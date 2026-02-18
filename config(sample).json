@@ -1,0 +1,9 @@
+{
+    "TELEGRAM_TOKEN": "....",
+    "CHAT_IDS": ["..."],
+    "DB_PATH": "kospi_stock_data.db",
+    "SHEET_NAME": "...",
+    "KIWOOM_APPKEY": "....",
+    "KIWOOM_SECRETKEY": "....",
+    "_comment": "..."
+}
