@@ -90,6 +90,79 @@ python bot_main.py
 * **오버나잇 금지:** 15:15 타임컷 로직을 통해 당일 매수 종목은 당일 모두 청산하여 내일의 변동성 차단.
 
 ---
+KORStockScan v12.1 시스템이 완벽하게 돌아가기 위해 필요한 라이브러리들을 카테고리별로 깔끔하게 정리해 드립니다.
+
+새로운 환경에서 세팅하신다면 이 리스트를 참고하여 설치하시면 됩니다.
+
+---
+
+### 📦 KORStockScan v12.1 핵심 종속성 리스트
+
+#### 1. 데이터 수집 및 전처리 (Data)
+
+* **`pandas`**: 데이터프레임 조작 및 시계열 데이터 관리의 핵심.
+* **`numpy`**: 수치 계산 및 행렬 연산.
+* **`FinanceDataReader`**: KOSPI 종목 리스트 및 주가 데이터를 가져오는 API 라이브러리.
+
+#### 2. 인공지능 및 머신러닝 (AI/ML)
+
+* **`scikit-learn`**: 메타 모델(Logistic Regression) 학습 및 각종 평가 지표(Precision 등) 계산.
+* **`xgboost`**: 추세 전문가 모델 학습 및 추론.
+* **`lightgbm`**: 변동성 전문가 모델 학습 및 추론.
+* **`joblib`**: 학습된 `.pkl` 모델 파일을 저장하고 불러오기 위한 도구.
+
+#### 3. 통신 및 텔레그램 (Communication)
+
+* **`pyTelegramBotAPI`**: 텔레그램 봇(`bot_main.py`) 구동을 위한 라이브러리 (코드상 `telebot`으로 임포트).
+* **`requests`**: 증권사 API 통신 및 텔레그램 메시지 전송용 HTTP 라이브러리.
+* **`websocket-client`**: 키움증권 실시간 데이터를 받기 위한 웹소켓 통신 (필요시).
+
+#### 4. 시각화 및 기타 (Visualization & Misc)
+
+* **`matplotlib`**: 백테스트 결과 및 지표 중요도를 그래프로 출력.
+* **`sqlite3`**: 로컬 DB 관리 (파이썬 기본 내장 라이브러리이므로 별도 설치 불필요).
+
+---
+
+### 💻 한 번에 설치하기 (Terminal/CMD)
+
+아래 명령어를 복사해서 터미널에 입력하시면 모든 필수 라이브러리가 한 번에 설치됩니다.
+
+```bash
+pip install pandas numpy FinanceDataReader scikit-learn xgboost lightgbm joblib pyTelegramBotAPI requests matplotlib
+
+```
+
+---
+
+### 📄 `requirements.txt` 파일 만들기
+
+GitHub에 올리시거나 나중에 서버를 옮길 때를 대비해 프로젝트 루트 폴더에 `requirements.txt` 파일을 만들어두는 것이 좋습니다. 파일 내용은 다음과 같이 작성하세요.
+
+```text
+# Data & Finance
+pandas
+numpy
+FinanceDataReader
+
+# AI & Machine Learning
+scikit-learn
+xgboost
+lightgbm
+joblib
+
+# Bot & Communication
+pyTelegramBotAPI
+requests
+
+# Visualization
+matplotlib
+
+```
+
+나중에 새로운 컴퓨터에서 `pip install -r requirements.txt` 한 줄이면 모든 세팅이 끝납니다! 🦾
+
+---
 
 ## ⚠️ 면책 조항 (Disclaimer)
 
