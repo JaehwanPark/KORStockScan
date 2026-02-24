@@ -1,5 +1,3 @@
----
-
 # 🚀 KORStockScan v12.1
 
 > **AI Stacking Ensemble 기반 KOSPI 데이트레이딩 자동매매 시스템**
