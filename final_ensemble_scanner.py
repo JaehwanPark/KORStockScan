@@ -10,6 +10,7 @@ import logging
 import lightgbm as lgb
 from datetime import datetime
 import FinanceDataReader as fdr
+import kiwoom_utils
 
 # --- [1. 설정 로드 엔진] ---
 def load_config():
@@ -65,13 +66,34 @@ def init_history_db():
                 name TEXT,
                 buy_price INTEGER,
                 type TEXT,
-                status TEXT DEFAULT 'WATCHING',
+                status TEXT DEFAULT 'WATCHING', 
+                buy_qty INTEGER DEFAULT 0,
                 PRIMARY KEY (date, code)
             )
         """)
     
     conn.commit()
     conn.close()
+
+def migrate_db():
+    """기존 테이블에 nxt 컬럼을 추가하고 초기화합니다."""
+    try:
+        conn = sqlite3.connect(CONF['DB_PATH'])
+        cursor = conn.cursor()
+        
+        # 현재 테이블의 컬럼 정보 조회
+        cursor.execute("PRAGMA table_info(recommendation_history)")
+        columns = [info[1] for info in cursor.fetchall()]
+        
+        # buy_time 컬럼이 없으면 추가
+        if 'nxt' not in columns:
+            cursor.execute("ALTER TABLE recommendation_history ADD COLUMN nxt REAL")
+            print("✅ nxt 컬럼이 성공적으로 추가되었습니다.")
+            
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"⚠️ DB 마이그레이션 오류: {e}")
 
 # --- [4. 성과 복기 및 매도 엔진] ---
 
@@ -129,58 +151,88 @@ def get_sell_signals():
         return "📢 *[보유종목 매도신호]*\n" + "\n".join(sell_items) + "\n" + "-"*20 + "\n" if sell_items else ""
     finally: conn.close()
 
-# --- [5. 메인 스캐너 엔진] ---
+# --- [5. 메인 스캐너 엔진 업데이트] ---
+
+# 전공 지표 리스트 정의 (반드시 학습 시와 일치해야 함)
+FEATURES_XGB = ['Return', 'MA_Ratio', 'MACD', 'MACD_Sig', 'VWAP', 'OBV', 'Up_Trend_2D', 'Dist_MA5']
+FEATURES_LGBM = ['BB_Pos', 'RSI', 'RSI_Slope', 'Range_Ratio', 'Vol_Momentum', 'Vol_Change', 'ATR', 'BBB', 'BBP']
 
 def run_integrated_scanner():
-    print(f"=== 콰트로 v10.0 ===")
+    print(f"=== 콰트로 v11.0 (스태킹 앙상블) ===")
     init_history_db()
+    migrate_db()
 
     try:
-        # 모델 로드
-        m_xgb = joblib.load('hybrid_xgb_model.pkl'); m_lgbm = joblib.load('hybrid_lgbm_model.pkl')
-        b_xgb = joblib.load('bull_xgb_model.pkl'); b_lgbm = joblib.load('bull_lgbm_model.pkl')
-        features = joblib.load('hybrid_features.pkl')
+        # [수정] 모델 로드 파일명 및 메타 모델 추가
+        m_xgb = joblib.load('hybrid_xgb_model.pkl') 
+        m_lgbm = joblib.load('hybrid_lgbm_model.pkl')
+        b_xgb = joblib.load('bull_xgb_model.pkl')
+        b_lgbm = joblib.load('bull_lgbm_model.pkl')
+        meta_model = joblib.load('stacking_meta_model.pkl') # 메타 모델 추가 로드
         
         conn = sqlite3.connect(CONF['DB_PATH'])
+        # 1. 분석 대상 확대 (시총 상위 500개 중 거래량 상위 400개 추출)
         df_krx = fdr.StockListing('KOSPI')
-        target_list = df_krx.sort_values(by='Marcap', ascending=False).head(200)
-        target_list = target_list.sort_values(by='Volume', ascending=False).head(100).to_dict('records')
+        target_list = df_krx.sort_values(by='Marcap', ascending=False).head(500) # 200 -> 500
+        target_list = target_list.sort_values(by='Volume', ascending=False).head(400).to_dict('records') # 100 -> 400
         
         all_results = []
 
         for stock in target_list:
             code, name = stock['Code'], stock['Name']
-            df = pd.read_sql(f"SELECT * FROM daily_stock_quotes WHERE Code='{code}' ORDER BY Date DESC LIMIT 30", conn)
-            if len(df) < 20: continue
+            # [체크] DB에서 VWAP, OBV 등 모든 컬럼을 가져와야 함 (SELECT * 사용 유지)
+            df = pd.read_sql(f"SELECT * FROM daily_stock_quotes WHERE Code='{code}' ORDER BY Date DESC LIMIT 60", conn)
+            if len(df) < 30: continue
             
             df = df.sort_values('Date')
-            # 지표 가공
-            df['Vol_Change'] = df['Volume'].pct_change(); df['MA_Ratio'] = df['Close'] / (df['MA20'] + 1e-9)
-            df['BB_Pos'] = (df['Close'] - df['BBL']) / (df['BBU'] - df['BBL'] + 1e-9); df['RSI_Slope'] = df['RSI'].diff()
-            df['Range_Ratio'] = (df['High'] - df['Low']) / (df['Close'] + 1e-9); df['Vol_Momentum'] = df['Volume'] / (df['Volume'].rolling(5).mean() + 1e-9)
-            df['MA5'] = df['Close'].rolling(5).mean(); df['Dist_MA5'] = df['Close'] / (df['MA5'] + 1e-9)
             
-            X_input = df.iloc[[-1]][features].replace([np.inf, -np.inf], np.nan).fillna(0)
+            # [수정] 지표 가공 로직 (훈련 시와 동일하게)
+            df['Vol_Change'] = df['Volume'].pct_change()
+            df['MA_Ratio'] = df['Close'] / (df['MA20'] + 1e-9)
+            df['BB_Pos'] = (df['Close'] - df['BBL']) / (df['BBU'] - df['BBL'] + 1e-9)
+            df['RSI_Slope'] = df['RSI'].diff()
+            df['Range_Ratio'] = (df['High'] - df['Low']) / (df['Close'] + 1e-9)
+            df['Vol_Momentum'] = df['Volume'] / (df['Volume'].rolling(5).mean() + 1e-9)
+            df['Dist_MA5'] = df['Close'] / (df['MA5'] + 1e-9)
             
-            p_m_x = m_xgb.predict_proba(X_input)[0][1]; p_m_l = m_lgbm.predict_proba(X_input, verbose=-1)[0][1]
-            p_b_x = b_xgb.predict_proba(X_input)[0][1]; p_b_l = b_lgbm.predict_proba(X_input, verbose=-1)[0][1]
+            # [신규 추가] 2일 연속 상승 추세
+            df['Up_Trend_2D'] = (df['Close'].diff(1) > 0) & (df['Close'].shift(1).diff(1) > 0)
+            df['Up_Trend_2D'] = df['Up_Trend_2D'].astype(int)
             
-            # 2:8 가중치 확률 및 보수적 문턱값
-            p_final = ((p_m_x + p_m_l)/2 * 0.2) + ((p_b_x + p_b_l)/2 * 0.8)
-            v_b_x = p_b_x > 0.58
-            votes = sum([p_m_x > 0.52, p_m_l > 0.51, v_b_x, p_b_l > 0.52])
+            # 최신 행 추출 및 무한대 처리
+            latest_row = df.iloc[[-1]].replace([np.inf, -np.inf], np.nan).fillna(0)
             
-            all_results.append({'Name': name, 'Prob': p_final, 'Bull_XGB': p_b_x, 'Votes': votes, 'Price': int(df.iloc[-1]['Close']), 'Code': code})
+            # [수정] 각 전문가에게 전공 지표로 질문
+            p_m_x = m_xgb.predict_proba(latest_row[FEATURES_XGB])[0][1]
+            p_m_l = m_lgbm.predict_proba(latest_row[FEATURES_LGBM])[0][1]
+            p_b_x = b_xgb.predict_proba(latest_row[FEATURES_XGB])[0][1]
+            p_b_l = b_lgbm.predict_proba(latest_row[FEATURES_LGBM])[0][1]
+            
+            # [수정] 스태킹 메타 모델을 이용한 최종 확률 계산
+            meta_input = pd.DataFrame({
+                'XGB_Prob': [p_m_x], 'LGBM_Prob': [p_m_l], 
+                'Bull_XGB_Prob': [p_b_x], 'Bull_LGBM_Prob': [p_b_l]
+            })
+            p_final = meta_model.predict_proba(meta_input)[0][1]
+            
+            all_results.append({
+                'Name': name, 
+                'Prob': p_final, 
+                'Price': int(df.iloc[-1]['Close']), 
+                'Code': code
+            })
 
         conn.close()
 
-        # 메시지 조립
-        msg = get_performance_report() + get_sell_signals() + f"🏆 *[AI 콰트로 리포트]* {datetime.now().strftime('%Y-%m-%d')}\n"
+        # [수정] 메시지 조립 및 필터링 로직
+        msg = get_performance_report() + get_sell_signals() + f"🏆 *[AI 콰트로 Stacking 리포트]* {datetime.now().strftime('%Y-%m-%d')}\n"
 
-        main_picks = sorted([r for r in all_results if r['Prob'] > 0.55 and r['Bull_XGB'] > 0.58 and r['Votes'] >= 2], key=lambda x: x['Prob'], reverse=True)[:3]
-        runner_ups = sorted([r for r in all_results if r['Name'] not in [m['Name'] for m in main_picks]], key=lambda x: x['Prob'], reverse=True)[:5]
+        # 임계값 0.80 이상만 강력 추천 (훈련 시 정밀도 58.94% 구간)
+        main_picks = sorted([r for r in all_results if r['Prob'] >= 0.80], key=lambda x: x['Prob'], reverse=True)[:3]
+        
+        # [:20] 제거: 조건에 맞는 모든 종목을 우선 다 담습니다.
+        runner_ups = sorted([r for r in all_results if 0.65 <= r['Prob'] < 0.80], key=lambda x: x['Prob'], reverse=True)
 
-        # 1. 강력 추천 기록
         # 1. 강력 추천 기록 (수정된 UPSERT 로직)
         if main_picks:
             msg += "🏆 *[AI 강력 추천 종목]*\n"
@@ -192,8 +244,8 @@ def run_integrated_scanner():
                 
                 # 중복 시(CONFLICT) 가격과 타입만 업데이트 (status는 보존)
                 sql = """
-                    INSERT INTO recommendation_history (date, code, name, buy_price, type, status)
-                    VALUES (?, ?, ?, ?, 'MAIN', 'WATCHING')
+                    INSERT INTO recommendation_history (date, code, name, buy_price, type, status, nxt)
+                    VALUES (?, ?, ?, ?, 'MAIN', 'WATCHING', NULL)
                     ON CONFLICT(date, code) DO UPDATE SET
                         buy_price = excluded.buy_price,
                         type = excluded.type
@@ -201,29 +253,31 @@ def run_integrated_scanner():
                 conn.execute(sql, (today, r['Code'], r['Name'], buy_p))
             conn.commit(); conn.close()
         else:
-            msg += "\n🧐 현재 기준을 통가한 강력 추천 종목이 없습니다.\n"
+            msg += "\n🧐 현재 기준을 통과한 강력 추천 종목이 없습니다.\n"
 
-        # 2. 아차상 기록 (오답 노트용 저장 포함)
-        # 2. 아차상 기록 (수정된 UPSERT 로직)
+        # 2. 아차상 기록 (기존 20개 제한을 풀고 더 많이 저장)
         if runner_ups:
-            msg += "\n🥈 *[아차상: 관심 종목]*\n"
+            # 리포트용 메시지는 여전히 상위 10개만 표시 (가독성)
+            msg += "\n🥈 *[아차상: 관심 종목 상위 10개]*\n"
+            for r in runner_ups[:10]:
+                msg += f"• {r['Name']} ({r['Prob']:.1%})\n"
+            
+            # DB 저장 (최대 300개)
             conn = sqlite3.connect(CONF['DB_PATH'])
             today = datetime.now().strftime('%Y-%m-%d')
-            for r in runner_ups:
-                fail = "확신도부족" if r['Prob'] <= 0.55 else ("Bull-XGB미달" if r['Bull_XGB'] <= 0.58 else "합의부족")
-                msg += f"• {r['Name']} ({r['Prob']:.1%}) - _{fail}_\n"
-                
+            
+            for r in runner_ups[:300]: # 여기서 최대 300개까지 저장됨
                 buy_p = int(r['Price'] * 0.995)
-                # 중복 시(CONFLICT) 가격과 타입만 업데이트 (status는 보존)
                 sql = """
-                    INSERT INTO recommendation_history (date, code, name, buy_price, type, status)
-                    VALUES (?, ?, ?, ?, 'RUNNER', 'WATCHING')
+                    INSERT INTO recommendation_history (date, code, name, buy_price, type, status, nxt)
+                    VALUES (?, ?, ?, ?, 'RUNNER', 'WATCHING', NULL)
                     ON CONFLICT(date, code) DO UPDATE SET
                         buy_price = excluded.buy_price,
                         type = excluded.type
                 """
                 conn.execute(sql, (today, r['Code'], r['Name'], buy_p))
-            conn.commit(); conn.close()
+            conn.commit()
+            conn.close()
 
         # 전송
         for cid in CONF['CHAT_IDS']:
