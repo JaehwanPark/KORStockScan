@@ -4,6 +4,8 @@
 
 KORStockScan v12.1은 4개의 베이스 모델(XGBoost, LightGBM, Bull Specialists)과 최종 결재권자인 Meta-Model을 결합한 **스태킹 앙상블(Stacking Ensemble)** 기술을 통해 시장의 노이즈를 극복하고 압도적인 정밀도를 실현한 차세대 트레이딩 봇입니다.
 
+텔레그램 봇 @KORStockScan
+
 ---
 
 ## 📊 핵심 성과 (v12.1 Backtest Result)
