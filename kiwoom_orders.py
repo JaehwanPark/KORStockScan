@@ -1,9 +1,11 @@
 import requests
 import json
+import kiwoom_utils # 🚀 추가: 소수점 정보 조회 유틸리티 사용
 
-def calc_buy_qty(current_price, total_deposit, ratio=0.1):
+def calc_buy_qty(current_price, total_deposit, code, token, ratio=0.1):
     """
     total_deposit(전체 예수금) 중 ratio(비율)만큼만 사용하여 수량 계산
+    🚀 [업데이트] 소수점 거래 가능 종목이면 1주 미만도 예산에 맞춰 소수점 수량으로 계산
     """
     if current_price <= 0 or total_deposit <= 0: 
         return 0
@@ -12,13 +14,37 @@ def calc_buy_qty(current_price, total_deposit, ratio=0.1):
     target_budget = total_deposit * ratio
     
     # 2. 슬리피지 및 수수료 대비 안전 예산 설정 (95% 권장)
-    # 90%는 너무 보수적일 수 있으니 95% 정도로 조정해 보았습니다.
     safe_budget = target_budget * 0.95
     
-    # 3. 정수 수량 반환
-    qty = int(safe_budget // current_price)
+    # 3. 키움 API를 통한 소수점 거래 가능 여부 확인
+    fractional_info = kiwoom_utils.get_fractional_info(code, token)
     
-    return qty
+    # 4. 수량 계산 로직 분기
+    if fractional_info['is_fractional']:
+        # [소수점 매수 로직]
+        # 예: fav_unit이 "0.01" 처럼 내려온다고 가정하고 최소 단위 파악
+        try:
+            fav_unit_str = str(fractional_info.get('fav_unit', '0.01'))
+            fav_unit_float = float(fav_unit_str) if fav_unit_str else 0.01
+            if fav_unit_float <= 0: fav_unit_float = 0.01
+        except:
+            fav_unit_float = 0.01
+            
+        # 소수점 단위로 안전 예산 내 수량 내림 계산
+        raw_qty = safe_budget / current_price
+        qty = (raw_qty // fav_unit_float) * fav_unit_float
+        
+        # 파이썬 부동소수점 오차 방지를 위해 소수점 자릿수 정리 (예: 0.120000001 -> 0.12)
+        decimals = len(str(fav_unit_float).split('.')[1]) if '.' in str(fav_unit_float) else 0
+        qty = round(qty, decimals)
+        
+        print(f"💡 [소수점 거래] {code}: 1주 {current_price:,}원. 예산 {safe_budget:,.0f}원에 맞춰 {qty}주 매수 세팅")
+        return qty
+
+    else:
+        # [일반 정수 매수 로직] (기존과 동일)
+        qty = int(safe_budget // current_price)
+        return qty
 
 def send_buy_order_market(code, qty, token):
     """
@@ -34,7 +60,7 @@ def send_buy_order_market(code, qty, token):
         'api-id': 'kt10000'
     }
     
-    # 사용자 제공 request.txt 형식 반영
+    # payload의 ord_qty는 str(qty)를 통해 0.5 같은 소수점도 정상적으로 문자열 "0.5"로 변환되어 들어갑니다.
     payload = {
         "dmst_stex_tp": "SOR",
         "stk_cd": str(code),
@@ -54,8 +80,6 @@ def send_buy_order_market(code, qty, token):
     except Exception as e:
         print(f"🚨 [Order] 시스템 에러: {e}")
         return None
-    
-# kiwoom_orders.py에 추가
 
 def send_sell_order_market(code, qty, token):
     """
@@ -71,11 +95,10 @@ def send_sell_order_market(code, qty, token):
         'api-id': 'kt10001' # 💡 매도 전용 API ID
     }
     
-    # 업로드해주신 request.txt 형식을 100% 반영
     payload = {
         "dmst_stex_tp": "SOR",
         "stk_cd": str(code),
-        "ord_qty": str(qty), # 전량 매도를 위해 매수 시 저장된 수량 사용
+        "ord_qty": str(qty), # 매수 시 소수점이었다면 그대로 소수점 전량 매도
         "ord_uv": "",        # 시장가는 가격 빈값
         "trde_tp": "3",      # 3: 시장가
         "cond_uv": ""
@@ -91,8 +114,6 @@ def send_sell_order_market(code, qty, token):
     except Exception as e:
         print(f"🚨 [Sell] 시스템 에러: {e}")
         return None
-    
-# kiwoom_orders.py (기존 내용 아래에 추가)
 
 def get_deposit(token):
     """
@@ -107,7 +128,6 @@ def get_deposit(token):
         'api-id': 'kt00001'
     }
     
-    # 미수금 반영: 추정조회(3) 옵션을 사용하면 미수금이 반영된 정확한 주문가능금액을 조회할 수 있어, 미수금 없이 주문 가능한 잔액 확인에 적합합니다.
     payload = {
         "qry_tp": "3"
     }
@@ -116,7 +136,6 @@ def get_deposit(token):
         res = requests.post(url, headers=headers, json=payload)
         if res.status_code == 200:
             data = res.json()
-            # ord_alow_amt: 주문가능금액 (실제 매수 가능 금액)
             d2_deposit = int(data.get('ord_alow_amt', 0))
             return d2_deposit
         else:
