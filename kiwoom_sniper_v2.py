@@ -6,6 +6,7 @@ import requests
 import threading
 from datetime import datetime
 import kiwoom_utils
+import kiwoom_orders
 from kiwoom_websocket import KiwoomWSManager
 from google_sheets_utils import GoogleSheetsManager
 
@@ -100,6 +101,40 @@ def analyze_stock_now(code):
     score, details, visual, p, conclusion = kiwoom_utils.analyze_signal_integrated(ws_data, 0.5, 70)
     return (f"🔍 *[{stock_name}]({code}) 실시간 분석*\n💰 현재가: `{p['curr']:,}원`\n{visual}\n🎯 목표가: `{p['sell']:,}원` (+3%)\n📝 확신지수: `{score:.1f}점`\n{conclusion}")
 
+def get_detailed_reason(code):
+    """
+    특정 종목이 왜 안 사고 있는지 상세 사유를 리포트로 반환
+    """
+    # 1. 감시 리스트에서 해당 종목 찾기
+    targets = get_active_targets()
+    target = next((t for t in targets if t['code'] == code), None)
+    
+    if not target:
+        return f"🔍 `{code}` 종목은 현재 AI 감시 대상(WATCHING)이 아닙니다."
+
+    # 2. 실시간 데이터 획득
+    ws_data = WS_MANAGER.get_latest_data(code)
+    if not ws_data or ws_data.get('curr', 0) == 0:
+        return f"⏳ `{code}` 종목의 실시간 데이터를 수신 중입니다. 잠시 후 다시 시도해 주세요."
+
+    # 3. 통합 분석 실행
+    ai_prob = target.get('prob', 0.75)
+    score, details, visual, prices, conclusion, checklist = kiwoom_utils.analyze_signal_integrated(ws_data, ai_prob)
+
+    # 4. 리포트 생성
+    report = f"🧐 **[{target['name']}] 미진입 사유 분석**\n"
+    report += f"━━━━━━━━━━━━━━━━━━\n"
+    for label, status in checklist.items():
+        icon = "✅" if status['pass'] else "❌"
+        report += f"{icon} {label}: `{status['val']}`\n"
+    
+    report += f"━━━━━━━━━━━━━━━━━━\n"
+    report += f"🎯 **종합 점수:** `{int(score)}점` (매수기준: 80점)\n"
+    report += f"📝 **현재 상태:** {conclusion}\n"
+    report += f"\n💡 *TIP: 모든 항목이 ✅이고 점수가 80점 이상일 때 자동으로 매수 주문이 집행됩니다.*"
+    
+    return report
+
 # --- [3. 메인 스나이퍼 엔진] ---
 def run_sniper(broadcast_callback):
     global KIWOOM_TOKEN, WS_MANAGER
@@ -134,8 +169,11 @@ def run_sniper(broadcast_callback):
                 print("🌙 장이 마감되었습니다.")
                 break
             
-            if now_t.minute % 20 == 0 and now_t.minute != last_msg_min:
-                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] 정상 감시중입니다.")
+            if now_t.minute != last_msg_min:
+                # 메모리에 있는 targets 리스트 중 상태가 'WATCHING'인 것만 카운트
+                watching_count = len([t for t in targets if t['status'] == 'WATCHING'])
+                current_time_str = datetime.now().strftime('%H:%M:%S')
+                print(f"💓 [{current_time_str}] 스나이퍼 엔진 정상 가동 중... (감시 대기: {watching_count}개 종목)")
                 last_msg_min = now_t.minute
             
             for stock in targets:
@@ -143,7 +181,7 @@ def run_sniper(broadcast_callback):
                 name = stock['name']
                 status = stock['status']
                 
-                ws_data = WS_MANAGER.get_latest_data(code + '_AL')
+                ws_data = WS_MANAGER.get_latest_data(code)
                 if not ws_data or ws_data.get('curr', 0) == 0: continue
 
                 # ========================================================
@@ -155,7 +193,8 @@ def run_sniper(broadcast_callback):
                     ai_prob = 0.75 
                     threshold = 80 
                     
-                    score, details, visual, p, conclusion = kiwoom_utils.analyze_signal_integrated(ws_data, ai_prob, threshold)
+                    # 🚀 6번째 인자인 checklist를 추가로 받도록 수정 (변수명 뒤에 , checklist 추가)
+                    score, details, visual, p, conclusion, checklist = kiwoom_utils.analyze_signal_integrated(ws_data, ai_prob)
 
                     # Scanner가 넘겨준 최종 확신도 (기본 0.75)
                     final_prob = stock.get('prob', 0.75)
@@ -176,7 +215,7 @@ def run_sniper(broadcast_callback):
                         if admin_id:
                             deposit = get_deposit(KIWOOM_TOKEN)
                             # 🚀 [핵심] 계좌 자산의 10% 비중으로만 매수 (MDD 500% -> 50% 이하로 제어)
-                            real_buy_qty = calc_buy_qty(p['curr'], deposit, 0.1) 
+                            real_buy_qty = calc_buy_qty(p['curr'], deposit, code, KIWOOM_TOKEN, ratio=0.1) 
                             if real_buy_qty > 0:
                                 res = send_buy_order_market(code, real_buy_qty, KIWOOM_TOKEN)
                                 if res and res.get('return_code') == 0:
@@ -224,6 +263,9 @@ def run_sniper(broadcast_callback):
                             stock['status'] = 'COMPLETED'
 
             time.sleep(1)
+            
+    except Exception as e:
+        kiwoom_utils.log_error(f"🔥 스나이퍼 루프 치명적 에러: {e}", config=CONF, send_telegram=True)
 
     except KeyboardInterrupt:
         print("\n🛑 엔진 종료")
