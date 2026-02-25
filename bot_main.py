@@ -160,6 +160,25 @@ def handle_today_picks(message):
     except:
         bot.send_message(chat_id, "❌ 추천 종목 로드 실패")
 
+@bot.message_handler(commands=['사유', 'why'])
+def handle_why_not(message):
+    chat_id = message.chat.id
+    parts = message.text.split()
+    
+    if len(parts) < 2:
+        bot.send_message(chat_id, "⚠️ 종목코드를 입력해주세요. (예: `/사유 005930`)")
+        return
+        
+    code = parts[1].strip()
+    bot.send_message(chat_id, f"🔍 `{code}` 종목의 실시간 진입 요건을 정밀 분석합니다...")
+    
+    try:
+        # 스나이퍼 엔진의 상세 사유 함수 호출
+        reason_report = kiwoom_sniper_v2.get_detailed_reason(code)
+        bot.send_message(chat_id, reason_report, parse_mode='Markdown')
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ 분석 중 오류 발생: {e}")
+
 # --- [4. 결제 및 등급 관리 로직] ---
 
 @bot.pre_checkout_query_handler(func=lambda query: True)
@@ -243,7 +262,7 @@ def broadcast_alert(message_text):
     temp_conn.close()
 
 def broadcast_today_picks():
-    # ... (기존 자동 알림 로직 동일) ...
+    # ... (기존 자동 알림 로직 동일) ... scanner 실행시 1회 알림으로 대체
     pass
 
 # --- [6. 메인 시스템 가동] ---

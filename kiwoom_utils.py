@@ -142,14 +142,24 @@ def generate_visual_gauge(ratio, label_left="매도", label_right="매수"):
     return f"[{label_left} {gauge} {label_right}]"
 
 def analyze_signal_integrated(ws_data, ai_prob, threshold=70):
-    """실시간 데이터와 수치를 결합한 통합 분석"""
+    """
+    [v12.1 정밀 진단 버전] 실시간 데이터와 수치를 결합한 통합 분석 및 상세 사유 반환
+    """
     score = ai_prob * 50
     details = [f"AI({ai_prob:.0%})"]
     visuals = ""
     prices = {}
+    
+    # 🚀 상세 체크리스트 초기 설정 (반환용)
+    checklist = {
+        "AI 확신도 (75%↑)": {"val": f"{ai_prob:.1%}", "pass": ai_prob >= 0.75},
+        "유동성 (5천만↑)": {"val": "데이터 대기", "pass": False},
+        "체결강도 (100%↑)": {"val": "데이터 대기", "pass": False},
+        "호가잔량비 (1.5~5배)": {"val": "데이터 대기", "pass": False}
+    }
 
     if not ws_data or ws_data.get('curr', 0) == 0:
-        return 0, "데이터 부족", "", prices, "결론: 데이터 수신 중"
+        return 0, "데이터 부족", "", prices, "결론: 데이터 수신 중", checklist
 
     try:
         curr_price = ws_data['curr']
@@ -159,9 +169,10 @@ def analyze_signal_integrated(ws_data, ai_prob, threshold=70):
         bid_tot = ws_data.get('bid_tot', 1)
         total = ask_tot + bid_tot
       
-        # 유동성 필터: 총 잔량 가치가 5,000만 원 미만이면 스킵
+        # 1️⃣ 유동성 필터 및 체크리스트 업데이트
         liquidity_value = (ask_tot + bid_tot) * curr_price
         MIN_LIQUIDITY = 50_000_000
+        checklist["유동성 (5천만↑)"] = {"val": f"{liquidity_value/1e6:.1f}백만", "pass": liquidity_value >= MIN_LIQUIDITY}
         
         ratio_val = (ask_tot / total) * 100 if total > 0 else 0
         gauge_idx = int(ratio_val / 10)
@@ -169,13 +180,21 @@ def analyze_signal_integrated(ws_data, ai_prob, threshold=70):
         visuals += f"📊 잔량비: [{'▓'*gauge_idx:<10}] {ratio_val:.1f}%\n"
         visuals += f"   (매도: {ask_tot:,} / 매수: {bid_tot:,})\n"
         
+        # 2️⃣ 호가잔량비 분석 및 체크리스트 업데이트
         imb_ratio = ask_tot / (bid_tot + 1e-9)
-        if 1.5 <= imb_ratio <= 5.0:
+        pass_imb = 1.5 <= imb_ratio <= 5.0
+        checklist["호가잔량비 (1.5~5배)"] = {"val": f"{imb_ratio:.2f}배", "pass": pass_imb}
+        
+        if pass_imb:
             score += 25
             details.append("호가(적격)")
 
+        # 3️⃣ 체결강도 분석 및 체크리스트 업데이트
         v_pw = ws_data.get('v_pw', 0.0)
         visuals += f"⚡ 체결강도: {v_pw:.1f}%\n"
+        
+        pass_v_pw = v_pw >= 100
+        checklist["체결강도 (100%↑)"] = {"val": f"{v_pw:.1f}%", "pass": pass_v_pw}
         
         if v_pw >= 110:
             score += 25
@@ -184,7 +203,7 @@ def analyze_signal_integrated(ws_data, ai_prob, threshold=70):
             score += 15
             details.append("수급(중)")
 
-        # 최종 결론 로직
+        # 4️⃣ 최종 결론 로직 (보내주신 로직 그대로 유지)
         if (v_pw < 100 and score < threshold) or (liquidity_value < MIN_LIQUIDITY):
             conclusion = "🚫 *결론: 매수타이밍이 아닙니다*"
         else:
@@ -193,4 +212,5 @@ def analyze_signal_integrated(ws_data, ai_prob, threshold=70):
     except Exception as e:
         conclusion = "결론: 분석 오류"
 
-    return score, " + ".join(details), visuals, prices, conclusion
+    # 🚀 최종적으로 checklist를 6번째 인자로 추가 반환
+    return score, " + ".join(details), visuals, prices, conclusion, checklist
