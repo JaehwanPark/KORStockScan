@@ -176,7 +176,7 @@ def run_sniper(broadcast_callback):
                         if admin_id:
                             deposit = get_deposit(KIWOOM_TOKEN)
                             # 🚀 [핵심] 계좌 자산의 10% 비중으로만 매수 (MDD 500% -> 50% 이하로 제어)
-                            real_buy_qty = calc_buy_qty(p['curr'], deposit, code, KIWOOM_TOKEN, ratio=0.1) 
+                            real_buy_qty = calc_buy_qty(p['curr'], deposit, 0.1) 
                             if real_buy_qty > 0:
                                 res = send_buy_order_market(code, real_buy_qty, KIWOOM_TOKEN)
                                 if res and res.get('return_code') == 0:
