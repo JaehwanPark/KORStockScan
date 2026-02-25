@@ -11,6 +11,9 @@ import signal
 # 💡 V2 스캐닝 엔진 임포트
 import kiwoom_sniper_v2 
 
+# 전역 변수로 스레드 관리
+sniper_thread = None
+
 # --- [1. 환경 설정 및 DB 초기화] ---
 def load_config():
     with open('config_prod.json', 'r', encoding='utf-8') as f:
@@ -154,6 +157,46 @@ def handle_today_picks(message):
         
     except Exception as e:
         bot.send_message(chat_id, "❌ 추천 종목을 불러오는 데 실패했습니다.")
+
+@bot.message_handler(commands=['상태', 'status'])
+def handle_status(message):
+    """현재 봇의 가동 상태를 보고합니다."""
+    chat_id = message.chat.id
+    now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    status_msg = f"🟢 *[KORStockScan v12.1 상태 보고]*\n"
+    status_msg += f"⏱ 현재시간: `{now_str}`\n\n"
+    
+    # 1. 엔진 가동 여부
+    if sniper_thread and sniper_thread.is_alive():
+        status_msg += "✅ **스나이퍼 엔진:** `가동 중` 💓\n"
+    else:
+        status_msg += "❌ **스나이퍼 엔진:** `중단됨` ⚠️\n"
+        
+    # 2. 오늘 성과 요약 (DB 조회)
+    try:
+        conn = sqlite3.connect(CONF['DB_PATH'])
+        today = datetime.now().strftime('%Y-%m-%d')
+        # 감시/보유 현황 파악
+        watch_cnt = conn.execute("SELECT COUNT(*) FROM recommendation_history WHERE date=? AND status='WATCHING'", (today,)).fetchone()[0]
+        hold_cnt = conn.execute("SELECT COUNT(*) FROM recommendation_history WHERE date=? AND status='HOLDING'", (today,)).fetchone()[0]
+        conn.close()
+        
+        status_msg += f"👀 **감시 대기:** `{watch_cnt}종목`\n"
+        status_msg += f"💼 **현재 보유:** `{hold_cnt}종목`\n"
+    except:
+        status_msg += "⚠️ DB 조회 오류\n"
+        
+    bot.send_message(chat_id, status_msg, parse_mode='Markdown')
+
+# --- [메인 실행 로직] ---
+if __name__ == "__main__":
+    # 스나이퍼 엔진을 별도 스레드로 실행
+    sniper_thread = threading.Thread(target=kiwoom_sniper_v2.run_sniper, args=(None,), daemon=True)
+    sniper_thread.start()
+    
+    print("🚀 KORStockScan v12.1 텔레그램 컨트롤러 가동 시작...")
+    bot.infinity_polling()
 
 @bot.message_handler(func=lambda message: True)
 def handle_text_messages(message):
