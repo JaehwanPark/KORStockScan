@@ -107,6 +107,52 @@ def get_stock_market_ka10100(code, token):
         print(f"⚠️ 거래소명 조회 에러: {e}")
         return code
 
+# 🚀 신규 추가: 소수점 거래 가능 여부 및 단위 확인 함수
+def get_fractional_info(code, token):
+    """
+    ka10001(주식기본정보요청)을 호출하여 소수점 거래 가능 여부와 최소 주문 단위를 확인합니다.
+    반환값: {'is_fractional': bool, 'fav_unit': str}
+    """
+    url = "https://api.kiwoom.com/api/dostk/stkinfo"
+    
+    headers = {
+        'Content-Type': 'application/json;charset=UTF-8',
+        'authorization': f'Bearer {token}',
+        'cont-yn': 'N',
+        'next-key': '',
+        'api-id': 'ka10001'
+    }
+    
+    payload = {
+        "stk_cd": str(code)
+    }
+    
+    try:
+        res = requests.post(url, headers=headers, json=payload)
+        if res.status_code == 200:
+            data = res.json()
+            
+            # API 응답에서 상장주식수(flo_stk)와 액면가단위(fav_unit) 추출
+            flo_stk = data.get('flo_stk', '')
+            fav_unit = data.get('fav_unit', '')
+            
+            # 소수점 거래 가능 여부 판단 (상장주식수에 소수점이 포함되어 있는지 확인)
+            is_fractional = False
+            if isinstance(flo_stk, str) and '.' in flo_stk:
+                is_fractional = True
+                
+            return {
+                'is_fractional': is_fractional,
+                'fav_unit': fav_unit
+            }
+        else:
+            print(f"⚠️ 소수점 정보 조회 실패 (에러 코드: {res.status_code})")
+            return {'is_fractional': False, 'fav_unit': ''}
+            
+    except Exception as e:
+        print(f"⚠️ 소수점 정보 조회 에러: {e}")
+        return {'is_fractional': False, 'fav_unit': ''}
+
 def generate_visual_gauge(ratio, label_left="매도", label_right="매수"):
     """수급 비율을 시각적 바(Bar)로 변환"""
     size = 10
