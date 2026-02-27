@@ -246,26 +246,3 @@ def analyze_signal_integrated(ws_data, ai_prob, threshold=70):
 
     # 🚀 최종적으로 checklist를 6번째 인자로 추가 반환
     return score, " + ".join(details), visuals, prices, conclusion, checklist
-
-def register_manual_stock(code, name, config):
-    """
-    [스나이퍼 관제탑] 수동 감시 종목을 DB에 등록합니다.
-    """
-    db_path = config.get('DB_PATH', 'trading_history.db') # 실제 사용하는 DB 이름 확인
-    today = datetime.now().strftime('%Y-%m-%d')
-    
-    try:
-        conn = sqlite3.connect(db_path)
-        sql = """
-            INSERT INTO recommendation_history (date, code, name, buy_price, type, status, position_tag)
-            VALUES (?, ?, ?, 0, 'MANUAL', 'WATCHING', 'MIDDLE')
-            ON CONFLICT(date, code) DO UPDATE SET
-                status = 'WATCHING', type = 'MANUAL'
-        """
-        conn.execute(sql, (today, str(code).zfill(6), name))
-        conn.commit()
-        conn.close()
-        return True
-    except Exception as e:
-        print(f"🔥 수동 타겟 DB 등록 오류: {e}")
-        return False

@@ -1,26 +1,29 @@
 import requests
 import json
-import kiwoom_utils
 
-def calc_buy_qty(current_price, total_deposit, code, token, ratio=0.1):
+def calc_buy_qty(current_price, total_deposit, ratio=0.1):
     """
-    [v12.1] 예수금 대비 비중을 계산하여 정수 수량 산출
+    total_deposit(전체 예수금) 중 ratio(비율)만큼만 사용하여 수량 계산
     """
     if current_price <= 0 or total_deposit <= 0: 
         return 0
     
+    # 1. 사용할 예산 결정 (예: 전체 예수금 1,000만원 * 0.1 = 100만원)
     target_budget = total_deposit * ratio
-    safe_budget = target_budget * 0.95 # 슬리피지 대비 95% 사용
     
+    # 2. 슬리피지 및 수수료 대비 안전 예산 설정 (95% 권장)
+    # 90%는 너무 보수적일 수 있으니 95% 정도로 조정해 보았습니다.
+    safe_budget = target_budget * 0.95
+    
+    # 3. 정수 수량 반환
     qty = int(safe_budget // current_price)
+    
     return qty
 
-def send_buy_order_market(code, qty, token, config=None):
+def send_buy_order_market(code, qty, token):
     """
-    [kt10000] 시장가 매수 주문 - return_code 대응 수정
+    [kt10000] 시장가 매수 주문 전송
     """
-    if qty <= 0: return None
-
     code = code[0:6]
     url = "https://api.kiwoom.com/api/dostk/ordr"
     headers = {
@@ -31,39 +34,33 @@ def send_buy_order_market(code, qty, token, config=None):
         'api-id': 'kt10000'
     }
     
+    # 사용자 제공 request.txt 형식 반영
     payload = {
         "dmst_stex_tp": "SOR",
         "stk_cd": str(code),
         "ord_qty": str(qty),
-        "ord_uv": "",
-        "trde_tp": "6", # 최유리지정가
+        "ord_uv": "",   # 시장가는 가격 빈값
+        "trde_tp": "3", # 3: 시장가
         "cond_uv": ""
     }
     
     try:
-        res = requests.post(url, headers=headers, json=payload, timeout=5)
-        data = res.json()
-        
-        # 🚀 [핵심 수정] rt_cd 또는 return_code 둘 중 하나라도 0이면 성공으로 간주
-        is_success = data.get('rt_cd') == '0' or data.get('return_code') == 0
-        
-        if res.status_code == 200 and is_success:
-            return data
+        res = requests.post(url, headers=headers, json=payload)
+        if res.status_code == 200:
+            return res.json()
         else:
-            err_msg = data.get('return_msg') or data.get('err_msg') or '상세 사유 없음'
-            err_code = data.get('return_code') if data.get('return_code') is not None else data.get('rt_cd')
-            kiwoom_utils.log_error(f"❌ [매수거절] 종목:{code}, 사유:{err_msg} (코드:{err_code})", config=config, send_telegram=True)
+            print(f"🚨 [Order] HTTP 에러: {res.status_code}")
             return None
     except Exception as e:
-        kiwoom_utils.log_error(f"🔥 [매수주문] 시스템 예외: {str(e)}", config=config, send_telegram=True)
+        print(f"🚨 [Order] 시스템 에러: {e}")
         return None
+    
+# kiwoom_orders.py에 추가
 
-def send_sell_order_market(code, qty, token, config=None):
+def send_sell_order_market(code, qty, token):
     """
-    [kt10001] 시장가 매도 주문 - return_code 대응 수정
+    [kt10001] 주식 매도주문 (시장가 전량 매도)
     """
-    if qty <= 0: return None
-
     code = code[0:6]
     url = "https://api.kiwoom.com/api/dostk/ordr"
     headers = {
@@ -71,39 +68,35 @@ def send_sell_order_market(code, qty, token, config=None):
         'authorization': f'Bearer {token}',
         'cont-yn': 'N',
         'next-key': '',
-        'api-id': 'kt10001'
+        'api-id': 'kt10001' # 💡 매도 전용 API ID
     }
     
+    # 업로드해주신 request.txt 형식을 100% 반영
     payload = {
         "dmst_stex_tp": "SOR",
         "stk_cd": str(code),
-        "ord_qty": str(qty),
-        "ord_uv": "",
-        "trde_tp": "3",
+        "ord_qty": str(qty), # 전량 매도를 위해 매수 시 저장된 수량 사용
+        "ord_uv": "",        # 시장가는 가격 빈값
+        "trde_tp": "3",      # 3: 시장가
         "cond_uv": ""
     }
     
     try:
-        res = requests.post(url, headers=headers, json=payload, timeout=5)
-        data = res.json()
-        
-        # 🚀 [핵심 수정] 성공 판단 로직 통일
-        is_success = data.get('rt_cd') == '0' or data.get('return_code') == 0
-        
-        if res.status_code == 200 and is_success:
-            return data
+        res = requests.post(url, headers=headers, json=payload)
+        if res.status_code == 200:
+            return res.json()
         else:
-            err_msg = data.get('return_msg') or data.get('err_msg') or '상세 사유 없음'
-            err_code = data.get('return_code') if data.get('return_code') is not None else data.get('rt_cd')
-            kiwoom_utils.log_error(f"❌ [매도거절] 종목:{code}, 사유:{err_msg} (코드:{err_code})", config=config, send_telegram=True)
+            print(f"🚨 [Sell] HTTP 에러: {res.status_code}")
             return None
     except Exception as e:
-        kiwoom_utils.log_error(f"🔥 [매도주문] 시스템 예외: {str(e)}", config=config, send_telegram=True)
+        print(f"🚨 [Sell] 시스템 에러: {e}")
         return None
+    
+# kiwoom_orders.py (기존 내용 아래에 추가)
 
-def get_deposit(token, config=None):
+def get_deposit(token):
     """
-    [kt00001] 예수금 조회 - return_code 대응 수정
+    [kt00001] 예수금상세현황요청(kt00001) API를 사용해 예수금 잔액과 주문가능금액을 조회
     """
     url = "https://api.kiwoom.com/api/dostk/acnt"
     headers = {
@@ -113,57 +106,22 @@ def get_deposit(token, config=None):
         'next-key': '',
         'api-id': 'kt00001'
     }
-    payload = {"qry_tp": "3"} 
-    try:
-        res = requests.post(url, headers=headers, json=payload, timeout=5)
-        data = res.json()
-        is_success = data.get('rt_cd') == '0' or data.get('return_code') == 0
-        if res.status_code == 200 and is_success:
-            return int(data.get('ord_alow_amt', 0))
-        else:
-            err_msg = data.get('return_msg') or data.get('err_msg') or '상세 사유 없음'
-            kiwoom_utils.log_error(f"❌ [예수금조회 실패] 사유: {err_msg}", config=config)
-            return 0
-    except: return 0
-
-def send_cancel_order(code, orig_ord_no, token, qty=0, config=None):
-    """
-    [kt10003] 주식 취소 주문 - 미체결 물량 취소
-    :param qty: 취소 수량. 기본값 0 (0 입력 시 미체결 잔량 전부 취소)
-    """
-    clean_code = str(code)[:6]
-    url = "https://api.kiwoom.com/api/dostk/ordr"
     
-    headers = {
-        'Content-Type': 'application/json;charset=UTF-8',
-        'authorization': f'Bearer {token}',
-        'cont-yn': 'N',
-        'next-key': '',
-        'api-id': 'kt10003' # 🚀 취소 전용 TR 명시
-    }
-    
+    # 미수금 반영: 추정조회(3) 옵션을 사용하면 미수금이 반영된 정확한 주문가능금액을 조회할 수 있어, 미수금 없이 주문 가능한 잔액 확인에 적합합니다.
     payload = {
-        "dmst_stex_tp": "SOR",           # 국내거래소구분
-        "orig_ord_no": str(orig_ord_no), # 원주문번호
-        "stk_cd": clean_code,            # 종목코드
-        "cncl_qty": str(qty)             # 🚀 '0'이면 남은 물량 싹 다 취소!
+        "qry_tp": "3"
     }
     
     try:
-        res = requests.post(url, headers=headers, json=payload, timeout=5)
-        data = res.json()
-        
-        # return_code 0이 성공
-        if res.status_code == 200 and data.get('return_code') == 0:
-            cncl_qty_result = data.get('cncl_qty', '')
-            new_ord_no = data.get('ord_no', '')
-            kiwoom_utils.log_error(f"✅ [취소접수] {clean_code} 전량 취소 성공 (새주문번호:{new_ord_no})", config=config)
-            return data
+        res = requests.post(url, headers=headers, json=payload)
+        if res.status_code == 200:
+            data = res.json()
+            # ord_alow_amt: 주문가능금액 (실제 매수 가능 금액)
+            d2_deposit = int(data.get('ord_alow_amt', 0))
+            return d2_deposit
         else:
-            err_msg = data.get('return_msg', '상세 사유 없음')
-            kiwoom_utils.log_error(f"❌ [취소거절] {clean_code}: {err_msg}", config=config, send_telegram=True)
-            return None
-            
+            print(f"🚨 [Deposit] 주문가능금액 조회 실패: {res.status_code}")
+            return 0
     except Exception as e:
-        kiwoom_utils.log_error(f"🔥 [취소주문] 시스템 예외: {str(e)}", config=config, send_telegram=True)
-        return None
+        print(f"🚨 [Deposit] 시스템 에러: {e}")
+        return 0

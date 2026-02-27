@@ -2,8 +2,6 @@ import asyncio
 import websockets
 import json
 import threading
-import time # 🚀 [추가] 시간 측정을 위해 필요
-import kiwoom_utils # 🚀 [추가] 통합 에러 로깅을 위해 필요
 
 class KiwoomWSManager:
     def __init__(self, token):
@@ -14,7 +12,6 @@ class KiwoomWSManager:
         self.websocket = None
         self.lock = threading.Lock()
         self.loop = None
-        self.last_recv_time = time.time() # 🚀 [추가] 마지막 데이터 수신 시간 초기화
 
     async def _run_ws(self):
         try:
@@ -30,7 +27,6 @@ class KiwoomWSManager:
                 
                 while True:
                     msg = await ws.recv()
-                    self.last_recv_time = time.time() # 🚀 [추가] 메시지가 들어올 때마다 타임스탬프 갱신
                     res = json.loads(msg)
                     
                     trnm = res.get('trnm')
@@ -59,8 +55,7 @@ class KiwoomWSManager:
                                     if '125' in vals: self.realtime_data[code]['bid_tot'] = int(vals['125'])
 
         except Exception as e:
-            # 🚀 [추가] 치명적 오류 발생 시 로깅 추가
-            kiwoom_utils.log_error(f"❌ [WS] 치명적 오류 발생 (연결 끊김): {e}", send_telegram=True)
+            print(f"❌ [WS] 치명적 오류 발생 (연결 끊김): {e}")
 
     def start(self):
         def thread_target():
@@ -70,24 +65,13 @@ class KiwoomWSManager:
         
         threading.Thread(target=thread_target, daemon=True).start()
 
-    # 🚀 [추가] 좀비 상태 체크 함수
-    def check_health(self, config=None):
-        """
-        웹소켓 좀비 상태 체크 (15초 이상 데이터 없으면 에러 로깅)
-        """
-        gap = time.time() - self.last_recv_time
-        if gap > 15:
-            kiwoom_utils.log_error(f"⚠️ [WS] 웹소켓 데이터 수신 중단 감지 ({int(gap)}초 경과)", 
-                                   config=config, send_telegram=True)
-            return False
-        return True
-
     async def _send_reg(self, codes):
         try:
+            # 💡 진입 즉시 로그를 찍어 코루틴이 살았는지 죽었는지 확인합니다.
             print(f"👉 [WS] 내부 _send_reg 전송 로직 진입: {codes}")
             
             for _ in range(50):
-                if self.websocket:
+                if self.websocket:  # .open 제거 (라이브러리 버전 호환성 문제 완벽 해결)
                     break
                 await asyncio.sleep(0.1)
 
@@ -106,25 +90,29 @@ class KiwoomWSManager:
                 self.subscribed_codes.update(codes)
                 print(f"📡 [WS] 종목 등록 완료 및 데이터 수신 시작: {codes}")
             else:
-                kiwoom_utils.log_error(f"⚠️ [WS] 연결된 웹소켓이 없어 전송 실패: {codes}")
+                print(f"⚠️ [WS] 연결된 웹소켓이 없어 전송 실패: {codes}")
                 
         except Exception as e:
-            kiwoom_utils.log_error(f"🚨 [WS] _send_reg 내부 치명적 에러 발생: {e}", send_telegram=True)
+            # 💡 [핵심] 코루틴 내부에서 에러가 터지면 무조건 터미널에 출력합니다!
+            print(f"🚨 [WS] _send_reg 내부 치명적 에러 발생: {e}")
 
     def subscribe(self, codes):
         if not codes: return
         if isinstance(codes, str): codes = [codes]
         
         new_targets = [c for c in codes if c not in self.subscribed_codes]
+        # print(f"👉 [WS] subscribe 호출됨 - 신규 등록 대상: {new_targets}")
         
         if new_targets and self.loop:
+            # 코루틴을 백그라운드 루프에 던집니다.
             future = asyncio.run_coroutine_threadsafe(self._send_reg(new_targets), self.loop)
             
+            # 💡 [핵심] 퓨처(Future) 결과를 감시하다가 에러가 났으면 멱살을 잡고 끌어옵니다.
             def on_complete(fut):
                 try:
                     fut.result()
                 except Exception as e:
-                    kiwoom_utils.log_error(f"🚨 [WS] run_coroutine_threadsafe 실행 중 에러 발견: {e}", send_telegram=True)
+                    print(f"🚨 [WS] run_coroutine_threadsafe 실행 중 에러 삼킴 발견: {e}")
             future.add_done_callback(on_complete)
 
     def get_latest_data(self, code):
