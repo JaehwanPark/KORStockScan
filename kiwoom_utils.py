@@ -2,7 +2,9 @@ import requests
 import json
 import logging
 import os
+import time
 from datetime import datetime
+
 
 # --- [1. 통합 에러 로깅 및 관제 설정] ---
 error_logger = logging.getLogger('KORStockScan_Error')
@@ -110,27 +112,57 @@ def get_stock_market_ka10100(code, token):
         return None
     except: return None
 
-def get_fractional_info(code, token):
-    """소수점 거래 가능 여부 확인"""
+def get_realtime_hot_stocks(token, config=None):
+    """
+    [ka00198] 당일 누적 기준 실시간 급등주 검색 (10054 에러 방어 로직 추가)
+    """
     url = "https://api.kiwoom.com/api/dostk/stkinfo"
+    
+    # 🚀 [해결 1] User-Agent를 추가하여 일반 크롬 브라우저에서 접속하는 것처럼 위장 (방화벽 통과용)
     headers = {
         'Content-Type': 'application/json;charset=UTF-8',
         'authorization': f'Bearer {token}',
         'cont-yn': 'N',
         'next-key': '',
-        'api-id': 'ka10001'
+        'api-id': 'ka00198',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
     }
-    payload = {"stk_cd": str(code)}
-    try:
-        res = requests.post(url, headers=headers, json=payload, timeout=5)
-        if res.status_code == 200:
+    
+    payload = {'qry_tp': '4'} 
+    hot_codes = []
+    
+    # 🚀 [해결 2] 10054 에러 발생 시 최대 3번까지 재시도하는 끈질긴 로직
+    for attempt in range(3):
+        try:
+            # 타임아웃도 5초에서 10초로 늘려 서버가 생각할 시간을 넉넉히 줍니다.
+            res = requests.post(url, headers=headers, json=payload, timeout=10)
             data = res.json()
-            flo_stk = data.get('flo_stk', '')
-            fav_unit = data.get('fav_unit', '')
-            is_fractional = True if (isinstance(flo_stk, str) and '.' in flo_stk) else False
-            return {'is_fractional': is_fractional, 'fav_unit': fav_unit}
-        return {'is_fractional': False, 'fav_unit': ''}
-    except: return {'is_fractional': False, 'fav_unit': ''}
+            
+            if res.status_code == 200 and data.get('return_code') == '0':
+                item_list = data.get('item_inq_rank', [])
+                
+                for item in item_list:
+                    stk_cd = item.get('stk_cd') 
+                    if stk_cd:
+                        hot_codes.append(str(stk_cd)[:6])
+                
+                return hot_codes
+            else:
+                err_msg = data.get('return_msg', '상세 사유 없음')
+                log_error(f"❌ [급등주 조회 실패] {err_msg}", config=config)
+                return []
+                
+        except requests.exceptions.ConnectionError as e:
+            # 10054 에러를 잡아내고 2초 대기 후 다시 시도
+            print(f"⚠️ 키움 서버 연결 끊김(10054 에러). 2초 후 재시도합니다... ({attempt+1}/3)")
+            time.sleep(2)
+        except Exception as e:
+            log_error(f"🔥 [급등주 조회] 시스템 예외: {e}", config=config)
+            return []
+            
+    # 3번 모두 실패했을 경우 빈 리스트 반환하여 메인 엔진이 다운되지 않게 보호
+    log_error("❌ [급등주 조회] 3회 재시도 모두 실패하여 스캔을 건너뜁니다.", config=config)
+    return []
 
 # --- [3. 보조 계산 및 시각화] ---
 
@@ -214,3 +246,26 @@ def analyze_signal_integrated(ws_data, ai_prob, threshold=70):
 
     # 🚀 최종적으로 checklist를 6번째 인자로 추가 반환
     return score, " + ".join(details), visuals, prices, conclusion, checklist
+
+def register_manual_stock(code, name, config):
+    """
+    [스나이퍼 관제탑] 수동 감시 종목을 DB에 등록합니다.
+    """
+    db_path = config.get('DB_PATH', 'trading_history.db') # 실제 사용하는 DB 이름 확인
+    today = datetime.now().strftime('%Y-%m-%d')
+    
+    try:
+        conn = sqlite3.connect(db_path)
+        sql = """
+            INSERT INTO recommendation_history (date, code, name, buy_price, type, status, position_tag)
+            VALUES (?, ?, ?, 0, 'MANUAL', 'WATCHING', 'MIDDLE')
+            ON CONFLICT(date, code) DO UPDATE SET
+                status = 'WATCHING', type = 'MANUAL'
+        """
+        conn.execute(sql, (today, str(code).zfill(6), name))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"🔥 수동 타겟 DB 등록 오류: {e}")
+        return False

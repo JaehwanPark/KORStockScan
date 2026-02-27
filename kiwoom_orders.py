@@ -36,7 +36,7 @@ def send_buy_order_market(code, qty, token, config=None):
         "stk_cd": str(code),
         "ord_qty": str(qty),
         "ord_uv": "",
-        "trde_tp": "3", # 시장가
+        "trde_tp": "6", # 최유리지정가
         "cond_uv": ""
     }
     
@@ -125,3 +125,45 @@ def get_deposit(token, config=None):
             kiwoom_utils.log_error(f"❌ [예수금조회 실패] 사유: {err_msg}", config=config)
             return 0
     except: return 0
+
+def send_cancel_order(code, orig_ord_no, token, qty=0, config=None):
+    """
+    [kt10003] 주식 취소 주문 - 미체결 물량 취소
+    :param qty: 취소 수량. 기본값 0 (0 입력 시 미체결 잔량 전부 취소)
+    """
+    clean_code = str(code)[:6]
+    url = "https://api.kiwoom.com/api/dostk/ordr"
+    
+    headers = {
+        'Content-Type': 'application/json;charset=UTF-8',
+        'authorization': f'Bearer {token}',
+        'cont-yn': 'N',
+        'next-key': '',
+        'api-id': 'kt10003' # 🚀 취소 전용 TR 명시
+    }
+    
+    payload = {
+        "dmst_stex_tp": "SOR",           # 국내거래소구분
+        "orig_ord_no": str(orig_ord_no), # 원주문번호
+        "stk_cd": clean_code,            # 종목코드
+        "cncl_qty": str(qty)             # 🚀 '0'이면 남은 물량 싹 다 취소!
+    }
+    
+    try:
+        res = requests.post(url, headers=headers, json=payload, timeout=5)
+        data = res.json()
+        
+        # return_code 0이 성공
+        if res.status_code == 200 and data.get('return_code') == 0:
+            cncl_qty_result = data.get('cncl_qty', '')
+            new_ord_no = data.get('ord_no', '')
+            kiwoom_utils.log_error(f"✅ [취소접수] {clean_code} 전량 취소 성공 (새주문번호:{new_ord_no})", config=config)
+            return data
+        else:
+            err_msg = data.get('return_msg', '상세 사유 없음')
+            kiwoom_utils.log_error(f"❌ [취소거절] {clean_code}: {err_msg}", config=config, send_telegram=True)
+            return None
+            
+    except Exception as e:
+        kiwoom_utils.log_error(f"🔥 [취소주문] 시스템 예외: {str(e)}", config=config, send_telegram=True)
+        return None
