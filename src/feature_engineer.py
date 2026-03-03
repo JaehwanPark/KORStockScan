@@ -6,7 +6,7 @@ import pandas_ta as ta
 def calculate_all_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     OHLCV 데이터프레임을 입력받아 KORStockScan의 모든 기술적 지표와
-    AI 모델(XGB, LGBM)용 파생 피처를 계산하여 반환합니다.
+    AI 모델용 파생 피처(수급/신용 포함)를 계산하여 반환합니다.
     """
     df = df.copy()
 
@@ -48,15 +48,12 @@ def calculate_all_features(df: pd.DataFrame) -> pd.DataFrame:
     df['OBV'] = ta.obv(close=df['Close'], volume=df['Volume'])
     df['ATR'] = ta.atr(high=df['High'], low=df['Low'], close=df['Close'], length=14)
 
-    # === [수정됨] 안전한 VWAP 계산 로직 ===
     v = df['Volume']
     p = (df['High'] + df['Low'] + df['Close']) / 3
     vwap_calc = None
 
-    # 1. 인덱스가 이미 날짜형인 경우 (수집기에서 바로 넣을 때)
     if isinstance(df.index, pd.DatetimeIndex):
         vwap_calc = ta.vwap(high=df['High'], low=df['Low'], close=df['Close'], volume=df['Volume'])
-    # 2. Date 컬럼이 존재하는 경우 (DB에서 꺼내올 때)
     elif 'Date' in df.columns:
         temp_idx = pd.to_datetime(df['Date'])
         vwap_calc = ta.vwap(
@@ -66,19 +63,17 @@ def calculate_all_features(df: pd.DataFrame) -> pd.DataFrame:
             volume=df['Volume'].set_axis(temp_idx)
         )
         if vwap_calc is not None:
-            vwap_calc = vwap_calc.values  # 인덱스 충돌 방지를 위해 값(array)만 추출
+            vwap_calc = vwap_calc.values
 
-    # 반환값이 없거나(None) 에러가 났다면 수동 누적 평균으로 계산 (안전장치)
     if vwap_calc is None:
         df['VWAP'] = (p * v).cumsum() / v.cumsum()
     else:
         df['VWAP'] = vwap_calc
 
-    # !!! 가장 중요한 부분: XGBoost object 에러 차단을 위해 강제로 float 타입 변환 !!!
     df['VWAP'] = pd.to_numeric(df['VWAP'], errors='coerce')
 
     # ----------------------------------------------------
-    # 2. AI 앙상블 모델용 파생 피처
+    # 2. 기존 AI 앙상블 모델용 차트 파생 피처
     # ----------------------------------------------------
     df['Vol_Change'] = df['Volume'].pct_change()
     df['MA_Ratio'] = df['Close'] / (df['MA20'] + 1e-9)
@@ -90,7 +85,38 @@ def calculate_all_features(df: pd.DataFrame) -> pd.DataFrame:
     df['Up_Trend_2D'] = ((df['Close'].diff(1) > 0) & (df['Close'].shift(1).diff(1) > 0)).astype(int)
 
     # ----------------------------------------------------
-    # 3. 결측치(NaN) 처리 및 반환
+    # 3. [신규] 수급 및 신용잔고 파생 피처 (AI 재학습용 핵심 데이터)
+    # ----------------------------------------------------
+    # 데이터베이스에 수급 컬럼이 존재할 경우에만 계산 (하위 호환성 방어)
+    if 'Foreign_Net' in df.columns and 'Inst_Net' in df.columns:
+        vol_safe = df['Volume'] + 1e-9
+
+        # 1) 당일 수급 비중 (0~1 사이의 비율로 스케일링)
+        df['Foreign_Vol_Ratio'] = df['Foreign_Net'] / vol_safe
+        df['Inst_Vol_Ratio'] = df['Inst_Net'] / vol_safe
+
+        # 2) 최근 5일 누적 수급 비중 (외국인/기관이 꾸준히 매집 중인가?)
+        df['Foreign_Net_Roll5'] = df['Foreign_Net'].rolling(5).sum() / (df['Volume'].rolling(5).sum() + 1e-9)
+        df['Inst_Net_Roll5'] = df['Inst_Net'].rolling(5).sum() / (df['Volume'].rolling(5).sum() + 1e-9)
+
+        # 3) 쌍끌이 매수 (강력한 상승 시그널)
+        df['Dual_Net_Buy'] = ((df['Foreign_Net'] > 0) & (df['Inst_Net'] > 0)).astype(int)
+    else:
+        for col in ['Foreign_Vol_Ratio', 'Inst_Vol_Ratio', 'Foreign_Net_Roll5', 'Inst_Net_Roll5', 'Dual_Net_Buy']:
+            df[col] = 0
+
+    if 'Margin_Rate' in df.columns:
+        # 4) 신용잔고율 증감 (빚투 개미들이 털려나가는지 확인)
+        df['Margin_Rate_Change'] = df['Margin_Rate'].diff()
+
+        # 5) 신용잔고율 5일 평균 (종목의 전반적인 신용 부담감)
+        df['Margin_Rate_Roll5'] = df['Margin_Rate'].rolling(5).mean()
+    else:
+        df['Margin_Rate_Change'] = 0
+        df['Margin_Rate_Roll5'] = 0
+
+    # ----------------------------------------------------
+    # 4. 결측치(NaN) 처리 및 반환
     # ----------------------------------------------------
     df = df.replace([np.inf, -np.inf], np.nan)
     df.bfill(inplace=True)
@@ -100,15 +126,18 @@ def calculate_all_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 if __name__ == "__main__":
-    import FinanceDataReader as fdr
+    from db_manager import DBManager
 
-    print("Feature Engineer 로직 테스트를 시작합니다...")
-    test_df = fdr.DataReader('005930', '2023-01-01', '2023-12-31')
+    print("Feature Engineer (수급/신용 통합) 테스트 중...")
 
-    # DB에서 불러온 상황을 강제로 모방하기 위해 인덱스를 날리고 Date 컬럼화
-    test_df = test_df.reset_index()
-    processed_df = calculate_all_features(test_df)
+    db = DBManager()
+    # 삼성전자 데이터 꺼내오기 (DB에 새로 쌓인 수급 데이터 확인)
+    test_df = db.get_stock_data('005930', limit=100)
 
-    print("✅ 계산 완료! VWAP 데이터 및 타입 확인:")
-    print(processed_df['VWAP'].tail())
-    print("VWAP Dtype:", processed_df['VWAP'].dtype)
+    if not test_df.empty:
+        processed_df = calculate_all_features(test_df)
+        print("✅ 계산 완료! 신규 수급/신용 피처 샘플:")
+        print(
+            processed_df[['Date', 'Dual_Net_Buy', 'Foreign_Vol_Ratio', 'Inst_Net_Roll5', 'Margin_Rate_Change']].tail(5))
+    else:
+        print("❌ DB에서 데이터를 가져오지 못했습니다.")

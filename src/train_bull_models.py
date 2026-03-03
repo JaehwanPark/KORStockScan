@@ -63,7 +63,7 @@ def load_and_preprocess_bull(codes):
     all_processed_data = []
 
     # 💡 [최적화] 두 모델이 사용하는 모든 컬럼만 명시적으로 가져옴
-    cols_to_fetch = "Date, Code, Open, High, Low, Close, Volume, MA5, MA20, MACD, MACD_Sig, VWAP, OBV, BBL, BBU, RSI, ATR, BBB, BBP, Return"
+    cols_to_fetch = "Date, Code, Open, High, Low, Close, Volume, MA5, MA20, MACD, MACD_Sig, VWAP, OBV, BBL, BBU, RSI, ATR, BBB, BBP, Return, Foreign_Net, Inst_Net, Margin_Rate"
 
     for code in codes:
         # 상승장 국면(25.08 ~ 26.01) 데이터만 필터링
@@ -81,6 +81,19 @@ def load_and_preprocess_bull(codes):
         df['Range_Ratio'] = (df['High'] - df['Low']) / (df['Close'] + 1e-9)
         df['Vol_Momentum'] = df['Volume'] / (df['Volume'].rolling(window=5).mean() + 1e-9)
         df['Dist_MA5'] = df['Close'] / (df['MA5'] + 1e-9)
+        # [추가할 파생 지표 로직] df['Dist_MA5'] = ... 바로 밑에 삽입
+        vol_safe = df['Volume'] + 1e-9
+        df['Foreign_Net'] = df['Foreign_Net'].fillna(0)
+        df['Inst_Net'] = df['Inst_Net'].fillna(0)
+        df['Margin_Rate'] = df['Margin_Rate'].fillna(0)
+
+        df['Foreign_Net_Roll5'] = df['Foreign_Net'].rolling(5).sum() / (df['Volume'].rolling(5).sum() + 1e-9)
+        df['Inst_Net_Roll5'] = df['Inst_Net'].rolling(5).sum() / (df['Volume'].rolling(5).sum() + 1e-9)
+        df['Dual_Net_Buy'] = ((df['Foreign_Net'] > 0) & (df['Inst_Net'] > 0)).astype(int)
+        df['Foreign_Vol_Ratio'] = df['Foreign_Net'] / vol_safe
+        df['Inst_Vol_Ratio'] = df['Inst_Net'] / vol_safe
+        df['Margin_Rate_Change'] = df['Margin_Rate'].diff()
+        df['Margin_Rate_Roll5'] = df['Margin_Rate'].rolling(5).mean()
 
         # 필수 특징 생성 (추세)
         df['Up_Trend_2D'] = (df['Close'].diff(1) > 0) & (df['Close'].shift(1).diff(1) > 0)
@@ -125,8 +138,10 @@ def train_bull_specialists():
         print("[-] 상승장 기간의 데이터가 부족합니다.")
         return
 
-    features_xgb = ['Return', 'MA_Ratio', 'MACD', 'MACD_Sig', 'VWAP', 'OBV', 'Up_Trend_2D', 'Dist_MA5']
-    features_lgbm = ['BB_Pos', 'RSI', 'RSI_Slope', 'Range_Ratio', 'Vol_Momentum', 'Vol_Change', 'ATR', 'BBB', 'BBP']
+    features_xgb = ['Return', 'MA_Ratio', 'MACD', 'MACD_Sig', 'VWAP', 'OBV', 'Up_Trend_2D', 'Dist_MA5', 'Dual_Net_Buy',
+                    'Foreign_Net_Roll5', 'Inst_Net_Roll5']
+    features_lgbm = ['BB_Pos', 'RSI', 'RSI_Slope', 'Range_Ratio', 'Vol_Momentum', 'Vol_Change', 'ATR', 'BBB', 'BBP',
+                     'Foreign_Vol_Ratio', 'Inst_Vol_Ratio', 'Margin_Rate_Change', 'Margin_Rate_Roll5']
 
     # 시간순 정렬 및 데이터 분할
     total_df = total_df.sort_values(by='Date')

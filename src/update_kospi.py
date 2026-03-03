@@ -134,11 +134,26 @@ def update_kospi_data():
     print(f"📊 총 {total_count}개 종목 업데이트를 시작합니다...")
 
     for index, row in kospi_list.iterrows():
-        code, name, marcap = row['Code'], row['Name'], row.get('Marcap', 0)
+        code, name = row['Code'], row['Name']
+        marcap = row.get('Marcap', 0)
         if pd.isna(marcap): marcap = 0
 
+        # 💡 [데이터 자가 치유(Auto-Healing) 방어막]
+        # FDR 통신 에러 등으로 marcap이 0으로 수신되었다면,
+        # 기존 DB를 뒤져서 0이 아닌 마지막 정상 시가총액을 찾아내어 복구합니다!
+        if marcap == 0:
+            try:
+                with db._get_connection() as conn:
+                    # 0을 건너뛰고 가장 최근에 저장된 정상적인 Marcap 조회
+                    res = conn.execute(
+                        f"SELECT Marcap FROM {TABLE_NAME} WHERE Code='{code}' AND Marcap > 0 ORDER BY Date DESC LIMIT 1").fetchone()
+                    if res:
+                        marcap = res[0]
+            except Exception:
+                pass  # DB에도 정상값이 없다면 어쩔 수 없이 0 유지
+
         try:
-            # 기존 종목의 가장 최근 저장 날짜 조회 (db_manager 사용)
+            # 기존 종목의 가장 최근 저장 날짜 조회
             last_date_str = db.get_last_date(TABLE_NAME, date_col='Date', code_col='Code', code=code)
 
             if last_date_str:
@@ -195,7 +210,8 @@ def update_kospi_data():
             if success_count % 50 == 0:
                 print(f"진행 상황: [{success_count}/{total_count}] 완료...")
 
-            time.sleep(0.5)  # 과부하 방지
+                # [기존] time.sleep(0.5)
+                time.sleep(1.0)  # 💡 1초로 늘려 서버 차단 확률을 대폭 낮춥니다.
 
         except Exception as e:
             logging.error(f"[{name}] 업데이트 에러: {e}")

@@ -2,6 +2,7 @@ import pandas as pd
 import FinanceDataReader as fdr
 import logging
 from datetime import datetime
+import time
 
 # 기존 키움 API 유틸리티
 import kiwoom_utils
@@ -22,29 +23,24 @@ class DataClient:
 
     def get_kospi_symbols(self) -> pd.DataFrame:
         """코스피 종목 리스트를 가져옵니다. (FDR 실패 시 로컬 DB 우회)"""
-        # --------------------------------------------------------
         # 1차 시도: FinanceDataReader
-        # --------------------------------------------------------
         try:
             df = fdr.StockListing('KOSPI')
+            if 'Marcap' not in df.columns:
+                df['Marcap'] = 0
             return df[['Code', 'Name', 'Marcap']]
         except Exception as e:
             logging.warning(f"FDR KOSPI 종목 리스트 수집 실패. 로컬 DB 우회 시도... (사유: {e})")
 
-        # --------------------------------------------------------
-        # 2차 시도: 로컬 DB에 저장된 고유 종목 목록 가져오기 (방어 로직)
-        # --------------------------------------------------------
+        # 2차 시도: 로컬 DB (방어 로직)
         try:
-            # daily_stock_quotes 테이블에 존재하는 종목 코드와 이름을 중복 없이 가져옴
-            query = "SELECT DISTINCT Code, Name FROM daily_stock_quotes"
+            # 💡 [핵심 수정] 단순 조회가 아니라, 종목별로 0이 아닌 가장 최근의 시가총액을 복구해서 가져옵니다.
+            query = "SELECT Code, Name, MAX(Marcap) as Marcap FROM daily_stock_quotes GROUP BY Code, Name"
             with self.db._get_connection() as conn:
                 df_db = pd.read_sql(query, conn)
 
             if not df_db.empty:
-                logging.info(f"로컬 DB에서 {len(df_db)}개의 종목 정보를 성공적으로 불러왔습니다.")
-                # Marcap(시가총액) 정보는 과거 데이터에 없을 수 있으므로 0으로 안전하게 채움
-                if 'Marcap' not in df_db.columns:
-                    df_db['Marcap'] = 0
+                logging.info(f"로컬 DB에서 {len(df_db)}개의 종목 정보를 성공적으로 복원했습니다.")
                 return df_db[['Code', 'Name', 'Marcap']]
         except Exception as db_e:
             logging.error(f"로컬 DB KOSPI 종목 리스트 수집 마저 실패: {db_e}")
@@ -118,6 +114,7 @@ class DataClient:
         if self.kiwoom_token:
             today_str = datetime.now().strftime("%Y%m%d")
             df_investor = kiwoom_utils.get_investor_daily_ka10059_df(self.kiwoom_token, code, today_str)
+            time.sleep(0.3)  # 💡 [추가] 수급 요청과 신용 요청 사이에 0.3초 대기
             df_margin = kiwoom_utils.get_margin_daily_ka10013_df(self.kiwoom_token, code, today_str)
 
             # 날짜를 기준으로 병합 (과거 100일 치)
