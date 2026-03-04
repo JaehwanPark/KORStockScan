@@ -93,9 +93,9 @@ def init_and_migrate_db(db: DBManager):
 
 # --- [4. 성과 복기 엔진] ---
 def get_performance_report(db: DBManager):
+    # 💡 [수정] db.get_latest_history_date()는 이미 문자열(날짜)을 반환하므로 바로 변수에 담습니다.
+    last_date = db.get_latest_history_date()
 
-    last_date_df = db.get_latest_history_date()
-    last_date = last_date_df.iloc[0]['last_date']
     if not last_date: return "📊 신규 가동을 시작합니다.\n"
 
     history = db.get_history_by_date(last_date)
@@ -139,7 +139,7 @@ def run_integrated_scanner():
     db = DBManager()
 
     try:
-        init_and_migrate_db()
+        init_and_migrate_db(db)
 
         # 1. 모델 로드 및 Kiwoom 토큰 준비
         m_xgb = joblib.load(os.path.join(DATA_DIR, 'hybrid_xgb_model.pkl'))
@@ -203,65 +203,135 @@ def run_integrated_scanner():
                 db_targets = pd.read_sql(query, conn)
             target_list = db_targets.head(150).to_dict('records')
 
-        # ==========================================
-        # 4. AI 앙상블 스캐닝 루프
-        # ==========================================
-        print(f"🚀 [2/4] AI 콰트로 앙상블 분석 시작 ({len(target_list)} 종목)...")
-        all_results = []
-        if not conn: conn = sqlite3.connect(STOCK_DB_PATH)
+            # ==========================================
+            # 4. AI 앙상블 스캐닝 루프
+            # ==========================================
+            print(f"🚀 [2/4] AI 콰트로 앙상블 분석 시작 ({len(target_list)} 종목)...")
+            all_results = []
+            if not conn: conn = sqlite3.connect(STOCK_DB_PATH)
 
-        for stock in target_list:
-            code, name = stock['Code'], stock['Name']
-            if not kiwoom_utils.is_valid_stock(code, name): continue
+            # 💡 [복구] 지워졌던 탈락 사유 추적 카운터 부활!
+            drop_stats = {'low_price': 0, 'quality': 0, 'ai_prob': 0, 'trend': 0, 'supply': 0, 'error': 0}
 
-            df = db.get_stock_data(code, limit=60)
-            if len(df) < 30: continue
-            df = df.sort_values('Date')
+            for stock in target_list:
+                # 💡 [안전장치] DB에서 가져온 종목코드의 앞자리 '0'이 날아가는 현상 방어
+                code = str(stock['Code']).strip().zfill(6)
+                name = stock['Name']
+                if not kiwoom_utils.is_valid_stock(code, name): continue
 
-            current_price = df.iloc[-1]['Close']
-            if current_price < TRADING_RULES['MIN_PRICE']:
-                continue
+                df = db.get_stock_data(code, limit=60)
+                if len(df) < 30: continue
+                df = df.sort_values('Date')
 
-            # Quality 필터 (상대강도 등)
+                current_price = df.iloc[-1]['Close']
+                if current_price < TRADING_RULES['MIN_PRICE']:
+                    drop_stats['low_price'] += 1
+                    continue
 
-            stock_5d_return = (current_price / df.iloc[-5]['Close']) - 1
-            ma5, ma20 = df['Close'].rolling(5).mean().iloc[-1], df['Close'].rolling(20).mean().iloc[-1]
-            high_20d = df['High'].tail(20).max()
+                # Quality 필터 (상대강도 등)
+                stock_5d_return = (current_price / df.iloc[-5]['Close']) - 1
+                ma5, ma20 = df['Close'].rolling(5).mean().iloc[-1], df['Close'].rolling(20).mean().iloc[-1]
+                high_20d = df['High'].tail(20).max()
 
-            if sum([stock_5d_return > kospi_5d_return, (current_price > ma5 > ma20),
-                    current_price >= (high_20d * 0.90)]) < 2:
-                continue
-            # ----------------------------------------------------
-            # [기존 로직: 삭제]
-            # 지표 계산 및 AI 예측
-            # df['Vol_Change'] = df['Volume'].pct_change()
-            # df['MA_Ratio'] = df['Close'] / (df['MA20'] + 1e-9)
-            # df['BB_Pos'] = (df['Close'] - df['BBL']) / (df['BBU'] - df['BBL'] + 1e-9)
-            # df['RSI_Slope'] = df['RSI'].diff()
-            # df['Range_Ratio'] = (df['High'] - df['Low']) / (df['Close'] + 1e-9)
-            # df['Vol_Momentum'] = df['Volume'] / (df['Volume'].rolling(5).mean() + 1e-9)
-            # df['Dist_MA5'] = df['Close'] / (df['MA5'] + 1e-9)
-            # df['Up_Trend_2D'] = ((df['Close'].diff(1) > 0) & (df['Close'].shift(1).diff(1) > 0)).astype(int)
-            # ----------------------------------------------------
-            # [새로운 로직: 추가]
-            # 이미 feature_engineer 모듈 안에 결측치 처리(bfill, fillna) 방어 로직과
-            # 모델용 파생 피처 계산이 모두 들어있으므로 함수 하나면 끝납니다.
-            df = calculate_all_features(df)
+                # 💡 [완화 적용] 3개 조건 중 '1개'만 만족해도 통과
+                if sum([stock_5d_return > kospi_5d_return, (current_price > ma5 > ma20),
+                        current_price >= (high_20d * 0.90)]) < 1:
+                    drop_stats['quality'] += 1  # 카운터 복구
+                    continue
 
-            h60, l60 = df['High'].tail(60).max(), df['Low'].tail(60).min()
-            pos_tag = 'BREAKOUT' if (current_price - l60) / (h60 - l60 + 1e-9) >= 0.8 else (
-                'BOTTOM' if (current_price - l60) / (h60 - l60 + 1e-9) <= 0.3 else 'MIDDLE')
+                try:
+                    df = calculate_all_features(df)
+                    h60, l60 = df['High'].tail(60).max(), df['Low'].tail(60).min()
+                    pos_tag = 'BREAKOUT' if (current_price - l60) / (h60 - l60 + 1e-9) >= 0.8 else (
+                        'BOTTOM' if (current_price - l60) / (h60 - l60 + 1e-9) <= 0.3 else 'MIDDLE')
 
-            latest_row = df.iloc[[-1]].replace([np.inf, -np.inf], np.nan).fillna(0)
-            preds = [m_xgb.predict_proba(latest_row[FEATURES_XGB])[0][1],
-                     m_lgbm.predict_proba(latest_row[FEATURES_LGBM])[0][1],
-                     b_xgb.predict_proba(latest_row[FEATURES_XGB])[0][1],
-                     b_lgbm.predict_proba(latest_row[FEATURES_LGBM])[0][1]]
+                    latest_row = df.iloc[[-1]].replace([np.inf, -np.inf], np.nan).fillna(0)
+                    preds = [m_xgb.predict_proba(latest_row[FEATURES_XGB])[0][1],
+                             m_lgbm.predict_proba(latest_row[FEATURES_LGBM])[0][1],
+                             b_xgb.predict_proba(latest_row[FEATURES_XGB])[0][1],
+                             b_lgbm.predict_proba(latest_row[FEATURES_LGBM])[0][1]]
 
-            p_final = meta_model.predict_proba(
-                pd.DataFrame([preds], columns=['XGB_Prob', 'LGBM_Prob', 'Bull_XGB_Prob', 'Bull_LGBM_Prob']))[0][1]
-            all_results.append(
-                {'Name': name, 'Prob': p_final, 'Price': int(current_price), 'Code': code, 'Position': pos_tag})
+                    p_final = meta_model.predict_proba(
+                        pd.DataFrame([preds], columns=['XGB_Prob', 'LGBM_Prob', 'Bull_XGB_Prob', 'Bull_LGBM_Prob']))[0][
+                        1]
+
+                    # ==========================================
+                    # 💡 황금 임계값 및 스마트 머니 필터 장착
+                    # ==========================================
+                    # 1. 완화된 AI 확신도 (0.70)
+                    if p_final < TRADING_RULES.get('PROB_RUNNER_PICK', 0.70):
+                        drop_stats['ai_prob'] += 1  # 카운터 복구
+                        continue
+
+                    # 2. 20일 이동평균선 아래(역배열) 종목은 패스
+                    # 👇 (AI의 낙폭과대 반등 타점을 허용하기 위해 아래 4줄의 맨 앞에 #을 붙여 주석 처리합니다)
+                    # latest_close = latest_row['Close'].values[0]
+                    # latest_ma20 = latest_row['MA20'].values[0]
+                    # if latest_close < latest_ma20:
+                    #     drop_stats['trend'] += 1
+                    #     continue
+
+                    # 3. [V3.1] 외국인/기관 매집 '가속도' 필터
+                    f_roll5 = latest_row['Foreign_Net_Roll5'].values[0]
+                    i_roll5 = latest_row['Inst_Net_Roll5'].values[0]
+                    f_accel = latest_row['Foreign_Net_Accel'].values[0]
+                    i_accel = latest_row['Inst_Net_Accel'].values[0]
+
+                    # 조건: 5일 누적이 양수이면서, 가속도(Accel)까지 플러스(+)로 전환된 곳이 한 곳이라도 있어야 통과!
+                    is_foreign_buying = (f_roll5 > 0 and f_accel > 0)
+                    is_inst_buying = (i_roll5 > 0 and i_accel > 0)
+
+                    if not (is_foreign_buying or is_inst_buying):
+                        drop_stats['supply'] += 1
+                        continue
+
+                    # 모든 필터를 뚫은 종목만 추가
+                    all_results.append(
+                        {'Name': name, 'Prob': p_final, 'Price': int(current_price), 'Code': code, 'Position': pos_tag})
+
+                except Exception as e:
+                    drop_stats['error'] += 1  # 카운터 복구
+                    continue
+
+            # ==========================================
+            # 💡 [디버깅 출력 및 텔레그램 관리자 보고]
+            # ==========================================
+            # 1. 텔레그램 전송용 예쁜 마크다운 메시지 생성
+            debug_msg = (
+                f"🛑 *[스캐너 필터링 결과 분석]*\n"
+                f"총 {len(target_list)}개 중 *{len(all_results)}개 생존*\n\n"
+                f"📉 *탈락 사유 통계*\n"
+                f" • 동전주/저가주: {drop_stats['low_price']}개\n"
+                f" • 기초 품질 미달: {drop_stats['quality']}개\n"
+                f" • AI 확신도 부족(<70%): {drop_stats['ai_prob']}개\n"
+                f" • 역배열(20일선 아래): {drop_stats['trend']}개\n"
+                f" • 수급 부재(이탈): {drop_stats['supply']}개\n"
+                f" • 데이터 계산 에러: {drop_stats['error']}개"
+            )
+
+            # 2. 기존처럼 터미널에도 출력 (마크다운 기호 * 제거)
+            print("\n" + "=" * 50)
+            print(debug_msg.replace('*', ''))
+            print("=" * 50 + "\n")
+
+            # 3. 텔레그램 관리자(ADMIN)에게 다이렉트 메시지 전송
+            try:
+                with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+                    conf = json.load(f)
+
+                bot_token = conf.get('TELEGRAM_TOKEN')
+                admin_id = conf.get('ADMIN_ID')
+
+                if bot_token and admin_id:
+                    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+                    payload = {
+                        'chat_id': admin_id,
+                        'text': debug_msg,
+                        'parse_mode': 'Markdown'
+                    }
+                    requests.post(url, json=payload, timeout=5)
+            except Exception as e:
+                print(f"⚠️ 관리자 텔레그램 전송 실패: {e}")
 
         # ==========================================
         # 5. 결과 기록 및 전송
@@ -279,14 +349,16 @@ def run_integrated_scanner():
         # 💡 DB 매니저로 데이터 저장 로직 단순화
 
         for r in main_picks:
-            msg += f"• *{r['Name']}* ({r['Prob']:.1%}) - {r['Position']}\n"
-            db.save_recommendation(today, r['Code'], r['Name'], r['Price'], 'MAIN', r['Position'])
+            msg += "\n🥇 *[적극 추천 종목]*\n"
+            for r in main_picks: msg += f"• *{r['Name']}* ({r['Prob']:.1%}) - {r['Position']}\n"
+            for r in main_picks:
+                db.save_recommendation(today, r['Code'], r['Name'], r['Price'], 'MAIN', r['Position'], prob=r['Prob'])
 
         if runner_ups:
             msg += "\n🥈 *[정예 관심 종목]*\n"
             for r in runner_ups[:10]: msg += f"• {r['Name']} ({r['Prob']:.1%})\n"
             for r in runner_ups:
-                db.save_recommendation(today, r['Code'], r['Name'], r['Price'], 'RUNNER', r['Position'])
+                db.save_recommendation(today, r['Code'], r['Name'], r['Price'], 'RUNNER', r['Position'], prob=r['Prob'])
 
         # 텔레그램 발송
         chat_ids = db.get_telegram_chat_ids()
@@ -373,6 +445,9 @@ def run_intraday_scanner(token):
     new_targets = []
     today_str: str = datetime.now().strftime('%Y-%m-%d')
 
+    # 💡 [해결] 장중 스캐너용 통계 카운터 바구니 초기화!
+    drop_stats = {'ai_prob': 0, 'trend': 0, 'supply': 0, 'error': 0}
+
     for stock in hot_stocks:
         code, name, curr_price, curr_vol = stock['code'], stock['name'], stock['price'], stock['vol']
 
@@ -393,34 +468,9 @@ def run_intraday_scanner(token):
             df.at[df.index[-1], 'Close'] = curr_price
             if curr_vol > 0: df.at[df.index[-1], 'Volume'] = curr_vol
 
-        # 기술적 지표 실시간 갱신
-        # df['MA5'] = df['Close'].rolling(5).mean()
-        # df['MA20'] = df['Close'].rolling(20).mean()
-        # std20 = df['Close'].rolling(20).std()
-        # df['BBU'], df['BBL'] = df['MA20'] + 2 * std20, df['MA20'] - 2 * std20
-        #
-        # delta = df['Close'].diff()
-        # gain = delta.clip(lower=0).ewm(alpha=1 / 14, adjust=False).mean()
-        # loss = -delta.clip(upper=0).ewm(alpha=1 / 14, adjust=False).mean()
-        # df['RSI'] = 100 - (100 / (1 + (gain / (loss + 1e-9))))
-        # df['RSI_Slope'] = df['RSI'].diff()
-        #
-        # ema12 = df['Close'].ewm(span=12, adjust=False).mean()
-        # ema26 = df['Close'].ewm(span=26, adjust=False).mean()
-        # df['MACD'] = ema12 - ema26
-        # df['MACD_Sig'] = df['MACD'].ewm(span=9, adjust=False).mean()
-        #
-        # # AI 필수 Features 가공
-        # df['Vol_Change'] = df['Volume'].pct_change()
-        # df['MA_Ratio'] = df['Close'] / (df['MA20'] + 1e-9)
-        # df['BB_Pos'] = (df['Close'] - df['BBL']) / (df['BBU'] - df['BBL'] + 1e-9)
-        # df['Range_Ratio'] = (df['High'] - df['Low']) / (df['Close'] + 1e-9)
-        # df['Vol_Momentum'] = df['Volume'] / (df['Volume'].rolling(5).mean() + 1e-9)
-        # df['Dist_MA5'] = df['Close'] / (df['MA5'] + 1e-9)
-        # df['Up_Trend_2D'] = ((df['Close'].diff(1) > 0) & (df['Close'].shift(1).diff(1) > 0)).astype(int)
-
         # 💡 [핵심] 장중 스캐너 역시 feature_engineer로 단번에 계산!
         df = calculate_all_features(df)
+
         # 주가 위치 판독
         h60, l60 = df['High'].tail(60).max(), df['Low'].tail(60).min()
         pos_pct = (curr_price - l60) / (h60 - l60 + 1e-9)
@@ -436,27 +486,63 @@ def run_intraday_scanner(token):
                 b_lgbm.predict_proba(latest_row[FEATURES_LGBM])[0][1]
             ]
 
-            meta_input = pd.DataFrame([preds], columns=['XGB_Prob', 'LGBM_Prob', 'Bull_XGB_Prob', 'Bull_LGBM_Prob'])
-            p_final = meta_model.predict_proba(meta_input)[0][1]
+            p_final = meta_model.predict_proba(
+                pd.DataFrame([preds], columns=['XGB_Prob', 'LGBM_Prob', 'Bull_XGB_Prob', 'Bull_LGBM_Prob']))[0][1]
 
-            if p_final >= TRADING_RULES['PROB_INTRADAY_PICK']:
-                new_targets.append({
-                    'code': code,
-                    'name': name,
-                    'prob': p_final,
-                    'price': curr_price,
-                    'status': 'WATCHING',
-                    'Position': pos_tag
-                })
+            # ==========================================
+            # 💡 [신규] 황금 임계값 및 스마트 머니 필터 장착
+            # ==========================================
+            # 1. 확신도 필터 (constants.py 동기화)
+            if p_final < TRADING_RULES['PROB_INTRADAY_PICK']:
+                drop_stats['ai_prob'] += 1  # 카운터 증가
+                continue
+
+            # 2. 20일 이동평균선 아래(역배열) 종목은 패스 (낙폭과대 발굴 시 주석 처리 가능)
+            latest_close = latest_row['Close'].values[0]
+            latest_ma20 = latest_row['MA20'].values[0]
+            if latest_close < latest_ma20:
+                drop_stats['trend'] += 1  # 카운터 증가
+                continue
+
+            # 3. [V3.1] 외국인/기관 매집 '가속도' 필터
+            f_roll5 = latest_row['Foreign_Net_Roll5'].values[0]
+            i_roll5 = latest_row['Inst_Net_Roll5'].values[0]
+
+            # 에러 방지를 위해 get() 메서드로 안전하게 호출
+            f_accel = latest_row.get('Foreign_Net_Accel', pd.Series([0])).values[0]
+            i_accel = latest_row.get('Inst_Net_Accel', pd.Series([0])).values[0]
+
+            # 조건: 5일 누적이 양수이면서, 가속도(Accel)까지 플러스(+)로 전환된 곳이 한 곳이라도 있어야 통과!
+            is_foreign_buying = (f_roll5 > 0 and f_accel > 0)
+            is_inst_buying = (i_roll5 > 0 and i_accel > 0)
+
+            if not (is_foreign_buying or is_inst_buying):
+                drop_stats['supply'] += 1  # 🚨 에러가 발생했던 부분 완벽 해결!
+                continue
+
+            # 모든 필터를 뚫은 종목만 추가
+            new_targets.append(
+                {'name': name, 'prob': p_final, 'price': int(current_price), 'code': code, 'Position': pos_tag})
+
         except Exception as e:
+            drop_stats['error'] += 1  # 카운터 증가
             continue
 
     # ==========================================
     # 4. 분석 결과 DB 기록 및 반환
     # ==========================================
+    # 💡 [신규] 장중 스캐너도 터미널에 필터링 통계를 출력해 줍니다.
+    print("\n" + "=" * 50)
+    print(f"🛑 [장중 스캐너 필터링 결과] 총 {len(hot_stocks)}개 중 {len(new_targets)}개 생존")
+    print(f"  - AI 확신도 부족(<{int(TRADING_RULES['PROB_INTRADAY_PICK'] * 100)}%): {drop_stats['ai_prob']}개")
+    print(f"  - 역배열(20일선 아래): {drop_stats['trend']}개")
+    print(f"  - 수급 부재(매집 가속도 미달): {drop_stats['supply']}개")
+    print(f"  - 데이터 계산 에러: {drop_stats['error']}개")
+    print("=" * 50 + "\n")
+
     if new_targets:
         for t in new_targets:
-            db.save_recommendation(today_str, t['code'], t['name'], t['price'], 'MAIN', t['Position'])
+            db.save_recommendation(today_str, t['Code'], t['Name'], t['Price'], 'MAIN', t['Position'], prob=r['Prob'])
         print(f"🎯 장중 AI 재스캔 완료! {len(new_targets)}개의 주도주가 스나이퍼 엔진에 전달됩니다.")
 
     conn.close()

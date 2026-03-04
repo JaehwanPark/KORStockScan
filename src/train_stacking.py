@@ -87,16 +87,28 @@ def load_and_preprocess_stacking(codes):
         df['Margin_Rate_Change'] = df['Margin_Rate'].diff()
         df['Margin_Rate_Roll5'] = df['Margin_Rate'].rolling(5).mean()
 
-        df['Next_Open'] = df['Open'].shift(-1)
-        df['Next_High'] = df['High'].shift(-1)
-        df['Next_Low'] = df['Low'].shift(-1)
-        df['Next_Close'] = df['Close'].shift(-1)
+        # ==========================================
+        # 🎯 [변경] 3일 단기 스윙 정답지(Target) 생성 로직
+        # ==========================================
+        df['Next1_Open'] = df['Open'].shift(-1)  # 다음날 아침 시가(매수가)
 
-        hit_target = (df['Next_High'] / (df['Next_Open'] + 1e-9)) >= 1.020
-        no_stop_loss = (df['Next_Low'] / (df['Next_Open'] + 1e-9)) >= 0.975
-        solid_close = df['Next_Close'] > df['Next_Open']
+        # 1일차 ~ 3일차의 고가, 저가, 종가 미리보기
+        for i in range(1, 4):
+            df[f'Next{i}_High'] = df['High'].shift(-i)
+            df[f'Next{i}_Low'] = df['Low'].shift(-i)
+            df[f'Next{i}_Close'] = df['Close'].shift(-i)
 
-        df['Target'] = np.where(hit_target & no_stop_loss & solid_close, 1, 0)
+        # 3일 동안의 최고가와 최저가 계산
+        df['Max_High_3D'] = df[['Next1_High', 'Next2_High', 'Next3_High']].max(axis=1)
+        df['Min_Low_3D'] = df[['Next1_Low', 'Next2_Low', 'Next3_Low']].min(axis=1)
+
+        # 타겟 조건: 3일 안에 +4.5% 도달 & 3일 동안 -3.0% 손절선 방어 성공
+        hit_target = (df['Max_High_3D'] / (df['Next1_Open'] + 1e-9)) >= 1.045
+        no_stop_loss = (df['Min_Low_3D'] / (df['Next1_Open'] + 1e-9)) >= 0.970
+
+        df['Target'] = np.where(hit_target & no_stop_loss, 1, 0)
+
+        # 결측치(최근 3일 데이터가 없어 정답을 알 수 없는 마지막 행들) 제거
         df = df.replace([np.inf, -np.inf], np.nan).dropna()
         if not df.empty: all_processed_data.append(df)
 
@@ -176,6 +188,30 @@ def train_meta_model():
     joblib.dump(meta_model, META_MODEL_PATH)
     print("=============================================\n")
     print(f"✅ Stacking 메타 모델이 성공적으로 갱신되었습니다! ({META_MODEL_PATH})")
+
+    # ==========================================
+    # 🚀 [추가] 정밀 백테스트(V2)를 위한 AI 예측 결과 저장
+    # ==========================================
+    print("\n💾 백테스트용 AI 예측 결과(ai_predictions.csv)를 생성합니다...")
+
+    # 원본 test_df의 Date와 Code만 복사해 옵니다. ('Name' 삭제)
+    df_results = test_df[['Date', 'Code']].copy()
+
+    # 방금 구한 각 모델들의 OOF 예측 확률과 최종 Stacking 확률을 주입합니다.
+    df_results['XGB_Prob'] = np.round(meta_X_test['XGB_Prob'].values, 4)
+    df_results['LGBM_Prob'] = np.round(meta_X_test['LGBM_Prob'].values, 4)
+    df_results['Bull_XGB_Prob'] = np.round(meta_X_test['Bull_XGB_Prob'].values, 4)
+    df_results['Bull_LGBM_Prob'] = np.round(meta_X_test['Bull_LGBM_Prob'].values, 4)
+    df_results['Stacking_Prob'] = np.round(meta_pred_proba, 4)
+    df_results['Actual_Target'] = y_test.values
+
+    # 시간순 백테스트를 위해 날짜 오름차순 정렬
+    df_results = df_results.sort_values(by=['Date', 'Code']).reset_index(drop=True)
+
+    # CSV 저장
+    save_path = os.path.join(DATA_DIR, 'ai_predictions.csv')
+    df_results.to_csv(save_path, index=False, encoding='utf-8-sig')
+    print(f"✅ 테스트 세트(총 {len(df_results):,}건) 예측 결과가 저장되었습니다: {save_path}")
 
 
 if __name__ == "__main__":

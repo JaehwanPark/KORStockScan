@@ -122,6 +122,15 @@ def calculate_all_features(df: pd.DataFrame) -> pd.DataFrame:
     df.bfill(inplace=True)
     df.fillna(0, inplace=True)
 
+    # ==========================================
+    # 💡 [신규] 스마트 머니 가속도 지표 (MACD 방식)
+    # ==========================================
+    # 외국인과 기관의 순매수 단기(5일) 지수이동평균 - 장기(20일) 지수이동평균
+    df['Foreign_Net_Accel'] = df['Foreign_Net'].ewm(span=5, adjust=False).mean() - df['Foreign_Net'].ewm(span=20,
+                                                                                                         adjust=False).mean()
+    df['Inst_Net_Accel'] = df['Inst_Net'].ewm(span=5, adjust=False).mean() - df['Inst_Net'].ewm(span=20,
+                                                                                                adjust=False).mean()
+
     return df
 
 

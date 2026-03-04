@@ -15,21 +15,31 @@ TRADING_RULES = {
     "PROB_RUNNER_PICK": 0.75,  # 정규 스캐너 '관심 종목(RUNNER)' 기준 점수
     "PROB_INTRADAY_PICK": 0.80,  # 장중 스캐너 발탁 기준 점수
 
-    "SNIPER_AGGRESSIVE_PROB": 0.80,  # 스나이퍼 매매 시 수급 기준을 완화해주는 고확신 점수
-
     # ==========================================
     # 3. 매매 타점 및 익절/손절 (Sniper Engine)
     # ==========================================
-    "BUY_RATIO": 0.1,  # 총 예수금 대비 1종목당 매수 비중 (0.1 = 10%)
+    'BUY_RATIO': 0.2,                # 예수금의 20% (5분할 매수)
+    'SNIPER_AGGRESSIVE_PROB': 0.70,  # 🏆 AI 진입 확신도 임계값 (기존 0.85 -> 0.70 완화)
 
-    # 익절 로직 (Trailing Stop)
-    "TRAILING_START_PCT": 2.0,  # 가변 익절 트래킹을 시작할 최소 수익률 (%)
-    "TRAILING_DRAWDOWN_PCT": 0.5,  # 달성한 고점 대비 하락 시 즉시 익절 (%)
-    "MIN_PROFIT_PRESERVE": 1.5,  # 트래킹 시작 전, 최소 수익 보존선 (%)
+    # 💡 [변경] 스윙 손절선 (백테스트 기준 -3.0% 반영)
+    'STOP_LOSS_BULL': -3.0,          # 🏆 상승장 손절선 (최적화 결과 -3.0 반영)
+    'STOP_LOSS_BEAR': -3.0,          # 🏆 하락장 손절선 (최적화 결과 -3.0 통일)
+    'STOP_LOSS_BREAKOUT': -1.5,      # 돌파 실패 시 칼손절 (-1.5%)
+    'STOP_LOSS_BOTTOM': -3.0,        # 바닥권 매물 소화 버티기용 (-4.0%)
 
-    # 손절 로직 (시장 상태 및 포지션별 맞춤형)
-    "STOP_LOSS_BULL": -3.5,  # 상승장 기본 손절선
-    "STOP_LOSS_BEAR": -1.5,  # 하락/조정장 기본 손절선 (보수적 대응)
-    "STOP_LOSS_BREAKOUT": -1.5,  # '전고점 돌파형(BREAKOUT)' 손절선 (짧고 타이트하게)
-    "STOP_LOSS_BOTTOM": -3.0,  # '바닥 탈출형(BOTTOM)' 손절선 (여유를 두고 대응)
+    # 💡 [변경] 가변 익절 (Trailing Stop) 룰
+    'TRAILING_START_PCT': 5.0,       # 🏆 방어선 가동 시작 수익률 (기존 3.5 -> 5.0 상향)
+    'TRAILING_DRAWDOWN_PCT': 1.5,    # 🏆 고점 대비 익절 하락폭 (%)
+    'MIN_PROFIT_PRESERVE': 1.5,      # 어떤 흔들기가 와도 최소 +1.5% 수익은 무조건 보존
+
+    'HOLDING_DAYS': 3,               # 최대 보유 영업일
+    # ==========================================
+    # 🎯 추가된 스나이퍼 매매/운영 세부 설정값
+    # ==========================================
+    'BUY_SCORE_THRESHOLD': 80,       # AI 봇이 매수 버튼을 누르는 최소 종합 점수
+    'VPW_STRONG_LIMIT': 120,         # 확신도가 낮을 때 매수를 강행하기 위한 체결강도 허들(%)
+    'RALLY_TARGET_PCT': 5.0,         # 신고가 돌파 시 기본 목표가 (%)
+    'ORDER_TIMEOUT_SEC': 30,         # 미체결 주문 취소 대기 시간 (초)
+    'SCAN_INTERVAL_SEC': 1800,       # 장중 스캐너 재가동 주기 (초 / 1800초 = 30분)
+    'MAX_WATCHING_SLOTS': 5          # 장중 감시 종목 최대 유지 개수
 }

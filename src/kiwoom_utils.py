@@ -3,11 +3,14 @@ import os
 import time
 from datetime import datetime
 
-import requests
+import FinanceDataReader as fdr
 import sqlite3
 import pandas as pd
 import numpy as np
 import holidays
+import requests
+
+
 
 # --- [신규] 경로 설정 (상대 참조) ---
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -68,27 +71,132 @@ def get_kiwoom_token(config):
         log_error(f"토큰 발급 중 시스템 예외: {e}", config=config, send_telegram=True)
         return None
 
-def get_stock_name_ka10001(code, token):
-    """ka10001(주식기본정보요청) - 종목명 조회"""
+
+def get_industry_list_ka10101(token, market_type="0"):
+    """
+    [ka10101] 업종코드 리스트 조회
+    market_type: "0":코스피, "1":코스닥, "2":KOSPI200
+    반환값 예시: [{'marketCode': '0', 'code': '001', 'name': '종합(KOSPI)', 'group': '1'}, ...]
+    """
     url = "https://api.kiwoom.com/api/dostk/stkinfo"
     headers = {
         'Content-Type': 'application/json;charset=UTF-8',
         'authorization': f'Bearer {token}',
-        'cont-yn': 'N',
-        'next-key': '',
+        'api-id': 'ka10101'
+    }
+    payload = {"mrkt_tp": str(market_type)}
+
+    try:
+        res = requests.post(url, headers=headers, json=payload, timeout=5)
+        if res.status_code == 200:
+            # 명세서 응답 예시에 따라 JSON 배열(List) 형태로 반환됨
+            return res.json()
+    except Exception as e:
+        print(f"🚨 ka10101 업종코드 리스트 조회 실패: {e}")
+
+    return []
+
+
+def get_basic_info_ka10001(token, code):
+    """
+    [ka10001] 주식기본정보요청 - 종목명 및 시가총액 조회
+    구조 설명: stkinfo 엔드포인트 사용, 데이터는 응답의 Root에 위치함
+    """
+    url = "https://api.kiwoom.com/api/dostk/stkinfo"
+    headers = {
+        'Content-Type': 'application/json;charset=UTF-8',
+        'authorization': f'Bearer {token}',
         'api-id': 'ka10001'
     }
     payload = {"stk_cd": str(code)}
+
     try:
         res = requests.post(url, headers=headers, json=payload, timeout=5)
         if res.status_code == 200:
             data = res.json()
-            stock_name = data.get('stk_nm')
-            return stock_name.strip() if stock_name else code
-        return code
-    except:
-        return code
 
+            # 종목명 추출
+            name = data.get('stk_nm', code)
+
+            # 💡 [핵심] 키움 API의 시가총액 키값은 'mkt_cap'이 아니라 'mac' 입니다!
+            raw_marcap = str(data.get('mac', '0'))
+
+            # 예외 처리 (공백이거나 콤마가 섞여 들어올 경우 방어)
+            raw_marcap = raw_marcap.replace(',', '').strip()
+            if not raw_marcap:
+                raw_marcap = '0'
+
+            marcap = int(float(raw_marcap))
+            return {'Name': name, 'Marcap': marcap}
+
+    except Exception as e:
+        print(f"🚨 ka10001 호출 실패 ({code}): {e}")
+
+    return {'Name': code, 'Marcap': 0}
+
+
+def get_daily_ohlcv_ka10081_df(token, code, end_date=""):
+    """[ka10081] 주식일봉차트조회요청 - OHLCV 데이터 (실제 명세서 반영 버전)"""
+    # 💡 URL이 chart로 변경되었습니다.
+    url = "https://api.kiwoom.com/api/dostk/chart"
+    headers = {
+        'Content-Type': 'application/json;charset=UTF-8',
+        'authorization': f'Bearer {token}',
+        'api-id': 'ka10081'
+    }
+
+    if not end_date:
+        from datetime import datetime
+        end_date = datetime.now().strftime("%Y%m%d")
+
+    # 💡 파라미터 이름이 base_dt 와 upd_stkpc_tp(수정주가) 로 변경되었습니다.
+    payload = {
+        "stk_cd": str(code),
+        "base_dt": end_date,
+        "upd_stkpc_tp": "1"
+    }
+
+    for attempt in range(3):
+        try:
+            res = requests.post(url, headers=headers, json=payload, timeout=10)
+
+            if res.status_code == 200:
+                data = res.json()
+
+                if str(data.get('return_code', '0')) != '0':
+                    print(f"      🚨 [키움서버 거절 사유] {data.get('return_msg', '알 수 없는 에러')}")
+
+                # 💡 응답 리스트의 Key가 stk_dt_pole_chart_qry 로 변경되었습니다.
+                output = data.get('stk_dt_pole_chart_qry', [])
+                if output:
+                    df = pd.DataFrame(output)
+
+                    # 💡 명세서에 맞춰 컬럼명을 매핑합니다. (cur_prc -> Close)
+                    df = df.rename(columns={
+                        'dt': 'Date',
+                        'open_pric': 'Open',
+                        'high_pric': 'High',
+                        'low_pric': 'Low',
+                        'cur_prc': 'Close',  # 현재가를 종가로 사용
+                        'trde_qty': 'Volume'
+                    })
+
+                    df['Date'] = pd.to_datetime(df['Date'], format='%Y%m%d')
+
+                    # 콤마(,) 제어 및 숫자형 변환
+                    for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+                        df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').abs()
+
+                    df.set_index('Date', inplace=True)
+                    return df.sort_index()
+            else:
+                print(f"      🚨 [HTTP 에러] {res.status_code} - {res.text}")
+            break
+        except Exception as e:
+            print(f"      🚨 [파이썬 시스템 에러] {e}")
+            time.sleep(2)
+
+    return pd.DataFrame()
 
 def get_item_info_ka10100(token, code):
     """
@@ -224,6 +332,64 @@ def get_realtime_hot_stocks(token, config=None, as_dict=False):
     log_error("❌ [급등주 조회] 3회 재시도 모두 실패하여 스캔을 건너뜁니다.", config=config)
     return []
 
+
+def get_top_marketcap_stocks(limit=300):
+    """
+    [FDR 완벽 대체용] KOSPI 시가총액 상위 종목 코드를 가져옵니다.
+    네이버 모바일 증권 API가 허용하는 최대 호출량(60개)에 맞춰
+    여러 페이지를 안전하게 순회하며 우량주 종목을 수집합니다.
+    """
+    import requests
+    import time
+
+    # 💡 [해결 1] 평범한 크롬 웹 브라우저인 것처럼 신분증(헤더) 위조
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Referer': 'https://m.stock.naver.com/'
+    }
+
+    target_codes = []
+    # 💡 [해결 2] 300개를 한 번에 부르지 않고(400 에러 방지), 60개씩 쪼개서 요청합니다.
+    page_size = 60
+    max_pages = (limit // page_size) + 1
+
+    for page in range(1, max_pages + 1):
+        url = f"https://m.stock.naver.com/api/stocks/marketValue/KOSPI?page={page}&pageSize={page_size}"
+
+        try:
+            res = requests.get(url, headers=headers, timeout=10)
+
+            if res.status_code == 200:
+                data = res.json()
+                stocks = data.get('stocks', [])
+
+                # 더 이상 불러올 종목이 없으면 루프 탈출
+                if not stocks:
+                    break
+
+                for stock in stocks:
+                    code = stock.get('itemCode')
+                    name = stock.get('stockName')
+
+                    # 스팩, 우선주, ETF 등 불순물 제거 로직 통과 후 적재
+                    if is_valid_stock(code, name):
+                        target_codes.append(code)
+
+                        # 목표 개수(300개)를 채우면 즉시 반환
+                        if len(target_codes) >= limit:
+                            return target_codes
+            else:
+                print(f"🚨 네이버 API 접근 거절 (HTTP {res.status_code}) - 페이지: {page}")
+                break
+
+        except Exception as e:
+            print(f"🚨 시가총액 상위 종목 조회 실패: {e}")
+            break
+
+        # 💡 [핵심] 네이버 서버 차단 방지를 위한 짧은 휴식 시간
+        time.sleep(0.3)
+
+    return target_codes
 
 # --- [3. 보조 계산 및 시각화] ---
 def generate_visual_gauge(ratio, label_left="매도", label_right="매수"):
@@ -536,3 +702,46 @@ def get_margin_daily_ka10013_df(token, code, base_dt=None):
             break
 
     return pd.DataFrame()
+
+def get_market_regime(token=None):
+    """
+    코스피 지수를 분석하여 현재 시장 상태(BULL/BEAR)를 판별합니다.
+    (1차: FinanceDataReader, 2차: 키움 ka20006 API 우회)
+    기준: 코스피 현재가가 20일 이동평균선 위에 있으면 BULL, 아래면 BEAR
+    """
+    # 1차: FDR 사용 (코스피 지수 KS11)
+    try:
+        df = fdr.DataReader('KS11')
+        if not df.empty and len(df) >= 20:
+            current_close = float(df['Close'].iloc[-1])
+            ma20 = float(df['Close'].tail(20).mean())
+            return 'BULL' if current_close >= ma20 else 'BEAR'
+    except Exception as e:
+        print(f"⚠️ FDR 코스피 조회 실패. 키움 ka20006 API로 우회합니다: {e}")
+
+    # 2차: 키움 ka20006 (업종일봉조회요청) 사용
+    if token:
+        try:
+            url = "https://api.kiwoom.com/api/dostk/mrkcond"
+            headers = {
+                'Content-Type': 'application/json;charset=UTF-8',
+                'authorization': f'Bearer {token}',
+                'cont-yn': 'N',
+                'api-id': 'ka20006'
+            }
+            payload = {"upjong_cd": "001"} # 001: 코스피
+            res = requests.post(url, headers=headers, json=payload, timeout=10)
+            if res.status_code == 200:
+                res_json = res.json()
+                for key, val in res_json.items():
+                    if isinstance(val, list) and len(val) >= 20 and 'cur_prc' in val[0]:
+                        df_k = pd.DataFrame(val)
+                        df_k['cur_prc'] = pd.to_numeric(df_k['cur_prc'].astype(str).str.replace(',', '', regex=False).str.replace('+', '', regex=False).str.replace('-', '', regex=False), errors='coerce')
+                        current_close = df_k['cur_prc'].iloc[0]
+                        ma20 = df_k['cur_prc'].head(20).mean()
+                        return 'BULL' if current_close >= ma20 else 'BEAR'
+        except Exception as e2:
+            print(f"🚨 키움 ka20006 우회 조회 실패: {e2}")
+
+    # 둘 다 실패하면 보수적으로 BEAR(하락장) 모드 전환하여 리스크 관리
+    return 'BEAR'

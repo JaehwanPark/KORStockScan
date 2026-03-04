@@ -67,16 +67,28 @@ def load_and_preprocess(codes):
         df['Dual_Net_Buy'] = ((df['Foreign_Net'] > 0) & (df['Inst_Net'] > 0)).astype(int)
 
         df['Return'] = df['Close'].pct_change()
-        df['Next_Open'] = df['Open'].shift(-1)
-        df['Next_High'] = df['High'].shift(-1)
-        df['Next_Low'] = df['Low'].shift(-1)
-        df['Next_Close'] = df['Close'].shift(-1)
+        # ==========================================
+        # 🎯 [변경] 3일 단기 스윙 정답지(Target) 생성 로직
+        # ==========================================
+        df['Next1_Open'] = df['Open'].shift(-1)  # 다음날 아침 시가(매수가)
 
-        hit_target = (df['Next_High'] / (df['Next_Open'] + 1e-9)) >= 1.020
-        no_stop_loss = (df['Next_Low'] / (df['Next_Open'] + 1e-9)) >= 0.975
-        solid_close = df['Next_Close'] > df['Next_Open']
+        # 1일차 ~ 3일차의 고가, 저가, 종가 미리보기
+        for i in range(1, 4):
+            df[f'Next{i}_High'] = df['High'].shift(-i)
+            df[f'Next{i}_Low'] = df['Low'].shift(-i)
+            df[f'Next{i}_Close'] = df['Close'].shift(-i)
 
-        df['Target'] = np.where(hit_target & no_stop_loss & solid_close, 1, 0)
+        # 3일 동안의 최고가와 최저가 계산
+        df['Max_High_3D'] = df[['Next1_High', 'Next2_High', 'Next3_High']].max(axis=1)
+        df['Min_Low_3D'] = df[['Next1_Low', 'Next2_Low', 'Next3_Low']].min(axis=1)
+
+        # 타겟 조건: 3일 안에 +4.5% 도달 & 3일 동안 -3.0% 손절선 방어 성공
+        hit_target = (df['Max_High_3D'] / (df['Next1_Open'] + 1e-9)) >= 1.045
+        no_stop_loss = (df['Min_Low_3D'] / (df['Next1_Open'] + 1e-9)) >= 0.970
+
+        df['Target'] = np.where(hit_target & no_stop_loss, 1, 0)
+
+        # 결측치(최근 3일 데이터가 없어 정답을 알 수 없는 마지막 행들) 제거
         df = df.replace([np.inf, -np.inf], np.nan).dropna()
         if not df.empty: all_data.append(df)
 

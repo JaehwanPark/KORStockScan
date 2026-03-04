@@ -1,3 +1,6 @@
+# ==========================================
+# 1. 임포트 및 전역 변수 설정 (TOKEN, CONF, DBManager 등)
+# ==========================================
 import json
 import os
 import signal
@@ -12,9 +15,11 @@ from telebot import types
 # 💡 엔진 및 유틸리티 모듈 임포트
 import kiwoom_sniper_v2
 import kiwoom_utils
+from db_manager import DBManager
+from constants import TRADING_RULES
 
 # ==========================================
-# 1. 경로 및 환경 설정 (상대 참조 고정)
+# 2. 경로 및 환경 설정 (상대 참조 고정)
 # ==========================================
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.abspath(os.path.join(CURRENT_DIR, '..', 'data'))
@@ -23,6 +28,9 @@ os.makedirs(DATA_DIR, exist_ok=True)
 CONFIG_PATH = os.path.join(DATA_DIR, 'config_prod.json')
 USERS_DB_PATH = os.path.join(DATA_DIR, 'users.db')
 STOCK_DB_PATH = os.path.join(DATA_DIR, 'kospi_stock_data.db')
+
+# 전역 DB 매니저 인스턴스 생성
+db_manager = DBManager()
 
 def load_config():
     """안전한 설정 파일 로드"""
@@ -43,8 +51,39 @@ if not TOKEN:
 bot = telebot.TeleBot(TOKEN)
 engine_thread = None
 
+
+def has_special_auth(chat_id):
+    """
+    요청한 사용자가 최고관리자(ADMIN_ID)이거나,
+    users.db 상에서 auth_group이 'A'(어드민) 또는 'V'(VIP)인 사용자인지 판별합니다.
+    """
+    chat_id_str = str(chat_id)
+
+    # 1. 최고 관리자(config.json의 ADMIN_ID)는 무조건 프리패스 (안전장치)
+    admin_id = str(CONF.get('ADMIN_ID', ''))
+    if chat_id_str == admin_id:
+        return True
+
+    # 2. DB에서 권한 그룹 조회 (A: 어드민, V: VIP)
+    try:
+        # USER_DB_PATH 변수가 봇 파일 상단에 정의되어 있어야 합니다.
+        with sqlite3.connect(USERS_DB_PATH) as conn:
+            cursor = conn.cursor()
+
+            cursor.execute("SELECT auth_group FROM users WHERE chat_id = ?", (chat_id_str,))
+            result = cursor.fetchone()
+
+            # 💡 [핵심] 결과가 'A' 이거나 'V' 이면 통과!
+            if result and result[0] in ['A', 'V']:
+                return True
+    except Exception as e:
+        print(f"⚠️ 권한 체크 중 DB 에러 발생: {e}")
+
+    # 권한이 없거나 에러가 나면 False 반환
+    return False
+
 # ==========================================
-# 2. 데이터베이스 유틸리티 (Thread-safe)
+# 3. 데이터베이스 유틸리티 (Thread-safe)
 # ==========================================
 def init_db():
     """사용자 관리 DB 초기화"""
@@ -62,66 +101,286 @@ def get_db_connection(db_path):
     return sqlite3.connect(db_path, timeout=10)
 
 # ==========================================
-# 3. 챗봇 핵심 로직 및 메뉴
+# 4. 유틸리티 및 UI 함수 (핸들러보다 무조건 위에 위치!)
 # ==========================================
 def get_main_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.add("🏆 오늘의 추천종목", "🔍 실시간 종목분석")
+    markup.add("📜 감시/보유 리스트", "➕ 수동 종목 추가") # 💡 신규 버튼 추가
     markup.add("☕ 서버 운영 후원하기")
     return markup
 
-@bot.message_handler(commands=['start', 'help'])
-def handle_start(message):
-    chat_id = message.chat.id
-    with get_db_connection(USERS_DB_PATH) as conn:
-        conn.execute('INSERT OR IGNORE INTO users (chat_id) VALUES (?)', (chat_id,))
-
-    welcome_msg = (
-        "🚀 **KORStockScan v12.1 관제 시스템 기동**\n\n"
-        "백테스트 **승률 63.3%**의 AI 앙상블이 실시간 감시 중입니다.\n\n"
-        "📈 **스나이퍼 매매 원칙**\n"
-        "• 장중 가변 익절 / 손절 시스템 적용\n"
-        "• FDR-Kiwoom API 2중 지수 판독 적용\n"
-        "• AI 확신도 기반 정예 종목 선별"
-    )
-    bot.send_message(chat_id, welcome_msg, parse_mode='Markdown', reply_markup=get_main_keyboard())
-
-# --- [FDR 방어 로직이 적용된 상태 보고] ---
-@bot.message_handler(commands=['상태', 'status'])
-def handle_status(message):
-    chat_id = message.chat.id
-    now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
-    # 🚀 [FDR 방어 핵심] 엔진이 판독한 최신 시장 상태 가져오기
-    regime = kiwoom_sniper_v2.get_market_regime()
-    regime_icon = "🐂 (상승장)" if regime == 'BULL' else "🐻 (조정장)"
-
-    msg = f"🟢 *[KORStockScan 시스템 보고]*\n"
-    msg += f"⏱ 현재시간: `{now_str}`\n"
-    msg += f"📊 시장판독: **{regime_icon}**\n\n"
-
-    # 엔진 스레드 생존 확인
-    if engine_thread and engine_thread.is_alive():
-        msg += "✅ **매매 엔진:** `정상 가동 중` 💓\n"
-    else:
-        msg += "❌ **매매 엔진:** `중단됨 (재시작 필요)` ⚠️\n"
-
-    # 실시간 모니터링 현황
+def get_user_badge(chat_id):
     try:
-        with get_db_connection(STOCK_DB_PATH) as conn:
-            today = datetime.now().strftime('%Y-%m-%d')
-            watch_cnt = conn.execute("SELECT COUNT(*) FROM recommendation_history WHERE date=? AND status='WATCHING'",
-                                     (today,)).fetchone()[0]
-            hold_cnt = conn.execute("SELECT COUNT(*) FROM recommendation_history WHERE date=? AND status='HOLDING'",
-                                    (today,)).fetchone()[0]
-            msg += f"👀 **감시 대상:** `{watch_cnt} 종목`\n"
-            msg += f"💼 **보유 종목:** `{hold_cnt} 종목`"
+        temp_conn = sqlite3.connect(USERS_DB_PATH)
+        row = temp_conn.execute("SELECT user_level FROM users WHERE chat_id = ?", (chat_id,)).fetchone()
+        temp_conn.close()
+        return "👑 [VIP 후원자] " if row and row[0] == 1 else "👤 [일반] "
+    except:
+        return ""
+
+def process_analyze_step(message):
+    chat_id = message.chat.id
+    code = message.text.strip()
+
+    if len(code) == 6 and code.isdigit():
+        bot.send_message(chat_id, f"🔄 `{code}` 분석을 시작합니다...", parse_mode='Markdown')
+        try:
+            # 엔진의 분석 함수 호출
+            report = kiwoom_sniper_v2.analyze_stock_now(code)
+            bot.send_message(chat_id, report, parse_mode='Markdown')
+        except Exception as e:
+            # 🚀 [업데이트] 에러 내용을 사용자에게 직접 전달하여 원인 파악
+            bot.send_message(chat_id, f"❌ 시스템 분석 오류 발생:\n`{str(e)}`", parse_mode='Markdown')
+    else:
+        bot.send_message(chat_id, "⚠️ 올바른 6자리 종목코드를 입력해 주세요.")
+
+def process_manual_add_logic(message, code):
+    stock_name = code
+
+    # 🛡️ 오직 키움 API(ka10001) 다이렉트 호출 (FDR 완전 제거)
+    try:
+        token = kiwoom_utils.get_kiwoom_token(CONF)
+        info = kiwoom_utils.get_basic_info_ka10001(token, code)
+        stock_name = info['Name']
+
+        # 엉뚱한 코드 입력 시 방어
+        if stock_name == code:
+            raise ValueError("존재하지 않는 종목코드이거나 상장폐지된 종목입니다.")
+
+    except Exception as api_e:
+        bot.reply_to(message, f"❌ 종목명 조회 실패: 올바른 종목코드인지 확인해 주세요. ({api_e})")
+        return
+
+        # 🎯 DB 저장 및 V3 룰 적용
+    try:
+        db = DBManager()
+        today = datetime.now().strftime('%Y-%m-%d')
+
+        with db._get_connection() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO recommendation_history 
+                (date, code, name, prob, status) 
+                VALUES (?, ?, ?, ?, 'WATCHING')
+            """, (today, code, stock_name, TRADING_RULES['SNIPER_AGGRESSIVE_PROB']))
+            conn.commit()
+
+        # ==========================================
+        # 💡 [신규] 수동 추가 시 차트 기반 목표가 즉시 계산
+        # ==========================================
+
+        df = db.get_stock_data(code, limit=20)
+
+        target_price_str = "데이터 부족 (기본값 적용)"
+        target_reason = f"기본 시스템 익절선 (+{TRADING_RULES.get('TRAILING_START_PCT', 3.0)}%)"
+
+        # DB에 데이터가 충분히 있는 경우 차트 저항대 계산
+        if df is not None and len(df) >= 10:
+            # 어제 종가 기준(또는 DB상 가장 최근 종가)
+            curr_price = int(df.iloc[-1]['Close'])
+            high_20d = df['High'].max()
+
+            # 볼린저 밴드 상단 계산
+            ma20 = df['Close'].mean()
+            std20 = df['Close'].std()
+            upper_bb = ma20 + (2 * std20)
+
+            chart_resistance = max(high_20d, upper_bb)
+            rally_pct = TRADING_RULES.get('RALLY_TARGET_PCT', 5.0)
+
+            if chart_resistance > curr_price:
+                target_price = int(chart_resistance)
+                expected_rtn = ((target_price / curr_price) - 1) * 100
+                target_price_str = f"{target_price:,}원 (+{expected_rtn:.1f}%)"
+                target_reason = "차트 저항대 (20일 고점/볼린저 상단)"
+            else:
+                # 저항선을 뚫은 신고가 영역
+                target_price = int(curr_price * (1 + (rally_pct / 100)))
+                target_price_str = f"{target_price:,}원 (+{rally_pct}%)"
+                target_reason = "신고가 돌파 랠리 (단기 추세)"
+
+        # ==========================================
+        # 💡 업그레이드된 알림 메시지 구성
+        # ==========================================
+        msg = (
+            f"✅ *[{stock_name}]({code}) 수동 감시 추가 완료!*\n\n"
+            f"📊 *차트 기반 1차 목표가*\n"
+            f"• 목표 단가: `{target_price_str}`\n"
+            f"• 산출 사유: *{target_reason}*\n\n"
+            f"⚙️ *현재 적용 기준 (V3 황금 비율)*\n"
+            f"• 매수 조건: 수급 포착 시 (AI 확신도 {TRADING_RULES.get('SNIPER_AGGRESSIVE_PROB', 0.8) * 100:.0f}% 간주)\n"
+            f"• 기계 익절선: `+{TRADING_RULES.get('TRAILING_START_PCT', 3.0)}%` (도달 시 트레일링 스탑)\n"
+            f"• 기본 손절선: `{TRADING_RULES.get('STOP_LOSS_BULL', -2.5)}%`\n\n"
+            f"🔫 지금부터 스나이퍼가 실시간 타점을 감시합니다."
+        )
+        bot.reply_to(message, msg, parse_mode='Markdown')
+
     except Exception as e:
-        msg += f"⚠️ DB 조회 불가: {e}"
+        bot.reply_to(message, f"❌ DB 저장 중 시스템 에러 발생: {e}")
 
-    bot.send_message(chat_id, msg, parse_mode='Markdown')
+def broadcast_alert(message_text):
+    temp_conn = sqlite3.connect(USERS_DB_PATH)
+    rows = temp_conn.execute('SELECT chat_id FROM users').fetchall()
+    for row in rows:
+        try:
+            bot.send_message(row[0], message_text, parse_mode='Markdown')
+            time.sleep(0.05)
+        except:
+            pass
+    temp_conn.close()
 
-@bot.message_handler(commands=['분석'])
+def broadcast_today_picks():
+    """
+    [v12.1 복구] 봇 시작 시, 오늘 날짜의 추천 종목을 모든 가입자에게 브로드캐스트합니다.
+    """
+    try:
+        # 1. DB 연결 및 오늘자 추천 종목 조회
+        conn = sqlite3.connect(STOCK_DB_PATH)
+        today = datetime.now().strftime('%Y-%m-%d')
+
+        # 종목코드 6자리를 보장하며 데이터 추출
+        query = "SELECT name, buy_price, type, code FROM recommendation_history WHERE date=?"
+        picks = conn.execute(query, (today,)).fetchall()
+        conn.close()
+
+        if not picks:
+            print(f"🧐 [{today}] 추천 종목이 아직 생성되지 않아 알림을 대기합니다.")
+            return
+
+        # 💡 constants.py에 세팅된 익절/손절 기준값을 가져옵니다.
+        # (키 이름이 다르다면 constants.py에 적힌 이름으로 맞춰주세요!)
+        take_profit = TRADING_RULES.get('TRAILING_START_PCT', 3.0)
+        stop_loss = TRADING_RULES.get('STOP_LOSS_PCT', 2.5)
+
+        # 2. 메시지 헤더 구성
+        msg = f"🌅 **[{today}] AI 스태킹 앙상블 리포트**\n"
+        msg += f"🎯 **전략: 장중 +{take_profit}% 익절(가변익절) / -{stop_loss}% 손절**\n"
+        msg += "--------------------------------------\n"
+
+        # 3. 등급별 종목 분류 (code[:6] 원칙 적용)
+        main_picks = [p for p in picks if p[2] == 'MAIN']
+        runner_picks = [p for p in picks if p[2] == 'RUNNER']
+
+        # 강력 추천 종목 출력
+        if main_picks:
+            msg += "🔥 **[고확신 종목]**\n"
+            for name, price, _, code in main_picks:
+                clean_code = str(code)[:6]  # 🚀 무조건 6자리만 사용
+                msg += f"• **{name}** ({clean_code}) : `{price:,}원`\n"
+            msg += "\n"
+
+        # 관심 종목 출력 (상위 10개로 제한하여 도배 방지)
+        if runner_picks:
+            msg += "🥈 **[관심 종목 TOP 10]**\n"
+            for name, price, _, code in runner_picks[:10]:
+                clean_code = str(code)[:6]
+                msg += f"• **{name}** ({clean_code}) : `{price:,}원`\n"
+
+            # 전체 개수 안내로 신뢰도 상승
+            if len(runner_picks) > 10:
+                msg += f"\n*(그 외 {len(runner_picks) - 10}개의 유망 종목 실시간 추적 중)*"
+
+        msg += "\n--------------------------------------\n"
+        msg += "💡 `/상태` 입력 시 엔진 가동 현황을 확인하실 수 있습니다."
+
+        # 4. 전체 사용자에게 전송
+        broadcast_alert(msg)
+        print(f"📢 [{today}] 추천 종목 브로드캐스트 완료 (총 {len(picks)}종목)")
+
+    except Exception as e:
+        # 통합 에러 로깅 활용
+        import kiwoom_utils
+        kiwoom_utils.log_error(f"❌ 아침 브로드캐스트 실패: {e}", config=CONF)
+
+def process_manual_add_step(message):
+    code = message.text.strip()
+
+    # 사용자가 코드를 안 치고 다른 메뉴 버튼을 눌러버렸을 경우 (취소 처리)
+    if not code.isdigit() or len(code) != 6:
+        bot.reply_to(message, "🚫 종목 추가가 취소되었거나 올바른 6자리 숫자가 아닙니다.")
+        return
+
+    process_manual_add_logic(message, code)
+
+def start_engine():
+    kiwoom_sniper_v2.run_sniper(broadcast_alert)
+
+def monitor_exit_time():
+    while True:
+        if datetime.now().time() >= datetime.strptime("23:50:00", "%H:%M:%S").time():
+            print("🌙 시스템 안전 종료")
+            os.kill(os.getpid(), signal.SIGTERM)
+        time.sleep(60)
+
+# ==========================================
+# 🎯 5. 메인 키보드 버튼 전용 핸들러들 (우선순위 높음)
+# ==========================================
+
+@bot.message_handler(func=lambda message: message.text == "📜 감시/보유 리스트")
+def handle_watch_list(message):
+    try:
+        today = datetime.now().strftime('%Y-%m-%d')
+        with db_manager._get_connection() as conn:
+            # 💡 [수정] prob 컬럼을 콕 집어 부르지 않고 전체(*)를 안전하게 가져옵니다.
+            query = "SELECT * FROM recommendation_history WHERE date=? OR status='HOLDING'"
+            import pandas as pd
+            df = pd.read_sql(query, conn, params=(today,))
+
+        if df.empty:
+            bot.reply_to(message, "📭 현재 감시 중이거나 보유 중인 종목이 없습니다.")
+            return
+
+        # 스나이퍼 엔진과 동일하게 중복 제거 (HOLDING 우선)
+        df = df.sort_values(by='status').drop_duplicates(subset=['code'], keep='first')
+
+        # 💡 [핵심 방어] 구버전 DB라서 prob 컬럼이 아예 없다면, V3 기본값(70%)을 채워줍니다.
+        if 'prob' not in df.columns:
+            df['prob'] = TRADING_RULES['SNIPER_AGGRESSIVE_PROB']
+
+        # 상태별로 분류
+        watching = df[df['status'] == 'WATCHING']
+        pending = df[df['status'] == 'PENDING']
+        holding = df[df['status'] == 'HOLDING']
+        completed = df[df['status'] == 'COMPLETED']
+
+        msg = "📜 *[KORStockScan V3 감시/보유 현황]*\n"
+        msg += "━━━━━━━━━━━━━━\n"
+
+        # 1. 감시 중 (WATCHING)
+        msg += f"👀 *감시 대기 (WATCHING)* : {len(watching)}종목\n"
+        for _, row in watching.iterrows():
+            # 안전하게 prob 값 추출 (결측치면 70%)
+            prob_val = row['prob'] if pd.notna(row['prob']) else TRADING_RULES['SNIPER_AGGRESSIVE_PROB']
+            msg += f" • {row['name']} ({row['code']}) | AI확신: {prob_val * 100:.0f}%\n"
+
+        # 2. 주문/체결 대기 (PENDING)
+        if not pending.empty:
+            msg += f"\n⏳ *주문 대기 (PENDING)* : {len(pending)}종목\n"
+            for _, row in pending.iterrows():
+                buy_price = row.get('buy_price', 0)
+                msg += f" • {row['name']} | {int(buy_price) if pd.notna(buy_price) else 0:,}원 주문 중\n"
+
+        # 3. 보유 중 (HOLDING)
+        if not holding.empty:
+            msg += f"\n💰 *보유 중 (HOLDING)* : {len(holding)}종목\n"
+            for _, row in holding.iterrows():
+                buy_price = row.get('buy_price', 0)
+                buy_qty = row.get('buy_qty', 0)
+                msg += f" • {row['name']} ({row['code']}) | {int(buy_price) if pd.notna(buy_price) else 0:,}원 ({int(buy_qty) if pd.notna(buy_qty) else 0}주)\n"
+
+        # 4. 오늘 매매 완료 (COMPLETED)
+        if not completed.empty:
+            msg += f"\n🏁 *금일 매매 완료* : {len(completed)}종목\n"
+            for _, row in completed.iterrows():
+                msg += f" • {row['name']}\n"
+
+        msg += "━━━━━━━━━━━━━━"
+        bot.reply_to(message, msg, parse_mode='Markdown')
+
+    except Exception as e:
+        bot.reply_to(message, f"❌ 리스트 조회 중 시스템 에러 발생: {e}")
+
+@bot.message_handler(func=lambda message: message.text == "🔍 실시간 종목분석")
 def handle_analyze(message):
     badge = get_user_badge(message.chat.id)
     chat_id = message.chat.id
@@ -141,8 +400,7 @@ def handle_analyze(message):
     except Exception as e:
         bot.send_message(chat_id, f"❌ 오류 발생: {e}")
 
-
-@bot.message_handler(commands=['오늘의추천', '추천'])
+@bot.message_handler(func=lambda message: message.text == "🏆 오늘의 추천종목")
 def handle_today_picks(message):
     chat_id = message.chat.id
     try:
@@ -175,6 +433,82 @@ def handle_today_picks(message):
     except:
         bot.send_message(chat_id, "❌ 추천 종목 로드 실패")
 
+@bot.message_handler(func=lambda message: message.text == "➕ 수동 종목 추가")
+def handle_manual_add_btn(message):
+    # 🛡️ 권한 체크: 어드민(A) 또는 VIP(V)
+    if not has_special_auth(message.chat.id):
+        bot.reply_to(message, "🚫 권한이 없습니다. 봇 관리자(A) 또는 VIP(V) 등급만 사용할 수 있는 기능입니다.")
+        return
+
+    msg = bot.reply_to(message, "📝 실시간 감시망에 추가할 **종목코드 6자리**를 입력해 주세요.\n*(예: 005930)*", parse_mode='Markdown')
+    bot.register_next_step_handler(msg, process_manual_add_step)
+
+
+# --- [명령어로 직접 입력 시 (/add 005930)] ---
+@bot.message_handler(commands=['add'])
+def handle_manual_add_cmd(message):
+    # 🛡️ 권한 체크: 어드민(A) 또는 VIP(V)
+    if not has_special_auth(message.chat.id):
+        bot.reply_to(message, "🚫 권한이 없습니다. 봇 관리자(A) 또는 VIP(V) 등급만 사용할 수 있는 기능입니다.")
+        return
+
+    args = message.text.split()
+    if len(args) < 2:
+        bot.reply_to(message, "⚠️ 종목코드를 함께 입력해 주세요. (예: `/add 005930`)", parse_mode='Markdown')
+        return
+
+    process_manual_add_logic(message, args[1])
+
+# ==========================================
+# 🎯 6. 명령어 핸들러들 (/상태, /분석, /add 등)
+# ==========================================
+
+@bot.message_handler(commands=['start', 'help'])
+def handle_start(message):
+    chat_id = message.chat.id
+    with sqlite3.connect(USERS_DB_PATH) as conn:
+        conn.execute('INSERT OR IGNORE INTO users (chat_id) VALUES (?)', (chat_id,))
+
+    welcome_msg = (
+        "🚀 **KORStockScan v12.1 관제 시스템 기동**\n\n"
+        "백테스트 **승률 63.3%**의 AI 앙상블이 실시간 감시 중입니다.\n\n"
+        "📈 **스나이퍼 매매 원칙**\n"
+        "• 장중 가변 익절 / 손절 시스템 적용\n"
+        "• FDR-Kiwoom API 2중 지수 판독 적용\n"
+        "• AI 확신도 기반 정예 종목 선별"
+    )
+    bot.send_message(chat_id, welcome_msg, parse_mode='Markdown', reply_markup=get_main_keyboard())
+
+@bot.message_handler(commands=['상태', 'status'])
+def handle_status(message):
+    chat_id = message.chat.id
+    now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    token = kiwoom_utils.get_kiwoom_token(CONF)
+    regime = kiwoom_utils.get_market_regime(token)
+    regime_icon = "🐂 (상승장)" if regime == 'BULL' else "🐻 (조정장)"
+
+    msg = f"🟢 *[KORStockScan 시스템 보고]*\n"
+    msg += f"⏱ 현재시간: `{now_str}`\n"
+    msg += f"📊 시장판독: **{regime_icon}**\n\n"
+
+    msg += "✅ **매매 엔진:** `정상 가동 중` 💓\n" if engine_thread and engine_thread.is_alive() else "❌ **매매 엔진:** `중단됨` ⚠️\n"
+
+    # 💡 [최적화] DBManager 활용 (락 방지)
+    try:
+        with db_manager._get_connection() as conn:
+            today = datetime.now().strftime('%Y-%m-%d')
+            watch_cnt = conn.execute("SELECT COUNT(*) FROM recommendation_history WHERE date=? AND status='WATCHING'",
+                                     (today,)).fetchone()[0]
+            hold_cnt = conn.execute("SELECT COUNT(*) FROM recommendation_history WHERE date=? AND status='HOLDING'",
+                                    (today,)).fetchone()[0]
+            msg += f"👀 **감시 대상:** `{watch_cnt} 종목`\n"
+            msg += f"💼 **보유 종목:** `{hold_cnt} 종목`"
+    except Exception as e:
+        msg += f"⚠️ DB 조회 불가: {e}"
+
+    bot.send_message(chat_id, msg, parse_mode='Markdown')
+
 @bot.message_handler(commands=['사유', 'why'])
 def handle_why_not(message):
     chat_id = message.chat.id
@@ -194,70 +528,9 @@ def handle_why_not(message):
     except Exception as e:
         bot.send_message(chat_id, f"❌ 분석 중 오류 발생: {e}")
 
-
-# ==========================================
-# 🚀 [관제탑] 수동 종목 등록 로직 시작
-# ==========================================
-@bot.message_handler(commands=['수동등록', 'admin'])
-def handle_manual_add(message):
-    chat_id = message.chat.id
-    # 1. 관리자 권한 철저히 확인
-    if str(chat_id) != str(CONF.get('ADMIN_ID')):
-        bot.send_message(chat_id, "⛔ 관리자만 사용 가능한 명령어입니다.")
-        return
-
-    # 2. 인라인 버튼(채팅창 안에 뜨는 투명 버튼) 생성
-    markup = types.InlineKeyboardMarkup()
-    btn = types.InlineKeyboardButton("🎯 수동 감시 종목 추가", callback_data="add_manual_stock")
-    markup.add(btn)
-
-    bot.send_message(chat_id, "👨‍✈️ **[스나이퍼 관제탑]**\n수동으로 감시할 타겟을 지정하시겠습니까?", reply_markup=markup, parse_mode="Markdown")
-
-@bot.callback_query_handler(func=lambda call: call.data == "add_manual_stock")
-def callback_add_stock(call):
-    # 버튼을 누르면 기존 메시지의 버튼을 로딩 상태로 변경하거나 알림을 띄울 수 있음
-    bot.answer_callback_query(call.id)
-
-    msg = bot.send_message(call.message.chat.id, "✏️ 추가할 **종목코드**와 **종목명**을 띄어쓰기로 입력하세요.\n*(예: 005930 삼성전자)*",
-                           parse_mode="Markdown")
-    # 다음 사용자가 치는 채팅을 'process_manual_stock_input' 함수가 가로채서 처리하도록 예약
-    bot.register_next_step_handler(msg, process_manual_stock_input)
-
-def process_manual_stock_input(message):
-    chat_id = message.chat.id
-    try:
-        inputs = message.text.split()
-        if len(inputs) < 2:
-            bot.send_message(chat_id, "❌ 형식이 잘못되었습니다. 다시 시도해주세요.\n*(예: 005930 삼성전자)*", parse_mode="Markdown")
-            return
-
-        code = inputs[0]
-        name = " ".join(inputs[1:])
-
-        # 🚀 [수정됨] kiwoom_utils의 전담 함수를 우아하게 호출합니다!
-        is_success = kiwoom_utils.register_manual_stock(code, name, CONF)
-
-        if is_success:
-            bot.send_message(chat_id,
-                             f"✅ **[{name}]({code})**\n스나이퍼 수동 타겟으로 DB 등록이 완료되었습니다!\n\n*(※ 실시간 감시 대상 등록 최대 30분 소요)*",
-                             parse_mode="Markdown")
-        else:
-            bot.send_message(chat_id, "❌ DB 등록 실패. 서버 로그를 확인하세요.")
-
-    except Exception as e:
-        bot.send_message(chat_id, f"❌ 명령어 처리 오류 발생: {e}")
-
-
-# ==========================================
-# 🚀 [관제탑] 수동 종목 등록 로직 끝
-# ==========================================
-
-# --- [4. 결제 및 등급 관리 로직] ---
-
 @bot.pre_checkout_query_handler(func=lambda query: True)
 def process_pre_checkout(pre_checkout_query):
     bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
-
 
 @bot.message_handler(content_types=['successful_payment'])
 def handle_payment_success(message):
@@ -267,7 +540,6 @@ def handle_payment_success(message):
     temp_conn.commit()
     temp_conn.close()
     bot.send_message(chat_id, "🎊 **VIP 등급으로 승격되었습니다!**")
-
 
 @bot.message_handler(commands=['reload'])
 def handle_reload(message):
@@ -284,138 +556,14 @@ def handle_reload(message):
     except Exception as e:
         bot.send_message(chat_id, f"❌ 새로고침 오류: {e}")
 
-
-# --- [5. 텍스트 메시지 및 기타 유틸] ---
+# ==========================================
+# 🎯 블랙홀(Catch-all) 핸들러 (반드시 맨 마지막에 위치!)
+# ==========================================
 
 @bot.message_handler(func=lambda message: True)
 def handle_text_messages(message):
-    chat_id = message.chat.id
-    text = message.text
-
-    if text == "🏆 오늘의 추천종목":
-        handle_today_picks(message)
-    elif text == "🔍 실시간 종목분석":
-        bot.send_message(chat_id, "분석할 **종목코드 6자리**를 입력해주세요.", parse_mode='Markdown')
-        bot.register_next_step_handler(message, process_analyze_step)
-    elif text == "☕ 서버 운영 후원하기":
-        prices = [types.LabeledPrice(label="서버 후원", amount=50)]
-        bot.send_invoice(chat_id, "✨ 서버 후원", "24시간 운영 지원", "donation_50", "", "XTR", prices)
-    else:
-        bot.send_message(chat_id, "아래 메뉴 버튼을 이용해 주세요.", reply_markup=get_main_keyboard())
-
-
-def get_user_badge(chat_id):
-    try:
-        temp_conn = sqlite3.connect(USERS_DB_PATH)
-        row = temp_conn.execute("SELECT user_level FROM users WHERE chat_id = ?", (chat_id,)).fetchone()
-        temp_conn.close()
-        return "👑 [VIP 후원자] " if row and row[0] == 1 else "👤 [일반] "
-    except:
-        return ""
-
-
-def process_analyze_step(message):
-    chat_id = message.chat.id
-    code = message.text.strip()
-
-    if len(code) == 6 and code.isdigit():
-        bot.send_message(chat_id, f"🔄 `{code}` 분석을 시작합니다...", parse_mode='Markdown')
-        try:
-            # 엔진의 분석 함수 호출
-            report = kiwoom_sniper_v2.analyze_stock_now(code)
-            bot.send_message(chat_id, report, parse_mode='Markdown')
-        except Exception as e:
-            # 🚀 [업데이트] 에러 내용을 사용자에게 직접 전달하여 원인 파악
-            bot.send_message(chat_id, f"❌ 시스템 분석 오류 발생:\n`{str(e)}`", parse_mode='Markdown')
-    else:
-        bot.send_message(chat_id, "⚠️ 올바른 6자리 종목코드를 입력해 주세요.")
-
-# ==========================================
-# 4. 브로드캐스트 및 알림 시스템
-# ==========================================
-def broadcast_alert(message_text):
-    temp_conn = sqlite3.connect(USERS_DB_PATH)
-    rows = temp_conn.execute('SELECT chat_id FROM users').fetchall()
-    for row in rows:
-        try:
-            bot.send_message(row[0], message_text, parse_mode='Markdown')
-            time.sleep(0.05)
-        except:
-            pass
-    temp_conn.close()
-
-def broadcast_today_picks():
-    """
-    [v12.1 복구] 봇 시작 시, 오늘 날짜의 추천 종목을 모든 가입자에게 브로드캐스트합니다.
-    """
-    try:
-        # 1. DB 연결 및 오늘자 추천 종목 조회
-        conn = sqlite3.connect(STOCK_DB_PATH)
-        today = datetime.now().strftime('%Y-%m-%d')
-
-        # 종목코드 6자리를 보장하며 데이터 추출
-        query = "SELECT name, buy_price, type, code FROM recommendation_history WHERE date=?"
-        picks = conn.execute(query, (today,)).fetchall()
-        conn.close()
-
-        if not picks:
-            print(f"🧐 [{today}] 추천 종목이 아직 생성되지 않아 알림을 대기합니다.")
-            return
-
-        # 2. 메시지 헤더 구성
-        msg = f"🌅 **[{today}] AI 스태킹 앙상블 리포트**\n"
-        msg += "🎯 **전략: 장중 +2.0% 익절(가변익절) / -2.5% 손절**\n"
-        msg += "------------------------------------------\n"
-
-        # 3. 등급별 종목 분류 (code[:6] 원칙 적용)
-        main_picks = [p for p in picks if p[2] == 'MAIN']
-        runner_picks = [p for p in picks if p[2] == 'RUNNER']
-
-        # 강력 추천 종목 출력
-        if main_picks:
-            msg += "🔥 **[고확신 종목]**\n"
-            for name, price, _, code in main_picks:
-                clean_code = str(code)[:6]  # 🚀 무조건 6자리만 사용
-                msg += f"• **{name}** ({clean_code}) : `{price:,}원`\n"
-            msg += "\n"
-
-        # 관심 종목 출력 (상위 10개로 제한하여 도배 방지)
-        if runner_picks:
-            msg += "🥈 **[관심 종목 TOP 10]**\n"
-            for name, price, _, code in runner_picks[:10]:
-                clean_code = str(code)[:6]
-                msg += f"• **{name}** ({clean_code}) : `{price:,}원`\n"
-
-            # 전체 개수 안내로 신뢰도 상승
-            if len(runner_picks) > 10:
-                msg += f"\n*(그 외 {len(runner_picks) - 10}개의 유망 종목 실시간 추적 중)*"
-
-        msg += "\n------------------------------------------\n"
-        msg += "💡 `/상태` 입력 시 엔진 가동 현황을 확인하실 수 있습니다."
-
-        # 4. 전체 사용자에게 전송
-        broadcast_alert(msg)
-        print(f"📢 [{today}] 추천 종목 브로드캐스트 완료 (총 {len(picks)}종목)")
-
-    except Exception as e:
-        # 통합 에러 로깅 활용
-        import kiwoom_utils
-        kiwoom_utils.log_error(f"❌ 아침 브로드캐스트 실패: {e}", config=CONF)
-
-
-# --- [6. 메인 시스템 가동] ---
-
-def start_engine():
-    kiwoom_sniper_v2.run_sniper(broadcast_alert)
-
-
-def monitor_exit_time():
-    while True:
-        if datetime.now().time() >= datetime.strptime("22:00:00", "%H:%M:%S").time():
-            print("🌙 시스템 안전 종료")
-            os.kill(os.getpid(), signal.SIGTERM)
-        time.sleep(60)
-
+    # 위에서 정의된 버튼 텍스트나 명령어에 해당하지 않는 '모든 잡다한 텍스트'는 여기서 걸러집니다.
+    bot.send_message(message.chat.id, "아래 메뉴 버튼을 이용해 주세요.", reply_markup=get_main_keyboard())
 
 if __name__ == '__main__':
     print("🤖 KORStockScan v12.1 관제 시스템 기동 중...")

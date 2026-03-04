@@ -65,18 +65,23 @@ class DBManager:
     # --------------------------------------------------------
     # 2. 데이터 저장 (Write)
     # --------------------------------------------------------
-    def save_recommendation(self, date: str, code: str, name: str, price: int, pick_type: str, position: str):
-        """AI가 발굴한 종목을 히스토리 테이블에 저장(또는 업데이트)합니다."""
+    def save_recommendation(self, date: str, code: str, name: str, price: int, pick_type: str, position: str,
+                            prob: float = 0.7):
+        """AI가 발굴한 종목을 히스토리 테이블에 저장(또는 업데이트)합니다. (진짜 확신도 반영)"""
+
+        # 💡 [핵심] INSERT와 UPDATE 쿼리 양쪽 모두에 prob 컬럼을 추가했습니다.
         query = """
-                INSERT INTO recommendation_history (date, code, name, buy_price, type, status, position_tag)
-                VALUES (?, ?, ?, ?, ?, 'WATCHING', ?) ON CONFLICT(date, code) DO \
+                INSERT INTO recommendation_history (date, code, name, buy_price, type, status, position_tag, prob)
+                VALUES (?, ?, ?, ?, ?, 'WATCHING', ?, ?) ON CONFLICT(date, code) DO \
                 UPDATE SET
                     buy_price=excluded.buy_price, \
                     type =excluded.type, \
-                    position_tag=excluded.position_tag \
+                    position_tag=excluded.position_tag, \
+                    prob=excluded.prob
                 """
         with self._get_connection() as conn:
-            conn.execute(query, (date, code, name, price, pick_type, position))
+            # 전달받은 파라미터 튜플의 맨 마지막에 prob를 넣어줍니다.
+            conn.execute(query, (date, code, name, price, pick_type, position, prob))
             conn.commit()
 
     def execute_query(self, query: str, params: tuple = ()):
