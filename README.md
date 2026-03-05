@@ -45,11 +45,37 @@
 ## ⚙️ 설치 및 설정 (Installation & Setup)
 
 ### 1. 환경 준비
-* **Windows OS** (키움증권 Open API+ 구동 필수 환경)
-* **Python 3.8+ (32-bit 버전 필수)**: 키움 API는 32비트 환경에서만 동작합니다.
+* **Windows/LINUX OS** (키움증권 REST API 구동 필수 환경)
+* **Python 3.13+**
 
 ### 2. 패키지 설치
 ```bash
 git clone [https://github.com/your-username/KORStockScan.git](https://github.com/your-username/KORStockScan.git)
 cd KORStockScan
 pip install -r requirements.txt
+```
+
+### 3. 설정파일 셋업
+```json
+{
+  "TELEGRAM_TOKEN": "your_bot_token_here",
+  "ADMIN_ID": "your_telegram_chat_id",
+  "KIWOOM_ACCOUNT": "your_8_digit_account_number"
+}
+```
+
+### 4. 전략 튜닝 (constants.py)
+
+모든 매매 기준은 단일 진실 공급원(`constants.py`)에서 중앙 통제됩니다. 시장 상황에 맞게 수치를 조절하세요.
+
+1. **`TRAILING_START_PCT` (가변 익절 방어선 가동 시작점 (예: 3.5%))**  
+2. **`TRAILING_DRAWDOWN_PCT` (고점 대비 하락 허용폭 (예: 1.5%))**
+3. **`STOP_LOSS_BULL / STOP_LOSS_BEAR` (시장 상태에 따른 탄력적 손절선)**
+4. **`PROB_RUNNER_PICK` (AI 최소 매수 확신도 임계값)**
+
+
+## ⚠️ 면책 조항 (Disclaimer)
+
+본 레포지토리의 코드는 알고리즘 트레이딩 연구 및 학습 목적으로 작성되었습니다.
+제공되는 AI 모델과 매매 로직은 수익을 보장하지 않으며, 실제 투자에 적용하여 발생하는 모든 금전적 손실에 대한 책임은 전적으로 사용자(투자자) 본인에게 있습니다.
+반드시 모의투자를 통해 충분한 검증을 거친 후 소액으로 실전에 적용하시기 바랍니다.
