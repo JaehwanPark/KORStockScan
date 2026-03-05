@@ -542,7 +542,7 @@ def run_intraday_scanner(token):
 
     if new_targets:
         for t in new_targets:
-            db.save_recommendation(today_str, t['Code'], t['Name'], t['Price'], 'MAIN', t['Position'], prob=r['Prob'])
+            db.save_recommendation(today_str, t['Code'], t['Name'], t['Price'], 'MAIN', t['Position'], prob=t['Prob'])
         print(f"🎯 장중 AI 재스캔 완료! {len(new_targets)}개의 주도주가 스나이퍼 엔진에 전달됩니다.")
 
     conn.close()

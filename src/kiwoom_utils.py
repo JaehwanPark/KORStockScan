@@ -295,7 +295,8 @@ def get_realtime_hot_stocks(token, config=None, as_dict=False):
             res = requests.post(url, headers=headers, json=payload, timeout=10)
             data = res.json()
 
-            if res.status_code == 200 and data.get('return_code') == '0':
+            # 💡 [핵심] str()을 씌워서 숫자로 오든 문자로 오든 무조건 문자 '0'으로 변환해서 비교합니다!
+            if res.status_code == 200 and str(data.get('return_code')) == '0':
                 item_list = data.get('item_inq_rank', [])
 
                 for item in item_list:

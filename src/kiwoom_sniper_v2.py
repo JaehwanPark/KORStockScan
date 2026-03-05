@@ -290,10 +290,12 @@ def handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback):
     strong_vpw = TRADING_RULES.get('VPW_STRONG_LIMIT', 115)
     buy_threshold = TRADING_RULES.get('BUY_SCORE_THRESHOLD', 80)
 
-    v_pw_limit = 100 if ai_prob >= TRADING_RULES['SNIPER_AGGRESSIVE_PROB'] else strong_vpw
-    is_shooting = ws_data.get('v_pw', 0) >= v_pw_limit
+    current_vpw = ws_data.get('v_pw', 0)
+    v_pw_limit = 100 if ai_prob >= TRADING_RULES.get('SNIPER_AGGRESSIVE_PROB', 0.8) else strong_vpw
+    is_shooting = current_vpw >= v_pw_limit
 
-    if score >= buy_threshold or is_shooting:
+    # 💡 [핵심 방어선] 점수가 아무리 높아도, 현재 체결강도가 103 미만이면 절대 쏘지 않습니다!
+    if (score >= buy_threshold or is_shooting) and current_vpw >= 103:
         msg = (f"🚀 **[{stock['name']}]({code}) 스나이퍼 포착!**\n"
                f"현재가: `{p['curr']:,}원` | 확신도: `{ai_prob:.1%}`\n"
                f"수급강도: `{ws_data.get('v_pw', 0):.1f}%` {visual}")

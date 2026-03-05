@@ -28,7 +28,7 @@ TRADING_RULES = {
     'STOP_LOSS_BOTTOM': -3.0,        # 바닥권 매물 소화 버티기용 (-4.0%)
 
     # 💡 [변경] 가변 익절 (Trailing Stop) 룰
-    'TRAILING_START_PCT': 5.0,       # 🏆 방어선 가동 시작 수익률 (기존 3.5 -> 5.0 상향)
+    'TRAILING_START_PCT': 3.5,       # 🏆 방어선 가동 시작 수익률
     'TRAILING_DRAWDOWN_PCT': 1.5,    # 🏆 고점 대비 익절 하락폭 (%)
     'MIN_PROFIT_PRESERVE': 1.5,      # 어떤 흔들기가 와도 최소 +1.5% 수익은 무조건 보존
 

@@ -106,8 +106,9 @@ def get_db_connection(db_path):
 def get_main_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.add("🏆 오늘의 추천종목", "🔍 실시간 종목분석")
-    markup.add("📜 감시/보유 리스트", "➕ 수동 종목 추가") # 💡 신규 버튼 추가
-    markup.add("☕ 서버 운영 후원하기")
+    markup.add("📜 감시/보유 리스트", "➕ 수동 종목 추가")
+    # 💡 [수정] 후원하기 버튼 옆에 나란히 배치되도록 버튼 추가!
+    markup.add("☕ 서버 운영 후원하기", "🤖 AI 확신지수란?")
     return markup
 
 def get_user_badge(chat_id):
@@ -118,22 +119,6 @@ def get_user_badge(chat_id):
         return "👑 [VIP 후원자] " if row and row[0] == 1 else "👤 [일반] "
     except:
         return ""
-
-def process_analyze_step(message):
-    chat_id = message.chat.id
-    code = message.text.strip()
-
-    if len(code) == 6 and code.isdigit():
-        bot.send_message(chat_id, f"🔄 `{code}` 분석을 시작합니다...", parse_mode='Markdown')
-        try:
-            # 엔진의 분석 함수 호출
-            report = kiwoom_sniper_v2.analyze_stock_now(code)
-            bot.send_message(chat_id, report, parse_mode='Markdown')
-        except Exception as e:
-            # 🚀 [업데이트] 에러 내용을 사용자에게 직접 전달하여 원인 파악
-            bot.send_message(chat_id, f"❌ 시스템 분석 오류 발생:\n`{str(e)}`", parse_mode='Markdown')
-    else:
-        bot.send_message(chat_id, "⚠️ 올바른 6자리 종목코드를 입력해 주세요.")
 
 def process_manual_add_logic(message, code):
     stock_name = code
@@ -302,6 +287,32 @@ def process_manual_add_step(message):
 
     process_manual_add_logic(message, code)
 
+def process_analyze_logic(message, code):
+    """실제 분석을 수행하는 핵심 로직"""
+    badge = get_user_badge(message.chat.id)
+    chat_id = message.chat.id
+
+    bot.send_message(chat_id, f"🔄 `{code}` 종목의 실시간 데이터를 수집하고 분석을 시작합니다...\n*(데이터 수신에 몇 초 정도 소요될 수 있습니다)*", parse_mode='Markdown')
+
+    try:
+        # 스나이퍼 V2의 분석 함수 호출
+        report = kiwoom_sniper_v2.analyze_stock_now(code)
+        final_msg = f"{badge}님을 위한 분석 결과입니다!\n\n{report}"
+        bot.send_message(chat_id, final_msg, parse_mode='Markdown')
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ 분석 중 오류 발생: {e}")
+
+def process_analyze_step(message):
+    """버튼 클릭 후 사용자가 입력한 코드를 검증하는 단계"""
+    code = message.text.strip()
+
+    # 올바른 6자리 숫자인지 검증 (다른 메뉴 버튼을 눌렀을 때 방어)
+    if not code.isdigit() or len(code) != 6:
+        bot.reply_to(message, "🚫 분석이 취소되었거나 올바른 6자리 숫자가 아닙니다.")
+        return
+
+    process_analyze_logic(message, code)
+
 def start_engine():
     kiwoom_sniper_v2.run_sniper(broadcast_alert)
 
@@ -380,25 +391,41 @@ def handle_watch_list(message):
     except Exception as e:
         bot.reply_to(message, f"❌ 리스트 조회 중 시스템 에러 발생: {e}")
 
+@bot.message_handler(func=lambda message: message.text == "🤖 AI 확신지수란?")
+def handle_ai_confidence_info(message):
+    info_msg = (
+        "🤖 *[KORStockScan AI 확신지수 안내]*\n\n"
+        "**AI 확신지수(Probability)**는 4개의 머신러닝 앙상블 모델(XGBoost, LightGBM 등)이 "
+        "과거 3년 치의 차트 패턴, 외국인/기관 수급, 호가창 체결 데이터를 입체적으로 학습하여 도출한 **'이 종목이 당일 단기 상승할 확률'**을 의미합니다.\n\n"
+        "📊 *확신지수 구간별 의미*\n"
+        "• `90% 이상` : 🌟 **[초고확신]** 알고리즘이 찾아낸 완벽한 조건의 S급 타점\n"
+        "• `80% ~ 89%` : 🔥 **[고확신]** 강력한 매집 수급이 포착된 주도주 (기본 스나이핑 대상)\n"
+        "• `70% ~ 79%` : 🎯 **[유망]** 폭락장/조정장에서 기술적 반등이 예상되는 낙폭과대주\n"
+        "• `70% 미만` : 🛑 **[관망]** 하락 리스크가 높아 시스템이 매수를 보류하는 구간\n\n"
+        "💡 *스나이퍼 매매 작동 원리*\n"
+        "현재 봇은 **AI 확신지수 80% 이상**(폭락장 세팅 시 70% 이상)인 종목 중에서도, "
+        "단순히 차트만 보지 않고 **실시간 체결강도가 100을 돌파**하며 세력의 진짜 돈이 들어오는 순간에만 정밀하게 방아쇠를 당깁니다 🔫"
+    )
+    bot.reply_to(message, info_msg, parse_mode='Markdown')
+
 @bot.message_handler(func=lambda message: message.text == "🔍 실시간 종목분석")
-def handle_analyze(message):
-    badge = get_user_badge(message.chat.id)
-    chat_id = message.chat.id
+def handle_analyze_btn(message):
+    """버튼을 눌렀을 때 안내 메시지를 띄우고 다음 입력을 기다림"""
+    msg = bot.reply_to(message, "🔍 실시간으로 분석할 **종목코드 6자리**를 입력해 주세요.\n*(예: 005930)*", parse_mode='Markdown')
+    bot.register_next_step_handler(msg, process_analyze_step)
+
+
+# --- [명령어로 직접 입력 시 (/분석 005930)] ---
+@bot.message_handler(commands=['분석', 'analyze'])
+def handle_analyze_cmd(message):
+    """/분석 명령어로 직접 입력했을 때 처리"""
     parts = message.text.split()
 
     if len(parts) < 2:
-        bot.send_message(chat_id, "⚠️ 종목코드를 함께 입력해주세요. (예: `/분석 005930`)", parse_mode='Markdown')
+        bot.reply_to(message, "⚠️ 종목코드를 함께 입력해 주세요. (예: `/분석 005930`)", parse_mode='Markdown')
         return
 
-    code = parts[1].strip()
-    bot.send_message(chat_id, f"🔄 `{code}` 분석을 시작합니다...", parse_mode='Markdown')
-
-    try:
-        report = kiwoom_sniper_v2.analyze_stock_now(code)
-        final_msg = f"{badge}님을 위한 분석 결과입니다!\n\n{report}"
-        bot.send_message(message.chat.id, final_msg, parse_mode='Markdown')
-    except Exception as e:
-        bot.send_message(chat_id, f"❌ 오류 발생: {e}")
+    process_analyze_logic(message, parts[1].strip())
 
 @bot.message_handler(func=lambda message: message.text == "🏆 오늘의 추천종목")
 def handle_today_picks(message):
