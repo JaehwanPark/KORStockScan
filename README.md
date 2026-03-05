@@ -74,6 +74,16 @@ pip install -r requirements.txt
 4. **`PROB_RUNNER_PICK` (AI 최소 매수 확신도 임계값)**
 
 
+## ⏰ 실행 가이드 (Daily Schedule)
+
+성공적인 무인 자동화를 위해 Windows 작업 스케줄러(Task Scheduler)를 활용한 아래의 구동 스케줄을 권장합니다.
+| 모듈명 (스크립트) | 권장 실행 시간 | 핵심 역할 |
+| :--- | :---: | :--- |
+| `update_kospi.py` | **16:00 ~ 17:00** | 정규장 마감 후 당일 데이터 DB 적재 |
+| `final_ensemble_scanner.py` | **08:00 ~ 08:30** | 장 시작 전 전종목 AI 스캐닝 및 타겟 DB 장전 |
+| `kiwoom_sniper_v2.py` | **08:50 ~ 15:30** | 텔레그램 관제소 기동 및 실시간 매매 체결 |
+
+
 ## ⚠️ 면책 조항 (Disclaimer)
 
 본 레포지토리의 코드는 알고리즘 트레이딩 연구 및 학습 목적으로 작성되었습니다.
