@@ -104,43 +104,48 @@ def get_basic_info_ka10001(token, code):
     import time
     import requests
 
-    url = "https://api.kiwoom.com/api/dostk/stkinfo"  # (실제 URL에 맞게 유지)
+    url = "https://api.kiwoom.com/api/dostk/stkinfo"
     headers = {
         'Content-Type': 'application/json;charset=UTF-8',
         'authorization': f'Bearer {token}',
         'cont-yn': 'N',
-        'api-id': 'ka10001',  # API ID 확인
+        'api-id': 'ka10001',
         'User-Agent': 'Mozilla/5.0'
     }
 
-    # 💡 키움 API ka10001에 맞는 payload (기존 코드에 맞춰 유지)
+    # 💡 키움 API ka10001에 맞는 payload (명세서 기준 stk_cd)
     payload = {'stk_cd': code}
 
     # 🛡️ 3번까지 끈질기게 재시도하는 루프
     for attempt in range(3):
         try:
             res = requests.post(url, headers=headers, json=payload, timeout=10)
-            data = res.json()
 
-            if res.status_code == 200 and str(data.get('return_code')) == '0':
-                # 키움 서버 응답 데이터 파싱 (기존 로직 유지)
-                # 실제 데이터 구조에 맞게 Name과 Marcap을 추출합니다.
-                basic_info = data.get('out_block', {})  # (out_block 또는 item_inq_rank 등)
+            # 1. HTTP 상태 코드가 200(정상)일 때만 파싱 시도
+            if res.status_code == 200:
+                data = res.json()
 
-                # 안전한 파싱
-                name = basic_info.get('stk_nm', code)
-                marcap = int(basic_info.get('mrkt_tot_amt', 0))
+                # 🚀 [핵심 수정] return_code가 아예 응답에 없을 수 있으므로, 없을 경우 '0'(정상)으로 간주합니다.
+                if str(data.get('return_code', '0')) != '0':
+                    print(f"⚠️ [{code}] 기본정보 조회 에러: {data.get('return_msg', '사유 없음')}")
+                    return {'Name': code, 'Marcap': 0}
+
+                # 🚀 평면 구조의 JSON에서 직접 데이터를 추출합니다.
+                name = data.get('stk_nm', code)
+
+                # 시가총액 필드는 명세서에 따라 'mac' 이며, 값이 빈 문자열("")로 올 수 있으므로 안전하게 변환
+                raw_mac = data.get('mac', 0)
+                marcap = int(raw_mac) if str(raw_mac).strip() != "" else 0
 
                 return {'Name': name, 'Marcap': marcap}
 
-            # 서버가 에러 메시지를 보낸 경우 (예: 조회가 안 되는 종목)
             else:
-                print(f"⚠️ [{code}] 기본정보 조회 에러: {data.get('return_msg')}")
-                return {'Name': code, 'Marcap': 0}
+                # 429(Too Many Requests), 500(서버 에러) 등 200이 아닌 경우
+                print(f"❌ [{code}] HTTP 응답 에러: {res.status_code}")
 
         except requests.exceptions.ConnectionError:
             # 💡 10054 에러 발생 시 여기서 잡아냅니다!
-            print(f"⚠️ [{code}] 키움 서버 연결 끊김(10054). 3초 대기 후 재접속 시도... ({attempt + 1}/3)")
+            print(f"⚠️ [{code}] 키움 서버 연결 끊김. 3초 대기 후 재접속 시도... ({attempt + 1}/3)")
             time.sleep(3)  # 트래픽 분산을 위해 3초 쉬고 다시 때림
 
         except Exception as e:
@@ -150,7 +155,6 @@ def get_basic_info_ka10001(token, code):
     # 3번 다 실패했을 때 최후의 방어막 (프로그램이 뻗지 않도록 빈 데이터 반환)
     print(f"❌ [{code}] 3회 재접속 모두 실패. 기본값으로 대체합니다.")
     return {'Name': code, 'Marcap': 0}
-
 
 def get_daily_ohlcv_ka10081_df(token, code, end_date=""):
     """[ka10081] 주식일봉차트조회요청 - OHLCV 데이터 (실제 명세서 반영 버전)"""
@@ -767,3 +771,68 @@ def get_market_regime(token=None):
 
     # 둘 다 실패하면 보수적으로 BEAR(하락장) 모드 전환하여 리스크 관리
     return 'BEAR'
+
+
+def get_top_fluctuation_ka10027(token, mrkt_tp="000", trde_qty_cnd="0100", limit=50):
+    """
+    [ka10027] 전일대비등락률상위요청
+    - mrkt_tp: "000"(전체), "001"(코스피), "101"(코스닥)
+    - trde_qty_cnd: "0100"(10만주 이상) 등
+    """
+    import requests
+
+    url = "https://api.kiwoom.com/api/dostk/rkinfo"
+    headers = {
+        'Content-Type': 'application/json;charset=UTF-8',
+        'authorization': f'Bearer {token}',
+        'api-id': 'ka10027',
+        'User-Agent': 'Mozilla/5.0'
+    }
+    payload = {
+        "mrkt_tp": mrkt_tp,
+        "sort_tp": "1",
+        "trde_qty_cnd": trde_qty_cnd,
+        "stk_cnd": "0",
+        "crd_cnd": "0",
+        "updown_incls": "1",
+        "pric_cnd": "0",
+        "trde_prica_cnd": "0",
+        "stex_tp": "3"
+    }
+
+    cleaned_list = []
+    try:
+        res = requests.post(url, headers=headers, json=payload, timeout=10)
+
+        if res.status_code == 200:
+            data = res.json()
+            if str(data.get('return_code', '0')) != '0':
+                print(f"⚠️ [ka10027] 응답 에러: {data.get('return_msg')}")
+                return []
+
+            items = data.get('pred_pre_flu_rt_upper', [])
+
+            for item in items[:limit]:
+                code = str(item.get('stk_cd', '')).strip()[:6]
+                name = item.get('stk_nm')
+
+                # 부호 제거 및 형변환 (데이터 정제)
+                raw_price = str(item.get('cur_prc', '0')).replace('+', '').replace('-', '')
+                raw_flu_rt = str(item.get('flu_rt', '0')).replace('+', '').replace('-', '')
+
+                price = int(raw_price) if raw_price.isdigit() else 0
+                change_rate = float(raw_flu_rt) if raw_flu_rt else 0.0
+                volume = int(item.get('now_trde_qty', 0))
+                cntr_str = float(item.get('cntr_str', 0.0))
+
+                cleaned_list.append({
+                    'Code': code, 'Name': name, 'Price': price,
+                    'ChangeRate': change_rate, 'Volume': volume, 'CntrStr': cntr_str
+                })
+        else:
+            print(f"❌ [ka10027] HTTP 에러: {res.status_code}")
+
+    except Exception as e:
+        print(f"🚨 [ka10027] API 호출 예외 발생: {e}")
+
+    return cleaned_list

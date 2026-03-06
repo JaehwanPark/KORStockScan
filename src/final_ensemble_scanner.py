@@ -13,7 +13,7 @@ import FinanceDataReader as fdr
 import kiwoom_utils
 
 from constants import TRADING_RULES
-from src.feature_engineer import calculate_all_features
+from feature_engineer import calculate_all_features
 from db_manager import DBManager
 
 # ==========================================
@@ -93,13 +93,13 @@ def init_and_migrate_db(db: DBManager):
 
 # --- [4. 성과 복기 엔진] ---
 def get_performance_report(db: DBManager):
-    # 💡 [수정] db.get_latest_history_date()는 이미 문자열(날짜)을 반환하므로 바로 변수에 담습니다.
     last_date = db.get_latest_history_date()
 
     if not last_date: return "📊 신규 가동을 시작합니다.\n"
 
     history = db.get_history_by_date(last_date)
-    report_msg = f"📊 *[전일 성적표 ({last_date})]*\n"
+    # 💡 마크다운(*) 대신 HTML(<b>) 태그 사용
+    report_msg = f"📊 <b>[전일 성적표 ({last_date})]</b>\n"
 
     for r_type in ['MAIN', 'RUNNER']:
         subset = history[history['type'] == r_type]
@@ -107,13 +107,10 @@ def get_performance_report(db: DBManager):
 
         profits = []
         for _, row in subset.iterrows():
-            # 💡 [개선] FDR 실패 시 로컬 DB의 최신 종가를 사용하여 수익률 계산
             try:
                 df = fdr.DataReader(row['code'], start=last_date)
                 close_price = df.iloc[-1]['Close']
             except:
-                # FDR 장애 시 DB의 해당 종목 마지막 기록 호출
-                # 💡 DB 매니저로 깔끔하게 교체
                 db_last = db.get_stock_data(row['code'], limit=1)
                 close_price = db_last.iloc[0]['Close'] if not db_last.empty else row['buy_price']
 
@@ -125,6 +122,7 @@ def get_performance_report(db: DBManager):
             avg_p = sum(profits) / len(profits)
             label = "✅ 강력추천" if r_type == 'MAIN' else "🥈 아차상"
             report_msg += f"{label}: 승률 {win_rate:.0f}% / 수익 {avg_p:+.2f}%\n"
+
     return report_msg + "-" * 20 + "\n"
 
 
@@ -333,41 +331,47 @@ def run_integrated_scanner():
             except Exception as e:
                 print(f"⚠️ 관리자 텔레그램 전송 실패: {e}")
 
-        # ==========================================
-        # 5. 결과 기록 및 전송
-        # ==========================================
-        print("📊 [3/4] 리포트 생성 및 전송 중...")
-        today = datetime.now().strftime('%Y-%m-%d')
-        main_picks = sorted([r for r in all_results if r['Prob'] >= TRADING_RULES['PROB_MAIN_PICK']],
-                            key=lambda x: x['Prob'], reverse=True)[:3]
-        runner_ups = sorted([r for r in all_results if
-                             TRADING_RULES['PROB_RUNNER_PICK'] <= r['Prob'] < TRADING_RULES['PROB_MAIN_PICK']],
-                            key=lambda x: x['Prob'], reverse=True)[:50]
+            # ==========================================
+            # 5. 결과 기록 및 전송
+            # ==========================================
+            print("📊 [3/4] 리포트 생성 및 전송 중...")
+            today = datetime.now().strftime('%Y-%m-%d')
+            main_picks = sorted([r for r in all_results if r['Prob'] >= TRADING_RULES['PROB_MAIN_PICK']],
+                                key=lambda x: x['Prob'], reverse=True)[:3]
+            runner_ups = sorted([r for r in all_results if
+                                 TRADING_RULES['PROB_RUNNER_PICK'] <= r['Prob'] < TRADING_RULES['PROB_MAIN_PICK']],
+                                key=lambda x: x['Prob'], reverse=True)[:50]
 
-        msg = get_performance_report(db) + f"🏆 *[AI 콰트로 Stacking 리포트]* {today}\n"
+            # 💡 HTML 태그 적용
+            msg = get_performance_report(db) + f"🏆 <b>[AI 콰트로 Stacking 리포트]</b> {today}\n"
 
-        # 💡 DB 매니저로 데이터 저장 로직 단순화
+            # 💡 [요청 반영] MAIN 종목 유무 체크 및 3가지 정보(이름, 코드, 확신지수)만 출력
+            msg += "\n🥇 <b>[적극 추천 종목]</b>\n"
+            if main_picks:
+                for r in main_picks:
+                    msg += f"• <b>{r['Name']}</b> ({r['Code']}) - 확신지수: {r['Prob']:.1%}\n"
+                    db.save_recommendation(today, r['Code'], r['Name'], r['Price'], 'MAIN', r['Position'],
+                                           prob=r['Prob'])
+            else:
+                # 추천 종목이 없을 때의 피드백 메시지 추가
+                msg += "• 😅 오늘은 AI 기준을 완벽히 통과한 MAIN 추천 종목이 없습니다.\n"
 
-        for r in main_picks:
-            msg += "\n🥇 *[적극 추천 종목]*\n"
-            for r in main_picks: msg += f"• *{r['Name']}* ({r['Prob']:.1%}) - {r['Position']}\n"
-            for r in main_picks:
-                db.save_recommendation(today, r['Code'], r['Name'], r['Price'], 'MAIN', r['Position'], prob=r['Prob'])
+            if runner_ups:
+                msg += "\n🥈 <b>[정예 관심 종목]</b>\n"
+                for r in runner_ups[:10]:
+                    msg += f"• <b>{r['Name']}</b> ({r['Code']}) - 확신지수: {r['Prob']:.1%}\n"
+                for r in runner_ups:
+                    db.save_recommendation(today, r['Code'], r['Name'], r['Price'], 'RUNNER', r['Position'],
+                                           prob=r['Prob'])
 
-        if runner_ups:
-            msg += "\n🥈 *[정예 관심 종목]*\n"
-            for r in runner_ups[:10]: msg += f"• {r['Name']} ({r['Prob']:.1%})\n"
-            for r in runner_ups:
-                db.save_recommendation(today, r['Code'], r['Name'], r['Price'], 'RUNNER', r['Position'], prob=r['Prob'])
-
-        # 텔레그램 발송
-        chat_ids = db.get_telegram_chat_ids()
-        for cid in chat_ids:
-            try:
-                requests.post(f"https://api.telegram.org/bot{CONF['TELEGRAM_TOKEN']}/sendMessage",
-                              data={"chat_id": cid, "text": msg, "parse_mode": "Markdown"}, timeout=5)
-            except:
-                pass
+            # 텔레그램 발송 (parse_mode="HTML" 로 변경하여 종목명 특수기호 에러 원천 차단)
+            chat_ids = db.get_telegram_chat_ids()
+            for cid in chat_ids:
+                try:
+                    requests.post(f"https://api.telegram.org/bot{CONF['TELEGRAM_TOKEN']}/sendMessage",
+                                  data={"chat_id": cid, "text": msg, "parse_mode": "HTML"}, timeout=5)
+                except Exception as e:
+                    print(f"🚨 텔레그램 발송 실패: {e}")
 
     except Exception as e:
         print(f"❌ 시스템 에러 발생: {e}")
@@ -498,11 +502,11 @@ def run_intraday_scanner(token):
                 continue
 
             # 2. 20일 이동평균선 아래(역배열) 종목은 패스 (낙폭과대 발굴 시 주석 처리 가능)
-            latest_close = latest_row['Close'].values[0]
-            latest_ma20 = latest_row['MA20'].values[0]
-            if latest_close < latest_ma20:
-                drop_stats['trend'] += 1  # 카운터 증가
-                continue
+            #latest_close = latest_row['Close'].values[0]
+            #latest_ma20 = latest_row['MA20'].values[0]
+            #if latest_close < latest_ma20:
+            #    drop_stats['trend'] += 1  # 카운터 증가
+            #    continue
 
             # 3. [V3.1] 외국인/기관 매집 '가속도' 필터
             f_roll5 = latest_row['Foreign_Net_Roll5'].values[0]
@@ -522,7 +526,7 @@ def run_intraday_scanner(token):
 
             # 모든 필터를 뚫은 종목만 추가
             new_targets.append(
-                {'name': name, 'prob': p_final, 'price': int(current_price), 'code': code, 'Position': pos_tag})
+                {'Name': name, 'Prob': p_final, 'Price': int(current_price), 'Code': code, 'Position': pos_tag})
 
         except Exception as e:
             drop_stats['error'] += 1  # 카운터 증가
@@ -535,7 +539,7 @@ def run_intraday_scanner(token):
     print("\n" + "=" * 50)
     print(f"🛑 [장중 스캐너 필터링 결과] 총 {len(hot_stocks)}개 중 {len(new_targets)}개 생존")
     print(f"  - AI 확신도 부족(<{int(TRADING_RULES['PROB_INTRADAY_PICK'] * 100)}%): {drop_stats['ai_prob']}개")
-    print(f"  - 역배열(20일선 아래): {drop_stats['trend']}개")
+    print(f"  - 역배열(20일선 아래) / 임시로 적용 제외중: {drop_stats['trend']}개")
     print(f"  - 수급 부재(매집 가속도 미달): {drop_stats['supply']}개")
     print(f"  - 데이터 계산 에러: {drop_stats['error']}개")
     print("=" * 50 + "\n")
@@ -547,6 +551,52 @@ def run_intraday_scanner(token):
 
     conn.close()
     return new_targets
+
+
+# ==========================================
+# 🚀 [신규 모듈] 외부 스캐너용 순수 AI 판독 함수 (모듈화)
+# ==========================================
+def load_models():
+    """AI 모델들을 메모리에 한 번만 로드하여 튜플로 반환합니다."""
+    try:
+        m_xgb = joblib.load(os.path.join(DATA_DIR, 'hybrid_xgb_model.pkl'))
+        m_lgbm = joblib.load(os.path.join(DATA_DIR, 'hybrid_lgbm_model.pkl'))
+        b_xgb = joblib.load(os.path.join(DATA_DIR, 'bull_xgb_model.pkl'))
+        b_lgbm = joblib.load(os.path.join(DATA_DIR, 'bull_lgbm_model.pkl'))
+        meta_model = joblib.load(os.path.join(DATA_DIR, 'stacking_meta_model.pkl'))
+        return (m_xgb, m_lgbm, b_xgb, b_lgbm, meta_model)
+    except Exception as e:
+        print(f"❌ AI 모델 로드 실패: {e}")
+        return None
+
+
+def predict_prob_for_df(df, models):
+    """
+    일봉 DataFrame을 입력받아 피처를 계산하고,
+    최종 AI Stacking 확신지수(Prob)를 반환합니다.
+    """
+    m_xgb, m_lgbm, b_xgb, b_lgbm, meta_model = models
+
+    # 1. 기술적 지표(피처) 일괄 계산
+    df = calculate_all_features(df)
+
+    # 2. 가장 최신 일자(오늘)의 데이터 한 줄만 추출
+    latest_row = df.iloc[[-1]].replace([np.inf, -np.inf], np.nan).fillna(0)
+
+    # 3. 개별 모델 예측
+    preds = [
+        m_xgb.predict_proba(latest_row[FEATURES_XGB])[0][1],
+        m_lgbm.predict_proba(latest_row[FEATURES_LGBM])[0][1],
+        b_xgb.predict_proba(latest_row[FEATURES_XGB])[0][1],
+        b_lgbm.predict_proba(latest_row[FEATURES_LGBM])[0][1]
+    ]
+
+    # 4. 메타 모델(Stacking) 최종 예측
+    p_final = meta_model.predict_proba(
+        pd.DataFrame([preds], columns=['XGB_Prob', 'LGBM_Prob', 'Bull_XGB_Prob', 'Bull_LGBM_Prob'])
+    )[0][1]
+
+    return float(p_final)
 
 if __name__ == "__main__":
     run_integrated_scanner()

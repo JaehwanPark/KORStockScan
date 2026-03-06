@@ -203,14 +203,15 @@ def process_manual_add_logic(message, code):
     except Exception as e:
         bot.reply_to(message, f"❌ DB 저장 중 시스템 에러 발생: {e}")
 
-def broadcast_alert(message_text):
+def broadcast_alert(message_text, parse_mode='HTML'): # 💡 기본값을 HTML로 변경!
     temp_conn = sqlite3.connect(USERS_DB_PATH)
     rows = temp_conn.execute('SELECT chat_id FROM users').fetchall()
     for row in rows:
         try:
-            bot.send_message(row[0], message_text, parse_mode='Markdown')
+            bot.send_message(row[0], message_text, parse_mode=parse_mode)
             time.sleep(0.05)
-        except:
+        except Exception as e:
+            print(f"⚠️ 브로드캐스트 전송 실패: {e}")
             pass
     temp_conn.close()
 
@@ -219,11 +220,9 @@ def broadcast_today_picks():
     [v12.1 복구] 봇 시작 시, 오늘 날짜의 추천 종목을 모든 가입자에게 브로드캐스트합니다.
     """
     try:
-        # 1. DB 연결 및 오늘자 추천 종목 조회
         conn = sqlite3.connect(STOCK_DB_PATH)
         today = datetime.now().strftime('%Y-%m-%d')
 
-        # 종목코드 6자리를 보장하며 데이터 추출
         query = "SELECT name, buy_price, type, code FROM recommendation_history WHERE date=?"
         picks = conn.execute(query, (today,)).fetchall()
         conn.close()
@@ -232,48 +231,41 @@ def broadcast_today_picks():
             print(f"🧐 [{today}] 추천 종목이 아직 생성되지 않아 알림을 대기합니다.")
             return
 
-        # 💡 constants.py에 세팅된 익절/손절 기준값을 가져옵니다.
-        # (키 이름이 다르다면 constants.py에 적힌 이름으로 맞춰주세요!)
         take_profit = TRADING_RULES.get('TRAILING_START_PCT', 3.0)
-        stop_loss = TRADING_RULES.get('STOP_LOSS_PCT', 2.5)
+        stop_loss = abs(TRADING_RULES.get('STOP_LOSS_BULL', -2.5)) # 💡 엔진과 변수명 동기화!
 
-        # 2. 메시지 헤더 구성
-        msg = f"🌅 **[{today}] AI 스태킹 앙상블 리포트**\n"
-        msg += f"🎯 **전략: 장중 +{take_profit}% 익절(가변익절) / -{stop_loss}% 손절**\n"
+        # 💡 HTML 태그 <b> </b> 사용
+        msg = f"🌅 <b>[{today}] AI 스태킹 앙상블 리포트</b>\n"
+        msg += f"🎯 <b>전략: 장중 +{take_profit}% 익절(가변익절) / -{stop_loss}% 손절</b>\n"
         msg += "--------------------------------------\n"
 
-        # 3. 등급별 종목 분류 (code[:6] 원칙 적용)
         main_picks = [p for p in picks if p[2] == 'MAIN']
         runner_picks = [p for p in picks if p[2] == 'RUNNER']
 
-        # 강력 추천 종목 출력
         if main_picks:
-            msg += "🔥 **[고확신 종목]**\n"
+            msg += "🔥 <b>[고확신 종목]</b>\n"
             for name, price, _, code in main_picks:
-                clean_code = str(code)[:6]  # 🚀 무조건 6자리만 사용
-                msg += f"• **{name}** ({clean_code}) : `{price:,}원`\n"
+                clean_code = str(code)[:6]
+                msg += f"• <b>{name}</b> ({clean_code}) : <code>{price:,}원</code>\n"
             msg += "\n"
 
-        # 관심 종목 출력 (상위 10개로 제한하여 도배 방지)
         if runner_picks:
-            msg += "🥈 **[관심 종목 TOP 10]**\n"
+            msg += "🥈 <b>[관심 종목 TOP 10]</b>\n"
             for name, price, _, code in runner_picks[:10]:
                 clean_code = str(code)[:6]
-                msg += f"• **{name}** ({clean_code}) : `{price:,}원`\n"
+                msg += f"• <b>{name}</b> ({clean_code}) : <code>{price:,}원</code>\n"
 
-            # 전체 개수 안내로 신뢰도 상승
             if len(runner_picks) > 10:
-                msg += f"\n*(그 외 {len(runner_picks) - 10}개의 유망 종목 실시간 추적 중)*"
+                msg += f"\n<i>(그 외 {len(runner_picks) - 10}개의 유망 종목 실시간 추적 중)</i>"
 
         msg += "\n--------------------------------------\n"
-        msg += "💡 `/상태` 입력 시 엔진 가동 현황을 확인하실 수 있습니다."
+        msg += "💡 /상태 입력 시 엔진 가동 현황을 확인하실 수 있습니다."
 
-        # 4. 전체 사용자에게 전송
-        broadcast_alert(msg)
+        # 🚀 안전한 HTML 모드로 전송
+        broadcast_alert(msg, parse_mode='HTML')
         print(f"📢 [{today}] 추천 종목 브로드캐스트 완료 (총 {len(picks)}종목)")
 
     except Exception as e:
-        # 통합 에러 로깅 활용
         import kiwoom_utils
         kiwoom_utils.log_error(f"❌ 아침 브로드캐스트 실패: {e}", config=CONF)
 
@@ -593,32 +585,51 @@ def handle_text_messages(message):
     bot.send_message(message.chat.id, "아래 메뉴 버튼을 이용해 주세요.", reply_markup=get_main_keyboard())
 
 if __name__ == '__main__':
-    print("🤖 KORStockScan v12.1 관제 시스템 기동 중...")
+    # 멀티 스캐너(우량주/초단타/코스닥) 체제 완성! 버전을 13.0으로 올렸습니다.
+    print("🤖 KORStockScan v13.0 통합 관제 시스템 기동 중...")
     init_db()
 
     # 🚀 영업일 체크
     is_open, reason = kiwoom_utils.is_trading_day()
 
     if is_open:
-        # 정상 영업일에만 리포트 발송 및 매매 엔진 스레드 시작
+        # 정상 영업일에만 리포트 발송 및 매매/스캔 엔진 스레드 시작
         broadcast_today_picks()
 
+        # 1. 스나이퍼 매매 엔진 가동 (격수)
         engine_thread = threading.Thread(target=start_engine, daemon=True)
         engine_thread.start()
-        print("✅ [시스템] 정상거래일 - 스나이퍼 엔진 스레드가 가동되었습니다.")
+        print("✅ [시스템] 정상거래일 - 스나이퍼 매매 엔진 가동 완료.")
+
+        # 2. 초단타 스캘핑 스캐너 가동 (정찰병 1)
+        try:
+            import scalping_scanner
+            scalper_thread = threading.Thread(target=scalping_scanner.run_scalper, daemon=True)
+            scalper_thread.start()
+            print("⚡ [시스템] 정상거래일 - 초단타 스캘핑 스캐너 가동 완료.")
+        except Exception as e:
+            print(f"🚨 [시스템] 스캘핑 스캐너 가동 중 오류 발생: {e}")
+
+        # 🚀 3. [신규 추가] 코스닥 AI 하이브리드 스캐너 가동 (정찰병 2)
+        try:
+            import kosdaq_scanner
+            kosdaq_thread = threading.Thread(target=kosdaq_scanner.run_kosdaq_scanner, daemon=True)
+            kosdaq_thread.start()
+            print("🚀 [시스템] 정상거래일 - 코스닥 하이브리드 스캐너 가동 완료.")
+        except Exception as e:
+            print(f"🚨 [시스템] 코스닥 스캐너 가동 중 오류 발생: {e}")
+
     else:
         # 휴장일 처리
-        print(f"🛑 [시스템] 오늘은 {reason} 휴장일입니다. 매매 엔진과 리포트 발송을 생략합니다.")
-        # engine_thread는 None 상태로 유지되어 /상태 명령어 시 '중단됨'으로 정상 표시됨
+        print(f"🛑 [시스템] 오늘은 {reason} 휴장일입니다. 매매 엔진과 스캐너 가동을 생략합니다.")
 
-    # 야간 자동 종료 감시 시작 (휴장일이어도 봇 프로세스 자체는 꺼야 하므로 실행)
+    # 야간 자동 종료 감시 시작
     threading.Thread(target=monitor_exit_time, daemon=True).start()
 
     print("📱 텔레그램 봇 폴링 시작 (명령어 대기 중)...")
-    # 🚀 [수정] 강력한 네트워크 끊김(10054) 발생 시 5초 후 무한 자동 재시작
+    # 강력한 네트워크 끊김(10054) 발생 시 5초 후 무한 자동 재시작
     while True:
         try:
-            # timeout 설정을 주어 연결이 좀비 상태가 되는 것을 방지
             bot.infinity_polling(timeout=10, long_polling_timeout=5)
         except Exception as e:
             print(f"⚠️ 텔레그램 서버 연결 순단 발생 ({e}). 5초 후 재접속을 시도합니다...")

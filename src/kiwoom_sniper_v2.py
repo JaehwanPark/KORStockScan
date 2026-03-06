@@ -13,7 +13,7 @@ import kiwoom_utils
 from constants import TRADING_RULES
 from google_sheets_utils import GoogleSheetsManager
 from kiwoom_websocket import KiwoomWSManager
-from src.db_manager import DBManager
+from db_manager import DBManager
 
 # ==========================================
 # 1. 경로 설정 (상대 참조 통일)
@@ -29,23 +29,25 @@ CREDENTIALS_PATH = os.path.join(DATA_DIR, 'credentials.json')
 # --- [전역 상태 변수] -----------------------------------------------
 highest_prices = {}
 alerted_stocks = set()
+cooldowns = {}  # 💡 [신규] 스캘핑 뇌동매매 방지용 쿨타임 관리
 CONF = None
 KIWOOM_TOKEN = None
 WS_MANAGER = None
 SHEET_MANAGER = GoogleSheetsManager(CREDENTIALS_PATH, 'KOSPIScanner')
-DB = DBManager() # 💡 전역 객체 생성
+DB = DBManager()  # 💡 전역 객체 생성
 # -------------------------------------------------------------------
 
 def load_config():
-    # 💡 [수정] 상대 경로가 적용된 CONFIG_PATH 사용
     with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
         return json.load(f)
+
 
 # 초기 설정 로드
 try:
     CONF = load_config()
 except:
-    pass # 메인 엔진 기동 시 다시 로드됨
+    pass
+
 
 def reload_config():
     global CONF
@@ -58,7 +60,6 @@ def reload_config():
         return False
 
 
-# 💡 관리자(님) 한 명에게만 주문 결과를 귓속말하는 함수
 def send_admin_msg(text):
     if not CONF: return
     admin_id = CONF.get('ADMIN_ID')
@@ -73,9 +74,7 @@ def send_admin_msg(text):
         print(f"❌ 관리자 메시지 전송 실패: {e}")
 
 
-# --- [공통: 상태 업데이트 함수] ---
 def update_stock_status(code, status, buy_price=None, buy_qty=None, buy_time=None):
-    """DBManager를 통한 안전한 DB 상태 업데이트"""
     try:
         today = datetime.now().strftime('%Y-%m-%d')
         nxt = kiwoom_utils.get_stock_market_ka10100(code, KIWOOM_TOKEN)
@@ -94,7 +93,6 @@ def update_stock_status(code, status, buy_price=None, buy_qty=None, buy_time=Non
 
 
 def get_active_targets():
-    """DBManager를 통한 감시 대상 종목 안전 조회"""
     targets = []
     try:
         today = datetime.now().strftime('%Y-%m-%d')
@@ -106,14 +104,14 @@ def get_active_targets():
         if df.empty:
             return targets
 
-        # 중복 제거 및 딕셔너리 변환
         df = df.sort_values(by='status').drop_duplicates(subset=['code'], keep='first')
         targets = df.to_dict('records')
 
-        # constants.py 의 임계값 적용
         for t in targets:
-            t['prob'] = t.get('prob', TRADING_RULES['SNIPER_AGGRESSIVE_PROB'])
+            t['prob'] = t.get('prob', TRADING_RULES.get('SNIPER_AGGRESSIVE_PROB', 0.8))
             t['buy_qty'] = t.get('buy_qty', 0)
+            # 🚀 [추가] DB에 strategy 값이 없으면 기본적으로 KOSPI_ML 로 취급합니다.
+            t['strategy'] = t.get('strategy', 'KOSPI_ML')
 
         return targets
     except Exception as e:
@@ -121,82 +119,69 @@ def get_active_targets():
         return targets
 
 
-# --- [2. 외부 요청용 실시간 분석 함수] ---
+# --- [외부 요청용 분석 리포트] ---
 def analyze_stock_now(code):
     global KIWOOM_TOKEN, WS_MANAGER
     import time
-    from db_manager import DBManager
+    from datetime import datetime
 
+    # 🚀 1. 장 운영 시간(09:00 ~ 15:30) 체크 로직
+    now_time = datetime.now().time()
+    market_open = datetime.strptime("09:00:00", "%H:%M:%S").time()
+    market_close = datetime.strptime("15:30:00", "%H:%M:%S").time()
+
+    if not (market_open <= now_time <= market_close):
+        return f"🌙 현재는 정규장 운영 시간(09:00~15:30)이 아닙니다.\n실시간 종목 분석은 장중에만 이용 가능합니다."
+
+    # 2. 웹소켓 및 구독 상태 체크
     if not WS_MANAGER: return "⏳ 시스템 초기화 중..."
-
-    import kiwoom_utils
     WS_MANAGER.subscribe([code])
 
-    # 1. 종목명 가져오기
     try:
         stock_name = kiwoom_utils.get_basic_info_ka10001(KIWOOM_TOKEN, code)['Name']
     except:
         stock_name = code
 
-    # 2. 실시간 웹소켓 데이터 대기
+    # 3. 실시간 호가 데이터 수신 대기 (최대 3초)
     ws_data = {}
     for _ in range(30):
         ws_data = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
         if ws_data and ws_data.get('curr', 0) > 0: break
         time.sleep(0.1)
 
+    # 💡 안내 메시지 개선: 단순히 '대기 중'이 아니라 이유를 함께 설명
     if not ws_data or ws_data.get('curr', 0) == 0:
-        return f"⏳ **{stock_name}**({code}) 데이터 수신 대기 중..."
+        return f"⏳ **{stock_name}**({code}) 호가창 수신 대기 중...\n(거래가 멈춰있거나 일시적인 통신 지연일 수 있습니다.)"
 
+    # 4. 분석 및 목표가 계산
     curr_price = ws_data.get('curr', 0)
-
-    # ==========================================
-    # 💡 [신규] 차트 기반 '진짜 목표가' 계산 로직
-    # ==========================================
-    from constants import TRADING_RULES
     trailing_pct = TRADING_RULES.get('TRAILING_START_PCT', 3.0)
-
-    # 퍼센트(%)를 소수로 변환하여 곱해줍니다 (예: 3.0 -> 1.03)
     target_price = int(curr_price * (1 + (trailing_pct / 100)))
     target_reason = f"기본 시스템 익절선 (+{trailing_pct}%)"
 
     try:
-        db = DBManager()
-        # 최근 20일치 차트 데이터 불러오기
-        df = db.get_stock_data(code, limit=20)
-
+        df = DB.get_stock_data(code, limit=20)
         if df is not None and len(df) >= 10:
-            # 1. 20일 최고가 저항선
             high_20d = df['High'].max()
-
-            # 2. 볼린저밴드 상단(20, 2) 저항선 계산
             ma20 = df['Close'].mean()
             std20 = df['Close'].std()
             upper_bb = ma20 + (2 * std20)
 
-            # 두 저항선 중 더 높은 곳을 1차 목표가로 설정
             chart_resistance = max(high_20d, upper_bb)
-
             if chart_resistance > curr_price:
                 target_price = int(chart_resistance)
                 expected_rtn = ((target_price / curr_price) - 1) * 100
                 target_reason = f"차트 저항대 도달 (예상 +{expected_rtn:.1f}%)"
             else:
-                # 💡 [개선] 1.05 하드코딩 제거, RALLY_TARGET_PCT 연동
                 rally_pct = TRADING_RULES.get('RALLY_TARGET_PCT', 5.0)
                 target_price = int(curr_price * (1 + (rally_pct / 100)))
                 target_reason = f"신고가 돌파 랠리 (단기 추세 +{rally_pct}%)"
-
     except Exception as e:
         print(f"⚠️ 목표가 계산 중 에러: {e}")
 
-    # 3. 기존 AI 분석 로직 실행
+    # 5. 종합 평가
     score, details, visual, p, conclusion, checklist = kiwoom_utils.analyze_signal_integrated(ws_data, 0.5, 70)
 
-    from constants import TRADING_RULES
-    trailing_pct = TRADING_RULES.get('TRAILING_START_PCT', 3.0)
-
-    # 4. 최종 리포트 생성 (목표가와 익절선 분리)
     return (
         f"🔍 *[{stock_name}]({code}) 실시간 분석*\n"
         f"💰 현재가: `{curr_price:,}원`\n"
@@ -210,46 +195,31 @@ def analyze_stock_now(code):
 
 
 def get_detailed_reason(code):
-    """
-    특정 종목이 왜 안 사고 있는지 상세 사유를 리포트로 반환
-    """
-    # 1. 감시 리스트에서 해당 종목 찾기
     targets = get_active_targets()
     target = next((t for t in targets if t['code'] == code), None)
 
-    if not target:
-        return f"🔍 `{code}` 종목은 현재 AI 감시 대상(WATCHING)이 아닙니다."
+    if not target: return f"🔍 `{code}` 종목은 현재 AI 감시 대상이 아닙니다."
 
-    # 2. 실시간 데이터 획득
     ws_data = WS_MANAGER.get_latest_data(code)
     if not ws_data or ws_data.get('curr', 0) == 0:
-        return f"⏳ `{code}` 종목의 실시간 데이터를 수신 중입니다. 잠시 후 다시 시도해 주세요."
+        return f"⏳ `{code}` 데이터 수신 중..."
 
-    # 3. 통합 분석 실행
     ai_prob = target.get('prob', 0.75)
     score, details, visual, prices, conclusion, checklist = kiwoom_utils.analyze_signal_integrated(ws_data, ai_prob)
 
-    # 4. 리포트 생성
-    report = f"🧐 **[{target['name']}] 미진입 사유 분석**\n"
-    report += f"━━━━━━━━━━━━━━━━━━\n"
+    report = f"🧐 **[{target['name']}] 미진입 사유 분석**\n━━━━━━━━━━━━━━━━━━\n"
     for label, status in checklist.items():
         icon = "✅" if status['pass'] else "❌"
         report += f"{icon} {label}: `{status['val']}`\n"
 
-    # 💡 [개선] 80점 하드코딩 제거
     buy_threshold = TRADING_RULES.get('BUY_SCORE_THRESHOLD', 80)
     report += f"🎯 **종합 점수:** `{int(score)}점` (매수기준: {buy_threshold}점)\n"
     report += f"📝 **현재 상태:** {conclusion}\n"
-    report += f"\n💡 *TIP: 모든 항목이 ✅이고 점수가 {buy_threshold}점 이상일 때 자동으로 매수 주문이 집행됩니다.*"
-
     return report
 
 
 def check_and_run_intraday_scanner(targets, last_scan_time, broadcast_callback):
-    """[장중 스캔 부서] 감시 슬롯이 부족하면 신규 주도주를 보충합니다."""
     watching_count = len([t for t in targets if t['status'] == 'WATCHING'])
-
-    # 💡 [개선] 숫자 5와 1800초(30분) 하드코딩 제거
     max_slots = TRADING_RULES.get('MAX_WATCHING_SLOTS', 5)
     scan_interval = TRADING_RULES.get('SCAN_INTERVAL_SEC', 1800)
 
@@ -269,51 +239,90 @@ def check_and_run_intraday_scanner(targets, last_scan_time, broadcast_callback):
                         msg_body += f"• **{np['name']}** ({np['code']}) - AI 확신도: {np['prob']:.1%}\n"
 
                 if added_count > 0:
-                    print(f"✅ [시스템] 신규 종목 {added_count}개 감시 리스트에 추가 완료")
-                    # 🚀 [추가] 텔레그램 발송
                     alert_msg = f"🔄 **[장중 주도주 재스캔 완료]**\n빈 슬롯을 채우기 위해 다음 {added_count}개 종목의 실시간 감시를 시작합니다.\n\n{msg_body}"
                     broadcast_callback(alert_msg)
 
-            return time.time()  # 스캔 완료 시점 갱신
+            return time.time()
         except Exception as e:
             kiwoom_utils.log_error(f"⚠️ 장중 스캔 중 오류: {e}")
     return last_scan_time
 
 
 def handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback):
+    strategy = stock.get('strategy', 'KOSPI_ML')
+    now_t = datetime.now().time()
+
+    # 🚀 1. 쿨타임(휴식기) 검사
+    if code in cooldowns and time.time() < cooldowns[code]:
+        return  # 아직 쿨타임이 안 지났으면 무시
+
+    # 🚀 2. 초단타 장 후반 진입 금지 (15:15 이후에는 새로 사지 않음)
+    if strategy == 'SCALPING' and now_t >= datetime.strptime("15:15:00", "%H:%M:%S").time():
+        return
+
     if code in alerted_stocks: return
 
-    ai_prob = stock.get('prob', TRADING_RULES['SNIPER_AGGRESSIVE_PROB'])
-    score, details, visual, p, conclusion, checklist = kiwoom_utils.analyze_signal_integrated(ws_data, ai_prob)
-
-    # 💡 [개선] 체결강도 허들(115) 및 매수 확정 점수(80) 연동
-    strong_vpw = TRADING_RULES.get('VPW_STRONG_LIMIT', 115)
-    buy_threshold = TRADING_RULES.get('BUY_SCORE_THRESHOLD', 80)
-
+    curr_price = ws_data.get('curr', 0)
     current_vpw = ws_data.get('v_pw', 0)
-    v_pw_limit = 100 if ai_prob >= TRADING_RULES.get('SNIPER_AGGRESSIVE_PROB', 0.8) else strong_vpw
-    is_shooting = current_vpw >= v_pw_limit
+    strategy = stock.get('strategy', 'KOSPI_ML')
 
-    # 💡 [핵심 방어선] 점수가 아무리 높아도, 현재 체결강도가 103 미만이면 절대 쏘지 않습니다!
-    if (score >= buy_threshold or is_shooting) and current_vpw >= 103:
-        msg = (f"🚀 **[{stock['name']}]({code}) 스나이퍼 포착!**\n"
-               f"현재가: `{p['curr']:,}원` | 확신도: `{ai_prob:.1%}`\n"
-               f"수급강도: `{ws_data.get('v_pw', 0):.1f}%` {visual}")
+    is_trigger = False
+    msg = ""
+
+    # ==========================================
+    # 🚀 [멀티 전략] 초단타 vs 스윙 분기 처리
+    # ==========================================
+    if strategy == 'SCALPING':
+        # [초단타 모드] 스캐너가 이미 엄격한 수급 필터링을 거쳤으므로, 잔여 수급만 확인하고 무호흡 사격합니다.
+        if current_vpw >= 100:
+            is_trigger = True
+            msg = (f"⚡ **[{stock['name']}]({code}) 초단타(SCALP) 스나이퍼 즉시 진입!**\n"
+                   f"현재가: `{curr_price:,}원` | 수급강도: `{current_vpw:.1f}%`")
+    else:
+        # [우량주 스윙 모드] 기존의 깐깐한 AI 통합 분석(20일치 차트)을 거칩니다.
+        ai_prob = stock.get('prob', TRADING_RULES.get('SNIPER_AGGRESSIVE_PROB', 0.8))
+        score, details, visual, p, conclusion, checklist = kiwoom_utils.analyze_signal_integrated(ws_data, ai_prob)
+
+        strong_vpw = TRADING_RULES.get('VPW_STRONG_LIMIT', 115)
+        buy_threshold = TRADING_RULES.get('BUY_SCORE_THRESHOLD', 80)
+        v_pw_limit = 100 if ai_prob >= TRADING_RULES.get('SNIPER_AGGRESSIVE_PROB', 0.8) else strong_vpw
+        is_shooting = current_vpw >= v_pw_limit
+
+        if (score >= buy_threshold or is_shooting) and current_vpw >= 103:
+            is_trigger = True
+            msg = (f"🚀 **[{stock['name']}]({code}) 스나이퍼 포착! (스윙)**\n"
+                   f"현재가: `{curr_price:,}원` | 확신도: `{ai_prob:.1%}`\n"
+                   f"수급강도: `{current_vpw:.1f}%` {visual}")
+
+    # ==========================================
+    # 🎯 매수 실행 공통 로직
+    # ==========================================
+    if is_trigger:
         broadcast_callback(msg)
         alerted_stocks.add(code)
+        # 🚀 전략에 따라 주문 타입 분류 (초단타는 3:시장가, 나머지는 6:최유리지정가)
+        order_type_code = "3" if strategy == 'SCALPING' else "6"
 
         if not admin_id:
-            print(f"⚠️ [매수보류] {stock['name']}: 관리자 ID(ADMIN_ID)가 없어 주문을 패스합니다.")
+            print(f"⚠️ [매수보류] {stock['name']}: 관리자 ID가 없습니다.")
             return
 
         deposit = kiwoom_orders.get_deposit(KIWOOM_TOKEN, config=CONF)
-        real_buy_qty = kiwoom_orders.calc_buy_qty(p['curr'], deposit, code, KIWOOM_TOKEN,
+        real_buy_qty = kiwoom_orders.calc_buy_qty(curr_price, deposit, code, KIWOOM_TOKEN,
                                                   ratio=TRADING_RULES['BUY_RATIO'])
+
         if real_buy_qty <= 0:
             print(f"⚠️ [매수보류] {stock['name']}: 매수 수량이 0주입니다.")
             return
 
-        res = kiwoom_orders.send_buy_order_market(code, real_buy_qty, KIWOOM_TOKEN, config=CONF)
+        # 매수 함수 호출 시 order_type 전달
+        res = kiwoom_orders.send_buy_order_market(
+            code=code,
+            qty=real_buy_qty,
+            token=KIWOOM_TOKEN,
+            config=CONF,
+            order_type=order_type_code  # 💡 여기에 반영!
+        )
 
         is_success = False
         ord_no = ''
@@ -325,46 +334,34 @@ def handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback):
                 ord_no = str(res.get('ord_no', '') or res.get('odno', ''))
             else:
                 err_msg = res.get('return_msg', '사유 없음')
-                print(f"❌ [주문거절] {stock['name']} 서버 거절: {err_msg} ({res})")
+                print(f"❌ [주문거절] {stock['name']} 서버 거절: {err_msg}")
+
+                # 🚀 3. [초단타 전용] 매수 거절 시 1분 대기 후 다시 감시!
+                if strategy == 'SCALPING':
+                    alerted_stocks.discard(code)
+                    cooldowns[code] = time.time() + 60
         elif res:
             is_success = True
 
         if is_success:
-            kiwoom_utils.log_error(f"💰 [주문접수] {stock['name']} {real_buy_qty}주 (최유리지정가)", config=CONF)
+            kiwoom_utils.log_error(f"💰 [주문접수] {stock['name']} {real_buy_qty}주 (전략: {strategy})", config=CONF)
 
             stock.update({
                 'status': 'PENDING',
-                'buy_price': p['curr'],
+                'buy_price': curr_price,
                 'buy_qty': real_buy_qty,
                 'odno': ord_no,
                 'order_time': time.time()
             })
-            highest_prices[code] = p['curr']
+            highest_prices[code] = curr_price
 
             update_stock_status(
-                code=code,
-                status='PENDING',
-                buy_price=p['curr'],
-                buy_qty=real_buy_qty,
-                buy_time=datetime.now().strftime('%H:%M:%S')
+                code=code, status='PENDING', buy_price=curr_price,
+                buy_qty=real_buy_qty, buy_time=datetime.now().strftime('%H:%M:%S')
             )
-        else:
-            print(f"❌ [주문실패] {stock['name']} 응답값 이상: {res}")
 
 
 def handle_holding_state(stock, code, ws_data, admin_id, broadcast_callback, market_regime):
-    pos_tag = stock.get('position_tag', 'MIDDLE')
-
-    if pos_tag == 'BREAKOUT':
-        current_stop_loss = TRADING_RULES['STOP_LOSS_BREAKOUT']
-        regime_name = "전고점 돌파 시도"
-    elif pos_tag == 'BOTTOM':
-        current_stop_loss = TRADING_RULES['STOP_LOSS_BOTTOM']
-        regime_name = "바닥 탈출 구간"
-    else:
-        current_stop_loss = TRADING_RULES['STOP_LOSS_BULL'] if market_regime == 'BULL' else TRADING_RULES['STOP_LOSS_BEAR']
-        regime_name = "상승장" if market_regime == 'BULL' else "조정장"
-
     curr_p = ws_data['curr']
     buy_p = stock.get('buy_price', 0)
     if buy_p <= 0: return
@@ -375,87 +372,192 @@ def handle_holding_state(stock, code, ws_data, admin_id, broadcast_callback, mar
     profit_rate = (curr_p - buy_p) / buy_p * 100
     peak_profit = (highest_prices[code] - buy_p) / buy_p * 100
 
+    strategy = stock.get('strategy', 'KOSPI_ML')
     is_sell_signal = False
     reason = ""
 
-    # 1. 영업일 기준 3일 만료 강제 청산
-    try:
-        buy_date_str = stock.get('date', datetime.now().strftime('%Y-%m-%d'))
-        buy_date = datetime.strptime(buy_date_str, '%Y-%m-%d').date()
-        today_date = datetime.now().date()
+    # 💡 [수정] now_t를 함수 상단으로 올려서 아래쪽 부활 로직에서도 시간을 확인할 수 있게 합니다.
+    now_t = datetime.now().time()
 
-        hold_days = np.busday_count(buy_date, today_date)
-        if hold_days >= TRADING_RULES['HOLDING_DAYS']:
+    # ==========================================
+    # 🚀 [멀티 전략] 보유 종목 청산 분기 처리
+    # ==========================================
+    # 1️⃣ 초단타 (SCALPING) 전략
+    if strategy == 'SCALPING':
+
+        held_time_min = 0
+
+        if 'order_time' in stock:
+            # 메모리에 기록된 주문 시간으로 가장 정확하게 계산
+            held_time_min = (time.time() - stock['order_time']) / 60
+        elif 'buy_time' in stock and stock['buy_time']:
+            # 프로그램 재시작 시 DB에 기록된 시간(HH:MM:SS)을 불러와서 계산
+            try:
+                b_time = datetime.strptime(stock['buy_time'], '%H:%M:%S').time()
+                b_dt = datetime.combine(datetime.now().date(), b_time)
+                held_time_min = (datetime.now() - b_dt).total_seconds() / 60
+            except:
+                pass
+
+        if profit_rate >= TRADING_RULES['SCALP_TARGET']:
             is_sell_signal = True
-            reason = f"⏳ {TRADING_RULES['HOLDING_DAYS']}일 단기스윙 보유기간 만료 (시간 청산)"
-    except Exception as e:
-        print(f"⚠️ 날짜 계산 오류: {e}")
-
-    # 2. constants.py 기반 트레일링 스탑 적용
-    if not is_sell_signal and peak_profit >= TRADING_RULES['TRAILING_START_PCT']:
-        drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100
-        if drawdown >= TRADING_RULES['TRAILING_DRAWDOWN_PCT']:
+            reason = f"⚡ 초단타 목표 수익 컷 (+{TRADING_RULES['SCALP_TARGET']}%)"
+        elif profit_rate <= TRADING_RULES['SCALP_STOP']:
             is_sell_signal = True
-            reason = f"🏆 가변익절 (+{TRADING_RULES['TRAILING_START_PCT']}% 도달 후 하락)"
-        elif profit_rate <= TRADING_RULES['MIN_PROFIT_PRESERVE']:
+            reason = f"🔪 초단타 무호흡 칼손절 ({TRADING_RULES['SCALP_STOP']}%)"
+            
+        # 🚀 [신규 추가] 30분이 지났고, 0.3% 이상 수익 중이면 미련 없이 던짐!
+        elif held_time_min >= TRADING_RULES['SCALP_TIME_LIMIT_MIN'] and profit_rate >= TRADING_RULES['MIN_FEE_COVER']:
             is_sell_signal = True
-            reason = f"익절 수익 보존 (최소 {TRADING_RULES['MIN_PROFIT_PRESERVE']}%)"
+            reason = f"⏱️ {TRADING_RULES['SCALP_TIME_LIMIT_MIN']}분 타임아웃 (기회비용 확보용 약익절)"
 
-    # 3. constants.py 기반 손절선 적용
-    elif not is_sell_signal and profit_rate <= current_stop_loss:
-        is_sell_signal = True
-        reason = f"🛑 손절선 도달 ({regime_name} 기준 {current_stop_loss}%)"
+        # 초단타 오버나잇 금지 (15시 15분 전량 청산)
+        elif now_t >= datetime.strptime("15:15:00", "%H:%M:%S").time():
+            is_sell_signal = True
+            reason = "⏰ 초단타 오버나잇 회피 (장 마감 현금화)"
 
+    # 2️⃣ 코스닥 AI 스윙 (KOSDAQ_ML) 전용 전략 🚀 [신규 추가]
+    elif strategy == 'KOSDAQ_ML':
+
+        # 1. 영업일 기준 만료 청산 (안전망 기본값: 2일)
+        try:
+            buy_date_str = stock.get('date', datetime.now().strftime('%Y-%m-%d'))
+            buy_date = datetime.strptime(buy_date_str, '%Y-%m-%d').date()
+            if np.busday_count(buy_date, datetime.now().date()) >= TRADING_RULES.get('KOSDAQ_HOLDING_DAYS', 2):
+                is_sell_signal = True
+                reason = "⏳ 코스닥 스윙 기한 만료 청산"
+        except:
+            pass
+
+        # 2. 가변 익절 (트레일링 스탑) (안전망 기본값: 4.0%)
+        if not is_sell_signal and peak_profit >= TRADING_RULES.get('KOSDAQ_TARGET', 4.0):
+            drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100
+            # 코스닥은 윗꼬리가 길게 달리므로, 고점 대비 조금만 빠져도(1.0%) 바로 수익 실현
+            if drawdown >= 1.0:
+                is_sell_signal = True
+                reason = f"🏆 KOSDAQ 트레일링 익절 (+{TRADING_RULES.get('KOSDAQ_TARGET', 4.0)}% 돌파 후 하락)"
+
+        # 3. 코스닥 전용 타이트한 손절 (안전망 기본값: -2.0%)
+        elif not is_sell_signal and profit_rate <= TRADING_RULES.get('KOSDAQ_STOP', -2.0):
+            is_sell_signal = True
+            reason = f"🛑 KOSDAQ 전용 방어선 이탈 ({TRADING_RULES.get('KOSDAQ_STOP', -2.0)}%)"
+
+    # 3️⃣ 코스피 우량주 스윙 (KOSPI_ML 및 기본값)
+    else:
+        # [우량주 스윙 청산 룰] 기존의 가변 익절, 트레일링 스탑 적용
+        pos_tag = stock.get('position_tag', 'MIDDLE')
+        if pos_tag == 'BREAKOUT':
+            current_stop_loss = TRADING_RULES['STOP_LOSS_BREAKOUT']
+            regime_name = "전고점 돌파"
+        elif pos_tag == 'BOTTOM':
+            current_stop_loss = TRADING_RULES['STOP_LOSS_BOTTOM']
+            regime_name = "바닥 탈출"
+        else:
+            current_stop_loss = TRADING_RULES['STOP_LOSS_BULL'] if market_regime == 'BULL' else TRADING_RULES[
+                'STOP_LOSS_BEAR']
+            regime_name = "상승장" if market_regime == 'BULL' else "조정장"
+
+        # 1. 영업일 기준 만료 청산
+        try:
+            buy_date_str = stock.get('date', datetime.now().strftime('%Y-%m-%d'))
+            buy_date = datetime.strptime(buy_date_str, '%Y-%m-%d').date()
+            today_date = datetime.now().date()
+            if np.busday_count(buy_date, today_date) >= TRADING_RULES['HOLDING_DAYS']:
+                is_sell_signal = True
+                reason = f"⏳ {TRADING_RULES['HOLDING_DAYS']}일 스윙 보유 만료"
+        except:
+            pass
+
+        # 2. 트레일링 스탑 (가변 익절)
+        if not is_sell_signal and peak_profit >= TRADING_RULES['TRAILING_START_PCT']:
+            drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100
+            if drawdown >= TRADING_RULES['TRAILING_DRAWDOWN_PCT']:
+                is_sell_signal = True
+                reason = f"🏆 가변익절 (+{TRADING_RULES['TRAILING_START_PCT']}% 도달 후 하락)"
+            elif profit_rate <= TRADING_RULES['MIN_PROFIT_PRESERVE']:
+                is_sell_signal = True
+                reason = f"수익 보존 (최소 {TRADING_RULES['MIN_PROFIT_PRESERVE']}%)"
+
+        # 3. 손절
+        elif not is_sell_signal and profit_rate <= current_stop_loss:
+            is_sell_signal = True
+            reason = f"🛑 손절선 도달 ({regime_name} 기준 {current_stop_loss}%)"
+
+    # ==========================================
+    # 🎯 매도 실행 공통 로직
+    # ==========================================
     if is_sell_signal:
         sign = "🎊 [익절]" if profit_rate > 0 else "📉 [손절]"
-        msg = (f"{sign} **{stock['name']} 트래킹 종료**\n사유: `{reason}`\n"
+        msg = (f"{sign} **{stock['name']} 트래킹 종료 ({strategy})**\n사유: `{reason}`\n"
                f"최종 수익: `{profit_rate:+.2f}%` (고점: {peak_profit:.1f}%)")
-        broadcast_callback(msg)
+
+        # 🚨 [수정] 중복 전송 방지를 위해 여기서 쏘던 broadcast_callback(msg) 삭제!
 
         if admin_id and stock.get('buy_qty', 0) > 0:
             kiwoom_orders.send_sell_order_market(code, stock['buy_qty'], KIWOOM_TOKEN, config=CONF)
 
-        stock['status'] = 'COMPLETED'
         highest_prices.pop(code, None)
-        update_stock_status(code, 'COMPLETED')
+
+        # 🚀 [초단타 부활 로직]
+        # 단, 15시 15분 이후 장 마감으로 강제 청산된 경우는 부활시키지 않고 완전히 종료(COMPLETED)시킵니다.
+        if strategy == 'SCALPING' and now_t < datetime.strptime("15:15:00", "%H:%M:%S").time():
+            stock['status'] = 'WATCHING'
+            stock['buy_qty'] = 0
+            stock['buy_price'] = 0
+            alerted_stocks.discard(code)  # 블랙리스트 해제
+            cooldowns[code] = time.time() + 180  # 3분(180초) 쿨타임
+
+            update_stock_status(code, 'WATCHING', buy_price=0, buy_qty=0, buy_time='')
+            broadcast_callback(msg + f"\n♻️ (3분 쿨타임 후 재감시 돌입)")
+        else:
+            stock['status'] = 'COMPLETED'
+            update_stock_status(code, 'COMPLETED')
+            broadcast_callback(msg)
+
 
 def handle_pending_state(stock, code):
     order_time = stock.get('order_time', 0)
     time_elapsed = time.time() - order_time
-
-    # 💡 [개선] 30초 하드코딩 제거
     timeout_sec = TRADING_RULES.get('ORDER_TIMEOUT_SEC', 30)
 
     if time_elapsed > timeout_sec:
-        print(f"⚠️ [{stock['name']}] 주문 {timeout_sec}초 경과. 미체결 물량(최유리지정가) 취소를 시도합니다.")
-
+        print(f"⚠️ [{stock['name']}] 주문 {timeout_sec}초 경과. 미체결 물량 취소 시도.")
         orig_ord_no = stock.get('odno')
+
+        # 1. 원주문번호가 없는 비정상 펜딩 상태일 때의 탈출 로직
         if not orig_ord_no:
-            print(f"❌ [{stock['name']}] 원주문번호가 없어 취소를 진행할 수 없습니다. 감시 모드로 복귀합니다.")
             stock['status'] = 'WATCHING'
+            stock.pop('order_time', None)
+
+            if stock.get('strategy') == 'SCALPING':
+                alerted_stocks.discard(code)
+                cooldowns[code] = time.time() + 60
             return
 
-        res = kiwoom_orders.send_cancel_order(
-            code=code,
-            orig_ord_no=orig_ord_no,
-            token=KIWOOM_TOKEN,
-            qty=0,
-            config=CONF
-        )
+        # 2. 정상적인 미체결 주문 취소 전송
+        res = kiwoom_orders.send_cancel_order(code=code, orig_ord_no=orig_ord_no, token=KIWOOM_TOKEN, qty=0,
+                                              config=CONF)
 
+        # 3. 취소 접수 성공 시 부활 로직
         if res:
-            kiwoom_utils.log_error(f"🔄 [{stock['name']}] 미체결 잔량 취소 완료. 다시 타점을 감시합니다.", config=CONF)
             stock['status'] = 'WATCHING'
             stock.pop('odno', None)
             stock.pop('order_time', None)
             highest_prices.pop(code, None)
             update_stock_status(code, 'WATCHING', buy_price=0, buy_qty=0, buy_time='')
+
+            # 🚀 [초단타 부활 로직] 미체결 취소 시 1분 대기 후 다시 타점 노림
+            if stock.get('strategy') == 'SCALPING':
+                alerted_stocks.discard(code)
+                cooldowns[code] = time.time() + 60
+
+        # 4. 취소 실패 시 (이미 체결되었을 확률이 높음) 보유 상태로 전환
         else:
-            kiwoom_utils.log_error(f"ℹ️ [{stock['name']}] 취소 실패 (이미 전량 체결 예상). 매도 감시(HOLDING)를 시작합니다.", config=CONF)
             stock['status'] = 'HOLDING'
             stock.pop('odno', None)
             stock.pop('order_time', None)
             update_stock_status(code, 'HOLDING')
+
 
 # ==============================================================================
 # 🎯 메인 스나이퍼 엔진 (교통 정리 전담)
@@ -464,7 +566,7 @@ def run_sniper(broadcast_callback):
     global KIWOOM_TOKEN, WS_MANAGER
 
     admin_id = CONF.get('ADMIN_ID')
-    print(f"🔫 스나이퍼 V12.1 가동 (관리자 ID: {admin_id})")
+    print(f"🔫 스나이퍼 V12.2 멀티 엔진 가동 (관리자: {admin_id})")
 
     is_open, reason = kiwoom_utils.is_trading_day()
     if not is_open:
@@ -485,9 +587,12 @@ def run_sniper(broadcast_callback):
     targets = get_active_targets()
     last_scan_time = time.time()
 
+    # 🚀 [핵심] 외부 스캐너가 DB에 밀어넣은 신규 종목을 감지하기 위한 타이머
+    last_db_poll_time = time.time()
+
     current_market_regime = kiwoom_utils.get_market_regime(KIWOOM_TOKEN)
     regime_kor = "상승장 🐂" if current_market_regime == 'BULL' else "조정장 🐻"
-    print(f"📊 [시장 판독] 현재 KOSPI는 '{regime_kor}' 상태입니다. 맞춤형 손절이 적용됩니다.")
+    print(f"📊 [시장 판독] 현재 KOSPI는 '{regime_kor}' 상태입니다.")
 
     target_codes = [t['code'] for t in targets]
     WS_MANAGER.subscribe([c for c in target_codes])
@@ -502,15 +607,27 @@ def run_sniper(broadcast_callback):
                 print("🌙 장 마감 시간이 다가와 감시를 종료합니다.")
                 break
 
+            # 1. 내부 장중 스캐너 가동 (KOSPI)
             last_scan_time = check_and_run_intraday_scanner(targets, last_scan_time, broadcast_callback)
 
+            # 🚀 2. [신규 추가] 15초마다 외부(초단타 스캐너 등)에서 DB에 새로 넣은 종목이 있는지 확인
+            if time.time() - last_db_poll_time > 15:
+                db_targets = get_active_targets()
+                for dt in db_targets:
+                    if not any(t['code'] == dt['code'] for t in targets):
+                        targets.append(dt)
+                        WS_MANAGER.subscribe([dt['code']])
+                        print(f"🔄 [멀티 스캐너 연동] {dt['name']}({dt['code']}) 감시망 쾌속 합류! (전략: {dt.get('strategy')})")
+                last_db_poll_time = time.time()
+
+            # 3. 콘솔 가동 상태 로그 (1분 주기)
             if now_t.minute != last_msg_min:
                 watching_count = len([t for t in targets if t['status'] == 'WATCHING'])
                 holding_count = len([t for t in targets if t['status'] == 'HOLDING'])
-                current_time_str = now.strftime('%H:%M:%S')
-                print(f"💓 [{current_time_str}] 엔진 가동 중... (감시: {watching_count} / 보유: {holding_count})")
+                print(f"💓 [{now.strftime('%H:%M:%S')}] 다중 감시망 가동 중... (감시: {watching_count} / 보유: {holding_count})")
                 last_msg_min = now_t.minute
 
+            # 4. 개별 종목 상태 라우팅
             for stock in targets:
                 code = str(stock['code'])[:6]
                 status = stock['status']
@@ -531,4 +648,4 @@ def run_sniper(broadcast_callback):
         kiwoom_utils.log_error(f"🔥 스나이퍼 루프 치명적 에러: {e}", config=CONF, send_telegram=True)
 
     except KeyboardInterrupt:
-        print("\n🛑 엔진 종료")
+        print("\n🛑 스나이퍼 매매 엔진 종료")

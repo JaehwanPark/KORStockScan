@@ -16,9 +16,11 @@ def calc_buy_qty(current_price, total_deposit, code, token, ratio=0.1):
     return qty
 
 
-def send_buy_order_market(code, qty, token, config=None):
+def send_buy_order_market(code, qty, token, config=None, order_type="6"):
     """
-    [kt10000] 시장가 매수 주문 - return_code 대응 수정
+    [kt10000] 매수 주문 - return_code 대응 수정
+    - order_type: "6" (최유리지정가 - 기본값, 우량주 스윙용)
+                  "3" (시장가 - 초단타 스캘핑용)
     """
     if qty <= 0: return None
 
@@ -37,7 +39,7 @@ def send_buy_order_market(code, qty, token, config=None):
         "stk_cd": str(code),
         "ord_qty": str(qty),
         "ord_uv": "",
-        "trde_tp": "6",  # 최유리지정가
+        "trde_tp": str(order_type),  # 🚀 외부에서 전달받은 주문 타입(시장가/최유리지정가) 적용
         "cond_uv": ""
     }
 
@@ -45,18 +47,20 @@ def send_buy_order_market(code, qty, token, config=None):
         res = requests.post(url, headers=headers, json=payload, timeout=5)
         data = res.json()
 
-        # 🚀 [핵심 수정] rt_cd 또는 return_code 둘 중 하나라도 0이면 성공으로 간주
-        is_success = data.get('rt_cd') == '0' or data.get('return_code') == 0
+        # 🚀 [핵심 수정] rt_cd 또는 return_code 둘 중 하나라도 0이면 성공으로 간주 (문자열 변환으로 안전하게 처리)
+        is_success = str(data.get('rt_cd', '')) == '0' or str(data.get('return_code', '')) == '0'
 
         if res.status_code == 200 and is_success:
             return data
         else:
             err_msg = data.get('return_msg') or data.get('err_msg') or '상세 사유 없음'
             err_code = data.get('return_code') if data.get('return_code') is not None else data.get('rt_cd')
+            import kiwoom_utils # 예외 처리 시 참조를 위해
             kiwoom_utils.log_error(f"❌ [매수거절] 종목:{code}, 사유:{err_msg} (코드:{err_code})", config=config,
                                    send_telegram=True)
             return None
     except Exception as e:
+        import kiwoom_utils
         kiwoom_utils.log_error(f"🔥 [매수주문] 시스템 예외: {str(e)}", config=config, send_telegram=True)
         return None
 
