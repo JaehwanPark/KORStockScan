@@ -15,6 +15,7 @@ from telebot import types
 # 💡 엔진 및 유틸리티 모듈 임포트
 import kiwoom_sniper_v2
 import kiwoom_utils
+from signal_radar import SniperRadar  # 1. 레이더 모듈 추가
 from db_manager import DBManager
 from constants import TRADING_RULES
 
@@ -525,7 +526,8 @@ def handle_status(message):
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
     token = kiwoom_utils.get_kiwoom_token(CONF)
-    regime = kiwoom_utils.get_market_regime(token)
+    radar = SniperRadar(token)            # 2. 레이더 인스턴스 생성
+    regime = radar.get_market_regime()
     regime_icon = "🐂 (상승장)" if regime == 'BULL' else "🐻 (조정장)"
 
     msg = f"🟢 *[KORStockScan 시스템 보고]*\n"
