@@ -318,22 +318,103 @@ class SniperRadar:
     # ---------------------------------------------------------
     # (나머지 2개 함수도 마저 이사 옵니다)
     # ---------------------------------------------------------
-    def get_market_regime(self):
-        """코스피 지수를 분석하여 현재 시장 상태(BULL/BEAR)를 판별 (FDR 및 ka20006 활용)"""
-        # 기존 kiwoom_utils.get_market_regime 로직 그대로 (self.token 활용)
-        import FinanceDataReader as fdr
+    def get_market_regime(token=None):
+        """
+        코스피 지수를 분석하여 현재 시장 상태(BULL/BEAR)를 판별합니다.
+        (1차: FinanceDataReader, 2차: 키움 ka20006 API 우회)
+        기준: 코스피 현재가가 20일 이동평균선 위에 있으면 BULL, 아래면 BEAR
+        """
+        # 1차: FDR 사용 (코스피 지수 KS11)
         try:
             df = fdr.DataReader('KS11')
             if not df.empty and len(df) >= 20:
                 current_close = float(df['Close'].iloc[-1])
                 ma20 = float(df['Close'].tail(20).mean())
                 return 'BULL' if current_close >= ma20 else 'BEAR'
-        except Exception:
-            pass
-        # (이하 ka20006 우회 로직 생략 - 기존과 동일하게 유지)
+        except Exception as e:
+            print(f"⚠️ FDR 코스피 조회 실패. 키움 ka20006 API로 우회합니다: {e}")
+
+        # 2차: 키움 ka20006 (업종일봉조회요청) 사용
+        if token:
+            try:
+                url = "https://api.kiwoom.com/api/dostk/mrkcond"
+                headers = {
+                    'Content-Type': 'application/json;charset=UTF-8',
+                    'authorization': f'Bearer {token}',
+                    'cont-yn': 'N',
+                    'api-id': 'ka20006'
+                }
+                payload = {"upjong_cd": "001"} # 001: 코스피
+                res = requests.post(url, headers=headers, json=payload, timeout=10)
+                if res.status_code == 200:
+                    res_json = res.json()
+                    for key, val in res_json.items():
+                        if isinstance(val, list) and len(val) >= 20 and 'cur_prc' in val[0]:
+                            df_k = pd.DataFrame(val)
+                            df_k['cur_prc'] = pd.to_numeric(df_k['cur_prc'].astype(str).str.replace(',', '', regex=False).str.replace('+', '', regex=False).str.replace('-', '', regex=False), errors='coerce')
+                            current_close = df_k['cur_prc'].iloc[0]
+                            ma20 = df_k['cur_prc'].head(20).mean()
+                            return 'BULL' if current_close >= ma20 else 'BEAR'
+            except Exception as e2:
+                print(f"🚨 키움 ka20006 우회 조회 실패: {e2}")
+
+        # 둘 다 실패하면 보수적으로 BEAR(하락장) 모드 전환하여 리스크 관리
         return 'BEAR'
 
-    def get_top_marketcap_stocks(self, limit=300):
-        """네이버 금융 API를 통해 시가총액 상위 종목 수집 (Universe 구축용)"""
-        # 기존 kiwoom_utils.get_top_marketcap_stocks 로직 그대로 이식
-        pass
+    def get_top_marketcap_stocks(limit=300):
+        """
+        [FDR 완벽 대체용] KOSPI 시가총액 상위 종목 코드를 가져옵니다.
+        네이버 모바일 증권 API가 허용하는 최대 호출량(60개)에 맞춰
+        여러 페이지를 안전하게 순회하며 우량주 종목을 수집합니다.
+        """
+        import requests
+        import time
+
+        # 💡 [해결 1] 평범한 크롬 웹 브라우저인 것처럼 신분증(헤더) 위조
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Referer': 'https://m.stock.naver.com/'
+        }
+
+        target_codes = []
+        # 💡 [해결 2] 300개를 한 번에 부르지 않고(400 에러 방지), 60개씩 쪼개서 요청합니다.
+        page_size = 60
+        max_pages = (limit // page_size) + 1
+
+        for page in range(1, max_pages + 1):
+            url = f"https://m.stock.naver.com/api/stocks/marketValue/KOSPI?page={page}&pageSize={page_size}"
+
+            try:
+                res = requests.get(url, headers=headers, timeout=10)
+
+                if res.status_code == 200:
+                    data = res.json()
+                    stocks = data.get('stocks', [])
+
+                    # 더 이상 불러올 종목이 없으면 루프 탈출
+                    if not stocks:
+                        break
+
+                    for stock in stocks:
+                        code = stock.get('itemCode')
+                        name = stock.get('stockName')
+
+                        # 스팩, 우선주, ETF 등 불순물 제거 로직 통과 후 적재
+                        if is_valid_stock(code, name):
+                            target_codes.append(code)
+
+                            # 목표 개수(300개)를 채우면 즉시 반환
+                            if len(target_codes) >= limit:
+                                return target_codes
+                else:
+                    print(f"🚨 네이버 API 접근 거절 (HTTP {res.status_code}) - 페이지: {page}")
+                    break
+
+            except Exception as e:
+                print(f"🚨 시가총액 상위 종목 조회 실패: {e}")
+                break
+
+            # 💡 [핵심] 네이버 서버 차단 방지를 위한 짧은 휴식 시간
+            time.sleep(0.3)
+
+        return target_codes
