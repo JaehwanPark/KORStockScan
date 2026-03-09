@@ -11,3 +11,5 @@ while true; do
     echo "⏳ 5초 후 엔진을 재가동합니다. (완전 종료를 원하면 지금 Ctrl+C를 누르세요)"
     sleep 5
 done
+
+# 깃허브 연동 테스트
