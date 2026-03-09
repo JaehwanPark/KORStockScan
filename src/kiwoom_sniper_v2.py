@@ -304,8 +304,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback):
                     return
 
             # 💡 [핵심] kiwoom_utils에서 호가 단위 불러와서 2호가 아래 '눌림목 타점' 계산
-            tick_size = kiwoom_utils.get_tick_size(curr_price)
-            target_buy_price = curr_price - (tick_size * 2)  # 2호가 아래 가격
+            target_buy_price = kiwoom_utils.get_price_ticks_down(curr_price, ticks=2)  # 정확한 2호가 아래 가격
 
             # stock 딕셔너리에 목표 매수가를 잠시 저장 (주문 전송 시 사용)
             stock['target_buy_price'] = target_buy_price

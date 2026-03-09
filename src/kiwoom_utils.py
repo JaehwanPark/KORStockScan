@@ -867,3 +867,12 @@ def get_tick_size(price):
     if price < 200000: return 100
     if price < 500000: return 500
     return 1000
+
+def get_price_ticks_down(curr_price, ticks=2):
+    """현재가에서 지정한 틱(호가) 수만큼 정확히 내린 가격을 계산합니다."""
+    price = curr_price
+    for _ in range(ticks):
+        # 가격이 내려갈 때의 호가 단위는 '현재 가격보다 1원이라도 낮을 때'의 기준을 따라야 함
+        tick = get_tick_size(price - 1)
+        price -= tick
+    return price
