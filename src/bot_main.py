@@ -129,7 +129,7 @@ def smart_broadcast(msg, audience='VIP_ALL'):
         # 1. users 테이블에서 알림을 받을 수 있는 모든 유저 정보를 한 번에 가져옵니다.
         # USER_DB_PATH 등을 참조하는 방식에 맞게 db._get_connection() 등을 사용하세요.
         with db._get_connection() as conn: 
-            users = conn.execute("SELECT chat_id, user_level FROM users").fetchall()
+            users = conn.execute("SELECT chat_id, auth_group FROM users").fetchall()
             
         for chat_id, level in users:
             # 2. 관리자('A') 발송 로직: 꼬리표 무관하게 0순위로 100% 수신

@@ -120,11 +120,17 @@ class KiwoomWSManager:
                     item_code = d.get('item', '')
                     if item_code and real_type != '00': 
                         with self.lock:
+                            # 1. 초기 데이터 구조 생성 (신규 종목 진입 시)
                             if item_code not in self.realtime_data:
                                 self.realtime_data[item_code] = {
-                                    'curr': 0, 'v_pw': 0, 'ask_tot': 0, 'bid_tot': 0, 'time': '',
+                                    'curr': 0, 
+                                    'v_pw': 0, 
+                                    'ask_tot': 0, 
+                                    'bid_tot': 0, 
+                                    'time': '',
                                     'fluctuation': 0.0,
-                                    'open': 0  # 💡 [여기 추가] 시가를 담을 빈 공간
+                                    'open': 0,  # 💡 시가 데이터 추가
+                                    'orderbook': {'asks': [], 'bids': []} # 🚀 [필수 교정] 초기화 시 포함되어야 함
                                 }
                             
                             target = self.realtime_data[item_code]
@@ -156,6 +162,33 @@ class KiwoomWSManager:
                             # 125: 매수호가 총잔량
                             if '125' in values:
                                 target['bid_tot'] = int(values['125'])
+
+                            # 🚀 [신규 추가] '0D' 주식호가잔량 데이터 파싱
+                            if real_type == '0D':
+                                asks = []
+                                bids = []
+                                # 1호가부터 5호가까지만 추출 (Gemini 토큰 절약 및 핵심 데이터 집중)
+                                # 키움 FID 규칙: 매도호가(41~50), 매수호가(51~60), 매도잔량(61~70), 매수잔량(71~80)
+                                for i in range(1, 6):
+                                    ask_p = values.get(str(40 + i))
+                                    ask_v = values.get(str(60 + i))
+                                    bid_p = values.get(str(50 + i))
+                                    bid_v = values.get(str(70 + i))
+
+                                    if ask_p and ask_v:
+                                        asks.append({
+                                            'price': abs(int(ask_p.replace('+', '').replace('-', ''))), 
+                                            'volume': int(ask_v)
+                                        })
+                                    if bid_p and bid_v:
+                                        bids.append({
+                                            'price': abs(int(bid_p.replace('+', '').replace('-', ''))), 
+                                            'volume': int(bid_v)
+                                        })
+                                
+                                # 매도호가는 역순(5호가 -> 1호가)이 보기 편하므로 뒤집어줌
+                                target['orderbook']['asks'] = asks[::-1]
+                                target['orderbook']['bids'] = bids
                             
                             target['time'] = datetime.now().strftime('%H:%M:%S')
 

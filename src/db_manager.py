@@ -130,7 +130,7 @@ class DBManager:
         """사용자의 등급 레벨을 반환합니다."""
         try:
             with sqlite3.connect(USER_DB_PATH) as conn:
-                row = conn.execute("SELECT user_level FROM users WHERE chat_id = ?", (chat_id,)).fetchone()
+                row = conn.execute("SELECT auth_group FROM users WHERE chat_id = ?", (chat_id,)).fetchone()
                 return row[0] if row else 0
         except Exception:
             return 0

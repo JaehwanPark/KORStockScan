@@ -104,6 +104,42 @@ class SniperRadar:
                     return s5 > s20 and s5 > 110.0
         except Exception: pass
         return False
+    
+    def get_tick_history_ka10003(self, code, limit=10):
+        """
+        [ka10003] 주식체결정보요청 - AI 분석용 최근 틱(Tick) 스냅샷 추출
+        """
+        self.headers_mrkcond['api-id'] = 'ka10003'
+        # TR 요청의 경우 보통 stkinfo 엔드포인트를 사용하지만, 기존 설정된 url을 사용합니다.
+        url = "https://api.kiwoom.com/api/dostk/stkinfo" 
+        
+        payload = {"stk_cd": str(code)}
+        ticks = []
+        
+        try:
+            res = requests.post(url, headers=self.headers_mrkcond, json=payload, timeout=3)
+            if res.status_code == 200:
+                data = res.json()
+                
+                # 🚀 알려주신 명세의 'cntr_infr' 배열 추출
+                tick_list = data.get('cntr_infr', []) 
+                
+                for item in tick_list[:limit]:
+                    raw_price = str(item.get('cur_prc', '0'))
+                    
+                    # 부호로 매수/매도 주도권 파악 (키움 데이터 종특 활용)
+                    direction = "BUY" if "+" in raw_price else "SELL" if "-" in raw_price else "NEUTRAL"
+                    
+                    ticks.append({
+                        'time': item.get('tm', ''),
+                        'price': abs(int(raw_price.replace('+', '').replace('-', ''))),
+                        'volume': int(item.get('cntr_trde_qty', '0')),
+                        'dir': direction
+                    })
+        except Exception as e:
+            kiwoom_utils.log_error(f"🚨 [Radar] 틱 체결 데이터 호출 실패 ({code}): {e}")
+            
+        return ticks
 
     # ==========================================
     # 🎯 [최종: 융합 및 지시] 메인 스캐너로 넘길 타겟 추출
