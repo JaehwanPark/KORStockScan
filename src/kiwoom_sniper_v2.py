@@ -648,7 +648,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback, ra
             )
 
 
-def handle_holding_state(stock, code, ws_data, admin_id, broadcast_callback, market_regime):
+def handle_holding_state(stock, code, ws_data, admin_id, broadcast_callback, market_regime, radar=None, ai_engine=None): # 🚀 파라미터 추가
     curr_p = ws_data['curr']
     buy_p = stock.get('buy_price', 0)
     if buy_p <= 0: return
@@ -666,10 +666,35 @@ def handle_holding_state(stock, code, ws_data, admin_id, broadcast_callback, mar
     now_t = datetime.now().time()
     db = DBManager()  # 💡 DB 매니저 로컬 인스턴스화
 
+    # =========================================================
+    # 🤖 [AI 보유 종목 실시간 감시] 15초마다 건강 검진
+    # =========================================================
+    global LAST_AI_CALL_TIMES
+    last_ai_time = LAST_AI_CALL_TIMES.get(code, 0)
+    current_ai_score = stock.get('rt_ai_prob', 0.8) * 100 # 기본값은 긍정(80점)으로 둠
+    
+    # 보유 중일 때는 API 쿼터를 아끼기 위해 15초(또는 20초) 주기로 여유롭게 감시
+    if strategy == 'SCALPING' and ai_engine and radar and (time.time() - last_ai_time > 15.0):
+        recent_ticks = radar.get_tick_history_ka10003(code, limit=10)
+        recent_candles = radar.get_minute_candles_ka10080(code, limit=5)
+        
+        if ws_data.get('orderbook') and recent_ticks:
+            ai_decision = ai_engine.analyze_target(stock['name'], ws_data, recent_ticks, recent_candles)
+            current_ai_score = ai_decision.get('score', 50)
+            ai_reason = ai_decision.get('reason', '')
+            
+            # 점수 갱신
+            stock['rt_ai_prob'] = current_ai_score / 100.0
+            LAST_AI_CALL_TIMES[code] = time.time()
+            
+            # 보유 중 상태를 터미널에 조용히 출력 (디버깅용)
+            print(f"👁️ [AI 보유감시: {stock['name']}] 수익: {profit_rate:+.2f}% | AI점수: {current_ai_score}점")
+    # =========================================================
+
     # ==========================================
     # 🚀 [멀티 전략] 보유 종목 청산 분기 처리
     # ==========================================
-    # 1️⃣ 초단타 (SCALPING) 전략
+    # 1️⃣ 초단타 (SCALPING) 전략 (AI 매도 로직 결합)
     if strategy == 'SCALPING':
         held_time_min = 0
         if 'order_time' in stock:
@@ -685,18 +710,34 @@ def handle_holding_state(stock, code, ws_data, admin_id, broadcast_callback, mar
         target_pct = TRADING_RULES.get('SCALP_TARGET', 2.0)
         stop_pct = TRADING_RULES.get('SCALP_STOP', -2.5)
 
+        # 🚀 [우선순위 1] 기계적 목표 도달 (AI 무시하고 무조건 익절/손절)
         if profit_rate >= target_pct:
             is_sell_signal = True
             reason = f"⚡ 초단타 목표 수익 컷 (+{target_pct}%)"
         elif profit_rate <= stop_pct:
             is_sell_signal = True
             reason = f"🔪 초단타 무호흡 칼손절 ({stop_pct}%)"
-        elif held_time_min >= TRADING_RULES['SCALP_TIME_LIMIT_MIN'] and profit_rate >= TRADING_RULES['MIN_FEE_COVER']:
-            is_sell_signal = True
-            reason = f"⏱️ {TRADING_RULES['SCALP_TIME_LIMIT_MIN']}분 타임아웃 (기회비용 확보용 약익절)"
-        elif now_t >= datetime.strptime("15:15:00", "%H:%M:%S").time():
-            is_sell_signal = True
-            reason = "⏰ 초단타 오버나잇 회피 (장 마감 현금화)"
+
+        # 🚀 [우선순위 2] 🤖 AI 지능형 개입 (Smart Exit)
+        elif not is_sell_signal:
+            # A. 지능형 조기 익절 (모멘텀 둔화)
+            if current_ai_score < 50 and profit_rate >= 0.5:
+                is_sell_signal = True
+                reason = f"🤖 AI 모멘텀 둔화 감지 ({current_ai_score}점). 조기 익절 (+{profit_rate:.2f}%)"
+            
+            # B. 지능형 조기 손절 (투매 징후)
+            elif current_ai_score <= 35 and profit_rate < 0:
+                is_sell_signal = True
+                reason = f"🚨 AI 하방 리스크(DROP) 포착 ({current_ai_score}점). 조기 손절 ({profit_rate:.2f}%)"
+
+        # 🚀 [우선순위 3] 시간 초과 및 장 마감
+        if not is_sell_signal:
+            if held_time_min >= TRADING_RULES['SCALP_TIME_LIMIT_MIN'] and profit_rate >= TRADING_RULES['MIN_FEE_COVER']:
+                is_sell_signal = True
+                reason = f"⏱️ {TRADING_RULES['SCALP_TIME_LIMIT_MIN']}분 타임아웃 (기회비용 확보용 약익절)"
+            elif now_t >= datetime.strptime("15:15:00", "%H:%M:%S").time():
+                is_sell_signal = True
+                reason = "⏰ 초단타 오버나잇 회피 (장 마감 현금화)"
 
     # 2️⃣ 코스닥 AI 스윙 (KOSDAQ_ML) 전용 전략
     elif strategy == 'KOSDAQ_ML':
@@ -853,6 +894,7 @@ def handle_buy_ordered_state(stock, code):
 
         is_success = False
         res_str = str(res)
+        err_msg = res_str  # 💡 [핵심] 어떤 경우에도 에러가 나지 않도록 기본 문자열을 미리 할당합니다.
 
         if isinstance(res, dict):
             if str(res.get('return_code', res.get('rt_cd', ''))) == '0':
@@ -860,7 +902,6 @@ def handle_buy_ordered_state(stock, code):
             err_msg = res.get('return_msg', '') # 딕셔너리일 때 안전하게 추출
         elif res:
             is_success = True
-            err_msg = res_str # 아닐 경우 결과 문자열 그대로 사용
 
         # 3. 취소 접수 성공 시
         if is_success:
@@ -1012,15 +1053,18 @@ def run_sniper(broadcast_callback):
                         ws_data, 
                         admin_id, 
                         broadcast_callback, 
-                        current_market_regime
+                        current_market_regime,
+                        radar=radar,         # 🚀 추가
+                        ai_engine=ai_engine  # 🚀 추가
                     )
                 
                 # 👇 [수정] PENDING 대신 BUY_ORDERED 로 확인하고, 방금 만든 새 함수를 호출합니다!
                 elif status == 'BUY_ORDERED':
                     handle_buy_ordered_state(stock, code)
-                    
+
             # 💡 [신규] 매매가 끝난 종목(COMPLETED)은 메모리(targets)에서 제거하여 속도 저하 방지
-            targets = [t for t in targets if t['status'] != 'COMPLETED']
+            # 반드시 targets[:] 를 사용하여 전역 변수인 ACTIVE_TARGETS와 메모리를 동기화해야 합니다!
+            targets[:] = [t for t in targets if t['status'] != 'COMPLETED']
 
             time.sleep(1)
 
