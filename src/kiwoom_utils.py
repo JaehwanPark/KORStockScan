@@ -907,10 +907,16 @@ def get_target_price_by_percent(curr_price, drop_percent=0.5):
         
     return price
 
-def get_smart_target_price(curr_price, v_pw=100):
-    if curr_price <= 0: return 0
+def get_smart_target_price(curr_price, v_pw=100, ai_prob=0.8, market_trend='NORMAL'):
+    """
+    [스캘핑 3.0] 수급강도 + AI 확신도 + 시장 지수 결합형 타점 계산기
+    """
+    if curr_price <= 0: return 0, 0.0
     
-    # VPW에 따른 조건 설정
+    # AI 확신도를 0~100 단위로 변환
+    ai_score = ai_prob * 100 if ai_prob <= 1.0 else ai_prob
+    
+    # 1. 기본 설정 (수급강도 기준)
     if v_pw >= 200:
         drop_percent, tick_count = 0.2, 3
     elif v_pw >= 150:
@@ -918,14 +924,28 @@ def get_smart_target_price(curr_price, v_pw=100):
     else:
         drop_percent, tick_count = 0.5, 5
         
-    # 💡 [핵심] 기존 함수를 호출해서 퍼센트 가격을 가져옵니다. (중복 제거)
+    # 2. 🚀 가속 페달: AI 확신도 반영
+    if ai_score >= 85:
+        drop_percent = max(0.1, drop_percent - 0.15) 
+        tick_count = max(1, tick_count - 1)
+    elif ai_score <= 50: # DROP에 가까운 경우
+        drop_percent += 0.5   
+        tick_count += 3
+
+    # 3. 🛑 브레이크: 시장 지수 반영
+    if market_trend == 'BAD':
+        drop_percent += 0.5
+        tick_count += 3
+
+    # 4. 가격 계산
     pct_price = get_target_price_by_percent(curr_price, drop_percent)
     
-    # 틱(Tick) 기준 가격 계산
     tick_price = curr_price
-    for _ in range(tick_count):
+    for _ in range(int(tick_count)):
         tick = get_tick_size(tick_price - 1)
         tick_price -= tick
         
-    # 두 기준 중 더 낮은(안전한) 가격 선택
-    return min(pct_price, tick_price)
+    final_target = min(pct_price, tick_price)
+    
+    # 💡 수정 완료: 최종 타점과 함께, 최종적으로 결정된 눌림목(drop_percent)을 리턴합니다.
+    return final_target, round(drop_percent, 2)

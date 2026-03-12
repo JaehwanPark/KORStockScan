@@ -477,21 +477,26 @@ def handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback, ra
                 recent_ticks = radar.get_tick_history_ka10003(code, limit=10)
                 
                 if ws_data.get('orderbook') and recent_ticks:
-                    # 2. AI 두뇌 호출 (넘겨받은 ai_engine 인스턴스 사용)
+                   
+                    # 2. AI 두뇌 호출
                     ai_decision = ai_engine.analyze_target(stock['name'], ws_data, recent_ticks)
                     
                     action = ai_decision.get('action', 'WAIT')
+                    ai_score = ai_decision.get('score', 50)  # 💡 AI가 직접 산정한 0~100 점수!
                     reason = ai_decision.get('reason', '사유 없음')
                     
-                    print(f"🤖 [AI 섀도우 모드: {stock['name']}] {action} | {reason}")
+                    # 💡 [NEW] AI 점수(100점 만점)를 내부 확률(0.0~1.0)로 변환하여 덮어씌움
+                    rt_score = ai_score / 100.0
+                    stock['rt_ai_prob'] = rt_score 
+                    
+                    print(f"🤖 [AI 섀도우 모드: {stock['name']}] {action} | 점수: {ai_score}점 | {reason}")
                     
                     if action in ["BUY", "DROP"]:
                         ai_msg = f"🤖 <b>[AI 스나이퍼 모의판단]</b>\n"
                         ai_msg += f"🎯 종목: {stock['name']}\n"
-                        ai_msg += f"⚡ 행동: <b>{action}</b>\n"
+                        ai_msg += f"⚡ 행동: <b>{action} ({ai_score}점)</b>\n"
                         ai_msg += f"🧠 사유: {reason}"
                         
-                        # 3. 어드민에게만 발송
                         try:
                             broadcast_callback(ai_msg, audience='ADMIN_ONLY', parse_mode='HTML')
                         except Exception as e:
@@ -501,12 +506,12 @@ def handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback, ra
                     LAST_AI_CALL_TIMES[code] = time.time()
             # =========================================================
 
-            target_buy_price = kiwoom_utils.get_smart_target_price(curr_price, current_vpw)
+            target_buy_price, used_drop_pct = kiwoom_utils.get_smart_target_price(curr_price, v_pw=current_vpw)
             stock['target_buy_price'] = target_buy_price
 
             is_trigger = True
             msg = (f"⚡ **[{stock['name']}]({code}) 초단타(SCALP) 그물망 투척!**\n"
-                   f"현재가: `{curr_price:,}원` ➡️ **매수대기: `{target_buy_price:,}원` (-0.5% 눌림목)**\n"
+                   f"현재가: `{curr_price:,}원` ➡️ **매수대기: `{target_buy_price:,}원` (-{used_drop_pct:.1f}% 눌림목)**\n"
                    f"호가잔량대금: `{liquidity_value / 100_000_000:.1f}억` | 수급강도: `{current_vpw:.1f}%`")
             
             # 💡 [핵심 추가] 매수 로직과 별개로, 텔레그램 발송용 타겟 오디언스 꼬리표를 붙입니다.

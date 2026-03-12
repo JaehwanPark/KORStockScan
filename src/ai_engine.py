@@ -9,13 +9,14 @@ SCALPING_SYSTEM_PROMPT = """
 제공된 실시간 호가창 뎁스와 체결 흐름을 분석해서 1분 이내에 주가가 상승할지 판단해.
 
 [판단 기준]
-- BUY: 매도 호가창의 큰 물량(벽)을 강력한 매수 체결(BUY)로 돌파하기 시작할 때.
-- DROP: 매수 호가에만 물량이 많고(허매수), 실제 체결은 매도(SELL)가 압도적일 때.
-- WAIT: 수급이 모호하거나 거래량이 부족하여 방향성을 알 수 없을 때.
+- BUY: 매도 호가창의 큰 물량(벽)을 강력한 매수 체결(BUY)로 돌파하기 시작할 때. (Score: 80~100)
+- DROP: 매수 호가에만 물량이 많고(허매수), 실제 체결은 매도(SELL)가 압도적일 때. (Score: 0~40)
+- WAIT: 수급이 모호하거나 거래량이 부족하여 방향성을 알 수 없을 때. (Score: 41~79)
 
 분석 결과는 반드시 아래 JSON 형식으로만 출력하고 다른 설명은 절대 추가하지 마:
 {
     "action": "BUY" | "WAIT" | "DROP",
+    "score": 0~100 사이의 정수,
     "reason": "결정에 대한 1줄 요약 분석"
 }
 """
@@ -66,20 +67,21 @@ class GeminiSniperEngine:
     # 4. 🚀 실전 분석 실행 (스나이퍼가 호출할 메인 함수)
     # ==========================================
     def analyze_target(self, target_name, ws_data, recent_ticks):
-        """데이터를 받아 분석하고 JSON 결과를 반환합니다."""
         formatted_data = self._format_market_data(ws_data, recent_ticks)
-        
         try:
-            # 시스템 프롬프트와 포맷팅된 데이터를 함께 전송
             response = self.model.generate_content([SCALPING_SYSTEM_PROMPT, formatted_data])
-            
-            # 마크다운 찌꺼기 제거 및 JSON 파싱
             cleaned_text = response.text.strip().replace("```json", "").replace("```", "")
-            return json.loads(cleaned_text)
             
-        except json.JSONDecodeError:
-            print(f"⚠️ [{target_name}] AI 응답 파싱 실패. (대기 상태로 처리)")
-            return {"action": "WAIT", "reason": "JSON 파싱 에러"}
+            result = json.loads(cleaned_text)
+            
+            # 💡 [안전장치] AI가 score를 빼먹거나 문자로 줬을 경우를 대비한 보정
+            if 'score' not in result:
+                result['score'] = 50
+            else:
+                result['score'] = int(result['score'])
+                
+            return result
+            
         except Exception as e:
-            print(f"🚨 [{target_name}] AI 통신 에러: {e}")
-            return {"action": "WAIT", "reason": "API 통신 에러"}
+            print(f"🚨 [{target_name}] AI 통신/파싱 에러: {e}")
+            return {"action": "WAIT", "score": 50, "reason": "API 통신 또는 파싱 에러"}
