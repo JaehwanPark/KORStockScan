@@ -95,15 +95,15 @@ def process_and_save_stock(code, token, db: DBManager):
         df_ohlcv = kiwoom_utils.get_daily_ohlcv_ka10081_df(token, code)
         if df_ohlcv.empty: return False
 
-        time.sleep(0.5) # 💡 [버퍼 추가] 10081 연속조회 후 키움 서버 진정시키기(모의투자용)
+        # time.sleep(0.5) # 💡 [버퍼 추가] 10081 연속조회 후 키움 서버 진정시키기(모의투자용)
         # time.sleep(0.2) # 💡 [버퍼 추가] 10081 연속조회 후 키움 서버 진정시키기(실전서버용)
         df_investor = kiwoom_utils.get_investor_daily_ka10059_df(token, code)
         
-        time.sleep(0.5) # 💡 [버퍼 추가] 10059 연속조회 후 진정시키기(모의투자용)
+        # time.sleep(0.5) # 💡 [버퍼 추가] 10059 연속조회 후 진정시키기(모의투자용)
         # time.sleep(0.2) # 💡 [버퍼 추가] 10081 연속조회 후 키움 서버 진정시키기(실전서버용)
         df_margin = kiwoom_utils.get_margin_daily_ka10013_df(token, code)
         
-        time.sleep(0.5) # 💡 [버퍼 추가] 10013 연속조회 후 진정시키기(모의투자용)
+        # time.sleep(0.5) # 💡 [버퍼 추가] 10013 연속조회 후 진정시키기(모의투자용)
         # time.sleep(0.2) # 💡 [버퍼 추가] 10081 연속조회 후 키움 서버 진정시키기(실전서버용)
         basic_info = kiwoom_utils.get_basic_info_ka10001(token, code)
 
@@ -134,21 +134,13 @@ def process_and_save_stock(code, token, db: DBManager):
         existing_cols = [col for col in COLUMN_MAPPING.keys() if col in df.columns]
         df = df[existing_cols].rename(columns=COLUMN_MAPPING)
 
-        # 4. DB 적재 (최근 100일치 덮어쓰기)
+        # 4. 최근 100일치만 잘라내어 반환 (DB I/O는 여기서 안 함!)
         cutoff_date = (datetime.now() - timedelta(days=100)).strftime('%Y-%m-%d')
         new_rows = df[df['quote_date'] >= cutoff_date].copy()
 
-        if not new_rows.empty:
-            with db.engine.begin() as conn:
-                delete_query = text(f"DELETE FROM {TABLE_NAME} WHERE stock_code=:code AND quote_date >= :date")
-                conn.execute(delete_query, {'code': code, 'date': cutoff_date})
-                
-                final_cols = [col for col in COLUMN_MAPPING.values() if col in new_rows.columns]
-                new_rows[final_cols].dropna(subset=['close_price']).to_sql(TABLE_NAME, con=conn, if_exists='append', index=False)
-            
-            return True 
-            
-        return False
+        # 안전한 최종 컬럼 필터링 (모델 스키마와 완벽 동기화)
+        final_cols = [col for col in COLUMN_MAPPING.values() if col in new_rows.columns]
+        return new_rows[final_cols].dropna(subset=['close_price'])
 
     except Exception as e:
         # 💡 429 처리 로직도 제거됨 (kiwoom_utils가 알아서 하므로)
@@ -199,22 +191,53 @@ def update_kospi_data():
         return
 
     total_count = len(kospi_codes)
-    success_count = 0
+    successful_codes = []
+    
+    # 💡 [핵심] 900개 종목의 데이터를 담을 거대한 빈 리스트
+    all_stocks_data = []
 
-    logger.info(f"\n🚀 총 {total_count}개 종목 업데이트를 시작합니다.\n")
+    logger.info(f"\n📦 총 {total_count}개 종목 메모리 적재를 시작합니다.\n")
 
+    # [PHASE 1] 메모리에 데이터 차곡차곡 모으기
     for i, code in enumerate(kospi_codes):
-        if process_and_save_stock(code, kiwoom_token, db):
-            success_count += 1
+        df_stock = process_and_save_stock(code, kiwoom_token)
+        
+        if df_stock is not None and not df_stock.empty:
+            all_stocks_data.append(df_stock)
+            successful_codes.append(code)
 
         if (i + 1) % 50 == 0:
-            logger.info(f" ⏳ 진행 상황: [{i + 1}/{total_count}] 완료...")
+            logger.info(f" ⏳ 수집 진행 상황: [{i + 1}/{total_count}] 완료...")
 
-        time.sleep(1.2)
+        time.sleep(0.3) # API 제재 방지용 대기
 
-    logger.info(f"\n🎉 일일 업데이트 완료! (최종 성공: {success_count} / {total_count} 종목)")
+    # [PHASE 2] 대망의 일괄 DB 삽입 (Bulk Insert)
+    if all_stocks_data:
+        logger.info("\n🚀 모든 데이터 수집 완료! PostgreSQL로 일괄 전송(Bulk-Insert)을 시작합니다...")
+        
+        # 모든 데이터프레임을 하나로 합치기
+        final_bulk_df = pd.concat(all_stocks_data, ignore_index=True)
+        cutoff_date = (datetime.now() - timedelta(days=100)).strftime('%Y-%m-%d')
+        
+        try:
+            # 💡 [트랜잭션 최적화] 삭제와 삽입을 하나의 논리적 흐름으로 묶어버림
+            with db.engine.begin() as conn:
+                # 1. 대상 종목들의 최근 100일치 데이터를 한방에 지움
+                delete_query = text(f"DELETE FROM {TABLE_NAME} WHERE quote_date >= :date AND stock_code IN :codes")
+                conn.execute(delete_query, {'date': cutoff_date, 'codes': tuple(successful_codes)})
+                
+                # 2. 수만 건의 데이터를 고속으로 밀어넣기 (method='multi' 가 핵심 부스터)
+                final_bulk_df.to_sql(TABLE_NAME, con=conn, if_exists='append', index=False, chunksize=2000, method='multi')
+            
+            logger.info(f"✅ DB 일괄 삽입 성공! (총 {len(final_bulk_df)}행 적재 완료)")
+        except Exception as e:
+            logger.error(f"🔥 DB 일괄 삽입 중 치명적 에러 발생: {e}")
+    else:
+        logger.warning("⚠️ 수집된 데이터가 없어 DB 작업을 건너뜁니다.")
+
+    logger.info(f"\n🎉 일일 업데이트 최종 완료! (성공: {len(successful_codes)} / {total_count} 종목)")
     
-    finish_msg = f"✅ **KOSPI 일일 데이터 갱신 완료**\n총 **{success_count} / {total_count}** 종목의 캔들 및 수급 데이터가 DB에 적재되었습니다."
+    finish_msg = f"✅ **KOSPI 일일 데이터 갱신 완료**\n총 **{len(successful_codes)} / {total_count}** 종목의 캔들 및 수급 데이터가 DB에 일괄 적재되었습니다."
     event_bus.publish('TELEGRAM_BROADCAST', {'message': finish_msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'Markdown'})
 
 
