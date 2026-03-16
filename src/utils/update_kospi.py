@@ -22,7 +22,6 @@ from src.model.feature_engineer import calculate_all_features
 from src.database.db_manager import DBManager 
 from src.database.models import DailyStockQuote  
 from src.core.event_bus import EventBus
-from src.utils.constants import DATA_DIR
 
 # 💡 [핵심 교정] 텔레그램 매니저를 초대해야 수신기가 EventBus에 정상 등록됩니다!
 import src.notify.telegram_manager as telegram_manager
@@ -30,11 +29,10 @@ import src.notify.telegram_manager as telegram_manager
 # ==========================================
 # 1. 경로 및 로깅 설정
 # ==========================================
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.abspath(os.path.join(CURRENT_DIR, '..', 'data'))
-os.makedirs(DATA_DIR, exist_ok=True)
+LOG_DIR = os.path.join(PROJECT_ROOT, 'logs')
+os.makedirs(LOG_DIR, exist_ok=True)
 
-LOG_PATH = os.path.join(DATA_DIR, 'update_kospi_error.log')
+LOG_PATH = os.path.join(LOG_DIR, 'update_kospi_error.log')
 TABLE_NAME = 'daily_stock_quotes'
 
 # 전문 로거 세팅 (터미널+파일)
