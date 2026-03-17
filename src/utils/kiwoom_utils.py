@@ -269,8 +269,21 @@ def get_realtime_hot_stocks_ka00198(token, config=None, as_dict=True):
 
     hot_results = []
     if results and (data := results[0].get('item_inq_rank', [])):
-        def to_i(v): return int(str(v).replace(',', '').replace('+', '').replace('-', '')) if v else 0
-        def to_f(v): return float(str(v).replace('+', '').replace('-', '')) if v else 0.0
+        def to_i(v): 
+            if not v: return 0
+            try:
+                # 콤마와 부호를 제거한 뒤 float으로 먼저 바꾸고 int로 최종 변환
+                clean_v = str(v).replace(',', '').replace('+', '').replace('-', '').strip()
+                return int(float(clean_v)) 
+            except (ValueError, TypeError):
+                return 0
+
+        def to_f(v): 
+            if not v: return 0.0
+            try:
+                return float(str(v).replace(',', '').replace('+', '').strip())
+            except (ValueError, TypeError):
+                return 0.0
 
         for item in data:
             stk_cd = str(item.get('stk_cd', ''))[:6]
@@ -531,7 +544,8 @@ def get_top_open_fluctuation_ka10028(token, mrkt_tp="000", trde_qty_cnd="0100", 
         "stk_cnd": "0",           # 0: 전체 (필요시 4: 우선주+관리주 제외 로 변경 추천)
         "crd_cnd": "0",
         "trde_prica_cnd": "0",
-        "flu_cnd": "1"            # 1: 상위
+        "flu_cnd": "1",            # 1: 상위
+        "stex_tp": "3"
     }
 
     results = fetch_kiwoom_api_continuous(
@@ -541,8 +555,22 @@ def get_top_open_fluctuation_ka10028(token, mrkt_tp="000", trde_qty_cnd="0100", 
     cleaned_list = []
     
     if results and (data := results[0].get('open_pric_pre_flu_rt', [])):
-        def to_i(v): return int(str(v).replace(',', '').replace('+', '').replace('-', '')) if v else 0
-        def to_f(v): return float(str(v).replace(',', '').replace('+', '')) if v else 0.0
+        # 💡 [핵심 교정] 소수점이 포함된 문자열도 안전하게 정수로 변환하도록 수정
+        def to_i(v): 
+            if not v: return 0
+            try:
+                # 콤마와 부호를 제거한 뒤 float으로 먼저 바꾸고 int로 최종 변환
+                clean_v = str(v).replace(',', '').replace('+', '').replace('-', '').strip()
+                return int(float(clean_v)) 
+            except (ValueError, TypeError):
+                return 0
+
+        def to_f(v): 
+            if not v: return 0.0
+            try:
+                return float(str(v).replace(',', '').replace('+', '').strip())
+            except (ValueError, TypeError):
+                return 0.0
 
         for item in data[:limit]:
             code = str(item.get('stk_cd', '')).strip()[:6]
@@ -720,8 +748,21 @@ def check_execution_strength_ka10046(token, code):
     
     if results and (data := results[0].get('cntr_str_tm', [])):
         item = data[0]
-        def to_f(v): return float(str(v).replace('+', '').replace('-', '')) if v else 0.0
-        def to_i(v): return int(str(v).replace(',', '').replace('+', '').replace('-', '')) if v else 0
+        def to_i(v): 
+            if not v: return 0
+            try:
+                # 콤마와 부호를 제거한 뒤 float으로 먼저 바꾸고 int로 최종 변환
+                clean_v = str(v).replace(',', '').replace('+', '').replace('-', '').strip()
+                return int(float(clean_v)) 
+            except (ValueError, TypeError):
+                return 0
+
+        def to_f(v): 
+            if not v: return 0.0
+            try:
+                return float(str(v).replace(',', '').replace('+', '').strip())
+            except (ValueError, TypeError):
+                return 0.0
         
         res_data.update({
             'strength': to_f(item.get('cntr_str')),      # 실시간 체결강도
@@ -752,9 +793,21 @@ def get_tick_history_ka10003(token, code, limit=10):
     ticks = []
     
     if results and (data := results[0]) and (tick_list := data.get('cntr_infr', [])):
-        def to_i(v): return int(str(v).replace(',', '').replace('+', '').replace('-', '')) if v else 0
-        def to_f(v): return float(str(v).replace(',', '').replace('+', '').replace('-', '')) if v else 0.0
+        def to_i(v): 
+            if not v: return 0
+            try:
+                # 콤마와 부호를 제거한 뒤 float으로 먼저 바꾸고 int로 최종 변환
+                clean_v = str(v).replace(',', '').replace('+', '').replace('-', '').strip()
+                return int(float(clean_v)) 
+            except (ValueError, TypeError):
+                return 0
 
+        def to_f(v): 
+            if not v: return 0.0
+            try:
+                return float(str(v).replace(',', '').replace('+', '').strip())
+            except (ValueError, TypeError):
+                return 0.0
         # 💡 최근 체결 순으로 들어오므로, 역순으로 순회하며 이전 틱과 비교
         for i in range(len(tick_list)):
             if i >= limit: break
@@ -810,7 +863,14 @@ def get_minute_candles_ka10080(token, code, limit=10):
     
     if results and (data := results[0]) and (candle_list := data.get('stk_min_pole_chart_qry', [])):
         # 💡 [안전 장치] 키움 특유의 콤마(,)와 부호(+,-)를 모두 지우는 헬퍼 함수
-        def to_i(v): return int(str(v).replace(',', '').replace('+', '').replace('-', '')) if v else 0
+        def to_i(v): 
+            if not v: return 0
+            try:
+                # 콤마와 부호를 제거한 뒤 float으로 먼저 바꾸고 int로 최종 변환
+                clean_v = str(v).replace(',', '').replace('+', '').replace('-', '').strip()
+                return int(float(clean_v)) 
+            except (ValueError, TypeError):
+                return 0
 
         # 최신 분봉부터 limit 개수만큼 자르기
         recent_candles = candle_list[:limit]
