@@ -78,11 +78,18 @@ def load_and_preprocess_stacking(codes):
                 SELECT {cols_to_fetch} 
                 FROM daily_stock_quotes 
                 WHERE stock_code = '{code}' 
-                ORDER BY quote_date DESC LIMIT 750
+                  AND quote_date >= '2026-01-16' 
+                  AND quote_date <= '2026-02-28'
+                ORDER BY quote_date ASC
             """
             df = pd.read_sql(text(query), conn)
             
-            if df.empty or len(df) < 150: 
+            # 기존
+            # if df.empty or len(df) < 150: 
+            #     continue
+
+            # 수정 (10~15일 정도의 여유만 있으면 파생 변수 계산에 충분함)
+            if df.empty or len(df) < 15: 
                 continue
 
             df = df.sort_values('quote_date', ascending=True).reset_index(drop=True)
@@ -145,7 +152,13 @@ def train_meta_model():
         return
 
     total_df = load_and_preprocess_stacking(target_codes)
+    # 기존
+    # if total_df.empty: 
+    #     return
+
+    # 수정
     if total_df.empty: 
+        print("❌ 에러: 전처리 후 남은 데이터가 없습니다. (날짜 범위나 데이터 길이를 확인하세요)")
         return
 
     print("[3/5] 하위 전문가 모델(Base Models) 로드 중...")

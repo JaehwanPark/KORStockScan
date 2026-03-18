@@ -28,9 +28,10 @@ class TradingConfig:
     # ==========================================
     # 2. AI 판독 확신도 (Probability Thresholds)
     # ==========================================
-    PROB_MAIN_PICK: float = 0.82  # 정규 스캐너 '강력 추천(MAIN)' 기준 점수
-    PROB_RUNNER_PICK: float = 0.75  # 정규 스캐너 '관심 종목(RUNNER)' 기준 점수
-    PROB_INTRADAY_PICK: float = 0.80  # 장중 스캐너 발탁 기준 점수
+    # PROB_MAIN_PICK: float = 0.82  # 정규 스캐너 '강력 추천(MAIN)' 기준 점수
+    # PROB_RUNNER_PICK: float = 0.75  # 정규 스캐너 '관심 종목(RUNNER)' 기준 점수
+    PROB_MAIN_PICK: float = 0.58  # 2025년부터 2026년까지의 최적화 결과 반영 (0.58로 완화) '강력 추천(MAIN)' 기준 점수
+    PROB_RUNNER_PICK: float = 0.52  # 2025년부터 2026년까지의 최적화 결과 반영 (0.52로 완화) '관심 종목(RUNNER)' 기준 점수
 
     # ==========================================
     # 3. 매매 타점 및 익절/손절 (Sniper Engine)

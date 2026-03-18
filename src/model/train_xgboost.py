@@ -75,7 +75,9 @@ def load_and_preprocess(codes):
                 SELECT {cols_to_fetch} 
                 FROM daily_stock_quotes 
                 WHERE stock_code = '{code}' 
-                ORDER BY quote_date DESC LIMIT 750
+                  AND quote_date >= '2024-11-01' 
+                  AND quote_date <= '2025-07-31'
+                ORDER BY quote_date ASC
             """
             df = pd.read_sql(text(query), conn)
             
