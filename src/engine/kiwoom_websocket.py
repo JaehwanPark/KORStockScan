@@ -41,6 +41,68 @@ class KiwoomWSManager:
         self.condition_dict = {} # 💡 [추가] 일련번호(seq)와 검색식 이름을 매핑할 사전
         
         print(f"🌐 [WS] 웹소켓 매니저 초기화 완료 (Target: {self.uri})")
+    
+    async def _run_ws(self):
+        while True:
+            try:
+                print(f"🔌 [WS] 키움 서버({self.uri})에 연결을 시도합니다...")
+                async with websockets.connect(self.uri, ping_interval=None) as ws:
+                    self.websocket = ws
+                    print("✅ [WS] 웹소켓 연결 성공!")
+
+                    # 1. 로그인 패킷 전송
+                    login_packet = {'trnm': 'LOGIN', 'token': self.token}
+                    await ws.send(json.dumps(login_packet))
+                    print("🔑 [WS] 로그인 패킷 전송 완료")
+                    
+                    await asyncio.sleep(1) # 로그인 처리 대기
+
+                    # 🚀 로그인 성공 직후, 조건검색식 목록(ka10171)을 먼저 요청합니다!
+                    print("🔍 [WS] HTS 조건검색식 목록(CNSRLST)을 요청합니다.")
+                    await ws.send(json.dumps({'trnm': 'CNSRLST'}))
+
+                    # 💡 재접속(Reconnect)인 경우 스나이퍼 엔진에 상태 동기화 명령 하달
+                    if self.is_reconnected:
+                        print("🔄 [WS] 웹소켓 재접속 감지! EventBus에 상태 동기화 이벤트를 발행합니다.")
+                        self.event_bus.publish("WS_RECONNECTED", {})
+                    
+                    # 최초 접속이 끝났으므로, 이후부터 연결되면 무조건 '재접속'으로 간주
+                    self.is_reconnected = True
+
+                    # 2. 계좌 전체 주문체결(00) 감시 명시적 등록
+                    exec_reg_packet = {
+                        "trnm": "REG",
+                        "grp_no": "2",  
+                        "refresh": "1",
+                        "data": [
+                            {
+                                "item": [""],   
+                                "type": ["00"]  
+                            }
+                        ]
+                    }
+                    await ws.send(json.dumps(exec_reg_packet))
+                    print("📝 [WS] 🚨 계좌 주문/체결통보(00) 감시망 등록 완료!")
+
+                    # 3. 기존 감시 종목 재등록 (네트워크 끊김 복구용)
+                    if self.subscribed_codes:
+                        await self._send_reg(list(self.subscribed_codes))
+
+                    # 4. 메시지 수신 무한 루프
+                    while True:
+                        message = await ws.recv()
+                        await self._handle_message(message)
+
+            except websockets.ConnectionClosed:
+                print("⚠️ [WS] 연결 끊김! 3초 후 재접속 시도...")
+                self.websocket = None
+                await asyncio.sleep(3)
+            except Exception as e:
+                from src.utils.logger import log_error
+                log_error(f"🚨 [WS] 예상치 못한 오류: {e}")
+                print(f"🚨 [WS] 예상치 못한 오류: {e}")
+                self.websocket = None
+                await asyncio.sleep(3)
 
     async def _handle_message(self, message):
         try:
@@ -96,7 +158,8 @@ class KiwoomWSManager:
             # 🚀 [추가 3] 조건검색 최초 편입 목록 (ka10173)
             # =========================================================
             if trnm == 'CNSRREQ':
-                c_data = msg_dict.get('data', [])
+                # 💡 [핵심 방어] 키움 서버가 null(None)을 주더라도 안전하게 빈 리스트([])로 바꿔치기합니다!
+                c_data = msg_dict.get('data') or []
                 print(f"📊 [WS] 조건검색 최초 편입 종목 수: {len(c_data)}개 (스나이퍼 큐에 투입합니다)")
                 for item in c_data:
                     code = item.get('jmcode', '').replace('A', '')

@@ -129,11 +129,7 @@ def handle_condition_matched(payload):
         from src.utils import kiwoom_utils
         basic_info = kiwoom_utils.get_basic_info_ka10001(KIWOOM_TOKEN, code)
         name = basic_info.get('Name', code)
-        
-        # 2. 동전주, ETF, ETN, 우선주 등 불순물 제거
-        if not kiwoom_utils.is_valid_stock(code, name, KIWOOM_TOKEN):
-            return
-            
+                    
         print(f"🦅 [V3 헌터] 조건검색 0.1초 포착! {name}({code}) 감시망 편입 완료")
         
         # 3. DB 저장 (ORM)
@@ -611,7 +607,6 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             print(f"📡 [관찰/블라인드 모드] 차트 데이터(VWAP) 형성 대기 중... (목표: {strategy_start})")
         return
     
-    MIN_PRICE = getattr(TRADING_RULES, 'MIN_PRICE', 5000)
     MAX_SURGE = getattr(TRADING_RULES, 'MAX_SCALP_SURGE_PCT', 20.0) 
     MAX_INTRADAY_SURGE = getattr(TRADING_RULES, 'MAX_INTRADAY_SURGE', 15.0)
     MIN_LIQUIDITY = getattr(TRADING_RULES, 'MIN_SCALP_LIQUIDITY', 500_000_000)
@@ -730,11 +725,12 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                 if last_ai_time == 0:
                     return
 
-        
             # =========================================================
             # 🚨 5. AI 거부권 및 최종 매수 대기열(그물망) 투척
             # 💡 [핵심 교정] AI가 명확히 'BUY(75점 이상)'를 외치지 않으면 그물망을 던지지 않습니다!
             # (단, 서버 에러 등으로 인한 기계적 폴백 상태인 '50점'은 예외로 통과시킵니다)
+            # =========================================================
+
             if current_ai_score < 75 and current_ai_score != 50:
                 if time.time() - last_ai_time < 1.0: 
                     action_str = "WAIT(진입 보류)" if current_ai_score > 40 else "DROP(진입 차단)"
@@ -1373,7 +1369,7 @@ def handle_real_execution(exec_data):
     
     elif exec_type == 'SELL':
         strategy = target_stock.get('strategy', 'KOSPI_ML')
-        if strategy == 'SCALPING' and now_t < datetime.strptime("19:15:00", "%H:%M:%S").time():
+        if strategy == 'SCALPING' and now_t < datetime.strptime("15:30:00", "%H:%M:%S").time():
             target_stock['status'] = 'WATCHING'
             target_stock['buy_price'] = 0
             target_stock['buy_qty'] = 0
@@ -1390,7 +1386,7 @@ def handle_real_execution(exec_data):
 # ==========================================        
 def execute_morning_strategy_batch(targets, ws_manager, radar, ai_engine):
     """
-    [v13.0] 09:05 주도주 분석, 리포트 발송, 매수 예약 주문을 일괄 처리합니다.
+    [v13.0] 09:05 주도주 분석, 리포트 발송 일괄 처리합니다.
     고유 PK(id)를 사용하여 정확히 해당 감시 대상의 상태만 변경합니다.
     """
     print("🤖 [전략 집행] 09:05 주도주 정렬 및 AI Report 시작합니다.")
