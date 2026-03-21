@@ -1,95 +1,93 @@
-import numpy as np
+import joblib
+import pandas as pd
 from xgboost import XGBClassifier
-from sklearn.isotonic import IsotonicRegression
 
-from ml_v2_common import (
-    get_period_liquid_codes, build_panel, split_dates_4way, recency_weights,
-    XGB_FEATURES, HYBRID_XGB_PACK, save_pickle,
-    build_model_pack, print_basic_report, print_topk_report
+from common_v2 import (
+    BASE_START, BASE_END, FEATURES_XGB, HYBRID_XGB_PATH,
+    get_top_kospi_codes, split_by_unique_dates, recency_sample_weight,
+    class_balance, fit_calibrator, apply_calibrator, threshold_table,
+    precision_at_k_by_day, select_daily_candidates
 )
+from dataset_builder_v2 import build_panel_dataset
 
-# =========================================================
-# 학습 구간 설정
-# =========================================================
-BASE_START = '2024-11-01'
-BASE_END   = '2026-01-15'
-TARGET_COL = 'Target_Loose'
 
-def main():
-    codes = get_period_liquid_codes(BASE_START, BASE_END, top_n=300, min_days=80)
-    if not codes:
-        print("❌ 학습 universe가 없습니다.")
-        return
+TARGET_COL = 'target_loose'
 
-    panel = build_panel(codes, BASE_START, BASE_END, warmup_days=160, min_rows=150, with_target=True)
+
+def train_hybrid_xgb_v2():
+    codes = get_top_kospi_codes(limit=300)
+
+    print(f"[1/4] Hybrid XGB용 패널 생성 중... ({BASE_START} ~ {BASE_END})")
+    panel = build_panel_dataset(codes, BASE_START, BASE_END, min_rows=150, include_labels=True)
     if panel.empty:
-        print("❌ 학습 패널이 비어 있습니다.")
+        print("❌ 학습 데이터가 없습니다.")
         return
 
-    train_df, valid_df, calib_df, test_df = split_dates_4way(panel)
+    train_df, valid_df, calib_df, test_df = split_by_unique_dates(panel, ratios=(0.65, 0.15, 0.10, 0.10))
+    y_train = train_df[TARGET_COL].astype(int)
+    y_valid = valid_df[TARGET_COL].astype(int)
+    y_calib = calib_df[TARGET_COL].astype(int)
+    y_test = test_df[TARGET_COL].astype(int)
 
-    y_train = train_df[TARGET_COL]
-    y_valid = valid_df[TARGET_COL]
-    y_calib = calib_df[TARGET_COL]
-    y_test = test_df[TARGET_COL]
+    pos, neg, spw = class_balance(y_train)
+    sw = recency_sample_weight(train_df['date'])
 
-    neg = (y_train == 0).sum()
-    pos = (y_train == 1).sum()
-    scale_pos_weight = 1.0 if pos == 0 else neg / pos
-    sample_weight = recency_weights(train_df['Date'], half_life_days=90)
-
-    print(f"[Hybrid XGB] Train/Valid/Calib/Test = {len(train_df):,}/{len(valid_df):,}/{len(calib_df):,}/{len(test_df):,}")
-    print(f"[Hybrid XGB] Pos Ratio(train) = {pos / max(len(y_train), 1):.2%}, scale_pos_weight={scale_pos_weight:.2f}")
+    print(f"[2/4] 학습 시작 - target={TARGET_COL}")
+    print(f"   Train Pos={pos}, Neg={neg}, scale_pos_weight={spw:.2f}")
 
     model = XGBClassifier(
-        n_estimators=1000,
+        n_estimators=700,
         learning_rate=0.03,
         max_depth=4,
         min_child_weight=10,
-        gamma=0.1,
         subsample=0.8,
         colsample_bytree=0.8,
         reg_alpha=0.5,
         reg_lambda=2.0,
-        scale_pos_weight=scale_pos_weight,
-        random_state=42,
-        n_jobs=-1,
+        scale_pos_weight=spw,
         eval_metric='aucpr',
-        early_stopping_rounds=100
+        random_state=42,
+        n_jobs=-1
     )
 
     model.fit(
-        train_df[XGB_FEATURES], y_train,
-        sample_weight=sample_weight,
-        eval_set=[(valid_df[XGB_FEATURES], y_valid)],
-        verbose=100
+        train_df[FEATURES_XGB], y_train,
+        sample_weight=sw,
+        eval_set=[(valid_df[FEATURES_XGB], y_valid)],
+        verbose=False
     )
 
-    calib_raw = model.predict_proba(calib_df[XGB_FEATURES])[:, 1]
-    calibrator = IsotonicRegression(out_of_bounds='clip')
-    calibrator.fit(calib_raw, y_calib)
+    print("[3/4] Calibration 및 검증...")
+    calib_raw = model.predict_proba(calib_df[FEATURES_XGB])[:, 1]
+    calibrator = fit_calibrator(calib_raw, y_calib)
 
-    test_prob = calibrator.transform(model.predict_proba(test_df[XGB_FEATURES])[:, 1])
+    test_raw = model.predict_proba(test_df[FEATURES_XGB])[:, 1]
+    test_score = apply_calibrator(calibrator, test_raw)
 
-    report_df = test_df[['Date', 'Code', TARGET_COL]].copy()
-    report_df['Score'] = test_prob
+    eval_df = test_df[['date', 'code', 'name', 'bull_regime', 'target_loose', 'target_strict']].copy()
+    eval_df['score'] = test_score
 
-    print_basic_report("Hybrid XGB Test", y_test, test_prob)
-    print_topk_report("Hybrid XGB Test", report_df, 'Score', TARGET_COL)
+    print("\n[Threshold Table - target_loose]")
+    print(threshold_table(eval_df, score_col='score', target_col='target_loose'))
 
-    pack = build_model_pack(
-        model=model,
-        calibrator=calibrator,
-        features=XGB_FEATURES,
-        target_col=TARGET_COL,
-        name='hybrid_xgb_v2',
-        extra={
-            'base_start': BASE_START,
-            'base_end': BASE_END
-        }
-    )
-    save_pickle(pack, HYBRID_XGB_PACK)
-    print(f"✅ 저장 완료: {HYBRID_XGB_PACK}")
+    print(f"\n[Precision@5/day - target_loose] {precision_at_k_by_day(eval_df, 'score', 'target_loose', k=5):.2%}")
+    print(f"[Precision@5/day - target_strict] {precision_at_k_by_day(eval_df, 'score', 'target_strict', k=5):.2%}")
+
+    picks = select_daily_candidates(eval_df, score_col='score')
+    strict_precision = picks['target_strict'].mean() if len(picks) > 0 else 0.0
+    print(f"[Daily Top-K Picks] picks={len(picks)} / strict_precision={strict_precision:.2%}")
+
+    artifact = {
+        'model': model,
+        'calibrator': calibrator,
+        'features': FEATURES_XGB,
+        'target_col': TARGET_COL,
+        'model_name': 'hybrid_xgb_v2'
+    }
+    joblib.dump(artifact, HYBRID_XGB_PATH)
+
+    print(f"[4/4] 저장 완료: {HYBRID_XGB_PATH}")
+
 
 if __name__ == "__main__":
-    main()
+    train_hybrid_xgb_v2()
