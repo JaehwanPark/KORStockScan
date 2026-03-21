@@ -802,18 +802,34 @@ def analyze_stock_now(code):
     target_info = next((t for t in ACTIVE_TARGETS if t['code'] == code), None)
     strategy = target_info.get('strategy', 'KOSPI_ML') if target_info else 'KOSPI_ML'
     
+    # 전략별 트레일링/손절 매핑
+    strategy_trailing_map = {
+        'SCALPING': {
+            'trailing_pct': getattr(TRADING_RULES, 'SCALP_TARGET', 1.5),
+            'stop_pct': getattr(TRADING_RULES, 'SCALP_STOP', -2.5),
+            'label': "⚡ 초단타(SCALP)",
+        },
+        'KOSDAQ_ML': {
+            'trailing_pct': getattr(TRADING_RULES, 'KOSDAQ_TARGET', 4.0),
+            'stop_pct': getattr(TRADING_RULES, 'KOSDAQ_STOP', -2.5),
+            'label': "🚀 코스닥 스윙",
+        },
+        'KOSPI_ML': {
+            'trailing_pct': getattr(TRADING_RULES, 'TRAILING_START_PCT', 4.0),
+            'stop_pct': getattr(TRADING_RULES, 'STOP_LOSS_BULL', -3.0),
+            'label': "🛡️ 우량주 스윙(KOSPI_ML)",
+        }
+    }
     if strategy in ['SCALPING', 'SCALP']:
-        trailing_pct = getattr(TRADING_RULES, 'SCALP_TARGET', 1.5)
-        stop_pct = getattr(TRADING_RULES, 'SCALP_STOP', -2.5)
-        strat_label = "⚡ 초단타(SCALP)"
+        key = 'SCALPING'
     elif strategy == 'KOSDAQ_ML':
-        trailing_pct = getattr(TRADING_RULES, 'KOSDAQ_TARGET', 4.0)
-        stop_pct = getattr(TRADING_RULES, 'KOSDAQ_STOP', -2.5)
-        strat_label = "🚀 코스닥 스윙"
+        key = 'KOSDAQ_ML'
     else:
-        trailing_pct = getattr(TRADING_RULES, 'TRAILING_START_PCT', 4.0)
-        stop_pct = getattr(TRADING_RULES, 'STOP_LOSS_BULL', -3.0)
-        strat_label = "🛡️ 우량주 스윙(KOSPI_ML)"
+        key = 'KOSPI_ML'
+    params = strategy_trailing_map[key]
+    trailing_pct = params['trailing_pct']
+    stop_pct = params['stop_pct']
+    strat_label = params['label']
 
     target_price = int(curr_price * (1 + (trailing_pct / 100)))
     stop_price = int(curr_price * (1 + (stop_pct / 100)))
@@ -1191,7 +1207,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                             current_ai_score = 50
 
                 except Exception as e:
-                    log_error(f"🚨 [AI 엔진 오류] {e} | 기계적 매수 모드로 폴백(Fallback)합니다.")
+                    log_error(f"🚨 [AI 엔진 오류] {stock['name']}({code}): {e} | 기계적 매수 모드로 폴백(Fallback)합니다.")
                     current_ai_score = 50
 
                 LAST_AI_CALL_TIMES[code] = time.time()
@@ -1233,49 +1249,130 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             )
             stock['msg_audience'] = 'VIP_ALL' if liquidity_value >= getattr(TRADING_RULES, 'VIP_LIQUIDITY_THRESHOLD', 1_000_000_000) else 'ADMIN_ONLY'
       
-    # 2️⃣ 코스닥 우량주 스윙 (KOSDAQ_ML) 전략
-    elif strategy == 'KOSDAQ_ML':
+    # 2️⃣ & 3️⃣ 스윙(KOSDAQ_ML / KOSPI_ML) 통합 전략: AI 교차 검증 및 동적 비중 조절
+    elif strategy in ['KOSDAQ_ML', 'KOSPI_ML']:
         if radar is None:
             return
 
-        ratio = getattr(TRADING_RULES, 'INVEST_RATIO_KOSDAQ', 0.10)
-        score, prices, conclusion, checklist, metrics = radar.analyze_signal_integrated(ws_data, ai_prob)
+        # --- [1] 전략별 파라미터 세팅 ---
+        if strategy == 'KOSPI_ML':
+            max_gap = getattr(TRADING_RULES, 'MAX_SWING_GAP_UP_PCT', 3.0)
+            if fluctuation >= max_gap:
+                return # 갭상승이 너무 크면 패스
 
-        v_pw_limit = getattr(TRADING_RULES, 'VPW_KOSDAQ_LIMIT', 105) if ai_prob >= getattr(TRADING_RULES, 'SNIPER_AGGRESSIVE_PROB', 0.70) else strong_vpw
+        # 전략별 기본 파라미터 매핑
+        strategy_params = {
+            'KOSDAQ_ML': {
+                'vpw_limit_base': getattr(TRADING_RULES, 'VPW_KOSDAQ_LIMIT', 105),
+                'strong_vpw': getattr(TRADING_RULES, 'VPW_STRONG_LIMIT', 120),
+                'buy_threshold': getattr(TRADING_RULES, 'BUY_SCORE_THRESHOLD', 70),
+                'vpw_condition': current_vpw >= getattr(TRADING_RULES, 'VPW_KOSDAQ_LIMIT', 105),
+                'ratio_min': getattr(TRADING_RULES, 'INVEST_RATIO_KOSDAQ_MIN', 0.05),
+                'ratio_max': getattr(TRADING_RULES, 'INVEST_RATIO_KOSDAQ_MAX', 0.15),
+                'ai_prob_threshold': 0.70,
+                'ai_score_threshold': getattr(TRADING_RULES, 'AI_SCORE_THRESHOLD_KOSDAQ', 60),
+                'ai_prob_default': 0.70,
+            },
+            'KOSPI_ML': {
+                'vpw_limit_base': 100,
+                'strong_vpw': getattr(TRADING_RULES, 'VPW_STRONG_LIMIT', 115),
+                'buy_threshold': getattr(TRADING_RULES, 'BUY_SCORE_THRESHOLD', 80),
+                'vpw_condition': current_vpw >= 103,
+                'ratio_min': getattr(TRADING_RULES, 'INVEST_RATIO_KOSPI_MIN', 0.10),
+                'ratio_max': getattr(TRADING_RULES, 'INVEST_RATIO_KOSPI_MAX', 0.30),
+                'ai_prob_threshold': 0.8,
+                'ai_score_threshold': getattr(TRADING_RULES, 'AI_SCORE_THRESHOLD_KOSPI', 60),
+                'ai_prob_default': 0.8,
+            }
+        }
+        params = strategy_params[strategy]
+
+        vpw_limit_base = params['vpw_limit_base']
+        strong_vpw = params['strong_vpw']
+        buy_threshold = params['buy_threshold']
+        vpw_condition = params['vpw_condition']
+        ratio_min = params['ratio_min']
+        ratio_max = params['ratio_max']
+        ai_score_threshold = params['ai_score_threshold']
+        ai_prob_threshold = params['ai_prob_threshold']
+        ai_prob_default = params['ai_prob_default']
+
+        ai_prob = stock.get('prob', getattr(TRADING_RULES, 'SNIPER_AGGRESSIVE_PROB', ai_prob_default))
+        v_pw_limit = vpw_limit_base if ai_prob >= ai_prob_threshold else strong_vpw
+
+        # --- [2] 기계적 퀀트 분석 ---
+        score, prices, conclusion, checklist, metrics = radar.analyze_signal_integrated(ws_data, ai_prob)
         is_shooting = current_vpw >= v_pw_limit
 
-        if (score >= buy_threshold or is_shooting) and current_vpw >= getattr(TRADING_RULES, 'VPW_KOSDAQ_LIMIT', 105):
+        # --- [3] 퀀트가 '매수'를 외쳤을 때만 AI 등판 (API 비용/속도 최적화) ---
+        if (score >= buy_threshold or is_shooting) and vpw_condition:
+            
+            current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
+            last_ai_time = LAST_AI_CALL_TIMES.get(code, 0)
+            time_elapsed = time.time() - last_ai_time
+
+            # 스윙 매매이므로 쿨타임을 5분(300초)으로 길게 잡습니다.
+            if ai_engine and (time_elapsed > 300 or last_ai_time == 0):
+                try:
+                    recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
+                    recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40)
+                    
+                    # 데이터 유효성 검사: 최소 20개 분봉 데이터 필요
+                    if len(recent_candles) < 20:
+                        print(f"⚠️ [{strategy} 데이터 부족] {stock['name']} 분봉 데이터 {len(recent_candles)}개. AI 호출 보류.")
+                        # AI 호출 없이 계속 진행 (current_ai_score는 기존 값 유지)
+                    else:
+                        # 프로그램 수급 데이터 가져오기 (실시간 분석을 위해)
+                        prog_data = kiwoom_utils.check_program_buying_ka90008(KIWOOM_TOKEN, code)
+                        prog_net_qty = prog_data.get('net_qty', 0)
+
+                        # AI 엔진 호출 시 program_net_qty 주입
+                        ai_decision = ai_engine.analyze_target(
+                            target_name=stock['name'],
+                            ws_data=ws_data,
+                            recent_ticks=recent_ticks,
+                            recent_candles=recent_candles,
+                            strategy=strategy,
+                            program_net_qty=prog_net_qty  # 👈 추가된 파라미터
+                        )
+                        
+                        raw_ai_score = ai_decision.get('score', 50)
+                        if raw_ai_score != 50:
+                            stock['rt_ai_prob'] = raw_ai_score / 100.0
+                            current_ai_score = raw_ai_score
+                            print(f"💎 [{strategy} AI 승인 대기: {stock['name']}] 점수: {raw_ai_score}점 | {ai_decision.get('reason', '')}")
+                        
+                except Exception as e:
+                    log_error(f"🚨 [{strategy} AI 연동 오류] {stock['name']}({code}): {e}")
+                
+                LAST_AI_CALL_TIMES[code] = time.time()
+
+                # 첫 분석 턴에는 성급하게 사지 않고 다음 루프에서 한 번 더 확인합니다.
+                if last_ai_time == 0:
+                    return
+
+            # --- [4] AI 거부권 행사 (60점 미만이면 보류) ---
+            if current_ai_score < ai_score_threshold and current_ai_score != 50:
+                print(f"🚫 [{strategy} AI 매수 보류] {stock['name']} (AI 점수: {current_ai_score}점)")
+                cooldowns[code] = time.time() + 180 # 3분간 쳐다보지 않음
+                return
+
+            # --- [5] 동적 투자 비율(Position Sizing) 최종 계산 ---
+            if current_ai_score == 50:
+                # 에러 등으로 AI가 판단을 못 내린 폴백 상태 -> 중간 비중 적용
+                ratio = (ratio_min + ratio_max) / 2
+            else:
+                # 60점 ~ 100점 사이에서 비중을 선형적으로 증가 (60점=Min비중, 100점=Max비중)
+                score_weight = max(0.0, min(1.0, (current_ai_score - ai_score_threshold) / (100 - ai_score_threshold)))
+                ratio = ratio_min + (score_weight * (ratio_max - ratio_min))
+
             is_trigger = True
+            stock['target_buy_price'] = curr_price # 스윙은 보통 최유리지정가/시장가로 긁으므로 현재가 기록
+            
             msg = (
-                f"🚀 **[{stock['name']}]({code}) 코스닥(KOSDAQ) 스나이퍼 포착!**\n"
-                f"현재가: `{curr_price:,}원` | 확신도: `{ai_prob:.1%}`\n"
-                f"수급강도: `{current_vpw:.1f}%`"
-            )
-
-    # 3️⃣ 코스피 우량주 스윙 (KOSPI_ML 및 기본값)
-    else:
-        if radar is None:
-            return
-
-        max_gap = getattr(TRADING_RULES, 'MAX_SWING_GAP_UP_PCT', 3.0)
-        if fluctuation >= max_gap:
-            return
-
-        ratio = getattr(TRADING_RULES, 'INVEST_RATIO_KOSPI', 0.20)
-        ai_prob = stock.get('prob', getattr(TRADING_RULES, 'SNIPER_AGGRESSIVE_PROB', 0.8))
-        score, prices, conclusion, checklist, metrics = radar.analyze_signal_integrated(ws_data, ai_prob)
-
-        strong_vpw = getattr(TRADING_RULES, 'VPW_STRONG_LIMIT', 115)
-        buy_threshold = getattr(TRADING_RULES, 'BUY_SCORE_THRESHOLD', 80)
-        v_pw_limit = 100 if ai_prob >= getattr(TRADING_RULES, 'SNIPER_AGGRESSIVE_PROB', 0.8) else strong_vpw
-        is_shooting = current_vpw >= v_pw_limit
-
-        if (score >= buy_threshold or is_shooting) and current_vpw >= 103:
-            is_trigger = True
-            msg = (
-                f"🚀 **[{stock['name']}]({code}) 스나이퍼 포착! (스윙)**\n"
-                f"현재가: `{curr_price:,}원` | 확신도: `{ai_prob:.1%}`\n"
-                f"수급강도: `{current_vpw:.1f}%`"
+                f"🚀 **[{stock['name']}]({code}) {strategy} AI 스나이퍼 포착!**\n"
+                f"현재가: `{curr_price:,}원` | 수급강도: `{current_vpw:.1f}%`\n"
+                f"🧠 AI 확신도: `{current_ai_score}점` ➡️ **투자비중: `{ratio*100:.1f}%` 할당**"
             )
 
     # ==========================================

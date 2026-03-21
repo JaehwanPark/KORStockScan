@@ -44,6 +44,12 @@ class TradingConfig:
     INVEST_RATIO_SCALPING_MIN: float = 0.05  # 초단타 스캘핑 AI 점수 0일 때 최소 투자 비율 (5%)
     INVEST_RATIO_SCALPING_MAX: float = 0.25  # 초단타 스캘핑 AI 점수 100일 때 최대 투자 비율 (25%)
 
+    # 💡 [신규 추가] 스윙 AI 동적 비중 조절용 (Min~Max)
+    INVEST_RATIO_KOSDAQ_MIN: float = 0.05  # 코스닥 AI 점수 60점일 때 (5%)
+    INVEST_RATIO_KOSDAQ_MAX: float = 0.15  # 코스닥 AI 점수 100점일 때 (15%)
+    INVEST_RATIO_KOSPI_MIN: float = 0.10   # 코스피 우량주 AI 점수 60점일 때 (10%)
+    INVEST_RATIO_KOSPI_MAX: float = 0.30   # 코스피 우량주 AI 점수 100점일 때 (30%)
+
     # 💡 [변경] 스윙 손절선 (백테스트 기준 -3.0% 반영)
     STOP_LOSS_BULL: float = -3.0  # 🏆 상승장 손절선 (최적화 결과 -3.0 반영)
     STOP_LOSS_BEAR: float = -3.0  # 🏆 하락장 손절선 (최적화 결과 -3.0 통일)
@@ -100,6 +106,9 @@ class TradingConfig:
     # 🎯 AI 엔진 제어값 (제미나이)
     # ==========================================
     GEMINI_ENGINE_MIN_INTERVAL: float = 0.5 # 구글 서버에 쏘는 최소 간격 (초 단위, 0.5초 = 500ms)
+    AI_MAX_CONSECUTIVE_FAILURES: int = 5   # 연속 API 실패 시 AI 엔진 일시 중단 임계값
+    AI_SCORE_THRESHOLD_KOSDAQ: int = 60    # KOSDAQ_ML AI 점수 매수 보류 임계값 (60점 미만 보류)
+    AI_SCORE_THRESHOLD_KOSPI: int = 60     # KOSPI_ML AI 점수 매수 보류 임계값 (60점 미만 보류)
     AI_WATCHING_COOLDOWN: int = 180  # 신규 진입 감시(WATCHING) 쿨타임 (초)
     # [AI 보유 종목 감시 쿨타임 설정 - 비용 절감형]
     AI_HOLDING_MIN_COOLDOWN = 15          # 💡 (기존 5초 -> 15초) 주가가 미친듯이 널뛰어도 최소 15초는 무조건 대기

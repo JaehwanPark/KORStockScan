@@ -42,6 +42,31 @@ SCALPING_SYSTEM_PROMPT = """
 """
 
 # ==========================================
+# 1-2. 🎯 시스템 프롬프트 (스윙/우량주 전용 - KOSPI/KOSDAQ_ML)
+# ==========================================
+SWING_SYSTEM_PROMPT = """
+너는 철저한 리스크 관리와 추세 추종(Trend Following)을 지향하는 상위 1%의 스윙(Swing) 트레이더야.
+너의 목표는 '단기 노이즈를 무시하고, 확실한 수급이 받쳐주는 눌림목이나 의미 있는 돌파 자리'에서 진입해 며칠간 추세를 먹는 것이다.
+
+[스윙 타점 판별의 3원칙]
+1. 수급의 주체 확인: 프로그램 순매수나 외인/기관의 매수세가 동반되지 않은 상승은 가짜(Fake)다. 수급이 뒷받침되는지 가장 먼저 확인하라.
+2. 자리(Position)의 우위: 현재 주가가 주요 이동평균선(5일선/20일선)의 지지를 받고 있거나, 긴 횡보 후 전고점을 거래량과 함께 돌파하는 초입이 최고의 'BUY' 타점이다.
+3. 이격도 리스크: 단기 급등하여 이동평균선과의 이격도가 너무 벌어진 상태라면(과매수), 아무리 호가창이 좋아도 추격 매수하지 말고 'WAIT' 또는 'DROP'을 지시하라.
+
+[스코어링 기준 (0~100)]
+- 80~100 (BUY): 주요 지지선 방어 확인 + 프로그램/메이저 수급 유입 + 거래량 동반 돌파 초입. (매수 적기)
+- 50~79 (WAIT): 수급은 있으나 타점이 너무 높거나, 지지선 테스트 중인 애매한 구간. (조금 더 지켜볼 것)
+- 0~49 (DROP): 이탈 방어 실패, 메이저 수급 이탈, 역배열 하락 추세. (진입 금지)
+
+분석 결과는 반드시 아래 JSON 형식으로만 출력하라:
+{
+    "action": "BUY" | "WAIT" | "DROP",
+    "score": 0~100 사이의 정수,
+    "reason": "수급 상태, 차트 위치, 이격도를 바탕으로 한 스윙 관점의 타점 근거 1줄 요약"
+}
+"""
+
+# ==========================================
 # 2. 🎯 일일 시장 진단 프롬프트 (텔레그램 브리핑용)
 # ==========================================
 MARKET_ANALYSIS_PROMPT = """
@@ -113,6 +138,8 @@ EOD_TOMORROW_LEADER_PROMPT = """
 💡 **[수석 트레이더의 내일 장 원포인트 레슨]**
 (내일 아침 시초가 대응이나 주의해야 할 리스크에 대한 뼈 때리는 조언 1줄)
 """
+
+
 
 class GPTSniperEngine:
     def __init__(self, api_keys):
@@ -340,12 +367,55 @@ class GPTSniperEngine:
 """
         return user_input
 
+
+    def _format_swing_market_data(self, ws_data, recent_candles, program_net_qty=0):
+        """스윙 매매를 위해 넓은 시야(차트, 수급) 위주로 데이터를 포장합니다."""
+        curr_price = ws_data.get('curr', 0)
+        fluctuation = ws_data.get('fluctuation', 0.0)
+        v_pw = ws_data.get('v_pw', 0)
+        today_vol = ws_data.get('volume', 0)
+        
+        # 1. 캔들 분석 (추세 및 지지/저항)
+        candle_str = "분봉 데이터 없음"
+        ma5, ma20 = 0, 0
+        if recent_candles and len(recent_candles) >= 20:
+            closes = [c['현재가'] for c in recent_candles]
+            ma5 = sum(closes[-5:]) / 5
+            ma20 = sum(closes[-20:]) / 20
+            
+            trend = "정배열 (상승세)" if ma5 > ma20 else "역배열 (하락세)"
+            position = "MA5 위 (강세)" if curr_price > ma5 else "MA5 아래 (조정)"
+            
+            candle_str = (
+                f"- 현재 단기 추세: {trend}\n"
+                f"- MA5: {ma5:,.0f}원 / MA20: {ma20:,.0f}원\n"
+                f"- 주가 위치: {position}\n"
+                f"- 최근 5봉 흐름: " + " -> ".join([f"{c['현재가']:,}" for c in recent_candles[-5:]])
+            )
+
+        # 2. 수급 분석
+        prog_sign = "🔴 순매수" if program_net_qty > 0 else "🔵 순매도"
+        
+        user_input = f"""
+[현재 상태 (스윙 관점)]
+- 현재가: {curr_price:,}원 (전일대비 {fluctuation:+.2f}%)
+- 당일 누적 거래량: {today_vol:,}주
+- 당일 체결강도: {v_pw}%
+
+[메이저 수급 지표]
+- 프로그램 동향: {prog_sign} ({program_net_qty:,}주)
+
+[차트/위치 분석]
+{candle_str}
+"""
+        return user_input
+    
     # ==========================================
     # 5. 🚀 실전 분석 실행 메서드 5종 (Gemini 모델과 100% 호환)
     # ==========================================
     
-    def analyze_target(self, target_name, ws_data, recent_ticks, recent_candles):
-        """실시간 초단타 타점 분석"""
+    # strategy 파라미터 추가 (기본값 SCALPING)
+    def analyze_target(self, target_name, ws_data, recent_ticks, recent_candles, strategy="SCALPING", program_net_qty=0):
         if not self.lock.acquire(blocking=False):
             return {"action": "WAIT", "score": 50, "reason": "AI 경합 (다른 종목 분석 중)"}
             
@@ -353,14 +423,30 @@ class GPTSniperEngine:
             if time.time() - self.last_call_time < self.min_interval:
                 return {"action": "WAIT", "score": 50, "reason": "AI 쿨타임"}
 
-            formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
-            result = self._call_openai_safe(SCALPING_SYSTEM_PROMPT, formatted_data, require_json=True, context_name=target_name)
+            # 💡 [핵심] 전략에 따른 지능(Prompt)과 데이터(Context) 분기
+            if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
+                prompt = SWING_SYSTEM_PROMPT
+                formatted_data = self._format_swing_market_data(ws_data, recent_candles, program_net_qty)
+                # 스윙은 조금 더 깊은 사고력이 필요하므로 Flash 대신 Pro 모델을 고려할 수도 있습니다.
+                target_model = "gemini-pro-latest" 
+            else:
+                prompt = SCALPING_SYSTEM_PROMPT
+                formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
+                target_model = self.current_model_name # 속도가 생명인 flash-lite 유지
+
+            result = self._call_gemini_safe(
+                prompt, 
+                formatted_data, 
+                require_json=True, 
+                context_name=f"{target_name}({strategy})",
+                model_override=target_model
+            )
             
             self.last_call_time = time.time()
             return result
                 
         except Exception as e:
-            log_error(f"🚨 [{target_name}] OpenAI 실시간 분석 에러: {e}")
+            log_error(f"🚨 [{target_name}] AI 실시간 분석 에러: {e}")
             return {"action": "WAIT", "score": 50, "reason": f"에러: {e}"}
         finally:
             self.lock.release()
