@@ -21,13 +21,27 @@ class PassThroughCalibrator:
 
 
 def train_meta_model_v2():
-    print(f"[1/5] Meta 학습용 패널 생성 중... ({META_START} ~ {META_END})")
+    print(f"[1/5] Meta 학습용 패널 생성 중... (타겟: {META_START} ~ {META_END})")
     codes = get_top_kospi_codes(limit=300)
-    # Meta 학습은 레이블이 필요하므로 include_labels=True
-    panel = build_panel_dataset(codes, META_START, META_END, min_rows=60, include_labels=True)
+
+    # 💡 핵심 수정: 지표 워밍업(ma120 등)을 위해 200일 이전부터 데이터를 DB에서 끌어옵니다.
+    meta_start_dt = pd.to_datetime(META_START)
+    fetch_start = (meta_start_dt - pd.Timedelta(days=200)).strftime('%Y-%m-%d')
+    
+    # 패널 생성은 과거부터 넉넉히 (min_rows=150으로 안전하게)
+    panel = build_panel_dataset(codes, fetch_start, META_END, min_rows=150, include_labels=True)
     if panel.empty:
-        print("❌ 메타 학습 데이터가 없습니다.")
+        print("❌ 메타 학습 데이터 추출 실패.")
         return
+
+    # 💡 지표 계산이 온전히 끝난 진짜 META_START 이후 데이터만 필터링
+    panel = panel[panel['date'] >= meta_start_dt].copy()
+    
+    if panel.empty:
+        print("❌ 날짜 필터링 후 메타 학습 데이터가 남지 않았습니다.")
+        return
+
+    print(f"✅ 메타 패널 준비 완료: {len(panel)} rows")
 
     print("[2/5] Base model 로드 및 예측 피처 병합 중...")
     hybrid_xgb = joblib.load(HYBRID_XGB_PATH)
