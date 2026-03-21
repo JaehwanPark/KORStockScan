@@ -802,34 +802,18 @@ def analyze_stock_now(code):
     target_info = next((t for t in ACTIVE_TARGETS if t['code'] == code), None)
     strategy = target_info.get('strategy', 'KOSPI_ML') if target_info else 'KOSPI_ML'
     
-    # 전략별 트레일링/손절 매핑
-    strategy_trailing_map = {
-        'SCALPING': {
-            'trailing_pct': getattr(TRADING_RULES, 'SCALP_TARGET', 1.5),
-            'stop_pct': getattr(TRADING_RULES, 'SCALP_STOP', -2.5),
-            'label': "⚡ 초단타(SCALP)",
-        },
-        'KOSDAQ_ML': {
-            'trailing_pct': getattr(TRADING_RULES, 'KOSDAQ_TARGET', 4.0),
-            'stop_pct': getattr(TRADING_RULES, 'KOSDAQ_STOP', -2.5),
-            'label': "🚀 코스닥 스윙",
-        },
-        'KOSPI_ML': {
-            'trailing_pct': getattr(TRADING_RULES, 'TRAILING_START_PCT', 4.0),
-            'stop_pct': getattr(TRADING_RULES, 'STOP_LOSS_BULL', -3.0),
-            'label': "🛡️ 우량주 스윙(KOSPI_ML)",
-        }
-    }
     if strategy in ['SCALPING', 'SCALP']:
-        key = 'SCALPING'
+        trailing_pct = getattr(TRADING_RULES, 'SCALP_TARGET', 1.5)
+        stop_pct = getattr(TRADING_RULES, 'SCALP_STOP', -2.5)
+        strat_label = "⚡ 초단타(SCALP)"
     elif strategy == 'KOSDAQ_ML':
-        key = 'KOSDAQ_ML'
+        trailing_pct = getattr(TRADING_RULES, 'KOSDAQ_TARGET', 4.0)
+        stop_pct = getattr(TRADING_RULES, 'KOSDAQ_STOP', -2.5)
+        strat_label = "🚀 코스닥 스윙"
     else:
-        key = 'KOSPI_ML'
-    params = strategy_trailing_map[key]
-    trailing_pct = params['trailing_pct']
-    stop_pct = params['stop_pct']
-    strat_label = params['label']
+        trailing_pct = getattr(TRADING_RULES, 'TRAILING_START_PCT', 4.0)
+        stop_pct = getattr(TRADING_RULES, 'STOP_LOSS_BULL', -3.0)
+        strat_label = "🛡️ 우량주 스윙(KOSPI_ML)"
 
     target_price = int(curr_price * (1 + (trailing_pct / 100)))
     stop_price = int(curr_price * (1 + (stop_pct / 100)))
@@ -1255,50 +1239,33 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             return
 
         # --- [1] 전략별 파라미터 세팅 ---
-        if strategy == 'KOSPI_ML':
+        if strategy == 'KOSDAQ_ML':
+            vpw_limit_base = getattr(TRADING_RULES, 'VPW_KOSDAQ_LIMIT', 105)
+            strong_vpw = getattr(TRADING_RULES, 'VPW_STRONG_LIMIT', 120)
+            buy_threshold = getattr(TRADING_RULES, 'BUY_SCORE_THRESHOLD', 70)
+            vpw_condition = current_vpw >= vpw_limit_base
+            ratio_min = getattr(TRADING_RULES, 'INVEST_RATIO_KOSDAQ_MIN', 0.05)
+            ratio_max = getattr(TRADING_RULES, 'INVEST_RATIO_KOSDAQ_MAX', 0.15)
+            ai_score_threshold = getattr(TRADING_RULES, 'AI_SCORE_THRESHOLD_KOSDAQ', 60)
+            
+            ai_prob = stock.get('prob', getattr(TRADING_RULES, 'SNIPER_AGGRESSIVE_PROB', 0.70))
+            v_pw_limit = vpw_limit_base if ai_prob >= 0.70 else strong_vpw
+            
+        else: # KOSPI_ML
             max_gap = getattr(TRADING_RULES, 'MAX_SWING_GAP_UP_PCT', 3.0)
             if fluctuation >= max_gap:
                 return # 갭상승이 너무 크면 패스
-
-        # 전략별 기본 파라미터 매핑
-        strategy_params = {
-            'KOSDAQ_ML': {
-                'vpw_limit_base': getattr(TRADING_RULES, 'VPW_KOSDAQ_LIMIT', 105),
-                'strong_vpw': getattr(TRADING_RULES, 'VPW_STRONG_LIMIT', 120),
-                'buy_threshold': getattr(TRADING_RULES, 'BUY_SCORE_THRESHOLD', 70),
-                'vpw_condition': current_vpw >= getattr(TRADING_RULES, 'VPW_KOSDAQ_LIMIT', 105),
-                'ratio_min': getattr(TRADING_RULES, 'INVEST_RATIO_KOSDAQ_MIN', 0.05),
-                'ratio_max': getattr(TRADING_RULES, 'INVEST_RATIO_KOSDAQ_MAX', 0.15),
-                'ai_prob_threshold': 0.70,
-                'ai_score_threshold': getattr(TRADING_RULES, 'AI_SCORE_THRESHOLD_KOSDAQ', 60),
-                'ai_prob_default': 0.70,
-            },
-            'KOSPI_ML': {
-                'vpw_limit_base': 100,
-                'strong_vpw': getattr(TRADING_RULES, 'VPW_STRONG_LIMIT', 115),
-                'buy_threshold': getattr(TRADING_RULES, 'BUY_SCORE_THRESHOLD', 80),
-                'vpw_condition': current_vpw >= 103,
-                'ratio_min': getattr(TRADING_RULES, 'INVEST_RATIO_KOSPI_MIN', 0.10),
-                'ratio_max': getattr(TRADING_RULES, 'INVEST_RATIO_KOSPI_MAX', 0.30),
-                'ai_prob_threshold': 0.8,
-                'ai_score_threshold': getattr(TRADING_RULES, 'AI_SCORE_THRESHOLD_KOSPI', 60),
-                'ai_prob_default': 0.8,
-            }
-        }
-        params = strategy_params[strategy]
-
-        vpw_limit_base = params['vpw_limit_base']
-        strong_vpw = params['strong_vpw']
-        buy_threshold = params['buy_threshold']
-        vpw_condition = params['vpw_condition']
-        ratio_min = params['ratio_min']
-        ratio_max = params['ratio_max']
-        ai_score_threshold = params['ai_score_threshold']
-        ai_prob_threshold = params['ai_prob_threshold']
-        ai_prob_default = params['ai_prob_default']
-
-        ai_prob = stock.get('prob', getattr(TRADING_RULES, 'SNIPER_AGGRESSIVE_PROB', ai_prob_default))
-        v_pw_limit = vpw_limit_base if ai_prob >= ai_prob_threshold else strong_vpw
+            
+            vpw_limit_base = 100
+            strong_vpw = getattr(TRADING_RULES, 'VPW_STRONG_LIMIT', 115)
+            buy_threshold = getattr(TRADING_RULES, 'BUY_SCORE_THRESHOLD', 80)
+            vpw_condition = current_vpw >= 103
+            ratio_min = getattr(TRADING_RULES, 'INVEST_RATIO_KOSPI_MIN', 0.10)
+            ratio_max = getattr(TRADING_RULES, 'INVEST_RATIO_KOSPI_MAX', 0.30)
+            ai_score_threshold = getattr(TRADING_RULES, 'AI_SCORE_THRESHOLD_KOSPI', 60)
+            
+            ai_prob = stock.get('prob', getattr(TRADING_RULES, 'SNIPER_AGGRESSIVE_PROB', 0.8))
+            v_pw_limit = vpw_limit_base if ai_prob >= 0.8 else strong_vpw
 
         # --- [2] 기계적 퀀트 분석 ---
         score, prices, conclusion, checklist, metrics = radar.analyze_signal_integrated(ws_data, ai_prob)
@@ -1390,7 +1357,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             min_ratio = getattr(TRADING_RULES, 'INVEST_RATIO_SCALPING_MIN', 0.05)
             max_ratio = getattr(TRADING_RULES, 'INVEST_RATIO_SCALPING_MAX', 0.25)
             ratio = min_ratio + (current_ai_score / 100.0) * (max_ratio - min_ratio)
-        real_buy_qty = kiwoom_orders.calc_buy_qty(curr_price, deposit, ratio)
+            real_buy_qty = kiwoom_orders.calc_buy_qty(curr_price, deposit, ratio)
 
         if real_buy_qty <= 0:
             print(f"⚠️ [매수보류] {stock['name']}: 매수 수량이 0주입니다. (자금 부족으로 20분 제외)")
