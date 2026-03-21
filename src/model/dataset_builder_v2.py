@@ -153,7 +153,10 @@ def fetch_kospi_index(start_date, end_date):
 
         return idx[['date', 'bull_regime', 'idx_ret20', 'idx_atr_ratio']].copy()
 
-    except Exception:
+    except Exception as e:
+        # 이 프린트문을 추가하여 실제 에러 원인을 터미널에 출력합니다.
+        print(f"⚠️ [오류] FinanceDataReader 지수 추출 실패: {e}")
+        
         # fallback: 전부 0
         date_range = pd.date_range(start=start_date, end=end_date, freq='B')
         idx = pd.DataFrame({'date': date_range})

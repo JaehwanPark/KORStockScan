@@ -255,35 +255,43 @@ def score_artifact(artifact, df):
     return apply_calibrator(calibrator, raw)
 
 
+# common_v2.py 내부의 해당 함수 교체
+
 def select_daily_candidates(
     scored_df,
-    score_col='score',
+    score_col='score',          # Meta Ranker의 상대 점수 컬럼
+    prob_col='hybrid_mean',     # Base 모델의 절대 확률 컬럼 (안전망)
     date_col='date',
     top_k_bull=5,
     top_k_bear=2,
-    floor_bull=0.47,
-    floor_bear=0.52,
-    fallback_floor=0.44
+    floor_bull=0.45,            # 절대 확률 필터링 임계치
+    floor_bear=0.50,
+    fallback_floor=0.42
 ):
     if scored_df.empty:
         return scored_df.copy()
 
     picks = []
     for dt, g in scored_df.groupby(date_col):
-        g = g.sort_values(score_col, ascending=False).copy()
-
         bull = int(g['bull_regime'].iloc[0]) if 'bull_regime' in g.columns else 0
         top_k = top_k_bull if bull == 1 else top_k_bear
         floor = floor_bull if bull == 1 else floor_bear
 
-        day_pick = g[g[score_col] >= floor].head(top_k)
+        # [1단계] 절대 평가: Base 확률 기준 위험 종목 컷오프
+        if prob_col in g.columns:
+            safe_pool = g[g[prob_col] >= floor].copy()
+        else:
+            safe_pool = g.copy()
 
-        # 추천 0건 방지 장치: bull 장일 때 1건 fallback
-        if day_pick.empty and bull == 1:
-            fallback = g[g[score_col] >= fallback_floor].head(1)
-            if not fallback.empty:
-                day_pick = fallback
+        # 상승장 추천 0건 방지 장치 (안전망 임계치 소폭 하향)
+        if safe_pool.empty and bull == 1 and prob_col in g.columns:
+            safe_pool = g[g[prob_col] >= fallback_floor].copy()
 
+        if safe_pool.empty:
+            continue
+
+        # [2단계] 상대 평가: 살아남은 후보 중 Meta Ranker 점수로 K개 픽업
+        day_pick = safe_pool.sort_values(score_col, ascending=False).head(top_k)
         picks.append(day_pick)
 
     if not picks:

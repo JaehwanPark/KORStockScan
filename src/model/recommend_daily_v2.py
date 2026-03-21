@@ -43,16 +43,24 @@ def recommend_daily_v2():
 
     score_df = build_meta_feature_frame(score_df)
 
-    print("[3/4] Meta score 생성 중...")
-    meta_raw = meta_artifact['model'].predict_proba(score_df[META_FEATURES])[:, 1]
-    score_df['score'] = apply_calibrator(meta_artifact['calibrator'], meta_raw)
+    # recommend_daily_v2.py 내부 [3/4] 단계 부분 교체
 
-    picks = select_daily_candidates(score_df, score_col='score')
+    print("[3/4] Meta score (Ranker) 생성 중...")
+    # Ranker는 확률이 아니므로 predict_proba 대신 predict를 사용하고 클리핑을 생략합니다.
+    score_df['score'] = meta_artifact['model'].predict(score_df[META_FEATURES])
+
+    # 새로 정의된 투트랙 필터링 적용 (hybrid_mean이 1차 안전망 역할)
+    picks = select_daily_candidates(
+        score_df, 
+        score_col='score', 
+        prob_col='hybrid_mean'
+    )
 
     if picks.empty:
-        print("⚠️ 오늘 추천 종목이 없습니다.")
+        print("⚠️ 오늘 추천 종목이 없습니다 (안전망 통과 종목 0건).")
+        # 안전망 상관없이 단순 랭킹 상위 10개만이라도 백업 저장
         score_df.sort_values('score', ascending=False).head(10).to_csv(RECO_PATH, index=False, encoding='utf-8-sig')
-        print(f"대신 상위 스코어 10개 저장: {RECO_PATH}")
+        print(f"대신 단순 상위 스코어 10개 임시 저장: {RECO_PATH}")
         return
 
     picks = picks.sort_values('score', ascending=False).reset_index(drop=True)

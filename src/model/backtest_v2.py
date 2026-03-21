@@ -42,9 +42,12 @@ def run_backtest_v2(
     df_pred['date'] = pd.to_datetime(df_pred['date']).dt.normalize()
     df_pred['code'] = df_pred['code'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().str.zfill(6)
 
+    # backtest_v2.py 내부 select_daily_candidates 호출부 교체
+
     picks = select_daily_candidates(
         df_pred,
-        score_col='score',
+        score_col='score',          # 랭킹 기준
+        prob_col='hybrid_mean',     # 필터링 기준
         date_col='date',
         top_k_bull=top_k_bull,
         top_k_bear=top_k_bear,
