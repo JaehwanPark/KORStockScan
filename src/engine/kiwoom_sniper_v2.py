@@ -1090,7 +1090,11 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
         if pos_tag == 'VCP_CANDID':
             return
             
-        ratio = getattr(TRADING_RULES, 'INVEST_RATIO_SCALPING', 0.15)
+        # AI 점수 기반 동적 투자 비율 계산
+        current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
+        min_ratio = getattr(TRADING_RULES, 'INVEST_RATIO_SCALPING_MIN', 0.05)
+        max_ratio = getattr(TRADING_RULES, 'INVEST_RATIO_SCALPING_MAX', 0.25)
+        ratio = min_ratio + (current_ai_score / 100.0) * (max_ratio - min_ratio)
 
         ask_tot = int(float(ws_data.get('ask_tot', 0) or 0))
         bid_tot = int(float(ws_data.get('bid_tot', 0) or 0))
@@ -1283,6 +1287,12 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             return
 
         deposit = kiwoom_orders.get_deposit(KIWOOM_TOKEN)
+        # SCALPING 전략인 경우 AI 점수 기반 동적 투자 비율 재계산
+        if strategy == 'SCALPING':
+            current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
+            min_ratio = getattr(TRADING_RULES, 'INVEST_RATIO_SCALPING_MIN', 0.05)
+            max_ratio = getattr(TRADING_RULES, 'INVEST_RATIO_SCALPING_MAX', 0.25)
+            ratio = min_ratio + (current_ai_score / 100.0) * (max_ratio - min_ratio)
         real_buy_qty = kiwoom_orders.calc_buy_qty(curr_price, deposit, ratio)
 
         if real_buy_qty <= 0:
