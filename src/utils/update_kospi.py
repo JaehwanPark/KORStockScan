@@ -1,4 +1,5 @@
 import sys
+import subprocess
 from pathlib import Path
 
 # ==========================================
@@ -272,4 +273,13 @@ def update_kospi_data():
 
 
 if __name__ == "__main__":
+    # 1. 데이터 업데이트 실행
     update_kospi_data()
+    
+    # 2. 업데이트가 끝난 후 V2 추천 스크립트 실행
+    print("🚀 추천 모델(recommend_daily_v2.py)을 이어서 실행합니다...")
+    try:
+        # check=True는 에러 발생 시 프로세스를 중단시킵니다.
+        subprocess.run([sys.executable, "src/model/recommend_daily_v2.py"], check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"❌ 추천 모델 실행 중 에러 발생: {e}")
