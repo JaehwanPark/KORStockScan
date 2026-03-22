@@ -1207,11 +1207,14 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             # =========================================================
 
             if current_ai_score < 75 and current_ai_score != 50:
+                # 1. 로그 출력 (기존 유지)
                 if time.time() - last_ai_time < 1.0:
                     action_str = "WAIT(진입 보류)" if current_ai_score > 40 else "DROP(진입 차단)"
                     print(f"🚫 [AI 매수 거부] {stock['name']} {action_str} (AI 점수: {current_ai_score}점)")
 
-                cooldown_time = getattr(TRADING_RULES, 'AI_WAIT_DROP_COOLDOWN', 300) if current_ai_score > 40 else 180
+                # 💡 [수정] 74점 이하는 점수와 상관없이 모두 설정값(기본 300초) 적용
+                cooldown_time = getattr(TRADING_RULES, 'AI_WAIT_DROP_COOLDOWN', 300)
+                
                 cooldowns[code] = time.time() + cooldown_time
                 return
 
@@ -1240,16 +1243,20 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
 
         # --- [1] 전략별 파라미터 세팅 ---
         if strategy == 'KOSDAQ_ML':
+            max_gap = getattr(TRADING_RULES, 'MAX_SWING_GAP_UP_PCT', 3.0)
+            if fluctuation >= max_gap:
+                return # 갭상승이 너무 크면 패스
+            
             vpw_limit_base = getattr(TRADING_RULES, 'VPW_KOSDAQ_LIMIT', 105)
-            strong_vpw = getattr(TRADING_RULES, 'VPW_STRONG_LIMIT', 120)
-            buy_threshold = getattr(TRADING_RULES, 'BUY_SCORE_THRESHOLD', 70)
+            strong_vpw = getattr(TRADING_RULES, 'VPW_STRONG_KOSDAQ_LIMIT', 120)
+            buy_threshold = getattr(TRADING_RULES, 'BUY_SCORE_KOSDAQ_THRESHOLD', 80)
             vpw_condition = current_vpw >= vpw_limit_base
             ratio_min = getattr(TRADING_RULES, 'INVEST_RATIO_KOSDAQ_MIN', 0.05)
             ratio_max = getattr(TRADING_RULES, 'INVEST_RATIO_KOSDAQ_MAX', 0.15)
             ai_score_threshold = getattr(TRADING_RULES, 'AI_SCORE_THRESHOLD_KOSDAQ', 60)
             
-            ai_prob = stock.get('prob', getattr(TRADING_RULES, 'SNIPER_AGGRESSIVE_PROB', 0.70))
-            v_pw_limit = vpw_limit_base if ai_prob >= 0.70 else strong_vpw
+            ai_prob = stock.get('prob', getattr(TRADING_RULES, 'SNIPER_AGGRESSIVE_PROB', 0.80))
+            v_pw_limit = vpw_limit_base if ai_prob >= 0.80 else strong_vpw
             
         else: # KOSPI_ML
             max_gap = getattr(TRADING_RULES, 'MAX_SWING_GAP_UP_PCT', 3.0)
@@ -1257,8 +1264,8 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                 return # 갭상승이 너무 크면 패스
             
             vpw_limit_base = 100
-            strong_vpw = getattr(TRADING_RULES, 'VPW_STRONG_LIMIT', 115)
-            buy_threshold = getattr(TRADING_RULES, 'BUY_SCORE_THRESHOLD', 80)
+            strong_vpw = getattr(TRADING_RULES, 'VPW_STRONG_LIMIT', 105)
+            buy_threshold = getattr(TRADING_RULES, 'BUY_SCORE_THRESHOLD', 70)
             vpw_condition = current_vpw >= 103
             ratio_min = getattr(TRADING_RULES, 'INVEST_RATIO_KOSPI_MIN', 0.10)
             ratio_max = getattr(TRADING_RULES, 'INVEST_RATIO_KOSPI_MAX', 0.30)

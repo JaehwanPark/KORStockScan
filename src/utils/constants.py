@@ -89,7 +89,9 @@ class TradingConfig:
     # 🎯 추가된 스나이퍼 매매/운영 세부 설정값
     # ==========================================
     BUY_SCORE_THRESHOLD: int = 70  # AI 봇이 매수 버튼을 누르는 최소 종합 점수
-    VPW_STRONG_LIMIT: int = 110  # 확신도가 낮을 때 매수를 강행하기 위한 체결강도 허들(%)
+    BUY_SCORE_KOSDAQ_THRESHOLD: int = 80  # AI 봇이 KOSDAQ 매수 버튼을 누르는 최소 종합 점수
+    VPW_STRONG_LIMIT: int = 115  # 확신도가 낮을 때 매수를 강행하기 위한 체결강도 허들(%)
+    VPW_STRONG_KOSDAQ_LIMIT: int = 120  # 확신도가 낮을 때 매수를 강행하기 위한 체결강도 허들(%)
     RALLY_TARGET_PCT: float = 5.0  # 신고가 돌파 시 기본 목표가 (%)
     ORDER_TIMEOUT_SEC: int = 30  # 미체결 주문 취소 대기 시간 (초)
     SCAN_INTERVAL_SEC: int = 1800  # 장중 스캐너 재가동 주기 (초 / 1800초 = 30분)
@@ -114,6 +116,7 @@ class TradingConfig:
     AI_HOLDING_MIN_COOLDOWN = 15          # 💡 (기존 5초 -> 15초) 주가가 미친듯이 널뛰어도 최소 15초는 무조건 대기
     AI_HOLDING_MAX_COOLDOWN = 50          # 💡 (기존 30초 -> 50초) 평상시 횡보장에서는 50초에 딱 한 번만 AI 호출
     AI_HOLDING_CRITICAL_COOLDOWN = 10     # 💡 [신규 추가] 익절/손절 임박 구간에서는 20초마다 호출
+    AI_WAIT_DROP_COOLDOWN = 300           # 💡 ai score 75점 이하 대기시간 300초
 
     # ==========================================
     # 🎯 AI 엔진 제어값 (OpenAI)
