@@ -298,6 +298,16 @@ def handle_analyze_btn(message):
 def handle_watch_list(message):
     import pandas as pd
     from src.utils.constants import TRADING_RULES # 상수 안전 임포트
+    from src.utils.logger import log_error
+    import telebot.apihelper
+
+    def escape_markdown(text):
+        if not isinstance(text, str):
+            text = str(text)
+        # Escape Markdown special characters (excluding parentheses/brackets/dot/exclamation)
+        for ch in '*_``~>#+-=|{}':
+            text = text.replace(ch, '\\' + ch)
+        return text
 
     # 💡 [신규] 실시간 분석이 진행되는 동안 대기 메시지 표시
     wait_msg = bot.reply_to(message, "🔄 감시 종목들의 실시간 틱/호가창을 분석하여 **AI 확신점수**를 가져옵니다. 잠시만 기다려주세요...", parse_mode='Markdown')
@@ -337,8 +347,9 @@ def handle_watch_list(message):
         msg += "━━━━━━━━━━━━━━\n"
 
         # 1. 감시 중 (WATCHING)
-        msg += f"👀 *감시 대기 (WATCHING)* : {len(watching)}종목\n"
-        for _, row in watching.iterrows():
+        watching_display = watching.head(10)
+        msg += f"👀 *감시 대기 (WATCHING)* : {len(watching)}종목 (상위 10개 표시)\n"
+        for _, row in watching_display.iterrows():
             code = row['stock_code']
             rt_score = rt_scores.get(code)
             
@@ -349,7 +360,7 @@ def handle_watch_list(message):
                 prob_val = row['prob'] if pd.notna(row['prob']) else getattr(TRADING_RULES, 'SNIPER_AGGRESSIVE_PROB', 0.70)
                 prob_str = f"{prob_val * 100:.0f}%"
                 
-            msg += f" • {row['stock_name']} ({code}) | AI확신: {prob_str}\n"
+            msg += f" • {escape_markdown(row['stock_name'])} ({code}) | AI확신: {prob_str}\n"
 
         # 2. 주문/체결 대기 (BUY_ORDERED / SELL_ORDERED)
         if not buy_ordered.empty or not sell_ordered.empty:
@@ -357,26 +368,50 @@ def handle_watch_list(message):
             msg += f"\n⏳ *주문 전송/대기* : {total_ordered}종목\n"
             for _, row in buy_ordered.iterrows():
                 buy_price = row.get('buy_price', 0)
-                msg += f" • [매수대기] {row['stock_name']} | {int(buy_price) if pd.notna(buy_price) else 0:,}원\n"
+                msg += f" • [매수대기] {escape_markdown(row['stock_name'])} | {int(buy_price) if pd.notna(buy_price) else 0:,}원\n"
             for _, row in sell_ordered.iterrows():
-                msg += f" • [매도대기] {row['stock_name']} | 체결 확인 중...\n"
+                msg += f" • [매도대기] {escape_markdown(row['stock_name'])} | 체결 확인 중...\n"
 
-        # 3. 보유 중 (HOLDING)
+        # 3. 보유 중 (HOLDING) - 전략별 구분
         if not holding.empty:
             msg += f"\n💰 *보유 중 (HOLDING)* : {len(holding)}종목\n"
-            for _, row in holding.iterrows():
-                buy_price = row.get('buy_price', 0)
-                buy_qty = row.get('buy_qty', 0)
-                msg += f" • {row['stock_name']} ({row['stock_code']}) | {int(buy_price) if pd.notna(buy_price) else 0:,}원 ({int(buy_qty) if pd.notna(buy_qty) else 0}주)\n"
+            
+            # 전략별 그룹화
+            strategy_groups = {
+                'SCALPING': '⚡ 단타매매 (SCALPING)',
+                'KOSPI_ML': '🛡️ 우량주 스윙 (KOSPI_ML)',
+                'KOSDAQ_ML': '🚀 코스닥 스윙 (KOSDAQ_ML)'
+            }
+            
+            # strategy 컬럼이 없을 경우 기본값 KOSPI_ML로 처리
+            if 'strategy' not in holding.columns:
+                holding = holding.copy()
+                holding['strategy'] = 'KOSPI_ML'
+            
+            for strategy, label in strategy_groups.items():
+                subset = holding[holding['strategy'].fillna('KOSPI_ML').str.upper() == strategy.upper()]
+                if not subset.empty:
+                    msg += f"  {label} : {len(subset)}종목\n"
+                    for _, row in subset.iterrows():
+                        buy_price = row.get('buy_price', 0)
+                        buy_qty = row.get('buy_qty', 0)
+                        msg += f"    • {escape_markdown(row['stock_name'])} ({row['stock_code']}) | {int(buy_price) if pd.notna(buy_price) else 0:,}원 ({int(buy_qty) if pd.notna(buy_qty) else 0}주)\n"
 
         # 4. 오늘 매매 완료 (COMPLETED)
         if not completed.empty:
             msg += f"\n🏁 *금일 매매 완료* : {len(completed)}종목\n"
             for _, row in completed.iterrows():
-                msg += f" • {row['stock_name']}\n"
+                msg += f" • {escape_markdown(row['stock_name'])}\n"
 
         msg += "━━━━━━━━━━━━━━"
-        bot.edit_message_text(chat_id=message.chat.id, message_id=wait_msg.message_id, text=msg, parse_mode='Markdown')
+        try:
+            bot.edit_message_text(chat_id=message.chat.id, message_id=wait_msg.message_id, text=msg, parse_mode='Markdown')
+        except telebot.apihelper.ApiTelegramException as e:
+            if "can't parse entities" in str(e):
+                # Strip markdown formatting and resend as plain text (no extra escaping)
+                bot.edit_message_text(chat_id=message.chat.id, message_id=wait_msg.message_id, text=msg, parse_mode=None)
+            else:
+                raise
 
     except Exception as e:
         from src.utils.logger import log_error
@@ -648,9 +683,12 @@ def start_telegram_bot():
     print("🤖 텔레그램 봇 수신 대기 시작...")
     import requests.exceptions
     import random
+    import traceback
+    global bot
     retry_delay = 5  # seconds
     max_retry_delay = 60
     consecutive_failures = 0
+    max_consecutive_failures = 10  # 재생성 임계값
 
     while True:
         try:
@@ -663,11 +701,13 @@ def start_telegram_bot():
             continue
         except requests.exceptions.ConnectionError as ce:
             # Network-level connection error (reset by peer, timeout, etc.)
-            log_error(f"텔레그램 네트워크 연결 오류: {ce}")
+            error_trace = traceback.format_exc()
+            log_error(f"텔레그램 네트워크 연결 오류: {ce}\n{error_trace}")
             print(f"⚠️ 텔레그램 연결 순단 ({ce}). {retry_delay}초 후 재접속...")
         except Exception as e:
             # Any other exception (API errors, parsing, etc.)
-            log_error(f"텔레그램 봇 예외 발생: {e}")
+            error_trace = traceback.format_exc()
+            log_error(f"텔레그램 봇 예외 발생: {e}\n{error_trace}")
             print(f"⚠️ 텔레그램 예외 ({e}). {retry_delay}초 후 재시도...")
 
         # Exponential backoff with jitter
@@ -676,4 +716,15 @@ def start_telegram_bot():
         jitter = random.uniform(0, 2)  # up to 2 seconds jitter
         sleep_time = retry_delay + jitter
         print(f"⚠️ 재시도 {consecutive_failures}회 실패, {sleep_time:.1f}초 후 재접속...")
+
+        # 연속 실패 횟수가 임계값을 넘으면 봇 인스턴스 재생성
+        if consecutive_failures >= max_consecutive_failures:
+            print(f"🔄 연속 {consecutive_failures}회 실패로 봇 인스턴스를 재생성합니다.")
+            try:
+                bot = telebot.TeleBot(TOKEN)
+                print("🤖 새로운 봇 인스턴스 생성 완료.")
+            except Exception as e:
+                log_error(f"봇 인스턴스 재생성 실패: {e}")
+            consecutive_failures = 0  # 재생성 후 카운터 리셋
+
         time.sleep(sleep_time)

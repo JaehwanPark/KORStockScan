@@ -11,6 +11,7 @@ docker-compose.yml
 *.txt
 *.sql
 .env
+.clinerules
 
 # ==========================================
 # 🐍 파이썬 환경 및 캐시

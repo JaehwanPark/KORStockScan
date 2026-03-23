@@ -36,7 +36,7 @@ class TradingConfig:
     # ==========================================
     # 3. 매매 타점 및 익절/손절 (Sniper Engine)
     # ==========================================
-    SNIPER_AGGRESSIVE_PROB: float = 0.75  # 🏆 AI 진입 확신도 임계값 (기존 0.85 -> 0.75 완화)
+    SNIPER_AGGRESSIVE_PROB: float = 0.70     # 🏆 AI 진입 확신도 임계값 (기존 0.85 -> 0.70 완화)
 
     # [매매 비중 설정] 전략별 주문 가능 현금 대비 1회 매수 투입 비율
     INVEST_RATIO_KOSPI: float = 0.20  # 1. 코스피 우량주 (20% - 묵직하게 스윙)

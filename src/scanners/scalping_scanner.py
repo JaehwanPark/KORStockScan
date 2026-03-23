@@ -33,7 +33,7 @@ def run_scalper(is_test_mode=False):
     3. DB 저장: 발굴된 종목을 SQLAlchemy ORM을 사용하여 안전하게 Upsert(삽입/업데이트) 합니다.
     4. 이벤트 발행: 'COMMAND_WS_REG' 이벤트를 EventBus에 쏘아, 웹소켓 모듈이 해당 종목의 실시간 틱 데이터 감시를 즉각 시작하도록 지시합니다.
     """
-    print("⚡ [SCALPING 스캐너] 초단타 감시 엔진 가동 (1분 주기)...")
+    print("⚡ [SCALPING 스캐너] 초단타 감시 엔진 가동 (30분 주기)...")
     db = DBManager()
     event_bus = EventBus() # 💡 전역 싱글톤 이벤트 버스
     
@@ -98,10 +98,11 @@ def run_scalper(is_test_mode=False):
                 all_targets[code]['Source'] = 'BOTH' # 두 조건 모두 만족하는 초강력 타겟
             
         new_codes_found = []
+        max_new_codes = 10
 
         for code, t in all_targets.items():
             if code not in already_picked:
-                curr_p = float(t.get('Price', 0)) 
+                curr_p = float(t.get('Price', 0))
 
                 if not kiwoom_utils.is_valid_stock(code, t['Name'], token=token, current_price=curr_p):
                     already_picked.add(code)
@@ -114,10 +115,10 @@ def run_scalper(is_test_mode=False):
 
                 try:
                     with db.get_session() as session:
-                        today_date = datetime.now().date() 
+                        today_date = datetime.now().date()
 
                         record = session.query(RecommendationHistory).filter_by(
-                            rec_date=today_date, 
+                            rec_date=today_date,
                             stock_code=code
                         ).first()
 
@@ -128,23 +129,27 @@ def run_scalper(is_test_mode=False):
                                 record.status = 'WATCHING'
                         else:
                             new_record = RecommendationHistory(
-                                rec_date=today_date, 
-                                stock_code=code, 
-                                stock_name=t['Name'], 
-                                buy_price=0, 
-                                trade_type='SCALP',       
-                                strategy='SCALPING', 
+                                rec_date=today_date,
+                                stock_code=code,
+                                stock_name=t['Name'],
+                                buy_price=0,
+                                trade_type='SCALP',
+                                strategy='SCALPING',
                                 status='WATCHING'
                             )
                             session.add(new_record)
                 except Exception as e:
                     log_error(f"⚠️ DB 저장 실패 ({code}): {e}")
+                
+                # 최대 10개까지만 선택
+                if len(new_codes_found) >= max_new_codes:
+                    break
             
         if new_codes_found:
             event_bus.publish("COMMAND_WS_REG", {"codes": new_codes_found})
             print(f"📡 웹소켓 감시 등록 요청 완료: {len(new_codes_found)} 종목")
 
-        time.sleep(60)
+        time.sleep(1800)
 
 if __name__ == "__main__":
     run_scalper(is_test_mode=True)
