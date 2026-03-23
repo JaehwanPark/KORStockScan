@@ -53,8 +53,6 @@ def log_info(msg: str, send_telegram: bool = False):
         
         with open(log_filepath, 'a', encoding='utf-8') as f:
             f.write(log_message)
-            
-        print(log_message.strip()) # 콘솔에도 출력
         
         # 💡 주의: 텔레그램 발송 기능은 순환 참조 방지를 위해 여기서 직접 import하지 않고,
         # bot_main.py나 최상단 계층에서 비동기로 처리하는 것이 안전해!
