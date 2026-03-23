@@ -86,18 +86,15 @@ def _broadcast_alert(message_text, audience='VIP_ALL', parse_mode='HTML'):
 
         if should_send:
             try:
+                # 💡 [핵심] 만약 parse_mode가 HTML인데 message_text에 생으로 <, >가 들어있으면 에러남
+                # 호출하는 쪽에서 이미 html.escape를 썼는지 확인이 필요합니다.
                 bot.send_message(chat_id, message_text, parse_mode=parse_mode)
-                time.sleep(0.05) 
             except telebot.apihelper.ApiTelegramException as e:
-                if e.error_code == 403:
-                    # 💡 핵심: 사용자가 봇을 차단함
-                    print(f"🚫 [차단 감지] 유저 {chat_id}가 봇을 차단했습니다. DB에서 삭제합니다.")
-                    db_manager.delete_user(chat_id)
-                else:
-                    log_error(f"⚠️ 메시지 전송 중 알 수 없는 API 에러 ({chat_id}): {e}")
-            except Exception as e:
-                log_error(f"⚠️ 전송 실패 ({chat_id}): {e}")
-
+                if "can't parse entities" in str(e):
+                    # 🛡️ 최후의 방어: 파싱 에러 시 마크업을 다 떼고 평문으로라도 보냅니다.
+                    clean_text = message_text.replace('<b>','').replace('</b>','').replace('<code>','').replace('</code>','')
+                    bot.send_message(chat_id, f"⚠️ [형식오류 발생] {clean_text}")
+                log_error(f"⚠️ 메시지 전송 중 API 에러: {e}")
 # ==========================================
 # 🎧 5. EventBus 구독 (Subscriber) 핸들러
 # ==========================================
@@ -649,9 +646,34 @@ def handle_text_messages(message):
 # ==========================================
 def start_telegram_bot():
     print("🤖 텔레그램 봇 수신 대기 시작...")
+    import requests.exceptions
+    import random
+    retry_delay = 5  # seconds
+    max_retry_delay = 60
+    consecutive_failures = 0
+
     while True:
         try:
             bot.infinity_polling(timeout=10, long_polling_timeout=5)
+            # If polling returns without exception, connection was stable.
+            # Reset retry delay and failures.
+            retry_delay = 5
+            consecutive_failures = 0
+            print("✅ 텔레그램 연결 안정화, 재시도 대기 시간 초기화.")
+            continue
+        except requests.exceptions.ConnectionError as ce:
+            # Network-level connection error (reset by peer, timeout, etc.)
+            log_error(f"텔레그램 네트워크 연결 오류: {ce}")
+            print(f"⚠️ 텔레그램 연결 순단 ({ce}). {retry_delay}초 후 재접속...")
         except Exception as e:
-            print(f"⚠️ 텔레그램 연결 순단 ({e}). 5초 후 재접속...")
-            time.sleep(5)
+            # Any other exception (API errors, parsing, etc.)
+            log_error(f"텔레그램 봇 예외 발생: {e}")
+            print(f"⚠️ 텔레그램 예외 ({e}). {retry_delay}초 후 재시도...")
+
+        # Exponential backoff with jitter
+        consecutive_failures += 1
+        retry_delay = min(retry_delay * 2, max_retry_delay)
+        jitter = random.uniform(0, 2)  # up to 2 seconds jitter
+        sleep_time = retry_delay + jitter
+        print(f"⚠️ 재시도 {consecutive_failures}회 실패, {sleep_time:.1f}초 후 재접속...")
+        time.sleep(sleep_time)

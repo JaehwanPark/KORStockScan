@@ -304,6 +304,45 @@ class DBManager:
                 new_user = User(chat_id=chat_id)
                 session.add(new_user)
     
+    def check_analyze_quota(self, chat_id, consume=False):
+        """
+        사용자의 일일 AI 분석 횟수 제한을 확인하고, 필요시 차감합니다.
+        반환: (is_allowed: bool, remaining: int, msg_text: str)
+        """
+        try:
+            with self.get_session() as session:
+                user = session.query(User).filter_by(chat_id=str(chat_id)).first()
+                if not user:
+                    # 사용자가 없으면 기본 허용 (무제한)
+                    return True, 999, "무제한 분석 가능"
+                
+                today = datetime.now().date()
+                last_date = user.last_analyze_date
+                
+                # 마지막 분석 날짜가 오늘이 아니면 카운트 리셋
+                if last_date != today:
+                    user.daily_analyze_count = 0
+                    user.last_analyze_date = today
+                
+                # 일일 제한은 TRADING_RULES에서 가져오거나 기본값 10으로 설정
+                from src.utils.constants import TRADING_RULES
+                daily_limit = getattr(TRADING_RULES, 'DAILY_ANALYZE_LIMIT', 10)
+                
+                remaining = daily_limit - user.daily_analyze_count
+                if remaining <= 0:
+                    return False, 0, f"일일 분석 횟수({daily_limit}회)를 모두 사용했습니다. 내일 다시 시도해주세요."
+                
+                if consume:
+                    user.daily_analyze_count += 1
+                    remaining -= 1
+                
+                return True, remaining, f"남은 분석 횟수: {remaining}회"
+        except Exception as e:
+            # 에러 발생 시 안전하게 허용 처리
+            import traceback
+            traceback.print_exc()
+            return True, 999, f"쿼터 확인 중 에러: {e}"
+    
     def update_user_active_status(self, chat_id: int, is_active: bool = True) -> bool:
         """
         💡 [핵심] 사용자의 봇 활성화 상태(차단/해제)를 업데이트합니다.

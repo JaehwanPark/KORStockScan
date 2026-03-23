@@ -52,7 +52,8 @@ def get_deposit(token):
 def get_my_inventory(token):
     """
     [kt00018] 계좌평가잔고내역을 조회합니다.
-    SOR 주문을 고려하여 KRX(한국거래소)와 NXT(넥스트트레이드)의 잔고를 모두 합산합니다.
+    SOR 주문을 고려하여 KRX(한국거래소) 잔고를 우선 반영하고, 
+    NXT(넥스트트레이드) 잔고 중복 종목은 무시하여 리스트를 구성합니다.
     """
     url = kiwoom_utils.get_api_url("/api/dostk/acnt")
     headers = {
@@ -63,12 +64,13 @@ def get_my_inventory(token):
         'api-id': 'kt00018',
     }
 
-    # 💡 [핵심] 종목 코드를 키(Key)로 사용하여 양쪽 거래소의 수량을 합산할 딕셔너리
+    # 💡 [핵심] 종목 코드를 키(Key)로 사용하여 중복을 제거할 딕셔너리
     aggregated_inventory = {}
     exchanges = ['KRX', 'NXT']
     
     for exchange in exchanges:
-        params = {'qry_tp': '1', 'dmst_stex_tp': exchange}
+        params = {'qry_tp': '2', 'dmst_stex_tp': exchange}
+
         try:
             response = requests.post(url, headers=headers, json=params, timeout=5)
             data = response.json()
@@ -83,9 +85,8 @@ def get_my_inventory(token):
                     name = item.get('stk_nm', '')
                     
                     if qty > 0:
-                        if code in aggregated_inventory:
-                            aggregated_inventory[code]['qty'] += qty
-                        else:
+                        # 💡 [수정됨] KRX 데이터가 먼저 들어가고, NXT 조회 시 이미 딕셔너리에 있는 종목이면 무시(방어)합니다.
+                        if code not in aggregated_inventory:
                             aggregated_inventory[code] = {'code': code, 'name': name, 'qty': qty}
             else:
                 err_msg = data.get('return_msg', '알 수 없는 오류')

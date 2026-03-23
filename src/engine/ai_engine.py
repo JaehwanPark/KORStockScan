@@ -158,11 +158,17 @@ class GeminiSniperEngine:
         self.consecutive_failures = 0
         self.ai_disabled = False
         self.max_consecutive_failures = getattr(TRADING_RULES, 'AI_MAX_CONSECUTIVE_FAILURES', 5)
+        self.current_api_key_index = 0
         print(f"🧠 [AI 엔진] {len(self.api_keys)}개 키 로테이션 가동! (선봉: {self.current_model_name})")
 
     def _rotate_client(self):
         self.current_key = next(self.key_cycle)
         self.client = genai.Client(api_key=self.current_key)
+        # 현재 API 키 인덱스 추적 (로그용)
+        try:
+            self.current_api_key_index = self.api_keys.index(self.current_key)
+        except ValueError:
+            self.current_api_key_index = 0
     
     # ==========================================
     # 3. 💡 [아키텍처 포인트] 만능 API 호출기 (중복 코드 완벽 제거)
@@ -171,9 +177,9 @@ class GeminiSniperEngine:
         """키 로테이션, 예외 처리, 모델 덮어쓰기를 모두 전담하는 중앙 집중식 호출기"""
         contents = [prompt, user_input] if prompt else [user_input]
         
-        config_kwargs = {}
+        config = None
         if require_json:
-            config_kwargs['response_mime_type'] = "application/json"
+            config = {'response_mime_type': "application/json"}
             
         # 💡 [핵심] model_override가 지정되면 해당 모델을, 아니면 기본 모델(flash-lite)을 사용
         target_model = model_override if model_override else self.current_model_name
@@ -181,19 +187,20 @@ class GeminiSniperEngine:
 
         for attempt in range(len(self.api_keys)):
             try:
-                response = self.client.models.generate_content(
-                    model=target_model,  # 👈 여기를 수정!
-                    contents=contents,
-                    config=types.GenerateContentConfig(**config_kwargs)
-                )
-                
-                # 호출 성공 시 다음을 위해 키 회전
-                self._rotate_client()
-                
+                response = self.client.models.generate_content(model=target_model, contents=contents, config=config)
                 raw_text = response.text.strip()
+                
                 if require_json:
-                    clean_json = re.sub(r"```json\s*|\s*```", "", raw_text)
-                    return json.loads(clean_json)
+                    # 💡 [개선] JSON 블록만 정밀하게 추출 (뒤에 붙은 부연설명 무시)
+                    import re
+                    # { 로 시작해서 } 로 끝나는 가장 큰 덩어리를 찾습니다.
+                    match = re.search(r'\{.*\}', raw_text, re.DOTALL)
+                    if match:
+                        clean_json = match.group()
+                        return json.loads(clean_json)
+                    else:
+                        # { } 자체가 없는 경우
+                        raise ValueError(f"JSON 형식을 찾을 수 없음: {raw_text[:100]}...")
                 else:
                     return raw_text
 

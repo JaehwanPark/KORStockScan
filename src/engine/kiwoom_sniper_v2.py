@@ -515,9 +515,9 @@ def sync_balance_with_db():
                         print(f"⚠️ [동기화] {name}({code}): 수량 불일치 교정 (DB: {safe_db_qty}주 -> 실제: {real_qty}주)")
                         record.buy_qty = real_qty
 
-                    target = next((t for t in ACTIVE_TARGETS if str(t.get('code', '')).strip()[:6] == code), None)
-                    if target and real_qty > 0:
-                        target['buy_qty'] = real_qty
+                    for t in ACTIVE_TARGETS:
+                        if str(t.get('code', '')).strip()[:6] == code and real_qty > 0:
+                            t['buy_qty'] = real_qty
 
     except Exception as e:
         log_error(f"🚨 DB 동기화 중 에러 발생: {e}")
@@ -540,7 +540,7 @@ def sync_state_with_broker():
 
     print("🔄 [상태 동기화] 웹소켓 재접속 감지! 증권사 잔고와 봇 상태를 대조합니다...")
 
-    real_balances = kiwoom_utils.get_account_balance_kt00005(KIWOOM_TOKEN, "ALL")
+    real_balances = kiwoom_utils.get_account_balance_kt00005(KIWOOM_TOKEN)
     if real_balances is None:
         print("⚠️ [상태 동기화] 잔고 조회 실패. 다음 턴에 재시도합니다.")
         return
@@ -586,7 +586,6 @@ def sync_state_with_broker():
                                 t['status'] = 'HOLDING'
                                 t['buy_price'] = buy_uv
                                 t['buy_qty'] = cur_qty
-                                break
 
                         synced_count += 1
 
@@ -609,6 +608,7 @@ def periodic_account_sync():
     주기적으로 실제 증권사 잔고를 조회하여, 웹소켓 체결 누락으로 인해
     DB와 메모리가 꼬이는 현상을 강제로 바로잡습니다.
     """
+    
     global KIWOOM_TOKEN, DB, ACTIVE_TARGETS, highest_prices
 
     def to_int(value):
@@ -617,7 +617,7 @@ def periodic_account_sync():
         except Exception:
             return 0
 
-    real_inventory = kiwoom_utils.get_account_balance_kt00005(KIWOOM_TOKEN, "ALL")
+    real_inventory = kiwoom_utils.get_account_balance_kt00005(KIWOOM_TOKEN)
     if real_inventory is None:
         return
 
@@ -678,7 +678,6 @@ def periodic_account_sync():
                         for t in ACTIVE_TARGETS:
                             if str(t.get('code', '')).strip()[:6] == code:
                                 t['buy_qty'] = real_qty
-                                break
 
                     if real_buy_uv > 0 and record.buy_price != real_buy_uv:
                         print(f"🔄 [정기 동기화] {record.stock_name} 매입단가 오차 교정 (기존: {record.buy_price}원 ➡️ 실제: {real_buy_uv}원)")
@@ -686,7 +685,6 @@ def periodic_account_sync():
                         for t in ACTIVE_TARGETS:
                             if str(t.get('code', '')).strip()[:6] == code:
                                 t['buy_price'] = real_buy_uv
-                                break
 
             # 2️⃣ [매수 누락 방어] DB엔 BUY_ORDERED 인데, 실제 잔고에 들어와 있는 경우 -> 샀음 (HOLDING)
             pending_records = session.query(RecommendationHistory).filter_by(status='BUY_ORDERED').all()
@@ -719,7 +717,6 @@ def periodic_account_sync():
                                 t['status'] = 'HOLDING'
                                 t['buy_price'] = buy_uv
                                 t['buy_qty'] = cur_qty
-                                break
 
                         synced_count += 1
 
@@ -728,6 +725,8 @@ def periodic_account_sync():
 
     if synced_count > 0:
         print(f"🔄 [정기 동기화 완료] 총 {synced_count}건의 웹소켓 누락 체결 상태를 바로잡았습니다.")
+    else:
+        pass  # 조용히 넘어갑니다. (로그 기록 안 함)
 
 
 # --- [외부 요청용 분석 리포트 (텔레그램 봇 응답용)] ---
@@ -824,14 +823,14 @@ def analyze_stock_now(code):
         # 💡 [DB 1회 조회 최적화] 차트 저항대 분석과 거래량 비율을 동시에 계산
         df = DB.get_stock_data(code, limit=20)
         if df is not None and len(df) >= 10:
-            avg_vol_20 = df['Volume'].mean()
+            avg_vol_20 = df['volume'].mean()
             if avg_vol_20 > 0:
                 vol_ratio = (today_vol / avg_vol_20) * 100
                 
             if strategy not in ['SCALPING', 'SCALP']:
-                high_20d = df['High'].max()
-                ma20 = df['Close'].mean()
-                std20 = df['Close'].std()
+                high_20d = df['high_price'].max()
+                ma20 = df['close_price'].mean()
+                std20 = df['close_price'].std()
                 upper_bb = ma20 + (2 * std20)
 
                 chart_resistance = max(high_20d, upper_bb)
@@ -911,7 +910,7 @@ def analyze_stock_now(code):
     prog_sign = "🔴" if prog_net_qty > 0 else "🔵"
 
     return (
-        f"🔍 *[{stock_name}]({code}) 실시간 분석*\n"
+        f"🔍 *{stock_name} ({code}) 실시간 분석*\n"
         f"💰 현재가: `{curr_price:,}원` ({fluctuation:+.2f}%)\n"
         f"🏷️ 감시전략: *{strat_label}*\n"
         f"🎯 기계 목표가: `{target_price:,}원`\n"
@@ -1113,7 +1112,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             stock['target_buy_price'] = curr_price
             is_trigger = True
             msg = (
-                f"🚀 **[{stock['name']}]({code}) VCP 시초가 예약 매수!**\n"
+                f"🚀 **{stock['name']} ({code}) VCP 시초가 예약 매수!**\n"
                 f"현재가: `{curr_price:,}원` (전일 VCP NEXT 달성)"
             )
             stock['msg_audience'] = 'VIP_ALL'
@@ -1230,7 +1229,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             is_trigger = True
 
             msg = (
-                f"⚡ **[{stock['name']}]({code}) 초단타(SCALP) 그물망 투척!**\n"
+                f"⚡ **{stock['name']} ({code}) 초단타(SCALP) 그물망 투척!**\n"
                 f"현재가: `{curr_price:,}원` ➡️ **매수대기: `{final_target_buy_price:,}원` (-{final_used_drop_pct:.1f}% 눌림목)**\n"
                 f"호가잔량대금: `{liquidity_value / 100_000_000:.1f}억` | 수급강도: `{current_vpw:.1f}%`"
             )
@@ -1344,7 +1343,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             stock['target_buy_price'] = curr_price # 스윙은 보통 최유리지정가/시장가로 긁으므로 현재가 기록
             
             msg = (
-                f"🚀 **[{stock['name']}]({code}) {strategy} AI 스나이퍼 포착!**\n"
+                f"🚀 **{stock['name']} ({code}) {strategy.replace('_', '\\_')} AI 스나이퍼 포착!**\n"
                 f"현재가: `{curr_price:,}원` | 수급강도: `{current_vpw:.1f}%`\n"
                 f"🧠 AI 확신도: `{current_ai_score}점` ➡️ **투자비중: `{ratio*100:.1f}%` 할당**"
             )
@@ -1449,7 +1448,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
     # 🤖 [AI 보유 종목 실시간 감시] 문지기(Gatekeeper) 스무딩 적용
     # =========================================================
     last_ai_time = LAST_AI_CALL_TIMES.get(code, 0)
-    current_ai_score = float(stock.get('rt_ai_prob', 0.8) or 0.8) * 100
+    current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
 
     last_ai_profit = stock.get('last_ai_profit', profit_rate)
     price_change = abs(profit_rate - last_ai_profit)
@@ -1512,7 +1511,10 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
         # --- [STEP 2] 익절/손절 기준선 및 하락폭(Drawdown) 설정 ---
         base_stop_pct = getattr(TRADING_RULES, 'SCALP_STOP', -2.5)
         safe_profit_pct = getattr(TRADING_RULES, 'SCALP_SAFE_PROFIT', 0.5)
-        drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100
+        if highest_prices.get(code, 0) > 0:
+            drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100
+        else:
+            drawdown = 0
 
         # AI 점수에 따른 동적 파라미터 분기
         if current_ai_score >= 75:
@@ -2087,7 +2089,7 @@ def handle_real_execution(exec_data):
         # 먼저 메모리 업데이트
         target_stock['status'] = 'HOLDING'
         target_stock['buy_price'] = exec_price
-        target_stock['buy_time'] = now.strftime('%H:%M:%S')
+        target_stock['buy_time'] = now
         highest_prices[code] = exec_price
         # pending_buy_msg는 백그라운드 스레드에서 제거
         # 백그라운드 DB 업데이트 실행
@@ -2255,12 +2257,16 @@ def execute_morning_strategy_batch(targets, ws_manager, radar, ai_engine):
 def run_sniper(is_test_mode=False):
     global KIWOOM_TOKEN, WS_MANAGER, ACTIVE_TARGETS, AI_ENGINE
 
+    from src.utils.logger import log_error
+    log_error(f"[DEBUG] run_sniper started at {datetime.now()}")
     run_sniper.morning_report_done = False
     run_sniper.last_fifo_time = 0
     run_sniper.last_account_sync_time = 0
 
     admin_id = CONF.get('ADMIN_ID')
     print(f"🔫 스나이퍼 V12.2 멀티 엔진 가동 (관리자: {admin_id})")
+    if not admin_id:
+        log_error("⚠️ ADMIN_ID가 설정되지 않았습니다. 매도 주문이 실행되지 않을 수 있습니다.")
 
     is_open, reason = kiwoom_utils.is_trading_day()
     if not is_test_mode and not is_open:
@@ -2422,6 +2428,8 @@ def run_sniper(is_test_mode=False):
             # 90초 주기 계좌 동기화
             # =====================================================
             if time.time() - getattr(run_sniper, 'last_account_sync_time', 0) > 90:
+                # from src.utils.logger import log_error
+                # log_error(f"[DEBUG] 90초 조건 만족, periodic_account_sync 시작")
                 threading.Thread(target=periodic_account_sync, daemon=True).start()
                 run_sniper.last_account_sync_time = time.time()
 
