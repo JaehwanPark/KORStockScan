@@ -42,6 +42,7 @@ from src.model.feature_engineer import calculate_all_features
 
 # 💡 [교정] 커스텀 로거 적용
 from src.utils.logger import log_error
+from src.engine.macro_briefing_complete import MacroBriefingBuilder
 
 # 💡 [수정] 순수 AI 추론 도구
 import src.engine.ml_predictor as ml_predictor
@@ -369,6 +370,14 @@ def run_integrated_scanner():
         # 💡 [핵심 교정 1] 복수형 api_keys 변수로 정확히 받음
         api_keys = [v for k, v in CONF.items() if k.startswith("GEMINI_API_KEY")]
     
+        # 매크로 데이터 수집
+        try:
+            macro_builder = MacroBriefingBuilder.from_system_config()
+            _, macro_text = macro_builder.build_macro_context(include_debug=False)
+        except Exception as e:
+            log_error(f"매크로 데이터 수집 실패: {e}")
+            macro_text = ""
+
         if not api_keys:
             log_error("❌ 제미나이 키 발급 실패로 엔진을 중단합니다.")
             event_bus.publish('TELEGRAM_BROADCAST', {'message': "🚨 [시스템 에러] 제미나이 키 발급 실패로 엔진을 중단합니다."})
@@ -376,7 +385,7 @@ def run_integrated_scanner():
             try:
                 # 💡 [핵심 교정 2] api_keys=api_keys 로 오타 수정!
                 ai_engine = GeminiSniperEngine(api_keys=api_keys)
-                ai_briefing = ai_engine.analyze_scanner_results(len(target_list), len(all_results), debug_msg)
+                ai_briefing = ai_engine.analyze_scanner_results(len(target_list), len(all_results), debug_msg, macro_text)
             except Exception as e:
                 ai_briefing = f"⚠️ AI 브리핑 생성 실패: {e}"
 

@@ -386,8 +386,10 @@ class MacroBriefingBuilder:
                     setattr(snap, key, self.fred.get_latest_series_point(series_id, name))
                 except Exception as e:
                     snap.missing_sources.append(f"FRED:{key}:{e}")
+                    log_error(f"FRED series {key} failed: {e}")
         else:
             snap.missing_sources.append("FRED_API_KEY 없음")
+            log_error("FRED_API_KEY missing")
 
         if self.ecos:
             for key, meta in ECOS_SERIES.items():
@@ -404,8 +406,10 @@ class MacroBriefingBuilder:
                     )
                 except Exception as e:
                     snap.missing_sources.append(f"ECOS:{key}:{e}")
+                    log_error(f"ECOS series {key} failed: {e}")
         else:
             snap.missing_sources.append("ECOS_API_KEY 없음")
+            log_error("ECOS_API_KEY missing")
 
         queries = [
             '(iran OR israel OR "middle east") AND (oil OR strike OR conflict)',
@@ -417,6 +421,7 @@ class MacroBriefingBuilder:
                 headlines.extend(self.gdelt.search_headlines(query, max_records=5))
             except Exception as e:
                 snap.missing_sources.append(f"GDELT:{e}")
+                log_error(f"GDELT query failed: {e}")
 
         snap.headlines = self._dedupe_headlines(headlines)[:5]
         snap.regime_tag, snap.confidence, snap.notes = self.signal_engine.score_snapshot(snap)
