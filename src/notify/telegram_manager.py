@@ -411,11 +411,6 @@ def handle_watch_list(message):
                         buy_qty = row.get('buy_qty', 0)
                         msg += f"    • {escape_markdown(row['stock_name'])} ({row['stock_code']}) | {int(buy_price) if pd.notna(buy_price) else 0:,}원 ({int(buy_qty) if pd.notna(buy_qty) else 0}주)\n"
 
-        # 4. 오늘 매매 완료 (COMPLETED)
-        if not completed.empty:
-            msg += f"\n🏁 *금일 매매 완료* : {len(completed)}종목\n"
-            for _, row in completed.iterrows():
-                msg += f" • {escape_markdown(row['stock_name'])}\n"
 
         msg += "━━━━━━━━━━━━━━"
         try:

@@ -2970,8 +2970,8 @@ def handle_real_execution(exec_data):
 
                 from src.engine import kiwoom_orders
                 sell_qty = int(target_stock.get('buy_qty') or exec_qty or 0)
-                sell_res = kiwoom_orders.send_sell_order_limit(
-                    code=code, qty=sell_qty, token=KIWOOM_TOKEN, price=preset_tp_price
+                sell_res = kiwoom_orders.send_sell_order_market(
+                    code=code, qty=sell_qty, token=KIWOOM_TOKEN, order_type="00", price=preset_tp_price
                 )
                 target_stock['preset_tp_ord_no'] = sell_res.get('ord_no') if isinstance(sell_res, dict) else ''
 
