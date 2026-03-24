@@ -85,12 +85,15 @@ def broadcast_today_picks_job():
             picks = session.query(RecommendationHistory).filter_by(rec_date=today).all()
 
         if not picks:
+            print(f"ℹ️ [{today}] 추천 종목 데이터가 없어 브로드캐스트를 건너뜁니다.")
             return
 
         msg = f"🌅 <b>[{today}] AI KOSPI 종목추천 리포트</b>\n"
         msg += "━━━━━━━━━━━━━━━━━━\n"
 
-        # ... (중략) ...
+        main_picks = [p for p in picks if getattr(p, 'type', '') == 'MAIN']
+        runner_picks = [p for p in picks if getattr(p, 'type', '') == 'RUNNER']
+        scalp_picks = [p for p in picks if getattr(p, 'type', '') == 'SCALP' or getattr(p, 'strategy', '') == 'SCALPING']
 
         if main_picks:
             msg += "🔥 <b>[AI 확신 종목]</b>\n"
@@ -101,9 +104,20 @@ def broadcast_today_picks_job():
                 msg += f"• <b>{safe_name}</b> (<code>{safe_price:,}원</code>)\n"
             msg += "\n"
 
-        # (runner_picks, scalp_picks 루프 내 p.name에도 동일하게 html.escape 적용 권장)
+        if runner_picks:
+            msg += "🥈 <b>[AI 관심 종목 TOP 10]</b>\n"
+            for p in runner_picks[:10]:
+                safe_price = int(p.buy_price) if p.buy_price else 0
+                msg += f"• <b>{safe_name}</b> (<code>{safe_price:,}원</code>)\n"
+            msg += "\n"
+            
+        if scalp_picks:
+            msg += "⚡ <b>[초단타(SCALP) 포착 대기열]</b>\n"
+            for p in scalp_picks[:10]:
+                safe_price = int(p.buy_price) if p.buy_price else 0
+                msg += f"• <b>{safe_name}</b> (<code>{safe_price:,}원</code>)\n"
 
-        # 발송
+        # 📢 텔레그램 모듈 직접 호출 파괴 -> EventBus 송출
         event_bus.publish('TELEGRAM_BROADCAST', {'message': msg, 'audience': 'VIP_ALL', 'parse_mode': 'HTML'})
 
     except Exception as e:
