@@ -1,6 +1,7 @@
 import sys
 import os
 import json
+import re
 import telebot
 from telebot import types
 import time
@@ -67,6 +68,15 @@ def _send_to_admin(message_text, parse_mode='HTML'):
     if not ADMIN_ID: return
     try:
         bot.send_message(chat_id=ADMIN_ID, text=message_text, parse_mode=parse_mode)
+    except telebot.apihelper.ApiTelegramException as e:
+        if "can't parse entities" in str(e):
+            # 🛡️ 최후의 방어: 파싱 에러 시 평문으로 재전송
+            try:
+                bot.send_message(chat_id=ADMIN_ID, text=f"⚠️ [형식오류 발생] {message_text}", parse_mode=None)
+            except Exception:
+                pass  # 이미 에러 로깅됨
+        print(f"⚠️ 관리자 다이렉트 발송 실패: {e}")
+        log_error(f"⚠️ 관리자 다이렉트 발송 실패: {e}")
     except Exception as e:
         print(f"⚠️ 관리자 다이렉트 발송 실패: {e}")
         log_error(f"⚠️ 관리자 다이렉트 발송 실패: {e}")
@@ -91,9 +101,13 @@ def _broadcast_alert(message_text, audience='VIP_ALL', parse_mode='HTML'):
                 bot.send_message(chat_id, message_text, parse_mode=parse_mode)
             except telebot.apihelper.ApiTelegramException as e:
                 if "can't parse entities" in str(e):
-                    # 🛡️ 최후의 방어: 파싱 에러 시 마크업을 다 떼고 평문으로라도 보냅니다.
-                    clean_text = message_text.replace('<b>','').replace('</b>','').replace('<code>','').replace('</code>','')
-                    bot.send_message(chat_id, f"⚠️ [형식오류 발생] {clean_text}")
+                    # 🛡️ 최후의 방어: 파싱 에러 시 평문으로 재전송
+                    # HTML 태그 제거
+                    clean_text = re.sub(r'<[^>]+>', '', message_text)
+                    try:
+                        bot.send_message(chat_id, f"⚠️ [형식오류 발생] {clean_text}", parse_mode=None)
+                    except Exception:
+                        pass  # 이미 에러 로깅됨
                 log_error(f"⚠️ 메시지 전송 중 API 에러: {e}")
 # ==========================================
 # 🎧 5. EventBus 구독 (Subscriber) 핸들러

@@ -697,7 +697,7 @@ def handle_condition_matched(payload):
                 )
                 event_bus.publish(
                     'TELEGRAM_BROADCAST',
-                    {'message': msg, 'audience': 'VIP_ALL', 'parse_mode': 'Markdown'}
+                    {'message': msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'Markdown'}
                 )
                 return
 
@@ -740,7 +740,7 @@ def handle_condition_matched(payload):
                     )
                     event_bus.publish(
                         'TELEGRAM_BROADCAST',
-                        {'message': msg, 'audience': 'VIP_ALL', 'parse_mode': 'Markdown'}
+                        {'message': msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'Markdown'}
                     )
                 return
 
@@ -752,6 +752,7 @@ def handle_condition_matched(payload):
                 stock_code=code
             ).first()
 
+            newly_created = False
             if not record:
                 record = RecommendationHistory(
                     rec_date=target_date,
@@ -765,6 +766,7 @@ def handle_condition_matched(payload):
                 )
                 session.add(record)
                 session.flush()
+                newly_created = True
             else:
                 # 기존 record가 있는데 position_tag가 비어 있거나 약한 값이면 보강
                 if hasattr(record, 'position_tag') and target_position_tag not in [None, '', 'MIDDLE']:
@@ -786,35 +788,36 @@ def handle_condition_matched(payload):
                 event_bus.publish("COMMAND_WS_REG", {"codes": [code]})
 
             else:
-                if target_position_tag == 'VCP_CANDID':
-                    msg = (
-                        f"🌙 **[VCP 예비 후보 포착]**\n"
-                        f"조건검색: `{cnd_name}`\n"
-                        f"종목: **{name} ({code})**\n"
-                        f"내일 오전 VCP 슈팅 조건 만족 시 감시망에 투입됩니다."
-                    )
+                if newly_created:
+                    if target_position_tag == 'VCP_CANDID':
+                        msg = (
+                            f"🌙 **[VCP 예비 후보 포착]**\n"
+                            f"조건검색: `{cnd_name}`\n"
+                            f"종목: **{name} ({code})**\n"
+                            f"내일 오전 VCP 슈팅 조건 만족 시 감시망에 투입됩니다."
+                        )
 
-                elif target_position_tag == 'S15_CANDID':
-                    msg = (
-                        f"🌙 **[S15 예비 후보 포착]**\n"
-                        f"조건검색: `{cnd_name}`\n"
-                        f"종목: **{name} ({code})**\n"
-                        f"S15 슈팅 조건 만족 시 감시망에 투입됩니다."
-                    )
+                    elif target_position_tag == 'S15_CANDID':
+                        msg = (
+                            f"🌙 **[S15 예비 후보 포착]**\n"
+                            f"조건검색: `{cnd_name}`\n"
+                            f"종목: **{name} ({code})**\n"
+                            f"S15 슈팅 조건 만족 시 감시망에 투입됩니다."
+                        )
 
-                else:
-                    msg = (
-                        f"🌙 **[내일의 스윙 주도주 예약]**\n"
-                        f"조건검색 포착: `{cnd_name}`\n"
-                        f"종목: **{name} ({code})**\n"
-                        f"내일({target_date}) 감시망에 전략({target_strategy})으로 자동 투입됩니다."
-                    )
+                    else:
+                        msg = (
+                            f"🌙 **[내일의 스윙 주도주 예약]**\n"
+                            f"조건검색 포착: `{cnd_name}`\n"
+                            f"종목: **{name} ({code})**\n"
+                            f"내일({target_date}) 감시망에 전략({target_strategy})으로 자동 투입됩니다."
+                        )
 
-                event_bus.publish(
-                    'TELEGRAM_BROADCAST',
-                    {'message': msg, 'audience': 'VIP_ALL', 'parse_mode': 'Markdown'}
-                )
-                print(f"🌙 [{name}] 종가 무렵 포착 완료. 내일({target_date}) 감시 대상({target_strategy})으로 DB 예약 성공!")
+                    event_bus.publish(
+                        'TELEGRAM_BROADCAST',
+                        {'message': msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'Markdown'}
+                    )
+                    print(f"🌙 [{name}] 종가 무렵 포착 완료. 내일({target_date}) 감시 대상({target_strategy})으로 DB 예약 성공!")
 
     except Exception as e:
         log_error(f"🚨 조건검색 편입 처리 에러: {e}")
