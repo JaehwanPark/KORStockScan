@@ -563,7 +563,6 @@ class GeminiSniperEngine:
                 f"📊 [스나이퍼 엔진 분석 데이터]\n{input_data_text}"
             )
             try:
-                # 💡 [핵심] 요청하신 gemini-3.0-flash 를 덮어씌워서 호출합니다!
                 return self._call_gemini_safe(
                     REALTIME_ANALYSIS_PROMPT, 
                     user_input, 

@@ -41,21 +41,20 @@ CONF = _load_config()
 TOKEN = CONF.get('TELEGRAM_TOKEN')
 ADMIN_ID = str(CONF.get('ADMIN_ID', ''))
 
-# 💡 봇 객체 생성 (Lazy Initialization)
-bot = telebot.TeleBot(TOKEN)
-db_manager = DBManager()
-event_bus = EventBus()
-
 # ==========================================
-# 3. [Refactored] 핵심 객체 싱글톤 인스턴스화
+# 3. 핵심 객체 단일 초기화
 # ==========================================
-# 💡 [우아함 3] 주석 대신 명확한 명칭과 로깅으로 흐름 파악 용이성 증대
 try:
+    if not TOKEN:
+        raise ValueError("TELEGRAM_TOKEN 이 비어 있습니다.")
+
+    # TeleBot 인스턴스 생성 자체는 네트워크를 사용하지 않으므로,
+    # import 시점에는 연결 검증(get_me 등)을 하지 않습니다.
     bot = telebot.TeleBot(TOKEN)
     db_manager = DBManager()
-    event_bus = EventBus() # 💡 싱글톤 인스턴스 획득
-    
-    print(f"🤖 Telegram Bot ({bot.get_me().first_name}) 온라인 - 관리자 ID: {ADMIN_ID}")
+    event_bus = EventBus()
+
+    print(f"🤖 Telegram Bot 초기화 완료 - 관리자 ID: {ADMIN_ID or '미설정'}")
 except Exception as e:
     log_error(f"🚨 텔레그램 매니저 초기화 실패: {e}")
     exit(1)
@@ -109,6 +108,26 @@ def _broadcast_alert(message_text, audience='VIP_ALL', parse_mode='HTML'):
                     except Exception:
                         pass  # 이미 에러 로깅됨
                 log_error(f"⚠️ 메시지 전송 중 API 에러: {e}")
+            except Exception as e:
+                print(f"⚠️ chat_id {chat_id} 메시지 전송 실패: {e}")
+                log_error(f"⚠️ chat_id {chat_id} 메시지 전송 실패: {e}")
+
+def _is_transient_connection_issue(exc):
+    """흔한 네트워크 순단(Reset/Timeout/Remote close)만 조용히 재시도 대상으로 분류"""
+    error_text = str(exc).lower()
+    transient_signatures = (
+        "connection reset by peer",
+        "errno 104",
+        "[errno 104]",
+        "remote end closed connection without response",
+        "connection aborted",
+        "broken pipe",
+        "read timed out",
+        "connect timeout",
+        "timed out",
+        "temporarily unavailable",
+    )
+    return any(signature in error_text for signature in transient_signatures)
 # ==========================================
 # 🎧 5. EventBus 구독 (Subscriber) 핸들러
 # ==========================================
@@ -143,6 +162,7 @@ def handle_telegram_event(event_data):
                 msg += f"• {p['Name']} ({p['Code']}) - AI확신: {p['Prob']*100:.1f}%\n"
         
         msg += f"\n🤖 <b>[AI 수석 브리핑]</b>\n{ai_brief}"
+        _broadcast_alert(msg, audience='VIP_ALL', parse_mode='HTML')
         
     # 3. 💡 [핵심 추가] 코스닥 장중 스캐너 리포트 수신 처리
     elif event_data.get('type') == 'KOSDAQ_REPORT':
@@ -607,10 +627,9 @@ def handle_why_not(message):
         
         report = kiwoom_sniper_v2.get_detailed_reason(code)
         
-        # 💡 [핵심 교정 1] 사유 리포트 내부에 텔레그램이 파싱하지 못하는 특수문자나 
-        # 닫히지 않은 마크다운이 있을 수 있으므로 가장 안전한 HTML 모드로 던집니다.
-        # (만약 스나이퍼에서 마크다운 형태로 리턴한다면 이 부분을 'Markdown'으로 유지하되, 리턴값을 점검해야 합니다.)
-        bot.send_message(chat_id, report, parse_mode='Markdown')
+        # 💡 [핵심 교정 1] 사유 리포트에는 닫히지 않은 마크다운/특수문자가 섞일 수 있으므로
+        # 파싱 없이 평문으로 전송해 리포트 자체 때문에 전송 실패가 나지 않도록 합니다.
+        bot.send_message(chat_id, report, parse_mode=None)
         
     except Exception as e:
         from src.utils.logger import log_error
@@ -628,12 +647,11 @@ def process_pre_checkout(pre_checkout_query):
 
 @bot.message_handler(content_types=['successful_payment'])
 def handle_payment_success(message):
-    """결제 완료 및 VIP 등급 승격 처리"""
+    """결제 완료 및 V 등급 승격 처리"""
     chat_id = message.chat.id
     
     try:
-        # DB의 users 테이블 구조(V -> VIP) 확인 필수
-        db_manager.upgrade_user_level(chat_id, level='VIP')
+        db_manager.upgrade_user_level(chat_id, level='V')
         
         # 💡 [핵심 교정 2] 텔레그램 마크다운 볼드는 ** 가 아니라 * 하나입니다.
         msg = (
@@ -646,40 +664,13 @@ def handle_payment_success(message):
         # EventBus를 통한 관리자 다이렉트 보고
         from src.core.event_bus import EventBus
         event_bus = EventBus()
-        admin_msg = f"💸 *[결제 발생]* Chat ID `{chat_id}` 님이 VIP로 승격되었습니다."
+        admin_msg = f"💸 *[결제 발생]* Chat ID `{chat_id}` 님이 V 등급으로 승격되었습니다."
         event_bus.publish('TELEGRAM_BROADCAST', {'message': admin_msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'Markdown'})
         
     except Exception as e:
         from src.utils.logger import log_error
         log_error(f"결제 완료 처리 중 시스템 에러: {e}")
         bot.send_message(chat_id, "✅ 결제는 확인되었으나 시스템 지연으로 등급 반영이 지연되고 있습니다. 관리자가 곧 수동으로 처리해 드릴 예정입니다.")
-
-@bot.message_handler(commands=['reload'])
-def handle_reload(message):
-    chat_id = message.chat.id
-    
-    # 관리자 검증
-    if str(chat_id) != str(ADMIN_ID):
-        bot.send_message(chat_id, "⛔ 관리 권한이 없습니다.")
-        return
-
-    msg_obj = bot.send_message(chat_id, "🔄 시스템 설정을 다시 읽어오는 중입니다...")
-
-    try:
-        from src.utils import kiwoom_utils
-        import src.engine.kiwoom_sniper_v2 as kiwoom_sniper_v2 
-        
-        # 💡 [핵심 교정 3] 전역 변수 CONF의 의존성을 끊어냈으므로, 
-        # 이제 reload는 스나이퍼 엔진(Sniper Engine) 내부의 캐시만 비워주는 역할로 축소시킵니다.
-        if kiwoom_sniper_v2.reload_config():
-            bot.edit_message_text("✅ 스나이퍼 엔진의 설정(JSON)이 성공적으로 새로고침 되었습니다!", chat_id, msg_obj.message_id)
-        else:
-            bot.edit_message_text("⚠️ 스나이퍼 엔진 갱신에 실패했습니다.", chat_id, msg_obj.message_id)
-            
-    except Exception as e:
-        from src.utils.logger import log_error
-        log_error(f"설정 새로고침 오류: {e}")
-        bot.edit_message_text(f"❌ 새로고침 중 치명적 오류 발생: {e}", chat_id, msg_obj.message_id)
 
 @bot.message_handler(func=lambda message: True)
 def handle_text_messages(message):
@@ -693,7 +684,9 @@ def start_telegram_bot():
     import requests.exceptions
     import random
     import traceback
+    import logging  # 💡 logging 모듈 추가
     global bot
+    
     retry_delay = 5  # seconds
     max_retry_delay = 60
     consecutive_failures = 0
@@ -701,32 +694,40 @@ def start_telegram_bot():
 
     while True:
         try:
-            bot.infinity_polling(timeout=10, long_polling_timeout=5)
-            # If polling returns without exception, connection was stable.
-            # Reset retry delay and failures.
+            # 💡 [핵심 최적화 1] 타임아웃을 넉넉하게 늘리고, 내부 에러 로그(CRITICAL)를 꺼서 화면을 깔끔하게 유지합니다.
+            bot.infinity_polling(
+                timeout=30, 
+                long_polling_timeout=20, 
+                logger_level=logging.CRITICAL
+            )
+            
+            # 폴링이 예외 없이 반환되면 안정화된 것으로 간주
             retry_delay = 5
             consecutive_failures = 0
             print("✅ 텔레그램 연결 안정화, 재시도 대기 시간 초기화.")
             continue
+            
         except requests.exceptions.ConnectionError as ce:
-            # Network-level connection error (reset by peer, timeout, etc.)
-            error_trace = traceback.format_exc()
-            log_error(f"텔레그램 네트워크 연결 오류: {ce}\n{error_trace}")
-            print(f"⚠️ 텔레그램 연결 순단 ({ce}). {retry_delay}초 후 재접속...")
+            if _is_transient_connection_issue(ce):
+                print(f"⚠️ [WS] 일시적 텔레그램 연결 순단 감지: {ce}. {retry_delay}초 후 재접속합니다...")
+            else:
+                log_error(f"텔레그램 ConnectionError 발생: {type(ce).__name__}: {ce}")
+                print(f"⚠️ 텔레그램 ConnectionError ({ce}). {retry_delay}초 후 재시도...")
+            
         except Exception as e:
-            # Any other exception (API errors, parsing, etc.)
+            # 기타 심각한 에러에 대해서만 전체 에러 트레이스백을 로깅합니다.
             error_trace = traceback.format_exc()
             log_error(f"텔레그램 봇 예외 발생: {e}\n{error_trace}")
             print(f"⚠️ 텔레그램 예외 ({e}). {retry_delay}초 후 재시도...")
 
-        # Exponential backoff with jitter
+        # 지수 백오프(Exponential backoff) 및 지터(Jitter) 대기
         consecutive_failures += 1
         retry_delay = min(retry_delay * 2, max_retry_delay)
-        jitter = random.uniform(0, 2)  # up to 2 seconds jitter
+        jitter = random.uniform(0, 2)
         sleep_time = retry_delay + jitter
-        print(f"⚠️ 재시도 {consecutive_failures}회 실패, {sleep_time:.1f}초 후 재접속...")
+        print(f"⚠️ 텔레그램 재시도 {consecutive_failures}회 실패, {sleep_time:.1f}초 후 재접속...")
 
-        # 연속 실패 횟수가 임계값을 넘으면 봇 인스턴스 재생성
+        # 연속 실패 횟수가 임계값을 넘으면 봇 인스턴스 완전 재생성
         if consecutive_failures >= max_consecutive_failures:
             print(f"🔄 연속 {consecutive_failures}회 실패로 봇 인스턴스를 재생성합니다.")
             try:
