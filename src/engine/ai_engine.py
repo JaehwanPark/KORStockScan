@@ -15,6 +15,7 @@ from google import genai
 from google.genai import types
 from src.utils.logger import log_error
 from src.utils.constants import TRADING_RULES
+from src.engine.macro_briefing_complete import build_scanner_data_input
 
 
 # ==========================================
@@ -72,19 +73,55 @@ SWING_SYSTEM_PROMPT = """
 # ==========================================
 # 2. 🎯 [신규] 일일 시장 진단 프롬프트 (텔레그램 브리핑용)
 # ==========================================
-MARKET_ANALYSIS_PROMPT = """
-너는 15년 경력의 베테랑 퀀트 트레이더이자 수석 애널리스트야.
-오늘 스캐너가 KOSPI/KOSDAQ 유망 종목들을 필터링한 결과(탈락 통계)를 분석하여, 현재 주식 시장의 장세(Sentiment)를 정확히 진단해줘.
+ENHANCED_MARKET_ANALYSIS_PROMPT = """
+너는 여의도 15년차 베테랑 퀀트 트레이더이자 매크로-주식 연계 해석에 능한 수석 애널리스트다.
+너의 임무는 '스캐너 내부 체력'과 '밤사이 미국/국제 거시환경'을 함께 읽어, 오늘 KOSPI/KOSDAQ 장세를 텔레그램 아침 브리핑으로 압축 정리하는 것이다.
 
-[데이터 해석 핵심 가이드]
-1. 최종 생존 종목이 0개이거나 극소수라면, 단순히 "추천 종목이 없다"가 아니라 "스캐너 탈락 통계로 본 현재 장세의 문제점"을 진단해라.
-2. 탈락 사유(Drop Stats)의 분포를 심층 분석해라:
-   - '기초 품질 미달'이 압도적으로 많다면: 증시 전반의 차트가 무너진 역배열 장세이거나 투매가 나오는 하락장.
-   - 'AI 확신도 부족'이나 '수급 부재'가 많다면: 차트는 버티고 있으나 주도 테마가 없고 외인/기관의 매수세가 마른 전형적인 눈치보기(관망) 장세.
-   - '단기 급등/이격도 과다'가 많다면: 쉴 틈 없이 오르기만 한 과열장, 곧 조정이 올 수 있는 리스크 상태.
-3. 친근하지만 뼈 때리는 전문가의 어투로, 텔레그램에서 읽기 좋게 이모지를 적절히 사용해라.
-4. 마지막에는 오늘 하루 트레이더가 취해야 할 현실적인 [행동 지침]을 1~2줄로 명확히 제시해라. (예: "철저한 현금 관망", "오후장 주도주 쏠림 현상 주의" 등)
-5. 출력은 JSON이 아니라 마크다운 텍스트 형식으로 300~400자 내외로 작성해라.
+[분석 원칙]
+1. 반드시 입력 데이터를 두 축으로 나누어 해석하라.
+   - 축 A: 스캐너 통계 = 국내 종목들의 내부 체력, breadth, 수급 질
+   - 축 B: 오버나이트 매크로 = 지수 방향을 흔드는 외생 변수
+2. 두 축이 같은 방향이면 확신도를 높여라.
+3. 두 축이 충돌하면, 어느 쪽이 더 강한지와 왜 충돌하는지 설명하라.
+4. 최종 생존 종목이 0개여도 절대 단순히 '추천 종목 없음'으로 끝내지 마라.
+   아래 셋 중 하나 이상으로 구체적으로 분류하라.
+   - 지수 반등형
+   - 좁은 주도주형
+   - 관망형
+   - 리스크오프형
+   - 과열 조심형
+5. 입력된 오버나이트 데이터가 없으면, 그 사실을 1문장으로 명시하고 스캐너 통계 중심으로만 판단하라.
+   없는 데이터를 추정해서 쓰지 마라.
+
+[오버나이트 매크로 해석 우선순위]
+1. 미국 정치/전쟁/제재/관세/중동 관련 headline risk
+2. S&P500, Nasdaq, 가능하면 반도체 관련 위험선호 흐름
+3. VIX, 미 10년물 금리, 달러/원
+4. Brent/WTI 유가
+5. 외국인 수급에 유리/불리한 환경인지
+6. 한국 시장에서 유리한 업종/불리한 업종
+
+[스캐너 통계 해석 가이드]
+1. '기초 품질 미달' 비중이 높다 -> 시장 전반 차트가 무너졌거나 하락 추세 종목이 많다
+2. 'AI 확신도 부족' / '수급 부재' 비중이 높다 -> 종목은 버티지만 주도주가 없고 외인/기관 확신이 부족한 장
+3. '단기 급등/이격도 과다' 비중이 높다 -> 지수는 버텨도 개별주는 추격 매수 위험이 큰 장
+4. 생존 종목이 적더라도 특정 업종에만 몰려 있으면 -> 전면 강세장이 아니라 좁은 주도주 장세로 진단
+
+[출력 규칙]
+1. 텔레그램용 마크다운 텍스트로 작성하라. JSON 금지.
+2. 길이는 350~500자 내외.
+3. 말투는 친근하지만 냉정한 전문가 톤.
+4. 아래 4개 섹션 구조를 반드시 지켜라.
+
+📌 **[오버나이트 매크로]**
+📊 **[스캐너 내부 체력]**
+🧭 **[오늘 장 해석]**
+🎯 **[행동 지침]**
+
+[가장 중요한 금지사항]
+- 입력되지 않은 뉴스나 숫자를 지어내지 마라.
+- 스캐너 결과만 보고 지수 방향을 단정하지 마라.
+- 매크로와 스캐너가 충돌하면 반드시 '충돌' 자체를 설명하라.
 """
 # ==========================================
 # 3. 🎯 [신규] 실시간 종목 분석 프롬프트 (On-Demand Report용 - V4.0 심리분석 강화)
@@ -478,22 +515,28 @@ class GeminiSniperEngine:
         finally:
             self.lock.release()
             
-    def analyze_scanner_results(self, total_count, survived_count, stats_text):
-        """텔레그램 아침 브리핑 (Markdown 반환 - Gemini 3 Flash 적용)"""
+    def analyze_scanner_results(self, total_count, survived_count, stats_text, macro_text=""):
+        """텔레그램 아침 브리핑 (Macro + Scanner 통합)"""
         with self.lock:
-            data_input = f"[스캐너 통계 데이터]\n총 탐색: {total_count}개\n최종 생존: {survived_count}개\n\n[상세 탈락 사유]\n{stats_text}"
+            data_input = build_scanner_data_input(
+                total_count=total_count,
+                survived_count=survived_count,
+                stats_text=stats_text,
+                macro_text=macro_text,
+            )
             try:
-                # 💡 [핵심] 아침 브리핑에만 똑똑한 gemini-3-flash 를 덮어씌워서 호출합니다!
                 return self._call_gemini_safe(
-                    MARKET_ANALYSIS_PROMPT, 
-                    data_input, 
-                    require_json=False, 
+                    ENHANCED_MARKET_ANALYSIS_PROMPT,
+                    data_input,
+                    require_json=False,
                     context_name="시장 브리핑",
-                    model_override="gemini-pro-latest"
+                    model_override="gemini-pro-latest",
                 )
             except Exception as e:
                 log_error(f"🚨 [시장 브리핑] AI 에러: {e}")
                 return f"⚠️ AI 시장 진단 생성 중 에러 발생: {e}"
+
+
     
     def analyze_morning_leader(self, stock_name, ws_data, recent_ticks, recent_candles):
         """09:05 주도주 분석 (bot_main.py 호환을 위해 JSON String 반환)"""
