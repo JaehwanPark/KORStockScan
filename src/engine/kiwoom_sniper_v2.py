@@ -100,8 +100,6 @@ TIME_09_10 = datetime.strptime("09:10:00", "%H:%M:%S").time()
 TIME_10_30 = datetime.strptime("10:30:00", "%H:%M:%S").time()
 TIME_11_00 = datetime.strptime("11:00:00", "%H:%M:%S").time()
 TIME_15_30 = datetime.strptime("15:30:00", "%H:%M:%S").time()
-TIME_16_00 = datetime.strptime("16:00:00", "%H:%M:%S").time()
-TIME_19_15 = datetime.strptime("19:15:00", "%H:%M:%S").time()
 TIME_20_00 = datetime.strptime("20:00:00", "%H:%M:%S").time()
 TIME_23_59 = datetime.strptime("23:59:59", "%H:%M:%S").time()
 # -------------------------------------------------------------------
@@ -1587,8 +1585,8 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
         log_info(f"[DEBUG] {code} 쿨다운 중 (만료 시간 {cooldowns[code]})")
         return
 
-    if strategy == 'SCALPING' and now_t >= TIME_16_00:
-        log_info(f"[DEBUG] {code} SCALPING 16:00 이후 제외")
+    if strategy == 'SCALPING' and now_t >= TIME_15_30:
+        log_info(f"[DEBUG] {code} SCALPING 15:30 이후 제외")
         return
 
     if code in alerted_stocks:
@@ -2181,7 +2179,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                 is_sell_signal = True
                 sell_reason_type = "TIMEOUT"
                 reason = f"⏱️ {getattr(TRADING_RULES, 'SCALP_TIME_LIMIT_MIN', 30)}분 타임아웃 (순환매 우선)"
-            elif now_t >= TIME_19_15:
+            elif now_t >= TIME_15_30 and profit_rate >= getattr(TRADING_RULES, 'MIN_FEE_COVER', 0.1):
                 is_sell_signal = True
                 sell_reason_type = "CLOSE"
                 reason = "⏰ 장 마감 전 현금화"
@@ -2341,7 +2339,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             if ord_no:
                 stock['sell_odno'] = ord_no
 
-            if strategy == 'SCALPING' and now_t < TIME_19_15:
+            if strategy == 'SCALPING' and now_t < TIME_15_30:
                 cooldowns[code] = time.time() + 1200
                 alerted_stocks.discard(code)
                 print(f"♻️ [{stock['name']}] 스캘핑 청산 완료 후 20분 쿨타임 진입.")
@@ -2399,8 +2397,8 @@ def check_watching_conditions(stock, code, ws_data, admin_id, radar=None, ai_eng
     if code in cooldowns and time.time() < cooldowns[code]:
         return f"쿨다운 중 (만료 시간 {cooldowns[code]})"
     
-    if strategy == 'SCALPING' and now_t >= TIME_16_00:
-        return "SCALPING 16:00 이후 제외"
+    if strategy == 'SCALPING' and now_t >= TIME_15_30:
+        return "SCALPING 15:30 이후 제외"
     
     if code in alerted_stocks:
         return "이미 alerted_stocks에 포함됨"
@@ -2529,7 +2527,7 @@ def check_holding_conditions(stock, code, ws_data, admin_id, market_regime, rada
         
         # 시간 초과 및 장 마감
         held_time_min = 0  # 계산 생략
-        if now_t >= TIME_19_15:
+        if now_t >= TIME_15_30 and profit_rate >= getattr(TRADING_RULES, 'MIN_FEE_COVER', 0.1):
             return "장 마감 전 현금화"
     
     # 코스닥 스윙 전략 검사 (간략화)
@@ -3004,8 +3002,8 @@ def handle_real_execution(exec_data):
                     print(f"⚠️ [수익률 계산 불가] ID {target_id}의 매수가(buy_price)가 누락되어 수익률을 0%로 처리합니다.")
                 raw_strategy = (record.strategy or target_stock.get('strategy') or 'KOSPI_ML').upper()
                 strategy = 'SCALPING' if raw_strategy in ['SCALPING', 'SCALP'] else raw_strategy
-                # ✅ 일관성 통일: 16:00 이전까지만 스캘핑 부활
-                is_scalp_revive = (strategy == 'SCALPING') and (now_t < TIME_16_00)
+                # ✅ 일관성 통일: 15:30 이전까지만 스캘핑 부활
+                is_scalp_revive = (strategy == 'SCALPING') and (now_t < TIME_15_30)
         except Exception as e:
             log_error(f"🚨 [DB 조회 에러] ID {target_id} SELL 처리 중 에러: {e}")
             return
@@ -3431,3 +3429,4 @@ if __name__ == "__main__":
         run_sniper(is_test_mode=True)
     except KeyboardInterrupt:
         print("\n🛑 테스트를 사용자에 의해 종료합니다.")
+
