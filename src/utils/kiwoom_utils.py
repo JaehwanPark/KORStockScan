@@ -1204,3 +1204,23 @@ def get_target_price_by_percent(curr_price, drop_percent=0.5):
         
     return price
 
+def get_target_price_up(curr_price, up_percent=0.5):
+    """
+    [스캘핑 전용] 현재가에서 목표 퍼센트(%)만큼 상승한 가격을
+    한국 주식시장 호가 규격에 딱 맞춰서 계산해 줍니다.
+
+    예: 19,900원에서 0.5% 상승(+99.5원) -> 20,000원으로 자동 맞춤
+    """
+    if curr_price <= 0:
+        return 0
+
+    # 1. 퍼센트를 적용한 이상적인 목표가 계산
+    ideal_target = curr_price * (1 + (up_percent / 100.0))
+
+    # 2. 현재가에서 호가를 하나씩 올리면서 목표가에 가장 근접한 실제 호가를 찾음
+    price = curr_price
+    while price < ideal_target:
+        tick = get_tick_size(price)
+        price += tick
+
+    return price

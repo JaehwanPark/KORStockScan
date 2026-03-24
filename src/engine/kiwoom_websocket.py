@@ -230,7 +230,9 @@ class KiwoomWSManager:
                     "kospi_midterm_swing_01", # 💡 [신규] 14:30 ~ 15:30 종가/다음날 중기 스윙
                     "vcp_candid_01",       # 💡 [VCP 1단계] 15:30 ~ VCP 예비 후보 (다음날용)
                     "vcp_shooting_01",     # 💡 [VCP 2단계] 09:00 ~ 15:00 VCP 당일 슈팅
-                    "vcp_shooting_next_01" # 💡 [VCP 3단계] 15:30 ~ VCP 다음날 시초가 예약 매수
+                    "vcp_shooting_next_01", # 💡 [VCP 3단계] 15:30 ~ VCP 다음날 시초가 예약 매수
+                    "s15_scan_base_01",     # 💡 [S15 1단계] 09:02 ~ 10:30 S15 예비 후보 
+                    "s15_trigger_break_01" # 💡 [S15 2단계] 09:05 ~ 11:00 S15 트리거 브레이크 
                 ]
                 # 🚨 주의: 다중 검색식을 찾을 때는 여기서 break를 쓰면 안 됩니다!
 
@@ -499,3 +501,10 @@ class KiwoomWSManager:
     def get_latest_data(self, code):
         with self.lock:
             return self.realtime_data.get(code, {})
+
+    def get_all_data(self, codes):
+        """Return dict of latest data for multiple codes, acquiring lock once."""
+        if isinstance(codes, str):
+            codes = [codes]
+        with self.lock:
+            return {code: self.realtime_data.get(code, {}) for code in codes}
