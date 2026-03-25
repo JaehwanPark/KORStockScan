@@ -121,21 +121,103 @@ def _arm_s15_candidate(code, name, cnd_name, ttl_sec=180):
             'base_condition': cnd_name,
             'expires_at': now + ttl_sec,
         }
+    try:
+        _save_armed_candidate_to_db(code, name, cnd_name, now, now + ttl_sec)
+    except Exception as e:
+        log_error(f"🚨 S15 armed candidate DB 저장 실패 ({code}): {e}")
 
 def _unarm_s15_candidate(code):
     with FAST_LOCK:
         FAST_SCALP_POOL.pop(code, None)
+    _delete_armed_candidate_from_db(code)
+
+def _save_armed_candidate_to_db(code, name, cnd_name, armed_at, expires_at):
+    today = datetime.now().date()
+    with DB.get_session() as session:
+        record = session.query(RecommendationHistory).filter_by(
+            rec_date=today,
+            stock_code=code,
+            strategy='S15_CANDID'
+        ).first()
+        if record:
+            record.stock_name = name
+            record.position_tag = 'S15_CANDID:' + cnd_name
+            record.nxt = armed_at
+            record.profit_rate = expires_at
+        else:
+            record = RecommendationHistory(
+                rec_date=today,
+                stock_code=code,
+                stock_name=name,
+                trade_type='SCALP',
+                strategy='S15_CANDID',
+                status='WATCHING',
+                position_tag='S15_CANDID:' + cnd_name,
+                prob=0.0,
+                nxt=armed_at,
+                profit_rate=expires_at,
+                buy_price=0,
+                buy_qty=0
+            )
+            session.add(record)
+
+def _delete_armed_candidate_from_db(code):
+    today = datetime.now().date()
+    with DB.get_session() as session:
+        session.query(RecommendationHistory).filter_by(
+            rec_date=today,
+            stock_code=code,
+            strategy='S15_CANDID'
+        ).delete()
+
+def _restore_armed_candidates_from_db():
+    """봇 재시작 시 DB에 저장된 S15_CANDID 후보들을 FAST_SCALP_POOL에 복원합니다."""
+    today = datetime.now().date()
+    now = _now_ts()
+    with DB.get_session() as session:
+        records = session.query(RecommendationHistory).filter_by(
+            rec_date=today,
+            strategy='S15_CANDID',
+            status='WATCHING'
+        ).all()
+        for rec in records:
+            code = rec.stock_code
+            name = rec.stock_name
+            cnd_name = rec.position_tag.replace('S15_CANDID:', '') if rec.position_tag else ''
+            armed_at = rec.nxt if rec.nxt else 0.0
+            expires_at = rec.profit_rate if rec.profit_rate else 0.0
+            if expires_at < now:
+                # 이미 만료된 후보는 DB에서 삭제
+                session.query(RecommendationHistory).filter_by(
+                    rec_date=today,
+                    stock_code=code,
+                    strategy='S15_CANDID'
+                ).delete()
+                continue
+            with FAST_LOCK:
+                FAST_SCALP_POOL[code] = {
+                    'name': name or code,
+                    'cnd_name': cnd_name,
+                    'armed_at': armed_at,
+                    'expires_at': expires_at
+                }
+        session.commit()
 
 def _is_s15_armed(code):
     now = _now_ts()
+    need_unarm = False
     with FAST_LOCK:
         item = FAST_SCALP_POOL.get(code)
         if not item:
             return False
         if item.get('expires_at', 0) < now:
             FAST_SCALP_POOL.pop(code, None)
-            return False
-        return True
+            need_unarm = True
+        else:
+            return True
+    if need_unarm:
+        _unarm_s15_candidate(code)
+    return False
 
 def _is_s15_reentry_blocked(code):
     return FAST_REENTRY_BLOCK.get(code, 0) > _now_ts()
@@ -3222,6 +3304,7 @@ def run_sniper(is_test_mode=False):
         print(f"🤖 제미나이 AI 엔진이 {len(api_keys)}개의 API 키로 가동됩니다.")
 
     ACTIVE_TARGETS = DB.get_active_targets() or []
+    _restore_armed_candidates_from_db()
     # ==========================================
     # 💡 [추가 1] 봇 시작 시 불러온 종목들의 진입 시간 기록
     # ==========================================
