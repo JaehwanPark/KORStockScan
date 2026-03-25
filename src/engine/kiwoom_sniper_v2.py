@@ -79,6 +79,7 @@ event_bus = EventBus() # 💡 [신규] 전역 이벤트 버스 장착!
 global ACTIVE_TARGETS
 ACTIVE_TARGETS = []
 LAST_AI_CALL_TIMES = {}
+LAST_LOG_TIMES = {}
 
 # ==========================================
 # ⚡ [S15 v2] Fast-Track 상태 관리
@@ -1983,6 +1984,14 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
     profit_rate = (curr_p - buy_p) / buy_p * 100
     peak_profit = (highest_prices[code] - buy_p) / buy_p * 100
 
+    # 로깅: KOSPI_ML/KOSDAQ_ML 보유 종목 감시 로그 (10분 간격)
+    if strategy in ('KOSPI_ML', 'KOSDAQ_ML'):
+        last_log = LAST_LOG_TIMES.get(code, 0)
+        if time.time() - last_log >= 600:  # 10 minutes
+            current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
+            log_info(f"[{strategy}] 보유 종목 감시 중: {stock['name']}({code}) 수익률 {profit_rate:+.2f}%, AI 점수 {current_ai_score:.0f}점")
+            LAST_LOG_TIMES[code] = time.time()
+
     # 💡 [V15.1 신규] 일반 SCALPING(MIDDLE) 선제적 출구 엔진 (기존 로직 우회)
     if stock.get('exit_mode') == 'SCALP_PRESET_TP':
         # 중복 청산 방지
@@ -2210,8 +2219,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             reason = f"🛑 KOSDAQ 전용 방어선 이탈 ({getattr(TRADING_RULES, 'KOSDAQ_STOP', -2.0)}%)"
 
 
-    # 3️⃣ 코스피 우량주 스윙 (KOSPI_ML 및 기본값)
-    else:
+    # 3️⃣ 코스피 우량주 스윙 (KOSPI_ML 전용)
+    elif strategy == 'KOSPI_ML':
         pos_tag = stock.get('position_tag', 'MIDDLE')
         if pos_tag == 'BREAKOUT':
             current_stop_loss = getattr(TRADING_RULES, 'STOP_LOSS_BREAKOUT')
@@ -2233,17 +2242,13 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
         except Exception:
             pass
 
-        if not is_sell_signal and peak_profit >= getattr(TRADING_RULES, 'TRAILING_START_PCT'):
-            drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100
-            if drawdown >= getattr(TRADING_RULES, 'TRAILING_DRAWDOWN_PCT'):
-                is_sell_signal = True
-                sell_reason_type = "TRAILING"
-                reason = f"🏆 가변익절 (+{getattr(TRADING_RULES, 'TRAILING_START_PCT')}% 도달 후 하락)"
-            elif profit_rate <= getattr(TRADING_RULES, 'MIN_PROFIT_PRESERVE'):
-                is_sell_signal = True
-                sell_reason_type = "TRAILING"
-                reason = f"수익 보존 (최소 {getattr(TRADING_RULES, 'MIN_PROFIT_PRESERVE')}%)"
+        # 익절 목표 도달 시 즉시 매도 (트레일링 없음)
+        if not is_sell_signal and profit_rate >= getattr(TRADING_RULES, 'TRAILING_START_PCT'):
+            is_sell_signal = True
+            sell_reason_type = "PROFIT"
+            reason = f"🎯 목표 수익률 도달 (+{getattr(TRADING_RULES, 'TRAILING_START_PCT')}%)"
 
+        # 손절선 도달
         elif not is_sell_signal and profit_rate <= current_stop_loss:
             is_sell_signal = True
             sell_reason_type = "LOSS"
