@@ -2,6 +2,8 @@ import asyncio
 import websockets
 import json
 import threading
+import copy
+from collections import deque
 from queue import Queue, Empty
 from datetime import datetime
 
@@ -52,6 +54,27 @@ class KiwoomWSManager:
         self.condition_dict = {} # 💡 [추가] 일련번호(seq)와 검색식 이름을 매핑할 사전
         
         print(f"🌐 [WS] 웹소켓 매니저 초기화 완료 (Target: {self.uri})")
+    
+    @staticmethod
+    def _safe_abs_int(val, default=0):
+        try:
+            return abs(int(float(str(val).replace(',', '').strip())))
+        except Exception:
+            return default
+
+    @staticmethod
+    def _safe_signed_int(val, default=0):
+        try:
+            return int(float(str(val).replace(',', '').replace('+', '').strip()))
+        except Exception:
+            return default
+
+    def _snapshot_target(self, target):
+        snapshot = copy.deepcopy(target)
+        for key in ("price_history", "v_pw_history", "signed_volume_history", "program_history"):
+            if isinstance(snapshot.get(key), deque):
+                snapshot[key] = list(snapshot[key])
+        return snapshot
     
     def _enqueue_state_event(self, event_type, payload):
         if self._stop_event.is_set():
@@ -351,9 +374,11 @@ class KiwoomWSManager:
                             # 1. 초기 데이터 구조 생성
                             if item_code not in self.realtime_data:
                                 self.realtime_data[item_code] = {
-                                    'curr': 0, 'v_pw': 0, 'ask_tot': 0, 'bid_tot': 0, 
+                                    'curr': 0, 'v_pw': 0, 'ask_tot': 0, 'bid_tot': 0,
                                     'volume': 0, 'time': '', 'fluctuation': 0.0, 'open': 0,
-                                    'orderbook': {'asks': [], 'bids': []}
+                                    'orderbook': {'asks': [], 'bids': []},
+                                    'prog_net_qty': 0, 'prog_delta_qty': 0,
+                                    'prog_net_amt': 0, 'prog_delta_amt': 0
                                 }
                             
                             target = self.realtime_data[item_code]
@@ -395,6 +420,13 @@ class KiwoomWSManager:
                                 
                                 target['orderbook']['asks'] = asks[::-1]
                                 target['orderbook']['bids'] = bids
+                            
+                            # '0w' 프로그램 매매 데이터 파싱
+                            if real_type == '0w':
+                                if '210' in values: target['prog_net_qty'] = safe_int(values['210'])
+                                if '211' in values: target['prog_delta_qty'] = safe_int(values['211'])
+                                if '212' in values: target['prog_net_amt'] = safe_int(values['212'])
+                                if '213' in values: target['prog_delta_amt'] = safe_int(values['213'])
                             
                             target['time'] = datetime.now().strftime('%H:%M:%S')
                             
@@ -441,7 +473,8 @@ class KiwoomWSManager:
                     'refresh': '1',
                     'data': [
                         {'item': codes, 'type': ['0B']},
-                        {'item': codes, 'type': ['0D']}
+                        {'item': codes, 'type': ['0D']},
+                        {'item': codes, 'type': ['0w']}
                     ]
                 }
                 await self.websocket.send(json.dumps(reg_packet))

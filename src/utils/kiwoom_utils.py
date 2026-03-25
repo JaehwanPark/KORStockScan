@@ -1224,3 +1224,128 @@ def get_target_price_up(curr_price, up_percent=0.5):
         price += tick
 
     return price
+
+def get_investor_flow_summary_ka10059(token, code, base_dt=None):
+    """[ka10059] 외인/기관/세부 기관 수급 요약"""
+    df = get_investor_daily_ka10059_df(token, code, base_dt=base_dt)
+    res = {
+        "foreign_net": 0,
+        "inst_net": 0,
+        "retail_net": 0,
+        "fin_net": 0,
+        "trust_net": 0,
+        "pension_net": 0,
+        "private_net": 0,
+        "smart_money_net": 0,
+    }
+    if df.empty:
+        return res
+
+    latest = df.iloc[-1]
+    res["foreign_net"] = int(latest.get("Foreign_Net", 0))
+    res["inst_net"] = int(latest.get("Inst_Net", 0))
+    res["retail_net"] = int(latest.get("Retail_Net", 0))
+    res["fin_net"] = int(latest.get("Fin_Net", 0))
+    res["trust_net"] = int(latest.get("Trust_Net", 0))
+    res["pension_net"] = int(latest.get("Pension_Net", 0))
+    res["private_net"] = int(latest.get("Private_Net", 0))
+    res["smart_money_net"] = res["foreign_net"] + res["inst_net"]
+    return res
+
+
+def summarize_ticks_for_realtime_ka10003(token, code, limit=20):
+    """[ka10003] 최근 체결정보를 실시간 분석용 매수/매도 편향 요약으로 변환"""
+    ticks = get_tick_history_ka10003(token, code, limit=limit)
+    res = {
+        "trade_qty_signed_now": 0,
+        "buy_exec_qty": 0,
+        "sell_exec_qty": 0,
+        "buy_ratio_now": 0.0,
+        "buy_ratio_1m": 0.0,
+        "buy_ratio_3m": 0.0,
+        "tape_bias": "중립",
+    }
+    if not ticks:
+        return res
+
+    buy_qty = sum(int(t.get("volume", 0)) for t in ticks if t.get("dir") == "BUY")
+    sell_qty = sum(int(t.get("volume", 0)) for t in ticks if t.get("dir") == "SELL")
+    total = buy_qty + sell_qty
+
+    res["buy_exec_qty"] = buy_qty
+    res["sell_exec_qty"] = sell_qty
+    if total > 0:
+        res["buy_ratio_now"] = (buy_qty / total) * 100.0
+        res["buy_ratio_1m"] = res["buy_ratio_now"]
+        res["buy_ratio_3m"] = res["buy_ratio_now"]
+
+    if buy_qty > sell_qty:
+        res["tape_bias"] = "매수 우세"
+        res["trade_qty_signed_now"] = buy_qty - sell_qty
+    elif sell_qty > buy_qty:
+        res["tape_bias"] = "매도 우세"
+        res["trade_qty_signed_now"] = -(sell_qty - buy_qty)
+
+    return res
+
+
+def _coerce_int(value, default=0):
+    try:
+        return int(float(str(value).replace(",", "").replace("+", "").strip()))
+    except Exception:
+        return default
+
+
+def _coerce_float(value, default=0.0):
+    try:
+        return float(str(value).replace(",", "").replace("+", "").strip())
+    except Exception:
+        return default
+
+
+def _window_average(history, value_key, last_n):
+    if not history:
+        return 0.0
+    values = []
+    for item in list(history)[-last_n:]:
+        if isinstance(item, dict):
+            values.append(_coerce_float(item.get(value_key), 0.0))
+        else:
+            values.append(_coerce_float(item, 0.0))
+    values = [v for v in values if v != 0.0]
+    return float(sum(values) / len(values)) if values else 0.0
+
+
+def _window_signed_ratio(history, last_n):
+    if not history:
+        return 0.0, 0, 0, 0
+    series = list(history)[-last_n:]
+    buy_qty = sum(abs(_coerce_int(item.get("qty", 0))) for item in series if _coerce_int(item.get("qty", 0)) > 0)
+    sell_qty = sum(abs(_coerce_int(item.get("qty", 0))) for item in series if _coerce_int(item.get("qty", 0)) < 0)
+    signed_now = _coerce_int(series[-1].get("qty", 0)) if series else 0
+    total = buy_qty + sell_qty
+    ratio = (buy_qty / total) * 100.0 if total > 0 else 0.0
+    return ratio, signed_now, buy_qty, sell_qty
+
+
+def _build_daily_setup_desc(ctx):
+    curr_price = ctx.get("curr_price", 0)
+    ma5 = ctx.get("ma5", 0)
+    ma20 = ctx.get("ma20", 0)
+    prev_high = ctx.get("prev_high", 0)
+    vol_ratio = ctx.get("vol_ratio", 0.0)
+    near_20d_high_pct = ctx.get("near_20d_high_pct", 0.0)
+
+    if curr_price > 0 and prev_high > 0 and curr_price >= prev_high:
+        return "전일 고점 돌파 시도"
+    if ma5 > 0 and ma20 > 0 and ma5 >= ma20 and curr_price >= ma20:
+        return "정배열 / 상승추세"
+    if ma20 > 0 and curr_price >= ma20 and vol_ratio >= 120:
+        return "20일선 위 거래량 동반"
+    if near_20d_high_pct >= -2.0:
+        return "20일 신고가 근접"
+    if ma20 > 0 and curr_price < ma20:
+        return "중립 또는 약세"
+    return "박스 또는 눌림 구간"
+
+
