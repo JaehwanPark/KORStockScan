@@ -92,17 +92,29 @@ FAST_LOCK = threading.RLock()
 # 💡 [스레드 안전성] 공유 상태 접근용 락
 _state_lock = threading.RLock()
 
-# 💡 [최적화] 매번 파싱(strptime)하지 않도록 주요 시간 객체를 미리 생성해둡니다.
-TIME_07_00 = datetime.strptime("07:00:00", "%H:%M:%S").time()
-TIME_09_00 = datetime.strptime("09:00:00", "%H:%M:%S").time()
-TIME_09_03 = datetime.strptime("09:03:00", "%H:%M:%S").time()
-TIME_09_05 = datetime.strptime("09:05:00", "%H:%M:%S").time()
-TIME_09_10 = datetime.strptime("09:10:00", "%H:%M:%S").time()
-TIME_10_30 = datetime.strptime("10:30:00", "%H:%M:%S").time()
-TIME_11_00 = datetime.strptime("11:00:00", "%H:%M:%S").time()
-TIME_15_30 = datetime.strptime("15:30:00", "%H:%M:%S").time()
-TIME_20_00 = datetime.strptime("20:00:00", "%H:%M:%S").time()
-TIME_23_59 = datetime.strptime("23:59:59", "%H:%M:%S").time()
+# 💡 [시간 제어] KRX 거래시간 확대에 대비해 주요 컷오프를 TRADING_RULES 에서 읽습니다.
+def _rule_time(rule_name, default_value):
+    raw = getattr(TRADING_RULES, rule_name, default_value)
+    if isinstance(raw, dt_time):
+        return raw
+    try:
+        return datetime.strptime(str(raw), "%H:%M:%S").time()
+    except Exception:
+        return datetime.strptime(default_value, "%H:%M:%S").time()
+
+TIME_07_00 = _rule_time("PREMARKET_START_TIME", "07:00:00")
+TIME_09_00 = _rule_time("MARKET_OPEN_TIME", "09:00:00")
+TIME_09_03 = _rule_time("SCALPING_EARLIEST_BUY_TIME", "09:03:00")
+TIME_09_05 = _rule_time("SWING_EARLIEST_BUY_TIME", "09:05:00")
+TIME_09_10 = _rule_time("MORNING_BATCH_END_TIME", "09:10:00")
+TIME_10_30 = _rule_time("MORNING_SCALPING_END_TIME", "10:30:00")
+TIME_11_00 = _rule_time("MIDDAY_SCALPING_END_TIME", "11:00:00")
+TIME_SCALPING_NEW_BUY_CUTOFF = _rule_time("SCALPING_NEW_BUY_CUTOFF", "15:00:00")
+TIME_SCALPING_OVERNIGHT_DECISION = _rule_time("SCALPING_OVERNIGHT_DECISION_TIME", "15:15:00")
+TIME_MARKET_CLOSE = _rule_time("MARKET_CLOSE_TIME", "15:30:00")
+TIME_15_30 = TIME_MARKET_CLOSE
+TIME_20_00 = _rule_time("SYSTEM_SHUTDOWN_TIME", "20:00:00")
+TIME_23_59 = _rule_time("SYSTEM_DAY_END_TIME", "23:59:59")
 # -------------------------------------------------------------------
 
 def _in_time_window(now_value, start, end):
@@ -271,6 +283,209 @@ def _weighted_avg(amount, qty):
     if qty <= 0:
         return 0
     return int(amount / qty)
+
+def _send_market_exit_now(code, qty, token):
+    """정규장 중 즉시 시장가 청산용 공통 래퍼"""
+    return kiwoom_orders.send_sell_order_market(
+        code=code,
+        qty=qty,
+        token=token,
+        order_type="3"
+    )
+
+
+def _find_active_target_by_code(code):
+    code = str(code).strip()[:6]
+    for item in ACTIVE_TARGETS:
+        if str(item.get('code', '')).strip()[:6] == code:
+            return item
+    return None
+
+
+def _calc_held_minutes(stock=None, db_record=None):
+    buy_time = None
+    if stock and stock.get('buy_time'):
+        buy_time = stock.get('buy_time')
+    elif db_record is not None:
+        buy_time = getattr(db_record, 'buy_time', None)
+
+    if not buy_time:
+        return 0.0
+
+    try:
+        if isinstance(buy_time, datetime):
+            buy_dt = buy_time
+        else:
+            buy_str = str(buy_time)
+            try:
+                buy_dt = datetime.fromisoformat(buy_str)
+            except Exception:
+                buy_dt = datetime.combine(datetime.now().date(), datetime.strptime(buy_str, '%H:%M:%S').time())
+        return max(0.0, (datetime.now() - buy_dt).total_seconds() / 60.0)
+    except Exception:
+        return 0.0
+
+
+def _build_scalping_overnight_ctx(record, mem_stock=None, ws_data=None):
+    ctx = kiwoom_utils.build_realtime_analysis_context(
+        KIWOOM_TOKEN,
+        record.stock_code,
+        position_status=record.status,
+        ws_data=ws_data,
+    )
+
+    avg_price = int(float(getattr(record, 'buy_price', 0) or (mem_stock.get('buy_price', 0) if mem_stock else 0) or 0))
+    curr_price = int(float(ctx.get('curr_price', 0) or 0))
+    pnl_pct = ((curr_price - avg_price) / avg_price * 100.0) if avg_price > 0 and curr_price > 0 else 0.0
+
+    ctx['stock_name'] = getattr(record, 'stock_name', '') or (mem_stock.get('name') if mem_stock else '')
+    ctx['stock_code'] = record.stock_code
+    ctx['position_status'] = record.status
+    ctx['avg_price'] = avg_price
+    ctx['pnl_pct'] = pnl_pct
+    ctx['held_minutes'] = _calc_held_minutes(mem_stock, record)
+    ctx['strat_label'] = 'SCALPING_EOD_REVIEW'
+    if mem_stock and mem_stock.get('rt_ai_prob') is not None:
+        try:
+            ctx['score'] = float(mem_stock.get('rt_ai_prob', 0.5) or 0.5) * 100.0
+        except Exception:
+            pass
+    ctx['order_status_note'] = (
+        f"db_status={record.status}, buy_qty={int(float(getattr(record, 'buy_qty', 0) or 0))}, "
+        f"sell_ord_no={(mem_stock or {}).get('sell_odno', '') if mem_stock else ''}"
+    )
+    return ctx
+
+
+def _publish_scalping_overnight_decision(stock_name, code, decision, action_taken):
+    confidence = int(decision.get('confidence', 0) or 0)
+    reason = decision.get('reason', '')
+    risk_note = decision.get('risk_note', '')
+    chosen = decision.get('action', 'SELL_TODAY')
+    msg = (
+        f"🌙 **[15:15 SCALPING EOD 판정]**\n"
+        f"종목: **{stock_name} ({code})**\n"
+        f"AI 결정: `{chosen}` ({confidence}점)\n"
+        f"실행: `{action_taken}`\n"
+        f"사유: {reason}\n"
+        f"리스크: {risk_note}"
+    )
+    event_bus.publish(
+        'TELEGRAM_BROADCAST',
+        {'message': msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'Markdown'}
+    )
+
+
+def _execute_scalping_sell_today(record, mem_stock=None):
+    code = str(record.stock_code).strip()[:6]
+    stock_name = getattr(record, 'stock_name', code)
+    expected_qty = int(float(getattr(record, 'buy_qty', 0) or (mem_stock.get('buy_qty', 0) if mem_stock else 0) or 0))
+    orig_ord_no = ''
+    if mem_stock:
+        orig_ord_no = mem_stock.get('sell_odno', '') or mem_stock.get('sell_ord_no', '') or ''
+
+    rem_qty = _confirm_cancel_or_reload_remaining(code, orig_ord_no, KIWOOM_TOKEN, expected_qty)
+    if rem_qty <= 0:
+        print(f"⚠️ [15:15 EOD] {stock_name}({code}) 청산 대상이지만 잔량 확인 실패/0주. 시장가 청산 생략")
+        return False, '잔량 없음 또는 확인 실패'
+
+    res = _send_market_exit_now(code, rem_qty, KIWOOM_TOKEN)
+    if not _is_ok_response(res):
+        return False, f"시장가 매도 실패: {res}"
+
+    ord_no = _extract_ord_no(res)
+    if mem_stock is not None:
+        mem_stock['status'] = 'SELL_ORDERED'
+        mem_stock['sell_order_time'] = time.time()
+        mem_stock['sell_target_price'] = int((WS_MANAGER.get_latest_data(code) or {}).get('curr', 0) or 0)
+        if ord_no:
+            mem_stock['sell_odno'] = ord_no
+
+    try:
+        with DB.get_session() as session:
+            session.query(RecommendationHistory).filter_by(id=record.id).update({"status": "SELL_ORDERED"})
+    except Exception as e:
+        log_error(f"🚨 [15:15 EOD] DB SELL_ORDERED 업데이트 실패 ({code}): {e}")
+
+    return True, f"시장가 청산 주문 전송 ({rem_qty}주)"
+
+
+def _execute_scalping_hold_overnight(record, mem_stock=None):
+    code = str(record.stock_code).strip()[:6]
+    if record.status != 'SELL_ORDERED':
+        return True, '기존 HOLDING 유지'
+
+    if not mem_stock:
+        return False, '메모리 대상 없음으로 기존 SELL_ORDERED 취소 불가'
+
+    orig_ord_no = mem_stock.get('sell_odno', '') or mem_stock.get('sell_ord_no', '') or ''
+    if not orig_ord_no:
+        return False, '취소할 원주문번호 없음'
+
+    cancelled = process_sell_cancellation(mem_stock, code, orig_ord_no, DB)
+    if cancelled:
+        mem_stock['status'] = 'HOLDING'
+        return True, '미체결 매도 취소 후 HOLDING 복귀'
+    return False, '미체결 매도 취소 실패'
+
+
+def run_scalping_overnight_gatekeeper(ai_engine=None):
+    """15:15 이후 DB 기준 SCALPING HOLDING/SELL_ORDERED 종목을 독립적으로 재판정합니다."""
+    today = datetime.now().date()
+    processed = 0
+
+    try:
+        with DB.get_session() as session:
+            records = session.query(RecommendationHistory).filter(
+                RecommendationHistory.rec_date == today,
+                RecommendationHistory.strategy.in_(['SCALPING', 'SCALP']),
+                RecommendationHistory.status.in_(['HOLDING', 'SELL_ORDERED'])
+            ).all()
+
+        for record in records:
+            code = str(record.stock_code).strip()[:6]
+            mem_stock = _find_active_target_by_code(code)
+            ws_data = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
+            realtime_ctx = _build_scalping_overnight_ctx(record, mem_stock=mem_stock, ws_data=ws_data)
+
+            if ai_engine:
+                decision = ai_engine.evaluate_scalping_overnight_decision(
+                    stock_name=realtime_ctx.get('stock_name') or getattr(record, 'stock_name', code),
+                    stock_code=code,
+                    realtime_ctx=realtime_ctx,
+                )
+            else:
+                decision = {
+                    'action': 'SELL_TODAY',
+                    'confidence': 0,
+                    'reason': 'AI 엔진 미초기화로 스캘핑 원칙상 당일 청산 폴백',
+                    'risk_note': 'AI 미사용 상태에서 오버나이트 보유 위험',
+                }
+
+            action = str(decision.get('action', 'SELL_TODAY') or 'SELL_TODAY').upper()
+            if action == 'HOLD_OVERNIGHT':
+                ok, action_taken = _execute_scalping_hold_overnight(record, mem_stock=mem_stock)
+                if not ok and record.status == 'SELL_ORDERED':
+                    decision['risk_note'] = f"{decision.get('risk_note', '')} | HOLD_OVERNIGHT 취소 실패로 보수적 청산 전환".strip()
+                    ok, action_taken = _execute_scalping_sell_today(record, mem_stock=mem_stock)
+                    decision['action'] = 'SELL_TODAY'
+            else:
+                ok, action_taken = _execute_scalping_sell_today(record, mem_stock=mem_stock)
+
+            _publish_scalping_overnight_decision(
+                realtime_ctx.get('stock_name') or getattr(record, 'stock_name', code),
+                code,
+                decision,
+                action_taken,
+            )
+            processed += 1
+
+        print(f"🌙 [15:15 SCALPING EOD] 독립 판정 완료: {processed}건")
+        return True
+    except Exception as e:
+        log_error(f"🚨 [15:15 SCALPING EOD] 독립 판정 에러: {e}")
+        return False
+
 
 def create_s15_shadow_record(code, name):
     global DB
@@ -1668,8 +1883,8 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
         log_info(f"[DEBUG] {code} 쿨다운 중 (만료 시간 {cooldowns[code]})")
         return
 
-    if strategy == 'SCALPING' and now_t >= TIME_15_30:
-        log_info(f"[DEBUG] {code} SCALPING 15:30 이후 제외")
+    if strategy == 'SCALPING' and now_t >= TIME_SCALPING_NEW_BUY_CUTOFF:
+        log_info(f"[DEBUG] {code} SCALPING 신규매수 컷오프 이후 제외")
         return
 
     if code in alerted_stocks:
@@ -1899,72 +2114,80 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
         score, prices, conclusion, checklist, metrics = radar.analyze_signal_integrated(ws_data, ai_prob)
         is_shooting = current_vpw >= v_pw_limit
 
-        # --- [3] 퀀트가 매수권이면 마지막 Gatekeeper 로 실시간 종목분석 호출 ---
+        # --- [3] 퀀트가 '매수'를 외쳤을 때만 AI 등판 (API 비용/속도 최적화) ---
         if (score >= buy_threshold or is_shooting) and vpw_condition:
-            gatekeeper_reject_cd = getattr(TRADING_RULES, 'ML_GATEKEEPER_REJECT_COOLDOWN', 60 * 60 * 2)
-            gatekeeper_error_cd = getattr(TRADING_RULES, 'ML_GATEKEEPER_ERROR_COOLDOWN', 60 * 10)
-            gatekeeper = None
-            gatekeeper_allow = False
-            action_label = 'UNKNOWN'
 
-            if not ai_engine:
-                log_error(f"🚨 [{strategy} Gatekeeper 미초기화] {stock['name']}({code})")
-                cooldowns[code] = time.time() + gatekeeper_error_cd
+            current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
+            last_ai_time = LAST_AI_CALL_TIMES.get(code, 0)
+            time_elapsed = time.time() - last_ai_time
+
+            # 스윙 매매이므로 쿨타임을 5분(300초)으로 길게 잡습니다.
+            if ai_engine and (time_elapsed > 300 or last_ai_time == 0):
+                ai_call_executed = False
+                try:
+                    recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
+                    recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40)
+
+                    # 데이터 유효성 검사: 최소 20개 분봉 데이터 필요
+                    if len(recent_candles) < 20:
+                        print(f"⚠️ [{strategy} 데이터 부족] {stock['name']} 분봉 데이터 {len(recent_candles)}개. AI 호출 보류.")
+                        # AI 호출 없이 계속 진행 (current_ai_score는 기존 값 유지)
+                    else:
+                        # 프로그램 수급 데이터 가져오기 (실시간 분석을 위해)
+                        prog_data = kiwoom_utils.check_program_buying_ka90008(KIWOOM_TOKEN, code)
+                        prog_net_qty = prog_data.get('net_qty', 0)
+
+                        # AI 엔진 호출 시 program_net_qty 주입
+                        ai_decision = ai_engine.analyze_target(
+                            target_name=stock['name'],
+                            ws_data=ws_data,
+                            recent_ticks=recent_ticks,
+                            recent_candles=recent_candles,
+                            strategy=strategy,
+                            program_net_qty=prog_net_qty
+                        )
+                        ai_call_executed = True
+
+                        raw_ai_score = ai_decision.get('score', 50)
+                        if raw_ai_score != 50:
+                            stock['rt_ai_prob'] = raw_ai_score / 100.0
+                            current_ai_score = raw_ai_score
+                            print(f"💎 [{strategy} AI 승인 대기: {stock['name']}] 점수: {raw_ai_score}점 | {ai_decision.get('reason', '')}")
+
+                except Exception as e:
+                    log_error(f"🚨 [{strategy} AI 연동 오류] {stock['name']}({code}): {e}")
+
+                if ai_call_executed:
+                    LAST_AI_CALL_TIMES[code] = time.time()
+
+                # 첫 분석 턴에는 "실제 AI 호출이 수행된 경우에만" 성급하게 사지 않고 다음 루프에서 한 번 더 확인합니다.
+                if ai_call_executed and last_ai_time == 0:
+                    log_info(f"[DEBUG] {code} 첫 AI 분석 턴 대기 (last_ai_time == 0)")
+                    return
+
+            # --- [4] AI 거부권 행사 (60점 미만이면 보류) ---
+            if current_ai_score < ai_score_threshold and current_ai_score != 50:
+                print(f"🚫 [{strategy} AI 매수 보류] {stock['name']} (AI 점수: {current_ai_score}점)")
+                log_info(f"[DEBUG] {code} AI 점수 불충족 (current_ai_score={current_ai_score} < ai_score_threshold={ai_score_threshold})")
+                cooldowns[code] = time.time() + 180  # 3분간 쳐다보지 않음
                 return
 
-            try:
-                realtime_ctx = kiwoom_utils.build_realtime_analysis_context(
-                    token=KIWOOM_TOKEN,
-                    code=code,
-                    ws_data=ws_data,
-                    strat_label=strategy,
-                    position_status='NONE',
-                    avg_price=0,
-                    pnl_pct=0.0,
-                    trailing_pct=0.0,
-                    stop_pct=0.0,
-                    target_price=curr_price,
-                    target_reason='WATCHING 최종 진입 Gatekeeper 검증',
-                    score=float(score),
-                    conclusion=conclusion,
-                    quant_metrics=metrics,
-                )
-                gatekeeper = ai_engine.evaluate_realtime_gatekeeper(
-                    stock_name=stock['name'],
-                    stock_code=code,
-                    realtime_ctx=realtime_ctx,
-                    analysis_mode='SWING',
-                )
-                LAST_AI_CALL_TIMES[code] = time.time()
-                action_label = gatekeeper.get('action_label', 'UNKNOWN')
-                gatekeeper_allow = bool(gatekeeper.get('allow_entry', False))
-                stock['last_gatekeeper_action'] = action_label
-                stock['last_gatekeeper_report'] = gatekeeper.get('report', '')
-            except Exception as e:
-                log_error(f"🚨 [{strategy} Gatekeeper 오류] {stock['name']}({code}): {e}")
-                cooldowns[code] = time.time() + gatekeeper_error_cd
-                return
-
-            if not gatekeeper_allow:
-                print(f"🚫 [{strategy} Gatekeeper 거부] {stock['name']} ({action_label})")
-                cooldowns[code] = time.time() + gatekeeper_reject_cd
-                _publish_gatekeeper_report(stock, code, gatekeeper, allowed=False)
-                return
-
-            _publish_gatekeeper_report(stock, code, gatekeeper, allowed=True)
-
-            score_weight = max(0.0, min(1.0, (float(score) - buy_threshold) / max(1.0, (100 - buy_threshold))))
-            ratio = ratio_min + (score_weight * (ratio_max - ratio_min))
-            if is_shooting and ratio < ((ratio_min + ratio_max) / 2):
+            # --- [5] 동적 투자 비율(Position Sizing) 최종 계산 ---
+            if current_ai_score == 50:
+                # 에러 등으로 AI가 판단을 못 내린 폴백 상태 -> 중간 비중 적용
                 ratio = (ratio_min + ratio_max) / 2
+            else:
+                # 60점 ~ 100점 사이에서 비중을 선형적으로 증가 (60점=Min비중, 100점=Max비중)
+                score_weight = max(0.0, min(1.0, (current_ai_score - ai_score_threshold) / (100 - ai_score_threshold)))
+                ratio = ratio_min + (score_weight * (ratio_max - ratio_min))
 
             is_trigger = True
             stock['target_buy_price'] = curr_price  # 스윙은 보통 최유리지정가/시장가로 긁으므로 현재가 기록
 
             msg = (
-                f"🚀 **{stock['name']} ({code}) {strategy.replace('_', '\\_')} Gatekeeper 통과!\n"
+                f"🚀 **{stock['name']} ({code}) {strategy.replace('_', '\\_')} AI 스나이퍼 포착!**\n"
                 f"현재가: `{curr_price:,}원` | 수급강도: `{current_vpw:.1f}%`\n"
-                f"🧠 Gatekeeper 판정: `{action_label}` ➡️ **투자비중: `{ratio*100:.1f}%` 할당**"
+                f"🧠 AI 확신도: `{current_ai_score}점` ➡️ **투자비중: `{ratio*100:.1f}%` 할당**"
             )
 
     # ==========================================
@@ -2255,18 +2478,6 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                 sell_reason_type = "TRAILING"
                 reason = f"🔥 고점 대비 밀림 (-{drawdown:.2f}%). 트레일링 익절 (+{profit_rate:.2f}%)"
 
-
-        # 4. 시간 초과 및 장 마감 (가장 하위 우선순위)
-        if not is_sell_signal:
-            if held_time_min >= getattr(TRADING_RULES, 'SCALP_TIME_LIMIT_MIN', 30) and profit_rate >= getattr(TRADING_RULES, 'MIN_FEE_COVER', 0.1):
-                is_sell_signal = True
-                sell_reason_type = "TIMEOUT"
-                reason = f"⏱️ {getattr(TRADING_RULES, 'SCALP_TIME_LIMIT_MIN', 30)}분 타임아웃 (순환매 우선)"
-            elif now_t >= TIME_15_30 and profit_rate >= getattr(TRADING_RULES, 'MIN_FEE_COVER', 0.1):
-                is_sell_signal = True
-                sell_reason_type = "CLOSE"
-                reason = "⏰ 장 마감 전 현금화"
-
                 
     # 2️⃣ 코스닥 AI 스윙 (KOSDAQ_ML) 전용 전략
     elif strategy == 'KOSDAQ_ML':
@@ -2418,7 +2629,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             if ord_no:
                 stock['sell_odno'] = ord_no
 
-            if strategy == 'SCALPING' and now_t < TIME_15_30:
+            if strategy == 'SCALPING' and now_t < TIME_SCALPING_NEW_BUY_CUTOFF:
                 cooldowns[code] = time.time() + 1200
                 alerted_stocks.discard(code)
                 print(f"♻️ [{stock['name']}] 스캘핑 청산 완료 후 20분 쿨타임 진입.")
@@ -2476,8 +2687,8 @@ def check_watching_conditions(stock, code, ws_data, admin_id, radar=None, ai_eng
     if code in cooldowns and time.time() < cooldowns[code]:
         return f"쿨다운 중 (만료 시간 {cooldowns[code]})"
     
-    if strategy == 'SCALPING' and now_t >= TIME_15_30:
-        return "SCALPING 15:30 이후 제외"
+    if strategy == 'SCALPING' and now_t >= TIME_SCALPING_NEW_BUY_CUTOFF:
+        return "SCALPING 15:00 이후 신규 매수 제외"
     
     if code in alerted_stocks:
         return "이미 alerted_stocks에 포함됨"
@@ -2604,10 +2815,6 @@ def check_holding_conditions(stock, code, ws_data, admin_id, market_regime, rada
             if drawdown >= getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_WEAK', 0.4):
                 return f"고점 대비 밀림 (drawdown={drawdown:.2f}%)"
         
-        # 시간 초과 및 장 마감
-        held_time_min = 0  # 계산 생략
-        if now_t >= TIME_15_30 and profit_rate >= getattr(TRADING_RULES, 'MIN_FEE_COVER', 0.1):
-            return "장 마감 전 현금화"
     
     # 코스닥 스윙 전략 검사 (간략화)
     elif strategy == 'KOSDAQ_ML':
@@ -3082,7 +3289,7 @@ def handle_real_execution(exec_data):
                 raw_strategy = (record.strategy or target_stock.get('strategy') or 'KOSPI_ML').upper()
                 strategy = 'SCALPING' if raw_strategy in ['SCALPING', 'SCALP'] else raw_strategy
                 # ✅ 일관성 통일: 15:30 이전까지만 스캘핑 부활
-                is_scalp_revive = (strategy == 'SCALPING') and (now_t < TIME_15_30)
+                is_scalp_revive = (strategy == 'SCALPING') and (now_t < TIME_SCALPING_NEW_BUY_CUTOFF)
         except Exception as e:
             log_error(f"🚨 [DB 조회 에러] ID {target_id} SELL 처리 중 에러: {e}")
             return
@@ -3423,6 +3630,18 @@ def run_sniper(is_test_mode=False):
                 run_sniper.morning_report_done = True
             elif now_t > TIME_09_10:
                 run_sniper.morning_report_done = True
+
+            # =====================================================
+            # 15:15 SCALPING 오버나이트 독립 판정 (DB 기준, 무조건 1회 작동)
+            # =====================================================
+            today_key = now.date().isoformat()
+            last_eod_done = getattr(run_sniper, 'scalping_eod_done_date', None)
+            last_eod_try = getattr(run_sniper, 'last_scalping_eod_try', 0)
+            if now_t >= TIME_SCALPING_OVERNIGHT_DECISION and last_eod_done != today_key:
+                if time.time() - last_eod_try >= 60:
+                    run_sniper.last_scalping_eod_try = time.time()
+                    if run_scalping_overnight_gatekeeper(ai_engine=ai_engine):
+                        run_sniper.scalping_eod_done_date = today_key
 
             # =====================================================
             # 상태 로그
