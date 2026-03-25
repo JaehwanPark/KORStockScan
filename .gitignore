@@ -6,7 +6,6 @@ config_dev.json
 config_prod.json
 credentials.json
 docker-compose.yml
-constants.py
 *.token
 *.key
 *.txt
