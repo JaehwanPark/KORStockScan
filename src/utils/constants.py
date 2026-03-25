@@ -98,6 +98,17 @@ class TradingConfig:
     MAX_WATCHING_SLOTS: int = 5  # 장중 감시 종목 최대 유지 개수
 
     # ==========================================
+    # 🕒 거래 시간 제어값 (KRX 거래시간 확대 대응)
+    # ==========================================
+    MARKET_OPEN_TIME: str = "09:00:00"
+    SCALPING_EARLIEST_BUY_TIME: str = "09:03:00"
+    SWING_EARLIEST_BUY_TIME: str = "09:05:00"
+    SCALPING_NEW_BUY_CUTOFF: str = "15:00:00"
+    SCALPING_OVERNIGHT_DECISION_TIME: str = "15:15:00"
+    MARKET_CLOSE_TIME: str = "15:30:00"
+    SYSTEM_SHUTDOWN_TIME: str = "20:00:00"
+
+    # ==========================================
     # 🎯 유저권한별 기능 제한 설정값
     # ==========================================
     VIP_LIQUIDITY_THRESHOLD: int = 1_000_000_000  # VIP 전용 호가 잔량 대금 기준 (10억)
