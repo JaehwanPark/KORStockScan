@@ -53,6 +53,17 @@ from src.engine.ai_engine import GeminiSniperEngine
 
 # 스캐너 모듈 (장중 스캔 호출용)
 import src.scanners.final_ensemble_scanner as final_ensemble_scanner
+import telebot
+try:
+    from telebot.formatting import escape_markdown
+except ImportError:
+    def escape_markdown(text):
+        if not isinstance(text, str):
+            text = str(text)
+        # Escape Markdown special characters (excluding parentheses/brackets/dot/exclamation)
+        for ch in '*_``~>#+-=|{}':
+            text = text.replace(ch, '\\' + ch)
+        return text
 
 # --- [전역 상태 변수] -----------------------------------------------
 highest_prices = {}
@@ -362,13 +373,19 @@ def _publish_scalping_overnight_decision(stock_name, code, decision, action_take
     reason = decision.get('reason', '')
     risk_note = decision.get('risk_note', '')
     chosen = decision.get('action', 'SELL_TODAY')
+    esc_stock_name = escape_markdown(stock_name)
+    esc_code = escape_markdown(code)
+    esc_chosen = escape_markdown(chosen)
+    esc_action_taken = escape_markdown(action_taken)
+    esc_reason = escape_markdown(reason)
+    esc_risk_note = escape_markdown(risk_note)
     msg = (
         f"🌙 **[15:15 SCALPING EOD 판정]**\n"
-        f"종목: **{stock_name} ({code})**\n"
-        f"AI 결정: `{chosen}` ({confidence}점)\n"
-        f"실행: `{action_taken}`\n"
-        f"사유: {reason}\n"
-        f"리스크: {risk_note}"
+        f"종목: **{esc_stock_name} ({esc_code})**\n"
+        f"AI 결정: `{esc_chosen}` ({confidence}점)\n"
+        f"실행: `{esc_action_taken}`\n"
+        f"사유: {esc_reason}\n"
+        f"리스크: {esc_risk_note}"
     )
     event_bus.publish(
         'TELEGRAM_BROADCAST',
@@ -1007,9 +1024,11 @@ def handle_condition_matched(payload):
                     ACTIVE_TARGETS.append(new_target)
                     event_bus.publish("COMMAND_WS_REG", {"codes": [code]})
 
+                esc_name = escape_markdown(name)
+                esc_code = escape_markdown(code)
                 msg = (
                     f"🎯 **[VCP 돌파 포착]**\n"
-                    f"종목: **{name} ({code})**\n"
+                    f"종목: **{esc_name} ({esc_code})**\n"
                     f"전일 CANDID 포착 후 금일 슈팅 조건을 만족하여 스캘핑 감시망에 투입됩니다."
                 )
                 event_bus.publish(
@@ -1050,9 +1069,11 @@ def handle_condition_matched(payload):
                     )
                     session.add(new_record)
 
+                    esc_name = escape_markdown(name)
+                    esc_code = escape_markdown(code)
                     msg = (
                         f"🌙 **[내일의 VCP 슈팅 예약]**\n"
-                        f"종목: **{name} ({code})**\n"
+                        f"종목: **{esc_name} ({esc_code})**\n"
                         f"금일 슈팅 후 강력한 마감 패턴을 보여 내일 시초가 매수를 예약합니다."
                     )
                     event_bus.publish(
@@ -1107,27 +1128,38 @@ def handle_condition_matched(payload):
             else:
                 if newly_created:
                     if target_position_tag == 'VCP_CANDID':
+                        esc_cnd_name = escape_markdown(cnd_name)
+                        esc_name = escape_markdown(name)
+                        esc_code = escape_markdown(code)
                         msg = (
                             f"🌙 **[VCP 예비 후보 포착]**\n"
-                            f"조건검색: `{cnd_name}`\n"
-                            f"종목: **{name} ({code})**\n"
+                            f"조건검색: `{esc_cnd_name}`\n"
+                            f"종목: **{esc_name} ({esc_code})**\n"
                             f"내일 오전 VCP 슈팅 조건 만족 시 감시망에 투입됩니다."
                         )
 
                     elif target_position_tag == 'S15_CANDID':
+                        esc_cnd_name = escape_markdown(cnd_name)
+                        esc_name = escape_markdown(name)
+                        esc_code = escape_markdown(code)
                         msg = (
                             f"🌙 **[S15 예비 후보 포착]**\n"
-                            f"조건검색: `{cnd_name}`\n"
-                            f"종목: **{name} ({code})**\n"
+                            f"조건검색: `{esc_cnd_name}`\n"
+                            f"종목: **{esc_name} ({esc_code})**\n"
                             f"S15 슈팅 조건 만족 시 감시망에 투입됩니다."
                         )
 
                     else:
+                        esc_cnd_name = escape_markdown(cnd_name)
+                        esc_name = escape_markdown(name)
+                        esc_code = escape_markdown(code)
+                        esc_target_date = escape_markdown(str(target_date))
+                        esc_target_strategy = escape_markdown(target_strategy)
                         msg = (
                             f"🌙 **[내일의 스윙 주도주 예약]**\n"
-                            f"조건검색 포착: `{cnd_name}`\n"
-                            f"종목: **{name} ({code})**\n"
-                            f"내일({target_date}) 감시망에 전략({target_strategy})으로 자동 투입됩니다."
+                            f"조건검색 포착: `{esc_cnd_name}`\n"
+                            f"종목: **{esc_name} ({esc_code})**\n"
+                            f"내일({esc_target_date}) 감시망에 전략({esc_target_strategy})으로 자동 투입됩니다."
                         )
 
                     event_bus.publish(
@@ -3374,67 +3406,6 @@ def handle_real_execution(exec_data):
 
     # 메모리 업데이트는 각 조건문 내에서 이미 수행됨
 
-# ==========================================
-# 💡 09:05 주도주 분석, 리포트 발송
-# ==========================================        
-def execute_morning_strategy_batch(targets, ws_manager, radar, ai_engine):
-    """
-    [v13.0] 09:05 주도주 분석, 리포트 발송 일괄 처리합니다.
-    고유 PK(id)를 사용하여 정확히 해당 감시 대상의 상태만 변경합니다.
-    """
-    if not targets or not ws_manager or not radar or not ai_engine:
-        return
-
-    print("🤖 [전략 집행] 09:05 주도주 정렬 및 AI Report 시작합니다.")
-
-    codes = [stock['code'] for stock in targets]
-    ws_data_map = ws_manager.get_all_data(codes)
-    
-    for stock in targets:
-        try:
-            ws_data = ws_data_map.get(stock['code'], {})
-            stock['priority_score'] = radar.calculate_market_leader_score(ws_data)
-        except Exception:
-            stock['priority_score'] = 0
-
-    sorted_targets = sorted(targets, key=lambda x: x.get('priority_score', 0), reverse=True)
-    top_3 = sorted_targets[:3]
-    if not top_3:
-        print("⚠️ [전략 집행] 분석할 감시 종목이 없습니다.")
-        return
-    
-    # 2. 통합 리포트 작성을 위한 변수 초기화
-    full_report = "🚀 **[Good Morning AI 주도주 TOP 3 정밀 분석]**\n"
-    full_report += f"📅 일시: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
-    full_report += "━━━━━━━━━━━━━━━━━━\n\n"
-
-    for i, s in enumerate(top_3):
-        code = s['code']
-        try:
-            ws_data = ws_data_map.get(code, {})
-            ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
-            candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40)
-
-            ai_json_str = ai_engine.analyze_morning_leader(s['name'], ws_data, ticks, candles)
-
-            if isinstance(ai_json_str, dict):
-                res = ai_json_str
-            else:
-                res = json.loads(ai_json_str)
-
-            full_report += f"📍 **{i+1}위. {s['name']}** ({code})\n"
-            full_report += f"💬 `{res.get('one_liner', '분석 중...')}`\n"
-            full_report += f"📈 패턴: **{res.get('pattern', '-')}**\n"
-            full_report += f"🎯 권장타점: `{res.get('target_price', '-')}원` 부근\n"
-            full_report += f"⚠️ 리스크: {res.get('risk_factor', '-')}\n"
-            full_report += "━━━━━━━━━━━━━━━━━━\n"
-
-        except Exception as e:
-            log_error(f"❌ {s.get('name', code)} 전략 집행 중 에러: {e}")
-
-    event_bus.publish('TELEGRAM_BROADCAST', {'message': full_report, 'parse_mode': 'Markdown'})
-    print("✅ 09:05 전략 배치 작업이 완료되었습니다.")
-
 # ==============================================================================
 # 🎯 메인 스나이퍼 엔진 (Phase 3: Event-Driven & 비동기 아키텍처 완전 적용)
 # ==============================================================================
@@ -3443,7 +3414,6 @@ def run_sniper(is_test_mode=False):
 
     from src.utils.logger import log_error
     log_error(f"[DEBUG] run_sniper started at {datetime.now()}")
-    run_sniper.morning_report_done = False
     run_sniper.last_fifo_time = 0
     run_sniper.last_account_sync_time = 0
 
@@ -3622,21 +3592,6 @@ def run_sniper(is_test_mode=False):
                 threading.Thread(target=periodic_account_sync, daemon=True).start()
                 run_sniper.last_account_sync_time = time.time()
 
-            # =====================================================
-            # 09:05 아침 배치
-            # =====================================================
-            if TIME_09_05 <= now_t <= TIME_09_10 and not getattr(run_sniper, 'morning_report_done', False):
-                if ai_engine and targets:
-                    print("🤖 Gemini AI가 주도주 TOP 3의 차트와 수급을 정밀 분석합니다...")
-                    morning_thread = threading.Thread(
-                        target=execute_morning_strategy_batch,
-                        args=(targets, WS_MANAGER, radar, ai_engine),
-                        daemon=True
-                    )
-                    morning_thread.start()
-                run_sniper.morning_report_done = True
-            elif now_t > TIME_09_10:
-                run_sniper.morning_report_done = True
 
             # =====================================================
             # 15:15 SCALPING 오버나이트 독립 판정 (DB 기준, 무조건 1회 작동)
