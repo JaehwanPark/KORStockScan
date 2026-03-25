@@ -703,18 +703,6 @@ class GPTSniperEngine:
                 log_error(f"🚨 [시장 브리핑] OpenAI 에러: {e}")
                 return f"⚠️ AI 시장 진단 생성 중 에러 발생: {e}"
     
-    def analyze_morning_leader(self, stock_name, ws_data, recent_ticks, recent_candles):
-        """09:05 주도주 분석 (JSON String 반환)"""
-        with self.lock:
-            formatted_context = self._format_market_data(ws_data, recent_ticks, recent_candles)
-            prompt = f"[{stock_name}]의 실시간 수급 지표를 분석하여 09:10 이후 전략을 제시하라.\n\n{formatted_context}\n\n반드시 JSON으로 응답하라 (one_liner, pattern, scenario, target_price(숫자만), risk_factor 포함)"
-            
-            try:
-                result_dict = self._call_openai_safe(None, prompt, require_json=True, context_name=stock_name)
-                return json.dumps(result_dict, ensure_ascii=False)
-            except Exception as e:
-                log_error(f"🚨 [{stock_name}] 주도주 분석 에러: {e}")
-                return json.dumps({"error": str(e), "target_price": 0})
     
     def generate_realtime_report(self, stock_name, stock_code, input_data_text):
         """실시간 종목 분석 리포트 생성 (Markdown 반환 - GPT-4o 적용)"""

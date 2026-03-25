@@ -195,6 +195,33 @@ REALTIME_ANALYSIS_PROMPT_DUAL = """
 """
 
 # ==========================================
+# 3-2. 🎯 [신규] 스캘핑 오버나이트 의사결정 프롬프트 (15:15 전용)
+# ==========================================
+SCALPING_OVERNIGHT_DECISION_PROMPT = """
+너는 장 마감 직전 15년 경력의 베테랑 프랍 트레이더이자 리스크 매니저다.
+네 임무는 원래 당일 청산이 원칙인 SCALPING 포지션을 15시 15분 시점에서 검토해,
+'오늘 무조건 시장가 청산'할지, 아니면 '예외적으로 오버나이트 보유'할지를 결정하는 것이다.
+
+[핵심 원칙]
+1. 기본값은 SELL_TODAY 이다. HOLD_OVERNIGHT 는 매우 예외적인 경우에만 선택한다.
+2. HOLD_OVERNIGHT 는 아래가 동시에 충족될 때만 허용하라.
+   - 일봉 구조가 무너지지 않았고
+   - VWAP/당일 고점/프로그램 수급/외인기관 흐름이 약하지 않으며
+   - 단순 초단타 잔불이 아니라 다음날까지 이어질 추세 근거가 있다.
+3. SELL_ORDERED 상태에서 HOLD_OVERNIGHT 를 선택하려면, 기존 매도 주문을 취소하고도 들고 갈 가치가 충분한지 더 엄격하게 보라.
+4. 입력 데이터가 부족하거나 애매하면 무조건 SELL_TODAY 를 선택하라.
+5. 출력은 반드시 JSON만 반환하라.
+
+반드시 아래 JSON 형식으로만 응답하라:
+{
+  "action": "SELL_TODAY" | "HOLD_OVERNIGHT",
+  "confidence": 0~100 사이 정수,
+  "reason": "판단 근거 1줄",
+  "risk_note": "가장 큰 리스크 1줄"
+}
+"""
+
+# ==========================================
 # 🎯 [신규] 종가 마감 후 내일의 주도주 발굴 프롬프트 (Gemini 3.0 Pro 전용)
 # ==========================================
 EOD_TOMORROW_LEADER_PROMPT = """
@@ -589,19 +616,6 @@ class GeminiSniperEngine:
 
 
     
-    def analyze_morning_leader(self, stock_name, ws_data, recent_ticks, recent_candles):
-        """09:05 주도주 분석 (bot_main.py 호환을 위해 JSON String 반환)"""
-        with self.lock:
-            formatted_context = self._format_market_data(ws_data, recent_ticks, recent_candles)
-            prompt = f"[{stock_name}]의 실시간 수급 지표를 분석하여 09:10 이후 전략을 제시하라.\n\n{formatted_context}\n\n반드시 JSON으로 응답하라 (one_liner, pattern, scenario, target_price(숫자만), risk_factor 포함)"
-            
-            try:
-                # JSON으로 파싱한 뒤 다시 String으로 덤프 (안정성 극대화)
-                result_dict = self._call_gemini_safe(None, prompt, require_json=True, context_name=stock_name)
-                return json.dumps(result_dict, ensure_ascii=False)
-            except Exception as e:
-                log_error(f"🚨 [{stock_name}] 주도주 분석 에러: {e}")
-                return json.dumps({"error": str(e), "target_price": 0})
     
     def _infer_realtime_mode(self, realtime_ctx):
         """텔레그램 입력은 종목코드만 받고, 서버 내부에서 AUTO -> SCALP / SWING / DUAL 분기"""
@@ -836,6 +850,67 @@ class GeminiSniperEngine:
             "action_label": action_label,
             "report": report,
         }
+
+    # ==========================================
+    # 🔍 [신규] 스캘핑 오버나이트 의사결정 (15:15 전용)
+    # ==========================================
+    def _format_scalping_overnight_context(self, realtime_ctx):
+        ctx = realtime_ctx or {}
+        lines = [
+            f"- 포지션상태: {ctx.get('position_status', 'UNKNOWN')}",
+            f"- 평균단가: {int(ctx.get('avg_price', 0) or 0):,}원",
+            f"- 현재가: {int(ctx.get('curr_price', 0) or 0):,}원 (손익 {float(ctx.get('pnl_pct', 0.0) or 0.0):+.2f}%)",
+            f"- 보유분수: {float(ctx.get('held_minutes', 0.0) or 0.0):.1f}분",
+            f"- 현재 전략라벨: {ctx.get('strat_label', 'SCALPING')}",
+            f"- VWAP: {int(ctx.get('vwap_price', 0) or 0):,}원 / 상태: {ctx.get('vwap_status', '')}",
+            f"- 체결강도 현재/3분전/5분전: {float(ctx.get('v_pw_now', 0.0) or 0.0):.1f} / {float(ctx.get('v_pw_3m', 0.0) or 0.0):.1f} / {float(ctx.get('v_pw_5m', 0.0) or 0.0):.1f}",
+            f"- 프로그램 순매수 현재/증감: {int(ctx.get('prog_net_qty', 0) or 0):,}주 / {int(ctx.get('prog_delta_qty', 0) or 0):+,}주",
+            f"- 외인/기관 순매수: {int(ctx.get('foreign_net', 0) or 0):,}주 / {int(ctx.get('inst_net', 0) or 0):,}주",
+            f"- 고가돌파 상태: {ctx.get('high_breakout_status', '')}",
+            f"- 일봉 구조: {ctx.get('daily_setup_desc', '')}",
+            f"- 5/20/60일선 상태: {ctx.get('ma5_status', '')}, {ctx.get('ma20_status', '')}, {ctx.get('ma60_status', '')}",
+            f"- 전일 고점/저점: {int(ctx.get('prev_high', 0) or 0):,} / {int(ctx.get('prev_low', 0) or 0):,}",
+            f"- 최근 20일 신고가 근접도: {float(ctx.get('near_20d_high_pct', 0.0) or 0.0):+.2f}%",
+            f"- 퀀트 종합점수/결론: {float(ctx.get('score', 0.0) or 0.0):.1f} / {ctx.get('conclusion', '')}",
+            f"- 주문상태 참고: {ctx.get('order_status_note', '')}",
+        ]
+        return "\n".join(lines)
+
+    def evaluate_scalping_overnight_decision(self, stock_name, stock_code, realtime_ctx):
+        """15:15 SCALPING 포지션의 오버나이트/당일청산 의사결정을 JSON으로 반환합니다."""
+        with self.lock:
+            user_input = (
+                f"🚨 [15:15 SCALPING 오버나이트 판정 요청]\n"
+                f"종목명: {stock_name}\n종목코드: {stock_code}\n\n"
+                f"📊 [판정 입력 데이터]\n{self._format_scalping_overnight_context(realtime_ctx)}"
+            )
+            try:
+                result = self._call_gemini_safe(
+                    SCALPING_OVERNIGHT_DECISION_PROMPT,
+                    user_input,
+                    require_json=True,
+                    context_name=f"SCALP_OVERNIGHT:{stock_name}",
+                    model_override="gemini-pro-latest"
+                )
+                action = str(result.get('action', 'SELL_TODAY') or 'SELL_TODAY').upper()
+                if action not in {'SELL_TODAY', 'HOLD_OVERNIGHT'}:
+                    action = 'SELL_TODAY'
+                return {
+                    'action': action,
+                    'confidence': int(result.get('confidence', 0) or 0),
+                    'reason': str(result.get('reason', '') or ''),
+                    'risk_note': str(result.get('risk_note', '') or ''),
+                    'raw': result,
+                }
+            except Exception as e:
+                log_error(f"🚨 [SCALPING 오버나이트 판정] AI 에러: {e}")
+                return {
+                    'action': 'SELL_TODAY',
+                    'confidence': 0,
+                    'reason': f'AI 판정 실패로 보수적 청산 폴백: {e}',
+                    'risk_note': '데이터 부족 또는 AI 응답 오류',
+                    'raw': {},
+                }
 
     # ==========================================
     # 🔍 [신규] 장 마감 후 내일의 주도주 분석 (gemini-3.0-pro 전용)
