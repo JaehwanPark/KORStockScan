@@ -1271,9 +1271,9 @@ def analyze_stock_now(code):
         stock_name = code
 
     # ---------------------------------------------------------
-    # 기존 대기 로직 (웹소켓 응답 대기 - 3초)
+    # 기존 대기 로직 (웹소켓 응답 대기 - 6초)
     ws_data = {}
-    for _ in range(30):
+    for _ in range(60):
         ws_data = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
         if ws_data and ws_data.get('curr', 0) > 0:
             break
