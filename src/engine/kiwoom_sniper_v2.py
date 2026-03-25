@@ -274,15 +274,15 @@ def _weighted_avg(amount, qty):
 
 def _publish_gatekeeper_report(stock, code, gatekeeper, allowed):
     """
-    Gatekeeper 판단 결과를 텔레그램으로 발행합니다.
+    Gatekeeper 성공일때만 결과를 텔레그램으로 발행합니다.
     """
     action_label = gatekeeper.get('action_label', 'UNKNOWN')
     report = gatekeeper.get('report', '')
     # 리포트가 길면 첫 200자만 사용
     preview = report[:200] + ('...' if len(report) > 200 else '')
     status = '승인' if allowed else '거부'
-    audience = 'ADMIN_ONLY'  # 기본적으로 관리자에게만 알림
-    # VIP 대상 여부는 stock에 따라 결정 가능 (필요 시 추가)
+    audience = 'VIP_ALL'  # 기본적으로 관리자에게만 알림
+    # VIP 대상 여부는 stock에 따라 결정 가능 (필요 시 추가)    
     msg = (
         f"🤖 <b>[Gatekeeper {status}]</b>\n"
         f"🎯 종목: {stock['name']} ({code})\n"
@@ -1131,7 +1131,7 @@ def sync_state_with_broker():
 
     if synced_count > 0:
         msg = f"🔄 <b>[시스템 복구 알림]</b>\n웹소켓 단절 시간 동안 체결된 <b>{synced_count}건</b>의 종목을 성공적으로 동기화하여 감시망에 편입했습니다."
-        event_bus.publish('TELEGRAM_BROADCAST', {'message': msg, 'audience': 'VIP_ALL', 'parse_mode': 'HTML'})
+        event_bus.publish('TELEGRAM_BROADCAST', {'message': msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'HTML'})
     else:
         print("✅ [상태 동기화] 누락된 체결 건이 없습니다.")
 
@@ -1747,7 +1747,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                 f"🚀 **{stock['name']} ({code}) VCP 시초가 예약 매수!**\n"
                 f"현재가: `{curr_price:,}원` (전일 VCP NEXT 달성)"
             )
-            stock['msg_audience'] = 'VIP_ALL'
+            stock['msg_audience'] = 'ADMIN_ONLY'
 
         else:
             if radar is None:
@@ -1818,7 +1818,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                                     f"⚡ 행동: <b>{action} ({ai_score}점)</b>\n"
                                     f"🧠 사유: {reason}"
                                 )
-                                target_audience = 'VIP_ALL' if liquidity_value >= VIP_LIQUIDITY_THRESHOLD else 'ADMIN_ONLY'
+                                target_audience = 'VIP_ALL' if liquidity_value >= VIP_LIQUIDITY_THRESHOLD and current_ai_score >= 90 else 'ADMIN_ONLY'
                                 event_bus.publish(
                                     'TELEGRAM_BROADCAST',
                                     {'message': ai_msg, 'audience': target_audience, 'parse_mode': 'HTML'}
@@ -1868,13 +1868,6 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
 
             stock['target_buy_price'] = final_target_buy_price
             is_trigger = True
-
-            msg = (
-                f"⚡ **{stock['name']} ({code}) 초단타(SCALP) 그물망 투척!**\n"
-                f"현재가: `{curr_price:,}원` ➡️ **매수대기: `{final_target_buy_price:,}원` (-{final_used_drop_pct:.1f}% 눌림목)**\n"
-                f"호가잔량대금: `{liquidity_value / 100_000_000:.1f}억` | 수급강도: `{current_vpw:.1f}%`"
-            )
-            stock['msg_audience'] = 'VIP_ALL' if liquidity_value >= VIP_LIQUIDITY_THRESHOLD else 'ADMIN_ONLY'
 
     # 2️⃣ & 3️⃣ 스윙(KOSDAQ_ML / KOSPI_ML) 통합 전략: AI 교차 검증 및 동적 비중 조절
     elif strategy in ['KOSDAQ_ML', 'KOSPI_ML']:
@@ -1970,10 +1963,9 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             if not gatekeeper_allow:
                 print(f"🚫 [{strategy} Gatekeeper 거부] {stock['name']} ({action_label})")
                 cooldowns[code] = time.time() + gatekeeper_reject_cd
-                _publish_gatekeeper_report(stock, code, gatekeeper, allowed=False)
                 return
 
-            _publish_gatekeeper_report(stock, code, gatekeeper, allowed=True)
+
 
             score_weight = max(0.0, min(1.0, (float(score) - buy_threshold) / max(1.0, (100 - buy_threshold))))
             ratio = ratio_min + (score_weight * (ratio_max - ratio_min))
@@ -1982,12 +1974,8 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
 
             is_trigger = True
             stock['target_buy_price'] = curr_price  # 스윙은 보통 최유리지정가/시장가로 긁으므로 현재가 기록
-
-            msg = (
-                f"🚀 **{stock['name']} ({code}) {strategy.replace('_', '\\_')} Gatekeeper 통과!\n"
-                f"현재가: `{curr_price:,}원` | 수급강도: `{current_vpw:.1f}%`\n"
-                f"🧠 Gatekeeper 판정: `{action_label}` ➡️ **투자비중: `{ratio*100:.1f}%` 할당**"
-            )
+            stock['msg_audience'] = 'VIP_ALL'
+            _publish_gatekeeper_report(stock, code, gatekeeper, allowed=True)
 
     # ==========================================
     # 🎯 매수 실행 공통 로직
@@ -2911,7 +2899,7 @@ def _update_db_for_buy(target_id, exec_price, now, target_stock):
         print(f"✅ [영수증: ID {target_id}] {target_stock.get('code')} 실제 매수 체결가 {exec_price:,}원 및 시간 반영 완료!")
 
         pending_msg = target_stock.get('pending_buy_msg')
-        audience = target_stock.get('msg_audience', 'VIP_ALL')
+        audience = target_stock.get('msg_audience', 'ADMIN_ONLY')
         if pending_msg:
             final_msg = pending_msg.replace("그물망 투척!", "그물망 매수 체결!").replace("스나이퍼 포착!", "스나이퍼 매수 체결!")
             final_msg += f"\n✅ **실제 체결가:** `{exec_price:,}원`"
@@ -2950,7 +2938,7 @@ def _update_db_for_sell(target_id, exec_price, now, target_stock, strategy, is_s
             print(f"🎉 [매매 완료: ID {target_id}] {target_stock.get('code')} 실매도가: {exec_price:,}원 / 수익률: {profit_rate}%")
 
             pending_msg = target_stock.get('pending_sell_msg')
-            audience = target_stock.get('msg_audience', 'VIP_ALL')
+            audience = target_stock.get('msg_audience', 'ADMIN_ONLY')
             if pending_msg:
                 final_msg = pending_msg.replace("매도 전송", "매도 체결 완료").replace("[익절 주문]", "[익절 완료]").replace("[손절 주문]", "[손절 완료]")
                 final_msg += f"\n✅ **실제 체결가:** `{exec_price:,}원` (확정 수익률: `{profit_rate:+.2f}%`)"
@@ -3138,7 +3126,7 @@ def handle_real_execution(exec_data):
                     new_watch_id = new_record.id
                     # 알림
                     pending_msg = target_stock.get('pending_sell_msg')
-                    audience = target_stock.get('msg_audience', 'VIP_ALL')
+                    audience = target_stock.get('msg_audience', 'ADMIN_ONLY')
                     if pending_msg:
                         final_msg = pending_msg.replace("매도 전송", "매도 체결 완료").replace("[익절 주문]", "[익절 완료]").replace("[손절 주문]", "[손절 완료]")
                         final_msg += f"\n✅ **실제 체결가:** `{exec_price:,}원` (확정 수익률: `{profit_rate:+.2f}%`)"
