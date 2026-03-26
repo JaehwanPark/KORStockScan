@@ -84,6 +84,8 @@ class KiwoomWSManager:
                 'prog_net_amt': 0, 'prog_delta_amt': 0,
                 'received_types': set(),
                 'last_ws_update_ts': 0.0,
+                'last_prog_update_ts': 0.0,
+                'program_history': deque(maxlen=120),
                 '_first_tick_logged': False,
             }
         return self.realtime_data[item_code]
@@ -469,10 +471,19 @@ class KiwoomWSManager:
                             
                             # '0w' 프로그램 매매 데이터 파싱
                             if real_type == '0w':
-                                if '210' in values: target['prog_net_qty'] = safe_int(values['210'])
-                                if '211' in values: target['prog_delta_qty'] = safe_int(values['211'])
-                                if '212' in values: target['prog_net_amt'] = safe_int(values['212'])
-                                if '213' in values: target['prog_delta_amt'] = safe_int(values['213'])
+                                if '210' in values: target['prog_net_qty'] = self._safe_signed_int(values['210'])
+                                if '211' in values: target['prog_delta_qty'] = self._safe_signed_int(values['211'])
+                                if '212' in values: target['prog_net_amt'] = self._safe_signed_int(values['212'])
+                                if '213' in values: target['prog_delta_amt'] = self._safe_signed_int(values['213'])
+                                # 프로그램 히스토리 업데이트
+                                target['program_history'].append({
+                                    'ts': time.time(),
+                                    'net_qty': target['prog_net_qty'],
+                                    'delta_qty': target['prog_delta_qty'],
+                                    'net_amt': target['prog_net_amt'],
+                                    'delta_amt': target['prog_delta_amt'],
+                                })
+                                target['last_prog_update_ts'] = time.time()
                             
                             target['received_types'].add(real_type)
                             target['last_ws_update_ts'] = time.time()
@@ -532,7 +543,7 @@ class KiwoomWSManager:
                 }
                 await self.websocket.send(json.dumps(reg_packet))
                 self.subscribed_codes.update(codes)
-                print(f"📡 [WS] 종목 등록 패킷 전송 완료: {codes}")
+                print(f"📡 [WS] 종목 등록 패킷 전송 완료(실수신 대기): {codes}")
             else:
                 print(f"⚠️ [WS] 연결된 웹소켓이 없어 전송 실패: {codes}")
 
