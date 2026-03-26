@@ -144,34 +144,36 @@ def get_account_balance_kt00005(token):
     
     # 종목코드를 Key로 하여 중복을 제거할 딕셔너리
     aggregated_balances = {}
+    successful_exchanges = set()
 
     for ex in target_exchanges:
         payload = {"dmst_stex_tp": ex}
 
         results = fetch_kiwoom_api_continuous(
-            url=url, 
-            token=token, 
-            api_id='kt00005', 
-            payload=payload, 
+            url=url,
+            token=token,
+            api_id='kt00005',
+            payload=payload,
             use_continuous=True
         )
 
         if not results:
             continue
+        successful_exchanges.add(ex)
 
         for res in results:
             data_list = res.get('stk_cntr_remn', [])
 
             for item in data_list:
-                def to_i(v): 
+                def to_i(v):
                     if not v: return 0
                     try:
                         clean_v = str(v).replace(',', '').replace('+', '').strip()
-                        return int(float(clean_v)) 
+                        return int(float(clean_v))
                     except (ValueError, TypeError):
                         return 0
 
-                def to_f(v): 
+                def to_f(v):
                     if not v: return 0.0
                     try:
                         clean_v = str(v).replace(',', '').replace('+', '').strip()
@@ -191,14 +193,14 @@ def get_account_balance_kt00005(token):
                             'code': clean_code,
                             'name': str(item.get('stk_nm', '')).strip(),
                             'qty': cur_qty,
-                            'buy_price': to_i(item.get('buy_uv')),        
-                            'current_price': to_i(item.get('cur_prc')),   
-                            'eval_profit': to_i(item.get('evltv_prft')),  
+                            'buy_price': to_i(item.get('buy_uv')),
+                            'current_price': to_i(item.get('cur_prc')),
+                            'eval_profit': to_i(item.get('evltv_prft')),
                             'profit_rate': to_f(item.get('pl_rt'))
                         }
                         
     # 딕셔너리의 Value들만 뽑아서 리스트 형태로 반환
-    return list(aggregated_balances.values())
+    return list(aggregated_balances.values()), successful_exchanges
 
 def get_industry_list_ka10101(token, market_type="0"):
     """

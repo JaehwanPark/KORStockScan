@@ -606,7 +606,7 @@ def _confirm_cancel_or_reload_remaining(code, orig_ord_no, token, expected_qty):
 
     # 2) 계좌 재조회 폴백
     try:
-        real_inventory = kiwoom_orders.get_my_inventory(token)
+        real_inventory, _ = kiwoom_orders.get_my_inventory(token)
         real_stock = next((item for item in (real_inventory or []) if str(item.get('code', '')).strip()[:6] == code), None)
         if real_stock:
             real_qty = int(float(real_stock.get('qty', 0) or 0))
@@ -639,7 +639,7 @@ def _confirm_s15_cancel_or_reload_remaining(code, state, wait_sec=0.5):
             return 0
         time.sleep(0.05)
     try:
-        inventory = kiwoom_orders.get_my_inventory(KIWOOM_TOKEN)
+        inventory, _ = kiwoom_orders.get_my_inventory(KIWOOM_TOKEN)
         real_stock = next((item for item in (inventory or []) if str(item.get('code', '')).strip()[:6] == code), None)
         if real_stock:
             return int(float(real_stock.get('qty', 0) or 0))
@@ -1263,9 +1263,9 @@ def sync_balance_with_db():
 
     print("🔄 [데이터 동기화] 실제 계좌 잔고와 DB를 대조합니다...")
 
-    real_inventory = kiwoom_orders.get_my_inventory(KIWOOM_TOKEN)
-    if real_inventory is None:
-        print("⚠️ [동기화 보류] 잔고 조회 API 통신에 실패하여 DB 동기화를 건너뜁니다.")
+    real_inventory, successful_exchanges = kiwoom_orders.get_my_inventory(KIWOOM_TOKEN)
+    if not successful_exchanges:
+        print("⚠️ [동기화 보류] 모든 거래소 잔고 조회 실패, 동기화를 건너뜁니다.")
         return
 
     real_codes = {
@@ -1273,6 +1273,10 @@ def sync_balance_with_db():
         for item in real_inventory
         if item.get('code')
     }
+
+    def get_exchange(code):
+        is_nxt = DB.get_latest_is_nxt(code)
+        return 'NXT' if is_nxt else 'KRX'
 
     try:
         with DB.get_session() as session:
@@ -1284,14 +1288,18 @@ def sync_balance_with_db():
                 safe_db_qty = to_int(record.buy_qty)
 
                 if code not in real_codes:
-                    print(f"⚠️ [동기화] {name}({code}): 실제 잔고 0주. 상태를 COMPLETED로 강제 변경.")
-                    record.status = 'COMPLETED'
-                    if not record.sell_time:
-                        record.sell_time = datetime.now()
+                    exchange = get_exchange(code)
+                    if exchange in successful_exchanges:
+                        print(f"⚠️ [동기화] {name}({code}): 실제 잔고 0주. 상태를 COMPLETED로 강제 변경.")
+                        record.status = 'COMPLETED'
+                        if not record.sell_time:
+                            record.sell_time = datetime.now()
 
-                    target = next((t for t in ACTIVE_TARGETS if str(t.get('code', '')).strip()[:6] == code), None)
-                    if target:
-                        target['status'] = 'COMPLETED'
+                        target = next((t for t in ACTIVE_TARGETS if str(t.get('code', '')).strip()[:6] == code), None)
+                        if target:
+                            target['status'] = 'COMPLETED'
+                    else:
+                        print(f"⚠️ [동기화] {name}({code}): {exchange} 거래소 잔고 조회 실패로 상태 변경 생략.")
                 else:
                     real_qty = to_int(real_codes[code].get('qty', 0))
                     if safe_db_qty != real_qty:
@@ -1323,9 +1331,9 @@ def sync_state_with_broker():
 
     print("🔄 [상태 동기화] 웹소켓 재접속 감지! 증권사 잔고와 봇 상태를 대조합니다...")
 
-    real_balances = kiwoom_utils.get_account_balance_kt00005(KIWOOM_TOKEN)
-    if real_balances is None:
-        print("⚠️ [상태 동기화] 잔고 조회 실패. 다음 턴에 재시도합니다.")
+    real_balances, successful_exchanges = kiwoom_utils.get_account_balance_kt00005(KIWOOM_TOKEN)
+    if not successful_exchanges:
+        print("⚠️ [상태 동기화] 모든 거래소 잔고 조회 실패. 다음 턴에 재시도합니다.")
         return
 
     balance_dict = {
@@ -1400,8 +1408,9 @@ def periodic_account_sync():
         except Exception:
             return 0
 
-    real_inventory = kiwoom_utils.get_account_balance_kt00005(KIWOOM_TOKEN)
-    if real_inventory is None:
+    real_inventory, successful_exchanges = kiwoom_utils.get_account_balance_kt00005(KIWOOM_TOKEN)
+    if not successful_exchanges:
+        print("⚠️ [정기 동기화] 모든 거래소 잔고 조회 실패, 동기화를 건너뜁니다.")
         return
 
     real_codes = {
@@ -1409,6 +1418,10 @@ def periodic_account_sync():
         for item in real_inventory
         if item.get('code')
     }
+
+    def get_exchange(code):
+        is_nxt = DB.get_latest_is_nxt(code)
+        return 'NXT' if is_nxt else 'KRX'
 
     synced_count = 0
 
@@ -1423,26 +1436,30 @@ def periodic_account_sync():
                 code = str(record.stock_code).strip()[:6]
 
                 if code not in real_codes:
-                    print(f"⚠️ [정기 동기화] {record.stock_name}({code}) 잔고 없음. 매도 영수증 누락으로 판단하여 COMPLETED 강제 전환.")
-                    record.status = 'COMPLETED'
-                    record.sell_time = datetime.now()
+                    exchange = get_exchange(code)
+                    if exchange in successful_exchanges:
+                        print(f"⚠️ [정기 동기화] {record.stock_name}({code}) 잔고 없음. 매도 영수증 누락으로 판단하여 COMPLETED 강제 전환.")
+                        record.status = 'COMPLETED'
+                        record.sell_time = datetime.now()
 
-                    with _state_lock:
-                        target_stock = next((t for t in ACTIVE_TARGETS if str(t.get('code', '')).strip()[:6] == code), None)
-                        estimated_sell_price = target_stock.get('sell_target_price', 0) if target_stock else 0
-                        fallback_price = record.buy_price if record.buy_price is not None else 0
+                        with _state_lock:
+                            target_stock = next((t for t in ACTIVE_TARGETS if str(t.get('code', '')).strip()[:6] == code), None)
+                            estimated_sell_price = target_stock.get('sell_target_price', 0) if target_stock else 0
+                            fallback_price = record.buy_price if record.buy_price is not None else 0
 
-                        if not record.sell_price or record.sell_price == 0:
-                            record.sell_price = estimated_sell_price if estimated_sell_price > 0 else fallback_price
+                            if not record.sell_price or record.sell_price == 0:
+                                record.sell_price = estimated_sell_price if estimated_sell_price > 0 else fallback_price
 
-                        if record.buy_price and record.buy_price > 0 and record.sell_price and record.sell_price > 0:
-                            record.profit_rate = round(((record.sell_price - record.buy_price) / record.buy_price) * 100, 2)
+                            if record.buy_price and record.buy_price > 0 and record.sell_price and record.sell_price > 0:
+                                record.profit_rate = round(((record.sell_price - record.buy_price) / record.buy_price) * 100, 2)
 
-                        if target_stock:
-                            target_stock['status'] = 'COMPLETED'
+                            if target_stock:
+                                target_stock['status'] = 'COMPLETED'
 
-                        highest_prices.pop(code, None)
-                    synced_count += 1
+                            highest_prices.pop(code, None)
+                        synced_count += 1
+                    else:
+                        print(f"⚠️ [정기 동기화] {record.stock_name}({code}): {exchange} 거래소 잔고 조회 실패로 상태 변경 생략.")
 
                 else:
                     real_data = real_codes[code]
@@ -2612,7 +2629,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
 
         if buy_qty <= 0:
             print(f"⚠️ [{stock['name']}] 고유 ID({target_id})의 수량이 0주입니다. 실제 키움 잔고로 폴백합니다...")
-            real_inventory = kiwoom_orders.get_my_inventory(KIWOOM_TOKEN)
+            real_inventory, _ = kiwoom_orders.get_my_inventory(KIWOOM_TOKEN)
             real_stock = next((item for item in (real_inventory or []) if str(item.get('code', '')).strip()[:6] == code), None)
 
             if real_stock and int(float(real_stock.get('qty', 0) or 0)) > 0:
@@ -3185,14 +3202,14 @@ def _update_db_for_sell(target_id, exec_price, now, target_stock, strategy, is_s
             pending_msg = target_stock.get('pending_sell_msg')
             audience = target_stock.get('msg_audience', 'ADMIN_ONLY')
             if pending_msg:
-                final_msg = pending_msg.replace("매도 전송", "매도 체결 완료").replace("<익절 주문>", "<익절 완료>").replace("<손절 주문>", "<손절 완료>")
+                final_msg = pending_msg.replace("매도 전송", "매도 체결 완료").replace("[익절 주문]", "[익절 완료]").replace("[손절 주문]", "[손절 완료]")
                 final_msg += f"\n✅ **실제 체결가:** `{exec_price:,}원` (확정 수익률: `{profit_rate:+.2f}%`)"
-                event_bus.publish('TELEGRAM_BROADCAST', {'message': final_msg, 'audience': audience, 'parse_mode': 'Markdown'})
+                event_bus.publish('TELEGRAM_BROADCAST', {'message': final_msg, 'audience': audience, 'parse_mode': 'HTML'})
             else:
-                sign = "🎊 <익절 완료>" if profit_rate > 0 else "📉 <손절 완료>"
+                sign = "🎊 [익절 완료]" if profit_rate > 0 else "📉 [손절 완료]"
                 event_bus.publish(
                     'TELEGRAM_BROADCAST',
-                    {'message': f"{sign} **[{target_stock.get('name')}]** 매도 체결!\n체결가: `{exec_price:,}원`\n수익률: `{profit_rate:+.2f}%`", 'audience': audience, 'parse_mode': 'Markdown'}
+                    {'message': f"{sign} **[{target_stock.get('name')}]** 매도 체결!\n체결가: `{exec_price:,}원`\n수익률: `{profit_rate:+.2f}%`", 'audience': audience, 'parse_mode': 'HTML'}
                 )
             # 메모리에서 pending_sell_msg 제거
             target_stock.pop('pending_sell_msg', None)
@@ -3375,12 +3392,12 @@ def handle_real_execution(exec_data):
                     if pending_msg:
                         final_msg = pending_msg.replace("매도 전송", "매도 체결 완료").replace("[익절 주문]", "[익절 완료]").replace("[손절 주문]", "[손절 완료]")
                         final_msg += f"\n✅ **실제 체결가:** `{exec_price:,}원` (확정 수익률: `{profit_rate:+.2f}%`)"
-                        event_bus.publish('TELEGRAM_BROADCAST', {'message': final_msg, 'audience': audience, 'parse_mode': 'Markdown'})
+                        event_bus.publish('TELEGRAM_BROADCAST', {'message': final_msg, 'audience': audience, 'parse_mode': 'HTML'})
                     else:
                         sign = "🎊 [익절 완료]" if profit_rate > 0 else "📉 [손절 완료]"
                         event_bus.publish(
                             'TELEGRAM_BROADCAST',
-                            {'message': f"{sign} **[{target_stock.get('name')}]** 매도 체결!\n체결가: `{exec_price:,}원`\n수익률: `{profit_rate:+.2f}%`", 'audience': audience, 'parse_mode': 'Markdown'}
+                            {'message': f"{sign} **[{target_stock.get('name')}]** 매도 체결!\n체결가: `{exec_price:,}원`\n수익률: `{profit_rate:+.2f}%`", 'audience': audience, 'parse_mode': 'HTML'}
                         )
             except Exception as e:
                 log_error(f"🚨 [DB 에러] ID {target_id} SELL 처리 중 에러: {e}")
