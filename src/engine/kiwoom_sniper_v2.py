@@ -1128,38 +1128,38 @@ def handle_condition_matched(payload):
             else:
                 if newly_created:
                     if target_position_tag == 'VCP_CANDID':
-                        esc_cnd_name = escape_markdown(cnd_name)
+                        # esc_cnd_name = escape_markdown(cnd_name)
                         esc_name = escape_markdown(name)
                         esc_code = escape_markdown(code)
                         msg = (
-                            f"🌙 **[VCP 예비 후보 포착]**\n"
-                            f"조건검색: `{esc_cnd_name}`\n"
+                            f"🌙 **[VCP 스캘핑 예비 후보 포착]**\n"
+                            # f"조건검색: `{esc_cnd_name}`\n"
                             f"종목: **{esc_name} ({esc_code})**\n"
                             f"내일 오전 VCP 슈팅 조건 만족 시 감시망에 투입됩니다."
                         )
 
                     elif target_position_tag == 'S15_CANDID':
-                        esc_cnd_name = escape_markdown(cnd_name)
+                        # esc_cnd_name = escape_markdown(cnd_name)
                         esc_name = escape_markdown(name)
                         esc_code = escape_markdown(code)
                         msg = (
-                            f"🌙 **[S15 예비 후보 포착]**\n"
-                            f"조건검색: `{esc_cnd_name}`\n"
+                            f"🌙 **[S15 스캘핑 예비 후보 포착]**\n"
+                            # f"조건검색: `{esc_cnd_name}`\n"
                             f"종목: **{esc_name} ({esc_code})**\n"
                             f"S15 슈팅 조건 만족 시 감시망에 투입됩니다."
                         )
 
                     else:
-                        esc_cnd_name = escape_markdown(cnd_name)
+                        # esc_cnd_name = escape_markdown(cnd_name)
                         esc_name = escape_markdown(name)
                         esc_code = escape_markdown(code)
-                        esc_target_date = escape_markdown(str(target_date))
+                        # esc_target_date = escape_markdown(str(target_date))
                         esc_target_strategy = escape_markdown(target_strategy)
                         msg = (
                             f"🌙 **[내일의 스윙 주도주 예약]**\n"
-                            f"조건검색 포착: `{esc_cnd_name}`\n"
+                            # f"조건검색 포착: `{esc_cnd_name}`\n"
                             f"종목: **{esc_name} ({esc_code})**\n"
-                            f"내일({esc_target_date}) 감시망에 전략({esc_target_strategy})으로 자동 투입됩니다."
+                            f"다음 영업일 감시망에 전략({esc_target_strategy})으로 자동 투입됩니다."
                         )
 
                     event_bus.publish(
@@ -3185,11 +3185,11 @@ def _update_db_for_sell(target_id, exec_price, now, target_stock, strategy, is_s
             pending_msg = target_stock.get('pending_sell_msg')
             audience = target_stock.get('msg_audience', 'ADMIN_ONLY')
             if pending_msg:
-                final_msg = pending_msg.replace("매도 전송", "매도 체결 완료").replace("[익절 주문]", "[익절 완료]").replace("[손절 주문]", "[손절 완료]")
+                final_msg = pending_msg.replace("매도 전송", "매도 체결 완료").replace("<익절 주문>", "<익절 완료>").replace("<손절 주문>", "<손절 완료>")
                 final_msg += f"\n✅ **실제 체결가:** `{exec_price:,}원` (확정 수익률: `{profit_rate:+.2f}%`)"
                 event_bus.publish('TELEGRAM_BROADCAST', {'message': final_msg, 'audience': audience, 'parse_mode': 'Markdown'})
             else:
-                sign = "🎊 [익절 완료]" if profit_rate > 0 else "📉 [손절 완료]"
+                sign = "🎊 <익절 완료>" if profit_rate > 0 else "📉 <손절 완료>"
                 event_bus.publish(
                     'TELEGRAM_BROADCAST',
                     {'message': f"{sign} **[{target_stock.get('name')}]** 매도 체결!\n체결가: `{exec_price:,}원`\n수익률: `{profit_rate:+.2f}%`", 'audience': audience, 'parse_mode': 'Markdown'}

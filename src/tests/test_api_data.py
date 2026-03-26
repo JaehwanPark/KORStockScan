@@ -116,11 +116,169 @@ def test_program_buying_ka90008():
     except Exception as e:
         print(f"🚨 프로그램 수급 데이터 호출 중 에러 발생: {e}")
 
+def test_execution_strength_ka10046():
+    print("=====================================================")
+    print("🔍 [TEST] 체결강도 및 거래대금 상세 데이터 (ka10046) 점검")
+    print("=====================================================\n")
+    
+    # 1. 키움 토큰 발급
+    print("🔑 키움 API 토큰 발급 중...")
+    token = kiwoom_utils.get_kiwoom_token()
+    if not token:
+        print("❌ 토큰 발급 실패. 설정 파일이나 환경 변수를 확인하세요.")
+        return
+    print("✅ 토큰 발급 성공!\n")
+    
+    # 2. 테스트 종목 설정 (삼성전자)
+    test_code = "005930_AL"
+    print(f"🎯 테스트 대상 종목: 삼성전자 ({test_code})")
+    
+    print("\n[1] 📊 체결강도 및 거래대금 데이터 (ka10046) 요청 중...")
+    try:
+        strength_data = kiwoom_utils.check_execution_strength_ka10046(token, test_code)
+        
+        # 결과 출력
+        print(f"✅ 체결강도 데이터 수신 성공!")
+        print("\n[데이터 구조 확인]")
+        for key, value in strength_data.items():
+            print(f"  {key}: {value}")
+        
+        # 기본 검증
+        expected_keys = ['is_strong', 'strength', 's5', 's20', 's60', 'acc_amt', 'trde_qty', 'flu_rt']
+        missing_keys = [k for k in expected_keys if k not in strength_data]
+        if missing_keys:
+            print(f"⚠️  필드 누락: {missing_keys}")
+        else:
+            print("✅ 모든 필드 존재함.")
+        
+        # 데이터가 있을 경우 간단한 판정 출력
+        if strength_data['strength'] != 0.0 or strength_data['acc_amt'] != 0:
+            print(f"\n💡 실시간 체결강도: {strength_data['strength']:.2f}%")
+            print(f"💡 5분 체결강도: {strength_data['s5']:.2f}%")
+            print(f"💡 20분 체결강도: {strength_data['s20']:.2f}%")
+            print(f"💡 60분 체결강도: {strength_data['s60']:.2f}%")
+            print(f"💡 누적거래대금: {strength_data['acc_amt']:,} 원")
+            print(f"💡 현재 거래량: {strength_data['trde_qty']:,} 주")
+            print(f"💡 등락율: {strength_data['flu_rt']:.2f}%")
+            if strength_data['is_strong']:
+                print("🟢 강력한 체결강도 (is_strong=True)")
+            else:
+                print("🔴 강력하지 않음 (is_strong=False)")
+        else:
+            print("\n📭 체결강도 데이터가 없거나 0입니다.")
+            
+    except Exception as e:
+        print(f"🚨 체결강도 데이터 호출 중 에러 발생: {e}")
+
+def test_tick_history_ka10003():
+    print("=====================================================")
+    print("🔍 [TEST] 틱 히스토리 데이터 (ka10003) 점검")
+    print("=====================================================\n")
+    
+    # 1. 키움 토큰 발급
+    print("🔑 키움 API 토큰 발급 중...")
+    token = kiwoom_utils.get_kiwoom_token()
+    if not token:
+        print("❌ 토큰 발급 실패. 설정 파일이나 환경 변수를 확인하세요.")
+        return
+    print("✅ 토큰 발급 성공!\n")
+    
+    # 2. 테스트 종목 설정 (삼성전자)
+    test_code = "005930_AL"
+    limit = 5
+    print(f"🎯 테스트 대상 종목: 삼성전자 ({test_code}), 최대 {limit}틱")
+    
+    print("\n[1] 📊 틱 히스토리 데이터 (ka10003) 요청 중...")
+    try:
+        ticks = kiwoom_utils.get_tick_history_ka10003(token, test_code, limit=limit)
+        
+        # 결과 출력
+        print(f"✅ 틱 데이터 수신 성공! 총 {len(ticks)}틱")
+        if ticks:
+            print("\n[데이터 구조 확인]")
+            # 첫 번째 틱의 키 출력
+            first = ticks[0]
+            for key, value in first.items():
+                print(f"  {key}: {value}")
+            
+            # 기본 검증
+            expected_keys = ['time', 'price', 'volume', 'dir', 'flu_rate', 'strength', 'acc_vol']
+            missing_keys = [k for k in expected_keys if k not in first]
+            if missing_keys:
+                print(f"⚠️  필드 누락: {missing_keys}")
+            else:
+                print("✅ 모든 필드 존재함.")
+            
+            # 틱 리스트 출력 (최대 3개)
+            print(f"\n[틱 리스트 (최대 {min(len(ticks), 3)}개)]")
+            for i, tick in enumerate(ticks[:3]):
+                print(f"  {i+1}. 시간:{tick['time']} 가격:{tick['price']:,} 수량:{tick['volume']:,} 방향:{tick['dir']} 체결강도:{tick['strength']:.2f}%")
+        else:
+            print("\n📭 틱 데이터가 없습니다.")
+            
+    except Exception as e:
+        print(f"🚨 틱 데이터 호출 중 에러 발생: {e}")
+
+def test_minute_candles_ka10080():
+    print("=====================================================")
+    print("🔍 [TEST] 분봉 차트 데이터 (ka10080) 점검")
+    print("=====================================================\n")
+    
+    # 1. 키움 토큰 발급
+    print("🔑 키움 API 토큰 발급 중...")
+    token = kiwoom_utils.get_kiwoom_token()
+    if not token:
+        print("❌ 토큰 발급 실패. 설정 파일이나 환경 변수를 확인하세요.")
+        return
+    print("✅ 토큰 발급 성공!\n")
+    
+    # 2. 테스트 종목 설정 (삼성전자)
+    test_code = "005930_AL"
+    limit = 5
+    print(f"🎯 테스트 대상 종목: 삼성전자 ({test_code}), 최근 {limit}분봉")
+    
+    print("\n[1] 📊 분봉 차트 데이터 (ka10080) 요청 중...")
+    try:
+        candles = kiwoom_utils.get_minute_candles_ka10080(token, test_code, limit=limit)
+        
+        # 결과 출력
+        print(f"✅ 분봉 데이터 수신 성공! 총 {len(candles)}봉")
+        if candles:
+            print("\n[데이터 구조 확인]")
+            # 첫 번째 캔들의 키 출력
+            first = candles[0]
+            for key, value in first.items():
+                print(f"  {key}: {value}")
+            
+            # 기본 검증
+            expected_keys = ['체결시간', '시가', '고가', '저가', '현재가', '거래량']
+            missing_keys = [k for k in expected_keys if k not in first]
+            if missing_keys:
+                print(f"⚠️  필드 누락: {missing_keys}")
+            else:
+                print("✅ 모든 필드 존재함.")
+            
+            # 캔들 리스트 출력 (최대 3개)
+            print(f"\n[분봉 리스트 (최대 {min(len(candles), 3)}개)]")
+            for i, candle in enumerate(candles[:3]):
+                print(f"  {i+1}. 시간:{candle['체결시간']} 시가:{candle['시가']:,} 고가:{candle['고가']:,} 저가:{candle['저가']:,} 현재가:{candle['현재가']:,} 거래량:{candle['거래량']:,}")
+        else:
+            print("\n📭 분봉 데이터가 없습니다.")
+            
+    except Exception as e:
+        print(f"🚨 분봉 데이터 호출 중 에러 발생: {e}")
+
 if __name__ == "__main__":
     # Pandas 출력 옵션 설정 (잘림 방지)
     pd.set_option('display.max_columns', None)
     pd.set_option('display.width', 1000)
     
-    test_investor_and_margin_api()
+    # test_investor_and_margin_api()
+    # print("\n" + "="*60)
+    # test_program_buying_ka90008()
+    # print("\n" + "="*60)
+    # test_execution_strength_ka10046()
+    # print("\n" + "="*60)
+    # test_tick_history_ka10003()
     print("\n" + "="*60)
-    test_program_buying_ka90008()
+    test_minute_candles_ka10080()

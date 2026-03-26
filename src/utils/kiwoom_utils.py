@@ -913,8 +913,12 @@ def get_program_flow_realtime(token, code, ws_data=None):
 def check_execution_strength_ka10046(token, code):
     """[ka10046] 체결강도 및 거래대금 상세 데이터 패키지 반환"""
     url = get_api_url("/api/dostk/mrkcond")
-    payload = {"stk_cd": str(code)}
     
+    # SOR 일 경우 _AL 코드로 변환
+    req_code = get_effective_kiwoom_code(code)
+
+    payload = {"stk_cd": str(req_code)}
+ 
     results = fetch_kiwoom_api_continuous(
         url=url, token=token, api_id='ka10046', payload=payload, use_continuous=False
     )
@@ -966,7 +970,11 @@ def get_tick_history_ka10003(token, code, limit=10):
     [ka10003] 주식체결정보요청 - 가격 흐름을 기반으로 한 진짜 체결 방향 역추적
     """
     url = get_api_url("/api/dostk/stkinfo")
-    payload = {"stk_cd": str(code)}
+
+    # SOR 일 경우 _AL 코드로 변환
+    req_code = get_effective_kiwoom_code(code)
+
+    payload = {"stk_cd": str(req_code)}
     
     results = fetch_kiwoom_api_continuous(
         url=url, token=token, api_id='ka10003', payload=payload, use_continuous=False
@@ -1030,8 +1038,12 @@ def get_minute_candles_ka10080(token, code, limit=10):
     """
     url = get_api_url("/api/dostk/chart")
     base_dt = datetime.now().strftime('%Y%m%d')
+    
+    # SOR 일 경우 _AL 코드로 변환
+    req_code = get_effective_kiwoom_code(code)
+
     payload = {
-        'stk_cd': str(code),
+        'stk_cd': str(req_code),
         'tic_scope': '1',       # 1분봉
         'upd_stkpc_tp': '1',    # 수정주가 반영
         'base_dt': base_dt      # 당일 기준
