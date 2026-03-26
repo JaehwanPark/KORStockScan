@@ -5,7 +5,7 @@ import requests
 import pandas as pd
 import numpy as np
 import holidays
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # 💡 독립 로거 및 전역 상수 사용
 from src.utils.logger import log_error
@@ -760,28 +760,54 @@ def scan_orderbook_spike_ka10021(token, mrkt_tp="101"):
     return candidates
 
 
-def check_program_buying_ka90008(token, code):
-    """[ka90008] 프로그램 수급 응답 바디의 모든 핵심 수치 반환"""
+
+def _get_prev_business_day_str(ref_dt=None):
+    """한국 주말/공휴일을 제외한 직전 영업일(YYYYMMDD)을 반환합니다."""
+    if ref_dt is None:
+        ref_dt = datetime.now()
+
+    try:
+        kr_holidays = holidays.KR()
+    except Exception:
+        kr_holidays = set()
+
+    d = ref_dt.date() - timedelta(days=1)
+    while d.weekday() >= 5 or d in kr_holidays:
+        d -= timedelta(days=1)
+    return d.strftime('%Y%m%d')
+
+
+def check_program_buying_ka90008(token, code, date_str=None, retry_prev_if_zero=True):
+    """[ka90008] 프로그램 수급 전일 스냅샷/fallback 조회
+    - 실시간 source of truth는 WS '0w'
+    - 기본 date는 직전 영업일
+    - today로 조회했는데 올제로면 직전 영업일로 1회 재시도
+    """
     url = get_api_url("/api/dostk/mrkcond")
-    today_str = datetime.now().strftime('%Y%m%d')
-    payload = {"amt_qty_tp": "2", "stk_cd": str(code), "date": str(today_str)}
-    
+    target_date = str(date_str or _get_prev_business_day_str())
+    payload = {"amt_qty_tp": "2", "stk_cd": str(code), "date": target_date}
+
     results = fetch_kiwoom_api_continuous(
         url=url, token=token, api_id='ka90008', payload=payload, use_continuous=False
     )
-    
-    # 💡 기본값: 나중에 추가될 모든 필드에 대해 0 또는 False로 초기화
+
+    def to_int(v):
+        if v in (None, ""):
+            return 0
+        try:
+            return int(str(v).replace(',', '').replace('+', '').strip())
+        except Exception:
+            return 0
+
     res_data = {
+        'base_date': target_date,
         'is_buying': False, 'net_amt': 0, 'net_qty': 0,
         'buy_amt': 0, 'sell_amt': 0, 'buy_qty': 0, 'sell_qty': 0,
-        'net_irds_amt': 0 # 순매수 금액 증감
+        'net_irds_amt': 0
     }
-    
+
     if results and (data := results[0].get('prm_trde_trend', [])):
         item = data[0]
-        def to_int(v): return int(str(v).replace(',', '').replace('+', '')) if v else 0
-        
-        # 💡 응답 바디의 모든 수치를 정수로 파싱하여 저장
         res_data.update({
             'net_amt': to_int(item.get('prm_netprps_amt')),
             'net_qty': to_int(item.get('prm_netprps_qty')),
@@ -791,11 +817,61 @@ def check_program_buying_ka90008(token, code):
             'sell_qty': to_int(item.get('prm_sell_qty')),
             'net_irds_amt': to_int(item.get('prm_netprps_amt_irds')),
         })
-        
-        # '진짜 수급' 판정 (필요에 따라 조건 조절 가능)
         res_data['is_buying'] = res_data['net_amt'] > 50 and res_data['net_qty'] > 10000
-            
+
+    if retry_prev_if_zero and date_str:
+        is_all_zero = (
+            res_data['net_amt'] == 0 and res_data['net_qty'] == 0 and
+            res_data['buy_amt'] == 0 and res_data['sell_amt'] == 0 and
+            res_data['buy_qty'] == 0 and res_data['sell_qty'] == 0
+        )
+        today_str = datetime.now().strftime('%Y%m%d')
+        prev_bd = _get_prev_business_day_str()
+        if is_all_zero and str(date_str) == today_str and target_date != prev_bd:
+            return check_program_buying_ka90008(
+                token=token,
+                code=code,
+                date_str=prev_bd,
+                retry_prev_if_zero=False
+            )
+
     return res_data
+
+
+def get_program_flow_realtime(token, code, ws_data=None):
+    """실시간 프로그램 수급은 WS '0w'를 우선, 없으면 ka90008 전일 스냅샷으로 fallback."""
+    ws_data = ws_data or {}
+    received_types = set(ws_data.get('received_types', []))
+    has_ws_program = (
+        '0w' in received_types or
+        any(int(ws_data.get(k, 0) or 0) != 0 for k in ('prog_net_qty', 'prog_delta_qty', 'prog_net_amt', 'prog_delta_amt'))
+    )
+
+    if has_ws_program:
+        net_qty = int(ws_data.get('prog_net_qty', 0) or 0)
+        delta_qty = int(ws_data.get('prog_delta_qty', 0) or 0)
+        net_amt = int(ws_data.get('prog_net_amt', 0) or 0)
+        delta_amt = int(ws_data.get('prog_delta_amt', 0) or 0)
+        return {
+            'source': 'WS_0w',
+            'base_date': '',
+            'is_buying': net_qty > 0 and net_amt > 0,
+            'net_amt': net_amt,
+            'net_qty': net_qty,
+            'buy_amt': 0,
+            'sell_amt': 0,
+            'buy_qty': 0,
+            'sell_qty': 0,
+            'net_irds_amt': delta_amt,
+            'delta_qty': delta_qty,
+            'delta_amt': delta_amt,
+        }
+
+    snap = check_program_buying_ka90008(token, code)
+    snap['source'] = 'KA90008_PREV_BD'
+    snap['delta_qty'] = 0
+    snap['delta_amt'] = int(snap.get('net_irds_amt', 0) or 0)
+    return snap
 
 
 def check_execution_strength_ka10046(token, code):
@@ -1224,3 +1300,259 @@ def get_target_price_up(curr_price, up_percent=0.5):
         price += tick
 
     return price
+def build_realtime_analysis_context(token, stock_code, position_status="NONE", ws_data=None):
+    """
+    ai_engine.py 로 넘길 표준 realtime_ctx 반환
+    """
+    from datetime import datetime, timedelta
+    from src.utils.logger import log_error
+    
+    # 기본 필드 초기화 (스펙 필드 모두 포함)
+    ctx = {
+        'stock_name': '',
+        'stock_code': stock_code,
+        'position_status': position_status,
+        'avg_price': 0,
+        'pnl_pct': 0.0,
+        'strat_label': 'AUTO',
+        
+        # 현재 시세
+        'curr_price': 0,
+        'fluctuation': 0.0,
+        'open_price': 0,
+        'high_price': 0,
+        'low_price': 0,
+        'prev_close': 0,
+        'vwap_price': 0,
+        
+        # 거래량/거래대금
+        'today_vol': 0,
+        'today_turnover': 0,
+        'vol_ratio': 0.0,
+        'turnover_ratio': 0.0,
+        
+        # 체결/체결강도
+        'v_pw_now': 0.0,
+        'v_pw_1m': 0.0,
+        'v_pw_3m': 0.0,
+        'v_pw_5m': 0.0,
+        'trade_qty_signed_now': 0,
+        'buy_exec_qty': 0,
+        'sell_exec_qty': 0,
+        'buy_ratio_now': 0.0,
+        'buy_ratio_1m': 0.0,
+        'buy_ratio_3m': 0.0,
+        
+        # 호가
+        'best_ask': 0,
+        'best_bid': 0,
+        'ask_tot': 0,
+        'bid_tot': 0,
+        'spread_tick': 0,
+        'orderbook_imbalance': 0.0,
+        'ask_top5_qty': 0,
+        'bid_top5_qty': 0,
+        'ask_absorption_status': '',
+        'tape_bias': '',
+        
+        # 프로그램/수급
+        'prog_net_qty': 0,
+        'prog_delta_qty': 0,
+        'prog_net_amt': 0,
+        'prog_delta_amt': 0,
+        'foreign_net': 0,
+        'inst_net': 0,
+        'smart_money_net': 0,
+        
+        # 구조
+        'high_breakout_status': '',
+        'open_position_desc': '',
+        'vwap_status': '',
+        'box_high': 0,
+        'box_low': 0,
+        'drawdown_from_high_pct': 0.0,
+        
+        # 일봉
+        'ma5': 0,
+        'ma20': 0,
+        'ma60': 0,
+        'ma5_status': '',
+        'ma20_status': '',
+        'ma60_status': '',
+        'prev_high': 0,
+        'prev_low': 0,
+        'near_20d_high_pct': 0.0,
+        'daily_setup_desc': '',
+        
+        # 퀀트 엔진 분해 점수
+        'trend_score': 0.0,
+        'flow_score': 0.0,
+        'orderbook_score': 0.0,
+        'timing_score': 0.0,
+        'score': 0.0,
+        'conclusion': '',
+        'target_price': 0,
+        'target_reason': '',
+        'stop_price': 0,
+        'stop_pct': 0.0,
+        'take_profit_price': 0,
+        'trailing_pct': 0.0,
+        
+        # 운영 정보
+        'session_stage': 'REGULAR',
+        'captured_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+    }
+    
+    # 1. 종목 기본 정보
+    try:
+        from . import get_item_info_ka10100
+        item_info = get_item_info_ka10100(token, stock_code)
+        if item_info:
+            ctx['stock_name'] = item_info.get('stk_nm', '')
+            ctx['prev_close'] = int(item_info.get('lastPrice', 0))
+            ctx['open_price'] = int(item_info.get('openPrice', 0))
+            ctx['high_price'] = int(item_info.get('highPrice', 0))
+            ctx['low_price'] = int(item_info.get('lowPrice', 0))
+    except Exception as e:
+        log_error(f'build_realtime_analysis_context get_item_info_ka10100 error: {e}')
+    
+    # 2. 실시간 데이터 (ws_data 제공 시)
+    if ws_data:
+        ctx['curr_price'] = ws_data.get('curr', 0)
+        ctx['fluctuation'] = ws_data.get('fluctuation', 0.0)
+        ctx['v_pw_now'] = ws_data.get('v_pw', 0.0)
+        ctx['ask_tot'] = ws_data.get('ask_tot', 0)
+        ctx['bid_tot'] = ws_data.get('bid_tot', 0)
+        orderbook = ws_data.get('orderbook', {})
+        asks = orderbook.get('asks', [])
+        bids = orderbook.get('bids', [])
+        if asks:
+            ctx['best_ask'] = asks[-1]['price'] if asks else 0
+            ctx['ask_top5_qty'] = sum(a['volume'] for a in asks[:5])
+        if bids:
+            ctx['best_bid'] = bids[0]['price'] if bids else 0
+            ctx['bid_top5_qty'] = sum(b['volume'] for b in bids[:5])
+        if ctx['best_ask'] > 0 and ctx['best_bid'] > 0:
+            from . import get_tick_size
+            ctx['spread_tick'] = (ctx['best_ask'] - ctx['best_bid']) // get_tick_size(ctx['best_bid'])
+        if ctx['bid_tot'] > 0:
+            ctx['orderbook_imbalance'] = ctx['ask_tot'] / ctx['bid_tot']
+    else:
+        # fallback: 최근 분봉에서 현재가 추정
+        try:
+            from . import get_minute_candles_ka10080
+            candles = get_minute_candles_ka10080(token, stock_code, limit=1)
+            if candles:
+                latest = candles[-1]
+                ctx['curr_price'] = latest.get('현재가', 0)
+                ctx['open_price'] = latest.get('시가', 0)
+                ctx['high_price'] = latest.get('고가', 0)
+                ctx['low_price'] = latest.get('저가', 0)
+                ctx['today_vol'] = latest.get('거래량', 0)
+        except Exception as e:
+            log_error(f'build_realtime_analysis_context get_minute_candles_ka10080 error: {e}')
+    
+    # 3. 프로그램 데이터
+    try:
+        from . import check_program_buying_ka90008
+        prog = check_program_buying_ka90008(token, stock_code)
+        ctx['prog_net_qty'] = prog.get('net_qty', 0)
+        ctx['prog_delta_qty'] = prog.get('net_qty', 0)  # TODO: delta 계산
+        ctx['prog_net_amt'] = prog.get('net_amt', 0)
+        ctx['prog_delta_amt'] = prog.get('net_amt', 0)
+    except Exception as e:
+        log_error(f'build_realtime_analysis_context check_program_buying_ka90008 error: {e}')
+    
+    # 4. 체결강도 데이터
+    try:
+        from . import check_execution_strength_ka10046
+        strength = check_execution_strength_ka10046(token, stock_code)
+        ctx['v_pw_now'] = strength.get('strength', ctx['v_pw_now'])
+        ctx['v_pw_1m'] = strength.get('s5', 0.0)
+        ctx['v_pw_3m'] = strength.get('s20', 0.0)
+        ctx['v_pw_5m'] = strength.get('s60', 0.0)
+    except Exception as e:
+        log_error(f'build_realtime_analysis_context check_execution_strength_ka10046 error: {e}')
+    
+    # 5. 일봉 데이터 (이동평균선 등)
+    try:
+        from . import get_daily_ohlcv_ka10081_df
+        daily_df = get_daily_ohlcv_ka10081_df(token, stock_code)
+        if not daily_df.empty:
+            closes = daily_df['Close'].tail(60).values
+            if len(closes) >= 5:
+                ctx['ma5'] = int(closes[-5:].mean())
+            if len(closes) >= 20:
+                ctx['ma20'] = int(closes[-20:].mean())
+            if len(closes) >= 60:
+                ctx['ma60'] = int(closes[-60:].mean())
+            prev_day = daily_df.iloc[-1] if len(daily_df) >= 1 else None
+            if prev_day is not None:
+                ctx['prev_high'] = int(prev_day['High'])
+                ctx['prev_low'] = int(prev_day['Low'])
+            if len(closes) >= 20:
+                highest_20 = closes[-20:].max()
+                if highest_20 > 0:
+                    ctx['near_20d_high_pct'] = (ctx['curr_price'] - highest_20) / highest_20 * 100
+    except Exception as e:
+        log_error(f'build_realtime_analysis_context get_daily_ohlcv_ka10081_df error: {e}')
+    
+    # 6. VWAP 계산 (분봉 누적)
+    try:
+        from . import get_minute_candles_ka10080
+        minute_candles = get_minute_candles_ka10080(token, stock_code, limit=30)
+        if minute_candles:
+            total_volume = sum(c.get('거래량', 0) for c in minute_candles)
+            total_turnover = sum(c.get('현재가', 0) * c.get('거래량', 0) for c in minute_candles)
+            if total_volume > 0:
+                ctx['vwap_price'] = int(total_turnover / total_volume)
+                ctx['today_turnover'] = total_turnover
+                ctx['today_vol'] = total_volume
+    except Exception as e:
+        log_error(f'build_realtime_analysis_context VWAP calc error: {e}')
+    
+    # 7. 볼륨 비율 계산 (20일 평균 대비)
+    try:
+        from . import get_daily_ohlcv_ka10081_df
+        daily_df = get_daily_ohlcv_ka10081_df(token, stock_code)
+        if not daily_df.empty and len(daily_df) >= 20:
+            avg_volume_20 = daily_df['Volume'].tail(20).mean()
+            if avg_volume_20 > 0:
+                ctx['vol_ratio'] = (ctx['today_vol'] / avg_volume_20) * 100
+    except Exception as e:
+        log_error(f'build_realtime_analysis_context vol_ratio error: {e}')
+    
+    # 8. 고가 돌파 상태
+    if ctx['curr_price'] > 0 and ctx['high_price'] > 0:
+        if ctx['curr_price'] >= ctx['high_price']:
+            ctx['high_breakout_status'] = '돌파'
+        else:
+            ctx['high_breakout_status'] = '미돌파'
+    
+    # 9. VWAP 상태
+    if ctx['curr_price'] > 0 and ctx['vwap_price'] > 0:
+        if ctx['curr_price'] >= ctx['vwap_price']:
+            ctx['vwap_status'] = 'VWAP 상회'
+        else:
+            ctx['vwap_status'] = 'VWAP 하회'
+    
+    # 10. 박스 계산 (최근 5분 고저)
+    try:
+        from . import get_minute_candles_ka10080
+        recent_candles = get_minute_candles_ka10080(token, stock_code, limit=5)
+        if recent_candles:
+            highs = [c.get('고가', 0) for c in recent_candles]
+            lows = [c.get('저가', 0) for c in recent_candles]
+            ctx['box_high'] = max(highs) if highs else 0
+            ctx['box_low'] = min(lows) if lows else 0
+    except Exception as e:
+        log_error(f'build_realtime_analysis_context box calc error: {e}')
+    
+    # 11. 외인/기관 수급 (간단 구현)
+    # TODO: implement get_investor_daily_ka10059_df 사용
+    
+    # 12. 퀀트 점수 (임시)
+    ctx['score'] = 50.0
+    ctx['conclusion'] = '데이터 수집 완료'
+    
+    return ctx

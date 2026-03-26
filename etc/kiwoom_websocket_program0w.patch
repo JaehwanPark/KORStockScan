@@ -1,0 +1,23 @@
+--- a/kiwoom_websocket.py
++++ b/kiwoom_websocket.py
+@@ -378,7 +378,10 @@
+                                     'volume': 0, 'time': '', 'fluctuation': 0.0, 'open': 0,
+                                     'orderbook': {'asks': [], 'bids': []},
+                                     'prog_net_qty': 0, 'prog_delta_qty': 0,
+-                                    'prog_net_amt': 0, 'prog_delta_amt': 0
++                                    'prog_net_amt': 0, 'prog_delta_amt': 0,
++                                    'last_prog_update_ts': 0.0,
++                                    'program_history': deque(maxlen=120),
++                                    'received_types': set()
+                                 }
+                             
+                             target = self.realtime_data[item_code]
+@@ -479,7 +482,7 @@
+                 }
+                 await self.websocket.send(json.dumps(reg_packet))
+                 self.subscribed_codes.update(codes)
+-                print(f"📡 [WS] 종목 등록 완료 및 데이터 수신 시작: {codes}")
++                print(f"📡 [WS] 종목 등록 패킷 전송 완료(실수신 대기): {codes}")
+             else:
+                 print(f"⚠️ [WS] 연결된 웹소켓이 없어 전송 실패: {codes}")
+ 

@@ -24,7 +24,7 @@ def test_investor_and_margin_api():
     print("✅ 토큰 발급 성공!\n")
 
     # 2. 테스트 종목 설정 (삼성전자)
-    test_code = "005930"
+    test_code = "005930_AL"
     print(f"🎯 테스트 대상 종목: 삼성전자 ({test_code})")
 
     # ==========================================
@@ -67,9 +67,60 @@ def test_investor_and_margin_api():
     except Exception as e:
         print(f"🚨 신용 데이터 호출 중 에러 발생: {e}")
 
+def test_program_buying_ka90008():
+    print("=====================================================")
+    print("🔍 [TEST] 프로그램 수급 (ka90008) 점검")
+    print("=====================================================\n")
+    
+    # 1. 키움 토큰 발급
+    print("🔑 키움 API 토큰 발급 중...")
+    token = kiwoom_utils.get_kiwoom_token()
+    if not token:
+        print("❌ 토큰 발급 실패. 설정 파일이나 환경 변수를 확인하세요.")
+        return
+    print("✅ 토큰 발급 성공!\n")
+    
+    # 2. 테스트 종목 설정 (삼성전자)
+    test_code = "005930"
+    print(f"🎯 테스트 대상 종목: 삼성전자 ({test_code})")
+    
+    print("\n[1] 📊 프로그램 수급 데이터 (ka90008) 요청 중...")
+    try:
+        program_data = kiwoom_utils.check_program_buying_ka90008(token, test_code)
+        
+        # 결과 출력
+        print(f"✅ 프로그램 수급 데이터 수신 성공!")
+        print("\n[데이터 구조 확인]")
+        for key, value in program_data.items():
+            print(f"  {key}: {value}")
+        
+        # 기본 검증
+        expected_keys = ['is_buying', 'net_amt', 'net_qty', 'buy_amt', 'sell_amt', 'buy_qty', 'sell_qty', 'net_irds_amt']
+        missing_keys = [k for k in expected_keys if k not in program_data]
+        if missing_keys:
+            print(f"⚠️  필드 누락: {missing_keys}")
+        else:
+            print("✅ 모든 필드 존재함.")
+        
+        # 데이터가 있을 경우 간단한 판정 출력
+        if program_data['net_amt'] != 0 or program_data['net_qty'] != 0:
+            print(f"\n💡 프로그램 순매수 금액: {program_data['net_amt']:,} 원")
+            print(f"💡 프로그램 순매수 수량: {program_data['net_qty']:,} 주")
+            if program_data['is_buying']:
+                print("🟢 프로그램 순매수 상태 (is_buying=True)")
+            else:
+                print("🔴 프로그램 순매수 아님 (is_buying=False)")
+        else:
+            print("\n📭 프로그램 수급 데이터가 없거나 0입니다.")
+            
+    except Exception as e:
+        print(f"🚨 프로그램 수급 데이터 호출 중 에러 발생: {e}")
+
 if __name__ == "__main__":
     # Pandas 출력 옵션 설정 (잘림 방지)
     pd.set_option('display.max_columns', None)
     pd.set_option('display.width', 1000)
     
     test_investor_and_margin_api()
+    print("\n" + "="*60)
+    test_program_buying_ka90008()

@@ -461,13 +461,17 @@ def get_daily_data_ka10005_df(token, code):
 
 def get_investor_daily_ka10059_df(token, code, base_dt=None):
     """[ka10059] 수급 데이터 (투신, 연기금, 사모펀드 등 세부 주체 확장)"""
+    
+    # SOR 일 경우 _AL 코드로 변환
+    req_code = get_effective_kiwoom_code(code)
+    
     if not base_dt:
         base_dt = datetime.now().strftime("%Y%m%d")
     else:
         base_dt = base_dt.replace("-", "")
 
     url = get_api_url("/api/dostk/stkinfo")
-    payload = {"dt": base_dt, "stk_cd": str(code), "amt_qty_tp": "2", "trde_tp": "0", "unit_tp": "1"}
+    payload = {"dt": base_dt, "stk_cd": str(req_code), "amt_qty_tp": "2", "trde_tp": "0", "unit_tp": "1"}
 
     # 💡 [방어막 1] 확장된 컬럼 뼈대
     target_cols = [
@@ -525,13 +529,17 @@ def get_investor_daily_ka10059_df(token, code, base_dt=None):
 
 def get_margin_daily_ka10013_df(token, code, base_dt=None):
     """[ka10013] 신용 잔고율 데이터 (공통 래퍼 함수 및 누락 방어 적용)"""
+
+    # SOR 일 경우 _AL 코드로 변환
+    req_code = get_effective_kiwoom_code(code)
+    
     if not base_dt:
         base_dt = datetime.now().strftime("%Y%m%d")
     else:
         base_dt = base_dt.replace("-", "")
 
     url = get_api_url("/api/dostk/stkinfo")
-    payload = {"stk_cd": str(code), "dt": base_dt, "qry_tp": "1"}
+    payload = {"stk_cd": str(req_code), "dt": base_dt, "qry_tp": "1"}
 
     empty_df = pd.DataFrame(columns=['Margin_Rate'])
     empty_df.index.name = 'Date'
