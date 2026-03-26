@@ -1348,258 +1348,258 @@ def _build_daily_setup_desc(ctx):
         return "중립 또는 약세"
     return "박스 또는 눌림 구간"
     
-
-def build_realtime_analysis_context(
-    token,
-    code,
-    ws_data=None,
-    strat_label="AUTO",
-    position_status="NONE",
-    avg_price=0,
-    pnl_pct=0.0,
-    trailing_pct=0.0,
-    stop_pct=0.0,
-    target_price=0,
-    target_reason="",
-    score=0.0,
-    conclusion="",
-    quant_metrics=None,
-):
-    """ai_engine.generate_realtime_report()용 표준 realtime_ctx 생성"""
-    ws_data = ws_data or {}
-    quant_metrics = quant_metrics or {}
-
-    curr_price = _coerce_int(ws_data.get("curr"), 0)
-    fluctuation = _coerce_float(ws_data.get("fluctuation"), 0.0)
-    today_vol = _coerce_int(ws_data.get("volume"), 0)
-    ask_tot = _coerce_int(ws_data.get("ask_tot"), 0)
-    bid_tot = _coerce_int(ws_data.get("bid_tot"), 0)
-    orderbook = ws_data.get("orderbook") or {}
-    asks = orderbook.get("asks") or []
-    bids = orderbook.get("bids") or []
-    best_ask = _coerce_int(asks[-1].get("price") if asks else 0, 0)
-    best_bid = _coerce_int(bids[0].get("price") if bids else 0, 0)
-
-    strength_pack = check_execution_strength_ka10046(token, code)
-    program_pack = check_program_buying_ka90008(token, code)
-    investor_pack = get_investor_flow_summary_ka10059(token, code)
-    tick_pack = summarize_ticks_for_realtime_ka10003(token, code, limit=20)
-    minute_candles = get_minute_candles_ka10080(token, code, limit=40)
-    daily_df = get_daily_ohlcv_ka10081_df(token, code)
-
-    if curr_price <= 0:
-        curr_price = _coerce_int(strength_pack.get("acc_amt"), 0)
-    if today_vol <= 0:
-        today_vol = _coerce_int(strength_pack.get("trde_qty"), 0)
-    if fluctuation == 0.0:
-        fluctuation = _coerce_float(strength_pack.get("flu_rt"), 0.0)
-
-    vol_ratio = 0.0
-    today_turnover = _coerce_int(strength_pack.get("acc_amt"), 0)
-    ma5 = ma20 = ma60 = 0.0
-    prev_high = prev_low = 0
-    near_20d_high_pct = 0.0
-    drawdown_from_high_pct = 0.0
-
-    if not daily_df.empty:
-        work_df = daily_df.sort_index().copy()
-        if "Volume" in work_df.columns and len(work_df) >= 20:
-            vol_base = float(work_df["Volume"].tail(20).mean() or 0.0)
-            if vol_base > 0 and today_vol > 0:
-                vol_ratio = (today_vol / vol_base) * 100.0
-        if len(work_df) >= 5:
-            ma5 = float(work_df["Close"].tail(5).mean())
-        if len(work_df) >= 20:
-            ma20 = float(work_df["Close"].tail(20).mean())
-        if len(work_df) >= 60:
-            ma60 = float(work_df["Close"].tail(60).mean())
-        if len(work_df) >= 2:
-            prev_high = _coerce_int(work_df.iloc[-1].get("High", 0))
-            prev_low = _coerce_int(work_df.iloc[-1].get("Low", 0))
-        if len(work_df) >= 20 and curr_price > 0:
-            high_20 = float(work_df["High"].tail(20).max() or 0.0)
-            if high_20 > 0:
-                near_20d_high_pct = ((curr_price / high_20) - 1.0) * 100.0
-
-    vwap_price = 0
-    box_high = box_low = 0
-    intraday_high = intraday_low = 0
-    open_price = _coerce_int(ws_data.get("open"), 0)
-    if minute_candles:
-        total_turnover = 0
-        total_volume = 0
-        highs = []
-        lows = []
-        closes = []
-        for candle in minute_candles:
-            c_close = _coerce_int(candle.get("현재가") or candle.get("Close"), 0)
-            c_high = _coerce_int(candle.get("고가") or candle.get("High"), 0)
-            c_low = _coerce_int(candle.get("저가") or candle.get("Low"), 0)
-            c_open = _coerce_int(candle.get("시가") or candle.get("Open"), 0)
-            c_vol = abs(_coerce_int(candle.get("거래량") or candle.get("Volume"), 0))
-            if open_price <= 0 and c_open > 0:
-                open_price = c_open
-            if c_close > 0 and c_vol > 0:
-                total_turnover += c_close * c_vol
-                total_volume += c_vol
-            if c_high > 0: highs.append(c_high)
-            if c_low > 0: lows.append(c_low)
-            if c_close > 0: closes.append(c_close)
-        if total_volume > 0:
-            vwap_price = int(total_turnover / total_volume)
-        if highs:
-            intraday_high = max(highs)
-            if curr_price > 0:
-                drawdown_from_high_pct = ((curr_price / intraday_high) - 1.0) * 100.0
-        if lows:
-            intraday_low = min(lows)
-        last_5 = minute_candles[-5:]
-        box_high = max((_coerce_int(c.get("고가") or c.get("High"), 0) for c in last_5), default=0)
-        lows_5 = [_coerce_int(c.get("저가") or c.get("Low"), 0) for c in last_5 if _coerce_int(c.get("저가") or c.get("Low"), 0) > 0]
-        box_low = min(lows_5) if lows_5 else 0
-
-    if curr_price > 0 and target_price <= 0:
-        up_pct = 3.0 if str(strat_label).upper() in {"KOSPI_ML", "KOSDAQ_ML", "SWING"} else 1.0
-        target_price = get_target_price_up(curr_price, up_pct)
-        target_reason = target_reason or f"기본 목표가(+{up_pct:.1f}%)"
-
-    if stop_pct <= 0.0:
-        stop_pct = 2.0 if str(strat_label).upper() in {"KOSPI_ML", "KOSDAQ_ML", "SWING"} else 0.8
-    if trailing_pct <= 0.0:
-        trailing_pct = 4.0 if str(strat_label).upper() in {"KOSPI_ML", "KOSDAQ_ML", "SWING"} else 1.5
-
-    ma5_status = "정보없음"
-    ma20_status = "정보없음"
-    ma60_status = "정보없음"
-    if ma5 > 0 and curr_price > 0:
-        ma5_status = "5일선 상회" if curr_price >= ma5 else "5일선 하회"
-    if ma20 > 0 and curr_price > 0:
-        ma20_status = "20일선 상회" if curr_price >= ma20 else "20일선 하회"
-    if ma60 > 0 and curr_price > 0:
-        ma60_status = "60일선 상회" if curr_price >= ma60 else "60일선 하회"
-
-    orderbook_imbalance = (ask_tot / bid_tot) if bid_tot > 0 else (999.0 if ask_tot > 0 else 0.0)
-    tick_size = get_tick_size(curr_price) if curr_price > 0 else 1
-    spread_tick = 0
-    if best_ask > 0 and best_bid > 0 and tick_size > 0:
-        spread_tick = max(0, int(round((best_ask - best_bid) / tick_size)))
-
-    v_pw_now = _coerce_float(ws_data.get("v_pw"), 0.0) or _coerce_float(strength_pack.get("strength"), 0.0)
-    v_pw_1m = _coerce_float(strength_pack.get("s5"), 0.0)
-    v_pw_3m = _coerce_float(strength_pack.get("s20"), 0.0)
-    v_pw_5m = _coerce_float(strength_pack.get("s60"), 0.0)
-
-    if not open_price:
-        open_price = curr_price
-
-    if curr_price > 0 and open_price > 0:
-        if curr_price >= open_price:
-            open_position_desc = f"시가 상회 (+{((curr_price/open_price)-1)*100:.2f}%)"
+    
+    def build_realtime_analysis_context(
+        token,
+        code,
+        ws_data=None,
+        strat_label="AUTO",
+        position_status="NONE",
+        avg_price=0,
+        pnl_pct=0.0,
+        trailing_pct=0.0,
+        stop_pct=0.0,
+        target_price=0,
+        target_reason="",
+        score=0.0,
+        conclusion="",
+        quant_metrics=None,
+    ):
+        """ai_engine.generate_realtime_report()용 표준 realtime_ctx 생성"""
+        ws_data = ws_data or {}
+        quant_metrics = quant_metrics or {}
+    
+        curr_price = _coerce_int(ws_data.get("curr"), 0)
+        fluctuation = _coerce_float(ws_data.get("fluctuation"), 0.0)
+        today_vol = _coerce_int(ws_data.get("volume"), 0)
+        ask_tot = _coerce_int(ws_data.get("ask_tot"), 0)
+        bid_tot = _coerce_int(ws_data.get("bid_tot"), 0)
+        orderbook = ws_data.get("orderbook") or {}
+        asks = orderbook.get("asks") or []
+        bids = orderbook.get("bids") or []
+        best_ask = _coerce_int(asks[-1].get("price") if asks else 0, 0)
+        best_bid = _coerce_int(bids[0].get("price") if bids else 0, 0)
+    
+        strength_pack = check_execution_strength_ka10046(token, code)
+        program_pack = check_program_buying_ka90008(token, code)
+        investor_pack = get_investor_flow_summary_ka10059(token, code)
+        tick_pack = summarize_ticks_for_realtime_ka10003(token, code, limit=20)
+        minute_candles = get_minute_candles_ka10080(token, code, limit=40)
+        daily_df = get_daily_ohlcv_ka10081_df(token, code)
+    
+        if curr_price <= 0:
+            curr_price = _coerce_int(strength_pack.get("acc_amt"), 0)
+        if today_vol <= 0:
+            today_vol = _coerce_int(strength_pack.get("trde_qty"), 0)
+        if fluctuation == 0.0:
+            fluctuation = _coerce_float(strength_pack.get("flu_rt"), 0.0)
+    
+        vol_ratio = 0.0
+        today_turnover = _coerce_int(strength_pack.get("acc_amt"), 0)
+        ma5 = ma20 = ma60 = 0.0
+        prev_high = prev_low = 0
+        near_20d_high_pct = 0.0
+        drawdown_from_high_pct = 0.0
+    
+        if not daily_df.empty:
+            work_df = daily_df.sort_index().copy()
+            if "Volume" in work_df.columns and len(work_df) >= 20:
+                vol_base = float(work_df["Volume"].tail(20).mean() or 0.0)
+                if vol_base > 0 and today_vol > 0:
+                    vol_ratio = (today_vol / vol_base) * 100.0
+            if len(work_df) >= 5:
+                ma5 = float(work_df["Close"].tail(5).mean())
+            if len(work_df) >= 20:
+                ma20 = float(work_df["Close"].tail(20).mean())
+            if len(work_df) >= 60:
+                ma60 = float(work_df["Close"].tail(60).mean())
+            if len(work_df) >= 2:
+                prev_high = _coerce_int(work_df.iloc[-1].get("High", 0))
+                prev_low = _coerce_int(work_df.iloc[-1].get("Low", 0))
+            if len(work_df) >= 20 and curr_price > 0:
+                high_20 = float(work_df["High"].tail(20).max() or 0.0)
+                if high_20 > 0:
+                    near_20d_high_pct = ((curr_price / high_20) - 1.0) * 100.0
+    
+        vwap_price = 0
+        box_high = box_low = 0
+        intraday_high = intraday_low = 0
+        open_price = _coerce_int(ws_data.get("open"), 0)
+        if minute_candles:
+            total_turnover = 0
+            total_volume = 0
+            highs = []
+            lows = []
+            closes = []
+            for candle in minute_candles:
+                c_close = _coerce_int(candle.get("현재가") or candle.get("Close"), 0)
+                c_high = _coerce_int(candle.get("고가") or candle.get("High"), 0)
+                c_low = _coerce_int(candle.get("저가") or candle.get("Low"), 0)
+                c_open = _coerce_int(candle.get("시가") or candle.get("Open"), 0)
+                c_vol = abs(_coerce_int(candle.get("거래량") or candle.get("Volume"), 0))
+                if open_price <= 0 and c_open > 0:
+                    open_price = c_open
+                if c_close > 0 and c_vol > 0:
+                    total_turnover += c_close * c_vol
+                    total_volume += c_vol
+                if c_high > 0: highs.append(c_high)
+                if c_low > 0: lows.append(c_low)
+                if c_close > 0: closes.append(c_close)
+            if total_volume > 0:
+                vwap_price = int(total_turnover / total_volume)
+            if highs:
+                intraday_high = max(highs)
+                if curr_price > 0:
+                    drawdown_from_high_pct = ((curr_price / intraday_high) - 1.0) * 100.0
+            if lows:
+                intraday_low = min(lows)
+            last_5 = minute_candles[-5:]
+            box_high = max((_coerce_int(c.get("고가") or c.get("High"), 0) for c in last_5), default=0)
+            lows_5 = [_coerce_int(c.get("저가") or c.get("Low"), 0) for c in last_5 if _coerce_int(c.get("저가") or c.get("Low"), 0) > 0]
+            box_low = min(lows_5) if lows_5 else 0
+    
+        if curr_price > 0 and target_price <= 0:
+            up_pct = 3.0 if str(strat_label).upper() in {"KOSPI_ML", "KOSDAQ_ML", "SWING"} else 1.0
+            target_price = get_target_price_up(curr_price, up_pct)
+            target_reason = target_reason or f"기본 목표가(+{up_pct:.1f}%)"
+    
+        if stop_pct <= 0.0:
+            stop_pct = 2.0 if str(strat_label).upper() in {"KOSPI_ML", "KOSDAQ_ML", "SWING"} else 0.8
+        if trailing_pct <= 0.0:
+            trailing_pct = 4.0 if str(strat_label).upper() in {"KOSPI_ML", "KOSDAQ_ML", "SWING"} else 1.5
+    
+        ma5_status = "정보없음"
+        ma20_status = "정보없음"
+        ma60_status = "정보없음"
+        if ma5 > 0 and curr_price > 0:
+            ma5_status = "5일선 상회" if curr_price >= ma5 else "5일선 하회"
+        if ma20 > 0 and curr_price > 0:
+            ma20_status = "20일선 상회" if curr_price >= ma20 else "20일선 하회"
+        if ma60 > 0 and curr_price > 0:
+            ma60_status = "60일선 상회" if curr_price >= ma60 else "60일선 하회"
+    
+        orderbook_imbalance = (ask_tot / bid_tot) if bid_tot > 0 else (999.0 if ask_tot > 0 else 0.0)
+        tick_size = get_tick_size(curr_price) if curr_price > 0 else 1
+        spread_tick = 0
+        if best_ask > 0 and best_bid > 0 and tick_size > 0:
+            spread_tick = max(0, int(round((best_ask - best_bid) / tick_size)))
+    
+        v_pw_now = _coerce_float(ws_data.get("v_pw"), 0.0) or _coerce_float(strength_pack.get("strength"), 0.0)
+        v_pw_1m = _coerce_float(strength_pack.get("s5"), 0.0)
+        v_pw_3m = _coerce_float(strength_pack.get("s20"), 0.0)
+        v_pw_5m = _coerce_float(strength_pack.get("s60"), 0.0)
+    
+        if not open_price:
+            open_price = curr_price
+    
+        if curr_price > 0 and open_price > 0:
+            if curr_price >= open_price:
+                open_position_desc = f"시가 상회 (+{((curr_price/open_price)-1)*100:.2f}%)"
+            else:
+                open_position_desc = f"시가 하회 ({((curr_price/open_price)-1)*100:.2f}%)"
         else:
-            open_position_desc = f"시가 하회 ({((curr_price/open_price)-1)*100:.2f}%)"
-    else:
-        open_position_desc = "정보없음"
-
-    if curr_price > 0 and intraday_high > 0:
-        if curr_price >= intraday_high:
-            high_breakout_status = "당일 고가 돌파"
-        elif curr_price >= intraday_high * 0.997:
-            high_breakout_status = "고가 재도전 구간"
+            open_position_desc = "정보없음"
+    
+        if curr_price > 0 and intraday_high > 0:
+            if curr_price >= intraday_high:
+                high_breakout_status = "당일 고가 돌파"
+            elif curr_price >= intraday_high * 0.997:
+                high_breakout_status = "고가 재도전 구간"
+            else:
+                high_breakout_status = "고가 하단"
         else:
-            high_breakout_status = "고가 하단"
-    else:
-        high_breakout_status = "정보없음"
-
-    if vwap_price > 0 and curr_price > 0:
-        vwap_status = "상회" if curr_price >= vwap_price else "하회"
-    else:
-        vwap_status = "정보없음"
-
-    if ask_tot > bid_tot and tick_pack.get("buy_ratio_now", 0.0) >= 55.0:
-        ask_absorption_status = "매도벽 소화 시도"
-    elif bid_tot > ask_tot and tick_pack.get("buy_ratio_now", 0.0) < 45.0:
-        ask_absorption_status = "매수벽 우세 / 하락 방어"
-    else:
-        ask_absorption_status = "중립 또는 혼조"
-
-    trend_score = _coerce_float(quant_metrics.get("trend_score"), 0.0)
-    flow_score = _coerce_float(quant_metrics.get("flow_score"), 0.0)
-    orderbook_score = _coerce_float(quant_metrics.get("orderbook_score"), 0.0)
-    timing_score = _coerce_float(quant_metrics.get("timing_score"), 0.0)
-    if trend_score == 0.0 and score:
-        trend_score = min(100.0, max(0.0, float(score)))
-    if flow_score == 0.0:
-        flow_score = min(100.0, max(0.0, 50.0 + (program_pack.get("net_qty", 0) / 10000.0)))
-    if orderbook_score == 0.0:
-        orderbook_score = 60.0 if bid_tot >= ask_tot else 45.0
-    if timing_score == 0.0:
-        timing_score = min(100.0, max(0.0, 50.0 + (v_pw_now - 100.0))) if v_pw_now > 0 else 50.0
-
-    ctx = {
-        "captured_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "session_stage": "INTRADAY",
-        "strat_label": strat_label,
-        "position_status": position_status,
-        "avg_price": _coerce_int(avg_price, 0),
-        "pnl_pct": _coerce_float(pnl_pct, 0.0),
-        "curr_price": curr_price,
-        "fluctuation": fluctuation,
-        "target_price": _coerce_int(target_price, 0),
-        "target_reason": target_reason,
-        "trailing_pct": _coerce_float(trailing_pct, 0.0),
-        "stop_pct": _coerce_float(stop_pct, 0.0),
-        "trend_score": trend_score,
-        "flow_score": flow_score,
-        "orderbook_score": orderbook_score,
-        "timing_score": timing_score,
-        "score": _coerce_float(score, 0.0),
-        "conclusion": conclusion,
-        "today_vol": today_vol,
-        "vol_ratio": vol_ratio,
-        "today_turnover": today_turnover,
-        "v_pw_now": v_pw_now,
-        "v_pw_1m": v_pw_1m,
-        "v_pw_3m": v_pw_3m,
-        "v_pw_5m": v_pw_5m,
-        "buy_ratio_now": _coerce_float(tick_pack.get("buy_ratio_now"), 0.0),
-        "buy_ratio_1m": _coerce_float(tick_pack.get("buy_ratio_1m"), 0.0),
-        "buy_ratio_3m": _coerce_float(tick_pack.get("buy_ratio_3m"), 0.0),
-        "trade_qty_signed_now": _coerce_int(tick_pack.get("trade_qty_signed_now"), 0),
-        "prog_net_qty": _coerce_int(ws_data.get("prog_net_qty"), 0) or _coerce_int(program_pack.get("net_qty"), 0),
-        "prog_delta_qty": _coerce_int(ws_data.get("prog_delta_qty"), 0),
-        "foreign_net": _coerce_int(investor_pack.get("foreign_net"), 0),
-        "inst_net": _coerce_int(investor_pack.get("inst_net"), 0),
-        "smart_money_net": _coerce_int(investor_pack.get("smart_money_net"), 0),
-        "best_ask": best_ask,
-        "best_bid": best_bid,
-        "ask_tot": ask_tot,
-        "bid_tot": bid_tot,
-        "orderbook_imbalance": orderbook_imbalance,
-        "spread_tick": spread_tick,
-        "tape_bias": tick_pack.get("tape_bias", "중립"),
-        "ask_absorption_status": ask_absorption_status,
-        "vwap_price": vwap_price,
-        "vwap_status": vwap_status,
-        "open_position_desc": open_position_desc,
-        "high_breakout_status": high_breakout_status,
-        "box_high": box_high,
-        "box_low": box_low,
-        "daily_setup_desc": _build_daily_setup_desc({
+            high_breakout_status = "정보없음"
+    
+        if vwap_price > 0 and curr_price > 0:
+            vwap_status = "상회" if curr_price >= vwap_price else "하회"
+        else:
+            vwap_status = "정보없음"
+    
+        if ask_tot > bid_tot and tick_pack.get("buy_ratio_now", 0.0) >= 55.0:
+            ask_absorption_status = "매도벽 소화 시도"
+        elif bid_tot > ask_tot and tick_pack.get("buy_ratio_now", 0.0) < 45.0:
+            ask_absorption_status = "매수벽 우세 / 하락 방어"
+        else:
+            ask_absorption_status = "중립 또는 혼조"
+    
+        trend_score = _coerce_float(quant_metrics.get("trend_score"), 0.0)
+        flow_score = _coerce_float(quant_metrics.get("flow_score"), 0.0)
+        orderbook_score = _coerce_float(quant_metrics.get("orderbook_score"), 0.0)
+        timing_score = _coerce_float(quant_metrics.get("timing_score"), 0.0)
+        if trend_score == 0.0 and score:
+            trend_score = min(100.0, max(0.0, float(score)))
+        if flow_score == 0.0:
+            flow_score = min(100.0, max(0.0, 50.0 + (program_pack.get("net_qty", 0) / 10000.0)))
+        if orderbook_score == 0.0:
+            orderbook_score = 60.0 if bid_tot >= ask_tot else 45.0
+        if timing_score == 0.0:
+            timing_score = min(100.0, max(0.0, 50.0 + (v_pw_now - 100.0))) if v_pw_now > 0 else 50.0
+    
+        ctx = {
+            "captured_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "session_stage": "INTRADAY",
+            "strat_label": strat_label,
+            "position_status": position_status,
+            "avg_price": _coerce_int(avg_price, 0),
+            "pnl_pct": _coerce_float(pnl_pct, 0.0),
             "curr_price": curr_price,
-            "ma5": ma5,
-            "ma20": ma20,
-            "prev_high": prev_high,
+            "fluctuation": fluctuation,
+            "target_price": _coerce_int(target_price, 0),
+            "target_reason": target_reason,
+            "trailing_pct": _coerce_float(trailing_pct, 0.0),
+            "stop_pct": _coerce_float(stop_pct, 0.0),
+            "trend_score": trend_score,
+            "flow_score": flow_score,
+            "orderbook_score": orderbook_score,
+            "timing_score": timing_score,
+            "score": _coerce_float(score, 0.0),
+            "conclusion": conclusion,
+            "today_vol": today_vol,
             "vol_ratio": vol_ratio,
+            "today_turnover": today_turnover,
+            "v_pw_now": v_pw_now,
+            "v_pw_1m": v_pw_1m,
+            "v_pw_3m": v_pw_3m,
+            "v_pw_5m": v_pw_5m,
+            "buy_ratio_now": _coerce_float(tick_pack.get("buy_ratio_now"), 0.0),
+            "buy_ratio_1m": _coerce_float(tick_pack.get("buy_ratio_1m"), 0.0),
+            "buy_ratio_3m": _coerce_float(tick_pack.get("buy_ratio_3m"), 0.0),
+            "trade_qty_signed_now": _coerce_int(tick_pack.get("trade_qty_signed_now"), 0),
+            "prog_net_qty": _coerce_int(ws_data.get("prog_net_qty"), 0) or _coerce_int(program_pack.get("net_qty"), 0),
+            "prog_delta_qty": _coerce_int(ws_data.get("prog_delta_qty"), 0),
+            "foreign_net": _coerce_int(investor_pack.get("foreign_net"), 0),
+            "inst_net": _coerce_int(investor_pack.get("inst_net"), 0),
+            "smart_money_net": _coerce_int(investor_pack.get("smart_money_net"), 0),
+            "best_ask": best_ask,
+            "best_bid": best_bid,
+            "ask_tot": ask_tot,
+            "bid_tot": bid_tot,
+            "orderbook_imbalance": orderbook_imbalance,
+            "spread_tick": spread_tick,
+            "tape_bias": tick_pack.get("tape_bias", "중립"),
+            "ask_absorption_status": ask_absorption_status,
+            "vwap_price": vwap_price,
+            "vwap_status": vwap_status,
+            "open_position_desc": open_position_desc,
+            "high_breakout_status": high_breakout_status,
+            "box_high": box_high,
+            "box_low": box_low,
+            "daily_setup_desc": _build_daily_setup_desc({
+                "curr_price": curr_price,
+                "ma5": ma5,
+                "ma20": ma20,
+                "prev_high": prev_high,
+                "vol_ratio": vol_ratio,
+                "near_20d_high_pct": near_20d_high_pct,
+            }),
+            "ma5_status": ma5_status,
+            "ma20_status": ma20_status,
+            "ma60_status": ma60_status,
+            "prev_high": prev_high,
+            "prev_low": prev_low,
             "near_20d_high_pct": near_20d_high_pct,
-        }),
-        "ma5_status": ma5_status,
-        "ma20_status": ma20_status,
-        "ma60_status": ma60_status,
-        "prev_high": prev_high,
-        "prev_low": prev_low,
-        "near_20d_high_pct": near_20d_high_pct,
-        "drawdown_from_high_pct": drawdown_from_high_pct,
-    }
-    return ctx
-
-
+            "drawdown_from_high_pct": drawdown_from_high_pct,
+        }
+        return ctx
+    
+    

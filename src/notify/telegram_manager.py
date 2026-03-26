@@ -159,7 +159,8 @@ def handle_telegram_event(event_data):
         if main_picks:
             msg += "🔥 <b>[오늘의 강력 추천]</b>\n"
             for p in main_picks:
-                msg += f"• {p['Name']} ({p['Code']}) - AI확신: {p['Prob']*100:.1f}%\n"
+                # msg += f"• {p['Name']} ({p['Code']}) - AI확신: {p['Prob']*100:.1f}%\n"
+                msg += f"• {p['Name']} ({p['Code']}) \n"
         
         msg += f"\n🤖 <b>[AI 수석 브리핑]</b>\n{ai_brief}"
         _broadcast_alert(msg, audience='VIP_ALL', parse_mode='HTML')

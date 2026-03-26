@@ -125,47 +125,6 @@ def get_performance_report(db):
 
     return report_msg + "-" * 20 + "\n"
 
-# --- [1.5. WATCHING 종목 요약 엔진] ---
-def build_today_watching_message(db, target_date=None):
-    """오늘 날짜로 등록된 WATCHING 종목명과 (종목코드) 목록을 VIP 브로드캐스트용 메시지로 반환합니다."""
-    rec_date = target_date or datetime.now().date()
-    try:
-        with db.get_session() as session:
-            rows = (
-                session.query(
-                    RecommendationHistory.stock_name,
-                    RecommendationHistory.stock_code,
-                )
-                .filter_by(rec_date=rec_date, status='WATCHING')
-                .order_by(RecommendationHistory.stock_name.asc(), RecommendationHistory.stock_code.asc())
-                .all()
-            )
-    except Exception as e:
-        log_error(f"🚨 WATCHING 종목 목록 조회 실패: {e}")
-        return ""
-
-    if not rows:
-        return ""
-
-    seen = set()
-    lines = []
-    for stock_name, stock_code in rows:
-        code = str(stock_code or "").replace('.0', '').strip().zfill(6)
-        name = str(stock_name or code).strip()
-        key = (code, name)
-        if key in seen:
-            continue
-        seen.add(key)
-        lines.append(f"• **{name}** ({code})")
-
-    if not lines:
-        return ""
-
-    return (
-        f"👀 **[오늘 감시 종목]**\n"
-        f"총 `{len(lines)}개`\n\n"
-        + "\n".join(lines)
-    )
 
 # --- [2. 메인 스캐너 엔진 (장 마감(또는 장 전) 배치 작업)] ---
 def run_integrated_scanner():
@@ -431,17 +390,6 @@ def run_integrated_scanner():
                 ai_briefing = ai_engine.analyze_scanner_results(len(target_list), len(all_results), debug_msg, macro_text)
             except Exception as e:
                 ai_briefing = f"⚠️ AI 브리핑 생성 실패: {e}"
-
-        watching_msg = build_today_watching_message(db, datetime.now().date())
-        if watching_msg:
-            event_bus.publish(
-                "TELEGRAM_BROADCAST",
-                {
-                    "message": watching_msg,
-                    "audience": "VIP_ALL",
-                    "parse_mode": "Markdown"
-                }
-            )
 
         perf_report = get_performance_report(db)
 
