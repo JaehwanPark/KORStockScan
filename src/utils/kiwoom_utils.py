@@ -5,7 +5,7 @@ import requests
 import pandas as pd
 import numpy as np
 import holidays
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # 💡 독립 로거 및 전역 상수 사용
 from src.utils.logger import log_error
@@ -797,28 +797,53 @@ def scan_orderbook_spike_ka10021(token, mrkt_tp="101"):
     return candidates
 
 
-def check_program_buying_ka90008(token, code):
-    """[ka90008] 프로그램 수급 응답 바디의 모든 핵심 수치 반환"""
+def _get_prev_business_day_str(ref_dt=None):
+    """한국 주말/공휴일을 제외한 직전 영업일(YYYYMMDD)을 반환합니다."""
+    if ref_dt is None:
+        ref_dt = datetime.now()
+
+    try:
+        kr_holidays = holidays.KR()
+    except Exception:
+        kr_holidays = set()
+
+    d = ref_dt.date() - timedelta(days=1)
+    while d.weekday() >= 5 or d in kr_holidays:
+        d -= timedelta(days=1)
+    return d.strftime('%Y%m%d')
+
+
+def check_program_buying_ka90008(token, code, date_str=None, retry_prev_if_zero=True):
+    """[ka90008] 프로그램 수급 전일 스냅샷/fallback 조회
+    - 실시간 source of truth는 WS '0w'
+    - 기본 date는 직전 영업일
+    - today로 조회했는데 올제로면 직전 영업일로 1회 재시도
+    """
     url = get_api_url("/api/dostk/mrkcond")
-    today_str = datetime.now().strftime('%Y%m%d')
-    payload = {"amt_qty_tp": "2", "stk_cd": str(code), "date": str(today_str)}
-    
+    target_date = str(date_str or _get_prev_business_day_str())
+    payload = {"amt_qty_tp": "2", "stk_cd": str(code), "date": target_date}
+
     results = fetch_kiwoom_api_continuous(
         url=url, token=token, api_id='ka90008', payload=payload, use_continuous=False
     )
-    
-    # 💡 기본값: 나중에 추가될 모든 필드에 대해 0 또는 False로 초기화
+
+    def to_int(v):
+        if v in (None, ""):
+            return 0
+        try:
+            return int(str(v).replace(',', '').replace('+', '').strip())
+        except Exception:
+            return 0
+
     res_data = {
+        'base_date': target_date,
         'is_buying': False, 'net_amt': 0, 'net_qty': 0,
         'buy_amt': 0, 'sell_amt': 0, 'buy_qty': 0, 'sell_qty': 0,
-        'net_irds_amt': 0 # 순매수 금액 증감
+        'net_irds_amt': 0
     }
-    
+
     if results and (data := results[0].get('prm_trde_trend', [])):
         item = data[0]
-        def to_int(v): return int(str(v).replace(',', '').replace('+', '')) if v else 0
-        
-        # 💡 응답 바디의 모든 수치를 정수로 파싱하여 저장
         res_data.update({
             'net_amt': to_int(item.get('prm_netprps_amt')),
             'net_qty': to_int(item.get('prm_netprps_qty')),
@@ -828,11 +853,61 @@ def check_program_buying_ka90008(token, code):
             'sell_qty': to_int(item.get('prm_sell_qty')),
             'net_irds_amt': to_int(item.get('prm_netprps_amt_irds')),
         })
-        
-        # '진짜 수급' 판정 (필요에 따라 조건 조절 가능)
         res_data['is_buying'] = res_data['net_amt'] > 50 and res_data['net_qty'] > 10000
-            
+
+    if retry_prev_if_zero and date_str:
+        is_all_zero = (
+            res_data['net_amt'] == 0 and res_data['net_qty'] == 0 and
+            res_data['buy_amt'] == 0 and res_data['sell_amt'] == 0 and
+            res_data['buy_qty'] == 0 and res_data['sell_qty'] == 0
+        )
+        today_str = datetime.now().strftime('%Y%m%d')
+        prev_bd = _get_prev_business_day_str()
+        if is_all_zero and str(date_str) == today_str and target_date != prev_bd:
+            return check_program_buying_ka90008(
+                token=token,
+                code=code,
+                date_str=prev_bd,
+                retry_prev_if_zero=False
+            )
+
     return res_data
+
+
+def get_program_flow_realtime(token, code, ws_data=None):
+    """실시간 프로그램 수급은 WS '0w'를 우선, 없으면 ka90008 전일 스냅샷으로 fallback."""
+    ws_data = ws_data or {}
+    received_types = set(ws_data.get('received_types', []))
+    has_ws_program = (
+        '0w' in received_types or
+        any(int(ws_data.get(k, 0) or 0) != 0 for k in ('prog_net_qty', 'prog_delta_qty', 'prog_net_amt', 'prog_delta_amt'))
+    )
+
+    if has_ws_program:
+        net_qty = int(ws_data.get('prog_net_qty', 0) or 0)
+        delta_qty = int(ws_data.get('prog_delta_qty', 0) or 0)
+        net_amt = int(ws_data.get('prog_net_amt', 0) or 0)
+        delta_amt = int(ws_data.get('prog_delta_amt', 0) or 0)
+        return {
+            'source': 'WS_0w',
+            'base_date': '',
+            'is_buying': net_qty > 0 and net_amt > 0,
+            'net_amt': net_amt,
+            'net_qty': net_qty,
+            'buy_amt': 0,
+            'sell_amt': 0,
+            'buy_qty': 0,
+            'sell_qty': 0,
+            'net_irds_amt': delta_amt,
+            'delta_qty': delta_qty,
+            'delta_amt': delta_amt,
+        }
+
+    snap = check_program_buying_ka90008(token, code)
+    snap['source'] = 'KA90008_PREV_BD'
+    snap['delta_qty'] = 0
+    snap['delta_amt'] = int(snap.get('net_irds_amt', 0) or 0)
+    return snap
 
 
 def check_execution_strength_ka10046(token, code):
@@ -1418,7 +1493,7 @@ def build_realtime_analysis_context(
     best_bid = _coerce_int(bids[0].get("price") if bids else 0, 0)
 
     strength_pack = check_execution_strength_ka10046(token, code)
-    program_pack = check_program_buying_ka90008(token, code)
+    program_pack = get_program_flow_realtime(token, code, ws_data)
     investor_pack = get_investor_flow_summary_ka10059(token, code)
     tick_pack = summarize_ticks_for_realtime_ka10003(token, code, limit=20)
     minute_candles = get_minute_candles_ka10080(token, code, limit=40)
