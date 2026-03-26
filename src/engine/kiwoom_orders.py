@@ -66,6 +66,7 @@ def get_my_inventory(token):
 
     # 💡 [핵심] 종목 코드를 키(Key)로 사용하여 중복을 제거할 딕셔너리
     aggregated_inventory = {}
+    successful_exchanges = set()
     exchanges = ['KRX', 'NXT']
     
     for exchange in exchanges:
@@ -76,6 +77,7 @@ def get_my_inventory(token):
             data = response.json()
             
             if str(data.get('return_code', data.get('rt_cd', ''))) == '0':
+                successful_exchanges.add(exchange)
                 stock_list = data.get('acnt_evlt_remn_indv_tot', [])
                 
                 for item in stock_list:
@@ -95,7 +97,7 @@ def get_my_inventory(token):
         except Exception as e:
             log_error(f"❌ [API 에러] {exchange} 잔고 통신 실패: {e}")
 
-    return list(aggregated_inventory.values())
+    return list(aggregated_inventory.values()), successful_exchanges
 
 # ==========================================
 # 2. 주문 실행 API
