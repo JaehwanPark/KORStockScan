@@ -1,0 +1,62 @@
+--- db_manager.py
++++ db_manager.py
+@@ -38,6 +38,7 @@
+             with self.engine.begin() as conn:
+                 conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_analyze_count INTEGER DEFAULT 0;"))
+                 conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_analyze_date DATE;"))
++                conn.execute(text("ALTER TABLE daily_stock_quotes ADD COLUMN IF NOT EXISTS is_nxt BOOLEAN;"))
+         except Exception as e:
+             print(f"⚠️ 컬럼 추가 확인 중 에러 (최초 생성 시 무시 가능): {e}")
+             
+@@ -69,6 +70,51 @@
+         if not df.empty:
+             df = df.sort_values('quote_date').reset_index(drop=True)
+         return df
++
++    def get_latest_is_nxt(self, code: str) -> bool:
++        """최신 거래일 기준 NXT 대상 종목 여부를 반환합니다."""
++        target_code = str(code).replace('.0', '').strip().split('_')[0].replace('A', '').zfill(6)
++        query = text("""
++            SELECT COALESCE(is_nxt, FALSE) AS is_nxt
++            FROM daily_stock_quotes
++            WHERE stock_code = :code
++            ORDER BY quote_date DESC
++            LIMIT 1
++        """)
++        try:
++            with self.engine.connect() as conn:
++                row = conn.execute(query, {"code": target_code}).fetchone()
++            return bool(row[0]) if row is not None else False
++        except Exception as e:
++            log_error(f"🚨 get_latest_is_nxt 실패 [{target_code}]: {e}")
++            return False
++
++    def get_latest_is_nxt_map(self, codes: list[str]) -> dict:
++        """복수 종목에 대해 최신 거래일 기준 NXT 대상 여부를 dict로 반환합니다."""
++        normalized = []
++        for code in codes or []:
++            if not code:
++                continue
++            normalized.append(str(code).replace('.0', '').strip().split('_')[0].replace('A', '').zfill(6))
++        if not normalized:
++            return {}
++
++        query = text("""
++            SELECT DISTINCT ON (stock_code) stock_code, COALESCE(is_nxt, FALSE) AS is_nxt
++            FROM daily_stock_quotes
++            WHERE stock_code = ANY(:codes)
++            ORDER BY stock_code, quote_date DESC
++        """)
++        try:
++            with self.engine.connect() as conn:
++                rows = conn.execute(query, {"codes": normalized}).fetchall()
++            result = {str(code): bool(flag) for code, flag in rows}
++            for code in normalized:
++                result.setdefault(code, False)
++            return result
++        except Exception as e:
++            log_error(f"🚨 get_latest_is_nxt_map 실패: {e}")
++            return {code: False for code in normalized}
+ 
+     # --------------------------------------------------------
+     # 2. 매매 이력 및 종목 관리

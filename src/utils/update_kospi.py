@@ -14,6 +14,8 @@ import numpy as np
 import time
 import logging
 import json
+import re
+import requests
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 from sqlalchemy import text
@@ -45,6 +47,9 @@ LOG_MAX_BYTES = 5 * 1024 * 1024
 LOG_BACKUP_COUNT = 3
 BULK_CHUNKSIZE = 2000
 PROGRESS_INTERVAL = 50
+NXT_TARGET_URL = "https://www.nextrade.co.kr/menu/transactionStatusConclusion/menuList.do"
+NXT_MARKETDATA_URL = "https://www.nextrade.co.kr/menu/marketData/menuList.do"
+HTTP_TIMEOUT_SECONDS = 10
 
 # 전문 로거 세팅 (터미널+파일)
 logger = logging.getLogger("KospiUpdater")
@@ -90,13 +95,78 @@ COLUMN_MAPPING = {
     'Retail_Net': 'retail_net',
     'Foreign_Net': 'foreign_net',
     'Inst_Net': 'inst_net',
-    'Margin_Rate': 'margin_rate'
+    'Margin_Rate': 'margin_rate',
+    'Is_NXT': 'is_nxt'
 }
 
 # ==========================================
-# 2. 메인 업데이트 로직
+# 2. NXT 대상 종목 수집 / 적재 헬퍼
 # ==========================================
-def process_and_save_stock(code, token, session) -> pd.DataFrame:
+def _normalize_stock_code(code) -> str:
+    raw = str(code or "").strip().upper().replace('.0', '')
+    if raw.endswith('_AL'):
+        raw = raw[:-3]
+    if raw.startswith('A') and len(raw) >= 7:
+        raw = raw[1:]
+    digits = ''.join(ch for ch in raw if ch.isdigit())
+    return digits[-6:].zfill(6) if digits else raw
+
+
+def fetch_nxt_target_codes() -> set[str]:
+    """넥스트레이드 공식 거래대상종목 페이지를 source of truth로 사용해 NXT 대상 종목 코드를 수집합니다."""
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": "https://www.nextrade.co.kr/",
+    }
+    collected = set()
+
+    for url in [NXT_TARGET_URL, NXT_MARKETDATA_URL]:
+        try:
+            res = requests.get(url, headers=headers, timeout=HTTP_TIMEOUT_SECONDS)
+            res.raise_for_status()
+            html = res.text
+
+            for match in re.findall(r'\bA?(\d{6})\b', html):
+                collected.add(_normalize_stock_code(match))
+
+            if not collected:
+                try:
+                    tables = pd.read_html(html)
+                    for table in tables:
+                        for col in table.columns:
+                            values = table[col].astype(str).tolist()
+                            for value in values:
+                                found = re.findall(r'A?(\d{6})', value)
+                                for code in found:
+                                    collected.add(_normalize_stock_code(code))
+                except Exception:
+                    pass
+
+            if collected:
+                logger.info(f"✅ NXT 대상 종목 목록 수집 성공: {len(collected)}개 (source: {url})")
+                break
+        except Exception as e:
+            logger.warning(f"⚠️ NXT 대상 종목 목록 수집 실패 ({url}): {e}")
+
+    return collected
+
+
+def resolve_nxt_map(db: DBManager, target_codes: list[str]) -> dict:
+    """공식 NXT 대상 종목 목록을 우선 사용하고, 실패 시 최신 거래일 DB 플래그로 폴백합니다."""
+    normalized = [_normalize_stock_code(c) for c in (target_codes or []) if c]
+    nxt_target_codes = fetch_nxt_target_codes()
+
+    if nxt_target_codes:
+        return {code: (code in nxt_target_codes) for code in normalized}
+
+    logger.warning("⚠️ NXT 공식 목록 수집 실패. 최신 거래일 DB is_nxt 플래그로 폴백합니다.")
+    return db.get_latest_is_nxt_map(normalized)
+
+
+# ==========================================
+# 3. 메인 업데이트 로직
+# ==========================================
+def process_and_save_stock(code, token, session, is_nxt=False) -> pd.DataFrame:
     """단일 종목 데이터를 키움 API로 병합하고 DB에 적재합니다."""
     try:
         # 💡 [안전 장치 1] Margin_Rate API(ka10013)는 무조건 6자리 문자열을 요구합니다.
@@ -151,6 +221,7 @@ def process_and_save_stock(code, token, session) -> pd.DataFrame:
         df['Code'] = code_str
         df['Name'] = basic_info.get('Name', '이름없음')
         df['Marcap'] = basic_info.get('Marcap', 0)  # 잘 들어오던 로직 그대로 유지!
+        df['Is_NXT'] = bool(is_nxt)
 
         # 💡 [핵심 복구 2] 지표 계산 전 원본 데이터 완벽 백업
         backup_df = df.copy()
@@ -165,7 +236,7 @@ def process_and_save_stock(code, token, session) -> pd.DataFrame:
 
         # 💡 [핵심 복구 3] 원본 컬럼 강제 복원 (지표 계산기가 0으로 덮어쓰는 것 원천 차단)
         for col in original_cols:
-            if col in ['Marcap', 'Margin_Rate', 'Retail_Net', 'Foreign_Net', 'Inst_Net', 'Code', 'Name']:
+            if col in ['Marcap', 'Margin_Rate', 'Retail_Net', 'Foreign_Net', 'Inst_Net', 'Code', 'Name', 'Is_NXT']:
                 df[col] = backup_df[col]
             elif col not in df.columns:
                 df[col] = backup_df[col]
@@ -267,6 +338,8 @@ def update_kospi_data():
 
     total_count = len(kospi_codes)
     successful_codes = []
+    nxt_map = resolve_nxt_map(db, kospi_codes)
+    nxt_count = int(sum(1 for v in nxt_map.values() if v))
     
     # 💡 [핵심] 900개 종목의 데이터를 담을 거대한 빈 리스트
     all_stocks_data = []
@@ -276,11 +349,12 @@ def update_kospi_data():
     # [PHASE 1] 메모리에 데이터 차곡차곡 모으기
     with db.get_session() as session:
         for i, code in enumerate(kospi_codes):
-            df_stock = process_and_save_stock(code, kiwoom_token, session)
+            code_str = _normalize_stock_code(code)
+            df_stock = process_and_save_stock(code_str, kiwoom_token, session, is_nxt=nxt_map.get(code_str, False))
             
             if df_stock is not None and not df_stock.empty:
                 all_stocks_data.append(df_stock)
-                successful_codes.append(code)
+                successful_codes.append(code_str)
 
             if (i + 1) % PROGRESS_INTERVAL == 0:
                 logger.info(f" ⏳ 수집 진행 상황: [{i + 1}/{total_count}] 완료...")
@@ -313,7 +387,7 @@ def update_kospi_data():
 
     logger.info(f"\n🎉 일일 업데이트 최종 완료! (성공: {len(successful_codes)} / {total_count} 종목)")
     
-    finish_msg = f"✅ **KOSPI 일일 데이터 갱신 완료**\n총 **{len(successful_codes)} / {total_count}** 종목의 캔들 및 수급 데이터가 DB에 일괄 적재되었습니다."
+    finish_msg = f"✅ **KOSPI 일일 데이터 갱신 완료**\n총 **{len(successful_codes)} / {total_count}** 종목의 캔들 및 수급 데이터가 DB에 일괄 적재되었습니다.\n🟣 NXT 대상 플래그 반영: **{nxt_count}개**"
     event_bus.publish('TELEGRAM_BROADCAST', {'message': finish_msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'Markdown'})
 
 
