@@ -17,6 +17,7 @@ import json
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 from sqlalchemy import text
+import FinanceDataReader as fdr
 
 # --- [Level 2: 공통 모듈 명시적 상대 경로 반영] ---
 from src.utils import kiwoom_utils
@@ -224,22 +225,45 @@ def update_kospi_data():
         event_bus.publish('TELEGRAM_BROADCAST', {'message': "🚨 [데이터 갱신 실패] 키움 토큰 발급 오류", 'audience': 'ADMIN_ONLY'})
         return
 
-    event_bus.publish('TELEGRAM_BROADCAST', {'message': "🔄 KOSPI 전 종목 일일 데이터 갱신을 시작합니다. (약 15분 소요)", 'audience': 'ADMIN_ONLY'})
+    event_bus.publish('TELEGRAM_BROADCAST', {'message': "🔄 전 종목 일일 데이터 갱신을 시작합니다. (약 15분 소요)", 'audience': 'ADMIN_ONLY'})
 
     kospi_codes = []
+    # ========================================================
+    # 💡 [1순위] FinanceDataReader를 통해 최신 KOSPI/KOSDAQ 종목 수집
+    # ========================================================
     try:
-        with db.engine.connect() as conn:
-            # 💡 [PostgreSQL 최적화] 쌍따옴표 제거, stock_code 적용
-            df_codes = pd.read_sql(text(f"SELECT DISTINCT stock_code FROM {TABLE_NAME}"), conn)
-
-        if df_codes.empty:
-            logger.warning("⚠️ DB가 완전히 비어있습니다! 기초 데이터 셋업이 필요합니다.")
-            return
+        logger.info("🔍 FinanceDataReader를 통해 최신 상장 종목 리스트를 수집합니다...")
+        df_krx = fdr.StockListing('KRX')
+        
+        if not df_krx.empty:
+            # 코스피, 코스닥 시장만 필터링 (코넥스 등 제외)
+            df_filtered = df_krx[df_krx['Market'].isin(['KOSPI', 'KOSDAQ'])]
+            kospi_codes = df_filtered['Code'].tolist()
+            logger.info(f"✅ FDR 종목 수집 성공! 총 {len(kospi_codes)}개 (KOSPI/KOSDAQ) 종목")
         else:
-            kospi_codes = df_codes['stock_code'].tolist()
+            raise ValueError("FDR에서 빈 데이터를 반환했습니다.")
+            
     except Exception as e:
-        logger.error(f"❌ DB 종목 수집 중 에러: {e}", exc_info=True)
-        return
+        logger.warning(f"⚠️ FDR 종목 수집 실패 ({e}). 기존 DB 조회 방식으로 Fallback 합니다.")
+        
+        # ========================================================
+        # 💡 [2순위 (Fallback)] 기존 방식: DB에서 수집된 이력이 있는 종목들 가져오기
+        # ========================================================
+        try:
+            with db.engine.connect() as conn:
+                # PostgreSQL 최적화 쿼리 유지
+                df_codes = pd.read_sql(text(f"SELECT DISTINCT stock_code FROM {TABLE_NAME}"), conn)
+
+            if df_codes.empty:
+                logger.warning("⚠️ DB가 완전히 비어있고 FDR도 실패했습니다! 기초 데이터 셋업이 필요합니다.")
+                return
+            else:
+                kospi_codes = df_codes['stock_code'].tolist()
+                logger.info(f"✅ DB에서 종목 수집 성공! 총 {len(kospi_codes)}개 종목")
+                
+        except Exception as db_e:
+            logger.error(f"❌ DB 종목 수집 중 에러: {db_e}", exc_info=True)
+            return
 
     total_count = len(kospi_codes)
     successful_codes = []
