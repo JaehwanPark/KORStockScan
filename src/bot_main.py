@@ -100,24 +100,21 @@ def broadcast_today_picks_job():
                 for p in main_picks:
                     # 💡 [방어] 종목명에 혹시 모를 특수문자(<, >)가 있을 수 있으므로 escape 처리
                     safe_name = html.escape(p.stock_name)
-                    safe_price = int(p.buy_price) if p.buy_price else 0
-                    msg += f"• <b>{safe_name}</b> (<code>{safe_price:,}원</code>)\n"
+                    msg += f"• <b>{safe_name}</b> (<code>{p.stock_code}</code>)\n"
                 msg += "\n"
 
             if runner_picks:
                 msg += "🥈 <b>[AI 관심 종목 TOP 10]</b>\n"
                 for p in runner_picks[:10]:
                     safe_name = html.escape(p.stock_name)
-                    safe_price = int(p.buy_price) if p.buy_price else 0
-                    msg += f"• <b>{safe_name}</b> (<code>{safe_price:,}원</code>)\n"
+                    msg += f"• <b>{safe_name}</b> (<code>{p.stock_code}</code>)\n"
                 msg += "\n"
                 
             if scalp_picks:
                 msg += "⚡ <b>[초단타(SCALP) 포착 대기열]</b>\n"
                 for p in scalp_picks[:10]:
                     safe_name = html.escape(p.stock_name)
-                    safe_price = int(p.buy_price) if p.buy_price else 0
-                    msg += f"• <b>{safe_name}</b> (<code>{safe_price:,}원</code>)\n"
+                    msg += f"• <b>{safe_name}</b> (<code>{p.stock_code}</code>)\n"
 
         # 📢 텔레그램 모듈 직접 호출 파괴 -> EventBus 송출
         event_bus.publish('TELEGRAM_BROADCAST', {'message': msg, 'audience': 'VIP_ALL', 'parse_mode': 'HTML'})
