@@ -47,7 +47,7 @@ class DailyStockQuote(Base):
     foreign_net = Column(Float, server_default=text("0"))
     inst_net = Column(Float, server_default=text("0"))
     margin_rate = Column(Float, server_default=text("0"))
-    is_nxt = Column(Boolean)
+    is_nxt = Column(Boolean, server_default=text("false"))
 
     def __repr__(self):
         return f"<DailyStockQuote(quote_date='{self.quote_date}', stock_code='{self.stock_code}')>"

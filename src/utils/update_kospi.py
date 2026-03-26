@@ -11,6 +11,7 @@ sys.path.append(str(PROJECT_ROOT))
 import os
 import pandas as pd
 import numpy as np
+from pandas.api.types import is_string_dtype, is_bool_dtype, is_numeric_dtype
 import time
 import logging
 import json
@@ -20,6 +21,7 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 from sqlalchemy import text
 import FinanceDataReader as fdr
+from bs4 import BeautifulSoup
 
 # --- [Level 2: 공통 모듈 명시적 상대 경로 반영] ---
 from src.utils import kiwoom_utils
@@ -45,11 +47,25 @@ CUTOFF_DAYS = 100
 API_DELAY_SECONDS = 0.3
 LOG_MAX_BYTES = 5 * 1024 * 1024
 LOG_BACKUP_COUNT = 3
-BULK_CHUNKSIZE = 2000
+BULK_CHUNKSIZE = 500
 PROGRESS_INTERVAL = 50
-NXT_TARGET_URL = "https://www.nextrade.co.kr/menu/transactionStatusConclusion/menuList.do"
+NXT_TARGET_URL = "https://www.nextrade.co.kr/menu/transactionStatusMain/menuList.do"
 NXT_MARKETDATA_URL = "https://www.nextrade.co.kr/menu/marketData/menuList.do"
+MIN_EXPECTED_NXT_CODES = 100
 HTTP_TIMEOUT_SECONDS = 10
+
+NXT_TARGET_KEYWORDS = [
+    r"매매체결대상종목",
+    r"정규시장.*매매체결대상종목",
+    r"매매체결대상종목.*안내",
+    r"매매체결대상종목.*확대",
+    r"매매체결대상종목.*편입",
+]
+NXT_EXCLUSION_KEYWORDS = [
+    r"매매체결 제외 종목",
+    r"매매체결대상종목.*축소",
+    r"한도 관리",
+]
 
 # 전문 로거 세팅 (터미널+파일)
 logger = logging.getLogger("KospiUpdater")
@@ -112,43 +128,220 @@ def _normalize_stock_code(code) -> str:
     return digits[-6:].zfill(6) if digits else raw
 
 
+def _extract_codes_from_table(html: str) -> set[str]:
+    codes: set[str] = set()
+    soup = BeautifulSoup(html, 'html.parser')
+
+    for tr in soup.find_all('tr'):
+        row_text = ' '.join(td.get_text(' ', strip=True) for td in tr.find_all(['td', 'th']))
+        if not row_text:
+            continue
+        m = re.search(r'\bA?(\d{6})\b', row_text)
+        if m:
+            code = _normalize_stock_code(m.group(1))
+            if code and code.isdigit() and len(code) == 6:
+                codes.add(code)
+    return codes
+
+
+def _extract_codes_from_scripts(html: str) -> set[str]:
+    patterns = [
+        r'\bA(\d{6})\b',
+        r'"isuSrdCd"\s*:\s*"A?(\d{6})"',
+        r'"stockCode"\s*:\s*"(\d{6})"',
+        r'"isuCd"\s*:\s*"A?(\d{6})"',
+    ]
+    codes: set[str] = set()
+    soup = BeautifulSoup(html, 'html.parser')
+
+    for script in soup.find_all('script'):
+        script_text = script.get_text(' ', strip=True) or ''
+        if not script_text:
+            continue
+        for pattern in patterns:
+            for match in re.findall(pattern, script_text):
+                code = _normalize_stock_code(match)
+                if code and code.isdigit() and len(code) == 6:
+                    codes.add(code)
+    return codes
+
+
+def _extract_codes_by_regex(html: str) -> set[str]:
+    codes: set[str] = set()
+    for pattern in [r'\bA(\d{6})\b', r'\b(\d{6})\b']:
+        for match in re.findall(pattern, html):
+            code = _normalize_stock_code(match)
+            if code and code.isdigit() and len(code) == 6:
+                codes.add(code)
+    return codes
+
+
+def _find_latest_announcement_url(base_url: str, keywords: list[str]) -> str:
+    """공지 목록 페이지에서 주어진 키워드를 포함하는 가장 최근 공지의 URL을 반환합니다."""
+    headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.nextrade.co.kr/"}
+    try:
+        res = requests.get(base_url, headers=headers, timeout=HTTP_TIMEOUT_SECONDS)
+        res.raise_for_status()
+        soup = BeautifulSoup(res.text, 'html.parser')
+        for link in soup.find_all('a', href=True):
+            link_text = link.get_text(strip=True)
+            if any(keyword in link_text for keyword in keywords):
+                href = link['href']
+                if href.startswith('http'):
+                    return href
+                else:
+                    from urllib.parse import urljoin
+                    return urljoin(base_url, href)
+    except Exception as e:
+        logger.warning(f"⚠️ 공지 목록 조회 실패 ({base_url}): {e}")
+    return ""
+
+
+def _extract_xlsx_url_from_html(html: str) -> str:
+    """공지 상세 HTML에서 XLSX 첨부파일 URL을 추출합니다."""
+    soup = BeautifulSoup(html, 'html.parser')
+    # 전략 1: href에 .xlsx가 직접 포함된 링크
+    for link in soup.find_all('a', href=True):
+        href = link['href']
+        if '.xlsx' in href.lower():
+            return href
+    # 전략 2: onclick에 .xlsx가 포함된 링크
+    for link in soup.find_all('a', onclick=True):
+        onclick = link['onclick']
+        if '.xlsx' in onclick.lower():
+            import re
+            match = re.search(r'\"([^\"]+\.xlsx)\"', onclick)
+            if match:
+                return match.group(1)
+    # 전략 3: 느슨한 fallback
+    for link in soup.find_all('a', href=True):
+        href = link['href']
+        if 'download' in href.lower() or 'file' in href.lower():
+            return href
+    return ""
+
+
+def _download_xlsx_and_extract_codes(xlsx_url: str) -> set[str]:
+    """XLSX 파일을 다운로드하여 모든 셀에서 종목코드를 추출합니다."""
+    headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.nextrade.co.kr/"}
+    try:
+        res = requests.get(xlsx_url, headers=headers, timeout=HTTP_TIMEOUT_SECONDS)
+        res.raise_for_status()
+        import io
+        import pandas as pd
+        df = pd.read_excel(io.BytesIO(res.content), sheet_name=None, header=None, engine='openpyxl')
+        codes = set()
+        for sheet_name, sheet_df in df.items():
+            for col in sheet_df.columns:
+                for cell in sheet_df[col].astype(str):
+                    import re
+                    matches = re.findall(r'(?:KR\d{10}|A\d{6}|\d{6})(?:_AL)?', cell.upper())
+                    for match in matches:
+                        code = _normalize_stock_code(match)
+                        if code and code.isdigit() and len(code) == 6:
+                            codes.add(code)
+        return codes
+    except Exception as e:
+        logger.warning(f"⚠️ XLSX 다운로드/파싱 실패 ({xlsx_url}): {e}")
+        return set()
+
+
+def _fetch_nxt_target_codes_via_xlsx() -> set[str]:
+    """공식 NXT 대상종목 및 제외종목 XLSX를 파싱하여 최종 NXT 대상 종목 코드 집합을 반환합니다."""
+    target_url = _find_latest_announcement_url(NXT_TARGET_URL, NXT_TARGET_KEYWORDS)
+    if not target_url:
+        logger.warning("⚠️ NXT 대상종목 공지를 찾을 수 없습니다.")
+        return set()
+    target_html = requests.get(target_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=HTTP_TIMEOUT_SECONDS).text
+    xlsx_url = _extract_xlsx_url_from_html(target_html)
+    if not xlsx_url:
+        logger.warning("⚠️ 대상종목 XLSX URL 추출 실패")
+        return set()
+    target_codes = _download_xlsx_and_extract_codes(xlsx_url)
+    if len(target_codes) < MIN_EXPECTED_NXT_CODES:
+        logger.warning(f"⚠️ 대상종목 XLSX 코드 수가 너무 적습니다: {len(target_codes)}개")
+        return set()
+    
+    exclusion_url = _find_latest_announcement_url(NXT_TARGET_URL, NXT_EXCLUSION_KEYWORDS)
+    exclusion_codes = set()
+    if exclusion_url:
+        exclusion_html = requests.get(exclusion_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=HTTP_TIMEOUT_SECONDS).text
+        excl_xlsx_url = _extract_xlsx_url_from_html(exclusion_html)
+        if excl_xlsx_url:
+            exclusion_codes = _download_xlsx_and_extract_codes(excl_xlsx_url)
+    
+    final_codes = target_codes - exclusion_codes
+    logger.info(f"✅ NXT 대상 종목 XLSX 파싱 성공: 대상 {len(target_codes)}개, 제외 {len(exclusion_codes)}개, 최종 {len(final_codes)}개")
+    return final_codes
+
+
 def fetch_nxt_target_codes() -> set[str]:
-    """넥스트레이드 공식 거래대상종목 페이지를 source of truth로 사용해 NXT 대상 종목 코드를 수집합니다."""
+    """넥스트레이드 공식 거래대상종목 페이지를 source of truth로 사용해 NXT 대상 종목 코드를 수집합니다.
+
+    파싱 전략:
+    1) 공식 NXT 대상종목/제외종목 XLSX 첨부파일 파싱 (우선)
+    2) HTML table row 기반
+    3) inline script / JSON-like 데이터
+    4) 전체 regex fallback
+    """
+    # 1. XLSX 우선 시도
+    xlsx_codes = _fetch_nxt_target_codes_via_xlsx()
+    if xlsx_codes and len(xlsx_codes) >= MIN_EXPECTED_NXT_CODES:
+        logger.info(f"✅ NXT 대상 종목 목록 XLSX 파싱 성공: {len(xlsx_codes)}개")
+        return xlsx_codes
+    else:
+        logger.warning("⚠️ NXT XLSX 파싱 실패 또는 코드 수 부족. HTML 파싱으로 폴백합니다.")
+    
     headers = {
         "User-Agent": "Mozilla/5.0",
         "Referer": "https://www.nextrade.co.kr/",
     }
-    collected = set()
-
-    for url in [NXT_TARGET_URL, NXT_MARKETDATA_URL]:
+    
+    strategies = [
+        ('table', _extract_codes_from_table),
+        ('scripts', _extract_codes_from_scripts),
+        ('regex', _extract_codes_by_regex),
+    ]
+    
+    for url in [NXT_MARKETDATA_URL, NXT_TARGET_URL]:
         try:
             res = requests.get(url, headers=headers, timeout=HTTP_TIMEOUT_SECONDS)
             res.raise_for_status()
             html = res.text
-
-            for match in re.findall(r'\bA?(\d{6})\b', html):
-                collected.add(_normalize_stock_code(match))
-
-            if not collected:
+            
+            best_codes = set()
+            best_strategy = None
+            for name, extractor in strategies:
                 try:
-                    tables = pd.read_html(html)
-                    for table in tables:
-                        for col in table.columns:
-                            values = table[col].astype(str).tolist()
-                            for value in values:
-                                found = re.findall(r'A?(\d{6})', value)
-                                for code in found:
-                                    collected.add(_normalize_stock_code(code))
-                except Exception:
-                    pass
-
-            if collected:
-                logger.info(f"✅ NXT 대상 종목 목록 수집 성공: {len(collected)}개 (source: {url})")
-                break
+                    codes = extractor(html)
+                except Exception as e:
+                    logger.warning(f"⚠️ NXT {name} 파싱 중 예외: {e}")
+                    continue
+                
+                if len(codes) > len(best_codes):
+                    best_codes = codes
+                    best_strategy = name
+                
+                if len(codes) >= MIN_EXPECTED_NXT_CODES:
+                    logger.info(f"✅ NXT 대상 종목 목록 수집 성공: {len(codes)}개 (strategy: {name}, source: {url})")
+                    return codes
+            
+            # 어떤 전략도 임계치를 넘지 못한 경우
+            if best_codes:
+                logger.warning(
+                    f"⚠️ NXT 코드 수집 결과가 비정상적으로 적음: {len(best_codes)}개 "
+                    f"(best_strategy: {best_strategy}, source: {url})"
+                )
+            else:
+                logger.warning(f"⚠️ NXT 코드 수집 실패 (source: {url})")
+                
         except Exception as e:
             logger.warning(f"⚠️ NXT 대상 종목 목록 수집 실패 ({url}): {e}")
-
-    return collected
+            continue
+    
+    # 모든 URL 실패
+    logger.warning("⚠️ NXT 공식 목록 수집 실패. 모든 소스에서 파싱 불가.")
+    return set()
 
 
 def resolve_nxt_map(db: DBManager, target_codes: list[str]) -> dict:
@@ -227,6 +420,14 @@ def process_and_save_stock(code, token, session, is_nxt=False) -> pd.DataFrame:
         backup_df = df.copy()
         original_cols = df.columns.tolist()
 
+        # Convert any None values to NaN for numeric columns (prevent NoneType errors)
+        for col in df.columns:
+            if df[col].dtype == object:
+                # Replace None with NaN (keeps other values unchanged)
+                df[col] = df[col].apply(lambda x: np.nan if x is None else x)
+            elif df[col].dtype.kind in 'biufc':  # numeric types
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+
         # 3. 보조 지표 계산 (Return 컬럼 생성)
         df = calculate_all_features(df)
 
@@ -259,7 +460,29 @@ def process_and_save_stock(code, token, session, is_nxt=False) -> pd.DataFrame:
 
         # 💡 [핵심 복구 4] 결측치(NaN) 완벽 제거 및 0 채우기 (PostgreSQL 에러 원천 차단)
         new_rows = new_rows.dropna(subset=['close_price', 'daily_return'])
-        new_rows = new_rows.fillna(0)
+        # Fill NaN with appropriate defaults per column type
+        # Ensure numeric columns are numeric (convert object dtype)
+        numeric_cols = ['open_price', 'high_price', 'low_price', 'close_price', 'volume',
+                        'ma5', 'ma20', 'ma60', 'ma120', 'rsi', 'macd', 'macd_sig', 'macd_hist',
+                        'bbl', 'bbm', 'bbu', 'bbb', 'bbp', 'vwap', 'obv', 'atr', 'daily_return',
+                        'marcap', 'retail_net', 'foreign_net', 'inst_net', 'margin_rate']
+        for col in numeric_cols:
+            if col in new_rows.columns:
+                new_rows[col] = pd.to_numeric(new_rows[col], errors='coerce')
+        # Boolean column
+        if 'is_nxt' in new_rows.columns:
+            new_rows['is_nxt'] = new_rows['is_nxt'].astype(bool)
+        
+        for col in new_rows.columns:
+            if is_numeric_dtype(new_rows[col]):
+                new_rows[col] = new_rows[col].fillna(0)
+            elif is_string_dtype(new_rows[col]):
+                new_rows[col] = new_rows[col].fillna('')
+            elif is_bool_dtype(new_rows[col]):
+                new_rows[col] = new_rows[col].fillna(False)
+            else:
+                # fallback: fill with empty string
+                new_rows[col] = new_rows[col].fillna('')
 
         # 안전한 최종 컬럼 필터링
         final_cols = [col for col in COLUMN_MAPPING.values() if col in new_rows.columns]
@@ -369,19 +592,61 @@ def update_kospi_data():
         final_bulk_df = pd.concat(all_stocks_data, ignore_index=True)
         cutoff_date = (datetime.now() - timedelta(days=CUTOFF_DAYS)).strftime('%Y-%m-%d')
         
-        try:
-            # 💡 [트랜잭션 최적화] 삭제와 삽입을 하나의 논리적 흐름으로 묶어버림
-            with db.engine.begin() as conn:
-                # 1. 대상 종목들의 최근 100일치 데이터를 한방에 지움
-                delete_query = text(f"DELETE FROM {TABLE_NAME} WHERE quote_date >= :date AND stock_code = ANY(:codes)")
-                conn.execute(delete_query, {'date': cutoff_date, 'codes': successful_codes})
+        # Filter out rows that already exist in DB to avoid duplicate key errors
+        existing_keys = set()
+        if not final_bulk_df.empty and successful_codes:
+            with db.engine.connect() as conn:
+                # Build query for existing keys using same condition as delete
+                query = text(f"""
+                    SELECT quote_date, stock_code
+                    FROM {TABLE_NAME}
+                    WHERE quote_date >= :cutoff
+                      AND stock_code = ANY(:codes)
+                """)
+                result = conn.execute(query, {'cutoff': cutoff_date, 'codes': successful_codes})
+                existing_keys.update((row.quote_date, row.stock_code) for row in result)
+        
+        # Filter final_bulk_df
+        if existing_keys:
+            mask = final_bulk_df.apply(
+                lambda row: (row['quote_date'], row['stock_code']) not in existing_keys, axis=1
+            )
+            final_bulk_df = final_bulk_df[mask].copy()
+            logger.info(f"⏩ Filtered out {len(existing_keys)} existing rows, {len(final_bulk_df)} new rows to insert")
+        
+        # Attempt bulk insert with retry and fallback
+        max_retries = 2
+        inserted = False
+        for attempt in range(max_retries):
+            try:
+                with db.engine.begin() as conn:
+                    # 1. Delete existing data for these codes within cutoff
+                    delete_query = text(f"DELETE FROM {TABLE_NAME} WHERE quote_date >= :date AND stock_code = ANY(:codes)")
+                    conn.execute(delete_query, {'date': cutoff_date, 'codes': successful_codes})
+                    
+                    # 2. Insert new data with adaptive method
+                    if attempt == 0:
+                        # First attempt: multi-row insert with configured chunk size
+                        final_bulk_df.to_sql(TABLE_NAME, con=conn, if_exists='append', index=False,
+                                             chunksize=BULK_CHUNKSIZE, method='multi')
+                    else:
+                        # Fallback: single-row inserts (slower but reliable)
+                        final_bulk_df.to_sql(TABLE_NAME, con=conn, if_exists='append', index=False,
+                                             chunksize=BULK_CHUNKSIZE, method=None)
                 
-                # 2. 수만 건의 데이터를 고속으로 밀어넣기 (method='multi' 가 핵심 부스터)
-                final_bulk_df.to_sql(TABLE_NAME, con=conn, if_exists='append', index=False, chunksize=BULK_CHUNKSIZE, method='multi')
-            
-            logger.info(f"✅ DB 일괄 삽입 성공! (총 {len(final_bulk_df)}행 적재 완료)")
-        except Exception as e:
-            logger.error(f"🔥 DB 일괄 삽입 중 치명적 에러 발생: {e}")
+                logger.info(f"✅ DB 일괄 삽입 성공! (총 {len(final_bulk_df)}행 적재 완료)")
+                inserted = True
+                break
+            except Exception as e:
+                logger.warning(f"⚠️ DB 일괄 삽입 시도 {attempt+1} 실패: {e}")
+                if attempt == max_retries - 1:
+                    logger.error(f"🔥 DB 일괄 삽입 중 치명적 에러 발생: {e}")
+                else:
+                    # Optionally reduce chunk size for next attempt
+                    pass
+        
+        if not inserted:
+            logger.error("🚨 DB 삽입 실패로 데이터가 저장되지 않았습니다.")
     else:
         logger.warning("⚠️ 수집된 데이터가 없어 DB 작업을 건너뜁니다.")
 

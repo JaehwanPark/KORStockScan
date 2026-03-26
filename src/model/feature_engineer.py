@@ -18,6 +18,7 @@
 import pandas as pd
 import numpy as np
 import pandas_ta as ta
+from pandas.api.types import is_string_dtype, is_bool_dtype, is_numeric_dtype
 # 🚀 판다스 경고 숨김 및 미래 규칙 적용 선언 (import 바로 아래에 추가)
 pd.set_option('future.no_silent_downcasting', True)
 
@@ -36,6 +37,14 @@ def calculate_all_features(df: pd.DataFrame) -> pd.DataFrame:
         'foreign_net': 'Foreign_Net', 'inst_net': 'Inst_Net', 'margin_rate': 'Margin_Rate'
     }
     df = df.rename(columns=COLUMN_NORMALIZER)
+
+    # Ensure chronological order for time‑series calculations
+    if 'Date' in df.columns:
+        # Convert to datetime if not already
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+        df = df.sort_values('Date').reset_index(drop=True)
+    elif isinstance(df.index, pd.DatetimeIndex):
+        df = df.sort_index()
 
     required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
     for col in required_cols:
@@ -159,6 +168,17 @@ def calculate_all_features(df: pd.DataFrame) -> pd.DataFrame:
     
     # 과거 데이터로 빈칸을 채우거나(ffill), 아예 0으로 채워 무로부터 시작하게 만듭니다.
     df.ffill(inplace=True)
-    df.fillna(0, inplace=True)
+
+    # Fill remaining NaN according to column dtype
+    for col in df.columns:
+        if is_numeric_dtype(df[col]):
+            df[col] = df[col].fillna(0)
+        elif is_string_dtype(df[col]):
+            df[col] = df[col].fillna('')
+        elif is_bool_dtype(df[col]):
+            df[col] = df[col].fillna(False)
+        else:
+            # fallback: fill with empty string
+            df[col] = df[col].fillna('')
 
     return df

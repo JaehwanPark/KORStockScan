@@ -4,6 +4,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import pandas_ta as ta
+from pandas.api.types import is_string_dtype, is_bool_dtype, is_numeric_dtype
 import FinanceDataReader as fdr
 
 from sqlalchemy import create_engine, text
@@ -263,7 +264,16 @@ def calculate_all_features(raw_df: pd.DataFrame) -> pd.DataFrame:
 
     df = df.replace([np.inf, -np.inf], np.nan)
     df = df.ffill()
-    df = df.fillna(0)
+    # Fill NaN according to column dtype
+    for col in df.columns:
+        if is_numeric_dtype(df[col]):
+            df[col] = df[col].fillna(0)
+        elif is_string_dtype(df[col]):
+            df[col] = df[col].fillna('')
+        elif is_bool_dtype(df[col]):
+            df[col] = df[col].fillna(False)
+        else:
+            df[col] = df[col].fillna('')
 
     return df
 
@@ -302,7 +312,16 @@ def build_market_regime(index_df: pd.DataFrame) -> pd.DataFrame:
     ).astype(int)
 
     df = df[['Date', 'Bull_Regime', 'Idx_Ret20', 'Idx_ATR_Ratio']].copy()
-    df = df.fillna(0)
+    # Fill NaN according to column dtype
+    for col in df.columns:
+        if is_numeric_dtype(df[col]):
+            df[col] = df[col].fillna(0)
+        elif is_string_dtype(df[col]):
+            df[col] = df[col].fillna('')
+        elif is_bool_dtype(df[col]):
+            df[col] = df[col].fillna(False)
+        else:
+            df[col] = df[col].fillna('')
     return df
 
 # =========================================================
