@@ -15,17 +15,14 @@ from pandas.api.types import is_string_dtype, is_bool_dtype, is_numeric_dtype
 import time
 import logging
 import json
-import re
-import requests
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 from sqlalchemy import text
 import FinanceDataReader as fdr
-from bs4 import BeautifulSoup
 
 # --- [Level 2: 공통 모듈 명시적 상대 경로 반영] ---
 from src.utils import kiwoom_utils
-from src.model.feature_engineer import calculate_all_features
+from src.model.ml_v2_common import calculate_all_features
 from src.database.db_manager import DBManager 
 from src.database.models import DailyStockQuote  
 from src.core.event_bus import EventBus
@@ -49,23 +46,6 @@ LOG_MAX_BYTES = 5 * 1024 * 1024
 LOG_BACKUP_COUNT = 3
 BULK_CHUNKSIZE = 500
 PROGRESS_INTERVAL = 50
-NXT_TARGET_URL = "https://www.nextrade.co.kr/menu/transactionStatusMain/menuList.do"
-NXT_MARKETDATA_URL = "https://www.nextrade.co.kr/menu/marketData/menuList.do"
-MIN_EXPECTED_NXT_CODES = 100
-HTTP_TIMEOUT_SECONDS = 10
-
-NXT_TARGET_KEYWORDS = [
-    r"매매체결대상종목",
-    r"정규시장.*매매체결대상종목",
-    r"매매체결대상종목.*안내",
-    r"매매체결대상종목.*확대",
-    r"매매체결대상종목.*편입",
-]
-NXT_EXCLUSION_KEYWORDS = [
-    r"매매체결 제외 종목",
-    r"매매체결대상종목.*축소",
-    r"한도 관리",
-]
 
 # 전문 로거 세팅 (터미널+파일)
 logger = logging.getLogger("KospiUpdater")
@@ -79,6 +59,8 @@ if not logger.handlers:
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(logging.Formatter('%(message)s'))
     logger.addHandler(console_handler)
+
+logger.info("🧠 Nightly feature source: src.model.ml_v2_common.calculate_all_features")
 
 # 💡 [핵심 매핑] 모델 스키마와 완벽 동기화 (Return -> daily_return 포함)
 COLUMN_MAPPING = {
@@ -115,8 +97,78 @@ COLUMN_MAPPING = {
     'Is_NXT': 'is_nxt'
 }
 
+def _normalize_feature_output_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """feature 함수 출력 컬럼을 nightly update 스키마에 맞게 정규화합니다."""
+    rename_map = {
+        'return': 'Return',
+        'return_1d': 'Return',
+        'ma5': 'MA5',
+        'ma20': 'MA20',
+        'ma60': 'MA60',
+        'ma120': 'MA120',
+        'rsi': 'RSI',
+        'macd': 'MACD',
+        'macd_sig': 'MACD_Sig',
+        'macd_hist': 'MACD_Hist',
+        'bbl': 'BBL',
+        'bbm': 'BBM',
+        'bbu': 'BBU',
+        'bbb': 'BBB',
+        'bbp': 'BBP',
+        'vwap20': 'VWAP',
+        'vwap': 'VWAP',
+        'obv': 'OBV',
+        'atr': 'ATR',
+        'date': 'Date',
+        'code': 'Code',
+        'name': 'Name',
+        'open': 'Open',
+        'high': 'High',
+        'low': 'Low',
+        'close': 'Close',
+        'volume': 'Volume',
+        'foreign_net': 'Foreign_Net',
+        'inst_net': 'Inst_Net',
+        'margin_rate': 'Margin_Rate',
+        'is_nxt': 'Is_NXT',
+    }
+    applicable = {k: v for k, v in rename_map.items() if k in df.columns and v not in df.columns}
+    return df.rename(columns=applicable)
+
+def _sanitize_daily_input(df: pd.DataFrame, code_str: str) -> pd.DataFrame:
+    """지표 계산 전에 Datetime/숫자 입력을 정규화합니다."""
+    out = df.copy()
+    if 'index' in out.columns and 'Date' not in out.columns:
+        out = out.rename(columns={'index': 'Date'})
+
+    out['Date'] = pd.to_datetime(out['Date'], errors='coerce')
+    numeric_cols = ['Open', 'High', 'Low', 'Close', 'Volume', 'Retail_Net', 'Foreign_Net', 'Inst_Net', 'Margin_Rate']
+    for col in numeric_cols:
+        if col not in out.columns:
+            out[col] = 0.0
+        out[col] = pd.to_numeric(out[col], errors='coerce')
+
+    raw_rows = len(out)
+    diag_cols = [c for c in ['Date', 'Open', 'High', 'Low', 'Close', 'Volume'] if c in out.columns]
+    if len(diag_cols) == 6:
+        null_diag = out[diag_cols].isnull().sum().to_dict()
+    else:
+        null_diag = {"missing_cols": [c for c in ['Date', 'Open', 'High', 'Low', 'Close', 'Volume'] if c not in out.columns]}
+
+    out = out.sort_values('Date').dropna(subset=['Date', 'Open', 'High', 'Low', 'Close', 'Volume']).copy()
+    out[['Retail_Net', 'Foreign_Net', 'Inst_Net', 'Margin_Rate']] = out[['Retail_Net', 'Foreign_Net', 'Inst_Net', 'Margin_Rate']].fillna(0.0)
+
+    if len(out) < 20:
+        logger.warning(
+            f"⚠️ [{code_str}] 유효 OHLCV 부족으로 종목 스킵 "
+            f"(원본 {raw_rows}행 -> 정제 후 {len(out)}행, nulls={null_diag})"
+        )
+        return pd.DataFrame()
+
+    return out
+
 # ==========================================
-# 2. NXT 대상 종목 수집 / 적재 헬퍼
+# 2. 공통 코드 정규화 헬퍼
 # ==========================================
 def _normalize_stock_code(code) -> str:
     raw = str(code or "").strip().upper().replace('.0', '')
@@ -126,235 +178,6 @@ def _normalize_stock_code(code) -> str:
         raw = raw[1:]
     digits = ''.join(ch for ch in raw if ch.isdigit())
     return digits[-6:].zfill(6) if digits else raw
-
-
-def _extract_codes_from_table(html: str) -> set[str]:
-    codes: set[str] = set()
-    soup = BeautifulSoup(html, 'html.parser')
-
-    for tr in soup.find_all('tr'):
-        row_text = ' '.join(td.get_text(' ', strip=True) for td in tr.find_all(['td', 'th']))
-        if not row_text:
-            continue
-        m = re.search(r'\bA?(\d{6})\b', row_text)
-        if m:
-            code = _normalize_stock_code(m.group(1))
-            if code and code.isdigit() and len(code) == 6:
-                codes.add(code)
-    return codes
-
-
-def _extract_codes_from_scripts(html: str) -> set[str]:
-    patterns = [
-        r'\bA(\d{6})\b',
-        r'"isuSrdCd"\s*:\s*"A?(\d{6})"',
-        r'"stockCode"\s*:\s*"(\d{6})"',
-        r'"isuCd"\s*:\s*"A?(\d{6})"',
-    ]
-    codes: set[str] = set()
-    soup = BeautifulSoup(html, 'html.parser')
-
-    for script in soup.find_all('script'):
-        script_text = script.get_text(' ', strip=True) or ''
-        if not script_text:
-            continue
-        for pattern in patterns:
-            for match in re.findall(pattern, script_text):
-                code = _normalize_stock_code(match)
-                if code and code.isdigit() and len(code) == 6:
-                    codes.add(code)
-    return codes
-
-
-def _extract_codes_by_regex(html: str) -> set[str]:
-    codes: set[str] = set()
-    for pattern in [r'\bA(\d{6})\b', r'\b(\d{6})\b']:
-        for match in re.findall(pattern, html):
-            code = _normalize_stock_code(match)
-            if code and code.isdigit() and len(code) == 6:
-                codes.add(code)
-    return codes
-
-
-def _find_latest_announcement_url(base_url: str, keywords: list[str]) -> str:
-    """공지 목록 페이지에서 주어진 키워드를 포함하는 가장 최근 공지의 URL을 반환합니다."""
-    headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.nextrade.co.kr/"}
-    try:
-        res = requests.get(base_url, headers=headers, timeout=HTTP_TIMEOUT_SECONDS)
-        res.raise_for_status()
-        soup = BeautifulSoup(res.text, 'html.parser')
-        for link in soup.find_all('a', href=True):
-            link_text = link.get_text(strip=True)
-            if any(keyword in link_text for keyword in keywords):
-                href = link['href']
-                if href.startswith('http'):
-                    return href
-                else:
-                    from urllib.parse import urljoin
-                    return urljoin(base_url, href)
-    except Exception as e:
-        logger.warning(f"⚠️ 공지 목록 조회 실패 ({base_url}): {e}")
-    return ""
-
-
-def _extract_xlsx_url_from_html(html: str) -> str:
-    """공지 상세 HTML에서 XLSX 첨부파일 URL을 추출합니다."""
-    soup = BeautifulSoup(html, 'html.parser')
-    # 전략 1: href에 .xlsx가 직접 포함된 링크
-    for link in soup.find_all('a', href=True):
-        href = link['href']
-        if '.xlsx' in href.lower():
-            return href
-    # 전략 2: onclick에 .xlsx가 포함된 링크
-    for link in soup.find_all('a', onclick=True):
-        onclick = link['onclick']
-        if '.xlsx' in onclick.lower():
-            import re
-            match = re.search(r'\"([^\"]+\.xlsx)\"', onclick)
-            if match:
-                return match.group(1)
-    # 전략 3: 느슨한 fallback
-    for link in soup.find_all('a', href=True):
-        href = link['href']
-        if 'download' in href.lower() or 'file' in href.lower():
-            return href
-    return ""
-
-
-def _download_xlsx_and_extract_codes(xlsx_url: str) -> set[str]:
-    """XLSX 파일을 다운로드하여 모든 셀에서 종목코드를 추출합니다."""
-    headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.nextrade.co.kr/"}
-    try:
-        res = requests.get(xlsx_url, headers=headers, timeout=HTTP_TIMEOUT_SECONDS)
-        res.raise_for_status()
-        import io
-        import pandas as pd
-        df = pd.read_excel(io.BytesIO(res.content), sheet_name=None, header=None, engine='openpyxl')
-        codes = set()
-        for sheet_name, sheet_df in df.items():
-            for col in sheet_df.columns:
-                for cell in sheet_df[col].astype(str):
-                    import re
-                    matches = re.findall(r'(?:KR\d{10}|A\d{6}|\d{6})(?:_AL)?', cell.upper())
-                    for match in matches:
-                        code = _normalize_stock_code(match)
-                        if code and code.isdigit() and len(code) == 6:
-                            codes.add(code)
-        return codes
-    except Exception as e:
-        logger.warning(f"⚠️ XLSX 다운로드/파싱 실패 ({xlsx_url}): {e}")
-        return set()
-
-
-def _fetch_nxt_target_codes_via_xlsx() -> set[str]:
-    """공식 NXT 대상종목 및 제외종목 XLSX를 파싱하여 최종 NXT 대상 종목 코드 집합을 반환합니다."""
-    target_url = _find_latest_announcement_url(NXT_TARGET_URL, NXT_TARGET_KEYWORDS)
-    if not target_url:
-        logger.warning("⚠️ NXT 대상종목 공지를 찾을 수 없습니다.")
-        return set()
-    target_html = requests.get(target_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=HTTP_TIMEOUT_SECONDS).text
-    xlsx_url = _extract_xlsx_url_from_html(target_html)
-    if not xlsx_url:
-        logger.warning("⚠️ 대상종목 XLSX URL 추출 실패")
-        return set()
-    target_codes = _download_xlsx_and_extract_codes(xlsx_url)
-    if len(target_codes) < MIN_EXPECTED_NXT_CODES:
-        logger.warning(f"⚠️ 대상종목 XLSX 코드 수가 너무 적습니다: {len(target_codes)}개")
-        return set()
-    
-    exclusion_url = _find_latest_announcement_url(NXT_TARGET_URL, NXT_EXCLUSION_KEYWORDS)
-    exclusion_codes = set()
-    if exclusion_url:
-        exclusion_html = requests.get(exclusion_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=HTTP_TIMEOUT_SECONDS).text
-        excl_xlsx_url = _extract_xlsx_url_from_html(exclusion_html)
-        if excl_xlsx_url:
-            exclusion_codes = _download_xlsx_and_extract_codes(excl_xlsx_url)
-    
-    final_codes = target_codes - exclusion_codes
-    logger.info(f"✅ NXT 대상 종목 XLSX 파싱 성공: 대상 {len(target_codes)}개, 제외 {len(exclusion_codes)}개, 최종 {len(final_codes)}개")
-    return final_codes
-
-
-def fetch_nxt_target_codes() -> set[str]:
-    """넥스트레이드 공식 거래대상종목 페이지를 source of truth로 사용해 NXT 대상 종목 코드를 수집합니다.
-
-    파싱 전략:
-    1) 공식 NXT 대상종목/제외종목 XLSX 첨부파일 파싱 (우선)
-    2) HTML table row 기반
-    3) inline script / JSON-like 데이터
-    4) 전체 regex fallback
-    """
-    # 1. XLSX 우선 시도
-    xlsx_codes = _fetch_nxt_target_codes_via_xlsx()
-    if xlsx_codes and len(xlsx_codes) >= MIN_EXPECTED_NXT_CODES:
-        logger.info(f"✅ NXT 대상 종목 목록 XLSX 파싱 성공: {len(xlsx_codes)}개")
-        return xlsx_codes
-    else:
-        logger.warning("⚠️ NXT XLSX 파싱 실패 또는 코드 수 부족. HTML 파싱으로 폴백합니다.")
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Referer": "https://www.nextrade.co.kr/",
-    }
-    
-    strategies = [
-        ('table', _extract_codes_from_table),
-        ('scripts', _extract_codes_from_scripts),
-        ('regex', _extract_codes_by_regex),
-    ]
-    
-    for url in [NXT_MARKETDATA_URL, NXT_TARGET_URL]:
-        try:
-            res = requests.get(url, headers=headers, timeout=HTTP_TIMEOUT_SECONDS)
-            res.raise_for_status()
-            html = res.text
-            
-            best_codes = set()
-            best_strategy = None
-            for name, extractor in strategies:
-                try:
-                    codes = extractor(html)
-                except Exception as e:
-                    logger.warning(f"⚠️ NXT {name} 파싱 중 예외: {e}")
-                    continue
-                
-                if len(codes) > len(best_codes):
-                    best_codes = codes
-                    best_strategy = name
-                
-                if len(codes) >= MIN_EXPECTED_NXT_CODES:
-                    logger.info(f"✅ NXT 대상 종목 목록 수집 성공: {len(codes)}개 (strategy: {name}, source: {url})")
-                    return codes
-            
-            # 어떤 전략도 임계치를 넘지 못한 경우
-            if best_codes:
-                logger.warning(
-                    f"⚠️ NXT 코드 수집 결과가 비정상적으로 적음: {len(best_codes)}개 "
-                    f"(best_strategy: {best_strategy}, source: {url})"
-                )
-            else:
-                logger.warning(f"⚠️ NXT 코드 수집 실패 (source: {url})")
-                
-        except Exception as e:
-            logger.warning(f"⚠️ NXT 대상 종목 목록 수집 실패 ({url}): {e}")
-            continue
-    
-    # 모든 URL 실패
-    logger.warning("⚠️ NXT 공식 목록 수집 실패. 모든 소스에서 파싱 불가.")
-    return set()
-
-
-def resolve_nxt_map(db: DBManager, target_codes: list[str]) -> dict:
-    """공식 NXT 대상 종목 목록을 우선 사용하고, 실패 시 최신 거래일 DB 플래그로 폴백합니다."""
-    normalized = [_normalize_stock_code(c) for c in (target_codes or []) if c]
-    nxt_target_codes = fetch_nxt_target_codes()
-
-    if nxt_target_codes:
-        return {code: (code in nxt_target_codes) for code in normalized}
-
-    logger.warning("⚠️ NXT 공식 목록 수집 실패. 최신 거래일 DB is_nxt 플래그로 폴백합니다.")
-    return db.get_latest_is_nxt_map(normalized)
-
 
 # ==========================================
 # 3. 메인 업데이트 로직
@@ -369,17 +192,17 @@ def process_and_save_stock(code, token, session, is_nxt=False) -> pd.DataFrame:
         df_ohlcv = kiwoom_utils.get_daily_ohlcv_ka10081_df(token, code_str)
         if df_ohlcv.empty: return pd.DataFrame()
         # 💡 [안전 장치 2] 조인(Join) 실패를 막기 위해 인덱스를 날짜형(Datetime)으로 강제 통일
-        df_ohlcv.index = pd.to_datetime(df_ohlcv.index)
+        df_ohlcv.index = pd.to_datetime(df_ohlcv.index, errors='coerce')
 
-        df_investor = kiwoom_utils.get_investor_daily_ka10059_df(token, code_str)
+        df_investor = kiwoom_utils.get_investor_daily_ka10059_df(token, code_str, is_nxt=is_nxt)
         if not df_investor.empty:
-            df_investor.index = pd.to_datetime(df_investor.index)
+            df_investor.index = pd.to_datetime(df_investor.index, errors='coerce')
 
-        df_margin = kiwoom_utils.get_margin_daily_ka10013_df(token, code_str)
+        df_margin = kiwoom_utils.get_margin_daily_ka10013_df(token, code_str, is_nxt=is_nxt)
         if not df_margin.empty:
-            df_margin.index = pd.to_datetime(df_margin.index)
+            df_margin.index = pd.to_datetime(df_margin.index, errors='coerce')
 
-        basic_info = kiwoom_utils.get_basic_info_ka10001(token, code_str)
+        basic_info = kiwoom_utils.get_basic_info_ka10001(token, code_str) or {}
         
         # 2. Date 기준 무결점 병합 (Join)
         df = df_ohlcv
@@ -407,59 +230,65 @@ def process_and_save_stock(code, token, session, is_nxt=False) -> pd.DataFrame:
         # 인덱스 이름 보정 (reset_index 후 이름이 index가 될 수 있음)
         if 'index' in df.columns and 'Date' not in df.columns:
             df.rename(columns={'index': 'Date'}, inplace=True)
-            
-        df['Date'] = df['Date'].dt.strftime('%Y-%m-%d')
+        
+        # 3. 지표 계산 전 입력 정제
+        df = _sanitize_daily_input(df, code_str)
+        if df.empty:
+            return pd.DataFrame()
 
         # 💡 [핵심 복구 1] 종목 코드, 이름, 그리고 시가총액(Marcap) 주입!
         df['Code'] = code_str
-        df['Name'] = basic_info.get('Name', '이름없음')
-        df['Marcap'] = basic_info.get('Marcap', 0)  # 잘 들어오던 로직 그대로 유지!
+        df['Name'] = basic_info.get('Name') or '이름없음'
+        df['Marcap'] = basic_info.get('Marcap') or 0
         df['Is_NXT'] = bool(is_nxt)
 
         # 💡 [핵심 복구 2] 지표 계산 전 원본 데이터 완벽 백업
         backup_df = df.copy()
         original_cols = df.columns.tolist()
 
-        # Convert any None values to NaN for numeric columns (prevent NoneType errors)
-        for col in df.columns:
-            if df[col].dtype == object:
-                # Replace None with NaN (keeps other values unchanged)
-                df[col] = df[col].apply(lambda x: np.nan if x is None else x)
-            elif df[col].dtype.kind in 'biufc':  # numeric types
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-
-        # 3. 보조 지표 계산 (Return 컬럼 생성)
-        df = calculate_all_features(df)
-
-        # 🚨 [중요] feature_engineer가 소문자 'return'을 줬다면 대문자로 통일
-        if 'return' in df.columns and 'Return' not in df.columns:
-            df.rename(columns={'return': 'Return'}, inplace=True)
+        # 4. feature 계산 (nightly SSOT)
+        # ml_v2_common.calculate_all_features는 quote_date, stock_code 컬럼을 기대함
+        df_feat = df.rename(columns={'Date': 'quote_date', 'Code': 'stock_code'})
+        df_feat = calculate_all_features(df_feat)
+        df = _normalize_feature_output_columns(df_feat)
 
         # 💡 [핵심 복구 3] 원본 컬럼 강제 복원 (지표 계산기가 0으로 덮어쓰는 것 원천 차단)
         for col in original_cols:
             if col in ['Marcap', 'Margin_Rate', 'Retail_Net', 'Foreign_Net', 'Inst_Net', 'Code', 'Name', 'Is_NXT']:
-                df[col] = backup_df[col]
+                df[col] = backup_df[col].values
             elif col not in df.columns:
-                df[col] = backup_df[col]
+                df[col] = backup_df[col].values
 
         # Ensure 'Return' column exists for mapping
         if 'Return' not in df.columns:
             # Compute daily return as percentage change of close_price
             if 'Close' in df.columns:
-                df['Return'] = df['Close'].pct_change().fillna(0)
+                df['Return'] = pd.to_numeric(df['Close'], errors='coerce').pct_change().fillna(0.0)
             else:
                 df['Return'] = 0.0
 
-        # 4. DB 컬럼명으로 최종 변환
+        if 'Date' not in df.columns:
+            raise ValueError(f'[{code_str}] feature 출력에 Date 컬럼이 없습니다.')
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+
+        # 5. DB 컬럼명으로 최종 변환
         final_valid_cols = [col for col in COLUMN_MAPPING.keys() if col in df.columns]
         df = df[final_valid_cols].rename(columns=COLUMN_MAPPING)
 
-        # 5. 최근 100일치 슬라이싱
-        cutoff_date = (datetime.now() - timedelta(days=CUTOFF_DAYS)).strftime('%Y-%m-%d')
-        new_rows = df[df['quote_date'] >= cutoff_date].copy()
+        # 6. 최근 100일치 슬라이싱
+        cutoff_ts = pd.Timestamp(datetime.now().date() - timedelta(days=CUTOFF_DAYS))
+        new_rows = df[df['quote_date'] >= cutoff_ts].copy()
+
+        # 7. DB 적재 전 정리
+        if 'quote_date' in new_rows.columns:
+            new_rows['quote_date'] = pd.to_datetime(new_rows['quote_date'], errors='coerce').dt.date
+        if 'is_nxt' in new_rows.columns:
+            new_rows['is_nxt'] = new_rows['is_nxt'].fillna(False).astype(bool)
+
+        new_rows = new_rows.dropna(subset=['quote_date', 'close_price', 'daily_return'])
+        new_rows = new_rows.replace([np.inf, -np.inf], np.nan)
 
         # 💡 [핵심 복구 4] 결측치(NaN) 완벽 제거 및 0 채우기 (PostgreSQL 에러 원천 차단)
-        new_rows = new_rows.dropna(subset=['close_price', 'daily_return'])
         # Fill NaN with appropriate defaults per column type
         # Ensure numeric columns are numeric (convert object dtype)
         numeric_cols = ['open_price', 'high_price', 'low_price', 'close_price', 'volume',
@@ -469,9 +298,6 @@ def process_and_save_stock(code, token, session, is_nxt=False) -> pd.DataFrame:
         for col in numeric_cols:
             if col in new_rows.columns:
                 new_rows[col] = pd.to_numeric(new_rows[col], errors='coerce')
-        # Boolean column
-        if 'is_nxt' in new_rows.columns:
-            new_rows['is_nxt'] = new_rows['is_nxt'].astype(bool)
         
         for col in new_rows.columns:
             if is_numeric_dtype(new_rows[col]):
@@ -490,7 +316,7 @@ def process_and_save_stock(code, token, session, is_nxt=False) -> pd.DataFrame:
         return new_rows[final_cols]
 
     except Exception as e:
-        logger.error(f"❌ [{code}] 처리 중 치명적 에러: {e}")
+        logger.error(f"❌ [{code}] 처리 중 치명적 에러: {e}", exc_info=True)
         return pd.DataFrame()
         
 # ==========================================
@@ -559,10 +385,18 @@ def update_kospi_data():
             logger.error(f"❌ DB 종목 수집 중 에러: {db_e}", exc_info=True)
             return
 
+    kospi_codes = sorted({_normalize_stock_code(c) for c in kospi_codes if c})
     total_count = len(kospi_codes)
     successful_codes = []
-    nxt_map = resolve_nxt_map(db, kospi_codes)
-    nxt_count = int(sum(1 for v in nxt_map.values() if v))
+
+    nxt_map = kiwoom_utils.get_nxt_flag_map_ka10099(kiwoom_token, kospi_codes, mrkt_tps=("0", "10"))
+    if nxt_map:
+        nxt_count = int(sum(1 for v in nxt_map.values() if v))
+        logger.info(f"✅ [ka10099] NXT 가능 종목 매핑 완료: {nxt_count}개")
+    else:
+        logger.warning("⚠️ [ka10099] NXT 가능 종목 매핑 실패. 최신 거래일 DB is_nxt 플래그로 폴백합니다.")
+        nxt_map = db.get_latest_is_nxt_map(kospi_codes)
+        nxt_count = int(sum(1 for v in nxt_map.values() if v))
     
     # 💡 [핵심] 900개 종목의 데이터를 담을 거대한 빈 리스트
     all_stocks_data = []
@@ -654,7 +488,6 @@ def update_kospi_data():
     
     finish_msg = f"✅ **KOSPI 일일 데이터 갱신 완료**\n총 **{len(successful_codes)} / {total_count}** 종목의 캔들 및 수급 데이터가 DB에 일괄 적재되었습니다.\n🟣 NXT 대상 플래그 반영: **{nxt_count}개**"
     event_bus.publish('TELEGRAM_BROADCAST', {'message': finish_msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'Markdown'})
-
 
 if __name__ == "__main__":
     # 1. 데이터 업데이트 실행
