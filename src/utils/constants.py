@@ -81,8 +81,8 @@ class TradingConfig:
     KOSDAQ_TARGET: float = 4.0  # 코스닥은 조금 더 높게 목표 (예: 4.0%)
     KOSDAQ_STOP: float = -2.5  # 타이트한 칼손절 적용
     VPW_KOSDAQ_LIMIT: int = 115  # 확신도가 낮을 때 매수를 강행하기 위한 체결강도 허들(%)
-    HOLDING_DAYS: int = 3  # KOSPI 최대 보유 영업일
-    KOSDAQ_HOLDING_DAYS: int = 2  # 코스닥 최대 보유 영업일
+    HOLDING_DAYS: int = 4  # KOSPI 최대 보유 영업일
+    KOSDAQ_HOLDING_DAYS: int = 3  # 코스닥 최대 보유 영업일
     MAX_SWING_GAP_UP_PCT: float = 3.0  # 💡 [신규] 스윙 전략 아침 갭상승/급등 출발 시 추격 매수 방지 기준 (%)
 
     # ==========================================

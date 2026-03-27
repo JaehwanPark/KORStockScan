@@ -229,6 +229,66 @@ def get_industry_list_ka10101(token, market_type="0"):
     # 첫 번째 응답 덩어리인 results[0]을 그대로 반환하면 기존 로직과 100% 호환됩니다.
     return results[0]
 
+
+
+def get_nxt_enabled_codes_ka10099(token, mrkt_tps=("0", "10")) -> set[str]:
+    """
+    [ka10099] 종목정보 리스트를 조회하여 nxtEnable == "Y" 인 종목코드 집합을 반환합니다.
+    - mrkt_tps 기본값: 코스피("0"), 코스닥("10")
+    - 응답 Body.list[*].code / nxtEnable 사용
+    """
+    url = get_api_url("/api/dostk/stkinfo")
+    nxt_codes: set[str] = set()
+    requested_markets = [str(m) for m in (mrkt_tps or ("0", "10"))]
+
+    for mrkt_tp in requested_markets:
+        payload = {"mrkt_tp": mrkt_tp}
+        results = fetch_kiwoom_api_continuous(
+            url=url,
+            token=token,
+            api_id='ka10099',
+            payload=payload,
+            use_continuous=True
+        )
+
+        if not results:
+            log_error(f"⚠️ [ka10099] 시장구분 {mrkt_tp} 조회 결과가 비어 있습니다.")
+            continue
+
+        market_total = 0
+        market_nxt = 0
+
+        for res in results:
+            for item in res.get('list', []) or []:
+                code = normalize_stock_code(item.get('code'))
+                if not code or not code.isdigit() or len(code) != 6:
+                    continue
+
+                market_total += 1
+                if str(item.get('nxtEnable', '')).strip().upper() == 'Y':
+                    nxt_codes.add(code)
+                    market_nxt += 1
+
+        print(f"ℹ️ [ka10099] 시장구분 {mrkt_tp}: 전체 {market_total}건 / NXT 가능 {market_nxt}건")
+
+    return nxt_codes
+
+
+def get_nxt_flag_map_ka10099(token, target_codes=None, mrkt_tps=("0", "10")) -> dict[str, bool]:
+    """
+    [ka10099] 기반으로 종목코드별 is_nxt 플래그 맵을 생성합니다.
+    - target_codes가 주어지면 해당 종목들만 {code: bool} 형태로 반환
+    - target_codes가 없으면 NXT 가능 종목만 True 맵으로 반환
+    """
+    nxt_enabled_codes = get_nxt_enabled_codes_ka10099(token, mrkt_tps=mrkt_tps)
+
+    if target_codes is None:
+        return {code: True for code in sorted(nxt_enabled_codes)}
+
+    normalized = sorted({normalize_stock_code(code) for code in (target_codes or []) if code})
+    return {code: (code in nxt_enabled_codes) for code in normalized}
+
+
 def get_basic_info_ka10001(token, code):
     """[ka10001] 주식기본정보요청 (1회성 조회)"""
     url = get_api_url("/api/dostk/stkinfo")
@@ -461,11 +521,11 @@ def get_daily_data_ka10005_df(token, code):
 
     return df
 
-def get_investor_daily_ka10059_df(token, code, base_dt=None):
+def get_investor_daily_ka10059_df(token, code, base_dt=None, is_nxt=None):
     """[ka10059] 수급 데이터 (투신, 연기금, 사모펀드 등 세부 주체 확장)"""
     
     # SOR 일 경우 _AL 코드로 변환
-    req_code = get_effective_kiwoom_code(code)
+    req_code = get_effective_kiwoom_code(code, is_nxt=is_nxt)
     
     if not base_dt:
         base_dt = datetime.now().strftime("%Y%m%d")
@@ -529,11 +589,11 @@ def get_investor_daily_ka10059_df(token, code, base_dt=None):
     df = df[~df.index.duplicated(keep='first')]
     return df.sort_index()
 
-def get_margin_daily_ka10013_df(token, code, base_dt=None):
+def get_margin_daily_ka10013_df(token, code, base_dt=None, is_nxt=None):
     """[ka10013] 신용 잔고율 데이터 (공통 래퍼 함수 및 누락 방어 적용)"""
 
     # SOR 일 경우 _AL 코드로 변환
-    req_code = get_effective_kiwoom_code(code)
+    req_code = get_effective_kiwoom_code(code, is_nxt=is_nxt)
     
     if not base_dt:
         base_dt = datetime.now().strftime("%Y%m%d")
