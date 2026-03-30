@@ -21,7 +21,7 @@ import numpy as np
 # 💡 Level 1 공통 모듈 (경로, 로거, 피처 엔지니어링)
 from src.utils.constants import DATA_DIR
 from src.utils.logger import log_error
-from src.model.feature_engineer import calculate_all_features
+from src.model.feature_engineering_v2 import calculate_all_features
 
 # ==========================================
 # 🧠 AI 앙상블 모델 Feature 리스트 (PostgreSQL 스키마 완벽 동기화)

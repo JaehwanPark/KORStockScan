@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 import kiwoom_utils
 from db_manager import DBManager
-from feature_engineer import calculate_all_features
+from src.model.feature_engineering_v2 import calculate_all_features
 from constants import TRADING_RULES
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
