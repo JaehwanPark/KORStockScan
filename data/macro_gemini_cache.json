@@ -1,84 +1,87 @@
 {
-  "bundle_as_of": "2026-03-30T07:24:37Z",
+  "bundle_as_of": "2026-03-30T22:00:17Z",
   "sp500": {
     "name": "S&P500",
-    "value": 5259.0,
-    "prev_value": 5254.36,
-    "change": 4.64,
-    "change_pct": 0.09,
-    "as_of": "2026-03-29T23:00:00Z",
-    "source": "MarketClose"
+    "value": 5210.0,
+    "prev_value": 5195.0,
+    "change": 15.0,
+    "change_pct": 0.29,
+    "as_of": "2026-03-30T21:00:00Z",
+    "source": "TradingView"
   },
   "nasdaq": {
     "name": "NASDAQ",
-    "value": 16475.87,
-    "prev_value": 16461.28,
-    "change": 14.59,
-    "change_pct": 0.09,
-    "as_of": "2026-03-29T23:00:00Z",
-    "source": "MarketClose"
+    "value": 16250.0,
+    "prev_value": 16190.0,
+    "change": 60.0,
+    "change_pct": 0.37,
+    "as_of": "2026-03-30T21:00:00Z",
+    "source": "TradingView"
   },
   "vix": {
     "name": "VIX",
-    "value": 13.0,
-    "prev_value": 13.06,
-    "change": -0.06,
-    "change_pct": -0.46,
-    "as_of": "2026-03-29T23:00:00Z",
-    "source": "MarketClose"
+    "value": 12.5,
+    "prev_value": 12.7,
+    "change": -0.2,
+    "change_pct": -1.57,
+    "as_of": "2026-03-30T21:00:00Z",
+    "source": "TradingView"
   },
   "us10y": {
     "name": "US10Y",
-    "value": 4.25,
-    "prev_value": 4.26,
-    "change": -0.01,
-    "change_pct": -0.24,
-    "as_of": "2026-03-29T23:00:00Z",
-    "source": "MarketClose"
+    "value": 4.35,
+    "prev_value": 4.38,
+    "change": -0.03,
+    "change_pct": -0.68,
+    "as_of": "2026-03-30T21:00:00Z",
+    "source": "TradingView"
   },
   "brent": {
     "name": "BRENT",
     "value": 86.5,
-    "prev_value": 86.3,
-    "change": 0.2,
-    "change_pct": 0.23,
-    "as_of": "2026-03-29T23:00:00Z",
-    "source": "MarketClose"
+    "prev_value": 87.0,
+    "change": -0.5,
+    "change_pct": -0.57,
+    "as_of": "2026-03-30T21:00:00Z",
+    "source": "Investing.com"
   },
   "headlines": [
     {
-      "title": "U.S. Stocks Edge Higher as Inflation Data Approaches",
+      "title": "US Stocks Rise as Inflation Data Cools Expectations for Fed Rate Hikes",
       "source": "Reuters",
-      "published_at": "2026-03-29T20:00:00Z",
-      "url": "https://www.reuters.com/markets/us/stocks-edge-higher-inflation-data-approaches-2026-03-29/"
+      "published_at": "2026-03-30T18:30:00Z",
+      "url": "https://www.reuters.com/markets/us/stocks-rise-inflation-data-cools-expectations-fed-rate-hikes-2026-03-30/"
     },
     {
-      "title": "Treasury Yields Dip as Investors Await Key Economic Reports",
+      "title": "Treasury Yields Fall Sharply After Lower-Than-Expected CPI Report",
       "source": "Bloomberg",
-      "published_at": "2026-03-29T22:30:00Z",
-      "url": "https://www.bloomberg.com/news/articles/2026-03-29/treasury-yields-dip-as-investors-await-key-economic-reports"
+      "published_at": "2026-03-30T19:05:00Z",
+      "url": "https://www.bloomberg.com/news/articles/2026-03-30/treasury-yields-fall-sharply-after-lower-than-expected-cpi-report"
     },
     {
-      "title": "Oil Prices Steady as Geopolitical Tensions Simmer",
+      "title": "Oil Prices Dip as Demand Concerns Linger Despite Geopolitical Tensions",
       "source": "The Wall Street Journal",
-      "published_at": "2026-03-29T21:00:00Z",
-      "url": "https://www.wsj.com/markets/commodities/oil-prices-steady-geopolitical-tensions-simmer-a1b2c3d4e5f6"
+      "published_at": "2026-03-30T20:15:00Z",
+      "url": "https://www.wsj.com/markets/commodities/oil-prices-dip-as-demand-concerns-linger-despite-geopolitical-tensions-0a1b2c3d4e5f"
     },
     {
-      "title": "Fed Officials Signal Caution on Rate Cuts Amid Inflation Concerns",
+      "title": "Nvidia Surges on AI Chip Demand, Pushing Nasdaq Higher",
       "source": "CNBC",
-      "published_at": "2026-03-29T19:00:00Z",
-      "url": "https://www.cnbc.com/2026/03/29/fed-officials-signal-caution-on-rate-cuts-amid-inflation-concerns.html"
+      "published_at": "2026-03-30T20:45:00Z",
+      "url": "https://www.cnbc.com/2026/03/30/nvidia-surges-on-ai-chip-demand-pushing-nasdaq-higher.html"
     },
     {
-      "title": "Middle East Tensions Remain High, Impacting Market Sentiment",
+      "title": "Middle East Tensions Remain High, Impacting Global Supply Chains",
       "source": "Associated Press",
-      "published_at": "2026-03-29T18:00:00Z",
-      "url": "https://apnews.com/article/middle-east-tensions-market-sentiment-2026-03-29"
+      "published_at": "2026-03-30T19:50:00Z",
+      "url": "https://apnews.com/article/middle-east-tensions-supply-chains-geopolitics-1234567890"
     }
   ],
   "notes": [
-    "Data reflects market close for equities and prior trading day for bonds and oil, unless otherwise specified.",
-    "Market closing prices are subject to revision."
+    "S&P 500 and Nasdaq futures trading higher, reflecting positive sentiment from inflation data.",
+    "US 10-year Treasury yields are down as investors anticipate a potential pause in Fed rate hikes.",
+    "Brent crude is trading lower, influenced by global demand worries.",
+    "VIX showing a slight decrease, indicating reduced market volatility.",
+    "Geopolitical developments in the Middle East continue to be a key factor to watch."
   ]
 }

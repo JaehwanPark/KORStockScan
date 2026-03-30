@@ -51,14 +51,14 @@ MACRO_GEMINI_SYSTEM_PROMPT = """
 
 반드시 아래 형태를 따른다.
 {
-  "bundle_as_of": "2026-03-30T10:45:00Z",
-  "sp500": {"name": "S&P500", "value": 0, "prev_value": 0, "change": 0, "change_pct": 0, "as_of": "2026-03-30T10:45:00Z", "source": "..." },
-  "nasdaq": {"name": "NASDAQ", "value": 0, "prev_value": 0, "change": 0, "change_pct": 0, "as_of": "2026-03-30T10:45:00Z", "source": "..." },
-  "vix": {"name": "VIX", "value": 0, "prev_value": 0, "change": 0, "change_pct": 0, "as_of": "2026-03-30T10:45:00Z", "source": "..." },
-  "us10y": {"name": "US10Y", "value": 0, "prev_value": 0, "change": 0, "change_pct": 0, "as_of": "2026-03-30T10:45:00Z", "source": "..." },
-  "brent": {"name": "BRENT", "value": 0, "prev_value": 0, "change": 0, "change_pct": 0, "as_of": "2026-03-30T10:45:00Z", "source": "..." },
+  "bundle_as_of": "...",
+  "sp500": {"name": "S&P500", "value": 0, "prev_value": 0, "change": 0, "change_pct": 0, "as_of": "...", "source": "..." },
+  "nasdaq": {"name": "NASDAQ", "value": 0, "prev_value": 0, "change": 0, "change_pct": 0, "as_of": "...", "source": "..." },
+  "vix": {"name": "VIX", "value": 0, "prev_value": 0, "change": 0, "change_pct": 0, "as_of": "...", "source": "..." },
+  "us10y": {"name": "US10Y", "value": 0, "prev_value": 0, "change": 0, "change_pct": 0, "as_of": "...", "source": "..." },
+  "brent": {"name": "BRENT", "value": 0, "prev_value": 0, "change": 0, "change_pct": 0, "as_of": "...", "source": "..." },
   "headlines": [
-    {"title": "...", "source": "...", "published_at": "2026-03-30T10:45:00Z", "url": "..."}
+    {"title": "...", "source": "...", "published_at": "...", "url": "..."}
   ],
   "notes": ["..."]
 }
@@ -433,7 +433,7 @@ class MacroBriefingBuilder:
         self.market_max_age_hours = int(self.config.get("MACRO_GEMINI_MARKET_MAX_AGE_HOURS", 96) or 96)
         self.headline_max_age_hours = int(self.config.get("MACRO_GEMINI_HEADLINE_MAX_AGE_HOURS", 36) or 36)
         self.cache_path = self._resolve_cache_path()
-        self.current_model_name = str(self.config.get("MACRO_GEMINI_MODEL", "gemini-2.5-flash-lite") or "gemini-2.5-flash-lite")
+        self.current_model_name = str("gemini-flash-lite-latest")
 
         api_keys = _extract_gemini_api_keys(self.config)
         if isinstance(api_keys, str):
@@ -547,10 +547,8 @@ class MacroBriefingBuilder:
             return cls({})
 
     def _build_macro_user_input(self) -> str:
-        now_utc = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
         return f"""
-[현재 시각]
-- now_utc: {now_utc}
+현재시간 기준 
 
 [수집 대상]
 1. S&P500

@@ -71,6 +71,53 @@ SWING_SYSTEM_PROMPT = """
 
 
 # ==========================================
+# 1-3. 🎯 조건검색식 진입 판단 프롬프트 (Condition Entry)
+# ==========================================
+CONDITION_ENTRY_PROMPT = """
+너는 키움 조건검색식 실시간 신호를 전문적으로 분석하는 상위 1% 조건검색 트레이더다.
+너의 임무는 조건검색식이 발생한 종목이 진입할만한 가치가 있는지, 아니면 거짓 신호인지 판단하는 것이다.
+
+[판단 원칙]
+1. 조건검색식 패밀리(VCP, S15, Swing Breakout 등)에 맞는 진입 논리를 적용하라.
+2. 실시간 호가창, 체결강도, 프로그램 수급, 거래량 폭발 여부를 종합적으로 평가하라.
+3. 조건검색식이 발생한 직후 3분 이내의 데이터만 신뢰하라. 시간이 지날수록 신호 신뢰도가 떨어진다.
+
+출력 형식은 반드시 아래 JSON으로만 응답하라:
+{
+  "decision": "BUY|WAIT|SKIP",
+  "confidence": 0~100 사이의 정수,
+  "order_type": "MARKET|LIMIT_TOP|NONE",
+  "position_size_ratio": 0.0~1.0,
+  "invalidation_price": 0 (정수),
+  "reasons": [""],
+  "risks": [""]
+}
+"""
+
+# ==========================================
+# 1-4. 🎯 조건검색식 청산 판단 프롬프트 (Condition Exit)
+# ==========================================
+CONDITION_EXIT_PROMPT = """
+너는 조건검색식으로 진입한 포지션의 청산 시점을 판단하는 전문 트레이더다.
+너의 임무는 보유 포지션의 실시간 데이터를 바탕으로 홀드, 부분 청산, 전량 청산을 결정하는 것이다.
+
+[판단 원칙]
+1. 조건검색식 패밀리에 맞는 청산 논리(VCP는 익절 빠르게, S15는 트레일링 등)를 적용하라.
+2. 실시간 수익률, 최고점 대비 하락폭, AI 점수 하락, 매도 압력 증가를 주요 신호로 삼아라.
+3. 손절은 신호 실패 시 즉시, 익절은 추세가 꺾일 때 점진적으로 실행하라.
+
+출력 형식은 반드시 아래 JSON으로만 응답하라:
+{
+  "decision": "HOLD|TRIM|EXIT",
+  "confidence": 0~100 사이의 정수,
+  "trim_ratio": 0.0~1.0,
+  "new_stop_price": 0 (정수),
+  "reason_primary": "",
+  "warning": ""
+}
+"""
+
+# ==========================================
 # 2. 🎯 [신규] 일일 시장 진단 프롬프트 (텔레그램 브리핑용)
 # ==========================================
 ENHANCED_MARKET_ANALYSIS_PROMPT = """
@@ -254,6 +301,37 @@ EOD_TOMORROW_LEADER_PROMPT = """
 
 💡 **[수석 트레이더의 내일 장 원포인트 레슨]**
 (내일 아침 시초가 대응이나 주의해야 할 리스크에 대한 뼈 때리는 조언 1줄)
+"""
+
+EOD_TOMORROW_LEADER_JSON_PROMPT = """
+너는 여의도 최상위 0.1% 수익률의 기관 프랍 트레이더다.
+입력된 후보군 중에서 내일 가장 유력한 주도주 TOP 5를 골라 반드시 JSON만 반환하라.
+
+[선정 원칙]
+1. 외인/기관 수급 누적 및 가속, 차트 응축, 정배열 초입, 전고점 돌파 직전 자리를 높게 평가한다.
+2. 이미 과열된 종목은 낮게 평가하거나 제외한다.
+3. 종목코드는 반드시 6자리 문자열로 반환한다.
+4. confidence는 0~1 사이 float로 반환한다.
+5. JSON 외의 텍스트는 절대 출력하지 마라.
+
+반드시 아래 형식만 반환:
+{
+  "market_summary": "오늘 시장과 내일 장세를 보는 1~2줄 요약",
+  "one_point_lesson": "내일 시초가 대응이나 주의할 리스크 한 줄",
+  "top5": [
+    {
+      "rank": 1,
+      "stock_name": "종목명",
+      "stock_code": "000000",
+      "close_price": 12345,
+      "reason": "선정 사유 1~2줄",
+      "entry_plan": "시초가 눌림 / 돌파 등",
+      "target_price_guide": "목표가 가이드",
+      "stop_price_guide": "손절가 가이드",
+      "confidence": 0.91
+    }
+  ]
+}
 """
 
 class GeminiSniperEngine:
@@ -593,6 +671,26 @@ class GeminiSniperEngine:
         finally:
             self.lock.release()
             
+        def analyze_condition_target(self, target_name, ws_data, recent_ticks, recent_candles, condition_profile):
+            """
+            조건검색 특화 AI 분석 (condition_profile에 따른 프롬프트 선택)
+            condition_profile은 resolve_condition_profile에서 반환된 딕셔너리입니다.
+            """
+            # 전략과 포지션 태그에 따라 프롬프트 분기 (기본은 SCALPING)
+            strategy = condition_profile.get('strategy', 'SCALPING')
+            position_tag = condition_profile.get('position_tag', 'MIDDLE')
+            # TODO: 조건별 프롬프트 추가 (VCP, S15 등)
+            # 현재는 기존 analyze_target에 위임
+            return self.analyze_target(target_name, ws_data, recent_ticks, recent_candles, strategy)
+    
+        def evaluate_condition_gatekeeper(self, stock_name, stock_code, realtime_ctx, condition_profile):
+            """
+            조건검색 특화 게이트키퍼 (condition_profile에 따른 판단)
+            """
+            # 현재는 기존 evaluate_realtime_gatekeeper에 위임
+            return self.evaluate_realtime_gatekeeper(stock_name, stock_code, realtime_ctx, analysis_mode="AUTO")
+    
+    
     def analyze_scanner_results(self, total_count, survived_count, stats_text, macro_text=""):
         """텔레그램 아침 브리핑 (Macro + Scanner 통합)"""
         with self.lock:
@@ -912,26 +1010,193 @@ class GeminiSniperEngine:
                     'raw': {},
                 }
 
+    def evaluate_condition_entry(self, stock_name, stock_code, ws_data, recent_ticks, recent_candles, condition_profile):
+        """
+        조건검색식 진입 판단 (프롬프트: CONDITION_ENTRY_PROMPT)
+        """
+        with self.lock:
+            # 데이터 포맷팅
+            formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
+            # 조건 프로필 정보 추가
+            profile_text = f"조건검색식 프로필: {condition_profile}"
+            user_input = f"{stock_name}({stock_code}) - 조건검색식 진입 판단 요청\n{profile_text}\n\n{formatted_data}"
+            try:
+                result = self._call_gemini_safe(
+                    CONDITION_ENTRY_PROMPT,
+                    user_input,
+                    require_json=True,
+                    context_name=f"COND_ENTRY:{stock_name}",
+                    model_override="gemini-pro-latest"
+                )
+                return result
+            except Exception as e:
+                log_error(f"🚨 [조건검색식 진입 판단] AI 에러: {e}")
+                return {
+                    "decision": "SKIP",
+                    "confidence": 0,
+                    "order_type": "NONE",
+                    "position_size_ratio": 0.0,
+                    "invalidation_price": 0,
+                    "reasons": [f"AI 판정 실패: {e}"],
+                    "risks": ["데이터 부족 또는 AI 응답 오류"]
+                }
+
+    def evaluate_condition_exit(self, stock_name, stock_code, ws_data, recent_ticks, recent_candles, condition_profile, profit_rate, peak_profit, current_ai_score):
+        """
+        조건검색식 청산 판단 (프롬프트: CONDITION_EXIT_PROMPT)
+        """
+        with self.lock:
+            formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
+            profile_text = f"조건검색식 프로필: {condition_profile}, 수익률: {profit_rate:.2f}%, 최고수익률: {peak_profit:.2f}%, AI 점수: {current_ai_score}"
+            user_input = f"{stock_name}({stock_code}) - 조건검색식 청산 판단 요청\n{profile_text}\n\n{formatted_data}"
+            try:
+                result = self._call_gemini_safe(
+                    CONDITION_EXIT_PROMPT,
+                    user_input,
+                    require_json=True,
+                    context_name=f"COND_EXIT:{stock_name}",
+                    model_override="gemini-pro-latest"
+                )
+                return result
+            except Exception as e:
+                log_error(f"🚨 [조건검색식 청산 판단] AI 에러: {e}")
+                return {
+                    "decision": "HOLD",
+                    "confidence": 0,
+                    "trim_ratio": 0.0,
+                    "new_stop_price": 0,
+                    "reason_primary": f"AI 판정 실패: {e}",
+                    "warning": "데이터 부족 또는 AI 응답 오류"
+                }
+
     # ==========================================
     # 🔍 [신규] 장 마감 후 내일의 주도주 분석 (gemini-3.0-pro 전용)
     # ==========================================
-    def generate_eod_tomorrow_report(self, candidates_text):
-        """장 마감 후 내일의 주도주 TOP 5 리포트 생성 (Markdown 반환 - Gemini 3.0 Pro 적용)"""
+
+    def _render_eod_tomorrow_markdown(self, market_summary, one_point_lesson, top5):
+        medals = {1: "🥇", 2: "🥈", 3: "🥉", 4: "4️⃣", 5: "5️⃣"}
+        lines = [
+            "📊 **[여의도 프랍 데스크] 내일의 주도주 TOP 5 마감 브리핑**",
+            str(market_summary or "").strip(),
+            ""
+        ]
+
+        for item in top5[:5]:
+            rank = int(item.get("rank", 0) or 0)
+            medal = medals.get(rank, "⭐")
+            stock_name = str(item.get("stock_name", "") or "")
+            stock_code = str(item.get("stock_code", "") or "").zfill(6)
+
+            try:
+                close_price = int(float(item.get("close_price", 0) or 0))
+            except Exception:
+                close_price = 0
+
+            reason = str(item.get("reason", "") or "").strip()
+            entry_plan = str(item.get("entry_plan", "") or "").strip()
+            target_guide = str(item.get("target_price_guide", "") or "").strip()
+            stop_guide = str(item.get("stop_price_guide", "") or "").strip()
+
+            lines.extend([
+                f"{medal} **{rank}. {stock_name} ({stock_code})**",
+                f"- 💰 종가: {close_price:,}원",
+                f"- 🧠 선정 사유: {reason}",
+                f"- 🎯 타점 전략: {entry_plan} / 목표가 가이드: {target_guide} / 손절가 가이드: {stop_guide}",
+                ""
+            ])
+
+        lines.extend([
+            "💡 **[수석 트레이더의 내일 장 원포인트 레슨]**",
+            str(one_point_lesson or "").strip()
+        ])
+        return "\n".join(lines)
+
+
+    def generate_eod_tomorrow_bundle(self, candidates_text):
+        """
+        장 마감 후 내일의 주도주 TOP5를
+        1) 구조화 JSON
+        2) 동일 데이터 기반 Markdown 리포트
+        로 함께 반환
+        """
         with self.lock:
             user_input = (
                 f"🚨 [1차 필터링 완료: 내일의 주도주 후보군 15선]\n\n"
                 f"{candidates_text}"
             )
             try:
-                # 💡 [핵심] 가장 똑똑한 gemini-3.0-pro 모델을 덮어씌워서 호출!
-                return self._call_gemini_safe(
-                    EOD_TOMORROW_LEADER_PROMPT, 
-                    user_input, 
-                    require_json=False, 
-                    context_name="종가베팅 분석",
-                    model_override="gemini-pro-latest"  # 👈 가장 깊은 사고력을 가진 Pro 모델 지정
+                result = self._call_gemini_safe(
+                    EOD_TOMORROW_LEADER_JSON_PROMPT,
+                    user_input,
+                    require_json=True,
+                    context_name="종가베팅 TOP5 JSON",
+                    model_override="gemini-pro-latest"
                 )
+
+                raw_top5 = result.get("top5", []) or []
+                normalized = []
+
+                for idx, item in enumerate(raw_top5[:5], start=1):
+                    code = str(item.get("stock_code", "")).replace(".0", "").strip().zfill(6)
+                    name = str(item.get("stock_name", "")).strip()
+                    if not code or not name:
+                        continue
+
+                    try:
+                        close_price = int(float(item.get("close_price", 0) or 0))
+                    except Exception:
+                        close_price = 0
+
+                    try:
+                        confidence = float(item.get("confidence", 0.0) or 0.0)
+                    except Exception:
+                        confidence = 0.0
+
+                    try:
+                        rank = int(item.get("rank", idx) or idx)
+                    except Exception:
+                        rank = idx
+
+                    normalized.append({
+                        "rank": rank,
+                        "stock_name": name,
+                        "stock_code": code,
+                        "close_price": close_price,
+                        "reason": str(item.get("reason", "") or "").strip(),
+                        "entry_plan": str(item.get("entry_plan", "") or "").strip(),
+                        "target_price_guide": str(item.get("target_price_guide", "") or "").strip(),
+                        "stop_price_guide": str(item.get("stop_price_guide", "") or "").strip(),
+                        "confidence": max(0.0, min(1.0, confidence)),
+                    })
+
+                market_summary = str(result.get("market_summary", "") or "").strip()
+                one_point_lesson = str(result.get("one_point_lesson", "") or "").strip()
+                report = self._render_eod_tomorrow_markdown(
+                    market_summary=market_summary,
+                    one_point_lesson=one_point_lesson,
+                    top5=normalized
+                )
+
+                return {
+                    "market_summary": market_summary,
+                    "one_point_lesson": one_point_lesson,
+                    "top5": normalized,
+                    "report": report
+                }
+
             except Exception as e:
-                from src.utils.logger import log_error
-                log_error(f"🚨 [종가베팅 분석] AI 에러: {e}")
-                return f"⚠️ AI 종가베팅 분석 생성 중 에러 발생: {e}"
+                log_error(f"🚨 [종가베팅 번들] AI 에러: {e}")
+                return {
+                    "market_summary": "",
+                    "one_point_lesson": "",
+                    "top5": [],
+                    "report": f"⚠️ AI 종가베팅 분석 생성 중 에러 발생: {e}"
+                }
+
+
+    def generate_eod_tomorrow_report(self, candidates_text):
+        """장 마감 후 내일의 주도주 TOP 5 리포트 생성 (호환용)"""
+        bundle = self.generate_eod_tomorrow_bundle(candidates_text)
+        return bundle.get("report", "⚠️ EOD 리포트 생성 실패")
+            
+    
