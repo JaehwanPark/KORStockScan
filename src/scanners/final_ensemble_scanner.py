@@ -39,7 +39,7 @@ from src.utils.constants import TRADING_RULES, DATA_DIR, CONFIG_PATH, DEV_PATH
 from src.database.db_manager import DBManager
 from src.database.models import RecommendationHistory
 from src.core.event_bus import EventBus
-from src.model.feature_engineer import calculate_all_features
+from src.model.feature_engineering_v2 import calculate_all_features
 
 # 💡 [교정] 커스텀 로거 적용
 from src.utils.logger import log_error
