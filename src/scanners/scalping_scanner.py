@@ -54,9 +54,9 @@ def run_scalper(is_test_mode=False):
         now = datetime.now()
         now_time = now.time()
 
-        # 장 운영 시간 체크 (08:00 ~ 20:00)
-        market_open = datetime.strptime("08:00:00", "%H:%M:%S").time()
-        market_close = datetime.strptime("20:00:00", "%H:%M:%S").time()
+        # 장 운영 시간 체크 (09:05 ~ 15:00) - 장 초반 감시 5분 후부터 장 마감 1시간 전까지 가동
+        market_open = datetime.strptime("09:05:00", "%H:%M:%S").time()
+        market_close = datetime.strptime("15:00:00", "%H:%M:%S").time()
         
         if not is_test_mode and not (market_open <= now_time <= market_close):
             if time.time() - last_closed_msg_time > 3600:
@@ -98,7 +98,7 @@ def run_scalper(is_test_mode=False):
                 all_targets[code]['Source'] = 'BOTH' # 두 조건 모두 만족하는 초강력 타겟
             
         new_codes_found = []
-        max_new_codes = 10
+        max_new_codes = 5
 
         for code, t in all_targets.items():
             if code not in already_picked:
@@ -141,7 +141,7 @@ def run_scalper(is_test_mode=False):
                 except Exception as e:
                     log_error(f"⚠️ DB 저장 실패 ({code}): {e}")
                 
-                # 최대 10개까지만 선택
+                # 최대 5개까지만 선택
                 if len(new_codes_found) >= max_new_codes:
                     break
             

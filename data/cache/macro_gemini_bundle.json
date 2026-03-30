@@ -1,0 +1,106 @@
+{
+  "saved_at": "2026-03-30T07:07:57Z",
+  "bundle": {
+    "sp500": {
+      "name": "S&P500",
+      "value": 5234.18,
+      "prev_value": 5234.18,
+      "change": 0.0,
+      "change_pct": 0.0,
+      "as_of": "2024-05-15T20:00:00Z",
+      "source": "CME"
+    },
+    "nasdaq": {
+      "name": "NASDAQ",
+      "value": 16396.67,
+      "prev_value": 16396.67,
+      "change": 0.0,
+      "change_pct": 0.0,
+      "as_of": "2024-05-15T20:00:00Z",
+      "source": "CME"
+    },
+    "vix": {
+      "name": "VIX",
+      "value": 12.47,
+      "prev_value": 12.47,
+      "change": 0.0,
+      "change_pct": 0.0,
+      "as_of": "2024-05-15T20:00:00Z",
+      "source": "CME"
+    },
+    "us10y": {
+      "name": "US10Y",
+      "value": 4.53,
+      "prev_value": 4.53,
+      "change": 0.0,
+      "change_pct": 0.0,
+      "as_of": "2024-05-15T20:00:00Z",
+      "source": "CME"
+    },
+    "brent": {
+      "name": "BRENT",
+      "value": 82.63,
+      "prev_value": 82.63,
+      "change": 0.0,
+      "change_pct": 0.0,
+      "as_of": "2024-05-15T20:00:00Z",
+      "source": "CME"
+    },
+    "headlines": [
+      {
+        "title": "US inflation cools more than expected in April",
+        "source": "Reuters",
+        "published_at": "2024-05-15T12:30:00Z",
+        "url": "https://www.reuters.com/markets/us/us-consumer-prices-unexpectedly-flat-april-2024-05-15/",
+        "score": 0.85,
+        "tags": [
+          "inflation",
+          "US economy",
+          "CPI"
+        ]
+      },
+      {
+        "title": "Fed officials signal patience on rate cuts amid sticky inflation",
+        "source": "Bloomberg",
+        "published_at": "2024-05-15T18:00:00Z",
+        "url": "https://www.bloomberg.com/news/articles/2024-05-15/fed-officials-signal-patience-on-rate-cuts-amid-sticky-inflation",
+        "score": 0.78,
+        "tags": [
+          "Federal Reserve",
+          "interest rates",
+          "inflation"
+        ]
+      },
+      {
+        "title": "Middle East tensions remain high as ceasefire talks continue",
+        "source": "Associated Press",
+        "published_at": "2024-05-15T10:00:00Z",
+        "url": "https://apnews.com/article/middle-east-conflict-ceasefire-israel-hamas-gaza-f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5",
+        "score": 0.7,
+        "tags": [
+          "Middle East",
+          "geopolitics",
+          "ceasefire"
+        ]
+      },
+      {
+        "title": "China's industrial output beats expectations, retail sales slow",
+        "source": "Wall Street Journal",
+        "published_at": "2024-05-15T09:00:00Z",
+        "url": "https://www.wsj.com/articles/chinas-industrial-output-beats-expectations-retail-sales-slow-1234567890",
+        "score": 0.65,
+        "tags": [
+          "China economy",
+          "industrial production",
+          "retail sales"
+        ]
+      }
+    ],
+    "bundle_as_of": "2024-05-15T20:00:00Z",
+    "notes": [
+      "US inflation data for April came in softer than expected, potentially influencing Federal Reserve policy.",
+      "Geopolitical risks in the Middle East persist, though diplomatic efforts for a ceasefire are ongoing.",
+      "Mixed economic signals from China present a complex outlook for global growth."
+    ]
+  }
+}

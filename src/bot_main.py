@@ -184,16 +184,16 @@ if __name__ == '__main__':
         # 💡 [아키텍처 포인트 3] 콜백(broadcast_alert) 파라미터 완전 제거!
         engine_thread = threading.Thread(target=kiwoom_sniper_v2.run_sniper, daemon=True)
         engine_thread.start()
-        print("✅ [시스템] 정상거래일 - 스나이퍼 매매 엔진 가동 완료. 조건검색식 가동기간으로 코스닥 및 스캘핑 스캐너 가동 임시중단 합니다.")
+        print("✅ [시스템] 정상거래일 - 스나이퍼 매매 엔진 가동 완료. 조건검색식 가동기간으로 코스닥 스캐너 가동 임시중단 합니다.")
 
-        # # 초단타 스캘핑 스캐너 가동 - 조건검색식 스캐너로 대체
-        # try:
-        #     import src.scanners.scalping_scanner as scalping_scanner
-        #     scalper_thread = threading.Thread(target=scalping_scanner.run_scalper, daemon=True)
-        #     scalper_thread.start()
-        #     print("⚡ [시스템] 정상거래일 - 초단타 스캘핑 스캐너 가동 완료.")
-        # except Exception as e:
-        #     print(f"🚨 [시스템] 스캘핑 스캐너 가동 중 오류 발생 (혹은 모듈 없음): {e}")
+        # 초단타 스캘핑 스캐너 가동 - 30분 주기로 시장을 스캔하여 급등 전조 종목 발굴(5개)
+        try:
+            import src.scanners.scalping_scanner as scalping_scanner
+            scalper_thread = threading.Thread(target=scalping_scanner.run_scalper, daemon=True)
+            scalper_thread.start()
+            print("⚡ [시스템] 정상거래일 - 초단타 스캘핑 스캐너 가동 완료.")
+        except Exception as e:
+            print(f"🚨 [시스템] 스캘핑 스캐너 가동 중 오류 발생 (혹은 모듈 없음): {e}")
 # 
         # 코스닥 AI 하이브리드 스캐너 가동
         # try:
