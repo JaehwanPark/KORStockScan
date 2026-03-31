@@ -1,87 +1,85 @@
 {
-  "bundle_as_of": "2026-03-30T22:00:17Z",
+  "bundle_as_of": "2026-03-31T23:28:11Z",
   "sp500": {
-    "name": "S&P500",
-    "value": 5210.0,
-    "prev_value": 5195.0,
-    "change": 15.0,
-    "change_pct": 0.29,
-    "as_of": "2026-03-30T21:00:00Z",
-    "source": "TradingView"
+    "name": "S&P 500",
+    "value": 6528.52,
+    "prev_value": 6343.72,
+    "change": 184.8,
+    "change_pct": 2.91,
+    "as_of": "2026-03-31T20:34:00Z",
+    "source": "Morningstar"
   },
   "nasdaq": {
-    "name": "NASDAQ",
-    "value": 16250.0,
-    "prev_value": 16190.0,
-    "change": 60.0,
-    "change_pct": 0.37,
-    "as_of": "2026-03-30T21:00:00Z",
-    "source": "TradingView"
+    "name": "NASDAQ Composite",
+    "value": 21590.63,
+    "prev_value": 20794.64,
+    "change": 795.99,
+    "change_pct": 3.83,
+    "as_of": "2026-03-31T20:34:00Z",
+    "source": "Morningstar"
   },
   "vix": {
     "name": "VIX",
-    "value": 12.5,
-    "prev_value": 12.7,
-    "change": -0.2,
-    "change_pct": -1.57,
-    "as_of": "2026-03-30T21:00:00Z",
-    "source": "TradingView"
+    "value": 27.63,
+    "prev_value": 30.61,
+    "change": -2.98,
+    "change_pct": -9.74,
+    "as_of": "2026-03-31T19:42:00Z",
+    "source": "Cboe Global Markets"
   },
   "us10y": {
-    "name": "US10Y",
-    "value": 4.35,
-    "prev_value": 4.38,
+    "name": "US 10-Year Treasury Yield",
+    "value": 4.31,
+    "prev_value": 4.34,
     "change": -0.03,
-    "change_pct": -0.68,
-    "as_of": "2026-03-30T21:00:00Z",
-    "source": "TradingView"
+    "change_pct": -0.69,
+    "as_of": "2026-03-31T23:28:11Z",
+    "source": "MacroMicro"
   },
   "brent": {
-    "name": "BRENT",
-    "value": 86.5,
-    "prev_value": 87.0,
-    "change": -0.5,
-    "change_pct": -0.57,
-    "as_of": "2026-03-30T21:00:00Z",
-    "source": "Investing.com"
+    "name": "Brent Crude",
+    "value": 103.97,
+    "prev_value": 107.41,
+    "change": -3.44,
+    "change_pct": -3.2,
+    "as_of": "2026-03-31T23:28:11Z",
+    "source": "LA Times"
   },
   "headlines": [
     {
-      "title": "US Stocks Rise as Inflation Data Cools Expectations for Fed Rate Hikes",
-      "source": "Reuters",
-      "published_at": "2026-03-30T18:30:00Z",
-      "url": "https://www.reuters.com/markets/us/stocks-rise-inflation-data-cools-expectations-fed-rate-hikes-2026-03-30/"
+      "title": "Stocks Rise as Trump Signals Possible End to Iran Conflict",
+      "source": "TheStreet",
+      "published_at": "2026-03-31T20:00:00Z",
+      "url": "https://www.thestreet.com/"
     },
     {
-      "title": "Treasury Yields Fall Sharply After Lower-Than-Expected CPI Report",
-      "source": "Bloomberg",
-      "published_at": "2026-03-30T19:05:00Z",
-      "url": "https://www.bloomberg.com/news/articles/2026-03-30/treasury-yields-fall-sharply-after-lower-than-expected-cpi-report"
+      "title": "Brent crude falls below $105 per barrel as market pares earlier war-driven gains",
+      "source": "Anadolu Agency",
+      "published_at": "2026-03-31T16:45:00Z",
+      "url": "https://www.aa.com.tr/"
     },
     {
-      "title": "Oil Prices Dip as Demand Concerns Linger Despite Geopolitical Tensions",
-      "source": "The Wall Street Journal",
-      "published_at": "2026-03-30T20:15:00Z",
-      "url": "https://www.wsj.com/markets/commodities/oil-prices-dip-as-demand-concerns-linger-despite-geopolitical-tensions-0a1b2c3d4e5f"
+      "title": "Fed is watching energy price spikes, but Powell says bank is limited in what it can do",
+      "source": "LA Times",
+      "published_at": "2026-03-31T12:00:00Z",
+      "url": "https://www.latimes.com/"
     },
     {
-      "title": "Nvidia Surges on AI Chip Demand, Pushing Nasdaq Higher",
-      "source": "CNBC",
-      "published_at": "2026-03-30T20:45:00Z",
-      "url": "https://www.cnbc.com/2026/03/30/nvidia-surges-on-ai-chip-demand-pushing-nasdaq-higher.html"
+      "title": "Unilever seals $44.8bn deal to merge food business with US rival McCormick",
+      "source": "The Guardian",
+      "published_at": "2026-03-31T10:19:00Z",
+      "url": "https://www.theguardian.com/"
     },
     {
-      "title": "Middle East Tensions Remain High, Impacting Global Supply Chains",
-      "source": "Associated Press",
-      "published_at": "2026-03-30T19:50:00Z",
-      "url": "https://apnews.com/article/middle-east-tensions-supply-chains-geopolitics-1234567890"
+      "title": "U.S. stocks surged to their best day since last spring as doubt swings back to hope on Wall Street",
+      "source": "AP News",
+      "published_at": "2026-03-31T20:30:00Z",
+      "url": "https://apnews.com/"
     }
   ],
   "notes": [
-    "S&P 500 and Nasdaq futures trading higher, reflecting positive sentiment from inflation data.",
-    "US 10-year Treasury yields are down as investors anticipate a potential pause in Fed rate hikes.",
-    "Brent crude is trading lower, influenced by global demand worries.",
-    "VIX showing a slight decrease, indicating reduced market volatility.",
-    "Geopolitical developments in the Middle East continue to be a key factor to watch."
+    "US Equities surged marking their best day since spring on hopes of Iran conflict de-escalation.",
+    "Brent Crude prices retreated from highs following signs of possible de-escalation.",
+    "VIX dropped nearly 10% as market fear slightly subdued."
   ]
 }

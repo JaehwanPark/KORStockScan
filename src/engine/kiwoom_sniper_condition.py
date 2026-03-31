@@ -954,33 +954,349 @@ def resolve_condition_profile(cnd_name):
 def _evaluate_scalping_watching_signal(stock, code, ws_data, radar=None, ai_engine=None, current_vpw=None, fluctuation=None, curr_price=None, pos_tag=None):
     """
     SCALPING 전략용 매수 신호 평가.
-    Returns decision dict.
+    Returns decision dict with keys: is_trigger, target_buy_price, ratio, msg, order_type_code, final_price, cooldown_sec, skip_reason.
     """
-    # Placeholder: always return no trigger
-    return {
+    # 전략별 파라미터 로드
+    MAX_SCALP_SURGE_PCT = getattr(TRADING_RULES, 'MAX_SCALP_SURGE_PCT', 20.0)
+    MAX_INTRADAY_SURGE = getattr(TRADING_RULES, 'MAX_INTRADAY_SURGE', 15.0)
+    MIN_SCALP_LIQUIDITY = getattr(TRADING_RULES, 'MIN_SCALP_LIQUIDITY', 500_000_000)
+    SNIPER_AGGRESSIVE_PROB = getattr(TRADING_RULES, 'SNIPER_AGGRESSIVE_PROB', 0.70)
+    INVEST_RATIO_SCALPING_MIN = getattr(TRADING_RULES, 'INVEST_RATIO_SCALPING_MIN', 0.05)
+    INVEST_RATIO_SCALPING_MAX = getattr(TRADING_RULES, 'INVEST_RATIO_SCALPING_MAX', 0.25)
+    VPW_SCALP_LIMIT = getattr(TRADING_RULES, 'VPW_SCALP_LIMIT', 120)
+    AI_WATCHING_COOLDOWN = getattr(TRADING_RULES, 'AI_WATCHING_COOLDOWN', 60)
+    VIP_LIQUIDITY_THRESHOLD = getattr(TRADING_RULES, 'VIP_LIQUIDITY_THRESHOLD', 1_000_000_000)
+    AI_WAIT_DROP_COOLDOWN = getattr(TRADING_RULES, 'AI_WAIT_DROP_COOLDOWN', 300)
+    
+    # 기본 결과 dict
+    result = {
         'is_trigger': False,
         'target_buy_price': 0,
-        'ratio': 0.0,
+        'ratio': 0.10,
         'msg': '',
         'order_type_code': '00',
         'final_price': 0,
-        'skip_reason': 'not implemented'
+        'cooldown_sec': 0,
+        'skip_reason': ''
     }
+    
+    # 🚨 [방어막] VCP_CANDID 상태인 종목은 당일 슈팅 조건이 올 때까지 매수 금지 (대기)
+    if pos_tag == 'VCP_CANDID':
+        result['skip_reason'] = 'VCP_CANDID 태그로 인한 제외'
+        return result
+    
+    # AI 점수 기반 동적 투자 비율 계산
+    current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
+    min_ratio = INVEST_RATIO_SCALPING_MIN
+    max_ratio = INVEST_RATIO_SCALPING_MAX
+    ratio = min_ratio + (current_ai_score / 100.0) * (max_ratio - min_ratio)
+    result['ratio'] = ratio
+    
+    # 현재가, 호가잔량 등
+    if curr_price is None:
+        curr_price = int(float(ws_data.get('curr', 0) or 0))
+    if curr_price <= 0:
+        result['skip_reason'] = '현재가 유효하지 않음'
+        return result
+    
+    if current_vpw is None:
+        current_vpw = float(ws_data.get('v_pw', 0) or 0)
+    if fluctuation is None:
+        fluctuation = float(ws_data.get('fluctuation', 0.0) or 0.0)
+    
+    ask_tot = int(float(ws_data.get('ask_tot', 0) or 0))
+    bid_tot = int(float(ws_data.get('bid_tot', 0) or 0))
+    open_price = float(ws_data.get('open', curr_price) or curr_price)
+    
+    intraday_surge = ((curr_price - open_price) / open_price) * 100 if open_price > 0 else fluctuation
+    liquidity_value = (ask_tot + bid_tot) * curr_price
+    
+    # 🚨 [이중 방어막] 과매수 위험 차단
+    if fluctuation >= MAX_SCALP_SURGE_PCT or intraday_surge >= MAX_INTRADAY_SURGE:
+        result['skip_reason'] = f'과매수 위험 차단 (fluctuation={fluctuation:.2f} >= {MAX_SCALP_SURGE_PCT} 또는 intraday_surge={intraday_surge:.2f} >= {MAX_INTRADAY_SURGE})'
+        return result
+    
+    # 💡 [VCP_NEXT는 09:00 이후 시초가 예약 진입]
+    if pos_tag == 'VCP_NEXT':
+        result['is_trigger'] = True
+        result['target_buy_price'] = curr_price
+        result['final_price'] = curr_price
+        result['msg'] = (
+            f"🚀 **{stock['name']} ({code}) VCP 시초가 예약 매수!**\n"
+            f"현재가: `{curr_price:,}원` (전일 VCP NEXT 달성)"
+        )
+        # audience는 호출자가 결정
+        return result
+    
+    # radar 없으면 진행 불가
+    if radar is None:
+        result['skip_reason'] = 'radar 객체 없음'
+        return result
+    
+    # 기본 조건
+    if current_vpw < VPW_SCALP_LIMIT:
+        result['skip_reason'] = f'VPW 불충족 (current_vpw={current_vpw:.1f} < VPW_SCALP_LIMIT)'
+        return result
+    if liquidity_value < MIN_SCALP_LIQUIDITY:
+        result['skip_reason'] = f'유동성 불충족 (liquidity_value={liquidity_value:,.0f} < MIN_SCALP_LIQUIDITY={MIN_SCALP_LIQUIDITY:,.0f})'
+        return result
+    
+    # 포착가 대비 갭 체크
+    scanner_price = stock.get('buy_price') or 0
+    if scanner_price > 0:
+        gap_pct = (curr_price - scanner_price) / scanner_price * 100
+        if gap_pct >= 1.5:
+            result['cooldown_sec'] = 1200
+            result['skip_reason'] = f'포착가 대비 갭 상승 (gap_pct={gap_pct:.1f}% >= 1.5%)'
+            return result
+    
+    # =========================================================
+    # 💎 AI 감시 종목 VIP 필터링 & 타점 계산 (Blocking Wait 적용)
+    # =========================================================
+    # 1. 이전 AI 점수를 기반으로 1차 타점 계산
+    current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
+    target_buy_price, used_drop_pct = radar.get_smart_target_price(
+        curr_price,
+        v_pw=current_vpw,
+        ai_score=current_ai_score,
+        ask_tot=ask_tot,
+        bid_tot=bid_tot
+    )
+    
+    last_ai_time = LAST_AI_CALL_TIMES.get(code, 0)
+    time_elapsed = time.time() - last_ai_time
+    is_vip_target = (target_buy_price > 0) and (curr_price <= target_buy_price * 1.015)
+    
+    if is_vip_target and last_ai_time == 0:
+        # 첫 AI 분석 턴 대기 (호출자가 처리)
+        result['skip_reason'] = '첫 AI 분석 턴 대기 (SCALPING)'
+        return result
+    
+    if ai_engine and is_vip_target and (time_elapsed > AI_WATCHING_COOLDOWN or last_ai_time == 0):
+        ai_call_executed = False
+        try:
+            recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
+            recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40)
+            
+            if ws_data.get('orderbook') and recent_ticks:
+                ai_decision = ai_engine.analyze_target(stock['name'], ws_data, recent_ticks, recent_candles)
+                ai_call_executed = True
+                
+                action = ai_decision.get('action', 'WAIT')
+                ai_score = ai_decision.get('score', 50)
+                reason = ai_decision.get('reason', '사유 없음')
+                
+                if ai_score != 50:
+                    stock['rt_ai_prob'] = ai_score / 100.0
+                    current_ai_score = ai_score
+                    # 텔레그램 발송은 호출자에게 위임 (메시지 반환)
+                    if action == "BUY":
+                        ai_msg = (
+                            f"🤖 <b>[VIP 종목 실시간 분석]</b>\n"
+                            f"🎯 종목: {stock['name']}\n"
+                            f"⚡ 행동: <b>{action} ({ai_score}점)</b>\n"
+                            f"🧠 사유: {reason}"
+                        )
+                        target_audience = 'VIP_ALL' if liquidity_value >= VIP_LIQUIDITY_THRESHOLD and current_ai_score >= 90 else 'ADMIN_ONLY'
+                        # 발송하지 않고 메시지 저장
+                        result['ai_telegram_msg'] = ai_msg
+                        result['ai_telegram_audience'] = target_audience
+                else:
+                    current_ai_score = 50
+        except Exception as e:
+            log_error(f"🚨 [AI 엔진 오류] {stock['name']}({code}): {e} | 기계적 매수 모드로 폴백(Fallback)합니다.")
+            current_ai_score = 50
+        
+        if ai_call_executed:
+            LAST_AI_CALL_TIMES[code] = time.time()
+        
+        # 첫 분석 턴은 "실제 AI 호출이 수행된 경우에만" 바로 진입하지 않고 다음 루프에서 확인
+        if ai_call_executed and last_ai_time == 0:
+            result['skip_reason'] = '첫 AI 분석 턴 대기 (SCALPING)'
+            return result
+    
+    # =========================================================
+    # 🚨 AI 거부권 및 최종 매수 대기열(그물망) 투척
+    # =========================================================
+    if current_ai_score < 75 and current_ai_score != 50:
+        # AI 점수 불충족 시 쿨다운
+        result['cooldown_sec'] = AI_WAIT_DROP_COOLDOWN
+        result['skip_reason'] = f'AI 점수 불충족 (current_ai_score={current_ai_score} < 75)'
+        return result
+    
+    final_target_buy_price, final_used_drop_pct = radar.get_smart_target_price(
+        curr_price,
+        v_pw=current_vpw,
+        ai_score=current_ai_score,
+        ask_tot=ask_tot,
+        bid_tot=bid_tot
+    )
+    
+    result['is_trigger'] = True
+    result['target_buy_price'] = final_target_buy_price
+    result['final_price'] = final_target_buy_price
+    
+    return result
 
 def _evaluate_swing_watching_signal(stock, code, ws_data, radar=None, ai_engine=None, current_vpw=None, fluctuation=None, curr_price=None, strategy='KOSPI_ML', pos_tag=None):
     """
     SWING 전략 (KOSPI_ML/KOSDAQ_ML) 매수 신호 평가.
-    Returns decision dict.
+    Returns decision dict with keys: is_trigger, target_buy_price, ratio, msg, order_type_code, final_price, cooldown_sec, skip_reason.
     """
-    return {
+    # 전략별 파라미터 로드
+    MAX_SWING_GAP_UP_PCT = getattr(TRADING_RULES, 'MAX_SWING_GAP_UP_PCT', 3.0)
+    VPW_KOSDAQ_LIMIT = getattr(TRADING_RULES, 'VPW_KOSDAQ_LIMIT', 105)
+    VPW_STRONG_KOSDAQ_LIMIT = getattr(TRADING_RULES, 'VPW_STRONG_KOSDAQ_LIMIT', 120)
+    BUY_SCORE_KOSDAQ_THRESHOLD = getattr(TRADING_RULES, 'BUY_SCORE_KOSDAQ_THRESHOLD', 80)
+    INVEST_RATIO_KOSDAQ_MIN = getattr(TRADING_RULES, 'INVEST_RATIO_KOSDAQ_MIN', 0.05)
+    INVEST_RATIO_KOSDAQ_MAX = getattr(TRADING_RULES, 'INVEST_RATIO_KOSDAQ_MAX', 0.15)
+    AI_SCORE_THRESHOLD_KOSDAQ = getattr(TRADING_RULES, 'AI_SCORE_THRESHOLD_KOSDAQ', 60)
+    VPW_STRONG_LIMIT = getattr(TRADING_RULES, 'VPW_STRONG_LIMIT', 105)
+    BUY_SCORE_THRESHOLD = getattr(TRADING_RULES, 'BUY_SCORE_THRESHOLD', 70)
+    INVEST_RATIO_KOSPI_MIN = getattr(TRADING_RULES, 'INVEST_RATIO_KOSPI_MIN', 0.10)
+    INVEST_RATIO_KOSPI_MAX = getattr(TRADING_RULES, 'INVEST_RATIO_KOSPI_MAX', 0.30)
+    AI_SCORE_THRESHOLD_KOSPI = getattr(TRADING_RULES, 'AI_SCORE_THRESHOLD_KOSPI', 60)
+    SNIPER_AGGRESSIVE_PROB = getattr(TRADING_RULES, 'SNIPER_AGGRESSIVE_PROB', 0.70)
+    ML_GATEKEEPER_REJECT_COOLDOWN = getattr(TRADING_RULES, 'ML_GATEKEEPER_REJECT_COOLDOWN', 60 * 60 * 2)
+    ML_GATEKEEPER_ERROR_COOLDOWN = getattr(TRADING_RULES, 'ML_GATEKEEPER_ERROR_COOLDOWN', 60 * 10)
+
+    # 기본 결과 dict
+    result = {
         'is_trigger': False,
         'target_buy_price': 0,
-        'ratio': 0.0,
+        'ratio': 0.10,
         'msg': '',
         'order_type_code': '6',
         'final_price': 0,
-        'skip_reason': 'not implemented'
+        'cooldown_sec': 0,
+        'skip_reason': ''
     }
+
+    # radar 없으면 진행 불가
+    if radar is None:
+        result['skip_reason'] = 'radar 객체 없음 (KOSDAQ_ML/KOSPI_ML)'
+        return result
+
+    # 현재가, VPW, fluctuation 유효성 검사
+    if curr_price is None:
+        curr_price = int(float(ws_data.get('curr', 0) or 0))
+    if curr_price <= 0:
+        result['skip_reason'] = '현재가 유효하지 않음'
+        return result
+
+    if current_vpw is None:
+        current_vpw = float(ws_data.get('v_pw', 0) or 0)
+    if fluctuation is None:
+        fluctuation = float(ws_data.get('fluctuation', 0.0) or 0.0)
+
+    # --- [1] 전략별 파라미터 세팅 ---
+    if strategy == 'KOSDAQ_ML':
+        max_gap = MAX_SWING_GAP_UP_PCT
+        if fluctuation >= max_gap:
+            result['skip_reason'] = f'갭상승 너무 큼 (fluctuation={fluctuation:.2f} >= max_gap={max_gap})'
+            return result
+
+        vpw_limit_base = VPW_KOSDAQ_LIMIT
+        strong_vpw = VPW_STRONG_KOSDAQ_LIMIT
+        buy_threshold = BUY_SCORE_KOSDAQ_THRESHOLD
+        vpw_condition = current_vpw >= vpw_limit_base
+        ratio_min = INVEST_RATIO_KOSDAQ_MIN
+        ratio_max = INVEST_RATIO_KOSDAQ_MAX
+        ai_score_threshold = AI_SCORE_THRESHOLD_KOSDAQ
+
+        ai_prob = stock.get('prob', SNIPER_AGGRESSIVE_PROB)
+        v_pw_limit = vpw_limit_base if ai_prob >= 0.70 else strong_vpw
+
+    else:  # KOSPI_ML
+        max_gap = MAX_SWING_GAP_UP_PCT
+        if fluctuation >= max_gap:
+            result['skip_reason'] = f'갭상승 너무 큼 (fluctuation={fluctuation:.2f} >= max_gap={max_gap})'
+            return result
+
+        vpw_limit_base = 100
+        strong_vpw = VPW_STRONG_LIMIT
+        buy_threshold = BUY_SCORE_THRESHOLD
+        vpw_condition = current_vpw >= 103
+        ratio_min = INVEST_RATIO_KOSPI_MIN
+        ratio_max = INVEST_RATIO_KOSPI_MAX
+        ai_score_threshold = AI_SCORE_THRESHOLD_KOSPI
+
+        ai_prob = stock.get('prob', SNIPER_AGGRESSIVE_PROB)
+        v_pw_limit = vpw_limit_base if ai_prob >= 0.70 else strong_vpw
+
+    # --- [2] 기계적 퀀트 분석 ---
+    score, prices, conclusion, checklist, metrics = radar.analyze_signal_integrated(ws_data, ai_prob)
+    is_shooting = current_vpw >= v_pw_limit
+
+    # --- [3] 퀀트가 매수권이면 마지막 Gatekeeper 로 실시간 종목분석 호출 ---
+    if not ((score >= buy_threshold or is_shooting) and vpw_condition):
+        result['skip_reason'] = f'퀀트 점수 불충족 (score={score} < buy_threshold={buy_threshold}) 또는 VPW 조건 불충족'
+        return result
+
+    gatekeeper = None
+    gatekeeper_allow = False
+    action_label = 'UNKNOWN'
+
+    if not ai_engine:
+        result['cooldown_sec'] = ML_GATEKEEPER_ERROR_COOLDOWN
+        result['skip_reason'] = f'{strategy} Gatekeeper 미초기화'
+        return result
+
+    try:
+        realtime_ctx = kiwoom_utils.build_realtime_analysis_context(
+            token=KIWOOM_TOKEN,
+            code=code,
+            ws_data=ws_data,
+            strat_label=strategy,
+            position_status='NONE',
+            avg_price=0,
+            pnl_pct=0.0,
+            trailing_pct=0.0,
+            stop_pct=0.0,
+            target_price=curr_price,
+            target_reason='WATCHING 최종 진입 Gatekeeper 검증',
+            score=float(score),
+            conclusion=conclusion,
+            quant_metrics=metrics,
+        )
+        gatekeeper = ai_engine.evaluate_realtime_gatekeeper(
+            stock_name=stock['name'],
+            stock_code=code,
+            realtime_ctx=realtime_ctx,
+            analysis_mode='SWING',
+        )
+        LAST_AI_CALL_TIMES[code] = time.time()
+        action_label = gatekeeper.get('action_label', 'UNKNOWN')
+        gatekeeper_allow = bool(gatekeeper.get('allow_entry', False))
+        # 저장할 필요가 있다면 호출자에게 전달
+        result['gatekeeper_action'] = action_label
+        result['gatekeeper_report'] = gatekeeper.get('report', '')
+    except Exception as e:
+        log_error(f"🚨 [{strategy} Gatekeeper 오류] {stock['name']}({code}): {e}")
+        result['cooldown_sec'] = ML_GATEKEEPER_ERROR_COOLDOWN
+        result['skip_reason'] = f'Gatekeeper 실행 오류: {e}'
+        return result
+
+    if not gatekeeper_allow:
+        result['cooldown_sec'] = ML_GATEKEEPER_REJECT_COOLDOWN
+        result['skip_reason'] = f'Gatekeeper 거부 ({action_label})'
+        return result
+
+    # 점수 가중치에 따른 투자 비율 계산
+    score_weight = max(0.0, min(1.0, (float(score) - buy_threshold) / max(1.0, (100 - buy_threshold))))
+    ratio = ratio_min + (score_weight * (ratio_max - ratio_min))
+    if is_shooting and ratio < ((ratio_min + ratio_max) / 2):
+        ratio = (ratio_min + ratio_max) / 2
+
+    result['is_trigger'] = True
+    result['target_buy_price'] = curr_price  # 스윙은 보통 최유리지정가/시장가로 긁으므로 현재가 기록
+    result['ratio'] = ratio
+    result['final_price'] = 0  # 최유리지정가는 가격 필요 없음
+    result['order_type_code'] = '6'
+    # audience는 호출자가 결정 (기본 VIP_ALL)
+    result['msg_audience'] = 'VIP_ALL'
+    # gatekeeper 리포트 발행은 호출자에게 위임 (필요 시 result에 gatekeeper 정보 포함)
+    return result
 
 def _evaluate_watching_buy_signal(stock, code, ws_data, radar=None, ai_engine=None, strategy='SCALPING', pos_tag='MIDDLE', current_vpw=None, fluctuation=None, curr_price=None):
     """
@@ -997,36 +1313,222 @@ def _evaluate_scalping_holding_signal(stock, code, ws_data, radar=None, ai_engin
     SCALPING 전략용 매도 신호 평가.
     Returns decision dict.
     """
-    # Placeholder: always return no sell signal
+    # 전역 변수 참조
+    global highest_prices
+    
+    # 기본 반환값
+    is_sell_signal = False
+    sell_reason_type = ""
+    reason = ""
+    target_sell_price = 0
+    skip_reason = ""
+    order_type_code = ""
+    
+    # --- [STEP 1] 보유 시간(held_time_min) 계산 ---
+    held_time_min = 0
+    if 'order_time' in stock and stock.get('order_time'):
+        held_time_min = (time.time() - stock['order_time']) / 60
+    elif stock.get('buy_time'):
+        try:
+            bt = stock['buy_time']
+            if isinstance(bt, datetime):
+                b_dt = bt
+            else:
+                bt_str = str(bt)
+                try:
+                    b_dt = datetime.fromisoformat(bt_str)
+                except Exception:
+                    b_time = datetime.strptime(bt_str, '%H:%M:%S').time()
+                    b_dt = datetime.combine(datetime.now().date(), b_time)
+            held_time_min = (datetime.now() - b_dt).total_seconds() / 60
+        except Exception:
+            pass
+    
+    # --- [STEP 2] 익절/손절 기준선 및 하락폭(Drawdown) 설정 ---
+    base_stop_pct = getattr(TRADING_RULES, 'SCALP_STOP', -2.5)
+    safe_profit_pct = getattr(TRADING_RULES, 'SCALP_SAFE_PROFIT', 0.5)
+    
+    drawdown = 0.0
+    if highest_prices.get(code, 0) > 0:
+        drawdown = (highest_prices[code] - curr_price) / highest_prices[code] * 100
+    
+    # AI 점수에 따른 동적 파라미터 분기
+    if current_ai_score >= 75:
+        dynamic_stop_pct = base_stop_pct - 1.0
+        dynamic_trailing_limit = getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_STRONG', 0.8)
+    else:
+        dynamic_stop_pct = base_stop_pct
+        dynamic_trailing_limit = getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_WEAK', 0.4)
+    
+    # --- [STEP 3] 🧠 V3 매도 판단 실행 (우선순위 순서) ---
+    
+    # 1. 하드 리밋 (최우선: 물리적 손절선 이탈 시 자비 없이 컷)
+    if profit_rate <= dynamic_stop_pct:
+        is_sell_signal = True
+        sell_reason_type = "LOSS"
+        reason = f"🔪 무호흡 칼손절 ({dynamic_stop_pct}%) [AI: {current_ai_score:.0f}]"
+    
+    # 2. AI 하방 리스크 조기 차단 (수익이 마이너스 구간일 때)
+    elif profit_rate < 0 and current_ai_score <= 35:
+        is_sell_signal = True
+        sell_reason_type = "LOSS"
+        reason = f"🚨 AI 하방 리스크 포착 ({current_ai_score:.0f}점). 조기 손절 ({profit_rate:.2f}%)"
+    
+    # 3. 🎯 V3 동적 트레일링 익절 (수익이 안전 마진 이상일 때만 발동!)
+    elif profit_rate >= safe_profit_pct:
+        
+        # 3-1. AI 모멘텀 둔화: 고점 대비 눌림을 기다릴 필요도 없이, AI가 가속도 죽었다고 판단하면 즉각 수익 실현
+        if current_ai_score < 50:
+            is_sell_signal = True
+            sell_reason_type = "MOMENTUM_DECAY"
+            reason = f"🤖 AI 틱 가속도 둔화 ({current_ai_score:.0f}점). 즉각 익절 (+{profit_rate:.2f}%)"
+            
+        # 3-2. 기계적 트레일링 방어: AI 점수(수급 강도)에 따라 타이트하게 혹은 여유롭게 익절폭 조절
+        elif drawdown >= dynamic_trailing_limit:
+            is_sell_signal = True
+            sell_reason_type = "TRAILING"
+            reason = f"🔥 고점 대비 밀림 (-{drawdown:.2f}%). 트레일링 익절 (+{profit_rate:.2f}%)"
+    
+    # 주문타입 코드 매핑 (send_smart_sell_order 기준)
+    if sell_reason_type == "LOSS":
+        order_type_code = "3"
+    elif sell_reason_type in ("MOMENTUM_DECAY", "TRAILING"):
+        order_type_code = "6"
+    else:
+        # PROFIT, TIMEOUT 등 기본 지정가
+        order_type_code = "00"
+    
+    # target_sell_price: 0은 시장가 의미, 현재는 0으로 설정 (스마트 매도 함수가 적절히 결정)
+    target_sell_price = 0
+    
+    # skip_reason: 매도 신호가 없을 때 설명 (필요 시 추가)
+    if not is_sell_signal:
+        skip_reason = ""
+    
     return {
-        'is_sell_signal': False,
-        'sell_reason_type': '',
-        'reason': '',
-        'target_sell_price': 0,
-        'skip_reason': 'not implemented'
+        'is_sell_signal': is_sell_signal,
+        'sell_reason_type': sell_reason_type,
+        'reason': reason,
+        'target_sell_price': target_sell_price,
+        'order_type_code': order_type_code,
+        'skip_reason': skip_reason
     }
 
-def _evaluate_swing_holding_signal(stock, code, ws_data, radar=None, ai_engine=None, current_vpw=None, fluctuation=None, curr_price=None, profit_rate=None, peak_profit=None, current_ai_score=None, strategy='KOSPI_ML', pos_tag=None):
+def _evaluate_swing_holding_signal(stock, code, ws_data, radar=None, ai_engine=None, current_vpw=None, fluctuation=None, curr_price=None, profit_rate=None, peak_profit=None, current_ai_score=None, strategy='KOSPI_ML', pos_tag=None, market_regime='BULL'):
     """
     SWING 전략 (KOSPI_ML/KOSDAQ_ML) 매도 신호 평가.
     Returns decision dict.
     """
+    # 전역 변수 참조
+    global highest_prices
+    
+    # 기본 반환값
+    is_sell_signal = False
+    sell_reason_type = ""
+    reason = ""
+    target_sell_price = 0
+    skip_reason = ""
+    order_type_code = ""
+    
+    drawdown = 0.0
+    if highest_prices.get(code, 0) > 0:
+        drawdown = (highest_prices[code] - curr_price) / highest_prices[code] * 100
+    
+    # 코스닥 AI 스윙 (KOSDAQ_ML) 전용 전략
+    if strategy == 'KOSDAQ_ML':
+        # 보유 일수 체크 (영업일 기준)
+        try:
+            buy_date_str = stock.get('date', datetime.now().strftime('%Y-%m-%d'))
+            buy_date = datetime.strptime(buy_date_str, '%Y-%m-%d').date()
+            if np.busday_count(buy_date, datetime.now().date()) >= getattr(TRADING_RULES, 'KOSDAQ_HOLDING_DAYS', 2):
+                is_sell_signal = True
+                sell_reason_type = "TIMEOUT"
+                reason = "⏳ 코스닥 스윙 기한 만료 청산"
+        except Exception:
+            pass
+        
+        # 목표 수익률 돌파 후 하락 (트레일링 익절)
+        if not is_sell_signal and peak_profit >= getattr(TRADING_RULES, 'KOSDAQ_TARGET', 4.0):
+            if drawdown >= 1.0:
+                is_sell_signal = True
+                sell_reason_type = "TRAILING"
+                reason = f"🏆 KOSDAQ 트레일링 익절 (+{getattr(TRADING_RULES, 'KOSDAQ_TARGET', 4.0)}% 돌파 후 하락)"
+        
+        # 손절선 도달
+        elif not is_sell_signal and profit_rate <= getattr(TRADING_RULES, 'KOSDAQ_STOP', -2.0):
+            is_sell_signal = True
+            sell_reason_type = "LOSS"
+            reason = f"🛑 KOSDAQ 전용 방어선 이탈 ({getattr(TRADING_RULES, 'KOSDAQ_STOP', -2.0)}%)"
+    
+    # 코스피 우량주 스윙 (KOSPI_ML 전용)
+    elif strategy == 'KOSPI_ML':
+        pos_tag = stock.get('position_tag', 'MIDDLE')
+        if pos_tag == 'BREAKOUT':
+            current_stop_loss = getattr(TRADING_RULES, 'STOP_LOSS_BREAKOUT')
+            regime_name = "전고점 돌파"
+        elif pos_tag == 'BOTTOM':
+            current_stop_loss = getattr(TRADING_RULES, 'STOP_LOSS_BOTTOM')
+            regime_name = "바닥 탈출"
+        else:
+            current_stop_loss = getattr(TRADING_RULES, 'STOP_LOSS_BULL') if market_regime == 'BULL' else getattr(TRADING_RULES, 'STOP_LOSS_BEAR')
+            regime_name = "상승장" if market_regime == 'BULL' else "조정장"
+        
+        # 보유 일수 체크 (영업일 기준)
+        try:
+            buy_date_str = stock.get('date', datetime.now().strftime('%Y-%m-%d'))
+            buy_date = datetime.strptime(buy_date_str, '%Y-%m-%d').date()
+            if np.busday_count(buy_date, datetime.now().date()) >= getattr(TRADING_RULES, 'HOLDING_DAYS'):
+                is_sell_signal = True
+                sell_reason_type = "TIMEOUT"
+                reason = f"⏳ {getattr(TRADING_RULES, 'HOLDING_DAYS')}일 스윙 보유 만료"
+        except Exception:
+            pass
+        
+        # 익절 목표 도달 시 즉시 매도 (트레일링 없음)
+        if not is_sell_signal and profit_rate >= getattr(TRADING_RULES, 'TRAILING_START_PCT'):
+            is_sell_signal = True
+            sell_reason_type = "PROFIT"
+            reason = f"🎯 목표 수익률 도달 (+{getattr(TRADING_RULES, 'TRAILING_START_PCT')}%)"
+        
+        # 손절선 도달
+        elif not is_sell_signal and profit_rate <= current_stop_loss:
+            is_sell_signal = True
+            sell_reason_type = "LOSS"
+            reason = f"🛑 손절선 도달 ({regime_name} 기준 {current_stop_loss}%)"
+    
+    # 주문타입 코드 매핑 (send_smart_sell_order 기준)
+    if sell_reason_type == "LOSS":
+        order_type_code = "3"
+    elif sell_reason_type in ("MOMENTUM_DECAY", "TRAILING"):
+        order_type_code = "6"
+    else:
+        # PROFIT, TIMEOUT 등 기본 지정가
+        order_type_code = "00"
+    
+    # target_sell_price: 0은 시장가 의미, 현재는 0으로 설정 (스마트 매도 함수가 적절히 결정)
+    target_sell_price = 0
+    
+    # skip_reason: 매도 신호가 없을 때 설명 (필요 시 추가)
+    if not is_sell_signal:
+        skip_reason = ""
+    
     return {
-        'is_sell_signal': False,
-        'sell_reason_type': '',
-        'reason': '',
-        'target_sell_price': 0,
-        'skip_reason': 'not implemented'
+        'is_sell_signal': is_sell_signal,
+        'sell_reason_type': sell_reason_type,
+        'reason': reason,
+        'target_sell_price': target_sell_price,
+        'order_type_code': order_type_code,
+        'skip_reason': skip_reason
     }
 
-def _evaluate_holding_sell_signal(stock, code, ws_data, radar=None, ai_engine=None, strategy='SCALPING', pos_tag='MIDDLE', current_vpw=None, fluctuation=None, curr_price=None, profit_rate=None, peak_profit=None, current_ai_score=None):
+def _evaluate_holding_sell_signal(stock, code, ws_data, radar=None, ai_engine=None, strategy='SCALPING', pos_tag='MIDDLE', current_vpw=None, fluctuation=None, curr_price=None, profit_rate=None, peak_profit=None, current_ai_score=None, market_regime='BULL'):
     """
     HOLDING 상태에서 매도 신호 평가 (공통 브랜치).
     """
     if strategy == 'SCALPING':
         return _evaluate_scalping_holding_signal(stock, code, ws_data, radar, ai_engine, current_vpw, fluctuation, curr_price, profit_rate, peak_profit, current_ai_score, pos_tag)
     else:
-        return _evaluate_swing_holding_signal(stock, code, ws_data, radar, ai_engine, current_vpw, fluctuation, curr_price, profit_rate, peak_profit, current_ai_score, strategy, pos_tag)
+        return _evaluate_swing_holding_signal(stock, code, ws_data, radar, ai_engine, current_vpw, fluctuation, curr_price, profit_rate, peak_profit, current_ai_score, strategy, pos_tag, market_regime)
 
 
 def get_condition_target_date(is_next_day_target):
@@ -2122,268 +2624,55 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
     buy_threshold = BUY_SCORE_THRESHOLD
     strong_vpw = VPW_STRONG_LIMIT
 
-    # 1️⃣ 초단타 (SCALPING) 전략
-    if strategy == 'SCALPING':
-        # 🚨 [방어막] VCP_CANDID 상태인 종목은 당일 슈팅 조건이 올 때까지 매수 금지 (대기)
-        if pos_tag == 'VCP_CANDID':
-            log_info(f"[DEBUG] {code} VCP_CANDID 태그로 인한 제외")
-            return
-
-        # AI 점수 기반 동적 투자 비율 계산
-        current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
-        min_ratio = INVEST_RATIO_SCALPING_MIN
-        max_ratio = INVEST_RATIO_SCALPING_MAX
-        ratio = min_ratio + (current_ai_score / 100.0) * (max_ratio - min_ratio)
-
-        ask_tot = int(float(ws_data.get('ask_tot', 0) or 0))
-        bid_tot = int(float(ws_data.get('bid_tot', 0) or 0))
-        open_price = float(ws_data.get('open', curr_price) or curr_price)
-
-        intraday_surge = ((curr_price - open_price) / open_price) * 100 if open_price > 0 else fluctuation
-        liquidity_value = (ask_tot + bid_tot) * curr_price
-
-        # 🚨 [이중 방어막] 과매수 위험 차단 (로그 출력 없이 조용히 스킵)
-        if fluctuation >= MAX_SURGE or intraday_surge >= MAX_INTRADAY_SURGE:
-            log_info(f"[DEBUG] {code} 과매수 위험 차단 (fluctuation={fluctuation:.2f} >= {MAX_SURGE} 또는 intraday_surge={intraday_surge:.2f} >= {MAX_INTRADAY_SURGE})")
-            return
-
-        # 💡 [VCP_NEXT는 09:00 이후 시초가 예약 진입]
-        if pos_tag == 'VCP_NEXT':
-            stock['target_buy_price'] = curr_price
-            is_trigger = True
-            msg = (
-                f"🚀 **{stock['name']} ({code}) VCP 시초가 예약 매수!**\n"
-                f"현재가: `{curr_price:,}원` (전일 VCP NEXT 달성)"
-            )
-            stock['msg_audience'] = 'ADMIN_ONLY'
-
-        else:
-            if radar is None:
-                log_info(f"[DEBUG] {code} radar 객체 없음")
-                return
-
-            # 기본 조건
-            if current_vpw < VPW_SCALP_LIMIT:
-                log_info(f"[DEBUG] {code} VPW 불충족 (current_vpw={current_vpw:.1f} < VPW_SCALP_LIMIT)")
-                return
-            if liquidity_value < MIN_LIQUIDITY:
-                log_info(f"[DEBUG] {code} 유동성 불충족 (liquidity_value={liquidity_value:,.0f} < MIN_LIQUIDITY={MIN_LIQUIDITY:,.0f})")
-                return
-
-            scanner_price = stock.get('buy_price') or 0
-            if scanner_price > 0:
-                gap_pct = (curr_price - scanner_price) / scanner_price * 100
-                if gap_pct >= 1.5:
-                    if code not in cooldowns:
-                        print(f"⚠️ [{stock['name']}] 포착가 대비 너무 오름 (갭 +{gap_pct:.1f}%). 추격매수 포기.")
-                        cooldowns[code] = time.time() + 1200
-                    log_info(f"[DEBUG] {code} 포착가 대비 갭 상승 (gap_pct={gap_pct:.1f}% >= 1.5%)")
-                    return
-
-            # =========================================================
-            # 💎 4. [핵심] AI 감시 종목 VIP 필터링 & 타점 계산 (Blocking Wait 적용)
-            # =========================================================
-            # 1. 이전 AI 점수를 기반으로 1차 타점 계산
-            current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
-            target_buy_price, used_drop_pct = radar.get_smart_target_price(
-                curr_price,
-                v_pw=current_vpw,
-                ai_score=current_ai_score,
-                ask_tot=ask_tot,
-                bid_tot=bid_tot
-            )
-
-            last_ai_time = LAST_AI_CALL_TIMES.get(code, 0)
-            time_elapsed = time.time() - last_ai_time
-            is_vip_target = (target_buy_price > 0) and (curr_price <= target_buy_price * 1.015)
-
-            if is_vip_target and last_ai_time == 0:
-                print(f"⏳ [{stock['name']}] 첫 AI 분석을 시작합니다... (기계적 매수 일시 보류)")
-
-            if ai_engine and is_vip_target and (time_elapsed > AI_WATCHING_COOLDOWN or last_ai_time == 0):
-                ai_call_executed = False
-                try:
-                    recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
-                    recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40)
-
-                    if ws_data.get('orderbook') and recent_ticks:
-                        ai_decision = ai_engine.analyze_target(stock['name'], ws_data, recent_ticks, recent_candles)
-                        ai_call_executed = True
-
-                        action = ai_decision.get('action', 'WAIT')
-                        ai_score = ai_decision.get('score', 50)
-                        reason = ai_decision.get('reason', '사유 없음')
-
-                        if ai_score != 50:
-                            stock['rt_ai_prob'] = ai_score / 100.0
-                            current_ai_score = ai_score
-                            print(f"💎 [VIP AI 확답 완료: {stock['name']}] {action} | 점수: {ai_score}점 | {reason}")
-
-                            if action == "BUY":
-                                ai_msg = (
-                                    f"🤖 <b>[VIP 종목 실시간 분석]</b>\n"
-                                    f"🎯 종목: {stock['name']}\n"
-                                    f"⚡ 행동: <b>{action} ({ai_score}점)</b>\n"
-                                    f"🧠 사유: {reason}"
-                                )
-                                target_audience = 'VIP_ALL' if liquidity_value >= VIP_LIQUIDITY_THRESHOLD and current_ai_score >= 90 else 'ADMIN_ONLY'
-                                event_bus.publish(
-                                    'TELEGRAM_BROADCAST',
-                                    {'message': ai_msg, 'audience': target_audience, 'parse_mode': 'HTML'}
-                                )
-                        else:
-                            print(f"⚠️ [{stock['name']}] AI 판단 보류(Score 50). 기계적 로직으로 폴백합니다.")
-                            current_ai_score = 50
-
-                except Exception as e:
-                    log_error(f"🚨 [AI 엔진 오류] {stock['name']}({code}): {e} | 기계적 매수 모드로 폴백(Fallback)합니다.")
-                    current_ai_score = 50
-
-                if ai_call_executed:
-                    LAST_AI_CALL_TIMES[code] = time.time()
-
-                # 첫 분석 턴은 "실제 AI 호출이 수행된 경우에만" 바로 진입하지 않고 다음 루프에서 확인
-                if ai_call_executed and last_ai_time == 0:
-                    log_info(f"[DEBUG] {code} 첫 AI 분석 턴 대기 (SCALPING)")
-                    return
-
-            # =========================================================
-            # 🚨 5. AI 거부권 및 최종 매수 대기열(그물망) 투척
-            # 💡 [핵심 교정] AI가 명확히 'BUY(75점 이상)'를 외치지 않으면 그물망을 던지지 않습니다!
-            # (단, 서버 에러 등으로 인한 기계적 폴백 상태인 '50점'은 예외로 통과시킵니다)
-            # =========================================================
-
-            if current_ai_score < 75 and current_ai_score != 50:
-                # 1. 로그 출력 (기존 유지)
-                if time.time() - last_ai_time < 1.0:
-                    action_str = "WAIT(진입 보류)" if current_ai_score > 40 else "DROP(진입 차단)"
-                    print(f"🚫 [AI 매수 거부] {stock['name']} {action_str} (AI 점수: {current_ai_score}점)")
-
-                # 💡 [수정] 74점 이하는 점수와 상관없이 모두 설정값(기본 300초) 적용
-                cooldown_time = AI_WAIT_DROP_COOLDOWN
-
-                cooldowns[code] = time.time() + cooldown_time
-                log_info(f"[DEBUG] {code} AI 점수 불충족 (current_ai_score={current_ai_score} < 75)")
-                return
-
-            final_target_buy_price, final_used_drop_pct = radar.get_smart_target_price(
-                curr_price,
-                v_pw=current_vpw,
-                ai_score=current_ai_score,
-                ask_tot=ask_tot,
-                bid_tot=bid_tot
-            )
-
-            stock['target_buy_price'] = final_target_buy_price
-            is_trigger = True
-
-    # 2️⃣ & 3️⃣ 스윙(KOSDAQ_ML / KOSPI_ML) 통합 전략: AI 교차 검증 및 동적 비중 조절
-    elif strategy in ['KOSDAQ_ML', 'KOSPI_ML']:
-        if radar is None:
-            log_info(f"[DEBUG] {code} radar 객체 없음 (KOSDAQ_ML/KOSPI_ML)")
-            return
-
-        # --- [1] 전략별 파라미터 세팅 ---
-        if strategy == 'KOSDAQ_ML':
-            max_gap = getattr(TRADING_RULES, 'MAX_SWING_GAP_UP_PCT', 3.0)
-            if fluctuation >= max_gap:
-                log_info(f"[DEBUG] {code} 갭상승 너무 큼 (fluctuation={fluctuation:.2f} >= max_gap={max_gap})")
-                return  # 갭상승이 너무 크면 패스
-
-            vpw_limit_base = getattr(TRADING_RULES, 'VPW_KOSDAQ_LIMIT', 105)
-            strong_vpw = getattr(TRADING_RULES, 'VPW_STRONG_KOSDAQ_LIMIT', 120)
-            buy_threshold = getattr(TRADING_RULES, 'BUY_SCORE_KOSDAQ_THRESHOLD', 80)
-            vpw_condition = current_vpw >= vpw_limit_base
-            ratio_min = getattr(TRADING_RULES, 'INVEST_RATIO_KOSDAQ_MIN', 0.05)
-            ratio_max = getattr(TRADING_RULES, 'INVEST_RATIO_KOSDAQ_MAX', 0.15)
-            ai_score_threshold = getattr(TRADING_RULES, 'AI_SCORE_THRESHOLD_KOSDAQ', 60)
-
-            ai_prob = stock.get('prob', getattr(TRADING_RULES, 'SNIPER_AGGRESSIVE_PROB', 0.70))
-            v_pw_limit = vpw_limit_base if ai_prob >= 0.70 else strong_vpw
-
-        else:  # KOSPI_ML
-            max_gap = getattr(TRADING_RULES, 'MAX_SWING_GAP_UP_PCT', 3.0)
-            if fluctuation >= max_gap:
-                log_info(f"[DEBUG] {code} 갭상승 너무 큼 (fluctuation={fluctuation:.2f} >= max_gap={max_gap})")
-                return  # 갭상승이 너무 크면 패스
-
-            vpw_limit_base = 100
-            strong_vpw = getattr(TRADING_RULES, 'VPW_STRONG_LIMIT', 105)
-            buy_threshold = getattr(TRADING_RULES, 'BUY_SCORE_THRESHOLD', 70)
-            vpw_condition = current_vpw >= 103
-            ratio_min = getattr(TRADING_RULES, 'INVEST_RATIO_KOSPI_MIN', 0.10)
-            ratio_max = getattr(TRADING_RULES, 'INVEST_RATIO_KOSPI_MAX', 0.30)
-            ai_score_threshold = getattr(TRADING_RULES, 'AI_SCORE_THRESHOLD_KOSPI', 60)
-
-            ai_prob = stock.get('prob', getattr(TRADING_RULES, 'SNIPER_AGGRESSIVE_PROB', 0.70))
-            v_pw_limit = vpw_limit_base if ai_prob >= 0.70 else strong_vpw
-
-        # --- [2] 기계적 퀀트 분석 ---
-        score, prices, conclusion, checklist, metrics = radar.analyze_signal_integrated(ws_data, ai_prob)
-        is_shooting = current_vpw >= v_pw_limit
-
-        # --- [3] 퀀트가 매수권이면 마지막 Gatekeeper 로 실시간 종목분석 호출 ---
-        if (score >= buy_threshold or is_shooting) and vpw_condition:
-            gatekeeper_reject_cd = getattr(TRADING_RULES, 'ML_GATEKEEPER_REJECT_COOLDOWN', 60 * 60 * 2)
-            gatekeeper_error_cd = getattr(TRADING_RULES, 'ML_GATEKEEPER_ERROR_COOLDOWN', 60 * 10)
-            gatekeeper = None
-            gatekeeper_allow = False
-            action_label = 'UNKNOWN'
-
-            if not ai_engine:
-                log_error(f"🚨 [{strategy} Gatekeeper 미초기화] {stock['name']}({code})")
-                cooldowns[code] = time.time() + gatekeeper_error_cd
-                return
-
-            try:
-                realtime_ctx = kiwoom_utils.build_realtime_analysis_context(
-                    token=KIWOOM_TOKEN,
-                    code=code,
-                    ws_data=ws_data,
-                    strat_label=strategy,
-                    position_status='NONE',
-                    avg_price=0,
-                    pnl_pct=0.0,
-                    trailing_pct=0.0,
-                    stop_pct=0.0,
-                    target_price=curr_price,
-                    target_reason='WATCHING 최종 진입 Gatekeeper 검증',
-                    score=float(score),
-                    conclusion=conclusion,
-                    quant_metrics=metrics,
-                )
-                gatekeeper = ai_engine.evaluate_realtime_gatekeeper(
-                    stock_name=stock['name'],
-                    stock_code=code,
-                    realtime_ctx=realtime_ctx,
-                    analysis_mode='SWING',
-                )
-                LAST_AI_CALL_TIMES[code] = time.time()
-                action_label = gatekeeper.get('action_label', 'UNKNOWN')
-                gatekeeper_allow = bool(gatekeeper.get('allow_entry', False))
-                stock['last_gatekeeper_action'] = action_label
-                stock['last_gatekeeper_report'] = gatekeeper.get('report', '')
-            except Exception as e:
-                log_error(f"🚨 [{strategy} Gatekeeper 오류] {stock['name']}({code}): {e}")
-                cooldowns[code] = time.time() + gatekeeper_error_cd
-                return
-
-            if not gatekeeper_allow:
-                print(f"🚫 [{strategy} Gatekeeper 거부] {stock['name']} ({action_label})")
-                cooldowns[code] = time.time() + gatekeeper_reject_cd
-                return
-
-
-
-            score_weight = max(0.0, min(1.0, (float(score) - buy_threshold) / max(1.0, (100 - buy_threshold))))
-            ratio = ratio_min + (score_weight * (ratio_max - ratio_min))
-            if is_shooting and ratio < ((ratio_min + ratio_max) / 2):
-                ratio = (ratio_min + ratio_max) / 2
-
-            is_trigger = True
-            stock['target_buy_price'] = curr_price  # 스윙은 보통 최유리지정가/시장가로 긁으므로 현재가 기록
-            stock['msg_audience'] = 'VIP_ALL'
-            _publish_gatekeeper_report(stock, code, gatekeeper, allowed=True)
+    # Evaluate buy signal using evaluator functions
+    result = _evaluate_watching_buy_signal(
+        stock=stock,
+        code=code,
+        ws_data=ws_data,
+        radar=radar,
+        ai_engine=ai_engine,
+        strategy=strategy,
+        pos_tag=pos_tag,
+        current_vpw=current_vpw,
+        fluctuation=fluctuation,
+        curr_price=curr_price
+    )
+    
+    # Handle skip reason (cooldown)
+    if result['skip_reason']:
+        log_info(f"[DEBUG] {code} 스킵: {result['skip_reason']}")
+        if result['cooldown_sec'] > 0:
+            cooldowns[code] = time.time() + result['cooldown_sec']
+        return
+    
+    # AI VIP telegram message (if any)
+    if 'ai_telegram_msg' in result and 'ai_telegram_audience' in result:
+        event_bus.publish(
+            'TELEGRAM_BROADCAST',
+            {
+                'message': result['ai_telegram_msg'],
+                'audience': result['ai_telegram_audience'],
+                'parse_mode': 'HTML'
+            }
+        )
+    
+    # Store gatekeeper info if present
+    if 'gatekeeper_action' in result:
+        stock['last_gatekeeper_action'] = result['gatekeeper_action']
+    if 'gatekeeper_report' in result:
+        stock['last_gatekeeper_report'] = result['gatekeeper_report']
+    
+    # If trigger, set stock fields and proceed to order execution
+    if result['is_trigger']:
+        stock['target_buy_price'] = result['target_buy_price']
+        if 'msg_audience' in result:
+            stock['msg_audience'] = result['msg_audience']
+        is_trigger = True
+        msg = result['msg']
+        ratio = result['ratio']
+        order_type_code = result['order_type_code']
+        final_price = result['final_price']
+        # Note: The following order execution block will use these variables
 
     # ==========================================
     # 🎯 매수 실행 공통 로직
@@ -2403,12 +2692,6 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             cooldowns[code] = time.time() + 1200
             return
 
-        if strategy == 'SCALPING':
-            order_type_code = "00"  # 지정가
-            final_price = int(float(stock.get('target_buy_price', curr_price) or curr_price))
-        else:
-            order_type_code = "6"   # 최유리지정가
-            final_price = 0
 
         res = kiwoom_orders.send_buy_order_market(
             code=code,
@@ -2606,135 +2889,35 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
 
 
 
-    # 1️⃣ 초단타 (SCALPING) 전략 (V3 동적 트레일링 & AI 개입)
-    if strategy == 'SCALPING':
-        held_time_min = 0
-        # --- [STEP 1] 보유 시간(held_time_min) 계산 ---
-        if 'order_time' in stock and stock.get('order_time'):
-            held_time_min = (time.time() - stock['order_time']) / 60
-        elif stock.get('buy_time'):
-            try:
-                bt = stock['buy_time']
-                if isinstance(bt, datetime):
-                    b_dt = bt
-                else:
-                    bt_str = str(bt)
-                    try:
-                        b_dt = datetime.fromisoformat(bt_str)
-                    except Exception:
-                        b_time = datetime.strptime(bt_str, '%H:%M:%S').time()
-                        b_dt = datetime.combine(datetime.now().date(), b_time)
-                held_time_min = (datetime.now() - b_dt).total_seconds() / 60
-            except Exception:
-                pass
+    # 결정 평가기 호출
+    pos_tag = stock.get('position_tag', 'MIDDLE')
+    current_vpw = float(ws_data.get('v_pw', 0) or 0)
+    fluctuation = float(ws_data.get('fluctuation', 0.0) or 0.0)
 
-        # --- [STEP 2] 익절/손절 기준선 및 하락폭(Drawdown) 설정 ---
-        base_stop_pct = getattr(TRADING_RULES, 'SCALP_STOP', -2.5)
-        safe_profit_pct = getattr(TRADING_RULES, 'SCALP_SAFE_PROFIT', 0.5)
-        if highest_prices.get(code, 0) > 0:
-            drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100
-        else:
-            drawdown = 0
+    result = _evaluate_holding_sell_signal(
+        stock=stock,
+        code=code,
+        ws_data=ws_data,
+        radar=radar,
+        ai_engine=ai_engine,
+        strategy=strategy,
+        pos_tag=pos_tag,
+        current_vpw=current_vpw,
+        fluctuation=fluctuation,
+        curr_price=curr_p,
+        profit_rate=profit_rate,
+        peak_profit=peak_profit,
+        current_ai_score=current_ai_score,
+        market_regime=market_regime
+    )
 
-        # AI 점수에 따른 동적 파라미터 분기
-        if current_ai_score >= 75:
-            dynamic_stop_pct = base_stop_pct - 1.0
-            dynamic_trailing_limit = getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_STRONG', 0.8)
-        else:
-            dynamic_stop_pct = base_stop_pct
-            dynamic_trailing_limit = getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_WEAK', 0.4)
+    if result['skip_reason']:
+        log_info(f"[DEBUG] {code} 매도 스킵: {result['skip_reason']}")
+        return
 
-        # --- [STEP 3] 🧠 V3 매도 판단 실행 (우선순위 순서) ---
-        
-        # 1. 하드 리밋 (최우선: 물리적 손절선 이탈 시 자비 없이 컷)
-        if profit_rate <= dynamic_stop_pct:
-            is_sell_signal = True
-            sell_reason_type = "LOSS"
-            reason = f"🔪 무호흡 칼손절 ({dynamic_stop_pct}%) [AI: {current_ai_score:.0f}]"
-
-        # 2. AI 하방 리스크 조기 차단 (수익이 마이너스 구간일 때)
-        elif profit_rate < 0 and current_ai_score <= 35:
-            is_sell_signal = True
-            sell_reason_type = "LOSS"
-            reason = f"🚨 AI 하방 리스크 포착 ({current_ai_score:.0f}점). 조기 손절 ({profit_rate:.2f}%)"
-
-        # 3. 🎯 V3 동적 트레일링 익절 (수익이 안전 마진 이상일 때만 발동!)
-        elif profit_rate >= safe_profit_pct:
-            
-            # 3-1. AI 모멘텀 둔화: 고점 대비 눌림을 기다릴 필요도 없이, AI가 가속도 죽었다고 판단하면 즉각 수익 실현
-            if current_ai_score < 50:
-                is_sell_signal = True
-                sell_reason_type = "MOMENTUM_DECAY"
-                reason = f"🤖 AI 틱 가속도 둔화 ({current_ai_score:.0f}점). 즉각 익절 (+{profit_rate:.2f}%)"
-                
-            # 3-2. 기계적 트레일링 방어: AI 점수(수급 강도)에 따라 타이트하게 혹은 여유롭게 익절폭 조절
-            elif drawdown >= dynamic_trailing_limit:
-                is_sell_signal = True
-                sell_reason_type = "TRAILING"
-                reason = f"🔥 고점 대비 밀림 (-{drawdown:.2f}%). 트레일링 익절 (+{profit_rate:.2f}%)"
-
-
-
-                
-    # 2️⃣ 코스닥 AI 스윙 (KOSDAQ_ML) 전용 전략
-    elif strategy == 'KOSDAQ_ML':
-        try:
-            buy_date_str = stock.get('date', datetime.now().strftime('%Y-%m-%d'))
-            buy_date = datetime.strptime(buy_date_str, '%Y-%m-%d').date()
-            if np.busday_count(buy_date, datetime.now().date()) >= getattr(TRADING_RULES, 'KOSDAQ_HOLDING_DAYS', 2):
-                is_sell_signal = True
-                sell_reason_type = "TIMEOUT"
-                reason = "⏳ 코스닥 스윙 기한 만료 청산"
-        except Exception:
-            pass
-
-        if not is_sell_signal and peak_profit >= getattr(TRADING_RULES, 'KOSDAQ_TARGET', 4.0):
-            drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100
-            if drawdown >= 1.0:
-                is_sell_signal = True
-                sell_reason_type = "TRAILING"
-                reason = f"🏆 KOSDAQ 트레일링 익절 (+{getattr(TRADING_RULES, 'KOSDAQ_TARGET', 4.0)}% 돌파 후 하락)"
-
-        elif not is_sell_signal and profit_rate <= getattr(TRADING_RULES, 'KOSDAQ_STOP', -2.0):
-            is_sell_signal = True
-            sell_reason_type = "LOSS"
-            reason = f"🛑 KOSDAQ 전용 방어선 이탈 ({getattr(TRADING_RULES, 'KOSDAQ_STOP', -2.0)}%)"
-
-
-    # 3️⃣ 코스피 우량주 스윙 (KOSPI_ML 전용)
-    elif strategy == 'KOSPI_ML':
-        pos_tag = stock.get('position_tag', 'MIDDLE')
-        if pos_tag == 'BREAKOUT':
-            current_stop_loss = getattr(TRADING_RULES, 'STOP_LOSS_BREAKOUT')
-            regime_name = "전고점 돌파"
-        elif pos_tag == 'BOTTOM':
-            current_stop_loss = getattr(TRADING_RULES, 'STOP_LOSS_BOTTOM')
-            regime_name = "바닥 탈출"
-        else:
-            current_stop_loss = getattr(TRADING_RULES, 'STOP_LOSS_BULL') if market_regime == 'BULL' else getattr(TRADING_RULES, 'STOP_LOSS_BEAR')
-            regime_name = "상승장" if market_regime == 'BULL' else "조정장"
-
-        try:
-            buy_date_str = stock.get('date', datetime.now().strftime('%Y-%m-%d'))
-            buy_date = datetime.strptime(buy_date_str, '%Y-%m-%d').date()
-            if np.busday_count(buy_date, datetime.now().date()) >= getattr(TRADING_RULES, 'HOLDING_DAYS'):
-                is_sell_signal = True
-                sell_reason_type = "TIMEOUT"
-                reason = f"⏳ {getattr(TRADING_RULES, 'HOLDING_DAYS')}일 스윙 보유 만료"
-        except Exception:
-            pass
-
-        # 익절 목표 도달 시 즉시 매도 (트레일링 없음)
-        if not is_sell_signal and profit_rate >= getattr(TRADING_RULES, 'TRAILING_START_PCT'):
-            is_sell_signal = True
-            sell_reason_type = "PROFIT"
-            reason = f"🎯 목표 수익률 도달 (+{getattr(TRADING_RULES, 'TRAILING_START_PCT')}%)"
-
-        # 손절선 도달
-        elif not is_sell_signal and profit_rate <= current_stop_loss:
-            is_sell_signal = True
-            sell_reason_type = "LOSS"
-            reason = f"🛑 손절선 도달 ({regime_name} 기준 {current_stop_loss}%)"
+    is_sell_signal = result['is_sell_signal']
+    sell_reason_type = result['sell_reason_type']
+    reason = result['reason']
 
     # ==========================================
     # 🎯 매도 실행 공통 로직 (Smart Sell + ID 정밀 타격 버전)
@@ -2897,57 +3080,34 @@ def check_watching_conditions(stock, code, ws_data, admin_id, radar=None, ai_eng
     current_vpw = float(ws_data.get('v_pw', 0) or 0)
     fluctuation = float(ws_data.get('fluctuation', 0.0) or 0.0)
     
-    # 초단타 SCALPING 전략 검사
-    if strategy == 'SCALPING':
-        if pos_tag == 'VCP_CANDID':
-            return "VCP_CANDID 태그로 인한 제외"
-        
-        ask_tot = int(float(ws_data.get('ask_tot', 0) or 0))
-        bid_tot = int(float(ws_data.get('bid_tot', 0) or 0))
-        open_price = float(ws_data.get('open', curr_price) or curr_price)
-        intraday_surge = ((curr_price - open_price) / open_price) * 100 if open_price > 0 else fluctuation
-        liquidity_value = (ask_tot + bid_tot) * curr_price
-        
-        if fluctuation >= MAX_SURGE or intraday_surge >= MAX_INTRADAY_SURGE:
-            return f"과매수 위험 차단 (fluctuation={fluctuation:.2f} >= {MAX_SURGE} 또는 intraday_surge={intraday_surge:.2f} >= {MAX_INTRADAY_SURGE})"
-        
-        if pos_tag == 'VCP_NEXT':
-            # VCP_NEXT는 별도 검사 없이 통과
-            pass
-        else:
-            if radar is None:
-                return "radar 객체 없음"
-            if current_vpw < getattr(TRADING_RULES, 'VPW_SCALP_LIMIT', 120):
-                return f"VPW 불충족 (current_vpw={current_vpw:.1f} < VPW_SCALP_LIMIT)"
-            if liquidity_value < MIN_LIQUIDITY:
-                return f"유동성 불충족 (liquidity_value={liquidity_value:,.0f} < MIN_LIQUIDITY={MIN_LIQUIDITY:,.0f})"
-            
-            scanner_price = stock.get('buy_price') or 0
-            if scanner_price > 0:
-                gap_pct = (curr_price - scanner_price) / scanner_price * 100
-                if gap_pct >= 1.5:
-                    return f"포착가 대비 갭 상승 (gap_pct={gap_pct:.1f}% >= 1.5%)"
-            
-            # AI 점수 체크
-            current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
-            if current_ai_score < 75 and current_ai_score != 50:
-                return f"AI 점수 불충족 (current_ai_score={current_ai_score} < 75)"
-    
-    # 스윙 전략 검사 (KOSDAQ_ML / KOSPI_ML)
+    # radar 필요성 검사 (평가기 호출 전)
+    if strategy == 'SCALPING' and pos_tag != 'VCP_NEXT':
+        if radar is None:
+            return "radar 객체 없음"
     elif strategy in ['KOSDAQ_ML', 'KOSPI_ML']:
         if radar is None:
             return "radar 객체 없음 (KOSDAQ_ML/KOSPI_ML)"
-        
-        max_gap = getattr(TRADING_RULES, 'MAX_SWING_GAP_UP_PCT', 3.0)
-        if fluctuation >= max_gap:
-            return f"갭상승 너무 큼 (fluctuation={fluctuation:.2f} >= max_gap={max_gap})"
-        
-        # 추가 검사 생략 (복잡성으로 인해)
-        # AI 점수 체크
-        current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
-        ai_score_threshold = getattr(TRADING_RULES, 'AI_SCORE_THRESHOLD_KOSDAQ', 60) if strategy == 'KOSDAQ_ML' else getattr(TRADING_RULES, 'AI_SCORE_THRESHOLD_KOSPI', 60)
-        if current_ai_score < ai_score_threshold and current_ai_score != 50:
-            return f"AI 점수 불충족 (current_ai_score={current_ai_score} < ai_score_threshold={ai_score_threshold})"
+    
+    # 평가기 호출
+    result = _evaluate_watching_buy_signal(
+        stock=stock,
+        code=code,
+        ws_data=ws_data,
+        radar=radar,
+        ai_engine=ai_engine,
+        strategy=strategy,
+        pos_tag=pos_tag,
+        current_vpw=current_vpw,
+        fluctuation=fluctuation,
+        curr_price=curr_price
+    )
+    
+    if result.get('skip_reason'):
+        return result['skip_reason']
+    
+    if not result.get('is_trigger', False):
+        # 평가기가 트리거를 반환하지 않은 경우 (예: AI 점수 불충족 등)
+        return "매수 신호 없음"
     
     # 공통 관리자 ID 체크
     if not admin_id:
@@ -2955,7 +3115,7 @@ def check_watching_conditions(stock, code, ws_data, admin_id, radar=None, ai_eng
     
     # 매수 수량 체크 (자금 부족)
     deposit = kiwoom_orders.get_deposit(KIWOOM_TOKEN)
-    ratio = stock.get('ratio', 0.1)  # 기본 비율
+    ratio = result.get('ratio', stock.get('ratio', 0.1))
     real_buy_qty = kiwoom_orders.calc_buy_qty(curr_price, deposit, ratio)
     if real_buy_qty <= 0:
         return "매수 수량 0주 (자금 부족)"
@@ -2986,63 +3146,36 @@ def check_holding_conditions(stock, code, ws_data, admin_id, market_regime, rada
         highest_prices[code] = curr_p
     peak_profit = (highest_prices[code] - buy_p) / buy_p * 100
     
-    now_t = datetime.now().time()
+    # 추가 파라미터 계산
+    pos_tag = stock.get('position_tag', 'MIDDLE')
+    current_vpw = float(ws_data.get('v_pw', 0) or 0)
+    fluctuation = float(ws_data.get('fluctuation', 0.0) or 0.0)
+    current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
     
-    # 초단타 SCALPING 전략 검사
-    if strategy == 'SCALPING':
-        base_stop_pct = getattr(TRADING_RULES, 'SCALP_STOP', -2.5)
-        safe_profit_pct = getattr(TRADING_RULES, 'SCALP_SAFE_PROFIT', 0.5)
-        drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100 if highest_prices[code] > 0 else 0
-        
-        # AI 점수 (간략화)
-        current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
-        
-        # 손절 조건
-        if profit_rate <= base_stop_pct:
-            return f"손절선 도달 (profit_rate={profit_rate:.2f}% <= {base_stop_pct}%)"
-        
-        # AI 하방 리스크
-        if profit_rate < 0 and current_ai_score <= 35:
-            return f"AI 하방 리스크 포착 (AI 점수 {current_ai_score:.0f})"
-        
-        # 익절 조건
-        if profit_rate >= safe_profit_pct:
-            if current_ai_score < 50:
-                return f"AI 모멘텀 둔화 (AI 점수 {current_ai_score:.0f})"
-            if drawdown >= getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_WEAK', 0.4):
-                return f"고점 대비 밀림 (drawdown={drawdown:.2f}%)"
-        
-        # 시간 초과 및 장 마감
-        held_time_min = 0  # 계산 생략
-        if now_t >= TIME_15_30 and profit_rate >= getattr(TRADING_RULES, 'MIN_FEE_COVER', 0.1):
-            return "장 마감 전 현금화"
+    # 평가기 호출
+    result = _evaluate_holding_sell_signal(
+        stock=stock,
+        code=code,
+        ws_data=ws_data,
+        radar=radar,
+        ai_engine=ai_engine,
+        strategy=strategy,
+        pos_tag=pos_tag,
+        current_vpw=current_vpw,
+        fluctuation=fluctuation,
+        curr_price=curr_p,
+        profit_rate=profit_rate,
+        peak_profit=peak_profit,
+        current_ai_score=current_ai_score,
+        market_regime=market_regime
+    )
     
-    # 코스닥 스윙 전략 검사 (간략화)
-    elif strategy == 'KOSDAQ_ML':
-        if peak_profit >= getattr(TRADING_RULES, 'KOSDAQ_TARGET', 4.0):
-            drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100 if highest_prices[code] > 0 else 0
-            if drawdown >= 1.0:
-                return f"KOSDAQ 트레일링 익절 (peak_profit={peak_profit:.1f}%)"
-        if profit_rate <= getattr(TRADING_RULES, 'KOSDAQ_STOP', -2.0):
-            return f"KOSDAQ 손절선 도달 (profit_rate={profit_rate:.2f}%)"
+    if result.get('skip_reason'):
+        return result['skip_reason']
     
-    # 코스피 스윙 전략 검사 (간략화)
-    else:
-        pos_tag = stock.get('position_tag', 'MIDDLE')
-        if pos_tag == 'BREAKOUT':
-            current_stop_loss = getattr(TRADING_RULES, 'STOP_LOSS_BREAKOUT')
-        elif pos_tag == 'BOTTOM':
-            current_stop_loss = getattr(TRADING_RULES, 'STOP_LOSS_BOTTOM')
-        else:
-            current_stop_loss = getattr(TRADING_RULES, 'STOP_LOSS_BULL') if market_regime == 'BULL' else getattr(TRADING_RULES, 'STOP_LOSS_BEAR')
-        
-        if profit_rate <= current_stop_loss:
-            return f"스윙 손절선 도달 (profit_rate={profit_rate:.2f}% <= {current_stop_loss}%)"
-        
-        if peak_profit >= getattr(TRADING_RULES, 'TRAILING_START_PCT'):
-            drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100 if highest_prices[code] > 0 else 0
-            if drawdown >= getattr(TRADING_RULES, 'TRAILING_DRAWDOWN_PCT'):
-                return f"스윙 트레일링 익절 (peak_profit={peak_profit:.1f}%)"
+    if result.get('is_sell_signal', False):
+        # 매도 신호가 있으면 그 이유를 반환 (기존 로직과 일치)
+        return result.get('reason', '매도 신호')
     
     # 관리자 ID 체크
     if not admin_id:
