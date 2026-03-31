@@ -372,13 +372,16 @@ def run_integrated_scanner():
         # 💡 [핵심 교정 1] 복수형 api_keys 변수로 정확히 받음
         api_keys = [v for k, v in CONF.items() if k.startswith("GEMINI_API_KEY")]
     
-        # 매크로 데이터 수집
+        # 매크로 데이터 수집 - Gemini API 호출이 실시간 시장 데이터에 grounded되지 않음
+        builder = MacroBriefingBuilder.from_system_config()
         try:
-            macro_builder = MacroBriefingBuilder.from_system_config()
-            _, macro_text = macro_builder.build_macro_context(include_debug=False)
+            snap, macro_text = builder.build_macro_context(include_debug=True)
         except Exception as e:
-            log_error(f"매크로 데이터 수집 실패: {e}")
-            macro_text = ""
+            macro_text = f"- 매크로 생성 예외: {e}"
+
+        if 'snap' in locals():
+            print("missing_sources =", snap.missing_sources)
+            print("notes =", snap.notes)
 
         if not api_keys:
             log_error("❌ 제미나이 키 발급 실패로 엔진을 중단합니다.")

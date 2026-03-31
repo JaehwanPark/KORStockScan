@@ -1,4 +1,4 @@
-
+import traceback
 import json
 import re
 import threading
@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 from google import genai
+from google.genai import types
 
 from src.utils.constants import CONFIG_PATH, DEV_PATH, TRADING_RULES
 from src.utils.logger import log_error
@@ -433,7 +434,7 @@ class MacroBriefingBuilder:
         self.market_max_age_hours = int(self.config.get("MACRO_GEMINI_MARKET_MAX_AGE_HOURS", 96) or 96)
         self.headline_max_age_hours = int(self.config.get("MACRO_GEMINI_HEADLINE_MAX_AGE_HOURS", 36) or 36)
         self.cache_path = self._resolve_cache_path()
-        self.current_model_name = str("gemini-flash-lite-latest")
+        self.current_model_name = str("gemini-pro-latest")
 
         api_keys = _extract_gemini_api_keys(self.config)
         if isinstance(api_keys, str):
@@ -469,16 +470,28 @@ class MacroBriefingBuilder:
         except ValueError:
             self.current_api_key_index = 0
 
-    def _call_gemini_safe(self, prompt, user_input, require_json=True, context_name="Unknown", model_override=None):
-        """ai_engine.py 스타일의 Gemini 호출기를 매크로 파일에 직접 이식"""
+    def _call_gemini_safe(
+        self,
+        prompt,
+        user_input,
+        require_json=True,
+        context_name="Unknown",
+        model_override=None,
+        extra_config=None,
+    ):
+        """Gemini 호출 + JSON 파싱을 최대한 안전하게 처리"""
         if not self.api_keys or not self.client:
             raise RuntimeError("GEMINI_API_KEY 계열 설정이 없습니다.")
 
         contents = [prompt, user_input] if prompt else [user_input]
 
-        config = None
+        config_kwargs = {}
         if require_json:
-            config = {'response_mime_type': "application/json"}
+            config_kwargs["response_mime_type"] = "application/json"
+        if extra_config:
+            config_kwargs.update(extra_config)
+
+        config = types.GenerateContentConfig(**config_kwargs) if config_kwargs else None
 
         target_model = model_override if model_override else self.current_model_name
         last_error = ""
@@ -491,16 +504,37 @@ class MacroBriefingBuilder:
                 if elapsed < self.min_interval:
                     time.sleep(self.min_interval - elapsed)
 
-                response = self.client.models.generate_content(model=target_model, contents=contents, config=config)
-                raw_text = (response.text or "").strip()
+                response = self.client.models.generate_content(
+                    model=target_model,
+                    contents=contents,
+                    config=config,
+                )
+
+                raw_text = self._extract_response_text(response).strip()
                 self.last_call_time = time.time()
 
                 if require_json:
-                    match = re.search(r'\{.*\}', raw_text, re.DOTALL)
+                    if not raw_text:
+                        raise ValueError("Gemini 응답 텍스트가 비어 있음")
+
+                    # 1차: 응답 전체가 JSON이라고 가정
+                    try:
+                        parsed = json.loads(raw_text)
+                        if isinstance(parsed, dict):
+                            return parsed
+                    except Exception:
+                        pass
+
+                    # 2차: 혹시 앞뒤에 설명이 섞였으면 JSON 블록만 추출
+                    match = re.search(r"\{.*\}", raw_text, re.DOTALL)
                     if match:
                         clean_json = match.group()
-                        return json.loads(clean_json)
-                    raise ValueError(f"JSON 형식을 찾을 수 없음: {raw_text[:200]}...")
+                        parsed = json.loads(clean_json)
+                        if isinstance(parsed, dict):
+                            return parsed
+
+                    raise ValueError(f"JSON 형식을 찾을 수 없음: {raw_text[:500]}...")
+
                 return raw_text
 
             except Exception as e:
@@ -532,6 +566,42 @@ class MacroBriefingBuilder:
         fatal_msg = f"🚨 [Macro Gemini 고갈] 모든 API 키 사용 불가. 마지막 에러: {last_error}"
         log_error(fatal_msg)
         raise RuntimeError(fatal_msg)
+    
+    @staticmethod
+    def _extract_response_text(response: Any) -> str:
+        """
+        Gemini Python SDK 응답에서 text를 최대한 안전하게 추출한다.
+        웹 UI에서는 정상인데 SDK에서는 response.text가 비는 경우를 대비.
+        """
+        try:
+            txt = getattr(response, "text", None)
+            if isinstance(txt, str) and txt.strip():
+                return txt
+        except Exception:
+            pass
+
+        chunks: List[str] = []
+        try:
+            candidates = getattr(response, "candidates", None) or []
+            for cand in candidates:
+                content = getattr(cand, "content", None)
+                if not content:
+                    continue
+                parts = getattr(content, "parts", None) or []
+                for part in parts:
+                    part_text = getattr(part, "text", None)
+                    if isinstance(part_text, str) and part_text.strip():
+                        chunks.append(part_text)
+        except Exception:
+            pass
+
+        if chunks:
+            return "\n".join(chunks).strip()
+
+        try:
+            return str(response)
+        except Exception:
+            return ""
 
     @classmethod
     def from_system_config(cls) -> "MacroBriefingBuilder":
@@ -547,8 +617,12 @@ class MacroBriefingBuilder:
             return cls({})
 
     def _build_macro_user_input(self) -> str:
+        now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         return f"""
-현재시간 기준 
+현재 UTC 시각은 {now_utc} 이다.
+
+이 시각 기준으로 가장 최근에 확인 가능한 신뢰할 수 있는 오버나이트 매크로 데이터를
+반드시 Google Search를 사용해 조회하고 JSON 객체 하나만 반환하라.
 
 [수집 대상]
 1. S&P500
@@ -564,27 +638,44 @@ class MacroBriefingBuilder:
 - 시간은 반드시 ISO 8601 UTC 형식으로 작성하라.
 - ET, EDT, EST, KST 같은 약식 시간대는 절대 쓰지 마라.
 - 숫자를 추정하지 마라. 불확실하면 null 로 둬라.
+- 최신 웹 검색 결과에 근거하지 않은 값은 쓰지 마라.
 - 출력은 JSON 객체 하나만 반환하라.
 """.strip()
 
     def _load_cached_bundle(self) -> Optional[Dict[str, Any]]:
         try:
             if not self.cache_path.exists():
+                log_error(f"[MACRO CACHE LOAD] no file: {self.cache_path}")
                 return None
+
             with open(self.cache_path, "r", encoding="utf-8") as f:
                 payload = json.load(f)
-            if not isinstance(payload, dict):
-                return None
-            return payload
+
+            if isinstance(payload, dict):
+                log_error(
+                    f"[MACRO CACHE LOAD] loaded from {self.cache_path}, "
+                    f"bundle_as_of={payload.get('bundle_as_of')}"
+                )
+                return payload
+
+            log_error(f"[MACRO CACHE LOAD] invalid payload type: {type(payload).__name__}")
+            return None
+
         except Exception as e:
             log_error(f"macro cache load failed: {e}")
             return None
+
 
     def _save_cached_bundle(self, bundle: Dict[str, Any]) -> None:
         try:
             self.cache_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.cache_path, "w", encoding="utf-8") as f:
                 json.dump(bundle, f, ensure_ascii=False, indent=2)
+
+            log_error(
+                f"[MACRO CACHE SAVE] saved to {self.cache_path}, "
+                f"bundle_as_of={bundle.get('bundle_as_of') if isinstance(bundle, dict) else None}"
+            )
         except Exception as e:
             log_error(f"macro cache save failed: {e}")
 
@@ -595,7 +686,24 @@ class MacroBriefingBuilder:
             require_json=True,
             context_name="macro_briefing",
             model_override=self.current_model_name,
+            extra_config={
+                "tools": [
+                    types.Tool(
+                        google_search=types.GoogleSearch()
+                    )
+                ]
+            },
         )
+
+    def _is_bundle_stale(self, bundle: Dict[str, Any]) -> bool:
+        if not isinstance(bundle, dict):
+            return True
+
+        bundle_as_of = str(bundle.get("bundle_as_of", "") or bundle.get("as_of", "") or "").strip()
+        if not bundle_as_of:
+            return True
+
+        return _is_stale(bundle_as_of, self.market_max_age_hours)
 
     def _to_market_series_point(
         self,
@@ -676,13 +784,22 @@ class MacroBriefingBuilder:
         bundle_as_of = str(bundle.get("bundle_as_of", "") or bundle.get("as_of", "") or "").strip()
 
         for key in GEMINI_MARKET_KEYS:
-            point = self._to_market_series_point(key, bundle.get(key), bundle_as_of=bundle_as_of, source_label=source_label)
+            point = self._to_market_series_point(
+                key,
+                bundle.get(key),
+                bundle_as_of=bundle_as_of,
+                source_label=source_label,
+            )
             if point is not None:
                 setattr(snap, key, point)
             else:
                 snap.missing_sources.append(f"{source_label}:{key}:stale_or_missing")
 
-        headlines = self._to_headlines(bundle.get("headlines", []), bundle_as_of=bundle_as_of, source_label=source_label)
+        headlines = self._to_headlines(
+            bundle.get("headlines", []),
+            bundle_as_of=bundle_as_of,
+            source_label=source_label,
+        )
         if headlines:
             snap.headlines = headlines
         else:
@@ -694,6 +811,9 @@ class MacroBriefingBuilder:
                 note_text = str(note or "").strip()
                 if note_text:
                     snap.notes.append(note_text)
+
+        if bundle_as_of:
+            snap.notes.append(f"{source_label} bundle_as_of={bundle_as_of}")
 
     def collect_snapshot(self) -> MacroSnapshot:
         snap = MacroSnapshot(created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
@@ -719,24 +839,54 @@ class MacroBriefingBuilder:
             log_error("ECOS_API_KEY missing")
 
         live_bundle: Optional[Dict[str, Any]] = None
+
         if self.api_keys:
             try:
                 live_bundle = self._fetch_live_bundle()
+                log_error(f"[MACRO] live_bundle fetched: type={type(live_bundle).__name__}")
+
                 if isinstance(live_bundle, dict):
-                    self._save_cached_bundle(live_bundle)
-                    self._apply_gemini_bundle(snap, live_bundle, source_label="GEMINI")
-                    self.consecutive_failures = 0
+                    bundle_as_of = live_bundle.get('bundle_as_of')
+                    log_error(
+                        f"[MACRO] LIVE bundle_as_of={bundle_as_of} "
+                        f"path={self.cache_path}"
+                    )
+
+                    if self._is_bundle_stale(live_bundle):
+                        snap.missing_sources.append(f"GEMINI:bundle:stale:{bundle_as_of}")
+                        snap.notes.append(f"Gemini live bundle stale 폐기: {bundle_as_of}")
+                        log_error(f"[MACRO] LIVE bundle rejected as stale: {bundle_as_of}")
+                    else:
+                        self._save_cached_bundle(live_bundle)
+                        log_error("[MACRO] applying LIVE bundle with source_label=GEMINI")
+                        self._apply_gemini_bundle(snap, live_bundle, source_label="GEMINI")
+                        self.consecutive_failures = 0
+                else:
+                    snap.missing_sources.append("GEMINI:live:not_dict")
+                    snap.notes.append("live Gemini 응답이 dict 아님")
+                    log_error("[MACRO] live_bundle is not dict, cache fallback not used")
             except Exception as e:
                 self.consecutive_failures += 1
                 snap.missing_sources.append(f"GEMINI:live:{e}")
                 log_error(f"Gemini 데이터 수집 실패: {e}")
 
                 cached_bundle = self._load_cached_bundle()
-                if isinstance(cached_bundle, dict):
+                log_error(
+                    f"[MACRO] CACHE fallback path={self.cache_path}, "
+                    f"exists={isinstance(cached_bundle, dict)}"
+                )
+
+                if isinstance(cached_bundle, dict) and not self._is_bundle_stale(cached_bundle):
+                    log_error(
+                        f"[MACRO] applying CACHE bundle bundle_as_of={cached_bundle.get('bundle_as_of')} "
+                        f"with source_label=GEMINI_CACHE"
+                    )
                     self._apply_gemini_bundle(snap, cached_bundle, source_label="GEMINI_CACHE")
                     snap.notes.append("live Gemini 실패로 cache fallback 사용")
                 else:
-                    snap.notes.append("live Gemini 실패 및 cache 없음")
+                    snap.notes.append("live Gemini 실패 및 사용 가능한 cache 없음")
+                    log_error("[MACRO] cache fallback unavailable or stale")
+
         else:
             snap.missing_sources.append("GEMINI_API_KEY 없음")
             log_error("GEMINI_API_KEY missing")
@@ -744,6 +894,11 @@ class MacroBriefingBuilder:
         snap.regime_tag, snap.confidence, scored_notes = self.signal_engine.score_snapshot(snap)
         if scored_notes:
             snap.notes.extend(scored_notes)
+
+        log_error(
+            f"[MACRO] collect_snapshot done | regime={snap.regime_tag} | confidence={snap.confidence} | "
+            f"missing_sources={snap.missing_sources}"
+        )
         return snap
 
     def build_macro_text(self, snap: MacroSnapshot, include_debug: bool = False) -> str:
@@ -785,12 +940,35 @@ class MacroBriefingBuilder:
             titles = [h.title for h in snap.headlines[:2]]
             lines.append("- 이벤트: " + " / ".join(titles))
 
-        lines.append(f"- 해석: {self._make_kospi_interpretation(snap)}")
+        has_any_macro = any([
+            snap.sp500 is not None,
+            snap.nasdaq is not None,
+            snap.vix is not None,
+            snap.us10y is not None,
+            snap.usdkrw is not None,
+            snap.kr3y is not None,
+            snap.kr10y is not None,
+            snap.brent is not None,
+            bool(snap.headlines),
+        ])
+
+        if has_any_macro:
+            lines.append(f"- 해석: {self._make_kospi_interpretation(snap)}")
+        else:
+            lines.append("- 해석: 유효한 오버나이트 매크로 수집값이 없어 보수적으로 중립 처리")
+
+        if snap.notes:
+            note_preview = [n for n in snap.notes if n][:3]
+            if note_preview:
+                lines.append("- 참고: " + " / ".join(note_preview))
 
         if include_debug and snap.missing_sources:
             lines.append("- 디버그: " + " | ".join(snap.missing_sources[:8]))
 
-        return "\n".join(lines)
+        text = "\n".join([x for x in lines if str(x).strip()]).strip()
+        if not text:
+            return "- 해석: 오버나이트 매크로 수집 결과가 비어 있음"
+        return text
 
     def build_macro_context(self, include_debug: bool = False) -> Tuple[MacroSnapshot, str]:
         snap = self.collect_snapshot()
@@ -818,7 +996,9 @@ class MacroBriefingBuilder:
 
 
 def build_scanner_data_input(total_count: int, survived_count: int, stats_text: str, macro_text: str = "") -> str:
-    macro_block = macro_text.strip() if macro_text else "오버나이트 매크로 데이터 없음"
+    cleaned_macro = str(macro_text or "").strip()
+    macro_block = cleaned_macro if cleaned_macro else "- 오버나이트 매크로 데이터 수집 실패 또는 빈 결과"
+
     return (
         f"[오버나이트 매크로]\n{macro_block}\n\n"
         f"[스캐너 통계 데이터]\n"

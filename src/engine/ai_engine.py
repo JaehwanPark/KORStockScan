@@ -10,6 +10,7 @@ import time
 import threading
 import json
 import re
+from datetime import datetime, timezone
 from itertools import cycle
 from google import genai
 from google.genai import types
@@ -366,57 +367,75 @@ class GeminiSniperEngine:
     # ==========================================
     # 3. 💡 [아키텍처 포인트] 만능 API 호출기 (중복 코드 완벽 제거)
     # ==========================================
-    def _call_gemini_safe(self, prompt, user_input, require_json=True, context_name="Unknown", model_override=None):
+    def _call_gemini_safe(
+        self,
+        prompt,
+        user_input,
+        require_json=True,
+        context_name="Unknown",
+        model_override=None,
+        use_google_search=False,
+    ):
         """키 로테이션, 예외 처리, 모델 덮어쓰기를 모두 전담하는 중앙 집중식 호출기"""
         contents = [prompt, user_input] if prompt else [user_input]
-        
+
         config = None
+        config_kwargs = {}
+
         if require_json:
-            config = {'response_mime_type': "application/json"}
-            
-        # 💡 [핵심] model_override가 지정되면 해당 모델을, 아니면 기본 모델(flash-lite)을 사용
+            config_kwargs["response_mime_type"] = "application/json"
+
+        if use_google_search:
+            config_kwargs["tools"] = [
+                types.Tool(
+                    google_search=types.GoogleSearch()
+                )
+            ]
+
+        if config_kwargs:
+            config = types.GenerateContentConfig(**config_kwargs)
+
         target_model = model_override if model_override else self.current_model_name
         last_error = ""
 
         for attempt in range(len(self.api_keys)):
             try:
-                response = self.client.models.generate_content(model=target_model, contents=contents, config=config)
-                raw_text = response.text.strip()
-                
+                response = self.client.models.generate_content(
+                    model=target_model,
+                    contents=contents,
+                    config=config
+                )
+                raw_text = (response.text or "").strip()
+
                 if require_json:
-                    # 💡 [개선] JSON 블록만 정밀하게 추출 (뒤에 붙은 부연설명 무시)
-                    import re
-                    # { 로 시작해서 } 로 끝나는 가장 큰 덩어리를 찾습니다.
                     match = re.search(r'\{.*\}', raw_text, re.DOTALL)
                     if match:
                         clean_json = match.group()
                         return json.loads(clean_json)
                     else:
-                        # { } 자체가 없는 경우
                         raise ValueError(f"JSON 형식을 찾을 수 없음: {raw_text[:100]}...")
                 else:
                     return raw_text
 
             except Exception as e:
                 last_error = str(e).lower()
-                # 💡 [핵심 교정] 429(한도초과)뿐만 아니라 503(서버과부하) 에러도 로테이션 대상에 포함합니다.
+
                 if any(x in last_error for x in ["429", "quota", "503", "unavailable", "high demand", "too_many_requests"]):
                     old_key = self.current_key[-5:]
                     self._rotate_client()
-                    
-                    # 📢 로그 기록 강화
-                    warn_msg = f"⚠️ [AI 서버 과부하/한도] {context_name} | {old_key} 교체 -> {self.current_key[-5:]} ({attempt+1}/{len(self.api_keys)})"
+
+                    warn_msg = (
+                        f"⚠️ [AI 서버 과부하/한도] {context_name} | "
+                        f"{old_key} 교체 -> {self.current_key[-5:]} ({attempt+1}/{len(self.api_keys)})"
+                    )
                     print(warn_msg)
-                    log_error(warn_msg) 
-                    
-                    # 서버 안정을 위해 약간의 지연 후 재시도
-                    time.sleep(0.8) 
+                    log_error(warn_msg)
+
+                    time.sleep(0.8)
                     continue
                 else:
-                    # 그 외 예측 불가능한 치명적 에러는 즉시 보고
                     raise RuntimeError(f"API 응답/파싱 실패: {e}")
-                
-        # 💡 [최종 방어선] 모든 키를 소진했을 때의 처리
+
         fatal_msg = f"🚨 [AI 고갈] 모든 API 키 사용 불가. 마지막 에러: {last_error}"
         log_error(fatal_msg)
         raise RuntimeError(fatal_msg)
@@ -700,13 +719,20 @@ class GeminiSniperEngine:
                 stats_text=stats_text,
                 macro_text=macro_text,
             )
+
+            now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            enriched_input = f"""현재 UTC 시각: {now_utc}
+
+    {data_input}"""
+
             try:
                 return self._call_gemini_safe(
                     ENHANCED_MARKET_ANALYSIS_PROMPT,
-                    data_input,
+                    enriched_input,
                     require_json=False,
                     context_name="시장 브리핑",
                     model_override="gemini-pro-latest",
+                    use_google_search=True,
                 )
             except Exception as e:
                 log_error(f"🚨 [시장 브리핑] AI 에러: {e}")
@@ -1130,7 +1156,8 @@ class GeminiSniperEngine:
                     user_input,
                     require_json=True,
                     context_name="종가베팅 TOP5 JSON",
-                    model_override="gemini-pro-latest"
+                    model_override="gemini-pro-latest",
+                    use_google_search=True
                 )
 
                 raw_top5 = result.get("top5", []) or []
