@@ -1,8 +1,11 @@
 import sys
 import os
 import json
+import numpy as np
 import pandas as pd
+import holidays
 from pathlib import Path
+from datetime import datetime
 
 # 1. KORStockScan 프로젝트 루트 경로 추가
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -10,6 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
 from src.database.db_manager import DBManager
+from src.database.models import RecommendationHistory
 from src.core.event_bus import EventBus
 from src.utils.constants import CONFIG_PATH, DEV_PATH
 
@@ -22,6 +26,69 @@ def load_config():
     except Exception as e:
         print(f"🚨 설정 파일 로드 실패: {e}")
         return {}
+
+def get_next_business_day():
+    """한국 휴일 반영 다음 영업일 계산"""
+    today = datetime.now().date()
+    kr_hols = holidays.KR(years=[today.year, today.year + 1])
+    hol_dates = np.array([np.datetime64(d) for d in kr_hols.keys()], dtype='datetime64[D]')
+    today_np = np.datetime64(today)
+    next_bday_np = np.busday_offset(today_np, 1, holidays=hol_dates)
+    return pd.to_datetime(next_bday_np).date()
+
+def save_eod_top5_as_nextday_watching(db_manager, top5):
+    """AI가 뽑은 EOD TOP5를 다음 영업일 WATCHING으로 저장"""
+    target_date = get_next_business_day()
+    saved_count = 0
+
+    with db_manager.get_session() as session:
+        for item in (top5 or [])[:5]:
+            code = str(item.get("stock_code", "")).replace(".0", "").strip().zfill(6)
+            name = str(item.get("stock_name", "")).strip()
+            if not code or not name:
+                continue
+
+            try:
+                close_price = int(float(item.get("close_price", 0) or 0))
+            except Exception:
+                close_price = 0
+
+            try:
+                prob = float(item.get("confidence", 0.0) or 0.0)
+            except Exception:
+                prob = 0.0
+
+            record = session.query(RecommendationHistory).filter_by(
+                rec_date=target_date,
+                stock_code=code
+            ).first()
+
+            if record:
+                record.stock_name = name
+                record.buy_price = close_price
+                record.trade_type = 'MAIN'
+                record.strategy = 'KOSPI_ML'
+                record.status = 'WATCHING'
+                record.position_tag = 'EOD_TOP5'
+                record.prob = prob
+            else:
+                record = RecommendationHistory(
+                    rec_date=target_date,
+                    stock_code=code,
+                    stock_name=name,
+                    buy_price=close_price,
+                    trade_type='MAIN',
+                    strategy='KOSPI_ML',
+                    status='WATCHING',
+                    position_tag='EOD_TOP5',
+                    prob=prob
+                )
+                session.add(record)
+
+            saved_count += 1
+
+    return saved_count, target_date
+
 
 def extract_eod_candidates(db_manager):
     """장 마감 후 내일의 주도주 후보 15종목을 추출합니다. (쌍끌이 양매수 + VCP 압축)"""
@@ -147,7 +214,22 @@ if __name__ == "__main__":
         ai_engine = GeminiSniperEngine(api_keys=api_keys)
         
         # 💡 장 마감 분석 전용 프롬프트 및 gemini-3.0-pro 호출
-        final_report = ai_engine.generate_eod_tomorrow_report(candidates_text)
+        bundle = ai_engine.generate_eod_tomorrow_bundle(candidates_text)
+        final_report = bundle.get("report", "")
+        top5 = bundle.get("top5", [])
+
+        if top5:
+            saved_count, target_date = save_eod_top5_as_nextday_watching(db, top5)
+            final_report = (
+                f"{final_report}\n\n"
+                f"🗂️ **[DB 예약 완료]** 다음 영업일 `{target_date}` WATCHING 대상으로 "
+                f"`{saved_count}개` 저장했습니다."
+            )
+        else:
+            final_report = (
+                f"{final_report}\n\n"
+                f"⚠️ **[DB 예약 스킵]** 구조화된 TOP5가 비어 있어 저장하지 않았습니다."
+            )
         
         print("\n" + "="*50)
         print(final_report)
@@ -157,7 +239,14 @@ if __name__ == "__main__":
         event_bus = EventBus()
         import src.notify.telegram_manager # 텔레그램 리스너 연결 및 봇 초기화
         
-        event_bus.publish('TELEGRAM_BROADCAST', {'message': final_report, 'audience': 'VIP_ALL'})
+        event_bus.publish(
+            'TELEGRAM_BROADCAST',
+            {
+                'message': final_report,
+                'audience': 'VIP_ALL',
+                'parse_mode': 'Markdown'
+            }
+        )
         print("🚀 텔레그램 VIP 채널로 마감 브리핑 전송 완료!")
         
     except Exception as e:
