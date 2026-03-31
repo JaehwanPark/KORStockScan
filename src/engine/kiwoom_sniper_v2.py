@@ -51,6 +51,9 @@ from src.engine.signal_radar import SniperRadar
 from src.engine.ai_engine import GeminiSniperEngine
 # from src.engine.ai_engine_openai import OpenAISniperEngine
 
+# 💡 VIX, 유가지표 임포트
+from src.market_regime import MarketRegimeService
+
 # 스캐너 모듈 (장중 스캔 호출용)
 import src.scanners.final_ensemble_scanner as final_ensemble_scanner
 import telebot
@@ -91,6 +94,7 @@ global ACTIVE_TARGETS
 ACTIVE_TARGETS = []
 LAST_AI_CALL_TIMES = {}
 LAST_LOG_TIMES = {}
+MARKET_REGIME = MarketRegimeService(refresh_minutes=15)
 
 # ==========================================
 # ⚡ [S15 v2] Fast-Track 상태 관리
@@ -445,6 +449,55 @@ def _execute_scalping_hold_overnight(record, mem_stock=None):
         return True, '미체결 매도 취소 후 HOLDING 복귀'
     return False, '미체결 매도 취소 실패'
 
+def init_market_regime_service():
+    global MARKET_REGIME
+    try:
+        snap = MARKET_REGIME.refresh_if_needed(force=True)
+        print(
+            f"🌍 [시장환경 초기화] "
+            f"risk={snap.risk_state}, "
+            f"VIX={snap.vix_close:.2f}, "
+            f"WTI_RSI={snap.wti_rsi:.2f}, "
+            f"allow_swing={snap.allow_swing_entry}, "
+            f"vol_mode={snap.volatility_mode}"
+        )
+    except Exception as e:
+        log_error(f"🚨 시장환경 초기화 실패: {e}")
+
+def should_block_swing_entry_by_market_regime(strategy: str):
+    """
+    스윙 전략(KOSPI_ML / KOSDAQ_ML / MAIN)에만 적용되는
+    시장환경 필터. 스캘핑 전략에는 적용하지 않는다.
+    """
+    global MARKET_REGIME
+
+    try:
+        snap = MARKET_REGIME.refresh_if_needed()
+        normalized = str(strategy or "").upper()
+
+        # 스윙 전략만 적용
+        if normalized not in ["KOSPI_ML", "KOSDAQ_ML", "MAIN"]:
+            return False, ""
+
+        if not snap.allow_swing_entry:
+            reason = (
+                f"시장환경 보류 | "
+                f"risk={snap.risk_state}, "
+                f"score={snap.swing_score}, "
+                f"VIX={snap.vix_close:.2f}, "
+                f"WTI_RSI={snap.wti_rsi:.2f}, "
+                f"oil_reversal={snap.oil_reversal}, "
+                f"FNG={snap.fng_value:.2f}, "
+                f"fng_recovery={snap.fng_recovery}, "
+                f"reasons={','.join(snap.reasons)}"
+            )
+            return True, reason
+
+        return False, ""
+
+    except Exception as e:
+        # 시장환경 서비스 장애가 주문엔진 장애가 되면 안 됨
+        return False, f"시장환경 조회 실패(보수적 미차단): {e}"
 
 def run_scalping_overnight_gatekeeper(ai_engine=None):
     """15:15 이후 DB 기준 SCALPING HOLDING/SELL_ORDERED 종목을 독립적으로 재판정합니다."""
@@ -2237,7 +2290,11 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                 cooldowns[code] = time.time() + gatekeeper_reject_cd
                 return
 
-
+            blocked, block_reason = should_block_swing_entry_by_market_regime(stock.get('strategy', ''))
+            if blocked:
+                print(f"⛔ [시장환경필터] {stock['name']}({code}) 스윙 진입 보류 - {block_reason}")
+                log_info(f"[DEBUG] {code} 시장환경필터에 의한 스윙 진입 보류 (reason: {block_reason})")
+                return
 
             score_weight = max(0.0, min(1.0, (float(score) - buy_threshold) / max(1.0, (100 - buy_threshold))))
             ratio = ratio_min + (score_weight * (ratio_max - ratio_min))
@@ -2248,6 +2305,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             stock['target_buy_price'] = curr_price  # 스윙은 보통 최유리지정가/시장가로 긁으므로 현재가 기록
             stock['msg_audience'] = 'VIP_ALL'
             _publish_gatekeeper_report(stock, code, gatekeeper, allowed=True)
+        
 
     # ==========================================
     # 🎯 매수 실행 공통 로직
@@ -3447,7 +3505,7 @@ def run_sniper(is_test_mode=False):
     print(f"🔫 스나이퍼 V12.2 멀티 엔진 가동 (관리자: {admin_id})")
     if not admin_id:
         log_error("⚠️ ADMIN_ID가 설정되지 않았습니다. 매도 주문이 실행되지 않을 수 있습니다.")
-
+    
     is_open, reason = kiwoom_utils.is_trading_day()
     if not is_test_mode and not is_open:
         msg = f"🛑 오늘은 {reason} 휴장일이므로 스나이퍼 매매 엔진을 가동하지 않습니다."
@@ -3464,6 +3522,7 @@ def run_sniper(is_test_mode=False):
     radar = SniperRadar(KIWOOM_TOKEN)
     log_error(f"[DEBUG] radar 객체 생성 완료: {radar}")
     sync_balance_with_db()
+    init_market_regime_service()
 
     if WS_MANAGER:
         try:
