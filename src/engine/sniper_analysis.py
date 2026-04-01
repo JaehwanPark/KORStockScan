@@ -5,7 +5,7 @@ from datetime import datetime
 
 from src.engine.sniper_s15_fast_track import bind_s15_dependencies
 from src.utils import kiwoom_utils
-from src.utils.logger import log_error
+from src.utils.logger import log_error, log_info
 
 
 KIWOOM_TOKEN = None
@@ -169,7 +169,7 @@ def analyze_stock_now(code):
                     target_price = int(curr_price * (1 + (rally_pct / 100)))
                     target_reason = f"신고가 돌파 랠리 (단기 추세 +{rally_pct}%)"
     except Exception as exc:
-        log_error(f"⚠️ 목표가/거래량 계산 중 에러: {exc}")
+        log_info(f"⚠️ 목표가/거래량 계산 중 에러: {exc}")
 
     prog_net_qty = int(ws_data.get('prog_net_qty', 0) or 0)
     prog_delta_qty = int(ws_data.get('prog_delta_qty', 0) or 0)
@@ -333,6 +333,27 @@ def get_detailed_reason(code):
     report += f"🎯 **기계적 수급 점수:** `{int(score)}점` (매수기준: {buy_threshold}점)\n"
     report += f"🤖 **AI 심층 판단:** `{ai_reason_str}`\n"
     report += f"📝 **최종 시스템 결론:** {conclusion}\n"
+
+    # Big-Bite 디버그 정보 (있을 때만 출력)
+    bb_triggered = target.get('big_bite_triggered')
+    bb_confirmed = target.get('big_bite_confirmed')
+    bb_boost = target.get('big_bite_boost_value', 0)
+    bb_hard_required = target.get('big_bite_hard_gate_required')
+    bb_hard_blocked = target.get('big_bite_hard_gate_blocked')
+    bb_info = target.get('big_bite_info') or {}
+    if any(v is not None for v in [bb_triggered, bb_confirmed, bb_boost, bb_hard_required, bb_hard_blocked]):
+        report += "━━━━━━━━━━━━━━━━━━\n"
+        report += (
+            "🧪 **Big-Bite 상태**\n"
+            f"- triggered: `{bb_triggered}`\n"
+            f"- confirmed: `{bb_confirmed}`\n"
+            f"- boost: `+{bb_boost}`\n"
+            f"- hard_gate_required: `{bb_hard_required}`\n"
+            f"- hard_gate_blocked: `{bb_hard_blocked}`\n"
+            f"- agg_value: `{bb_info.get('agg_value')}`\n"
+            f"- impact_ratio: `{bb_info.get('impact_ratio')}`\n"
+            f"- chase_pct: `{bb_info.get('chase_pct')}`\n"
+        )
 
     return report
 

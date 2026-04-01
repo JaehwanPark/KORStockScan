@@ -16,6 +16,11 @@ from src.engine.sniper_time import (
     TIME_15_30,
     TIME_SCALPING_NEW_BUY_CUTOFF,
 )
+from src.engine.sniper_condition_handlers_big_bite import (
+    build_tick_data_from_ws,
+    arm_big_bite_if_triggered,
+    confirm_big_bite_follow_through,
+)
 
 
 KIWOOM_TOKEN = None
@@ -32,6 +37,7 @@ PUBLISH_GATEKEEPER_REPORT = None
 SHOULD_BLOCK_SWING_ENTRY = None
 CONFIRM_CANCEL_OR_RELOAD_REMAINING = None
 SEND_EXIT_BEST_IOC = None
+BIG_BITE_STATE = {}
 
 
 def bind_state_dependencies(
@@ -151,6 +157,14 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
     INVEST_RATIO_KOSPI_MIN = getattr(TRADING_RULES, 'INVEST_RATIO_KOSPI_MIN', 0.10)
     INVEST_RATIO_KOSPI_MAX = getattr(TRADING_RULES, 'INVEST_RATIO_KOSPI_MAX', 0.30)
     AI_SCORE_THRESHOLD_KOSPI = getattr(TRADING_RULES, 'AI_SCORE_THRESHOLD_KOSPI', 60)
+    BIG_BITE_BOOST_SCORE = getattr(TRADING_RULES, 'BIG_BITE_BOOST_SCORE', 5)
+    BIG_BITE_ARMED_ENTRY_BONUS = getattr(TRADING_RULES, 'BIG_BITE_ARMED_ENTRY_BONUS', 2)
+    BIG_BITE_HARD_GATE_ENABLED = getattr(TRADING_RULES, 'BIG_BITE_HARD_GATE_ENABLED', False)
+    BIG_BITE_HARD_GATE_TAGS_SCALPING = getattr(
+        TRADING_RULES, 'BIG_BITE_HARD_GATE_TAGS_SCALPING', ("VCP", "BREAK", "BRK", "SHOOT", "NEXT")
+    )
+    BIG_BITE_HARD_GATE_TAGS_KOSDAQ = getattr(TRADING_RULES, 'BIG_BITE_HARD_GATE_TAGS_KOSDAQ', ())
+    BIG_BITE_HARD_GATE_TAGS_KOSPI = getattr(TRADING_RULES, 'BIG_BITE_HARD_GATE_TAGS_KOSPI', ())
 
     raw_strategy = (stock.get('strategy') or 'KOSPI_ML').upper()
     strategy = 'SCALPING' if raw_strategy in ['SCALPING', 'SCALP'] else raw_strategy
@@ -225,6 +239,72 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                 f"또는 intraday_surge={intraday_surge:.2f} >= {MAX_INTRADAY_SURGE})"
             )
             return
+
+        # --------------------------
+        # Big-Bite: arm -> confirm (보조 확증 신호)
+        # --------------------------
+        big_bite_hit = False
+        big_bite_armed = False
+        big_bite_confirmed = False
+        big_bite_info = {}
+        try:
+            tick_data = build_tick_data_from_ws(ws_data)
+            big_bite_armed, big_bite_info = arm_big_bite_if_triggered(
+                stock=stock,
+                code=code,
+                ws_data=ws_data,
+                tick_data=tick_data,
+                runtime_state=BIG_BITE_STATE,
+            )
+            big_bite_confirmed, confirm_info = confirm_big_bite_follow_through(
+                stock=stock,
+                code=code,
+                ws_data=ws_data,
+                runtime_state=BIG_BITE_STATE,
+            )
+            big_bite_hit = bool(big_bite_confirmed)
+            big_bite_info = {**(big_bite_info or {}), **(confirm_info or {})}
+        except Exception as exc:
+            log_error(f"⚠️ [Big-Bite] 보조 신호 계산 실패 ({code}): {exc}")
+
+        stock['big_bite_confirmed'] = bool(big_bite_confirmed)
+        stock['big_bite_info'] = big_bite_info or {}
+        stock['big_bite_triggered'] = bool(big_bite_armed)
+
+        if strategy == 'SCALPING':
+            gate_tags = BIG_BITE_HARD_GATE_TAGS_SCALPING
+        elif strategy == 'KOSDAQ_ML':
+            gate_tags = BIG_BITE_HARD_GATE_TAGS_KOSDAQ
+        elif strategy == 'KOSPI_ML':
+            gate_tags = BIG_BITE_HARD_GATE_TAGS_KOSPI
+        else:
+            gate_tags = ()
+
+        hard_gate_required = bool(
+            BIG_BITE_HARD_GATE_ENABLED
+            and gate_tags
+            and any(tag in pos_tag for tag in gate_tags)
+        )
+        stock['big_bite_hard_gate_required'] = hard_gate_required
+        stock['big_bite_hard_gate_blocked'] = bool(hard_gate_required and not big_bite_confirmed)
+        stock['big_bite_hard_gate_tags'] = gate_tags
+
+        if hard_gate_required and not big_bite_confirmed:
+            log_info(
+                f"[DEBUG] {code} Big-Bite 하드 게이트 차단 "
+                f"(required={hard_gate_required}, triggered={big_bite_armed}, confirmed={big_bite_confirmed})"
+            )
+            stock['big_bite_block_reason'] = 'hard_gate'
+            return
+
+        if big_bite_info:
+            log_info(
+                f"[DEBUG] {code} Big-Bite 상태 "
+                f"(triggered={big_bite_armed}, confirmed={big_bite_confirmed}, "
+                f"impact={big_bite_info.get('impact_ratio')}, "
+                f"agg_value={big_bite_info.get('agg_value')}, "
+                f"chase_pct={big_bite_info.get('chase_pct')})"
+            )
 
         if pos_tag == 'VCP_NEXT':
             stock['target_buy_price'] = curr_price
@@ -330,8 +410,29 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                     LAST_AI_CALL_TIMES[code] = time.time()
 
                 if ai_call_executed and last_ai_time == 0:
-                    log_info(f"[DEBUG] {code} 첫 AI 분석 턴 대기 (SCALPING)")
-                    return
+                    if not big_bite_confirmed:
+                        log_info(f"[DEBUG] {code} 첫 AI 분석 턴 대기 (SCALPING)")
+                        return
+                    log_info(f"[DEBUG] {code} Big-Bite 확인으로 첫 AI 분석 대기 스킵")
+
+            # Big-Bite 점수 보너스 (보수적)
+            boost_applied_value = 0
+            if big_bite_confirmed:
+                boost_applied_value = BIG_BITE_BOOST_SCORE
+            elif big_bite_armed:
+                boost_applied_value = BIG_BITE_ARMED_ENTRY_BONUS
+
+            if boost_applied_value:
+                current_ai_score = min(100.0, current_ai_score + boost_applied_value)
+                stock['big_bite_boosted'] = bool(big_bite_confirmed)
+                stock['big_bite_boost_value'] = boost_applied_value
+                log_info(
+                    f"[DEBUG] {code} Big-Bite boost 적용 (+{boost_applied_value}, "
+                    f"score={current_ai_score:.1f})"
+                )
+            else:
+                stock['big_bite_boosted'] = False
+                stock['big_bite_boost_value'] = 0
 
             if current_ai_score < 75 and current_ai_score != 50:
                 if time.time() - last_ai_time < 1.0:
@@ -354,6 +455,9 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
 
             stock['target_buy_price'] = final_target_buy_price
             is_trigger = True
+            if big_bite_confirmed:
+                stock['big_bite_boosted'] = True
+                log_info(f"[DEBUG] {code} Big-Bite 보조 확증 신호 확인됨 (진입 조건 통과)")
 
     elif strategy in ['KOSDAQ_ML', 'KOSPI_ML']:
         if radar is None:
@@ -498,11 +602,23 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             order_type_desc="매수" if strategy == 'SCALPING' else "최유리지정가",
         )
 
+        big_bite_summary = ""
+        if stock.get('big_bite_triggered') or stock.get('big_bite_confirmed'):
+            info = stock.get('big_bite_info') or {}
+            big_bite_summary = (
+                f"\n🧪 Big-Bite: "
+                f"T={stock.get('big_bite_triggered')} / C={stock.get('big_bite_confirmed')} / "
+                f"Boost=+{stock.get('big_bite_boost_value', 0)}"
+                f"\n└ agg={info.get('agg_value')} impact={info.get('impact_ratio')} chase={info.get('chase_pct')}"
+            )
+            stock['msg_audience'] = 'ADMIN_ONLY'
+
         msg = msg or (
             f"✅ **{stock['name']} ({code}) 진입 주문 전송!**\n"
             f"전략: `{strategy}`\n"
             f"현재가: `{curr_price:,}원`\n"
             f"주문 수량: `{real_buy_qty}주`"
+            f"{big_bite_summary}"
         )
 
         if res is None:

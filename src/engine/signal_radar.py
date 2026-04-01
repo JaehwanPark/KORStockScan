@@ -5,9 +5,13 @@ import FinanceDataReader as fdr
 
 # 기존 유틸리티에서 로깅 등 순수 도구만 빌려옵니다.
 from src.utils import kiwoom_utils
-from src.utils.logger import log_error
+from src.utils.logger import log_error, log_info
 from src.core.event_bus import EventBus
 from src.utils.constants import TRADING_RULES  # 필요에 따라 상수를 추가/수정해서 사용
+from src.engine.sniper_condition_handlers_big_bite import (
+    detect_big_bite_trigger,
+    build_tick_data_from_ws,
+)
 
 class SniperRadar:
     """
@@ -15,6 +19,7 @@ class SniperRadar:
     """
     def __init__(self, token):
         self.access_token = token
+        self._big_bite_state = {}
         
         # 💡 [핵심] EventBus 인스턴스 획득 및 실시간 데이터 구독
         self.event_bus = EventBus()
@@ -39,6 +44,23 @@ class SniperRadar:
 
         # 3. 통합 신호 분석 (순수 데이터만 반환받음)
         score, prices, conclusion, checklist, metrics = SniperRadar.analyze_signal_integrated(ws_data, dummy_ai_prob)
+
+        # 3-1. Big-Bite 보조 신호 계산 (진입 판단에 직접 결합하지 않음)
+        big_bite_hit = False
+        big_bite_info = None
+        try:
+            tick_data = build_tick_data_from_ws(ws_data)
+            big_bite_hit, big_bite_info = detect_big_bite_trigger(
+                code=code,
+                tick_data=tick_data,
+                ws_data=ws_data,
+                runtime_state=self._big_bite_state,
+            )
+        except Exception as exc:
+            log_error(f"⚠️ [Big-Bite] 보조 신호 계산 실패 ({code}): {exc}")
+
+        metrics["big_bite_hit"] = bool(big_bite_hit)
+        metrics["big_bite_info"] = big_bite_info or {}
 
         # 4. 🚀 [조건 충족 시 타점 계산 및 이벤트 발행]
         if score >= 70:  # 매수 기준 통과
@@ -106,7 +128,7 @@ class SniperRadar:
                 )
                 
                 final_targets.append(stock)
-                log_error(f"🎯 [Supernova] {stock['name']} 준비 완료 (점수: {stock['priority_score']:.1f} | 수급: {prm_res['net_amt']}M)")
+                log_info(f"🎯 [Supernova] {stock['name']} 준비 완료 (점수: {stock['priority_score']:.1f} | 수급: {prm_res['net_amt']}M)")
 
         # [효율화] 최종 우선순위 정렬
         final_targets.sort(key=lambda x: x.get('priority_score', 0), reverse=True)

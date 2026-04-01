@@ -87,6 +87,7 @@ class KiwoomWSManager:
                 'last_prog_update_ts': 0.0,
                 'program_history': deque(maxlen=120),
                 '_first_tick_logged': False,
+                'last_trade_tick': None,
             }
         return self.realtime_data[item_code]
 
@@ -451,6 +452,14 @@ class KiwoomWSManager:
                                 
                             if '121' in values: target['ask_tot'] = safe_int(values['121'])
                             if '125' in values: target['bid_tot'] = safe_int(values['125'])
+
+                            # '0B' 체결 데이터는 필드가 문서/계정에 따라 달라질 수 있어
+                            # raw 스냅샷만 저장해둡니다. (추후 detector에서 해석)
+                            if real_type == '0B':
+                                target['last_trade_tick'] = {
+                                    'ts': time.time(),
+                                    'values': values,
+                                }
 
                             # '0D' 주식호가잔량 데이터 파싱 (1~5호가)
                             if real_type == '0D':

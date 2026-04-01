@@ -13,7 +13,7 @@ from datetime import datetime
 
 # 💡 Level 1 & 2 공통 모듈 임포트
 from src.utils import kiwoom_utils
-from src.utils.logger import log_error
+from src.utils.logger import log_error, log_info
 from src.database.db_manager import DBManager
 from src.database.models import RecommendationHistory
 from src.core.event_bus import EventBus
@@ -127,6 +127,7 @@ def run_scalper(is_test_mode=False):
                                 record.strategy = 'SCALPING'
                                 record.buy_price = 0
                                 record.status = 'WATCHING'
+                                record.position_tag = 'SCANNER'
                         else:
                             new_record = RecommendationHistory(
                                 rec_date=today_date,
@@ -135,11 +136,12 @@ def run_scalper(is_test_mode=False):
                                 buy_price=0,
                                 trade_type='SCALP',
                                 strategy='SCALPING',
-                                status='WATCHING'
+                                status='WATCHING',
+                                position_tag='SCANNER'
                             )
                             session.add(new_record)
                 except Exception as e:
-                    log_error(f"⚠️ DB 저장 실패 ({code}): {e}")
+                    log_info(f"⚠️ DB 저장 실패 ({code}): {e}")
                 
                 # 최대 5개까지만 선택
                 if len(new_codes_found) >= max_new_codes:
