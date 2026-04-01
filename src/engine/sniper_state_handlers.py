@@ -741,24 +741,32 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             except Exception:
                 pass
 
-        base_stop_pct = getattr(TRADING_RULES, 'SCALP_STOP', -2.5)
+        base_stop_pct = getattr(TRADING_RULES, 'SCALP_STOP', -1.5)
+        hard_stop_pct = getattr(TRADING_RULES, 'SCALP_HARD_STOP', -2.5)
         safe_profit_pct = getattr(TRADING_RULES, 'SCALP_SAFE_PROFIT', 0.5)
         if highest_prices.get(code, 0) > 0:
             drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100
         else:
             drawdown = 0
 
+        soft_stop_pct = max(base_stop_pct, hard_stop_pct)
+        hard_stop_pct = min(base_stop_pct, hard_stop_pct)
         if current_ai_score >= 75:
-            dynamic_stop_pct = base_stop_pct - 1.0
+            dynamic_stop_pct = max(soft_stop_pct - 1.0, hard_stop_pct)
             dynamic_trailing_limit = getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_STRONG', 0.8)
         else:
-            dynamic_stop_pct = base_stop_pct
+            dynamic_stop_pct = soft_stop_pct
             dynamic_trailing_limit = getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_WEAK', 0.4)
 
-        if profit_rate <= dynamic_stop_pct:
+        if profit_rate <= hard_stop_pct:
             is_sell_signal = True
             sell_reason_type = "LOSS"
-            reason = f"🔪 무호흡 칼손절 ({dynamic_stop_pct}%) [AI: {current_ai_score:.0f}]"
+            reason = f"🛑 하드스탑 도달 ({hard_stop_pct}%) [AI: {current_ai_score:.0f}]"
+
+        elif profit_rate <= dynamic_stop_pct:
+            is_sell_signal = True
+            sell_reason_type = "LOSS"
+            reason = f"🔪 소프트 손절 ({dynamic_stop_pct}%) [AI: {current_ai_score:.0f}]"
 
         elif profit_rate < 0 and current_ai_score <= 35:
             is_sell_signal = True

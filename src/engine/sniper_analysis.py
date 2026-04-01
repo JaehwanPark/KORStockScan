@@ -131,7 +131,7 @@ def analyze_stock_now(code):
 
     if strategy in ['SCALPING', 'SCALP']:
         trailing_pct = getattr(TRADING_RULES, 'SCALP_TARGET', 1.5)
-        stop_pct = getattr(TRADING_RULES, 'SCALP_STOP', -2.5)
+        stop_pct = getattr(TRADING_RULES, 'SCALP_STOP', -1.5)
         strat_label = "⚡ 초단타(SCALP)"
     elif strategy == 'KOSDAQ_ML':
         trailing_pct = getattr(TRADING_RULES, 'KOSDAQ_TARGET', 4.0)

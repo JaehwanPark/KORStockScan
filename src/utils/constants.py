@@ -67,8 +67,8 @@ class TradingConfig:
     MIN_FEE_COVER: float = 0.3  # 세금(0.2%) + 수수료 보존용 최소 익절선 (0.3%)
     VPW_SCALP_LIMIT: int = 120  # 확신도가 낮을 때 매수를 강행하기 위한 체결강도 허들(%)
     SCALP_TARGET: float = 1.5  # 초단타 익절 1.5% (분석용 목표)
-    SCALP_STOP: float = -2.5  # 초단타 손절 -2.5%
-    SCALP_HARD_STOP: float = -1.5  # 초단타 최종 안전장치(hard stop)
+    SCALP_STOP: float = -1.5  # 초단타 완충 손절(soft stop)
+    SCALP_HARD_STOP: float = -2.5  # 초단타 최종 안전장치(hard stop)
     SCALP_TRAILING_START_PCT: float = 0.6  # 초단타 트레일링 시작 수익률
     SCALP_TRAILING_LIMIT: float = 0.5  # DEPRECATED: STRONG/WEAK로 대체됨
     MIN_SCALP_LIQUIDITY: int = 500_000_000  # 최소 호가 잔량 대금 (5억)

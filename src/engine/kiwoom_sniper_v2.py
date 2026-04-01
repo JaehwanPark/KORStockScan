@@ -510,16 +510,25 @@ def check_holding_conditions(stock, code, ws_data, admin_id, market_regime, rada
     
     # 초단타 SCALPING 전략 검사
     if strategy == 'SCALPING':
-        base_stop_pct = getattr(TRADING_RULES, 'SCALP_STOP', -2.5)
+        base_stop_pct = getattr(TRADING_RULES, 'SCALP_STOP', -1.5)
+        hard_stop_pct = getattr(TRADING_RULES, 'SCALP_HARD_STOP', -2.5)
         safe_profit_pct = getattr(TRADING_RULES, 'SCALP_SAFE_PROFIT', 0.5)
         drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100 if highest_prices[code] > 0 else 0
         
         # AI 점수 (간략화)
         current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
         
-        # 손절 조건
-        if profit_rate <= base_stop_pct:
-            return f"손절선 도달 (profit_rate={profit_rate:.2f}% <= {base_stop_pct}%)"
+        # Hard/Soft Stop 정렬: hard는 더 깊은 손실, soft는 완충 손절
+        soft_stop_pct = max(base_stop_pct, hard_stop_pct)
+        hard_stop_pct = min(base_stop_pct, hard_stop_pct)
+
+        # 하드스탑 (최종 안전장치)
+        if profit_rate <= hard_stop_pct:
+            return f"하드스탑 도달 (profit_rate={profit_rate:.2f}% <= {hard_stop_pct}%)"
+
+        # 소프트 손절
+        if profit_rate <= soft_stop_pct:
+            return f"소프트 손절선 도달 (profit_rate={profit_rate:.2f}% <= {soft_stop_pct}%)"
         
         # AI 하방 리스크
         if profit_rate < 0 and current_ai_score <= 35:
