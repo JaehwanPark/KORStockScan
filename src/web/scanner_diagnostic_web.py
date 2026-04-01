@@ -127,7 +127,7 @@ def generate_web_report():
             is_inst_buy = (i_roll5 > 0 and i_accel > 0)
             row_data["수급(외인/기관)"] = f"{'양호' if is_for_buy else '이탈'} / {'양호' if is_inst_buy else '이탈'}"
 
-            if p_final < TRADING_RULES.get('PROB_RUNNER_PICK', 0.70):
+            if p_final < getattr(TRADING_RULES, 'PROB_RUNNER_PICK', 0.70):
                 row_data["최종결과"] = "❌ 점수 미달"
             elif not (is_for_buy or is_inst_buy):
                 row_data["최종결과"] = "❌ 수급 부재"

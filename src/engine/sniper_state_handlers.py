@@ -790,6 +790,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             pass
 
         if not is_sell_signal and peak_profit >= getattr(TRADING_RULES, 'KOSDAQ_TARGET', 4.0):
+            # TODO: KOSDAQ 트레일링 되밀림 폭을 TRAILING_DRAWDOWN_PCT로 통일 검토
             drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100
             if drawdown >= 1.0:
                 is_sell_signal = True
@@ -830,10 +831,15 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
         except Exception:
             pass
 
+        # TODO: TRAILING_START_PCT는 스윙 트레일링 시작 수익률로 통일 필요
+        # 현재 로직은 해당 임계 도달 시 즉시 익절로 동작
         if not is_sell_signal and profit_rate >= getattr(TRADING_RULES, 'TRAILING_START_PCT'):
             is_sell_signal = True
             sell_reason_type = "PROFIT"
-            reason = f"🎯 목표 수익률 도달 (+{getattr(TRADING_RULES, 'TRAILING_START_PCT')}%)"
+            reason = (
+                f"🎯 트레일링 시작 수익률 도달 (+{getattr(TRADING_RULES, 'TRAILING_START_PCT')}%) "
+                "(현 로직: 즉시 익절)"
+            )
 
         elif not is_sell_signal and profit_rate <= current_stop_loss:
             is_sell_signal = True

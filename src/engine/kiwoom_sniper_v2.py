@@ -541,6 +541,7 @@ def check_holding_conditions(stock, code, ws_data, admin_id, market_regime, rada
     elif strategy == 'KOSDAQ_ML':
         if peak_profit >= getattr(TRADING_RULES, 'KOSDAQ_TARGET', 4.0):
             drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100 if highest_prices[code] > 0 else 0
+            # TODO: KOSDAQ 트레일링 되밀림 폭을 TRAILING_DRAWDOWN_PCT로 통일 검토
             if drawdown >= 1.0:
                 return f"KOSDAQ 트레일링 익절 (peak_profit={peak_profit:.1f}%)"
         if profit_rate <= getattr(TRADING_RULES, 'KOSDAQ_STOP', -2.0):
