@@ -35,7 +35,7 @@ def get_kiwoom_base_url():
             print(f"⚙️ Kiwoom API 스위치 온: {mode_str} 목적지 -> {base_url}")
             return base_url
     except Exception as e:
-        log_error(f"⚠️ 설정 파일 로드 실패: {e}. 실투자 URL로 폴백합니다.")
+        log_info(f"⚠️ 설정 파일 로드 실패: {e}. 실투자 URL로 폴백합니다.")
         print(f"⚠️ 설정 로드 실패. 실투자 기본 URL로 폴백합니다: {e}")
         return "https://api.kiwoom.com"
 
@@ -72,7 +72,7 @@ def get_effective_kiwoom_code(code: str, db=None, is_nxt=None) -> str:
                 db = DBManager()
             is_nxt = db.get_latest_is_nxt(normalized)
         except Exception as e:
-            log_error(f"⚠️ get_effective_kiwoom_code DB 조회 실패 [{normalized}]: {e}")
+            log_info(f"⚠️ get_effective_kiwoom_code DB 조회 실패 [{normalized}]: {e}")
             is_nxt = False
 
     return f"{normalized}_AL" if bool(is_nxt) else normalized
@@ -101,7 +101,7 @@ def get_effective_kiwoom_code(code: str, db=None, is_nxt=None) -> str:
                 db = DBManager()
             is_nxt = db.get_latest_is_nxt(normalized)
         except Exception as e:
-            log_error(f"⚠️ get_effective_kiwoom_code DB 조회 실패 [{normalized}]: {e}")
+            log_info(f"⚠️ get_effective_kiwoom_code DB 조회 실패 [{normalized}]: {e}")
             is_nxt = False
 
     return f"{normalized}_AL" if bool(is_nxt) else normalized
@@ -290,7 +290,7 @@ def get_nxt_enabled_codes_ka10099(token, mrkt_tps=("0", "10")) -> set[str]:
         )
 
         if not results:
-            log_error(f"⚠️ [ka10099] 시장구분 {mrkt_tp} 조회 결과가 비어 있습니다.")
+            log_info(f"⚠️ [ka10099] 시장구분 {mrkt_tp} 조회 결과가 비어 있습니다.")
             continue
 
         market_total = 0
@@ -1269,7 +1269,7 @@ def fetch_kiwoom_api_continuous(url: str, token: str, api_id: str, payload: dict
                     break  # 치명적 에러는 즉시 중단
                     
             except requests.exceptions.ConnectionError:
-                log_error(f"⚠️ [{api_id}] 연결 끊김. 3초 대기 후 재접속... ({retry_count+1}/{max_retries})")
+                log_info(f"⚠️ [{api_id}] 연결 끊김. 3초 대기 후 재접속... ({retry_count+1}/{max_retries})")
                 time.sleep(3)
                 retry_count += 1
             except Exception as e:
@@ -1284,7 +1284,7 @@ def fetch_kiwoom_api_continuous(url: str, token: str, api_id: str, payload: dict
         
         # return_code 체크 (정상이 아니면 경고 후 응답값 저장)
         if str(res_json.get('return_code', '0')) != '0':
-            log_error(f"⚠️ [{api_id}] API 거절 사유: {res_json.get('return_msg', '알 수 없는 에러')}")
+            log_info(f"⚠️ [{api_id}] API 거절 사유: {res_json.get('return_msg', '알 수 없는 에러')}")
             
         all_results.append(res_json)
         

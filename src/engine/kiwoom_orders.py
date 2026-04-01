@@ -3,7 +3,7 @@ import json
 import re
 
 # 💡 Level 1 & 2 공통 모듈
-from src.utils.logger import log_error
+from src.utils.logger import log_error, log_info
 from src.core.event_bus import EventBus
 from src.utils import kiwoom_utils
 
@@ -63,7 +63,7 @@ def get_my_inventory(token):
     """
     url = kiwoom_utils.get_api_url("/api/dostk/acnt")
     token_preview = f"{str(token)[:6]}...{str(token)[-6:]}" if token else "None"
-    log_error(f"🔎 [잔고조회] url={url}, token={token_preview}")
+    log_info(f"🔎 [잔고조회] url={url}, token={token_preview}")
     headers = {
         'Content-Type': 'application/json;charset=UTF-8',
         'authorization': f'Bearer {token}',
@@ -102,7 +102,7 @@ def get_my_inventory(token):
             else:
                 err_code = data.get('return_code', data.get('rt_cd', ''))
                 err_msg = data.get('return_msg') or data.get('err_msg') or '알 수 없는 오류'
-                log_error(f"⚠️ [API 경고] {exchange} 잔고 조회 실패: {err_msg}")
+                log_info(f"⚠️ [API 경고] {exchange} 잔고 조회 실패: {err_msg}")
                 _LAST_INVENTORY_ERRORS.append({
                     'exchange': exchange,
                     'http_status': response.status_code,

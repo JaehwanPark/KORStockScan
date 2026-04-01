@@ -32,7 +32,7 @@ from datetime import datetime
 
 # 💡 Level 1 & 2 공통 모듈 임포트
 from src.utils import kiwoom_utils
-from src.utils.logger import log_error
+from src.utils.logger import log_error, log_info
 from src.database.db_manager import DBManager
 from src.database.models import RecommendationHistory
 from src.core.event_bus import EventBus
@@ -193,7 +193,7 @@ def run_kosdaq_scanner(is_test_mode=False):
                     })
                     new_codes_found.append(code)
             except Exception as e:
-                log_error(f"⚠️ {name} AI 분석 실패: {e}")
+                log_info(f"⚠️ {name} AI 분석 실패: {e}")
 
             time.sleep(0.3) # API 제한 방어
 
