@@ -1,7 +1,7 @@
 """State machine handlers for the sniper engine."""
 
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import numpy as np
 
@@ -21,6 +21,14 @@ from src.engine.sniper_condition_handlers_big_bite import (
     arm_big_bite_if_triggered,
     confirm_big_bite_follow_through,
 )
+from src.engine.sniper_scale_in import (
+    evaluate_scalping_avg_down,
+    evaluate_scalping_pyramid,
+    evaluate_swing_avg_down,
+    evaluate_swing_pyramid,
+    calc_scale_in_qty,
+)
+from src.engine.sniper_scale_in_utils import record_add_history_event
 
 
 KIWOOM_TOKEN = None
@@ -69,6 +77,7 @@ def bind_state_dependencies(
         EVENT_BUS = event_bus
     if active_targets is not None:
         ACTIVE_TARGETS = active_targets
+        _sanitize_pending_add_states(ACTIVE_TARGETS)
     if cooldowns is not None:
         COOLDOWNS = cooldowns
     if alerted_stocks is not None:
@@ -681,12 +690,27 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
     if curr_p <= 0 or buy_p <= 0:
         return
 
+    # --------------------------------------------------------
+    # HOLDING 제어 흐름(요약)
+    # 1) 현재가/평단/수익률 계산
+    # 2) 최고가/보유시간 등 갱신
+    # 3) 전략별 청산 조건 평가
+    # 4) SELL 신호면 즉시 매도 처리 후 종료
+    # 5) stop/trailing 보정(전략별 내장)
+    # 6) 추가매수 공통 게이트 확인
+    # 7) 전략별 추가매수 시그널 평가
+    # 8) 조건 만족 시 추가매수 주문 전송
+    # 9) 아니면 HOLD 유지
+    # --------------------------------------------------------
+
     if code not in highest_prices:
         highest_prices[code] = curr_p
     highest_prices[code] = max(highest_prices[code], curr_p)
 
     profit_rate = (curr_p - buy_p) / buy_p * 100
     peak_profit = (highest_prices[code] - buy_p) / buy_p * 100
+    trailing_stop_price = float(stock.get('trailing_stop_price') or 0)
+    hard_stop_price = float(stock.get('hard_stop_price') or 0)
 
     if strategy in ('KOSPI_ML', 'KOSDAQ_ML'):
         last_log = LAST_LOG_TIMES.get(code, 0)
@@ -833,7 +857,17 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             finally:
                 LAST_AI_CALL_TIMES[code] = time.time()
 
-    if strategy == 'SCALPING':
+    if hard_stop_price > 0 and curr_p <= hard_stop_price:
+        is_sell_signal = True
+        sell_reason_type = "LOSS"
+        reason = f"🛑 보호 하드스탑 이탈 ({hard_stop_price:,.0f}원)"
+
+    elif trailing_stop_price > 0 and curr_p <= trailing_stop_price:
+        is_sell_signal = True
+        sell_reason_type = "TRAILING"
+        reason = f"🔥 보호 트레일링 이탈 ({trailing_stop_price:,.0f}원)"
+
+    elif strategy == 'SCALPING':
         held_time_min = 0
         if 'order_time' in stock and stock.get('order_time'):
             held_time_min = (time.time() - stock['order_time']) / 60
@@ -977,17 +1011,15 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
         is_success = False
         target_id = stock.get('id')
 
-        buy_qty = 0
+        mem_buy_qty = int(float(stock.get('buy_qty', 0) or 0))
+        buy_qty = mem_buy_qty
         try:
             with DB.get_session() as session:
                 record = session.query(RecommendationHistory).filter_by(id=target_id).first()
                 if record and record.buy_qty:
-                    buy_qty = int(record.buy_qty)
+                    buy_qty = max(buy_qty, int(record.buy_qty))
         except Exception as e:
             print(f"🚨 [DB 조회 에러] ID {target_id} 수량 조회 실패: {e}")
-
-        if buy_qty <= 0:
-            buy_qty = int(float(stock.get('buy_qty', 0) or 0))
 
         if buy_qty <= 0:
             print(f"⚠️ [{stock['name']}] 고유 ID({target_id})의 수량이 0주입니다. 실제 키움 잔고로 폴백합니다...")
@@ -1082,6 +1114,504 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
 
             if new_status == 'COMPLETED':
                 highest_prices.pop(code, None)
+        return
+
+    # --------------------------------------------------------
+    # [추가매수 레이어] SELL 신호가 없을 때만 진입
+    # --------------------------------------------------------
+    gate = can_consider_scale_in(
+        stock=stock,
+        code=code,
+        ws_data=ws_data,
+        strategy=strategy,
+        market_regime=market_regime,
+    )
+    if gate.get('allowed'):
+        scale_in_action = _evaluate_scale_in_signal(
+            stock=stock,
+            code=code,
+            strategy=strategy,
+            market_regime=market_regime,
+            profit_rate=profit_rate,
+            peak_profit=peak_profit,
+            curr_price=curr_p,
+            ws_data=ws_data,
+        )
+        if scale_in_action:
+            log_info(
+                "[ADD_SIGNAL] "
+                f"{stock.get('name')}({code}) "
+                f"strategy={strategy} type={scale_in_action.get('add_type')} "
+                f"reason={scale_in_action.get('reason')} "
+                f"profit={profit_rate:+.2f}% peak={peak_profit:+.2f}%"
+            )
+            _process_scale_in_action(
+                stock=stock,
+                code=code,
+                ws_data=ws_data,
+                action=scale_in_action,
+                admin_id=admin_id,
+            )
+            return
+    else:
+        last_block = float(stock.get('last_add_block_log_ts', 0) or 0)
+        if time.time() - last_block >= 30:
+            log_info(
+                "[ADD_BLOCKED] "
+                f"{stock.get('name')}({code}) "
+                f"strategy={strategy} reason={gate.get('reason')}"
+            )
+            stock['last_add_block_log_ts'] = time.time()
+
+
+def can_consider_scale_in(stock, code, ws_data, strategy, market_regime):
+    """추가매수 공통 게이트: 조건을 만족하는 경우에만 True."""
+    _ = (code, ws_data)
+
+    if getattr(TRADING_RULES, 'SCALE_IN_REQUIRE_HISTORY_TABLE', False):
+        return {"allowed": False, "reason": "history_table_required"}
+
+    if stock.get('pending_add_order') and not stock.get('pending_add_ord_no'):
+        _cancel_or_reconcile_pending_add(stock, reason="stale_pending_no_ordno")
+        return {"allowed": False, "reason": "pending_add_recovered"}
+
+    # 장시간 미체결된 추가매수 주문은 보수적으로 해제
+    pending_ts = float(stock.get('pending_add_requested_at', 0) or 0)
+    if pending_ts:
+        raw_strategy = (strategy or "").upper()
+        base_timeout = 20 if raw_strategy == 'SCALPING' else int(getattr(TRADING_RULES, 'ORDER_TIMEOUT_SEC', 30) or 30)
+        add_type = (stock.get('pending_add_type') or '').upper()
+        if raw_strategy != 'SCALPING' and add_type == 'PYRAMID':
+            base_timeout = int(base_timeout * 2)
+        timeout_sec = base_timeout
+        pending_filled = int(stock.get('pending_add_filled_qty', 0) or 0)
+        if pending_filled > 0:
+            timeout_sec = timeout_sec * 3
+        if (time.time() - pending_ts) > timeout_sec:
+            reconcile = _cancel_or_reconcile_pending_add(stock, reason="timeout")
+            if reconcile.get('cleared'):
+                return {"allowed": False, "reason": "pending_add_timeout_released"}
+            return {"allowed": False, "reason": "pending_add_cancel_failed"}
+
+    if stock.get('status') != 'HOLDING':
+        return {"allowed": False, "reason": "not_holding"}
+
+    if not getattr(TRADING_RULES, 'ENABLE_SCALE_IN', False):
+        return {"allowed": False, "reason": "scale_in_disabled"}
+
+    if stock.get('scale_in_locked'):
+        return {"allowed": False, "reason": "scale_in_locked"}
+
+    buy_p = float(stock.get('buy_price', 0) or 0)
+    buy_q = int(float(stock.get('buy_qty', 0) or 0))
+    if buy_p <= 0 or buy_q <= 0:
+        return {"allowed": False, "reason": "invalid_position"}
+
+    if stock.get('status') == 'SELL_ORDERED':
+        return {"allowed": False, "reason": "sell_ordered"}
+
+    # 동일 루프/짧은 시간 중복 호출 방지
+    lock_sec = int(getattr(TRADING_RULES, 'ADD_JUDGMENT_LOCK_SEC', 20) or 20)
+    last_check = float(stock.get('last_scale_in_check_ts', 0) or 0)
+    if last_check > 0 and (time.time() - last_check) < lock_sec:
+        return {"allowed": False, "reason": "add_judgment_locked"}
+
+    # 최근 추가매수 직후 쿨다운
+    cooldown_sec = int(getattr(TRADING_RULES, 'SCALE_IN_COOLDOWN_SEC', 180) or 180)
+    last_add = float(stock.get('last_add_time', 0) or 0)
+    if not last_add and stock.get('last_add_at'):
+        try:
+            last_add = stock['last_add_at'].timestamp()
+        except Exception:
+            pass
+    if last_add > 0 and (time.time() - last_add) < cooldown_sec:
+        return {"allowed": False, "reason": "scale_in_cooldown"}
+
+    # 매수 주문이 이미 진행 중인 경우
+    if (
+        stock.get('pending_add_order')
+        or stock.get('pending_add_ord_no')
+        or stock.get('pending_add_requested_at')
+        or stock.get('add_order_time')
+        or stock.get('pending_add_msg')
+        or stock.get('add_odno')
+    ):
+        return {"allowed": False, "reason": "pending_add_order"}
+
+    # 계좌 리스크 게이트(옵션): 예수금 정보가 있을 때만 적용
+    curr_price = int(float(ws_data.get('curr', 0) or 0))
+    deposit_hint = float(stock.get('account_deposit', 0) or stock.get('deposit', 0) or 0)
+    if curr_price > 0 and deposit_hint > 0:
+        max_pos_pct = float(getattr(TRADING_RULES, 'MAX_POSITION_PCT', 0.30) or 0.30)
+        if (buy_q * curr_price) >= (deposit_hint * max_pos_pct * 0.98):
+            return {"allowed": False, "reason": "position_at_cap"}
+
+    # 전략별 허용 여부
+    raw_strategy = (strategy or "").upper()
+    if raw_strategy == 'SCALPING':
+        allow_avg = bool(getattr(TRADING_RULES, 'SCALPING_ENABLE_AVG_DOWN', False))
+        allow_pyr = int(getattr(TRADING_RULES, 'SCALPING_MAX_PYRAMID_COUNT', 0) or 0) > 0
+        if not (allow_avg or allow_pyr):
+            return {"allowed": False, "reason": "scalping_scale_in_disabled"}
+    elif raw_strategy in ('KOSPI_ML', 'KOSDAQ_ML'):
+        allow_avg = bool(getattr(TRADING_RULES, 'SWING_ENABLE_AVG_DOWN', False))
+        allow_pyr = int(getattr(TRADING_RULES, 'SWING_MAX_PYRAMID_COUNT', 0) or 0) > 0
+        if not (allow_avg or allow_pyr):
+            return {"allowed": False, "reason": "swing_scale_in_disabled"}
+
+        if (
+            allow_avg
+            and not allow_pyr
+            and market_regime == 'BEAR'
+            and getattr(TRADING_RULES, 'BLOCK_SWING_AVG_DOWN_IN_BEAR', True)
+        ):
+            return {"allowed": False, "reason": "bear_avg_down_blocked"}
+    else:
+        return {"allowed": False, "reason": "unknown_strategy"}
+
+    # 장 마감 근접 시 추가매수 금지
+    now = datetime.now()
+    try:
+        close_str = getattr(TRADING_RULES, 'MARKET_CLOSE_TIME', "15:30:00")
+        close_t = datetime.strptime(close_str, "%H:%M:%S").time()
+        close_dt = datetime.combine(now.date(), close_t) - timedelta(minutes=5)
+        if now >= close_dt:
+            return {"allowed": False, "reason": "near_market_close"}
+    except Exception:
+        pass
+
+    if raw_strategy == 'SCALPING':
+        try:
+            cutoff_str = getattr(TRADING_RULES, 'SCALPING_NEW_BUY_CUTOFF', "15:00:00")
+            cutoff_t = datetime.strptime(cutoff_str, "%H:%M:%S").time()
+            if now.time() >= cutoff_t:
+                return {"allowed": False, "reason": "scalping_cutoff"}
+        except Exception:
+            pass
+
+    stock['last_scale_in_check_ts'] = time.time()
+    return {"allowed": True, "reason": "ok"}
+
+
+def _clear_pending_add_meta(stock, reason=None):
+    for key in [
+        'pending_add_order',
+        'pending_add_type',
+        'pending_add_qty',
+        'pending_add_ord_no',
+        'pending_add_requested_at',
+        'pending_add_counted',
+        'pending_add_filled_qty',
+        'add_order_time',
+        'add_odno',
+    ]:
+        stock.pop(key, None)
+    if reason:
+        log_info(f"[ADD_CANCELLED] pending add cleared ({reason}) for {stock.get('name')}")
+
+
+def _persist_scale_in_flags(stock):
+    target_id = stock.get('id')
+    if not DB or not target_id:
+        return
+    try:
+        with DB.get_session() as session:
+            session.query(RecommendationHistory).filter_by(id=target_id).update({
+                "scale_in_locked": bool(stock.get('scale_in_locked', False)),
+            })
+    except Exception as e:
+        log_error(f"[ADD_BLOCKED] scale_in flag persist failed for id={target_id}: {e}")
+
+
+def _is_ok_response(res):
+    if not isinstance(res, dict):
+        return bool(res)
+    return str(res.get('return_code', res.get('rt_cd', ''))) == '0'
+
+
+def _cancel_or_reconcile_pending_add(stock, reason):
+    """
+    보수적으로 pending add를 정리합니다.
+    - 주문번호가 있으면 실제 취소를 먼저 시도
+    - 주문이 이미 없거나 체결/취소 완료로 보이면 잠금 후 정리
+    - 취소 실패 시 pending을 유지해 중복 add를 막음
+    """
+    ord_no = str(stock.get('pending_add_ord_no', '') or '').strip()
+    code = str(stock.get('code', '')).strip()[:6]
+
+    if not ord_no:
+        stock['scale_in_locked'] = True
+        _persist_scale_in_flags(stock)
+        record_add_history_event(
+            DB,
+            recommendation_id=stock.get('id'),
+            stock_code=code,
+            stock_name=stock.get('name'),
+            strategy=stock.get('strategy'),
+            add_type=stock.get('pending_add_type'),
+            event_type='CANCELLED',
+            order_no=None,
+            request_qty=stock.get('pending_add_qty', 0),
+            prev_buy_price=stock.get('buy_price'),
+            prev_buy_qty=stock.get('buy_qty', 0),
+            add_count_after=stock.get('add_count', 0),
+            reason=f"{reason}_missing_ordno",
+            note='pending add missing order number; scale_in_locked applied',
+        )
+        _clear_pending_add_meta(stock, reason=f"{reason}_missing_ordno")
+        log_error(
+            f"[ADD_CANCELLED] {stock.get('name')}({code}) pending add missing order number. "
+            "scale_in_locked=True for manual reconciliation."
+        )
+        return {"cleared": True, "reason": f"{reason}_missing_ordno"}
+
+    if not code or not KIWOOM_TOKEN:
+        stock['scale_in_locked'] = True
+        _persist_scale_in_flags(stock)
+        log_error(
+            f"[ADD_BLOCKED] {stock.get('name')}({code}) cannot reconcile pending add "
+            f"(token/code missing). keeping pending blocked."
+        )
+        return {"cleared": False, "reason": "missing_runtime_context"}
+
+    res = kiwoom_orders.send_cancel_order(code=code, orig_ord_no=ord_no, token=KIWOOM_TOKEN, qty=0)
+    if _is_ok_response(res):
+        record_add_history_event(
+            DB,
+            recommendation_id=stock.get('id'),
+            stock_code=code,
+            stock_name=stock.get('name'),
+            strategy=stock.get('strategy'),
+            add_type=stock.get('pending_add_type'),
+            event_type='CANCELLED',
+            order_no=ord_no,
+            request_qty=stock.get('pending_add_qty', 0),
+            prev_buy_price=stock.get('buy_price'),
+            prev_buy_qty=stock.get('buy_qty', 0),
+            add_count_after=stock.get('add_count', 0),
+            reason=reason,
+            note='pending add order cancelled before release',
+        )
+        _clear_pending_add_meta(stock, reason=reason)
+        return {"cleared": True, "reason": f"{reason}_cancelled"}
+
+    err_msg = str(res.get('return_msg', '')) if isinstance(res, dict) else str(res)
+    uncertain_keywords = ['주문없음', '취소가능수량', '체결', '원주문']
+    if any(keyword in err_msg for keyword in uncertain_keywords):
+        stock['scale_in_locked'] = True
+        _persist_scale_in_flags(stock)
+        record_add_history_event(
+            DB,
+            recommendation_id=stock.get('id'),
+            stock_code=code,
+            stock_name=stock.get('name'),
+            strategy=stock.get('strategy'),
+            add_type=stock.get('pending_add_type'),
+            event_type='CANCELLED',
+            order_no=ord_no,
+            request_qty=stock.get('pending_add_qty', 0),
+            prev_buy_price=stock.get('buy_price'),
+            prev_buy_qty=stock.get('buy_qty', 0),
+            add_count_after=stock.get('add_count', 0),
+            reason=f"{reason}_uncertain",
+            note=f'cancel uncertain: {err_msg}',
+        )
+        _clear_pending_add_meta(stock, reason=f"{reason}_uncertain")
+        log_error(
+            f"[ADD_CANCELLED] {stock.get('name')}({code}) pending add uncertain after cancel attempt. "
+            "scale_in_locked=True for manual/account reconciliation."
+        )
+        return {"cleared": True, "reason": f"{reason}_uncertain"}
+
+    log_error(
+        f"[ADD_BLOCKED] {stock.get('name')}({code}) pending add cancel failed; keeping pending. "
+        f"reason={reason} err={err_msg}"
+    )
+    return {"cleared": False, "reason": "cancel_failed"}
+
+
+def _sanitize_pending_add_states(active_targets):
+    """재시작/복구 시 보수적으로 pending add 메타를 정리합니다."""
+    if not active_targets:
+        return
+    for stock in active_targets:
+        if not isinstance(stock, dict):
+            continue
+        if stock.get('pending_add_order'):
+            # 주문번호가 없으면 복구 불가 → 정리
+            if not stock.get('pending_add_ord_no'):
+                stock['scale_in_locked'] = True
+                _persist_scale_in_flags(stock)
+                _clear_pending_add_meta(stock, reason="recovery_no_ordno")
+                continue
+            # 오래된 pending은 정리
+            pending_ts = float(stock.get('pending_add_requested_at', 0) or 0)
+            if pending_ts:
+                raw_strategy = (stock.get('strategy') or '').upper()
+                timeout_sec = 20 if raw_strategy == 'SCALPING' else int(getattr(TRADING_RULES, 'ORDER_TIMEOUT_SEC', 30) or 30)
+                if (time.time() - pending_ts) > timeout_sec:
+                    _cancel_or_reconcile_pending_add(stock, reason="recovery_timeout")
+
+
+def _evaluate_scale_in_signal(
+    stock,
+    code,
+    strategy,
+    market_regime,
+    profit_rate,
+    peak_profit,
+    curr_price,
+    ws_data,
+):
+    """전략별 추가매수 시그널 평가 (퍼센트 기반 1차 버전)."""
+    _ = (ws_data,)
+
+    raw_strategy = (strategy or "").upper()
+    if raw_strategy == 'SCALPING':
+        is_new_high = False
+        try:
+            highest_prices = HIGHEST_PRICES or {}
+            is_new_high = curr_price >= float(highest_prices.get(code, curr_price))
+        except Exception:
+            pass
+
+        avg_down = evaluate_scalping_avg_down(stock, profit_rate)
+        pyramid = evaluate_scalping_pyramid(stock, profit_rate, peak_profit, is_new_high)
+    elif raw_strategy in ('KOSPI_ML', 'KOSDAQ_ML'):
+        avg_down = evaluate_swing_avg_down(stock, profit_rate, market_regime)
+        pyramid = evaluate_swing_pyramid(stock, profit_rate, peak_profit)
+    else:
+        return None
+
+    if avg_down.get("should_add") and pyramid.get("should_add"):
+        return pyramid if profit_rate >= 0 else avg_down
+    if pyramid.get("should_add"):
+        return pyramid
+    if avg_down.get("should_add"):
+        return avg_down
+    return None
+
+
+def _process_scale_in_action(stock, code, ws_data, action, admin_id):
+    """추가매수 주문 처리 (STEP4 이후 구현 예정)."""
+    if not action:
+        return None
+    return execute_scale_in_order(
+        stock=stock,
+        code=code,
+        ws_data=ws_data,
+        action=action,
+        admin_id=admin_id,
+    )
+
+
+def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
+    """
+    HOLDING 상태 추가매수 주문 실행.
+    - 성공 시 HOLDING 유지 + pending add 메타 저장
+    - 실패 시 pending 메타 저장하지 않음
+    """
+    if not admin_id:
+        print(f"⚠️ [추가매수보류] {stock.get('name')}: 관리자 ID가 없습니다.")
+        log_info(f"[ADD_BLOCKED] {stock.get('name')}({code}) reason=no_admin")
+        return None
+
+    add_type = (action.get("add_type") or "").upper()
+    if add_type not in ("AVG_DOWN", "PYRAMID"):
+        log_info(f"[ADD_BLOCKED] {stock.get('name')}({code}) reason=invalid_add_type")
+        return None
+
+    curr_price = int(float(ws_data.get('curr', 0) or 0))
+    if curr_price <= 0:
+        log_info(f"[ADD_BLOCKED] {stock.get('name')}({code}) reason=invalid_price")
+        return None
+
+    deposit = kiwoom_orders.get_deposit(KIWOOM_TOKEN)
+    qty = calc_scale_in_qty(
+        stock=stock,
+        curr_price=curr_price,
+        deposit=deposit,
+        add_type=add_type,
+        strategy=stock.get('strategy', ''),
+    )
+    if qty <= 0:
+        print(f"⚠️ [추가매수보류] {stock.get('name')}: 추가매수 수량 0주")
+        log_info(f"[ADD_BLOCKED] {stock.get('name')}({code}) reason=zero_qty")
+        return None
+
+    raw_strategy = (stock.get('strategy') or 'KOSPI_ML').upper()
+    strategy = 'SCALPING' if raw_strategy in ['SCALPING', 'SCALP'] else raw_strategy
+    if strategy == 'SCALPING':
+        order_type_code = "00"
+        final_price = curr_price
+    else:
+        order_type_code = "6"
+        final_price = 0
+
+    res = kiwoom_orders.send_buy_order(
+        code,
+        qty,
+        final_price,
+        order_type_code,
+        token=KIWOOM_TOKEN,
+        order_type_desc=f"추가매수({add_type})",
+    )
+
+    if res is None:
+        print(f"❌ [{stock.get('name')}] 추가매수 주문 전송 실패 (None 반환)")
+        log_info(f"[ADD_ORDER_SENT] {stock.get('name')}({code}) failed=None_response")
+        return None
+
+    if isinstance(res, dict):
+        rt_cd = str(res.get('return_code', res.get('rt_cd', '')))
+        if rt_cd == '0':
+            ord_no = str(res.get('ord_no', '') or res.get('odno', ''))
+            stock['pending_add_order'] = True
+            stock['pending_add_type'] = add_type
+            stock['pending_add_qty'] = qty
+            stock['pending_add_ord_no'] = ord_no
+            stock['pending_add_requested_at'] = time.time()
+            stock['add_order_time'] = time.time()
+            if ord_no:
+                stock['add_odno'] = ord_no
+
+            print(
+                f"✅ [{stock.get('name')}] 추가매수 주문 전송 완료. "
+                f"type={add_type}, qty={qty}, ord_no={ord_no}"
+            )
+            log_info(
+                "[ADD_ORDER_SENT] "
+                f"{stock.get('name')}({code}) "
+                f"type={add_type} qty={qty} ord_no={ord_no}"
+            )
+            record_add_history_event(
+                DB,
+                recommendation_id=stock.get('id'),
+                stock_code=code,
+                stock_name=stock.get('name'),
+                strategy=stock.get('strategy'),
+                add_type=add_type,
+                event_type='ORDER_SENT',
+                order_no=ord_no,
+                request_qty=qty,
+                request_price=curr_price if strategy == 'SCALPING' else None,
+                prev_buy_price=stock.get('buy_price'),
+                prev_buy_qty=stock.get('buy_qty', 0),
+                add_count_after=stock.get('add_count', 0),
+                reason=action.get('reason'),
+            )
+            return res
+
+        print(f"❌ [{stock.get('name')}] 추가매수 주문 거절: {res.get('return_msg')}")
+        log_info(
+            "[ADD_ORDER_SENT] "
+            f"{stock.get('name')}({code}) failed=reject msg={res.get('return_msg')}"
+        )
+        return None
+
+    print(f"❌ [{stock.get('name')}] 추가매수 주문 전송 실패 (응답 파싱 실패)")
+    log_info(f"[ADD_ORDER_SENT] {stock.get('name')}({code}) failed=parse_error")
+    return None
 
 
 def handle_buy_ordered_state(stock, code):

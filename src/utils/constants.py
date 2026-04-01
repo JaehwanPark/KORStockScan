@@ -38,6 +38,36 @@ class TradingConfig:
     # ==========================================
     SNIPER_AGGRESSIVE_PROB: float = 0.75     # 🏆 AI 진입 확신도 임계값 (기존 0.85 -> 0.75 완화)
 
+    # ==========================================
+    # 3.1 추가매수(물타기/불타기) 공통 설정
+    # ==========================================
+    ENABLE_SCALE_IN: bool = True  # add scale-in 활성화
+    SCALE_IN_REQUIRE_HISTORY_TABLE: bool = False  # holding_add_history 준비 완료
+    SCALE_IN_FAIL_CLOSED_ON_PROTECTION_ERROR: bool = True  # 보호선 재설정 실패 시 fail-closed
+    MAX_POSITION_PCT: float = 0.20  # 남은 리스크 예산 우선
+    SCALE_IN_COOLDOWN_SEC: int = 180  # 추가매수 재시도 쿨다운
+    ADD_JUDGMENT_LOCK_SEC: int = 20  # 추가매수 판단 락(스팸 판단 방지)
+
+    # ==========================================
+    # 3.2 추가매수(스캘핑) 설정
+    # ==========================================
+    SCALPING_ENABLE_AVG_DOWN: bool = False
+    SCALPING_MAX_AVG_DOWN_COUNT: int = 0
+    SCALPING_MAX_PYRAMID_COUNT: int = 2
+    SCALPING_AVG_DOWN_MIN_DROP_PCT: float = -3.0
+    SCALPING_AVG_DOWN_MAX_DROP_PCT: float = -6.0
+    SCALPING_PYRAMID_MIN_PROFIT_PCT: float = 1.5
+
+    # ==========================================
+    # 3.3 추가매수(스윙) 설정
+    # ==========================================
+    SWING_ENABLE_AVG_DOWN: bool = True
+    SWING_MAX_AVG_DOWN_COUNT: int = 1
+    SWING_MAX_PYRAMID_COUNT: int = 1
+    SWING_AVG_DOWN_MIN_DROP_PCT: float = -5.0
+    SWING_PYRAMID_MIN_PROFIT_PCT: float = 4.0
+    BLOCK_SWING_AVG_DOWN_IN_BEAR: bool = True
+
     # [매매 비중 설정] 전략별 주문 가능 현금 대비 1회 매수 투입 비율
     INVEST_RATIO_KOSPI: float = 0.25  # DEPRECATED: MIN/MAX 비중으로 대체됨
     INVEST_RATIO_KOSDAQ: float = 0.15  # DEPRECATED: MIN/MAX 비중으로 대체됨

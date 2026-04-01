@@ -87,7 +87,7 @@ class RecommendationHistory(Base):
     prob = Column(Float, server_default=text("0.70"))
     nxt = Column(Float)
     
-    buy_price = Column(Integer)
+    buy_price = Column(Float)
     buy_qty = Column(Integer, server_default=text("0"))
     buy_time = Column(DateTime) # DDL에 맞춰 진정한 DateTime으로 복귀!
     
@@ -95,8 +95,46 @@ class RecommendationHistory(Base):
     sell_time = Column(DateTime)
     profit_rate = Column(Float, server_default=text("0.0"))
 
+    # ---- 추가매수(물타기/불타기) 제어 필드 ----
+    add_count = Column(Integer, nullable=True, server_default=text("0"))
+    avg_down_count = Column(Integer, nullable=True, server_default=text("0"))
+    pyramid_count = Column(Integer, nullable=True, server_default=text("0"))
+    last_add_type = Column(Text, nullable=True)
+    last_add_at = Column(DateTime, nullable=True)
+    scale_in_locked = Column(Boolean, nullable=True, server_default=text("false"))
+    hard_stop_price = Column(Float, nullable=True)
+    trailing_stop_price = Column(Float, nullable=True)
+
     def __repr__(self):
         return f"<RecommendationHistory(rec_date='{self.rec_date}', stock_code='{self.stock_code}')>"
+
+
+class HoldingAddHistory(Base):
+    __tablename__ = 'holding_add_history'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    recommendation_id = Column(Integer, nullable=False)
+    stock_code = Column(String(10), nullable=False)
+    stock_name = Column(Text)
+    strategy = Column(Text)
+    add_type = Column(Text)
+    event_type = Column(Text, nullable=False)
+    event_time = Column(DateTime, server_default=text("CURRENT_TIMESTAMP"))
+    order_no = Column(Text)
+    request_qty = Column(Integer, server_default=text("0"))
+    executed_qty = Column(Integer, server_default=text("0"))
+    request_price = Column(Float)
+    executed_price = Column(Float)
+    prev_buy_price = Column(Float)
+    new_buy_price = Column(Float)
+    prev_buy_qty = Column(Integer, server_default=text("0"))
+    new_buy_qty = Column(Integer, server_default=text("0"))
+    add_count_after = Column(Integer, server_default=text("0"))
+    reason = Column(Text)
+    note = Column(Text)
+
+    def __repr__(self):
+        return f"<HoldingAddHistory(recommendation_id={self.recommendation_id}, event_type='{self.event_type}')>"
 
 
 class User(Base):

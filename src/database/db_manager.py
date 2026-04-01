@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from src.utils.constants import TRADING_RULES
 
 # 💡 MacroAlert 등 새로 추가된 모델들도 모두 임포트합니다.
-from src.database.models import Base, User, RecommendationHistory, DailyStockQuote, MacroAlert
+from src.database.models import Base, User, RecommendationHistory, DailyStockQuote, MacroAlert, HoldingAddHistory
 from src.utils.logger import log_error
 
 class DBManager:
@@ -39,6 +39,43 @@ class DBManager:
                 conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_analyze_count INTEGER DEFAULT 0;"))
                 conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_analyze_date DATE;"))
                 conn.execute(text("ALTER TABLE daily_stock_quotes ADD COLUMN IF NOT EXISTS is_nxt BOOLEAN DEFAULT false;"))
+                # 💡 [추가매수 필드] recommendation_history 확장 (PostgreSQL)
+                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS add_count INTEGER DEFAULT 0;"))
+                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS avg_down_count INTEGER DEFAULT 0;"))
+                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS pyramid_count INTEGER DEFAULT 0;"))
+                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS last_add_type TEXT;"))
+                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS last_add_at TIMESTAMP;"))
+                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS scale_in_locked BOOLEAN DEFAULT false;"))
+                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS hard_stop_price DOUBLE PRECISION;"))
+                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS trailing_stop_price DOUBLE PRECISION;"))
+                conn.execute(text(
+                    "ALTER TABLE recommendation_history "
+                    "ALTER COLUMN buy_price TYPE DOUBLE PRECISION USING buy_price::double precision;"
+                ))
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS holding_add_history (
+                        id SERIAL PRIMARY KEY,
+                        recommendation_id INTEGER NOT NULL,
+                        stock_code VARCHAR(10) NOT NULL,
+                        stock_name TEXT,
+                        strategy TEXT,
+                        add_type TEXT,
+                        event_type TEXT NOT NULL,
+                        event_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        order_no TEXT,
+                        request_qty INTEGER DEFAULT 0,
+                        executed_qty INTEGER DEFAULT 0,
+                        request_price DOUBLE PRECISION,
+                        executed_price DOUBLE PRECISION,
+                        prev_buy_price DOUBLE PRECISION,
+                        new_buy_price DOUBLE PRECISION,
+                        prev_buy_qty INTEGER DEFAULT 0,
+                        new_buy_qty INTEGER DEFAULT 0,
+                        add_count_after INTEGER DEFAULT 0,
+                        reason TEXT,
+                        note TEXT
+                    );
+                """))
         except Exception as e:
             print(f"⚠️ 컬럼 추가 확인 중 에러 (최초 생성 시 무시 가능): {e}")
             

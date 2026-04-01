@@ -7,6 +7,7 @@ from telebot import types
 import time
 from datetime import datetime
 from pathlib import Path
+import logging
 
 # ==========================================
 # 🚀 1. 경로 자동 탐지 (어느 위치에서 실행해도 OK)
@@ -41,16 +42,55 @@ CONF = _load_config()
 TOKEN = CONF.get('TELEGRAM_TOKEN')
 ADMIN_ID = str(CONF.get('ADMIN_ID', ''))
 
+def _configure_telebot_http():
+    """telebot 내부 요청 세션을 재시도 가능하도록 설정"""
+    try:
+        import requests
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+        import telebot.apihelper as apihelper
+
+        retry = Retry(
+            total=5,
+            connect=5,
+            read=5,
+            status=5,
+            backoff_factor=0.5,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset(["GET", "POST"]),
+        )
+        session = requests.Session()
+        adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=10)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+
+        apihelper.SESSION = session
+        apihelper.RETRY_ON_ERROR = True
+        apihelper.CONNECT_TIMEOUT = 10
+        apihelper.READ_TIMEOUT = 60
+
+        # telebot 내부 로그 과다 출력 방지
+        try:
+            telebot.logger.setLevel(logging.CRITICAL)
+        except Exception:
+            pass
+    except Exception as e:
+        log_info(f"⚠️ telebot HTTP 설정 스킵: {e}")
+
+def _create_bot_instance():
+    if not TOKEN:
+        raise ValueError("TELEGRAM_TOKEN 이 비어 있습니다.")
+    # TeleBot 인스턴스 생성 자체는 네트워크를 사용하지 않으므로,
+    # import 시점에는 연결 검증(get_me 등)을 하지 않습니다.
+    bot_instance = telebot.TeleBot(TOKEN)
+    _configure_telebot_http()
+    return bot_instance
+
 # ==========================================
 # 3. 핵심 객체 단일 초기화
 # ==========================================
 try:
-    if not TOKEN:
-        raise ValueError("TELEGRAM_TOKEN 이 비어 있습니다.")
-
-    # TeleBot 인스턴스 생성 자체는 네트워크를 사용하지 않으므로,
-    # import 시점에는 연결 검증(get_me 등)을 하지 않습니다.
-    bot = telebot.TeleBot(TOKEN)
+    bot = _create_bot_instance()
     db_manager = DBManager()
     event_bus = EventBus()
 
@@ -687,7 +727,6 @@ def start_telegram_bot():
     import requests.exceptions
     import random
     import traceback
-    import logging  # 💡 logging 모듈 추가
     global bot
     
     retry_delay = 5  # seconds
@@ -734,7 +773,7 @@ def start_telegram_bot():
         if consecutive_failures >= max_consecutive_failures:
             print(f"🔄 연속 {consecutive_failures}회 실패로 봇 인스턴스를 재생성합니다.")
             try:
-                bot = telebot.TeleBot(TOKEN)
+                bot = _create_bot_instance()
                 print("🤖 새로운 봇 인스턴스 생성 완료.")
             except Exception as e:
                 log_error(f"봇 인스턴스 재생성 실패: {e}")

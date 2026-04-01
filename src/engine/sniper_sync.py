@@ -2,8 +2,10 @@
 
 import time
 from datetime import datetime
+from math import isclose
 
 from src.database.models import RecommendationHistory
+from src.engine.sniper_scale_in_utils import record_add_history_event, find_latest_open_add_order_no
 from src.utils import kiwoom_utils
 from src.utils.logger import log_error, log_info
 from src.engine import kiwoom_orders
@@ -80,6 +82,73 @@ def _to_int(value):
         return 0
 
 
+def _to_float(value):
+    try:
+        return float(value or 0)
+    except Exception:
+        return 0.0
+
+
+def _with_state_lock():
+    class _DummyLock:
+        def __enter__(self):
+            return None
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    return STATE_LOCK if STATE_LOCK is not None else _DummyLock()
+
+
+def _reconcile_scale_in_lock(record, real_qty, real_buy_uv):
+    """
+    계좌 truth 기준으로 scale_in_locked 자동 해제 여부를 판단합니다.
+    - DB/메모리/계좌 수량과 평단이 정합하면 자동 해제
+    - 불일치가 남아 있으면 lock 유지
+    """
+    target_stock = next(
+        (t for t in (ACTIVE_TARGETS or []) if str(t.get('code', '')).strip()[:6] == str(record.stock_code).strip()[:6]),
+        None,
+    )
+    mem_pending = bool(target_stock.get('pending_add_order')) if target_stock else False
+    if mem_pending:
+        return False
+
+    db_qty = _to_int(record.buy_qty)
+    db_avg = _to_float(record.buy_price)
+    qty_match = db_qty == real_qty
+    avg_match = (real_buy_uv <= 0) or isclose(db_avg, float(real_buy_uv), rel_tol=0.0, abs_tol=1.0)
+
+    if qty_match and avg_match:
+        reconcile_order_no = find_latest_open_add_order_no(DB, getattr(record, 'id', None))
+        record.scale_in_locked = False
+        if target_stock:
+            target_stock['scale_in_locked'] = False
+        record_add_history_event(
+            DB,
+            recommendation_id=getattr(record, 'id', None),
+            stock_code=record.stock_code,
+            stock_name=record.stock_name,
+            strategy=getattr(record, 'strategy', None),
+            add_type=getattr(record, 'last_add_type', None),
+            event_type='RECONCILED',
+            order_no=reconcile_order_no,
+            executed_qty=real_qty,
+            executed_price=real_buy_uv,
+            new_buy_price=record.buy_price,
+            new_buy_qty=record.buy_qty,
+            add_count_after=getattr(record, 'add_count', 0),
+            reason='scale_in_lock_auto_release',
+        )
+        log_info(f"✅ [ADD_RECONCILED] {record.stock_name}({record.stock_code}) scale_in_locked 자동 해제")
+        return True
+
+    log_info(
+        f"⚠️ [ADD_RECONCILE_PENDING] {record.stock_name}({record.stock_code}) "
+        f"lock 유지 (db_qty={db_qty}, real_qty={real_qty}, db_avg={db_avg}, real_avg={real_buy_uv})"
+    )
+    return False
+
+
 def sync_balance_with_db():
     """봇 시작 시 실제 계좌 잔고와 DB의 HOLDING 기록을 대조하여 정합성을 맞춥니다."""
     global KIWOOM_TOKEN, DB, ACTIVE_TARGETS
@@ -142,6 +211,13 @@ def sync_balance_with_db():
                         print(f"⚠️ [동기화] {name}({code}): {exchange} 거래소 잔고 조회 실패로 상태 변경 생략.")
                 else:
                     real_qty = _to_int(real_codes[code].get('qty', 0))
+                    raw_price = (
+                        real_codes[code].get('buy_price')
+                        or real_codes[code].get('purchase_price')
+                        or real_codes[code].get('pchs_avg_pric')
+                        or 0
+                    )
+                    real_buy_uv = _to_int(raw_price)
                     if safe_db_qty != real_qty:
                         print(f"⚠️ [동기화] {name}({code}): 수량 불일치 교정 (DB: {safe_db_qty}주 -> 실제: {real_qty}주)")
                         record.buy_qty = real_qty
@@ -149,6 +225,15 @@ def sync_balance_with_db():
                     for t in ACTIVE_TARGETS:
                         if str(t.get('code', '')).strip()[:6] == code and real_qty > 0:
                             t['buy_qty'] = real_qty
+
+                    if real_buy_uv > 0 and not isclose(_to_float(record.buy_price), float(real_buy_uv), rel_tol=0.0, abs_tol=1.0):
+                        record.buy_price = real_buy_uv
+                        for t in ACTIVE_TARGETS:
+                            if str(t.get('code', '')).strip()[:6] == code and real_qty > 0:
+                                t['buy_price'] = real_buy_uv
+
+                    if bool(record.scale_in_locked):
+                        _reconcile_scale_in_lock(record, real_qty, real_buy_uv)
 
     except Exception as exc:
         log_error(f"🚨 DB 동기화 중 에러 발생: {exc}")
@@ -324,10 +409,13 @@ def periodic_account_sync():
                     if real_buy_uv > 0 and record.buy_price != real_buy_uv:
                         print(f"🔄 [정기 동기화] {record.stock_name} 매입단가 오차 교정 (기존: {record.buy_price}원 ➡️ 실제: {real_buy_uv}원)")
                         record.buy_price = real_buy_uv
-                        with STATE_LOCK:
+                        with _with_state_lock():
                             for t in ACTIVE_TARGETS:
                                 if str(t.get('code', '')).strip()[:6] == code:
                                     t['buy_price'] = real_buy_uv
+
+                    if bool(record.scale_in_locked):
+                        _reconcile_scale_in_lock(record, real_qty, real_buy_uv)
 
             # 2️⃣ [매수 누락 방어] DB엔 BUY_ORDERED 인데, 실제 잔고에 들어와 있는 경우 -> 샀음 (HOLDING)
             pending_records = session.query(RecommendationHistory).filter_by(status='BUY_ORDERED').all()
@@ -355,7 +443,7 @@ def periodic_account_sync():
                         record.buy_qty = cur_qty
                         record.buy_time = datetime.now()
 
-                        with STATE_LOCK:
+                        with _with_state_lock():
                             for t in ACTIVE_TARGETS:
                                 if str(t.get('code', '')).strip()[:6] == code:
                                     t['status'] = 'HOLDING'
