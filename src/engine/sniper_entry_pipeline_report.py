@@ -18,21 +18,13 @@ _ENTRY_RE = re.compile(
 )
 _FIELD_RE = re.compile(r"(?P<key>[A-Za-z_]+)=(?P<value>[^\s]+)")
 
-_FUNNEL_STAGES = [
-    "ai_confirmed",
-    "strength_momentum_pass",
-    "dynamic_vpw_override_pass",
-    "budget_pass",
-    "latency_pass",
-    "order_leg_sent",
-    "order_bundle_submitted",
-]
-
 _DISPLAY_STAGE_LABELS = {
     "watching": "감시중",
     "ai_confirmed": "AI 확답",
     "strength_momentum_pass": "동적 체결강도 통과",
     "dynamic_vpw_override_pass": "정적 120 우회",
+    "entry_armed": "진입 자격 확보",
+    "entry_armed_resume": "진입 자격 유지",
     "budget_pass": "수량 계산 통과",
     "latency_pass": "Latency 통과",
     "order_leg_sent": "주문 전송",
@@ -53,6 +45,7 @@ _SUMMARY_PASS_STAGES = {
     "ai_confirmed",
     "strength_momentum_pass",
     "dynamic_vpw_override_pass",
+    "entry_armed",
     "budget_pass",
     "latency_pass",
     "order_leg_sent",
@@ -198,6 +191,32 @@ def _build_summary_flow(item_events: list[PipelineEvent], latest: PipelineEvent)
     return compact
 
 
+def _build_pass_flow(item_events: list[PipelineEvent]) -> list[dict]:
+    flow = [{"stage": "watching", "label": _display_stage_label("watching"), "kind": "start"}]
+    seen_passes: set[str] = set()
+    for event in item_events:
+        if event.stage not in _SUMMARY_PASS_STAGES or event.stage in seen_passes:
+            continue
+        flow.append({
+            "stage": event.stage,
+            "label": _display_stage_label(event.stage),
+            "kind": "pass" if event.stage != "order_bundle_submitted" else "submitted",
+        })
+        seen_passes.add(event.stage)
+    return flow
+
+
+def _build_latest_status(latest: PipelineEvent) -> dict:
+    status_kind = _classify_stage(latest.stage)
+    return {
+        "stage": latest.stage,
+        "label": _display_stage_label(latest.stage),
+        "kind": status_kind,
+        "reason": latest.fields.get("reason") or latest.fields.get("dynamic_reason") or "",
+        "timestamp": latest.timestamp,
+    }
+
+
 def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = None, top_n: int = 20) -> dict:
     log_path = LOGS_DIR / "sniper_state_handlers_info.log"
     lines = _iter_target_lines(log_path, target_date=target_date)
@@ -221,7 +240,6 @@ def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = 
     per_stock_rows = []
     blocker_counts: Counter[str] = Counter()
     latest_stage_counts: Counter[str] = Counter()
-    funnel_reach: Counter[str] = Counter()
 
     for key, item_events in stock_events.items():
         if not item_events:
@@ -232,24 +250,25 @@ def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = 
         if stage_class in {"blocked", "waiting"}:
             blocker_counts[_friendly_gate_name(latest.stage)] += 1
 
-        seen = set()
         compact_flow = []
         for event in item_events:
             if not compact_flow or event.stage != compact_flow[-1]:
                 compact_flow.append(event.stage)
-            if event.stage not in seen and event.stage in _FUNNEL_STAGES:
-                funnel_reach[event.stage] += 1
-                seen.add(event.stage)
+
+        pass_flow = _build_pass_flow(item_events)
+        latest_status = _build_latest_status(latest)
 
         per_stock_rows.append({
             "name": latest.name,
             "code": latest.code,
             "latest_timestamp": latest.timestamp,
             "latest_stage": latest.stage,
-            "latest_stage_label": _friendly_gate_name(latest.stage),
+            "latest_stage_label": _display_stage_label(latest.stage),
             "stage_class": stage_class,
-            "latest_reason": latest.fields.get("reason") or latest.fields.get("dynamic_reason") or "",
+            "latest_reason": latest_status["reason"],
             "flow": compact_flow,
+            "pass_flow": pass_flow,
+            "latest_status": latest_status,
             "summary_flow": _build_summary_flow(item_events, latest),
             "events": [_event_to_row(event) for event in item_events[-min(len(item_events), 20):]],
         })
@@ -268,10 +287,6 @@ def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = 
             "blocked_stocks": sum(1 for row in per_stock_rows if row["stage_class"] == "blocked"),
             "waiting_stocks": sum(1 for row in per_stock_rows if row["stage_class"] == "waiting"),
         },
-        "funnel": [
-            {"stage": stage, "count": funnel_reach.get(stage, 0)}
-            for stage in _FUNNEL_STAGES
-        ],
         "latest_stage_breakdown": [
             {"stage": stage, "count": count}
             for stage, count in latest_stage_counts.most_common(12)

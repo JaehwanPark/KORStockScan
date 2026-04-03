@@ -268,6 +268,7 @@ latency-aware 진입 기준:
 
 - 웹소켓 실시간 체결 데이터에서 동적 체결강도 지표를 계산
 - `sniper_state_handlers.py`가 `strength_momentum_observed`, `strength_momentum_pass` 로그를 남김
+- 동적 체결강도와 AI 확답을 통과하면 스캘핑 `entry_armed` 상태로 잠시 고정되어, 다음 루프에서는 자격 게이트를 다시 되감지 않고 주문 안전 게이트만 재확인
 - `SCALP_DYNAMIC_VPW_OBSERVE_ONLY=False`이면 동적 게이트를 실전 진입에 적용하고, `dynamic_vpw_override_pass`로 정적 `VPW_SCALP_LIMIT` 우회 진입을 기록
 - `SCALP_DYNAMIC_VPW_OBSERVE_ONLY=True`로 돌리면 정적 `VPW_SCALP_LIMIT`에 막히면서도 동적 조건은 통과한 경우 `shadow_candidate_recorded` 로그를 남기고 후보를 저장
 - 장마감 요약 시 기존 진입 지표 요약 뒤에 `shadow feedback` 결과를 함께 관리자에게 전송

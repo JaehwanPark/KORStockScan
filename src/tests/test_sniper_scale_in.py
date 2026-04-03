@@ -427,7 +427,11 @@ def test_watching_state_submits_fallback_entry_bundle(monkeypatch):
 
     monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
     monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
-    monkeypatch.setattr(state_handlers.kiwoom_orders, "calc_buy_qty", lambda *args, **kwargs: 5)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "describe_buy_capacity",
+        lambda *args, **kwargs: (50_000, 47_500, 5, 0.95),
+    )
     monkeypatch.setattr(
         state_handlers,
         "evaluate_live_buy_entry",
@@ -465,6 +469,139 @@ def test_watching_state_submits_fallback_entry_bundle(monkeypatch):
     assert sent_orders[1] == (4, 9990, "00", "DAY")
     assert len(stock["pending_entry_orders"]) == 2
     assert stock["entry_requested_qty"] == 5
+
+
+def test_entry_arm_skips_strength_recheck_after_ai_confirm(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 4, 3, 13, 45, 0)
+
+    class DummyEventBus:
+        def publish(self, *args, **kwargs):
+            return None
+
+    class DummyRadar:
+        def get_smart_target_price(self, curr_price, **kwargs):
+            return curr_price, 0.0
+
+    class DummyAI:
+        def analyze_target(self, *args, **kwargs):
+            return {"action": "BUY", "score": 85, "reason": "confirmed"}
+
+    state_handlers.datetime = FixedDateTime
+    state_handlers.TRADING_RULES = replace(CONFIG, SCALE_IN_REQUIRE_HISTORY_TABLE=False, SCALP_ENTRY_ARM_TTL_SEC=20)
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+    state_handlers.KIWOOM_TOKEN = "token"
+    state_handlers.EVENT_BUS = DummyEventBus()
+
+    momentum_calls = {"count": 0}
+    pipeline_stages = []
+
+    def fake_momentum_gate(ws_data):
+        momentum_calls["count"] += 1
+        return {
+            "enabled": True,
+            "allowed": True,
+            "reason": "strong_absolute_override",
+            "base_vpw": 100.0,
+            "current_vpw": 100.0,
+            "vpw_delta": 0.0,
+            "slope_per_sec": 0.0,
+            "window_sec": 8,
+            "window_buy_value": 25000,
+            "window_sell_value": 5000,
+            "window_buy_ratio": 0.83,
+            "window_exec_buy_ratio": 0.62,
+            "window_net_buy_qty": 120,
+            "elapsed_sec": 8.0,
+        }
+
+    def fake_log_entry_pipeline(stock, code, stage, **fields):
+        pipeline_stages.append(stage)
+
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", fake_log_entry_pipeline)
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(state_handlers, "evaluate_scalping_strength_momentum", fake_momentum_gate)
+    monkeypatch.setattr(state_handlers, "arm_big_bite_if_triggered", lambda **kwargs: (False, {}))
+    monkeypatch.setattr(state_handlers, "confirm_big_bite_follow_through", lambda **kwargs: (True, {}))
+    monkeypatch.setattr(state_handlers, "build_tick_data_from_ws", lambda ws_data: {})
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [1])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [1])
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "describe_buy_capacity",
+        lambda curr_price, deposit, ratio: (100000, 95000, 5, 0.95),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_live_buy_entry",
+        lambda **kwargs: {
+            "allowed": False,
+            "mode": "reject",
+            "decision": "REJECT",
+            "reason": "latency_blocked",
+            "latency_state": "DANGER",
+            "orders": [],
+            "signal_price": kwargs.get("signal_price"),
+            "latest_price": kwargs.get("signal_price"),
+            "computed_allowed_slippage": 0.0,
+            "ws_age_ms": 0,
+        },
+    )
+
+    stock = {"id": 7, "name": "ARMED", "strategy": "SCALPING", "position_tag": "SCANNER", "prob": 0.7}
+    ws_data = {
+        "curr": 10000,
+        "v_pw": 100.0,
+        "ask_tot": 30000,
+        "bid_tot": 30000,
+        "open": 9950,
+        "fluctuation": 1.0,
+        "orderbook": {"dummy": True},
+    }
+
+    state_handlers.handle_watching_state(
+        stock=stock,
+        code="123456",
+        ws_data=ws_data,
+        admin_id=1,
+        radar=DummyRadar(),
+        ai_engine=DummyAI(),
+    )
+
+    assert stock.get("entry_armed") is True
+    assert "entry_armed" in pipeline_stages
+    assert "latency_block" in pipeline_stages
+    assert momentum_calls["count"] == 1
+
+    pipeline_stages.clear()
+
+    def fail_if_rechecked(_ws_data):
+        raise AssertionError("entry_armed 상태에서는 동적 체결강도 재평가를 하면 안 됩니다.")
+
+    monkeypatch.setattr(state_handlers, "evaluate_scalping_strength_momentum", fail_if_rechecked)
+
+    state_handlers.handle_watching_state(
+        stock=stock,
+        code="123456",
+        ws_data=ws_data,
+        admin_id=1,
+        radar=DummyRadar(),
+        ai_engine=DummyAI(),
+    )
+
+    assert "entry_armed_resume" in pipeline_stages
+    assert "blocked_strength_momentum" not in pipeline_stages
+    assert "latency_block" in pipeline_stages
 
 
 def test_execution_receipt_accumulates_fallback_bundle_fills(monkeypatch):

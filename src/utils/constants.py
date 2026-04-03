@@ -102,6 +102,7 @@ class TradingConfig:
     VPW_SCALP_LIMIT: int = 120  # 확신도가 낮을 때 매수를 강행하기 위한 체결강도 허들(%)
     SCALP_DYNAMIC_VPW_ENABLED: bool = True  # 동적 체결강도 게이트 관측/사용 여부
     SCALP_DYNAMIC_VPW_OBSERVE_ONLY: bool = False  # False면 동적 체결강도 게이트를 실전 진입에 적용
+    SCALP_ENTRY_ARM_TTL_SEC: int = 20  # 스캘핑 자격 게이트 통과 후 재평가 없이 주문 단계로 유지할 시간
     SCALP_VPW_WINDOW_SECONDS: int = 8  # 단기 체결 가속도 판정 시간창(초)
     SCALP_VPW_MIN_BASE: float = 95.0  # 누적 체결강도 최소 베이스
     SCALP_VPW_TARGET_DELTA: float = 0.0  # DEPRECATED: 로그 관측용만 유지, 진입 조건문에는 미사용

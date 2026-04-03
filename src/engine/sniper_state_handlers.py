@@ -205,6 +205,70 @@ def _clear_pending_entry_meta(stock):
             'entry_bundle_id',
         ]:
             stock.pop(key, None)
+    _clear_entry_arm(stock)
+
+
+def _clear_entry_arm(stock):
+    for key in [
+        'entry_armed',
+        'entry_armed_at',
+        'entry_armed_until',
+        'entry_armed_reason',
+        'entry_armed_ai_score',
+        'entry_armed_ratio',
+        'entry_armed_target_buy_price',
+        'entry_armed_vpw',
+        'entry_armed_dynamic_reason',
+    ]:
+        stock.pop(key, None)
+
+
+def _activate_entry_arm(stock, code, *, ai_score, ratio, target_buy_price, current_vpw, reason, dynamic_reason):
+    ttl_sec = int(getattr(TRADING_RULES, 'SCALP_ENTRY_ARM_TTL_SEC', 20) or 20)
+    now_ts = time.time()
+    stock['entry_armed'] = True
+    stock['entry_armed_at'] = now_ts
+    stock['entry_armed_until'] = now_ts + ttl_sec
+    stock['entry_armed_reason'] = reason
+    stock['entry_armed_ai_score'] = float(ai_score)
+    stock['entry_armed_ratio'] = float(ratio)
+    stock['entry_armed_target_buy_price'] = int(target_buy_price or 0)
+    stock['entry_armed_vpw'] = float(current_vpw)
+    stock['entry_armed_dynamic_reason'] = dynamic_reason
+    _log_entry_pipeline(
+        stock,
+        code,
+        'entry_armed',
+        ai_score=f"{float(ai_score):.1f}",
+        ratio=f"{float(ratio):.4f}",
+        target_buy_price=int(target_buy_price or 0),
+        current_vpw=f"{float(current_vpw):.1f}",
+        reason=reason,
+        dynamic_reason=dynamic_reason,
+        ttl_sec=ttl_sec,
+    )
+
+
+def _get_live_entry_arm(stock, code):
+    if not stock.get('entry_armed'):
+        return None
+    expires_at = float(stock.get('entry_armed_until', 0) or 0)
+    now_ts = time.time()
+    if expires_at <= now_ts:
+        _log_entry_pipeline(stock, code, 'entry_arm_expired')
+        _clear_entry_arm(stock)
+        return None
+    return {
+        'armed_at': float(stock.get('entry_armed_at', 0) or 0),
+        'expires_at': expires_at,
+        'remaining_sec': max(0.0, expires_at - now_ts),
+        'ai_score': float(stock.get('entry_armed_ai_score', 50.0) or 50.0),
+        'ratio': float(stock.get('entry_armed_ratio', 0.10) or 0.10),
+        'target_buy_price': int(stock.get('entry_armed_target_buy_price', 0) or 0),
+        'current_vpw': float(stock.get('entry_armed_vpw', 0.0) or 0.0),
+        'reason': stock.get('entry_armed_reason'),
+        'dynamic_reason': stock.get('entry_armed_dynamic_reason'),
+    }
 
 
 def _has_open_pending_entry_orders(stock):
@@ -269,6 +333,7 @@ def _cancel_pending_entry_orders(stock, code, *, force=False):
 
 def _finalize_buy_order_submission(stock, code, curr_price, requested_qty, msg, entry_orders):
     with ENTRY_LOCK:
+        _clear_entry_arm(stock)
         stock['status'] = 'BUY_ORDERED'
         stock['order_time'] = time.time()
         stock['order_price'] = curr_price
@@ -349,6 +414,7 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
         stock.pop('pending_buy_msg', None)
         stock.pop('target_buy_price', None)
         stock.pop('order_price', None)
+        _clear_entry_arm(stock)
         HIGHEST_PRICES.pop(code, None)
         ALERTED_STOCKS.discard(code)
         if strategy in ['SCALPING', 'SCALP']:
@@ -492,355 +558,381 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
 
         intraday_surge = ((curr_price - open_price) / open_price) * 100 if open_price > 0 else fluctuation
         liquidity_value = (ask_tot + bid_tot) * curr_price
-
-        if fluctuation >= MAX_SURGE or intraday_surge >= MAX_INTRADAY_SURGE:
-            log_info(
-                f"[DEBUG] {code} 과매수 위험 차단 (fluctuation={fluctuation:.2f} >= {MAX_SURGE} "
-                f"또는 intraday_surge={intraday_surge:.2f} >= {MAX_INTRADAY_SURGE})"
-            )
-            _log_entry_pipeline(
-                stock,
-                code,
-                "blocked_overbought",
-                fluctuation=f"{fluctuation:.2f}",
-                intraday_surge=f"{intraday_surge:.2f}",
-                max_surge=f"{MAX_SURGE:.2f}",
-                max_intraday_surge=f"{MAX_INTRADAY_SURGE:.2f}",
-            )
-            return
-
-        # --------------------------
-        # Big-Bite: arm -> confirm (보조 확증 신호)
-        # --------------------------
         big_bite_hit = False
         big_bite_armed = False
         big_bite_confirmed = False
         big_bite_info = {}
-        try:
-            tick_data = build_tick_data_from_ws(ws_data)
-            big_bite_armed, big_bite_info = arm_big_bite_if_triggered(
-                stock=stock,
-                code=code,
-                ws_data=ws_data,
-                tick_data=tick_data,
-                runtime_state=BIG_BITE_STATE,
-            )
-            big_bite_confirmed, confirm_info = confirm_big_bite_follow_through(
-                stock=stock,
-                code=code,
-                ws_data=ws_data,
-                runtime_state=BIG_BITE_STATE,
-            )
-            big_bite_hit = bool(big_bite_confirmed)
-            big_bite_info = {**(big_bite_info or {}), **(confirm_info or {})}
-        except Exception as exc:
-            log_error(f"⚠️ [Big-Bite] 보조 신호 계산 실패 ({code}): {exc}")
+        entry_arm = _get_live_entry_arm(stock, code)
 
-        stock['big_bite_confirmed'] = bool(big_bite_confirmed)
-        stock['big_bite_info'] = big_bite_info or {}
-        stock['big_bite_triggered'] = bool(big_bite_armed)
-
-        if strategy == 'SCALPING':
-            gate_tags = BIG_BITE_HARD_GATE_TAGS_SCALPING
-        elif strategy == 'KOSDAQ_ML':
-            gate_tags = BIG_BITE_HARD_GATE_TAGS_KOSDAQ
-        elif strategy == 'KOSPI_ML':
-            gate_tags = BIG_BITE_HARD_GATE_TAGS_KOSPI
-        else:
-            gate_tags = ()
-
-        hard_gate_required = bool(
-            BIG_BITE_HARD_GATE_ENABLED
-            and gate_tags
-            and any(tag in pos_tag for tag in gate_tags)
-        )
-        stock['big_bite_hard_gate_required'] = hard_gate_required
-        stock['big_bite_hard_gate_blocked'] = bool(hard_gate_required and not big_bite_confirmed)
-        stock['big_bite_hard_gate_tags'] = gate_tags
-
-        if hard_gate_required and not big_bite_confirmed:
-            log_info(
-                f"[DEBUG] {code} Big-Bite 하드 게이트 차단 "
-                f"(required={hard_gate_required}, triggered={big_bite_armed}, confirmed={big_bite_confirmed})"
-            )
-            stock['big_bite_block_reason'] = 'hard_gate'
+        if entry_arm:
+            current_ai_score = float(entry_arm.get('ai_score', current_ai_score) or current_ai_score)
+            ratio = float(entry_arm.get('ratio', ratio) or ratio)
+            stock['rt_ai_prob'] = current_ai_score / 100.0
+            stock['target_buy_price'] = int(entry_arm.get('target_buy_price') or curr_price)
             _log_entry_pipeline(
                 stock,
                 code,
-                "blocked_big_bite_hard_gate",
-                required=hard_gate_required,
-                triggered=big_bite_armed,
-                confirmed=big_bite_confirmed,
-                position_tag=pos_tag,
+                "entry_armed_resume",
+                ai_score=f"{current_ai_score:.1f}",
+                ratio=f"{ratio:.4f}",
+                remaining_sec=f"{float(entry_arm.get('remaining_sec', 0.0) or 0.0):.1f}",
+                armed_reason=entry_arm.get('reason'),
+                dynamic_reason=entry_arm.get('dynamic_reason'),
             )
-            return
-
-        if big_bite_info:
-            log_info(
-                f"[DEBUG] {code} Big-Bite 상태 "
-                f"(triggered={big_bite_armed}, confirmed={big_bite_confirmed}, "
-                f"impact={big_bite_info.get('impact_ratio')}, "
-                f"agg_value={big_bite_info.get('agg_value')}, "
-                f"chase_pct={big_bite_info.get('chase_pct')})"
-            )
-
-        if pos_tag == 'VCP_NEXT':
-            stock['target_buy_price'] = curr_price
             is_trigger = True
-            msg = (
-                f"🚀 **{stock['name']} ({code}) VCP 시초가 예약 매수!**\n"
-                f"현재가: `{curr_price:,}원` (전일 VCP NEXT 달성)"
-            )
-            stock['msg_audience'] = 'ADMIN_ONLY'
-
         else:
-            if radar is None:
-                log_info(f"[DEBUG] {code} radar 객체 없음")
-                _log_entry_pipeline(stock, code, "blocked_missing_radar", strategy=strategy)
+            if fluctuation >= MAX_SURGE or intraday_surge >= MAX_INTRADAY_SURGE:
+                log_info(
+                    f"[DEBUG] {code} 과매수 위험 차단 (fluctuation={fluctuation:.2f} >= {MAX_SURGE} "
+                    f"또는 intraday_surge={intraday_surge:.2f} >= {MAX_INTRADAY_SURGE})"
+                )
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "blocked_overbought",
+                    fluctuation=f"{fluctuation:.2f}",
+                    intraday_surge=f"{intraday_surge:.2f}",
+                    max_surge=f"{MAX_SURGE:.2f}",
+                    max_intraday_surge=f"{MAX_INTRADAY_SURGE:.2f}",
+                )
                 return
 
-            observe_only = bool(getattr(TRADING_RULES, "SCALP_DYNAMIC_VPW_OBSERVE_ONLY", True))
-            momentum_gate = evaluate_scalping_strength_momentum(ws_data)
-            if momentum_gate.get("enabled"):
-                _log_strength_momentum_observation(stock, code, momentum_gate)
-                if not observe_only and not momentum_gate.get("allowed"):
-                    _log_entry_pipeline(
-                        stock,
-                        code,
-                        "blocked_strength_momentum",
-                        reason=momentum_gate.get("reason"),
-                        delta=f"{float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}",
-                        buy_value=int(momentum_gate.get("window_buy_value", 0) or 0),
-                        buy_ratio=f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
-                        exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
-                        net_buy_qty=int(momentum_gate.get("window_net_buy_qty", 0) or 0),
-                    )
+            # --------------------------
+            # Big-Bite: arm -> confirm (보조 확증 신호)
+            # --------------------------
+            try:
+                tick_data = build_tick_data_from_ws(ws_data)
+                big_bite_armed, big_bite_info = arm_big_bite_if_triggered(
+                    stock=stock,
+                    code=code,
+                    ws_data=ws_data,
+                    tick_data=tick_data,
+                    runtime_state=BIG_BITE_STATE,
+                )
+                big_bite_confirmed, confirm_info = confirm_big_bite_follow_through(
+                    stock=stock,
+                    code=code,
+                    ws_data=ws_data,
+                    runtime_state=BIG_BITE_STATE,
+                )
+                big_bite_hit = bool(big_bite_confirmed)
+                big_bite_info = {**(big_bite_info or {}), **(confirm_info or {})}
+            except Exception as exc:
+                log_error(f"⚠️ [Big-Bite] 보조 신호 계산 실패 ({code}): {exc}")
+
+            stock['big_bite_confirmed'] = bool(big_bite_confirmed)
+            stock['big_bite_info'] = big_bite_info or {}
+            stock['big_bite_triggered'] = bool(big_bite_armed)
+
+            if strategy == 'SCALPING':
+                gate_tags = BIG_BITE_HARD_GATE_TAGS_SCALPING
+            elif strategy == 'KOSDAQ_ML':
+                gate_tags = BIG_BITE_HARD_GATE_TAGS_KOSDAQ
+            elif strategy == 'KOSPI_ML':
+                gate_tags = BIG_BITE_HARD_GATE_TAGS_KOSPI
+            else:
+                gate_tags = ()
+
+            hard_gate_required = bool(
+                BIG_BITE_HARD_GATE_ENABLED
+                and gate_tags
+                and any(tag in pos_tag for tag in gate_tags)
+            )
+            stock['big_bite_hard_gate_required'] = hard_gate_required
+            stock['big_bite_hard_gate_blocked'] = bool(hard_gate_required and not big_bite_confirmed)
+            stock['big_bite_hard_gate_tags'] = gate_tags
+
+            if hard_gate_required and not big_bite_confirmed:
+                log_info(
+                    f"[DEBUG] {code} Big-Bite 하드 게이트 차단 "
+                    f"(required={hard_gate_required}, triggered={big_bite_armed}, confirmed={big_bite_confirmed})"
+                )
+                stock['big_bite_block_reason'] = 'hard_gate'
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "blocked_big_bite_hard_gate",
+                    required=hard_gate_required,
+                    triggered=big_bite_armed,
+                    confirmed=big_bite_confirmed,
+                    position_tag=pos_tag,
+                )
+                return
+
+            if big_bite_info:
+                log_info(
+                    f"[DEBUG] {code} Big-Bite 상태 "
+                    f"(triggered={big_bite_armed}, confirmed={big_bite_confirmed}, "
+                    f"impact={big_bite_info.get('impact_ratio')}, "
+                    f"agg_value={big_bite_info.get('agg_value')}, "
+                    f"chase_pct={big_bite_info.get('chase_pct')})"
+                )
+
+            if pos_tag == 'VCP_NEXT':
+                stock['target_buy_price'] = curr_price
+                is_trigger = True
+                msg = (
+                    f"🚀 **{stock['name']} ({code}) VCP 시초가 예약 매수!**\n"
+                    f"현재가: `{curr_price:,}원` (전일 VCP NEXT 달성)"
+                )
+                stock['msg_audience'] = 'ADMIN_ONLY'
+
+            else:
+                if radar is None:
+                    log_info(f"[DEBUG] {code} radar 객체 없음")
+                    _log_entry_pipeline(stock, code, "blocked_missing_radar", strategy=strategy)
                     return
 
-            if current_vpw < VPW_SCALP_LIMIT:
-                shadow_candidate = None
-                if momentum_gate.get("allowed"):
-                    if observe_only:
-                        shadow_candidate = record_shadow_candidate(stock, code, ws_data, momentum_gate)
-                        if shadow_candidate:
-                            _log_entry_pipeline(
-                                stock,
-                                code,
-                                "shadow_candidate_recorded",
-                                shadow_id=shadow_candidate.get("shadow_id"),
-                                signal_price=shadow_candidate.get("signal_price"),
-                                dynamic_delta=f"{float(shadow_candidate.get('dynamic_delta', 0.0) or 0.0):.1f}",
-                                dynamic_buy_value=int(shadow_candidate.get("dynamic_window_buy_value", 0) or 0),
-                                dynamic_buy_ratio=f"{float(shadow_candidate.get('dynamic_window_buy_ratio', 0.0) or 0.0):.2f}",
-                            )
-                    else:
+                observe_only = bool(getattr(TRADING_RULES, "SCALP_DYNAMIC_VPW_OBSERVE_ONLY", True))
+                momentum_gate = evaluate_scalping_strength_momentum(ws_data)
+                if momentum_gate.get("enabled"):
+                    _log_strength_momentum_observation(stock, code, momentum_gate)
+                    if not observe_only and not momentum_gate.get("allowed"):
                         _log_entry_pipeline(
                             stock,
                             code,
-                            "dynamic_vpw_override_pass",
+                            "blocked_strength_momentum",
+                            reason=momentum_gate.get("reason"),
+                            delta=f"{float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}",
+                            buy_value=int(momentum_gate.get("window_buy_value", 0) or 0),
+                            buy_ratio=f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
+                            exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
+                            net_buy_qty=int(momentum_gate.get("window_net_buy_qty", 0) or 0),
+                        )
+                        return
+
+                if current_vpw < VPW_SCALP_LIMIT:
+                    shadow_candidate = None
+                    if momentum_gate.get("allowed"):
+                        if observe_only:
+                            shadow_candidate = record_shadow_candidate(stock, code, ws_data, momentum_gate)
+                            if shadow_candidate:
+                                _log_entry_pipeline(
+                                    stock,
+                                    code,
+                                    "shadow_candidate_recorded",
+                                    shadow_id=shadow_candidate.get("shadow_id"),
+                                    signal_price=shadow_candidate.get("signal_price"),
+                                    dynamic_delta=f"{float(shadow_candidate.get('dynamic_delta', 0.0) or 0.0):.1f}",
+                                    dynamic_buy_value=int(shadow_candidate.get("dynamic_window_buy_value", 0) or 0),
+                                    dynamic_buy_ratio=f"{float(shadow_candidate.get('dynamic_window_buy_ratio', 0.0) or 0.0):.2f}",
+                                )
+                        else:
+                            _log_entry_pipeline(
+                                stock,
+                                code,
+                                "dynamic_vpw_override_pass",
+                                current_vpw=f"{current_vpw:.1f}",
+                                threshold=VPW_SCALP_LIMIT,
+                                dynamic_reason=momentum_gate.get("reason"),
+                                dynamic_delta=f"{float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}",
+                                dynamic_buy_value=int(momentum_gate.get("window_buy_value", 0) or 0),
+                                dynamic_buy_ratio=f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
+                                dynamic_exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
+                                dynamic_net_buy_qty=int(momentum_gate.get("window_net_buy_qty", 0) or 0),
+                            )
+                            shadow_candidate = None
+                    if not (momentum_gate.get("allowed") and not observe_only):
+                        log_info(f"[DEBUG] {code} VPW 불충족 (current_vpw={current_vpw:.1f} < VPW_SCALP_LIMIT)")
+                        _log_entry_pipeline(
+                            stock,
+                            code,
+                            "blocked_vpw",
                             current_vpw=f"{current_vpw:.1f}",
                             threshold=VPW_SCALP_LIMIT,
+                            dynamic_allowed=momentum_gate.get("allowed"),
                             dynamic_reason=momentum_gate.get("reason"),
                             dynamic_delta=f"{float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}",
                             dynamic_buy_value=int(momentum_gate.get("window_buy_value", 0) or 0),
-                            dynamic_buy_ratio=f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
                             dynamic_exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
                             dynamic_net_buy_qty=int(momentum_gate.get("window_net_buy_qty", 0) or 0),
+                            shadow_recorded=bool(shadow_candidate),
                         )
-                        shadow_candidate = None
-                if momentum_gate.get("allowed") and not observe_only:
-                    pass
-                else:
-                    log_info(f"[DEBUG] {code} VPW 불충족 (current_vpw={current_vpw:.1f} < VPW_SCALP_LIMIT)")
+                        return
+                if liquidity_value < MIN_LIQUIDITY:
+                    log_info(
+                        f"[DEBUG] {code} 유동성 불충족 (liquidity_value={liquidity_value:,.0f} "
+                        f"< MIN_LIQUIDITY={MIN_LIQUIDITY:,.0f})"
+                    )
                     _log_entry_pipeline(
                         stock,
                         code,
-                        "blocked_vpw",
-                        current_vpw=f"{current_vpw:.1f}",
-                        threshold=VPW_SCALP_LIMIT,
-                        dynamic_allowed=momentum_gate.get("allowed"),
-                        dynamic_reason=momentum_gate.get("reason"),
-                        dynamic_delta=f"{float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}",
-                        dynamic_buy_value=int(momentum_gate.get("window_buy_value", 0) or 0),
-                        dynamic_exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
-                        dynamic_net_buy_qty=int(momentum_gate.get("window_net_buy_qty", 0) or 0),
-                        shadow_recorded=bool(shadow_candidate),
-                    )
-                    return
-            if liquidity_value < MIN_LIQUIDITY:
-                log_info(
-                    f"[DEBUG] {code} 유동성 불충족 (liquidity_value={liquidity_value:,.0f} "
-                    f"< MIN_LIQUIDITY={MIN_LIQUIDITY:,.0f})"
-                )
-                _log_entry_pipeline(
-                    stock,
-                    code,
-                    "blocked_liquidity",
-                    liquidity_value=int(liquidity_value),
-                    min_liquidity=MIN_LIQUIDITY,
-                )
-                return
-
-            scanner_price = stock.get('buy_price') or 0
-            if scanner_price > 0:
-                gap_pct = (curr_price - scanner_price) / scanner_price * 100
-                if gap_pct >= 1.5:
-                    if code not in cooldowns:
-                        print(f"⚠️ [{stock['name']}] 포착가 대비 너무 오름 (갭 +{gap_pct:.1f}%). 추격매수 포기.")
-                        cooldowns[code] = time.time() + 1200
-                    log_info(f"[DEBUG] {code} 포착가 대비 갭 상승 (gap_pct={gap_pct:.1f}% >= 1.5%)")
-                    _log_entry_pipeline(
-                        stock,
-                        code,
-                        "blocked_gap_from_scan",
-                        gap_pct=f"{gap_pct:.1f}",
-                        scanner_price=int(scanner_price),
-                        curr_price=curr_price,
+                        "blocked_liquidity",
+                        liquidity_value=int(liquidity_value),
+                        min_liquidity=MIN_LIQUIDITY,
                     )
                     return
 
-            current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
-            target_buy_price, used_drop_pct = radar.get_smart_target_price(
-                curr_price,
-                v_pw=current_vpw,
-                ai_score=current_ai_score,
-                ask_tot=ask_tot,
-                bid_tot=bid_tot,
-            )
-
-            last_ai_time = LAST_AI_CALL_TIMES.get(code, 0)
-            time_elapsed = time.time() - last_ai_time
-            is_vip_target = (target_buy_price > 0) and (curr_price <= target_buy_price * 1.015)
-
-            if is_vip_target and last_ai_time == 0:
-                print(f"⏳ [{stock['name']}] 첫 AI 분석을 시작합니다... (기계적 매수 일시 보류)")
-
-            if ai_engine and is_vip_target and (time_elapsed > AI_WATCHING_COOLDOWN or last_ai_time == 0):
-                ai_call_executed = False
-                try:
-                    recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
-                    recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40)
-
-                    if ws_data.get('orderbook') and recent_ticks:
-                        ai_decision = ai_engine.analyze_target(stock['name'], ws_data, recent_ticks, recent_candles)
-                        ai_call_executed = True
-
-                        action = ai_decision.get('action', 'WAIT')
-                        ai_score = ai_decision.get('score', 50)
-                        reason = ai_decision.get('reason', '사유 없음')
-
-                        if ai_score != 50:
-                            stock['rt_ai_prob'] = ai_score / 100.0
-                            current_ai_score = ai_score
-                            print(
-                                f"💎 [VIP AI 확답 완료: {stock['name']}] {action} | 점수: {ai_score}점 | {reason}"
-                            )
-                            _log_entry_pipeline(
-                                stock,
-                                code,
-                                "ai_confirmed",
-                                action=action,
-                                ai_score=ai_score,
-                                vip_target=is_vip_target,
-                            )
-
-                            if action == "BUY":
-                                ai_msg = (
-                                    f"🤖 <b>[VIP 종목 실시간 분석]</b>\n"
-                                    f"🎯 종목: {stock['name']}\n"
-                                    f"⚡ 행동: <b>{action} ({ai_score}점)</b>\n"
-                                    f"🧠 사유: {reason}"
-                                )
-                                target_audience = (
-                                    'VIP_ALL'
-                                    if liquidity_value >= VIP_LIQUIDITY_THRESHOLD and current_ai_score >= 90
-                                    else 'ADMIN_ONLY'
-                                )
-                                event_bus.publish(
-                                    'TELEGRAM_BROADCAST',
-                                    {'message': ai_msg, 'audience': target_audience, 'parse_mode': 'HTML'},
-                                )
-                        else:
-                            print(
-                                f"⚠️ [{stock['name']}] AI 판단 보류(Score 50). 기계적 로직으로 폴백합니다."
-                            )
-                            current_ai_score = 50
-
-                except Exception as e:
-                    log_error(
-                        f"🚨 [AI 엔진 오류] {stock['name']}({code}): {e} | "
-                        "기계적 매수 모드로 폴백(Fallback)합니다."
-                    )
-                    current_ai_score = 50
-
-                if ai_call_executed:
-                    LAST_AI_CALL_TIMES[code] = time.time()
-
-                if ai_call_executed and last_ai_time == 0:
-                    if not big_bite_confirmed:
-                        log_info(f"[DEBUG] {code} 첫 AI 분석 턴 대기 (SCALPING)")
+                scanner_price = stock.get('buy_price') or 0
+                if scanner_price > 0:
+                    gap_pct = (curr_price - scanner_price) / scanner_price * 100
+                    if gap_pct >= 1.5:
+                        if code not in cooldowns:
+                            print(f"⚠️ [{stock['name']}] 포착가 대비 너무 오름 (갭 +{gap_pct:.1f}%). 추격매수 포기.")
+                            cooldowns[code] = time.time() + 1200
+                        log_info(f"[DEBUG] {code} 포착가 대비 갭 상승 (gap_pct={gap_pct:.1f}% >= 1.5%)")
                         _log_entry_pipeline(
                             stock,
                             code,
-                            "first_ai_wait",
-                            ai_score=f"{current_ai_score:.1f}",
-                            big_bite_confirmed=big_bite_confirmed,
-                            vip_target=is_vip_target,
+                            "blocked_gap_from_scan",
+                            gap_pct=f"{gap_pct:.1f}",
+                            scanner_price=int(scanner_price),
+                            curr_price=curr_price,
                         )
                         return
-                    log_info(f"[DEBUG] {code} Big-Bite 확인으로 첫 AI 분석 대기 스킵")
 
-            # Big-Bite 점수 보너스 (보수적)
-            boost_applied_value = 0
-            if big_bite_confirmed:
-                boost_applied_value = BIG_BITE_BOOST_SCORE
-            elif big_bite_armed:
-                boost_applied_value = BIG_BITE_ARMED_ENTRY_BONUS
-
-            if boost_applied_value:
-                current_ai_score = min(100.0, current_ai_score + boost_applied_value)
-                stock['big_bite_boosted'] = bool(big_bite_confirmed)
-                stock['big_bite_boost_value'] = boost_applied_value
-                log_info(
-                    f"[DEBUG] {code} Big-Bite boost 적용 (+{boost_applied_value}, "
-                    f"score={current_ai_score:.1f})"
+                current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
+                target_buy_price, used_drop_pct = radar.get_smart_target_price(
+                    curr_price,
+                    v_pw=current_vpw,
+                    ai_score=current_ai_score,
+                    ask_tot=ask_tot,
+                    bid_tot=bid_tot,
                 )
-            else:
-                stock['big_bite_boosted'] = False
-                stock['big_bite_boost_value'] = 0
 
-            if current_ai_score < 75 and current_ai_score != 50:
-                if time.time() - last_ai_time < 1.0:
-                    action_str = "WAIT(진입 보류)" if current_ai_score > 40 else "DROP(진입 차단)"
-                    print(f"🚫 [AI 매수 거부] {stock['name']} {action_str} (AI 점수: {current_ai_score}점)")
+                last_ai_time = LAST_AI_CALL_TIMES.get(code, 0)
+                time_elapsed = time.time() - last_ai_time
+                is_vip_target = (target_buy_price > 0) and (curr_price <= target_buy_price * 1.015)
 
-                cooldown_time = AI_WAIT_DROP_COOLDOWN
+                if is_vip_target and last_ai_time == 0:
+                    print(f"⏳ [{stock['name']}] 첫 AI 분석을 시작합니다... (기계적 매수 일시 보류)")
 
-                cooldowns[code] = time.time() + cooldown_time
-                log_info(f"[DEBUG] {code} AI 점수 불충족 (current_ai_score={current_ai_score} < 75)")
-                _log_entry_pipeline(
+                if ai_engine and is_vip_target and (time_elapsed > AI_WATCHING_COOLDOWN or last_ai_time == 0):
+                    ai_call_executed = False
+                    try:
+                        recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
+                        recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40)
+
+                        if ws_data.get('orderbook') and recent_ticks:
+                            ai_decision = ai_engine.analyze_target(stock['name'], ws_data, recent_ticks, recent_candles)
+                            ai_call_executed = True
+
+                            action = ai_decision.get('action', 'WAIT')
+                            ai_score = ai_decision.get('score', 50)
+                            reason = ai_decision.get('reason', '사유 없음')
+
+                            if ai_score != 50:
+                                stock['rt_ai_prob'] = ai_score / 100.0
+                                current_ai_score = ai_score
+                                print(
+                                    f"💎 [VIP AI 확답 완료: {stock['name']}] {action} | 점수: {ai_score}점 | {reason}"
+                                )
+                                _log_entry_pipeline(
+                                    stock,
+                                    code,
+                                    "ai_confirmed",
+                                    action=action,
+                                    ai_score=ai_score,
+                                    vip_target=is_vip_target,
+                                )
+
+                                if action == "BUY":
+                                    ai_msg = (
+                                        f"🤖 <b>[VIP 종목 실시간 분석]</b>\n"
+                                        f"🎯 종목: {stock['name']}\n"
+                                        f"⚡ 행동: <b>{action} ({ai_score}점)</b>\n"
+                                        f"🧠 사유: {reason}"
+                                    )
+                                    target_audience = (
+                                        'VIP_ALL'
+                                        if liquidity_value >= VIP_LIQUIDITY_THRESHOLD and current_ai_score >= 90
+                                        else 'ADMIN_ONLY'
+                                    )
+                                    event_bus.publish(
+                                        'TELEGRAM_BROADCAST',
+                                        {'message': ai_msg, 'audience': target_audience, 'parse_mode': 'HTML'},
+                                    )
+                            else:
+                                print(
+                                    f"⚠️ [{stock['name']}] AI 판단 보류(Score 50). 기계적 로직으로 폴백합니다."
+                                )
+                                current_ai_score = 50
+
+                    except Exception as e:
+                        log_error(
+                            f"🚨 [AI 엔진 오류] {stock['name']}({code}): {e} | "
+                            "기계적 매수 모드로 폴백(Fallback)합니다."
+                        )
+                        current_ai_score = 50
+
+                    if ai_call_executed:
+                        LAST_AI_CALL_TIMES[code] = time.time()
+
+                    if ai_call_executed and last_ai_time == 0:
+                        if not big_bite_confirmed:
+                            log_info(f"[DEBUG] {code} 첫 AI 분석 턴 대기 (SCALPING)")
+                            _log_entry_pipeline(
+                                stock,
+                                code,
+                                "first_ai_wait",
+                                ai_score=f"{current_ai_score:.1f}",
+                                big_bite_confirmed=big_bite_confirmed,
+                                vip_target=is_vip_target,
+                            )
+                            return
+                        log_info(f"[DEBUG] {code} Big-Bite 확인으로 첫 AI 분석 대기 스킵")
+
+                # Big-Bite 점수 보너스 (보수적)
+                boost_applied_value = 0
+                if big_bite_confirmed:
+                    boost_applied_value = BIG_BITE_BOOST_SCORE
+                elif big_bite_armed:
+                    boost_applied_value = BIG_BITE_ARMED_ENTRY_BONUS
+
+                if boost_applied_value:
+                    current_ai_score = min(100.0, current_ai_score + boost_applied_value)
+                    stock['big_bite_boosted'] = bool(big_bite_confirmed)
+                    stock['big_bite_boost_value'] = boost_applied_value
+                    log_info(
+                        f"[DEBUG] {code} Big-Bite boost 적용 (+{boost_applied_value}, "
+                        f"score={current_ai_score:.1f})"
+                    )
+                else:
+                    stock['big_bite_boosted'] = False
+                    stock['big_bite_boost_value'] = 0
+
+                if current_ai_score < 75 and current_ai_score != 50:
+                    if time.time() - last_ai_time < 1.0:
+                        action_str = "WAIT(진입 보류)" if current_ai_score > 40 else "DROP(진입 차단)"
+                        print(f"🚫 [AI 매수 거부] {stock['name']} {action_str} (AI 점수: {current_ai_score}점)")
+
+                    cooldown_time = AI_WAIT_DROP_COOLDOWN
+
+                    cooldowns[code] = time.time() + cooldown_time
+                    log_info(f"[DEBUG] {code} AI 점수 불충족 (current_ai_score={current_ai_score} < 75)")
+                    _log_entry_pipeline(
+                        stock,
+                        code,
+                        "blocked_ai_score",
+                        ai_score=f"{current_ai_score:.1f}",
+                        threshold=75,
+                        cooldown_sec=cooldown_time,
+                    )
+                    return
+
+                final_target_buy_price, final_used_drop_pct = radar.get_smart_target_price(
+                    curr_price,
+                    v_pw=current_vpw,
+                    ai_score=current_ai_score,
+                    ask_tot=ask_tot,
+                    bid_tot=bid_tot,
+                )
+
+                stock['target_buy_price'] = final_target_buy_price
+                _activate_entry_arm(
                     stock,
                     code,
-                    "blocked_ai_score",
-                    ai_score=f"{current_ai_score:.1f}",
-                    threshold=75,
-                    cooldown_sec=cooldown_time,
+                    ai_score=current_ai_score,
+                    ratio=ratio,
+                    target_buy_price=final_target_buy_price,
+                    current_vpw=current_vpw,
+                    reason='qualification_passed',
+                    dynamic_reason=momentum_gate.get('reason'),
                 )
-                return
-
-            final_target_buy_price, final_used_drop_pct = radar.get_smart_target_price(
-                curr_price,
-                v_pw=current_vpw,
-                ai_score=current_ai_score,
-                ask_tot=ask_tot,
-                bid_tot=bid_tot,
-            )
-
-            stock['target_buy_price'] = final_target_buy_price
-            is_trigger = True
-            if big_bite_confirmed:
-                stock['big_bite_boosted'] = True
-                log_info(f"[DEBUG] {code} Big-Bite 보조 확증 신호 확인됨 (진입 조건 통과)")
+                is_trigger = True
+                if big_bite_confirmed:
+                    stock['big_bite_boosted'] = True
+                    log_info(f"[DEBUG] {code} Big-Bite 보조 확증 신호 확인됨 (진입 조건 통과)")
 
     elif strategy in ['KOSDAQ_ML', 'KOSPI_ML']:
         if radar is None:
@@ -2406,6 +2498,7 @@ def process_order_cancellation(stock, code, orig_ord_no, db, strategy):
             stock.pop('target_buy_price', None)
             stock.pop('order_price', None)
             stock.pop('buy_qty', None)
+            _clear_entry_arm(stock)
             highest_prices.pop(code, None)
 
             try:

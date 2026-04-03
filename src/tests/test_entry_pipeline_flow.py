@@ -50,12 +50,14 @@ def main():
     if report["sections"]["recent_stocks"]:
         print("1. 최근 종목 흐름")
         for idx, row in enumerate(report["sections"]["recent_stocks"], start=1):
-            flow = " -> ".join(item["label"] for item in row.get("summary_flow", []))
+            passed_flow = " -> ".join(item["label"] for item in row.get("pass_flow", []))
+            latest = row.get("latest_status") or {}
             print(
                 f"{idx}. {row['name']}({row['code']}) "
-                f"latest={row['latest_stage']} "
-                f"reason={row['latest_reason'] or '-'} "
-                f"flow={flow}"
+                f"passed={passed_flow or '-'} "
+                f"latest={latest.get('label', row['latest_stage'])} "
+                f"reason={latest.get('reason') or '-'} "
+                f"time={latest.get('timestamp', row['latest_timestamp'])}"
             )
 
 

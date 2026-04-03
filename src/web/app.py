@@ -636,7 +636,7 @@ def entry_pipeline_flow_preview():
       <div class="wrap">
         <div class="hero">
           <h1>주문 진입 게이트 플로우</h1>
-          <p>종목별로 실제 주문 직전까지 어디서 막혔는지 추적합니다.</p>
+          <p>종목별 누적 통과 단계와 최신 차단 상태를 분리해 주문 흐름을 추적합니다.</p>
           <div class="chips">
             <div class="chip">date: {{ report.date }}</div>
             <div class="chip">since: {{ report.since or '전체' }}</div>
@@ -655,7 +655,7 @@ def entry_pipeline_flow_preview():
         </div>
 
         <div class="section card">
-          <h2>게이트별 blocker 분포</h2>
+          <h2>최신 차단 사유 분포</h2>
           <div class="bars">
             {% for item in blockers %}
               <div class="bar-row">
@@ -676,19 +676,26 @@ def entry_pipeline_flow_preview():
               <div class="row">
                 <div class="title">{{ row.name }} ({{ row.code }})</div>
                 <div class="meta">
-                  latest:
-                  <span class="{{ row.stage_class }}">{{ row.latest_stage_label }}</span>
-                  {% if row.latest_reason %}/ {{ row.latest_reason }}{% endif %}
-                  / {{ row.latest_timestamp }}
+                  최신 상태:
+                  <span class="{{ row.latest_status.kind }}">{{ row.latest_status.label }}</span>
+                  {% if row.latest_status.reason %}/ {{ row.latest_status.reason }}{% endif %}
+                  / {{ row.latest_status.timestamp }}
                 </div>
+                <div class="meta" style="margin-top: 8px;">누적 통과 단계</div>
                 <div class="flow">
-                  {% for item in row.summary_flow %}
+                  {% for item in row.pass_flow %}
                     <span class="tag {{ item.kind }}">{{ item.label }}</span>
                     {% if not loop.last %}
                       <span class="arrow">→</span>
                     {% endif %}
                   {% endfor %}
                 </div>
+                {% if row.latest_status.kind in ['blocked', 'waiting'] %}
+                  <div class="meta" style="margin-top: 10px;">마지막 차단/대기</div>
+                  <div class="flow">
+                    <span class="tag {{ row.latest_status.kind }}">{{ row.latest_status.label }}</span>
+                  </div>
+                {% endif %}
               </div>
             {% else %}
               <div class="meta">데이터 없음</div>
