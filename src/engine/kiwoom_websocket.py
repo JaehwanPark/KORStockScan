@@ -11,7 +11,7 @@ from datetime import datetime
 # 💡 [Level 1 & 2 적용] 독립 로거 및 싱글톤 이벤트 버스 임포트
 from src.utils.logger import log_error
 from src.core.event_bus import EventBus
-from src.utils.constants import CONFIG_PATH, DEV_PATH
+from src.utils.constants import CONFIG_PATH, DEV_PATH, TRADING_RULES
 
 def _load_system_config():
     """웹소켓 매니저 전용 설정 로더 (의존성 분리)"""
@@ -53,6 +53,8 @@ class KiwoomWSManager:
         # 💡 [추가] 최초 접속인지, 끊겼다가 다시 붙은(재접속) 것인지 구분하는 플래그
         self.is_reconnected = False
         self.condition_dict = {} # 💡 [추가] 일련번호(seq)와 검색식 이름을 매핑할 사전
+        self.market_session_state = ''
+        self.market_session_remaining = ''
         
         print(f"🌐 [WS] 웹소켓 매니저 초기화 완료 (Target: {self.uri})")
     
@@ -71,21 +73,83 @@ class KiwoomWSManager:
             return default
 
     @staticmethod
+    def _safe_float(val, default=0.0):
+        try:
+            return float(str(val).replace(',', '').replace('+', '').strip())
+        except Exception:
+            return default
+
+    @staticmethod
     def _normalize_code(code):
         return str(code or '').strip()[:6]
 
+    def _append_strength_momentum(self, target, *, current_price, current_vpw, signed_qty, tick_value, buy_ratio, buy_qty, sell_qty):
+        history = target.get('strength_momentum_history')
+        if not isinstance(history, deque):
+            maxlen = int(getattr(TRADING_RULES, 'SCALP_VPW_HISTORY_MAXLEN', 120) or 120)
+            history = deque(maxlen=maxlen)
+            target['strength_momentum_history'] = history
+
+        buy_tick_value = 0
+        sell_tick_value = 0
+        if signed_qty > 0:
+            buy_tick_value = tick_value
+        elif signed_qty < 0:
+            sell_tick_value = tick_value
+        elif buy_qty > sell_qty:
+            buy_tick_value = tick_value
+        elif sell_qty > buy_qty:
+            sell_tick_value = tick_value
+        elif buy_ratio >= 50.0:
+            buy_tick_value = tick_value
+        else:
+            sell_tick_value = tick_value
+
+        now_ts = time.time()
+        history.append({
+            'ts': now_ts,
+            'v_pw': float(current_vpw or 0.0),
+            'price': int(current_price or 0),
+            'signed_qty': int(signed_qty or 0),
+            'buy_qty': int(buy_qty or 0),
+            'sell_qty': int(sell_qty or 0),
+            'buy_exec_qty_cum': int(buy_qty or 0),
+            'sell_exec_qty_cum': int(sell_qty or 0),
+            'tick_value': int(tick_value or 0),
+            'buy_tick_value': int(buy_tick_value or 0),
+            'sell_tick_value': int(sell_tick_value or 0),
+            'buy_ratio': float(buy_ratio or 0.0),
+        })
+
+        keep_seconds = max(15.0, float(getattr(TRADING_RULES, 'SCALP_VPW_WINDOW_SECONDS', 5) or 5) * 3.0)
+        cutoff = now_ts - keep_seconds
+        while history and float((history[0] or {}).get('ts', 0.0) or 0.0) < cutoff:
+            history.popleft()
+
     def _ensure_target_defaults(self, item_code):
         if item_code not in self.realtime_data:
+            history_maxlen = int(getattr(TRADING_RULES, 'SCALP_VPW_HISTORY_MAXLEN', 120) or 120)
             self.realtime_data[item_code] = {
                 'curr': 0, 'v_pw': 0, 'ask_tot': 0, 'bid_tot': 0,
                 'volume': 0, 'time': '', 'fluctuation': 0.0, 'open': 0,
                 'orderbook': {'asks': [], 'bids': []},
                 'prog_net_qty': 0, 'prog_delta_qty': 0,
                 'prog_net_amt': 0, 'prog_delta_amt': 0,
+                'prog_buy_qty': 0, 'prog_buy_amt': 0,
+                'prog_sell_qty': 0, 'prog_sell_amt': 0,
+                'tick_trade_value': 0, 'cum_trade_value': 0,
+                'buy_exec_volume': 0, 'sell_exec_volume': 0,
+                'buy_ratio': 0.0, 'net_buy_exec_volume': 0,
+                'sell_exec_single': 0, 'buy_exec_single': 0,
+                'net_bid_depth': 0, 'bid_depth_ratio': 0.0,
+                'net_ask_depth': 0, 'ask_depth_ratio': 0.0,
+                'market_session_state': self.market_session_state,
+                'market_session_remaining': self.market_session_remaining,
                 'received_types': set(),
                 'last_ws_update_ts': 0.0,
                 'last_prog_update_ts': 0.0,
                 'program_history': deque(maxlen=120),
+                'strength_momentum_history': deque(maxlen=history_maxlen),
                 '_first_tick_logged': False,
                 'last_trade_tick': None,
             }
@@ -129,7 +193,9 @@ class KiwoomWSManager:
 
     def _snapshot_target(self, target):
         snapshot = copy.deepcopy(target)
-        for key in ("price_history", "v_pw_history", "signed_volume_history", "program_history"):
+        snapshot['market_session_state'] = self.market_session_state
+        snapshot['market_session_remaining'] = self.market_session_remaining
+        for key in ("price_history", "v_pw_history", "signed_volume_history", "program_history", "strength_momentum_history"):
             if isinstance(snapshot.get(key), deque):
                 snapshot[key] = list(snapshot[key])
         return snapshot
@@ -252,6 +318,20 @@ class KiwoomWSManager:
                     }
                     await ws.send(json.dumps(exec_reg_packet))
                     print("📝 [WS] 🚨 계좌 주문/체결통보(00) 감시망 등록 완료!")
+
+                    session_reg_packet = {
+                        "trnm": "REG",
+                        "grp_no": "3",
+                        "refresh": "1",
+                        "data": [
+                            {
+                                "item": [""],
+                                "type": ["0s"]
+                            }
+                        ]
+                    }
+                    await ws.send(json.dumps(session_reg_packet))
+                    print("📝 [WS] 장운영구분(0s) 감시망 등록 완료!")
 
                     # 3. 기존 감시 종목 재등록 (네트워크 끊김 복구용)
                     if self.subscribed_codes:
@@ -419,6 +499,11 @@ class KiwoomWSManager:
                                 })
                         continue
 
+                    if real_type == '0s' or d.get('name') == '장시작시간':
+                        self.market_session_state = str(values.get('215', '') or '').strip()
+                        self.market_session_remaining = str(values.get('214', '') or '').strip()
+                        continue
+
                     # ===================================================
                     # [트랙 B] 실시간 주가/호가 데이터 처리
                     # ===================================================
@@ -447,17 +532,49 @@ class KiwoomWSManager:
                             if '228' in values:
                                 try: target['v_pw'] = float(values['228'])
                                 except ValueError: pass
+                            if '14' in values: target['cum_trade_value'] = safe_int(values['14'], target.get('cum_trade_value', 0))
+                            if '1313' in values: target['tick_trade_value'] = safe_int(values['1313'], target.get('tick_trade_value', 0))
+                            if '1030' in values: target['sell_exec_volume'] = safe_int(values['1030'], target.get('sell_exec_volume', 0))
+                            if '1031' in values: target['buy_exec_volume'] = safe_int(values['1031'], target.get('buy_exec_volume', 0))
+                            if '1032' in values: target['buy_ratio'] = self._safe_float(values['1032'], target.get('buy_ratio', 0.0))
+                            if '1314' in values: target['net_buy_exec_volume'] = self._safe_signed_int(values['1314'], target.get('net_buy_exec_volume', 0))
+                            if '1315' in values: target['sell_exec_single'] = safe_int(values['1315'], target.get('sell_exec_single', 0))
+                            if '1316' in values: target['buy_exec_single'] = safe_int(values['1316'], target.get('buy_exec_single', 0))
                                 
                             if '121' in values: target['ask_tot'] = safe_int(values['121'])
                             if '125' in values: target['bid_tot'] = safe_int(values['125'])
+                            if '128' in values: target['net_bid_depth'] = self._safe_signed_int(values['128'], target.get('net_bid_depth', 0))
+                            if '129' in values: target['bid_depth_ratio'] = self._safe_float(values['129'], target.get('bid_depth_ratio', 0.0))
+                            if '138' in values: target['net_ask_depth'] = self._safe_signed_int(values['138'], target.get('net_ask_depth', 0))
+                            if '139' in values: target['ask_depth_ratio'] = self._safe_float(values['139'], target.get('ask_depth_ratio', 0.0))
+                            target['market_session_state'] = self.market_session_state
+                            target['market_session_remaining'] = self.market_session_remaining
 
                             # '0B' 체결 데이터는 필드가 문서/계정에 따라 달라질 수 있어
-                            # raw 스냅샷만 저장해둡니다. (추후 detector에서 해석)
                             if real_type == '0B':
+                                signed_qty = self._safe_signed_int(values.get('15'), 0)
+                                current_price = target.get('curr', 0)
+                                current_vpw = target.get('v_pw', 0.0)
+                                tick_value = safe_int(values.get('1313'), 0)
+                                if tick_value <= 0 and current_price > 0 and signed_qty != 0:
+                                    tick_value = abs(int(current_price * abs(signed_qty)))
+                                buy_qty = safe_int(values.get('1031'), 0)
+                                sell_qty = safe_int(values.get('1030'), 0)
+                                buy_ratio = self._safe_float(values.get('1032'), 0.0)
                                 target['last_trade_tick'] = {
                                     'ts': time.time(),
                                     'values': values,
                                 }
+                                self._append_strength_momentum(
+                                    target,
+                                    current_price=current_price,
+                                    current_vpw=current_vpw,
+                                    signed_qty=signed_qty,
+                                    tick_value=tick_value,
+                                    buy_ratio=buy_ratio,
+                                    buy_qty=buy_qty,
+                                    sell_qty=sell_qty,
+                                )
 
                             # '0D' 주식호가잔량 데이터 파싱 (1~5호가)
                             if real_type == '0D':
@@ -478,6 +595,10 @@ class KiwoomWSManager:
                             
                             # '0w' 프로그램 매매 데이터 파싱
                             if real_type == '0w':
+                                if '202' in values: target['prog_sell_qty'] = self._safe_signed_int(values['202'])
+                                if '204' in values: target['prog_sell_amt'] = self._safe_signed_int(values['204'])
+                                if '206' in values: target['prog_buy_qty'] = self._safe_signed_int(values['206'])
+                                if '208' in values: target['prog_buy_amt'] = self._safe_signed_int(values['208'])
                                 if '210' in values: target['prog_net_qty'] = self._safe_signed_int(values['210'])
                                 if '211' in values: target['prog_delta_qty'] = self._safe_signed_int(values['211'])
                                 if '212' in values: target['prog_net_amt'] = self._safe_signed_int(values['212'])

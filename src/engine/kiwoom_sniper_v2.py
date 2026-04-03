@@ -97,6 +97,7 @@ from src.engine.sniper_analysis import (
     get_realtime_ai_scores,
 )
 import src.engine.sniper_state_handlers as sniper_state_handlers
+from src.engine.sniper_strength_momentum import evaluate_scalping_strength_momentum
 from src.engine.sniper_state_handlers import bind_state_dependencies
 import src.engine.sniper_execution_receipts as sniper_execution_receipts
 from src.engine.sniper_execution_receipts import bind_execution_dependencies
@@ -440,8 +441,15 @@ def check_watching_conditions(stock, code, ws_data, admin_id, radar=None, ai_eng
         else:
             if radar is None:
                 return "radar 객체 없음"
+            momentum_gate = evaluate_scalping_strength_momentum(ws_data)
             if current_vpw < getattr(TRADING_RULES, 'VPW_SCALP_LIMIT', 120):
-                return f"VPW 불충족 (current_vpw={current_vpw:.1f} < VPW_SCALP_LIMIT)"
+                return (
+                    f"VPW 불충족 (current_vpw={current_vpw:.1f} < VPW_SCALP_LIMIT, "
+                    f"dynamic_allowed={momentum_gate.get('allowed')}, "
+                    f"dynamic_reason={momentum_gate.get('reason')}, "
+                    f"dynamic_delta={float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}, "
+                    f"dynamic_buy_value={int(momentum_gate.get('window_buy_value', 0) or 0)})"
+                )
             if liquidity_value < MIN_LIQUIDITY:
                 return f"유동성 불충족 (liquidity_value={liquidity_value:,.0f} < MIN_LIQUIDITY={MIN_LIQUIDITY:,.0f})"
             

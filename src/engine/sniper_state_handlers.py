@@ -36,6 +36,8 @@ from src.engine.sniper_entry_latency import (
     evaluate_live_buy_entry,
 )
 from src.engine.sniper_entry_state import ENTRY_LOCK, move_orders_to_terminal
+from src.engine.sniper_strength_momentum import evaluate_scalping_strength_momentum
+from src.engine.sniper_strength_shadow_feedback import record_shadow_candidate
 
 
 KIWOOM_TOKEN = None
@@ -158,6 +160,29 @@ def _log_entry_pipeline(stock, code, stage, **fields):
     parts = [f"{key}={value}" for key, value in fields.items()]
     suffix = f" {' '.join(parts)}" if parts else ""
     log_info(f"[ENTRY_PIPELINE] {stock.get('name')}({code}) stage={stage}{suffix}")
+
+
+def _log_strength_momentum_observation(stock, code, result):
+    if not isinstance(result, dict):
+        return
+    stage = "strength_momentum_pass" if result.get("allowed") else "strength_momentum_observed"
+    _log_entry_pipeline(
+        stock,
+        code,
+        stage,
+        reason=result.get("reason"),
+        base_vpw=f"{float(result.get('base_vpw', 0.0) or 0.0):.1f}",
+        current_vpw=f"{float(result.get('current_vpw', 0.0) or 0.0):.1f}",
+        delta=f"{float(result.get('vpw_delta', 0.0) or 0.0):.1f}",
+        slope=f"{float(result.get('slope_per_sec', 0.0) or 0.0):.2f}",
+        window_sec=result.get("window_sec"),
+        buy_value=int(result.get("window_buy_value", 0) or 0),
+        sell_value=int(result.get("window_sell_value", 0) or 0),
+        buy_ratio=f"{float(result.get('window_buy_ratio', 0.0) or 0.0):.2f}",
+        exec_buy_ratio=f"{float(result.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
+        net_buy_qty=int(result.get("window_net_buy_qty", 0) or 0),
+        elapsed=f"{float(result.get('elapsed_sec', 0.0) or 0.0):.2f}",
+    )
 
 
 def _iter_pending_entry_orders(stock):
@@ -574,16 +599,74 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                 _log_entry_pipeline(stock, code, "blocked_missing_radar", strategy=strategy)
                 return
 
+            observe_only = bool(getattr(TRADING_RULES, "SCALP_DYNAMIC_VPW_OBSERVE_ONLY", True))
+            momentum_gate = evaluate_scalping_strength_momentum(ws_data)
+            if momentum_gate.get("enabled"):
+                _log_strength_momentum_observation(stock, code, momentum_gate)
+                if not observe_only and not momentum_gate.get("allowed"):
+                    _log_entry_pipeline(
+                        stock,
+                        code,
+                        "blocked_strength_momentum",
+                        reason=momentum_gate.get("reason"),
+                        delta=f"{float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}",
+                        buy_value=int(momentum_gate.get("window_buy_value", 0) or 0),
+                        buy_ratio=f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
+                        exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
+                        net_buy_qty=int(momentum_gate.get("window_net_buy_qty", 0) or 0),
+                    )
+                    return
+
             if current_vpw < VPW_SCALP_LIMIT:
-                log_info(f"[DEBUG] {code} VPW 불충족 (current_vpw={current_vpw:.1f} < VPW_SCALP_LIMIT)")
-                _log_entry_pipeline(
-                    stock,
-                    code,
-                    "blocked_vpw",
-                    current_vpw=f"{current_vpw:.1f}",
-                    threshold=VPW_SCALP_LIMIT,
-                )
-                return
+                shadow_candidate = None
+                if momentum_gate.get("allowed"):
+                    if observe_only:
+                        shadow_candidate = record_shadow_candidate(stock, code, ws_data, momentum_gate)
+                        if shadow_candidate:
+                            _log_entry_pipeline(
+                                stock,
+                                code,
+                                "shadow_candidate_recorded",
+                                shadow_id=shadow_candidate.get("shadow_id"),
+                                signal_price=shadow_candidate.get("signal_price"),
+                                dynamic_delta=f"{float(shadow_candidate.get('dynamic_delta', 0.0) or 0.0):.1f}",
+                                dynamic_buy_value=int(shadow_candidate.get("dynamic_window_buy_value", 0) or 0),
+                                dynamic_buy_ratio=f"{float(shadow_candidate.get('dynamic_window_buy_ratio', 0.0) or 0.0):.2f}",
+                            )
+                    else:
+                        _log_entry_pipeline(
+                            stock,
+                            code,
+                            "dynamic_vpw_override_pass",
+                            current_vpw=f"{current_vpw:.1f}",
+                            threshold=VPW_SCALP_LIMIT,
+                            dynamic_reason=momentum_gate.get("reason"),
+                            dynamic_delta=f"{float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}",
+                            dynamic_buy_value=int(momentum_gate.get("window_buy_value", 0) or 0),
+                            dynamic_buy_ratio=f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
+                            dynamic_exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
+                            dynamic_net_buy_qty=int(momentum_gate.get("window_net_buy_qty", 0) or 0),
+                        )
+                        shadow_candidate = None
+                if momentum_gate.get("allowed") and not observe_only:
+                    pass
+                else:
+                    log_info(f"[DEBUG] {code} VPW 불충족 (current_vpw={current_vpw:.1f} < VPW_SCALP_LIMIT)")
+                    _log_entry_pipeline(
+                        stock,
+                        code,
+                        "blocked_vpw",
+                        current_vpw=f"{current_vpw:.1f}",
+                        threshold=VPW_SCALP_LIMIT,
+                        dynamic_allowed=momentum_gate.get("allowed"),
+                        dynamic_reason=momentum_gate.get("reason"),
+                        dynamic_delta=f"{float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}",
+                        dynamic_buy_value=int(momentum_gate.get("window_buy_value", 0) or 0),
+                        dynamic_exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
+                        dynamic_net_buy_qty=int(momentum_gate.get("window_net_buy_qty", 0) or 0),
+                        shadow_recorded=bool(shadow_candidate),
+                    )
+                    return
             if liquidity_value < MIN_LIQUIDITY:
                 log_info(
                     f"[DEBUG] {code} 유동성 불충족 (liquidity_value={liquidity_value:,.0f} "
