@@ -125,7 +125,7 @@ class TradingConfig:
     SCALP_TRAILING_LIMIT: float = 0.5  # DEPRECATED: STRONG/WEAK로 대체됨
     MIN_SCALP_LIQUIDITY: int = 500_000_000  # 최소 호가 잔량 대금 (5억)
     MAX_SCALP_SURGE_PCT: float = 20.0  # 초단타 진입 금지 급등률 (20%)
-    MAX_INTRADAY_SURGE: float = 15.0  # 당일 시가 대비 최대 급등률 (15%)
+    MAX_INTRADAY_SURGE: float = 16.0  # 당일 시가 대비 최대 급등률 (1차 완화: 16%)
     # [V3 스캘핑 동적 트레일링 전용 상수]
     SCALP_SAFE_PROFIT = 0.5            # 💡 [신규] 수수료/세금/슬리피지를 커버하는 최소 안전 마진 (이 선을 넘으면 무조건 수익 마감 모드 돌입)
     SCALP_TRAILING_LIMIT_STRONG = 0.8  # 💡 [신규] AI 점수가 75점 이상(수급 폭발)일 때 허용하는 고점 대비 눌림폭 (%)
@@ -137,7 +137,9 @@ class TradingConfig:
     VPW_KOSDAQ_LIMIT: int = 115  # 확신도가 낮을 때 매수를 강행하기 위한 체결강도 허들(%)
     HOLDING_DAYS: int = 4  # KOSPI 최대 보유 영업일
     KOSDAQ_HOLDING_DAYS: int = 3  # 코스닥 최대 보유 영업일
-    MAX_SWING_GAP_UP_PCT: float = 3.0  # 💡 [신규] 스윙 전략 아침 갭상승/급등 출발 시 추격 매수 방지 기준 (%)
+    MAX_SWING_GAP_UP_PCT: float = 3.0  # DEPRECATED: 전략별 갭 기준의 공통 폴백
+    MAX_SWING_GAP_UP_PCT_KOSDAQ: float = 3.0  # 코스닥 스윙 갭상승 차단 기준
+    MAX_SWING_GAP_UP_PCT_KOSPI: float = 3.5  # 코스피 스윙 갭상승 차단 기준 (1차 완화)
 
     # ==========================================
     # 🎯 추가된 스나이퍼 매매/운영 세부 설정값
@@ -195,6 +197,10 @@ class TradingConfig:
     AI_SCORE_THRESHOLD_KOSDAQ: int = 60    # KOSDAQ_ML AI 점수 매수 보류 임계값 (60점 미만 보류)
     AI_SCORE_THRESHOLD_KOSPI: int = 60     # KOSPI_ML AI 점수 매수 보류 임계값 (60점 미만 보류)
     AI_WATCHING_COOLDOWN: int = 180  # 신규 진입 감시(WATCHING) 쿨타임 (초)
+    ML_GATEKEEPER_PULLBACK_WAIT_COOLDOWN: int = 60 * 20  # 게이트키퍼 '눌림 대기' 재평가 쿨다운
+    ML_GATEKEEPER_REJECT_COOLDOWN: int = 60 * 60 * 2  # 게이트키퍼 '전량 회피' 계열 쿨다운
+    ML_GATEKEEPER_NEUTRAL_COOLDOWN: int = 60 * 30  # 게이트키퍼 중립/애매 응답 재평가 쿨다운
+    ML_GATEKEEPER_ERROR_COOLDOWN: int = 60 * 10  # 게이트키퍼 오류 재시도 쿨다운
     # [AI 보유 종목 감시 쿨타임 설정 - 비용 절감형]
     AI_HOLDING_MIN_COOLDOWN = 15          # 💡 (기존 5초 -> 15초) 주가가 미친듯이 널뛰어도 최소 15초는 무조건 대기
     AI_HOLDING_MAX_COOLDOWN = 50          # 💡 (기존 30초 -> 50초) 평상시 횡보장에서는 50초에 딱 한 번만 AI 호출
@@ -207,6 +213,24 @@ class TradingConfig:
     GPT_FAST_MODEL = "gpt-4.1-mini"
     GPT_DEEP_MODEL = "gpt-4o"
     GPT_ENGINE_MIN_INTERVAL: float = 0.5 # OpenAI 서버에 쏘는 최소 간격 (초 단위, 0.5초 = 500ms)
+
+    # ==========================================
+    # ⚡ 성능 최적화 캐시 설정
+    # ==========================================
+    KIWOOM_TICK_CACHE_TTL_SEC: float = 1.0  # 최근 틱 체결 조회 캐시
+    KIWOOM_MINUTE_CACHE_TTL_SEC: float = 3.0  # 최근 1분봉 조회 캐시
+    KIWOOM_STRENGTH_CACHE_TTL_SEC: float = 1.0  # 체결강도 패킷 캐시
+    KIWOOM_DAILY_CACHE_TTL_SEC: float = 30.0  # 일봉/이평 계산용 캐시
+    KIWOOM_INVESTOR_CACHE_TTL_SEC: float = 60.0  # 외인/기관 수급 캐시
+    KIWOOM_PROGRAM_CACHE_TTL_SEC: float = 20.0  # 프로그램 fallback 캐시
+    AI_ANALYZE_RESULT_CACHE_TTL_SEC: float = 5.0  # 스캘핑/보유 AI 재평가 결과 캐시
+    AI_GATEKEEPER_RESULT_CACHE_TTL_SEC: float = 8.0  # 스윙 Gatekeeper 결과 캐시
+    GATEKEEPER_SNAPSHOT_DEDUP_TTL_SEC: float = 10.0  # 동일 Gatekeeper 스냅샷 중복 기록 억제
+    AI_HOLDING_FAST_REUSE_CRITICAL_SEC: float = 5.0  # 위기구간 동일 시장상태 재평가 생략
+    AI_HOLDING_FAST_REUSE_NORMAL_SEC: float = 12.0  # 일반구간 동일 시장상태 재평가 생략
+    AI_GATEKEEPER_FAST_REUSE_SEC: float = 8.0  # 동일 감시 스냅샷 재평가 생략
+    AI_HOLDING_FAST_REUSE_MAX_WS_AGE_SEC: float = 1.5  # 보유 AI fast reuse 허용 최대 WS 나이
+    AI_GATEKEEPER_FAST_REUSE_MAX_WS_AGE_SEC: float = 2.0  # Gatekeeper fast reuse 허용 최대 WS 나이
 
     # ==========================================
     # 📝 로그 운영 설정

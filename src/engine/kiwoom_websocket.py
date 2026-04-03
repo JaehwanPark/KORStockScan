@@ -1,4 +1,5 @@
 import asyncio
+import concurrent.futures
 import websockets
 import json
 import threading
@@ -45,6 +46,8 @@ class KiwoomWSManager:
         self._tick_dispatch_thread = None
         self._ws_thread = None
         self._started = False
+        self._pending_loop_futures = set()
+        self._pending_future_lock = threading.Lock()
         
         # 전역 EventBus 인스턴스 획득 및 외부 명령 수신기 장착
         self.event_bus = EventBus()
@@ -308,6 +311,7 @@ class KiwoomWSManager:
         self._stop_event.set()
         self._started = False
         self._tick_dispatch_event.set()
+        self._cancel_pending_futures()
 
         try:
             self.event_bus.unsubscribe("COMMAND_WS_REG", self._handle_reg_event)
@@ -332,6 +336,32 @@ class KiwoomWSManager:
                 thread.join(timeout=2)
 
         self.websocket = None
+
+    def _cancel_pending_futures(self):
+        with self._pending_future_lock:
+            futures = list(self._pending_loop_futures)
+            self._pending_loop_futures.clear()
+        for future in futures:
+            try:
+                future.cancel()
+            except Exception:
+                pass
+
+    def _cancel_pending_loop_tasks(self):
+        if not self.loop:
+            return
+        try:
+            pending = [task for task in asyncio.all_tasks(self.loop) if not task.done()]
+        except Exception:
+            pending = []
+        if not pending:
+            return
+        for task in pending:
+            task.cancel()
+        try:
+            self.loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        except Exception:
+            pass
 
     async def _run_ws(self):
         while not self._stop_event.is_set():
@@ -721,8 +751,13 @@ class KiwoomWSManager:
         def thread_target():
             self.loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self.loop)
-            self.loop.run_until_complete(self._run_ws())
-            self.loop.close()
+            try:
+                self.loop.run_until_complete(self._run_ws())
+                self._cancel_pending_loop_tasks()
+                self.loop.run_until_complete(self.loop.shutdown_asyncgens())
+            finally:
+                self.loop.close()
+                self.loop = None
 
         self._state_dispatch_thread = threading.Thread(target=self._dispatch_state_events, daemon=True)
         self._tick_dispatch_thread = threading.Thread(target=self._dispatch_tick_events, daemon=True)
@@ -740,14 +775,22 @@ class KiwoomWSManager:
                 return
 
             for _ in range(50):
-                if self.websocket: break
+                if self._stop_event.is_set():
+                    return
+                if self.websocket:
+                    break
                 await asyncio.sleep(0.1)
+
+            if self._stop_event.is_set():
+                return
 
             if self.websocket:
                 batch_size = int(getattr(TRADING_RULES, 'WS_REG_BATCH_SIZE', 20) or 20)
                 total_batches = (len(normalized_codes) + batch_size - 1) // batch_size
                 print(f"📝 [WS] 종목 등록(REG) 전송 시도: {normalized_codes} (batch_size={batch_size})")
                 for batch_index, batch_codes in enumerate(self._chunked(normalized_codes, batch_size), start=1):
+                    if self._stop_event.is_set() or not self.websocket:
+                        return
                     reg_packet = {
                         'trnm': 'REG',
                         'grp_no': '1',
@@ -767,7 +810,8 @@ class KiwoomWSManager:
                     await asyncio.sleep(0.15)
             else:
                 print(f"⚠️ [WS] 연결된 웹소켓이 없어 전송 실패: {normalized_codes}")
-
+        except asyncio.CancelledError:
+            return
         except Exception as e:
             log_error(f"🚨 [WS] _send_reg 에러 발생: {e}")
             print(f"🚨 [WS] _send_reg 내부 치명적 에러 발생: {e}")
@@ -775,16 +819,29 @@ class KiwoomWSManager:
     def execute_subscribe(self, codes):
         if not codes: return
         if isinstance(codes, str): codes = [codes]
+        if self._stop_event.is_set() or not self._started:
+            return
 
         normalized_codes = self._normalize_subscribe_codes(codes)
         new_targets = [c for c in normalized_codes if c not in self.subscribed_codes]
 
         if new_targets and self.loop and self.loop.is_running() and not self._stop_event.is_set():
             future = asyncio.run_coroutine_threadsafe(self._send_reg(new_targets), self.loop)
+            with self._pending_future_lock:
+                self._pending_loop_futures.add(future)
 
             def on_complete(fut):
-                try: fut.result()
+                with self._pending_future_lock:
+                    self._pending_loop_futures.discard(fut)
+                try:
+                    fut.result()
+                except asyncio.CancelledError:
+                    return
+                except concurrent.futures.CancelledError:
+                    return
                 except Exception as e:
+                    if self._stop_event.is_set() or "cancelled" in str(e).lower():
+                        return
                     log_error(f"🚨 [WS] 스레드 통신 간 에러 발생: {e}")
                     print(f"🚨 [WS] 스레드 통신 간 에러 발생: {e}")
 

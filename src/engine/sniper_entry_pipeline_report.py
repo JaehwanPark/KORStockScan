@@ -17,6 +17,9 @@ _ENTRY_RE = re.compile(
     r"stage=(?P<stage>[^\s]+)(?P<rest>.*)$"
 )
 _FIELD_RE = re.compile(r"(?P<key>[A-Za-z_]+)=(?P<value>[^\s]+)")
+_GATEKEEPER_ACTION_RE = re.compile(
+    r"\saction=(?P<action>.+?)(?:\s+cooldown_sec=|\s+cooldown_policy=|\s+gatekeeper_eval_ms=|$)"
+)
 _IGNORED_STOCK_KEYS = {
     ("TEST", "123456"),
 }
@@ -53,8 +56,18 @@ _DISPLAY_STAGE_LABELS = {
     "blocked_overbought": "과열 차단",
     "blocked_big_bite_hard_gate": "Big-Bite 차단",
     "blocked_vpw": "정적 체결강도 차단",
-    "blocked_gatekeeper_reject": "게이트키퍼 거부",
+    "blocked_gatekeeper_reject": "게이트키퍼 보류",
     "blocked_swing_gap": "스윙 갭상승 차단",
+}
+
+_DISPLAY_REASON_LABELS = {
+    "below_window_buy_value": "단기 매수 유입 약함",
+    "below_strength_base": "체결강도 베이스 부족",
+    "below_buy_ratio": "매수비율 부족",
+    "below_exec_buy_ratio": "체결 매수비율 부족",
+    "insufficient_history": "관측 히스토리 부족",
+    "below_target_delta": "체결강도 변화량 부족",
+    "latency_state_danger": "지연 리스크 위험구간",
 }
 
 _SUMMARY_PASS_STAGES = {
@@ -125,7 +138,10 @@ def _parse_event(line: str) -> PipelineEvent | None:
     match = _ENTRY_RE.match(line.strip())
     if not match:
         return None
-    fields = {m.group("key"): m.group("value") for m in _FIELD_RE.finditer(match.group("rest") or "")}
+    fields = {
+        m.group("key"): str(m.group("value")).replace("|", " ")
+        for m in _FIELD_RE.finditer(match.group("rest") or "")
+    }
     return PipelineEvent(
         timestamp=match.group("timestamp"),
         name=match.group("name"),
@@ -184,7 +200,7 @@ def _friendly_gate_name(stage: str) -> str:
         "blocked_overbought": "과열",
         "blocked_big_bite_hard_gate": "Big-Bite 하드게이트",
         "blocked_vpw": "정적 체결강도",
-        "blocked_gatekeeper_reject": "게이트키퍼 거부",
+        "blocked_gatekeeper_reject": "게이트키퍼 보류",
         "blocked_swing_gap": "스윙 갭상승",
         "first_ai_wait": "첫 AI 대기",
     }
@@ -229,8 +245,8 @@ _BLOCKER_GUIDE = {
         "check": "current_vpw vs limit",
     },
     "게이트키퍼 거부": {
-        "description": "스윙 게이트키퍼가 실시간 컨텍스트를 보고 진입을 거부한 경우",
-        "check": "gatekeeper action/report",
+        "description": "스윙 AI Gatekeeper가 수급·호가·갭·위치 정보를 종합해 즉시 진입보다 보류가 낫다고 본 경우",
+        "check": "gatekeeper action, report, gap, orderbook, program flow",
     },
     "스윙 갭상승": {
         "description": "스윙 진입 기준 대비 갭상승 폭이 너무 커서 추격을 막은 경우",
@@ -242,9 +258,96 @@ _BLOCKER_GUIDE = {
     },
 }
 
+_GATEKEEPER_ACTION_GUIDE = {
+    "눌림 대기": {
+        "description": (
+            "추세 자체를 부정한 것은 아니지만, 현재 가격 위치가 애매하거나 단기 추격 리스크가 크다고 본 경우입니다. "
+            "즉시 진입 대신 눌림 재진입, VWAP/전일고점 재지지, 매도잔량 소화 확인이 필요하다는 의미에 가깝습니다."
+        ),
+        "check": "VWAP 재안착, 전일고점 재돌파, 매도잔량 소화, 프로그램/순매수 유지",
+    },
+    "전량 회피": {
+        "description": (
+            "현재 시점의 수급·호가·갭 구조가 불리해 스윙 진입 기대값이 낮다고 본 경우입니다. "
+            "단순 타이밍 문제라기보다 공급 우위, 추격 과열, 돌파 품질 저하처럼 구조적 리스크가 커서 아예 건너뛰자는 판단입니다."
+        ),
+        "check": "갭 과열, 매도 우위 잔량, 프로그램 순매도, 돌파 실패/상단 매물 여부",
+    },
+    "둘 다 아님": {
+        "description": (
+            "스캘핑도 스윙도 현재 문맥상 적합하지 않다고 본 경우입니다. "
+            "진입 시나리오 자체가 불명확하거나 수급 방향성이 약해 전략 우위를 만들지 못한 상태에 가깝습니다."
+        ),
+        "check": "전략 부합도, 수급 방향성, 위치 애매함, 추세 지속성",
+    },
+    "스윙 우선": {
+        "description": (
+            "초단기 추격보다는 스윙 관점의 눌림/재돌파 시나리오가 더 유효하다고 본 경우입니다. "
+            "같은 종목이라도 진입 타임프레임을 더 길게 보라는 의미입니다."
+        ),
+        "check": "타임프레임 전환, 눌림 구간, 일봉 위치, 거래대금 유지",
+    },
+}
+
 
 def _display_stage_label(stage: str) -> str:
     return _DISPLAY_STAGE_LABELS.get(stage, _friendly_gate_name(stage))
+
+
+def _display_reason_label(reason: str) -> str:
+    if not reason:
+        return ""
+    return _DISPLAY_REASON_LABELS.get(reason, reason)
+
+
+def _extract_gatekeeper_action(event: PipelineEvent) -> str:
+    action = str(event.fields.get("action") or "").replace("|", " ").strip()
+    if action and action not in {"눌림", "전량", "둘", "스윙"}:
+        return action
+    match = _GATEKEEPER_ACTION_RE.search(event.raw_line or "")
+    if match:
+        return str(match.group("action") or "").replace("|", " ").strip()
+    return action
+
+
+def _extract_event_reason(event: PipelineEvent) -> str:
+    if event.stage == "blocked_gatekeeper_reject":
+        return _extract_gatekeeper_action(event) or event.fields.get("reason") or ""
+    return event.fields.get("reason") or event.fields.get("dynamic_reason") or ""
+
+
+def _friendly_blocker_name(event: PipelineEvent) -> str:
+    if event.stage == "blocked_gatekeeper_reject":
+        action = _extract_gatekeeper_action(event)
+        if action:
+            return f"게이트키퍼: {action}"
+    return _friendly_gate_name(event.stage)
+
+
+def _resolve_blocker_guide(gate: str) -> dict[str, str]:
+    gate_text = str(gate or "").strip()
+    if gate_text.startswith("게이트키퍼:"):
+        action = gate_text.split(":", 1)[1].strip()
+        action_guide = _GATEKEEPER_ACTION_GUIDE.get(action)
+        if action_guide:
+            return {
+                "gate": gate_text,
+                "description": action_guide["description"],
+                "check": action_guide["check"],
+            }
+        fallback = _BLOCKER_GUIDE.get("게이트키퍼 거부", {})
+        return {
+            "gate": gate_text,
+            "description": fallback.get("description", "운영 로그에서 상세 사유 확인 필요"),
+            "check": fallback.get("check", "-"),
+        }
+
+    base = _BLOCKER_GUIDE.get(gate_text, {})
+    return {
+        "gate": gate_text,
+        "description": base.get("description", "운영 로그에서 상세 사유 확인 필요"),
+        "check": base.get("check", "-"),
+    }
 
 
 def _build_summary_flow(item_events: list[PipelineEvent], latest: PipelineEvent) -> list[dict]:
@@ -314,11 +417,13 @@ def _build_pass_flow(item_events: list[PipelineEvent]) -> list[dict]:
 
 def _build_latest_status(latest: PipelineEvent) -> dict:
     status_kind = _classify_stage(latest.stage)
+    raw_reason = _extract_event_reason(latest)
     return {
         "stage": latest.stage,
         "label": _display_stage_label(latest.stage),
         "kind": status_kind,
-        "reason": latest.fields.get("reason") or latest.fields.get("dynamic_reason") or "",
+        "reason": raw_reason,
+        "reason_label": _display_reason_label(raw_reason),
         "timestamp": latest.timestamp,
     }
 
@@ -337,7 +442,8 @@ def _build_confirmed_failure(item_events: list[PipelineEvent]) -> dict | None:
         return {
             "stage": event.stage,
             "label": _display_stage_label(event.stage),
-            "reason": event.fields.get("reason") or event.fields.get("dynamic_reason") or "",
+            "reason": _extract_event_reason(event),
+            "reason_label": _display_reason_label(_extract_event_reason(event)),
             "timestamp": event.timestamp,
             "fields": dict(event.fields),
             "details": _build_failure_details(event),
@@ -393,6 +499,13 @@ def _build_precheck_passes(item_events: list[PipelineEvent]) -> list[dict]:
     return precheck_stages
 
 
+def _find_latest_gatekeeper_event(item_events: list[PipelineEvent]) -> PipelineEvent | None:
+    for event in reversed(item_events):
+        if event.stage == "blocked_gatekeeper_reject":
+            return event
+    return None
+
+
 def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = None, top_n: int = 20) -> dict:
     log_path = LOGS_DIR / "sniper_state_handlers_info.log"
     lines = _iter_target_lines(log_path, target_date=target_date)
@@ -430,7 +543,7 @@ def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = 
         latest_stage_counts[latest.stage] += 1
         stage_class = _classify_stage(latest.stage)
         if stage_class in {"blocked", "waiting"}:
-            blocker_counts[_friendly_gate_name(latest.stage)] += 1
+            blocker_counts[_friendly_blocker_name(latest)] += 1
 
         compact_flow = []
         for event in item_events:
@@ -439,6 +552,30 @@ def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = 
 
         pass_flow = _build_pass_flow(item_events)
         latest_status = _build_latest_status(latest)
+        latest_gatekeeper_event = _find_latest_gatekeeper_event(item_events)
+        gatekeeper_replay = None
+        if latest_gatekeeper_event is not None:
+            replay_time = ""
+            try:
+                replay_time = datetime.strptime(
+                    latest_gatekeeper_event.timestamp,
+                    "%Y-%m-%d %H:%M:%S",
+                ).strftime("%H:%M:%S")
+            except Exception:
+                replay_time = ""
+            gatekeeper_replay = {
+                "timestamp": latest_gatekeeper_event.timestamp,
+                "time": replay_time,
+                "action": latest_gatekeeper_event.fields.get("action") or "",
+                "url": (
+                    f"/gatekeeper-replay?date={target_date}&code={latest.code}"
+                    + (f"&time={replay_time}" if replay_time else "")
+                ),
+                "api_url": (
+                    f"/api/gatekeeper-replay?date={target_date}&code={latest.code}"
+                    + (f"&time={replay_time}" if replay_time else "")
+                ),
+            }
 
         per_stock_rows.append({
             "name": latest.name,
@@ -453,6 +590,7 @@ def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = 
             "precheck_passes": _build_precheck_passes(item_events),
             "latest_status": latest_status,
             "confirmed_failure": _build_confirmed_failure(item_events),
+            "gatekeeper_replay": gatekeeper_replay,
             "summary_flow": _build_summary_flow(item_events, latest),
             "events": [_event_to_row(event) for event in item_events[-min(len(item_events), 20):]],
         })
@@ -480,11 +618,7 @@ def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = 
             for gate, count in blocker_counts.most_common(12)
         ],
         "blocker_guide": [
-            {
-                "gate": gate,
-                "description": _BLOCKER_GUIDE.get(gate, {}).get("description", "운영 로그에서 상세 사유 확인 필요"),
-                "check": _BLOCKER_GUIDE.get(gate, {}).get("check", "-"),
-            }
+            _resolve_blocker_guide(gate)
             for gate, _count in blocker_counts.most_common(12)
         ],
         "sections": {

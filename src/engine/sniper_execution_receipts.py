@@ -379,6 +379,7 @@ def _update_db_for_sell(target_id, exec_price, now, target_stock, strategy, is_s
                 'sell_completed',
                 sell_price=int(exec_price or 0),
                 profit_rate=f"{profit_rate:+.2f}",
+                exit_rule=target_stock.get('last_exit_rule') or '-',
                 revive=bool(is_scalp_revive),
                 strategy=strategy,
             )
@@ -746,6 +747,7 @@ def handle_real_execution(exec_data):
                             'sell_completed',
                             sell_price=int(exec_price or 0),
                             profit_rate=f"{profit_rate:+.2f}",
+                            exit_rule=target_stock.get('last_exit_rule') or '-',
                             revive=True,
                             new_watch_id=int(new_watch_id or 0),
                         )

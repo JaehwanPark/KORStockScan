@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from src.utils.constants import LOGS_DIR, POSTGRES_URL
+from src.engine.sniper_gatekeeper_replay import find_gatekeeper_snapshot_for_trade
 
 
 _HOLDING_RE = re.compile(
@@ -39,6 +40,7 @@ _EVENT_DETAIL_LABELS = {
     "review_cd_sec": "AI 주기",
     "sell_reason_type": "청산유형",
     "reason": "사유",
+    "exit_rule": "청산 규칙",
     "peak_profit": "고점수익",
     "current_ai_score": "현재 AI",
     "curr_price": "현재가",
@@ -65,6 +67,7 @@ _EVENT_DETAIL_LABELS = {
 
 _DETAIL_KEY_ORDER = [
     "reason",
+    "exit_rule",
     "profit_rate",
     "ai_score",
     "low_score_hits",
@@ -380,6 +383,7 @@ def _build_exit_signal(events: list[HoldingEvent]) -> dict | None:
             "label": _friendly_stage(event.stage),
             "timestamp": event.timestamp,
             "reason": event.fields.get("reason") or "",
+            "exit_rule": event.fields.get("exit_rule") or "",
             "sell_reason_type": event.fields.get("sell_reason_type") or "",
             "details": _build_event_details(event),
             "fields": dict(event.fields),
@@ -411,6 +415,25 @@ def _build_trade_row(trade: dict, events: list[HoldingEvent]) -> dict:
         for event in events
         if event.stage == "ai_holding_review"
     ]
+    gatekeeper_snapshot = find_gatekeeper_snapshot_for_trade(
+        str(trade.get("rec_date") or ""),
+        str(trade.get("code") or ""),
+        buy_dt,
+    )
+    gatekeeper_replay = None
+    if gatekeeper_snapshot:
+        replay_time = str(gatekeeper_snapshot.get("signal_time") or "")
+        gatekeeper_replay = {
+            "timestamp": gatekeeper_snapshot.get("recorded_at") or "",
+            "time": replay_time,
+            "action": gatekeeper_snapshot.get("action_label") or "",
+            "allow_entry": bool(gatekeeper_snapshot.get("allow_entry", False)),
+            "report_preview": str(gatekeeper_snapshot.get("report_preview") or ""),
+            "url": (
+                f"/gatekeeper-replay?date={trade.get('rec_date')}&code={trade.get('code')}"
+                + (f"&time={replay_time}" if replay_time else "")
+            ),
+        }
 
     return {
         **trade,
@@ -421,19 +444,37 @@ def _build_trade_row(trade: dict, events: list[HoldingEvent]) -> dict:
         "latest_event": _build_latest_event(events),
         "exit_signal": _build_exit_signal(events),
         "ai_reviews": ai_reviews[-6:],
+        "gatekeeper_replay": gatekeeper_replay,
     }
 
 
-def build_trade_review_report(target_date: str, code: str | None = None, since_time: str | None = None, top_n: int = 10) -> dict:
+def _is_entered_trade(row: dict) -> bool:
+    status = str(row.get("status") or "").upper()
+    if row.get("buy_time"):
+        return True
+    if _safe_int(row.get("buy_qty")) > 0:
+        return True
+    return status in {"BUY_ORDERED", "HOLDING", "SELL_ORDERED", "COMPLETED"}
+
+
+def build_trade_review_report(
+    target_date: str,
+    code: str | None = None,
+    since_time: str | None = None,
+    top_n: int = 10,
+    scope: str = "entered",
+) -> dict:
     normalized_code = str(code).strip()[:6] if code else None
     since_dt = _parse_since_datetime(target_date, since_time)
+    scope = str(scope or "entered").strip().lower()
 
     log_paths = [
         LOGS_DIR / "sniper_state_handlers_info.log",
         LOGS_DIR / "sniper_execution_receipts_info.log",
     ]
     lines = _iter_target_lines(log_paths, target_date=target_date)
-    events = [event for line in lines if (event := _parse_event(line))]
+    all_events = [event for line in lines if (event := _parse_event(line))]
+    events = all_events
     if normalized_code:
         events = [event for event in events if event.code == normalized_code]
     if since_dt is not None:
@@ -445,39 +486,62 @@ def build_trade_review_report(target_date: str, code: str | None = None, since_t
         events = filtered_events
     events.sort(key=_event_sort_key)
 
-    trade_rows, warnings = _fetch_trade_rows(target_date, normalized_code)
+    trade_rows, warnings = _fetch_trade_rows(target_date, None)
     per_stage = Counter(event.stage for event in events)
 
     compiled_rows = []
     for trade in trade_rows:
-        matched = _match_trade_events(trade, events)
+        matched = _match_trade_events(trade, all_events)
         compiled_rows.append(_build_trade_row(trade, matched))
 
-    recent_trades = compiled_rows[:top_n]
-    realized = [row for row in compiled_rows if str(row.get("status") or "").upper() == "COMPLETED"]
+    all_rows = compiled_rows
+    entered_rows = [row for row in all_rows if _is_entered_trade(row)]
+    expired_rows = [row for row in all_rows if str(row.get("status") or "").upper() == "EXPIRED"]
+    base_rows = all_rows if scope == "all" else entered_rows
+    visible_rows = base_rows
+    if normalized_code:
+        visible_rows = [row for row in visible_rows if str(row.get("code") or "").strip() == normalized_code]
+
+    recent_trades = visible_rows[:top_n]
+    realized = [row for row in visible_rows if str(row.get("status") or "").upper() == "COMPLETED"]
     win_count = sum(1 for row in realized if _safe_float(row.get("profit_rate")) > 0)
     loss_count = sum(1 for row in realized if _safe_float(row.get("profit_rate")) < 0)
-    codes = sorted({row["code"] for row in compiled_rows if row.get("code")})
+    available_stocks = []
+    seen_codes = set()
+    for row in entered_rows:
+        code_value = str(row.get("code") or "").strip()
+        if not code_value or code_value in seen_codes:
+            continue
+        seen_codes.add(code_value)
+        available_stocks.append({
+            "code": code_value,
+            "name": str(row.get("name") or ""),
+            "label": f"{row.get('name') or '-'} ({code_value})",
+        })
 
     return {
         "date": target_date,
         "code": normalized_code,
+        "scope": scope,
         "since": since_dt.strftime("%Y-%m-%d %H:%M:%S") if since_dt else None,
-        "has_data": bool(compiled_rows or events),
+        "has_data": bool(visible_rows or events),
         "meta": {
             "warnings": warnings,
-            "available_codes": codes,
+            "available_stocks": available_stocks,
             "log_paths": [str(path) for path in log_paths],
         },
         "metrics": {
-            "total_trades": len(compiled_rows),
+            "total_trades": len(visible_rows),
             "completed_trades": len(realized),
-            "open_trades": sum(1 for row in compiled_rows if str(row.get("status") or "").upper() != "COMPLETED"),
+            "open_trades": sum(1 for row in visible_rows if str(row.get("status") or "").upper() != "COMPLETED"),
             "win_trades": win_count,
             "loss_trades": loss_count,
             "avg_profit_rate": round(sum(_safe_float(row.get("profit_rate")) for row in realized) / len(realized), 2) if realized else 0.0,
             "realized_pnl_krw": int(sum(_safe_int(row.get("realized_pnl_krw")) for row in realized)),
             "holding_events": len(events),
+            "all_rows": len(all_rows),
+            "entered_rows": len(entered_rows),
+            "expired_rows": len(expired_rows),
         },
         "event_breakdown": [
             {"stage": stage, "label": _friendly_stage(stage), "count": count}
@@ -485,8 +549,9 @@ def build_trade_review_report(target_date: str, code: str | None = None, since_t
         ],
         "sections": {
             "recent_trades": recent_trades,
-            "completed_trades": [row for row in compiled_rows if str(row.get("status") or "").upper() == "COMPLETED"][:top_n],
-            "open_trades": [row for row in compiled_rows if str(row.get("status") or "").upper() != "COMPLETED"][:top_n],
+            "completed_trades": [row for row in visible_rows if str(row.get("status") or "").upper() == "COMPLETED"][:top_n],
+            "open_trades": [row for row in visible_rows if str(row.get("status") or "").upper() != "COMPLETED"][:top_n],
+            "expired_candidates": expired_rows[:top_n],
         },
     }
 

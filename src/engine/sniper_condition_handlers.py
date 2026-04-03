@@ -425,6 +425,7 @@ def handle_condition_matched(payload):
                 candid_record.trade_type = 'SCALP'
 
                 if not any(str(t.get('code', '')).strip()[:6] == code for t in ACTIVE_TARGETS):
+                    marcap = int(DB.get_latest_marcap(code) or 0) if DB is not None else 0
                     new_target = {
                         'id': candid_record.id,
                         'code': code,
@@ -432,7 +433,8 @@ def handle_condition_matched(payload):
                         'strategy': 'SCALPING',
                         'status': 'WATCHING',
                         'added_time': time.time(),
-                        'position_tag': 'VCP_SHOOTING'
+                        'position_tag': 'VCP_SHOOTING',
+                        'marcap': marcap,
                     }
                     ACTIVE_TARGETS.append(new_target)
                     EVENT_BUS.publish("COMMAND_WS_REG", {"codes": [code]})
@@ -532,6 +534,7 @@ def handle_condition_matched(payload):
             if not is_next_day_target:
                 newly_added_to_active = False
                 if not any(str(t.get('code', '')).strip()[:6] == code for t in ACTIVE_TARGETS):
+                    marcap = int(DB.get_latest_marcap(code) or 0) if DB is not None else 0
                     new_target = {
                         'id': record.id,
                         'code': code,
@@ -539,7 +542,8 @@ def handle_condition_matched(payload):
                         'strategy': record.strategy or target_strategy,
                         'status': 'WATCHING',
                         'added_time': time.time(),
-                        'position_tag': getattr(record, 'position_tag', target_position_tag) or target_position_tag
+                        'position_tag': getattr(record, 'position_tag', target_position_tag) or target_position_tag,
+                        'marcap': marcap,
                     }
                     ACTIVE_TARGETS.append(new_target)
                     newly_added_to_active = True

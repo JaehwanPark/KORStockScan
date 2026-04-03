@@ -10,6 +10,7 @@ import time
 import threading
 import json
 import re
+import hashlib
 from datetime import datetime, timezone
 from itertools import cycle
 from google import genai
@@ -185,6 +186,11 @@ REALTIME_ANALYSIS_PROMPT_SCALP = """
 4. 이미 보유 중이라면 신규 진입과 다르게 판단하라.
 5. 결론은 반드시 행동 가능한 문장으로 끝내라.
 
+[세부 수급 우선순위]
+1. 누적 체결강도 숫자 하나보다 순간 체결대금, 매수 체결량 우위, 순매수 체결량을 더 우선하라.
+2. 매수비율이 높아도 순매수 체결량이 약하거나 잔량 개선이 없으면 '눌림 대기' 또는 '전량 회피'로 보수적으로 판단하라.
+3. 프로그램 절대 매수/매도, 매수/매도 잔량 변화가 동반되면 호가 우위를 더 강하게 인정하라.
+
 [출력 형식]
 텔레그램 마크다운으로 아래 형식만 사용하라.
 
@@ -209,6 +215,11 @@ REALTIME_ANALYSIS_PROMPT_SWING = """
 3. 프로그램, 외인, 기관의 개입이 지속 가능한지 판단하라.
 4. 기계 목표가와 손절가의 손익비가 합리적인지 검증하라.
 5. 이미 많이 오른 자리라면 좋은 종목이어도 추격 금지를 명확히 말하라.
+
+[세부 수급 우선순위]
+1. 프로그램 절대 매수/매도, 순매수 체결량, 잔량 개선 여부를 눌림목의 질을 가르는 핵심 근거로 삼아라.
+2. '눌림 대기'와 '전량 회피'를 구분할 때는 VWAP 위치, 고가 대비 눌림폭, 갭 부담, 프로그램 절대 매수/매도, 잔량 개선의 조합을 명시적으로 사용하라.
+3. 갭상승이 있어도 프로그램 절대 매수 우위와 잔량 개선이 유지되면 무조건 회피로 몰지 말고, 눌림 재진입 가능성을 함께 판단하라.
 
 [출력 형식]
 텔레그램 마크다운으로 아래 형식만 사용하라.
@@ -353,6 +364,11 @@ class GeminiSniperEngine:
         self.ai_disabled = False
         self.max_consecutive_failures = getattr(TRADING_RULES, 'AI_MAX_CONSECUTIVE_FAILURES', 5)
         self.current_api_key_index = 0
+        self.cache_lock = threading.RLock()
+        self.analysis_cache_ttl = getattr(TRADING_RULES, 'AI_ANALYZE_RESULT_CACHE_TTL_SEC', 8.0)
+        self.gatekeeper_cache_ttl = getattr(TRADING_RULES, 'AI_GATEKEEPER_RESULT_CACHE_TTL_SEC', 12.0)
+        self._analysis_cache = {}
+        self._gatekeeper_cache = {}
         print(f"🧠 [AI 엔진] {len(self.api_keys)}개 키 로테이션 가동! (선봉: {self.current_model_name})")
 
     def _rotate_client(self):
@@ -363,6 +379,78 @@ class GeminiSniperEngine:
             self.current_api_key_index = self.api_keys.index(self.current_key)
         except ValueError:
             self.current_api_key_index = 0
+
+    def _normalize_for_cache(self, value):
+        if isinstance(value, dict):
+            return {str(k): self._normalize_for_cache(v) for k, v in sorted(value.items()) if str(k) != "captured_at"}
+        if isinstance(value, list):
+            return [self._normalize_for_cache(item) for item in value]
+        if isinstance(value, tuple):
+            return [self._normalize_for_cache(item) for item in value]
+        if isinstance(value, float):
+            return round(value, 4)
+        if value is None or isinstance(value, (str, int, bool)):
+            return value
+        return str(value)
+
+    def _build_cache_digest(self, payload):
+        normalized = self._normalize_for_cache(payload)
+        raw = json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+        return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+    def _cache_get(self, cache_name, key):
+        cache = getattr(self, cache_name, None)
+        lock = getattr(self, "cache_lock", None)
+        if cache is None or lock is None:
+            return None
+        now = time.time()
+        with lock:
+            entry = cache.get(key)
+            if not entry:
+                return None
+            if float(entry.get("expires_at", 0.0) or 0.0) <= now:
+                cache.pop(key, None)
+                return None
+            value = dict(entry.get("value", {}))
+            value["cache_hit"] = True
+            value.setdefault("cache_mode", "hit")
+            return value
+
+    def _cache_set(self, cache_name, key, value, ttl_sec):
+        cache = getattr(self, cache_name, None)
+        lock = getattr(self, "cache_lock", None)
+        if cache is None or lock is None or ttl_sec <= 0:
+            return
+        now = time.time()
+        payload = dict(value or {})
+        payload.pop("cache_hit", None)
+        with lock:
+            cache[key] = {
+                "expires_at": now + float(ttl_sec),
+                "value": payload,
+            }
+            if len(cache) > 512:
+                expired = [item_key for item_key, item in cache.items() if float(item.get("expires_at", 0.0) or 0.0) <= now]
+                for item_key in expired[:128]:
+                    cache.pop(item_key, None)
+
+    def _build_analysis_cache_key(self, target_name, strategy, ws_data, recent_ticks, recent_candles, program_net_qty):
+        return self._build_cache_digest({
+            "target_name": target_name,
+            "strategy": strategy,
+            "ws_data": ws_data,
+            "recent_ticks": recent_ticks,
+            "recent_candles": recent_candles,
+            "program_net_qty": program_net_qty,
+        })
+
+    def _build_gatekeeper_cache_key(self, stock_name, stock_code, realtime_ctx, analysis_mode):
+        return self._build_cache_digest({
+            "stock_name": stock_name,
+            "stock_code": stock_code,
+            "analysis_mode": analysis_mode,
+            "realtime_ctx": realtime_ctx,
+        })
     
     # ==========================================
     # 3. 💡 [아키텍처 포인트] 만능 API 호출기 (중복 코드 완벽 제거)
@@ -641,10 +729,26 @@ class GeminiSniperEngine:
     # ==========================================
     # strategy 파라미터 추가 (기본값 SCALPING)
     def analyze_target(self, target_name, ws_data, recent_ticks, recent_candles, strategy="SCALPING", program_net_qty=0):
+        cache_key = self._build_analysis_cache_key(
+            target_name=target_name,
+            strategy=strategy,
+            ws_data=ws_data,
+            recent_ticks=recent_ticks,
+            recent_candles=recent_candles,
+            program_net_qty=program_net_qty,
+        )
+        cached_result = self._cache_get("_analysis_cache", cache_key)
+        if cached_result is not None:
+            return cached_result
+
         if not self.lock.acquire(blocking=False):
             return {"action": "WAIT", "score": 50, "reason": "AI 경합 (다른 종목 분석 중)"}
             
         try:
+            cached_result = self._cache_get("_analysis_cache", cache_key)
+            if cached_result is not None:
+                return cached_result
+
             # AI 엔진이 비활성화되었을 경우 즉시 DROP 반환
             if self.ai_disabled:
                 return {"action": "DROP", "score": 0, "reason": "AI 엔진 일시 중단 (연속 실패)"}
@@ -674,6 +778,10 @@ class GeminiSniperEngine:
             # 호출 성공 시 실패 횟수 리셋
             self.consecutive_failures = 0
             self.last_call_time = time.time()
+            self._cache_set("_analysis_cache", cache_key, result, self.analysis_cache_ttl)
+            result = dict(result)
+            result["cache_hit"] = False
+            result["cache_mode"] = "miss"
             return result
                 
         except Exception as e:
@@ -832,10 +940,22 @@ class GeminiSniperEngine:
         orderbook_imbalance = f("orderbook_imbalance")
         best_ask = i("best_ask")
         best_bid = i("best_bid")
+        tick_trade_value = i("tick_trade_value")
+        cum_trade_value = i("cum_trade_value")
+        buy_exec_volume = i("buy_exec_volume")
+        sell_exec_volume = i("sell_exec_volume")
+        net_buy_exec_volume = i("net_buy_exec_volume")
+        buy_exec_single = i("buy_exec_single")
+        sell_exec_single = i("sell_exec_single")
+        prog_buy_qty = i("prog_buy_qty")
+        prog_sell_qty = i("prog_sell_qty")
+        prog_buy_amt = i("prog_buy_amt")
+        prog_sell_amt = i("prog_sell_amt")
 
         common_block = f"""[기본]
 - 종목명: {stock_name}
 - 종목코드: {stock_code}
+- 시가총액: {i('market_cap'):,}원
 - 분석모드: {selected_mode}
 - 감시전략: {realtime_ctx.get('strat_label', 'AUTO')}
 - 보유상태: {realtime_ctx.get('position_status', 'NONE')}
@@ -853,8 +973,14 @@ class GeminiSniperEngine:
 - 체결강도 현재/1분/3분/5분: {f('v_pw_now'):.1f} / {f('v_pw_1m'):.1f} / {f('v_pw_3m'):.1f} / {f('v_pw_5m'):.1f}
 - 매수세 현재/1분/3분: {f('buy_ratio_now'):.1f}% / {f('buy_ratio_1m'):.1f}% / {f('buy_ratio_3m'):.1f}%
 - 프로그램 순매수 현재/증감: {i('prog_net_qty'):+,}주 / {i('prog_delta_qty'):+,}주
+- 프로그램 절대 매수/매도: {prog_buy_qty:+,}주 / {prog_sell_qty:+,}주 | {prog_buy_amt:+,} / {prog_sell_amt:+,}
 - 외인/기관 당일 가집계: 외인 {i('foreign_net'):+,}주 / 기관 {i('inst_net'):+,}주
 - 외인+기관 합산: {i('smart_money_net'):+,}주
+- 순간 체결대금/누적: {tick_trade_value:,} / {cum_trade_value:,}
+- 매수/매도 체결량: {buy_exec_volume:+,} / {sell_exec_volume:+,} (순매수 {net_buy_exec_volume:+,})
+- 체결 매수비율(WS): {f('buy_ratio_ws'):.1f}% / 체결량 기준 {f('exec_buy_ratio'):.1f}%
+- 단건 체결: 매수 {buy_exec_single:+,} / 매도 {sell_exec_single:+,}
+- 수급 요약: {realtime_ctx.get('micro_flow_desc', '')} / {realtime_ctx.get('program_flow_desc', '')}
 
 [호가/구조]
 - 최우선 매도/매수호가: {best_ask:,} / {best_bid:,}
@@ -863,6 +989,8 @@ class GeminiSniperEngine:
 - 스프레드: {i('spread_tick')}틱
 - 체결 편향: {realtime_ctx.get('tape_bias', '중립')}
 - 매도벽 소화 여부: {realtime_ctx.get('ask_absorption_status', '')}
+- 잔량 개선: 매수 {i('net_bid_depth'):+,} ({f('bid_depth_ratio'):.1f}%) / 매도 {i('net_ask_depth'):+,} ({f('ask_depth_ratio'):.1f}%)
+- 잔량 요약: {realtime_ctx.get('depth_flow_desc', '')}
 - VWAP: {vwap_price:,}원 ({realtime_ctx.get('vwap_status', '정보없음')})
 - 시가 위치: {realtime_ctx.get('open_position_desc', '')}
 - 고가 돌파 여부: {realtime_ctx.get('high_breakout_status', '')}
@@ -961,6 +1089,16 @@ class GeminiSniperEngine:
 
     def evaluate_realtime_gatekeeper(self, stock_name, stock_code, realtime_ctx, analysis_mode="AUTO"):
         """generate_realtime_report 결과를 마지막 진입 게이트 판단용으로 정규화합니다."""
+        cache_key = self._build_gatekeeper_cache_key(
+            stock_name=stock_name,
+            stock_code=stock_code,
+            realtime_ctx=realtime_ctx,
+            analysis_mode=analysis_mode,
+        )
+        cached_gatekeeper = self._cache_get("_gatekeeper_cache", cache_key)
+        if cached_gatekeeper is not None:
+            return cached_gatekeeper
+
         report = self.generate_realtime_report(
             stock_name=stock_name,
             stock_code=stock_code,
@@ -969,11 +1107,15 @@ class GeminiSniperEngine:
         )
         action_label = self.extract_realtime_gatekeeper_action(report)
         allow_entry = action_label == "즉시 매수"
-        return {
+        result = {
             "allow_entry": allow_entry,
             "action_label": action_label,
             "report": report,
+            "cache_hit": False,
+            "cache_mode": "miss",
         }
+        self._cache_set("_gatekeeper_cache", cache_key, result, self.gatekeeper_cache_ttl)
+        return result
 
     # ==========================================
     # 🔍 [신규] 스캘핑 오버나이트 의사결정 (15:15 전용)

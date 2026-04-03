@@ -98,6 +98,11 @@ from src.engine.sniper_analysis import (
 )
 import src.engine.sniper_state_handlers as sniper_state_handlers
 from src.engine.sniper_strength_momentum import evaluate_scalping_strength_momentum
+from src.engine.sniper_dynamic_thresholds import (
+    estimate_turnover_hint,
+    get_dynamic_scalp_thresholds,
+    get_dynamic_swing_gap_threshold,
+)
 from src.engine.sniper_state_handlers import bind_state_dependencies
 import src.engine.sniper_execution_receipts as sniper_execution_receipts
 from src.engine.sniper_execution_receipts import bind_execution_dependencies
@@ -165,6 +170,32 @@ bind_sync_dependencies(
     state_lock=_state_lock,
     conf=CONF,
 )
+
+
+def _get_swing_gap_threshold(strategy: str) -> float:
+    fallback = float(getattr(TRADING_RULES, 'MAX_SWING_GAP_UP_PCT', 3.0) or 3.0)
+    strategy_upper = str(strategy or '').upper()
+    if strategy_upper == 'KOSPI_ML':
+        return float(getattr(TRADING_RULES, 'MAX_SWING_GAP_UP_PCT_KOSPI', fallback) or fallback)
+    return float(getattr(TRADING_RULES, 'MAX_SWING_GAP_UP_PCT_KOSDAQ', fallback) or fallback)
+
+
+def _resolve_stock_marcap(stock, code) -> int:
+    try:
+        existing = int(float(stock.get('marcap', 0) or 0))
+    except Exception:
+        existing = 0
+    if existing > 0:
+        return existing
+    try:
+        marcap = int(DB.get_latest_marcap(code) or 0)
+    except Exception:
+        marcap = 0
+    if marcap > 0:
+        stock['marcap'] = marcap
+    return marcap
+
+
 def _set_ai_engine_from_analysis(engine):
     global AI_ENGINE
     AI_ENGINE = engine
@@ -429,11 +460,21 @@ def check_watching_conditions(stock, code, ws_data, admin_id, radar=None, ai_eng
         ask_tot = int(float(ws_data.get('ask_tot', 0) or 0))
         bid_tot = int(float(ws_data.get('bid_tot', 0) or 0))
         open_price = float(ws_data.get('open', curr_price) or curr_price)
+        marcap = _resolve_stock_marcap(stock, code)
+        turnover_hint = estimate_turnover_hint(curr_price, ws_data.get('volume', 0))
+        scalp_limits = get_dynamic_scalp_thresholds(marcap, turnover_hint=turnover_hint)
         intraday_surge = ((curr_price - open_price) / open_price) * 100 if open_price > 0 else fluctuation
         liquidity_value = (ask_tot + bid_tot) * curr_price
+        max_surge = float(scalp_limits.get('max_surge', MAX_SURGE) or MAX_SURGE)
+        max_intraday_surge = float(scalp_limits.get('max_intraday_surge', MAX_INTRADAY_SURGE) or MAX_INTRADAY_SURGE)
+        min_liquidity = int(scalp_limits.get('min_liquidity', MIN_LIQUIDITY) or MIN_LIQUIDITY)
         
-        if fluctuation >= MAX_SURGE or intraday_surge >= MAX_INTRADAY_SURGE:
-            return f"과매수 위험 차단 (fluctuation={fluctuation:.2f} >= {MAX_SURGE} 또는 intraday_surge={intraday_surge:.2f} >= {MAX_INTRADAY_SURGE})"
+        if fluctuation >= max_surge or intraday_surge >= max_intraday_surge:
+            return (
+                f"과매수 위험 차단 (fluctuation={fluctuation:.2f} >= {max_surge:.2f} "
+                f"또는 intraday_surge={intraday_surge:.2f} >= {max_intraday_surge:.2f}, "
+                f"cap={scalp_limits.get('bucket_label')})"
+            )
         
         if pos_tag == 'VCP_NEXT':
             # VCP_NEXT는 별도 검사 없이 통과
@@ -450,8 +491,11 @@ def check_watching_conditions(stock, code, ws_data, admin_id, radar=None, ai_eng
                     f"dynamic_delta={float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}, "
                     f"dynamic_buy_value={int(momentum_gate.get('window_buy_value', 0) or 0)})"
                 )
-            if liquidity_value < MIN_LIQUIDITY:
-                return f"유동성 불충족 (liquidity_value={liquidity_value:,.0f} < MIN_LIQUIDITY={MIN_LIQUIDITY:,.0f})"
+            if liquidity_value < min_liquidity:
+                return (
+                    f"유동성 불충족 (liquidity_value={liquidity_value:,.0f} < "
+                    f"MIN_LIQUIDITY={min_liquidity:,.0f}, cap={scalp_limits.get('bucket_label')})"
+                )
             
             scanner_price = stock.get('buy_price') or 0
             if scanner_price > 0:
@@ -469,9 +513,15 @@ def check_watching_conditions(stock, code, ws_data, admin_id, radar=None, ai_eng
         if radar is None:
             return "radar 객체 없음 (KOSDAQ_ML/KOSPI_ML)"
         
-        max_gap = getattr(TRADING_RULES, 'MAX_SWING_GAP_UP_PCT', 3.0)
+        marcap = _resolve_stock_marcap(stock, code)
+        turnover_hint = estimate_turnover_hint(curr_price, ws_data.get('volume', 0))
+        swing_gap = get_dynamic_swing_gap_threshold(strategy, marcap, turnover_hint=turnover_hint)
+        max_gap = float(swing_gap.get('threshold', _get_swing_gap_threshold(strategy)) or _get_swing_gap_threshold(strategy))
         if fluctuation >= max_gap:
-            return f"갭상승 너무 큼 (fluctuation={fluctuation:.2f} >= max_gap={max_gap})"
+            return (
+                f"갭상승 너무 큼 (fluctuation={fluctuation:.2f} >= max_gap={max_gap:.2f}, "
+                f"cap={swing_gap.get('bucket_label')})"
+            )
         
         # 추가 검사 생략 (복잡성으로 인해)
         # AI 점수 체크

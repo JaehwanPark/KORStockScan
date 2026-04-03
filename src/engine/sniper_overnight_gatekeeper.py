@@ -100,6 +100,7 @@ def _build_scalping_overnight_ctx(record, mem_stock=None, ws_data=None):
         record.stock_code,
         position_status=record.status,
         ws_data=ws_data,
+        market_cap=(mem_stock or {}).get('marcap', 0),
     )
 
     avg_price = int(float(getattr(record, 'buy_price', 0) or (mem_stock.get('buy_price', 0) if mem_stock else 0) or 0))

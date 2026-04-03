@@ -1,15 +1,57 @@
 import os
 import json
 import time
+import threading
 import requests
 import pandas as pd
 import numpy as np
 import holidays
+from copy import deepcopy
 from datetime import datetime, timedelta
 
 # 💡 독립 로거 및 전역 상수 사용
 from src.utils.logger import log_error, log_info
 from src.utils.constants import CONFIG_PATH, DEV_PATH, TRADING_RULES  # 필요에 따라 상수를 추가/수정해서 사용
+
+
+_MARKET_DATA_CACHE = {}
+_MARKET_DATA_CACHE_LOCK = threading.RLock()
+
+
+def _cache_clone(value):
+    if isinstance(value, pd.DataFrame):
+        return value.copy(deep=True)
+    return deepcopy(value)
+
+
+def _cache_get(namespace, key):
+    cache_key = (namespace, key)
+    now = time.time()
+    with _MARKET_DATA_CACHE_LOCK:
+        entry = _MARKET_DATA_CACHE.get(cache_key)
+        if not entry:
+            return None
+        if float(entry.get("expires_at", 0.0) or 0.0) <= now:
+            _MARKET_DATA_CACHE.pop(cache_key, None)
+            return None
+        return _cache_clone(entry.get("value"))
+
+
+def _cache_set(namespace, key, value, ttl_sec):
+    if ttl_sec <= 0:
+        return value
+    cache_key = (namespace, key)
+    now = time.time()
+    with _MARKET_DATA_CACHE_LOCK:
+        _MARKET_DATA_CACHE[cache_key] = {
+            "expires_at": now + float(ttl_sec),
+            "value": _cache_clone(value),
+        }
+        if len(_MARKET_DATA_CACHE) > 2048:
+            expired = [k for k, v in _MARKET_DATA_CACHE.items() if float(v.get("expires_at", 0.0) or 0.0) <= now]
+            for item in expired[:512]:
+                _MARKET_DATA_CACHE.pop(item, None)
+    return value
 
 # ==========================================
 # 1. API 설정 및 공통 유틸리티
@@ -349,9 +391,14 @@ def get_basic_info_ka10001(token, code):
 
 def get_daily_ohlcv_ka10081_df(token, code, end_date=""):
     """[ka10081] 주식일봉차트조회요청 (과거 데이터 연속조회 지원)"""
-    url = get_api_url("/api/dostk/chart")
     if not end_date:
         end_date = datetime.now().strftime("%Y%m%d")
+    cache_key = (str(code), str(end_date))
+    cached_df = _cache_get("ka10081_daily_df", cache_key)
+    if cached_df is not None:
+        return cached_df
+
+    url = get_api_url("/api/dostk/chart")
         
     payload = {
         "stk_cd": str(code),
@@ -363,7 +410,12 @@ def get_daily_ohlcv_ka10081_df(token, code, end_date=""):
     results = fetch_kiwoom_api_continuous(url, token, 'ka10081', payload, use_continuous=False)
     
     if not results:
-        return pd.DataFrame()
+        return _cache_set(
+            "ka10081_daily_df",
+            cache_key,
+            pd.DataFrame(),
+            getattr(TRADING_RULES, "KIWOOM_DAILY_CACHE_TTL_SEC", 30.0),
+        )
         
     # 여러 페이지(연속조회)의 응답 리스트를 하나의 DataFrame으로 합침
     all_data = []
@@ -372,7 +424,12 @@ def get_daily_ohlcv_ka10081_df(token, code, end_date=""):
         all_data.extend(output)
         
     if not all_data:
-        return pd.DataFrame()
+        return _cache_set(
+            "ka10081_daily_df",
+            cache_key,
+            pd.DataFrame(),
+            getattr(TRADING_RULES, "KIWOOM_DAILY_CACHE_TTL_SEC", 30.0),
+        )
 
     df = pd.DataFrame(all_data)
 
@@ -393,7 +450,12 @@ def get_daily_ohlcv_ka10081_df(token, code, end_date=""):
     df.set_index('Date', inplace=True)
     
     # 가장 오래된 과거(오름차순) 순으로 정렬하여 반환
-    return df.sort_index()
+    return _cache_set(
+        "ka10081_daily_df",
+        cache_key,
+        df.sort_index(),
+        getattr(TRADING_RULES, "KIWOOM_DAILY_CACHE_TTL_SEC", 30.0),
+    )
 
 def get_item_info_ka10100(token, code):
     """
@@ -570,6 +632,11 @@ def get_investor_daily_ka10059_df(token, code, base_dt=None, is_nxt=None):
     else:
         base_dt = base_dt.replace("-", "")
 
+    cache_key = (str(req_code), str(base_dt))
+    cached_df = _cache_get("ka10059_investor_df", cache_key)
+    if cached_df is not None:
+        return cached_df
+
     url = get_api_url("/api/dostk/stkinfo")
     payload = {"dt": base_dt, "stk_cd": str(req_code), "amt_qty_tp": "2", "trde_tp": "0", "unit_tp": "1"}
 
@@ -585,13 +652,25 @@ def get_investor_daily_ka10059_df(token, code, base_dt=None, is_nxt=None):
         url=url, token=token, api_id='ka10059', payload=payload, use_continuous=False
     )
 
-    if not results: return empty_df
+    if not results:
+        return _cache_set(
+            "ka10059_investor_df",
+            cache_key,
+            empty_df,
+            getattr(TRADING_RULES, "KIWOOM_INVESTOR_CACHE_TTL_SEC", 60.0),
+        )
 
     all_data = []
     for res in results:
         all_data.extend(res.get('stk_invsr_orgn', []))
 
-    if not all_data: return empty_df
+    if not all_data:
+        return _cache_set(
+            "ka10059_investor_df",
+            cache_key,
+            empty_df,
+            getattr(TRADING_RULES, "KIWOOM_INVESTOR_CACHE_TTL_SEC", 60.0),
+        )
 
     df = pd.DataFrame(all_data)
     
@@ -625,7 +704,12 @@ def get_investor_daily_ka10059_df(token, code, base_dt=None, is_nxt=None):
     df.set_index('Date', inplace=True)
     
     df = df[~df.index.duplicated(keep='first')]
-    return df.sort_index()
+    return _cache_set(
+        "ka10059_investor_df",
+        cache_key,
+        df.sort_index(),
+        getattr(TRADING_RULES, "KIWOOM_INVESTOR_CACHE_TTL_SEC", 60.0),
+    )
 
 def get_margin_daily_ka10013_df(token, code, base_dt=None, is_nxt=None):
     """[ka10013] 신용 잔고율 데이터 (공통 래퍼 함수 및 누락 방어 적용)"""
@@ -921,6 +1005,10 @@ def check_program_buying_ka90008(token, code, date_str=None, retry_prev_if_zero=
     """
     url = get_api_url("/api/dostk/mrkcond")
     target_date = str(date_str or _get_prev_business_day_str())
+    cache_key = (str(code), str(target_date))
+    cached = _cache_get("ka90008_program_snapshot", cache_key)
+    if cached is not None:
+        return cached
     payload = {"amt_qty_tp": "2", "stk_cd": str(code), "date": target_date}
 
     results = fetch_kiwoom_api_continuous(
@@ -971,7 +1059,12 @@ def check_program_buying_ka90008(token, code, date_str=None, retry_prev_if_zero=
                 retry_prev_if_zero=False
             )
 
-    return res_data
+    return _cache_set(
+        "ka90008_program_snapshot",
+        cache_key,
+        res_data,
+        getattr(TRADING_RULES, "KIWOOM_PROGRAM_CACHE_TTL_SEC", 20.0),
+    )
 
 
 def get_program_flow_realtime(token, code, ws_data=None):
@@ -1012,6 +1105,11 @@ def get_program_flow_realtime(token, code, ws_data=None):
 
 def check_execution_strength_ka10046(token, code):
     """[ka10046] 체결강도 및 거래대금 상세 데이터 패키지 반환"""
+    cache_key = str(get_effective_kiwoom_code(code))
+    cached = _cache_get("ka10046_strength", cache_key)
+    if cached is not None:
+        return cached
+
     url = get_api_url("/api/dostk/mrkcond")
     
     # SOR 일 경우 _AL 코드로 변환
@@ -1062,17 +1160,25 @@ def check_execution_strength_ka10046(token, code):
         res_data['is_strong'] = res_data['s5'] > res_data['s20'] and res_data['s5'] > 110.0
     
     time.sleep(0.3) # 💡 API 연속 호출 방지 위해 약간의 딜레이 추가
-            
-    return res_data
+
+    return _cache_set(
+        "ka10046_strength",
+        cache_key,
+        res_data,
+        getattr(TRADING_RULES, "KIWOOM_STRENGTH_CACHE_TTL_SEC", 2.0),
+    )
     
 def get_tick_history_ka10003(token, code, limit=10):
     """
     [ka10003] 주식체결정보요청 - 가격 흐름을 기반으로 한 진짜 체결 방향 역추적
     """
-    url = get_api_url("/api/dostk/stkinfo")
-
-    # SOR 일 경우 _AL 코드로 변환
     req_code = get_effective_kiwoom_code(code)
+    cache_key = (str(req_code), int(limit))
+    cached = _cache_get("ka10003_ticks", cache_key)
+    if cached is not None:
+        return cached
+
+    url = get_api_url("/api/dostk/stkinfo")
 
     payload = {"stk_cd": str(req_code)}
     
@@ -1126,7 +1232,12 @@ def get_tick_history_ka10003(token, code, limit=10):
                 'acc_vol': to_i(item.get('acc_trde_qty'))   # 누적거래량
             })
             
-    return ticks
+    return _cache_set(
+        "ka10003_ticks",
+        cache_key,
+        ticks,
+        getattr(TRADING_RULES, "KIWOOM_TICK_CACHE_TTL_SEC", 2.0),
+    )
 
 
 # 📝 TODO: 추후 RSI/MACD 보조지표 계산이 필요할 경우, 
@@ -1136,12 +1247,15 @@ def get_minute_candles_ka10080(token, code, limit=10):
     [REST API] ka10080: 주식분봉차트조회
     - 시간 역순 배열 방지 및 AI/지표 연산용 무결점 데이터 정제
     """
+    req_code = get_effective_kiwoom_code(code)
+    cache_key = (str(req_code), int(limit))
+    cached = _cache_get("ka10080_minutes", cache_key)
+    if cached is not None:
+        return cached
+
     url = get_api_url("/api/dostk/chart")
     base_dt = datetime.now().strftime('%Y%m%d')
     
-    # SOR 일 경우 _AL 코드로 변환
-    req_code = get_effective_kiwoom_code(code)
-
     payload = {
         'stk_cd': str(req_code),
         'tic_scope': '1',       # 1분봉
@@ -1191,9 +1305,19 @@ def get_minute_candles_ka10080(token, code, limit=10):
             
         # 🚀 [핵심 교정] 과거 -> 최신(현재) 시간순으로 배열을 뒤집어서 반환!
         # 이렇게 해야 AI 엔진(recent_candles[-1])과 지표 연산(이동평균선 등)이 정상 작동합니다.
-        return refined_candles[::-1]
-        
-    return refined_candles
+        return _cache_set(
+            "ka10080_minutes",
+            cache_key,
+            refined_candles[::-1],
+            getattr(TRADING_RULES, "KIWOOM_MINUTE_CACHE_TTL_SEC", 5.0),
+        )
+
+    return _cache_set(
+        "ka10080_minutes",
+        cache_key,
+        refined_candles,
+        getattr(TRADING_RULES, "KIWOOM_MINUTE_CACHE_TTL_SEC", 5.0),
+    )
 
 def get_top_marketcap_stocks(self, limit=300):
     """네이버 API 우회 시총 상위 종목 수집 (구조 정합성 교정)"""
@@ -1577,6 +1701,7 @@ def build_realtime_analysis_context(
     token,
     code,
     ws_data=None,
+    market_cap=0,
     strat_label="AUTO",
     position_status="NONE",
     avg_price=0,
@@ -1708,6 +1833,48 @@ def build_realtime_analysis_context(
     if best_ask > 0 and best_bid > 0 and tick_size > 0:
         spread_tick = max(0, int(round((best_ask - best_bid) / tick_size)))
 
+    tick_trade_value = _coerce_int(ws_data.get("tick_trade_value"), 0)
+    cum_trade_value = _coerce_int(ws_data.get("cum_trade_value"), 0)
+    buy_exec_volume = _coerce_int(ws_data.get("buy_exec_volume"), 0)
+    sell_exec_volume = _coerce_int(ws_data.get("sell_exec_volume"), 0)
+    net_buy_exec_volume = _coerce_int(ws_data.get("net_buy_exec_volume"), 0)
+    buy_exec_single = _coerce_int(ws_data.get("buy_exec_single"), 0)
+    sell_exec_single = _coerce_int(ws_data.get("sell_exec_single"), 0)
+    ws_buy_ratio = _coerce_float(ws_data.get("buy_ratio"), 0.0)
+    exec_total_volume = buy_exec_volume + sell_exec_volume
+    exec_buy_ratio = ((buy_exec_volume / exec_total_volume) * 100.0) if exec_total_volume > 0 else ws_buy_ratio
+    net_bid_depth = _coerce_int(ws_data.get("net_bid_depth"), 0)
+    bid_depth_ratio = _coerce_float(ws_data.get("bid_depth_ratio"), 0.0)
+    net_ask_depth = _coerce_int(ws_data.get("net_ask_depth"), 0)
+    ask_depth_ratio = _coerce_float(ws_data.get("ask_depth_ratio"), 0.0)
+    prog_buy_qty = _coerce_int(ws_data.get("prog_buy_qty"), 0) or _coerce_int(program_pack.get("buy_qty"), 0)
+    prog_sell_qty = _coerce_int(ws_data.get("prog_sell_qty"), 0) or _coerce_int(program_pack.get("sell_qty"), 0)
+    prog_buy_amt = _coerce_int(ws_data.get("prog_buy_amt"), 0) or _coerce_int(program_pack.get("buy_amt"), 0)
+    prog_sell_amt = _coerce_int(ws_data.get("prog_sell_amt"), 0) or _coerce_int(program_pack.get("sell_amt"), 0)
+
+    if exec_total_volume > 0 and exec_buy_ratio >= 60.0 and net_buy_exec_volume > 0:
+        micro_flow_desc = "단기 매수 체결 우위"
+    elif exec_total_volume > 0 and exec_buy_ratio <= 40.0 and net_buy_exec_volume < 0:
+        micro_flow_desc = "단기 매도 체결 우위"
+    else:
+        micro_flow_desc = "단기 체결 혼조"
+
+    if net_bid_depth > 0 and bid_depth_ratio >= 100.0:
+        depth_flow_desc = "매수 잔량 개선"
+    elif net_ask_depth > 0 and ask_depth_ratio >= 100.0:
+        depth_flow_desc = "매도 잔량 증가"
+    else:
+        depth_flow_desc = "잔량 변화 중립"
+
+    prog_abs_net_qty = prog_buy_qty - prog_sell_qty
+    prog_abs_net_amt = prog_buy_amt - prog_sell_amt
+    if prog_abs_net_qty > 0 and prog_abs_net_amt > 0:
+        program_flow_desc = "프로그램 절대 매수 우위"
+    elif prog_abs_net_qty < 0 and prog_abs_net_amt < 0:
+        program_flow_desc = "프로그램 절대 매도 우위"
+    else:
+        program_flow_desc = "프로그램 혼조"
+
     v_pw_now = _coerce_float(ws_data.get("v_pw"), 0.0) or _coerce_float(strength_pack.get("strength"), 0.0)
     v_pw_1m = _coerce_float(strength_pack.get("s5"), 0.0)
     v_pw_3m = _coerce_float(strength_pack.get("s20"), 0.0)
@@ -1762,6 +1929,7 @@ def build_realtime_analysis_context(
     ctx = {
         "captured_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "session_stage": "INTRADAY",
+        "market_cap": _coerce_int(market_cap, 0),
         "strat_label": strat_label,
         "position_status": position_status,
         "avg_price": _coerce_int(avg_price, 0),
@@ -1791,9 +1959,29 @@ def build_realtime_analysis_context(
         "trade_qty_signed_now": _coerce_int(tick_pack.get("trade_qty_signed_now"), 0),
         "prog_net_qty": _coerce_int(ws_data.get("prog_net_qty"), 0) or _coerce_int(program_pack.get("net_qty"), 0),
         "prog_delta_qty": _coerce_int(ws_data.get("prog_delta_qty"), 0),
+        "prog_buy_qty": prog_buy_qty,
+        "prog_sell_qty": prog_sell_qty,
+        "prog_buy_amt": prog_buy_amt,
+        "prog_sell_amt": prog_sell_amt,
         "foreign_net": _coerce_int(investor_pack.get("foreign_net"), 0),
         "inst_net": _coerce_int(investor_pack.get("inst_net"), 0),
         "smart_money_net": _coerce_int(investor_pack.get("smart_money_net"), 0),
+        "tick_trade_value": tick_trade_value,
+        "cum_trade_value": cum_trade_value,
+        "buy_exec_volume": buy_exec_volume,
+        "sell_exec_volume": sell_exec_volume,
+        "net_buy_exec_volume": net_buy_exec_volume,
+        "buy_exec_single": buy_exec_single,
+        "sell_exec_single": sell_exec_single,
+        "buy_ratio_ws": ws_buy_ratio,
+        "exec_buy_ratio": exec_buy_ratio,
+        "net_bid_depth": net_bid_depth,
+        "bid_depth_ratio": bid_depth_ratio,
+        "net_ask_depth": net_ask_depth,
+        "ask_depth_ratio": ask_depth_ratio,
+        "micro_flow_desc": micro_flow_desc,
+        "depth_flow_desc": depth_flow_desc,
+        "program_flow_desc": program_flow_desc,
         "best_ask": best_ask,
         "best_bid": best_bid,
         "ask_tot": ask_tot,
@@ -1825,5 +2013,3 @@ def build_realtime_analysis_context(
         "drawdown_from_high_pct": drawdown_from_high_pct,
     }
     return ctx
-
-

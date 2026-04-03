@@ -314,7 +314,14 @@ class DBManager:
                     SELECT 
                         id, rec_date as date, stock_code as code, stock_name as name, 
                         trade_type as type, status, strategy, position_tag, prob, nxt, 
-                        buy_price, buy_qty, buy_time, sell_price, sell_time, profit_rate 
+                        buy_price, buy_qty, buy_time, sell_price, sell_time, profit_rate,
+                        (
+                            SELECT dsq.marcap
+                            FROM daily_stock_quotes dsq
+                            WHERE dsq.stock_code = recommendation_history.stock_code
+                            ORDER BY dsq.quote_date DESC
+                            LIMIT 1
+                        ) as marcap
                     FROM recommendation_history 
                     WHERE (rec_date='{today}' AND status NOT IN ('COMPLETED', 'EXPIRED')) 
                        OR status='HOLDING'
@@ -359,6 +366,25 @@ class DBManager:
             print(f"감시 대상 로드 에러: {e}")
             log_error(f"감시 대상 로드 에러: {e}")
             return []
+
+    def get_latest_marcap(self, code: str) -> int:
+        target_code = str(code or "").replace("_AL", "").strip()[:6]
+        if not target_code:
+            return 0
+        query = text("""
+            SELECT COALESCE(marcap, 0)
+            FROM daily_stock_quotes
+            WHERE stock_code = :code
+            ORDER BY quote_date DESC
+            LIMIT 1
+        """)
+        try:
+            with self.get_session() as session:
+                value = session.execute(query, {"code": target_code}).scalar()
+            return int(value or 0)
+        except Exception as e:
+            log_error(f"최신 시가총액 조회 실패 [{target_code}]: {e}")
+            return 0
 
     # --------------------------------------------------------
     # 3. 텔레그램 유저 관리
