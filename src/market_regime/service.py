@@ -3,6 +3,8 @@ import threading
 from datetime import datetime, timedelta, time as dt_time
 from zoneinfo import ZoneInfo
 
+import numpy as np
+
 try:
     import fear_and_greed
 except ImportError:  # optional dependency
@@ -48,11 +50,28 @@ class MarketRegimeService:
         return (current.date() - timedelta(days=1)).isoformat()
 
     def _snapshot_to_payload(self, snapshot: MarketRegimeSnapshot, session_date: str) -> dict:
-        payload = dict(snapshot.__dict__)
+        payload = self._json_safe_value(dict(snapshot.__dict__))
         payload["timestamp"] = snapshot.timestamp.isoformat()
         payload["cached_session_date"] = session_date
         payload["cached_at"] = self._now().isoformat()
         return payload
+
+    def _json_safe_value(self, value):
+        if isinstance(value, dict):
+            return {str(key): self._json_safe_value(inner) for key, inner in value.items()}
+        if isinstance(value, (list, tuple, set)):
+            return [self._json_safe_value(item) for item in value]
+        if isinstance(value, np.bool_):
+            return bool(value)
+        if isinstance(value, np.integer):
+            return int(value)
+        if isinstance(value, np.floating):
+            return float(value)
+        if isinstance(value, np.ndarray):
+            return [self._json_safe_value(item) for item in value.tolist()]
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return value
 
     def _snapshot_from_payload(self, payload: dict) -> MarketRegimeSnapshot | None:
         try:
