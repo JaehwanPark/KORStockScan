@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html class="{{ 'dark' if theme_class == 'dark' else 'light' }}" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Performance Tuning | Trading Intelligence</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&amp;family=Inter:wght@400;500;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "surface-bright": "#f7f9fb",
+                        "on-primary-container": "#0048bf",
+                        "inverse-primary": "#618bff",
+                        "on-secondary-container": "#435368",
+                        "secondary-fixed": "#d3e4fe",
+                        "tertiary-fixed": "#69f6b8",
+                        "on-primary-fixed": "#003798",
+                        "on-error": "#fff7f6",
+                        "on-background": "#2a3439",
+                        "surface-dim": "#cfdce3",
+                        "inverse-on-surface": "#9a9d9f",
+                        "on-secondary-fixed-variant": "#4d5d73",
+                        "on-tertiary-container": "#005a3c",
+                        "error-dim": "#4e0309",
+                        "on-error-container": "#752121",
+                        "secondary-fixed-dim": "#c5d6f0",
+                        "secondary-container": "#d3e4fe",
+                        "on-primary-fixed-variant": "#0050d4",
+                        "primary-fixed-dim": "#c7d3ff",
+                        "surface-tint": "#0053db",
+                        "inverse-surface": "#0b0f10",
+                        "error": "#9f403d",
+                        "on-surface-variant": "#566166",
+                        "on-tertiary": "#e6ffee",
+                        "on-secondary": "#f7f9ff",
+                        "secondary-dim": "#44546a",
+                        "surface-container-lowest": "#ffffff",
+                        "error-container": "#fe8983",
+                        "primary": "#0053db",
+                        "surface-variant": "#d9e4ea",
+                        "primary-container": "#dbe1ff",
+                        "on-surface": "#2a3439",
+                        "outline-variant": "#a9b4b9",
+                        "surface-container-low": "#f0f4f7",
+                        "on-secondary-fixed": "#314055",
+                        "tertiary": "#006d4a",
+                        "on-primary": "#f8f7ff",
+                        "on-tertiary-fixed": "#00452d",
+                        "background": "#f7f9fb",
+                        "primary-fixed": "#dbe1ff",
+                        "tertiary-dim": "#005f40",
+                        "outline": "#717c82",
+                        "tertiary-container": "#69f6b8",
+                        "surface-container-high": "#e1e9ee",
+                        "tertiary-fixed-dim": "#58e7ab",
+                        "surface-container-highest": "#d9e4ea",
+                        "surface": "#f7f9fb",
+                        "surface-container": "#e8eff3",
+                        "secondary": "#506076",
+                        "on-tertiary-fixed-variant": "#006544",
+                        "primary-dim": "#0048c1"
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        body { font-family: 'Inter', sans-serif; }
+        h1, h2, h3 { font-family: 'Manrope', sans-serif; }
+        .theme-light-layout { display: block; }
+        .theme-dark-layout { display: none; }
+        html.dark .theme-light-layout { display: none; }
+        html.dark .theme-dark-layout { display: block; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+    </style>
+</head>
+<body>
+<div class="theme-light-layout bg-surface-bright text-on-surface">
+<aside class="fixed left-0 top-0 h-full flex flex-col py-8 bg-[#ffffff] w-64 shadow-[48px_0_48px_rgba(42,52,57,0.04)] z-50">
+<div class="px-6 mb-10">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-xl bg-primary flex items-center justify-center text-on-primary"><span class="material-symbols-outlined">analytics</span></div>
+<div><h2 class="text-lg font-black text-[#2a3439] tracking-tight">Atelier Terminal</h2><p class="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">Premium Tier</p></div>
+</div>
+</div>
+<nav class="flex-1 space-y-1">
+<a class="flex items-center gap-3 px-6 py-4 w-full transition-all text-[#2a3439]/70 hover:bg-[#f7f9fb] hover:translate-x-1" href="/dashboard?tab=daily-report&amp;date={{ report.date }}"><span class="material-symbols-outlined">dashboard</span><span class="font-inter text-sm font-medium">Dashboard</span></a>
+<a class="flex items-center gap-3 px-6 py-4 w-full transition-all text-[#2a3439]/70 hover:bg-[#f7f9fb] hover:translate-x-1" href="/entry-pipeline-flow?date={{ report.date }}"><span class="material-symbols-outlined">account_tree</span><span class="font-inter text-sm font-medium">Entry Gate</span></a>
+<a class="flex items-center gap-3 px-6 py-4 w-full transition-all text-[#2a3439]/70 hover:bg-[#f7f9fb] hover:translate-x-1" href="/trade-review?date={{ report.date }}"><span class="material-symbols-outlined">query_stats</span><span class="font-inter text-sm font-medium">Trade Review</span></a>
+<a class="flex items-center gap-3 px-6 py-4 w-full transition-all text-[#2a3439]/70 hover:bg-[#f7f9fb] hover:translate-x-1" href="/strength-momentum?date={{ report.date }}"><span class="material-symbols-outlined">account_balance_wallet</span><span class="font-inter text-sm font-medium">Portfolio</span></a>
+<a class="flex items-center gap-3 px-6 py-4 w-full transition-all bg-[#f0f4f7] text-[#0053db] rounded-r-full" href="/performance-tuning?date={{ report.date }}"><span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">insights</span><span class="font-inter text-sm font-medium">Analytics</span></a>
+</nav>
+<div class="px-6 mt-auto space-y-4">
+<button class="w-full py-3 bg-gradient-to-r from-primary to-primary-dim text-on-primary rounded-xl font-bold text-sm shadow-lg shadow-primary/10 transition-transform active:scale-95">New Trade</button>
+<div class="ad-slot-sidebar min-h-[96px] rounded-2xl border-2 border-dashed border-outline-variant/20 flex items-center justify-center text-[10px] uppercase tracking-[0.24em] text-on-surface-variant/50">ad-slot-sidebar</div>
+<div class="pt-6 space-y-2">
+<a class="flex items-center gap-3 text-on-surface-variant hover:text-primary transition-colors text-sm" href="#"><span class="material-symbols-outlined text-sm">help</span><span>Help</span></a>
+<a class="flex items-center gap-3 text-on-surface-variant hover:text-error transition-colors text-sm" href="#"><span class="material-symbols-outlined text-sm">logout</span><span>Logout</span></a>
+</div>
+</div>
+</aside>
+<main class="pl-64 flex flex-col min-h-screen">
+<header class="flex justify-between items-center px-8 h-16 w-full max-w-full bg-[#f7f9fb] sticky top-0 z-40">
+<div class="flex items-center gap-8">
+<h1 class="text-xl font-bold text-[#2a3439]">Performance Tuning</h1>
+<nav class="hidden md:flex gap-6">
+<a class="text-[#2a3439]/60 font-manrope font-bold text-sm tracking-tight hover:text-[#0053db] transition-colors duration-200 pb-1" href="/entry-pipeline-flow?date={{ report.date }}">Entry Gate</a>
+<a class="text-[#2a3439]/60 font-manrope font-bold text-sm tracking-tight hover:text-[#0053db] transition-colors duration-200 pb-1" href="/trade-review?date={{ report.date }}">Trade Review</a>
+</nav>
+</div>
+<div class="flex items-center gap-6">
+<form action="/performance-tuning" class="relative">
+<span class="absolute left-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-on-surface-variant text-sm">search</span>
+<input class="bg-surface-container-low border-none rounded-full pl-10 pr-4 py-1.5 text-xs w-64 focus:ring-1 focus:ring-primary" name="since" placeholder="Search parameters..." type="text" value="{{ report.since or '' }}"/>
+<input name="date" type="hidden" value="{{ report.date }}"/>
+</form>
+<div class="flex items-center gap-4">
+<button id="theme-toggle-light" type="button"><span class="material-symbols-outlined cursor-pointer text-on-surface-variant hover:text-primary transition-colors">dark_mode</span></button>
+<span class="material-symbols-outlined cursor-pointer text-on-surface-variant hover:text-primary transition-colors">notifications</span>
+<span class="material-symbols-outlined cursor-pointer text-on-surface-variant hover:text-primary transition-colors">settings</span>
+<div class="w-8 h-8 rounded-full overflow-hidden bg-surface-container flex items-center justify-center text-[10px] font-bold">AI</div>
+</div>
+</div>
+</header>
+<div class="bg-surface-dim/30 px-8 py-2 flex items-center gap-8 overflow-x-auto no-scrollbar">
+<div class="flex items-center gap-2 whitespace-nowrap"><span class="text-[10px] font-bold text-on-surface-variant uppercase tracking-tighter">System Health</span><span class="flex items-center gap-1 text-xs font-bold {% if status_health == 'Operational' %}text-tertiary{% elif status_health == 'Watch' %}text-primary{% else %}text-error{% endif %}"><span class="w-2 h-2 rounded-full {% if status_health == 'Operational' %}bg-tertiary{% elif status_health == 'Watch' %}bg-primary{% else %}bg-error{% endif %} animate-pulse"></span>{{ status_health }}</span></div>
+<div class="h-4 w-[1px] bg-outline-variant/30"></div>
+<div class="flex items-center gap-4 text-[11px] font-medium text-on-secondary-container">
+<span>API Latency: <strong class="text-on-surface">{{ api_latency }}ms</strong></span>
+<span>DB Load: <strong class="text-on-surface">{{ db_load }}%</strong></span>
+<span>Active Nodes: <strong class="text-on-surface">{{ active_nodes }}/24</strong></span>
+<span>Throughput: <strong class="text-on-surface">{{ throughput_label }}</strong></span>
+</div>
+</div>
+<div class="p-8 space-y-8">
+<div class="grid grid-cols-12 gap-6">
+<div class="col-span-12 lg:col-span-8 bg-surface-container-lowest p-6 rounded-xl shadow-[0_4px_24px_rgba(42,52,57,0.02)]">
+<div class="flex justify-between items-center mb-8">
+<div><h3 class="text-lg font-bold text-on-surface">Transaction Latency Histogram</h3><p class="text-xs text-on-surface-variant">Real-time execution speed distribution across global nodes</p></div>
+<div class="flex gap-2"><button class="px-3 py-1 text-[10px] font-bold rounded-md bg-surface-container-low text-on-surface-variant">1H</button><button class="px-3 py-1 text-[10px] font-bold rounded-md bg-primary text-on-primary">6H</button><button class="px-3 py-1 text-[10px] font-bold rounded-md bg-surface-container-low text-on-surface-variant">24H</button></div>
+</div>
+<div class="h-64 flex items-end justify-between gap-1">
+{% for bar in histogram_bars %}
+<div class="flex-1 {% if loop.index >= 12 %}bg-error/20{% elif loop.index == 7 %}bg-primary{% else %}bg-primary/{{ 10 + (loop.index0 * 5) if loop.index < 7 else 60 }}{% endif %} rounded-t-sm h-[{{ bar }}%] {% if loop.index == 7 %}relative group{% endif %}">
+{% if loop.index == 7 %}<div class="absolute -top-10 left-1/2 -translate-x-1/2 bg-on-surface text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity">{{ p95_value }}ms (p95)</div>{% endif %}
+</div>
+{% endfor %}
+</div>
+<div class="flex justify-between mt-4 text-[10px] font-bold text-on-surface-variant uppercase tracking-widest"><span>2ms</span><span>8ms</span><span>14ms</span><span>20ms</span><span>26ms+</span></div>
+</div>
+<div class="col-span-12 lg:col-span-4 grid grid-rows-2 gap-6">
+<div class="bg-surface-container-lowest p-6 rounded-xl shadow-[0_4px_24px_rgba(42,52,57,0.02)] flex flex-col justify-between"><div class="flex justify-between items-start"><span class="text-xs font-bold text-on-surface-variant uppercase tracking-tight">CPU Core Load</span><span class="text-tertiary font-bold text-xs">+1.2%</span></div><div class="mt-4 flex items-baseline gap-2"><span class="text-4xl font-extrabold text-on-surface tracking-tighter">{{ cpu_usage }}</span><span class="text-lg font-bold text-on-surface-variant">%</span></div><div class="mt-6 w-full bg-surface-container h-1.5 rounded-full overflow-hidden"><div class="bg-primary h-full rounded-full" style="width: {{ cpu_usage }}%;"></div></div></div>
+<div class="bg-surface-container-lowest p-6 rounded-xl shadow-[0_4px_24px_rgba(42,52,57,0.02)] flex flex-col justify-between"><div class="flex justify-between items-start"><span class="text-xs font-bold text-on-surface-variant uppercase tracking-tight">Memory Alloc</span><span class="text-error font-bold text-xs">-0.4%</span></div><div class="mt-4 flex items-baseline gap-2"><span class="text-4xl font-extrabold text-on-surface tracking-tighter">{{ memory_usage }}</span><span class="text-lg font-bold text-on-surface-variant">GB</span></div><div class="mt-6 w-full bg-surface-container h-1.5 rounded-full overflow-hidden"><div class="bg-primary-dim h-full rounded-full" style="width: {{ (memory_usage / 32 * 100)|round(1) }}%;"></div></div></div>
+</div>
+<div class="col-span-12 ad-slot-inline bg-surface-container-low/50 p-6 rounded-xl border-2 border-dashed border-outline-variant/10 flex items-center justify-center text-[10px] uppercase tracking-[0.24em] text-on-surface-variant/40">ad-slot-inline</div>
+<div class="col-span-12 bg-surface-container-low p-8 rounded-xl">
+<div class="flex items-center justify-between mb-6"><h3 class="text-sm font-bold uppercase tracking-widest text-on-surface-variant">Network Topology Nodes</h3><div class="flex gap-4"><div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full bg-tertiary"></span><span class="text-[10px] font-bold text-on-surface-variant">Stable</span></div><div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full bg-secondary"></span><span class="text-[10px] font-bold text-on-surface-variant">Pending</span></div></div></div>
+<div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
+{% for node in node_tiles %}
+<div class="bg-surface-container-lowest p-4 rounded-lg border border-outline-variant/10 {% if node.tone == 'error' %}border-l-4 border-l-error{% endif %}"><p class="text-[10px] font-bold text-on-surface-variant mb-1">{{ node.name }}</p><p class="text-sm font-bold {% if node.tone == 'error' %}text-error{% else %}text-on-surface{% endif %}">{{ node.latency }}</p></div>
+{% endfor %}
+</div>
+</div>
+<div class="col-span-12 bg-surface-container-lowest rounded-xl shadow-[0_4px_24px_rgba(42,52,57,0.02)] overflow-hidden">
+<div class="px-8 py-6 border-b border-surface-container"><h3 class="text-sm font-bold text-on-surface">Recent Execution Logs</h3></div>
+<table class="w-full text-left border-collapse">
+<thead><tr class="bg-surface-container-low text-[10px] font-bold text-on-surface-variant uppercase tracking-widest"><th class="px-8 py-3">Timestamp</th><th class="px-8 py-3">Service ID</th><th class="px-8 py-3">Status</th><th class="px-8 py-3">Execution Time</th><th class="px-8 py-3">Allocated RAM</th><th class="px-8 py-3 text-right">Action</th></tr></thead>
+<tbody class="text-xs">
+{% for row in log_rows %}
+<tr class="{% if loop.index % 2 == 0 %}bg-surface-container-low/50{% endif %} hover:bg-surface-container-low transition-colors group">
+<td class="px-8 py-4 font-medium text-on-surface-variant">{{ row.timestamp }}</td>
+<td class="px-8 py-4 font-bold">{{ row.service }}</td>
+<td class="px-8 py-4"><span class="px-2 py-1 {% if row.status_tone == 'success' %}bg-tertiary/10 text-tertiary{% else %}bg-error/10 text-error{% endif %} rounded text-[10px] font-bold uppercase">{{ row.status }}</span></td>
+<td class="px-8 py-4 {% if row.status_tone == 'success' %}text-on-surface{% else %}text-error font-bold{% endif %}">{{ row.execution_time }}</td>
+<td class="px-8 py-4 text-on-surface-variant">{{ row.ram }}</td>
+<td class="px-8 py-4 text-right"><span class="material-symbols-outlined text-sm cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity">more_vert</span></td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+</div>
+</div>
+</main>
+<div class="fixed bottom-8 right-8 flex flex-col gap-4"><button class="w-14 h-14 bg-surface-container-lowest text-primary rounded-full shadow-2xl flex items-center justify-center hover:scale-110 transition-transform active:scale-95 border border-outline-variant/10"><span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">bolt</span></button></div>
+</div>
+
+<div class="theme-dark-layout bg-black text-[#f8fafc]">
+<aside class="fixed left-0 top-0 h-full flex flex-col py-8 bg-[#000000] w-64 border-r border-[#222222] z-50">
+<div class="px-6 mb-10"><div class="flex items-center gap-3"><div class="w-10 h-10 rounded-xl bg-[#111111] border border-[#333333] flex items-center justify-center text-white"><span class="material-symbols-outlined">analytics</span></div><div><h2 class="text-lg font-black tracking-tight text-white">Atelier Terminal</h2><p class="text-[10px] uppercase tracking-widest text-[#94a3b8] font-bold">Obsidian Terminal</p></div></div></div>
+<nav class="flex-1 space-y-1">
+<a class="flex items-center gap-3 px-6 py-4 w-full transition-all text-[#94a3b8] hover:bg-[#0b0b0b]" href="/dashboard?tab=daily-report&amp;date={{ report.date }}"><span class="material-symbols-outlined">dashboard</span><span class="font-inter text-sm font-medium">Dashboard</span></a>
+<a class="flex items-center gap-3 px-6 py-4 w-full transition-all text-[#94a3b8] hover:bg-[#0b0b0b]" href="/entry-pipeline-flow?date={{ report.date }}"><span class="material-symbols-outlined">account_tree</span><span class="font-inter text-sm font-medium">Entry Gate</span></a>
+<a class="flex items-center gap-3 px-6 py-4 w-full transition-all text-[#94a3b8] hover:bg-[#0b0b0b]" href="/trade-review?date={{ report.date }}"><span class="material-symbols-outlined">query_stats</span><span class="font-inter text-sm font-medium">Trade Review</span></a>
+<a class="flex items-center gap-3 px-6 py-4 w-full transition-all text-[#94a3b8] hover:bg-[#0b0b0b]" href="/strength-momentum?date={{ report.date }}"><span class="material-symbols-outlined">account_balance_wallet</span><span class="font-inter text-sm font-medium">Portfolio</span></a>
+<a class="flex items-center gap-3 px-6 py-4 w-full transition-all bg-[#111111] text-[#10b981] rounded-r-full border-l-4 border-[#10b981]" href="/performance-tuning?date={{ report.date }}"><span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">insights</span><span class="font-inter text-sm font-medium">Analytics</span></a>
+</nav>
+<div class="px-6 mt-auto space-y-4">
+<button class="w-full py-3 bg-[#111111] text-white rounded-xl font-bold text-sm border border-[#333333] transition-transform active:scale-95">New Trade</button>
+<div class="ad-slot-sidebar min-h-[96px] rounded-2xl border-2 border-dashed border-[#333333] flex items-center justify-center text-[10px] uppercase tracking-[0.24em] text-[#94a3b8]">ad-slot-sidebar</div>
+</div>
+</aside>
+<main class="pl-64 flex flex-col min-h-screen bg-black">
+<header class="flex justify-between items-center px-8 h-16 w-full max-w-full bg-[#000000] sticky top-0 z-40 border-b border-[#222222]">
+<div class="flex items-center gap-8"><h1 class="text-xl font-bold text-white">Performance Tuning</h1><nav class="hidden md:flex gap-6"><a class="text-[#94a3b8] font-manrope font-bold text-sm tracking-tight hover:text-[#10b981] transition-colors duration-200 pb-1" href="/entry-pipeline-flow?date={{ report.date }}">Entry Gate</a><a class="text-[#94a3b8] font-manrope font-bold text-sm tracking-tight hover:text-[#10b981] transition-colors duration-200 pb-1" href="/trade-review?date={{ report.date }}">Trade Review</a></nav></div>
+<div class="flex items-center gap-6">
+<form action="/performance-tuning" class="relative"><span class="absolute left-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-[#94a3b8] text-sm">search</span><input class="bg-[#111111] border border-[#333333] rounded-full pl-10 pr-4 py-1.5 text-xs w-64 focus:ring-1 focus:ring-[#10b981] text-white placeholder:text-[#94a3b8]" name="since" placeholder="Search parameters..." type="text" value="{{ report.since or '' }}"/><input name="date" type="hidden" value="{{ report.date }}"/></form>
+<div class="flex items-center gap-4"><button id="theme-toggle-dark" type="button"><span class="material-symbols-outlined cursor-pointer text-[#94a3b8] hover:text-[#10b981] transition-colors">light_mode</span></button><span class="material-symbols-outlined cursor-pointer text-[#94a3b8] hover:text-[#10b981] transition-colors">notifications</span><span class="material-symbols-outlined cursor-pointer text-[#94a3b8] hover:text-[#10b981] transition-colors">settings</span><div class="w-8 h-8 rounded-full overflow-hidden bg-[#111111] border border-[#333333] flex items-center justify-center text-[10px] font-bold text-white">AI</div></div>
+</div>
+</header>
+<div class="bg-[#0b0b0b] px-8 py-2 flex items-center gap-8 overflow-x-auto no-scrollbar border-b border-[#222222]">
+<div class="flex items-center gap-2 whitespace-nowrap"><span class="text-[10px] font-bold text-[#94a3b8] uppercase tracking-tighter">System Health</span><span class="flex items-center gap-1 text-xs font-bold {% if status_health == 'Operational' %}text-[#10b981]{% elif status_health == 'Watch' %}text-[#3b82f6]{% else %}text-[#e11d48]{% endif %}"><span class="w-2 h-2 rounded-full {% if status_health == 'Operational' %}bg-[#10b981]{% elif status_health == 'Watch' %}bg-[#3b82f6]{% else %}bg-[#e11d48]{% endif %} animate-pulse"></span>{{ status_health }}</span></div>
+<div class="h-4 w-[1px] bg-[#333333]"></div>
+<div class="flex items-center gap-4 text-[11px] font-medium text-[#94a3b8]"><span>API Latency: <strong class="text-white">{{ api_latency }}ms</strong></span><span>DB Load: <strong class="text-white">{{ db_load }}%</strong></span><span>Active Nodes: <strong class="text-white">{{ active_nodes }}/24</strong></span><span>Throughput: <strong class="text-white">{{ throughput_label }}</strong></span></div>
+</div>
+<div class="p-8 space-y-8">
+<div class="grid grid-cols-12 gap-6">
+<div class="col-span-12 lg:col-span-8 bg-[#111111] p-6 rounded-xl border border-[#333333]">
+<div class="flex justify-between items-center mb-8"><div><h3 class="text-lg font-bold text-white">Transaction Latency Histogram</h3><p class="text-xs text-[#94a3b8]">Real-time execution speed distribution across global nodes</p></div><div class="flex gap-2"><button class="px-3 py-1 text-[10px] font-bold rounded-md bg-[#0b0b0b] text-[#94a3b8] border border-[#222222]">1H</button><button class="px-3 py-1 text-[10px] font-bold rounded-md bg-[#10b981] text-black">6H</button><button class="px-3 py-1 text-[10px] font-bold rounded-md bg-[#0b0b0b] text-[#94a3b8] border border-[#222222]">24H</button></div></div>
+<div class="h-64 flex items-end justify-between gap-1">
+{% for bar in histogram_bars %}
+<div class="flex-1 {% if loop.index >= 12 %}bg-[#e11d48]/25{% elif loop.index == 7 %}bg-[#10b981]{% else %}bg-[#10b981]/{{ 20 + (loop.index0 * 5) if loop.index < 7 else 40 }}{% endif %} rounded-t-sm h-[{{ bar }}%] {% if loop.index == 7 %}relative group{% endif %}">{% if loop.index == 7 %}<div class="absolute -top-10 left-1/2 -translate-x-1/2 bg-white text-black text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity">{{ p95_value }}ms (p95)</div>{% endif %}</div>
+{% endfor %}
+</div>
+<div class="flex justify-between mt-4 text-[10px] font-bold text-[#94a3b8] uppercase tracking-widest"><span>2ms</span><span>8ms</span><span>14ms</span><span>20ms</span><span>26ms+</span></div>
+</div>
+<div class="col-span-12 lg:col-span-4 grid grid-rows-2 gap-6">
+<div class="bg-[#111111] p-6 rounded-xl border border-[#333333] flex flex-col justify-between"><div class="flex justify-between items-start"><span class="text-xs font-bold text-[#94a3b8] uppercase tracking-tight">CPU Core Load</span><span class="text-[#10b981] font-bold text-xs">+1.2%</span></div><div class="mt-4 flex items-baseline gap-2"><span class="text-4xl font-extrabold text-white tracking-tighter">{{ cpu_usage }}</span><span class="text-lg font-bold text-[#94a3b8]">%</span></div><div class="mt-6 w-full bg-[#0b0b0b] h-1.5 rounded-full overflow-hidden"><div class="bg-[#3b82f6] h-full rounded-full" style="width: {{ cpu_usage }}%;"></div></div></div>
+<div class="bg-[#111111] p-6 rounded-xl border border-[#333333] flex flex-col justify-between"><div class="flex justify-between items-start"><span class="text-xs font-bold text-[#94a3b8] uppercase tracking-tight">Memory Alloc</span><span class="text-[#e11d48] font-bold text-xs">-0.4%</span></div><div class="mt-4 flex items-baseline gap-2"><span class="text-4xl font-extrabold text-white tracking-tighter">{{ memory_usage }}</span><span class="text-lg font-bold text-[#94a3b8]">GB</span></div><div class="mt-6 w-full bg-[#0b0b0b] h-1.5 rounded-full overflow-hidden"><div class="bg-[#10b981] h-full rounded-full" style="width: {{ (memory_usage / 32 * 100)|round(1) }}%;"></div></div></div>
+</div>
+<div class="col-span-12 ad-slot-inline bg-[#111111] p-6 rounded-xl border-2 border-dashed border-[#333333] flex items-center justify-center text-[10px] uppercase tracking-[0.24em] text-[#94a3b8]">ad-slot-inline</div>
+<div class="col-span-12 bg-[#111111] p-8 rounded-xl border border-[#333333]">
+<div class="flex items-center justify-between mb-6"><h3 class="text-sm font-bold uppercase tracking-widest text-[#94a3b8]">Network Topology Nodes</h3><div class="flex gap-4"><div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full bg-[#10b981]"></span><span class="text-[10px] font-bold text-[#94a3b8]">Stable</span></div><div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full bg-[#3b82f6]"></span><span class="text-[10px] font-bold text-[#94a3b8]">Pending</span></div></div></div>
+<div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">{% for node in node_tiles %}<div class="bg-[#0b0b0b] p-4 rounded-lg border border-[#222222] {% if node.tone == 'error' %}border-l-4 border-l-[#e11d48]{% endif %}"><p class="text-[10px] font-bold text-[#94a3b8] mb-1">{{ node.name }}</p><p class="text-sm font-bold {% if node.tone == 'error' %}text-[#e11d48]{% else %}text-white{% endif %}">{{ node.latency }}</p></div>{% endfor %}</div>
+</div>
+<div class="col-span-12 bg-[#111111] rounded-xl border border-[#333333] overflow-hidden">
+<div class="px-8 py-6 border-b border-[#222222]"><h3 class="text-sm font-bold text-white">Recent Execution Logs</h3></div>
+<table class="w-full text-left border-collapse">
+<thead><tr class="bg-[#0b0b0b] text-[10px] font-bold text-[#94a3b8] uppercase tracking-widest"><th class="px-8 py-3">Timestamp</th><th class="px-8 py-3">Service ID</th><th class="px-8 py-3">Status</th><th class="px-8 py-3">Execution Time</th><th class="px-8 py-3">Allocated RAM</th><th class="px-8 py-3 text-right">Action</th></tr></thead>
+<tbody class="text-xs">
+{% for row in log_rows %}
+<tr class="{% if loop.index % 2 == 0 %}bg-[#0b0b0b]{% endif %} hover:bg-[#111111] transition-colors group"><td class="px-8 py-4 font-medium text-[#94a3b8]">{{ row.timestamp }}</td><td class="px-8 py-4 font-bold text-white">{{ row.service }}</td><td class="px-8 py-4"><span class="px-2 py-1 {% if row.status_tone == 'success' %}bg-[#0f1d17] text-[#10b981]{% else %}bg-[#2a1016] text-[#e11d48]{% endif %} rounded text-[10px] font-bold uppercase">{{ row.status }}</span></td><td class="px-8 py-4 {% if row.status_tone == 'success' %}text-white{% else %}text-[#e11d48] font-bold{% endif %}">{{ row.execution_time }}</td><td class="px-8 py-4 text-[#94a3b8]">{{ row.ram }}</td><td class="px-8 py-4 text-right"><span class="material-symbols-outlined text-sm cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity text-[#94a3b8]">more_vert</span></td></tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+</div>
+</div>
+</main>
+<div class="fixed bottom-8 right-8 flex flex-col gap-4"><button class="w-14 h-14 bg-[#111111] text-[#10b981] rounded-full border border-[#333333] flex items-center justify-center hover:scale-110 transition-transform active:scale-95"><span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">bolt</span></button></div>
+</div>
+
+<script>
+  (function () {
+    const root = document.documentElement;
+    const storedTheme = localStorage.getItem('color-theme');
+    if (storedTheme === 'dark' || storedTheme === 'light') {
+      root.classList.remove('light', 'dark');
+      root.classList.add(storedTheme);
+    }
+    function bindToggle(id) {
+      const btn = document.getElementById(id);
+      if (!btn) return;
+      btn.addEventListener('click', function () {
+        const nextTheme = root.classList.contains('dark') ? 'light' : 'dark';
+        root.classList.remove('light', 'dark');
+        root.classList.add(nextTheme);
+        localStorage.setItem('color-theme', nextTheme);
+      });
+    }
+    bindToggle('theme-toggle-light');
+    bindToggle('theme-toggle-dark');
+  })();
+</script>
+</body>
+</html>

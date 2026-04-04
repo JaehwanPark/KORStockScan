@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html class="{{ theme_class }}" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Strength Momentum | Trading Intelligence</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;700;800&amp;family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script>
+  tailwind.config = {
+    darkMode: "class",
+    theme: {
+      extend: {
+        fontFamily: {
+          headline: ["Manrope"],
+          body: ["Inter"],
+        },
+      },
+    },
+  };
+</script>
+<style>
+  body { font-family: "Inter", sans-serif; }
+  .font-headline { font-family: "Manrope", sans-serif; }
+  .material-symbols-outlined {
+    font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+  }
+  .theme-light-layout { display: block; }
+  .theme-dark-layout { display: none; }
+  html.dark .theme-light-layout { display: none; }
+  html.dark .theme-dark-layout { display: block; }
+  .terminal-border { border: 1px solid rgba(255, 255, 255, 0.08); }
+</style>
+</head>
+<body class="m-0">
+<div class="theme-light-layout bg-surface text-on-surface min-h-screen">
+  <div class="h-8 bg-surface-dim/30 flex items-center px-8 gap-6 text-[10px] font-medium tracking-wider uppercase text-on-surface-variant overflow-hidden">
+    {% for item in market_ticker %}
+    <div class="flex items-center gap-2">
+      <span>{{ item.label }}</span>
+      <span class="{% if item.tone == 'positive' %}text-tertiary{% else %}text-error{% endif %}">{{ item.value }} ({{ item.change }})</span>
+    </div>
+    {% endfor %}
+    <div class="ml-auto flex items-center gap-2">
+      <span class="w-1.5 h-1.5 rounded-full bg-tertiary animate-pulse"></span>
+      <span>Live Feed Connected</span>
+    </div>
+  </div>
+
+  <aside class="fixed left-0 top-0 h-full w-64 bg-surface-container-lowest flex flex-col py-8 z-[60] shadow-[48px_0_48px_rgba(42,52,57,0.04)] hidden md:flex">
+    <div class="px-6 mb-10">
+      <div class="flex items-center gap-3">
+        <div class="w-8 h-8 bg-primary rounded-lg flex items-center justify-center text-on-primary">
+          <span class="material-symbols-outlined text-lg">terminal</span>
+        </div>
+        <div>
+          <h1 class="font-headline font-black text-lg text-on-surface tracking-tight">Atelier Terminal</h1>
+          <p class="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">Premium Tier</p>
+        </div>
+      </div>
+    </div>
+    <nav class="flex-1 space-y-1">
+      <a class="flex items-center gap-3 px-6 py-4 w-full text-on-surface-variant hover:bg-surface-container-low hover:translate-x-1 transition-all" href="#"><span class="material-symbols-outlined">dashboard</span><span class="font-body text-sm font-medium">Dashboard</span></a>
+      <a class="flex items-center gap-3 px-6 py-4 w-full bg-surface-container-low text-primary rounded-r-full hover:translate-x-1 transition-all" href="#"><span class="material-symbols-outlined">insights</span><span class="font-body text-sm font-medium">Analytics</span></a>
+      <a class="flex items-center gap-3 px-6 py-4 w-full text-on-surface-variant hover:bg-surface-container-low hover:translate-x-1 transition-all" href="#"><span class="material-symbols-outlined">account_tree</span><span class="font-body text-sm font-medium">Entry Gate</span></a>
+      <a class="flex items-center gap-3 px-6 py-4 w-full text-on-surface-variant hover:bg-surface-container-low hover:translate-x-1 transition-all" href="#"><span class="material-symbols-outlined">query_stats</span><span class="font-body text-sm font-medium">Trade Review</span></a>
+      <a class="flex items-center gap-3 px-6 py-4 w-full text-on-surface-variant hover:bg-surface-container-low hover:translate-x-1 transition-all" href="#"><span class="material-symbols-outlined">account_balance_wallet</span><span class="font-body text-sm font-medium">Portfolio</span></a>
+    </nav>
+    <div class="px-6 mt-auto">
+      <button class="w-full bg-primary hover:bg-primary-dim text-on-primary py-3 rounded-xl font-bold text-sm shadow-lg shadow-primary/20 transition-all flex items-center justify-center gap-2 mb-8">
+        <span class="material-symbols-outlined text-sm">add</span>
+        New Trade
+      </button>
+      <div class="space-y-1 border-t border-surface-variant pt-6">
+        <a class="flex items-center gap-3 px-2 py-2 text-on-surface-variant hover:text-primary transition-colors" href="#"><span class="material-symbols-outlined text-sm">help</span><span class="text-sm font-medium">Help</span></a>
+        <a class="flex items-center gap-3 px-2 py-2 text-on-surface-variant hover:text-error transition-colors" href="#"><span class="material-symbols-outlined text-sm">logout</span><span class="text-sm font-medium">Logout</span></a>
+      </div>
+    </div>
+  </aside>
+
+  <main class="md:ml-64 min-h-screen">
+    <header class="flex justify-between items-center px-8 h-16 w-full sticky top-0 z-50 bg-surface/80 backdrop-blur-md">
+      <div class="flex items-center gap-8">
+        <h2 class="font-headline text-xl font-bold text-on-surface">Strength Momentum</h2>
+        <nav class="hidden lg:flex items-center gap-6">
+          <a class="text-primary border-b-2 border-primary pb-1 font-headline font-bold text-sm tracking-tight" href="#">Entry Gate</a>
+          <a class="text-on-surface/60 hover:text-primary transition-colors pb-1 font-headline font-bold text-sm tracking-tight" href="#">Trade Review</a>
+        </nav>
+      </div>
+      <div class="flex items-center gap-4">
+        <form action="/strength-momentum" class="flex items-center gap-3">
+          <input class="bg-surface-container-low border-none rounded-full pl-4 pr-4 py-2 text-sm focus:ring-2 focus:ring-primary/20 w-32 transition-all" name="date" value="{{ report.date }}" />
+          <input class="bg-surface-container-low border-none rounded-full pl-4 pr-4 py-2 text-sm focus:ring-2 focus:ring-primary/20 w-28 transition-all" name="since" value="{{ report.since or '' }}" placeholder="HH:MM:SS" />
+        </form>
+        <div class="relative hidden sm:block">
+          <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-lg">search</span>
+          <input class="bg-surface-container-low border-none rounded-full pl-10 pr-4 py-2 text-sm focus:ring-2 focus:ring-primary/20 w-64 transition-all" placeholder="Search Tickers..." type="text"/>
+        </div>
+        <div class="flex items-center gap-2">
+          <button class="w-10 h-10 flex items-center justify-center text-on-surface-variant hover:bg-surface-container rounded-full transition-colors" id="theme-toggle-light" type="button">
+            <span class="material-symbols-outlined">dark_mode</span>
+          </button>
+          <button class="w-10 h-10 flex items-center justify-center text-on-surface-variant hover:bg-surface-container rounded-full transition-colors relative" type="button">
+            <span class="material-symbols-outlined">notifications</span>
+            <span class="absolute top-2 right-2 w-2 h-2 bg-error rounded-full"></span>
+          </button>
+          <button class="w-10 h-10 flex items-center justify-center text-on-surface-variant hover:bg-surface-container rounded-full transition-colors" type="button">
+            <span class="material-symbols-outlined">settings</span>
+          </button>
+          <div class="h-8 w-8 rounded-full bg-surface-container overflow-hidden ml-2 cursor-pointer border border-outline-variant/20 flex items-center justify-center text-[10px] font-bold">AI</div>
+        </div>
+      </div>
+    </header>
+
+    <div class="px-8 pb-12 pt-4">
+      <div class="flex flex-col lg:flex-row lg:items-end justify-between gap-6 mb-8">
+        <div>
+          <h3 class="text-on-surface-variant text-sm font-medium mb-1">Momentum Intelligence</h3>
+          <h1 class="font-headline font-extrabold text-4xl text-on-surface tracking-tighter">Strength Momentum Matrix</h1>
+        </div>
+        <div class="flex items-center gap-3">
+          <div class="bg-surface-container-lowest px-4 py-2 rounded-xl flex items-center gap-3 shadow-sm">
+            <span class="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Global Sentiment</span>
+            <div class="flex items-center gap-1">
+              <span class="h-2 w-16 bg-surface-container rounded-full overflow-hidden">
+                <span class="block h-full bg-gradient-to-r from-tertiary-dim to-tertiary" style="width: {{ pressure_score if pressure_score <= 100 else 100 }}%;"></span>
+              </span>
+              <span class="text-xs font-bold text-tertiary">{{ global_sentiment }}</span>
+            </div>
+          </div>
+          <button class="bg-surface-container-high text-on-surface px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 hover:bg-surface-variant transition-all">
+            <span class="material-symbols-outlined text-sm">filter_list</span>
+            Filters
+          </button>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-12 gap-6">
+        <div class="col-span-12 lg:col-span-8 bg-surface-container-lowest rounded-xl p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] relative overflow-hidden">
+          <div class="flex items-center justify-between mb-8">
+            <div>
+              <h2 class="font-headline font-bold text-lg text-on-surface">Top 10 Strength Indices</h2>
+              <p class="text-xs text-on-surface-variant font-medium">Relative performance against sector benchmarks</p>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="text-[10px] font-bold text-on-surface-variant">TIMEFRAME:</span>
+              <select class="text-xs font-bold bg-surface-container-low border-none rounded-lg py-1 px-3 focus:ring-0">
+                <option>1 HOUR</option>
+                <option selected="">4 HOURS</option>
+                <option>DAILY</option>
+              </select>
+            </div>
+          </div>
+          <div class="space-y-6">
+            {% for leader in strength_leaders %}
+            <div class="flex items-center gap-4">
+              <div class="w-12 text-sm font-black font-headline">{{ leader.code }}</div>
+              <div class="flex-1 h-3 bg-surface-container rounded-full overflow-hidden flex">
+                <div class="h-full {% if leader.tone == 'positive' %}bg-gradient-to-r from-primary to-tertiary{% else %}bg-gradient-to-r from-primary-dim to-primary{% endif %}" style="width: {{ [leader.strength_score, 100]|min }}%;"></div>
+              </div>
+              <div class="w-16 text-right text-sm font-bold {% if leader.tone == 'positive' %}text-tertiary{% else %}text-primary{% endif %}">{{ leader.strength_score }}</div>
+            </div>
+            {% endfor %}
+          </div>
+          <div class="mt-8 pt-6 border-t border-surface-container flex justify-between items-center text-[10px] uppercase font-bold text-on-surface-variant tracking-widest">
+            <span>Last Update: {{ report.since or "Session Open" }}</span>
+            <a class="text-primary hover:underline" href="#">View All {{ strength_leaders|length }} Tickers</a>
+          </div>
+        </div>
+
+        <div class="col-span-12 lg:col-span-4 bg-surface-container-lowest rounded-xl p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] flex flex-col items-center justify-center">
+          <h2 class="font-headline font-bold text-lg text-on-surface mb-1 text-center w-full">Order Flow Pressure</h2>
+          <p class="text-xs text-on-surface-variant font-medium mb-8 text-center">Market-wide liquidity volume</p>
+          <div class="relative w-48 h-48 flex items-center justify-center">
+            <svg class="w-full h-full -rotate-90">
+              <circle class="text-surface-container-low" cx="96" cy="96" fill="transparent" r="88" stroke="currentColor" stroke-width="12"></circle>
+              <circle class="text-tertiary" cx="96" cy="96" fill="transparent" r="88" stroke="currentColor" stroke-dasharray="552.92" stroke-dashoffset="{{ 552.92 - (552.92 * ((pressure_score if pressure_score <= 100 else 100) / 100)) }}" stroke-width="12"></circle>
+            </svg>
+            <div class="absolute inset-0 flex flex-col items-center justify-center">
+              <span class="text-4xl font-headline font-black text-on-surface tracking-tighter">{{ pressure_score }}%</span>
+              <span class="text-[10px] font-black uppercase text-tertiary tracking-widest">{% if pressure_score >= 50 %}Buy Bias{% else %}Balanced{% endif %}</span>
+            </div>
+          </div>
+          <div class="grid grid-cols-2 w-full gap-4 mt-8">
+            <div class="bg-surface-container-low p-3 rounded-lg text-center">
+              <span class="block text-[10px] font-bold text-on-surface-variant uppercase mb-1">Buy Pressure</span>
+              <span class="font-headline font-extrabold text-lg text-tertiary">{{ buy_pressure_value }}</span>
+            </div>
+            <div class="bg-surface-container-low p-3 rounded-lg text-center">
+              <span class="block text-[10px] font-bold text-on-surface-variant uppercase mb-1">Sell Pressure</span>
+              <span class="font-headline font-extrabold text-lg text-error">{{ sell_pressure_value }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="col-span-12">
+          <div class="flex items-center justify-between mb-6">
+            <h2 class="font-headline font-bold text-lg text-on-surface">Momentum Hotspots</h2>
+            <div class="flex items-center gap-4">
+              <div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full bg-tertiary"></span><span class="text-[10px] font-bold text-on-surface-variant">BULLISH</span></div>
+              <div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full bg-error"></span><span class="text-[10px] font-bold text-on-surface-variant">BEARISH</span></div>
+            </div>
+          </div>
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            {% for card in momentum_cards %}
+            <div class="bg-surface-container-lowest rounded-xl p-5 shadow-sm border border-transparent hover:border-primary/20 transition-all cursor-pointer relative overflow-hidden {% if card.badge %}bg-primary/5{% endif %}">
+              {% if card.badge %}<div class="absolute inset-0 bg-primary/5 pointer-events-none"></div>{% endif %}
+              <div class="flex justify-between items-start mb-4">
+                <div>
+                  <h4 class="font-headline font-black text-sm">{{ card.code }}</h4>
+                  <p class="text-[10px] text-on-surface-variant font-medium">{{ card.name }}</p>
+                </div>
+                <div class="text-right">
+                  <span class="block text-sm font-bold {% if card.tone == 'bullish' %}text-tertiary{% else %}text-error{% endif %}">{{ "%+.1f"|format(card.change) }}%</span>
+                  <span class="block text-[10px] font-medium text-on-surface-variant">STR: {{ card.strength_score }}</span>
+                </div>
+              </div>
+              <div class="h-16 w-full flex items-end gap-0.5">
+                {% for bar in card.bars %}
+                <div class="flex-1 {% if card.tone == 'bullish' %}{% if loop.last or loop.index >= 7 %}bg-tertiary{% elif loop.index >= 5 %}bg-tertiary/60{% else %}bg-tertiary/20{% endif %}{% else %}{% if loop.last or loop.index >= 7 %}bg-error{% elif loop.index >= 5 %}bg-error/60{% else %}bg-error/20{% endif %}{% endif %} rounded-t-sm" style="height: {{ bar }}%;"></div>
+                {% endfor %}
+              </div>
+              {% if card.badge %}
+              <div class="mt-2 text-[8px] font-black uppercase text-primary tracking-widest text-center">{{ card.badge }}</div>
+              {% endif %}
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+
+        <div class="col-span-12 ad-slot-inline bg-surface-container-lowest rounded-xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-dashed border-outline-variant/20 p-6 flex items-center justify-center">
+          <span class="text-[10px] font-bold uppercase tracking-[0.2em] text-on-surface-variant/50">ad-slot-inline reserved</span>
+        </div>
+
+        <div class="col-span-12 bg-surface-container-lowest rounded-xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] overflow-hidden">
+          <div class="p-6 border-b border-surface-container flex items-center justify-between">
+            <h2 class="font-headline font-bold text-lg text-on-surface">Real-Time Momentum Feed</h2>
+            <div class="flex gap-2">
+              <button class="px-3 py-1 text-[10px] font-bold bg-surface-container-low text-on-surface rounded-lg">CSV</button>
+              <button class="px-3 py-1 text-[10px] font-bold bg-surface-container-low text-on-surface rounded-lg">Print</button>
+            </div>
+          </div>
+          <table class="w-full text-left">
+            <thead class="bg-surface-container-low text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
+              <tr>
+                <th class="px-6 py-4">Ticker</th>
+                <th class="px-6 py-4">Price</th>
+                <th class="px-6 py-4">Change (%)</th>
+                <th class="px-6 py-4">Rel Strength</th>
+                <th class="px-6 py-4">Momentum</th>
+                <th class="px-6 py-4 text-right">Action</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-surface-container">
+              {% for row in feed_rows %}
+              <tr class="{% if loop.index is even %}bg-surface-container-low/30 {% endif %}hover:bg-surface-bright transition-colors">
+                <td class="px-6 py-4">
+                  <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 rounded-lg bg-surface-container flex items-center justify-center font-bold text-xs">{{ row.avatar }}</div>
+                    <div>
+                      <div class="font-bold text-sm">{{ row.code }}</div>
+                      <div class="text-[10px] text-on-surface-variant font-medium">{{ row.name }}</div>
+                    </div>
+                  </div>
+                </td>
+                <td class="px-6 py-4 font-headline font-bold text-sm">{{ row.price }}</td>
+                <td class="px-6 py-4">
+                  <span class="{% if row.tone == 'bullish' %}text-tertiary{% else %}text-error{% endif %} font-bold text-sm">{{ row.change }}</span>
+                </td>
+                <td class="px-6 py-4">
+                  <div class="flex items-center gap-2">
+                    <div class="w-24 h-1.5 bg-surface-container rounded-full overflow-hidden">
+                      <div class="h-full {% if row.tone == 'bullish' %}bg-tertiary{% else %}bg-primary{% endif %}" style="width: {{ row.strength_score }}%;"></div>
+                    </div>
+                    <span class="text-xs font-bold">{{ row.strength_score }}</span>
+                  </div>
+                </td>
+                <td class="px-6 py-4">
+                  <span class="inline-flex items-center gap-1 text-[10px] font-black {% if row.momentum == 'Accelerating' %}bg-tertiary-container/30 text-on-tertiary-container{% elif row.momentum == 'Decelerating' %}bg-error-container/20 text-on-error-container{% else %}bg-surface-container text-on-surface-variant{% endif %} px-2 py-0.5 rounded uppercase">{{ row.momentum }}</span>
+                </td>
+                <td class="px-6 py-4 text-right">
+                  <button class="text-primary hover:text-primary-dim font-bold text-xs underline">Analyze</button>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <nav class="md:hidden fixed bottom-0 left-0 right-0 bg-surface-container-lowest h-16 flex items-center justify-around z-[100] border-t border-surface-variant/20 shadow-[0_-8px_20px_rgba(0,0,0,0.05)]">
+    <button class="flex flex-col items-center justify-center text-on-surface-variant"><span class="material-symbols-outlined">dashboard</span><span class="text-[9px] font-bold uppercase mt-1">Home</span></button>
+    <button class="flex flex-col items-center justify-center text-primary"><span class="material-symbols-outlined">insights</span><span class="text-[9px] font-bold uppercase mt-1">Strength</span></button>
+    <button class="flex flex-col items-center justify-center bg-primary text-on-primary w-12 h-12 rounded-full -translate-y-4 shadow-lg shadow-primary/30"><span class="material-symbols-outlined">add</span></button>
+    <button class="flex flex-col items-center justify-center text-on-surface-variant"><span class="material-symbols-outlined">account_balance_wallet</span><span class="text-[9px] font-bold uppercase mt-1">Assets</span></button>
+    <button class="flex flex-col items-center justify-center text-on-surface-variant"><span class="material-symbols-outlined">person</span><span class="text-[9px] font-bold uppercase mt-1">Profile</span></button>
+  </nav>
+</div>
+
+<div class="theme-dark-layout min-h-screen bg-[#131313] text-[#e5e2e1] font-body selection:bg-[#00e639] selection:text-[#002203]">
+  <header class="bg-[#131313] border-b border-[#474747]/20 fixed w-full h-14 flex justify-between items-center px-6 z-50">
+    <div class="flex items-center gap-8">
+      <span class="text-xl font-black tracking-tighter text-white uppercase font-headline">SOVEREIGN_ANALYST</span>
+      <nav class="hidden md:flex gap-6 items-center h-full">
+        <a class="font-headline font-bold tracking-tighter uppercase text-sm text-[#C6C6C6] hover:text-white transition-colors" href="#">TERMINAL</a>
+        <a class="font-headline font-bold tracking-tighter uppercase text-sm text-white border-b-2 border-[#00E639] pb-1" href="#">PORTFOLIO</a>
+        <a class="font-headline font-bold tracking-tighter uppercase text-sm text-[#C6C6C6] hover:text-white transition-colors" href="#">HISTORY</a>
+      </nav>
+    </div>
+    <div class="flex items-center gap-4">
+      <div class="hidden lg:flex items-center bg-[#0e0e0e] border border-[#474747]/20 px-3 py-1 gap-2">
+        <span class="material-symbols-outlined text-[#c6c6c6] text-sm">search</span>
+        <input class="bg-transparent border-none focus:ring-0 text-xs uppercase tracking-widest text-white w-48" placeholder="QUERY_API..." type="text"/>
+      </div>
+      <form action="/strength-momentum" class="hidden xl:flex items-center gap-2">
+        <input name="theme" type="hidden" value="dark"/>
+        <input class="bg-[#0e0e0e] border border-[#474747]/20 text-white text-[10px] py-1 px-2 w-24 uppercase tracking-widest" name="date" value="{{ report.date }}"/>
+        <input class="bg-[#0e0e0e] border border-[#474747]/20 text-white text-[10px] py-1 px-2 w-20 uppercase tracking-widest" name="since" placeholder="TIME" value="{{ report.since or '' }}"/>
+      </form>
+      <button class="bg-[#00e639] text-[#002203] px-4 py-1 font-headline font-bold text-xs tracking-widest hover:brightness-110 active:scale-95 transition-all">EXECUTE</button>
+      <button id="theme-toggle-dark" type="button" class="flex items-center justify-center w-8 h-8 border border-[#474747]/20 bg-[#1c1b1b] hover:bg-[#2a2a2a] transition-colors">
+        <span class="material-symbols-outlined text-[#c6c6c6] hover:text-white text-sm">light_mode</span>
+      </button>
+      <div class="flex gap-2 ml-2">
+        <span class="material-symbols-outlined text-[#c6c6c6] hover:text-white cursor-pointer">settings</span>
+        <span class="material-symbols-outlined text-[#c6c6c6] hover:text-white cursor-pointer">notifications_active</span>
+      </div>
+    </div>
+  </header>
+
+  <aside class="fixed left-0 top-14 bottom-0 flex flex-col justify-between bg-[#1C1B1B] w-64 border-r border-[#474747]/20 z-40 hidden md:flex">
+    <div class="flex flex-col">
+      <div class="p-6 border-b border-[#474747]/10">
+        <div class="flex items-center gap-3">
+          <div class="w-2 h-2 bg-[#00e639] animate-pulse"></div>
+          <div>
+            <p class="font-medium text-xs tracking-widest uppercase text-white">NODE_01</p>
+            <p class="text-[10px] text-[#c6c6c6]">LATENCY: 12ms</p>
+          </div>
+        </div>
+      </div>
+      <nav class="mt-4">
+        <a class="flex items-center gap-4 text-[#C6C6C6] px-6 py-4 hover:bg-[#201F1F] text-xs tracking-widest uppercase transition-all duration-150" href="#"><span class="material-symbols-outlined">door_open</span> ENTRY_GATE</a>
+        <a class="flex items-center gap-4 bg-[#201F1F] text-[#00E639] border-l-4 border-[#00E639] px-6 py-4 text-xs tracking-widest uppercase" href="#"><span class="material-symbols-outlined">analytics</span> TRADE_REVIEW</a>
+        <a class="flex items-center gap-4 text-[#C6C6C6] px-6 py-4 hover:bg-[#201F1F] text-xs tracking-widest uppercase transition-all duration-150" href="#"><span class="material-symbols-outlined">query_stats</span> MARKET_DATA</a>
+        <a class="flex items-center gap-4 text-[#C6C6C6] px-6 py-4 hover:bg-[#201F1F] text-xs tracking-widest uppercase transition-all duration-150" href="#"><span class="material-symbols-outlined">security</span> RISK_ENGINE</a>
+        <a class="flex items-center gap-4 text-[#C6C6C6] px-6 py-4 hover:bg-[#201F1F] text-xs tracking-widest uppercase transition-all duration-150" href="#"><span class="material-symbols-outlined">terminal</span> LOGS</a>
+      </nav>
+    </div>
+    <div class="flex flex-col p-4 gap-2">
+      <button class="w-full bg-[#353534] border border-[#474747]/30 text-white py-3 font-headline font-bold text-xs tracking-widest hover:bg-[#393939] transition-colors uppercase">NEW_ORDER</button>
+      <div class="flex border-t border-[#474747]/10 pt-4">
+        <a class="flex-1 flex flex-col items-center gap-1 text-[10px] text-[#c6c6c6] hover:text-white uppercase tracking-tighter" href="#"><span class="material-symbols-outlined text-sm">help_center</span> SUPPORT</a>
+        <a class="flex-1 flex flex-col items-center gap-1 text-[10px] text-[#c6c6c6] hover:text-white uppercase tracking-tighter" href="#"><span class="material-symbols-outlined text-sm">lock_open</span> LOCK</a>
+      </div>
+    </div>
+  </aside>
+
+  <main class="md:ml-64 pt-14 min-h-screen bg-[#131313]">
+    <div class="p-6 space-y-6">
+      <div class="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
+        <div>
+          <h1 class="font-headline text-3xl font-black tracking-tighter text-white uppercase italic">STRENGTH_MOMENTUM</h1>
+          <p class="text-xs tracking-[0.2em] text-[#00e639] mt-1">QUANTITATIVE VELOCITY ENGINE // ACTIVE_SCAN</p>
+        </div>
+        <div class="flex gap-4">
+          <div class="bg-[#1c1b1b] px-4 py-2 border-l-2 border-[#00e639]">
+            <p class="text-[10px] text-[#c6c6c6] uppercase tracking-widest">Global Momentum</p>
+            <p class="text-xl font-headline font-bold text-[#00e639] tabular-nums">{{ global_momentum_value }}</p>
+          </div>
+          <div class="bg-[#1c1b1b] px-4 py-2 border-l-2 border-[#c0000a]">
+            <p class="text-[10px] text-[#c6c6c6] uppercase tracking-widest">Volatility Index</p>
+            <p class="text-xl font-headline font-bold text-[#c0000a] tabular-nums">{{ volatility_index }}</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 xl:grid-cols-4 gap-6">
+        <div class="xl:col-span-3 space-y-6">
+          <div class="bg-[#201f1f] border border-[#474747]/10 overflow-hidden">
+            <div class="bg-[#2a2a2a] px-4 py-2 flex justify-between items-center">
+              <span class="text-[10px] font-bold tracking-[0.2em] text-white">TOP_10_VELOCITY_ASSETS</span>
+              <span class="text-[10px] text-[#c6c6c6]">AUTO_REFRESH: 500MS</span>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="w-full text-left border-collapse">
+                <thead>
+                  <tr class="text-[10px] text-[#c6c6c6] uppercase tracking-widest border-b border-[#474747]/10">
+                    <th class="px-4 py-3">Ticker</th>
+                    <th class="px-4 py-3">Price</th>
+                    <th class="px-4 py-3">Strength Index</th>
+                    <th class="px-4 py-3 text-right">Velocity</th>
+                    <th class="px-4 py-3 w-48">Momentum Curve</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-[#474747]/5">
+                  {% for row in velocity_rows %}
+                  <tr class="hover:bg-[#1c1b1b] transition-colors group">
+                    <td class="px-4 py-4">
+                      <div class="flex items-center gap-3">
+                        <span class="font-headline font-extrabold text-white">{{ row.code }}</span>
+                        <span class="text-[9px] px-1 border {% if row.tier_tone == 'negative' %}bg-[#c0000a]/10 text-[#ffdad5] border-[#c0000a]/20{% elif row.tier == 'ELITE' %}bg-[#00e639]/10 text-[#00e639] border-[#00e639]/20{% else %}bg-[#474747]/20 text-[#c6c6c6] border-[#474747]/20{% endif %}">{{ row.tier }}</span>
+                      </div>
+                    </td>
+                    <td class="px-4 py-4 tabular-nums text-sm text-[#e5e2e1]">{{ row.price }}</td>
+                    <td class="px-4 py-4">
+                      <div class="w-full bg-[#353534] h-1.5 overflow-hidden">
+                        <div class="{% if row.tier_tone == 'negative' %}bg-[#c0000a]{% else %}bg-[#00e639]{% endif %} h-full" style="width: {{ row.strength_width }}%"></div>
+                      </div>
+                    </td>
+                    <td class="px-4 py-4 text-right tabular-nums {% if row.velocity_tone == 'positive' %}text-[#00e639]{% else %}text-[#c0000a]{% endif %} font-bold">{{ row.velocity }}</td>
+                    <td class="px-4 py-4">
+                      <div class="h-8 flex items-end gap-0.5">
+                        {% for point in row.curve %}
+                        <div class="w-full" style="height: {{ point }}%; background-color: {{ '#00e639' if row.velocity_tone == 'positive' else '#c0000a' }}; opacity: {{ 0.3 + (loop.index0 * 0.1) if loop.index0 < 6 else 1 }};"></div>
+                        {% endfor %}
+                      </div>
+                    </td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="bg-[#201f1f] border border-[#474747]/10">
+            <div class="bg-[#2a2a2a] px-4 py-2">
+              <span class="text-[10px] font-bold tracking-[0.2em] text-white">SECTOR_SENTIMENT_HEATMAP</span>
+            </div>
+            <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-0.5 p-0.5 bg-[#131313]">
+              {% for cell in sector_heatmap %}
+              <div class="{% if cell.tone == 'strong_positive' %}bg-[#00e639]/90 text-[#002203]{% elif cell.tone == 'positive' %}bg-[#00e639]/70 text-[#002203]{% elif cell.tone == 'mild_positive' %}bg-[#00e639]/40 text-white{% elif cell.tone == 'mild_negative' %}bg-[#c0000a]/40 text-white{% elif cell.tone == 'negative' %}bg-[#c0000a]/70 text-white{% else %}bg-[#353534] text-white{% endif %} aspect-square p-2 flex flex-col justify-between">
+                <span class="text-[10px] font-bold uppercase">{{ cell.label }}</span>
+                <span class="text-xs font-headline font-black">{{ cell.value }}</span>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+
+        <div class="space-y-6">
+          <div class="bg-[#201f1f] border border-[#474747]/10 p-4">
+            <div class="flex justify-between items-center mb-4">
+              <span class="text-[10px] font-bold tracking-[0.2em] text-white">MOMENTUM_ORDER</span>
+              <span class="material-symbols-outlined text-sm text-[#c6c6c6]">info</span>
+            </div>
+            <div class="space-y-4">
+              <div>
+                <label class="block text-[10px] text-[#c6c6c6] uppercase mb-1">Target Symbol</label>
+                <input class="w-full bg-[#0e0e0e] border-[#474747]/20 focus:border-[#00e639] focus:ring-0 text-white font-headline font-bold" type="text" value="{{ execution_symbol }}"/>
+              </div>
+              <div class="grid grid-cols-2 gap-2">
+                <div>
+                  <label class="block text-[10px] text-[#c6c6c6] uppercase mb-1">Quantity</label>
+                  <input class="w-full bg-[#0e0e0e] border-[#474747]/20 focus:border-[#00e639] focus:ring-0 text-white font-headline font-bold" type="number" value="100"/>
+                </div>
+                <div>
+                  <label class="block text-[10px] text-[#c6c6c6] uppercase mb-1">Leverage</label>
+                  <select class="w-full bg-[#0e0e0e] border-[#474747]/20 focus:border-[#00e639] focus:ring-0 text-white font-headline font-bold">
+                    <option>1X</option>
+                    <option>5X</option>
+                    <option>10X</option>
+                  </select>
+                </div>
+              </div>
+              <button class="w-full bg-[#00e639] text-[#002203] py-3 font-headline font-black tracking-widest hover:brightness-110">BUY_MOMENTUM</button>
+            </div>
+          </div>
+
+          <div class="ad-slot-sidebar relative group cursor-pointer overflow-hidden border border-[#474747]/20">
+            <div class="absolute inset-0 bg-gradient-to-t from-[#131313] via-transparent to-transparent z-10"></div>
+            <div class="w-full h-48 bg-[radial-gradient(circle_at_top,_rgba(0,230,57,0.12),_transparent_35%),linear-gradient(135deg,_#111111,_#1c1b1b)]"></div>
+            <div class="absolute bottom-4 left-4 right-4 z-20">
+              <span class="text-[8px] bg-white/10 text-white px-1 uppercase mb-2 inline-block">Sponsored Content</span>
+              <p class="text-xs font-headline font-bold text-white uppercase tracking-tight">Upgrade to NODE_PREMIUM for 0ms data feeds.</p>
+            </div>
+          </div>
+
+          <div class="bg-[#201f1f] border border-[#474747]/10">
+            <div class="bg-[#2a2a2a] px-4 py-2">
+              <span class="text-[10px] font-bold tracking-[0.2em] text-white">VOLATILITY_STREAM</span>
+            </div>
+            <div class="p-4 space-y-4">
+              {% for item in volatility_stream %}
+              <div class="{% if not loop.last %}flex items-center justify-between border-b border-[#474747]/10 pb-4{% else %}flex items-center justify-between{% endif %}">
+                <div>
+                  <p class="text-[10px] text-[#c6c6c6] uppercase">{{ item.label }}</p>
+                  <p class="text-sm font-bold text-white">{{ item.value }} <span class="{% if item.tone == 'positive' %}text-[#00e639]{% else %}text-[#c0000a]{% endif %} text-[10px]">{{ item.change }}</span></p>
+                </div>
+                <div class="w-24 h-8 bg-[#0e0e0e] relative overflow-hidden">
+                  <div class="absolute bottom-0 left-0 right-0 border-t" style="height: {{ item.bar }}%; background-color: {{ 'rgba(0,230,57,0.10)' if item.tone == 'positive' else 'rgba(192,0,10,0.10)' }}; border-color: {{ 'rgba(0,230,57,0.30)' if item.tone == 'positive' else 'rgba(192,0,10,0.30)' }};"></div>
+                </div>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <footer class="md:hidden fixed bottom-0 left-0 right-0 bg-[#131313] border-t border-[#474747]/20 z-50 flex items-center justify-around h-16">
+    <a class="flex flex-col items-center gap-1 text-[#00E639]" href="#"><span class="material-symbols-outlined">analytics</span><span class="text-[9px] font-bold tracking-tighter uppercase">ANALYST</span></a>
+    <a class="flex flex-col items-center gap-1 text-[#C6C6C6]" href="#"><span class="material-symbols-outlined">query_stats</span><span class="text-[9px] font-bold tracking-tighter uppercase">MARKET</span></a>
+    <a class="flex flex-col items-center gap-1 text-[#C6C6C6]" href="#"><span class="material-symbols-outlined">security</span><span class="text-[9px] font-bold tracking-tighter uppercase">RISK</span></a>
+    <a class="flex flex-col items-center gap-1 text-[#C6C6C6]" href="#"><span class="material-symbols-outlined">terminal</span><span class="text-[9px] font-bold tracking-tighter uppercase">LOGS</span></a>
+  </footer>
+</div>
+
+<script>
+  const root = document.documentElement;
+  const savedTheme = localStorage.getItem('color-theme');
+
+  if (savedTheme === 'dark' || savedTheme === 'light') {
+    root.classList.remove('light', 'dark');
+    root.classList.add(savedTheme);
+  }
+
+  function bindToggle(id) {
+    const button = document.getElementById(id);
+    if (!button) return;
+    button.addEventListener('click', function() {
+      root.classList.toggle('dark');
+      root.classList.toggle('light');
+      localStorage.setItem('color-theme', root.classList.contains('dark') ? 'dark' : 'light');
+    });
+  }
+
+  bindToggle('theme-toggle-light');
+  bindToggle('theme-toggle-dark');
+</script>
+</body>
+</html>

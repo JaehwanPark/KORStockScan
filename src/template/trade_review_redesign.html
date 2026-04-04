@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html class="{{ 'dark' if theme_class == 'dark' else 'light' }}" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Trade Review - Trading Intelligence</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&amp;family=Inter:wght@400;500;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "surface-bright": "#f7f9fb",
+                    "on-primary-container": "#0048bf",
+                    "inverse-primary": "#618bff",
+                    "on-secondary-container": "#435368",
+                    "secondary-fixed": "#d3e4fe",
+                    "tertiary-fixed": "#69f6b8",
+                    "on-primary-fixed": "#003798",
+                    "on-error": "#fff7f6",
+                    "on-background": "#2a3439",
+                    "surface-dim": "#cfdce3",
+                    "inverse-on-surface": "#9a9d9f",
+                    "on-secondary-fixed-variant": "#4d5d73",
+                    "on-tertiary-container": "#005a3c",
+                    "error-dim": "#4e0309",
+                    "on-error-container": "#752121",
+                    "secondary-fixed-dim": "#c5d6f0",
+                    "secondary-container": "#d3e4fe",
+                    "on-primary-fixed-variant": "#0050d4",
+                    "primary-fixed-dim": "#c7d3ff",
+                    "surface-tint": "#0053db",
+                    "inverse-surface": "#0b0f10",
+                    "error": "#9f403d",
+                    "on-surface-variant": "#566166",
+                    "on-tertiary": "#e6ffee",
+                    "on-secondary": "#f7f9ff",
+                    "secondary-dim": "#44546a",
+                    "surface-container-lowest": "#ffffff",
+                    "error-container": "#fe8983",
+                    "primary": "#0053db",
+                    "surface-variant": "#d9e4ea",
+                    "primary-container": "#dbe1ff",
+                    "on-surface": "#2a3439",
+                    "outline-variant": "#a9b4b9",
+                    "surface-container-low": "#f0f4f7",
+                    "on-secondary-fixed": "#314055",
+                    "tertiary": "#006d4a",
+                    "on-primary": "#f8f7ff",
+                    "on-tertiary-fixed": "#00452d",
+                    "background": "#f7f9fb",
+                    "primary-fixed": "#dbe1ff",
+                    "tertiary-dim": "#005f40",
+                    "outline": "#717c82",
+                    "tertiary-container": "#69f6b8",
+                    "surface-container-high": "#e1e9ee",
+                    "tertiary-fixed-dim": "#58e7ab",
+                    "surface-container-highest": "#d9e4ea",
+                    "surface": "#f7f9fb",
+                    "surface-container": "#e8eff3",
+                    "secondary": "#506076",
+                    "on-tertiary-fixed-variant": "#006544",
+                    "primary-dim": "#0048c1"
+            }
+          }
+        }
+      }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        body { font-family: 'Inter', sans-serif; }
+        h1, h2, h3 { font-family: 'Manrope', sans-serif; }
+        .tabular-nums { font-variant-numeric: tabular-nums; }
+        .terminal-scroll::-webkit-scrollbar { width: 4px; }
+        .terminal-scroll::-webkit-scrollbar-track { background: #131313; }
+        .terminal-scroll::-webkit-scrollbar-thumb { background: #353534; }
+        .theme-light-layout { display: block; }
+        .theme-dark-layout { display: none; }
+        html.dark .theme-light-layout { display: none; }
+        html.dark .theme-dark-layout { display: block; }
+        .animate-marquee { animation: marquee 20s linear infinite; }
+        @keyframes marquee {
+            0% { transform: translateX(0); }
+            100% { transform: translateX(-30%); }
+        }
+    </style>
+</head>
+<body>
+<div class="theme-light-layout bg-surface text-on-surface">
+<aside class="fixed left-0 top-0 h-full flex flex-col py-8 bg-[#ffffff] dark:bg-slate-950 h-screen w-64 border-r-0 shadow-[48px_0_48px_rgba(42,52,57,0.04)] z-50">
+<div class="px-6 mb-10">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-xl bg-primary flex items-center justify-center text-on-primary">
+<span class="material-symbols-outlined">analytics</span>
+</div>
+<div>
+<h2 class="text-lg font-black text-[#2a3439] leading-tight">Atelier Terminal</h2>
+<p class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant/60">Premium Tier</p>
+</div>
+</div>
+</div>
+<nav class="flex-1 space-y-1">
+<a class="flex items-center gap-3 px-6 py-4 w-full transition-all text-[#2a3439]/70 hover:bg-[#f7f9fb] font-inter text-sm font-medium hover:translate-x-1 duration-200" href="/dashboard?tab=daily-report&amp;date={{ report.date }}">
+<span class="material-symbols-outlined">dashboard</span>
+<span>Dashboard</span>
+</a>
+<a class="flex items-center gap-3 px-6 py-4 w-full transition-all text-[#2a3439]/70 hover:bg-[#f7f9fb] font-inter text-sm font-medium hover:translate-x-1 duration-200" href="/entry-pipeline-flow?date={{ report.date }}">
+<span class="material-symbols-outlined">account_tree</span>
+<span>Entry Gate</span>
+</a>
+<a class="flex items-center gap-3 px-6 py-4 w-full transition-all bg-[#f0f4f7] text-[#0053db] rounded-r-full font-inter text-sm font-medium hover:translate-x-1 duration-200" href="/trade-review?date={{ report.date }}{% if selected_code %}&amp;code={{ selected_code }}{% endif %}">
+<span class="material-symbols-outlined">query_stats</span>
+<span>Trade Review</span>
+</a>
+<a class="flex items-center gap-3 px-6 py-4 w-full transition-all text-[#2a3439]/70 hover:bg-[#f7f9fb] font-inter text-sm font-medium hover:translate-x-1 duration-200" href="/strength-momentum?date={{ report.date }}">
+<span class="material-symbols-outlined">account_balance_wallet</span>
+<span>Portfolio</span>
+</a>
+<a class="flex items-center gap-3 px-6 py-4 w-full transition-all text-[#2a3439]/70 hover:bg-[#f7f9fb] font-inter text-sm font-medium hover:translate-x-1 duration-200" href="/performance-tuning?date={{ report.date }}">
+<span class="material-symbols-outlined">insights</span>
+<span>Analytics</span>
+</a>
+</nav>
+<div class="px-6 mt-auto">
+<a class="w-full block py-3 bg-gradient-to-r from-primary to-primary-dim text-on-primary rounded-xl font-bold text-sm shadow-lg shadow-primary/20 text-center" href="/gatekeeper-replay?date={{ report.date }}{% if selected_code %}&amp;code={{ selected_code }}{% endif %}">New Trade</a>
+<div class="mt-8 space-y-1">
+<a class="flex items-center gap-3 px-2 py-3 text-[#2a3439]/60 font-medium text-sm hover:text-primary transition-colors" href="#"><span class="material-symbols-outlined text-xl">help</span><span>Help</span></a>
+<a class="flex items-center gap-3 px-2 py-3 text-[#2a3439]/60 font-medium text-sm hover:text-error transition-colors" href="#"><span class="material-symbols-outlined text-xl">logout</span><span>Logout</span></a>
+</div>
+</div>
+</aside>
+<main class="ml-64 min-h-screen bg-surface">
+<header class="flex justify-between items-center px-8 h-16 w-full max-w-full bg-[#f7f9fb] docked full-width top-0 z-50 font-manrope font-bold text-sm tracking-tight">
+<div class="flex items-center gap-8 flex-1">
+<form action="/trade-review" class="relative w-72">
+<span class="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant material-symbols-outlined text-lg">search</span>
+<input class="w-full bg-surface-container-low border-none rounded-full py-2 pl-10 pr-4 text-xs focus:ring-2 focus:ring-primary/20 transition-all placeholder:text-on-surface-variant/50" name="code" placeholder="Search by stock code (000000)" type="text" value="{{ selected_code if selected_code != '000000' else '' }}"/>
+<input name="date" type="hidden" value="{{ report.date }}"/>
+<input name="scope" type="hidden" value="{{ report.scope }}"/>
+</form>
+<nav class="hidden md:flex gap-6">
+<a class="text-[#2a3439]/60 pb-1 hover:text-[#0053db] transition-colors duration-200" href="/entry-pipeline-flow?date={{ report.date }}">Entry Gate</a>
+<a class="text-[#0053db] border-b-2 border-[#0053db] pb-1 hover:text-[#0053db] transition-colors duration-200" href="/trade-review?date={{ report.date }}{% if selected_code %}&amp;code={{ selected_code }}{% endif %}">Trade Review</a>
+</nav>
+</div>
+<div class="flex items-center gap-4">
+<button class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-surface-container transition-colors cursor-pointer active:opacity-80" id="theme-toggle-light" type="button"><span class="material-symbols-outlined text-on-surface-variant">dark_mode</span></button>
+<button class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-surface-container transition-colors relative cursor-pointer active:opacity-80" type="button"><span class="material-symbols-outlined text-on-surface-variant">notifications</span><span class="absolute top-2 right-2 w-2 h-2 bg-error rounded-full ring-2 ring-surface"></span></button>
+<button class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-surface-container transition-colors cursor-pointer active:opacity-80" type="button"><span class="material-symbols-outlined text-on-surface-variant">settings</span></button>
+<div class="h-8 w-[1px] bg-outline-variant/20 mx-2"></div>
+<div class="flex items-center gap-3 cursor-pointer group">
+<div class="w-8 h-8 rounded-full border border-outline-variant/30 bg-surface-container-low flex items-center justify-center text-[10px] font-bold">AI</div>
+<span class="hidden lg:block text-xs font-bold text-on-surface">Alex Thompson</span>
+</div>
+</div>
+</header>
+<div class="bg-[#f0f4f7] h-[1px] w-full"></div>
+<div class="p-8 space-y-8">
+<form action="/trade-review" class="grid grid-cols-1 xl:grid-cols-[1.2fr_1fr_1fr_auto_auto] gap-3">
+<input class="rounded-2xl border-0 bg-surface-container-low px-4 py-3 text-sm" name="date" type="date" value="{{ report.date }}"/>
+<input class="rounded-2xl border-0 bg-surface-container-low px-4 py-3 text-sm" name="code" placeholder="Stock code" type="text" value="{{ report.code or '' }}"/>
+<input class="rounded-2xl border-0 bg-surface-container-low px-4 py-3 text-sm" name="since" placeholder="HH:MM:SS" type="text" value="{{ request.args.get('since', '') }}"/>
+<select class="rounded-2xl border-0 bg-surface-container-low px-4 py-3 text-sm" name="scope">
+<option value="entered" {% if report.scope != 'all' %}selected{% endif %}>Entered only</option>
+<option value="all" {% if report.scope == 'all' %}selected{% endif %}>All records</option>
+</select>
+<button class="rounded-2xl bg-primary text-white px-5 py-3 text-sm font-bold" type="submit">Load Review</button>
+</form>
+
+{% if warnings %}
+<div class="rounded-2xl border border-error/20 bg-error/5 px-5 py-4">
+<h3 class="text-sm font-bold text-error mb-2">Report Warnings</h3>
+{% for item in warnings %}<p class="text-xs text-on-surface-variant">{{ item }}</p>{% endfor %}
+</div>
+{% endif %}
+
+<div class="flex flex-col md:flex-row md:items-end justify-between gap-4">
+<div>
+<div class="flex items-center gap-2 mb-2">
+<span class="px-2 py-0.5 bg-primary-container text-primary font-bold text-[10px] rounded uppercase tracking-tighter">{{ status_badge }}</span>
+<span class="text-on-surface-variant text-sm font-medium">{{ reference_label }}</span>
+</div>
+<h1 class="text-4xl font-extrabold tracking-tight text-on-surface">{{ selected_stock_label }}</h1>
+<p class="text-on-surface-variant mt-1 font-medium italic">{{ header_subtitle }}</p>
+</div>
+<div class="flex gap-3">
+<a class="px-6 py-2.5 bg-surface-container-high text-on-surface rounded-xl font-bold text-sm hover:bg-surface-container-highest transition-colors" href="/api/trade-review?date={{ report.date }}{% if selected_code %}&amp;code={{ selected_code }}{% endif %}&amp;scope={{ report.scope }}&amp;top={{ top_value }}">Export Report</a>
+<a class="px-6 py-2.5 bg-primary text-on-primary rounded-xl font-bold text-sm hover:bg-primary-dim transition-colors" href="/gatekeeper-replay?date={{ report.date }}{% if selected_code %}&amp;code={{ selected_code }}{% endif %}">Replicate Strategy</a>
+</div>
+</div>
+
+<div class="grid grid-cols-12 gap-6">
+<div class="col-span-12 lg:col-span-8 space-y-6">
+<div class="bg-surface-container-lowest rounded-xl p-6 shadow-[0_8px_32px_rgba(42,52,57,0.04)]">
+<div class="flex items-center justify-between mb-8">
+<h3 class="text-sm font-bold uppercase tracking-widest text-on-surface-variant">Price Action Breakdown</h3>
+<div class="flex gap-2">
+<button class="px-3 py-1 bg-surface-container-low text-xs font-bold rounded-lg text-primary" type="button">5M</button>
+<button class="px-3 py-1 text-xs font-bold rounded-lg text-on-surface-variant hover:bg-surface-container-low" type="button">15M</button>
+<button class="px-3 py-1 text-xs font-bold rounded-lg text-on-surface-variant hover:bg-surface-container-low" type="button">1H</button>
+<button class="px-3 py-1 text-xs font-bold rounded-lg text-on-surface-variant hover:bg-surface-container-low" type="button">Daily</button>
+</div>
+</div>
+<div class="h-[400px] w-full relative group">
+<div class="absolute inset-0 bg-surface-container-low/30 rounded-lg flex items-center justify-center overflow-hidden">
+<img class="w-full h-full object-cover opacity-20" data-alt="Sophisticated financial candlestick chart with clean blue and teal bars, minimalist grid lines, and technical overlay indicators on a white background" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBUKhBsZt_RktQ1ITLu007qCftnzyLLqJ3A74ouwOPaHw3e5aj4nByir27XldlH9Z9zbVokbVReTZBEdvAJUf2kQUTAMYHP4WXgpoRnjgIXMZpPUSQgj2EMzoBOintEMt7azHNuc5DpbXPvQcI46MUQtZTHt2eMY3b65ep-pM5NUQA67JZ0S31c5OkWpChMtJxEdMUC_w68hKFeaK7k4iuspkkZng_0zMvCZVl4SiR8hAf4Iqs5YqIklI2yphp5G4Prd80Naqaljxw"/>
+<div class="absolute left-[20%] top-[60%] flex flex-col items-center"><span class="material-symbols-outlined text-primary scale-150" style="font-variation-settings: 'FILL' 1;">arrow_drop_up</span><span class="bg-primary text-on-primary text-[10px] px-2 py-0.5 rounded-full font-bold">ENTRY</span></div>
+<div class="absolute right-[15%] top-[30%] flex flex-col items-center"><span class="material-symbols-outlined text-tertiary scale-150" style="font-variation-settings: 'FILL' 1;">arrow_drop_down</span><span class="bg-tertiary text-on-tertiary text-[10px] px-2 py-0.5 rounded-full font-bold">EXIT</span></div>
+</div>
+</div>
+</div>
+<div class="bg-surface-container-lowest rounded-xl p-6 shadow-[0_8px_32px_rgba(42,52,57,0.04)]">
+<h3 class="text-sm font-bold uppercase tracking-widest text-on-surface-variant mb-6">Execution Lifecycle</h3>
+<div class="space-y-0 relative">
+<div class="absolute left-4 top-2 bottom-2 w-[2px] bg-surface-container-low"></div>
+{% for step in timeline_steps %}
+<div class="relative pl-12 {% if not loop.last %}pb-8{% endif %}">
+<div class="absolute left-2.5 top-1.5 w-3 h-3 rounded-full {% if step.tone == 'good' %}bg-tertiary ring-4 ring-tertiary/20{% elif step.tone == 'bad' %}bg-error ring-4 ring-error/20{% elif step.tone == 'warn' %}bg-surface-dim{% else %}bg-primary ring-4 ring-primary/20{% endif %}"></div>
+<div class="flex justify-between items-start">
+<div><h4 class="text-sm font-bold text-on-surface">{{ step.title }}</h4><p class="text-xs text-on-surface-variant">{{ step.summary }}</p></div>
+<span class="text-[10px] font-medium text-on-surface-variant/60">{{ step.timestamp }}</span>
+</div>
+</div>
+{% endfor %}
+</div>
+</div>
+</div>
+<div class="col-span-12 lg:col-span-4 space-y-6">
+<div class="bg-surface-container-lowest rounded-xl p-8 shadow-[0_32px_48px_rgba(42,52,57,0.06)] border border-outline-variant/10">
+<p class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mb-2">Total Net Realized P/L</p>
+<div class="flex items-baseline gap-2">
+<h2 class="text-4xl font-extrabold {{ pnl_tone }}">{{ pnl_display }}</h2>
+<span class="text-sm font-bold {% if selected_trade.profit_rate > 0 %}text-tertiary/70{% elif selected_trade.profit_rate < 0 %}text-error/70{% else %}text-on-surface-variant{% endif %}">{{ pnl_rate_display }}</span>
+</div>
+<div class="mt-6 pt-6 border-t border-surface-container-low flex justify-between">
+<div><p class="text-[10px] font-medium text-on-surface-variant mb-1">Gross Profit</p><p class="text-sm font-bold text-on-surface">{{ gross_profit_display }}</p></div>
+<div class="text-right"><p class="text-[10px] font-medium text-on-surface-variant mb-1">{{ fee_label }}</p><p class="text-sm font-bold text-error">{{ fee_value }}</p></div>
+</div>
+</div>
+<div class="bg-surface-container-low rounded-xl p-6 space-y-6">
+<h3 class="text-sm font-bold uppercase tracking-widest text-on-surface-variant">Trade Metrics</h3>
+{% for item in trade_metric_items %}
+<div class="flex justify-between items-center">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-lg bg-surface-container-lowest flex items-center justify-center text-primary shadow-sm"><span class="material-symbols-outlined">{{ item.icon }}</span></div>
+<div><p class="text-[10px] font-medium text-on-surface-variant uppercase">{{ item.label }}</p><p class="text-sm font-bold text-on-surface">{{ item.value }}</p></div>
+</div>
+<span class="material-symbols-outlined text-outline-variant text-lg">info</span>
+</div>
+{% endfor %}
+</div>
+<div class="bg-primary text-on-primary rounded-xl p-6 shadow-xl shadow-primary/10 relative overflow-hidden">
+<div class="absolute top-0 right-0 p-4 opacity-20"><span class="material-symbols-outlined scale-[4]" style="font-variation-settings: 'FILL' 1;">auto_awesome</span></div>
+<h3 class="text-xs font-black uppercase tracking-[0.2em] mb-4 text-on-primary/80">Strategy Insight</h3>
+<p class="text-sm font-medium leading-relaxed italic mb-4">{{ insight_message }}</p>
+<div class="bg-white/10 rounded-lg p-3 flex items-center gap-2"><span class="material-symbols-outlined text-sm">verified</span><span class="text-[10px] font-bold uppercase">Efficiency: {{ efficiency_score }}/100</span></div>
+</div>
+<div class="bg-surface-container-lowest border border-outline-variant/10 rounded-xl p-6">
+<div class="flex items-center gap-4 mb-4"><div class="w-12 h-12 rounded-full bg-on-surface flex items-center justify-center"><span class="text-on-primary font-bold text-xs">{{ selected_code }}</span></div><div><h4 class="font-bold text-sm">{{ selected_name }}</h4><p class="text-xs text-on-surface-variant">{{ selected_code }}</p></div></div>
+<div class="grid grid-cols-2 gap-4">{% for item in stock_info_items %}<div class="p-3 bg-surface-container-low rounded-lg"><p class="text-[10px] text-on-surface-variant font-medium">{{ item.label }}</p><p class="text-xs font-bold">{{ item.value }}</p></div>{% endfor %}</div>
+</div>
+</div>
+</div>
+</div>
+</main>
+</div>
+
+<div class="theme-dark-layout">
+<body class="overflow-hidden bg-black text-[#e5e2e1]">
+<header class="fixed top-0 z-50 flex justify-between items-center w-full px-6 h-14 bg-[#131313] border-b border-[#474747]/20">
+<div class="flex items-center gap-8">
+<span class="text-xl font-black tracking-tighter text-white uppercase font-['Manrope']">SOVEREIGN_ANALYST</span>
+<nav class="hidden md:flex gap-6 items-center">
+<a class="font-['Manrope'] font-bold tracking-tighter uppercase text-sm text-[#C6C6C6] hover:text-white transition-colors" href="/dashboard?tab=daily-report&amp;date={{ report.date }}">TERMINAL</a>
+<a class="font-['Manrope'] font-bold tracking-tighter uppercase text-sm text-[#C6C6C6] hover:text-white transition-colors" href="/strength-momentum?date={{ report.date }}">PORTFOLIO</a>
+<a class="font-['Manrope'] font-bold tracking-tighter uppercase text-sm text-[#C6C6C6] hover:text-white transition-colors" href="/trade-review?date={{ report.date }}{% if selected_code %}&amp;code={{ selected_code }}{% endif %}">HISTORY</a>
+</nav>
+</div>
+<div class="flex items-center gap-4">
+<form action="/trade-review" class="flex items-center gap-2">
+<input class="bg-[#201F1F] border-0 px-3 py-1.5 text-xs font-medium w-36" name="code" placeholder="CODE" type="text" value="{{ report.code or '' }}"/>
+<input name="date" type="hidden" value="{{ report.date }}"/>
+<input name="scope" type="hidden" value="{{ report.scope }}"/>
+<button class="bg-[#201F1F] text-white px-4 py-1.5 text-xs font-bold font-['Manrope'] tracking-tighter uppercase hover:bg-[#1C1B1B] transition-all active:scale-95 duration-100" type="submit">SYNC</button>
+</form>
+<a class="bg-[#00E639] text-[#002203] px-4 py-1.5 text-xs font-bold font-['Manrope'] tracking-tighter uppercase hover:opacity-90 transition-all active:scale-95 duration-100" href="/gatekeeper-replay?date={{ report.date }}{% if selected_code %}&amp;code={{ selected_code }}{% endif %}">EXECUTE</a>
+<div class="flex gap-2 ml-4">
+<span class="material-symbols-outlined text-[#C6C6C6] cursor-pointer hover:text-white">notifications_active</span>
+<button id="theme-toggle-dark" type="button"><span class="material-symbols-outlined text-[#C6C6C6] cursor-pointer hover:text-white">contrast</span></button>
+</div>
+<div class="w-8 h-8 bg-surface-container border border-outline-variant/20 overflow-hidden flex items-center justify-center text-[10px] font-bold">AI</div>
+</div>
+</header>
+<aside class="fixed left-0 top-14 bottom-0 flex flex-col justify-between bg-[#1C1B1B] h-screen w-64 border-r border-[#474747]/20">
+<div class="flex flex-col">
+<div class="p-6 border-b border-[#474747]/20">
+<div class="flex items-center gap-3"><div class="w-2 h-2 rounded-full bg-[#00E639] animate-pulse"></div><div><div class="font-['Inter'] font-medium text-xs tracking-widest uppercase text-white">NODE_01</div><div class="text-[10px] text-secondary tabular-nums">LATENCY: {{ trade_parameters[1].value }}</div></div></div>
+</div>
+<nav class="flex flex-col mt-4">
+<a class="flex items-center gap-4 text-[#C6C6C6] px-6 py-4 hover:bg-[#201F1F] font-['Inter'] font-medium text-xs tracking-widest uppercase hover:text-white transition-all duration-150 active:bg-[#353534]" href="/entry-pipeline-flow?date={{ report.date }}"><span class="material-symbols-outlined">door_open</span> ENTRY_GATE</a>
+<a class="flex items-center gap-4 bg-[#201F1F] text-[#00E639] border-l-4 border-[#00E639] px-6 py-4 font-['Inter'] font-medium text-xs tracking-widest uppercase active:bg-[#353534]" href="/trade-review?date={{ report.date }}{% if selected_code %}&amp;code={{ selected_code }}{% endif %}"><span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">analytics</span> TRADE_REVIEW</a>
+<a class="flex items-center gap-4 text-[#C6C6C6] px-6 py-4 hover:bg-[#201F1F] font-['Inter'] font-medium text-xs tracking-widest uppercase hover:text-white transition-all duration-150 active:bg-[#353534]" href="/strength-momentum?date={{ report.date }}"><span class="material-symbols-outlined">query_stats</span> MARKET_DATA</a>
+<a class="flex items-center gap-4 text-[#C6C6C6] px-6 py-4 hover:bg-[#201F1F] font-['Inter'] font-medium text-xs tracking-widest uppercase hover:text-white transition-all duration-150 active:bg-[#353534]" href="/performance-tuning?date={{ report.date }}"><span class="material-symbols-outlined">security</span> RISK_ENGINE</a>
+<a class="flex items-center gap-4 text-[#C6C6C6] px-6 py-4 hover:bg-[#201F1F] font-['Inter'] font-medium text-xs tracking-widest uppercase hover:text-white transition-all duration-150 active:bg-[#353534]" href="/gatekeeper-replay?date={{ report.date }}{% if selected_code %}&amp;code={{ selected_code }}{% endif %}"><span class="material-symbols-outlined">terminal</span> LOGS</a>
+</nav>
+</div>
+<div class="p-4 flex flex-col gap-2">
+<div class="ad-slot-sidebar border border-dashed border-[#474747]/30 min-h-[120px] flex items-center justify-center text-[10px] tracking-widest uppercase text-[#C6C6C6]">ad-slot-sidebar</div>
+<button class="w-full bg-[#00E639] text-[#002203] font-bold py-3 text-xs tracking-widest uppercase active:scale-[0.98] transition-transform">NEW_ORDER</button>
+</div>
+</aside>
+<main class="fixed left-64 top-14 right-0 bottom-0 overflow-y-auto bg-black p-6 space-y-6">
+<div class="flex justify-between items-end border-b border-outline-variant/10 pb-6">
+<div><h1 class="text-4xl font-black font-headline tracking-tighter text-white uppercase italic">TRADE_REVIEW: <span class="text-secondary">{{ reference_label }}</span></h1><p class="text-on-surface-variant font-label text-xs tracking-[0.2em] mt-1">ASSET: {{ selected_stock_label }} / EXECUTION_TIME: {{ execution_time }}</p></div>
+<div class="flex gap-8"><div class="text-right"><p class="text-[10px] font-bold text-outline uppercase tracking-widest">REALIZED_P/L</p><p class="text-2xl font-black tabular-nums {% if selected_trade.realized_pnl_krw >= 0 %}text-secondary{% else %}text-tertiary-fixed{% endif %} tracking-tight">{{ pnl_display }}</p></div><div class="text-right"><p class="text-[10px] font-bold text-outline uppercase tracking-widest">ROI</p><p class="text-2xl font-black tabular-nums {% if selected_trade.profit_rate >= 0 %}text-secondary{% else %}text-tertiary-fixed{% endif %} tracking-tight">{{ pnl_rate_display }}</p></div></div>
+</div>
+<div class="grid grid-cols-12 gap-6 h-[calc(100vh-280px)]">
+<div class="col-span-8 bg-surface-container flex flex-col relative border border-outline-variant/10">
+<div class="flex justify-between items-center p-4 border-b border-outline-variant/10 bg-surface-container-low">
+<div class="flex gap-4"><span class="text-xs font-bold text-white border-b-2 border-secondary pb-1 px-2 cursor-pointer">1M</span><span class="text-xs font-bold text-outline hover:text-white transition-colors cursor-pointer">5M</span><span class="text-xs font-bold text-outline hover:text-white transition-colors cursor-pointer">15M</span><span class="text-xs font-bold text-outline hover:text-white transition-colors cursor-pointer">1H</span></div>
+<div class="flex gap-2"><span class="material-symbols-outlined text-on-surface-variant text-sm cursor-pointer hover:text-white">fullscreen</span><span class="material-symbols-outlined text-on-surface-variant text-sm cursor-pointer hover:text-white">photo_camera</span></div>
+</div>
+<div class="flex-grow bg-[#0c0c0c] relative overflow-hidden flex items-center justify-center">
+<div class="absolute inset-0 opacity-5" style="background-image: linear-gradient(#474747 1px, transparent 1px), linear-gradient(90deg, #474747 1px, transparent 1px); background-size: 40px 40px;"></div>
+<div class="absolute top-1/2 left-1/3 w-px h-1/2 bg-secondary opacity-30 border-l border-dashed border-secondary/50"></div>
+<div class="absolute top-1/2 left-1/3 -translate-x-1/2 -translate-y-1/2 bg-secondary text-on-secondary px-2 py-0.5 text-[10px] font-bold">ENTRY</div>
+<div class="absolute top-1/3 left-2/3 w-px h-1/3 bg-tertiary-fixed opacity-30 border-l border-dashed border-tertiary-fixed/50"></div>
+<div class="absolute top-1/3 left-2/3 -translate-x-1/2 -translate-y-1/2 bg-tertiary-fixed text-white px-2 py-0.5 text-[10px] font-bold">EXIT</div>
+<img alt="Trade Chart" class="w-full h-auto opacity-80" data-alt="Technical financial candlestick chart on a black background with emerald green and deep red indicators and faint grid lines" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCuJvnKqW7PEP85363Um99KpFj4mSDvkz_bIJ_0Y7ur7KwEX9SyBvB0eBSgoQakeUQns9sZdA-Vm_7AWHtzm6-znsHL_Psi26gJx_mnmUSJUbisEj_IANg83TUMsVM0r-cTku81oEOGfA3r1FAIGeAndsyiPqjzFl_1yQM9URjUfrzvI5nNGZlEqGTjvJpw8LxqrE5He27b2MXl4SV9VA1WH8Tw2U7Ngjr9PFq6WHlCW2afyK8r9lt3kUdpByj8JB3o-594_DwOejY"/>
+</div>
+</div>
+<div class="col-span-4 flex flex-col gap-6 h-full">
+<div class="bg-surface-container p-6 border border-outline-variant/10">
+<h3 class="text-xs font-bold text-white uppercase tracking-widest mb-6 flex items-center gap-2"><span class="material-symbols-outlined text-sm text-secondary">monitoring</span> TRADE_PARAMETERS</h3>
+<div class="space-y-4">{% for item in trade_parameters %}<div class="flex justify-between items-center {% if not loop.last %}border-b border-outline-variant/5 pb-2{% endif %}"><span class="text-[10px] text-on-surface-variant uppercase font-medium">{{ item.label }}</span><span class="text-xs tabular-nums font-black {{ item.tone }}">{{ item.value }}</span></div>{% endfor %}</div>
+</div>
+<div class="ad-slot-inline bg-surface-container border border-dashed border-outline-variant/20 min-h-[80px] flex items-center justify-center text-[10px] tracking-widest uppercase text-[#C6C6C6]">ad-slot-inline</div>
+<div class="flex-grow bg-surface-container-lowest border border-outline-variant/10 overflow-hidden flex flex-col">
+<div class="bg-surface-container-highest px-4 py-2 flex justify-between items-center"><span class="text-[10px] font-bold text-white uppercase tracking-widest font-mono">DEBUG_TERMINAL</span><div class="flex gap-1"><div class="w-2 h-2 bg-[#474747]"></div><div class="w-2 h-2 bg-[#474747]"></div></div></div>
+<div class="p-4 font-mono text-[11px] leading-relaxed overflow-y-auto terminal-scroll text-[#00E639]/80 h-full">{% for item in terminal_logs %}<p class="{% if item.highlight %}font-bold{% endif %}"><span class="text-outline">{{ item.timestamp }}</span> [{{ item.level }}] {{ item.message }}{% if item.detail %} :: {{ item.detail|upper }}{% endif %}</p>{% endfor %}<p class="animate-pulse">_</p></div>
+</div>
+</div>
+</div>
+<div class="fixed bottom-0 left-64 right-0 h-8 bg-surface-container-lowest border-t border-outline-variant/20 flex items-center px-6 overflow-hidden"><div class="flex gap-8 items-center whitespace-nowrap animate-marquee">{% for item in ticker_items %}<div class="flex gap-2 items-center"><span class="text-[10px] font-bold text-outline uppercase tracking-tighter">{{ item.symbol }}</span><span class="text-[10px] font-black tabular-nums {{ item.tone }}">{{ item.value }}</span></div>{% endfor %}</div></div>
+</main>
+</div>
+
+<script>
+  (function () {
+    const root = document.documentElement;
+    const storedTheme = localStorage.getItem('color-theme');
+    if (storedTheme === 'dark' || storedTheme === 'light') {
+      root.classList.remove('light', 'dark');
+      root.classList.add(storedTheme);
+    }
+
+    function bindToggle(id) {
+      const btn = document.getElementById(id);
+      if (!btn) return;
+      btn.addEventListener('click', function() {
+        const nextTheme = root.classList.contains('dark') ? 'light' : 'dark';
+        root.classList.remove('light', 'dark');
+        root.classList.add(nextTheme);
+        localStorage.setItem('color-theme', nextTheme);
+      });
+    }
+
+    bindToggle('theme-toggle-light');
+    bindToggle('theme-toggle-dark');
+  })();
+</script>
+</body>
+</html>

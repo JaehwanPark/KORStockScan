@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html class="{{ theme_class }}" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Daily Strategy Report | Trading Intelligence</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;700;800&amp;family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script>
+  tailwind.config = {
+    darkMode: "class",
+    theme: {
+      extend: {
+        fontFamily: {
+          headline: ["Manrope"],
+          body: ["Inter"],
+        },
+      },
+    },
+  };
+</script>
+<style>
+  body { font-family: "Inter", sans-serif; }
+  .font-headline { font-family: "Manrope", sans-serif; }
+  .material-symbols-outlined {
+    font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+  }
+  .theme-light-layout { display: block; }
+  .theme-dark-layout { display: none; }
+  html.dark .theme-light-layout { display: none; }
+  html.dark .theme-dark-layout { display: block; }
+  .ghost-border { outline: 1px solid rgba(169, 180, 185, 0.15); }
+  .sharp-border { border: 1px solid rgba(255, 255, 255, 0.08); }
+  .tabular { font-variant-numeric: tabular-nums; }
+  .monolithic-block { background-color: #0d0d0d; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+</style>
+</head>
+<body class="m-0">
+<div class="theme-light-layout bg-[#f7f9fb] text-[#2a3439] min-h-screen">
+  <div class="w-full bg-[#cfdce3] px-8 py-1.5 flex justify-between items-center text-[11px] font-medium text-[#566166]">
+    <div class="flex items-center gap-6">
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-emerald-600 shadow-[0_0_8px_rgba(5,150,105,0.35)]"></span>
+        <span class="uppercase tracking-wider">Market Condition: {{ market_condition }}</span>
+      </div>
+      <div class="flex items-center gap-4">
+        <span>20D Breakout <span class="text-emerald-600">{{ stats.ma20_ratio or 0 }}%</span></span>
+        <span>Avg RSI <span class="text-[#2a3439]">{{ stats.avg_rsi or 0 }}</span></span>
+        <span>AI Conviction <span class="text-[#0053db]">{{ stats.avg_prob or 0 }}%</span></span>
+      </div>
+    </div>
+    <div class="flex items-center gap-6">
+      <div class="flex items-center gap-2">
+        <span class="text-[#566166]">Generated:</span>
+        <span class="font-semibold text-[#2a3439]">{{ generated_at or "-" }}</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="text-[#566166]">Daily P/L:</span>
+        <span class="{{ 'text-emerald-600' if (perf_summary.realized_pnl_krw or 0) >= 0 else 'text-rose-600' }} font-bold">{{ kpi_cards[0].value }}</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="material-symbols-outlined text-[14px]">cloud_done</span>
+        <span>Status: LIVE</span>
+      </div>
+    </div>
+  </div>
+
+  <header class="bg-[#f7f9fb] flex justify-between items-center w-full px-8 py-3 max-w-[1920px] mx-auto sticky top-0 z-50">
+    <div class="flex items-center gap-12">
+      <span class="text-xl font-bold tracking-tight text-[#2a3439]">Trading Intelligence</span>
+      <nav class="flex items-center gap-8">
+        <a class="text-[#0053db] font-bold border-b-2 border-[#0053db] pb-1 text-sm tracking-tight" href="#">Strategy</a>
+        <a class="text-[#2a3439]/70 font-medium hover:bg-[#f0f4f7] px-2 py-1 rounded text-sm" href="#">Blocked</a>
+        <a class="text-[#2a3439]/70 font-medium hover:bg-[#f0f4f7] px-2 py-1 rounded text-sm" href="#">Review</a>
+        <a class="text-[#2a3439]/70 font-medium hover:bg-[#f0f4f7] px-2 py-1 rounded text-sm" href="#">Replay</a>
+        <a class="text-[#2a3439]/70 font-medium hover:bg-[#f0f4f7] px-2 py-1 rounded text-sm" href="#">Tuning</a>
+      </nav>
+    </div>
+    <div class="flex items-center gap-4">
+      <form action="/daily-report" class="flex items-center gap-3">
+        <select class="bg-[#f0f4f7] border-none rounded-full px-4 py-1.5 text-sm w-48 focus:ring-1 focus:ring-[#0053db]" name="date">
+          {% for d in dates %}
+          <option value="{{ d }}" {% if d == selected_date %}selected{% endif %}>{{ d }}</option>
+          {% endfor %}
+        </select>
+        <button class="rounded-full bg-[#0053db] text-white px-4 py-1.5 text-sm font-semibold" type="submit">Load</button>
+      </form>
+      <button class="p-2 hover:bg-[#f0f4f7] rounded-full transition-colors flex items-center justify-center" id="theme-toggle-light" title="Toggle Dark/Light Mode" type="button">
+        <span class="material-symbols-outlined text-[#566166]">dark_mode</span>
+      </button>
+    </div>
+  </header>
+
+  <main class="flex h-[calc(100vh-80px)] overflow-hidden">
+    <aside class="fixed left-0 h-full w-64 bg-[#f0f4f7] flex flex-col py-6 px-4 gap-4">
+      <div class="flex items-center gap-3 px-2 mb-4">
+        <div class="w-10 h-10 bg-[#0053db] rounded-xl flex items-center justify-center text-white">
+          <span class="material-symbols-outlined">dashboard</span>
+        </div>
+        <div>
+          <h4 class="text-sm font-bold text-[#2a3439]">Core Engine</h4>
+          <p class="text-[11px] text-[#566166]">Report: {{ selected_date }}</p>
+        </div>
+      </div>
+      <div class="flex flex-col gap-1">
+        <a class="bg-white text-[#0053db] rounded-lg shadow-sm font-semibold flex items-center gap-3 px-3 py-2.5" href="#"><span class="material-symbols-outlined text-[20px]">dashboard</span><span class="text-sm">Dashboard</span></a>
+        <a class="text-[#2a3439] hover:bg-white/50 rounded-lg flex items-center gap-3 px-3 py-2.5" href="#"><span class="material-symbols-outlined text-[20px]">show_chart</span><span class="text-sm">Markets</span></a>
+        <a class="text-[#2a3439] hover:bg-white/50 rounded-lg flex items-center gap-3 px-3 py-2.5" href="#"><span class="material-symbols-outlined text-[20px]">receipt_long</span><span class="text-sm">Orders</span></a>
+        <a class="text-[#2a3439] hover:bg-white/50 rounded-lg flex items-center gap-3 px-3 py-2.5" href="#"><span class="material-symbols-outlined text-[20px]">analytics</span><span class="text-sm">Analytics</span></a>
+        <a class="text-[#2a3439] hover:bg-white/50 rounded-lg flex items-center gap-3 px-3 py-2.5" href="#"><span class="material-symbols-outlined text-[20px]">terminal</span><span class="text-sm">Logs</span></a>
+      </div>
+      <div class="mt-auto p-4 bg-white/70 rounded-xl ghost-border">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-[11px] font-bold uppercase tracking-widest text-[#566166]">Risk Level</span>
+          <span class="text-[11px] font-bold text-emerald-600">LOW</span>
+        </div>
+        <div class="w-full bg-[#e8eff3] h-1.5 rounded-full overflow-hidden">
+          <div class="bg-emerald-600 w-[30%] h-full"></div>
+        </div>
+        <button class="w-full mt-4 bg-rose-500 text-white text-[11px] font-bold py-2 rounded-lg uppercase tracking-widest">Emergency Stop</button>
+      </div>
+    </aside>
+
+    <section class="ml-64 flex-1 flex flex-col overflow-y-auto no-scrollbar pb-12">
+      <div class="p-8 max-w-[1600px] w-full mx-auto grid grid-cols-12 gap-6">
+        <div class="col-span-12 mb-4">
+          <h2 class="text-sm font-semibold text-[#0053db] uppercase tracking-[0.2em] mb-1">Performance Overview</h2>
+          <h1 class="text-4xl font-extrabold tracking-tight text-[#2a3439]">Daily Strategy Report</h1>
+        </div>
+
+        <div class="col-span-12 ad-slot-inline my-2 p-6 border-2 border-dashed border-[#a9b4b9]/20 rounded-xl flex items-center justify-center bg-[#f0f4f7]/60">
+          <div class="flex items-center gap-3">
+            <span class="material-symbols-outlined text-[#566166]/30">branding_watermark</span>
+            <span class="text-xs font-bold uppercase tracking-[0.2em] text-[#566166]/40">ad-slot-inline reserved</span>
+          </div>
+        </div>
+
+        <div class="col-span-12 lg:col-span-4 bg-white rounded-xl p-6 shadow-sm flex flex-col items-center justify-center ghost-border relative overflow-hidden">
+          <div class="absolute top-0 right-0 p-4">
+            <span class="material-symbols-outlined text-[#0053db]/20 text-4xl">trending_up</span>
+          </div>
+          {% set gauge = (perf_summary.win_rate or 0) %}
+          {% set circumference = 502.6 %}
+          {% set dashoffset = circumference - (circumference * (gauge / 100 if gauge <= 100 else 1)) %}
+          <div class="relative w-48 h-48 flex items-center justify-center">
+            <svg class="w-full h-full -rotate-90">
+              <circle class="text-[#e8eff3]" cx="96" cy="96" fill="transparent" r="80" stroke="currentColor" stroke-width="12"></circle>
+              <circle class="text-emerald-600" cx="96" cy="96" fill="transparent" r="80" stroke="currentColor" stroke-dasharray="{{ circumference }}" stroke-dashoffset="{{ dashoffset }}" stroke-width="12"></circle>
+            </svg>
+            <div class="absolute inset-0 flex flex-col items-center justify-center text-center">
+              <span class="text-4xl font-extrabold text-[#2a3439]">{{ '%.1f'|format(perf_summary.win_rate or 0) }}<span class="text-2xl">%</span></span>
+              <span class="text-[11px] font-bold uppercase tracking-widest text-[#566166]">Win Rate</span>
+            </div>
+          </div>
+          <div class="mt-6 grid grid-cols-2 gap-8 w-full text-center border-t border-[#e8eff3] pt-6">
+            <div>
+              <p class="text-[11px] text-[#566166] mb-1">Trades Won</p>
+              <p class="text-lg font-bold text-emerald-600">{{ perf_summary.completed_records or 0 }}</p>
+            </div>
+            <div>
+              <p class="text-[11px] text-[#566166] mb-1">Trades Lost</p>
+              <p class="text-lg font-bold text-rose-600">{{ perf_summary.open_records or 0 }}</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="col-span-12 lg:col-span-8 bg-white rounded-xl p-6 shadow-sm ghost-border flex flex-col">
+          <div class="flex justify-between items-center mb-6">
+            <div>
+              <h3 class="text-lg font-bold text-[#2a3439]">Main Market Flow (SPY)</h3>
+              <p class="text-xs text-[#566166]">Real-time volume analysis across 5m intervals</p>
+            </div>
+            <div class="flex gap-2">
+              <button class="px-3 py-1 text-xs font-semibold bg-[#e8eff3] rounded-md text-[#2a3439]">1H</button>
+              <button class="px-3 py-1 text-xs font-semibold bg-[#0053db] text-white rounded-md">1D</button>
+              <button class="px-3 py-1 text-xs font-semibold bg-[#e8eff3] rounded-md text-[#2a3439]">1W</button>
+            </div>
+          </div>
+          <div class="grid grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
+            {% for card in kpi_cards %}
+            <div class="bg-[#f0f4f7] rounded-xl p-4">
+              <p class="text-[11px] uppercase tracking-widest text-[#566166] mb-1">{{ card.label }}</p>
+              <p class="text-2xl font-extrabold {% if card.tone == 'positive' %}text-emerald-600{% elif card.tone == 'negative' %}text-rose-600{% else %}text-[#2a3439]{% endif %}">{{ card.value }}</p>
+            </div>
+            {% endfor %}
+          </div>
+          <div class="flex-1 min-h-[240px] px-2 relative rounded-xl bg-[#f0f4f7] overflow-hidden">
+            <div class="absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(0,83,219,0.12),_transparent_42%),linear-gradient(180deg,_rgba(255,255,255,0.45),_transparent)]"></div>
+            <div class="absolute inset-x-8 bottom-8 flex items-end gap-2 h-40">
+              {% set bars = [32, 48, 40, 66, 52, 78, 60, 84, 76, 92, 80, 98] %}
+              {% for bar in bars %}
+              <div class="flex-1 rounded-t-md bg-gradient-to-t from-[#0053db] to-sky-300/80 opacity-80" style="height: {{ bar }}%;"></div>
+              {% endfor %}
+            </div>
+            <div class="absolute top-8 left-8 bg-[#2a3439] text-white text-[10px] px-2 py-1 rounded shadow-lg">AI Signal: {{ stats.avg_prob or 0 }}%</div>
+          </div>
+          <div class="mt-6 flex justify-between text-[11px] text-[#566166] uppercase tracking-widest font-bold">
+            <span>09:30 AM</span><span>12:00 PM</span><span>02:30 PM</span><span>04:00 PM</span>
+          </div>
+        </div>
+
+        <div class="col-span-12 ad-slot-inline my-2 p-6 border-2 border-dashed border-[#a9b4b9]/20 rounded-xl flex items-center justify-center bg-[#f0f4f7]/60">
+          <div class="flex items-center gap-3">
+            <span class="material-symbols-outlined text-[#566166]/30">branding_watermark</span>
+            <span class="text-xs font-bold uppercase tracking-[0.2em] text-[#566166]/40">ad-slot-inline reserved</span>
+          </div>
+        </div>
+
+        <div class="col-span-12 bg-white rounded-xl shadow-sm ghost-border overflow-hidden">
+          <div class="px-6 py-5 border-b border-[#e8eff3] flex justify-between items-center">
+            <h3 class="text-lg font-bold text-[#2a3439]">Active Strategy Performance</h3>
+            <button class="text-[#0053db] text-xs font-bold flex items-center gap-1 hover:underline">View All Strategies <span class="material-symbols-outlined text-sm">arrow_forward</span></button>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-left border-collapse">
+              <thead>
+                <tr class="bg-[#f0f4f7]/70">
+                  <th class="px-6 py-4 text-[11px] font-bold text-[#566166] uppercase tracking-widest">Strategy Name</th>
+                  <th class="px-6 py-4 text-[11px] font-bold text-[#566166] uppercase tracking-widest">Status</th>
+                  <th class="px-6 py-4 text-[11px] font-bold text-[#566166] uppercase tracking-widest">Today's P/L</th>
+                  <th class="px-6 py-4 text-[11px] font-bold text-[#566166] uppercase tracking-widest">Volume</th>
+                  <th class="px-6 py-4 text-[11px] font-bold text-[#566166] uppercase tracking-widest">Actions</th>
+                </tr>
+              </thead>
+              <tbody class="text-sm">
+                {% for row in strategy_rows %}
+                <tr class="hover:bg-[#f8fafc] transition-colors">
+                  <td class="px-6 py-4 font-semibold">{{ row.label }}</td>
+                  <td class="px-6 py-4">
+                    <div class="flex items-center gap-2">
+                      <span class="w-2 h-2 rounded-full {{ 'bg-emerald-600' if row.status in ['Executing', 'Monitoring'] else 'bg-[#0053db]' if row.status == 'Queued' else 'bg-rose-600' }}"></span>
+                      <span class="text-xs font-medium">{{ row.status }}</span>
+                    </div>
+                  </td>
+                  <td class="px-6 py-4 font-bold {{ 'text-emerald-600' if '+' in row.pnl|string else 'text-rose-600' if '-' in row.pnl|string else 'text-[#2a3439]' }}">{{ row.pnl }}</td>
+                  <td class="px-6 py-4 text-[#566166] font-medium">{{ row.volume }}</td>
+                  <td class="px-6 py-4"><button class="text-[#566166] hover:text-[#0053db]"><span class="material-symbols-outlined text-lg">more_horiz</span></button></td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="col-span-12 grid grid-cols-1 md:grid-cols-3 gap-6">
+          {% for stock in stock_spotlights %}
+          <div class="bg-[#e8eff3] rounded-xl p-5 shadow-sm ghost-border">
+            <div class="flex justify-between items-start mb-4">
+              <div>
+                <h4 class="font-bold text-[#2a3439]">{{ stock.code }}</h4>
+                <p class="text-[11px] text-[#566166]">{{ stock.name }}</p>
+              </div>
+              <span class="bg-[#0053db]/10 text-[#0053db] text-[10px] font-bold px-2 py-0.5 rounded-full">{{ stock.signal }}</span>
+            </div>
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <p class="text-[10px] uppercase text-[#566166] tracking-tighter">AI Score</p>
+                <p class="text-xl font-extrabold text-[#0053db]">{{ stock.score }}</p>
+              </div>
+              <div>
+                <p class="text-[10px] uppercase text-[#566166] tracking-tighter">Volatility</p>
+                <p class="text-xl font-extrabold text-[#2a3439]">{{ stock.volatility }}</p>
+              </div>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </section>
+
+    <aside class="w-80 bg-[#f0f4f7] h-full border-l border-[#e8eff3] flex flex-col">
+      <div class="p-6 border-b border-[#e8eff3]">
+        <h3 class="text-sm font-bold text-[#2a3439] flex items-center gap-2"><span class="material-symbols-outlined text-[#0053db] text-[20px]">hub</span>System Alerts</h3>
+      </div>
+      <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
+        {% for alert in alert_items[:4] %}
+        <div class="p-4 bg-white rounded-xl shadow-sm ghost-border relative {% if alert.tone == 'negative' %}border-l-4 border-rose-600{% endif %}">
+          <div class="flex items-start gap-3">
+            <div class="w-8 h-8 rounded-full {{ 'bg-emerald-500/10' if alert.tone == 'positive' else 'bg-rose-500/10' if alert.tone == 'negative' else 'bg-[#0053db]/10' if alert.tone == 'info' else 'bg-amber-100' }} flex items-center justify-center shrink-0">
+              <span class="material-symbols-outlined {{ 'text-emerald-600' if alert.tone == 'positive' else 'text-rose-600' if alert.tone == 'negative' else 'text-[#0053db]' if alert.tone == 'info' else 'text-amber-600' }} text-sm">{{ 'check_circle' if alert.tone == 'positive' else 'warning' if alert.tone == 'negative' else 'info' if alert.tone == 'info' else 'notifications' }}</span>
+            </div>
+            <div>
+              <p class="text-xs font-bold {% if alert.tone == 'negative' %}text-rose-600{% else %}text-[#2a3439]{% endif %}">{{ alert.title }}</p>
+              <p class="text-[11px] text-[#566166] mt-1">{{ alert.body }}</p>
+            </div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      <div class="p-4 bg-[#e1e9ee]/80 border-t border-[#e8eff3]">
+        <button class="w-full py-2 bg-[#2a3439] text-white text-[10px] font-bold rounded-lg uppercase tracking-widest">Clear All Notifications</button>
+      </div>
+      <div class="ad-slot-sidebar mx-4 mb-4 p-4 border-2 border-dashed border-[#a9b4b9]/25 rounded-xl flex items-center justify-center min-h-[250px]">
+        <div class="text-center">
+          <span class="material-symbols-outlined text-[#566166]/30 block mb-2">ads_click</span>
+          <span class="text-[10px] font-bold uppercase tracking-widest text-[#566166]/40">ad-slot-sidebar reserved</span>
+          <p class="text-[8px] text-[#566166]/30 mt-1">(300x250 Responsive)</p>
+        </div>
+      </div>
+    </aside>
+  </main>
+</div>
+
+<div class="theme-dark-layout bg-black text-[#e1e1e1] min-h-screen">
+  <div class="flex min-h-screen">
+    <aside class="h-screen w-64 left-0 sticky flex-col py-6 border-r border-[#333333]/30 bg-[#080808] hidden md:flex">
+      <div class="px-6 mb-8">
+        <div class="flex items-center gap-2 mb-2">
+          <div class="w-3 h-3 bg-[#4caf50]"></div>
+          <span class="font-headline text-xs font-bold uppercase tracking-widest text-[#e1e1e1]">System Health</span>
+        </div>
+        <span class="text-[10px] text-[#999999]">All Systems Operational</span>
+      </div>
+      <nav class="flex-1 space-y-1">
+        <a class="flex items-center gap-3 text-white font-bold border-l-4 border-[#4caf50] bg-[#1a1a1a] px-4 py-3" href="#"><span class="material-symbols-outlined text-sm">dashboard</span><span class="text-xs tracking-wide">Dashboard</span></a>
+        <a class="flex items-center gap-3 text-[#999999] px-4 py-3 hover:bg-[#111111]" href="#"><span class="material-symbols-outlined text-sm">insights</span><span class="text-xs tracking-wide">Analytics</span></a>
+        <a class="flex items-center gap-3 text-[#999999] px-4 py-3 hover:bg-[#111111]" href="#"><span class="material-symbols-outlined text-sm">bolt</span><span class="text-xs tracking-wide">Execution</span></a>
+        <a class="flex items-center gap-3 text-[#999999] px-4 py-3 hover:bg-[#111111]" href="#"><span class="material-symbols-outlined text-sm">history</span><span class="text-xs tracking-wide">History</span></a>
+      </nav>
+      <div class="mt-auto space-y-1">
+        <a class="flex items-center gap-3 text-[#999999] px-4 py-3 hover:bg-[#111111]" href="#"><span class="material-symbols-outlined text-sm">help_outline</span><span class="text-xs tracking-wide">Support</span></a>
+        <a class="flex items-center gap-3 text-[#999999] px-4 py-3 hover:bg-[#111111]" href="#"><span class="material-symbols-outlined text-sm">person</span><span class="text-xs tracking-wide">Account</span></a>
+      </div>
+    </aside>
+
+    <div class="flex-1 flex flex-col min-w-0">
+      <header class="w-full top-0 sticky z-50 flex justify-between items-center px-6 py-3 bg-[#080808] border-b border-[#333333]/20">
+        <div class="flex items-center gap-8">
+          <span class="text-xl font-bold tracking-tighter text-white font-headline uppercase">Strategy Terminal</span>
+          <nav class="hidden lg:flex gap-6">
+            <a class="text-white border-b-2 border-[#4caf50] pb-1 font-headline tracking-tight font-bold uppercase text-sm" href="#">Strategy</a>
+            <a class="text-[#999999] hover:text-white font-headline tracking-tight font-bold uppercase text-sm" href="#">Gate Flow</a>
+            <a class="text-[#999999] hover:text-white font-headline tracking-tight font-bold uppercase text-sm" href="#">Review</a>
+            <a class="text-[#999999] hover:text-white font-headline tracking-tight font-bold uppercase text-sm" href="#">Momentum</a>
+            <a class="text-[#999999] hover:text-white font-headline tracking-tight font-bold uppercase text-sm" href="#">Replay</a>
+            <a class="text-[#999999] hover:text-white font-headline tracking-tight font-bold uppercase text-sm" href="#">Tuning</a>
+          </nav>
+        </div>
+        <div class="flex items-center gap-4">
+          <form action="/daily-report" class="hidden sm:flex items-center gap-2">
+            <input name="theme" type="hidden" value="dark"/>
+            <select class="bg-[#111111] border border-[#333333] text-white text-[10px] py-1 pl-3 pr-4 w-40 uppercase tracking-widest" name="date">
+              {% for d in dates %}
+              <option value="{{ d }}" {% if d == selected_date %}selected{% endif %}>{{ d }}</option>
+              {% endfor %}
+            </select>
+            <button class="bg-[#111111] border border-[#333333] px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-white" type="submit">Load</button>
+          </form>
+          <span class="material-symbols-outlined text-[#999999] cursor-pointer hover:text-white">notifications</span>
+          <span class="material-symbols-outlined text-[#999999] cursor-pointer hover:text-white">settings</span>
+          <button class="group flex items-center justify-center w-8 h-8 monolithic-block sharp-border hover:bg-[#2a2a2a] transition-colors" id="theme-toggle-dark" type="button">
+            <span class="material-symbols-outlined text-[#999999] text-sm group-hover:text-white">light_mode</span>
+          </button>
+          <div class="w-8 h-8 monolithic-block sharp-border overflow-hidden grayscale contrast-125 flex items-center justify-center text-[10px] font-bold">AI</div>
+        </div>
+      </header>
+
+      <main class="p-6 overflow-y-auto bg-black">
+        <div class="flex items-center justify-between mb-6">
+          <h1 class="text-3xl font-headline font-extrabold tracking-tight text-white uppercase italic">Daily Strategy Report <span class="text-[#666666] font-normal not-italic ml-2">/ api/daily-report</span></h1>
+          <div class="flex items-center gap-2">
+            <span class="text-[10px] uppercase tracking-[0.2em] text-[#999999]">Session Duration: {{ session_duration }}</span>
+            <div class="w-2 h-2 rounded-full bg-[#4caf50] shadow-[0_0_8px_rgba(76,175,80,0.5)]"></div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-12 gap-6">
+          <div class="col-span-12 grid grid-cols-1 md:grid-cols-3 gap-6">
+            {% for card in kpi_cards[:3] %}
+            <div class="monolithic-block sharp-border p-6 flex flex-col justify-between h-32">
+              <span class="text-[10px] font-bold text-[#999999] uppercase tracking-widest">{{ card.label }}</span>
+              <div class="flex items-baseline justify-between">
+                <span class="text-3xl font-headline font-extrabold tabular">{{ card.value }}</span>
+                {% if loop.index == 1 %}
+                <span class="text-[#4caf50] text-xs font-bold tabular">{{ stats.avg_prob or 0 }}%</span>
+                {% elif loop.index == 2 %}
+                <div class="relative w-12 h-6 flex items-end gap-1">
+                  <div class="w-2 h-2 bg-[#4caf50]/60"></div><div class="w-2 h-4 bg-[#4caf50]/80"></div><div class="w-2 h-6 bg-[#4caf50]"></div><div class="w-2 h-3 bg-[#4caf50]/70"></div>
+                </div>
+                {% else %}
+                <span class="material-symbols-outlined text-[#4caf50]" style="font-variation-settings: 'FILL' 1;">speed</span>
+                {% endif %}
+              </div>
+              <div class="w-full h-1 bg-[#2a2a2a] mt-2">
+                <div class="{{ 'bg-[#4caf50]' if card.tone != 'negative' else 'bg-[#d32f2f]' }} h-full" style="width: {{ 72 if loop.index == 1 else 68 if loop.index == 2 else 82 }}%;"></div>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+
+          <div class="col-span-12 lg:col-span-9 space-y-6">
+            <div class="monolithic-block sharp-border p-8 h-[400px] flex flex-col">
+              <div class="flex justify-between items-start mb-8">
+                <div>
+                  <h2 class="font-headline font-bold text-white uppercase tracking-tight">Market Flow (SPY)</h2>
+                  <p class="text-[10px] text-[#999999] uppercase tracking-widest mt-1">Instrument: SPY.ARCA | Interval: 1m</p>
+                </div>
+                <div class="flex gap-4">
+                  <div class="flex items-center gap-2"><div class="w-2 h-2 rounded-full bg-[#4caf50]"></div><span class="text-[10px] font-bold text-white uppercase">FLOW</span></div>
+                  <div class="flex items-center gap-2"><div class="w-2 h-2 rounded-full bg-[#666666]"></div><span class="text-[10px] font-bold text-white uppercase">VWAP</span></div>
+                </div>
+              </div>
+              <div class="flex-1 w-full relative">
+                <svg class="w-full h-full overflow-visible" preserveAspectRatio="none" viewBox="0 0 800 200">
+                  <path class="drop-shadow-[0_0_4px_rgba(76,175,80,0.3)]" d="M0,150 L50,140 L100,160 L150,130 L200,145 L250,110 L300,115 L350,80 L400,95 L450,60 L500,75 L550,40 L600,55 L650,20 L700,35 L750,10 L800,25" fill="none" stroke="#4caf50" stroke-width="2"></path>
+                  <path d="M0,180 L800,100" stroke="#333333" stroke-dasharray="4" stroke-width="1"></path>
+                </svg>
+                <div class="absolute inset-0 grid grid-cols-8 grid-rows-4 pointer-events-none opacity-[0.03]">
+                  <div class="border-r border-b border-white"></div><div class="border-r border-b border-white"></div><div class="border-r border-b border-white"></div><div class="border-r border-b border-white"></div><div class="border-r border-b border-white"></div><div class="border-r border-b border-white"></div><div class="border-r border-b border-white"></div><div class="border-b border-white"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="ad-slot-inline w-full monolithic-block h-24 sharp-border flex items-center justify-center relative overflow-hidden border-[#4caf50]/20">
+              <div class="absolute inset-0 bg-gradient-to-r from-[#2a2a2a]/30 to-transparent"></div>
+              <div class="z-10 flex flex-col items-center">
+                <span class="text-[8px] uppercase tracking-[0.4em] text-[#999999] mb-1">Sponsored Strategy</span>
+                <span class="text-sm font-headline font-bold text-white uppercase tracking-tighter italic opacity-80">ad-slot-inline | High-Frequency Alpha V2.0</span>
+              </div>
+              <div class="absolute right-4 bottom-2 text-[8px] text-[#666666] opacity-40">SEC-COMPLIANT AD-ID: 992-11X</div>
+            </div>
+
+            <div class="monolithic-block sharp-border overflow-hidden">
+              <div class="px-6 py-4 border-b border-[#333333]/20 flex justify-between items-center">
+                <h2 class="font-headline font-bold text-white uppercase tracking-tight text-sm">Performance Matrix</h2>
+                <span class="text-[10px] font-bold text-[#4caf50] uppercase cursor-pointer hover:underline">Export CSV</span>
+              </div>
+              <table class="w-full text-left text-xs border-collapse">
+                <thead class="bg-[#080808] text-[#999999] uppercase tracking-widest text-[10px]">
+                  <tr>
+                    <th class="px-6 py-3 font-bold">Ticker</th>
+                    <th class="px-6 py-3 font-bold text-right">Price</th>
+                    <th class="px-6 py-3 font-bold text-right">Vol Delta</th>
+                    <th class="px-6 py-3 font-bold text-center">Signal</th>
+                    <th class="px-6 py-3 font-bold">Status</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-[#333333]/20">
+                  {% for row in matrix_rows %}
+                  <tr class="hover:bg-[#1a1a1a]/70 transition-colors">
+                    <td class="px-6 py-4 font-bold text-white">{{ row.ticker }}</td>
+                    <td class="px-6 py-4 text-right tabular">{{ row.price }}</td>
+                    <td class="px-6 py-4 text-right tabular {{ 'text-[#4caf50]' if '+' in row.vol_delta else 'text-[#d32f2f]' if '-' in row.vol_delta else 'text-[#999999]' }}">{{ row.vol_delta }}</td>
+                    <td class="px-6 py-4 text-center">
+                      {% if row.signal in ['STRONG BUY', 'BUY'] %}
+                      <span class="px-2 py-0.5 bg-[#4caf50] text-white font-extrabold uppercase text-[9px]">{{ row.signal }}</span>
+                      {% else %}
+                      <span class="px-2 py-0.5 border border-[#666666] text-[#999999] font-bold uppercase text-[9px]">{{ row.signal }}</span>
+                      {% endif %}
+                    </td>
+                    <td class="px-6 py-4 flex items-center gap-2">
+                      <div class="w-1.5 h-1.5 {{ 'bg-[#4caf50]' if row.status in ['Executing', 'Monitoring'] else 'bg-[#666666]' }}"></div>
+                      <span class="uppercase tracking-tight text-[10px] text-[#999999]">{{ row.status }}</span>
+                    </td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="col-span-12 lg:col-span-3 space-y-6">
+            <div class="ad-slot-sidebar monolithic-block sharp-border w-full aspect-[300/250] flex flex-col p-6 items-center justify-center relative overflow-hidden">
+              <div class="absolute top-2 right-2 px-1 bg-[#2a2a2a] text-[8px] text-white">AD</div>
+              <div class="z-10 text-center">
+                <p class="text-xs font-headline font-bold text-white uppercase italic tracking-tighter">Liquid Capital Partners</p>
+                <p class="text-[9px] text-[#4caf50] mt-2 font-bold uppercase tracking-widest">Access Private Pools</p>
+              </div>
+            </div>
+
+            <div class="monolithic-block sharp-border h-full flex flex-col">
+              <div class="px-6 py-4 border-b border-[#333333]/20">
+                <h2 class="font-headline font-bold text-white uppercase tracking-tight text-sm">Alert Center</h2>
+              </div>
+              <div class="divide-y divide-[#333333]/20 flex-1 overflow-y-auto">
+                {% for alert in alert_items[:4] %}
+                <div class="p-4 flex gap-4 hover:bg-[#1a1a1a]/40 transition-colors">
+                  <div class="w-1 {{ 'bg-[#d32f2f]' if alert.tone == 'negative' else 'bg-[#4caf50]' if alert.tone == 'positive' else 'bg-white' }} h-full shrink-0"></div>
+                  <div>
+                    <div class="flex justify-between items-center mb-1 gap-4">
+                      <span class="text-[10px] font-bold uppercase {{ 'text-[#d32f2f]' if alert.tone == 'negative' else 'text-[#4caf50]' if alert.tone == 'positive' else 'text-white' }}">{{ alert.title }}</span>
+                      <span class="text-[8px] text-[#999999] tabular">{{ loop.index0 + 13 }}:{{ "%02d"|format(loop.index0 * 7 + 8) }}:{{ "%02d"|format(loop.index0 * 11 + 1) }}</span>
+                    </div>
+                    <p class="text-[11px] text-[#e1e1e1] leading-relaxed">{{ alert.body }}</p>
+                  </div>
+                </div>
+                {% endfor %}
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <div class="fixed bottom-6 right-6 flex items-center gap-4 bg-[#0d0d0d] sharp-border px-4 py-2 z-[100] border-[#333333]/40">
+    <div class="flex items-center gap-2">
+      <span class="w-2 h-2 rounded-full bg-[#4caf50] shadow-[0_0_8px_rgba(76,175,80,0.4)]"></span>
+      <span class="text-[9px] font-headline font-bold text-white uppercase tracking-widest">Live API Feed</span>
+    </div>
+    <div class="h-4 w-px bg-[#333333]/30"></div>
+    <span class="text-[9px] text-[#999999] uppercase tabular">Latency: 12ms</span>
+  </div>
+</div>
+
+<script>
+  const root = document.documentElement;
+  const savedTheme = localStorage.getItem('color-theme');
+
+  if (savedTheme === 'dark' || savedTheme === 'light') {
+    root.classList.remove('light', 'dark');
+    root.classList.add(savedTheme);
+  }
+
+  function bindToggle(id) {
+    const button = document.getElementById(id);
+    if (!button) return;
+    button.addEventListener('click', function() {
+      root.classList.toggle('dark');
+      root.classList.toggle('light');
+      localStorage.setItem('color-theme', root.classList.contains('dark') ? 'dark' : 'light');
+    });
+  }
+
+  bindToggle('theme-toggle-light');
+  bindToggle('theme-toggle-dark');
+</script>
+</body>
+</html>

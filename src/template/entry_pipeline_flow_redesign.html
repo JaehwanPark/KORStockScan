@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html class="{{ 'dark' if theme_class == 'dark' else 'light' }}" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Entry Gate Flow - Trading Intelligence</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;700;800&amp;family=Inter:wght@400;500;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "surface-bright": "#f7f9fb",
+                        "on-primary-container": "#0048bf",
+                        "inverse-primary": "#618bff",
+                        "on-secondary-container": "#435368",
+                        "secondary-fixed": "#d3e4fe",
+                        "tertiary-fixed": "#69f6b8",
+                        "on-primary-fixed": "#003798",
+                        "on-error": "#fff7f6",
+                        "on-background": "#2a3439",
+                        "surface-dim": "#cfdce3",
+                        "inverse-on-surface": "#9a9d9f",
+                        "on-secondary-fixed-variant": "#4d5d73",
+                        "on-tertiary-container": "#005a3c",
+                        "error-dim": "#4e0309",
+                        "on-error-container": "#752121",
+                        "secondary-fixed-dim": "#c5d6f0",
+                        "secondary-container": "#d3e4fe",
+                        "on-primary-fixed-variant": "#0050d4",
+                        "primary-fixed-dim": "#c7d3ff",
+                        "surface-tint": "#0053db",
+                        "inverse-surface": "#0b0f10",
+                        "error": "#9f403d",
+                        "on-surface-variant": "#566166",
+                        "on-tertiary": "#e6ffee",
+                        "on-secondary": "#f7f9ff",
+                        "secondary-dim": "#44546a",
+                        "surface-container-lowest": "#ffffff",
+                        "error-container": "#fe8983",
+                        "primary": "#0053db",
+                        "surface-variant": "#d9e4ea",
+                        "primary-container": "#dbe1ff",
+                        "on-surface": "#2a3439",
+                        "outline-variant": "#a9b4b9",
+                        "surface-container-low": "#f0f4f7",
+                        "on-secondary-fixed": "#314055",
+                        "tertiary": "#006d4a",
+                        "on-primary": "#f8f7ff",
+                        "on-tertiary-fixed": "#00452d",
+                        "background": "#f7f9fb",
+                        "primary-fixed": "#dbe1ff",
+                        "tertiary-dim": "#005f40",
+                        "outline": "#717c82",
+                        "tertiary-container": "#69f6b8",
+                        "surface-container-high": "#e1e9ee",
+                        "tertiary-fixed-dim": "#58e7ab",
+                        "surface-container-highest": "#d9e4ea",
+                        "surface": "#f7f9fb",
+                        "surface-container": "#e8eff3",
+                        "secondary": "#506076",
+                        "on-tertiary-fixed-variant": "#006544",
+                        "primary-dim": "#0048c1"
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f9fb;
+            color: #2a3439;
+        }
+        h1, h2, h3, .font-headline {
+            font-family: 'Manrope', sans-serif;
+        }
+        .scrollbar-hide::-webkit-scrollbar {
+            display: none;
+        }
+        .theme-light-layout { display: block; }
+        .theme-dark-layout { display: none; }
+        html.dark .theme-light-layout { display: none; }
+        html.dark .theme-dark-layout { display: block; }
+    </style>
+</head>
+<body>
+<div class="theme-light-layout bg-surface text-on-surface">
+<aside class="fixed left-0 top-0 h-full flex flex-col py-8 bg-[#ffffff] w-64 shadow-[48px_0_48px_rgba(42,52,57,0.04)] z-[60]">
+<div class="px-8 mb-12">
+<h2 class="text-lg font-black text-[#2a3439]">Atelier Terminal</h2>
+<p class="text-xs text-on-surface-variant font-medium uppercase tracking-widest mt-1">Premium Tier</p>
+</div>
+<nav class="flex-1 space-y-1">
+<a class="flex items-center gap-3 px-6 py-4 w-full transition-all text-[#2a3439]/70 hover:bg-[#f7f9fb] hover:translate-x-1 duration-200" href="/dashboard?tab=daily-report&amp;date={{ report.date }}"><span class="material-symbols-outlined">dashboard</span><span class="font-inter text-sm font-medium">Dashboard</span></a>
+<a class="flex items-center gap-3 px-6 py-4 w-full transition-all bg-[#f0f4f7] text-[#0053db] rounded-r-full" href="/entry-pipeline-flow?date={{ report.date }}"><span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">account_tree</span><span class="font-inter text-sm font-medium">Entry Gate</span></a>
+<a class="flex items-center gap-3 px-6 py-4 w-full transition-all text-[#2a3439]/70 hover:bg-[#f7f9fb] hover:translate-x-1 duration-200" href="/trade-review?date={{ report.date }}"><span class="material-symbols-outlined">query_stats</span><span class="font-inter text-sm font-medium">Trade Review</span></a>
+<a class="flex items-center gap-3 px-6 py-4 w-full transition-all text-[#2a3439]/70 hover:bg-[#f7f9fb] hover:translate-x-1 duration-200" href="/strength-momentum?date={{ report.date }}"><span class="material-symbols-outlined">account_balance_wallet</span><span class="font-inter text-sm font-medium">Portfolio</span></a>
+<a class="flex items-center gap-3 px-6 py-4 w-full transition-all text-[#2a3439]/70 hover:bg-[#f7f9fb] hover:translate-x-1 duration-200" href="/performance-tuning?date={{ report.date }}"><span class="material-symbols-outlined">insights</span><span class="font-inter text-sm font-medium">Analytics</span></a>
+</nav>
+<div class="px-6 mt-auto space-y-1">
+<button class="w-full mb-6 py-3 bg-primary text-on-primary rounded-xl font-bold shadow-lg shadow-primary/20 flex items-center justify-center gap-2"><span class="material-symbols-outlined text-sm">add</span>New Trade</button>
+<div class="ad-slot-sidebar mb-4 min-h-[92px] rounded-2xl border-2 border-dashed border-outline-variant/20 flex items-center justify-center text-[10px] uppercase tracking-[0.24em] text-on-surface-variant/50">ad-slot-sidebar</div>
+<a class="flex items-center gap-3 px-6 py-3 text-on-surface-variant hover:text-on-surface transition-colors" href="#"><span class="material-symbols-outlined">help</span><span class="text-sm font-medium">Help</span></a>
+<a class="flex items-center gap-3 px-6 py-3 text-on-surface-variant hover:text-on-surface transition-colors" href="#"><span class="material-symbols-outlined">logout</span><span class="text-sm font-medium">Logout</span></a>
+</div>
+</aside>
+<header class="fixed top-0 right-0 left-64 h-16 bg-[#f7f9fb] z-50 flex justify-between items-center px-8 border-b border-outline-variant/10">
+<div class="flex items-center gap-8">
+<h1 class="text-xl font-bold text-[#2a3439]">Trading Intelligence</h1>
+<nav class="flex gap-6">
+<a class="text-[#0053db] border-b-2 border-[#0053db] pb-1 font-manrope font-bold text-sm tracking-tight" href="/entry-pipeline-flow?date={{ report.date }}">Entry Gate</a>
+<a class="text-[#2a3439]/60 pb-1 font-manrope font-bold text-sm tracking-tight hover:text-[#0053db] transition-colors duration-200" href="/trade-review?date={{ report.date }}">Trade Review</a>
+</nav>
+</div>
+<div class="flex items-center gap-4">
+<form action="/entry-pipeline-flow" class="flex items-center bg-surface-container-low px-3 py-1.5 rounded-full">
+<span class="material-symbols-outlined text-on-surface-variant text-lg">search</span>
+<input class="bg-transparent border-none focus:ring-0 text-sm w-40 placeholder-on-surface-variant/50" name="since" placeholder="Search entries..." type="text" value="{{ request.args.get('since', '') }}"/>
+<input name="date" type="hidden" value="{{ report.date }}"/>
+<input name="top" type="hidden" value="{{ top_value }}"/>
+</form>
+<button class="p-2 text-on-surface-variant hover:text-primary transition-colors cursor-pointer" id="theme-toggle-light" type="button"><span class="material-symbols-outlined">dark_mode</span></button>
+<button class="p-2 text-on-surface-variant hover:text-primary transition-colors cursor-pointer relative" type="button"><span class="material-symbols-outlined">notifications</span><span class="absolute top-2 right-2 w-2 h-2 bg-error rounded-full"></span></button>
+<button class="p-2 text-on-surface-variant hover:text-primary transition-colors cursor-pointer" type="button"><span class="material-symbols-outlined">settings</span></button>
+<div class="w-8 h-8 rounded-full bg-primary-container flex items-center justify-center overflow-hidden ml-2 text-[10px] font-bold">AI</div>
+</div>
+</header>
+<main class="ml-64 pt-24 px-8 pb-12">
+<div class="max-w-7xl mx-auto space-y-8">
+<div class="flex justify-between items-end">
+<div>
+<p class="text-primary font-bold text-xs uppercase tracking-widest mb-1">Live Pipeline</p>
+<h2 class="text-3xl font-extrabold tracking-tight text-on-surface">Entry Gate Flow</h2>
+</div>
+<div class="flex gap-3">
+<button class="px-4 py-2 bg-surface-container-lowest text-on-surface font-semibold text-sm rounded-xl flex items-center gap-2 border border-outline-variant/10 hover:bg-surface-container-low transition-colors"><span class="material-symbols-outlined text-lg">filter_list</span>Filters</button>
+<a class="px-4 py-2 bg-primary text-on-primary font-semibold text-sm rounded-xl flex items-center gap-2 shadow-lg shadow-primary/10" href="/api/entry-pipeline-flow?date={{ report.date }}{% if report.since %}&amp;since={{ report.since }}{% endif %}&amp;top={{ top_value }}"><span class="material-symbols-outlined text-lg">refresh</span>Refresh API</a>
+</div>
+</div>
+<section class="bg-surface-container-lowest rounded-full p-6 border border-outline-variant/10 shadow-sm">
+<div class="flex items-center justify-between">
+<div class="flex-1 relative flex items-center justify-between px-4">
+<div class="absolute left-0 top-1/2 -translate-y-1/2 w-full h-0.5 bg-surface-container"></div>
+{% for step in stage_steps %}
+<div class="relative z-10 flex flex-col items-center">
+<div class="w-10 h-10 rounded-full {% if step.kind == 'complete' %}bg-tertiary text-on-tertiary shadow-lg shadow-tertiary/20{% elif step.kind == 'active' %}bg-primary text-on-primary flex items-center justify-center shadow-lg shadow-primary/20 ring-4 ring-primary-container{% else %}bg-surface-container text-on-surface-variant{% endif %} flex items-center justify-center">
+<span class="material-symbols-outlined text-xl" {% if step.kind == 'complete' %}style="font-variation-settings: 'FILL' 1;"{% endif %}>{{ step.icon }}</span>
+</div>
+<span class="absolute -bottom-8 text-[10px] font-bold {% if step.kind == 'inactive' %}text-on-surface-variant opacity-50{% else %}text-on-surface{% endif %} uppercase tracking-tighter">{{ step.label }}</span>
+</div>
+{% endfor %}
+</div>
+</div>
+</section>
+<div class="grid grid-cols-12 gap-6 pt-4">
+<div class="col-span-12 lg:col-span-8 grid grid-cols-1 md:grid-cols-2 gap-4">
+{% for card in hero_cards %}
+<div class="bg-surface-container-lowest p-6 rounded-full border border-outline-variant/10 shadow-sm relative overflow-hidden group">
+<div class="absolute top-0 right-0 w-32 h-32 {% if card.tone == 'positive' %}bg-primary/5{% else %}bg-error/5{% endif %} rounded-full -mr-16 -mt-16 group-hover:scale-110 transition-transform"></div>
+<div class="flex items-start justify-between mb-4">
+<div class="w-12 h-12 rounded-xl {% if card.tone == 'positive' %}bg-primary-container/30 text-primary{% else %}bg-error-container/20 text-error{% endif %} flex items-center justify-center"><span class="material-symbols-outlined">{{ card.icon }}</span></div>
+<span class="{% if card.tone == 'positive' %}text-tertiary bg-tertiary-container/30{% else %}text-error bg-error-container/30{% endif %} text-sm font-bold px-2 py-0.5 rounded-lg">{{ card.delta }}</span>
+</div>
+<h3 class="text-on-surface-variant text-xs font-bold uppercase tracking-wider">{{ card.title }}</h3>
+<p class="text-2xl font-black text-on-surface mt-1">{{ card.ticker }}</p>
+<p class="text-xs text-on-surface-variant mt-4 flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full {% if card.tone == 'positive' %}bg-tertiary{% else %}bg-error{% endif %}"></span>{{ card.value }}</p>
+</div>
+{% endfor %}
+<div class="col-span-full bg-surface-container-low/50 p-6 rounded-full border border-outline-variant/10">
+<div class="flex justify-between items-center mb-6"><h3 class="font-bold text-on-surface">Top Momentum Candidates</h3><span class="text-xs text-primary font-bold cursor-pointer hover:underline">View All</span></div>
+<div class="flex gap-4 overflow-x-auto pb-2 scrollbar-hide">
+{% for item in momentum_candidates %}
+<div class="flex-shrink-0 bg-surface-container-lowest px-4 py-3 rounded-xl flex items-center gap-3 border border-outline-variant/10 min-w-[140px]">
+<div class="bg-primary-container text-primary text-xs font-bold px-1.5 py-0.5 rounded">{{ item.ticker }}</div>
+<div><p class="text-xs font-black">{{ item.price }}</p><p class="text-[10px] {% if item.tone == 'negative' %}text-error{% else %}text-tertiary{% endif %}">{{ item.change }}</p></div>
+</div>
+{% endfor %}
+</div>
+</div>
+</div>
+<div class="col-span-12 lg:col-span-4 flex flex-col gap-4">
+<div class="bg-surface-container-lowest p-6 rounded-full border border-outline-variant/10 shadow-sm flex-1">
+<div class="flex items-center gap-2 mb-6"><span class="material-symbols-outlined text-error" style="font-variation-settings: 'FILL' 1;">lock</span><h3 class="font-bold text-on-surface">Critical Blockers</h3></div>
+<div class="space-y-4">
+{% for item in critical_alerts %}
+<div class="p-3 {% if item.tone == 'critical' %}bg-error-container/10 border-l-4 border-error rounded-r-lg{% elif item.tone == 'muted' %}bg-surface-container rounded-lg opacity-60{% else %}bg-surface-container rounded-lg{% endif %}">
+<p class="text-xs font-bold {% if item.tone == 'critical' %}text-error{% else %}text-on-surface-variant{% endif %} uppercase mb-1">{{ item.title }}</p>
+<p class="text-sm text-on-surface font-medium leading-tight">{{ item.body }}</p>
+<p class="text-[10px] text-on-surface-variant mt-2">{{ item.timestamp }} • {{ item.impact }}</p>
+</div>
+{% endfor %}
+</div>
+<button class="w-full mt-6 py-2 text-primary font-bold text-sm border border-primary/20 rounded-lg hover:bg-primary/5 transition-colors">Clear Resolved</button>
+</div>
+</div>
+</div>
+<section class="bg-surface-container-lowest rounded-full border border-outline-variant/10 shadow-sm overflow-hidden">
+<div class="px-8 py-6 border-b border-outline-variant/5 flex justify-between items-center">
+<div><h3 class="text-lg font-bold text-on-surface">Entry Condition Matrix</h3><p class="text-sm text-on-surface-variant">Real-time validation status of active trade setups</p></div>
+<div class="flex gap-4"><div class="flex items-center gap-2 bg-surface-container px-3 py-1.5 rounded-lg"><span class="w-2 h-2 rounded-full bg-tertiary"></span><span class="text-xs font-bold text-on-surface">Active</span></div></div>
+</div>
+<div class="overflow-x-auto">
+<table class="w-full border-collapse">
+<thead><tr class="bg-surface-container-low/50 text-left"><th class="px-8 py-4 text-xs font-bold text-on-surface-variant uppercase tracking-wider">Asset</th><th class="px-8 py-4 text-xs font-bold text-on-surface-variant uppercase tracking-wider">Condition Name</th><th class="px-8 py-4 text-xs font-bold text-on-surface-variant uppercase tracking-wider">Threshold</th><th class="px-8 py-4 text-xs font-bold text-on-surface-variant uppercase tracking-wider">Current Value</th><th class="px-8 py-4 text-xs font-bold text-on-surface-variant uppercase tracking-wider">Status</th><th class="px-8 py-4 text-xs font-bold text-on-surface-variant uppercase tracking-wider">Action</th></tr></thead>
+<tbody class="divide-y divide-outline-variant/5">
+{% for row in condition_rows %}
+<tr class="{% if loop.index % 2 == 0 %}bg-surface-container-low/20{% endif %} hover:bg-surface-container-low/30 transition-colors">
+<td class="px-8 py-4"><div class="flex items-center gap-3"><div class="w-8 h-8 rounded-lg bg-surface-container flex items-center justify-center font-bold text-xs">{{ row.badge }}</div><span class="font-bold text-sm">{{ row.asset }}</span></div></td>
+<td class="px-8 py-4 text-sm font-medium">{{ row.condition_name }}</td>
+<td class="px-8 py-4 text-sm text-on-surface-variant">{{ row.threshold }}</td>
+<td class="px-8 py-4 text-sm font-bold {% if row.status_tone == 'submitted' %}text-tertiary{% elif row.status_tone == 'blocked' %}text-error{% else %}text-on-surface{% endif %}">{{ row.current_value }}</td>
+<td class="px-8 py-4"><span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium {% if row.status_tone == 'submitted' %}bg-tertiary-container/40 text-tertiary{% elif row.status_tone == 'blocked' %}bg-error-container/20 text-error{% elif row.status_tone == 'waiting' %}bg-surface-container text-on-surface-variant{% else %}bg-primary-container/40 text-primary{% endif %}">{{ row.status_label }}</span></td>
+<td class="px-8 py-4"><button class="p-1.5 hover:bg-surface-container rounded-lg transition-colors"><span class="material-symbols-outlined text-on-surface-variant">more_vert</span></button></td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+<div class="px-8 py-4 bg-surface-container-low/30 border-t border-outline-variant/5 flex justify-between items-center">
+<p class="text-xs text-on-surface-variant font-medium">Showing {{ condition_rows|length }} of {{ metrics.tracked_stocks or condition_rows|length }} active entry conditions</p>
+<div class="flex gap-2"><button class="p-1 hover:bg-surface-container rounded"><span class="material-symbols-outlined text-sm">chevron_left</span></button><button class="p-1 hover:bg-surface-container rounded"><span class="material-symbols-outlined text-sm">chevron_right</span></button></div>
+</div>
+</section>
+</div>
+</main>
+</div>
+
+<div class="theme-dark-layout bg-black text-[#e5e2e1]">
+<aside class="fixed left-0 top-0 h-full flex flex-col py-8 bg-[#000000] w-64 border-r border-[#222222] z-[60]">
+<div class="px-8 mb-12">
+<h2 class="text-lg font-black text-white">Atelier Terminal</h2>
+<p class="text-xs text-[#94a3b8] font-medium uppercase tracking-widest mt-1">Obsidian Terminal</p>
+</div>
+<nav class="flex-1 space-y-1">
+<a class="flex items-center gap-3 px-6 py-4 w-full transition-all text-[#94a3b8] hover:bg-[#0b0b0b] hover:text-white duration-200" href="/dashboard?tab=daily-report&amp;date={{ report.date }}"><span class="material-symbols-outlined">dashboard</span><span class="font-inter text-sm font-medium">Dashboard</span></a>
+<a class="flex items-center gap-3 px-6 py-4 w-full transition-all bg-[#111111] text-[#10b981] rounded-r-full border-l-4 border-[#10b981]" href="/entry-pipeline-flow?date={{ report.date }}"><span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">account_tree</span><span class="font-inter text-sm font-medium">Entry Gate</span></a>
+<a class="flex items-center gap-3 px-6 py-4 w-full transition-all text-[#94a3b8] hover:bg-[#0b0b0b] hover:text-white duration-200" href="/trade-review?date={{ report.date }}"><span class="material-symbols-outlined">query_stats</span><span class="font-inter text-sm font-medium">Trade Review</span></a>
+<a class="flex items-center gap-3 px-6 py-4 w-full transition-all text-[#94a3b8] hover:bg-[#0b0b0b] hover:text-white duration-200" href="/strength-momentum?date={{ report.date }}"><span class="material-symbols-outlined">account_balance_wallet</span><span class="font-inter text-sm font-medium">Portfolio</span></a>
+<a class="flex items-center gap-3 px-6 py-4 w-full transition-all text-[#94a3b8] hover:bg-[#0b0b0b] hover:text-white duration-200" href="/performance-tuning?date={{ report.date }}"><span class="material-symbols-outlined">insights</span><span class="font-inter text-sm font-medium">Analytics</span></a>
+</nav>
+<div class="px-6 mt-auto space-y-1">
+<button class="w-full mb-6 py-3 bg-[#111111] text-white rounded-xl font-bold border border-[#333333] flex items-center justify-center gap-2"><span class="material-symbols-outlined text-sm">add</span>New Trade</button>
+<div class="ad-slot-sidebar mb-4 min-h-[92px] rounded-2xl border-2 border-dashed border-[#333333] flex items-center justify-center text-[10px] uppercase tracking-[0.24em] text-[#94a3b8]">ad-slot-sidebar</div>
+</div>
+</aside>
+<header class="fixed top-0 right-0 left-64 h-16 bg-[#000000] z-50 flex justify-between items-center px-8 border-b border-[#222222]">
+<div class="flex items-center gap-8">
+<h1 class="text-xl font-bold text-white">Trading Intelligence</h1>
+<nav class="flex gap-6">
+<a class="text-[#10b981] border-b-2 border-[#10b981] pb-1 font-manrope font-bold text-sm tracking-tight" href="/entry-pipeline-flow?date={{ report.date }}">Entry Gate</a>
+<a class="text-[#94a3b8] pb-1 font-manrope font-bold text-sm tracking-tight hover:text-white transition-colors duration-200" href="/trade-review?date={{ report.date }}">Trade Review</a>
+</nav>
+</div>
+<div class="flex items-center gap-4">
+<form action="/entry-pipeline-flow" class="flex items-center bg-[#111111] px-3 py-1.5 rounded-full border border-[#333333]">
+<span class="material-symbols-outlined text-[#94a3b8] text-lg">search</span>
+<input class="bg-transparent border-none focus:ring-0 text-sm w-40 text-white placeholder:text-[#94a3b8]" name="since" placeholder="Search entries..." type="text" value="{{ request.args.get('since', '') }}"/>
+<input name="date" type="hidden" value="{{ report.date }}"/>
+<input name="top" type="hidden" value="{{ top_value }}"/>
+</form>
+<button class="p-2 text-[#94a3b8] hover:text-[#10b981] transition-colors cursor-pointer" id="theme-toggle-dark" type="button"><span class="material-symbols-outlined">light_mode</span></button>
+<button class="p-2 text-[#94a3b8] hover:text-white transition-colors cursor-pointer relative" type="button"><span class="material-symbols-outlined">notifications</span><span class="absolute top-2 right-2 w-2 h-2 bg-[#e11d48] rounded-full"></span></button>
+<button class="p-2 text-[#94a3b8] hover:text-white transition-colors cursor-pointer" type="button"><span class="material-symbols-outlined">settings</span></button>
+<div class="w-8 h-8 rounded-full bg-[#111111] border border-[#333333] flex items-center justify-center overflow-hidden ml-2 text-[10px] font-bold text-white">AI</div>
+</div>
+</header>
+<main class="ml-64 pt-24 px-8 pb-12 bg-black min-h-screen">
+<div class="max-w-7xl mx-auto space-y-8">
+<div class="flex justify-between items-end">
+<div>
+<p class="text-[#10b981] font-bold text-xs uppercase tracking-widest mb-1">Live Pipeline</p>
+<h2 class="text-3xl font-extrabold tracking-tight text-white">Entry Gate Flow</h2>
+</div>
+<div class="flex gap-3">
+<button class="px-4 py-2 bg-[#111111] text-white font-semibold text-sm rounded-xl flex items-center gap-2 border border-[#333333] hover:bg-[#0b0b0b] transition-colors"><span class="material-symbols-outlined text-lg">filter_list</span>Filters</button>
+<a class="px-4 py-2 bg-[#10b981] text-black font-semibold text-sm rounded-xl flex items-center gap-2 shadow-lg shadow-[#10b981]/10" href="/api/entry-pipeline-flow?date={{ report.date }}{% if report.since %}&amp;since={{ report.since }}{% endif %}&amp;top={{ top_value }}"><span class="material-symbols-outlined text-lg">refresh</span>Refresh API</a>
+</div>
+</div>
+<section class="bg-[#111111] rounded-[32px] p-6 border border-[#333333]">
+<div class="flex items-center justify-between">
+<div class="flex-1 relative flex items-center justify-between px-4">
+<div class="absolute left-0 top-1/2 -translate-y-1/2 w-full h-0.5 bg-[#222222]"></div>
+{% for step in stage_steps %}
+<div class="relative z-10 flex flex-col items-center">
+<div class="w-10 h-10 rounded-full {% if step.kind == 'complete' %}bg-[#10b981] text-black shadow-lg shadow-[#10b981]/20{% elif step.kind == 'active' %}bg-[#3b82f6] text-white shadow-lg shadow-[#3b82f6]/20 ring-4 ring-[#111111]{% else %}bg-[#111111] border border-[#333333] text-[#94a3b8]{% endif %} flex items-center justify-center">
+<span class="material-symbols-outlined text-xl" {% if step.kind == 'complete' %}style="font-variation-settings: 'FILL' 1;"{% endif %}>{{ step.icon }}</span>
+</div>
+<span class="absolute -bottom-8 text-[10px] font-bold {% if step.kind == 'inactive' %}text-[#94a3b8] opacity-60{% else %}text-white{% endif %} uppercase tracking-tighter">{{ step.label }}</span>
+</div>
+{% endfor %}
+</div>
+</div>
+</section>
+<div class="grid grid-cols-12 gap-6 pt-4">
+<div class="col-span-12 lg:col-span-8 grid grid-cols-1 md:grid-cols-2 gap-4">
+{% for card in hero_cards %}
+<div class="bg-[#111111] p-6 rounded-[28px] border border-[#333333] relative overflow-hidden group">
+<div class="absolute top-0 right-0 w-32 h-32 {% if card.tone == 'positive' %}bg-[#10b981]/10{% else %}bg-[#e11d48]/10{% endif %} rounded-full -mr-16 -mt-16 group-hover:scale-110 transition-transform"></div>
+<div class="flex items-start justify-between mb-4">
+<div class="w-12 h-12 rounded-xl {% if card.tone == 'positive' %}bg-[#0f1d17] text-[#10b981]{% else %}bg-[#2a1016] text-[#e11d48]{% endif %} flex items-center justify-center"><span class="material-symbols-outlined">{{ card.icon }}</span></div>
+<span class="{% if card.tone == 'positive' %}text-[#10b981] bg-[#0f1d17]{% else %}text-[#e11d48] bg-[#2a1016]{% endif %} text-sm font-bold px-2 py-0.5 rounded-lg">{{ card.delta }}</span>
+</div>
+<h3 class="text-[#94a3b8] text-xs font-bold uppercase tracking-wider">{{ card.title }}</h3>
+<p class="text-2xl font-black text-white mt-1">{{ card.ticker }}</p>
+<p class="text-xs text-[#94a3b8] mt-4 flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full {% if card.tone == 'positive' %}bg-[#10b981]{% else %}bg-[#e11d48]{% endif %}"></span>{{ card.value }}</p>
+</div>
+{% endfor %}
+<div class="col-span-full bg-[#111111] p-6 rounded-[28px] border border-[#333333]">
+<div class="flex justify-between items-center mb-6"><h3 class="font-bold text-white">Top Momentum Candidates</h3><span class="text-xs text-[#10b981] font-bold cursor-pointer hover:underline">View All</span></div>
+<div class="flex gap-4 overflow-x-auto pb-2 scrollbar-hide">
+{% for item in momentum_candidates %}
+<div class="flex-shrink-0 bg-[#0b0b0b] px-4 py-3 rounded-xl flex items-center gap-3 border border-[#222222] min-w-[140px]">
+<div class="bg-[#1b2430] text-[#3b82f6] text-xs font-bold px-1.5 py-0.5 rounded">{{ item.ticker }}</div>
+<div><p class="text-xs font-black text-white">{{ item.price }}</p><p class="text-[10px] {% if item.tone == 'negative' %}text-[#e11d48]{% else %}text-[#10b981]{% endif %}">{{ item.change }}</p></div>
+</div>
+{% endfor %}
+</div>
+</div>
+</div>
+<div class="col-span-12 lg:col-span-4 flex flex-col gap-4">
+<div class="bg-[#111111] p-6 rounded-[28px] border border-[#333333] flex-1">
+<div class="flex items-center gap-2 mb-6"><span class="material-symbols-outlined text-[#e11d48]" style="font-variation-settings: 'FILL' 1;">lock</span><h3 class="font-bold text-white">Critical Blockers</h3></div>
+<div class="space-y-4">
+{% for item in critical_alerts %}
+<div class="p-3 {% if item.tone == 'critical' %}bg-[#2a1016] border-l-4 border-[#e11d48] rounded-r-lg{% elif item.tone == 'muted' %}bg-[#0b0b0b] rounded-lg opacity-60{% else %}bg-[#0b0b0b] rounded-lg{% endif %}">
+<p class="text-xs font-bold {% if item.tone == 'critical' %}text-[#e11d48]{% else %}text-[#94a3b8]{% endif %} uppercase mb-1">{{ item.title }}</p>
+<p class="text-sm text-white font-medium leading-tight">{{ item.body }}</p>
+<p class="text-[10px] text-[#94a3b8] mt-2">{{ item.timestamp }} • {{ item.impact }}</p>
+</div>
+{% endfor %}
+</div>
+<button class="w-full mt-6 py-2 text-[#10b981] font-bold text-sm border border-[#10b981]/20 rounded-lg hover:bg-[#10b981]/5 transition-colors">Clear Resolved</button>
+</div>
+</div>
+</div>
+<section class="bg-[#111111] rounded-[28px] border border-[#333333] overflow-hidden">
+<div class="px-8 py-6 border-b border-[#222222] flex justify-between items-center">
+<div><h3 class="text-lg font-bold text-white">Entry Condition Matrix</h3><p class="text-sm text-[#94a3b8]">Real-time validation status of active trade setups</p></div>
+<div class="flex gap-4"><div class="flex items-center gap-2 bg-[#0b0b0b] px-3 py-1.5 rounded-lg border border-[#222222]"><span class="w-2 h-2 rounded-full bg-[#10b981]"></span><span class="text-xs font-bold text-white">Active</span></div></div>
+</div>
+<div class="overflow-x-auto">
+<table class="w-full border-collapse">
+<thead><tr class="bg-[#0b0b0b] text-left"><th class="px-8 py-4 text-xs font-bold text-[#94a3b8] uppercase tracking-wider">Asset</th><th class="px-8 py-4 text-xs font-bold text-[#94a3b8] uppercase tracking-wider">Condition Name</th><th class="px-8 py-4 text-xs font-bold text-[#94a3b8] uppercase tracking-wider">Threshold</th><th class="px-8 py-4 text-xs font-bold text-[#94a3b8] uppercase tracking-wider">Current Value</th><th class="px-8 py-4 text-xs font-bold text-[#94a3b8] uppercase tracking-wider">Status</th><th class="px-8 py-4 text-xs font-bold text-[#94a3b8] uppercase tracking-wider">Action</th></tr></thead>
+<tbody class="divide-y divide-[#222222]">
+{% for row in condition_rows %}
+<tr class="{% if loop.index % 2 == 0 %}bg-[#0b0b0b]{% endif %} hover:bg-[#111111] transition-colors">
+<td class="px-8 py-4"><div class="flex items-center gap-3"><div class="w-8 h-8 rounded-lg bg-[#0b0b0b] border border-[#222222] flex items-center justify-center font-bold text-xs text-white">{{ row.badge }}</div><span class="font-bold text-sm text-white">{{ row.asset }}</span></div></td>
+<td class="px-8 py-4 text-sm font-medium text-white">{{ row.condition_name }}</td>
+<td class="px-8 py-4 text-sm text-[#94a3b8]">{{ row.threshold }}</td>
+<td class="px-8 py-4 text-sm font-bold {% if row.status_tone == 'submitted' %}text-[#10b981]{% elif row.status_tone == 'blocked' %}text-[#e11d48]{% else %}text-white{% endif %}">{{ row.current_value }}</td>
+<td class="px-8 py-4"><span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium {% if row.status_tone == 'submitted' %}bg-[#0f1d17] text-[#10b981]{% elif row.status_tone == 'blocked' %}bg-[#2a1016] text-[#e11d48]{% elif row.status_tone == 'waiting' %}bg-[#0b0b0b] text-[#94a3b8] border border-[#222222]{% else %}bg-[#172033] text-[#3b82f6]{% endif %}">{{ row.status_label }}</span></td>
+<td class="px-8 py-4"><button class="p-1.5 hover:bg-[#0b0b0b] rounded-lg transition-colors"><span class="material-symbols-outlined text-[#94a3b8]">more_vert</span></button></td>
+ </tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+<div class="px-8 py-4 bg-[#0b0b0b] border-t border-[#222222] flex justify-between items-center">
+<p class="text-xs text-[#94a3b8] font-medium">Showing {{ condition_rows|length }} of {{ metrics.tracked_stocks or condition_rows|length }} active entry conditions</p>
+<div class="flex gap-2"><button class="p-1 hover:bg-[#111111] rounded"><span class="material-symbols-outlined text-sm text-[#94a3b8]">chevron_left</span></button><button class="p-1 hover:bg-[#111111] rounded"><span class="material-symbols-outlined text-sm text-[#94a3b8]">chevron_right</span></button></div>
+</div>
+</section>
+</div>
+</main>
+</div>
+
+<script>
+  (function () {
+    const root = document.documentElement;
+    const storedTheme = localStorage.getItem('color-theme');
+    if (storedTheme === 'dark' || storedTheme === 'light') {
+      root.classList.remove('light', 'dark');
+      root.classList.add(storedTheme);
+    }
+
+    function bindToggle(id) {
+      const btn = document.getElementById(id);
+      if (!btn) return;
+      btn.addEventListener('click', function () {
+        const nextTheme = root.classList.contains('dark') ? 'light' : 'dark';
+        root.classList.remove('light', 'dark');
+        root.classList.add(nextTheme);
+        localStorage.setItem('color-theme', nextTheme);
+      });
+    }
+
+    bindToggle('theme-toggle-light');
+    bindToggle('theme-toggle-dark');
+  })();
+</script>
+</body>
+</html>
