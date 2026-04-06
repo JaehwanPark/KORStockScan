@@ -456,6 +456,11 @@ def _build_failure_details(event: PipelineEvent) -> list[dict[str, str]]:
             continue
         if key in {"ws_age_ms", "ws_jitter_ms"}:
             display_value = f"{value}ms"
+        elif key == "spread_ratio":
+            try:
+                display_value = f"{float(value) * 100:.2f}%"
+            except Exception:
+                display_value = str(value)
         else:
             display_value = str(value)
         details.append({"label": label, "value": display_value})

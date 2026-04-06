@@ -12,7 +12,7 @@ def test_latency_entry_normal_mode_uses_defensive_limit_price():
     stock = {"name": "TEST", "position_tag": "MIDDLE"}
     result = evaluate_live_buy_entry(
         stock=stock,
-        code="123456",
+        code="123456_normal",
         ws_data={
             "curr": 10_000,
             "last_ws_update_ts": datetime.now(UTC).timestamp(),
@@ -37,7 +37,7 @@ def test_latency_entry_blocks_stale_quote_as_danger():
     stock = {"name": "TEST", "position_tag": "MIDDLE"}
     result = evaluate_live_buy_entry(
         stock=stock,
-        code="123456",
+        code="123456_stale",
         ws_data={
             "curr": 10_000,
             "last_ws_update_ts": 0.0,
@@ -69,7 +69,7 @@ def test_latency_entry_caution_requires_future_live_fallback():
 
     result = evaluate_live_buy_entry(
         stock=stock,
-        code="123456",
+        code="123456_caution",
         ws_data={
             "curr": 10_010,
             "last_ws_update_ts": time.time() - 0.35,

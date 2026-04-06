@@ -1,0 +1,202 @@
+{
+  "date": "2026-03-31",
+  "stats": {
+    "quote_date": "2026-03-31",
+    "ma20_ratio": 0.0,
+    "avg_rsi": 0.0,
+    "avg_prob": 0.0,
+    "avg_bull": 0.0,
+    "total_valid": 0,
+    "qualified_count": 0,
+    "status_text": "하락장",
+    "color": "text-danger",
+    "tone": "bad"
+  },
+  "insights": {
+    "dashboard": "시총 상위 우량주 중 20일선 위에 있는 종목이 0.0%에 그칩니다.",
+    "psychology": "상승장 전용 모델 평균 확신도는 0.0%로 낮습니다. AI는 방어적 심리를 유지하는 구간으로 해석합니다.",
+    "strategy": "현금 비중을 높이고, 반등 확인 전까지는 무리한 추격 매수를 피하는 편이 좋습니다.",
+    "execution_feedback": "직전 매매일 실현손익은 -2,000원으로 약했습니다. 손실 전략과 차단 게이트를 함께 점검해보는 편이 좋습니다."
+  },
+  "performance": {
+    "date": "2026-03-30",
+    "has_data": true,
+    "summary": {
+      "total_records": 19,
+      "filled_records": 2,
+      "completed_records": 2,
+      "open_records": 0,
+      "watching_records": 10,
+      "expired_records": 7,
+      "pending_buy_records": 0,
+      "win_rate": 0.0,
+      "avg_profit_rate": -0.75,
+      "total_profit_rate": -1.5,
+      "realized_pnl_krw": -2000,
+      "fill_rate": 10.5
+    },
+    "strategy_breakdown": [
+      {
+        "strategy": "KOSPI_ML",
+        "total_records": 14,
+        "completed_records": 0,
+        "open_records": 0,
+        "win_rate": 0.0,
+        "avg_profit_rate": 0.0,
+        "realized_pnl_krw": 0
+      },
+      {
+        "strategy": "SCALPING",
+        "total_records": 5,
+        "completed_records": 2,
+        "open_records": 0,
+        "win_rate": 0.0,
+        "avg_profit_rate": -0.75,
+        "realized_pnl_krw": -2000
+      }
+    ],
+    "top_winners": [
+      {
+        "code": "475150",
+        "name": "SK이터닉스",
+        "strategy": "SCALPING",
+        "status": "COMPLETED",
+        "profit_rate": -0.72,
+        "buy_price": 55300.0,
+        "sell_price": 54900.0,
+        "buy_qty": 2,
+        "buy_time": "2026-03-30 09:42:56.009126",
+        "sell_time": "2026-03-30 09:47:44.528867",
+        "realized_pnl_krw": -800
+      },
+      {
+        "code": "100840",
+        "name": "SNT에너지",
+        "strategy": "SCALPING",
+        "status": "COMPLETED",
+        "profit_rate": -0.78,
+        "buy_price": 51400.0,
+        "sell_price": 51000.0,
+        "buy_qty": 3,
+        "buy_time": "2026-03-30 09:33:55.707808",
+        "sell_time": "2026-03-30 09:34:46.108420",
+        "realized_pnl_krw": -1200
+      }
+    ],
+    "top_losers": [
+      {
+        "code": "100840",
+        "name": "SNT에너지",
+        "strategy": "SCALPING",
+        "status": "COMPLETED",
+        "profit_rate": -0.78,
+        "buy_price": 51400.0,
+        "sell_price": 51000.0,
+        "buy_qty": 3,
+        "buy_time": "2026-03-30 09:33:55.707808",
+        "sell_time": "2026-03-30 09:34:46.108420",
+        "realized_pnl_krw": -1200
+      },
+      {
+        "code": "475150",
+        "name": "SK이터닉스",
+        "strategy": "SCALPING",
+        "status": "COMPLETED",
+        "profit_rate": -0.72,
+        "buy_price": 55300.0,
+        "sell_price": 54900.0,
+        "buy_qty": 2,
+        "buy_time": "2026-03-30 09:42:56.009126",
+        "sell_time": "2026-03-30 09:47:44.528867",
+        "realized_pnl_krw": -800
+      }
+    ],
+    "insight": "직전 매매일 실현손익은 -2,000원으로 약했습니다. 손실 전략과 차단 게이트를 함께 점검해보는 편이 좋습니다."
+  },
+  "stocks": [],
+  "sections": {
+    "qualified_stocks": [],
+    "top_winners": [
+      {
+        "code": "475150",
+        "name": "SK이터닉스",
+        "strategy": "SCALPING",
+        "status": "COMPLETED",
+        "profit_rate": -0.72,
+        "buy_price": 55300.0,
+        "sell_price": 54900.0,
+        "buy_qty": 2,
+        "buy_time": "2026-03-30 09:42:56.009126",
+        "sell_time": "2026-03-30 09:47:44.528867",
+        "realized_pnl_krw": -800
+      },
+      {
+        "code": "100840",
+        "name": "SNT에너지",
+        "strategy": "SCALPING",
+        "status": "COMPLETED",
+        "profit_rate": -0.78,
+        "buy_price": 51400.0,
+        "sell_price": 51000.0,
+        "buy_qty": 3,
+        "buy_time": "2026-03-30 09:33:55.707808",
+        "sell_time": "2026-03-30 09:34:46.108420",
+        "realized_pnl_krw": -1200
+      }
+    ],
+    "top_losers": [
+      {
+        "code": "100840",
+        "name": "SNT에너지",
+        "strategy": "SCALPING",
+        "status": "COMPLETED",
+        "profit_rate": -0.78,
+        "buy_price": 51400.0,
+        "sell_price": 51000.0,
+        "buy_qty": 3,
+        "buy_time": "2026-03-30 09:33:55.707808",
+        "sell_time": "2026-03-30 09:34:46.108420",
+        "realized_pnl_krw": -1200
+      },
+      {
+        "code": "475150",
+        "name": "SK이터닉스",
+        "strategy": "SCALPING",
+        "status": "COMPLETED",
+        "profit_rate": -0.72,
+        "buy_price": 55300.0,
+        "sell_price": 54900.0,
+        "buy_qty": 2,
+        "buy_time": "2026-03-30 09:42:56.009126",
+        "sell_time": "2026-03-30 09:47:44.528867",
+        "realized_pnl_krw": -800
+      }
+    ],
+    "strategy_breakdown": [
+      {
+        "strategy": "KOSPI_ML",
+        "total_records": 14,
+        "completed_records": 0,
+        "open_records": 0,
+        "win_rate": 0.0,
+        "avg_profit_rate": 0.0,
+        "realized_pnl_krw": 0
+      },
+      {
+        "strategy": "SCALPING",
+        "total_records": 5,
+        "completed_records": 2,
+        "open_records": 0,
+        "win_rate": 0.0,
+        "avg_profit_rate": -0.75,
+        "realized_pnl_krw": -2000
+      }
+    ]
+  },
+  "meta": {
+    "report_generated_at": "2026-04-05 16:19:47",
+    "warnings": [],
+    "model_ready": true,
+    "report_path": "/home/ubuntu/KORStockScan/data/report/report_2026-03-31.json"
+  }
+}

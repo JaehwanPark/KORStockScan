@@ -1,85 +1,85 @@
 {
-  "bundle_as_of": "2026-03-31T23:28:11Z",
+  "bundle_as_of": "2026-04-05T22:00:10Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 6528.52,
-    "prev_value": 6343.72,
-    "change": 184.8,
-    "change_pct": 2.91,
-    "as_of": "2026-03-31T20:34:00Z",
-    "source": "Morningstar"
+    "value": 6582.69,
+    "prev_value": 6575.32,
+    "change": 7.37,
+    "change_pct": 0.11,
+    "as_of": "2026-04-02T20:00:00Z",
+    "source": "Associated Press"
   },
   "nasdaq": {
     "name": "NASDAQ Composite",
-    "value": 21590.63,
-    "prev_value": 20794.64,
-    "change": 795.99,
-    "change_pct": 3.83,
-    "as_of": "2026-03-31T20:34:00Z",
-    "source": "Morningstar"
+    "value": 21879.18,
+    "prev_value": 21840.95,
+    "change": 38.23,
+    "change_pct": 0.18,
+    "as_of": "2026-04-02T20:00:00Z",
+    "source": "Associated Press"
   },
   "vix": {
     "name": "VIX",
-    "value": 27.63,
-    "prev_value": 30.61,
-    "change": -2.98,
-    "change_pct": -9.74,
-    "as_of": "2026-03-31T19:42:00Z",
-    "source": "Cboe Global Markets"
+    "value": 23.87,
+    "prev_value": 24.54,
+    "change": -0.67,
+    "change_pct": -2.73,
+    "as_of": "2026-04-02T20:15:00Z",
+    "source": "Cboe"
   },
   "us10y": {
     "name": "US 10-Year Treasury Yield",
-    "value": 4.31,
-    "prev_value": 4.34,
-    "change": -0.03,
-    "change_pct": -0.69,
-    "as_of": "2026-03-31T23:28:11Z",
-    "source": "MacroMicro"
+    "value": 4.32,
+    "prev_value": 4.31,
+    "change": 0.01,
+    "change_pct": 0.23,
+    "as_of": "2026-04-03T16:00:00Z",
+    "source": "Trading Economics"
   },
   "brent": {
     "name": "Brent Crude",
-    "value": 103.97,
-    "prev_value": 107.41,
-    "change": -3.44,
-    "change_pct": -3.2,
-    "as_of": "2026-03-31T23:28:11Z",
-    "source": "LA Times"
+    "value": 109.03,
+    "prev_value": 101.16,
+    "change": 7.87,
+    "change_pct": 7.78,
+    "as_of": "2026-04-02T20:00:00Z",
+    "source": "Trading Economics"
   },
   "headlines": [
     {
-      "title": "Stocks Rise as Trump Signals Possible End to Iran Conflict",
+      "title": "Oil prices surge as Trump threatens to bring Iran 'back to the stone ages'",
       "source": "TheStreet",
-      "published_at": "2026-03-31T20:00:00Z",
-      "url": "https://www.thestreet.com/"
+      "published_at": "2026-04-02T21:48:00Z",
+      "url": "https://www.thestreet.com"
     },
     {
-      "title": "Brent crude falls below $105 per barrel as market pares earlier war-driven gains",
-      "source": "Anadolu Agency",
-      "published_at": "2026-03-31T16:45:00Z",
-      "url": "https://www.aa.com.tr/"
+      "title": "Strait of Hormuz remains shut down by US-Israel strikes, 20% of global oil shipments blocked",
+      "source": "The Economic Times",
+      "published_at": "2026-04-02T12:00:00Z",
+      "url": "https://economictimes.indiatimes.com"
     },
     {
-      "title": "Fed is watching energy price spikes, but Powell says bank is limited in what it can do",
-      "source": "LA Times",
-      "published_at": "2026-03-31T12:00:00Z",
-      "url": "https://www.latimes.com/"
+      "title": "Trump Administration places 100% tariff on foreign drugs unless prices are cut",
+      "source": "TheStreet",
+      "published_at": "2026-04-02T19:24:00Z",
+      "url": "https://www.thestreet.com"
     },
     {
-      "title": "Unilever seals $44.8bn deal to merge food business with US rival McCormick",
-      "source": "The Guardian",
-      "published_at": "2026-03-31T10:19:00Z",
-      "url": "https://www.theguardian.com/"
+      "title": "US 10-year Treasury yield edges up to 4.32% in shortened Good Friday session",
+      "source": "Trading Economics",
+      "published_at": "2026-04-03T16:00:00Z",
+      "url": "https://tradingeconomics.com"
     },
     {
-      "title": "U.S. stocks surged to their best day since last spring as doubt swings back to hope on Wall Street",
-      "source": "AP News",
-      "published_at": "2026-03-31T20:30:00Z",
-      "url": "https://apnews.com/"
+      "title": "Tesla deliveries fall short of Q1 estimates, shares drop over 5%",
+      "source": "Associated Press",
+      "published_at": "2026-04-02T20:43:00Z",
+      "url": "https://apnews.com"
     }
   ],
   "notes": [
-    "US Equities surged marking their best day since spring on hopes of Iran conflict de-escalation.",
-    "Brent Crude prices retreated from highs following signs of possible de-escalation.",
-    "VIX dropped nearly 10% as market fear slightly subdued."
+    "US Stock markets were closed on Friday, April 3, 2026, in observance of Good Friday. Equities prices reflect the Thursday, April 2 close.",
+    "US Bond markets had an abbreviated session on April 3, 2026, closing at noon ET.",
+    "All timestamps reflect requested ISO 8601 UTC format."
   ]
 }

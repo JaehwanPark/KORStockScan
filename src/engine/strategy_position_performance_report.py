@@ -168,13 +168,21 @@ def _build_kpis(rows: list[dict[str, Any]], fact_rows: list[dict[str, Any]]) -> 
     avg_hold_sec = round(sum(avg_hold_values) / len(avg_hold_values), 1) if avg_hold_values else 0.0
 
     top_winner = max(
-        (row for row in fact_rows if row.get("status") == "COMPLETED"),
-        key=lambda item: _safe_float(item.get("profit_rate")),
+        (
+            row
+            for row in fact_rows
+            if row.get("status") == "COMPLETED" and _safe_int(row.get("realized_pnl_krw")) > 0
+        ),
+        key=lambda item: _safe_int(item.get("realized_pnl_krw")),
         default=None,
     )
     top_loser = min(
-        (row for row in fact_rows if row.get("status") == "COMPLETED"),
-        key=lambda item: _safe_float(item.get("profit_rate")),
+        (
+            row
+            for row in fact_rows
+            if row.get("status") == "COMPLETED" and _safe_int(row.get("realized_pnl_krw")) < 0
+        ),
+        key=lambda item: _safe_int(item.get("realized_pnl_krw")),
         default=None,
     )
 
@@ -309,6 +317,7 @@ def sync_trade_performance_for_date(target_date: str) -> dict[str, Any]:
 
 def build_strategy_position_performance_report(target_date: str, *, refresh: bool = False) -> dict[str, Any]:
     rec_date = _parse_date(target_date)
+    _DB.init_db()
     try:
         if refresh:
             sync_trade_performance_for_date(target_date)

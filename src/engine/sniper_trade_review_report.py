@@ -26,6 +26,8 @@ _DISPLAY_STAGE_LABELS = {
     "scale_in_executed": "추가매수 체결",
     "preset_exit_setup": "기본 익절망 설치",
     "ai_holding_review": "AI 보유감시",
+    "ai_holding_reuse_bypass": "AI 재사용 우회",
+    "ai_holding_skip_unchanged": "AI 재사용 생략",
     "exit_signal": "청산 시그널",
     "sell_order_sent": "매도 주문 전송",
     "sell_order_failed": "매도 주문 실패",
@@ -33,6 +35,7 @@ _DISPLAY_STAGE_LABELS = {
 }
 
 _EVENT_DETAIL_LABELS = {
+    "id": "ID",
     "profit_rate": "수익률",
     "ai_score": "AI 점수",
     "low_score_hits": "하방카운트",
@@ -64,6 +67,11 @@ _EVENT_DETAIL_LABELS = {
     "error": "오류",
     "revive": "부활여부",
     "new_watch_id": "신규 감시 ID",
+}
+
+_DETAIL_HIDDEN_KEYS = {
+    "id",
+    "new_watch_id",
 }
 
 _DETAIL_KEY_ORDER = [
@@ -201,7 +209,7 @@ def _format_duration_seconds(seconds: float | int | None) -> str:
 
 
 def _value_chip(key: str, value: str) -> dict[str, str] | None:
-    if value in (None, "", "None"):
+    if value in (None, "", "None", "-"):
         return None
     label = _EVENT_DETAIL_LABELS.get(key, key)
     display = str(value)
@@ -219,6 +227,9 @@ def _value_chip(key: str, value: str) -> dict[str, str] | None:
         display = f"{_safe_int(value):,}"
     elif key == "price_change":
         display = f"{_safe_float(value):.2f}"
+    elif key == "revive":
+        normalized = str(value).strip().lower()
+        display = "예" if normalized in {"true", "1", "yes", "y"} else "아니오"
     return {"label": label, "value": display}
 
 
@@ -227,6 +238,8 @@ def _build_event_details(event: HoldingEvent) -> list[dict[str, str]]:
     seen = set()
     for key in _DETAIL_KEY_ORDER + sorted(event.fields.keys()):
         if key in seen:
+            continue
+        if key in _DETAIL_HIDDEN_KEYS:
             continue
         seen.add(key)
         chip = _value_chip(key, event.fields.get(key))

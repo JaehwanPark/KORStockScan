@@ -1,0 +1,637 @@
+{
+  "date": "2026-04-06",
+  "since": null,
+  "metrics": {
+    "holding_reviews": 134,
+    "holding_skips": 3,
+    "holding_skip_ratio": 2.2,
+    "holding_ai_cache_hit_ratio": 0.0,
+    "holding_review_ms_avg": 1483.23,
+    "holding_review_ms_p95": 1908.0,
+    "holding_skip_ws_age_p95": 1.23,
+    "gatekeeper_decisions": 45,
+    "gatekeeper_fast_reuse_ratio": 0.0,
+    "gatekeeper_ai_cache_hit_ratio": 0.0,
+    "gatekeeper_eval_ms_avg": 24983.51,
+    "gatekeeper_eval_ms_p95": 29306.0,
+    "gatekeeper_fast_reuse_ws_age_p95": 0.0,
+    "gatekeeper_action_age_p95": 1737.18,
+    "gatekeeper_allow_entry_age_p95": 1737.18,
+    "gatekeeper_bypass_evaluation_samples": 45,
+    "exit_signals": 2
+  },
+  "cards": [
+    {
+      "label": "보유 AI 리뷰",
+      "value": "134건",
+      "hint": "실제 AI 재평가"
+    },
+    {
+      "label": "보유 AI skip",
+      "value": "3건",
+      "hint": "시장상태 동일로 생략"
+    },
+    {
+      "label": "보유 AI p95",
+      "value": "1908ms",
+      "hint": "리뷰 지연 상위 5%"
+    },
+    {
+      "label": "Gatekeeper 결정",
+      "value": "45건",
+      "hint": "실제 허용/보류 판단"
+    },
+    {
+      "label": "Gatekeeper fast reuse",
+      "value": "0.0%",
+      "hint": "같은 장면 재사용 비율"
+    },
+    {
+      "label": "Gatekeeper p95",
+      "value": "29306ms",
+      "hint": "평가 지연 상위 5%"
+    }
+  ],
+  "watch_items": [
+    {
+      "label": "보유 AI skip 비율",
+      "value": "2.2%",
+      "target": "20% ~ 60%",
+      "tone": "warn",
+      "comment": "너무 낮으면 비용 절감이 약하고, 너무 높으면 stale 리스크를 점검해야 합니다."
+    },
+    {
+      "label": "보유 AI skip WS age p95",
+      "value": "1.23s",
+      "target": "<= 1.50s",
+      "tone": "good",
+      "comment": "skip 시점의 웹소켓 나이가 길면 최신성이 부족할 수 있습니다."
+    },
+    {
+      "label": "Gatekeeper 평가 p95",
+      "value": "29306ms",
+      "target": "< 1200ms",
+      "tone": "warn",
+      "comment": "높을수록 컨텍스트 생성 또는 AI 응답이 무거운 상태입니다."
+    },
+    {
+      "label": "Gatekeeper fast reuse 비율",
+      "value": "0.0%",
+      "target": "15% ~ 55%",
+      "tone": "warn",
+      "comment": "너무 낮으면 최적화 효과가 적고, 너무 높으면 같은 판단을 오래 재사용할 수 있습니다."
+    },
+    {
+      "label": "Gatekeeper fast reuse WS age p95",
+      "value": "0.00s",
+      "target": "<= 2.00s",
+      "tone": "good",
+      "comment": "fast reuse가 stale WS 위에서 일어나지 않는지 확인합니다."
+    },
+    {
+      "label": "보유 AI 결과 cache hit",
+      "value": "0.0%",
+      "target": "10% ~ 50%",
+      "tone": "warn",
+      "comment": "높다고 무조건 좋은 건 아닙니다. 너무 높으면 같은 판단 반복일 수 있습니다."
+    }
+  ],
+  "strategy_rows": [
+    {
+      "key": "scalping",
+      "label": "스캘핑",
+      "pipeline": {
+        "candidates": 71,
+        "ai_confirmed": 21,
+        "entry_armed": 20,
+        "submitted": 2,
+        "blocked_latest": 71,
+        "waiting_latest": 0,
+        "progress_latest": 0,
+        "ai_confirm_rate": 29.6,
+        "entry_arm_rate": 95.2,
+        "submitted_rate": 10.0,
+        "latest_blockers": [
+          {
+            "label": "동적 체결강도",
+            "count": 52,
+            "ratio": 73.2
+          },
+          {
+            "label": "AI 점수",
+            "count": 9,
+            "ratio": 12.7
+          },
+          {
+            "label": "과열",
+            "count": 8,
+            "ratio": 11.3
+          }
+        ],
+        "top_blocker": "동적 체결강도",
+        "top_blocker_ratio": 73.2
+      },
+      "outcomes": {
+        "total_rows": 111,
+        "entered_rows": 13,
+        "completed_rows": 13,
+        "open_rows": 0,
+        "watching_rows": 38,
+        "expired_rows": 60,
+        "entry_rate": 18.3,
+        "completion_rate": 100.0,
+        "win_count": 5,
+        "loss_count": 8,
+        "win_rate": 38.5,
+        "avg_profit_rate": -0.5,
+        "realized_pnl_krw": -1740,
+        "early_exit_count": 1,
+        "early_exit_ratio": 7.7,
+        "top_exit_rules": [
+          {
+            "label": "scalp_soft_stop_pct",
+            "count": 1,
+            "ratio": 50.0
+          },
+          {
+            "label": "scalp_ai_early_exit",
+            "count": 1,
+            "ratio": 50.0
+          }
+        ]
+      },
+      "trends": {
+        "summary_5d": {
+          "date_count": 5,
+          "entered_rows": 66,
+          "completed_rows": 59,
+          "win_count": 21,
+          "loss_count": 28,
+          "win_rate": 35.6,
+          "avg_profit_rate": -0.24,
+          "realized_pnl_krw": -1710
+        },
+        "summary_20d": {
+          "date_count": 16,
+          "entered_rows": 214,
+          "completed_rows": 171,
+          "win_count": 49,
+          "loss_count": 70,
+          "win_rate": 28.7,
+          "avg_profit_rate": -0.16,
+          "realized_pnl_krw": -68511
+        },
+        "signal": {
+          "label": "혼합 추세",
+          "tone": "warn",
+          "comment": "최근 성과와 장기 성과가 엇갈려, 한 항목만 보고 튜닝하기엔 애매한 상태입니다.",
+          "avg_profit_diff": -0.08,
+          "win_rate_diff": 6.9
+        },
+        "recent_points": [
+          {
+            "date": "2026-04-01",
+            "entered_rows": 35,
+            "completed_rows": 31,
+            "win_rate": 41.9,
+            "avg_profit_rate": -0.16,
+            "realized_pnl_krw": -4710
+          },
+          {
+            "date": "2026-04-02",
+            "entered_rows": 16,
+            "completed_rows": 15,
+            "win_rate": 20.0,
+            "avg_profit_rate": -0.27,
+            "realized_pnl_krw": -3910
+          },
+          {
+            "date": "2026-04-03",
+            "entered_rows": 2,
+            "completed_rows": 2,
+            "win_rate": 50.0,
+            "avg_profit_rate": 0.3,
+            "realized_pnl_krw": 5570
+          },
+          {
+            "date": "2026-04-04",
+            "entered_rows": 0,
+            "completed_rows": 0,
+            "win_rate": 0.0,
+            "avg_profit_rate": 0.0,
+            "realized_pnl_krw": 0
+          },
+          {
+            "date": "2026-04-06",
+            "entered_rows": 13,
+            "completed_rows": 11,
+            "win_rate": 36.4,
+            "avg_profit_rate": -0.54,
+            "realized_pnl_krw": 1340
+          }
+        ]
+      }
+    },
+    {
+      "key": "swing",
+      "label": "스윙",
+      "pipeline": {
+        "candidates": 9,
+        "ai_confirmed": 0,
+        "entry_armed": 0,
+        "submitted": 0,
+        "blocked_latest": 9,
+        "waiting_latest": 0,
+        "progress_latest": 0,
+        "ai_confirm_rate": 0.0,
+        "entry_arm_rate": 0.0,
+        "submitted_rate": 0.0,
+        "latest_blockers": [
+          {
+            "label": "게이트키퍼: 눌림 대기",
+            "count": 8,
+            "ratio": 88.9
+          },
+          {
+            "label": "게이트키퍼: 전량 회피",
+            "count": 1,
+            "ratio": 11.1
+          }
+        ],
+        "top_blocker": "게이트키퍼: 눌림 대기",
+        "top_blocker_ratio": 88.9
+      },
+      "outcomes": {
+        "total_rows": 22,
+        "entered_rows": 0,
+        "completed_rows": 0,
+        "open_rows": 0,
+        "watching_rows": 17,
+        "expired_rows": 5,
+        "entry_rate": 0.0,
+        "completion_rate": 0.0,
+        "win_count": 0,
+        "loss_count": 0,
+        "win_rate": 0.0,
+        "avg_profit_rate": 0.0,
+        "realized_pnl_krw": 0,
+        "early_exit_count": 0,
+        "early_exit_ratio": 0.0,
+        "top_exit_rules": []
+      },
+      "trends": {
+        "summary_5d": {
+          "date_count": 5,
+          "entered_rows": 0,
+          "completed_rows": 0,
+          "win_count": 0,
+          "loss_count": 0,
+          "win_rate": 0.0,
+          "avg_profit_rate": 0.0,
+          "realized_pnl_krw": 0
+        },
+        "summary_20d": {
+          "date_count": 16,
+          "entered_rows": 18,
+          "completed_rows": 18,
+          "win_count": 1,
+          "loss_count": 4,
+          "win_rate": 5.6,
+          "avg_profit_rate": -0.65,
+          "realized_pnl_krw": -109190
+        },
+        "signal": {
+          "label": "혼합 추세",
+          "tone": "warn",
+          "comment": "최근 성과와 장기 성과가 엇갈려, 한 항목만 보고 튜닝하기엔 애매한 상태입니다.",
+          "avg_profit_diff": 0.65,
+          "win_rate_diff": -5.6
+        },
+        "recent_points": [
+          {
+            "date": "2026-04-01",
+            "entered_rows": 0,
+            "completed_rows": 0,
+            "win_rate": 0.0,
+            "avg_profit_rate": 0.0,
+            "realized_pnl_krw": 0
+          },
+          {
+            "date": "2026-04-02",
+            "entered_rows": 0,
+            "completed_rows": 0,
+            "win_rate": 0.0,
+            "avg_profit_rate": 0.0,
+            "realized_pnl_krw": 0
+          },
+          {
+            "date": "2026-04-03",
+            "entered_rows": 0,
+            "completed_rows": 0,
+            "win_rate": 0.0,
+            "avg_profit_rate": 0.0,
+            "realized_pnl_krw": 0
+          },
+          {
+            "date": "2026-04-04",
+            "entered_rows": 0,
+            "completed_rows": 0,
+            "win_rate": 0.0,
+            "avg_profit_rate": 0.0,
+            "realized_pnl_krw": 0
+          },
+          {
+            "date": "2026-04-06",
+            "entered_rows": 0,
+            "completed_rows": 0,
+            "win_rate": 0.0,
+            "avg_profit_rate": 0.0,
+            "realized_pnl_krw": 0
+          }
+        ]
+      }
+    }
+  ],
+  "auto_comments": [
+    {
+      "tone": "warn",
+      "strategy": "스윙",
+      "title": "스윙은 정책 게이트에서 대부분 멈추고 있습니다",
+      "comment": "스윙 감시 9종목 중 실제 진입은 0건이며, 최신 차단의 100.0%는 Gatekeeper, 0.0%는 갭상승 차단입니다. 눌림 대기 cooldown, KOSPI gap 기준, Gatekeeper 프롬프트의 보수성을 함께 재확인하는 편이 좋습니다."
+    },
+    {
+      "tone": "warn",
+      "strategy": "스윙",
+      "title": "Gatekeeper 액션 분포를 함께 봐야 합니다",
+      "comment": "스윙은 실제 체결보다 Gatekeeper 판단 품질이 선행합니다. 특히 `눌림 대기`가 많다면 재평가 간격과 재진입 조건을, `전량 회피`가 많다면 프롬프트의 공급 우위 해석이 과한지 확인하세요."
+    },
+    {
+      "tone": "warn",
+      "strategy": "전체",
+      "title": "Gatekeeper 평가 시간이 길어지고 있습니다",
+      "comment": "Gatekeeper 평가 p95가 29306ms입니다. 프롬프트 입력값이 너무 많아졌는지, fast reuse가 충분히 작동하는지 함께 점검해볼 만합니다."
+    }
+  ],
+  "meta": {
+    "warnings": [],
+    "outcome_basis": "기준일 누적 성과 (trade review 정규화)",
+    "engine_basis": "조회 구간 엔진 지표",
+    "trend_basis": "최근 16개 거래일 rolling 성과",
+    "saved_snapshot_at": "2026-04-06 15:45:41",
+    "snapshot_kind": "performance_tuning"
+  },
+  "breakdowns": {
+    "holding_ai_cache_modes": [
+      {
+        "label": "miss",
+        "count": 134
+      }
+    ],
+    "holding_reuse_blockers": [
+      {
+        "label": "시그니처 변경",
+        "count": 120
+      },
+      {
+        "label": "AI 손절 경계",
+        "count": 64
+      },
+      {
+        "label": "재사용 창 만료",
+        "count": 29
+      },
+      {
+        "label": "저점수 경계",
+        "count": 25
+      },
+      {
+        "label": "가격 변화 확대",
+        "count": 11
+      },
+      {
+        "label": "안전수익 경계",
+        "count": 5
+      },
+      {
+        "label": "WS stale",
+        "count": 5
+      }
+    ],
+    "gatekeeper_cache_modes": [
+      {
+        "label": "miss",
+        "count": 45
+      }
+    ],
+    "gatekeeper_reuse_blockers": [
+      {
+        "label": "시그니처 변경",
+        "count": 45
+      },
+      {
+        "label": "재사용 창 만료",
+        "count": 45
+      },
+      {
+        "label": "이전 액션 없음",
+        "count": 19
+      },
+      {
+        "label": "이전 허용값 없음",
+        "count": 19
+      },
+      {
+        "label": "WS stale",
+        "count": 15
+      },
+      {
+        "label": "점수 경계",
+        "count": 1
+      }
+    ],
+    "gatekeeper_sig_deltas": [
+      {
+        "label": "curr_price",
+        "count": 19
+      },
+      {
+        "label": "spread_tick",
+        "count": 17
+      },
+      {
+        "label": "v_pw_now",
+        "count": 16
+      },
+      {
+        "label": "score",
+        "count": 15
+      },
+      {
+        "label": "buy_ratio_ws",
+        "count": 11
+      },
+      {
+        "label": "net_buy_exec_volume",
+        "count": 6
+      },
+      {
+        "label": "prog_delta_qty",
+        "count": 3
+      }
+    ],
+    "gatekeeper_actions": [
+      {
+        "label": "눌림 대기",
+        "count": 35
+      },
+      {
+        "label": "전량 회피",
+        "count": 10
+      }
+    ],
+    "exit_rules": [
+      {
+        "label": "scalp_soft_stop_pct",
+        "count": 1
+      },
+      {
+        "label": "scalp_ai_early_exit",
+        "count": 1
+      }
+    ]
+  },
+  "sections": {
+    "top_holding_slow": [
+      {
+        "timestamp": "2026-04-06 11:51:22",
+        "name": "에코프로",
+        "code": "086520",
+        "review_ms": 3669,
+        "profit_rate": "-0.82",
+        "ai_cache": "miss"
+      },
+      {
+        "timestamp": "2026-04-06 11:42:01",
+        "name": "에코프로",
+        "code": "086520",
+        "review_ms": 3504,
+        "profit_rate": "-0.75",
+        "ai_cache": "miss"
+      },
+      {
+        "timestamp": "2026-04-06 11:23:31",
+        "name": "에코프로",
+        "code": "086520",
+        "review_ms": 1980,
+        "profit_rate": "+0.07",
+        "ai_cache": "miss"
+      },
+      {
+        "timestamp": "2026-04-06 11:48:01",
+        "name": "에코프로",
+        "code": "086520",
+        "review_ms": 1960,
+        "profit_rate": "-0.69",
+        "ai_cache": "miss"
+      },
+      {
+        "timestamp": "2026-04-06 11:42:14",
+        "name": "에코프로",
+        "code": "086520",
+        "review_ms": 1930,
+        "profit_rate": "-0.69",
+        "ai_cache": "miss"
+      },
+      {
+        "timestamp": "2026-04-06 11:48:49",
+        "name": "에코프로",
+        "code": "086520",
+        "review_ms": 1923,
+        "profit_rate": "-0.62",
+        "ai_cache": "miss"
+      },
+      {
+        "timestamp": "2026-04-06 11:50:19",
+        "name": "에코프로",
+        "code": "086520",
+        "review_ms": 1908,
+        "profit_rate": "-0.75",
+        "ai_cache": "miss"
+      },
+      {
+        "timestamp": "2026-04-06 11:49:14",
+        "name": "에코프로",
+        "code": "086520",
+        "review_ms": 1883,
+        "profit_rate": "-0.62",
+        "ai_cache": "miss"
+      }
+    ],
+    "top_gatekeeper_slow": [
+      {
+        "timestamp": "2026-04-06 14:40:44",
+        "name": "KSS해운",
+        "code": "044450",
+        "gatekeeper_eval_ms": 140059,
+        "cache": "miss",
+        "action": "눌림 대기"
+      },
+      {
+        "timestamp": "2026-04-06 15:42:09",
+        "name": "KSS해운",
+        "code": "044450",
+        "gatekeeper_eval_ms": 33505,
+        "cache": "miss",
+        "action": "눌림 대기"
+      },
+      {
+        "timestamp": "2026-04-06 14:42:28",
+        "name": "한국카본",
+        "code": "017960",
+        "gatekeeper_eval_ms": 29306,
+        "cache": "miss",
+        "action": "눌림 대기"
+      },
+      {
+        "timestamp": "2026-04-06 14:07:58",
+        "name": "KSS해운",
+        "code": "044450",
+        "gatekeeper_eval_ms": 28369,
+        "cache": "miss",
+        "action": "전량 회피"
+      },
+      {
+        "timestamp": "2026-04-06 13:03:33",
+        "name": "LG",
+        "code": "003550",
+        "gatekeeper_eval_ms": 27771,
+        "cache": "miss",
+        "action": "눌림 대기"
+      },
+      {
+        "timestamp": "2026-04-06 12:07:28",
+        "name": "KSS해운",
+        "code": "044450",
+        "gatekeeper_eval_ms": 27641,
+        "cache": "miss",
+        "action": "눌림 대기"
+      },
+      {
+        "timestamp": "2026-04-06 11:32:00",
+        "name": "SK리츠",
+        "code": "395400",
+        "gatekeeper_eval_ms": 25410,
+        "cache": "miss",
+        "action": "눌림 대기"
+      },
+      {
+        "timestamp": "2026-04-06 11:32:56",
+        "name": "KSS해운",
+        "code": "044450",
+        "gatekeeper_eval_ms": 25165,
+        "cache": "miss",
+        "action": "눌림 대기"
+      }
+    ]
+  }
+}

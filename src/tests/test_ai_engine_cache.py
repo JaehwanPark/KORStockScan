@@ -1,5 +1,6 @@
 import threading
 
+from src.engine import ai_engine as ai_engine_module
 from src.engine.ai_engine import GeminiSniperEngine
 
 
@@ -18,7 +19,10 @@ def _build_engine():
     engine.consecutive_failures = 0
     engine.max_consecutive_failures = 5
     engine.current_api_key_index = 0
-    engine.current_model_name = "stub-model"
+    engine.model_tier1_fast = "tier1-model"
+    engine.model_tier2_balanced = "tier2-model"
+    engine.model_tier3_deep = "tier3-model"
+    engine.current_model_name = engine.model_tier1_fast
     return engine
 
 
@@ -251,3 +255,128 @@ def test_holding_cache_profile_absorbs_micro_market_noise(monkeypatch):
     assert first["cache_hit"] is False
     assert second["cache_hit"] is True
     assert second["score"] == 58
+
+
+def test_analyze_target_routes_scalping_and_swing_to_expected_tiers(monkeypatch):
+    engine = _build_engine()
+    used_models = []
+
+    monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "scalp-packet")
+    monkeypatch.setattr(engine, "_format_swing_market_data", lambda ws, candles, qty: "swing-packet")
+
+    def _fake_call(*args, **kwargs):
+        used_models.append(kwargs.get("model_override"))
+        return {"action": "BUY", "score": 80, "reason": "ok"}
+
+    monkeypatch.setattr(engine, "_call_gemini_safe", _fake_call)
+
+    ws_data = {"curr": 10000, "fluctuation": 1.0, "orderbook": {"asks": [], "bids": []}}
+    recent_ticks = [{"time": "10:00:00", "price": 10000, "volume": 10, "dir": "BUY"}]
+    recent_candles = [{"체결시간": "10:00:00", "현재가": 10000, "거래량": 100}]
+
+    engine.analyze_target("스캘프", ws_data, recent_ticks, recent_candles, strategy="SCALPING")
+    engine.analyze_target("스윙", ws_data, recent_ticks, recent_candles, strategy="KOSDAQ_ML")
+
+    assert used_models == ["tier1-model", "tier2-model"]
+
+
+def test_condition_entry_and_exit_use_tier1_model(monkeypatch):
+    engine = _build_engine()
+    used_models = []
+
+    monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "condition-packet")
+
+    def _fake_call(*args, **kwargs):
+        used_models.append(kwargs.get("model_override"))
+        if kwargs.get("context_name", "").startswith("COND_ENTRY"):
+            return {
+                "decision": "BUY",
+                "confidence": 88,
+                "order_type": "MARKET",
+                "position_size_ratio": 0.3,
+                "invalidation_price": 9800,
+                "reasons": ["flow"],
+                "risks": ["volatility"],
+            }
+        return {
+            "decision": "HOLD",
+            "confidence": 77,
+            "trim_ratio": 0.0,
+            "new_stop_price": 9700,
+            "reason_primary": "trend intact",
+            "warning": "",
+        }
+
+    monkeypatch.setattr(engine, "_call_gemini_safe", _fake_call)
+
+    ws_data = {"curr": 10000, "fluctuation": 1.0, "orderbook": {"asks": [], "bids": []}}
+    recent_ticks = [{"time": "10:00:00", "price": 10000, "volume": 10, "dir": "BUY"}]
+    recent_candles = [{"체결시간": "10:00:00", "현재가": 10000, "거래량": 100}]
+    profile = {"name": "VCP", "strategy": "SCALPING"}
+
+    engine.evaluate_condition_entry("조건주", "000001", ws_data, recent_ticks, recent_candles, profile)
+    engine.evaluate_condition_exit("조건주", "000001", ws_data, recent_ticks, recent_candles, profile, 1.2, 2.1, 78)
+
+    assert used_models == ["tier1-model", "tier1-model"]
+
+
+def test_realtime_report_and_overnight_decision_use_tier2_model(monkeypatch):
+    engine = _build_engine()
+    used_models = []
+
+    monkeypatch.setattr(engine, "_get_realtime_prompt", lambda mode: f"prompt:{mode}")
+
+    def _fake_call(*args, **kwargs):
+        used_models.append(kwargs.get("model_override"))
+        if kwargs.get("require_json"):
+            return {
+                "action": "HOLD_OVERNIGHT",
+                "confidence": 81,
+                "reason": "trend strong",
+                "risk_note": "gap risk",
+            }
+        return "📍 **[한 줄 결론]**\n🎯 **[실전 행동 지침]**\n[보유 지속]"
+
+    monkeypatch.setattr(engine, "_call_gemini_safe", _fake_call)
+
+    engine.generate_realtime_report("리포트주", "000001", "legacy packet", analysis_mode="SWING")
+    engine.evaluate_scalping_overnight_decision("오버나이트주", "000001", {"curr_price": 10000})
+
+    assert used_models == ["tier2-model", "tier2-model"]
+
+
+def test_scanner_briefing_and_eod_bundle_use_tier3_model(monkeypatch):
+    engine = _build_engine()
+    used_models = []
+
+    monkeypatch.setattr(ai_engine_module, "build_scanner_data_input", lambda **kwargs: "scanner-data")
+
+    def _fake_call(*args, **kwargs):
+        used_models.append(kwargs.get("model_override"))
+        if kwargs.get("context_name") == "종가베팅 TOP5 JSON":
+            return {
+                "market_summary": "시장 요약",
+                "one_point_lesson": "원포인트",
+                "top5": [
+                    {
+                        "rank": 1,
+                        "stock_name": "테스트",
+                        "stock_code": "000001",
+                        "close_price": 12345,
+                        "reason": "수급 양호",
+                        "entry_plan": "눌림",
+                        "target_price_guide": "전고점",
+                        "stop_price_guide": "전일 저점",
+                        "confidence": 0.91,
+                    }
+                ],
+            }
+        return "브리핑"
+
+    monkeypatch.setattr(engine, "_call_gemini_safe", _fake_call)
+
+    engine.analyze_scanner_results(100, 5, "stats", "macro")
+    bundle = engine.generate_eod_tomorrow_bundle("candidate text")
+
+    assert used_models == ["tier3-model", "tier3-model"]
+    assert bundle["top5"][0]["stock_code"] == "000001"

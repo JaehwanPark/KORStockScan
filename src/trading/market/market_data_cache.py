@@ -22,6 +22,7 @@ class MarketDataCache:
     def __init__(self, *, stale_after_ms: int = 1_000) -> None:
         self._quotes: dict[str, _SymbolQuote] = {}
         self._stale_after_ms = stale_after_ms
+        self._jitter_reset_gap_ms = max(1_500, int(stale_after_ms) * 3)
 
     def update(
         self,
@@ -36,8 +37,14 @@ class MarketDataCache:
         quote = self._quotes.setdefault(symbol, _SymbolQuote())
         if quote.last_packet_ts > 0:
             interval_ms = int(max(0.0, (now - quote.last_packet_ts) * 1000))
-            quote.packet_intervals_ms.append(interval_ms)
-        quote.last_packet_ts = now
+            if interval_ms <= 0:
+                interval_ms = 0
+            if interval_ms >= self._jitter_reset_gap_ms:
+                quote.packet_intervals_ms.clear()
+            elif interval_ms > 0:
+                quote.packet_intervals_ms.append(interval_ms)
+        if now > quote.last_packet_ts:
+            quote.last_packet_ts = now
         if last_price is not None:
             quote.last_price = int(last_price)
         if best_ask is not None:

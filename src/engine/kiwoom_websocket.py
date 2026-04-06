@@ -48,6 +48,7 @@ class KiwoomWSManager:
         self._started = False
         self._pending_loop_futures = set()
         self._pending_future_lock = threading.Lock()
+        self._session_ready = threading.Event()
         
         # 전역 EventBus 인스턴스 획득 및 외부 명령 수신기 장착
         self.event_bus = EventBus()
@@ -310,6 +311,7 @@ class KiwoomWSManager:
 
         self._stop_event.set()
         self._started = False
+        self._session_ready.clear()
         self._tick_dispatch_event.set()
         self._cancel_pending_futures()
 
@@ -336,6 +338,100 @@ class KiwoomWSManager:
                 thread.join(timeout=2)
 
         self.websocket = None
+
+    @staticmethod
+    def _is_login_success_message(msg_dict):
+        if not isinstance(msg_dict, dict):
+            return False
+        if str(msg_dict.get('trnm', '') or '').strip().upper() != 'LOGIN':
+            return False
+        code = msg_dict.get('return_code', msg_dict.get('rt_cd', ''))
+        return str(code).strip() == '0'
+
+    @staticmethod
+    def _is_login_failure_message(msg_dict):
+        if not isinstance(msg_dict, dict):
+            return False
+        if str(msg_dict.get('trnm', '') or '').strip().upper() != 'LOGIN':
+            return False
+        code = str(msg_dict.get('return_code', msg_dict.get('rt_cd', ''))).strip()
+        return bool(code) and code != '0'
+
+    async def _await_login_ack(self, ws, timeout_sec=5.0):
+        deadline = time.time() + max(1.0, float(timeout_sec or 0.0))
+        while not self._stop_event.is_set() and time.time() < deadline:
+            remaining = max(0.1, deadline - time.time())
+            try:
+                message = await asyncio.wait_for(ws.recv(), timeout=remaining)
+            except asyncio.TimeoutError:
+                break
+
+            try:
+                msg_dict = json.loads(message)
+            except Exception:
+                continue
+
+            trnm = str(msg_dict.get('trnm', '') or '').strip().upper()
+            if trnm == 'PING':
+                await ws.send(json.dumps({"trnm": "PONG"}))
+                continue
+
+            if self._is_login_success_message(msg_dict):
+                print("✅ [WS] 로그인 응답 확인 완료")
+                return
+
+            if self._is_login_failure_message(msg_dict):
+                code = msg_dict.get('return_code', msg_dict.get('rt_cd', '?'))
+                message = msg_dict.get('return_msg', msg_dict.get('msg1', '로그인 실패'))
+                raise RuntimeError(f"LOGIN ACK failed code={code} msg={message}")
+
+            await self._handle_message(json.dumps(msg_dict))
+
+        raise TimeoutError("LOGIN ACK timeout")
+
+    async def _send_post_login_bootstrap(self):
+        if not self.websocket:
+            return
+
+        print("🔍 [WS] HTS 조건검색식 목록(CNSRLST)을 요청합니다.")
+        await self.websocket.send(json.dumps({'trnm': 'CNSRLST'}))
+
+        if self.is_reconnected:
+            print("🔄 [WS] 웹소켓 재접속 감지! EventBus에 상태 동기화 이벤트를 발행합니다.")
+            self._enqueue_state_event("WS_RECONNECTED", {})
+
+        self.is_reconnected = True
+
+        exec_reg_packet = {
+            "trnm": "REG",
+            "grp_no": "2",
+            "refresh": "1",
+            "data": [
+                {
+                    "item": [""],
+                    "type": ["00"]
+                }
+            ]
+        }
+        await self.websocket.send(json.dumps(exec_reg_packet))
+        print("📝 [WS] 🚨 계좌 주문/체결통보(00) 감시망 등록 완료!")
+
+        session_reg_packet = {
+            "trnm": "REG",
+            "grp_no": "3",
+            "refresh": "1",
+            "data": [
+                {
+                    "item": [""],
+                    "type": ["0s"]
+                }
+            ]
+        }
+        await self.websocket.send(json.dumps(session_reg_packet))
+        print("📝 [WS] 장운영구분(0s) 감시망 등록 완료!")
+
+        if self.subscribed_codes:
+            await self._send_reg(list(self.subscribed_codes))
 
     def _cancel_pending_futures(self):
         with self._pending_future_lock:
@@ -369,61 +465,16 @@ class KiwoomWSManager:
                 print(f"🔌 [WS] 키움 서버({self.uri})에 연결을 시도합니다...")
                 async with websockets.connect(self.uri, ping_interval=None) as ws:
                     self.websocket = ws
+                    self._session_ready.clear()
                     print("✅ [WS] 웹소켓 연결 성공!")
 
-                    # 1. 로그인 패킷 전송
                     login_packet = {'trnm': 'LOGIN', 'token': self.token}
                     await ws.send(json.dumps(login_packet))
                     print("🔑 [WS] 로그인 패킷 전송 완료")
-                    
-                    await asyncio.sleep(1) # 로그인 처리 대기
+                    await self._await_login_ack(ws)
+                    await self._send_post_login_bootstrap()
+                    self._session_ready.set()
 
-                    # 🚀 로그인 성공 직후, 조건검색식 목록(ka10171)을 먼저 요청합니다!
-                    print("🔍 [WS] HTS 조건검색식 목록(CNSRLST)을 요청합니다.")
-                    await ws.send(json.dumps({'trnm': 'CNSRLST'}))
-
-                    # 💡 재접속(Reconnect)인 경우 스나이퍼 엔진에 상태 동기화 명령 하달
-                    if self.is_reconnected:
-                        print("🔄 [WS] 웹소켓 재접속 감지! EventBus에 상태 동기화 이벤트를 발행합니다.")
-                        self._enqueue_state_event("WS_RECONNECTED", {})
-                    
-                    # 최초 접속이 끝났으므로, 이후부터 연결되면 무조건 '재접속'으로 간주
-                    self.is_reconnected = True
-
-                    # 2. 계좌 전체 주문체결(00) 감시 명시적 등록
-                    exec_reg_packet = {
-                        "trnm": "REG",
-                        "grp_no": "2",  
-                        "refresh": "1",
-                        "data": [
-                            {
-                                "item": [""],   
-                                "type": ["00"]  
-                            }
-                        ]
-                    }
-                    await ws.send(json.dumps(exec_reg_packet))
-                    print("📝 [WS] 🚨 계좌 주문/체결통보(00) 감시망 등록 완료!")
-
-                    session_reg_packet = {
-                        "trnm": "REG",
-                        "grp_no": "3",
-                        "refresh": "1",
-                        "data": [
-                            {
-                                "item": [""],
-                                "type": ["0s"]
-                            }
-                        ]
-                    }
-                    await ws.send(json.dumps(session_reg_packet))
-                    print("📝 [WS] 장운영구분(0s) 감시망 등록 완료!")
-
-                    # 3. 기존 감시 종목 재등록 (네트워크 끊김 복구용)
-                    if self.subscribed_codes:
-                        await self._send_reg(list(self.subscribed_codes))
-
-                    # 4. 메시지 수신 무한 루프
                     while True:
                         message = await ws.recv()
                         await self._handle_message(message)
@@ -437,6 +488,7 @@ class KiwoomWSManager:
                     "3초 후 재접속 시도..."
                 )
                 self.websocket = None
+                self._session_ready.clear()
                 await asyncio.sleep(3)
             except Exception as e:
                 if self._stop_event.is_set():
@@ -445,8 +497,10 @@ class KiwoomWSManager:
                 log_error(f"🚨 [WS] 예상치 못한 오류: {e}")
                 print(f"🚨 [WS] 예상치 못한 오류: {e}")
                 self.websocket = None
+                self._session_ready.clear()
                 await asyncio.sleep(3)
         self.websocket = None
+        self._session_ready.clear()
 
     async def _handle_message(self, message):
         try:
@@ -778,17 +832,17 @@ class KiwoomWSManager:
                 print("⚠️ [WS] 등록 가능한 유효 종목코드가 없어 REG 전송을 생략합니다.")
                 return
 
-            for _ in range(50):
+            for _ in range(100):
                 if self._stop_event.is_set():
                     return
-                if self.websocket:
+                if self.websocket and self._session_ready.is_set():
                     break
                 await asyncio.sleep(0.1)
 
             if self._stop_event.is_set():
                 return
 
-            if self.websocket:
+            if self.websocket and self._session_ready.is_set():
                 batch_size = int(getattr(TRADING_RULES, 'WS_REG_BATCH_SIZE', 20) or 20)
                 total_batches = (len(normalized_codes) + batch_size - 1) // batch_size
                 print(f"📝 [WS] 종목 등록(REG) 전송 시도: {normalized_codes} (batch_size={batch_size})")
@@ -813,7 +867,7 @@ class KiwoomWSManager:
                     )
                     await asyncio.sleep(0.15)
             else:
-                print(f"⚠️ [WS] 연결된 웹소켓이 없어 전송 실패: {normalized_codes}")
+                print(f"⚠️ [WS] 로그인 준비가 완료되지 않아 REG 전송 실패: {normalized_codes}")
         except asyncio.CancelledError:
             return
         except Exception as e:

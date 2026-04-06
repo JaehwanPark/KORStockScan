@@ -109,6 +109,7 @@ def dashboard_home():
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <meta name="google-adsense-account" content="ca-pub-9559810990033158">
+      <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9559810990033158" crossorigin="anonymous"></script>
       <title>KORStockScan Dashboard</title>
       <link rel="preconnect" href="https://fonts.googleapis.com">
       <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -633,6 +634,7 @@ def index():
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <meta name="google-adsense-account" content="ca-pub-9559810990033158">
+      <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9559810990033158" crossorigin="anonymous"></script>
       <title>KORStockScan Daily Report</title>
       <style>
         :root {
@@ -962,6 +964,7 @@ def strength_momentum_preview():
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <meta name="google-adsense-account" content="ca-pub-9559810990033158">
+      <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9559810990033158" crossorigin="anonymous"></script>
       <title>Strength Momentum Dashboard</title>
       <style>
         :root {
@@ -1206,6 +1209,7 @@ def entry_pipeline_flow_preview():
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <meta name="google-adsense-account" content="ca-pub-9559810990033158">
+      <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9559810990033158" crossorigin="anonymous"></script>
       <title>Entry Pipeline Flow</title>
       <style>
         :root {
@@ -1439,6 +1443,7 @@ def gatekeeper_replay_preview():
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <meta name="google-adsense-account" content="ca-pub-9559810990033158">
+      <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9559810990033158" crossorigin="anonymous"></script>
       <title>Gatekeeper Replay</title>
       <style>
         :root {
@@ -1627,6 +1632,7 @@ def performance_tuning_preview():
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <meta name="google-adsense-account" content="ca-pub-9559810990033158">
+      <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9559810990033158" crossorigin="anonymous"></script>
       <title>Performance Tuning Monitor</title>
       <style>
         :root {
@@ -2102,6 +2108,7 @@ def strategy_performance_preview():
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <meta name="google-adsense-account" content="ca-pub-9559810990033158">
+      <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9559810990033158" crossorigin="anonymous"></script>
       <title>Strategy Performance</title>
       <style>
         :root {
@@ -2396,6 +2403,7 @@ def trade_review_preview():
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <meta name="google-adsense-account" content="ca-pub-9559810990033158">
+      <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9559810990033158" crossorigin="anonymous"></script>
       <title>Trade Review</title>
       <style>
         :root {
