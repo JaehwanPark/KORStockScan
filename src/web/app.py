@@ -108,6 +108,7 @@ def dashboard_home():
     <head>
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
+      <meta name="google-adsense-account" content="ca-pub-9559810990033158">
       <title>KORStockScan Dashboard</title>
       <link rel="preconnect" href="https://fonts.googleapis.com">
       <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -268,6 +269,55 @@ def dashboard_home():
           box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.15);
         }
         .tabs { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+        .telegram-cta {
+          margin-top: 18px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 14px;
+          padding: 16px 18px;
+          border-radius: 20px;
+          border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
+          background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 8%, var(--bg-elevated)), var(--bg-elevated));
+          box-shadow: var(--shadow);
+        }
+        .telegram-copy {
+          min-width: 0;
+        }
+        .telegram-copy small {
+          display: block;
+          color: var(--accent-strong);
+          font-size: 11px;
+          font-weight: 800;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+          margin-bottom: 6px;
+        }
+        .telegram-copy strong {
+          display: block;
+          font-size: 17px;
+          line-height: 1.35;
+        }
+        .telegram-copy span {
+          display: block;
+          margin-top: 5px;
+          color: var(--muted);
+          font-size: 13px;
+          line-height: 1.5;
+        }
+        .telegram-link {
+          flex-shrink: 0;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          padding: 11px 16px;
+          border-radius: 999px;
+          background: var(--accent);
+          color: #fff;
+          text-decoration: none;
+          font-weight: 800;
+          white-space: nowrap;
+        }
         .tab {
           display: inline-flex;
           align-items: center;
@@ -374,6 +424,8 @@ def dashboard_home():
           .dashboard-grid { grid-template-columns: 1fr; }
         }
         @media (max-width: 640px) {
+          .telegram-cta { align-items: stretch; flex-direction: column; }
+          .telegram-link { width: 100%; }
           .hero-meta-grid { grid-template-columns: 1fr; }
           .topbar { align-items: stretch; flex-direction: column; }
           .hero h2 { font-size: 28px; }
@@ -447,6 +499,15 @@ def dashboard_home():
           </a>
         </div>
 
+        <div class="telegram-cta">
+          <div class="telegram-copy">
+            <small>Telegram Bot</small>
+            <strong>실시간 체결·보유감시 알림은 <code>@KORStockScan_bot</code>에서 받아보세요.</strong>
+            <span>대시보드 복기와 함께 텔레그램으로 즉시 흐름을 확인할 수 있도록 운영 알림 채널을 연결했습니다.</span>
+          </div>
+          <a class="telegram-link" href="https://t.me/KORStockScan_bot" target="_blank" rel="noopener noreferrer">텔레그램 열기</a>
+        </div>
+
         <div class="dashboard-grid">
           <div>
             <div class="frame-card">
@@ -454,6 +515,16 @@ def dashboard_home():
             </div>
           </div>
           <div class="rail">
+            <div class="rail-card">
+              <h3>텔레그램 알림</h3>
+              <p>실시간 체결, 보유감시, 주요 상태 변화를 텔레그램에서 바로 확인하려면 <code>@KORStockScan_bot</code>을 이용하면 됩니다.</p>
+              <ul>
+                <li>실매매 이벤트를 대시보드보다 빠르게 확인</li>
+                <li>보유감시·청산 신호 흐름을 모바일에서 바로 추적</li>
+                <li>운영 중 이슈를 즉시 점검할 수 있는 보조 채널</li>
+              </ul>
+              <p style="margin-top: 12px;"><a class="telegram-link" href="https://t.me/KORStockScan_bot" target="_blank" rel="noopener noreferrer">봇 바로가기</a></p>
+            </div>
             <div class="rail-card">
               <h3>운영 포인트</h3>
               <p>최근에 추가된 복기 정규화, 전략 성과, 성능 튜닝 화면까지 같은 셸에서 확인할 수 있도록 `main` 기준 기능셋을 유지한 채 레이아웃을 재구성했습니다.</p>
@@ -561,6 +632,7 @@ def index():
     <head>
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
+      <meta name="google-adsense-account" content="ca-pub-9559810990033158">
       <title>KORStockScan Daily Report</title>
       <style>
         :root {
@@ -889,6 +961,7 @@ def strength_momentum_preview():
     <head>
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
+      <meta name="google-adsense-account" content="ca-pub-9559810990033158">
       <title>Strength Momentum Dashboard</title>
       <style>
         :root {
@@ -1132,6 +1205,7 @@ def entry_pipeline_flow_preview():
     <head>
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
+      <meta name="google-adsense-account" content="ca-pub-9559810990033158">
       <title>Entry Pipeline Flow</title>
       <style>
         :root {
@@ -1364,6 +1438,7 @@ def gatekeeper_replay_preview():
     <head>
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
+      <meta name="google-adsense-account" content="ca-pub-9559810990033158">
       <title>Gatekeeper Replay</title>
       <style>
         :root {
@@ -1551,6 +1626,7 @@ def performance_tuning_preview():
     <head>
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
+      <meta name="google-adsense-account" content="ca-pub-9559810990033158">
       <title>Performance Tuning Monitor</title>
       <style>
         :root {
@@ -2025,6 +2101,7 @@ def strategy_performance_preview():
     <head>
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
+      <meta name="google-adsense-account" content="ca-pub-9559810990033158">
       <title>Strategy Performance</title>
       <style>
         :root {
@@ -2318,6 +2395,7 @@ def trade_review_preview():
     <head>
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
+      <meta name="google-adsense-account" content="ca-pub-9559810990033158">
       <title>Trade Review</title>
       <style>
         :root {
