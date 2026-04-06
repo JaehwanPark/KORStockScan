@@ -134,6 +134,14 @@ def _safe_int(value, default: int | None = None) -> int | None:
         return default
 
 
+def _safe_bool(value, default: bool = False) -> bool:
+    if value in (None, "", "-", "None"):
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 def _safe_date_string(value) -> str:
     if value is None:
         return ""
@@ -760,6 +768,11 @@ def _build_watch_items(metrics: dict) -> list[dict]:
     gate_fast_ratio = float(metrics.get("gatekeeper_fast_reuse_ratio", 0.0) or 0.0)
     gate_ws_p95 = float(metrics.get("gatekeeper_fast_reuse_ws_age_p95", 0.0) or 0.0)
     ai_hit_ratio = float(metrics.get("holding_ai_cache_hit_ratio", 0.0) or 0.0)
+    dual_shadow_samples = int(metrics.get("dual_persona_shadow_samples", 0) or 0)
+    dual_conflict_ratio = float(metrics.get("dual_persona_conflict_ratio", 0.0) or 0.0)
+    dual_veto_ratio = float(metrics.get("dual_persona_conservative_veto_ratio", 0.0) or 0.0)
+    dual_override_ratio = float(metrics.get("dual_persona_fused_override_ratio", 0.0) or 0.0)
+    dual_extra_ms_p95 = float(metrics.get("dual_persona_extra_ms_p95", 0.0) or 0.0)
 
     hold_ws_warn = float(getattr(TRADING_RULES, "AI_HOLDING_FAST_REUSE_MAX_WS_AGE_SEC", 1.5) or 1.5)
     gate_ws_warn = float(getattr(TRADING_RULES, "AI_GATEKEEPER_FAST_REUSE_MAX_WS_AGE_SEC", 2.0) or 2.0)
@@ -808,6 +821,41 @@ def _build_watch_items(metrics: dict) -> list[dict]:
         "tone": "warn" if ai_hit_ratio < 5.0 or ai_hit_ratio > 70.0 else "good",
         "comment": "높다고 무조건 좋은 건 아닙니다. 너무 높으면 같은 판단 반복일 수 있습니다.",
     })
+    items.append({
+        "label": "듀얼 페르소나 shadow 표본",
+        "value": f"{dual_shadow_samples}건",
+        "target": "20건 이상",
+        "tone": "warn" if dual_shadow_samples < 20 else "good",
+        "comment": "표본이 너무 적으면 충돌률과 veto 비율 해석이 쉽게 흔들립니다.",
+    })
+    items.append({
+        "label": "듀얼 페르소나 충돌률",
+        "value": f"{dual_conflict_ratio:.1f}%",
+        "target": "15% ~ 35%",
+        "tone": "warn" if dual_shadow_samples >= 10 and (dual_conflict_ratio < 15.0 or dual_conflict_ratio > 35.0) else "good",
+        "comment": "너무 낮으면 중복 판단, 너무 높으면 프롬프트 방향 불일치를 의심할 수 있습니다.",
+    })
+    items.append({
+        "label": "보수 veto 비율",
+        "value": f"{dual_veto_ratio:.1f}%",
+        "target": "8% ~ 25%",
+        "tone": "warn" if dual_shadow_samples >= 10 and (dual_veto_ratio < 8.0 or dual_veto_ratio > 25.0) else "good",
+        "comment": "과도한 veto는 과보수, 지나치게 낮은 veto는 실익 부족일 수 있습니다.",
+    })
+    items.append({
+        "label": "가상 fused override 비율",
+        "value": f"{dual_override_ratio:.1f}%",
+        "target": "5% ~ 15%",
+        "tone": "warn" if dual_shadow_samples >= 10 and (dual_override_ratio < 5.0 or dual_override_ratio > 15.0) else "good",
+        "comment": "shadow 기준으로 Gemini 결과와 다른 결론이 얼마나 나오는지 확인합니다.",
+    })
+    items.append({
+        "label": "듀얼 페르소나 extra latency p95",
+        "value": f"{dual_extra_ms_p95:.0f}ms",
+        "target": f"<= {int(getattr(TRADING_RULES, 'OPENAI_DUAL_PERSONA_MAX_EXTRA_MS', 2500) or 2500)}ms",
+        "tone": "warn" if dual_shadow_samples >= 1 and dual_extra_ms_p95 > float(getattr(TRADING_RULES, 'OPENAI_DUAL_PERSONA_MAX_EXTRA_MS', 2500) or 2500) else "good",
+        "comment": "shadow는 비동기지만, 실제 live 전환 전에 응답시간 분포는 미리 관찰해두는 편이 좋습니다.",
+    })
     return items
 
 
@@ -829,19 +877,35 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
     exit_signals = [e for e in holding_events if e.stage == "exit_signal"]
     gatekeeper_decisions = [e for e in entry_events if e.stage in _GATEKEEPER_DECISION_STAGES]
     gatekeeper_fast_reuse = [e for e in entry_events if e.stage == "gatekeeper_fast_reuse"]
+    dual_persona_events = [e for e in (entry_events + holding_events) if e.stage == "dual_persona_shadow"]
+    dual_gatekeeper_events = [e for e in dual_persona_events if str(e.fields.get("decision_type") or "") == "gatekeeper"]
+    dual_overnight_events = [e for e in dual_persona_events if str(e.fields.get("decision_type") or "") == "overnight"]
 
     holding_review_ms = [float(v) for e in holding_reviews if (v := _safe_float(e.fields.get("review_ms"))) is not None]
     holding_skip_ws_ages = [float(v) for e in holding_skips if (v := _safe_float(e.fields.get("ws_age_sec"))) is not None]
     gatekeeper_eval_ms = [float(v) for e in gatekeeper_decisions if (v := _safe_float(e.fields.get("gatekeeper_eval_ms"))) is not None]
     gatekeeper_fast_ws_ages = [float(v) for e in gatekeeper_fast_reuse if (v := _safe_float(e.fields.get("ws_age_sec"))) is not None]
+    dual_shadow_extra_ms = [float(v) for e in dual_persona_events if (v := _safe_float(e.fields.get("shadow_extra_ms"))) is not None]
 
     holding_ai_cache_modes = Counter(str(e.fields.get("ai_cache", "miss") or "miss") for e in holding_reviews)
     gatekeeper_cache_modes = Counter(str(e.fields.get("gatekeeper_cache", "miss") or "miss") for e in gatekeeper_decisions)
     gatekeeper_actions = Counter(str(e.fields.get("action", "UNKNOWN") or "UNKNOWN") for e in gatekeeper_decisions if e.stage == "blocked_gatekeeper_reject")
     exit_rule_counts = Counter(str(e.fields.get("exit_rule", "-") or "-") for e in exit_signals)
+    dual_persona_agreement = Counter(str(e.fields.get("agreement_bucket", "-") or "-") for e in dual_persona_events)
+    dual_persona_winners = Counter(str(e.fields.get("winner", "-") or "-") for e in dual_persona_events)
+    dual_persona_decision_types = Counter(str(e.fields.get("decision_type", "-") or "-") for e in dual_persona_events)
     trade_rows, trade_warnings = _build_current_trade_rows(target_date)
     history_rows, history_warnings, recent_history_dates = _fetch_trade_history_rows(target_date)
     trend_by_group = _build_strategy_trends(history_rows, recent_history_dates)
+    dual_persona_hard_flags = Counter()
+    for event in dual_persona_events:
+        raw_flags = str(event.fields.get("hard_flags", "") or "")
+        if not raw_flags or raw_flags == "-":
+            continue
+        for flag in raw_flags.split(","):
+            clean_flag = str(flag or "").strip()
+            if clean_flag:
+                dual_persona_hard_flags[clean_flag] += 1
 
     holding_reuse_blockers = Counter()
     for event in holding_events:
@@ -891,6 +955,18 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
     holding_ai_cache_hit_count = holding_ai_cache_modes.get("hit", 0)
     gatekeeper_fast_reuse_count = gatekeeper_cache_modes.get("fast_reuse", 0)
     gatekeeper_ai_cache_hit_count = gatekeeper_cache_modes.get("hit", 0)
+    dual_persona_conflicts = sum(
+        1 for e in dual_persona_events
+        if str(e.fields.get("agreement_bucket", "all_agree") or "all_agree") != "all_agree"
+    )
+    dual_persona_conservative_veto = sum(
+        1 for e in dual_persona_events if _safe_bool(e.fields.get("cons_veto"), False)
+    )
+    dual_persona_fused_override = sum(
+        1
+        for e in dual_persona_events
+        if str(e.fields.get("fused_action", "") or "") != str(e.fields.get("gemini_action", "") or "")
+    )
 
     metrics = {
         "holding_reviews": len(holding_reviews),
@@ -910,6 +986,13 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
         "gatekeeper_allow_entry_age_p95": round(_percentile(gatekeeper_allow_ages, 95), 2) if gatekeeper_allow_ages else 0,
         "gatekeeper_bypass_evaluation_samples": gatekeeper_bypass_evaluation_samples,
         "exit_signals": len(exit_signals),
+        "dual_persona_shadow_samples": len(dual_persona_events),
+        "dual_persona_gatekeeper_samples": len(dual_gatekeeper_events),
+        "dual_persona_overnight_samples": len(dual_overnight_events),
+        "dual_persona_conflict_ratio": _ratio(dual_persona_conflicts, len(dual_persona_events)),
+        "dual_persona_conservative_veto_ratio": _ratio(dual_persona_conservative_veto, len(dual_persona_events)),
+        "dual_persona_fused_override_ratio": _ratio(dual_persona_fused_override, len(dual_persona_events)),
+        "dual_persona_extra_ms_p95": round(_percentile(dual_shadow_extra_ms, 95), 2),
     }
 
     cards = [
@@ -919,6 +1002,10 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
         _metric_card("Gatekeeper 결정", f"{metrics['gatekeeper_decisions']}건", "실제 허용/보류 판단"),
         _metric_card("Gatekeeper fast reuse", f"{metrics['gatekeeper_fast_reuse_ratio']:.1f}%", "같은 장면 재사용 비율"),
         _metric_card("Gatekeeper p95", f"{metrics['gatekeeper_eval_ms_p95']:.0f}ms", "평가 지연 상위 5%"),
+        _metric_card("Dual Persona shadow", f"{metrics['dual_persona_shadow_samples']}건", "Gatekeeper + Overnight shadow 표본"),
+        _metric_card("Dual Persona 충돌률", f"{metrics['dual_persona_conflict_ratio']:.1f}%", "Gemini와 다른 결론 비중"),
+        _metric_card("보수 veto", f"{metrics['dual_persona_conservative_veto_ratio']:.1f}%", "보수 페르소나 veto 비중"),
+        _metric_card("Dual Persona p95", f"{metrics['dual_persona_extra_ms_p95']:.0f}ms", "shadow 추가 응답시간 상위 5%"),
     ]
 
     strategy_rows = _build_strategy_outcomes(
@@ -960,6 +1047,22 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
         key=lambda item: item["gatekeeper_eval_ms"],
         reverse=True,
     )[:8]
+    top_dual_persona_slow = sorted(
+        [
+            {
+                "timestamp": e.timestamp,
+                "name": e.name,
+                "code": e.code,
+                "decision_type": e.fields.get("decision_type", "-"),
+                "shadow_extra_ms": _safe_int(e.fields.get("shadow_extra_ms"), 0) or 0,
+                "winner": e.fields.get("winner", "-"),
+                "agreement_bucket": e.fields.get("agreement_bucket", "-"),
+            }
+            for e in dual_persona_events
+        ],
+        key=lambda item: item["shadow_extra_ms"],
+        reverse=True,
+    )[:8]
 
     return {
         "date": target_date,
@@ -983,9 +1086,14 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
             "gatekeeper_sig_deltas": [{"label": key, "count": value} for key, value in gatekeeper_sig_deltas.most_common()],
             "gatekeeper_actions": [{"label": key, "count": value} for key, value in gatekeeper_actions.most_common()],
             "exit_rules": [{"label": key, "count": value} for key, value in exit_rule_counts.most_common()],
+            "dual_persona_agreement": [{"label": key, "count": value} for key, value in dual_persona_agreement.most_common()],
+            "dual_persona_winners": [{"label": key, "count": value} for key, value in dual_persona_winners.most_common()],
+            "dual_persona_decision_types": [{"label": key, "count": value} for key, value in dual_persona_decision_types.most_common()],
+            "dual_persona_hard_flags": [{"label": key, "count": value} for key, value in dual_persona_hard_flags.most_common()],
         },
         "sections": {
             "top_holding_slow": top_holding_slow,
             "top_gatekeeper_slow": top_gatekeeper_slow,
+            "top_dual_persona_slow": top_dual_persona_slow,
         },
     }

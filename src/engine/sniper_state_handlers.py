@@ -64,6 +64,7 @@ PUBLISH_GATEKEEPER_REPORT = None
 SHOULD_BLOCK_SWING_ENTRY = None
 CONFIRM_CANCEL_OR_RELOAD_REMAINING = None
 SEND_EXIT_BEST_IOC = None
+DUAL_PERSONA_ENGINE = None
 BIG_BITE_STATE = {}
 
 
@@ -83,10 +84,12 @@ def bind_state_dependencies(
     should_block_swing_entry=None,
     confirm_cancel_or_reload_remaining=None,
     send_exit_best_ioc=None,
+    dual_persona_engine=None,
 ):
     global KIWOOM_TOKEN, DB, EVENT_BUS, ACTIVE_TARGETS, COOLDOWNS, ALERTED_STOCKS, HIGHEST_PRICES
     global LAST_AI_CALL_TIMES, LAST_LOG_TIMES, TRADING_RULES, PUBLISH_GATEKEEPER_REPORT
     global SHOULD_BLOCK_SWING_ENTRY, CONFIRM_CANCEL_OR_RELOAD_REMAINING, SEND_EXIT_BEST_IOC
+    global DUAL_PERSONA_ENGINE
 
     if kiwoom_token is not None:
         KIWOOM_TOKEN = kiwoom_token
@@ -117,6 +120,8 @@ def bind_state_dependencies(
         CONFIRM_CANCEL_OR_RELOAD_REMAINING = confirm_cancel_or_reload_remaining
     if send_exit_best_ioc is not None:
         SEND_EXIT_BEST_IOC = send_exit_best_ioc
+    if dual_persona_engine is not None:
+        DUAL_PERSONA_ENGINE = dual_persona_engine
 
 
 def _publish_gatekeeper_report_proxy(stock, code, gatekeeper, allowed):
@@ -234,6 +239,70 @@ def _log_holding_pipeline(stock, code, stage, **fields):
     parts = [f"{key}={_sanitize_pipeline_field(value)}" for key, value in merged_fields.items()]
     suffix = f" {' '.join(parts)}" if parts else ""
     log_info(f"[HOLDING_PIPELINE] {stock.get('name')}({code}) stage={stage}{suffix}")
+
+
+def _log_dual_persona_shadow_result(stock_name, code, strategy, payload):
+    stock_stub = {"name": stock_name}
+    if not isinstance(payload, dict):
+        _log_entry_pipeline(
+            stock_stub,
+            code,
+            "dual_persona_shadow_error",
+            strategy=strategy,
+            decision_type="gatekeeper",
+            error="invalid_shadow_payload",
+        )
+        return
+
+    if payload.get("error"):
+        _log_entry_pipeline(
+            stock_stub,
+            code,
+            "dual_persona_shadow_error",
+            strategy=strategy,
+            decision_type=payload.get("decision_type", "gatekeeper"),
+            error=payload.get("error", "unknown"),
+            shadow_extra_ms=payload.get("shadow_extra_ms", 0),
+        )
+        return
+
+    _log_entry_pipeline(
+        stock_stub,
+        code,
+        "dual_persona_shadow",
+        strategy=strategy,
+        decision_type=payload.get("decision_type", "gatekeeper"),
+        dual_mode=payload.get("mode", "shadow"),
+        gemini_action=payload.get("gemini_action", ""),
+        gemini_score=payload.get("gemini_score", 0),
+        aggr_action=payload.get("aggr_action", ""),
+        aggr_score=payload.get("aggr_score", 0),
+        cons_action=payload.get("cons_action", ""),
+        cons_score=payload.get("cons_score", 0),
+        cons_veto=str(bool(payload.get("cons_veto", False))).lower(),
+        fused_action=payload.get("fused_action", ""),
+        fused_score=payload.get("fused_score", 0),
+        winner=payload.get("winner", ""),
+        agreement_bucket=payload.get("agreement_bucket", ""),
+        hard_flags=",".join(payload.get("hard_flags", []) or []) or "-",
+        shadow_extra_ms=payload.get("shadow_extra_ms", 0),
+    )
+
+
+def _submit_gatekeeper_dual_persona_shadow(*, stock_name, code, strategy, realtime_ctx, gatekeeper):
+    if DUAL_PERSONA_ENGINE is None:
+        return
+    try:
+        DUAL_PERSONA_ENGINE.submit_gatekeeper_shadow(
+            stock_name=stock_name,
+            stock_code=code,
+            strategy=strategy,
+            realtime_ctx=realtime_ctx,
+            gemini_result=gatekeeper,
+            callback=lambda payload: _log_dual_persona_shadow_result(stock_name, code, strategy, payload),
+        )
+    except Exception as e:
+        log_error(f"🚨 [Gatekeeper 듀얼 페르소나 shadow 제출 실패] {stock_name}({code}): {e}")
 
 
 def _reason_codes(**checks) -> str:
@@ -1338,6 +1407,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                 return
 
             try:
+                realtime_ctx = None
                 gatekeeper_fast_sig = _build_gatekeeper_fast_signature(stock, ws_data, strategy, score)
                 gatekeeper_fast_snapshot = _build_gatekeeper_fast_snapshot(stock, ws_data, strategy, score)
                 gatekeeper_fast_reuse_sec = _resolve_gatekeeper_fast_reuse_sec()
@@ -1464,6 +1534,14 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                 stock['last_gatekeeper_allow_entry'] = gatekeeper_allow
                 stock['last_gatekeeper_cache_mode'] = gatekeeper_cache_mode
                 stock['last_gatekeeper_fast_signature'] = gatekeeper_fast_sig
+                if is_new_evaluation and realtime_ctx is not None:
+                    _submit_gatekeeper_dual_persona_shadow(
+                        stock_name=stock['name'],
+                        code=code,
+                        strategy=strategy,
+                        realtime_ctx=realtime_ctx,
+                        gatekeeper=gatekeeper,
+                    )
             except Exception as e:
                 log_error(f"🚨 [{strategy} Gatekeeper 오류] {stock['name']}({code}): {e}")
                 cooldowns[code] = time.time() + gatekeeper_error_cd

@@ -1624,6 +1624,7 @@ def performance_tuning_preview():
     breakdowns = report.get('breakdowns', {}) or {}
     top_holding_slow = report.get('sections', {}).get('top_holding_slow', []) or []
     top_gatekeeper_slow = report.get('sections', {}).get('top_gatekeeper_slow', []) or []
+    top_dual_persona_slow = report.get('sections', {}).get('top_dual_persona_slow', []) or []
 
     template = """
     <!doctype html>
@@ -1753,6 +1754,7 @@ def performance_tuning_preview():
             <div class="chip">조회 시작: {{ report.since or '전체 구간' }}</div>
             <div class="chip">보유 AI 리뷰 {{ metrics.holding_reviews }}건</div>
             <div class="chip">Gatekeeper 결정 {{ metrics.gatekeeper_decisions }}건</div>
+            <div class="chip">Dual Persona shadow {{ metrics.dual_persona_shadow_samples or 0 }}건</div>
             <div class="chip">성과 기준: {{ meta_info.outcome_basis or '기준일 누적 성과' }}</div>
             <div class="chip">추세 기준: {{ meta_info.trend_basis or '최근 거래일 rolling 성과' }}</div>
           </div>
@@ -1980,6 +1982,72 @@ def performance_tuning_preview():
 
         <div class="section two-col">
           <div class="card">
+            <h2>Dual Persona 결정 타입</h2>
+            <div class="list">
+              {% for item in breakdowns.dual_persona_decision_types %}
+                <div class="row">
+                  <div class="title">{{ item.label }}</div>
+                  <div class="meta">{{ item.count }}건</div>
+                </div>
+              {% else %}
+                <div class="meta">아직 shadow 표본이 없습니다.</div>
+              {% endfor %}
+            </div>
+            <div class="meta" style="margin-top: 12px;">
+              Gatekeeper {{ metrics.dual_persona_gatekeeper_samples or 0 }}건 / Overnight {{ metrics.dual_persona_overnight_samples or 0 }}건
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>Dual Persona 합의도</h2>
+            <div class="list">
+              {% for item in breakdowns.dual_persona_agreement %}
+                <div class="row">
+                  <div class="title">{{ item.label }}</div>
+                  <div class="meta">{{ item.count }}건</div>
+                </div>
+              {% else %}
+                <div class="meta">아직 shadow 표본이 없습니다.</div>
+              {% endfor %}
+            </div>
+            <div class="meta" style="margin-top: 12px;">
+              충돌률 {{ metrics.dual_persona_conflict_ratio or 0 }}% / 보수 veto {{ metrics.dual_persona_conservative_veto_ratio or 0 }}% / override {{ metrics.dual_persona_fused_override_ratio or 0 }}%
+            </div>
+          </div>
+        </div>
+
+        <div class="section two-col">
+          <div class="card">
+            <h2>Dual Persona winner 분포</h2>
+            <div class="list">
+              {% for item in breakdowns.dual_persona_winners %}
+                <div class="row">
+                  <div class="title">{{ item.label }}</div>
+                  <div class="meta">{{ item.count }}건</div>
+                </div>
+              {% else %}
+                <div class="meta">아직 shadow 표본이 없습니다.</div>
+              {% endfor %}
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>Dual Persona hard flag 분포</h2>
+            <div class="list">
+              {% for item in breakdowns.dual_persona_hard_flags %}
+                <div class="row">
+                  <div class="title">{{ item.label }}</div>
+                  <div class="meta">{{ item.count }}건</div>
+                </div>
+              {% else %}
+                <div class="meta">아직 hard flag 데이터가 없습니다.</div>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+
+        <div class="section two-col">
+          <div class="card">
             <h2>Gatekeeper 재사용 차단 사유</h2>
             <div class="list">
               {% for item in breakdowns.gatekeeper_reuse_blockers %}
@@ -2067,6 +2135,20 @@ def performance_tuning_preview():
             </div>
           </div>
         </div>
+
+        <div class="section card">
+          <h2>느린 Dual Persona shadow 상위</h2>
+          <div class="list">
+            {% for item in top_dual_persona_slow %}
+              <div class="row">
+                <div class="title">{{ item.name }} ({{ item.code }})</div>
+                <div class="meta">{{ item.timestamp }} / {{ item.decision_type }} / {{ item.shadow_extra_ms }}ms / {{ item.winner }} / {{ item.agreement_bucket }}</div>
+              </div>
+            {% else %}
+              <div class="meta">아직 shadow 표본이 없습니다.</div>
+            {% endfor %}
+          </div>
+        </div>
       </div>
     </body>
     </html>
@@ -2083,6 +2165,7 @@ def performance_tuning_preview():
         breakdowns=breakdowns,
         top_holding_slow=top_holding_slow,
         top_gatekeeper_slow=top_gatekeeper_slow,
+        top_dual_persona_slow=top_dual_persona_slow,
     )
 
 

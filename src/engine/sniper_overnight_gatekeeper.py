@@ -19,6 +19,7 @@ _send_market_exit_now = None
 _is_ok_response = None
 _extract_ord_no = None
 process_sell_cancellation = None
+DUAL_PERSONA_ENGINE = None
 
 
 def bind_overnight_dependencies(
@@ -34,10 +35,11 @@ def bind_overnight_dependencies(
     is_ok_response=None,
     extract_ord_no=None,
     process_sell_cancellation_fn=None,
+    dual_persona_engine=None,
 ):
     global KIWOOM_TOKEN, DB, WS_MANAGER, event_bus, ACTIVE_TARGETS, escape_markdown
     global _confirm_cancel_or_reload_remaining, _send_market_exit_now, _is_ok_response
-    global _extract_ord_no, process_sell_cancellation
+    global _extract_ord_no, process_sell_cancellation, DUAL_PERSONA_ENGINE
 
     if kiwoom_token is not None:
         KIWOOM_TOKEN = kiwoom_token
@@ -61,6 +63,18 @@ def bind_overnight_dependencies(
         _extract_ord_no = extract_ord_no
     if process_sell_cancellation_fn is not None:
         process_sell_cancellation = process_sell_cancellation_fn
+    if dual_persona_engine is not None:
+        DUAL_PERSONA_ENGINE = dual_persona_engine
+
+
+def _sanitize_pipeline_field(value):
+    return str(value).replace(" ", "|")
+
+
+def _log_holding_pipeline(name, code, stage, **fields):
+    parts = [f"{key}={_sanitize_pipeline_field(value)}" for key, value in fields.items()]
+    suffix = f" {' '.join(parts)}" if parts else ""
+    log_info(f"[HOLDING_PIPELINE] {name}({code}) stage={stage}{suffix}")
 
 def _find_active_target_by_code(code):
     code = str(code).strip()[:6]
@@ -149,6 +163,69 @@ def _publish_scalping_overnight_decision(stock_name, code, decision, action_take
         'TELEGRAM_BROADCAST',
         {'message': msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'Markdown'}
     )
+
+
+def _log_overnight_dual_persona_shadow_result(stock_name, code, strategy, payload):
+    if not isinstance(payload, dict):
+        _log_holding_pipeline(
+            stock_name,
+            code,
+            "dual_persona_shadow_error",
+            strategy=strategy,
+            decision_type="overnight",
+            error="invalid_shadow_payload",
+        )
+        return
+
+    if payload.get("error"):
+        _log_holding_pipeline(
+            stock_name,
+            code,
+            "dual_persona_shadow_error",
+            strategy=strategy,
+            decision_type=payload.get("decision_type", "overnight"),
+            error=payload.get("error", "unknown"),
+            shadow_extra_ms=payload.get("shadow_extra_ms", 0),
+        )
+        return
+
+    _log_holding_pipeline(
+        stock_name,
+        code,
+        "dual_persona_shadow",
+        strategy=strategy,
+        decision_type=payload.get("decision_type", "overnight"),
+        dual_mode=payload.get("mode", "shadow"),
+        gemini_action=payload.get("gemini_action", ""),
+        gemini_score=payload.get("gemini_score", 0),
+        aggr_action=payload.get("aggr_action", ""),
+        aggr_score=payload.get("aggr_score", 0),
+        cons_action=payload.get("cons_action", ""),
+        cons_score=payload.get("cons_score", 0),
+        cons_veto=str(bool(payload.get("cons_veto", False))).lower(),
+        fused_action=payload.get("fused_action", ""),
+        fused_score=payload.get("fused_score", 0),
+        winner=payload.get("winner", ""),
+        agreement_bucket=payload.get("agreement_bucket", ""),
+        hard_flags=",".join(payload.get("hard_flags", []) or []) or "-",
+        shadow_extra_ms=payload.get("shadow_extra_ms", 0),
+    )
+
+
+def _submit_overnight_dual_persona_shadow(stock_name, code, realtime_ctx, decision):
+    if DUAL_PERSONA_ENGINE is None:
+        return
+    try:
+        DUAL_PERSONA_ENGINE.submit_overnight_shadow(
+            stock_name=stock_name,
+            stock_code=code,
+            strategy="SCALPING",
+            realtime_ctx=realtime_ctx,
+            gemini_result=decision,
+            callback=lambda payload: _log_overnight_dual_persona_shadow_result(stock_name, code, "SCALPING", payload),
+        )
+    except Exception as e:
+        log_error(f"🚨 [15:15 EOD 듀얼 페르소나 shadow 제출 실패] {stock_name}({code}): {e}")
 
 
 def _execute_scalping_sell_today(record, mem_stock=None):
@@ -243,6 +320,7 @@ def run_scalping_overnight_gatekeeper(ai_engine=None):
 
         ctx = _build_scalping_overnight_ctx(record, mem_stock, ws_data)
         decision = ai_engine.evaluate_scalping_overnight_decision(name, code, ctx)
+        _submit_overnight_dual_persona_shadow(name, code, ctx, decision)
         action = str(decision.get('action', 'SELL_TODAY') or 'SELL_TODAY').upper()
 
         if action == 'HOLD_OVERNIGHT':

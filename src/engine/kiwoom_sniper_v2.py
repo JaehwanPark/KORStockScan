@@ -123,6 +123,7 @@ from src.engine import kiwoom_orders
 from src.engine.kiwoom_websocket import KiwoomWSManager
 from src.engine.signal_radar import SniperRadar
 from src.engine.ai_engine import GeminiSniperEngine
+from src.engine.ai_engine_openai_v2 import OpenAIDualPersonaShadowEngine
 # from src.engine.ai_engine_openai import OpenAISniperEngine
 
 # 💡 VIX, 유가지표 임포트
@@ -147,6 +148,7 @@ bind_condition_dependencies(escape_markdown_fn=escape_markdown)
 highest_prices = {}
 alerted_stocks = set()
 cooldowns = {}  # 스캘핑 뇌동매매 방지용 쿨타임 관리
+DUAL_PERSONA_ENGINE = None
 
 KIWOOM_TOKEN = None
 WS_MANAGER = None
@@ -280,6 +282,7 @@ def _ensure_state_handler_deps():
         'should_block_swing_entry': should_block_swing_entry_by_market_regime,
         'confirm_cancel_or_reload_remaining': _confirm_cancel_or_reload_remaining,
         'send_exit_best_ioc': _send_exit_best_ioc,
+        'dual_persona_engine': DUAL_PERSONA_ENGINE,
     }
     if any(_STATE_HANDLER_DEPS.get(k) is not v for k, v in snapshot.items()):
         bind_state_dependencies(**snapshot)
@@ -358,6 +361,7 @@ def _ensure_overnight_deps():
         'is_ok_response': _is_ok_response,
         'extract_ord_no': _extract_ord_no,
         'process_sell_cancellation_fn': process_sell_cancellation,
+        'dual_persona_engine': DUAL_PERSONA_ENGINE,
     }
     if any(_OVERNIGHT_DEPS.get(k) is not v for k, v in snapshot.items()):
         bind_overnight_dependencies(**snapshot)
@@ -859,6 +863,8 @@ def run_sniper(is_test_mode=False):
     # GEMINI_API_KEY, GEMINI_API_KEY_2, GEMINI_API_KEY_3 등을 모두 가져옵니다.
     ai_engine = None
     AI_ENGINE = None
+    dual_persona_engine = None
+    global DUAL_PERSONA_ENGINE
 
     api_keys = [v for k, v in CONF.items() if k.startswith("GEMINI_API_KEY") and v]
     if not api_keys:
@@ -868,7 +874,25 @@ def run_sniper(is_test_mode=False):
         ai_engine = GeminiSniperEngine(api_keys=api_keys)
         AI_ENGINE = ai_engine
         print(f"🤖 제미나이 AI 엔진이 {len(api_keys)}개의 API 키로 가동됩니다.")
+
+    openai_dual_enabled = bool(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_ENABLED", True))
+    openai_shadow_mode = bool(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_SHADOW_MODE", True))
+    openai_api_keys = [v for k, v in CONF.items() if k.startswith("OPENAI_API_KEY") and v]
+    if openai_dual_enabled and openai_shadow_mode and openai_api_keys:
+        try:
+            dual_persona_engine = OpenAIDualPersonaShadowEngine(api_keys=openai_api_keys)
+            DUAL_PERSONA_ENGINE = dual_persona_engine
+            print(f"🧠 OpenAI 듀얼 페르소나 shadow 엔진이 {len(openai_api_keys)}개의 API 키로 가동됩니다.")
+        except Exception as e:
+            log_error(f"🚨 OpenAI 듀얼 페르소나 엔진 초기화 실패: {e}")
+            dual_persona_engine = None
+            DUAL_PERSONA_ENGINE = None
+    elif openai_dual_enabled and not openai_api_keys:
+        log_info("ℹ️ OPENAI_API_KEY 미설정으로 듀얼 페르소나 shadow 엔진은 비활성화됩니다.")
+
     bind_analysis_dependencies(ai_engine=AI_ENGINE)
+    bind_state_dependencies(dual_persona_engine=DUAL_PERSONA_ENGINE)
+    bind_overnight_dependencies(dual_persona_engine=DUAL_PERSONA_ENGINE)
 
     bind_s15_dependencies(
         kiwoom_token=KIWOOM_TOKEN,
