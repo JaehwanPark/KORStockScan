@@ -112,6 +112,11 @@ import src.engine.sniper_market_regime as sniper_market_regime
 from src.engine.sniper_market_regime import bind_market_regime_dependencies
 import src.engine.sniper_trade_utils as sniper_trade_utils
 from src.engine.trade_pause_control import bind_event_bus as bind_trade_pause_event_bus, is_buy_side_paused
+from src.engine.sniper_position_tags import (
+    normalize_position_tag,
+    normalize_strategy,
+    target_identity,
+)
 
 # 💡 뇌(AI)와 눈(웹소켓, 레이더) 임포트
 from src.engine import kiwoom_orders
@@ -416,9 +421,8 @@ def check_watching_conditions(stock, code, ws_data, admin_id, radar=None, ai_eng
     """
     global LAST_AI_CALL_TIMES, cooldowns, alerted_stocks, highest_prices
     
-    raw_strategy = (stock.get('strategy') or 'KOSPI_ML').upper()
-    strategy = 'SCALPING' if raw_strategy in ['SCALPING', 'SCALP'] else raw_strategy
-    pos_tag = stock.get('position_tag', 'MIDDLE')
+    strategy = normalize_strategy(stock.get('strategy'))
+    pos_tag = normalize_position_tag(strategy, stock.get('position_tag'))
     
     now = datetime.now()
     now_t = now.time()
@@ -676,7 +680,7 @@ def evaluate_swing_exit(stock, code, ws_data, curr_p, buy_p, profit_rate, peak_p
             return f"KOSDAQ 손절선 도달 (profit_rate={profit_rate:.2f}%)"
         return None
 
-    pos_tag = stock.get('position_tag', 'MIDDLE')
+    pos_tag = normalize_position_tag(strategy, stock.get('position_tag'))
     if pos_tag == 'BREAKOUT':
         current_stop_loss = getattr(TRADING_RULES, 'STOP_LOSS_BREAKOUT')
     elif pos_tag == 'BOTTOM':
@@ -886,7 +890,8 @@ def run_sniper(is_test_mode=False):
     # ==========================================
     for t in ACTIVE_TARGETS:
         t['added_time'] = time.time()
-        t.setdefault('position_tag', 'MIDDLE')
+        t['strategy'] = normalize_strategy(t.get('strategy'))
+        t['position_tag'] = normalize_position_tag(t['strategy'], t.get('position_tag'))
 
     targets = ACTIVE_TARGETS
     last_db_poll_time = time.time()
@@ -930,10 +935,12 @@ def run_sniper(is_test_mode=False):
             if time.time() - last_db_poll_time > 5:
                 db_targets = DB.get_active_targets() or []
                 for dt in db_targets:
+                    dt['strategy'] = normalize_strategy(dt.get('strategy'))
+                    dt['position_tag'] = normalize_position_tag(dt['strategy'], dt.get('position_tag'))
                     code = str(dt.get('code', '')).strip()[:6]
-                    if not any(str(t.get('code', '')).strip()[:6] == code for t in targets):
+                    identity = target_identity(code, dt['strategy'])
+                    if not any(target_identity(t.get('code', ''), t.get('strategy', '')) == identity for t in targets):
                         dt['added_time'] = time.time()
-                        dt.setdefault('position_tag', 'MIDDLE')
                         targets.append(dt)
                         event_bus.publish("COMMAND_WS_REG", {"codes": [code]})
                 last_db_poll_time = time.time()

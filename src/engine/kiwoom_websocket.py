@@ -475,6 +475,10 @@ class KiwoomWSManager:
                 target_keywords = [
                     "scalp_candid_aggressive_01", # 09:00 ~ 09:30 초단타 후보군 (공격형)
                     "scalp_candid_normal_01", # 09:00 ~ 09:30 초단타 후보군 (일반형)
+                    "scalp_open_reclaim_01", # 09:03 ~ 09:20 시초 회복형 스캘핑
+                    "scalp_vwap_reclaim_01", # 10:00 ~ 14:00 VWAP 재안착형 스캘핑
+                    "scalp_dryup_squeeze_01", # 09:30 ~ 13:30 거래마름 스퀴즈형 스캘핑
+                    "scalp_preclose_01", # 14:30 ~ 15:20 장마감 전 스캘핑
                     "scalp_strong_01",  # 09:20 ~ 11:00 스캘핑 강세군 (공격형)
                     "scalp_underpress_01",  # 09:40 ~ 13:00 스캘핑 약세군 (수동)
                     "scalp_shooting_01",   # 09:40 ~ 13:30 스캘핑 슈팅스타 (공격형)

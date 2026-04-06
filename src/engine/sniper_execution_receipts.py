@@ -11,6 +11,12 @@ from src.engine.sniper_entry_state import (
     move_orders_to_terminal,
 )
 from src.engine.sniper_scale_in_utils import record_add_history_event
+from src.engine.sniper_position_tags import (
+    default_position_tag_for_strategy,
+    is_default_position_tag,
+    normalize_position_tag,
+    normalize_strategy,
+)
 from src.utils import kiwoom_utils
 from src.utils.logger import log_error, log_info
 from src.engine.sniper_time import TIME_15_30
@@ -498,9 +504,9 @@ def handle_real_execution(exec_data):
                 pending_qty = int(target_stock.get('pending_add_qty', 0) or 0)
 
                 protection_ok = _apply_scale_in_protection(target_stock, add_type)
-                raw_strategy = (target_stock.get('strategy') or 'KOSPI_ML').upper()
-                pos_tag = target_stock.get('position_tag', 'MIDDLE')
-                if raw_strategy in ['SCALPING', 'SCALP'] and pos_tag == 'MIDDLE':
+                strategy = normalize_strategy(target_stock.get('strategy'))
+                pos_tag = normalize_position_tag(strategy, target_stock.get('position_tag'))
+                if strategy == 'SCALPING' and is_default_position_tag(strategy, pos_tag):
                     base_buy_price = int(target_stock.get('buy_price') or exec_price or 0)
                     target_stock['preset_tp_price'] = kiwoom_utils.get_target_price_up(base_buy_price, 1.5)
                     protection_ok = _refresh_scalp_preset_exit_order(target_stock, code, new_qty) and protection_ok
@@ -613,10 +619,11 @@ def handle_real_execution(exec_data):
                     target_stock.pop('entry_fill_amount', None)
                     target_stock.pop('entry_bundle_id', None)
 
-                raw_strategy = (target_stock.get('strategy') or 'KOSPI_ML').upper()
-                pos_tag = target_stock.get('position_tag', 'MIDDLE')
+                strategy = normalize_strategy(target_stock.get('strategy'))
+                pos_tag = normalize_position_tag(strategy, target_stock.get('position_tag'))
+                target_stock['position_tag'] = pos_tag
 
-                if raw_strategy in ['SCALPING', 'SCALP'] and pos_tag == 'MIDDLE':
+                if strategy == 'SCALPING' and is_default_position_tag(strategy, pos_tag):
                     target_stock['exit_mode'] = 'SCALP_PRESET_TP'
 
                     # 가능한 경우 누적 buy_qty / buy_price 기준 사용, 불가하면 exec_price 폴백
@@ -692,8 +699,7 @@ def handle_real_execution(exec_data):
                     else:
                         profit_rate = 0.0
                         print(f"⚠️ [수익률 계산 불가] ID {target_id}의 매수가(buy_price)가 누락되어 수익률을 0%로 처리합니다.")
-                    raw_strategy = (record.strategy or target_stock.get('strategy') or 'KOSPI_ML').upper()
-                    strategy = 'SCALPING' if raw_strategy in ['SCALPING', 'SCALP'] else raw_strategy
+                    strategy = normalize_strategy(record.strategy or target_stock.get('strategy') or 'KOSPI_ML')
                     # ✅ 일관성 통일: 15:30 이전까지만 스캘핑 부활
                     is_scalp_revive = (strategy == 'SCALPING') and (now_t < TIME_15_30)
             except Exception as e:
@@ -702,6 +708,10 @@ def handle_real_execution(exec_data):
 
             if is_scalp_revive:
             # 스캘핑 부활: 동기 DB 업데이트 (새 레코드 삽입 필요)
+                revived_position_tag = normalize_position_tag(
+                    'SCALPING',
+                    target_stock.get('position_tag') or default_position_tag_for_strategy('SCALPING'),
+                )
                 try:
                     with DB.get_session() as session:
                         record = session.query(RecommendationHistory).filter_by(id=target_id).first()
@@ -721,7 +731,7 @@ def handle_real_execution(exec_data):
                             status='WATCHING',
                             strategy='SCALPING',
                             trade_type='SCALP',
-                            position_tag='MIDDLE',
+                            position_tag=revived_position_tag,
                             prob=record.prob
                         )
                         session.add(new_record)
@@ -761,7 +771,7 @@ def handle_real_execution(exec_data):
                 target_stock['buy_price'] = 0
                 target_stock['buy_qty'] = 0
                 target_stock['added_time'] = time.time()
-                target_stock['position_tag'] = 'MIDDLE'
+                target_stock['position_tag'] = revived_position_tag
                 move_orders_to_terminal(target_stock, reason='sell_revive_cleanup')
                 for key in [
                     'odno', 'order_time', 'order_price', 'buy_time',
