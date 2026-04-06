@@ -356,8 +356,23 @@ class GeminiSniperEngine:
         self.key_cycle = cycle(self.api_keys) 
         self._rotate_client()
 
-        # self.current_model_name = 'gemini-flash-lite-latest'
-        self.current_model_name = 'gemini-2.5-flash-lite'
+        # 모델 티어 라우팅: 초저지연 / 균형형 / 심층추론
+        self.model_tier1_fast = getattr(
+            TRADING_RULES,
+            'AI_MODEL_TIER1',
+            'models/gemini-3.1-flash-lite-preview',
+        )
+        self.model_tier2_balanced = getattr(
+            TRADING_RULES,
+            'AI_MODEL_TIER2',
+            'models/gemini-3-flash-preview',
+        )
+        self.model_tier3_deep = getattr(
+            TRADING_RULES,
+            'AI_MODEL_TIER3',
+            'models/gemini-3.1-pro-preview-customtools',
+        )
+        self.current_model_name = self.model_tier1_fast
         self.lock = threading.Lock()
         self.last_call_time = 0
         self.min_interval = getattr(TRADING_RULES, 'GEMINI_ENGINE_MIN_INTERVAL', 0.5)
@@ -375,7 +390,10 @@ class GeminiSniperEngine:
         self.gatekeeper_cache_ttl = getattr(TRADING_RULES, 'AI_GATEKEEPER_RESULT_CACHE_TTL_SEC', 12.0)
         self._analysis_cache = {}
         self._gatekeeper_cache = {}
-        print(f"🧠 [AI 엔진] {len(self.api_keys)}개 키 로테이션 가동! (선봉: {self.current_model_name})")
+        print(
+            f"🧠 [AI 엔진] {len(self.api_keys)}개 키 로테이션 가동! "
+            f"(T1: {self.model_tier1_fast} / T2: {self.model_tier2_balanced} / T3: {self.model_tier3_deep})"
+        )
 
     def _rotate_client(self):
         self.current_key = next(self.key_cycle)
@@ -385,6 +403,19 @@ class GeminiSniperEngine:
             self.current_api_key_index = self.api_keys.index(self.current_key)
         except ValueError:
             self.current_api_key_index = 0
+
+    def _get_tier1_model(self):
+        return getattr(
+            self,
+            "model_tier1_fast",
+            getattr(self, "current_model_name", "models/gemini-3.1-flash-lite-preview"),
+        )
+
+    def _get_tier2_model(self):
+        return getattr(self, "model_tier2_balanced", self._get_tier1_model())
+
+    def _get_tier3_model(self):
+        return getattr(self, "model_tier3_deep", self._get_tier2_model())
 
     def _normalize_for_cache(self, value):
         if isinstance(value, dict):
@@ -977,12 +1008,11 @@ class GeminiSniperEngine:
             if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
                 prompt = SWING_SYSTEM_PROMPT
                 formatted_data = self._format_swing_market_data(ws_data, recent_candles, program_net_qty)
-                # 스윙은 조금 더 깊은 사고력이 필요하므로 Flash 대신 Pro 모델을 고려할 수도 있습니다.
-                target_model = "gemini-pro-latest"
+                target_model = self._get_tier2_model()
             else:
                 prompt = SCALPING_SYSTEM_PROMPT
                 formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
-                target_model = self.current_model_name # 속도가 생명인 flash-lite 유지
+                target_model = self._get_tier1_model()
 
             result = self._call_gemini_safe(
                 prompt,
@@ -1061,7 +1091,7 @@ class GeminiSniperEngine:
                     enriched_input,
                     require_json=False,
                     context_name="시장 브리핑",
-                    model_override="gemini-pro-latest",
+                    model_override=self._get_tier3_model(),
                     use_google_search=True,
                 )
             except Exception as e:
@@ -1283,7 +1313,7 @@ class GeminiSniperEngine:
                     user_input,
                     require_json=False,
                     context_name=context_name,
-                    model_override="gemini-pro-latest"
+                    model_override=self._get_tier2_model()
                 )
             except Exception as e:
                 log_error(f"🚨 [{context_name}] AI 에러: {e}")
@@ -1378,7 +1408,7 @@ class GeminiSniperEngine:
                     user_input,
                     require_json=True,
                     context_name=f"SCALP_OVERNIGHT:{stock_name}",
-                    model_override="gemini-pro-latest"
+                    model_override=self._get_tier2_model()
                 )
                 action = str(result.get('action', 'SELL_TODAY') or 'SELL_TODAY').upper()
                 if action not in {'SELL_TODAY', 'HOLD_OVERNIGHT'}:
@@ -1416,7 +1446,7 @@ class GeminiSniperEngine:
                     user_input,
                     require_json=True,
                     context_name=f"COND_ENTRY:{stock_name}",
-                    model_override="gemini-pro-latest"
+                    model_override=self._get_tier1_model()
                 )
                 return result
             except Exception as e:
@@ -1445,7 +1475,7 @@ class GeminiSniperEngine:
                     user_input,
                     require_json=True,
                     context_name=f"COND_EXIT:{stock_name}",
-                    model_override="gemini-pro-latest"
+                    model_override=self._get_tier1_model()
                 )
                 return result
             except Exception as e:
@@ -1460,7 +1490,7 @@ class GeminiSniperEngine:
                 }
 
     # ==========================================
-    # 🔍 [신규] 장 마감 후 내일의 주도주 분석 (gemini-3.0-pro 전용)
+    # 🔍 [신규] 장 마감 후 내일의 주도주 분석 (Tier 3 Pro 전용)
     # ==========================================
 
     def _render_eod_tomorrow_markdown(self, market_summary, one_point_lesson, top5):
@@ -1520,7 +1550,7 @@ class GeminiSniperEngine:
                     user_input,
                     require_json=True,
                     context_name="종가베팅 TOP5 JSON",
-                    model_override="gemini-pro-latest",
+                    model_override=self._get_tier3_model(),
                     use_google_search=True
                 )
 

@@ -192,6 +192,9 @@ class TradingConfig:
     # ==========================================
     # 🎯 AI 엔진 제어값 (제미나이)
     # ==========================================
+    AI_MODEL_TIER1: str = "models/gemini-3.1-flash-lite-preview"  # 초단타/조건검색용 초저지연 티어
+    AI_MODEL_TIER2: str = "models/gemini-3-flash-preview"  # 스윙/실시간 리포트용 균형 티어
+    AI_MODEL_TIER3: str = "models/gemini-3.1-pro-preview-customtools"  # 시장 브리핑/EOD용 심층 추론 티어
     GEMINI_ENGINE_MIN_INTERVAL: float = 0.5 # 구글 서버에 쏘는 최소 간격 (초 단위, 0.5초 = 500ms)
     AI_MAX_CONSECUTIVE_FAILURES: int = 5   # 연속 API 실패 시 AI 엔진 일시 중단 임계값
     AI_SCORE_THRESHOLD_KOSDAQ: int = 60    # KOSDAQ_ML AI 점수 매수 보류 임계값 (60점 미만 보류)
