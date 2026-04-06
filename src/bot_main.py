@@ -53,14 +53,14 @@ from src.utils.constants import TRADING_RULES
 # ==========================================
 class DualLogger:
     def __init__(self):
-        if not os.path.exists('logs'):
-            os.makedirs('logs')
+        log_dir = PROJECT_ROOT / 'logs'
+        log_dir.mkdir(parents=True, exist_ok=True)
         
         self.logger = logging.getLogger('SniperBot')
         self.logger.setLevel(logging.INFO)
         
         file_handler = TimedRotatingFileHandler(
-            filename='logs/bot_history.log',
+            filename=str(log_dir / 'bot_history.log'),
             when='midnight',
             interval=1,
             backupCount=getattr(TRADING_RULES, 'BOT_HISTORY_BACKUP_COUNT', 7),
