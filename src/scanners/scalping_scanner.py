@@ -117,12 +117,15 @@ def run_scalper(is_test_mode=False):
                     with db.get_session() as session:
                         today_date = datetime.now().date()
 
-                        record = session.query(RecommendationHistory).filter_by(
+                        record = db.find_reusable_watching_record(
+                            session,
                             rec_date=today_date,
-                            stock_code=code
-                        ).first()
+                            stock_code=code,
+                            strategy='SCALPING',
+                        )
 
                         if record:
+                            record.stock_name = t['Name']
                             if record.status in ('WATCHING', 'COMPLETED', 'EXPIRED'):
                                 record.strategy = 'SCALPING'
                                 record.buy_price = 0

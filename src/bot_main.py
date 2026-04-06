@@ -44,6 +44,8 @@ from src.engine.sniper_strength_shadow_feedback import (
     format_shadow_feedback_summary,
 )
 from src.engine.daily_report_service import save_daily_report, build_daily_report
+from src.engine.log_archive_service import archive_target_date_logs, save_monitor_snapshots_for_date
+from src.engine.strategy_position_performance_report import sync_trade_performance_for_date
 from src.utils.constants import TRADING_RULES
 
 # ==========================================
@@ -207,6 +209,37 @@ def generate_daily_report_job(target_date: str | None = None):
         print(f"⚠️ [시스템] 일일 리포트 생성 실패: {e}")
         return None
 
+
+def generate_monitor_archive_job(target_date: str | None = None):
+    """장마감 핵심 모니터 요약과 날짜별 gzip 로그 아카이브를 생성합니다."""
+    resolved_date = str(target_date or datetime.now().strftime("%Y-%m-%d"))
+    try:
+        perf_sync = sync_trade_performance_for_date(resolved_date)
+        snapshot_paths = save_monitor_snapshots_for_date(resolved_date)
+        archived_logs = archive_target_date_logs(
+            resolved_date,
+            [
+                PROJECT_ROOT / "logs" / "sniper_state_handlers_info.log",
+                PROJECT_ROOT / "logs" / "sniper_execution_receipts_info.log",
+            ],
+        )
+        print(
+            f"🗂️ [시스템] 모니터 스냅샷/로그 아카이브 완료: "
+            f"date={resolved_date} snapshots={len(snapshot_paths)} archived_logs={len(archived_logs)}"
+        )
+        return {
+            "target_date": resolved_date,
+            "performance_sync": perf_sync,
+            "snapshots": snapshot_paths,
+            "archived_logs": archived_logs,
+        }
+    except Exception as e:
+        from src.utils.logger import log_error
+
+        log_error(f"모니터 스냅샷/로그 아카이브 실패: {e}")
+        print(f"⚠️ [시스템] 모니터 스냅샷/로그 아카이브 실패: {e}")
+        return None
+
 # ==========================================
 # 🎯 메인 실행부 (Main Thread)
 # ==========================================
@@ -278,6 +311,7 @@ if __name__ == '__main__':
     morning_report_sent = False
     entry_metrics_report_sent = False
     daily_report_sent = False
+    monitor_archive_sent = False
 
     while True:
         try:
@@ -293,6 +327,7 @@ if __name__ == '__main__':
                 morning_report_sent = False
                 entry_metrics_report_sent = False
                 daily_report_sent = False
+                monitor_archive_sent = False
 
             # [스케줄러 1-0] 아침 리포트 JSON 생성
             if now.hour == 8 and now.minute == 45 and not daily_report_sent:
@@ -303,6 +338,11 @@ if __name__ == '__main__':
             if now.hour == 15 and now.minute == 40 and not entry_metrics_report_sent:
                 broadcast_entry_metrics_job()
                 entry_metrics_report_sent = True
+
+            # [스케줄러 1-2] 장 마감 후 모니터 요약/로그 아카이브 저장
+            if now.hour == 15 and now.minute == 45 and not monitor_archive_sent:
+                generate_monitor_archive_job()
+                monitor_archive_sent = True
 
             # [스케줄러 2] 야간(23:50) 시스템 자동 재시작
             if now.hour == 23 and now.minute == 50:

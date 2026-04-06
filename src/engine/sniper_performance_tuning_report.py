@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
-from src.engine.sniper_trade_review_report import _fetch_trade_rows
+from src.engine.log_archive_service import iter_target_log_lines
+from src.engine.sniper_trade_review_report import build_trade_review_report
 from src.utils.constants import LOGS_DIR, POSTGRES_URL, TRADING_RULES
 
 
@@ -55,6 +56,18 @@ _BLOCKER_LABELS = {
     "blocked_swing_gap": "스윙 갭상승",
     "first_ai_wait": "첫 AI 대기",
 }
+_REUSE_REASON_LABELS = {
+    "sig_changed": "시그니처 변경",
+    "age_expired": "재사용 창 만료",
+    "ws_stale": "WS stale",
+    "price_move": "가격 변화 확대",
+    "near_ai_exit": "AI 손절 경계",
+    "near_safe_profit": "안전수익 경계",
+    "near_low_score": "저점수 경계",
+    "score_boundary": "점수 경계",
+    "missing_action": "이전 액션 없음",
+    "missing_allow_flag": "이전 허용값 없음",
+}
 
 
 @dataclass
@@ -82,20 +95,7 @@ def _parse_since_datetime(target_date: str, since_time: str | None) -> datetime 
 
 
 def _iter_target_lines(log_path: Path, *, target_date: str, marker: str) -> list[str]:
-    lines: list[str] = []
-    candidate_paths = [log_path]
-    candidate_paths.extend(sorted(log_path.parent.glob(f"{log_path.name}.*"), key=lambda path: path.name))
-    for candidate in candidate_paths:
-        if not candidate.exists() or not candidate.is_file():
-            continue
-        with open(candidate, "r", encoding="utf-8") as handle:
-            for raw_line in handle:
-                if f"[{target_date}" not in raw_line:
-                    continue
-                if marker not in raw_line:
-                    continue
-                lines.append(raw_line.strip())
-    return lines
+    return iter_target_log_lines([log_path], target_date=target_date, marker=marker)
 
 
 def _parse_event(line: str, pattern: re.Pattern[str]) -> PerfEvent | None:
@@ -128,6 +128,10 @@ def _safe_float(value, default: float | None = None) -> float | None:
 def _safe_int(value, default: int | None = None) -> int | None:
     if value in (None, "", "-", "None"):
         return default
+    try:
+        return int(float(value))
+    except Exception:
+        return default
 
 
 def _safe_date_string(value) -> str:
@@ -138,10 +142,6 @@ def _safe_date_string(value) -> str:
     if isinstance(value, date):
         return value.isoformat()
     return str(value)
-    try:
-        return int(float(value))
-    except Exception:
-        return default
 
 
 def _percentile(values: list[float], pct: float) -> float:
@@ -229,6 +229,30 @@ def _friendly_blocker_name(event: PerfEvent) -> str:
         if action:
             return f"게이트키퍼: {action}"
     return _BLOCKER_LABELS.get(event.stage, event.stage)
+
+
+def _split_reason_codes(value) -> list[str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return []
+    return [token for token in re.split(r"[,\s]+", raw) if token]
+
+
+def _friendly_reason_name(code: str) -> str:
+    normalized = str(code or "").strip()
+    return _REUSE_REASON_LABELS.get(normalized, normalized)
+
+
+def _build_current_trade_rows(target_date: str) -> tuple[list[dict], list[str]]:
+    report = build_trade_review_report(
+        target_date=target_date,
+        since_time=None,
+        top_n=10_000,
+        scope="all",
+    )
+    rows = list((report.get("sections", {}) or {}).get("recent_trades", []) or [])
+    warnings = list((report.get("meta", {}) or {}).get("warnings", []) or [])
+    return rows, warnings
 
 
 def _infer_strategy_from_event(event: PerfEvent, strategy_by_code: dict[str, str]) -> str:
@@ -815,9 +839,23 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
     gatekeeper_cache_modes = Counter(str(e.fields.get("gatekeeper_cache", "miss") or "miss") for e in gatekeeper_decisions)
     gatekeeper_actions = Counter(str(e.fields.get("action", "UNKNOWN") or "UNKNOWN") for e in gatekeeper_decisions if e.stage == "blocked_gatekeeper_reject")
     exit_rule_counts = Counter(str(e.fields.get("exit_rule", "-") or "-") for e in exit_signals)
-    trade_rows, trade_warnings = _fetch_trade_rows(target_date)
+    trade_rows, trade_warnings = _build_current_trade_rows(target_date)
     history_rows, history_warnings, recent_history_dates = _fetch_trade_history_rows(target_date)
     trend_by_group = _build_strategy_trends(history_rows, recent_history_dates)
+
+    holding_reuse_blockers = Counter()
+    for event in holding_events:
+        if event.stage != "ai_holding_reuse_bypass":
+            continue
+        for reason_code in _split_reason_codes(event.fields.get("reason_codes")):
+            holding_reuse_blockers[_friendly_reason_name(reason_code)] += 1
+
+    gatekeeper_reuse_blockers = Counter()
+    for event in entry_events:
+        if event.stage != "gatekeeper_fast_reuse_bypass":
+            continue
+        for reason_code in _split_reason_codes(event.fields.get("reason_codes")):
+            gatekeeper_reuse_blockers[_friendly_reason_name(reason_code)] += 1
 
     total_holding_samples = len(holding_reviews) + len(holding_skips)
     total_gatekeeper_samples = len(gatekeeper_decisions)
@@ -901,13 +939,15 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
         "auto_comments": auto_comments,
         "meta": {
             "warnings": trade_warnings + history_warnings,
-            "outcome_basis": "기준일 누적 성과",
+            "outcome_basis": "기준일 누적 성과 (trade review 정규화)",
             "engine_basis": "조회 구간 엔진 지표",
             "trend_basis": f"최근 {len(recent_history_dates)}개 거래일 rolling 성과" if recent_history_dates else "최근 거래일 rolling 성과",
         },
         "breakdowns": {
             "holding_ai_cache_modes": [{"label": key, "count": value} for key, value in holding_ai_cache_modes.most_common()],
+            "holding_reuse_blockers": [{"label": key, "count": value} for key, value in holding_reuse_blockers.most_common()],
             "gatekeeper_cache_modes": [{"label": key, "count": value} for key, value in gatekeeper_cache_modes.most_common()],
+            "gatekeeper_reuse_blockers": [{"label": key, "count": value} for key, value in gatekeeper_reuse_blockers.most_common()],
             "gatekeeper_actions": [{"label": key, "count": value} for key, value in gatekeeper_actions.most_common()],
             "exit_rules": [{"label": key, "count": value} for key, value in exit_rule_counts.most_common()],
         },

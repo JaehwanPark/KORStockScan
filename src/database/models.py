@@ -137,6 +137,65 @@ class HoldingAddHistory(Base):
         return f"<HoldingAddHistory(recommendation_id={self.recommendation_id}, event_type='{self.event_type}')>"
 
 
+class TradePerformanceFact(Base):
+    __tablename__ = 'trade_performance_facts'
+
+    recommendation_id = Column(Integer, primary_key=True)
+    rec_date = Column(Date, nullable=False)
+    stock_code = Column(String(10), nullable=False)
+    stock_name = Column(Text)
+    strategy = Column(Text, nullable=False)
+    position_tag = Column(Text, nullable=False)
+    status = Column(Text, nullable=False)
+    buy_price = Column(Float, server_default=text("0"))
+    buy_qty = Column(Integer, server_default=text("0"))
+    buy_time = Column(DateTime)
+    sell_price = Column(Float, server_default=text("0"))
+    sell_time = Column(DateTime)
+    profit_rate = Column(Float, server_default=text("0"))
+    realized_pnl_krw = Column(Integer, server_default=text("0"))
+    holding_seconds = Column(Integer)
+    exit_rule = Column(Text)
+    sell_reason_type = Column(Text)
+    add_count = Column(Integer, server_default=text("0"))
+    avg_down_count = Column(Integer, server_default=text("0"))
+    pyramid_count = Column(Integer, server_default=text("0"))
+    ai_review_headline = Column(Text)
+    gatekeeper_action = Column(Text)
+    gatekeeper_allow_entry = Column(Boolean)
+    synced_at = Column(DateTime, server_default=text("CURRENT_TIMESTAMP"))
+
+    def __repr__(self):
+        return f"<TradePerformanceFact(recommendation_id={self.recommendation_id}, strategy='{self.strategy}', position_tag='{self.position_tag}')>"
+
+
+class StrategyPositionPerformanceDaily(Base):
+    __tablename__ = 'strategy_position_performance_daily'
+
+    rec_date = Column(Date, primary_key=True)
+    strategy = Column(Text, primary_key=True)
+    position_tag = Column(Text, primary_key=True)
+    entered_count = Column(Integer, server_default=text("0"))
+    completed_count = Column(Integer, server_default=text("0"))
+    open_count = Column(Integer, server_default=text("0"))
+    win_count = Column(Integer, server_default=text("0"))
+    loss_count = Column(Integer, server_default=text("0"))
+    flat_count = Column(Integer, server_default=text("0"))
+    realized_pnl_krw = Column(Integer, server_default=text("0"))
+    avg_profit_rate = Column(Float, server_default=text("0"))
+    avg_holding_seconds = Column(Float, server_default=text("0"))
+    best_trade_code = Column(String(10))
+    best_trade_name = Column(Text)
+    best_profit_rate = Column(Float)
+    worst_trade_code = Column(String(10))
+    worst_trade_name = Column(Text)
+    worst_profit_rate = Column(Float)
+    synced_at = Column(DateTime, server_default=text("CURRENT_TIMESTAMP"))
+
+    def __repr__(self):
+        return f"<StrategyPositionPerformanceDaily(rec_date='{self.rec_date}', strategy='{self.strategy}', position_tag='{self.position_tag}')>"
+
+
 class User(Base):
     __tablename__ = 'users'
 

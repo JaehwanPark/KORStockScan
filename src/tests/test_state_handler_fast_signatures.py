@@ -1,6 +1,8 @@
 from src.engine.sniper_state_handlers import (
     _build_gatekeeper_fast_signature,
     _build_holding_ai_fast_signature,
+    _resolve_gatekeeper_fast_reuse_sec,
+    _resolve_holding_ai_fast_reuse_sec,
 )
 
 
@@ -72,3 +74,12 @@ def test_holding_ai_fast_signature_changes_on_meaningful_orderbook_shift():
     sig_b = _build_holding_ai_fast_signature(ws_b)
 
     assert sig_a != sig_b
+
+
+def test_holding_ai_fast_reuse_sec_tracks_review_window():
+    assert _resolve_holding_ai_fast_reuse_sec(True, 10) == 12.0
+    assert _resolve_holding_ai_fast_reuse_sec(False, 50) == 52.0
+
+
+def test_gatekeeper_fast_reuse_sec_has_minimum_window():
+    assert _resolve_gatekeeper_fast_reuse_sec() >= 20.0

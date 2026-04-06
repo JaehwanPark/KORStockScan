@@ -224,11 +224,12 @@ class TradingConfig:
     KIWOOM_INVESTOR_CACHE_TTL_SEC: float = 60.0  # 외인/기관 수급 캐시
     KIWOOM_PROGRAM_CACHE_TTL_SEC: float = 20.0  # 프로그램 fallback 캐시
     AI_ANALYZE_RESULT_CACHE_TTL_SEC: float = 5.0  # 스캘핑/보유 AI 재평가 결과 캐시
-    AI_GATEKEEPER_RESULT_CACHE_TTL_SEC: float = 8.0  # 스윙 Gatekeeper 결과 캐시
+    AI_HOLDING_RESULT_CACHE_TTL_SEC: float = 60.0  # 보유 AI 재평가 결과 캐시
+    AI_GATEKEEPER_RESULT_CACHE_TTL_SEC: float = 30.0  # 스윙 Gatekeeper 결과 캐시
     GATEKEEPER_SNAPSHOT_DEDUP_TTL_SEC: float = 10.0  # 동일 Gatekeeper 스냅샷 중복 기록 억제
     AI_HOLDING_FAST_REUSE_CRITICAL_SEC: float = 5.0  # 위기구간 동일 시장상태 재평가 생략
     AI_HOLDING_FAST_REUSE_NORMAL_SEC: float = 12.0  # 일반구간 동일 시장상태 재평가 생략
-    AI_GATEKEEPER_FAST_REUSE_SEC: float = 8.0  # 동일 감시 스냅샷 재평가 생략
+    AI_GATEKEEPER_FAST_REUSE_SEC: float = 30.0  # 동일 감시 스냅샷 재평가 생략
     AI_HOLDING_FAST_REUSE_MAX_WS_AGE_SEC: float = 1.5  # 보유 AI fast reuse 허용 최대 WS 나이
     AI_GATEKEEPER_FAST_REUSE_MAX_WS_AGE_SEC: float = 2.0  # Gatekeeper fast reuse 허용 최대 WS 나이
 

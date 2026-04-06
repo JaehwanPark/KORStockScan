@@ -9,6 +9,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from src.engine.log_archive_service import iter_target_log_lines
 from src.utils.constants import LOGS_DIR, POSTGRES_URL
 from src.engine.sniper_gatekeeper_replay import find_gatekeeper_snapshot_for_trade
 
@@ -111,21 +112,7 @@ def _parse_since_datetime(target_date: str, since_time: str | None) -> datetime 
 
 
 def _iter_target_lines(log_paths: list[Path], *, target_date: str) -> list[str]:
-    lines: list[str] = []
-    for log_path in log_paths:
-        candidate_paths = [log_path]
-        candidate_paths.extend(sorted(log_path.parent.glob(f"{log_path.name}.*"), key=lambda path: path.name))
-        for candidate in candidate_paths:
-            if not candidate.exists() or not candidate.is_file():
-                continue
-            with open(candidate, "r", encoding="utf-8") as handle:
-                for raw_line in handle:
-                    if f"[{target_date}" not in raw_line:
-                        continue
-                    if "[HOLDING_PIPELINE]" not in raw_line:
-                        continue
-                    lines.append(raw_line.strip())
-    return lines
+    return iter_target_log_lines(log_paths, target_date=target_date, marker="[HOLDING_PIPELINE]")
 
 
 def _parse_event(line: str) -> HoldingEvent | None:
@@ -361,6 +348,29 @@ def _build_timeline(events: list[HoldingEvent]) -> list[dict[str, Any]]:
     return timeline
 
 
+def _build_compact_timeline(
+    timeline: list[dict[str, Any]],
+    *,
+    head_count: int = 4,
+    tail_count: int = 3,
+) -> list[dict[str, Any]]:
+    if len(timeline) <= (head_count + tail_count + 1):
+        return timeline
+    omitted_count = len(timeline) - head_count - tail_count
+    if omitted_count <= 0:
+        return timeline
+    omitted_item = {
+        "stage": "omitted",
+        "label": f"중간 {omitted_count}단계 생략",
+        "timestamp": "",
+        "details": [],
+        "fields": {},
+        "is_omitted": True,
+        "omitted_count": omitted_count,
+    }
+    return [*timeline[:head_count], omitted_item, *timeline[-tail_count:]]
+
+
 def _build_latest_event(events: list[HoldingEvent]) -> dict | None:
     if not events:
         return None
@@ -391,6 +401,116 @@ def _build_exit_signal(events: list[HoldingEvent]) -> dict | None:
     return None
 
 
+def _first_non_empty_event_field(
+    events: list[HoldingEvent],
+    *,
+    stages: set[str] | None = None,
+    keys: list[str] | tuple[str, ...] = (),
+    reverse: bool = False,
+):
+    iterable = reversed(events) if reverse else events
+    for event in iterable:
+        if stages and event.stage not in stages:
+            continue
+        for key in keys:
+            value = event.timestamp if key == "timestamp" else event.fields.get(key)
+            if value not in (None, "", "None", "-"):
+                return value
+    return None
+
+
+def _normalize_trade_with_events(trade: dict, events: list[HoldingEvent]) -> dict:
+    normalized = dict(trade or {})
+
+    buy_price = _safe_float(normalized.get("buy_price"))
+    buy_qty = _safe_int(normalized.get("buy_qty"))
+    sell_price = _safe_int(normalized.get("sell_price"))
+    sell_time = normalized.get("sell_time") or ""
+    profit_rate = _safe_float(normalized.get("profit_rate"))
+    status = str(normalized.get("status") or "").upper()
+
+    has_sell_completed = any(event.stage == "sell_completed" for event in events)
+    has_exit_signal = any(event.stage == "exit_signal" for event in events)
+    has_sell_time = bool(_parse_dt(sell_time))
+
+    if buy_price <= 0:
+        restored_buy_price = _safe_float(
+            _first_non_empty_event_field(
+                events,
+                stages={"holding_started", "exit_signal"},
+                keys=("fill_price", "buy_price"),
+            )
+        )
+        if restored_buy_price > 0:
+            buy_price = restored_buy_price
+
+    if buy_qty <= 0:
+        restored_buy_qty = _safe_int(
+            _first_non_empty_event_field(
+                events,
+                stages={"holding_started", "exit_signal"},
+                keys=("fill_qty", "buy_qty", "qty"),
+            )
+        )
+        if restored_buy_qty > 0:
+            buy_qty = restored_buy_qty
+
+    if sell_price <= 0:
+        restored_sell_price = _safe_int(
+            _first_non_empty_event_field(
+                events,
+                stages={"sell_completed", "exit_signal"},
+                keys=("sell_price", "curr_price"),
+                reverse=True,
+            )
+        )
+        if restored_sell_price > 0:
+            sell_price = restored_sell_price
+
+    if not has_sell_time:
+        restored_sell_time = _first_non_empty_event_field(
+            events,
+            stages={"sell_completed", "exit_signal"},
+            keys=("timestamp",),
+            reverse=True,
+        )
+        if restored_sell_time:
+            sell_time = str(restored_sell_time)
+            has_sell_time = bool(_parse_dt(sell_time))
+
+    # 스캘핑 revive 설계에서는 원 거래 row가 WATCHING으로 되돌아가도,
+    # sell_time 또는 sell_completed 로그가 있으면 종료 거래로 보는 편이 복기 목적에 맞다.
+    if has_sell_completed or has_sell_time or (has_exit_signal and sell_price > 0):
+        status = "COMPLETED"
+
+    if abs(profit_rate) <= 0 and buy_price > 0 and sell_price > 0:
+        profit_rate = round(((sell_price - buy_price) / buy_price) * 100, 2)
+    elif abs(profit_rate) <= 0:
+        restored_profit_rate = _safe_float(
+            _first_non_empty_event_field(
+                events,
+                stages={"sell_completed", "exit_signal"},
+                keys=("profit_rate",),
+                reverse=True,
+            )
+        )
+        if abs(restored_profit_rate) > 0:
+            profit_rate = round(restored_profit_rate, 2)
+
+    pnl_krw = int(round((sell_price - buy_price) * buy_qty)) if sell_price and buy_price and buy_qty else 0
+
+    normalized.update({
+        "status": status,
+        "buy_price": buy_price,
+        "buy_qty": buy_qty,
+        "sell_price": sell_price,
+        "sell_time": sell_time,
+        "profit_rate": round(profit_rate, 2),
+        "realized_pnl_krw": pnl_krw,
+    })
+    return normalized
+
+
 def _tone_for_trade(trade: dict) -> str:
     if str(trade.get("status") or "").upper() != "COMPLETED":
         return "warn"
@@ -401,7 +521,103 @@ def _tone_for_trade(trade: dict) -> str:
     return "muted"
 
 
+def _trade_result_badge(trade: dict) -> dict[str, str]:
+    status = str(trade.get("status") or "").upper()
+    profit_rate = _safe_float(trade.get("profit_rate"))
+    if status == "COMPLETED":
+        if profit_rate > 0:
+            return {"icon": "▲", "label": "익절", "tone": "good"}
+        if profit_rate < 0:
+            return {"icon": "▼", "label": "손절", "tone": "bad"}
+        return {"icon": "■", "label": "본전", "tone": "warn"}
+    if status in {"HOLDING", "SELL_ORDERED", "BUY_ORDERED"}:
+        return {"icon": "●", "label": "보유중", "tone": "warn"}
+    return {"icon": "○", "label": "미종료", "tone": "warn"}
+
+
+def _parse_low_score_hits(value: Any) -> tuple[int, int]:
+    text = str(value or "").strip()
+    if not text:
+        return 0, 0
+    if "/" in text:
+        left, _, right = text.partition("/")
+        return _safe_int(left), _safe_int(right)
+    return _safe_int(text), 0
+
+
+def _summarize_ai_reviews(ai_reviews: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not ai_reviews:
+        return None
+    scores = [_safe_int(item.get("ai_score")) for item in ai_reviews]
+    profits = [_safe_float(item.get("profit_rate")) for item in ai_reviews]
+    low_hits = [_parse_low_score_hits(item.get("low_score_hits")) for item in ai_reviews]
+    latest_score = scores[-1]
+    first_score = scores[0]
+    score_delta = latest_score - first_score
+    min_score = min(scores)
+    max_score = max(scores)
+    max_hit = max((value for value, _target in low_hits), default=0)
+    hit_target = max((target for _value, target in low_hits), default=0)
+    latest_profit = profits[-1]
+    min_profit = min(profits)
+    max_profit = max(profits)
+
+    tone = "warn"
+    headline = "AI 흐름 관찰"
+    if max_hit >= max(1, hit_target - 1) and hit_target > 0:
+        headline = "AI 하방 경고 누적"
+        tone = "bad"
+    elif latest_score <= 35:
+        headline = "AI 약세 심화"
+        tone = "bad"
+    elif score_delta >= 8 and latest_score >= 60:
+        headline = "AI 점수 반등"
+        tone = "good"
+    elif score_delta <= -8:
+        headline = "AI 점수 약화"
+        tone = "bad" if latest_score < 45 else "warn"
+    elif (max_score - min_score) <= 5:
+        headline = "AI 판단 정체"
+        tone = "muted"
+    elif latest_score >= 65 and min_score >= 55:
+        headline = "AI 보유 유지 우세"
+        tone = "good"
+
+    score_flow = f"AI {first_score}→{latest_score}점"
+    if len(ai_reviews) == 1:
+        score_flow = f"AI {latest_score}점 단일 확인"
+
+    summary = (
+        f"최근 {len(ai_reviews)}회 기준 {score_flow}, "
+        f"손익 구간 {min_profit:+.2f}%~{max_profit:+.2f}%"
+    )
+    if hit_target > 0:
+        summary += f", 하방카운트 최대 {max_hit}/{hit_target}"
+    elif latest_profit < 0 and latest_score <= 40:
+        summary += ", 손실 구간에서 AI 점수가 낮아졌습니다"
+
+    chips = [
+        {"label": "점수 흐름", "value": score_flow},
+        {"label": "최저/최고", "value": f"{min_score}점 / {max_score}점"},
+        {"label": "손익 범위", "value": f"{min_profit:+.2f}% ~ {max_profit:+.2f}%"},
+    ]
+    if hit_target > 0:
+        chips.append({"label": "하방카운트", "value": f"{max_hit}/{hit_target}"})
+    chips.append({"label": "마지막 확인", "value": str(ai_reviews[-1].get("timestamp") or "-")[-8:]})
+
+    return {
+        "headline": headline,
+        "tone": tone,
+        "summary": summary,
+        "chips": chips[:4],
+        "review_count": len(ai_reviews),
+        "latest_score": latest_score,
+        "latest_profit_rate": round(latest_profit, 2),
+    }
+
+
 def _build_trade_row(trade: dict, events: list[HoldingEvent]) -> dict:
+    trade = _normalize_trade_with_events(trade, events)
     buy_dt = _parse_dt(trade.get("buy_time"))
     sell_dt = _parse_dt(trade.get("sell_time"))
     holding_sec = int((sell_dt - buy_dt).total_seconds()) if buy_dt and sell_dt else None
@@ -434,16 +650,25 @@ def _build_trade_row(trade: dict, events: list[HoldingEvent]) -> dict:
                 + (f"&time={replay_time}" if replay_time else "")
             ),
         }
+    result_badge = _trade_result_badge(trade)
+    timeline = _build_timeline(events)
+    compact_timeline = _build_compact_timeline(timeline)
 
     return {
         **trade,
         "tone": _tone_for_trade(trade),
+        "result_icon": result_badge["icon"],
+        "result_label": result_badge["label"],
+        "result_tone": result_badge["tone"],
         "holding_seconds": holding_sec,
         "holding_duration_text": _format_duration_seconds(holding_sec),
-        "timeline": _build_timeline(events),
+        "timeline": timeline,
+        "compact_timeline": compact_timeline,
+        "timeline_hidden_count": max(0, len(timeline) - len(compact_timeline) + (1 if any(item.get("is_omitted") for item in compact_timeline) else 0)),
         "latest_event": _build_latest_event(events),
         "exit_signal": _build_exit_signal(events),
         "ai_reviews": ai_reviews[-6:],
+        "ai_review_summary": _summarize_ai_reviews(ai_reviews[-6:]),
         "gatekeeper_replay": gatekeeper_replay,
     }
 

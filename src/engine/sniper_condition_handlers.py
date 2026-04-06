@@ -24,6 +24,13 @@ from src.engine.sniper_s15_fast_track import (
     create_s15_shadow_record,
     execute_fast_track_scalp_v2,
 )
+from src.engine.sniper_position_tags import (
+    default_position_tag_for_strategy,
+    is_default_position_tag,
+    normalize_position_tag,
+    normalize_strategy,
+    target_identity,
+)
 from src.utils import kiwoom_utils
 from src.utils.constants import TRADING_RULES
 from src.utils.logger import log_error
@@ -103,17 +110,71 @@ def _should_log_match_event(key, cooldown_sec=300):
 
 
 def _condition_key(code, target_date, strategy, position_tag):
-    return (str(code).strip()[:6], str(target_date), str(strategy), str(position_tag))
+    normalized_strategy = normalize_strategy(strategy)
+    normalized_tag = normalize_position_tag(normalized_strategy, position_tag)
+    return (str(code).strip()[:6], str(target_date), normalized_strategy, normalized_tag)
+
+
+def _find_reusable_watch_record(session, *, rec_date, stock_code, strategy):
+    if DB is not None and hasattr(DB, "find_reusable_watching_record"):
+        return DB.find_reusable_watching_record(
+            session,
+            rec_date=rec_date,
+            stock_code=stock_code,
+            strategy=strategy,
+        )
+    return session.query(RecommendationHistory).filter_by(
+        rec_date=rec_date,
+        stock_code=stock_code,
+        strategy=strategy,
+    ).first()
+
+
+def _has_active_target(code, strategy):
+    identity = target_identity(code, strategy)
+    return any(
+        target_identity(t.get('code', ''), t.get('strategy', '')) == identity
+        for t in (ACTIVE_TARGETS or [])
+    )
 
 
 def _get_latest_price(code):
-    if WS_MANAGER is None:
-        return 0
-    ws_data = WS_MANAGER.get_latest_data(code) or {}
+    ws_data = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
     try:
-        return int(float(ws_data.get('curr', 0) or 0))
+        current_price = int(float(ws_data.get('curr', 0) or 0))
     except Exception:
-        return 0
+        current_price = 0
+
+    if current_price > 0:
+        return current_price
+
+    try:
+        best_bid = int(float(ws_data.get('best_bid', 0) or 0))
+    except Exception:
+        best_bid = 0
+    try:
+        best_ask = int(float(ws_data.get('best_ask', 0) or 0))
+    except Exception:
+        best_ask = 0
+
+    if best_bid > 0 and best_ask > 0:
+        return int((best_bid + best_ask) / 2)
+    if best_bid > 0:
+        return best_bid
+    if best_ask > 0:
+        return best_ask
+
+    if KIWOOM_TOKEN:
+        try:
+            candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=5)
+            for candle in candles or []:
+                candle_close = int(float(candle.get("현재가", 0) or 0))
+                if candle_close > 0:
+                    return candle_close
+        except Exception:
+            pass
+
+    return 0
 
 
 def _get_latest_open_and_vwap(code):
@@ -155,6 +216,30 @@ def _get_latest_strength(code):
         return float(ws_data.get('v_pw', 0) or 0.0)
     except Exception:
         return 0.0
+
+
+def _passes_vwap_reclaim_precheck(code):
+    current_price = float(_get_latest_price(code) or 0)
+    _, vwap_price = _get_latest_open_and_vwap(code)
+    vwap_price = float(vwap_price or 0)
+
+    if current_price <= 0 or vwap_price <= 0:
+        return False, {
+            'reason': 'missing_price_or_vwap',
+            'current_price': current_price,
+            'vwap_price': vwap_price,
+            'vwap_gap_pct': 0.0,
+        }
+
+    vwap_gap_pct = ((current_price - vwap_price) / vwap_price) * 100.0
+    allowed = current_price > vwap_price and 0.1 <= vwap_gap_pct <= 1.0
+    reason = 'ok' if allowed else 'outside_vwap_reclaim_band'
+    return allowed, {
+        'reason': reason,
+        'current_price': current_price,
+        'vwap_price': vwap_price,
+        'vwap_gap_pct': vwap_gap_pct,
+    }
 
 
 def _get_hysteresis_drop_pct(cnd_name):
@@ -226,13 +311,30 @@ def resolve_condition_profile(cnd_name):
         'strategy': 'SCALPING',
         'trade_type': 'SCALP',
         'is_next_day_target': False,
-        'position_tag': 'MIDDLE',
+        'position_tag': default_position_tag_for_strategy('SCALPING'),
         'start': None,
         'end': None,
+        'use_debounce': True,
     }
 
     if "scalp_candid_aggressive_01" in cnd_name or "scalp_candid_normal_01" in cnd_name:
         profile['start'], profile['end'] = dt_time(9, 0), dt_time(9, 30)
+    elif "scalp_open_reclaim_01" in cnd_name:
+        profile['start'], profile['end'] = dt_time(9, 3), dt_time(9, 20)
+        profile['position_tag'] = 'OPEN_RECLAIM'
+        profile['use_debounce'] = False
+    elif "scalp_vwap_reclaim_01" in cnd_name:
+        profile['start'], profile['end'] = dt_time(10, 0), dt_time(14, 0)
+        profile['position_tag'] = 'VWAP_RECLAIM'
+        profile['use_debounce'] = False
+    elif "scalp_dryup_squeeze_01" in cnd_name:
+        profile['start'], profile['end'] = dt_time(9, 30), dt_time(13, 30)
+        profile['position_tag'] = 'DRYUP_SQUEEZE'
+        profile['use_debounce'] = False
+    elif "scalp_preclose_01" in cnd_name:
+        profile['start'], profile['end'] = dt_time(14, 30), dt_time(15, 20)
+        profile['position_tag'] = 'PRECLOSE'
+        profile['use_debounce'] = False
     elif "scalp_strong_01" in cnd_name:
         profile['start'], profile['end'] = dt_time(9, 20), dt_time(11, 0)
     elif "scalp_underpress_01" in cnd_name:
@@ -246,6 +348,7 @@ def resolve_condition_profile(cnd_name):
         profile['strategy'] = 'KOSPI_ML'
         profile['trade_type'] = 'MAIN'
         profile['is_next_day_target'] = True
+        profile['position_tag'] = default_position_tag_for_strategy('KOSPI_ML')
     elif "vcp_candid_01" in cnd_name:
         profile['start'], profile['end'] = dt_time(15, 30), dt_time(7, 0)
         profile['is_next_day_target'] = True
@@ -305,14 +408,18 @@ def handle_condition_matched(payload):
     target_strategy = profile['strategy']
     target_trade_type = profile['trade_type']
     is_next_day_target = profile['is_next_day_target']
-    target_position_tag = profile['position_tag']
+    target_position_tag = normalize_position_tag(target_strategy, profile['position_tag'])
 
     if ACTIVE_TARGETS is None or DB is None or EVENT_BUS is None:
         return
 
     key = _condition_key(code, get_condition_target_date(profile['is_next_day_target']), target_strategy, target_position_tag)
     now_ts = time.time()
-    is_debounce_target = not profile['is_next_day_target'] and target_position_tag not in ['S15_CANDID', 'S15_SHOOTING', 'VCP_NEXT']
+    is_debounce_target = (
+        bool(profile.get('use_debounce', True))
+        and not profile['is_next_day_target']
+        and target_position_tag not in ['S15_CANDID', 'S15_SHOOTING', 'VCP_NEXT']
+    )
     if is_debounce_target:
         state = _CONDITION_STATE.get(key)
         if state is None:
@@ -345,8 +452,22 @@ def handle_condition_matched(payload):
 
     # 당일 감시망에 이미 있으면 일반 케이스는 스킵
     # 단, VCP_SHOOTING은 기존 CANDID -> SHOOTING 승격이 있으므로 통과
-    if any(str(t.get('code', '')).strip()[:6] == code for t in ACTIVE_TARGETS):
+    if _has_active_target(code, target_strategy):
         if not is_next_day_target and target_position_tag != 'VCP_SHOOTING':
+            return
+
+    if target_position_tag == 'VWAP_RECLAIM':
+        passed, precheck = _passes_vwap_reclaim_precheck(code)
+        if not passed:
+            log_key = f"{code}:{cnd_name}:{precheck.get('reason')}"
+            if _should_log_match_event(log_key, cooldown_sec=120):
+                gap_pct = float(precheck.get('vwap_gap_pct', 0.0) or 0.0)
+                current_price = int(precheck.get('current_price', 0) or 0)
+                vwap_price = int(precheck.get('vwap_price', 0) or 0)
+                print(
+                    f"⏭️ [조건검색 전처리 스킵] {code} {cnd_name} "
+                    f"reason={precheck.get('reason')} curr={current_price:,} vwap={vwap_price:,} gap={gap_pct:+.2f}%"
+                )
             return
 
     try:
@@ -424,7 +545,7 @@ def handle_condition_matched(payload):
                 candid_record.strategy = 'SCALPING'
                 candid_record.trade_type = 'SCALP'
 
-                if not any(str(t.get('code', '')).strip()[:6] == code for t in ACTIVE_TARGETS):
+                if not _has_active_target(code, 'SCALPING'):
                     marcap = int(DB.get_latest_marcap(code) or 0) if DB is not None else 0
                     new_target = {
                         'id': candid_record.id,
@@ -463,16 +584,19 @@ def handle_condition_matched(payload):
                 today_record = session.query(RecommendationHistory).filter_by(
                     rec_date=today,
                     stock_code=code,
+                    strategy='SCALPING',
                     position_tag='VCP_SHOOTING'
                 ).first()
 
                 if not today_record:
                     return
 
-                next_record = session.query(RecommendationHistory).filter_by(
+                next_record = _find_reusable_watch_record(
+                    session,
                     rec_date=target_date,
-                    stock_code=code
-                ).first()
+                    stock_code=code,
+                    strategy='SCALPING',
+                )
 
                 if not next_record:
                     new_record = RecommendationHistory(
@@ -506,10 +630,12 @@ def handle_condition_matched(payload):
             # =====================================================
             # 3) 일반 로직 / VCP_CANDID 저장
             # =====================================================
-            record = session.query(RecommendationHistory).filter_by(
+            record = _find_reusable_watch_record(
+                session,
                 rec_date=target_date,
-                stock_code=code
-            ).first()
+                stock_code=code,
+                strategy=target_strategy,
+            )
 
             newly_created = False
             if not record:
@@ -527,22 +653,29 @@ def handle_condition_matched(payload):
                 session.flush()
                 newly_created = True
             else:
+                record.stock_name = name
+                if hasattr(record, 'position_tag'):
+                    record.position_tag = normalize_position_tag(record.strategy or target_strategy, record.position_tag)
                 # 기존 record가 있는데 position_tag가 비어 있거나 약한 값이면 보강
-                if hasattr(record, 'position_tag') and target_position_tag not in [None, '', 'MIDDLE']:
+                if hasattr(record, 'position_tag') and not is_default_position_tag(target_strategy, target_position_tag):
                     record.position_tag = target_position_tag
 
             if not is_next_day_target:
                 newly_added_to_active = False
-                if not any(str(t.get('code', '')).strip()[:6] == code for t in ACTIVE_TARGETS):
+                if not _has_active_target(code, target_strategy):
                     marcap = int(DB.get_latest_marcap(code) or 0) if DB is not None else 0
+                    active_strategy = normalize_strategy(record.strategy or target_strategy)
                     new_target = {
                         'id': record.id,
                         'code': code,
                         'name': name,
-                        'strategy': record.strategy or target_strategy,
+                        'strategy': active_strategy,
                         'status': 'WATCHING',
                         'added_time': time.time(),
-                        'position_tag': getattr(record, 'position_tag', target_position_tag) or target_position_tag,
+                        'position_tag': normalize_position_tag(
+                            active_strategy,
+                            getattr(record, 'position_tag', target_position_tag) or target_position_tag,
+                        ),
                         'marcap': marcap,
                     }
                     ACTIVE_TARGETS.append(new_target)
@@ -556,10 +689,12 @@ def handle_condition_matched(payload):
 
                 if newly_created or newly_added_to_active:
                     log_key = f"{code}:{cnd_name}:{target_position_tag}:active"
+                    active_strategy = normalize_strategy(record.strategy or target_strategy)
+                    active_position_tag = normalize_position_tag(active_strategy, getattr(record, 'position_tag', target_position_tag))
                     if _should_log_match_event(log_key):
                         detail = f"strategy={record.strategy or target_strategy}"
-                        if target_position_tag not in ["", "MIDDLE"]:
-                            detail += f", tag={target_position_tag}"
+                        if not is_default_position_tag(active_strategy, active_position_tag):
+                            detail += f", tag={active_position_tag}"
                         print(f"🎯 [조건검색 포착] {name}({code}) 감시망 편입 완료 (출처: {cnd_name}, {detail})")
 
             else:
@@ -629,7 +764,7 @@ def handle_condition_unmatched(payload):
 
     target_date = get_condition_target_date(profile['is_next_day_target'])
     target_strategy = profile['strategy']
-    target_position_tag = profile['position_tag']
+    target_position_tag = normalize_position_tag(target_strategy, profile['position_tag'])
     key = _condition_key(code, target_date, target_strategy, target_position_tag)
     now_ts = time.time()
     state = _CONDITION_STATE.get(key)
@@ -696,7 +831,7 @@ def handle_condition_unmatched(payload):
                 strategy=target_strategy
             )
 
-            if target_position_tag != 'MIDDLE':
+            if not is_default_position_tag(target_strategy, target_position_tag):
                 query = query.filter_by(position_tag=target_position_tag)
 
             records = query.all()
@@ -708,9 +843,8 @@ def handle_condition_unmatched(payload):
         for target in ACTIVE_TARGETS:
             target_code = str(target.get('code', '')).strip()[:6]
             target_status = target.get('status')
-            target_strategy_value = (target.get('strategy') or '').upper()
-            normalized_strategy = 'SCALPING' if target_strategy_value in ['SCALPING', 'SCALP'] else target_strategy_value
-            target_position = target.get('position_tag', 'MIDDLE')
+            normalized_strategy = normalize_strategy(target.get('strategy', ''))
+            target_position = normalize_position_tag(normalized_strategy, target.get('position_tag'))
 
             should_remove = (
                 target_code == code and
@@ -738,7 +872,7 @@ def handle_condition_unmatched(payload):
                 detail = f"reason={removal_reason}"
                 if unmatched_age_sec > 0:
                     detail += f", unmatched_age={unmatched_age_sec}s"
-                if target_position_tag not in ["", "MIDDLE"]:
+                if not is_default_position_tag(target_strategy, target_position_tag):
                     detail += f", tag={target_position_tag}"
                 print(f"🧹 [조건검색 실제 이탈] {code} 이탈 처리 완료 (출처: {cnd_name}, {detail})")
             if not still_tracking:

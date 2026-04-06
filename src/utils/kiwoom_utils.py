@@ -16,6 +16,8 @@ from src.utils.constants import CONFIG_PATH, DEV_PATH, TRADING_RULES  # 필요�
 
 _MARKET_DATA_CACHE = {}
 _MARKET_DATA_CACHE_LOCK = threading.RLock()
+KIWOOM_CONNECT_TIMEOUT_SEC = float(os.getenv("KIWOOM_CONNECT_TIMEOUT_SEC", "5"))
+KIWOOM_READ_TIMEOUT_SEC = float(os.getenv("KIWOOM_READ_TIMEOUT_SEC", "20"))
 
 
 def _cache_clone(value):
@@ -1379,7 +1381,12 @@ def fetch_kiwoom_api_continuous(url: str, token: str, api_id: str, payload: dict
         # 💡 [핵심 방어] 429 에러 발생 시 백오프(Back-off) 후 재시도
         while retry_count < max_retries:
             try:
-                response = requests.post(url, headers=headers, json=payload, timeout=10)
+                response = requests.post(
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=(KIWOOM_CONNECT_TIMEOUT_SEC, KIWOOM_READ_TIMEOUT_SEC),
+                )
                 
                 if response.status_code == 200:
                     break  # 성공 시 재시도 루프 탈출
@@ -1392,9 +1399,28 @@ def fetch_kiwoom_api_continuous(url: str, token: str, api_id: str, payload: dict
                     log_error(f"❌ [{api_id}] HTTP 에러 {response.status_code}: {response.text}")
                     break  # 치명적 에러는 즉시 중단
                     
+            except requests.exceptions.ReadTimeout:
+                wait_sec = min(2 * (retry_count + 1), 6)
+                log_info(
+                    f"⚠️ [{api_id}] 응답 지연으로 읽기 타임아웃 "
+                    f"({KIWOOM_READ_TIMEOUT_SEC:.0f}초). {wait_sec}초 후 재시도... "
+                    f"({retry_count+1}/{max_retries})"
+                )
+                time.sleep(wait_sec)
+                retry_count += 1
+            except requests.exceptions.ConnectTimeout:
+                wait_sec = min(2 * (retry_count + 1), 6)
+                log_info(
+                    f"⚠️ [{api_id}] 연결 타임아웃 "
+                    f"({KIWOOM_CONNECT_TIMEOUT_SEC:.0f}초). {wait_sec}초 후 재시도... "
+                    f"({retry_count+1}/{max_retries})"
+                )
+                time.sleep(wait_sec)
+                retry_count += 1
             except requests.exceptions.ConnectionError:
-                log_info(f"⚠️ [{api_id}] 연결 끊김. 3초 대기 후 재접속... ({retry_count+1}/{max_retries})")
-                time.sleep(3)
+                wait_sec = min(2 * (retry_count + 1), 6)
+                log_info(f"⚠️ [{api_id}] 연결 끊김. {wait_sec}초 대기 후 재접속... ({retry_count+1}/{max_retries})")
+                time.sleep(wait_sec)
                 retry_count += 1
             except Exception as e:
                 log_error(f"🚨 [{api_id}] 알 수 없는 예외: {e}")

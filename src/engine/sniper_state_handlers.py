@@ -44,6 +44,10 @@ from src.engine.sniper_dynamic_thresholds import (
     get_dynamic_scalp_thresholds,
     get_dynamic_swing_gap_threshold,
 )
+from src.engine.sniper_position_tags import (
+    normalize_position_tag,
+    normalize_strategy,
+)
 
 
 KIWOOM_TOKEN = None
@@ -139,6 +143,54 @@ def _send_exit_best_ioc(code, qty, token):
     return SEND_EXIT_BEST_IOC(code, qty, token)
 
 
+def _format_entry_price_text(value):
+    try:
+        price = int(float(value))
+    except (TypeError, ValueError):
+        return "-"
+    return f"{price:,}원"
+
+
+def _translate_latency_state(value):
+    return {
+        "SAFE": "양호",
+        "CAUTION": "주의",
+        "DANGER": "위험",
+    }.get(str(value or "").upper(), value or "-")
+
+
+def _translate_entry_decision(value):
+    return {
+        "ALLOW_NORMAL": "기본 진입 허용",
+        "ALLOW_FALLBACK": "분할 진입 허용",
+        "REJECT_DANGER": "진입 보류",
+        "REJECT": "진입 보류",
+    }.get(str(value or "").upper(), value or "-")
+
+
+def _translate_order_tag(value):
+    return {
+        "fallback_scout": "탐색 주문",
+        "fallback_main": "본 주문",
+    }.get(value, value or "주문")
+
+
+def _translate_tif(value):
+    return {
+        "IOC": "즉시체결 우선",
+        "DAY": "장중 유지",
+    }.get(str(value or "").upper(), value or "-")
+
+
+def _format_entry_order_line(order):
+    return (
+        f"- {_translate_order_tag(order.get('tag'))}: "
+        f"{int(order.get('qty') or 0)}주 / "
+        f"{_format_entry_price_text(order.get('price'))} / "
+        f"{_translate_tif(order.get('tif'))}"
+    )
+
+
 def _publish_entry_mode_summary(stock, code, *, entry_mode, latency_gate):
     if EVENT_BUS is None:
         return
@@ -146,15 +198,15 @@ def _publish_entry_mode_summary(stock, code, *, entry_mode, latency_gate):
         return
 
     orders = latency_gate.get('orders') or []
-    summary = ", ".join(
-        f"{order.get('tag')}:{order.get('qty')}@{order.get('price')}[{order.get('tif')}]"
-        for order in orders
-    )
+    order_lines = [_format_entry_order_line(order) for order in orders]
+    order_summary = "\n".join(order_lines) if order_lines else "- 주문 계획 없음"
     msg = (
-        f"🧭 **[{stock.get('name')} ({code})] fallback 진입 활성화**\n"
-        f"latency=`{latency_gate.get('latency_state')}` / decision=`{latency_gate.get('decision')}`\n"
-        f"signal=`{latency_gate.get('signal_price')}` latest=`{latency_gate.get('latest_price')}`\n"
-        f"orders: `{summary}`"
+        f"🧭 **[{stock.get('name')} ({code})] 지연 대응 분할진입 활성화**\n"
+        f"- 지연 상태: `{_translate_latency_state(latency_gate.get('latency_state'))}`\n"
+        f"- 판정: `{_translate_entry_decision(latency_gate.get('decision'))}`\n"
+        f"- 기준 가격: 신호가 `{_format_entry_price_text(latency_gate.get('signal_price'))}` / "
+        f"현재가 `{_format_entry_price_text(latency_gate.get('latest_price'))}`\n"
+        f"- 주문 계획:\n{order_summary}"
     )
     EVENT_BUS.publish(
         'TELEGRAM_BROADCAST',
@@ -182,6 +234,11 @@ def _log_holding_pipeline(stock, code, stage, **fields):
     parts = [f"{key}={_sanitize_pipeline_field(value)}" for key, value in merged_fields.items()]
     suffix = f" {' '.join(parts)}" if parts else ""
     log_info(f"[HOLDING_PIPELINE] {stock.get('name')}({code}) stage={stage}{suffix}")
+
+
+def _reason_codes(**checks) -> str:
+    failed = [name for name, allowed in checks.items() if not allowed]
+    return ",".join(failed) if failed else "eligible"
 
 
 def _get_swing_gap_threshold(strategy: str) -> float:
@@ -266,6 +323,31 @@ def _bucket_int(value, bucket):
         return 0
 
 
+def _coerce_int_value(value, default=0):
+    try:
+        if value in (None, ""):
+            return default
+        return int(float(value))
+    except Exception:
+        return default
+
+
+def _price_bucket_step(price):
+    try:
+        price = abs(int(float(price or 0)))
+    except Exception:
+        price = 0
+    if price >= 200_000:
+        return 500
+    if price >= 50_000:
+        return 100
+    if price >= 10_000:
+        return 50
+    if price >= 5_000:
+        return 10
+    return 5
+
+
 def _bucket_float(value, step):
     try:
         step = float(step)
@@ -286,45 +368,87 @@ def _floor_bucket_float(value, step):
         return 0.0
 
 
+def _resolve_holding_ai_fast_reuse_sec(is_critical_zone, dynamic_max_cd):
+    configured_sec = (
+        float(getattr(TRADING_RULES, 'AI_HOLDING_FAST_REUSE_CRITICAL_SEC', 8.0) or 8.0)
+        if is_critical_zone
+        else float(getattr(TRADING_RULES, 'AI_HOLDING_FAST_REUSE_NORMAL_SEC', 20.0) or 20.0)
+    )
+    review_window_floor = max(0.0, float(dynamic_max_cd or 0.0)) + 2.0
+    return max(configured_sec, review_window_floor)
+
+
+def _resolve_gatekeeper_fast_reuse_sec():
+    configured_sec = float(getattr(TRADING_RULES, 'AI_GATEKEEPER_FAST_REUSE_SEC', 12.0) or 12.0)
+    return max(configured_sec, 20.0)
+
+
 def _build_gatekeeper_fast_signature(stock, ws_data, strategy, score):
     best_ask, best_bid = _get_best_levels_from_ws(ws_data)
+    curr_price = ws_data.get('curr', 0)
+    price_bucket = _price_bucket_step(curr_price)
     return (
         str(strategy or ''),
         str(stock.get('position_tag', '') or ''),
         _floor_bucket_float(score, 5.0),
-        _bucket_int(ws_data.get('curr', 0), 10),
-        _floor_bucket_float(ws_data.get('fluctuation', 0.0), 0.2),
-        _bucket_int(ws_data.get('volume', 0), 10_000),
-        _floor_bucket_float(ws_data.get('v_pw', 0.0), 2.0),
-        _floor_bucket_float(ws_data.get('buy_ratio', 0.0), 5.0),
-        _bucket_int(ws_data.get('prog_net_qty', 0), 5_000),
-        _bucket_int(ws_data.get('prog_delta_qty', 0), 1_000),
-        best_ask,
-        best_bid,
-        _bucket_int(ws_data.get('ask_tot', 0), 10_000),
-        _bucket_int(ws_data.get('bid_tot', 0), 10_000),
-        _bucket_int(ws_data.get('net_bid_depth', 0), 1_000),
-        _bucket_int(ws_data.get('net_ask_depth', 0), 1_000),
+        _bucket_int(curr_price, price_bucket),
+        _floor_bucket_float(ws_data.get('fluctuation', 0.0), 0.3),
+        _bucket_int(ws_data.get('volume', 0), 50_000),
+        _floor_bucket_float(ws_data.get('v_pw', 0.0), 5.0),
+        _floor_bucket_float(ws_data.get('buy_ratio', 0.0), 8.0),
+        _bucket_int(ws_data.get('prog_net_qty', 0), 10_000),
+        _bucket_int(ws_data.get('prog_delta_qty', 0), 2_000),
+        _bucket_int(best_ask, price_bucket),
+        _bucket_int(best_bid, price_bucket),
+        _bucket_int(ws_data.get('ask_tot', 0), 50_000),
+        _bucket_int(ws_data.get('bid_tot', 0), 50_000),
+        _bucket_int(ws_data.get('net_bid_depth', 0), 5_000),
+        _bucket_int(ws_data.get('net_ask_depth', 0), 5_000),
     )
+
+
+def _build_holding_ai_fast_snapshot(ws_data):
+    best_ask, best_bid = _get_best_levels_from_ws(ws_data)
+    curr_price = ws_data.get('curr', 0)
+    price_bucket = _price_bucket_step(curr_price)
+    ask_tot = _coerce_int_value(ws_data.get('ask_tot'))
+    bid_tot = _coerce_int_value(ws_data.get('bid_tot'))
+    buy_exec = _coerce_int_value(ws_data.get('buy_exec_volume'))
+    sell_exec = _coerce_int_value(ws_data.get('sell_exec_volume'))
+    spread_amount = max(0, _coerce_int_value(best_ask) - _coerce_int_value(best_bid))
+    return {
+        "curr": _bucket_int(curr_price, price_bucket),
+        "fluctuation": _bucket_float(ws_data.get('fluctuation', 0.0), 0.3),
+        "v_pw": _bucket_float(ws_data.get('v_pw', 0.0), 10.0),
+        "buy_ratio": _bucket_float(ws_data.get('buy_ratio', 0.0), 8.0),
+        "spread": _bucket_int(spread_amount, max(1, price_bucket)),
+        "ask_bid_balance": _bucket_int(bid_tot - ask_tot, 50_000),
+        "depth_balance": _bucket_int(
+            _coerce_int_value(ws_data.get('net_bid_depth')) - abs(_coerce_int_value(ws_data.get('net_ask_depth'))),
+            20_000,
+        ),
+        "exec_balance": _bucket_int(buy_exec - sell_exec, 5_000),
+        "tick_trade_value": _bucket_int(ws_data.get('tick_trade_value', 0), 20_000),
+    }
 
 
 def _build_holding_ai_fast_signature(ws_data):
-    best_ask, best_bid = _get_best_levels_from_ws(ws_data)
-    return (
-        _bucket_int(ws_data.get('curr', 0), 10),
-        _bucket_float(ws_data.get('fluctuation', 0.0), 0.1),
-        _bucket_float(ws_data.get('v_pw', 0.0), 2.0),
-        _bucket_float(ws_data.get('buy_ratio', 0.0), 2.0),
-        best_ask,
-        best_bid,
-        _bucket_int(ws_data.get('ask_tot', 0), 5_000),
-        _bucket_int(ws_data.get('bid_tot', 0), 5_000),
-        _bucket_int(ws_data.get('net_bid_depth', 0), 1_000),
-        _bucket_int(ws_data.get('net_ask_depth', 0), 1_000),
-        _bucket_int(ws_data.get('buy_exec_volume', 0), 500),
-        _bucket_int(ws_data.get('sell_exec_volume', 0), 500),
-        _bucket_int(ws_data.get('tick_trade_value', 0), 2_000),
-    )
+    snapshot = _build_holding_ai_fast_snapshot(ws_data)
+    return tuple(snapshot.values())
+
+
+def _describe_snapshot_deltas(previous_snapshot, current_snapshot, *, limit=4):
+    if not isinstance(previous_snapshot, dict) or not isinstance(current_snapshot, dict):
+        return ""
+    deltas = []
+    for key in current_snapshot.keys():
+        prev = previous_snapshot.get(key)
+        curr = current_snapshot.get(key)
+        if prev != curr:
+            deltas.append(f"{key}:{prev}->{curr}")
+        if len(deltas) >= limit:
+            break
+    return ",".join(deltas)
 
 
 def _log_strength_momentum_observation(stock, code, result):
@@ -656,9 +780,8 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
     BIG_BITE_HARD_GATE_TAGS_KOSDAQ = getattr(TRADING_RULES, 'BIG_BITE_HARD_GATE_TAGS_KOSDAQ', ())
     BIG_BITE_HARD_GATE_TAGS_KOSPI = getattr(TRADING_RULES, 'BIG_BITE_HARD_GATE_TAGS_KOSPI', ())
 
-    raw_strategy = (stock.get('strategy') or 'KOSPI_ML').upper()
-    strategy = 'SCALPING' if raw_strategy in ['SCALPING', 'SCALP'] else raw_strategy
-    pos_tag = stock.get('position_tag', 'MIDDLE')
+    strategy = normalize_strategy(stock.get('strategy'))
+    pos_tag = normalize_position_tag(strategy, stock.get('position_tag'))
 
     now = datetime.now()
     now_t = now.time()
@@ -1197,19 +1320,23 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
 
             try:
                 gatekeeper_fast_sig = _build_gatekeeper_fast_signature(stock, ws_data, strategy, score)
-                gatekeeper_fast_reuse_sec = float(getattr(TRADING_RULES, 'AI_GATEKEEPER_FAST_REUSE_SEC', 12.0) or 12.0)
+                gatekeeper_fast_reuse_sec = _resolve_gatekeeper_fast_reuse_sec()
                 gatekeeper_fast_max_ws_age = float(getattr(TRADING_RULES, 'AI_GATEKEEPER_FAST_REUSE_MAX_WS_AGE_SEC', 2.0) or 2.0)
                 gatekeeper_ws_age_sec = _get_ws_snapshot_age_sec(ws_data)
                 fast_sig_matches = gatekeeper_fast_sig == stock.get('last_gatekeeper_fast_signature')
                 fast_sig_age = time.time() - float(stock.get('last_gatekeeper_fast_at', 0) or 0)
                 near_score_boundary = abs(float(score) - float(buy_threshold)) <= 3.0
+                fast_sig_fresh = fast_sig_age < gatekeeper_fast_reuse_sec
+                ws_fresh = gatekeeper_ws_age_sec is None or gatekeeper_ws_age_sec <= gatekeeper_fast_max_ws_age
+                has_last_action = bool(str(stock.get('last_gatekeeper_action', '') or '').strip())
+                has_last_allow_flag = 'last_gatekeeper_allow_entry' in stock
                 can_fast_reuse = (
                     fast_sig_matches
-                    and fast_sig_age < gatekeeper_fast_reuse_sec
-                    and (gatekeeper_ws_age_sec is None or gatekeeper_ws_age_sec <= gatekeeper_fast_max_ws_age)
+                    and fast_sig_fresh
+                    and ws_fresh
                     and not near_score_boundary
-                    and str(stock.get('last_gatekeeper_action', '') or '').strip()
-                    and 'last_gatekeeper_allow_entry' in stock
+                    and has_last_action
+                    and has_last_allow_flag
                 )
 
                 if can_fast_reuse:
@@ -1232,6 +1359,23 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                         ws_age_sec="-" if gatekeeper_ws_age_sec is None else f"{gatekeeper_ws_age_sec:.2f}",
                     )
                 else:
+                    _log_entry_pipeline(
+                        stock,
+                        code,
+                        "gatekeeper_fast_reuse_bypass",
+                        strategy=strategy,
+                        score=round(float(score), 2),
+                        age_sec=f"{fast_sig_age:.1f}",
+                        ws_age_sec="-" if gatekeeper_ws_age_sec is None else f"{gatekeeper_ws_age_sec:.2f}",
+                        reason_codes=_reason_codes(
+                            sig_changed=fast_sig_matches,
+                            age_expired=fast_sig_fresh,
+                            ws_stale=ws_fresh,
+                            score_boundary=not near_score_boundary,
+                            missing_action=has_last_action,
+                            missing_allow_flag=has_last_allow_flag,
+                        ),
+                    )
                     realtime_ctx = kiwoom_utils.build_realtime_analysis_context(
                         token=KIWOOM_TOKEN,
                         code=code,
@@ -1800,25 +1944,26 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
         if time_elapsed > dynamic_min_cd and (price_change >= dynamic_price_trigger or time_elapsed > dynamic_max_cd):
             holding_ai_review_started = time.perf_counter()
             try:
-                market_signature = _build_holding_ai_fast_signature(ws_data)
-                reuse_sec = (
-                    float(getattr(TRADING_RULES, 'AI_HOLDING_FAST_REUSE_CRITICAL_SEC', 8.0) or 8.0)
-                    if is_critical_zone
-                    else float(getattr(TRADING_RULES, 'AI_HOLDING_FAST_REUSE_NORMAL_SEC', 20.0) or 20.0)
-                )
+                market_snapshot = _build_holding_ai_fast_snapshot(ws_data)
+                market_signature = tuple(market_snapshot.values())
+                reuse_sec = _resolve_holding_ai_fast_reuse_sec(is_critical_zone, dynamic_max_cd)
                 max_ws_age_sec = float(getattr(TRADING_RULES, 'AI_HOLDING_FAST_REUSE_MAX_WS_AGE_SEC', 1.5) or 1.5)
                 ws_age_sec = _get_ws_snapshot_age_sec(ws_data)
                 fast_sig_matches = market_signature == stock.get('last_ai_market_signature')
                 fast_sig_age = time.time() - float(stock.get('last_ai_market_signature_at', 0) or 0)
+                sig_delta = _describe_snapshot_deltas(stock.get('last_ai_market_snapshot'), market_snapshot)
                 near_ai_exit_band = abs(profit_rate - ai_exit_min_loss_pct) <= 0.20
                 near_safe_profit_band = abs(profit_rate - safe_profit_pct) <= 0.20
                 near_low_score_band = current_ai_score <= (ai_exit_score_limit + 5)
+                fast_sig_fresh = fast_sig_age < reuse_sec
+                price_change_ok = price_change < (dynamic_price_trigger * 1.25)
+                ws_fresh = ws_age_sec is None or ws_age_sec <= max_ws_age_sec
 
                 if (
                     fast_sig_matches
-                    and fast_sig_age < reuse_sec
-                    and price_change < (dynamic_price_trigger * 1.25)
-                    and (ws_age_sec is None or ws_age_sec <= max_ws_age_sec)
+                    and fast_sig_fresh
+                    and price_change_ok
+                    and ws_fresh
                     and not near_ai_exit_band
                     and not near_safe_profit_band
                     and not near_low_score_band
@@ -1836,11 +1981,39 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                         ws_age_sec="-" if ws_age_sec is None else f"{ws_age_sec:.2f}",
                     )
                 else:
+                    _log_holding_pipeline(
+                        stock,
+                        code,
+                        "ai_holding_reuse_bypass",
+                        profit_rate=f"{profit_rate:+.2f}",
+                        ai_score=f"{current_ai_score:.0f}",
+                        held_sec=int(held_time_min * 60),
+                        price_change=f"{price_change:.2f}",
+                        reuse_sec=f"{reuse_sec:.1f}",
+                        age_sec=f"{fast_sig_age:.1f}",
+                        ws_age_sec="-" if ws_age_sec is None else f"{ws_age_sec:.2f}",
+                        sig_delta=sig_delta or "-",
+                        reason_codes=_reason_codes(
+                            sig_changed=fast_sig_matches,
+                            age_expired=fast_sig_fresh,
+                            price_move=price_change_ok,
+                            ws_stale=ws_fresh,
+                            near_ai_exit=not near_ai_exit_band,
+                            near_safe_profit=not near_safe_profit_band,
+                            near_low_score=not near_low_score_band,
+                        ),
+                    )
                     recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
                     recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40)
 
                     if ws_data.get('orderbook') and recent_ticks:
-                        ai_decision = ai_engine.analyze_target(stock['name'], ws_data, recent_ticks, recent_candles)
+                        ai_decision = ai_engine.analyze_target(
+                            stock['name'],
+                            ws_data,
+                            recent_ticks,
+                            recent_candles,
+                            cache_profile="holding",
+                        )
                         raw_ai_score = ai_decision.get('score', 50)
                         ai_cache_hit = bool(ai_decision.get('cache_hit', False))
 
@@ -1857,6 +2030,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                         stock['ai_low_score_loss_hits'] = ai_low_score_hits
                         stock['last_ai_reviewed_at'] = time.time()
                         stock['last_ai_market_signature'] = market_signature
+                        stock['last_ai_market_snapshot'] = market_snapshot
                         stock['last_ai_market_signature_at'] = time.time()
 
                         print(
@@ -1989,7 +2163,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             exit_rule = "kosdaq_stop_loss"
 
     elif strategy == 'KOSPI_ML':
-        pos_tag = stock.get('position_tag', 'MIDDLE')
+        pos_tag = normalize_position_tag(strategy, stock.get('position_tag'))
         if pos_tag == 'BREAKOUT':
             current_stop_loss = getattr(TRADING_RULES, 'STOP_LOSS_BREAKOUT')
             regime_name = "전고점 돌파"

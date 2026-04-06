@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from src.engine.log_archive_service import iter_target_log_lines
 from src.utils.constants import LOGS_DIR
 
 
@@ -44,21 +45,7 @@ def _parse_since_datetime(target_date: str, since_time: str | None) -> datetime 
 
 
 def _iter_target_lines(log_path: Path, *, target_date: str) -> list[str]:
-    lines: list[str] = []
-    candidate_paths = [log_path]
-    candidate_paths.extend(sorted(log_path.parent.glob(f"{log_path.name}.*"), key=lambda path: path.name))
-
-    for candidate in candidate_paths:
-        if not candidate.exists() or not candidate.is_file():
-            continue
-        with open(candidate, "r", encoding="utf-8") as handle:
-            for raw_line in handle:
-                if f"[{target_date}" not in raw_line:
-                    continue
-                if "[ENTRY_PIPELINE]" not in raw_line:
-                    continue
-                lines.append(raw_line.strip())
-    return lines
+    return iter_target_log_lines([log_path], target_date=target_date, marker="[ENTRY_PIPELINE]")
 
 
 def _parse_entry_event(line: str) -> MomentumEvent | None:

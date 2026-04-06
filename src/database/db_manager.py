@@ -8,11 +8,25 @@ from sqlalchemy.orm import sessionmaker
 from src.utils.constants import POSTGRES_URL 
 from sqlalchemy import func
 from sqlalchemy import text
+from sqlalchemy import or_
 from contextlib import contextmanager
 from src.utils.constants import TRADING_RULES
 
 # 💡 MacroAlert 등 새로 추가된 모델들도 모두 임포트합니다.
-from src.database.models import Base, User, RecommendationHistory, DailyStockQuote, MacroAlert, HoldingAddHistory
+from src.database.models import (
+    Base,
+    User,
+    RecommendationHistory,
+    DailyStockQuote,
+    MacroAlert,
+    HoldingAddHistory,
+    TradePerformanceFact,
+    StrategyPositionPerformanceDaily,
+)
+from src.engine.sniper_position_tags import (
+    normalize_position_tag,
+    normalize_strategy,
+)
 from src.utils.logger import log_error
 
 class DBManager:
@@ -76,10 +90,75 @@ class DBManager:
                         note TEXT
                     );
                 """))
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS trade_performance_facts (
+                        recommendation_id INTEGER PRIMARY KEY,
+                        rec_date DATE NOT NULL,
+                        stock_code VARCHAR(10) NOT NULL,
+                        stock_name TEXT,
+                        strategy TEXT NOT NULL,
+                        position_tag TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        buy_price DOUBLE PRECISION DEFAULT 0,
+                        buy_qty INTEGER DEFAULT 0,
+                        buy_time TIMESTAMP,
+                        sell_price DOUBLE PRECISION DEFAULT 0,
+                        sell_time TIMESTAMP,
+                        profit_rate DOUBLE PRECISION DEFAULT 0,
+                        realized_pnl_krw INTEGER DEFAULT 0,
+                        holding_seconds INTEGER,
+                        exit_rule TEXT,
+                        sell_reason_type TEXT,
+                        add_count INTEGER DEFAULT 0,
+                        avg_down_count INTEGER DEFAULT 0,
+                        pyramid_count INTEGER DEFAULT 0,
+                        ai_review_headline TEXT,
+                        gatekeeper_action TEXT,
+                        gatekeeper_allow_entry BOOLEAN,
+                        synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """))
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS strategy_position_performance_daily (
+                        rec_date DATE NOT NULL,
+                        strategy TEXT NOT NULL,
+                        position_tag TEXT NOT NULL,
+                        entered_count INTEGER DEFAULT 0,
+                        completed_count INTEGER DEFAULT 0,
+                        open_count INTEGER DEFAULT 0,
+                        win_count INTEGER DEFAULT 0,
+                        loss_count INTEGER DEFAULT 0,
+                        flat_count INTEGER DEFAULT 0,
+                        realized_pnl_krw INTEGER DEFAULT 0,
+                        avg_profit_rate DOUBLE PRECISION DEFAULT 0,
+                        avg_holding_seconds DOUBLE PRECISION DEFAULT 0,
+                        best_trade_code VARCHAR(10),
+                        best_trade_name TEXT,
+                        best_profit_rate DOUBLE PRECISION,
+                        worst_trade_code VARCHAR(10),
+                        worst_trade_name TEXT,
+                        worst_profit_rate DOUBLE PRECISION,
+                        synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (rec_date, strategy, position_tag)
+                    );
+                """))
         except Exception as e:
             print(f"⚠️ 컬럼 추가 확인 중 에러 (최초 생성 시 무시 가능): {e}")
             
         print("✅ 데이터베이스 초기화 및 테이블 검증 완료")
+
+    def find_reusable_watching_record(self, session, *, rec_date, stock_code, strategy=None):
+        """체결/청산 이력이 없는 WATCHING/EXPIRED row만 재사용 대상으로 찾습니다."""
+        query = session.query(RecommendationHistory).filter(
+            RecommendationHistory.rec_date == rec_date,
+            RecommendationHistory.stock_code == stock_code,
+            RecommendationHistory.status.in_(("WATCHING", "EXPIRED")),
+            RecommendationHistory.buy_time.is_(None),
+            func.coalesce(RecommendationHistory.buy_qty, 0) == 0,
+        )
+        if strategy is not None:
+            query = query.filter(RecommendationHistory.strategy == strategy)
+        return query.order_by(RecommendationHistory.id.desc()).first()
     
     @contextmanager
     def get_session(self):
@@ -172,11 +251,19 @@ class DBManager:
                 strategy = 'KOSDAQ_ML'
             else:
                 strategy = 'KOSPI_ML'
+        strategy = normalize_strategy(strategy)
+        position = normalize_position_tag(strategy, position)
 
         with self.get_session() as session:
-            record = session.query(RecommendationHistory).filter_by(rec_date=date, stock_code=code).first()
+            record = self.find_reusable_watching_record(
+                session,
+                rec_date=date,
+                stock_code=code,
+                strategy=strategy,
+            )
             
             if record: # Update
+                record.stock_name = name
                 record.buy_price = price
                 record.trade_type = normalized_type # 💡 표준화된 태그 저장
                 record.strategy = strategy          # 💡 매핑된 전략 저장
@@ -203,18 +290,24 @@ class DBManager:
         """수동 감시 종목을 DB에 등록합니다."""
         today_date = datetime.now().date()
         target_code = str(code).zfill(6)
+        strategy = 'SCALPING'
+        position_tag = normalize_position_tag(strategy, None)
 
         try:
             with self.get_session() as session:
-                record = session.query(RecommendationHistory).filter_by(
+                record = self.find_reusable_watching_record(
+                    session,
                     rec_date=today_date,
-                    stock_code=target_code
-                ).first()
+                    stock_code=target_code,
+                    strategy=strategy,
+                )
 
                 if record:
+                    record.stock_name = name
                     record.status = 'WATCHING'
                     record.trade_type = 'SCALP' 
-                    record.strategy = 'SCALPING' # 💡 수동 등록 시 확실하게 단타 전략으로 덮어씌움
+                    record.strategy = strategy # 💡 수동 등록 시 확실하게 단타 전략으로 덮어씌움
+                    record.position_tag = normalize_position_tag(strategy, record.position_tag)
                 else:
                     new_record = RecommendationHistory(
                         rec_date=today_date,     
@@ -222,9 +315,9 @@ class DBManager:
                         stock_name=name,         
                         buy_price=0,
                         trade_type='SCALP', # 태그는 단타로
-                        strategy='SCALPING',       # 💡 실제 매매 로직은 확실한 SCALPING으로!
+                        strategy=strategy,       # 💡 실제 매매 로직은 확실한 SCALPING으로!
                         status='WATCHING',
-                        position_tag='MIDDLE'
+                        position_tag=position_tag,
                     )
                     session.add(new_record)
                 
@@ -331,6 +424,12 @@ class DBManager:
             if df.empty:
                 return []
 
+            df['strategy'] = df['strategy'].apply(normalize_strategy)
+            df['position_tag'] = df.apply(
+                lambda row: normalize_position_tag(row.get('strategy'), row.get('position_tag')),
+                axis=1,
+            )
+
             # 💡 [핵심 교정 2] 상태값(status) 우선순위 강제 지정 (알파벳 정렬 버그 차단)
             # 가장 중요한 상태(HOLDING)부터 먼저 오도록 랭킹을 매깁니다.
             status_priority = {
@@ -344,7 +443,7 @@ class DBManager:
             
             # 우선순위가 높은 순(오름차순), 그리고 id가 최신인 순(내림차순)으로 정렬 후 중복 제거
             df = df.sort_values(by=['priority', 'id'], ascending=[True, False])
-            df = df.drop_duplicates(subset=['code'], keep='first')
+            df = df.drop_duplicates(subset=['code', 'strategy'], keep='first')
             
             # 엔진에 넘기기 전에 임시 컬럼 삭제
             df = df.drop(columns=['priority'])
@@ -357,7 +456,8 @@ class DBManager:
             for t in targets:
                 t['prob'] = t.get('prob', default_prob)
                 t['buy_qty'] = t.get('buy_qty', 0)
-                t['strategy'] = t.get('strategy', 'KOSPI_ML')
+                t['strategy'] = normalize_strategy(t.get('strategy', 'KOSPI_ML'))
+                t['position_tag'] = normalize_position_tag(t['strategy'], t.get('position_tag'))
 
             return targets
             

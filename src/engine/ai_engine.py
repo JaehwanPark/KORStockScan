@@ -18,6 +18,7 @@ from google.genai import types
 from src.utils.logger import log_error
 from src.utils.constants import TRADING_RULES
 from src.engine.macro_briefing_complete import build_scanner_data_input
+from src.engine.sniper_position_tags import normalize_position_tag
 
 
 # ==========================================
@@ -366,6 +367,11 @@ class GeminiSniperEngine:
         self.current_api_key_index = 0
         self.cache_lock = threading.RLock()
         self.analysis_cache_ttl = getattr(TRADING_RULES, 'AI_ANALYZE_RESULT_CACHE_TTL_SEC', 8.0)
+        self.holding_analysis_cache_ttl = getattr(
+            TRADING_RULES,
+            'AI_HOLDING_RESULT_CACHE_TTL_SEC',
+            max(float(self.analysis_cache_ttl or 0.0), 30.0),
+        )
         self.gatekeeper_cache_ttl = getattr(TRADING_RULES, 'AI_GATEKEEPER_RESULT_CACHE_TTL_SEC', 12.0)
         self._analysis_cache = {}
         self._gatekeeper_cache = {}
@@ -382,7 +388,20 @@ class GeminiSniperEngine:
 
     def _normalize_for_cache(self, value):
         if isinstance(value, dict):
-            return {str(k): self._normalize_for_cache(v) for k, v in sorted(value.items()) if str(k) != "captured_at"}
+            transient_keys = {
+                "captured_at",
+                "last_ws_update_ts",
+                "time",
+                "timestamp",
+                "체결시간",
+                "tm",
+                "cntr_tm",
+            }
+            return {
+                str(k): self._normalize_for_cache(v)
+                for k, v in sorted(value.items())
+                if str(k) not in transient_keys
+            }
         if isinstance(value, list):
             return [self._normalize_for_cache(item) for item in value]
         if isinstance(value, tuple):
@@ -435,6 +454,158 @@ class GeminiSniperEngine:
                     cache.pop(item_key, None)
 
     def _build_analysis_cache_key(self, target_name, strategy, ws_data, recent_ticks, recent_candles, program_net_qty):
+        return self._build_analysis_cache_key_with_profile(
+            target_name=target_name,
+            strategy=strategy,
+            ws_data=ws_data,
+            recent_ticks=recent_ticks,
+            recent_candles=recent_candles,
+            program_net_qty=program_net_qty,
+            cache_profile="default",
+        )
+
+    def _bucket_int_for_cache(self, value, bucket):
+        try:
+            bucket = max(1, int(bucket))
+            return int(float(value or 0) // bucket)
+        except Exception:
+            return 0
+
+    def _bucket_float_for_cache(self, value, step):
+        try:
+            step = float(step)
+            if step <= 0:
+                return 0.0
+            return round(float(value or 0.0) / step) * step
+        except Exception:
+            return 0.0
+
+    def _price_bucket_step_for_cache(self, price):
+        try:
+            price = abs(int(float(price or 0)))
+        except Exception:
+            price = 0
+        if price >= 200_000:
+            return 500
+        if price >= 50_000:
+            return 100
+        if price >= 10_000:
+            return 50
+        if price >= 5_000:
+            return 10
+        return 5
+
+    def _get_best_levels_for_cache(self, ws_data):
+        orderbook = ws_data.get("orderbook") if isinstance(ws_data, dict) else None
+        if not isinstance(orderbook, dict):
+            return 0, 0
+        asks = orderbook.get("asks") or []
+        bids = orderbook.get("bids") or []
+        best_ask = asks[0].get("price", 0) if asks and isinstance(asks[0], dict) else 0
+        best_bid = bids[0].get("price", 0) if bids and isinstance(bids[0], dict) else 0
+        return best_ask, best_bid
+
+    def _compact_holding_ws_for_cache(self, ws_data):
+        ws_data = ws_data or {}
+        best_ask, best_bid = self._get_best_levels_for_cache(ws_data)
+        curr_price = ws_data.get("curr", 0) or best_ask or best_bid
+        price_bucket = self._price_bucket_step_for_cache(curr_price)
+        return {
+            "curr": self._bucket_int_for_cache(curr_price, price_bucket),
+            "fluctuation": self._bucket_float_for_cache(ws_data.get("fluctuation", 0.0), 0.25),
+            "v_pw": self._bucket_float_for_cache(ws_data.get("v_pw", 0.0), 10.0),
+            "buy_ratio": self._bucket_float_for_cache(ws_data.get("buy_ratio", 0.0), 4.0),
+            "best_ask": self._bucket_int_for_cache(best_ask, price_bucket),
+            "best_bid": self._bucket_int_for_cache(best_bid, price_bucket),
+            "ask_tot": self._bucket_int_for_cache(ws_data.get("ask_tot", 0), 25_000),
+            "bid_tot": self._bucket_int_for_cache(ws_data.get("bid_tot", 0), 25_000),
+            "net_bid_depth": self._bucket_int_for_cache(ws_data.get("net_bid_depth", 0), 10_000),
+            "net_ask_depth": self._bucket_int_for_cache(ws_data.get("net_ask_depth", 0), 10_000),
+            "buy_exec_volume": self._bucket_int_for_cache(ws_data.get("buy_exec_volume", 0), 3_000),
+            "sell_exec_volume": self._bucket_int_for_cache(ws_data.get("sell_exec_volume", 0), 3_000),
+            "tick_trade_value": self._bucket_int_for_cache(ws_data.get("tick_trade_value", 0), 10_000),
+        }
+
+    def _compact_holding_ticks_for_cache(self, recent_ticks):
+        ticks = recent_ticks or []
+        if not ticks:
+            return []
+        latest = ticks[-1] if isinstance(ticks[-1], dict) else {}
+        buy_volume = 0
+        sell_volume = 0
+        total_value = 0
+        latest_price = 0
+        for tick in ticks[-10:]:
+            if not isinstance(tick, dict):
+                continue
+            price = tick.get("price", tick.get("현재가", tick.get("체결가", 0)))
+            volume = tick.get("volume", tick.get("qty", tick.get("체결량", 0)))
+            direction = str(tick.get("dir", tick.get("side", tick.get("trade_type", ""))) or "").upper()
+            try:
+                latest_price = int(float(price or latest_price or 0))
+            except Exception:
+                latest_price = 0
+            try:
+                volume_int = int(float(volume or 0))
+            except Exception:
+                volume_int = 0
+            total_value += max(0, latest_price) * max(0, volume_int)
+            if "SELL" in direction or "매도" in direction:
+                sell_volume += volume_int
+            else:
+                buy_volume += volume_int
+        price_bucket = self._price_bucket_step_for_cache(latest_price)
+        return [{
+            "latest_price": self._bucket_int_for_cache(latest.get("price", latest.get("현재가", latest_price)), price_bucket),
+            "buy_volume": self._bucket_int_for_cache(buy_volume, 100),
+            "sell_volume": self._bucket_int_for_cache(sell_volume, 100),
+            "net_volume": self._bucket_int_for_cache(buy_volume - sell_volume, 100),
+            "trade_value": self._bucket_int_for_cache(total_value, 500_000),
+        }]
+
+    def _compact_holding_candles_for_cache(self, recent_candles):
+        candles = recent_candles or []
+        compact = []
+        for candle in candles[-3:]:
+            if not isinstance(candle, dict):
+                continue
+            close_price = candle.get("현재가", candle.get("close", candle.get("종가", 0)))
+            high_price = candle.get("고가", candle.get("high", close_price))
+            low_price = candle.get("저가", candle.get("low", close_price))
+            volume = candle.get("거래량", candle.get("volume", 0))
+            price_bucket = self._price_bucket_step_for_cache(close_price)
+            compact.append(
+                {
+                    "close": self._bucket_int_for_cache(close_price, price_bucket),
+                    "high": self._bucket_int_for_cache(high_price, price_bucket),
+                    "low": self._bucket_int_for_cache(low_price, price_bucket),
+                    "volume": self._bucket_int_for_cache(volume, 5_000),
+                }
+            )
+        return compact
+
+    def _build_analysis_cache_key_with_profile(
+        self,
+        target_name,
+        strategy,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        program_net_qty,
+        cache_profile,
+    ):
+        if cache_profile == "holding":
+            return self._build_cache_digest(
+                {
+                    "cache_profile": "holding",
+                    "target_name": target_name,
+                    "strategy": strategy,
+                    "ws_data": self._compact_holding_ws_for_cache(ws_data),
+                    "recent_ticks": self._compact_holding_ticks_for_cache(recent_ticks),
+                    "recent_candles": self._compact_holding_candles_for_cache(recent_candles),
+                    "program_net_qty": self._bucket_int_for_cache(program_net_qty, 1_000),
+                }
+            )
         return self._build_cache_digest({
             "target_name": target_name,
             "strategy": strategy,
@@ -444,12 +615,48 @@ class GeminiSniperEngine:
             "program_net_qty": program_net_qty,
         })
 
+    def _resolve_analysis_cache_ttl(self, cache_profile):
+        if cache_profile == "holding":
+            return float(self.holding_analysis_cache_ttl or 0.0)
+        return float(self.analysis_cache_ttl or 0.0)
+
+    def _compact_gatekeeper_ctx_for_cache(self, realtime_ctx):
+        ctx = realtime_ctx or {}
+        curr_price = ctx.get("curr_price", 0)
+        target_price = ctx.get("target_price", 0)
+        vwap_price = ctx.get("vwap_price", 0)
+        prev_high = ctx.get("prev_high", 0)
+        price_bucket = self._price_bucket_step_for_cache(curr_price)
+        return {
+            "strat_label": str(ctx.get("strat_label", "") or ""),
+            "position_status": str(ctx.get("position_status", "") or ""),
+            "curr_price": self._bucket_int_for_cache(curr_price, price_bucket),
+            "target_price": self._bucket_int_for_cache(target_price, price_bucket),
+            "vwap_price": self._bucket_int_for_cache(vwap_price, price_bucket),
+            "prev_high": self._bucket_int_for_cache(prev_high, price_bucket),
+            "market_cap": self._bucket_int_for_cache(ctx.get("market_cap", 0), 50_000_000_000),
+            "fluctuation": self._bucket_float_for_cache(ctx.get("fluctuation", 0.0), 0.3),
+            "score": self._bucket_float_for_cache(ctx.get("score", 0.0), 10.0),
+            "v_pw_now": self._bucket_float_for_cache(ctx.get("v_pw_now", 0.0), 5.0),
+            "buy_ratio_ws": self._bucket_float_for_cache(ctx.get("buy_ratio_ws", 0.0), 4.0),
+            "exec_buy_ratio": self._bucket_float_for_cache(ctx.get("exec_buy_ratio", 0.0), 8.0),
+            "prog_net_qty": self._bucket_int_for_cache(ctx.get("prog_net_qty", 0), 10_000),
+            "prog_delta_qty": self._bucket_int_for_cache(ctx.get("prog_delta_qty", 0), 2_000),
+            "tick_trade_value": self._bucket_int_for_cache(ctx.get("tick_trade_value", 0), 25_000),
+            "net_buy_exec_volume": self._bucket_int_for_cache(ctx.get("net_buy_exec_volume", 0), 500),
+            "net_bid_depth": self._bucket_int_for_cache(ctx.get("net_bid_depth", 0), 10_000),
+            "net_ask_depth": self._bucket_int_for_cache(ctx.get("net_ask_depth", 0), 10_000),
+            "spread_tick": self._bucket_int_for_cache(ctx.get("spread_tick", 0), 1),
+            "vol_ratio": self._bucket_float_for_cache(ctx.get("vol_ratio", 0.0), 25.0),
+            "today_vol": self._bucket_int_for_cache(ctx.get("today_vol", 0), 100_000),
+        }
+
     def _build_gatekeeper_cache_key(self, stock_name, stock_code, realtime_ctx, analysis_mode):
         return self._build_cache_digest({
             "stock_name": stock_name,
             "stock_code": stock_code,
             "analysis_mode": analysis_mode,
-            "realtime_ctx": realtime_ctx,
+            "realtime_ctx": self._compact_gatekeeper_ctx_for_cache(realtime_ctx),
         })
     
     # ==========================================
@@ -728,14 +935,24 @@ class GeminiSniperEngine:
     # 4. 🚀 실전 분석 실행 (스나이퍼가 호출할 메인 함수)
     # ==========================================
     # strategy 파라미터 추가 (기본값 SCALPING)
-    def analyze_target(self, target_name, ws_data, recent_ticks, recent_candles, strategy="SCALPING", program_net_qty=0):
-        cache_key = self._build_analysis_cache_key(
+    def analyze_target(
+        self,
+        target_name,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        strategy="SCALPING",
+        program_net_qty=0,
+        cache_profile="default",
+    ):
+        cache_key = self._build_analysis_cache_key_with_profile(
             target_name=target_name,
             strategy=strategy,
             ws_data=ws_data,
             recent_ticks=recent_ticks,
             recent_candles=recent_candles,
             program_net_qty=program_net_qty,
+            cache_profile=cache_profile,
         )
         cached_result = self._cache_get("_analysis_cache", cache_key)
         if cached_result is not None:
@@ -778,7 +995,12 @@ class GeminiSniperEngine:
             # 호출 성공 시 실패 횟수 리셋
             self.consecutive_failures = 0
             self.last_call_time = time.time()
-            self._cache_set("_analysis_cache", cache_key, result, self.analysis_cache_ttl)
+            self._cache_set(
+                "_analysis_cache",
+                cache_key,
+                result,
+                self._resolve_analysis_cache_ttl(cache_profile),
+            )
             result = dict(result)
             result["cache_hit"] = False
             result["cache_mode"] = "miss"
@@ -805,7 +1027,7 @@ class GeminiSniperEngine:
             """
             # 전략과 포지션 태그에 따라 프롬프트 분기 (기본은 SCALPING)
             strategy = condition_profile.get('strategy', 'SCALPING')
-            position_tag = condition_profile.get('position_tag', 'MIDDLE')
+            position_tag = normalize_position_tag(strategy, condition_profile.get('position_tag'))
             # TODO: 조건별 프롬프트 추가 (VCP, S15 등)
             # 현재는 기존 analyze_target에 위임
             return self.analyze_target(target_name, ws_data, recent_ticks, recent_candles, strategy)

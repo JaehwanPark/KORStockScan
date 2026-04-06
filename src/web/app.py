@@ -13,11 +13,13 @@ from src.engine.sniper_strength_observation_report import build_strength_momentu
 from src.engine.sniper_entry_pipeline_report import build_entry_pipeline_flow_report
 from src.engine.sniper_trade_review_report import build_trade_review_report
 from src.engine.sniper_performance_tuning_report import build_performance_tuning_report
+from src.engine.strategy_position_performance_report import build_strategy_position_performance_report
 from src.engine.sniper_gatekeeper_replay import (
     find_gatekeeper_snapshot,
     load_gatekeeper_snapshots,
     rerun_gatekeeper_snapshot,
 )
+from src.engine.log_archive_service import load_monitor_snapshot
 from src.engine.sniper_config import CONF
 from src.engine.daily_report_service import (
     list_available_report_dates,
@@ -34,6 +36,30 @@ def _resolve_dashboard_since(target_date: str, since: str | None) -> str | None:
     if str(target_date).strip() != today:
         return None
     return (datetime.now() - timedelta(minutes=_DEFAULT_DASHBOARD_LOOKBACK_MINUTES)).strftime("%H:%M:%S")
+
+
+def _load_saved_performance_tuning_snapshot(target_date: str, since: str | None, refresh: bool) -> dict | None:
+    if refresh or since:
+        return None
+    return load_monitor_snapshot("performance_tuning", target_date)
+
+
+def _load_saved_trade_review_snapshot(
+    target_date: str,
+    *,
+    since: str | None,
+    code: str | None,
+    scope: str,
+    top: int,
+    refresh: bool,
+) -> dict | None:
+    if refresh or since or code or str(scope or "entered").strip().lower() != "entered":
+        return None
+    snapshot = load_monitor_snapshot("trade_review", target_date)
+    if not snapshot:
+        return None
+    snapshot["recent_trades"] = list(snapshot.get("recent_trades") or [])[: max(1, int(top or 10))]
+    return snapshot
 
 @app.route("/api/daily-report")
 def daily_report_api():
@@ -58,6 +84,7 @@ def dashboard_home():
         "daily-report": "일일 전략 리포트",
         "entry-pipeline-flow": "진입 게이트 차단",
         "trade-review": "실제 매매 복기",
+        "strategy-performance": "전략 성과 분석",
         "gatekeeper-replay": "Gatekeeper 리플레이",
         "performance-tuning": "성능 튜닝 모니터",
     }
@@ -66,6 +93,7 @@ def dashboard_home():
         "daily-report": f"/daily-report?date={target_date}",
         "entry-pipeline-flow": f"/entry-pipeline-flow?date={target_date}&top={max(1, int(top or 10))}" + (f"&since={resolved_since}" if resolved_since else ""),
         "trade-review": f"/trade-review?date={target_date}",
+        "strategy-performance": f"/strategy-performance?date={target_date}",
         "gatekeeper-replay": f"/gatekeeper-replay?date={target_date}",
         "performance-tuning": f"/performance-tuning?date={target_date}" + (f"&since={resolved_since}" if resolved_since else ""),
     }
@@ -841,10 +869,23 @@ def gatekeeper_replay_api():
 def performance_tuning_api():
     target_date = request.args.get('date')
     since = request.args.get('since')
+    refresh = str(request.args.get("refresh", "")).lower() in {"1", "true", "yes", "y"}
     if not target_date:
         target_date = datetime.now().strftime('%Y-%m-%d')
     since = _resolve_dashboard_since(target_date, since)
-    report = build_performance_tuning_report(target_date=target_date, since_time=since)
+    report = _load_saved_performance_tuning_snapshot(target_date, since, refresh)
+    if report is None:
+        report = build_performance_tuning_report(target_date=target_date, since_time=since)
+    return jsonify(report)
+
+
+@app.route('/api/strategy-performance')
+def strategy_performance_api():
+    target_date = request.args.get('date')
+    refresh = str(request.args.get("refresh", "")).lower() in {"1", "true", "yes", "y"}
+    if not target_date:
+        target_date = datetime.now().strftime('%Y-%m-%d')
+    report = build_strategy_position_performance_report(target_date=target_date, refresh=refresh)
     return jsonify(report)
 
 
@@ -1268,11 +1309,14 @@ def gatekeeper_replay_preview():
 def performance_tuning_preview():
     target_date = request.args.get('date')
     since = request.args.get('since')
+    refresh = str(request.args.get("refresh", "")).lower() in {"1", "true", "yes", "y"}
     if not target_date:
         target_date = datetime.now().strftime('%Y-%m-%d')
     since = _resolve_dashboard_since(target_date, since)
 
-    report = build_performance_tuning_report(target_date=target_date, since_time=since)
+    report = _load_saved_performance_tuning_snapshot(target_date, since, refresh)
+    if report is None:
+        report = build_performance_tuning_report(target_date=target_date, since_time=since)
     metrics = report.get('metrics', {}) or {}
     cards = report.get('cards', []) or []
     watch_items = report.get('watch_items', []) or []
@@ -1709,6 +1753,250 @@ def performance_tuning_preview():
     )
 
 
+@app.route('/strategy-performance')
+def strategy_performance_preview():
+    target_date = request.args.get('date')
+    refresh = str(request.args.get("refresh", "")).lower() in {"1", "true", "yes", "y"}
+    if not target_date:
+        target_date = datetime.now().strftime('%Y-%m-%d')
+
+    report = build_strategy_position_performance_report(target_date=target_date, refresh=refresh)
+    summary = report.get('summary', {}) or {}
+    kpis = report.get('kpis', []) or []
+    strategy_totals = report.get('strategy_totals', []) or []
+    rows = report.get('rows', []) or []
+    top_winners = report.get('sections', {}).get('top_winners', []) or []
+    top_losers = report.get('sections', {}).get('top_losers', []) or []
+
+    template = """
+    <!doctype html>
+    <html lang="ko">
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>Strategy Performance</title>
+      <style>
+        :root {
+          --bg: #f4f7ef;
+          --card: #fcfffa;
+          --ink: #1b2a22;
+          --muted: #6c7f73;
+          --line: #d7e2d5;
+          --accent: #1d7a52;
+        }
+        body { margin: 0; background: var(--bg); color: var(--ink); font-family: "Pretendard", "Noto Sans KR", sans-serif; }
+        .wrap { max-width: 1180px; margin: 0 auto; padding: 24px 16px 48px; }
+        .hero { background: linear-gradient(135deg, #1c3d31, #2d7a57); color: white; padding: 22px; border-radius: 20px; }
+        .hero h1 { margin: 0 0 8px; font-size: 28px; }
+        .hero p { margin: 0; opacity: 0.9; }
+        .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
+        .stat { background: rgba(255,255,255,0.12); border-radius: 16px; padding: 12px 14px; }
+        .stat .label { font-size: 12px; opacity: 0.72; margin-bottom: 4px; }
+        .stat .value { font-size: 22px; font-weight: 700; }
+        .kpi-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
+        .kpi-card { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 16px; box-shadow: 0 10px 24px rgba(27,42,34,0.05); }
+        .kpi-card.good { background: #edf8f0; border-color: #cde6d4; }
+        .kpi-card.warn { background: #fff8ea; border-color: #f0dbb0; }
+        .kpi-card.bad { background: #fff0f0; border-color: #efcaca; }
+        .kpi-card.muted { background: #f5f7f4; border-color: #dde4da; }
+        .kpi-label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+        .kpi-value { font-size: 20px; font-weight: 800; line-height: 1.25; }
+        .kpi-detail { margin-top: 6px; font-size: 12px; color: var(--muted); }
+        .grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px; margin-top: 18px; }
+        .card { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 18px; box-shadow: 0 10px 24px rgba(27,42,34,0.05); }
+        .card h2 { margin: 0 0 12px; font-size: 18px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { text-align: left; padding: 10px 8px; border-top: 1px solid var(--line); font-size: 13px; vertical-align: top; }
+        th { color: var(--muted); font-weight: 600; border-top: 0; }
+        .good { color: #176942; font-weight: 700; }
+        .bad { color: #a12b2b; font-weight: 700; }
+        .muted { color: var(--muted); }
+        .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+        .chip { border: 1px solid var(--line); background: #f4f8f2; border-radius: 999px; padding: 6px 10px; font-size: 12px; }
+        @media (max-width: 920px) {
+          .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+          .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+          .grid { grid-template-columns: 1fr; }
+        }
+        @media (max-width: 640px) {
+          .kpi-grid { grid-template-columns: 1fr; }
+        }
+      </style>
+    </head>
+    <body>
+      <div class="wrap">
+        <div class="hero">
+          <h1>전략/포지션태그 성과</h1>
+          <p>{{ target_date }} 기준 실제 매매 복기를 정규화한 성과 집계입니다.</p>
+          <div class="stats">
+            <div class="stat"><div class="label">전략 수</div><div class="value">{{ summary.strategy_count }}</div></div>
+            <div class="stat"><div class="label">태그 그룹</div><div class="value">{{ summary.tag_group_count }}</div></div>
+            <div class="stat"><div class="label">종료 거래</div><div class="value">{{ summary.completed_count }}</div></div>
+            <div class="stat"><div class="label">실현손익</div><div class="value">{{ "{:,}".format(summary.realized_pnl_krw) }}원</div></div>
+          </div>
+        </div>
+
+        <div class="kpi-grid">
+          {% for item in kpis %}
+            <div class="kpi-card {{ item.tone }}">
+              <div class="kpi-label">{{ item.label }}</div>
+              <div class="kpi-value">{{ item.value }}</div>
+              <div class="kpi-detail">{{ item.detail }}</div>
+            </div>
+          {% else %}
+            <div class="kpi-card muted">
+              <div class="kpi-label">KPI</div>
+              <div class="kpi-value">데이터 없음</div>
+              <div class="kpi-detail">종료 거래가 쌓이면 KPI가 생성됩니다.</div>
+            </div>
+          {% endfor %}
+        </div>
+
+        <div class="grid">
+          <div class="card">
+            <h2>전략별 합산</h2>
+            <table>
+              <thead>
+                <tr>
+                  <th>전략</th>
+                  <th>진입</th>
+                  <th>종료</th>
+                  <th>미종료</th>
+                  <th>승/패</th>
+                  <th>실현손익</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in strategy_totals %}
+                  <tr>
+                    <td>{{ row.strategy }}</td>
+                    <td>{{ row.entered_count }}</td>
+                    <td>{{ row.completed_count }}</td>
+                    <td>{{ row.open_count }}</td>
+                    <td>{{ row.win_count }}/{{ row.loss_count }}</td>
+                    <td class="{% if row.realized_pnl_krw > 0 %}good{% elif row.realized_pnl_krw < 0 %}bad{% endif %}">{{ "{:,}".format(row.realized_pnl_krw) }}원</td>
+                  </tr>
+                {% else %}
+                  <tr><td colspan="6" class="muted">데이터 없음</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+
+          <div class="card">
+            <h2>상위 인사이트</h2>
+            <div class="chips">
+              {% for row in rows[:8] %}
+                <span class="chip">
+                  {{ row.strategy }} / {{ row.position_tag }} · {{ row.completed_count }}건 ·
+                  <span class="{% if row.realized_pnl_krw > 0 %}good{% elif row.realized_pnl_krw < 0 %}bad{% endif %}">
+                    {{ "{:,}".format(row.realized_pnl_krw) }}원
+                  </span>
+                </span>
+              {% else %}
+                <span class="muted">요약 데이터가 없습니다.</span>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top: 16px;">
+          <h2>전략 × 포지션태그 상세</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>전략</th>
+                <th>포지션태그</th>
+                <th>진입</th>
+                <th>종료</th>
+                <th>승/패/보합</th>
+                <th>평균 손익률</th>
+                <th>평균 보유</th>
+                <th>실현손익</th>
+                <th>최고/최저</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in rows %}
+                <tr>
+                  <td>{{ row.strategy }}</td>
+                  <td>{{ row.position_tag }}</td>
+                  <td>{{ row.entered_count }}</td>
+                  <td>{{ row.completed_count }} / 미종료 {{ row.open_count }}</td>
+                  <td>{{ row.win_count }} / {{ row.loss_count }} / {{ row.flat_count }}</td>
+                  <td class="{% if row.avg_profit_rate > 0 %}good{% elif row.avg_profit_rate < 0 %}bad{% endif %}">{{ "%+.2f"|format(row.avg_profit_rate) }}%</td>
+                  <td>{{ row.avg_holding_seconds }}초</td>
+                  <td class="{% if row.realized_pnl_krw > 0 %}good{% elif row.realized_pnl_krw < 0 %}bad{% endif %}">{{ "{:,}".format(row.realized_pnl_krw) }}원</td>
+                  <td>
+                    {% if row.best_trade_code %}
+                      최고 {{ row.best_trade_name }}({{ row.best_trade_code }}) {{ "%+.2f"|format(row.best_profit_rate) }}%<br>
+                    {% endif %}
+                    {% if row.worst_trade_code %}
+                      최저 {{ row.worst_trade_name }}({{ row.worst_trade_code }}) {{ "%+.2f"|format(row.worst_profit_rate) }}%
+                    {% endif %}
+                  </td>
+                </tr>
+              {% else %}
+                <tr><td colspan="9" class="muted">상세 데이터가 없습니다.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="grid" style="margin-top: 16px;">
+          <div class="card">
+            <h2>상위 익절 거래</h2>
+            <table>
+              <thead><tr><th>종목</th><th>전략</th><th>손익률</th><th>실현손익</th></tr></thead>
+              <tbody>
+                {% for row in top_winners %}
+                  <tr>
+                    <td>{{ row.stock_name }}({{ row.stock_code }})</td>
+                    <td>{{ row.strategy }} / {{ row.position_tag }}</td>
+                    <td class="good">{{ "%+.2f"|format(row.profit_rate) }}%</td>
+                    <td class="good">{{ "{:,}".format(row.realized_pnl_krw) }}원</td>
+                  </tr>
+                {% else %}
+                  <tr><td colspan="4" class="muted">데이터 없음</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          <div class="card">
+            <h2>상위 손실 거래</h2>
+            <table>
+              <thead><tr><th>종목</th><th>전략</th><th>손익률</th><th>실현손익</th></tr></thead>
+              <tbody>
+                {% for row in top_losers %}
+                  <tr>
+                    <td>{{ row.stock_name }}({{ row.stock_code }})</td>
+                    <td>{{ row.strategy }} / {{ row.position_tag }}</td>
+                    <td class="bad">{{ "%+.2f"|format(row.profit_rate) }}%</td>
+                    <td class="bad">{{ "{:,}".format(row.realized_pnl_krw) }}원</td>
+                  </tr>
+                {% else %}
+                  <tr><td colspan="4" class="muted">데이터 없음</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </body>
+    </html>
+    """
+    return render_template_string(
+        template,
+        target_date=target_date,
+        summary=summary,
+        kpis=kpis,
+        strategy_totals=strategy_totals,
+        rows=rows,
+        top_winners=top_winners,
+        top_losers=top_losers,
+    )
+
+
 @app.route('/api/trade-review')
 def trade_review_api():
     target_date = request.args.get('date')
@@ -1716,16 +2004,26 @@ def trade_review_api():
     code = request.args.get('code')
     scope = request.args.get('scope') or 'entered'
     top = request.args.get('top', default=10, type=int)
+    refresh = str(request.args.get("refresh", "")).lower() in {"1", "true", "yes", "y"}
     if not target_date:
         target_date = datetime.now().strftime('%Y-%m-%d')
     since = _resolve_dashboard_since(target_date, since)
-    report = build_trade_review_report(
-        target_date=target_date,
+    report = _load_saved_trade_review_snapshot(
+        target_date,
+        since=since,
         code=code,
-        since_time=since,
-        top_n=max(1, int(top or 10)),
         scope=scope,
+        top=top,
+        refresh=refresh,
     )
+    if report is None:
+        report = build_trade_review_report(
+            target_date=target_date,
+            code=code,
+            since_time=since,
+            top_n=max(1, int(top or 10)),
+            scope=scope,
+        )
     return jsonify(report)
 
 
@@ -1736,17 +2034,27 @@ def trade_review_preview():
     code = request.args.get('code')
     scope = request.args.get('scope') or 'entered'
     top = request.args.get('top', default=10, type=int)
+    refresh = str(request.args.get("refresh", "")).lower() in {"1", "true", "yes", "y"}
     if not target_date:
         target_date = datetime.now().strftime('%Y-%m-%d')
     since = _resolve_dashboard_since(target_date, since)
 
-    report = build_trade_review_report(
-        target_date=target_date,
+    report = _load_saved_trade_review_snapshot(
+        target_date,
+        since=since,
         code=code,
-        since_time=since,
-        top_n=max(1, int(top or 10)),
         scope=scope,
+        top=top,
+        refresh=refresh,
     )
+    if report is None:
+        report = build_trade_review_report(
+            target_date=target_date,
+            code=code,
+            since_time=since,
+            top_n=max(1, int(top or 10)),
+            scope=scope,
+        )
     metrics = report.get('metrics', {}) or {}
     recent_trades = report.get('sections', {}).get('recent_trades', []) or []
     event_breakdown = report.get('event_breakdown', []) or []
@@ -1827,6 +2135,26 @@ def trade_review_preview():
         .row { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px; }
         .row:first-child { border-top: 0; padding-top: 0; margin-top: 0; }
         .title { font-weight: 700; font-size: 16px; }
+        .title-line {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          gap: 8px;
+        }
+        .result-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          border-radius: 999px;
+          padding: 5px 10px;
+          font-size: 12px;
+          font-weight: 700;
+          border: 1px solid var(--line);
+          background: #edf5ee;
+        }
+        .result-badge.good { background: #e7f6ee; border-color: #b8dfc8; color: #176942; }
+        .result-badge.warn { background: #fff3df; border-color: #f1d29d; color: #9a5b10; }
+        .result-badge.bad { background: #fdeaea; border-color: #efb8b8; color: #a12b2b; }
         .meta { color: var(--muted); font-size: 13px; margin-top: 4px; }
         .bars { display: grid; gap: 10px; }
         .bar-row { display: grid; grid-template-columns: 150px 1fr 52px; gap: 10px; align-items: center; }
@@ -1837,9 +2165,22 @@ def trade_review_preview():
         .tag.good { background: #e7f6ee; border-color: #b8dfc8; color: #176942; }
         .tag.warn { background: #fff3df; border-color: #f1d29d; color: #9a5b10; }
         .tag.bad { background: #fdeaea; border-color: #efb8b8; color: #a12b2b; }
+        .tag.muted { background: #f2f5f1; border-color: #dbe4d7; color: #6c7f73; }
         .arrow { color: var(--muted); font-size: 12px; }
         .detail-flow { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
         .detail-chip { border-radius: 999px; padding: 4px 9px; font-size: 12px; background: #f3f7f2; border: 1px solid var(--line); color: var(--ink); }
+        .insight-box {
+          margin-top: 8px;
+          border-radius: 14px;
+          border: 1px solid var(--line);
+          background: #f7fbf6;
+          padding: 12px 13px;
+        }
+        .insight-box.good { background: #edf8f0; border-color: #cde6d4; }
+        .insight-box.warn { background: #fff8ea; border-color: #f0dbb0; }
+        .insight-box.bad { background: #fff0f0; border-color: #efcaca; }
+        .insight-box.muted { background: #f5f7f4; border-color: #dde4da; }
+        .insight-title { font-size: 13px; font-weight: 700; }
         .warning-box {
           margin-top: 16px;
           background: #fff5e8;
@@ -1934,7 +2275,10 @@ def trade_review_preview():
           <h2>거래별 복기</h2>
           {% for row in recent_trades %}
             <div class="row">
-              <div class="title">{{ row.name }} ({{ row.code }}) / ID {{ row.id }}</div>
+              <div class="title-line">
+                <span class="result-badge {{ row.result_tone }}">{{ row.result_icon }} {{ row.result_label }}</span>
+                <div class="title">{{ row.name }} ({{ row.code }}) / ID {{ row.id }}</div>
+              </div>
               <div class="meta">
                 {{ row.strategy }} · {{ row.status }} · 매수 {{ "{:,}".format(row.buy_price|int) }}원 x {{ row.buy_qty }}주
                 {% if row.sell_time %}
@@ -1982,20 +2326,27 @@ def trade_review_preview():
               {% if row.timeline %}
                 <div class="meta" style="margin-top: 10px;">핵심 흐름</div>
                 <div class="flow">
-                  {% for item in row.timeline %}
-                    <span class="tag {% if item.stage == 'sell_completed' %}good{% elif item.stage in ['exit_signal','sell_order_failed'] %}bad{% elif item.stage == 'ai_holding_review' %}warn{% endif %}">{{ item.label }}</span>
+                  {% for item in row.compact_timeline %}
+                    <span class="tag {% if item.is_omitted %}muted{% elif item.stage == 'sell_completed' %}good{% elif item.stage in ['exit_signal','sell_order_failed'] %}bad{% elif item.stage == 'ai_holding_review' %}warn{% endif %}">{{ item.label }}</span>
                     {% if not loop.last %}
                       <span class="arrow">→</span>
                     {% endif %}
                   {% endfor %}
                 </div>
+                {% if row.timeline_hidden_count > 0 %}
+                  <div class="meta">전체 {{ row.timeline|length }}단계 중 중간 {{ row.timeline_hidden_count }}단계를 접어서 표시합니다.</div>
+                {% endif %}
               {% endif %}
-              {% if row.ai_reviews %}
-                <div class="meta" style="margin-top: 10px;">최근 AI 보유감시</div>
-                <div class="detail-flow">
-                  {% for item in row.ai_reviews %}
-                    <span class="detail-chip">{{ item.timestamp }} / AI {{ item.ai_score }} / 수익 {{ item.profit_rate }}% / 카운트 {{ item.low_score_hits }}</span>
-                  {% endfor %}
+              {% if row.ai_review_summary %}
+                <div class="meta" style="margin-top: 10px;">최근 AI 보유감시 요약</div>
+                <div class="insight-box {{ row.ai_review_summary.tone }}">
+                  <div class="insight-title">{{ row.ai_review_summary.headline }}</div>
+                  <div class="meta">{{ row.ai_review_summary.summary }}</div>
+                  <div class="detail-flow">
+                    {% for item in row.ai_review_summary.chips %}
+                      <span class="detail-chip">{{ item.label }}: {{ item.value }}</span>
+                    {% endfor %}
+                  </div>
                 </div>
               {% endif %}
               {% if row.latest_event and row.latest_event.details %}

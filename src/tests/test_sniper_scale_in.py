@@ -604,6 +604,44 @@ def test_entry_arm_skips_strength_recheck_after_ai_confirm(monkeypatch):
     assert "latency_block" in pipeline_stages
 
 
+def test_publish_entry_mode_summary_formats_fallback_message(monkeypatch):
+    published = []
+
+    class DummyEventBus:
+        def publish(self, topic, payload):
+            published.append((topic, payload))
+
+    monkeypatch.setattr(state_handlers, "EVENT_BUS", DummyEventBus())
+
+    state_handlers._publish_entry_mode_summary(
+        {"name": "씨아이에스"},
+        "222080",
+        entry_mode="fallback",
+        latency_gate={
+            "latency_state": "CAUTION",
+            "decision": "ALLOW_FALLBACK",
+            "signal_price": 12150,
+            "latest_price": 12150,
+            "orders": [
+                {"tag": "fallback_scout", "qty": 1, "price": 12200, "tif": "IOC"},
+                {"tag": "fallback_main", "qty": 44, "price": 12130, "tif": "DAY"},
+            ],
+        },
+    )
+
+    assert len(published) == 1
+    topic, payload = published[0]
+    assert topic == "TELEGRAM_BROADCAST"
+    assert payload["audience"] == "ADMIN_ONLY"
+    assert payload["parse_mode"] == "Markdown"
+    assert "지연 대응 분할진입 활성화" in payload["message"]
+    assert "지연 상태: `주의`" in payload["message"]
+    assert "판정: `분할 진입 허용`" in payload["message"]
+    assert "신호가 `12,150원` / 현재가 `12,150원`" in payload["message"]
+    assert "탐색 주문: 1주 / 12,200원 / 즉시체결 우선" in payload["message"]
+    assert "본 주문: 44주 / 12,130원 / 장중 유지" in payload["message"]
+
+
 def test_execution_receipt_accumulates_fallback_bundle_fills(monkeypatch):
     receipts.ACTIVE_TARGETS = []
     receipts.highest_prices = {}

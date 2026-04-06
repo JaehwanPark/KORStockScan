@@ -10,6 +10,7 @@ def _build_engine():
     engine._analysis_cache = {}
     engine._gatekeeper_cache = {}
     engine.analysis_cache_ttl = 30.0
+    engine.holding_analysis_cache_ttl = 60.0
     engine.gatekeeper_cache_ttl = 30.0
     engine.ai_disabled = False
     engine.last_call_time = 0
@@ -46,6 +47,41 @@ def test_analyze_target_uses_short_ttl_cache(monkeypatch):
     assert second["action"] == "BUY"
 
 
+def test_analyze_target_cache_ignores_transient_market_timestamps(monkeypatch):
+    engine = _build_engine()
+    call_count = {"value": 0}
+
+    monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "packet")
+
+    def _fake_call(*args, **kwargs):
+        call_count["value"] += 1
+        return {"action": "WAIT", "score": 61, "reason": "stable"}
+
+    monkeypatch.setattr(engine, "_call_gemini_safe", _fake_call)
+
+    ws_base = {
+        "curr": 57100,
+        "fluctuation": 1.2,
+        "v_pw": 210.0,
+        "orderbook": {"asks": [], "bids": []},
+    }
+    ws_1 = dict(ws_base, last_ws_update_ts=1712369400.10)
+    ws_2 = dict(ws_base, last_ws_update_ts=1712369400.95)
+
+    ticks_1 = [{"time": "09:11:27", "price": 57100, "volume": 10, "dir": "BUY"}]
+    ticks_2 = [{"time": "09:11:28", "price": 57100, "volume": 10, "dir": "BUY"}]
+    candles_1 = [{"체결시간": "09:11:00", "현재가": 57100, "거래량": 100}]
+    candles_2 = [{"체결시간": "09:11:01", "현재가": 57100, "거래량": 100}]
+
+    first = engine.analyze_target("심텍", ws_1, ticks_1, candles_1, strategy="SCALPING")
+    second = engine.analyze_target("심텍", ws_2, ticks_2, candles_2, strategy="SCALPING")
+
+    assert call_count["value"] == 1
+    assert first["cache_hit"] is False
+    assert second["cache_hit"] is True
+    assert second["score"] == 61
+
+
 def test_gatekeeper_cache_ignores_captured_at(monkeypatch):
     engine = _build_engine()
     call_count = {"value": 0}
@@ -75,3 +111,143 @@ def test_gatekeeper_cache_ignores_captured_at(monkeypatch):
     assert first["cache_hit"] is False
     assert second["cache_hit"] is True
     assert second["allow_entry"] is True
+
+
+def test_gatekeeper_cache_absorbs_small_context_noise(monkeypatch):
+    engine = _build_engine()
+    call_count = {"value": 0}
+
+    def _fake_report(*args, **kwargs):
+        call_count["value"] += 1
+        return "[눌림 대기]\n미세 변동"
+
+    monkeypatch.setattr(engine, "generate_realtime_report", _fake_report)
+
+    ctx_a = {
+        "curr_price": 72500,
+        "target_price": 73200,
+        "vwap_price": 72100,
+        "prev_high": 73000,
+        "market_cap": 551000000000,
+        "fluctuation": 1.42,
+        "score": 66.1,
+        "v_pw_now": 118.1,
+        "buy_ratio_ws": 62.4,
+        "exec_buy_ratio": 61.1,
+        "prog_net_qty": 18490,
+        "prog_delta_qty": 2210,
+        "tick_trade_value": 28500,
+        "net_buy_exec_volume": 510,
+        "net_bid_depth": 11880,
+        "net_ask_depth": -3420,
+        "spread_tick": 1,
+        "vol_ratio": 146.0,
+        "today_vol": 1854321,
+        "captured_at": "2026-04-03 10:00:00",
+    }
+    ctx_b = {
+        **ctx_a,
+        "curr_price": 72540,
+        "target_price": 73240,
+        "fluctuation": 1.55,
+        "score": 68.9,
+        "v_pw_now": 121.8,
+        "buy_ratio_ws": 63.8,
+        "exec_buy_ratio": 63.5,
+        "prog_net_qty": 18999,
+        "prog_delta_qty": 2390,
+        "tick_trade_value": 30900,
+        "net_buy_exec_volume": 690,
+        "net_bid_depth": 12940,
+        "net_ask_depth": -3010,
+        "vol_ratio": 151.0,
+        "today_vol": 1888999,
+        "captured_at": "2026-04-03 10:00:11",
+    }
+
+    first = engine.evaluate_realtime_gatekeeper("테스트", "000001", ctx_a, analysis_mode="SWING")
+    second = engine.evaluate_realtime_gatekeeper("테스트", "000001", ctx_b, analysis_mode="SWING")
+
+    assert call_count["value"] == 1
+    assert first["cache_hit"] is False
+    assert second["cache_hit"] is True
+    assert second["allow_entry"] is False
+
+
+def test_holding_cache_profile_absorbs_micro_market_noise(monkeypatch):
+    engine = _build_engine()
+    call_count = {"value": 0}
+
+    monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "packet")
+
+    def _fake_call(*args, **kwargs):
+        call_count["value"] += 1
+        return {"action": "WAIT", "score": 58, "reason": "holding-stable"}
+
+    monkeypatch.setattr(engine, "_call_gemini_safe", _fake_call)
+
+    ws_1 = {
+        "curr": 12150,
+        "fluctuation": -0.33,
+        "v_pw": 102.4,
+        "buy_ratio": 51.2,
+        "ask_tot": 182000,
+        "bid_tot": 176000,
+        "net_bid_depth": 8200,
+        "net_ask_depth": -6100,
+        "buy_exec_volume": 2400,
+        "sell_exec_volume": 2100,
+        "tick_trade_value": 28100,
+        "orderbook": {"asks": [{"price": 12200}], "bids": [{"price": 12150}]},
+    }
+    ws_2 = {
+        **ws_1,
+        "curr": 12160,
+        "fluctuation": -0.29,
+        "v_pw": 103.9,
+        "buy_ratio": 52.8,
+        "ask_tot": 189000,
+        "bid_tot": 181000,
+        "tick_trade_value": 29900,
+        "orderbook": {"asks": [{"price": 12210}], "bids": [{"price": 12160}]},
+    }
+    ticks_1 = [
+        {"time": "10:45:01", "price": 12150, "volume": 22, "dir": "BUY"},
+        {"time": "10:45:02", "price": 12150, "volume": 18, "dir": "SELL"},
+    ]
+    ticks_2 = [
+        {"time": "10:45:11", "price": 12160, "volume": 24, "dir": "BUY"},
+        {"time": "10:45:12", "price": 12160, "volume": 16, "dir": "SELL"},
+    ]
+    candles_1 = [
+        {"체결시간": "10:43:00", "현재가": 12140, "고가": 12160, "저가": 12120, "거래량": 8200},
+        {"체결시간": "10:44:00", "현재가": 12150, "고가": 12170, "저가": 12130, "거래량": 9100},
+        {"체결시간": "10:45:00", "현재가": 12150, "고가": 12180, "저가": 12140, "거래량": 10300},
+    ]
+    candles_2 = [
+        {"체결시간": "10:43:30", "현재가": 12140, "고가": 12160, "저가": 12120, "거래량": 8700},
+        {"체결시간": "10:44:30", "현재가": 12160, "고가": 12170, "저가": 12140, "거래량": 9500},
+        {"체결시간": "10:45:30", "현재가": 12160, "고가": 12180, "저가": 12140, "거래량": 10800},
+    ]
+
+    first = engine.analyze_target(
+        "씨아이에스",
+        ws_1,
+        ticks_1,
+        candles_1,
+        strategy="SCALPING",
+        cache_profile="holding",
+    )
+    second = engine.analyze_target(
+        "씨아이에스",
+        ws_2,
+        ticks_2,
+        candles_2,
+        strategy="SCALPING",
+        cache_profile="holding",
+    )
+
+    assert call_count["value"] == 1
+    assert first["cache_hit"] is False
+    assert second["cache_hit"] is True
+    assert second["score"] == 58
