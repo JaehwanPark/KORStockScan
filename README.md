@@ -228,6 +228,93 @@ Flutter나 외부 서비스는 아래 API를 그대로 사용하면 됩니다.
 
 ---
 
+## AI 모델 의사결정
+
+현재 운영 의사결정의 기준은 `정확도 최대화`가 아니라 `속도 대비 성능 최적화`입니다.  
+특히 스캘핑에서는 응답 지연 자체가 손익에 직접 반영되므로, 모델 선택은 아래 우선순위로 정리합니다.
+
+1. `hot path`는 가장 빠른 모델을 기본값으로 둡니다.
+2. 실수 비용은 크지만 매 틱은 아닌 구간만 한 단계 위 모델을 씁니다.
+3. OpenAI는 Gemini를 그대로 복제하지 않고, `gpt-4.1-mini`를 기준 비교선으로 둡니다.
+4. `gpt-4o`는 현재 기본 운영 경로에서 제외합니다.
+
+### 현재 운영 라우팅
+
+| 구간 | 현재 메인 모델 | 이유 |
+| --- | --- | --- |
+| 스캘핑 타점 판정 | `Gemini Flash-Lite` | 최저 지연 우선 |
+| 조건검색 진입/청산 | `Gemini Flash-Lite` | 빠른 재판정이 중요 |
+| 스윙 판정 | `Gemini Flash` | 속도와 논리 균형 |
+| 실시간 리포트 / Gatekeeper | `Gemini Flash` | 전술 판단 품질 우선 |
+| 스캘핑 오버나이트 | `Gemini Flash` | 빈도는 낮고 실수 비용이 큼 |
+| OpenAI shadow 비교 | `GPT-4.1-mini` | Gemini Flash와 비교 가능한 비용/속도 구간 |
+
+### 왜 GPT-4.1-mini인가
+
+- `Gemini Flash-Lite`는 초단타 hot path 기준점입니다.
+- `Gemini Flash`는 Gatekeeper, Overnight 같은 전술 구간의 기준점입니다.
+- `GPT-4.1-mini`는 `Gemini Flash`와 비교 가능한 비용/속도 축에 있고, `gpt-4o`보다 훨씬 운영 친화적입니다.
+- `gpt-4o`는 스캘핑 재판정 기준으로는 비용과 지연이 너무 커서 현재 기본값으로 두지 않습니다.
+
+현재 코드 기본값도 이에 맞춰 아래처럼 유지합니다.
+
+- `Gemini Tier1 = models/gemini-3.1-flash-lite-preview`
+- `Gemini Tier2 = models/gemini-3-flash-preview`
+- `OpenAI fast/deep/report = gpt-4.1-mini`
+- `OpenAI 스캘핑 deep 재판정 = 기본 OFF`
+
+### 비교실험 매트릭스
+
+이번 주 shadow mode와 다음 주 live 전환을 위한 비교 구간은 아래 기준으로 운영합니다.
+
+| 구간 | 실전 메인 | shadow 비교 1 | shadow 비교 2 | 운영 원칙 |
+| --- | --- | --- | --- | --- |
+| 스캘핑 초단타 타점 | `Gemini Flash-Lite` | `Gemini Flash` | `GPT-4.1-mini` | 전수 비교 금지, 경계 점수/샘플 구간만 비동기 shadow |
+| 조건검색 진입 | `Gemini Flash-Lite` | `Gemini Flash` | `GPT-4.1-mini` | BUY 후보만 shadow 비교 |
+| 조건검색 청산 | `Gemini Flash-Lite` | `Gemini Flash` | `GPT-4.1-mini` | EXIT/HOLD 갈림 구간만 shadow 비교 |
+| Gatekeeper | `Gemini Flash` | `Gemini Flash-Lite` | `GPT-4.1-mini` | 현재 최우선 shadow 적용 구간 |
+| 스캘핑 오버나이트 | `Gemini Flash` | `Gemini Flash-Lite` | `GPT-4.1-mini` | 현재 최우선 shadow 적용 구간 |
+| 일일 브리핑 / EOD 리포트 | `Gemini Tier3` | 비교 제외 | 비교 제외 | 이번 실험 범위 밖 |
+
+### 실험 판단 기준
+
+모델 비교는 응답 품질만이 아니라 운영 지표까지 함께 봅니다.
+
+- `p50 / p95 응답시간`
+- `AI 쿨타임 또는 lock 때문에 WAIT 난 비율`
+- `JSON 파싱 실패율`
+- `Gemini 대비 action flip 비율`
+- `보수 veto가 실제 손실 회피에 기여한 비율`
+- `shadow override 이후 기대손익 개선폭`
+- `호출 1건당 평균 비용`
+
+운영 해석 원칙은 단순합니다.
+
+- `Gemini Flash-Lite`가 충분히 비슷한 성능을 내면 hot path는 그대로 유지합니다.
+- `Gemini Flash`가 유의미하게 더 낫더라도, 전수 승격이 아니라 Gatekeeper 같은 느슨한 구간만 우선 적용합니다.
+- `GPT-4.1-mini`는 Gemini 대비 `보완 관점`에서만 봅니다. 즉 OpenAI가 항상 메인이 되는 구조가 아니라, 충돌 탐지와 보수 veto 품질을 보는 방향입니다.
+
+### OpenAI 관여 지점
+
+현재 OpenAI는 실전 주문 결정을 직접 덮어쓰지 않고, `shadow calibration`과 관측 지표 생성에만 관여합니다.
+
+| 구간 | 현재 역할 | 사용 모델 | 반영 파일 |
+| --- | --- | --- | --- |
+| 런타임 부팅 | `OPENAI_API_KEY*`가 있으면 듀얼 페르소나 shadow 엔진 생성 | `GPT-4.1-mini` | `src/engine/kiwoom_sniper_v2.py` |
+| Gatekeeper shadow | Gemini Gatekeeper 결과를 기준선으로 공격/보수 페르소나 비교 | `GPT-4.1-mini` | `src/engine/sniper_state_handlers.py`, `src/engine/ai_engine_openai_v2.py` |
+| Overnight shadow | 15:15 오버나이트 결정을 Gemini와 비교 | `GPT-4.1-mini` | `src/engine/sniper_overnight_gatekeeper.py`, `src/engine/ai_engine_openai_v2.py` |
+| Shadow 가중치 합성 | aggressive / conservative / gemini 결과를 fused 판단으로 집계 | `GPT-4.1-mini` | `src/engine/ai_engine_openai_v2.py` |
+| 성능 리포트 | conflict ratio, conservative veto, override, extra latency 집계 | 집계 전용 | `src/engine/sniper_performance_tuning_report.py` |
+| 웹 대시보드 | Dual Persona shadow 카드와 느린 샘플 표시 | 집계 전용 | `src/web/app.py` |
+| 설정 레이어 | shadow on/off, worker 수, latency 기준, 가중치 설정 | 설정 전용 | `src/utils/constants.py` |
+
+운영상 중요한 원칙은 아래 두 가지입니다.
+
+- OpenAI 결과는 현재 `shadow-only`이며, 실매매 액션은 Gemini가 그대로 결정합니다.
+- OpenAI는 `정답 엔진`보다 `충돌 탐지와 보수 veto 품질을 보는 비교 엔진`으로 사용합니다.
+
+---
+
 ## Topic 별 구조
 
 아래는 “파일이 어디에 있는가”보다 “무슨 책임을 갖는가” 기준의 정리입니다.

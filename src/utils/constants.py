@@ -214,7 +214,9 @@ class TradingConfig:
     # 🎯 AI 엔진 제어값 (OpenAI)
     # ==========================================
     GPT_FAST_MODEL = "gpt-4.1-mini"
-    GPT_DEEP_MODEL = "gpt-4o"
+    GPT_DEEP_MODEL = "gpt-4.1-mini"
+    GPT_REPORT_MODEL = "gpt-4.1-mini"
+    GPT_ENABLE_SCALPING_DEEP_RECHECK: bool = False
     GPT_ENGINE_MIN_INTERVAL: float = 0.5 # OpenAI 서버에 쏘는 최소 간격 (초 단위, 0.5초 = 500ms)
     OPENAI_DUAL_PERSONA_ENABLED: bool = True
     OPENAI_DUAL_PERSONA_SHADOW_MODE: bool = True

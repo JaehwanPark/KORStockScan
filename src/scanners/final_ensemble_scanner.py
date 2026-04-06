@@ -48,9 +48,8 @@ from src.engine.macro_briefing_complete import MacroBriefingBuilder
 # 💡 [수정] 순수 AI 추론 도구
 import src.engine.ml_predictor as ml_predictor
 
-# 💡 [신규] AI 합의체 (Gemini + OpenAI) 엔진 준비
+# 💡 [신규] AI 브리핑 엔진 준비
 from src.engine.ai_engine import GeminiSniperEngine
-from src.engine.ai_engine_openai import GPTSniperEngine 
 
 # 💡 [핵심 교정] 텔레그램 매니저를 초대해야 수신기가 EventBus에 정상 등록됩니다!
 import src.notify.telegram_manager as telegram_manager

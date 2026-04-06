@@ -124,7 +124,6 @@ from src.engine.kiwoom_websocket import KiwoomWSManager
 from src.engine.signal_radar import SniperRadar
 from src.engine.ai_engine import GeminiSniperEngine
 from src.engine.ai_engine_openai_v2 import OpenAIDualPersonaShadowEngine
-# from src.engine.ai_engine_openai import OpenAISniperEngine
 
 # 💡 VIX, 유가지표 임포트
 from src.market_regime import MarketRegimeService

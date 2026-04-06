@@ -222,17 +222,24 @@ class GPTSniperEngine:
         self.key_cycle = cycle(self.api_keys) 
         self._rotate_client()
 
-        # 계정에서 지원하면 gpt-4.1-mini 권장, 아니면 gpt-4o-mini 유지
-        self.fast_model_name = getattr(TRADING_RULES, 'GPT_FAST_MODEL', 'gpt-4o-mini')
-        self.deep_model_name = getattr(TRADING_RULES, 'GPT_DEEP_MODEL', 'gpt-4o')
+        # OpenAI는 현재 gpt-4.1-mini를 기본 비교 기준선으로 사용한다.
+        self.fast_model_name = getattr(TRADING_RULES, 'GPT_FAST_MODEL', 'gpt-4.1-mini')
+        self.deep_model_name = getattr(TRADING_RULES, 'GPT_DEEP_MODEL', self.fast_model_name)
+        self.report_model_name = getattr(TRADING_RULES, 'GPT_REPORT_MODEL', self.fast_model_name)
         self.current_model_name = self.fast_model_name
+        self.scalping_deep_recheck_enabled = bool(
+            getattr(TRADING_RULES, 'GPT_ENABLE_SCALPING_DEEP_RECHECK', False)
+        )
 
         self.lock = threading.Lock()
         self.api_call_lock = threading.Lock()
         self.last_call_time = 0
         self.min_interval = getattr(TRADING_RULES, 'GPT_ENGINE_MIN_INTERVAL', 0.5)
 
-        print(f"🧠 [OpenAI 엔진] {len(self.api_keys)}개 키 로테이션 가동! (FAST: {self.fast_model_name} / DEEP: {self.deep_model_name})")
+        print(
+            f"🧠 [OpenAI 엔진] {len(self.api_keys)}개 키 로테이션 가동! "
+            f"(FAST: {self.fast_model_name} / DEEP: {self.deep_model_name} / REPORT: {self.report_model_name})"
+        )
 
     def _rotate_client(self):
         self.current_key = next(self.key_cycle)
@@ -697,8 +704,15 @@ class GPTSniperEngine:
     # 6. 🚀 실전 분석 실행 메서드 5종 (Gemini 모델과 100% 호환)
     # ==========================================
     
+    def _should_run_deep_recheck(self, features, result):
+        if not self.scalping_deep_recheck_enabled:
+            return False
+        if self.deep_model_name == self.fast_model_name:
+            return False
+        return self._should_escalate_scalping(features, result)
+
     def analyze_target(self, target_name, ws_data, recent_ticks, recent_candles):
-        """실시간 초단타 타점 분석 - 2단 라우팅 버전"""
+        """실시간 초단타 타점 분석 - fast 우선, 선택적 deep 재판정"""
         if not self.lock.acquire(blocking=False):
             return {"action": "WAIT", "score": 50, "reason": "AI 경합 (다른 종목 분석 중)"}
             
@@ -720,8 +734,8 @@ class GPTSniperEngine:
             )
             result = self._normalize_scalping_result(raw_result)
 
-            # 2차: 애매하거나 충돌 나면 상위 모델 재판정
-            if self._should_escalate_scalping(features, result):
+            # 2차: 경계 구간만 선택적으로 재판정한다.
+            if self._should_run_deep_recheck(features, result):
                 upgraded_prompt = (
                     formatted_data
                     + "\n\n[추가 지시]\n"
@@ -749,7 +763,7 @@ class GPTSniperEngine:
             self.lock.release()
             
     def analyze_scanner_results(self, total_count, survived_count, stats_text):
-        """텔레그램 아침 브리핑 (Markdown 반환 - GPT-4o 적용)"""
+        """텔레그램 아침 브리핑 (Markdown 반환 - 기본은 GPT-4.1-mini)"""
         with self.lock:
             data_input = f"[스캐너 통계 데이터]\n총 탐색: {total_count}개\n최종 생존: {survived_count}개\n\n[상세 탈락 사유]\n{stats_text}"
             try:
@@ -758,7 +772,7 @@ class GPTSniperEngine:
                     data_input, 
                     require_json=False, 
                     context_name="시장 브리핑",
-                    model_override="gpt-4o" # 더 깊은 추론을 위해 4o 모델 사용
+                    model_override=self.report_model_name
                 )
             except Exception as e:
                 log_error(f"🚨 [시장 브리핑] OpenAI 에러: {e}")
@@ -766,7 +780,7 @@ class GPTSniperEngine:
     
     
     def generate_realtime_report(self, stock_name, stock_code, input_data_text):
-        """실시간 종목 분석 리포트 생성 (Markdown 반환 - GPT-4o 적용)"""
+        """실시간 종목 분석 리포트 생성 (Markdown 반환 - 기본은 GPT-4.1-mini)"""
         with self.lock:
             user_input = (
                 f"🚨 [요청 종목]\n종목명: {stock_name}\n종목코드: {stock_code}\n\n"
@@ -778,7 +792,7 @@ class GPTSniperEngine:
                     user_input, 
                     require_json=False, 
                     context_name="실시간 분석",
-                    model_override="gpt-4o"
+                    model_override=self.report_model_name
                 )
             except Exception as e:
                 from src.utils.logger import log_error
@@ -786,7 +800,7 @@ class GPTSniperEngine:
                 return f"⚠️ AI 실시간 분석 생성 중 에러 발생: {e}"
     
     def generate_eod_tomorrow_report(self, candidates_text):
-        """장 마감 후 내일의 주도주 TOP 5 리포트 생성 (Markdown 반환 - GPT-4o 적용)"""
+        """장 마감 후 내일의 주도주 TOP 5 리포트 생성 (Markdown 반환 - 기본은 GPT-4.1-mini)"""
         with self.lock:
             user_input = (
                 f"🚨 [1차 필터링 완료: 내일의 주도주 후보군 15선]\n\n"
@@ -798,7 +812,7 @@ class GPTSniperEngine:
                     user_input, 
                     require_json=False, 
                     context_name="종가베팅 분석",
-                    model_override="gpt-4o"
+                    model_override=self.report_model_name
                 )
             except Exception as e:
                 from src.utils.logger import log_error
