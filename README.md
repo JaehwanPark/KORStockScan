@@ -156,6 +156,37 @@ Flutter나 외부 서비스는 아래 API를 그대로 사용하면 됩니다.
 - `pause.flag`가 있으면 신규 매수와 추가매수는 막고, 청산은 계속 수행합니다.
 - 스캘핑은 `entry_armed` 상태를 두어 자격 게이트를 통과한 직후 다시 되감기지 않도록 보강되어 있습니다.
 
+#### 전략별 투자 비중 로직
+
+공통 주문 수량 계산:
+
+- `target_budget = 주문가능금액 x 전략비중`
+- `safe_budget = target_budget x BUY_BUDGET_SAFETY_RATIO`
+- `qty = floor(safe_budget / 현재가)`
+- 안전계수 절삭 때문에 `qty=0`이 되더라도, 원래 `target_budget`으로는 1주 매수가 가능한 경우에만 `BUY_BUDGET_RELAXED_SAFETY_RATIO`로 1회 재계산합니다.
+
+스캘핑(`SCALPING`) 신규 진입:
+
+- 사용 상수: `INVEST_RATIO_SCALPING_MIN=0.10`, `INVEST_RATIO_SCALPING_MAX=0.50`
+- 사용 점수: 실시간 AI 점수 `rt_ai_prob x 100`
+- 산식: `ratio = min_ratio + (ai_score / 100) x (max_ratio - min_ratio)`
+- 즉, AI 점수가 높을수록 같은 주문가능금액 안에서 더 큰 비중을 배정합니다.
+- 스캘핑은 `entry_armed` 상태에 들어가면 당시 계산된 `ratio`를 저장해, 짧은 TTL 안에서는 재평가 없이 같은 비중을 이어서 주문 단계까지 전달할 수 있습니다.
+
+스윙(`KOSDAQ_ML`, `KOSPI_ML`) 신규 진입:
+
+- 코스닥 스윙 범위: `INVEST_RATIO_KOSDAQ_MIN=0.05` ~ `INVEST_RATIO_KOSDAQ_MAX=0.15`
+- 코스피 스윙 범위: `INVEST_RATIO_KOSPI_MIN=0.10` ~ `INVEST_RATIO_KOSPI_MAX=0.40`
+- 스윙은 먼저 `radar.analyze_signal_integrated(...)`의 종합 점수, VPW 조건, 갭상승 필터, Gatekeeper, 시장환경 필터를 통과해야 합니다.
+- 비중은 Gatekeeper 직전 신호 점수를 기준으로 `score_weight = clamp((score - buy_threshold) / (100 - buy_threshold), 0, 1)`를 만든 뒤, `ratio = ratio_min + score_weight x (ratio_max - ratio_min)`로 계산합니다.
+- 즉, 문턱을 겨우 넘긴 스윙은 최소 비중에 가깝고, 점수가 100에 가까울수록 최대 비중에 가까워집니다.
+- `is_shooting` 예외가 걸린 스윙은 계산 비중이 너무 낮으면 최소한 `(ratio_min + ratio_max) / 2`까지는 끌어올려 진입 강도를 보정합니다.
+
+추가매수(`scale-in`) 상한:
+
+- 신규 진입 비중과 별도로, 추가매수는 `MAX_POSITION_PCT=0.20` 한도 안에서만 허용됩니다.
+- 따라서 초기 진입 비중이 높더라도, 전체 포지션은 계좌 주문가능금액 대비 별도 리스크 상한을 넘지 않도록 막아둡니다.
+
 ### 3. 홀딩
 
 홀딩 단계에서는 “보유 중인 종목이 여전히 들고 갈 가치가 있는지”를 계속 재평가합니다.
