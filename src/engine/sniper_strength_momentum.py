@@ -40,11 +40,29 @@ def evaluate_scalping_strength_momentum(ws_data: dict, *, now_ts: float | None =
     min_net_buy_qty = int(getattr(TRADING_RULES, "SCALP_VPW_MIN_NET_BUY_QTY", 1) or 1)
     strong_absolute = float(getattr(TRADING_RULES, "SCALP_VPW_STRONG_ABSOLUTE", 115.0) or 115.0)
     strong_buy_value = int(getattr(TRADING_RULES, "SCALP_VPW_STRONG_BUY_VALUE", 40_000) or 40_000)
+    profile_tag = str(ws_data.get("position_tag") or ws_data.get("_position_tag") or "").strip().upper()
+    relaxed_tags = {
+        str(tag).strip().upper()
+        for tag in (getattr(TRADING_RULES, "SCALP_VPW_RELAX_TAGS", ()) or ())
+        if str(tag).strip()
+    }
+    if profile_tag and profile_tag in relaxed_tags:
+        min_base = float(getattr(TRADING_RULES, "SCALP_VPW_RELAX_MIN_BASE", min_base) or min_base)
+        min_buy_value = int(getattr(TRADING_RULES, "SCALP_VPW_RELAX_MIN_BUY_VALUE", min_buy_value) or min_buy_value)
+        min_buy_ratio = float(getattr(TRADING_RULES, "SCALP_VPW_RELAX_MIN_BUY_RATIO", min_buy_ratio) or min_buy_ratio)
+        min_exec_buy_ratio = float(
+            getattr(TRADING_RULES, "SCALP_VPW_RELAX_MIN_EXEC_BUY_RATIO", min_exec_buy_ratio) or min_exec_buy_ratio
+        )
+        threshold_profile = "relaxed"
+    else:
+        threshold_profile = "default"
 
     result = {
         "enabled": bool(getattr(TRADING_RULES, "SCALP_DYNAMIC_VPW_ENABLED", True)),
         "allowed": False,
         "reason": "disabled",
+        "position_tag": profile_tag or "-",
+        "threshold_profile": threshold_profile,
         "window_sec": window_sec,
         "elapsed_sec": 0.0,
         "base_vpw": 0.0,

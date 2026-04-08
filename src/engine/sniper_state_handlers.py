@@ -416,6 +416,33 @@ def _resolve_reference_age_sec(primary_ts, *, fallback_ts=None, now_ts=None):
     return max(0.0, float(current_ts - reference_ts))
 
 
+def _resolve_holding_elapsed_sec(stock):
+    now_ts = time.time()
+    raw_order_time = stock.get("order_time")
+    if raw_order_time not in (None, "", 0, "0"):
+        try:
+            return max(0, int(now_ts - float(raw_order_time)))
+        except Exception:
+            pass
+
+    raw_buy_time = stock.get("buy_time")
+    if not raw_buy_time:
+        return 0
+    try:
+        if isinstance(raw_buy_time, datetime):
+            buy_dt = raw_buy_time
+        else:
+            buy_str = str(raw_buy_time)
+            try:
+                buy_dt = datetime.fromisoformat(buy_str)
+            except Exception:
+                parsed_time = datetime.strptime(buy_str, "%H:%M:%S").time()
+                buy_dt = datetime.combine(datetime.now().date(), parsed_time)
+        return max(0, int((datetime.now() - buy_dt).total_seconds()))
+    except Exception:
+        return 0
+
+
 def _bucket_int(value, bucket):
     try:
         bucket = max(1, int(bucket))
@@ -591,6 +618,8 @@ def _log_strength_momentum_observation(stock, code, result):
         exec_buy_ratio=f"{float(result.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
         net_buy_qty=int(result.get("window_net_buy_qty", 0) or 0),
         elapsed=f"{float(result.get('elapsed_sec', 0.0) or 0.0):.2f}",
+        threshold_profile=result.get("threshold_profile"),
+        momentum_tag=result.get("position_tag"),
     )
 
 
@@ -1099,7 +1128,9 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                     return
 
                 observe_only = bool(getattr(TRADING_RULES, "SCALP_DYNAMIC_VPW_OBSERVE_ONLY", True))
-                momentum_gate = evaluate_scalping_strength_momentum(ws_data)
+                momentum_ws_data = dict(ws_data or {})
+                momentum_ws_data["_position_tag"] = pos_tag
+                momentum_gate = evaluate_scalping_strength_momentum(momentum_ws_data)
                 if momentum_gate.get("enabled"):
                     _log_strength_momentum_observation(stock, code, momentum_gate)
                     if not observe_only and not momentum_gate.get("allowed"):
@@ -1113,6 +1144,8 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                             buy_ratio=f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
                             exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
                             net_buy_qty=int(momentum_gate.get("window_net_buy_qty", 0) or 0),
+                            threshold_profile=momentum_gate.get("threshold_profile"),
+                            momentum_tag=momentum_gate.get("position_tag"),
                         )
                         return
 
@@ -1145,6 +1178,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                                 dynamic_buy_ratio=f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
                                 dynamic_exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
                                 dynamic_net_buy_qty=int(momentum_gate.get("window_net_buy_qty", 0) or 0),
+                                dynamic_profile=momentum_gate.get("threshold_profile"),
                             )
                             shadow_candidate = None
                     if not (momentum_gate.get("allowed") and not observe_only):
@@ -1440,15 +1474,21 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
 
             try:
                 realtime_ctx = None
+                now_ts = time.time()
                 gatekeeper_fast_sig = _build_gatekeeper_fast_signature(stock, ws_data, strategy, score)
                 gatekeeper_fast_snapshot = _build_gatekeeper_fast_snapshot(stock, ws_data, strategy, score)
                 gatekeeper_fast_reuse_sec = _resolve_gatekeeper_fast_reuse_sec()
                 gatekeeper_fast_max_ws_age = float(getattr(TRADING_RULES, 'AI_GATEKEEPER_FAST_REUSE_MAX_WS_AGE_SEC', 2.0) or 2.0)
                 gatekeeper_ws_age_sec = _get_ws_snapshot_age_sec(ws_data)
                 fast_sig_matches = gatekeeper_fast_sig == stock.get('last_gatekeeper_fast_signature')
-                fast_sig_age = time.time() - float(stock.get('last_gatekeeper_fast_at', 0) or 0)
+                fast_sig_age = _resolve_reference_age_sec(
+                    stock.get('last_gatekeeper_fast_at'),
+                    fallback_ts=stock.get('last_gatekeeper_action_at'),
+                    now_ts=now_ts,
+                )
+                fast_sig_age_str = "-" if fast_sig_age is None else f"{fast_sig_age:.1f}"
                 near_score_boundary = abs(float(score) - float(buy_threshold)) <= 3.0
-                fast_sig_fresh = fast_sig_age < gatekeeper_fast_reuse_sec
+                fast_sig_fresh = fast_sig_age is not None and fast_sig_age < gatekeeper_fast_reuse_sec
                 ws_fresh = gatekeeper_ws_age_sec is None or gatekeeper_ws_age_sec <= gatekeeper_fast_max_ws_age
                 has_last_action = bool(str(stock.get('last_gatekeeper_action', '') or '').strip())
                 has_last_allow_flag = 'last_gatekeeper_allow_entry' in stock
@@ -1477,21 +1517,25 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                         "gatekeeper_fast_reuse",
                         strategy=strategy,
                         action=gatekeeper.get('action_label', 'UNKNOWN'),
-                        age_sec=f"{fast_sig_age:.1f}",
+                        age_sec=fast_sig_age_str,
                         ws_age_sec="-" if gatekeeper_ws_age_sec is None else f"{gatekeeper_ws_age_sec:.2f}",
                     )
                     is_new_evaluation = False
                 else:
-                    now_ts = time.time()
                     # age 계산: 값이 없으면 "-" sentinel 사용 (p95 오염 방지)
-                    last_action_at = float(stock.get('last_gatekeeper_action_at') or 0) if stock.get('last_gatekeeper_action_at') is not None else None
-                    last_allow_at = float(stock.get('last_gatekeeper_allow_entry_at') or 0) if stock.get('last_gatekeeper_allow_entry_at') is not None else None
-                    
-                    action_age_sec_str = "-" if last_action_at is None else f"{now_ts - last_action_at:.2f}"
-                    allow_age_sec_str = "-" if last_allow_at is None else f"{now_ts - last_allow_at:.2f}"
-                    
+                    action_age_sec = _resolve_reference_age_sec(
+                        stock.get('last_gatekeeper_action_at'),
+                        now_ts=now_ts,
+                    )
+                    allow_age_sec = _resolve_reference_age_sec(
+                        stock.get('last_gatekeeper_allow_entry_at'),
+                        now_ts=now_ts,
+                    )
+                    action_age_sec_str = "-" if action_age_sec is None else f"{action_age_sec:.2f}"
+                    allow_age_sec_str = "-" if allow_age_sec is None else f"{allow_age_sec:.2f}"
+
                     sig_delta = _describe_snapshot_deltas(
-                        stock.get('last_gatekeeper_fast_snapshot', {}), 
+                        stock.get('last_gatekeeper_fast_snapshot', {}),
                         gatekeeper_fast_snapshot,
                         limit=5
                     ) or "-"
@@ -1501,7 +1545,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                         "gatekeeper_fast_reuse_bypass",
                         strategy=strategy,
                         score=round(float(score), 2),
-                        age_sec=f"{fast_sig_age:.1f}",
+                        age_sec=fast_sig_age_str,
                         ws_age_sec="-" if gatekeeper_ws_age_sec is None else f"{gatekeeper_ws_age_sec:.2f}",
                         action_age_sec=action_age_sec_str,
                         allow_entry_age_sec=allow_age_sec_str,
@@ -1641,21 +1685,29 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             return
 
         deposit = kiwoom_orders.get_deposit(KIWOOM_TOKEN)
+        uncapped_target_budget = int(max(float(deposit) * float(ratio), 0.0))
+        budget_cap = 0
+        if strategy == 'SCALPING':
+            budget_cap = int(getattr(TRADING_RULES, 'SCALPING_MAX_BUY_BUDGET_KRW', 0) or 0)
         target_budget, safe_budget, real_buy_qty, used_safety_ratio = kiwoom_orders.describe_buy_capacity(
             curr_price,
             deposit,
             ratio,
+            max_budget=budget_cap,
         )
+        budget_cap_applied = budget_cap > 0 and target_budget < uncapped_target_budget
+        budget_cap_msg = f", 절대한도 {budget_cap:,}원 적용" if budget_cap_applied else ""
 
         if real_buy_qty <= 0:
             print(
                 f"⚠️ [매수보류] {stock['name']}: 매수 수량이 0주입니다. "
                 f"(주문가능금액 {deposit:,}원, 전략비중 {ratio:.1%}, 안전계수 {used_safety_ratio:.0%}, "
-                f"실사용예산 {safe_budget:,}원, 현재가 {curr_price:,}원)"
+                f"실사용예산 {safe_budget:,}원, 현재가 {curr_price:,}원{budget_cap_msg})"
             )
             log_info(
                 f"[DEBUG] {code} 매수 수량 0주 "
-                f"(deposit={deposit}, ratio={ratio:.4f}, target_budget={target_budget}, "
+                f"(deposit={deposit}, ratio={ratio:.4f}, uncapped_target_budget={uncapped_target_budget}, "
+                f"target_budget={target_budget}, "
                 f"safe_budget={safe_budget}, safety_ratio={used_safety_ratio:.4f}, curr_price={curr_price})"
             )
             cooldowns[code] = time.time() + 1200
@@ -1669,6 +1721,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                 safe_budget=safe_budget,
                 safety_ratio=f"{used_safety_ratio:.4f}",
                 curr_price=curr_price,
+                budget_cap=budget_cap if budget_cap_applied else "-",
             )
             return
 
@@ -1681,6 +1734,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             target_budget=target_budget,
             safe_budget=safe_budget,
             safety_ratio=f"{used_safety_ratio:.4f}",
+            budget_cap=budget_cap if budget_cap_applied else "-",
             qty=real_buy_qty,
         )
 
@@ -1922,6 +1976,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
 
     raw_strategy = (stock.get('strategy') or 'KOSPI_ML').upper()
     strategy = 'SCALPING' if raw_strategy in ['SCALPING', 'SCALP'] else raw_strategy
+    pos_tag = normalize_position_tag(strategy, stock.get('position_tag'))
+    stock['position_tag'] = pos_tag
 
     curr_p = int(float(ws_data.get('curr', 0) or 0))
     buy_p = float(stock.get('buy_price', 0) or 0)
@@ -1961,30 +2017,136 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             )
             LAST_LOG_TIMES[code] = time.time()
 
+    def _dispatch_scalp_preset_exit(*, sell_reason_type, reason, exit_rule):
+        target_id = stock.get('id')
+        expected_qty = int(stock.get('buy_qty', 0) or 0)
+        orig_ord_no = stock.get('preset_tp_ord_no', '')
+        preset_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
+        preset_held_sec = 0
+        try:
+            if stock.get('order_time'):
+                preset_held_sec = max(0, int(time.time() - float(stock.get('order_time') or 0)))
+        except Exception:
+            preset_held_sec = 0
+
+        stock['last_exit_rule'] = exit_rule or ''
+        stock['last_exit_reason'] = reason
+        _log_holding_pipeline(
+            stock,
+            code,
+            "exit_signal",
+            sell_reason_type=sell_reason_type,
+            reason=reason,
+            exit_rule=exit_rule or "-",
+            profit_rate=f"{profit_rate:+.2f}",
+            peak_profit=f"{peak_profit:+.2f}",
+            current_ai_score=f"{preset_ai_score:.0f}",
+            held_sec=preset_held_sec,
+            curr_price=curr_p,
+            buy_price=buy_p,
+            buy_qty=expected_qty,
+        )
+
+        try:
+            if target_id:
+                with DB.get_session() as session:
+                    session.query(RecommendationHistory).filter_by(id=target_id).update({"status": "SELL_ORDERED"})
+        except Exception as e:
+            print(f"🚨 [DB 에러] {stock['name']} SELL_ORDERED 장부 잠금 실패: {e}")
+
+        rem_qty = _confirm_cancel_or_reload_remaining(code, orig_ord_no, KIWOOM_TOKEN, expected_qty)
+        ord_no = ''
+        if rem_qty > 0:
+            sell_res = _send_exit_best_ioc(code, rem_qty, KIWOOM_TOKEN)
+            stock['exit_requested'] = True
+            stock['exit_order_type'] = '16'
+            stock['exit_order_time'] = time.time()
+            ord_no = str(sell_res.get('ord_no', '') or '') if isinstance(sell_res, dict) else ''
+            if ord_no:
+                stock['sell_ord_no'] = ord_no
+            stock['sell_order_time'] = time.time()
+            sign = "📉 [손절 주문]" if sell_reason_type == 'LOSS' else "🎊 [익절 주문]"
+            stock['pending_sell_msg'] = (
+                f"{sign} **{stock['name']} 매도 전송 ({strategy})**\n"
+                f"사유: `{reason}`\n"
+                f"현재가 기준 수익: `{profit_rate:+.2f}%` (고점: {peak_profit:.1f}%)"
+            )
+            _log_holding_pipeline(
+                stock,
+                code,
+                "sell_order_sent",
+                sell_reason_type=sell_reason_type,
+                exit_rule=exit_rule or "-",
+                qty=rem_qty,
+                ord_no=ord_no or "-",
+                order_type=stock.get("exit_order_type") or "-",
+                profit_rate=f"{profit_rate:+.2f}",
+            )
+
+        stock['status'] = 'SELL_ORDERED'
+        stock['sell_target_price'] = curr_p
+
     if stock.get('exit_mode') == 'SCALP_PRESET_TP':
         if stock.get('exit_requested'):
             return
 
         profit_rate = calculate_net_profit_rate(buy_p, curr_p) if buy_p > 0 else 0.0
-        orig_ord_no = stock.get('preset_tp_ord_no', '')
-        expected_qty = stock.get('buy_qty', 0)
-
-        if profit_rate <= stock.get('hard_stop_pct', -0.7):
-            print(
-                f"🔪 [SCALP 출구엔진] {stock['name']} 손절선 터치({profit_rate:.2f}%). "
-                "즉각 최유리(IOC) 청산!"
+        preset_hard_stop_pct = float(
+            stock.get(
+                'hard_stop_pct',
+                getattr(TRADING_RULES, 'SCALP_PRESET_HARD_STOP_PCT', -0.7),
             )
-            rem_qty = _confirm_cancel_or_reload_remaining(code, orig_ord_no, KIWOOM_TOKEN, expected_qty)
-            if rem_qty > 0:
-                sell_res = _send_exit_best_ioc(code, rem_qty, KIWOOM_TOKEN)
-                stock['exit_requested'] = True
-                stock['exit_order_type'] = '16'
-                stock['exit_order_time'] = time.time()
-                stock['sell_ord_no'] = (
-                    sell_res.get('ord_no') if isinstance(sell_res, dict) else stock.get('sell_ord_no')
+            or getattr(TRADING_RULES, 'SCALP_PRESET_HARD_STOP_PCT', -0.7)
+        )
+        preset_hard_stop_grace_sec = int(
+            stock.get(
+                'hard_stop_grace_sec',
+                getattr(TRADING_RULES, 'SCALP_PRESET_HARD_STOP_GRACE_SEC', 0),
+            )
+            or 0
+        )
+        preset_hard_stop_emergency_pct = float(
+            stock.get(
+                'hard_stop_emergency_pct',
+                getattr(
+                    TRADING_RULES,
+                    'SCALP_PRESET_HARD_STOP_EMERGENCY_PCT',
+                    min(preset_hard_stop_pct - 0.5, -1.2),
+                ),
+            )
+            or getattr(
+                TRADING_RULES,
+                'SCALP_PRESET_HARD_STOP_EMERGENCY_PCT',
+                min(preset_hard_stop_pct - 0.5, -1.2),
+            )
+        )
+        preset_held_sec = _resolve_holding_elapsed_sec(stock)
+
+        if profit_rate <= preset_hard_stop_pct:
+            within_grace = preset_hard_stop_grace_sec > 0 and preset_held_sec < preset_hard_stop_grace_sec
+            emergency_break = profit_rate <= preset_hard_stop_emergency_pct
+            if within_grace and not emergency_break:
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "preset_hard_stop_grace",
+                    profit_rate=f"{profit_rate:+.2f}",
+                    held_sec=preset_held_sec,
+                    grace_sec=preset_hard_stop_grace_sec,
+                    hard_stop_pct=f"{preset_hard_stop_pct:+.2f}",
+                    emergency_pct=f"{preset_hard_stop_emergency_pct:+.2f}",
                 )
-            stock['status'] = 'SELL_ORDERED'
-            return
+            else:
+                print(
+                    f"🔪 [SCALP 출구엔진] {stock['name']} 손절선 터치({profit_rate:.2f}%). "
+                    "즉각 최유리(IOC) 청산!"
+                )
+                _dispatch_scalp_preset_exit(
+                    sell_reason_type="LOSS",
+                    reason=f"🛑 SCALP 출구엔진 손절선 도달 ({preset_hard_stop_pct:+.2f}%)",
+                    exit_rule="scalp_preset_hard_stop_pct",
+                )
+                return
 
         if profit_rate >= 0.8 and not stock.get('ai_review_done', False):
             print(f"🤖 [SCALP 출구엔진] {stock['name']} +0.8% 도달! AI 1회 검문 실시...")
@@ -2007,16 +2169,11 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                             "🛑 [SCALP 출구엔진 AI] 모멘텀 둔화 감지. 1.5% 포기 후 즉시 최유리(IOC) "
                             "청산!"
                         )
-                        rem_qty = _confirm_cancel_or_reload_remaining(code, orig_ord_no, KIWOOM_TOKEN, expected_qty)
-                        if rem_qty > 0:
-                            sell_res = _send_exit_best_ioc(code, rem_qty, KIWOOM_TOKEN)
-                            stock['exit_requested'] = True
-                            stock['exit_order_type'] = '16'
-                            stock['exit_order_time'] = time.time()
-                            stock['sell_ord_no'] = (
-                                sell_res.get('ord_no') if isinstance(sell_res, dict) else stock.get('sell_ord_no')
-                            )
-                        stock['status'] = 'SELL_ORDERED'
+                        _dispatch_scalp_preset_exit(
+                            sell_reason_type="MOMENTUM_DECAY",
+                            reason="🛑 SCALP 출구엔진 AI 모멘텀 둔화 즉시청산",
+                            exit_rule="scalp_preset_ai_review_exit",
+                        )
                         return
                     else:
                         print(
@@ -2032,16 +2189,11 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             print(
                 f"🛡️ [SCALP 출구엔진] {stock['name']} +0.3% 보호선 이탈. 최유리(IOC) 약익절!"
             )
-            rem_qty = _confirm_cancel_or_reload_remaining(code, orig_ord_no, KIWOOM_TOKEN, expected_qty)
-            if rem_qty > 0:
-                sell_res = _send_exit_best_ioc(code, rem_qty, KIWOOM_TOKEN)
-                stock['exit_requested'] = True
-                stock['exit_order_type'] = '16'
-                stock['exit_order_time'] = time.time()
-                stock['sell_ord_no'] = (
-                    sell_res.get('ord_no') if isinstance(sell_res, dict) else stock.get('sell_ord_no')
-                )
-            stock['status'] = 'SELL_ORDERED'
+            _dispatch_scalp_preset_exit(
+                sell_reason_type="TRAILING",
+                reason=f"🛡️ SCALP 출구엔진 보호선 이탈 ({protect_pct:+.2f}%)",
+                exit_rule="scalp_preset_protect_profit",
+            )
             return
 
         return
@@ -2061,28 +2213,20 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
     ai_exit_min_loss_pct = float(getattr(TRADING_RULES, 'SCALP_AI_EARLY_EXIT_MIN_LOSS_PCT', -0.7))
     ai_exit_min_hold_sec = int(getattr(TRADING_RULES, 'SCALP_AI_EARLY_EXIT_MIN_HOLD_SEC', 180))
     ai_exit_needed_hits = int(getattr(TRADING_RULES, 'SCALP_AI_EARLY_EXIT_CONSECUTIVE_HITS', 3))
+    open_reclaim_needed_hits = int(
+        getattr(TRADING_RULES, 'SCALP_AI_EARLY_EXIT_CONSECUTIVE_HITS_OPEN_RECLAIM', ai_exit_needed_hits)
+        or ai_exit_needed_hits
+    )
+    momentum_decay_score_limit = int(getattr(TRADING_RULES, 'SCALP_AI_MOMENTUM_DECAY_SCORE_LIMIT', 45) or 45)
+    momentum_decay_min_hold_sec = int(getattr(TRADING_RULES, 'SCALP_AI_MOMENTUM_DECAY_MIN_HOLD_SEC', 90) or 90)
+    if pos_tag == 'OPEN_RECLAIM':
+        ai_exit_needed_hits = max(ai_exit_needed_hits, open_reclaim_needed_hits)
 
     last_ai_profit = stock.get('last_ai_profit', profit_rate)
     price_change = abs(profit_rate - last_ai_profit)
     time_elapsed = time.time() - last_ai_time
-    held_time_min = 0
-    if 'order_time' in stock and stock.get('order_time'):
-        held_time_min = (time.time() - stock['order_time']) / 60
-    elif stock.get('buy_time'):
-        try:
-            bt = stock['buy_time']
-            if isinstance(bt, datetime):
-                b_dt = bt
-            else:
-                bt_str = str(bt)
-                try:
-                    b_dt = datetime.fromisoformat(bt_str)
-                except Exception:
-                    b_time = datetime.strptime(bt_str, '%H:%M:%S').time()
-                    b_dt = datetime.combine(datetime.now().date(), b_time)
-            held_time_min = (datetime.now() - b_dt).total_seconds() / 60
-        except Exception:
-            pass
+    held_sec = _resolve_holding_elapsed_sec(stock)
+    held_time_min = held_sec / 60.0
 
     if strategy == 'SCALPING' and ai_engine and radar:
         safe_profit_pct = getattr(TRADING_RULES, 'SCALP_SAFE_PROFIT', 0.5)
@@ -2265,6 +2409,15 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
         base_stop_pct = getattr(TRADING_RULES, 'SCALP_STOP', -1.5)
         hard_stop_pct = getattr(TRADING_RULES, 'SCALP_HARD_STOP', -2.5)
         safe_profit_pct = getattr(TRADING_RULES, 'SCALP_SAFE_PROFIT', 0.5)
+        open_reclaim_peak_max_pct = float(getattr(TRADING_RULES, 'SCALP_OPEN_RECLAIM_NEVER_GREEN_PEAK_MAX_PCT', 0.20) or 0.20)
+        open_reclaim_hold_sec = int(getattr(TRADING_RULES, 'SCALP_OPEN_RECLAIM_NEVER_GREEN_HOLD_SEC', 300) or 300)
+        open_reclaim_score_buffer = int(getattr(TRADING_RULES, 'SCALP_OPEN_RECLAIM_NEAR_AI_EXIT_SCORE_BUFFER', 5) or 5)
+        scanner_fallback_peak_max_pct = float(getattr(TRADING_RULES, 'SCALP_SCANNER_FALLBACK_NEVER_GREEN_PEAK_MAX_PCT', 0.20) or 0.20)
+        scanner_fallback_hold_sec = int(getattr(TRADING_RULES, 'SCALP_SCANNER_FALLBACK_NEVER_GREEN_HOLD_SEC', 420) or 420)
+        scanner_fallback_score_buffer = int(getattr(TRADING_RULES, 'SCALP_SCANNER_FALLBACK_NEAR_AI_EXIT_SCORE_BUFFER', 8) or 8)
+        scanner_fallback_near_ai_exit_sustain_sec = int(
+            getattr(TRADING_RULES, 'SCALP_SCANNER_FALLBACK_NEAR_AI_EXIT_SUSTAIN_SEC', 120) or 120
+        )
         if highest_prices.get(code, 0) > 0:
             drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100
         else:
@@ -2278,6 +2431,19 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
         else:
             dynamic_stop_pct = soft_stop_pct
             dynamic_trailing_limit = getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_WEAK', 0.4)
+
+        near_ai_exit_risk = (
+            profit_rate <= ai_exit_min_loss_pct
+            and current_ai_score <= (ai_exit_score_limit + max(open_reclaim_score_buffer, scanner_fallback_score_buffer))
+        )
+        now_ts = time.time()
+        if near_ai_exit_risk:
+            if not stock.get('near_ai_exit_started_at'):
+                stock['near_ai_exit_started_at'] = now_ts
+        else:
+            stock.pop('near_ai_exit_started_at', None)
+        near_ai_exit_started_at = float(stock.get('near_ai_exit_started_at', 0) or 0)
+        near_ai_exit_sustain_sec = max(0, int(now_ts - near_ai_exit_started_at)) if near_ai_exit_started_at > 0 else 0
 
         if profit_rate <= hard_stop_pct:
             is_sell_signal = True
@@ -2296,7 +2462,38 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             ai_low_score_hits = 0
 
         elif (
-            held_time_min * 60 >= ai_exit_min_hold_sec
+            pos_tag == 'OPEN_RECLAIM'
+            and held_sec >= open_reclaim_hold_sec
+            and peak_profit <= open_reclaim_peak_max_pct
+            and profit_rate <= ai_exit_min_loss_pct
+            and current_ai_score <= (ai_exit_score_limit + open_reclaim_score_buffer)
+        ):
+            is_sell_signal = True
+            sell_reason_type = "LOSS"
+            reason = (
+                f"🧯 OPEN_RECLAIM never-green 조기정리 "
+                f"(hold={held_sec}s, peak={peak_profit:.2f}%, ai={current_ai_score:.0f})"
+            )
+            exit_rule = "scalp_open_reclaim_never_green"
+
+        elif (
+            pos_tag == 'SCANNER'
+            and str(stock.get('entry_mode', '')).strip().lower() == 'fallback'
+            and held_sec >= scanner_fallback_hold_sec
+            and peak_profit <= scanner_fallback_peak_max_pct
+            and near_ai_exit_sustain_sec >= scanner_fallback_near_ai_exit_sustain_sec
+            and current_ai_score <= (ai_exit_score_limit + scanner_fallback_score_buffer)
+        ):
+            is_sell_signal = True
+            sell_reason_type = "LOSS"
+            reason = (
+                f"🧯 SCANNER fallback 지연손절 보정 "
+                f"(hold={held_sec}s, near_ai_exit={near_ai_exit_sustain_sec}s, peak={peak_profit:.2f}%)"
+            )
+            exit_rule = "scalp_scanner_fallback_never_green"
+
+        elif (
+            held_sec >= ai_exit_min_hold_sec
             and profit_rate <= ai_exit_min_loss_pct
             and current_ai_score <= ai_exit_score_limit
             and ai_low_score_hits >= ai_exit_needed_hits
@@ -2310,11 +2507,12 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             exit_rule = "scalp_ai_early_exit"
 
         elif profit_rate >= safe_profit_pct:
-            if current_ai_score < 50:
+            if current_ai_score < momentum_decay_score_limit and held_sec >= momentum_decay_min_hold_sec:
                 is_sell_signal = True
                 sell_reason_type = "MOMENTUM_DECAY"
                 reason = (
-                    f"🤖 AI 틱 가속도 둔화 ({current_ai_score:.0f}점). 즉각 익절 (+{profit_rate:.2f}%)"
+                    f"🤖 AI 틱 가속도 둔화 ({current_ai_score:.0f}점). "
+                    f"확인유예({momentum_decay_min_hold_sec}s) 후 익절 (+{profit_rate:.2f}%)"
                 )
                 exit_rule = "scalp_ai_momentum_decay"
 

@@ -79,6 +79,19 @@ Flutter나 외부 서비스는 아래 API를 그대로 사용하면 됩니다.
 - 예시:
   `/home/ubuntu/KORStockScan/.venv/bin/python -m pytest -q src/tests/test_condition_open_reclaim.py`
 
+### 최근 변경사항 (2026-04-08 장중 즉시 적용)
+
+- 스캘핑 신규 진입에 절대 예산 상한을 적용했습니다.
+  - `SCALPING_MAX_BUY_BUDGET_KRW=2_000_000`
+- 동적 체결강도(`strength_momentum`)는 태그 한정 완화 프로필을 추가했습니다.
+  - 대상 태그: `VWAP_RECLAIM`, `OPEN_RECLAIM`
+  - 완화값: `min_base 95→93`, `min_buy_value 20,000→16,000`, `min_buy_ratio 0.75→0.72`, `min_exec_buy_ratio 0.56→0.53`
+- 스캘핑 청산 과민 완화를 위해 `OPEN_RECLAIM` 조기손절 연속 확인 횟수를 상향했습니다.
+  - `SCALP_AI_EARLY_EXIT_CONSECUTIVE_HITS_OPEN_RECLAIM=4` (기본 3회 대비 완화)
+- `scalp_ai_momentum_decay`는 즉시 반응 대신 최소 확인 유예를 둡니다.
+  - 발동 조건: `score < 45` 이고 `hold >= 90초`
+- 관련 상수는 `src/utils/constants.py`에서 즉시 롤백 가능하도록 분리되어 있습니다.
+
 ---
 
 ## 시스템 라이프사이클
@@ -168,10 +181,17 @@ Flutter나 외부 서비스는 아래 API를 그대로 사용하면 됩니다.
 스캘핑(`SCALPING`) 신규 진입:
 
 - 사용 상수: `INVEST_RATIO_SCALPING_MIN=0.10`, `INVEST_RATIO_SCALPING_MAX=0.50`
+- 절대 예산 상한: `SCALPING_MAX_BUY_BUDGET_KRW=2,000,000`
 - 사용 점수: 실시간 AI 점수 `rt_ai_prob x 100`
 - 산식: `ratio = min_ratio + (ai_score / 100) x (max_ratio - min_ratio)`
 - 즉, AI 점수가 높을수록 같은 주문가능금액 안에서 더 큰 비중을 배정합니다.
+- 최종 주문 예산은 `min(target_budget, SCALPING_MAX_BUY_BUDGET_KRW)`로 한 번 더 제한됩니다.
 - 스캘핑은 `entry_armed` 상태에 들어가면 당시 계산된 `ratio`를 저장해, 짧은 TTL 안에서는 재평가 없이 같은 비중을 이어서 주문 단계까지 전달할 수 있습니다.
+- `VWAP_RECLAIM`, `OPEN_RECLAIM`은 동적 체결강도 게이트를 태그 한정 완화 프로필로 평가합니다.
+  - `SCALP_VPW_RELAX_MIN_BASE=93.0`
+  - `SCALP_VPW_RELAX_MIN_BUY_VALUE=16,000`
+  - `SCALP_VPW_RELAX_MIN_BUY_RATIO=0.72`
+  - `SCALP_VPW_RELAX_MIN_EXEC_BUY_RATIO=0.53`
 
 스윙(`KOSDAQ_ML`, `KOSPI_ML`) 신규 진입:
 
@@ -235,6 +255,8 @@ Flutter나 외부 서비스는 아래 API를 그대로 사용하면 됩니다.
 - SELL은 pause 상태에서도 막지 않습니다.
 - entry BUY 미체결이 남아 있으면 취소 후 청산으로 넘어가도록 처리합니다.
 - 시장가, 지정가, IOC 성격은 주문 계층에서 일관되게 관리합니다.
+- `OPEN_RECLAIM`의 `scalp_ai_early_exit`는 기본 3회가 아니라 4회 연속 저점수 확인 시에만 발동하도록 완화되어 있습니다.
+- `scalp_ai_momentum_decay`는 `score < 45` + `보유 90초 이상` 조건을 만족할 때만 발동합니다.
 
 ### 5. 복기
 

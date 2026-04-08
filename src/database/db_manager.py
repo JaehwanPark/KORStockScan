@@ -408,6 +408,8 @@ class DBManager:
                         id, rec_date as date, stock_code as code, stock_name as name, 
                         trade_type as type, status, strategy, position_tag, prob, nxt, 
                         buy_price, buy_qty, buy_time, sell_price, sell_time, profit_rate,
+                        add_count, avg_down_count, pyramid_count, last_add_type, last_add_at,
+                        scale_in_locked, hard_stop_price, trailing_stop_price,
                         (
                             SELECT dsq.marcap
                             FROM daily_stock_quotes dsq
@@ -452,12 +454,41 @@ class DBManager:
 
             # 기본값 보정 (스나이퍼 엔진의 부담을 DB 매니저가 덜어줍니다)
             default_prob = getattr(TRADING_RULES, 'SNIPER_AGGRESSIVE_PROB', 0.8)
-            
+
+            def _safe_int(value, default=0):
+                try:
+                    return int(float(value or 0))
+                except Exception:
+                    return default
+
+            def _safe_float(value, default=0.0):
+                try:
+                    return float(value or 0.0)
+                except Exception:
+                    return default
+
+            def _safe_bool(value, default=False):
+                if value is None:
+                    return default
+                if isinstance(value, bool):
+                    return value
+                text = str(value).strip().lower()
+                if text in {'1', 'true', 't', 'yes', 'y'}:
+                    return True
+                if text in {'0', 'false', 'f', 'no', 'n'}:
+                    return False
+                return default
             for t in targets:
                 t['prob'] = t.get('prob', default_prob)
                 t['buy_qty'] = t.get('buy_qty', 0)
                 t['strategy'] = normalize_strategy(t.get('strategy', 'KOSPI_ML'))
                 t['position_tag'] = normalize_position_tag(t['strategy'], t.get('position_tag'))
+                t['add_count'] = _safe_int(t.get('add_count'))
+                t['avg_down_count'] = _safe_int(t.get('avg_down_count'))
+                t['pyramid_count'] = _safe_int(t.get('pyramid_count'))
+                t['scale_in_locked'] = _safe_bool(t.get('scale_in_locked'), default=False)
+                t['hard_stop_price'] = _safe_float(t.get('hard_stop_price'))
+                t['trailing_stop_price'] = _safe_float(t.get('trailing_stop_price'))
 
             return targets
             

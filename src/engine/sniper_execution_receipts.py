@@ -18,6 +18,7 @@ from src.engine.sniper_position_tags import (
     normalize_strategy,
 )
 from src.engine.trade_profit import calculate_net_profit_rate
+from src.utils.constants import TRADING_RULES
 from src.utils import kiwoom_utils
 from src.utils.logger import log_error, log_info
 from src.engine.sniper_time import TIME_15_30
@@ -634,7 +635,44 @@ def handle_real_execution(exec_data):
 
                     preset_tp_price = kiwoom_utils.get_target_price_up(base_buy_price, 1.5)
                     target_stock['preset_tp_price'] = preset_tp_price
-                    target_stock['hard_stop_pct'] = -0.7
+                    preset_hard_stop_pct = float(getattr(TRADING_RULES, 'SCALP_PRESET_HARD_STOP_PCT', -0.7) or -0.7)
+                    preset_hard_stop_grace_sec = int(getattr(TRADING_RULES, 'SCALP_PRESET_HARD_STOP_GRACE_SEC', 0) or 0)
+                    preset_hard_stop_emergency_pct = float(
+                        getattr(
+                            TRADING_RULES,
+                            'SCALP_PRESET_HARD_STOP_EMERGENCY_PCT',
+                            min(preset_hard_stop_pct - 0.5, -1.2),
+                        )
+                        or min(preset_hard_stop_pct - 0.5, -1.2)
+                    )
+                    if str(target_stock.get('entry_mode', '')).strip().lower() == 'fallback':
+                        preset_hard_stop_pct = float(
+                            getattr(
+                                TRADING_RULES,
+                                'SCALP_PRESET_HARD_STOP_FALLBACK_BASE_PCT',
+                                preset_hard_stop_pct,
+                            )
+                            or preset_hard_stop_pct
+                        )
+                        preset_hard_stop_grace_sec = int(
+                            getattr(
+                                TRADING_RULES,
+                                'SCALP_PRESET_HARD_STOP_FALLBACK_BASE_GRACE_SEC',
+                                preset_hard_stop_grace_sec,
+                            )
+                            or preset_hard_stop_grace_sec
+                        )
+                        preset_hard_stop_emergency_pct = float(
+                            getattr(
+                                TRADING_RULES,
+                                'SCALP_PRESET_HARD_STOP_FALLBACK_BASE_EMERGENCY_PCT',
+                                preset_hard_stop_emergency_pct,
+                            )
+                            or preset_hard_stop_emergency_pct
+                        )
+                    target_stock['hard_stop_pct'] = preset_hard_stop_pct
+                    target_stock['hard_stop_grace_sec'] = preset_hard_stop_grace_sec
+                    target_stock['hard_stop_emergency_pct'] = preset_hard_stop_emergency_pct
                     target_stock['protect_profit_pct'] = None
                     target_stock['ai_review_done'] = False
                     target_stock['ai_review_score'] = None

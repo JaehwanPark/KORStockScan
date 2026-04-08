@@ -1,84 +1,85 @@
 {
-  "bundle_as_of": "2026-04-06T22:00:13Z",
+  "bundle_as_of": "2026-04-07T22:00:11Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 6611.83,
-    "prev_value": 6582.69,
-    "change": 29.14,
-    "change_pct": 0.44,
-    "as_of": "2026-04-06T20:00:00Z",
-    "source": "Associated Press / WDRB"
+    "value": 6616.85,
+    "prev_value": 6611.83,
+    "change": 5.02,
+    "change_pct": 0.08,
+    "as_of": "2026-04-07T20:00:00Z",
+    "source": "Dow Jones Market Data / Associated Press"
   },
   "nasdaq": {
     "name": "NASDAQ Composite",
-    "value": 21996.34,
-    "prev_value": 21879.18,
-    "change": 117.16,
-    "change_pct": 0.54,
-    "as_of": "2026-04-06T20:00:00Z",
-    "source": "Associated Press / WDRB"
+    "value": 22017.85,
+    "prev_value": 21996.34,
+    "change": 21.51,
+    "change_pct": 0.1,
+    "as_of": "2026-04-07T20:00:00Z",
+    "source": "Dow Jones Market Data / Associated Press"
   },
   "vix": {
     "name": "VIX",
-    "value": 24.54,
-    "prev_value": 23.87,
-    "change": 0.67,
-    "change_pct": 2.81,
-    "as_of": "2026-04-06T20:15:00Z",
-    "source": "CBOE / Chicago Today"
+    "value": 25.78,
+    "prev_value": 24.17,
+    "change": 1.61,
+    "change_pct": 6.66,
+    "as_of": "2026-04-07T20:15:00Z",
+    "source": "Cboe Global Markets"
   },
   "us10y": {
-    "name": "US 10-Year Treasury Yield",
-    "value": 4.34,
-    "prev_value": 4.32,
+    "name": "US 10Y Treasury Yield",
+    "value": 4.35,
+    "prev_value": 4.33,
     "change": 0.02,
     "change_pct": 0.46,
-    "as_of": "2026-04-06T20:00:00Z",
+    "as_of": "2026-04-07T22:00:11Z",
     "source": "Trading Economics"
   },
   "brent": {
-    "name": "Brent Crude Oil",
-    "value": 109.41,
-    "prev_value": 109.04,
-    "change": 0.37,
-    "change_pct": 0.34,
-    "as_of": "2026-04-06T20:00:00Z",
-    "source": "Trading Economics"
+    "name": "Brent Crude",
+    "value": 109.27,
+    "prev_value": 109.82,
+    "change": -0.55,
+    "change_pct": -0.5,
+    "as_of": "2026-04-07T22:00:11Z",
+    "source": "LA Times / Trading Economics"
   },
   "headlines": [
     {
-      "title": "U.S. stocks drift higher ahead of Trump's deadline to bomb Iranian power plants",
-      "source": "Los Angeles Times / AP",
-      "published_at": "2026-04-06T20:57:00Z",
-      "url": "https://www.latimes.com/"
+      "title": "Trump warns a 'whole civilization will die tonight' if a deal with Iran isn't reached",
+      "source": "Washington Post",
+      "published_at": "2026-04-07T17:10:00Z",
+      "url": "https://www.washingtonpost.com"
     },
     {
-      "title": "Oil edges up in choppy trade; US, Iran receive ceasefire proposal framework",
-      "source": "Reuters",
-      "published_at": "2026-04-06T13:26:00Z",
-      "url": "https://www.reuters.com/"
+      "title": "Pakistan asks for 2-week ceasefire amid diplomatic efforts",
+      "source": "CBS News",
+      "published_at": "2026-04-07T20:40:00Z",
+      "url": "https://www.cbsnews.com"
     },
     {
-      "title": "Oil Prices Fluctuate as Trump's Deadline on Hormuz Looms",
-      "source": "Transport Topics",
-      "published_at": "2026-04-06T17:10:00Z",
-      "url": "https://www.ttnews.com/"
+      "title": "Stocks swing from losses to a tiny gain ahead of Trump's deadline for Iran",
+      "source": "LA Times",
+      "published_at": "2026-04-07T20:28:00Z",
+      "url": "https://www.latimes.com"
     },
     {
-      "title": "Wall Street 'Fear Gauge' Retreats as Geopolitical Tensions Ease",
-      "source": "Chicago Today",
-      "published_at": "2026-04-06T14:00:00Z",
-      "url": "https://nationaltoday.com/"
+      "title": "US 10-Year Treasury Yield Rises for Second Session to Around 4.35%",
+      "source": "Trading Economics",
+      "published_at": "2026-04-07T18:00:00Z",
+      "url": "https://tradingeconomics.com"
     },
     {
-      "title": "Crude prices jump sharply: WTI at $114, Brent at $111 on renewed geopolitical risk, supply concerns",
-      "source": "Gulf News",
-      "published_at": "2026-04-05T22:38:00Z",
-      "url": "https://gulfnews.com/"
+      "title": "Brent Crude eases to $109.27 but remains volatile due to Kharg Island strikes",
+      "source": "LA Times",
+      "published_at": "2026-04-07T20:28:00Z",
+      "url": "https://www.latimes.com"
     }
   ],
   "notes": [
-    "U.S. equities closed slightly higher on April 6, 2026, as the market balanced a potential 45-day ceasefire proposal against an impending deadline set by President Trump to bomb Iranian infrastructure if the Strait of Hormuz is not reopened.",
-    "Oil markets exhibited elevated volatility, with Brent crude briefly soaring above $111 before paring gains, as shipping traffic through the Strait of Hormuz remains drastically reduced."
+    "Market values and headlines are compiled based on the latest available updates on 2026-04-07.",
+    "Major US indexes rallied slightly at the end of the session on hopes for a Pakistan-brokered ceasefire.",
+    "Markets are closely monitoring President Trump's deadline for Iran regarding the reopening of the Strait of Hormuz."
   ]
 }

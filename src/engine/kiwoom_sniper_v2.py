@@ -114,6 +114,7 @@ from src.engine.sniper_market_regime import bind_market_regime_dependencies
 import src.engine.sniper_trade_utils as sniper_trade_utils
 from src.engine.trade_pause_control import bind_event_bus as bind_trade_pause_event_bus, is_buy_side_paused
 from src.engine.sniper_position_tags import (
+    is_default_position_tag,
     normalize_position_tag,
     normalize_strategy,
     target_identity,
@@ -394,6 +395,20 @@ def should_block_swing_entry_by_market_regime(strategy: str):
     _ensure_market_regime_deps()
     return sniper_market_regime.should_block_swing_entry_by_market_regime(strategy)
 
+
+def _current_market_regime_code() -> str:
+    """
+    보유/청산 로직이 기대하는 시장 국면 코드(BULL/NEUTRAL/BEAR)를 반환합니다.
+    시장환경 서비스 오류가 매매 루프 전체 장애로 번지지 않도록 보수적으로 NEUTRAL로 폴백합니다.
+    """
+    try:
+        market_snapshot = MARKET_REGIME.refresh_if_needed()
+        regime_summary = summarize_market_regime_snapshot(market_snapshot)
+        return str(regime_summary.get("regime_code") or "NEUTRAL").upper()
+    except Exception as exc:
+        log_error(f"⚠️ 시장 국면 코드 조회 실패, NEUTRAL 폴백 사용: {exc}")
+        return "NEUTRAL"
+
 bind_state_dependencies(
     db=DB,
     event_bus=event_bus,
@@ -490,14 +505,17 @@ def check_watching_conditions(stock, code, ws_data, admin_id, radar=None, ai_eng
         else:
             if radar is None:
                 return "radar 객체 없음"
-            momentum_gate = evaluate_scalping_strength_momentum(ws_data)
+            momentum_ws_data = dict(ws_data or {})
+            momentum_ws_data["_position_tag"] = pos_tag
+            momentum_gate = evaluate_scalping_strength_momentum(momentum_ws_data)
             if current_vpw < getattr(TRADING_RULES, 'VPW_SCALP_LIMIT', 120):
                 return (
                     f"VPW 불충족 (current_vpw={current_vpw:.1f} < VPW_SCALP_LIMIT, "
                     f"dynamic_allowed={momentum_gate.get('allowed')}, "
                     f"dynamic_reason={momentum_gate.get('reason')}, "
                     f"dynamic_delta={float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}, "
-                    f"dynamic_buy_value={int(momentum_gate.get('window_buy_value', 0) or 0)})"
+                    f"dynamic_buy_value={int(momentum_gate.get('window_buy_value', 0) or 0)}, "
+                    f"dynamic_profile={momentum_gate.get('threshold_profile')})"
                 )
             if liquidity_value < min_liquidity:
                 return (
@@ -545,10 +563,14 @@ def check_watching_conditions(stock, code, ws_data, admin_id, radar=None, ai_eng
     # 매수 수량 체크 (자금 부족)
     deposit = kiwoom_orders.get_deposit(KIWOOM_TOKEN)
     ratio = stock.get('ratio', 0.1)  # 기본 비율
+    budget_cap = 0
+    if strategy == 'SCALPING':
+        budget_cap = int(getattr(TRADING_RULES, 'SCALPING_MAX_BUY_BUDGET_KRW', 0) or 0)
     target_budget, safe_budget, real_buy_qty, used_safety_ratio = kiwoom_orders.describe_buy_capacity(
         curr_price,
         deposit,
         ratio,
+        max_budget=budget_cap,
     )
     if real_buy_qty <= 0:
         return (
@@ -573,6 +595,105 @@ def _parse_holding_started_at(stock):
         return None
 
 
+def _safe_int(value, default=0):
+    try:
+        return int(float(value or 0))
+    except Exception:
+        return default
+
+
+def _safe_float(value, default=0.0):
+    try:
+        return float(value or 0.0)
+    except Exception:
+        return default
+
+
+def _restore_holding_runtime_state(targets):
+    """Rehydrate HOLDING runtime fields so restart can resume with minimal drift."""
+    restored = 0
+    for stock in targets or []:
+        if str(stock.get("status") or "").upper() != "HOLDING":
+            continue
+
+        code = str(stock.get("code", "")).strip()[:6]
+        strategy = normalize_strategy(stock.get("strategy"))
+        position_tag = normalize_position_tag(strategy, stock.get("position_tag"))
+        buy_price = _safe_float(stock.get("buy_price"))
+
+        stock["strategy"] = strategy
+        stock["position_tag"] = position_tag
+        stock["buy_qty"] = _safe_int(stock.get("buy_qty"))
+        stock["add_count"] = _safe_int(stock.get("add_count"))
+        stock["avg_down_count"] = _safe_int(stock.get("avg_down_count"))
+        stock["pyramid_count"] = _safe_int(stock.get("pyramid_count"))
+        stock["scale_in_locked"] = bool(stock.get("scale_in_locked", False))
+        stock["hard_stop_price"] = _safe_float(stock.get("hard_stop_price"))
+        stock["trailing_stop_price"] = _safe_float(stock.get("trailing_stop_price"))
+
+        if stock.get("buy_time") and not stock.get("holding_started_at"):
+            stock["holding_started_at"] = stock.get("buy_time")
+
+        if code and buy_price > 0:
+            highest_prices[code] = max(_safe_float(highest_prices.get(code)), buy_price)
+
+        if strategy == "SCALPING":
+            stock.setdefault("ai_low_score_loss_hits", 0)
+            stock.setdefault("last_ai_reviewed_at", None)
+            stock.setdefault("near_ai_exit_started_at", None)
+            if is_default_position_tag(strategy, position_tag):
+                stock.setdefault("exit_mode", "SCALP_PRESET_TP")
+                if _safe_int(stock.get("preset_tp_price")) <= 0 and buy_price > 0:
+                    stock["preset_tp_price"] = kiwoom_utils.get_target_price_up(int(buy_price), 1.5)
+
+                base_stop = float(getattr(TRADING_RULES, "SCALP_PRESET_HARD_STOP_PCT", -0.7) or -0.7)
+                base_grace = int(getattr(TRADING_RULES, "SCALP_PRESET_HARD_STOP_GRACE_SEC", 0) or 0)
+                base_emergency = float(
+                    getattr(
+                        TRADING_RULES,
+                        "SCALP_PRESET_HARD_STOP_EMERGENCY_PCT",
+                        min(base_stop - 0.5, -1.2),
+                    )
+                    or min(base_stop - 0.5, -1.2)
+                )
+
+                if str(stock.get("entry_mode", "")).strip().lower() == "fallback":
+                    stock.setdefault(
+                        "hard_stop_pct",
+                        float(getattr(TRADING_RULES, "SCALP_PRESET_HARD_STOP_FALLBACK_BASE_PCT", base_stop) or base_stop),
+                    )
+                    stock.setdefault(
+                        "hard_stop_grace_sec",
+                        int(getattr(TRADING_RULES, "SCALP_PRESET_HARD_STOP_FALLBACK_BASE_GRACE_SEC", base_grace) or base_grace),
+                    )
+                    stock.setdefault(
+                        "hard_stop_emergency_pct",
+                        float(
+                            getattr(
+                                TRADING_RULES,
+                                "SCALP_PRESET_HARD_STOP_FALLBACK_BASE_EMERGENCY_PCT",
+                                base_emergency,
+                            )
+                            or base_emergency
+                        ),
+                    )
+                else:
+                    stock.setdefault("hard_stop_pct", base_stop)
+                    stock.setdefault("hard_stop_grace_sec", base_grace)
+                    stock.setdefault("hard_stop_emergency_pct", base_emergency)
+
+                stock.setdefault("protect_profit_pct", None)
+                stock.setdefault("ai_review_done", False)
+                stock.setdefault("exit_requested", False)
+                stock.setdefault("exit_order_type", None)
+                stock.setdefault("exit_order_time", None)
+
+        restored += 1
+
+    if restored:
+        log_info(f"[BOOT_RESTORE] HOLDING runtime rehydrated count={restored}")
+
+
 def evaluate_scalping_exit(stock, code, ws_data, curr_p, buy_p, profit_rate, peak_profit):
     base_stop_pct = getattr(TRADING_RULES, 'SCALP_STOP', -1.5)
     hard_stop_pct = getattr(TRADING_RULES, 'SCALP_HARD_STOP', -2.5)
@@ -580,10 +701,19 @@ def evaluate_scalping_exit(stock, code, ws_data, curr_p, buy_p, profit_rate, pea
     ai_exit_min_loss_pct = float(getattr(TRADING_RULES, 'SCALP_AI_EARLY_EXIT_MIN_LOSS_PCT', -0.7))
     ai_exit_min_hold_sec = int(getattr(TRADING_RULES, 'SCALP_AI_EARLY_EXIT_MIN_HOLD_SEC', 180))
     ai_exit_needed_hits = int(getattr(TRADING_RULES, 'SCALP_AI_EARLY_EXIT_CONSECUTIVE_HITS', 3))
+    open_reclaim_needed_hits = int(
+        getattr(TRADING_RULES, 'SCALP_AI_EARLY_EXIT_CONSECUTIVE_HITS_OPEN_RECLAIM', ai_exit_needed_hits)
+        or ai_exit_needed_hits
+    )
+    momentum_decay_score_limit = int(getattr(TRADING_RULES, 'SCALP_AI_MOMENTUM_DECAY_SCORE_LIMIT', 45) or 45)
+    momentum_decay_min_hold_sec = int(getattr(TRADING_RULES, 'SCALP_AI_MOMENTUM_DECAY_MIN_HOLD_SEC', 90) or 90)
     safe_profit_pct = getattr(TRADING_RULES, 'SCALP_SAFE_PROFIT', 0.5)
     trailing_start_pct = getattr(TRADING_RULES, 'SCALP_TRAILING_START_PCT', 0.6)
     weak_trailing = getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_WEAK', 0.4)
     strong_trailing = getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_STRONG', 0.8)
+    pos_tag = normalize_position_tag('SCALPING', stock.get('position_tag'))
+    if pos_tag == 'OPEN_RECLAIM':
+        ai_exit_needed_hits = max(ai_exit_needed_hits, open_reclaim_needed_hits)
 
     current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
     current_vpw = float(ws_data.get('v_pw', 0) or 0.0)
@@ -656,6 +786,11 @@ def evaluate_scalping_exit(stock, code, ws_data, curr_p, buy_p, profit_rate, pea
     # Dynamic Trailing (peak 확보 이후만)
     if peak_profit >= trailing_start_pct and profit_rate >= safe_profit_pct:
         drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100 if highest_prices[code] > 0 else 0
+        if current_ai_score < momentum_decay_score_limit and held_seconds >= momentum_decay_min_hold_sec:
+            return (
+                f"AI 모멘텀 둔화 확인유예 후 익절 "
+                f"(score={current_ai_score:.0f}, hold={int(held_seconds)}s)"
+            )
         if current_ai_score >= 75 and current_vpw >= 110:
             trailing_limit = strong_trailing
         elif current_ai_score >= 65 and current_vpw >= 105:
@@ -916,6 +1051,7 @@ def run_sniper(is_test_mode=False):
         t['added_time'] = time.time()
         t['strategy'] = normalize_strategy(t.get('strategy'))
         t['position_tag'] = normalize_position_tag(t['strategy'], t.get('position_tag'))
+    _restore_holding_runtime_state(ACTIVE_TARGETS)
 
     targets = ACTIVE_TARGETS
     last_db_poll_time = time.time()
@@ -947,6 +1083,7 @@ def run_sniper(is_test_mode=False):
             now = datetime.now()
             now_t = now.time()
             run_sniper.runtime_pause_state = is_buy_side_paused()
+            current_market_regime = _current_market_regime_code()
 
             if not is_test_mode and now_t >= TIME_20_00:
                 print("🌙 장 마감 시간이 다가와 감시를 종료합니다.")

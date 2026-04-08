@@ -518,6 +518,104 @@ else:
    - 오늘 `scalp_ai_early_exit`는 2건 모두 손실로 끝났지만, 이것만으로 임계값을 즉시 바꾸기엔 근거가 부족하다.
    - hard time stop 설계와 함께 묶어 다시 본다.
 
+#### 2026-04-08 스캘핑 손절 패턴 반영
+
+현재까지 확인된 사실:
+
+1. `2026-04-08 10:40 KST` 기준 완료된 스캘핑 거래는 3건이고 모두 손실이다. 실현손익 합계는 `-80,456원`이다.
+2. `OPEN_RECLAIM`이 2건, `SCALP_BASE`가 1건이다.
+3. `OPEN_RECLAIM` 손절 2건의 평균 손익률은 `-0.99%`, 평균 보유시간은 `492.5초`다.
+4. `SCALP_BASE` 손절 1건은 `entry_mode=fallback`, `35초 보유`, `preset hard stop(-0.7)` 성격의 초단기 손절이었다.
+
+1차 손절 분해표:
+
+| ID | 종목 | position_tag | entry_mode | exit_rule | 보유시간 | 손익률 | 실현손익 | 해석 |
+| --- | --- | --- | --- | --- | ---: | ---: | ---: | --- |
+| 1403 | 씨아이에스 | OPEN_RECLAIM | 미확인 | `scalp_ai_early_exit` | 527초 | -1.03% | -53,298원 | 지연 손절 표본 |
+| 1407 | 산일전기 | SCALP_BASE | `fallback` | `preset hard stop(-0.7)` | 35초 | -0.71% | -27,053원 | 과민 손절 표본 |
+| 1368 | 휴림로봇 | OPEN_RECLAIM | 미확인 | `scalp_ai_early_exit` | 458초 | -0.95% | -105원 | `low_score_hits 3/3` 후 청산 |
+
+보정 메모:
+
+1. `산일전기`는 체결 로그 원본에 `exit_rule=-`로 남아 있지만, 현재 복기 로직과 주문 흐름 기준으로 `preset hard stop(-0.7)`로 해석하는 것이 맞다.
+2. `휴림로봇`은 시작 로그상 `entry_mode`를 아직 직접 복원하지 못했지만, `position_tag=OPEN_RECLAIM`, `scalp_ai_early_exit`, `low_score_hits 3/3` 누적은 확인됐다.
+
+초기 해석:
+
+1. `OPEN_RECLAIM`은 현재 표본상 `AI early exit`가 손실 `-0.95% ~ -1.03%` 구간, 보유 `458 ~ 527초` 시점에서 확정되는 지연 손절 패턴이 2건이다.
+2. `SCALP_BASE/fallback`은 현재 표본 1건이지만, 손절 메커니즘이 명시적으로 `preset hard stop(-0.7)`라 구조적 과민 손절 후보다.
+3. 따라서 `표본 우선순위`는 `Track B`, `구조 리스크 우선순위`는 `Track A`도 유지하는 방식이 맞다.
+
+해석 원칙:
+
+1. 이 문제를 `스캘핑 공통 손절값 1개`로 바로 풀려고 하지 않는다.
+2. 먼저 `entry_mode`, `position_tag`, `exit_rule`, `holding_seconds` 기준으로 손절을 분해한다.
+3. `fallback 전용 보정`, `OPEN_RECLAIM 전용 보정`, `공통 hard time stop`은 서로 다른 트랙으로 관리한다.
+
+채택할 튜닝 트랙:
+
+1. `Track A: SCALP_BASE / fallback 과민 손절 보정`
+   - 후보 A1: `fallback 전용 투자비중 축소`
+   - 후보 A2: `fallback 전용 preset hard stop`을 `-0.7`보다 완화하거나 `30~45초 grace` 부여
+   - 후보 A3: `fallback 전용 60~120초 미전환 hard time stop`
+   - 비교 지표: `손절 건수`, `평균 손실폭`, `1분 내 양전환 실패율`, `실현손익`
+   - 우선순위: `비중 축소` 또는 `fallback 전용 time stop`처럼 국소적 변경을 먼저 보고, `preset hard stop` 직접 완화는 마지막에 검토한다.
+   - 1차 비교표:
+
+| 후보 | 변경안 | 기대효과 | 현재 표본 적합도 | 주요 리스크 | 오늘 기준 우선순위 |
+| --- | --- | --- | --- | --- | --- |
+| A1 | `fallback` 전용 투자비중 축소 | 같은 과민 손절이 나와도 절대 손실을 즉시 줄인다 | 높음 | false stop 자체는 남는다 | 1 |
+| A2 | `preset hard stop(-0.7)` 완화 또는 `30~45초 grace` | `35초 / -0.71%` 손절을 직접 완화한다 | 매우 높음 | 눌림 구간 손실 확대로 이어질 수 있다 | 3 |
+| A3 | `fallback` 전용 `60~120초` 미전환 hard time stop | 완만한 실패 진입을 별도 규칙으로 정리한다 | 중간 | 현재 `35초` 손절 표본에는 단독 효과가 약하다 | 2 |
+2. `Track B: OPEN_RECLAIM 지연 손절 보정`
+   - 후보 B1: `AI early exit min hold 180초 -> 120초`를 `OPEN_RECLAIM` 한정 즉시 적용
+   - 후보 B2: `low score 3회 -> 2회`를 `OPEN_RECLAIM` 한정 즉시 적용
+   - 후보 B3: `never green`, `peak_profit 낮음` 조건을 결합해 조기손절 신호를 보강
+   - 비교 지표: `손실 확대 방지`, `조기 잘림 증가`, `평균 보유시간`, `실현손익`
+   - 우선순위: `태그 한정 즉시 적용(한 번에 1개)`을 먼저 수행하고, 공통 Early Exit 재가중은 그 다음에 검토한다.
+   - 1차 비교표:
+
+| 후보 | 변경안 | 기대효과 | 현재 표본 적합도 | 주요 리스크 | 오늘 기준 우선순위 |
+| --- | --- | --- | --- | --- | --- |
+| B1 | `AI early exit min hold 180초 -> 120초` 즉시 적용 | 장초 실패 reclaim을 더 빨리 정리할 여지를 본다 | 낮음 | 장초 흔들림에 과하게 잘릴 수 있다 | 3 |
+| B2 | `low_score_hits 3회 -> 2회` 즉시 적용 | AI 연속 저점수 확인을 조금 더 빠르게 반영한다 | 중간 | 점수 노이즈에 민감해질 수 있다 | 2 |
+| B3 | `never green`, `peak_profit 낮음` 결합 보조 gate | 회복 못 하는 reclaim을 별도 규칙으로 더 빨리 정리한다 | 높음 | 상승 재시도 직전 표본도 같이 잘릴 수 있다 | 1 |
+   - 현재 표본상 `OPEN_RECLAIM` 손절 2건은 모두 `180초`를 한참 지난 뒤 발생해 `min_hold` 직접 완화의 적합도는 상대적으로 낮다.
+   - `휴림로봇`에서는 `2/3 -> 3/3` 차이가 약 `9초`라서, `low_score_hits 3 -> 2` 단독 완화는 효과가 제한적일 수 있다.
+3. `Track C: 공통 hard time stop`
+   - `Track A/B`로 설명되지 않는 `장시간 미전환 손실`이 반복될 때만 공통 규칙으로 승격한다.
+   - 즉 `공통 hard time stop`은 `fallback 과민 손절`의 대체재가 아니라, 별도 안전망 후보로 유지한다.
+
+오늘 작업과의 연결:
+
+1. `2026-04-08 10:40 KST` 기준 1차 손절 분해표는 이미 문서화했다.
+2. 장후 분석에서는 여기에 추가 체결을 덧붙여 `fallback/normal`, `SCALP_BASE/OPEN_RECLAIM`, `exit_rule`, `holding bucket` 기준 확정 비교표로 닫는다.
+3. 오늘은 `후보안 문서화`에 그치지 않고, `진입/청산 완화안 1차를 즉시 실전 적용`하는 것을 목표로 둔다.
+4. 적용 방식은 위 트랙 중 `한 번에 한 가지`만 좁은 범위로 적용하고, `30~60분 결과`를 본 뒤 다음 항목으로 넘어간다.
+5. 공통 하드 손절선은 유지하고, 확인 횟수/유예시간/태그 한정 정책을 우선 조정한다.
+
+즉시 적용 롤아웃 규칙:
+
+1. `진입 완화`와 `청산 완화`를 동시에 크게 바꾸지 않는다. (한 단계씩 순차)
+2. 각 단계는 `적용 시각`, `파라미터`, `대상 태그`, `기대효과`, `실측 결과`를 같은 포맷으로 기록한다.
+3. 롤백 기준:
+   - 적용 후 `30~60분` 내 손절 건수 급증
+   - 평균 손실폭 급증
+   - 의도와 반대되는 `초단기 손절`/`지연 손절` 악화
+4. 롤백 시 즉시 이전 값으로 원복하고, 다음 단계는 같은 축을 더 완만한 강도로 재시도한다.
+
+2026-04-08 12:48 KST 1차 즉시 적용 반영:
+
+1. 진입 민감도 완화(태그 한정)
+   - 대상: `VWAP_RECLAIM`, `OPEN_RECLAIM`
+   - 변경: `SCALP_VPW_RELAX_*` 신설
+   - 값: `min_base 93.0`, `min_buy_value 16,000`, `min_buy_ratio 0.72`, `min_exec_buy_ratio 0.53`
+2. 청산 민감도 완화(하드손절 유지)
+   - `OPEN_RECLAIM` 전용 `scalp_ai_early_exit` 확인횟수 `3 -> 4`
+   - `scalp_ai_momentum_decay`는 `score < 45` + `hold >= 90s`에서만 발동
+3. 관찰 규칙
+   - 적용 후 `30~60분` 손절 건수/평균 손실폭/보유시간 변화 확인 후 다음 단계 적용
+
 #### 2026-04-07 즉시 변경 반영 완료 보고
 
 완료 상태:
@@ -638,6 +736,94 @@ else:
 1. 오늘 스윙 0건은 `RISK_OFF 장세 + Gatekeeper 반복 거부` day로 기록하는 것이 현재 코드/로그와 더 잘 맞는다.
 2. 따라서 내일 즉시 실전 파라미터를 바꾸기보다, 스윙 차단 원인 분류 체계를 먼저 바로잡는 것이 우선이다.
 
+#### 2026-04-08 장중 긴급 조치 반영: Gatekeeper Dual Persona Shadow OFF
+
+상황 요약:
+
+1. `2026-04-08 12:14 KST` 단기 관측에서 `dual_persona_conflict_ratio`가 과도하게 높게 확인됐다.
+   - `since=11:00`: `100.0%` (`samples=8`)
+   - `since=09:00`: `71.4%` (`samples=28`)
+2. 다만 같은 구간에서 `fused_override_ratio`는 낮았다.
+   - `since=11:00`: `0.0%`
+   - `since=09:00`: `3.6%`
+3. `dual_persona_extra_ms_p95`는 `7666~8354ms`로 목표(`<=2500ms`)를 크게 초과했다.
+
+장중 조치:
+
+1. `2026-04-08 12:22 KST`에 [constants.py](../src/utils/constants.py) `OPENAI_DUAL_PERSONA_APPLY_GATEKEEPER=False`로 긴급 비활성화 반영
+2. 같은 시각 `bot_main.py` 재기동 및 보유 복원 확인 (`[BOOT_RESTORE] HOLDING runtime rehydrated`)
+3. 재기동 이후 구간에서 `dual_persona_shadow` 신규 로그 미발생 확인
+
+해석 원칙(업데이트):
+
+1. `raw conflict(agreement_bucket!=all_agree)`는 “의견 불일치 관측 지표”로 본다.
+2. 운영 리스크 판단은 `effective override(fused_action!=gemini_action)`를 우선 본다.
+3. 따라서 `conflict_ratio` 단독으로 즉시 실전 승급/폐기를 판단하지 않는다.
+
+후속 작업(장후~익일 장전):
+
+1. `performance-tuning` 카드에서 `raw conflict`와 `effective override`를 분리 노출한다.
+2. 재활성화 기준을 수치로 고정한다.
+   - 최소 표본 수
+   - `dual_persona_extra_ms_p95` 상한
+   - `effective override` 범위
+   - `gatekeeper_eval_ms_p95` 상한
+3. `전면 on` 전에 `canary(스윙/KOSPI_ML 한정)` 단계를 거치고, 초과 시 즉시 rollback한다.
+4. 당일 문서에는 `ON/OFF 상태`와 `재기동 시각`을 운영 이력으로 남긴다.
+
+#### 2026-04-08 장마감 후속작업 반영: 종목선정 vs 진입/탈출 문제 분리
+
+장마감 집계 기준(`top=200`, `since=09:00`) 요약:
+
+1. 스캘핑 완료 `12건`, 승률 `25.0%(3/12)`, 평균 손익률 `-0.275%`, 실현손익 `-66,367원`
+2. `fallback` 진입은 `5건` 전부 손실(승률 `0%`, 평균 손익률 `-0.726%`, 실현손익 `-27,742원`)
+3. `scalp_ai_early_exit` 종료는 `4건` 전부 손실(승률 `0%`, 실현손익 `-9,440원`)
+4. 동일 종목 내 수익/손실 혼재 표본이 확인됨
+   - `현대건설`: `+0.51%` 익절 1건 + `-0.75%` 손절 1건
+   - `휴림로봇`: `+1.16%` 익절 1건 + 손절 2건(`-0.95%`, `-1.11%`)
+5. 해석: 당일 문제의 중심은 `종목 선정`보다 `진입 타이밍/출구 규칙` 품질이다.
+
+보완안 1차 적용(12:48 KST) 이후 관찰:
+
+1. 이후 종료 `3건`은 모두 `-0.23%` 내외로 끝났고 대손실은 재발하지 않았다.
+2. 다만 승률 회복(`0/3`)은 확인되지 않아, 손실 크기 완화와 진입 성공률 개선을 분리해 봐야 한다.
+3. 즉시 롤백 조건(손절 건수 급증/평균 손실폭 급증)에는 걸리지 않아, `fallback`/`OPEN_RECLAIM` 분리 튜닝을 다음 거래일에 이어간다.
+
+스윙/듀얼 페르소나 장마감 분류:
+
+1. snapshot 기준 `risk_state=RISK_OFF`, `allow_swing_entry=false`, `swing_score=-10`
+2. `blocked_swing_gap` 누적 표본이 충분해(`38k+`) 스윙 0진입은 gap 차단 편중 day로 분류 가능
+3. 듀얼 페르소나는 `raw conflict=84.6%`, `effective override=0.0%`, `extra_ms_p95=7666ms`로 재활성화 조건 미달
+
+#### 2026-04-09 장전 실행 계획 (우선순위)
+
+1. `fallback` 전용 진입 억제 canary 1개만 적용
+   - 비중 축소 또는 트리거 강화 중 하나만 선택해 동시변경을 피한다.
+2. `scalp_ai_early_exit` 규칙 분리
+   - `never_green`과 `양전환 이력 있음`을 분리해 같은 규칙으로 자르지 않는다.
+3. `exit_rule='-'` 복원 정확도 보정
+   - 복기 블라인드 스팟(4건)을 우선 제거해 원인 추적 정확도를 확보한다.
+4. Dual Persona 재활성화는 조건 충족 시에만 canary
+   - `extra_ms_p95<=2500`, `effective override>=3%`, `samples>=30`, `gatekeeper_eval_ms_p95<=5000`
+5. 공통 hard time stop은 shadow 평가만 수행
+   - 실전 반영은 보류하고 `fallback`/`OPEN_RECLAIM` 트랙 결과를 먼저 축적한다.
+6. `2026-04-09` 실행은 별도 체크리스트 문서로 운영한다.
+   - [2026-04-09-stage2-todo-checklist.md](./2026-04-09-stage2-todo-checklist.md)
+   - 장전/장중/장후/종일 유지 점검 4블록으로 세분화해 기록한다.
+
+#### 2026-04-09 계획수정 반영: 미수행 이월 + 실행 블록 세분화
+
+이번 계획수정에서 확정한 사항:
+
+1. `2026-04-08` 미수행 항목 4개를 `2026-04-09`로 이월 확정했다.
+   - `curr/spread` 완화 후보 분석 기준 정리
+   - 공통 hard time stop 후보안 영향 추정
+   - 스윙 Gatekeeper missed case 정리
+   - 스윙 missed case 요약표 + threshold 완화 검토 근거 문서화
+2. `2026-04-08` 미적용 정책 11개는 `2026-04-09`에도 "종일 유지 점검" 항목으로 고정했다.
+3. 실행 순서를 `장전(적용/가드 설정) → 장중(모니터링/표본채집) → 장후(영향추정/판단서 작성)`로 분리했다.
+4. 따라서 `2026-04-09`의 성공 기준은 "파라미터 변경 자체"가 아니라 "의사결정 근거 축적"으로 본다.
+
 ### 3단계: 중간 우선 - 성과 집계와 복기 기준 통일
 
 목표:
@@ -654,6 +840,114 @@ else:
 
 1. 같은 날짜 기준 `completed/open/realized_pnl` 값이 세 화면에서 일치한다.
 2. `UndefinedTable`, `buy_time=''` 같은 DB 예외가 재발하지 않는다.
+
+### 3단계-추가: 중간 우선 - 추가매수 효과성 관측 계층 추가
+
+목표:
+
+- `performance-tuning`이 추가매수(`AVG_DOWN`, `PYRAMID`)를 단순히 최종 손익에 섞어 보지 않고, 별도 정책 레이어로 평가하게 만든다.
+- 물타기/불타기가 실제로 수익 극대화에 기여했는지와, 실행 시점이 전략 의도에 맞았는지를 분리해서 해석할 수 있게 한다.
+
+현재 상태:
+
+1. [sniper_trade_review_report.py](../src/engine/sniper_trade_review_report.py)는 `scale_in_executed`, `add_count`를 이미 알고 있다.
+2. [strategy_position_performance_report.py](../src/engine/strategy_position_performance_report.py)는 `add_count`, `avg_down_count`, `pyramid_count`를 읽고 있다.
+3. [sniper_performance_tuning_report.py](../src/engine/sniper_performance_tuning_report.py)는 아직 `추가매수 전용 섹션/지표`를 만들지 않는다.
+4. 따라서 현재 `performance-tuning`으로는 `물타기/불타기 효과성`, `추가매수 시점 적절성`, `추가매수 후 회복/확장 품질`을 직접 판단하기 어렵다.
+
+데이터 소스:
+
+1. `holding_add_history`
+   - `ORDER_SENT`, `EXECUTED`, `CANCELLED`, `RECONCILED`
+   - `add_type`, `request_qty`, `executed_qty`, `executed_price`, `prev_buy_price`, `new_buy_price`, `add_count_after`
+2. `recommendation_history` / `trade-review` 정규화 결과
+   - 최종 `profit_rate`, `realized_pnl_krw`, `strategy`, `status`
+3. `HOLDING_PIPELINE scale_in_executed`
+   - 실제 add 체결 시점의 `fill_price`, `new_avg_price`, `new_buy_qty`, `add_count`
+4. `[ADD_SIGNAL]` 로그
+   - `strategy`, `type`, `reason`, `profit`, `peak`
+   - 추가매수 "판단 시점" 품질을 추적하는 데 사용
+
+1차 설계 원칙:
+
+1. 먼저 `현재 데이터로 바로 계산 가능한 지표`부터 `performance-tuning`에 넣는다.
+2. `물타기/불타기 효과성`과 `시점 적절성`을 한 지표로 섞지 않는다.
+3. `SCALPING`과 `SWING`은 반드시 분리해서 본다.
+4. `AVG_DOWN`, `PYRAMID`, `no-add` 비교는 같은 화면에서 나란히 보이게 한다.
+5. 단일 날짜 절대값보다 `최근 5거래일 / 20거래일` 비교를 우선한다.
+
+1차 구현 항목:
+
+1. `performance-tuning`에 `추가매수 품질` 섹션을 추가한다.
+2. 아래 분해를 기본 축으로 삼는다.
+   - `strategy`
+   - `add_type`
+   - `add_count_after`
+   - `time-of-day bucket`
+3. `holding_add_history EXECUTED`와 정규화된 `trade-review` 결과를 연결해, `추가매수 있는 거래`와 `없는 거래`를 비교한다.
+4. `[ADD_SIGNAL]` 로그를 파싱해 `signal_profit_rate`, `signal_peak_profit`, `pullback_from_peak = peak - profit`를 계산한다.
+5. `signal` 로그가 없는 표본은 억지로 추정하지 않고 `timing_unknown`으로 분리한다.
+
+1차 핵심 지표:
+
+1. 실행 품질
+   - `add order sent / executed / cancelled / reconciled / locked` 건수
+   - `AVG_DOWN`, `PYRAMID`별 실행 건수
+   - `scale_in_locked` 또는 `uncertain cancel` 비율
+2. 효과성
+   - `추가매수 있는 거래` vs `없는 거래`의 `win_rate`, `avg_profit_rate`, `realized_pnl_krw`
+   - `AVG_DOWN` vs `PYRAMID`의 `completed_rows`, `win_rate`, `avg_profit_rate`
+   - `add_count=1` vs `add_count>=2` 비교
+3. 시점 적절성
+   - `signal_profit_rate` 버킷 분포
+   - `pullback_from_peak` 버킷 분포
+   - 시간대별 add 실행 분포
+4. 결과 전환력
+   - `AVG_DOWN 회복률`: add 시점 손익이 음수였던 거래 중 최종 손익이 `0% 이상` 또는 `양수`로 끝난 비율
+   - `PYRAMID 확장률`: add 시점 손익이 양수였던 거래 중 최종 손익이 add 시점 손익보다 더 커진 비율
+
+시점 해석 기준:
+
+1. `AVG_DOWN`
+   - `signal_profit_rate`가 각 전략의 configured drop band보다 덜 빠졌으면 `too_shallow`
+   - configured band 안이면 `in_band`
+   - 지나치게 깊으면 `too_deep`
+2. `PYRAMID`
+   - `signal_profit_rate`가 최소 진입 이익 기준을 못 넘으면 `too_early`
+   - 기준을 넘고 `pullback_from_peak`가 작으면 `in_band`
+   - 기준은 넘었지만 `pullback_from_peak`가 크면 `too_late`
+3. 초기 단계에서는 이 분류를 "정책 완화 근거"보다 "운영 관찰 라벨"로 먼저 쓴다.
+
+2차 보강 항목:
+
+1. `holding_add_history` 또는 `scale_in_executed`에 아래 필드를 직접 남기는 방향을 검토한다.
+   - `signal_profit_rate`
+   - `signal_peak_profit`
+   - `entry_mode`
+   - `position_tag`
+   - `market_regime`
+2. 가능하면 `마지막 add 이후 MFE/MAE`, `마지막 add 이후 보유시간`도 추가해 "추가 후 회복 속도"를 직접 보게 한다.
+3. 그 전까지는 `ADD_SIGNAL + EXECUTED + 최종 거래 결과` 조합으로 1차 판단을 수행한다.
+
+초기 대시보드 후보 항목:
+
+1. `추가매수 실행 건수`
+2. `AVG_DOWN 회복률`
+3. `PYRAMID 수익 확장률`
+4. `AVG_DOWN band 이탈 비율`
+5. `PYRAMID late pullback 비율`
+6. `add lock / uncertain cancel 비율`
+
+검증 기준:
+
+1. `performance-tuning`이 `AVG_DOWN`, `PYRAMID`, `no-add`를 분리해서 보여준다.
+2. 같은 전략 내에서 `추가매수 유무`에 따른 손익 차이를 바로 비교할 수 있다.
+3. `추가매수 시점이 너무 이른지/늦은지`를 최소한 `signal_profit_rate`, `pullback_from_peak`, `time bucket` 기준으로 설명할 수 있다.
+4. 운영자가 아래 질문에 화면만 보고 답할 수 있어야 한다.
+   - 물타기가 실제 회복에 도움이 되었는가
+   - 불타기가 수익 확장에 기여했는가
+   - 특정 시간대의 add가 유난히 나쁜가
+   - lock/cancel 문제 때문에 실행 품질이 오염되고 있지는 않은가
 
 ### 4단계: 중간 우선 - 로그 보관과 장마감 스냅샷 체계화
 
@@ -688,6 +982,30 @@ else:
 2. 그 다음에 `들어가게 만들지`를 결정한다.
 3. 활동량 증가보다 손익/승률/품질 개선을 우선한다.
 
+### 5단계-추가: 후순위 - 스캘핑 진입종목의 스윙 자동전환 검토
+
+목표:
+
+- 스캘핑으로 진입한 종목 중, 장중 흐름이 스윙 시나리오에 더 적합해진 케이스를 자동 전환할지 검토한다.
+- "스캘핑 손절 회피용 전환"이 아니라 "전략 재분류가 합리적인 표본"만 선별하는 기준을 만든다.
+
+검토 항목:
+
+1. 전환 트리거 정의
+   - 보유시간, 변동성 완화, 거래대금 유지, 추세 지속, market regime 조건을 결합한 후보 정의
+2. 전환 금지 조건 정의
+   - `RISK_OFF`, 유동성 저하, 급락 반전 구간, `near_ai_exit` 반복 구간 등은 자동전환 금지
+3. 전환 후 리스크 관리 정의
+   - 손절 기준, 목표 수익, 최대 보유시간, 추가매수 허용 여부를 스윙 정책과 정합성 있게 고정
+4. 사후 검증 프레임
+   - "전환했을 때/하지 않았을 때" PnL, MFE/MAE, 승률 비교를 최근 N거래일로 리플레이
+
+검증 기준:
+
+1. 자동전환 후보군과 비후보군의 분포가 명확히 분리된다.
+2. 전환 시나리오가 손실 은폐가 아니라 기대값 개선으로 설명된다.
+3. 최소 5거래일 shadow 검증 전에는 실전 자동전환을 켜지 않는다.
+
 ---
 
 ## 즉시 착수 체크리스트
@@ -702,6 +1020,14 @@ else:
 6. 장마감 snapshot/gzip 생성 여부 운영 점검
 7. 스윙 blocker 일일 분류 체계 정리
 8. `allow_swing_entry=true/false` 구간 분리 기준 고정
+9. `performance-tuning`용 추가매수(`AVG_DOWN` / `PYRAMID`) 관측 지표 설계
+10. `holding_add_history + ADD_SIGNAL + trade-review` 연결 가능 여부 확인
+11. 스캘핑 손절을 `fallback/SCALP_BASE`와 `OPEN_RECLAIM`로 분리한 일일 비교표 작성
+12. `fallback 전용 후보안`과 `OPEN_RECLAIM 전용 후보안`의 shadow 비교 기준 문서화
+13. `dual_persona_conflict_ratio`를 `raw conflict`와 `effective override`로 분리 집계
+14. `OPENAI_DUAL_PERSONA_APPLY_GATEKEEPER` ON/OFF 상태를 일일 점검 항목으로 고정
+15. Gatekeeper dual persona 재활성화 canary/rollback 기준 문서화
+16. 스캘핑 진입종목의 스윙 자동전환 검토 프레임(트리거/금지조건/검증지표) 문서화
 
 ### 이미 진행되었거나 반영됨
 
@@ -712,6 +1038,7 @@ else:
 5. 전략/포지션태그 성과 화면 추가
 6. 장마감 snapshot 및 gzip 아카이브 기반 마련
 7. `ai_holding_shadow_band` shadow 로그 선반영
+8. `2026-04-09` 실행 체크리스트 별도 분리 및 `장전/장중/장후/종일 점검` 세분화
 
 ---
 
@@ -726,6 +1053,7 @@ else:
 5. 목표치 없이 TTL만 추가로 늘리는 조정
 6. `RISK_OFF` 상태에서의 스윙 허용 기준 완화
 7. `dual_persona_shadow`의 즉시 실전 승급
+8. 단일 손절 사례만 보고 `스캘핑 공통 손절값`을 즉시 변경
 
 ### 보류 이유
 
@@ -735,6 +1063,8 @@ else:
 4. 지표 일관성이 확보되지 않으면 전략 조정 효과를 정확히 판단할 수 없다.
 5. `allow_swing_entry=false` day의 0진입은 threshold 미스보다 시장 국면 영향일 수 있다.
 6. Dual Persona는 아직 충돌률/지연이 커서 실전 게이트 승급 근거가 부족하다.
+7. 또한 `2026-04-08 12:22 KST` 기준 Gatekeeper dual persona는 장중 안정화 목적의 임시 OFF 상태이며, 재활성화는 canary 검증 전까지 보류한다.
+8. 오늘 스캘핑 손절 문제는 `SCALP_BASE/fallback`과 `OPEN_RECLAIM`의 양상이 달라, 공통 파라미터 1개로 묶으면 오판 가능성이 크다.
 
 ---
 
@@ -762,11 +1092,15 @@ else:
 - [src/engine/sniper_state_handlers.py](../src/engine/sniper_state_handlers.py)
 - [src/engine/sniper_performance_tuning_report.py](../src/engine/sniper_performance_tuning_report.py)
 - [src/engine/sniper_trade_review_report.py](../src/engine/sniper_trade_review_report.py)
+- [src/engine/sniper_execution_receipts.py](../src/engine/sniper_execution_receipts.py)
+- [src/engine/sniper_scale_in.py](../src/engine/sniper_scale_in.py)
+- [src/engine/sniper_scale_in_utils.py](../src/engine/sniper_scale_in_utils.py)
 - [src/engine/strategy_position_performance_report.py](../src/engine/strategy_position_performance_report.py)
 - [src/engine/log_archive_service.py](../src/engine/log_archive_service.py)
 - [src/engine/sniper_market_regime.py](../src/engine/sniper_market_regime.py)
 - [src/engine/sniper_strength_momentum.py](../src/engine/sniper_strength_momentum.py)
 - [src/engine/sniper_gatekeeper_replay.py](../src/engine/sniper_gatekeeper_replay.py)
+- [src/database/models.py](../src/database/models.py)
 - [src/web/app.py](../src/web/app.py)
 - [src/bot_main.py](../src/bot_main.py)
 
@@ -886,3 +1220,42 @@ else:
 1. `3단계 목표`에 자동 검증 칩 또는 경고 박스를 추가한다.
 2. 검증 항목은 `completed/open/realized_pnl` 3개를 기본으로 한다.
 3. 세 화면 중 하나라도 값이 다르면 대시보드에서 경고를 띄우고, snapshot 저장 시 warning도 함께 남긴다.
+
+### Q4. 추가매수 점검 기준도 현재 퍼포먼스 튜닝 계획안에 포함해야 하나요?
+
+답변:
+
+- 포함하는 것이 맞다.
+- 다만 `즉시 임계값 완화`가 아니라, `성능 튜닝 모니터에 추가매수 품질 계층을 넣는 설계`로 포함하는 것이 안전하다.
+
+이유:
+
+1. 현재 `performance-tuning`은 Gatekeeper, 보유 AI, exit rule, 전략 성과 추세는 보지만 `AVG_DOWN`, `PYRAMID`의 효과성과 시점은 직접 보지 못한다.
+2. 추가매수는 손익을 크게 바꿀 수 있으므로, 전략 튜닝에서 빠져 있으면 `진입/청산 정책`만 보고 잘못된 결론을 내릴 수 있다.
+3. 특히 `물타기 회복률`, `불타기 확장률`, `lock/cancel 오염`은 별도 축으로 봐야 한다.
+
+채택안:
+
+1. `3단계-추가`로 `추가매수 효과성 관측 계층`을 계획안에 포함한다.
+2. 1차는 `holding_add_history + ADD_SIGNAL + trade-review` 조합으로 바로 계산 가능한 지표부터 붙인다.
+3. 2차는 `signal_profit_rate`, `signal_peak_profit`, `market_regime` 같은 필드를 직접 저장해 시점 판단 정밀도를 높인다.
+
+### Q5. 오늘 확인된 스캘핑 손절 문제도 현재 퍼포먼스 튜닝 계획안에 바로 병합해야 하나요?
+
+답변:
+
+- 포함하는 것이 맞다.
+- 다만 `스캘핑 공통 손절 완화`로 넣지 말고, `fallback/SCALP_BASE 과민 손절`과 `OPEN_RECLAIM 지연 손절`을 분리한 튜닝 트랙으로 병합해야 한다.
+
+이유:
+
+1. 오늘까지 확인된 손절은 `너무 빠른 손절`과 `너무 늦은 손절`이 동시에 있어, 공통 손절값 1개로 풀면 한쪽을 고치며 다른 쪽을 악화시킬 가능성이 크다.
+2. `SCALP_BASE/fallback`은 `SCALP_PRESET_TP`와 `preset hard stop=-0.7`의 영향을 직접 받는다.
+3. `OPEN_RECLAIM`은 `AI early exit min_hold / low_score_hits` 구조의 영향을 더 크게 받는다.
+4. 따라서 현재 계획안에는 `전략 자체 튜닝`이 아니라 `전략 내부 세부 트랙 분리`가 먼저 반영되어야 한다.
+
+채택안:
+
+1. `2026-04-08 스캘핑 손절 패턴 반영` 섹션을 계획안에 포함한다.
+2. 오늘은 `비교표 작성 + 후보안 문서화`까지를 완료 기준으로 둔다.
+3. 이후 shadow 또는 실전 반영은 `fallback 전용` 또는 `OPEN_RECLAIM 전용` 중 하나씩만 순차 적용한다.

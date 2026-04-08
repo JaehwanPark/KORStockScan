@@ -20,15 +20,15 @@ def get_last_inventory_errors():
     """최근 잔고 조회 실패 원인을 반환합니다."""
     return list(_LAST_INVENTORY_ERRORS)
 
-def calc_buy_qty(current_price, total_deposit, ratio=0.1):
+def calc_buy_qty(current_price, total_deposit, ratio=0.1, max_budget=None):
     """
     [v12.1] 예수금 대비 비중을 계산하여 정수 수량 산출
     """
-    _, _, qty, _ = describe_buy_capacity(current_price, total_deposit, ratio)
+    _, _, qty, _ = describe_buy_capacity(current_price, total_deposit, ratio, max_budget=max_budget)
     return qty
 
 
-def describe_buy_capacity(current_price, total_deposit, ratio=0.1, safety_ratio=None):
+def describe_buy_capacity(current_price, total_deposit, ratio=0.1, safety_ratio=None, max_budget=None):
     """
     주문가능금액과 전략 비중을 바탕으로 실제 주문 가능 예산/수량을 설명합니다.
     """
@@ -39,6 +39,13 @@ def describe_buy_capacity(current_price, total_deposit, ratio=0.1, safety_ratio=
         safety_ratio = getattr(TRADING_RULES, "BUY_BUDGET_SAFETY_RATIO", 0.95)
     safe_ratio = max(0.0, min(float(safety_ratio), 1.0))
     target_budget = max(float(total_deposit) * float(ratio), 0.0)
+    if max_budget is not None:
+        try:
+            budget_cap = max(float(max_budget), 0.0)
+        except (TypeError, ValueError):
+            budget_cap = 0.0
+        if budget_cap > 0:
+            target_budget = min(target_budget, budget_cap)
     safe_budget = target_budget * safe_ratio  # 슬리피지 대비 95% 사용
 
     qty = int(safe_budget // current_price)

@@ -74,7 +74,8 @@ class TradingConfig:
     INVEST_RATIO_KOSPI: float = 0.25  # DEPRECATED: MIN/MAX 비중으로 대체됨
     INVEST_RATIO_KOSDAQ: float = 0.15  # DEPRECATED: MIN/MAX 비중으로 대체됨
     INVEST_RATIO_SCALPING_MIN: float = 0.10  # 초단타 스캘핑 AI 점수 0일 때 최소 투자 비율 (10%)
-    INVEST_RATIO_SCALPING_MAX: float = 0.30  # 초단타 스캘핑 AI 점수 100일 때 최대 투자 비율 (30%)
+    INVEST_RATIO_SCALPING_MAX: float = 0.50  # 초단타 스캘핑 AI 점수 100일 때 최대 투자 비율 (50%)
+    SCALPING_MAX_BUY_BUDGET_KRW: int = 2_000_000  # 스캘핑 신규 진입 1회 절대 투자금 상한
 
     # 💡 [신규 추가] 스윙 AI 동적 비중 조절용 (Min~Max)
     INVEST_RATIO_KOSDAQ_MIN: float = 0.05  # 코스닥 AI 점수 60점일 때 (5%)
@@ -112,6 +113,11 @@ class TradingConfig:
     SCALP_VPW_MIN_BUY_RATIO: float = 0.75  # WINDOW 동안 필요한 최소 매수 체결대금 비중
     SCALP_VPW_MIN_EXEC_BUY_RATIO: float = 0.56  # WINDOW 동안 필요한 최소 매수 체결량 비중
     SCALP_VPW_MIN_NET_BUY_QTY: int = 1  # WINDOW 동안 순매수 체결수량 최소 기준
+    SCALP_VPW_RELAX_TAGS: tuple = ("VWAP_RECLAIM", "OPEN_RECLAIM")  # 1차 진입 민감도 완화 대상 태그
+    SCALP_VPW_RELAX_MIN_BASE: float = 93.0  # 완화 태그 전용 최소 체결강도 베이스
+    SCALP_VPW_RELAX_MIN_BUY_VALUE: int = 16_000  # 완화 태그 전용 WINDOW 최소 매수 체결대금
+    SCALP_VPW_RELAX_MIN_BUY_RATIO: float = 0.72  # 완화 태그 전용 WINDOW 최소 매수 체결대금 비중
+    SCALP_VPW_RELAX_MIN_EXEC_BUY_RATIO: float = 0.53  # 완화 태그 전용 WINDOW 최소 매수 체결량 비중
     SCALP_VPW_HISTORY_MAXLEN: int = 120  # 종목별 동적 체결강도 히스토리 최대 보관 개수
     SCALP_VPW_STRONG_ABSOLUTE: float = 115.0  # 강한 절대 체결강도 예외 통과 기준
     SCALP_VPW_STRONG_BUY_VALUE: int = 40_000  # WINDOW 강한 매수 체결대금 예외 기준
@@ -122,6 +128,22 @@ class TradingConfig:
     SCALP_AI_EARLY_EXIT_MIN_LOSS_PCT: float = -0.7  # 조기손절을 허용하는 최소 손실폭
     SCALP_AI_EARLY_EXIT_MIN_HOLD_SEC: int = 180  # 진입 직후 블라인드 타임(초)
     SCALP_AI_EARLY_EXIT_CONSECUTIVE_HITS: int = 3  # 연속 저점수 확인 횟수
+    SCALP_AI_EARLY_EXIT_CONSECUTIVE_HITS_OPEN_RECLAIM: int = 4  # OPEN_RECLAIM 전용 조기손절 확인 횟수(완화)
+    SCALP_AI_MOMENTUM_DECAY_SCORE_LIMIT: int = 45  # 이 값 미만일 때만 AI 모멘텀 둔화 익절 검토
+    SCALP_AI_MOMENTUM_DECAY_MIN_HOLD_SEC: int = 90  # AI 모멘텀 둔화 익절 최소 보유시간(초)
+    SCALP_PRESET_HARD_STOP_PCT: float = -0.7  # SCALP_PRESET_TP 기본 손절선
+    SCALP_PRESET_HARD_STOP_GRACE_SEC: int = 0  # SCALP_PRESET_TP 공통 유예시간(초)
+    SCALP_PRESET_HARD_STOP_EMERGENCY_PCT: float = -1.2  # 유예 중에도 강제 청산하는 비상 손절선
+    SCALP_PRESET_HARD_STOP_FALLBACK_BASE_PCT: float = -0.7  # SCALP_BASE + fallback 전용 기본 손절선
+    SCALP_PRESET_HARD_STOP_FALLBACK_BASE_GRACE_SEC: int = 35  # SCALP_BASE + fallback 전용 유예시간
+    SCALP_PRESET_HARD_STOP_FALLBACK_BASE_EMERGENCY_PCT: float = -1.2  # SCALP_BASE + fallback 비상 손절선
+    SCALP_OPEN_RECLAIM_NEVER_GREEN_HOLD_SEC: int = 300  # OPEN_RECLAIM never-green 조기 정리 최소 보유시간
+    SCALP_OPEN_RECLAIM_NEVER_GREEN_PEAK_MAX_PCT: float = 0.20  # OPEN_RECLAIM never-green 최대 허용 고점수익
+    SCALP_OPEN_RECLAIM_NEAR_AI_EXIT_SCORE_BUFFER: int = 5  # OPEN_RECLAIM near_ai_exit 점수 여유폭
+    SCALP_SCANNER_FALLBACK_NEVER_GREEN_HOLD_SEC: int = 420  # SCANNER fallback never-green 조기 정리 최소 보유시간
+    SCALP_SCANNER_FALLBACK_NEVER_GREEN_PEAK_MAX_PCT: float = 0.20  # SCANNER fallback 최대 허용 고점수익
+    SCALP_SCANNER_FALLBACK_NEAR_AI_EXIT_SCORE_BUFFER: int = 8  # SCANNER fallback near_ai_exit 점수 여유폭
+    SCALP_SCANNER_FALLBACK_NEAR_AI_EXIT_SUSTAIN_SEC: int = 120  # SCANNER fallback near_ai_exit 지속 필요시간
     SCALP_TRAILING_START_PCT: float = 0.6  # 초단타 트레일링 시작 수익률
     SCALP_TRAILING_LIMIT: float = 0.5  # DEPRECATED: STRONG/WEAK로 대체됨
     MIN_SCALP_LIQUIDITY: int = 500_000_000  # 최소 호가 잔량 대금 (5억)
@@ -221,7 +243,7 @@ class TradingConfig:
     GPT_ENGINE_MIN_INTERVAL: float = 0.5 # OpenAI 서버에 쏘는 최소 간격 (초 단위, 0.5초 = 500ms)
     OPENAI_DUAL_PERSONA_ENABLED: bool = True
     OPENAI_DUAL_PERSONA_SHADOW_MODE: bool = True
-    OPENAI_DUAL_PERSONA_APPLY_GATEKEEPER: bool = True
+    OPENAI_DUAL_PERSONA_APPLY_GATEKEEPER: bool = False  # 장중 긴급 완화: Gatekeeper dual-persona shadow 일시 비활성화
     OPENAI_DUAL_PERSONA_APPLY_OVERNIGHT: bool = True
     OPENAI_DUAL_PERSONA_WORKERS: int = 2
     OPENAI_DUAL_PERSONA_MAX_EXTRA_MS: int = 2500

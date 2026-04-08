@@ -9,6 +9,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from src.engine.trade_profit import calculate_net_realized_pnl
 from src.engine.log_archive_service import iter_target_log_lines
 from src.utils.constants import LOGS_DIR, POSTGRES_URL
 from src.engine.sniper_gatekeeper_replay import find_gatekeeper_snapshot_for_trade
@@ -180,6 +181,14 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _calculate_realized_pnl_krw(
+    buy_price: float | int,
+    sell_price: float | int,
+    buy_qty: float | int,
+) -> int:
+    return calculate_net_realized_pnl(buy_price, sell_price, buy_qty)
+
+
 def _parse_dt(value: Any) -> datetime | None:
     if value in (None, "", "None"):
         return None
@@ -316,7 +325,7 @@ def _fetch_trade_rows(target_date: str, code: str | None = None) -> tuple[list[d
                 buy_price = _safe_float(row.get("buy_price"))
                 sell_price = _safe_float(row.get("sell_price"))
                 buy_qty = _safe_int(row.get("buy_qty"))
-                pnl_krw = int(round((sell_price - buy_price) * buy_qty)) if sell_price and buy_price and buy_qty else 0
+                pnl_krw = _calculate_realized_pnl_krw(buy_price, sell_price, buy_qty)
                 rows.append({
                     "id": _safe_int(row.get("id")),
                     "rec_date": str(row.get("rec_date") or ""),
@@ -416,20 +425,69 @@ def _build_latest_event(events: list[HoldingEvent]) -> dict | None:
     }
 
 
+def _build_exit_signal_payload(
+    event: HoldingEvent,
+    *,
+    reason: str | None = None,
+    exit_rule: str | None = None,
+    sell_reason_type: str | None = None,
+    inferred: bool = False,
+) -> dict:
+    fields = dict(event.fields)
+    if reason is not None:
+        fields["reason"] = reason
+    if exit_rule is not None:
+        fields["exit_rule"] = exit_rule
+    if sell_reason_type is not None:
+        fields["sell_reason_type"] = sell_reason_type
+
+    payload = {
+        "stage": "exit_signal",
+        "label": _friendly_stage("exit_signal"),
+        "timestamp": event.timestamp,
+        "reason": fields.get("reason") or "",
+        "exit_rule": fields.get("exit_rule") or "",
+        "sell_reason_type": fields.get("sell_reason_type") or "",
+        "details": _build_event_details(
+            HoldingEvent(
+                timestamp=event.timestamp,
+                name=event.name,
+                code=event.code,
+                stage="exit_signal",
+                fields=fields,
+                raw_line=event.raw_line,
+            )
+        ),
+        "fields": fields,
+    }
+    if inferred:
+        payload["inferred"] = True
+    return payload
+
+
 def _build_exit_signal(events: list[HoldingEvent]) -> dict | None:
     for event in reversed(events):
         if event.stage != "exit_signal":
             continue
-        return {
-            "stage": event.stage,
-            "label": _friendly_stage(event.stage),
-            "timestamp": event.timestamp,
-            "reason": event.fields.get("reason") or "",
-            "exit_rule": event.fields.get("exit_rule") or "",
-            "sell_reason_type": event.fields.get("sell_reason_type") or "",
-            "details": _build_event_details(event),
-            "fields": dict(event.fields),
-        }
+        return _build_exit_signal_payload(event)
+
+    sell_completed = next((event for event in reversed(events) if event.stage == "sell_completed"), None)
+    if not sell_completed:
+        return None
+
+    completed_exit_rule = str(sell_completed.fields.get("exit_rule") or "").strip()
+    if completed_exit_rule and completed_exit_rule not in {"-", "None"}:
+        return _build_exit_signal_payload(sell_completed)
+
+    has_preset_exit = any(event.stage == "preset_exit_setup" for event in events)
+    if has_preset_exit and _safe_float(sell_completed.fields.get("profit_rate")) < 0:
+        return _build_exit_signal_payload(
+            sell_completed,
+            reason="추정: SCALP 출구엔진 손절선 도달",
+            exit_rule="scalp_preset_hard_stop_pct",
+            sell_reason_type="LOSS",
+            inferred=True,
+        )
     return None
 
 
@@ -529,7 +587,7 @@ def _normalize_trade_with_events(trade: dict, events: list[HoldingEvent]) -> dic
         if abs(restored_profit_rate) > 0:
             profit_rate = round(restored_profit_rate, 2)
 
-    pnl_krw = int(round((sell_price - buy_price) * buy_qty)) if sell_price and buy_price and buy_qty else 0
+    pnl_krw = _calculate_realized_pnl_krw(buy_price, sell_price, buy_qty)
 
     normalized.update({
         "status": status,
@@ -684,6 +742,18 @@ def _build_trade_row(trade: dict, events: list[HoldingEvent]) -> dict:
         }
     result_badge = _trade_result_badge(trade)
     timeline = _build_timeline(events)
+    exit_signal = _build_exit_signal(events)
+    if exit_signal and exit_signal.get("inferred") and not any(item.get("stage") == "exit_signal" for item in timeline):
+        synthetic_timeline_item = {
+            "stage": "exit_signal",
+            "label": _friendly_stage("exit_signal"),
+            "timestamp": exit_signal.get("timestamp") or "",
+            "details": list(exit_signal.get("details") or []),
+            "fields": dict(exit_signal.get("fields") or {}),
+            "is_inferred": True,
+        }
+        insert_idx = next((idx for idx, item in enumerate(timeline) if item.get("stage") == "sell_completed"), len(timeline))
+        timeline.insert(insert_idx, synthetic_timeline_item)
     compact_timeline = _build_compact_timeline(timeline)
 
     return {
@@ -698,7 +768,7 @@ def _build_trade_row(trade: dict, events: list[HoldingEvent]) -> dict:
         "compact_timeline": compact_timeline,
         "timeline_hidden_count": max(0, len(timeline) - len(compact_timeline) + (1 if any(item.get("is_omitted") for item in compact_timeline) else 0)),
         "latest_event": _build_latest_event(events),
-        "exit_signal": _build_exit_signal(events),
+        "exit_signal": exit_signal,
         "ai_reviews": ai_reviews[-6:],
         "ai_review_summary": _summarize_ai_reviews(ai_reviews[-6:]),
         "gatekeeper_replay": gatekeeper_replay,

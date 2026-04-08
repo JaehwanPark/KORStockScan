@@ -49,3 +49,42 @@ def test_strength_momentum_blocks_when_exec_buy_pressure_is_weak():
 
     assert result["allowed"] is False
     assert result["reason"] in {"below_exec_buy_ratio", "below_net_buy_qty", "below_buy_ratio"}
+
+
+def test_strength_momentum_relaxed_profile_allows_open_reclaim_borderline_case():
+    ws_data = {
+        "v_pw": 94.0,
+        "_position_tag": "OPEN_RECLAIM",
+        "strength_momentum_history": _build_history([
+            (300.0, 93.0, 8_000, 6_000, 2_000, 1_000, 900, 75.0),
+            (304.0, 94.0, 8_000, 6_000, 2_000, 1_280, 1_140, 75.0),
+            (308.0, 94.0, 8_000, 6_000, 2_000, 1_540, 1_360, 75.0),
+        ]),
+    }
+
+    result = evaluate_scalping_strength_momentum(ws_data, now_ts=308.0)
+
+    assert result["allowed"] is True
+    assert result["threshold_profile"] == "relaxed"
+    assert result["position_tag"] == "OPEN_RECLAIM"
+    assert result["window_buy_value"] == 18_000
+    assert result["window_exec_buy_ratio"] == 0.54
+
+
+def test_strength_momentum_keeps_default_profile_for_scanner():
+    ws_data = {
+        "v_pw": 94.0,
+        "_position_tag": "SCANNER",
+        "strength_momentum_history": _build_history([
+            (400.0, 93.0, 8_000, 6_000, 2_000, 1_000, 900, 75.0),
+            (404.0, 94.0, 8_000, 6_000, 2_000, 1_280, 1_140, 75.0),
+            (408.0, 94.0, 8_000, 6_000, 2_000, 1_540, 1_360, 75.0),
+        ]),
+    }
+
+    result = evaluate_scalping_strength_momentum(ws_data, now_ts=408.0)
+
+    assert result["allowed"] is False
+    assert result["threshold_profile"] == "default"
+    assert result["position_tag"] == "SCANNER"
+    assert result["reason"] == "below_strength_base"

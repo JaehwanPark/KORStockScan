@@ -55,14 +55,14 @@ def test_trade_review_restores_completed_trade_from_holding_events(monkeypatch):
 
     assert report["metrics"]["completed_trades"] == 1
     assert report["metrics"]["open_trades"] == 0
-    assert report["metrics"]["realized_pnl_krw"] == -9000
+    assert report["metrics"]["realized_pnl_krw"] == -10290
 
     trade = report["sections"]["completed_trades"][0]
     assert trade["id"] == 1085
     assert trade["status"] == "COMPLETED"
     assert trade["buy_price"] == 57000.0
     assert trade["sell_price"] == 56100
-    assert trade["realized_pnl_krw"] == -9000
+    assert trade["realized_pnl_krw"] == -10290
     assert trade["result_icon"] == "▼"
     assert trade["result_label"] == "손절"
     assert trade["result_tone"] == "bad"
@@ -203,3 +203,47 @@ def test_trade_review_hides_unrealistic_holding_age_sec(monkeypatch):
     bypass_event = next(item for item in timeline if item["stage"] == "ai_holding_reuse_bypass")
 
     assert all(detail["label"] != "재사용 나이" for detail in bypass_event["details"])
+
+
+def test_trade_review_infers_scalp_preset_hard_stop_from_sell_completed(monkeypatch):
+    holding_lines = [
+        "[2026-04-08 09:53:20] [HOLDING_PIPELINE] 산일전기(062040) stage=holding_started id=1407 fill_price=145700 fill_qty=25 buy_price=145700.00 buy_qty=25 strategy=SCALPING position_tag=SCALP_BASE",
+        "[2026-04-08 09:53:20] [HOLDING_PIPELINE] 산일전기(062040) stage=preset_exit_setup id=1407 preset_tp_price=147900 qty=25 ord_no=0033457",
+        "[2026-04-08 09:55:29] [HOLDING_PIPELINE] 산일전기(062040) stage=sell_completed id=1407 sell_price=145000 profit_rate=-0.71 exit_rule=- revive=True new_watch_id=1426",
+    ]
+
+    def _fake_iter(log_paths, *, target_date):
+        return holding_lines
+
+    def _fake_fetch(target_date, code=None):
+        return ([
+            {
+                "id": 1407,
+                "rec_date": target_date,
+                "code": "062040",
+                "name": "산일전기",
+                "status": "COMPLETED",
+                "strategy": "SCALPING",
+                "position_tag": "SCALP_BASE",
+                "buy_price": 145707.0,
+                "buy_qty": 26,
+                "buy_time": "2026-04-08 09:54:52",
+                "sell_price": 145000,
+                "sell_time": "2026-04-08 09:55:29",
+                "profit_rate": -0.71,
+                "realized_pnl_krw": -27053,
+            },
+        ], [])
+
+    monkeypatch.setattr(report_mod, "_iter_target_lines", _fake_iter)
+    monkeypatch.setattr(report_mod, "_fetch_trade_rows", _fake_fetch)
+    monkeypatch.setattr(report_mod, "find_gatekeeper_snapshot_for_trade", lambda *args, **kwargs: None)
+
+    report = report_mod.build_trade_review_report(target_date="2026-04-08", code="062040", scope="all")
+    trade = report["sections"]["recent_trades"][0]
+    timeline_stages = [item["stage"] for item in trade["compact_timeline"]]
+
+    assert trade["exit_signal"]["exit_rule"] == "scalp_preset_hard_stop_pct"
+    assert trade["exit_signal"]["sell_reason_type"] == "LOSS"
+    assert trade["exit_signal"]["inferred"] is True
+    assert timeline_stages == ["holding_started", "preset_exit_setup", "exit_signal", "sell_completed"]
