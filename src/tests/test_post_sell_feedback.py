@@ -176,3 +176,119 @@ def test_post_sell_ws_retain_window(monkeypatch, tmp_path):
 
     assert feedback_mod.should_retain_ws_subscription("444444", now_ts=base_ts + 60.0) is True
     assert feedback_mod.should_retain_ws_subscription("444444", now_ts=base_ts + 181.0) is False
+
+
+def test_build_post_sell_feedback_report(monkeypatch, tmp_path):
+    monkeypatch.setattr(feedback_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        feedback_mod,
+        "TRADING_RULES",
+        SimpleNamespace(
+            POST_SELL_FEEDBACK_ENABLED=True,
+            POST_SELL_FEEDBACK_EVAL_ENABLED=True,
+            POST_SELL_FEEDBACK_MISSED_UPSIDE_MFE_PCT=0.8,
+            POST_SELL_FEEDBACK_MISSED_UPSIDE_CLOSE_PCT=0.3,
+            POST_SELL_FEEDBACK_GOOD_EXIT_MAE_PCT=-0.6,
+            POST_SELL_FEEDBACK_GOOD_EXIT_CLOSE_PCT=-0.2,
+            POST_SELL_WS_RETAIN_MINUTES=0,
+        ),
+    )
+    feedback_mod._RECORDED_KEYS.clear()
+    feedback_mod._WS_RETAIN_UNTIL.clear()
+
+    feedback_mod.record_post_sell_candidate(
+        recommendation_id=101,
+        stock={"name": "상승A", "strategy": "SCALPING", "position_tag": "OPEN_RECLAIM"},
+        code="551111",
+        sell_time="2026-04-08 10:00:10",
+        buy_price=9800,
+        sell_price=10000,
+        profit_rate=2.0,
+        buy_qty=10,
+        exit_rule="scalp_soft_stop_pct",
+    )
+    feedback_mod.record_post_sell_candidate(
+        recommendation_id=102,
+        stock={"name": "하락B", "strategy": "SCALPING", "position_tag": "SCALP_BASE"},
+        code="552222",
+        sell_time="2026-04-08 10:00:10",
+        buy_price=10200,
+        sell_price=10000,
+        profit_rate=-2.0,
+        buy_qty=10,
+        exit_rule="scalp_ai_early_exit",
+    )
+    feedback_mod.record_post_sell_candidate(
+        recommendation_id=103,
+        stock={"name": "중립C", "strategy": "KOSPI_ML", "position_tag": "KOSPI_BASE"},
+        code="553333",
+        sell_time="2026-04-08 10:00:10",
+        buy_price=10000,
+        sell_price=10000,
+        profit_rate=0.0,
+        buy_qty=10,
+        exit_rule="trailing_take_profit",
+    )
+
+    candle_map = {
+        "551111": [
+            _make_candle("10:01:00", 10120, 10020, 10090),
+            _make_candle("10:02:00", 10220, 10080, 10160),
+            _make_candle("10:03:00", 10240, 10120, 10190),
+            _make_candle("10:04:00", 10200, 10100, 10160),
+            _make_candle("10:05:00", 10180, 10090, 10140),
+            _make_candle("10:06:00", 10200, 10100, 10160),
+            _make_candle("10:07:00", 10220, 10130, 10180),
+            _make_candle("10:08:00", 10230, 10120, 10190),
+            _make_candle("10:09:00", 10240, 10130, 10200),
+            _make_candle("10:10:00", 10250, 10140, 10210),
+        ],
+        "552222": [
+            _make_candle("10:01:00", 10010, 9920, 9950),
+            _make_candle("10:02:00", 10000, 9880, 9920),
+            _make_candle("10:03:00", 9990, 9860, 9890),
+            _make_candle("10:04:00", 9980, 9850, 9880),
+            _make_candle("10:05:00", 9970, 9840, 9870),
+            _make_candle("10:06:00", 9970, 9830, 9860),
+            _make_candle("10:07:00", 9960, 9820, 9850),
+            _make_candle("10:08:00", 9960, 9810, 9840),
+            _make_candle("10:09:00", 9950, 9800, 9830),
+            _make_candle("10:10:00", 9950, 9790, 9820),
+        ],
+        "553333": [
+            _make_candle("10:01:00", 10020, 9980, 10000),
+            _make_candle("10:02:00", 10030, 9970, 10010),
+            _make_candle("10:03:00", 10020, 9980, 10000),
+            _make_candle("10:04:00", 10010, 9990, 10000),
+            _make_candle("10:05:00", 10020, 9980, 10000),
+            _make_candle("10:06:00", 10020, 9980, 10000),
+            _make_candle("10:07:00", 10020, 9980, 10000),
+            _make_candle("10:08:00", 10010, 9990, 10000),
+            _make_candle("10:09:00", 10020, 9980, 10000),
+            _make_candle("10:10:00", 10020, 9980, 10000),
+        ],
+    }
+    fake_kiwoom = types.SimpleNamespace(
+        get_kiwoom_token=lambda: "dummy",
+        get_minute_candles_ka10080=lambda _token, code, limit=700: candle_map.get(code, []),
+    )
+    monkeypatch.setitem(sys.modules, "src.utils.kiwoom_utils", fake_kiwoom)
+    monkeypatch.setattr(utils_pkg, "kiwoom_utils", fake_kiwoom, raising=False)
+
+    summary = feedback_mod.evaluate_post_sell_candidates("2026-04-08", token="dummy")
+    assert summary.evaluated_candidates == 3
+
+    report = feedback_mod.build_post_sell_feedback_report(
+        "2026-04-08",
+        top_n=5,
+        evaluate_now=False,
+    )
+
+    assert report["metrics"]["evaluated_candidates"] == 3
+    assert report["metrics"]["missed_upside_rate"] > 0.0
+    assert report["metrics"]["good_exit_rate"] > 0.0
+    assert report["metrics"]["estimated_extra_upside_10m_krw_sum"] > 0
+    assert len(report["exit_rule_tuning"]) == 3
+    assert len(report["tag_tuning"]) == 3
+    assert report["priority_actions"]
+    assert report["top_missed_upside"]

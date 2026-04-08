@@ -16,6 +16,10 @@ from src.engine.sniper_performance_tuning_report import (
     PERFORMANCE_TUNING_SCHEMA_VERSION,
     build_performance_tuning_report,
 )
+from src.engine.sniper_post_sell_feedback import (
+    POST_SELL_REPORT_SCHEMA_VERSION,
+    build_post_sell_feedback_report,
+)
 from src.engine.strategy_position_performance_report import build_strategy_position_performance_report
 from src.engine.sniper_gatekeeper_replay import (
     find_gatekeeper_snapshot,
@@ -139,6 +143,35 @@ def _load_or_build_performance_tuning_report(
     return report
 
 
+def _load_saved_post_sell_feedback_snapshot(target_date: str, refresh: bool) -> dict | None:
+    if refresh:
+        return None
+    snapshot = load_monitor_snapshot("post_sell_feedback", target_date)
+    if not snapshot:
+        return None
+    schema_version = int(((snapshot.get("meta") or {}).get("schema_version")) or 0)
+    if schema_version != POST_SELL_REPORT_SCHEMA_VERSION:
+        return None
+    return snapshot
+
+
+def _load_or_build_post_sell_feedback_report(
+    *,
+    target_date: str,
+    top: int,
+    refresh: bool,
+    evaluate_now_when_build: bool = True,
+) -> dict:
+    report = _load_saved_post_sell_feedback_snapshot(target_date, refresh)
+    if report is None:
+        report = build_post_sell_feedback_report(
+            target_date=target_date,
+            top_n=max(1, int(top or 10)),
+            evaluate_now=bool(evaluate_now_when_build),
+        )
+    return report
+
+
 def _load_or_build_trade_review_report(
     *,
     target_date: str,
@@ -166,6 +199,57 @@ def _load_or_build_trade_review_report(
         )
     return report
 
+
+def _build_post_sell_kpi_cards(post_sell_report: dict | None) -> list[dict]:
+    metrics = _report_dict(post_sell_report, "metrics")
+    summary = _report_dict(post_sell_report, "summary")
+    evaluated = int(metrics.get("evaluated_candidates", 0) or 0)
+    missed_rate = float(metrics.get("missed_upside_rate", 0.0) or 0.0)
+    avg_extra = float(metrics.get("avg_extra_upside_10m_pct", 0.0) or 0.0)
+    avg_close = float(metrics.get("avg_close_after_sell_10m_pct", 0.0) or 0.0)
+    tuning_pressure = float(metrics.get("timing_tuning_pressure_score", 0.0) or 0.0)
+    extra_krw = int(metrics.get("estimated_extra_upside_10m_krw_sum", 0) or 0)
+    missed_count = int(_report_dict(summary, "outcome_counts").get("MISSED_UPSIDE", 0) or 0)
+    good_count = int(_report_dict(summary, "outcome_counts").get("GOOD_EXIT", 0) or 0)
+
+    if evaluated <= 0:
+        return [
+            {
+                "label": "Post-sell 평가",
+                "value": "0건",
+                "hint": "평가 데이터 누적 후 KPI가 표시됩니다.",
+                "tone_class": "tone-warn",
+            }
+        ]
+
+    def _tone_by_score(score: float) -> str:
+        if score >= 65.0:
+            return "tone-bad"
+        if score >= 50.0:
+            return "tone-warn"
+        return "tone-good"
+
+    return [
+        {
+            "label": "Post-sell 평균 추가상승 (MFE10m)",
+            "value": f"{avg_extra:+.2f}%",
+            "hint": f"평가 {evaluated}건 기준, 잠재 추가수익 {extra_krw:,}원",
+            "tone_class": "tone-warn" if avg_extra >= 0.8 else "tone-good",
+        },
+        {
+            "label": "Post-sell 매도 후 10분 평균 종가",
+            "value": f"{avg_close:+.2f}%",
+            "hint": f"MISSED {missed_count}건 / GOOD_EXIT {good_count}건 / missed {missed_rate:.1f}%",
+            "tone_class": "tone-warn" if avg_close > 0.15 else "tone-good",
+        },
+        {
+            "label": "Post-sell 매도시점 튜닝 압력",
+            "value": f"{tuning_pressure:.1f}",
+            "hint": "높을수록 exit_rule 미세조정 우선순위가 높습니다.",
+            "tone_class": _tone_by_score(tuning_pressure),
+        },
+    ]
+
 @app.route("/api/daily-report")
 def daily_report_api():
     target_date = _request_target_date()
@@ -189,6 +273,7 @@ def dashboard_home():
         "daily-report": "일일 전략 리포트",
         "entry-pipeline-flow": "진입 게이트 차단",
         "trade-review": "실제 매매 복기",
+        "post-sell-feedback": "Post-sell 피드백",
         "strategy-performance": "전략 성과 분석",
         "gatekeeper-replay": "Gatekeeper 리플레이",
         "performance-tuning": "성능 튜닝 모니터",
@@ -198,6 +283,7 @@ def dashboard_home():
         "daily-report": f"/daily-report?date={target_date}",
         "entry-pipeline-flow": f"/entry-pipeline-flow?date={target_date}&top={max(1, int(top or 10))}" + (f"&since={resolved_since}" if resolved_since else ""),
         "trade-review": f"/trade-review?date={target_date}",
+        "post-sell-feedback": f"/post-sell-feedback?date={target_date}&top={max(1, int(top or 10))}&refresh=0",
         "strategy-performance": f"/strategy-performance?date={target_date}",
         "gatekeeper-replay": f"/gatekeeper-replay?date={target_date}",
         "performance-tuning": f"/performance-tuning?date={target_date}" + (f"&since={resolved_since}" if resolved_since else ""),
@@ -552,7 +638,7 @@ def dashboard_home():
           <div class="hero-top">
             <div class="hero-copy">
               <h2>운영 화면을 한 셸에서 읽는 통합 대시보드</h2>
-              <p>일일 전략 리포트, 진입 게이트 차단, 실제 매매 복기, 전략 성과 분석, Gatekeeper 리플레이, 성능 튜닝 모니터를 같은 관제 흐름에서 넘겨보도록 정리했습니다.</p>
+              <p>일일 전략 리포트, 진입 게이트 차단, 실제 매매 복기, post-sell 피드백, 전략 성과 분석, Gatekeeper 리플레이, 성능 튜닝 모니터를 같은 관제 흐름에서 넘겨보도록 정리했습니다.</p>
               <div class="hero-status">
                 <span class="hero-status-dot"></span>
                 <span>현재 보고 있는 탭: {{ active_tab_label }}</span>
@@ -590,6 +676,9 @@ def dashboard_home():
           </a>
           <a class="tab {% if active_tab == 'trade-review' %}active{% endif %}" href="/dashboard?tab=trade-review&date={{ target_date }}">
             <span class="tab-label">실제 매매 복기<small>체결 이후 흐름</small></span>
+          </a>
+          <a class="tab {% if active_tab == 'post-sell-feedback' %}active{% endif %}" href="/dashboard?tab=post-sell-feedback&date={{ target_date }}&top={{ top }}">
+            <span class="tab-label">Post-sell 피드백<small>매도시점 정밀 점검</small></span>
           </a>
           <a class="tab {% if active_tab == 'strategy-performance' %}active{% endif %}" href="/dashboard?tab=strategy-performance&date={{ target_date }}">
             <span class="tab-label">전략 성과 분석<small>전략·태그 성과 비교</small></span>
@@ -638,7 +727,7 @@ def dashboard_home():
                 </div>
                 <div class="rail-kpi-item">
                   <div class="rail-kpi-label">탭 개수</div>
-                  <div class="rail-kpi-value">6개</div>
+                  <div class="rail-kpi-value">7개</div>
                 </div>
                 <div class="rail-kpi-item">
                   <div class="rail-kpi-label">조회 범위</div>
@@ -656,6 +745,7 @@ def dashboard_home():
                 <li>`/api/daily-report?date=YYYY-MM-DD`</li>
                 <li>`/api/entry-pipeline-flow?date=YYYY-MM-DD&since=HH:MM:SS&top=10`</li>
                 <li>`/api/trade-review?date=YYYY-MM-DD&code=000000`</li>
+                <li>`/api/post-sell-feedback?date=YYYY-MM-DD&top=10`</li>
                 <li>`/api/strategy-performance?date=YYYY-MM-DD`</li>
                 <li>`/api/gatekeeper-replay?date=YYYY-MM-DD`</li>
                 <li>`/api/performance-tuning?date=YYYY-MM-DD&since=HH:MM:SS`</li>
@@ -1265,6 +1355,19 @@ def performance_tuning_api():
     return jsonify(report)
 
 
+@app.route('/api/post-sell-feedback')
+def post_sell_feedback_api():
+    target_date = _request_target_date()
+    top = _request_top(10)
+    refresh = _request_flag("refresh")
+    report = _load_or_build_post_sell_feedback_report(
+        target_date=target_date,
+        top=top,
+        refresh=refresh,
+    )
+    return jsonify(report)
+
+
 @app.route('/api/strategy-performance')
 def strategy_performance_api():
     target_date = _request_target_date()
@@ -1695,6 +1798,7 @@ def performance_tuning_preview():
     target_date = _request_target_date()
     since = _request_since(target_date)
     refresh = _request_flag("refresh")
+    top = _request_top(10)
 
     report = _load_or_build_performance_tuning_report(
         target_date=target_date,
@@ -1712,6 +1816,13 @@ def performance_tuning_preview():
     top_holding_slow = _report_list(report, 'sections', 'top_holding_slow')
     top_gatekeeper_slow = _report_list(report, 'sections', 'top_gatekeeper_slow')
     top_dual_persona_slow = _report_list(report, 'sections', 'top_dual_persona_slow')
+    post_sell_report = _load_or_build_post_sell_feedback_report(
+        target_date=target_date,
+        top=max(1, int(top or 10)),
+        refresh=refresh,
+        evaluate_now_when_build=False,
+    )
+    post_sell_kpi_cards = _build_post_sell_kpi_cards(post_sell_report)
 
     template = """
     <!doctype html>
@@ -1855,6 +1966,22 @@ def performance_tuning_preview():
               {% if item.hint %}<div class="hint">{{ item.hint }}</div>{% endif %}
             </div>
           {% endfor %}
+        </div>
+
+        <div class="section">
+          <h2>Post-sell 핵심 KPI</h2>
+          <div class="grid">
+            {% for item in post_sell_kpi_cards %}
+              <div class="card">
+                <div class="label">{{ item.label }}</div>
+                <div class="value {{ item.tone_class }}">{{ item.value }}</div>
+                {% if item.hint %}<div class="hint">{{ item.hint }}</div>{% endif %}
+              </div>
+            {% endfor %}
+          </div>
+          <div class="meta" style="margin-top: 8px;">
+            상세 분석은 <code>/post-sell-feedback?date={{ report.date }}&top={{ top }}{% if refresh %}&refresh=1{% endif %}</code>에서 확인할 수 있습니다.
+          </div>
         </div>
 
         {% if auto_comments %}
@@ -2372,6 +2499,298 @@ def performance_tuning_preview():
         top_holding_slow=top_holding_slow,
         top_gatekeeper_slow=top_gatekeeper_slow,
         top_dual_persona_slow=top_dual_persona_slow,
+        post_sell_kpi_cards=post_sell_kpi_cards,
+        top=max(1, int(top or 10)),
+        refresh=refresh,
+    )
+
+
+@app.route('/post-sell-feedback')
+def post_sell_feedback_preview():
+    target_date = _request_target_date()
+    top = _request_top(10)
+    refresh = _request_flag("refresh")
+
+    report = _load_or_build_post_sell_feedback_report(
+        target_date=target_date,
+        top=top,
+        refresh=refresh,
+    )
+    summary = _report_dict(report, "summary")
+    metrics = _report_dict(report, "metrics")
+    insight = _report_dict(report, "insight")
+    exit_rule_rows = _report_list(report, "exit_rule_tuning")
+    tag_rows = _report_list(report, "tag_tuning")
+    priority_actions = _report_list(report, "priority_actions")
+    top_missed = _report_list(report, "top_missed_upside")
+    top_good = _report_list(report, "top_good_exit")
+    meta_info = _report_dict(report, "meta")
+
+    template = """
+    <!doctype html>
+    <html lang="ko">
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <meta name="google-adsense-account" content="ca-pub-9559810990033158">
+      <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9559810990033158" crossorigin="anonymous"></script>
+      <title>Post-sell Feedback</title>
+      <style>
+        :root {
+          --bg: #f4f7ef;
+          --card: #fcfffa;
+          --ink: #1b2a22;
+          --muted: #6c7f73;
+          --line: #d7e2d5;
+          --accent: #1d7a52;
+          --warn: #b7791f;
+          --bad: #b83232;
+          --navy: #183153;
+        }
+        body {
+          margin: 0;
+          background: linear-gradient(180deg, #eef6ef 0%, var(--bg) 100%);
+          color: var(--ink);
+          font-family: "Pretendard", "Noto Sans KR", sans-serif;
+        }
+        .wrap { max-width: 1160px; margin: 0 auto; padding: 24px 16px 48px; }
+        .hero {
+          background: linear-gradient(135deg, var(--navy), #227a53);
+          color: white;
+          padding: 22px;
+          border-radius: 20px;
+          box-shadow: 0 18px 44px rgba(24, 49, 83, 0.16);
+        }
+        .hero h1 { margin: 0 0 8px; font-size: 24px; }
+        .hero p { margin: 0; opacity: 0.92; }
+        .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
+        .toolbar input, .toolbar select, .toolbar button {
+          border: 0;
+          border-radius: 12px;
+          padding: 10px 12px;
+          font-size: 14px;
+        }
+        .toolbar button {
+          background: rgba(255,255,255,0.18);
+          color: white;
+          cursor: pointer;
+        }
+        .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+        .chip { background: rgba(255,255,255,0.16); padding: 8px 12px; border-radius: 999px; font-size: 13px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-top: 18px; }
+        .card {
+          background: var(--card);
+          border: 1px solid var(--line);
+          border-radius: 18px;
+          padding: 16px;
+          box-shadow: 0 12px 26px rgba(27, 42, 34, 0.05);
+        }
+        .label { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+        .value { font-size: 24px; font-weight: 700; }
+        .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+        .section { margin-top: 20px; }
+        .section h2 { margin: 0 0 10px; font-size: 18px; }
+        .row { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 10px; }
+        .row:first-child { border-top: 0; padding-top: 0; margin-top: 0; }
+        .title { font-weight: 700; }
+        .meta { color: var(--muted); font-size: 13px; margin-top: 4px; }
+        .good { color: var(--accent); }
+        .warn { color: var(--warn); }
+        .bad { color: var(--bad); }
+        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th, td { text-align: left; padding: 9px 7px; border-top: 1px solid var(--line); vertical-align: top; }
+        th { color: var(--muted); font-weight: 600; border-top: 0; }
+        .tone-good { color: var(--accent); font-weight: 700; }
+        .tone-warn { color: var(--warn); font-weight: 700; }
+        .tone-bad { color: var(--bad); font-weight: 700; }
+        @media (max-width: 960px) {
+          .two-col { grid-template-columns: 1fr; }
+        }
+      </style>
+    </head>
+    <body>
+      <div class="wrap">
+        <div class="hero">
+          <h1>Post-sell 피드백</h1>
+          <p>핵심 목표: 1) 수익 극대화 여지 확인 2) 매도시점 미세조정 필요 지점 선별</p>
+          <form method="GET" action="/post-sell-feedback" class="toolbar">
+            <input type="date" name="date" value="{{ report.date }}">
+            <label>
+              <select name="top">
+                {% for n in [5, 10, 20, 30] %}
+                  <option value="{{ n }}" {% if n == top %}selected{% endif %}>TOP {{ n }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>
+              <select name="refresh">
+                <option value="0" {% if not refresh %}selected{% endif %}>snapshot 우선</option>
+                <option value="1" {% if refresh %}selected{% endif %}>즉시 재평가</option>
+              </select>
+            </label>
+            <button type="submit">조회</button>
+          </form>
+          <div class="chips">
+            <span class="chip">후보 {{ metrics.total_candidates or 0 }}건</span>
+            <span class="chip">평가 {{ metrics.evaluated_candidates or 0 }}건</span>
+            <span class="chip">MISSED_UPSIDE {{ summary.outcome_counts.MISSED_UPSIDE if summary.outcome_counts else 0 }}건</span>
+            <span class="chip">GOOD_EXIT {{ summary.outcome_counts.GOOD_EXIT if summary.outcome_counts else 0 }}건</span>
+          </div>
+        </div>
+
+        <div class="grid">
+          <div class="card">
+            <div class="label">수익 극대화 여지</div>
+            <div class="value">{{ metrics.avg_extra_upside_10m_pct or 0 }}%</div>
+            <div class="hint">매도 후 10분 내 추가 고점 평균 (MFE)</div>
+          </div>
+          <div class="card">
+            <div class="label">매도 후 10분 종가</div>
+            <div class="value {% if (metrics.avg_close_after_sell_10m_pct or 0) > 0 %}warn{% endif %}">{{ metrics.avg_close_after_sell_10m_pct or 0 }}%</div>
+            <div class="hint">양수면 매도 후에도 상승 지속 가능성이 큼</div>
+          </div>
+          <div class="card">
+            <div class="label">추정 추가수익(10분)</div>
+            <div class="value">{{ "{:,}".format(metrics.estimated_extra_upside_10m_krw_sum or 0) }}원</div>
+            <div class="hint">sell_price x qty x MFE(+) 기준 추정치</div>
+          </div>
+          <div class="card">
+            <div class="label">매도시점 튜닝 압력</div>
+            <div class="value {% if (metrics.timing_tuning_pressure_score or 0) >= 65 %}bad{% elif (metrics.timing_tuning_pressure_score or 0) >= 50 %}warn{% else %}good{% endif %}">
+              {{ metrics.timing_tuning_pressure_score or 0 }}
+            </div>
+            <div class="hint">높을수록 매도 규칙 미세조정 우선순위가 높음</div>
+          </div>
+        </div>
+
+        <div class="section card">
+          <h2>요약 인사이트</h2>
+          <div class="title">{{ insight.headline or '-' }}</div>
+          <div class="meta">{{ insight.comment or '-' }}</div>
+          <div class="meta">capture 효율 평균 {{ metrics.capture_efficiency_avg_pct or 0 }}% / 실현 평균 {{ metrics.avg_realized_profit_rate or 0 }}%</div>
+        </div>
+
+        <div class="section two-col">
+          <div class="card">
+            <h2>즉시 점검 우선순위</h2>
+            {% for item in priority_actions %}
+              <div class="row">
+                <div class="title">{{ item.exit_rule }} (score {{ item.tuning_pressure_score }})</div>
+                <div class="meta">{{ item.reason }}</div>
+                <div class="meta">{{ item.suggested_test }}</div>
+              </div>
+            {% else %}
+              <div class="meta">우선순위 항목 없음</div>
+            {% endfor %}
+          </div>
+          <div class="card">
+            <h2>전략/태그별 히트맵</h2>
+            {% for item in tag_rows[:top] %}
+              <div class="row">
+                <div class="title">{{ item.strategy }} / {{ item.position_tag }}</div>
+                <div class="meta">
+                  trades {{ item.trades }} /
+                  missed {{ item.missed_upside_rate }}% /
+                  close10m {{ item.avg_close_10m_pct }}% /
+                  예상추가수익 {{ "{:,}".format(item.estimated_extra_upside_10m_krw or 0) }}원
+                </div>
+              </div>
+            {% else %}
+              <div class="meta">데이터 없음</div>
+            {% endfor %}
+          </div>
+        </div>
+
+        <div class="section card">
+          <h2>매도 규칙별 튜닝 후보</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>exit_rule</th>
+                <th>표본</th>
+                <th>missed%</th>
+                <th>good%</th>
+                <th>avg ret%</th>
+                <th>close10m%</th>
+                <th>추정추가수익</th>
+                <th>score</th>
+                <th>hint</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in exit_rule_rows %}
+                <tr>
+                  <td>{{ item.exit_rule }}</td>
+                  <td>{{ item.trades }}</td>
+                  <td>{{ item.missed_upside_rate }}</td>
+                  <td>{{ item.good_exit_rate }}</td>
+                  <td>{{ item.avg_profit_rate }}</td>
+                  <td>{{ item.avg_close_10m_pct }}</td>
+                  <td>{{ "{:,}".format(item.estimated_extra_upside_10m_krw or 0) }}원</td>
+                  <td class="{% if item.tuning_pressure_score >= 65 %}tone-bad{% elif item.tuning_pressure_score >= 50 %}tone-warn{% else %}tone-good{% endif %}">
+                    {{ item.tuning_pressure_score }}
+                  </td>
+                  <td>{{ item.tuning_hint }}</td>
+                </tr>
+              {% else %}
+                <tr><td colspan="9" class="meta">데이터 없음</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="section two-col">
+          <div class="card">
+            <h2>상위 Missed Upside</h2>
+            {% for item in top_missed %}
+              <div class="row">
+                <div class="title">{{ item.stock_name }} ({{ item.stock_code }})</div>
+                <div class="meta">exit {{ item.exit_rule }} / ret {{ item.profit_rate }}%</div>
+                <div class="meta">MFE10m {{ item.mfe_10m_pct }}% / Close10m {{ item.close_10m_pct }}% / 추가 {{ "{:,}".format(item.extra_upside_10m_krw_est or 0) }}원</div>
+              </div>
+            {% else %}
+              <div class="meta">데이터 없음</div>
+            {% endfor %}
+          </div>
+          <div class="card">
+            <h2>상위 Good Exit</h2>
+            {% for item in top_good %}
+              <div class="row">
+                <div class="title">{{ item.stock_name }} ({{ item.stock_code }})</div>
+                <div class="meta">exit {{ item.exit_rule }} / ret {{ item.profit_rate }}%</div>
+                <div class="meta">MAE10m {{ item.mae_10m_pct }}% / Close10m {{ item.close_10m_pct }}%</div>
+              </div>
+            {% else %}
+              <div class="meta">데이터 없음</div>
+            {% endfor %}
+          </div>
+        </div>
+
+        <div class="section card">
+          <h2>메타</h2>
+          <div class="meta">schema v{{ meta_info.schema_version or '-' }} / generated {{ meta_info.generated_at or '-' }}</div>
+          <div class="meta">평가 기준: 10분 윈도우 기반 MFE/MAE/Close</div>
+          <div class="meta">API: <code>/api/post-sell-feedback?date={{ report.date }}&top={{ top }}</code></div>
+        </div>
+      </div>
+    </body>
+    </html>
+    """
+    return render_template_string(
+        template,
+        report=report,
+        summary=summary,
+        metrics=metrics,
+        insight=insight,
+        exit_rule_rows=exit_rule_rows,
+        tag_rows=tag_rows,
+        priority_actions=priority_actions,
+        top_missed=top_missed,
+        top_good=top_good,
+        meta_info=meta_info,
+        top=max(1, int(top or 10)),
+        refresh=refresh,
     )
 
 
