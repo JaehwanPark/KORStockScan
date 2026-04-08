@@ -42,6 +42,10 @@ from src.engine.sniper_strength_shadow_feedback import (
     evaluate_shadow_candidates,
     format_shadow_feedback_summary,
 )
+from src.engine.sniper_post_sell_feedback import (
+    evaluate_post_sell_candidates,
+    format_post_sell_feedback_summary,
+)
 from src.engine.daily_report_service import save_daily_report, build_daily_report
 from src.engine.log_archive_service import archive_target_date_logs, save_monitor_snapshots_for_date
 from src.engine.strategy_position_performance_report import sync_trade_performance_for_date
@@ -186,15 +190,17 @@ def broadcast_entry_metrics_job():
         summary = summarize_today_entry_metrics()
         today = _today_string()
         shadow_summary = evaluate_shadow_candidates(today)
+        post_sell_summary = evaluate_post_sell_candidates(today)
         msg = (
             f"{format_entry_metrics_summary(summary)}\n\n"
-            f"{format_shadow_feedback_summary(shadow_summary)}"
+            f"{format_shadow_feedback_summary(shadow_summary)}\n\n"
+            f"{format_post_sell_feedback_summary(post_sell_summary)}"
         )
         event_bus.publish(
             'TELEGRAM_BROADCAST',
             {'message': msg, 'audience': 'ADMIN_ONLY', 'parse_mode': None},
         )
-        print("📊 [시스템] 장 마감 진입 지표 및 shadow 피드백 요약을 관리자에게 전송했습니다.")
+        print("📊 [시스템] 장 마감 진입 지표 + shadow + post-sell 피드백 요약을 관리자에게 전송했습니다.")
     except Exception as e:
         from src.utils.logger import log_error
 

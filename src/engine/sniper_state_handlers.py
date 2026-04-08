@@ -10,6 +10,7 @@ from src.database.models import RecommendationHistory
 from src.engine import kiwoom_orders
 from src.utils import kiwoom_utils
 from src.utils.logger import log_error, log_info
+from src.utils.pipeline_event_logger import emit_pipeline_event
 from src.engine.sniper_time import (
     TIME_09_00,
     TIME_09_03,
@@ -221,30 +222,27 @@ def _publish_entry_mode_summary(stock, code, *, entry_mode, latency_gate):
 
 
 def _log_entry_pipeline(stock, code, stage, **fields):
-    merged_fields = {}
     record_id = stock.get("id") if isinstance(stock, dict) else None
-    if record_id not in (None, "", 0):
-        merged_fields["id"] = record_id
-    merged_fields.update(fields)
-    parts = [f"{key}={_sanitize_pipeline_field(value)}" for key, value in merged_fields.items()]
-    suffix = f" {' '.join(parts)}" if parts else ""
-    log_info(f"[ENTRY_PIPELINE] {stock.get('name')}({code}) stage={stage}{suffix}")
-
-
-def _sanitize_pipeline_field(value):
-    text = str(value)
-    return text.replace(" ", "|")
+    emit_pipeline_event(
+        "ENTRY_PIPELINE",
+        stock.get("name"),
+        code,
+        stage,
+        record_id=record_id,
+        fields=fields,
+    )
 
 
 def _log_holding_pipeline(stock, code, stage, **fields):
     record_id = stock.get("id")
-    merged_fields = {}
-    if record_id not in (None, "", 0):
-        merged_fields["id"] = record_id
-    merged_fields.update(fields)
-    parts = [f"{key}={_sanitize_pipeline_field(value)}" for key, value in merged_fields.items()]
-    suffix = f" {' '.join(parts)}" if parts else ""
-    log_info(f"[HOLDING_PIPELINE] {stock.get('name')}({code}) stage={stage}{suffix}")
+    emit_pipeline_event(
+        "HOLDING_PIPELINE",
+        stock.get("name"),
+        code,
+        stage,
+        record_id=record_id,
+        fields=fields,
+    )
 
 
 def _log_dual_persona_shadow_result(stock_name, code, strategy, payload, record_id=None):

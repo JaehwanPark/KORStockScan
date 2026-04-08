@@ -21,7 +21,9 @@ from src.engine.trade_profit import calculate_net_profit_rate
 from src.utils.constants import TRADING_RULES
 from src.utils import kiwoom_utils
 from src.utils.logger import log_error, log_info
+from src.utils.pipeline_event_logger import emit_pipeline_event
 from src.engine.sniper_time import TIME_15_30
+from src.engine.sniper_post_sell_feedback import record_post_sell_candidate
 
 
 KIWOOM_TOKEN = None
@@ -68,13 +70,14 @@ def bind_execution_dependencies(
 
 
 def _log_holding_pipeline(name, code, target_id, stage, **fields):
-    merged_fields = {}
-    if target_id not in (None, "", 0):
-        merged_fields["id"] = target_id
-    merged_fields.update(fields)
-    parts = [f"{key}={str(value).replace(' ', '|')}" for key, value in merged_fields.items()]
-    suffix = f" {' '.join(parts)}" if parts else ""
-    log_info(f"[HOLDING_PIPELINE] {name}({code}) stage={stage}{suffix}")
+    emit_pipeline_event(
+        "HOLDING_PIPELINE",
+        name,
+        code,
+        stage,
+        record_id=target_id,
+        fields=fields,
+    )
 
 
 # ==========================================
@@ -391,6 +394,22 @@ def _update_db_for_sell(target_id, exec_price, now, target_stock, strategy, is_s
                 revive=bool(is_scalp_revive),
                 strategy=strategy,
             )
+            try:
+                record_post_sell_candidate(
+                    recommendation_id=target_id,
+                    stock=target_stock,
+                    code=str(target_stock.get('code', '')).strip()[:6],
+                    sell_time=now,
+                    buy_price=safe_buy_price,
+                    sell_price=exec_price,
+                    profit_rate=profit_rate,
+                    buy_qty=int(float(getattr(record, 'buy_qty', 0) or target_stock.get('buy_qty', 0) or 0)),
+                    exit_rule=target_stock.get('last_exit_rule') or '-',
+                    strategy=strategy,
+                    revive=bool(is_scalp_revive),
+                )
+            except Exception as exc:
+                log_error(f"[POST_SELL] candidate record failed (id={target_id}): {exc}")
             # 메모리에서 pending_sell_msg 제거
             target_stock.pop('pending_sell_msg', None)
     except Exception as e:
@@ -800,6 +819,22 @@ def handle_real_execution(exec_data):
                             revive=True,
                             new_watch_id=int(new_watch_id or 0),
                         )
+                        try:
+                            record_post_sell_candidate(
+                                recommendation_id=target_id,
+                                stock=target_stock,
+                                code=code,
+                                sell_time=now,
+                                buy_price=safe_buy_price,
+                                sell_price=exec_price,
+                                profit_rate=profit_rate,
+                                buy_qty=int(float(getattr(record, 'buy_qty', 0) or target_stock.get('buy_qty', 0) or 0)),
+                                exit_rule=target_stock.get('last_exit_rule') or '-',
+                                strategy=strategy,
+                                revive=True,
+                            )
+                        except Exception as exc:
+                            log_error(f"[POST_SELL] candidate record failed (id={target_id}): {exc}")
                 except Exception as e:
                     log_error(f"🚨 [DB 에러] ID {target_id} SELL 처리 중 에러: {e}")
                     return

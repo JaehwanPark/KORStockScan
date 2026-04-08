@@ -119,6 +119,7 @@ from src.engine.sniper_position_tags import (
     normalize_strategy,
     target_identity,
 )
+from src.engine.sniper_post_sell_feedback import should_retain_ws_subscription
 
 # 💡 뇌(AI)와 눈(웹소켓, 레이더) 임포트
 from src.engine import kiwoom_orders
@@ -429,6 +430,36 @@ def _extract_ord_no(res):
 
 def _is_ok_response(res):
     return sniper_trade_utils.is_ok_response(res)
+
+
+def _prune_ws_subscriptions_for_inactive_targets(targets):
+    if not WS_MANAGER:
+        return
+    subscribed_codes = list(getattr(WS_MANAGER, "subscribed_codes", set()) or [])
+    if not subscribed_codes:
+        return
+
+    active_codes = {
+        str(t.get("code", "")).strip()[:6]
+        for t in (targets or [])
+        if t.get("status") not in {"COMPLETED", "EXPIRED"}
+    }
+    now_ts = time.time()
+    stale_codes = []
+    for code in subscribed_codes:
+        norm = str(code or "").strip()[:6]
+        if not norm or norm in active_codes:
+            continue
+        if should_retain_ws_subscription(norm, now_ts=now_ts):
+            continue
+        stale_codes.append(norm)
+
+    if stale_codes:
+        event_bus.publish("COMMAND_WS_UNREG", {"codes": stale_codes})
+        log_info(
+            f"[WS_SUBSCRIPTION_PRUNE] inactive={len(stale_codes)} "
+            f"codes={','.join(sorted(set(stale_codes)))}"
+        )
 
 # =====================================================================
 # 🧠 상태 머신 (State Machine) 핸들러 
@@ -1230,6 +1261,9 @@ def run_sniper(is_test_mode=False):
                     )
 
             targets[:] = [t for t in targets if t.get('status') not in ['COMPLETED', 'EXPIRED']]
+            if time.time() - getattr(run_sniper, "last_ws_prune_time", 0) >= 5:
+                _prune_ws_subscriptions_for_inactive_targets(targets)
+                run_sniper.last_ws_prune_time = time.time()
             time.sleep(1)
 
     except Exception as e:

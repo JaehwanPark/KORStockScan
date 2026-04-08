@@ -6,6 +6,7 @@ from datetime import datetime
 from src.database.models import RecommendationHistory
 from src.utils import kiwoom_utils
 from src.utils.logger import log_error, log_info
+from src.utils.pipeline_event_logger import emit_pipeline_event
 
 
 KIWOOM_TOKEN = None
@@ -67,14 +68,14 @@ def bind_overnight_dependencies(
         DUAL_PERSONA_ENGINE = dual_persona_engine
 
 
-def _sanitize_pipeline_field(value):
-    return str(value).replace(" ", "|")
-
-
 def _log_holding_pipeline(name, code, stage, **fields):
-    parts = [f"{key}={_sanitize_pipeline_field(value)}" for key, value in fields.items()]
-    suffix = f" {' '.join(parts)}" if parts else ""
-    log_info(f"[HOLDING_PIPELINE] {name}({code}) stage={stage}{suffix}")
+    emit_pipeline_event(
+        "HOLDING_PIPELINE",
+        name,
+        code,
+        stage,
+        fields=fields,
+    )
 
 def _find_active_target_by_code(code):
     code = str(code).strip()[:6]

@@ -118,6 +118,10 @@ def archive_target_date_logs(target_date: str, log_paths: Iterable[Path]) -> lis
 
 def save_monitor_snapshots_for_date(target_date: str) -> dict[str, str]:
     from src.engine.sniper_performance_tuning_report import build_performance_tuning_report
+    from src.engine.sniper_post_sell_feedback import (
+        evaluate_post_sell_candidates,
+        post_sell_feedback_summary_to_dict,
+    )
     from src.engine.sniper_trade_review_report import build_trade_review_report
 
     trade_review = build_trade_review_report(
@@ -138,9 +142,18 @@ def save_monitor_snapshots_for_date(target_date: str) -> dict[str, str]:
     performance_tuning["meta"]["saved_snapshot_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     performance_tuning["meta"]["snapshot_kind"] = "performance_tuning"
 
+    post_sell_feedback = post_sell_feedback_summary_to_dict(
+        evaluate_post_sell_candidates(target_date=target_date)
+    )
+    post_sell_feedback.setdefault("meta", {})
+    post_sell_feedback["meta"]["saved_snapshot_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    post_sell_feedback["meta"]["snapshot_kind"] = "post_sell_feedback"
+
     trade_review_path = save_monitor_snapshot("trade_review", target_date, trade_review)
     performance_path = save_monitor_snapshot("performance_tuning", target_date, performance_tuning)
+    post_sell_path = save_monitor_snapshot("post_sell_feedback", target_date, post_sell_feedback)
     return {
         "trade_review": str(trade_review_path),
         "performance_tuning": str(performance_path),
+        "post_sell_feedback": str(post_sell_path),
     }

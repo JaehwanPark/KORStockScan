@@ -255,6 +255,17 @@ class TradingConfig:
     OPENAI_DUAL_PERSONA_OVERNIGHT_C_WEIGHT: float = 0.45
 
     # ==========================================
+    # 📉 post-sell 피드백 설정
+    # ==========================================
+    POST_SELL_FEEDBACK_ENABLED: bool = True
+    POST_SELL_FEEDBACK_EVAL_ENABLED: bool = True
+    POST_SELL_FEEDBACK_MISSED_UPSIDE_MFE_PCT: float = 0.8
+    POST_SELL_FEEDBACK_MISSED_UPSIDE_CLOSE_PCT: float = 0.3
+    POST_SELL_FEEDBACK_GOOD_EXIT_MAE_PCT: float = -0.6
+    POST_SELL_FEEDBACK_GOOD_EXIT_CLOSE_PCT: float = -0.2
+    POST_SELL_WS_RETAIN_MINUTES: int = 0  # 0이면 매도 이후 WS 유지 비활성(MVP 기본값)
+
+    # ==========================================
     # ⚡ 성능 최적화 캐시 설정
     # ==========================================
     KIWOOM_TICK_CACHE_TTL_SEC: float = 1.0  # 최근 틱 체결 조회 캐시
@@ -280,6 +291,8 @@ class TradingConfig:
     MODULE_LOG_BACKUP_COUNT: int = 10  # 파일별 순환 보관 개수
     LOG_RETENTION_DAYS: int = 14  # 오래된 로그 자동 삭제 기준
     BOT_HISTORY_BACKUP_COUNT: int = 7  # 콘솔 히스토리 일별 보관 개수
+    PIPELINE_EVENT_JSONL_ENABLED: bool = True
+    PIPELINE_EVENT_SCHEMA_VERSION: int = 1
 
 
 # 전역 싱글톤 인스턴스 생성
