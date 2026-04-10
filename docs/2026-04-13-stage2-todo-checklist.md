@@ -64,6 +64,17 @@
 - 원격 `gunicorn`은 `HUP reload`로 워커 재적재 완료.
 - `0-1b 원격 경량 프로파일링`은 별도 작업으로 남아 있음.
 
+## Phase 0-1b 수행시간 고정 (2026-04-13, KST)
+
+- `08:20~08:35` 장전 baseline 1차 수집
+  - 목적: 장 시작 전 `budget_pass -> latency_block` 직전 경로의 기준 지연값 확보
+- `10:20~10:35` 장중 1차 수집
+  - 목적: 오전 변동성 구간의 `quote_stale=False latency_block` hot path 후보 관측
+- `13:20~13:35` 장중 2차 수집
+  - 목적: 점심 이후 유동성 변화 구간 재측정 및 오전 결과와 비교
+- `15:35~15:50` 장후 정리/확정
+  - 목적: `hot path 후보 1~3개`를 문서화하고 다음 액션으로 연결
+
 ## 장전 체크리스트 (08:00~09:00)
 
 - [ ] 원격 `latency remote_v2` 설정 유지 상태 확인
@@ -71,7 +82,8 @@
 - [ ] `RELAX-LATENCY / RELAX-DYNSTR / RELAX-OVERBOUGHT` 시작 상태를 체크리스트에 고정
 - [x] `AI 코딩 작업지시서` 기준 `Phase 0 / Phase 1` 선반영 범위 확정
 - [x] `latency reason breakdown / expired_armed / partial fill sync` 계측 반영 여부 확인
-- [ ] 원격 경량 프로파일링 실행 여부 및 방식(`표준 도구만`) 결정
+- [ ] 원격 경량 프로파일링 실행 여부 및 방식(`표준 도구만`) 결정 (`08:00~08:10`)
+- [ ] 원격 경량 프로파일링 장전 baseline 1차 수집 (`08:20~08:35`)
 - [ ] `buy_pause_guard`, `run_monitor_snapshot`, 원격 fetch cron 상태 확인
 
 ## 장중 체크리스트 (09:00~15:30)
@@ -97,6 +109,8 @@
   - `hard time stop shadow` 영향 메모
   - `live hard stop` 계열(`preset/protect/scalp_hard_stop`) 분기 확인 메모
   - `스캘핑 -> 스윙 자동전환` shadow 조건 초안 정리
+- [ ] 원격 경량 프로파일링 장중 1차 수집 (`10:20~10:35`)
+- [ ] 원격 경량 프로파일링 장중 2차 수집 (`13:20~13:35`)
 
 ## 장후 체크리스트 (15:30~)
 
@@ -104,7 +118,7 @@
 - [ ] `RELAX-DYNSTR` 재설계 후보안 문서화
 - [ ] `RELAX-OVERBOUGHT` 표본 누적 여부 재판정
 - [ ] 원격 수집 안정화 패치 필요 시 작업지시서화
-- [ ] 원격 경량 프로파일링 결과 정리
+- [ ] 원격 경량 프로파일링 결과 정리 (`15:35~15:50`, hot path 후보 1~3개 확정)
 - [ ] `live hard stop taxonomy audit` 결과 정리
 - [ ] `2026-04-13` 결과를 다음 세션 플랜/체크리스트에 승격
 
