@@ -33,6 +33,9 @@
    문서 기준으로 `Status` 자동 동기화
    - 문서에 남아있음: `Todo`
    - 문서에서 제거됨(완료 처리): `Done`
+6. `Slot`이 비어있는 관리 항목은 문서 sync 시 자동 추론하여 채움
+   - 기본 규칙: `Plan/Checklist0413 -> PREOPEN`, `ScalpingLogic -> INTRADAY`, `AIPrompt -> POSTCLOSE`
+   - 키워드 우선 규칙: `장전/PREOPEN`, `장중/INTRADAY`, `장후/EOD/리포트/검증` 매칭 시 트랙 기본값보다 우선
 
 ---
 
@@ -76,6 +79,15 @@ Settings -> Secrets and variables -> Actions
 - `GH_PROJECT_SLOT_FIELD_NAME`
   - 기본: `Slot`
   - 권장 옵션: `PREOPEN`, `INTRADAY`, `POSTCLOSE`
+- `GH_PROJECT_SLOT_PREOPEN_OPTION_NAME`
+  - 기본: `PREOPEN`
+- `GH_PROJECT_SLOT_INTRADAY_OPTION_NAME`
+  - 기본: `INTRADAY`
+- `GH_PROJECT_SLOT_POSTCLOSE_OPTION_NAME`
+  - 기본: `POSTCLOSE`
+- `GH_PROJECT_AUTO_FILL_SLOT`
+  - 기본: `true`
+  - `sync_docs_backlog_to_project`에서 Slot 자동 채움 활성/비활성
 - `GH_SYNC_ONLY_STATUSES`  
   - 예: `Todo,In Progress,Blocked`  
   - 비우면 Due Date 있는 항목 전체 동기화

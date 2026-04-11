@@ -35,9 +35,46 @@ class ProjectItem:
     item_id: str
     title: str
     content_type: str
+    slot: str = ""
 
 
 MANAGED_TRACKS = ("Plan", "Checklist0413", "ScalpingLogic", "AIPrompt")
+
+TRACK_DEFAULT_SLOT = {
+    "Plan": "PREOPEN",
+    "Checklist0413": "PREOPEN",
+    "ScalpingLogic": "INTRADAY",
+    "AIPrompt": "POSTCLOSE",
+}
+
+SLOT_PREOPEN_KEYWORDS = (
+    "장전",
+    "preopen",
+    "개장 전",
+    "오전 8",
+    "08:",
+)
+
+SLOT_INTRADAY_KEYWORDS = (
+    "장중",
+    "intraday",
+    "실시간",
+    "체결",
+    "canary",
+    "모니터링",
+)
+
+SLOT_POSTCLOSE_KEYWORDS = (
+    "장후",
+    "postclose",
+    "마감",
+    "eod",
+    "리포트",
+    "회고",
+    "분석",
+    "검증",
+    "리뷰",
+)
 
 
 def _read(path: Path) -> str:
@@ -289,6 +326,11 @@ def _env(name: str, default: str | None = None) -> str:
     return value
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = str(os.getenv(name, "true" if default else "false")).strip().lower()
+    return raw in {"1", "true", "yes", "y", "on"}
+
+
 def _graphql_request(token: str, query: str, variables: dict[str, Any]) -> dict[str, Any]:
     payload = json.dumps({"query": query, "variables": variables}).encode("utf-8")
     req = request.Request(
@@ -341,6 +383,19 @@ query($owner: String!, $number: Int!, $cursor: String) {
             ... on Issue { title }
             ... on PullRequest { title }
           }
+          fieldValues(first: 30) {
+            nodes {
+              __typename
+              ... on ProjectV2ItemFieldSingleSelectValue {
+                name
+                field { ... on ProjectV2FieldCommon { name } }
+              }
+              ... on ProjectV2ItemFieldTextValue {
+                text
+                field { ... on ProjectV2FieldCommon { name } }
+              }
+            }
+          }
         }
       }
     }
@@ -366,6 +421,19 @@ query($owner: String!, $number: Int!, $cursor: String) {
             ... on Issue { title }
             ... on PullRequest { title }
           }
+          fieldValues(first: 30) {
+            nodes {
+              __typename
+              ... on ProjectV2ItemFieldSingleSelectValue {
+                name
+                field { ... on ProjectV2FieldCommon { name } }
+              }
+              ... on ProjectV2ItemFieldTextValue {
+                text
+                field { ... on ProjectV2FieldCommon { name } }
+              }
+            }
+          }
         }
       }
     }
@@ -385,6 +453,7 @@ def _fetch_project_metadata(
     token: str,
     owner: str,
     project_number: int,
+    slot_field_name: str,
 ) -> tuple[str, dict[str, Any], set[str], list[ProjectItem]]:
     query = _project_query()
     cursor: str | None = None
@@ -407,11 +476,21 @@ def _fetch_project_metadata(
             title = str(content.get("title") or "").strip()
             content_type = str(content.get("__typename") or "").strip()
             item_id = str(node.get("id") or "").strip()
+            slot_value = ""
+            for fv in (node.get("fieldValues") or {}).get("nodes") or []:
+                field_name = str(((fv.get("field") or {}).get("name")) or "").strip()
+                kind = str(fv.get("__typename") or "")
+                if field_name != slot_field_name:
+                    continue
+                if kind == "ProjectV2ItemFieldSingleSelectValue":
+                    slot_value = str(fv.get("name") or "").strip()
+                elif kind == "ProjectV2ItemFieldTextValue" and not slot_value:
+                    slot_value = str(fv.get("text") or "").strip()
             if title:
                 existing_titles.add(title)
                 if item_id:
                     existing_items.append(
-                        ProjectItem(item_id=item_id, title=title, content_type=content_type),
+                        ProjectItem(item_id=item_id, title=title, content_type=content_type, slot=slot_value),
                     )
         page = (project.get("items") or {}).get("pageInfo") or {}
         if not page.get("hasNextPage"):
@@ -452,6 +531,29 @@ def _is_managed_project_title(title: str) -> bool:
     return bool(re.match(rf"^\[({'|'.join(MANAGED_TRACKS)})\]\s+.+", title.strip()))
 
 
+def _slot_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", value.strip().lower())
+
+
+def _infer_slot_label(task: BacklogTask) -> str:
+    text = f"{task.title} {task.section}".lower()
+    if any(keyword.lower() in text for keyword in SLOT_PREOPEN_KEYWORDS):
+        return "PREOPEN"
+    if any(keyword.lower() in text for keyword in SLOT_INTRADAY_KEYWORDS):
+        return "INTRADAY"
+    if any(keyword.lower() in text for keyword in SLOT_POSTCLOSE_KEYWORDS):
+        return "POSTCLOSE"
+    return TRACK_DEFAULT_SLOT.get(task.track, "POSTCLOSE")
+
+
+def _find_option_id_by_name(options: list[dict[str, Any]], option_name: str) -> str:
+    wanted = _slot_key(option_name)
+    for opt in options:
+        if _slot_key(str(opt.get("name") or "")) == wanted:
+            return str(opt.get("id") or "")
+    return ""
+
+
 def _desired_status_option_id(
     *,
     title: str,
@@ -484,13 +586,24 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
     number = int(_env("GH_PROJECT_NUMBER"))
     status_field_name = _env("GH_PROJECT_STATUS_FIELD_NAME", "Status")
     due_field_name = _env("GH_PROJECT_DUE_FIELD_NAME", "Due")
+    slot_field_name = _env("GH_PROJECT_SLOT_FIELD_NAME", "Slot")
     todo_option_name = _env("GH_PROJECT_TODO_OPTION_NAME", "Todo")
     done_option_name = _env("GH_PROJECT_DONE_OPTION_NAME", "Done")
+    slot_preopen_option_name = _env("GH_PROJECT_SLOT_PREOPEN_OPTION_NAME", "PREOPEN")
+    slot_intraday_option_name = _env("GH_PROJECT_SLOT_INTRADAY_OPTION_NAME", "INTRADAY")
+    slot_postclose_option_name = _env("GH_PROJECT_SLOT_POSTCLOSE_OPTION_NAME", "POSTCLOSE")
+    auto_fill_slot = _env_bool("GH_PROJECT_AUTO_FILL_SLOT", True)
 
-    project_id, fields, existing_titles, existing_items = _fetch_project_metadata(token, owner, number)
+    project_id, fields, existing_titles, existing_items = _fetch_project_metadata(
+        token,
+        owner,
+        number,
+        slot_field_name,
+    )
 
     status_field = fields.get(status_field_name)
     due_field = fields.get(due_field_name)
+    slot_field = fields.get(slot_field_name)
     status_option_id = ""
     done_status_option_id = ""
     if status_field and str(status_field.get("__typename")) == "ProjectV2SingleSelectField":
@@ -500,8 +613,20 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
             if str(opt.get("name") or "").strip() == done_option_name:
                 done_status_option_id = str(opt.get("id") or "")
 
+    slot_option_ids: dict[str, str] = {}
+    slot_field_type = str(slot_field.get("__typename") or "") if slot_field else ""
+    if slot_field and slot_field_type == "ProjectV2SingleSelectField":
+        options = slot_field.get("options") or []
+        slot_option_ids = {
+            "PREOPEN": _find_option_id_by_name(options, slot_preopen_option_name),
+            "INTRADAY": _find_option_id_by_name(options, slot_intraday_option_name),
+            "POSTCLOSE": _find_option_id_by_name(options, slot_postclose_option_name),
+        }
+
     add_mut = _mutation_add_draft()
     upd_mut = _mutation_update_field()
+    tasks_by_title = {_title_for_project(task): task for task in tasks}
+    desired_open_titles = set(tasks_by_title.keys())
 
     created = 0
     skipped_existing = 0
@@ -553,11 +678,37 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
                         "value": {"date": task.due_date},
                     },
                 )
+
+        if auto_fill_slot and slot_field:
+            inferred_slot = _infer_slot_label(task)
+            if slot_field_type == "ProjectV2SingleSelectField":
+                slot_option_id = slot_option_ids.get(inferred_slot, "")
+                if slot_option_id:
+                    _graphql_request(
+                        token,
+                        upd_mut,
+                        {
+                            "projectId": project_id,
+                            "itemId": item_id,
+                            "fieldId": slot_field["id"],
+                            "value": {"singleSelectOptionId": slot_option_id},
+                        },
+                    )
+            elif slot_field_type == "ProjectV2Field" and str(slot_field.get("dataType") or "") == "TEXT":
+                _graphql_request(
+                    token,
+                    upd_mut,
+                    {
+                        "projectId": project_id,
+                        "itemId": item_id,
+                        "fieldId": slot_field["id"],
+                        "value": {"text": inferred_slot},
+                    },
+                )
         created += 1
 
     synced_status_todo = 0
     synced_status_done = 0
-    desired_open_titles = {_title_for_project(task) for task in tasks}
     if status_field and status_option_id:
         for item in existing_items:
             desired_option_id = _desired_status_option_id(
@@ -589,6 +740,56 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
             else:
                 synced_status_done += 1
 
+    synced_slot_filled = 0
+    if auto_fill_slot and slot_field:
+        for item in existing_items:
+            if not _is_managed_project_title(item.title):
+                continue
+            if item.title not in desired_open_titles:
+                continue
+            if item.slot.strip():
+                continue
+            task = tasks_by_title.get(item.title)
+            if not task:
+                continue
+            inferred_slot = _infer_slot_label(task)
+            if not inferred_slot:
+                continue
+
+            if slot_field_type == "ProjectV2SingleSelectField":
+                slot_option_id = slot_option_ids.get(inferred_slot, "")
+                if not slot_option_id:
+                    continue
+                if dry_run:
+                    synced_slot_filled += 1
+                    continue
+                _graphql_request(
+                    token,
+                    upd_mut,
+                    {
+                        "projectId": project_id,
+                        "itemId": item.item_id,
+                        "fieldId": slot_field["id"],
+                        "value": {"singleSelectOptionId": slot_option_id},
+                    },
+                )
+                synced_slot_filled += 1
+            elif slot_field_type == "ProjectV2Field" and str(slot_field.get("dataType") or "") == "TEXT":
+                if dry_run:
+                    synced_slot_filled += 1
+                    continue
+                _graphql_request(
+                    token,
+                    upd_mut,
+                    {
+                        "projectId": project_id,
+                        "itemId": item.item_id,
+                        "fieldId": slot_field["id"],
+                        "value": {"text": inferred_slot},
+                    },
+                )
+                synced_slot_filled += 1
+
     by_track: dict[str, int] = {}
     for t in tasks:
         by_track[t.track] = by_track.get(t.track, 0) + 1
@@ -602,6 +803,7 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
         "skipped_existing": skipped_existing,
         "status_synced_todo": synced_status_todo,
         "status_synced_done": synced_status_done,
+        "slot_filled": synced_slot_filled,
         "track_breakdown": by_track,
     }
 

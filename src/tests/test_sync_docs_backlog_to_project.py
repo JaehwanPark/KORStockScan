@@ -1,8 +1,12 @@
 from src.engine.sync_docs_backlog_to_project import (
+    BacklogTask,
     DOC_SCALPING,
     DOC_PLAN,
     _desired_status_option_id,
+    _find_option_id_by_name,
+    _infer_slot_label,
     _is_managed_project_title,
+    _slot_key,
     collect_backlog_tasks,
     parse_checklist_tasks,
     parse_plan_tasks,
@@ -98,3 +102,30 @@ def test_desired_status_option_id():
         )
         == ""
     )
+
+
+def test_slot_key_normalizes():
+    assert _slot_key("In Progress") == "inprogress"
+    assert _slot_key("POST_CLOSE") == "postclose"
+
+
+def test_find_option_id_by_name_normalized():
+    options = [
+        {"id": "1", "name": "PRE OPEN"},
+        {"id": "2", "name": "INTRADAY"},
+        {"id": "3", "name": "POST_CLOSE"},
+    ]
+    assert _find_option_id_by_name(options, "preopen") == "1"
+    assert _find_option_id_by_name(options, "POSTCLOSE") == "3"
+    assert _find_option_id_by_name(options, "NONE") == ""
+
+
+def test_infer_slot_label_uses_keyword_then_track_default():
+    preopen = BacklogTask(title="2026-04-13 장전 점검", source="x", section="체크", track="Plan")
+    intraday = BacklogTask(title="장중 canary 모니터링", source="x", section="체크", track="Plan")
+    postclose = BacklogTask(title="장후 리포트 검증", source="x", section="체크", track="Plan")
+    fallback = BacklogTask(title="키워드 없음", source="x", section="체크", track="ScalpingLogic")
+    assert _infer_slot_label(preopen) == "PREOPEN"
+    assert _infer_slot_label(intraday) == "INTRADAY"
+    assert _infer_slot_label(postclose) == "POSTCLOSE"
+    assert _infer_slot_label(fallback) == "INTRADAY"
