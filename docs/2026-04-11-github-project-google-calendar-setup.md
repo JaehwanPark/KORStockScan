@@ -20,8 +20,10 @@
 
 1. 30분마다(또는 수동 실행) GitHub Project 항목 조회
 2. Due Date가 있는 항목만 Google Calendar 이벤트로 upsert
-3. 항목 식별은 `extendedProperties.private.gh_project_item_id` 사용
-4. 소스는 항상 GitHub, 캘린더는 표시/알림 레이어
+3. `Slot(PREOPEN/INTRADAY/POSTCLOSE)`이 있으면 시간 지정 이벤트 + 시작 알림으로 생성
+4. `Slot`이 없으면 종일(all-day) 이벤트로 생성
+5. 항목 식별은 `extendedProperties.private.gh_project_item_id` 사용
+6. 소스는 항상 GitHub, 캘린더는 표시/알림 레이어
 
 문서 backlog 반영 동작:
 
@@ -93,6 +95,23 @@ Settings -> Secrets and variables -> Actions
   - 비우면 Due Date 있는 항목 전체 동기화
 - `GCAL_EVENT_PREFIX`  
   - 예: `[KORStockScan]`
+- `GCAL_EVENT_TIMEZONE`
+  - 기본: `Asia/Seoul`
+- `GCAL_USE_SLOT_TIME`
+  - 기본: `true`
+  - `true`면 Slot 기반 시간 이벤트 생성, `false`면 전부 종일 이벤트
+- `GCAL_SLOT_PREOPEN_TIME`
+  - 기본: `08:20`
+- `GCAL_SLOT_INTRADAY_TIME`
+  - 기본: `10:00`
+- `GCAL_SLOT_POSTCLOSE_TIME`
+  - 기본: `15:40`
+- `GCAL_SLOT_DURATION_MINUTES`
+  - 기본: `30`
+  - 슬롯 일정 길이(분)
+- `GCAL_SLOT_REMINDER_MINUTES`
+  - 기본: `0`
+  - 시작 시각 기준 알림 분(0이면 시작 시각 즉시)
 - `SYNC_DRY_RUN`
   - 초기 검증 시 `true` 권장, 운영 시 `false`
 - `GH_PROJECT_TODO_OPTION_NAME`
@@ -185,6 +204,12 @@ Codex 일일 작업지시서 자동 생성:
 - 항목에 Due Date가 있는지 확인
 - `GH_SYNC_ONLY_STATUSES` 필터가 과하게 좁지 않은지 확인
 - `SYNC_DRY_RUN`이 `false`인지 확인
+
+### 시간이 아니라 종일 이벤트로 생김
+
+- `Slot` 값이 비어있지 않은지 확인
+- `GH_PROJECT_SLOT_FIELD_NAME`이 실제 Project 필드명과 일치하는지 확인
+- `GCAL_USE_SLOT_TIME=true`인지 확인
 
 ---
 

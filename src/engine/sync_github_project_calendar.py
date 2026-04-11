@@ -11,7 +11,7 @@ import json
 import os
 import sys
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from urllib import request
 
@@ -29,6 +29,7 @@ class ProjectItem:
     due_date: str
     status: str
     track: str
+    slot: str
     assignees: str
     state: str
 
@@ -43,6 +44,18 @@ def _env(name: str, default: str | None = None) -> str:
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = str(os.getenv(name, "true" if default else "false")).strip().lower()
     return raw in {"1", "true", "yes", "y", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = str(os.getenv(name, str(default))).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _norm_key(value: str) -> str:
+    return "".join(ch for ch in value.strip().lower() if ch.isalnum())
 
 
 def _graphql_query() -> str:
@@ -194,6 +207,7 @@ def _parse_project_item(
     due_field_name: str,
     status_field_name: str,
     track_field_name: str,
+    slot_field_name: str,
 ) -> ProjectItem | None:
     if bool(node.get("isArchived")):
         return None
@@ -213,6 +227,7 @@ def _parse_project_item(
     due_date = ""
     status = ""
     track = ""
+    slot = ""
 
     for fv in (node.get("fieldValues") or {}).get("nodes") or []:
         field_name = str(((fv.get("field") or {}).get("name")) or "").strip()
@@ -225,8 +240,12 @@ def _parse_project_item(
                 status = str(fv.get("name") or "").strip()
             elif field_name == track_field_name:
                 track = str(fv.get("name") or "").strip()
+            elif field_name == slot_field_name:
+                slot = str(fv.get("name") or "").strip()
         elif kind == "ProjectV2ItemFieldTextValue" and field_name == track_field_name and not track:
             track = str(fv.get("text") or "").strip()
+        elif kind == "ProjectV2ItemFieldTextValue" and field_name == slot_field_name and not slot:
+            slot = str(fv.get("text") or "").strip()
 
     if not due_date:
         return None
@@ -239,6 +258,7 @@ def _parse_project_item(
         due_date=due_date,
         status=status,
         track=track,
+        slot=slot,
         assignees=assignees,
         state=state,
     )
@@ -252,6 +272,7 @@ def fetch_project_items(
     due_field_name: str,
     status_field_name: str,
     track_field_name: str,
+    slot_field_name: str,
     sync_only_statuses: set[str],
 ) -> list[ProjectItem]:
     items: list[ProjectItem] = []
@@ -276,6 +297,7 @@ def fetch_project_items(
                 due_field_name=due_field_name,
                 status_field_name=status_field_name,
                 track_field_name=track_field_name,
+                slot_field_name=slot_field_name,
             )
             if not parsed:
                 continue
@@ -311,22 +333,36 @@ def _event_body(
     event_prefix: str,
     owner: str,
     project_number: int,
+    event_timezone: str,
+    use_slot_time: bool,
+    slot_preopen_time: str,
+    slot_intraday_time: str,
+    slot_postclose_time: str,
+    slot_duration_minutes: int,
+    slot_reminder_minutes: int,
 ) -> dict[str, Any]:
     due = date.fromisoformat(item.due_date)
+    slot_key = _norm_key(item.slot)
+    slot_to_time = {
+        _norm_key("PREOPEN"): slot_preopen_time,
+        _norm_key("INTRADAY"): slot_intraday_time,
+        _norm_key("POSTCLOSE"): slot_postclose_time,
+    }
+    start_hhmm = slot_to_time.get(slot_key, "")
+    is_timed_event = bool(use_slot_time and start_hhmm)
     description_lines = [
         f"Project: {owner}#{project_number}",
         f"Type: {item.content_type}",
         f"Status: {item.status or '-'}",
+        f"Slot: {item.slot or '-'}",
         f"Track: {item.track or '-'}",
         f"State: {item.state or '-'}",
         f"Assignees: {item.assignees or '-'}",
         f"URL: {item.url or '-'}",
     ]
-    return {
+    body = {
         "summary": f"{event_prefix} {item.title}".strip(),
         "description": "\n".join(description_lines),
-        "start": {"date": due.isoformat()},
-        "end": {"date": (due + timedelta(days=1)).isoformat()},
         "extendedProperties": {
             "private": {
                 "gh_project_item_id": item.item_id,
@@ -335,6 +371,22 @@ def _event_body(
             }
         },
     }
+    if is_timed_event:
+        try:
+            start_dt = datetime.fromisoformat(f"{due.isoformat()}T{start_hhmm}:00")
+        except ValueError:
+            start_dt = datetime.fromisoformat(f"{due.isoformat()}T09:00:00")
+        end_dt = start_dt + timedelta(minutes=max(5, slot_duration_minutes))
+        body["start"] = {"dateTime": start_dt.isoformat(), "timeZone": event_timezone}
+        body["end"] = {"dateTime": end_dt.isoformat(), "timeZone": event_timezone}
+        body["reminders"] = {
+            "useDefault": False,
+            "overrides": [{"method": "popup", "minutes": max(0, slot_reminder_minutes)}],
+        }
+    else:
+        body["start"] = {"date": due.isoformat()}
+        body["end"] = {"date": (due + timedelta(days=1)).isoformat()}
+    return body
 
 
 def upsert_events(
@@ -345,6 +397,13 @@ def upsert_events(
     event_prefix: str,
     owner: str,
     project_number: int,
+    event_timezone: str,
+    use_slot_time: bool,
+    slot_preopen_time: str,
+    slot_intraday_time: str,
+    slot_postclose_time: str,
+    slot_duration_minutes: int,
+    slot_reminder_minutes: int,
     dry_run: bool,
 ) -> dict[str, int]:
     created = 0
@@ -357,6 +416,13 @@ def upsert_events(
             event_prefix=event_prefix,
             owner=owner,
             project_number=project_number,
+            event_timezone=event_timezone,
+            use_slot_time=use_slot_time,
+            slot_preopen_time=slot_preopen_time,
+            slot_intraday_time=slot_intraday_time,
+            slot_postclose_time=slot_postclose_time,
+            slot_duration_minutes=slot_duration_minutes,
+            slot_reminder_minutes=slot_reminder_minutes,
         )
         if dry_run:
             skipped += 1
@@ -399,7 +465,15 @@ def main() -> int:
     due_field_name = _env("GH_PROJECT_DUE_FIELD_NAME", "Due")
     status_field_name = _env("GH_PROJECT_STATUS_FIELD_NAME", "Status")
     track_field_name = _env("GH_PROJECT_TRACK_FIELD_NAME", "Track")
+    slot_field_name = _env("GH_PROJECT_SLOT_FIELD_NAME", "Slot")
     event_prefix = _env("GCAL_EVENT_PREFIX", "[KORStockScan]")
+    event_timezone = _env("GCAL_EVENT_TIMEZONE", "Asia/Seoul")
+    use_slot_time = _env_bool("GCAL_USE_SLOT_TIME", True)
+    slot_preopen_time = _env("GCAL_SLOT_PREOPEN_TIME", "08:20")
+    slot_intraday_time = _env("GCAL_SLOT_INTRADAY_TIME", "10:00")
+    slot_postclose_time = _env("GCAL_SLOT_POSTCLOSE_TIME", "15:40")
+    slot_duration_minutes = _env_int("GCAL_SLOT_DURATION_MINUTES", 30)
+    slot_reminder_minutes = _env_int("GCAL_SLOT_REMINDER_MINUTES", 0)
     calendar_id = _env("GOOGLE_CALENDAR_ID")
     service_account_json = _env("GOOGLE_SERVICE_ACCOUNT_JSON")
     dry_run = args.dry_run or _env_bool("SYNC_DRY_RUN", False)
@@ -414,6 +488,7 @@ def main() -> int:
         due_field_name=due_field_name,
         status_field_name=status_field_name,
         track_field_name=track_field_name,
+        slot_field_name=slot_field_name,
         sync_only_statuses=sync_only_statuses,
     )
 
@@ -425,6 +500,13 @@ def main() -> int:
         event_prefix=event_prefix,
         owner=owner,
         project_number=project_number,
+        event_timezone=event_timezone,
+        use_slot_time=use_slot_time,
+        slot_preopen_time=slot_preopen_time,
+        slot_intraday_time=slot_intraday_time,
+        slot_postclose_time=slot_postclose_time,
+        slot_duration_minutes=slot_duration_minutes,
+        slot_reminder_minutes=slot_reminder_minutes,
         dry_run=dry_run,
     )
 
