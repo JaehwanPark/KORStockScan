@@ -1,6 +1,8 @@
 from src.engine.sync_docs_backlog_to_project import (
     DOC_SCALPING,
     DOC_PLAN,
+    _desired_status_option_id,
+    _is_managed_project_title,
     collect_backlog_tasks,
     parse_checklist_tasks,
     parse_plan_tasks,
@@ -58,3 +60,41 @@ def test_parse_plan_tasks_empty_when_source_missing(monkeypatch):
     monkeypatch.setattr("src.engine.sync_docs_backlog_to_project.DOC_PLAN", missing)
     tasks = parse_plan_tasks()
     assert tasks == []
+
+
+def test_managed_title_detection():
+    assert _is_managed_project_title("[Plan] something")
+    assert _is_managed_project_title("[AIPrompt] something")
+    assert not _is_managed_project_title("[Other] something")
+    assert not _is_managed_project_title("plain title")
+
+
+def test_desired_status_option_id():
+    open_titles = {"[Plan] alive task"}
+    assert (
+        _desired_status_option_id(
+            title="[Plan] alive task",
+            desired_open_titles=open_titles,
+            todo_option_id="todo-id",
+            done_option_id="done-id",
+        )
+        == "todo-id"
+    )
+    assert (
+        _desired_status_option_id(
+            title="[Plan] closed task",
+            desired_open_titles=open_titles,
+            todo_option_id="todo-id",
+            done_option_id="done-id",
+        )
+        == "done-id"
+    )
+    assert (
+        _desired_status_option_id(
+            title="manual task",
+            desired_open_titles=open_titles,
+            todo_option_id="todo-id",
+            done_option_id="done-id",
+        )
+        == ""
+    )

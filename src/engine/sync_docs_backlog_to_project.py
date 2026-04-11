@@ -30,6 +30,16 @@ class BacklogTask:
     due_date: str = ""
 
 
+@dataclass(frozen=True)
+class ProjectItem:
+    item_id: str
+    title: str
+    content_type: str
+
+
+MANAGED_TRACKS = ("Plan", "Checklist0413", "ScalpingLogic", "AIPrompt")
+
+
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
@@ -371,12 +381,17 @@ def _project_node(data: dict[str, Any]) -> dict[str, Any]:
     return node
 
 
-def _fetch_project_metadata(token: str, owner: str, project_number: int) -> tuple[str, dict[str, Any], set[str]]:
+def _fetch_project_metadata(
+    token: str,
+    owner: str,
+    project_number: int,
+) -> tuple[str, dict[str, Any], set[str], list[ProjectItem]]:
     query = _project_query()
     cursor: str | None = None
     project_id = ""
     fields: dict[str, Any] = {}
     existing_titles: set[str] = set()
+    existing_items: list[ProjectItem] = []
 
     while True:
         data = _graphql_request(token, query, {"owner": owner, "number": project_number, "cursor": cursor})
@@ -390,15 +405,21 @@ def _fetch_project_metadata(token: str, owner: str, project_number: int) -> tupl
         for node in (project.get("items") or {}).get("nodes") or []:
             content = node.get("content") or {}
             title = str(content.get("title") or "").strip()
+            content_type = str(content.get("__typename") or "").strip()
+            item_id = str(node.get("id") or "").strip()
             if title:
                 existing_titles.add(title)
+                if item_id:
+                    existing_items.append(
+                        ProjectItem(item_id=item_id, title=title, content_type=content_type),
+                    )
         page = (project.get("items") or {}).get("pageInfo") or {}
         if not page.get("hasNextPage"):
             break
         cursor = page.get("endCursor")
     if not project_id:
         raise RuntimeError("project id missing")
-    return project_id, fields, existing_titles
+    return project_id, fields, existing_titles, existing_items
 
 
 def _mutation_add_draft() -> str:
@@ -427,6 +448,22 @@ def _title_for_project(task: BacklogTask) -> str:
     return f"[{task.track}] {task.title}".strip()
 
 
+def _is_managed_project_title(title: str) -> bool:
+    return bool(re.match(rf"^\[({'|'.join(MANAGED_TRACKS)})\]\s+.+", title.strip()))
+
+
+def _desired_status_option_id(
+    *,
+    title: str,
+    desired_open_titles: set[str],
+    todo_option_id: str,
+    done_option_id: str,
+) -> str:
+    if not _is_managed_project_title(title):
+        return ""
+    return todo_option_id if title in desired_open_titles else done_option_id
+
+
 def _body_for_project(task: BacklogTask) -> str:
     return "\n".join(
         [
@@ -448,17 +485,20 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
     status_field_name = _env("GH_PROJECT_STATUS_FIELD_NAME", "Status")
     due_field_name = _env("GH_PROJECT_DUE_FIELD_NAME", "Due")
     todo_option_name = _env("GH_PROJECT_TODO_OPTION_NAME", "Todo")
+    done_option_name = _env("GH_PROJECT_DONE_OPTION_NAME", "Done")
 
-    project_id, fields, existing_titles = _fetch_project_metadata(token, owner, number)
+    project_id, fields, existing_titles, existing_items = _fetch_project_metadata(token, owner, number)
 
     status_field = fields.get(status_field_name)
     due_field = fields.get(due_field_name)
     status_option_id = ""
+    done_status_option_id = ""
     if status_field and str(status_field.get("__typename")) == "ProjectV2SingleSelectField":
         for opt in status_field.get("options") or []:
             if str(opt.get("name") or "").strip() == todo_option_name:
                 status_option_id = str(opt.get("id") or "")
-                break
+            if str(opt.get("name") or "").strip() == done_option_name:
+                done_status_option_id = str(opt.get("id") or "")
 
     add_mut = _mutation_add_draft()
     upd_mut = _mutation_update_field()
@@ -515,6 +555,40 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
                 )
         created += 1
 
+    synced_status_todo = 0
+    synced_status_done = 0
+    desired_open_titles = {_title_for_project(task) for task in tasks}
+    if status_field and status_option_id:
+        for item in existing_items:
+            desired_option_id = _desired_status_option_id(
+                title=item.title,
+                desired_open_titles=desired_open_titles,
+                todo_option_id=status_option_id,
+                done_option_id=done_status_option_id,
+            )
+            if not desired_option_id:
+                continue
+            if dry_run:
+                if desired_option_id == status_option_id:
+                    synced_status_todo += 1
+                else:
+                    synced_status_done += 1
+                continue
+            _graphql_request(
+                token,
+                upd_mut,
+                {
+                    "projectId": project_id,
+                    "itemId": item.item_id,
+                    "fieldId": status_field["id"],
+                    "value": {"singleSelectOptionId": desired_option_id},
+                },
+            )
+            if desired_option_id == status_option_id:
+                synced_status_todo += 1
+            else:
+                synced_status_done += 1
+
     by_track: dict[str, int] = {}
     for t in tasks:
         by_track[t.track] = by_track.get(t.track, 0) + 1
@@ -526,6 +600,8 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
         "parsed_tasks": len(tasks),
         "created_or_would_create": created,
         "skipped_existing": skipped_existing,
+        "status_synced_todo": synced_status_todo,
+        "status_synced_done": synced_status_done,
         "track_breakdown": by_track,
     }
 

@@ -27,6 +27,10 @@
 2. `Done/[x]` 항목 제외
 3. 남은 항목만 GitHub Project Draft Item으로 upsert
 4. 기존 같은 제목이 있으면 중복 생성하지 않고 skip
+5. `sync_docs_backlog_to_project`가 생성한 관리 항목(` [Plan]/[Checklist0413]/[ScalpingLogic]/[AIPrompt] `)은
+   문서 기준으로 `Status` 자동 동기화
+   - 문서에 남아있음: `Todo`
+   - 문서에서 제거됨(완료 처리): `Done`
 
 ---
 
@@ -77,6 +81,9 @@ Settings -> Secrets and variables -> Actions
 - `GH_PROJECT_TODO_OPTION_NAME`
   - 기본: `Todo`
   - Project `Status` 필드의 기본 옵션명
+- `GH_PROJECT_DONE_OPTION_NAME`
+  - 기본: `Done`
+  - 문서에서 빠진 관리 항목에 반영할 완료 옵션명
 - `DOC_BACKLOG_SYNC_DRY_RUN`
   - `true`면 문서 파싱 후 생성 예정 수량만 출력
   - `false`면 실제 Project Draft Item 생성
