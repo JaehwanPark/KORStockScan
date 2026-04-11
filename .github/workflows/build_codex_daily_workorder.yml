@@ -26,28 +26,36 @@ env:
 
 jobs:
   build-workorder:
-    if: |
-      (github.event_name == 'workflow_dispatch' && (github.event.inputs.slot == 'ALL' || github.event.inputs.slot == matrix.slot)) ||
-      (github.event_name == 'schedule' && (
-        (github.event.schedule == '20 23 * * *' && matrix.slot == 'PREOPEN') ||
-        (github.event.schedule == '0 1,4 * * *' && matrix.slot == 'INTRADAY') ||
-        (github.event.schedule == '40 6 * * *' && matrix.slot == 'POSTCLOSE')
-      ))
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        slot: [PREOPEN, INTRADAY, POSTCLOSE]
+        include:
+          - slot: PREOPEN
+            cron: "20 23 * * *"
+          - slot: INTRADAY
+            cron: "0 1,4 * * *"
+          - slot: POSTCLOSE
+            cron: "40 6 * * *"
     steps:
       - name: Checkout
+        if: |
+          (github.event_name == 'workflow_dispatch' && (github.event.inputs.slot == 'ALL' || github.event.inputs.slot == matrix.slot)) ||
+          (github.event_name == 'schedule' && github.event.schedule == matrix.cron)
         uses: actions/checkout@v5
 
       - name: Setup Python
+        if: |
+          (github.event_name == 'workflow_dispatch' && (github.event.inputs.slot == 'ALL' || github.event.inputs.slot == matrix.slot)) ||
+          (github.event_name == 'schedule' && github.event.schedule == matrix.cron)
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
       - name: Validate required config
+        if: |
+          (github.event_name == 'workflow_dispatch' && (github.event.inputs.slot == 'ALL' || github.event.inputs.slot == matrix.slot)) ||
+          (github.event_name == 'schedule' && github.event.schedule == matrix.cron)
         env:
           GH_PROJECT_TOKEN: ${{ secrets.GH_PROJECT_TOKEN }}
           GH_PROJECT_OWNER: ${{ vars.GH_PROJECT_OWNER }}
@@ -66,6 +74,9 @@ jobs:
           fi
 
       - name: Build markdown
+        if: |
+          (github.event_name == 'workflow_dispatch' && (github.event.inputs.slot == 'ALL' || github.event.inputs.slot == matrix.slot)) ||
+          (github.event_name == 'schedule' && github.event.schedule == matrix.cron)
         env:
           GH_PROJECT_TOKEN: ${{ secrets.GH_PROJECT_TOKEN }}
           GH_PROJECT_OWNER: ${{ vars.GH_PROJECT_OWNER }}
@@ -84,6 +95,9 @@ jobs:
             --slot "${{ matrix.slot }}" | tee "tmp/codex_daily_workorder_summary_${{ matrix.slot }}.json"
 
       - name: Publish summary
+        if: |
+          (github.event_name == 'workflow_dispatch' && (github.event.inputs.slot == 'ALL' || github.event.inputs.slot == matrix.slot)) ||
+          (github.event_name == 'schedule' && github.event.schedule == matrix.cron)
         run: |
           {
             echo "## Codex Daily Workorder (${{ matrix.slot }})"
