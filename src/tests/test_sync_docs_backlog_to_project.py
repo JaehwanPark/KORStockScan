@@ -3,6 +3,8 @@ from src.engine.sync_docs_backlog_to_project import (
     DOC_SCALPING,
     DOC_PLAN,
     _desired_status_option_id,
+    _env,
+    _env_bool,
     _find_option_id_by_name,
     _infer_slot_label,
     _is_managed_project_title,
@@ -129,3 +131,19 @@ def test_infer_slot_label_uses_keyword_then_track_default():
     assert _infer_slot_label(intraday) == "INTRADAY"
     assert _infer_slot_label(postclose) == "POSTCLOSE"
     assert _infer_slot_label(fallback) == "INTRADAY"
+
+
+def test_env_bool_uses_default_when_blank(monkeypatch):
+    monkeypatch.delenv("X_FLAG", raising=False)
+    assert _env_bool("X_FLAG", True) is True
+    monkeypatch.setenv("X_FLAG", "")
+    assert _env_bool("X_FLAG", True) is True
+    monkeypatch.setenv("X_FLAG", "false")
+    assert _env_bool("X_FLAG", True) is False
+
+
+def test_env_uses_default_when_blank(monkeypatch):
+    monkeypatch.delenv("X_NAME", raising=False)
+    assert _env("X_NAME", "Slot") == "Slot"
+    monkeypatch.setenv("X_NAME", "")
+    assert _env("X_NAME", "Slot") == "Slot"

@@ -31,10 +31,12 @@ class ProjectTask:
 
 
 def _env(name: str, default: str | None = None) -> str:
-    value = os.getenv(name, default)
-    if value is None:
+    value = os.getenv(name)
+    if value is None or not str(value).strip():
+        value = default
+    if value is None or not str(value).strip():
         raise RuntimeError(f"missing required env: {name}")
-    return value
+    return str(value)
 
 
 def _graphql_query() -> str:

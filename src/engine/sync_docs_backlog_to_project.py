@@ -320,14 +320,19 @@ def collect_backlog_tasks() -> list[BacklogTask]:
 
 
 def _env(name: str, default: str | None = None) -> str:
-    value = os.getenv(name, default)
-    if value is None:
+    value = os.getenv(name)
+    if value is None or not str(value).strip():
+        value = default
+    if value is None or not str(value).strip():
         raise RuntimeError(f"missing required env: {name}")
-    return value
+    return str(value)
 
 
 def _env_bool(name: str, default: bool) -> bool:
-    raw = str(os.getenv(name, "true" if default else "false")).strip().lower()
+    raw_env = os.getenv(name)
+    if raw_env is None or not str(raw_env).strip():
+        return default
+    raw = str(raw_env).strip().lower()
     return raw in {"1", "true", "yes", "y", "on"}
 
 
