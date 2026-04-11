@@ -2,8 +2,21 @@ name: Build Codex Daily Workorder
 
 on:
   workflow_dispatch:
+    inputs:
+      slot:
+        description: "Slot to build"
+        required: true
+        default: "ALL"
+        type: choice
+        options:
+          - ALL
+          - PREOPEN
+          - INTRADAY
+          - POSTCLOSE
   schedule:
-    - cron: "0 23 * * *"
+    - cron: "20 23 * * *"
+    - cron: "0 1,4 * * *"
+    - cron: "40 6 * * *"
 
 permissions:
   contents: read
@@ -13,7 +26,18 @@ env:
 
 jobs:
   build-workorder:
+    if: |
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.slot == 'ALL' || github.event.inputs.slot == matrix.slot)) ||
+      (github.event_name == 'schedule' && (
+        (github.event.schedule == '20 23 * * *' && matrix.slot == 'PREOPEN') ||
+        (github.event.schedule == '0 1,4 * * *' && matrix.slot == 'INTRADAY') ||
+        (github.event.schedule == '40 6 * * *' && matrix.slot == 'POSTCLOSE')
+      ))
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        slot: [PREOPEN, INTRADAY, POSTCLOSE]
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -49,24 +73,26 @@ jobs:
           GH_PROJECT_DUE_FIELD_NAME: ${{ vars.GH_PROJECT_DUE_FIELD_NAME }}
           GH_PROJECT_STATUS_FIELD_NAME: ${{ vars.GH_PROJECT_STATUS_FIELD_NAME }}
           GH_PROJECT_TRACK_FIELD_NAME: ${{ vars.GH_PROJECT_TRACK_FIELD_NAME }}
+          GH_PROJECT_SLOT_FIELD_NAME: ${{ vars.GH_PROJECT_SLOT_FIELD_NAME }}
           GH_CODEX_WORKORDER_STATUSES: ${{ vars.GH_CODEX_WORKORDER_STATUSES }}
           CODEX_WORKORDER_MAX_ITEMS: ${{ vars.CODEX_WORKORDER_MAX_ITEMS }}
         run: |
           mkdir -p tmp
           PYTHONPATH=. python -m src.engine.build_codex_daily_workorder \
-            --output tmp/codex_daily_workorder.md \
-            --max-items "${CODEX_WORKORDER_MAX_ITEMS:-20}" | tee tmp/codex_daily_workorder_summary.json
+            --output "tmp/codex_daily_workorder_${{ matrix.slot }}.md" \
+            --max-items "${CODEX_WORKORDER_MAX_ITEMS:-20}" \
+            --slot "${{ matrix.slot }}" | tee "tmp/codex_daily_workorder_summary_${{ matrix.slot }}.json"
 
       - name: Publish summary
         run: |
           {
-            echo "## Codex Daily Workorder"
+            echo "## Codex Daily Workorder (${{ matrix.slot }})"
             echo ""
-            cat tmp/codex_daily_workorder.md
+            cat "tmp/codex_daily_workorder_${{ matrix.slot }}.md"
             echo ""
             echo "### Build Summary"
             echo ""
             echo '```json'
-            cat tmp/codex_daily_workorder_summary.json
+            cat "tmp/codex_daily_workorder_summary_${{ matrix.slot }}.json"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

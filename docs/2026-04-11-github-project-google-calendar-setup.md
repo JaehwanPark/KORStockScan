@@ -73,6 +73,9 @@ Settings -> Secrets and variables -> Actions
   - 기본: `Status`
 - `GH_PROJECT_TRACK_FIELD_NAME`  
   - 기본: `Track`
+- `GH_PROJECT_SLOT_FIELD_NAME`
+  - 기본: `Slot`
+  - 권장 옵션: `PREOPEN`, `INTRADAY`, `POSTCLOSE`
 - `GH_SYNC_ONLY_STATUSES`  
   - 예: `Todo,In Progress,Blocked`  
   - 비우면 Due Date 있는 항목 전체 동기화
@@ -130,9 +133,18 @@ Settings -> Secrets and variables -> Actions
 Codex 일일 작업지시서 자동 생성:
 
 1. 워크플로우 `Build Codex Daily Workorder`를 수동 실행(`workflow_dispatch`)하거나
-   스케줄(`0 23 * * *`, KST 08:00) 자동 실행 사용
+   슬롯별 스케줄 자동 실행 사용
+   - `PREOPEN`: `20 23 * * *` (KST 08:20)
+   - `INTRADAY`: `0 1,4 * * *` (KST 10:00, 13:00)
+   - `POSTCLOSE`: `40 6 * * *` (KST 15:40)
 2. 실행 완료 후 `Actions run summary`의 `Codex Daily Workorder` 섹션에서 본문을 복사
 3. 복사한 본문을 Codex 대화에 붙여 실행 지시
+4. 수동 실행 시 `slot` 입력에서 `ALL` 또는 단일 슬롯을 선택할 수 있다.
+
+슬롯 운영 원칙:
+
+1. Project 항목 생성 시 `Slot`을 반드시 지정한다.
+2. 슬롯이 비어있는 항목은 슬롯 자동 작업지시서에 포함되지 않는다.
 
 ---
 

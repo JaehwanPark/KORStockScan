@@ -1,4 +1,4 @@
-from src.engine.build_codex_daily_workorder import ProjectTask, _split_csv, render_markdown, sort_tasks
+from src.engine.build_codex_daily_workorder import ProjectTask, _matches_slot, _split_csv, render_markdown, sort_tasks
 
 
 def test_split_csv_trims_and_drops_empty():
@@ -15,6 +15,7 @@ def test_sort_tasks_by_status_due_track_title():
             due_date="2026-04-15",
             status="Todo",
             track="Plan",
+            slot="PREOPEN",
             assignees="",
             state="",
         ),
@@ -26,6 +27,7 @@ def test_sort_tasks_by_status_due_track_title():
             due_date="2026-04-14",
             status="In Progress",
             track="AIPrompt",
+            slot="INTRADAY",
             assignees="",
             state="",
         ),
@@ -37,6 +39,7 @@ def test_sort_tasks_by_status_due_track_title():
             due_date="2026-04-14",
             status="Todo",
             track="Checklist0413",
+            slot="POSTCLOSE",
             assignees="",
             state="",
         ),
@@ -55,6 +58,7 @@ def test_render_markdown_includes_template_and_ids():
             due_date="2026-04-13",
             status="Todo",
             track="Plan",
+            slot="PREOPEN",
             assignees="jaehwan",
             state="OPEN",
         )
@@ -65,9 +69,17 @@ def test_render_markdown_includes_template_and_ids():
         project_title="KORStockScan Ops",
         generated_at="2026-04-11T23:00:00+09:00",
         statuses=["Todo", "In Progress"],
+        slots=["PREOPEN"],
         tasks=tasks,
         max_items=20,
     )
     assert "Codex 일일 작업지시서" in md
     assert "ITEM_123" in md
     assert "Codex 전달 템플릿" in md
+    assert "슬롯필터" in md
+
+
+def test_matches_slot_case_insensitive():
+    assert _matches_slot("PREOPEN", {"preopen"})
+    assert not _matches_slot("INTRADAY", {"preopen"})
+    assert _matches_slot("", set())

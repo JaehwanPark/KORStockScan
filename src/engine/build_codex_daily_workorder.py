@@ -25,6 +25,7 @@ class ProjectTask:
     due_date: str
     status: str
     track: str
+    slot: str
     assignees: str
     state: str
 
@@ -176,12 +177,17 @@ def _split_csv(raw: str) -> list[str]:
     return [part.strip() for part in raw.split(",") if part.strip()]
 
 
+def _norm(value: str) -> str:
+    return value.strip().lower()
+
+
 def _parse_project_item(
     node: dict[str, Any],
     *,
     due_field_name: str,
     status_field_name: str,
     track_field_name: str,
+    slot_field_name: str,
 ) -> ProjectTask | None:
     if bool(node.get("isArchived")):
         return None
@@ -197,6 +203,7 @@ def _parse_project_item(
     due_date = ""
     status = ""
     track = ""
+    slot = ""
     for fv in (node.get("fieldValues") or {}).get("nodes") or []:
         field_name = str(((fv.get("field") or {}).get("name")) or "").strip()
         kind = str(fv.get("__typename") or "")
@@ -207,8 +214,12 @@ def _parse_project_item(
                 status = str(fv.get("name") or "").strip()
             elif field_name == track_field_name:
                 track = str(fv.get("name") or "").strip()
+            elif field_name == slot_field_name:
+                slot = str(fv.get("name") or "").strip()
         elif kind == "ProjectV2ItemFieldTextValue" and field_name == track_field_name and not track:
             track = str(fv.get("text") or "").strip()
+        elif kind == "ProjectV2ItemFieldTextValue" and field_name == slot_field_name and not slot:
+            slot = str(fv.get("text") or "").strip()
 
     return ProjectTask(
         item_id=str(node.get("id") or "").strip(),
@@ -218,9 +229,16 @@ def _parse_project_item(
         due_date=due_date,
         status=status,
         track=track,
+        slot=slot,
         assignees=assignees,
         state=state,
     )
+
+
+def _matches_slot(item_slot: str, target_slots: set[str]) -> bool:
+    if not target_slots:
+        return True
+    return _norm(item_slot) in target_slots
 
 
 def fetch_project_tasks(
@@ -231,13 +249,16 @@ def fetch_project_tasks(
     due_field_name: str,
     status_field_name: str,
     track_field_name: str,
+    slot_field_name: str,
     include_statuses: list[str],
+    include_slots: list[str],
 ) -> tuple[str, list[ProjectTask]]:
     query = _graphql_query()
     cursor: str | None = None
     project_title = ""
     out: list[ProjectTask] = []
-    include_set = {s.strip() for s in include_statuses if s.strip()}
+    include_set = {_norm(s) for s in include_statuses if s.strip()}
+    slot_set = {_norm(s) for s in include_slots if s.strip()}
 
     while True:
         data = _graphql_request(token, query, {"owner": owner, "number": number, "cursor": cursor})
@@ -252,10 +273,13 @@ def fetch_project_tasks(
                 due_field_name=due_field_name,
                 status_field_name=status_field_name,
                 track_field_name=track_field_name,
+                slot_field_name=slot_field_name,
             )
             if not item:
                 continue
-            if include_set and item.status not in include_set:
+            if include_set and _norm(item.status) not in include_set:
+                continue
+            if not _matches_slot(item.slot, slot_set):
                 continue
             out.append(item)
         page_info = page.get("pageInfo") or {}
@@ -291,6 +315,7 @@ def render_markdown(
     project_title: str,
     generated_at: str,
     statuses: list[str],
+    slots: list[str],
     tasks: list[ProjectTask],
     max_items: int,
 ) -> str:
@@ -306,6 +331,7 @@ def render_markdown(
     lines.append(f"- 생성시각: `{generated_at}`")
     lines.append(f"- 프로젝트: `{owner}` / `#{project_number}` / `{project_title or '-'}`")
     lines.append(f"- 상태필터: `{', '.join(statuses) if statuses else '전체'}`")
+    lines.append(f"- 슬롯필터: `{', '.join(slots) if slots else '전체'}`")
     lines.append(f"- 후보건수: `{len(tasks)}` / 지시반영건수: `{len(top)}`")
     if track_counts:
         compact = ", ".join(f"{k}:{v}" for k, v in sorted(track_counts.items(), key=lambda kv: kv[0]))
@@ -318,7 +344,9 @@ def render_markdown(
     else:
         for idx, item in enumerate(top, start=1):
             lines.append(f"{idx}. `{item.title}`")
-            lines.append(f"   - 상태: `{item.status or '-'}` / 트랙: `{item.track or '-'}` / Due: `{item.due_date or '-'}`")
+            lines.append(
+                f"   - 상태: `{item.status or '-'}` / 슬롯: `{item.slot or '-'}` / 트랙: `{item.track or '-'}` / Due: `{item.due_date or '-'}`"
+            )
             if item.assignees:
                 lines.append(f"   - 담당자: `{item.assignees}`")
             if item.url:
@@ -337,7 +365,9 @@ def render_markdown(
     lines.append("[대상 항목]")
     if top:
         for item in top:
-            lines.append(f"- {item.title} | 상태={item.status or '-'} | Due={item.due_date or '-'} | ID={item.item_id}")
+            lines.append(
+                f"- {item.title} | 상태={item.status or '-'} | 슬롯={item.slot or '-'} | Due={item.due_date or '-'} | ID={item.item_id}"
+            )
     else:
         lines.append("- 없음")
     lines.append("```")
@@ -350,14 +380,17 @@ def write_markdown(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def build_daily_workorder(*, output: Path, max_items: int) -> dict[str, Any]:
+def build_daily_workorder(*, output: Path, max_items: int, slots: list[str] | None = None) -> dict[str, Any]:
     token = _env("GH_PROJECT_TOKEN", os.getenv("GITHUB_TOKEN"))
     owner = _env("GH_PROJECT_OWNER")
     number = int(_env("GH_PROJECT_NUMBER"))
     due_field_name = _env("GH_PROJECT_DUE_FIELD_NAME", "Due")
     status_field_name = _env("GH_PROJECT_STATUS_FIELD_NAME", "Status")
     track_field_name = _env("GH_PROJECT_TRACK_FIELD_NAME", "Track")
+    slot_field_name = _env("GH_PROJECT_SLOT_FIELD_NAME", "Slot")
     statuses = _split_csv(os.getenv("GH_CODEX_WORKORDER_STATUSES", "Todo,In Progress"))
+    configured_slots = _split_csv(os.getenv("GH_CODEX_WORKORDER_SLOTS", ""))
+    selected_slots = slots if slots is not None else configured_slots
 
     project_title, tasks = fetch_project_tasks(
         token=token,
@@ -366,7 +399,9 @@ def build_daily_workorder(*, output: Path, max_items: int) -> dict[str, Any]:
         due_field_name=due_field_name,
         status_field_name=status_field_name,
         track_field_name=track_field_name,
+        slot_field_name=slot_field_name,
         include_statuses=statuses,
+        include_slots=selected_slots,
     )
     generated_at = datetime.now().astimezone().isoformat(timespec="seconds")
     markdown = render_markdown(
@@ -375,6 +410,7 @@ def build_daily_workorder(*, output: Path, max_items: int) -> dict[str, Any]:
         project_title=project_title,
         generated_at=generated_at,
         statuses=statuses,
+        slots=selected_slots,
         tasks=tasks,
         max_items=max_items,
     )
@@ -385,6 +421,7 @@ def build_daily_workorder(*, output: Path, max_items: int) -> dict[str, Any]:
         "project_number": number,
         "project_title": project_title,
         "status_filter": statuses,
+        "slot_filter": selected_slots,
         "candidate_tasks": len(tasks),
         "output": str(output),
         "max_items": max_items,
@@ -395,9 +432,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Build Codex daily workorder markdown from GitHub Project")
     parser.add_argument("--output", default="tmp/codex_daily_workorder.md", help="Output markdown path")
     parser.add_argument("--max-items", type=int, default=20, help="Max items in workorder")
+    parser.add_argument("--slot", action="append", default=[], help="Target slot filter (repeatable)")
     args = parser.parse_args()
 
-    summary = build_daily_workorder(output=Path(args.output), max_items=max(1, args.max_items))
+    slot_filter = [s.strip() for s in args.slot if s.strip()] or None
+    summary = build_daily_workorder(output=Path(args.output), max_items=max(1, args.max_items), slots=slot_filter)
     print(json.dumps(summary, ensure_ascii=False))
     return 0
 

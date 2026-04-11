@@ -327,6 +327,7 @@
 2. 일정 가시성은 `Google Calendar`로 단방향 동기화한다.
 3. 동기화 기준은 `Project Due Date`이며 캘린더는 표시/알림 레이어로만 사용한다.
 4. 코덱스 작업지시는 `Issue/Project 링크 + 체크리스트`를 함께 전달한다.
+5. 코덱스 작업지시는 `Slot(PREOPEN/INTRADAY/POSTCLOSE)` 기준 자동 분리한다.
 
 운영 파일:
 - `.github/workflows/sync_project_to_google_calendar.yml`
