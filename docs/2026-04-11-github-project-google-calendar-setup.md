@@ -11,6 +11,8 @@
 
 - 워크플로우: `.github/workflows/sync_project_to_google_calendar.yml`
 - 동기화 스크립트: `src/engine/sync_github_project_calendar.py`
+- 워크플로우(문서 backlog -> Project): `.github/workflows/sync_docs_backlog_to_project.yml`
+- 파싱/반영 스크립트: `src/engine/sync_docs_backlog_to_project.py`
 
 동작 방식:
 
@@ -18,6 +20,13 @@
 2. Due Date가 있는 항목만 Google Calendar 이벤트로 upsert
 3. 항목 식별은 `extendedProperties.private.gh_project_item_id` 사용
 4. 소스는 항상 GitHub, 캘린더는 표시/알림 레이어
+
+문서 backlog 반영 동작:
+
+1. `plan`, `4/13 체크리스트`, `스캘핑 로직`, `AI 프롬프트` 문서를 파싱
+2. `Done/[x]` 항목 제외
+3. 남은 항목만 GitHub Project Draft Item으로 upsert
+4. 기존 같은 제목이 있으면 중복 생성하지 않고 skip
 
 ---
 
@@ -65,6 +74,12 @@ Settings -> Secrets and variables -> Actions
   - 예: `[KORStockScan]`
 - `SYNC_DRY_RUN`
   - 초기 검증 시 `true` 권장, 운영 시 `false`
+- `GH_PROJECT_TODO_OPTION_NAME`
+  - 기본: `Todo`
+  - Project `Status` 필드의 기본 옵션명
+- `DOC_BACKLOG_SYNC_DRY_RUN`
+  - `true`면 문서 파싱 후 생성 예정 수량만 출력
+  - `false`면 실제 Project Draft Item 생성
 
 ---
 
@@ -90,6 +105,12 @@ Settings -> Secrets and variables -> Actions
 1. 스케줄(`*/30 * * * *`)로 자동 반영 확인
 2. 모바일은 GitHub Mobile + Google Calendar 앱으로 모니터링
 3. 작업 지시는 Issue/Project 코멘트로 유지
+
+문서 backlog 정기 반영:
+
+1. `Sync Docs Backlog To GitHub Project` 워크플로우는 `6시간 주기`(`15 */6 * * *`)로 자동 실행
+2. 운영 초기에는 `DOC_BACKLOG_SYNC_DRY_RUN=true`로 1~2회 로그 검증
+3. 검증 후 `DOC_BACKLOG_SYNC_DRY_RUN=false`로 전환
 
 ---
 

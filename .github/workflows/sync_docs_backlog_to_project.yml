@@ -1,0 +1,58 @@
+name: Sync Docs Backlog To GitHub Project
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "15 */6 * * *"
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  sync-docs-backlog:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Validate required config
+        env:
+          GH_PROJECT_TOKEN: ${{ secrets.GH_PROJECT_TOKEN }}
+          GH_PROJECT_OWNER: ${{ vars.GH_PROJECT_OWNER }}
+          GH_PROJECT_NUMBER: ${{ vars.GH_PROJECT_NUMBER }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for key in GH_PROJECT_TOKEN GH_PROJECT_OWNER GH_PROJECT_NUMBER; do
+            if [ -z "${!key:-}" ]; then
+              echo "::error::Missing required secret/variable: $key"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Sync remaining tasks from docs
+        env:
+          GH_PROJECT_TOKEN: ${{ secrets.GH_PROJECT_TOKEN }}
+          GH_PROJECT_OWNER: ${{ vars.GH_PROJECT_OWNER }}
+          GH_PROJECT_NUMBER: ${{ vars.GH_PROJECT_NUMBER }}
+          GH_PROJECT_STATUS_FIELD_NAME: ${{ vars.GH_PROJECT_STATUS_FIELD_NAME }}
+          GH_PROJECT_DUE_FIELD_NAME: ${{ vars.GH_PROJECT_DUE_FIELD_NAME }}
+          GH_PROJECT_TODO_OPTION_NAME: ${{ vars.GH_PROJECT_TODO_OPTION_NAME }}
+          DOC_BACKLOG_SYNC_DRY_RUN: ${{ vars.DOC_BACKLOG_SYNC_DRY_RUN }}
+        run: |
+          if [ "${DOC_BACKLOG_SYNC_DRY_RUN:-false}" = "true" ]; then
+            PYTHONPATH=. python -m src.engine.sync_docs_backlog_to_project --dry-run
+          else
+            PYTHONPATH=. python -m src.engine.sync_docs_backlog_to_project
+          fi

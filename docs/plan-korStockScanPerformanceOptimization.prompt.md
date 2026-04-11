@@ -330,7 +330,9 @@
 
 운영 파일:
 - `.github/workflows/sync_project_to_google_calendar.yml`
+- `.github/workflows/sync_docs_backlog_to_project.yml`
 - `src/engine/sync_github_project_calendar.py`
+- `src/engine/sync_docs_backlog_to_project.py`
 
 ## 관련 문서
 

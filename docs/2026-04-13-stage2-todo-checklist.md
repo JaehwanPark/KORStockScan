@@ -123,6 +123,7 @@
 - [ ] 원격 `latency remote_v2` 설정 유지 상태 확인
 - [ ] `fetch_remote_scalping_logs`를 `live snapshot copy -> tar` 방식으로 보강할지 장전 전 최종 결정
 - [ ] `GitHub Project -> Google Calendar` 동기화 워크플로우 마지막 실행 상태 확인
+- [ ] `Sync Docs Backlog To GitHub Project` 워크플로우 마지막 실행 상태 확인
 - [ ] `RELAX-LATENCY / RELAX-DYNSTR / RELAX-OVERBOUGHT` 시작 상태를 체크리스트에 고정
 - [x] `AI 코딩 작업지시서` 기준 `Phase 0 / Phase 1` 선반영 범위 확정
 - [x] `latency reason breakdown / expired_armed / partial fill sync` 계측 반영 여부 확인
