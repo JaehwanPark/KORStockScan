@@ -1,5 +1,6 @@
 from src.engine.sync_docs_backlog_to_project import (
     BacklogTask,
+    DOC_PROMPT,
     DOC_SCALPING,
     DOC_PLAN,
     _desired_status_option_id,
@@ -43,6 +44,17 @@ def test_parse_prompt_has_priority_and_detail_tasks():
     titles = [t.title for t in tasks]
     assert any("SCALP_PRESET_TP SELL 의도 확인" in title for title in titles)
     assert any(title.startswith("작업 10 ") for title in titles)
+
+
+def test_parse_prompt_fallback_when_primary_missing(monkeypatch):
+    monkeypatch.setattr(
+        "src.engine.sync_docs_backlog_to_project.DOC_PROMPT",
+        DOC_PROMPT.parent / "__missing-prompt__.md",
+    )
+    monkeypatch.setenv("DOC_PROMPT_PATH", str(DOC_PROMPT))
+    tasks = parse_prompt_tasks()
+    assert len(tasks) > 0
+    assert all(str(DOC_PROMPT) in t.source for t in tasks)
 
 
 def test_collect_backlog_tasks_deduped():

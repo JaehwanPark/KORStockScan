@@ -102,16 +102,22 @@ def _read(path: Path) -> str:
 
 def _read_optional(path: Path) -> str | None:
     if not path.exists():
-        print(f"[DOC_BACKLOG_SYNC_WARN] missing source doc: {path}", file=sys.stderr)
         return None
     return _read(path)
 
 
 def _read_candidates(paths: list[Path]) -> tuple[Path, str] | None:
+    checked: list[str] = []
     for path in paths:
+        checked.append(str(path))
         text = _read_optional(path)
         if text is not None:
             return path, text
+    if checked:
+        print(
+            f"[DOC_BACKLOG_SYNC_WARN] missing source doc candidates: {', '.join(checked)}",
+            file=sys.stderr,
+        )
     return None
 
 
@@ -122,6 +128,25 @@ def _scalping_doc_candidates() -> list[Path]:
         candidates.append(Path(env_path))
     candidates.append(DOC_SCALPING)
     candidates.extend(sorted(Path("docs").glob("*-scalping-ai-coding-instructions.md"), reverse=True))
+
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for p in candidates:
+        key = str(p)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(p)
+    return deduped
+
+
+def _prompt_doc_candidates() -> list[Path]:
+    candidates: list[Path] = []
+    env_path = os.getenv("DOC_PROMPT_PATH", "").strip()
+    if env_path:
+        candidates.append(Path(env_path))
+    candidates.append(DOC_PROMPT)
+    candidates.extend(sorted(Path("docs").glob("*-scalping-ai-prompt-coding-instructions.md"), reverse=True))
 
     deduped: list[Path] = []
     seen: set[str] = set()
@@ -267,7 +292,7 @@ def parse_scalping_logic_tasks() -> list[BacklogTask]:
 
 
 def parse_prompt_tasks() -> list[BacklogTask]:
-    loaded = _read_candidates([DOC_PROMPT])
+    loaded = _read_candidates(_prompt_doc_candidates())
     if not loaded:
         return []
     source_path, text = loaded
