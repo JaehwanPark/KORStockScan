@@ -669,6 +669,7 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
 
     slot_option_ids: dict[str, str] = {}
     slot_field_type = str(slot_field.get("__typename") or "") if slot_field else ""
+    slot_field_data_type = str(slot_field.get("dataType") or "") if slot_field else ""
     if slot_field and slot_field_type == "ProjectV2SingleSelectField":
         options = slot_field.get("options") or []
         slot_option_ids = {
@@ -676,11 +677,26 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
             "INTRADAY": _find_option_id_by_name(options, slot_intraday_option_name),
             "POSTCLOSE": _find_option_id_by_name(options, slot_postclose_option_name),
         }
+        missing = [name for name, oid in slot_option_ids.items() if not oid]
+        if auto_fill_slot and missing:
+            print(
+                f"[DOC_BACKLOG_SYNC_WARN] slot option mapping missing: {', '.join(missing)}",
+                file=sys.stderr,
+            )
+    elif auto_fill_slot and not slot_field:
+        print(
+            f"[DOC_BACKLOG_SYNC_WARN] slot field not found: {slot_field_name}",
+            file=sys.stderr,
+        )
 
     add_mut = _mutation_add_draft()
     upd_mut = _mutation_update_field()
     tasks_by_title = {_title_for_project(task): task for task in tasks}
     desired_open_titles = set(tasks_by_title.keys())
+    managed_open_items = [
+        item for item in existing_items if _is_managed_project_title(item.title) and item.title in desired_open_titles
+    ]
+    managed_open_blank_slot = sum(1 for item in managed_open_items if not item.slot.strip())
 
     created = 0
     skipped_existing = 0
@@ -864,6 +880,12 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
     for t in tasks:
         by_track[t.track] = by_track.get(t.track, 0) + 1
 
+    slot_update_mode = "none"
+    if slot_field_type == "ProjectV2SingleSelectField":
+        slot_update_mode = "single_select"
+    elif slot_field_type == "ProjectV2Field" and slot_field_data_type == "TEXT":
+        slot_update_mode = "text"
+
     return {
         "project_owner": owner,
         "project_number": number,
@@ -875,6 +897,23 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
         "status_synced_done": synced_status_done,
         "slot_filled": synced_slot_filled,
         "slot_reclassified": synced_slot_reclassified,
+        "slot_debug": {
+            "slot_field_name": slot_field_name,
+            "slot_field_detected": bool(slot_field),
+            "slot_field_type": slot_field_type or "-",
+            "slot_field_data_type": slot_field_data_type or "-",
+            "slot_update_mode": slot_update_mode,
+            "auto_fill_slot": auto_fill_slot,
+            "reclassify_slot": reclassify_slot,
+            "slot_option_name_map": {
+                "PREOPEN": slot_preopen_option_name,
+                "INTRADAY": slot_intraday_option_name,
+                "POSTCLOSE": slot_postclose_option_name,
+            },
+            "slot_option_id_map": slot_option_ids,
+            "managed_open_items": len(managed_open_items),
+            "managed_open_items_blank_slot": managed_open_blank_slot,
+        },
         "track_breakdown": by_track,
     }
 
