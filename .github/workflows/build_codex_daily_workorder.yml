@@ -52,6 +52,7 @@ jobs:
           GH_CODEX_WORKORDER_STATUSES: ${{ vars.GH_CODEX_WORKORDER_STATUSES }}
           CODEX_WORKORDER_MAX_ITEMS: ${{ vars.CODEX_WORKORDER_MAX_ITEMS }}
         run: |
+          mkdir -p tmp
           PYTHONPATH=. python -m src.engine.build_codex_daily_workorder \
             --output tmp/codex_daily_workorder.md \
             --max-items "${CODEX_WORKORDER_MAX_ITEMS:-20}" | tee tmp/codex_daily_workorder_summary.json
