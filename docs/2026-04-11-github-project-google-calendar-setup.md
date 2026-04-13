@@ -134,6 +134,7 @@ Settings -> Secrets and variables -> Actions
   - 예: `Todo,In Progress,Blocked`  
   - 비우면 Due Date 있는 항목 전체 동기화
   - 값이 설정돼 있으면 `Status`가 비어 있거나 파싱되지 않은 항목은 캘린더에서 제외
+  - 자동관리 대상(`[Plan]`, `[Checklist0413]`, `[ScalpingLogic]`, `[AIPrompt]`)은 현재 문서 backlog에 남아 있는 제목만 캘린더에 유지
 - `GCAL_EVENT_PREFIX`  
   - 예: `[KORStockScan]`
 - `GCAL_EVENT_TIMEZONE`
@@ -274,6 +275,7 @@ Codex 일일 작업지시서 자동 생성:
 - `sync_docs_backlog_to_project` 실행 결과에서 `status_synced_done`이 기대대로 올라갔는지 확인
 - `GH_SYNC_ONLY_STATUSES`를 쓰는 경우 `Todo,In Progress`처럼 open 상태만 포함했는지 확인
 - 수동 항목이라도 `Status`가 비어 있으면 최신 스크립트 기준 캘린더 sync 대상에서 제외된다
+- 자동관리 대상은 문서 backlog에 현재 남아 있지 않으면 `Project` 상태가 늦게 갱신돼도 캘린더에서 제거된다
 
 ### 시간이 아니라 종일 이벤트로 생김
 
