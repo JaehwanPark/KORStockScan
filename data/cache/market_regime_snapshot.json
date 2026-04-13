@@ -1,43 +1,43 @@
 {
-  "timestamp": "2026-04-08T13:02:46.423221",
-  "vix_close": 25.780000686645508,
-  "vix_ma3": 24.606667200724285,
+  "timestamp": "2026-04-13T11:16:47.450418",
+  "vix_close": 19.229999542236328,
+  "vix_ma3": 19.920000076293945,
   "vix_peak_passed": false,
-  "vix_two_day_down": false,
+  "vix_two_day_down": true,
   "vix_extreme": false,
-  "wti_close": 112.94999694824219,
-  "wti_rsi": 72.1607418354743,
-  "wti_macd": 8.505475524037578,
-  "wti_macd_signal": 7.544188376409993,
+  "wti_close": 104.45999908447266,
+  "wti_rsi": 58.49436263016515,
+  "wti_macd": 5.532992237304654,
+  "wti_macd_signal": 6.6411024354042425,
   "wti_dead_cross": false,
-  "wti_from_recent_high_pct": 0.0,
-  "oil_reversal": false,
-  "fng_value": 22.1714285714286,
-  "fng_prev": 22.1714285714286,
-  "fng_description": "extreme fear",
-  "fng_extreme_fear": true,
+  "wti_from_recent_high_pct": -7.51659857738638,
+  "oil_reversal": true,
+  "fng_value": 37.7428571428571,
+  "fng_prev": 37.7428571428571,
+  "fng_description": "fear",
+  "fng_extreme_fear": false,
   "fng_recovery": false,
   "allow_swing_entry": false,
-  "swing_score": -10,
+  "swing_score": 35,
   "volatility_mode": "NORMAL",
   "risk_state": "RISK_OFF",
   "reasons": [
-    "공포탐욕지수 극단적 공포 유지"
+    "원유 반전 시그널"
   ],
   "debug": {
     "oil_rsi_turned": false,
-    "fng_curr": 22.1714285714286,
-    "fng_prev": 22.1714285714286,
+    "fng_curr": 37.7428571428571,
+    "fng_prev": 37.7428571428571,
     "score_threshold": 70,
     "component_scores": {
       "vix": 0,
-      "oil": 0,
-      "fng": -10
+      "oil": 35,
+      "fng": 0
     },
     "vix_signal": "none",
-    "oil_signal": "none",
-    "fng_signal": "extreme_fear"
+    "oil_signal": "reversal",
+    "fng_signal": "none"
   },
-  "cached_session_date": "2026-04-08",
-  "cached_at": "2026-04-08T13:02:46.434330+09:00"
+  "cached_session_date": "2026-04-13",
+  "cached_at": "2026-04-13T11:16:47.458569+09:00"
 }

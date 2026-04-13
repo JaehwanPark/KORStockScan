@@ -21,14 +21,14 @@
 1. 30분마다(또는 수동 실행) GitHub Project 항목 조회
 2. Due Date가 있는 항목만 Google Calendar 이벤트로 upsert
 3. `Slot(PREOPEN/INTRADAY/POSTCLOSE)`이 있으면 시간 지정 이벤트 + 시작 알림으로 생성
-4. `TimeWindow` 필드가 있으면 캘린더 시간은 `TimeWindow`를 최우선 적용
-5. 제목에 시간 범위(`13:20~13:35`)가 있으면 Slot 기본시간보다 우선 적용
+4. 거래일에는 `TimeWindow` 필드가 있으면 캘린더 시간은 `TimeWindow`를 최우선 적용
+5. 거래일에는 제목에 시간 범위(`13:20~13:35`)가 있으면 Slot 기본시간보다 우선 적용
 6. `Slot`이 없고 제목/TimeWindow 시간도 없으면 종일(all-day) 이벤트로 생성
 7. 항목 식별은 `extendedProperties.private.gh_project_item_id` 사용
 8. 현재 Project 집합에 없는 기존 관리 이벤트는 다음 sync에서 삭제한다
 9. 소스는 항상 GitHub, 캘린더는 표시/알림 레이어
-10. 휴장일에는 슬롯 기본시간을 `INTRADAY` 기준으로 재매핑한다
-11. 단, 제목 시간범위나 `TimeWindow`가 있으면 그 시간을 우선한다
+10. 휴장일에는 `PREOPEN/POSTCLOSE`의 `TimeWindow`와 제목 명시시간도 무시하고 `INTRADAY` 기준으로 재매핑한다
+11. 즉 휴장일 운영큐는 사실상 `INTRADAY` 단일 시간축으로 본다
 
 문서 backlog 반영 동작:
 
@@ -58,6 +58,12 @@
    - `## 작업 N.` 상세 작업만 사용
    - 우선순위 요약 표는 중복 소스로 쓰지 않는다
    - `P0` 작업은 `DOC_BACKLOG_TODAY` 또는 `Asia/Seoul` 오늘 날짜를 Due로 부여한다
+
+운영 강제 원칙:
+
+1. 지금 즉시 처리하지 않는 작업, 특정 시각에 실행할 작업, 익일/장후 재확인 작업은 답변 텍스트에만 남기지 않고 반드시 문서 backlog 항목으로 남긴다.
+2. 시간 정보가 있으면 `Due`, `Slot`, `TimeWindow`까지 함께 잡아 `Project -> Calendar` 자동화 대상이 되게 유지한다.
+3. env/권한이 있는 세션에서는 문서 수정 후 같은 턴에 `sync_docs_backlog_to_project`와 가능하면 `sync_github_project_calendar`까지 이어서 실행한다.
 
 ---
 

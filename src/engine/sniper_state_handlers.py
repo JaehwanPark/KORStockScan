@@ -631,6 +631,53 @@ def _build_ai_overlap_log_fields(
     }
 
 
+def _build_ai_ops_log_fields(
+    ai_decision,
+    *,
+    ai_score_raw=None,
+    ai_score_after_bonus=None,
+    entry_score_threshold=None,
+    big_bite_bonus_applied=None,
+    ai_cooldown_blocked=None,
+):
+    payload = ai_decision or {}
+    out = {
+        "ai_parse_ok": bool(payload.get("ai_parse_ok", False)),
+        "ai_parse_fail": bool(payload.get("ai_parse_fail", False)),
+        "ai_fallback_score_50": bool(payload.get("ai_fallback_score_50", False)),
+        "ai_response_ms": int(payload.get("ai_response_ms", 0) or 0),
+        "ai_prompt_type": str(payload.get("ai_prompt_type", "-") or "-"),
+        "ai_result_source": str(payload.get("ai_result_source", "-") or "-"),
+    }
+    if ai_score_raw is not None:
+        out["ai_score_raw"] = f"{float(ai_score_raw or 0.0):.1f}"
+    if ai_score_after_bonus is not None:
+        out["ai_score_after_bonus"] = f"{float(ai_score_after_bonus or 0.0):.1f}"
+    if entry_score_threshold is not None:
+        out["entry_score_threshold"] = f"{float(entry_score_threshold or 0.0):.1f}"
+    if big_bite_bonus_applied is not None:
+        out["big_bite_bonus_applied"] = bool(big_bite_bonus_applied)
+    if ai_cooldown_blocked is not None:
+        out["ai_cooldown_blocked"] = bool(ai_cooldown_blocked)
+    return out
+
+
+def _should_run_watching_prompt_75_shadow(ai_decision, ai_score):
+    if not bool(getattr(TRADING_RULES, "AI_WATCHING_75_PROMPT_SHADOW_ENABLED", False)):
+        return False
+    try:
+        score = float(ai_score or 0.0)
+    except Exception:
+        return False
+    min_score = float(getattr(TRADING_RULES, "AI_WATCHING_75_PROMPT_SHADOW_MIN_SCORE", 75) or 75)
+    max_score = float(getattr(TRADING_RULES, "AI_WATCHING_75_PROMPT_SHADOW_MAX_SCORE", 79) or 79)
+    if score < min_score or score > max_score:
+        return False
+    if bool((ai_decision or {}).get("ai_fallback_score_50", False)):
+        return False
+    return str((ai_decision or {}).get("action", "WAIT") or "WAIT").upper() != "BUY"
+
+
 def _resolve_holding_elapsed_sec(stock):
     now_ts = time.time()
     raw_order_time = stock.get("order_time")
@@ -1440,8 +1487,6 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                             buy_ratio=f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
                             exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
                             net_buy_qty=int(momentum_gate.get("window_net_buy_qty", 0) or 0),
-                            threshold_profile=momentum_gate.get("threshold_profile"),
-                            momentum_tag=momentum_gate.get("position_tag"),
                             **_build_ai_overlap_log_fields(
                                 stock=stock,
                                 ai_score=current_ai_score,
@@ -1599,7 +1644,49 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                                     blocked_stage="-",
                                     overlap_snapshot=overlap_snapshot,
                                 ),
+                                **_build_ai_ops_log_fields(
+                                    ai_decision,
+                                    ai_score_raw=ai_score,
+                                    ai_score_after_bonus=ai_score,
+                                    entry_score_threshold=75,
+                                    big_bite_bonus_applied=False,
+                                    ai_cooldown_blocked=False,
+                                ),
                             )
+
+                            if _should_run_watching_prompt_75_shadow(ai_decision, ai_score):
+                                shadow_decision = ai_engine.analyze_target_shadow_prompt(
+                                    stock['name'],
+                                    ws_data,
+                                    recent_ticks,
+                                    recent_candles,
+                                    strategy="SCALPING",
+                                    prompt_type="scalping_buy75_shadow",
+                                    cache_profile="watching_prompt75_shadow",
+                                )
+                                shadow_action = str(shadow_decision.get("action", "WAIT") or "WAIT").upper()
+                                shadow_score = float(shadow_decision.get("score", 50) or 50)
+                                _log_entry_pipeline(
+                                    stock,
+                                    code,
+                                    "watching_prompt_75_shadow",
+                                    main_action=str(action or "WAIT").upper(),
+                                    main_score=f"{float(ai_score or 0.0):.1f}",
+                                    shadow_action=shadow_action,
+                                    shadow_score=f"{shadow_score:.1f}",
+                                    buy_diverged=str((str(action or "WAIT").upper() == "BUY") != (shadow_action == "BUY")).lower(),
+                                    score_band=f"{int(float(ai_score or 0.0))}",
+                                    threshold_live=80,
+                                    threshold_shadow=75,
+                                    **_build_ai_ops_log_fields(
+                                        shadow_decision,
+                                        ai_score_raw=shadow_score,
+                                        ai_score_after_bonus=shadow_score,
+                                        entry_score_threshold=75,
+                                        big_bite_bonus_applied=False,
+                                        ai_cooldown_blocked=False,
+                                    ),
+                                )
 
                             if ai_score != 50:
                                 stock['rt_ai_prob'] = ai_score / 100.0
@@ -1673,6 +1760,30 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                     stock['big_bite_boosted'] = False
                     stock['big_bite_boost_value'] = 0
 
+                if ai_engine and is_vip_target and last_ai_time > 0 and time_elapsed <= AI_WATCHING_COOLDOWN:
+                    _log_entry_pipeline(
+                        stock,
+                        code,
+                        "ai_cooldown_blocked",
+                        cooldown_elapsed_sec=int(time_elapsed),
+                        cooldown_threshold_sec=AI_WATCHING_COOLDOWN,
+                        **_build_ai_ops_log_fields(
+                            {
+                                "ai_parse_ok": False,
+                                "ai_parse_fail": False,
+                                "ai_fallback_score_50": False,
+                                "ai_response_ms": 0,
+                                "ai_prompt_type": "scalping_shared",
+                                "ai_result_source": "watching_cooldown",
+                            },
+                            ai_score_raw=current_ai_score,
+                            ai_score_after_bonus=current_ai_score,
+                            entry_score_threshold=75,
+                            big_bite_bonus_applied=bool(boost_applied_value),
+                            ai_cooldown_blocked=True,
+                        ),
+                    )
+
                 if current_ai_score < 75 and current_ai_score != 50:
                     if time.time() - last_ai_time < 1.0:
                         action_str = "WAIT(진입 보류)" if current_ai_score > 40 else "DROP(진입 차단)"
@@ -1695,6 +1806,14 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                             threshold_profile=stock.get("entry_threshold_profile"),
                             overbought_blocked=False,
                             blocked_stage="blocked_ai_score",
+                        ),
+                        **_build_ai_ops_log_fields(
+                            ai_decision if "ai_decision" in locals() else {},
+                            ai_score_raw=current_ai_score,
+                            ai_score_after_bonus=current_ai_score,
+                            entry_score_threshold=75,
+                            big_bite_bonus_applied=bool(boost_applied_value),
+                            ai_cooldown_blocked=False,
                         ),
                     )
                     return
@@ -2143,6 +2262,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                 ws_jitter_ms=latency_gate.get('ws_jitter_ms'),
                 spread_ratio=f"{float(latency_gate.get('spread_ratio', 0.0) or 0.0):.6f}",
                 quote_stale=bool(latency_gate.get('quote_stale')),
+                latency_danger_reasons=latency_gate.get('latency_danger_reasons'),
                 signal_price=int(latency_gate.get('signal_price', 0) or 0),
                 latest_price=int(latency_gate.get('latest_price', 0) or 0),
                 computed_allowed_slippage=int(latency_gate.get('computed_allowed_slippage', 0) or 0),
@@ -2201,6 +2321,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             ws_jitter_ms=latency_gate.get('ws_jitter_ms'),
             spread_ratio=f"{float(latency_gate.get('spread_ratio', 0.0) or 0.0):.6f}",
             quote_stale=bool(latency_gate.get('quote_stale')),
+            latency_danger_reasons=latency_gate.get('latency_danger_reasons'),
             signal_price=int(latency_gate.get('signal_price', 0) or 0),
             latest_price=int(latency_gate.get('latest_price', 0) or 0),
             computed_allowed_slippage=int(latency_gate.get('computed_allowed_slippage', 0) or 0),
@@ -2591,7 +2712,23 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                     stock['ai_review_action'] = ai_action
                     stock['ai_review_score'] = ai_score
 
+                    # Shared scalping prompt still emits BUY|WAIT|DROP today.
+                    # Keep SELL as an explicit placeholder until a dedicated HOLDING/exit action schema lands.
                     if ai_action in ['SELL', 'DROP']:
+                        _log_holding_pipeline(
+                            stock,
+                            code,
+                            "scalp_preset_tp_ai_exit_action",
+                            ai_action_raw=ai_action,
+                            ai_reason_raw=ai_decision.get('reason', '-'),
+                            ai_action_used_for_exit=str(ai_action in ['SELL', 'DROP']).lower(),
+                            **_build_ai_ops_log_fields(
+                                ai_decision,
+                                ai_score_raw=ai_score,
+                                ai_score_after_bonus=ai_score,
+                                ai_cooldown_blocked=False,
+                            ),
+                        )
                         print(
                             "🛑 [SCALP 출구엔진 AI] 모멘텀 둔화 감지. 1.5% 포기 후 즉시 최유리(IOC) "
                             "청산!"
@@ -2603,6 +2740,20 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                         )
                         return
                     else:
+                        _log_holding_pipeline(
+                            stock,
+                            code,
+                            "scalp_preset_tp_ai_hold_action",
+                            ai_action_raw=ai_action,
+                            ai_reason_raw=ai_decision.get('reason', '-'),
+                            ai_action_used_for_exit="false",
+                            **_build_ai_ops_log_fields(
+                                ai_decision,
+                                ai_score_raw=ai_score,
+                                ai_score_after_bonus=ai_score,
+                                ai_cooldown_blocked=False,
+                            ),
+                        )
                         print(
                             "✅ [SCALP 출구엔진 AI] 돌파 모멘텀 유지(WAIT/BUY). 1.5% 유지, +0.3% 보호선 구축."
                         )
@@ -2823,6 +2974,12 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                             review_cd_sec=dynamic_max_cd,
                             review_ms=int((time.perf_counter() - holding_ai_review_started) * 1000),
                             ai_cache="hit" if ai_cache_hit else "miss",
+                            **_build_ai_ops_log_fields(
+                                ai_decision,
+                                ai_score_raw=raw_ai_score,
+                                ai_score_after_bonus=current_ai_score,
+                                ai_cooldown_blocked=False,
+                            ),
                         )
 
             except Exception as e:

@@ -1,85 +1,83 @@
 {
-  "bundle_as_of": "2026-04-07T22:00:11Z",
+  "bundle_as_of": "2026-04-12T22:00:13Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 6616.85,
-    "prev_value": 6611.83,
-    "change": 5.02,
-    "change_pct": 0.08,
-    "as_of": "2026-04-07T20:00:00Z",
-    "source": "Dow Jones Market Data / Associated Press"
+    "value": 6816.89,
+    "prev_value": 6824.66,
+    "change": -7.77,
+    "change_pct": -0.11,
+    "as_of": "2026-04-10T20:00:00Z",
+    "source": "BNN Bloomberg"
   },
   "nasdaq": {
     "name": "NASDAQ Composite",
-    "value": 22017.85,
-    "prev_value": 21996.34,
-    "change": 21.51,
-    "change_pct": 0.1,
-    "as_of": "2026-04-07T20:00:00Z",
-    "source": "Dow Jones Market Data / Associated Press"
+    "value": 22902.89,
+    "prev_value": 22822.41,
+    "change": 80.48,
+    "change_pct": 0.35,
+    "as_of": "2026-04-10T20:00:00Z",
+    "source": "BNN Bloomberg"
   },
   "vix": {
     "name": "VIX",
-    "value": 25.78,
-    "prev_value": 24.17,
-    "change": 1.61,
-    "change_pct": 6.66,
-    "as_of": "2026-04-07T20:15:00Z",
-    "source": "Cboe Global Markets"
+    "value": 19.23,
+    "prev_value": 19.49,
+    "change": -0.26,
+    "change_pct": -1.33,
+    "as_of": "2026-04-10T20:00:00Z",
+    "source": "YCharts"
   },
   "us10y": {
-    "name": "US 10Y Treasury Yield",
-    "value": 4.35,
-    "prev_value": 4.33,
-    "change": 0.02,
-    "change_pct": 0.46,
-    "as_of": "2026-04-07T22:00:11Z",
-    "source": "Trading Economics"
+    "name": "US 10-Year Treasury Yield",
+    "value": 4.317,
+    "prev_value": 4.29,
+    "change": 0.027,
+    "change_pct": 0.63,
+    "as_of": "2026-04-10T20:00:00Z",
+    "source": "TradingView"
   },
   "brent": {
     "name": "Brent Crude",
-    "value": 109.27,
-    "prev_value": 109.82,
-    "change": -0.55,
-    "change_pct": -0.5,
-    "as_of": "2026-04-07T22:00:11Z",
-    "source": "LA Times / Trading Economics"
+    "value": 95.2,
+    "prev_value": 95.92,
+    "change": -0.72,
+    "change_pct": -0.75,
+    "as_of": "2026-04-10T20:00:00Z",
+    "source": "Trading Economics"
   },
   "headlines": [
     {
-      "title": "Trump warns a 'whole civilization will die tonight' if a deal with Iran isn't reached",
-      "source": "Washington Post",
-      "published_at": "2026-04-07T17:10:00Z",
-      "url": "https://www.washingtonpost.com"
+      "title": "Trump orders U.S. Navy blockade of Strait of Hormuz after peace talks fail",
+      "source": "Associated Press",
+      "published_at": "2026-04-12T12:07:00Z",
+      "url": "https://www.9news.com/"
     },
     {
-      "title": "Pakistan asks for 2-week ceasefire amid diplomatic efforts",
-      "source": "CBS News",
-      "published_at": "2026-04-07T20:40:00Z",
-      "url": "https://www.cbsnews.com"
+      "title": "U.S.-Iran peace talks in Pakistan collapse without an agreement; VP JD Vance departs",
+      "source": "The Guardian",
+      "published_at": "2026-04-12T03:06:00Z",
+      "url": "https://www.theguardian.com/"
     },
     {
-      "title": "Stocks swing from losses to a tiny gain ahead of Trump's deadline for Iran",
-      "source": "LA Times",
-      "published_at": "2026-04-07T20:28:00Z",
-      "url": "https://www.latimes.com"
+      "title": "Iran's Revolutionary Guards warn of 'firm and forceful response' to U.S. military vessels in Hormuz",
+      "source": "The Hindu",
+      "published_at": "2026-04-12T19:07:00Z",
+      "url": "https://www.thehindu.com/"
     },
     {
-      "title": "US 10-Year Treasury Yield Rises for Second Session to Around 4.35%",
+      "title": "Yield Trap: 10-Year Treasury Hits 4.317% as Energy Shocks Chill Tech Sector Growth",
+      "source": "Chronicle Journal",
+      "published_at": "2026-04-10T14:22:00Z",
+      "url": "https://www.chroniclejournal.com/"
+    },
+    {
+      "title": "Brent crude falls to $95.20 ahead of weekend talks, but faces renewed upside risks following collapsed negotiations",
       "source": "Trading Economics",
-      "published_at": "2026-04-07T18:00:00Z",
-      "url": "https://tradingeconomics.com"
-    },
-    {
-      "title": "Brent Crude eases to $109.27 but remains volatile due to Kharg Island strikes",
-      "source": "LA Times",
-      "published_at": "2026-04-07T20:28:00Z",
-      "url": "https://www.latimes.com"
+      "published_at": "2026-04-10T20:00:00Z",
+      "url": "https://tradingeconomics.com/"
     }
   ],
   "notes": [
-    "Market values and headlines are compiled based on the latest available updates on 2026-04-07.",
-    "Major US indexes rallied slightly at the end of the session on hopes for a Pakistan-brokered ceasefire.",
-    "Markets are closely monitoring President Trump's deadline for Iran regarding the reopening of the Strait of Hormuz."
+    "모든 시장 데이터는 2026년 4월 10일(금) 마감 기준입니다. 4월 12일 일요일에 진행된 미국-이란 파키스탄 평화 협상이 결렬되고, 트럼프 대통령이 호르무즈 해협 봉쇄를 지시함에 따라 월요일 개장 시 유가(Brent) 폭등 및 증시, 국채 금리 등 금융 시장 전반의 큰 변동성이 예상됩니다."
   ]
 }

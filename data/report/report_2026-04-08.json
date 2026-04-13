@@ -1,21 +1,21 @@
 {
   "date": "2026-04-08",
   "stats": {
-    "quote_date": "2026-04-07",
-    "ma20_ratio": 26.4,
-    "avg_rsi": 47.2,
-    "avg_prob": 53.1,
-    "avg_bull": 55.9,
-    "total_valid": 144,
-    "qualified_count": 6,
-    "status_text": "하락장",
-    "color": "text-danger",
-    "tone": "bad"
+    "quote_date": "2026-04-08",
+    "ma20_ratio": 72.0,
+    "avg_rsi": 63.8,
+    "avg_prob": 48.5,
+    "avg_bull": 46.7,
+    "total_valid": 132,
+    "qualified_count": 3,
+    "status_text": "상승장",
+    "color": "text-success",
+    "tone": "good"
   },
   "insights": {
-    "dashboard": "시총 상위 우량주 중 20일선 위에 있는 종목이 26.4%에 그칩니다.",
-    "psychology": "상승장 전용 모델 평균 확신도는 55.9%로 낮습니다. AI는 방어적 심리를 유지하는 구간으로 해석합니다.",
-    "strategy": "현금 비중을 높이고, 반등 확인 전까지는 무리한 추격 매수를 피하는 편이 좋습니다.",
+    "dashboard": "시총 상위 우량주 중 20일선 위 종목 비율이 72.0%로 넓게 확산돼 있습니다.",
+    "psychology": "상승장 전용 모델 평균 확신도는 46.7%입니다. 주도주 추세가 살아있는 환경으로 읽힙니다.",
+    "strategy": "수급이 붙는 주도주 위주로 눌림목 스윙과 추세 추종을 병행하기 좋은 구간입니다.",
     "execution_feedback": "직전 매매일 실현손익은 5,870원, 승률은 60.0%였습니다."
   },
   "performance": {
@@ -193,85 +193,19 @@
   },
   "stocks": [
     {
-      "code": "035420",
-      "name": "NAVER",
-      "price": 195900,
-      "price_text": "195,900원",
-      "ma20_state": "역배열",
-      "ma20_icon": "🔴",
-      "ai_prob": 62.3,
-      "ai_prob_text": "62.3%",
-      "ai_details": {
-        "hybrid_xgb": 50.8,
-        "hybrid_lgbm": 26.3,
-        "bull_xgb": 74.1,
-        "bull_lgbm": 76.5
-      },
-      "supply": {
-        "foreign": "양호",
-        "institution": "이탈"
-      },
-      "result": "합격",
-      "result_tone": "good"
-    },
-    {
-      "code": "042700",
-      "name": "한미반도체",
-      "price": 253500,
-      "price_text": "253,500원",
-      "ma20_state": "역배열",
-      "ma20_icon": "🔴",
-      "ai_prob": 61.5,
-      "ai_prob_text": "61.5%",
-      "ai_details": {
-        "hybrid_xgb": 51.0,
-        "hybrid_lgbm": 26.7,
-        "bull_xgb": 79.1,
-        "bull_lgbm": 66.2
-      },
-      "supply": {
-        "foreign": "이탈",
-        "institution": "이탈"
-      },
-      "result": "수급 부재",
-      "result_tone": "warn"
-    },
-    {
-      "code": "036460",
-      "name": "한국가스공사",
-      "price": 34800,
-      "price_text": "34,800원",
-      "ma20_state": "역배열",
-      "ma20_icon": "🔴",
-      "ai_prob": 61.4,
-      "ai_prob_text": "61.4%",
-      "ai_details": {
-        "hybrid_xgb": 49.9,
-        "hybrid_lgbm": 24.8,
-        "bull_xgb": 67.2,
-        "bull_lgbm": 81.8
-      },
-      "supply": {
-        "foreign": "이탈",
-        "institution": "양호"
-      },
-      "result": "합격",
-      "result_tone": "good"
-    },
-    {
-      "code": "402340",
-      "name": "SK스퀘어",
-      "price": 499000,
-      "price_text": "499,000원",
-      "ma20_state": "역배열",
-      "ma20_icon": "🔴",
-      "ai_prob": 60.5,
-      "ai_prob_text": "60.5%",
+      "code": "003230",
+      "name": "삼양식품",
+      "price": 1171000,
+      "price_text": "1,171,000원",
+      "ma20_state": "정배열",
+      "ma20_icon": "🟢",
+      "ai_prob": 59.6,
+      "ai_prob_text": "59.6%",
       "ai_details": {
         "hybrid_xgb": 50.4,
-        "hybrid_lgbm": 26.5,
-        "bull_xgb": 79.2,
-        "bull_lgbm": 62.1
+        "hybrid_lgbm": 26.1,
+        "bull_xgb": 70.4,
+        "bull_lgbm": 68.3
       },
       "supply": {
         "foreign": "이탈",
@@ -283,237 +217,61 @@
     {
       "code": "005490",
       "name": "POSCO홀딩스",
-      "price": 345500,
-      "price_text": "345,500원",
+      "price": 362500,
+      "price_text": "362,500원",
       "ma20_state": "정배열",
       "ma20_icon": "🟢",
-      "ai_prob": 60.2,
-      "ai_prob_text": "60.2%",
-      "ai_details": {
-        "hybrid_xgb": 50.4,
-        "hybrid_lgbm": 25.0,
-        "bull_xgb": 73.0,
-        "bull_lgbm": 69.0
-      },
-      "supply": {
-        "foreign": "양호",
-        "institution": "양호"
-      },
-      "result": "합격",
-      "result_tone": "good"
-    },
-    {
-      "code": "097950",
-      "name": "CJ제일제당",
-      "price": 239000,
-      "price_text": "239,000원",
-      "ma20_state": "정배열",
-      "ma20_icon": "🟢",
-      "ai_prob": 60.1,
-      "ai_prob_text": "60.1%",
-      "ai_details": {
-        "hybrid_xgb": 50.4,
-        "hybrid_lgbm": 25.7,
-        "bull_xgb": 64.9,
-        "bull_lgbm": 77.4
-      },
-      "supply": {
-        "foreign": "양호",
-        "institution": "양호"
-      },
-      "result": "합격",
-      "result_tone": "good"
-    },
-    {
-      "code": "010060",
-      "name": "OCI홀딩스",
-      "price": 199800,
-      "price_text": "199,800원",
-      "ma20_state": "정배열",
-      "ma20_icon": "🟢",
-      "ai_prob": 59.0,
-      "ai_prob_text": "59.0%",
-      "ai_details": {
-        "hybrid_xgb": 51.1,
-        "hybrid_lgbm": 26.6,
-        "bull_xgb": 67.6,
-        "bull_lgbm": 68.1
-      },
-      "supply": {
-        "foreign": "이탈",
-        "institution": "이탈"
-      },
-      "result": "수급 부재",
-      "result_tone": "warn"
-    },
-    {
-      "code": "051900",
-      "name": "LG생활건강",
-      "price": 236000,
-      "price_text": "236,000원",
-      "ma20_state": "역배열",
-      "ma20_icon": "🔴",
-      "ai_prob": 59.0,
-      "ai_prob_text": "59.0%",
-      "ai_details": {
-        "hybrid_xgb": 50.2,
-        "hybrid_lgbm": 24.8,
-        "bull_xgb": 69.3,
-        "bull_lgbm": 67.7
-      },
-      "supply": {
-        "foreign": "이탈",
-        "institution": "이탈"
-      },
-      "result": "수급 부재",
-      "result_tone": "warn"
-    },
-    {
-      "code": "277810",
-      "name": "레인보우로보틱스",
-      "price": 545000,
-      "price_text": "545,000원",
-      "ma20_state": "역배열",
-      "ma20_icon": "🔴",
-      "ai_prob": 58.8,
-      "ai_prob_text": "58.8%",
-      "ai_details": {
-        "hybrid_xgb": 51.1,
-        "hybrid_lgbm": 26.6,
-        "bull_xgb": 65.9,
-        "bull_lgbm": 69.1
-      },
-      "supply": {
-        "foreign": "이탈",
-        "institution": "이탈"
-      },
-      "result": "수급 부재",
-      "result_tone": "warn"
-    },
-    {
-      "code": "034020",
-      "name": "두산에너빌리티",
-      "price": 94900,
-      "price_text": "94,900원",
-      "ma20_state": "역배열",
-      "ma20_icon": "🔴",
-      "ai_prob": 58.5,
-      "ai_prob_text": "58.5%",
-      "ai_details": {
-        "hybrid_xgb": 50.7,
-        "hybrid_lgbm": 26.3,
-        "bull_xgb": 67.6,
-        "bull_lgbm": 66.4
-      },
-      "supply": {
-        "foreign": "이탈",
-        "institution": "이탈"
-      },
-      "result": "수급 부재",
-      "result_tone": "warn"
-    },
-    {
-      "code": "000990",
-      "name": "DB하이텍",
-      "price": 87800,
-      "price_text": "87,800원",
-      "ma20_state": "정배열",
-      "ma20_icon": "🟢",
-      "ai_prob": 58.3,
-      "ai_prob_text": "58.3%",
-      "ai_details": {
-        "hybrid_xgb": 50.6,
-        "hybrid_lgbm": 26.4,
-        "bull_xgb": 55.6,
-        "bull_lgbm": 79.4
-      },
-      "supply": {
-        "foreign": "이탈",
-        "institution": "양호"
-      },
-      "result": "합격",
-      "result_tone": "good"
-    },
-    {
-      "code": "316140",
-      "name": "우리금융지주",
-      "price": 31850,
-      "price_text": "31,850원",
-      "ma20_state": "역배열",
-      "ma20_icon": "🔴",
-      "ai_prob": 58.2,
-      "ai_prob_text": "58.2%",
-      "ai_details": {
-        "hybrid_xgb": 50.5,
-        "hybrid_lgbm": 24.7,
-        "bull_xgb": 71.9,
-        "bull_lgbm": 61.0
-      },
-      "supply": {
-        "foreign": "이탈",
-        "institution": "이탈"
-      },
-      "result": "수급 부재",
-      "result_tone": "warn"
-    },
-    {
-      "code": "298380",
-      "name": "에이비엘바이오",
-      "price": 153800,
-      "price_text": "153,800원",
-      "ma20_state": "역배열",
-      "ma20_icon": "🔴",
-      "ai_prob": 57.7,
-      "ai_prob_text": "57.7%",
-      "ai_details": {
-        "hybrid_xgb": 51.1,
-        "hybrid_lgbm": 26.7,
-        "bull_xgb": 58.3,
-        "bull_lgbm": 73.2
-      },
-      "supply": {
-        "foreign": "양호",
-        "institution": "이탈"
-      },
-      "result": "점수 미달",
-      "result_tone": "bad"
-    },
-    {
-      "code": "011790",
-      "name": "SKC",
-      "price": 91300,
-      "price_text": "91,300원",
-      "ma20_state": "역배열",
-      "ma20_icon": "🔴",
-      "ai_prob": 57.6,
-      "ai_prob_text": "57.6%",
+      "ai_prob": 59.3,
+      "ai_prob_text": "59.3%",
       "ai_details": {
         "hybrid_xgb": 50.3,
-        "hybrid_lgbm": 25.6,
-        "bull_xgb": 60.1,
+        "hybrid_lgbm": 25.2,
+        "bull_xgb": 66.7,
         "bull_lgbm": 71.8
       },
       "supply": {
         "foreign": "양호",
         "institution": "양호"
       },
-      "result": "점수 미달",
-      "result_tone": "bad"
+      "result": "합격",
+      "result_tone": "good"
     },
     {
-      "code": "034730",
-      "name": "SK",
-      "price": 312500,
-      "price_text": "312,500원",
-      "ma20_state": "역배열",
-      "ma20_icon": "🔴",
-      "ai_prob": 57.5,
-      "ai_prob_text": "57.5%",
+      "code": "068270",
+      "name": "셀트리온",
+      "price": 202000,
+      "price_text": "202,000원",
+      "ma20_state": "정배열",
+      "ma20_icon": "🟢",
+      "ai_prob": 58.9,
+      "ai_prob_text": "58.9%",
       "ai_details": {
-        "hybrid_xgb": 50.8,
-        "hybrid_lgbm": 26.5,
-        "bull_xgb": 62.7,
-        "bull_lgbm": 67.3
+        "hybrid_xgb": 49.9,
+        "hybrid_lgbm": 26.0,
+        "bull_xgb": 70.4,
+        "bull_lgbm": 65.6
+      },
+      "supply": {
+        "foreign": "양호",
+        "institution": "양호"
+      },
+      "result": "합격",
+      "result_tone": "good"
+    },
+    {
+      "code": "066570",
+      "name": "LG전자",
+      "price": 116700,
+      "price_text": "116,700원",
+      "ma20_state": "정배열",
+      "ma20_icon": "🟢",
+      "ai_prob": 57.4,
+      "ai_prob_text": "57.4%",
+      "ai_details": {
+        "hybrid_xgb": 50.7,
+        "hybrid_lgbm": 25.3,
+        "bull_xgb": 76.2,
+        "bull_lgbm": 51.9
       },
       "supply": {
         "foreign": "양호",
@@ -523,41 +281,19 @@
       "result_tone": "bad"
     },
     {
-      "code": "014680",
-      "name": "한솔케미칼",
-      "price": 260500,
-      "price_text": "260,500원",
+      "code": "036570",
+      "name": "엔씨소프트",
+      "price": 218000,
+      "price_text": "218,000원",
       "ma20_state": "역배열",
       "ma20_icon": "🔴",
-      "ai_prob": 57.5,
-      "ai_prob_text": "57.5%",
-      "ai_details": {
-        "hybrid_xgb": 50.8,
-        "hybrid_lgbm": 26.4,
-        "bull_xgb": 58.6,
-        "bull_lgbm": 72.2
-      },
-      "supply": {
-        "foreign": "양호",
-        "institution": "이탈"
-      },
-      "result": "점수 미달",
-      "result_tone": "bad"
-    },
-    {
-      "code": "323410",
-      "name": "카카오뱅크",
-      "price": 23650,
-      "price_text": "23,650원",
-      "ma20_state": "역배열",
-      "ma20_icon": "🔴",
-      "ai_prob": 57.3,
-      "ai_prob_text": "57.3%",
+      "ai_prob": 57.2,
+      "ai_prob_text": "57.2%",
       "ai_details": {
         "hybrid_xgb": 50.6,
-        "hybrid_lgbm": 24.8,
-        "bull_xgb": 61.0,
-        "bull_lgbm": 69.6
+        "hybrid_lgbm": 25.5,
+        "bull_xgb": 65.6,
+        "bull_lgbm": 63.4
       },
       "supply": {
         "foreign": "이탈",
@@ -567,23 +303,23 @@
       "result_tone": "bad"
     },
     {
-      "code": "307950",
-      "name": "현대오토에버",
-      "price": 370000,
-      "price_text": "370,000원",
-      "ma20_state": "역배열",
-      "ma20_icon": "🔴",
-      "ai_prob": 57.1,
-      "ai_prob_text": "57.1%",
+      "code": "096770",
+      "name": "SK이노베이션",
+      "price": 120400,
+      "price_text": "120,400원",
+      "ma20_state": "정배열",
+      "ma20_icon": "🟢",
+      "ai_prob": 56.9,
+      "ai_prob_text": "56.9%",
       "ai_details": {
-        "hybrid_xgb": 50.9,
-        "hybrid_lgbm": 26.5,
-        "bull_xgb": 59.7,
-        "bull_lgbm": 69.0
+        "hybrid_xgb": 50.6,
+        "hybrid_lgbm": 26.4,
+        "bull_xgb": 58.5,
+        "bull_lgbm": 69.5
       },
       "supply": {
-        "foreign": "이탈",
-        "institution": "이탈"
+        "foreign": "양호",
+        "institution": "양호"
       },
       "result": "점수 미달",
       "result_tone": "bad"
@@ -591,39 +327,171 @@
     {
       "code": "377300",
       "name": "카카오페이",
-      "price": 49050,
-      "price_text": "49,050원",
+      "price": 52500,
+      "price_text": "52,500원",
       "ma20_state": "역배열",
       "ma20_icon": "🔴",
-      "ai_prob": 57.0,
-      "ai_prob_text": "57.0%",
+      "ai_prob": 56.7,
+      "ai_prob_text": "56.7%",
       "ai_details": {
-        "hybrid_xgb": 51.2,
-        "hybrid_lgbm": 26.5,
-        "bull_xgb": 63.5,
-        "bull_lgbm": 63.9
+        "hybrid_xgb": 50.5,
+        "hybrid_lgbm": 26.0,
+        "bull_xgb": 58.1,
+        "bull_lgbm": 69.7
+      },
+      "supply": {
+        "foreign": "이탈",
+        "institution": "양호"
+      },
+      "result": "점수 미달",
+      "result_tone": "bad"
+    },
+    {
+      "code": "259960",
+      "name": "크래프톤",
+      "price": 234000,
+      "price_text": "234,000원",
+      "ma20_state": "역배열",
+      "ma20_icon": "🔴",
+      "ai_prob": 56.1,
+      "ai_prob_text": "56.1%",
+      "ai_details": {
+        "hybrid_xgb": 50.2,
+        "hybrid_lgbm": 25.4,
+        "bull_xgb": 74.7,
+        "bull_lgbm": 48.2
+      },
+      "supply": {
+        "foreign": "이탈",
+        "institution": "양호"
+      },
+      "result": "점수 미달",
+      "result_tone": "bad"
+    },
+    {
+      "code": "006400",
+      "name": "삼성SDI",
+      "price": 471500,
+      "price_text": "471,500원",
+      "ma20_state": "정배열",
+      "ma20_icon": "🟢",
+      "ai_prob": 55.3,
+      "ai_prob_text": "55.3%",
+      "ai_details": {
+        "hybrid_xgb": 50.7,
+        "hybrid_lgbm": 25.9,
+        "bull_xgb": 56.0,
+        "bull_lgbm": 65.7
       },
       "supply": {
         "foreign": "양호",
+        "institution": "양호"
+      },
+      "result": "점수 미달",
+      "result_tone": "bad"
+    },
+    {
+      "code": "028260",
+      "name": "삼성물산",
+      "price": 309000,
+      "price_text": "309,000원",
+      "ma20_state": "정배열",
+      "ma20_icon": "🟢",
+      "ai_prob": 55.2,
+      "ai_prob_text": "55.2%",
+      "ai_details": {
+        "hybrid_xgb": 50.7,
+        "hybrid_lgbm": 26.5,
+        "bull_xgb": 58.8,
+        "bull_lgbm": 61.7
+      },
+      "supply": {
+        "foreign": "이탈",
+        "institution": "양호"
+      },
+      "result": "점수 미달",
+      "result_tone": "bad"
+    },
+    {
+      "code": "018260",
+      "name": "삼성에스디에스",
+      "price": 154000,
+      "price_text": "154,000원",
+      "ma20_state": "역배열",
+      "ma20_icon": "🔴",
+      "ai_prob": 55.1,
+      "ai_prob_text": "55.1%",
+      "ai_details": {
+        "hybrid_xgb": 50.6,
+        "hybrid_lgbm": 26.0,
+        "bull_xgb": 64.5,
+        "bull_lgbm": 54.7
+      },
+      "supply": {
+        "foreign": "이탈",
         "institution": "이탈"
       },
       "result": "점수 미달",
       "result_tone": "bad"
     },
     {
-      "code": "016360",
-      "name": "삼성증권",
-      "price": 95200,
-      "price_text": "95,200원",
+      "code": "302440",
+      "name": "SK바이오사이언스",
+      "price": 41750,
+      "price_text": "41,750원",
       "ma20_state": "역배열",
       "ma20_icon": "🔴",
-      "ai_prob": 56.9,
-      "ai_prob_text": "56.9%",
+      "ai_prob": 55.0,
+      "ai_prob_text": "55.0%",
       "ai_details": {
-        "hybrid_xgb": 50.5,
-        "hybrid_lgbm": 25.6,
-        "bull_xgb": 63.8,
-        "bull_lgbm": 63.9
+        "hybrid_xgb": 51.1,
+        "hybrid_lgbm": 26.3,
+        "bull_xgb": 57.7,
+        "bull_lgbm": 61.7
+      },
+      "supply": {
+        "foreign": "이탈",
+        "institution": "이탈"
+      },
+      "result": "점수 미달",
+      "result_tone": "bad"
+    },
+    {
+      "code": "373220",
+      "name": "LG에너지솔루션",
+      "price": 406000,
+      "price_text": "406,000원",
+      "ma20_state": "정배열",
+      "ma20_icon": "🟢",
+      "ai_prob": 54.5,
+      "ai_prob_text": "54.5%",
+      "ai_details": {
+        "hybrid_xgb": 50.7,
+        "hybrid_lgbm": 26.6,
+        "bull_xgb": 52.8,
+        "bull_lgbm": 65.5
+      },
+      "supply": {
+        "foreign": "이탈",
+        "institution": "이탈"
+      },
+      "result": "점수 미달",
+      "result_tone": "bad"
+    },
+    {
+      "code": "086280",
+      "name": "현대글로비스",
+      "price": 220500,
+      "price_text": "220,500원",
+      "ma20_state": "역배열",
+      "ma20_icon": "🔴",
+      "ai_prob": 54.4,
+      "ai_prob_text": "54.4%",
+      "ai_details": {
+        "hybrid_xgb": 49.9,
+        "hybrid_lgbm": 25.7,
+        "bull_xgb": 58.8,
+        "bull_lgbm": 58.7
       },
       "supply": {
         "foreign": "이탈",
@@ -635,39 +503,39 @@
     {
       "code": "010950",
       "name": "S-Oil",
-      "price": 114800,
-      "price_text": "114,800원",
+      "price": 112100,
+      "price_text": "112,100원",
       "ma20_state": "정배열",
       "ma20_icon": "🟢",
-      "ai_prob": 56.8,
-      "ai_prob_text": "56.8%",
+      "ai_prob": 54.4,
+      "ai_prob_text": "54.4%",
       "ai_details": {
-        "hybrid_xgb": 50.5,
-        "hybrid_lgbm": 26.4,
-        "bull_xgb": 64.7,
-        "bull_lgbm": 61.7
+        "hybrid_xgb": 51.1,
+        "hybrid_lgbm": 26.5,
+        "bull_xgb": 60.0,
+        "bull_lgbm": 56.1
       },
       "supply": {
-        "foreign": "양호",
-        "institution": "양호"
+        "foreign": "이탈",
+        "institution": "이탈"
       },
       "result": "점수 미달",
       "result_tone": "bad"
     },
     {
-      "code": "001440",
-      "name": "대한전선",
-      "price": 28150,
-      "price_text": "28,150원",
-      "ma20_state": "역배열",
-      "ma20_icon": "🔴",
-      "ai_prob": 56.8,
-      "ai_prob_text": "56.8%",
+      "code": "241560",
+      "name": "두산밥캣",
+      "price": 66200,
+      "price_text": "66,200원",
+      "ma20_state": "정배열",
+      "ma20_icon": "🟢",
+      "ai_prob": 54.4,
+      "ai_prob_text": "54.4%",
       "ai_details": {
         "hybrid_xgb": 50.6,
-        "hybrid_lgbm": 26.1,
-        "bull_xgb": 66.0,
-        "bull_lgbm": 60.9
+        "hybrid_lgbm": 25.8,
+        "bull_xgb": 65.7,
+        "bull_lgbm": 50.2
       },
       "supply": {
         "foreign": "양호",
@@ -677,66 +545,198 @@
       "result_tone": "bad"
     },
     {
-      "code": "004170",
-      "name": "신세계",
-      "price": 311000,
-      "price_text": "311,000원",
+      "code": "009830",
+      "name": "한화솔루션",
+      "price": 40300,
+      "price_text": "40,300원",
       "ma20_state": "역배열",
       "ma20_icon": "🔴",
-      "ai_prob": 56.8,
-      "ai_prob_text": "56.8%",
+      "ai_prob": 54.3,
+      "ai_prob_text": "54.3%",
       "ai_details": {
         "hybrid_xgb": 50.7,
         "hybrid_lgbm": 26.3,
         "bull_xgb": 61.9,
-        "bull_lgbm": 65.0
-      },
-      "supply": {
-        "foreign": "이탈",
-        "institution": "이탈"
-      },
-      "result": "점수 미달",
-      "result_tone": "bad"
-    },
-    {
-      "code": "267250",
-      "name": "HD현대",
-      "price": 236500,
-      "price_text": "236,500원",
-      "ma20_state": "역배열",
-      "ma20_icon": "🔴",
-      "ai_prob": 56.7,
-      "ai_prob_text": "56.7%",
-      "ai_details": {
-        "hybrid_xgb": 50.9,
-        "hybrid_lgbm": 26.5,
-        "bull_xgb": 61.4,
-        "bull_lgbm": 65.1
-      },
-      "supply": {
-        "foreign": "이탈",
-        "institution": "이탈"
-      },
-      "result": "점수 미달",
-      "result_tone": "bad"
-    },
-    {
-      "code": "032820",
-      "name": "우리기술",
-      "price": 19950,
-      "price_text": "19,950원",
-      "ma20_state": "역배열",
-      "ma20_icon": "🔴",
-      "ai_prob": 56.7,
-      "ai_prob_text": "56.7%",
-      "ai_details": {
-        "hybrid_xgb": 51.4,
-        "hybrid_lgbm": 26.6,
-        "bull_xgb": 62.8,
-        "bull_lgbm": 63.2
+        "bull_lgbm": 53.9
       },
       "supply": {
         "foreign": "양호",
+        "institution": "양호"
+      },
+      "result": "점수 미달",
+      "result_tone": "bad"
+    },
+    {
+      "code": "082740",
+      "name": "한화엔진",
+      "price": 46600,
+      "price_text": "46,600원",
+      "ma20_state": "역배열",
+      "ma20_icon": "🔴",
+      "ai_prob": 54.3,
+      "ai_prob_text": "54.3%",
+      "ai_details": {
+        "hybrid_xgb": 50.7,
+        "hybrid_lgbm": 24.6,
+        "bull_xgb": 59.9,
+        "bull_lgbm": 57.4
+      },
+      "supply": {
+        "foreign": "이탈",
+        "institution": "이탈"
+      },
+      "result": "점수 미달",
+      "result_tone": "bad"
+    },
+    {
+      "code": "035420",
+      "name": "NAVER",
+      "price": 201500,
+      "price_text": "201,500원",
+      "ma20_state": "역배열",
+      "ma20_icon": "🔴",
+      "ai_prob": 54.2,
+      "ai_prob_text": "54.2%",
+      "ai_details": {
+        "hybrid_xgb": 51.0,
+        "hybrid_lgbm": 25.6,
+        "bull_xgb": 57.7,
+        "bull_lgbm": 59.0
+      },
+      "supply": {
+        "foreign": "이탈",
+        "institution": "이탈"
+      },
+      "result": "점수 미달",
+      "result_tone": "bad"
+    },
+    {
+      "code": "016360",
+      "name": "삼성증권",
+      "price": 104400,
+      "price_text": "104,400원",
+      "ma20_state": "정배열",
+      "ma20_icon": "🟢",
+      "ai_prob": 54.2,
+      "ai_prob_text": "54.2%",
+      "ai_details": {
+        "hybrid_xgb": 50.7,
+        "hybrid_lgbm": 25.9,
+        "bull_xgb": 53.6,
+        "bull_lgbm": 63.4
+      },
+      "supply": {
+        "foreign": "양호",
+        "institution": "양호"
+      },
+      "result": "점수 미달",
+      "result_tone": "bad"
+    },
+    {
+      "code": "014680",
+      "name": "한솔케미칼",
+      "price": 272500,
+      "price_text": "272,500원",
+      "ma20_state": "역배열",
+      "ma20_icon": "🔴",
+      "ai_prob": 54.0,
+      "ai_prob_text": "54.0%",
+      "ai_details": {
+        "hybrid_xgb": 49.9,
+        "hybrid_lgbm": 25.7,
+        "bull_xgb": 60.2,
+        "bull_lgbm": 55.4
+      },
+      "supply": {
+        "foreign": "양호",
+        "institution": "이탈"
+      },
+      "result": "점수 미달",
+      "result_tone": "bad"
+    },
+    {
+      "code": "003670",
+      "name": "포스코퓨처엠",
+      "price": 217500,
+      "price_text": "217,500원",
+      "ma20_state": "정배열",
+      "ma20_icon": "🟢",
+      "ai_prob": 53.8,
+      "ai_prob_text": "53.8%",
+      "ai_details": {
+        "hybrid_xgb": 50.6,
+        "hybrid_lgbm": 26.0,
+        "bull_xgb": 58.2,
+        "bull_lgbm": 56.2
+      },
+      "supply": {
+        "foreign": "양호",
+        "institution": "양호"
+      },
+      "result": "점수 미달",
+      "result_tone": "bad"
+    },
+    {
+      "code": "010140",
+      "name": "삼성중공업",
+      "price": 28300,
+      "price_text": "28,300원",
+      "ma20_state": "정배열",
+      "ma20_icon": "🟢",
+      "ai_prob": 53.7,
+      "ai_prob_text": "53.7%",
+      "ai_details": {
+        "hybrid_xgb": 50.6,
+        "hybrid_lgbm": 25.1,
+        "bull_xgb": 53.2,
+        "bull_lgbm": 62.4
+      },
+      "supply": {
+        "foreign": "이탈",
+        "institution": "양호"
+      },
+      "result": "점수 미달",
+      "result_tone": "bad"
+    },
+    {
+      "code": "011170",
+      "name": "롯데케미칼",
+      "price": 91600,
+      "price_text": "91,600원",
+      "ma20_state": "정배열",
+      "ma20_icon": "🟢",
+      "ai_prob": 53.7,
+      "ai_prob_text": "53.7%",
+      "ai_details": {
+        "hybrid_xgb": 50.7,
+        "hybrid_lgbm": 26.0,
+        "bull_xgb": 57.2,
+        "bull_lgbm": 57.1
+      },
+      "supply": {
+        "foreign": "이탈",
+        "institution": "양호"
+      },
+      "result": "점수 미달",
+      "result_tone": "bad"
+    },
+    {
+      "code": "047050",
+      "name": "포스코인터내셔널",
+      "price": 73400,
+      "price_text": "73,400원",
+      "ma20_state": "역배열",
+      "ma20_icon": "🔴",
+      "ai_prob": 53.6,
+      "ai_prob_text": "53.6%",
+      "ai_details": {
+        "hybrid_xgb": 51.2,
+        "hybrid_lgbm": 26.4,
+        "bull_xgb": 61.6,
+        "bull_lgbm": 50.9
+      },
+      "supply": {
+        "foreign": "이탈",
         "institution": "이탈"
       },
       "result": "점수 미달",
@@ -746,63 +746,19 @@
   "sections": {
     "qualified_stocks": [
       {
-        "code": "035420",
-        "name": "NAVER",
-        "price": 195900,
-        "price_text": "195,900원",
-        "ma20_state": "역배열",
-        "ma20_icon": "🔴",
-        "ai_prob": 62.3,
-        "ai_prob_text": "62.3%",
-        "ai_details": {
-          "hybrid_xgb": 50.8,
-          "hybrid_lgbm": 26.3,
-          "bull_xgb": 74.1,
-          "bull_lgbm": 76.5
-        },
-        "supply": {
-          "foreign": "양호",
-          "institution": "이탈"
-        },
-        "result": "합격",
-        "result_tone": "good"
-      },
-      {
-        "code": "036460",
-        "name": "한국가스공사",
-        "price": 34800,
-        "price_text": "34,800원",
-        "ma20_state": "역배열",
-        "ma20_icon": "🔴",
-        "ai_prob": 61.4,
-        "ai_prob_text": "61.4%",
-        "ai_details": {
-          "hybrid_xgb": 49.9,
-          "hybrid_lgbm": 24.8,
-          "bull_xgb": 67.2,
-          "bull_lgbm": 81.8
-        },
-        "supply": {
-          "foreign": "이탈",
-          "institution": "양호"
-        },
-        "result": "합격",
-        "result_tone": "good"
-      },
-      {
-        "code": "402340",
-        "name": "SK스퀘어",
-        "price": 499000,
-        "price_text": "499,000원",
-        "ma20_state": "역배열",
-        "ma20_icon": "🔴",
-        "ai_prob": 60.5,
-        "ai_prob_text": "60.5%",
+        "code": "003230",
+        "name": "삼양식품",
+        "price": 1171000,
+        "price_text": "1,171,000원",
+        "ma20_state": "정배열",
+        "ma20_icon": "🟢",
+        "ai_prob": 59.6,
+        "ai_prob_text": "59.6%",
         "ai_details": {
           "hybrid_xgb": 50.4,
-          "hybrid_lgbm": 26.5,
-          "bull_xgb": 79.2,
-          "bull_lgbm": 62.1
+          "hybrid_lgbm": 26.1,
+          "bull_xgb": 70.4,
+          "bull_lgbm": 68.3
         },
         "supply": {
           "foreign": "이탈",
@@ -814,17 +770,17 @@
       {
         "code": "005490",
         "name": "POSCO홀딩스",
-        "price": 345500,
-        "price_text": "345,500원",
+        "price": 362500,
+        "price_text": "362,500원",
         "ma20_state": "정배열",
         "ma20_icon": "🟢",
-        "ai_prob": 60.2,
-        "ai_prob_text": "60.2%",
+        "ai_prob": 59.3,
+        "ai_prob_text": "59.3%",
         "ai_details": {
-          "hybrid_xgb": 50.4,
-          "hybrid_lgbm": 25.0,
-          "bull_xgb": 73.0,
-          "bull_lgbm": 69.0
+          "hybrid_xgb": 50.3,
+          "hybrid_lgbm": 25.2,
+          "bull_xgb": 66.7,
+          "bull_lgbm": 71.8
         },
         "supply": {
           "foreign": "양호",
@@ -834,44 +790,22 @@
         "result_tone": "good"
       },
       {
-        "code": "097950",
-        "name": "CJ제일제당",
-        "price": 239000,
-        "price_text": "239,000원",
+        "code": "068270",
+        "name": "셀트리온",
+        "price": 202000,
+        "price_text": "202,000원",
         "ma20_state": "정배열",
         "ma20_icon": "🟢",
-        "ai_prob": 60.1,
-        "ai_prob_text": "60.1%",
+        "ai_prob": 58.9,
+        "ai_prob_text": "58.9%",
         "ai_details": {
-          "hybrid_xgb": 50.4,
-          "hybrid_lgbm": 25.7,
-          "bull_xgb": 64.9,
-          "bull_lgbm": 77.4
+          "hybrid_xgb": 49.9,
+          "hybrid_lgbm": 26.0,
+          "bull_xgb": 70.4,
+          "bull_lgbm": 65.6
         },
         "supply": {
           "foreign": "양호",
-          "institution": "양호"
-        },
-        "result": "합격",
-        "result_tone": "good"
-      },
-      {
-        "code": "000990",
-        "name": "DB하이텍",
-        "price": 87800,
-        "price_text": "87,800원",
-        "ma20_state": "정배열",
-        "ma20_icon": "🟢",
-        "ai_prob": 58.3,
-        "ai_prob_text": "58.3%",
-        "ai_details": {
-          "hybrid_xgb": 50.6,
-          "hybrid_lgbm": 26.4,
-          "bull_xgb": 55.6,
-          "bull_lgbm": 79.4
-        },
-        "supply": {
-          "foreign": "이탈",
           "institution": "양호"
         },
         "result": "합격",
@@ -1035,10 +969,8 @@
   },
   "meta": {
     "schema_version": 2,
-    "report_generated_at": "2026-04-08 13:02:44",
-    "warnings": [
-      "요청일 2026-04-08 대신 최근 시세일 2026-04-07 기준으로 리포트를 생성했습니다."
-    ],
+    "report_generated_at": "2026-04-08 23:51:28",
+    "warnings": [],
     "model_ready": true,
     "report_path": "/home/ubuntu/KORStockScan/data/report/report_2026-04-08.json"
   }

@@ -1,6 +1,7 @@
 import requests
 import json
 import re
+import time
 
 # 💡 Level 1 & 2 공통 모듈
 from src.engine import sniper_config
@@ -15,6 +16,8 @@ from src.engine.trade_pause_control import is_buy_side_paused, get_pause_state_l
 # ==========================================
 _LAST_INVENTORY_ERRORS = []
 _LAST_DEPOSIT_OVERRIDE = None
+_LAST_SUCCESSFUL_DEPOSIT = 0
+_LAST_SUCCESSFUL_DEPOSIT_AT = 0.0
 
 def get_last_inventory_errors():
     """최근 잔고 조회 실패 원인을 반환합니다."""
@@ -92,6 +95,30 @@ def _log_virtual_orderable_amount_once(amount, key):
     _LAST_DEPOSIT_OVERRIDE = marker
 
 
+def _remember_successful_deposit(amount):
+    global _LAST_SUCCESSFUL_DEPOSIT, _LAST_SUCCESSFUL_DEPOSIT_AT
+    try:
+        normalized = int(float(amount or 0))
+    except (TypeError, ValueError):
+        normalized = 0
+    if normalized <= 0:
+        return
+    _LAST_SUCCESSFUL_DEPOSIT = normalized
+    _LAST_SUCCESSFUL_DEPOSIT_AT = time.time()
+
+
+def get_cached_deposit(max_age_sec=None):
+    """최근 정상 주문가능금액이 충분히 최신이면 fallback 값으로 반환합니다."""
+    if max_age_sec is None:
+        max_age_sec = int(getattr(TRADING_RULES, "DEPOSIT_CACHE_FALLBACK_TTL_SEC", 30) or 30)
+    if _LAST_SUCCESSFUL_DEPOSIT <= 0 or max_age_sec <= 0:
+        return 0
+    age = time.time() - float(_LAST_SUCCESSFUL_DEPOSIT_AT or 0.0)
+    if age > float(max_age_sec):
+        return 0
+    return int(_LAST_SUCCESSFUL_DEPOSIT)
+
+
 def get_deposit(token):
     """
     [kt00001] 예수금 조회 - return_code 대응 수정
@@ -99,6 +126,7 @@ def get_deposit(token):
     virtual_amount, config_key = _get_virtual_orderable_amount()
     if virtual_amount > 0:
         _log_virtual_orderable_amount_once(virtual_amount, config_key)
+        _remember_successful_deposit(virtual_amount)
         return virtual_amount
 
     url = kiwoom_utils.get_api_url("/api/dostk/acnt")
@@ -110,18 +138,37 @@ def get_deposit(token):
         'api-id': 'kt00001'
     }
     payload = {"qry_tp": "3"}
-    try:
-        res = requests.post(url, headers=headers, json=payload, timeout=5)
-        data = res.json()
-        is_success = data.get('rt_cd') == '0' or data.get('return_code') == 0
-        if res.status_code == 200 and is_success:
-            return int(data.get('ord_alow_amt', 0))
-        else:
+    retries = max(int(getattr(TRADING_RULES, "DEPOSIT_API_RETRY_COUNT", 2) or 2), 1)
+    retry_delay = max(float(getattr(TRADING_RULES, "DEPOSIT_API_RETRY_DELAY_SEC", 0.15) or 0.15), 0.0)
+
+    for attempt in range(1, retries + 1):
+        try:
+            res = requests.post(url, headers=headers, json=payload, timeout=5)
+            data = res.json()
+            is_success = data.get('rt_cd') == '0' or data.get('return_code') == 0
+            if res.status_code == 200 and is_success:
+                amount = int(float(data.get('ord_alow_amt', 0) or 0))
+                if amount > 0:
+                    _remember_successful_deposit(amount)
+                return amount
+
             err_msg = data.get('return_msg') or data.get('err_msg') or '상세 사유 없음'
-            log_error(f"❌ [예수금조회 실패] 사유: {err_msg}")
-            return 0
-    except:
-        return 0
+            log_error(f"❌ [예수금조회 실패] attempt={attempt}/{retries} 사유: {err_msg}")
+        except Exception as exc:
+            log_error(f"❌ [예수금조회 예외] attempt={attempt}/{retries} 사유: {exc}")
+
+        if attempt < retries and retry_delay > 0:
+            time.sleep(retry_delay)
+
+    cached_amount = get_cached_deposit()
+    if cached_amount > 0:
+        cached_age = time.time() - float(_LAST_SUCCESSFUL_DEPOSIT_AT or 0.0)
+        log_info(
+            f"⚠️ [예수금조회 fallback] 최근 정상 주문가능금액 사용 "
+            f"({cached_amount:,}원, age={cached_age:.1f}s)"
+        )
+        return cached_amount
+    return 0
 
 def get_my_inventory(token):
     """

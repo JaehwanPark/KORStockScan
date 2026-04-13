@@ -669,6 +669,7 @@ def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = 
     blocker_counts: Counter[str] = Counter()
     latest_stage_counts: Counter[str] = Counter()
     latency_reason_counts: Counter[str] = Counter()
+    latency_danger_reason_counts: Counter[str] = Counter()
     expired_armed_counts: Counter[str] = Counter()
     quote_fresh_latency_blocks = 0
     quote_fresh_latency_passes = 0
@@ -676,6 +677,12 @@ def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = 
     for event in events:
         if event.stage == "latency_block":
             latency_reason_counts[str(event.fields.get("reason") or "-")] += 1
+            raw_danger_reasons = str(event.fields.get("latency_danger_reasons") or "").strip()
+            if raw_danger_reasons:
+                for reason in raw_danger_reasons.split(","):
+                    clean = str(reason or "").strip()
+                    if clean:
+                        latency_danger_reason_counts[clean] += 1
             if str(event.fields.get("quote_stale") or "").strip().lower() in {"false", "0", "no"}:
                 quote_fresh_latency_blocks += 1
         elif event.stage == "latency_pass":
@@ -776,6 +783,10 @@ def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = 
         "latency_reason_breakdown": [
             {"reason": reason, "count": count}
             for reason, count in latency_reason_counts.most_common(12)
+        ],
+        "latency_danger_reason_breakdown": [
+            {"reason": reason, "count": count}
+            for reason, count in latency_danger_reason_counts.most_common(12)
         ],
         "expired_armed_breakdown": [
             {"stage": stage, "label": _display_stage_label(stage), "count": count}

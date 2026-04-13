@@ -1,5 +1,6 @@
 # src/utils/constants.py
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 # Pathlib을 사용하면 os.path.join 보다 훨씬 우아하게 경로를 관리할 수 있습니다.
@@ -74,8 +75,8 @@ class TradingConfig:
     INVEST_RATIO_KOSPI: float = 0.25  # DEPRECATED: MIN/MAX 비중으로 대체됨
     INVEST_RATIO_KOSDAQ: float = 0.15  # DEPRECATED: MIN/MAX 비중으로 대체됨
     INVEST_RATIO_SCALPING_MIN: float = 0.10  # 초단타 스캘핑 AI 점수 0일 때 최소 투자 비율 (10%)
-    INVEST_RATIO_SCALPING_MAX: float = 0.50  # 초단타 스캘핑 AI 점수 100일 때 최대 투자 비율 (50%)
-    SCALPING_MAX_BUY_BUDGET_KRW: int = 2_000_000  # 스캘핑 신규 진입 1회 절대 투자금 상한
+    INVEST_RATIO_SCALPING_MAX: float = 0.30  # 초단타 스캘핑 AI 점수 100일 때 최대 투자 비율 (30%)
+    SCALPING_MAX_BUY_BUDGET_KRW: int = 1_000_000  # 스캘핑 신규 진입 1회 절대 투자금 상한
 
     # 💡 [신규 추가] 스윙 AI 동적 비중 조절용 (Min~Max)
     INVEST_RATIO_KOSDAQ_MIN: float = 0.05  # 코스닥 AI 점수 60점일 때 (5%)
@@ -84,6 +85,10 @@ class TradingConfig:
     INVEST_RATIO_KOSPI_MAX: float = 0.40   # 코스피 우량주 AI 점수 100점일 때 (40%)
     BUY_BUDGET_SAFETY_RATIO: float = 0.95  # 기본 주문 안전계수
     BUY_BUDGET_RELAXED_SAFETY_RATIO: float = 1.00  # 1주도 안 나올 때만 재시도하는 완화 안전계수
+    DEPOSIT_API_RETRY_COUNT: int = 2  # 주문가능금액 조회 일시 실패 시 재시도 횟수
+    DEPOSIT_API_RETRY_DELAY_SEC: float = 0.15  # 주문가능금액 재시도 간격(초)
+    DEPOSIT_CACHE_FALLBACK_TTL_SEC: int = 30  # 최근 정상 주문가능금액 fallback 허용 시간(초)
+    ZERO_DEPOSIT_RETRY_COOLDOWN_SEC: int = 20  # 주문가능금액 0원 단발성 조회 실패 의심 시 재조회 대기
 
     # 💡 [변경] 스윙 손절선 (백테스트 기준 -3.0% 반영)
     STOP_LOSS_BULL: float = -3.0  # 🏆 상승장 손절선 (최적화 결과 -3.0 반영)
@@ -137,13 +142,37 @@ class TradingConfig:
     SCALP_PRESET_HARD_STOP_FALLBACK_BASE_PCT: float = -0.7  # SCALP_BASE + fallback 전용 기본 손절선
     SCALP_PRESET_HARD_STOP_FALLBACK_BASE_GRACE_SEC: int = 35  # SCALP_BASE + fallback 전용 유예시간
     SCALP_PRESET_HARD_STOP_FALLBACK_BASE_EMERGENCY_PCT: float = -1.2  # SCALP_BASE + fallback 비상 손절선
+    SCALP_FALLBACK_ENTRY_QTY_MULTIPLIER: float = 0.70  # 2026-04-09 canary: fallback 진입 수량 배율(한 축만 적용)
     SCALP_OPEN_RECLAIM_NEVER_GREEN_HOLD_SEC: int = 300  # OPEN_RECLAIM never-green 조기 정리 최소 보유시간
     SCALP_OPEN_RECLAIM_NEVER_GREEN_PEAK_MAX_PCT: float = 0.20  # OPEN_RECLAIM never-green 최대 허용 고점수익
     SCALP_OPEN_RECLAIM_NEAR_AI_EXIT_SCORE_BUFFER: int = 5  # OPEN_RECLAIM near_ai_exit 점수 여유폭
+    SCALP_OPEN_RECLAIM_RETRACE_NEAR_AI_EXIT_SUSTAIN_SEC: int = 120  # OPEN_RECLAIM 양전환 이력 케이스 near_ai_exit 지속 필요시간
     SCALP_SCANNER_FALLBACK_NEVER_GREEN_HOLD_SEC: int = 420  # SCANNER fallback never-green 조기 정리 최소 보유시간
     SCALP_SCANNER_FALLBACK_NEVER_GREEN_PEAK_MAX_PCT: float = 0.20  # SCANNER fallback 최대 허용 고점수익
     SCALP_SCANNER_FALLBACK_NEAR_AI_EXIT_SCORE_BUFFER: int = 8  # SCANNER fallback near_ai_exit 점수 여유폭
     SCALP_SCANNER_FALLBACK_NEAR_AI_EXIT_SUSTAIN_SEC: int = 120  # SCANNER fallback near_ai_exit 지속 필요시간
+    SCALP_SCANNER_FALLBACK_RETRACE_NEAR_AI_EXIT_SUSTAIN_SEC: int = 150  # SCANNER fallback 양전환 이력 케이스 near_ai_exit 지속 필요시간
+    SCALP_LATENCY_GUARD_CANARY_ENABLED: bool = True  # REJECT_DANGER 중 조건부 케이스만 fallback 허용
+    SCALP_LATENCY_GUARD_CANARY_TAGS: tuple = ("SCANNER", "VWAP_RECLAIM", "OPEN_RECLAIM")  # latency canary 적용 태그
+    SCALP_LATENCY_GUARD_CANARY_MIN_SIGNAL_SCORE: float = 85.0  # latency canary 최소 AI 점수
+    SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS: int = 450  # latency canary 최대 ws_age
+    SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS: int = 260  # latency canary 최대 ws_jitter
+    SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO: float = 0.0100  # latency canary 최대 spread_ratio
+    SCALP_LATENCY_GUARD_CANARY_ALLOWED_DANGER_REASONS: tuple = ()  # 비어 있으면 전체 허용, 값이 있으면 해당 danger reason만 canary 허용
+    SCALP_DYNAMIC_STRENGTH_CANARY_ENABLED: bool = True  # dynamic strength 근소 미달 조건부 완화
+    SCALP_DYNAMIC_STRENGTH_CANARY_TAGS: tuple = ("SCANNER", "VWAP_RECLAIM", "OPEN_RECLAIM")  # dynamic canary 적용 태그
+    SCALP_DYNAMIC_STRENGTH_CANARY_ALLOWED_REASONS: tuple = (
+        "below_exec_buy_ratio",
+        "below_buy_ratio",
+        "below_window_buy_value",
+    )
+    SCALP_DYNAMIC_STRENGTH_CANARY_MIN_BUY_VALUE_RATIO: float = 0.85  # buy_value 최소 허용 비율
+    SCALP_DYNAMIC_STRENGTH_CANARY_BUY_RATIO_TOL: float = 0.03  # buy_ratio 부족 허용폭
+    SCALP_DYNAMIC_STRENGTH_CANARY_EXEC_BUY_RATIO_TOL: float = 0.03  # exec_buy_ratio 부족 허용폭
+    SCALP_COMMON_HARD_TIME_STOP_SHADOW_ONLY: bool = True  # 공통 hard time stop은 shadow-only 관찰 고정
+    SCALP_COMMON_HARD_TIME_STOP_SHADOW_MINUTES: tuple = (3, 5, 7)  # 공통 hard time stop shadow 후보 분(실전 미적용)
+    SCALP_COMMON_HARD_TIME_STOP_SHADOW_MIN_LOSS_PCT: float = -0.7  # shadow 후보 기록 최소 손실폭
+    SCALP_COMMON_HARD_TIME_STOP_SHADOW_MAX_PEAK_PCT: float = 0.20  # shadow 후보 기록 최대 고점수익(never-green 기준)
     SCALP_TRAILING_START_PCT: float = 0.6  # 초단타 트레일링 시작 수익률
     SCALP_TRAILING_LIMIT: float = 0.5  # DEPRECATED: STRONG/WEAK로 대체됨
     MIN_SCALP_LIQUIDITY: int = 500_000_000  # 최소 호가 잔량 대금 (5억)
@@ -223,6 +252,9 @@ class TradingConfig:
     AI_SCORE_THRESHOLD_KOSDAQ: int = 60    # KOSDAQ_ML AI 점수 매수 보류 임계값 (60점 미만 보류)
     AI_SCORE_THRESHOLD_KOSPI: int = 60     # KOSPI_ML AI 점수 매수 보류 임계값 (60점 미만 보류)
     AI_WATCHING_COOLDOWN: int = 180  # 신규 진입 감시(WATCHING) 쿨타임 (초)
+    AI_WATCHING_75_PROMPT_SHADOW_ENABLED: bool = False  # 작업 4: 75 정합화 shadow canary (remote 전용)
+    AI_WATCHING_75_PROMPT_SHADOW_MIN_SCORE: int = 75  # shadow 재평가 시작 점수
+    AI_WATCHING_75_PROMPT_SHADOW_MAX_SCORE: int = 79  # shadow 재평가 종료 점수
     ML_GATEKEEPER_PULLBACK_WAIT_COOLDOWN: int = 60 * 20  # 게이트키퍼 '눌림 대기' 재평가 쿨다운
     ML_GATEKEEPER_REJECT_COOLDOWN: int = 60 * 60 * 2  # 게이트키퍼 '전량 회피' 계열 쿨다운
     ML_GATEKEEPER_NEUTRAL_COOLDOWN: int = 60 * 30  # 게이트키퍼 중립/애매 응답 재평가 쿨다운
@@ -247,6 +279,9 @@ class TradingConfig:
     OPENAI_DUAL_PERSONA_APPLY_OVERNIGHT: bool = True
     OPENAI_DUAL_PERSONA_WORKERS: int = 2
     OPENAI_DUAL_PERSONA_MAX_EXTRA_MS: int = 2500
+    OPENAI_DUAL_PERSONA_GATEKEEPER_MIN_SAMPLES: int = 30
+    OPENAI_DUAL_PERSONA_GATEKEEPER_MIN_OVERRIDE_RATIO: float = 3.0
+    OPENAI_DUAL_PERSONA_GATEKEEPER_MAX_EVAL_MS_P95: int = 5000
     OPENAI_DUAL_PERSONA_GATEKEEPER_G_WEIGHT: float = 0.50
     OPENAI_DUAL_PERSONA_GATEKEEPER_A_WEIGHT: float = 0.20
     OPENAI_DUAL_PERSONA_GATEKEEPER_C_WEIGHT: float = 0.30
@@ -295,5 +330,98 @@ class TradingConfig:
     PIPELINE_EVENT_SCHEMA_VERSION: int = 1
 
 
+def _env_int(name: str) -> int | None:
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return None
+    try:
+        return int(str(raw).strip())
+    except Exception:
+        return None
+
+
+def _env_float(name: str) -> float | None:
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return None
+    try:
+        return float(str(raw).strip())
+    except Exception:
+        return None
+
+
+def _env_bool(name: str) -> bool | None:
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return None
+    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _env_csv_tuple(name: str) -> tuple | None:
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return None
+    parts = tuple(part.strip() for part in str(raw).split(",") if part.strip())
+    return parts
+
+
+def _build_trading_rules() -> TradingConfig:
+    config = TradingConfig()
+    latency_profile = str(os.getenv("KORSTOCKSCAN_LATENCY_CANARY_PROFILE", "") or "").strip().lower()
+    if latency_profile == "remote_v2":
+        config = replace(
+            config,
+            SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS=400,
+        )
+
+    env_ws_jitter = _env_int("KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS")
+    env_ws_age = _env_int("KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS")
+    env_spread_ratio = _env_float("KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO")
+    env_allowed_danger_reasons = _env_csv_tuple("KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_ALLOWED_DANGER_REASONS")
+    if (
+        env_ws_jitter is not None
+        or env_ws_age is not None
+        or env_spread_ratio is not None
+        or env_allowed_danger_reasons is not None
+    ):
+        config = replace(
+            config,
+            SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS=env_ws_jitter
+            if env_ws_jitter is not None
+            else config.SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS,
+            SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS=env_ws_age
+            if env_ws_age is not None
+            else config.SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS,
+            SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO=env_spread_ratio
+            if env_spread_ratio is not None
+            else config.SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO,
+            SCALP_LATENCY_GUARD_CANARY_ALLOWED_DANGER_REASONS=env_allowed_danger_reasons
+            if env_allowed_danger_reasons is not None
+            else config.SCALP_LATENCY_GUARD_CANARY_ALLOWED_DANGER_REASONS,
+        )
+
+    env_prompt_shadow_enabled = _env_bool("AI_WATCHING_75_PROMPT_SHADOW_ENABLED")
+    env_prompt_shadow_min = _env_int("AI_WATCHING_75_PROMPT_SHADOW_MIN_SCORE")
+    env_prompt_shadow_max = _env_int("AI_WATCHING_75_PROMPT_SHADOW_MAX_SCORE")
+    if (
+        env_prompt_shadow_enabled is not None
+        or env_prompt_shadow_min is not None
+        or env_prompt_shadow_max is not None
+    ):
+        config = replace(
+            config,
+            AI_WATCHING_75_PROMPT_SHADOW_ENABLED=env_prompt_shadow_enabled
+            if env_prompt_shadow_enabled is not None
+            else config.AI_WATCHING_75_PROMPT_SHADOW_ENABLED,
+            AI_WATCHING_75_PROMPT_SHADOW_MIN_SCORE=env_prompt_shadow_min
+            if env_prompt_shadow_min is not None
+            else config.AI_WATCHING_75_PROMPT_SHADOW_MIN_SCORE,
+            AI_WATCHING_75_PROMPT_SHADOW_MAX_SCORE=env_prompt_shadow_max
+            if env_prompt_shadow_max is not None
+            else config.AI_WATCHING_75_PROMPT_SHADOW_MAX_SCORE,
+        )
+    return config
+
+
 # 전역 싱글톤 인스턴스 생성
-TRADING_RULES = TradingConfig()
+TRADING_RULES = _build_trading_rules()

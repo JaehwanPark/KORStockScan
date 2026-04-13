@@ -1281,6 +1281,15 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
                 dual_persona_hard_flags[clean_flag] += 1
 
     latency_reason_counts = Counter(str(e.fields.get("reason") or "-") for e in latency_block_events)
+    latency_danger_reason_counts = Counter()
+    for event in latency_block_events:
+        raw_danger_reasons = str(event.fields.get("latency_danger_reasons") or "").strip()
+        if not raw_danger_reasons:
+            continue
+        for reason in raw_danger_reasons.split(","):
+            clean = str(reason or "").strip()
+            if clean:
+                latency_danger_reason_counts[clean] += 1
     quote_fresh_latency_blocks = sum(
         1
         for e in latency_block_events
@@ -1511,6 +1520,7 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
         },
         "breakdowns": {
             "latency_reason_breakdown": [{"label": key, "count": value} for key, value in latency_reason_counts.most_common()],
+            "latency_danger_reason_breakdown": [{"label": key, "count": value} for key, value in latency_danger_reason_counts.most_common()],
             "holding_ai_cache_modes": [{"label": key, "count": value} for key, value in holding_ai_cache_modes.most_common()],
             "holding_reuse_blockers": [{"label": key, "count": value} for key, value in holding_reuse_blockers.most_common()],
             "holding_sig_deltas": [{"label": key, "count": value} for key, value in holding_sig_deltas.most_common()],

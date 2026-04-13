@@ -46,6 +46,12 @@ SCALPING_SYSTEM_PROMPT = """
 }
 """
 
+SCALPING_SYSTEM_PROMPT_75_CANARY = (
+    SCALPING_SYSTEM_PROMPT
+    .replace("80~100 (BUY)", "75~100 (BUY)")
+    .replace("50~79 (WAIT)", "50~74 (WAIT)")
+)
+
 
 # ==========================================
 # 1-2. 🎯 시스템 프롬프트 (스윙/우량주 전용 - KOSPI/KOSDAQ_ML)
@@ -651,6 +657,147 @@ class GeminiSniperEngine:
             return float(self.holding_analysis_cache_ttl or 0.0)
         return float(self.analysis_cache_ttl or 0.0)
 
+    def _annotate_analysis_result(
+        self,
+        result,
+        *,
+        prompt_type,
+        response_ms,
+        parse_ok,
+        parse_fail,
+        fallback_score_50,
+        cache_hit,
+        cache_mode,
+        result_source,
+    ):
+        payload = dict(result or {})
+        payload["ai_parse_ok"] = bool(parse_ok)
+        payload["ai_parse_fail"] = bool(parse_fail)
+        payload["ai_fallback_score_50"] = bool(fallback_score_50)
+        payload["ai_response_ms"] = max(0, int(response_ms))
+        payload["ai_prompt_type"] = str(prompt_type or "-")
+        payload["ai_result_source"] = str(result_source or "-")
+        payload["cache_hit"] = bool(cache_hit)
+        payload["cache_mode"] = str(cache_mode or "miss")
+        return payload
+
+    def analyze_target_shadow_prompt(
+        self,
+        target_name,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        *,
+        strategy="SCALPING",
+        prompt_override=None,
+        prompt_type="scalping_shadow",
+        cache_profile="shadow",
+    ):
+        if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
+            return self._annotate_analysis_result(
+                {"action": "WAIT", "score": 50, "reason": "shadow unsupported for swing"},
+                prompt_type=prompt_type,
+                response_ms=0,
+                parse_ok=False,
+                parse_fail=False,
+                fallback_score_50=True,
+                cache_hit=False,
+                cache_mode="miss",
+                result_source="shadow_unsupported",
+            )
+
+        analysis_started = time.perf_counter()
+        cache_key = self._build_analysis_cache_key_with_profile(
+            target_name=target_name,
+            strategy=f"{strategy}:{prompt_type}",
+            ws_data=ws_data,
+            recent_ticks=recent_ticks,
+            recent_candles=recent_candles,
+            program_net_qty=0,
+            cache_profile=cache_profile,
+        )
+        cached_result = self._cache_get("_analysis_cache", cache_key)
+        if cached_result is not None:
+            return self._annotate_analysis_result(
+                cached_result,
+                prompt_type=prompt_type,
+                response_ms=int((time.perf_counter() - analysis_started) * 1000),
+                parse_ok=bool(cached_result.get("ai_parse_ok", False)),
+                parse_fail=bool(cached_result.get("ai_parse_fail", False)),
+                fallback_score_50=bool(cached_result.get("ai_fallback_score_50", False)),
+                cache_hit=True,
+                cache_mode="hit",
+                result_source="shadow_cache",
+            )
+
+        if not self.lock.acquire(blocking=False):
+            return self._annotate_analysis_result(
+                {"action": "WAIT", "score": 50, "reason": "AI shadow 경합"},
+                prompt_type=prompt_type,
+                response_ms=int((time.perf_counter() - analysis_started) * 1000),
+                parse_ok=False,
+                parse_fail=False,
+                fallback_score_50=True,
+                cache_hit=False,
+                cache_mode="miss",
+                result_source="shadow_lock_contention",
+            )
+
+        try:
+            cached_result = self._cache_get("_analysis_cache", cache_key)
+            if cached_result is not None:
+                return self._annotate_analysis_result(
+                    cached_result,
+                    prompt_type=prompt_type,
+                    response_ms=int((time.perf_counter() - analysis_started) * 1000),
+                    parse_ok=bool(cached_result.get("ai_parse_ok", False)),
+                    parse_fail=bool(cached_result.get("ai_parse_fail", False)),
+                    fallback_score_50=bool(cached_result.get("ai_fallback_score_50", False)),
+                    cache_hit=True,
+                    cache_mode="hit",
+                    result_source="shadow_cache",
+                )
+
+            formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
+            result = self._call_gemini_safe(
+                prompt_override or SCALPING_SYSTEM_PROMPT_75_CANARY,
+                formatted_data,
+                require_json=True,
+                context_name=f"{target_name}({prompt_type})",
+                model_override=self._get_tier1_model(),
+            )
+            self._cache_set(
+                "_analysis_cache",
+                cache_key,
+                result,
+                self._resolve_analysis_cache_ttl(cache_profile),
+            )
+            return self._annotate_analysis_result(
+                result,
+                prompt_type=prompt_type,
+                response_ms=int((time.perf_counter() - analysis_started) * 1000),
+                parse_ok=True,
+                parse_fail=False,
+                fallback_score_50=False,
+                cache_hit=False,
+                cache_mode="miss",
+                result_source="shadow_live",
+            )
+        except Exception as e:
+            return self._annotate_analysis_result(
+                {"action": "WAIT", "score": 50, "reason": f"shadow error: {e}"},
+                prompt_type=prompt_type,
+                response_ms=int((time.perf_counter() - analysis_started) * 1000),
+                parse_ok=False,
+                parse_fail=True,
+                fallback_score_50=True,
+                cache_hit=False,
+                cache_mode="miss",
+                result_source="shadow_exception",
+            )
+        finally:
+            self.lock.release()
+
     def _compact_gatekeeper_ctx_for_cache(self, realtime_ctx):
         ctx = realtime_ctx or {}
         curr_price = ctx.get("curr_price", 0)
@@ -976,6 +1123,8 @@ class GeminiSniperEngine:
         program_net_qty=0,
         cache_profile="default",
     ):
+        analysis_started = time.perf_counter()
+        prompt_type = "swing" if strategy in ["KOSPI_ML", "KOSDAQ_ML"] else "scalping_shared"
         cache_key = self._build_analysis_cache_key_with_profile(
             target_name=target_name,
             strategy=strategy,
@@ -987,22 +1136,72 @@ class GeminiSniperEngine:
         )
         cached_result = self._cache_get("_analysis_cache", cache_key)
         if cached_result is not None:
-            return cached_result
+            return self._annotate_analysis_result(
+                cached_result,
+                prompt_type=prompt_type,
+                response_ms=int((time.perf_counter() - analysis_started) * 1000),
+                parse_ok=bool(cached_result.get("ai_parse_ok", False)),
+                parse_fail=bool(cached_result.get("ai_parse_fail", False)),
+                fallback_score_50=bool(cached_result.get("ai_fallback_score_50", False)),
+                cache_hit=True,
+                cache_mode="hit",
+                result_source="cache",
+            )
 
         if not self.lock.acquire(blocking=False):
-            return {"action": "WAIT", "score": 50, "reason": "AI 경합 (다른 종목 분석 중)"}
+            return self._annotate_analysis_result(
+                {"action": "WAIT", "score": 50, "reason": "AI 경합 (다른 종목 분석 중)"},
+                prompt_type=prompt_type,
+                response_ms=int((time.perf_counter() - analysis_started) * 1000),
+                parse_ok=False,
+                parse_fail=False,
+                fallback_score_50=True,
+                cache_hit=False,
+                cache_mode="miss",
+                result_source="lock_contention",
+            )
             
         try:
             cached_result = self._cache_get("_analysis_cache", cache_key)
             if cached_result is not None:
-                return cached_result
+                return self._annotate_analysis_result(
+                    cached_result,
+                    prompt_type=prompt_type,
+                    response_ms=int((time.perf_counter() - analysis_started) * 1000),
+                    parse_ok=bool(cached_result.get("ai_parse_ok", False)),
+                    parse_fail=bool(cached_result.get("ai_parse_fail", False)),
+                    fallback_score_50=bool(cached_result.get("ai_fallback_score_50", False)),
+                    cache_hit=True,
+                    cache_mode="hit",
+                    result_source="cache",
+                )
 
             # AI 엔진이 비활성화되었을 경우 즉시 DROP 반환
             if self.ai_disabled:
-                return {"action": "DROP", "score": 0, "reason": "AI 엔진 일시 중단 (연속 실패)"}
+                return self._annotate_analysis_result(
+                    {"action": "DROP", "score": 0, "reason": "AI 엔진 일시 중단 (연속 실패)"},
+                    prompt_type=prompt_type,
+                    response_ms=int((time.perf_counter() - analysis_started) * 1000),
+                    parse_ok=False,
+                    parse_fail=False,
+                    fallback_score_50=False,
+                    cache_hit=False,
+                    cache_mode="miss",
+                    result_source="engine_disabled",
+                )
 
             if time.time() - self.last_call_time < self.min_interval:
-                return {"action": "WAIT", "score": 50, "reason": "AI 쿨타임"}
+                return self._annotate_analysis_result(
+                    {"action": "WAIT", "score": 50, "reason": "AI 쿨타임"},
+                    prompt_type=prompt_type,
+                    response_ms=int((time.perf_counter() - analysis_started) * 1000),
+                    parse_ok=False,
+                    parse_fail=False,
+                    fallback_score_50=True,
+                    cache_hit=False,
+                    cache_mode="miss",
+                    result_source="cooldown",
+                )
 
             # 💡 [핵심] 전략에 따른 지능(Prompt)과 데이터(Context) 분기
             if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
@@ -1031,10 +1230,17 @@ class GeminiSniperEngine:
                 result,
                 self._resolve_analysis_cache_ttl(cache_profile),
             )
-            result = dict(result)
-            result["cache_hit"] = False
-            result["cache_mode"] = "miss"
-            return result
+            return self._annotate_analysis_result(
+                result,
+                prompt_type=prompt_type,
+                response_ms=int((time.perf_counter() - analysis_started) * 1000),
+                parse_ok=True,
+                parse_fail=False,
+                fallback_score_50=False,
+                cache_hit=False,
+                cache_mode="miss",
+                result_source="live",
+            )
                 
         except Exception as e:
             # 실패 횟수 증가
@@ -1046,7 +1252,17 @@ class GeminiSniperEngine:
                 self.ai_disabled = True
                 log_error(f"🚨 AI 엔진 비활성화 (연속 실패 {self.consecutive_failures}회 초과, API키 인덱스 {self.current_api_key_index})")
             
-            return {"action": "WAIT", "score": 50, "reason": f"에러: {e}"}
+            return self._annotate_analysis_result(
+                {"action": "WAIT", "score": 50, "reason": f"에러: {e}"},
+                prompt_type=prompt_type,
+                response_ms=int((time.perf_counter() - analysis_started) * 1000),
+                parse_ok=False,
+                parse_fail=True,
+                fallback_score_50=True,
+                cache_hit=False,
+                cache_mode="miss",
+                result_source="exception",
+            )
         finally:
             self.lock.release()
             

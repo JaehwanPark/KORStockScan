@@ -1,4 +1,8 @@
+from dataclasses import replace
+
+import src.engine.sniper_strength_momentum as strength_momentum_module
 from src.engine.sniper_strength_momentum import evaluate_scalping_strength_momentum
+from src.utils.constants import TRADING_RULES as CONFIG
 
 
 def _build_history(entries):
@@ -88,3 +92,68 @@ def test_strength_momentum_keeps_default_profile_for_scanner():
     assert result["threshold_profile"] == "default"
     assert result["position_tag"] == "SCANNER"
     assert result["reason"] == "below_strength_base"
+
+
+def test_strength_momentum_canary_relaxes_exec_buy_ratio_for_scanner(monkeypatch):
+    monkeypatch.setattr(
+        strength_momentum_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_DYNAMIC_STRENGTH_CANARY_ENABLED=True,
+            SCALP_DYNAMIC_STRENGTH_CANARY_TAGS=("SCANNER",),
+            SCALP_DYNAMIC_STRENGTH_CANARY_ALLOWED_REASONS=("below_exec_buy_ratio",),
+            SCALP_DYNAMIC_STRENGTH_CANARY_MIN_BUY_VALUE_RATIO=0.85,
+            SCALP_DYNAMIC_STRENGTH_CANARY_BUY_RATIO_TOL=0.03,
+            SCALP_DYNAMIC_STRENGTH_CANARY_EXEC_BUY_RATIO_TOL=0.03,
+        ),
+    )
+
+    ws_data = {
+        "v_pw": 102.0,
+        "_position_tag": "SCANNER",
+        "strength_momentum_history": _build_history([
+            (500.0, 99.0, 10_000, 8_000, 2_000, 500, 460, 80.0),
+            (504.0, 101.0, 10_000, 8_000, 2_000, 650, 590, 80.0),
+            (508.0, 102.0, 10_000, 8_000, 2_000, 820, 740, 80.0),
+        ]),
+    }
+
+    result = evaluate_scalping_strength_momentum(ws_data, now_ts=508.0)
+
+    assert result["canary_applied"] is True
+    assert result["allowed"] is True
+    assert result["reason"] == "canary_relaxed_below_exec_buy_ratio"
+    assert result["canary_origin_reason"] == "below_exec_buy_ratio"
+
+
+def test_strength_momentum_canary_not_applied_for_non_allowed_tag(monkeypatch):
+    monkeypatch.setattr(
+        strength_momentum_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_DYNAMIC_STRENGTH_CANARY_ENABLED=True,
+            SCALP_DYNAMIC_STRENGTH_CANARY_TAGS=("SCANNER",),
+            SCALP_DYNAMIC_STRENGTH_CANARY_ALLOWED_REASONS=("below_exec_buy_ratio",),
+            SCALP_DYNAMIC_STRENGTH_CANARY_MIN_BUY_VALUE_RATIO=0.85,
+            SCALP_DYNAMIC_STRENGTH_CANARY_BUY_RATIO_TOL=0.03,
+            SCALP_DYNAMIC_STRENGTH_CANARY_EXEC_BUY_RATIO_TOL=0.03,
+        ),
+    )
+
+    ws_data = {
+        "v_pw": 102.0,
+        "_position_tag": "MIDDLE",
+        "strength_momentum_history": _build_history([
+            (600.0, 99.0, 10_000, 8_000, 2_000, 500, 460, 80.0),
+            (604.0, 101.0, 10_000, 8_000, 2_000, 650, 590, 80.0),
+            (608.0, 102.0, 10_000, 8_000, 2_000, 820, 740, 80.0),
+        ]),
+    }
+
+    result = evaluate_scalping_strength_momentum(ws_data, now_ts=608.0)
+
+    assert result["canary_applied"] is False
+    assert result["allowed"] is False
+    assert result["reason"] == "below_exec_buy_ratio"

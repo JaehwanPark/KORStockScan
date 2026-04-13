@@ -161,6 +161,7 @@ KORStockScan/
 
 ## 운영 문서
 
+- `docs/2026-04-11-codex-cloud-setup.md`
 - `docs/ec2_web_service_runbook.md`
 - `docs/emergency_buy_pause_runbook.md`
 - `docs/latency_aware_entry_system_summary.md`

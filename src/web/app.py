@@ -1390,6 +1390,8 @@ def entry_pipeline_flow_preview():
     metrics = _report_dict(report, 'metrics')
     blockers = _report_list(report, 'blocker_breakdown')
     blocker_guide = _report_list(report, 'blocker_guide')
+    latency_reason_breakdown = _report_list(report, 'latency_reason_breakdown')
+    expired_armed_breakdown = _report_list(report, 'expired_armed_breakdown')
     recent_stocks = _report_list(report, 'sections', 'recent_stocks')
 
     template = """
@@ -1481,6 +1483,8 @@ def entry_pipeline_flow_preview():
             <div class="chip">추적 종목 {{ metrics.tracked_stocks }}개</div>
             <div class="chip">차단 {{ metrics.blocked_stocks }}개</div>
             <div class="chip">주문 제출 {{ metrics.submitted_stocks }}개</div>
+            <div class="chip">예산통과→제출 {{ metrics.budget_pass_to_submitted_rate or 0 }}%</div>
+            <div class="chip">Fresh quote latency pass {{ metrics.quote_fresh_latency_pass_rate or 0 }}%</div>
           </div>
         </div>
 
@@ -1489,6 +1493,10 @@ def entry_pipeline_flow_preview():
           <div class="card"><div class="label">차단 종목</div><div class="value blocked">{{ metrics.blocked_stocks }}</div></div>
           <div class="card"><div class="label">첫 AI 대기 종목</div><div class="value waiting">{{ metrics.waiting_stocks }}</div></div>
           <div class="card"><div class="label">주문 제출 종목</div><div class="value submitted">{{ metrics.submitted_stocks }}</div></div>
+          <div class="card"><div class="label">예산통과 종목</div><div class="value">{{ metrics.budget_pass_stocks or 0 }}</div></div>
+          <div class="card"><div class="label">예산통과→제출 전환율</div><div class="value submitted">{{ metrics.budget_pass_to_submitted_rate or 0 }}%</div></div>
+          <div class="card"><div class="label">Fresh quote latency pass율</div><div class="value">{{ metrics.quote_fresh_latency_pass_rate or 0 }}%</div></div>
+          <div class="card"><div class="label">entry_armed 만료</div><div class="value waiting">{{ metrics.expired_armed_total or 0 }}</div></div>
         </div>
 
         <div class="section card">
@@ -1498,6 +1506,36 @@ def entry_pipeline_flow_preview():
               <div class="bar-row">
                 <div>{{ item.gate }}</div>
                 <div class="bar"><div class="fill" style="width: {{ (item.count / blockers[0].count * 100) if blockers and blockers[0].count else 0 }}%"></div></div>
+                <div>{{ item.count }}</div>
+              </div>
+            {% else %}
+              <div class="meta">데이터 없음</div>
+            {% endfor %}
+          </div>
+        </div>
+
+        <div class="section card">
+          <h2>Latency 차단 사유 분포</h2>
+          <div class="bars">
+            {% for item in latency_reason_breakdown %}
+              <div class="bar-row">
+                <div>{{ item.reason }}</div>
+                <div class="bar"><div class="fill" style="width: {{ (item.count / latency_reason_breakdown[0].count * 100) if latency_reason_breakdown and latency_reason_breakdown[0].count else 0 }}%"></div></div>
+                <div>{{ item.count }}</div>
+              </div>
+            {% else %}
+              <div class="meta">데이터 없음</div>
+            {% endfor %}
+          </div>
+        </div>
+
+        <div class="section card">
+          <h2>entry_armed 만료 분포</h2>
+          <div class="bars">
+            {% for item in expired_armed_breakdown %}
+              <div class="bar-row">
+                <div>{{ item.label }}</div>
+                <div class="bar"><div class="fill" style="width: {{ (item.count / expired_armed_breakdown[0].count * 100) if expired_armed_breakdown and expired_armed_breakdown[0].count else 0 }}%"></div></div>
                 <div>{{ item.count }}</div>
               </div>
             {% else %}
@@ -1611,6 +1649,8 @@ def entry_pipeline_flow_preview():
         metrics=metrics,
         blockers=blockers,
         blocker_guide=blocker_guide,
+        latency_reason_breakdown=latency_reason_breakdown,
+        expired_armed_breakdown=expired_armed_breakdown,
         recent_stocks=recent_stocks,
     )
 
@@ -1966,6 +2006,105 @@ def performance_tuning_preview():
               {% if item.hint %}<div class="hint">{{ item.hint }}</div>{% endif %}
             </div>
           {% endfor %}
+        </div>
+
+        <div class="section">
+          <h2>스캘핑 퍼널/체결 품질</h2>
+          <div class="grid">
+            <div class="card">
+              <div class="label">budget_pass 이벤트</div>
+              <div class="value">{{ metrics.budget_pass_events or 0 }}</div>
+            </div>
+            <div class="card">
+              <div class="label">order_bundle_submitted 이벤트</div>
+              <div class="value">{{ metrics.order_bundle_submitted_events or 0 }}</div>
+            </div>
+            <div class="card">
+              <div class="label">budget_pass→submitted 전환율</div>
+              <div class="value">{{ metrics.budget_pass_to_submitted_rate or 0 }}%</div>
+            </div>
+            <div class="card">
+              <div class="label">fresh quote latency pass율</div>
+              <div class="value">{{ metrics.quote_fresh_latency_pass_rate or 0 }}%</div>
+            </div>
+            <div class="card">
+              <div class="label">entry_armed 만료 이벤트</div>
+              <div class="value">{{ metrics.expired_armed_events or 0 }}</div>
+            </div>
+            <div class="card">
+              <div class="label">preset sync mismatch율</div>
+              <div class="value">{{ metrics.preset_exit_sync_mismatch_rate or 0 }}%</div>
+            </div>
+            <div class="card">
+              <div class="label">FULL_FILL 평균 손익률</div>
+              <div class="value">{{ "%+.2f"|format(metrics.full_fill_completed_avg_profit_rate or 0.0) }}%</div>
+            </div>
+            <div class="card">
+              <div class="label">PARTIAL_FILL 평균 손익률</div>
+              <div class="value">{{ "%+.2f"|format(metrics.partial_fill_completed_avg_profit_rate or 0.0) }}%</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="section two-col">
+          <div class="card">
+            <h2>Latency 차단 사유 분포</h2>
+            <div class="list">
+              {% for item in breakdowns.latency_reason_breakdown %}
+                <div class="row">
+                  <div class="title">{{ item.label }}</div>
+                  <div class="meta">{{ item.count }}건</div>
+                </div>
+              {% else %}
+                <div class="meta">데이터 없음</div>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="card">
+            <h2>Fill Quality Cohort 성과</h2>
+            <div class="list">
+              {% for item in breakdowns.fill_quality_cohorts %}
+                <div class="row">
+                  <div class="title">{{ item.label }}</div>
+                  <div class="meta">{{ item.count }}건 / 평균 {{ "%+.2f"|format(item.avg_profit_rate or 0.0) }}%</div>
+                </div>
+              {% else %}
+                <div class="meta">데이터 없음</div>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+
+        <div class="section two-col">
+          <div class="card">
+            <h2>Preset Exit 동기화 상태</h2>
+            <div class="list">
+              {% for item in breakdowns.preset_exit_sync_status %}
+                <div class="row">
+                  <div class="title">{{ item.label }}</div>
+                  <div class="meta">{{ item.count }}건</div>
+                </div>
+              {% else %}
+                <div class="meta">데이터 없음</div>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="card">
+            <h2>AI Overlap 차단 stage</h2>
+            <div class="list">
+              {% for item in breakdowns.ai_overlap_blocked_stages %}
+                <div class="row">
+                  <div class="title">{{ item.label }}</div>
+                  <div class="meta">{{ item.count }}건</div>
+                </div>
+              {% else %}
+                <div class="meta">데이터 없음</div>
+              {% endfor %}
+            </div>
+            <div class="meta" style="margin-top: 10px;">
+              overbought_blocked 이벤트 {{ metrics.ai_overlap_overbought_blocked_events or 0 }}건
+            </div>
+          </div>
         </div>
 
         <div class="section">
@@ -3079,6 +3218,8 @@ def trade_review_preview():
     event_breakdown = _report_list(report, 'event_breakdown')
     warnings = _report_list(report, 'meta', 'warnings')
     available_stocks = _report_list(report, 'meta', 'available_stocks')
+    fill_quality_summary = _report_dict(report, 'sections', 'fill_quality_summary')
+    hard_stop_taxonomy = _report_dict(report, 'sections', 'hard_stop_taxonomy')
 
     template = """
     <!doctype html>
@@ -3153,6 +3294,7 @@ def trade_review_preview():
         .bad { color: var(--bad); }
         .section { margin-top: 20px; }
         .section h2 { margin: 0 0 10px; font-size: 18px; }
+        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
         .row { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px; }
         .row:first-child { border-top: 0; padding-top: 0; margin-top: 0; }
         .title { font-weight: 700; font-size: 16px; }
@@ -3210,6 +3352,9 @@ def trade_review_preview():
           border-radius: 16px;
           padding: 14px 16px;
         }
+        @media (max-width: 900px) {
+          .two-col { grid-template-columns: 1fr; }
+        }
       </style>
     </head>
     <body>
@@ -3256,6 +3401,61 @@ def trade_review_preview():
           <div class="card"><div class="label">실현손익</div><div class="value {% if metrics.realized_pnl_krw > 0 %}good{% elif metrics.realized_pnl_krw < 0 %}bad{% endif %}">{{ "{:,}".format(metrics.realized_pnl_krw) }}원</div></div>
           <div class="card"><div class="label">평균 손익률</div><div class="value">{{ metrics.avg_profit_rate }}%</div></div>
           <div class="card"><div class="label">승 / 패</div><div class="value">{{ metrics.win_trades }} / {{ metrics.loss_trades }}</div></div>
+        </div>
+
+        <div class="section">
+          <h2>체결 품질 / Hard Stop 감사</h2>
+          <div class="grid">
+            <div class="card"><div class="label">FULL_FILL 이벤트</div><div class="value">{{ metrics.full_fill_events or 0 }}</div></div>
+            <div class="card"><div class="label">PARTIAL_FILL 이벤트</div><div class="value">{{ metrics.partial_fill_events or 0 }}</div></div>
+            <div class="card"><div class="label">Preset sync mismatch</div><div class="value bad">{{ metrics.preset_exit_sync_mismatch_events or 0 }}</div></div>
+            <div class="card"><div class="label">Hard Time Stop Shadow</div><div class="value warn">{{ metrics.hard_time_stop_shadow_events or 0 }}</div></div>
+            <div class="card"><div class="label">Preset sync mismatch율</div><div class="value">{{ (fill_quality_summary.metrics or {}).get('preset_exit_sync_mismatch_rate', 0) }}%</div></div>
+            <div class="card"><div class="label">Live hard stop 이벤트</div><div class="value">{{ (hard_stop_taxonomy.metrics or {}).get('live_hard_stop_events', 0) }}</div></div>
+          </div>
+        </div>
+
+        <div class="section two-col">
+          <div class="card">
+            <h2>Fill Quality 분포</h2>
+            {% for item in fill_quality_summary.fill_quality_breakdown %}
+              <div class="row">
+                <div class="title">{{ item.label }}</div>
+                <div class="meta">{{ item.count }}건</div>
+              </div>
+            {% else %}
+              <div class="meta">데이터 없음</div>
+            {% endfor %}
+
+            <h2 style="margin-top:16px;">최근 Sync Mismatch</h2>
+            {% for item in fill_quality_summary.recent_mismatches %}
+              <div class="row">
+                <div class="title">{{ item.name }} ({{ item.code }})</div>
+                <div class="meta">{{ item.timestamp }} / {{ item.sync_status }} / {{ item.sync_reason }}</div>
+                <div class="meta">ord_no {{ item.preset_tp_ord_no_before }} → {{ item.preset_tp_ord_no_after }}</div>
+              </div>
+            {% else %}
+              <div class="meta">불일치 표본 없음</div>
+            {% endfor %}
+          </div>
+          <div class="card">
+            <h2>Hard Stop Taxonomy</h2>
+            {% for item in hard_stop_taxonomy.rows %}
+              <div class="row">
+                <div class="title">{{ item.label }}</div>
+                <div class="meta">{{ item.mode }} / stage {{ item.stage }} / {{ item.count }}건</div>
+                {% if item.entry_mode_position_tag_top %}
+                  <div class="meta">top pair:
+                    {% for pair in item.entry_mode_position_tag_top %}
+                      {{ pair.label }} {{ pair.count }}건{% if not loop.last %}, {% endif %}
+                    {% endfor %}
+                  </div>
+                {% endif %}
+              </div>
+            {% else %}
+              <div class="meta">데이터 없음</div>
+            {% endfor %}
+          </div>
         </div>
 
         {% if available_stocks %}
@@ -3395,6 +3595,8 @@ def trade_review_preview():
         event_breakdown=event_breakdown,
         warnings=warnings,
         available_stocks=available_stocks,
+        fill_quality_summary=fill_quality_summary,
+        hard_stop_taxonomy=hard_stop_taxonomy,
         request=request,
     )
 

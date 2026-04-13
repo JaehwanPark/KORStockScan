@@ -406,18 +406,19 @@ def _event_body(
     due = date.fromisoformat(item.due_date)
     is_trading_day, trading_day_reason = get_krx_trading_day_status(due)
     slot_key = _norm_key(item.slot)
+    holiday_forced_intraday = bool(not is_trading_day and slot_key in {_norm_key("PREOPEN"), _norm_key("POSTCLOSE")})
     slot_to_time = {
         _norm_key("PREOPEN"): slot_preopen_time,
         _norm_key("INTRADAY"): slot_intraday_time,
         _norm_key("POSTCLOSE"): slot_postclose_time,
     }
-    start_hhmm = slot_to_time.get(slot_key, "")
+    start_hhmm = slot_intraday_time if holiday_forced_intraday else slot_to_time.get(slot_key, "")
     end_hhmm = ""
     is_timed_event = bool(use_slot_time and start_hhmm)
     force_all_day = False
 
     mode, tw_start, tw_end = _parse_time_window(item.time_window)
-    if mode == "timed":
+    if mode == "timed" and not holiday_forced_intraday:
         start_hhmm = tw_start
         end_hhmm = tw_end
         is_timed_event = True
@@ -427,12 +428,12 @@ def _event_body(
 
     explicit_start_hhmm, explicit_end_hhmm = _extract_time_range_from_text(item.title)
     has_explicit_time = bool(explicit_start_hhmm)
-    if has_explicit_time and not force_all_day and mode != "timed":
+    if has_explicit_time and not force_all_day and mode != "timed" and not holiday_forced_intraday:
         start_hhmm = explicit_start_hhmm
         end_hhmm = explicit_end_hhmm
         is_timed_event = True
 
-    if not is_trading_day and is_timed_event and not force_all_day and mode != "timed" and not has_explicit_time:
+    if holiday_forced_intraday and is_timed_event and not force_all_day:
         start_hhmm = slot_intraday_time
         end_hhmm = ""
 

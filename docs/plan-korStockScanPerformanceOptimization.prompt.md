@@ -158,12 +158,17 @@
 3. `HOLDING hybrid`는 `override 조건 명세` 선행
 4. `프롬프트 분리`와 `컨텍스트 주입`은 `순차 canary`
 5. raw 즉시 제거, OpenAI 라이브 즉시 전환, 본서버 즉시 반영은 계속 보류
+6. `스캘핑 HOLDING AI 프롬프트 최종 통합 설계안`은 북극성 문서로만 사용하고, 실제 실행 순서는 `AI 프롬프트 코딩지시서`의 `P1~P5` 분해 순서를 따른다.
+7. `WAIT 65`는 `AI threshold miss` 단독 문제로 보지 않고, `latency_block` 1순위, `blocked_strength_momentum` 2순위, `overbought` 후순위로 고정한다.
+
+참고 문서:
+- [2026-04-13-scalping-holding-prompt-final-design.md](./2026-04-13-scalping-holding-prompt-final-design.md)
 
 ### 프롬프트 Phase 상태
 
 | Phase | 상태 | 현재 판정 |
 | --- | --- | --- |
-| `P0 확인/계측` | `미착수` | 즉시 착수 가능 |
+| `P0 확인/계측` | `진행중` | `2026-04-12` 작업 1~3 반영 중 |
 | `P1 판단 기준/프롬프트 분리` | `미착수` | 원격 canary 대상 |
 | `P2 컨텍스트 주입` | `미착수` | `HOLDING -> WATCHING` 순차 진행 |
 | `P3 피처 패킷 보강` | `미착수` | helper 추출 후 진행 |
@@ -188,6 +193,38 @@
    - HOLDING hybrid 적용
    - HOLDING critical 경량 프롬프트
    - raw 축소 A/B
+
+### `2026-04-12` P0 진행 메모
+
+1. `SCALP_PRESET_TP SELL`
+   - 현재 라이브 공유 프롬프트에서는 비도달
+   - 즉시 제거 대신 placeholder 의도 명시 + `ai_action_raw` 로그 추적 유지
+2. AI 운영계측
+   - `ai_parse_ok / ai_parse_fail / ai_fallback_score_50 / ai_response_ms / ai_prompt_type / ai_result_source` 로그 반영
+   - `ai_score_raw / ai_score_after_bonus / entry_score_threshold / big_bite_bonus_applied / ai_cooldown_blocked` 운영 로그 반영
+3. `HOLDING hybrid override`
+   - `FORCE_EXIT`만 즉시집행 후보
+   - `SELL`은 1차 canary에서 로그 우선
+   - `SCALP_PRESET_TP`는 전용 검문에서만 `DROP` 즉시집행 허용
+
+### `2026-04-12` P1 작업 4 착수 메모
+
+1. 라이브 프롬프트는 유지
+2. `75~79` 경계구간만 `75 정합화 shadow prompt` 재평가
+3. 실주문 연결 없이 `watching_prompt_75_shadow` 로그만 기록
+4. 원격 환경에서 `AI_WATCHING_75_PROMPT_SHADOW_ENABLED=true`일 때만 활성화
+5. `2026-04-12` 기준 원격 `songstockscan`에는 최소 패치 + env 주입 완료, 단 실제 표본은 다음 거래일 `tmux bot` 재기동 이후부터 누적됨
+6. 집계는 `src/engine/watching_prompt_75_shadow_report.py`로 `buy_diverged / 75~79 분포 / missed_winner 교차표`까지 같이 본다
+7. 운영 점검은 `src/engine/check_watching_prompt_75_shadow_canary.py`로 `preopen/open_check/midmorning/postclose` 4개 phase를 표준화한다
+
+### `2026-04-13 10:50 KST` WAIT 65 통합 운영판단
+
+1. `WAIT 65`는 추가 분석만 계속할 단계도, 전면 완화로 갈 단계도 아니다.
+2. 저위험 축은 즉시 canary를 시작하고, 하위 원인 분해는 그 폭을 제어하는 범위에서만 병행한다.
+3. 현재 즉시 착수 가능한 축은 `quote_stale=False` 중심 `latency canary`다.
+4. `blocked_strength_momentum`은 전역 완화가 아니라 `below_window_buy_value / below_buy_ratio / below_strength_base` 3축 기준 국소 재설계로 간다.
+5. `shadow 하한 60/55` 조정, `WAIT 65` 전면 완화, `overbought` 우선 착수는 보류한다.
+6. 이번 세션 코드 개선은 `latency_state_danger`를 `quote_stale / ws_age / ws_jitter / spread` 하위 이유로 로깅하고, canary를 해당 reason allowlist로 더 좁게 제어할 수 있게 만드는 것까지로 제한한다.
 
 ## 운영서버 롤아웃 판단용 추가 모니터링 기간
 
@@ -248,6 +285,10 @@
 2. 프로파일링 방식 확정
 3. `RELAX-LATENCY / RELAX-DYNSTR / RELAX-OVERBOUGHT` 시작 상태 고정
 4. 원격 fetch/cron 상태 확인
+5. 운영 자동화:
+   - `08:20/10:20/13:20` 원격 baseline 수집 cron
+   - `10:00/12:00` monitor snapshot cron
+   - `16:00` 원격 fetch cron
 
 장중 체크포인트:
 1. `AI BUY -> entry_armed -> budget_pass -> submitted` 퍼널 추적

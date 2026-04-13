@@ -8,9 +8,13 @@ import os
 import re
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib import request
+from zoneinfo import ZoneInfo
+
+from src.utils.market_day import get_krx_trading_day_status
 
 
 GITHUB_GRAPHQL_URL = "https://api.github.com/graphql"
@@ -35,6 +39,7 @@ class ProjectItem:
     item_id: str
     title: str
     content_type: str
+    due_date: str = ""
     slot: str = ""
     time_window: str = ""
 
@@ -98,6 +103,18 @@ SLOT_POSTCLOSE_KEYWORDS = (
 
 TIME_ALLDAY_KEYWORDS = ("하루종일", "종일", "all day", "allday")
 TIME_UNSCHEDULED_KEYWORDS = ("미정", "tbd", "unscheduled", "예약작업", "추후")
+
+
+def _local_today_iso() -> str:
+    raw = os.getenv("DOC_BACKLOG_TODAY", "").strip()
+    if raw:
+        return raw
+    tz_name = os.getenv("DOC_BACKLOG_TIMEZONE", "Asia/Seoul").strip() or "Asia/Seoul"
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("Asia/Seoul")
+    return datetime.now(tz).date().isoformat()
 
 
 def _read(path: Path) -> str:
@@ -200,7 +217,6 @@ def parse_plan_tasks() -> list[BacklogTask]:
         return []
     source_path, text = loaded
     remaining = _parse_numbered_items(_extract_section_lines(text, "### 아직 남아있는 일"))
-    immediate = _parse_numbered_items(_extract_section_lines(text, "## 즉시 착수 체크리스트"))
     tasks: list[BacklogTask] = []
     for item in remaining:
         tasks.append(
@@ -208,15 +224,6 @@ def parse_plan_tasks() -> list[BacklogTask]:
                 title=item,
                 source=str(source_path),
                 section="아직 남아있는 일",
-                track="Plan",
-            )
-        )
-    for item in immediate:
-        tasks.append(
-            BacklogTask(
-                title=item,
-                source=str(source_path),
-                section="즉시 착수 체크리스트",
                 track="Plan",
             )
         )
@@ -256,29 +263,6 @@ def parse_scalping_logic_tasks() -> list[BacklogTask]:
     source_path, text = loaded
     tasks: list[BacklogTask] = []
 
-    # Remaining tasks in status memo
-    in_remaining = False
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("- 잔여:"):
-            in_remaining = True
-            continue
-        if in_remaining and stripped.startswith("- 즉,"):
-            in_remaining = False
-        if not in_remaining:
-            continue
-        m = re.match(r"^\s*-\s+`([^`]+)`\s*$", line)
-        if not m:
-            continue
-        tasks.append(
-            BacklogTask(
-                title=m.group(1).strip(),
-                source=str(source_path),
-                section="상태 메모 잔여",
-                track="ScalpingLogic",
-            )
-        )
-
     # Remaining implementation phases only
     for line in text.splitlines():
         m = re.match(r"^\s*####\s+(0-1b|2-1|2-2|3-1|3-2)\.\s+(.+?)\s*$", line)
@@ -301,46 +285,25 @@ def parse_prompt_tasks() -> list[BacklogTask]:
         return []
     source_path, text = loaded
     tasks: list[BacklogTask] = []
-
-    # Priority table
-    in_table = False
+    today_iso = _local_today_iso()
+    current_phase = "작업 상세"
     for line in text.splitlines():
-        if line.strip().startswith("| 우선순위 | 작업명 |"):
-            in_table = True
+        phase = re.match(r"^\s*##\s+(P[0-9][A-Z0-9\-]*\.\s+.+?)\s*$", line)
+        if phase:
+            current_phase = phase.group(1).strip()
             continue
-        if in_table and (not line.strip().startswith("|") or line.strip().startswith("---")):
-            if not line.strip().startswith("|"):
-                in_table = False
-                continue
-        if not in_table:
-            continue
-        parts = [p.strip() for p in line.strip().strip("|").split("|")]
-        if len(parts) < 2:
-            continue
-        if parts[0] in {"우선순위", "---"}:
-            continue
-        task_name = re.sub(r"`([^`]+)`", r"\1", parts[1]).strip()
-        if task_name:
-                tasks.append(
-                    BacklogTask(
-                        title=task_name,
-                        source=str(source_path),
-                        section="작업 우선순위 요약",
-                        track="AIPrompt",
-                    )
-                )
-
-    # Explicit task headings (작업 1~12)
-    for line in text.splitlines():
         m = re.match(r"^\s*##\s+작업\s+(\d+)\.\s+(.+?)\s*$", line)
         if not m:
             continue
+        due_date = today_iso if current_phase.startswith("P0.") else ""
+        task_name = re.sub(r"`([^`]+)`", r"\1", m.group(2).strip())
         tasks.append(
             BacklogTask(
-                title=f"작업 {m.group(1)} {m.group(2).strip()}",
+                title=f"작업 {m.group(1)} {task_name}",
                 source=str(source_path),
-                section="작업 상세",
+                section=current_phase,
                 track="AIPrompt",
+                due_date=due_date,
             )
         )
     return tasks
@@ -453,6 +416,10 @@ query($owner: String!, $number: Int!, $cursor: String) {
                 name
                 field { ... on ProjectV2FieldCommon { name } }
               }
+              ... on ProjectV2ItemFieldDateValue {
+                date
+                field { ... on ProjectV2FieldCommon { name } }
+              }
               ... on ProjectV2ItemFieldTextValue {
                 text
                 field { ... on ProjectV2FieldCommon { name } }
@@ -491,6 +458,10 @@ query($owner: String!, $number: Int!, $cursor: String) {
                 name
                 field { ... on ProjectV2FieldCommon { name } }
               }
+              ... on ProjectV2ItemFieldDateValue {
+                date
+                field { ... on ProjectV2FieldCommon { name } }
+              }
               ... on ProjectV2ItemFieldTextValue {
                 text
                 field { ... on ProjectV2FieldCommon { name } }
@@ -516,6 +487,7 @@ def _fetch_project_metadata(
     token: str,
     owner: str,
     project_number: int,
+    due_field_name: str,
     slot_field_name: str,
     time_window_field_name: str,
 ) -> tuple[str, dict[str, Any], set[str], list[ProjectItem]]:
@@ -540,12 +512,15 @@ def _fetch_project_metadata(
             title = str(content.get("title") or "").strip()
             content_type = str(content.get("__typename") or "").strip()
             item_id = str(node.get("id") or "").strip()
+            due_date_value = ""
             slot_value = ""
             time_window_value = ""
             for fv in (node.get("fieldValues") or {}).get("nodes") or []:
                 field_name = str(((fv.get("field") or {}).get("name")) or "").strip()
                 kind = str(fv.get("__typename") or "")
-                if field_name == slot_field_name:
+                if field_name == due_field_name and kind == "ProjectV2ItemFieldDateValue":
+                    due_date_value = str(fv.get("date") or "").strip()
+                elif field_name == slot_field_name:
                     if kind == "ProjectV2ItemFieldSingleSelectValue":
                         slot_value = str(fv.get("name") or "").strip()
                     elif kind == "ProjectV2ItemFieldTextValue" and not slot_value:
@@ -563,6 +538,7 @@ def _fetch_project_metadata(
                             item_id=item_id,
                             title=title,
                             content_type=content_type,
+                            due_date=due_date_value,
                             slot=slot_value,
                             time_window=time_window_value,
                         ),
@@ -688,12 +664,23 @@ def _infer_time_window(task: BacklogTask, *, slot_label: str, default_duration_m
     if mode:
         return mode
 
+    due_date = (task.due_date or "").strip()
+    holiday_forced_intraday = False
+    if due_date:
+        try:
+            is_trading_day, _ = get_krx_trading_day_status(datetime.fromisoformat(due_date).date())
+            if not is_trading_day and slot_label in {"PREOPEN", "POSTCLOSE"}:
+                slot_label = "INTRADAY"
+                holiday_forced_intraday = True
+        except Exception:
+            pass
+
     start, end = _extract_time_range_from_text(text)
     start = _normalize_hhmm(start)
     end = _normalize_hhmm(end)
-    if start and end:
+    if start and end and slot_label == "INTRADAY" and not holiday_forced_intraday:
         return f"{start}~{end}"
-    if start:
+    if start and slot_label == "INTRADAY" and not holiday_forced_intraday:
         end_auto = _add_minutes(start, max(5, default_duration_min))
         return f"{start}~{end_auto}" if end_auto else start
 
@@ -756,6 +743,7 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
         token,
         owner,
         number,
+        due_field_name,
         slot_field_name,
         time_window_field_name,
     )
@@ -958,6 +946,44 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
             else:
                 synced_status_done += 1
 
+    synced_due_filled = 0
+    synced_due_reclassified = 0
+    if due_field:
+        due_type = str(due_field.get("__typename") or "")
+        due_data_type = str(due_field.get("dataType") or "")
+        if due_type == "ProjectV2Field" and due_data_type == "DATE":
+            for item in existing_items:
+                if not _is_managed_project_title(item.title):
+                    continue
+                if item.title not in desired_open_titles:
+                    continue
+                task = tasks_by_title.get(item.title)
+                if not task or not task.due_date:
+                    continue
+                existing_due = item.due_date.strip()
+                if existing_due == task.due_date:
+                    continue
+                if dry_run:
+                    if existing_due:
+                        synced_due_reclassified += 1
+                    else:
+                        synced_due_filled += 1
+                    continue
+                _graphql_request(
+                    token,
+                    upd_mut,
+                    {
+                        "projectId": project_id,
+                        "itemId": item.item_id,
+                        "fieldId": due_field["id"],
+                        "value": {"date": task.due_date},
+                    },
+                )
+                if existing_due:
+                    synced_due_reclassified += 1
+                else:
+                    synced_due_filled += 1
+
     synced_slot_filled = 0
     synced_slot_reclassified = 0
     if auto_fill_slot and slot_field:
@@ -1086,6 +1112,8 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
         "skipped_existing": skipped_existing,
         "status_synced_todo": synced_status_todo,
         "status_synced_done": synced_status_done,
+        "due_filled": synced_due_filled,
+        "due_reclassified": synced_due_reclassified,
         "slot_filled": synced_slot_filled,
         "slot_reclassified": synced_slot_reclassified,
         "time_window_filled": synced_time_window_filled,

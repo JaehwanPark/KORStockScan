@@ -13,9 +13,12 @@ from src.utils.constants import DATA_DIR
 
 LOG_ARCHIVE_DIR = DATA_DIR / "log_archive"
 MONITOR_SNAPSHOT_DIR = DATA_DIR / "report" / "monitor_snapshots"
+SERVER_COMPARISON_REPORT_DIR = DATA_DIR / "report" / "server_comparison"
+DOCS_DIR = Path(__file__).resolve().parents[2] / "docs"
 
 LOG_ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
 MONITOR_SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+SERVER_COMPARISON_REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _snapshot_path(kind: str, target_date: str) -> Path:
@@ -36,6 +39,84 @@ def save_monitor_snapshot(kind: str, target_date: str, payload: dict) -> Path:
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, ensure_ascii=False, indent=2)
     return path
+
+
+def _relative_to_repo(path: Path) -> str:
+    repo_root = Path(__file__).resolve().parents[2]
+    try:
+        return str(path.relative_to(repo_root))
+    except Exception:
+        return str(path)
+
+
+def _upsert_generated_block(
+    path: Path,
+    *,
+    block_id: str,
+    content: str,
+    insert_before: str | None = None,
+) -> bool:
+    if not path.exists():
+        return False
+
+    start_marker = f"<!-- {block_id}_START -->"
+    end_marker = f"<!-- {block_id}_END -->"
+    block = f"{start_marker}\n{content.rstrip()}\n{end_marker}"
+    original = path.read_text(encoding="utf-8")
+
+    if start_marker in original and end_marker in original:
+        start = original.index(start_marker)
+        end = original.index(end_marker) + len(end_marker)
+        updated = f"{original[:start].rstrip()}\n\n{block}\n{original[end:].lstrip()}"
+    elif insert_before and insert_before in original:
+        updated = original.replace(insert_before, f"{block}\n\n{insert_before}", 1)
+    else:
+        updated = f"{original.rstrip()}\n\n{block}\n"
+
+    path.write_text(updated, encoding="utf-8")
+    return True
+
+
+def _save_server_comparison_artifacts(target_date: str) -> dict[str, str] | None:
+    from src.engine.server_report_comparison import (
+        build_snapshot_summary,
+        compare_server_reports,
+        render_checklist_append_block,
+        render_markdown_report,
+    )
+
+    comparison = compare_server_reports(
+        target_date=target_date,
+        remote_base_url="https://songstockscan.ddns.net",
+        since_time="09:00:00",
+        include_sections=("trade_review", "performance_tuning", "post_sell_feedback", "entry_pipeline_flow"),
+    )
+    summary = build_snapshot_summary(comparison)
+    comparison_snapshot_path = save_monitor_snapshot("server_comparison", target_date, comparison)
+
+    report_path = SERVER_COMPARISON_REPORT_DIR / f"server_comparison_{target_date}.md"
+    report_path.write_text(render_markdown_report(comparison), encoding="utf-8")
+
+    checklist_path = DOCS_DIR / f"{target_date}-stage2-todo-checklist.md"
+    checklist_updated = False
+    if checklist_path.exists():
+        checklist_block = render_checklist_append_block(
+            comparison,
+            report_relpath=_relative_to_repo(report_path),
+        )
+        checklist_updated = _upsert_generated_block(
+            checklist_path,
+            block_id="AUTO_SERVER_COMPARISON",
+            content=checklist_block,
+            insert_before=f"## {target_date} 장후 체크리스트 (15:30~)",
+        )
+
+    return {
+        "server_comparison_snapshot": str(comparison_snapshot_path),
+        "server_comparison_report": str(report_path),
+        "server_comparison_checklist_updated": str(checklist_updated).lower(),
+        "server_comparison_summary_generated_at": str(summary.get("generated_at") or ""),
+    }
 
 
 def archived_log_path(log_path: Path, target_date: str) -> Path:
@@ -117,6 +198,8 @@ def archive_target_date_logs(target_date: str, log_paths: Iterable[Path]) -> lis
 
 
 def save_monitor_snapshots_for_date(target_date: str) -> dict[str, str]:
+    from src.engine.buy_pause_guard import evaluate_buy_pause_guard
+    from src.engine.sniper_missed_entry_counterfactual import build_missed_entry_counterfactual_report
     from src.engine.sniper_performance_tuning_report import build_performance_tuning_report
     from src.engine.sniper_post_sell_feedback import build_post_sell_feedback_report
     from src.engine.sniper_trade_review_report import build_trade_review_report
@@ -146,12 +229,34 @@ def save_monitor_snapshots_for_date(target_date: str) -> dict[str, str]:
     post_sell_feedback.setdefault("meta", {})
     post_sell_feedback["meta"]["saved_snapshot_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     post_sell_feedback["meta"]["snapshot_kind"] = "post_sell_feedback"
+    missed_entry_counterfactual = build_missed_entry_counterfactual_report(
+        target_date=target_date,
+    )
+    missed_entry_counterfactual.setdefault("meta", {})
+    missed_entry_counterfactual["meta"]["saved_snapshot_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    missed_entry_counterfactual["meta"]["snapshot_kind"] = "missed_entry_counterfactual"
+    buy_pause_guard = evaluate_buy_pause_guard(target_date, send_alert=True)
+    trade_review["meta"]["buy_pause_guard"] = buy_pause_guard
+    performance_tuning["meta"]["buy_pause_guard"] = buy_pause_guard
+    post_sell_feedback["meta"]["buy_pause_guard"] = buy_pause_guard
+    missed_entry_counterfactual["meta"]["buy_pause_guard"] = buy_pause_guard
 
     trade_review_path = save_monitor_snapshot("trade_review", target_date, trade_review)
     performance_path = save_monitor_snapshot("performance_tuning", target_date, performance_tuning)
     post_sell_path = save_monitor_snapshot("post_sell_feedback", target_date, post_sell_feedback)
-    return {
+    missed_entry_counterfactual_path = save_monitor_snapshot("missed_entry_counterfactual", target_date, missed_entry_counterfactual)
+    result = {
         "trade_review": str(trade_review_path),
         "performance_tuning": str(performance_path),
         "post_sell_feedback": str(post_sell_path),
+        "missed_entry_counterfactual": str(missed_entry_counterfactual_path),
     }
+    try:
+        server_comparison = _save_server_comparison_artifacts(target_date)
+    except Exception as exc:
+        result["server_comparison_error"] = f"{type(exc).__name__}: {exc}"
+        return result
+
+    if server_comparison:
+        result.update(server_comparison)
+    return result

@@ -70,12 +70,80 @@
 
 - `08:20~08:35` 장전 baseline 1차 수집
   - 목적: 장 시작 전 `budget_pass -> latency_block` 직전 경로의 기준 지연값 확보
+- `08:05~08:10` shadow canary preopen readiness check
+  - 목적: `tmux bot`, `shadow env`, `07:40` 기동 상태를 장초반 전에 확인
+- `09:05~09:10` shadow canary open collection check
+  - 목적: `pipeline_events`가 실제로 갱신되고 있는지, `ENTRY_PIPELINE`/`ai_confirmed`가 들어오는지 확인
 - `10:20~10:35` 장중 1차 수집
   - 목적: 오전 변동성 구간의 `quote_stale=False latency_block` hot path 후보 관측
 - `13:20~13:35` 장중 2차 수집
   - 목적: 점심 이후 유동성 변화 구간 재측정 및 오전 결과와 비교
+- `15:45~16:00` shadow fetch/report
+  - 목적: 원격 fetch + `buy_diverged / 75~79 / missed_winner` 교차표 산출
 - `15:35~15:50` 장후 정리/확정
   - 목적: `hot path 후보 1~3개`를 문서화하고 다음 액션으로 연결
+
+## 작업 4 shadow canary 점검 명령세트
+
+### 수동 실행
+
+1. 장전 readiness (`08:05~08:10`)
+
+```bash
+PYTHONPATH=. .venv/bin/python -m src.engine.check_watching_prompt_75_shadow_canary \
+  --date 2026-04-13 \
+  --phase preopen
+```
+
+2. 장초반 수집 확인 (`09:05~09:10`)
+
+```bash
+PYTHONPATH=. .venv/bin/python -m src.engine.check_watching_prompt_75_shadow_canary \
+  --date 2026-04-13 \
+  --phase open_check
+```
+
+3. 오전 shadow fetch/report (`10:20~10:35`)
+
+```bash
+PYTHONPATH=. .venv/bin/python -m src.engine.check_watching_prompt_75_shadow_canary \
+  --date 2026-04-13 \
+  --phase midmorning
+```
+
+4. 장후 fetch/report (`15:45~16:00`)
+
+```bash
+PYTHONPATH=. .venv/bin/python -m src.engine.check_watching_prompt_75_shadow_canary \
+  --date 2026-04-13 \
+  --phase postclose
+```
+
+5. 원격 fetch 산출물 기준 shadow 집계
+
+```bash
+PYTHONPATH=. .venv/bin/python -m src.engine.watching_prompt_75_shadow_report \
+  --date 2026-04-13 \
+  --data-dir tmp/remote_2026-04-13/data \
+  --json-output tmp/watching_prompt_75_shadow_2026-04-13.json \
+  --markdown-output tmp/watching_prompt_75_shadow_2026-04-13.md
+```
+
+### 자동 실행 권장 시간
+
+- `08:05` `preopen`
+- `09:05` `open_check`
+- `10:25` `midmorning`
+- `15:45` `postclose`
+
+### 자동 실행용 cron 예시
+
+```bash
+5 8 * * 1-5 cd /home/ubuntu/KORStockScan && PYTHONPATH=. /home/ubuntu/KORStockScan/.venv/bin/python -m src.engine.check_watching_prompt_75_shadow_canary --date $(date +\\%F) --phase preopen >> logs/shadow_canary_check.log 2>&1
+5 9 * * 1-5 cd /home/ubuntu/KORStockScan && PYTHONPATH=. /home/ubuntu/KORStockScan/.venv/bin/python -m src.engine.check_watching_prompt_75_shadow_canary --date $(date +\\%F) --phase open_check >> logs/shadow_canary_check.log 2>&1
+25 10 * * 1-5 cd /home/ubuntu/KORStockScan && PYTHONPATH=. /home/ubuntu/KORStockScan/.venv/bin/python -m src.engine.check_watching_prompt_75_shadow_canary --date $(date +\\%F) --phase midmorning >> logs/shadow_canary_check.log 2>&1
+45 15 * * 1-5 cd /home/ubuntu/KORStockScan && PYTHONPATH=. /home/ubuntu/KORStockScan/.venv/bin/python -m src.engine.check_watching_prompt_75_shadow_canary --date $(date +\\%F) --phase postclose >> logs/shadow_canary_check.log 2>&1
+```
 
 ## `0-1b` / 원격 수집 트리거, 수행주체, 수행방식
 
@@ -120,16 +188,43 @@
 
 ## 장전 체크리스트 (08:00~09:00)
 
-- [ ] 원격 `latency remote_v2` 설정 유지 상태 확인
-- [ ] `fetch_remote_scalping_logs`를 `live snapshot copy -> tar` 방식으로 보강할지 장전 전 최종 결정
-- [ ] `GitHub Project -> Google Calendar` 동기화 워크플로우 마지막 실행 상태 확인
-- [ ] `Sync Docs Backlog To GitHub Project` 워크플로우 마지막 실행 상태 확인
-- [ ] `RELAX-LATENCY / RELAX-DYNSTR / RELAX-OVERBOUGHT` 시작 상태를 체크리스트에 고정
+- [x] 원격 `latency remote_v2` 설정 유지 상태 확인
+  - `2026-04-13 08:01 KST` 원격 `run_bot.sh`를 재기동해 `bot_main.py` PID `1151319`의 `/proc/<pid>/environ`에서 `KORSTOCKSCAN_LATENCY_CANARY_PROFILE=remote_v2`, `...MAX_WS_JITTER_MS=400`를 직접 확인.
+- [x] `fetch_remote_scalping_logs`를 `live snapshot copy -> tar` 방식으로 보강할지 장전 전 최종 결정
+  - `src/engine/fetch_remote_scalping_logs.py`는 이미 원격 `mktemp -d -> cp -p snapshot -> tar` 구조와 `snapshot_only_on_live_failure` fallback을 사용한다.
+- [x] `GitHub Project -> Google Calendar` 동기화 워크플로우 마지막 실행 상태 확인
+  - GitHub Actions API 기준 마지막 실행 `run_number=53`, `2026-04-13 08:02:51 KST`, `conclusion=success`, `head_sha=433e0408b2bab5ef054cd522f622af6486b4d823`.
+- [x] `Sync Docs Backlog To GitHub Project` 워크플로우 마지막 실행 상태 확인
+  - GitHub Actions API 기준 마지막 실행 `run_number=29`, `2026-04-13 04:08:25 KST`, `conclusion=success`, `head_sha=433e0408b2bab5ef054cd522f622af6486b4d823`.
+- [x] `RELAX-LATENCY / RELAX-DYNSTR / RELAX-OVERBOUGHT` 시작 상태를 체크리스트에 고정
+  - 상단 `전일(2026-04-10) 핵심 요약`에 `RELAX-LATENCY=강화`, `RELAX-DYNSTR=유지`, `RELAX-OVERBOUGHT=유지`를 고정했다.
 - [x] `AI 코딩 작업지시서` 기준 `Phase 0 / Phase 1` 선반영 범위 확정
 - [x] `latency reason breakdown / expired_armed / partial fill sync` 계측 반영 여부 확인
-- [ ] `0-1b 원격 경량 프로파일링` 수행 주체와 표준 절차(`OS 기본 sampling 우선`) 고정 (`08:00~08:10`)
-- [ ] 원격 경량 프로파일링 장전 baseline 1차 수집 (`08:20~08:35`)
-- [ ] `buy_pause_guard`, `run_monitor_snapshot`, 원격 fetch cron 상태 확인
+- [x] `0-1b 원격 경량 프로파일링` 수행 주체와 표준 절차(`OS 기본 sampling 우선`) 고정 (`08:00~08:10`)
+  - `docs/2026-04-11-remote-profiling-fetch-ai-coding-instructions.md`에 수행 주체/윈도우/명령 기준을 고정했고, `src/engine/collect_remote_latency_baseline.py` + `deploy/run_remote_latency_baseline.sh`를 추가했다.
+- [x] 원격 경량 프로파일링 장전 baseline 1차 수집 (`08:20~08:35`)
+  - `2026-04-13 08:20:01 KST` local cron `REMOTE_LATENCY_BASELINE_PREOPEN` 실행 확인.
+  - 산출물: `tmp/remote_latency_baseline/2026-04-13/2026-04-13_preopen_20260413_082001.json`, `...082001.md`
+  - 결과: `status=ok`, `bot_running=true`, `bot_pid=1151319`, `pipeline_exists=false`, `pipeline_line_count=0`
+- [x] `buy_pause_guard`, `run_monitor_snapshot`, 원격 fetch cron 상태 확인
+  - local cron: `buy_pause_guard` 기존 유지 확인.
+  - local cron 추가: `RUN_MONITOR_SNAPSHOT_1000`, `RUN_MONITOR_SNAPSHOT_1200`, `REMOTE_SCALPING_FETCH_1600`.
+  - 원격 crontab에는 동일 잡이 없고, 표준 경로는 local cron -> SSH fetch로 고정한다.
+  - smoke 실행 확인: `./deploy/run_monitor_snapshot_cron.sh 2026-04-13`, `./deploy/fetch_remote_scalping_logs_cron.sh 2026-04-10` 성공.
+
+### 2026-04-13 08:02 장전 점검 메모
+
+- 원격 bot: `08:01` 재기동 후 `tmux bot` 세션/`bot_main.py` PID `1151319` 활성.
+- 원격 canary env: `/proc/1151319/environ`에서 `remote_v2`, `MAX_WS_JITTER_MS=400`, `AI_WATCHING_75_PROMPT_SHADOW_ENABLED=true`, `MIN=75`, `MAX=79` 확인.
+- 장전 baseline smoke: [2026-04-13_preopen_20260413_080230.json](/home/ubuntu/KORStockScan/tmp/remote_latency_baseline/2026-04-13/2026-04-13_preopen_20260413_080230.json), [2026-04-13_preopen_20260413_080230.md](/home/ubuntu/KORStockScan/tmp/remote_latency_baseline/2026-04-13/2026-04-13_preopen_20260413_080230.md)
+- 장전 baseline 자동 실행 결과: [2026-04-13_preopen_20260413_082001.json](/home/ubuntu/KORStockScan/tmp/remote_latency_baseline/2026-04-13/2026-04-13_preopen_20260413_082001.json), [2026-04-13_preopen_20260413_082001.md](/home/ubuntu/KORStockScan/tmp/remote_latency_baseline/2026-04-13/2026-04-13_preopen_20260413_082001.md)
+- 현재 시각 기준 `pipeline_events_2026-04-13.jsonl`은 아직 생성 전이며, 장전 상태로는 정상이다.
+- snapshot/fetch wrapper smoke:
+  - `run_monitor_snapshot`: `2026-04-13` snapshot JSON 5종 + `server_comparison_2026-04-13.md` 생성 확인
+  - `fetch_remote_scalping_logs`: `2026-04-10` 기준 `[REMOTE_FETCH] ... status=ok` 확인
+- GitHub Actions 확인:
+  - `Sync Docs Backlog To GitHub Project`: `2026-04-13 04:08:25 KST` `success`
+  - `GitHub Project -> Google Calendar`: `2026-04-13 08:02:51 KST` `success`
 
 ## 장중 체크리스트 (09:00~15:30)
 
@@ -154,8 +249,97 @@
   - `hard time stop shadow` 영향 메모
   - `live hard stop` 계열(`preset/protect/scalp_hard_stop`) 분기 확인 메모
   - `스캘핑 -> 스윙 자동전환` shadow 조건 초안 정리
-- [ ] 원격 경량 프로파일링 장중 1차 수집 (`10:20~10:35`)
+- [x] 원격 경량 프로파일링 장중 1차 수집 (`10:20~10:35`)
 - [ ] 원격 경량 프로파일링 장중 2차 수집 (`13:20~13:35`)
+
+### 2026-04-13 10:03 KST 장중 중간 점검 메모
+
+- `GitHub Project -> Google Calendar` 마지막 실행 상태:
+  - 장전 점검에서 이미 확인 완료.
+  - GitHub Actions API 기준 마지막 실행 `run_number=53`, `2026-04-13 08:02:51 KST`, `conclusion=success`.
+- `RELAX-LATENCY` 관찰:
+  - `data/report/server_comparison/server_comparison_2026-04-13.md` 기준 `submitted_stocks=0`, `blocked_stocks local/remote = 29/30`.
+  - `ENTRY_PIPELINE`에는 `entry_armed`, `entry_armed_resume`, `entry_armed_expired_after_wait`가 반복 기록되고 있으나 `submitted/holding_started` 전환은 아직 확인되지 않았다.
+  - 따라서 현재 시점 판정은 `강화 유지 관찰 계속`, `quote_stale=False latency_block hot path`는 `10:20` 1차 수집 이후 재점검이 맞다.
+- `RELAX-DYNSTR` 관찰:
+  - `ENTRY_PIPELINE strength_momentum_observed / blocked_strength_momentum`에서 `below_window_buy_value`, `below_buy_ratio`, `below_strength_base` 3유형이 모두 확인됐다.
+  - 각 표본에 `momentum_tag=SCANNER`, `threshold_profile=default`가 함께 남아 재분해 가능한 상태다.
+- `RELAX-OVERBOUGHT` 관찰:
+  - `server_comparison_2026-04-13.md` 기준 local/remote 모두 `blocked_overbought count=18`.
+  - 오전 표본만으로도 과열 차단은 충분히 누적되고 있어 지금 단계에서 실전 완화 재오픈은 부적절하다.
+- 체결 품질 관찰:
+  - 현재 시점 `submitted/holding_started`가 없어 `full fill / partial fill` 평가는 유보.
+  - 대신 `entry_armed -> expired_after_wait` 반복은 누적 중이며, 장후에는 latency/quote 품질과 함께 봐야 한다.
+- 미결 이월건 추적:
+  - `태광(023160)`에서 `entry_armed`와 `entry_armed_expired_after_wait` 반복이 확인돼 `미체결 이월/소진` 관찰 포인트로 유지한다.
+  - `live hard stop` 계열은 현재 시점 검색 표본 없음.
+- 시간 조건:
+  - `원격 경량 프로파일링 장중 1차 수집 (10:20~10:35)`은 `2026-04-13 10:20:02 KST` cron 자동 실행으로 완료.
+  - `원격 경량 프로파일링 장중 2차 수집 (13:20~13:35)`도 아직 시작 전이라 미착수 유지.
+
+### 2026-04-13 10:20 KST 장중 1차 프로파일링 메모
+
+- 산출물:
+  - `tmp/remote_latency_baseline/2026-04-13/2026-04-13_midmorning_20260413_102002.json`
+  - `tmp/remote_latency_baseline/2026-04-13/2026-04-13_midmorning_20260413_102002.md`
+- 결과 요약:
+  - `status=ok`
+  - `bot_running=true`
+  - `bot_pid=1159650`
+  - `pipeline_exists=true`
+  - `pipeline_line_count=78390`
+  - `latency_block_rows=308`
+  - `latest_event_at=2026-04-13T10:20:04.116052`
+- 해석:
+  - 원격 `remote_v2` 관측 경로와 shadow env는 장중에도 정상 유지되고 있다.
+  - `quote_stale=False latency_block` hot path 설명은 장후에 `midmorning`/`13:20` 결과를 합쳐 최종 정리한다.
+
+### 2026-04-13 10:43 KST WATCHING 75 shadow 중간집계
+
+- 집계 명령:
+  - `PYTHONPATH=. .venv/bin/python -m src.engine.watching_prompt_75_shadow_report --date 2026-04-13 --data-dir data --json-output tmp/watching_prompt_75_shadow_2026-04-13.json --markdown-output tmp/watching_prompt_75_shadow_2026-04-13.md`
+- 결과:
+  - `shadow_samples=0`
+  - `buy_diverged_count=0`
+  - 최근 3일 `eligible_shadow(75~79, non-BUY, non-fallback)`는 `2026-04-09=0`, `2026-04-10=1`, `2026-04-13=0`
+- 추가 해석:
+  - `WAIT 65`는 최근 3일 총 `286건`이며 `missed_entry_counterfactual`에 붙은 `85건` 중 `MISSED_WINNER=62`, `AVOIDED_LOSER=20`, `NEUTRAL=3`이다.
+  - 오늘 `fallback50` `4건`은 모두 `ai_result_source=cooldown`이라 파싱 실패보다 쿨다운 경로로 봐야 한다.
+  - 현재 판정은 `shadow band 즉시 하향 보류`, `작업 5 보류 유지`, `13:20/장후에 표본 재확인`이다.
+
+### 2026-04-13 10:49 KST WAIT 65 blocker 교차집계
+
+- 산출물:
+  - `tmp/wait65_blocker_crosstab_2026-04-13.json`
+- 최근 3일 `WAIT 65` 총 `288건`, counterfactual join `85건`
+- `terminal_stage x outcome`
+  - `latency_block`: `MISSED_WINNER=50`, `AVOIDED_LOSER=20`, `NEUTRAL=2`
+  - `blocked_strength_momentum`: `MISSED_WINNER=11`, `NEUTRAL=1`
+  - `blocked_liquidity`: `MISSED_WINNER=1`
+- `blocked_overbought x outcome`
+  - 전 표본 `False`
+  - 즉 현재 `WAIT 65` missed-winner 묶음은 `overbought gate miss`보다 `latency/strength` 축으로 읽는 것이 맞다.
+- 해석:
+  - `WAIT 65`는 단순 AI threshold miss라기보다 `latency_block`과 `strength_momentum` blocker에 더 강하게 묶인다.
+  - 다음 우선순위는 `shadow band 하향`보다 `WAIT 65 + latency_block`, `WAIT 65 + blocked_strength_momentum` 분해다.
+
+### 2026-04-13 11:02 KST latency canary 개선 패치
+
+- 목적:
+  - `quote_stale=False` 중심 latency canary를 전면 완화가 아니라 더 좁고 해석 가능하게 유지
+- 코드 반영:
+  - `src/engine/sniper_entry_latency.py`
+  - `src/engine/sniper_state_handlers.py`
+  - `src/engine/sniper_entry_pipeline_report.py`
+  - `src/engine/sniper_performance_tuning_report.py`
+  - `src/utils/constants.py`
+- 핵심 변경:
+  - `latency_state_danger`를 `quote_stale / ws_age_too_high / ws_jitter_too_high / spread_too_wide / other_danger`로 분해해 로그에 남긴다.
+  - `KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_ALLOWED_DANGER_REASONS` env로 canary를 특정 danger reason에만 허용할 수 있게 했다.
+  - `latency_block`/`latency_pass` 이벤트에 `latency_danger_reasons`를 함께 남기고, 리포트 breakdown에도 추가했다.
+- 테스트:
+  - `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_sniper_entry_latency.py src/tests/test_constants.py`
+  - 결과 `11 passed`
 
 ## 장후 체크리스트 (15:30~)
 
@@ -181,3 +365,18 @@
 - [2026-04-10-scalping-ai-coding-instructions.md](./2026-04-10-scalping-ai-coding-instructions.md)
 - [2026-04-11-remote-profiling-fetch-ai-coding-instructions.md](./2026-04-11-remote-profiling-fetch-ai-coding-instructions.md)
 - [2026-04-10-scalping-expert-proposals-not-fit.md](./2026-04-10-scalping-expert-proposals-not-fit.md)
+
+<!-- AUTO_SERVER_COMPARISON_START -->
+### 본서버 vs songstockscan 자동 비교 (`2026-04-13 10:00:33`)
+
+- 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
+- 상세 리포트: `data/report/server_comparison/server_comparison_2026-04-13.md`
+- `Trade Review`: status=`ok`, differing_safe_metrics=`5`
+  - all_rows local=44 remote=47 delta=3.0; expired_rows local=0 remote=3 delta=3.0; total_trades local=1 remote=0 delta=-1.0
+- `Performance Tuning`: status=`ok`, differing_safe_metrics=`10`
+  - gatekeeper_eval_ms_p95 local=40197.0 remote=35544.0 delta=-4653.0; holding_review_ms_p95 local=2690.0 remote=0.0 delta=-2690.0; holding_review_ms_avg local=2315.06 remote=0.0 delta=-2315.06
+- `Post Sell Feedback`: status=`ok`, differing_safe_metrics=`2`
+  - total_candidates local=1 remote=0 delta=-1.0; evaluated_candidates local=1 remote=0 delta=-1.0
+- `Entry Pipeline Flow`: status=`ok`, differing_safe_metrics=`3`
+  - total_events local=48516 remote=46688 delta=-1828.0; tracked_stocks local=42 remote=41 delta=-1.0; blocked_stocks local=29 remote=30 delta=1.0
+<!-- AUTO_SERVER_COMPARISON_END -->

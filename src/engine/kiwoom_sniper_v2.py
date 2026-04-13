@@ -347,6 +347,11 @@ def handle_real_execution(exec_data):
     return sniper_execution_receipts.handle_real_execution(exec_data)
 
 
+def handle_order_notice(notice_data):
+    _ensure_execution_deps()
+    return sniper_execution_receipts.handle_order_notice(notice_data)
+
+
 _OVERNIGHT_DEPS = {}
 
 def _ensure_overnight_deps():
@@ -991,6 +996,7 @@ def run_sniper(is_test_mode=False):
 
     # 중복 subscribe 방지
     if not getattr(run_sniper, '_subscriptions_registered', False):
+        event_bus.subscribe('ORDER_NOTICE', handle_order_notice)
         event_bus.subscribe('ORDER_EXECUTED', handle_real_execution)
         event_bus.subscribe('CONDITION_MATCHED', handle_condition_matched)
         event_bus.subscribe('CONDITION_UNMATCHED', handle_condition_unmatched)

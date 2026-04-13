@@ -33,6 +33,13 @@ dist/
 # PostgreSQL을 쓰지만, 이전 SQLite 잔재나 백업본 방지
 *.db
 *.sqlite3
+*.json
+*.jsonl
+*.csv
+*.bak
+*.backup
+*.gz
+*.log
 
 # bot_main.py에서 생성하는 로그 폴더
 logs/

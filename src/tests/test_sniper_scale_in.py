@@ -479,9 +479,9 @@ def test_watching_state_submits_fallback_entry_bundle(monkeypatch):
     assert stock["status"] == "BUY_ORDERED"
     assert len(sent_orders) == 2
     assert sent_orders[0] == (1, 0, "16", "IOC")
-    assert sent_orders[1] == (4, 9990, "00", "DAY")
+    assert sent_orders[1] == (3, 9990, "00", "DAY")
     assert len(stock["pending_entry_orders"]) == 2
-    assert stock["entry_requested_qty"] == 5
+    assert stock["entry_requested_qty"] == 4
 
 
 def test_entry_arm_skips_strength_recheck_after_ai_confirm(monkeypatch):
@@ -756,6 +756,130 @@ def test_late_fill_after_cancel_matches_terminal_entry_order(monkeypatch):
 
     assert stock["buy_qty"] == 2
     assert stock["status"] == "HOLDING"
+
+
+def test_order_notice_backfills_missing_entry_order_number(monkeypatch):
+    receipts.ACTIVE_TARGETS = []
+    receipts.highest_prices = {}
+    receipts._get_fast_state = lambda code: None
+    receipts.DB = _DummyDB()
+    receipts.KIWOOM_TOKEN = "token"
+    entry_state.TERMINAL_ENTRY_ORDERS.clear()
+
+    class DummyThread:
+        def __init__(self, target=None, args=(), daemon=None):
+            self._target = target
+            self._args = args
+
+        def start(self):
+            if self._target:
+                self._target(*self._args)
+
+    monkeypatch.setattr(receipts.threading, "Thread", DummyThread)
+    monkeypatch.setattr(receipts, "_update_db_for_buy", lambda *args, **kwargs: None)
+    monkeypatch.setattr(receipts.kiwoom_utils, "get_target_price_up", lambda price, pct: 10150)
+    monkeypatch.setattr(kiwoom_orders, "send_sell_order_market", lambda *args, **kwargs: {"ord_no": "TP1"})
+
+    stock = {
+        "id": 1,
+        "code": "123456",
+        "name": "TEST",
+        "status": "BUY_ORDERED",
+        "strategy": "SCALPING",
+        "position_tag": "MIDDLE",
+        "buy_price": 0,
+        "buy_qty": 0,
+        "entry_mode": "fallback",
+        "entry_requested_qty": 3,
+        "pending_entry_orders": [
+            {"tag": "fallback_main", "qty": 3, "ord_no": "", "status": "OPEN", "filled_qty": 0},
+        ],
+    }
+    receipts.ACTIVE_TARGETS.append(stock)
+
+    receipts.handle_order_notice({"code": "123456", "type": "BUY", "order_no": "O1", "status": "접수"})
+
+    assert stock["odno"] == "O1"
+    assert stock["pending_entry_orders"][0]["ord_no"] == "O1"
+    assert stock["pending_entry_orders"][0]["notice_status"] == "접수"
+
+    receipts.handle_real_execution({"code": "123456", "type": "BUY", "order_no": "O1", "price": 10000, "qty": 3})
+
+    assert stock["buy_qty"] == 3
+    assert stock["status"] == "HOLDING"
+    assert stock.get("pending_entry_orders") is None
+
+
+def test_stage_buy_order_submission_preserves_early_fill_state(monkeypatch):
+    receipts.ACTIVE_TARGETS = []
+    receipts.highest_prices = {}
+    receipts._get_fast_state = lambda code: None
+    receipts.DB = _DummyDB()
+    receipts.KIWOOM_TOKEN = "token"
+    entry_state.TERMINAL_ENTRY_ORDERS.clear()
+
+    class DummyThread:
+        def __init__(self, target=None, args=(), daemon=None):
+            self._target = target
+            self._args = args
+
+        def start(self):
+            if self._target:
+                self._target(*self._args)
+
+    monkeypatch.setattr(receipts.threading, "Thread", DummyThread)
+    monkeypatch.setattr(receipts, "_update_db_for_buy", lambda *args, **kwargs: None)
+    monkeypatch.setattr(receipts.kiwoom_utils, "get_target_price_up", lambda price, pct: 10150)
+    monkeypatch.setattr(kiwoom_orders, "send_sell_order_market", lambda *args, **kwargs: {"ord_no": "TP1"})
+
+    stock = {
+        "id": 1,
+        "code": "123456",
+        "name": "TEST",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "MIDDLE",
+        "buy_price": 0,
+        "buy_qty": 0,
+        "entry_mode": "fallback",
+    }
+    receipts.ACTIVE_TARGETS.append(stock)
+
+    first_leg = [
+        {"tag": "fallback_scout", "qty": 1, "ord_no": "O1", "status": "OPEN", "filled_qty": 0},
+    ]
+    state_handlers._stage_buy_order_submission(
+        stock=stock,
+        code="123456",
+        curr_price=10000,
+        requested_qty=3,
+        msg="pending",
+        entry_orders=first_leg,
+    )
+
+    receipts.handle_real_execution({"code": "123456", "type": "BUY", "order_no": "O1", "price": 10000, "qty": 1})
+
+    assert stock["buy_qty"] == 1
+    assert stock["entry_filled_qty"] == 1
+
+    all_legs = [
+        {"tag": "fallback_scout", "qty": 1, "ord_no": "O1", "status": "OPEN", "filled_qty": 0},
+        {"tag": "fallback_main", "qty": 2, "ord_no": "O2", "status": "OPEN", "filled_qty": 0},
+    ]
+    state_handlers._stage_buy_order_submission(
+        stock=stock,
+        code="123456",
+        curr_price=10000,
+        requested_qty=3,
+        msg="pending",
+        entry_orders=all_legs,
+    )
+
+    assert stock["status"] == "BUY_ORDERED"
+    assert stock["entry_filled_qty"] == 1
+    assert stock["pending_entry_orders"][0]["ord_no"] == "O1"
+    assert stock["pending_entry_orders"][0]["filled_qty"] == 1
+    assert stock["pending_entry_orders"][0]["status"] == "FILLED"
 
 
 def test_scalp_preset_tp_refreshes_to_latest_filled_qty(monkeypatch):
@@ -1793,6 +1917,195 @@ def test_scanner_fallback_never_green_exit_rule(monkeypatch):
     assert stock["last_exit_rule"] == "scalp_scanner_fallback_never_green"
     exit_logs = [fields for stage, fields in pipeline_logs if stage == "exit_signal"]
     assert exit_logs and exit_logs[-1]["exit_rule"] == "scalp_scanner_fallback_never_green"
+
+
+def test_open_reclaim_retrace_exit_rule(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALP_OPEN_RECLAIM_NEVER_GREEN_HOLD_SEC=300,
+        SCALP_OPEN_RECLAIM_NEVER_GREEN_PEAK_MAX_PCT=0.20,
+        SCALP_OPEN_RECLAIM_RETRACE_NEAR_AI_EXIT_SUSTAIN_SEC=120,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 100.60}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    pipeline_logs = []
+
+    def fake_log_holding_pipeline(stock, code, stage, **fields):
+        pipeline_logs.append((stage, fields))
+
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", fake_log_holding_pipeline)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda *args, **kwargs: {"return_code": "0", "ord_no": "S2"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_block"},
+    )
+
+    stock = {
+        "id": 17,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "position_tag": "OPEN_RECLAIM",
+        "buy_price": 100,
+        "buy_qty": 10,
+        "rt_ai_prob": 0.32,
+        "order_time": state_handlers.time.time() - 520,
+        "open_reclaim_near_ai_exit_started_at": state_handlers.time.time() - 150,
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 99.2, "orderbook": {"bids": [{"price": 99, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    assert stock["status"] == "SELL_ORDERED"
+    assert stock["last_exit_rule"] == "scalp_open_reclaim_retrace_exit"
+    exit_logs = [fields for stage, fields in pipeline_logs if stage == "exit_signal"]
+    assert exit_logs and exit_logs[-1]["exit_rule"] == "scalp_open_reclaim_retrace_exit"
+
+
+def test_scanner_fallback_retrace_exit_rule(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALP_SCANNER_FALLBACK_NEVER_GREEN_HOLD_SEC=420,
+        SCALP_SCANNER_FALLBACK_NEVER_GREEN_PEAK_MAX_PCT=0.20,
+        SCALP_SCANNER_FALLBACK_RETRACE_NEAR_AI_EXIT_SUSTAIN_SEC=150,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 100.55}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    pipeline_logs = []
+
+    def fake_log_holding_pipeline(stock, code, stage, **fields):
+        pipeline_logs.append((stage, fields))
+
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", fake_log_holding_pipeline)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda *args, **kwargs: {"return_code": "0", "ord_no": "S3"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_block"},
+    )
+
+    stock = {
+        "id": 19,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "entry_mode": "fallback",
+        "buy_price": 100,
+        "buy_qty": 10,
+        "rt_ai_prob": 0.36,
+        "order_time": state_handlers.time.time() - 780,
+        "near_ai_exit_started_at": state_handlers.time.time() - 220,
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 99.2, "orderbook": {"bids": [{"price": 99, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    assert stock["status"] == "SELL_ORDERED"
+    assert stock["last_exit_rule"] == "scalp_scanner_fallback_retrace_exit"
+    exit_logs = [fields for stage, fields in pipeline_logs if stage == "exit_signal"]
+    assert exit_logs and exit_logs[-1]["exit_rule"] == "scalp_scanner_fallback_retrace_exit"
+
+
+def test_common_hard_time_stop_stays_shadow_only(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALP_COMMON_HARD_TIME_STOP_SHADOW_ONLY=True,
+        SCALP_COMMON_HARD_TIME_STOP_SHADOW_MINUTES=(3, 5, 7),
+        SCALP_COMMON_HARD_TIME_STOP_SHADOW_MIN_LOSS_PCT=-0.7,
+        SCALP_COMMON_HARD_TIME_STOP_SHADOW_MAX_PEAK_PCT=0.20,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 100.10}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    pipeline_logs = []
+
+    def fake_log_holding_pipeline(stock, code, stage, **fields):
+        pipeline_logs.append((stage, fields))
+
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", fake_log_holding_pipeline)
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_block"},
+    )
+
+    stock = {
+        "id": 21,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "position_tag": "SCALP_BASE",
+        "entry_mode": "fallback",
+        "buy_price": 100,
+        "buy_qty": 10,
+        "rt_ai_prob": 0.55,
+        "order_time": state_handlers.time.time() - 400,
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 99.2, "orderbook": {"bids": [{"price": 99, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    assert stock["status"] == "HOLDING"
+    shadow_logs = [fields for stage, fields in pipeline_logs if stage == "hard_time_stop_shadow"]
+    assert shadow_logs
+    assert any(item.get("candidate") == "fallback_3m" for item in shadow_logs)
 
 
 def test_holding_shadow_band_logs_review_for_near_safe_profit(monkeypatch):

@@ -30,6 +30,11 @@ from src.engine.trade_pause_control import (
     get_pause_state_label,
     is_buy_side_paused,
 )
+from src.engine.buy_pause_guard import (
+    confirm_buy_pause_guard,
+    get_buy_pause_guard_status,
+    reject_buy_pause_guard,
+)
 from src.engine.sniper_entry_metrics import (
     format_entry_metrics_summary_compact,
     format_entry_metrics_summary,
@@ -272,10 +277,15 @@ def _get_admin_pause_status_label():
 
 def _reply_pause_status(message):
     paused = is_trading_paused()
+    guard_status = get_buy_pause_guard_status()
     if paused:
         text = "현재 상태: 신규 매수/추가매수 중단"
     else:
         text = "현재 상태: 정상운영"
+    active_guard_id = str(guard_status.get("active_guard_id") or "").strip()
+    active_guard_status = str(guard_status.get("status") or "").strip()
+    if active_guard_id:
+        text += f"\nGuard 상태: {active_guard_status or '-'} ({active_guard_id})"
     bot.reply_to(message, text)
 
 
@@ -341,6 +351,24 @@ def _handle_pause_toggle(message, *, paused):
         'TELEGRAM_BROADCAST',
         {'message': msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'HTML'},
     )
+
+
+def _extract_command_arg(message):
+    text = str(getattr(message, "text", "") or "").strip()
+    parts = text.split(maxsplit=1)
+    if len(parts) >= 2:
+        return parts[1].strip()
+    return ""
+
+
+def _reply_guard_action(message, result):
+    reply_text = str(result.get("message") or "처리 결과가 비어 있습니다.")
+    bot.reply_to(message, reply_text, reply_markup=get_main_keyboard(chat_id=message.chat.id))
+    if result.get("ok"):
+        event_bus.publish(
+            'TELEGRAM_BROADCAST',
+            {'message': reply_text, 'audience': 'ADMIN_ONLY', 'parse_mode': None},
+        )
 
 def get_main_keyboard(chat_id=None):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -481,6 +509,26 @@ def cmd_pause_status(message):
         bot.reply_to(message, "⛔ 권한이 없습니다.")
         return
     _reply_pause_status(message)
+
+
+@bot.message_handler(commands=['buy_pause_confirm'])
+def cmd_buy_pause_confirm(message):
+    if not _is_admin_message(message):
+        bot.reply_to(message, "⛔ 권한이 없습니다.")
+        return
+    guard_id = _extract_command_arg(message)
+    result = confirm_buy_pause_guard(guard_id, event_bus=event_bus)
+    _reply_guard_action(message, result)
+
+
+@bot.message_handler(commands=['buy_pause_reject'])
+def cmd_buy_pause_reject(message):
+    if not _is_admin_message(message):
+        bot.reply_to(message, "⛔ 권한이 없습니다.")
+        return
+    guard_id = _extract_command_arg(message)
+    result = reject_buy_pause_guard(guard_id)
+    _reply_guard_action(message, result)
 
 
 @bot.message_handler(commands=['trading_status'])

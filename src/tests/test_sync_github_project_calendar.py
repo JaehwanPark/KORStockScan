@@ -222,7 +222,7 @@ def test_event_body_uses_explicit_time_range_from_title_over_slot_default():
     assert body["end"]["dateTime"] == "2026-04-14T13:35:00"
 
 
-def test_event_body_holiday_keeps_explicit_time_range():
+def test_event_body_holiday_forces_intraday_over_explicit_time_range():
     item = ProjectItem(
         item_id="PVTI_3b",
         content_type="Issue",
@@ -249,8 +249,8 @@ def test_event_body_holiday_keeps_explicit_time_range():
         slot_duration_minutes=30,
         slot_reminder_minutes=0,
     )
-    assert body["start"]["dateTime"] == "2026-04-12T13:20:00"
-    assert body["end"]["dateTime"] == "2026-04-12T13:35:00"
+    assert body["start"]["dateTime"] == "2026-04-12T10:00:00"
+    assert body["end"]["dateTime"] == "2026-04-12T10:30:00"
 
 
 def test_event_body_prefers_time_window_field_over_title_and_slot():
@@ -282,6 +282,37 @@ def test_event_body_prefers_time_window_field_over_title_and_slot():
     )
     assert body["start"]["dateTime"] == "2026-04-14T13:20:00"
     assert body["end"]["dateTime"] == "2026-04-14T13:35:00"
+
+
+def test_event_body_holiday_forces_intraday_over_time_window():
+    item = ProjectItem(
+        item_id="PVTI_4b",
+        content_type="Issue",
+        title="Task Holiday",
+        url="https://github.com/org/repo/issues/44",
+        due_date="2026-04-12",
+        status="Todo",
+        track="AIPrompt",
+        slot="POSTCLOSE",
+        time_window="15:40~16:10",
+        assignees="alice",
+        state="OPEN",
+    )
+    body = _event_body(
+        item,
+        event_prefix="[KORStockScan]",
+        owner="org",
+        project_number=3,
+        event_timezone="Asia/Seoul",
+        use_slot_time=True,
+        slot_preopen_time="08:20",
+        slot_intraday_time="10:00",
+        slot_postclose_time="15:40",
+        slot_duration_minutes=30,
+        slot_reminder_minutes=0,
+    )
+    assert body["start"]["dateTime"] == "2026-04-12T10:00:00"
+    assert body["end"]["dateTime"] == "2026-04-12T10:30:00"
 
 
 def test_event_body_all_day_when_unscheduled_time_window():

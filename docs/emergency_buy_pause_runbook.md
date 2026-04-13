@@ -30,6 +30,8 @@
 - `/resume`
 - `/pause_status`
 - `/trading_status`
+- `/buy_pause_confirm <guard_id>`
+- `/buy_pause_reject <guard_id>`
 
 상태 라벨:
 - `✅ 현재: 정상운영`
@@ -38,6 +40,23 @@
 상태조회 응답:
 - `현재 상태: 정상운영`
 - `현재 상태: 신규 매수/추가매수 중단`
+
+가드 승인형 운영:
+- `buy pause guard`가 `09:30~11:00` 사이 5분 간격으로 fallback canary 악화를 자동 평가
+- 경보는 관리자에게만 발송되며, 자동 pause는 하지 않음
+- 운영자는 `/buy_pause_confirm <guard_id>` 로 승인하거나 `/buy_pause_reject <guard_id>` 로 거절
+- `guard_id`는 텔레그램 `ADMIN_ID` 숫자가 아니라, 경보 건별 운영 티켓 ID다
+- 형식 예시: `BPG-20260409-1000-01`
+- 텔레그램 입력 예시:
+  - 경보 승인 후 buy pause 실행: `/buy_pause_confirm BPG-20260409-1000-01`
+  - 경보 거절: `/buy_pause_reject BPG-20260409-1000-01`
+  - 현재 상태 확인: `/pause_status`
+  - guard와 무관하게 즉시 수동 pause: `/pause`
+  - 수동 재개: `/resume`
+- Codex 백업 경로:
+  - `buy pause 실행해줘`
+  - `buy resume 실행해줘`
+  - `buy pause 상태 보여줘`
 
 ## 3. 부팅 시 확인 포인트
 부팅 시 `pause.flag`가 남아 있으면 시스템은 자동으로 pause 상태를 유지한다.
@@ -53,6 +72,7 @@ pause 관련 표준 태그:
 - `[TRADING_PAUSED]`
 - `[TRADING_RESUMED]`
 - `[TRADING_PAUSED_BLOCK]`
+- `[BUY_PAUSE_GUARD]`
 
 예시 grep:
 ```bash

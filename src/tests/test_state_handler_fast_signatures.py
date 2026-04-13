@@ -1,9 +1,15 @@
+from dataclasses import replace
+
 from src.engine.sniper_state_handlers import (
+    _build_ai_overlap_log_fields,
+    _build_ai_ops_log_fields,
     _build_gatekeeper_fast_signature,
     _build_holding_ai_fast_signature,
+    _should_run_watching_prompt_75_shadow,
     _resolve_gatekeeper_fast_reuse_sec,
     _resolve_holding_ai_fast_reuse_sec,
 )
+from src.utils.constants import TRADING_RULES
 
 
 def test_gatekeeper_fast_signature_absorbs_small_noise():
@@ -83,3 +89,67 @@ def test_holding_ai_fast_reuse_sec_tracks_review_window():
 
 def test_gatekeeper_fast_reuse_sec_has_minimum_window():
     assert _resolve_gatekeeper_fast_reuse_sec() >= 20.0
+
+
+def test_build_ai_ops_log_fields_preserves_operational_meta():
+    fields = _build_ai_ops_log_fields(
+        {
+            "ai_parse_ok": True,
+            "ai_parse_fail": False,
+            "ai_fallback_score_50": False,
+            "ai_response_ms": 321,
+            "ai_prompt_type": "scalping_shared",
+            "ai_result_source": "live",
+        },
+        ai_score_raw=74,
+        ai_score_after_bonus=79,
+        entry_score_threshold=75,
+        big_bite_bonus_applied=True,
+        ai_cooldown_blocked=False,
+    )
+
+    assert fields["ai_parse_ok"] is True
+    assert fields["ai_parse_fail"] is False
+    assert fields["ai_fallback_score_50"] is False
+    assert fields["ai_response_ms"] == 321
+    assert fields["ai_prompt_type"] == "scalping_shared"
+    assert fields["ai_result_source"] == "live"
+    assert fields["ai_score_raw"] == "74.0"
+    assert fields["ai_score_after_bonus"] == "79.0"
+    assert fields["entry_score_threshold"] == "75.0"
+    assert fields["big_bite_bonus_applied"] is True
+    assert fields["ai_cooldown_blocked"] is False
+
+
+def test_build_ai_overlap_log_fields_includes_momentum_and_profile():
+    stock = {"entry_momentum_tag": "SURGE", "entry_threshold_profile": "RELAX"}
+
+    fields = _build_ai_overlap_log_fields(
+        stock=stock,
+        ai_score=78,
+        momentum_tag="MIDDLE",
+        threshold_profile="STRICT",
+        overbought_blocked=False,
+        blocked_stage="blocked_strength_momentum",
+        overlap_snapshot={},
+    )
+
+    assert fields["momentum_tag"] == "MIDDLE"
+    assert fields["threshold_profile"] == "STRICT"
+    assert fields["blocked_stage"] == "blocked_strength_momentum"
+    assert fields["ai_score"] == "78.0"
+
+
+def test_should_run_watching_prompt_75_shadow_only_for_boundary_wait(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        AI_WATCHING_75_PROMPT_SHADOW_ENABLED=True,
+        AI_WATCHING_75_PROMPT_SHADOW_MIN_SCORE=75,
+        AI_WATCHING_75_PROMPT_SHADOW_MAX_SCORE=79,
+    )
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+
+    assert _should_run_watching_prompt_75_shadow({"action": "WAIT"}, 77) is True
+    assert _should_run_watching_prompt_75_shadow({"action": "BUY"}, 77) is False
+    assert _should_run_watching_prompt_75_shadow({"action": "WAIT", "ai_fallback_score_50": True}, 77) is False
+    assert _should_run_watching_prompt_75_shadow({"action": "WAIT"}, 74) is False

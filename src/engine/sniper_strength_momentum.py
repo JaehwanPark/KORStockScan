@@ -28,6 +28,82 @@ def _safe_positive_delta(end_value: int | float, start_value: int | float) -> in
         return 0
 
 
+def _normalized_tag_set(raw_tags) -> set[str]:
+    return {
+        str(tag).strip().upper()
+        for tag in (raw_tags or ())
+        if str(tag).strip()
+    }
+
+
+def _try_dynamic_strength_canary(
+    *,
+    result: dict,
+    reason: str,
+    profile_tag: str,
+    threshold_profile: str,
+    min_base: float,
+    current_vpw: float,
+    min_buy_value: int,
+    window_buy_value: int,
+    min_buy_ratio: float,
+    buy_ratio: float,
+    min_exec_buy_ratio: float,
+    exec_buy_ratio: float,
+) -> bool:
+    if not bool(getattr(TRADING_RULES, "SCALP_DYNAMIC_STRENGTH_CANARY_ENABLED", False)):
+        return False
+
+    allow_tags = _normalized_tag_set(getattr(TRADING_RULES, "SCALP_DYNAMIC_STRENGTH_CANARY_TAGS", ()))
+    if allow_tags and str(profile_tag or "").upper() not in allow_tags:
+        return False
+
+    allowed_reasons = _normalized_tag_set(getattr(TRADING_RULES, "SCALP_DYNAMIC_STRENGTH_CANARY_ALLOWED_REASONS", ()))
+    if allowed_reasons and str(reason or "").upper() not in allowed_reasons:
+        return False
+
+    min_buy_value_ratio = float(getattr(TRADING_RULES, "SCALP_DYNAMIC_STRENGTH_CANARY_MIN_BUY_VALUE_RATIO", 0.85) or 0.85)
+    buy_ratio_tol = float(getattr(TRADING_RULES, "SCALP_DYNAMIC_STRENGTH_CANARY_BUY_RATIO_TOL", 0.03) or 0.03)
+    exec_buy_ratio_tol = float(
+        getattr(TRADING_RULES, "SCALP_DYNAMIC_STRENGTH_CANARY_EXEC_BUY_RATIO_TOL", 0.03) or 0.03
+    )
+    min_base_floor = max(min_base - 1.5, 0.0)
+
+    reason_key = str(reason or "").strip().lower()
+    passed = False
+    if reason_key == "below_exec_buy_ratio":
+        passed = (
+            exec_buy_ratio >= (min_exec_buy_ratio - exec_buy_ratio_tol)
+            and buy_ratio >= (min_buy_ratio - buy_ratio_tol)
+            and window_buy_value >= int(min_buy_value * min_buy_value_ratio)
+            and current_vpw >= min_base_floor
+        )
+    elif reason_key == "below_buy_ratio":
+        passed = (
+            buy_ratio >= (min_buy_ratio - buy_ratio_tol)
+            and exec_buy_ratio >= (min_exec_buy_ratio - exec_buy_ratio_tol)
+            and window_buy_value >= int(min_buy_value * min_buy_value_ratio)
+            and current_vpw >= min_base_floor
+        )
+    elif reason_key == "below_window_buy_value":
+        passed = (
+            window_buy_value >= int(min_buy_value * min_buy_value_ratio)
+            and buy_ratio >= (min_buy_ratio - buy_ratio_tol)
+            and exec_buy_ratio >= (min_exec_buy_ratio - exec_buy_ratio_tol)
+            and current_vpw >= min_base_floor
+        )
+    if not passed:
+        return False
+
+    result["allowed"] = True
+    result["canary_applied"] = True
+    result["canary_origin_reason"] = reason_key
+    result["canary_reason"] = "dynamic_strength_canary"
+    result["reason"] = f"canary_relaxed_{reason_key}"
+    result["threshold_profile"] = f"{threshold_profile}+canary"
+    return True
+
+
 def evaluate_scalping_strength_momentum(ws_data: dict, *, now_ts: float | None = None) -> dict:
     ws_data = ws_data or {}
     window_sec = int(getattr(TRADING_RULES, "SCALP_VPW_WINDOW_SECONDS", 5) or 5)
@@ -79,6 +155,9 @@ def evaluate_scalping_strength_momentum(ws_data: dict, *, now_ts: float | None =
         "window_exec_buy_ratio": 0.0,
         "window_avg_buy_ratio": 0.0,
         "market_session_state": str(ws_data.get("market_session_state", "") or ""),
+        "canary_applied": False,
+        "canary_reason": "",
+        "canary_origin_reason": "",
     }
 
     if not result["enabled"]:
@@ -175,12 +254,57 @@ def evaluate_scalping_strength_momentum(ws_data: dict, *, now_ts: float | None =
         return result
     if window_buy_value < min_buy_value:
         result["reason"] = "below_window_buy_value"
+        if _try_dynamic_strength_canary(
+            result=result,
+            reason=result["reason"],
+            profile_tag=profile_tag,
+            threshold_profile=threshold_profile,
+            min_base=min_base,
+            current_vpw=current_vpw,
+            min_buy_value=min_buy_value,
+            window_buy_value=window_buy_value,
+            min_buy_ratio=min_buy_ratio,
+            buy_ratio=buy_ratio,
+            min_exec_buy_ratio=min_exec_buy_ratio,
+            exec_buy_ratio=exec_buy_ratio,
+        ):
+            return result
         return result
     if buy_ratio < min_buy_ratio:
         result["reason"] = "below_buy_ratio"
+        if _try_dynamic_strength_canary(
+            result=result,
+            reason=result["reason"],
+            profile_tag=profile_tag,
+            threshold_profile=threshold_profile,
+            min_base=min_base,
+            current_vpw=current_vpw,
+            min_buy_value=min_buy_value,
+            window_buy_value=window_buy_value,
+            min_buy_ratio=min_buy_ratio,
+            buy_ratio=buy_ratio,
+            min_exec_buy_ratio=min_exec_buy_ratio,
+            exec_buy_ratio=exec_buy_ratio,
+        ):
+            return result
         return result
     if exec_buy_ratio < min_exec_buy_ratio:
         result["reason"] = "below_exec_buy_ratio"
+        if _try_dynamic_strength_canary(
+            result=result,
+            reason=result["reason"],
+            profile_tag=profile_tag,
+            threshold_profile=threshold_profile,
+            min_base=min_base,
+            current_vpw=current_vpw,
+            min_buy_value=min_buy_value,
+            window_buy_value=window_buy_value,
+            min_buy_ratio=min_buy_ratio,
+            buy_ratio=buy_ratio,
+            min_exec_buy_ratio=min_exec_buy_ratio,
+            exec_buy_ratio=exec_buy_ratio,
+        ):
+            return result
         return result
     if window_net_buy_qty < min_net_buy_qty:
         result["reason"] = "below_net_buy_qty"

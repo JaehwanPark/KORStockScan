@@ -14,6 +14,7 @@ from src.trading.entry.latency_monitor import LatencyMonitor
 from src.trading.entry.normal_entry_builder import NormalEntryBuilder
 from src.trading.entry.signal_snapshot import build_signal_snapshot
 from src.trading.market.market_data_cache import MarketDataCache
+from src.utils.constants import TRADING_RULES
 from src.utils.logger import log_info
 
 
@@ -44,6 +45,99 @@ def _best_ask_bid_from_ws(ws_data: dict[str, Any] | None) -> tuple[int, int]:
         except Exception:
             best_bid = 0
     return best_ask, best_bid
+
+
+def _to_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(str(value).replace(",", "").replace("+", "").strip())
+    except Exception:
+        return default
+
+
+def _normalized_reason_set(values: Any) -> set[str]:
+    normalized: set[str] = set()
+    for value in values or ():
+        clean = str(value or "").strip().lower()
+        if clean:
+            normalized.add(clean)
+    return normalized
+
+
+def _latency_danger_reasons(latency_status) -> list[str]:
+    reasons: list[str] = []
+    if getattr(latency_status, "quote_stale", False):
+        reasons.append("quote_stale")
+    max_ws_age_ms = int(getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS", 450) or 450)
+    max_ws_jitter_ms = int(getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS", 260) or 260)
+    max_spread_ratio = _to_float(getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO", 0.0100), 0.0100)
+    if int(getattr(latency_status, "ws_age_ms", 0) or 0) > max_ws_age_ms:
+        reasons.append("ws_age_too_high")
+    if int(getattr(latency_status, "ws_jitter_ms", 0) or 0) > max_ws_jitter_ms:
+        reasons.append("ws_jitter_too_high")
+    if _to_float(getattr(latency_status, "spread_ratio", 0.0), 0.0) > max_spread_ratio:
+        reasons.append("spread_too_wide")
+    if not reasons:
+        reasons.append("other_danger")
+    return reasons
+
+
+def _should_apply_latency_guard_canary(
+    *,
+    strategy_id: str,
+    position_tag: str,
+    signal_strength: float,
+    latency_status,
+    signal_price: int,
+    latest_price: int,
+    danger_reasons: list[str] | None = None,
+) -> tuple[bool, str]:
+    if not bool(getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_ENABLED", False)):
+        return False, "disabled"
+    if str(strategy_id or "").upper() != "SCALPING":
+        return False, "non_scalping"
+    if getattr(latency_status, "quote_stale", False):
+        return False, "quote_stale"
+
+    reasons = danger_reasons or _latency_danger_reasons(latency_status)
+    allowed_danger_reasons = _normalized_reason_set(
+        getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_ALLOWED_DANGER_REASONS", ())
+    )
+    if allowed_danger_reasons and not (allowed_danger_reasons & _normalized_reason_set(reasons)):
+        return False, "danger_reason_not_allowed"
+
+    allow_tags = {
+        str(tag).strip().upper()
+        for tag in (getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_TAGS", ()) or ())
+        if str(tag).strip()
+    }
+    normalized_tag = str(position_tag or "").strip().upper()
+    if allow_tags and normalized_tag not in allow_tags:
+        return False, "tag_not_allowed"
+
+    min_signal = _to_float(getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_MIN_SIGNAL_SCORE", 85.0), 85.0)
+    if _to_float(signal_strength, 0.0) < min_signal:
+        return False, "low_signal"
+
+    max_ws_age_ms = int(getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS", 450) or 450)
+    max_ws_jitter_ms = int(getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS", 260) or 260)
+    max_spread_ratio = _to_float(getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO", 0.0100), 0.0100)
+    if int(getattr(latency_status, "ws_age_ms", 0) or 0) > max_ws_age_ms:
+        return False, "ws_age_too_high"
+    if int(getattr(latency_status, "ws_jitter_ms", 0) or 0) > max_ws_jitter_ms:
+        return False, "ws_jitter_too_high"
+    if _to_float(getattr(latency_status, "spread_ratio", 0.0), 0.0) > max_spread_ratio:
+        return False, "spread_too_wide"
+
+    allowed_slippage = _ENTRY_POLICY._allowed_slippage(
+        signal_price=signal_price,
+        latest_price=latest_price,
+        tick_limit=_CONFIG.fallback_allowed_slippage_ticks,
+        pct_limit=_CONFIG.fallback_allowed_slippage_pct,
+    )
+    if not _ENTRY_POLICY._slippage_ok(signal_price, latest_price, allowed_slippage, "BUY"):
+        return False, "fallback_slippage_exceeded"
+
+    return True, "canary_applied"
 
 
 def freeze_signal_reference(
@@ -155,24 +249,66 @@ def evaluate_live_buy_entry(
         now=datetime.now(UTC),
     )
 
+    effective_decision = policy.decision
+    effective_reason = policy.reason
+    latency_canary_applied = False
+    latency_canary_reason = ""
+    latency_danger_reasons = ",".join(_latency_danger_reasons(latency))
+    if policy.decision == EntryDecision.REJECT_DANGER:
+        canary_ok, canary_reason = _should_apply_latency_guard_canary(
+            strategy_id=strategy_id,
+            position_tag=str(stock.get("position_tag") or ""),
+            signal_strength=float(signal_strength or 0.0),
+            latency_status=latency,
+            signal_price=frozen_price,
+            latest_price=latest_price,
+            danger_reasons=latency_danger_reasons.split(","),
+        )
+        if canary_ok:
+            latency_canary_applied = True
+            latency_canary_reason = canary_reason
+            effective_decision = EntryDecision.ALLOW_FALLBACK
+            effective_reason = "latency_guard_canary_override"
+            log_info(
+                f"[LATENCY_GUARD_CANARY] {stock.get('name')}({code}) "
+                f"tag={stock.get('position_tag')} signal={float(signal_strength or 0.0):.1f} "
+                f"ws_age_ms={latency.ws_age_ms} ws_jitter_ms={latency.ws_jitter_ms} "
+                f"spread_ratio={latency.spread_ratio:.6f} "
+                f"danger_reasons={latency_danger_reasons}"
+            )
+        else:
+            latency_canary_reason = canary_reason
+
+    computed_allowed_slippage = int(policy.computed_allowed_slippage or 0)
+    if latency_canary_applied and computed_allowed_slippage <= 0:
+        computed_allowed_slippage = _ENTRY_POLICY._allowed_slippage(
+            signal_price=frozen_price,
+            latest_price=latest_price,
+            tick_limit=_CONFIG.fallback_allowed_slippage_ticks,
+            pct_limit=_CONFIG.fallback_allowed_slippage_pct,
+        )
+
     result = {
         "allowed": False,
-        "decision": policy.decision.value,
-        "reason": policy.reason,
+        "decision": effective_decision.value,
+        "reason": effective_reason,
         "latency_state": latency.state.value,
         "latest_price": latest_price,
         "signal_price": frozen_price,
         "signal_time": frozen_time,
-        "computed_allowed_slippage": policy.computed_allowed_slippage,
+        "computed_allowed_slippage": computed_allowed_slippage,
         "ws_age_ms": latency.ws_age_ms,
         "ws_jitter_ms": latency.ws_jitter_ms,
         "spread_ratio": latency.spread_ratio,
         "quote_stale": latency.quote_stale,
+        "latency_danger_reasons": latency_danger_reasons,
         "target_buy_price": int(target_buy_price or 0),
         "order_price": 0,
+        "latency_canary_applied": latency_canary_applied,
+        "latency_canary_reason": latency_canary_reason,
     }
 
-    if policy.decision == EntryDecision.ALLOW_NORMAL:
+    if effective_decision == EntryDecision.ALLOW_NORMAL:
         defensive_order = _NORMAL_BUILDER.build(snapshot=snapshot, latest_price=latest_price)
         order_price = int(defensive_order.price)
         if int(target_buy_price or 0) > 0:
@@ -191,7 +327,7 @@ def evaluate_live_buy_entry(
         ]
         return result
 
-    if policy.decision == EntryDecision.ALLOW_FALLBACK:
+    if effective_decision == EntryDecision.ALLOW_FALLBACK:
         fallback_orders = _FALLBACK_BUILDER.build(
             snapshot=snapshot,
             latest_price=latest_price,

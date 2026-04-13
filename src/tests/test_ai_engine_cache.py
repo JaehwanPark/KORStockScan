@@ -1,7 +1,7 @@
 import threading
 
 from src.engine import ai_engine as ai_engine_module
-from src.engine.ai_engine import GeminiSniperEngine
+from src.engine.ai_engine import GeminiSniperEngine, SCALPING_SYSTEM_PROMPT_75_CANARY
 
 
 def _build_engine():
@@ -255,6 +255,37 @@ def test_holding_cache_profile_absorbs_micro_market_noise(monkeypatch):
     assert first["cache_hit"] is False
     assert second["cache_hit"] is True
     assert second["score"] == 58
+
+
+def test_scalping_prompt_75_canary_rewrites_buy_band():
+    assert "75~100 (BUY)" in SCALPING_SYSTEM_PROMPT_75_CANARY
+    assert "50~74 (WAIT)" in SCALPING_SYSTEM_PROMPT_75_CANARY
+
+
+def test_analyze_target_shadow_prompt_uses_shadow_prompt_type(monkeypatch):
+    engine = _build_engine()
+
+    monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "packet")
+    monkeypatch.setattr(
+        engine,
+        "_call_gemini_safe",
+        lambda *args, **kwargs: {"action": "BUY", "score": 77, "reason": "shadow-strong"},
+    )
+
+    result = engine.analyze_target_shadow_prompt(
+        "테스트",
+        {"curr": 10000, "fluctuation": 2.1, "orderbook": {"asks": [], "bids": []}},
+        [{"time": "10:00:00", "price": 10000, "volume": 10, "dir": "BUY"}],
+        [{"체결시간": "10:00:00", "현재가": 10000, "거래량": 100}],
+        strategy="SCALPING",
+        prompt_type="scalping_buy75_shadow",
+        cache_profile="watching_prompt75_shadow",
+    )
+
+    assert result["action"] == "BUY"
+    assert result["ai_prompt_type"] == "scalping_buy75_shadow"
+    assert result["ai_result_source"] == "shadow_live"
+    assert result["cache_hit"] is False
 
 
 def test_analyze_target_routes_scalping_and_swing_to_expected_tiers(monkeypatch):

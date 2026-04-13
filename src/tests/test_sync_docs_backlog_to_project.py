@@ -3,6 +3,7 @@ from src.engine.sync_docs_backlog_to_project import (
     DOC_PROMPT,
     DOC_SCALPING,
     DOC_PLAN,
+    ProjectItem,
     _desired_status_option_id,
     _env,
     _env_bool,
@@ -17,6 +18,7 @@ from src.engine.sync_docs_backlog_to_project import (
     parse_plan_tasks,
     parse_prompt_tasks,
     parse_scalping_logic_tasks,
+    sync_backlog_to_project,
 )
 
 
@@ -24,6 +26,7 @@ def test_parse_plan_tasks_has_remaining_items():
     tasks = parse_plan_tasks()
     titles = [t.title for t in tasks]
     assert any("0-1b 원격 경량 프로파일링" in title for title in titles)
+    assert all("SCALP_PRESET_TP SELL 의도 확인" not in title for title in titles)
 
 
 def test_parse_checklist_excludes_done_checkboxes():
@@ -38,13 +41,19 @@ def test_parse_scalping_logic_has_phase2_and_phase3():
     titles = [t.title for t in tasks]
     assert any(title.startswith("2-1 ") for title in titles)
     assert any(title.startswith("3-1 ") for title in titles)
+    assert all(title != "0-1b 원격 경량 프로파일링" or titles.count(title) == 1 for title in titles)
 
 
-def test_parse_prompt_has_priority_and_detail_tasks():
+def test_parse_prompt_has_detail_tasks_with_due_for_p0(monkeypatch):
+    monkeypatch.setenv("DOC_BACKLOG_TODAY", "2026-04-12")
     tasks = parse_prompt_tasks()
     titles = [t.title for t in tasks]
-    assert any("SCALP_PRESET_TP SELL 의도 확인" in title for title in titles)
+    task_map = {t.title: t for t in tasks}
+    assert "작업 1 SCALP_PRESET_TP SELL 의도 확인" in task_map
     assert any(title.startswith("작업 10 ") for title in titles)
+    assert task_map["작업 1 SCALP_PRESET_TP SELL 의도 확인"].due_date == "2026-04-12"
+    assert task_map["작업 1 SCALP_PRESET_TP SELL 의도 확인"].section.startswith("P0.")
+    assert task_map["작업 10 HOLDING hybrid 적용"].due_date == ""
 
 
 def test_parse_prompt_fallback_when_primary_missing(monkeypatch):
@@ -62,6 +71,7 @@ def test_collect_backlog_tasks_deduped():
     tasks = collect_backlog_tasks()
     normalized = [" ".join(t.title.split()).lower() for t in tasks]
     assert len(normalized) == len(set(normalized))
+    assert all(t.title != "SCALP_PRESET_TP SELL 의도 확인" for t in tasks)
 
 
 def test_parse_scalping_logic_fallback_when_primary_missing(monkeypatch):
@@ -164,6 +174,22 @@ def test_infer_time_window_uses_slot_default_when_missing():
     assert _infer_time_window(task, slot_label="POSTCLOSE", default_duration_min=30) == "15:40~16:10"
 
 
+def test_infer_time_window_holiday_forces_intraday_default_for_postclose():
+    task = BacklogTask(title="일반 작업", source="x", section="체크", track="AIPrompt", due_date="2026-04-12")
+    assert _infer_time_window(task, slot_label="POSTCLOSE", default_duration_min=30) == "10:00~10:30"
+
+
+def test_infer_time_window_holiday_ignores_explicit_postclose_range():
+    task = BacklogTask(
+        title="휴장일 작업 (15:40~16:10)",
+        source="x",
+        section="체크",
+        track="AIPrompt",
+        due_date="2026-04-12",
+    )
+    assert _infer_time_window(task, slot_label="POSTCLOSE", default_duration_min=30) == "10:00~10:30"
+
+
 def test_infer_time_window_unscheduled_keyword():
     task = BacklogTask(title="예약 작업(미정)", source="x", section="체크", track="Plan")
     assert _infer_time_window(task, slot_label="POSTCLOSE", default_duration_min=30) == "UNSCHEDULED"
@@ -183,3 +209,56 @@ def test_env_uses_default_when_blank(monkeypatch):
     assert _env("X_NAME", "Slot") == "Slot"
     monkeypatch.setenv("X_NAME", "")
     assert _env("X_NAME", "Slot") == "Slot"
+
+
+def test_sync_backlog_updates_due_for_existing_item(monkeypatch):
+    task = BacklogTask(
+        title="작업 2 AI 운영계측 추가",
+        source="docs/prompt.md",
+        section="P0. 즉시 착수 가능한 확인/계측",
+        track="AIPrompt",
+        due_date="2026-04-12",
+    )
+    existing_title = "[AIPrompt] 작업 2 AI 운영계측 추가"
+
+    monkeypatch.setenv("GH_PROJECT_TOKEN", "token")
+    monkeypatch.setenv("GH_PROJECT_OWNER", "JaehwanPark")
+    monkeypatch.setenv("GH_PROJECT_NUMBER", "1")
+    monkeypatch.setattr(
+        "src.engine.sync_docs_backlog_to_project.collect_backlog_tasks",
+        lambda: [task],
+    )
+    monkeypatch.setattr(
+        "src.engine.sync_docs_backlog_to_project._fetch_project_metadata",
+        lambda *args, **kwargs: (
+            "PROJECT_1",
+            {
+                "Due": {"id": "FIELD_DUE", "__typename": "ProjectV2Field", "dataType": "DATE"},
+            },
+            {existing_title},
+            [
+                ProjectItem(
+                    item_id="ITEM_1",
+                    title=existing_title,
+                    content_type="DraftIssue",
+                    due_date="",
+                    slot="",
+                    time_window="",
+                )
+            ],
+        ),
+    )
+
+    calls = []
+
+    def _fake_graphql_request(token, query, variables):
+        calls.append(variables)
+        return {}
+
+    monkeypatch.setattr("src.engine.sync_docs_backlog_to_project._graphql_request", _fake_graphql_request)
+
+    summary = sync_backlog_to_project(dry_run=False, limit=10)
+    assert summary["created_or_would_create"] == 0
+    assert summary["due_filled"] == 1
+    assert summary["due_reclassified"] == 0
+    assert any(call.get("value") == {"date": "2026-04-12"} for call in calls)

@@ -455,6 +455,7 @@ def render_markdown(
     lines.append("```text")
     lines.append("아래 Project 항목을 오늘 작업 대상으로 처리해줘.")
     lines.append("원칙:")
+    lines.append("- 현재 시간 기준으로 작업시작 시간이 도래한 작업만 실행할 것(필수)")
     lines.append("- 판정, 근거, 다음 액션 순서로 보고")
     lines.append("- 관련 문서/체크리스트 동시 업데이트")
     lines.append("- 테스트/검증 결과 포함")

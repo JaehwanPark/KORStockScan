@@ -665,6 +665,14 @@ class KiwoomWSManager:
                         order_type_str = notice['order_type_str']
                         
                         print(f"📩 [WS 주문상태] {code} | 상태: '{status}' | 구분: '{order_type_str}'")
+                        self._enqueue_state_event("ORDER_NOTICE", {
+                            'code': code,
+                            'order_no': order_no,
+                            'type': notice['exec_type'],
+                            'status': status,
+                            'order_type_str': order_type_str,
+                            'time': datetime.now().strftime('%H:%M:%S')
+                        })
 
                         if status == '체결':
                             exec_price = notice['exec_price']
