@@ -254,7 +254,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.watching_prompt_75_shadow_report \
   - `live hard stop` 계열(`preset/protect/scalp_hard_stop`) 분기 확인 메모
   - `스캘핑 -> 스윙 자동전환` shadow 조건 초안 정리
 - [x] 원격 경량 프로파일링 장중 1차 수집 (`10:20~10:35`)
-- [ ] 원격 경량 프로파일링 장중 2차 수집 (`13:20~13:35`)
+- [x] 원격 경량 프로파일링 장중 2차 수집 (`13:20~13:35`)
 
 ### 2026-04-13 10:03 KST 장중 중간 점검 메모
 
@@ -370,6 +370,25 @@ PYTHONPATH=. .venv/bin/python -m src.engine.watching_prompt_75_shadow_report \
   - `태광`은 계속 핵심 추적 대상으로 유지한다.
   - `hard stop / protect / preset` 계열 관련 표본은 현재 시점에도 검색되지 않았다.
 
+### 2026-04-13 13:39 KST 장중 후속 관찰 메모
+
+- 시간 조건:
+  - 현재 시각 `13:39 KST`
+  - `원격 경량 프로파일링 장중 2차 수집 (13:20~13:35)` 완료 (`afternoon` window). 산출물: `tmp/remote_latency_baseline/2026-04-13/2026-04-13_afternoon_20260413_132002.json`, `...134211.json`
+- `RELAX-LATENCY` 관찰:
+  - `server_comparison_2026-04-13.md` 기준 `submitted_stocks=0` 유지.
+  - `latency_danger_reasons` 분포: `ws_jitter_too_high`, `other_danger` 등 비슷한 패턴 유지.
+  - `quote_stale=False latency canary` 해석 강화 계속 필요. 장후 hot path 후보 정리 예정.
+- `RELAX-DYNSTR` 관찰:
+  - `blocked_strength_momentum` 여전히 주요 blocker. `below_window_buy_value / below_buy_ratio / below_strength_base` 분해는 장후 재설계로 넘김.
+- `RELAX-OVERBOUGHT` 관찰:
+  - `blocked_overbought=20` 유지. 과열 차단 지속.
+- 체결 품질 관찰:
+  - `submitted/holding_started` 신규 전환 없음. `full fill / partial fill` 평가 유보.
+- 미결 이월건 추적:
+  - `entry_armed_expired_after_wait` 상위 종목 변동 없음. `태광` 계속 추적.
+  - `hard stop / protect / preset` 계열 표본 없음.
+
 ## 장후 체크리스트 (15:30~)
 
 - [ ] `RELAX-LATENCY` 원격 결과 기준 `유지/강화/축소/롤백` 재판정
@@ -377,6 +396,9 @@ PYTHONPATH=. .venv/bin/python -m src.engine.watching_prompt_75_shadow_report \
 - [ ] `RELAX-OVERBOUGHT` 표본 누적 여부 재판정
 - [ ] 원격 수집 안정화 패치 필요 시 `partial_snapshot_only` fallback까지 포함해 재작업지시
 - [ ] 원격 경량 프로파일링 결과 정리 (`15:35~15:50`, hot path 후보 1~3개 확정)
+- [ ] `post-sell` 지표 기준 `원격 1축 매도시점 canary` 후보안 작성 (`15:35~15:50`)
+  - `estimated_extra_upside_10m_krw_sum`, `timing_tuning_pressure_score`, `exit_rule_tuning`, `tag_tuning`, `priority_actions`를 함께 검토한다.
+  - 전면 청산 규칙 교체는 금지하고 `exit_rule` 또는 `position_tag` 기준 국소 미세조정안만 다음 세션 원격 canary 후보로 정리한다.
 - [ ] `live hard stop taxonomy audit` 결과 정리
 - [ ] `2026-04-13` 결과를 다음 세션 플랜/체크리스트에 승격
 

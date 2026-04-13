@@ -85,6 +85,7 @@
 2. `fetch_remote_scalping_logs` 장중 갱신 파일 읽기 실패 보강 여부 판단
 3. `trade_review` 해석에서 `entry_mode/fill quality` 복원 품질 점검
 4. 프롬프트 개선 트랙의 최종 구현 순서 고정
+5. `post-sell` 기반 매도시점 튜닝 canary 계획 수립
 
 ### 아직 남아있는 일
 
@@ -93,6 +94,7 @@
 3. 스캘핑 매매로직 `Phase 3` 분석 품질 고도화
 4. AI 프롬프트 개선 코드 구현 전반
 5. 프롬프트 트랙의 `원격 canary -> 장후 평가 -> 1~2세션 후속 확인`
+6. `post-sell` 지표 기반 `원격 1축 매도시점 canary` 후보안 작성 및 승격 조건 고정
 
 ## 활성 워크스트림
 
@@ -142,6 +144,9 @@
    - `momentum_tag × threshold_profile` 재설계 근거 확보 후만 착수
 4. `Phase 3-1 realistic/conservative counterfactual`
 5. `Phase 3-2 exit authority 명문화`
+6. `Phase 3-3 post-sell exit timing canary`
+   - `estimated_extra_upside_10m_krw_sum`, `timing_tuning_pressure_score`, `exit_rule_tuning`, `tag_tuning`, `priority_actions`를 묶어 장후에 `원격 1축 매도시점 canary` 후보안을 고정
+   - 전면 청산 규칙 교체는 금지하고 `exit_rule` 또는 `position_tag` 기준 국소 미세조정안만 설계
 
 ## AI 프롬프트 개선작업 반영 상태
 
@@ -225,6 +230,7 @@
 4. `blocked_strength_momentum`은 전역 완화가 아니라 `below_window_buy_value / below_buy_ratio / below_strength_base` 3축 기준 국소 재설계로 간다.
 5. `shadow 하한 60/55` 조정, `WAIT 65` 전면 완화, `overbought` 우선 착수는 보류한다.
 6. 이번 세션 코드 개선은 `latency_state_danger`를 `quote_stale / ws_age / ws_jitter / spread` 하위 이유로 로깅하고, canary를 해당 reason allowlist로 더 좁게 제어할 수 있게 만드는 것까지로 제한한다.
+7. `post-sell`의 `추정 추가수익(10분)`과 `매도시점 튜닝 압력`은 이미 관측 지표로는 유효하므로, 다음 단계는 장후에 `exit_rule_tuning / tag_tuning / priority_actions`를 읽어 `원격 1축 매도시점 canary` 후보안으로 내리는 것이다.
 
 ## 운영서버 롤아웃 판단용 추가 모니터링 기간
 
