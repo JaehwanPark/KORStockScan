@@ -30,12 +30,24 @@
    - [2026-04-11-scalping-ai-prompt-plan-review.md](./2026-04-11-scalping-ai-prompt-plan-review.md)
    - [2026-04-11-ai-operator-message-validation.md](./2026-04-11-ai-operator-message-validation.md)
    - 역할: 프롬프트 트랙의 최종 분류와 운영 원칙
-8. 다음 영업일 운영 체크리스트
+8. 일자별 운영 체크리스트
    - [2026-04-13-stage2-todo-checklist.md](./2026-04-13-stage2-todo-checklist.md)
-   - 역할: `2026-04-13` 장중/장후 실행표
+   - [2026-04-14-stage2-todo-checklist.md](./2026-04-14-stage2-todo-checklist.md)
+   - [2026-04-15-stage2-todo-checklist.md](./2026-04-15-stage2-todo-checklist.md)
+   - [2026-04-16-stage2-todo-checklist.md](./2026-04-16-stage2-todo-checklist.md)
+   - [2026-04-17-stage2-todo-checklist.md](./2026-04-17-stage2-todo-checklist.md)
+   - [2026-04-18-stage2-todo-checklist.md](./2026-04-18-stage2-todo-checklist.md)
+   - [2026-04-19-stage2-todo-checklist.md](./2026-04-19-stage2-todo-checklist.md)
+   - [2026-04-21-stage2-todo-checklist.md](./2026-04-21-stage2-todo-checklist.md)
+   - [2026-04-22-stage2-todo-checklist.md](./2026-04-22-stage2-todo-checklist.md)
+   - [2026-04-23-stage2-todo-checklist.md](./2026-04-23-stage2-todo-checklist.md)
+   - 역할: `2026-04-13~2026-04-23` 장중/장후 실행표
 9. 관찰 축 vs 코드 반영 감사표
    - [2026-04-13-observation-axis-code-reflection-audit.md](./2026-04-13-observation-axis-code-reflection-audit.md)
    - 역할: 관찰 축별 분석결과와 실제 코드/실전 반영 상태를 한 번에 점검
+10. AI 프롬프트 트랙 감사표
+   - [2026-04-14-ai-prompt-track-audit.md](./2026-04-14-ai-prompt-track-audit.md)
+   - 역할: `P0~P5`의 일정/체크리스트 반영/구현 지연 위험을 한 번에 점검
 
 ## 문서 정합성 재점검 결과
 
@@ -66,6 +78,8 @@
 6. 해석 기준은 항상 `판정 -> 근거 -> 다음 액션` 순서로 남긴다.
 7. `관찰 축 추가`는 상시 전략이 아니다. `2026-04-14 장후`까지는 이미 고정한 축만 재검증하고, `2026-04-14 장후`에는 반드시 `반영 / 보류+단일축 전환 / 관찰 종료 후 재설계` 중 하나로 결론낸다.
 8. 원격 비교검증은 `API 비교`만으로 닫지 않는다. `Performance Tuning` 또는 `Entry Pipeline Flow`가 `remote_error`이면 snapshot 기준 재점검을 같은 날짜 또는 익일 첫 체크포인트에 필수로 남기고, `결론 시점`까지 설명 가능 상태로 만들어야 한다.
+9. `계측 완료 + 실전반영 확신도 50% 이상`인 축은 같은 주 canary 착수를 기본값으로 한다. 착수하지 않으려면 장후 문서에 명시적 보류 사유를 남긴다.
+10. 장후 결론은 `유지/보류` 같은 상태 기록으로 끝내지 않는다. `날짜 + 액션 + 실행시각`이 없으면 결론으로 인정하지 않는다.
 
 ## 현재 상태 요약 (`2026-04-11` 기준)
 
@@ -86,29 +100,33 @@
 
 ### 진행 중인 일
 
-1. 원격 `RELAX-LATENCY` 추가 관찰 및 운영서버 롤아웃 판단
-2. `fetch_remote_scalping_logs` 장중 갱신 파일 읽기 실패 보강 여부 판단
-3. `trade_review` 해석에서 `entry_mode/fill quality` 복원 품질 점검
-4. 프롬프트 개선 트랙의 최종 구현 순서 고정
-5. `post-sell` 기반 매도시점 튜닝 canary 계획 수립
+1. 원격 `RELAX-LATENCY` 추가 관찰 및 `2026-04-14 장후` 운영서버 롤아웃 최종 판단
+2. `RELAX-DYNSTR` `momentum_tag` 1축 원격 canary의 `2026-04-15 08:30` 착수 준비
+3. `partial fill min_fill_ratio` 원격 canary의 `2026-04-15` 착수 준비
+4. `expired_armed` 처리 로직 설계 문서의 `2026-04-15 장후` 완료 준비
+5. `remote_error`가 난 원격 비교 항목의 snapshot 기준 해소
+6. `AI overlap audit -> selective override` 설계 착수 입력 정리 (`2026-04-16` 이내)
 
 ### 아직 남아있는 일
 
 1. 스캘핑 매매로직 `0-1b 원격 경량 프로파일링`
-2. 스캘핑 매매로직 `Phase 2` 원격 실전 로직 변경
-3. 스캘핑 매매로직 `Phase 3` 분석 품질 고도화
-4. AI 프롬프트 개선 코드 구현 전반
-5. 프롬프트 트랙의 `원격 canary -> 장후 평가 -> 1~2세션 후속 확인`
-6. `post-sell` 지표 기반 `원격 1축 매도시점 canary` 후보안 작성 및 승격 조건 고정
+2. `RELAX-LATENCY` `2026-04-14 장후` 최종 결론 및 `2026-04-15 장전` 반영
+3. `RELAX-DYNSTR` `momentum_tag` 1축 원격 canary `2026-04-15 08:30` 착수
+4. `partial fill min_fill_ratio` 원격 canary `2026-04-15` 시작
+5. `expired_armed` 처리 로직 설계 문서 `2026-04-15 장후` 완료
+6. `AI overlap audit` 기반 `selective override` 설계 착수 (`2026-04-16` 이내)
+7. AI 프롬프트 개선 코드 구현 전반
+8. 프롬프트 트랙의 `원격 canary -> 장후 평가 -> 1~2세션 후속 확인`
+9. `post-sell` 지표 기반 `원격 1축 매도시점 canary` 후보안 작성 및 승격 조건 고정
 
 ## 활성 워크스트림
 
 | 워크스트림 | 현재 상태 | 완료된 일 | 남은 일 |
 | --- | --- | --- | --- |
 | `WS-A 스캘핑 관측/리포트` | `진행 중` | `Phase 0/1` 대부분 반영 완료 | `0-1b`, 리포트 품질 최종 검증 |
-| `WS-B 원격 canary/롤아웃` | `진행 중` | `RELAX-LATENCY` 원격 반영, `RELAX-DYNSTR/OVERBOUGHT` 분류 고정 | `2026-04-13~14` 추가 모니터링, `2026-04-15` 판단 |
-| `WS-C AI 프롬프트 개선` | `설계 완료 / 미구현` | 팩트/검토/반박/운영자 메모 완료 | `P0~P5` 순차 구현 및 원격 canary |
-| `WS-D 보조 운영/데이터 품질` | `진행 중` | `trade_review`, `post_sell`, `pipeline_events` 기반 보강 축 정리 | 원격 fetch 안정화, 추가 파서/대시보드 |
+| `WS-B 원격 canary/롤아웃` | `진행 중` | `RELAX-LATENCY` 원격 반영, `RELAX-DYNSTR/OVERBOUGHT` 분류 고정 | `2026-04-14` 장후 결론, `2026-04-15 08:30` `RELAX-DYNSTR` canary/`Phase 2` 착수 |
+| `WS-C AI 프롬프트 개선` | `설계 완료 / 일정 고정` | 팩트/검토/반박/운영자 메모 완료, `작업 1/2` 완료, `작업 3` 문서완료 | `2026-04-14 POSTCLOSE` `P1` scope 확정, `작업 8` 즉시 착수, 가능 시 `작업 4/5` 당일 착수, `2026-04-17` `작업 3/6`, `2026-04-18~23` `작업 7~12` 절대 일정 고정 |
+| `WS-D 보조 운영/데이터 품질` | `진행 중` | `trade_review`, `post_sell`, `pipeline_events` 기반 보강 축 정리 | `remote_error` snapshot 해소, `partial fill min_fill_ratio` canary, `expired_armed` 설계 |
 
 ## 후순위/비차단 백로그
 
@@ -136,7 +154,7 @@
 | --- | --- | --- |
 | `Phase 0` | `대부분 완료` | `0-1b 원격 경량 프로파일링`만 잔여 |
 | `Phase 1` | `완료` | 집계/리포트 반영 완료 |
-| `Phase 2` | `미착수` | 원격 canary 결과를 더 본 뒤 착수 여부 판정 |
+| `Phase 2` | `착수 확정` | `2026-04-14 장후` `RELAX-LATENCY` 결론 후 `2026-04-15 장전`에 `2-1` 또는 `2-2` 중 하나를 반드시 시작 |
 | `Phase 3` | `미착수` | 현재 critical path 아님 |
 
 ### 잔여 작업 명세
@@ -144,12 +162,19 @@
 1. `0-1b 원격 경량 프로파일링`
    - `quote_stale=False latency_block` hot path 후보 1~3개 정리
 2. `Phase 2-1 EV-aware latency degrade`
-   - 원격 추가 모니터링 후 강화/축소/롤백 결정
+   - `2026-04-14 장후` `RELAX-LATENCY` 승격 결론이 나면 `2026-04-15 장전` 병행 착수
 3. `Phase 2-2 dynamic strength selective override`
-   - `momentum_tag × threshold_profile` 재설계 근거 확보 후만 착수
-4. `Phase 3-1 realistic/conservative counterfactual`
-5. `Phase 3-2 exit authority 명문화`
-6. `Phase 3-3 post-sell exit timing canary`
+   - `2026-04-15 08:30`까지 `missed_winner` 빈도가 가장 높은 `momentum_tag` 1개를 골라 원격 canary 시작
+   - `근거 부족`을 사유로 미루지 않고, 보류 시 명시적 사유와 다음 실행시각을 남긴다
+4. `partial fill min_fill_ratio` 원격 canary
+   - `2026-04-15` 원격 기본값 `0.5`로 시작하고 체결 기회 감소 여부를 장중에 확인
+5. `expired_armed` 처리 로직 설계
+   - `2026-04-15 장후`까지 재진입 허용 여부와 조건을 문서화한다
+6. `AI overlap audit` 기반 `selective override` 설계 착수
+   - `2026-04-16` 이내에 `blocked_stage / momentum_tag / threshold_profile` 연결표 기준으로 시작한다
+7. `Phase 3-1 realistic/conservative counterfactual`
+8. `Phase 3-2 exit authority 명문화`
+9. `Phase 3-3 post-sell exit timing canary`
    - `estimated_extra_upside_10m_krw_sum`, `timing_tuning_pressure_score`, `exit_rule_tuning`, `tag_tuning`, `priority_actions`를 묶어 장후에 `원격 1축 매도시점 canary` 후보안을 고정
    - 전면 청산 규칙 교체는 금지하고 `exit_rule` 또는 `position_tag` 기준 국소 미세조정안만 설계
 
@@ -178,11 +203,11 @@
 
 | Phase | 상태 | 현재 판정 |
 | --- | --- | --- |
-| `P0 확인/계측` | `진행중` | `2026-04-12` 작업 1~3 반영 중 |
-| `P1 판단 기준/프롬프트 분리` | `미착수` | 원격 canary 대상 |
-| `P2 컨텍스트 주입` | `미착수` | `HOLDING -> WATCHING` 순차 진행 |
-| `P3 피처 패킷 보강` | `미착수` | helper 추출 후 진행 |
-| `P4 hybrid/critical` | `미착수` | 후순위 |
+| `P0 확인/계측` | `부분 완료` | `작업 1/2` 완료, `작업 3`은 `In Progress(문서완료/구현대기)` |
+| `P1 판단 기준/프롬프트 분리` | `일정 고정` | `2026-04-14 POSTCLOSE` scope 확정, 가능 시 당일 착수, `2026-04-15` 구현 진행, `2026-04-16` 1차 평가 |
+| `P2 컨텍스트 주입` | `일정 고정` | `작업 6`은 `2026-04-17` 착수 또는 보류 사유, `작업 7`은 `2026-04-18` 독립 착수 |
+| `P3 피처 패킷 보강` | `일정 고정` | `작업 8` 즉시 착수, `작업 9`는 `2026-04-17` scope / `2026-04-19` 착수 |
+| `P4/P5 hybrid/critical` | `일정 고정` | `작업 10` `2026-04-21`, `작업 11` `2026-04-22`, `작업 12` 범위 확정 `2026-04-23` |
 
 ### 현재 순서
 
@@ -203,6 +228,35 @@
    - HOLDING hybrid 적용
    - HOLDING critical 경량 프롬프트
    - raw 축소 A/B
+
+### 프롬프트 트랙 일정 고정 (`2026-04-14`)
+
+1. `2026-04-14 POSTCLOSE`
+   - `작업 4 WATCHING 75 정합화 원격 canary`
+   - `작업 5 WATCHING/HOLDING 프롬프트 물리 분리`
+   - `작업 8 감사용 핵심값 3종 투입`
+   - 위 작업들의 write scope / rollback 가드 / 비교지표 확정
+   - `작업 8`은 같은 날 바로 착수하고, `작업 4/5`도 범위가 명확하면 같은 날 구현 착수
+2. `2026-04-15`
+   - `작업 4`, `작업 5` 구현 진행 / 원격 ready 확인
+   - `작업 8 감사용 핵심값 3종 투입` 구현/검증 지속
+3. `2026-04-16`
+   - `P1` 원격 canary 1차 평가
+   - `작업 3` 구현 착수 준비와 `작업 9` helper scope 초안 정리
+4. `2026-04-17`
+   - `작업 3` 구현 착수 또는 보류 사유 기록
+   - `작업 6` 착수 또는 보류 사유 기록
+   - `작업 9` helper scope 확정
+5. `2026-04-18`
+   - `작업 7` 착수
+6. `2026-04-19`
+   - `작업 9` 착수
+7. `2026-04-21`
+   - `작업 10` 착수
+8. `2026-04-22`
+   - `작업 11` 착수
+9. `2026-04-23`
+   - `작업 12` 범위 확정
 
 ### `2026-04-12` P0 진행 메모
 
@@ -248,14 +302,15 @@
 - 따라서 **운영서버 롤아웃 판단 전 추가 모니터링은 최소 `2026-04-14 장후`까지** 필요하다.
 - 이 기간은 `기존 관찰축 재검증` 기간이며, 새로운 관찰축을 계속 추가하는 기간이 아니다.
 - 더 정확히는 `2026-04-14 장후 결론`을 내릴 만큼만 재검증하는 기간이며, 그 이후에는 속도 우선으로 바로 반영/착수한다.
+- `2026-04-15 08:30`까지는 최소 한 개의 실행 축이 실제로 시작돼 있어야 한다. `결론만 있고 실행 없음`은 허용하지 않는다.
 
 ### 현재 판단
 
 1. `2026-04-13` = 원격 추가 관찰 1일차
 2. `2026-04-14` = 원격 추가 관찰 2일차
 3. `2026-04-14 장후` = 현재 스캘핑 매매로직 canary의 `결론 확정` 시점
-4. `2026-04-15 장전` = `2026-04-14 장후 결론`을 실제 반영/착수하는 시점
-5. 단, 아래 체크포인트를 충족하지 못해도 `관찰축 추가`부터 하지 않는다. `2026-04-14 장후`에는 `보류 + 단일축 전환` 또는 `관찰 종료 후 재설계`를 명시한다.
+4. `2026-04-15 08:30` = `RELAX-DYNSTR` 1축 canary, `partial fill min_fill_ratio` canary, `Phase 2` 시작이 실제 실행되는 시점
+5. 단, 아래 체크포인트를 충족하지 못해도 `결론 미룸`부터 하지 않는다. `2026-04-14 장후`에는 `보류 + 단일축 실행` 또는 `관찰 종료 후 재설계`를 명시한다.
 
 ### 롤아웃 체크포인트
 
@@ -327,6 +382,7 @@
 - 프롬프트 트랙은 여전히 설계/구현 준비만 유지
 - `2026-04-13`에 `remote_error`가 난 원격 비교 항목을 snapshot 기준으로 닫는다
 - 신규 관찰축 추가 없이 `개선 착수 결론`을 강제한다
+- `RELAX-DYNSTR`, `partial fill min_fill_ratio`, `expired_armed`, `AI overlap`의 다음 실행시각을 오늘 장후에 고정한다
 
 장전 체크포인트:
 1. 전일 판정 반영 상태 확인
@@ -341,35 +397,63 @@
 
 장후 체크포인트:
 1. `RELAX-LATENCY` 운영서버 승격 가능/불가 최종 결론
-2. 미충족 시 `RELAX-DYNSTR` 1축 canary 전환 또는 `관찰 종료 후 재설계` 중 하나를 명시
-3. `2026-04-15` 장전 반영/착수 항목을 확정
-4. 원격 비교검증을 snapshot 기준으로 닫고 `remote_error` 원인을 설명 가능 상태로 만든다
-5. 이미 구축된 관찰축은 `2026-04-15 장중 지속 점검용`으로만 재정리한다
+2. `RELAX-DYNSTR` `momentum_tag` 1축 canary 설정값과 rollback 가드를 `2026-04-15 08:30` 실행형으로 확정
+3. `partial fill min_fill_ratio` 원격 canary 설정값과 `2026-04-15` 관찰 포인트를 확정
+4. `expired_armed` 처리 로직 설계 범위와 `2026-04-15 장후` 완료 기준을 확정
+5. `AI overlap audit -> selective override` 설계 착수일을 `2026-04-16`로 고정
+6. 원격 비교검증을 snapshot 기준으로 닫고 `remote_error` 원인을 설명 가능 상태로 만든다
+7. 이미 구축된 관찰축은 `2026-04-15 장중 지속 점검용`으로만 재정리한다
+8. 장후 결론은 반드시 `날짜 + 액션 + 실행시각` 형식으로 문서화한다
 
 ### `2026-04-15` 장전 반영/착수 시점
 
 핵심 목적:
 - `2026-04-14 장후 결론`을 실제 운영/개발 액션으로 즉시 반영한다
+- `RELAX-DYNSTR` 1축 canary와 `partial fill min_fill_ratio` canary를 `08:30`까지 실제로 시작한다
+- `Phase 2`를 오늘 시작하고, `expired_armed` 설계는 오늘 장후에 닫는다
 
 장전 체크포인트 (`08:00~08:30`):
-1. `2026-04-14 장후` 결론대로 `RELAX-LATENCY` 반영 또는 `RELAX-DYNSTR` 1축 착수 여부를 실행한다
-2. 반영/착수한 축의 롤백 가드와 관찰 포인트를 재확인한다
+1. `2026-04-14 장후` 결론대로 `RELAX-LATENCY` 반영/보류 상태를 실제 설정에 적용한다
+2. `RELAX-DYNSTR` `momentum_tag` 1축 원격 canary를 `08:30`까지 시작한다
+3. `partial fill min_fill_ratio` 원격 canary를 `08:30`까지 시작한다
+4. `RELAX-LATENCY`가 승격되면 `Phase 2-1`을 병행 착수하고, 승격이 보류되면 `Phase 2-2`를 단독 착수한다
+5. 실행 축의 롤백 가드와 장중 관찰 포인트를 재확인한다
+
+장중 체크포인트:
+1. `RELAX-DYNSTR` 1축 canary 퍼널 변화를 기록한다
+2. `partial fill min_fill_ratio` canary의 체결 기회 감소/partial 억제 효과를 함께 본다
 3. `2026-04-15` 장중에는 `전일 결론이 실제로 기대한 방향으로 움직이는지`만 점검한다
+
+장후 체크포인트:
+1. `expired_armed` 처리 로직 설계 문서를 완료한다
+2. `RELAX-DYNSTR`와 `partial fill min_fill_ratio` 1일차 canary 결과를 1차 정리한다
+3. `2026-04-16` `AI overlap audit -> selective override` 설계 착수 입력을 고정한다
 
 주의:
 - `2026-04-15`는 새 결론을 내는 날이 아니라 `2026-04-14 장후 결론`을 검증하는 날이다.
 - `AI 프롬프트 개선` 롤아웃 판단은 별도 일정으로 시작한다.
+- 별도 일정은 더 미정 상태가 아니라 `2026-04-14 POSTCLOSE -> 2026-04-15 진행 -> 2026-04-16 평가`로 고정한다.
 - 기존 관찰축은 이 시점부터 `반영 후 지속 점검` 용도로만 유지한다.
+
+### `2026-04-16` 설계 착수 시점
+
+핵심 목적:
+- `AI overlap audit`를 `selective override` 설계 착수로 연결한다
+
+체크포인트:
+1. `blocked_stage / momentum_tag / threshold_profile` 연결표를 설계 입력으로 고정한다
+2. `RELAX-DYNSTR` canary 1일차 결과와 연결해 `selective override` 초안을 시작한다
+3. 추가 canary가 필요하면 `한 축만` 남기고 보류 사유를 기록한다
 
 ## 즉시 착수 체크리스트
 
-1. `0-1b 원격 경량 프로파일링` 방식 확정
-2. `fetch_remote_scalping_logs` 장중 갱신 파일 실패 대응 여부 결정
-3. `SCALP_PRESET_TP SELL` 의도 확인
-4. HOLDING hybrid override 조건 명세 문서화
-5. WATCHING 75 정합화는 `원격 canary`로만 분류했는지 재확인
-6. 프롬프트 분리와 컨텍스트 주입이 같은 단계로 묶이지 않았는지 재확인
-7. `2026-04-13~2026-04-15` 체크포인트를 운영 문서에 고정
+1. `RELAX-LATENCY` `2026-04-14 장후` 최종 결론 확정
+2. `RELAX-DYNSTR` `momentum_tag` 1축과 rollback 가드를 `2026-04-15 08:30` 실행형으로 고정
+3. `partial fill min_fill_ratio` 원격 canary 값을 `2026-04-15` 실행형으로 고정
+4. `expired_armed` 설계 문서 위치와 완료 기준을 `2026-04-15 장후`로 못박기
+5. `remote_error` 원격 비교 항목을 snapshot 기준으로 닫기
+6. `AI overlap audit -> selective override` 착수일을 `2026-04-16`로 고정
+7. `2026-04-14~2026-04-16` 체크포인트를 운영 문서와 체크리스트에 고정
 
 ## 가드레일
 

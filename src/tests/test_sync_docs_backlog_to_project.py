@@ -35,7 +35,7 @@ def test_parse_checklist_excludes_done_checkboxes():
     tasks = parse_checklist_tasks()
     titles = [t.title for t in tasks]
     assert any("RELAX-LATENCY 반복 재현성 관찰" in title for title in titles)
-    assert all(t.due_date == "2026-04-14" for t in tasks)
+    assert any(t.due_date == "2026-04-14" for t in tasks)
 
 
 def test_parse_checklist_uses_env_override(monkeypatch):
@@ -45,7 +45,9 @@ def test_parse_checklist_uses_env_override(monkeypatch):
     )
     tasks = parse_checklist_tasks()
     titles = [t.title for t in tasks]
+    sources = {t.source for t in tasks}
     assert any("RELAX-LATENCY 운영서버 승격 가능/불가 1차 결론" in title for title in titles)
+    assert any("2026-04-14-stage2-todo-checklist.md" in source for source in sources)
     assert all("선반영 범위 확정" not in title for title in titles)
 
 
@@ -56,7 +58,21 @@ def test_parse_checklist_fallback_when_primary_missing(monkeypatch):
     )
     tasks = parse_checklist_tasks()
     assert len(tasks) > 0
-    assert all("2026-04-14-stage2-todo-checklist.md" in t.source for t in tasks)
+    assert any("2026-04-14-stage2-todo-checklist.md" in t.source for t in tasks)
+
+
+def test_parse_checklist_collects_multiple_stage2_files():
+    tasks = parse_checklist_tasks()
+    due_dates = {t.due_date for t in tasks}
+    assert "2026-04-14" in due_dates
+    assert "2026-04-15" in due_dates
+    assert "2026-04-16" in due_dates
+
+
+def test_parse_checklist_skips_past_due_stage2_files_by_default(monkeypatch):
+    monkeypatch.setenv("DOC_BACKLOG_TODAY", "2026-04-13")
+    tasks = parse_checklist_tasks()
+    assert all((not t.due_date) or t.due_date >= "2026-04-13" for t in tasks)
 
 
 def test_due_date_from_checklist_path():
@@ -80,7 +96,8 @@ def test_parse_prompt_has_detail_tasks_with_due_for_p0(monkeypatch):
     assert any(title.startswith("작업 10 ") for title in titles)
     assert "작업 1 SCALP_PRESET_TP SELL 의도 확인" not in task_map
     assert "작업 2 AI 운영계측 추가" not in task_map
-    assert "작업 3 HOLDING hybrid override 조건 명세" not in task_map
+    assert "작업 3 HOLDING hybrid override 조건 명세" in task_map
+    assert task_map["작업 3 HOLDING hybrid override 조건 명세"].due_date == "2026-04-12"
     assert task_map["작업 10 HOLDING hybrid 적용"].due_date == ""
 
 
@@ -88,7 +105,7 @@ def test_parse_prompt_excludes_done_marker_and_keeps_open_tasks():
     tasks = parse_prompt_tasks()
     titles = [t.title for t in tasks]
     assert "작업 1 SCALP_PRESET_TP SELL 의도 확인" not in titles
-    assert "작업 3 HOLDING hybrid override 조건 명세" not in titles
+    assert "작업 3 HOLDING hybrid override 조건 명세" in titles
     assert any(title.startswith("작업 4 ") for title in titles)
 
 

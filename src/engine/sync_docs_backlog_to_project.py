@@ -257,29 +257,46 @@ def parse_plan_tasks() -> list[BacklogTask]:
 
 
 def parse_checklist_tasks() -> list[BacklogTask]:
-    loaded = _read_candidates(_checklist_doc_candidates())
-    if not loaded:
-        return []
-    source_path, text = loaded
-    due_date = _due_date_from_checklist_path(source_path)
+    candidates = _checklist_doc_candidates()
     tasks: list[BacklogTask] = []
-    for line in text.splitlines():
-        m = re.match(r"^\s*-\s*\[ \]\s+(.+?)\s*$", line)
-        if not m:
+    checked: list[str] = []
+    loaded_any = False
+    today_iso = _local_today_iso()
+    forced_path_raw = os.getenv("DOC_CHECKLIST_PATH", "").strip()
+    forced_path = Path(forced_path_raw) if forced_path_raw else None
+    for source_path in candidates:
+        checked.append(str(source_path))
+        text = _read_optional(source_path)
+        if text is None:
             continue
-        item = m.group(1).strip()
-        item = re.sub(r"`([^`]+)`", r"\1", item)
-        if not item:
+        loaded_any = True
+        due_date = _due_date_from_checklist_path(source_path)
+        if due_date and due_date < today_iso and source_path != forced_path:
             continue
-        tasks.append(
-            BacklogTask(
-                title=item,
-                source=str(source_path),
-                section="체크박스 미완료",
-                track="Checklist0413",
-                due_date=due_date,
+        for line in text.splitlines():
+            m = re.match(r"^\s*-\s*\[ \]\s+(.+?)\s*$", line)
+            if not m:
+                continue
+            item = m.group(1).strip()
+            item = re.sub(r"`([^`]+)`", r"\1", item)
+            if not item:
+                continue
+            tasks.append(
+                BacklogTask(
+                    title=item,
+                    source=str(source_path),
+                    section="체크박스 미완료",
+                    track="Checklist0413",
+                    due_date=due_date,
+                )
             )
-        )
+    if not loaded_any:
+        if checked:
+            print(
+                f"[DOC_BACKLOG_SYNC_WARN] missing source doc candidates: {', '.join(checked)}",
+                file=sys.stderr,
+            )
+        return []
     return tasks
 
 
