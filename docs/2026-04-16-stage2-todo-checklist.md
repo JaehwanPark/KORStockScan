@@ -6,11 +6,13 @@
 - `2026-04-15` canary 결과를 `blocked_stage / momentum_tag / threshold_profile` 기준으로 묶어 설계 입력으로 고정한다.
 - 신규 관찰축을 추가하지 않고, 이미 확보한 계측과 전일 canary 결과만 사용한다.
 - `AIPrompt 즉시 코드축(작업 5/8/10)`은 오늘 1차 결과 평가를 수행한다.
+- 오늘은 `2026-04-14~15`에 `develop`에서 선행 적용한 축 중 `main` 승격 가능한 것만 고른다.
 
 ## 장중 체크리스트 (09:00~15:30)
 
 - [ ] `AI overlap audit` 기반 `selective override` 설계 착수
 - [ ] `RELAX-DYNSTR` canary 결과와 `blocked_stage / momentum_tag / threshold_profile` 연결표 고정
+- [ ] `RELAX-DYNSTR / partial fill / AIPrompt 5/8/10` 각각에 대해 `main` 승격 가능/불가 판정 초안 작성
 - [ ] `AIPrompt 작업 5 WATCHING/HOLDING 프롬프트 물리 분리` 영향도 1차 평가
 - [ ] `AIPrompt 작업 8 감사용 핵심값 3종 투입` 1차 결과 평가
 
@@ -19,6 +21,7 @@
 - [ ] `selective override` 설계 초안 문서화
 - [ ] `AIPrompt 작업 5/8/10` 구현 1일차 결과 정리
 - [ ] `AIPrompt 작업 10 HOLDING hybrid 적용` canary-ready 입력 마감
+- [ ] `develop` 선행 적용 축 중 `main` 승격 후보와 보류 후보를 분리 기록
 - [ ] `AIPrompt 작업 9 정량형 수급 피처 이식 1차` helper scope 초안 정리
 - [ ] `2026-04-17` `P2 HOLDING 포지션 컨텍스트 주입` 착수 또는 보류 사유 기록 기준을 체크리스트로 승격
 - [ ] 추가 canary가 필요하면 `한 축만` 남기고 보류 사유를 기록

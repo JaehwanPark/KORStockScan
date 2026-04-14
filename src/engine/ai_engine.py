@@ -1211,7 +1211,7 @@ class GeminiSniperEngine:
             else:
                 prompt = SCALPING_SYSTEM_PROMPT
                 formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
-                target_model = self._get_tier1_model()
+                target_model = self._get_tier2_model()
 
             result = self._call_gemini_safe(
                 prompt,

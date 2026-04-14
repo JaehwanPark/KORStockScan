@@ -17,7 +17,7 @@ on:
       - "src/engine/sync_docs_backlog_to_project.py"
       - ".github/workflows/sync_project_to_google_calendar.yml"
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "*/10 * * * *"
 
 permissions:
   contents: read

@@ -76,7 +76,7 @@ class TradingConfig:
     INVEST_RATIO_KOSDAQ: float = 0.15  # DEPRECATED: MIN/MAX 비중으로 대체됨
     INVEST_RATIO_SCALPING_MIN: float = 0.10  # 초단타 스캘핑 AI 점수 0일 때 최소 투자 비율 (10%)
     INVEST_RATIO_SCALPING_MAX: float = 0.30  # 초단타 스캘핑 AI 점수 100일 때 최대 투자 비율 (30%)
-    SCALPING_MAX_BUY_BUDGET_KRW: int = 1_000_000  # 스캘핑 신규 진입 1회 절대 투자금 상한
+    SCALPING_MAX_BUY_BUDGET_KRW: int = 2_000_000  # 스캘핑 신규 진입 1회 절대 투자금 상한
 
     # 💡 [신규 추가] 스윙 AI 동적 비중 조절용 (Min~Max)
     INVEST_RATIO_KOSDAQ_MIN: float = 0.05  # 코스닥 AI 점수 60점일 때 (5%)
@@ -419,6 +419,42 @@ def _build_trading_rules() -> TradingConfig:
             AI_WATCHING_75_PROMPT_SHADOW_MAX_SCORE=env_prompt_shadow_max
             if env_prompt_shadow_max is not None
             else config.AI_WATCHING_75_PROMPT_SHADOW_MAX_SCORE,
+        )
+
+    env_dynamic_strength_enabled = _env_bool("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_CANARY_ENABLED")
+    env_dynamic_strength_tags = _env_csv_tuple("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_CANARY_TAGS")
+    env_dynamic_strength_reasons = _env_csv_tuple("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_CANARY_ALLOWED_REASONS")
+    env_dynamic_strength_min_buy_value_ratio = _env_float("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_CANARY_MIN_BUY_VALUE_RATIO")
+    env_dynamic_strength_buy_ratio_tol = _env_float("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_CANARY_BUY_RATIO_TOL")
+    env_dynamic_strength_exec_buy_ratio_tol = _env_float("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_CANARY_EXEC_BUY_RATIO_TOL")
+    if (
+        env_dynamic_strength_enabled is not None
+        or env_dynamic_strength_tags is not None
+        or env_dynamic_strength_reasons is not None
+        or env_dynamic_strength_min_buy_value_ratio is not None
+        or env_dynamic_strength_buy_ratio_tol is not None
+        or env_dynamic_strength_exec_buy_ratio_tol is not None
+    ):
+        config = replace(
+            config,
+            SCALP_DYNAMIC_STRENGTH_CANARY_ENABLED=env_dynamic_strength_enabled
+            if env_dynamic_strength_enabled is not None
+            else config.SCALP_DYNAMIC_STRENGTH_CANARY_ENABLED,
+            SCALP_DYNAMIC_STRENGTH_CANARY_TAGS=env_dynamic_strength_tags
+            if env_dynamic_strength_tags is not None
+            else config.SCALP_DYNAMIC_STRENGTH_CANARY_TAGS,
+            SCALP_DYNAMIC_STRENGTH_CANARY_ALLOWED_REASONS=env_dynamic_strength_reasons
+            if env_dynamic_strength_reasons is not None
+            else config.SCALP_DYNAMIC_STRENGTH_CANARY_ALLOWED_REASONS,
+            SCALP_DYNAMIC_STRENGTH_CANARY_MIN_BUY_VALUE_RATIO=env_dynamic_strength_min_buy_value_ratio
+            if env_dynamic_strength_min_buy_value_ratio is not None
+            else config.SCALP_DYNAMIC_STRENGTH_CANARY_MIN_BUY_VALUE_RATIO,
+            SCALP_DYNAMIC_STRENGTH_CANARY_BUY_RATIO_TOL=env_dynamic_strength_buy_ratio_tol
+            if env_dynamic_strength_buy_ratio_tol is not None
+            else config.SCALP_DYNAMIC_STRENGTH_CANARY_BUY_RATIO_TOL,
+            SCALP_DYNAMIC_STRENGTH_CANARY_EXEC_BUY_RATIO_TOL=env_dynamic_strength_exec_buy_ratio_tol
+            if env_dynamic_strength_exec_buy_ratio_tol is not None
+            else config.SCALP_DYNAMIC_STRENGTH_CANARY_EXEC_BUY_RATIO_TOL,
         )
     return config
 

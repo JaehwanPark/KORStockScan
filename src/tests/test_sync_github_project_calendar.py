@@ -236,6 +236,95 @@ def test_fetch_project_items_excludes_managed_title_missing_from_docs(monkeypatc
     assert [item.title for item in items] == ["[Checklist0413] still open in docs"]
 
 
+def test_fetch_project_items_excludes_all_managed_titles_when_docs_open_set_empty(monkeypatch):
+    managed_node = _sample_node()
+    managed_node["content"]["title"] = "[Checklist0413] closed in docs"
+
+    unmanaged_node = {
+        **_sample_node(),
+        "id": "PVTI_unmanaged",
+        "content": {
+            **_sample_node()["content"],
+            "title": "Unmanaged live task",
+        },
+    }
+
+    data = {
+        "organization": {
+            "projectV2": {
+                "items": {
+                    "nodes": [managed_node, unmanaged_node],
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                }
+            }
+        },
+        "user": {"projectV2": None},
+    }
+
+    monkeypatch.setattr(
+        "src.engine.sync_github_project_calendar._graphql_request",
+        lambda token, query, variables: data,
+    )
+    monkeypatch.setattr(
+        "src.engine.sync_github_project_calendar.collect_backlog_tasks",
+        lambda: [],
+    )
+
+    items = fetch_project_items(
+        token="token",
+        owner="JaehwanPark",
+        number=1,
+        due_field_name="Due",
+        status_field_name="Status",
+        track_field_name="Track",
+        slot_field_name="Slot",
+        time_window_field_name="TimeWindow",
+        sync_only_statuses={"Todo", "In Progress"},
+    )
+
+    assert [item.title for item in items] == ["Unmanaged live task"]
+
+
+def test_fetch_project_items_keeps_managed_titles_when_docs_parse_fails(monkeypatch):
+    managed_node = _sample_node()
+    managed_node["content"]["title"] = "[Checklist0413] fallback keep on parse failure"
+
+    data = {
+        "organization": {
+            "projectV2": {
+                "items": {
+                    "nodes": [managed_node],
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                }
+            }
+        },
+        "user": {"projectV2": None},
+    }
+
+    monkeypatch.setattr(
+        "src.engine.sync_github_project_calendar._graphql_request",
+        lambda token, query, variables: data,
+    )
+    monkeypatch.setattr(
+        "src.engine.sync_github_project_calendar.collect_backlog_tasks",
+        lambda: (_ for _ in ()).throw(RuntimeError("parse failed")),
+    )
+
+    items = fetch_project_items(
+        token="token",
+        owner="JaehwanPark",
+        number=1,
+        due_field_name="Due",
+        status_field_name="Status",
+        track_field_name="Track",
+        slot_field_name="Slot",
+        time_window_field_name="TimeWindow",
+        sync_only_statuses={"Todo", "In Progress"},
+    )
+
+    assert [item.title for item in items] == ["[Checklist0413] fallback keep on parse failure"]
+
+
 def test_event_body_contains_private_extended_properties():
     item = ProjectItem(
         item_id="PVTI_1",

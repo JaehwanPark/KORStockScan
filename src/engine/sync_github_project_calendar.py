@@ -76,12 +76,12 @@ def _status_allowed(status: str, allowed_statuses: set[str]) -> bool:
     return current in {_norm_key(item) for item in allowed_statuses if item.strip()}
 
 
-def _managed_open_titles_from_docs() -> set[str]:
+def _managed_open_titles_from_docs() -> set[str] | None:
     try:
         return {_title_for_project(task) for task in collect_backlog_tasks()}
     except Exception as exc:
         print(f"[PROJECT_CAL_SYNC_WARN] failed to parse docs backlog for managed title filter: {exc}", file=sys.stderr)
-        return set()
+        return None
 
 
 def _extract_time_range_from_text(text: str) -> tuple[str, str]:
@@ -365,7 +365,7 @@ def fetch_project_items(
     cursor: str | None = None
     query = _graphql_query()
     managed_open_titles = _managed_open_titles_from_docs()
-    enforce_managed_doc_filter = bool(managed_open_titles)
+    enforce_managed_doc_filter = managed_open_titles is not None
 
     while True:
         data = _graphql_request(
@@ -390,7 +390,11 @@ def fetch_project_items(
             )
             if not parsed:
                 continue
-            if enforce_managed_doc_filter and _is_managed_project_title(parsed.title) and parsed.title not in managed_open_titles:
+            if (
+                enforce_managed_doc_filter
+                and _is_managed_project_title(parsed.title)
+                and parsed.title not in managed_open_titles
+            ):
                 continue
             if not _status_allowed(parsed.status, sync_only_statuses):
                 continue

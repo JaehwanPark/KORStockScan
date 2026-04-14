@@ -18,7 +18,7 @@
 
 동작 방식:
 
-1. 30분마다(또는 수동 실행) GitHub Project 항목 조회
+1. 10분마다(또는 수동 실행) GitHub Project 항목 조회
 2. Due Date가 있는 항목만 Google Calendar 이벤트로 upsert
 3. `Slot(PREOPEN/INTRADAY/POSTCLOSE)`이 있으면 시간 지정 이벤트 + 시작 알림으로 생성
 4. 거래일에는 `TimeWindow` 필드가 있으면 캘린더 시간은 `TimeWindow`를 최우선 적용
@@ -40,6 +40,8 @@
    문서 기준으로 `Status` 자동 동기화
    - 문서에 남아있음: `Todo`
    - 문서에서 제거됨(완료 처리): `Done`
+   - 문서에 열린 관리 항목이 `0개`면 캘린더에서도 해당 관리 이벤트를 stale 대상으로 본다
+   - 단 문서 파싱 자체가 실패한 실행에서는 오삭제를 막기 위해 managed 이벤트 삭제를 보류한다
 6. `Slot`이 비어있는 관리 항목은 문서 sync 시 자동 추론하여 채움
    - 기본 규칙: `Plan/Checklist0413 -> PREOPEN`, `ScalpingLogic -> INTRADAY`, `AIPrompt -> POSTCLOSE`
    - 키워드 우선 규칙: `장전/PREOPEN`, `장중/INTRADAY`, `장후/EOD/리포트/검증` 매칭 시 트랙 기본값보다 우선
@@ -208,7 +210,7 @@ Settings -> Secrets and variables -> Actions
 
 ### Step 3. 정기 운영
 
-1. 스케줄(`*/30 * * * *`)로 자동 반영 확인
+1. 스케줄(`*/10 * * * *`)로 자동 반영 확인
 2. 모바일은 GitHub Mobile + Google Calendar 앱으로 모니터링
 3. 작업 지시는 Issue/Project 코멘트로 유지
 

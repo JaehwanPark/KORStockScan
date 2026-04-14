@@ -79,11 +79,12 @@
 3. 스캘핑은 `과감한 적용 + 빠른 피드백`, 스윙은 `정확도 우선 + 표본 축적 우선`으로 분리 운영한다.
 4. `한 번에 한 축 canary`, `shadow-only`, `즉시 롤백 가드`는 보수적 철학이 아니라 `원인 귀속 정확도`와 `실전 리스크 관리`를 위한 운영 규율이다.
 5. 실전 변경은 `develop=원격 실험서버`, `main=본서버` 기준으로 운영한다. 원격 실험 반영은 `develop`에서 먼저 만들고, 본서버 승격만 `main`으로 올린다.
-6. 해석 기준은 항상 `판정 -> 근거 -> 다음 액션` 순서로 남긴다.
-7. `관찰 축 추가`는 상시 전략이 아니다. `2026-04-14 장후`까지는 이미 고정한 축만 재검증하고, `2026-04-14 장후`에는 반드시 `반영 / 보류+단일축 전환 / 관찰 종료 후 재설계` 중 하나로 결론낸다.
-8. 원격 비교검증 `remote_error`는 재발 시 원인 수정 대상으로 다루되, `2026-04-13` 기준 현재 잔여 작업축에는 올리지 않는다.
-9. `계측 완료 + 실전반영 확신도 50% 이상`인 축은 같은 주 canary 착수를 기본값으로 한다. 착수하지 않으려면 장후 문서에 명시적 보류 사유를 남긴다.
-10. 장후 결론은 `유지/보류` 같은 상태 기록으로 끝내지 않는다. `날짜 + 액션 + 실행시각`이 없으면 결론으로 인정하지 않는다.
+6. 메인서버 작업계획이 잡히면 동일 축은 원격 `develop`에 `T-2` 또는 늦어도 `T-1` 영업일 먼저 적용한다. `main`은 원격 장후 판정이 남아 있을 때만 반영한다.
+7. 해석 기준은 항상 `판정 -> 근거 -> 다음 액션` 순서로 남긴다.
+8. `관찰 축 추가`는 상시 전략이 아니다. `2026-04-14 장후`까지는 이미 고정한 축만 재검증하고, `2026-04-14 장후`에는 반드시 `반영 / 보류+단일축 전환 / 관찰 종료 후 재설계` 중 하나로 결론낸다.
+9. 원격 비교검증 `remote_error`는 재발 시 원인 수정 대상으로 다루되, `2026-04-13` 기준 현재 잔여 작업축에는 올리지 않는다.
+10. `계측 완료 + 실전반영 확신도 50% 이상`인 축은 같은 주 canary 착수를 기본값으로 한다. 착수하지 않으려면 장후 문서에 명시적 보류 사유를 남긴다.
+11. 장후 결론은 `유지/보류` 같은 상태 기록으로 끝내지 않는다. `날짜 + 액션 + 실행시각`이 없으면 결론으로 인정하지 않는다.
 
 ## 현재 상태 요약 (`2026-04-11` 기준)
 
@@ -104,31 +105,46 @@
 
 ### 진행 중인 일
 
-1. 원격 `RELAX-LATENCY` 추가 관찰 및 `2026-04-14 장후` 운영서버 롤아웃 최종 판단
-2. `RELAX-DYNSTR` `momentum_tag` 1축 원격 canary의 `2026-04-15 08:30` 착수 준비
-3. `partial fill min_fill_ratio` 원격 canary의 `2026-04-15` 착수 준비
-4. `expired_armed` 처리 로직 설계 문서의 `2026-04-15 장후` 완료 준비
-5. `AI overlap audit -> selective override` 설계 착수 입력 정리 (`2026-04-16` 이내)
+1. `main` 반영 예정 축을 원격 `develop`에 `1~2일 선행` 적용하는 운영계획 재정렬
+2. 원격 `RELAX-LATENCY` 추가 관찰 및 `2026-04-14 장후` 운영서버 롤아웃 최종 판단
+3. `RELAX-DYNSTR` `momentum_tag` 1축 원격 canary의 `2026-04-15 08:30` 착수 준비
+4. `partial fill min_fill_ratio` 원격 canary의 `2026-04-15` 착수 준비
+5. `expired_armed` 처리 로직 설계 문서의 `2026-04-15 장후` 완료 준비
+6. `AI overlap audit -> selective override` 설계 착수 입력 정리 (`2026-04-16` 이내)
 
 ### 아직 남아있는 일
 
 1. 스캘핑 매매로직 `0-1b 원격 경량 프로파일링`
-2. `RELAX-LATENCY` `2026-04-14 장후` 최종 결론 및 `2026-04-15 장전` 반영
-3. `RELAX-DYNSTR` `momentum_tag` 1축 원격 canary `2026-04-15 08:30` 착수
-4. `partial fill min_fill_ratio` 원격 canary `2026-04-15` 시작
+2. `RELAX-LATENCY` `2026-04-14 develop` 최종 결론 및 `2026-04-15 main` 반영 여부 확정
+3. `RELAX-DYNSTR` `momentum_tag` 1축 원격 canary `2026-04-15 08:30` 착수와 `2026-04-16 main` 반영 판단 준비
+4. `partial fill min_fill_ratio` 원격 canary `2026-04-15` 시작과 `2026-04-16 main` 반영 판단 준비
 5. `expired_armed` 처리 로직 설계 문서 `2026-04-15 장후` 완료
 6. `AI overlap audit` 기반 `selective override` 설계 착수 (`2026-04-16` 이내)
 7. AI 프롬프트 개선 코드 구현 전반
-8. AI 프롬프트 `작업 5/8/10`의 즉시 코드 착수와 `2026-04-16` 1차 평가
+8. AI 프롬프트 `작업 5/8/10`의 `develop` 선행 적용과 `main` 후행 승격 기준 확정
 
 ## 활성 워크스트림
 
 | 워크스트림 | 현재 상태 | 완료된 일 | 남은 일 |
 | --- | --- | --- | --- |
 | `WS-A 스캘핑 관측/리포트` | `진행 중` | `Phase 0/1` 대부분 반영 완료 | `0-1b`, 리포트 품질 최종 검증 |
-| `WS-B 원격 canary/롤아웃` | `진행 중` | `RELAX-LATENCY` 원격 반영, `RELAX-DYNSTR/OVERBOUGHT` 분류 고정 | `2026-04-14` 장후 결론, `2026-04-15 08:30` `RELAX-DYNSTR` canary/`Phase 2` 착수 |
-| `WS-C AI 프롬프트 개선` | `즉시 착수` | 팩트/검토/반박/운영자 메모 완료, `작업 1/2/3` 완료, `작업 4` Deferred | `2026-04-14 POSTCLOSE` `작업 5/8/10` 같은 날 착수, `2026-04-16` 1차 평가, `2026-04-17~21` `작업 6/7/9/11/12` 고정 |
+| `WS-B 원격 canary/롤아웃` | `진행 중` | `RELAX-LATENCY` 원격 반영, `RELAX-DYNSTR/OVERBOUGHT` 분류 고정 | `main` 예정 축의 `develop T-2/T-1` 선행 적용, `2026-04-14` 장후 결론, `2026-04-15 08:30` `RELAX-DYNSTR` canary/`Phase 2` 착수 |
+| `WS-C AI 프롬프트 개선` | `즉시 착수` | 팩트/검토/반박/운영자 메모 완료, `작업 1/2/3` 완료, `작업 4` Deferred | `develop`에 `작업 5/8/10` 선행 적용, `2026-04-16` 1차 평가 후 `main` 승격 여부 결정, `2026-04-17~21` `작업 6/7/9/11/12` 고정 |
 | `WS-D 보조 운영/데이터 품질` | `진행 중` | `trade_review`, `pipeline_events` 기반 보강 축 정리 | `partial fill min_fill_ratio` canary, `expired_armed` 설계, `AI overlap selective override` |
+
+## 원격 선행 적용 운영계획
+
+| 축 | `develop` 원격 실험서버 | `main` 본서버 |
+| --- | --- | --- |
+| `RELAX-LATENCY` | `2026-04-14` 장후 결론 확정 | `2026-04-15` 장전/장중 반영 여부 결정 |
+| `RELAX-DYNSTR momentum_tag 1축` | `2026-04-15 08:30` canary 시작 | `2026-04-16` 장후 승격 여부 판단 |
+| `partial fill min_fill_ratio` | `2026-04-15 08:30` canary 시작 | `2026-04-16` 장후 승격 여부 판단 |
+| `AIPrompt 작업 5/8/10` | `2026-04-14 POSTCLOSE` 착수, `2026-04-15~16` 원격 검증 | `2026-04-16` 이후 장후 판정이 남는 경우만 승격 |
+
+운영 메모:
+- `main` 작업계획에는 반드시 대응하는 `develop` 선행 적용 일자가 같이 있어야 한다.
+- 같은 축을 `main`에 먼저 적용하는 일정은 금지한다.
+- `develop` 선행 적용이 누락된 항목은 장후 체크리스트에서 `미착수`가 아니라 `계획 오류`로 기록한다.
 
 ## 후순위/비차단 백로그
 
@@ -172,11 +188,16 @@
    - `2026-04-15` 원격 기본값 `0.5`로 시작하고 체결 기회 감소 여부를 장중에 확인
 5. `expired_armed` 처리 로직 설계
    - `2026-04-15 장후`까지 재진입 허용 여부와 조건을 문서화한다
+   - `태광` 같은 anchor case는 이벤트 복원용으로만 쓰고, 의사결정 기준은 전수 `expired_armed` 분포와 상위 코호트 통계로 둔다
 6. `AI overlap audit` 기반 `selective override` 설계 착수
    - `2026-04-16` 이내에 `blocked_stage / momentum_tag / threshold_profile` 연결표 기준으로 시작한다
-7. `Phase 3-1 realistic/conservative counterfactual`
-8. `Phase 3-2 exit authority 명문화`
-9. `Phase 3-3 post-sell exit timing canary`
+7. `SCALPING 모델 shadow 비교안`
+   - `2026-04-15 PREOPEN`에 `WATCHING shared prompt` shadow 구현 착수
+   - `2026-04-15 INTRADAY`에 `Tier2 Gemini Flash vs GPT-4.1-mini` 첫 실표본 수집 시작
+   - `2026-04-15 POSTCLOSE`에 `counterfactual realized outcome` 1차 비교표 생성
+8. `Phase 3-1 realistic/conservative counterfactual`
+9. `Phase 3-2 exit authority 명문화`
+10. `Phase 3-3 post-sell exit timing canary`
    - 현재 잔여 작업축에서는 제외한다.
    - entry/holding 직접 코드축(`작업 5/8/10`, `RELAX-DYNSTR`, `partial fill`) 1차 평가 후 재오픈 여부를 다시 본다.
 
@@ -241,6 +262,7 @@
    - `작업 5` 구현 진행 / 로그 비교축 확인
    - `작업 8 감사용 핵심값 3종 투입` 구현/검증 지속
    - `작업 10 HOLDING hybrid 적용` `FORCE_EXIT` 제한형 MVP 구현 지속
+   - `SCALPING 모델 shadow 비교안`은 `WATCHING shared prompt` 기준 `Tier2 Gemini Flash vs GPT-4.1-mini` 1차 shadow 설계를 닫고, 장후 `counterfactual realized outcome` 비교표까지 이어지게 한다
 3. `2026-04-16`
    - `작업 5/8/10` 1차 평가
    - `작업 10` canary-ready 입력 정리와 `작업 9` helper scope 초안 정리
@@ -269,6 +291,10 @@
    - `FORCE_EXIT`만 즉시집행 후보
    - `SELL`은 1차 canary에서 로그 우선
    - `SCALP_PRESET_TP`는 전용 검문에서만 `DROP` 즉시집행 허용
+4. `SCALPING 모델 shadow 비교`
+   - 현재 `OpenAI 듀얼 페르소나 shadow`는 `gatekeeper/overnight` 전용이라 라이브 스캘핑 공용 프롬프트 비교에는 바로 못 쓴다
+   - 1차 범위는 `WATCHING shared prompt` 동일 입력의 `Tier2 Gemini Flash vs GPT-4.1-mini`
+   - 비교 결과는 `action/score divergence`와 장후 `counterfactual realized outcome`으로 읽고, `HOLDING/SCALP_PRESET_TP` 확장은 후순위로 둔다
 
 ### `2026-04-12` P1 작업 4 착수 메모
 

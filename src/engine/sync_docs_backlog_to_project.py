@@ -273,7 +273,12 @@ def parse_checklist_tasks() -> list[BacklogTask]:
         due_date = _due_date_from_checklist_path(source_path)
         if due_date and due_date < today_iso and source_path != forced_path:
             continue
+        current_section = ""
         for line in text.splitlines():
+            heading = re.match(r"^\s*##\s+(.+?)\s*$", line)
+            if heading:
+                current_section = heading.group(1).strip()
+                continue
             m = re.match(r"^\s*-\s*\[ \]\s+(.+?)\s*$", line)
             if not m:
                 continue
@@ -281,11 +286,14 @@ def parse_checklist_tasks() -> list[BacklogTask]:
             item = re.sub(r"`([^`]+)`", r"\1", item)
             if not item:
                 continue
+            section_label = "체크박스 미완료"
+            if current_section:
+                section_label = f"{current_section} / 체크박스 미완료"
             tasks.append(
                 BacklogTask(
                     title=item,
                     source=str(source_path),
-                    section="체크박스 미완료",
+                    section=section_label,
                     track="Checklist0413",
                     due_date=due_date,
                 )
@@ -656,13 +664,21 @@ def _slot_key(value: str) -> str:
 
 
 def _infer_slot_label(task: BacklogTask) -> str:
+    section_text = str(task.section or "").lower()
+    if any(keyword.lower() in section_text for keyword in SLOT_PREOPEN_KEYWORDS):
+        return "PREOPEN"
+    if any(keyword.lower() in section_text for keyword in SLOT_POSTCLOSE_KEYWORDS):
+        return "POSTCLOSE"
+    if any(keyword.lower() in section_text for keyword in SLOT_INTRADAY_KEYWORDS):
+        return "INTRADAY"
+
     text = f"{task.title} {task.section}".lower()
     if any(keyword.lower() in text for keyword in SLOT_PREOPEN_KEYWORDS):
         return "PREOPEN"
-    if any(keyword.lower() in text for keyword in SLOT_INTRADAY_KEYWORDS):
-        return "INTRADAY"
     if any(keyword.lower() in text for keyword in SLOT_POSTCLOSE_KEYWORDS):
         return "POSTCLOSE"
+    if any(keyword.lower() in text for keyword in SLOT_INTRADAY_KEYWORDS):
+        return "INTRADAY"
     return TRACK_DEFAULT_SLOT.get(task.track, "POSTCLOSE")
 
 

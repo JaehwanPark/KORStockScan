@@ -308,7 +308,7 @@ def test_analyze_target_routes_scalping_and_swing_to_expected_tiers(monkeypatch)
     engine.analyze_target("스캘프", ws_data, recent_ticks, recent_candles, strategy="SCALPING")
     engine.analyze_target("스윙", ws_data, recent_ticks, recent_candles, strategy="KOSDAQ_ML")
 
-    assert used_models == ["tier1-model", "tier2-model"]
+    assert used_models == ["tier2-model", "tier2-model"]
 
 
 def test_condition_entry_and_exit_use_tier1_model(monkeypatch):
