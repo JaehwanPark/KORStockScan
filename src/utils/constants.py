@@ -133,6 +133,7 @@ class TradingConfig:
     SCALP_AI_EARLY_EXIT_MIN_LOSS_PCT: float = -0.7  # 조기손절을 허용하는 최소 손실폭
     SCALP_AI_EARLY_EXIT_MIN_HOLD_SEC: int = 180  # 진입 직후 블라인드 타임(초)
     SCALP_AI_EARLY_EXIT_CONSECUTIVE_HITS: int = 3  # 연속 저점수 확인 횟수
+    SCALP_AI_EXIT_AVGDOWN_ENABLED: bool = False  # AI 하방카운트 도달 시 1회 물타기 후 보유 재진입
     SCALP_AI_EARLY_EXIT_CONSECUTIVE_HITS_OPEN_RECLAIM: int = 4  # OPEN_RECLAIM 전용 조기손절 확인 횟수(완화)
     SCALP_AI_MOMENTUM_DECAY_SCORE_LIMIT: int = 45  # 이 값 미만일 때만 AI 모멘텀 둔화 익절 검토
     SCALP_AI_MOMENTUM_DECAY_MIN_HOLD_SEC: int = 90  # AI 모멘텀 둔화 익절 최소 보유시간(초)
@@ -485,6 +486,27 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_PARTIAL_FILL_MIN_RATIO_PRESET_TP=env_partial_fill_min_preset
             if env_partial_fill_min_preset is not None
             else config.SCALP_PARTIAL_FILL_MIN_RATIO_PRESET_TP,
+        )
+
+    env_scalp_ai_exit_avgdown_enabled = _env_bool("KORSTOCKSCAN_SCALP_AI_EXIT_AVGDOWN_ENABLED")
+    env_scalping_enable_avg_down = _env_bool("KORSTOCKSCAN_SCALPING_ENABLE_AVG_DOWN")
+    env_scalping_max_avg_down_count = _env_int("KORSTOCKSCAN_SCALPING_MAX_AVG_DOWN_COUNT")
+    if (
+        env_scalp_ai_exit_avgdown_enabled is not None
+        or env_scalping_enable_avg_down is not None
+        or env_scalping_max_avg_down_count is not None
+    ):
+        config = replace(
+            config,
+            SCALP_AI_EXIT_AVGDOWN_ENABLED=env_scalp_ai_exit_avgdown_enabled
+            if env_scalp_ai_exit_avgdown_enabled is not None
+            else config.SCALP_AI_EXIT_AVGDOWN_ENABLED,
+            SCALPING_ENABLE_AVG_DOWN=env_scalping_enable_avg_down
+            if env_scalping_enable_avg_down is not None
+            else config.SCALPING_ENABLE_AVG_DOWN,
+            SCALPING_MAX_AVG_DOWN_COUNT=env_scalping_max_avg_down_count
+            if env_scalping_max_avg_down_count is not None
+            else config.SCALPING_MAX_AVG_DOWN_COUNT,
         )
     return config
 

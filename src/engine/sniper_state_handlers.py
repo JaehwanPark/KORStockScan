@@ -2675,6 +2675,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
     strategy = 'SCALPING' if raw_strategy in ['SCALPING', 'SCALP'] else raw_strategy
     pos_tag = normalize_position_tag(strategy, stock.get('position_tag'))
     stock['position_tag'] = pos_tag
+    legacy_broker_recovered = bool(stock.get('broker_recovered_legacy'))
 
     curr_p = int(float(ws_data.get('curr', 0) or 0))
     buy_p = float(stock.get('buy_price', 0) or 0)
@@ -2829,7 +2830,9 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             ai_exit_min_loss_pct=float(getattr(TRADING_RULES, 'SCALP_AI_EARLY_EXIT_MIN_LOSS_PCT', -0.7) or -0.7),
         )
 
-        if profit_rate <= preset_hard_stop_pct:
+        if legacy_broker_recovered:
+            stock['last_exit_guard_reason'] = 'broker_recovered_legacy'
+        elif profit_rate <= preset_hard_stop_pct:
             within_grace = preset_hard_stop_grace_sec > 0 and preset_held_sec < preset_hard_stop_grace_sec
             emergency_break = profit_rate <= preset_hard_stop_emergency_pct
             if within_grace and not emergency_break:
@@ -3230,7 +3233,9 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             now_ts=now_ts,
         )
 
-        if profit_rate <= hard_stop_pct:
+        if legacy_broker_recovered:
+            stock['last_exit_guard_reason'] = 'broker_recovered_legacy'
+        elif profit_rate <= hard_stop_pct:
             is_sell_signal = True
             sell_reason_type = "LOSS"
             reason = f"🛑 하드스탑 도달 ({hard_stop_pct}%) [AI: {current_ai_score:.0f}]"
@@ -3247,6 +3252,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             ai_low_score_hits = 0
 
         elif (
+            not legacy_broker_recovered
+            and
             pos_tag == 'OPEN_RECLAIM'
             and held_sec >= open_reclaim_hold_sec
             and peak_profit <= open_reclaim_peak_max_pct
@@ -3262,6 +3269,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             exit_rule = "scalp_open_reclaim_never_green"
 
         elif (
+            not legacy_broker_recovered
+            and
             pos_tag == 'OPEN_RECLAIM'
             and held_sec >= open_reclaim_hold_sec
             and peak_profit > open_reclaim_peak_max_pct
@@ -3276,6 +3285,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             exit_rule = "scalp_open_reclaim_retrace_exit"
 
         elif (
+            not legacy_broker_recovered
+            and
             pos_tag == 'SCANNER'
             and str(stock.get('entry_mode', '')).strip().lower() == 'fallback'
             and held_sec >= scanner_fallback_hold_sec
@@ -3292,6 +3303,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             exit_rule = "scalp_scanner_fallback_never_green"
 
         elif (
+            not legacy_broker_recovered
+            and
             pos_tag == 'SCANNER'
             and str(stock.get('entry_mode', '')).strip().lower() == 'fallback'
             and held_sec >= scanner_fallback_hold_sec
@@ -3307,18 +3320,66 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             exit_rule = "scalp_scanner_fallback_retrace_exit"
 
         elif (
+            not legacy_broker_recovered
+            and
             held_sec >= ai_exit_min_hold_sec
             and profit_rate <= ai_exit_min_loss_pct
             and current_ai_score <= ai_exit_score_limit
             and ai_low_score_hits >= ai_exit_needed_hits
         ):
-            is_sell_signal = True
-            sell_reason_type = "LOSS"
-            reason = (
-                f"🚨 AI 하방 리스크 연속 확인 {ai_low_score_hits}/{ai_exit_needed_hits}회 "
-                f"({current_ai_score:.0f}점). 조기 손절 ({profit_rate:.2f}%)"
+            ai_exit_avgdown_enabled = bool(
+                getattr(TRADING_RULES, 'SCALP_AI_EXIT_AVGDOWN_ENABLED', False)
             )
-            exit_rule = "scalp_ai_early_exit"
+            ai_exit_avgdown_done = bool(stock.get('scalp_ai_exit_avgdown_done', False))
+
+            if ai_exit_avgdown_enabled and not ai_exit_avgdown_done:
+                # AI 하방카운트 기반 avg-down은 기존 가격낙폭 평가와 독립적으로 1회 시도한다.
+                avgdown_action = {
+                    "should_add": True,
+                    "add_type": "AVG_DOWN",
+                    "reason": "scalp_ai_exit_avgdown",
+                    "qty": 0,
+                    "price": 0,
+                }
+                add_result = _process_scale_in_action(stock, code, ws_data, avgdown_action, admin_id)
+                if add_result:
+                    stock['scalp_ai_exit_avgdown_done'] = True
+                    stock['ai_low_score_loss_hits'] = 0
+                    ai_low_score_hits = 0
+                    _log_holding_pipeline(
+                        stock,
+                        code,
+                        "scalp_ai_exit_avgdown",
+                        id=stock.get('id'),
+                        profit_rate=f"{profit_rate:+.2f}",
+                        ai_score=f"{current_ai_score:.0f}",
+                        low_score_hits=f"{ai_exit_needed_hits}/{ai_exit_needed_hits}",
+                        held_sec=int(held_sec),
+                        note="ai_exit_avgdown_triggered_reset_hits",
+                    )
+                    print(
+                        f"🔄 [AI카운트 물타기] {stock['name']}({code}) "
+                        f"하방카운트 {ai_exit_needed_hits}회 도달 → AVG_DOWN 실행 후 보유 재진입 "
+                        f"(수익: {profit_rate:.2f}%, AI: {current_ai_score:.0f}점)"
+                    )
+                else:
+                    is_sell_signal = True
+                    sell_reason_type = "LOSS"
+                    reason = (
+                        f"🚨 AI 하방 리스크 연속 확인 {ai_low_score_hits}/{ai_exit_needed_hits}회 "
+                        f"({current_ai_score:.0f}점). 조기 손절 [{profit_rate:.2f}%] "
+                        f"(물타기 주문 실패 - fallback)"
+                    )
+                    exit_rule = "scalp_ai_early_exit"
+            else:
+                is_sell_signal = True
+                sell_reason_type = "LOSS"
+                reason = (
+                    f"🚨 AI 하방 리스크 연속 확인 {ai_low_score_hits}/{ai_exit_needed_hits}회 "
+                    f"({current_ai_score:.0f}점). 조기 손절 ({profit_rate:.2f}%)"
+                    + (" [물타기 소진]" if ai_exit_avgdown_done else "")
+                )
+                exit_rule = "scalp_ai_early_exit"
 
         elif profit_rate >= safe_profit_pct:
             if current_ai_score < momentum_decay_score_limit and held_sec >= momentum_decay_min_hold_sec:

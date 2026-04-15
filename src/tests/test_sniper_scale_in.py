@@ -1683,6 +1683,277 @@ def test_scalping_ai_early_exit_requires_consecutive_low_score_hits(monkeypatch)
     assert stock["status"] == "SELL_ORDERED"
 
 
+def test_scalping_ai_exit_avgdown_toggle_off_keeps_original_exit(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    monkeypatch.setattr(state_handlers, "datetime", datetime)
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALP_AI_EXIT_AVGDOWN_ENABLED=False,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 101}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    sell_calls = []
+    add_calls = []
+
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda *args, **kwargs: sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_process_scale_in_action",
+        lambda *args, **kwargs: add_calls.append(kwargs) or {"rt_cd": "0"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_block"},
+    )
+
+    stock = {
+        "id": 121,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 100,
+        "buy_qty": 10,
+        "buy_time": datetime.now() - timedelta(seconds=240),
+        "rt_ai_prob": 0.29,
+        "ai_low_score_loss_hits": 3,
+        "scalp_ai_exit_avgdown_done": False,
+    }
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 99.2, "orderbook": {"bids": [{"price": 99, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    assert len(sell_calls) == 1
+    assert add_calls == []
+    assert stock["status"] == "SELL_ORDERED"
+    assert stock["last_exit_rule"] == "scalp_ai_early_exit"
+
+
+def test_scalping_ai_exit_avgdown_first_hit_success_resets_hits(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    monkeypatch.setattr(state_handlers, "datetime", datetime)
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALP_AI_EXIT_AVGDOWN_ENABLED=True,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 101}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    sell_calls = []
+    add_calls = []
+
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda *args, **kwargs: sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_process_scale_in_action",
+        lambda *args, **kwargs: add_calls.append(kwargs) or {"return_code": "0", "ord_no": "A1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_block"},
+    )
+
+    stock = {
+        "id": 122,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 100,
+        "buy_qty": 10,
+        "buy_time": datetime.now() - timedelta(seconds=240),
+        "rt_ai_prob": 0.29,
+        "ai_low_score_loss_hits": 3,
+        "scalp_ai_exit_avgdown_done": False,
+    }
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 99.2, "orderbook": {"bids": [{"price": 99, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    assert len(add_calls) == 1
+    assert sell_calls == []
+    assert stock["status"] == "HOLDING"
+    assert stock["ai_low_score_loss_hits"] == 0
+    assert stock["scalp_ai_exit_avgdown_done"] is True
+
+
+def test_scalping_ai_exit_avgdown_first_hit_failure_falls_back_to_sell(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    monkeypatch.setattr(state_handlers, "datetime", datetime)
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALP_AI_EXIT_AVGDOWN_ENABLED=True,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 101}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    sell_calls = []
+    add_calls = []
+    exit_logs = []
+
+    def fake_log_holding_pipeline(stock, code, stage, **fields):
+        if stage == "exit_signal":
+            exit_logs.append(fields)
+
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", fake_log_holding_pipeline)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda *args, **kwargs: sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_process_scale_in_action",
+        lambda *args, **kwargs: add_calls.append(kwargs) or None,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_block"},
+    )
+
+    stock = {
+        "id": 123,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 100,
+        "buy_qty": 10,
+        "buy_time": datetime.now() - timedelta(seconds=240),
+        "rt_ai_prob": 0.29,
+        "ai_low_score_loss_hits": 3,
+        "scalp_ai_exit_avgdown_done": False,
+    }
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 99.2, "orderbook": {"bids": [{"price": 99, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    assert len(add_calls) == 1
+    assert len(sell_calls) == 1
+    assert stock["status"] == "SELL_ORDERED"
+    assert stock["last_exit_rule"] == "scalp_ai_early_exit"
+    assert exit_logs and "fallback" in str(exit_logs[-1].get("reason", ""))
+
+
+def test_scalping_ai_exit_avgdown_done_stock_sells_without_retry(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    monkeypatch.setattr(state_handlers, "datetime", datetime)
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALP_AI_EXIT_AVGDOWN_ENABLED=True,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 101}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    sell_calls = []
+    add_calls = []
+    exit_logs = []
+
+    def fake_log_holding_pipeline(stock, code, stage, **fields):
+        if stage == "exit_signal":
+            exit_logs.append(fields)
+
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", fake_log_holding_pipeline)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda *args, **kwargs: sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_process_scale_in_action",
+        lambda *args, **kwargs: add_calls.append(kwargs) or {"return_code": "0", "ord_no": "A1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_block"},
+    )
+
+    stock = {
+        "id": 124,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 100,
+        "buy_qty": 10,
+        "buy_time": datetime.now() - timedelta(seconds=240),
+        "rt_ai_prob": 0.29,
+        "ai_low_score_loss_hits": 3,
+        "scalp_ai_exit_avgdown_done": True,
+    }
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 99.2, "orderbook": {"bids": [{"price": 99, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    assert add_calls == []
+    assert len(sell_calls) == 1
+    assert stock["status"] == "SELL_ORDERED"
+    assert stock["last_exit_rule"] == "scalp_ai_early_exit"
+    assert exit_logs and "[물타기 소진]" in str(exit_logs[-1].get("reason", ""))
+
+
 def test_open_reclaim_ai_early_exit_uses_relaxed_consecutive_hits(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 
