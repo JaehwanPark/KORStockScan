@@ -243,7 +243,7 @@ def evaluate_scalping_reversal_add(stock, profit_rate, current_ai_score, held_se
     return result
 
 
-def calc_scale_in_qty(stock, curr_price, deposit, add_type, strategy):
+def calc_scale_in_qty(stock, curr_price, deposit, add_type, strategy, add_reason=None):
     """
     추가매수 수량 계산 (1차 보수적 템플릿).
     - 남은 허용 포지션(최대 비중) 기반 cap 우선
@@ -267,7 +267,12 @@ def calc_scale_in_qty(stock, curr_price, deposit, add_type, strategy):
     add_type = (add_type or "").upper()
 
     if raw_strategy == 'SCALPING':
-        ratio = 0.50
+        if add_type == 'AVG_DOWN' and (add_reason or '') == 'reversal_add_ok':
+            ratio = float(getattr(TRADING_RULES, 'REVERSAL_ADD_SIZE_RATIO', 0.33) or 0.33)
+            if ratio <= 0:
+                ratio = 0.33
+        else:
+            ratio = 0.50
     else:
         ratio = 0.50 if add_type == 'AVG_DOWN' else 0.30
 

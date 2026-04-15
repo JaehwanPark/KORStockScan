@@ -3174,6 +3174,57 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                                     stock['reversal_add_ai_bottom'] = 100
                                     stock['reversal_add_ai_history'] = []
 
+                            # REVERSAL_CANDIDATE 전이 판단 (실행 직전 후보 상태)
+                            _ra_state = stock.get('reversal_add_state', '')
+                            if _ra_state in ('STAGNATION', 'REVERSAL_CANDIDATE'):
+                                _ra_floor = float(stock.get('reversal_add_profit_floor', 0.0))
+                                _ra_margin = float(getattr(TRADING_RULES, 'REVERSAL_ADD_STAGNATION_LOW_FLOOR_MARGIN', 0.05))
+                                _ra_min_ai = int(getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_AI_SCORE', 60))
+                                _ra_bottom = int(stock.get('reversal_add_ai_bottom', 100))
+                                _ra_recovery_delta = int(getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_AI_RECOVERY_DELTA', 15))
+                                _ra_hist = list(stock.get('reversal_add_ai_history', []))
+                                _ra_recovering_delta = (current_ai_score >= _ra_bottom + _ra_recovery_delta)
+                                _ra_recovering_consec = (
+                                    len(_ra_hist) >= 2 and _ra_hist[-1] > _ra_hist[-2] and current_ai_score > _ra_hist[-1]
+                                )
+
+                                _ra_feat = stock.get('last_reversal_features', {})
+                                if _ra_feat:
+                                    _ra_checks = [
+                                        _ra_feat.get('buy_pressure_10t', 0) >= getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_BUY_PRESSURE', 55),
+                                        _ra_feat.get('tick_acceleration_ratio', 0) >= getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_TICK_ACCEL', 0.95),
+                                        not _ra_feat.get('large_sell_print_detected', True),
+                                        _ra_feat.get('curr_vs_micro_vwap_bp', -999) >= getattr(TRADING_RULES, 'REVERSAL_ADD_VWAP_BP_MIN', -5.0),
+                                    ]
+                                    _ra_supply_ok = sum(_ra_checks) >= 3
+                                else:
+                                    _ra_bp = float(stock.get('last_reversal_features', {}).get('buy_pressure_10t', 50.0))
+                                    _ra_supply_ok = _ra_bp >= getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_BUY_PRESSURE', 55)
+
+                                _ra_candidate_ok = (
+                                    (not stock.get('reversal_add_used'))
+                                    and (_ra_pnl_min <= profit_rate <= _ra_pnl_max)
+                                    and (profit_rate >= _ra_floor - _ra_margin)
+                                    and ai_low_score_hits == 0
+                                    and current_ai_score >= _ra_min_ai
+                                    and (_ra_recovering_delta or _ra_recovering_consec)
+                                    and _ra_supply_ok
+                                )
+
+                                if _ra_candidate_ok and _ra_state != 'REVERSAL_CANDIDATE':
+                                    stock['reversal_add_state'] = 'REVERSAL_CANDIDATE'
+                                    _log_holding_pipeline(
+                                        stock,
+                                        code,
+                                        "reversal_add_candidate",
+                                        state="REVERSAL_CANDIDATE",
+                                        reason="candidate_ready",
+                                        profit_rate=f"{profit_rate:+.2f}",
+                                        ai_score=f"{current_ai_score:.0f}",
+                                    )
+                                elif (not _ra_candidate_ok) and _ra_state == 'REVERSAL_CANDIDATE':
+                                    stock['reversal_add_state'] = 'STAGNATION'
+
                         print(
                             f"👁️ [AI 보유감시: {stock['name']}] 수익: {profit_rate:+.2f}% | "
                             f"AI: {current_ai_score:.0f}점 | 하방카운트: {ai_low_score_hits}/{ai_exit_needed_hits} | "
@@ -3731,6 +3782,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             held_sec=held_sec,
         )
         if scale_in_action:
+            if scale_in_action.get("reason") == "reversal_add_ok":
+                stock['reversal_add_state'] = "ADD_ARMED"
             log_info(
                 "[ADD_SIGNAL] "
                 f"{stock.get('name')}({code}) "
@@ -3749,6 +3802,34 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                 stock['reversal_add_used'] = True
                 stock['reversal_add_state'] = "POST_ADD_EVAL"
                 stock['reversal_add_executed_at'] = time.time()
+            elif (not add_result) and scale_in_action.get("reason") == "reversal_add_ok":
+                stock['reversal_add_state'] = "REVERSAL_CANDIDATE"
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "reversal_add_blocked_reason",
+                    state="REVERSAL_CANDIDATE",
+                    blocked_reason="add_order_failed",
+                    profit_rate=f"{profit_rate:+.2f}",
+                    ai_score=f"{current_ai_score:.0f}",
+                )
+            return
+        if strategy == 'SCALPING' and getattr(TRADING_RULES, 'REVERSAL_ADD_ENABLED', False):
+            _last_ra_probe_log = float(stock.get('last_reversal_add_probe_log_ts', 0) or 0)
+            if time.time() - _last_ra_probe_log >= 30:
+                _ra_probe = evaluate_scalping_reversal_add(stock, profit_rate, current_ai_score, held_sec)
+                _ra_probe_reason = str(_ra_probe.get("reason") or "")
+                if _ra_probe_reason and _ra_probe_reason != "reversal_add_ok":
+                    _log_holding_pipeline(
+                        stock,
+                        code,
+                        "reversal_add_blocked_reason",
+                        state=stock.get('reversal_add_state', '') or "-",
+                        blocked_reason=_ra_probe_reason,
+                        profit_rate=f"{profit_rate:+.2f}",
+                        ai_score=f"{current_ai_score:.0f}",
+                    )
+                stock['last_reversal_add_probe_log_ts'] = time.time()
             return
     else:
         last_block = float(stock.get('last_add_block_log_ts', 0) or 0)
@@ -4148,6 +4229,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         deposit=deposit,
         add_type=add_type,
         strategy=stock.get('strategy', ''),
+        add_reason=action.get('reason'),
     )
     if qty <= 0:
         log_info(

@@ -247,6 +247,44 @@ def test_execute_scale_in_order_failure_no_pending(monkeypatch):
     assert stock.get("pending_add_type") is None
 
 
+def test_calc_scale_in_qty_scalping_reversal_add_uses_configured_ratio():
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    original = scale_in.TRADING_RULES
+    scale_in.TRADING_RULES = replace(CONFIG, MAX_POSITION_PCT=1.0, REVERSAL_ADD_SIZE_RATIO=0.33)
+    try:
+        qty = scale_in.calc_scale_in_qty(
+            stock={"buy_qty": 10},
+            curr_price=10000,
+            deposit=10_000_000,
+            add_type="AVG_DOWN",
+            strategy="SCALPING",
+            add_reason="reversal_add_ok",
+        )
+        assert qty == 3
+    finally:
+        scale_in.TRADING_RULES = original
+
+
+def test_calc_scale_in_qty_scalping_non_reversal_keeps_default_ratio():
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    original = scale_in.TRADING_RULES
+    scale_in.TRADING_RULES = replace(CONFIG, MAX_POSITION_PCT=1.0, REVERSAL_ADD_SIZE_RATIO=0.33)
+    try:
+        qty = scale_in.calc_scale_in_qty(
+            stock={"buy_qty": 10},
+            curr_price=10000,
+            deposit=10_000_000,
+            add_type="AVG_DOWN",
+            strategy="SCALPING",
+            add_reason="avg_down_ok",
+        )
+        assert qty == 5
+    finally:
+        scale_in.TRADING_RULES = original
+
+
 def test_sell_priority_blocks_add(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 

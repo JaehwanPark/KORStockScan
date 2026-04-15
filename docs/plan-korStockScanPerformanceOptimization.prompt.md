@@ -85,6 +85,7 @@
 9. 원격 비교검증 `remote_error`는 재발 시 원인 수정 대상으로 다루되, `2026-04-13` 기준 현재 잔여 작업축에는 올리지 않는다.
 10. `계측 완료 + 실전반영 확신도 50% 이상`인 축은 같은 주 canary 착수를 기본값으로 한다. 착수하지 않으려면 장후 문서에 명시적 보류 사유를 남긴다.
 11. 장후 결론은 `유지/보류` 같은 상태 기록으로 끝내지 않는다. `날짜 + 액션 + 실행시각`이 없으면 결론으로 인정하지 않는다.
+12. 서비스 오류/재기동 다발일에는 `No-Decision Day` 모드로 전환한다. 당일은 `분석/복기`만 진행하고, 실전 파라미터 변경/승격은 `리포트 정합성 + 이벤트 복원 + 집계 품질` 3개 게이트 통과 후 익일 장전에만 판정한다.
 
 ## 현재 상태 요약 (`2026-04-11` 기준)
 
@@ -111,6 +112,14 @@
 4. `partial fill min_fill_ratio` 원격 canary의 `2026-04-15` 착수 준비
 5. `expired_armed` 처리 로직 설계 문서의 `2026-04-15 장후` 완료 준비
 6. `AI overlap audit -> selective override` 설계 착수 입력 정리 (`2026-04-16` 이내)
+7. `2026-04-15` 장후는 `No-Decision Day`로 운영하며, 게이트 통과 여부만 판정
+   - gate-1: report integrity (`COMPLETED + valid profit_rate`)
+   - gate-2: event restoration (재기동 구간 상태전이 복원)
+   - gate-3: aggregation quality (대시보드 기준일/실보유 분리, full/partial 분리)
+   - `2026-04-15 15:55 KST` 실행 결과: `gate-1/2 PASS`, `gate-3 FAIL` → `No-Decision Day 유지`, 신규 canary/승격 보류
+8. `2026-04-15 POSTCLOSE` 체크리스트 실행 완료
+   - `RELAX-DYNSTR`/`partial fill`/`shadow`/`expired_armed` 항목은 수치 근거를 남겨 1차 종료
+   - `task8 감사키 로그`, `shadow EV 확정`, `kt00007/ka10076`는 `사유+재시각`으로 이월
 
 ### 아직 남아있는 일
 
@@ -122,6 +131,7 @@
 6. `AI overlap audit` 기반 `selective override` 설계 착수 (`2026-04-16` 이내)
 7. AI 프롬프트 개선 코드 구현 전반
 8. AI 프롬프트 `작업 5/8/10`의 `develop` 선행 적용과 `main` 후행 승격 기준 확정
+9. `No-Decision Day` 해제 조건 문서화 및 `2026-04-16 PREOPEN` canary 1축 판정
 
 ## 활성 워크스트림
 
@@ -462,11 +472,14 @@
 
 핵심 목적:
 - `AI overlap audit`를 `selective override` 설계 착수로 연결한다
+- `reversal_add` 결함 핫픽스 반영 상태를 기준으로 shadow->limited canary 전환 기준을 고정한다
 
 체크포인트:
 1. `blocked_stage / momentum_tag / threshold_profile` 연결표를 설계 입력으로 고정한다
 2. `RELAX-DYNSTR` canary 1일차 결과와 연결해 `selective override` 초안을 시작한다
 3. 추가 canary가 필요하면 `한 축만` 남기고 보류 사유를 기록한다
+4. `reversal_add`는 `REVERSAL_ADD_SIZE_RATIO` 반영 핫픽스가 적용된 버전을 기준으로 운영한다
+5. `reversal_add` 모니터링은 실제 로그 키(`reversal_add_candidate`, `reversal_add_blocked_reason`, `[ADD_SIGNAL]`, `[ADD_ORDER_SENT]`, `reversal_add_post_eval_fail`) 기준으로 집계한다
 
 ## 즉시 착수 체크리스트
 
@@ -477,6 +490,7 @@
 5. `AI 프롬프트 작업 5/8/10`을 `2026-04-14 POSTCLOSE` 즉시 착수 대상으로 고정
 6. `AI overlap audit -> selective override` 착수일을 `2026-04-16`로 고정
 7. `2026-04-14~2026-04-16` 체크포인트를 운영 문서와 체크리스트에 고정
+8. `reversal_add`는 shadow 지표 통과 시에만 원격 1축 limited canary를 연다
 
 ## 가드레일
 
@@ -514,6 +528,7 @@
 - [2026-04-11-scalping-ai-prompt-coding-instructions.md](./2026-04-11-scalping-ai-prompt-coding-instructions.md)
 - [2026-04-11-scalping-ai-prompt-plan-review.md](./2026-04-11-scalping-ai-prompt-plan-review.md)
 - [2026-04-11-ai-operator-message-validation.md](./2026-04-11-ai-operator-message-validation.md)
+- [2026-04-15-scalp-reversal-add-implementation-result.md](./2026-04-15-scalp-reversal-add-implementation-result.md)
 - [2026-04-11-github-project-google-calendar-setup.md](./2026-04-11-github-project-google-calendar-setup.md)
 - [plan-korStockScanPerformanceOptimization.archive-2026-04-08.md](./plan-korStockScanPerformanceOptimization.archive-2026-04-08.md)
 - [plan-korStockScanPerformanceOptimization.qna.md](./plan-korStockScanPerformanceOptimization.qna.md)
