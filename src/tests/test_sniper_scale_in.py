@@ -135,6 +135,95 @@ def test_add_count_increment_once_on_partial_fills(monkeypatch):
     assert target_stock["avg_down_count"] == 1
 
 
+def test_update_db_for_add_does_not_touch_detached_record_after_commit(monkeypatch):
+    class DetachedRecord:
+        def __init__(self):
+            self.buy_price = 10000
+            self.buy_qty = 5
+            self.add_count = 1
+            self.avg_down_count = 1
+            self.pyramid_count = 0
+            self.last_add_type = None
+            self.last_add_at = None
+            self.scale_in_locked = False
+            self.trailing_stop_price = None
+            self.hard_stop_price = None
+            self._detached = False
+
+        def __getattribute__(self, name):
+            if name not in {"_detached", "__dict__", "__class__", "__getattribute__", "__setattr__"}:
+                detached = object.__getattribute__(self, "_detached")
+                if detached:
+                    raise RuntimeError(f"detached access: {name}")
+            return object.__getattribute__(self, name)
+
+    class DummyQuery:
+        def __init__(self, record):
+            self._record = record
+
+        def filter_by(self, **kwargs):
+            return self
+
+        def first(self):
+            return self._record
+
+    class DummySession:
+        def __init__(self, record):
+            self._record = record
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self._record._detached = True
+            return False
+
+        def query(self, *args, **kwargs):
+            return DummyQuery(self._record)
+
+    class DummyDB:
+        def __init__(self, record):
+            self._record = record
+
+        def get_session(self):
+            return DummySession(self._record)
+
+    class DummyEventBus:
+        def __init__(self):
+            self.published = []
+
+        def publish(self, topic, payload):
+            self.published.append((topic, payload))
+
+    record = DetachedRecord()
+    monkeypatch.setattr(receipts, "DB", DummyDB(record))
+    monkeypatch.setattr(receipts, "event_bus", DummyEventBus())
+
+    receipts._update_db_for_add(
+        target_id=2196,
+        exec_price=9500,
+        exec_qty=3,
+        now=datetime(2026, 4, 15, 9, 31, 54),
+        target_stock={
+            "name": "TEST",
+            "code": "123456",
+            "strategy": "SCALPING",
+            "buy_price": 9800,
+            "buy_qty": 8,
+            "add_count": 2,
+            "avg_down_count": 2,
+            "msg_audience": "ADMIN_ONLY",
+        },
+        add_type="AVG_DOWN",
+        count_increment=True,
+    )
+
+    assert record.__dict__["buy_price"] == 9800
+    assert record.__dict__["buy_qty"] == 8
+    assert len(receipts.event_bus.published) == 1
+    assert "add_count=2" in receipts.event_bus.published[0][1]["message"]
+
+
 def test_execute_scale_in_order_failure_no_pending(monkeypatch):
     state_handlers.KIWOOM_TOKEN = "test"
 
@@ -956,6 +1045,84 @@ def test_entry_submission_bundle_log_uses_actual_entry_mode(monkeypatch):
     )
 
     assert any("mode=fallback" in msg for msg in logs)
+
+
+def test_reconcile_partial_fill_below_min_ratio_sends_exit_order(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALP_PARTIAL_FILL_RATIO_CANARY_ENABLED=True,
+        SCALP_PARTIAL_FILL_MIN_RATIO_DEFAULT=0.20,
+        SCALP_PARTIAL_FILL_MIN_RATIO_STRONG_ABS_OVERRIDE=0.10,
+        SCALP_PARTIAL_FILL_MIN_RATIO_PRESET_TP=0.00,
+    )
+    state_handlers.KIWOOM_TOKEN = "token"
+
+    monkeypatch.setattr(state_handlers, "_cancel_pending_entry_orders", lambda *args, **kwargs: "cancelled")
+    sell_calls = []
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_sell_order_market",
+        lambda **kwargs: sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"},
+    )
+
+    now = datetime.now().timestamp()
+    stock = {
+        "id": 1,
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "status": "BUY_ORDERED",
+        "buy_qty": 1,
+        "entry_requested_qty": 10,
+        "order_price": 10000,
+        "order_time": now - 60,
+        "pending_entry_orders": [{"ord_no": "B1", "status": "OPEN", "qty": 10, "filled_qty": 1}],
+    }
+
+    state_handlers._reconcile_pending_entry_orders(stock, "123456", "SCALPING")
+
+    assert stock["status"] == "SELL_ORDERED"
+    assert stock.get("pending_sell_msg", "").startswith("partial_fill_ratio_below_min")
+    assert len(sell_calls) == 1
+    assert sell_calls[0]["qty"] == 1
+
+
+def test_reconcile_partial_fill_strong_override_uses_relaxed_ratio(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALP_PARTIAL_FILL_RATIO_CANARY_ENABLED=True,
+        SCALP_PARTIAL_FILL_MIN_RATIO_DEFAULT=0.20,
+        SCALP_PARTIAL_FILL_MIN_RATIO_STRONG_ABS_OVERRIDE=0.10,
+    )
+
+    monkeypatch.setattr(state_handlers, "_cancel_pending_entry_orders", lambda *args, **kwargs: "cancelled")
+    sell_calls = []
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_sell_order_market",
+        lambda **kwargs: sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"},
+    )
+
+    now = datetime.now().timestamp()
+    stock = {
+        "id": 1,
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "status": "BUY_ORDERED",
+        "buy_qty": 15,
+        "entry_requested_qty": 100,
+        "entry_dynamic_reason": "strong_absolute_override",
+        "order_time": now - 60,
+        "pending_entry_orders": [{"ord_no": "B1", "status": "OPEN", "qty": 100, "filled_qty": 15}],
+    }
+
+    state_handlers._reconcile_pending_entry_orders(stock, "123456", "SCALPING")
+
+    assert stock["status"] == "HOLDING"
+    assert sell_calls == []
 
 
 def test_ioc_mapping_discards_price():

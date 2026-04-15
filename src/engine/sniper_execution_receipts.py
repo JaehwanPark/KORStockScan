@@ -384,6 +384,7 @@ def _update_db_for_buy(target_id, exec_price, now, target_stock):
 def _update_db_for_add(target_id, exec_price, exec_qty, now, target_stock, add_type, count_increment):
     """비동기로 실행되는 추가매수 체결 DB 업데이트"""
     try:
+        add_count_after = int(target_stock.get('add_count') or 0)
         with DB.get_session() as session:
             record = session.query(RecommendationHistory).filter_by(id=target_id).first()
             if not record:
@@ -402,6 +403,7 @@ def _update_db_for_add(target_id, exec_price, exec_qty, now, target_stock, add_t
             record.last_add_type = add_type
             record.last_add_at = now
             record.scale_in_locked = bool(target_stock.get('scale_in_locked', False))
+            add_count_after = int(record.add_count or 0)
 
             # 보호선 보정값을 DB에도 반영 (있을 때만)
             if target_stock.get('trailing_stop_price') is not None:
@@ -421,7 +423,7 @@ def _update_db_for_add(target_id, exec_price, exec_qty, now, target_stock, add_t
                 f"type={add_type}\n"
                 f"old_avg={old_price:.2f} exec={exec_price:,}\n"
                 f"new_avg={new_avg:.2f} total_qty={new_qty}\n"
-                f"add_count={int(record.add_count or 0)}"
+                f"add_count={add_count_after}"
             )
             event_bus.publish('TELEGRAM_BROADCAST', {
                 'message': msg,
