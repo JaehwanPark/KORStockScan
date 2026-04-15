@@ -417,18 +417,21 @@ def _update_db_for_add(target_id, exec_price, exec_qty, now, target_stock, add_t
         )
 
         if event_bus and count_increment:
+            _type_kr = {'AVG_DOWN': '물타기', 'PYRAMID': '불타기'}.get(add_type, add_type)
+            _strategy_kr = {'SCALPING': '스캘핑', 'SWING': '스윙'}.get(
+                target_stock.get('strategy', ''), target_stock.get('strategy', ''))
             msg = (
-                f"[ADD_EXECUTED] {target_stock.get('name')}({target_stock.get('code')})\n"
-                f"strategy={target_stock.get('strategy')}\n"
-                f"type={add_type}\n"
-                f"old_avg={old_price:.2f} exec={exec_price:,}\n"
-                f"new_avg={new_avg:.2f} total_qty={new_qty}\n"
-                f"add_count={add_count_after}"
+                f"📉 추가매수 체결\n"
+                f"종목: {target_stock.get('name')} ({target_stock.get('code')})\n"
+                f"전략: {_strategy_kr} | 유형: {_type_kr}\n"
+                f"기존 평단가: {int(old_price):,}원 → 체결가: {int(exec_price):,}원\n"
+                f"새 평단가: {int(new_avg):,}원 | 총 수량: {new_qty}주\n"
+                f"누적 추가매수: {add_count_after}회"
             )
             event_bus.publish('TELEGRAM_BROADCAST', {
                 'message': msg,
                 'audience': target_stock.get('msg_audience', 'ADMIN_ONLY'),
-                'parse_mode': 'Markdown'
+                'parse_mode': None
             })
     except Exception as e:
         log_error(f"🚨 [DB 에러] ID {target_id} ADD 처리 중 에러: {e}")
