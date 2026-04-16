@@ -314,6 +314,17 @@
 8. `2026-04-21`
    - `작업 12` 범위 확정
 
+### `2026-04-16` 감사 반영 보정
+
+1. `REVERSAL_ADD observe-only shadow` 단계는 제거한다.
+   - 현재 코드에는 observe-only 전용 가드가 없어 `REVERSAL_ADD_ENABLED=True`가 곧 실주문 경로 진입을 뜻한다.
+   - 따라서 readiness 판단은 기존 `reversal_add_candidate` 표본과 포지션 수량 분포 로그로 먼저 수행한다.
+2. `SCANNER timeout`은 완전 신설 과제가 아니라 `SCANNER fallback` 한정 never-green/retrace 조기정리 로직의 일반 SCANNER 확장 과제로 정리한다.
+3. `SCALP_LOSS_FALLBACK`은 신규 shadow가 아니라 이미 `SCALP_LOSS_FALLBACK_OBSERVE_ONLY=True`로 진행 중인 관찰축으로 본다.
+   - `2026-04-17 PREOPEN` 1차 판정
+   - `2026-04-21 POSTCLOSE` 활성화 여부 최종 판정
+4. 상세 실행계획은 [2026-04-16-holding-profit-conversion-plan.md](./2026-04-16-holding-profit-conversion-plan.md)를 따른다.
+
 ### `2026-04-12` P0 진행 메모
 
 1. `SCALP_PRESET_TP SELL`
@@ -497,14 +508,16 @@
 
 핵심 목적:
 - `AI overlap audit`를 `selective override` 설계 착수로 연결한다
-- `reversal_add` 결함 핫픽스 반영 상태를 기준으로 shadow->limited canary 전환 기준을 고정한다
+- `reversal_add` 결함 핫픽스 반영 상태를 기준으로 기존 후보 로그 -> limited canary 전환 기준을 고정한다
 
 체크포인트:
 1. `blocked_stage / momentum_tag / threshold_profile` 연결표를 설계 입력으로 고정한다
 2. `RELAX-DYNSTR` canary 1일차 결과와 연결해 `selective override` 초안을 시작한다
 3. 추가 canary가 필요하면 `한 축만` 남기고 보류 사유를 기록한다
 4. `reversal_add`는 `REVERSAL_ADD_SIZE_RATIO` 반영 핫픽스가 적용된 버전을 기준으로 운영한다
-5. `reversal_add` 모니터링은 실제 로그 키(`reversal_add_candidate`, `reversal_add_blocked_reason`, `[ADD_SIGNAL]`, `[ADD_ORDER_SENT]`, `reversal_add_post_eval_fail`) 기준으로 집계한다
+5. `reversal_add` 모니터링은 기존 후보 로그와 실주문 로그를 분리해 읽는다.
+   - readiness: `reversal_add_candidate`, `reversal_add_blocked_reason`
+   - live canary 이후: `[ADD_SIGNAL]`, `[ADD_ORDER_SENT]`, `reversal_add_post_eval_fail`
 
 ## 즉시 착수 체크리스트
 
@@ -515,7 +528,7 @@
 5. `AI 프롬프트 작업 5/8/10`을 `2026-04-14 POSTCLOSE` 즉시 착수 대상으로 고정
 6. `AI overlap audit -> selective override` 착수일을 `2026-04-16`로 고정
 7. `2026-04-14~2026-04-16` 체크포인트를 운영 문서와 체크리스트에 고정
-8. `reversal_add`는 shadow 지표 통과 시에만 원격 1축 limited canary를 연다
+8. `reversal_add`는 기존 후보 로그와 포지션 수량 분포 readiness가 통과할 때에만 원격 1축 limited canary를 연다
 
 ## 가드레일
 

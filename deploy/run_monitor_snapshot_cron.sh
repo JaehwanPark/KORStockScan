@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROJECT_DIR="/home/ubuntu/KORStockScan"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 VENV_PY="$PROJECT_DIR/.venv/bin/python"
 TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
 

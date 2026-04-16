@@ -241,9 +241,19 @@ def get_account_balance_kt00005(token):
 
         if not results:
             continue
-        successful_exchanges.add(ex)
+
+        exchange_success = False
 
         for res in results:
+            rt_code = str(res.get('return_code', res.get('rt_cd', '0')))
+            if rt_code != '0':
+                log_info(
+                    f"⚠️ [kt00005] {ex} 잔고 응답 거절: "
+                    f"{res.get('return_msg', res.get('msg1', '알 수 없는 에러'))}"
+                )
+                continue
+
+            exchange_success = True
             data_list = res.get('stk_cntr_remn', [])
 
             for item in data_list:
@@ -280,6 +290,9 @@ def get_account_balance_kt00005(token):
                             'eval_profit': to_i(item.get('evltv_prft')),
                             'profit_rate': to_f(item.get('pl_rt'))
                         }
+
+        if exchange_success:
+            successful_exchanges.add(ex)
                         
     # 딕셔너리의 Value들만 뽑아서 리스트 형태로 반환
     return list(aggregated_balances.values()), successful_exchanges

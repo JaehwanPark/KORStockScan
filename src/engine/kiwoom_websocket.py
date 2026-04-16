@@ -14,6 +14,13 @@ from src.utils.logger import log_error
 from src.core.event_bus import EventBus
 from src.utils.constants import CONFIG_PATH, DEV_PATH, TRADING_RULES
 
+
+class _LoginAckFailure(RuntimeError):
+    def __init__(self, code, message):
+        self.code = str(code or '').strip()
+        self.message = str(message or '').strip()
+        super().__init__(f"LOGIN ACK failed code={self.code or '?'} msg={self.message or '로그인 실패'}")
+
 def _load_system_config():
     """웹소켓 매니저 전용 설정 로더 (의존성 분리)"""
     target = CONFIG_PATH if CONFIG_PATH.exists() else DEV_PATH
@@ -28,6 +35,7 @@ class KiwoomWSManager:
     def __init__(self, token):
         # 💡 [우아한 아키텍처] 하드코딩 파괴! 설정 파일에서 URI를 동적으로 읽어옵니다.
         conf = _load_system_config()
+        self.conf = conf
         # config에 URI가 없으면 안전하게 Mock API를 기본값으로 사용합니다.
         self.uri = conf.get('KIWOOM_WS_URI', 'wss://mockapi.kiwoom.com:10000/api/dostk/websocket')
         
@@ -49,6 +57,7 @@ class KiwoomWSManager:
         self._pending_loop_futures = set()
         self._pending_future_lock = threading.Lock()
         self._session_ready = threading.Event()
+        self._last_token_refresh_at = 0.0
         
         # 전역 EventBus 인스턴스 획득 및 외부 명령 수신기 장착
         self.event_bus = EventBus()
@@ -375,6 +384,41 @@ class KiwoomWSManager:
         code = str(msg_dict.get('return_code', msg_dict.get('rt_cd', ''))).strip()
         return bool(code) and code != '0'
 
+    @staticmethod
+    def _is_auth_token_failure(code, message):
+        code_str = str(code or '').strip()
+        msg = str(message or '')
+        if '8005' in code_str:
+            return True
+        if '8005' in msg:
+            return True
+        if 'Token' in msg or '토큰' in msg or '인증' in msg:
+            return True
+        return False
+
+    def _refresh_ws_token(self):
+        now_ts = time.time()
+        # 토큰 인증 실패 루프에서 과도한 재발급 스팸을 방지합니다.
+        if now_ts - self._last_token_refresh_at < 5:
+            return False
+
+        try:
+            from src.utils import kiwoom_utils
+            new_token = kiwoom_utils.get_kiwoom_token(self.conf)
+        except Exception as e:
+            log_error(f"❌ [WS TOKEN 재발급] 예외: {e}")
+            self._last_token_refresh_at = now_ts
+            return False
+
+        self._last_token_refresh_at = now_ts
+        if not new_token:
+            log_error("❌ [WS TOKEN 재발급] 실패")
+            return False
+
+        self.token = new_token
+        print("✅ [WS TOKEN 재발급] 성공. 새 토큰으로 재접속합니다.")
+        return True
+
     async def _await_login_ack(self, ws, timeout_sec=5.0):
         deadline = time.time() + max(1.0, float(timeout_sec or 0.0))
         while not self._stop_event.is_set() and time.time() < deadline:
@@ -401,7 +445,7 @@ class KiwoomWSManager:
             if self._is_login_failure_message(msg_dict):
                 code = msg_dict.get('return_code', msg_dict.get('rt_cd', '?'))
                 message = msg_dict.get('return_msg', msg_dict.get('msg1', '로그인 실패'))
-                raise RuntimeError(f"LOGIN ACK failed code={code} msg={message}")
+                raise _LoginAckFailure(code, message)
 
             await self._handle_message(json.dumps(msg_dict))
 
@@ -508,6 +552,21 @@ class KiwoomWSManager:
                 self.websocket = None
                 self._session_ready.clear()
                 await asyncio.sleep(3)
+            except _LoginAckFailure as e:
+                if self._stop_event.is_set():
+                    break
+
+                self.websocket = None
+                self._session_ready.clear()
+
+                if self._is_auth_token_failure(e.code, e.message):
+                    print(f"⚠️ [WS] 로그인 인증 실패 감지(code={e.code}). 토큰 재발급을 시도합니다.")
+                    refreshed = self._refresh_ws_token()
+                    await asyncio.sleep(1 if refreshed else 3)
+                else:
+                    log_error(f"🚨 [WS] 로그인 실패: {e}")
+                    print(f"🚨 [WS] 로그인 실패: {e}")
+                    await asyncio.sleep(3)
             except Exception as e:
                 if self._stop_event.is_set():
                     break

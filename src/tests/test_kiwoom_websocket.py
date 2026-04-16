@@ -54,3 +54,15 @@ def test_await_login_ack_raises_on_login_failure():
 
     with pytest.raises(RuntimeError):
         asyncio.run(manager._await_login_ack(fake_ws, timeout_sec=1.0))
+
+
+@pytest.mark.parametrize(
+    "code,message,expected",
+    [
+        ("8005", "Token이 유효하지 않습니다", True),
+        ("805004", "토큰 인증에 실패했습니다 [CODE=8005]", True),
+        ("100013", "login pending", False),
+    ],
+)
+def test_is_auth_token_failure(code, message, expected):
+    assert KiwoomWSManager._is_auth_token_failure(code, message) is expected

@@ -673,9 +673,15 @@ def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = 
     expired_armed_counts: Counter[str] = Counter()
     quote_fresh_latency_blocks = 0
     quote_fresh_latency_passes = 0
+    budget_pass_events = 0
+    order_bundle_submitted_events = 0
 
     for event in events:
-        if event.stage == "latency_block":
+        if event.stage == "budget_pass":
+            budget_pass_events += 1
+        elif event.stage == "order_bundle_submitted":
+            order_bundle_submitted_events += 1
+        elif event.stage == "latency_block":
             latency_reason_counts[str(event.fields.get("reason") or "-")] += 1
             raw_danger_reasons = str(event.fields.get("latency_danger_reasons") or "").strip()
             if raw_danger_reasons:
@@ -774,6 +780,9 @@ def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = 
             "budget_pass_stocks": int(budget_pass_stocks),
             "budget_pass_to_submitted_stocks": int(budget_pass_to_submitted_stocks),
             "budget_pass_to_submitted_rate": _ratio(budget_pass_to_submitted_stocks, budget_pass_stocks),
+            "budget_pass_events": int(budget_pass_events),
+            "order_bundle_submitted_events": int(order_bundle_submitted_events),
+            "budget_pass_event_to_submitted_rate": _ratio(order_bundle_submitted_events, budget_pass_events),
             "latency_block_events": int(sum(latency_reason_counts.values())),
             "quote_fresh_latency_blocks": int(quote_fresh_latency_blocks),
             "quote_fresh_latency_passes": int(quote_fresh_latency_passes),

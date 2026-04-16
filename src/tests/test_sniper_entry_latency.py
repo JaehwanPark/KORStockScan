@@ -138,6 +138,45 @@ def test_latency_entry_canary_overrides_reject_danger_for_scanner(monkeypatch):
     assert result["latency_danger_reasons"] == "other_danger"
 
 
+def test_latency_entry_canary_normalizes_probability_signal_strength(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_LATENCY_GUARD_CANARY_ENABLED=True,
+            SCALP_LATENCY_GUARD_CANARY_TAGS=("SCANNER",),
+            SCALP_LATENCY_GUARD_CANARY_MIN_SIGNAL_SCORE=85.0,
+            SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS=450,
+            SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS=300,
+            SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO=0.0100,
+        ),
+    )
+
+    stock = {"name": "TEST", "position_tag": "SCANNER"}
+    result = evaluate_live_buy_entry(
+        stock=stock,
+        code="123456_canary_prob",
+        ws_data={
+            "curr": 10_020,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook": {
+                "asks": [{"price": 10_080, "volume": 100}],
+                "bids": [{"price": 10_020, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=2,
+        signal_price=10_000,
+        signal_strength=0.90,
+    )
+
+    assert result["latency_state"] == "DANGER"
+    assert result["latency_canary_applied"] is True
+    assert result["allowed"] is True
+    assert result["decision"] == "ALLOW_FALLBACK"
+
+
 def test_latency_entry_canary_does_not_apply_when_signal_score_low(monkeypatch):
     monkeypatch.setattr(
         entry_latency_module,

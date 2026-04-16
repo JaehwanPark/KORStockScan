@@ -1483,7 +1483,8 @@ def entry_pipeline_flow_preview():
             <div class="chip">추적 종목 {{ metrics.tracked_stocks }}개</div>
             <div class="chip">차단 {{ metrics.blocked_stocks }}개</div>
             <div class="chip">주문 제출 {{ metrics.submitted_stocks }}개</div>
-            <div class="chip">예산통과→제출 {{ metrics.budget_pass_to_submitted_rate or 0 }}%</div>
+            <div class="chip">최신 시도 예산통과→제출 {{ metrics.budget_pass_to_submitted_rate or 0 }}%</div>
+            <div class="chip">이벤트 예산통과→제출 {{ metrics.budget_pass_event_to_submitted_rate or 0 }}%</div>
             <div class="chip">Fresh quote latency pass {{ metrics.quote_fresh_latency_pass_rate or 0 }}%</div>
           </div>
         </div>
@@ -1493,8 +1494,10 @@ def entry_pipeline_flow_preview():
           <div class="card"><div class="label">차단 종목</div><div class="value blocked">{{ metrics.blocked_stocks }}</div></div>
           <div class="card"><div class="label">첫 AI 대기 종목</div><div class="value waiting">{{ metrics.waiting_stocks }}</div></div>
           <div class="card"><div class="label">주문 제출 종목</div><div class="value submitted">{{ metrics.submitted_stocks }}</div></div>
-          <div class="card"><div class="label">예산통과 종목</div><div class="value">{{ metrics.budget_pass_stocks or 0 }}</div></div>
-          <div class="card"><div class="label">예산통과→제출 전환율</div><div class="value submitted">{{ metrics.budget_pass_to_submitted_rate or 0 }}%</div></div>
+          <div class="card"><div class="label">최신 시도 예산통과 종목</div><div class="value">{{ metrics.budget_pass_stocks or 0 }}</div></div>
+          <div class="card"><div class="label">최신 시도 예산통과→제출 전환율</div><div class="value submitted">{{ metrics.budget_pass_to_submitted_rate or 0 }}%</div></div>
+          <div class="card"><div class="label">누적 budget_pass 이벤트</div><div class="value">{{ metrics.budget_pass_events or 0 }}</div></div>
+          <div class="card"><div class="label">누적 이벤트 예산통과→제출 전환율</div><div class="value submitted">{{ metrics.budget_pass_event_to_submitted_rate or 0 }}%</div></div>
           <div class="card"><div class="label">Fresh quote latency pass율</div><div class="value">{{ metrics.quote_fresh_latency_pass_rate or 0 }}%</div></div>
           <div class="card"><div class="label">entry_armed 만료</div><div class="value waiting">{{ metrics.expired_armed_total or 0 }}</div></div>
         </div>

@@ -54,6 +54,13 @@ def _to_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _normalize_signal_score(signal_strength: Any) -> float:
+    score = _to_float(signal_strength, 0.0)
+    if 0.0 <= score <= 1.0:
+        return score * 100.0
+    return score
+
+
 def _normalized_reason_set(values: Any) -> set[str]:
     normalized: set[str] = set()
     for value in values or ():
@@ -115,7 +122,8 @@ def _should_apply_latency_guard_canary(
         return False, "tag_not_allowed"
 
     min_signal = _to_float(getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_MIN_SIGNAL_SCORE", 85.0), 85.0)
-    if _to_float(signal_strength, 0.0) < min_signal:
+    signal_score = _normalize_signal_score(signal_strength)
+    if signal_score < min_signal:
         return False, "low_signal"
 
     max_ws_age_ms = int(getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS", 450) or 450)
@@ -271,7 +279,7 @@ def evaluate_live_buy_entry(
             effective_reason = "latency_guard_canary_override"
             log_info(
                 f"[LATENCY_GUARD_CANARY] {stock.get('name')}({code}) "
-                f"tag={stock.get('position_tag')} signal={float(signal_strength or 0.0):.1f} "
+                f"tag={stock.get('position_tag')} signal_score={_normalize_signal_score(signal_strength):.1f} "
                 f"ws_age_ms={latency.ws_age_ms} ws_jitter_ms={latency.ws_jitter_ms} "
                 f"spread_ratio={latency.spread_ratio:.6f} "
                 f"danger_reasons={latency_danger_reasons}"

@@ -54,6 +54,11 @@ def test_latest_attempt_events_excludes_previous_submitted_attempt(monkeypatch):
     assert row["confirmed_failure"]["stage"] == "latency_block"
     assert row["record_id"] == "11"
     assert all(event["stage"] != "order_bundle_submitted" for event in row["events"])
+    assert report["metrics"]["budget_pass_stocks"] == 1
+    assert report["metrics"]["budget_pass_to_submitted_rate"] == 0.0
+    assert report["metrics"]["budget_pass_events"] == 2
+    assert report["metrics"]["order_bundle_submitted_events"] == 1
+    assert report["metrics"]["budget_pass_event_to_submitted_rate"] == 50.0
 
 
 def test_latest_attempt_prefers_new_record_id_for_same_stock(monkeypatch):

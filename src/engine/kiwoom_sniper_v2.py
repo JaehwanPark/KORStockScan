@@ -1247,6 +1247,12 @@ def run_sniper(is_test_mode=False):
                     run_sniper.last_scalping_eod_try = time.time()
                     if run_scalping_overnight_gatekeeper(ai_engine=ai_engine):
                         run_sniper.scalping_eod_done_date = today_key
+                        last_eod_done = today_key
+
+            eod_ai_holding_fallback = (
+                now_t >= TIME_SCALPING_OVERNIGHT_DECISION
+                and (last_eod_done == today_key or last_eod_try > 0)
+            )
 
             # =====================================================
             # 상태 로그
@@ -1287,6 +1293,7 @@ def run_sniper(is_test_mode=False):
                         ai_engine=ai_engine
                     )
                 elif status == 'HOLDING':
+                    holding_ai_engine = None if eod_ai_holding_fallback else ai_engine
                     handle_holding_state(
                         stock,
                         code,
@@ -1294,7 +1301,7 @@ def run_sniper(is_test_mode=False):
                         admin_id,
                         current_market_regime,
                         radar=radar,
-                        ai_engine=ai_engine
+                        ai_engine=holding_ai_engine
                     )
 
             targets[:] = [t for t in targets if t.get('status') not in ['COMPLETED', 'EXPIRED']]

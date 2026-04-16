@@ -11,13 +11,13 @@
 
 | metric | local | remote | delta(remote-local) |
 | --- | ---: | ---: | ---: |
-| `total_trades` | `19` | `28` | `9.0` |
-| `completed_trades` | `12` | `26` | `14.0` |
-| `open_trades` | `7` | `2` | `-5.0` |
-| `holding_events` | `3360` | `96` | `-3264.0` |
-| `all_rows` | `195` | `208` | `13.0` |
-| `entered_rows` | `19` | `28` | `9.0` |
-| `expired_rows` | `145` | `159` | `14.0` |
+| `total_trades` | `25` | `30` | `5.0` |
+| `completed_trades` | `25` | `30` | `5.0` |
+| `open_trades` | `0` | `0` | `0.0` |
+| `holding_events` | `10843` | `0` | `-10843.0` |
+| `all_rows` | `210` | `221` | `11.0` |
+| `entered_rows` | `25` | `30` | `5.0` |
+| `expired_rows` | `174` | `183` | `9.0` |
 
 ## Performance Tuning
 - status: `remote_error`
@@ -31,8 +31,8 @@
 
 | metric | local | remote | delta(remote-local) |
 | --- | ---: | ---: | ---: |
-| `total_candidates` | `11` | `25` | `14.0` |
-| `evaluated_candidates` | `11` | `25` | `14.0` |
+| `total_candidates` | `16` | `28` | `12.0` |
+| `evaluated_candidates` | `16` | `28` | `12.0` |
 
 ## Entry Pipeline Flow
 - status: `remote_error`
