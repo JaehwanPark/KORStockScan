@@ -15,6 +15,10 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from itertools import cycle
 from openai import OpenAI, RateLimitError
+from src.engine.scalping_feature_packet import (
+    build_scalping_feature_audit_fields,
+    extract_scalping_feature_packet,
+)
 from src.utils.logger import log_error
 from src.utils.constants import TRADING_RULES
 
@@ -467,6 +471,8 @@ class GPTSniperEngine:
 - large_buy_print_detected: {str(features['large_buy_print_detected']).lower()}
 - distance_from_day_high_pct: {features['distance_from_day_high_pct']}%
 - intraday_range_pct: {features['intraday_range_pct']}%
+- ask_depth_ratio: {features['ask_depth_ratio']}
+- net_ask_depth: {features['net_ask_depth']}
 - volume_ratio_pct: {features['volume_ratio_pct']}%
 - curr_vs_micro_vwap_bp: {features['curr_vs_micro_vwap_bp']}
 - curr_vs_ma5_bp: {features['curr_vs_ma5_bp']}
@@ -502,178 +508,8 @@ class GPTSniperEngine:
     # ==========================================
     # 5. 🚀 이제 진짜 핵심이다. 실시간 초단타 분석에서, 단순히 텍스트로 시장 상황을 설명하는 것을 넘어서, AI가 정량 피처를 직접 해석하여 판단할 수 있도록 데이터를 가공하는 함수를 추가하자.
     # ==========================================
-    def _safe_hhmmss_to_seconds(self, t):
-        try:
-            t_str = str(t).replace(":", "").zfill(6)
-            dt = datetime.strptime(t_str, "%H%M%S")
-            return dt.hour * 3600 + dt.minute * 60 + dt.second
-        except:
-            return None
-
     def _extract_scalping_features(self, ws_data, recent_ticks, recent_candles=None):
-        if recent_candles is None:
-            recent_candles = []
-
-        curr_price = ws_data.get('curr', 0) or 0
-        v_pw = ws_data.get('v_pw', 0) or 0
-        ask_tot = ws_data.get('ask_tot', 0) or 0
-        bid_tot = ws_data.get('bid_tot', 0) or 0
-        orderbook = ws_data.get('orderbook', {'asks': [], 'bids': []}) or {'asks': [], 'bids': []}
-        asks = orderbook.get('asks', []) or []
-        bids = orderbook.get('bids', []) or []
-
-        best_ask = asks[0]['price'] if len(asks) > 0 else curr_price
-        best_bid = bids[0]['price'] if len(bids) > 0 else curr_price
-        best_ask_vol = asks[0]['volume'] if len(asks) > 0 else 0
-        best_bid_vol = bids[0]['volume'] if len(bids) > 0 else 0
-
-        spread_krw = max(0, best_ask - best_bid)
-        spread_bp = round((spread_krw / curr_price) * 10000, 2) if curr_price > 0 else 0.0
-
-        top3_ask_vol = sum(a.get('volume', 0) for a in asks[:3])
-        top3_bid_vol = sum(b.get('volume', 0) for b in bids[:3])
-
-        top1_depth_ratio = round((best_ask_vol / best_bid_vol), 3) if best_bid_vol > 0 else 999.0
-        top3_depth_ratio = round((top3_ask_vol / top3_bid_vol), 3) if top3_bid_vol > 0 else 999.0
-
-        micro_price = curr_price
-        denom = best_ask_vol + best_bid_vol
-        if denom > 0:
-            micro_price = ((best_bid * best_ask_vol) + (best_ask * best_bid_vol)) / denom
-
-        microprice_edge_bp = round(((micro_price - curr_price) / curr_price) * 10000, 2) if curr_price > 0 else 0.0
-
-        high_price = curr_price
-        low_price = curr_price
-        if recent_candles:
-            high_price = max(c.get('고가', curr_price) for c in recent_candles)
-            low_price = min(c.get('저가', curr_price) for c in recent_candles)
-
-        distance_from_day_high_pct = round(((curr_price - high_price) / high_price) * 100, 3) if high_price > 0 else 0.0
-        intraday_range_pct = round(((high_price - low_price) / low_price) * 100, 3) if low_price > 0 else 0.0
-
-        buy_vol_10 = 0
-        sell_vol_10 = 0
-        latest_strength = v_pw
-        price_change_10t_pct = 0.0
-        net_aggressive_delta_10t = 0
-        recent_5tick_seconds = 999.0
-        prev_5tick_seconds = 999.0
-        tick_acceleration_ratio = 0.0
-        same_price_buy_absorption = 0
-        large_sell_print_detected = False
-        large_buy_print_detected = False
-
-        ticks = recent_ticks[:10] if recent_ticks else []
-
-        if ticks:
-            buy_vol_10 = sum(t.get('volume', 0) for t in ticks if t.get('dir') == 'BUY')
-            sell_vol_10 = sum(t.get('volume', 0) for t in ticks if t.get('dir') == 'SELL')
-            total_vol_10 = buy_vol_10 + sell_vol_10
-            buy_pressure_10t = round((buy_vol_10 / total_vol_10) * 100, 2) if total_vol_10 > 0 else 50.0
-            net_aggressive_delta_10t = buy_vol_10 - sell_vol_10
-
-            latest_strength = ticks[0].get('strength', v_pw)
-
-            latest_price = ticks[0].get('price', curr_price)
-            oldest_price = ticks[-1].get('price', curr_price)
-            price_change_10t_pct = round(((latest_price - oldest_price) / oldest_price) * 100, 3) if oldest_price > 0 else 0.0
-
-            tick_secs = [self._safe_hhmmss_to_seconds(t.get('time')) for t in ticks]
-            if len(tick_secs) >= 5 and tick_secs[0] is not None and tick_secs[4] is not None:
-                recent_5tick_seconds = tick_secs[0] - tick_secs[4]
-                if recent_5tick_seconds < 0:
-                    recent_5tick_seconds += 86400
-
-            if len(tick_secs) >= 10 and tick_secs[5] is not None and tick_secs[9] is not None:
-                prev_5tick_seconds = tick_secs[5] - tick_secs[9]
-                if prev_5tick_seconds < 0:
-                    prev_5tick_seconds += 86400
-
-            if recent_5tick_seconds > 0 and prev_5tick_seconds < 999:
-                tick_acceleration_ratio = round(prev_5tick_seconds / recent_5tick_seconds, 3)
-
-            volumes = [t.get('volume', 0) for t in ticks if t.get('volume', 0) > 0]
-            avg_tick_vol = mean(volumes) if volumes else 0
-
-            if avg_tick_vol > 0:
-                large_sell_print_detected = any(
-                    (t.get('dir') == 'SELL' and t.get('volume', 0) >= avg_tick_vol * 2.2)
-                    for t in ticks[:5]
-                )
-                large_buy_print_detected = any(
-                    (t.get('dir') == 'BUY' and t.get('volume', 0) >= avg_tick_vol * 2.2)
-                    for t in ticks[:5]
-                )
-
-            # 같은 가격에서 매수 체결이 여러 번 반복되면 흡수로 간주
-            price_buy_count = {}
-            for t in ticks[:6]:
-                if t.get('dir') == 'BUY':
-                    p = t.get('price')
-                    price_buy_count[p] = price_buy_count.get(p, 0) + 1
-            same_price_buy_absorption = max(price_buy_count.values()) if price_buy_count else 0
-        else:
-            buy_pressure_10t = 50.0
-
-        volume_ratio_pct = 0.0
-        curr_vs_micro_vwap_bp = 0.0
-        curr_vs_ma5_bp = 0.0
-        micro_vwap_value = 0.0
-        ma5_value = 0.0
-
-        if recent_candles and len(recent_candles) >= 2:
-            current_volume = recent_candles[-1].get('거래량', 0)
-            prev_volumes = [c.get('거래량', 0) for c in recent_candles[:-1] if c.get('거래량', 0) > 0]
-            avg_prev_volume = mean(prev_volumes) if prev_volumes else 0
-            if avg_prev_volume > 0:
-                volume_ratio_pct = round((current_volume / avg_prev_volume) * 100, 2)
-
-        if recent_candles and len(recent_candles) >= 5:
-            try:
-                from src.engine.signal_radar import SniperRadar
-                temp_radar = SniperRadar(token=None)
-                ind = temp_radar.calculate_micro_indicators(recent_candles)
-
-                ma5_value = ind.get('MA5', 0) or 0
-                micro_vwap_value = ind.get('Micro_VWAP', 0) or 0
-
-                if micro_vwap_value > 0 and curr_price > 0:
-                    curr_vs_micro_vwap_bp = round(((curr_price - micro_vwap_value) / micro_vwap_value) * 10000, 2)
-                if ma5_value > 0 and curr_price > 0:
-                    curr_vs_ma5_bp = round(((curr_price - ma5_value) / ma5_value) * 10000, 2)
-            except Exception:
-                pass
-
-        orderbook_total_ratio = round((ask_tot / bid_tot), 3) if bid_tot > 0 else 999.0
-
-        return {
-            "curr_price": curr_price,
-            "latest_strength": latest_strength,
-            "spread_krw": spread_krw,
-            "spread_bp": spread_bp,
-            "top1_depth_ratio": top1_depth_ratio,
-            "top3_depth_ratio": top3_depth_ratio,
-            "orderbook_total_ratio": orderbook_total_ratio,
-            "micro_price": round(micro_price, 2),
-            "microprice_edge_bp": microprice_edge_bp,
-            "buy_pressure_10t": buy_pressure_10t,
-            "net_aggressive_delta_10t": int(net_aggressive_delta_10t),
-            "price_change_10t_pct": price_change_10t_pct,
-            "recent_5tick_seconds": round(recent_5tick_seconds, 3),
-            "prev_5tick_seconds": round(prev_5tick_seconds, 3) if prev_5tick_seconds < 999 else 999.0,
-            "tick_acceleration_ratio": tick_acceleration_ratio,
-            "same_price_buy_absorption": same_price_buy_absorption,
-            "large_sell_print_detected": large_sell_print_detected,
-            "large_buy_print_detected": large_buy_print_detected,
-            "distance_from_day_high_pct": distance_from_day_high_pct,
-            "intraday_range_pct": intraday_range_pct,
-            "volume_ratio_pct": volume_ratio_pct,
-            "curr_vs_micro_vwap_bp": curr_vs_micro_vwap_bp,
-            "curr_vs_ma5_bp": curr_vs_ma5_bp,
-            "micro_vwap_value": round(micro_vwap_value, 2) if micro_vwap_value else 0.0,
-            "ma5_value": round(ma5_value, 2) if ma5_value else 0.0
-        }
+        return extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles)
     
     def _normalize_scalping_result(self, result):
         if not isinstance(result, dict):
@@ -855,6 +691,8 @@ class GPTSniperEngine:
 
             result = self._apply_main_entry_bias_relief(features, result, prompt_type)
 
+            # 메인(OpenAI) 스캘핑 경로에서도 feature packet 감사키를 동일하게 남긴다.
+            result.update(build_scalping_feature_audit_fields(features))
             result["ai_prompt_type"] = prompt_type
             result["ai_prompt_version"] = "openai_v2_structured_v1"
             result["cache_hit"] = False

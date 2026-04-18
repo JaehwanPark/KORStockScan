@@ -15,6 +15,10 @@ from datetime import datetime, timezone
 from itertools import cycle
 from google import genai
 from google.genai import types
+from src.engine.scalping_feature_packet import (
+    build_scalping_feature_audit_fields,
+    extract_scalping_feature_packet,
+)
 from src.utils.logger import log_error
 from src.utils.constants import TRADING_RULES
 from src.engine.macro_briefing_complete import build_scanner_data_input
@@ -1046,7 +1050,7 @@ class GeminiSniperEngine:
         """키움 API의 딕셔너리 데이터를 AI가 읽을 수 있는 텍스트로 예쁘게 포장합니다."""
         if recent_candles is None:
             recent_candles = []
-            
+
         curr_price = ws_data.get('curr', 0)
         v_pw = ws_data.get('v_pw', 0)
         fluctuation = ws_data.get('fluctuation', 0.0) 
@@ -1125,7 +1129,7 @@ class GeminiSniperEngine:
         candle_str = ""
         if recent_candles:
             candle_str = "\n".join([
-                f"[{c['체결시간']}] 시가:{c['시가']:,} 고가:{c['고가']:,} 저가:{c['저가']:,} 종가:{c['현재가']:,} 거래량:{c['거래량']:,}" 
+                f"[{c['체결시간']}] 시가:{c.get('시가', c.get('현재가', 0)):,} 고가:{c['고가']:,} 저가:{c['저가']:,} 종가:{c['현재가']:,} 거래량:{c['거래량']:,}"
                 for c in recent_candles
             ])
         else:
@@ -1164,12 +1168,29 @@ class GeminiSniperEngine:
                 f"- 호가 불균형: {imbalance_str}"
             )
 
+        feature_packet = extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles)
+        quant_features_str = (
+            f"- packet_version: {feature_packet['packet_version']}\n"
+            f"- buy_pressure_10t: {feature_packet['buy_pressure_10t']}%\n"
+            f"- distance_from_day_high_pct: {feature_packet['distance_from_day_high_pct']}%\n"
+            f"- intraday_range_pct: {feature_packet['intraday_range_pct']}%\n"
+            f"- tick_acceleration_ratio: {feature_packet['tick_acceleration_ratio']}\n"
+            f"- same_price_buy_absorption: {feature_packet['same_price_buy_absorption']}\n"
+            f"- large_sell_print_detected: {str(feature_packet['large_sell_print_detected']).lower()}\n"
+            f"- net_aggressive_delta_10t: {feature_packet['net_aggressive_delta_10t']}\n"
+            f"- ask_depth_ratio: {feature_packet['ask_depth_ratio']}\n"
+            f"- net_ask_depth: {feature_packet['net_ask_depth']}"
+        )
+
         # 최종 프롬프트 조합
         user_input = f"""
 [현재 상태]
 - 현재가: {curr_price:,}원
 - 전일대비 등락률: {fluctuation}%
 - 웹소켓 체결강도: {v_pw}%
+
+[정량형 수급 피처]
+{quant_features_str}
 
 [초단타 수급/위치 지표]
 {indicators_str}
@@ -1346,9 +1367,13 @@ class GeminiSniperEngine:
             if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
                 formatted_data = self._format_swing_market_data(ws_data, recent_candles, program_net_qty)
                 target_model = self._get_tier2_model()
+                feature_audit_fields = {}
             else:
                 formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
                 target_model = self._get_tier1_model()
+                feature_audit_fields = build_scalping_feature_audit_fields(
+                    extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles)
+                )
 
             result = self._call_gemini_safe(
                 prompt,
@@ -1366,7 +1391,8 @@ class GeminiSniperEngine:
                     recent_ticks=recent_ticks,
                     recent_candles=recent_candles,
                 )
-            
+                result.update(feature_audit_fields)
+
             # 호출 성공 시 실패 횟수 리셋
             self.consecutive_failures = 0
             self.last_call_time = time.time()
