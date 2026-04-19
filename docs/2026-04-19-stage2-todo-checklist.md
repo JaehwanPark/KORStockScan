@@ -28,6 +28,17 @@
   - 근거: `src/engine/compress_db_backfilled_files.py` 추가, `deploy/run_dashboard_db_archive_cron.sh` 추가, crontab `DASHBOARD_DB_ARCHIVE_2310` 등록 확인
   - 실행 결과 (`2026-04-19 18:45 KST`): `2026-04-10~2026-04-17` DB 적재 후 압축 완료. `compressed pipeline=6 (2.3GB), snapshots=42 (90.4MB), skipped_unverified=0`
   - 다음 액션: `logs/dashboard_db_archive_cron.log`에서 `DASHBOARD_ARCHIVE_*` 통계와 `skipped_unverified` 추세를 장후 점검 (`2026-04-19 23:10 KST`부터 D+1 기준 적용)
+- [x] `[OpsFix0419] logs 회전백업(.log.N) D+7 자동정리 cron 고정` 완료 (`Due: 2026-04-19`, `Slot: POSTCLOSE`, `TimeWindow: 23:20~23:25`, `Track: Plan`)
+  - 판정: 승인
+  - 근거: `deploy/run_logs_rotation_cleanup_cron.sh` 추가, crontab `LOG_ROTATION_CLEANUP_2320` 등록 확인
+  - 실행 결과 (`2026-04-19 23:xx KST` 사전 실행): `retention_days=7`, `deleted=0`, `rotated_before=0`, `rotated_after=0`
+  - 다음 액션: `logs/log_rotation_cleanup_cron.log`에서 `deleted/size_before/size_after` 추세를 장후 점검
+- [x] `[OpsFix0419] 스캘핑 패턴랩 DB 우선 수집 + 주간 cron 고정` 완료 (`Due: 2026-04-19`, `Slot: POSTCLOSE`, `TimeWindow: 23:25~23:40`, `Track: Plan`)
+  - 판정: 승인
+  - 근거: `analysis/*_scalping_pattern_lab` 데이터 수집이 `DB -> 파일 -> .gz` 우선순위로 보강되었고, `deploy/install_pattern_lab_cron.sh`로 주간 자동 실행 라인이 고정됨
+  - 실행 결과 (`2026-04-19 23:3x KST`): `PATTERN_LAB_CLAUDE_FRI_POSTCLOSE`, `PATTERN_LAB_GEMINI_FRI_POSTCLOSE` crontab 등록 및 래퍼 스크립트 실행 경로 검증
+  - 자동화 동기화 (`문서 -> Project -> Calendar`): `GH_PROJECT_TOKEN` 누락으로 `sync_docs_backlog_to_project`, `sync_github_project_calendar` 미실행
+  - 다음 액션: `2026-04-24 POSTCLOSE` 첫 주간 자동 실행 로그(`claude/gemini_scalping_pattern_lab_cron.log`)와 산출물 정합성 확인
 
 ## 참고 문서
 
@@ -36,3 +47,4 @@
 - [2026-04-11-scalping-ai-prompt-coding-instructions.md](./2026-04-11-scalping-ai-prompt-coding-instructions.md)
 - [plan-korStockScanPerformanceOptimization.prompt.md](./plan-korStockScanPerformanceOptimization.prompt.md)
 - [2026-04-19-rereview2-report-integrated-dashboard-db-migration.md](./2026-04-19-rereview2-report-integrated-dashboard-db-migration.md)
+- [2026-04-19-audit-report-pattern-lab-db-ops.md](./2026-04-19-audit-report-pattern-lab-db-ops.md)

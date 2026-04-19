@@ -138,6 +138,30 @@
 | `작업10 필수 관찰축` | `sections.holding_axis.force_exit_shadow_samples` | FORCE_EXIT shadow 표본 |
 | `작업10 필수 관찰축` | `sections.holding_axis.trailing_conflict_rate` | trailing 충돌률 |
 
+## 9. 패턴랩 정기 실행 및 DB 연계 운영
+
+### 9-1. 실행 정책
+
+1. `claude_scalping_pattern_lab`, `gemini_scalping_pattern_lab`은 `금요일 POSTCLOSE` 정기 실행으로 고정한다.
+2. 데이터 소스 우선순위는 `DB -> 원본 파일 -> 압축 파일(.gz)`로 통일한다.
+3. DB/파일 소스 불일치가 발생하면 결론 확정보다 `이벤트 복원/집계 정합성` 점검을 우선한다.
+
+### 9-2. 자동 실행 경로
+
+1. `deploy/install_pattern_lab_cron.sh`
+2. `deploy/run_claude_scalping_pattern_lab_cron.sh`
+3. `deploy/run_gemini_scalping_pattern_lab_cron.sh`
+4. 로그:
+   - `logs/claude_scalping_pattern_lab_cron.log`
+   - `logs/gemini_scalping_pattern_lab_cron.log`
+
+### 9-3. 주간 검증 항목
+
+1. `trade_fact/funnel_fact/sequence_fact` 생성 성공 여부
+2. `profit_valid_flag` 표본 30건 미만 경고 여부
+3. `full_fill/partial_fill/split-entry` 분리 집계 유지 여부
+4. 관찰축(`거래수/퍼널/blocker/체결품질/missed_upside`) 주간 변동 보고서 반영 여부
+
 ## 참고 문서
 
 - [2026-04-17-midterm-tuning-performance-report.md](./2026-04-17-midterm-tuning-performance-report.md)

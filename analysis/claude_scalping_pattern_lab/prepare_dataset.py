@@ -2,9 +2,8 @@
 데이터 준비 모듈.
 
 입력:
-  - data/report/monitor_snapshots/trade_review_*.json   → trade_fact.csv
-  - data/report/monitor_snapshots/performance_tuning_*.json → funnel_fact.csv
-  - data/pipeline_events/pipeline_events_*.jsonl         → sequence_fact.csv
+  - monitor snapshots: DB 우선, 파일(.json/.json.gz) fallback
+  - pipeline events: DB 우선, 파일(.jsonl/.jsonl.gz) fallback
 
 출력:
   - outputs/trade_fact.csv
@@ -16,6 +15,7 @@
 from __future__ import annotations
 
 import csv
+import gzip
 import json
 import sys
 from collections import defaultdict
@@ -25,7 +25,10 @@ from typing import Any
 
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+LAB_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = LAB_DIR.parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+sys.path.insert(0, str(LAB_DIR))
 from config import (
     ANALYSIS_END,
     ANALYSIS_START,
@@ -38,6 +41,85 @@ from config import (
     SNAPSHOT_DIR,
     SPLIT_ENTRY_REBASE_THRESHOLD,
 )
+
+try:
+    from src.engine.dashboard_data_repository import (
+        load_monitor_snapshot_prefer_db,
+        load_pipeline_events,
+    )
+except Exception:
+    load_monitor_snapshot_prefer_db = None
+    load_pipeline_events = None
+
+
+def _load_json(path: Path) -> dict | None:
+    try:
+        if path.suffix == ".gz":
+            with gzip.open(path, "rt", encoding="utf-8") as f:
+                return json.load(f)
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"  [WARN] json load failed: {path.name} — {e}")
+        return None
+
+
+def _load_jsonl(path: Path) -> list[dict]:
+    rows: list[dict] = []
+    try:
+        if path.suffix == ".gz":
+            stream = gzip.open(path, "rt", encoding="utf-8")
+        else:
+            stream = open(path, encoding="utf-8")
+        with stream as f:
+            for raw_line in f:
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                try:
+                    rows.append(json.loads(raw_line))
+                except json.JSONDecodeError:
+                    continue
+    except Exception as e:
+        print(f"  [WARN] jsonl load failed: {path.name} — {e}")
+    return rows
+
+
+def _load_snapshot_payload(kind: str, target_date: str) -> tuple[dict | None, str]:
+    if load_monitor_snapshot_prefer_db is not None:
+        try:
+            payload = load_monitor_snapshot_prefer_db(kind, target_date)
+            if payload is not None:
+                source = payload.get("meta", {}).get("source", "db")
+                return payload, str(source)
+        except Exception as e:
+            print(f"  [WARN] snapshot DB load failed: {kind} {target_date} — {e}")
+
+    for suffix in (".json", ".json.gz"):
+        path = SNAPSHOT_DIR / f"{kind}_{target_date}{suffix}"
+        if path.exists():
+            payload = _load_json(path)
+            if payload is not None:
+                return payload, f"file:{suffix}"
+    return None, "none"
+
+
+def _load_pipeline_rows(target_date: str) -> tuple[list[dict], str]:
+    if load_pipeline_events is not None:
+        try:
+            rows = load_pipeline_events(target_date, include_file_for_today=True)
+            if rows:
+                return rows, "db_or_mixed"
+        except Exception as e:
+            print(f"  [WARN] pipeline DB load failed: {target_date} — {e}")
+
+    for suffix in (".jsonl", ".jsonl.gz"):
+        path = PIPELINE_EVENT_DIR / f"pipeline_events_{target_date}{suffix}"
+        if path.exists():
+            rows = _load_jsonl(path)
+            if rows:
+                return rows, f"file:{suffix}"
+    return [], "none"
 
 
 # ── 날짜 범위 생성 ────────────────────────────────────────────────────────────
@@ -53,14 +135,7 @@ def _date_range(start: date, end: date) -> list[date]:
 
 # ── trade_fact 파싱 ───────────────────────────────────────────────────────────
 
-def _parse_trade_review(path: Path, server: str) -> list[dict]:
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception as e:
-        print(f"  [WARN] trade_review parse failed: {path.name} — {e}")
-        return []
-
+def _parse_trade_review(data: dict[str, Any], server: str) -> list[dict]:
     rows = []
     # completed_trades + open_trades (open은 profit_valid_flag=False)
     all_trades = data.get("sections", {}).get("recent_trades", [])
@@ -106,13 +181,15 @@ def build_trade_fact() -> pd.DataFrame:
     print("[prepare] building trade_fact …")
     rows: list[dict] = []
     parse_errors = 0
+    source_count: dict[str, int] = defaultdict(int)
 
     for d in _date_range(ANALYSIS_START, ANALYSIS_END):
         ds = d.isoformat()
-        path = SNAPSHOT_DIR / f"trade_review_{ds}.json"
-        if not path.exists():
+        payload, source = _load_snapshot_payload("trade_review", ds)
+        if payload is None:
             continue
-        result = _parse_trade_review(path, SERVER_LOCAL)
+        source_count[source] += 1
+        result = _parse_trade_review(payload, SERVER_LOCAL)
         if not result:
             parse_errors += 1
         rows.extend(result)
@@ -127,22 +204,18 @@ def build_trade_fact() -> pd.DataFrame:
         lambda m: "full_fill" if m == "normal" else "partial_fill"
     )
     df.to_csv(OUTPUT_DIR / "trade_fact.csv", index=False, encoding="utf-8")
-    print(f"  → trade_fact: {len(df)} rows, {parse_errors} parse errors")
+    print(
+        f"  → trade_fact: {len(df)} rows, {parse_errors} parse errors, "
+        f"source={dict(source_count)}"
+    )
     return df
 
 
 # ── funnel_fact 파싱 ──────────────────────────────────────────────────────────
 
-def _parse_performance_tuning(path: Path, server: str) -> dict | None:
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception as e:
-        print(f"  [WARN] performance_tuning parse failed: {path.name} — {e}")
-        return None
-
+def _parse_performance_tuning(data: dict[str, Any], target_date: str, server: str) -> dict:
     metrics = data.get("metrics", {})
-    date_str = data.get("date", path.stem.replace("performance_tuning_", ""))
+    date_str = data.get("date", target_date)
 
     row: dict[str, Any] = {"server": server, "date": date_str}
     for col, src_key in FUNNEL_METRIC_MAP.items():
@@ -163,28 +236,28 @@ def _parse_performance_tuning(path: Path, server: str) -> dict | None:
 def build_funnel_fact() -> pd.DataFrame:
     print("[prepare] building funnel_fact …")
     rows = []
+    source_count: dict[str, int] = defaultdict(int)
     for d in _date_range(ANALYSIS_START, ANALYSIS_END):
         ds = d.isoformat()
-        path = SNAPSHOT_DIR / f"performance_tuning_{ds}.json"
-        if not path.exists():
+        payload, source = _load_snapshot_payload("performance_tuning", ds)
+        if payload is None:
             continue
-        row = _parse_performance_tuning(path, SERVER_LOCAL)
-        if row:
-            rows.append(row)
+        source_count[source] += 1
+        rows.append(_parse_performance_tuning(payload, ds, SERVER_LOCAL))
 
     df = pd.DataFrame(rows)
     if df.empty:
         print("  [WARN] funnel_fact is empty")
         return df
     df.to_csv(OUTPUT_DIR / "funnel_fact.csv", index=False, encoding="utf-8")
-    print(f"  → funnel_fact: {len(df)} rows")
+    print(f"  → funnel_fact: {len(df)} rows, source={dict(source_count)}")
     return df
 
 
 # ── sequence_fact 파싱 (JSONL 스트리밍) ──────────────────────────────────────
 
 def _stream_sequence_events(
-    jsonl_path: Path,
+    rows: list[dict],
     date_str: str,
     server: str,
 ) -> list[dict]:
@@ -209,59 +282,50 @@ def _stream_sequence_events(
     symbol_soft_stop_times: dict[str, list[str]] = defaultdict(list)
 
     try:
-        with open(jsonl_path, encoding="utf-8") as f:
-            for raw_line in f:
-                raw_line = raw_line.strip()
-                if not raw_line:
-                    continue
-                try:
-                    ev = json.loads(raw_line)
-                except json.JSONDecodeError:
-                    continue
+        for ev in rows:
+            stage = ev.get("stage", "")
+            if stage not in SEQUENCE_STAGES:
+                continue
 
-                stage = ev.get("stage", "")
-                if stage not in SEQUENCE_STAGES:
-                    continue
+            rid = ev.get("record_id")
+            if rid is None:
+                continue
 
-                rid = ev.get("record_id")
-                if rid is None:
-                    continue
+            b = buckets[rid]
+            b["trade_id"] = rid
+            if not b["symbol"]:
+                b["symbol"] = ev.get("stock_code", "")
 
-                b = buckets[rid]
-                b["trade_id"] = rid
-                if not b["symbol"]:
-                    b["symbol"] = ev.get("stock_code", "")
+            ts = ev.get("emitted_at", "")
 
-                ts = ev.get("emitted_at", "")
+            if stage == "holding_started":
+                b["holding_started_times"].append(ts)
 
-                if stage == "holding_started":
-                    b["holding_started_times"].append(ts)
+            elif stage == "position_rebased_after_fill":
+                fields = ev.get("fields", {})
+                b["rebase_events"].append({
+                    "ts":              ts,
+                    "fill_qty":        fields.get("fill_qty"),
+                    "cum_filled_qty":  fields.get("cum_filled_qty"),
+                    "requested_qty":   fields.get("requested_qty"),
+                    "remaining_qty":   fields.get("remaining_qty"),
+                    "fill_quality":    fields.get("fill_quality", ""),
+                    "entry_mode":      fields.get("entry_mode", ""),
+                })
 
-                elif stage == "position_rebased_after_fill":
-                    fields = ev.get("fields", {})
-                    b["rebase_events"].append({
-                        "ts":              ts,
-                        "fill_qty":        fields.get("fill_qty"),
-                        "cum_filled_qty":  fields.get("cum_filled_qty"),
-                        "requested_qty":   fields.get("requested_qty"),
-                        "remaining_qty":   fields.get("remaining_qty"),
-                        "fill_quality":    fields.get("fill_quality", ""),
-                        "entry_mode":      fields.get("entry_mode", ""),
-                    })
-
-                elif stage in ("exit_signal", "sell_completed"):
-                    fields = ev.get("fields", {})
-                    rule = fields.get("exit_rule", "")
-                    if rule:
-                        b["exit_rules"].append(rule)
-                        b["exit_times"].append(ts)
-                        # soft-stop 반복 추적
-                        if rule == "scalp_soft_stop_pct" and b["symbol"]:
-                            soft_stop_by_symbol[b["symbol"]] += 1
-                            symbol_soft_stop_times[b["symbol"]].append(ts)
+            elif stage in ("exit_signal", "sell_completed"):
+                fields = ev.get("fields", {})
+                rule = fields.get("exit_rule", "")
+                if rule:
+                    b["exit_rules"].append(rule)
+                    b["exit_times"].append(ts)
+                    # soft-stop 반복 추적
+                    if rule == "scalp_soft_stop_pct" and b["symbol"]:
+                        soft_stop_by_symbol[b["symbol"]] += 1
+                        symbol_soft_stop_times[b["symbol"]].append(ts)
 
     except Exception as e:
-        print(f"  [WARN] sequence stream error: {jsonl_path.name} — {e}")
+        print(f"  [WARN] sequence stream error: {date_str} — {e}")
         return []
 
     # 반복 soft-stop 기호 목록
@@ -336,23 +400,25 @@ def _stream_sequence_events(
 def build_sequence_fact() -> pd.DataFrame:
     print("[prepare] building sequence_fact (streaming JSONL) …")
     all_rows: list[dict] = []
+    source_count: dict[str, int] = defaultdict(int)
 
     for d in _date_range(ANALYSIS_START, ANALYSIS_END):
         ds = d.isoformat()
-        path = PIPELINE_EVENT_DIR / f"pipeline_events_{ds}.jsonl"
-        if not path.exists():
+        rows, source = _load_pipeline_rows(ds)
+        if not rows:
             continue
-        print(f"  streaming {path.name} …")
-        rows = _stream_sequence_events(path, ds, SERVER_LOCAL)
-        print(f"    → {len(rows)} records")
-        all_rows.extend(rows)
+        source_count[source] += 1
+        print(f"  streaming pipeline_events_{ds} ({source}) …")
+        parsed_rows = _stream_sequence_events(rows, ds, SERVER_LOCAL)
+        print(f"    → {len(parsed_rows)} records")
+        all_rows.extend(parsed_rows)
 
     df = pd.DataFrame(all_rows)
     if df.empty:
         print("  [WARN] sequence_fact is empty")
         return df
     df.to_csv(OUTPUT_DIR / "sequence_fact.csv", index=False, encoding="utf-8")
-    print(f"  → sequence_fact: {len(df)} rows")
+    print(f"  → sequence_fact: {len(df)} rows, source={dict(source_count)}")
     return df
 
 

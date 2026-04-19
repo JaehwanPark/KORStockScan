@@ -1,22 +1,29 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Exit on any error
-set -e
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+PYTHON="$PROJECT_ROOT/.venv/bin/python"
 
-# Navigate to script directory
-cd "$(dirname "$0")"
+if [ ! -f "$PYTHON" ]; then
+    echo "[ERROR] .venv/bin/python not found at $PROJECT_ROOT/.venv"
+    exit 1
+fi
+
+cd "$SCRIPT_DIR"
+export PYTHONPATH="$PROJECT_ROOT"
 
 echo "=== Gemini Scalping Pattern Lab ==="
 echo "1. Building Datasets..."
-python3 build_dataset.py
+"$PYTHON" build_dataset.py
 
 echo "2. Analyzing Patterns..."
-python3 analyze_patterns.py
+"$PYTHON" analyze_patterns.py
 
 echo "3. Building LLM Payload..."
-python3 build_llm_payload.py
+"$PYTHON" build_llm_payload.py
 
 echo "4. Generating Final Reports..."
-python3 generate_final_report.py
+"$PYTHON" generate_final_report.py
 
 echo "=== Done. Check 'outputs/' directory. ==="

@@ -11,9 +11,9 @@ bash run.sh
 ```
 
 ## 입력 데이터
-- `data/pipeline_events/` (Local Pipeline Events)
-- `data/post_sell/` (Local Post Sell Evaluations)
-- `tmp/remote_*/` (Remote Logs)
+- Local pipeline: `dashboard_pipeline_events` DB 우선, 파일 fallback (`data/pipeline_events/*.jsonl`, `*.jsonl.gz`)
+- Local post-sell: `data/post_sell/` (`.jsonl`, `.jsonl.gz`)
+- Remote logs: `tmp/remote_*/` (`pipeline_events*.jsonl(.gz)`, `post_sell_evaluations*.jsonl(.gz)`)
 
 ## 출력물 (`outputs/` 하위 생성)
 - `trade_fact.csv`: 매매 기본 정보

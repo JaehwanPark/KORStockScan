@@ -51,13 +51,13 @@ PYTHONPATH=. .venv/bin/python analysis/claude_scalping_pattern_lab/analyze_ev_pa
 PYTHONPATH=. .venv/bin/python analysis/claude_scalping_pattern_lab/build_claude_payload.py
 ```
 
-## 입력 데이터 경로
+## 입력 데이터 소스 (우선순위)
 
 | 종류 | 경로 |
 |---|---|
-| trade_review 스냅샷 | `data/report/monitor_snapshots/trade_review_*.json` |
-| performance_tuning 스냅샷 | `data/report/monitor_snapshots/performance_tuning_*.json` |
-| pipeline events | `data/pipeline_events/pipeline_events_*.jsonl` |
+| trade_review 스냅샷 | `dashboard_monitor_snapshots` DB 우선 → `data/report/monitor_snapshots/trade_review_*.json` → `*.json.gz` |
+| performance_tuning 스냅샷 | `dashboard_monitor_snapshots` DB 우선 → `data/report/monitor_snapshots/performance_tuning_*.json` → `*.json.gz` |
+| pipeline events | `dashboard_pipeline_events` DB 우선 → `data/pipeline_events/pipeline_events_*.jsonl` → `*.jsonl.gz` |
 
 ## 분석 기간
 
