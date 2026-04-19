@@ -1,5 +1,6 @@
 from dataclasses import replace
 from datetime import datetime, timedelta
+import time
 
 import src.engine.sniper_scale_in as scale_in
 import src.engine.sniper_state_handlers as state_handlers
@@ -2200,6 +2201,125 @@ def test_scalp_preset_tp_hard_stop_logs_exit_rule(monkeypatch):
     assert sent_logs[-1]["order_type"] == "16"
 
 
+def test_sell_reject_with_positive_sellable_qty_keeps_holding(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(CONFIG, SCALE_IN_REQUIRE_HISTORY_TABLE=False)
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 100}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    pipeline_logs = []
+
+    def fake_log_holding_pipeline(stock, code, stage, **fields):
+        pipeline_logs.append((stage, fields))
+
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", fake_log_holding_pipeline)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda *args, **kwargs: {
+            "return_code": "20",
+            "return_msg": "[2000](800033:매도가능수량이 부족합니다. 125주 매도가능)",
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_block"},
+    )
+
+    stock = {
+        "id": 14,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 100,
+        "buy_qty": 145,
+        "rt_ai_prob": 0.50,
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 98.0, "orderbook": {"bids": [{"price": 98, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    fail_logs = [fields for stage, fields in pipeline_logs if stage == "sell_order_failed"]
+    assert stock["status"] == "HOLDING"
+    assert stock["buy_qty"] == 125
+    assert fail_logs
+    assert fail_logs[-1]["new_status"] == "HOLDING"
+    assert fail_logs[-1]["sellable_qty"] == 125
+
+
+def test_sell_reject_with_zero_sellable_qty_marks_completed(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(CONFIG, SCALE_IN_REQUIRE_HISTORY_TABLE=False)
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 100}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    pipeline_logs = []
+
+    def fake_log_holding_pipeline(stock, code, stage, **fields):
+        pipeline_logs.append((stage, fields))
+
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", fake_log_holding_pipeline)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda *args, **kwargs: {
+            "return_code": "20",
+            "return_msg": "[2000](800033:매도가능수량이 부족합니다. 0주 매도가능)",
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_block"},
+    )
+
+    stock = {
+        "id": 15,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 100,
+        "buy_qty": 10,
+        "rt_ai_prob": 0.50,
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 98.0, "orderbook": {"bids": [{"price": 98, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    fail_logs = [fields for stage, fields in pipeline_logs if stage == "sell_order_failed"]
+    assert stock["status"] == "COMPLETED"
+    assert fail_logs
+    assert fail_logs[-1]["new_status"] == "COMPLETED"
+    assert fail_logs[-1]["sellable_qty"] == 0
+
+
 def test_scalp_preset_tp_hard_stop_grace_delays_exit(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 
@@ -2879,3 +2999,111 @@ def test_reversal_add_tc10_no_features_engine_buy_pressure_only():
         assert result["reason"] == "buy_pressure_not_met(no_features)"
     finally:
         scale_in.TRADING_RULES = CONFIG
+
+
+def test_resolve_sell_order_sign_trailing_negative_treated_as_loss():
+    assert state_handlers._resolve_sell_order_sign("TRAILING", -0.01) == "📉 [손절 주문]"
+    assert state_handlers._resolve_sell_order_sign("TRAILING", 0.0) == "📉 [손절 주문]"
+    assert state_handlers._resolve_sell_order_sign("TRAILING", 0.15) == "🎊 [익절 주문]"
+
+
+def test_emit_same_symbol_soft_stop_cooldown_shadow_once(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    class _RulesProxy:
+        def __init__(self, base, **overrides):
+            self._base = base
+            self._overrides = overrides
+
+        def __getattr__(self, name):
+            if name in self._overrides:
+                return self._overrides[name]
+            return getattr(self._base, name)
+
+    state_handlers.TRADING_RULES = _RulesProxy(
+        CONFIG,
+        SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_ENABLED=True,
+        SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_SEC=600,
+    )
+    state_handlers._SAME_SYMBOL_SOFT_STOP_TS = {}
+    logs = []
+
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {"id": 101, "name": "TEST"}
+    now_ts = time.time()
+    state_handlers._mark_same_symbol_soft_stop("123456", now_ts=now_ts - 30)
+
+    state_handlers._emit_same_symbol_soft_stop_cooldown_shadow(
+        stock=stock,
+        code="123456",
+        now_ts=now_ts,
+        runtime_remaining_sec=200,
+    )
+    state_handlers._emit_same_symbol_soft_stop_cooldown_shadow(
+        stock=stock,
+        code="123456",
+        now_ts=now_ts + 1,
+        runtime_remaining_sec=199,
+    )
+
+    assert len(logs) == 1
+    assert logs[0][0] == "same_symbol_soft_stop_cooldown_shadow"
+    assert logs[0][1]["shadow_only"] is True
+    assert logs[0][1]["would_block"] is True
+
+
+def test_emit_partial_only_timeout_shadow_logs_when_partial_stuck(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    class _RulesProxy:
+        def __init__(self, base, **overrides):
+            self._base = base
+            self._overrides = overrides
+
+        def __getattr__(self, name):
+            if name in self._overrides:
+                return self._overrides[name]
+            return getattr(self._base, name)
+
+    state_handlers.TRADING_RULES = _RulesProxy(
+        CONFIG,
+        SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_ENABLED=True,
+        SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_SEC=180,
+        SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_MAX_PEAK_PCT=0.20,
+    )
+    logs = []
+
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 102,
+        "name": "TEST",
+        "entry_requested_qty": 3,
+        "buy_qty": 1,
+        "entry_mode": "split",
+        "_split_entry_rebase_shadow_count": 1,
+    }
+
+    state_handlers._emit_partial_only_timeout_shadow(
+        stock=stock,
+        code="123456",
+        held_sec=210,
+        profit_rate=-0.32,
+        peak_profit=0.08,
+        current_ai_score=43.0,
+    )
+
+    assert len(logs) == 1
+    assert logs[0][0] == "partial_only_timeout_shadow"
+    assert logs[0][1]["shadow_only"] is True
+    assert logs[0][1]["requested_qty"] == 3
+    assert logs[0][1]["buy_qty"] == 1

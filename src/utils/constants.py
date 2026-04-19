@@ -76,7 +76,7 @@ class TradingConfig:
     INVEST_RATIO_KOSDAQ: float = 0.15  # DEPRECATED: MIN/MAX 비중으로 대체됨
     INVEST_RATIO_SCALPING_MIN: float = 0.10  # 초단타 스캘핑 AI 점수 0일 때 최소 투자 비율 (10%)
     INVEST_RATIO_SCALPING_MAX: float = 0.30  # 초단타 스캘핑 AI 점수 100일 때 최대 투자 비율 (30%)
-    SCALPING_MAX_BUY_BUDGET_KRW: int = 2_000_000  # 스캘핑 신규 진입 1회 절대 투자금 상한
+    SCALPING_MAX_BUY_BUDGET_KRW: int = 1_600_000  # 2026-04-21 canary: 스캘핑 신규 진입 1회 절대 투자금 상한 (2,000,000 -> 1,600,000)
 
     # 💡 [신규 추가] 스윙 AI 동적 비중 조절용 (Min~Max)
     INVEST_RATIO_KOSDAQ_MIN: float = 0.05  # 코스닥 AI 점수 60점일 때 (5%)

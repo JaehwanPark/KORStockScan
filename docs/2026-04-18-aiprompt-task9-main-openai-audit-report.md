@@ -68,6 +68,15 @@
   - 판정 기준: `HOLDING action schema shadow-only` 선행 범위와 충돌 없이 착수 가능 여부 확정
   - 다음 액션: 보류 유지 시 `다음 실행시각`을 같은 문서와 `2026-04-20-stage2-todo-checklist.md`에 동시에 기록
 
+### 4-3) 사이징 리스크 단일축 기록 (자동 파싱 대상)
+
+- [ ] `[RiskSize0420] SCALPING_MAX_BUY_BUDGET_KRW=1,600,000 단일축 canary 적용` (`Due: 2026-04-20`, `Slot: PREOPEN`, `TimeWindow: 08:40~08:45`, `Track: ScalpingLogic`)
+  - 판정 기준: `src/utils/constants.py` 반영 + 런타임 기동 후 신규 진입 예산 계산에서 cap 값이 1,600,000으로 확인됨
+  - 다음 액션: 미반영 시 배포 경로/재기동 순서를 먼저 점검하고, 추정 손익 비교는 반영 확인 후 진행
+- [ ] `[RiskSize0420] 비중/예산 상수 동적 튜닝 대상화 여부 확정` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:25~17:35`, `Track: Plan`)
+  - 판정 기준: `INVEST_RATIO_SCALPING_MIN/MAX`, `SCALPING_MAX_BUY_BUDGET_KRW`를 동적 튜닝 큐에 올릴지 승격/보류 중 하나로 확정
+  - 다음 액션: 보류 시 원인과 재시각을 `2026-04-20-stage2-todo-checklist.md`에 동시 기록
+
 ## 5) 코드베이스 실측 리뷰 (2026-04-18)
 
 > 실제 소스 파일을 직접 열람하여 작업 9 이식 정확도를 검증한 결과다.

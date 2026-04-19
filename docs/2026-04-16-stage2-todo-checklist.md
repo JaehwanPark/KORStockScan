@@ -120,11 +120,11 @@
   - 근거: `nxt`는 NXT거래 여부/수량 의미와 불일치하며, 현재 실데이터 활용도가 낮음
   - 다음 액션: 1) 대체 필드 도입(명시적 네이밍) 2) 호환 read/write 3) 참조 제거 및 drop 순으로 진행
   - 실행 메모: 1단계 착수 완료 (`entry_armed_at_epoch` 추가, `sniper_s15_fast_track` read/write 호환 반영, `nxt` fallback 유지)
-- [ ] `[Checklist0417] scalping_exit 액션스키마 분리 여부 재판정 및 실행순서 확정` (`Due: 2026-04-17`, `Slot: PREOPEN`, `TimeWindow: 08:00~08:20`)
+- [x] `[Checklist0417] scalping_exit 액션스키마 분리 여부 재판정 및 실행순서 확정` (`Due: 2026-04-17`, `Slot: PREOPEN`, `TimeWindow: 08:00~08:20`) (`실행: 2026-04-17 20:58 KST`)
   - 판정 기준: `HOLDING` action schema(`HOLD/SELL/FORCE_EXIT`) 분리 적용 여부와 롤백 가드 포함 실행순서를 확정
   - 근거: 2026-04-16 운영반영에는 완전 분리가 미포함이므로 차기 plan 고정 필요
   - 다음 액션: 분리 포함 시 shadow-only 선적용, 미포함 시 계획문서에 보류사유/재판정 시각 고정
-  - 실행 게이트 확인(2026-04-16 15:34 KST): `TimeWindow=2026-04-17 08:00~08:20 KST` 미도래로 미실행 유지 (체크박스 보류)
+  - 실행 메모: 판정=실전 미포함 유지, 실행순서 확정 `1) 파싱 양방향 호환(legacy+new) shadow-only -> 2) HOLDING prompt schema(HOLD/SELL/FORCE_EXIT) shadow-only -> 3) parse_error/미체결/지연 가드 통과 시 canary`.
 
 ## 참고 문서
 

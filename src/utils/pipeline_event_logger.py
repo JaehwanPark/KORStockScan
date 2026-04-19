@@ -9,6 +9,7 @@ from pathlib import Path
 
 from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.logger import log_error, log_info
+from src.engine.dashboard_data_repository import upsert_pipeline_event_rows
 
 
 _WRITE_LOCK = threading.RLock()
@@ -77,5 +78,11 @@ def emit_pipeline_event(
                 handle.write(json.dumps(event_payload, ensure_ascii=False) + "\n")
     except Exception as exc:
         log_error(f"[PIPELINE_EVENT] structured append failed: {exc}")
+
+    # DB 저장 시도
+    try:
+        upsert_pipeline_event_rows(event_payload["emitted_date"], [event_payload])
+    except Exception as exc:
+        log_error(f"[PIPELINE_EVENT] DB upsert failed: {exc}")
 
     return event_payload

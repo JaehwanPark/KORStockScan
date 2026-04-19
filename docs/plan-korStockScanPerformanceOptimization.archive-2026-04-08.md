@@ -3,6 +3,12 @@
 이 문서는 `plan-korStockScanPerformanceOptimization.prompt.md`의 장문 버전 백업본이다.
 다음 세션 실행 지시는 경량 프롬프트 문서를 우선 사용한다.
 
+## 아카이브 맵
+
+1. 이 문서는 `2026-04-08` 기준 초기 장문 백업본이다.
+2. `2026-04-19` 정리 시점에 prompt에서 걷어낸 후속 상세 경과는 [plan-korStockScanPerformanceOptimization.archive-2026-04-19.md](./plan-korStockScanPerformanceOptimization.archive-2026-04-19.md)에 따로 보관한다.
+3. 기본계획 대비 실행 변경사항은 [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md), 반복 성과 baseline은 [plan-korStockScanPerformanceOptimization.performance-report.md](./plan-korStockScanPerformanceOptimization.performance-report.md)에서 관리한다.
+
 ## 계획: KORStockScan 성능 최적화 실행안
 
 이 문서는 `2026-04-06` 장중 `성능 튜닝 모니터`, `실제 매매 복기`, `HOLDING_PIPELINE / ENTRY_PIPELINE` 로그를 기준으로, 지금 코드베이스에 맞게 다시 정리한 실행 계획이다.

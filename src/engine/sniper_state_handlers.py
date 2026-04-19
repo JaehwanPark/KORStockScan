@@ -1,5 +1,6 @@
 """State machine handlers for the sniper engine."""
 
+import re
 import time
 from datetime import datetime, timedelta
 from uuid import uuid4
@@ -66,6 +67,21 @@ def _resolve_zero_qty_cooldown_sec(deposit: int) -> int:
     if int(float(deposit or 0)) <= 0:
         return int(getattr(TRADING_RULES, "ZERO_DEPOSIT_RETRY_COOLDOWN_SEC", 20) or 20)
     return 1200
+
+
+def _extract_sellable_qty_from_error(err_msg: str):
+    """주문 거절 메시지에서 'N주 매도가능' 수량을 추출한다."""
+    if not err_msg:
+        return None
+    match = re.search(r"(\d+)\s*주\s*매도가능", str(err_msg))
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
 HIGHEST_PRICES = None
 LAST_AI_CALL_TIMES = None
 LAST_LOG_TIMES = None
@@ -76,6 +92,7 @@ CONFIRM_CANCEL_OR_RELOAD_REMAINING = None
 SEND_EXIT_BEST_IOC = None
 DUAL_PERSONA_ENGINE = None
 BIG_BITE_STATE = {}
+_SAME_SYMBOL_SOFT_STOP_TS: dict[str, float] = {}
 
 
 def bind_state_dependencies(
@@ -262,6 +279,130 @@ def _update_boolean_sustain_sec(stock, *, key: str, active: bool, now_ts: float)
         return max(0, int(now_ts - started_at))
     stock.pop(key, None)
     return 0
+
+
+def _is_non_positive_numeric(value) -> bool:
+    try:
+        return float(value) <= 0.0
+    except (TypeError, ValueError):
+        return False
+
+
+def _resolve_sell_order_sign(sell_reason_type: str, profit_rate) -> str:
+    reason_upper = str(sell_reason_type or "").upper()
+    is_loss = reason_upper == "LOSS"
+    if not is_loss and reason_upper == "TRAILING" and _is_non_positive_numeric(profit_rate):
+        is_loss = True
+    return "📉 [손절 주문]" if is_loss else "🎊 [익절 주문]"
+
+
+def _mark_same_symbol_soft_stop(code: str, *, now_ts: float) -> None:
+    cooldown_sec = int(
+        getattr(TRADING_RULES, "SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_SEC", 600) or 600
+    )
+    if cooldown_sec <= 0:
+        return
+    _SAME_SYMBOL_SOFT_STOP_TS[code] = now_ts
+
+
+def _emit_same_symbol_soft_stop_cooldown_shadow(
+    *,
+    stock: dict,
+    code: str,
+    now_ts: float,
+    runtime_remaining_sec: int,
+) -> None:
+    enabled = bool(getattr(TRADING_RULES, "SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_ENABLED", True))
+    if not enabled:
+        return
+
+    marked_at = float(_SAME_SYMBOL_SOFT_STOP_TS.get(code, 0) or 0)
+    if marked_at <= 0:
+        return
+
+    cooldown_sec = int(
+        getattr(TRADING_RULES, "SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_SEC", 600) or 600
+    )
+    if cooldown_sec <= 0:
+        return
+
+    elapsed_sec = max(0, int(now_ts - marked_at))
+    if elapsed_sec > cooldown_sec:
+        _SAME_SYMBOL_SOFT_STOP_TS.pop(code, None)
+        stock.pop("_same_symbol_soft_stop_cooldown_shadow_logged_key", None)
+        return
+
+    logged_key = f"{int(marked_at)}:{cooldown_sec}"
+    if stock.get("_same_symbol_soft_stop_cooldown_shadow_logged_key") == logged_key:
+        return
+
+    _log_entry_pipeline(
+        stock,
+        code,
+        "same_symbol_soft_stop_cooldown_shadow",
+        elapsed_sec=elapsed_sec,
+        cooldown_sec=cooldown_sec,
+        runtime_remaining_sec=max(0, int(runtime_remaining_sec or 0)),
+        would_block=True,
+        shadow_only=True,
+    )
+    stock["_same_symbol_soft_stop_cooldown_shadow_logged_key"] = logged_key
+
+
+def _emit_partial_only_timeout_shadow(
+    *,
+    stock: dict,
+    code: str,
+    held_sec: int,
+    profit_rate: float,
+    peak_profit: float,
+    current_ai_score: float,
+) -> None:
+    enabled = bool(getattr(TRADING_RULES, "SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_ENABLED", True))
+    if not enabled:
+        return
+
+    timeout_sec = int(getattr(TRADING_RULES, "SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_SEC", 180) or 180)
+    if timeout_sec <= 0 or held_sec < timeout_sec:
+        return
+
+    requested_qty = int(stock.get("entry_requested_qty", 0) or stock.get("requested_buy_qty", 0) or 0)
+    buy_qty = int(stock.get("buy_qty", 0) or 0)
+    if requested_qty <= 1 or buy_qty <= 0 or buy_qty > 1 or buy_qty >= requested_qty:
+        return
+
+    peak_max_pct = float(getattr(TRADING_RULES, "SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_MAX_PEAK_PCT", 0.20) or 0.20)
+    if peak_profit > peak_max_pct:
+        return
+
+    entry_mode = str(stock.get("entry_mode", "") or "normal").strip().lower() or "normal"
+    rebase_count = int(stock.get("_split_entry_rebase_shadow_count", 0) or 0)
+    if rebase_count >= 2:
+        return
+
+    logged_key = (
+        f"{timeout_sec}:{requested_qty}:{buy_qty}:{entry_mode}:{rebase_count}:"
+        f"{peak_max_pct:.2f}"
+    )
+    if stock.get("_partial_only_timeout_shadow_logged_key") == logged_key:
+        return
+
+    _log_holding_pipeline(
+        stock,
+        code,
+        "partial_only_timeout_shadow",
+        held_sec=int(held_sec),
+        timeout_sec=int(timeout_sec),
+        requested_qty=int(requested_qty),
+        buy_qty=int(buy_qty),
+        entry_mode=entry_mode,
+        rebase_count=int(rebase_count),
+        peak_profit=f"{peak_profit:+.2f}",
+        profit_rate=f"{profit_rate:+.2f}",
+        current_ai_score=f"{current_ai_score:.0f}",
+        shadow_only=True,
+    )
+    stock["_partial_only_timeout_shadow_logged_key"] = logged_key
 
 
 def _apply_fallback_qty_canary(
@@ -713,6 +854,16 @@ def _build_ai_ops_log_fields(
         "ai_prompt_version": str(payload.get("ai_prompt_version", "-") or "-"),
         "ai_result_source": str(payload.get("ai_result_source", "-") or "-"),
     }
+    if payload.get("scalp_feature_packet_version"):
+        out["scalp_feature_packet_version"] = str(payload.get("scalp_feature_packet_version"))
+    for field_name in (
+        "tick_acceleration_ratio_sent",
+        "same_price_buy_absorption_sent",
+        "large_sell_print_detected_sent",
+        "ask_depth_ratio_sent",
+    ):
+        if field_name in payload:
+            out[field_name] = bool(payload.get(field_name))
     if ai_score_raw is not None:
         out["ai_score_raw"] = f"{float(ai_score_raw or 0.0):.1f}"
     if ai_score_after_bonus is not None:
@@ -1422,7 +1573,14 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
     MAX_INTRADAY_SURGE = MAX_INTRADAY_SURGE
     MIN_LIQUIDITY = MIN_SCALP_LIQUIDITY
 
-    if code in cooldowns and time.time() < cooldowns[code]:
+    now_ts = time.time()
+    if code in cooldowns and now_ts < cooldowns[code]:
+        _emit_same_symbol_soft_stop_cooldown_shadow(
+            stock=stock,
+            code=code,
+            now_ts=now_ts,
+            runtime_remaining_sec=max(0, int(cooldowns[code] - now_ts)),
+        )
         log_info(f"[DEBUG] {code} 쿨다운 중 (만료 시간 {cooldowns[code]})")
         return
 
@@ -2764,7 +2922,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             if ord_no:
                 stock['sell_ord_no'] = ord_no
             stock['sell_order_time'] = time.time()
-            sign = "📉 [손절 주문]" if sell_reason_type == 'LOSS' else "🎊 [익절 주문]"
+            sign = _resolve_sell_order_sign(sell_reason_type, profit_rate)
             stock['pending_sell_msg'] = (
                 f"{sign} **{stock['name']} 매도 전송 ({strategy})**\n"
                 f"사유: `{reason}`\n"
@@ -2983,6 +3141,14 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             peak_profit=peak_profit,
             current_ai_score=current_ai_score,
             ai_exit_min_loss_pct=ai_exit_min_loss_pct,
+        )
+        _emit_partial_only_timeout_shadow(
+            stock=stock,
+            code=code,
+            held_sec=held_sec,
+            profit_rate=profit_rate,
+            peak_profit=peak_profit,
+            current_ai_score=current_ai_score,
         )
 
     if strategy == 'SCALPING' and ai_engine and radar:
@@ -3603,7 +3769,6 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                 ws_data=ws_data,
                 strategy=strategy,
                 market_regime=market_regime,
-                skip_add_judgment_lock=True,
             )
             fallback_action = None
             if fallback_gate.get("allowed"):
@@ -3693,7 +3858,10 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                 )
                 return
 
-        sign = "📉 [손절 주문]" if sell_reason_type == 'LOSS' else "🎊 [익절 주문]"
+        if strategy == "SCALPING" and str(exit_rule or "").strip() == "scalp_soft_stop_pct":
+            _mark_same_symbol_soft_stop(code, now_ts=time.time())
+
+        sign = _resolve_sell_order_sign(sell_reason_type, profit_rate)
         msg = (
             f"{sign} **{stock['name']} 매도 전송 ({strategy})**\n"
             f"사유: `{reason}`\n"
@@ -3797,13 +3965,26 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                 alerted_stocks.discard(code)
                 print(f"♻️ [{stock['name']}] 스캘핑 청산 완료 후 20분 쿨타임 진입.")
         else:
-            err_msg = res.get('return_msg', '') if isinstance(res, dict) else ''
+            err_msg = str(res.get('return_msg', '') if isinstance(res, dict) else '')
+            sellable_qty = _extract_sellable_qty_from_error(err_msg)
 
-            if '매도가능수량' in err_msg:
+            # '매도가능수량 부족'은 0주인 경우에만 완료로 간주한다.
+            # 양수 수량이면 실계좌 잔고가 남아있는 상태이므로 HOLDING으로 복구해 재시도한다.
+            if '매도가능수량' in err_msg and sellable_qty == 0:
                 print(f"🚨 [{stock['name']}] 잔고 0주(이미 매도됨). COMPLETED로 강제 전환.")
                 new_status = 'COMPLETED'
             else:
-                print(f"🚨 [{stock['name']}] 일시적 매도 실패! HOLDING으로 원상복구.")
+                if '매도가능수량' in err_msg and sellable_qty and sellable_qty > 0:
+                    prev_qty = int(stock.get('buy_qty', 0) or 0)
+                    if prev_qty != sellable_qty:
+                        stock['buy_qty'] = sellable_qty
+                        print(
+                            f"⚠️ [{stock['name']}] 매도가능수량 불일치 감지 "
+                            f"(요청:{prev_qty}주, 가능:{sellable_qty}주). "
+                            "HOLDING 복구 후 재시도 대상으로 유지합니다."
+                        )
+                else:
+                    print(f"🚨 [{stock['name']}] 일시적 매도 실패! HOLDING으로 원상복구.")
                 new_status = 'HOLDING'
 
             stock['status'] = new_status
@@ -3815,6 +3996,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                 exit_rule=exit_rule or stock.get("last_exit_rule") or "-",
                 new_status=new_status,
                 error=err_msg or "unknown",
+                sellable_qty=sellable_qty if sellable_qty is not None else "-",
                 profit_rate=f"{profit_rate:+.2f}",
             )
 

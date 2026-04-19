@@ -3,6 +3,7 @@
 import threading
 import time
 from datetime import datetime
+from typing import Any
 
 from src.database.models import RecommendationHistory
 from src.engine.sniper_entry_state import (
@@ -79,6 +80,113 @@ def _log_holding_pipeline(name, code, target_id, stage, **fields):
         stage,
         record_id=target_id,
         fields=fields,
+    )
+
+
+def _clear_split_entry_shadow_state(target_stock: dict[str, Any]) -> None:
+    for key in [
+        "_split_entry_rebase_shadow_count",
+        "_split_entry_rebase_shadow_last_second",
+        "_split_entry_rebase_shadow_same_second_count",
+        "_split_entry_first_partial_qty",
+        "_split_entry_last_immediate_recheck_rebase_count",
+    ]:
+        target_stock.pop(key, None)
+
+
+def _emit_split_entry_followup_shadows(
+    *,
+    target_stock: dict[str, Any],
+    code: str,
+    target_id: int,
+    now: datetime,
+    entry_mode: str,
+    fill_quality: str,
+    requested_entry_qty: int,
+    cum_filled_qty: int,
+    remaining_qty: int,
+    new_qty: int,
+) -> None:
+    if not bool(getattr(TRADING_RULES, "SPLIT_ENTRY_REBASE_INTEGRITY_SHADOW_ENABLED", True)):
+        return
+
+    rebase_count = int(target_stock.get("_split_entry_rebase_shadow_count", 0) or 0) + 1
+    target_stock["_split_entry_rebase_shadow_count"] = rebase_count
+
+    emitted_second = now.strftime("%Y-%m-%dT%H:%M:%S")
+    last_second = str(target_stock.get("_split_entry_rebase_shadow_last_second") or "")
+    if emitted_second == last_second:
+        same_second_count = int(target_stock.get("_split_entry_rebase_shadow_same_second_count", 0) or 0) + 1
+    else:
+        same_second_count = 1
+    target_stock["_split_entry_rebase_shadow_last_second"] = emitted_second
+    target_stock["_split_entry_rebase_shadow_same_second_count"] = same_second_count
+
+    fill_quality_upper = str(fill_quality or "").upper()
+    first_partial_qty = int(target_stock.get("_split_entry_first_partial_qty", 0) or 0)
+    if fill_quality_upper == "PARTIAL_FILL" and first_partial_qty <= 0:
+        first_partial_qty = max(0, int(cum_filled_qty or 0))
+        target_stock["_split_entry_first_partial_qty"] = first_partial_qty
+
+    split_entry_candidate = rebase_count >= 2 or fill_quality_upper == "PARTIAL_FILL" or first_partial_qty > 0
+    if not split_entry_candidate:
+        return
+
+    integrity_flags: list[str] = []
+    if requested_entry_qty > 0 and cum_filled_qty > requested_entry_qty:
+        integrity_flags.append("cum_gt_requested")
+    if requested_entry_qty == 0 and fill_quality_upper == "UNKNOWN":
+        integrity_flags.append("requested0_unknown")
+    if same_second_count >= 2:
+        integrity_flags.append("same_ts_multi_rebase")
+
+    integrity_flag_text = ",".join(integrity_flags) if integrity_flags else "-"
+    _log_holding_pipeline(
+        target_stock.get("name"),
+        code,
+        target_id,
+        "split_entry_rebase_integrity_shadow",
+        requested_qty=int(requested_entry_qty or 0),
+        cum_filled_qty=int(cum_filled_qty or 0),
+        remaining_qty=int(remaining_qty or 0),
+        fill_quality=fill_quality_upper or "-",
+        entry_mode=entry_mode or "-",
+        buy_qty_after_rebase=int(new_qty or 0),
+        rebase_count=int(rebase_count),
+        same_ts_multi_rebase_count=int(same_second_count),
+        integrity_flags=integrity_flag_text,
+    )
+
+    if not bool(getattr(TRADING_RULES, "SPLIT_ENTRY_IMMEDIATE_RECHECK_SHADOW_ENABLED", True)):
+        return
+
+    expanded_after_partial = first_partial_qty > 0 and int(new_qty or 0) > first_partial_qty
+    if not (expanded_after_partial or rebase_count >= 2):
+        return
+
+    last_logged_count = int(target_stock.get("_split_entry_last_immediate_recheck_rebase_count", 0) or 0)
+    if rebase_count <= last_logged_count:
+        return
+    target_stock["_split_entry_last_immediate_recheck_rebase_count"] = rebase_count
+
+    trigger_reason = "partial_then_expand" if expanded_after_partial else "multi_rebase"
+    shadow_window_sec = int(getattr(TRADING_RULES, "SPLIT_ENTRY_IMMEDIATE_RECHECK_SHADOW_WINDOW_SEC", 90) or 90)
+    _log_holding_pipeline(
+        target_stock.get("name"),
+        code,
+        target_id,
+        "split_entry_immediate_recheck_shadow",
+        trigger_reason=trigger_reason,
+        shadow_window_sec=int(shadow_window_sec),
+        requested_qty=int(requested_entry_qty or 0),
+        cum_filled_qty=int(cum_filled_qty or 0),
+        remaining_qty=int(remaining_qty or 0),
+        buy_qty_after_rebase=int(new_qty or 0),
+        first_partial_qty=int(first_partial_qty or 0),
+        rebase_count=int(rebase_count),
+        fill_quality=fill_quality_upper or "-",
+        entry_mode=entry_mode or "-",
+        integrity_flags=integrity_flag_text,
     )
 
 
@@ -701,6 +809,8 @@ def handle_real_execution(exec_data):
                 # 신규 진입 체결: 단일 주문/복수 fallback 주문 공통 누적 처리
                 old_qty = int(target_stock.get('buy_qty') or 0)
                 old_price = float(target_stock.get('buy_price') or 0)
+                if old_qty <= 0:
+                    _clear_split_entry_shadow_state(target_stock)
                 new_qty = old_qty + exec_qty
                 new_avg = weighted_avg_price(old_price, old_qty, exec_price, exec_qty) if old_qty > 0 else exec_price
                 entry_mode = str(target_stock.get('entry_mode', 'normal') or 'normal')
@@ -880,6 +990,18 @@ def handle_real_execution(exec_data):
                     preset_tp_ord_no_after=preset_tp_ord_no_after or "-",
                     sync_status=preset_sync_status,
                 )
+                _emit_split_entry_followup_shadows(
+                    target_stock=target_stock,
+                    code=code,
+                    target_id=target_id,
+                    now=now,
+                    entry_mode=entry_mode,
+                    fill_quality=fill_quality,
+                    requested_entry_qty=int(requested_entry_qty or 0),
+                    cum_filled_qty=int(cum_filled_qty or 0),
+                    remaining_qty=int(remaining_qty or 0),
+                    new_qty=int(new_qty or 0),
+                )
                 if strategy == 'SCALPING' and is_default_position_tag(strategy, pos_tag):
                     sync_stage = 'preset_exit_sync_ok' if preset_sync_status == "OK" else 'preset_exit_sync_mismatch'
                     _log_holding_pipeline(
@@ -1029,7 +1151,8 @@ def handle_real_execution(exec_data):
                     'pending_sell_msg', 'sell_odno', 'sell_order_time',
                     'sell_target_price', 'pending_entry_orders', 'entry_mode',
                     'entry_requested_qty', 'entry_filled_qty', 'entry_fill_amount',
-                    'entry_bundle_id', 'requested_buy_qty', 'buy_execution_notified'
+                    'entry_bundle_id', 'requested_buy_qty', 'buy_execution_notified',
+                    'trailing_stop_price', 'hard_stop_price', 'protect_profit_pct',
                 ]:
                     target_stock.pop(key, None)
             else:
@@ -1041,7 +1164,7 @@ def handle_real_execution(exec_data):
                 for key in [
                     'pending_entry_orders', 'entry_mode', 'entry_requested_qty',
                     'entry_filled_qty', 'entry_fill_amount', 'entry_bundle_id', 'requested_buy_qty',
-                    'buy_execution_notified'
+                    'buy_execution_notified', 'trailing_stop_price', 'hard_stop_price', 'protect_profit_pct',
                 ]:
                     target_stock.pop(key, None)
                 # pending_sell_msg는 백그라운드에서 제거

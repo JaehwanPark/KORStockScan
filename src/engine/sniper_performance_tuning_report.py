@@ -14,6 +14,7 @@ from src.engine.log_archive_service import iter_target_log_lines
 from src.engine.sniper_trade_review_report import build_trade_review_report
 from src.market_regime import summarize_market_regime
 from src.utils.constants import DATA_DIR, LOGS_DIR, POSTGRES_URL, TRADING_RULES
+from src.engine.dashboard_data_repository import load_pipeline_events
 
 
 _ENTRY_RE = re.compile(
@@ -124,66 +125,56 @@ def _stringify_field_value(value) -> str:
 
 
 def _load_pipeline_events_from_jsonl(*, target_date: str) -> tuple[list[PerfEvent], list[PerfEvent]]:
-    path = _jsonl_path(target_date)
-    if not path.exists():
-        return [], []
+    # DB 우선, 당일 파일 병합으로 pipeline events 로드
+    raw_events = load_pipeline_events(target_date, include_file_for_today=True)
 
     entry_events: list[PerfEvent] = []
     holding_events: list[PerfEvent] = []
 
-    with open(path, "r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                payload = json.loads(line)
-            except Exception:
-                continue
+    for payload in raw_events:
+        pipeline = str(payload.get("pipeline") or "").strip()
+        if pipeline not in {"ENTRY_PIPELINE", "HOLDING_PIPELINE"}:
+            continue
+        if payload.get("event_type") not in (None, "", "pipeline_event"):
+            continue
 
-            pipeline = str(payload.get("pipeline") or "").strip()
-            if pipeline not in {"ENTRY_PIPELINE", "HOLDING_PIPELINE"}:
-                continue
-            if payload.get("event_type") not in (None, "", "pipeline_event"):
-                continue
+        stock_name = str(payload.get("stock_name") or "").strip()
+        stock_code = str(payload.get("stock_code") or "").strip()
+        stage = str(payload.get("stage") or "").strip()
+        emitted_at = str(payload.get("emitted_at") or "").strip()
+        if not stock_name or not stock_code or not stage or not emitted_at:
+            continue
 
-            stock_name = str(payload.get("stock_name") or "").strip()
-            stock_code = str(payload.get("stock_code") or "").strip()
-            stage = str(payload.get("stage") or "").strip()
-            emitted_at = str(payload.get("emitted_at") or "").strip()
-            if not stock_name or not stock_code or not stage or not emitted_at:
-                continue
+        try:
+            emitted_dt = datetime.fromisoformat(emitted_at)
+        except Exception:
+            continue
+        if emitted_dt.strftime("%Y-%m-%d") != target_date:
+            continue
 
-            try:
-                emitted_dt = datetime.fromisoformat(emitted_at)
-            except Exception:
-                continue
-            if emitted_dt.strftime("%Y-%m-%d") != target_date:
-                continue
+        fields_payload = payload.get("fields") or {}
+        if not isinstance(fields_payload, dict):
+            fields_payload = {}
+        fields = {
+            str(key): _stringify_field_value(value).replace("|", " ")
+            for key, value in fields_payload.items()
+        }
+        record_id = payload.get("record_id")
+        if record_id not in (None, "", 0):
+            fields.setdefault("id", str(record_id))
 
-            fields_payload = payload.get("fields") or {}
-            if not isinstance(fields_payload, dict):
-                fields_payload = {}
-            fields = {
-                str(key): _stringify_field_value(value).replace("|", " ")
-                for key, value in fields_payload.items()
-            }
-            record_id = payload.get("record_id")
-            if record_id not in (None, "", 0):
-                fields.setdefault("id", str(record_id))
-
-            event = PerfEvent(
-                timestamp=emitted_dt.strftime("%Y-%m-%d %H:%M:%S"),
-                name=stock_name,
-                code=stock_code,
-                stage=stage,
-                fields=fields,
-                raw_line=str(payload.get("text_payload") or ""),
-            )
-            if pipeline == "ENTRY_PIPELINE":
-                entry_events.append(event)
-            else:
-                holding_events.append(event)
+        event = PerfEvent(
+            timestamp=emitted_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            name=stock_name,
+            code=stock_code,
+            stage=stage,
+            fields=fields,
+            raw_line=str(payload.get("text_payload") or ""),
+        )
+        if pipeline == "ENTRY_PIPELINE":
+            entry_events.append(event)
+        else:
+            holding_events.append(event)
 
     def _sort_key(event: PerfEvent) -> tuple[datetime, str, str]:
         try:
@@ -1186,6 +1177,126 @@ def _build_watch_items(metrics: dict) -> list[dict]:
     return items
 
 
+def _build_judgment_gate(metrics: dict) -> dict:
+    # audited validation-axis 권고 기본값
+    n_min = 50
+    delta_min = 3.0
+
+    budget_pass_events = int(metrics.get("budget_pass_events", 0) or 0)
+    primary_metric_value = float(metrics.get("budget_pass_to_submitted_rate", 0.0) or 0.0)
+
+    ai_overlap_events = int(metrics.get("ai_overlap_events", 0) or 0)
+    ai_overlap_blocked_events = int(metrics.get("ai_overlap_blocked_events", 0) or 0)
+    reject_rate = _ratio(ai_overlap_blocked_events, ai_overlap_events)
+
+    partial_fill_events = int(metrics.get("partial_fill_events", 0) or 0)
+    full_fill_events = int(metrics.get("full_fill_events", 0) or 0)
+    partial_fill_ratio = _ratio(partial_fill_events, partial_fill_events + full_fill_events)
+
+    latency_p95 = float(metrics.get("gatekeeper_eval_ms_p95", 0.0) or 0.0)
+    submitted_events = int(metrics.get("order_bundle_submitted_events", 0) or 0)
+    rebase_events = int(metrics.get("position_rebased_after_fill_events", 0) or 0)
+    reentry_freq = _ratio(rebase_events, submitted_events)
+
+    rollback_limits = {
+        "reject_rate_max": 70.0,
+        "partial_fill_ratio_max": 65.0,
+        "latency_p95_max": 5000.0,
+        "reentry_freq_max": 180.0,
+    }
+    rollback_checks = {
+        "reject_rate_ok": reject_rate <= rollback_limits["reject_rate_max"],
+        "partial_fill_ratio_ok": partial_fill_ratio <= rollback_limits["partial_fill_ratio_max"],
+        "latency_p95_ok": latency_p95 <= rollback_limits["latency_p95_max"],
+        "reentry_freq_ok": reentry_freq <= rollback_limits["reentry_freq_max"],
+    }
+
+    return {
+        "n_min": n_min,
+        "n_current": budget_pass_events,
+        "n_ok": budget_pass_events >= n_min,
+        "delta_min": delta_min,
+        "primary_metric_name": "budget_pass_to_submitted_rate",
+        "primary_metric_value": round(primary_metric_value, 1),
+        "primary_metric_ok": primary_metric_value >= delta_min,
+        "rollback_limits": rollback_limits,
+        "rollback_values": {
+            "reject_rate": round(reject_rate, 1),
+            "partial_fill_ratio": round(partial_fill_ratio, 1),
+            "latency_p95": round(latency_p95, 1),
+            "reentry_freq": round(reentry_freq, 1),
+        },
+        "rollback_checks": rollback_checks,
+        "ready": (budget_pass_events >= n_min)
+        and (primary_metric_value >= delta_min)
+        and all(rollback_checks.values()),
+        "note": (
+            "PrimaryMetric은 budget_pass_to_submitted_rate를 사용하며, "
+            "Δ_min은 절대 하한(+3.0%p)으로 계산했습니다."
+        ),
+    }
+
+
+def _build_holding_axis_summary(holding_events: list[PerfEvent], exit_signals: list[PerfEvent], dual_persona_events: list[PerfEvent]) -> dict:
+    holding_action_applied = 0
+    holding_force_exit_triggered = 0
+    override_versions: set[str] = set()
+    force_exit_shadow_samples = 0
+
+    for event in holding_events:
+        stage = str(event.stage or "").strip()
+        fields = event.fields or {}
+        if stage == "holding_action_applied" or _safe_bool(fields.get("holding_action_applied"), False):
+            holding_action_applied += 1
+        if stage == "holding_force_exit_triggered" or _safe_bool(fields.get("holding_force_exit_triggered"), False):
+            holding_force_exit_triggered += 1
+
+        override_version = str(
+            fields.get("holding_override_rule_version")
+            or fields.get("override_rule_version")
+            or ""
+        ).strip()
+        if override_version:
+            override_versions.add(override_version)
+
+        action = str(fields.get("action") or "").strip().upper()
+        if action == "FORCE_EXIT":
+            force_exit_shadow_samples += 1
+
+    for event in dual_persona_events:
+        fields = event.fields or {}
+        action_fields = [
+            str(fields.get("gemini_action") or "").upper(),
+            str(fields.get("aggr_action") or "").upper(),
+            str(fields.get("cons_action") or "").upper(),
+            str(fields.get("fused_action") or "").upper(),
+        ]
+        if any("FORCE_EXIT" in item for item in action_fields):
+            force_exit_shadow_samples += 1
+
+    trailing_exit_total = 0
+    trailing_conflict_count = 0
+    for event in exit_signals:
+        exit_rule = str((event.fields or {}).get("exit_rule") or "").lower()
+        if "trailing" not in exit_rule:
+            continue
+        trailing_exit_total += 1
+        profit_rate = _safe_float((event.fields or {}).get("profit_rate"), None)
+        if profit_rate is not None and profit_rate <= 0:
+            trailing_conflict_count += 1
+
+    return {
+        "holding_action_applied": holding_action_applied,
+        "holding_force_exit_triggered": holding_force_exit_triggered,
+        "holding_override_rule_versions": sorted(override_versions),
+        "holding_override_rule_version_count": len(override_versions),
+        "force_exit_shadow_samples": force_exit_shadow_samples,
+        "trailing_conflict_rate": _ratio(trailing_conflict_count, trailing_exit_total),
+        "trailing_conflict_count": trailing_conflict_count,
+        "trailing_exit_total": trailing_exit_total,
+    }
+
+
 def build_performance_tuning_report(*, target_date: str, since_time: str | None = None) -> dict:
     entry_events, holding_events = _load_pipeline_events_from_jsonl(target_date=target_date)
     if not entry_events and not holding_events:
@@ -1454,6 +1565,12 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
         target_date=target_date,
     )
     auto_comments = _build_auto_comments(metrics, strategy_rows)
+    judgment_gate = _build_judgment_gate(metrics)
+    holding_axis = _build_holding_axis_summary(
+        holding_events=holding_events,
+        exit_signals=exit_signals,
+        dual_persona_events=dual_persona_events,
+    )
 
     top_holding_slow = sorted(
         [
@@ -1549,5 +1666,7 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
             "top_holding_slow": top_holding_slow,
             "top_gatekeeper_slow": top_gatekeeper_slow,
             "top_dual_persona_slow": top_dual_persona_slow,
+            "judgment_gate": judgment_gate,
+            "holding_axis": holding_axis,
         },
     }

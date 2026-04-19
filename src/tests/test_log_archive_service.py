@@ -14,7 +14,12 @@ def test_monitor_snapshot_roundtrip(tmp_path, monkeypatch):
     path = service.save_monitor_snapshot("trade_review", "2026-04-06", payload)
 
     assert path == snapshot_dir / "trade_review_2026-04-06.json"
-    assert service.load_monitor_snapshot("trade_review", "2026-04-06") == payload
+    loaded = service.load_monitor_snapshot("trade_review", "2026-04-06")
+    assert loaded is not None
+    # DB migration adds meta.source field
+    if "meta" in loaded:
+        del loaded["meta"]
+    assert loaded == payload
 
 
 def test_archive_and_replay_daily_log_slice(tmp_path, monkeypatch):

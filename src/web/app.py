@@ -140,6 +140,17 @@ def _load_or_build_performance_tuning_report(
     report = _load_saved_performance_tuning_snapshot(target_date, since, refresh)
     if report is None:
         report = build_performance_tuning_report(target_date=target_date, since_time=since)
+        # 빌드된 리포트에 meta.source 추가
+        if "meta" not in report:
+            report["meta"] = {}
+        report["meta"]["source"] = "built"
+    else:
+        # 스냅샷에서 로드된 리포트는 이미 meta.source를 가질 수 있음 (db/file)
+        # 없으면 추가
+        if "meta" not in report:
+            report["meta"] = {}
+        if "source" not in report["meta"]:
+            report["meta"]["source"] = "unknown"
     return report
 
 
@@ -169,6 +180,17 @@ def _load_or_build_post_sell_feedback_report(
             top_n=max(1, int(top or 10)),
             evaluate_now=bool(evaluate_now_when_build),
         )
+        # 빌드된 리포트에 meta.source 추가
+        if "meta" not in report:
+            report["meta"] = {}
+        report["meta"]["source"] = "built"
+    else:
+        # 스냅샷에서 로드된 리포트는 이미 meta.source를 가질 수 있음 (db/file)
+        # 없으면 추가
+        if "meta" not in report:
+            report["meta"] = {}
+        if "source" not in report["meta"]:
+            report["meta"]["source"] = "unknown"
     return report
 
 
@@ -197,6 +219,17 @@ def _load_or_build_trade_review_report(
             top_n=max(1, int(top or 10)),
             scope=scope,
         )
+        # 빌드된 리포트에 meta.source 추가
+        if "meta" not in report:
+            report["meta"] = {}
+        report["meta"]["source"] = "built"
+    else:
+        # 스냅샷에서 로드된 리포트는 이미 meta.source를 가질 수 있음 (db/file)
+        # 없으면 추가
+        if "meta" not in report:
+            report["meta"] = {}
+        if "source" not in report["meta"]:
+            report["meta"]["source"] = "unknown"
     return report
 
 
@@ -1856,6 +1889,8 @@ def performance_tuning_preview():
     meta_info = _report_dict(report, 'meta')
     breakdowns = _report_dict(report, 'breakdowns')
     swing_daily_summary = _report_dict(report, 'sections', 'swing_daily_summary')
+    judgment_gate = _report_dict(report, 'sections', 'judgment_gate')
+    holding_axis = _report_dict(report, 'sections', 'holding_axis')
     top_holding_slow = _report_list(report, 'sections', 'top_holding_slow')
     top_gatekeeper_slow = _report_list(report, 'sections', 'top_gatekeeper_slow')
     top_dual_persona_slow = _report_list(report, 'sections', 'top_dual_persona_slow')
@@ -2385,6 +2420,121 @@ def performance_tuning_preview():
           </table>
         </div>
 
+        {% if judgment_gate %}
+        <div class="section two-col">
+          <div class="card">
+            <h2>판정 게이트 (N_min/Δ_min/PrimaryMetric)</h2>
+            <div class="mini-grid">
+              <div class="mini-card">
+                <div class="mini-label">N_min</div>
+                <div class="mini-value">{{ judgment_gate.n_min or 0 }}</div>
+              </div>
+              <div class="mini-card">
+                <div class="mini-label">N_current</div>
+                <div class="mini-value">{{ judgment_gate.n_current or 0 }}</div>
+              </div>
+              <div class="mini-card">
+                <div class="mini-label">N 판정</div>
+                <div class="mini-value {% if judgment_gate.n_ok %}good{% else %}bad{% endif %}">
+                  {{ '충족' if judgment_gate.n_ok else '미충족' }}
+                </div>
+              </div>
+              <div class="mini-card">
+                <div class="mini-label">PrimaryMetric</div>
+                <div class="mini-value">{{ judgment_gate.primary_metric_name or '-' }}</div>
+              </div>
+              <div class="mini-card">
+                <div class="mini-label">현재값</div>
+                <div class="mini-value">{{ judgment_gate.primary_metric_value or 0 }}%</div>
+              </div>
+              <div class="mini-card">
+                <div class="mini-label">Δ_min</div>
+                <div class="mini-value">{{ judgment_gate.delta_min or 0 }}%p</div>
+              </div>
+            </div>
+            <div class="meta" style="margin-top: 10px;">
+              {{ judgment_gate.note or '' }}
+            </div>
+            <div class="meta" style="margin-top: 8px;">
+              종합 판정:
+              <span class="pill {{ 'tone-good' if judgment_gate.ready else 'tone-warn' }}">
+                {{ 'GO 후보' if judgment_gate.ready else '보류 후보' }}
+              </span>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>Rollback Trigger</h2>
+            <table>
+              <thead>
+                <tr>
+                  <th>지표</th>
+                  <th>현재값</th>
+                  <th>상한</th>
+                  <th>판정</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>reject_rate</td>
+                  <td>{{ judgment_gate.rollback_values.reject_rate or 0 }}%</td>
+                  <td>{{ judgment_gate.rollback_limits.reject_rate_max or 0 }}%</td>
+                  <td>{{ 'OK' if judgment_gate.rollback_checks.reject_rate_ok else 'ALERT' }}</td>
+                </tr>
+                <tr>
+                  <td>partial_fill_ratio</td>
+                  <td>{{ judgment_gate.rollback_values.partial_fill_ratio or 0 }}%</td>
+                  <td>{{ judgment_gate.rollback_limits.partial_fill_ratio_max or 0 }}%</td>
+                  <td>{{ 'OK' if judgment_gate.rollback_checks.partial_fill_ratio_ok else 'ALERT' }}</td>
+                </tr>
+                <tr>
+                  <td>latency_p95</td>
+                  <td>{{ judgment_gate.rollback_values.latency_p95 or 0 }}ms</td>
+                  <td>{{ judgment_gate.rollback_limits.latency_p95_max or 0 }}ms</td>
+                  <td>{{ 'OK' if judgment_gate.rollback_checks.latency_p95_ok else 'ALERT' }}</td>
+                </tr>
+                <tr>
+                  <td>reentry_freq</td>
+                  <td>{{ judgment_gate.rollback_values.reentry_freq or 0 }}%</td>
+                  <td>{{ judgment_gate.rollback_limits.reentry_freq_max or 0 }}%</td>
+                  <td>{{ 'OK' if judgment_gate.rollback_checks.reentry_freq_ok else 'ALERT' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        {% endif %}
+
+        {% if holding_axis %}
+        <div class="section card">
+          <h2>HOLDING 필수 관찰축 (작업10)</h2>
+          <div class="mini-grid">
+            <div class="mini-card">
+              <div class="mini-label">holding_action_applied</div>
+              <div class="mini-value">{{ holding_axis.holding_action_applied or 0 }}</div>
+            </div>
+            <div class="mini-card">
+              <div class="mini-label">holding_force_exit_triggered</div>
+              <div class="mini-value">{{ holding_axis.holding_force_exit_triggered or 0 }}</div>
+            </div>
+            <div class="mini-card">
+              <div class="mini-label">holding_override_rule_version</div>
+              <div class="mini-value">{{ holding_axis.holding_override_rule_version_count or 0 }}</div>
+              <div class="hint">{{ (holding_axis.holding_override_rule_versions or [])|join(', ') }}</div>
+            </div>
+            <div class="mini-card">
+              <div class="mini-label">FORCE_EXIT shadow 표본</div>
+              <div class="mini-value">{{ holding_axis.force_exit_shadow_samples or 0 }}</div>
+            </div>
+            <div class="mini-card">
+              <div class="mini-label">trailing 충돌률</div>
+              <div class="mini-value">{{ holding_axis.trailing_conflict_rate or 0 }}%</div>
+              <div class="hint">{{ holding_axis.trailing_conflict_count or 0 }}/{{ holding_axis.trailing_exit_total or 0 }}건</div>
+            </div>
+          </div>
+        </div>
+        {% endif %}
+
         <div class="section two-col">
           <div class="card">
             <h2>보유 AI 경로 분포</h2>
@@ -2638,6 +2788,8 @@ def performance_tuning_preview():
         meta_info=meta_info,
         breakdowns=breakdowns,
         swing_daily_summary=swing_daily_summary,
+        judgment_gate=judgment_gate,
+        holding_axis=holding_axis,
         top_holding_slow=top_holding_slow,
         top_gatekeeper_slow=top_gatekeeper_slow,
         top_dual_persona_slow=top_dual_persona_slow,

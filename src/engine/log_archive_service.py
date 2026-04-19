@@ -9,6 +9,10 @@ from pathlib import Path
 from typing import Iterable
 
 from src.utils.constants import DATA_DIR
+from src.engine.dashboard_data_repository import (
+    load_monitor_snapshot_prefer_db,
+    upsert_monitor_snapshot,
+)
 
 
 LOG_ARCHIVE_DIR = DATA_DIR / "log_archive"
@@ -27,17 +31,21 @@ def _snapshot_path(kind: str, target_date: str) -> Path:
 
 
 def load_monitor_snapshot(kind: str, target_date: str) -> dict | None:
-    path = _snapshot_path(kind, target_date)
-    if not path.exists():
-        return None
-    with open(path, "r", encoding="utf-8") as handle:
-        return json.load(handle)
+    """DB 우선, 당일 파일 우선으로 모니터 스냅샷을 로드합니다."""
+    return load_monitor_snapshot_prefer_db(kind, target_date)
 
 
 def save_monitor_snapshot(kind: str, target_date: str, payload: dict) -> Path:
     path = _snapshot_path(kind, target_date)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, ensure_ascii=False, indent=2)
+    # DB에도 저장 (병행)
+    try:
+        upsert_monitor_snapshot(kind, target_date, payload)
+    except Exception as e:
+        # DB 저장 실패는 로그만 남기고 파일 저장은 유지
+        import logging
+        logging.getLogger(__name__).warning("DB 저장 실패 (스냅샷 %s %s): %s", kind, target_date, e)
     return path
 
 

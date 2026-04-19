@@ -1,19 +1,19 @@
 {
-  "timestamp": "2026-04-16T16:03:57.552047",
-  "vix_close": 18.170000076293945,
-  "vix_ma3": 18.5500005086263,
+  "timestamp": "2026-04-17T12:53:02.327673",
+  "vix_close": 17.940000534057617,
+  "vix_ma3": 18.156667073567707,
   "vix_peak_passed": false,
   "vix_two_day_down": true,
   "vix_extreme": false,
-  "wti_close": 91.62999725341797,
-  "wti_rsi": 47.885519323791115,
-  "wti_macd": 2.453791671026309,
-  "wti_macd_signal": 4.87107796919746,
+  "wti_close": 89.91999816894531,
+  "wti_rsi": 46.334900356048585,
+  "wti_macd": 2.3173814876495697,
+  "wti_macd_signal": 4.843795932522111,
   "wti_dead_cross": false,
-  "wti_from_recent_high_pct": -18.87560891621256,
+  "wti_from_recent_high_pct": -20.389552369665008,
   "oil_reversal": true,
-  "fng_value": 56.4571428571429,
-  "fng_prev": 56.4571428571429,
+  "fng_value": 62.2285714285714,
+  "fng_prev": 62.2285714285714,
   "fng_description": "greed",
   "fng_extreme_fear": false,
   "fng_recovery": false,
@@ -26,8 +26,8 @@
   ],
   "debug": {
     "oil_rsi_turned": false,
-    "fng_curr": 56.4571428571429,
-    "fng_prev": 56.4571428571429,
+    "fng_curr": 62.2285714285714,
+    "fng_prev": 62.2285714285714,
     "score_threshold": 70,
     "component_scores": {
       "vix": 0,
@@ -38,6 +38,6 @@
     "oil_signal": "reversal",
     "fng_signal": "none"
   },
-  "cached_session_date": "2026-04-16",
-  "cached_at": "2026-04-16T16:03:57.559831+09:00"
+  "cached_session_date": "2026-04-17",
+  "cached_at": "2026-04-17T12:53:02.337061+09:00"
 }

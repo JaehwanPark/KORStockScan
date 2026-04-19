@@ -45,6 +45,11 @@ def test_performance_tuning_report_prefers_jsonl_events(monkeypatch, tmp_path):
         ]
 
     monkeypatch.setattr(report_mod, "DATA_DIR", data_dir)
+    # dashboard_data_repository도 같은 DATA_DIR을 사용하도록 모킹
+    import src.engine.dashboard_data_repository as dash_repo
+    monkeypatch.setattr(dash_repo, "DATA_DIR", data_dir)
+    monkeypatch.setattr(dash_repo, "PIPELINE_EVENTS_DIR", data_dir / "pipeline_events")
+    monkeypatch.setattr(dash_repo, "MONITOR_SNAPSHOT_DIR", data_dir / "report" / "monitor_snapshots")
     monkeypatch.setattr(report_mod, "_iter_target_lines", _fake_iter)
     monkeypatch.setattr(
         report_mod,

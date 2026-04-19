@@ -1,85 +1,86 @@
 {
-  "bundle_as_of": "2026-04-15T22:20:20Z",
+  "bundle_as_of": "2026-04-16T22:20:18Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 7022.95,
-    "prev_value": 6967.38,
-    "change": 55.57,
-    "change_pct": 0.8,
-    "as_of": "2026-04-15T20:00:00Z",
-    "source": "TheStreet / CT Insider"
+    "value": 7041.28,
+    "prev_value": 7022.95,
+    "change": 18.33,
+    "change_pct": 0.26,
+    "as_of": "2026-04-16T20:00:00Z",
+    "source": "TheStreet"
   },
   "nasdaq": {
     "name": "NASDAQ Composite",
-    "value": 24016.02,
-    "prev_value": 23639.09,
-    "change": 376.93,
-    "change_pct": 1.6,
-    "as_of": "2026-04-15T20:00:00Z",
-    "source": "TheStreet / CT Insider"
+    "value": 24102.7,
+    "prev_value": 24016.01,
+    "change": 86.69,
+    "change_pct": 0.36,
+    "as_of": "2026-04-16T20:00:00Z",
+    "source": "TheStreet"
   },
   "vix": {
     "name": "VIX",
-    "value": 18.01,
-    "prev_value": 18.36,
-    "change": -0.35,
-    "change_pct": -1.91,
-    "as_of": "2026-04-15T19:27:00Z",
-    "source": "Cboe Global Markets"
+    "value": 17.87,
+    "prev_value": 18.17,
+    "change": -0.3,
+    "change_pct": -1.65,
+    "as_of": "2026-04-16T20:00:00Z",
+    "source": "Reddit / r/FluentInFinance"
   },
   "us10y": {
-    "name": "US 10-Year Treasury Yield",
-    "value": 4.281,
-    "prev_value": 4.256,
-    "change": 0.025,
-    "change_pct": 0.59,
-    "as_of": "2026-04-15T20:00:00Z",
-    "source": "TheStreet / StoneX"
+    "name": "US 10Y Treasury Yield",
+    "value": 4.313,
+    "prev_value": 4.279,
+    "change": 0.034,
+    "change_pct": 0.79,
+    "as_of": "2026-04-16T20:00:00Z",
+    "source": "TheStreet"
   },
   "brent": {
     "name": "Brent Crude",
-    "value": 94.27,
-    "prev_value": 94.79,
-    "change": -0.52,
-    "change_pct": -0.55,
-    "as_of": "2026-04-15T00:54:00Z",
-    "source": "The Economic Times"
+    "value": 97.51,
+    "prev_value": 94.94,
+    "change": 2.57,
+    "change_pct": 2.71,
+    "as_of": "2026-04-16T20:00:00Z",
+    "source": "Trading Economics"
   },
   "headlines": [
     {
-      "title": "US pivots to economic warfare on Iran with naval blockade and secondary sanctions on banks",
-      "source": "AP / WRAL",
-      "published_at": "2026-04-15T20:13:11Z",
-      "url": "https://www.wral.com/"
-    },
-    {
-      "title": "S&P 500 closes at new record of 7,022.95, Nasdaq clears 24,000 on AI strength and easing war fears",
+      "title": "Nasdaq notches 12th straight daily gain; longest winning streak since July 2009",
       "source": "TheStreet",
-      "published_at": "2026-04-15T20:00:00Z",
-      "url": "https://www.thestreet.com/"
+      "published_at": "2026-04-16T20:08:00Z",
+      "url": "https://www.thestreet.com"
     },
     {
-      "title": "Oil prices fall below $95 on hopes for renewed US-Iran peace talks",
-      "source": "The Economic Times",
-      "published_at": "2026-04-15T02:55:00Z",
-      "url": "https://economictimes.indiatimes.com/"
+      "title": "Oil Prices Climb on Ceasefire Extension Caution",
+      "source": "Transport Topics",
+      "published_at": "2026-04-16T12:52:00Z",
+      "url": "https://www.ttnews.com"
     },
     {
-      "title": "UK Chancellor Reeves calls US war on Iran a 'mistake' amid global economic fallout",
-      "source": "The Guardian",
-      "published_at": "2026-04-15T12:00:00Z",
-      "url": "https://www.theguardian.com/"
+      "title": "Rally Slows, Oil Up After Stocks Post New Highs",
+      "source": "Charles Schwab",
+      "published_at": "2026-04-16T13:13:00Z",
+      "url": "https://www.schwab.com"
     },
     {
-      "title": "Iran's economy faces collapse within three months under blockade, experts warn",
-      "source": "The Jerusalem Post",
-      "published_at": "2026-04-15T10:00:00Z",
-      "url": "https://www.jpost.com/"
+      "title": "Treasurers increase money market fund allocations amid rising volatility",
+      "source": "Tradeweb",
+      "published_at": "2026-04-16T12:00:00Z",
+      "url": "https://www.tradeweb.com"
+    },
+    {
+      "title": "Wall Street holds near its record high even as oil prices climb",
+      "source": "Pittsburgh Post-Gazette",
+      "published_at": "2026-04-16T09:21:00Z",
+      "url": "https://www.post-gazette.com"
     }
   ],
   "notes": [
-    "U.S. markets surged to record highs on April 15, driven by strong tech performance (Nasdaq > 24K) and optimism over potential U.S.-Iran negotiations.",
-    "The U.S. has enforced a naval blockade on Iranian ports, halting maritime trade, while Treasury Secretary Scott Bessent announced a pivot to economic warfare with secondary sanctions.",
-    "Brent crude dipped slightly below $95 per barrel amid shifting geopolitical risk premiums and hopes for a continued ceasefire."
+    "S&P 500 and Nasdaq set fresh record highs, largely driven by AI momentum and hopes of a Middle East ceasefire.",
+    "The Nasdaq Composite recorded its 12th straight day of gains, its longest streak since 2009.",
+    "Oil prices traded higher amid continued geopolitical tensions and Strait of Hormuz uncertainties.",
+    "The US 10-year Treasury yield rose slightly to 4.313%."
   ]
 }
