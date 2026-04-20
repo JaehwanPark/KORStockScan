@@ -4,13 +4,14 @@
 > 현재 실행 기준은 [plan-korStockScanPerformanceOptimization.prompt.md](./plan-korStockScanPerformanceOptimization.prompt.md), 기본계획 대비 실행 변경은 [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md), 반복 baseline은 [plan-korStockScanPerformanceOptimization.performance-report.md](./plan-korStockScanPerformanceOptimization.performance-report.md)에서 관리한다.
 
 작성일: `2026-04-17`  
-기준 데이터: `data/report/monitor_snapshots/*_2026-04-17.json`, `analysis/gemini_scalping_pattern_lab/outputs/*`, `analysis/claude_scalping_pattern_lab/outputs/*`
+정합성 보정: `2026-04-20`  
+기준 데이터: `DB 우선 조회 + data/report/monitor_snapshots/*_2026-04-17.json.gz`, `analysis/gemini_scalping_pattern_lab/outputs/*`, `analysis/claude_scalping_pattern_lab/outputs/*`
 
 ## 1. 판정
 
-1. `2026-04-17`은 운영기간 중 `거래수 최대`, `손실건수 최대`, `실현손익 최저`의 날이 맞다. 다만 동시에 `split-entry`, `holding/exit`, `entry blocker` 전 구간에서 가장 고밀도 표본을 확보한 날이기도 하다.
-2. 현재 튜닝 계획은 `리포트 정합성 -> split-entry 누수 차단 -> HOLDING/청산 수익전환 -> 그 다음 진입확장` 순서로 재정렬하는 것이 맞다. `latency/tag/threshold`를 먼저 넓히는 것은 다음주 가시적 성과 확률을 낮춘다.
-3. 다음주 손익을 익절 전환할 현실적인 경로는 `split-entry soft-stop 누수 억제`와 `HOLDING/청산 판단 분리` 2축을 먼저 닫는 것이다. 진입 완화는 그 뒤 `1축 canary`로만 다뤄야 한다.
+1. `2026-04-17`은 운영기간 중 `거래수 최대`, `손실건수 최대`, `실현손익 최저`의 날이 맞다. 다만 동시에 `latency`, `partial/rebase`, `holding/exit`, `entry blocker` 전 구간에서 가장 고밀도 표본을 확보한 날이기도 하다.
+2. 현재 튜닝 계획은 `리포트 정합성 -> latency/partial/rebase 병목 확인 -> split-entry 누수 차단 -> HOLDING/청산 수익전환 -> 그 다음 진입확장` 순서로 재정렬하는 것이 맞다.
+3. 다음주 손익을 플러스로 되돌릴 현실적인 경로는 `상류 병목(latency + partial/rebase)`과 `HOLDING/청산 판단 분리`를 먼저 닫는 것이다. `same_symbol_repeat`는 독립 원인이라기보다 하위 증상일 가능성을 열어둬야 한다.
 
 ## 2. 근거
 
@@ -57,31 +58,34 @@
    - `partial_fill`: `82`건으로 직전 최대치 `44`건의 `1.86배`
    - `post_sell 평가`: `68`건으로 직전 최대치 `30`건의 `2.27배`
    - `missed_entry 평가`: `194`건으로 직전 최대치 `124`건의 `1.56배`
-3. 더 중요한 것은 "양"이 아니라 "핵심 패턴 점유율"이다.
-   - `same_symbol_repeat_flag`: 전체의 `55.1%`
-   - `partial_then_expand_flag`: 전체의 `52.2%`
-   - `multi_rebase_flag`: 전체의 `52.2%`
-   - `rebase_integrity_flag`: 전체의 `56.2%`
-   - `split-entry + scalp_soft_stop_pct`: 전체의 `92.9%`
-   - `full_fill + scalp_trailing_take_profit`: 전체의 `84.6%`
-   - `split-entry + scalp_trailing_take_profit`: 전체의 `90.0%`
-4. 결론적으로 오늘 데이터는 평시 하루치가 아니라 `2~3영업일 이상`의 진단 압축 효과가 있었다고 보는 것이 타당하다. 특히 `split-entry soft-stop` 손실축과 `trailing_take_profit` 수익축이 거의 같은 날에 대량 확보됐다는 점이 중요하다.
+3. 더 중요한 것은 상류 병목의 밀도다.
+   - `budget_pass_events=6634`
+   - `latency_block_events=6567`
+   - `quote_fresh_latency_blocks=5354`
+   - `partial_fill_events=82`
+   - `full_fill_events=33`
+   - `position_rebased_after_fill_events=117`
+   - `gatekeeper_eval_ms_p95=29336ms`
+   - `exit_rules.scalp_soft_stop_pct=26`
+   - `partial_fill_completed_avg_profit_rate=-0.261`
+4. 결론적으로 오늘 데이터는 평시 하루치가 아니라 `2~3영업일 이상`의 진단 압축 효과가 있었다고 보는 것이 타당하다. 특히 `latency/partial/rebase` 병목과 `HOLDING missed_upside`가 같은 날 고밀도로 확보됐다는 점이 중요하다.
 5. 다만 `missed_entry +1,896,874원`, `post_sell +1,612,548원`은 `10분 counterfactual / extra upside` 기반 추정치이므로 직접 실현가능 이익으로 합산하면 안 된다. 이 수치는 `오늘 손실을 보전할 여지`가 아니라 `어느 축을 먼저 손대야 하는지 보여주는 진단 가치`로 해석해야 한다.
+6. `same_symbol_repeat_flag=55.1%`는 당시 문서 파생 baseline으로 남아 있으나, `2026-04-20` 현재 원 raw 필드와 산식 추적이 끝나지 않아 hard KPI/rollback 기준에서는 제외한다.
 
 ### 2-4. 진입부터 청산까지 개선 가능성 예측
 
 | 단계 | 현재 관측 | 개선 여지 | 신뢰도 | 해석 |
 | --- | --- | --- | --- | --- |
 | `WATCHING/진입 차단` | `MISSED_WINNER=157`, blocker는 `latency`, `AI threshold`, `overbought` 혼재 | `매우 큼` | `중간` | 기회비용은 크지만 broad relax는 오판 리스크가 커서 다음주 1순위는 아님 |
-| `체결/분할진입` | `split-entry + soft_stop`가 핵심 손실축, rebase/repeat 이상치가 오늘 집중 | `매우 큼` | `높음` | 다음주 실손익 개선 레버리지가 가장 큼 |
+| `체결/분할진입` | `latency + partial/rebase + split-entry soft_stop`가 핵심 손실축 | `매우 큼` | `높음` | 다음주 실손익 개선 레버리지가 가장 큼 |
 | `보유/청산` | `MISSED_UPSIDE=19`, `capture_efficiency_avg_pct=39.8` | `큼` | `중상` | 손절을 줄이는 것만으로는 부족하고, 승자 보유 품질 개선이 필요 |
 | `리포트/운영 정합성` | stale label, COMPLETED 오판정, event/latest 혼선이 정리 단계 | `중간` | `높음` | 직접 수익축은 아니지만 잘못된 튜닝을 막는 필수 축 |
 
 추정:
 
-1. 다음주 `가시적 성과`가 나올 확률은 `split-entry 누수 차단 + HOLDING 분리`를 순서대로 실행할 때가 가장 높다.
+1. 다음주 `가시적 성과`가 나올 확률은 `latency/partial/rebase 병목 확인 + split-entry 누수 차단 + HOLDING 분리`를 순서대로 실행할 때가 가장 높다.
 2. 반대로 `latency/tag/threshold`를 먼저 넓히면 거래수는 늘어도 손실축이 같이 확대될 가능성이 커서 `익절 전환 확률`은 낮아진다.
-3. 운영 목표는 `거래 수 확대`가 아니라 `split-entry soft-stop 비중 축소`와 `post-sell missed_upside_rate 축소`다.
+3. 운영 목표는 `거래 수 확대`가 아니라 `latency/partial/rebase 오염 축소`, `split-entry soft-stop 비중 축소`, `post-sell missed_upside_rate 축소`다.
 
 ### 2-5. Gemini / Claude 인사이트 비교와 미진한 부분
 
@@ -118,13 +122,16 @@
    - `HOLDING shadow 1일차 판정`
    - 다음 영업일 승격축 `1개`를 확정한다.
 5. `latency/tag/threshold` broad relax는 위 1~4가 닫히기 전까지 승격하지 않는다.
+6. `2026-04-20~2026-04-21 POSTCLOSE`
+   - `baseline source-of-truth audit`를 먼저 닫는다.
+   - `trade_review/performance_tuning/post_sell_feedback/missed_entry_counterfactual`별 소유 지표와 금지 지표를 명시한다.
 
 ### 3-2. 다음주 가시적 성과 기준
 
-1. `split-entry + scalp_soft_stop_pct` 빈도가 `2026-04-17` 기준선보다 유의하게 낮아질 것
-2. `same_symbol_repeat_flag`가 감소할 것
-3. `post_sell_feedback missed_upside_rate`가 현재 `27.9%`보다 내려갈 것
-4. `capture_efficiency_avg_pct`가 현재 `39.8%`보다 올라갈 것
+1. `latency_block_events / budget_pass_events`가 `2026-04-17` 기준선보다 유의하게 낮아질 것
+2. `partial_fill_completed_avg_profit_rate`가 `-0.261`보다 개선될 것
+3. `exit_rules.scalp_soft_stop_pct` count가 `26`보다 유의하게 낮아질 것
+4. `post_sell_feedback missed_upside_rate`가 현재 기준선보다 내려가고 `capture_efficiency_avg_pct`가 `39.8%`보다 올라갈 것
 5. 위 1~4가 개선되지 않으면 entry 확장은 중단하고 원인 재판정으로 되돌린다.
 
 ## 4. 요청사항

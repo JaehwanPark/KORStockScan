@@ -54,6 +54,34 @@
 3. `16:00~16:10` 작업 6/7 보류 유지 또는 착수 전환 재판정
 4. `16:10~16:20` 판정 결과를 `2026-04-20-stage2-todo-checklist.md`와 본 보고서에 역기록
 
+### 4-3) 2026-04-20 POSTCLOSE 실행 결과
+
+#### 판정
+
+- `main runtime OPENAI 라우팅/감사필드 실표본 확인`: `완료`
+- `main runtime OpenAI 모델 식별자 검증/수정`: `수정 완료`
+- `작업 6/7 보류 유지 또는 착수 전환 재판정`: `보류 유지`
+- `작업 9 정량형 수급 피처 이식 1차 확대 여부`: `조건부 적합 / 확대 보류`
+
+#### 근거
+
+1. `logs/runtime_ai_router_info.log`에 `2026-04-20` `role=main scalping_openai=on` 기록이 남아 main OpenAI 라우팅 실표본을 확인했다.
+2. `logs/pipeline_event_logger_info.log`의 `ai_confirmed`, `ai_holding_review` 실표본에서 아래 감사 필드를 확인했다.
+   - `scalp_feature_packet_version=scalp_feature_packet_v1`
+   - `tick_acceleration_ratio_sent=True`
+   - `same_price_buy_absorption_sent=True`
+   - `large_sell_print_detected_sent=True`
+   - `ask_depth_ratio_sent=True`
+3. `src/engine/kiwoom_sniper_v2.py`의 메인 OpenAI 모델 하드코딩은 제거하고, `TRADING_RULES.GPT_FAST_MODEL/GPT_DEEP_MODEL/GPT_REPORT_MODEL`을 사용하도록 교정했다. 운영 상수는 `gpt-5.4-nano` 유지가 기준이다.
+4. 다만 같은 날 `ai_confirmed` 일부 표본에 `ai_parse_ok=False`, `ai_response_ms=0`, `ai_result_source=-`가 남아 결과 경로 안정화는 미완료다.
+5. `작업 6/7`은 `holding_action_applied=0`, `holding_force_exit_triggered=0`, `holding_override_rule_version_count=0` 상태여서 오늘 착수 전환 시 HOLDING 축과 원인 귀속이 겹친다.
+
+#### 다음 액션
+
+1. `bot_main` 재기동 후 startup log로 실제 OpenAI 모델명이 `gpt-5.4-nano`로 반영됐는지 확인한다.
+2. `ai_parse_ok=False` 경로를 우선 정리하고, `작업 9` 확대 여부는 `2026-04-22 POSTCLOSE`에 다시 판정한다.
+3. `작업 6/7`은 `2026-04-22 POSTCLOSE` HOLDING 축 재판정 이후에만 다시 연다.
+
 ### 4-2) 체크리스트 (자동 파싱 대상)
 
 - [ ] `[AuditFollowup0418] main runtime OPENAI 라우팅/감사필드 실표본 확인` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 15:40~15:50`, `Track: AIPrompt`)

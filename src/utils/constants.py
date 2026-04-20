@@ -74,9 +74,9 @@ class TradingConfig:
     # [매매 비중 설정] 전략별 주문 가능 현금 대비 1회 매수 투입 비율
     INVEST_RATIO_KOSPI: float = 0.25  # DEPRECATED: MIN/MAX 비중으로 대체됨
     INVEST_RATIO_KOSDAQ: float = 0.15  # DEPRECATED: MIN/MAX 비중으로 대체됨
-    INVEST_RATIO_SCALPING_MIN: float = 0.10  # 초단타 스캘핑 AI 점수 0일 때 최소 투자 비율 (10%)
-    INVEST_RATIO_SCALPING_MAX: float = 0.30  # 초단타 스캘핑 AI 점수 100일 때 최대 투자 비율 (30%)
-    SCALPING_MAX_BUY_BUDGET_KRW: int = 1_600_000  # 2026-04-21 canary: 스캘핑 신규 진입 1회 절대 투자금 상한 (2,000,000 -> 1,600,000)
+    INVEST_RATIO_SCALPING_MIN: float = 0.07  # 2026-04-20 risk cut: 스캘핑 최소 투자 비율 (10% -> 7%)
+    INVEST_RATIO_SCALPING_MAX: float = 0.22  # 2026-04-20 risk cut: 스캘핑 최대 투자 비율 (30% -> 22%)
+    SCALPING_MAX_BUY_BUDGET_KRW: int = 1_200_000  # 2026-04-20 risk cut: 스캘핑 신규 진입 1회 절대 투자금 상한 (1,600,000 -> 1,200,000)
 
     # 💡 [신규 추가] 스윙 AI 동적 비중 조절용 (Min~Max)
     INVEST_RATIO_KOSDAQ_MIN: float = 0.05  # 코스닥 AI 점수 60점일 때 (5%)
@@ -144,7 +144,7 @@ class TradingConfig:
     SCALP_PRESET_HARD_STOP_FALLBACK_BASE_GRACE_SEC: int = 35  # SCALP_BASE + fallback 전용 유예시간
     SCALP_PRESET_HARD_STOP_FALLBACK_BASE_EMERGENCY_PCT: float = -1.2  # SCALP_BASE + fallback 비상 손절선
     SCALP_FALLBACK_ENTRY_QTY_MULTIPLIER: float = 0.70  # 2026-04-09 canary: fallback 진입 수량 배율(한 축만 적용)
-    SCALP_PARTIAL_FILL_RATIO_CANARY_ENABLED: bool = False  # partial fill 최소 체결비율 canary on/off
+    SCALP_PARTIAL_FILL_RATIO_CANARY_ENABLED: bool = True  # 2026-04-20 immediate fix: partial fill 최소 체결비율 canary on
     SCALP_PARTIAL_FILL_MIN_RATIO_DEFAULT: float = 0.20  # 기본 최소 체결비율
     SCALP_PARTIAL_FILL_MIN_RATIO_STRONG_ABS_OVERRIDE: float = 0.10  # strong_absolute_override 예외
     SCALP_PARTIAL_FILL_MIN_RATIO_PRESET_TP: float = 0.00  # SCALP_PRESET_TP 예외(적용 제외)
@@ -295,9 +295,9 @@ class TradingConfig:
     # ==========================================
     # 🎯 AI 엔진 제어값 (OpenAI)
     # ==========================================
-    GPT_FAST_MODEL = "gpt-4.1-mini"
-    GPT_DEEP_MODEL = "gpt-4.1-mini"
-    GPT_REPORT_MODEL = "gpt-4.1-mini"
+    GPT_FAST_MODEL = "gpt-5.4-nano"
+    GPT_DEEP_MODEL = "gpt-5.4-nano"
+    GPT_REPORT_MODEL = "gpt-5.4-nano"
     GPT_ENABLE_SCALPING_DEEP_RECHECK: bool = False
     GPT_ENGINE_MIN_INTERVAL: float = 0.5 # OpenAI 서버에 쏘는 최소 간격 (초 단위, 0.5초 = 500ms)
     OPENAI_DUAL_PERSONA_ENABLED: bool = True

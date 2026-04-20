@@ -68,6 +68,24 @@ PYTHONPATH=. .venv/bin/python -m py_compile src/engine/scalping_feature_packet.p
 
 - `exit code 0`
 
+## 4. 2026-04-20 POSTCLOSE 재판정 결과
+
+### 판정
+
+- `작업 10 HOLDING hybrid 적용`: `shadow-only 유지 / 확대 보류`
+- `작업 8 감사용 핵심값 3종 투입`: `미완료 유지`
+
+### 근거
+
+1. `performance_tuning_2026-04-20` 기준 `holding_action_applied=0`, `holding_force_exit_triggered=0`, `holding_override_rule_version_count=0`, `force_exit_shadow_samples=0`, `trailing_conflict_rate=0.0`라서 HOLDING hybrid 확대를 닫을 표본이 없다.
+2. `buy_pressure_10t`, `distance_from_day_high_pct`, `intraday_range_pct` 값 자체는 프롬프트에 포함되지만, 요구된 `buy_pressure_10t_sent`, `distance_from_day_high_pct_sent`, `intraday_range_pct_sent` 감사 필드는 main runtime 실표본과 코드에서 여전히 미확인이다.
+3. 따라서 `작업 10`은 `2026-04-22 POSTCLOSE` 최종판정으로 넘기고, `작업 8`은 같은 날짜에 `sent` 감사필드 구현 여부를 다시 확인하는 것이 맞다.
+
+### 다음 액션
+
+1. `2026-04-22 POSTCLOSE`에 `작업 10` 최종 확대 여부를 다시 판정한다.
+2. 같은 슬롯에서 `작업 8`의 `3개 sent 감사필드` 구현 여부를 확인하고, 미구현이면 사유를 유지한다.
+
 ## 참고 문서
 
 - [2026-04-19-stage2-todo-checklist.md](./2026-04-19-stage2-todo-checklist.md)

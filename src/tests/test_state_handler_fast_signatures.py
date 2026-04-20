@@ -46,6 +46,47 @@ def test_gatekeeper_fast_signature_absorbs_small_noise():
     assert sig_a == sig_b
 
 
+def test_gatekeeper_fast_signature_absorbs_small_price_and_orderbook_noise():
+    stock = {"position_tag": "SCANNER"}
+    ws_a = {
+        "curr": 12570,
+        "fluctuation": 3.42,
+        "volume": 1854321,
+        "v_pw": 118.1,
+        "buy_ratio": 62.4,
+        "prog_net_qty": 18490,
+        "prog_delta_qty": 2210,
+        "ask_tot": 184200,
+        "bid_tot": 218700,
+        "net_bid_depth": 11880,
+        "net_ask_depth": -3420,
+        "orderbook": {
+            "asks": [{"price": 12590}, {"price": 12600}],
+            "bids": [{"price": 12570}, {"price": 12560}],
+        },
+    }
+    ws_b = dict(ws_a)
+    ws_b.update({
+        "curr": 12610,
+        "volume": 1949999,
+        "v_pw": 119.4,
+        "buy_ratio": 67.9,
+        "prog_net_qty": 20510,
+        "prog_delta_qty": 4880,
+        "ask_tot": 199999,
+        "bid_tot": 241000,
+    })
+    ws_b["orderbook"] = {
+        "asks": [{"price": 12620}, {"price": 12630}],
+        "bids": [{"price": 12600}, {"price": 12590}],
+    }
+
+    sig_a = _build_gatekeeper_fast_signature(stock, ws_a, "KOSPI_ML", 86.0)
+    sig_b = _build_gatekeeper_fast_signature(stock, ws_b, "KOSPI_ML", 87.9)
+
+    assert sig_a == sig_b
+
+
 def test_holding_ai_fast_signature_changes_on_meaningful_orderbook_shift():
     ws_a = {
         "curr": 10000,

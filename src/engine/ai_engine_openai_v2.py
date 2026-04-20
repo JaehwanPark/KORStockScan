@@ -232,8 +232,8 @@ class GPTSniperEngine:
         self.key_cycle = cycle(self.api_keys) 
         self._rotate_client()
 
-        # OpenAI는 현재 gpt-4.1-mini를 기본 비교 기준선으로 사용한다.
-        self.fast_model_name = getattr(TRADING_RULES, 'GPT_FAST_MODEL', 'gpt-4.1-mini')
+        # 메인 스캘핑 OpenAI 기본 모델은 상수에서 주입하며, fallback도 nano 계열로 맞춘다.
+        self.fast_model_name = getattr(TRADING_RULES, 'GPT_FAST_MODEL', 'gpt-5.4-nano')
         self.deep_model_name = getattr(TRADING_RULES, 'GPT_DEEP_MODEL', self.fast_model_name)
         self.report_model_name = getattr(TRADING_RULES, 'GPT_REPORT_MODEL', self.fast_model_name)
         self.current_model_name = self.fast_model_name
@@ -269,6 +269,35 @@ class GPTSniperEngine:
     def _rotate_client(self):
         self.current_key = next(self.key_cycle)
         self.client = OpenAI(api_key=self.current_key)
+
+    def _parse_json_response_text(self, raw_text):
+        text = str(raw_text or "").strip()
+        if not text:
+            raise ValueError("OpenAI 응답 텍스트가 비어 있음")
+
+        candidates = [text]
+        fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+        if fence_match:
+            candidates.append(fence_match.group(1).strip())
+
+        block_match = re.search(r"\{.*\}", text, re.DOTALL)
+        if block_match:
+            candidates.append(block_match.group().strip())
+
+        seen = set()
+        for candidate in candidates:
+            normalized = candidate.strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            try:
+                parsed = json.loads(normalized)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                continue
+
+        raise ValueError(f"JSON 형식을 찾을 수 없음: {text[:500]}...")
     
     # ==========================================
     # 3. 💡 [아키텍처 포인트] 만능 API 호출기 (OpenAI 버전)
@@ -300,12 +329,11 @@ class GPTSniperEngine:
 
                     self._rotate_client()
 
-                    raw_text = response.choices[0].message.content.strip()
+                    raw_text = response.choices[0].message.content
                     if require_json:
-                        clean_json = re.sub(r"```json\s*|\s*```", "", raw_text)
-                        return json.loads(clean_json)
+                        return self._parse_json_response_text(raw_text)
                     else:
-                        return raw_text
+                        return str(raw_text or "").strip()
 
                 except RateLimitError as e:
                     last_error = str(e)
@@ -613,6 +641,31 @@ class GPTSniperEngine:
 
         return result
 
+    def _finalize_scalping_result(
+        self,
+        result,
+        *,
+        features,
+        prompt_type,
+        response_ms,
+        parse_ok,
+        parse_fail,
+        fallback_score_50,
+        result_source,
+        cache_hit=False,
+    ):
+        normalized = self._normalize_scalping_result(result)
+        normalized.update(build_scalping_feature_audit_fields(features))
+        normalized["ai_prompt_type"] = prompt_type
+        normalized["ai_prompt_version"] = "openai_v2_structured_v1"
+        normalized["ai_parse_ok"] = bool(parse_ok)
+        normalized["ai_parse_fail"] = bool(parse_fail)
+        normalized["ai_fallback_score_50"] = bool(fallback_score_50)
+        normalized["ai_response_ms"] = max(0, int(response_ms))
+        normalized["ai_result_source"] = str(result_source or "-")
+        normalized["cache_hit"] = bool(cache_hit)
+        return normalized
+
     # ==========================================
     # 6. 🚀 실전 분석 실행 메서드 5종 (Gemini 모델과 100% 호환)
     # ==========================================
@@ -648,6 +701,7 @@ class GPTSniperEngine:
 
             features = self._extract_scalping_features(ws_data, recent_ticks, recent_candles)
             formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
+            analysis_started = time.perf_counter()
             profile = str(prompt_profile or "shared").strip().lower()
             if profile == "watching":
                 prompt_type = "scalping_entry"
@@ -660,15 +714,31 @@ class GPTSniperEngine:
             formatted_data = f"[task_type]\n{prompt_type}\n\n{formatted_data}"
 
             # 1차: 빠른 모델
-            raw_result = self._call_openai_safe(
-                SCALPING_SYSTEM_PROMPT_V3,
-                formatted_data,
-                require_json=True,
-                context_name=f"{target_name}:{prompt_type}",
-                model_override=self.fast_model_name,
-                temperature_override=0.05
-            )
-            result = self._normalize_scalping_result(raw_result)
+            try:
+                raw_result = self._call_openai_safe(
+                    SCALPING_SYSTEM_PROMPT_V3,
+                    formatted_data,
+                    require_json=True,
+                    context_name=f"{target_name}:{prompt_type}",
+                    model_override=self.fast_model_name,
+                    temperature_override=0.05
+                )
+                result = self._normalize_scalping_result(raw_result)
+                result_source = "openai_live"
+            except Exception as e:
+                log_error(f"🚨 [{target_name}] OpenAI 실시간 분석 1차 파싱/호출 에러: {e}")
+                response_ms = int((time.perf_counter() - analysis_started) * 1000)
+                return self._finalize_scalping_result(
+                    {"action": "WAIT", "score": 50, "reason": "OpenAI parse fallback"},
+                    features=features,
+                    prompt_type=prompt_type,
+                    response_ms=response_ms,
+                    parse_ok=False,
+                    parse_fail=True,
+                    fallback_score_50=True,
+                    result_source="openai_parse_fallback",
+                    cache_hit=False,
+                )
 
             # 2차: 경계 구간만 선택적으로 재판정한다.
             if self._should_run_deep_recheck(features, result):
@@ -679,25 +749,34 @@ class GPTSniperEngine:
                     + "매수 압도율이 높더라도 Micro-VWAP 아래이거나 고가 부근 대량 매도틱이 있으면 보수적으로 판정하라."
                 )
 
-                deep_raw_result = self._call_openai_safe(
-                    SCALPING_SYSTEM_PROMPT_V3,
-                    upgraded_prompt,
-                    require_json=True,
-                    context_name=f"{target_name}-deep",
-                    model_override=self.deep_model_name,
-                    temperature_override=0.05
-                )
-                result = self._normalize_scalping_result(deep_raw_result)
+                try:
+                    deep_raw_result = self._call_openai_safe(
+                        SCALPING_SYSTEM_PROMPT_V3,
+                        upgraded_prompt,
+                        require_json=True,
+                        context_name=f"{target_name}-deep",
+                        model_override=self.deep_model_name,
+                        temperature_override=0.05
+                    )
+                    result = self._normalize_scalping_result(deep_raw_result)
+                    result_source = "openai_deep_recheck"
+                except Exception as e:
+                    log_error(f"🚨 [{target_name}] OpenAI deep recheck 실패, fast 결과 유지: {e}")
 
             result = self._apply_main_entry_bias_relief(features, result, prompt_type)
-
-            # 메인(OpenAI) 스캘핑 경로에서도 feature packet 감사키를 동일하게 남긴다.
-            result.update(build_scalping_feature_audit_fields(features))
-            result["ai_prompt_type"] = prompt_type
-            result["ai_prompt_version"] = "openai_v2_structured_v1"
-            result["cache_hit"] = False
+            response_ms = int((time.perf_counter() - analysis_started) * 1000)
             self.last_call_time = time.time()
-            return result
+            return self._finalize_scalping_result(
+                result,
+                features=features,
+                prompt_type=prompt_type,
+                response_ms=response_ms,
+                parse_ok=True,
+                parse_fail=False,
+                fallback_score_50=False,
+                result_source=result_source,
+                cache_hit=False,
+            )
                 
         except Exception as e:
             log_error(f"🚨 [{target_name}] OpenAI 실시간 분석 에러: {e}")

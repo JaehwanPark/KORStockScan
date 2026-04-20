@@ -989,26 +989,19 @@ def _resolve_gatekeeper_fast_reuse_sec():
 
 
 def _build_gatekeeper_fast_signature(stock, ws_data, strategy, score):
-    best_ask, best_bid = _get_best_levels_from_ws(ws_data)
     curr_price = ws_data.get('curr', 0)
-    price_bucket = _price_bucket_step(curr_price)
+    price_bucket = max(_price_bucket_step(curr_price), 50)
     return (
         str(strategy or ''),
         str(stock.get('position_tag', '') or ''),
         _floor_bucket_float(score, 5.0),
-        _bucket_int(curr_price, price_bucket),
-        _floor_bucket_float(ws_data.get('fluctuation', 0.0), 0.3),
-        _bucket_int(ws_data.get('volume', 0), 50_000),
-        _floor_bucket_float(ws_data.get('v_pw', 0.0), 5.0),
-        _floor_bucket_float(ws_data.get('buy_ratio', 0.0), 8.0),
-        _bucket_int(ws_data.get('prog_net_qty', 0), 10_000),
-        _bucket_int(ws_data.get('prog_delta_qty', 0), 2_000),
-        _bucket_int(best_ask, price_bucket),
-        _bucket_int(best_bid, price_bucket),
-        _bucket_int(ws_data.get('ask_tot', 0), 50_000),
-        _bucket_int(ws_data.get('bid_tot', 0), 50_000),
-        _bucket_int(ws_data.get('net_bid_depth', 0), 5_000),
-        _bucket_int(ws_data.get('net_ask_depth', 0), 5_000),
+        _bucket_int(curr_price, price_bucket * 8),
+        _floor_bucket_float(ws_data.get('fluctuation', 0.0), 0.5),
+        _bucket_int(ws_data.get('volume', 0), 200_000),
+        _floor_bucket_float(ws_data.get('v_pw', 0.0), 10.0),
+        _floor_bucket_float(ws_data.get('buy_ratio', 0.0), 12.0),
+        _bucket_int(ws_data.get('prog_net_qty', 0), 25_000),
+        _bucket_int(ws_data.get('prog_delta_qty', 0), 5_000),
     )
 
 

@@ -11,13 +11,13 @@
 
 | metric | local | remote | delta(remote-local) |
 | --- | ---: | ---: | ---: |
-| `total_trades` | `14` | `1` | `-13.0` |
-| `completed_trades` | `11` | `1` | `-10.0` |
-| `open_trades` | `3` | `0` | `-3.0` |
-| `holding_events` | `1308` | `0` | `-1308.0` |
-| `all_rows` | `84` | `72` | `-12.0` |
-| `entered_rows` | `14` | `1` | `-13.0` |
-| `expired_rows` | `18` | `22` | `4.0` |
+| `total_trades` | `38` | `6` | `-32.0` |
+| `completed_trades` | `36` | `6` | `-30.0` |
+| `open_trades` | `2` | `0` | `-2.0` |
+| `holding_events` | `11788` | `0` | `-11788.0` |
+| `all_rows` | `183` | `148` | `-35.0` |
+| `entered_rows` | `38` | `6` | `-32.0` |
+| `expired_rows` | `95` | `124` | `29.0` |
 
 ## Performance Tuning
 - status: `ok`
@@ -25,42 +25,42 @@
 
 | metric | local | remote | delta(remote-local) |
 | --- | ---: | ---: | ---: |
-| `holding_reviews` | `367` | `19` | `-348.0` |
-| `holding_skips` | `31` | `1` | `-30.0` |
-| `holding_skip_ratio` | `7.8` | `5.0` | `-2.8` |
-| `holding_ai_cache_hit_ratio` | `0.0` | `10.5` | `10.5` |
-| `holding_review_ms_avg` | `1946.67` | `6368.79` | `4422.12` |
-| `holding_review_ms_p95` | `2866.0` | `74603.0` | `71737.0` |
-| `holding_skip_ws_age_p95` | `1.04` | `0.07` | `-0.97` |
-| `gatekeeper_decisions` | `13` | `18` | `5.0` |
+| `holding_reviews` | `3601` | `486` | `-3115.0` |
+| `holding_skips` | `296` | `45` | `-251.0` |
+| `holding_skip_ratio` | `7.6` | `8.5` | `0.9` |
+| `holding_ai_cache_hit_ratio` | `0.0` | `1.4` | `1.4` |
+| `holding_review_ms_avg` | `1787.78` | `2556.89` | `769.11` |
+| `holding_review_ms_p95` | `2500.0` | `3095.0` | `595.0` |
+| `holding_skip_ws_age_p95` | `1.23` | `1.19` | `-0.04` |
+| `gatekeeper_decisions` | `61` | `81` | `20.0` |
 | `gatekeeper_fast_reuse_ratio` | `0.0` | `0.0` | `0.0` |
 | `gatekeeper_ai_cache_hit_ratio` | `0.0` | `0.0` | `0.0` |
-| `gatekeeper_eval_ms_avg` | `17085.54` | `10369.44` | `-6716.1` |
-| `gatekeeper_eval_ms_p95` | `30794.0` | `13269.0` | `-17525.0` |
-| `gatekeeper_fast_reuse_ws_age_p95` | `0.0` | `0.0` | `0.0` |
-| `gatekeeper_action_age_p95` | `3057.52` | `1646.53` | `-1410.99` |
-| `gatekeeper_allow_entry_age_p95` | `3057.52` | `1646.53` | `-1410.99` |
-| `gatekeeper_bypass_evaluation_samples` | `13` | `19` | `6.0` |
-| `exit_signals` | `14` | `5` | `-9.0` |
-| `dual_persona_shadow_samples` | `0` | `0` | `0.0` |
+| `gatekeeper_eval_ms_avg` | `12295.82` | `11130.01` | `-1165.81` |
+| `gatekeeper_eval_ms_p95` | `19917.0` | `15370.0` | `-4547.0` |
+| `gatekeeper_fast_reuse_ws_age_p95` | `0.07` | `0.0` | `-0.07` |
+| `gatekeeper_action_age_p95` | `1616.38` | `1224.62` | `-391.76` |
+| `gatekeeper_allow_entry_age_p95` | `1616.38` | `1224.62` | `-391.76` |
+| `gatekeeper_bypass_evaluation_samples` | `63` | `83` | `20.0` |
+| `exit_signals` | `39` | `10` | `-29.0` |
+| `dual_persona_shadow_samples` | `2` | `0` | `-2.0` |
 | `dual_persona_gatekeeper_samples` | `0` | `0` | `0.0` |
-| `dual_persona_overnight_samples` | `0` | `0` | `0.0` |
-| `dual_persona_conflict_ratio` | `0.0` | `0.0` | `0.0` |
+| `dual_persona_overnight_samples` | `2` | `0` | `-2.0` |
+| `dual_persona_conflict_ratio` | `50.0` | `0.0` | `-50.0` |
 | `dual_persona_conservative_veto_ratio` | `0.0` | `0.0` | `0.0` |
-| `dual_persona_extra_ms_p95` | `0.0` | `0.0` | `0.0` |
+| `dual_persona_extra_ms_p95` | `4324.0` | `0.0` | `-4324.0` |
 | `dual_persona_fused_override_ratio` | `0.0` | `0.0` | `0.0` |
 
 - local_watch_items:
-  - `label=보유 AI skip 비율, value=7.8%, target=20% ~ 60%`
-  - `label=보유 AI skip WS age p95, value=1.04s, target=<= 1.50s`
-  - `label=Gatekeeper 평가 p95, value=30794ms, target=re-enable <= 5000ms / preferred < 1200ms`
+  - `label=보유 AI skip 비율, value=7.6%, target=20% ~ 60%`
+  - `label=보유 AI skip WS age p95, value=1.23s, target=<= 1.50s`
+  - `label=Gatekeeper 평가 p95, value=19917ms, target=re-enable <= 5000ms / preferred < 1200ms`
   - `label=Gatekeeper fast reuse 비율, value=0.0%, target=15% ~ 55%`
-  - `label=Gatekeeper fast reuse WS age p95, value=0.00s, target=<= 2.00s`
+  - `label=Gatekeeper fast reuse WS age p95, value=0.07s, target=<= 2.00s`
 
 - remote_watch_items:
-  - `label=보유 AI skip 비율, value=5.0%, target=20% ~ 60%`
-  - `label=보유 AI skip WS age p95, value=0.07s, target=<= 1.50s`
-  - `label=Gatekeeper 평가 p95, value=13269ms, target=re-enable <= 5000ms / preferred < 1200ms`
+  - `label=보유 AI skip 비율, value=8.5%, target=20% ~ 60%`
+  - `label=보유 AI skip WS age p95, value=1.19s, target=<= 1.50s`
+  - `label=Gatekeeper 평가 p95, value=15370ms, target=re-enable <= 5000ms / preferred < 1200ms`
   - `label=Gatekeeper fast reuse 비율, value=0.0%, target=15% ~ 55%`
   - `label=Gatekeeper fast reuse WS age p95, value=0.00s, target=<= 2.00s`
 
@@ -71,8 +71,8 @@
 
 | metric | local | remote | delta(remote-local) |
 | --- | ---: | ---: | ---: |
-| `total_candidates` | `13` | `5` | `-8.0` |
-| `evaluated_candidates` | `13` | `5` | `-8.0` |
+| `total_candidates` | `38` | `9` | `-29.0` |
+| `evaluated_candidates` | `38` | `9` | `-29.0` |
 
 ## Entry Pipeline Flow
 - status: `ok`
@@ -80,22 +80,22 @@
 
 | metric | local | remote | delta(remote-local) |
 | --- | ---: | ---: | ---: |
-| `total_events` | `22081` | `28445` | `6364.0` |
-| `tracked_stocks` | `59` | `59` | `0.0` |
-| `submitted_stocks` | `1` | `0` | `-1.0` |
-| `blocked_stocks` | `19` | `22` | `3.0` |
+| `total_events` | `156047` | `176274` | `20227.0` |
+| `tracked_stocks` | `132` | `131` | `-1.0` |
+| `submitted_stocks` | `0` | `1` | `1.0` |
+| `blocked_stocks` | `29` | `33` | `4.0` |
 | `waiting_stocks` | `0` | `0` | `0.0` |
 
 - local_latest_stage_breakdown:
-  - `name=strength_momentum_observed, count=24`
-  - `name=blocked_overbought, count=10`
-  - `name=blocked_gatekeeper_reject, count=7`
-  - `name=watching_shared_prompt_shadow, count=7`
+  - `name=strength_momentum_observed, count=89`
+  - `name=blocked_overbought, count=16`
+  - `name=blocked_gatekeeper_reject, count=9`
+  - `name=watching_shared_prompt_shadow, count=6`
   - `name=partial_fill_reconciled, count=5`
 
 - remote_latest_stage_breakdown:
-  - `name=strength_momentum_observed, count=24`
-  - `name=watching_shared_prompt_shadow, count=12`
-  - `name=blocked_overbought, count=9`
-  - `name=blocked_gatekeeper_reject, count=7`
-  - `name=blocked_strength_momentum, count=4`
+  - `name=strength_momentum_observed, count=77`
+  - `name=blocked_overbought, count=19`
+  - `name=watching_shared_prompt_shadow, count=18`
+  - `name=blocked_gatekeeper_reject, count=10`
+  - `name=blocked_strength_momentum, count=3`

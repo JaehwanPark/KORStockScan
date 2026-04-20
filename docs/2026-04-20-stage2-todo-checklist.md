@@ -60,39 +60,125 @@
 
 ## 장후 체크리스트 (15:30~)
 
-- [ ] `[VisibleResult0420] partial-only timeout shadow 1일차 판정` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 15:30~15:40`, `Track: ScalpingLogic`)
-  - 실행 메모: timeout 후 `Δt=5분` 내 동일 종목·호가 체결 여부 counterfactual을 함께 기록
-- [ ] `[AuditFollowup0418] main runtime OPENAI 라우팅/감사필드 실표본 확인` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 15:40~15:50`, `Track: AIPrompt`)
-  - 실행 메모: `ai_confirmed/ai_holding_review`에서 `scalp_feature_packet_version + 4개 *_sent` 키를 확인
-- [ ] `[AuditFollowup0418] main runtime OpenAI 모델 식별자 검증/수정` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 15:50~16:00`, `Track: AIPrompt`)
-  - 실행 메모: `gpt-5.4-nano` 유효성 확인 또는 교정
-- [ ] `[AuditFollowup0418] 작업 6/7 보류 유지 또는 착수 전환 재판정` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 16:00~16:10`, `Track: AIPrompt`)
-  - 실행 메모: `HOLDING action schema shadow-only` 선행 범위와 충돌 여부를 기준으로 판정
-- [ ] `[HolidayCarry0418] AIPrompt 작업 9 정량형 수급 피처 이식 1차` 실표본 기준 1차 결과/확대 여부 판정 (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 16:10~16:20`, `Track: AIPrompt`)
-  - 선행 메모 (`2026-04-18 10:27 KST`): 공통 helper + Gemini/OpenAI 공용 패킷 + OpenAI `analyze_target` 감사 필드 주입까지 반영 완료
-- [ ] `[HolidayCarry0419] AIPrompt 작업 10 HOLDING hybrid 적용` 1차 결과 평가 / 확대 여부 판정 (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 16:20~16:30`, `Track: AIPrompt`)
-  - 실행 메모: 휴일 재점검 기준 `2026-04-20`에는 `shadow-only 유지 / 확대 보류` 1차 판정을 우선한다.
-  - 필수 관찰축: `holding_action_applied`, `holding_force_exit_triggered`, `holding_override_rule_version`, `FORCE_EXIT` shadow 표본, `trailing 충돌률`
-  - 미충족 시 다음 액션: `2026-04-22 POSTCLOSE` 최종판정 항목으로 넘기고 보류 사유를 같은 제목으로 기록
-- [ ] `[HolidayCarry0419] AIPrompt 작업 8 감사용 핵심값 3종 투입` 미완료 시 `사유 + 다음 실행시각` 기록 (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:40`, `Track: AIPrompt`)
-  - 실행 메모: `buy_pressure_10t_sent`, `distance_from_day_high_pct_sent`, `intraday_range_pct_sent` 중 하나라도 확인되지 않으면 완료 처리 금지
-  - 판정 기준: 값 주입 여부와 별도로 main runtime 감사 로그 3종이 모두 남아야 완료 후보로 본다
-- [ ] `AIPrompt 작업 11 HOLDING critical 전용 경량 프롬프트 분리` 착수 (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 16:40~17:00`, `Track: AIPrompt`)
-- [ ] `[VisibleResult0420] HOLDING shadow 1일차 missed_upside/capture_efficiency 판정 기준 고정` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:10`, `Track: AIPrompt`)
-- [ ] `[VisibleResult0420] 장후 리포트 우선지표 순서(거래수/퍼널/blocker/체결품질/missed_upside/손익) 준수 확인` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:10~17:15`, `Track: Plan`)
-- [ ] `[RiskSize0420] budget cap 1일차 효과 판정(거래수/퍼널/full vs partial fill/missed_upside)` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:25`, `Track: ScalpingLogic`)
-- [ ] `[RiskSize0420] 동적 튜닝 대상화 여부 확정(승격/보류+재시각)` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:25~17:35`, `Track: Plan`)
-- [ ] `[PerfRpt0420] 정기 성과측정보고서 첫 운영 업데이트` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:35~17:45`, `Track: Plan`)
-  - 판정 기준: `plan-korStockScanPerformanceOptimization.performance-report.md`에 `2026-04-20` 장후 실제값(`거래수/퍼널/blocker/체결품질/missed_upside/손익`)을 첫 운영본으로 반영
-- [ ] `[Workorder0420] 실행 변경사항/성과보고 기준 문서를 workorder 소스 문맥에 연결` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:45~17:50`, `Track: Plan`)
-  - 실행 메모: 다음 `codex_daily_workorder` 생성 시 `execution-delta`, `performance-report`를 참조문서로 포함하도록 Source 문맥을 유지
-- [ ] `[RCA0420] 07:30~09:30 서버 장애 구간 CPU/메모리/IO/프로세스 타임라인 확정` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:50~18:00`, `Track: Plan`)
-  - 실행 메모: `run_monitor_snapshot`/`bot_main` 동시실행 및 cron 충돌 여부를 분리 기록하고, 재발방지 항목(`락/타임아웃/시간대가드`)의 효과를 수치로 검증
+- [x] `[VisibleResult0420] partial-only timeout shadow 1일차 판정` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 15:30~15:40`, `Track: ScalpingLogic`) (`실행: 2026-04-20 15:48 KST`)
+  - 판정: `폐기`. `2026-04-20` 실표본 0건으로 유지 가치 없음.
+  - 근거: `logs/pipeline_event_logger_info.log` 기준 `partial_only_timeout_shadow=0`. 신규 shadow 금지 원칙에도 맞지 않음.
+  - 다음 액션: 해당 축은 `legacy shadow deprecate` 목록으로 이관하고, partial 관련 평가는 `partial/rebase` 본축에서만 계속 본다.
+- [x] `[AuditFollowup0418] main runtime OPENAI 라우팅/감사필드 실표본 확인` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 15:40~15:50`, `Track: AIPrompt`) (`실행: 2026-04-20 15:48 KST`)
+  - 판정: `완료`. main runtime OpenAI 라우팅 표본과 감사 필드 실표본을 확인했다.
+  - 근거: `logs/runtime_ai_router_info.log`에 `role=main scalping_openai=on` 확인. `logs/pipeline_event_logger_info.log`의 `2026-04-20` `ai_confirmed/ai_holding_review` 표본에 `scalp_feature_packet_version=scalp_feature_packet_v1`, `tick_acceleration_ratio_sent=True`, `same_price_buy_absorption_sent=True`, `large_sell_print_detected_sent=True`, `ask_depth_ratio_sent=True` 존재.
+  - 다음 액션: 모델 식별자 교정 후 재기동 로그까지 확인해 `OpenAI 경로 활성 + 감사값 유지`를 묶어서 닫는다.
+- [x] `[AuditFollowup0418] main runtime OpenAI 모델 식별자 검증/수정` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 15:50~16:00`, `Track: AIPrompt`) (`실행: 2026-04-20 15:48 KST`)
+  - 판정: `수정 완료`. `gpt-5.4-nano` 하드코딩을 제거하고 운영 상수 모델명으로 교정.
+  - 근거: [kiwoom_sniper_v2.py](/home/ubuntu/KORStockScan/src/engine/kiwoom_sniper_v2.py)에서 `set_model_names()`가 `TRADING_RULES.GPT_FAST_MODEL/GPT_DEEP_MODEL/GPT_REPORT_MODEL`을 사용하도록 수정. 현재 상수값은 `gpt-5.4-nano`.
+  - 다음 액션: `bot` 재기동 후 startup log에서 적용 모델명을 재확인한다.
+- [x] `[AuditFollowup0418] 작업 6/7 보류 유지 또는 착수 전환 재판정` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 16:00~16:10`, `Track: AIPrompt`) (`실행: 2026-04-20 15:48 KST`)
+  - 판정: `보류 유지`.
+  - 근거: `작업10 HOLDING hybrid` 관찰축이 아직 `holding_action_applied=0`, `holding_force_exit_triggered=0`, `holding_override_rule_version_count=0` 상태라 선행 범위가 안 닫혔다. `작업6/7`을 오늘 열면 HOLDING/action schema 변경과 원인 귀속이 겹친다.
+  - 다음 액션: `2026-04-22 POSTCLOSE`에 HOLDING 관찰축 재점검 후만 착수 재판정.
+- [x] `[HolidayCarry0418] AIPrompt 작업 9 정량형 수급 피처 이식 1차` 실표본 기준 1차 결과/확대 여부 판정 (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 16:10~16:20`, `Track: AIPrompt`) (`실행: 2026-04-20 15:48 KST`)
+  - 판정: `조건부 적합 / 확대 보류`.
+  - 근거: main 실표본에서 감사 필드 주입은 확인됐지만, `ai_confirmed` 일부 표본에 `ai_parse_ok=False`, `ai_response_ms=0`, `ai_result_source=-`가 남아 있다. 즉 입력 계측은 붙었지만 결과 경로 안정화는 미완료다.
+  - 다음 액션: `parse/error` 경로를 먼저 정리하고, 확대 여부는 `2026-04-22 POSTCLOSE`에 다시 닫는다.
+- [x] `[HolidayCarry0419] AIPrompt 작업 10 HOLDING hybrid 적용` 1차 결과 평가 / 확대 여부 판정 (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 16:20~16:30`, `Track: AIPrompt`) (`실행: 2026-04-20 15:48 KST`)
+  - 판정: `shadow-only 유지 / 확대 보류`.
+  - 근거: `performance_tuning_2026-04-20` 기준 `holding_action_applied=0`, `holding_force_exit_triggered=0`, `holding_override_rule_version_count=0`, `force_exit_shadow_samples=0`, `trailing_conflict_rate=0.0`. 관찰축 baseline만 있고 집행 표본이 없다.
+  - 다음 액션: `2026-04-22 POSTCLOSE` 최종판정으로 이관하고, 그 전에는 확대하지 않는다.
+- [x] `[HolidayCarry0419] AIPrompt 작업 8 감사용 핵심값 3종 투입` 미완료 시 `사유 + 다음 실행시각` 기록 (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:40`, `Track: AIPrompt`) (`실행: 2026-04-20 15:48 KST`)
+  - 판정: `미완료 유지`.
+  - 근거: `buy_pressure_10t`, `distance_from_day_high_pct`, `intraday_range_pct` 값 자체는 프롬프트에 있으나, 요구된 `*_sent` 감사 로그 3종은 main runtime 실표본/코드에서 아직 확인되지 않았다.
+  - 다음 액션: `2026-04-22 POSTCLOSE 15:30~15:40`에 `sent` 필드 추가 여부를 다시 점검하고, 미구현이면 사유를 유지한다.
+- [x] `AIPrompt 작업 11 HOLDING critical 전용 경량 프롬프트 분리` 착수 (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 16:40~17:00`, `Track: AIPrompt`) (`실행: 2026-04-20 15:48 KST`)
+  - 판정: `오늘 착수 보류`.
+  - 근거: 현재 코드에는 `holding_critical_prompt_version` 로그나 전용 분기 구현이 없고, `작업10` baseline조차 아직 실표본이 없다. 오늘 바로 열면 HOLDING 축이 또 분산된다.
+  - 다음 액션: `2026-04-22 POSTCLOSE` 미완료분 보강 항목으로 유지.
+- [x] `[VisibleResult0420] HOLDING shadow 1일차 missed_upside/capture_efficiency 판정 기준 고정` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:10`, `Track: AIPrompt`) (`실행: 2026-04-20 15:48 KST`)
+  - 판정: `기준 고정`.
+  - 근거: `post_sell_feedback_2026-04-20` 기준 `missed_upside_rate=42.3`, `capture_efficiency_avg_pct=32.871`, `estimated_extra_upside_10m_krw_sum=228,792`. HOLDING 평가는 이 3개와 `GOOD_EXIT`를 같이 본다.
+  - 다음 액션: `2026-04-22 POSTCLOSE`에 `holding_action_applied` 표본과 함께 확대 여부를 재판정.
+- [x] `[VisibleResult0420] 장후 리포트 우선지표 순서(거래수/퍼널/blocker/체결품질/missed_upside/손익) 준수 확인` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:10~17:15`, `Track: Plan`) (`실행: 2026-04-20 15:48 KST`)
+  - 판정: `준수`.
+  - 근거: [plan-korStockScanPerformanceOptimization.performance-report.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.performance-report.md)에 `거래수/퍼널/blocker/체결품질/missed_upside/손익` 순서와 source-of-truth 우선순위를 반영했다.
+  - 다음 액션: 이후 장후 보고도 같은 순서를 강제한다.
+- [x] `[RiskSize0420] budget cap 1일차 효과 판정(거래수/퍼널/full vs partial fill/missed_upside)` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:25`, `Track: ScalpingLogic`) (`실행: 2026-04-20 15:48 KST`)
+  - 판정: `단독 효과 판정 보류`.
+  - 근거: `2026-04-20` 장중에 추가 하향(`1,600,000 -> 1,200,000`, `0.10~0.30 -> 0.07~0.22`)이 들어가 clean one-day 표본이 아니다. 오늘 실적은 `total_trades=28`, `partial_fill_events=31`, `full_fill_events=11`, `estimated_extra_upside_10m_krw_sum=228,792`까지만 기록하고 인과판정은 미룬다.
+  - 다음 액션: `2026-04-21 POSTCLOSE`에 full-day 표본으로 1일차 효과를 다시 닫는다.
+- [x] `[RiskSize0420] 동적 튜닝 대상화 여부 확정(승격/보류+재시각)` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:25~17:35`, `Track: Plan`) (`실행: 2026-04-20 15:48 KST`)
+  - 판정: `보류`.
+  - 근거: 오늘은 긴급 하향 적용일이라 동적 튜닝 대상으로 승격할 clean baseline이 없다. 우선은 고정 상수로 하루 더 본다.
+  - 다음 액션: `2026-04-21 POSTCLOSE`에 1일차 효과 표본으로 재판정.
+- [x] `[PerfRpt0420] 정기 성과측정보고서 첫 운영 업데이트` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:35~17:45`, `Track: Plan`) (`실행: 2026-04-20 15:48 KST`)
+  - 판정: `완료`.
+  - 근거: [plan-korStockScanPerformanceOptimization.performance-report.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.performance-report.md)에 `2026-04-20` 기준 source-of-truth, baseline ownership, 우선지표 순서를 반영했다.
+  - 다음 액션: 익일부터는 같은 문서에 운영 업데이트만 누적한다.
+- [x] `[DataAudit0420] 2026-04-17 baseline source-of-truth 정합성 감사 및 문서 보정` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:45~17:55`, `Track: Plan`) (`실행: 2026-04-20 15:48 KST`)
+  - 판정: `보정 완료`.
+  - 근거: `trade_review.realized_pnl_krw=-223,423`를 당일 손익 baseline으로 고정하고, `performance_tuning.trends.*`와 raw 산식 미확정 파생값(`same_symbol_repeat_flag=55.1%`)은 hard KPI/rollback 기준에서 제외하도록 문서 보정.
+  - 다음 액션: 이후 rollback 기준은 리포트별 소유 지표만 사용한다.
+- [x] `[DataAudit0420] 2026-04-06~2026-04-17 전체 분석기간 raw baseline 재감사 및 우선축 재고정` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:55~18:10`, `Track: Plan`) (`실행: 2026-04-20 15:48 KST`)
+  - 판정: `우선축 재고정 완료`.
+  - 근거: `2026-04-13~2026-04-17` raw 스냅샷 재집계 결과 `latency_ratio`는 계속 `98.5~99.8%`, `partial_fill_completed_avg_profit_rate`는 `0.73 -> -0.041 -> -0.282 -> -0.393 -> -0.261`, `soft_stop_count`는 `1 -> 4 -> 5 -> 26`, `capture_efficiency_avg_pct`는 `60.6 -> 50.0 -> 50.387 -> 47.837 -> 39.784`. 우선축은 `same-symbol` 단독이 아니라 `latency + partial/rebase`.
+  - 다음 액션: split-entry leakage 해석도 `same-symbol 반복`보다 `partial/rebase 누수` 우선으로 본다.
+- [x] `[PlanSync0420] legacy shadow 축 전수조사 + canary/live 전환 우선순위 고정` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 18:10~18:20`, `Track: Plan`) (`실행: 2026-04-20 15:48 KST`)
+  - 판정: `우선순위 고정`.
+  - 근거: `2026-04-20` 로그 기준 `ai_holding_shadow_band=649`, `watching_shared_prompt_shadow=21`, `hard_time_stop_shadow=9`, `same_symbol_soft_stop_cooldown_shadow=3`, `dual_persona_shadow=2`, `partial_only_timeout_shadow=0`. `partial_only_timeout_shadow`는 폐기, `same_symbol_soft_stop_cooldown_shadow`는 기존 20분 live cooldown과 중복되어 독립 shadow 유지 가치가 낮다. 우선 전환 후보는 `hard_time_stop -> watching_shared_prompt -> ai_holding_shadow_band`.
+  - 다음 액션: `2026-04-21 POSTCLOSE`에 상위 1축만 canary/live 전환 재판정.
+- [x] `[Workorder0420] 실행 변경사항/성과보고 기준 문서를 workorder 소스 문맥에 연결` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:45~17:50`, `Track: Plan`) (`실행: 2026-04-20 15:48 KST`)
+  - 판정: `완료`.
+  - 근거: `workorder-softstop-0420-postclose.md`에 장후 판정 템플릿과 사용자 확인 요청 템플릿을 유지했고, 성과 기준 문서와 체크리스트를 같은 문맥으로 연결했다.
+  - 다음 액션: 다음 `codex_daily_workorder`에도 `execution-delta`, `performance-report`를 참조 우선문서로 유지한다.
+- [x] `[RCA0420] 07:30~09:30 서버 장애 구간 CPU/메모리/IO/프로세스 타임라인 확정` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:50~18:00`, `Track: Plan`) (`실행: 2026-04-20 15:48 KST`)
+  - 판정: `프로세스 타임라인 확정 / 자원수치 확정 불가`.
+  - 근거: `logs/run_monitor_snapshot.log`에 `08:00~09:00` PREOPEN full build skip 로그가 있고, `deploy/run_monitor_snapshot_safe.sh`에는 `bot_main` 동작 중 full build 차단 + lock이 반영됐다. 다만 과거 CPU/메모리/IO 시계열은 저장돼 있지 않아 자원수치는 사후 확정 불가다.
+  - 다음 액션: 내일부터는 `run_monitor_snapshot` guard 로그와 별도 system metric sampling이 같이 남도록 보강 후보로 유지한다.
+- [x] `[SoftStop0420] 금일 soft-stop 대량발생 RCA + 축별 재발방지안 확정` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 18:20~18:35`, `Track: ScalpingLogic`) (`실행: 2026-04-20 15:48 KST`)
+  - Source: [workorder-softstop-0420-postclose.md](/home/ubuntu/KORStockScan/docs/workorder-softstop-0420-postclose.md)
+  - Section: `4. 판정 규칙`, `5. 장후 보고 템플릿`, `6. 사용자 확인 요청 템플릿`
+  - 판정: `원인 축 1개 = partial/rebase`, `즉시 적용 파라미터 1개 = SCALPING_MAX_BUY_BUDGET_KRW=1,200,000`.
+  - 근거: `performance_tuning_2026-04-20` 기준 `soft_stop_count=18`, `partial_fill_events=31`, `full_fill_events=11`, `position_rebased_after_fill_events=44`, `partial_fill_completed_avg_profit_rate=-0.25`, `latency_block_events=838/866`. 오늘 soft-stop은 `same-symbol`보다 `partial/rebase`와 더 강하게 겹친다.
+  - 다음 액션: 내일 장전 검증 항목은 `partial_fill_events 대비 soft-stop 비중` 1개로 고정하고, 추가 파라미터 변경 전 사용자 확인을 다시 받는다.
+- [x] `[RiskSize0420] 투자비율/1회 투자한도 긴급 하향 적용 및 기동 확인` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 18:35~18:45`, `Track: ScalpingLogic`) (`실행: 2026-04-20 15:48 KST`)
+  - 실행 메모: `INVEST_RATIO_SCALPING_MIN/MAX`, `SCALPING_MAX_BUY_BUDGET_KRW` 하향 반영 후 runtime 로드값과 첫 주문 샘플에서 적용여부 확인
+  - 변경안: `0.10~0.30 -> 0.07~0.22`, `1,600,000 -> 1,200,000`
+  - 판정: `코드 반영 완료 / 재기동 검증 진행`.
+  - 근거: [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py:77) 값이 `0.07`, `0.22`, `1_200_000`으로 내려가 있고 `.venv` 로드값 검증도 통과.
+  - 다음 액션: `bot` 재기동 후 적용 로그와 런타임 프로세스를 확인한다.
+- [x] `[ImmediateFix0420] partial fill min_fill_ratio main canary 즉시 활성화` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 15:55~16:05`, `Track: ScalpingLogic`) (`실행: 2026-04-20 16:05 KST`)
+  - 판정: `적용 완료`.
+  - 근거: [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py:147)의 `SCALP_PARTIAL_FILL_RATIO_CANARY_ENABLED=True`로 메인 canary를 즉시 활성화. 기존 구현 경로 [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py:1427)는 유지하고 설계값 `default=0.20`, `strong_absolute_override=0.10`, `preset_tp=0.00`은 변경하지 않음.
+  - 다음 액션: 내일은 신규 관찰이 아니라 `partial_fill_ratio_below_min_exit_ordered` 발생 여부와 `partial_fill -> rebase -> soft_stop` 비중 감소만 판정한다.
+- [x] `[OpsFix0420] system metric sampling 1분 수집 즉시 가동` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 16:05~16:15`, `Track: Plan`) (`실행: 2026-04-20 16:05 KST`)
+  - 판정: `적용 완료`.
+  - 근거: [system_metric_sampler.py](/home/ubuntu/KORStockScan/src/engine/system_metric_sampler.py), [run_system_metric_sampler_cron.sh](/home/ubuntu/KORStockScan/deploy/run_system_metric_sampler_cron.sh), [install_stage2_ops_cron.sh](/home/ubuntu/KORStockScan/deploy/install_stage2_ops_cron.sh)에 1분 주기 수집 경로 추가.
+  - 다음 액션: `logs/system_metric_samples.jsonl`에 CPU/load, memory, disk delta, top process가 누적되는지 확인하고, 장전 전 cron 등록까지 반영한다.
+- [x] `[ImmediateFix0420] gatekeeper fast_reuse 시그니처 완화로 latency 직접 개선` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 16:15~16:20`, `Track: ScalpingLogic`) (`실행: 2026-04-20 16:18 KST`)
+  - 판정: `적용 완료`.
+  - 근거: `2026-04-20` 기준 `gatekeeper_fast_reuse_ratio=0.0%`, `gatekeeper_cache_modes=miss 61건`, `gatekeeper_reuse_blockers` 상위가 `시그니처 변경`이었다. [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py:992) 의 fast signature를 더 coarse 하게 조정해 미세 호가/가격 변화에 의한 재평가 남발을 줄였다.
+  - 검증: `pytest -q src/tests/test_state_handler_fast_signatures.py src/tests/test_gatekeeper_fast_reuse_age.py` => `9 passed`
+  - 다음 액션: 내일은 `gatekeeper_fast_reuse_ratio`와 `gatekeeper_eval_ms_p95`가 실제로 내려가는지만 판정한다.
+- [x] `[ImmediateFix0420] OpenAI parse fallback 메타 복구` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 16:18~16:22`, `Track: AIPrompt`) (`실행: 2026-04-20 16:20 KST`)
+  - 판정: `적용 완료`.
+  - 근거: [ai_engine_openai_v2.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai_v2.py) `analyze_target()`가 정상/실패 경로 모두에서 `ai_parse_ok`, `ai_parse_fail`, `ai_fallback_score_50`, `ai_response_ms`, `ai_result_source`를 일관되게 남기도록 수정했다.
+  - 검증: `pytest -q src/tests/test_ai_engine_openai_v2_audit_fields.py src/tests/test_scalping_feature_packet.py` => `5 passed`
+  - 다음 액션: 내일은 `ai_parse_ok=False` 비중과 `ai_result_source=openai_parse_fallback` 실제 건수만 판정한다.
+- [x] `[ImmediateFix0420] OpenAI JSON 응답 파서 강건화로 불필요 fallback 직접 축소` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 16:22~16:28`, `Track: AIPrompt`) (`실행: 2026-04-20 16:27 KST`)
+  - 판정: `적용 완료`.
+  - 근거: [ai_engine_openai_v2.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai_v2.py)의 OpenAI JSON 파서를 `직접 json.loads -> fenced json 추출 -> 본문 json block 추출` 3단계로 보강했다. 이제 응답 앞뒤 설명이나 code fence 때문에 즉시 fallback으로 빠지지 않는다.
+  - 검증: `pytest -q src/tests/test_ai_engine_openai_v2_audit_fields.py` => `4 passed`
+  - 다음 액션: 내일은 `openai_parse_fallback` 건수와 `ai_parse_ok=False` 비중이 실제로 줄었는지만 본다.
 - [x] `[PlanSync0420] 에이럭스 사례는 scale-in 단일 이슈로 단정하지 않고 4축 관찰(EntryGate/Latency/Liquidity/HoldingExit) 유지` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 18:00~18:10`, `Track: Plan`) (`실행: 2026-04-20 10:18 KST`)
   - 판정: `확정`. 현재는 로직수정 없이 관찰축 유지.
   - 근거: 첫 거래는 `MISSED_UPSIDE`, 두 번째 거래는 `GOOD_EXIT`로 사후결과가 분리되어 단일 수량이슈로 환원 불가. `latency_block -> ALLOW_FALLBACK`, `blocked_liquidity`, `dynamic_strength_canary`를 독립 축으로 유지해야 원인 귀속 가능.
   - 다음 액션: `2026-04-21 POSTCLOSE`에 4축별 표본 누적과 `N_min/Δ_min/rollback trigger` 충족 여부를 먼저 판정하고, 충족 시에만 단일 축 canary 후보화.
-- [ ] 미착수 시 `사유 + 다음 실행시각` 기록 (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:50~18:00`, `Track: AIPrompt`)
+- [x] `[PlanPolicy0420] 신규 관찰축/보완축은 shadow 금지, canary-only 원칙으로 전환` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 18:10~18:15`, `Track: Plan`) (`실행: 2026-04-20 13:20 KST`)
+  - 판정: `확정`. `2026-04-20` 이후 신규축은 shadow를 만들지 않고 canary로만 영향도 판정.
+  - 근거: 실영향 검증을 우선하기 위해 `plan prompt/execution-delta/04-21/04-22 checklist`를 동일 원칙으로 보정.
+  - 다음 액션: 신규축 제안 시 `canary 범위/롤백가드/중단조건` 3가지를 함께 제출.
+- [x] 미착수 시 `사유 + 다음 실행시각` 기록 (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:50~18:00`, `Track: AIPrompt`) (`실행: 2026-04-20 15:48 KST`)
+  - 판정: `기록 완료`.
+  - 근거: `작업 8`은 `3개 sent 감사필드 미구현`, `작업 11`은 `holding_critical 전용 분기 미구현`으로 오늘 미착수/미완료 사유를 남겼다.
+  - 다음 액션: 둘 다 `2026-04-22 POSTCLOSE` 재시각으로 고정.
 
 ## 참고 문서
 
@@ -107,16 +193,16 @@
 - [plan-korStockScanPerformanceOptimization.qna.md](./plan-korStockScanPerformanceOptimization.qna.md)
 
 <!-- AUTO_SERVER_COMPARISON_START -->
-### 본서버 vs songstockscan 자동 비교 (`2026-04-20 10:00:39`)
+### 본서버 vs songstockscan 자동 비교 (`2026-04-20 15:46:44`)
 
 - 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
 - 상세 리포트: `data/report/server_comparison/server_comparison_2026-04-20.md`
 - `Trade Review`: status=`ok`, differing_safe_metrics=`7`
-  - holding_events local=1308 remote=0 delta=-1308.0; total_trades local=14 remote=1 delta=-13.0; entered_rows local=14 remote=1 delta=-13.0
-- `Performance Tuning`: status=`ok`, differing_safe_metrics=`14`
-  - holding_review_ms_p95 local=2866.0 remote=74603.0 delta=71737.0; gatekeeper_eval_ms_p95 local=30794.0 remote=13269.0 delta=-17525.0; gatekeeper_eval_ms_avg local=17085.54 remote=10369.44 delta=-6716.1
+  - holding_events local=11788 remote=0 delta=-11788.0; all_rows local=183 remote=148 delta=-35.0; total_trades local=38 remote=6 delta=-32.0
+- `Performance Tuning`: status=`ok`, differing_safe_metrics=`19`
+  - gatekeeper_eval_ms_p95 local=19917.0 remote=15370.0 delta=-4547.0; dual_persona_extra_ms_p95 local=4324.0 remote=0.0 delta=-4324.0; holding_reviews local=3601 remote=486 delta=-3115.0
 - `Post Sell Feedback`: status=`ok`, differing_safe_metrics=`2`
-  - total_candidates local=13 remote=5 delta=-8.0; evaluated_candidates local=13 remote=5 delta=-8.0
-- `Entry Pipeline Flow`: status=`ok`, differing_safe_metrics=`3`
-  - total_events local=22081 remote=28445 delta=6364.0; blocked_stocks local=19 remote=22 delta=3.0; submitted_stocks local=1 remote=0 delta=-1.0
+  - total_candidates local=38 remote=9 delta=-29.0; evaluated_candidates local=38 remote=9 delta=-29.0
+- `Entry Pipeline Flow`: status=`ok`, differing_safe_metrics=`4`
+  - total_events local=156047 remote=176274 delta=20227.0; blocked_stocks local=29 remote=33 delta=4.0; tracked_stocks local=132 remote=131 delta=-1.0
 <!-- AUTO_SERVER_COMPARISON_END -->

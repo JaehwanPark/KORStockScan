@@ -84,8 +84,68 @@ def test_openai_scalping_analyze_target_returns_feature_audit_fields(monkeypatch
     assert result["action"] == "BUY"
     assert result["ai_prompt_type"] == "scalping_entry"
     assert result["ai_prompt_version"] == "openai_v2_structured_v1"
+    assert result["ai_parse_ok"] is True
+    assert result["ai_parse_fail"] is False
+    assert result["ai_fallback_score_50"] is False
+    assert result["ai_response_ms"] >= 0
+    assert result["ai_result_source"] == "openai_live"
     assert result["scalp_feature_packet_version"] == SCALP_FEATURE_PACKET_VERSION
     assert result["tick_acceleration_ratio_sent"] is True
     assert result["same_price_buy_absorption_sent"] is True
     assert result["large_sell_print_detected_sent"] is True
     assert result["ask_depth_ratio_sent"] is True
+
+
+def test_openai_scalping_analyze_target_returns_parse_fallback_meta(monkeypatch):
+    engine = _build_engine()
+
+    def _raise(*args, **kwargs):
+        raise RuntimeError("json parse failed")
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _raise)
+    monkeypatch.setattr(engine, "_should_run_deep_recheck", lambda features, result: False)
+    monkeypatch.setattr(engine, "_apply_main_entry_bias_relief", lambda features, result, prompt_type: result)
+
+    result = engine.analyze_target(
+        "테스트",
+        _sample_ws_data(),
+        _sample_ticks(),
+        _sample_candles(),
+        strategy="SCALPING",
+        prompt_profile="watching",
+    )
+
+    assert result["action"] == "WAIT"
+    assert result["score"] == 50
+    assert result["ai_parse_ok"] is False
+    assert result["ai_parse_fail"] is True
+    assert result["ai_fallback_score_50"] is True
+    assert result["ai_response_ms"] >= 0
+    assert result["ai_result_source"] == "openai_parse_fallback"
+    assert result["scalp_feature_packet_version"] == SCALP_FEATURE_PACKET_VERSION
+
+
+def test_openai_parse_json_response_text_accepts_code_fence():
+    engine = _build_engine()
+
+    parsed = engine._parse_json_response_text(
+        """
+        ```json
+        {"action":"BUY","score":81,"reason":"momentum"}
+        ```
+        """
+    )
+
+    assert parsed["action"] == "BUY"
+    assert parsed["score"] == 81
+
+
+def test_openai_parse_json_response_text_extracts_json_from_wrapped_text():
+    engine = _build_engine()
+
+    parsed = engine._parse_json_response_text(
+        '분석 결과는 아래와 같습니다. {"action":"WAIT","score":63,"reason":"needs confirmation"} 추가 설명 끝.'
+    )
+
+    assert parsed["action"] == "WAIT"
+    assert parsed["score"] == 63

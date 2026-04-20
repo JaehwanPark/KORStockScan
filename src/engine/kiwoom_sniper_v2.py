@@ -1058,13 +1058,19 @@ def run_sniper(is_test_mode=False):
     if runtime_role == "main" and openai_api_keys:
         try:
             openai_scalping_engine = GPTSniperEngine(api_keys=openai_api_keys, announce_startup=False)
+            fast_model = str(getattr(TRADING_RULES, "GPT_FAST_MODEL", "gpt-5.4-nano") or "gpt-5.4-nano")
+            deep_model = str(getattr(TRADING_RULES, "GPT_DEEP_MODEL", fast_model) or fast_model)
+            report_model = str(getattr(TRADING_RULES, "GPT_REPORT_MODEL", fast_model) or fast_model)
             openai_scalping_engine.set_model_names(
-                fast_model="gpt-5.4-nano",
-                deep_model="gpt-5.4-nano",
-                report_model="gpt-5.4-nano",
+                fast_model=fast_model,
+                deep_model=deep_model,
+                report_model=report_model,
                 announce=True,
             )
-            print("🧠 메인 스캘핑 OpenAI 엔진을 gpt-5.4-nano로 고정 완료.")
+            print(
+                "🧠 메인 스캘핑 OpenAI 엔진 고정 완료 "
+                f"(FAST: {fast_model} / DEEP: {deep_model} / REPORT: {report_model})"
+            )
         except Exception as e:
             log_error(f"🚨 OpenAI 스캘핑 엔진 초기화 실패: {e}")
             openai_scalping_engine = None

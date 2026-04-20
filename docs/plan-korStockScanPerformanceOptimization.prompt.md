@@ -36,51 +36,54 @@
 1. 최종 목표는 `손실 억제`가 아니라 `기대값/순이익 극대화`다.
 2. 현재 단계의 주제는 `리포트 정합성 유지 + split-entry leakage 제거 + HOLDING/청산 판단 분리`다.
 3. 실전 변경은 항상 `한 번에 한 축 canary` 원칙을 지킨다.
-4. shadow는 공격적 실행을 늦추기 위한 장치가 아니라 `원인 귀속 정확도`를 확보하기 위한 장치다.
+4. `2026-04-20` 이후 신규 관찰축/보완축은 `shadow 금지`, `canary-only`로 운영한다.
 5. `develop=원격 실험서버`, `main=본서버`를 유지하고 `main` 선반영은 금지한다.
 6. `NULL`, 미완료 상태, fallback 정규화 값은 손익 기준에서 제외한다. 손익 계산은 `COMPLETED + valid profit_rate`만 사용한다.
 7. 장후 리포트의 우선 지표는 `거래수 -> 퍼널 -> blocker -> 체결품질 -> missed_upside -> 손익` 순서다.
 8. BUY 후 미진입은 `latency guard miss`, `liquidity gate miss`, `AI threshold miss`, `overbought gate miss`로 분리 해석한다.
 9. `full fill`과 `partial fill`은 같은 표본으로 합치지 않는다.
 10. 원인 귀속이 불명확하면 먼저 `리포트 정합성`, `이벤트 복원`, `집계 품질`을 점검한다.
-11. HOLDING 축 승격은 `missed_upside_rate`, `capture_efficiency`, `GOOD_EXIT`와 shadow 로그 축을 함께 본다.
+11. HOLDING 축 승격은 `missed_upside_rate`, `capture_efficiency`, `GOOD_EXIT`와 운영 로그 축을 함께 본다.
 12. broad relax(`latency/tag/threshold`)는 `split-entry leakage` 1차 판정 이후에만 재오픈한다.
-13. 현재 튜닝 기간에는 원격을 신규 canary 기본 경로로 강제하지 않고, 모델별 A/B 착수 직전에만 `원격 정합화 + shadow/canary` 순서를 적용한다.
+13. 현재 튜닝 기간에는 원격을 신규 canary 기본 경로로 강제하지 않고, 모델별 A/B 착수 직전에만 `원격 정합화 + canary` 순서를 적용한다.
 14. `PREOPEN(08:00~09:00)`에는 `bot_main` 동작 중 `run_monitor_snapshot` full build를 금지하고, 필요 시 `sanity check`만 수행한다.
-15. `scale-in qty` 축은 현재 주간에 `split-entry/HOLDING` 관찰축과 섞지 않고, `remote shadow-only -> remote canary -> main flag-off 적재` 순서로만 연다.
+15. `scale-in qty` 축은 현재 주간에 `split-entry/HOLDING` 관찰축과 섞지 않고, `remote canary -> main flag-off 적재` 순서로만 연다.
 16. 개별 종목(예: 에이럭스) 이슈는 `scale-in` 단일 원인으로 단정하지 않고 `entry gate + latency + liquidity + holding exit` 관찰축으로 먼저 분해 판정한다.
+17. 기준선/롤백/승격 판단은 `문서 파생값`이 아니라 `DB 우선 스냅샷 실필드`만 사용한다.
+18. `performance_tuning.trends.*` rolling 값은 당일 손익 baseline/rollback 기준으로 사용하지 않는다.
 
 ## 현재 기준 우선순위
 
 | 워크스트림 | 현재 상태 | 판정 | 다음 닫힘 시점 |
 | --- | --- | --- | --- |
 | `리포트/집계 정합성` | 핵심 게이트는 정리됐으나 장후 판정 규칙 유지 필요 | `완료 유지 / 품질게이트 지속` | 날짜별 checklist 장후 판정 |
-| `split-entry leakage` | 다음주 실손익 개선 레버리지 1순위 | `최우선` | `2026-04-20~2026-04-22` 순차 shadow |
-| `HOLDING action schema / prompt split` | shadow-only 착수와 D+2 판정 구조 필요 | `2순위` | `2026-04-20 착수`, `2026-04-22 최종판정` |
+| `split-entry leakage` | 다음주 실손익 개선 레버리지 1순위 | `최우선` | `2026-04-20~2026-04-22` 순차 canary |
+| `HOLDING action schema / prompt split` | canary 최소범위 착수와 D+2 판정 구조 필요 | `2순위` | `2026-04-20 착수`, `2026-04-22 최종판정` |
 | `AIPrompt 작업 8/9/10/11/12` | `8/10`은 보류 사유가 생겼고 `9`는 실표본 확인 단계 | `진행 중` | `2026-04-20~2026-04-23` |
 | `latency/tag/threshold broad relax` | bugfix-only 외 확장은 근거 부족 | `후순위 유지` | split-entry 1차 판정 후 재오픈 |
-| `물타기축(AVG_DOWN/REVERSAL_ADD)` | 코드/설계는 존재하지만 스캘핑 실전축은 OFF | `이번 주는 일정 확정만, 실주문 변경 금지` | `2026-04-23 일정 고정`, `2026-04-24 다음주 shadow go/no-go` |
-| `정기 성과측정` | 중간 진단은 있으나 정기 보고 기준 분리 필요 | `이번 정리에서 기준 문서화` | 장후/주간 반복 운영 |
+| `물타기축(AVG_DOWN/REVERSAL_ADD)` | 코드/설계는 존재하지만 스캘핑 실전축은 OFF | `이번 주는 일정 확정만, 실주문 변경 금지` | `2026-04-23 일정 고정`, `2026-04-24 다음주 canary go/no-go` |
+| `정기 성과측정` | 중간 진단은 있으나 리포트 basis 혼선 정리 필요 | `DB 우선 실필드 기준 재고정` | `2026-04-20~2026-04-21` 정합성 감사 |
 
 ## 2026-04-20~2026-04-24 실행 맵
 
 | 일자 | 핵심 실행축 | 실행 원칙 | 기대 산출물 |
 | --- | --- | --- | --- |
-| `2026-04-20 (월)` | `split-entry rebase` shadow 1일차, `HOLDING action schema` shadow-only 착수, `작업 9/8/10` 장후 판정 | split-entry 3축 동시 가동 금지, HOLDING 성과판정은 D+2로 미룬다 | `rebase` 1차 판정, HOLDING baseline/rollback 경로, 작업 8/10 보류 또는 유지 |
-| `2026-04-21 (화)` | `split-entry 즉시 재평가` 착수 또는 보류, `split-entry leakage` 승격/보류, `작업 12` 범위 확정 | `N_min/Δ_min/false_entry_rate` 없으면 착수 금지 | 다음 승격축 `1개` 또는 보류 사유 |
-| `2026-04-22 (수)` | `same-symbol cooldown` 착수 또는 보류, `HOLDING shadow` 최종판정, `작업 10` 확대 여부 최종판정, `작업 11` 보강 | `schema 변경 효과`와 `critical 경량화 효과`를 분리 기록 | HOLDING 축 go/no-go, cooldown 착수 여부 |
+| `2026-04-20 (월)` | `split-entry rebase` canary 1일차, `HOLDING action schema` canary 최소범위 착수, `작업 9/8/10` 장후 판정 | split-entry 3축 동시 가동 금지, HOLDING 성과판정은 D+2로 미룬다 | `rebase` 1차 판정, HOLDING baseline/rollback 경로, 작업 8/10 보류 또는 유지 |
+| `2026-04-21 (화)` | `split-entry 즉시 재평가` 착수 또는 보류, `split-entry leakage` 승격/보류, `작업 12` 범위 확정, `baseline source-of-truth audit` 닫기 | `N_min/Δ_min/false_entry_rate` 없으면 착수 금지, 문서 파생값은 hard KPI로 사용 금지 | 다음 승격축 `1개` 또는 보류 사유 + 정합성 고정 |
+| `2026-04-22 (수)` | `same-symbol cooldown` 착수 또는 보류, `HOLDING` 최종판정, `작업 10` 확대 여부 최종판정, `작업 11` 보강 | `schema 변경 효과`와 `critical 경량화 효과`를 분리 기록 | HOLDING 축 go/no-go, cooldown 착수 여부 |
 | `2026-04-23 (목)` | `작업 12` 미확정분 최종정리 + `AI 엔진 A/B 원격 사전정합화 범위 확정` + `PYRAMID zero_qty Stage 1` 원격 범위/flag/rollback guard 확정 + `물타기축(AVG_DOWN/REVERSAL_ADD)` 재오픈 일정 확정 | `2026-04-21` 미확정이었을 때만 닫고, A/B/scale-in/물타기 모두 실험축 1개만 허용 | 범위 확정 또는 사유+재시각+escalation, A/B/scale-in/물타기 preflight 체크리스트 |
-| `2026-04-24 (금)` | 주간 통합판정 + `AI 엔진 A/B remote shadow 착수 여부` 판정 + `PYRAMID zero_qty Stage 1 remote canary` 승인/보류 + `물타기축 다음주 shadow` 승인/보류 | `regime 태그` 병기, `canary 1축 + 독립 shadow 최대 2축` 원칙 재확인 | 다음주 PREOPEN 승격축 `1개` 또는 A/B/scale-in/물타기 보류사유 |
+| `2026-04-24 (금)` | 주간 통합판정 + `AI 엔진 A/B remote canary 착수 여부` 판정 + `PYRAMID zero_qty Stage 1 remote canary` 승인/보류 + `물타기축 다음주 canary` 승인/보류 | `regime 태그` 병기, `canary 1축` 원칙 재확인 | 다음주 PREOPEN 승격축 `1개` 또는 A/B/scale-in/물타기 보류사유 |
 
 ## 승격/보류 게이트
 
 1. `live` 승격은 하루에 `1축`만 연다.
-2. 같은 날 shadow 착수축은 최대 `3개`로 제한한다.
+2. 신규 관찰축/보완축은 shadow를 만들지 않고 canary로만 착수한다.
 3. 모든 판정 행에는 최소 `N_min`, `Δ_min`, `PrimaryMetric`을 남긴다.
 4. rollback guard는 `reject_rate`, `partial_fill_ratio`, `latency_p95`, `reentry_freq` 같은 정량값을 포함해야 한다.
 5. HOLDING 성과판정은 schema 변경 직후에 내리지 않고 최소 `D+2`에 내린다.
 6. `counterfactual` 수치는 직접 실현손익과 합산하지 않고 우선순위 판단 자료로만 쓴다.
 7. `full fill`, `partial fill`, `split-entry`, `same_symbol_repeat`는 항상 별도 코호트로 본다.
+8. `same_symbol_repeat`는 원 raw 필드/산식 추적 전까지 원인축이 아니라 참고 코호트로만 본다.
 
 ## 현재 기준 문서 입력 규칙
 

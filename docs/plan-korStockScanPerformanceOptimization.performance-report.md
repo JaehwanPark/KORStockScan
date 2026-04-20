@@ -1,7 +1,7 @@
 # KORStockScan 정기 성과측정보고서
 
-기준 시각: `2026-04-19 KST`  
-기준 데이터 baseline: `2026-04-17` 고밀도 표본일 + 장후 문서/스냅샷
+기준 시각: `2026-04-20 KST`  
+기준 데이터 baseline: `2026-04-17` 고밀도 표본일 + DB 우선 스냅샷 + 장후 문서
 
 이 문서는 장후/주간 반복 성과판정에 쓰는 기준 문서다.  
 일회성 진단은 [2026-04-17-midterm-tuning-performance-report.md](./2026-04-17-midterm-tuning-performance-report.md), 기본계획 대비 실행 변경은 [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md)에서 본다.
@@ -9,8 +9,8 @@
 ## 1. 판정
 
 1. 현재 성과측정의 1순위는 `손익`이 아니라 `거래수`, `퍼널`, `blocker`, `체결품질`, `missed_upside`다.
-2. `2026-04-17`은 실현손익 최저일이지만, 동시에 다음주 우선순위를 정할 가장 고밀도 표본일이다.
-3. 다음주 성과측정의 핵심 baseline은 `split-entry soft-stop 손실축 축소`와 `HOLDING missed_upside/capture_efficiency 개선`이다.
+2. `2026-04-17`은 고밀도 표본일이 맞지만, baseline은 `문서 파생값`이 아니라 `스냅샷 실필드` 기준으로 다시 고정해야 한다.
+3. 다음주 성과측정의 핵심 baseline은 `latency + partial/rebase 체결품질 축`과 `HOLDING missed_upside/capture_efficiency 개선`이다.
 
 ## 2. 보고 주기
 
@@ -41,6 +41,11 @@
 
 ## 4. 현재 baseline (`2026-04-17`)
 
+> `2026-04-20` 정합성 보정:
+> `realized_pnl_krw=-223,423`는 `trade_review` 기준의 당일 실현손익이다.
+> `performance_tuning.trends.recent_points`는 rolling trend이므로 당일 손익 baseline이나 rollback 기준으로 사용하지 않는다.
+> `same_symbol_repeat_flag=55.1%`는 현재 원 raw 필드와 산식 추적이 끝나지 않아 hard baseline/rollback 기준에서 제외한다.
+
 ### 4-1. 거래/손익 baseline
 
 | 항목 | 값 | 해석 |
@@ -49,17 +54,21 @@
 | `completed_trades` | `65` | 손익 해석의 기본 표본 |
 | `loss_trades` | `36` | 손실축 집중 구간 존재 |
 | `avg_profit_rate` | `-0.25%` | 직접 손익은 악화 |
-| `realized_pnl_krw` | `-223,423` | 최저 실현손익일 |
+| `realized_pnl_krw` | `-223,423` | `trade_review` 기준 당일 실현손익 |
 
 ### 4-2. 퍼널/체결품질 baseline
 
 | 항목 | 값 | 해석 |
 | --- | ---: | --- |
-| `order_bundle_submitted_events` | `67` | 진입 실행 표본 충분 |
-| `position_rebased_after_fill_events` | `117` | rebase 문제 관찰 밀도 높음 |
+| `budget_pass_events` | `6,634` | 엔진 평가 모수 충분 |
+| `order_bundle_submitted_events` | `67` | 실제 주문 전송 표본 |
+| `latency_block_events` | `6,567` | 상류 차단 병목이 큼 |
+| `quote_fresh_latency_blocks` | `5,354` | stale quote보다 내부 처리 지연 비중 큼 |
+| `position_rebased_after_fill_events` | `117` | rebase 관찰 밀도 높음 |
 | `partial_fill_events` | `82` | split-entry/partial 품질 이슈 집중 |
-| `same_symbol_repeat_flag` | `55.1%` | 반복 진입 오염 강함 |
-| `partial_then_expand_flag` | `52.2%` | split-entry 누수의 핵심 코호트 |
+| `full_fill_events` | `33` | partial과 분리 해석 필요 |
+| `gatekeeper_eval_ms_p95` | `29,336ms` | gatekeeper 지연이 큼 |
+| `partial_fill_completed_avg_profit_rate` | `-0.261` | partial cohort EV 악화 |
 
 ### 4-3. HOLDING/청산 baseline
 
@@ -68,7 +77,7 @@
 | `MISSED_UPSIDE` | `19` | 승자 보유 품질 개선 여지 큼 |
 | `GOOD_EXIT` | `32` | 정상 종료 표본도 충분 |
 | `estimated_extra_upside_10m_krw_sum` | `1,612,548` | 직접 손익이 아니라 HOLDING 개선 여지 |
-| `capture_efficiency_avg_pct` | `39.8%` | 기준선으로 사용 |
+| `capture_efficiency_avg_pct` | `39.8%` | `post_sell_feedback` 기준선으로 사용 |
 
 ### 4-4. 미진입 기회비용 baseline
 
@@ -83,14 +92,49 @@
 
 | 구간 | 기준선 | 원하는 방향 |
 | --- | --- | --- |
-| `split-entry + scalp_soft_stop_pct` | `2026-04-17` 집중 손실축 | 비중 감소 |
-| `same_symbol_repeat_flag` | `55.1%` | 감소 |
+| `latency_block_events / budget_pass_events` | `6567 / 6634` | 의미 있게 감소 |
+| `quote_fresh_latency_blocks` | `5,354` | 감소 |
 | `partial_fill_events` | `82` | 체결기회 훼손 없이 질 개선 |
+| `partial_fill_completed_avg_profit_rate` | `-0.261` | `-0.15` 이내로 개선 |
+| `exit_rules.scalp_soft_stop_pct` | `26` | 감소 |
 | `missed_upside_rate` | 현재 HOLDING 기준선으로 고정 예정 | 감소 |
 | `capture_efficiency_avg_pct` | `39.8%` | 증가 |
 | `GOOD_EXIT` 분포 | `32`건 | 질 유지 또는 개선 |
 
 ## 6. 정기 보고서 작성 템플릿
+
+### 6-0. 2026-04-20 운영 업데이트
+
+#### 판정
+
+1. `2026-04-20`의 장후 우선축은 `same-symbol 반복`이 아니라 `latency + partial/rebase`로 다시 고정한다.
+2. `HOLDING`은 아직 성과확대 판단이 아니라 baseline 고정 단계다.
+3. 리스크 사이즈는 긴급 하향 반영했지만, 오늘은 clean one-day 효과 판정일이 아니다.
+
+#### 근거
+
+| 항목 | 값 | 해석 |
+| --- | ---: | --- |
+| `total_trades` | `28` | 당일 거래수 |
+| `completed_trades` | `24` | 손익 해석 기본 표본 |
+| `realized_pnl_krw` | `-56,786` | `trade_review` 기준 당일 실현손익 |
+| `budget_pass_events` | `866` | 당일 평가 모수 |
+| `latency_block_events` | `838` | latency 차단 우세 |
+| `order_bundle_submitted_events` | `28` | 실제 주문 전송 표본 |
+| `partial_fill_events` | `31` | partial 우세 |
+| `full_fill_events` | `11` | full과 분리 해석 필요 |
+| `position_rebased_after_fill_events` | `44` | rebase 반복 존재 |
+| `gatekeeper_eval_ms_p95` | `19,917ms` | 상류 지연 여전. `2026-04-20` 공식 p95 기준이며, 단일 샘플값 `21,619ms`는 기준선에서 제외 |
+| `exit_rules.scalp_soft_stop_pct` | `18` | soft-stop 과다 |
+| `partial_fill_completed_avg_profit_rate` | `-0.25` | partial cohort EV 악화 |
+| `missed_upside_rate` | `42.3%` | HOLDING 개선 여지 큼 |
+| `capture_efficiency_avg_pct` | `32.871%` | HOLDING baseline 고정치 |
+
+#### 다음 액션
+
+1. `2026-04-21 POSTCLOSE`에는 `partial/rebase` 기반 soft-stop 비중을 다시 본다.
+2. 같은 슬롯에서 긴급 하향한 risk size의 full-day 효과를 clean sample로 재판정한다.
+3. HOLDING 확대 여부는 `2026-04-22 POSTCLOSE`까지 보류한다.
 
 ### 6-1. Daily POSTCLOSE
 
@@ -114,13 +158,47 @@
 3. regime 태그와 조건부 유효범위
 4. 다음주 PREOPEN 반영축
 
-## 7. 데이터 소스
+## 7. 데이터 소스와 우선순위
+
+### 7-1. 소스 우선순위
+
+1. 과거 날짜 운영 판정은 `DB 우선` 조회를 기준으로 한다.
+2. 수동 감사/포렌식은 `monitor_snapshots/*.json.gz`를 사용한다.
+3. 평문 `*.json`은 당일 임시 산출물 또는 fallback으로만 사용한다.
+4. 문서에 적힌 파생 지표는 원 raw 필드와 산식이 추적되기 전까지 rollback/life-cycle 기준으로 쓰지 않는다.
+
+### 7-2. 리포트별 소유 지표
 
 1. `trade_review_YYYY-MM-DD`
+   - `total_trades`
+   - `completed_trades`
+   - `loss_trades`
+   - `avg_profit_rate`
+   - `realized_pnl_krw`
 2. `performance_tuning_YYYY-MM-DD`
+   - `budget_pass_events`
+   - `order_bundle_submitted_events`
+   - `latency_block_events`
+   - `quote_fresh_latency_blocks`
+   - `partial_fill_events`
+   - `full_fill_events`
+   - `position_rebased_after_fill_events`
+   - `gatekeeper_eval_ms_p95`
+   - `partial_fill_completed_avg_profit_rate`
+   - `breakdowns.exit_rules.*`
+   - `breakdowns.fill_quality_cohorts.*`
 3. `post_sell_feedback_YYYY-MM-DD`
+   - `MISSED_UPSIDE`
+   - `GOOD_EXIT`
+   - `estimated_extra_upside_10m_krw_sum`
+   - `capture_efficiency_avg_pct`
 4. `missed_entry_counterfactual_YYYY-MM-DD`
-5. 날짜별 checklist와 audited validation-axis 문서
+   - `MISSED_WINNER`
+   - `AVOIDED_LOSER`
+   - `estimated_counterfactual_pnl_10m_krw_sum`
+5. `performance_tuning.trends.*`
+   - rolling trend 전용
+   - 당일 손익 baseline/rollback 기준으로 사용 금지
 
 ## 8. 대시보드-검증축 매핑 (performance-tuning)
 

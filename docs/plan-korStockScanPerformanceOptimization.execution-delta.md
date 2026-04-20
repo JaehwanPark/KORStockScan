@@ -10,6 +10,9 @@
 1. 계획은 유지하되 실행 방식은 `공격적 동시 추진`에서 `원인 귀속 우선 순차 실행`으로 조정됐다.
 2. 가장 큰 변경은 `split-entry 3축 동시 shadow`를 버리고 `rebase -> 즉시 재평가 -> cooldown` 순차 도입으로 바꾼 점이다.
 3. HOLDING 축도 `schema 착수`와 `성과판정`을 분리해 `D+2` 판정 구조로 변경됐다.
+4. `2026-04-20` 기준으로 baseline/rollback 수치 해석도 조정됐다. 문서 파생값과 rolling trend 값을 hard KPI로 섞어 쓰지 않도록 `DB 우선 실필드 기준`으로 재고정한다.
+5. `2026-04-20`부터 신규 관찰축/보완축은 `shadow`를 열지 않고 `canary-only`로 운영한다.
+6. `TRADING_RULES` 운영 상수, 특히 모델명/투자비율/주문한도/실전 canary 스위치는 요청 범위를 넘겨 바꾸지 않는다. 변경 필요 시 사용자 명시 승인과 롤백 조건을 먼저 기록한다.
 
 ## 2. 변경사항 요약
 
@@ -27,15 +30,18 @@
 | `물타기축(AVG_DOWN/REVERSAL_ADD)` | holding-profit-conversion 플랜 기준으로 `2026-04-20~2026-04-21` 관찰/전환 가능 | 현재 활성 플랜에서는 우선순위에서 내려 `일정 확정만` 수행, 실제 재오픈 여부는 `2026-04-24 POSTCLOSE`에 다음주 shadow go/no-go로 판정 | split-entry/HOLDING 우선 + 실주문 변경축 과밀 방지 | `2026-04-23 일정 확정`, `2026-04-24 go/no-go` |
 | `장전 리포트 빌드 운영` | 장전에도 필요 시 full build 실행 가능으로 운용 | `PREOPEN`에는 `sanity check` 우선, full build는 `bot_main` 동작 중 차단(락 + override 필요) | `2026-04-20` 장전 부하/장애 재발 방지 | 즉시 적용 (`deploy/run_monitor_snapshot_safe.sh`) |
 | `AI 엔진 A/B 착수` | 운영 튜닝과 병행 | 운영 튜닝 종료판정 이후 `remote shadow -> remote canary -> main canary`로 분리 착수 | 원인 귀속 혼선 방지 + 단일축 실험 유지 | `2026-04-24 POSTCLOSE` go/no-go |
+| `신규축 실행 방식` | shadow 선행 후 canary | 신규/보완축은 `shadow 금지`, `canary-only` | 영향도 확인을 실거래 경로에서 즉시 검증하고, 다축 실험은 금지 | 즉시 적용 (`2026-04-20`) |
 | `broad relax` | `latency/tag/threshold` 확장 후보를 빠르게 재오픈 | `split-entry leakage` 1차 판정 전 재오픈 금지 | 거래수 확대보다 손실축 제거 우선 | split-entry 1차 판정 후 |
 | `운영판정` | 실험축별 판정 중심 | `No-Decision Day` 게이트와 `report integrity / event restoration / aggregation quality` 품질게이트 병행 | 잘못된 집계로 잘못된 승격을 막기 위함 | 장후 반복 적용 |
+| `baseline source-of-truth` | 문서 baseline과 스냅샷 baseline을 혼용 가능 | `DB 우선 스냅샷 실필드`만 하드 기준으로 사용, 문서 파생값은 raw 산식 추적 전까지 참고치로 격하 | `same_symbol_repeat_flag=55.1%`, rolling trend 등 basis 혼선 정리 필요 | `2026-04-21 POSTCLOSE` |
+| `운영 상수 변경 통제` | 하드코딩 제거 중 상수값까지 함께 보정 가능 | `TRADING_RULES` 모델명/투자비율/주문한도/canary 스위치는 별도 명시 승인 없이는 전략 변경 금지 | `2026-04-20` 모델명 오판 재발 방지. 하드코딩 제거와 운영 모델 전략 변경을 분리 | 즉시 적용 (`2026-04-20`) |
 
 ## 3. 변경의 의미
 
 ### 3-1. 공격성은 낮춘 것이 아니라 방향을 바꿨다
 
 1. 거래수 확대보다 `split-entry soft-stop` 손실축 제거가 먼저라는 점이 더 명확해졌다.
-2. HOLDING 축도 `지금 바로 확대`가 아니라 `측정 가능한 shadow 로그 축 확보 -> D+2 판정`으로 바뀌었다.
+2. HOLDING 축도 `지금 바로 확대`가 아니라 `측정 가능한 운영 로그 축 확보 -> D+2 판정`으로 바뀌었다.
 3. 이는 보수화가 아니라 `기대값 개선 실패 확률`을 낮추는 방향의 공격성 조정이다.
 
 ### 3-2. 문서 운영도 변경됐다
@@ -43,6 +49,7 @@
 1. `prompt`는 현재 기준만 남긴 경량 실행본으로 바뀌었다.
 2. 계획과 실행의 차이는 이 문서에 남긴다.
 3. 정기 성과 baseline은 [plan-korStockScanPerformanceOptimization.performance-report.md](./plan-korStockScanPerformanceOptimization.performance-report.md)로 분리했다.
+4. 단, baseline 문서에 적힌 모든 숫자가 곧바로 hard KPI는 아니다. 리포트별 소유 지표와 금지 지표를 먼저 고정한다.
 
 ## 4. 앞으로 이 문서를 갱신하는 조건
 
