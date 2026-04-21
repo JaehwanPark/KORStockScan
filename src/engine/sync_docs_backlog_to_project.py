@@ -716,7 +716,25 @@ def _slot_key(value: str) -> str:
     return re.sub(r"[^a-z0-9]", "", value.strip().lower())
 
 
+def _extract_explicit_slot_label(text: str) -> str:
+    match = re.search(r"\bSlot\s*:\s*([A-Za-z_ -]+)", text, re.IGNORECASE)
+    if not match:
+        return ""
+    value = _slot_key(match.group(1))
+    if value == "preopen":
+        return "PREOPEN"
+    if value == "intraday":
+        return "INTRADAY"
+    if value == "postclose":
+        return "POSTCLOSE"
+    return ""
+
+
 def _infer_slot_label(task: BacklogTask) -> str:
+    explicit_slot = _extract_explicit_slot_label(str(task.title or ""))
+    if explicit_slot:
+        return explicit_slot
+
     section_text = str(task.section or "").lower()
     if any(keyword.lower() in section_text for keyword in SLOT_PREOPEN_KEYWORDS):
         return "PREOPEN"

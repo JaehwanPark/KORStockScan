@@ -231,6 +231,16 @@ def test_infer_slot_label_uses_keyword_then_track_default():
     assert _infer_slot_label(plan_fallback) == "POSTCLOSE"
 
 
+def test_infer_slot_label_prefers_explicit_slot_over_section_keyword():
+    task = BacklogTask(
+        title="[AIPrompt0422] Gemini BUY recovery canary 1일차 판정 (Due: 2026-04-22, Slot: INTRADAY, TimeWindow: 12:00~12:20, Track: AIPrompt)",
+        source="docs/2026-04-22-stage2-todo-checklist.md",
+        section="장전/장중 체크리스트 (08:00~12:20) / 체크박스 미완료",
+        track="Checklist0422",
+    )
+    assert _infer_slot_label(task) == "INTRADAY"
+
+
 def test_slot_equals_normalized():
     assert _slot_equals("POST_CLOSE", "postclose")
     assert not _slot_equals("PREOPEN", "INTRADAY")
