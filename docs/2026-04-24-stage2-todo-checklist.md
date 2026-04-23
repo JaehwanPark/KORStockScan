@@ -20,16 +20,25 @@
 
 - [ ] `[ScaleIn0424] PYRAMID zero_qty Stage 1 flag OFF 코드 적재/restart/env 증적 확인` (`Due: 2026-04-24`, `Slot: PREOPEN`, `TimeWindow: 08:20~08:30`, `Track: ScalpingLogic`)
   - 판정 기준: `KORSTOCKSCAN_SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED`가 꺼진 상태로 배포되어야 하며, 재시작 후에도 `flag OFF`가 유지된 증적을 남긴다.
+- [ ] `[FastReuseVerify0424] gatekeeper_fast_reuse 실전 호출 로그 확인` (`Due: 2026-04-24`, `Slot: PREOPEN`, `TimeWindow: 08:20~08:35`, `Track: ScalpingLogic`)
+  - 판정 기준:
+    - `gatekeeper_fast_reuse` 코드 경로가 실전에서 호출되었는지 로그 확인
+    - `호출 건수 = 0`이면: signature 조건 과엄격 또는 코드 미도달 분기
+    - `호출 건수 > 0`이고 `reuse = 0`이면: signature 일치 조건 완화 검토
+    - `reuse > 0`이면: `fast_reuse` 비율 목표(>=10.0%) 대비 평가
+  - 판정 연계:
+    - `fast_reuse`가 활성화되면 `gatekeeper_eval_ms_p95` 하락 기대
+    - p95 하락 동반 시 `quote_fresh_latency_pass_rate` 개선 기대
+    - `DF-ENTRY-004` `fast_reuse` 미개선이면 `quote_fresh` canary 후보 판단으로 후행 이동
+  - Rollback: 필요 시 코드 변경은 Plan Rebase §6 guard 전수 대조 후 진행
 - [ ] `[ScaleIn0424] PYRAMID zero_qty Stage 1 zero_qty/template_qty/cap_qty/floor_applied 로그 필드 확인` (`Due: 2026-04-24`, `Slot: PREOPEN`, `TimeWindow: 08:30~08:40`, `Track: Plan`)
   - 판정 기준: `ADD_BLOCKED` 또는 `ADD_ORDER_SENT` 로그에 `template_qty`, `cap_qty`, `floor_applied`가 모두 남아야 한다.
 
 ## 장중 체크리스트 (09:00~10:00)
 
 - [ ] `[LatencyOps0424] DF-ENTRY-004 오전 검증축 고정 확인` (`Due: 2026-04-24`, `Slot: INTRADAY`, `TimeWindow: 09:00~09:10`, `Track: ScalpingLogic`)
-  - Source: [personal-decision-flow-notes.md](/home/ubuntu/KORStockScan/docs/personal-decision-flow-notes.md)
   - 판정 기준: 오전 `10:00 KST` 전까지의 주병목 검증축을 `DF-ENTRY-003 spread relief canary` 하나로 고정하고, `entry_filter_quality/score-promote/HOLDING/EOD-NXT`를 주병목 판정에서 분리한다고 기록한다.
-- [ ] `[LatencyOps0424] DF-ENTRY-004 10시 제출축 checkpoint` (`Due: 2026-04-24`, `Slot: INTRADAY`, `TimeWindow: 09:50~10:00`, `Track: ScalpingLogic`)
-  - Source: [personal-decision-flow-notes.md](/home/ubuntu/KORStockScan/docs/personal-decision-flow-notes.md)
+- [ ] `[LatencyOps0424] DF-ENTRY-004 10시 제출축 잠금` (`Due: 2026-04-24`, `Slot: INTRADAY`, `TimeWindow: 09:50~10:00`, `Track: ScalpingLogic`)
   - 판정 기준: `ai_confirmed`, `entry_armed`, `budget_pass`, `submitted`, `latency_block`, `quote_fresh_latency_blocks`, `quote_fresh_latency_pass_rate`, `full_fill`, `partial_fill`를 기준으로 `DF-ENTRY-003 유지`, `효과 미확인`, `롤백 검토` 중 하나로 닫는다.
 
 ## 장후 체크리스트 (15:10~15:40) - 주병목 판정

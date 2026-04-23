@@ -157,7 +157,7 @@
 | 테스트 상태 | [test_sniper_entry_latency.py](/home/ubuntu/KORStockScan/src/tests/test_sniper_entry_latency.py) 기준 `spread-only danger -> ALLOW_NORMAL`, `mixed danger -> 차단 유지`를 포함해 `10 passed`다. |
 | 후속 액션 | 남은 장에서는 기존 live 축을 끈 뒤 `spread relief canary`만 켜서 `budget_pass_to_submitted_rate`, `quote_fresh_latency_pass_rate`, `submitted/full/partial fill quality`, `fallback_regression=0`를 본다. 장후 checklist의 `LatencyOps0423 gatekeeper latency 경로 분해(lock/cache/quote_fresh)`는 새 구현의 live 결과까지 포함해 `유지/확대/롤백`을 닫는 단계로 쓴다. |
 
-### DF-ENTRY-004 `2026-04-24 10시까지 검증할 축`
+### DF-ENTRY-004 `DF-ENTRY-003 spread relief canary 유지/실효성 확인`
 
 | 항목 | 내용 |
 | --- | --- |
@@ -170,8 +170,55 @@
 | 해석 원칙 | 오전 10시까지는 `DF-ENTRY-003`의 실효성만 본다. `entry_filter_quality`, `score/promote`, `HOLDING`, `EOD/NXT`는 같은 창에서 주병목 축으로 재판정하지 않는다. |
 | 통과 의미 | `ai_confirmed/entry_armed`가 유지되는 상태에서 `submitted` 또는 `quote_fresh_latency_pass_rate`가 개선되면 제출축 개선 방향이 맞다는 뜻이다. |
 | 실패 의미 | `ai_confirmed/entry_armed`가 유지되는데 `submitted`가 계속 낮고 `latency_block`이 그대로면 `DF-ENTRY-003` 축의 효과 미확인으로 본다. 이 경우 장후에는 제출축 내부 재분해 또는 롤백 여부를 본다. |
-| 금지 | 오전 11시 전에는 `DF-ENTRY-002`를 끄고 다른 upstream 축으로 갈아타지 않는다. `score/promote` 전역 완화, fallback 재개, 다축 동시 ON도 금지다. |
+| 금지 | 오전 10시 전에는 `DF-ENTRY-002`를 끄고 다른 upstream 축으로 갈아타지 않는다. `score/promote` 전역 완화, fallback 재개, 다축 동시 ON도 금지다. |
 | 후속 연결 | 오전 10시 checkpoint 결과는 장후의 `승격 1축 실행 승인 또는 보류`, `후순위 축 parking` 판정 입력으로만 쓴다. |
+
+### DF-ENTRY-004 진행 가이드 (내일 오전 기준)
+
+| 항목 | 기준 |
+| --- | --- |
+| 현재 단계 | `DF-ENTRY-004` 검증 수행 준비 단계 |
+| 직전 선행조건 | `[FastReuseVerify0424]` PREOPEN fast_reuse 확인과 스냅샷 생성 상태가 체크되어야 함 |
+| 내일 오전 검증 대상 | `09:00~09:10`, `09:50~10:00` |
+| 공통 판정군 | `ai_confirmed`, `entry_armed`, `budget_pass`, `submitted`, `latency_block`, `quote_fresh_latency_blocks`, `quote_fresh_latency_pass_rate`, `full_fill`, `partial_fill`, `COMPLETED + valid profit_rate` |
+
+### 내일 오전 판정/액션
+
+1) `09:00~09:10` `[LatencyOps0424] DF-ENTRY-004 오전 검증축 고정 확인`
+- 판정: PREOPEN 선행조건(스냅샷 존재, `[FastReuseVerify0424]` fast_reuse 확인)이 충족되면 `DF-ENTRY-004` 단일축 고정 모드로 진행한다.
+- 근거: 장전에서 `entry_filter_quality/score-promote/HOLDING/EOD-NXT`를 이미 분리했으므로 시간축이 뒤섞이면 오판정 위험이 커진다.
+- 다음 액션: 선행조건 미충족이면 장중 판정 중단 후 1) 재실행 시각 지정, 2) 원인 로그 수집 우선.
+
+2) `09:50~10:00` `[LatencyOps0424] DF-ENTRY-004 10시 제출축 잠금`
+- 판정 A: `submitted` 또는 `quote_fresh_latency_pass_rate`가 전일 대비 개선되고 `fallback_regression=0`.
+- 근거: `ai_confirmed/entry_armed` 유지 전제가 깨지지 않았고 제출축 지표가 개선되면 canary 실효성 증거가 된다.
+- 다음 액션: `DF-ENTRY-004 유지/확대 후보`로 장후 15:10~15:20 확정 판단 준비.
+
+- 판정 B: `latency_block`가 동일하거나 증가하고 `submitted`·`quote_fresh_latency_pass_rate` 정체.
+- 근거: spread relief canary의 실효성이 없거나 반응이 약함.
+- 다음 액션: 장후 15:10~15:20에서 `DF-ENTRY-004 미효과`로 분류, 제출축 재분해 또는 롤백 검토.
+
+- 판정 C: `partial_fill` 상승 + `full_fill` 급락 + `COMPLETED + valid profit_rate` 악화 동반.
+- 근거: 제출량 지표만 아니라 체결 품질과 기대값(완성거래)도 훼손되는 상태.
+- 다음 액션: 즉시 `보류/롤백` 경로로 전환하고 대체축 평가 보류.
+
+3) 장후 연계 (`15:10~15:20` 결과 잠금)
+- 판정 A: `DF-ENTRY-004` 개선 확인.
+- 근거: 10시 checkpoint에서 제출축 개선 조건 충족.
+- 다음 액션: `[VisibleResult0424] 승격 1축 실행 승인` 후보로 연계.
+
+- 판정 B: 개선 미확인.
+- 근거: 제출축 개선 조건 미충족.
+- 다음 액션: `entry_filter_quality`, `AIPrompt`, HOLDING, EOD/NXT를 parking으로 유지하고 재실험 대기.
+
+- 판정 C: `fast_reuse` 재사용률 0 확인, 원인분해에서 코드 경로 미도달.
+- 근거: 제출축 단절의 1차 원인이 `fast_reuse` 미도달일 가능성 큼.
+- 다음 액션: `[FastReuseVerify0424]` 선행조치 우선 후 `quote_fresh` canary는 보류.
+
+### 플로우차트 진행 위치
+
+- 현재 플로우는 `DF-ENTRY-004` 기준 `entry_armed -> budget_pass -> latency_block -> submitted` 구간(플로우차트 단계 7~8) 위주로 고정 추적한다.
+- upstream 단계인 `감시종목/AI 판정`(`DF-ENTRY-001`, `DF-ENTRY-002`)은 `보류 상태`가 아니라 `다음 단계 선결 조건 충족`으로 판정되어, 현재는 제출 전 단락 해소가 핵심 검증 목표다.
 
 ## 항목 간 연결 관계
 

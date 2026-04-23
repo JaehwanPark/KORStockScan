@@ -6,6 +6,7 @@ import argparse
 import fcntl
 import json
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -52,12 +53,52 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _validate_wrapper_invocation(target_date: str | None) -> int | None:
+    if os.getenv("MONITOR_SNAPSHOT_FROM_WRAPPER") == "1":
+        return None
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(
+        json.dumps(
+            {
+                "target_date": target_date or "unknown",
+                "status": "failed",
+                "error_kind": "ForbiddenInvocation",
+                "error": (
+                    "run_monitor_snapshot must be executed through "
+                    "deploy/run_monitor_snapshot_safe.sh"
+                ),
+                "profile": os.getenv("MONITOR_SNAPSHOT_PROFILE", "full"),
+                "skip_server_comparison": os.getenv("MONITOR_SNAPSHOT_SKIP_SERVER_COMPARISON", "0")
+                == "1",
+                "skip_lock": True,
+                "started_at": now,
+                "finished_at": now,
+                "duration_sec": 0.0,
+            },
+            ensure_ascii=False,
+        )
+    )
+    return 2
+
+
 def main() -> int:
     args = build_parser().parse_args()
-    target_date = args.target_date or datetime.now().strftime("%Y-%m-%d")
+    resolved_target_date = args.target_date
+    invocation_result = _validate_wrapper_invocation(resolved_target_date)
+    if invocation_result is not None:
+        return invocation_result
+
+    started_at = datetime.now()
+    started_at_display = started_at.strftime("%Y-%m-%d %H:%M:%S")
+    target_date = resolved_target_date or started_at.strftime("%Y-%m-%d")
     lock_path = Path(args.lock_file)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_handle = None
+    status = "success"
+    error_kind = ""
+    error_message = ""
+    result: dict[str, str] = {}
     if not args.skip_lock:
         lock_handle = open(lock_path, "a+", encoding="utf-8")
         try:
@@ -67,9 +108,12 @@ def main() -> int:
                 json.dumps(
                     {
                         "target_date": target_date,
-                        "skipped": True,
+                        "status": "skipped",
                         "reason": "lock_busy",
                         "lock_file": str(lock_path),
+                        "started_at": started_at_display,
+                        "finished_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "duration_sec": round(time.time() - started_at.timestamp(), 3),
                     },
                     ensure_ascii=False,
                 )
@@ -83,23 +127,35 @@ def main() -> int:
             io_delay_sec=max(0.0, float(args.io_delay_sec)),
             include_server_comparison=not args.skip_server_comparison,
         )
+    except Exception as exc:
+        status = "failed"
+        error_kind = type(exc).__name__
+        error_message = str(exc)
     finally:
         if lock_handle is not None:
             lock_handle.close()
+
+    finished_at = datetime.now()
     print(
         json.dumps(
             {
                 "target_date": target_date,
+                "status": status,
                 "profile": args.profile,
                 "io_delay_sec": max(0.0, float(args.io_delay_sec)),
                 "skip_server_comparison": bool(args.skip_server_comparison),
                 "skip_lock": bool(args.skip_lock),
-                "snapshots": result,
+                "started_at": started_at_display,
+                "finished_at": finished_at.strftime("%Y-%m-%d %H:%M:%S"),
+                "duration_sec": round((finished_at - started_at).total_seconds(), 3),
+                "error_kind": error_kind or None,
+                "error": error_message or None,
+                "snapshots": result if status == "success" else {},
             },
             ensure_ascii=False,
         )
     )
-    return 0
+    return 0 if status == "success" else 1
 
 
 if __name__ == "__main__":
