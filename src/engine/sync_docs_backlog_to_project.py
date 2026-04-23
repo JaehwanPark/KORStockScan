@@ -7,11 +7,13 @@ import json
 import os
 import re
 import sys
+import time
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib import request
+from urllib.error import HTTPError, URLError
 from zoneinfo import ZoneInfo
 
 from src.utils.market_day import get_krx_trading_day_status
@@ -489,8 +491,28 @@ def _graphql_request(token: str, query: str, variables: dict[str, Any]) -> dict[
         },
         method="POST",
     )
-    with request.urlopen(req, timeout=30) as resp:
-        body = resp.read().decode("utf-8")
+
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            with request.urlopen(req, timeout=30) as resp:
+                body = resp.read().decode("utf-8")
+            break
+        except (HTTPError, URLError) as exc:
+            last_err = exc
+            status_code = getattr(exc, "code", None)
+            if status_code in {502, 503, 504, 429} and attempt < 2:
+                delay = 0.8 * (2 ** attempt)
+                print(
+                    f"[DOC_GRAPHQL_RETRY] code={status_code} attempt={attempt + 1} retry_after={delay:.1f}s",
+                    file=sys.stderr,
+                )
+                time.sleep(delay)
+                continue
+            raise
+    else:
+        raise last_err if last_err is not None else RuntimeError("github graphql request failed")
+
     parsed = json.loads(body)
     errors = parsed.get("errors") or []
     fatal: list[dict[str, Any]] = []
