@@ -105,6 +105,9 @@ def test_render_markdown_includes_template_and_ids():
     assert "기준일자" in md
     assert "휴장일 재분류" in md
     assert "반영대상" in md
+    removed_rule = "현재 시간 기준으로" + " 작업시작 시간이 도래한 작업만 실행"
+    assert removed_rule not in md
+    assert "작업시간이 지났으나 반복적으로 실행해야하는 작업" in md
 
 
 def test_matches_slot_case_insensitive():

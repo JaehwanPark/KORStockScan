@@ -414,6 +414,33 @@ def sort_tasks(tasks: list[ProjectTask], status_order: list[str]) -> list[Projec
     )
 
 
+def _task_completeness_score(task: ProjectTask) -> tuple[int, int, int, int, str]:
+    return (
+        1 if task.due_date else 0,
+        1 if task.slot else 0,
+        1 if task.time_window else 0,
+        1 if task.source or task.section else 0,
+        task.item_id,
+    )
+
+
+def dedupe_tasks(tasks: list[ProjectTask]) -> list[ProjectTask]:
+    deduped: dict[str, ProjectTask] = {}
+    order: list[str] = []
+    for task in tasks:
+        key = " ".join(str(task.title or "").split()).strip().lower()
+        if not key:
+            key = task.item_id
+        existing = deduped.get(key)
+        if existing is None:
+            deduped[key] = task
+            order.append(key)
+            continue
+        if _task_completeness_score(task) > _task_completeness_score(existing):
+            deduped[key] = task
+    return [deduped[key] for key in order]
+
+
 def render_markdown(
     *,
     owner: str,
@@ -429,7 +456,8 @@ def render_markdown(
     tasks: list[ProjectTask],
     max_items: int,
 ) -> str:
-    top = sort_tasks(tasks, statuses)[:max_items]
+    unique_tasks = dedupe_tasks(tasks)
+    top = sort_tasks(unique_tasks, statuses)[:max_items]
     track_counts: dict[str, int] = {}
     for item in top:
         key = item.track or "-"
@@ -445,7 +473,12 @@ def render_markdown(
         lines.append(f"- 휴장일 재분류: `true` / 사유: `{holiday_reason or '-'}` / 슬롯정책: `all -> INTRADAY`")
     lines.append(f"- 상태필터: `{', '.join(statuses) if statuses else '전체'}`")
     lines.append(f"- 슬롯필터: `{', '.join(slots) if slots else '전체'}`")
-    lines.append(f"- 후보건수: `{len(tasks)}` / 지시반영건수: `{len(top)}`")
+    duplicate_count = max(0, len(tasks) - len(unique_tasks))
+    lines.append(
+        f"- 후보건수: `{len(tasks)}` / 중복제거후: `{len(unique_tasks)}` / 지시반영건수: `{len(top)}`"
+    )
+    if duplicate_count:
+        lines.append(f"- 중복축약건수: `{duplicate_count}`")
     if track_counts:
         compact = ", ".join(f"{k}:{v}" for k, v in sorted(track_counts.items(), key=lambda kv: kv[0]))
         lines.append(f"- Track 분포: `{compact}`")
@@ -520,7 +553,6 @@ def render_markdown(
     lines.append("```text")
     lines.append("아래 Project 항목을 오늘 작업 대상으로 처리해줘.")
     lines.append("원칙:")
-    lines.append("- 현재 시간 기준으로 작업시작 시간이 도래한 작업만 실행할 것(필수)")
     lines.append("- 작업시간이 지났으나 반복적으로 실행해야하는 작업은 시간이 지났어도 확인해서 실행(필수)")
     lines.append("- 판정, 근거, 다음 액션 순서로 보고")
     lines.append("- 관련 문서/체크리스트 동시 업데이트")
