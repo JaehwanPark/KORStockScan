@@ -1,10 +1,10 @@
 # Data Quality Report
 
-- 총 거래수: 0
-- `COMPLETED` 수: 0
-- `valid_profit_rate` 수: 0
+- 총 거래수: 133
+- `COMPLETED` 수: 52
+- `valid_profit_rate` 수: 52
 - 서버별 `valid_profit_rate` 건수:
-  - 로컬(local): 0
+  - 로컬(local): 52
   - 원격(remote): 0
 
 ## ⚠️ 실패 조건 도달

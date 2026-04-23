@@ -29,6 +29,27 @@ MONITOR_SNAPSHOT_MANIFEST_DIR.mkdir(parents=True, exist_ok=True)
 SERVER_COMPARISON_REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _env_float(name: str, default: float = 0.0) -> float:
+    raw_value = str(os.getenv(name, "")).strip()
+    if not raw_value:
+        return default
+    try:
+        return max(0.0, float(raw_value))
+    except Exception:
+        return default
+
+
+def _stage_io_delay_sec(base_delay: float, snapshot_kind: str) -> float:
+    delay_map = {
+        "performance_tuning": _env_float("MONITOR_SNAPSHOT_PERFORMANCE_TUNING_IO_DELAY_SEC", base_delay),
+        "server_comparison": _env_float(
+            "MONITOR_SNAPSHOT_SERVER_COMPARISON_IO_DELAY_SEC",
+            base_delay,
+        ),
+    }
+    return delay_map.get(snapshot_kind, base_delay)
+
+
 def _snapshot_path(kind: str, target_date: str) -> Path:
     safe_kind = str(kind or "").strip().lower().replace("-", "_")
     return MONITOR_SNAPSHOT_DIR / f"{safe_kind}_{target_date}.json"
@@ -355,14 +376,22 @@ def save_monitor_snapshots_for_date_with_profile(
         "profile": normalized_profile,
         "io_delay_sec": f"{sleep_sec:.3f}",
     }
+    result["io_delay_sec_per_stage"] = json.dumps(
+        {
+            "default": f"{sleep_sec:.3f}",
+            "performance_tuning": f"{_stage_io_delay_sec(sleep_sec, 'performance_tuning'):.3f}",
+            "server_comparison": f"{_stage_io_delay_sec(sleep_sec, 'server_comparison'):.3f}",
+        }
+    )
     if trend_max_dates is not None:
         result["trend_max_dates"] = str(trend_max_dates)
 
     selected_kinds = allowed_by_profile[normalized_profile]
     selected_entries = [item for item in snapshot_order if item[0] in selected_kinds]
     for idx, (snapshot_kind, build_fn) in enumerate(selected_entries):
-        if idx > 0 and sleep_sec > 0:
-            time.sleep(sleep_sec)
+        stage_delay = _stage_io_delay_sec(sleep_sec, snapshot_kind)
+        if idx > 0 and stage_delay > 0:
+            time.sleep(stage_delay)
         payload = build_fn()
         payload.setdefault("meta", {})
         payload["meta"]["saved_snapshot_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -385,8 +414,9 @@ def save_monitor_snapshots_for_date_with_profile(
         return _finalize_snapshot_manifest()
 
     try:
-        if sleep_sec > 0:
-            time.sleep(sleep_sec)
+        comparison_delay = _stage_io_delay_sec(sleep_sec, "server_comparison")
+        if comparison_delay > 0:
+            time.sleep(comparison_delay)
         server_comparison = _save_server_comparison_artifacts(target_date)
     except Exception as exc:
         result["server_comparison_error"] = f"{type(exc).__name__}: {exc}"

@@ -37,7 +37,8 @@ def _load_telegram_config() -> tuple[str, str]:
 
 
 def _build_message(payload: dict, *, target_date: str, profile: str, log_file: str) -> str:
-    if payload.get("skipped"):
+    status = str(payload.get("status") or "success")
+    if payload.get("skipped") or status == "skipped":
         reason = payload.get("reason") or "-"
         lock_file = payload.get("lock_file") or "-"
         lines = [
@@ -46,6 +47,10 @@ def _build_message(payload: dict, *, target_date: str, profile: str, log_file: s
             f"- profile: {profile}",
             f"- reason: {reason}",
             f"- lock_file: {lock_file}",
+            f"- status: {status}",
+            f"- started_at: {payload.get('started_at', '-')}",
+            f"- finished_at: {payload.get('finished_at', '-')}",
+            f"- duration_sec: {payload.get('duration_sec', '-')}",
             f"- log: {log_file}",
         ]
         return "\n".join(lines)
@@ -62,24 +67,37 @@ def _build_message(payload: dict, *, target_date: str, profile: str, log_file: s
             "profile",
             "io_delay_sec",
             "trend_max_dates",
+            "io_delay_sec_per_stage",
             "snapshot_manifest",
             "server_comparison_status",
             "server_comparison_error",
+            "status",
+            "error",
+            "error_kind",
         }
         and not key.startswith("server_comparison_")
     ]
     trend_max_dates = snapshots.get("trend_max_dates", "-")
     server_status = snapshots.get("server_comparison_status") or snapshots.get("server_comparison_error") or "-"
+    error_kind = payload.get("error_kind") or "-"
+    error_message = payload.get("error") or "-"
 
     lines = [
         "[KORStockScan] monitor snapshot complete",
         f"- date: {target_date}",
         f"- profile: {profile}",
+        f"- status: {status}",
+        f"- started_at: {payload.get('started_at', '-')}",
+        f"- finished_at: {payload.get('finished_at', '-')}",
+        f"- duration_sec: {payload.get('duration_sec', '-')}",
         f"- snapshot_count: {len(snapshot_kinds)}",
         f"- kinds: {', '.join(snapshot_kinds) if snapshot_kinds else '-'}",
         f"- trend_max_dates: {trend_max_dates}",
         f"- max_date_basis: {target_date}",
         f"- server_comparison: {server_status}",
+        f"- io_delay_sec_per_stage: {payload.get('io_delay_sec_per_stage') or snapshots.get('io_delay_sec_per_stage', '-')}",
+        f"- error_kind: {error_kind}",
+        f"- error: {error_message}",
         f"- log: {log_file}",
     ]
     return "\n".join(lines)

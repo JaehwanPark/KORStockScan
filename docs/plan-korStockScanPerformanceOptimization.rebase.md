@@ -49,6 +49,7 @@
 | --- | --- | --- |
 | 단일 live canary | 하루에 동시 live 변경축은 1개만 허용한다. 단, 같은 거래일 안에서 live 축 교체가 필요하면 `기존 축 OFF -> restart.flag -> 새 축 ON`의 replacement 전환만 허용한다. | 동시 2축 live 금지. 교체 전환 시 기존 축 OFF -> `restart.flag` -> 새 축 ON 순서를 강제한다. |
 | shadow 금지 | 신규/보완축은 shadow 없이 canary-only | shadow 항목은 폐기 또는 코드정리로 격하 |
+| 문서 참조 방향 | `docs/personal-decision-flow-notes.md`는 개인판단 정합성 기록용 노트다. 다른 문서에서 `Source` 또는 판정 근거 링크로 사용하지 않는다. 개인문서는 checklist/report/plan 문서나 코드 레퍼런스를 참조해도 된다. | 개인문서가 판정 근거 링크로 쓰이면 링크를 checklist에서 제거하고 기준문서/감사문서 근거로 대체한다. |
 | 원격 비교 제외 | Plan Rebase 기간은 main-only 기준 | songstock/remote 비교는 의사결정 입력에서 제외 |
 | 라우팅 고정 | live 스캘핑 AI는 Gemini 고정 | A/B는 `entry_filter_quality` 1차 판정 후 별도 판단. 병목 완화 중에는 원격 전체 엔진 라우팅만 GPT로 바꾸는 단순 교체를 금지하고, 진입/보유/청산 단계별 코호트 비교와 품질 가드(`submitted/full/partial/soft_stop/COMPLETED + valid profit_rate`)를 함께 고정한다. |
 | 문서 기준 | 중심 문서는 기준, checklist는 실행, report는 근거 | 중복 작업항목 생성 금지 |

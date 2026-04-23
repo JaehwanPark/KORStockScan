@@ -22,6 +22,8 @@ KORStockScan 작업 기본 규칙:
 
 - 관련 문서가 있으면 함께 업데이트한다.
 - 날짜별 checklist 상단은 매번 장문의 `목적/용어 범례/운영 규칙` 반복본을 복제하지 말고, `오늘 목적`과 `오늘 강제 규칙`만 짧게 적는다. 상세 용어/정책/가드는 `Plan Rebase` 또는 관련 부속문서를 참조한다.
+- 개인문서(`docs/personal-decision-flow-notes.md`)는 다른 문서의 `Source`/판정 근거 링크로 참조되지 않는다.  
+  즉, 개인문서는 보조 메모 성격으로 유지하고, 실행 판정의 근거는 checklist/report/plan 기준문서에서 직접 가져온다.
 - 미래 작업, 특정 시각 작업, 재확인 작업은 답변에만 남기지 말고 날짜별 checklist에 자동 파싱 가능한 `- [ ]` 항목으로 기록한다.
 - checklist 작업항목을 만들거나 수정했으면 parser 검증을 수행하고, Project/Calendar 동기화는 토큰 존재 여부를 확인하지 말고 사용자에게 실행할 1개 명령을 남긴다.
 - 자동화 규칙, cron, workflow, wrapper를 바꾸면 운영문서와 checklist를 같은 변경 세트로 맞춘다.

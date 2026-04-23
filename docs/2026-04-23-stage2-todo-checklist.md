@@ -75,7 +75,7 @@
   - why: 장중 실전 전환은 `준비된 단일 downstream 축`이어야 하는데, 현재 저장소에 남아 있는 즉시 사용 가능 후보는 fallback 결합 경로라 Plan Rebase 기준을 만족하지 못한다. 무리하게 켜면 `main-only`, `shadow 금지`, `fallback 폐기`, `1축 canary` 원칙을 동시에 흔들게 된다.
   - 다음 액션: 장중 live는 기존 `buy_recovery_canary`만 유지하고, 장후 `[LatencyOps0423] gatekeeper latency 경로 분해(lock/cache/quote_fresh)`에서 `quote_stale=False/ws_age/ws_jitter/spread`를 분리한 `fallback 비결합 downstream 축` 1개를 새로 정의한다. 정의 가능 조건은 `submitted 단절이 주병목으로 잠금`, `분해 계측 live 확인`, `fallback과 분리된 단일 조작점 + rollback guard` 3개가 모두 충족될 때다.
 - [x] `[LatencyOps0423] latency/quote 제출축 사전착수 가능 여부 판정` (`Due: 2026-04-23`, `Slot: INTRADAY`, `TimeWindow: 11:20~11:35`, `Track: Plan`) (`실행: 2026-04-23 11:22 KST`)
-  - Source: [personal-decision-flow-notes.md](/home/ubuntu/KORStockScan/docs/personal-decision-flow-notes.md), [ai_engine.py](/home/ubuntu/KORStockScan/src/engine/ai_engine.py), [sniper_entry_latency.py](/home/ubuntu/KORStockScan/src/engine/sniper_entry_latency.py)
+  - Source: [ai_engine.py](/home/ubuntu/KORStockScan/src/engine/ai_engine.py), [sniper_entry_latency.py](/home/ubuntu/KORStockScan/src/engine/sniper_entry_latency.py)
   - 판정 기준: `entry_armed -> submitted` 병목에 대해 `지금 바로 할 수 있는 일`과 `장후까지 남겨야 하는 일`을 분리해 기록한다. 장중에는 원인귀속 정리, 로그/스냅샷 분해, 다음 코드수정 후보 고정까지 가능하면 `사전착수 가능`으로 닫는다.
   - 판정: 완료. `사전착수 가능`이다. 다만 `독립 downstream live 전환`은 아직 불가하다.
   - 근거: 오늘 snapshot 기준 `budget_pass_events=1893`, `order_bundle_submitted_events=2`, `latency_block_events=1891`, `quote_fresh_latency_blocks=1693`, `gatekeeper_eval_ms_p95=16869ms`라서 blocker 분해/원인귀속 정리는 지금도 충분히 가능하다. 또한 gatekeeper 계측 필드(`lock_wait/model_call/total_internal`)는 오늘 PREOPEN/INTRADAY에서 이미 live 기록이 확인됐다.
@@ -83,7 +83,7 @@
   - why: 즉시 가능한 일은 `분해/설계/코드수정 후보 고정`이고, 아직 불가능한 일은 `실전 1축 교체`다. 장후 task를 기다릴 필요 없이 원인귀속 정리 자체는 지금 착수해도 된다.
   - 다음 액션: 장중에는 `quote_stale=False vs true`, `ws_age/ws_jitter/spread`, `gatekeeper lock/model/cache` 분포를 먼저 정리하고, 장후 `[LatencyOps0423] gatekeeper latency 경로 분해(lock/cache/quote_fresh)`에서 `fallback 비결합 downstream 축` 여부를 최종 판정한다. 여기서 말하는 정의는 `단일 조작점 1개`, `주 KPI 1개`, `rollback guard 3개 이상`이 함께 고정되는 수준을 뜻한다.
 - [x] `[LatencyOps0423] latency/quote 제출축 1차 blocker 분해(quote_stale/ws_age/ws_jitter/spread/lock-model-cache)` (`Due: 2026-04-23`, `Slot: INTRADAY`, `TimeWindow: 11:25~11:45`, `Track: Plan`) (`실행: 2026-04-23 11:37 KST`)
-  - Source: [personal-decision-flow-notes.md](/home/ubuntu/KORStockScan/docs/personal-decision-flow-notes.md), [ai_engine.py](/home/ubuntu/KORStockScan/src/engine/ai_engine.py), [sniper_entry_latency.py](/home/ubuntu/KORStockScan/src/engine/sniper_entry_latency.py)
+  - Source: [ai_engine.py](/home/ubuntu/KORStockScan/src/engine/ai_engine.py), [sniper_entry_latency.py](/home/ubuntu/KORStockScan/src/engine/sniper_entry_latency.py)
   - 판정 기준: 오늘 live 로그와 `performance_tuning` snapshot을 기준으로 `quote_stale=False vs true`, `ws_age/ws_jitter/spread`, `gatekeeper lock/model/cache` 3축 분포를 1차 정리하고, `fallback 비결합 downstream 1축`의 단일 조작점 후보 1개를 남긴다.
   - why 기준: 지금 필요한 것은 장후까지 새 데이터를 기다리는 것이 아니라, 이미 쌓인 표본으로 `entry_armed -> submitted` 단절의 하위 원인을 좁혀 `단일 조작점 1개 + 주 KPI 1개 + rollback guard 3개`까지 정의 가능한 상태로 만드는 것이다.
   - 산출물: `수치 + why + 다음 코드수정 후보 1개`를 기록하고, 장후 `[LatencyOps0423] gatekeeper latency 경로 분해(lock/cache/quote_fresh)`의 입력으로 넘긴다.
@@ -94,7 +94,7 @@
   - why: 지금 제출축을 가장 많이 막는 것은 `quote_stale=False` 구간의 `spread_too_wide`다. 따라서 첫 downstream 정의는 `latency 전체 완화`보다 `fresh quote spread 지배 구간`을 별도 cohort로 고정하는 쪽이 원인귀속이 가장 깨끗하다. 반면 gatekeeper는 느리지만 아직 low-N이고, 관찰된 표본도 제출 직전 대량 차단의 1차 설명력보다는 보조 경고에 가깝다.
   - 다음 액션: 장후 `[LatencyOps0423] gatekeeper latency 경로 분해(lock/cache/quote_fresh)`에서는 `fallback 비결합 downstream 1축`의 첫 후보를 `quote_stale=False + spread_too_wide 지배 구간 분리`로 두고, 보조 가설로 `ws_age/ws_jitter`와 `gatekeeper model_call/cache miss`를 같이 적는다. 다음 코드수정 후보 1개는 `latency_danger_reasons=spread_too_wide` 전용 분리 집계/allowlist 설계다.
 - [x] `[LatencyOps0423] fallback 비결합 spread relief canary 구현 + 테스트` (`Due: 2026-04-23`, `Slot: INTRADAY`, `TimeWindow: 11:40~12:00`, `Track: ScalpingLogic`) (`실행: 2026-04-23 11:47 KST`)
-  - Source: [personal-decision-flow-notes.md](/home/ubuntu/KORStockScan/docs/personal-decision-flow-notes.md), [sniper_entry_latency.py](/home/ubuntu/KORStockScan/src/engine/sniper_entry_latency.py), [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py), [test_sniper_entry_latency.py](/home/ubuntu/KORStockScan/src/tests/test_sniper_entry_latency.py)
+  - Source: [sniper_entry_latency.py](/home/ubuntu/KORStockScan/src/engine/sniper_entry_latency.py), [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py), [test_sniper_entry_latency.py](/home/ubuntu/KORStockScan/src/tests/test_sniper_entry_latency.py)
   - 판정 기준: `REJECT_DANGER` 중 `quote_stale=False + spread_too_wide 단독` 케이스만 `ALLOW_NORMAL`로 직접 넘기는 fallback 비결합 조작점을 코드에 반영하고, 혼합 danger(`ws_age/ws_jitter/quote_stale` 동반)는 계속 차단되게 유지한다.
   - 판정: 완료. `spread-only + quote fresh` 구간 전용 `spread relief canary`를 구현했다.
   - 근거: [sniper_entry_latency.py](/home/ubuntu/KORStockScan/src/engine/sniper_entry_latency.py)에 `_should_apply_latency_spread_relief_canary()`를 추가했고, `REJECT_DANGER -> ALLOW_NORMAL` 직접 override 경로와 `[LATENCY_SPREAD_RELIEF_CANARY]` 로그를 넣었다. [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py)에는 `KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_*` env/설정축을 추가했다.
@@ -119,7 +119,7 @@
   - 근거(품질/손익): `trade_review_2026-04-23.json` (`saved_snapshot_at=2026-04-23 14:01:52`) 기준 `completed_trades=2`, `full_fill_events=2`, `partial_fill_events=0`, `avg_profit_rate=-0.47%`, `realized_pnl_krw=-10317`, open trade는 0이다. 손익 표본은 `COMPLETED + valid profit_rate` 2건만 사용했고 partial fill은 합산하지 않았다.
   - 근거(fallback): `2026-04-23 12:00~14:00 KST` raw 로그에서 `fallback_scout/main`, `fallback_single` 신규 회귀는 0건이다.
   - why: spread relief canary가 켜진 상태에서도 제출은 12시 이후 0건이고, fresh quote 구간의 spread 차단이 계속 지배적이다. 다만 실제 canary 통과 로그는 실전 후보에서 0건이며, `latency_canary_reason`은 `spread_only_required=964`, `low_signal=842`, `quote_stale=65`, `missing=11`로 나뉜다. 특히 `fresh spread-only` 964건 중 `ai_score>=85` 표본이 0건이라 `min_signal=85` 조건이 실제 제출 회복을 만들지 못했다. 따라서 전역 완화나 즉시 확대가 아니라 장후에 `min_signal/tag/allowlist`와 `spread_only_required` 조건을 분리 재판정해야 한다.
-  - 검증 메모: `PYTHONPATH=. .venv/bin/python -m src.engine.run_monitor_snapshot --date 2026-04-23 --profile intraday_light` 실행으로 snapshot 파일은 갱신됐으나, 프로세스가 산출물 생성 후 종료 반환 없이 남아 있어 PID `112774`는 중복 리소스 점유 방지를 위해 종료했다. 생성 파일의 `saved_snapshot_at` 기준으로 판정했다.
+  - 검증 메모: 당시 수동 점검 중 `PYTHONPATH=. .venv/bin/python -m src.engine.run_monitor_snapshot --date 2026-04-23 --profile intraday_light`로 갱신 시도가 있었고, 프로세스가 산출물 생성 후 종료 반환 없이 잔류해 PID `112774`를 수동 종료 처리했다. 현재 운영 방침은 wrapper 강제 실행이므로 동일 케이스 재현 방지 위해 동일 실행은 `run_monitor_snapshot_safe.sh` 경로로만 수행한다.
   - 운영 보정: 직접 CLI는 timeout 보호가 없으므로 장중 표준 실행은 `deploy/run_monitor_snapshot_midcheck_safe.sh 2026-04-23`로 보정한다. wrapper는 `timeout`과 lock을 갖고 있으며, `bot_main.py` 감지 패턴을 실제 `python bot_main.py` 실행 형태까지 잡도록 수정했다.
 - [x] `[HoldingSoftStop0423] soft stop forensic baseline 수집 필드 반영 + 테스트` (`Due: 2026-04-23`, `Slot: INTRADAY`, `TimeWindow: 13:55~14:15`, `Track: AIPrompt`) (`실행: 2026-04-23 14:08 KST`)
   - Source: [sniper_post_sell_feedback.py](/home/ubuntu/KORStockScan/src/engine/sniper_post_sell_feedback.py), [sniper_execution_receipts.py](/home/ubuntu/KORStockScan/src/engine/sniper_execution_receipts.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py)
@@ -161,7 +161,7 @@
 
 ### 주병목 결과 잠금
 
-- 주병목 결과 잠금의 대상은 `DF-ENTRY-003 entry_armed -> submitted` 제출축이다.
+- 주병목 결과 잠금의 대상은 `entry_armed -> submitted` 제출축이다.
 - 아래 항목 중 주병목 판정은 `LatencyOps0423 gatekeeper latency 경로 분해(lock/cache/quote_fresh)` 하나로 읽고, 나머지는 `후순위 축 parking`으로 읽는다.
 
 - [x] `[PlanRebase0423] entry_filter_quality 착수 가능성 재판정` (`Due: 2026-04-23`, `Slot: POSTCLOSE`, `TimeWindow: 15:20~15:35`, `Track: ScalpingLogic`) (`실행: 2026-04-23 16:37 KST`)
@@ -174,7 +174,7 @@
   - 근거: `Plan Rebase` 기준상 오늘 live는 `1축 canary`만 허용이고, 현재 upstream보다 downstream 제출 병목이 커서 A/B는 운영판정 축과 분리해야 한다. preflight 범위는 `main-only`, `normal_only`, `COMPLETED+valid profit_rate`, `full/partial 분리`, `ai_confirmed_buy_count/share`, `WAIT65/70/75~79`, `blocked_ai_score`, `ai_confirmed->submitted`, rollback guard는 `submitted 감소`, `fill quality 악화`, `fallback_regression=0`으로 고정한다.
   - 다음 액션: [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-24-stage2-todo-checklist.md)의 `[AIPrompt0424] AI 엔진 A/B 재개 여부 판정`에서 오늘 확정한 preflight 범위를 그대로 사용한다.
 - [x] `[PlanRebase0423] AI threshold 완화축(score/promote) 승격 조건 재판정` (`Due: 2026-04-23`, `Slot: POSTCLOSE`, `TimeWindow: 17:05~17:15`, `Track: ScalpingLogic`) (`실행: 2026-04-23 16:37 KST`)
-  - Source: [personal-decision-flow-notes.md](/home/ubuntu/KORStockScan/docs/personal-decision-flow-notes.md)
+  - Source: [2026-04-23-stage2-todo-checklist.md](./2026-04-23-stage2-todo-checklist.md)
   - 판정: `보류`.
   - 근거: `wait6579_ev_cohort` 기준 `approval_gate.min_sample_gate_passed=false`, `full_samples=305`, `partial_samples=1`, `threshold_relaxation_approved=false`이고, `performance_tuning` 기준 `gatekeeper_decisions=33`, `gatekeeper_eval_ms_p95=22653ms`인데 같은 시점에 `budget_pass_to_submitted_rate=0.1%`라서 threshold보다 제출 병목이 훨씬 크다. 시간대 감소 역시 기존 intraday decay 범위 설명이 가능해 `score/promote`를 주원인으로 승격할 근거가 없다.
   - 다음 액션: 오늘 결론은 [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-24-stage2-todo-checklist.md)의 `VisibleResult0424`/`AIPrompt0424` 항목 입력으로만 사용하고, 전역 threshold 하향은 계속 금지한다.
@@ -186,7 +186,7 @@
 
 ### 후순위 축 Parking
 
-- 아래 항목들은 주병목 원인 판정이 아니라, `DF-ENTRY-003`이 잠긴 상태에서 오늘 승격하지 않을 축을 parking 처리하는 용도다.
+- 아래 항목들은 주병목 원인 판정이 아니라, `entry_armed -> submitted` 제출병목이 잠긴 상태에서 오늘 승격하지 않을 축을 parking 처리하는 용도다.
 - [x] `[KiwoomAuth0423] REST token invalid 자동 복구/중복 발급 가드 판정` (`Due: 2026-04-23`, `Slot: POSTCLOSE`, `TimeWindow: 17:45~17:55`, `Track: ScalpingLogic`) (`실행: 2026-04-23 16:37 KST`)
   - Source: [kiwoom_orders.py](/home/ubuntu/KORStockScan/src/engine/kiwoom_orders.py), [kiwoom_utils.py](/home/ubuntu/KORStockScan/src/utils/kiwoom_utils.py), [kiwoom_sniper_v2.py](/home/ubuntu/KORStockScan/src/engine/kiwoom_sniper_v2.py)
   - 판정: `restart.flag 우아한 재시작으로 고정`, `auth_zero_qty`를 별도 운영 장애 코호트로 분리.
