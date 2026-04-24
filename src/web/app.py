@@ -1912,6 +1912,8 @@ def performance_tuning_preview():
     swing_daily_summary = _report_dict(report, 'sections', 'swing_daily_summary')
     judgment_gate = _report_dict(report, 'sections', 'judgment_gate')
     holding_axis = _report_dict(report, 'sections', 'holding_axis')
+    flow_bottleneck_lane = _report_dict(report, 'sections', 'flow_bottleneck_lane')
+    observation_axis_coverage = _report_list(report, 'sections', 'observation_axis_coverage')
     top_holding_slow = _report_list(report, 'sections', 'top_holding_slow')
     top_gatekeeper_slow = _report_list(report, 'sections', 'top_gatekeeper_slow')
     top_dual_persona_slow = _report_list(report, 'sections', 'top_dual_persona_slow')
@@ -2794,6 +2796,124 @@ def performance_tuning_preview():
             {% endfor %}
           </div>
         </div>
+
+        {# ---------- Flow Bottleneck Lane ---------- #}
+        {% if flow_bottleneck_lane and flow_bottleneck_lane.nodes %}
+        <div class="section card">
+          <h2>Flow Bottleneck Lane (진입→청산 흐름)</h2>
+          <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:12px;">
+            {% for node in flow_bottleneck_lane.nodes %}
+              <div style="flex:1; min-width:130px; max-width:180px; border:1px solid var(--line); border-radius:14px; padding:12px; background:#fafcfa;">
+                <div style="font-size:11px; color:var(--muted); margin-bottom:4px;">{{ node.stage or node.stage_group }}</div>
+                <div style="font-weight:700; font-size:14px; margin-bottom:4px;">{{ node.node_name }}</div>
+                <div>
+                  <span class="pill
+                    {% if node.status == 'ok' %}tone-good
+                    {% elif node.status == 'watch' %}tone-warn
+                    {% elif node.status == 'bottleneck' %}tone-bad
+                    {% elif node.status == 'anomaly' %}tone-bad
+                    {% elif node.status == 'waiting' %}{# neutral #}
+                    {% endif %}">
+                    {% if node.status == 'ok' %}✓ 정상
+                    {% elif node.status == 'watch' %}● 주시
+                    {% elif node.status == 'bottleneck' %}⚠ 병목
+                    {% elif node.status == 'anomaly' %}✗ 이상
+                    {% elif node.status == 'waiting' %}○ 대기
+                    {% else %}{{ node.status }}{% endif %}
+                  </span>
+                </div>
+                <div style="margin-top:8px; font-size:13px;">
+                  <span style="color:var(--muted);">{{ node.primary_label or node.primary_metric }}</span>
+                  <div style="font-weight:700;">{{ node.primary_value }}</div>
+                </div>
+                {% if node.tuning_point and node.tuning_point != '-' %}
+                <div style="margin-top:6px; font-size:12px; color:var(--warn);">
+                  {{ node.tuning_point }}
+                </div>
+                {% endif %}
+                <div style="margin-top:4px; font-size:11px; color:var(--muted);">
+                  {{ node.next_action }}
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+          {% if flow_bottleneck_lane.meta.warnings %}
+          <div style="margin-top:12px; font-size:12px; color:var(--bad);">
+            {% for w in flow_bottleneck_lane.meta.warnings %}
+              <div>{{ w }}</div>
+            {% endfor %}
+          </div>
+          {% endif %}
+        </div>
+        {% endif %}
+
+        {# ---------- Observation Axis Coverage Matrix ---------- #}
+        {% if observation_axis_coverage %}
+        <div class="section card">
+          <h2>관찰축 커버리지 매트릭스</h2>
+          <div style="overflow-x:auto; margin-top:12px;">
+            <table>
+              <thead>
+                <tr>
+                  <th>관찰축</th>
+                  <th>상태</th>
+                  <th>Source</th>
+                  <th>대시보드 위치</th>
+                  <th>판정 용도</th>
+                  <th>보완 액션</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for axis in observation_axis_coverage %}
+                  <tr>
+                    <td>
+                      <strong>{{ axis.axis_name }}</strong>
+                      <div style="font-size:11px; color:var(--muted);">{{ axis.axis_id }}</div>
+                    </td>
+                    <td>
+                      <span class="pill
+                        {% if axis.coverage_status == 'direct' %}tone-good
+                        {% elif axis.coverage_status == 'indirect' %}tone-warn
+                        {% elif axis.coverage_status == 'external_report' %}{# neutral #}
+                        {% elif axis.coverage_status == 'collected_not_displayed' %}{# neutral #}
+                        {% elif axis.coverage_status == 'deprecated_archive' %}tone-bad
+                        {% endif %}">
+                        {% if axis.coverage_status == 'direct' %}직접 표시
+                        {% elif axis.coverage_status == 'indirect' %}간접 표시
+                        {% elif axis.coverage_status == 'external_report' %}별도 리포트
+                        {% elif axis.coverage_status == 'collected_not_displayed' %}수집 미표시
+                        {% elif axis.coverage_status == 'deprecated_archive' %}보관 후보
+                        {% else %}{{ axis.coverage_status }}{% endif %}
+                      </span>
+                      {% if not axis.available %}
+                        {% if axis.coverage_status in ('direct', 'indirect') %}
+                          <br><span style="font-size:11px; color:var(--bad);">키 누락</span>
+                        {% elif axis.coverage_status == 'external_report' %}
+                          <br><span style="font-size:11px; color:var(--muted);">외부 리포트 연결</span>
+                        {% elif axis.coverage_status == 'collected_not_displayed' %}
+                          <br><span style="font-size:11px; color:var(--muted);">수집/증적 유지</span>
+                        {% endif %}
+                      {% endif %}
+                    </td>
+                    <td style="font-size:12px;">{{ axis.source_snapshot }}</td>
+                    <td style="font-size:12px;">{{ axis.dashboard_location }}</td>
+                    <td style="font-size:12px;">{{ axis.decision_use }}</td>
+                    <td style="font-size:12px; max-width:200px;">
+                      {{ axis.gap_action }}
+                      {% if axis.missing_keys %}
+                        <div style="color:var(--bad); font-size:11px; margin-top:4px;">
+                          누락: {{ axis.missing_keys|join(', ') }}
+                        </div>
+                      {% endif %}
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        {% endif %}
+
       </div>
     </body>
     </html>
@@ -2811,6 +2931,8 @@ def performance_tuning_preview():
         swing_daily_summary=swing_daily_summary,
         judgment_gate=judgment_gate,
         holding_axis=holding_axis,
+        flow_bottleneck_lane=flow_bottleneck_lane,
+        observation_axis_coverage=observation_axis_coverage,
         top_holding_slow=top_holding_slow,
         top_gatekeeper_slow=top_gatekeeper_slow,
         top_dual_persona_slow=top_dual_persona_slow,

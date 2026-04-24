@@ -255,6 +255,31 @@
 | `작업10 필수 관찰축` | `sections.holding_axis.holding_override_rule_versions` | rule version 관찰 |
 | `작업10 필수 관찰축` | `sections.holding_axis.force_exit_shadow_samples` | FORCE_EXIT shadow 표본 |
 | `작업10 필수 관찰축` | `sections.holding_axis.trailing_conflict_rate` | trailing 충돌률 |
+| `관찰축 커버리지 매트릭스` | `sections.observation_axis_coverage[].axis_id` / `coverage_status` / `available` / `missing_keys` | 14개 축 상태를 한 테이블에 집약; 축별 required_keys 존재 여부를 `_check_dotted_path`로 검증 |
+| `관찰축: entry_funnel` | `sections.observation_axis_coverage[0]` | `direct` / `metrics.budget_pass_events` 등 필수키 보유 |
+| `관찰축: latency_quote` | `sections.observation_axis_coverage[1]` | `direct` / `breakdowns.latency_reason_breakdown` 포함 |
+| `관찰축: gatekeeper_fast_reuse` | `sections.observation_axis_coverage[2]` | `direct` / `breakdowns.gatekeeper_reuse_blockers` 포함 |
+| `관찰축: fill_quality` | `sections.observation_axis_coverage[3]` | `direct` / `breakdowns.fill_quality_cohorts` 포함 |
+| `관찰축: holding_exit` | `sections.observation_axis_coverage[4]` | `direct` / `sections.holding_axis` 포함 |
+| `관찰축: dual_persona` | `sections.observation_axis_coverage[5]` | `direct` / `breakdowns.dual_persona_agreement` 등 포함 |
+| `관찰축: preset_exit_sync` | `sections.observation_axis_coverage[6]` | `direct` / `breakdowns.preset_exit_sync_status` 포함 |
+| `관찰축(간접): spread_relief_canary_detail` | `sections.observation_axis_coverage[7]` | `indirect` / latency 지표에서 부분 추론 가능 |
+| `관찰축(외부): post_sell_quality` | `sections.observation_axis_coverage[8]` | `external_report` / post_sell_feedback 리포트 링크 |
+| `관찰축(외부): wait6579_ev` | `sections.observation_axis_coverage[9]` | `external_report` / wait6579_ev_cohort 리포트 링크 |
+| `관찰축(외부): missed_entry_counterfactual` | `sections.observation_axis_coverage[10]` | `external_report` / missed_entry_counterfactual 리포트 링크; 성능튜닝 손익과 합산 금지 |
+| `관찰축(수집미표시): initial_vs_pyramid` | `sections.observation_axis_coverage[11]` | `collected_not_displayed` / trade_review raw log 증적 |
+| `관찰축(수집미표시): pyramid_zero_qty_stage1` | `sections.observation_axis_coverage[12]` | `collected_not_displayed` / raw log 증적 |
+| `관찰축(수집미표시): eod_nxt_exit` | `sections.observation_axis_coverage[13]` | `collected_not_displayed` / trade raw log 증적 |
+| `Flow Bottleneck Lane` | `sections.flow_bottleneck_lane.nodes[]` | 9개 노드(watch_universe→sell_complete)의 상태/지표/튜닝포인트를 가로 흐름으로 표시 |
+| `Flow: watch_universe` | `sections.flow_bottleneck_lane.nodes[0]` | 감시종목 수 / strategy_rows candidates 합계 |
+| `Flow: ai_decision` | `sections.flow_bottleneck_lane.nodes[1]` | AI overlap blocked / overbought blocked |
+| `Flow: entry_armed` | `sections.flow_bottleneck_lane.nodes[2]` | expired_armed / budget_pass |
+| `Flow: pre_submit_latency` | `sections.flow_bottleneck_lane.nodes[3]` | latency_block / quote_fresh_latency_pass_rate로 bottleneck 탐지 |
+| `Flow: submitted_fill` | `sections.flow_bottleneck_lane.nodes[4]` | order_bundle_submitted / full_fill / partial_fill |
+| `Flow: holding_review` | `sections.flow_bottleneck_lane.nodes[5]` | holding_reviews / holding_skips; flow 단절 anomaly 탐지 |
+| `Flow: scale_in_branch` | `sections.flow_bottleneck_lane.nodes[6]` | position_rebased_after_fill / 추가매수 표본 |
+| `Flow: exit_signal` | `sections.flow_bottleneck_lane.nodes[7]` | exit_signals / preset_exit_sync_mismatch |
+| `Flow: sell_complete` | `sections.flow_bottleneck_lane.nodes[8]` | completed_trades / full_fill/partial_fill 평균 손익률 |
 
 ## 9. 패턴랩 정기 실행 및 DB 연계 운영
 

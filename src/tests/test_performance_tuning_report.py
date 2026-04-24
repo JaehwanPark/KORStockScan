@@ -633,3 +633,286 @@ def test_performance_tuning_report_accepts_dynamic_trend_window(monkeypatch):
     assert captured["target_date"] == "2026-04-03"
     assert captured["max_dates"] == 7
     assert report["meta"]["trend_max_dates"] == 7
+
+
+def test_check_dotted_path_validates_nested_keys():
+    """_check_dotted_path 단위 검증"""
+    data = {
+        "metrics": {"budget_pass_events": 5, "latency_block_events": 2},
+        "breakdowns": {"latency_reason_breakdown": []},
+        "sections": {"holding_axis": {}},
+    }
+    exists, missing = report_mod._check_dotted_path(data, "metrics.budget_pass_events")
+    assert exists and missing is None
+    exists, missing = report_mod._check_dotted_path(data, "metrics.nonexistent")
+    assert not exists and missing == "nonexistent"
+    exists, missing = report_mod._check_dotted_path(data, "breakdowns.latency_reason_breakdown")
+    assert exists and missing is None
+    exists, missing = report_mod._check_dotted_path(data, "sections.holding_axis")
+    assert exists and missing is None
+
+
+def test_observation_axis_coverage_returns_all_14_axes():
+    """_build_observation_axis_coverage가 14개 axis row를 반환하고 direct/indirect축은 available=True"""
+    metrics = {
+        "budget_pass_events": 10, "order_bundle_submitted_events": 5, "budget_pass_to_submitted_rate": 50.0,
+        "latency_block_events": 2, "latency_pass_events": 8, "quote_fresh_latency_pass_rate": 80.0,
+        "gatekeeper_fast_reuse_ratio": 30.0, "gatekeeper_eval_ms_p95": 450.0,
+        "full_fill_events": 4, "partial_fill_events": 1,
+        "holding_reviews": 6, "holding_skips": 3,
+        "dual_persona_shadow_samples": 5, "dual_persona_conflict_ratio": 40.0,
+        "preset_exit_sync_ok_events": 3, "preset_exit_sync_mismatch_events": 1,
+        "expired_armed_events": 0,
+    }
+    breakdowns = {
+        "latency_reason_breakdown": [{"label": "latency_state_danger", "count": 2}],
+        "gatekeeper_reuse_blockers": [{"label": "시그니처 변경", "count": 3}],
+        "gatekeeper_sig_deltas": [{"label": "curr_price", "count": 2}],
+        "fill_quality_cohorts": [{"label": "FULL_FILL", "count": 4, "avg_profit_rate": 0.5}],
+        "exit_rules": [{"label": "scalp_ai_early_exit", "count": 1}],
+        "dual_persona_agreement": [{"label": "all_agree", "count": 3}],
+        "dual_persona_decision_types": [{"label": "gatekeeper", "count": 3}],
+        "preset_exit_sync_status": [{"label": "OK", "count": 3}],
+    }
+    sections = {"holding_axis": {"holding_action_applied": 1}}
+    rows = report_mod._build_observation_axis_coverage(metrics, breakdowns, sections)
+    assert len(rows) == 14
+    direct_axes = {r["axis_id"] for r in rows if r["coverage_status"] == "direct"}
+    assert len(direct_axes) == 7
+    for r in rows:
+        if r["coverage_status"] in ("direct", "indirect"):
+            assert r["available"] is True, f"{r['axis_id']} should be available but missing {r['missing_keys']}"
+        elif r["coverage_status"] in ("external_report", "collected_not_displayed"):
+            assert r["available"] is False, f"{r['axis_id']} should be unavailable (no external data)"
+
+
+def test_flow_bottleneck_lane_returns_9_nodes():
+    """_build_flow_bottleneck_lane가 9개 node 반환, stage_group은 4종 스펙 준수"""
+    metrics = {
+        "budget_pass_events": 10, "order_bundle_submitted_events": 5,
+        "latency_block_events": 0, "latency_pass_events": 10, "quote_fresh_latency_pass_rate": 100.0,
+        "expired_armed_events": 0, "position_rebased_after_fill_events": 0,
+        "full_fill_events": 4, "partial_fill_events": 1,
+        "holding_reviews": 6, "holding_skips": 3,
+        "exit_signals": 3, "preset_exit_sync_mismatch_events": 0,
+        "full_fill_completed_avg_profit_rate": 0.5, "partial_fill_completed_avg_profit_rate": -0.2,
+        "ai_overlap_blocked_events": 1, "ai_overlap_overbought_blocked_events": 0,
+    }
+    breakdowns = {
+        "latency_reason_breakdown": [],
+        "gatekeeper_reuse_blockers": [],
+        "gatekeeper_sig_deltas": [],
+    }
+    sections = {
+        "strategy_rows": [
+            {
+                "pipeline": {"candidates": 20},
+                "outcomes": {"completed_rows": 5},
+            }
+        ],
+        "swing_daily_summary": {
+            "metrics": {"blocker_event_count": 0},
+            "blocker_families": [],
+        },
+    }
+    result = report_mod._build_flow_bottleneck_lane(metrics, breakdowns, sections)
+    assert len(result["nodes"]) == 9
+    node_ids = [n["node_id"] for n in result["nodes"]]
+    expected = ["watch_universe", "ai_decision", "entry_armed", "pre_submit_latency",
+                "submitted_fill", "holding_review", "scale_in_branch", "exit_signal", "sell_complete"]
+    assert node_ids == expected
+    for n in result["nodes"]:
+        assert n["status"] in ("ok", "watch", "bottleneck", "anomaly", "waiting", "not_applicable")
+        # stage_group은 4종 스펙(ENTRY, EXECUTION, HOLDING, EXIT) 준수
+        assert n["stage_group"] in ("ENTRY", "EXECUTION", "HOLDING", "EXIT"), (
+            f"stage_group={n['stage_group']} not in spec 4-type"
+        )
+        # stage 필드는 상세 표시용으로 존재
+        assert "stage" in n
+    assert "meta" in result
+
+
+def test_flow_bottleneck_lane_latency_bottleneck_detection():
+    """pre_submit_latency bottleneck 상태 감지: latency_block>0 + quote_pass_rate<30"""
+    metrics = {
+        "budget_pass_events": 10, "order_bundle_submitted_events": 0,
+        "latency_block_events": 5, "latency_pass_events": 1, "quote_fresh_latency_pass_rate": 16.0,
+        "expired_armed_events": 0, "position_rebased_after_fill_events": 0,
+        "full_fill_events": 0, "partial_fill_events": 0,
+        "holding_reviews": 0, "holding_skips": 0,
+        "exit_signals": 0, "preset_exit_sync_mismatch_events": 0,
+        "full_fill_completed_avg_profit_rate": 0.0, "partial_fill_completed_avg_profit_rate": 0.0,
+        "ai_overlap_blocked_events": 0, "ai_overlap_overbought_blocked_events": 0,
+    }
+    breakdowns = {}
+    sections = {
+        "strategy_rows": [],
+        "swing_daily_summary": {
+            "metrics": {"blocker_event_count": 0},
+            "blocker_families": [],
+        },
+    }
+    result = report_mod._build_flow_bottleneck_lane(metrics, breakdowns, sections)
+    pre_submit = next(n for n in result["nodes"] if n["node_id"] == "pre_submit_latency")
+    assert pre_submit["status"] == "bottleneck"
+    assert "latency guard threshold" in pre_submit["tuning_point"]
+
+
+def test_observation_axis_coverage_gatekeeper_sig_deltas_required_key():
+    """gatekeeper_fast_reuse required_keys에 breakdowns.gatekeeper_sig_deltas 포함 여부 검증
+    - CASE 1: sig_deltas 존재 → available=True
+    - CASE 2: sig_deltas 누락 → available=False, missing_keys에 포함
+    """
+    base_metrics = {
+        "budget_pass_events": 10, "order_bundle_submitted_events": 5, "budget_pass_to_submitted_rate": 50.0,
+        "latency_block_events": 2, "latency_pass_events": 8, "quote_fresh_latency_pass_rate": 80.0,
+        "gatekeeper_fast_reuse_ratio": 30.0, "gatekeeper_eval_ms_p95": 450.0,
+        "full_fill_events": 4, "partial_fill_events": 1,
+        "holding_reviews": 6, "holding_skips": 3,
+        "dual_persona_shadow_samples": 5, "dual_persona_conflict_ratio": 40.0,
+        "preset_exit_sync_ok_events": 3, "preset_exit_sync_mismatch_events": 1,
+    }
+    base_breakdowns = {
+        "latency_reason_breakdown": [{"label": "latency_state_danger", "count": 2}],
+        "gatekeeper_reuse_blockers": [{"label": "시그니처 변경", "count": 3}],
+        # gatekeeper_sig_deltas 제외 (누락 케이스)
+        "fill_quality_cohorts": [{"label": "FULL_FILL", "count": 4, "avg_profit_rate": 0.5}],
+        "exit_rules": [{"label": "scalp_ai_early_exit", "count": 1}],
+        "dual_persona_agreement": [{"label": "all_agree", "count": 3}],
+        "dual_persona_decision_types": [{"label": "gatekeeper", "count": 3}],
+        "preset_exit_sync_status": [{"label": "OK", "count": 3}],
+    }
+    sections = {"holding_axis": {"holding_action_applied": 1}}
+
+    # CASE 1: sig_deltas 있음 → available
+    breakdowns_with = dict(base_breakdowns)
+    breakdowns_with["gatekeeper_sig_deltas"] = [{"label": "curr_price", "count": 2}]
+    rows_with = report_mod._build_observation_axis_coverage(base_metrics, breakdowns_with, sections)
+    gk_with = next(r for r in rows_with if r["axis_id"] == "gatekeeper_fast_reuse")
+    assert gk_with["available"] is True
+    assert "breakdowns.gatekeeper_sig_deltas" not in gk_with["missing_keys"]
+
+    # CASE 2: sig_deltas 없음 → 누락 감지
+    rows_without = report_mod._build_observation_axis_coverage(base_metrics, base_breakdowns, sections)
+    gk_without = next(r for r in rows_without if r["axis_id"] == "gatekeeper_fast_reuse")
+    assert gk_without["available"] is False
+    assert "breakdowns.gatekeeper_sig_deltas" in gk_without["missing_keys"]
+
+
+def test_performance_tuning_api_includes_new_sections(monkeypatch):
+    """API endpoint /api/performance-tuning 응답에 flow_bottleneck_lane과 observation_axis_coverage 포함 검증."""
+    import src.web.app as web_app
+    monkeypatch.setattr(web_app, "_load_saved_performance_tuning_snapshot", lambda *args, **kwargs: {
+        "metrics": {},
+        "breakdowns": {},
+        "sections": {
+            "flow_bottleneck_lane": {
+                "nodes": [{"node_id": "test", "status": "ok"}],
+                "meta": {"warnings": []},
+            },
+            "observation_axis_coverage": [
+                {"axis_id": "test_axis", "available": True, "missing_keys": []},
+            ],
+        },
+        "meta": {"source": "snapshot"},
+    })
+    with web_app.app.test_client() as client:
+        resp = client.get("/api/performance-tuning?target_date=2026-04-24")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert "flow_bottleneck_lane" in data.get("sections", {})
+    assert "observation_axis_coverage" in data.get("sections", {})
+    assert len(data["sections"]["flow_bottleneck_lane"]["nodes"]) >= 1
+
+
+def test_performance_tuning_html_renders_new_sections(monkeypatch):
+    """HTML /performance-tuning 페이지에 Flow Bottleneck Lane 및 관찰축 커버리지 섹션 렌더링 검증."""
+    import src.web.app as web_app
+    monkeypatch.setattr(web_app, "_load_saved_performance_tuning_snapshot", lambda *args, **kwargs: {
+        "metrics": {},
+        "breakdowns": {},
+        "sections": {
+            "flow_bottleneck_lane": {
+                "nodes": [
+                    {"node_id": "test_node", "node_name": "테스트 노드", "status": "ok",
+                     "stage_group": "TEST", "stage": "TEST", "primary_metric": "test", "primary_value": 0,
+                     "supporting_metrics": [], "tuning_point": "-",
+                     "evidence_keys": [], "missing_keys": [], "next_action": "정상"},
+                ],
+                "meta": {"warnings": []},
+            },
+            "observation_axis_coverage": [
+                {"axis_id": "direct_axis", "axis_name": "직접 표시 축", "coverage_status": "direct",
+                 "source_snapshot": "test", "dashboard_location": "test", "decision_use": "test",
+                 "required_keys": [], "gap_action": "-", "owner_doc": "-",
+                 "available": True, "missing_keys": [], "reuse_mode": "existing_metric"},
+                {"axis_id": "external_axis", "axis_name": "외부 리포트 축", "coverage_status": "external_report",
+                 "source_snapshot": "post_sell_feedback", "dashboard_location": "별도", "decision_use": "참고",
+                 "required_keys": ["MISSED_UPSIDE"], "gap_action": "링크", "owner_doc": "-",
+                 "available": False, "missing_keys": ["MISSED_UPSIDE"], "reuse_mode": "external_report_pointer"},
+                {"axis_id": "collected_axis", "axis_name": "수집 미표시 축", "coverage_status": "collected_not_displayed",
+                 "source_snapshot": "raw_log", "dashboard_location": "미표시", "decision_use": "참고",
+                 "required_keys": ["initial_entry"], "gap_action": "증적", "owner_doc": "-",
+                 "available": False, "missing_keys": ["initial_entry"], "reuse_mode": "raw_log_pointer"},
+            ],
+        },
+        "meta": {"source": "snapshot"},
+    })
+    with web_app.app.test_client() as client:
+        resp = client.get("/performance-tuning?target_date=2026-04-24")
+    assert resp.status_code == 200
+    html = resp.data.decode("utf-8")
+    assert "Flow Bottleneck Lane" in html
+    assert "관찰축 커버리지" in html or "Observation Axis" in html
+    assert "테스트 노드" in html
+    assert "직접 표시 축" in html
+    # 감리: external_report available=false → "외부 리포트 연결" 표시
+    assert "외부 리포트 연결" in html
+    # 감리: collected_not_displayed available=false → "수집/증적 유지" 표시
+    assert "수집/증적 유지" in html
+
+
+def test_flow_bottleneck_lane_scale_in_branch_zero_qty_bottleneck():
+    """scale_in_branch 노드가 swing_daily_summary blocker zero_qty 힌트를 통해 bottleneck 감지"""
+    metrics = {
+        "budget_pass_events": 10, "order_bundle_submitted_events": 5,
+        "latency_block_events": 0, "latency_pass_events": 10, "quote_fresh_latency_pass_rate": 100.0,
+        "expired_armed_events": 0, "position_rebased_after_fill_events": 0,
+        "full_fill_events": 4, "partial_fill_events": 1,
+        "holding_reviews": 6, "holding_skips": 3,
+        "exit_signals": 3, "preset_exit_sync_mismatch_events": 0,
+        "full_fill_completed_avg_profit_rate": 0.5, "partial_fill_completed_avg_profit_rate": -0.2,
+        "ai_overlap_blocked_events": 1, "ai_overlap_overbought_blocked_events": 0,
+    }
+    breakdowns = {}
+    # zero_qty 힌트가 있는 swing_daily_summary
+    sections = {
+        "strategy_rows": [{"pipeline": {"candidates": 20}, "outcomes": {"completed_rows": 5}}],
+        "swing_daily_summary": {
+            "metrics": {"blocker_event_count": 3},
+            "blocker_families": [
+                {"label": "주문 가능 수량", "count": 3, "stock_count": 2},
+            ],
+        },
+    }
+    result = report_mod._build_flow_bottleneck_lane(metrics, breakdowns, sections)
+    scale_in = next(n for n in result["nodes"] if n["node_id"] == "scale_in_branch")
+    assert scale_in["status"] == "bottleneck", (
+        f"position_rebased=0 + zero_qty 힌트 있음 → bottleneck 예상, 실제={scale_in['status']}"
+    )
+    assert "zero_qty" in scale_in["tuning_point"] or "차단" in scale_in["tuning_point"]
+
+
+def test_observation_axis_coverage_external_report_badge_not_red():
+    """external_report/collected_not_displayed 축은 available=false여도 '키 누락' 마크 없이 상태 표시"""
+    metrics = {"budget_pass_events": 1, "order_bundle_submitted_events": 0, "budget_pass_to_submitted_rate": 0.0}
+    breakdowns = {}
+    sections = {}
+    rows = report_mod._build_observation_axis_coverage(metrics, breakdowns, sections)
+    for row in rows:
+        if row["coverage_status"] in ("external_report", "collected_not_displayed"):
+            assert row["available"] is False, (
+                f"{row['axis_id']}은 external/collected이므로 available=false 정상"
+            )
+            # 이 축들은 UI에서 '키 누락' 빨간 배지 대신 회색/정보 배지로 표시되어야 함
+            # available=false지만, engine에서 warnings에 포함되지 않아야 함

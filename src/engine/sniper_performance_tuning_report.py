@@ -47,7 +47,7 @@ _STRATEGY_LABELS = {
     "other": "기타",
 }
 _STRATEGY_ORDER = ("scalping", "swing")
-PERFORMANCE_TUNING_SCHEMA_VERSION = 4
+PERFORMANCE_TUNING_SCHEMA_VERSION = 5
 _BLOCKER_LABELS = {
     "blocked_strength_momentum": "동적 체결강도",
     "blocked_liquidity": "유동성",
@@ -370,6 +370,349 @@ def _count_sig_delta_fields(counter: Counter, value) -> None:
         field_name = delta_field.split(":", 1)[0].strip()
         if field_name:
             counter[field_name] += 1
+
+
+def _check_dotted_path(report_like: dict, dotted_path: str) -> tuple[bool, str | None]:
+    """Check if a dotted path like 'metrics.budget_pass_events' exists in report_like dict.
+    
+    Returns (exists, missing_part) where missing_part is the first segment not found.
+    """
+    parts = dotted_path.strip().split(".")
+    current = report_like
+    for i, part in enumerate(parts):
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+        else:
+            return False, part
+    return True, None
+
+
+def _build_observation_axis_coverage(
+    metrics: dict,
+    breakdowns: dict,
+    sections: dict,
+) -> list[dict]:
+    """Build observation axis coverage matrix for performance-tuning dashboard.
+    
+    Returns a list of axis coverage rows with availability checks.
+    Does not add new aggregations; only reuses existing metrics/breakdowns/sections.
+    """
+    report_like = {
+        "metrics": metrics,
+        "breakdowns": breakdowns,
+        "sections": sections,
+    }
+
+    axis_definitions = [
+        # (axis_id, axis_name, coverage_status, source_snapshot, dashboard_location, decision_use, required_keys, gap_action, owner_doc, reuse_mode)
+        # -- direct --
+        ("entry_funnel", "진입/제출 퍼널", "direct", "performance_tuning",
+         "스캘핑 퍼널/체결 품질 카드", "제출병목",
+         ["metrics.budget_pass_events", "metrics.order_bundle_submitted_events", "metrics.budget_pass_to_submitted_rate"],
+         "직접 표시, metric card 유지", "docs/plan-korStockScanPerformanceOptimization.performance-report.md", "existing_metric"),
+        ("latency_quote", "latency/quote fresh", "direct", "performance_tuning",
+         "스캘핑 퍼널/체결 품질 카드 + Latency 차단 사유 분포", "제출병목",
+         ["metrics.latency_block_events", "metrics.latency_pass_events", "metrics.quote_fresh_latency_pass_rate", "breakdowns.latency_reason_breakdown"],
+         "직접 표시, metric card + breakdown 유지", "docs/plan-korStockScanPerformanceOptimization.performance-report.md", "existing_breakdown"),
+        ("gatekeeper_fast_reuse", "Gatekeeper fast reuse", "direct", "performance_tuning",
+         "조정 관찰 포인트 + Gatekeeper 경로 분포", "HOLDING/청산",
+         ["metrics.gatekeeper_fast_reuse_ratio", "metrics.gatekeeper_eval_ms_p95", "breakdowns.gatekeeper_reuse_blockers", "breakdowns.gatekeeper_sig_deltas"],
+         "직접 표시, watch item + breakdown 유지", "docs/plan-korStockScanPerformanceOptimization.performance-report.md", "existing_breakdown"),
+        ("fill_quality", "full/partial 체결품질", "direct", "performance_tuning",
+         "Fill Quality Cohort 성과 + 스캘핑 퍼널/체결 품질 카드", "체결품질",
+         ["metrics.full_fill_events", "metrics.partial_fill_events", "breakdowns.fill_quality_cohorts"],
+         "직접 표시, full/partial 분리 유지", "docs/plan-korStockScanPerformanceOptimization.performance-report.md", "existing_breakdown"),
+        ("holding_exit", "보유/청산 축", "direct", "performance_tuning",
+         "HOLDING 필수 관찰축 + 보유 AI 경로 + 청산 규칙 분포", "HOLDING/청산",
+         ["metrics.holding_reviews", "metrics.holding_skips", "sections.holding_axis", "breakdowns.exit_rules"],
+         "직접 표시, holding_axis 섹션 + breakdown 유지", "docs/plan-korStockScanPerformanceOptimization.performance-report.md", "existing_section"),
+        ("dual_persona", "Dual Persona 보조축", "direct", "performance_tuning",
+         "Dual Persona 결정 타입/합의도/winner/hard flag 분포", "canary rollback",
+         ["metrics.dual_persona_shadow_samples", "metrics.dual_persona_conflict_ratio", "breakdowns.dual_persona_agreement", "breakdowns.dual_persona_decision_types"],
+         "직접 표시, breakdown 섹션 유지", "docs/plan-korStockScanPerformanceOptimization.performance-report.md", "existing_breakdown"),
+        ("preset_exit_sync", "preset exit sync", "direct", "performance_tuning",
+         "Preset Exit 동기화 상태 breakdown", "HOLDING/청산",
+         ["metrics.preset_exit_sync_ok_events", "metrics.preset_exit_sync_mismatch_events", "breakdowns.preset_exit_sync_status"],
+         "직접 표시, breakdown 유지", "docs/plan-korStockScanPerformanceOptimization.performance-report.md", "existing_breakdown"),
+        # -- indirect --
+        ("spread_relief_canary_detail", "spread relief canary 세부 사유", "indirect", "performance_tuning/raw_log",
+         "미표시 (성능튜닝 지표에 부분 반영)", "canary rollback",
+         ["metrics.latency_block_events", "metrics.quote_fresh_latency_pass_rate", "breakdowns.latency_reason_breakdown"],
+         "간접 표시: latency 지표에서 spread/quote 원인 추론 가능", "docs/plan-korStockScanPerformanceOptimization.rebase.md", "existing_metric"),
+        # -- external_report --
+        ("post_sell_quality", "청산 후 missed_upside/good_exit", "external_report", "post_sell_feedback",
+         "Post-sell 핵심 KPI 카드 (별도 리포트 연결)", "HOLDING/청산",
+         ["MISSED_UPSIDE", "GOOD_EXIT", "capture_efficiency_avg_pct"],
+         "별도 리포트 링크: /post-sell-feedback", "docs/plan-korStockScanPerformanceOptimization.performance-report.md", "external_report_pointer"),
+        ("wait6579_ev", "WAIT65~79 BUY recovery EV", "external_report", "wait6579_ev_cohort",
+         "별도 리포트: wait6579_ev_cohort", "기회비용",
+         ["recovery_check", "promoted", "budget_pass", "latency_block", "submitted"],
+         "별도 리포트 링크 유지", "docs/plan-korStockScanPerformanceOptimization.rebase.md", "external_report_pointer"),
+        ("missed_entry_counterfactual", "미진입 기회비용", "external_report", "missed_entry_counterfactual",
+         "별도 리포트: missed_entry_counterfactual", "기회비용",
+         ["MISSED_WINNER", "AVOIDED_LOSER", "estimated_counterfactual_pnl_10m_krw_sum"],
+         "별도 리포트 링크 유지, 성능튜닝 손익과 합산 금지", "docs/plan-korStockScanPerformanceOptimization.performance-report.md", "external_report_pointer"),
+        # -- collected_not_displayed --
+        ("initial_vs_pyramid", "initial-only vs pyramid-activated", "collected_not_displayed", "trade_review/raw_log",
+         "미표시 (trade_review/trade raw log)", "HOLDING/청산",
+         ["initial_entry", "pyramid_activated"],
+         "추후 탭 분리 또는 raw log 증적 유지", "docs/plan-korStockScanPerformanceOptimization.rebase.md", "raw_log_pointer"),
+        ("pyramid_zero_qty_stage1", "PYRAMID zero_qty Stage 1", "collected_not_displayed", "raw_log",
+         "미표시 (raw log)", "HOLDING/청산",
+         ["template_qty", "cap_qty", "floor_applied"],
+         "추후 탭 분리 또는 raw log 증적 유지", "docs/plan-korStockScanPerformanceOptimization.rebase.md", "raw_log_pointer"),
+        ("eod_nxt_exit", "EOD/NXT 청산 운영축", "collected_not_displayed", "trade_review/raw_log",
+         "미표시 (trade raw log)", "HOLDING/청산",
+         ["exit_rule", "sell_order_status", "sell_fail_reason"],
+         "추후 탭 분리 또는 raw log 증적 유지", "docs/plan-korStockScanPerformanceOptimization.rebase.md", "raw_log_pointer"),
+    ]
+
+    rows = []
+    warnings: list[str] = []
+    for axis_id, axis_name, coverage_status, source_snapshot, dashboard_location, decision_use, required_keys, gap_action, owner_doc, reuse_mode in axis_definitions:
+        missing_keys: list[str] = []
+        for dotted_key in required_keys:
+            exists, missing_part = _check_dotted_path(report_like, dotted_key)
+            if not exists:
+                missing_keys.append(dotted_key)
+        available = len(missing_keys) == 0
+
+        if not available and coverage_status in ("direct", "indirect"):
+            warnings.append(
+                f"관찰축 [{axis_id}] required_key 일부 누락: {missing_keys} — "
+                "report dict 연결 끊김 또는 지표 미생성을 의심해야 합니다."
+            )
+
+        rows.append({
+            "axis_id": axis_id,
+            "axis_name": axis_name,
+            "coverage_status": coverage_status,
+            "source_snapshot": source_snapshot,
+            "dashboard_location": dashboard_location,
+            "decision_use": decision_use,
+            "required_keys": required_keys,
+            "gap_action": gap_action,
+            "owner_doc": owner_doc,
+            "available": available,
+            "missing_keys": missing_keys,
+            "reuse_mode": reuse_mode,
+        })
+
+    return rows
+
+
+def _build_flow_bottleneck_lane(
+    metrics: dict,
+    breakdowns: dict,
+    sections: dict,
+) -> dict:
+    """Build flow bottleneck lane showing entry-to-exit horizontal flow.
+    
+    Returns a dict with 'nodes' list and 'meta' dict.
+    All values are derived from existing metrics/breakdowns/sections only.
+    No new aggregations or AI calls.
+    """
+    nodes_config = [
+        # (node_id, node_name, stage_group, stage, primary_metric_key, supporting_metric_keys, evidence_keys)
+        ("watch_universe", "감시/후보", "ENTRY", "ENTRY upstream",
+         "strategy_rows_candidates",
+         [],
+         ["sections.strategy_rows", "sections.swing_daily_summary.metrics.candidates"]),
+        ("ai_decision", "AI BUY 판단", "ENTRY", "ENTRY upstream",
+         "ai_overlap_blocked_events",
+         ["ai_overlap_overbought_blocked_events"],
+         ["metrics.ai_overlap_blocked_events", "metrics.ai_overlap_overbought_blocked_events"]),
+        ("entry_armed", "주문 자격", "ENTRY", "ENTRY midstream",
+         "expired_armed_events",
+         ["budget_pass_events"],
+         ["metrics.expired_armed_events", "metrics.budget_pass_events"]),
+        ("pre_submit_latency", "제출 전 latency/quote", "ENTRY", "ENTRY downstream",
+         "latency_block_events",
+         ["latency_pass_events", "quote_fresh_latency_pass_rate"],
+         ["metrics.latency_block_events", "metrics.latency_pass_events", "metrics.quote_fresh_latency_pass_rate"]),
+        ("submitted_fill", "주문 제출/체결", "EXECUTION", "EXECUTION",
+         "order_bundle_submitted_events",
+         ["full_fill_events", "partial_fill_events"],
+         ["metrics.order_bundle_submitted_events", "metrics.full_fill_events", "metrics.partial_fill_events"]),
+        ("holding_review", "HOLDING 리뷰", "HOLDING", "HOLDING",
+         "holding_reviews",
+         ["holding_skips"],
+         ["metrics.holding_reviews", "metrics.holding_skips"]),
+        ("scale_in_branch", "추가매수/피라미드 분기", "HOLDING", "HOLDING branch",
+         "position_rebased_after_fill_events",
+         [],
+         ["metrics.position_rebased_after_fill_events", "sections.swing_daily_summary.metrics.blocker_event_count"]),
+        ("exit_signal", "청산 신호", "EXIT", "EXIT",
+         "exit_signals",
+         ["preset_exit_sync_mismatch_events"],
+         ["metrics.exit_signals", "metrics.preset_exit_sync_mismatch_events"]),
+        ("sell_complete", "매도/청산 완료", "EXIT", "EXIT completion",
+         "completed_trades",
+         ["full_fill_completed_avg_profit_rate", "partial_fill_completed_avg_profit_rate"],
+         ["metrics.full_fill_completed_avg_profit_rate", "metrics.partial_fill_completed_avg_profit_rate"]),
+    ]
+
+    def _resolve_value(metric_key: str) -> tuple[str, str | int | float]:
+        """Resolve a metric/section key to (label, value)."""
+        # Strategy row aggregated
+        if metric_key == "strategy_rows_candidates":
+            total = 0
+            for row in sections.get("strategy_rows", []):
+                total += int((row.get("pipeline") or {}).get("candidates", 0) or 0)
+            return "감시 종목", total
+        if metric_key == "completed_trades":
+            total = 0
+            for row in sections.get("strategy_rows", []):
+                total += int((row.get("outcomes") or {}).get("completed_rows", 0) or 0)
+            return "종료 거래", total
+        # Direct metric keys
+        if metric_key in metrics:
+            val = metrics[metric_key]
+            return metric_key, val if val is not None else 0
+        # Breakdown fallback (not used for primary currently)
+        return metric_key, 0
+
+    nodes: list[dict] = []
+    meta_warnings: list[str] = []
+
+    for node_id, node_name, stage_group, stage, primary_key, supporting_keys, evidence_paths in nodes_config:
+        primary_label, primary_value = _resolve_value(primary_key)
+
+        # Collect supporting metrics
+        supporting = []
+        for sk in supporting_keys:
+            sk_label, sk_val = _resolve_value(sk)
+            supporting.append({"key": sk, "label": sk_label, "value": sk_val})
+
+        # Evidence check
+        missing_keys: list[str] = []
+        for ep in evidence_paths:
+            exists, missing_part = _check_dotted_path({"metrics": metrics, "breakdowns": breakdowns, "sections": sections}, ep)
+            if not exists:
+                missing_keys.append(ep)
+
+        # Status determination (rule-based, no AI)
+        status = "ok"
+        tuning_point = "-"
+        next_action = "정상"
+
+        budget_pass = int(metrics.get("budget_pass_events", 0) or 0)
+        submitted = int(metrics.get("order_bundle_submitted_events", 0) or 0)
+        latency_block = int(metrics.get("latency_block_events", 0) or 0)
+        latency_pass = int(metrics.get("latency_pass_events", 0) or 0)
+        quote_pass_rate = float(metrics.get("quote_fresh_latency_pass_rate", 0.0) or 0.0)
+        full_fill = int(metrics.get("full_fill_events", 0) or 0)
+        partial_fill = int(metrics.get("partial_fill_events", 0) or 0)
+        holding_reviews = int(metrics.get("holding_reviews", 0) or 0)
+        preset_mismatch = int(metrics.get("preset_exit_sync_mismatch_events", 0) or 0)
+        exit_signal = int(metrics.get("exit_signals", 0) or 0)
+        total_completed = sum(
+            int((row.get("outcomes") or {}).get("completed_rows", 0) or 0)
+            for row in sections.get("strategy_rows", [])
+        )
+
+        if node_id == "pre_submit_latency":
+            if latency_block > 0 and quote_pass_rate < 30.0:
+                status = "bottleneck"
+                tuning_point = "latency guard threshold / quote freshness"
+                next_action = "latency_block 원인 분해 및 threshold 조정 검토"
+            elif budget_pass > 0 and submitted == 0:
+                status = "bottleneck"
+                tuning_point = "budget_pass → submitted 단절"
+                next_action = "budget_pass 이후 latency_block 분포 우선 점검"
+            elif latency_block > 0:
+                status = "watch"
+                tuning_point = "latency_block 사유 분해 pending"
+                next_action = "latency_reason_breakdown 분포 확인"
+        elif node_id == "submitted_fill":
+            if submitted == 0:
+                status = "waiting"
+                tuning_point = "-"
+                next_action = "제출 표본이 없어 병목 진단 불가, 상류 노드 우선 확인"
+            elif partial_fill > 0 and full_fill > 0 and partial_fill > full_fill * 2:
+                status = "watch"
+                tuning_point = "partial fill 비중 과다"
+                next_action = "fill_quality_cohorts profit 비교, 체결조건/호가 단위 점검"
+        elif node_id == "holding_review":
+            has_flow_before = submitted > 0 or full_fill > 0 or partial_fill > 0
+            if holding_reviews == 0 and not has_flow_before:
+                status = "waiting"
+                tuning_point = "-"
+                next_action = "HOLDING 표본 없음, 진입 축 우선 확인"
+            elif has_flow_before and holding_reviews == 0:
+                status = "anomaly"
+                tuning_point = "제출/체결 발생했으나 HOLDING 리뷰 없음"
+                next_action = "holding_events 로그 복원, HOLDING_PIPELINE 연결 확인"
+        elif node_id == "scale_in_branch":
+            rebased = int(metrics.get("position_rebased_after_fill_events", 0) or 0)
+            if rebased == 0:
+                # Check swing_daily_summary for ADD_BLOCKED related signals
+                swing_metrics = (sections.get("swing_daily_summary") or {}).get("metrics") or {}
+                blocker_count = int(swing_metrics.get("blocker_event_count", 0) or 0)
+                blocker_families = (sections.get("swing_daily_summary") or {}).get("blocker_families") or []
+                zero_qty_hint = any(
+                    "수량" in (fam.get("label") or "") or "zero_qty" in (fam.get("label") or "")
+                    for fam in blocker_families
+                )
+                if blocker_count > 0 and zero_qty_hint:
+                    status = "bottleneck"
+                    tuning_point = "zero_qty 반복 차단, 추가매수 미발생"
+                    next_action = "add_blocked_lock_report 상세 확인, zero_qty 원인 분석"
+                else:
+                    status = "waiting"
+                    tuning_point = "-"
+                    next_action = "추가매수 표본 없음, raw log 증적 유지"
+        elif node_id == "exit_signal":
+            if preset_mismatch > 0:
+                status = "watch"
+                tuning_point = "preset exit sync mismatch 발생"
+                next_action = "preset_exit_sync_status breakdown 세부 확인"
+            elif exit_signal == 0 and total_completed == 0:
+                status = "waiting"
+                tuning_point = "-"
+                next_action = "청산 표본 없음"
+        elif node_id == "sell_complete":
+            if total_completed == 0:
+                status = "waiting"
+                tuning_point = "-"
+                next_action = "청산 완료 표본 없음"
+            else:
+                avg_full = float(metrics.get("full_fill_completed_avg_profit_rate", 0.0) or 0.0)
+                avg_partial = float(metrics.get("partial_fill_completed_avg_profit_rate", 0.0) or 0.0)
+                if avg_full < -0.5 or avg_partial < -0.5:
+                    status = "anomaly"
+                    tuning_point = "손실 청산 집중"
+                    next_action = "post_sell_feedback 리포트에서 MISSED_UPSIDE/GOOD_EXIT 확인"
+
+        if missing_keys:
+            if status in ("ok", "watch"):
+                status = "waiting"
+            meta_warnings.append(
+                f"Flow node [{node_id}] evidence_key 일부 누락: {missing_keys}"
+            )
+
+        nodes.append({
+            "node_id": node_id,
+            "node_name": node_name,
+            "stage_group": stage_group,
+            "stage": stage,
+            "status": status,
+            "primary_metric": primary_key,
+            "primary_label": primary_label,
+            "primary_value": primary_value,
+            "supporting_metrics": supporting,
+            "tuning_point": tuning_point,
+            "evidence_keys": evidence_paths,
+            "missing_keys": missing_keys,
+            "next_action": next_action,
+        })
+
+    return {
+        "nodes": nodes,
+        "meta": {
+            "warnings": meta_warnings,
+        },
+    }
 
 
 def _build_current_trade_rows(target_date: str) -> tuple[list[dict], list[str]]:
@@ -1665,6 +2008,41 @@ def build_performance_tuning_report(
         reverse=True,
     )[:8]
 
+    sections = {
+        "strategy_rows": strategy_rows,
+        "swing_daily_summary": swing_daily_summary,
+        "top_holding_slow": top_holding_slow,
+        "top_gatekeeper_slow": top_gatekeeper_slow,
+        "top_dual_persona_slow": top_dual_persona_slow,
+        "judgment_gate": judgment_gate,
+        "holding_axis": holding_axis,
+    }
+    breakdowns = {
+        "latency_reason_breakdown": [{"label": key, "count": value} for key, value in latency_reason_counts.most_common()],
+        "latency_danger_reason_breakdown": [{"label": key, "count": value} for key, value in latency_danger_reason_counts.most_common()],
+        "holding_ai_cache_modes": [{"label": key, "count": value} for key, value in holding_ai_cache_modes.most_common()],
+        "holding_reuse_blockers": [{"label": key, "count": value} for key, value in holding_reuse_blockers.most_common()],
+        "holding_sig_deltas": [{"label": key, "count": value} for key, value in holding_sig_deltas.most_common()],
+        "gatekeeper_cache_modes": [{"label": key, "count": value} for key, value in gatekeeper_cache_modes.most_common()],
+        "gatekeeper_reuse_blockers": [{"label": key, "count": value} for key, value in gatekeeper_reuse_blockers.most_common()],
+        "gatekeeper_sig_deltas": [{"label": key, "count": value} for key, value in gatekeeper_sig_deltas.most_common()],
+        "gatekeeper_actions": [{"label": key, "count": value} for key, value in gatekeeper_actions.most_common()],
+        "exit_rules": [{"label": key, "count": value} for key, value in exit_rule_counts.most_common()],
+        "fill_quality_cohorts": [
+            {
+                "label": quality,
+                "count": len(profits),
+                "avg_profit_rate": round(sum(profits) / len(profits), 3) if profits else 0.0,
+            }
+            for quality, profits in sorted(fill_quality_profit_map.items(), key=lambda pair: len(pair[1]), reverse=True)
+        ],
+        "preset_exit_sync_status": [{"label": key, "count": value} for key, value in preset_sync_status_counts.most_common()],
+        "ai_overlap_blocked_stages": [{"label": key, "count": value} for key, value in ai_overlap_blocked_stage_counts.most_common()],
+        "dual_persona_agreement": [{"label": key, "count": value} for key, value in dual_persona_agreement.most_common()],
+        "dual_persona_winners": [{"label": key, "count": value} for key, value in dual_persona_winners.most_common()],
+        "dual_persona_decision_types": [{"label": key, "count": value} for key, value in dual_persona_decision_types.most_common()],
+        "dual_persona_hard_flags": [{"label": key, "count": value} for key, value in dual_persona_hard_flags.most_common()],
+    }
     return {
         "date": target_date,
         "since": since_time,
@@ -1681,38 +2059,10 @@ def build_performance_tuning_report(
             "trend_basis": f"최근 {len(recent_history_dates)}개 거래일 rolling 성과" if recent_history_dates else "최근 거래일 rolling 성과",
             "trend_max_dates": trend_max_dates,
         },
-        "breakdowns": {
-            "latency_reason_breakdown": [{"label": key, "count": value} for key, value in latency_reason_counts.most_common()],
-            "latency_danger_reason_breakdown": [{"label": key, "count": value} for key, value in latency_danger_reason_counts.most_common()],
-            "holding_ai_cache_modes": [{"label": key, "count": value} for key, value in holding_ai_cache_modes.most_common()],
-            "holding_reuse_blockers": [{"label": key, "count": value} for key, value in holding_reuse_blockers.most_common()],
-            "holding_sig_deltas": [{"label": key, "count": value} for key, value in holding_sig_deltas.most_common()],
-            "gatekeeper_cache_modes": [{"label": key, "count": value} for key, value in gatekeeper_cache_modes.most_common()],
-            "gatekeeper_reuse_blockers": [{"label": key, "count": value} for key, value in gatekeeper_reuse_blockers.most_common()],
-            "gatekeeper_sig_deltas": [{"label": key, "count": value} for key, value in gatekeeper_sig_deltas.most_common()],
-            "gatekeeper_actions": [{"label": key, "count": value} for key, value in gatekeeper_actions.most_common()],
-            "exit_rules": [{"label": key, "count": value} for key, value in exit_rule_counts.most_common()],
-            "fill_quality_cohorts": [
-                {
-                    "label": quality,
-                    "count": len(profits),
-                    "avg_profit_rate": round(sum(profits) / len(profits), 3) if profits else 0.0,
-                }
-                for quality, profits in sorted(fill_quality_profit_map.items(), key=lambda pair: len(pair[1]), reverse=True)
-            ],
-            "preset_exit_sync_status": [{"label": key, "count": value} for key, value in preset_sync_status_counts.most_common()],
-            "ai_overlap_blocked_stages": [{"label": key, "count": value} for key, value in ai_overlap_blocked_stage_counts.most_common()],
-            "dual_persona_agreement": [{"label": key, "count": value} for key, value in dual_persona_agreement.most_common()],
-            "dual_persona_winners": [{"label": key, "count": value} for key, value in dual_persona_winners.most_common()],
-            "dual_persona_decision_types": [{"label": key, "count": value} for key, value in dual_persona_decision_types.most_common()],
-            "dual_persona_hard_flags": [{"label": key, "count": value} for key, value in dual_persona_hard_flags.most_common()],
-        },
+        "breakdowns": breakdowns,
         "sections": {
-            "swing_daily_summary": swing_daily_summary,
-            "top_holding_slow": top_holding_slow,
-            "top_gatekeeper_slow": top_gatekeeper_slow,
-            "top_dual_persona_slow": top_dual_persona_slow,
-            "judgment_gate": judgment_gate,
-            "holding_axis": holding_axis,
+            **sections,
+            "flow_bottleneck_lane": _build_flow_bottleneck_lane(metrics, breakdowns, sections),
+            "observation_axis_coverage": _build_observation_axis_coverage(metrics, breakdowns, sections),
         },
     }

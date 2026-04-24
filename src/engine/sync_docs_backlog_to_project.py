@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import socket
 import json
 import os
 import re
 import sys
 import time
+from http.client import RemoteDisconnected
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -493,18 +495,30 @@ def _graphql_request(token: str, query: str, variables: dict[str, Any]) -> dict[
     )
 
     last_err: Exception | None = None
+    transient_network_errors = (URLError, RemoteDisconnected, TimeoutError, socket.timeout)
     for attempt in range(3):
         try:
             with request.urlopen(req, timeout=30) as resp:
                 body = resp.read().decode("utf-8")
             break
-        except (HTTPError, URLError) as exc:
+        except HTTPError as exc:
             last_err = exc
             status_code = getattr(exc, "code", None)
             if status_code in {502, 503, 504, 429} and attempt < 2:
                 delay = 0.8 * (2 ** attempt)
                 print(
                     f"[DOC_GRAPHQL_RETRY] code={status_code} attempt={attempt + 1} retry_after={delay:.1f}s",
+                    file=sys.stderr,
+                )
+                time.sleep(delay)
+                continue
+            raise
+        except transient_network_errors as exc:
+            last_err = exc
+            if attempt < 2:
+                delay = 0.8 * (2 ** attempt)
+                print(
+                    f"[DOC_GRAPHQL_RETRY] network_error={type(exc).__name__} attempt={attempt + 1} retry_after={delay:.1f}s",
                     file=sys.stderr,
                 )
                 time.sleep(delay)

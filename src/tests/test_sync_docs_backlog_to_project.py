@@ -1,3 +1,6 @@
+from http.client import RemoteDisconnected
+from io import BytesIO
+
 from src.engine.sync_docs_backlog_to_project import (
     BacklogTask,
     DOC_PROMPT,
@@ -25,6 +28,7 @@ from src.engine.sync_docs_backlog_to_project import (
     parse_prompt_tasks,
     parse_scalping_logic_tasks,
     sync_backlog_to_project,
+    _graphql_request,
 )
 
 
@@ -479,3 +483,30 @@ def test_sync_backlog_deletes_duplicate_managed_project_items(monkeypatch):
     assert summary["created_or_would_create"] == 0
     assert summary["duplicates_deleted_or_would_delete"] == 1
     assert any("deleteProjectV2Item" in query and variables["itemId"] == "ITEM_DROP" for query, variables in calls)
+
+
+def test_graphql_request_retries_remote_disconnected(monkeypatch):
+    calls = {"count": 0}
+
+    class _FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return BytesIO(b'{"data":{"ok":true}}').read()
+
+    def _fake_urlopen(req, timeout=30):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RemoteDisconnected("Remote end closed connection without response")
+        return _FakeResponse()
+
+    monkeypatch.setattr("src.engine.sync_docs_backlog_to_project.request.urlopen", _fake_urlopen)
+    monkeypatch.setattr("src.engine.sync_docs_backlog_to_project.time.sleep", lambda _: None)
+
+    data = _graphql_request("token", "query Test { viewer { login } }", {})
+    assert data == {"ok": True}
+    assert calls["count"] == 2
