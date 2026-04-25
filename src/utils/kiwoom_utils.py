@@ -1569,7 +1569,7 @@ def get_minute_candles_ka10080(token, code, limit=10):
         getattr(TRADING_RULES, "KIWOOM_MINUTE_CACHE_TTL_SEC", 5.0),
     )
 
-def get_top_marketcap_stocks(self, limit=300):
+def get_top_marketcap_stocks(limit=300):
     """네이버 API 우회 시총 상위 종목 수집 (구조 정합성 교정)"""
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
