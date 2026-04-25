@@ -37,10 +37,9 @@ import json
 # 💡 Level 1 & 2 공통 모듈 (경로 및 패키지 구조에 맞게 통일)
 from src.utils import kiwoom_utils
 from src.utils.logger import log_error, log_info
-from src.utils.constants import CREDENTIALS_PATH, RESTART_FLAG_PATH, TRADING_RULES
+from src.utils.constants import RESTART_FLAG_PATH, TRADING_RULES
 from src.database.db_manager import DBManager
 from src.core.event_bus import EventBus
-from src.utils.google_sheets_utils import GoogleSheetsManager
 from src.database.models import RecommendationHistory
 from src.engine.trade_profit import calculate_net_profit_rate
 from src.engine.sniper_config import CONF
@@ -157,7 +156,6 @@ DUAL_PERSONA_ENGINE = None
 KIWOOM_TOKEN = None
 WS_MANAGER = None
 AI_ENGINE = None  # 💡 [추가] AI 엔진을 전역으로 끌어올립니다.
-SHEET_MANAGER = GoogleSheetsManager(CREDENTIALS_PATH, 'KOSPIScanner')
 DB = DBManager()  
 event_bus = EventBus() # 💡 [신규] 전역 이벤트 버스 장착!
 bind_trade_pause_event_bus(event_bus)
