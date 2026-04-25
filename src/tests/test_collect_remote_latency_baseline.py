@@ -20,7 +20,6 @@ def test_render_markdown_contains_key_fields() -> None:
             "KORSTOCKSCAN_LATENCY_CANARY_PROFILE": "remote_v2",
             "KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS": "400",
         },
-        "shadow_env": {"AI_WATCHING_75_PROMPT_SHADOW_ENABLED": "true"},
         "pipeline": {
             "exists": True,
             "line_count": 11,

@@ -201,7 +201,7 @@ Flow node는 반드시 기존 `performance_tuning` report dict의 값을 우선 
 | `post_sell_quality` | 청산 후 missed_upside/good_exit | `external_report` | `post_sell_feedback` | `MISSED_UPSIDE`, `GOOD_EXIT`, `capture_efficiency_avg_pct` |
 | `wait6579_ev` | WAIT65~79 BUY recovery EV | `external_report` | `wait6579_ev_cohort` | `recovery_check`, `promoted`, `budget_pass`, `latency_block`, `submitted` |
 | `missed_entry_counterfactual` | 미진입 기회비용 | `external_report` | `missed_entry_counterfactual` | `MISSED_WINNER`, `AVOIDED_LOSER`, `estimated_counterfactual_pnl_10m_krw_sum` |
-| `spread_relief_canary_detail` | spread relief canary 세부 사유 | `indirect` 또는 `collected_not_displayed` | `performance_tuning`/`raw_log` | `spread_only_required`, `low_signal`, `quote_stale`, `latency_canary_reason` |
+| `spread_relief_canary_detail` | spread relief 세부 사유 | `indirect` 또는 `collected_not_displayed` | `performance_tuning`/`raw_log` | `spread_only_required`, `low_signal`, `quote_stale`, `latency_canary_reason` |
 | `initial_vs_pyramid` | initial-only vs pyramid-activated | `collected_not_displayed` | `trade_review`/`raw_log` | `initial_entry`, `pyramid_activated`, `position_rebased_after_fill` |
 | `pyramid_zero_qty_stage1` | PYRAMID zero_qty Stage 1 | `collected_not_displayed` | `raw_log` | `template_qty`, `cap_qty`, `floor_applied`, `reason=zero_qty` |
 | `eod_nxt_exit` | EOD/NXT 청산 운영축 | `collected_not_displayed` | `trade_review`/`raw_log` | `exit_rule`, `sell_order_status`, `sell_fail_reason`, `is_nxt` |

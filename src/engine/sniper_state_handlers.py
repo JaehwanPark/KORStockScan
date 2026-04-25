@@ -665,6 +665,10 @@ def _emit_scalp_hard_time_stop_shadow(
 ) -> None:
     if not bool(getattr(TRADING_RULES, "SCALP_COMMON_HARD_TIME_STOP_SHADOW_ONLY", True)):
         return
+    if int(stock.get("buy_qty", 0) or 0) <= 0:
+        return
+    if str(stock.get("status", "") or "").strip().upper() in {"COMPLETED", "SOLD"}:
+        return
 
     raw_candidates = getattr(TRADING_RULES, "SCALP_COMMON_HARD_TIME_STOP_SHADOW_MINUTES", (3, 5, 7)) or (3, 5, 7)
     try:
@@ -804,8 +808,16 @@ def _log_watching_shared_prompt_shadow_result(stock_name, code, payload, record_
     )
 
 
+def _shadow_runtime_enabled() -> bool:
+    return bool(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_ENABLED", False))
+
+
 def _submit_watching_shared_prompt_shadow(*, stock_name, code, ws_data, recent_ticks, recent_candles, gemini_result, record_id=None):
-    if DUAL_PERSONA_ENGINE is None or not hasattr(DUAL_PERSONA_ENGINE, "submit_watching_shared_prompt_shadow"):
+    if (
+        not _shadow_runtime_enabled()
+        or DUAL_PERSONA_ENGINE is None
+        or not hasattr(DUAL_PERSONA_ENGINE, "submit_watching_shared_prompt_shadow")
+    ):
         return
     try:
         DUAL_PERSONA_ENGINE.submit_watching_shared_prompt_shadow(
@@ -827,7 +839,7 @@ def _submit_watching_shared_prompt_shadow(*, stock_name, code, ws_data, recent_t
 
 
 def _submit_gatekeeper_dual_persona_shadow(*, stock_name, code, strategy, realtime_ctx, gatekeeper, record_id=None):
-    if DUAL_PERSONA_ENGINE is None:
+    if not _shadow_runtime_enabled() or DUAL_PERSONA_ENGINE is None:
         return
     try:
         DUAL_PERSONA_ENGINE.submit_gatekeeper_shadow(
@@ -1088,22 +1100,6 @@ def _build_ai_ops_log_fields(
     if ai_cooldown_blocked is not None:
         out["ai_cooldown_blocked"] = bool(ai_cooldown_blocked)
     return out
-
-
-def _should_run_watching_prompt_75_shadow(ai_decision, ai_score):
-    if not bool(getattr(TRADING_RULES, "AI_WATCHING_75_PROMPT_SHADOW_ENABLED", False)):
-        return False
-    try:
-        score = float(ai_score or 0.0)
-    except Exception:
-        return False
-    min_score = float(getattr(TRADING_RULES, "AI_WATCHING_75_PROMPT_SHADOW_MIN_SCORE", 75) or 75)
-    max_score = float(getattr(TRADING_RULES, "AI_WATCHING_75_PROMPT_SHADOW_MAX_SCORE", 79) or 79)
-    if score < min_score or score > max_score:
-        return False
-    if bool((ai_decision or {}).get("ai_fallback_score_50", False)):
-        return False
-    return str((ai_decision or {}).get("action", "WAIT") or "WAIT").upper() != "BUY"
 
 
 def _extract_buy_recovery_probe_features(ai_engine, ws_data, recent_ticks, recent_candles):
@@ -1726,10 +1722,10 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
         fill_ratio = float(buy_qty) / float(requested_qty)
 
         min_fill_ratio = 0.0
-        partial_fill_ratio_canary_enabled = bool(
-            getattr(TRADING_RULES, 'SCALP_PARTIAL_FILL_RATIO_CANARY_ENABLED', False)
+        partial_fill_ratio_guard_enabled = bool(
+            getattr(TRADING_RULES, 'SCALP_PARTIAL_FILL_RATIO_GUARD_ENABLED', False)
         )
-        if partial_fill_ratio_canary_enabled:
+        if partial_fill_ratio_guard_enabled:
             min_fill_ratio = float(
                 getattr(TRADING_RULES, 'SCALP_PARTIAL_FILL_MIN_RATIO_DEFAULT', 0.20) or 0.20
             )
@@ -1752,11 +1748,11 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
             filled_qty=buy_qty,
             fill_ratio=f"{fill_ratio:.3f}",
             min_fill_ratio=f"{min_fill_ratio:.3f}",
-            min_fill_ratio_enabled=partial_fill_ratio_canary_enabled,
+            min_fill_ratio_enabled=partial_fill_ratio_guard_enabled,
             dynamic_reason=stock.get('entry_dynamic_reason'),
         )
 
-        if partial_fill_ratio_canary_enabled and min_fill_ratio > 0 and fill_ratio < min_fill_ratio:
+        if partial_fill_ratio_guard_enabled and min_fill_ratio > 0 and fill_ratio < min_fill_ratio:
             res = kiwoom_orders.send_sell_order_market(code=code, qty=buy_qty, token=KIWOOM_TOKEN)
             if _is_ok_response(res):
                 stock['status'] = 'SELL_ORDERED'
@@ -2334,40 +2330,6 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
                                 gemini_result=ai_decision,
                                 record_id=stock.get("id"),
                             )
-
-                            if _should_run_watching_prompt_75_shadow(ai_decision, ai_score):
-                                shadow_decision = ai_engine.analyze_target_shadow_prompt(
-                                    stock['name'],
-                                    ws_data,
-                                    recent_ticks,
-                                    recent_candles,
-                                    strategy="SCALPING",
-                                    prompt_type="scalping_buy75_shadow",
-                                    cache_profile="watching_prompt75_shadow",
-                                )
-                                shadow_action = str(shadow_decision.get("action", "WAIT") or "WAIT").upper()
-                                shadow_score = float(shadow_decision.get("score", 50) or 50)
-                                _log_entry_pipeline(
-                                    stock,
-                                    code,
-                                    "watching_prompt_75_shadow",
-                                    main_action=str(action or "WAIT").upper(),
-                                    main_score=f"{float(ai_score or 0.0):.1f}",
-                                    shadow_action=shadow_action,
-                                    shadow_score=f"{shadow_score:.1f}",
-                                    buy_diverged=str((str(action or "WAIT").upper() == "BUY") != (shadow_action == "BUY")).lower(),
-                                    score_band=f"{int(float(ai_score or 0.0))}",
-                                    threshold_live=80,
-                                    threshold_shadow=75,
-                                    **_build_ai_ops_log_fields(
-                                        shadow_decision,
-                                        ai_score_raw=shadow_score,
-                                        ai_score_after_bonus=shadow_score,
-                                        entry_score_threshold=75,
-                                        big_bite_bonus_applied=False,
-                                        ai_cooldown_blocked=False,
-                                    ),
-                                )
 
                             if _should_run_main_buy_recovery_canary(
                                 ai_decision,
@@ -3112,14 +3074,14 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
                 _log_entry_pipeline(
                     stock,
                     code,
-                    "fallback_qty_canary_applied",
+                    "fallback_qty_guard_applied",
                     qty_multiplier=f"{max(0.1, min(1.0, fallback_qty_multiplier)):.2f}",
                     original_qty=original_qty,
                     scaled_qty=scaled_qty,
                     legs=len(planned_orders),
                 )
                 log_info(
-                    f"[FALLBACK_QTY_CANARY] {stock.get('name')}({code}) "
+                    f"[FALLBACK_QTY_GUARD] {stock.get('name')}({code}) "
                     f"multiplier={max(0.1, min(1.0, fallback_qty_multiplier)):.2f} "
                     f"qty={original_qty}->{scaled_qty}"
                 )
@@ -3764,6 +3726,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         distance_to_ai_exit=f"{profit_rate - ai_exit_min_loss_pct:+.2f}",
                         distance_to_safe_profit=f"{profit_rate - safe_profit_pct:+.2f}",
                         action=shadow_action,
+                        shadow_only=True,
                     )
                     _log_holding_pipeline(
                         stock,
@@ -3791,6 +3754,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         distance_to_ai_exit=f"{profit_rate - ai_exit_min_loss_pct:+.2f}",
                         distance_to_safe_profit=f"{profit_rate - safe_profit_pct:+.2f}",
                         action=shadow_action,
+                        shadow_only=True,
                     )
                     _log_holding_pipeline(
                         stock,

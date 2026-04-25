@@ -438,7 +438,7 @@ def _build_observation_axis_coverage(
          ["metrics.preset_exit_sync_ok_events", "metrics.preset_exit_sync_mismatch_events", "breakdowns.preset_exit_sync_status"],
          "직접 표시, breakdown 유지", "docs/plan-korStockScanPerformanceOptimization.performance-report.md", "existing_breakdown"),
         # -- indirect --
-        ("spread_relief_canary_detail", "spread relief canary 세부 사유", "indirect", "performance_tuning/raw_log",
+        ("spread_relief_canary_detail", "spread relief 세부 사유", "indirect", "performance_tuning/raw_log",
          "미표시 (성능튜닝 지표에 부분 반영)", "canary rollback",
          ["metrics.latency_block_events", "metrics.quote_fresh_latency_pass_rate", "breakdowns.latency_reason_breakdown"],
          "간접 표시: latency 지표에서 spread/quote 원인 추론 가능", "docs/plan-korStockScanPerformanceOptimization.rebase.md", "existing_metric"),

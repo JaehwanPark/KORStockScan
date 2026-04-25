@@ -1245,7 +1245,7 @@ def test_reconcile_partial_fill_below_min_ratio_sends_exit_order(monkeypatch):
 
     state_handlers.TRADING_RULES = replace(
         CONFIG,
-        SCALP_PARTIAL_FILL_RATIO_CANARY_ENABLED=True,
+        SCALP_PARTIAL_FILL_RATIO_GUARD_ENABLED=True,
         SCALP_PARTIAL_FILL_MIN_RATIO_DEFAULT=0.20,
         SCALP_PARTIAL_FILL_MIN_RATIO_STRONG_ABS_OVERRIDE=0.10,
         SCALP_PARTIAL_FILL_MIN_RATIO_PRESET_TP=0.00,
@@ -1286,7 +1286,7 @@ def test_reconcile_partial_fill_strong_override_uses_relaxed_ratio(monkeypatch):
 
     state_handlers.TRADING_RULES = replace(
         CONFIG,
-        SCALP_PARTIAL_FILL_RATIO_CANARY_ENABLED=True,
+        SCALP_PARTIAL_FILL_RATIO_GUARD_ENABLED=True,
         SCALP_PARTIAL_FILL_MIN_RATIO_DEFAULT=0.20,
         SCALP_PARTIAL_FILL_MIN_RATIO_STRONG_ABS_OVERRIDE=0.10,
     )
@@ -2858,6 +2858,32 @@ def test_common_hard_time_stop_stays_shadow_only(monkeypatch):
     assert any(item.get("candidate") == "fallback_3m" for item in shadow_logs)
 
 
+def test_hard_time_stop_shadow_skips_completed_position(monkeypatch):
+    pipeline_logs = []
+
+    def fake_log_holding_pipeline(stock, code, stage, **fields):
+        pipeline_logs.append((stage, fields))
+
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", fake_log_holding_pipeline)
+
+    state_handlers._emit_scalp_hard_time_stop_shadow(
+        stock={
+            "status": "COMPLETED",
+            "buy_qty": 0,
+            "entry_mode": "normal",
+            "position_tag": "SCALP_BASE",
+        },
+        code="123456",
+        held_sec=240,
+        profit_rate=-0.9,
+        peak_profit=0.1,
+        current_ai_score=32.0,
+        ai_exit_min_loss_pct=-0.7,
+    )
+
+    assert pipeline_logs == []
+
+
 def test_holding_shadow_band_logs_review_for_near_safe_profit(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 
@@ -2950,6 +2976,7 @@ def test_holding_shadow_band_logs_review_for_near_safe_profit(monkeypatch):
     assert shadow_logs[-1]["action"] == "review"
     assert shadow_logs[-1]["near_safe_profit"] is True
     assert shadow_logs[-1]["near_ai_exit"] is False
+    assert shadow_logs[-1]["shadow_only"] is True
 
 
 # ─────────────────────────────────────────────

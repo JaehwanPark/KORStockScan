@@ -36,7 +36,7 @@ def _normalized_tag_set(raw_tags) -> set[str]:
     }
 
 
-def _try_dynamic_strength_canary(
+def _try_dynamic_strength_relief(
     *,
     result: dict,
     reason: str,
@@ -51,21 +51,21 @@ def _try_dynamic_strength_canary(
     min_exec_buy_ratio: float,
     exec_buy_ratio: float,
 ) -> bool:
-    if not bool(getattr(TRADING_RULES, "SCALP_DYNAMIC_STRENGTH_CANARY_ENABLED", False)):
+    if not bool(getattr(TRADING_RULES, "SCALP_DYNAMIC_STRENGTH_RELIEF_ENABLED", False)):
         return False
 
-    allow_tags = _normalized_tag_set(getattr(TRADING_RULES, "SCALP_DYNAMIC_STRENGTH_CANARY_TAGS", ()))
+    allow_tags = _normalized_tag_set(getattr(TRADING_RULES, "SCALP_DYNAMIC_STRENGTH_RELIEF_TAGS", ()))
     if allow_tags and str(profile_tag or "").upper() not in allow_tags:
         return False
 
-    allowed_reasons = _normalized_tag_set(getattr(TRADING_RULES, "SCALP_DYNAMIC_STRENGTH_CANARY_ALLOWED_REASONS", ()))
+    allowed_reasons = _normalized_tag_set(getattr(TRADING_RULES, "SCALP_DYNAMIC_STRENGTH_RELIEF_ALLOWED_REASONS", ()))
     if allowed_reasons and str(reason or "").upper() not in allowed_reasons:
         return False
 
-    min_buy_value_ratio = float(getattr(TRADING_RULES, "SCALP_DYNAMIC_STRENGTH_CANARY_MIN_BUY_VALUE_RATIO", 0.85) or 0.85)
-    buy_ratio_tol = float(getattr(TRADING_RULES, "SCALP_DYNAMIC_STRENGTH_CANARY_BUY_RATIO_TOL", 0.03) or 0.03)
+    min_buy_value_ratio = float(getattr(TRADING_RULES, "SCALP_DYNAMIC_STRENGTH_RELIEF_MIN_BUY_VALUE_RATIO", 0.85) or 0.85)
+    buy_ratio_tol = float(getattr(TRADING_RULES, "SCALP_DYNAMIC_STRENGTH_RELIEF_BUY_RATIO_TOL", 0.03) or 0.03)
     exec_buy_ratio_tol = float(
-        getattr(TRADING_RULES, "SCALP_DYNAMIC_STRENGTH_CANARY_EXEC_BUY_RATIO_TOL", 0.03) or 0.03
+        getattr(TRADING_RULES, "SCALP_DYNAMIC_STRENGTH_RELIEF_EXEC_BUY_RATIO_TOL", 0.03) or 0.03
     )
     min_base_floor = max(min_base - 1.5, 0.0)
 
@@ -98,9 +98,9 @@ def _try_dynamic_strength_canary(
     result["allowed"] = True
     result["canary_applied"] = True
     result["canary_origin_reason"] = reason_key
-    result["canary_reason"] = "dynamic_strength_canary"
-    result["reason"] = f"canary_relaxed_{reason_key}"
-    result["threshold_profile"] = f"{threshold_profile}+canary"
+    result["canary_reason"] = "dynamic_strength_relief"
+    result["reason"] = f"relief_relaxed_{reason_key}"
+    result["threshold_profile"] = f"{threshold_profile}+relief"
     return True
 
 
@@ -254,7 +254,7 @@ def evaluate_scalping_strength_momentum(ws_data: dict, *, now_ts: float | None =
         return result
     if window_buy_value < min_buy_value:
         result["reason"] = "below_window_buy_value"
-        if _try_dynamic_strength_canary(
+        if _try_dynamic_strength_relief(
             result=result,
             reason=result["reason"],
             profile_tag=profile_tag,
@@ -272,7 +272,7 @@ def evaluate_scalping_strength_momentum(ws_data: dict, *, now_ts: float | None =
         return result
     if buy_ratio < min_buy_ratio:
         result["reason"] = "below_buy_ratio"
-        if _try_dynamic_strength_canary(
+        if _try_dynamic_strength_relief(
             result=result,
             reason=result["reason"],
             profile_tag=profile_tag,
@@ -290,7 +290,7 @@ def evaluate_scalping_strength_momentum(ws_data: dict, *, now_ts: float | None =
         return result
     if exec_buy_ratio < min_exec_buy_ratio:
         result["reason"] = "below_exec_buy_ratio"
-        if _try_dynamic_strength_canary(
+        if _try_dynamic_strength_relief(
             result=result,
             reason=result["reason"],
             profile_tag=profile_tag,

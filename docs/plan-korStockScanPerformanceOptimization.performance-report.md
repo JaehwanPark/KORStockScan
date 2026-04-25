@@ -263,7 +263,7 @@
 | `관찰축: holding_exit` | `sections.observation_axis_coverage[4]` | `direct` / `sections.holding_axis` 포함 |
 | `관찰축: dual_persona` | `sections.observation_axis_coverage[5]` | `direct` / `breakdowns.dual_persona_agreement` 등 포함 |
 | `관찰축: preset_exit_sync` | `sections.observation_axis_coverage[6]` | `direct` / `breakdowns.preset_exit_sync_status` 포함 |
-| `관찰축(간접): spread_relief_canary_detail` | `sections.observation_axis_coverage[7]` | `indirect` / latency 지표에서 부분 추론 가능 |
+| `관찰축(간접): spread_relief_canary_detail` | `sections.observation_axis_coverage[7]` | `indirect` / 리포트 표시명은 `spread relief 세부 사유`, latency 지표에서 부분 추론 가능 |
 | `관찰축(외부): post_sell_quality` | `sections.observation_axis_coverage[8]` | `external_report` / post_sell_feedback 리포트 링크 |
 | `관찰축(외부): wait6579_ev` | `sections.observation_axis_coverage[9]` | `external_report` / wait6579_ev_cohort 리포트 링크 |
 | `관찰축(외부): missed_entry_counterfactual` | `sections.observation_axis_coverage[10]` | `external_report` / missed_entry_counterfactual 리포트 링크; 성능튜닝 손익과 합산 금지 |

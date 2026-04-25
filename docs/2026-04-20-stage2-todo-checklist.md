@@ -146,7 +146,7 @@
   - 다음 액션: `bot` 재기동 후 적용 로그와 런타임 프로세스를 확인한다.
 - [x] `[ImmediateFix0420] partial fill min_fill_ratio main canary 즉시 활성화` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 15:55~16:05`, `Track: ScalpingLogic`) (`실행: 2026-04-20 16:05 KST`)
   - 판정: `적용 완료`.
-  - 근거: [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py:147)의 `SCALP_PARTIAL_FILL_RATIO_CANARY_ENABLED=True`로 메인 canary를 즉시 활성화. 기존 구현 경로 [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py:1427)는 유지하고 설계값 `default=0.20`, `strong_absolute_override=0.10`, `preset_tp=0.00`은 변경하지 않음.
+  - 근거: [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py:147)의 `SCALP_PARTIAL_FILL_RATIO_GUARD_ENABLED=True`로 메인 guard를 즉시 활성화. 기존 구현 경로 [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py:1427)는 유지하고 설계값 `default=0.20`, `strong_absolute_override=0.10`, `preset_tp=0.00`은 변경하지 않음.
   - 다음 액션: 내일은 신규 관찰이 아니라 `partial_fill_ratio_below_min_exit_ordered` 발생 여부와 `partial_fill -> rebase -> soft_stop` 비중 감소만 판정한다.
 - [x] `[OpsFix0420] system metric sampling 1분 수집 즉시 가동` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 16:05~16:15`, `Track: Plan`) (`실행: 2026-04-20 16:05 KST`)
   - 판정: `적용 완료`.
@@ -169,7 +169,7 @@
   - 다음 액션: 내일은 `openai_parse_fallback` 건수와 `ai_parse_ok=False` 비중이 실제로 줄었는지만 본다.
 - [x] `[PlanSync0420] 에이럭스 사례는 scale-in 단일 이슈로 단정하지 않고 4축 관찰(EntryGate/Latency/Liquidity/HoldingExit) 유지` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 18:00~18:10`, `Track: Plan`) (`실행: 2026-04-20 10:18 KST`)
   - 판정: `확정`. 현재는 로직수정 없이 관찰축 유지.
-  - 근거: 첫 거래는 `MISSED_UPSIDE`, 두 번째 거래는 `GOOD_EXIT`로 사후결과가 분리되어 단일 수량이슈로 환원 불가. `latency_block -> ALLOW_FALLBACK`, `blocked_liquidity`, `dynamic_strength_canary`를 독립 축으로 유지해야 원인 귀속 가능.
+  - 근거: 첫 거래는 `MISSED_UPSIDE`, 두 번째 거래는 `GOOD_EXIT`로 사후결과가 분리되어 단일 수량이슈로 환원 불가. `latency_block -> ALLOW_FALLBACK`, `blocked_liquidity`, `dynamic_strength_relief`를 독립 축으로 유지해야 원인 귀속 가능.
   - 다음 액션: `2026-04-21 POSTCLOSE`에 4축별 표본 누적과 `N_min/Δ_min/rollback trigger` 충족 여부를 먼저 판정하고, 충족 시에만 단일 축 canary 후보화.
 - [x] `[PlanPolicy0420] 신규 관찰축/보완축은 shadow 금지, canary-only 원칙으로 전환` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 18:10~18:15`, `Track: Plan`) (`실행: 2026-04-20 13:20 KST`)
   - 판정: `확정`. `2026-04-20` 이후 신규축은 shadow를 만들지 않고 canary로만 영향도 판정.

@@ -148,7 +148,7 @@ class TradingConfig:
     SCALP_FALLBACK_ENTRY_QTY_MULTIPLIER: float = 0.70  # 2026-04-09 canary: fallback 진입 수량 배율(한 축만 적용)
     SCALP_LATENCY_FALLBACK_ENABLED: bool = False  # 폐기: 지연대응 fallback 진입 전체 비활성화
     SCALP_SPLIT_ENTRY_ENABLED: bool = False  # 폐기 기록용: fallback scout/main 다중 leg 재개 금지
-    SCALP_PARTIAL_FILL_RATIO_CANARY_ENABLED: bool = True  # 2026-04-20 immediate fix: partial fill 최소 체결비율 canary on
+    SCALP_PARTIAL_FILL_RATIO_GUARD_ENABLED: bool = True  # 2026-04-20 immediate fix: partial fill 최소 체결비율 guard on
     SCALP_PARTIAL_FILL_MIN_RATIO_DEFAULT: float = 0.20  # 기본 최소 체결비율
     SCALP_PARTIAL_FILL_MIN_RATIO_STRONG_ABS_OVERRIDE: float = 0.10  # strong_absolute_override 예외
     SCALP_PARTIAL_FILL_MIN_RATIO_PRESET_TP: float = 0.00  # SCALP_PRESET_TP 예외(적용 제외)
@@ -184,16 +184,16 @@ class TradingConfig:
     SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_WS_AGE_MS: int = 400  # other_danger relief 최대 ws_age
     SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_WS_JITTER_MS: int = 80  # other_danger relief 최대 허용 ws_jitter
     SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_SPREAD_RATIO: float = 0.0080  # other_danger relief 최대 허용 spread_ratio
-    SCALP_DYNAMIC_STRENGTH_CANARY_ENABLED: bool = True  # dynamic strength 근소 미달 조건부 완화
-    SCALP_DYNAMIC_STRENGTH_CANARY_TAGS: tuple = ("SCANNER", "VWAP_RECLAIM", "OPEN_RECLAIM")  # dynamic canary 적용 태그
-    SCALP_DYNAMIC_STRENGTH_CANARY_ALLOWED_REASONS: tuple = (
+    SCALP_DYNAMIC_STRENGTH_RELIEF_ENABLED: bool = True  # dynamic strength 근소 미달 조건부 완화
+    SCALP_DYNAMIC_STRENGTH_RELIEF_TAGS: tuple = ("SCANNER", "VWAP_RECLAIM", "OPEN_RECLAIM")  # dynamic relief 적용 태그
+    SCALP_DYNAMIC_STRENGTH_RELIEF_ALLOWED_REASONS: tuple = (
         "below_exec_buy_ratio",
         "below_buy_ratio",
         "below_window_buy_value",
     )
-    SCALP_DYNAMIC_STRENGTH_CANARY_MIN_BUY_VALUE_RATIO: float = 0.85  # buy_value 최소 허용 비율
-    SCALP_DYNAMIC_STRENGTH_CANARY_BUY_RATIO_TOL: float = 0.03  # buy_ratio 부족 허용폭
-    SCALP_DYNAMIC_STRENGTH_CANARY_EXEC_BUY_RATIO_TOL: float = 0.03  # exec_buy_ratio 부족 허용폭
+    SCALP_DYNAMIC_STRENGTH_RELIEF_MIN_BUY_VALUE_RATIO: float = 0.85  # buy_value 최소 허용 비율
+    SCALP_DYNAMIC_STRENGTH_RELIEF_BUY_RATIO_TOL: float = 0.03  # buy_ratio 부족 허용폭
+    SCALP_DYNAMIC_STRENGTH_RELIEF_EXEC_BUY_RATIO_TOL: float = 0.03  # exec_buy_ratio 부족 허용폭
     SCALP_COMMON_HARD_TIME_STOP_SHADOW_ONLY: bool = True  # 공통 hard time stop은 shadow-only 관찰 고정
     SCALP_COMMON_HARD_TIME_STOP_SHADOW_MINUTES: tuple = (3, 5, 7)  # 공통 hard time stop shadow 후보 분(실전 미적용)
     SCALP_COMMON_HARD_TIME_STOP_SHADOW_MIN_LOSS_PCT: float = -0.7  # shadow 후보 기록 최소 손실폭
@@ -298,9 +298,6 @@ class TradingConfig:
     AI_SCORE_THRESHOLD_KOSDAQ: int = 60    # KOSDAQ_ML AI 점수 매수 보류 임계값 (60점 미만 보류)
     AI_SCORE_THRESHOLD_KOSPI: int = 60     # KOSPI_ML AI 점수 매수 보류 임계값 (60점 미만 보류)
     AI_WATCHING_COOLDOWN: int = 180  # 신규 진입 감시(WATCHING) 쿨타임 (초)
-    AI_WATCHING_75_PROMPT_SHADOW_ENABLED: bool = False  # 작업 4: 75 정합화 shadow canary (remote 전용)
-    AI_WATCHING_75_PROMPT_SHADOW_MIN_SCORE: int = 75  # shadow 재평가 시작 점수
-    AI_WATCHING_75_PROMPT_SHADOW_MAX_SCORE: int = 79  # shadow 재평가 종료 점수
     AI_MAIN_BUY_RECOVERY_CANARY_ENABLED: bool = False  # same-day 교체: BUY recovery canary 기본 OFF
     AI_MAIN_BUY_RECOVERY_CANARY_MIN_SCORE: int = 65  # 재평가 시작 점수
     AI_MAIN_BUY_RECOVERY_CANARY_MAX_SCORE: int = 79  # 재평가 종료 점수
@@ -478,9 +475,6 @@ def _build_trading_rules() -> TradingConfig:
             else config.SCALP_LATENCY_SPREAD_RELIEF_MAX_SPREAD_RATIO,
         )
 
-    env_prompt_shadow_enabled = _env_bool("AI_WATCHING_75_PROMPT_SHADOW_ENABLED")
-    env_prompt_shadow_min = _env_int("AI_WATCHING_75_PROMPT_SHADOW_MIN_SCORE")
-    env_prompt_shadow_max = _env_int("AI_WATCHING_75_PROMPT_SHADOW_MAX_SCORE")
     env_main_buy_recovery_enabled = _env_bool("KORSTOCKSCAN_MAIN_BUY_RECOVERY_CANARY_ENABLED")
     env_main_buy_recovery_min = _env_int("KORSTOCKSCAN_MAIN_BUY_RECOVERY_CANARY_MIN_SCORE")
     env_main_buy_recovery_max = _env_int("KORSTOCKSCAN_MAIN_BUY_RECOVERY_CANARY_MAX_SCORE")
@@ -494,10 +488,7 @@ def _build_trading_rules() -> TradingConfig:
     env_wait6579_probe_max_qty = _env_int("KORSTOCKSCAN_WAIT6579_PROBE_CANARY_MAX_QTY")
     env_scalping_prompt_split_enabled = _env_bool("KORSTOCKSCAN_SCALPING_PROMPT_SPLIT_ENABLED")
     if (
-        env_prompt_shadow_enabled is not None
-        or env_prompt_shadow_min is not None
-        or env_prompt_shadow_max is not None
-        or env_main_buy_recovery_enabled is not None
+        env_main_buy_recovery_enabled is not None
         or env_main_buy_recovery_min is not None
         or env_main_buy_recovery_max is not None
         or env_main_buy_recovery_promote is not None
@@ -512,15 +503,6 @@ def _build_trading_rules() -> TradingConfig:
     ):
         config = replace(
             config,
-            AI_WATCHING_75_PROMPT_SHADOW_ENABLED=env_prompt_shadow_enabled
-            if env_prompt_shadow_enabled is not None
-            else config.AI_WATCHING_75_PROMPT_SHADOW_ENABLED,
-            AI_WATCHING_75_PROMPT_SHADOW_MIN_SCORE=env_prompt_shadow_min
-            if env_prompt_shadow_min is not None
-            else config.AI_WATCHING_75_PROMPT_SHADOW_MIN_SCORE,
-            AI_WATCHING_75_PROMPT_SHADOW_MAX_SCORE=env_prompt_shadow_max
-            if env_prompt_shadow_max is not None
-            else config.AI_WATCHING_75_PROMPT_SHADOW_MAX_SCORE,
             AI_MAIN_BUY_RECOVERY_CANARY_ENABLED=env_main_buy_recovery_enabled
             if env_main_buy_recovery_enabled is not None
             else config.AI_MAIN_BUY_RECOVERY_CANARY_ENABLED,
@@ -559,13 +541,27 @@ def _build_trading_rules() -> TradingConfig:
             else config.SCALPING_PROMPT_SPLIT_ENABLED,
         )
 
-    env_dynamic_strength_enabled = _env_bool("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_CANARY_ENABLED")
-    env_dynamic_strength_tags = _env_csv_tuple("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_CANARY_TAGS")
-    env_dynamic_strength_reasons = _env_csv_tuple("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_CANARY_ALLOWED_REASONS")
-    env_dynamic_strength_min_buy_value_ratio = _env_float("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_CANARY_MIN_BUY_VALUE_RATIO")
-    env_dynamic_strength_buy_ratio_tol = _env_float("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_CANARY_BUY_RATIO_TOL")
-    env_dynamic_strength_exec_buy_ratio_tol = _env_float("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_CANARY_EXEC_BUY_RATIO_TOL")
-    env_partial_fill_enabled = _env_bool("KORSTOCKSCAN_SCALP_PARTIAL_FILL_RATIO_CANARY_ENABLED")
+    env_dynamic_strength_enabled = _env_bool("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_RELIEF_ENABLED")
+    if env_dynamic_strength_enabled is None:
+        env_dynamic_strength_enabled = _env_bool("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_CANARY_ENABLED")
+    env_dynamic_strength_tags = _env_csv_tuple("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_RELIEF_TAGS")
+    if env_dynamic_strength_tags is None:
+        env_dynamic_strength_tags = _env_csv_tuple("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_CANARY_TAGS")
+    env_dynamic_strength_reasons = _env_csv_tuple("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_RELIEF_ALLOWED_REASONS")
+    if env_dynamic_strength_reasons is None:
+        env_dynamic_strength_reasons = _env_csv_tuple("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_CANARY_ALLOWED_REASONS")
+    env_dynamic_strength_min_buy_value_ratio = _env_float("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_RELIEF_MIN_BUY_VALUE_RATIO")
+    if env_dynamic_strength_min_buy_value_ratio is None:
+        env_dynamic_strength_min_buy_value_ratio = _env_float("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_CANARY_MIN_BUY_VALUE_RATIO")
+    env_dynamic_strength_buy_ratio_tol = _env_float("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_RELIEF_BUY_RATIO_TOL")
+    if env_dynamic_strength_buy_ratio_tol is None:
+        env_dynamic_strength_buy_ratio_tol = _env_float("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_CANARY_BUY_RATIO_TOL")
+    env_dynamic_strength_exec_buy_ratio_tol = _env_float("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_RELIEF_EXEC_BUY_RATIO_TOL")
+    if env_dynamic_strength_exec_buy_ratio_tol is None:
+        env_dynamic_strength_exec_buy_ratio_tol = _env_float("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_CANARY_EXEC_BUY_RATIO_TOL")
+    env_partial_fill_enabled = _env_bool("KORSTOCKSCAN_SCALP_PARTIAL_FILL_RATIO_GUARD_ENABLED")
+    if env_partial_fill_enabled is None:
+        env_partial_fill_enabled = _env_bool("KORSTOCKSCAN_SCALP_PARTIAL_FILL_RATIO_CANARY_ENABLED")
     env_partial_fill_min_default = _env_float("KORSTOCKSCAN_SCALP_PARTIAL_FILL_MIN_RATIO_DEFAULT")
     env_partial_fill_min_strong = _env_float("KORSTOCKSCAN_SCALP_PARTIAL_FILL_MIN_RATIO_STRONG_ABS_OVERRIDE")
     env_partial_fill_min_preset = _env_float("KORSTOCKSCAN_SCALP_PARTIAL_FILL_MIN_RATIO_PRESET_TP")
@@ -583,27 +579,27 @@ def _build_trading_rules() -> TradingConfig:
     ):
         config = replace(
             config,
-            SCALP_DYNAMIC_STRENGTH_CANARY_ENABLED=env_dynamic_strength_enabled
+            SCALP_DYNAMIC_STRENGTH_RELIEF_ENABLED=env_dynamic_strength_enabled
             if env_dynamic_strength_enabled is not None
-            else config.SCALP_DYNAMIC_STRENGTH_CANARY_ENABLED,
-            SCALP_DYNAMIC_STRENGTH_CANARY_TAGS=env_dynamic_strength_tags
+            else config.SCALP_DYNAMIC_STRENGTH_RELIEF_ENABLED,
+            SCALP_DYNAMIC_STRENGTH_RELIEF_TAGS=env_dynamic_strength_tags
             if env_dynamic_strength_tags is not None
-            else config.SCALP_DYNAMIC_STRENGTH_CANARY_TAGS,
-            SCALP_DYNAMIC_STRENGTH_CANARY_ALLOWED_REASONS=env_dynamic_strength_reasons
+            else config.SCALP_DYNAMIC_STRENGTH_RELIEF_TAGS,
+            SCALP_DYNAMIC_STRENGTH_RELIEF_ALLOWED_REASONS=env_dynamic_strength_reasons
             if env_dynamic_strength_reasons is not None
-            else config.SCALP_DYNAMIC_STRENGTH_CANARY_ALLOWED_REASONS,
-            SCALP_DYNAMIC_STRENGTH_CANARY_MIN_BUY_VALUE_RATIO=env_dynamic_strength_min_buy_value_ratio
+            else config.SCALP_DYNAMIC_STRENGTH_RELIEF_ALLOWED_REASONS,
+            SCALP_DYNAMIC_STRENGTH_RELIEF_MIN_BUY_VALUE_RATIO=env_dynamic_strength_min_buy_value_ratio
             if env_dynamic_strength_min_buy_value_ratio is not None
-            else config.SCALP_DYNAMIC_STRENGTH_CANARY_MIN_BUY_VALUE_RATIO,
-            SCALP_DYNAMIC_STRENGTH_CANARY_BUY_RATIO_TOL=env_dynamic_strength_buy_ratio_tol
+            else config.SCALP_DYNAMIC_STRENGTH_RELIEF_MIN_BUY_VALUE_RATIO,
+            SCALP_DYNAMIC_STRENGTH_RELIEF_BUY_RATIO_TOL=env_dynamic_strength_buy_ratio_tol
             if env_dynamic_strength_buy_ratio_tol is not None
-            else config.SCALP_DYNAMIC_STRENGTH_CANARY_BUY_RATIO_TOL,
-            SCALP_DYNAMIC_STRENGTH_CANARY_EXEC_BUY_RATIO_TOL=env_dynamic_strength_exec_buy_ratio_tol
+            else config.SCALP_DYNAMIC_STRENGTH_RELIEF_BUY_RATIO_TOL,
+            SCALP_DYNAMIC_STRENGTH_RELIEF_EXEC_BUY_RATIO_TOL=env_dynamic_strength_exec_buy_ratio_tol
             if env_dynamic_strength_exec_buy_ratio_tol is not None
-            else config.SCALP_DYNAMIC_STRENGTH_CANARY_EXEC_BUY_RATIO_TOL,
-            SCALP_PARTIAL_FILL_RATIO_CANARY_ENABLED=env_partial_fill_enabled
+            else config.SCALP_DYNAMIC_STRENGTH_RELIEF_EXEC_BUY_RATIO_TOL,
+            SCALP_PARTIAL_FILL_RATIO_GUARD_ENABLED=env_partial_fill_enabled
             if env_partial_fill_enabled is not None
-            else config.SCALP_PARTIAL_FILL_RATIO_CANARY_ENABLED,
+            else config.SCALP_PARTIAL_FILL_RATIO_GUARD_ENABLED,
             SCALP_PARTIAL_FILL_MIN_RATIO_DEFAULT=env_partial_fill_min_default
             if env_partial_fill_min_default is not None
             else config.SCALP_PARTIAL_FILL_MIN_RATIO_DEFAULT,

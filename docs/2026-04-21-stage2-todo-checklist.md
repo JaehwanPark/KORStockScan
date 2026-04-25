@@ -18,9 +18,9 @@
   - 근거: [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py:991), [test_state_handler_fast_signatures.py](/home/ubuntu/KORStockScan/src/tests/test_state_handler_fast_signatures.py:15) `small_noise`, `price_and_orderbook_noise` 흡수 테스트 통과.
   - 다음 액션: 장후 `[QuantVerify0421]`에서 `gatekeeper_fast_reuse_ratio >= 10.0%`와 `gatekeeper_reuse_blockers`의 signature_changed 감소를 같이 판정한다.
 - [x] `[Governance0421] partial fill min_fill_ratio canary 승인 로그 고정 + 유지/롤백 조건 점검` (`Due: 2026-04-21`, `Slot: PREOPEN`, `TimeWindow: 08:10~08:20`, `Track: ScalpingLogic`) (`실행: 2026-04-21 07:59 KST`)
-  - 판정 기준: `SCALP_PARTIAL_FILL_RATIO_CANARY_ENABLED=True` 사용자 승인 로그를 고정한다. 승인 상태를 전제로 유지/롤백 조건만 점검하고, 무승인 예외로 재분류하지 않는다.
+  - 판정 기준: `SCALP_PARTIAL_FILL_RATIO_GUARD_ENABLED=True` 사용자 승인 로그를 고정한다. 승인 상태를 전제로 유지/롤백 조건만 점검하고, 무승인 예외로 재분류하지 않는다.
   - 판정: 승인 로그 고정 완료, 유지. 무승인 예외 분류는 해제하고 유지/롤백 조건만 장후 성과로 본다.
-  - 근거: [2026-04-20-operator-response.md](/home/ubuntu/KORStockScan/docs/2026-04-20-operator-response.md:77)의 승인 증거와 재분류 기록, [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py:147)의 `SCALP_PARTIAL_FILL_RATIO_CANARY_ENABLED=True`, [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py:462)의 env rollback 경로 확인.
+  - 근거: [2026-04-20-operator-response.md](/home/ubuntu/KORStockScan/docs/2026-04-20-operator-response.md:77)의 승인 증거와 재분류 기록, [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py:147)의 `SCALP_PARTIAL_FILL_RATIO_GUARD_ENABLED=True`, [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py:462)의 env rollback 경로 확인.
   - 다음 액션: 장후 `partial_fill_events`, `position_rebased_after_fill_events/partial_fill_events`, `partial_fill_completed_avg_profit_rate` 기준으로 유지/롤백 후보를 판정한다. 원격 반영 상태는 운영 로그/원격 설정 증거가 없으면 별도 원격 정합성 확인으로 분리한다.
 - [x] `[AuditFix0421] 테스트 카운트 불일치 재현 및 증적 기록` (`Due: 2026-04-21`, `Slot: PREOPEN`, `TimeWindow: 08:20~08:30`, `Track: Plan`) (`실행: 2026-04-21 07:59 KST`)
   - 판정 기준: 아래 4개 파일 pytest를 재실행해 `N passed`를 고정한다. 기존 `16 passed` 주장과 불일치하면 장후 보고에서 정정 근거를 함께 기록한다.

@@ -53,7 +53,7 @@
 
 | # | axis_id | 축명 | decision_use | required_keys |
 |---|---------|------|-------------|---------------|
-| 8 | `spread_relief_canary_detail` | spread relief canary 세부 사유 | canary rollback | `metrics.latency_block_events`, `metrics.quote_fresh_latency_pass_rate`, `breakdowns.latency_reason_breakdown` |
+| 8 | `spread_relief_canary_detail` | spread relief 세부 사유 | canary rollback | `metrics.latency_block_events`, `metrics.quote_fresh_latency_pass_rate`, `breakdowns.latency_reason_breakdown` |
 
 #### external_report (3)
 

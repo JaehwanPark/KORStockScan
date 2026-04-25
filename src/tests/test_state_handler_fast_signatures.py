@@ -8,7 +8,6 @@ from src.engine.sniper_state_handlers import (
     _build_gatekeeper_fast_signature,
     _build_holding_ai_fast_signature,
     _should_run_main_buy_recovery_canary,
-    _should_run_watching_prompt_75_shadow,
     _resolve_gatekeeper_fast_reuse_sec,
     _resolve_holding_ai_fast_reuse_sec,
 )
@@ -251,21 +250,6 @@ def test_build_ai_overlap_log_fields_includes_momentum_and_profile():
     assert fields["threshold_profile"] == "STRICT"
     assert fields["blocked_stage"] == "blocked_strength_momentum"
     assert fields["ai_score"] == "78.0"
-
-
-def test_should_run_watching_prompt_75_shadow_only_for_boundary_wait(monkeypatch):
-    rules = replace(
-        TRADING_RULES,
-        AI_WATCHING_75_PROMPT_SHADOW_ENABLED=True,
-        AI_WATCHING_75_PROMPT_SHADOW_MIN_SCORE=75,
-        AI_WATCHING_75_PROMPT_SHADOW_MAX_SCORE=79,
-    )
-    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
-
-    assert _should_run_watching_prompt_75_shadow({"action": "WAIT"}, 77) is True
-    assert _should_run_watching_prompt_75_shadow({"action": "BUY"}, 77) is False
-    assert _should_run_watching_prompt_75_shadow({"action": "WAIT", "ai_fallback_score_50": True}, 77) is False
-    assert _should_run_watching_prompt_75_shadow({"action": "WAIT"}, 74) is False
 
 
 def test_should_run_main_buy_recovery_canary_with_feature_allowlist(monkeypatch):

@@ -14,6 +14,8 @@
 3. `오늘 강제 규칙`은 아래 공통 bullet를 기본값으로 쓰고, 당일 예외는 최소한으로만 추가한다.
 4. PREOPEN checklist도 같은 템플릿을 쓰되, PREOPEN은 전일 준비완료 carry-over 승인/롤백 슬롯만 받는다.
 5. 날짜별 checklist는 장문의 정책 반복본 대신 이 템플릿과 `Plan Rebase`를 참조한다.
+6. 매일 `POSTCLOSE`에는 [workorder-shadow-canary-runtime-classification.md](./workorder-shadow-canary-runtime-classification.md)를 참조한 `shadow/canary 분류 및 정리` 항목을 최소 1건 포함한다.
+7. 새 `shadow/canary` 경로를 추가하거나 기존 항목의 분류 상태를 바꾸면, 같은 change set에서 [workorder-shadow-canary-runtime-classification.md](./workorder-shadow-canary-runtime-classification.md) 판정표를 먼저 갱신한다. `POSTCLOSE` daily review는 이 규칙의 대체가 아니다.
 
 ---
 
@@ -47,3 +49,15 @@
 - future checklist를 새로 만들 때는 이 템플릿을 먼저 복사한 뒤 task section을 채운다.
 - same-day에 분해 가능한 축을 `다음 장전 검토`로 넘기면 템플릿 위반이다.
 - PREOPEN checklist가 carry-over 승인 슬롯이 아니라 설계 검토 슬롯으로 변질되면 템플릿 위반이다.
+- POSTCLOSE checklist에는 `shadow/canary 런타임 경로 분류/정리` 항목을 넣고, Source는 [workorder-shadow-canary-runtime-classification.md](./workorder-shadow-canary-runtime-classification.md)로 고정한다.
+- 새 `shadow/canary`를 코드에 추가하고 판정표를 같은 change set에서 갱신하지 않으면 템플릿 위반이다.
+
+### POSTCLOSE 기본 항목 예시
+
+```md
+- [ ] `[CodeDebtNNNN] shadow/canary 런타임 경로 일일 분류/정리 판정` (`Due: YYYY-MM-DD`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)
+  - Source: [workorder-shadow-canary-runtime-classification.md](./workorder-shadow-canary-runtime-classification.md)
+  - 판정 기준: 당일 변경/관찰 결과를 기준으로 `remove`, `observe-only`, `baseline-promote`, `active-canary` 중 변동이 필요한 항목이 있는지 닫고, 있으면 same-day 코드정리 후보 또는 다음 독립축 후보로 연결한다.
+  - why: `shadow 금지`, `canary-only`, `baseline 승격` 원칙을 코드/문서 상태와 매일 다시 맞춰야 다음 기대값 개선축의 원인귀속이 흐려지지 않는다.
+  - 다음 액션: 상태 변경이 있으면 checklist와 관련 기준문서에 함께 반영하고, 변경이 없으면 `변동 없음`과 근거만 잠근다.
+```

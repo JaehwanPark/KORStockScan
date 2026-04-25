@@ -78,9 +78,9 @@ PYTHONPATH=. .venv/bin/pytest -q \
 
 | 항목 | 상태 |
 | --- | --- |
-| 코드 구현 | `SCALP_PARTIAL_FILL_RATIO_CANARY_ENABLED=True`, `default=0.20`, `strong_absolute_override=0.10`, `preset_tp=0.00` |
+| 코드 구현 | `SCALP_PARTIAL_FILL_RATIO_GUARD_ENABLED=True`, `default=0.20`, `strong_absolute_override=0.10`, `preset_tp=0.00` |
 | 기대 효과 | `partial_fill -> rebase -> soft_stop` 연쇄 차단 |
-| 승인 증거 | `2026-04-20` 사용자 명시 지시: "원격서버 반영하고 메인,원격 커밋푸시바람. SCALP_PARTIAL_FILL_RATIO_CANARY_ENABLED 는 내가 결정할 사항은? 왜 미승인이지?" |
+| 승인 증거 | `2026-04-20` 사용자 명시 지시: "원격서버 반영하고 메인,원격 커밋푸시바람. SCALP_PARTIAL_FILL_RATIO_GUARD_ENABLED 는 내가 결정할 사항은? 왜 미승인이지?" |
 | 재분류 | `승인 완료 / 유지` |
 
 운영 판단:

@@ -123,7 +123,7 @@
 
 다만 핵심 미결 사항 하나를 명확히 한다:
 
-> **`SCALP_PARTIAL_FILL_RATIO_CANARY_ENABLED=True`는 현재 운영 중이다. 내일 `[Governance0421]`에서 사용자가 명시적으로 유지 또는 롤백을 결정하기 전까지, 이 변경은 사용자 승인 없이 live에 적용된 변경으로 기록에 남는다.**
+> **`SCALP_PARTIAL_FILL_RATIO_GUARD_ENABLED=True`는 현재 운영 중이다. 내일 `[Governance0421]`에서 사용자가 명시적으로 유지 또는 롤백을 결정하기 전까지, 이 변경은 사용자 승인 없이 live에 적용된 변경으로 기록에 남는다.**
 
 이 항목은 내일 PREOPEN에서 사용자가 직접 판정하고, 그 결과를 `2026-04-21` 체크리스트에 명기해야 감사가 닫힌다.
 

@@ -369,6 +369,7 @@ AI 모델 품질과 출력/운영 안정성 문제를 분리해서 본다.
 
 ### `2026-04-13` 작업축 재분류
 
+- `2026-04-25 KST` 기준 `watching_prompt_75_shadow` 런타임/상수/전용 report/check script는 코드베이스에서 제거됐다. 아래 내용은 historical implementation note로만 본다.
 - `2026-04-10`, `2026-04-13` 모두 `shadow_samples=0`, `buy_diverged=0`, `joined_missed_rows=0`이었다.
 - 따라서 이 축은 **현재 잔여 작업축에서 제외**한다.
 - 재오픈 조건:

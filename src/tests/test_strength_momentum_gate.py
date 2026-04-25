@@ -100,12 +100,12 @@ def test_strength_momentum_canary_relaxes_exec_buy_ratio_for_scanner(monkeypatch
         "TRADING_RULES",
         replace(
             CONFIG,
-            SCALP_DYNAMIC_STRENGTH_CANARY_ENABLED=True,
-            SCALP_DYNAMIC_STRENGTH_CANARY_TAGS=("SCANNER",),
-            SCALP_DYNAMIC_STRENGTH_CANARY_ALLOWED_REASONS=("below_exec_buy_ratio",),
-            SCALP_DYNAMIC_STRENGTH_CANARY_MIN_BUY_VALUE_RATIO=0.85,
-            SCALP_DYNAMIC_STRENGTH_CANARY_BUY_RATIO_TOL=0.03,
-            SCALP_DYNAMIC_STRENGTH_CANARY_EXEC_BUY_RATIO_TOL=0.03,
+            SCALP_DYNAMIC_STRENGTH_RELIEF_ENABLED=True,
+            SCALP_DYNAMIC_STRENGTH_RELIEF_TAGS=("SCANNER",),
+            SCALP_DYNAMIC_STRENGTH_RELIEF_ALLOWED_REASONS=("below_exec_buy_ratio",),
+            SCALP_DYNAMIC_STRENGTH_RELIEF_MIN_BUY_VALUE_RATIO=0.85,
+            SCALP_DYNAMIC_STRENGTH_RELIEF_BUY_RATIO_TOL=0.03,
+            SCALP_DYNAMIC_STRENGTH_RELIEF_EXEC_BUY_RATIO_TOL=0.03,
         ),
     )
 
@@ -123,7 +123,7 @@ def test_strength_momentum_canary_relaxes_exec_buy_ratio_for_scanner(monkeypatch
 
     assert result["canary_applied"] is True
     assert result["allowed"] is True
-    assert result["reason"] == "canary_relaxed_below_exec_buy_ratio"
+    assert result["reason"] == "relief_relaxed_below_exec_buy_ratio"
     assert result["canary_origin_reason"] == "below_exec_buy_ratio"
 
 
@@ -133,12 +133,12 @@ def test_strength_momentum_canary_not_applied_for_non_allowed_tag(monkeypatch):
         "TRADING_RULES",
         replace(
             CONFIG,
-            SCALP_DYNAMIC_STRENGTH_CANARY_ENABLED=True,
-            SCALP_DYNAMIC_STRENGTH_CANARY_TAGS=("SCANNER",),
-            SCALP_DYNAMIC_STRENGTH_CANARY_ALLOWED_REASONS=("below_exec_buy_ratio",),
-            SCALP_DYNAMIC_STRENGTH_CANARY_MIN_BUY_VALUE_RATIO=0.85,
-            SCALP_DYNAMIC_STRENGTH_CANARY_BUY_RATIO_TOL=0.03,
-            SCALP_DYNAMIC_STRENGTH_CANARY_EXEC_BUY_RATIO_TOL=0.03,
+            SCALP_DYNAMIC_STRENGTH_RELIEF_ENABLED=True,
+            SCALP_DYNAMIC_STRENGTH_RELIEF_TAGS=("SCANNER",),
+            SCALP_DYNAMIC_STRENGTH_RELIEF_ALLOWED_REASONS=("below_exec_buy_ratio",),
+            SCALP_DYNAMIC_STRENGTH_RELIEF_MIN_BUY_VALUE_RATIO=0.85,
+            SCALP_DYNAMIC_STRENGTH_RELIEF_BUY_RATIO_TOL=0.03,
+            SCALP_DYNAMIC_STRENGTH_RELIEF_EXEC_BUY_RATIO_TOL=0.03,
         ),
     )
 

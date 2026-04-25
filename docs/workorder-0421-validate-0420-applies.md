@@ -27,7 +27,7 @@
 
 ## 2. 검증 대상 변경
 
-1. `SCALP_PARTIAL_FILL_RATIO_CANARY_ENABLED=True` (`partial fill min_fill_ratio` canary)
+1. `SCALP_PARTIAL_FILL_RATIO_GUARD_ENABLED=True` (`partial fill min_fill_ratio` guard)
 2. `INVEST_RATIO_SCALPING_MIN/MAX`, `SCALPING_MAX_BUY_BUDGET_KRW` 하향
 3. `gatekeeper fast_reuse` 시그니처 coarsening
 4. OpenAI parse fallback 메타 복구 + JSON parser 강건화

@@ -62,7 +62,6 @@ def read_cmd(command: str) -> list[str]:
     text = proc.stdout if proc.returncode == 0 else proc.stderr
     return [line.rstrip() for line in text.splitlines() if line.strip()]
 
-shadow_env = {{}}
 latency_env = {{}}
 if pid:
     try:
@@ -74,13 +73,6 @@ if pid:
         if '=' in chunk:
             k, v = chunk.split('=', 1)
             env_map[k] = v
-    for key in [
-        'AI_WATCHING_75_PROMPT_SHADOW_ENABLED',
-        'AI_WATCHING_75_PROMPT_SHADOW_MIN_SCORE',
-        'AI_WATCHING_75_PROMPT_SHADOW_MAX_SCORE',
-    ]:
-        if key in env_map:
-            shadow_env[key] = env_map[key]
     for key in [
         'KORSTOCKSCAN_LATENCY_CANARY_PROFILE',
         'KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS',
@@ -124,7 +116,6 @@ payload = {{
     'bot_pid': pid,
     'tmux_bot_session': subprocess.run('tmux has-session -t bot', shell=True).returncode == 0,
     'latency_env': latency_env,
-    'shadow_env': shadow_env,
     'thread_snapshot': read_cmd(f'ps -L -p {{pid}} -o pid,tid,pcpu,pmem,etime,cmd | sed -n \"1,20p\"') if pid else [],
     'top_snapshot': read_cmd(f'top -b -n 1 -H -p {{pid}} | sed -n \"1,20p\"') if pid else [],
     'pipeline': pipeline,
@@ -147,7 +138,6 @@ def _run_ssh_json(*, host: str, user: str, remote_root: str, target_date: str) -
 def _render_markdown(window: str, payload: dict[str, Any]) -> str:
     pipeline = dict(payload.get("pipeline") or {})
     latency_env = dict(payload.get("latency_env") or {})
-    shadow_env = dict(payload.get("shadow_env") or {})
     lines = [
         f"# Remote Latency Baseline / {window}",
         "",
@@ -158,7 +148,6 @@ def _render_markdown(window: str, payload: dict[str, Any]) -> str:
         f"- tmux_bot_session: `{payload.get('tmux_bot_session', False)}`",
         f"- latency_profile: `{latency_env.get('KORSTOCKSCAN_LATENCY_CANARY_PROFILE', '')}`",
         f"- latency_max_ws_jitter_ms: `{latency_env.get('KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS', '')}`",
-        f"- shadow_enabled: `{shadow_env.get('AI_WATCHING_75_PROMPT_SHADOW_ENABLED', '')}`",
         f"- pipeline_exists: `{pipeline.get('exists', False)}`",
         f"- pipeline_line_count: `{pipeline.get('line_count', 0)}`",
         f"- entry_pipeline_rows: `{pipeline.get('entry_pipeline_rows', 0)}`",

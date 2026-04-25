@@ -20,6 +20,7 @@
 - `ApplyTarget`은 문서에 명시된 값만 사용하고, parser/workorder가 `remote`를 추정하지 않도록 유지한다.
 - 다축 동시 변경 금지, 승인 전 `main` 실주문 변경 금지 규칙을 유지한다.
 - 대량 재처리는 `saved snapshot 우선 -> safe wrapper async dispatch -> completion artifact/Telegram` 순서만 허용하며, foreground direct build는 금지한다.
+- 새 `shadow/canary` 경로 추가 또는 기존 분류(`remove / observe-only / baseline-promote / active-canary`) 변경은 같은 change set에서 [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md) 판정표를 함께 갱신해야 하며, 장후 review 항목은 누락 보정용으로만 쓴다.
 
 ## 장전 체크리스트 (08:20~)
 
@@ -105,3 +106,9 @@
   - 판정 기준: 장중/장후 `[GATEKEEPER_SNAPSHOT]` 성공 로그와 `data/gatekeeper/gatekeeper_snapshots_2026-04-27.jsonl` 실제 line 증가를 대조해, `enqueue accepted` 후 worker write 실패가 있었다면 callback `log_error`와 dedup rollback이 같은 구간에 남는지 확인한다.
   - why: 현재 구현은 동기 fallback 실패는 `None`으로 닫지만, async worker 실패는 best-effort 규약상 후행 rollback으로만 관측된다. 따라서 코드 테스트 통과와 별개로 실로그 기준 persist 정합성 확인이 필요하다.
   - 다음 액션: mismatch가 없으면 async writer 규약을 운영 기준선으로 잠그고, mismatch가 있으면 `persist confirmed` 필요 구간을 동기 write 또는 명시적 ack 구조로 재분해한다.
+
+- [ ] `[CodeDebt0427] shadow/canary 런타임 경로 일일 분류/정리 판정` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)
+  - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)
+  - 판정 기준: 당일 코드/운영 결과를 기준으로 `dual_persona`, `watching_prompt_75_shadow`, `hard_time_stop_shadow`, `ai_holding_shadow_band`, `dynamic_strength_canary(dynamic_strength_relief)`, `other_danger_relief_canary`, `partial_fill_ratio_canary(partial_fill_ratio_guard)`의 분류(`remove`, `observe-only`, `baseline-promote`, `active-canary`)에 변동이 있는지 닫고, 변동 시 same-day 코드정리 후보 또는 다음 독립축 후보까지 함께 기록한다.
+  - why: `shadow 금지`, `canary-only`, `baseline 승격` 원칙은 문서 선언만으로 유지되지 않고, 매일 장후 실코드/실운영 상태와 다시 맞춰야 다음 기대값 개선축의 원인귀속이 흐려지지 않는다.
+  - 다음 액션: 분류 변경이 있으면 checklist와 관련 기준문서에 함께 반영하고, 변경이 없으면 `변동 없음`과 근거만 잠근다.

@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from sqlalchemy.orm.exc import DetachedInstanceError
 
 from src.database.models import RecommendationHistory
@@ -6,6 +8,7 @@ from src.engine.sniper_overnight_gatekeeper import (
     _format_order_error,
     _humanize_eod_action,
     _snapshot_record,
+    _submit_overnight_dual_persona_shadow,
 )
 
 
@@ -81,3 +84,19 @@ def test_humanize_eod_action_and_clean_text():
     assert _humanize_eod_action("SELL_TODAY") == "당일 청산"
     assert _humanize_eod_action("HOLD_OVERNIGHT") == "오버나이트 유지"
     assert _clean_telegram_text(r"\[ABC\]\(test\)\.") == "[ABC](test)."
+
+
+def test_submit_overnight_dual_persona_shadow_is_disabled_when_dual_persona_off(monkeypatch):
+    submit_calls = []
+    monkeypatch.setattr(
+        "src.engine.sniper_overnight_gatekeeper.TRADING_RULES",
+        SimpleNamespace(OPENAI_DUAL_PERSONA_ENABLED=False),
+    )
+    monkeypatch.setattr(
+        "src.engine.sniper_overnight_gatekeeper.DUAL_PERSONA_ENGINE",
+        SimpleNamespace(submit_overnight_shadow=lambda **kwargs: submit_calls.append(kwargs)),
+    )
+
+    _submit_overnight_dual_persona_shadow("테스트", "005930", {"curr_price": 70000}, {"action": "SELL_TODAY"})
+
+    assert submit_calls == []

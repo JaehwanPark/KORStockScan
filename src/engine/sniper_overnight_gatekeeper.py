@@ -6,6 +6,7 @@ from datetime import datetime
 
 from src.database.models import RecommendationHistory
 from src.utils import kiwoom_utils
+from src.utils.constants import TRADING_RULES
 from src.utils.logger import log_error, log_info
 from src.utils.pipeline_event_logger import emit_pipeline_event
 
@@ -236,7 +237,7 @@ def _log_overnight_dual_persona_shadow_result(stock_name, code, strategy, payloa
 
 
 def _submit_overnight_dual_persona_shadow(stock_name, code, realtime_ctx, decision):
-    if DUAL_PERSONA_ENGINE is None:
+    if not bool(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_ENABLED", False)) or DUAL_PERSONA_ENGINE is None:
         return
     try:
         DUAL_PERSONA_ENGINE.submit_overnight_shadow(
