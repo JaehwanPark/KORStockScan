@@ -1895,9 +1895,6 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
         strategy_start = TIME_09_05
 
     if now_t < strategy_start:
-        if now_dt.second % 30 == 0:
-            print(f"📡 [관찰/블라인드 모드] 차트 데이터(VWAP) 형성 대기 중... (목표: {strategy_start})")
-        log_info(f"[DEBUG] {code} 시간 조건 불충족 (현재 {now_t}, 시작 {strategy_start})")
         return
 
     MAX_SURGE = MAX_SCALP_SURGE_PCT
@@ -1910,20 +1907,16 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
             now_ts=now_ts,
             runtime_remaining_sec=max(0, int(cooldowns[code] - now_ts)),
         )
-        log_info(f"[DEBUG] {code} 쿨다운 중 (만료 시간 {cooldowns[code]})")
         return
 
     if strategy == 'SCALPING' and now_t >= TIME_SCALPING_NEW_BUY_CUTOFF:
-        log_info(f"[DEBUG] {code} SCALPING 신규매수 컷오프 이후 제외")
         return
 
     if code in alerted_stocks:
-        log_info(f"[DEBUG] {code} 이미 alerted_stocks에 포함됨")
         return
 
     curr_price = int(float(ws_data.get('curr', 0) or 0))
     if curr_price <= 0:
-        log_info(f"[DEBUG] {code} 현재가 유효하지 않음: {curr_price}")
         return
 
     current_vpw = float(ws_data.get('v_pw', 0) or 0)
@@ -1939,7 +1932,6 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
 
     if strategy == 'SCALPING':
         if pos_tag == 'VCP_CANDID':
-            log_info(f"[DEBUG] {code} VCP_CANDID 태그로 인한 제외")
             return
 
         current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
@@ -1984,10 +1976,6 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
             is_trigger = True
         else:
             if fluctuation >= max_surge or intraday_surge >= max_intraday_surge:
-                log_info(
-                    f"[DEBUG] {code} 과매수 위험 차단 (fluctuation={fluctuation:.2f} >= {max_surge} "
-                    f"또는 intraday_surge={intraday_surge:.2f} >= {max_intraday_surge})"
-                )
                 overlap_snapshot = _extract_ai_overlap_snapshot(ws_data=ws_data)
                 stock["last_ai_overlap_snapshot"] = overlap_snapshot
                 _log_entry_pipeline(
@@ -2058,10 +2046,6 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
             stock['big_bite_hard_gate_tags'] = gate_tags
 
             if hard_gate_required and not big_bite_confirmed:
-                log_info(
-                    f"[DEBUG] {code} Big-Bite 하드 게이트 차단 "
-                    f"(required={hard_gate_required}, triggered={big_bite_armed}, confirmed={big_bite_confirmed})"
-                )
                 stock['big_bite_block_reason'] = 'hard_gate'
                 _log_entry_pipeline(
                     stock,
@@ -2074,15 +2058,6 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
                 )
                 return
 
-            if big_bite_info:
-                log_info(
-                    f"[DEBUG] {code} Big-Bite 상태 "
-                    f"(triggered={big_bite_armed}, confirmed={big_bite_confirmed}, "
-                    f"impact={big_bite_info.get('impact_ratio')}, "
-                    f"agg_value={big_bite_info.get('agg_value')}, "
-                    f"chase_pct={big_bite_info.get('chase_pct')})"
-                )
-
             if pos_tag == 'VCP_NEXT':
                 stock['target_buy_price'] = curr_price
                 is_trigger = True
@@ -2094,7 +2069,6 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
 
             else:
                 if radar is None:
-                    log_info(f"[DEBUG] {code} radar 객체 없음")
                     _log_entry_pipeline(stock, code, "blocked_missing_radar", strategy=strategy)
                     return
 
@@ -2164,7 +2138,6 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
                             )
                             shadow_candidate = None
                     if not (momentum_gate.get("allowed") and not observe_only):
-                        log_info(f"[DEBUG] {code} VPW 불충족 (current_vpw={current_vpw:.1f} < VPW_SCALP_LIMIT)")
                         overlap_snapshot = _extract_ai_overlap_snapshot(ws_data=ws_data)
                         stock["last_ai_overlap_snapshot"] = overlap_snapshot
                         _log_entry_pipeline(
@@ -2192,10 +2165,6 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
                         )
                         return
                 if liquidity_value < min_liquidity:
-                    log_info(
-                        f"[DEBUG] {code} 유동성 불충족 (liquidity_value={liquidity_value:,.0f} "
-                        f"< MIN_LIQUIDITY={min_liquidity:,.0f})"
-                    )
                     _log_entry_pipeline(
                         stock,
                         code,
@@ -2212,9 +2181,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
                     gap_pct = (curr_price - scanner_price) / scanner_price * 100
                     if gap_pct >= 1.5:
                         if code not in cooldowns:
-                            print(f"⚠️ [{stock['name']}] 포착가 대비 너무 오름 (갭 +{gap_pct:.1f}%). 추격매수 포기.")
                             cooldowns[code] = now_ts + 1200
-                        log_info(f"[DEBUG] {code} 포착가 대비 갭 상승 (gap_pct={gap_pct:.1f}% >= 1.5%)")
                         _log_entry_pipeline(
                             stock,
                             code,
@@ -2436,7 +2403,6 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
 
                     if ai_call_executed and last_ai_time == 0:
                         if not big_bite_confirmed:
-                            log_info(f"[DEBUG] {code} 첫 AI 분석 턴 대기 (SCALPING)")
                             _log_entry_pipeline(
                                 stock,
                                 code,
@@ -2446,7 +2412,6 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
                                 vip_target=is_vip_target,
                             )
                             return
-                        log_info(f"[DEBUG] {code} Big-Bite 확인으로 첫 AI 분석 대기 스킵")
 
                 # Big-Bite 점수 보너스 (보수적)
                 boost_applied_value = 0
@@ -2459,10 +2424,6 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
                     current_ai_score = min(100.0, current_ai_score + boost_applied_value)
                     stock['big_bite_boosted'] = bool(big_bite_confirmed)
                     stock['big_bite_boost_value'] = boost_applied_value
-                    log_info(
-                        f"[DEBUG] {code} Big-Bite boost 적용 (+{boost_applied_value}, "
-                        f"score={current_ai_score:.1f})"
-                    )
                 else:
                     stock['big_bite_boosted'] = False
                     stock['big_bite_boost_value'] = 0
@@ -2493,14 +2454,9 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
                     )
 
                 if current_ai_score < 75 and current_ai_score != 50:
-                    if now_ts - last_ai_time < 1.0:
-                        action_str = "WAIT(진입 보류)" if current_ai_score > 40 else "DROP(진입 차단)"
-                        print(f"🚫 [AI 매수 거부] {stock['name']} {action_str} (AI 점수: {current_ai_score}점)")
-
                     cooldown_time = AI_WAIT_DROP_COOLDOWN
 
                     cooldowns[code] = now_ts + cooldown_time
-                    log_info(f"[DEBUG] {code} AI 점수 불충족 (current_ai_score={current_ai_score} < 75)")
                     _log_entry_pipeline(
                         stock,
                         code,
@@ -2548,11 +2504,9 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
                 is_trigger = True
                 if big_bite_confirmed:
                     stock['big_bite_boosted'] = True
-                    log_info(f"[DEBUG] {code} Big-Bite 보조 확증 신호 확인됨 (진입 조건 통과)")
 
     elif strategy in ['KOSDAQ_ML', 'KOSPI_ML']:
         if radar is None:
-            log_info(f"[DEBUG] {code} radar 객체 없음 (KOSDAQ_ML/KOSPI_ML)")
             _log_entry_pipeline(stock, code, "blocked_missing_radar", strategy=strategy)
             return
 
@@ -2562,9 +2516,6 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
             swing_gap = get_dynamic_swing_gap_threshold(strategy, marcap, turnover_hint=turnover_hint)
             max_gap = float(swing_gap.get('threshold', _get_swing_gap_threshold(strategy)) or _get_swing_gap_threshold(strategy))
             if fluctuation >= max_gap:
-                log_info(
-                    f"[DEBUG] {code} 갭상승 너무 큼 (fluctuation={fluctuation:.2f} >= max_gap={max_gap})"
-                )
                 _log_entry_pipeline(
                     stock,
                     code,
@@ -2594,9 +2545,6 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
             swing_gap = get_dynamic_swing_gap_threshold(strategy, marcap, turnover_hint=turnover_hint)
             max_gap = float(swing_gap.get('threshold', _get_swing_gap_threshold(strategy)) or _get_swing_gap_threshold(strategy))
             if fluctuation >= max_gap:
-                log_info(
-                    f"[DEBUG] {code} 갭상승 너무 큼 (fluctuation={fluctuation:.2f} >= max_gap={max_gap})"
-                )
                 _log_entry_pipeline(
                     stock,
                     code,
@@ -2831,7 +2779,6 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
             blocked, block_reason = _should_block_swing_entry(stock.get('strategy', ''))
             if blocked:
                 print(f"⛔ [시장환경필터] {stock['name']}({code}) 스윙 진입 보류 - {block_reason}")
-                log_info(f"[DEBUG] {code} 시장환경필터에 의한 스윙 진입 보류 (reason: {block_reason})")
                 _log_entry_pipeline(stock, code, "market_regime_block", strategy=strategy)
                 return
 
@@ -2863,7 +2810,6 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
     if is_trigger:
         if not admin_id:
             print(f"⚠️ [매수보류] {stock['name']}: 관리자 ID가 없습니다.")
-            log_info(f"[DEBUG] {code} 관리자 ID 없음")
             _log_entry_pipeline(stock, code, "blocked_no_admin")
             return
 
