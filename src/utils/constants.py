@@ -294,6 +294,16 @@ class TradingConfig:
     AI_MODEL_TIER2: str = "models/gemini-3-flash-preview"  # 스윙/실시간 리포트용 균형 티어
     AI_MODEL_TIER3: str = "models/gemini-3.1-pro-preview-customtools"  # 시장 브리핑/EOD용 심층 추론 티어
     GEMINI_ENGINE_MIN_INTERVAL: float = 0.5 # 구글 서버에 쏘는 최소 간격 (초 단위, 0.5초 = 500ms)
+    GEMINI_SYSTEM_INSTRUCTION_JSON_ENABLED: bool = False  # JSON 경로에서만 system_instruction 분리 적용
+    GEMINI_JSON_DETERMINISTIC_CONFIG_ENABLED: bool = False  # JSON 경로 deterministic config 적용 토글
+    GEMINI_JSON_TEMPERATURE: float = 0.0  # deterministic JSON 응답 기본 temperature
+    GEMINI_JSON_TOP_P: float = 0.1  # deterministic JSON 응답 기본 top_p
+    GEMINI_JSON_TOP_K: int = 1  # deterministic JSON 응답 기본 top_k
+    DEEPSEEK_CONTEXT_AWARE_BACKOFF_ENABLED: bool = False  # live-sensitive / report retry sleep 분리 토글
+    DEEPSEEK_RETRY_BASE_SLEEP_SEC: float = 0.4  # context-aware backoff 기본 sleep
+    DEEPSEEK_RETRY_JITTER_MAX_SEC: float = 0.25  # retry jitter 상한
+    DEEPSEEK_RETRY_LIVE_MAX_SLEEP_SEC: float = 0.8  # live-sensitive retry sleep 상한
+    DEEPSEEK_RETRY_REPORT_MAX_SLEEP_SEC: float = 4.0  # report/eod retry sleep 상한
     AI_MAX_CONSECUTIVE_FAILURES: int = 5   # 연속 API 실패 시 AI 엔진 일시 중단 임계값
     AI_SCORE_THRESHOLD_KOSDAQ: int = 60    # KOSDAQ_ML AI 점수 매수 보류 임계값 (60점 미만 보류)
     AI_SCORE_THRESHOLD_KOSPI: int = 60     # KOSPI_ML AI 점수 매수 보류 임계값 (60점 미만 보류)

@@ -112,3 +112,15 @@
   - 판정 기준: 당일 코드/운영 결과를 기준으로 `dual_persona`, `watching_prompt_75_shadow`, `hard_time_stop_shadow`, `ai_holding_shadow_band`, `dynamic_strength_canary(dynamic_strength_relief)`, `other_danger_relief_canary`, `partial_fill_ratio_canary(partial_fill_ratio_guard)`의 분류(`remove`, `observe-only`, `baseline-promote`, `active-canary`)에 변동이 있는지 닫고, live 전환에 쓰는 cohort도 `baseline-decision / active-canary-decision / provisional-stage-disjoint / observe-only / excluded` 상태로 잠근다.
   - why: `shadow 금지`, `canary-only`, `baseline 승격` 원칙은 문서 선언만으로 유지되지 않고, 매일 장후 실코드/실운영 상태와 live cohort 경계를 다시 맞춰야 다음 기대값 개선축의 원인귀속이 흐려지지 않는다.
   - 다음 액션: 분류 변경이 있으면 checklist와 관련 기준문서에 함께 반영하고, 변경이 없으면 `변동 없음`과 근거를 남긴다. live 축 교체 또는 stage-disjoint 병렬 검토가 있었다면 `baseline cohort / candidate live cohort / observe-only cohort / excluded cohort / rollback owner / cross-contamination check` 6개 잠금 필드도 같은 메모에 함께 적는다.
+
+- [ ] `[DeepSeekReview0427] ai_engine_deepseek 리뷰 후속 P0/P1/P2 적용축 판정` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 18:55~19:10`, `Track: ScalpingLogic`)
+  - Source: [workorder_deepseek_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_deepseek_engine_review.md)
+  - 판정 기준: `P0`는 `_call_deepseek_safe()` JSON fast-path만 반영하는 무행동 변경으로 same-day 닫을 수 있어야 하고, `P1 retry`는 `live-sensitive 상한 + rollback guard`가 문서/코드에 함께 고정될 때만 승인한다. `P2 gatekeeper JSON`은 `flag default OFF`, `JSON 실패 시 text fallback`, `action_label/allow_entry/report` contract 유지 테스트가 준비되지 않으면 착수하지 않는다. `_compact_holding_ws_for_cache()` 버킷 축소는 holding cohort 근거 전까지 잠근다.
+  - why: 현재 DeepSeek 리뷰 초안에는 유효한 지적과 과장된 지적이 섞여 있다. 실전 EV 기준으로는 `JSON fast-path`는 즉시 가능하지만, `retry/backoff`와 `gatekeeper JSON`은 live latency/호환성/rollback을 먼저 잠가야 한다.
+  - 다음 액션: 승인된 축만 별도 change set으로 분리하고, 미승인 축은 보류 사유 1개와 재판정 시각 1개를 같은 메모에 고정한다.
+
+- [ ] `[GeminiReview0427] ai_engine Gemini 호출 구조 리뷰 후속 P0/P1/P2 적용축 판정` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 19:10~19:25`, `Track: ScalpingLogic`)
+  - Source: [workorder_gemini_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_gemini_engine_review.md)
+  - 판정 기준: `P0`는 `_call_gemini_safe()` JSON fast-path만 반영하는 무행동 보강으로 same-day 닫을 수 있어야 한다. `P1 system instruction`과 `P1 deterministic JSON config`는 `flag default OFF`, `rollback guard`, `live 영향 비교 기준`이 문서/코드에 함께 있을 때만 승인한다. `P2 response schema`는 `entry/holding_exit/overnight/condition_entry/condition_exit/eod_top5` endpoint별 schema registry와 fallback, 계약 테스트가 준비되지 않으면 착수하지 않는다.
+  - why: Gemini 리뷰 초안의 방향은 일부 맞지만, 현재 live 기준 엔진을 바꾸는 항목과 단순 파싱 보강 항목이 섞여 있다. EV 기준으로는 `fast-path`는 저위험이지만, `system instruction/temperature/schema`는 실제 BUY/WAIT/DROP 분포와 parse_fail 축을 함께 바꿀 수 있어 canary/rollback 전제가 먼저다.
+  - 다음 액션: 승인된 축만 독립 change set으로 분리하고, 미승인 축은 보류 사유 1개와 재판정 시각 1개를 같은 메모에 고정한다.

@@ -1189,13 +1189,28 @@ class GeminiSniperEngine:
         use_google_search=False,
     ):
         """키 로테이션, 예외 처리, 모델 덮어쓰기를 모두 전담하는 중앙 집중식 호출기"""
-        contents = [prompt, user_input] if prompt else [user_input]
+        use_system_instruction = bool(
+            require_json
+            and prompt
+            and getattr(TRADING_RULES, "GEMINI_SYSTEM_INSTRUCTION_JSON_ENABLED", False)
+        )
+        contents = [user_input] if use_system_instruction else ([prompt, user_input] if prompt else [user_input])
 
         config = None
         config_kwargs = {}
 
         if require_json:
             config_kwargs["response_mime_type"] = "application/json"
+            if use_system_instruction:
+                config_kwargs["system_instruction"] = prompt
+            if getattr(TRADING_RULES, "GEMINI_JSON_DETERMINISTIC_CONFIG_ENABLED", False):
+                config_kwargs["temperature"] = float(getattr(TRADING_RULES, "GEMINI_JSON_TEMPERATURE", 0.0))
+                top_p = getattr(TRADING_RULES, "GEMINI_JSON_TOP_P", None)
+                top_k = getattr(TRADING_RULES, "GEMINI_JSON_TOP_K", None)
+                if top_p is not None:
+                    config_kwargs["top_p"] = float(top_p)
+                if top_k is not None:
+                    config_kwargs["top_k"] = int(top_k)
 
         if use_google_search:
             config_kwargs["tools"] = [
@@ -1220,6 +1235,12 @@ class GeminiSniperEngine:
                 raw_text = (response.text or "").strip()
 
                 if require_json:
+                    try:
+                        parsed = json.loads(raw_text)
+                        if isinstance(parsed, dict):
+                            return parsed
+                    except Exception:
+                        pass
                     match = re.search(r'\{.*\}', raw_text, re.DOTALL)
                     if match:
                         clean_json = match.group()

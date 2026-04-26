@@ -18,6 +18,7 @@ import threading
 import json
 import re
 import hashlib
+import random
 from datetime import datetime, timezone
 from itertools import cycle
 from openai import OpenAI, RateLimitError
@@ -529,6 +530,18 @@ class DeepSeekSniperEngine:
     # 핵심 API 호출기: _call_deepseek_safe
     # ==========================================
 
+    def _compute_retry_sleep(self, attempt, *, live_sensitive):
+        if not getattr(TRADING_RULES, "DEEPSEEK_CONTEXT_AWARE_BACKOFF_ENABLED", False):
+            return 0.8
+
+        base_sleep = max(0.0, float(getattr(TRADING_RULES, "DEEPSEEK_RETRY_BASE_SLEEP_SEC", 0.4) or 0.4))
+        jitter_max = max(0.0, float(getattr(TRADING_RULES, "DEEPSEEK_RETRY_JITTER_MAX_SEC", 0.25) or 0.25))
+        live_cap = max(0.0, float(getattr(TRADING_RULES, "DEEPSEEK_RETRY_LIVE_MAX_SLEEP_SEC", 0.8) or 0.8))
+        report_cap = max(0.0, float(getattr(TRADING_RULES, "DEEPSEEK_RETRY_REPORT_MAX_SLEEP_SEC", 4.0) or 4.0))
+        cap = live_cap if live_sensitive else report_cap
+        backoff = base_sleep * (2 ** max(0, int(attempt)))
+        return min(cap, backoff + random.uniform(0.0, jitter_max))
+
     def _call_deepseek_safe(
         self,
         prompt,
@@ -551,6 +564,7 @@ class DeepSeekSniperEngine:
 
             target_model = model_override if model_override else self.current_model_name
             target_temp = temperature_override if temperature_override is not None else (0.0 if require_json else 0.7)
+            live_sensitive = target_model != self._get_tier3_model()
             last_error = ""
 
             for attempt in range(len(self.api_keys)):
@@ -565,11 +579,17 @@ class DeepSeekSniperEngine:
                     # 성공 시 다음 호출을 위해 키 순환 (부하 분산)
                     self._rotate_client()
 
-                    raw_text = response.choices[0].message.content
+                    raw_text = str(response.choices[0].message.content or "").strip()
                     if require_json:
+                        try:
+                            parsed = json.loads(raw_text)
+                            if isinstance(parsed, dict):
+                                return parsed
+                        except Exception:
+                            pass
                         return self._parse_json_response_text(raw_text)
                     else:
-                        return str(raw_text or "").strip()
+                        return raw_text
 
                 except RateLimitError as e:
                     last_error = str(e)
@@ -579,7 +599,7 @@ class DeepSeekSniperEngine:
                     warn_msg = f"⚠️ [DeepSeek 한도 초과] {context_name} | {old_key} 교체 -> {self.current_key[-5:]} ({attempt+1}/{len(self.api_keys)})"
                     print(warn_msg)
                     log_error(warn_msg)
-                    time.sleep(0.8)
+                    time.sleep(self._compute_retry_sleep(attempt, live_sensitive=live_sensitive))
                     continue
 
                 except Exception as e:
@@ -588,7 +608,7 @@ class DeepSeekSniperEngine:
                         old_key = self.current_key[-5:]
                         self._rotate_client()
                         print(f"⚠️ [DeepSeek 서버 에러] {context_name} | {old_key} 교체 -> {self.current_key[-5:]} ({attempt+1}/{len(self.api_keys)})")
-                        time.sleep(0.8)
+                        time.sleep(self._compute_retry_sleep(attempt, live_sensitive=live_sensitive))
                         continue
                     else:
                         raise RuntimeError(f"DeepSeek API 응답/파싱 실패: {e}")

@@ -99,11 +99,19 @@ def test_gatekeeper_cache_ignores_captured_at(monkeypatch):
     engine = _build_engine()
     call_count = {"value": 0}
 
-    def _fake_report(*args, **kwargs):
+    def _fake_report_payload(*args, **kwargs):
         call_count["value"] += 1
-        return "[즉시 매수]\n수급 양호"
+        return {
+            "report": "[즉시 매수]\n수급 양호",
+            "selected_mode": "SWING",
+            "lock_wait_ms": 0,
+            "packet_build_ms": 0,
+            "model_call_ms": 0,
+            "total_ms": 0,
+            "error": "",
+        }
 
-    monkeypatch.setattr(engine, "generate_realtime_report", _fake_report)
+    monkeypatch.setattr(engine, "_generate_realtime_report_payload", _fake_report_payload)
 
     base_ctx = {
         "curr_price": 10100,
@@ -130,11 +138,19 @@ def test_gatekeeper_cache_absorbs_small_context_noise(monkeypatch):
     engine = _build_engine()
     call_count = {"value": 0}
 
-    def _fake_report(*args, **kwargs):
+    def _fake_report_payload(*args, **kwargs):
         call_count["value"] += 1
-        return "[눌림 대기]\n미세 변동"
+        return {
+            "report": "[눌림 대기]\n미세 변동",
+            "selected_mode": "SWING",
+            "lock_wait_ms": 0,
+            "packet_build_ms": 0,
+            "model_call_ms": 0,
+            "total_ms": 0,
+            "error": "",
+        }
 
-    monkeypatch.setattr(engine, "generate_realtime_report", _fake_report)
+    monkeypatch.setattr(engine, "_generate_realtime_report_payload", _fake_report_payload)
 
     ctx_a = {
         "curr_price": 72500,
