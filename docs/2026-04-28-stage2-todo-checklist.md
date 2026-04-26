@@ -22,6 +22,18 @@
 
 ## 장후 체크리스트 (18:05~19:20)
 
+- [ ] `[GeminiP1Rollout0428] main Gemini JSON system_instruction/deterministic flag 실전 승인 판정` (`Due: 2026-04-28`, `Slot: POSTCLOSE`, `TimeWindow: 18:05~18:20`, `Track: ScalpingLogic`)
+  - Source: [workorder_gemini_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_gemini_engine_review.md)
+  - 판정 기준: `GEMINI_SYSTEM_INSTRUCTION_JSON_ENABLED`, `GEMINI_JSON_DETERMINISTIC_CONFIG_ENABLED`는 코드상 guard가 준비됐더라도 기본값 `OFF`를 유지한다. `main` 실전 엔진에서 이 flag를 켜려면 `BUY/WAIT/DROP`, `HOLD/TRIM/EXIT`, `condition/eod` JSON contract 유지, rollback owner, `baseline cohort / candidate live cohort / observe-only cohort / excluded cohort`, parse_fail/consecutive_failures/ai_disabled 관찰 필드가 같은 메모에 잠겨 있어야 한다.
+  - why: Gemini는 현재 `main` 실전 기준 엔진이라 P1은 단순 코드 완료가 아니라 live 판정 분포를 바꾸는 canary 승인 작업이다.
+  - 다음 액션: 승인되면 `2026-04-29 PREOPEN` replacement 또는 observe-only 반영 시각을 고정하고, 미승인이면 보류 사유 1개와 재판정 시각 1개를 남긴다.
+
+- [ ] `[DeepSeekP1Rollout0428] remote DeepSeek context-aware backoff flag 실전 승인 판정` (`Due: 2026-04-28`, `Slot: POSTCLOSE`, `TimeWindow: 18:20~18:30`, `Track: ScalpingLogic`)
+  - Source: [workorder_deepseek_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_deepseek_engine_review.md)
+  - 판정 기준: `DEEPSEEK_CONTEXT_AWARE_BACKOFF_ENABLED`는 코드상 guard가 준비됐더라도 기본값 `OFF`를 유지한다. `remote` 운용에서 flag를 켜려면 `live-sensitive cap <= 0.8s`, `report/eod cap`, jitter 상한, `api_call_lock` 장기 점유 여부, retry 이후 rate-limit/log acceptance를 함께 잠가야 한다.
+  - why: DeepSeek는 `remote` 운용 엔진이라 P1 잔여작업은 구현이 아니라 실제 enable 판정과 운영 acceptance다.
+  - 다음 액션: 승인되면 `remote observe-only` 또는 `remote canary-only` 1개 경로와 적용 시각을 고정하고, 미승인이면 막힌 조건과 재판정 시각을 남긴다.
+
 - [ ] `[GeminiSchema0428] Gemini JSON endpoint schema registry 적용 범위 잠금` (`Due: 2026-04-28`, `Slot: POSTCLOSE`, `TimeWindow: 18:05~18:25`, `Track: ScalpingLogic`)
   - Source: [workorder_gemini_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_gemini_engine_review.md)
   - 판정 기준: `entry_v1`, `holding_exit_v1`, `overnight_v1`, `condition_entry_v1`, `condition_exit_v1`, `eod_top5_v1` 6개 endpoint를 분리하고, `response_schema` 실패 시 기존 `json.loads/raw regex fallback` 경로로 즉시 복귀할 수 있어야 한다. `system_instruction`/deterministic JSON config flag와 schema registry를 한 change set에서 묶어 global live 전환하지 않는다.
