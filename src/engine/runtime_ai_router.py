@@ -36,28 +36,28 @@ def resolve_runtime_role() -> str:
 
 
 def resolve_scalping_ai_route() -> str:
-    """Return live scalping AI route: gemini (default), openai, or deepseek."""
+    """Return live scalping AI route: gemini (main default), deepseek (remote default), or openai."""
     explicit = str(os.getenv("KORSTOCKSCAN_SCALPING_AI_ROUTE", "") or "").strip().lower()
     if explicit in {"gemini", "openai", "deepseek"}:
         return explicit
 
-    # Plan Rebase default: keep live decisions on Gemini until the core
-    # trading logic and observation axes are realigned.
+    if resolve_runtime_role() == "remote":
+        return "deepseek"
     return "gemini"
 
 
 class RuntimeAIEngineRouter:
     """
     Runtime router:
-    - gemini route: scalping analyze_target -> Gemini engine
     - openai route + main role: scalping analyze_target -> OpenAI engine
-    - deepseek route + main role: scalping analyze_target -> DeepSeek engine
+    - deepseek route + remote role: scalping analyze_target -> DeepSeek engine
+    - fallback route: Gemini engine when the preferred engine is unavailable
     """
 
     def __init__(
         self,
         *,
-        gemini_engine: Any,
+        gemini_engine: Any = None,
         openai_scalping_engine: Any = None,
         deepseek_scalping_engine: Any = None,
         runtime_role: str = "main",
@@ -76,7 +76,7 @@ class RuntimeAIEngineRouter:
         )
         deepseek_enabled = (
             self.scalping_ai_route == "deepseek"
-            and self.runtime_role == "main"
+            and self.runtime_role == "remote"
             and self.deepseek_scalping_engine is not None
         )
         log_info(
@@ -100,17 +100,23 @@ class RuntimeAIEngineRouter:
     def _should_use_deepseek_scalping(self, *, strategy: Any) -> bool:
         return (
             self.scalping_ai_route == "deepseek"
-            and self.runtime_role == "main"
+            and self.runtime_role == "remote"
             and self.deepseek_scalping_engine is not None
             and self._is_scalping_strategy(strategy)
         )
+
+    def _fallback_scalping_engine(self):
+        for engine in (self.gemini_engine, self.deepseek_scalping_engine, self.openai_scalping_engine):
+            if engine is not None:
+                return engine
+        raise RuntimeError("No AI engine available for live scalping route")
 
     def _selected_scalping_engine(self, strategy: Any):
         if self._should_use_deepseek_scalping(strategy=strategy):
             return self.deepseek_scalping_engine
         if self._should_use_openai_scalping(strategy=strategy):
             return self.openai_scalping_engine
-        return self.gemini_engine
+        return self._fallback_scalping_engine()
 
     def analyze_target(
         self,

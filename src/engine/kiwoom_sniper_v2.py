@@ -1111,7 +1111,7 @@ def run_sniper(is_test_mode=False):
         except Exception as e:
             log_error(f"🚨 OpenAI 스캘핑 엔진 초기화 실패: {e}")
             openai_scalping_engine = None
-    elif scalping_ai_route == "deepseek" and runtime_role == "main" and deepseek_api_keys:
+    elif scalping_ai_route == "deepseek" and runtime_role == "remote" and deepseek_api_keys:
         try:
             deepseek_scalping_engine = DeepSeekSniperEngine(
                 api_keys=deepseek_api_keys,
@@ -1130,7 +1130,7 @@ def run_sniper(is_test_mode=False):
         log_info("ℹ️ Plan Rebase: 스캘핑 live AI 라우팅을 Gemini로 고정하고 OpenAI 스캘핑 엔진 초기화를 건너뜁니다.")
     elif scalping_ai_route == "openai" and runtime_role == "main" and not openai_api_keys:
         log_error("🚨 KORSTOCKSCAN_SCALPING_AI_ROUTE=openai 이지만 OPENAI_API_KEY가 없어 Gemini 기본 라우트로 유지합니다.")
-    elif scalping_ai_route == "deepseek" and runtime_role == "main" and not deepseek_api_keys:
+    elif scalping_ai_route == "deepseek" and runtime_role == "remote" and not deepseek_api_keys:
         log_error("🚨 KORSTOCKSCAN_SCALPING_AI_ROUTE=deepseek 이지만 DEEPSEEK_API_KEY가 없어 Gemini 기본 라우트로 유지합니다.")
 
     if openai_dual_enabled and openai_shadow_mode and openai_api_keys:
@@ -1145,7 +1145,17 @@ def run_sniper(is_test_mode=False):
     elif openai_dual_enabled and not openai_api_keys:
         log_info("ℹ️ OPENAI_API_KEY 미설정으로 듀얼 페르소나 shadow 엔진은 비활성화됩니다.")
 
-    if gemini_engine is not None:
+    if any(engine is not None for engine in (gemini_engine, openai_scalping_engine, deepseek_scalping_engine)):
+        openai_route_active = (
+            scalping_ai_route == "openai"
+            and runtime_role == "main"
+            and openai_scalping_engine is not None
+        )
+        deepseek_route_active = (
+            scalping_ai_route == "deepseek"
+            and runtime_role == "remote"
+            and deepseek_scalping_engine is not None
+        )
         ai_engine = RuntimeAIEngineRouter(
             gemini_engine=gemini_engine,
             openai_scalping_engine=openai_scalping_engine,
@@ -1157,8 +1167,8 @@ def run_sniper(is_test_mode=False):
         print(
             f"🧭 AI 라우팅 활성화: role={runtime_role} "
             f"route={scalping_ai_route} "
-            f"(main_scalping_openai={'ON' if scalping_ai_route == 'openai' and runtime_role == 'main' and openai_scalping_engine else 'OFF'} / "
-            f"main_scalping_deepseek={'ON' if scalping_ai_route == 'deepseek' and runtime_role == 'main' and deepseek_scalping_engine else 'OFF'})"
+            f"(main_scalping_openai={'ON' if openai_route_active else 'OFF'} / "
+            f"remote_scalping_deepseek={'ON' if deepseek_route_active else 'OFF'})"
         )
 
     bind_analysis_dependencies(ai_engine=AI_ENGINE)
