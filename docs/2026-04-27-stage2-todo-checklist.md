@@ -20,7 +20,7 @@
 - `ApplyTarget`은 문서에 명시된 값만 사용하고, parser/workorder가 `remote`를 추정하지 않도록 유지한다.
 - 다축 동시 변경 금지, 승인 전 `main` 실주문 변경 금지 규칙을 유지한다.
 - 대량 재처리는 `saved snapshot 우선 -> safe wrapper async dispatch -> completion artifact/Telegram` 순서만 허용하며, foreground direct build는 금지한다.
-- 새 `shadow/canary` 경로 추가 또는 기존 분류(`remove / observe-only / baseline-promote / active-canary`) 변경은 같은 change set에서 [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md) 판정표를 함께 갱신해야 하며, 장후 review 항목은 누락 보정용으로만 쓴다.
+- 새 `shadow/canary` 경로 추가 또는 기존 분류(`remove / observe-only / baseline-promote / active-canary`) 변경은 같은 change set에서 [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md) 판정표를 함께 갱신해야 하며, `baseline-decision / active-canary-decision / provisional-stage-disjoint / observe-only / excluded` cohort 상태도 같이 잠근다. 장후 review 항목은 누락 보정용으로만 쓴다.
 
 ## 장전 체크리스트 (08:20~)
 
@@ -40,7 +40,7 @@
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
   - 판정 기준: `data/report/monitor_snapshots/holding_exit_observation_2026-04-25.json`의 `soft_stop_rebound.rebound_above_sell_10m_rate/rebound_above_buy_10m_rate`를 raw `data/post_sell/post_sell_candidates_2026-04-09~2026-04-24.jsonl`, `data/post_sell/post_sell_evaluations_2026-04-09~2026-04-24.jsonl`와 현행 `holding_exit_observation_report` 로직으로 대조한다. 불일치 시 저장본은 stale로 잠그고 same-day 판정 basis는 raw 재집계값 `57/61(93.4%)`, `16/61(26.2%)`, `20m buy recovery 21/61(34.4%)`로 고정한다.
   - why: 현재 저장본에는 `4.9%/1.6%`가 남아 있지만 현행 raw+코드 재집계는 `93.4%/26.2%`로 크게 달라, soft_stop whipsaw 우선순위와 canary 승인 여부를 왜곡할 수 있다.
-  - 다음 액션: 가능하면 safe wrapper 기준 산출물을 same-day 재생성하고, 재생성이 막히면 stale 사유와 raw basis 수치를 checklist/판정 메모에 함께 잠근다.
+  - 다음 액션: PREOPEN에서는 우선 raw basis 수치로 판정을 잠그고, `holding_exit_observation` full snapshot 재생성을 기본값으로 열지 않는다. same-day 재생성이 꼭 필요하면 `deploy/run_monitor_snapshot_cron.sh 2026-04-27` 또는 대응 safe wrapper async 결과만 허용하고 foreground direct build는 금지한다. PREOPEN/INTRADAY 재생성이 막히거나 과부하 위험이 있으면 stale 사유와 raw basis 수치를 checklist/판정 메모에 잠그고 full 재생성은 POSTCLOSE 우선으로 이관한다.
 
 ## 장중 체크리스트 (10:00~)
 
@@ -107,8 +107,8 @@
   - why: 현재 구현은 동기 fallback 실패는 `None`으로 닫지만, async worker 실패는 best-effort 규약상 후행 rollback으로만 관측된다. 따라서 코드 테스트 통과와 별개로 실로그 기준 persist 정합성 확인이 필요하다.
   - 다음 액션: mismatch가 없으면 async writer 규약을 운영 기준선으로 잠그고, mismatch가 있으면 `persist confirmed` 필요 구간을 동기 write 또는 명시적 ack 구조로 재분해한다.
 
-- [ ] `[CodeDebt0427] shadow/canary 런타임 경로 일일 분류/정리 판정` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)
+- [ ] `[CodeDebt0427] shadow/canary/cohort 런타임 분류/정리 판정` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)
   - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)
-  - 판정 기준: 당일 코드/운영 결과를 기준으로 `dual_persona`, `watching_prompt_75_shadow`, `hard_time_stop_shadow`, `ai_holding_shadow_band`, `dynamic_strength_canary(dynamic_strength_relief)`, `other_danger_relief_canary`, `partial_fill_ratio_canary(partial_fill_ratio_guard)`의 분류(`remove`, `observe-only`, `baseline-promote`, `active-canary`)에 변동이 있는지 닫고, 변동 시 same-day 코드정리 후보 또는 다음 독립축 후보까지 함께 기록한다.
-  - why: `shadow 금지`, `canary-only`, `baseline 승격` 원칙은 문서 선언만으로 유지되지 않고, 매일 장후 실코드/실운영 상태와 다시 맞춰야 다음 기대값 개선축의 원인귀속이 흐려지지 않는다.
-  - 다음 액션: 분류 변경이 있으면 checklist와 관련 기준문서에 함께 반영하고, 변경이 없으면 `변동 없음`과 근거만 잠근다.
+  - 판정 기준: 당일 코드/운영 결과를 기준으로 `dual_persona`, `watching_prompt_75_shadow`, `hard_time_stop_shadow`, `ai_holding_shadow_band`, `dynamic_strength_canary(dynamic_strength_relief)`, `other_danger_relief_canary`, `partial_fill_ratio_canary(partial_fill_ratio_guard)`의 분류(`remove`, `observe-only`, `baseline-promote`, `active-canary`)에 변동이 있는지 닫고, live 전환에 쓰는 cohort도 `baseline-decision / active-canary-decision / provisional-stage-disjoint / observe-only / excluded` 상태로 잠근다.
+  - why: `shadow 금지`, `canary-only`, `baseline 승격` 원칙은 문서 선언만으로 유지되지 않고, 매일 장후 실코드/실운영 상태와 live cohort 경계를 다시 맞춰야 다음 기대값 개선축의 원인귀속이 흐려지지 않는다.
+  - 다음 액션: 분류 변경이 있으면 checklist와 관련 기준문서에 함께 반영하고, 변경이 없으면 `변동 없음`과 근거를 남긴다. live 축 교체 또는 stage-disjoint 병렬 검토가 있었다면 `baseline cohort / candidate live cohort / observe-only cohort / excluded cohort / rollback owner / cross-contamination check` 6개 잠금 필드도 같은 메모에 함께 적는다.

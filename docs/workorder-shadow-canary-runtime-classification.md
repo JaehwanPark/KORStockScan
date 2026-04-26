@@ -1,10 +1,10 @@
-# 작업지시서: Shadow/Canary 런타임 경로 분류와 지속 모니터링 가치 평가
+# 작업지시서: Shadow/Canary 런타임 경로와 Live Cohort 분류 기준
 
 작성일: `2026-04-25 KST`  
 대상: KORStockScan 메인 코드베이스 운영/튜닝 문서 소유자  
 ApplyTarget: `main` 문서/후속 코드정리 기준  
 
-이 문서는 체크리스트/Project/Calendar 자동관리 대상이 아닌 독립 workorder다. 목적은 `shadow/canary` 경로를 일괄 삭제하는 것이 아니라, `지속 모니터링 가치`와 `운영/코드 부채`를 함께 평가해 각 경로를 `remove / observe-only / baseline-promote / active-canary` 중 하나로 고정하는 것이다.
+이 문서는 체크리스트/Project/Calendar 자동관리 대상이 아닌 독립 workorder다. 목적은 `shadow/canary` 경로를 일괄 삭제하는 것이 아니라, `지속 모니터링 가치`와 `운영/코드 부채`를 함께 평가해 각 경로를 `remove / observe-only / baseline-promote / active-canary` 중 하나로 고정하고, live 전환/병렬 관찰 시 섞이면 안 되는 `cohort`도 함께 분류 기준으로 잠그는 것이다.
 
 ---
 
@@ -27,6 +27,7 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
 7. 장후 `POSTCLOSE` 분류/정리 항목은 same-day 변경 누락을 보정하는 daily review 용도이며, 생성/상태변경 시점의 문서 갱신 의무를 대체하지 않는다.
 8. 조사 범위는 `src/utils/constants.py`의 운영 토글/상수와 `src/engine/`의 실런타임 분기, 이벤트 stage, shadow 기록, canary 적용 경로로 고정한다.
 9. `src/web/`, `src/template/`의 CSS `box-shadow`, 공용 `analyze_target_shadow_prompt` capability, `S15 shadow record` 같은 execution bookkeeping은 `튜닝 shadow/canary 축`에서 제외한다.
+10. `cohort tag`가 live 전환, stage-disjoint 예외, rollback 판정의 단위가 된 이상 `canary flag`만 정리하고 cohort를 방치하는 상태는 허용하지 않는다. live/observe/제외 코호트는 문서 기준으로 같이 잠가야 한다.
 
 ---
 
@@ -109,6 +110,87 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
    - 성공 기준
    - 종료 또는 승격 조건
    - 실패 시 OFF 또는 parking 조건
+
+### 3.1 Live Cohort 분류
+
+`shadow/canary` 축 정리와 별도로, live 전환에 쓰이는 cohort는 아래 5개 상태로만 분류한다.
+
+| cohort 상태 | 의미 | live 판정 사용 방식 |
+| --- | --- | --- |
+| `baseline-decision` | 기준선 EV/품질 판정의 주 비교모집단 | 기준선 유지 여부 판단에 직접 사용 |
+| `active-canary-decision` | 현재 live canary가 실제로 바꾼 모집단 | baseline과 분리 비교, rollback 직접 연결 |
+| `provisional-stage-disjoint` | 병렬 canary 예외에서 다른 조작점과 분리된 임시 cohort | hard pass/fail 금지, provisional 판정만 허용 |
+| `observe-only` | 리포트/모니터링에는 남기지만 live go/no-go에는 직접 쓰지 않는 cohort | 오염 탐지/후속 설계 참고용 |
+| `excluded` | fallback, stale snapshot, partial/full 혼합, initial/pyramid 혼합 등 현재 판정에서 제외할 모집단 | 손익/승인 판단 입력 금지 |
+
+live 전환 시 cohort는 최소 아래 필드를 같이 잠근다.
+
+1. `cohort_name`
+2. `cohort_status`
+3. `entry_or_exit_stage`
+4. `apply_target`
+5. `cohort_tag`
+6. `inclusion_rule`
+7. `exclusion_rule`
+8. `rollback_owner`
+9. `allowed_metrics`
+10. `forbidden_aggregations`
+
+cohort 분류 공통 규칙은 아래로 고정한다.
+
+1. `baseline-decision` cohort는 `main-only`, `normal_only`, `post_fallback_deprecation`, `COMPLETED + valid profit_rate`, `full/partial 분리` 원칙을 깨면 안 된다.
+2. `active-canary-decision` cohort는 반드시 ON/OFF 가능한 단일 조작점과 1:1로 연결돼야 하며, `applied/not-applied`를 raw event에서 복원할 수 있어야 한다.
+3. `provisional-stage-disjoint` cohort는 별도 `cohort tag`, 별도 rollback guard, 별도 적용시점이 동시에 없으면 만들 수 없다.
+4. `observe-only` cohort는 future candidate 탐색에는 쓸 수 있지만, 실현손익 pass/fail 근거로 승격하면 안 된다.
+5. `excluded` cohort는 손익 왜곡 방지용이므로, 제외 사유가 줄어들었다고 즉시 baseline으로 되돌리지 않고 별도 재승인 절차를 거친다.
+
+### 3.2 Live 전환 시 Cohort 잠금 템플릿
+
+새 live 축 승인 또는 기존 축 replacement 시 아래 형식을 checklist/report에 같이 남긴다.
+
+1. `baseline cohort`: 예) `main-only + normal_only + post_fallback_deprecation`
+2. `candidate live cohort`: 예) `gatekeeper_fast_reuse post-change`, `soft_stop qualifying cohort`
+3. `observe-only cohort`: 예) `wait6579_ev_cohort`, `hard_stop_whipsaw_aux`, `same_symbol cooldown shadow`
+4. `excluded cohort`: 예) `fallback`, `partial/full mixed`, `initial/pyramid mixed`, `NULL or incomplete profit`
+5. `rollback trigger owner`: 진입/보유/청산 중 어느 축이 이 cohort를 끄는지
+6. `cross-contamination check`: 다른 canary가 유입 모집단을 바꿨는지 여부
+
+판정 메모에서 위 6개 중 하나라도 비어 있으면 `cohort 미정리`로 보고 live 승인/유지 판정을 잠그지 않는다.
+
+### 3.3 현행 Decision Cohort Inventory
+
+아래 inventory는 `Plan Rebase`와 현행 active checklist에서 실제 판정/관찰에 쓰이면서, 최소 하나 이상에 해당하는 코호트만 잠근다.
+
+1. `src/` 코드/리포트 빌더/스냅샷 경로가 남아 있다.
+2. active checklist의 live 승인/관찰/rollback 판정에 직접 들어간다.
+3. 현재 기준 문서(`Plan Rebase`, performance report, active workorder)에서 현행 영향도가 있다.
+
+과거 문서에만 남고 현재 `src/` 흔적도 없고 active 판정에도 쓰이지 않는 historical-only cohort는 이 inventory에 올리지 않는다. 아직 상태가 비어 있는 코호트가 있으면 `전체 코호트 분류 완료`로 보지 않는다.
+
+| cohort | cohort 상태 | 주 용도 | 유지 종료 시점/달성요건 | 기본 문서 |
+| --- | --- | --- | --- | --- |
+| `main-only + normal_only + post_fallback_deprecation` | `baseline-decision` | live 기준선 손익/퍼널/체결 품질 비교 | Plan Rebase 종료 전까지 유지. 새 기준선이 문서 승인되어 replacement되고 동일 메트릭/제외규칙이 승계될 때만 교체 가능 | `Plan Rebase`, 날짜별 checklist |
+| `wait6579_ev_cohort` | `observe-only` | BUY recovery 후보 EV/blocked_ai_score/제출 전환 관찰 | `buy_recovery_canary` 축이 remove 또는 baseline 승격으로 닫히고, `recovery_check -> promoted -> submitted` 설명력이 다른 live/report 축으로 완전히 대체될 때 제거 가능 | `2026-04-21~22 checklist` |
+| `buy_recovery_canary applied cohort` | `active-canary-decision` | `WAIT65~79` live canary 효과/rollback 판정 | 승격 조건 또는 OFF/parking 판정이 닫히는 시점까지 유지. `submitted/full/partial/COMPLETED + valid profit_rate` 기준으로 승격 또는 종료가 확정되면 제거 | `2026-04-21~23 checklist` |
+| `wait6579_probe_canary_applied` | `active-canary-decision` | 소량 probe 적용 표본 분리 | probe가 종료되거나 본 canary에 통합되어 별도 applied tag가 사라질 때 제거 | `wait6579_ev_cohort`, `2026-04-21 checklist` |
+| `post-restart cohort` | `active-canary-decision` | replacement 이후 same-day 제출 회복 관찰 | replacement 당일 판정이 닫히고 후속 축이 새 `post-change` cohort로 넘어가면 종료. 익일 이후 지속 baseline으로 쓰지 않음 | `2026-04-24 checklist` |
+| `gatekeeper_fast_reuse post-change` | `active-canary-decision` | signature/window 형상 변경 이후 live 비교 | PREOPEN 승인/보류와 post-change 유지/롤백 판정이 닫힐 때까지 유지. baseline 승격 또는 OFF 확정 시 제거/재분류 | `2026-04-24`, `2026-04-27 checklist` |
+| `soft_stop qualifying cohort` | `provisional-stage-disjoint` | 보유/청산 live 예외 canary 후보 | `soft_stop_rebound_split` 승인 또는 보류+재시각이 닫히고, qualifying rule이 live 조작점으로 승격되거나 폐기될 때 종료 | `2026-04-27 checklist` |
+| `hard_stop_whipsaw_aux` | `observe-only` | severe-loss guard 보조 관찰 | 하드스탑을 보조 관찰로만 둔다는 원칙이 유지되는 동안 유지. `MISSED_UPSIDE/GOOD_EXIT/NEUTRAL`과 반등 지표가 독립 판단가치를 잃거나 hard stop 완화 의제가 공식 폐기되면 제거 | `Plan Rebase`, `2026-04-27 checklist` |
+| `same_symbol_reentry` | `observe-only` | 동일종목 재진입 손실/guard 필요성 관찰 | `same_symbol_reentry_loss_count`가 독립 guard 후보성을 잃거나, soft stop/position context 축에 완전히 흡수되어 별도 재진입 cohort가 필요 없을 때 제거 | `holding_exit_observation`, `2026-04-27 checklist` |
+| `trailing_continuation` | `observe-only` | upside capture 개선 후보 관찰 | `MISSED_UPSIDE rate >= 60%`, `GOOD_EXIT rate <= 30%`로 2순위 live 후보 요건을 충족해 canary로 승격되거나, 반대로 upside 개선 후보성이 약해져 후순위 폐기가 확정되면 제거/재분류 | `holding_exit_observation`, `2026-04-27 checklist` |
+| `initial-only` | `observe-only` | 신규 진입만의 체결/손익/청산 품질 분리 | `1주 cap` 유지/해제 판정이 닫히고 initial/pyramid가 더 이상 다른 EV를 보이지 않아 분리 해석 가치가 사라질 때만 제거 | `2026-04-24`, `2026-04-27 checklist` |
+| `pyramid-activated` | `observe-only` | 추가매수 활성 표본 분리 | `1주 cap` 및 추가매수 정책 재판정이 닫히고 별도 손익/청산 특성이 없다고 확인될 때만 제거 | `2026-04-24`, `2026-04-27 checklist` |
+| `full_fill` | `observe-only` | 체결 품질 우수 표본 분리 | `partial_fill`과 EV/청산 품질 차이가 더 이상 의사결정 의미를 잃지 않는 한 유지. full/partial 합산 허용 정책으로 바뀌기 전에는 제거 금지 | `Plan Rebase`, performance/report/checklist |
+| `partial_fill` | `observe-only` | partial 전용 손익/재베이스/soft-stop 악화 관찰 | partial 악화 여부가 더 이상 독립 리스크가 아니라고 확인되기 전까지 유지. full/partial 합산 정책 변경 전에는 제거 금지 | `Plan Rebase`, performance/report/checklist |
+
+inventory 운영 규칙은 아래로 고정한다.
+
+1. 위 표에 없는 cohort가 신규 문서/코드/리포트에 등장하면, 같은 change set에서 이 표에 추가하고 상태를 먼저 잠근다.
+2. 표에 있는 cohort라도 성격이 바뀌면 `상태 변경 + why + 허용 메트릭 + 금지 집계`를 같은 턴에 같이 갱신한다.
+3. `baseline-decision`, `active-canary-decision`, `provisional-stage-disjoint`는 빈 이름으로 운영하지 않는다. 임시 표현(`post-change`, `new cohort`)만 적고 상태를 안 잠그는 것은 무효다.
+4. `historical-only` 문서에만 남고 `src/`/active checklist/현재 기준 리포트 어디에도 연결되지 않는 cohort는 inventory에서 제거한다. 필요하면 archive나 과거 report에서만 유지한다.
+5. `observe-only` cohort는 `유지 종료 시점/달성요건` 없이 무기한 두지 않는다. 제거, 승격, 상위 축 흡수 중 하나의 종료 조건이 반드시 있어야 한다.
 
 ---
 
