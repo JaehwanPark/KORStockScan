@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from src.utils.constants import PROJECT_ROOT, TRADING_RULES
+from src.utils.market_day import is_krx_trading_day
 
 from src.engine.error_detectors.base import (
     BaseDetector,
@@ -316,6 +317,8 @@ def _is_bot_expected_running(now: datetime | None = None) -> bool:
     if not enabled:
         return True
     current = now or datetime.now().astimezone()
+    if not is_krx_trading_day(current.date()):
+        return False
     start = _parse_hhmm(getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_START_HHMM", "07:40"))
     end = _parse_hhmm(getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_END_HHMM", "22:55"))
     if start is None or end is None:

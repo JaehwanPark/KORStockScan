@@ -18,7 +18,6 @@ REQUIRED_CRON_JOB_IDS: set[str] = {
     "swing_model_retrain_postclose",
     "tuning_monitoring_postclose",
     "update_kospi",
-    "eod_analyzer",
     "dashboard_db_archive",
     "log_rotation_cleanup",
     "system_metric_sampler",

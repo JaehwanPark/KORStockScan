@@ -33,6 +33,12 @@ def _marker_ts() -> str:
 def _marker_date() -> str:
     return _marker_now().date().isoformat()
 
+
+def _env_enabled(name: str, default: str = "false") -> bool:
+    value = os.getenv(name, default)
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def load_config():
     """환경에 맞는 설정 파일(JSON)을 로드합니다."""
     target_path = CONFIG_PATH if os.path.exists(CONFIG_PATH) else DEV_PATH
@@ -205,6 +211,14 @@ def extract_eod_candidates(db_manager):
 def main() -> int:
     marker_target_date = _marker_date()
     print(f"[START] eod_analyzer target_date={marker_target_date} started_at={_marker_ts()}")
+    if not _env_enabled("KORSTOCKSCAN_EOD_TOP5_ENABLED"):
+        print(
+            "[DONE] eod_analyzer "
+            f"target_date={marker_target_date} status=disabled_no_ai_call "
+            f"reason=KORSTOCKSCAN_EOD_TOP5_ENABLED_not_true finished_at={_marker_ts()}"
+        )
+        return 0
+
     print("🌙 [종가베팅 분석기] 장 마감 후 데이터 기반 분석 시작...")
     
     # 1. 설정 및 DB 로드

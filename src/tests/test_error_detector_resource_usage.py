@@ -165,6 +165,26 @@ class TestResourceUsageDetector:
                 result = detector.check()
             assert result.severity == "fail"
 
+    def test_non_trading_day_ignores_stale_sampler_but_keeps_resource_checks(self, monkeypatch):
+        import time
+        sample = {
+            "ts": "2026-05-09T18:00:00+09:00",
+            "epoch": int(time.time()) - 999999,
+            "cpu": {"cpu_busy_pct": 20.0},
+            "memory": {"mem_available_mb": 4096.0, "swap_total_mb": 8192.0, "swap_free_mb": 7000.0},
+            "loadavg": {"15m": 1.5},
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sample_file = Path(tmpdir) / "samples.jsonl"
+            sample_file.write_text(json.dumps(sample), encoding="utf-8")
+            monkeypatch.setattr("src.engine.error_detectors.resource_usage.is_krx_trading_day", lambda target: False)
+            with patch("src.engine.error_detectors.resource_usage.SAMPLER_JSONL", sample_file), \
+                patch.object(ResourceUsageDetector, "_check_disk_free", return_value=8192.0):
+                result = ResourceUsageDetector().check()
+
+        assert result.severity == "pass"
+        assert result.details["sampler_status"] == "skip_non_trading_day"
+
     def test_log_rotate_cooldown_persists_across_detector_instances(self, tmp_path):
         project_root = tmp_path / "project"
         deploy_dir = project_root / "deploy"

@@ -10,6 +10,13 @@ import pytest
 from src.engine.error_detectors.cron_completion import CronCompletionDetector
 
 
+@pytest.fixture(autouse=True)
+def _force_trading_day(monkeypatch):
+    import src.engine.error_detectors.cron_completion as cc
+
+    monkeypatch.setattr(cc, "is_krx_trading_day", lambda target: True)
+
+
 class TestCronCompletionDetector:
     def test_pass_when_log_not_yet_due(self):
         detector = CronCompletionDetector()
@@ -133,6 +140,33 @@ class TestCronCompletionDetector:
 
         assert result.severity == "pass"
         assert result.details["threshold_cycle_postclose_status"] == "pass"
+
+    def test_trading_day_only_jobs_skip_on_non_trading_day(self, monkeypatch, tmp_path):
+        import src.engine.error_detectors.cron_completion as cc
+
+        monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
+        monkeypatch.setattr(cc, "is_krx_trading_day", lambda target: False)
+        monkeypatch.setattr(
+            cc,
+            "CRON_JOB_REGISTRY",
+            [
+                {
+                    "id": "threshold_cycle_preopen",
+                    "log": "logs/threshold_cycle_preopen_cron.log",
+                    "window_start": (7, 35),
+                    "window_end": (7, 50),
+                    "mode": "once",
+                    "critical": True,
+                    "trading_day_only": True,
+                }
+            ],
+        )
+
+        with _mock_time(10, 45):
+            result = CronCompletionDetector().check()
+
+        assert result.severity == "pass"
+        assert result.details["threshold_cycle_preopen_status"] == "skip_non_trading_day"
 
 
 @contextmanager

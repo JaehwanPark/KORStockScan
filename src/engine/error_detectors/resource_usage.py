@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from src.utils.constants import PROJECT_ROOT, TRADING_RULES
+from src.utils.market_day import is_krx_trading_day
 
 from src.engine.error_detectors.base import (
     BaseDetector,
@@ -36,6 +37,8 @@ class ResourceUsageDetector(BaseDetector):
         disk_free_min = float(getattr(TRADING_RULES, "ERROR_DETECTOR_DISK_FREE_MIN_MB", 2048.0))
         swap_used_max = float(getattr(TRADING_RULES, "ERROR_DETECTOR_SWAP_USED_MAX_PCT", 80.0))
         loadavg_15m_max = float(getattr(TRADING_RULES, "ERROR_DETECTOR_LOADAVG_15M_MAX", 8.0))
+        trading_day = is_krx_trading_day(datetime.now().astimezone().date())
+        details["trading_day"] = trading_day
 
         latest_sample = self._read_latest_sample()
         if latest_sample:
@@ -43,7 +46,9 @@ class ResourceUsageDetector(BaseDetector):
             details["sampler_age_sec"] = round(sampler_age_sec, 1)
             max_sample_age = getattr(TRADING_RULES, "ERROR_DETECTOR_RESOURCE_MAX_SAMPLE_AGE_SEC", 600)
 
-            if sampler_age_sec > max_sample_age * 2:
+            if not trading_day:
+                details["sampler_status"] = "skip_non_trading_day"
+            elif sampler_age_sec > max_sample_age * 2:
                 issues.append(f"Sampler data stale ({sampler_age_sec:.0f}s > {max_sample_age * 2:.0f}s)")
             elif sampler_age_sec > max_sample_age:
                 warnings.append(f"Sampler data aging ({sampler_age_sec:.0f}s > {max_sample_age}s)")
@@ -94,7 +99,7 @@ class ResourceUsageDetector(BaseDetector):
                 else:
                     warnings.append(f"Loadavg 15m {load15} approaching {loadavg_15m_max}")
         else:
-            details["sampler_status"] = "no_data"
+            details["sampler_status"] = "skip_non_trading_day" if not trading_day else "no_data"
             try:
                 load1, load5, load15 = os.getloadavg()
                 details["loadavg_15m"] = load15

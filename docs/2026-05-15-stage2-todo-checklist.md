@@ -239,6 +239,8 @@
   - 문서 반영: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)에 `2026-05-15 POSTCLOSE Snapshot Addendum`을 추가해 cohort 분류를 잠갔다.
   - 다음 액션: 신규 `remove`, `baseline-promote`, 추가 `active-canary` 전환 없음. 다음 5/18 장후 review에서 same-day 변경 여부만 재확인한다.
 
+- 운영 변경 기록 (`EODTop5AutoRunDisabled0515`): 판정은 `disabled_no_ai_call`. AI 호출 절감을 위해 `22:30` `eod_analyzer.py` cron 라인을 현재 crontab에서 제거했고, [eod_analyzer.py](/home/ubuntu/KORStockScan/src/scanners/eod_analyzer.py)는 `KORSTOCKSCAN_EOD_TOP5_ENABLED=true`가 명시되지 않으면 `[DONE] status=disabled_no_ai_call`로 종료하도록 막았다. [cron_completion.py](/home/ubuntu/KORStockScan/src/engine/error_detectors/cron_completion.py)와 [error_detector_coverage.py](/home/ubuntu/KORStockScan/src/engine/error_detector_coverage.py)에서도 `eod_analyzer` 반복 cron 기대값을 제거해 22:45 이후 disabled 상태를 장애로 보지 않게 했다. 이 변경은 내일의 주도주 TOP5 리포트/DB 예약 자동 실행 OFF이며, threshold daily EV, 스윙 dry-run/lifecycle, final ensemble scanner, update_kospi, 실주문 runtime guard는 변경하지 않는다. 재개하려면 cron 등록, `KORSTOCKSCAN_EOD_TOP5_ENABLED=true`, detector registry 복구, runbook 갱신을 같은 변경 세트로 처리한다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
 

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from src.utils.constants import PROJECT_ROOT, TRADING_RULES
+from src.utils.market_day import is_krx_trading_day
 
 from src.engine.error_detectors.base import (
     BaseDetector,
@@ -37,6 +38,7 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "window_end": (8, 0),
         "mode": "once",
         "critical": True,
+        "trading_day_only": True,
     },
     {
         "id": "threshold_cycle_preopen",
@@ -45,6 +47,7 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "window_end": (7, 50),
         "mode": "once",
         "critical": True,
+        "trading_day_only": True,
     },
     {
         "id": "buy_funnel_sentinel",
@@ -54,6 +57,7 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "mode": "recurring",
         "interval_min": 5,
         "critical": False,
+        "trading_day_only": True,
     },
     {
         "id": "holding_exit_sentinel",
@@ -63,6 +67,7 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "mode": "recurring",
         "interval_min": 5,
         "critical": False,
+        "trading_day_only": True,
     },
     {
         "id": "panic_sell_defense",
@@ -72,6 +77,7 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "mode": "recurring",
         "interval_min": 5,
         "critical": False,
+        "trading_day_only": True,
     },
     {
         "id": "panic_buying",
@@ -81,6 +87,7 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "mode": "recurring",
         "interval_min": 5,
         "critical": False,
+        "trading_day_only": True,
     },
     {
         "id": "buy_pause_guard",
@@ -90,6 +97,7 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "mode": "recurring",
         "interval_min": 5,
         "critical": False,
+        "trading_day_only": True,
     },
     {
         "id": "monitor_snapshot",
@@ -99,6 +107,7 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "mode": "recurring",
         "interval_min": 20,
         "critical": False,
+        "trading_day_only": True,
     },
     {
         "id": "threshold_cycle_calibration_intraday",
@@ -107,6 +116,7 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "window_end": (12, 30),
         "mode": "once",
         "critical": False,
+        "trading_day_only": True,
     },
     {
         "id": "swing_live_dry_run",
@@ -115,6 +125,7 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "window_end": (16, 5),
         "mode": "once",
         "critical": False,
+        "trading_day_only": True,
     },
     {
         "id": "threshold_cycle_postclose",
@@ -123,6 +134,7 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "window_end": (17, 0),
         "mode": "once",
         "critical": True,
+        "trading_day_only": True,
     },
     {
         "id": "swing_model_retrain_postclose",
@@ -131,6 +143,7 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "window_end": (18, 30),
         "mode": "once",
         "critical": False,
+        "trading_day_only": True,
     },
     {
         "id": "tuning_monitoring_postclose",
@@ -139,20 +152,13 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "window_end": (20, 45),
         "mode": "once",
         "critical": False,
+        "trading_day_only": True,
     },
     {
         "id": "update_kospi",
         "log": "logs/update_kospi.log",
         "window_start": (21, 0),
         "window_end": (21, 50),
-        "mode": "once",
-        "critical": False,
-    },
-    {
-        "id": "eod_analyzer",
-        "log": "logs/eod_analyzer.log",
-        "window_start": (22, 30),
-        "window_end": (22, 45),
         "mode": "once",
         "critical": False,
     },
@@ -180,6 +186,7 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "mode": "recurring",
         "interval_min": 1,
         "critical": False,
+        "trading_day_only": True,
     },
     {
         "id": "error_detection_full",
@@ -210,6 +217,7 @@ class CronCompletionDetector(BaseDetector):
     def check(self) -> DetectionResult:
         now_h, now_m = _kst_time_tuple()
         now_total = now_h * 60 + now_m
+        trading_day = is_krx_trading_day(date.today())
         details: dict = {}
         issues: list[str] = []
         warnings: list[str] = []
@@ -218,6 +226,9 @@ class CronCompletionDetector(BaseDetector):
             log_path = PROJECT_ROOT / job["log"]
             jid = job["id"]
             critical = job.get("critical", False)
+            if job.get("trading_day_only", False) and not trading_day:
+                details[f"{jid}_status"] = "skip_non_trading_day"
+                continue
 
             ws_h, ws_m = job["window_start"]
             we_h, we_m = job.get("window_end", (23, 59))

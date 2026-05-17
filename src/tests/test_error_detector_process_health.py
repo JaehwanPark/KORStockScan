@@ -17,6 +17,11 @@ from src.engine.error_detectors.process_health import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _force_trading_day(monkeypatch):
+    monkeypatch.setattr(process_health_module, "is_krx_trading_day", lambda target: True)
+
+
 class TestProcessHealthDetector:
     def setup_method(self):
         if HEARTBEAT_PATH.exists():
