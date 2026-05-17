@@ -1,6 +1,14 @@
 import json
 
+import pytest
+
 from src.engine import runtime_approval_summary as mod
+
+
+@pytest.fixture(autouse=True)
+def _isolate_pattern_lab_audit_dirs(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing_currentness_audit")
+    monkeypatch.setattr(mod, "PATTERN_LAB_PROPAGATION_AUDIT_DIR", tmp_path / "missing_propagation_audit")
 
 
 def test_runtime_approval_summary_combines_scalping_and_swing(tmp_path, monkeypatch):

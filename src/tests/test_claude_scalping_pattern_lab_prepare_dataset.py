@@ -1,5 +1,7 @@
 import json
 
+import pandas as pd
+
 from analysis.claude_scalping_pattern_lab import prepare_dataset as prepare
 
 
@@ -91,3 +93,20 @@ def test_claude_pattern_lab_duckdb_query_is_column_bounded(monkeypatch):
     assert "stage IN" in sql
     assert "fields_json" not in sql
     assert captured["params"][0] == "2026-05-14"
+
+
+def test_claude_pattern_lab_empty_input_overwrites_trade_fact_with_header(monkeypatch, tmp_path):
+    output_dir = tmp_path / "outputs"
+    output_dir.mkdir()
+    stale_path = output_dir / "trade_fact.csv"
+    stale_path.write_text("stale_col\nstale\n", encoding="utf-8")
+
+    monkeypatch.setattr(prepare, "OUTPUT_DIR", output_dir)
+    monkeypatch.setattr(prepare, "_load_snapshot_payload", lambda *_args, **_kwargs: (None, "missing"))
+
+    df = prepare.build_trade_fact()
+
+    assert df.empty
+    written = pd.read_csv(stale_path)
+    assert list(written.columns) == prepare.TRADE_FACT_COLUMNS
+    assert len(written) == 0

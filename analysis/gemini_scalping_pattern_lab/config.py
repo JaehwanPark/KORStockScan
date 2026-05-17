@@ -13,6 +13,12 @@ TEMPLATE_DIR = BASE_DIR / "prompt_templates"
 START_DATE = os.getenv("ANALYSIS_START_DATE", "2026-04-01").strip() or "2026-04-01"
 END_DATE = os.getenv("ANALYSIS_END_DATE", "2026-04-17").strip() or "2026-04-17"
 MIN_VALID_SAMPLES = 30
+INCLUDE_REMOTE = os.getenv("PATTERN_LAB_INCLUDE_REMOTE", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "y",
+}
 
 # Data sources
 LOCAL_REPORT_DIR = DATA_DIR / "report"

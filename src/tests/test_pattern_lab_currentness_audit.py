@@ -1,0 +1,99 @@
+import json
+from pathlib import Path
+
+from src.engine import pattern_lab_currentness_audit as mod
+
+
+def _metric_contract() -> dict:
+    return {
+        "metric_role": "primary_ev",
+        "decision_authority": "source_quality_only",
+        "window_policy": "rolling_10d",
+        "sample_floor": 5,
+        "primary_decision_metric": "equal_weight_avg_profit_pct",
+        "source_quality_gate": "completed_only",
+        "forbidden_uses": ["threshold mutation"],
+        "runtime_effect": False,
+    }
+
+
+def _write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _seed_labs(project_root: Path, target_date: str) -> None:
+    for lab in ("gemini_scalping_pattern_lab", "claude_scalping_pattern_lab"):
+        lab_dir = project_root / "analysis" / lab
+        outputs = lab_dir / "outputs"
+        outputs.mkdir(parents=True, exist_ok=True)
+        _write_json(outputs / "ev_analysis_result.json", {"schema_version": 2, "metric_contract": _metric_contract()})
+        _write_json(outputs / "tuning_observability_summary.json", {"schema_version": 2, "metric_contract": _metric_contract()})
+        _write_json(outputs / "run_manifest.json", {"run_at": target_date, "history_coverage_end": target_date})
+        (lab_dir / "README.md").write_text("report_only_observation\n", encoding="utf-8")
+        (lab_dir / "config.py").write_text('INCLUDE_REMOTE = os.getenv("PATTERN_LAB_INCLUDE_REMOTE", "false")\n', encoding="utf-8")
+        (lab_dir / "prepare_dataset.py").write_text(
+            "TRADE_FACT_COLUMNS = []\npd.DataFrame(columns=TRADE_FACT_COLUMNS).to_csv(path)\n",
+            encoding="utf-8",
+        )
+
+    deep_dir = project_root / "analysis" / "deepseek_swing_pattern_lab"
+    outputs = deep_dir / "outputs"
+    outputs.mkdir(parents=True, exist_ok=True)
+    _write_json(outputs / "swing_pattern_analysis_result.json", {"schema_version": 2, "metric_contract": _metric_contract()})
+    _write_json(
+        outputs / "data_quality_report.json",
+        {"schema_version": 2, "sim_probe_provenance": {"trade_fact_actual_order_submitted_false": 1}},
+    )
+    _write_json(outputs / "run_manifest.json", {"analysis_window": {"start": target_date, "end": target_date}})
+    (deep_dir / "README.md").write_text("report_only_observation\n", encoding="utf-8")
+
+
+def test_currentness_audit_passes_when_contracts_and_guards_exist(tmp_path, monkeypatch):
+    project_root = tmp_path
+    report_dir = project_root / "data" / "report"
+    target_date = "2026-05-15"
+    _seed_labs(project_root, target_date)
+
+    monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+
+    report = mod.build_pattern_lab_currentness_audit(target_date)
+
+    assert report["status"] == "pass"
+    assert report["runtime_effect"] is False
+    assert report["code_improvement_orders"] == []
+    assert (report_dir / "pattern_lab_currentness_audit" / f"pattern_lab_currentness_audit_{target_date}.json").exists()
+
+
+def test_currentness_audit_emits_runtime_false_orders_for_gaps(tmp_path, monkeypatch):
+    project_root = tmp_path
+    report_dir = project_root / "data" / "report"
+    target_date = "2026-05-15"
+    _seed_labs(project_root, target_date)
+
+    (project_root / "analysis" / "claude_scalping_pattern_lab" / "README.md").write_text(
+        "legacy shadow-only wording\n",
+        encoding="utf-8",
+    )
+    _write_json(
+        project_root / "analysis" / "gemini_scalping_pattern_lab" / "outputs" / "ev_analysis_result.json",
+        {"schema_version": 1},
+    )
+    _write_json(
+        project_root / "analysis" / "deepseek_swing_pattern_lab" / "outputs" / "data_quality_report.json",
+        {"schema_version": 2},
+    )
+
+    monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+
+    report = mod.build_pattern_lab_currentness_audit(target_date)
+
+    assert report["status"] == "warning"
+    order_ids = {order["order_id"] for order in report["code_improvement_orders"]}
+    assert "order_pattern_lab_currentness_audit_gemini_scalping_metric_contract" in order_ids
+    assert "order_pattern_lab_currentness_audit_active_source_forbidden_terms" in order_ids
+    assert "order_pattern_lab_currentness_audit_deepseek_sim_probe_provenance" in order_ids
+    assert all(order["runtime_effect"] is False for order in report["code_improvement_orders"])
+    assert all(order["allowed_runtime_apply"] is False for order in report["code_improvement_orders"])

@@ -32,19 +32,34 @@ LAB_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = LAB_DIR.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(LAB_DIR))
-from config import (
-    ANALYSIS_END,
-    ANALYSIS_START,
-    FUNNEL_METRIC_MAP,
-    OUTPUT_DIR,
-    PIPELINE_EVENT_DIR,
-    SEQUENCE_STAGES,
-    SERVER_LOCAL,
-    SERVER_REMOTE,
-    SNAPSHOT_DIR,
-    SPLIT_ENTRY_REBASE_THRESHOLD,
-    USE_DUCKDB_PRIMARY,
-)
+try:
+    from .config import (
+        ANALYSIS_END,
+        ANALYSIS_START,
+        FUNNEL_METRIC_MAP,
+        OUTPUT_DIR,
+        PIPELINE_EVENT_DIR,
+        SEQUENCE_STAGES,
+        SERVER_LOCAL,
+        SERVER_REMOTE,
+        SNAPSHOT_DIR,
+        SPLIT_ENTRY_REBASE_THRESHOLD,
+        USE_DUCKDB_PRIMARY,
+    )
+except ImportError:  # pragma: no cover - direct script execution
+    from config import (
+        ANALYSIS_END,
+        ANALYSIS_START,
+        FUNNEL_METRIC_MAP,
+        OUTPUT_DIR,
+        PIPELINE_EVENT_DIR,
+        SEQUENCE_STAGES,
+        SERVER_LOCAL,
+        SERVER_REMOTE,
+        SNAPSHOT_DIR,
+        SPLIT_ENTRY_REBASE_THRESHOLD,
+        USE_DUCKDB_PRIMARY,
+    )
 
 try:
     from src.engine.dashboard_data_repository import load_monitor_snapshot_prefer_db
@@ -60,6 +75,24 @@ except Exception:
 
 logger = logging.getLogger(__name__)
 _DUCKDB_VIEW_READY = False
+TRADE_FACT_COLUMNS = [
+    "server",
+    "trade_id",
+    "symbol",
+    "name",
+    "entry_time",
+    "exit_time",
+    "held_sec",
+    "entry_mode",
+    "position_tag",
+    "exit_rule",
+    "status",
+    "profit_rate",
+    "profit_valid_flag",
+    "holding_started_count",
+    "rec_date",
+    "cohort",
+]
 _PIPELINE_DUCKDB_COLUMNS = (
     "stage",
     "record_id",
@@ -297,6 +330,11 @@ def build_trade_fact() -> pd.DataFrame:
     df = pd.DataFrame(rows)
     if df.empty:
         print("  [WARN] trade_fact is empty")
+        pd.DataFrame(columns=TRADE_FACT_COLUMNS).to_csv(
+            OUTPUT_DIR / "trade_fact.csv",
+            index=False,
+            encoding="utf-8",
+        )
         return df
 
     # cohort 컬럼 초기화 (sequence_fact join 후 갱신)

@@ -1,6 +1,14 @@
 import json
 
+import pytest
+
 from src.engine import threshold_cycle_ev_report as mod
+
+
+@pytest.fixture(autouse=True)
+def _isolate_pattern_lab_audit_dirs(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing_currentness_audit")
+    monkeypatch.setattr(mod, "PATTERN_LAB_PROPAGATION_AUDIT_DIR", tmp_path / "missing_propagation_audit")
 
 
 def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeypatch):

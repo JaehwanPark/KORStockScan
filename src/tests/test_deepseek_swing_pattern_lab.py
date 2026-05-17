@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from analysis.deepseek_swing_pattern_lab import prepare_dataset as prepare_mod
 from analysis.deepseek_swing_pattern_lab.prepare_dataset import (
     build_data_quality_report,
     build_swing_lifecycle_funnel_fact,
@@ -263,6 +264,54 @@ class TestPrepareDataset:
     def test_build_swing_ofi_qi_fact_empty(self):
         fact = build_swing_ofi_qi_fact(["2099-01-01"])
         assert isinstance(fact, pd.DataFrame)
+
+    def test_sim_probe_events_include_broker_forbidden_provenance(self, tmp_path, monkeypatch):
+        events_dir = tmp_path / "pipeline_events"
+        events_dir.mkdir()
+        target_date = "2026-05-08"
+        (events_dir / f"pipeline_events_{target_date}.jsonl").write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "stage": "swing_sim_buy_order_assumed_filled",
+                            "record_id": "sim-1",
+                            "stock_code": "000001",
+                            "stock_name": "A",
+                            "strategy": "KOSPI_ML",
+                            "fields": {"profit_rate": "1.2"},
+                            "emitted_at": "2026-05-08T10:00:00+09:00",
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "stage": "swing_probe_exit_signal",
+                            "record_id": "probe-1",
+                            "stock_code": "000002",
+                            "stock_name": "B",
+                            "strategy": "KOSPI_ML",
+                            "fields": {"orderbook_micro_ready": False, "swing_micro_advice": "MISSING"},
+                            "emitted_at": "2026-05-08T10:01:00+09:00",
+                        }
+                    ),
+                ]
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(prepare_mod, "PIPELINE_EVENTS_DIR", events_dir)
+
+        sequence = prepare_mod.build_swing_sequence_fact([target_date])
+        ofi_qi = prepare_mod.build_swing_ofi_qi_fact([target_date])
+        report = prepare_mod.build_data_quality_report(pd.DataFrame(), pd.DataFrame({"date": [target_date]}), sequence, ofi_qi, [target_date])
+
+        assert set(sequence["actual_order_submitted"]) == {False}
+        assert set(sequence["broker_order_forbidden"]) == {True}
+        assert set(sequence["decision_authority"]) == {"sim_equal_weight", "probe_observe_only"}
+        assert bool(ofi_qi.iloc[0]["actual_order_submitted"]) is False
+        assert bool(ofi_qi.iloc[0]["broker_order_forbidden"]) is True
+        assert ofi_qi.iloc[0]["decision_authority"] == "probe_observe_only"
+        assert report["sim_probe_provenance"]["sequence_fact_actual_order_submitted_false"] == 2
+        assert report["sim_probe_provenance"]["ofi_qi_fact_broker_order_forbidden_true"] == 1
 
     def test_build_data_quality_report(self):
         trade = _sample_trade_fact()

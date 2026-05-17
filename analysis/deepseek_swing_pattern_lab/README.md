@@ -9,6 +9,7 @@ Swing 전용 pattern analysis lab. 스윙 lifecycle 전 단계(selection → db_
 - 새 threshold family는 `design_family_candidate`로만 제안
 - OFI/QI 단독 BUY/EXIT hard gate 금지
 - 기존 스캘핑 pattern lab 산출물과 섞지 않음
+- sim/probe/dry-run 표본은 `actual_order_submitted=false`, `broker_order_forbidden=true`, `decision_authority=probe_observe_only|sim_equal_weight` provenance를 포함
 
 ## Quick Start
 
@@ -62,6 +63,14 @@ ANALYSIS_START_DATE=2026-05-01 ANALYSIS_END_DATE=2026-05-09 bash analysis/deepse
 | `deepseek_payload_cases.json` | DeepSeek LLM sample cases |
 | `run_manifest.json` | Pipeline execution manifest |
 
+## Metric Contract
+
+- `schema_version=2`
+- `metric_role=primary_ev`
+- `primary_decision_metric=equal_weight_avg_profit_pct`
+- `runtime_effect=false`
+- `forbidden_uses`: threshold mutation, order guard mutation, provider change, bot restart, broker order submit
+
 ## Direction Map
 
 ```
@@ -72,9 +81,6 @@ Input Reports → prepare_dataset.py → Fact Tables (CSV)
                               build_deepseek_payload.py → DeepSeek Payload + Final Reports (JSON/MD)
 ```
 
-## 2차 연결 (미구현)
+## Postclose Automation 연결
 
-1차 산출물 안정화 이후별도 change set으로 검토:
-- `src/engine/swing_pattern_lab_automation.py`
-- `src/engine/build_code_improvement_workorder.py`에 swing_pattern_lab_automation source 추가
-- `deploy/run_threshold_cycle_postclose.sh`에 연결
+DeepSeek swing lab은 postclose 체인에서 `swing_pattern_lab_automation` source로 연결되며, 결과는 code improvement workorder와 threshold-cycle EV의 report-only 입력으로만 사용한다.

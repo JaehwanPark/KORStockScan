@@ -8,7 +8,10 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import config
+try:
+    from . import config
+except ImportError:  # pragma: no cover - direct script execution
+    import config
 from tuning_observability_summary import write_tuning_observability_outputs
 
 
@@ -61,7 +64,7 @@ def _write_pattern_report(ev_result: dict, observability: dict) -> None:
             f"- 근거: 발생 {row['n']}건, 중앙손익 {row['median_profit']:+.3f}%, 평균손익 {row['mean_profit']:+.3f}%, 기여손익 {row['contrib_profit']:+.3f}%"
         )
         lines.append(
-            "- 다음 액션: 전역 조정이 아니라 해당 코호트/패턴을 분리해 shadow 점검"
+            "- 다음 액션: 전역 조정이 아니라 해당 코호트/패턴을 report-only로 분리 점검"
         )
         lines.append("")
 
@@ -175,8 +178,9 @@ def _write_final_review(ev_result: dict, trade_df: pd.DataFrame, seq_df: pd.Data
         for row in cohort_rows:
             sufficient = "✓" if row.get("sufficient") else "⚠️부족"
             lines.append(
-                f"| {row['cohort']} | {row['n']} | {row['win_rate']}% | "
-                f"{row['median_profit']:+.3f}% | {row['mean_profit']:+.3f}% | {row['sum_profit']:+.3f}% | {sufficient} |"
+            f"| {row['cohort']} | {row['n']} | {row.get('diagnostic_win_rate_pct', 0.0)}% | "
+            f"{row['median_profit']:+.3f}% | {row.get('equal_weight_avg_profit_pct', row.get('mean_profit', 0.0)):+.3f}% | "
+            f"{row.get('simple_sum_profit_pct', row.get('contrib_profit', 0.0)):+.3f}% | {sufficient} |"
             )
     else:
         lines.append("- 분석 대상 없음")

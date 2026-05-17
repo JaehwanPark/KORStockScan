@@ -12,8 +12,24 @@ import pandas as pd
 
 from analysis.deepseek_swing_pattern_lab.config import MIN_VALID_SAMPLES, OUTPUT_DIR
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 FINDING_ID_PREFIX = "swing_pattern_lab_deepseek"
+METRIC_CONTRACT = {
+    "metric_role": "primary_ev",
+    "decision_authority": "probe_observe_only|sim_equal_weight",
+    "window_policy": "sim_first_lifecycle_window_with_daily_source_quality_guard",
+    "sample_floor": MIN_VALID_SAMPLES,
+    "primary_decision_metric": "equal_weight_avg_profit_pct",
+    "source_quality_gate": "sim/probe/dry-run provenance required; COMPLETED + valid_profit_rate only for realized PnL diagnostics",
+    "forbidden_uses": [
+        "threshold_mutation",
+        "order_guard_mutation",
+        "provider_change",
+        "bot_restart",
+        "broker_order_submit",
+    ],
+    "runtime_effect": False,
+}
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -642,6 +658,7 @@ def build_swing_pattern_analysis_result() -> dict[str, Any]:
 
     result = {
         "schema_version": SCHEMA_VERSION,
+        "metric_contract": METRIC_CONTRACT,
         "report_type": "deepseek_swing_pattern_lab",
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "analysis_start": str(funnel_fact["date"].iloc[0]) if not funnel_fact.empty else "",
@@ -652,6 +669,7 @@ def build_swing_pattern_analysis_result() -> dict[str, Any]:
             "lifecycle_event_rows": len(sequence_fact),
             "completed_valid_profit_rows": int(trade_fact["valid_profit_rate"].notna().sum()) if not trade_fact.empty else 0,
             "ofi_qi_rows": len(ofi_qi_fact),
+            "sim_probe_provenance": quality_report.get("sim_probe_provenance", {}),
             "warnings": quality_warnings,
         },
         "stage_findings": all_findings,

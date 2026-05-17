@@ -15,7 +15,7 @@
 ### 우선순위 결정 원칙
 
 1. **데이터 정합성 먼저**: `rebase_integrity_flag` 케이스가 존재하면, 이 데이터를 사용한 튜닝은 정합성 감사 완료 전까지 보류.
-2. **shadow-only 우선**: 운영 영향이 없는 shadow 관찰을 canary보다 먼저 시작.
+2. **report-only observation 우선**: 운영 영향이 없는 관찰 산출물을 먼저 축적하고, workorder 구현 후에만 canary-only candidate로 분리한다.
 3. **코호트 한정 적용**: 개선안은 가장 작은 코호트 범위에서 먼저 검증.
 4. **승자 보호**: 수익 패턴에 영향을 주는 개선안은 반드시 missed-upside 추적과 함께 진행.
 
@@ -31,7 +31,7 @@
 1. **EV 개선 우선순위 Top 5**
 
    각 후보에 대해:
-   - 현재 단계: `shadow-only` / `canary` / `승격 후보`
+   - 현재 단계: `report_only_observation` / `canary_only_candidate_after_workorder` / `hold`
    - 기대 EV 개선 방향: 손실 감소 / 기회비용 회수 / 수익 패턴 강화
    - 필요 표본 수와 현재 달성 여부
    - 선행 조건 (다른 항목 완료 필요 여부)
@@ -56,7 +56,7 @@
 
 | 순위 | 항목 | 단계 | 기대효과 | 필요표본 | 선행조건 |
 |---|---|---|---|---|---|
-| 1 | ... | shadow-only | ... | ... | ... |
+| 1 | ... | report_only_observation | ... | ... | ... |
 ...
 
 ### 기회비용 회수 후보 Top 5
@@ -71,8 +71,8 @@
 ### 근거
 [수치 기반 근거]
 
-### 다음 액션 (shadow-only → canary → 승격 순)
-1. [즉시 시작] shadow: ...
-2. [shadow 완료 후] canary: ...
-3. [canary 통과 후] 승격: ...
+### 다음 액션 (report-only observation → canary-only candidate 순)
+1. [즉시 시작] report-only observation: ...
+2. [workorder 구현 후] canary-only candidate: ...
+3. [보류] hold: ...
 ```

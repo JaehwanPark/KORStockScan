@@ -22,7 +22,7 @@
    - 승자 코호트를 함께 절단하는 부작용이 있다.
    - 반드시 코호트 한정 개선안을 제시한다.
 
-3. **운영 코드 즉시 변경 지시 금지**: 모든 개선안은 `shadow-only → canary → 승격` 단계를 포함해야 한다.
+3. **운영 코드 즉시 변경 지시 금지**: 모든 개선안은 `report_only_observation → canary_only_candidate_after_workorder` 단계를 포함해야 한다.
 
 4. **표본 부족 시 결론 확정 금지**: 코호트별 valid_profit_rate 30건 미만이면 "표본 부족" 명시 후 후속 수집 제안만 작성.
 
@@ -67,7 +67,7 @@
 ### 근거
 [수치 기반 근거]
 
-### 다음 액션 (shadow-only 우선)
-1. [shadow 항목]
-2. [canary 항목 — shadow 완료 후]
+### 다음 액션 (report-only observation 우선)
+1. [report-only observation 항목]
+2. [canary-only candidate 항목 — workorder 구현 후]
 ```

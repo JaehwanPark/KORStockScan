@@ -73,6 +73,12 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "threshold_cycle_ev": REPORT_DIR / "threshold_cycle_ev" / f"threshold_cycle_ev_{target_date}.json",
         "code_improvement_workorder": REPORT_DIR / "code_improvement_workorder" / f"code_improvement_workorder_{target_date}.json",
         "runtime_approval_summary": REPORT_DIR / "runtime_approval_summary" / f"runtime_approval_summary_{target_date}.json",
+        "pattern_lab_currentness_audit": REPORT_DIR
+        / "pattern_lab_currentness_audit"
+        / f"pattern_lab_currentness_audit_{target_date}.json",
+        "pattern_lab_propagation_audit": REPORT_DIR
+        / "pattern_lab_propagation_audit"
+        / f"pattern_lab_propagation_audit_{target_date}.json",
         "swing_daily_simulation": REPORT_DIR / "swing_daily_simulation" / f"swing_daily_simulation_{target_date}.json",
         "swing_lifecycle_audit": REPORT_DIR / "swing_lifecycle_audit" / f"swing_lifecycle_audit_{target_date}.json",
         "next_stage2_checklist": PROJECT_ROOT / "docs" / "checklists" / f"{next_day}-stage2-todo-checklist.md",
@@ -86,7 +92,11 @@ def _next_krx_trading_day(target_date: str) -> str:
 
 
 def _json_valid(path: Path) -> bool:
-    return bool(_load_json(path))
+    try:
+        json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    return True
 
 
 def _postclose_not_yet_due(target_date: str) -> bool:
@@ -186,18 +196,82 @@ def build_threshold_cycle_postclose_verification(target_date: str) -> dict[str, 
         "runtime_approval_summary_sources_ev": (
             ((runtime_summary.get("sources") or {}).get("threshold_cycle_ev")) or None
         ),
+        "threshold_cycle_ev_sources_pattern_lab_currentness_audit": (
+            ((ev_report.get("sources") or {}).get("pattern_lab_currentness_audit")) or None
+        ),
+        "threshold_cycle_ev_sources_pattern_lab_propagation_audit": (
+            ((ev_report.get("sources") or {}).get("pattern_lab_propagation_audit")) or None
+        ),
+        "runtime_approval_summary_sources_pattern_lab_propagation_audit": (
+            ((runtime_summary.get("sources") or {}).get("pattern_lab_propagation_audit")) or None
+        ),
     }
 
     execution_flags = _parse_bool_flags(done_line or "")
+    required_execution_flags = (
+        "swing_lifecycle",
+        "pattern_labs",
+        "deepseek_swing_lab",
+        "pattern_lab_currentness_audit",
+        "pattern_lab_propagation_audit",
+        "code_improvement_workorder",
+        "daily_ev",
+        "runtime_approval_summary",
+        "next_stage2_checklist",
+    )
+    missing_execution_flags = [
+        key for key in required_execution_flags if done_line and key not in execution_flags
+    ]
     disabled_stage_flags = [
         key
         for key in (
             "swing_lifecycle",
             "pattern_labs",
             "deepseek_swing_lab",
+            "pattern_lab_currentness_audit",
+            "pattern_lab_propagation_audit",
+            "code_improvement_workorder",
+            "daily_ev",
+            "runtime_approval_summary",
+            "next_stage2_checklist",
         )
         if key in execution_flags and not execution_flags[key]
     ]
+    disabled_artifact_labels = {
+        "pattern_lab_currentness_audit" if "pattern_lab_currentness_audit" in disabled_stage_flags else "",
+        "pattern_lab_propagation_audit" if "pattern_lab_propagation_audit" in disabled_stage_flags else "",
+        "code_improvement_workorder" if "code_improvement_workorder" in disabled_stage_flags else "",
+        "threshold_cycle_ev" if "daily_ev" in disabled_stage_flags else "",
+        "runtime_approval_summary" if "runtime_approval_summary" in disabled_stage_flags else "",
+        "next_stage2_checklist" if "next_stage2_checklist" in disabled_stage_flags else "",
+    }
+    disabled_artifact_labels.discard("")
+    missing_required_artifacts = [
+        item["label"]
+        for item in artifact_status
+        if item["label"] not in disabled_artifact_labels
+        and (
+            not item.get("exists")
+            or (item.get("json_valid") is False)
+        )
+    ]
+    missing_downstream_links = [
+        key for key, value in downstream_links.items() if value in (None, "", "-")
+    ]
+    if "pattern_lab_currentness_audit" in disabled_stage_flags:
+        missing_downstream_links = [
+            key for key in missing_downstream_links if "pattern_lab_currentness_audit" not in key
+        ]
+    if "pattern_lab_propagation_audit" in disabled_stage_flags:
+        missing_downstream_links = [
+            key for key in missing_downstream_links if "pattern_lab_propagation_audit" not in key
+        ]
+    if "code_improvement_workorder" in disabled_stage_flags:
+        missing_downstream_links = [
+            key for key in missing_downstream_links if "code_improvement_workorder" not in key
+        ]
+    if "daily_ev" in disabled_stage_flags or "runtime_approval_summary" in disabled_stage_flags:
+        missing_downstream_links = []
     execution_profile_status = "full_profile"
     if disabled_stage_flags:
         execution_profile_status = "recovered_partial_profile"
@@ -216,6 +290,13 @@ def build_threshold_cycle_postclose_verification(target_date: str) -> dict[str, 
     elif done_line is None:
         status = "fail"
         log_issues.append("postclose_done_marker_missing")
+    elif missing_execution_flags:
+        status = "fail"
+        log_issues.append("postclose_done_marker_missing_required_flags")
+    elif missing_required_artifacts:
+        status = "fail"
+    elif missing_downstream_links:
+        status = "fail"
     elif predecessor_waits:
         status = "warning"
     elif disabled_stage_flags:
@@ -235,6 +316,7 @@ def build_threshold_cycle_postclose_verification(target_date: str) -> dict[str, 
             "status": execution_profile_status,
             "flags": execution_flags,
             "disabled_stage_flags": disabled_stage_flags,
+            "missing_required_flags": missing_execution_flags,
             "interpretation": (
                 "latest DONE marker was produced by a recovery run with selected heavy stages disabled; "
                 "same-date artifacts are still validated separately"
@@ -261,12 +343,14 @@ def build_threshold_cycle_postclose_verification(target_date: str) -> dict[str, 
             "log_issues": sorted(set(log_issues)),
         },
         "artifact_status": artifact_status,
+        "missing_required_artifacts": missing_required_artifacts,
         "workorder_snapshot": {
             **workorder_snapshot,
             "status": workorder_snapshot_status,
             "priority_rule": "prefer_generation_id_source_hash_lineage_over_mtime",
         },
         "downstream_links": downstream_links,
+        "missing_downstream_links": missing_downstream_links,
     }
 
 
@@ -287,7 +371,10 @@ def _render_markdown(report: dict[str, Any]) -> str:
         "## Execution Profile",
         f"- profile_status: `{(report.get('execution_profile') or {}).get('status') or '-'}`",
         f"- disabled_stage_flags: `{(report.get('execution_profile') or {}).get('disabled_stage_flags') or []}`",
+        f"- missing_required_flags: `{(report.get('execution_profile') or {}).get('missing_required_flags') or []}`",
         f"- interpretation: `{(report.get('execution_profile') or {}).get('interpretation') or '-'}`",
+        f"- missing_required_artifacts: `{report.get('missing_required_artifacts') or []}`",
+        f"- missing_downstream_links: `{report.get('missing_downstream_links') or []}`",
         "",
         "## Workorder Snapshot",
         f"- generation_id: `{workorder.get('generation_id') or '-'}`",

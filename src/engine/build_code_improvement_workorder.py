@@ -21,6 +21,7 @@ THRESHOLD_CYCLE_EV_DIR = REPORT_DIR / "threshold_cycle_ev"
 PIPELINE_EVENT_VERBOSITY_DIR = REPORT_DIR / "pipeline_event_verbosity"
 OBSERVATION_SOURCE_QUALITY_AUDIT_DIR = REPORT_DIR / "observation_source_quality_audit"
 CODEBASE_PERFORMANCE_WORKORDER_DIR = REPORT_DIR / "codebase_performance_workorder"
+PATTERN_LAB_CURRENTNESS_AUDIT_DIR = REPORT_DIR / "pattern_lab_currentness_audit"
 CODE_IMPROVEMENT_WORKORDER_DIR = PROJECT_ROOT / "docs" / "code-improvement-workorders"
 CODE_IMPROVEMENT_WORKORDER_REPORT_DIR = REPORT_DIR / "code_improvement_workorder"
 WORKORDER_SCHEMA_VERSION = 1
@@ -160,6 +161,10 @@ def code_improvement_workorder_paths(target_date: str) -> tuple[Path, Path]:
     )
 
 
+def pattern_lab_currentness_audit_report_path(target_date: str) -> Path:
+    return PATTERN_LAB_CURRENTNESS_AUDIT_DIR / f"pattern_lab_currentness_audit_{target_date}.json"
+
+
 def _finding_maps(report: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     by_order_id: dict[str, dict[str, Any]] = {}
     by_title_slug: dict[str, dict[str, Any]] = {}
@@ -275,6 +280,17 @@ def _classify_order(
             route=route or "performance_optimization_order",
             confidence=confidence,
             automation_reentry="Do not implement from this workorder source.",
+        )
+
+    if order.get("source_report_type") == "pattern_lab_currentness_audit":
+        return ClassifiedOrder(
+            order=order,
+            decision="implement_now",
+            reason="pattern lab currentness order is report/source-quality instrumentation only and must remain runtime_effect=false",
+            mapped_family=mapped_family,
+            route=route or "instrumentation_order",
+            confidence=confidence or "consensus",
+            automation_reentry="After implementation, rerun pattern labs, currentness audit, workorder, EV, and propagation audit.",
         )
 
     if _contains_any(text, ("fallback", "shadow")):
@@ -980,6 +996,8 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     observation_source_quality = _load_json(observation_source_quality_path)
     codebase_performance_path = _codebase_performance_report_path(target_date)
     codebase_performance = _load_json(codebase_performance_path)
+    pattern_lab_currentness_path = pattern_lab_currentness_audit_report_path(target_date)
+    pattern_lab_currentness = _load_json(pattern_lab_currentness_path)
     calibration_source_path = _calibration_report_path_from_ev(ev_report)
     calibration_report = _calibration_report_from_ev(ev_report)
     source_paths = {
@@ -990,6 +1008,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "pipeline_event_verbosity": pipeline_event_verbosity_path,
             "observation_source_quality_audit": observation_source_quality_path,
             "codebase_performance_workorder": codebase_performance_path,
+            "pattern_lab_currentness_audit": pattern_lab_currentness_path,
     }
     if calibration_source_path is not None:
         source_paths["threshold_cycle_calibration"] = calibration_source_path
@@ -1017,6 +1036,11 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         for item in (swing_lab_automation.get("code_improvement_orders") or [])
         if isinstance(item, dict)
     ]
+    pattern_lab_currentness_orders = [
+        {**item, "source_report_type": "pattern_lab_currentness_audit"}
+        for item in (pattern_lab_currentness.get("code_improvement_orders") or [])
+        if isinstance(item, dict)
+    ]
     threshold_ev_orders = [
         *_threshold_ev_followup_orders(ev_report),
         *_window_policy_audit_followup_orders(calibration_report),
@@ -1026,7 +1050,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         *_codebase_performance_followup_orders(codebase_performance),
     ]
     closed_instrumentation_order_families = _closed_instrumentation_order_families(ev_report)
-    orders = [*scalping_orders, *swing_orders, *swing_lab_orders, *threshold_ev_orders]
+    orders = [*scalping_orders, *swing_orders, *swing_lab_orders, *pattern_lab_currentness_orders, *threshold_ev_orders]
     seen_keys: set[tuple[str, str, str]] = set()
     deduped_orders: list[dict[str, Any]] = []
     collision_warnings: list[str] = []
@@ -1075,6 +1099,9 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "codebase_performance_workorder": str(codebase_performance_path)
             if codebase_performance_path.exists()
             else None,
+            "pattern_lab_currentness_audit": str(pattern_lab_currentness_path)
+            if pattern_lab_currentness_path.exists()
+            else None,
             "threshold_cycle_calibration": str(calibration_source_path)
             if calibration_source_path and calibration_source_path.exists()
             else None,
@@ -1095,6 +1122,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "scalping_source_order_count": len(scalping_orders),
             "swing_source_order_count": len(swing_orders),
             "swing_lab_source_order_count": len(swing_lab_orders),
+            "pattern_lab_currentness_source_order_count": len(pattern_lab_currentness_orders),
             "threshold_ev_source_order_count": len(threshold_ev_orders),
             "pipeline_event_verbosity_source_order_count": len(
                 _pipeline_event_verbosity_followup_orders(pipeline_event_verbosity)
@@ -1113,6 +1141,8 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "swing_lifecycle_audit_available": bool(swing_automation),
             "swing_pattern_lab_automation_available": bool(swing_lab_automation),
             "swing_pattern_lab_fresh": ((swing_lab_automation.get("ev_report_summary") or {}).get("deepseek_lab_available")),
+            "pattern_lab_currentness_status": pattern_lab_currentness.get("status"),
+            "pattern_lab_currentness_fail_count": ((pattern_lab_currentness.get("summary") or {}).get("fail_count")),
             "swing_threshold_ai_status": ((swing_automation.get("ev_report_summary") or {}).get("threshold_ai_status")),
             "daily_ev_available": bool(ev_report),
             "duplicate_order_warnings": collision_warnings,
@@ -1196,6 +1226,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- pipeline_event_verbosity: `{source.get('pipeline_event_verbosity') or '-'}`",
         f"- observation_source_quality_audit: `{source.get('observation_source_quality_audit') or '-'}`",
         f"- codebase_performance_workorder: `{source.get('codebase_performance_workorder') or '-'}`",
+        f"- pattern_lab_currentness_audit: `{source.get('pattern_lab_currentness_audit') or '-'}`",
         f"- generated_at: `{report.get('generated_at')}`",
         f"- generation_id: `{report.get('generation_id')}`",
         f"- source_hash: `{report.get('source_hash')}`",
@@ -1232,6 +1263,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- scalping_source_order_count: `{summary.get('scalping_source_order_count')}`",
         f"- swing_source_order_count: `{summary.get('swing_source_order_count')}`",
         f"- swing_lab_source_order_count: `{summary.get('swing_lab_source_order_count')}`",
+        f"- pattern_lab_currentness_source_order_count: `{summary.get('pattern_lab_currentness_source_order_count')}`",
         f"- threshold_ev_source_order_count: `{summary.get('threshold_ev_source_order_count')}`",
         f"- pipeline_event_verbosity_source_order_count: `{summary.get('pipeline_event_verbosity_source_order_count')}`",
         f"- observation_source_quality_source_order_count: `{summary.get('observation_source_quality_source_order_count')}`",
@@ -1244,6 +1276,8 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- swing_lifecycle_audit_available: `{summary.get('swing_lifecycle_audit_available')}`",
         f"- swing_pattern_lab_automation_available: `{summary.get('swing_pattern_lab_automation_available')}`",
         f"- swing_pattern_lab_fresh: `{summary.get('swing_pattern_lab_fresh')}`",
+        f"- pattern_lab_currentness_status: `{summary.get('pattern_lab_currentness_status')}`",
+        f"- pattern_lab_currentness_fail_count: `{summary.get('pattern_lab_currentness_fail_count')}`",
         f"- swing_threshold_ai_status: `{summary.get('swing_threshold_ai_status')}`",
         f"- daily_ev_available: `{summary.get('daily_ev_available')}`",
         "",

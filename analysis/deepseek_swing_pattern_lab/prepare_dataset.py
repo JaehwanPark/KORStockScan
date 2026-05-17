@@ -132,7 +132,7 @@ ACTUAL_EXIT_STAGES = {
 }
 MAX_STAGES_SEEN_SAMPLES = 5
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _date_text(d: str | date | datetime) -> str:
@@ -174,6 +174,51 @@ def _safe_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"1", "true", "yes", "y"}
+
+
+def _stage_is_probe(stage: str) -> bool:
+    lowered = str(stage or "").strip().lower()
+    return lowered.startswith("swing_probe_") or "probe" in lowered
+
+
+def _stage_is_sim_or_dry_run(stage: str) -> bool:
+    lowered = str(stage or "").strip().lower()
+    return lowered.startswith("swing_sim_") or "dry_run" in lowered or "assumed_filled" in lowered
+
+
+def _stage_actual_order_submitted(stage: str, fields: dict[str, Any] | None = None) -> bool:
+    fields = fields or {}
+    for key in ("actual_order_submitted", "broker_order_submitted"):
+        if key in fields:
+            return _safe_bool(fields.get(key))
+    if _stage_is_probe(stage) or _stage_is_sim_or_dry_run(stage):
+        return False
+    return stage in SUBMITTED_STAGES or stage in {"sell_order_sent", "sell_order_submitted", "scale_in_executed"}
+
+
+def _stage_decision_authority(stage: str, fields: dict[str, Any] | None = None) -> str:
+    fields = fields or {}
+    explicit = str(fields.get("decision_authority") or "").strip()
+    if explicit:
+        return explicit
+    if _stage_is_probe(stage):
+        return "probe_observe_only"
+    if _stage_is_sim_or_dry_run(stage):
+        return "sim_equal_weight"
+    if _stage_actual_order_submitted(stage, fields):
+        return "real_order_event"
+    return "source_quality_only"
+
+
+def _merge_decision_authority(current: str, incoming: str) -> str:
+    priority = {
+        "probe_observe_only": 4,
+        "sim_equal_weight": 3,
+        "real_order_event": 2,
+        "source_quality_only": 1,
+        "": 0,
+    }
+    return incoming if priority.get(incoming, 0) > priority.get(current, 0) else current
 
 
 def _safe_read_json(path: str | Path) -> dict[str, Any]:
@@ -321,8 +366,11 @@ def build_swing_trade_fact(target_dates: list[str]) -> pd.DataFrame:
                     "valid_profit_rate": valid_profit_rate,
                     "profit_rate": profit_rate,
                     "profit": _safe_float(row.get("profit")),
-                    "actual_order_submitted": "",
-                    "simulation_owner": "",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "decision_authority": "sim_equal_weight",
+                    "runtime_effect": False,
+                    "simulation_owner": "deepseek_swing_pattern_lab",
                     "add_count": _safe_int(row.get("add_count")),
                     "avg_down_count": _safe_int(row.get("avg_down_count")),
                     "pyramid_count": _safe_int(row.get("pyramid_count")),
@@ -493,11 +541,25 @@ def build_swing_sequence_fact(target_dates: list[str]) -> pd.DataFrame:
                     "exit_source": "",
                     "sell_reason_type": "",
                     "holding_flow_action": "",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "decision_authority": "",
+                    "runtime_effect": False,
+                    "virtual_lifecycle_owner": "deepseek_swing_pattern_lab",
                     "stage_summary": {},
                     "_sample_stages": {},
                 }
             rec = by_record[identity]
             rec["stage_count"] += 1
+            stage_actual_order_submitted = _stage_actual_order_submitted(stage, fields)
+            stage_decision_authority = _stage_decision_authority(stage, fields)
+            if stage_actual_order_submitted:
+                rec["actual_order_submitted"] = True
+                rec["broker_order_forbidden"] = False
+            rec["decision_authority"] = _merge_decision_authority(
+                str(rec.get("decision_authority") or ""),
+                stage_decision_authority,
+            )
 
             group = _stage_lifecycle_position(stage)
             if stage in ACTUAL_ENTRY_STAGES:
@@ -533,9 +595,18 @@ def build_swing_sequence_fact(target_dates: list[str]) -> pd.DataFrame:
                 sample = {k: v for k, v in fields.items()
                           if k in ("action", "cooldown_sec", "gap_pct", "exit_source",
                                    "profit_rate", "profit", "sell_reason_type")}
+                sample.update(
+                    {
+                        "actual_order_submitted": stage_actual_order_submitted,
+                        "broker_order_forbidden": not stage_actual_order_submitted,
+                        "decision_authority": stage_decision_authority,
+                    }
+                )
                 rec["_sample_stages"][stage_key].append(sample)
 
         for rec in by_record.values():
+            if not rec.get("decision_authority"):
+                rec["decision_authority"] = "source_quality_only"
             compressed = {}
             for stage_key, summary in rec["stage_summary"].items():
                 compressed[stage_key] = {
@@ -572,6 +643,7 @@ def build_swing_ofi_qi_fact(target_dates: list[str]) -> pd.DataFrame:
                 continue
             stage = _event_stage(event)
             identity = _event_identity(event)
+            actual_order_submitted = _stage_actual_order_submitted(stage, fields)
             rows.append(
                 {
                     "date": d,
@@ -593,6 +665,10 @@ def build_swing_ofi_qi_fact(target_dates: list[str]) -> pd.DataFrame:
                     "swing_micro_advice": str(fields.get("swing_micro_advice") or ""),
                     "swing_micro_runtime_effect": _safe_bool(fields.get("swing_micro_runtime_effect")),
                     "smoothing_action": str(fields.get("smoothing_action") or ""),
+                    "actual_order_submitted": actual_order_submitted,
+                    "broker_order_forbidden": not actual_order_submitted,
+                    "decision_authority": _stage_decision_authority(stage, fields),
+                    "runtime_effect": False,
                     "micro_missing_flag": False,
                     "micro_stale_flag": False,
                     "observer_unhealthy_flag": False,
@@ -748,6 +824,36 @@ def build_data_quality_report(
             warning = f"{warning}; reasons: {active_reasons}"
         warnings.append(warning)
 
+    def _false_count(df: pd.DataFrame, column: str) -> int:
+        if df.empty or column not in df:
+            return 0
+        return int((df[column] == False).sum())
+
+    def _true_count(df: pd.DataFrame, column: str) -> int:
+        if df.empty or column not in df:
+            return 0
+        return int((df[column] == True).sum())
+
+    def _authority_counts(df: pd.DataFrame) -> dict[str, int]:
+        if df.empty or "decision_authority" not in df:
+            return {}
+        return {
+            str(key): int(value)
+            for key, value in df["decision_authority"].fillna("").replace("", "unknown").value_counts().to_dict().items()
+        }
+
+    sim_probe_provenance = {
+        "trade_fact_actual_order_submitted_false": _false_count(trade_fact, "actual_order_submitted"),
+        "trade_fact_broker_order_forbidden_true": _true_count(trade_fact, "broker_order_forbidden"),
+        "sequence_fact_actual_order_submitted_false": _false_count(sequence_fact, "actual_order_submitted"),
+        "sequence_fact_broker_order_forbidden_true": _true_count(sequence_fact, "broker_order_forbidden"),
+        "ofi_qi_fact_actual_order_submitted_false": _false_count(ofi_qi_fact, "actual_order_submitted"),
+        "ofi_qi_fact_broker_order_forbidden_true": _true_count(ofi_qi_fact, "broker_order_forbidden"),
+        "trade_fact_decision_authority_counts": _authority_counts(trade_fact),
+        "sequence_fact_decision_authority_counts": _authority_counts(sequence_fact),
+        "ofi_qi_fact_decision_authority_counts": _authority_counts(ofi_qi_fact),
+    }
+
     return {
         "schema_version": SCHEMA_VERSION,
         "analysis_window": {"start": target_dates[0] if target_dates else "", "end": target_dates[-1] if target_dates else ""},
@@ -774,6 +880,7 @@ def build_data_quality_report(
             "observer_unhealthy_overlap": observer_unhealthy_overlap,
             "examples": examples,
         },
+        "sim_probe_provenance": sim_probe_provenance,
         "warnings": warnings,
     }
 
@@ -809,6 +916,24 @@ def generate_data_quality_markdown(report: dict[str, Any]) -> str:
                 f"- stale_missing_group_counts: `{ofi_qi_quality.get('stale_missing_group_counts', {})}`",
                 f"- stale_missing_group_unique_record_counts: `{ofi_qi_quality.get('stale_missing_group_unique_record_counts', {})}`",
                 f"- observer_unhealthy_overlap: `{ofi_qi_quality.get('observer_unhealthy_overlap', {})}`",
+                "",
+            ]
+        )
+    sim_probe_provenance = report.get("sim_probe_provenance") if isinstance(report.get("sim_probe_provenance"), dict) else {}
+    if sim_probe_provenance:
+        lines.extend(
+            [
+                "## Sim/Probe Provenance",
+                "",
+                f"- trade_fact_actual_order_submitted_false: `{sim_probe_provenance.get('trade_fact_actual_order_submitted_false', 0)}`",
+                f"- trade_fact_broker_order_forbidden_true: `{sim_probe_provenance.get('trade_fact_broker_order_forbidden_true', 0)}`",
+                f"- sequence_fact_actual_order_submitted_false: `{sim_probe_provenance.get('sequence_fact_actual_order_submitted_false', 0)}`",
+                f"- sequence_fact_broker_order_forbidden_true: `{sim_probe_provenance.get('sequence_fact_broker_order_forbidden_true', 0)}`",
+                f"- ofi_qi_fact_actual_order_submitted_false: `{sim_probe_provenance.get('ofi_qi_fact_actual_order_submitted_false', 0)}`",
+                f"- ofi_qi_fact_broker_order_forbidden_true: `{sim_probe_provenance.get('ofi_qi_fact_broker_order_forbidden_true', 0)}`",
+                f"- trade_fact_decision_authority_counts: `{sim_probe_provenance.get('trade_fact_decision_authority_counts', {})}`",
+                f"- sequence_fact_decision_authority_counts: `{sim_probe_provenance.get('sequence_fact_decision_authority_counts', {})}`",
+                f"- ofi_qi_fact_decision_authority_counts: `{sim_probe_provenance.get('ofi_qi_fact_decision_authority_counts', {})}`",
                 "",
             ]
         )

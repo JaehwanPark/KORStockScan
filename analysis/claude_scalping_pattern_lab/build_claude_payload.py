@@ -24,15 +24,26 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from config import (
-    ANALYSIS_END,
-    ANALYSIS_START,
-    MIN_VALID_PROFIT_SAMPLES,
-    OUTPUT_DIR,
-    SOFT_STOP_RULES,
-    TOP_N_PATTERNS,
-    TRAILING_TP_RULES,
-)
+try:
+    from .config import (
+        ANALYSIS_END,
+        ANALYSIS_START,
+        MIN_VALID_PROFIT_SAMPLES,
+        OUTPUT_DIR,
+        SOFT_STOP_RULES,
+        TOP_N_PATTERNS,
+        TRAILING_TP_RULES,
+    )
+except ImportError:  # pragma: no cover - direct script execution
+    from config import (
+        ANALYSIS_END,
+        ANALYSIS_START,
+        MIN_VALID_PROFIT_SAMPLES,
+        OUTPUT_DIR,
+        SOFT_STOP_RULES,
+        TOP_N_PATTERNS,
+        TRAILING_TP_RULES,
+    )
 from tuning_observability_summary import write_tuning_observability_outputs
 
 LAB_DIR = Path(__file__).resolve().parent
@@ -77,12 +88,16 @@ def build_summary_payload(ev_result: dict, trade_df: pd.DataFrame) -> dict:
     daily_stats: list[dict] = []
     if not vt.empty and "rec_date" in vt.columns:
         for dt, grp in vt.groupby("rec_date"):
+            equal_weight_avg = round(float(grp["profit_rate"].mean()), 3)
+            simple_sum = round(float(grp["profit_rate"].sum()), 3)
             daily_stats.append({
                 "date":          str(dt),
                 "n_trades":      int(len(grp)),
-                "win_rate":      round((grp["profit_rate"] > 0).mean() * 100, 1),
+                "diagnostic_win_rate_pct": round((grp["profit_rate"] > 0).mean() * 100, 1),
                 "median_profit": round(float(grp["profit_rate"].median()), 3),
-                "sum_profit":    round(float(grp["profit_rate"].sum()), 3),
+                "equal_weight_avg_profit_pct": equal_weight_avg,
+                "simple_sum_profit_pct": simple_sum,
+                "primary_decision_metric": "equal_weight_avg_profit_pct",
             })
 
     # 코호트별 통계
@@ -120,7 +135,7 @@ def build_summary_payload(ev_result: dict, trade_df: pd.DataFrame) -> dict:
                 "손실 패턴 Top 5",
                 "수익 패턴 Top 5",
                 "기회비용 회수 후보 Top 5",
-                "EV 개선 우선순위 (shadow-only → canary → 승격 순)",
+                "EV 개선 우선순위 (report-only observation → canary-only candidate 순)",
             ],
         },
     }
@@ -258,8 +273,8 @@ def write_final_review_report(
         for cs in coh_summary:
             suf = "✓" if cs.get("sufficient") or cs.get("sample_sufficient") else "⚠️부족"
             lines.append(
-                f"| {cs['cohort']} | {cs['n']} | {cs['win_rate']}% "
-                f"| {cs['median_profit']:+.3f}% | {cs['sum_profit']:+.3f}% | {suf} |"
+                f"| {cs['cohort']} | {cs['n']} | {cs.get('diagnostic_win_rate_pct', 0.0)}% "
+                f"| {cs['median_profit']:+.3f}% | {cs.get('simple_sum_profit_pct', 0.0):+.3f}% | {suf} |"
             )
         lines.append("")
 
@@ -355,21 +370,21 @@ def write_final_review_report(
         "",
         "## 3. 다음 액션",
         "",
-        "### 3-1. EV 개선 우선순위 (shadow-only 선행)",
+        "### 3-1. EV 개선 우선순위 (report-only observation 선행)",
         "",
     ]
-    shadow_items = [b for b in backlog if b.get("적용단계") == "shadow-only"]
-    canary_items = [b for b in backlog if b.get("적용단계") == "canary"]
+    report_only_items = [b for b in backlog if b.get("적용단계") == "report_only_observation"]
+    canary_items = [b for b in backlog if b.get("적용단계") == "canary_only_candidate_after_workorder"]
     hold_items   = [b for b in backlog if b.get("적용단계") == "hold"]
 
-    lines.append("**shadow-only (즉시 시작 가능):**")
+    lines.append("**report-only observation (즉시 시작 가능):**")
     lines.append("")
-    for b in shadow_items:
+    for b in report_only_items:
         lines.append(f"- `{b['title']}` — 검증지표: {b['검증지표']}")
-    if not shadow_items:
+    if not report_only_items:
         lines.append("- 없음")
 
-    lines += ["", "**canary (shadow 결과 확인 후):**", ""]
+    lines += ["", "**canary-only candidate (workorder 구현 후):**", ""]
     for b in canary_items:
         lines.append(f"- `{b['title']}` — 필요표본: {b['필요표본']}")
     if not canary_items:

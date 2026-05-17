@@ -16,6 +16,8 @@ from src.engine.threshold_cycle_ev_report import ev_report_paths
 
 SUMMARY_DIR = REPORT_DIR / "runtime_approval_summary"
 SWING_RUNTIME_APPROVAL_DIR = REPORT_DIR / "swing_runtime_approval"
+PATTERN_LAB_CURRENTNESS_AUDIT_DIR = REPORT_DIR / "pattern_lab_currentness_audit"
+PATTERN_LAB_PROPAGATION_AUDIT_DIR = REPORT_DIR / "pattern_lab_propagation_audit"
 SWING_RUNTIME_APPROVAL_ARTIFACT_DIR = Path(__file__).resolve().parents[2] / "data" / "threshold_cycle" / "approvals"
 BOT_HISTORY_LOG = Path(__file__).resolve().parents[2] / "logs" / "bot_history.log"
 
@@ -540,6 +542,20 @@ def _application_timing(target_date: str, ev_report: dict[str, Any]) -> dict[str
     }
 
 
+def _audit_summary(path: Path) -> dict[str, Any]:
+    payload = _load_json(path)
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    return {
+        "available": bool(payload),
+        "artifact": str(path) if path.exists() else None,
+        "status": payload.get("status") if payload else "missing",
+        "fail_count": _as_int(summary.get("fail_count")),
+        "warning_count": _as_int(summary.get("warning_count")),
+        "runtime_effect": bool(payload.get("runtime_effect")) if payload else False,
+        "decision_authority": payload.get("decision_authority") if payload else None,
+    }
+
+
 def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     target_date = str(target_date).strip()
     ev_json, _ = ev_report_paths(target_date)
@@ -549,6 +565,10 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     sources = ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
     calibration_source = sources.get("calibration")
     calibration_report = _load_json(Path(str(calibration_source))) if calibration_source else {}
+    currentness_path = Path(str(sources.get("pattern_lab_currentness_audit"))) if sources.get("pattern_lab_currentness_audit") else PATTERN_LAB_CURRENTNESS_AUDIT_DIR / f"pattern_lab_currentness_audit_{target_date}.json"
+    propagation_path = Path(str(sources.get("pattern_lab_propagation_audit"))) if sources.get("pattern_lab_propagation_audit") else PATTERN_LAB_PROPAGATION_AUDIT_DIR / f"pattern_lab_propagation_audit_{target_date}.json"
+    currentness_audit = _audit_summary(currentness_path)
+    propagation_audit = _audit_summary(propagation_path)
     scalping_rows = _scalping_rows(ev_report, calibration_report)
     swing_rows = _swing_rows(swing_report)
     panic_rows = _panic_rows(calibration_report, target_date)
@@ -561,6 +581,8 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
         "sources": {
             "threshold_cycle_ev": str(ev_json) if ev_json.exists() else None,
             "swing_runtime_approval": str(swing_path) if swing_path.exists() else None,
+            "pattern_lab_currentness_audit": str(currentness_path) if currentness_path.exists() else None,
+            "pattern_lab_propagation_audit": str(propagation_path) if propagation_path.exists() else None,
         },
         "summary": {
             "scalping_items": len(scalping_rows),
@@ -575,8 +597,12 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
                 for row in swing_rows
                 if row.get("state") == "approval_required" and bool(row.get("approval_artifact_approved"))
             ),
+            "pattern_lab_currentness_status": currentness_audit.get("status"),
+            "pattern_lab_propagation_status": propagation_audit.get("status"),
         },
         "application_timing": _application_timing(target_date, ev_report),
+        "pattern_lab_currentness_audit": currentness_audit,
+        "pattern_lab_propagation_audit": propagation_audit,
         "scalping": scalping_rows,
         "swing": swing_rows,
         "panic": panic_rows,
@@ -585,6 +611,8 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             for message in [
                 "threshold_cycle_ev_missing" if not ev_json.exists() else "",
                 "swing_runtime_approval_missing" if not swing_path.exists() else "",
+                "pattern_lab_currentness_audit_missing" if not currentness_path.exists() else "",
+                "pattern_lab_propagation_audit_missing" if not propagation_path.exists() else "",
             ]
             if message
         ],
@@ -620,6 +648,8 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
     scalping = report.get("scalping") if isinstance(report.get("scalping"), list) else []
     swing = report.get("swing") if isinstance(report.get("swing"), list) else []
     panic = report.get("panic") if isinstance(report.get("panic"), list) else []
+    currentness = report.get("pattern_lab_currentness_audit") if isinstance(report.get("pattern_lab_currentness_audit"), dict) else {}
+    propagation = report.get("pattern_lab_propagation_audit") if isinstance(report.get("pattern_lab_propagation_audit"), dict) else {}
     lines = [
         f"# Runtime Approval Summary - {report.get('date')}",
         "",
@@ -628,6 +658,8 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         f"- scalping_items/selected: `{summary.get('scalping_items')}` / `{summary.get('scalping_selected_auto_bounded_live')}`",
         f"- swing_blocked/requested/approved: `{summary.get('swing_blocked')}` / `{summary.get('swing_requested')}` / `{summary.get('swing_approved')}`",
         f"- panic_approval_requested: `{summary.get('panic_approval_requested')}`",
+        f"- pattern_lab_currentness_status: `{summary.get('pattern_lab_currentness_status')}`",
+        f"- pattern_lab_propagation_status: `{summary.get('pattern_lab_propagation_status')}`",
         f"- env_generated_at: `{timing.get('env_generated_at') or '-'}`",
         f"- first_bot_start_at: `{timing.get('first_bot_start_at') or '-'}`",
         f"- first_bot_start_after_env_at: `{timing.get('first_bot_start_after_env_at') or '-'}`",
@@ -641,6 +673,10 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         "",
         "## Panic",
         *_render_rows(panic),
+        "",
+        "## Pattern Lab Audits",
+        f"- currentness: status=`{currentness.get('status')}` fail=`{currentness.get('fail_count')}` artifact=`{currentness.get('artifact') or '-'}`",
+        f"- propagation: status=`{propagation.get('status')}` fail=`{propagation.get('fail_count')}` warnings=`{propagation.get('warning_count')}` artifact=`{propagation.get('artifact') or '-'}`",
     ]
     warnings = report.get("warnings") if isinstance(report.get("warnings"), list) else []
     if warnings:

@@ -51,6 +51,8 @@ REQUIRED_ARTIFACT_IDS: set[str] = {
     "swing_runtime_approval_report",
     "scalping_pattern_lab_automation_report",
     "swing_pattern_lab_automation_report",
+    "pattern_lab_currentness_audit_report",
+    "pattern_lab_propagation_audit_report",
     "swing_live_dry_run_status",
     "swing_model_retrain_report",
     "swing_model_retrain_diagnosis",

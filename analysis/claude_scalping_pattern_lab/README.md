@@ -7,7 +7,7 @@
 
 - 누적 스캘핑 거래 데이터 기반 손실 패턴 / 수익 패턴 분해
 - 미진입 기회비용 blocker별 분해
-- EV 개선 후보 우선순위 도출 (shadow-only → canary → 승격)
+- EV 개선 후보 우선순위 도출 (report-only observation → canary-only candidate)
 
 ## 디렉토리 구조
 
@@ -82,12 +82,15 @@ PYTHONPATH=. .venv/bin/python analysis/claude_scalping_pattern_lab/build_claude_
 ## 품질 게이트
 
 - 서버별 `valid_profit_rate` 30건 미만이면 **결론 확정 금지** (`data_quality_report.md`에 명시)
+- 손익 표본은 `COMPLETED + numeric profit_rate`만 인정한다.
+- JSON 산출물은 `diagnostic_win_rate_pct`, `simple_sum_profit_pct`, `equal_weight_avg_profit_pct`, `primary_decision_metric`과 metric contract를 포함한다.
 - `full_fill / partial_fill / split-entry` 코호트 혼합 분석 금지
 - `rebase_integrity_flag` 케이스는 손절 튜닝 전 정합성 감사 선행 필수
 
 ## 제약 사항
 
 - `src/` 이하 운영 코드 수정 금지
+- 패턴랩 산출물은 `runtime_effect=false` report-only/proposal-only 입력이며, threshold/order/provider/bot 상태를 직접 변경하지 않는다.
 - 패키지 설치/업그레이드 금지
 - 봇 재기동, cron 수정 금지
 - 오프라인 파일 분석만 수행

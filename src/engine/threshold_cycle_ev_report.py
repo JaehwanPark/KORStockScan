@@ -19,6 +19,8 @@ from src.engine.threshold_cycle_preopen_apply import apply_manifest_path
 MONITOR_SNAPSHOT_DIR = REPORT_DIR / "monitor_snapshots"
 CALIBRATION_REPORT_DIR = REPORT_DIR / "threshold_cycle_calibration"
 EV_REPORT_DIR = REPORT_DIR / "threshold_cycle_ev"
+PATTERN_LAB_CURRENTNESS_AUDIT_DIR = REPORT_DIR / "pattern_lab_currentness_audit"
+PATTERN_LAB_PROPAGATION_AUDIT_DIR = REPORT_DIR / "pattern_lab_propagation_audit"
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -494,6 +496,47 @@ def _codebase_performance_workorder_summary(target_date: str) -> tuple[dict[str,
     )
 
 
+def _audit_summary(target_date: str, report_type: str, report_dir: Path) -> tuple[dict[str, Any], str | None, list[str]]:
+    json_path = report_dir / f"{report_type}_{target_date}.json"
+    payload = _load_json(json_path)
+    if not payload:
+        return (
+            {
+                "available": False,
+                "artifact": None,
+                "status": "missing",
+                "fail_count": 0,
+                "warning_count": 0,
+                "code_improvement_order_count": 0,
+                "runtime_effect": False,
+            },
+            None,
+            [f"{report_type}_missing"],
+        )
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    status = str(payload.get("status") or "unknown")
+    warnings: list[str] = []
+    if status in {"warning", "fail"}:
+        warnings.append(f"{report_type}_{status}")
+    return (
+        {
+            "available": True,
+            "artifact": str(json_path),
+            "status": status,
+            "fail_count": _safe_int(summary.get("fail_count"), 0),
+            "warning_count": _safe_int(summary.get("warning_count"), 0),
+            "code_improvement_order_count": _safe_int(
+                summary.get("code_improvement_order_count"),
+                _safe_int(summary.get("order_count"), 0),
+            ),
+            "runtime_effect": bool(payload.get("runtime_effect")),
+            "decision_authority": payload.get("decision_authority"),
+        },
+        str(json_path),
+        warnings,
+    )
+
+
 def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
     target_date = str(target_date).strip()
     trade_review_path = MONITOR_SNAPSHOT_DIR / f"trade_review_{target_date}.json"
@@ -519,6 +562,16 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
     code_workorder_summary, code_workorder_path, code_workorder_warnings = _code_improvement_workorder_summary(target_date)
     pipeline_verbosity_summary, pipeline_verbosity_path, pipeline_verbosity_warnings = _pipeline_event_verbosity_summary(target_date)
     codebase_perf_summary, codebase_perf_path, codebase_perf_warnings = _codebase_performance_workorder_summary(target_date)
+    currentness_audit_summary, currentness_audit_path, currentness_audit_warnings = _audit_summary(
+        target_date,
+        "pattern_lab_currentness_audit",
+        PATTERN_LAB_CURRENTNESS_AUDIT_DIR,
+    )
+    propagation_audit_summary, propagation_audit_path, propagation_audit_warnings = _audit_summary(
+        target_date,
+        "pattern_lab_propagation_audit",
+        PATTERN_LAB_PROPAGATION_AUDIT_DIR,
+    )
     selected_families = _selected_families(apply_manifest)
     swing_runtime_approval = _swing_runtime_approval_summary(apply_manifest)
     completed = _safe_int(trade_metrics.get("completed_trades"), 0)
@@ -581,6 +634,8 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
         "swing_pattern_lab_automation": swing_lab_summary,
         "pipeline_event_verbosity": pipeline_verbosity_summary,
         "codebase_performance_workorder": codebase_perf_summary,
+        "pattern_lab_currentness_audit": currentness_audit_summary,
+        "pattern_lab_propagation_audit": propagation_audit_summary,
         "code_improvement_workorder": code_workorder_summary,
         "sources": {
             "trade_review": str(trade_review_path) if trade_review_path.exists() else None,
@@ -591,6 +646,8 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "swing_pattern_lab_automation": swing_lab_path,
             "pipeline_event_verbosity": pipeline_verbosity_path,
             "codebase_performance_workorder": codebase_perf_path,
+            "pattern_lab_currentness_audit": currentness_audit_path,
+            "pattern_lab_propagation_audit": propagation_audit_path,
             "code_improvement_workorder": code_workorder_path,
             "missed_probe_counterfactual": wait6579_counterfactual_path,
         },
@@ -605,6 +662,8 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
                 *swing_lab_warnings,
                 *pipeline_verbosity_warnings,
                 *codebase_perf_warnings,
+                *currentness_audit_warnings,
+                *propagation_audit_warnings,
                 *code_workorder_warnings,
             ]
             if message
@@ -628,6 +687,8 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
     swing_lab = report.get("swing_pattern_lab_automation") if isinstance(report.get("swing_pattern_lab_automation"), dict) else {}
     pipeline_verbosity = report.get("pipeline_event_verbosity") if isinstance(report.get("pipeline_event_verbosity"), dict) else {}
     codebase_perf = report.get("codebase_performance_workorder") if isinstance(report.get("codebase_performance_workorder"), dict) else {}
+    currentness_audit = report.get("pattern_lab_currentness_audit") if isinstance(report.get("pattern_lab_currentness_audit"), dict) else {}
+    propagation_audit = report.get("pattern_lab_propagation_audit") if isinstance(report.get("pattern_lab_propagation_audit"), dict) else {}
     swing_runtime = report.get("swing_runtime_approval") if isinstance(report.get("swing_runtime_approval"), dict) else {}
     code_workorder = report.get("code_improvement_workorder") if isinstance(report.get("code_improvement_workorder"), dict) else {}
     approval_requests = report.get("approval_requests") if isinstance(report.get("approval_requests"), list) else []
@@ -709,6 +770,10 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- strategy_effect: `{codebase_perf.get('strategy_effect')}`",
         f"- data_quality_effect: `{codebase_perf.get('data_quality_effect')}`",
         f"- tuning_axis_effect: `{codebase_perf.get('tuning_axis_effect')}`",
+        "",
+        "## Pattern Lab Audits",
+        f"- currentness: status=`{currentness_audit.get('status')}` fail=`{currentness_audit.get('fail_count')}` orders=`{currentness_audit.get('code_improvement_order_count')}` artifact=`{currentness_audit.get('artifact') or '-'}`",
+        f"- propagation: status=`{propagation_audit.get('status')}` fail=`{propagation_audit.get('fail_count')}` warnings=`{propagation_audit.get('warning_count')}` artifact=`{propagation_audit.get('artifact') or '-'}`",
         "",
         "## Swing Runtime Approval",
         f"- request_report: `{swing_runtime.get('request_report') or '-'}`",

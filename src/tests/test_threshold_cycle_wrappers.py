@@ -7,12 +7,14 @@ def test_postclose_wrapper_runs_pattern_labs_before_automation_and_ev_report():
     gemini_idx = script.index("analysis/gemini_scalping_pattern_lab/run.sh")
     claude_idx = script.index("analysis/claude_scalping_pattern_lab/run_all.sh")
     automation_idx = script.index("src.engine.scalping_pattern_lab_automation")
+    currentness_idx = script.index("src.engine.pattern_lab_currentness_audit")
     ev_idx = script.index('run_threshold_cycle_ev_and_wait "pre_workorder"')
 
     assert "ANALYSIS_START_DATE=\"$PATTERN_LAB_START_DATE\" ANALYSIS_END_DATE=\"$TARGET_DATE\"" in script
     assert gemini_idx < automation_idx
     assert claude_idx < automation_idx
-    assert automation_idx < ev_idx
+    assert automation_idx < currentness_idx < ev_idx
+    assert 'RUN_PATTERN_LAB_CURRENTNESS_AUDIT="${THRESHOLD_CYCLE_RUN_PATTERN_LAB_CURRENTNESS_AUDIT:-true}"' in script
 
 
 def test_postclose_wrapper_runs_swing_daily_simulation_before_lifecycle_audit():
@@ -35,6 +37,8 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     pre_ev_idx = script.index('run_threshold_cycle_ev_and_wait "pre_workorder"')
     workorder_idx = script.index("src.engine.build_code_improvement_workorder")
     post_ev_idx = script.index('run_threshold_cycle_ev_and_wait "post_workorder_refresh"')
+    propagation_idx = script.index("src.engine.pattern_lab_propagation_audit")
+    post_propagation_ev_idx = script.index('run_threshold_cycle_ev_and_wait "post_propagation_audit_refresh"')
     runtime_summary_idx = script.index("src.engine.runtime_approval_summary")
     rebase_renewal_idx = script.index("src.engine.plan_rebase_daily_renewal")
     next_checklist_idx = script.rindex("src.engine.build_next_stage2_checklist")
@@ -46,10 +50,13 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         < pre_ev_idx
         < workorder_idx
         < post_ev_idx
+        < propagation_idx
+        < post_propagation_ev_idx
         < runtime_summary_idx
         < rebase_renewal_idx
         < next_checklist_idx
     )
+    assert 'RUN_PATTERN_LAB_PROPAGATION_AUDIT="${THRESHOLD_CYCLE_RUN_PATTERN_LAB_PROPAGATION_AUDIT:-true}"' in script
 
 
 def test_postclose_wrapper_refreshes_market_breadth_before_panic_reports():
@@ -84,11 +91,15 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert "wait_for_report_artifact()" in script
     assert "next_stage2_checklist_path()" in script
     assert '"$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json"' in script
+    assert '"$PROJECT_DIR/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_${TARGET_DATE}.json"' in script
+    assert '"$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/runtime_approval_summary/runtime_approval_summary_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/plan_rebase_daily_renewal/plan_rebase_daily_renewal_${TARGET_DATE}.json"' in script
     assert 'wait_for_file_artifact "$(next_stage2_checklist_path)" "next_stage2_checklist"' in script
     assert "src.engine.verify_threshold_cycle_postclose_chain" in script
     assert '"$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json"' in script
+    assert "pattern_lab_currentness_audit=$RUN_PATTERN_LAB_CURRENTNESS_AUDIT" in script
+    assert "pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT" in script
 
 
 def test_postclose_wrapper_marks_availability_guard_pause_as_fail():

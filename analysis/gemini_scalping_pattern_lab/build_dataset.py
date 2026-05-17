@@ -12,7 +12,10 @@ BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE_DIR.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-import config
+try:
+    from . import config
+except ImportError:  # pragma: no cover - direct script execution
+    import config
 
 try:
     from src.engine.tuning_duckdb_repository import TuningDuckDBRepository
@@ -174,7 +177,7 @@ def _process_post_sell_rows(rows, server_name, trade_info, seq_info, trade_facts
         outcome = data.get("outcome", "COMPLETED")
         profit_rate = data.get("profit_rate")
         profit_valid_flag = (
-            outcome in {"GOOD_EXIT", "COMPLETED"} and isinstance(profit_rate, (int, float))
+            outcome == "COMPLETED" and isinstance(profit_rate, (int, float))
         )
 
         trade_facts.append(
@@ -336,21 +339,22 @@ def main():
             _load_jsonl_rows(file_path), "local", trade_info, seq_info, trade_facts
         )
 
-    # REMOTE logs: 파일(jsonl/jsonl.gz)
-    for file_path in _iter_jsonl_files(config.REMOTE_BASE_DIR):
-        path_str = str(file_path)
-        if "remote_" not in path_str:
-            continue
-        if not any(token in file_path.name for token in target_date_tokens):
-            continue
-        if "pipeline_events" in file_path.name:
-            _process_pipeline_events_rows(
-                _load_jsonl_rows(file_path), "remote", funnel_counts, trade_info, seq_info
-            )
-        if "post_sell_evaluations" in file_path.name:
-            _process_post_sell_rows(
-                _load_jsonl_rows(file_path), "remote", trade_info, seq_info, trade_facts
-            )
+    # REMOTE logs are excluded by default; Plan Rebase decisions are main/local-only.
+    if config.INCLUDE_REMOTE:
+        for file_path in _iter_jsonl_files(config.REMOTE_BASE_DIR):
+            path_str = str(file_path)
+            if "remote_" not in path_str:
+                continue
+            if not any(token in file_path.name for token in target_date_tokens):
+                continue
+            if "pipeline_events" in file_path.name:
+                _process_pipeline_events_rows(
+                    _load_jsonl_rows(file_path), "remote", funnel_counts, trade_info, seq_info
+                )
+            if "post_sell_evaluations" in file_path.name:
+                _process_post_sell_rows(
+                    _load_jsonl_rows(file_path), "remote", trade_info, seq_info, trade_facts
+                )
 
     trade_fact_path = config.OUTPUT_DIR / "trade_fact.csv"
     with open(trade_fact_path, "w", newline="", encoding="utf-8") as f:
@@ -439,17 +443,18 @@ def main():
         f.write("# Data Quality Report\n\n")
         f.write(f"- 총 거래수: {total_trades}\n")
         f.write(
-            f"- `COMPLETED` 수: {len([t for t in trade_facts if t['status'] == 'GOOD_EXIT' or t['status'] == 'COMPLETED'])}\n"
+            f"- `COMPLETED` 수: {len([t for t in trade_facts if t['status'] == 'COMPLETED'])}\n"
         )
         f.write(f"- `valid_profit_rate` 수: {len(valid_trades)}\n")
         f.write("- 서버별 `valid_profit_rate` 건수:\n")
         f.write(f"  - 로컬(local): {local_valid}\n")
         f.write(f"  - 원격(remote): {remote_valid}\n\n")
 
-        if local_valid < config.MIN_VALID_SAMPLES or remote_valid < config.MIN_VALID_SAMPLES:
+        remote_sample_block = config.INCLUDE_REMOTE and remote_valid < config.MIN_VALID_SAMPLES
+        if local_valid < config.MIN_VALID_SAMPLES or remote_sample_block:
             f.write("## ⚠️ 실패 조건 도달\n")
             f.write(
-                f"`profit_valid_flag=true` 표본이 서버별 {config.MIN_VALID_SAMPLES}건 미만이므로 **표본 부족**으로 결론을 확정할 수 없음.\n"
+                f"`profit_valid_flag=true` 표본이 기준별 {config.MIN_VALID_SAMPLES}건 미만이므로 **표본 부족**으로 결론을 확정할 수 없음.\n"
             )
 
     # run_manifest.json 작성
@@ -483,6 +488,7 @@ def main():
         "history_coverage_ok": history_coverage_ok,
         "history_expected_dates": expected_dates,
         "local_pipeline_source_stats": dict(local_pipeline_sources),
+        "include_remote": bool(config.INCLUDE_REMOTE),
         "total_trades": total_trades,
         "valid_trades": len(valid_trades),
     }

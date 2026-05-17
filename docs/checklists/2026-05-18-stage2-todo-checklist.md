@@ -13,6 +13,18 @@
 - `actual_order_submitted=false`인 sim/probe 표본은 EV/source-quality 입력이며 실주문 전환 근거가 아니다.
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
 
+### PreopenAutomationHealthCheck20260518 운영 확인 기록
+
+- checked_at: `2026-05-18 08:50 KST`
+- 판정: `pass`
+- 대상: `[ThresholdEnvAutoApplyPreopen0518]`, `[OpenAIWSPreopenConfirm0518]`, `[SwingApprovalArtifactPreopen0518]`, `[Runbook 운영 확인] 장전 자동화체인 상태 확인`
+- 근거: `logs/threshold_cycle_preopen_cron.log`에 `2026-05-18` preopen `[DONE]` marker가 있고, `threshold_apply_2026-05-18.json`은 status=`auto_bounded_live_ready`, apply_mode=`auto_bounded_live`, runtime_change=`true`, source_date=`2026-05-15`다. runtime env는 `threshold_runtime_env_2026-05-18.{env,json}`으로 생성됐고 selected family는 `bad_entry_refined_canary`, `swing_one_share_real_canary_phase0`, `swing_gatekeeper_reject_cooldown`이다. env override는 `KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED=true`, `KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_ENABLED=true`, `KORSTOCKSCAN_ML_GATEKEEPER_REJECT_COOLDOWN=6600`, `KORSTOCKSCAN_SWING_LIVE_ORDER_DRY_RUN_ENABLED=true`를 포함한다.
+- OpenAI WS: `src/run_bot.sh`는 startup env로 `KORSTOCKSCAN_SCALPING_AI_ROUTE=openai`, `KORSTOCKSCAN_OPENAI_TRANSPORT_MODE=responses_ws`, `KORSTOCKSCAN_OPENAI_RESPONSES_WS_ENABLED=true`를 고정하고, `openai_ws_stability_2026-05-15.md`는 decision=`keep_ws`, unique WS calls=`763`, WS fallback=`0/763`, endpoint counts=`analyze_target:762`, `entry_price:1`, entry_price instrumentation_gap=`False`로 닫혔다.
+- swing approval: `swing_runtime_approval_2026-05-15.json`은 approval request 3건을 만들었고, 별도 approval artifact `data/threshold_cycle/approvals/swing_runtime_approvals_2026-05-15.json`과 `data/threshold_cycle/approvals/swing_one_share_real_canary_2026-05-15.json`이 존재한다. preopen apply는 `swing_gatekeeper_reject_cooldown`과 `swing_one_share_real_canary_phase0`만 env에 반영했고, `swing_model_floor`는 selected=`false`, decision_reason=`no_runtime_env_override`로 유지했다. `swing_scale_in_real_canary_phase0`는 scale-in approval artifact 없음으로 차단 상태다.
+- runbook 운영 확인: `tmux bot` 세션은 `2026-05-18 07:40 KST`에 기동 상태이고, `src/run_bot.sh`는 오늘 runtime env 파일을 기다린 뒤 source하도록 되어 있다. `logs/ensemble_scanner.log`에는 `final_ensemble_scanner target_date=2026-05-18` `[DONE]` marker와 V2 CSV 3개 종목 적재 로그가 있다. `data/daily_recommendations_v2.csv`는 3행이며 diagnostics는 selected_count=`3`, selection_mode=`SELECTED`다.
+- 금지 확인: 확인 과정에서 threshold/provider/order guard, 스윙 dry-run guard, bot restart, broker 주문 상태를 변경하지 않았다. OpenAI provider provenance 확인은 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경과 분리했다.
+- 다음 액션: 오늘 PREOPEN Project 항목은 완료로 닫는다. 장중에는 runtime threshold mutation 없이 selected family provenance, one-share real canary receipt, sim/probe `actual_order_submitted=false` split을 기존 INTRADAY checklist에서 계속 확인한다. Project/Calendar 동기화는 표준 명령으로 사용자가 수행한다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-05-15` postclose -> `2026-05-18`)
 
@@ -22,24 +34,30 @@
 
 ## 장전 체크리스트 (08:45~09:00)
 
-- [ ] `[ThresholdEnvAutoApplyPreopen0518] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-05-18`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
+- [x] `[ThresholdEnvAutoApplyPreopen0518] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-05-18`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-15.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-15.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
   - 판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.
   - 금지: blocked family, approval artifact missing, same-stage owner conflict를 수동 env override로 우회하지 않는다.
   - 다음 액션: `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.
+  - 판정: `applied_guard_passed_env`.
+  - 근거: `threshold_apply_2026-05-18.json` status=`auto_bounded_live_ready`, runtime env selected families=`bad_entry_refined_canary`, `swing_one_share_real_canary_phase0`, `swing_gatekeeper_reject_cooldown`; `KORSTOCKSCAN_SWING_LIVE_ORDER_DRY_RUN_ENABLED=true` 유지.
 
-- [ ] `[OpenAIWSPreopenConfirm0518] OpenAI WS 유지 설정 및 entry_price/analyze_target provenance 확인` (`Due: 2026-05-18`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: RuntimeStability`)
+- [x] `[OpenAIWSPreopenConfirm0518] OpenAI WS 유지 설정 및 entry_price/analyze_target provenance 확인` (`Due: 2026-05-18`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: RuntimeStability`)
   - Source: [openai_ws_stability_2026-05-15.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-15.md), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py)
   - 판정 기준: startup env의 OpenAI route/Responses WS 설정과 `analyze_target`, `entry_price` transport provenance를 분리 확인한다.
   - 금지: provider transport 확인을 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경으로 해석하지 않는다.
   - 다음 액션: entry_price transport 표본이 부족하면 장중 표본 재확인 항목과 연결한다.
+  - 판정: `pass_keep_ws`.
+  - 근거: startup env는 OpenAI Responses WS 고정이고, `openai_ws_stability_2026-05-15.md`는 decision=`keep_ws`, analyze_target=`762`, entry_price=`1`, WS fallback=`0/763`, entry_price instrumentation_gap=`False`.
 
-- [ ] `[SwingApprovalArtifactPreopen0518] 스윙 approval request 및 별도 승인 artifact 존재 여부 확인` (`Due: 2026-05-18`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
+- [x] `[SwingApprovalArtifactPreopen0518] 스윙 approval request 및 별도 승인 artifact 존재 여부 확인` (`Due: 2026-05-18`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
   - Source: [swing_runtime_approval_2026-05-15.json](/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-05-15.json), [threshold_cycle_ev_2026-05-15.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-15.json)
   - 판정 기준: approval request가 있더라도 사용자 승인 artifact가 없으면 env apply 대상이 아니다.
   - 금지: 스윙 dry-run 해제, real canary, floor, scale-in real canary를 서로 자동 승인하지 않는다.
   - 사용자 승인 요청/승인 현황 표면화: `swing_model_floor` approval_id=`swing_runtime_approval:2026-05-15:swing_model_floor`, `swing_gatekeeper_reject_cooldown` approval_id=`swing_runtime_approval:2026-05-15:swing_gatekeeper_reject_cooldown`, `swing_one_share_real_canary_phase0` approval_id=`swing_one_share_real_canary:2026-05-15:phase0`는 사용자 승인 artifact 생성 완료 상태로 확인한다.
   - 다음 액션: 최종 보고에 `사용자 승인 필요/승인 완료` 섹션을 별도로 쓰고, 각 approval_id, artifact path, selected env, blocked reason을 `approval_artifact_present`, `approval_artifact_missing`, `blocked_by_policy` 중 하나로 닫는다.
+  - 판정: `approval_artifact_present`.
+  - 근거: `swing_runtime_approvals_2026-05-15.json`과 `swing_one_share_real_canary_2026-05-15.json`이 존재한다. preopen apply는 `swing_gatekeeper_reject_cooldown`, `swing_one_share_real_canary_phase0`를 selected env로 반영했고 `swing_model_floor`는 selected=`false`/`no_runtime_env_override`, scale-in real canary는 approval artifact 없음으로 차단했다.
 
 ## 장중 체크리스트 (09:05~15:20)
 

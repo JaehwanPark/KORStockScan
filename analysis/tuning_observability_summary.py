@@ -10,6 +10,23 @@ from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SNAPSHOT_DIR = PROJECT_ROOT / "data" / "report" / "monitor_snapshots"
+SCHEMA_VERSION = 2
+OBSERVABILITY_METRIC_CONTRACT = {
+    "metric_role": "funnel_count",
+    "decision_authority": "source_quality_only",
+    "window_policy": "daily_only_for_ops_with_rolling_consumer_required",
+    "sample_floor": 1,
+    "primary_decision_metric": "submitted_drought_and_blocker_count",
+    "source_quality_gate": "performance_tuning + wait6579_ev_cohort + trade_review + post_sell_feedback source presence",
+    "forbidden_uses": [
+        "runtime_threshold_apply",
+        "broker_order_enable",
+        "provider_route_change",
+        "bot_restart",
+        "single_day_live_canary_approval",
+    ],
+    "runtime_effect": False,
+}
 
 
 def _load_json(path: Path) -> dict[str, Any] | None:
@@ -62,6 +79,8 @@ def build_tuning_observability_summary(
     blocked_ai_score_share = round((blocked_ai_score / total_candidates) * 100, 1) if total_candidates else 0.0
 
     summary = {
+        "schema_version": SCHEMA_VERSION,
+        "metric_contract": OBSERVABILITY_METRIC_CONTRACT,
         "meta": {
             "target_date": target_date,
             "analysis_period": {

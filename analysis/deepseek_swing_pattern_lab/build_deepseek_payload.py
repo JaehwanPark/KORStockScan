@@ -12,7 +12,7 @@ import pandas as pd
 
 from analysis.deepseek_swing_pattern_lab.config import OUTPUT_DIR, PROMPT_DIR
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -22,6 +22,12 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(float(value))
     except (TypeError, ValueError):
         return default
+
+
+def _safe_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "y"}
 
 
 def _load_csv(name: str) -> pd.DataFrame:
@@ -85,6 +91,7 @@ def build_payload_summary(
         "schema_version": SCHEMA_VERSION,
         "payload_type": "deepseek_swing_pattern_lab_summary",
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "metric_contract": analysis_result.get("metric_contract", {}),
         "data_window": {
             "start": str(funnel_fact["date"].iloc[0]) if not funnel_fact.empty else "",
             "end": str(funnel_fact["date"].iloc[-1]) if not funnel_fact.empty else "",
@@ -256,6 +263,9 @@ def build_payload_cases(
                     "sell_price": _safe_value(row.get("sell_price")),
                     "profit_rate": _safe_value(row.get("profit_rate")),
                     "profit": _safe_value(row.get("profit")),
+                    "actual_order_submitted": _safe_bool(row.get("actual_order_submitted", False)),
+                    "broker_order_forbidden": _safe_bool(row.get("broker_order_forbidden", True)),
+                    "decision_authority": str(row.get("decision_authority", "")),
                     "pyramid_count": _safe_int(row.get("pyramid_count")),
                     "avg_down_count": _safe_int(row.get("avg_down_count")),
                 }

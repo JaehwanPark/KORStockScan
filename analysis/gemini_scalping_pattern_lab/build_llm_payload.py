@@ -8,7 +8,10 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import config
+try:
+    from . import config
+except ImportError:  # pragma: no cover - direct script execution
+    import config
 from tuning_observability_summary import write_tuning_observability_outputs
 
 
@@ -49,9 +52,11 @@ def build_summary_payload(ev_result: dict, trade_df: pd.DataFrame) -> dict:
                 {
                     "date": str(rec_date),
                     "n_trades": int(len(group)),
-                    "win_rate": round((group["profit_rate"].astype(float) > 0).mean() * 100, 1),
+                    "diagnostic_win_rate_pct": round((group["profit_rate"].astype(float) > 0).mean() * 100, 1),
                     "median_profit": round(float(group["profit_rate"].astype(float).median()), 3),
-                    "sum_profit": round(float(group["profit_rate"].astype(float).sum()), 3),
+                    "equal_weight_avg_profit_pct": round(float(group["profit_rate"].astype(float).mean()), 3),
+                    "simple_sum_profit_pct": round(float(group["profit_rate"].astype(float).sum()), 3),
+                    "primary_decision_metric": "equal_weight_avg_profit_pct",
                 }
             )
 

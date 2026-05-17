@@ -23,14 +23,42 @@ import pandas as pd
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from config import (
-    MIN_VALID_PROFIT_SAMPLES,
-    OUTPUT_DIR,
-    SERVER_LOCAL,
-    SOFT_STOP_RULES,
-    TOP_N_PATTERNS,
-    TRAILING_TP_RULES,
-)
+try:
+    from .config import (
+        MIN_VALID_PROFIT_SAMPLES,
+        OUTPUT_DIR,
+        SERVER_LOCAL,
+        SOFT_STOP_RULES,
+        TOP_N_PATTERNS,
+        TRAILING_TP_RULES,
+    )
+except ImportError:  # pragma: no cover - direct script execution
+    from config import (
+        MIN_VALID_PROFIT_SAMPLES,
+        OUTPUT_DIR,
+        SERVER_LOCAL,
+        SOFT_STOP_RULES,
+        TOP_N_PATTERNS,
+        TRAILING_TP_RULES,
+    )
+
+SCHEMA_VERSION = 2
+METRIC_CONTRACT = {
+    "metric_role": "primary_ev",
+    "decision_authority": "main_only_completed",
+    "window_policy": "rolling_10d_with_daily_guard",
+    "sample_floor": MIN_VALID_PROFIT_SAMPLES,
+    "primary_decision_metric": "equal_weight_avg_profit_pct",
+    "source_quality_gate": "COMPLETED + numeric profit_rate only; full/partial/split cohorts separated",
+    "forbidden_uses": [
+        "runtime_threshold_apply_without_deterministic_guard",
+        "broker_order_enable",
+        "provider_route_change",
+        "bot_restart",
+        "single_day_live_approval",
+    ],
+    "runtime_effect": False,
+}
 
 
 # ── 로드 ──────────────────────────────────────────────────────────────────────
@@ -94,15 +122,18 @@ def cohort_summary(df: pd.DataFrame) -> list[dict]:
         n = len(grp)
         win = (grp["profit_rate"] > 0).sum()
         loss = (grp["profit_rate"] <= 0).sum()
+        mean_profit = round(_safe_mean(grp["profit_rate"]), 3)
+        simple_sum = round(float(grp["profit_rate"].sum()), 3)
         results.append({
             "cohort":          cohort,
             "n":               int(n),
             "win":             int(win),
             "loss":            int(loss),
-            "win_rate":        round(win / n * 100, 1) if n > 0 else 0.0,
+            "diagnostic_win_rate_pct": round(win / n * 100, 1) if n > 0 else 0.0,
             "median_profit":   round(_safe_median(grp["profit_rate"]), 3),
-            "mean_profit":     round(_safe_mean(grp["profit_rate"]), 3),
-            "sum_profit":      round(float(grp["profit_rate"].sum()), 3),
+            "equal_weight_avg_profit_pct": mean_profit,
+            "simple_sum_profit_pct": simple_sum,
+            "primary_decision_metric": "equal_weight_avg_profit_pct",
             "sufficient":      n >= MIN_VALID_PROFIT_SAMPLES,
         })
     return results
@@ -160,6 +191,8 @@ def extract_loss_patterns(df: pd.DataFrame, seq_df: pd.DataFrame) -> list[dict]:
             "exit_rule":       exit_rule,
             "n":               int(n),
             "median_profit":   round(_safe_median(grp["profit_rate"]), 3),
+            "equal_weight_avg_profit_pct": round(_safe_mean(grp["profit_rate"]), 3),
+            "simple_sum_profit_pct": contrib,
             "contrib_profit":  contrib,
             "median_held_sec": held_med,
             "preconditions":   preconditions,
@@ -195,7 +228,9 @@ def extract_profit_patterns(df: pd.DataFrame) -> list[dict]:
             "entry_mode":     entry_mode,
             "n":              int(n),
             "median_profit":  round(_safe_median(grp["profit_rate"]), 3),
+            "equal_weight_avg_profit_pct": round(_safe_mean(grp["profit_rate"]), 3),
             "mean_profit":    round(_safe_mean(grp["profit_rate"]), 3),
+            "simple_sum_profit_pct": round(float(grp["profit_rate"].sum()), 3),
             "contrib_profit": round(float(grp["profit_rate"].sum()), 3),
             "median_held_sec": round(_safe_median(grp["held_sec"]), 1) if "held_sec" in grp else None,
         })
@@ -237,36 +272,36 @@ def decompose_opportunity_cost(funnel_df: pd.DataFrame) -> list[dict]:
 
 _EV_TEMPLATES: dict[str, dict] = {
     "split_entry_rebase_integrity": {
-        "title":          "split-entry rebase 수량 정합성 shadow 감사",
+        "title":          "split-entry rebase 수량 정합성 report-only 감사",
         "기대효과":       "rebase quantity 이상(cum_gt_requested / same_ts_multi_rebase) 케이스를 분리해 실제 경제 손실과 이벤트 복원 오류를 혼합하지 않게 함",
         "리스크":         "false-positive 제거 전 손절 임계값 튜닝 시 결론 왜곡 가능",
         "필요표본":       "rebase_integrity_flag 케이스 20건 이상",
         "검증지표":       "cum_filled_qty > requested_qty 비율, same_ts_multi_rebase_count 분포",
-        "적용단계":       "shadow-only",
+        "적용단계":       "report_only_observation",
     },
     "partial_expand_immediate_recheck": {
-        "title":          "partial → fallback 확대 직후 즉시 재평가 shadow",
+        "title":          "partial → fallback 확대 직후 즉시 재평가 report-only",
         "기대효과":       "나쁜 포지션 확대(확대 직후 peak_profit < 0) 코호트 조기 감지",
-        "리스크":         "정상 확대 패턴도 일부 차단 가능 — shadow 관찰 선행 필수",
+        "리스크":         "정상 확대 패턴도 일부 차단 가능. report-only 관찰 선행 필수",
         "필요표본":       "partial_then_expand 코호트 30건 이상",
         "검증지표":       "확대 후 90초 내 held_sec soft stop 비율 감소 여부",
-        "적용단계":       "shadow-only",
+        "적용단계":       "report_only_observation",
     },
     "same_symbol_cooldown": {
-        "title":          "동일 종목 split-entry soft-stop 재진입 cooldown shadow",
+        "title":          "동일 종목 split-entry soft-stop 재진입 cooldown report-only",
         "기대효과":       "같은 날 동일 종목 반복 손절 누수 차단",
         "리스크":         "cooldown 중 missed upside 발생 가능 — 차단 건수와 missed upside를 함께 추적해야 함",
         "필요표본":       "same_symbol_repeat_flag 케이스 10건 이상",
         "검증지표":       "same-symbol repeat soft stop 건수, cooldown 차단 후 10분 missed upside",
-        "적용단계":       "shadow-only",
+        "적용단계":       "report_only_observation",
     },
     "partial_only_timeout": {
-        "title":          "partial-only 표류 전용 timeout shadow",
+        "title":          "partial-only 표류 전용 timeout report-only",
         "기대효과":       "1주 partial만 남긴 채 장시간 표류하는 케이스 조기 정리",
         "리스크":         "full fill 전 짧은 대기 케이스를 오분류할 수 있음",
         "필요표본":       "partial-only 코호트 20건 이상",
         "검증지표":       "partial-only held_sec 중앙값, timeout 이후 실현손익 분포",
-        "적용단계":       "shadow-only",
+        "적용단계":       "report_only_observation",
     },
     "latency_canary_tag_expansion": {
         "title":          "latency canary tag 완화 1축 canary 승인",
@@ -274,7 +309,7 @@ _EV_TEMPLATES: dict[str, dict] = {
         "리스크":         "bugfix-only 실표본 관찰 전 추가 완화는 해석 가능성 저하",
         "필요표본":       "bugfix-only canary_applied 건수 50건 이상 (현재 19건)",
         "검증지표":       "latency_canary_applied 증가, low_signal / tag_not_allowed 감소",
-        "적용단계":       "canary",
+        "적용단계":       "canary_only_candidate_after_workorder",
     },
 }
 
@@ -369,6 +404,8 @@ def main() -> dict:
     write_ev_backlog_md(backlog)
 
     result = {
+        "schema_version": SCHEMA_VERSION,
+        "metric_contract": METRIC_CONTRACT,
         "generated_at":    datetime.now().isoformat(),
         "cohort_summary":  coh_summary,
         "loss_patterns":   loss_patterns,

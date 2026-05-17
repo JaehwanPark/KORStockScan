@@ -3,10 +3,30 @@ from pathlib import Path
 
 import pandas as pd
 
-import config
+try:
+    from . import config
+except ImportError:  # pragma: no cover - direct script execution
+    import config
 
 TOP_N_PATTERNS = 5
 MIN_VALID_SAMPLES = config.MIN_VALID_SAMPLES
+SCHEMA_VERSION = 2
+METRIC_CONTRACT = {
+    "metric_role": "primary_ev",
+    "decision_authority": "main_only_completed",
+    "window_policy": "rolling_10d_with_daily_guard",
+    "sample_floor": MIN_VALID_SAMPLES,
+    "primary_decision_metric": "equal_weight_avg_profit_pct",
+    "source_quality_gate": "COMPLETED + numeric profit_rate only; local/main source by default; full/partial/split cohorts separated",
+    "forbidden_uses": [
+        "runtime_threshold_apply_without_deterministic_guard",
+        "broker_order_enable",
+        "provider_route_change",
+        "bot_restart",
+        "real_execution_quality_inference_from_remote_or_sim",
+    ],
+    "runtime_effect": False,
+}
 
 
 def _load_csv(name: str) -> pd.DataFrame:
@@ -73,18 +93,21 @@ def cohort_summary(trade_df: pd.DataFrame) -> list[dict]:
     for cohort, group in valid.groupby("cohort"):
         count = len(group)
         win = int((group["profit_rate"] > 0).sum())
+        mean_profit = round(_safe_mean(group["profit_rate"]), 3)
+        simple_sum = round(float(group["profit_rate"].sum()), 3)
         rows.append(
             {
                 "cohort": str(cohort),
                 "n": int(count),
-                "win_rate": round((win / count) * 100, 1) if count else 0.0,
+                "diagnostic_win_rate_pct": round((win / count) * 100, 1) if count else 0.0,
                 "median_profit": round(_safe_median(group["profit_rate"]), 3),
-                "mean_profit": round(_safe_mean(group["profit_rate"]), 3),
-                "sum_profit": round(float(group["profit_rate"].sum()), 3),
+                "equal_weight_avg_profit_pct": mean_profit,
+                "simple_sum_profit_pct": simple_sum,
+                "primary_decision_metric": "equal_weight_avg_profit_pct",
                 "sufficient": count >= MIN_VALID_SAMPLES,
             }
         )
-    return sorted(rows, key=lambda row: row["sum_profit"])
+    return sorted(rows, key=lambda row: row["simple_sum_profit_pct"])
 
 
 def extract_loss_patterns(trade_df: pd.DataFrame, seq_df: pd.DataFrame) -> list[dict]:
@@ -139,6 +162,8 @@ def extract_loss_patterns(trade_df: pd.DataFrame, seq_df: pd.DataFrame) -> list[
                 "n": int(len(group)),
                 "median_profit": round(_safe_median(group["profit_rate"]), 3),
                 "mean_profit": round(_safe_mean(group["profit_rate"]), 3),
+                "equal_weight_avg_profit_pct": round(_safe_mean(group["profit_rate"]), 3),
+                "simple_sum_profit_pct": round(float(group["profit_rate"].sum()), 3),
                 "contrib_profit": round(float(group["profit_rate"].sum()), 3),
                 "median_held_sec": round(_safe_median(group["held_sec"]), 1),
                 "preconditions": preconditions,
@@ -172,6 +197,8 @@ def extract_profit_patterns(trade_df: pd.DataFrame) -> list[dict]:
                 "n": int(len(group)),
                 "median_profit": round(_safe_median(group["profit_rate"]), 3),
                 "mean_profit": round(_safe_mean(group["profit_rate"]), 3),
+                "equal_weight_avg_profit_pct": round(_safe_mean(group["profit_rate"]), 3),
+                "simple_sum_profit_pct": round(float(group["profit_rate"].sum()), 3),
                 "contrib_profit": round(float(group["profit_rate"].sum()), 3),
                 "median_held_sec": round(_safe_median(group["held_sec"]), 1),
             }
@@ -217,13 +244,13 @@ def build_ev_backlog(
     opportunity_cost: list[dict],
 ) -> list[dict]:
     backlog: list[dict] = []
-    negative_cohorts = [row for row in cohort_rows if row["sum_profit"] < 0]
+    negative_cohorts = [row for row in cohort_rows if row["simple_sum_profit_pct"] < 0]
     if negative_cohorts:
         worst = negative_cohorts[0]
         backlog.append(
             {
                 "title": f"{worst['cohort']} EV 누수 분리 점검",
-                "적용단계": "shadow-only",
+                "적용단계": "report_only_observation",
                 "기대효과": f"{worst['cohort']} 코호트의 음수 EV 원인을 분리해 전역 조정 오판을 줄인다.",
                 "검증지표": f"{worst['cohort']} 거래수, 손익 중앙값, 기여손익 합 재확인",
                 "필요표본": f"{MIN_VALID_SAMPLES}건 이상 또는 연속 2일 동일 패턴",
@@ -234,14 +261,14 @@ def build_ev_backlog(
         backlog.append(
             {
                 "title": f"{top_loss['cohort']} / {top_loss['exit_rule']} 손실패턴 분해",
-                "적용단계": "shadow-only",
+                "적용단계": "report_only_observation",
                 "기대효과": "가장 큰 음수 기여 패턴을 별도 축으로 분리해 EV 누수 원인을 좁힌다.",
                 "검증지표": f"빈도={top_loss['n']}, 중앙손익={top_loss['median_profit']:+.3f}%, 기여손익={top_loss['contrib_profit']:+.3f}%",
                 "필요표본": "동일 패턴 10건 이상",
             }
         )
     for item in opportunity_cost[:2]:
-        stage = "canary-ready" if item["blocker"] == "AI threshold miss" else "observability"
+        stage = "canary_only_candidate_after_workorder" if item["blocker"] == "AI threshold miss" else "report_only_observation"
         backlog.append(
             {
                 "title": f"{item['blocker']} EV 회수 조건 점검",
@@ -264,6 +291,8 @@ def analyze_patterns() -> None:
         return
 
     result = {
+        "schema_version": SCHEMA_VERSION,
+        "metric_contract": METRIC_CONTRACT,
         "cohort_summary": cohort_summary(trade_df),
         "loss_patterns": extract_loss_patterns(trade_df, seq_df),
         "profit_patterns": extract_profit_patterns(trade_df),
