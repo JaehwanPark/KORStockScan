@@ -22,17 +22,27 @@
 
 ## 장전 체크리스트 (08:45~09:00)
 
-- [ ] `[ThresholdEnvAutoApplyPreopen0519] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-05-19`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
+- [x] `[ThresholdEnvAutoApplyPreopen0519] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-05-19`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-18.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-18.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
   - 판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.
   - 금지: blocked family, approval artifact missing, same-stage owner conflict를 수동 env override로 우회하지 않는다.
-  - 다음 액션: `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.
+  - 완료 메모 (`2026-05-19 08:25 KST`): `warning`. `logs/threshold_cycle_preopen_cron.log`는 `[DONE] threshold-cycle preopen target_date=2026-05-19 finished_at=2026-05-19T07:35:01+0900`를 남겼고, apply plan은 `status=auto_bounded_live_ready`, `apply_mode=auto_bounded_live`, `runtime_change=true`다. `threshold_runtime_env_2026-05-19.{env,json}`은 07:52에 재생성되어 `KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED=true`, latency classifier age/jitter/spread override, `KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED=true`를 포함한다. 이는 사용자 `operator_override_reopen_score65_74_probe` lock 반영이며 threshold/provider/order guard 우회 권한은 없다. 봇 PID `7079`는 `2026-05-19 07:52:26 KST` 시작했고 `/proc/7079/environ`에서 위 runtime env 로드를 확인했다.
+  - 다음 액션: `applied_guard_passed_env_with_operator_reopen_warning`으로 닫는다. 장중에는 `RuntimeEnvIntradayObserve0519`에서 score65_74 probe, latency classifier profile, rollback guard provenance를 분리 확인한다.
 
-- [ ] `[OpenAIWSPreopenConfirm0519] OpenAI WS 유지 설정 및 entry_price/analyze_target provenance 확인` (`Due: 2026-05-19`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: RuntimeStability`)
+- [x] `[OpenAIWSPreopenConfirm0519] OpenAI WS 유지 설정 및 entry_price/analyze_target provenance 확인` (`Due: 2026-05-19`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: RuntimeStability`)
   - Source: [openai_ws_stability_2026-05-18.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-18.md), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py)
   - 판정 기준: startup env의 OpenAI route/Responses WS 설정과 `analyze_target`, `entry_price` transport provenance를 분리 확인한다.
   - 금지: provider transport 확인을 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경으로 해석하지 않는다.
-  - 다음 액션: entry_price transport 표본이 부족하면 장중 표본 재확인 항목과 연결한다.
+  - 완료 메모 (`2026-05-19 08:25 KST`): `pass`. `run_bot.sh`는 `KORSTOCKSCAN_SCALPING_AI_ROUTE=openai`, `KORSTOCKSCAN_OPENAI_RESPONSES_WS_ENABLED=true`, pool size `2`, timeout `15000ms`, max output tokens `512`를 export한다. 봇 PID `7079`의 `/proc/7079/environ`에서도 동일 env 로드를 확인했다. `openai_ws_stability_2026-05-18.md`는 decision=`keep_ws`, unique WS calls=`799`, endpoint counts=`analyze_target 797`, `entry_price 2`, WS fallback=`0/799`, WS success rate=`1.0`, entry_price instrumentation_gap=`False`로 닫혔다.
+  - 다음 액션: provider/threshold/order guard 변경 없이 OpenAI WS 유지. 당일 live 표본은 장중 provenance 항목에서 `openai_endpoint_name`, `openai_schema_name`, `openai_ws_used`, `openai_ws_http_fallback`을 계속 분리 확인한다.
+
+## Runbook 운영 확인 기록
+
+- [x] `[PreopenAutomationHealthCheck20260519] 장전 자동화체인 상태 확인` (`Due: 2026-05-19`, `Slot: PREOPEN`, `TimeWindow: 08:00~09:00`, `Track: RunbookOps`)
+  - Source: [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md#장전-확인-절차)
+  - 판정: `warning`
+  - 근거: preopen apply `[DONE]` marker와 runtime env 생성은 확인됐다. `final_ensemble_scanner target_date=2026-05-19`도 `[DONE]`으로 종료했고 추천 3건이 적재됐다. apply plan은 `auto_bounded_live_ready`, runtime env는 07:52 재생성본 기준으로 로드됐다. 봇 PID `7079`는 env 재생성 이후 시작되어 `/proc/7079/environ`에서 runtime env와 OpenAI WS env 로드를 확인했다. 다만 `score65_74_recovery_probe`는 사용자 operator reopen lock으로 `true`가 반영된 상태라 순수 자동 apply와 구분한다.
+  - 다음 액션: 장중 `RuntimeEnvIntradayObserve0519`에서 operator reopen cohort와 latency classifier profile provenance를 확인하고, 장중 threshold/provider/order guard 변경은 하지 않는다.
 
 ## 장중 체크리스트 (09:05~15:20)
 
