@@ -9,6 +9,14 @@ from src.engine import threshold_cycle_ev_report as mod
 def _isolate_pattern_lab_audit_dirs(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing_currentness_audit")
     monkeypatch.setattr(mod, "PATTERN_LAB_PROPAGATION_AUDIT_DIR", tmp_path / "missing_propagation_audit")
+    monkeypatch.setattr(
+        mod,
+        "scalp_entry_adm_report_paths",
+        lambda target_date: (
+            tmp_path / "missing_entry_adm" / f"scalp_entry_action_decision_matrix_{target_date}.json",
+            tmp_path / "missing_entry_adm" / f"scalp_entry_action_decision_matrix_{target_date}.md",
+        ),
+    )
 
 
 def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeypatch):
@@ -235,6 +243,7 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
     assert report["missed_probe_counterfactual"]["score65_74_probe_candidates"] == 2
     assert report["missed_probe_counterfactual"]["real_execution_quality_source"] == "none"
     assert report["pattern_lab_automation"]["consensus_count"] == 1
+    assert report["scalp_entry_action_decision_matrix"]["available"] is False
     assert report["swing_runtime_approval"]["requested"] == 1
     assert (
         report["swing_runtime_approval"]["real_canary_policy"]["policy_id"]
@@ -254,6 +263,7 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
     markdown = (ev_dir / "threshold_cycle_ev_2026-05-08.md").read_text(encoding="utf-8")
     assert "Missed Probe Counterfactual" in markdown
     assert "Swing Runtime Approval" in markdown
+    assert "Scalp Entry ADM" in markdown
     assert "swing_one_share_real_canary_phase0" in markdown
     assert "AVG_DOWN, PYRAMID, SCALE_IN" in markdown
     assert "swing_runtime_approval:2026-05-08:swing_model_floor" in markdown

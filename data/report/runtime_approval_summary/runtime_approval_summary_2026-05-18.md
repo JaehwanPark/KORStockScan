@@ -2,16 +2,17 @@
 
 - 목적: 스캘핑 threshold-cycle 판정과 스윙 runtime approval 판정을 한 화면에서 보는 읽기 전용 요약이다.
 - runtime_mutation_allowed: `False`
-- scalping_items/selected: `14` / `2`
-- scalping_legacy_hard_gate_risk_counts: `{'approval_or_contract_required': 2, 'intentional_safety_guard': 4, 'no_unreviewed_hard_gate': 8}`
+- scalping_items/selected: `15` / `2`
+- scalping_legacy_hard_gate_risk_counts: `{'approval_or_contract_required': 2, 'intentional_safety_guard': 4, 'no_unreviewed_hard_gate': 9}`
 - swing_blocked/requested/approved: `14` / `0` / `0`
 - swing_legacy_hard_gate_risk_counts: `{'contract_gap': 4, 'no_unreviewed_hard_gate': 3, 'same_stage_deferred': 2, 'sample_or_contract_gap': 3, 'source_quality_or_approval_required': 1, 'source_quality_or_contract_gap': 1}`
 - panic_approval_requested: `0`
+- scalp_entry_adm_status: `warning`
 - pattern_lab_currentness_status: `pass`
 - pattern_lab_propagation_status: `warning`
-- env_generated_at: `2026-05-18T15:16:14`
+- env_generated_at: `2026-05-18T18:24:06`
 - first_bot_start_at: `2026-05-18T07:40:03`
-- first_bot_start_after_env_at: `2026-05-18T15:17:34`
+- first_bot_start_after_env_at: `2026-05-18T18:25:44`
 - pre_env_boot_gap: `True`
 
 ## Scalping
@@ -31,6 +32,18 @@
 | `scale_in_price_guard` | 추가매수 직전 best bid/defensive limit, spread, stale quote로 가격품질을 보장하는 축 | 기존 적용 유지: 추가매수 가격품질 guard ON | `hold` | `intentional_pre_submit_safety_guard` | scale-in price quality EV/source-quality only | 현재 적용 상태와 값을 유지하고 추가 env 변경은 하지 않는다 | 1 | `-` | 유지 |
 | `position_sizing_cap_release` | 신규/추가매수 1주 cap을 풀 수 있는지 EV와 downside 기준으로 보는 축 | 미적용: 1주 cap 유지 | `hold_sample` | `policy_approval_or_contract_gap` | separate approval artifact/workorder before runtime size change | 축은 유지/관찰하지만 표본 부족으로 runtime 변경은 하지 않는다 | 0.6333 | `-` | 표본 부족 |
 | `position_sizing_dynamic_formula` | 설명 미등록 | 관찰/리포트 only: runtime 변경 없음 | `hold_sample` | `policy_contract_gap` | notional/source-quality adjusted EV plus approval contract | 축은 유지/관찰하지만 표본 부족으로 runtime 변경은 하지 않는다 | 0 | `-` | 표본 부족 |
+| `scalp_entry_action_decision_matrix_advisory` | 스캘핑 entry action(BUY_NOW/WAIT_REQUOTE/SKIP_STALE/BUY_DEFENSIVE 등)을 matrix EV로 비교해 AI action을 보정하는 운영 override 축 | 운영 override runtime bias: AI BUY를 WAIT/DROP 또는 defensive bias로 보정, submit safety guard 우선 | `hold_sample` | `entry_adm_runtime_bias_operator_override` | daily scalp_entry_action_decision_matrix -> threshold EV/runtime summary/workorder/pattern lab -> next runtime env | 운영 override runtime bias는 AI BUY를 WAIT/DROP 또는 defensive bias로 보정한다. daily action bucket EV와 runtime forced_action provenance가 충분해야 다음 env 튜닝 판단으로 넘어간다. | 없음 | `-` | 표본 부족, ADM action bucket 누락, ADM prompt context 미적재 |
+
+## Scalp Entry ADM
+- status: `warning`
+- runtime_bias_scope: `force_wait_force_drop_buy_defensive_bias`
+- joined_action_ev_pct: `-2.225`
+- joined_sample/sample_floor: `2` / `20`
+- prompt_applied_count: `0`
+- missing_actions: `['WAIT_REQUOTE', 'SKIP_STALE', 'BUY_DEFENSIVE', 'SKIP_PRE_SUBMIT_SAFETY']`
+- top_actions: `[{'action': 'BUY_NOW', 'sample_count': 2, 'joined_sample': 2, 'source_quality_adjusted_ev_pct': -2.225}, {'action': 'NO_BUY_AI', 'sample_count': 70, 'joined_sample': 0, 'source_quality_adjusted_ev_pct': 0.0}, {'action': 'SKIP_SOURCE_QUALITY', 'sample_count': 1, 'joined_sample': 0, 'source_quality_adjusted_ev_pct': 0.0}]`
+- ready_for_daily_policy_tuning: `False`
+- warnings: `['joined_sample_below_sample_floor', 'missing_action_bucket', 'prompt_context_not_loaded']`
 
 ## Swing
 | 항목 | 설명 | 현재 적용 | 상태 | Gate 분류 | 튜닝 경로 | 판정 해석 | 점수 | 계약 | 차단/판정 사유 |
@@ -54,7 +67,7 @@
 | 항목 | 설명 | 현재 적용 | 상태 | Gate 분류 | 튜닝 경로 | 판정 해석 | 점수 | 계약 | 차단/판정 사유 |
 | --- | --- | --- | --- | --- | --- | --- | ---: | --- | --- |
 | `panic_entry_freeze_guard` | 패닉셀 구간에서 scalping 신규 BUY pre-submit freeze canary를 열 수 있는지 보는 축 | 계약 미준비: approval artifact를 만들어도 pre-submit freeze runtime 반영 불가 | `hold` | `-` | - | 현재 적용 상태와 값을 유지하고 추가 env 변경은 하지 않는다 | 0.3662 | `contract_missing` | 유지 |
-| `panic_buy_runner_tp_canary` | 패닉바잉 구간에서 fixed TP 전량청산 대비 runner 유지가 missed upside를 줄이는지 보는 축 | report-only: TP/trailing/live exit 변경 없음 | `freeze` | `-` | - | 계측/DB/safety 문제로 runtime 변경을 금지한다 | 0.45 | `contract_missing` | source_quality_blocker, panic_buy_orderbook_collector_coverage_gap |
+| `panic_buy_runner_tp_canary` | 패닉바잉 구간에서 fixed TP 전량청산 대비 runner 유지가 missed upside를 줄이는지 보는 축 | report-only: TP/trailing/live exit 변경 없음 | `freeze` | `-` | - | 계측/DB/safety 문제로 runtime 변경을 금지한다 | 0.45 | `contract_missing` | 소스 품질 차단, panic_buy_orderbook_collector_coverage_gap |
 
 ## Pattern Lab Audits
 - currentness: status=`pass` fail=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-18.json`

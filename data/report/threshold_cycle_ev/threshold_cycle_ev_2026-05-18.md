@@ -40,6 +40,14 @@
 - actual_order_submitted: `False` / broker_order_forbidden: `True`
 - authority: `missed_probe_ev_only_not_broker_execution`
 
+## Scalp Entry ADM
+- artifact: `/home/ubuntu/KORStockScan/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_2026-05-18.json`
+- status: `warning` / authority: `entry_advisory_prompt_context_only`
+- total/joined/floor: `73` / `2` / `20`
+- prompt_applied_count: `0`
+- missing_actions: `['WAIT_REQUOTE', 'SKIP_STALE', 'BUY_DEFENSIVE', 'SKIP_PRE_SUBMIT_SAFETY']`
+- top_actions: `[{'action': 'BUY_NOW', 'sample_count': 2, 'joined_sample': 2, 'source_quality_adjusted_ev_pct': -2.225}, {'action': 'NO_BUY_AI', 'sample_count': 70, 'joined_sample': 0, 'source_quality_adjusted_ev_pct': 0.0}, {'action': 'SKIP_SOURCE_QUALITY', 'sample_count': 1, 'joined_sample': 0, 'source_quality_adjusted_ev_pct': 0.0}]`
+
 ## Pattern Lab Automation
 - artifact: `/home/ubuntu/KORStockScan/data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_2026-05-18.json`
 - fresh: gemini=`True` claude=`True`
@@ -63,8 +71,8 @@
 - artifact: `/home/ubuntu/KORStockScan/data/report/pipeline_event_verbosity/pipeline_event_verbosity_2026-05-18.json`
 - state: `v2_shadow_missing`
 - recommended_workorder_state: `open_shadow_order`
-- high_volume_line_count: `1423700`
-- high_volume_byte_share_pct: `96.57`
+- high_volume_line_count: `1443016`
+- high_volume_byte_share_pct: `96.59`
 - parity_ok: `False`
 - suppress_eligibility: `False`
 
@@ -100,7 +108,7 @@
 - artifact: `/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-18.json`
 - markdown: `/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-18.md`
 - selected_order_count: `12`
-- decision_counts: `{'implement_now': 9, 'attach_existing_family': 8, 'design_family_candidate': 6, 'defer_evidence': 11, 'reject': 3}`
+- decision_counts: `{'implement_now': 3, 'attach_existing_family': 15, 'design_family_candidate': 6, 'defer_evidence': 11, 'reject': 3}`
 
 ## Approval Requests
 - none
@@ -110,9 +118,9 @@
 
 ## Calibration Decisions
 ## Code Improvement Top Orders
-- `order_perf_buy_funnel_json_scan` decision=`implement_now` subsystem=`buy_funnel_sentinel`
 - `order_pipeline_event_compaction_v2_shadow` decision=`implement_now` subsystem=`runtime_instrumentation`
 - `order_high_volume_diagnostic_stage_contract_labels` decision=`implement_now` subsystem=`runtime_instrumentation`
+- `order_scalp_entry_adm_daily_tuning_coverage` decision=`implement_now` subsystem=`entry_funnel`
 
 ## Pattern Lab Top Findings
 - `AI threshold dominance` route=`existing_family` family=`score65_74_recovery_probe`
@@ -136,4 +144,7 @@
 
 ## Warnings
 - `swing_lab_dq:OFI/QI stale/missing ratio: 0.4304 (68/158); reasons: micro_missing=68, observer_unhealthy=6, micro_not_ready=6, state_insufficient=6`
+- `scalp_entry_adm:joined_sample_below_sample_floor`
+- `scalp_entry_adm:missing_action_bucket`
+- `scalp_entry_adm:prompt_context_not_loaded`
 - `pattern_lab_propagation_audit_warning`

@@ -459,6 +459,73 @@ def _threshold_ev_followup_orders(ev_report: dict[str, Any]) -> list[dict[str, A
     return orders
 
 
+def _entry_adm_followup_orders(ev_report: dict[str, Any]) -> list[dict[str, Any]]:
+    adm = (
+        ev_report.get("scalp_entry_action_decision_matrix")
+        if isinstance(ev_report.get("scalp_entry_action_decision_matrix"), dict)
+        else {}
+    )
+    if not adm:
+        return []
+    joined = _safe_int(adm.get("joined_sample"), 0)
+    floor = _safe_int(adm.get("sample_floor"), 20)
+    missing_actions = adm.get("missing_actions") if isinstance(adm.get("missing_actions"), list) else []
+    prompt_applied_count = _safe_int(adm.get("prompt_applied_count"), 0)
+    issues: list[str] = []
+    if joined < floor:
+        issues.append("joined_sample_below_sample_floor")
+    if missing_actions:
+        issues.append("missing_action_bucket")
+    if prompt_applied_count <= 0:
+        issues.append("prompt_context_not_loaded")
+    if str(adm.get("status") or "").lower() == "missing":
+        issues.append("source_quality_gap")
+    if not issues:
+        return []
+    sources = ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
+    evidence = [
+        f"status={adm.get('status')}",
+        f"joined_sample={joined}",
+        f"sample_floor={floor}",
+        f"prompt_applied_count={prompt_applied_count}",
+    ]
+    if missing_actions:
+        evidence.append("missing_actions=" + ",".join(str(value) for value in missing_actions))
+    source_path = sources.get("scalp_entry_action_decision_matrix") or adm.get("artifact")
+    return [
+        {
+            "order_id": "order_scalp_entry_adm_daily_tuning_coverage",
+            "title": "scalp entry ADM daily tuning coverage",
+            "source_report_type": "threshold_cycle_ev",
+            "lifecycle_stage": "entry",
+            "target_subsystem": "entry_funnel",
+            "route": "instrumentation_order",
+            "mapped_family": "scalp_entry_action_decision_matrix_advisory",
+            "threshold_family": "scalp_entry_action_decision_matrix_advisory",
+            "improvement_type": "instrumentation_report_provenance",
+            "confidence": "consensus",
+            "priority": 3,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "expected_ev_effect": "Keep BUY_NOW/WAIT_REQUOTE/SKIP_STALE/BUY_DEFENSIVE/NO_BUY_AI/SKIP_SOURCE_QUALITY/SKIP_PRE_SUBMIT_SAFETY action buckets joined to post-sell outcomes and runtime forced_action provenance for daily entry policy tuning.",
+            "evidence": evidence,
+            "source_paths": [str(source_path)] if source_path else [],
+            "next_postclose_metric": "scalp_entry_action_decision_matrix should meet sample_floor, include all action buckets, show prompt_applied_count, and expose entry_adm_runtime_effect/forced_action evidence when runtime bias env is enabled.",
+            "files_likely_touched": [
+                "src/engine/scalp_entry_action_decision_matrix.py",
+                "src/engine/sniper_state_handlers.py",
+                "src/engine/scalp_entry_adm_runtime.py",
+                "src/engine/threshold_cycle_ev_report.py",
+            ],
+            "acceptance_tests": [
+                "PYTHONPATH=. .venv/bin/pytest src/tests/test_scalp_entry_action_decision_matrix.py src/tests/test_build_code_improvement_workorder.py",
+                "runtime_effect remains false and broker submit safety guards remain owner",
+            ],
+            "adm_issue_types": issues,
+        }
+    ]
+
+
 def _pipeline_event_verbosity_report_path(target_date: str) -> Path:
     return PIPELINE_EVENT_VERBOSITY_DIR / f"pipeline_event_verbosity_{target_date}.json"
 
@@ -1026,6 +1093,9 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "codebase_performance_workorder": codebase_performance_path,
             "pattern_lab_currentness_audit": pattern_lab_currentness_path,
     }
+    ev_sources = ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
+    if ev_sources.get("scalp_entry_action_decision_matrix"):
+        source_paths["scalp_entry_action_decision_matrix"] = Path(str(ev_sources.get("scalp_entry_action_decision_matrix")))
     if calibration_source_path is not None:
         source_paths["threshold_cycle_calibration"] = calibration_source_path
     source_fingerprint = _source_fingerprint(source_paths)
@@ -1059,6 +1129,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     ]
     threshold_ev_orders = [
         *_threshold_ev_followup_orders(ev_report),
+        *_entry_adm_followup_orders(ev_report),
         *_window_policy_audit_followup_orders(calibration_report),
         *_panic_lifecycle_followup_orders(calibration_report),
         *_pipeline_event_verbosity_followup_orders(pipeline_event_verbosity),
@@ -1106,6 +1177,10 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "swing_improvement_automation": str(swing_source_path) if swing_source_path.exists() else None,
             "swing_pattern_lab_automation": str(swing_lab_source_path) if swing_lab_source_path.exists() else None,
             "threshold_cycle_ev": str(ev_path) if ev_path.exists() else None,
+            "scalp_entry_action_decision_matrix": str(source_paths["scalp_entry_action_decision_matrix"])
+            if "scalp_entry_action_decision_matrix" in source_paths
+            and Path(source_paths["scalp_entry_action_decision_matrix"]).exists()
+            else None,
             "pipeline_event_verbosity": str(pipeline_event_verbosity_path)
             if pipeline_event_verbosity_path.exists()
             else None,

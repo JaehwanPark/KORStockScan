@@ -71,6 +71,9 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "panic_sell_defense": REPORT_DIR / "panic_sell_defense" / f"panic_sell_defense_{target_date}.json",
         "panic_buying": REPORT_DIR / "panic_buying" / f"panic_buying_{target_date}.json",
         "threshold_cycle_ev": REPORT_DIR / "threshold_cycle_ev" / f"threshold_cycle_ev_{target_date}.json",
+        "scalp_entry_action_decision_matrix": REPORT_DIR
+        / "scalp_entry_action_decision_matrix"
+        / f"scalp_entry_action_decision_matrix_{target_date}.json",
         "code_improvement_workorder": REPORT_DIR / "code_improvement_workorder" / f"code_improvement_workorder_{target_date}.json",
         "runtime_approval_summary": REPORT_DIR / "runtime_approval_summary" / f"runtime_approval_summary_{target_date}.json",
         "pattern_lab_currentness_audit": REPORT_DIR
@@ -202,6 +205,12 @@ def build_threshold_cycle_postclose_verification(target_date: str) -> dict[str, 
         "threshold_cycle_ev_sources_pattern_lab_propagation_audit": (
             ((ev_report.get("sources") or {}).get("pattern_lab_propagation_audit")) or None
         ),
+        "threshold_cycle_ev_sources_scalp_entry_action_decision_matrix": (
+            ((ev_report.get("sources") or {}).get("scalp_entry_action_decision_matrix")) or None
+        ),
+        "runtime_approval_summary_sources_scalp_entry_action_decision_matrix": (
+            ((runtime_summary.get("sources") or {}).get("scalp_entry_action_decision_matrix")) or None
+        ),
         "runtime_approval_summary_sources_pattern_lab_propagation_audit": (
             ((runtime_summary.get("sources") or {}).get("pattern_lab_propagation_audit")) or None
         ),
@@ -214,6 +223,7 @@ def build_threshold_cycle_postclose_verification(target_date: str) -> dict[str, 
         "deepseek_swing_lab",
         "pattern_lab_currentness_audit",
         "pattern_lab_propagation_audit",
+        "scalp_entry_adm",
         "code_improvement_workorder",
         "daily_ev",
         "runtime_approval_summary",
@@ -230,6 +240,7 @@ def build_threshold_cycle_postclose_verification(target_date: str) -> dict[str, 
             "deepseek_swing_lab",
             "pattern_lab_currentness_audit",
             "pattern_lab_propagation_audit",
+            "scalp_entry_adm",
             "code_improvement_workorder",
             "daily_ev",
             "runtime_approval_summary",
@@ -240,6 +251,7 @@ def build_threshold_cycle_postclose_verification(target_date: str) -> dict[str, 
     disabled_artifact_labels = {
         "pattern_lab_currentness_audit" if "pattern_lab_currentness_audit" in disabled_stage_flags else "",
         "pattern_lab_propagation_audit" if "pattern_lab_propagation_audit" in disabled_stage_flags else "",
+        "scalp_entry_action_decision_matrix" if "scalp_entry_adm" in disabled_stage_flags else "",
         "code_improvement_workorder" if "code_improvement_workorder" in disabled_stage_flags else "",
         "threshold_cycle_ev" if "daily_ev" in disabled_stage_flags else "",
         "runtime_approval_summary" if "runtime_approval_summary" in disabled_stage_flags else "",
@@ -269,6 +281,10 @@ def build_threshold_cycle_postclose_verification(target_date: str) -> dict[str, 
     if "code_improvement_workorder" in disabled_stage_flags:
         missing_downstream_links = [
             key for key in missing_downstream_links if "code_improvement_workorder" not in key
+        ]
+    if "scalp_entry_adm" in disabled_stage_flags:
+        missing_downstream_links = [
+            key for key in missing_downstream_links if "scalp_entry_action_decision_matrix" not in key
         ]
     if "daily_ev" in disabled_stage_flags or "runtime_approval_summary" in disabled_stage_flags:
         missing_downstream_links = []

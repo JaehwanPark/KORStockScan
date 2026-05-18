@@ -31,6 +31,10 @@ from src.engine.holding_exit_matrix_runtime import (
     build_holding_exit_matrix_runtime_context,
     merge_holding_exit_matrix_result_fields,
 )
+from src.engine.scalp_entry_adm_runtime import (
+    build_scalp_entry_adm_runtime_context,
+    merge_scalp_entry_adm_result_fields,
+)
 from src.utils.logger import log_error
 from src.utils.constants import TRADING_RULES
 from src.engine.macro_briefing_complete import build_scanner_data_input
@@ -1327,6 +1331,7 @@ class DeepSeekSniperEngine:
         cache_strategy = strategy
         normalized_profile = "shared"
         matrix_runtime = None
+        entry_adm_runtime = None
         if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
             prompt_type = "swing"
             prompt = SWING_SYSTEM_PROMPT
@@ -1336,11 +1341,27 @@ class DeepSeekSniperEngine:
                 prompt_profile=normalized_profile,
                 ws_data=ws_data if isinstance(ws_data, dict) else {},
                 recent_candles=recent_candles if isinstance(recent_candles, list) else [],
-                advisory_enabled=bool(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_ADVISORY_ENABLED", False)),
+                advisory_enabled=bool(
+                    getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_ADVISORY_ENABLED", False)
+                    or getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED", False)
+                ),
+            )
+            entry_adm_runtime = build_scalp_entry_adm_runtime_context(
+                prompt_profile=normalized_profile,
+                ws_data=ws_data if isinstance(ws_data, dict) else {},
+                advisory_enabled=bool(
+                    getattr(TRADING_RULES, "SCALP_ENTRY_ADM_ADVISORY_ENABLED", False)
+                    or getattr(TRADING_RULES, "SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED", False)
+                ),
             )
             if normalized_profile != "shared":
                 cache_strategy = f"{strategy}:{normalized_profile}"
                 cache_strategy = f"{cache_strategy}:adm:{matrix_runtime.get('cache_token', 'disabled')}"
+                cache_strategy = f"{cache_strategy}:{entry_adm_runtime.get('cache_token', 'disabled')}"
+        def _merge_runtime_fields(payload):
+            merged = merge_holding_exit_matrix_result_fields(payload, matrix_runtime)
+            return merge_scalp_entry_adm_result_fields(merged, entry_adm_runtime)
+
         cache_key = self._build_analysis_cache_key_with_profile(
             target_name=target_name,
             strategy=cache_strategy,
@@ -1352,7 +1373,7 @@ class DeepSeekSniperEngine:
         )
         cached_result = self._cache_get("_analysis_cache", cache_key)
         if cached_result is not None:
-            cached_result = merge_holding_exit_matrix_result_fields(cached_result, matrix_runtime)
+            cached_result = _merge_runtime_fields(cached_result)
             return self._annotate_analysis_result(
                 cached_result,
                 prompt_type=prompt_type,
@@ -1368,10 +1389,7 @@ class DeepSeekSniperEngine:
 
         if not self.lock.acquire(blocking=False):
             return self._annotate_analysis_result(
-                merge_holding_exit_matrix_result_fields(
-                    {"action": "WAIT", "score": 50, "reason": "AI 경합 (다른 종목 분석 중)"},
-                    matrix_runtime,
-                ),
+                _merge_runtime_fields({"action": "WAIT", "score": 50, "reason": "AI 경합 (다른 종목 분석 중)"}),
                 prompt_type=prompt_type,
                 prompt_version=prompt_version,
                 response_ms=int((time.perf_counter() - analysis_started) * 1000),
@@ -1386,7 +1404,7 @@ class DeepSeekSniperEngine:
         try:
             cached_result = self._cache_get("_analysis_cache", cache_key)
             if cached_result is not None:
-                cached_result = merge_holding_exit_matrix_result_fields(cached_result, matrix_runtime)
+                cached_result = _merge_runtime_fields(cached_result)
                 return self._annotate_analysis_result(
                     cached_result,
                     prompt_type=prompt_type,
@@ -1402,10 +1420,7 @@ class DeepSeekSniperEngine:
 
             if self.ai_disabled:
                 return self._annotate_analysis_result(
-                    merge_holding_exit_matrix_result_fields(
-                        {"action": "DROP", "score": 0, "reason": "AI 엔진 일시 중단 (연속 실패)"},
-                        matrix_runtime,
-                    ),
+                    _merge_runtime_fields({"action": "DROP", "score": 0, "reason": "AI 엔진 일시 중단 (연속 실패)"}),
                     prompt_type=prompt_type,
                     prompt_version=prompt_version,
                     response_ms=int((time.perf_counter() - analysis_started) * 1000),
@@ -1419,10 +1434,7 @@ class DeepSeekSniperEngine:
 
             if time.time() - self.last_call_time < self.min_interval:
                 return self._annotate_analysis_result(
-                    merge_holding_exit_matrix_result_fields(
-                        {"action": "WAIT", "score": 50, "reason": "AI 쿨타임"},
-                        matrix_runtime,
-                    ),
+                    _merge_runtime_fields({"action": "WAIT", "score": 50, "reason": "AI 쿨타임"}),
                     prompt_type=prompt_type,
                     prompt_version=prompt_version,
                     response_ms=int((time.perf_counter() - analysis_started) * 1000),
@@ -1442,6 +1454,8 @@ class DeepSeekSniperEngine:
                 formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
                 if matrix_runtime and matrix_runtime.get("prompt_context"):
                     formatted_data = f"{formatted_data}\n\n{matrix_runtime['prompt_context']}"
+                if entry_adm_runtime and entry_adm_runtime.get("prompt_context"):
+                    formatted_data = f"{formatted_data}\n\n{entry_adm_runtime['prompt_context']}"
                 target_model = self._get_tier1_model()
                 feature_audit_fields = build_scalping_feature_audit_fields(
                     extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles)
@@ -1467,7 +1481,7 @@ class DeepSeekSniperEngine:
                 result = self._normalize_scalping_action_schema(result, prompt_type=prompt_type)
                 result.update(feature_audit_fields)
 
-            result = merge_holding_exit_matrix_result_fields(result, matrix_runtime)
+            result = _merge_runtime_fields(result)
             self._mark_successful_ai_call()
             self._cache_set(
                 "_analysis_cache",
@@ -1495,10 +1509,7 @@ class DeepSeekSniperEngine:
             log_error(f"🚨 [{target_name}][{strategy}] DeepSeek 실시간 분석 에러 (연속 실패 {failure_count}회, API키 인덱스 {self.current_api_key_index}): {e}")
 
             return self._annotate_analysis_result(
-                merge_holding_exit_matrix_result_fields(
-                    {"action": "WAIT", "score": 50, "reason": f"에러: {e}"},
-                    matrix_runtime,
-                ),
+                _merge_runtime_fields({"action": "WAIT", "score": 50, "reason": f"에러: {e}"}),
                 prompt_type=prompt_type,
                 prompt_version=prompt_version,
                 response_ms=int((time.perf_counter() - analysis_started) * 1000),
@@ -2016,6 +2027,17 @@ class DeepSeekSniperEngine:
                 flow_history=flow_history,
                 decision_kind=decision_kind,
             )
+            matrix_runtime = build_holding_exit_matrix_runtime_context(
+                prompt_profile="holding",
+                ws_data=ws_data if isinstance(ws_data, dict) else {},
+                recent_candles=recent_candles if isinstance(recent_candles, list) else [],
+                advisory_enabled=bool(
+                    getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_ADVISORY_ENABLED", False)
+                    or getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED", False)
+                ),
+            )
+            if matrix_runtime.get("prompt_context"):
+                user_input = f"{user_input}\n\n{matrix_runtime['prompt_context']}"
             result = self._call_deepseek_safe(
                 SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
                 user_input,
@@ -2024,6 +2046,11 @@ class DeepSeekSniperEngine:
                 model_override=self._get_tier2_model(),
             )
             normalized = self._normalize_holding_flow_result(result, decision_kind=decision_kind)
+            normalized = merge_holding_exit_matrix_result_fields(
+                normalized,
+                matrix_runtime,
+                position_ctx=position_ctx if isinstance(position_ctx, dict) else {},
+            )
             self._mark_successful_ai_call(update_last_call_time=False)
             return self._annotate_analysis_result(
                 normalized,

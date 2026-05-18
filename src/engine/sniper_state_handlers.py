@@ -49,6 +49,7 @@ from src.engine.sniper_strength_momentum import evaluate_scalping_strength_momen
 from src.engine.sniper_strength_shadow_feedback import record_shadow_candidate
 from src.engine.sniper_gatekeeper_replay import record_gatekeeper_snapshot
 from src.engine.sniper_post_sell_feedback import record_sim_post_sell_candidate
+from src.engine.holding_exit_matrix_runtime import resolve_holding_exit_matrix_scale_in_bias
 from src.engine.sniper_dynamic_thresholds import (
     estimate_turnover_hint,
     get_dynamic_scalp_thresholds,
@@ -1706,6 +1707,7 @@ def _mark_scalp_simulated_holding(
         "scalp_sim_buy_order_assumed_filled",
         **_scalp_sim_event_fields(
             threshold_family="pre_submit_price_guard",
+            entry_adm_candidate_id=stock.get("entry_adm_candidate_id"),
             sim_record_id=stock.get("sim_record_id"),
             sim_parent_record_id=stock.get("sim_parent_record_id"),
             ord_no=ord_no,
@@ -1727,6 +1729,7 @@ def _mark_scalp_simulated_holding(
         "scalp_sim_holding_started",
         **_scalp_sim_event_fields(
             threshold_family="statistical_action_weight",
+            entry_adm_candidate_id=stock.get("entry_adm_candidate_id"),
             sim_record_id=stock.get("sim_record_id"),
             sim_parent_record_id=stock.get("sim_parent_record_id"),
             requested_qty=qty,
@@ -1887,6 +1890,7 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
     pre_ai_context_fields = _scalp_pre_ai_gate_context_log_fields(
         runtime.get("scalp_pre_ai_gate_context") if isinstance(runtime, dict) else {}
     )
+    entry_adm_candidate_id = _entry_adm_candidate_id(stock, code)
     sim_record_id = _simulated_order_no("SCALPSIM", code)
     sim_ord_no = _simulated_order_no("SIMBUY", code)
     sim_target = dict(stock)
@@ -1902,6 +1906,7 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
             "scalp_live_simulator": True,
             "simulated_order": True,
             "actual_order_submitted": False,
+            "entry_adm_candidate_id": entry_adm_candidate_id,
             "sim_record_id": sim_record_id,
             "sim_parent_record_id": stock.get("id"),
             "scalp_sim_entry_limit_price": limit_price,
@@ -1964,6 +1969,7 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
                 "scalp_sim_entry_ai_price_skip_order",
                 **_scalp_sim_event_fields(
                     threshold_family="pre_submit_price_guard",
+                    entry_adm_candidate_id=entry_adm_candidate_id,
                     sim_record_id=sim_record_id,
                     sim_parent_record_id=stock.get("id"),
                     ai_entry_price_canary_action=latency_gate.get("ai_entry_price_canary_action"),
@@ -1994,6 +2000,7 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
                 "scalp_sim_entry_ai_price_applied",
                 **_scalp_sim_event_fields(
                     threshold_family="pre_submit_price_guard",
+                    entry_adm_candidate_id=entry_adm_candidate_id,
                     sim_record_id=sim_record_id,
                     sim_parent_record_id=stock.get("id"),
                     original_limit_price=stock.get("target_buy_price") or stock.get("entry_armed_target_buy_price"),
@@ -2023,6 +2030,7 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
             "scalp_sim_entry_submit_revalidation_warning",
             **_scalp_sim_event_fields(
                 threshold_family="pre_submit_price_guard",
+                entry_adm_candidate_id=entry_adm_candidate_id,
                 sim_record_id=sim_record_id,
                 sim_parent_record_id=stock.get("id"),
                 **sim_submit_revalidation_fields,
@@ -2036,6 +2044,7 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
             "scalp_sim_entry_submit_revalidation_block",
             **_scalp_sim_event_fields(
                 threshold_family="pre_submit_price_guard",
+                entry_adm_candidate_id=entry_adm_candidate_id,
                 sim_record_id=sim_record_id,
                 sim_parent_record_id=stock.get("id"),
                 block_reason="stale_context_or_quote",
@@ -2043,6 +2052,19 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
                 **sim_submit_revalidation_fields,
                 **sim_price_snapshot,
             ),
+        )
+        _emit_scalp_entry_adm_snapshot(
+            sim_target,
+            code,
+            "scalp_sim_entry_submit_revalidation_block",
+            ai_score=current_ai_score,
+            chosen_action="SKIP_STALE",
+            latency_gate=latency_gate,
+            submit_fields=sim_submit_revalidation_fields,
+            price_snapshot=sim_price_snapshot,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            extra_fields={"sim_record_id": sim_record_id, "sim_parent_record_id": stock.get("id")},
         )
         persist_scalp_simulator_state()
         return True
@@ -2059,6 +2081,7 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
         "scalp_sim_entry_armed",
         **_scalp_sim_event_fields(
             threshold_family="entry_mechanical_momentum",
+            entry_adm_candidate_id=entry_adm_candidate_id,
             sim_record_id=sim_record_id,
             sim_parent_record_id=stock.get("id"),
             ai_score=f"{current_ai_score:.1f}",
@@ -2068,12 +2091,25 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
             **pre_ai_context_fields,
         ),
     )
+    _emit_scalp_entry_adm_snapshot(
+        sim_target,
+        code,
+        "scalp_sim_entry_armed",
+        ai_score=current_ai_score,
+        latency_gate=latency_gate,
+        submit_fields=sim_submit_revalidation_fields,
+        price_snapshot=sim_price_snapshot,
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+        extra_fields={"sim_record_id": sim_record_id, "sim_parent_record_id": stock.get("id")},
+    )
     _log_entry_pipeline(
         stock,
         code,
         "scalp_sim_buy_order_virtual_pending",
         **_scalp_sim_event_fields(
             threshold_family="pre_submit_price_guard",
+            entry_adm_candidate_id=entry_adm_candidate_id,
             sim_record_id=sim_record_id,
             sim_parent_record_id=stock.get("id"),
             ord_no=sim_ord_no,
@@ -2113,6 +2149,7 @@ def _complete_scalp_simulated_sell(
             "scalp_sim_sell_blocked_zero_qty",
             **_scalp_sim_event_fields(
                 threshold_family="statistical_action_weight",
+                entry_adm_candidate_id=stock.get("entry_adm_candidate_id"),
                 sim_record_id=stock.get("sim_record_id"),
                 sim_parent_record_id=stock.get("sim_parent_record_id"),
                 sell_reason_type=sell_reason_type,
@@ -2144,6 +2181,7 @@ def _complete_scalp_simulated_sell(
         "scalp_sim_sell_order_assumed_filled",
         **_scalp_sim_event_fields(
             threshold_family="statistical_action_weight",
+            entry_adm_candidate_id=stock.get("entry_adm_candidate_id"),
             sim_record_id=stock.get("sim_record_id"),
             sim_parent_record_id=stock.get("sim_parent_record_id"),
             sell_reason_type=sell_reason_type,
@@ -2163,6 +2201,7 @@ def _complete_scalp_simulated_sell(
     try:
         record_sim_post_sell_candidate(
             sim_record_id=stock.get("sim_record_id"),
+            candidate_id=stock.get("entry_adm_candidate_id"),
             sim_parent_record_id=stock.get("sim_parent_record_id"),
             stock=stock,
             code=code,
@@ -2682,6 +2721,105 @@ def _log_entry_pipeline(stock, code, stage, **fields):
         record_id=record_id,
         fields=fields,
     )
+
+
+def _entry_adm_candidate_id(stock, code) -> str:
+    if not isinstance(stock, dict):
+        return f"ADM-{code}-{int(time.time() * 1000)}-{uuid4().hex[:6]}"
+    existing = str(stock.get("entry_adm_candidate_id") or "").strip()
+    if existing:
+        return existing
+    record_id = stock.get("id") or "noid"
+    candidate_id = f"ADM-{code}-{record_id}-{int(time.time() * 1000)}-{uuid4().hex[:6]}"
+    _mutate_stock_state(stock, set_fields={"entry_adm_candidate_id": candidate_id})
+    return candidate_id
+
+
+def _entry_adm_action_from_context(stage: str, *, ai_decision=None, ai_score=None, latency_gate=None, submit_fields=None) -> str:
+    stage = str(stage or "")
+    submit_fields = submit_fields or {}
+    if stage in {"pre_submit_liquidity_guard_block", "pre_submit_overbought_pullback_guard_block"}:
+        return "SKIP_PRE_SUBMIT_SAFETY"
+    if stage == "entry_submit_revalidation_block" or bool(submit_fields.get("entry_submit_revalidation_block")):
+        return "SKIP_STALE"
+    if stage in {"entry_submit_revalidation_warning", "latency_block"} or bool(submit_fields.get("entry_submit_revalidation_warning")):
+        return "WAIT_REQUOTE"
+    action = str((ai_decision or {}).get("action") or "").upper()
+    score_value = _safe_float(ai_score if ai_score is not None else (ai_decision or {}).get("score"), 0.0)
+    if action == "BUY" and score_value >= 75:
+        guard = str((latency_gate or {}).get("entry_price_guard") or "").lower()
+        canary_action = str((latency_gate or {}).get("ai_entry_price_canary_action") or "").upper()
+        if "defensive" in guard or canary_action == "USE_DEFENSIVE":
+            return "BUY_DEFENSIVE"
+        return "BUY_NOW"
+    if stage == "blocked_ai_score":
+        reason = str((ai_decision or {}).get("ai_input_source_quality_reason") or "").lower()
+        return "SKIP_SOURCE_QUALITY" if "source" in reason or "stale" in reason else "NO_BUY_AI"
+    return "NO_BUY_AI"
+
+
+def _emit_scalp_entry_adm_snapshot(
+    stock,
+    code,
+    stage,
+    *,
+    ai_decision=None,
+    ai_score=None,
+    chosen_action=None,
+    latency_gate=None,
+    submit_fields=None,
+    price_snapshot=None,
+    orderbook_fields=None,
+    actual_order_submitted=False,
+    broker_order_forbidden=True,
+    extra_fields=None,
+):
+    if not isinstance(stock, dict) or str(stock.get("strategy") or "SCALPING").upper() not in {"SCALPING", "SCALP"}:
+        return
+    action = chosen_action or _entry_adm_action_from_context(
+        stage,
+        ai_decision=ai_decision,
+        ai_score=ai_score,
+        latency_gate=latency_gate,
+        submit_fields=submit_fields,
+    )
+    candidate_id = _entry_adm_candidate_id(stock, code)
+    eligible = {
+        "BUY_NOW": "BUY_NOW,BUY_DEFENSIVE,WAIT_REQUOTE,NO_BUY_AI",
+        "BUY_DEFENSIVE": "BUY_NOW,BUY_DEFENSIVE,WAIT_REQUOTE,NO_BUY_AI",
+        "WAIT_REQUOTE": "WAIT_REQUOTE,SKIP_STALE,NO_BUY_AI",
+        "SKIP_STALE": "WAIT_REQUOTE,SKIP_STALE,NO_BUY_AI",
+        "SKIP_PRE_SUBMIT_SAFETY": "SKIP_PRE_SUBMIT_SAFETY,NO_BUY_AI",
+        "SKIP_SOURCE_QUALITY": "SKIP_SOURCE_QUALITY,NO_BUY_AI",
+        "NO_BUY_AI": "NO_BUY_AI",
+    }.get(action, "NO_BUY_AI")
+    rejected = ",".join(item for item in ("BUY_NOW", "WAIT_REQUOTE", "SKIP_STALE", "BUY_DEFENSIVE", "NO_BUY_AI", "SKIP_SOURCE_QUALITY", "SKIP_PRE_SUBMIT_SAFETY") if item not in eligible)
+    fields = {
+        "candidate_id": candidate_id,
+        "entry_adm_candidate_id": candidate_id,
+        "ai_score": f"{_safe_float(ai_score if ai_score is not None else (ai_decision or {}).get('score'), 0.0):.1f}",
+        "ai_action": str((ai_decision or {}).get("action") or "-"),
+        "chosen_action": action,
+        "eligible_actions": eligible,
+        "rejected_actions": rejected,
+        "metric_role": "action_decision_matrix",
+        "decision_authority": "entry_advisory_prompt_context_only",
+        "window_policy": "same_day_intraday_events_plus_postclose_sim_post_sell_join",
+        "sample_floor": 20,
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": "entry pipeline event + post-sell sim evaluation join when available",
+        "runtime_effect": False,
+        "actual_order_submitted": bool(actual_order_submitted),
+        "broker_order_forbidden": bool(broker_order_forbidden),
+        "forbidden_uses": "threshold mutation,order guard mutation,provider change,bot restart,broker order submit",
+        **_scalp_pre_ai_gate_context_log_fields(stock.get("scalp_pre_ai_gate_context")),
+    }
+    for payload in (ai_decision or {}, latency_gate or {}, submit_fields or {}, price_snapshot or {}, orderbook_fields or {}, extra_fields or {}):
+        if isinstance(payload, dict):
+            for key, value in payload.items():
+                if key not in fields and value is not None:
+                    fields[key] = value
+    _log_entry_pipeline(stock, code, "scalp_entry_action_decision_snapshot", source_stage=stage, **fields)
 
 
 def _log_holding_pipeline(stock, code, stage, **fields):
@@ -5252,6 +5390,31 @@ def _build_ai_ops_log_fields(
         "holding_exit_matrix_recommended_biases",
         "holding_exit_matrix_policy_hints",
         "holding_exit_matrix_decision_alignment",
+        "holding_exit_matrix_runtime_effect",
+        "holding_exit_matrix_original_action",
+        "holding_exit_matrix_forced_action",
+        "holding_exit_matrix_runtime_reason",
+        "holding_exit_matrix_scale_in_bias",
+        "entry_adm_status",
+        "entry_adm_version",
+        "entry_adm_source_date",
+        "entry_adm_application_mode",
+        "entry_adm_loaded_from",
+        "entry_adm_cache_token",
+        "entry_adm_bucket_token",
+        "entry_adm_score_bucket",
+        "entry_adm_risk_context_bucket",
+        "entry_adm_stale_bucket",
+        "entry_adm_price_resolution_bucket",
+        "entry_adm_liquidity_bucket",
+        "entry_adm_overbought_bucket",
+        "entry_adm_time_bucket",
+        "entry_adm_recommended_action",
+        "entry_adm_decision_alignment",
+        "entry_adm_runtime_effect",
+        "entry_adm_original_action",
+        "entry_adm_forced_action",
+        "entry_adm_runtime_reason",
     ):
         if field_name in payload:
             out[field_name] = str(payload.get(field_name, "-") or "-")
@@ -5292,6 +5455,18 @@ def _build_ai_ops_log_fields(
         out["holding_exit_matrix_feature_enabled"] = bool(payload.get("holding_exit_matrix_feature_enabled"))
     if "holding_exit_matrix_applied" in payload:
         out["holding_exit_matrix_applied"] = bool(payload.get("holding_exit_matrix_applied"))
+    if "holding_exit_matrix_runtime_bias_enabled" in payload:
+        out["holding_exit_matrix_runtime_bias_enabled"] = bool(payload.get("holding_exit_matrix_runtime_bias_enabled"))
+    if "holding_exit_matrix_runtime_bias_applied" in payload:
+        out["holding_exit_matrix_runtime_bias_applied"] = bool(payload.get("holding_exit_matrix_runtime_bias_applied"))
+    if "entry_adm_feature_enabled" in payload:
+        out["entry_adm_feature_enabled"] = bool(payload.get("entry_adm_feature_enabled"))
+    if "entry_adm_prompt_applied" in payload:
+        out["entry_adm_prompt_applied"] = bool(payload.get("entry_adm_prompt_applied"))
+    if "entry_adm_runtime_bias_enabled" in payload:
+        out["entry_adm_runtime_bias_enabled"] = bool(payload.get("entry_adm_runtime_bias_enabled"))
+    if "entry_adm_runtime_bias_applied" in payload:
+        out["entry_adm_runtime_bias_applied"] = bool(payload.get("entry_adm_runtime_bias_applied"))
     if payload.get("scalp_feature_packet_version"):
         out["scalp_feature_packet_version"] = str(payload.get("scalp_feature_packet_version"))
     for field_name in (
@@ -6969,6 +7144,16 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                     ai_cooldown_blocked=False,
                                 ),
                             )
+                            _emit_scalp_entry_adm_snapshot(
+                                stock,
+                                code,
+                                "ai_confirmed",
+                                ai_decision=ai_decision,
+                                ai_score=ai_score,
+                                chosen_action="BUY_NOW" if str(action or "").upper() == "BUY" and _safe_float(ai_score, 0.0) >= 75 else "NO_BUY_AI",
+                                actual_order_submitted=False,
+                                broker_order_forbidden=True,
+                            )
                             if _is_wait65_79_candidate(action, ai_score):
                                 _log_wait65_79_ev_candidate(
                                     stock=stock,
@@ -7271,6 +7456,16 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         ),
                         **ai_ops_fields,
                     )
+                    _emit_scalp_entry_adm_snapshot(
+                        stock,
+                        code,
+                        "blocked_ai_score",
+                        ai_decision=ai_decision,
+                        ai_score=current_ai_score,
+                        chosen_action="NO_BUY_AI",
+                        actual_order_submitted=False,
+                        broker_order_forbidden=True,
+                    )
                     return False
                 if wait6579_probe_entry_unlocked and current_ai_score < 75:
                     _log_entry_pipeline(
@@ -7302,6 +7497,17 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                     current_vpw=current_vpw,
                     reason='qualification_passed',
                     dynamic_reason=momentum_gate.get('reason'),
+                )
+                _emit_scalp_entry_adm_snapshot(
+                    stock,
+                    code,
+                    "entry_armed",
+                    ai_decision=ai_decision,
+                    ai_score=current_ai_score,
+                    chosen_action="BUY_NOW",
+                    actual_order_submitted=False,
+                    broker_order_forbidden=False,
+                    extra_fields={"target_buy_price": final_target_buy_price},
                 )
                 is_trigger = True
                 if big_bite_confirmed:
@@ -7966,6 +8172,17 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             ),
             **swing_entry_micro_fields,
         )
+        _emit_scalp_entry_adm_snapshot(
+            stock,
+            code,
+            "latency_block",
+            ai_score=latency_signal_score,
+            chosen_action="WAIT_REQUOTE" if not bool(latency_gate.get("quote_stale")) else "SKIP_STALE",
+            latency_gate=latency_gate,
+            orderbook_fields=entry_orderbook_micro_fields,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+        )
         if _is_swing_strategy(strategy):
             maybe_start_swing_intraday_probe(
                 stock=stock,
@@ -8071,6 +8288,19 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             "entry_submit_revalidation_warning",
             **submit_revalidation_fields,
         )
+        _emit_scalp_entry_adm_snapshot(
+            stock,
+            code,
+            "entry_submit_revalidation_warning",
+            ai_score=latency_signal_score,
+            chosen_action="WAIT_REQUOTE",
+            latency_gate=latency_gate,
+            submit_fields=submit_revalidation_fields,
+            price_snapshot=latency_price_snapshot,
+            orderbook_fields=entry_orderbook_micro_fields,
+            actual_order_submitted=False,
+            broker_order_forbidden=False,
+        )
 
     _log_entry_pipeline(
         stock, code, "latency_pass", mode=entry_mode, decision=latency_gate.get('decision'),
@@ -8098,6 +8328,18 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         ),
         **swing_entry_micro_fields,
     )
+    _emit_scalp_entry_adm_snapshot(
+        stock,
+        code,
+        "latency_pass",
+        ai_score=latency_signal_score,
+        latency_gate=latency_gate,
+        submit_fields=submit_revalidation_fields,
+        price_snapshot=latency_price_snapshot,
+        orderbook_fields=entry_orderbook_micro_fields,
+        actual_order_submitted=False,
+        broker_order_forbidden=False,
+    )
 
     if _is_passive_probe_stale_submit_block(submit_revalidation_fields):
         log_info(
@@ -8116,6 +8358,19 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             **latency_price_snapshot,
             **entry_orderbook_micro_fields,
             **swing_entry_micro_fields,
+        )
+        _emit_scalp_entry_adm_snapshot(
+            stock,
+            code,
+            "entry_submit_revalidation_block",
+            ai_score=latency_signal_score,
+            chosen_action="SKIP_STALE",
+            latency_gate=latency_gate,
+            submit_fields=submit_revalidation_fields,
+            price_snapshot=latency_price_snapshot,
+            orderbook_fields=entry_orderbook_micro_fields,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
         )
         return False
 
@@ -8160,6 +8415,20 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 **entry_orderbook_micro_fields,
                 **_scalp_pre_ai_gate_context_log_fields(scalp_pre_ai_gate_context),
             )
+            _emit_scalp_entry_adm_snapshot(
+                stock,
+                code,
+                "pre_submit_liquidity_guard_block",
+                ai_score=latency_signal_score,
+                chosen_action="SKIP_PRE_SUBMIT_SAFETY",
+                latency_gate=latency_gate,
+                submit_fields=submit_revalidation_fields,
+                price_snapshot=latency_price_snapshot,
+                orderbook_fields=entry_orderbook_micro_fields,
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                extra_fields={"liquidity_value": int(liquidity_value), "min_liquidity": min_liquidity},
+            )
             return False
 
     if strategy == "SCALPING" and not _overbought_pre_submit_allowed(scalp_pre_ai_gate_context):
@@ -8181,6 +8450,24 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             **latency_price_snapshot,
             **entry_orderbook_micro_fields,
             **_scalp_pre_ai_gate_context_log_fields(scalp_pre_ai_gate_context),
+        )
+        _emit_scalp_entry_adm_snapshot(
+            stock,
+            code,
+            "pre_submit_overbought_pullback_guard_block",
+            ai_score=latency_signal_score,
+            chosen_action="SKIP_PRE_SUBMIT_SAFETY",
+            latency_gate=latency_gate,
+            submit_fields=submit_revalidation_fields,
+            price_snapshot=latency_price_snapshot,
+            orderbook_fields=entry_orderbook_micro_fields,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            extra_fields={
+                "block_reason": "pullback_or_rebreak_not_confirmed",
+                "risk_state": overbought_context.get("risk_state") or "-",
+                "risk_bucket": overbought_context.get("risk_bucket") or "-",
+            },
         )
         return False
 
@@ -8475,6 +8762,24 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         **bundle_price_snapshot,
         **swing_entry_micro_fields,
         **(swing_one_share_real_canary_fields or {}),
+    )
+    _emit_scalp_entry_adm_snapshot(
+        stock,
+        code,
+        "order_bundle_submitted",
+        ai_score=latency_signal_score,
+        latency_gate=latency_gate,
+        submit_fields=submit_revalidation_fields,
+        price_snapshot=bundle_price_snapshot,
+        orderbook_fields=entry_orderbook_micro_fields,
+        actual_order_submitted=True,
+        broker_order_forbidden=False,
+        extra_fields={
+            "entry_mode": entry_mode,
+            "requested_qty": requested_qty,
+            "legs": len(successful_orders),
+            "order_price": int(latency_gate.get('order_price', 0) or 0),
+        },
     )
 
     if strategy in ['SCALPING', 'SCALP']:
@@ -11726,6 +12031,15 @@ def _evaluate_scale_in_signal(
                 }
             )
             return reversal
+        adm_scale_in = resolve_holding_exit_matrix_scale_in_bias(
+            strategy=raw_strategy,
+            profit_rate=profit_rate,
+            peak_profit=peak_profit,
+            current_ai_score=current_ai_score,
+            held_sec=held_sec,
+        )
+        if adm_scale_in.get("should_add"):
+            return adm_scale_in
         return None
     elif raw_strategy in ('KOSPI_ML', 'KOSDAQ_ML'):
         _ = market_regime

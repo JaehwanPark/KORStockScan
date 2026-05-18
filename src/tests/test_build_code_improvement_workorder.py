@@ -218,6 +218,58 @@ def test_build_code_improvement_workorder_consumes_pattern_lab_currentness_audit
     )
 
 
+def test_build_code_improvement_workorder_adds_entry_adm_gap_order(tmp_path, monkeypatch):
+    automation_dir = tmp_path / "automation"
+    ev_dir = tmp_path / "ev"
+    adm_dir = tmp_path / "adm"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    for directory in (automation_dir, ev_dir, adm_dir):
+        directory.mkdir()
+    adm_path = adm_dir / "scalp_entry_action_decision_matrix_2026-05-18.json"
+    adm_path.write_text(json.dumps({"status": "warning"}), encoding="utf-8")
+    (automation_dir / "scalping_pattern_lab_automation_2026-05-18.json").write_text(
+        json.dumps({"date": "2026-05-18", "code_improvement_orders": []}),
+        encoding="utf-8",
+    )
+    (ev_dir / "threshold_cycle_ev_2026-05-18.json").write_text(
+        json.dumps(
+            {
+                "sources": {"scalp_entry_action_decision_matrix": str(adm_path)},
+                "scalp_entry_action_decision_matrix": {
+                    "available": True,
+                    "status": "warning",
+                    "joined_sample": 2,
+                    "sample_floor": 20,
+                    "prompt_applied_count": 0,
+                    "missing_actions": ["WAIT_REQUOTE"],
+                    "artifact": str(adm_path),
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
+    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-observation-audit")
+    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness")
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-18", max_orders=5)
+
+    order = next(item for item in report["orders"] if item["order_id"] == "order_scalp_entry_adm_daily_tuning_coverage")
+    assert order["decision"] == "implement_now"
+    assert order["runtime_effect"] is False
+    assert "joined_sample=2" in order["evidence"]
+    assert report["source"]["scalp_entry_action_decision_matrix"] == str(adm_path)
+
+
 def test_build_code_improvement_workorder_adds_pipeline_event_verbosity_order(tmp_path, monkeypatch):
     automation_dir = tmp_path / "automation"
     ev_dir = tmp_path / "ev"

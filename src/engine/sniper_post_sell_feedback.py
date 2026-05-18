@@ -269,6 +269,7 @@ def record_post_sell_candidate(
 
 def record_sim_post_sell_candidate(
     *,
+    candidate_id=None,
     sim_record_id=None,
     sim_parent_record_id=None,
     stock: dict | None = None,
@@ -302,6 +303,7 @@ def record_sim_post_sell_candidate(
     sell_bucket = _minute_bucket(sell_dt, bucket_min=1)
     sim_id = str(sim_record_id or stock.get("sim_record_id") or "").strip()
     sim_parent_id = str(sim_parent_record_id or stock.get("sim_parent_record_id") or "").strip()
+    entry_candidate_id = str(candidate_id or stock.get("entry_adm_candidate_id") or "").strip()
     dedupe_marker = sim_id or sim_parent_id or f"{sell_bucket}:{safe_sell_price}"
     dedupe_key = (
         target_date,
@@ -349,6 +351,8 @@ def record_sim_post_sell_candidate(
             "evaluation_mode": "sim_post_sell_minute_forward",
             "candidate_source": "scalp_simulator",
             "simulation_book": "scalp_ai_buy_all",
+            "candidate_id": entry_candidate_id,
+            "entry_adm_candidate_id": entry_candidate_id,
             "sim_record_id": sim_id,
             "sim_parent_record_id": sim_parent_id,
             "source_event_stage": str(source_event_stage or "scalp_sim_sell_order_assumed_filled"),
@@ -688,6 +692,8 @@ def evaluate_sim_post_sell_candidates(target_date: str, token: str | None = None
             "outcome": outcome,
             "candidate_source": "scalp_simulator",
             "simulation_book": "scalp_ai_buy_all",
+            "candidate_id": candidate.get("candidate_id", ""),
+            "entry_adm_candidate_id": candidate.get("entry_adm_candidate_id", ""),
             "sim_record_id": candidate.get("sim_record_id", ""),
             "sim_parent_record_id": candidate.get("sim_parent_record_id", ""),
             "source_event_stage": candidate.get("source_event_stage", ""),
@@ -750,6 +756,7 @@ def backfill_sim_post_sell_candidates_from_threshold_events(target_date: str) ->
         if existing_key in existing_keys:
             continue
         candidate = record_sim_post_sell_candidate(
+            candidate_id=fields.get("entry_adm_candidate_id") or fields.get("candidate_id"),
             sim_record_id=fields.get("sim_record_id") or event.get("record_id"),
             sim_parent_record_id=fields.get("sim_parent_record_id"),
             stock={

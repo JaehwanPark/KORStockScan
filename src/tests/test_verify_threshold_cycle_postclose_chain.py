@@ -5,6 +5,17 @@ from pathlib import Path
 from src.engine import verify_threshold_cycle_postclose_chain as mod
 
 
+def _write_adm_artifact(report_dir: Path, target_date: str = "2026-05-12") -> Path:
+    path = (
+        report_dir
+        / "scalp_entry_action_decision_matrix"
+        / f"scalp_entry_action_decision_matrix_{target_date}.json"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"report_type": "scalp_entry_action_decision_matrix"}), encoding="utf-8")
+    return path
+
+
 def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(tmp_path, monkeypatch):
     project_root = tmp_path
     report_dir = project_root / "data" / "report"
@@ -20,6 +31,7 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
     (report_dir / "swing_daily_simulation").mkdir(parents=True)
     (report_dir / "swing_lifecycle_audit").mkdir(parents=True)
     (project_root / "docs").mkdir(parents=True)
+    adm_path = _write_adm_artifact(report_dir)
 
     log_path = project_root / "logs" / "threshold_cycle_postclose_cron.log"
     log_path.write_text(
@@ -28,7 +40,7 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
                 "[START] threshold-cycle postclose target_date=2026-05-12 started_at=2026-05-12T21:00:00+0900",
                 "[threshold-cycle] artifact ready label=swing_daily_simulation.json path=/tmp/a waited=0s json_valid=true",
                 "[threshold-cycle] artifact ready label=threshold_cycle_ev_pre_workorder.json path=/tmp/b waited=0s json_valid=true",
-                "[DONE] threshold-cycle postclose target_date=2026-05-12 swing_lifecycle=true pattern_labs=true deepseek_swing_lab=true pattern_lab_currentness_audit=true pattern_lab_propagation_audit=true code_improvement_workorder=true daily_ev=true runtime_approval_summary=true next_stage2_checklist=true finished_at=2026-05-12T21:30:00+0900",
+                "[DONE] threshold-cycle postclose target_date=2026-05-12 swing_lifecycle=true pattern_labs=true deepseek_swing_lab=true pattern_lab_currentness_audit=true pattern_lab_propagation_audit=true scalp_entry_adm=true code_improvement_workorder=true daily_ev=true runtime_approval_summary=true next_stage2_checklist=true finished_at=2026-05-12T21:30:00+0900",
             ]
         ),
         encoding="utf-8",
@@ -47,6 +59,7 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
                     "pattern_lab_propagation_audit": str(
                         report_dir / "pattern_lab_propagation_audit" / "pattern_lab_propagation_audit_2026-05-12.json"
                     ),
+                    "scalp_entry_action_decision_matrix": str(adm_path),
                 }
             }
         ),
@@ -82,6 +95,7 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
                     "pattern_lab_propagation_audit": str(
                         report_dir / "pattern_lab_propagation_audit" / "pattern_lab_propagation_audit_2026-05-12.json"
                     ),
+                    "scalp_entry_action_decision_matrix": str(adm_path),
                 }
             }
         ),
@@ -152,6 +166,7 @@ def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(
     (report_dir / "swing_daily_simulation").mkdir(parents=True)
     (report_dir / "swing_lifecycle_audit").mkdir(parents=True)
     (project_root / "docs").mkdir(parents=True)
+    adm_path = _write_adm_artifact(report_dir)
 
     log_path = project_root / "logs" / "threshold_cycle_postclose_cron.log"
     log_path.write_text(
@@ -159,7 +174,7 @@ def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(
             [
                 "[START] threshold-cycle postclose target_date=2026-05-12 started_at=2026-05-12T21:00:00+0900",
                 "[threshold-cycle] artifact ready label=swing_daily_simulation.json path=/tmp/a waited=5s json_valid=true",
-                "[DONE] threshold-cycle postclose target_date=2026-05-12 swing_lifecycle=true pattern_labs=true deepseek_swing_lab=true pattern_lab_currentness_audit=true pattern_lab_propagation_audit=true code_improvement_workorder=true daily_ev=true runtime_approval_summary=true next_stage2_checklist=true finished_at=2026-05-12T21:30:00+0900",
+                "[DONE] threshold-cycle postclose target_date=2026-05-12 swing_lifecycle=true pattern_labs=true deepseek_swing_lab=true pattern_lab_currentness_audit=true pattern_lab_propagation_audit=true scalp_entry_adm=true code_improvement_workorder=true daily_ev=true runtime_approval_summary=true next_stage2_checklist=true finished_at=2026-05-12T21:30:00+0900",
             ]
         ),
         encoding="utf-8",
@@ -185,6 +200,7 @@ def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(
                     "code_improvement_workorder": str(report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-05-12.json"),
                     "pattern_lab_currentness_audit": str(report_dir / "pattern_lab_currentness_audit" / "pattern_lab_currentness_audit_2026-05-12.json"),
                     "pattern_lab_propagation_audit": str(report_dir / "pattern_lab_propagation_audit" / "pattern_lab_propagation_audit_2026-05-12.json"),
+                    "scalp_entry_action_decision_matrix": str(adm_path),
                 }
             }
         ),
@@ -196,6 +212,7 @@ def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(
                 "sources": {
                     "threshold_cycle_ev": str(report_dir / "threshold_cycle_ev" / "threshold_cycle_ev_2026-05-12.json"),
                     "pattern_lab_propagation_audit": str(report_dir / "pattern_lab_propagation_audit" / "pattern_lab_propagation_audit_2026-05-12.json"),
+                    "scalp_entry_action_decision_matrix": str(adm_path),
                 }
             }
         ),
@@ -229,6 +246,7 @@ def test_build_threshold_cycle_postclose_verification_warns_on_recovery_profile(
         "runtime_approval_summary",
         "pattern_lab_currentness_audit",
         "pattern_lab_propagation_audit",
+        "scalp_entry_action_decision_matrix",
         "market_panic_breadth",
         "panic_sell_defense",
         "panic_buying",
@@ -243,7 +261,7 @@ def test_build_threshold_cycle_postclose_verification_warns_on_recovery_profile(
         "\n".join(
             [
                 "[START] threshold-cycle postclose target_date=2026-05-12 started_at=2026-05-12T21:00:00+0900",
-                "[DONE] threshold-cycle postclose target_date=2026-05-12 swing_lifecycle=false pattern_labs=false deepseek_swing_lab=false pattern_lab_currentness_audit=false pattern_lab_propagation_audit=false code_improvement_workorder=true daily_ev=true runtime_approval_summary=true next_stage2_checklist=true finished_at=2026-05-12T21:30:00+0900",
+                "[DONE] threshold-cycle postclose target_date=2026-05-12 swing_lifecycle=false pattern_labs=false deepseek_swing_lab=false pattern_lab_currentness_audit=false pattern_lab_propagation_audit=false scalp_entry_adm=true code_improvement_workorder=true daily_ev=true runtime_approval_summary=true next_stage2_checklist=true finished_at=2026-05-12T21:30:00+0900",
             ]
         ),
         encoding="utf-8",
@@ -252,6 +270,7 @@ def test_build_threshold_cycle_postclose_verification_warns_on_recovery_profile(
         "threshold_cycle_ev/threshold_cycle_ev_2026-05-12.json",
         "code_improvement_workorder/code_improvement_workorder_2026-05-12.json",
         "runtime_approval_summary/runtime_approval_summary_2026-05-12.json",
+        "scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_2026-05-12.json",
         "market_panic_breadth/market_panic_breadth_2026-05-12.json",
         "panic_sell_defense/panic_sell_defense_2026-05-12.json",
         "panic_buying/panic_buying_2026-05-12.json",
@@ -266,7 +285,12 @@ def test_build_threshold_cycle_postclose_verification_warns_on_recovery_profile(
         json.dumps(
             {
                 "sources": {
-                    "code_improvement_workorder": str(report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-05-12.json")
+                    "code_improvement_workorder": str(report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-05-12.json"),
+                    "scalp_entry_action_decision_matrix": str(
+                        report_dir
+                        / "scalp_entry_action_decision_matrix"
+                        / "scalp_entry_action_decision_matrix_2026-05-12.json"
+                    ),
                 }
             }
         ),
@@ -274,7 +298,16 @@ def test_build_threshold_cycle_postclose_verification_warns_on_recovery_profile(
     )
     (report_dir / "runtime_approval_summary" / "runtime_approval_summary_2026-05-12.json").write_text(
         json.dumps(
-            {"sources": {"threshold_cycle_ev": str(report_dir / "threshold_cycle_ev" / "threshold_cycle_ev_2026-05-12.json")}}
+            {
+                "sources": {
+                    "threshold_cycle_ev": str(report_dir / "threshold_cycle_ev" / "threshold_cycle_ev_2026-05-12.json"),
+                    "scalp_entry_action_decision_matrix": str(
+                        report_dir
+                        / "scalp_entry_action_decision_matrix"
+                        / "scalp_entry_action_decision_matrix_2026-05-12.json"
+                    ),
+                }
+            }
         ),
         encoding="utf-8",
     )

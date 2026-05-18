@@ -48,6 +48,12 @@
   - 금지: sim/probe EV를 broker execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
   - 다음 액션: source-quality split, active state 복원, open/closed count를 같이 기록한다.
 
+- [ ] `[EntryADMRuntimeEffectObserve0519] Entry ADM runtime effect 및 실제 API prompt 적용 재확인` (`Due: 2026-05-19`, `Slot: INTRADAY`, `TimeWindow: 10:00~10:20`, `Track: ScalpingLogic`)
+  - Source: [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md), [scalp_entry_adm_runtime.py](/home/ubuntu/KORStockScan/src/engine/scalp_entry_adm_runtime.py), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py), [scalp_entry_action_decision_matrix_2026-05-18.json](/home/ubuntu/KORStockScan/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_2026-05-18.json)
+  - 판정 기준: `/proc/<bot_pid>/environ` 또는 신규 event에서 `KORSTOCKSCAN_SCALP_ENTRY_ADM_ADVISORY_ENABLED=true`, `KORSTOCKSCAN_SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED=true` 로드를 확인하고, `analyze_target` actual API live 호출 또는 당일 live event에서 `entry_adm_prompt_applied=true`, `openai_endpoint_name=analyze_target`, `openai_schema_name=entry_v1`, `entry_adm_cache_token` prefix를 확인한다. 신규 cohort에 `entry_adm_runtime_effect`, `entry_adm_forced_action`, `entry_adm_runtime_reason`이 찍히는지도 분리 확인한다.
+  - 금지: 실제 API smoke를 broker order submit, threshold mutation, provider 변경, bot restart 근거로 사용하지 않는다. `BUY_NOW`/`BUY_DEFENSIVE` positive bucket은 표본 충족 전 강제 BUY 승격으로 해석하지 않는다.
+  - 다음 액션: `api_prompt_loaded_no_forced_effect`, `forced_wait_drop_observed`, `prompt_not_loaded`, `runtime_env_missing`, `fixture_schema_gap`, `api_transport_fail` 중 하나로 닫고, gap은 `order_scalp_entry_adm_daily_tuning_coverage` 또는 후속 workorder로 연결한다.
+
 ## 장후 체크리스트 (16:30~18:55)
 
 - [ ] `[ThresholdDailyEVReport0519] daily EV real/sim/combined split 및 자동 반영 결과 확인` (`Due: 2026-05-19`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:45`, `Track: RuntimeStability`)

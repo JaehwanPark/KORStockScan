@@ -16,6 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 GEMINI_LAB_DIR = PROJECT_ROOT / "analysis" / "gemini_scalping_pattern_lab"
 CLAUDE_LAB_DIR = PROJECT_ROOT / "analysis" / "claude_scalping_pattern_lab"
 PATTERN_LAB_AUTOMATION_DIR = REPORT_DIR / "scalping_pattern_lab_automation"
+SCALP_ENTRY_ADM_DIR = REPORT_DIR / "scalp_entry_action_decision_matrix"
 AUTOMATION_SCHEMA_VERSION = 1
 
 
@@ -56,6 +57,29 @@ def _parse_date_prefix(value: Any) -> str:
 def automation_report_paths(target_date: str) -> tuple[Path, Path]:
     base = PATTERN_LAB_AUTOMATION_DIR / f"scalping_pattern_lab_automation_{target_date}"
     return base.with_suffix(".json"), base.with_suffix(".md")
+
+
+def _entry_adm_summary(target_date: str) -> tuple[dict[str, Any], str | None]:
+    path = SCALP_ENTRY_ADM_DIR / f"scalp_entry_action_decision_matrix_{target_date}.json"
+    payload = _load_json(path)
+    if not payload:
+        return {"available": False, "status": "missing", "runtime_effect": False}, None
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    return (
+        {
+            "available": True,
+            "status": payload.get("status"),
+            "runtime_effect": bool(payload.get("runtime_effect")),
+            "decision_authority": payload.get("decision_authority"),
+            "application_mode": payload.get("application_mode"),
+            "total_candidates": _safe_int(summary.get("total_candidates"), 0),
+            "joined_sample": _safe_int(summary.get("joined_sample"), 0),
+            "sample_floor": _safe_int(summary.get("sample_floor"), 0),
+            "missing_actions": summary.get("missing_actions") if isinstance(summary.get("missing_actions"), list) else [],
+            "prompt_applied_count": _safe_int(summary.get("prompt_applied_count"), 0),
+        },
+        str(path),
+    )
 
 
 def _lab_output_paths(lab_dir: Path, lab_name: str) -> dict[str, Path]:
@@ -372,6 +396,7 @@ def build_scalping_pattern_lab_automation_report(target_date: str) -> dict[str, 
     family_candidates = _auto_family_candidates(accepted_for_family)
     orders = _code_improvement_orders(consensus, solo)
     rejected = [item for result in lab_results for item in result.get("rejected_findings") or []]
+    entry_adm_summary, entry_adm_path = _entry_adm_summary(target_date)
     report = {
         "schema_version": AUTOMATION_SCHEMA_VERSION,
         "date": target_date,
@@ -385,6 +410,7 @@ def build_scalping_pattern_lab_automation_report(target_date: str) -> dict[str, 
         "auto_family_candidates": family_candidates,
         "code_improvement_orders": orders,
         "rejected_findings": rejected,
+        "scalp_entry_adm_summary": entry_adm_summary,
         "ev_report_summary": {
             "gemini_fresh": bool(lab_results[0]["freshness"]["fresh"]),
             "claude_fresh": bool(lab_results[1]["freshness"]["fresh"]),
@@ -399,9 +425,12 @@ def build_scalping_pattern_lab_automation_report(target_date: str) -> dict[str, 
                 {"order_id": item.get("order_id"), "title": item.get("title"), "target_subsystem": item.get("target_subsystem")}
                 for item in orders[:3]
             ],
+            "scalp_entry_adm_status": entry_adm_summary.get("status"),
+            "scalp_entry_adm_joined_sample": entry_adm_summary.get("joined_sample"),
         },
         "sources": {
-            result["lab"]: result["paths"] for result in lab_results
+            **{result["lab"]: result["paths"] for result in lab_results},
+            "scalp_entry_action_decision_matrix": entry_adm_path,
         },
     }
     PATTERN_LAB_AUTOMATION_DIR.mkdir(parents=True, exist_ok=True)
@@ -423,6 +452,7 @@ def render_scalping_pattern_lab_automation_markdown(report: dict[str, Any]) -> s
         f"- consensus_count: `{summary.get('consensus_count')}`",
         f"- auto_family_candidate_count: `{summary.get('auto_family_candidate_count')}`",
         f"- code_improvement_order_count: `{summary.get('code_improvement_order_count')}`",
+        f"- scalp_entry_adm_status/joined: `{summary.get('scalp_entry_adm_status')}` / `{summary.get('scalp_entry_adm_joined_sample')}`",
         f"- runtime_effect: `{report.get('runtime_effect')}`",
         "",
         "## Consensus Findings",

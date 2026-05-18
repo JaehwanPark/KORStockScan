@@ -28,6 +28,9 @@ _REASON_LABELS = {
     "runtime_family_guard_missing": "runtime guard 없음",
     "family_sample_floor_not_met": "표본 부족",
     "sample_floor_not_met": "표본 부족",
+    "source_quality_blocker": "소스 품질 차단",
+    "missing_action_bucket": "ADM action bucket 누락",
+    "prompt_context_not_loaded": "ADM prompt context 미적재",
     "pyramid_sample_floor_not_met": "PYRAMID 표본 부족",
     "post_add_outcome_field_missing": "추가매수 outcome 누락",
     "final_exit_return_missing": "최종 exit 수익률 누락",
@@ -55,6 +58,7 @@ _FAMILY_DESCRIPTIONS = {
     "overbought_gate_refined_candidate": "과열 gate가 막은 후보의 후행 EV를 보고 과열 차단 기준을 다듬는 축",
     "bad_entry_refined_canary": "진입 직후 never-green/AI fade 위험이 큰 표본을 조기 정리할 수 있는지 보는 축",
     "holding_exit_decision_matrix_advisory": "보유 중 가능한 행동(EXIT/HOLD/AVG_DOWN/PYRAMID)을 matrix 점수로 보조 판단하는 축",
+    "scalp_entry_action_decision_matrix_advisory": "스캘핑 entry action(BUY_NOW/WAIT_REQUOTE/SKIP_STALE/BUY_DEFENSIVE 등)을 matrix EV로 비교해 AI action을 보정하는 운영 override 축",
     "scale_in_price_guard": "추가매수 직전 best bid/defensive limit, spread, stale quote로 가격품질을 보장하는 축",
     "position_sizing_cap_release": "신규/추가매수 1주 cap을 풀 수 있는지 EV와 downside 기준으로 보는 축",
     "swing_model_floor": "스윙 추천 모델 floor 값을 올리거나 낮출 수 있는지 보는 선택 기준 축",
@@ -81,6 +85,7 @@ _BASELINE_APPLICATION = {
     "scale_in_price_guard": "기존 적용 유지: 추가매수 가격품질 guard ON",
     "pre_submit_price_guard": "기존 적용/검증 유지: 제출 직전 가격품질 guard 계열",
     "holding_exit_decision_matrix_advisory": "관찰/리포트 only: advisory live 적용 아님",
+    "scalp_entry_action_decision_matrix_advisory": "운영 override runtime bias: AI BUY를 WAIT/DROP 또는 defensive bias로 보정, submit safety guard 우선",
     "protect_trailing_smoothing": "관찰/리포트 only: protect/trailing live smoothing 미적용",
     "trailing_continuation": "관찰/리포트 only: trailing 연장 live 미적용",
     "bad_entry_refined_canary": "OFF/관찰 only: refined canary live 미적용",
@@ -196,6 +201,13 @@ _SCALPING_GATE_REVIEW = {
         "hard_gate_review": "advisory layer라 runtime hard gate가 아니다",
         "tuning_route": "report-only decision support contract",
         "analysis_coverage": "holding_exit_decision_matrix report",
+    },
+    "scalp_entry_action_decision_matrix_advisory": {
+        "gate_review_class": "entry_adm_runtime_bias_operator_override",
+        "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
+        "hard_gate_review": "entry ADM은 bad-entry blacklist가 아니라 BUY_NOW/WAIT_REQUOTE/SKIP_STALE/BUY_DEFENSIVE/NO_BUY action policy를 daily EV로 조정한다",
+        "tuning_route": "daily scalp_entry_action_decision_matrix -> threshold EV/runtime summary/workorder/pattern lab -> next runtime env",
+        "analysis_coverage": "entry snapshots, sim post-sell join, action bucket EV, runtime forced_action provenance",
     },
     "scale_in_price_guard": {
         "gate_review_class": "intentional_pre_submit_safety_guard",
@@ -476,6 +488,45 @@ def _scalping_rows(ev_report: dict[str, Any], calibration_report: dict[str, Any]
             "selected_auto_bounded_live": family in selected,
         }
         row.update(_gate_review("scalping", family, reasons))
+        rows.append(row)
+    entry_adm = (
+        ev_report.get("scalp_entry_action_decision_matrix")
+        if isinstance(ev_report.get("scalp_entry_action_decision_matrix"), dict)
+        else {}
+    )
+    if entry_adm:
+        joined = _as_int(entry_adm.get("joined_sample"))
+        floor = _as_int(entry_adm.get("sample_floor")) or 20
+        state = "hold_sample" if joined < floor else "hold"
+        reasons = []
+        if not entry_adm.get("available"):
+            reasons.append("source_quality_blocker")
+        elif joined < floor:
+            reasons.append("sample_floor_not_met")
+        if entry_adm.get("missing_actions"):
+            reasons.append("missing_action_bucket")
+        if _as_int(entry_adm.get("prompt_applied_count")) == 0:
+            reasons.append("prompt_context_not_loaded")
+        row = {
+            "domain": "scalping",
+            "family": "scalp_entry_action_decision_matrix_advisory",
+            "description": _description("scalp_entry_action_decision_matrix_advisory"),
+            "state": state,
+            "current_application": _current_application("scalp_entry_action_decision_matrix_advisory", state, False),
+            "state_interpretation": "운영 override runtime bias는 AI BUY를 WAIT/DROP 또는 defensive bias로 보정한다",
+            "score": entry_adm.get("source_quality_adjusted_ev_pct"),
+            "score_label": _format_score(entry_adm.get("source_quality_adjusted_ev_pct")),
+            "sample": {"count": joined, "floor": floor},
+            "reasons": reasons or ["hold"],
+            "reason_label": _reason_text(reasons or ["hold"]),
+            "selected_auto_bounded_live": False,
+            "runtime_bias_scope": "force_wait_force_drop_buy_defensive_bias",
+        }
+        row.update(_gate_review("scalping", "scalp_entry_action_decision_matrix_advisory", reasons))
+        row["state_interpretation"] = (
+            "운영 override runtime bias는 AI BUY를 WAIT/DROP 또는 defensive bias로 보정한다. "
+            "daily action bucket EV와 runtime forced_action provenance가 충분해야 다음 env 튜닝 판단으로 넘어간다."
+        )
         rows.append(row)
     return rows
 
@@ -806,6 +857,79 @@ def _audit_summary(path: Path) -> dict[str, Any]:
     }
 
 
+def _entry_adm_summary(ev_report: dict[str, Any], source_path: str | None) -> dict[str, Any]:
+    adm = (
+        ev_report.get("scalp_entry_action_decision_matrix")
+        if isinstance(ev_report.get("scalp_entry_action_decision_matrix"), dict)
+        else {}
+    )
+    expected_actions = [
+        "BUY_NOW",
+        "WAIT_REQUOTE",
+        "SKIP_STALE",
+        "BUY_DEFENSIVE",
+        "NO_BUY_AI",
+        "SKIP_SOURCE_QUALITY",
+        "SKIP_PRE_SUBMIT_SAFETY",
+    ]
+    if not adm:
+        return {
+            "available": False,
+            "artifact": source_path,
+            "status": "missing",
+            "runtime_effect": False,
+            "decision_authority": "entry_adm_runtime_bias_operator_override",
+            "runtime_bias_scope": "force_wait_force_drop_buy_defensive_bias",
+            "expected_actions": expected_actions,
+            "warnings": ["scalp_entry_action_decision_matrix_missing"],
+            "ready_for_daily_policy_tuning": False,
+        }
+
+    joined = _as_int(adm.get("joined_sample"))
+    floor = _as_int(adm.get("sample_floor")) or 20
+    missing_actions = adm.get("missing_actions") if isinstance(adm.get("missing_actions"), list) else []
+    prompt_applied_count = _as_int(adm.get("prompt_applied_count"))
+    top_actions = adm.get("top_actions") if isinstance(adm.get("top_actions"), list) else []
+    joined_action_ev_pct = None
+    for action in top_actions:
+        if not isinstance(action, dict):
+            continue
+        if _as_int(action.get("joined_sample")) > 0:
+            joined_action_ev_pct = action.get("source_quality_adjusted_ev_pct")
+            break
+    warnings: list[str] = []
+    if not adm.get("available", True):
+        warnings.append("source_quality_blocker")
+    if joined < floor:
+        warnings.append("joined_sample_below_sample_floor")
+    if missing_actions:
+        warnings.append("missing_action_bucket")
+    if prompt_applied_count == 0:
+        warnings.append("prompt_context_not_loaded")
+
+    return {
+        "available": bool(adm.get("available", True)),
+        "artifact": source_path or adm.get("artifact"),
+        "status": adm.get("status"),
+        "runtime_effect": False,
+        "decision_authority": "entry_adm_runtime_bias_operator_override",
+        "runtime_bias_scope": "force_wait_force_drop_buy_defensive_bias",
+        "application_mode": "operator_override_runtime_bias",
+        "primary_decision_metric": adm.get("primary_decision_metric") or "source_quality_adjusted_ev_pct",
+        "source_quality_adjusted_ev_pct": adm.get("source_quality_adjusted_ev_pct"),
+        "joined_action_ev_pct": joined_action_ev_pct,
+        "top_actions": top_actions,
+        "joined_sample": joined,
+        "sample_floor": floor,
+        "prompt_applied_count": prompt_applied_count,
+        "missing_actions": missing_actions,
+        "expected_actions": expected_actions,
+        "tuning_cycle": "scalp_entry_action_decision_matrix -> threshold_cycle_ev -> runtime_approval_summary -> code_improvement_workorder -> pattern_lab source bundle -> next runtime env",
+        "warnings": warnings,
+        "ready_for_daily_policy_tuning": not warnings,
+    }
+
+
 def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     target_date = str(target_date).strip()
     ev_json, _ = ev_report_paths(target_date)
@@ -814,6 +938,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     swing_report = _load_json(swing_path)
     sources = ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
     calibration_source = sources.get("calibration")
+    scalp_entry_adm_path = sources.get("scalp_entry_action_decision_matrix")
     calibration_report = _load_json(Path(str(calibration_source))) if calibration_source else {}
     currentness_path = Path(str(sources.get("pattern_lab_currentness_audit"))) if sources.get("pattern_lab_currentness_audit") else PATTERN_LAB_CURRENTNESS_AUDIT_DIR / f"pattern_lab_currentness_audit_{target_date}.json"
     propagation_path = Path(str(sources.get("pattern_lab_propagation_audit"))) if sources.get("pattern_lab_propagation_audit") else PATTERN_LAB_PROPAGATION_AUDIT_DIR / f"pattern_lab_propagation_audit_{target_date}.json"
@@ -822,6 +947,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     scalping_rows = _scalping_rows(ev_report, calibration_report)
     swing_rows = _swing_rows(swing_report)
     panic_rows = _panic_rows(calibration_report, target_date)
+    scalp_entry_adm_summary = _entry_adm_summary(ev_report, scalp_entry_adm_path)
     report = {
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -831,6 +957,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
         "sources": {
             "threshold_cycle_ev": str(ev_json) if ev_json.exists() else None,
             "swing_runtime_approval": str(swing_path) if swing_path.exists() else None,
+            "scalp_entry_action_decision_matrix": scalp_entry_adm_path,
             "pattern_lab_currentness_audit": str(currentness_path) if currentness_path.exists() else None,
             "pattern_lab_propagation_audit": str(propagation_path) if propagation_path.exists() else None,
         },
@@ -851,8 +978,18 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             ),
             "pattern_lab_currentness_status": currentness_audit.get("status"),
             "pattern_lab_propagation_status": propagation_audit.get("status"),
+            "scalp_entry_adm_status": (
+                (ev_report.get("scalp_entry_action_decision_matrix") or {}).get("status")
+                if isinstance(ev_report.get("scalp_entry_action_decision_matrix"), dict)
+                else None
+            ),
+            "scalp_entry_adm_ready_for_daily_policy_tuning": scalp_entry_adm_summary.get(
+                "ready_for_daily_policy_tuning"
+            ),
+            "scalp_entry_adm_warnings": scalp_entry_adm_summary.get("warnings"),
         },
         "application_timing": _application_timing(target_date, ev_report),
+        "scalp_entry_action_decision_matrix": scalp_entry_adm_summary,
         "pattern_lab_currentness_audit": currentness_audit,
         "pattern_lab_propagation_audit": propagation_audit,
         "scalping": scalping_rows,
@@ -863,6 +1000,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             for message in [
                 "threshold_cycle_ev_missing" if not ev_json.exists() else "",
                 "swing_runtime_approval_missing" if not swing_path.exists() else "",
+                "scalp_entry_action_decision_matrix_missing" if not scalp_entry_adm_path else "",
                 "pattern_lab_currentness_audit_missing" if not currentness_path.exists() else "",
                 "pattern_lab_propagation_audit_missing" if not propagation_path.exists() else "",
             ]
@@ -900,6 +1038,11 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
     scalping = report.get("scalping") if isinstance(report.get("scalping"), list) else []
     swing = report.get("swing") if isinstance(report.get("swing"), list) else []
     panic = report.get("panic") if isinstance(report.get("panic"), list) else []
+    entry_adm = (
+        report.get("scalp_entry_action_decision_matrix")
+        if isinstance(report.get("scalp_entry_action_decision_matrix"), dict)
+        else {}
+    )
     currentness = report.get("pattern_lab_currentness_audit") if isinstance(report.get("pattern_lab_currentness_audit"), dict) else {}
     propagation = report.get("pattern_lab_propagation_audit") if isinstance(report.get("pattern_lab_propagation_audit"), dict) else {}
     lines = [
@@ -912,6 +1055,7 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         f"- swing_blocked/requested/approved: `{summary.get('swing_blocked')}` / `{summary.get('swing_requested')}` / `{summary.get('swing_approved')}`",
         f"- swing_legacy_hard_gate_risk_counts: `{summary.get('swing_legacy_hard_gate_risk_counts')}`",
         f"- panic_approval_requested: `{summary.get('panic_approval_requested')}`",
+        f"- scalp_entry_adm_status: `{summary.get('scalp_entry_adm_status')}`",
         f"- pattern_lab_currentness_status: `{summary.get('pattern_lab_currentness_status')}`",
         f"- pattern_lab_propagation_status: `{summary.get('pattern_lab_propagation_status')}`",
         f"- env_generated_at: `{timing.get('env_generated_at') or '-'}`",
@@ -921,6 +1065,17 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         "",
         "## Scalping",
         *_render_rows(scalping),
+        "",
+        "## Scalp Entry ADM",
+        f"- status: `{entry_adm.get('status')}`",
+        f"- runtime_bias_scope: `{entry_adm.get('runtime_bias_scope')}`",
+        f"- joined_action_ev_pct: `{entry_adm.get('joined_action_ev_pct')}`",
+        f"- joined_sample/sample_floor: `{entry_adm.get('joined_sample')}` / `{entry_adm.get('sample_floor')}`",
+        f"- prompt_applied_count: `{entry_adm.get('prompt_applied_count')}`",
+        f"- missing_actions: `{entry_adm.get('missing_actions') or []}`",
+        f"- top_actions: `{entry_adm.get('top_actions') or []}`",
+        f"- ready_for_daily_policy_tuning: `{entry_adm.get('ready_for_daily_policy_tuning')}`",
+        f"- warnings: `{entry_adm.get('warnings') or []}`",
         "",
         "## Swing",
         *_render_rows(swing),

@@ -34,6 +34,8 @@ def test_postclose_wrapper_runs_swing_daily_simulation_before_lifecycle_audit():
 def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
+    sim_post_sell_idx = script.index("src.engine.sniper_post_sell_feedback")
+    entry_adm_idx = script.index("src.engine.scalp_entry_action_decision_matrix")
     verbosity_idx = script.index("src.engine.pipeline_event_verbosity_report")
     observation_audit_idx = script.index("src.engine.observation_source_quality_audit")
     perf_source_idx = script.index("src.engine.codebase_performance_workorder_report")
@@ -47,7 +49,9 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     next_checklist_idx = script.rindex("src.engine.build_next_stage2_checklist")
 
     assert (
-        verbosity_idx
+        sim_post_sell_idx
+        < entry_adm_idx
+        < verbosity_idx
         < observation_audit_idx
         < perf_source_idx
         < pre_ev_idx
@@ -60,6 +64,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         < next_checklist_idx
     )
     assert 'RUN_PATTERN_LAB_PROPAGATION_AUDIT="${THRESHOLD_CYCLE_RUN_PATTERN_LAB_PROPAGATION_AUDIT:-true}"' in script
+    assert 'RUN_SCALP_ENTRY_ADM="${THRESHOLD_CYCLE_RUN_SCALP_ENTRY_ADM:-true}"' in script
 
 
 def test_postclose_wrapper_refreshes_market_breadth_before_panic_reports():
@@ -96,6 +101,7 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert '"$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json"' in script
+    assert '"$PROJECT_DIR/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/runtime_approval_summary/runtime_approval_summary_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/plan_rebase_daily_renewal/plan_rebase_daily_renewal_${TARGET_DATE}.json"' in script
     assert 'wait_for_file_artifact "$(next_stage2_checklist_path)" "next_stage2_checklist"' in script
@@ -103,6 +109,7 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert '"$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json"' in script
     assert "pattern_lab_currentness_audit=$RUN_PATTERN_LAB_CURRENTNESS_AUDIT" in script
     assert "pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT" in script
+    assert "scalp_entry_adm=$RUN_SCALP_ENTRY_ADM" in script
 
 
 def test_postclose_wrapper_marks_availability_guard_pause_as_fail():

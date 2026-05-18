@@ -12,6 +12,7 @@ from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.engine.build_code_improvement_workorder import code_improvement_workorder_paths
 from src.engine.approval_contracts import annotate_approval_request
 from src.engine.scalping_pattern_lab_automation import automation_report_paths
+from src.engine.scalp_entry_action_decision_matrix import report_paths as scalp_entry_adm_report_paths
 from src.engine.swing_pattern_lab_automation import swing_pattern_lab_automation_report_paths
 from src.engine.threshold_cycle_preopen_apply import apply_manifest_path
 
@@ -446,6 +447,60 @@ def _code_improvement_workorder_summary(target_date: str) -> tuple[dict[str, Any
     )
 
 
+def _scalp_entry_adm_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
+    json_path, _ = scalp_entry_adm_report_paths(target_date)
+    payload = _load_json(json_path)
+    if not payload:
+        return (
+            {
+                "available": False,
+                "artifact": None,
+                "status": "missing",
+                "total_candidates": 0,
+                "joined_sample": 0,
+                "sample_floor": 20,
+                "missing_actions": [],
+                "prompt_applied_count": 0,
+                "top_actions": [],
+                "runtime_effect": False,
+                "decision_authority": "entry_advisory_prompt_context_only",
+            },
+            None,
+            ["scalp_entry_action_decision_matrix_missing"],
+        )
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    action_summary = payload.get("action_summary") if isinstance(payload.get("action_summary"), list) else []
+    warnings = [f"scalp_entry_adm:{item}" for item in (payload.get("warnings") or []) if str(item)]
+    return (
+        {
+            "available": True,
+            "artifact": str(json_path),
+            "status": payload.get("status"),
+            "runtime_effect": bool(payload.get("runtime_effect")),
+            "decision_authority": payload.get("decision_authority"),
+            "application_mode": payload.get("application_mode"),
+            "primary_decision_metric": payload.get("primary_decision_metric"),
+            "total_candidates": _safe_int(summary.get("total_candidates"), 0),
+            "joined_sample": _safe_int(summary.get("joined_sample"), 0),
+            "sample_floor": _safe_int(summary.get("sample_floor"), 20),
+            "missing_actions": summary.get("missing_actions") if isinstance(summary.get("missing_actions"), list) else [],
+            "prompt_applied_count": _safe_int(summary.get("prompt_applied_count"), 0),
+            "top_actions": [
+                {
+                    "action": item.get("action"),
+                    "sample_count": item.get("sample_count"),
+                    "joined_sample": item.get("joined_sample"),
+                    "source_quality_adjusted_ev_pct": item.get("source_quality_adjusted_ev_pct"),
+                }
+                for item in action_summary
+                if isinstance(item, dict) and _safe_int(item.get("sample_count"), 0) > 0
+            ][:5],
+        },
+        str(json_path),
+        warnings,
+    )
+
+
 def _pipeline_event_verbosity_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
     json_path = REPORT_DIR / "pipeline_event_verbosity" / f"pipeline_event_verbosity_{target_date}.json"
     payload = _load_json(json_path)
@@ -582,6 +637,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
     )
     pattern_lab_summary, pattern_lab_path, pattern_lab_warnings = _pattern_lab_automation_summary(target_date)
     swing_lab_summary, swing_lab_path, swing_lab_warnings = _swing_pattern_lab_automation_summary(target_date)
+    scalp_entry_adm_summary, scalp_entry_adm_path, scalp_entry_adm_warnings = _scalp_entry_adm_summary(target_date)
     code_workorder_summary, code_workorder_path, code_workorder_warnings = _code_improvement_workorder_summary(target_date)
     pipeline_verbosity_summary, pipeline_verbosity_path, pipeline_verbosity_warnings = _pipeline_event_verbosity_summary(target_date)
     codebase_perf_summary, codebase_perf_path, codebase_perf_warnings = _codebase_performance_workorder_summary(target_date)
@@ -655,6 +711,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
         "swing_runtime_approval": swing_runtime_approval,
         "pattern_lab_automation": pattern_lab_summary,
         "swing_pattern_lab_automation": swing_lab_summary,
+        "scalp_entry_action_decision_matrix": scalp_entry_adm_summary,
         "pipeline_event_verbosity": pipeline_verbosity_summary,
         "codebase_performance_workorder": codebase_perf_summary,
         "pattern_lab_currentness_audit": currentness_audit_summary,
@@ -667,6 +724,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "apply_manifest": str(apply_path) if apply_path.exists() else None,
             "pattern_lab_automation": pattern_lab_path,
             "swing_pattern_lab_automation": swing_lab_path,
+            "scalp_entry_action_decision_matrix": scalp_entry_adm_path,
             "pipeline_event_verbosity": pipeline_verbosity_path,
             "codebase_performance_workorder": codebase_perf_path,
             "pattern_lab_currentness_audit": currentness_audit_path,
@@ -683,6 +741,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
                 "apply_manifest_missing" if not apply_path.exists() else "",
                 *pattern_lab_warnings,
                 *swing_lab_warnings,
+                *scalp_entry_adm_warnings,
                 *pipeline_verbosity_warnings,
                 *codebase_perf_warnings,
                 *currentness_audit_warnings,
@@ -708,6 +767,7 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
     runtime = report.get("runtime_apply") if isinstance(report.get("runtime_apply"), dict) else {}
     pattern_lab = report.get("pattern_lab_automation") if isinstance(report.get("pattern_lab_automation"), dict) else {}
     swing_lab = report.get("swing_pattern_lab_automation") if isinstance(report.get("swing_pattern_lab_automation"), dict) else {}
+    scalp_entry_adm = report.get("scalp_entry_action_decision_matrix") if isinstance(report.get("scalp_entry_action_decision_matrix"), dict) else {}
     pipeline_verbosity = report.get("pipeline_event_verbosity") if isinstance(report.get("pipeline_event_verbosity"), dict) else {}
     codebase_perf = report.get("codebase_performance_workorder") if isinstance(report.get("codebase_performance_workorder"), dict) else {}
     currentness_audit = report.get("pattern_lab_currentness_audit") if isinstance(report.get("pattern_lab_currentness_audit"), dict) else {}
@@ -759,6 +819,14 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- avg_expected_ev: `{missed_probe.get('avg_expected_ev_pct')}`% / score65_74_avg_expected_ev: `{missed_probe.get('score65_74_avg_expected_ev_pct')}`%",
         f"- actual_order_submitted: `{missed_probe.get('actual_order_submitted')}` / broker_order_forbidden: `{missed_probe.get('broker_order_forbidden')}`",
         f"- authority: `{missed_probe.get('calibration_authority') or '-'}`",
+        "",
+        "## Scalp Entry ADM",
+        f"- artifact: `{scalp_entry_adm.get('artifact') or '-'}`",
+        f"- status: `{scalp_entry_adm.get('status')}` / authority: `{scalp_entry_adm.get('decision_authority') or '-'}`",
+        f"- total/joined/floor: `{scalp_entry_adm.get('total_candidates')}` / `{scalp_entry_adm.get('joined_sample')}` / `{scalp_entry_adm.get('sample_floor')}`",
+        f"- prompt_applied_count: `{scalp_entry_adm.get('prompt_applied_count')}`",
+        f"- missing_actions: `{scalp_entry_adm.get('missing_actions') or []}`",
+        f"- top_actions: `{scalp_entry_adm.get('top_actions') or []}`",
         "",
         "## Pattern Lab Automation",
         f"- artifact: `{pattern_lab.get('artifact') or '-'}`",

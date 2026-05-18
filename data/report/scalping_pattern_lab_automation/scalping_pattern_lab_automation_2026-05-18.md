@@ -6,6 +6,7 @@
 - consensus_count: `6`
 - auto_family_candidate_count: `3`
 - code_improvement_order_count: `13`
+- scalp_entry_adm_status/joined: `warning` / `2`
 - runtime_effect: `False`
 
 ## Consensus Findings

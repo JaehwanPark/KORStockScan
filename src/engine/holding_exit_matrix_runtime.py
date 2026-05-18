@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from src.utils.constants import DATA_DIR
+from src.utils.constants import DATA_DIR, TRADING_RULES
 
 
 MATRIX_DIR = DATA_DIR / "report" / "holding_exit_decision_matrix"
@@ -43,6 +43,24 @@ def _volume_bucket(value: Any) -> str:
     if volume < 10_000_000:
         return "volume_2m_10m"
     return "volume_gte_10m"
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        if value is None:
+            return default
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
 
 
 def _time_bucket(value: datetime | None) -> str:
@@ -144,7 +162,7 @@ def _prompt_context(payload: dict[str, Any], matched_entries: list[dict[str, Any
     hard_veto = ", ".join(str(item) for item in (payload.get("hard_veto") or [])[:4]) or "-"
     lines = [
         "[ADM Advisory Context]",
-        "- source: report-only holding/exit decision matrix. hard veto and existing runtime safety always win.",
+        "- source: holding/exit decision matrix. operator override may force HOLD/EXIT or scale-in bias; hard veto and existing runtime safety always win.",
         f"- matrix_version: {payload.get('matrix_version', '-')}",
         f"- source_date: {payload.get('source_date', '-')}",
         f"- hard_veto_first: {hard_veto}",
@@ -179,6 +197,157 @@ def _alignment_for_action(action_label: str, matched_entries: list[dict[str, Any
     if action in {"EXIT", "TRIM", "DROP", "SELL"}:
         return "exit_against_matrix_bias"
     return "mixed_or_unknown"
+
+
+def _runtime_bias_from_entries(
+    *,
+    action_label: str,
+    matched_entries: list[dict[str, Any]],
+    position_ctx: dict[str, Any] | None,
+) -> dict[str, Any]:
+    runtime_enabled = bool(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED", False))
+    action = str(action_label or "").upper()
+    biases = {str(entry.get("recommended_bias") or "no_clear_edge") for entry in matched_entries}
+    profit_rate = _safe_float((position_ctx or {}).get("profit_rate"), 0.0)
+    peak_profit = _safe_float((position_ctx or {}).get("peak_profit"), profit_rate)
+    current_ai_score = _safe_float((position_ctx or {}).get("current_ai_score"), 50.0)
+    exit_rule = str((position_ctx or {}).get("exit_rule") or "").lower()
+    hard_veto = any(token in exit_rule for token in ("hard_stop", "emergency", "market_closed", "invalid"))
+    result = {
+        "holding_exit_matrix_runtime_bias_enabled": runtime_enabled,
+        "holding_exit_matrix_runtime_bias_applied": False,
+        "holding_exit_matrix_runtime_effect": "none",
+        "holding_exit_matrix_original_action": action or "-",
+        "holding_exit_matrix_forced_action": "-",
+        "holding_exit_matrix_runtime_reason": "no_runtime_bias",
+        "holding_exit_matrix_scale_in_bias": "-",
+        "holding_exit_matrix_hypothesis_profit_rate": profit_rate,
+        "holding_exit_matrix_hypothesis_peak_profit": peak_profit,
+        "holding_exit_matrix_hypothesis_ai_score": current_ai_score,
+    }
+    if not runtime_enabled:
+        result["holding_exit_matrix_runtime_reason"] = "runtime_bias_disabled"
+        return result
+    if not action:
+        result["holding_exit_matrix_runtime_reason"] = "missing_ai_action"
+        return result
+    if hard_veto:
+        result["holding_exit_matrix_runtime_reason"] = "hard_veto_passthrough"
+        return result
+
+    forced_action = ""
+    effect = "none"
+    reason = ""
+    if (
+        "prefer_exit" in biases
+        and action in {"HOLD", "WAIT", "TRIM"}
+        and bool(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_HOLD_TO_EXIT_ENABLED", True))
+    ):
+        forced_action = "EXIT"
+        effect = "force_exit"
+        reason = "matrix_prefer_exit"
+    elif (
+        biases & {"prefer_avg_down_wait", "prefer_pyramid_wait"}
+        and action in {"EXIT", "DROP", "SELL", "TRIM"}
+        and bool(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_EXIT_TO_HOLD_ENABLED", True))
+    ):
+        forced_action = "HOLD"
+        effect = "force_hold"
+        reason = "matrix_scale_in_or_missed_upside_wait"
+
+    if "prefer_avg_down_wait" in biases:
+        result["holding_exit_matrix_scale_in_bias"] = "AVG_DOWN"
+    elif "prefer_pyramid_wait" in biases:
+        result["holding_exit_matrix_scale_in_bias"] = "PYRAMID"
+
+    if not forced_action and position_ctx:
+        drawdown_from_peak = float(peak_profit or 0.0) - float(profit_rate or 0.0)
+        if (
+            action in {"EXIT", "DROP", "SELL"}
+            and bool(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_EXIT_TO_HOLD_ENABLED", True))
+            and current_ai_score >= float(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_AI_SCORE", 65) or 65)
+            and profit_rate >= float(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_PROFIT_PCT", -1.2) or -1.2)
+            and profit_rate <= float(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MAX_PROFIT_PCT", -0.1) or -0.1)
+        ):
+            forced_action = "HOLD"
+            effect = "force_hold"
+            reason = "hypothesis_avg_down_wait_window"
+            result["holding_exit_matrix_scale_in_bias"] = "AVG_DOWN"
+        elif (
+            action in {"EXIT", "DROP", "SELL", "TRIM"}
+            and bool(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_EXIT_TO_HOLD_ENABLED", True))
+            and current_ai_score >= float(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_PYRAMID_MIN_AI_SCORE", 75) or 75)
+            and profit_rate >= float(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_PYRAMID_MIN_PROFIT_PCT", 0.8) or 0.8)
+            and drawdown_from_peak <= float(
+                getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_PYRAMID_MAX_DRAWDOWN_FROM_PEAK_PCT", 0.35) or 0.35
+            )
+        ):
+            forced_action = "HOLD"
+            effect = "force_hold"
+            reason = "hypothesis_pyramid_wait_window"
+            result["holding_exit_matrix_scale_in_bias"] = "PYRAMID"
+
+    if not forced_action:
+        result["holding_exit_matrix_runtime_reason"] = "no_matching_runtime_bias"
+        return result
+    result.update(
+        {
+            "holding_exit_matrix_runtime_bias_applied": True,
+            "holding_exit_matrix_runtime_effect": effect,
+            "holding_exit_matrix_forced_action": forced_action,
+            "holding_exit_matrix_runtime_reason": reason,
+        }
+    )
+    return result
+
+
+def resolve_holding_exit_matrix_scale_in_bias(
+    *,
+    strategy: str,
+    profit_rate: float,
+    peak_profit: float,
+    current_ai_score: float,
+    held_sec: int,
+) -> dict[str, Any]:
+    """Runtime override hook for ADM-driven avg-down/pyramid proposals."""
+    if not bool(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED", False)):
+        return {"should_add": False, "reason": "holding_exit_matrix_scale_in_bias_disabled"}
+    raw_strategy = str(strategy or "").upper()
+    if raw_strategy not in {"SCALPING", "SCALP"}:
+        return {"should_add": False, "reason": "holding_exit_matrix_scale_in_bias_scalping_only"}
+    avg_min = float(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_PROFIT_PCT", -1.2) or -1.2)
+    avg_max = float(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MAX_PROFIT_PCT", -0.1) or -0.1)
+    avg_ai = int(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_AI_SCORE", 65) or 65)
+    avg_min_held = int(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_HELD_SEC", 10) or 10)
+    avg_max_held = int(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MAX_HELD_SEC", 240) or 240)
+    if avg_min <= float(profit_rate or 0.0) <= avg_max and int(held_sec or 0) >= avg_min_held:
+        if int(held_sec or 0) <= avg_max_held and float(current_ai_score or 0.0) >= avg_ai:
+            return {
+                "should_add": True,
+                "add_type": "AVG_DOWN",
+                "reason": "holding_exit_matrix_avg_down_bias",
+                "profit_rate": profit_rate,
+                "peak_profit": peak_profit,
+                "current_ai_score": current_ai_score,
+                "held_sec": held_sec,
+                "holding_exit_matrix_scale_in_bias": "AVG_DOWN",
+            }
+    pyr_min = float(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_PYRAMID_MIN_PROFIT_PCT", 0.8) or 0.8)
+    pyr_ai = int(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_PYRAMID_MIN_AI_SCORE", 75) or 75)
+    pyr_max_dd = float(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_PYRAMID_MAX_DRAWDOWN_FROM_PEAK_PCT", 0.35) or 0.35)
+    drawdown_from_peak = float(peak_profit or 0.0) - float(profit_rate or 0.0)
+    if float(profit_rate or 0.0) >= pyr_min and float(current_ai_score or 0.0) >= pyr_ai and drawdown_from_peak <= pyr_max_dd:
+        return {
+            "should_add": True,
+            "add_type": "PYRAMID",
+            "reason": "holding_exit_matrix_pyramid_bias",
+            "profit_rate": profit_rate,
+            "peak_profit": peak_profit,
+            "current_ai_score": current_ai_score,
+            "held_sec": held_sec,
+            "holding_exit_matrix_scale_in_bias": "PYRAMID",
+        }
+    return {"should_add": False, "reason": "holding_exit_matrix_scale_in_no_match"}
 
 
 def build_holding_exit_matrix_runtime_context(
@@ -222,6 +391,15 @@ def build_holding_exit_matrix_runtime_context(
                 "holding_exit_matrix_time_bucket": time_bucket,
                 "holding_exit_matrix_recommended_biases": "-",
                 "holding_exit_matrix_policy_hints": "-",
+                "holding_exit_matrix_runtime_bias_enabled": bool(
+                    getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED", False)
+                ),
+                "holding_exit_matrix_runtime_bias_applied": False,
+                "holding_exit_matrix_runtime_effect": "none",
+                "holding_exit_matrix_original_action": "-",
+                "holding_exit_matrix_forced_action": "-",
+                "holding_exit_matrix_runtime_reason": "not_evaluated",
+                "holding_exit_matrix_scale_in_bias": "-",
             },
             "matched_entries": [],
         }
@@ -254,6 +432,15 @@ def build_holding_exit_matrix_runtime_context(
                 "holding_exit_matrix_time_bucket": time_bucket,
                 "holding_exit_matrix_recommended_biases": "-",
                 "holding_exit_matrix_policy_hints": "-",
+                "holding_exit_matrix_runtime_bias_enabled": bool(
+                    getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED", False)
+                ),
+                "holding_exit_matrix_runtime_bias_applied": False,
+                "holding_exit_matrix_runtime_effect": "none",
+                "holding_exit_matrix_original_action": "-",
+                "holding_exit_matrix_forced_action": "-",
+                "holding_exit_matrix_runtime_reason": "not_evaluated",
+                "holding_exit_matrix_scale_in_bias": "-",
             },
             "matched_entries": [],
         }
@@ -288,6 +475,15 @@ def build_holding_exit_matrix_runtime_context(
         "holding_exit_matrix_policy_hints": ",".join(
             str(entry.get("policy_hint") or "-") for entry in matched_entries
         ),
+        "holding_exit_matrix_runtime_bias_enabled": bool(
+            getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED", False)
+        ),
+        "holding_exit_matrix_runtime_bias_applied": False,
+        "holding_exit_matrix_runtime_effect": "none",
+        "holding_exit_matrix_original_action": "-",
+        "holding_exit_matrix_forced_action": "-",
+        "holding_exit_matrix_runtime_reason": "not_evaluated",
+        "holding_exit_matrix_scale_in_bias": "-",
     }
     return {
         "applied": bool(advisory_enabled),
@@ -303,13 +499,28 @@ def build_holding_exit_matrix_runtime_context(
 def merge_holding_exit_matrix_result_fields(
     result: dict[str, Any] | None,
     runtime_context: dict[str, Any] | None,
+    position_ctx: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = dict(result or {})
     context = runtime_context or {}
     fields = dict(context.get("fields") or {})
     action = payload.get("action_v2") or payload.get("action") or ""
+    runtime_bias = _runtime_bias_from_entries(
+        action_label=str(action or ""),
+        matched_entries=list(context.get("matched_entries") or []),
+        position_ctx=position_ctx,
+    )
+    fields.update(runtime_bias)
+    forced_action = str(runtime_bias.get("holding_exit_matrix_forced_action") or "").upper()
+    if runtime_bias.get("holding_exit_matrix_runtime_effect") in {"force_hold", "force_exit"} and forced_action in {
+        "HOLD",
+        "EXIT",
+    }:
+        if "action_v2" in payload:
+            payload["action_v2"] = forced_action
+        payload["action"] = forced_action
     fields["holding_exit_matrix_decision_alignment"] = _alignment_for_action(
-        str(action or ""),
+        str(payload.get("action_v2") or payload.get("action") or action or ""),
         list(context.get("matched_entries") or []),
     )
     payload.update(fields)

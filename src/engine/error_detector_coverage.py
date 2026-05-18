@@ -50,6 +50,7 @@ REQUIRED_ARTIFACT_IDS: set[str] = {
     "swing_improvement_automation_report",
     "swing_runtime_approval_report",
     "scalping_pattern_lab_automation_report",
+    "scalp_entry_action_decision_matrix_report",
     "swing_pattern_lab_automation_report",
     "pattern_lab_currentness_audit_report",
     "pattern_lab_propagation_audit_report",

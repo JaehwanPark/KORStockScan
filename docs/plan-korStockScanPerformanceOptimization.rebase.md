@@ -1,6 +1,6 @@
 # KORStockScan Plan Rebase 중심 문서
 
-기준일: `2026-05-13 KST`
+기준일: `2026-05-18 KST`
 역할: 현재 튜닝 원칙, 자동화체인 판정 계약, active/open 상태만 고정하는 중심축 문서다.
 주의: 이 문서는 자동 파싱용 체크리스트를 소유하지 않는다. 실행 작업항목은 날짜별 `stage2 todo checklist`가 소유한다.
 
@@ -14,7 +14,7 @@
 2. 중심 루프는 `R0_collect -> R1_daily_report -> R2_cumulative_report -> R3_manifest_only -> R4_preopen_apply_candidate -> R5_bounded_calibrated_apply -> R6_post_apply_attribution`다. 상세 산출물/소비자 계약은 [report-based-automation-traceability](./report-based-automation-traceability.md)를 따른다.
 3. 기준선은 `main-only`, `normal_only`, `post_fallback_deprecation`이다. 원격/server 비교값은 기본 의사결정 입력에서 제외한다.
 4. 실전 변경은 동일 단계 내 단일 owner canary를 기본으로 한다. stage, 조작점, cohort tag, rollback guard가 분리된 경우에만 stage-disjoint concurrent canary를 허용한다.
-5. `2026-05-15` PREOPEN 기준 runtime env는 `auto_bounded_live` guard를 통과한 `soft_stop_whipsaw_confirmation`만 selected family로 인정한다. `score65_74_recovery_probe`는 `2026-05-13`에는 selected였고 `2026-05-14` 5/13 source 재검증에서도 open 가능성이 확인됐지만, `2026-05-15` 실제 preopen apply에서는 5/14 source의 rolling_5d primary 재평가 결과 `hold/no_runtime_env_override`로 미적용됐다. 장중 runtime threshold mutation은 금지한다.
+5. `2026-05-18` runtime env는 사용자 운영 override를 포함한다. 스캘핑은 `score65_74_recovery_probe`, pre-AI soft gate 재배치, `scalp_entry_adm_runtime_bias_p1`, `holding_exit_matrix_runtime_bias_p1`이 켜져 있고, 스윙은 one-share real canary와 gatekeeper reject cooldown이 env에 명시되어 있다. 이는 자동화체인의 무단 장중 mutation이 아니라 사용자 명시 operator override이며, threshold/provider/broker submit safety guard 우회 권한은 없다.
 6. 스캘핑 live AI route는 OpenAI 고정이다. `KORSTOCKSCAN_SCALPING_AI_ROUTE=openai`, Responses WS transport, numeric compact JSON hot path를 기준으로 보고, Gemini/DeepSeek fallback은 명시 env 또는 OpenAI 초기화 실패/비운영 분석 경로로만 본다.
 7. 스윙은 dry-run self-improvement 체인이다. `selection -> db_load -> entry -> holding -> scale_in -> exit -> attribution` lifecycle을 매 장후 감사하고, approval request는 생성할 수 있지만 별도 approval artifact 없이는 runtime env/live order 전환으로 보지 않는다.
 8. sim/probe/counterfactual은 source bundle과 approval request 근거가 될 수 있지만 real execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
@@ -27,6 +27,7 @@
 | `auto_bounded_live` | deterministic guard + AI correction guard + same-stage owner rule을 통과한 family만 다음 장전 runtime env에 반영하는 모드 | 현재 threshold apply 허용선 |
 | `manifest_only` | 후보와 권고는 만들지만 runtime env를 바꾸지 않는 상태 | approval/guard 미충족 기본값 |
 | `report_only` / `observe_only` | runtime 판단을 바꾸지 않고 source bundle, workorder, approval request, operator review에만 쓰는 상태 | live 변경 권한 없음 |
+| `operator_runtime_override` | 사용자가 명시적으로 실적용을 지시해 runtime env와 bot restart까지 실행한 상태 | source/provenance와 rollback env를 반드시 남기며 safety guard 우회 금지 |
 | `approval_required` | 자동화체인이 후보를 만들었지만 사용자/approval artifact가 필요한 상태 | artifact 없으면 env apply 금지 |
 | `safety_veto` | severe loss, 주문 실패, provenance 손상, hard/protect/emergency stop 지연 같은 즉시 차단 조건 | daily-only로도 차단 가능 |
 | `source_quality_blocker` | stale/missing/duplicate/provenance 결함 때문에 edge 판정이 막힌 상태 | threshold candidate 아님 |
@@ -106,9 +107,9 @@
 
 | 영역 | 현재 상태 | 금지선 |
 | --- | --- | --- |
-| scalping entry | `score65_74_recovery_probe`는 2026-05-13 selected였으나 2026-05-15 실제 preopen apply에서는 `hold/no_runtime_env_override`로 미적용된 open 후보다. score 50 fallback/neutral은 `blocked_ai_score`로 보류 | score threshold 완화, fallback 재개, 장중 env mutation 금지 |
+| scalping entry | `score65_74_recovery_probe`와 `scalp_entry_adm_runtime_bias_p1`이 2026-05-18 operator override로 runtime env에 포함됐다. Entry ADM은 `BUY_NOW/WAIT_REQUOTE/SKIP_STALE/BUY_DEFENSIVE/NO_BUY_AI/SKIP_SOURCE_QUALITY/SKIP_PRE_SUBMIT_SAFETY` bucket과 hypothesis fallback으로 AI `BUY`를 `WAIT`/`DROP`으로 보정할 수 있다. score 50 fallback/neutral은 `blocked_ai_score`로 보류 | threshold/provider/broker submit guard 우회 금지. stale/liquidity/overbought/latency/price freshness pre-submit safety는 ADM보다 우선 |
 | entry price | `dynamic_entry_price_resolver_p1` + `dynamic_entry_ai_price_canary_p2`; passive probe submit revalidation이 stale이면 제출 전 block | `ws_data.curr` 직접 추격, stale quote submit 금지 |
-| holding/exit | `soft_stop_micro_grace`, `soft_stop_whipsaw_confirmation` selected family, `holding_flow_override` 운영 override | hard/protect/emergency/order safety 우회 금지 |
+| holding/exit | `soft_stop_micro_grace`, `soft_stop_whipsaw_confirmation`, `holding_flow_override`, `holding_exit_matrix_runtime_bias_p1` 운영 override. Holding/Exit ADM은 flow AI action을 `HOLD`/`EXIT`로 보정하고 `holding_exit_matrix_avg_down_bias`/`holding_exit_matrix_pyramid_bias`로 scale-in action을 제안할 수 있다 | hard/protect/emergency/order/account/cooldown/qty safety 우회 금지 |
 | scale-in/position sizing | scale-in price resolver와 dynamic qty safety 유지. `position_sizing_dynamic_formula`는 score/strategy/volatility/liquidity/spread/price band/recent loss/portfolio exposure를 입력으로 보는 별도 owner이며, 신규/추가매수 1주 cap 해제는 `position_sizing_cap_release` approval request 이후만 검토 | sim/probe 단독 실주문 cap 해제, cap 해제 자동 apply 금지 |
 | sim lifecycle | sim-first lifecycle 탐색은 신규 report chain이 아니라 기존 threshold-cycle 자동화체인의 입력 범위/해석 범위다. 스캘핑 `scalp_ai_buy_all`, wait/missed-entry counterfactual, swing dry-run/probe는 모두 `actual_order_submitted=false` source로 daily/cumulative EV, runtime approval summary, code-improvement workorder에 들어간다 | real order나 real-like execution 품질로 해석 금지. 단, sim 탐색은 예수금/실주문 가능 여부/현재 selected family 때문에 후보를 좁히지 않는다 |
 | swing dry-run | lifecycle audit, threshold AI review, improvement automation, runtime approval summary가 장후 생성되며 기존 threshold-cycle 자동화체인의 swing source bundle 입력이 된다 | approval artifact 없는 env/live order 전환 금지 |
@@ -135,11 +136,11 @@
 
 | 워크스트림 | 현재 owner/상태 | 다음 판정 경로 |
 | --- | --- | --- |
-| threshold auto apply | 2026-05-15 현재 selected runtime family는 `soft_stop_whipsaw_confirmation` 1개다. `score65_74_recovery_probe`는 open 후보이나 5/15 실제 env에는 포함되지 않았다 | 장후 `threshold_cycle_ev`, `runtime_approval_summary`, post-apply attribution |
-| entry funnel | `BUY Funnel Sentinel` + `wait6579_ev_cohort` + open 후보 `score65_74_recovery_probe` | BUY/submitted drought는 daily/rolling/cumulative EV와 blocker attribution으로 판정 |
+| threshold auto apply | 2026-05-18 runtime env는 preopen selected family와 사용자 운영 override가 병합되어 있다. `score65_74_recovery_probe`, pre-AI soft gate 재배치, Entry ADM runtime bias, Holding/Exit ADM runtime bias는 post-restart cohort와 장후 EV로 추적한다 | 장후 `threshold_cycle_ev`, `runtime_approval_summary`, post-apply attribution |
+| entry funnel | `BUY Funnel Sentinel` + `wait6579_ev_cohort` + `score65_74_recovery_probe` + `scalp_entry_adm_runtime_bias_p1` | BUY/submitted drought와 forced WAIT/DROP은 daily/rolling/cumulative EV, blocker attribution, missed-upside/avoided-loss로 판정 |
 | sim-first lifecycle threshold scope | 신규 산출물 owner가 아니라 기존 `R0_collect -> R1_daily_report -> R2_cumulative_report -> R3_manifest_only -> R4_preopen_apply_candidate -> R5_bounded_calibrated_apply -> R6_post_apply_attribution` 체인의 범위 규칙이다. 스캘핑과 스윙의 BUY/selection 가능 후보 전체를 `selection -> entry -> holding -> scale_in -> exit` virtual lifecycle로 넓게 실행해 최적 threshold 후보와 기능개선 workorder를 찾는다 | 실주문/예수금/cap/selected runtime family는 sim exclusion 사유가 아니라 provenance tag로만 남긴다. 별도 standalone report가 threshold-cycle consumer나 apply authority가 되지 않는다 |
 | entry price quality | P1/P2 price resolver, passive probe lifecycle, submit revalidation block | `pre_submit_price_guard` family와 daily EV attribution |
-| holding/exit | `soft_stop_micro_grace`, selected `soft_stop_whipsaw_confirmation`, `holding_flow_override` | HOLD/EXIT Sentinel, post-sell feedback, threshold-cycle EV |
+| holding/exit | `soft_stop_micro_grace`, selected `soft_stop_whipsaw_confirmation`, `holding_flow_override`, `holding_exit_matrix_runtime_bias_p1` | HOLD/EXIT Sentinel, post-sell feedback, scale-in ADM bias attribution, threshold-cycle EV |
 | position sizing | scale-in resolver/dynamic qty safety, 1주 cap default ON. 동적수량 산식 튜닝 owner는 `position_sizing_dynamic_formula`, cap 해제 승인 owner는 `position_sizing_cap_release`로 분리 | 산식 변경은 `notional_weighted_ev_pct` 또는 `source_quality_adjusted_ev_pct` 기준으로 별도 검토하고, 실주문 수량 확대는 approval request 기준 충족 시 사용자 승인 요청 |
 | panic lifecycle | `panic_sell_defense`, `panic_buying` report-only source bundle. `panic_regime_mode`는 `NORMAL -> PANIC_DETECTED -> STABILIZING -> RECOVERY_CONFIRMED` risk-regime 해석 계층이며, V2.0 runtime 후보는 scalping `entry_pre_submit` 전용 `panic_entry_freeze_guard`다. `panic_buy_regime_mode`는 `NORMAL -> PANIC_BUY_DETECTED -> PANIC_BUY_CONTINUATION -> PANIC_BUY_EXHAUSTION -> COOLDOWN` risk-regime 해석 계층이며, V2.0 후보는 기존 보유분 TP/runner 전용 `panic_buy_runner_tp_canary`다 | code-improvement workorder와 approval summary는 `runtime_effect=false` 또는 `approval_required`로만 생성. 패닉셀 미체결 주문 cancel, holding/exit context, 강제 축소/청산과 패닉바잉 추격매수 차단, continuation trailing, exhaustion cleanup, cooldown reentry guard는 별도 owner/approval/rollback guard 없이는 열지 않는다 |
 | swing lifecycle | swing dry-run recommendation, audit, AI review, improvement automation, runtime approval | approval artifact 없으면 env apply/real order 금지 |
@@ -154,7 +155,7 @@
 3. 운영 자동화 증적(cron, wrapper, manifest, parser, report freshness)은 전략 효과나 live 승인 근거와 분리한다.
 4. `server_comparison`은 명시 플래그가 없으면 Plan Rebase 의사결정 입력에서 제외한다.
 5. `combined` sim+real 진단은 운영 관찰에는 쓸 수 있지만 real execution 품질/실주문 승인에는 쓰지 않는다.
-6. 새 report-only 산출물이 생겨도 source bundle consumer, metric contract, forbidden uses가 없으면 자동화체인 입력으로 보지 않는다.
+6. 새 report-only 산출물이 생겨도 source bundle consumer, metric contract, forbidden uses가 없으면 자동화체인 입력으로 보지 않는다. 단, 사용자가 별도 `operator_runtime_override`를 선언하면 산출물과 runtime env override를 분리해 기록하고, rollback env와 safety guard 우선순위를 함께 남긴다.
 
 ## 9. 델타/Q&A 라우팅
 

@@ -116,6 +116,76 @@ def test_runtime_approval_summary_combines_scalping_and_swing(tmp_path, monkeypa
     assert "swing_model_floor" in markdown
 
 
+def test_runtime_approval_summary_surfaces_entry_adm_runtime_bias_summary(tmp_path, monkeypatch):
+    ev_dir = tmp_path / "threshold_cycle_ev"
+    adm_dir = tmp_path / "scalp_entry_action_decision_matrix"
+    swing_dir = tmp_path / "swing_runtime_approval"
+    out_dir = tmp_path / "runtime_approval_summary"
+    for directory in (ev_dir, adm_dir, swing_dir):
+        directory.mkdir(parents=True)
+    monkeypatch.setattr(
+        mod,
+        "ev_report_paths",
+        lambda target_date: (
+            ev_dir / f"threshold_cycle_ev_{target_date}.json",
+            ev_dir / f"threshold_cycle_ev_{target_date}.md",
+        ),
+    )
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_DIR", swing_dir)
+    monkeypatch.setattr(mod, "SUMMARY_DIR", out_dir)
+    adm_path = adm_dir / "scalp_entry_action_decision_matrix_2026-05-18.json"
+    adm_path.write_text(json.dumps({"status": "warning"}), encoding="utf-8")
+    (ev_dir / "threshold_cycle_ev_2026-05-18.json").write_text(
+        json.dumps(
+            {
+                "sources": {"scalp_entry_action_decision_matrix": str(adm_path)},
+                "scalp_entry_action_decision_matrix": {
+                    "available": True,
+                    "status": "warning",
+                    "joined_sample": 2,
+                    "sample_floor": 20,
+                    "prompt_applied_count": 0,
+                    "missing_actions": ["WAIT_REQUOTE", "BUY_DEFENSIVE"],
+                    "primary_decision_metric": "source_quality_adjusted_ev_pct",
+                    "source_quality_adjusted_ev_pct": -2.22,
+                    "top_actions": [
+                        {
+                            "action": "BUY_NOW",
+                            "joined_sample": 2,
+                            "source_quality_adjusted_ev_pct": -2.22,
+                        }
+                    ],
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (swing_dir / "swing_runtime_approval_2026-05-18.json").write_text(
+        json.dumps({"summary": {"requested": 0, "approved": 0}, "blocked_requests": []}),
+        encoding="utf-8",
+    )
+
+    report = mod.build_runtime_approval_summary("2026-05-18")
+
+    adm_summary = report["scalp_entry_action_decision_matrix"]
+    assert adm_summary["runtime_bias_scope"] == "force_wait_force_drop_buy_defensive_bias"
+    assert adm_summary["joined_action_ev_pct"] == -2.22
+    assert adm_summary["ready_for_daily_policy_tuning"] is False
+    assert "joined_sample_below_sample_floor" in adm_summary["warnings"]
+    assert "missing_action_bucket" in adm_summary["warnings"]
+    assert "prompt_context_not_loaded" in adm_summary["warnings"]
+    assert report["summary"]["scalp_entry_adm_ready_for_daily_policy_tuning"] is False
+    adm_row = next(
+        row for row in report["scalping"] if row["family"] == "scalp_entry_action_decision_matrix_advisory"
+    )
+    assert adm_row["gate_review_class"] == "entry_adm_runtime_bias_operator_override"
+    assert adm_row["runtime_bias_scope"] == "force_wait_force_drop_buy_defensive_bias"
+    markdown = (out_dir / "runtime_approval_summary_2026-05-18.md").read_text(encoding="utf-8")
+    assert "## Scalp Entry ADM" in markdown
+    assert "BUY_DEFENSIVE" in markdown
+
+
 def test_runtime_approval_summary_warns_when_sources_missing(tmp_path, monkeypatch):
     ev_dir = tmp_path / "threshold_cycle_ev"
     swing_dir = tmp_path / "swing_runtime_approval"

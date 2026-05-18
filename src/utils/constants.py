@@ -366,9 +366,12 @@ class TradingConfig:
     REVERSAL_ADD_SESSION_CUTOFF: str = "14:30"     # 허용 시간대 상한
     REVERSAL_ADD_BOX_RANGE_MAX_PCT: float = 0.20   # 박스 폭 허용 최대치 (%p)
     REVERSAL_ADD_STAGNATION_LOW_FLOOR_MARGIN: float = 0.05  # 저점 미갱신 허용 마진 (%p)
-    SCALP_LOSS_FALLBACK_ENABLED: bool = False       # 손절 직전 fallback 추가매수 실전 적용 토글
-    SCALP_LOSS_FALLBACK_OBSERVE_ONLY: bool = True   # True면 후보만 기록하고 실전 실행하지 않음
-    SCALP_LOSS_FALLBACK_ALLOWED_REASONS: tuple = ("reversal_add_ok",)  # 손절 fallback 허용 reason
+    SCALP_LOSS_FALLBACK_ENABLED: bool = True        # 운영 override: 손절 직전 ADM/fallback 추가매수 실전 적용
+    SCALP_LOSS_FALLBACK_OBSERVE_ONLY: bool = False  # 운영 override: 후보 기록에 그치지 않고 scale-in safety 후 실행
+    SCALP_LOSS_FALLBACK_ALLOWED_REASONS: tuple = (
+        "reversal_add_ok",
+        "holding_exit_matrix_avg_down_bias",
+    )  # 손절 fallback 허용 reason
     SCALP_LOSS_FALLBACK_MIN_AI_SCORE: int = 65      # 손절 fallback 후보 최소 AI 점수
     SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED: bool = True  # soft_stop 선행 불량진입 유형 observe-only
     SCALP_BAD_ENTRY_BLOCK_MIN_HOLD_SEC: int = 60
@@ -561,7 +564,26 @@ class TradingConfig:
     AI_GATEKEEPER_FAST_REUSE_SEC: float = 30.0  # 동일 감시 스냅샷 재평가 생략
     AI_HOLDING_FAST_REUSE_MAX_WS_AGE_SEC: float = 1.5  # 보유 AI fast reuse 허용 최대 WS 나이
     AI_GATEKEEPER_FAST_REUSE_MAX_WS_AGE_SEC: float = 2.0  # Gatekeeper fast reuse 허용 최대 WS 나이
-    HOLDING_EXIT_MATRIX_ADVISORY_ENABLED: bool = False  # holding/exit decision matrix advisory prompt canary 기본 OFF
+    SCALP_ENTRY_ADM_ADVISORY_ENABLED: bool = True  # 운영 override: 스캘핑 entry ADM prompt advisory 기본 ON
+    SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED: bool = True  # 운영 override: ADM bucket/hypothesis로 entry AI action 보정
+    SCALP_ENTRY_ADM_HYPOTHESIS_FALLBACK_ENABLED: bool = True  # joined sample 부족 시 stale/chase/weak-momentum 가설 적용
+    SCALP_ENTRY_ADM_NEGATIVE_EV_BLOCK_ENABLED: bool = True  # BUY bucket이라도 source-quality EV<기준이면 즉시 진입 대기
+    SCALP_ENTRY_ADM_NEGATIVE_EV_FORCE_WAIT_THRESHOLD_PCT: float = 0.0
+    SCALP_ENTRY_ADM_MIN_BUCKET_SAMPLE: int = 1
+    SCALP_ENTRY_ADM_MIN_JOINED_SAMPLE: int = 0
+    HOLDING_EXIT_MATRIX_ADVISORY_ENABLED: bool = True  # 운영 override: holding/exit matrix prompt advisory 기본 ON
+    HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED: bool = True  # 운영 override: matrix/hypothesis로 HOLD/EXIT action 보정
+    HOLDING_EXIT_MATRIX_EXIT_TO_HOLD_ENABLED: bool = True
+    HOLDING_EXIT_MATRIX_HOLD_TO_EXIT_ENABLED: bool = True
+    HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED: bool = True
+    HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_PROFIT_PCT: float = -1.20
+    HOLDING_EXIT_MATRIX_AVG_DOWN_MAX_PROFIT_PCT: float = -0.10
+    HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_AI_SCORE: int = 65
+    HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_HELD_SEC: int = 10
+    HOLDING_EXIT_MATRIX_AVG_DOWN_MAX_HELD_SEC: int = 240
+    HOLDING_EXIT_MATRIX_PYRAMID_MIN_PROFIT_PCT: float = 0.80
+    HOLDING_EXIT_MATRIX_PYRAMID_MIN_AI_SCORE: int = 75
+    HOLDING_EXIT_MATRIX_PYRAMID_MAX_DRAWDOWN_FROM_PEAK_PCT: float = 0.35
     HOLDING_FLOW_OVERRIDE_ENABLED: bool = True  # 운영 override: 단일 보유/청산 점수 대신 흐름 판단으로 최종 청산
     HOLDING_FLOW_OVERRIDE_WORSEN_PCT: float = 0.80  # 최초 후보 대비 추가 악화 허용폭(%p)
     HOLDING_FLOW_OVERRIDE_MAX_DEFER_SEC: int = 90  # flow HOLD/TRIM 보류 최대 시간
@@ -1726,7 +1748,58 @@ def _build_trading_rules() -> TradingConfig:
             else config.GPT_THRESHOLD_CORRECTION_FALLBACK_MODELS,
         )
 
+    env_scalp_entry_adm_advisory_enabled = _env_bool("KORSTOCKSCAN_SCALP_ENTRY_ADM_ADVISORY_ENABLED")
+    env_scalp_entry_adm_runtime_bias_enabled = _env_bool("KORSTOCKSCAN_SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED")
+    env_scalp_entry_adm_hypothesis_fallback_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_ENTRY_ADM_HYPOTHESIS_FALLBACK_ENABLED"
+    )
+    env_scalp_entry_adm_negative_ev_block_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_ENTRY_ADM_NEGATIVE_EV_BLOCK_ENABLED"
+    )
+    env_scalp_entry_adm_negative_ev_force_wait_threshold = _env_float(
+        "KORSTOCKSCAN_SCALP_ENTRY_ADM_NEGATIVE_EV_FORCE_WAIT_THRESHOLD_PCT"
+    )
+    env_scalp_entry_adm_min_bucket_sample = _env_int("KORSTOCKSCAN_SCALP_ENTRY_ADM_MIN_BUCKET_SAMPLE")
+    env_scalp_entry_adm_min_joined_sample = _env_int("KORSTOCKSCAN_SCALP_ENTRY_ADM_MIN_JOINED_SAMPLE")
+    env_scalp_loss_fallback_enabled = _env_bool("KORSTOCKSCAN_SCALP_LOSS_FALLBACK_ENABLED")
+    env_scalp_loss_fallback_observe_only = _env_bool("KORSTOCKSCAN_SCALP_LOSS_FALLBACK_OBSERVE_ONLY")
     env_holding_exit_matrix_advisory_enabled = _env_bool("KORSTOCKSCAN_HOLDING_EXIT_MATRIX_ADVISORY_ENABLED")
+    env_holding_exit_matrix_runtime_bias_enabled = _env_bool(
+        "KORSTOCKSCAN_HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED"
+    )
+    env_holding_exit_matrix_exit_to_hold_enabled = _env_bool(
+        "KORSTOCKSCAN_HOLDING_EXIT_MATRIX_EXIT_TO_HOLD_ENABLED"
+    )
+    env_holding_exit_matrix_hold_to_exit_enabled = _env_bool(
+        "KORSTOCKSCAN_HOLDING_EXIT_MATRIX_HOLD_TO_EXIT_ENABLED"
+    )
+    env_holding_exit_matrix_scale_in_bias_enabled = _env_bool(
+        "KORSTOCKSCAN_HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED"
+    )
+    env_holding_exit_matrix_avg_down_min_profit = _env_float(
+        "KORSTOCKSCAN_HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_PROFIT_PCT"
+    )
+    env_holding_exit_matrix_avg_down_max_profit = _env_float(
+        "KORSTOCKSCAN_HOLDING_EXIT_MATRIX_AVG_DOWN_MAX_PROFIT_PCT"
+    )
+    env_holding_exit_matrix_avg_down_min_ai = _env_int(
+        "KORSTOCKSCAN_HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_AI_SCORE"
+    )
+    env_holding_exit_matrix_avg_down_min_held = _env_int(
+        "KORSTOCKSCAN_HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_HELD_SEC"
+    )
+    env_holding_exit_matrix_avg_down_max_held = _env_int(
+        "KORSTOCKSCAN_HOLDING_EXIT_MATRIX_AVG_DOWN_MAX_HELD_SEC"
+    )
+    env_holding_exit_matrix_pyramid_min_profit = _env_float(
+        "KORSTOCKSCAN_HOLDING_EXIT_MATRIX_PYRAMID_MIN_PROFIT_PCT"
+    )
+    env_holding_exit_matrix_pyramid_min_ai = _env_int(
+        "KORSTOCKSCAN_HOLDING_EXIT_MATRIX_PYRAMID_MIN_AI_SCORE"
+    )
+    env_holding_exit_matrix_pyramid_max_drawdown = _env_float(
+        "KORSTOCKSCAN_HOLDING_EXIT_MATRIX_PYRAMID_MAX_DRAWDOWN_FROM_PEAK_PCT"
+    )
     env_holding_flow_override_enabled = _env_bool("KORSTOCKSCAN_HOLDING_FLOW_OVERRIDE_ENABLED")
     env_holding_flow_worsen = _env_float("KORSTOCKSCAN_HOLDING_FLOW_OVERRIDE_WORSEN_PCT")
     env_holding_flow_max_defer = _env_int("KORSTOCKSCAN_HOLDING_FLOW_OVERRIDE_MAX_DEFER_SEC")
@@ -1741,9 +1814,29 @@ def _build_trading_rules() -> TradingConfig:
     env_holding_flow_candle_limit = _env_int("KORSTOCKSCAN_HOLDING_FLOW_REVIEW_CANDLE_LIMIT")
     env_holding_flow_max_ws_age = _env_float("KORSTOCKSCAN_HOLDING_FLOW_REVIEW_MAX_WS_AGE_SEC")
     if (
-        env_holding_exit_matrix_advisory_enabled is not None
-        or
-        env_holding_flow_override_enabled is not None
+        env_scalp_entry_adm_advisory_enabled is not None
+        or env_scalp_entry_adm_runtime_bias_enabled is not None
+        or env_scalp_entry_adm_hypothesis_fallback_enabled is not None
+        or env_scalp_entry_adm_negative_ev_block_enabled is not None
+        or env_scalp_entry_adm_negative_ev_force_wait_threshold is not None
+        or env_scalp_entry_adm_min_bucket_sample is not None
+        or env_scalp_entry_adm_min_joined_sample is not None
+        or env_scalp_loss_fallback_enabled is not None
+        or env_scalp_loss_fallback_observe_only is not None
+        or env_holding_exit_matrix_advisory_enabled is not None
+        or env_holding_exit_matrix_runtime_bias_enabled is not None
+        or env_holding_exit_matrix_exit_to_hold_enabled is not None
+        or env_holding_exit_matrix_hold_to_exit_enabled is not None
+        or env_holding_exit_matrix_scale_in_bias_enabled is not None
+        or env_holding_exit_matrix_avg_down_min_profit is not None
+        or env_holding_exit_matrix_avg_down_max_profit is not None
+        or env_holding_exit_matrix_avg_down_min_ai is not None
+        or env_holding_exit_matrix_avg_down_min_held is not None
+        or env_holding_exit_matrix_avg_down_max_held is not None
+        or env_holding_exit_matrix_pyramid_min_profit is not None
+        or env_holding_exit_matrix_pyramid_min_ai is not None
+        or env_holding_exit_matrix_pyramid_max_drawdown is not None
+        or env_holding_flow_override_enabled is not None
         or env_holding_flow_worsen is not None
         or env_holding_flow_max_defer is not None
         or env_holding_flow_ofi_smoothing_enabled is not None
@@ -1757,9 +1850,72 @@ def _build_trading_rules() -> TradingConfig:
     ):
         config = replace(
             config,
+            SCALP_ENTRY_ADM_ADVISORY_ENABLED=env_scalp_entry_adm_advisory_enabled
+            if env_scalp_entry_adm_advisory_enabled is not None
+            else config.SCALP_ENTRY_ADM_ADVISORY_ENABLED,
+            SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED=env_scalp_entry_adm_runtime_bias_enabled
+            if env_scalp_entry_adm_runtime_bias_enabled is not None
+            else config.SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED,
+            SCALP_ENTRY_ADM_HYPOTHESIS_FALLBACK_ENABLED=env_scalp_entry_adm_hypothesis_fallback_enabled
+            if env_scalp_entry_adm_hypothesis_fallback_enabled is not None
+            else config.SCALP_ENTRY_ADM_HYPOTHESIS_FALLBACK_ENABLED,
+            SCALP_ENTRY_ADM_NEGATIVE_EV_BLOCK_ENABLED=env_scalp_entry_adm_negative_ev_block_enabled
+            if env_scalp_entry_adm_negative_ev_block_enabled is not None
+            else config.SCALP_ENTRY_ADM_NEGATIVE_EV_BLOCK_ENABLED,
+            SCALP_ENTRY_ADM_NEGATIVE_EV_FORCE_WAIT_THRESHOLD_PCT=env_scalp_entry_adm_negative_ev_force_wait_threshold
+            if env_scalp_entry_adm_negative_ev_force_wait_threshold is not None
+            else config.SCALP_ENTRY_ADM_NEGATIVE_EV_FORCE_WAIT_THRESHOLD_PCT,
+            SCALP_ENTRY_ADM_MIN_BUCKET_SAMPLE=env_scalp_entry_adm_min_bucket_sample
+            if env_scalp_entry_adm_min_bucket_sample is not None
+            else config.SCALP_ENTRY_ADM_MIN_BUCKET_SAMPLE,
+            SCALP_ENTRY_ADM_MIN_JOINED_SAMPLE=env_scalp_entry_adm_min_joined_sample
+            if env_scalp_entry_adm_min_joined_sample is not None
+            else config.SCALP_ENTRY_ADM_MIN_JOINED_SAMPLE,
+            SCALP_LOSS_FALLBACK_ENABLED=env_scalp_loss_fallback_enabled
+            if env_scalp_loss_fallback_enabled is not None
+            else config.SCALP_LOSS_FALLBACK_ENABLED,
+            SCALP_LOSS_FALLBACK_OBSERVE_ONLY=env_scalp_loss_fallback_observe_only
+            if env_scalp_loss_fallback_observe_only is not None
+            else config.SCALP_LOSS_FALLBACK_OBSERVE_ONLY,
             HOLDING_EXIT_MATRIX_ADVISORY_ENABLED=env_holding_exit_matrix_advisory_enabled
             if env_holding_exit_matrix_advisory_enabled is not None
             else config.HOLDING_EXIT_MATRIX_ADVISORY_ENABLED,
+            HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED=env_holding_exit_matrix_runtime_bias_enabled
+            if env_holding_exit_matrix_runtime_bias_enabled is not None
+            else config.HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED,
+            HOLDING_EXIT_MATRIX_EXIT_TO_HOLD_ENABLED=env_holding_exit_matrix_exit_to_hold_enabled
+            if env_holding_exit_matrix_exit_to_hold_enabled is not None
+            else config.HOLDING_EXIT_MATRIX_EXIT_TO_HOLD_ENABLED,
+            HOLDING_EXIT_MATRIX_HOLD_TO_EXIT_ENABLED=env_holding_exit_matrix_hold_to_exit_enabled
+            if env_holding_exit_matrix_hold_to_exit_enabled is not None
+            else config.HOLDING_EXIT_MATRIX_HOLD_TO_EXIT_ENABLED,
+            HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED=env_holding_exit_matrix_scale_in_bias_enabled
+            if env_holding_exit_matrix_scale_in_bias_enabled is not None
+            else config.HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED,
+            HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_PROFIT_PCT=env_holding_exit_matrix_avg_down_min_profit
+            if env_holding_exit_matrix_avg_down_min_profit is not None
+            else config.HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_PROFIT_PCT,
+            HOLDING_EXIT_MATRIX_AVG_DOWN_MAX_PROFIT_PCT=env_holding_exit_matrix_avg_down_max_profit
+            if env_holding_exit_matrix_avg_down_max_profit is not None
+            else config.HOLDING_EXIT_MATRIX_AVG_DOWN_MAX_PROFIT_PCT,
+            HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_AI_SCORE=env_holding_exit_matrix_avg_down_min_ai
+            if env_holding_exit_matrix_avg_down_min_ai is not None
+            else config.HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_AI_SCORE,
+            HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_HELD_SEC=env_holding_exit_matrix_avg_down_min_held
+            if env_holding_exit_matrix_avg_down_min_held is not None
+            else config.HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_HELD_SEC,
+            HOLDING_EXIT_MATRIX_AVG_DOWN_MAX_HELD_SEC=env_holding_exit_matrix_avg_down_max_held
+            if env_holding_exit_matrix_avg_down_max_held is not None
+            else config.HOLDING_EXIT_MATRIX_AVG_DOWN_MAX_HELD_SEC,
+            HOLDING_EXIT_MATRIX_PYRAMID_MIN_PROFIT_PCT=env_holding_exit_matrix_pyramid_min_profit
+            if env_holding_exit_matrix_pyramid_min_profit is not None
+            else config.HOLDING_EXIT_MATRIX_PYRAMID_MIN_PROFIT_PCT,
+            HOLDING_EXIT_MATRIX_PYRAMID_MIN_AI_SCORE=env_holding_exit_matrix_pyramid_min_ai
+            if env_holding_exit_matrix_pyramid_min_ai is not None
+            else config.HOLDING_EXIT_MATRIX_PYRAMID_MIN_AI_SCORE,
+            HOLDING_EXIT_MATRIX_PYRAMID_MAX_DRAWDOWN_FROM_PEAK_PCT=env_holding_exit_matrix_pyramid_max_drawdown
+            if env_holding_exit_matrix_pyramid_max_drawdown is not None
+            else config.HOLDING_EXIT_MATRIX_PYRAMID_MAX_DRAWDOWN_FROM_PEAK_PCT,
             HOLDING_FLOW_OVERRIDE_ENABLED=env_holding_flow_override_enabled
             if env_holding_flow_override_enabled is not None
             else config.HOLDING_FLOW_OVERRIDE_ENABLED,
