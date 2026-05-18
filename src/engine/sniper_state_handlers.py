@@ -6199,6 +6199,32 @@ def _should_run_score65_74_recovery_probe(
     return True
 
 
+def _resolve_wait6579_probe_entry_unlock(stock) -> dict:
+    if not bool((stock or {}).get("wait6579_probe_canary_armed")):
+        return {"unlocked": False, "source": "", "event_stage": ""}
+    source = str((stock or {}).get("wait6579_probe_canary_source") or "")
+    if source == "score65_74_recovery_probe":
+        return {
+            "unlocked": _rule_bool("AI_SCORE65_74_RECOVERY_PROBE_ENABLED", False),
+            "source": source,
+            "event_stage": "score65_74_recovery_probe_entry_unlocked",
+            "decision_source": "BUY_SCORE65_74_RECOVERY_PROBE",
+        }
+    if source == "buy_recovery_canary_promoted":
+        return {
+            "unlocked": _rule_bool("AI_MAIN_BUY_RECOVERY_CANARY_ENABLED", False),
+            "source": source,
+            "event_stage": "buy_recovery_canary_entry_unlocked",
+            "decision_source": "BUY_RECOVERY_CANARY_PROMOTED",
+        }
+    return {"unlocked": False, "source": source, "event_stage": ""}
+
+
+def _is_score65_74_recovery_probe_entry_unlocked(stock) -> bool:
+    unlock = _resolve_wait6579_probe_entry_unlock(stock)
+    return bool(unlock.get("unlocked")) and unlock.get("source") == "score65_74_recovery_probe"
+
+
 def _should_apply_ai_score_50_buy_hold_override(ai_score, ai_decision=None) -> bool:
     if not _rule_bool("AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED", True):
         return False
@@ -6820,14 +6846,15 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 ai_decision["action"] = action
                                 ai_decision["score"] = ai_score
                                 ai_decision["reason"] = reason
-                                _mutate_stock_state(
-                                    stock,
-                                    set_fields={
-                                        'wait6579_probe_canary_armed': True,
-                                        'wait6579_probe_canary_source': "buy_recovery_canary_promoted",
-                                        'wait6579_probe_canary_score': f"{float(recovery_score):.1f}",
-                                    },
-                                )
+                                if can_promote:
+                                    _mutate_stock_state(
+                                        stock,
+                                        set_fields={
+                                            'wait6579_probe_canary_armed': True,
+                                            'wait6579_probe_canary_source': "buy_recovery_canary_promoted",
+                                            'wait6579_probe_canary_score': f"{float(recovery_score):.1f}",
+                                        },
+                                    )
 
                             if ai_score != 50:
                                 _mutate_stock_state(stock, set_fields={'rt_ai_prob': ai_score / 100.0})
@@ -6952,7 +6979,9 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         ),
                     )
 
-                if current_ai_score < 75 and current_ai_score != 50:
+                wait6579_probe_entry_unlock = _resolve_wait6579_probe_entry_unlock(stock)
+                wait6579_probe_entry_unlocked = bool(wait6579_probe_entry_unlock.get("unlocked"))
+                if current_ai_score < 75 and current_ai_score != 50 and not wait6579_probe_entry_unlocked:
                     cooldown_time = config["AI_WAIT_DROP_COOLDOWN"]
                     with ENTRY_LOCK:
                         cooldowns[code] = now_ts + cooldown_time
@@ -6986,6 +7015,18 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         **ai_ops_fields,
                     )
                     return False
+                if wait6579_probe_entry_unlocked and current_ai_score < 75:
+                    _log_entry_pipeline(
+                        stock,
+                        code,
+                        wait6579_probe_entry_unlock.get("event_stage") or "wait6579_probe_canary_entry_unlocked",
+                        decision_source=wait6579_probe_entry_unlock.get("decision_source") or "WAIT6579_PROBE_CANARY",
+                        ai_score=f"{current_ai_score:.1f}",
+                        entry_score_threshold=75,
+                        source=wait6579_probe_entry_unlock.get("source") or stock.get("wait6579_probe_canary_source", "-"),
+                        qty_cap=1,
+                        budget_cap_krw=int(_rule("AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW", 50_000) or 50_000),
+                    )
 
                 final_target_buy_price, final_used_drop_pct = radar.get_smart_target_price(
                     curr_price,
@@ -7694,6 +7735,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     wait6579_cap_enabled = (
         bool(_rule("AI_WAIT6579_PROBE_CANARY_ENABLED", False))
         or bool(_rule("AI_SCORE65_74_RECOVERY_PROBE_ENABLED", False))
+        or bool(_rule("AI_MAIN_BUY_RECOVERY_CANARY_ENABLED", False))
     )
     if strategy == 'SCALPING' and wait6579_cap_enabled and bool(stock.get('wait6579_probe_canary_armed')):
         probe_max_budget = int(_rule("AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW", 50_000) or 50_000)

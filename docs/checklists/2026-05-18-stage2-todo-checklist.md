@@ -154,11 +154,32 @@
 - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_threshold_cycle_preopen_apply.py` 15 passed, `py_compile` 통과, `git diff --check` 통과, `sync_docs_backlog_to_project --dry-run` parsed_tasks=`7`, `error_detector --mode full --dry-run` summary_severity=`pass`. lock loader dry-check는 lock_count=`1`, family=`score65_74_recovery_probe`로 확인했다.
 - 다음 액션: 장후 또는 다음 PREOPEN source evaluation에서 `operator_runtime_env_lock.applied`, `close_reasons`, `allowed_close`를 확인해 연장/해제/차단 중 하나로 닫는다. Project/Calendar 동기화는 표준 명령으로 사용자가 수행한다.
 
-- [ ] `[Score6574PostRestartCohortCheck0518] score65_74_recovery_probe post-restart cohort 결과 확인` (`Due: 2026-05-18`, `Slot: INTRADAY`, `TimeWindow: 13:30~15:20`, `Track: ScalpingLogic`)
+- [x] `[Score6574PostRestartCohortCheck0518] score65_74_recovery_probe post-restart cohort 결과 확인` (`Due: 2026-05-18`, `Slot: INTRADAY`, `TimeWindow: 13:30~15:20`, `Track: ScalpingLogic`)
   - Source: `data/threshold_cycle/threshold_events_2026-05-18.jsonl`, `data/pipeline_events/pipeline_events_2026-05-18.jsonl`, `data/threshold_cycle/runtime_env/threshold_runtime_env_2026-05-18.json`
   - Section: `Score6574EntryUnlockRuntimeApply0518 실행 기록`
   - 판정 기준: 새 PID `63152` 시작 이후 `score65_74_recovery_probe`, `wait6579_probe_canary_applied`, `budget_pass`, `latency_block`, `order_bundle_submitted`, `buy_order_sent`, `full_fill`, `partial_fill`, `COMPLETED + valid profit_rate`를 오전 cohort와 분리한다.
   - 금지: 결과 확인 전 추가 entry family enable, score threshold 전면 완화, fallback 재개, provider 변경, 주문가 guard 완화, 스윙 dry-run 해제 금지.
+  - 판정: `warning_probe_applied_but_order_not_reached`.
+  - 근거: runtime env와 현재 봇 env는 `KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED=true`를 유지한다. `13:36:40 KST` OCI홀딩스(010060)에서 `score65_74_recovery_probe`가 `applied=True`, `decision_source=BUY_SCORE65_74_RECOVERY_PROBE`, `threshold_applied_value=enabled=True|score=65-74|budget=50000|qty=1`, `ai_score=68.0`, `buy_pressure=94.78`, `tick_accel=2.000`, `micro_vwap_bp=31.78`로 생성됐다. 단, 직후 `13:36:42 KST` 같은 record_id `6973`이 기존 `blocked_ai_score`로 닫혔고 `entry_score_threshold=75`, `threshold_profile=default`가 남아 있어 `budget_pass`, `latency_block`, `order_bundle_submitted`, `buy_order_sent`, `full_fill`, `partial_fill`, `COMPLETED + valid profit_rate`는 아직 0건이다.
+  - 안전성 확인: OCI홀딩스 probe event의 `wait65_79_ev_candidate`와 threshold event는 `quote_stale=True`를 같이 남겼다. 반면 최종 `blocked_ai_score` event는 `quote_stale=False`로 기록되어 주문 제출 전 source-quality 상태가 stage별로 갈렸다. 현재까지 broker order/receipt/provenance failure는 없지만, 이 표본은 실주문 제출 표본이 아니라 `applied_probe_blocked_before_order`로 분리한다.
+  - 구조 확인/조치 (`2026-05-18 13:50 KST`): `score65_74_recovery_probe`의 원래 의도는 BUY 병목 확대가 맞다. 코드상 probe가 `action=BUY`와 `wait6579_probe_canary_armed=true`를 세운 뒤에도 후단 공통 `current_ai_score < 75` gate가 다시 `blocked_ai_score`로 return 해 `wait6579_probe_canary_applied`/budget/order 단계에 도달하지 못하는 구조적 버그가 확인됐다. `sniper_state_handlers`를 수정해 `wait6579_probe_canary_source=score65_74_recovery_probe`로 armed 된 경우에만 75점 공통 차단을 우회하고, 기존 5만원/1주 cap 및 latency/order guard 단계로 넘어가도록 제한 보정했다.
+  - 다음 액션: 같은 env 유지 상태로 봇을 재기동해 코드 수정분을 반영한다. 이후 다음 post-restart 표본에서 `score65_74_recovery_probe_entry_unlocked -> budget_pass/latency_block -> wait6579_probe_canary_applied -> order_bundle_submitted|latency_block` 순서가 찍히는지 확인한다. 추가 entry family enable, score threshold 전면 완화, fallback 재개, provider 변경, 주문가 guard 완화, 스윙 dry-run 해제는 계속 금지한다.
+
+### RuntimeApplyEnvBlockAudit0518 실행 기록
+
+- checked_at: `2026-05-18 14:10 KST`
+- 판정: `current_score65_path_fixed_with_latent_canary_guard_added`
+- 대상: runtime env selected family 및 같은 유형의 probe/canary runtime path (`score65_74_recovery_probe`, `bad_entry_refined_canary`, `swing_one_share_real_canary_phase0`, `swing_gatekeeper_reject_cooldown`, dormant `buy_recovery_canary_promoted`, latency/entry-price/scale-in canary path)
+- 근거:
+  - `score65_74_recovery_probe`: env는 로드됐고 OCI홀딩스(010060)에서 `applied=True`까지 찍혔으나 후단 공통 75점 gate가 `blocked_ai_score`로 재차단한 버그가 확인됐다. `wait6579_probe_canary_source=score65_74_recovery_probe`로 armed 된 경우에만 `score65_74_recovery_probe_entry_unlocked`를 남기고 budget/latency/order path로 진입하도록 수정했다.
+  - `bad_entry_refined_canary`: holding/exit path에서 hard/protect/emergency, active sell pending, 회복 조건, 최소 보유/손실 조건을 통과한 뒤 soft-stop보다 먼저 청산 후보로 평가된다. runtime env 적용 후 의도와 다르게 공통 gate에 재차단되는 구조는 확인되지 않았다.
+  - `swing_one_share_real_canary_phase0`: global `SWING_LIVE_ORDER_DRY_RUN_ENABLED=true`를 유지하되 승인 code allowlist, source-quality, 1주/daily/open/notional cap을 통과한 경우에만 dry-run을 우회한다. 승인 밖 code, stale/bearish micro, sim/probe 포지션 차단은 의도된 fail-closed다.
+  - `swing_gatekeeper_reject_cooldown`: reject 후 cooldown 값을 조정하는 family라 `blocked_gatekeeper_reject` 자체가 runtime 의도다. entry unblock 축으로 해석하지 않는다.
+  - dormant `buy_recovery_canary_promoted`: 현재 env selected는 아니지만, future promote score를 75 아래로 낮출 경우 같은 75점 재차단이 날 수 있고, promote되지 않은 WAIT도 `wait6579_probe_canary_armed`가 될 수 있는 잠재 위험이 있었다. `can_promote=true`일 때만 arming하고, `AI_MAIN_BUY_RECOVERY_CANARY_ENABLED=true`인 promoted source만 entry unlock 및 1주/5만원 cap 대상이 되도록 제한 보정했다.
+  - latency/entry-price/swing scale-in canary: 기존 테스트와 runtime path상 canary 적용 flag가 뒤쪽 gate에 소비되고, 남는 block은 quote stale, price guard, OFI/QI bearish, cap 초과, receipt/source-quality 같은 의도된 safety/source-quality block으로 분리된다.
+- 조치: `sniper_state_handlers`에 wait6579 계열 entry unlock resolver를 추가하고, 활성 `score65_74_recovery_probe`와 휴면 `buy_recovery_canary_promoted` 모두 source/env/armed 조건을 만족할 때만 공통 75점 gate를 우회하게 했다. `buy_recovery_canary_promoted`는 promote 성공 시에만 arming하고, main recovery canary enabled 시에도 wait6579 cap 적용 대상에 포함했다.
+- 테스트/검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_state_handler_fast_signatures.py src/tests/test_sniper_entry_latency.py src/tests/test_threshold_cycle_preopen_apply.py` 통과 (`65 passed`). `py_compile` 통과.
+- 다음 액션: 장중 추가 표본에서 `score65_74_recovery_probe_entry_unlocked`, `wait6579_probe_canary_applied`, `budget_pass`, `latency_block`, `order_bundle_submitted`, `buy_order_sent` 순서를 재확인한다. postclose에는 selected family별 `env loaded -> family applied -> intended downstream consumer reached|intended safety block`을 `threshold_cycle_ev`와 runtime summary에서 재확인한다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-05-15` postclose -> `2026-05-18`)

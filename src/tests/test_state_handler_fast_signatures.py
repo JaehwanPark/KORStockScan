@@ -11,6 +11,8 @@ from src.engine.sniper_state_handlers import (
     _build_gatekeeper_fast_signature,
     _build_holding_ai_fast_signature,
     _extract_ai_overlap_snapshot,
+    _is_score65_74_recovery_probe_entry_unlocked,
+    _resolve_wait6579_probe_entry_unlock,
     _should_apply_ai_score_50_buy_hold_override,
     _should_run_score65_74_recovery_probe,
     _should_run_main_buy_recovery_canary,
@@ -474,6 +476,78 @@ def test_should_run_score65_74_recovery_probe_uses_dedicated_default_off_flag(mo
         None,
         feature_probe=feature_probe,
     ) is False
+
+
+def test_score65_74_recovery_probe_entry_unlock_requires_armed_source(monkeypatch):
+    rules = replace(TRADING_RULES, AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True)
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+
+    assert _is_score65_74_recovery_probe_entry_unlocked(
+        {
+            "wait6579_probe_canary_armed": True,
+            "wait6579_probe_canary_source": "score65_74_recovery_probe",
+        }
+    ) is True
+    assert _is_score65_74_recovery_probe_entry_unlocked(
+        {
+            "wait6579_probe_canary_armed": True,
+            "wait6579_probe_canary_source": "buy_recovery_canary_promoted",
+        }
+    ) is False
+    assert _is_score65_74_recovery_probe_entry_unlocked({}) is False
+
+
+def test_wait6579_probe_entry_unlock_allows_only_enabled_sources(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True,
+        AI_MAIN_BUY_RECOVERY_CANARY_ENABLED=True,
+    )
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+
+    score65 = _resolve_wait6579_probe_entry_unlock(
+        {
+            "wait6579_probe_canary_armed": True,
+            "wait6579_probe_canary_source": "score65_74_recovery_probe",
+        }
+    )
+    assert score65["unlocked"] is True
+    assert score65["event_stage"] == "score65_74_recovery_probe_entry_unlocked"
+
+    promoted = _resolve_wait6579_probe_entry_unlock(
+        {
+            "wait6579_probe_canary_armed": True,
+            "wait6579_probe_canary_source": "buy_recovery_canary_promoted",
+        }
+    )
+    assert promoted["unlocked"] is True
+    assert promoted["event_stage"] == "buy_recovery_canary_entry_unlocked"
+
+    assert _resolve_wait6579_probe_entry_unlock(
+        {
+            "wait6579_probe_canary_armed": True,
+            "wait6579_probe_canary_source": "unknown_probe",
+        }
+    )["unlocked"] is False
+
+
+def test_wait6579_probe_entry_unlock_blocks_disabled_future_canary(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True,
+        AI_MAIN_BUY_RECOVERY_CANARY_ENABLED=False,
+    )
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+
+    promoted = _resolve_wait6579_probe_entry_unlock(
+        {
+            "wait6579_probe_canary_armed": True,
+            "wait6579_probe_canary_source": "buy_recovery_canary_promoted",
+        }
+    )
+
+    assert promoted["unlocked"] is False
+    assert promoted["event_stage"] == "buy_recovery_canary_entry_unlocked"
 
 
 def test_ai_score_50_buy_hold_override_blocks_neutral_and_fallback(monkeypatch):
