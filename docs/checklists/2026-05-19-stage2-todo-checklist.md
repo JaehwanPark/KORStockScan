@@ -42,6 +42,7 @@
   - Source: [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md#장전-확인-절차)
   - 판정: `warning`
   - 근거: preopen apply `[DONE]` marker와 runtime env 생성은 확인됐다. `final_ensemble_scanner target_date=2026-05-19`도 `[DONE]`으로 종료했고 추천 3건이 적재됐다. apply plan은 `auto_bounded_live_ready`, runtime env는 07:52 재생성본 기준으로 로드됐다. 봇 PID `7079`는 env 재생성 이후 시작되어 `/proc/7079/environ`에서 runtime env와 OpenAI WS env 로드를 확인했다. 다만 `score65_74_recovery_probe`는 사용자 operator reopen lock으로 `true`가 반영된 상태라 순수 자동 apply와 구분한다.
+  - 재확인 (`2026-05-19 08:46 KST`): Project 항목 `PVTI_lAHOAXZuE84BUTcPzgtFDOM` 처리 요청 기준으로 재검증했다. `logs/threshold_cycle_preopen_cron.log`의 `[DONE] threshold-cycle preopen target_date=2026-05-19 finished_at=2026-05-19T07:35:01+0900`, `logs/ensemble_scanner.log`의 `[DONE] final_ensemble_scanner target_date=2026-05-19 finished_at=2026-05-19T07:21:27`, `threshold_runtime_env_2026-05-19.env`의 latency override와 `KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED=true`, 봇 PID `7079` env 로드를 재확인했다. 판정은 계속 `warning`이며 추가 runtime 변경은 없다.
   - 다음 액션: 장중 `RuntimeEnvIntradayObserve0519`에서 operator reopen cohort와 latency classifier profile provenance를 확인하고, 장중 threshold/provider/order guard 변경은 하지 않는다.
 
 ## 장중 체크리스트 (09:05~15:20)
