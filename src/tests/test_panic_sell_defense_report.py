@@ -343,6 +343,33 @@ def test_recovery_confirmed_keeps_probe_report_only_and_broker_forbidden(monkeyp
     assert report["policy"]["report_only"] is True
 
 
+def test_micro_recovery_confirmed_does_not_release_market_risk_off():
+    state, reasons = report_mod._resolve_panic_state(
+        panic_metrics={"panic_detected": False},
+        active_recovery={
+            "profit_sample": 0,
+            "avg_unrealized_profit_rate_pct": 0.0,
+            "win_rate_pct": 0.0,
+        },
+        post_sell_recovery={
+            "rebound_above_sell_10_20m_pct": 0.0,
+            "rebound_above_buy_10_20m_pct": 0.0,
+        },
+        microstructure_detector={
+            "risk_off_advisory_count": 1,
+            "recovery_confirmed_count": 1,
+            "recovery_candidate_count": 0,
+        },
+        microstructure_market_context={
+            "confirmed_risk_off_advisory": True,
+            "market_panic_breadth_risk_off_advisory": True,
+        },
+    )
+
+    assert state == "RECOVERY_WATCH"
+    assert "microstructure recovery confirmed but market risk-off remains" in reasons
+
+
 def test_hard_protect_emergency_exits_are_never_confirmation_eligible():
     hard_rows = [
         _event("10:00:00", fields={"exit_rule": "scalp_hard_stop_pct"}),

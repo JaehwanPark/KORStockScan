@@ -251,7 +251,7 @@ Sentinel routing은 [2026-05-07 checklist](./2026-05-07-stage2-todo-checklist.md
 
 `panic_buy_runner_tp_canary`의 approval artifact 후보는 `data/threshold_cycle/approvals/panic_buy_runner_tp_canary_YYYY-MM-DD.json`이다. artifact가 없으면 env key를 쓰지 않고, artifact가 있어도 적용 범위는 scalping 기존 보유분의 TP/runner canary로 제한한다. 신규 추격매수, 추가매수, hard/protect/emergency stop, provider route에는 영향을 주지 않는다. 상세 workorder는 [panic_buying_regime_mode_v2_2026-05-14](./code-improvement-workorders/panic_buying_regime_mode_v2_2026-05-14.md)를 기준으로 한다.
 
-Panic Telegram 안내는 report 결과의 상태 전환만 소비한다. `notify_panic_state_transition`은 `tmp/panic_state_telegram_notify_state.json`으로 직전 상태를 저장하고, 패닉셀/패닉바잉의 시작과 해제에만 사용자 친화 문구를 보낸다. runtime wrapper 기본 수신자는 전체 등록 사용자이며, `PANIC_*_DRY_RUN=1` 또는 수동 `--audience admin --force` 테스트는 admin only다. 이 알림은 `R1_daily_report` 안내이며 주문/threshold/runtime guard 변경 권한이 없다.
+Panic Telegram 안내는 report 결과의 상태 전환만 소비한다. `notify_panic_state_transition`은 `tmp/panic_state_telegram_notify_state.json`으로 직전 상태를 저장하고, 패닉셀/패닉바잉의 시작과 해제에만 사용자 친화 문구를 보낸다. 패닉셀 `RECOVERY_CONFIRMED`는 1회 관측만으로 즉시 해제 알림을 보내지 않고 `release_pending`으로 한 번 보류한다. 다음 관측이 계속 `RECOVERY_CONFIRMED` 또는 `NORMAL`이면 해제를 보내고, `RECOVERY_WATCH`/`PANIC_SELL`로 재활성화되면 해제 알림 없이 active 상태를 유지해 해제 후 주의가 뒤따르는 역순 알림을 막는다. 또한 report 판정에서는 `confirmed_risk_off_advisory=true` 또는 live market breadth `risk_off_advisory=true`가 남아 있으면 개별 microstructure `recovery_confirmed_count>0`만으로 `RECOVERY_CONFIRMED`를 열지 않고 `RECOVERY_WATCH`로 제한한다. runtime wrapper 기본 수신자는 전체 등록 사용자이며, `PANIC_*_DRY_RUN=1` 또는 수동 `--audience admin --force` 테스트는 admin only다. 이 알림은 `R1_daily_report` 안내이며 주문/threshold/runtime guard 변경 권한이 없다.
 
 ## 4. auto bounded calibration gate
 

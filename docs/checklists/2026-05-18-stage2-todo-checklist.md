@@ -25,6 +25,24 @@
 - 금지 확인: 확인 과정에서 threshold/provider/order guard, 스윙 dry-run guard, bot restart, broker 주문 상태를 변경하지 않았다. OpenAI provider provenance 확인은 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경과 분리했다.
 - 다음 액션: 오늘 PREOPEN Project 항목은 완료로 닫는다. 장중에는 runtime threshold mutation 없이 selected family provenance, one-share real canary receipt, sim/probe `actual_order_submitted=false` split을 기존 INTRADAY checklist에서 계속 확인한다. Project/Calendar 동기화는 표준 명령으로 사용자가 수행한다.
 
+### PanicSellNotificationOrderFix0518 확인 기록
+
+- checked_at: `2026-05-18 09:35 KST`
+- 판정: `fixed_report_only_notification`
+- 근거: `logs/run_panic_sell_defense_cron.log`에서 `PANIC_SELL -> RECOVERY_CONFIRMED -> RECOVERY_WATCH -> RECOVERY_CONFIRMED -> RECOVERY_WATCH/PANIC_SELL` 전이가 짧은 간격으로 발생했고, 기존 notifier는 `RECOVERY_CONFIRMED`를 즉시 release로 보내 다음 `RECOVERY_WATCH`를 새 start로 보내는 구조였다. 이 때문에 사용자 수신 순서가 `패닉셀 경보 해제` 뒤 `패닉셀 주의`로 보일 수 있었다.
+- 조치: `notify_panic_state_transition`에서 패닉셀 `RECOVERY_CONFIRMED` 1회 관측은 `release_pending`으로 보류하고, 다음 관측이 계속 `RECOVERY_CONFIRMED` 또는 `NORMAL`일 때만 해제 알림을 보내도록 수정했다. 다음 관측이 `RECOVERY_WATCH` 또는 `PANIC_SELL`이면 해제 알림 없이 active 상태를 유지한다.
+- 금지 확인: 알림 hysteresis만 보정했고 panic report 판정, threshold/provider/order guard, 자동매도, bot restart, broker 주문 상태는 변경하지 않았다.
+- 다음 액션: 장중 panic sell defense 다음 cycle에서 `panic state Telegram notify status`가 `release_pending`, `no_transition`, `sent` 중 어떤 상태로 닫히는지 로그로 확인한다. Project/Calendar 동기화는 표준 명령으로 사용자가 수행한다.
+
+### PanicSellRecoveryConfirmedSensitivityFix0518 확인 기록
+
+- checked_at: `2026-05-18 09:45 KST`
+- 판정: `fixed_report_only_state_gate`
+- 근거: `RECOVERY_CONFIRMED`는 active sim/probe, post-sell rebound, microstructure recovery 중 하나만 만족해도 열릴 수 있었다. 오늘처럼 live market breadth `risk_off_advisory=true`와 market risk-off가 남아 있는 구간에서는 개별 microstructure `recovery_confirmed_count>0` 단독으로 경보 해제 성격의 `RECOVERY_CONFIRMED`를 여는 것이 과민했다.
+- 조치: `panic_sell_defense_report`에서 `confirmed_risk_off_advisory=true` 또는 `market_panic_breadth_risk_off_advisory=true`가 남아 있으면 `micro_recovery_confirmed` 단독으로는 `RECOVERY_CONFIRMED`를 반환하지 않고 `RECOVERY_WATCH`로 제한하도록 보정했다. active sim/probe와 post-sell rebound 기반 confirmation은 기존 기준을 유지한다.
+- 금지 확인: report-only 상태 판정 gate만 보정했고 threshold/provider/order guard, 자동매도, bot restart, broker 주문 상태는 변경하지 않았다.
+- 다음 액션: 다음 panic sell defense cycle에서 market risk-off가 유지되는 동안 `microstructure recovery confirmed but market risk-off remains` reason이 `RECOVERY_WATCH`로 라우팅되는지 확인한다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-05-15` postclose -> `2026-05-18`)
 

@@ -605,6 +605,7 @@ def _resolve_panic_state(
     market_breadth_risk_off = bool(micro_context.get("market_panic_breadth_risk_off_advisory"))
     micro_recovery_watch = _safe_int(micro.get("recovery_candidate_count"), 0) > 0
     micro_recovery_confirmed = _safe_int(micro.get("recovery_confirmed_count"), 0) > 0
+    risk_off_active = micro_risk_off or market_breadth_risk_off
     if not panic_metrics.get("panic_detected") and not micro_risk_off and not micro_recovery_watch and not micro_recovery_confirmed:
         reasons.append("panic thresholds not breached")
         if raw_micro_risk_off:
@@ -630,12 +631,15 @@ def _resolve_panic_state(
         and active_avg > RECOVERY_CONFIRMED_ACTIVE_AVG_FLOOR_PCT
     )
     post_sell_confirmed = post_sell_above_buy >= RECOVERY_CONFIRMED_REBOUND_ABOVE_BUY_FLOOR_PCT
-    if active_confirmed or post_sell_confirmed or micro_recovery_confirmed:
+    micro_confirmed_allowed = micro_recovery_confirmed and not risk_off_active
+    if active_confirmed or post_sell_confirmed or micro_confirmed_allowed:
         reasons.append("recovery confirmed by active sim/probe or post-sell rebound above buy")
         return "RECOVERY_CONFIRMED", reasons
+    if micro_recovery_confirmed and risk_off_active:
+        reasons.append("microstructure recovery confirmed but market risk-off remains")
     active_watch = active_avg is not None and active_avg > RECOVERY_WATCH_ACTIVE_AVG_FLOOR_PCT
     post_sell_watch = post_sell_above_sell >= RECOVERY_WATCH_REBOUND_ABOVE_SELL_FLOOR_PCT
-    if active_watch or post_sell_watch or micro_recovery_watch:
+    if active_watch or post_sell_watch or micro_recovery_watch or micro_recovery_confirmed:
         reasons.append("recovery watch triggered by active sim/probe or post-sell rebound above sell")
         return "RECOVERY_WATCH", reasons
     reasons.append("recovery conditions not yet met")

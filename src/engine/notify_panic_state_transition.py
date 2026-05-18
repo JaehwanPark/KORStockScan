@@ -109,12 +109,21 @@ def _state_phase(kind: str, value: str) -> str:
     return "unknown"
 
 
-def _transition(previous_phase: str | None, current_phase: str, *, force: bool) -> str:
+def _transition(
+    previous_phase: str | None,
+    current_phase: str,
+    *,
+    force: bool,
+    current_value: str = "",
+) -> str:
     if force:
         return "start" if current_phase == "active" else "release"
-    if previous_phase != "active" and current_phase == "active":
+    previous_effective_phase = "active" if previous_phase == "release_pending" else previous_phase
+    if previous_effective_phase != "active" and current_phase == "active":
         return "start"
-    if previous_phase == "active" and current_phase == "released":
+    if previous_effective_phase == "active" and current_phase == "released":
+        if current_value == "RECOVERY_CONFIRMED" and previous_phase != "release_pending":
+            return "release_pending"
         return "release"
     return "none"
 
@@ -229,20 +238,21 @@ def notify_from_report(
     state = _load_state(state_file)
     previous = state.get(kind) if isinstance(state.get(kind), dict) else {}
     previous_phase = str(previous.get("phase") or "") or None
-    transition = _transition(previous_phase, current_phase, force=force)
+    transition = _transition(previous_phase, current_phase, force=force, current_value=current_value)
 
     now = time.time() if now_ts is None else now_ts
+    next_phase = "release_pending" if transition == "release_pending" else current_phase
     next_state = {
-        "phase": current_phase,
+        "phase": next_phase,
         "state": current_value,
         "updated_at_ts": now,
         "report_file": str(report_file),
     }
 
-    if transition == "none":
+    if transition in {"none", "release_pending"}:
         state[kind] = next_state
         _write_state(state_file, state)
-        return "no_transition"
+        return "release_pending" if transition == "release_pending" else "no_transition"
 
     token, admin_id = _load_telegram_config()
     if not token:
