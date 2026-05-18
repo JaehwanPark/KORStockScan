@@ -6,14 +6,14 @@
 - panic_regime_mode: `NORMAL`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-05-18T12:56:13`
-- latest_event_at: `2026-05-18T12:56:12`
+- as_of: `2026-05-18T13:14:13`
+- latest_event_at: `2026-05-18T13:14:13`
 - reasons: `panic thresholds not breached`
 
 ## 패닉 지표
 
 - real_exit_count: `0`
-- non_real_exit_count: `73`
+- non_real_exit_count: `75`
 - stop_loss_exit_count: `0`
 - current_30m_stop_loss_exit_count: `0`
 - max_rolling_30m_stop_loss_exit_count: `0`
@@ -26,8 +26,8 @@
 
 - active_positions: `11`
 - active_profit_sample: `11`
-- active_avg_unrealized_profit_rate_pct: `0.1075`
-- active_win_rate_pct: `27.3`
+- active_avg_unrealized_profit_rate_pct: `0.3568`
+- active_win_rate_pct: `63.6`
 - sim_probe_provenance_passed: `false`
 - post_sell_rebound_above_sell_10_20m_pct: `0`
 - post_sell_rebound_above_buy_10_20m_pct: `0`
@@ -51,7 +51,7 @@
 ## Microstructure Market Context
 
 - market_risk_state: `RISK_OFF`
-- market_panic_breadth_as_of: `2026-05-18T12:56:01`
+- market_panic_breadth_as_of: `2026-05-18T13:14:01`
 - market_panic_breadth_source_quality_status: `ok`
 - market_panic_breadth_risk_off_advisory: `false`
 - market_panic_breadth_single_market_risk_off_advisory: `true`

@@ -298,13 +298,16 @@ def test_score65_74_entry_unlock_can_use_intraday_source_and_ignore_no_applied_g
     runtime_dir = tmp_path / "runtime_env"
     ai_dir = report_dir / "threshold_cycle_ai_review"
     calibration_dir = report_dir / "threshold_cycle_calibration"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
     ai_dir.mkdir(parents=True)
     calibration_dir.mkdir(parents=True)
+    lock_dir.mkdir(parents=True)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
     monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
     monkeypatch.setattr(mod, "AI_REVIEW_DIR", ai_dir)
     monkeypatch.setattr(mod, "CALIBRATION_REPORT_DIR", calibration_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
 
     (calibration_dir / "threshold_cycle_calibration_2026-05-18_intraday.json").write_text(
         json.dumps(
@@ -394,6 +397,161 @@ def test_score65_74_entry_unlock_can_use_intraday_source_and_ignore_no_applied_g
     assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED=true" in env_text
     assert "KORSTOCKSCAN_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW=50000" in env_text
     assert "KORSTOCKSCAN_WAIT6579_PROBE_CANARY_MAX_QTY=1" in env_text
+
+
+def test_operator_runtime_env_lock_preserves_score65_probe_through_sample_gap(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    ai_dir = report_dir / "threshold_cycle_ai_review"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    ai_dir.mkdir(parents=True)
+    lock_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "AI_REVIEW_DIR", ai_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+
+    (report_dir / "threshold_cycle_2026-05-18.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-18",
+                "calibration_candidates": [
+                    {
+                        "family": "score65_74_recovery_probe",
+                        "stage": "entry",
+                        "priority": 10,
+                        "allowed_runtime_apply": False,
+                        "safety_revert_required": False,
+                        "calibration_state": "hold_sample",
+                        "calibration_reason": "sample_shortfall_no_applied_probe_gap",
+                        "target_env_keys": ["AI_SCORE65_74_RECOVERY_PROBE_ENABLED"],
+                        "recommended_values": {"enabled": False},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (ai_dir / "threshold_cycle_ai_review_2026-05-18_postclose.json").write_text(
+        json.dumps(
+            {
+                "ai_status": "parsed",
+                "items": [
+                    {
+                        "family": "score65_74_recovery_probe",
+                        "guard_accepted": True,
+                        "ai_anomaly_route": "instrumentation_gap",
+                        "route_action": "exclude_from_threshold_candidate_review",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (lock_dir / "score65_74_recovery_probe_2026-05-18.json").write_text(
+        json.dumps(
+            {
+                "lock_id": "score65_74_entry_unlock_operator_override_2026-05-18",
+                "enabled": True,
+                "family": "score65_74_recovery_probe",
+                "stage": "entry",
+                "env_key": "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED",
+                "env_value": "true",
+                "active_from_date": "2026-05-18",
+                "min_observation_until_date": "2026-05-18",
+                "allowed_close_reason_keywords": ["safety_revert", "severe_loss", "stale_quote"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-19",
+        source_date="2026-05-18",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+    )
+
+    decision = manifest["auto_apply_decisions"][0]
+    assert decision["selected"] is True
+    assert decision["decision_reason"] == (
+        "operator_runtime_env_lock_preserved:score65_74_entry_unlock_operator_override_2026-05-18"
+    )
+    assert decision["operator_runtime_env_lock"]["applied"] is True
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED"] == "true"
+    env_text = (runtime_dir / "threshold_runtime_env_2026-05-19.env").read_text(encoding="utf-8")
+    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED=true" in env_text
+
+
+def test_operator_runtime_env_lock_does_not_preserve_score65_probe_on_safety_revert(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    ai_dir = report_dir / "threshold_cycle_ai_review"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    ai_dir.mkdir(parents=True)
+    lock_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "AI_REVIEW_DIR", ai_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+
+    (report_dir / "threshold_cycle_2026-05-18.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-18",
+                "calibration_candidates": [
+                    {
+                        "family": "score65_74_recovery_probe",
+                        "stage": "entry",
+                        "priority": 10,
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": True,
+                        "calibration_state": "adjust_up",
+                        "target_env_keys": ["AI_SCORE65_74_RECOVERY_PROBE_ENABLED"],
+                        "recommended_values": {"enabled": True},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (ai_dir / "threshold_cycle_ai_review_2026-05-18_postclose.json").write_text(
+        json.dumps({"ai_status": "parsed", "items": [{"family": "score65_74_recovery_probe", "guard_accepted": True}]}),
+        encoding="utf-8",
+    )
+    (lock_dir / "score65_74_recovery_probe_2026-05-18.json").write_text(
+        json.dumps(
+            {
+                "lock_id": "score65_74_entry_unlock_operator_override_2026-05-18",
+                "enabled": True,
+                "family": "score65_74_recovery_probe",
+                "stage": "entry",
+                "env_key": "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED",
+                "env_value": "true",
+                "active_from_date": "2026-05-18",
+                "min_observation_until_date": "2026-05-18",
+                "allowed_close_reason_keywords": ["safety_revert", "severe_loss", "stale_quote"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-19",
+        source_date="2026-05-18",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+    )
+
+    decision = manifest["auto_apply_decisions"][0]
+    assert decision["selected"] is False
+    assert decision["decision_reason"] == "safety_revert_required"
+    assert decision["operator_runtime_env_lock"]["allowed_close"] is True
+    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED" not in manifest["runtime_env_overrides"]
 
 
 def test_swing_approval_required_request_does_not_auto_apply_without_artifact(tmp_path, monkeypatch):

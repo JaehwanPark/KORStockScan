@@ -143,6 +143,17 @@
 - 테스트/검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py::test_score65_74_recovery_probe_opens_existing_entry_unlock_when_rolling_primary_ready src/tests/test_threshold_cycle_preopen_apply.py::test_score65_74_entry_unlock_can_use_intraday_source_and_ignore_no_applied_gap src/tests/test_threshold_cycle_preopen_apply.py::test_auto_bounded_live_writes_runtime_env_with_ai_guard_and_stage_priority src/tests/test_threshold_cycle_preopen_apply.py::test_auto_bounded_live_excludes_ai_instrumentation_gap` 통과 (`4 passed`). `py_compile` 통과.
 - 다음 액션: `13:30~15:20` 사이 post-restart cohort에서 `score65_74_recovery_probe`, `wait6579_probe_canary_applied`, `budget_pass`, `latency_block`, `order_bundle_submitted`, `buy_order_sent`, `full_fill`, `partial_fill`, `COMPLETED + valid profit_rate`를 오전 cohort와 분리 확인한다. safety breach, stale quote submit, receipt/provenance 손상, severe loss guard breach가 있으면 즉시 OFF 후보로 닫는다. Project/Calendar 동기화는 표준 명령으로 사용자가 수행한다.
 
+### Score6574OperatorRuntimeEnvLock0518 실행 기록
+
+- checked_at: `2026-05-18 13:10 KST`
+- 판정: `operator_lock_created`
+- 근거: 사용자가 `SCORE65_74_RECOVERY_PROBE_ENABLED=true`를 강력 요구해 장중 적용했지만, 다음 자동화 cycle이 sample shortfall/no-applied gap/AI instrumentation gap만으로 env를 다시 제외할 수 있는 구조였다.
+- 조치: `data/threshold_cycle/operator_runtime_env_locks/score65_74_recovery_probe_2026-05-18.json`을 추가하고, `threshold_cycle_preopen_apply`가 active lock을 읽어 `score65_74_recovery_probe`를 `KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED=true`로 보존하도록 구현했다. lock은 calibration 후보가 `hold_sample`, `no_runtime_env_override`, AI instrumentation gap으로 닫히거나 후보가 누락된 경우에도 env를 유지한다.
+- 허용 close reason: `safety_revert`, `severe_loss`, `order_provenance/provenance_breach`, `stale_quote/stale_context_or_quote`, `hard/protect/emergency_stop`, `order_failure/receipt_missing` 계열은 lock이 있어도 닫을 수 있다.
+- 금지/범위: lock은 score threshold 전면 완화, fallback 재개, provider 변경, 주문가 guard 완화, 스윙 dry-run 해제 권한이 아니다. sample shortfall/no-applied gap 단독 close만 차단한다.
+- 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_threshold_cycle_preopen_apply.py` 15 passed, `py_compile` 통과, `git diff --check` 통과, `sync_docs_backlog_to_project --dry-run` parsed_tasks=`7`, `error_detector --mode full --dry-run` summary_severity=`pass`. lock loader dry-check는 lock_count=`1`, family=`score65_74_recovery_probe`로 확인했다.
+- 다음 액션: 장후 또는 다음 PREOPEN source evaluation에서 `operator_runtime_env_lock.applied`, `close_reasons`, `allowed_close`를 확인해 연장/해제/차단 중 하나로 닫는다. Project/Calendar 동기화는 표준 명령으로 사용자가 수행한다.
+
 - [ ] `[Score6574PostRestartCohortCheck0518] score65_74_recovery_probe post-restart cohort 결과 확인` (`Due: 2026-05-18`, `Slot: INTRADAY`, `TimeWindow: 13:30~15:20`, `Track: ScalpingLogic`)
   - Source: `data/threshold_cycle/threshold_events_2026-05-18.jsonl`, `data/pipeline_events/pipeline_events_2026-05-18.jsonl`, `data/threshold_cycle/runtime_env/threshold_runtime_env_2026-05-18.json`
   - Section: `Score6574EntryUnlockRuntimeApply0518 실행 기록`

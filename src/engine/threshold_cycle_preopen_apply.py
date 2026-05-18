@@ -17,6 +17,7 @@ from src.utils.constants import DATA_DIR
 
 APPLY_PLAN_DIR = DATA_DIR / "threshold_cycle" / "apply_plans"
 RUNTIME_ENV_DIR = DATA_DIR / "threshold_cycle" / "runtime_env"
+OPERATOR_RUNTIME_ENV_LOCK_DIR = DATA_DIR / "threshold_cycle" / "operator_runtime_env_locks"
 AI_REVIEW_DIR = REPORT_DIR / "threshold_cycle_ai_review"
 CALIBRATION_REPORT_DIR = REPORT_DIR / "threshold_cycle_calibration"
 SWING_RUNTIME_APPROVAL_REPORT_DIR = DATA_DIR / "report" / "swing_runtime_approval"
@@ -27,6 +28,19 @@ AUTO_APPLY_ALLOWED_STATES = {"adjust_up", "adjust_down", "hold"}
 AUTO_APPLY_BLOCK_STATES = {"freeze", "hold_sample", "hold_no_edge"}
 AUTO_APPLY_ROUTE_EXCLUDE_ACTIONS = {"exclude_from_threshold_candidate_review"}
 AUTO_APPLY_ALLOWED_ROUTES = {"threshold_candidate", "normal_drift", ""}
+LOCK_ALLOWED_CLOSE_KEYWORDS = {
+    "safety_revert",
+    "severe_loss",
+    "order_provenance",
+    "provenance_breach",
+    "stale_quote",
+    "stale_context_or_quote",
+    "hard_stop",
+    "protect_stop",
+    "emergency_stop",
+    "order_failure",
+    "receipt_missing",
+}
 
 TARGET_ENV_VALUE_KEYS = {
     "SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED": "enabled",
@@ -200,6 +214,109 @@ def _format_env_value(value: Any) -> str:
     if isinstance(value, float):
         return f"{value:.10g}"
     return str(value)
+
+
+def _date_in_lock_window(lock: dict[str, Any], source_date: str | None, target_date: str) -> bool:
+    basis_date = str(source_date or target_date or "").strip()
+    if not basis_date:
+        return False
+    active_from = str(lock.get("active_from_date") or lock.get("created_date") or "").strip()
+    active_until = str(
+        lock.get("min_observation_until_date")
+        or lock.get("expires_after_source_date")
+        or lock.get("target_date")
+        or ""
+    ).strip()
+    if active_from and basis_date < active_from:
+        return False
+    if active_until and basis_date > active_until:
+        return False
+    return True
+
+
+def _load_operator_runtime_env_locks(source_date: str | None, target_date: str) -> list[dict[str, Any]]:
+    locks: list[dict[str, Any]] = []
+    if not OPERATOR_RUNTIME_ENV_LOCK_DIR.exists():
+        return locks
+    for path in sorted(OPERATOR_RUNTIME_ENV_LOCK_DIR.glob("*.json")):
+        payload = _load_json(path)
+        if not payload or not bool(payload.get("enabled", True)):
+            continue
+        family = str(payload.get("family") or "").strip()
+        env_key = str(payload.get("env_key") or "").strip()
+        if not family or not env_key:
+            continue
+        if not _date_in_lock_window(payload, source_date, target_date):
+            continue
+        locks.append({**payload, "path": str(path)})
+    return locks
+
+
+def _lock_env_overrides(lock: dict[str, Any]) -> dict[str, str]:
+    overrides = lock.get("env_overrides") if isinstance(lock.get("env_overrides"), dict) else {}
+    if overrides:
+        return {str(key): _format_env_value(value) for key, value in overrides.items()}
+    env_key = str(lock.get("env_key") or "").strip()
+    if not env_key:
+        return {}
+    value = lock.get("env_value", "true")
+    return {env_key: _format_env_value(value)}
+
+
+def _candidate_close_reasons(candidate: dict[str, Any], reject_reason: str) -> list[str]:
+    reasons: list[str] = []
+    if reject_reason:
+        reasons.append(reject_reason)
+    if bool(candidate.get("safety_revert_required")):
+        reasons.append("safety_revert_required")
+    for key in (
+        "calibration_reason",
+        "guard_reject_reason",
+        "rollback_reason",
+        "decision_reason",
+        "source_quality_blocker",
+        "source_quality_blockers",
+        "block_reasons",
+        "safety_reasons",
+    ):
+        value = candidate.get(key)
+        if isinstance(value, list):
+            reasons.extend(str(item) for item in value)
+        elif value:
+            reasons.append(str(value))
+    metrics = candidate.get("source_metrics") if isinstance(candidate.get("source_metrics"), dict) else {}
+    for key in ("block_reason", "submit_block_reason", "stale_reason", "order_provenance_status"):
+        value = metrics.get(key)
+        if value:
+            reasons.append(str(value))
+    return reasons
+
+
+def _lock_allows_close(lock: dict[str, Any], close_reasons: list[str]) -> bool:
+    allowed = {
+        str(item).strip().lower()
+        for item in (lock.get("allowed_close_reason_keywords") or [])
+        if str(item).strip()
+    }
+    if not allowed:
+        allowed = LOCK_ALLOWED_CLOSE_KEYWORDS
+    lowered = " ".join(close_reasons).lower()
+    return any(keyword in lowered for keyword in allowed)
+
+
+def _locked_synthetic_candidate(lock: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "family": lock.get("family"),
+        "stage": lock.get("stage") or "entry",
+        "priority": int(lock.get("priority") or 10),
+        "allowed_runtime_apply": True,
+        "safety_revert_required": False,
+        "calibration_state": "operator_locked",
+        "target_env_keys": [],
+        "recommended_values": {"enabled": True},
+        "threshold_version": lock.get("threshold_version") or f"{lock.get('family')}:operator_runtime_env_lock",
+        "operator_runtime_env_lock_synthetic": True,
+    }
 
 
 def _values_equal(left: Any, right: Any) -> bool:
@@ -507,13 +624,25 @@ def _select_auto_apply_candidates(
     ai_review: dict[str, Any],
     require_ai: bool,
     include_families: set[str] | None = None,
+    operator_locks: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
     selected_by_stage: dict[str, dict[str, Any]] = {}
     decisions: list[dict[str, Any]] = []
-    for candidate in sorted(calibration_candidates, key=lambda item: int(item.get("priority") or 999)):
+    locks_by_family = {
+        str(lock.get("family") or ""): lock
+        for lock in (operator_locks or [])
+        if isinstance(lock, dict) and lock.get("family")
+    }
+    candidates = list(calibration_candidates)
+    present_families = {str(item.get("family") or "") for item in candidates if isinstance(item, dict)}
+    for family, lock in locks_by_family.items():
+        if family not in present_families:
+            candidates.append(_locked_synthetic_candidate(lock))
+    for candidate in sorted(candidates, key=lambda item: int(item.get("priority") or 999)):
         family = str(candidate.get("family") or "")
         stage = str(candidate.get("stage") or "unknown")
         state = str(candidate.get("calibration_state") or "")
+        lock = locks_by_family.get(family)
         allowed, reason = _ai_guard_allows_candidate(candidate, ai_review, require_ai=require_ai)
         reject_reason = ""
         if include_families is not None and family not in include_families:
@@ -531,6 +660,18 @@ def _select_auto_apply_candidates(
         elif stage in selected_by_stage:
             reject_reason = f"same_stage_owner_conflict:{selected_by_stage[stage].get('family')}"
 
+        lock_applied = False
+        lock_close_reasons = _candidate_close_reasons(candidate, reject_reason)
+        if lock and (include_families is None or family in include_families):
+            lock_overrides = _lock_env_overrides(lock)
+            lock_can_preserve = bool(lock_overrides) and not _lock_allows_close(lock, lock_close_reasons)
+            if lock_can_preserve:
+                reject_reason = ""
+                reason = f"operator_runtime_env_lock_preserved:{lock.get('lock_id') or family}"
+                lock_applied = True
+            elif bool(lock_overrides):
+                reason = f"operator_runtime_env_lock_allowed_close:{lock.get('lock_id') or family}"
+
         decision = {
             "family": family,
             "stage": stage,
@@ -539,8 +680,22 @@ def _select_auto_apply_candidates(
             "threshold_version": candidate.get("threshold_version"),
             "selected": not bool(reject_reason),
             "decision_reason": reject_reason or reason,
-            "env_overrides": _env_overrides_for_candidate(candidate) if not reject_reason else {},
+            "env_overrides": (
+                _lock_env_overrides(lock)
+                if lock_applied and lock
+                else _env_overrides_for_candidate(candidate)
+                if not reject_reason
+                else {}
+            ),
         }
+        if lock:
+            decision["operator_runtime_env_lock"] = {
+                "lock_id": lock.get("lock_id"),
+                "path": lock.get("path"),
+                "applied": bool(lock_applied),
+                "close_reasons": lock_close_reasons,
+                "allowed_close": _lock_allows_close(lock, lock_close_reasons),
+            }
         if reject_reason:
             decisions.append(decision)
             continue
@@ -651,6 +806,10 @@ def build_preopen_apply_manifest(
         ]
         auto_apply_requested = bool(auto_apply) or apply_mode in AUTO_APPLY_MODES
         ai_review = _load_ai_review(str(report.get("date") or source_date or ""))
+        operator_runtime_env_locks = _load_operator_runtime_env_locks(
+            str(report.get("date") or source_date or ""),
+            target_date,
+        )
         selected, decisions, env_overrides = ([], [], {})
         swing_bundle = _load_swing_runtime_approval_bundle(str(report.get("date") or source_date or ""))
         swing_selected, swing_decisions, swing_env_overrides = ([], [], {})
@@ -660,6 +819,7 @@ def build_preopen_apply_manifest(
                 ai_review=ai_review,
                 require_ai=require_ai,
                 include_families=include_families,
+                operator_locks=operator_runtime_env_locks,
             )
             swing_selected, swing_decisions, swing_env_overrides = _select_swing_approved_candidates(swing_bundle)
             env_overrides = {**env_overrides, **swing_env_overrides}
@@ -701,6 +861,7 @@ def build_preopen_apply_manifest(
             },
             "auto_apply_selected": selected,
             "auto_apply_decisions": decisions,
+            "operator_runtime_env_locks": operator_runtime_env_locks,
             "approval_requests": approval_requests,
             "approval_contract_gaps": approval_contract_gaps,
             "swing_runtime_approval": {
