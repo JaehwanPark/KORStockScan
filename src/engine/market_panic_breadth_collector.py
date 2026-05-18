@@ -37,6 +37,10 @@ DEFAULT_INDUSTRY_UP_RATIO_FLOOR_PCT = 62.0
 DEFAULT_SEVERE_UP_FLOOR_PCT = 2.0
 DEFAULT_SEVERE_UP_RATIO_FLOOR_PCT = 15.0
 DEFAULT_STOCK_RISE_RATIO_FLOOR_PCT = 70.0
+DEFAULT_MARKET_WEIGHTS = {
+    "KOSPI": 0.65,
+    "KOSDAQ": 0.35,
+}
 
 
 def _report_dir() -> Path:
@@ -166,6 +170,13 @@ def _is_market_index(row: dict[str, Any]) -> str | None:
     return None
 
 
+def _weighted_average(values: list[tuple[float, float]]) -> float | None:
+    total_weight = sum(weight for _, weight in values if weight > 0)
+    if total_weight <= 0:
+        return None
+    return round(sum(value * weight for value, weight in values if weight > 0) / total_weight, 3)
+
+
 def summarize_breadth(
     rows: list[dict[str, Any]],
     *,
@@ -201,16 +212,21 @@ def summarize_breadth(
     severe_ratio = round((len(severe_down_rows) / sample_count) * 100.0, 1) if sample_count else 0.0
     up_ratio = round((len(up_rows) / sample_count) * 100.0, 1) if sample_count else 0.0
     severe_up_ratio = round((len(severe_up_rows) / sample_count) * 100.0, 1) if sample_count else 0.0
-    min_index_change = min(
-        [float(row.get("change_pct")) for row in market_indices.values() if row.get("change_pct") is not None],
-        default=None,
-    )
-    max_index_change = max(
-        [float(row.get("change_pct")) for row in market_indices.values() if row.get("change_pct") is not None],
-        default=None,
+    index_changes = {
+        market: float(row.get("change_pct"))
+        for market, row in market_indices.items()
+        if row.get("change_pct") is not None
+    }
+    weighted_index_change = _weighted_average(
+        [
+            (change, DEFAULT_MARKET_WEIGHTS.get(market, 0.0))
+            for market, change in index_changes.items()
+        ]
     )
     stock_fall_rows = []
     stock_rise_rows = []
+    stock_fall_weight_values: list[tuple[float, float]] = []
+    stock_rise_weight_values: list[tuple[float, float]] = []
     for market, row in market_indices.items():
         listed = _safe_int(row.get("listed_count"), 0)
         fall = _safe_int(row.get("fall_count"), 0)
@@ -219,6 +235,9 @@ def summarize_breadth(
         denominator = listed or (fall + rising + flat)
         fall_ratio = round((fall / denominator) * 100.0, 1) if denominator else 0.0
         rise_ratio = round((rising / denominator) * 100.0, 1) if denominator else 0.0
+        weight = float(denominator) if denominator > 0 else DEFAULT_MARKET_WEIGHTS.get(market, 0.0)
+        stock_fall_weight_values.append((fall_ratio, weight))
+        stock_rise_weight_values.append((rise_ratio, weight))
         stock_fall_rows.append(
             {
                 "market": market,
@@ -241,36 +260,60 @@ def summarize_breadth(
         )
     max_stock_fall_ratio = max([row["fall_ratio_pct"] for row in stock_fall_rows], default=0.0)
     max_stock_rise_ratio = max([row["rise_ratio_pct"] for row in stock_rise_rows], default=0.0)
-    index_risk_off = min_index_change is not None and min_index_change <= index_drop_floor_pct
+    weighted_stock_fall_ratio = _weighted_average(stock_fall_weight_values) or 0.0
+    weighted_stock_rise_ratio = _weighted_average(stock_rise_weight_values) or 0.0
+    index_risk_off = weighted_index_change is not None and weighted_index_change <= index_drop_floor_pct
+    single_market_index_risk_off = any(change <= index_drop_floor_pct for change in index_changes.values())
     industry_risk_off = sample_count > 0 and down_ratio >= industry_down_ratio_floor_pct
     severe_risk_off = sample_count > 0 and severe_ratio >= severe_down_ratio_floor_pct
-    stock_breadth_risk_off = max_stock_fall_ratio >= stock_fall_ratio_floor_pct
+    stock_breadth_risk_off = weighted_stock_fall_ratio >= stock_fall_ratio_floor_pct
+    single_market_stock_risk_off = max_stock_fall_ratio >= stock_fall_ratio_floor_pct
     risk_off = bool(index_risk_off and (industry_risk_off or severe_risk_off or stock_breadth_risk_off))
-    index_risk_on = max_index_change is not None and max_index_change >= index_rise_floor_pct
+    single_market_risk_off = bool(
+        not risk_off
+        and (single_market_index_risk_off or single_market_stock_risk_off)
+        and (industry_risk_off or severe_risk_off or single_market_stock_risk_off)
+    )
+    index_risk_on = weighted_index_change is not None and weighted_index_change >= index_rise_floor_pct
+    single_market_index_risk_on = any(change >= index_rise_floor_pct for change in index_changes.values())
     industry_risk_on = sample_count > 0 and up_ratio >= industry_up_ratio_floor_pct
     severe_risk_on = sample_count > 0 and severe_up_ratio >= severe_up_ratio_floor_pct
-    stock_breadth_risk_on = max_stock_rise_ratio >= stock_rise_ratio_floor_pct
+    stock_breadth_risk_on = weighted_stock_rise_ratio >= stock_rise_ratio_floor_pct
+    single_market_stock_risk_on = max_stock_rise_ratio >= stock_rise_ratio_floor_pct
     risk_on = bool(index_risk_on and (industry_risk_on or severe_risk_on or stock_breadth_risk_on))
+    single_market_risk_on = bool(
+        not risk_on
+        and (single_market_index_risk_on or single_market_stock_risk_on)
+        and (industry_risk_on or severe_risk_on or single_market_stock_risk_on)
+    )
     reasons: list[str] = []
     if index_risk_off:
-        reasons.append("market_index_intraday_drop")
+        reasons.append("weighted_market_index_intraday_drop")
+    elif single_market_index_risk_off:
+        reasons.append("single_market_index_intraday_drop")
     if industry_risk_off:
         reasons.append("industry_breadth_down_ratio_high")
     if severe_risk_off:
         reasons.append("industry_severe_down_ratio_high")
     if stock_breadth_risk_off:
-        reasons.append("listed_stock_fall_ratio_high")
+        reasons.append("weighted_listed_stock_fall_ratio_high")
+    elif single_market_stock_risk_off:
+        reasons.append("single_market_listed_stock_fall_ratio_high")
     if not risk_off:
         reasons.append("live market breadth panic thresholds not breached")
     risk_on_reasons: list[str] = []
     if index_risk_on:
-        risk_on_reasons.append("market_index_intraday_rise")
+        risk_on_reasons.append("weighted_market_index_intraday_rise")
+    elif single_market_index_risk_on:
+        risk_on_reasons.append("single_market_index_intraday_rise")
     if industry_risk_on:
         risk_on_reasons.append("industry_breadth_up_ratio_high")
     if severe_risk_on:
         risk_on_reasons.append("industry_severe_up_ratio_high")
     if stock_breadth_risk_on:
-        risk_on_reasons.append("listed_stock_rise_ratio_high")
+        risk_on_reasons.append("weighted_listed_stock_rise_ratio_high")
+    elif single_market_stock_risk_on:
+        risk_on_reasons.append("single_market_listed_stock_rise_ratio_high")
     if not risk_on:
         risk_on_reasons.append("live market breadth panic-buy thresholds not breached")
 
@@ -279,10 +322,18 @@ def summarize_breadth(
         "decision_authority": "source_quality_only",
         "window_policy": "intraday_observe_only",
         "sample_floor": "at least one market index and live industry rows when available",
-        "primary_decision_metric": "risk_off_advisory",
+        "primary_decision_metric": "weighted_composite_risk_off_advisory",
         "source_quality_gate": "Kiwoom REST ka20003 current industry/index snapshot must be generated intraday",
         "forbidden_uses": REPORT_ONLY_FORBIDDEN_USES,
         "market_indices": market_indices,
+        "weighted_market_breadth": {
+            "market_weights": DEFAULT_MARKET_WEIGHTS,
+            "index_change_pct": weighted_index_change,
+            "stock_fall_ratio_pct": weighted_stock_fall_ratio,
+            "stock_rise_ratio_pct": weighted_stock_rise_ratio,
+            "single_market_risk_off_advisory": single_market_risk_off,
+            "single_market_risk_on_advisory": single_market_risk_on,
+        },
         "industry_breadth": {
             "sample_count": sample_count,
             "up_count": len(up_rows),
@@ -316,6 +367,8 @@ def summarize_breadth(
         },
         "risk_off_advisory": risk_off,
         "risk_on_advisory": risk_on,
+        "single_market_risk_off_advisory": single_market_risk_off,
+        "single_market_risk_on_advisory": single_market_risk_on,
         "reasons": reasons,
         "risk_on_reasons": risk_on_reasons,
     }

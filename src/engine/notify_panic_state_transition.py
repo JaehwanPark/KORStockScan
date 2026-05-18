@@ -122,7 +122,7 @@ def _transition(
     if previous_effective_phase != "active" and current_phase == "active":
         return "start"
     if previous_effective_phase == "active" and current_phase == "released":
-        if current_value == "RECOVERY_CONFIRMED" and previous_phase != "release_pending":
+        if previous_phase != "release_pending":
             return "release_pending"
         return "release"
     return "none"
@@ -156,6 +156,27 @@ def _score_bar(value: object) -> str:
     return f"{icon} {'▰' * filled}{'▱' * empty} {pct}% · {label}"
 
 
+def _sell_context_label(report: dict) -> str:
+    reasons = [str(item or "") for item in (report.get("panic_state_reasons") or [])]
+    micro_context = (
+        report.get("microstructure_market_context")
+        if isinstance(report.get("microstructure_market_context"), dict)
+        else {}
+    )
+    market_breadth_only = any("market breadth risk-off watch without panic confirmation" in item for item in reasons)
+    market_breadth_risk_off = bool(micro_context.get("market_panic_breadth_risk_off_advisory"))
+    micro_panic = int((report.get("microstructure_detector") or {}).get("panic_signal_count", 0) or 0) > 0
+    panic_metrics = report.get("panic_metrics") if isinstance(report.get("panic_metrics"), dict) else {}
+    stop_cluster = bool(panic_metrics.get("panic_detected"))
+    if market_breadth_only or (market_breadth_risk_off and not micro_panic and not stop_cluster):
+        return "market_breadth_watch"
+    if stop_cluster:
+        return "stop_loss_cluster"
+    if micro_panic:
+        return "microstructure_panic"
+    return "panic_sell_watch"
+
+
 def _message_for_sell(report: dict, transition: str) -> str:
     micro = report.get("microstructure_detector") if isinstance(report.get("microstructure_detector"), dict) else {}
     micro_metrics = micro.get("metrics") if isinstance(micro.get("metrics"), dict) else {}
@@ -168,8 +189,13 @@ def _message_for_sell(report: dict, transition: str) -> str:
         body = "현재 패닉셀 알림 상태를 관리자 테스트로 확인합니다."
         intensity_line = f"- 체감 강도\n  {_score_bar(micro_metrics.get('max_panic_score'))}"
     else:
-        title = "⚠️ 패닉셀 주의"
-        body = "시장에 급한 매도세가 감지되었습니다. 신규 진입은 평소보다 더 보수적으로 볼 구간입니다."
+        context = _sell_context_label(report)
+        if context == "market_breadth_watch":
+            title = "⚠️ 시장 breadth risk-off 주의"
+            body = "시장/업종 breadth가 약해졌지만 개별 micro panic이나 손절 cluster는 아직 확인되지 않았습니다."
+        else:
+            title = "⚠️ 패닉셀 주의"
+            body = "시장에 급한 매도세가 감지되었습니다. 신규 진입은 평소보다 더 보수적으로 볼 구간입니다."
         intensity_line = f"- 체감 강도\n  {_score_bar(micro_metrics.get('max_panic_score'))}"
     return "\n".join(
         [

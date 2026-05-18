@@ -6,19 +6,19 @@
 - panic_buy_regime_mode: `NORMAL`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-05-18T10:49:06`
-- latest_event_at: `2026-05-18T10:49:05`
+- as_of: `2026-05-18T12:05:17`
+- latest_event_at: `2026-05-18T12:05:16`
 - reasons: `no panic buying threshold breached`
 
 ## 패닉바잉 지표
 
-- evaluated_symbol_count: `30`
+- evaluated_symbol_count: `31`
 - panic_buy_active_count: `0`
 - panic_buy_watch_count: `0`
 - allow_tp_override_count: `0`
 - allow_runner_count: `0`
 - max_panic_buy_score: `0.45`
-- avg_confidence: `0.5167`
+- avg_confidence: `0.5129`
 
 ## 소진 지표
 
@@ -37,11 +37,11 @@
 
 ## Microstructure Detector
 
-- missing_orderbook_count: `20`
-- degraded_orderbook_count: `20`
+- missing_orderbook_count: `22`
+- degraded_orderbook_count: `22`
 - missing_trade_aggressor_count: `20`
-- carried_orderbook_snapshot_count: `48`
-- carried_trade_aggressor_snapshot_count: `37`
+- carried_orderbook_snapshot_count: `85`
+- carried_trade_aggressor_snapshot_count: `75`
 - micro_cusum_triggered_symbol_count: `0`
 - micro_consensus_pass_symbol_count: `0`
 - micro_cusum_decision_authority: `source_quality_only`
@@ -50,7 +50,9 @@
 
 - market_panic_breadth_source_quality_status: `ok`
 - market_panic_breadth_risk_on_advisory: `false`
-- market_panic_breadth_risk_off_advisory: `true`
+- market_panic_breadth_risk_off_advisory: `false`
+- market_panic_breadth_single_market_risk_on_advisory: `false`
+- market_panic_breadth_single_market_risk_off_advisory: `true`
 - market_wide_panic_buy_confirmed: `false`
 - market_breadth_decision_authority: `source_quality_only`
 

@@ -132,7 +132,7 @@ def test_normal_state_without_panic_threshold(monkeypatch, tmp_path):
     assert report["panic_regime_contract"]["allowed_runtime_apply"] is False
 
 
-def test_live_market_panic_breadth_can_mark_report_only_panic(monkeypatch, tmp_path):
+def test_live_market_panic_breadth_only_marks_watch_not_panic(monkeypatch, tmp_path):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,
@@ -150,10 +150,13 @@ def test_live_market_panic_breadth_can_mark_report_only_panic(monkeypatch, tmp_p
         as_of=datetime.fromisoformat(f"{TARGET_DATE}T10:30:00"),
     )
 
-    assert report["panic_state"] == "PANIC_SELL"
+    assert report["panic_state"] == "RECOVERY_WATCH"
+    assert report["panic_regime_mode"] == "STABILIZING"
     assert report["policy"]["runtime_effect"] == "report_only_no_mutation"
     assert report["microstructure_market_context"]["market_panic_breadth_risk_off_advisory"] is True
+    assert report["microstructure_detector"]["panic_signal_count"] == 0
     assert "live market panic breadth risk_off advisory" in report["panic_state_reasons"]
+    assert "market breadth risk-off watch without panic confirmation" in report["panic_state_reasons"]
 
 
 def test_panic_sell_state_from_five_stop_losses_in_30_minutes(monkeypatch, tmp_path):

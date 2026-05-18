@@ -288,6 +288,11 @@ def _load_source_summary(target_date: str) -> dict[str, Any]:
             else None,
             "risk_on_advisory": bool(panic_breadth.get("risk_on_advisory")),
             "risk_off_advisory": bool(panic_breadth.get("risk_off_advisory")),
+            "single_market_risk_on_advisory": bool(panic_breadth.get("single_market_risk_on_advisory")),
+            "single_market_risk_off_advisory": bool(panic_breadth.get("single_market_risk_off_advisory")),
+            "weighted_market_breadth": panic_breadth.get("weighted_market_breadth")
+            if isinstance(panic_breadth, dict)
+            else {},
             "industry_breadth": panic_breadth.get("industry_breadth") if isinstance(panic_breadth, dict) else {},
             "stock_breadth": panic_breadth.get("stock_breadth") if isinstance(panic_breadth, dict) else {},
             "risk_on_reasons": panic_breadth.get("risk_on_reasons") if isinstance(panic_breadth, dict) else [],
@@ -320,6 +325,13 @@ def _market_breadth_context(source_summary: dict[str, Any], micro: dict[str, Any
         "market_panic_breadth_source_quality_status": market.get("source_quality_status"),
         "market_panic_breadth_risk_on_advisory": risk_on,
         "market_panic_breadth_risk_off_advisory": bool(market.get("risk_off_advisory")),
+        "market_panic_breadth_single_market_risk_on_advisory": bool(
+            market.get("single_market_risk_on_advisory")
+        ),
+        "market_panic_breadth_single_market_risk_off_advisory": bool(
+            market.get("single_market_risk_off_advisory")
+        ),
+        "market_panic_breadth_weighted": market.get("weighted_market_breadth") or {},
         "market_wide_panic_buy_confirmed": bool(active_or_watch > 0 and risk_on),
         "local_panic_buy_signal_count": active_or_watch,
         "industry_breadth": market.get("industry_breadth") or {},
@@ -618,6 +630,8 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"- market_panic_breadth_source_quality_status: `{market.get('market_panic_breadth_source_quality_status') or '-'}`",
         f"- market_panic_breadth_risk_on_advisory: `{str(market.get('market_panic_breadth_risk_on_advisory', False)).lower()}`",
         f"- market_panic_breadth_risk_off_advisory: `{str(market.get('market_panic_breadth_risk_off_advisory', False)).lower()}`",
+        f"- market_panic_breadth_single_market_risk_on_advisory: `{str(market.get('market_panic_breadth_single_market_risk_on_advisory', False)).lower()}`",
+        f"- market_panic_breadth_single_market_risk_off_advisory: `{str(market.get('market_panic_breadth_single_market_risk_off_advisory', False)).lower()}`",
         f"- market_wide_panic_buy_confirmed: `{str(market.get('market_wide_panic_buy_confirmed', False)).lower()}`",
         f"- market_breadth_decision_authority: `{market.get('decision_authority', '-')}`",
         "",

@@ -513,6 +513,12 @@ def _load_source_summary(target_date: str) -> dict[str, Any]:
             if isinstance(market_breadth, dict)
             else None,
             "risk_off_advisory": panic_breadth.get("risk_off_advisory") if isinstance(panic_breadth, dict) else False,
+            "single_market_risk_off_advisory": panic_breadth.get("single_market_risk_off_advisory")
+            if isinstance(panic_breadth, dict)
+            else False,
+            "weighted_market_breadth": panic_breadth.get("weighted_market_breadth")
+            if isinstance(panic_breadth, dict)
+            else {},
             "industry_breadth": panic_breadth.get("industry_breadth") if isinstance(panic_breadth, dict) else {},
             "market_indices": panic_breadth.get("market_indices") if isinstance(panic_breadth, dict) else {},
             "reasons": panic_breadth.get("reasons") if isinstance(panic_breadth, dict) else [],
@@ -537,7 +543,8 @@ def _microstructure_market_context(microstructure_detector: dict[str, Any], sour
         evaluated_count >= MICRO_MARKET_BREADTH_SYMBOL_FLOOR
         and risk_off_ratio >= MICRO_RISK_OFF_RATIO_FLOOR_PCT
     )
-    confirmed = (risk_off_count > 0 and (market_confirms or breadth_confirms)) or live_breadth_risk_off
+    micro_confirmed = risk_off_count > 0 and (market_confirms or breadth_confirms)
+    confirmed = micro_confirmed or live_breadth_risk_off
     local_only = risk_off_count > 0 and not confirmed
     reasons: list[str] = []
     if market_confirms:
@@ -575,6 +582,10 @@ def _microstructure_market_context(microstructure_detector: dict[str, Any], sour
         "market_panic_breadth_as_of": market_breadth.get("as_of"),
         "market_panic_breadth_source_quality_status": market_breadth.get("source_quality_status"),
         "market_panic_breadth_risk_off_advisory": live_breadth_risk_off,
+        "market_panic_breadth_single_market_risk_off_advisory": bool(
+            market_breadth.get("single_market_risk_off_advisory")
+        ),
+        "market_panic_breadth_weighted": market_breadth.get("weighted_market_breadth") or {},
         "market_panic_breadth_industry_breadth": market_breadth.get("industry_breadth") or {},
         "market_panic_breadth_indices": market_breadth.get("market_indices") or {},
         "evaluated_symbol_count": evaluated_count,
@@ -584,6 +595,7 @@ def _microstructure_market_context(microstructure_detector: dict[str, Any], sour
         "breadth_risk_off_ratio_floor_pct": MICRO_RISK_OFF_RATIO_FLOOR_PCT,
         "market_confirms_risk_off": market_confirms,
         "breadth_confirms_risk_off": breadth_confirms,
+        "confirmed_micro_risk_off_advisory": micro_confirmed,
         "confirmed_risk_off_advisory": confirmed,
         "portfolio_local_risk_off_only": local_only,
         "reasons": reasons,
@@ -601,12 +613,23 @@ def _resolve_panic_state(
     micro = microstructure_detector if isinstance(microstructure_detector, dict) else {}
     micro_context = microstructure_market_context if isinstance(microstructure_market_context, dict) else {}
     raw_micro_risk_off = _safe_int(micro.get("risk_off_advisory_count"), 0) > 0
-    micro_risk_off = bool(micro_context.get("confirmed_risk_off_advisory"))
+    micro_risk_off = bool(micro_context.get("confirmed_micro_risk_off_advisory"))
     market_breadth_risk_off = bool(micro_context.get("market_panic_breadth_risk_off_advisory"))
     micro_recovery_watch = _safe_int(micro.get("recovery_candidate_count"), 0) > 0
     micro_recovery_confirmed = _safe_int(micro.get("recovery_confirmed_count"), 0) > 0
     risk_off_active = micro_risk_off or market_breadth_risk_off
-    if not panic_metrics.get("panic_detected") and not micro_risk_off and not micro_recovery_watch and not micro_recovery_confirmed:
+    market_breadth_only_risk_off = (
+        market_breadth_risk_off
+        and not raw_micro_risk_off
+        and not bool(panic_metrics.get("panic_detected"))
+    )
+    if (
+        not panic_metrics.get("panic_detected")
+        and not micro_risk_off
+        and not market_breadth_risk_off
+        and not micro_recovery_watch
+        and not micro_recovery_confirmed
+    ):
         reasons.append("panic thresholds not breached")
         if raw_micro_risk_off:
             reasons.append("microstructure risk_off unconfirmed by market/breadth context")
@@ -641,6 +664,9 @@ def _resolve_panic_state(
     post_sell_watch = post_sell_above_sell >= RECOVERY_WATCH_REBOUND_ABOVE_SELL_FLOOR_PCT
     if active_watch or post_sell_watch or micro_recovery_watch or micro_recovery_confirmed:
         reasons.append("recovery watch triggered by active sim/probe or post-sell rebound above sell")
+        return "RECOVERY_WATCH", reasons
+    if market_breadth_only_risk_off:
+        reasons.append("market breadth risk-off watch without panic confirmation")
         return "RECOVERY_WATCH", reasons
     reasons.append("recovery conditions not yet met")
     return "PANIC_SELL", reasons
@@ -921,8 +947,10 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"- market_panic_breadth_as_of: `{micro_market.get('market_panic_breadth_as_of') or '-'}`",
         f"- market_panic_breadth_source_quality_status: `{micro_market.get('market_panic_breadth_source_quality_status') or '-'}`",
         f"- market_panic_breadth_risk_off_advisory: `{str(micro_market.get('market_panic_breadth_risk_off_advisory', False)).lower()}`",
+        f"- market_panic_breadth_single_market_risk_off_advisory: `{str(micro_market.get('market_panic_breadth_single_market_risk_off_advisory', False)).lower()}`",
         f"- evaluated_symbol_count: `{micro_market.get('evaluated_symbol_count', 0)}`",
         f"- risk_off_advisory_ratio_pct: `{_fmt(micro_market.get('risk_off_advisory_ratio_pct'))}`",
+        f"- confirmed_micro_risk_off_advisory: `{str(micro_market.get('confirmed_micro_risk_off_advisory', False)).lower()}`",
         f"- confirmed_risk_off_advisory: `{str(micro_market.get('confirmed_risk_off_advisory', False)).lower()}`",
         f"- portfolio_local_risk_off_only: `{str(micro_market.get('portfolio_local_risk_off_only', False)).lower()}`",
         f"- source_quality_gate: `{micro_market.get('source_quality_gate', '-')}`",

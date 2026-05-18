@@ -20,7 +20,7 @@
 - 스캘핑 simulator와 스윙 dry-run 성과는 `real`, `sim`, `combined`로 분리해 본다. `real`은 실제 브로커 주문이 접수된 포지션/체결, `sim`은 `actual_order_submitted=false`인 가상 체결, `combined`는 둘을 합친 calibration view다. sim/probe 수량은 기본 `SIM_VIRTUAL_BUDGET_KRW=10,000,000` 가상 주문가능금액과 실주문 동적수량 산식으로 계산하며 실계좌 주문가능금액과 분리한다. tuning 후보 산출에는 combined를 사용할 수 있지만, provenance와 execution-quality 평가는 real/sim을 절대 섞지 않는다.
 - OFI/QI source-quality, DeepSeek data-quality, workorder lineage 같은 report-only 값은 자동화 체인의 입력으로 쓸 수 있다. 단, source-quality blocker나 workorder 생성 자체는 runtime mutation 권한이 아니며, approval artifact 또는 `auto_bounded_live` guard 없이 live env/order guard로 승격하지 않는다.
 - Sentinel은 Telegram 알림 기능을 제거한 운영 감시/report-only 축이다. 이상치는 mutation이 아니라 threshold source bundle, incident, instrumentation gap, normal drift로 라우팅한다.
-- 사람이 반드시 개입하는 지점은 운영 장애, 생성된 code improvement workorder를 Codex 세션에 넣어 구현을 요청하는 단계, 문서 backlog Project/Calendar 동기화다.
+- 사람이 반드시 개입하는 지점은 운영 장애, 생성된 approval request를 검토해 approval artifact 생성 여부를 결정하는 단계, 생성된 code improvement workorder를 Codex 세션에 넣어 구현을 요청하는 단계, 문서 backlog Project/Calendar 동기화다.
 - `build_codex_daily_workorder`는 이 runbook의 장전/장중/장후 확인절차를 `Runbook 운영 확인` 블록으로 자동 포함한다. 단, 같은 날짜 checklist에 `PreopenAutomationHealthCheckYYYYMMDD`/`IntradayAutomationHealthCheckYYYYMMDD`/`PostcloseAutomationHealthCheckYYYYMMDD` 운영 확인 기록이 남은 슬롯은 이미 처리된 것으로 보고 같은 날짜 workorder에서 제외한다. 같은 확인 큐는 `RunbookOps` track으로 GitHub Project와 Google Calendar에도 동기화되어 operator가 놓치지 않게 한다. GitHub Project 동기화가 rate limit 등으로 지연돼도 workorder는 기본값 `CODEX_WORKORDER_INCLUDE_LOCAL_DOCS=true`로 로컬 checklist 미완료 항목을 병합한다.
 - 이 문서에서 “확인”은 artifact, log, source-of-truth 문서를 읽고 아래 `판정 상태 정의` 중 하나로 분류하는 행위다. 확인만으로 live env, runtime threshold, broker 주문 상태를 변경하지 않는다.
 
@@ -34,7 +34,7 @@
 | swing runtime approval | 스윙 approval request 생성, approval artifact 소비, dry-run runtime env 후보 연결 | 승인 artifact 없이 env 반영, dry-run 해제, 브로커 주문 허용 | `swing_runtime_approval`, `threshold_apply_YYYY-MM-DD.json`, runtime env JSON |
 | swing one-share real canary | 별도 승인된 후보에 한해 1주 실제 BUY/SELL execution 품질 수집 | 스윙 전체 실매매 전환, phase0 scale-in 실주문, approval artifact 밖 주문 | `swing_one_share_real_canary`, 실주문 receipt, real-only execution metrics |
 | Codex | 사용자가 요청한 범위에서 코드/문서 수정, artifact 검증, parser/test 실행, workorder 작성 또는 구현 | GitHub Project/Calendar 동기화 실행, 사용자 승인 없는 live guard 완화, broker 주문 제출, 임의 패키지 설치 | 변경 파일, 테스트 결과, 최종 답변 |
-| 사람/operator | 장전/장중/장후 판정 검토, 외부 동기화 명령 실행, 운영 장애 복구 판단, 생성 workorder의 구현 지시 여부 결정 | 자동화 artifact만 보고 이미 live 변경됐다고 간주, 출처 없는 수동 threshold 변경 | 수동 실행 명령, Project/Calendar 상태, 운영 메모 |
+| 사람/operator | 장전/장중/장후 판정 검토, approval request 승인 여부와 approval artifact 생성 여부 결정, 외부 동기화 명령 실행, 운영 장애 복구 판단, 생성 workorder의 구현 지시 여부 결정 | 자동화 artifact만 보고 이미 live 변경됐다고 간주, approval artifact 없이 env를 수동 작성, 출처 없는 수동 threshold 변경 | approval artifact, 수동 실행 명령, Project/Calendar 상태, 운영 메모 |
 
 ## 판정 상태 정의
 
@@ -66,8 +66,8 @@
 | `09:00~15:30` | cron | `deploy/run_system_metric_sampler_cron.sh` 1분 주기 | `logs/system_metric_samples.jsonl`, `logs/system_metric_sampler_cron.log`, `tmp/system_metric_sampler_state.json` | CPU busy, load, memory, swap, disk 사용률과 sampler stale 여부를 확인한다. error detector resource_usage의 입력 source다 | resource pressure를 전략 threshold/order guard 변경으로 해석하지 않는다 |
 | `09:05~15:20` | cron | `deploy/run_buy_funnel_sentinel_intraday.sh` 5분 주기, 기본 `BUY_FUNNEL_SENTINEL_USE_CACHE=1`, `BUY_FUNNEL_SENTINEL_USE_SUMMARY=1` | `data/report/buy_funnel_sentinel/buy_funnel_sentinel_YYYY-MM-DD.{json,md}`, `data/runtime/sentinel_event_cache/buy_funnel_sentinel_events_YYYY-MM-DD.*`, `data/pipeline_event_summaries/pipeline_event_summary_YYYY-MM-DD.jsonl`, `data/pipeline_event_summaries/pipeline_event_summary_manifest_YYYY-MM-DD.json`, `logs/run_buy_funnel_sentinel_cron.log` | `UPSTREAM_AI_THRESHOLD`, `LATENCY_DROUGHT`, `PRICE_GUARD_DROUGHT`, `RUNTIME_OPS` 추세와 `followup.route`, `operator_action_required`, `runtime_effect=report_only_no_mutation`, cache `rebuilt=false`/append rows, summary `status=ok` 또는 fallback 확인 | Sentinel 결과로 score/spread/fallback/restart 자동 변경 금지. summary는 diagnostic aggregation이며 raw suppression이 아니다 |
 | `09:05~15:30` | cron | `deploy/run_holding_exit_sentinel_intraday.sh` 5분 주기, 기본 `HOLDING_EXIT_SENTINEL_USE_CACHE=1` | `data/report/holding_exit_sentinel/holding_exit_sentinel_YYYY-MM-DD.{json,md}`, `data/runtime/sentinel_event_cache/holding_exit_sentinel_events_YYYY-MM-DD.*`, `logs/run_holding_exit_sentinel_cron.log` | `HOLD_DEFER_DANGER`, `SOFT_STOP_WHIPSAW`, `AI_HOLDING_OPS`, `SELL_EXECUTION_DROUGHT` 추세와 real/non-real exit split, `followup.route`, `operator_action_required`, `runtime_effect=report_only_no_mutation`, cache `rebuilt=false`/append rows 확인 | Sentinel 결과로 자동 매도, threshold mutation, bot restart 금지 |
-| `09:05~15:30` | cron | `deploy/run_panic_sell_defense_intraday.sh` 2분 주기, 5분 배수 분 제외 offset, wrapper cooldown 90초. report 생성 전 `market_panic_breadth_collector`를 nproc 기반 report-only CPU affinity/nice/ionice로 best-effort 실행하되 `PANIC_MARKET_BREADTH_MAX_AGE_SEC` 안의 fresh artifact가 있거나 shared lock이 잡혀 있으면 재사용한다 | `data/report/panic_sell_defense/panic_sell_defense_YYYY-MM-DD.{json,md}`, `data/report/market_panic_breadth/market_panic_breadth_YYYY-MM-DD.json`, `logs/run_panic_sell_defense_cron.log`, `tmp/panic_state_telegram_notify_state.json` | `panic_state`, stop-loss cluster, active sim/probe 회복률, post-sell rebound, market-wide `risk_off_advisory`/`risk_on_advisory`, `canary_candidates`, `runtime_effect=report_only_no_mutation`, panic 시작/해제 Telegram transition, CPU/resource spike 반복 여부 확인 | panic 결과로 score/stop threshold 변경, 자동매도, bot restart, 스윙 실주문 전환 금지. Telegram은 시작/해제 안내만 전송하며 runtime 기본 audience는 전체, dry-run/test는 admin only다. 2분 전환 후 resource fail이 반복되면 5분 주기로 rollback |
-| `09:05~15:30` | cron | `deploy/run_panic_buying_intraday.sh` 2분 주기, panic sell defense보다 1분 늦게 staggered 실행, 5분 배수 분 제외 offset, wrapper cooldown 90초. report 생성 전 `market_panic_breadth_collector`는 shared lock/fresh artifact를 재사용한다 | `data/report/panic_buying/panic_buying_YYYY-MM-DD.{json,md}`, `data/report/market_panic_breadth/market_panic_breadth_YYYY-MM-DD.json`, `logs/run_panic_buying_cron.log`, `tmp/panic_state_telegram_notify_state.json` | `panic_buy_state`, `panic_buy_regime_mode`, 패닉바잉 active/소진 count, market-wide `risk_on_advisory`/`risk_off_advisory`, TP counterfactual, `panic_buy_runner_tp_canary`, `runtime_effect=report_only_no_mutation`, panic 시작/해제 Telegram transition, CPU/resource spike 반복 여부 확인 | panic buying 결과로 TP 정책, trailing, score/threshold, provider route, 자동매수/자동매도, bot restart 변경 금지. `panic_buy_regime_mode`는 runner TP, 추격매수 차단, exhaustion cleanup, cooldown 후보를 source bundle에 분리하는 값일 뿐 approval artifact 전 runtime 권한이 없다. Telegram은 시작/해제 안내만 전송하며 runtime 기본 audience는 전체, dry-run/test는 admin only다. 2분 전환 후 resource fail이 반복되면 5분 주기로 rollback |
+| `09:05~15:30` | cron | `deploy/run_panic_sell_defense_intraday.sh` 2분 주기, 5분 배수 분 제외 offset, wrapper cooldown 90초. report 생성 전 `market_panic_breadth_collector`를 nproc 기반 report-only CPU affinity/nice/ionice로 best-effort 실행하되 `PANIC_MARKET_BREADTH_MAX_AGE_SEC` 안의 fresh artifact가 있거나 shared lock이 잡혀 있으면 재사용한다 | `data/report/panic_sell_defense/panic_sell_defense_YYYY-MM-DD.{json,md}`, `data/report/market_panic_breadth/market_panic_breadth_YYYY-MM-DD.json`, `logs/run_panic_sell_defense_cron.log`, `tmp/panic_state_telegram_notify_state.json` | `panic_state`, stop-loss cluster, active sim/probe 회복률, post-sell rebound, weighted composite `risk_off_advisory`/`risk_on_advisory`, `single_market_risk_off_advisory`, `canary_candidates`, `runtime_effect=report_only_no_mutation`, panic 시작/해제 Telegram transition, CPU/resource spike 반복 여부 확인 | panic 결과로 score/stop threshold 변경, 자동매도, bot restart, 스윙 실주문 전환 금지. Telegram은 시작/해제 안내만 전송하며 runtime 기본 audience는 전체, dry-run/test는 admin only다. 2분 전환 후 resource fail이 반복되면 5분 주기로 rollback |
+| `09:05~15:30` | cron | `deploy/run_panic_buying_intraday.sh` 2분 주기, panic sell defense보다 1분 늦게 staggered 실행, 5분 배수 분 제외 offset, wrapper cooldown 90초. report 생성 전 `market_panic_breadth_collector`는 shared lock/fresh artifact를 재사용한다 | `data/report/panic_buying/panic_buying_YYYY-MM-DD.{json,md}`, `data/report/market_panic_breadth/market_panic_breadth_YYYY-MM-DD.json`, `logs/run_panic_buying_cron.log`, `tmp/panic_state_telegram_notify_state.json` | `panic_buy_state`, `panic_buy_regime_mode`, 패닉바잉 active/소진 count, weighted composite `risk_on_advisory`/`risk_off_advisory`, `single_market_risk_on_advisory`, TP counterfactual, `panic_buy_runner_tp_canary`, `runtime_effect=report_only_no_mutation`, panic 시작/해제 Telegram transition, CPU/resource spike 반복 여부 확인 | panic buying 결과로 TP 정책, trailing, score/threshold, provider route, 자동매수/자동매도, bot restart 변경 금지. `panic_buy_regime_mode`는 runner TP, 추격매수 차단, exhaustion cleanup, cooldown 후보를 source bundle에 분리하는 값일 뿐 approval artifact 전 runtime 권한이 없다. Telegram은 시작/해제 안내만 전송하며 runtime 기본 audience는 전체, dry-run/test는 admin only다. 2분 전환 후 resource fail이 반복되면 5분 주기로 rollback |
 | `09:30~11:00` | cron | `src.engine.buy_pause_guard evaluate` 5분 주기 | `logs/buy_pause_guard.log` | pause guard 반복 발동 여부와 `[DONE] buy_pause_guard target_date=YYYY-MM-DD` marker 확인 | pause guard를 진입 threshold 튜닝 근거로 단독 사용 금지 |
 | `09:35~12:00` | cron | monitor snapshot incremental/full | `data/report/monitor_snapshots/*_YYYY-MM-DD.json`, `logs/run_monitor_snapshot_cron.log`, `data/runtime/monitor_snapshot_completion_*.json` | snapshot failure, async timeout, manifest status, completion artifact 확인. 완료 Telegram 발송은 기본 제거하고 로그/산출물 기준으로 판정한다 | 장전 full build 차단을 우회하지 않는다 |
 | `12:05` | cron | `deploy/run_threshold_cycle_calibration.sh` with `THRESHOLD_CYCLE_AI_CORRECTION_PROVIDER=openai` | `data/report/threshold_cycle_calibration/threshold_cycle_calibration_YYYY-MM-DD_intraday.json`, `data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_YYYY-MM-DD_intraday.{json,md}`, `logs/threshold_cycle_calibration_intraday_cron.log` | `[START]/[DONE]/[FAIL] threshold-cycle calibration target_date=YYYY-MM-DD phase=intraday` marker와 `calibration_state`, `safety_revert_required`, `ai_status`, `guard_reject_reason` 확인 | 장중 calibration 결과를 당일 runtime에 적용 금지 |
@@ -453,6 +453,155 @@ ls -l data/daily_recommendations_v2.csv data/daily_recommendations_v2_diagnostic
 | block | sim/probe/dry-run 포지션, 승인되지 않은 arm, stale quote, `orderbook_micro_ready=false`, OFI/QI `RISK_BEARISH`, pending add/sell, cap 초과 |
 | provenance | `cohort=swing_scale_in_real_canary_phase0`, `actual_order_submitted=true`, `would_qty`, `effective_qty`, `real_canary_actual_qty=1`, `real_canary_qty_cap=1`, `qty_cap_reason=swing_scale_in_real_canary_phase0` |
 | rollback | 승인 밖 주문, qty > 1, sim/probe real order attempt, receipt lifecycle mismatch, stale submit, OFI/QI bearish submit |
+
+## 신규 Approval Artifact 처리 절차
+
+`approval_request`는 자동화체인이 만든 사용자 승인 요청이다. 생성 자체는 runtime 효과가 없으며, approval artifact가 없으면 `threshold_cycle_preopen_apply`는 env를 쓰지 않는다. 사람/operator가 남는 지점은 장후 산출물에서 승인 요청을 검토한 뒤 다음 장전 apply에 넘길 approval artifact를 만들지 결정하는 단계다. 이 절차는 code improvement workorder 검토와 같은 POSTCLOSE 수동 triage 대상이다.
+
+### 1. Intake
+
+입력 artifact:
+
+- `data/report/swing_runtime_approval/swing_runtime_approval_YYYY-MM-DD.json`
+- `data/report/swing_runtime_approval/swing_runtime_approval_YYYY-MM-DD.md`
+- `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.json`
+- `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.md`
+- `data/report/runtime_approval_summary/runtime_approval_summary_YYYY-MM-DD.json`
+- `data/report/runtime_approval_summary/runtime_approval_summary_YYYY-MM-DD.md`
+- `data/threshold_cycle/apply_plans/threshold_apply_YYYY-MM-DD.json`
+- `docs/checklists/YYYY-MM-DD-stage2-todo-checklist.md`
+
+확인 필드:
+
+| 필드 | 의미 | 처리 |
+| --- | --- | --- |
+| `approval_id` | 승인 요청 식별자 | approval artifact의 `approved_request_ids`에 그대로 보존 |
+| `policy_id` / `family` | 승인 대상 축 | 지원되는 approval contract인지 확인. contract missing이면 artifact를 만들어도 live 반영 금지 |
+| `calibration_state` | 승인 요청 상태 | `approval_required`만 artifact 검토 대상. `hold_sample`, `freeze`, `blocked_by_policy`는 승인하지 않는다 |
+| `candidate_codes` / `candidate_rows` | 승인 후보 종목/대상 | allowlist와 일치해야 한다. 후보 밖 코드는 승인 artifact에 넣지 않는다 |
+| `allowed_actions` | scale-in real canary 허용 arm | artifact의 `allowed_actions`는 request의 subset이어야 한다 |
+| `recommended_values` | env 후보값 | cap, allowed codes, dry-run 유지 조건이 policy와 일치하는지 확인 |
+| `approval_contract_status` | artifact loader/env/runtime guard 준비 여부 | `ready`가 아니면 approval artifact 생성 대신 workorder 또는 보류로 닫는다 |
+| `approval_artifact_path` | 소비될 artifact 경로 | 해당 날짜 파일이 있어야 다음 PREOPEN apply가 소비한다 |
+| `approval_artifact_approved` | 이미 승인 artifact가 있는지 | true면 중복 생성하지 않고 target date와 approved ids를 확인한다 |
+| `blocked_reason` / `block_reasons` | 차단 사유 | 차단이 남아 있으면 artifact를 만들지 않는다 |
+| `dry_run_required` / `global_swing_dry_run_must_remain_enabled` | dry-run 유지 계약 | approval artifact가 있어도 global dry-run 해제 금지 |
+
+### 2. 사람 승인 판정
+
+승인 triage는 `HumanInterventionSummaryYYYYMMDD`에서 code improvement workorder와 분리해 닫는다.
+
+| 판정 | 조건 | 다음 액션 |
+| --- | --- | --- |
+| `approval_artifact_required` | `approval_required`, contract ready, blocker 없음, 후보/cap이 policy와 일치 | operator가 approval artifact 생성 여부를 결정한다 |
+| `approval_artifact_created` | artifact가 생성되어 `approved=true`와 request id가 일치 | 다음 PREOPEN apply에서 selected/blocked reason을 확인한다 |
+| `approval_artifact_missing` | 승인 요청은 있으나 사용자가 아직 승인하지 않음 | env 미반영이 정상 차단임을 기록하고 다음 영업일 재검토 |
+| `blocked_by_policy` | contract missing, source-quality blocker, sample 부족, severe downside, same-stage conflict | artifact 생성 금지. workorder 또는 관찰로 라우팅 |
+| `observe_only` | approval request가 없거나 요청이 report-only/proposal-only | live/env/order 변경 없이 관찰만 유지 |
+
+금지선:
+
+- approval artifact를 만든다고 장중 runtime이 바뀌지 않는다. 소비 시점은 다음 PREOPEN apply다.
+- approval request만 보고 env 파일을 직접 수정하지 않는다.
+- `SWING_LIVE_ORDER_DRY_RUN_ENABLED=True`를 approval artifact로 해제하지 않는다.
+- `swing_one_share_real_canary_phase0` approval은 초기 BUY/해당 포지션 SELL 1주 execution 품질 수집만 허용한다. 전체 스윙 실매매 전환이나 scale-in 실주문 승인이 아니다.
+- `swing_scale_in_real_canary_phase0` approval은 이미 승인된 real swing holding의 승인 arm만 허용한다. sim/probe/dry-run 포지션에는 실주문을 내지 않는다.
+- panic/position-sizing 등 `approval_contract_missing` 축은 artifact를 만들어도 preopen env/runtime guard가 소비할 수 없으므로 먼저 code improvement workorder로 계약을 구현한다.
+
+### 3. Approval Artifact 작성 형식
+
+스윙 1주 real canary:
+
+```json
+{
+  "policy_id": "swing_one_share_real_canary_phase0",
+  "approved": true,
+  "target_date": "YYYY-MM-DD",
+  "allowed_codes": ["000000"],
+  "max_order_qty": 1,
+  "max_new_entries_per_day": 1,
+  "max_open_positions": 3,
+  "max_total_notional_krw": 300000,
+  "approval_source_report": "data/report/swing_runtime_approval/swing_runtime_approval_YYYY-MM-DD.json",
+  "approved_request_ids": ["swing_one_share_real_canary:YYYY-MM-DD:phase0"],
+  "approved_by": "user_chat_YYYY-MM-DD",
+  "expires_after_target_date": true
+}
+```
+
+저장 경로:
+
+```text
+data/threshold_cycle/approvals/swing_one_share_real_canary_YYYY-MM-DD.json
+```
+
+스윙 scale-in real canary:
+
+```json
+{
+  "policy_id": "swing_scale_in_real_canary_phase0",
+  "approved": true,
+  "target_date": "YYYY-MM-DD",
+  "allowed_actions": ["PYRAMID"],
+  "max_order_qty": 1,
+  "max_orders_per_day": 1,
+  "max_orders_per_position": 1,
+  "approval_source_report": "data/report/swing_runtime_approval/swing_runtime_approval_YYYY-MM-DD.json",
+  "approved_request_ids": ["swing_scale_in_real_canary:YYYY-MM-DD:phase0"],
+  "approved_by": "user_chat_YYYY-MM-DD",
+  "expires_after_target_date": true
+}
+```
+
+저장 경로:
+
+```text
+data/threshold_cycle/approvals/swing_scale_in_real_canary_YYYY-MM-DD.json
+```
+
+일반 스윙 runtime approval:
+
+```json
+{
+  "target_date": "YYYY-MM-DD",
+  "approved_requests": [
+    {
+      "approval_id": "swing_runtime_approval:YYYY-MM-DD:swing_gatekeeper_reject_cooldown",
+      "approved": true,
+      "approved_by": "user_chat_YYYY-MM-DD"
+    }
+  ]
+}
+```
+
+저장 경로:
+
+```text
+data/threshold_cycle/approvals/swing_runtime_approvals_YYYY-MM-DD.json
+```
+
+### 4. 다음 장전 확인
+
+approval artifact 생성 후에도 완료 판정은 다음 PREOPEN에서 닫는다.
+
+1. `deploy/run_threshold_cycle_preopen.sh`가 `[DONE] threshold-cycle preopen target_date=YYYY-MM-DD`로 종료됐는지 확인한다.
+2. `data/threshold_cycle/apply_plans/threshold_apply_YYYY-MM-DD.json`의 `swing_runtime_approval.approved`, `blocked`, `selected`, `decisions`를 확인한다.
+3. `data/threshold_cycle/runtime_env/threshold_runtime_env_YYYY-MM-DD.json`의 `selected_families`와 `env_overrides`에 승인 축이 들어갔는지 확인한다.
+4. `KORSTOCKSCAN_SWING_LIVE_ORDER_DRY_RUN_ENABLED=true`가 유지되는지 확인한다.
+5. artifact가 있는데 selected되지 않았다면 blocked reason을 checklist에 남기고 env 수동 override는 하지 않는다.
+
+### 5. Checklist/Project 반영
+
+POSTCLOSE `HumanInterventionSummaryYYYYMMDD`는 approval artifact를 code improvement workorder와 동급으로 표면화한다. 최종 사용자 보고와 checklist에는 최소 아래 정보를 남긴다.
+
+- `approval_id`
+- `policy_id` / `family`
+- 후보 종목 또는 승인 arm
+- artifact path
+- `approval_artifact_required|created|missing|blocked_by_policy|observe_only` 판정
+- 다음 PREOPEN apply 확인 항목
+
+다음 영업일 PREOPEN checklist에는 `SwingApprovalArtifactPreopenMMDD`가 자동 생성되어 artifact 존재 여부, selected env, blocked reason을 확인한다. 누락된 승인 검토가 있으면 날짜별 checklist에 parser-friendly checkbox로 추가한다.
 
 ## 신규 Code Improvement Order 처리 절차
 

@@ -90,6 +90,46 @@
 - 영향도: 기존 real `post_sell_feedback` 파일과 DB/주문/threshold/provider 경로는 변경하지 않았다. postclose wrapper는 compact threshold event 수집 직후 sim post-sell backfill/evaluate를 수행하고, `daily_threshold_cycle_report`/`threshold_cycle_ev`가 join summary를 읽는다. pattern lab과 code-improvement workorder는 EV summary를 통해서만 간접 소비하며 runtime mutation 권한은 없다.
 - 다음 액션: 장후 `[ScalpSimPostSellMFECheck0518]`에서 10m GOOD_EXIT와 30m/60m rebound를 분리해 `good_cut_after_rebound_check` 또는 `mfe_positive_missed_upside_long_horizon`으로 닫는다.
 
+### PanicSellNotificationDebounce0518 추가 보정 기록
+
+- checked_at: `2026-05-18 11:35 KST`
+- 판정: `fixed_report_only_notification_debounce`
+- 근거: 사용자 수신 순서가 `경보해제 -> 경보 -> 경보해제`로 다시 뒤집힌 것은 notifier가 `RECOVERY_CONFIRMED`만 1회 보류하고 `NORMAL`은 active 직후 즉시 release로 발송했기 때문이다. panic sell intraday job은 봇 프로세스가 아니라 cron wrapper가 매번 새 Python 프로세스로 실행하는 report-only notifier이므로 봇 재기동 대상이 아니다.
+- 조치: `notify_panic_state_transition`에서 `PANIC_SELL/RECOVERY_WATCH` active 상태 다음에 오는 모든 release 상태(`NORMAL`, `RECOVERY_CONFIRMED`)를 1회 `release_pending`으로 보류하도록 수정했다. 다음 cycle도 release 상태이면 그때만 `패닉셀 경보 해제`를 보내고, 중간에 다시 `PANIC_SELL/RECOVERY_WATCH`가 오면 추가 경보/해제 없이 active 상태를 유지한다.
+- 금지 확인: Telegram 알림 debounce만 보정했고 panic report 판정, threshold/provider/order guard, 자동매도, bot restart, broker 주문 상태는 변경하지 않았다.
+- 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_notify_panic_state_transition.py src/tests/test_panic_sell_defense_report.py` 통과 (`18 passed`). `py_compile`, `bash -n deploy/run_panic_sell_defense_intraday.sh`, `git diff --check` 통과.
+- 다음 액션: 다음 panic sell defense cycle에서 `panic state Telegram notify status=release_pending|no_transition|sent` 순서를 확인한다. 동일 현상이 반복되면 report state 자체의 `NORMAL/PANIC_SELL` bounce를 source-quality incident로 분리한다.
+
+### PanicSellMarketBreadthWatch0518 추가 보정 기록
+
+- checked_at: `2026-05-18 11:50 KST`
+- 판정: `fixed_report_only_market_breadth_watch`
+- 근거: `market_panic_breadth_2026-05-18.json`은 KOSDAQ 하락과 업종 breadth 악화로 `risk_off_advisory=true`였지만, `panic_sell_defense_2026-05-18.json`의 microstructure detector는 `risk_off_advisory_count=0`, `panic_signal_count=0`, `max_panic_score=0.366`였고 실현 손절 cluster도 없었다. 따라서 코스닥/업종 breadth-only 경고를 `PANIC_SELL`로 단정하는 것은 과했다.
+- 조치: `panic_sell_defense_report`에서 `confirmed_micro_risk_off_advisory`와 시장 breadth 포함 `confirmed_risk_off_advisory`를 분리했다. 시장 breadth-only risk-off이고 micro panic/손절 cluster가 없으면 `PANIC_SELL`이 아니라 `RECOVERY_WATCH`/`STABILIZING`으로 라우팅하고, Telegram 문구도 `시장 breadth risk-off 주의`로 구분하도록 보정했다.
+- 금지 확인: report-only 판정/알림 문구만 보정했고 threshold/provider/order guard, 자동매도, bot restart, broker 주문 상태는 변경하지 않았다.
+- 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_panic_sell_defense_report.py src/tests/test_notify_panic_state_transition.py` 통과 (`19 passed`). `py_compile`, `git diff --check` 통과. `panic_sell_defense_report --date 2026-05-18 --print-json` 재생성 결과 저장 JSON은 `panic_state=RECOVERY_WATCH`, `panic_regime_mode=STABILIZING`, `confirmed_micro_risk_off_advisory=false`, `market_panic_breadth_risk_off_advisory=true`로 닫혔다.
+- 다음 액션: 다음 intraday panic sell defense cycle에서 동일 시장 breadth-only 상황이 `PANIC_SELL` 경보가 아니라 breadth 주의 또는 release-pending 흐름으로 발송되는지 로그를 확인한다. Project/Calendar 동기화는 표준 명령으로 사용자가 수행한다.
+
+### MarketPanicBreadthWeightedComposite0518 추가 보정 기록
+
+- checked_at: `2026-05-18 12:05 KST`
+- 판정: `implemented_report_only_weighted_composite`
+- 근거: 기존 `market_panic_breadth_collector`는 KOSPI/KOSDAQ 중 더 나쁜 지수 변화율(`min_index_change`)과 시장별 하락 종목 비율 최댓값(`max_stock_fall_ratio`)을 사용해 한 시장만 급락해도 `risk_off_advisory=true`가 될 수 있었다. 이는 코스닥 단독 하락을 시장 전체 패닉으로 과대 해석할 위험이 있다.
+- 조치: KOSPI/KOSDAQ index change는 기본 weight `KOSPI=0.65`, `KOSDAQ=0.35`로 weighted composite을 만들고, 시장별 stock fall/rise ratio는 listed count가 있으면 listed count, 없으면 기본 market weight로 병합하도록 수정했다. 전체 composite 조건을 충족하지 못한 단일시장 악화는 `single_market_risk_off_advisory=true`로 별도 노출하고, `risk_off_advisory`는 전체 시장 패닉 근거로만 유지한다.
+- 영향도: `panic_sell_defense_report`와 `panic_buying_report`는 weighted composite `risk_off_advisory`/`risk_on_advisory`만 시장 전체 confirmation으로 소비하고, single-market advisory는 source-quality/운영 주의 필드로만 노출한다. threshold/provider/order guard, 자동매수/자동매도, bot restart 권한은 없다.
+- 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_market_panic_breadth_collector.py src/tests/test_panic_sell_defense_report.py src/tests/test_panic_buying_report.py src/tests/test_notify_panic_state_transition.py` 통과 (`31 passed`). `py_compile`, `git diff --check` 통과. 2026-05-18 report 재생성 결과 `market_panic_breadth.risk_off_advisory=false`, `single_market_risk_off_advisory=true`, weighted index change=`-0.091`, weighted stock fall ratio=`68.288`로 전체 패닉 threshold 미달이며, `panic_sell_defense`는 `panic_state=NORMAL`, `panic_regime_mode=NORMAL`로 닫혔다.
+- 다음 액션: 다음 intraday cycle에서 KOSPI/KOSDAQ 중 한쪽만 악화된 경우 `single_market_risk_off_advisory`로만 노출되고 `PANIC_SELL`로 승격되지 않는지 로그와 Telegram transition state를 확인한다. Project/Calendar 동기화는 표준 명령으로 사용자가 수행한다.
+
+### ApprovalArtifactRunbookProcedure0518 문서 보강 기록
+
+- checked_at: `2026-05-18 12:20 KST`
+- 판정: `documented_manual_approval_gate`
+- 근거: approval request는 `swing_runtime_approval`/`runtime_approval_summary`/다음 영업일 checklist에 표면화되지만, `신규 Code Improvement Order 처리 절차`처럼 사람이 approval artifact 생성 여부를 판단하는 독립 절차가 런북에 없었다. 이로 인해 스윙 1주 real canary 같은 승인 요청이 code workorder와 같은 수동 triage 대상인지 불명확했다.
+- 조치: `time-based-operations-runbook.md`에 `신규 Approval Artifact 처리 절차`를 추가해 intake artifact, 확인 필드, 사람 승인 판정, artifact JSON 형식, 다음 PREOPEN 확인, checklist/Project 반영 기준을 분리 명시했다. `build_next_stage2_checklist`의 `HumanInterventionSummary`도 `approval_artifact_required|created|missing|blocked_by_policy|observe_only` 분류와 approval id/artifact path/PREOPEN 확인 항목을 남기도록 보강했다.
+- 금지 확인: 문서/체크리스트 생성 문구만 보강했고 approval artifact를 생성하거나 env 파일, threshold/provider/order guard, broker 주문 상태를 변경하지 않았다.
+- 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_build_next_stage2_checklist.py src/tests/test_build_codex_daily_workorder.py` 통과 (`19 passed`). `py_compile`, `git diff --check`, `sync_docs_backlog_to_project --dry-run` 통과. `test_sync_docs_backlog_to_project.py` 전체 실행은 기존 prompt/scalping 문서 파싱 기대값 불일치 5건으로 실패했으며 이번 변경과 직접 관련된 실패는 아니다.
+- 다음 액션: 오늘 POSTCLOSE `HumanInterventionSummary0518`에서 approval request가 있으면 새 절차 기준으로 `approval_id`, 후보/대상, artifact path, 승인 여부, 다음 PREOPEN 확인 항목을 분리 보고한다. Project/Calendar 동기화는 표준 명령으로 사용자가 수행한다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-05-15` postclose -> `2026-05-18`)
 

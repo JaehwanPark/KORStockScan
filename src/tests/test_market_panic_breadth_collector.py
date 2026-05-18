@@ -37,10 +37,48 @@ def test_summarize_breadth_sets_report_only_risk_off_advisory():
     )
 
     assert summary["risk_off_advisory"] is True
+    assert summary["weighted_market_breadth"]["index_change_pct"] < -1.2
     assert summary["decision_authority"] == "source_quality_only"
     assert "order_submit" in summary["forbidden_uses"]
     assert summary["industry_breadth"]["down_count"] == 3
     assert summary["risk_on_advisory"] is False
+
+
+def test_summarize_breadth_splits_single_market_risk_off_from_composite():
+    rows = [
+        {
+            "code": "001",
+            "name": "종합(KOSPI)",
+            "change_pct": 0.4,
+            "rising_count": 520,
+            "fall_count": 320,
+            "listed_count": 900,
+        },
+        {
+            "code": "101",
+            "name": "코스닥",
+            "change_pct": -1.7,
+            "rising_count": 210,
+            "fall_count": 780,
+            "listed_count": 1000,
+        },
+        {"code": "201", "name": "반도체", "change_pct": -2.4},
+        {"code": "202", "name": "IT", "change_pct": -1.2},
+        {"code": "203", "name": "바이오", "change_pct": -2.2},
+        {"code": "204", "name": "운송", "change_pct": 0.2},
+    ]
+
+    summary = collector.summarize_breadth(
+        rows,
+        industry_down_ratio_floor_pct=50.0,
+        severe_down_ratio_floor_pct=40.0,
+    )
+
+    assert summary["risk_off_advisory"] is False
+    assert summary["single_market_risk_off_advisory"] is True
+    assert summary["weighted_market_breadth"]["index_change_pct"] == -0.335
+    assert "single_market_index_intraday_drop" in summary["reasons"]
+    assert "live market breadth panic thresholds not breached" in summary["reasons"]
 
 
 def test_summarize_breadth_sets_report_only_risk_on_advisory():
@@ -60,6 +98,7 @@ def test_summarize_breadth_sets_report_only_risk_on_advisory():
     )
 
     assert summary["risk_on_advisory"] is True
+    assert summary["weighted_market_breadth"]["index_change_pct"] > 1.2
     assert summary["risk_off_advisory"] is False
     assert summary["decision_authority"] == "source_quality_only"
     assert "order_submit" in summary["forbidden_uses"]
