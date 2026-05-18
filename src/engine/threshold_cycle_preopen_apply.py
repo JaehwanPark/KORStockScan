@@ -22,6 +22,7 @@ AI_REVIEW_DIR = REPORT_DIR / "threshold_cycle_ai_review"
 CALIBRATION_REPORT_DIR = REPORT_DIR / "threshold_cycle_calibration"
 SWING_RUNTIME_APPROVAL_REPORT_DIR = DATA_DIR / "report" / "swing_runtime_approval"
 SWING_RUNTIME_APPROVAL_ARTIFACT_DIR = DATA_DIR / "threshold_cycle" / "approvals"
+LATENCY_CLASSIFIER_RECOMMENDATION_DIR = DATA_DIR / "report" / "latency_classifier_recommendation"
 
 AUTO_APPLY_MODES = {"auto_bounded_live"}
 AUTO_APPLY_ALLOWED_STATES = {"adjust_up", "adjust_down", "hold"}
@@ -85,6 +86,9 @@ TARGET_ENV_VALUE_KEYS = {
     "SWING_ONE_SHARE_REAL_CANARY_MAX_OPEN_POSITIONS": "max_open_positions",
     "SWING_ONE_SHARE_REAL_CANARY_MAX_TOTAL_NOTIONAL_KRW": "max_total_notional_krw",
     "SWING_ONE_SHARE_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT": "require_approval_artifact",
+    "SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION": "max_ws_age_ms_for_caution",
+    "SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION": "max_ws_jitter_ms_for_caution",
+    "SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION": "max_spread_ratio_for_caution",
 }
 
 
@@ -198,6 +202,30 @@ def _load_ai_review(source_date: str | None) -> dict[str, Any]:
             },
         }
     return {"status": "missing_ai_review", "path": None, "items_by_family": {}}
+
+
+def _latency_classifier_recommendation_path(source_date: str) -> Path:
+    return LATENCY_CLASSIFIER_RECOMMENDATION_DIR / f"latency_classifier_recommendation_{source_date}.json"
+
+
+def _load_latency_classifier_candidates(source_date: str | None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if not source_date:
+        return [], {"status": "missing_source_date", "path": None}
+    path = _latency_classifier_recommendation_path(source_date)
+    if not path.exists():
+        return [], {"status": "missing_report", "path": str(path)}
+    payload = _load_json(path)
+    candidates = payload.get("calibration_candidates")
+    if not isinstance(candidates, list):
+        candidate = payload.get("calibration_candidate")
+        candidates = [candidate] if isinstance(candidate, dict) else []
+    normalized = [item for item in candidates if isinstance(item, dict)]
+    return normalized, {
+        "status": "loaded",
+        "path": str(path),
+        "latency_block_count": payload.get("latency_block_count"),
+        "selected_profile_id": payload.get("selected_profile_id"),
+    }
 
 
 def _runtime_env_name(target_env_key: str) -> str:
@@ -596,6 +624,8 @@ def _select_swing_approved_candidates(bundle: dict[str, Any]) -> tuple[list[dict
 
 
 def _ai_guard_allows_candidate(candidate: dict[str, Any], ai_review: dict[str, Any], *, require_ai: bool) -> tuple[bool, str]:
+    if str(candidate.get("family") or "") == "latency_classifier_runtime_profile":
+        return (True, "deterministic_latency_classifier_recommendation")
     items_by_family = ai_review.get("items_by_family") if isinstance(ai_review.get("items_by_family"), dict) else {}
     item = items_by_family.get(str(candidate.get("family") or ""))
     if not item:
@@ -775,6 +805,10 @@ def build_preopen_apply_manifest(
         calibration_candidates = (
             report.get("calibration_candidates") if isinstance(report.get("calibration_candidates"), list) else []
         )
+        report_source_date = str(report.get("date") or source_date or "")
+        latency_candidates, latency_recommendation = _load_latency_classifier_candidates(report_source_date)
+        if latency_candidates:
+            calibration_candidates = [*calibration_candidates, *latency_candidates]
         approval_requests = []
         for item in calibration_candidates:
             if (
@@ -805,13 +839,13 @@ def build_preopen_apply_manifest(
             if isinstance(item, dict) and not bool(item.get("approval_live_ready"))
         ]
         auto_apply_requested = bool(auto_apply) or apply_mode in AUTO_APPLY_MODES
-        ai_review = _load_ai_review(str(report.get("date") or source_date or ""))
+        ai_review = _load_ai_review(report_source_date)
         operator_runtime_env_locks = _load_operator_runtime_env_locks(
-            str(report.get("date") or source_date or ""),
+            report_source_date,
             target_date,
         )
         selected, decisions, env_overrides = ([], [], {})
-        swing_bundle = _load_swing_runtime_approval_bundle(str(report.get("date") or source_date or ""))
+        swing_bundle = _load_swing_runtime_approval_bundle(report_source_date)
         swing_selected, swing_decisions, swing_env_overrides = ([], [], {})
         if auto_apply_requested:
             selected, decisions, env_overrides = _select_auto_apply_candidates(
@@ -859,6 +893,7 @@ def build_preopen_apply_manifest(
                 "model": ai_review.get("model"),
                 "provider_status": ai_review.get("provider_status") or {},
             },
+            "latency_classifier_recommendation": latency_recommendation,
             "auto_apply_selected": selected,
             "auto_apply_decisions": decisions,
             "operator_runtime_env_locks": operator_runtime_env_locks,

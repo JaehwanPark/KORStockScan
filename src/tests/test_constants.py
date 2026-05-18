@@ -43,6 +43,18 @@ def test_trading_rules_env_override_wins_over_profile(monkeypatch):
     assert reloaded.TRADING_RULES.SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS == 420
 
 
+def test_trading_rules_entry_latency_classifier_jitter_env_override(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION", "1200")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION", "1500")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION", "0.01")
+
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION == 1200
+    assert reloaded.TRADING_RULES.SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION == 1500
+    assert reloaded.TRADING_RULES.SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION == 0.01
+
+
 def test_trading_rules_dynamic_strength_relief_env_override(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_RELIEF_ENABLED", "false")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_RELIEF_TAGS", "SCANNER")

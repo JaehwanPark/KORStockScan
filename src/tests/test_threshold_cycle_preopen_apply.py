@@ -227,6 +227,75 @@ def test_auto_bounded_live_writes_runtime_env_with_ai_guard_and_stage_priority(t
     assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE=65" in env_text
 
 
+def test_auto_bounded_live_imports_latency_classifier_recommendation(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    ai_dir = report_dir / "threshold_cycle_ai_review"
+    latency_dir = report_dir / "latency_classifier_recommendation"
+    report_dir.mkdir(parents=True)
+    ai_dir.mkdir(parents=True)
+    latency_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "AI_REVIEW_DIR", ai_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    (report_dir / "threshold_cycle_2026-05-08.json").write_text(
+        json.dumps({"date": "2026-05-08", "apply_candidate_list": [], "calibration_candidates": []}),
+        encoding="utf-8",
+    )
+    (latency_dir / "latency_classifier_recommendation_2026-05-08.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-08",
+                "latency_block_count": 24,
+                "selected_profile_id": "balanced_1200_1500_0100",
+                "calibration_candidates": [
+                    {
+                        "family": "latency_classifier_runtime_profile",
+                        "stage": "entry_latency_classifier",
+                        "priority": 6,
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": False,
+                        "calibration_state": "adjust_up",
+                        "target_env_keys": [
+                            "SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION",
+                            "SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION",
+                            "SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION",
+                        ],
+                        "current_values": {
+                            "max_ws_age_ms_for_caution": 700,
+                            "max_ws_jitter_ms_for_caution": 300,
+                            "max_spread_ratio_for_caution": 0.005,
+                        },
+                        "recommended_values": {
+                            "max_ws_age_ms_for_caution": 1200,
+                            "max_ws_jitter_ms_for_caution": 1500,
+                            "max_spread_ratio_for_caution": 0.01,
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-11",
+        source_date="2026-05-08",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+    )
+
+    assert manifest["status"] == "auto_bounded_live_ready"
+    assert manifest["latency_classifier_recommendation"]["status"] == "loaded"
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION"] == "1200"
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION"] == "1500"
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION"] == "0.01"
+
+
 def test_auto_bounded_live_excludes_ai_instrumentation_gap(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"

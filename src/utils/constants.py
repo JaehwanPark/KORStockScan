@@ -277,6 +277,9 @@ class TradingConfig:
     SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS: int = 260  # latency canary 최대 ws_jitter
     SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO: float = 0.0100  # latency canary 최대 spread_ratio
     SCALP_LATENCY_GUARD_CANARY_ALLOWED_DANGER_REASONS: tuple = ()  # 비어 있으면 전체 허용, 값이 있으면 해당 danger reason만 canary 허용
+    SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION: int = 700  # latency classifier CAUTION 최대 ws_age
+    SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION: int = 300  # latency classifier CAUTION 최대 ws_jitter
+    SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION: float = 0.005  # latency classifier CAUTION 최대 spread_ratio
     SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED: bool = False  # 2026-04-29 OFF 확정: quote freshness 복합 residual canary 기본 비활성
     SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_TAGS: tuple = ("SCANNER", "VWAP_RECLAIM", "OPEN_RECLAIM")  # composite relief 적용 태그
     SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MIN_SIGNAL_SCORE: float = 88.0  # 단일축 실패 후 복합축은 더 강한 신호만 허용
@@ -705,6 +708,15 @@ def _build_trading_rules() -> TradingConfig:
     env_ws_age = _env_int("KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS")
     env_spread_ratio = _env_float("KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO")
     env_allowed_danger_reasons = _env_csv_tuple("KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_ALLOWED_DANGER_REASONS")
+    env_entry_latency_max_ws_age_caution = _env_int(
+        "KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION"
+    )
+    env_entry_latency_max_ws_jitter_caution = _env_int(
+        "KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION"
+    )
+    env_entry_latency_max_spread_caution = _env_float(
+        "KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION"
+    )
     env_spread_relief_enabled = _env_bool("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED")
     env_spread_relief_tags = _env_csv_tuple("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_TAGS")
     env_spread_relief_min_signal = _env_float("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MIN_SIGNAL_SCORE")
@@ -738,6 +750,9 @@ def _build_trading_rules() -> TradingConfig:
         or env_ws_age is not None
         or env_spread_ratio is not None
         or env_allowed_danger_reasons is not None
+        or env_entry_latency_max_ws_age_caution is not None
+        or env_entry_latency_max_ws_jitter_caution is not None
+        or env_entry_latency_max_spread_caution is not None
         or env_spread_relief_enabled is not None
         or env_spread_relief_tags is not None
         or env_spread_relief_min_signal is not None
@@ -765,6 +780,15 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_LATENCY_GUARD_CANARY_ALLOWED_DANGER_REASONS=env_allowed_danger_reasons
             if env_allowed_danger_reasons is not None
             else config.SCALP_LATENCY_GUARD_CANARY_ALLOWED_DANGER_REASONS,
+            SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION=env_entry_latency_max_ws_age_caution
+            if env_entry_latency_max_ws_age_caution is not None
+            else config.SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION,
+            SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION=env_entry_latency_max_ws_jitter_caution
+            if env_entry_latency_max_ws_jitter_caution is not None
+            else config.SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION,
+            SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION=env_entry_latency_max_spread_caution
+            if env_entry_latency_max_spread_caution is not None
+            else config.SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION,
             SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=env_spread_relief_enabled
             if env_spread_relief_enabled is not None
             else config.SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED,

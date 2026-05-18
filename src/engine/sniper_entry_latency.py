@@ -19,7 +19,21 @@ from src.utils.constants import TRADING_RULES
 from src.utils.logger import log_info
 
 
-_CONFIG = EntryConfig()
+def _build_entry_config() -> EntryConfig:
+    return EntryConfig(
+        max_ws_age_ms_for_caution=int(
+            getattr(TRADING_RULES, "SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION", 700) or 700
+        ),
+        max_ws_jitter_ms_for_caution=int(
+            getattr(TRADING_RULES, "SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION", 300) or 300
+        ),
+        max_spread_ratio_for_caution=float(
+            getattr(TRADING_RULES, "SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION", 0.005) or 0.005
+        ),
+    )
+
+
+_CONFIG = _build_entry_config()
 _CACHE = MarketDataCache(stale_after_ms=_CONFIG.max_ws_age_ms_for_caution)
 _CACHE_LOCK = threading.RLock()
 _LATENCY_MONITOR = LatencyMonitor(_CONFIG)

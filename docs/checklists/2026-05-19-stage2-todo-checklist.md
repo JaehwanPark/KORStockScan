@@ -42,6 +42,12 @@
   - 금지: 장중 관찰 결과로 runtime threshold mutation을 수행하지 않는다.
   - 다음 액션: provenance present/missing, rollback guard breach 여부를 분리 기록한다.
 
+- [ ] `[LatencyClassifierProfileOverride0519] 스캘핑 latency classifier age/jitter/spread override 로드 및 latency_pass 회복 확인` (`Due: 2026-05-19`, `Slot: INTRADAY`, `TimeWindow: 09:20~09:35`, `Track: ScalpingLogic`)
+  - Source: [latency_classifier_recommendation_2026-05-18.json](/home/ubuntu/KORStockScan/data/report/latency_classifier_recommendation/latency_classifier_recommendation_2026-05-18.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [sniper_entry_latency.py](/home/ubuntu/KORStockScan/src/engine/sniper_entry_latency.py), [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py), [pipeline_events_2026-05-18.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-05-18.jsonl)
+  - 판정 기준: PREOPEN runtime env에서 `KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION`, `KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION`, `KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION`이 로드됐는지 확인하고, `latency_block` 비중이 줄고 `latency_pass` 또는 `order_leg_request`가 발생하는지 본다.
+  - 금지: fallback split-entry 재개, provider 변경, order guard 우회, 장중 threshold mutation으로 해석하지 않는다. `quote_stale`/`spread_too_wide`/stale submit block은 별도 safety로 유지한다.
+  - 다음 액션: `override_loaded_latency_pass_recovered`, `override_loaded_still_blocked_by_quote_or_spread`, `override_missing`, `runtime_restart_needed`, `rollback_guard_breach` 중 하나로 닫는다.
+
 - [ ] `[SimProbeIntradayCoverage0519] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-05-19`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
   - Source: [threshold_cycle_ev_2026-05-18.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-18.json)
   - 판정 기준: sim/probe 표본이 real execution과 분리되고 `actual_order_submitted=false` provenance가 유지되는지 확인한다.

@@ -50,6 +50,25 @@ def test_latency_entry_normal_mode_uses_defensive_limit_price():
     assert result["orderbook_stability"]["best_ask"] == 10_010
 
 
+def test_latency_entry_config_uses_runtime_classifier_overrides(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION=1200,
+            SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION=1500,
+            SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION=0.01,
+        ),
+    )
+
+    config = entry_latency_module._build_entry_config()
+
+    assert config.max_ws_age_ms_for_caution == 1200
+    assert config.max_ws_jitter_ms_for_caution == 1500
+    assert config.max_spread_ratio_for_caution == 0.01
+
+
 def test_latency_entry_blocks_stale_quote_as_danger():
     stock = {"name": "TEST", "position_tag": "MIDDLE"}
     result = evaluate_live_buy_entry(
