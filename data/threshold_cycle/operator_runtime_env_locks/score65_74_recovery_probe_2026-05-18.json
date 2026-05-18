@@ -9,8 +9,8 @@
   "active_from_date": "2026-05-18",
   "min_observation_until_date": "2026-05-18",
   "lock_scope": "entry_unlock_operator_override",
-  "decision_authority": "operator_override_preserve_until_postclose_source_evaluation",
-  "reason": "User explicitly required SCORE65_74_RECOVERY_PROBE_ENABLED=true to collect post-restart entry unlock cohort; automation must not close it on sample shortfall or no-applied-probe instrumentation gap alone.",
+  "decision_authority": "operator_override_reopen_score65_74_probe",
+  "reason": "User explicitly reopened SCORE65_74_RECOVERY_PROBE_ENABLED on 2026-05-19; keep latency classifier profile active and observe attribution with score65-74 entry unlock restored.",
   "disallowed_close_reasons": [
     "sample_shortfall",
     "no_applied_probe_gap",

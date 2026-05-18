@@ -38,7 +38,7 @@
 
 - [ ] `[RuntimeEnvIntradayObserve0519] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-05-19`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-18.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-18.json)
-  - 판정 기준: selected_families=score65_74_recovery_probe, bad_entry_refined_canary, swing_one_share_real_canary_phase0, swing_gatekeeper_reject_cooldown가 runtime event provenance에 찍히는지 확인한다.
+  - 판정 기준: `score65_74_recovery_probe`는 사용자 지시로 다시 열린 상태를 확인하고, selected_families 중 score65_74_recovery_probe, latency classifier profile, bad_entry_refined_canary, swing_one_share_real_canary_phase0, swing_gatekeeper_reject_cooldown가 runtime event provenance에 찍히는지 확인한다.
   - 금지: 장중 관찰 결과로 runtime threshold mutation을 수행하지 않는다.
   - 다음 액션: provenance present/missing, rollback guard breach 여부를 분리 기록한다.
 
