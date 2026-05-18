@@ -129,6 +129,7 @@
 - 금지 확인: 문서/체크리스트 생성 문구만 보강했고 approval artifact를 생성하거나 env 파일, threshold/provider/order guard, broker 주문 상태를 변경하지 않았다.
 - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_build_next_stage2_checklist.py src/tests/test_build_codex_daily_workorder.py` 통과 (`19 passed`). `py_compile`, `git diff --check`, `sync_docs_backlog_to_project --dry-run` 통과. `test_sync_docs_backlog_to_project.py` 전체 실행은 기존 prompt/scalping 문서 파싱 기대값 불일치 5건으로 실패했으며 이번 변경과 직접 관련된 실패는 아니다.
 - 다음 액션: 오늘 POSTCLOSE `HumanInterventionSummary0518`에서 approval request가 있으면 새 절차 기준으로 `approval_id`, 후보/대상, artifact path, 승인 여부, 다음 PREOPEN 확인 항목을 분리 보고한다. Project/Calendar 동기화는 표준 명령으로 사용자가 수행한다.
+- 추가 명확화 (`2026-05-18 12:30 KST`): `Approval Artifact 작성 형식` 제목을 `현재 지원되는 Approval Artifact 작성 형식`으로 바꾸고, 런북의 3개 artifact 형식은 단순 예시가 아니라 `threshold_cycle_preopen_apply`가 현재 소비하는 형식임을 명시했다. panic/position sizing 등 `approval_contract_missing` 축은 artifact loader/env mapping/runtime guard/rollback test 구현 전에는 approval artifact를 만들어도 소비되지 않는다고 분리했다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-05-15` postclose -> `2026-05-18`)

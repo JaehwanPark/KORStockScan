@@ -508,7 +508,9 @@ ls -l data/daily_recommendations_v2.csv data/daily_recommendations_v2_diagnostic
 - `swing_scale_in_real_canary_phase0` approval은 이미 승인된 real swing holding의 승인 arm만 허용한다. sim/probe/dry-run 포지션에는 실주문을 내지 않는다.
 - panic/position-sizing 등 `approval_contract_missing` 축은 artifact를 만들어도 preopen env/runtime guard가 소비할 수 없으므로 먼저 code improvement workorder로 계약을 구현한다.
 
-### 3. Approval Artifact 작성 형식
+### 3. 현재 지원되는 Approval Artifact 작성 형식
+
+아래 3가지는 `threshold_cycle_preopen_apply`가 현재 실제로 소비하는 approval artifact 형식이다. 단순 예시가 아니며, 이 형식과 경로를 벗어난 approval artifact는 현재 preopen env 반영 근거가 아니다. panic, position sizing, 기타 신규 runtime 승인 후보처럼 `approval_contract_missing`으로 분류되는 축은 approval request가 있더라도 artifact loader, env mapping, runtime guard, rollback test가 구현되기 전까지 approval artifact를 만들어도 소비되지 않는다.
 
 스윙 1주 real canary:
 
