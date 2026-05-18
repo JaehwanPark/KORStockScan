@@ -112,6 +112,13 @@ PRE_SUBMIT_GUARD_FIELDS = (
     "broker_order_forbidden",
 )
 
+DIAGNOSTIC_CONTRACT_FIELDS = (
+    "metric_role",
+    "decision_authority",
+    "runtime_effect",
+    "forbidden_uses",
+)
+
 
 STAGE_CONTRACTS: dict[str, StageContract] = {
     "ai_confirmed": StageContract(
@@ -154,6 +161,18 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
     "pre_submit_overbought_pullback_guard_block": StageContract(
         required_fields=(*PRE_SUBMIT_GUARD_FIELDS, "risk_state"),
     ),
+    "ai_holding_fast_reuse_band": StageContract(
+        required_fields=(*DIAGNOSTIC_CONTRACT_FIELDS, "source_quality_route", "telemetry_only", "action"),
+        decision_authority="source_quality_only",
+    ),
+    "soft_stop_expert_shadow": StageContract(
+        required_fields=(*DIAGNOSTIC_CONTRACT_FIELDS, "source_quality_route", "shadow_only", "hierarchy"),
+        decision_authority="source_quality_only",
+    ),
+    "holding_flow_override_candidate_cleared": StageContract(
+        required_fields=(*DIAGNOSTIC_CONTRACT_FIELDS, "source_quality_route", "reason", "previous_key"),
+        decision_authority="source_quality_only",
+    ),
     "swing_probe_entry_candidate": StageContract(
         required_fields=(*SIM_PROVENANCE_FIELDS, *SWING_PROBE_FIELDS, "virtual_budget_override", "budget_authority"),
     ),
@@ -190,7 +209,10 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         required_fields=("price_source", "virtual_budget_override", "budget_authority", *ORDERBOOK_MICRO_FIELDS),
         max_missing_rate=0.05,
     ),
-    "scale_in_price_p2_observe": StageContract(required_fields=("price_source", *ORDERBOOK_MICRO_FIELDS)),
+    "scale_in_price_p2_observe": StageContract(
+        required_fields=("price_source", *ORDERBOOK_MICRO_FIELDS),
+        max_missing_rate=0.05,
+    ),
     "swing_sim_scale_in_order_assumed_filled": StageContract(
         required_fields=("actual_order_submitted", "broker_order_forbidden", "virtual_budget_override", "budget_authority", *ORDERBOOK_MICRO_FIELDS),
         max_missing_rate=0.05,

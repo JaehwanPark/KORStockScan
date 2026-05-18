@@ -18,9 +18,9 @@
 - observation_source_quality_audit: `/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-05-18.json`
 - codebase_performance_workorder: `/home/ubuntu/KORStockScan/data/report/codebase_performance_workorder/codebase_performance_workorder_2026-05-18.json`
 - pattern_lab_currentness_audit: `/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-18.json`
-- generated_at: `2026-05-18T18:43:35+09:00`
-- generation_id: `2026-05-18-cbd912785351`
-- source_hash: `cbd91278535157694a896e5747fa8bf49d31c89f74203a55e5e212a10d417a46`
+- generated_at: `2026-05-18T19:19:42+09:00`
+- generation_id: `2026-05-18-4c080e7281b5`
+- source_hash: `4c080e7281b58e0bbc5431cf547f7789f83e7c5a0c4c230b961ab41004701945`
 
 ## 운영 원칙
 
@@ -42,26 +42,26 @@
 ## Snapshot Lineage
 
 - previous_exists: `True`
-- previous_generation_id: `2026-05-18-1e550649ac26`
-- previous_source_hash: `1e550649ac2662361af53117fae9b4e1297bfd4e38ff5591b752443ee15902d9`
-- new_order_ids: `[]`
-- removed_order_ids: `[]`
+- previous_generation_id: `2026-05-18-0966b43e32bc`
+- previous_source_hash: `0966b43e32bc2217a128bea428da87c20a76a100b7d7a4910d888479ce51897a`
+- new_order_ids: `['order_perf_recommend_update_vectorization', 'order_swing_ofi_qi_stale_or_missing_context']`
+- removed_order_ids: `['order_high_volume_diagnostic_stage_contract_labels', 'order_swing_source_quality_micro_context_provenance']`
 - decision_changed_order_ids: `[]`
 
 ## Summary
 
-- source_order_count: `38`
+- source_order_count: `37`
 - scalping_source_order_count: `13`
 - swing_source_order_count: `4`
 - swing_lab_source_order_count: `4`
 - pattern_lab_currentness_source_order_count: `0`
-- threshold_ev_source_order_count: `17`
+- threshold_ev_source_order_count: `16`
 - pipeline_event_verbosity_source_order_count: `1`
-- observation_source_quality_source_order_count: `1`
+- observation_source_quality_source_order_count: `0`
 - codebase_performance_source_order_count: `12`
 - panic_lifecycle_source_order_count: `2`
 - selected_order_count: `12`
-- decision_counts: `{'implement_now': 3, 'attach_existing_family': 15, 'design_family_candidate': 6, 'defer_evidence': 11, 'reject': 3}`
+- decision_counts: `{'implement_now': 2, 'attach_existing_family': 15, 'design_family_candidate': 6, 'defer_evidence': 11, 'reject': 3}`
 - gemini_fresh: `True`
 - claude_fresh: `True`
 - swing_lifecycle_audit_available: `True`
@@ -112,7 +112,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - data_quality_effect: `False`
 - tuning_axis_effect: `False`
 - expected_ev_effect: none_direct_ops_cpu_io_reduction_only
-- evidence: `state=v2_shadow_missing`, `recommended_workorder_state=open_shadow_order`, `raw_size_bytes=1943545900`, `high_volume_line_count=1443016`, `high_volume_byte_share_pct=96.59`, `producer_summary_exists=False`, `parity_ok=False`, `raw_derived_event_count=1443016`, `producer_event_count=0`
+- evidence: `state=v2_shadow_missing`, `recommended_workorder_state=open_shadow_order`, `raw_size_bytes=2110663718`, `high_volume_line_count=1576556`, `high_volume_byte_share_pct=96.7`, `producer_summary_exists=False`, `parity_ok=False`, `raw_derived_event_count=1576556`, `producer_event_count=0`
 - parity_contract: -
 - next_postclose_metric: pipeline_event_verbosity.parity.ok
 - files_likely_touched: `src/utils/pipeline_event_logger.py`, `src/engine/pipeline_event_summary.py`, `src/engine/pipeline_event_verbosity_report.py`
@@ -125,39 +125,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - runtime 판단값을 직접 바꾸지 않는다.
 - 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
 
-### 2. `order_high_volume_diagnostic_stage_contract_labels`
-
-- title: High-volume diagnostic stage metric contract labels
-- decision: `implement_now`
-- decision_reason: instrumentation/provenance work can improve attribution without direct runtime mutation
-- source_report_type: `observation_source_quality_audit`
-- lifecycle_stage: `source_quality_gate`
-- target_subsystem: `runtime_instrumentation`
-- route: `instrumentation_order`
-- mapped_family: `-`
-- threshold_family: `-`
-- improvement_type: `-`
-- confidence: `audit`
-- priority: `2`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: none_direct_source_quality_attribution_only
-- evidence: `status=warning`, `event_count=1487642`, `warning_stage_count=3`, `warning_stages=blocked_strength_momentum,blocked_overbought,blocked_liquidity`, `high_volume_no_source_field_stage_count=3`, `decision_authority=source_quality_only`, `runtime_effect=false`, `gap_stages=ai_holding_fast_reuse_band,soft_stop_expert_shadow,holding_flow_override_candidate_cleared`
-- parity_contract: -
-- next_postclose_metric: observation_source_quality_audit.warning_stage_count and high_volume_no_source_field_stage_count
-- files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/observation_source_quality_audit.py`, `docs/report-based-automation-traceability.md`
-- acceptance_tests: `pytest src/tests/test_observation_source_quality_audit.py src/tests/test_build_code_improvement_workorder.py`
-- automation_reentry: After implementation, next postclose report must show source freshness or warning reduction.
-
-실행 기준:
-
-- instrumentation/provenance/report source 보강을 우선 구현한다.
-- runtime 판단값을 직접 바꾸지 않는다.
-- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
-
-### 3. `order_scalp_entry_adm_daily_tuning_coverage`
+### 2. `order_scalp_entry_adm_daily_tuning_coverage`
 
 - title: scalp entry ADM daily tuning coverage
 - decision: `implement_now`
@@ -176,7 +144,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - data_quality_effect: `False`
 - tuning_axis_effect: `False`
 - expected_ev_effect: Keep BUY_NOW/WAIT_REQUOTE/SKIP_STALE/BUY_DEFENSIVE/NO_BUY_AI/SKIP_SOURCE_QUALITY/SKIP_PRE_SUBMIT_SAFETY action buckets joined to post-sell outcomes and runtime forced_action provenance for daily entry policy tuning.
-- evidence: `status=warning`, `joined_sample=2`, `sample_floor=20`, `prompt_applied_count=0`, `missing_actions=WAIT_REQUOTE,SKIP_STALE,BUY_DEFENSIVE,SKIP_PRE_SUBMIT_SAFETY`
+- evidence: `status=warning`, `joined_sample=2`, `sample_floor=20`, `prompt_applied_count=0`, `missing_actions=SKIP_STALE,BUY_DEFENSIVE,SKIP_PRE_SUBMIT_SAFETY`
 - parity_contract: -
 - next_postclose_metric: scalp_entry_action_decision_matrix should meet sample_floor, include all action buckets, show prompt_applied_count, and expose entry_adm_runtime_effect/forced_action evidence when runtime bias env is enabled.
 - files_likely_touched: `src/engine/scalp_entry_action_decision_matrix.py`, `src/engine/sniper_state_handlers.py`, `src/engine/scalp_entry_adm_runtime.py`, `src/engine/threshold_cycle_ev_report.py`
@@ -189,7 +157,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - runtime 판단값을 직접 바꾸지 않는다.
 - 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
 
-### 4. `order_ai_threshold_dominance`
+### 3. `order_ai_threshold_dominance`
 
 - title: AI threshold dominance
 - decision: `attach_existing_family`
@@ -221,7 +189,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 5. `order_perf_buy_funnel_json_scan`
+### 4. `order_perf_buy_funnel_json_scan`
 
 - title: BUY funnel sentinel field scan without repeated json.dumps
 - decision: `attach_existing_family`
@@ -253,7 +221,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 6. `order_ai_threshold_miss_ev_recovery`
+### 5. `order_ai_threshold_miss_ev_recovery`
 
 - title: AI threshold miss EV recovery
 - decision: `attach_existing_family`
@@ -285,7 +253,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 7. `order_perf_daily_report_bulk_history`
+### 6. `order_perf_daily_report_bulk_history`
 
 - title: Daily report market snapshot bulk history query
 - decision: `attach_existing_family`
@@ -317,7 +285,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 8. `order_perf_daily_report_engine_singleton`
+### 7. `order_perf_daily_report_engine_singleton`
 
 - title: Daily report SQLAlchemy engine singleton
 - decision: `attach_existing_family`
@@ -349,7 +317,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 9. `order_swing_gatekeeper_reject_threshold_review`
+### 8. `order_swing_gatekeeper_reject_threshold_review`
 
 - title: swing gatekeeper reject threshold review
 - decision: `attach_existing_family`
@@ -381,7 +349,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 10. `order_swing_pattern_lab_deepseek_scale_in_events_observed`
+### 9. `order_swing_pattern_lab_deepseek_scale_in_events_observed`
 
 - title: Scale-in events observed for swing positions
 - decision: `attach_existing_family`
@@ -413,7 +381,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 11. `order_latency_guard_miss_ev_recovery`
+### 10. `order_latency_guard_miss_ev_recovery`
 
 - title: latency guard miss EV recovery
 - decision: `attach_existing_family`
@@ -445,7 +413,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 12. `order_perf_recommend_update_vectorization`
+### 11. `order_perf_recommend_update_vectorization`
 
 - title: Recommendation and update_kospi vectorized membership checks
 - decision: `attach_existing_family`
@@ -470,6 +438,38 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - files_likely_touched: `src/model/recommend_daily_v2.py`, `src/utils/update_kospi.py`
 - acceptance_tests: `pytest src/tests/test_swing_retrain_automation.py src/tests/test_swing_feature_ssot.py`, `recommendation CSV and diagnostics parity`
 - automation_reentry: Next postclose codebase performance source report must keep implementation_status=implemented and parity tests green.
+
+실행 기준:
+
+- 기존 threshold family의 source metric/provenance를 보강한다.
+- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
+- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
+
+### 12. `order_swing_ofi_qi_stale_or_missing_context`
+
+- title: swing OFI/QI stale or missing context
+- decision: `attach_existing_family`
+- decision_reason: finding maps to an existing threshold family and should strengthen source metrics/provenance
+- source_report_type: `swing_improvement_automation`
+- lifecycle_stage: `entry`
+- target_subsystem: `swing_orderbook_micro_context`
+- route: `existing_family`
+- mapped_family: `swing_entry_ofi_qi_execution_quality`
+- threshold_family: `swing_entry_ofi_qi_execution_quality`
+- improvement_type: `instrumentation`
+- confidence: `consensus`
+- priority: `4`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: stale_missing_ratio decreases while submitted/simulated entry quality remains attributable.
+- evidence: `stale_missing_count=68`, `stale_missing_ratio=0.4304`, `stale_missing_unique_record_count=2`, `stale_missing_reason_counts={'micro_missing': 68, 'observer_unhealthy': 6, 'micro_not_ready': 6, 'state_insufficient': 6}`, `stale_missing_reason_combination_counts={'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 6, 'micro_missing': 62}`, `stale_missing_reason_combination_unique_record_counts={'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 2}`, `observer_unhealthy_overlap={'observer_unhealthy_total': 6, 'observer_unhealthy_with_other_reason': 6, 'observer_unhealthy_only': 0}`, `scale_in_source_quality={'group': 'scale_in', 'sample_count': 58, 'valid_micro_context_count': 52, 'invalid_micro_context_count': 6, 'invalid_micro_context_unique_record_count': 2, 'invalid_reason_combination_counts': {'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 6, 'micro_missing': 62}, 'invalid_reason_combination_unique_record_counts': {'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 2}, 'observer_unhealthy_overlap': {'observer_unhealthy_total': 6, 'observer_unhealthy_with_other_reason': 6, 'observer_unhealthy_only': 0}, 'source_quality_blockers': ['scale_in_ofi_qi_invalid_micro_context']}`, `entry_source_quality={'group': 'entry', 'sample_count': 0, 'valid_micro_context_count': 0, 'invalid_micro_context_count': 0, 'invalid_micro_context_unique_record_count': 0, 'invalid_reason_combination_counts': {'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 6, 'micro_missing': 62}, 'invalid_reason_combination_unique_record_counts': {'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 2}, 'observer_unhealthy_overlap': {'observer_unhealthy_total': 6, 'observer_unhealthy_with_other_reason': 6, 'observer_unhealthy_only': 0}, 'source_quality_blockers': []}`
+- parity_contract: -
+- next_postclose_metric: stale_missing_ratio decreases while submitted/simulated entry quality remains attributable.
+- files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/orderbook_stability.py`, `src/engine/swing_lifecycle_audit.py`
+- acceptance_tests: `pytest orderbook stability tests`, `pytest swing lifecycle audit tests`
+- automation_reentry: After implementation, intraday/postclose calibration should include the updated family input.
 
 실행 기준:
 

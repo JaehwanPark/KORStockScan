@@ -110,6 +110,57 @@ def test_observation_source_quality_audit_accepts_high_volume_contract_labels(mo
     assert report["high_volume_no_source_fields"] == []
 
 
+def test_observation_source_quality_audit_routes_holding_diagnostics_by_contract(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    rows = [
+        _event(
+            "ai_holding_fast_reuse_band",
+            {
+                "metric_role": "ops_volume_diagnostic",
+                "decision_authority": "source_quality_only",
+                "runtime_effect": False,
+                "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
+                "source_quality_route": "source_quality_blocker_or_workorder_only",
+                "telemetry_only": True,
+                "action": "skip",
+            },
+        ),
+        _event(
+            "soft_stop_expert_shadow",
+            {
+                "metric_role": "ops_volume_diagnostic",
+                "decision_authority": "source_quality_only",
+                "runtime_effect": False,
+                "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
+                "source_quality_route": "source_quality_blocker_or_workorder_only",
+                "shadow_only": True,
+                "hierarchy": "mae_mfe_quantile|recovery_probability|partial_de_risk",
+            },
+        ),
+        _event(
+            "holding_flow_override_candidate_cleared",
+            {
+                "metric_role": "funnel_count",
+                "decision_authority": "source_quality_only",
+                "runtime_effect": False,
+                "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
+                "source_quality_route": "source_quality_blocker_or_workorder_only",
+                "reason": "exit_rule_changed",
+                "previous_key": "ABC:1",
+            },
+        ),
+    ]
+    _write_events(tmp_path, "2026-05-15", [dict(row, record_id=idx) for idx, row in enumerate(rows * 55)])
+
+    report = audit.build_observation_source_quality_audit("2026-05-15")
+
+    assert report["high_volume_no_source_fields"] == []
+    assert report["stage_contracts"]["ai_holding_fast_reuse_band"]["status"] == "pass"
+    assert report["stage_contracts"]["soft_stop_expert_shadow"]["status"] == "pass"
+    assert report["stage_contracts"]["holding_flow_override_candidate_cleared"]["status"] == "pass"
+    assert report["status"] == "pass"
+
+
 def test_observation_source_quality_audit_routes_probe_state_persisted_by_contract(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(

@@ -8,20 +8,20 @@
 - primary_decision_metric: `source_quality_adjusted_ev_pct`
 
 ## Summary
-- total_candidates: `73`
+- total_candidates: `75`
 - joined_sample/sample_floor: `2` / `20`
 - prompt_applied_count: `0`
-- action_counts: `{'NO_BUY_AI': 70, 'BUY_NOW': 2, 'SKIP_SOURCE_QUALITY': 1}`
-- missing_actions: `['WAIT_REQUOTE', 'SKIP_STALE', 'BUY_DEFENSIVE', 'SKIP_PRE_SUBMIT_SAFETY']`
+- action_counts: `{'NO_BUY_AI': 71, 'BUY_NOW': 2, 'SKIP_SOURCE_QUALITY': 1, 'WAIT_REQUOTE': 1}`
+- missing_actions: `['SKIP_STALE', 'BUY_DEFENSIVE', 'SKIP_PRE_SUBMIT_SAFETY']`
 
 ## Action Summary
 | action | sample | joined | sq_adjusted_ev_pct | equal_weight_avg_profit_pct | missed_winner | avoided_loser |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | `BUY_NOW` | 2 | 2 | -2.225 | -2.225 | 1 | 0 |
-| `WAIT_REQUOTE` | 0 | 0 | None | None | 0 | 0 |
+| `WAIT_REQUOTE` | 1 | 0 | 0.0 | None | 0 | 0 |
 | `SKIP_STALE` | 0 | 0 | None | None | 0 | 0 |
 | `BUY_DEFENSIVE` | 0 | 0 | None | None | 0 | 0 |
-| `NO_BUY_AI` | 70 | 0 | 0.0 | None | 0 | 0 |
+| `NO_BUY_AI` | 71 | 0 | 0.0 | None | 0 | 0 |
 | `SKIP_SOURCE_QUALITY` | 1 | 0 | 0.0 | None | 0 | 0 |
 | `SKIP_PRE_SUBMIT_SAFETY` | 0 | 0 | None | None | 0 | 0 |
 

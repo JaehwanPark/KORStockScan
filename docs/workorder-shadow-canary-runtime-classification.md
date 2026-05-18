@@ -1,7 +1,7 @@
 # 작업지시서: Shadow/Canary 런타임 경로와 Live Cohort 분류 기준
 
 작성일: `2026-04-25 KST`  
-마지막 갱신: `2026-05-15 KST`
+마지막 갱신: `2026-05-18 KST`
 대상: KORStockScan 메인 코드베이스 운영/튜닝 문서 소유자  
 ApplyTarget: `main` 문서/후속 코드정리 기준  
 
@@ -59,6 +59,25 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
 | `swing_runtime_approval` | approval-required dry-run, real canary 아님 | `swing_model_floor`, `swing_gatekeeper_reject_cooldown`, `swing_one_share_real_canary_phase0` request가 있으나 approved 0, approval artifact missing | 승인 artifact 없이는 env/live order 반영 금지 |
 
 5/15 결론은 `no_runtime_classification_change_with_snapshot_update`다. 신규 `remove`, `baseline-promote`, 추가 `active-canary` 전환은 없고, report-only/observe-only 축은 threshold/order/provider/bot restart 권한이 없다. `soft_stop_whipsaw_confirmation` 외의 당일 후보는 다음 장전 deterministic guard 또는 별도 approval contract가 닫히기 전까지 runtime owner가 아니다.
+
+### 2026-05-18 POSTCLOSE Snapshot Addendum
+
+이 addendum은 `runtime_approval_summary_2026-05-18`, `threshold_cycle_ev_2026-05-18`, `threshold_runtime_env_2026-05-18`, `scalp_entry_action_decision_matrix_2026-05-18`, `swing_runtime_approval_2026-05-18` 기준의 당일 분류 보정이다. 5/18에는 사용자 운영 override로 runtime 영향이 열린 축이 있으므로, alpha baseline 승격이 아니라 `operator override cohort`로 별도 잠근다.
+
+| 축 | 2026-05-18 판정 | 근거 | 다음 액션 |
+| --- | --- | --- | --- |
+| `score65_74_recovery_probe` | active-canary / selected auto-bounded-live | runtime env selected family에 포함됨. score 65~74 BUY 병목 확대 목적의 bounded cohort다 | post-restart/postclose attribution에서 `env loaded -> intended downstream consumer reached|intended safety block` 순서를 계속 확인 |
+| `bad_entry_refined_canary` | active-canary / selected auto-bounded-live | runtime env selected family에 포함됨. post-sell/ADM 품질을 근거로 bad-entry 방어 cohort를 분리한다 | 단일 손실 표본으로 threshold를 닫지 않고 candidate/post-sell join 품질을 먼저 본다 |
+| `strength_momentum_soft_gate_p1` | operator override risk-context path / baseline 아님 | pre-AI hard block을 `risk_context_only`로 낮추는 운영 override가 적용됐으나 post-restart real scalp 표본은 hold_sample | 5/19 real cohort에서 AI/counterfactual 전달과 source-quality blocker 분리를 확인 |
+| `overbought_pullback_guard_p1` | operator override + pre-submit safety guard | AI 평가는 허용하되 pullback/rebreak 또는 price freshness가 없으면 broker submit 직전 차단한다 | `blocked_overbought`가 terminal pre-AI block으로 재등장하지 않는지 확인 |
+| `liquidity_pre_submit_guard_p1` | operator override + pre-submit hard guard | AI/counterfactual 평가는 허용하되 저유동성은 broker submit 직전 `actual_order_submitted=false`로 닫는다 | missed-upside/avoided-loss 분석에는 포함하되 submit safety 우회 금지 |
+| `scalp_entry_action_decision_matrix_advisory` | operator runtime bias active / source bundle warning | ADM runtime bias env는 켜졌으나 matrix joined_sample=`2/20`, prompt_applied_count=`0`, missing action bucket이 남음 | runtime forced WAIT/DROP, missed upside, avoided loss를 다음 장중/postclose cohort에서 분리 |
+| `holding_exit_decision_matrix` | operator runtime bias active / positive action tuning not ready | holding/exit/scale-in bias env는 열렸지만 daily matrix edge와 forced action 표본은 아직 부족하다 | hard/emergency/order safety를 우회하지 않고 missed-upside/avg-down/pyramid provenance를 수집 |
+| `pipeline_event_compaction_v2_shadow` | report-only diagnostic aggregation | raw event 보존을 전제로 producer summary/parity만 생성하는 instrumentation 축이다 | parity와 source link가 닫히기 전 raw suppress 또는 runtime 판단 변경 금지 |
+| `swing_one_share_real_canary_phase0` | approval-bounded real-canary env retained / dry-run split 유지 | runtime env selected family에 있으나 `SWING_LIVE_ORDER_DRY_RUN_ENABLED=true`가 기본이며 5/18 swing approval request는 0건 | 승인 artifact와 target 후보가 없으면 실주문 제출로 해석하지 않는다 |
+| `swing_gatekeeper_reject_cooldown` | active selected policy tuning / source-quality 관찰 필요 | runtime env selected family에 포함됐지만 swing_runtime_approval 5/18은 requested=0, blocked=14로 닫힘 | gatekeeper accept/reject contract gap과 cooldown attribution을 분리 |
+
+5/18 결론은 `no_baseline_promote_with_operator_override_cohorts_locked`다. 신규 `remove`와 `baseline-promote`는 없다. 사용자 운영 override 축은 실런타임 bias 영향이 있으므로 `observe-only`가 아니라 `operator override cohort`로 보되, threshold mutation/provider change/broker submit safety 우회 권한은 없다. report-only/pattern lab/source-quality 축은 runtime owner로 승격하지 않는다.
 
 ## 0.1 Runtime ON/OFF 스냅샷 (`2026-05-12` 기준)
 

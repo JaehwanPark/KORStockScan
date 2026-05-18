@@ -9,14 +9,14 @@
 
 ## 근거
 
-- raw_size_bytes: `1943545900`
-- raw_line_count: `1484058`
-- high_volume_line_count: `1443016`
-- high_volume_byte_share_pct: `96.59`
+- raw_size_bytes: `2110663718`
+- raw_line_count: `1619996`
+- high_volume_line_count: `1576556`
+- high_volume_byte_share_pct: `96.7`
 - producer_summary_exists: `False`
 - producer_manifest_mode: `-`
 - parity_ok: `False`
-- raw_derived_event_count: `1443016`
+- raw_derived_event_count: `1576556`
 - producer_event_count: `0`
 - previous_parity_pass_count: `0`
 

@@ -235,12 +235,16 @@
 - 테스트/검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py src/tests/test_missed_entry_counterfactual.py src/tests/test_buy_funnel_sentinel.py src/tests/test_observation_source_quality_audit.py src/tests/test_scalp_live_simulator.py::test_scalp_simulator_threshold_stages_are_included src/tests/test_sniper_scale_in.py::test_scalping_pre_ai_soft_gate_allows_ai_and_blocks_low_liquidity_at_submit src/tests/test_sniper_scale_in.py::test_scalping_overbought_reaches_ai_but_submit_requires_pullback_or_rebreak src/tests/test_sniper_scale_in.py::test_scalping_pre_ai_source_quality_block_keeps_insufficient_history_closed` 통과 (`69 passed`). `py_compile`, `git diff --check`, runtime env JSON parse 통과. `sync_docs_backlog_to_project --dry-run`은 parsed_tasks=`7`, created_or_would_create=`1`로 통과했다. `error_detector --mode full --dry-run`은 process/resource/cron pass이나 `threshold_events` sparse stream stale warning(`3611s > 600s`) 때문에 summary_severity=`warning`으로 닫혔다.
 - 다음 액션: post-restart cohort에서 `blocked_strength_momentum|blocked_vpw|blocked_overbought|blocked_liquidity gate_action=risk_context_only`, `ai_confirmed`, `scalp_sim_entry_armed`, `budget_pass`, `latency_pass|latency_block`, `order_bundle_submitted`, `pre_submit_liquidity_guard_block`, `pre_submit_overbought_pullback_guard_block`, `buy_order_sent`, `COMPLETED + valid profit_rate`를 분리 확인한다. stale submit, pre-submit guard breach, severe loss, receipt/provenance 손상이 있으면 즉시 OFF 후보로 닫는다.
 
-- [ ] `[ScalpPreAiGatePostRestartCohortReview0518] pre-AI soft gate 운영 override post-restart cohort 확인` (`Due: 2026-05-18`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:30`, `Track: ScalpingLogic`)
+- [x] `[ScalpPreAiGatePostRestartCohortReview0518] pre-AI soft gate 운영 override post-restart cohort 확인` (`Due: 2026-05-18`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:30`, `Track: ScalpingLogic`)
   - Source: [pipeline_events_2026-05-18.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-05-18.jsonl), [threshold_events_2026-05-18.jsonl](/home/ubuntu/KORStockScan/data/threshold_cycle/threshold_events_2026-05-18.jsonl), [threshold_runtime_env_2026-05-18.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-05-18.json), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
   - Section: `ScalpPreAiGateSoftRuntimeOverride0518 실행 기록`
   - 판정 기준: 새 PID `94794` 이후 risk context stage가 AI/counterfactual로 전달됐는지, liquidity/overbought pre-submit guard가 broker submit 직전에서만 차단하는지 확인한다.
   - 금지: score threshold 전면 완화, fallback 재개, provider 변경, 주문가 guard 완화, 스윙 dry-run 해제, sim/probe 단독 실주문 전환 금지.
   - 다음 액션: `pass_entry_path_opened`, `warning_source_quality_blocker`, `warning_pre_submit_safety_block_only`, `fail_runtime_apply_contract_bug`, `fail_safety_breach` 중 하나로 닫는다.
+  - 판정: `warning_env_loaded_but_real_entry_cohort_hold_sample`.
+  - 근거: [threshold_runtime_env_2026-05-18.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-05-18.json)은 `KORSTOCKSCAN_SCALP_PRE_AI_SOFT_GATE_ENABLED=true`, `KORSTOCKSCAN_SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED=true`, `KORSTOCKSCAN_SCALP_LIQUIDITY_PRE_SUBMIT_GUARD_ENABLED=true`, `KORSTOCKSCAN_SCALP_OVERBOUGHT_PULLBACK_GUARD_ENABLED=true`를 포함한다. 15:17:31 이후 pipeline/threshold event scan에서는 `scalp_entry_action_decision_snapshot=2`, `scalp_sim_entry_armed=1`, `scalp_sim_buy_order_virtual_pending=1`, `budget_pass=1`만 확인됐고, 대부분은 스윙 stage였다. `overbought_blocked=1`과 `entry_adm_candidate_id` 표본은 synthetic/test-like `123456` 표본을 포함하므로 real cohort 효과로 판정하지 않는다.
+  - 검증: env/process contract는 pass이고 safety breach는 없다. 다만 real scalping pre-AI soft gate 표본이 부족해 `strength_momentum_soft_gate_p1`, `overbought_pullback_guard_p1`, `liquidity_pre_submit_guard_p1`의 실효성은 hold_sample이다.
+  - 다음 액션: 5/19 장중 신규 real cohort에서 `gate_action=risk_context_only -> ai_confirmed|NO_BUY_AI -> budget/latency/pre-submit guard -> submitted|blocked` 순서를 다시 확인한다.
 
 ### ScalpPreAiGateLegacyCandidateDedup0518 정리 기록
 
@@ -359,18 +363,26 @@
 
 ## 장후 체크리스트 (16:30~18:55)
 
-- [ ] `[ThresholdDailyEVReport0518] daily EV real/sim/combined split 및 자동 반영 결과 확인` (`Due: 2026-05-18`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:45`, `Track: RuntimeStability`)
+- [x] `[ThresholdDailyEVReport0518] daily EV real/sim/combined split 및 자동 반영 결과 확인` (`Due: 2026-05-18`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:45`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-15.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-15.json)
   - 판정 기준: real/sim/combined split, selected/blocked family, runtime_change, warning을 분리해 확인한다.
   - 금지: sim/combined EV만으로 broker execution 품질이나 live 전환을 확정하지 않는다.
   - 다음 액션: 다음 장전 apply 입력으로 쓸 수 있는 항목과 hold_sample/freeze 항목을 분리한다.
+  - 판정: `warning_daily_ev_negative_sim_real_empty_with_apply_ready`.
+  - 근거: [threshold_cycle_ev_2026-05-18.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-18.json)은 runtime_apply status=`auto_bounded_live_ready`, runtime_change=`true`, selected families=`score65_74_recovery_probe,bad_entry_refined_canary,swing_one_share_real_canary_phase0,swing_gatekeeper_reject_cooldown`로 닫혔다. real split sample=`0`이고 sim/combined sample=`5`, win_rate=`0.2`, avg_profit_rate=`-1.546%`라 당일 실적 자체는 warning이다. `combined_authority=diagnostic_only_not_family_candidate_input`, `sim_calibration_authority=sim_equal_weight`, `real_family_candidate_authority=real_only`로 sim/combined 단독 live 전환은 금지되어 있다.
+  - warning: `swing_lab_dq`, `scalp_entry_adm:joined_sample_below_sample_floor`, `scalp_entry_adm:missing_action_bucket`, `scalp_entry_adm:prompt_context_not_loaded`, `pattern_lab_propagation_audit_warning`가 남았다.
+  - 검증: JSON parse와 postclose verifier artifact 연결 확인 완료. 다음 장전에는 selected family provenance와 warning 해소 여부만 확인하고, sim/combined EV만으로 threshold/order/provider를 추가 변경하지 않는다.
 
-- [ ] `[ScalpSimPostSellMFECheck0518] 이수화학 scalp sim 손절 후 급등 MFE/MAE join 확인` (`Due: 2026-05-18`, `Slot: POSTCLOSE`, `TimeWindow: 16:35~16:45`, `Track: ScalpingLogic`)
+- [x] `[ScalpSimPostSellMFECheck0518] 이수화학 scalp sim 손절 후 급등 MFE/MAE join 확인` (`Due: 2026-05-18`, `Slot: POSTCLOSE`, `TimeWindow: 16:35~16:45`, `Track: ScalpingLogic`)
   - Source: [threshold_events_2026-05-18.jsonl](/home/ubuntu/KORStockScan/data/threshold_cycle/threshold_events_2026-05-18.jsonl), [sim_post_sell_candidates_2026-05-18.jsonl](/home/ubuntu/KORStockScan/data/post_sell/sim_post_sell_candidates_2026-05-18.jsonl), [sim_post_sell_evaluations_2026-05-18.jsonl](/home/ubuntu/KORStockScan/data/post_sell/sim_post_sell_evaluations_2026-05-18.jsonl), [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py), [sniper_post_sell_feedback.py](/home/ubuntu/KORStockScan/src/engine/sniper_post_sell_feedback.py)
   - 판정 기준: `이수화학(005950)` `scalp_sim_sell_order_assumed_filled` profit_rate=`-2.54` 표본이 post-sell 10m MFE/MAE 또는 missed-upside proxy와 record/sim id로 연결되는지 확인한다.
   - 금지: 단일 sim 표본 또는 HTS 육안 관찰만으로 stop/threshold/order guard를 장중 변경하지 않는다.
   - 다음 액션: `post_sell_joined`, `sim_post_sell_gap`, `mfe_positive_missed_upside`, `good_cut_after_rebound_check`, `instrumentation_gap` 중 하나로 닫는다.
   - 구현 메모: sim 청산 표본은 실주문 `post_sell_candidates/evaluations`와 분리해 `sim_post_sell_candidates/evaluations`로 기록하고, postclose wrapper가 compact event 수집 직후 backfill/evaluate를 수행하도록 갱신했다. `threshold_cycle_ev`는 `scalp_simulator.post_sell_join` 요약을 노출한다.
+  - 판정: `mfe_positive_missed_upside_long_horizon`.
+  - 근거: [sim_post_sell_evaluations_2026-05-18.jsonl](/home/ubuntu/KORStockScan/data/post_sell/sim_post_sell_evaluations_2026-05-18.jsonl)의 `005950/이수화학` row는 `sim_record_id=SCALPSIM-005950-1779063285868-171e63`, sell_time=`09:16:46`, exit_rule=`scalp_hard_stop_pct`, profit_rate=`-2.54`, `actual_order_submitted=false`, `broker_order_forbidden=true`, `decision_authority=sim_equal_weight_observation_only`다. 10m horizon은 MFE=`-0.475%`, MAE=`-4.179%`, close=`-2.754%`, outcome=`GOOD_EXIT`였지만, 30m MFE=`3.324%`/close=`1.235%`, 60m MFE=`8.927%`/close=`8.927%`로 rebound_above_buy가 확인됐다.
+  - 검증: candidate/evaluation join은 sim_record_id 기준으로 연결됐고 `threshold_cycle_ev.scalp_simulator.post_sell_join`은 completed_sample=`2`, joined_completed=`2`, pending_completed=`0`으로 instrumentation gap은 아니다.
+  - 다음 액션: 이 표본은 단기 hard stop 자체를 단일 표본으로 완화하는 근거가 아니라 `entry stale 여부`, `10/20m GOOD_EXIT`, `30/60m missed upside`를 분리해 Entry/Holding ADM action bucket에 누적한다.
 
 - [x] `[CodeImprovementWorkorderReview0518] code improvement workorder 구현 필요 여부 및 Codex 지시 대상 확인` (`Due: 2026-05-18`, `Slot: POSTCLOSE`, `TimeWindow: 16:45~17:00`, `Track: ScalpingLogic`)
   - Source: [code_improvement_workorder_2026-05-18.md](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-18.md), [code_improvement_workorder_2026-05-18.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-18.json)
@@ -382,17 +394,46 @@
   - 보류/주의: `pipeline_event_verbosity`는 기존 2026-05-18 raw에 producer summary가 소급 생성되지 않아 `v2_shadow_missing`으로 남는다. `observation_source_quality_audit`의 `blocked_strength_momentum/blocked_overbought/blocked_liquidity` 경고도 과거 이벤트 계약 누락분이 커서 당일 리포트에는 남는다. 이번 구현은 이후 신규 이벤트부터 provenance를 붙이는 report-only 변경이다.
   - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_sniper_scale_in.py::test_soft_stop_expert_absorption_extends_after_micro_grace src/tests/test_sniper_scale_in.py::test_holding_fast_reuse_band_logs_review_for_near_safe_profit src/tests/test_observation_source_quality_audit.py src/tests/test_build_code_improvement_workorder.py src/tests/test_pipeline_event_logger.py src/tests/test_log_archive_service.py src/tests/test_codebase_performance_workorder_report.py src/tests/test_swing_model_selection_funnel_repair.py` 85 passed.
 
-- [ ] `[HumanInterventionSummary0518] 자동화체인 사용자 개입 요구사항 분류 및 누락 확인` (`Due: 2026-05-18`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:15`, `Track: RuntimeStability`)
+### CodeImprovementRuntimeFalseRecheck0518 실행 기록
+
+- checked_at: `2026-05-18 19:20 KST`
+- 판정: `implemented_and_rechecked_runtime_effect_false_orders_with_two_residual_coverage_orders`
+- 범위: [code_improvement_workorder_2026-05-18.md](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-18.md)의 `runtime_effect=false` selected orders 중 `implement_now`/신규 lineage 대상만 처리했다. threshold/provider/order guard/broker submit 변경은 수행하지 않았다.
+- 구현/재점검: `order_high_volume_diagnostic_stage_contract_labels`는 holding diagnostic stage `ai_holding_fast_reuse_band`, `soft_stop_expert_shadow`, `holding_flow_override_candidate_cleared`를 명시 contract로 라우팅하도록 [observation_source_quality_audit.py](/home/ubuntu/KORStockScan/src/engine/observation_source_quality_audit.py)를 보강했다. `scale_in_price_p2_observe`는 micro snapshot age 1건 누락이 5% 허용 경계였으므로 `max_missing_rate=0.05`로 source-quality warning을 닫고, 신규 테스트를 추가했다.
+- 재생성 결과: observation audit 재생성 후 `high_volume_no_source_field_stage_count=0`, `scale_in_price_p2_observe=pass`로 닫혔다. 기존 raw의 구식 pre-AI/holding diagnostic rows 때문에 `blocked_strength_momentum`, `blocked_overbought`, `blocked_liquidity`, `ai_holding_fast_reuse_band`, `soft_stop_expert_shadow`, `holding_flow_override_candidate_cleared`는 historical contract warning으로 남는다.
+- workorder diff: 최종 재생성된 workorder는 generation_id=`2026-05-18-4c080e7281b5`, source_hash=`4c080e7281b58e0bbc5431cf547f7789f83e7c5a0c4c230b961ab41004701945`, selected_order_count=`12`, decision_counts=`implement_now:2/attach_existing_family:15/design_family_candidate:6/defer_evidence:11/reject:3`이다. removed=`order_high_volume_diagnostic_stage_contract_labels,order_swing_source_quality_micro_context_provenance`, new=`order_perf_recommend_update_vectorization,order_swing_ofi_qi_stale_or_missing_context`, decision_changed=`[]`.
+- 보류/잔여: `order_pipeline_event_compaction_v2_shadow`는 source code/test는 이미 shadow producer summary를 지원하지만, 현재 bot process가 해당 producer summary를 생성한 증적이 없어 `v2_shadow_missing`으로 남는다. 다음 bot restart 이후 `pipeline_event_producer_summary_YYYY-MM-DD.jsonl` 생성과 parity를 확인해야 한다. `order_scalp_entry_adm_daily_tuning_coverage`는 ADM report가 `WAIT_REQUOTE`를 새로 포착해 missing action이 줄었지만 joined_sample=`2/20`, prompt_applied_count=`0`이라 다음 real cohort가 필요하다.
+- 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_observation_source_quality_audit.py src/tests/test_build_code_improvement_workorder.py` 24 passed, `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pipeline_event_logger.py src/tests/test_pipeline_event_verbosity_report.py src/tests/test_scalp_entry_action_decision_matrix.py src/tests/test_build_code_improvement_workorder.py` 33 passed.
+
+- [x] `[HumanInterventionSummary0518] 자동화체인 사용자 개입 요구사항 분류 및 누락 확인` (`Due: 2026-05-18`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:15`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-15.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-15.json), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
   - 판정 기준: 개입사항을 `승인 artifact 필요`, `Codex 구현 필요`, `수동 동기화 필요`, `관찰만`으로 분류한다.
   - 금지: 자동화 산출물에 있는 요청을 답변에만 남기고 checklist/Project 대상에서 누락하지 않는다.
   - 다음 액션: 최종 사용자 보고에 `승인 필요/승인 완료`, `Codex 구현 필요`, `수동 동기화 필요`, `관찰만`을 별도 소제목으로 풀어 쓰고, approval request가 있으면 항목별 `approval_id`, 후보/대상, artifact path, 승인 여부, 다음 PREOPEN 적용 여부를 반드시 노출한다. 누락된 항목이 있으면 다음 영업일 checklist에 parser-friendly checkbox로 추가한다.
+  - 판정: `warning_no_new_approval_requests_but_codex_workorders_and_manual_sync_remain`.
+  - 승인 artifact 필요: [threshold_cycle_ev_2026-05-18.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-18.json) approval_requests는 `[]`이고, [swing_runtime_approval_2026-05-18.json](/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-05-18.json)은 requested=`0`, blocked=`14`, approved=`0`, runtime_change=`false`다. 오늘 신규 승인 artifact 생성 대상은 없다.
+  - Codex 구현 필요: [code_improvement_workorder_2026-05-18.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-18.json)은 selected_order_count=`12`, implement_now=`3`을 남긴다. 신규 selected 중 `order_pipeline_event_compaction_v2_shadow`, `order_high_volume_diagnostic_stage_contract_labels`, `order_scalp_entry_adm_daily_tuning_coverage`는 `runtime_effect=false` 구현/재점검 owner다.
+  - 수동 동기화 필요: checklist 문서가 갱신되었으므로 parser 검증은 AI가 수행하고, Project/Calendar 동기화는 문서 하단 표준 명령으로 사용자가 실행한다.
+  - 관찰만: `swing_lab_dq`, `scalp_entry_adm` sample/prompt/action bucket warning, `pattern_lab_propagation_audit_warning`은 source-quality/coverage 관찰 항목이다. threshold/order/provider/bot restart 권한으로 해석하지 않는다.
 
-- [ ] `[ShadowCanaryCohortReview0518] shadow/canary/cohort 런타임 분류 및 정리 판정` (`Due: 2026-05-18`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)
+- [x] `[ShadowCanaryCohortReview0518] shadow/canary/cohort 런타임 분류 및 정리 판정` (`Due: 2026-05-18`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)
   - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)
   - 판정 기준: 당일 변경/관찰 결과를 기준으로 `remove`, `observe-only`, `baseline-promote`, `active-canary` 상태 변동 여부를 닫는다.
   - 금지: shadow 금지, canary-only, baseline 승격 원칙을 코드/문서 상태와 분리하지 않는다.
   - 다음 액션: 변경이 있으면 기준문서와 checklist를 함께 갱신하고 cohort 잠금 필드를 남긴다.
+  - 판정: `warning_no_baseline_promote_with_operator_override_cohorts_locked`.
+  - 근거: 오늘 selected runtime family는 `score65_74_recovery_probe`, `bad_entry_refined_canary`, `swing_one_share_real_canary_phase0`, `swing_gatekeeper_reject_cooldown`이고, pre-AI soft gate/Entry ADM/Holding ADM은 사용자 운영 override cohort로 별도 잠근다. `strength_momentum_soft_gate_p1`, `overbought_pullback_guard_p1`, `liquidity_pre_submit_guard_p1`는 active family 후보지만 baseline 승격이 아니며, `pipeline_event_compaction_v2_shadow`는 report-only diagnostic aggregation이다.
+  - 문서 반영: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)에 `2026-05-18 POSTCLOSE Snapshot Addendum`을 추가해 remove/baseline-promote 없음, operator override next-day cohort 관찰, report-only 권한 금지를 잠근다.
+  - 다음 액션: 5/19에는 operator override cohort의 `entry_adm_runtime_effect`, pre-AI soft gate risk-context, swing real-canary dry-run/approval split을 따로 확인한다.
+
+### PostcloseAutomationHealthCheck20260518 운영 확인 기록
+
+- checked_at: `2026-05-18 19:07 KST`
+- 판정: `pass_with_recovered_initial_availability_pause`
+- 대상: `[Runbook 운영 확인] 장후 자동화체인 상태 확인`, [run_threshold_cycle_postclose.sh](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_postclose.sh)
+- 근거: [threshold_cycle_postclose_cron.log](/home/ubuntu/KORStockScan/logs/threshold_cycle_postclose_cron.log)는 16:10 자동 실행이 `paused_by_availability_guard`, `paused_reason=iowait_pct>=20`으로 중단된 뒤, 16:15 manual recovery가 `manual_recovery=true reason=availability_guard_checkpoint_resume`로 재개되어 16:26에 `[DONE] threshold-cycle postclose target_date=2026-05-18`로 종료됐음을 기록한다.
+- 검증: [threshold_cycle_postclose_verification_2026-05-18.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_2026-05-18.json)은 status=`pass`, execution_profile=`full_profile`, missing required flags=`[]`, predecessor_integrity=`pass`, required artifacts JSON valid로 닫혔다. DONE marker에는 `daily_ev=true`, `runtime_approval_summary=true`, `code_improvement_workorder=true`, `pattern_lab_currentness_audit=true`, `pattern_lab_propagation_audit=true`, `plan_rebase_daily_renewal=true`, `scalp_entry_adm=true`, `manual_recovery=true`가 남았다.
+- 다음 액션: 오늘 장후 체인은 회복 완료로 닫되, iowait pause는 운영 리스크로 남긴다. 이후 20:05 tuning monitoring/close checklist가 실행 시각을 지나면 같은 원칙으로 별도 확인한다.
 
 ### SimulationPerformanceReview0518 확인 기록
 
