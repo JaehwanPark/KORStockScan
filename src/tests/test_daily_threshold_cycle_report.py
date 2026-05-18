@@ -1068,6 +1068,56 @@ def test_score65_74_recovery_probe_uses_panic_adjusted_floor():
     assert "panic-adjusted floor" in candidate["calibration_reason"]
 
 
+def test_score65_74_recovery_probe_opens_existing_entry_unlock_when_rolling_primary_ready():
+    report_sources = {
+        "schema_version": 1,
+        "target_date": "2026-05-18",
+        "sources": {
+            "buy_funnel_sentinel": {"path": "data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-05-18.json", "exists": True},
+            "wait6579_ev_cohort": {"path": "data/report/monitor_snapshots/wait6579_ev_cohort_2026-05-18.json", "exists": True},
+            "panic_sell_defense": {"path": "data/report/panic_sell_defense/panic_sell_defense_2026-05-18.json", "exists": True},
+        },
+        "source_metrics": {
+            "buy_score65_74": {
+                "sentinel_primary": "UPSTREAM_AI_THRESHOLD",
+                "sentinel_secondary": [],
+                "panic_state": "NORMAL",
+                "panic_regime_mode": "NORMAL",
+                "panic_detected": False,
+                "panic_by_stop_loss_count": False,
+                "score65_74_candidates": 50,
+                "wait6579_total_candidates": 50,
+                "score65_74_avg_expected_ev_pct": 4.5216,
+                "score65_74_avg_close_10m_pct": 5.243,
+                "score65_74_avg_mfe_10m_pct": 7.7935,
+                "full_samples": 50,
+                "partial_samples": 0,
+                "threshold_relaxation_approved": False,
+                "budget_pass": 11,
+                "latency_pass": 0,
+                "order_bundle_submitted": 0,
+                "submitted_to_budget_unique_pct": 0.0,
+            }
+        },
+        "new_observation_axis_created": False,
+    }
+
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-05-18",
+        pipeline_loader=lambda target_date: [],
+        report_source_loader=lambda target_date: report_sources,
+        completed_rows_loader=lambda start_date, end_date: [],
+    )
+
+    candidate = {item["family"]: item for item in report["calibration_candidates"]}["score65_74_recovery_probe"]
+    assert candidate["calibration_state"] == "adjust_up"
+    assert candidate["sample_count"] == 50
+    assert candidate["sample_floor_status"] == "ready"
+    assert candidate["recommended_values"]["enabled"] is True
+    assert candidate["source_metrics"]["entry_unlock_probe_ready"] is True
+    assert "bounded entry probe" in candidate["calibration_reason"]
+
+
 def test_bad_entry_refined_candidate_waits_for_postclose_lifecycle_attribution(tmp_path, monkeypatch):
     monkeypatch.setattr(report_mod, "POST_SELL_DIR", tmp_path)
     (tmp_path / "post_sell_evaluations_2026-05-08.jsonl").write_text(

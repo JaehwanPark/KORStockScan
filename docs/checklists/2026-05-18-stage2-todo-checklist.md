@@ -131,6 +131,24 @@
 - 다음 액션: 오늘 POSTCLOSE `HumanInterventionSummary0518`에서 approval request가 있으면 새 절차 기준으로 `approval_id`, 후보/대상, artifact path, 승인 여부, 다음 PREOPEN 확인 항목을 분리 보고한다. Project/Calendar 동기화는 표준 명령으로 사용자가 수행한다.
 - 추가 명확화 (`2026-05-18 12:30 KST`): `Approval Artifact 작성 형식` 제목을 `현재 지원되는 Approval Artifact 작성 형식`으로 바꾸고, 런북의 3개 artifact 형식은 단순 예시가 아니라 `threshold_cycle_preopen_apply`가 현재 소비하는 형식임을 명시했다. panic/position sizing 등 `approval_contract_missing` 축은 artifact loader/env mapping/runtime guard/rollback test 구현 전에는 approval artifact를 만들어도 소비되지 않는다고 분리했다.
 
+### Score6574EntryUnlockRuntimeApply0518 실행 기록
+
+- checked_at: `2026-05-18 12:45 KST`
+- 판정: `runtime_applied_operator_override`
+- 대상: 기존 entry family `score65_74_recovery_probe`
+- 근거: 12:40 재생성한 `threshold_cycle_calibration_2026-05-18_intraday.json`에서 `score65_74_recovery_probe`는 `calibration_state=adjust_up`, `allowed_runtime_apply=true`, `sample_count=50`, `sample_floor=20`, `recommended_values.enabled=true`로 닫혔다. rolling primary source는 `panic_state=NORMAL`, `panic_regime_mode=NORMAL`, `score65_74_avg_expected_ev_pct=4.5216`, `score65_74_avg_close_10m_pct=5.243`, `score65_74_avg_mfe_10m_pct=7.7935`, `order_bundle_submitted=0.0`, `submitted_to_budget_unique_pct=0.0`다. OpenAI correction은 no-applied-sample을 `instrumentation_gap`으로 제안했지만, 이번 경우는 새 family 생성이 아니라 submitted drought를 풀기 위한 기존 1주/5만원 bounded probe 표본 생성 목적이므로 `entry_unlock_probe_ready_overrides_no_applied_probe_gap`로 override했다.
+- 조치: `daily_threshold_cycle_report`에서 normal market + rolling primary ready + positive missed EV/close/MFE + submitted drought 조건이면 `score65_74_recovery_probe`의 `recommended_values.enabled=true`와 `entry_unlock_probe_ready=true`를 명시하도록 수정했다. `threshold_cycle_preopen_apply`에는 `--source-phase intraday`와 `--include-family`를 추가해 오늘 장중 apply source를 intraday calibration으로 지정하고, 명시 family 외 자동 선택을 차단했다.
+- runtime 반영: `threshold_apply_2026-05-18.json`은 `source_report=threshold_cycle_calibration_2026-05-18_intraday.json`, `operator_family_filter=[score65_74_recovery_probe]`, selected family=`score65_74_recovery_probe`로 재생성했다. 이후 기존 장전 selected runtime family(`bad_entry_refined_canary`, `swing_one_share_real_canary_phase0`, `swing_gatekeeper_reject_cooldown`)와 `KORSTOCKSCAN_SWING_LIVE_ORDER_DRY_RUN_ENABLED=true`를 보존해 runtime env를 merge했다. `restart.flag`로 봇을 우아하게 재기동했고 새 PID `63152`의 `/proc/63152/environ`에서 `KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED=true`, `KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED=true`, `KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_ENABLED=true`, `KORSTOCKSCAN_ML_GATEKEEPER_REJECT_COOLDOWN=6600`, `KORSTOCKSCAN_SWING_LIVE_ORDER_DRY_RUN_ENABLED=true` 로드를 확인했다.
+- 금지/범위: 신규 튜닝축을 만들지 않았다. score threshold 전면 완화, fallback 재개, provider 변경, 주문가 guard 완화, 스윙 dry-run 해제, 1주 cap 해제는 수행하지 않았다. 다만 사용자 명시 승인에 따라 장중 runtime env source와 봇 재기동을 수행했으므로 이후 결과는 `12:44:37 KST` post-restart cohort로 분리한다.
+- 테스트/검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py::test_score65_74_recovery_probe_opens_existing_entry_unlock_when_rolling_primary_ready src/tests/test_threshold_cycle_preopen_apply.py::test_score65_74_entry_unlock_can_use_intraday_source_and_ignore_no_applied_gap src/tests/test_threshold_cycle_preopen_apply.py::test_auto_bounded_live_writes_runtime_env_with_ai_guard_and_stage_priority src/tests/test_threshold_cycle_preopen_apply.py::test_auto_bounded_live_excludes_ai_instrumentation_gap` 통과 (`4 passed`). `py_compile` 통과.
+- 다음 액션: `13:30~15:20` 사이 post-restart cohort에서 `score65_74_recovery_probe`, `wait6579_probe_canary_applied`, `budget_pass`, `latency_block`, `order_bundle_submitted`, `buy_order_sent`, `full_fill`, `partial_fill`, `COMPLETED + valid profit_rate`를 오전 cohort와 분리 확인한다. safety breach, stale quote submit, receipt/provenance 손상, severe loss guard breach가 있으면 즉시 OFF 후보로 닫는다. Project/Calendar 동기화는 표준 명령으로 사용자가 수행한다.
+
+- [ ] `[Score6574PostRestartCohortCheck0518] score65_74_recovery_probe post-restart cohort 결과 확인` (`Due: 2026-05-18`, `Slot: INTRADAY`, `TimeWindow: 13:30~15:20`, `Track: ScalpingLogic`)
+  - Source: `data/threshold_cycle/threshold_events_2026-05-18.jsonl`, `data/pipeline_events/pipeline_events_2026-05-18.jsonl`, `data/threshold_cycle/runtime_env/threshold_runtime_env_2026-05-18.json`
+  - Section: `Score6574EntryUnlockRuntimeApply0518 실행 기록`
+  - 판정 기준: 새 PID `63152` 시작 이후 `score65_74_recovery_probe`, `wait6579_probe_canary_applied`, `budget_pass`, `latency_block`, `order_bundle_submitted`, `buy_order_sent`, `full_fill`, `partial_fill`, `COMPLETED + valid profit_rate`를 오전 cohort와 분리한다.
+  - 금지: 결과 확인 전 추가 entry family enable, score threshold 전면 완화, fallback 재개, provider 변경, 주문가 guard 완화, 스윙 dry-run 해제 금지.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-05-15` postclose -> `2026-05-18`)
 
@@ -182,6 +200,17 @@
   - 다음 액션: source-quality split, active state 복원, open/closed count를 같이 기록한다.
   - 판정: `pass_sim_probe_split_preserved`.
   - 근거: pipeline events 기준 `actual_order_submitted=False` 1336건, threshold events 기준 `actual_order_submitted=False` 16건이 확인됐고, `decision_authority=source_quality_only`와 report-only/runtime_effect split이 유지됐다.
+
+### CrisisRiskAlertSlotThrottle0518 확인 기록
+
+- checked_at: `2026-05-18 12:53 KST`
+- 판정: `implemented_notification_throttle`
+- 근거: `crisis_monitor`는 위기 RSS 수집과 DB 저장 후 `risk_count>=4` 조건에서 `시스템 경보: 매매 리스크 감지` Telegram을 보낼 수 있었고, 기존 제어는 야간 quiet hour 중심이라 장중 반복 발송을 충분히 제한하지 못했다.
+- 조치: `crisis_monitor`에 KST 기준 장전 `08:00~09:30`, 정오 `11:30~12:30`, 장후 `15:30~16:30` 슬롯 게이트와 `data/runtime/crisis_monitor_alert_state.json` 기반 일자별 슬롯 1회 발송 상태를 추가했다. bot daemon 설명은 60분 수집과 슬롯 제한 알림으로 맞췄고, 런북에 알림 제한 계약을 추가했다.
+- 금지 확인: 알림 notification throttle만 변경했고 threshold, 주문 guard, provider, 자동매도, broker order submit 권한은 추가하지 않았다. RSS 수집, macro alert DB 저장, risk count 계산은 계속 수행한다.
+- 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_crisis_monitor.py` 4 passed, `py_compile` 통과, `git diff --check` 통과, `sync_docs_backlog_to_project --dry-run` parsed_tasks=`7`, `error_detector --mode full --dry-run` summary_severity=`pass`.
+- 재기동 확인: `restart.flag` 기반 graceful restart로 bot PID가 최종 `66968`로 변경됐고, post-restart process health는 main loop와 `crisis_monitor` heartbeat 모두 pass다. 현재 시각 `12:56 KST` 기준 슬롯 밖 dry-check는 `outside_alert_slot`으로 Telegram 발송 차단 판정이다.
+- 다음 액션: 장후 `15:30~16:30` 슬롯에 risk 조건이 살아 있을 때만 당일 `postclose` 슬롯 1회 발송되는지 로그를 확인한다. Project/Calendar 동기화는 표준 명령으로 사용자가 수행한다.
 
 ## 장후 체크리스트 (16:30~18:55)
 

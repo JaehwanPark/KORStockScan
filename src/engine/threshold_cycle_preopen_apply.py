@@ -125,7 +125,11 @@ def swing_one_share_real_canary_artifact_path(source_date: str) -> Path:
     return SWING_RUNTIME_APPROVAL_ARTIFACT_DIR / f"swing_one_share_real_canary_{source_date}.json"
 
 
-def _report_path_for_date(target_date: str) -> Path:
+def _report_path_for_date(target_date: str, *, source_phase: str | None = None) -> Path:
+    if source_phase == "intraday":
+        return CALIBRATION_REPORT_DIR / f"threshold_cycle_calibration_{target_date}_intraday.json"
+    if source_phase == "postclose":
+        return CALIBRATION_REPORT_DIR / f"threshold_cycle_calibration_{target_date}_postclose.json"
     canonical = REPORT_DIR / f"threshold_cycle_{target_date}.json"
     if canonical.exists():
         return canonical
@@ -226,6 +230,36 @@ def _env_overrides_for_candidate(candidate: dict[str, Any]) -> dict[str, str]:
             continue
         overrides[_runtime_env_name(target_key)] = _format_env_value(value)
     return overrides
+
+
+def _score65_74_entry_unlock_candidate(candidate: dict[str, Any]) -> bool:
+    if str(candidate.get("family") or "") != "score65_74_recovery_probe":
+        return False
+    metrics = candidate.get("source_metrics") if isinstance(candidate.get("source_metrics"), dict) else {}
+    if bool(metrics.get("entry_unlock_probe_ready")):
+        return True
+    try:
+        sample_count = int(candidate.get("sample_count") or 0)
+        sample_floor = int(candidate.get("sample_floor") or 0)
+    except Exception:
+        return False
+    if sample_floor <= 0 or sample_count < sample_floor:
+        return False
+    try:
+        avg_ev = float(metrics.get("score65_74_avg_expected_ev_pct") or 0.0)
+        avg_close = float(metrics.get("score65_74_avg_close_10m_pct") or 0.0)
+    except Exception:
+        return False
+    panic_state = str(metrics.get("panic_state") or "").upper()
+    panic_regime = str(metrics.get("panic_regime_mode") or "").upper()
+    submitted = float(metrics.get("order_bundle_submitted") or 0.0)
+    return (
+        avg_ev >= 2.0
+        and avg_close >= 1.0
+        and submitted <= 0.0
+        and panic_state not in {"PANIC_SELL", "RECOVERY_WATCH"}
+        and panic_regime != "PANIC_DETECTED"
+    )
 
 
 def _load_swing_runtime_approval_bundle(source_date: str | None) -> dict[str, Any]:
@@ -449,9 +483,17 @@ def _ai_guard_allows_candidate(candidate: dict[str, Any], ai_review: dict[str, A
     item = items_by_family.get(str(candidate.get("family") or ""))
     if not item:
         return (not require_ai, "ai_review_missing" if require_ai else "ai_review_missing_deterministic_allowed")
+    guard_decision = item.get("guard_decision") if isinstance(item.get("guard_decision"), dict) else {}
+    route_action = str(item.get("route_action") or guard_decision.get("route_action") or "")
+    if (
+        _score65_74_entry_unlock_candidate(candidate)
+        and route_action == "exclude_from_threshold_candidate_review"
+        and str(guard_decision.get("anomaly_route") or item.get("ai_anomaly_route") or "") == "instrumentation_gap"
+    ):
+        return (True, "entry_unlock_probe_ready_overrides_no_applied_probe_gap")
     if str(item.get("guard_decision") or "").lower() != "accept" and not bool(item.get("guard_accepted")):
         return (False, str(item.get("guard_reject_reason") or "ai_guard_rejected"))
-    if str(item.get("route_action") or "") in AUTO_APPLY_ROUTE_EXCLUDE_ACTIONS:
+    if route_action in AUTO_APPLY_ROUTE_EXCLUDE_ACTIONS:
         return (False, "ai_route_excluded_from_threshold_candidate")
     route = str(item.get("ai_anomaly_route") or "")
     if route not in AUTO_APPLY_ALLOWED_ROUTES:
@@ -464,6 +506,7 @@ def _select_auto_apply_candidates(
     *,
     ai_review: dict[str, Any],
     require_ai: bool,
+    include_families: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
     selected_by_stage: dict[str, dict[str, Any]] = {}
     decisions: list[dict[str, Any]] = []
@@ -473,7 +516,9 @@ def _select_auto_apply_candidates(
         state = str(candidate.get("calibration_state") or "")
         allowed, reason = _ai_guard_allows_candidate(candidate, ai_review, require_ai=require_ai)
         reject_reason = ""
-        if not bool(candidate.get("allowed_runtime_apply")):
+        if include_families is not None and family not in include_families:
+            reject_reason = "operator_family_filter_excluded"
+        elif not bool(candidate.get("allowed_runtime_apply")):
             reject_reason = "runtime_apply_not_allowed"
         elif bool(candidate.get("safety_revert_required")):
             reject_reason = "safety_revert_required"
@@ -553,9 +598,11 @@ def build_preopen_apply_manifest(
     apply_mode: str = "manifest_only",
     auto_apply: bool = False,
     require_ai: bool = True,
+    source_phase: str | None = None,
+    include_families: set[str] | None = None,
 ) -> dict[str, Any]:
     target_date = str(target_date).strip()
-    source_path = _report_path_for_date(source_date) if source_date else _latest_report_before(target_date)
+    source_path = _report_path_for_date(source_date, source_phase=source_phase) if source_date else _latest_report_before(target_date)
     if source_path is None or not source_path.exists():
         manifest = {
             "target_date": target_date,
@@ -612,6 +659,7 @@ def build_preopen_apply_manifest(
                 calibration_candidates,
                 ai_review=ai_review,
                 require_ai=require_ai,
+                include_families=include_families,
             )
             swing_selected, swing_decisions, swing_env_overrides = _select_swing_approved_candidates(swing_bundle)
             env_overrides = {**env_overrides, **swing_env_overrides}
@@ -688,6 +736,7 @@ def build_preopen_apply_manifest(
                 "ai_correction_required": bool(require_ai),
                 "same_stage_owner_rule": "one_selected_family_per_stage_by_priority",
                 "daily_ev_report_only": True,
+                "operator_family_filter": sorted(include_families) if include_families is not None else None,
             },
             "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         }
@@ -702,6 +751,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build preopen threshold apply manifest.")
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat(), help="Target preopen date")
     parser.add_argument("--source-date", dest="source_date", default=None, help="Postclose report date to apply")
+    parser.add_argument(
+        "--source-phase",
+        choices=["canonical", "intraday", "postclose"],
+        default="canonical",
+        help="When --source-date is given, choose canonical threshold report or a phase calibration artifact.",
+    )
+    parser.add_argument(
+        "--include-family",
+        action="append",
+        default=[],
+        help="Limit auto-apply selection to the given family. May be repeated for stage-disjoint explicit applies.",
+    )
     parser.add_argument(
         "--apply-mode",
         default=os.getenv("THRESHOLD_CYCLE_APPLY_MODE", "manifest_only"),
@@ -732,6 +793,8 @@ def main(argv: list[str] | None = None) -> int:
         apply_mode=args.apply_mode,
         auto_apply=args.auto_apply,
         require_ai=not args.allow_deterministic_without_ai,
+        source_phase=None if args.source_phase == "canonical" else args.source_phase,
+        include_families=set(args.include_family) if args.include_family else None,
     )
     print(json.dumps(manifest, ensure_ascii=False))
     return (

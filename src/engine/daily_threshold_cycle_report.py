@@ -4526,6 +4526,33 @@ def _source_sample_count_for_family(output_family: str, source_metrics: dict) ->
     return 0
 
 
+def _score65_74_entry_unlock_probe_ready(source_metrics: dict, *, sample_count: int, sample_floor: int) -> bool:
+    """Return True when the existing score65~74 entry probe should open to collect applied samples."""
+    if sample_count < sample_floor:
+        return False
+    avg_ev = _safe_float(source_metrics.get("score65_74_avg_expected_ev_pct"), None)
+    avg_close = _safe_float(source_metrics.get("score65_74_avg_close_10m_pct"), None)
+    avg_mfe = _safe_float(source_metrics.get("score65_74_avg_mfe_10m_pct"), None)
+    submitted_to_budget = _safe_float(source_metrics.get("submitted_to_budget_unique_pct"), None)
+    order_bundle_submitted = _safe_float(source_metrics.get("order_bundle_submitted"), None)
+    panic_state = str(source_metrics.get("panic_state") or "").upper()
+    panic_regime = str(source_metrics.get("panic_regime_mode") or "").upper()
+    panic_detected = bool(source_metrics.get("panic_detected")) or bool(source_metrics.get("panic_by_stop_loss_count"))
+    if panic_detected or panic_state in {"PANIC_SELL", "RECOVERY_WATCH"} or panic_regime == "PANIC_DETECTED":
+        return False
+    if avg_ev is None or avg_ev < 2.0:
+        return False
+    if avg_close is None or avg_close < 1.0:
+        return False
+    if avg_mfe is not None and avg_mfe < 2.0:
+        return False
+    if submitted_to_budget is not None and submitted_to_budget > 10.0:
+        return False
+    if order_bundle_submitted is not None and order_bundle_submitted > 0:
+        return False
+    return True
+
+
 def _calibration_state_for_family(
     output_family: str,
     family: dict,
@@ -4569,6 +4596,16 @@ def _calibration_state_for_family(
             return ("hold", "score65~74 EV/close_10m 우위가 efficient trade-off gate에 미달해 값 유지")
         if submitted_to_budget is not None and submitted_to_budget > 60.0:
             return ("hold", "submitted drought가 아니므로 probe live 확대보다 baseline funnel 유지")
+        if _score65_74_entry_unlock_probe_ready(
+            source_metrics,
+            sample_count=sample_count,
+            sample_floor=sample_floor,
+        ):
+            return (
+                "adjust_up",
+                "rolling primary score65~74 missed EV가 양수이고 panic/source guard가 정상이다. "
+                "submitted drought를 풀기 위해 기존 1주/5만원 bounded entry probe를 연다.",
+            )
         if (
             0 < panic_adjusted_floor <= sample_count < sample_floor
             and (panic_detected or panic_state in {"PANIC_SELL", "RECOVERY_WATCH"})
@@ -4814,6 +4851,15 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
                 source_ready = True
                 recommended = dict(recommended)
                 recommended["enabled"] = True
+            elif _score65_74_entry_unlock_probe_ready(
+                source_metrics,
+                sample_count=sample_count,
+                sample_floor=sample_floor,
+            ):
+                source_ready = True
+                recommended = dict(recommended)
+                recommended["enabled"] = True
+                source_metrics["entry_unlock_probe_ready"] = True
         sample_ready = bool(family.get("apply_ready")) or source_ready
         calibration_state, calibration_reason = _calibration_state_for_family(
             output_family,
@@ -5136,6 +5182,14 @@ def _refresh_candidate_from_primary_window(
     )
     current = current if isinstance(current, dict) else {}
     recommended = recommended if isinstance(recommended, dict) else {}
+    if family == "score65_74_recovery_probe" and _score65_74_entry_unlock_probe_ready(
+        source_metrics,
+        sample_count=primary_sample_count,
+        sample_floor=sample_floor,
+    ):
+        recommended = dict(recommended)
+        recommended["enabled"] = True
+        source_metrics["entry_unlock_probe_ready"] = True
     apply_mode = _apply_mode_for_candidate_state(candidate, state, primary_ready)
     candidate.update(
         {

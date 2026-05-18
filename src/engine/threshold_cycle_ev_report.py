@@ -95,6 +95,24 @@ def _wait6579_counterfactual_summary(target_date: str) -> tuple[dict[str, Any], 
 
 
 def _selected_families(apply_manifest: dict[str, Any]) -> list[str]:
+    def _dedupe(values: list[str]) -> list[str]:
+        seen: set[str] = set()
+        result: list[str] = []
+        for value in values:
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            result.append(value)
+        return result
+
+    merge = apply_manifest.get("operator_runtime_env_merge")
+    preserved = []
+    if isinstance(merge, dict):
+        preserved = [
+            str(value)
+            for value in (merge.get("preserved_selected_families") or [])
+            if str(value or "").strip()
+        ]
     selected = apply_manifest.get("auto_apply_selected")
     if isinstance(selected, list) and selected:
         families = [str(item.get("family") or "") for item in selected if isinstance(item, dict) and item.get("family")]
@@ -102,10 +120,15 @@ def _selected_families(apply_manifest: dict[str, Any]) -> list[str]:
         families.extend(
             str(item.get("family") or "") for item in swing_selected if isinstance(item, dict) and item.get("family")
         )
-        return families
+        families.extend(preserved)
+        return _dedupe(families)
     swing_selected = ((apply_manifest.get("swing_runtime_approval") or {}).get("selected") or [])
     if isinstance(swing_selected, list) and swing_selected:
-        return [str(item.get("family") or "") for item in swing_selected if isinstance(item, dict) and item.get("family")]
+        families = [str(item.get("family") or "") for item in swing_selected if isinstance(item, dict) and item.get("family")]
+        families.extend(preserved)
+        return _dedupe(families)
+    if preserved:
+        return _dedupe(preserved)
     env_manifest = apply_manifest.get("runtime_env_overrides")
     if isinstance(env_manifest, dict) and env_manifest:
         return ["runtime_env_override"]

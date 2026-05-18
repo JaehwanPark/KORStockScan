@@ -152,9 +152,9 @@ def broadcast_today_picks_job():
             'parse_mode': 'HTML'
         })
 
-# 💡 [신규 추가] 30분 단위 글로벌 위기 감지 무한 루프
+# 💡 글로벌 위기 감지 무한 루프
 def crisis_monitor_loop():
-    """60분(3600초) 주기로 글로벌 위기를 감시하는 백그라운드 작업"""
+    """60분(3600초) 주기로 글로벌 위기를 감시하고 Telegram은 슬롯 단위로 제한한다."""
     # 순환 참조 및 의존성 방지를 위해 쓰레드 내부에서 지역 임포트
     try:
         import src.scanners.crisis_monitor as crisis_monitor
@@ -341,7 +341,7 @@ if __name__ == '__main__':
     # 💡 2. [신규 추가] 글로벌 위기 감지 모니터는 주말/휴일 상관없이 365일 돌아가야 합니다.
     crisis_thread = threading.Thread(target=crisis_monitor_loop, daemon=True)
     crisis_thread.start()
-    print("🌍 [시스템] 글로벌 위기 감지 모니터 (30분 주기) 가동 완료.")
+    print("🌍 [시스템] 글로벌 위기 감지 모니터 (60분 수집, 장전/정오/장후 알림 제한) 가동 완료.")
 
     if is_open:
         # 💡 [아키텍처 포인트 3] 콜백(broadcast_alert) 파라미터 완전 제거!

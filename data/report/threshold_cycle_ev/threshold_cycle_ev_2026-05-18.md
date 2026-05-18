@@ -3,7 +3,7 @@
 ## Runtime Apply
 - status: `auto_bounded_live_ready`
 - runtime_change: `True`
-- selected_families: `bad_entry_refined_canary, swing_one_share_real_canary_phase0, swing_gatekeeper_reject_cooldown`
+- selected_families: `score65_74_recovery_probe, bad_entry_refined_canary, swing_one_share_real_canary_phase0, swing_gatekeeper_reject_cooldown`
 
 ## Daily EV
 - completed: `0` / open: `0`
@@ -19,7 +19,7 @@
 
 ## Holding Exit
 - holding_reviews: `5`
-- exit_signals: `31`
+- exit_signals: `37`
 - holding_review_ms_p95: `1429.0`
 
 ## Scalp Simulator
@@ -35,8 +35,8 @@
 
 ## Missed Probe Counterfactual
 - book: `scalp_score65_74_probe_counterfactual` / role: `missed_buy_probe_counterfactual`
-- total/score65_74: `5` / `0`
-- avg_expected_ev: `3.7463`% / score65_74_avg_expected_ev: `0.0`%
+- total/score65_74: `12` / `0`
+- avg_expected_ev: `4.5216`% / score65_74_avg_expected_ev: `0.0`%
 - actual_order_submitted: `False` / broker_order_forbidden: `True`
 - authority: `missed_probe_ev_only_not_broker_execution`
 
@@ -82,18 +82,18 @@
 - propagation: status=`fail` fail=`7` warnings=`2` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-18.json`
 
 ## Swing Runtime Approval
-- request_report: `/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-05-15.json`
-- approval_artifact: `/home/ubuntu/KORStockScan/data/threshold_cycle/approvals/swing_runtime_approvals_2026-05-15.json`
-- requested/approved/live_dry_run: `3` / `3` / `2`
-- dry_run_forced: `True`
-- real_canary_policy: `swing_one_share_real_canary_phase0`
-- one_share_real_canary_artifact: `/home/ubuntu/KORStockScan/data/threshold_cycle/approvals/swing_one_share_real_canary_2026-05-15.json`
-- selected_one_share_real_canary: `1`
-- real_order_allowed_actions: `BUY_INITIAL, SELL_CLOSE`
-- sim_only_actions: `AVG_DOWN, PYRAMID, SCALE_IN`
-- scale_in_real_canary_policy: `swing_scale_in_real_canary_phase0`
+- request_report: `-`
+- approval_artifact: `-`
+- requested/approved/live_dry_run: `0` / `0` / `0`
+- dry_run_forced: `False`
+- real_canary_policy: `-`
+- one_share_real_canary_artifact: `-`
+- selected_one_share_real_canary: `0`
+- real_order_allowed_actions: ``
+- sim_only_actions: ``
+- scale_in_real_canary_policy: `-`
 - selected_scale_in_real_canary: `0`
-- scale_in_real_execution_quality: `{'one_share_canary_selected': 1, 'scale_in_canary_selected': 0, 'execution_quality_source': 'real_only', 'sim_probe_ev_source': 'separate_from_broker_execution_quality'}`
+- scale_in_real_execution_quality: `{'one_share_canary_selected': 0, 'scale_in_canary_selected': 0, 'execution_quality_source': 'real_only', 'sim_probe_ev_source': 'separate_from_broker_execution_quality'}`
 - blocked: `[]`
 
 ## Code Improvement Workorder
@@ -106,9 +106,7 @@
 - none
 
 ## Swing Approval Requests
-- `swing_model_floor` approval_id=`swing_runtime_approval:2026-05-15:swing_model_floor` score=`0.8361` target_env_keys=`['SWING_FLOOR_BULL', 'SWING_FLOOR_BEAR']`
-- `swing_gatekeeper_reject_cooldown` approval_id=`swing_runtime_approval:2026-05-15:swing_gatekeeper_reject_cooldown` score=`0.8361` target_env_keys=`['ML_GATEKEEPER_REJECT_COOLDOWN']`
-- `swing_one_share_real_canary_phase0` approval_id=`swing_one_share_real_canary:2026-05-15:phase0` score=`0.8361` target_env_keys=`['SWING_ONE_SHARE_REAL_CANARY_ENABLED', 'SWING_ONE_SHARE_REAL_CANARY_ALLOWED_CODES', 'SWING_ONE_SHARE_REAL_CANARY_MAX_QTY', 'SWING_ONE_SHARE_REAL_CANARY_MAX_NEW_ENTRIES_PER_DAY', 'SWING_ONE_SHARE_REAL_CANARY_MAX_OPEN_POSITIONS', 'SWING_ONE_SHARE_REAL_CANARY_MAX_TOTAL_NOTIONAL_KRW', 'SWING_ONE_SHARE_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT']`
+- none
 
 ## Calibration Decisions
 - `soft_stop_whipsaw_confirmation`: `adjust_up` sample=`144/10`

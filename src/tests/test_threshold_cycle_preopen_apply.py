@@ -292,6 +292,110 @@ def test_auto_bounded_live_excludes_ai_instrumentation_gap(tmp_path, monkeypatch
     assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED" not in env_text
 
 
+def test_score65_74_entry_unlock_can_use_intraday_source_and_ignore_no_applied_gap(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    ai_dir = report_dir / "threshold_cycle_ai_review"
+    calibration_dir = report_dir / "threshold_cycle_calibration"
+    ai_dir.mkdir(parents=True)
+    calibration_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "AI_REVIEW_DIR", ai_dir)
+    monkeypatch.setattr(mod, "CALIBRATION_REPORT_DIR", calibration_dir)
+
+    (calibration_dir / "threshold_cycle_calibration_2026-05-18_intraday.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-18",
+                "run_phase": "intraday",
+                "calibration_candidates": [
+                    {
+                        "family": "soft_stop_whipsaw_confirmation",
+                        "stage": "holding_exit",
+                        "priority": 1,
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": False,
+                        "calibration_state": "adjust_up",
+                        "target_env_keys": ["SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED"],
+                        "recommended_values": {"enabled": True},
+                    },
+                    {
+                        "family": "score65_74_recovery_probe",
+                        "stage": "entry",
+                        "priority": 10,
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": False,
+                        "calibration_state": "adjust_up",
+                        "sample_count": 50,
+                        "sample_floor": 20,
+                        "target_env_keys": [
+                            "AI_SCORE65_74_RECOVERY_PROBE_ENABLED",
+                            "AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW",
+                            "AI_WAIT6579_PROBE_CANARY_MAX_QTY",
+                        ],
+                        "recommended_values": {"enabled": True, "max_budget_krw": 50000, "max_qty": 1},
+                        "source_metrics": {
+                            "entry_unlock_probe_ready": True,
+                            "panic_state": "NORMAL",
+                            "panic_regime_mode": "NORMAL",
+                            "score65_74_avg_expected_ev_pct": 4.5,
+                            "score65_74_avg_close_10m_pct": 5.2,
+                            "order_bundle_submitted": 0,
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (ai_dir / "threshold_cycle_ai_review_2026-05-18_intraday.json").write_text(
+        json.dumps(
+            {
+                "ai_status": "parsed",
+                "items": [
+                    {
+                        "family": "soft_stop_whipsaw_confirmation",
+                        "guard_accepted": True,
+                        "ai_anomaly_route": "threshold_candidate",
+                    },
+                    {
+                        "family": "score65_74_recovery_probe",
+                        "guard_accepted": True,
+                        "guard_decision": {
+                            "anomaly_route": "instrumentation_gap",
+                            "route_action": "exclude_from_threshold_candidate_review",
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-18",
+        source_date="2026-05-18",
+        source_phase="intraday",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        include_families={"score65_74_recovery_probe"},
+    )
+
+    assert manifest["status"] == "auto_bounded_live_ready"
+    blocked = [item for item in manifest["auto_apply_decisions"] if item["family"] == "soft_stop_whipsaw_confirmation"][0]
+    assert blocked["decision_reason"] == "operator_family_filter_excluded"
+    decision = [item for item in manifest["auto_apply_decisions"] if item["family"] == "score65_74_recovery_probe"][0]
+    assert decision["selected"] is True
+    assert decision["decision_reason"] == "entry_unlock_probe_ready_overrides_no_applied_probe_gap"
+    env_text = (runtime_dir / "threshold_runtime_env_2026-05-18.env").read_text(encoding="utf-8")
+    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED=true" in env_text
+    assert "KORSTOCKSCAN_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW=50000" in env_text
+    assert "KORSTOCKSCAN_WAIT6579_PROBE_CANARY_MAX_QTY=1" in env_text
+
+
 def test_swing_approval_required_request_does_not_auto_apply_without_artifact(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"

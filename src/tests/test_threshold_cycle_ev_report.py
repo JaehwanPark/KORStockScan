@@ -137,6 +137,12 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
                 "status": "auto_bounded_live_ready",
                 "runtime_change": True,
                 "auto_apply_selected": [{"family": "score65_74_recovery_probe"}],
+                "operator_runtime_env_merge": {
+                    "preserved_selected_families": [
+                        "bad_entry_refined_canary",
+                        "swing_one_share_real_canary_phase0",
+                    ]
+                },
                 "swing_runtime_approval": {
                     "request_report": "data/report/swing_runtime_approval/swing_runtime_approval_2026-05-08.json",
                     "approval_artifact": None,
@@ -217,7 +223,11 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
 
     report = mod.build_threshold_cycle_ev_report("2026-05-08")
 
-    assert report["runtime_apply"]["selected_families"] == ["score65_74_recovery_probe"]
+    assert report["runtime_apply"]["selected_families"] == [
+        "score65_74_recovery_probe",
+        "bad_entry_refined_canary",
+        "swing_one_share_real_canary_phase0",
+    ]
     assert report["daily_ev_summary"]["completed_trades"] == 2
     assert report["daily_ev_summary"]["realized_pnl_krw"] == -282
     assert report["entry_funnel"]["budget_pass_to_submitted_rate_pct"] == 5.0
