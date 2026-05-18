@@ -1426,6 +1426,62 @@ def test_daily_threshold_cycle_keeps_sim_completed_out_of_family_candidate_input
     assert sizing["sample"]["normal_completed_summary"]["avg_profit_rate"] == -0.4
 
 
+def test_daily_threshold_cycle_joins_sim_post_sell_mfe_mae(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "POST_SELL_DIR", tmp_path)
+    (tmp_path / "sim_post_sell_evaluations_2026-05-18.jsonl").write_text(
+        json.dumps(
+            {
+                "post_sell_id": "SIMPOST1",
+                "sim_record_id": "SIM-005950-1",
+                "sim_parent_record_id": "PARENT-1",
+                "stock_code": "005950",
+                "stock_name": "이수화학",
+                "outcome": "MISSED_UPSIDE",
+                "profit_rate": -2.54,
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+                "metrics_10m": {"mfe_pct": 4.45, "mae_pct": -0.47, "close_ret_pct": 3.9},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    sim_event = {
+        "event_type": "pipeline_event",
+        "pipeline": "HOLDING_PIPELINE",
+        "stage": "scalp_sim_sell_order_assumed_filled",
+        "stock_name": "이수화학",
+        "stock_code": "005950",
+        "emitted_date": "2026-05-18",
+        "emitted_at": "2026-05-18T10:00:00",
+        "fields": {
+            "simulation_book": "scalp_ai_buy_all",
+            "actual_order_submitted": "False",
+            "sim_record_id": "SIM-005950-1",
+            "sim_parent_record_id": "PARENT-1",
+            "profit_rate": "-2.54",
+            "buy_price": "10000",
+            "assumed_fill_price": "9746",
+            "qty": "1",
+        },
+    }
+
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-05-18",
+        pipeline_loader=lambda target_date: [sim_event] if target_date == "2026-05-18" else [],
+        completed_rows_loader=lambda start_date, end_date: [],
+    )
+
+    join = report["scalp_simulator"]["post_sell_join"]
+    assert join["joined_completed"] == 1
+    assert join["pending_completed"] == 0
+    assert join["outcome_counts"]["MISSED_UPSIDE"] == 1
+    assert join["avg_mfe_10m_pct"] == 4.45
+    assert join["runtime_effect"] is False
+    assert join["decision_authority"] == "sim_equal_weight_observation_only"
+
+
 def test_statistical_action_weight_reports_eligible_but_not_chosen(tmp_path, monkeypatch):
     monkeypatch.setattr(report_mod, "POST_SELL_DIR", tmp_path)
     (tmp_path / "post_sell_evaluations_2026-04-30.jsonl").write_text(

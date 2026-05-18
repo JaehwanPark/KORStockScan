@@ -48,6 +48,7 @@ from src.engine.sniper_entry_state import ENTRY_LOCK, move_orders_to_terminal
 from src.engine.sniper_strength_momentum import evaluate_scalping_strength_momentum
 from src.engine.sniper_strength_shadow_feedback import record_shadow_candidate
 from src.engine.sniper_gatekeeper_replay import record_gatekeeper_snapshot
+from src.engine.sniper_post_sell_feedback import record_sim_post_sell_candidate
 from src.engine.sniper_dynamic_thresholds import (
     estimate_turnover_hint,
     get_dynamic_scalp_thresholds,
@@ -2154,6 +2155,23 @@ def _complete_scalp_simulated_sell(
             runtime_effect="simulated_completed_only",
         ),
     )
+    try:
+        record_sim_post_sell_candidate(
+            sim_record_id=stock.get("sim_record_id"),
+            sim_parent_record_id=stock.get("sim_parent_record_id"),
+            stock=stock,
+            code=code,
+            sell_time=datetime.fromtimestamp(float(now_ts)),
+            buy_price=stock.get("buy_price"),
+            sell_price=fill_price,
+            profit_rate=simulated_profit_rate,
+            buy_qty=buy_qty,
+            exit_rule=exit_rule or stock.get("last_exit_rule") or "-",
+            sell_reason_type=sell_reason_type,
+            trigger_profit_rate=profit_rate,
+        )
+    except Exception as exc:
+        log_error(f"[SCALP_SIM_POST_SELL] candidate record failed: {exc}")
     persist_scalp_simulator_state()
     return True
 

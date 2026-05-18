@@ -36,6 +36,7 @@ def _reset_state(monkeypatch, tmp_path):
     monkeypatch.setattr(state_handlers, "ALERTED_STOCKS", set())
     monkeypatch.setattr(state_handlers, "LAST_LOG_TIMES", {})
     monkeypatch.setattr(state_handlers, "SCALP_SIM_STATE_PATH", tmp_path / "scalp_live_sim_state.json")
+    monkeypatch.setattr(state_handlers, "record_sim_post_sell_candidate", lambda **kwargs: None)
     captured_pipeline_events = []
     monkeypatch.setattr(
         state_handlers,
@@ -547,10 +548,16 @@ def test_scalp_simulator_preset_tp_sell_does_not_call_real_sell(monkeypatch):
 
 def test_scalp_simulator_sell_profit_uses_assumed_fill_price(monkeypatch):
     holding_logs = []
+    sim_post_sell_candidates = []
     monkeypatch.setattr(
         state_handlers,
         "_log_holding_pipeline",
         lambda stock, code, stage, **fields: holding_logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "record_sim_post_sell_candidate",
+        lambda **kwargs: sim_post_sell_candidates.append(kwargs),
     )
     stock = {
         "name": "TEST",
@@ -588,6 +595,10 @@ def test_scalp_simulator_sell_profit_uses_assumed_fill_price(monkeypatch):
     event = next(fields for stage, fields in holding_logs if stage == "scalp_sim_sell_order_assumed_filled")
     assert event["profit_rate"] == f"{expected_profit:+.2f}"
     assert event["trigger_profit_rate"] == f"{state_handlers.calculate_net_profit_rate(10_000, 10_150):+.2f}"
+    assert len(sim_post_sell_candidates) == 1
+    assert sim_post_sell_candidates[0]["sim_record_id"] == "SIM-1"
+    assert sim_post_sell_candidates[0]["sell_price"] == 10_130
+    assert sim_post_sell_candidates[0]["profit_rate"] == expected_profit
 
 
 def test_scalp_simulator_scale_in_does_not_call_real_buy(monkeypatch):

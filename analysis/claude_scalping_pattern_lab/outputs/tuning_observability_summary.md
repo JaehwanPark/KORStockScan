@@ -1,7 +1,7 @@
 # Tuning Observability Summary
 
 - target_date: `2026-05-15`
-- analysis_period: `2026-04-21 ~ 2026-05-15`
+- analysis_period: `2026-05-15 ~ 2026-05-15`
 
 ## Entry Funnel
 

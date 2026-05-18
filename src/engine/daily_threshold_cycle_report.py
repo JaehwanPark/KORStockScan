@@ -1889,6 +1889,35 @@ def _load_post_sell_candidate_by_record_id(target_date: str | None) -> dict[str,
     return rows
 
 
+def _load_sim_post_sell_evaluation_by_sim_id(target_date: str | None) -> dict[str, dict]:
+    if not target_date:
+        return {}
+    path = POST_SELL_DIR / f"sim_post_sell_evaluations_{target_date}.jsonl"
+    if not path.exists():
+        return {}
+    rows: dict[str, dict] = {}
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            for key in (
+                payload.get("sim_record_id"),
+                payload.get("sim_parent_record_id"),
+                payload.get("post_sell_id"),
+            ):
+                if key in (None, "", "-"):
+                    continue
+                rows[str(key)] = payload
+    return rows
+
+
 def _post_sell_metric(row: dict | None, horizon: str, key: str) -> float | None:
     if not isinstance(row, dict):
         return None
@@ -2565,7 +2594,73 @@ def _completed_by_source_summary(real_rows: list[dict], sim_rows: list[dict]) ->
     }
 
 
-def _scalp_simulator_event_summary(events: list[dict], sim_completed_rows: list[dict] | None = None) -> dict:
+def _scalp_simulator_post_sell_join_summary(
+    *,
+    target_date: str | None,
+    completed_rows: list[dict],
+) -> dict:
+    evaluations = _load_sim_post_sell_evaluation_by_sim_id(target_date)
+    joined: list[dict] = []
+    pending = 0
+    for row in completed_rows or []:
+        keys = [
+            str(row.get("sim_record_id") or "").strip(),
+            str(row.get("sim_parent_record_id") or "").strip(),
+        ]
+        evaluation = next((evaluations.get(key) for key in keys if key and evaluations.get(key)), None)
+        if not evaluation:
+            pending += 1
+            continue
+        metrics_10m = evaluation.get("metrics_10m") if isinstance(evaluation.get("metrics_10m"), dict) else {}
+        joined.append(
+            {
+                "stock_code": row.get("stock_code") or evaluation.get("stock_code"),
+                "stock_name": row.get("stock_name") or evaluation.get("stock_name"),
+                "sim_record_id": row.get("sim_record_id") or evaluation.get("sim_record_id"),
+                "profit_rate": _safe_float(row.get("profit_rate"), None),
+                "outcome": str(evaluation.get("outcome") or "NEUTRAL"),
+                "mfe_10m_pct": _safe_float(metrics_10m.get("mfe_pct"), 0.0),
+                "mae_10m_pct": _safe_float(metrics_10m.get("mae_pct"), 0.0),
+                "close_10m_pct": _safe_float(metrics_10m.get("close_ret_pct"), 0.0),
+            }
+        )
+    outcome_counts = Counter(str(item.get("outcome") or "NEUTRAL").upper() for item in joined)
+    mfe_values = [_safe_float(item.get("mfe_10m_pct"), None) for item in joined]
+    mae_values = [_safe_float(item.get("mae_10m_pct"), None) for item in joined]
+    close_values = [_safe_float(item.get("close_10m_pct"), None) for item in joined]
+    mfe_values = [value for value in mfe_values if value is not None]
+    mae_values = [value for value in mae_values if value is not None]
+    close_values = [value for value in close_values if value is not None]
+    return {
+        "join_status": "sim_record_id_to_sim_post_sell_evaluations_after_postclose",
+        "candidate_artifact": f"data/post_sell/sim_post_sell_candidates_{target_date}.jsonl" if target_date else None,
+        "evaluation_artifact": f"data/post_sell/sim_post_sell_evaluations_{target_date}.jsonl" if target_date else None,
+        "completed_sample": len(completed_rows or []),
+        "joined_completed": len(joined),
+        "pending_completed": int(pending),
+        "outcome_counts": dict(outcome_counts),
+        "avg_mfe_10m_pct": round(_avg(mfe_values), 4) if mfe_values else None,
+        "avg_mae_10m_pct": round(_avg(mae_values), 4) if mae_values else None,
+        "avg_close_10m_pct": round(_avg(close_values), 4) if close_values else None,
+        "runtime_effect": False,
+        "decision_authority": "sim_equal_weight_observation_only",
+        "forbidden_uses": [
+            "threshold mutation",
+            "order guard mutation",
+            "provider change",
+            "bot restart",
+            "broker order submit",
+        ],
+        "examples": joined[:5],
+    }
+
+
+def _scalp_simulator_event_summary(
+    events: list[dict],
+    sim_completed_rows: list[dict] | None = None,
+    *,
+    target_date: str | None = None,
+) -> dict:
     sim_events = [event for event in events or [] if _is_scalp_sim_event(event)]
     stage_counts = Counter(str(event.get("stage") or "-") for event in sim_events)
     completed_rows = sim_completed_rows if sim_completed_rows is not None else _extract_scalp_sim_completed_rows(events)
@@ -2592,6 +2687,10 @@ def _scalp_simulator_event_summary(events: list[dict], sim_completed_rows: list[
         "scale_in_filled": int(stage_counts.get("scalp_sim_scale_in_order_assumed_filled", 0)),
         "scale_in_unfilled": int(stage_counts.get("scalp_sim_scale_in_order_unfilled", 0)),
         "completed_profit_summary": _completed_profit_summary(completed_rows or []),
+        "post_sell_join": _scalp_simulator_post_sell_join_summary(
+            target_date=target_date,
+            completed_rows=completed_rows or [],
+        ),
     }
 
 
@@ -6697,6 +6796,7 @@ def build_cumulative_threshold_cycle_report(
         label: _scalp_simulator_event_summary(
             events_by_window.get(label, []),
             sim_completed_by_window.get(label, []),
+            target_date=target_date,
         )
         for label in events_by_window
     }
@@ -7009,7 +7109,11 @@ def build_daily_threshold_cycle_report(
             "event_count_same_day": len(event_windows["same_day"]),
         },
         "completed_by_source": _completed_by_source_summary(real_completed_rows, sim_completed_rows),
-        "scalp_simulator": _scalp_simulator_event_summary(event_windows["same_day"], same_day_sim_completed_rows),
+        "scalp_simulator": _scalp_simulator_event_summary(
+            event_windows["same_day"],
+            same_day_sim_completed_rows,
+            target_date=target_date,
+        ),
         "source_flags": {
             "profit_basis": "real COMPLETED + valid profit_rate; scalp_sim completed rows are split into completed_by_source/scalp_simulator only",
             "real_family_candidate_authority": "real_only",

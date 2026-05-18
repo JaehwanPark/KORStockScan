@@ -1,85 +1,84 @@
 {
-  "bundle_as_of": "2026-05-14T22:20:16Z",
+  "bundle_as_of": "2026-05-17T22:20:16Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 7501.24,
-    "prev_value": 7444.25,
-    "change": 56.99,
-    "change_pct": 0.77,
-    "as_of": "2026-05-14T20:30:00Z",
-    "source": "Morningstar / Dow Jones Market Data"
+    "value": 7408.5,
+    "prev_value": 7501.24,
+    "change": -92.74,
+    "change_pct": -1.24,
+    "as_of": "2026-05-15T20:00:00Z",
+    "source": "Investing.com"
   },
   "nasdaq": {
-    "name": "NASDAQ",
-    "value": 26635.22,
-    "prev_value": 26402.34,
-    "change": 232.88,
-    "change_pct": 0.88,
-    "as_of": "2026-05-14T20:31:00Z",
-    "source": "Morningstar / Dow Jones Market Data"
+    "name": "NASDAQ Composite",
+    "value": 26225.14,
+    "prev_value": 26635.22,
+    "change": -410.08,
+    "change_pct": -1.54,
+    "as_of": "2026-05-15T20:00:00Z",
+    "source": "Morningstar"
   },
   "vix": {
     "name": "VIX",
-    "value": 17.45,
-    "prev_value": 17.87,
-    "change": -0.42,
-    "change_pct": -2.35,
-    "as_of": "2026-05-14T22:03:00Z",
-    "source": "Cboe Global Markets"
+    "value": 18.43,
+    "prev_value": 17.26,
+    "change": 1.17,
+    "change_pct": 6.78,
+    "as_of": "2026-05-15T20:00:00Z",
+    "source": "CBOE"
   },
   "us10y": {
-    "name": "US 10-Year Treasury Yield",
-    "value": 4.46,
-    "prev_value": 4.48,
-    "change": -0.02,
-    "change_pct": -0.45,
-    "as_of": "2026-05-14T22:20:16Z",
-    "source": "MacroMicro"
+    "name": "US 10Y Treasury Yield",
+    "value": 4.6,
+    "prev_value": 4.49,
+    "change": 0.11,
+    "change_pct": null,
+    "as_of": "2026-05-15T20:00:00Z",
+    "source": "Trading Economics"
   },
   "brent": {
     "name": "Brent Crude",
-    "value": 106.51,
-    "prev_value": 105.63,
-    "change": 0.88,
-    "change_pct": 0.83,
-    "as_of": "2026-05-14T22:20:16Z",
-    "source": "Trading Economics"
+    "value": 109.26,
+    "prev_value": 105.72,
+    "change": 3.54,
+    "change_pct": 3.35,
+    "as_of": "2026-05-15T21:00:00Z",
+    "source": "Investing.com"
   },
   "headlines": [
     {
-      "title": "China's Xi warns Trump about 'conflicts' if Taiwan isn't 'handled properly' during Beijing summit",
-      "source": "CBS News",
-      "published_at": "2026-05-14T02:20:00Z",
-      "url": "https://www.cbsnews.com"
+      "title": "Oxford Economics: U.S.-Israeli war on Iran deepens global economic fragmentation",
+      "source": "Syrian Arab News Agency (SANA)",
+      "published_at": "2026-05-17T00:00:00Z",
+      "url": ""
     },
     {
-      "title": "JP Morgan Warns Oil Could Average $151 in Q4 if Strait of Hormuz remains disrupted",
-      "source": "Rigzone",
-      "published_at": "2026-05-14T12:35:00Z",
-      "url": "https://www.rigzone.com"
+      "title": "China Says Trump Visit Trade Deals Are Only Preliminary",
+      "source": "Modern Diplomacy",
+      "published_at": "2026-05-16T00:00:00Z",
+      "url": ""
     },
     {
-      "title": "US filings for jobless benefits hits 211,000 as the war in Iran drags on, clouding economic forecast",
-      "source": "AP News / CityNews",
-      "published_at": "2026-05-14T13:39:13Z",
-      "url": "https://halifax.citynews.ca"
+      "title": "India-US Trade Tensions Cloud Modi's Solar Energy and AI Ambitions",
+      "source": "Fair Observer",
+      "published_at": "2026-05-17T10:06:00Z",
+      "url": ""
     },
     {
-      "title": "War, inflation and Trump's tariffs have shaken the US. Why does the stock market keep going up?",
-      "source": "The Guardian",
-      "published_at": "2026-05-14T10:00:00Z",
-      "url": "https://www.theguardian.com"
+      "title": "Higher Oil Prices Send Shivers Through Bond Market",
+      "source": "Transport Topics",
+      "published_at": "2026-05-15T12:20:00Z",
+      "url": ""
     },
     {
-      "title": "S&P 500, Nasdaq post all-time closing highs as Nvidia also reaches record",
-      "source": "Reuters",
-      "published_at": "2026-05-14T20:32:00Z",
-      "url": "https://www.reuters.com"
+      "title": "How China's electric vehicles turn crisis into climate opportunity",
+      "source": "China Daily HK",
+      "published_at": "2026-05-17T09:21:00Z",
+      "url": ""
     }
   ],
   "notes": [
-    "U.S. markets recorded consecutive all-time highs driven by AI sector momentum, overlooking sticky inflation and Middle East geopolitical tensions.",
-    "Brent Crude remains elevated above $106/bbl amid ongoing conflicts in the Strait of Hormuz and tight global supply.",
-    "The U.S. 10-year Treasury yield stabilized near 4.46% following higher-than-expected inflation metrics."
+    "Market data reflects the close on Friday, May 15, 2026.",
+    "US 10Y Yield values are in percentage points; change_pct is set to null as basis point changes are standard."
   ]
 }

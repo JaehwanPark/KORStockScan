@@ -28,6 +28,8 @@
 | `data/report/threshold_cycle_YYYY-MM-DD.json` | `daily_threshold_cycle_report` | `threshold_cycle_preopen_apply`, operator review | `R1_daily_report` | `ThresholdOpsTransition0506` | apply candidate, trade lifecycle attribution, calibration candidates, safety guard, calibration trigger, post-apply attribution, warnings |
 | `data/report/threshold_cycle_calibration/threshold_cycle_calibration_YYYY-MM-DD_{intraday,postclose}.json` | `daily_threshold_cycle_report` | operator review, next preopen manifest review | `R4_preopen_apply_candidate` artifact | `ThresholdCalibrationLoop0508`, `EfficientTradeoffCalibration0508` | calibration source bundle, candidate state, safety guard, no runtime mutation |
 | `data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_YYYY-MM-DD_{intraday,postclose}.{json,md}` | `daily_threshold_cycle_report` via threshold cron wrappers | next preopen auto bounded apply guard | `R4_preopen_apply_candidate` support artifact | `ThresholdAICorrectionCron0508`, `ThresholdUnattendedApply0508` | OpenAI correction proposal, strict schema parse, family bounds/max-step guard, sample-window guard, AI 단독 runtime_change=false |
+| `data/post_sell/sim_post_sell_candidates_YYYY-MM-DD.jsonl` | `sniper_state_handlers.record_sim_post_sell_candidate`, `sniper_post_sell_feedback --backfill-sim-candidates` | `sniper_post_sell_feedback --evaluate-sim`, `daily_threshold_cycle_report` | `R1_daily_report` sim post-exit source | `ScalpSimPostSellMFECheck0518` | scalp sim sell 완료 후 forward MFE/MAE 후보. `actual_order_submitted=false`, `broker_order_forbidden=true`, `decision_authority=sim_equal_weight_observation_only`, 실주문 post-sell candidate와 파일 분리 |
+| `data/post_sell/sim_post_sell_evaluations_YYYY-MM-DD.jsonl` | `sniper_post_sell_feedback --evaluate-sim` | `daily_threshold_cycle_report`, `threshold_cycle_ev_report`, pattern lab/workorder source via EV summary | `R1_daily_report -> R6_post_apply_attribution` sim post-exit source | `ScalpSimPostSellMFECheck0518` | `sim_record_id`/`sim_parent_record_id`로 `scalp_sim_sell_order_assumed_filled`와 join한다. `primary_decision_metric=sim_post_decision_mfe_10m_pct`, `runtime_effect=false`; threshold/order/provider/bot/broker submit 직접 변경 금지 |
 | `data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_YYYY-MM-DD.{json,md}` | `scalping_pattern_lab_automation` | daily EV report, future implementation order queue | `R6_post_apply_attribution` support artifact | `PatternLabAutomation0508` | Gemini/Claude freshness, consensus findings, existing family inputs, auto family candidates(`allowed_runtime_apply=false`), code improvement orders(`runtime_effect=false`) |
 | `data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_YYYY-MM-DD.{json,md}` | `swing_pattern_lab_automation` | daily EV report, code improvement workorder, swing approval/source-quality review | `R6_post_apply_attribution` support artifact | `SwingPatternLabAutomation0512` | DeepSeek payload schema, `analysis_window.start == target_date == end`, data-quality warnings, `source_quality_blocked_families`, sim/probe provenance, `runtime_effect=false` orders |
 | `data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_YYYY-MM-DD.{json,md}` | `pattern_lab_currentness_audit` | code improvement workorder, threshold EV, propagation audit, runtime approval summary | `R6_post_apply_attribution` source-quality artifact | `PatternLabCurrentnessAudit0518` | lab code/README/output schema/metric contract/forbidden wording/source mode/stale-output risk, `code_improvement_orders.runtime_effect=false`, `allowed_runtime_apply=false`, no repo auto-patch |
@@ -68,17 +70,18 @@
 
 1. `swing_daily_simulation_report`를 먼저 생성하고, `swing_lifecycle_audit`/`swing_runtime_approval`은 해당 JSON/Markdown이 존재하고 JSON 검증이 끝난 뒤에만 실행한다.
 2. `daily_threshold_cycle_report`는 immutable snapshot/checkpoint를 우선 사용한다. 같은 날짜 retry는 기존 snapshot/checkpoint를 재사용하고 중복 snapshot retention을 정리한다.
-3. scalping/swing pattern lab automation 이후 `pattern_lab_currentness_audit`가 lab code/README/schema/source-mode/stale-output 위험을 `runtime_effect=false` currentness workorder 후보로 고정한다.
-4. `pipeline_event_verbosity_report`가 raw volume과 V1/V2 producer summary parity를 생성한다. 이 artifact는 workorder source-quality/ops 입력이며 threshold/order/provider/bot restart 권한이 없다.
-5. `codebase_performance_workorder_report`가 코드베이스 성능점검 문서를 workorder source artifact로 변환한다. 이 artifact는 user-instructed performance backlog이며 전략 로직/데이터품질/튜닝축 변경 권한이 없다.
-6. `threshold_cycle_ev` pre-pass를 생성해 workorder source로 사용한다.
-7. `build_code_improvement_workorder`가 pattern lab currentness audit를 포함한 source bundle에서 code improvement JSON/Markdown을 생성한다.
-8. `threshold_cycle_ev` post-pass를 다시 생성해 workorder summary와 source-quality blocker를 refresh한다.
-9. `pattern_lab_propagation_audit`가 lab automation -> currentness -> workorder -> threshold EV -> runtime summary source link를 점검한다. 같은 wrapper에서는 runtime summary가 아직 생성 전일 수 있으므로 propagation audit 결과를 `threshold_cycle_ev`에 한 번 더 refresh한 뒤 runtime summary가 소비한다.
-10. `runtime_approval_summary`는 refreshed EV/workorder/audit가 닫힌 뒤에만 실행한다.
-11. `plan_rebase_daily_renewal`은 `runtime_approval_summary` 이후 Plan Rebase/prompt/AGENTS 갱신 제안 artifact만 만든다. 기본은 `proposal_only`이며 `document_mutation_allowed=false`, `runtime_mutation_allowed=false`다.
-12. 다음 영업일 checklist를 생성한다.
-13. `threshold_cycle_postclose_verification`이 최신 run의 predecessor wait/fail/timeout, 필수 audit artifact, DONE marker flag, downstream source link, workorder lineage를 기록한다.
+3. compact threshold event 수집 직후 `sniper_post_sell_feedback --backfill-sim-candidates --evaluate-sim`을 실행해 `scalp_sim_sell_order_assumed_filled` 표본을 `sim_post_sell_candidates/evaluations`에 분리 기록한다. 이 단계는 report-only이며 기존 실주문 `post_sell_candidates/evaluations`를 오염시키지 않는다.
+4. scalping/swing pattern lab automation 이후 `pattern_lab_currentness_audit`가 lab code/README/schema/source-mode/stale-output 위험을 `runtime_effect=false` currentness workorder 후보로 고정한다.
+5. `pipeline_event_verbosity_report`가 raw volume과 V1/V2 producer summary parity를 생성한다. 이 artifact는 workorder source-quality/ops 입력이며 threshold/order/provider/bot restart 권한이 없다.
+6. `codebase_performance_workorder_report`가 코드베이스 성능점검 문서를 workorder source artifact로 변환한다. 이 artifact는 user-instructed performance backlog이며 전략 로직/데이터품질/튜닝축 변경 권한이 없다.
+7. `threshold_cycle_ev` pre-pass를 생성해 workorder source로 사용한다.
+8. `build_code_improvement_workorder`가 pattern lab currentness audit를 포함한 source bundle에서 code improvement JSON/Markdown을 생성한다.
+9. `threshold_cycle_ev` post-pass를 다시 생성해 workorder summary와 source-quality blocker를 refresh한다.
+10. `pattern_lab_propagation_audit`가 lab automation -> currentness -> workorder -> threshold EV -> runtime summary source link를 점검한다. 같은 wrapper에서는 runtime summary가 아직 생성 전일 수 있으므로 propagation audit 결과를 `threshold_cycle_ev`에 한 번 더 refresh한 뒤 runtime summary가 소비한다.
+11. `runtime_approval_summary`는 refreshed EV/workorder/audit가 닫힌 뒤에만 실행한다.
+12. `plan_rebase_daily_renewal`은 `runtime_approval_summary` 이후 Plan Rebase/prompt/AGENTS 갱신 제안 artifact만 만든다. 기본은 `proposal_only`이며 `document_mutation_allowed=false`, `runtime_mutation_allowed=false`다.
+13. 다음 영업일 checklist를 생성한다.
+14. `threshold_cycle_postclose_verification`이 최신 run의 predecessor wait/fail/timeout, 필수 audit artifact, DONE marker flag, downstream source link, workorder lineage를 기록한다.
 
 2026-05-12 기준 검증 결과는 `threshold_cycle_postclose_verification_2026-05-12` `status=pass`, `predecessor_wait_count=0`, `timeout_count=0`, workorder `generation_id=2026-05-12-5abbfc31939d`, `source_hash=5abbfc31939dffedcaab60313d1641234dbc026363b0f2842778d63b45f9440a`, `lineage.new_order_ids=[]`, `lineage.removed_order_ids=[]`, `lineage.decision_changed_order_ids=[]`다.
 

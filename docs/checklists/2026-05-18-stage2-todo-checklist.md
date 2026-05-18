@@ -55,6 +55,41 @@
 - 금지 확인: 장중 threshold mutation, provider 변경, order guard 변경, bot restart, broker order submit, 스윙 dry-run guard 변경을 수행하지 않았다.
 - 다음 액션: 12:05 이후 `threshold_cycle_calibration_intraday` `[DONE]` marker와 `threshold_cycle_ai_review_2026-05-18_intraday.md` 생성을 다시 확인한다. Project/Calendar 동기화는 표준 명령으로 사용자가 수행한다.
 
+### SwingOneShareProbeAndSimulationMidcheck0518 확인 기록
+
+- checked_at: `2026-05-18 09:48 KST`
+- 판정: `pass_probe_env_allowed_but_dry_run_guarded`
+- 대상: 스윙 1주 probe 허용 env 중간점검, 스캘핑/스윙 시뮬레이션 중간점검
+- 스윙 1주 env: `threshold_runtime_env_2026-05-18.json`은 selected family=`swing_one_share_real_canary_phase0`를 포함하고 `KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_ENABLED=true`, allowed_codes=`000100,032830,136490`, max_qty=`1`, max_new_entries_per_day=`1`, max_open_positions=`3`, max_total_notional_krw=`300000`, require_approval_artifact=`true`를 선언한다. approval artifact `swing_one_share_real_canary_2026-05-15.json`은 approved=`true`, target_date=`2026-05-18`다.
+- guard 판정: 같은 runtime env가 `KORSTOCKSCAN_SWING_LIVE_ORDER_DRY_RUN_ENABLED=true`를 유지하므로, 1주 canary 허용은 승인/대상/한도 provenance 확인으로만 보고 스윙 live order 제출 허용으로 해석하지 않는다. 주문 로그 검색에서도 오늘 1주 canary 실주문 제출 증적은 확인되지 않았다.
+- 스윙 probe/sim: `pipeline_events_2026-05-18.jsonl` 기준 swing 관련 stage는 `blocked_swing_score_vpw` 47704건, `blocked_swing_gap` 2690건, `swing_probe_discarded` 1301건, `swing_probe_entry_candidate` 25건, `swing_probe_holding_started` 25건, `swing_probe_exit_signal` 27건, `swing_probe_sell_order_assumed_filled` 27건, `swing_sim_scale_in_order_assumed_filled` 12건, `swing_probe_scale_in_order_assumed_filled` 12건이다. swing 관련 `actual_order_submitted=False`는 1621건이고, `runtime_effect`는 `in_memory_probe_only`/`counterfactual_only`/`in_memory_completed_only`로 분리됐다.
+- 스캘핑 sim: `threshold_events_2026-05-18.jsonl` 기준 `scalp_sim_entry_ai_price_applied` 1건, `scalp_sim_entry_armed` 1건, `scalp_sim_buy_order_virtual_pending` 1건, `scalp_sim_buy_order_assumed_filled` 1건, `scalp_sim_holding_started` 1건, `scalp_sim_sell_order_assumed_filled` 1건, `scalp_sim_duplicate_buy_signal` 10건이다. `actual_order_submitted=False` 16건, `simulation_book=scalp_ai_buy_all`, `calibration_authority=equal_weight`, `budget_authority=sim_virtual_not_real_orderable_amount`가 유지됐다.
+- 상태 파일: `data/runtime/swing_intraday_probe_state.json`은 updated_at=`2026-05-18T09:45:11`, open_count=`0`, completed_count=`0`로 저장됐다. 장중 event stream에는 과거 복원/폐기/assumed fill provenance가 있지만 현재 상태 파일에는 active probe가 없다.
+- 검증: `bash deploy/run_error_detection.sh full` 결과 summary_severity=`pass`, detector_count=`7`, process/artifact/resource/lock detector는 pass이고 `threshold_cycle_calibration_intraday`, `swing_live_dry_run_status` 등 미래 window는 `not_yet_due`로 분리됐다.
+- 금지 확인: 장중 threshold mutation, 스윙 dry-run guard 변경, 실주문 cap 해제, broker order submit, provider 변경, bot restart를 수행하지 않았다.
+- 다음 액션: 15:45 이후 `swing_live_dry_run_status`와 장후 `swing_lifecycle_audit`에서 1주 canary 대상 코드별 selected/blocked/receipt provenance를 다시 확인한다. 스캘핑/스윙 sim 손익은 장후 `threshold_cycle_ev`의 real/sim/combined split에서만 판정한다.
+
+### ScalpingSimEVMidcheck0518 확인 기록
+
+- checked_at: `2026-05-18 09:54 KST`
+- 판정: `warning_hold_sample_negative_ev`
+- 대상: 스캘핑 `scalp_ai_buy_all` sim EV 중간점검
+- EV 표본: `threshold_events_2026-05-18.jsonl` 기준 `scalp_sim_sell_order_assumed_filled` completed 표본은 1건이며, 종목은 `이수화학(005950)`, `profit_rate=-2.54`다. `COMPLETED + valid profit_rate`만 EV 표본으로 인정했고 open/pending/duplicate context는 EV에서 제외했다.
+- metric: `equal_weight_avg_profit_pct=-2.54`, `simple_sum_profit_pct=-2.54`, `diagnostic_win_rate_pct=0.0`, completed_count=`1`, duplicate_signal_count=`10`, active_or_pending_context_count=`3`이다. 표본 1건이므로 hard fail/pass가 아니라 `hold_sample` 성격의 negative 중간 관찰로 둔다.
+- provenance: 스캘핑 sim event 16건 모두 `actual_order_submitted=False`이고, `simulation_book=scalp_ai_buy_all`, `calibration_authority=equal_weight`, `budget_authority=sim_virtual_not_real_orderable_amount`, `fill_source=best_ask`, `would_limit_fill=False`가 확인됐다. 이는 broker execution 품질이나 실주문 전환 근거가 아니다.
+- Sentinel context: `buy_funnel_sentinel_2026-05-18.json`은 primary=`UPSTREAM_AI_THRESHOLD`, `holding_exit_sentinel_2026-05-18.json`은 primary=`HOLD_DEFER_DANGER`/secondary=`AI_HOLDING_OPS`로 fresh하게 생성됐지만 둘 다 `live_runtime_effect=false`이며 threshold/order/bot 변경 권한이 없다.
+- 검증: `bash deploy/run_error_detection.sh full` 결과 summary_severity=`pass`, detector_count=`7`, process/artifact/resource/lock detector는 pass이고 `threshold_cycle_calibration_intraday`, postclose reports 등 미래 window는 `not_yet_due`로 분리됐다.
+- 금지 확인: 장중 threshold mutation, score threshold 완화, fallback 재개, order guard 변경, provider 변경, bot restart, broker order submit을 수행하지 않았다.
+- 다음 액션: 12:05 이후 intraday calibration이 생성되면 현재 negative sim 표본이 source-quality/coverage warning으로만 라우팅되는지 확인한다. 최종 EV 판정은 장후 `threshold_cycle_ev_2026-05-18`의 real/sim/combined split에서 completed 표본만으로 다시 닫는다.
+
+### ScalpSimPostSellMFEInstrumentation0518 구현 기록
+
+- checked_at: `2026-05-18 10:25 KST`
+- 판정: `implemented_report_only_sim_post_sell_join`
+- 근거: `scalp_sim_sell_order_assumed_filled` 표본을 실주문 `post_sell_candidates/evaluations`와 분리해 `sim_post_sell_candidates/evaluations`에 기록하도록 구현했다. 2026-05-18 이수화학(005950) 표본은 `sim_record_id=SCALPSIM-005950-1779063285868-171e63`, `profit_rate=-2.54`, `actual_order_submitted=false`, `broker_order_forbidden=true`로 backfill/evaluate 됐다. `threshold_cycle_ev`의 `scalp_simulator.post_sell_join`은 `joined_completed=1`, `pending_completed=0`, 10분 기준 `GOOD_EXIT`, `mfe_10m=-0.475`, `mae_10m=-4.179`, `close_10m=-2.754`를 노출한다. 단, 30분/60분 forward에서는 `mfe_30m=3.324`, `mfe_60m=8.927`로 장후 long-horizon rebound forensic 확인 대상이다.
+- 영향도: 기존 real `post_sell_feedback` 파일과 DB/주문/threshold/provider 경로는 변경하지 않았다. postclose wrapper는 compact threshold event 수집 직후 sim post-sell backfill/evaluate를 수행하고, `daily_threshold_cycle_report`/`threshold_cycle_ev`가 join summary를 읽는다. pattern lab과 code-improvement workorder는 EV summary를 통해서만 간접 소비하며 runtime mutation 권한은 없다.
+- 다음 액션: 장후 `[ScalpSimPostSellMFECheck0518]`에서 10m GOOD_EXIT와 30m/60m rebound를 분리해 `good_cut_after_rebound_check` 또는 `mfe_positive_missed_upside_long_horizon`으로 닫는다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-05-15` postclose -> `2026-05-18`)
 
@@ -114,6 +149,13 @@
   - 판정 기준: real/sim/combined split, selected/blocked family, runtime_change, warning을 분리해 확인한다.
   - 금지: sim/combined EV만으로 broker execution 품질이나 live 전환을 확정하지 않는다.
   - 다음 액션: 다음 장전 apply 입력으로 쓸 수 있는 항목과 hold_sample/freeze 항목을 분리한다.
+
+- [ ] `[ScalpSimPostSellMFECheck0518] 이수화학 scalp sim 손절 후 급등 MFE/MAE join 확인` (`Due: 2026-05-18`, `Slot: POSTCLOSE`, `TimeWindow: 16:35~16:45`, `Track: ScalpingLogic`)
+  - Source: [threshold_events_2026-05-18.jsonl](/home/ubuntu/KORStockScan/data/threshold_cycle/threshold_events_2026-05-18.jsonl), [sim_post_sell_candidates_2026-05-18.jsonl](/home/ubuntu/KORStockScan/data/post_sell/sim_post_sell_candidates_2026-05-18.jsonl), [sim_post_sell_evaluations_2026-05-18.jsonl](/home/ubuntu/KORStockScan/data/post_sell/sim_post_sell_evaluations_2026-05-18.jsonl), [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py), [sniper_post_sell_feedback.py](/home/ubuntu/KORStockScan/src/engine/sniper_post_sell_feedback.py)
+  - 판정 기준: `이수화학(005950)` `scalp_sim_sell_order_assumed_filled` profit_rate=`-2.54` 표본이 post-sell 10m MFE/MAE 또는 missed-upside proxy와 record/sim id로 연결되는지 확인한다.
+  - 금지: 단일 sim 표본 또는 HTS 육안 관찰만으로 stop/threshold/order guard를 장중 변경하지 않는다.
+  - 다음 액션: `post_sell_joined`, `sim_post_sell_gap`, `mfe_positive_missed_upside`, `good_cut_after_rebound_check`, `instrumentation_gap` 중 하나로 닫는다.
+  - 구현 메모: sim 청산 표본은 실주문 `post_sell_candidates/evaluations`와 분리해 `sim_post_sell_candidates/evaluations`로 기록하고, postclose wrapper가 compact event 수집 직후 backfill/evaluate를 수행하도록 갱신했다. `threshold_cycle_ev`는 `scalp_simulator.post_sell_join` 요약을 노출한다.
 
 - [ ] `[CodeImprovementWorkorderReview0518] code improvement workorder 구현 필요 여부 및 Codex 지시 대상 확인` (`Due: 2026-05-18`, `Slot: POSTCLOSE`, `TimeWindow: 16:45~17:00`, `Track: ScalpingLogic`)
   - Source: [code_improvement_workorder_2026-05-15.md](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-15.md), [code_improvement_workorder_2026-05-15.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-15.json)

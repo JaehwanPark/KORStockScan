@@ -693,6 +693,7 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
     code_workorder = report.get("code_improvement_workorder") if isinstance(report.get("code_improvement_workorder"), dict) else {}
     approval_requests = report.get("approval_requests") if isinstance(report.get("approval_requests"), list) else []
     decisions = ((report.get("calibration_outcome") or {}).get("decisions") or []) if isinstance(report.get("calibration_outcome"), dict) else []
+    sim_post_sell = scalp_sim.get("post_sell_join") if isinstance(scalp_sim.get("post_sell_join"), dict) else {}
     lines = [
         f"# Threshold Cycle Daily EV Report - {report.get('date')}",
         "",
@@ -726,6 +727,8 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- submit_revalidation warning/block: `{scalp_sim.get('entry_submit_revalidation_warning')}` / `{scalp_sim.get('entry_submit_revalidation_block')}`",
         f"- scale_in filled/unfilled: `{scalp_sim.get('scale_in_filled')}` / `{scalp_sim.get('scale_in_unfilled')}`",
         f"- completed_profit_summary: `{scalp_sim.get('completed_profit_summary') or {}}`",
+        f"- post_sell_join: joined=`{sim_post_sell.get('joined_completed')}` / pending=`{sim_post_sell.get('pending_completed')}`",
+        f"- post_sell_mfe_mae_10m: mfe=`{sim_post_sell.get('avg_mfe_10m_pct')}`% / mae=`{sim_post_sell.get('avg_mae_10m_pct')}`% / close=`{sim_post_sell.get('avg_close_10m_pct')}`%",
         "",
         "## Missed Probe Counterfactual",
         f"- book: `{missed_probe.get('book') or '-'}` / role: `{missed_probe.get('role') or '-'}`",

@@ -1,3 +1,4 @@
+import json
 import sys
 import types
 from types import SimpleNamespace
@@ -105,6 +106,124 @@ def test_record_and_evaluate_post_sell_feedback(monkeypatch, tmp_path):
     text = feedback_mod.format_post_sell_feedback_summary(summary)
     assert "MISSED_UPSIDE 1" in text
     assert "GOOD_EXIT 1" in text
+
+
+def test_record_and_evaluate_sim_post_sell_feedback_isolated(monkeypatch, tmp_path):
+    monkeypatch.setattr(feedback_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        feedback_mod,
+        "TRADING_RULES",
+        SimpleNamespace(
+            POST_SELL_FEEDBACK_ENABLED=True,
+            POST_SELL_FEEDBACK_EVAL_ENABLED=True,
+            POST_SELL_FEEDBACK_MISSED_UPSIDE_MFE_PCT=0.8,
+            POST_SELL_FEEDBACK_MISSED_UPSIDE_CLOSE_PCT=0.3,
+            POST_SELL_FEEDBACK_GOOD_EXIT_MAE_PCT=-0.6,
+            POST_SELL_FEEDBACK_GOOD_EXIT_CLOSE_PCT=-0.2,
+        ),
+    )
+    feedback_mod._SIM_RECORDED_KEYS.clear()
+
+    candidate = feedback_mod.record_sim_post_sell_candidate(
+        sim_record_id="SIM-005950-1",
+        sim_parent_record_id="PARENT-1",
+        stock={"name": "이수화학", "strategy": "SCALPING", "position_tag": "SCALP_SIM"},
+        code="005950",
+        sell_time="2026-05-18 10:00:30",
+        buy_price=10000,
+        sell_price=9746,
+        profit_rate=-2.54,
+        buy_qty=1,
+        exit_rule="scalp_soft_stop_pct",
+        sell_reason_type="STOP_LOSS",
+    )
+
+    assert candidate is not None
+    assert candidate["runtime_effect"] is False
+    assert candidate["actual_order_submitted"] is False
+    assert candidate["broker_order_forbidden"] is True
+    assert candidate["decision_authority"] == "sim_equal_weight_observation_only"
+    assert "broker order submit" in candidate["forbidden_uses"]
+    assert feedback_mod._candidate_path("2026-05-18").exists() is False
+    assert feedback_mod._sim_candidate_path("2026-05-18").exists() is True
+
+    candle_map = {
+        "005950": [
+            _make_candle("10:01:00", 9800, 9700, 9780),
+            _make_candle("10:02:00", 9900, 9720, 9850),
+            _make_candle("10:03:00", 10050, 9810, 10000),
+            _make_candle("10:04:00", 10120, 9900, 10080),
+            _make_candle("10:05:00", 10150, 9950, 10100),
+            _make_candle("10:06:00", 10180, 10000, 10140),
+            _make_candle("10:07:00", 10160, 10020, 10130),
+            _make_candle("10:08:00", 10140, 10010, 10120),
+            _make_candle("10:09:00", 10130, 10000, 10110),
+            _make_candle("10:10:00", 10120, 9990, 10100),
+        ],
+    }
+    fake_kiwoom = types.SimpleNamespace(
+        get_kiwoom_token=lambda: "dummy",
+        get_minute_candles_ka10080=lambda _token, code, limit=700: candle_map.get(code, []),
+    )
+    monkeypatch.setitem(sys.modules, "src.utils.kiwoom_utils", fake_kiwoom)
+    monkeypatch.setattr(utils_pkg, "kiwoom_utils", fake_kiwoom, raising=False)
+
+    summary = feedback_mod.evaluate_sim_post_sell_candidates("2026-05-18", token="dummy")
+    assert summary.total_candidates == 1
+    assert summary.evaluated_candidates == 1
+    assert summary.outcome_counts.get("MISSED_UPSIDE") == 1
+    evaluations = feedback_mod._load_jsonl(feedback_mod._sim_evaluation_path("2026-05-18"))
+    assert evaluations[0]["sim_record_id"] == "SIM-005950-1"
+    assert evaluations[0]["runtime_effect"] is False
+    assert evaluations[0]["metrics_10m"]["mfe_pct"] > 4.0
+
+
+def test_backfill_sim_post_sell_candidates_is_idempotent(monkeypatch, tmp_path):
+    monkeypatch.setattr(feedback_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        feedback_mod,
+        "TRADING_RULES",
+        SimpleNamespace(
+            POST_SELL_FEEDBACK_ENABLED=True,
+            POST_SELL_FEEDBACK_EVAL_ENABLED=True,
+        ),
+    )
+    feedback_mod._SIM_RECORDED_KEYS.clear()
+    threshold_dir = tmp_path / "threshold_cycle"
+    threshold_dir.mkdir(parents=True)
+    (threshold_dir / "threshold_events_2026-05-18.jsonl").write_text(
+        json.dumps(
+            {
+                "stage": "scalp_sim_sell_order_assumed_filled",
+                "stock_name": "이수화학",
+                "stock_code": "005950",
+                "emitted_at": "2026-05-18T09:16:46",
+                "fields": {
+                    "sim_record_id": "SCALPSIM-1",
+                    "sim_parent_record_id": "6924",
+                    "profit_rate": "-2.54",
+                    "buy_price": "10780",
+                    "assumed_fill_price": "10530",
+                    "qty": "264",
+                    "exit_rule": "scalp_hard_stop_pct",
+                    "sell_reason_type": "LOSS",
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    first = feedback_mod.backfill_sim_post_sell_candidates_from_threshold_events("2026-05-18")
+    second = feedback_mod.backfill_sim_post_sell_candidates_from_threshold_events("2026-05-18")
+
+    assert first["events_seen"] == 1
+    assert first["candidates_created"] == 1
+    assert second["events_seen"] == 1
+    assert second["candidates_created"] == 0
+    candidates = feedback_mod._load_jsonl(feedback_mod._sim_candidate_path("2026-05-18"))
+    assert len(candidates) == 1
 
 
 def test_soft_stop_forensics_report(monkeypatch, tmp_path):

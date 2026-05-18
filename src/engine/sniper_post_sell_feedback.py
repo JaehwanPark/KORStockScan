@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import argparse
 from collections import Counter, defaultdict
 import json
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from src.engine.log_archive_service import load_monitor_snapshot
@@ -19,10 +20,18 @@ from src.utils.logger import log_error, log_info
 
 _WRITE_LOCK = threading.RLock()
 _RECORDED_KEYS: dict[tuple[str, str, str, str], float] = {}
+_SIM_RECORDED_KEYS: dict[tuple[str, str, str, str], float] = {}
 _WS_RETAIN_UNTIL: dict[str, float] = {}
 POST_SELL_REPORT_SCHEMA_VERSION = 3
 POST_SELL_FEEDBACK_HORIZONS_MIN = (1, 3, 5, 10, 20, 30, 60)
 POST_SELL_LONG_HORIZONS_MIN = (20, 30, 60)
+SIM_POST_SELL_FORBIDDEN_USES = [
+    "threshold mutation",
+    "order guard mutation",
+    "provider change",
+    "bot restart",
+    "broker order submit",
+]
 
 
 def _post_sell_dir() -> Path:
@@ -37,6 +46,14 @@ def _candidate_path(target_date: str) -> Path:
 
 def _evaluation_path(target_date: str) -> Path:
     return _post_sell_dir() / f"post_sell_evaluations_{target_date}.jsonl"
+
+
+def _sim_candidate_path(target_date: str) -> Path:
+    return _post_sell_dir() / f"sim_post_sell_candidates_{target_date}.jsonl"
+
+
+def _sim_evaluation_path(target_date: str) -> Path:
+    return _post_sell_dir() / f"sim_post_sell_evaluations_{target_date}.jsonl"
 
 
 def _append_jsonl(path: Path, payload: dict) -> None:
@@ -246,6 +263,103 @@ def record_post_sell_candidate(
             f"[POST_SELL_CANDIDATE] {payload['stock_name']}({payload['stock_code']}) "
             f"sell={payload['sell_price']} ret={payload['profit_rate']:+.2f}% "
             f"exit_rule={payload['exit_rule']} revive={payload['revive']}"
+        )
+        return payload
+
+
+def record_sim_post_sell_candidate(
+    *,
+    sim_record_id=None,
+    sim_parent_record_id=None,
+    stock: dict | None = None,
+    code: str | None = None,
+    sell_time=None,
+    buy_price=0,
+    sell_price=0,
+    profit_rate=0,
+    buy_qty=0,
+    exit_rule: str | None = None,
+    sell_reason_type: str | None = None,
+    trigger_profit_rate=None,
+    strategy: str | None = "SCALPING",
+    source_event_stage: str = "scalp_sim_sell_order_assumed_filled",
+) -> dict | None:
+    if not bool(getattr(TRADING_RULES, "POST_SELL_FEEDBACK_ENABLED", True)):
+        return None
+
+    stock = stock or {}
+    norm_code = str(code or stock.get("code") or "").strip()[:6]
+    if not norm_code:
+        return None
+
+    safe_sell_price = _safe_int(sell_price, 0)
+    if safe_sell_price <= 0:
+        return None
+
+    now = datetime.now()
+    sell_dt = _parse_datetime(sell_time, default=now) or now
+    target_date = sell_dt.strftime("%Y-%m-%d")
+    sell_bucket = _minute_bucket(sell_dt, bucket_min=1)
+    sim_id = str(sim_record_id or stock.get("sim_record_id") or "").strip()
+    sim_parent_id = str(sim_parent_record_id or stock.get("sim_parent_record_id") or "").strip()
+    dedupe_marker = sim_id or sim_parent_id or f"{sell_bucket}:{safe_sell_price}"
+    dedupe_key = (
+        target_date,
+        norm_code,
+        "scalp_sim",
+        dedupe_marker,
+    )
+
+    with _WRITE_LOCK:
+        if dedupe_key in _SIM_RECORDED_KEYS:
+            return None
+
+        payload = {
+            "schema_version": POST_SELL_REPORT_SCHEMA_VERSION,
+            "report_type": "sim_post_sell_candidate",
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "metric_role": "sim_post_sell_mfe_mae_observation",
+            "decision_authority": "sim_equal_weight_observation_only",
+            "window_policy": "same_day_post_sell_forward_window",
+            "sample_floor": "report_only_no_hard_decision",
+            "primary_decision_metric": "sim_post_decision_mfe_10m_pct",
+            "source_quality_gate": "scalp_sim_sell_order_assumed_filled + numeric profit_rate",
+            "forbidden_uses": list(SIM_POST_SELL_FORBIDDEN_USES),
+            "post_sell_id": uuid.uuid4().hex[:16],
+            "recorded_at": now.isoformat(),
+            "signal_date": target_date,
+            "sell_time": sell_dt.strftime("%H:%M:%S"),
+            "sell_bucket": sell_bucket,
+            "stock_code": norm_code,
+            "stock_name": str(stock.get("name", "") or ""),
+            "strategy": str(strategy or stock.get("strategy", "") or "SCALPING"),
+            "position_tag": str(stock.get("position_tag", "") or ""),
+            "buy_price": _safe_int(buy_price, stock.get("buy_price", 0)),
+            "sell_price": safe_sell_price,
+            "profit_rate": round(_safe_float(profit_rate, 0.0), 3),
+            "buy_qty": _safe_int(buy_qty, stock.get("buy_qty", 0)),
+            "exit_rule": str(exit_rule or stock.get("last_exit_rule") or "-"),
+            "sell_reason_type": str(sell_reason_type or "-"),
+            "trigger_profit_rate": round(
+                _safe_float(trigger_profit_rate, _safe_float(profit_rate, 0.0)),
+                3,
+            ),
+            "evaluation_mode": "sim_post_sell_minute_forward",
+            "candidate_source": "scalp_simulator",
+            "simulation_book": "scalp_ai_buy_all",
+            "sim_record_id": sim_id,
+            "sim_parent_record_id": sim_parent_id,
+            "source_event_stage": str(source_event_stage or "scalp_sim_sell_order_assumed_filled"),
+        }
+
+        _append_jsonl(_sim_candidate_path(target_date), payload)
+        _SIM_RECORDED_KEYS[dedupe_key] = now.timestamp()
+        log_info(
+            f"[SIM_POST_SELL_CANDIDATE] {payload['stock_name']}({payload['stock_code']}) "
+            f"sell={payload['sell_price']} ret={payload['profit_rate']:+.2f}% "
+            f"sim_record_id={payload['sim_record_id'] or '-'}"
         )
         return payload
 
@@ -483,6 +597,188 @@ def evaluate_post_sell_candidates(target_date: str, token: str | None = None) ->
         key=lambda item: float((item.get("metrics_10m", {}) or {}).get("mae_pct", 0.0) or 0.0),
     )[:5]
     return summary
+
+
+def evaluate_sim_post_sell_candidates(target_date: str, token: str | None = None) -> PostSellFeedbackSummary:
+    try:
+        from src.utils import kiwoom_utils
+    except Exception as exc:
+        log_error(f"[SIM_POST_SELL_EVAL] kiwoom_utils import failed: {exc}")
+        kiwoom_utils = None
+
+    candidates = _load_jsonl(_sim_candidate_path(target_date))
+    existing_evaluations = _load_jsonl(_sim_evaluation_path(target_date))
+    evaluated_ids = {
+        str(item.get("post_sell_id", ""))
+        for item in existing_evaluations
+        if _evaluation_has_current_horizons(item)
+    }
+    summary = PostSellFeedbackSummary(date=target_date)
+    summary.total_candidates = len(candidates)
+
+    if not bool(getattr(TRADING_RULES, "POST_SELL_FEEDBACK_EVAL_ENABLED", True)):
+        summary.evaluated_candidates = len(existing_evaluations)
+        return summary
+
+    candle_cache: dict[str, list[dict]] = {}
+    new_evaluations: list[dict] = []
+    token_fetch_attempted = token is not None
+
+    for candidate in candidates:
+        post_sell_id = str(candidate.get("post_sell_id", "") or "")
+        code = str(candidate.get("stock_code", "") or "")
+        if not post_sell_id or not code or post_sell_id in evaluated_ids or kiwoom_utils is None:
+            continue
+
+        if token is None and not token_fetch_attempted:
+            token_fetch_attempted = True
+            try:
+                token = kiwoom_utils.get_kiwoom_token()
+            except Exception as exc:
+                log_error(f"[SIM_POST_SELL_EVAL] token fetch failed: {exc}")
+                token = None
+
+        if token is None:
+            continue
+
+        if code not in candle_cache:
+            try:
+                candle_cache[code] = kiwoom_utils.get_minute_candles_ka10080(token, code, limit=700) or []
+            except Exception as exc:
+                log_error(f"[SIM_POST_SELL_EVAL] {code} minute candles fetch failed: {exc}")
+                candle_cache[code] = []
+
+        candles = candle_cache.get(code, [])
+        metrics_by_horizon = {
+            horizon: _compute_window_metrics(candidate, candles, horizon)
+            for horizon in POST_SELL_FEEDBACK_HORIZONS_MIN
+        }
+        metrics_10m = metrics_by_horizon[10]
+        outcome = _classify_candidate(metrics_10m)
+
+        evaluation = {
+            "schema_version": POST_SELL_REPORT_SCHEMA_VERSION,
+            "report_type": "sim_post_sell_evaluation",
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "metric_role": "sim_post_sell_mfe_mae_observation",
+            "decision_authority": "sim_equal_weight_observation_only",
+            "window_policy": "same_day_post_sell_forward_window",
+            "sample_floor": "report_only_no_hard_decision",
+            "primary_decision_metric": "sim_post_decision_mfe_10m_pct",
+            "source_quality_gate": "scalp_sim_sell_order_assumed_filled + numeric profit_rate",
+            "forbidden_uses": list(SIM_POST_SELL_FORBIDDEN_USES),
+            "post_sell_id": post_sell_id,
+            "evaluated_at": datetime.now().isoformat(),
+            "signal_date": target_date,
+            "stock_code": code,
+            "stock_name": candidate.get("stock_name", ""),
+            "strategy": candidate.get("strategy", ""),
+            "position_tag": candidate.get("position_tag", ""),
+            "sell_time": candidate.get("sell_time", ""),
+            "sell_bucket": candidate.get("sell_bucket", ""),
+            "buy_price": candidate.get("buy_price", 0),
+            "sell_price": candidate.get("sell_price", 0),
+            "profit_rate": candidate.get("profit_rate", 0.0),
+            "buy_qty": candidate.get("buy_qty", 0),
+            "exit_rule": candidate.get("exit_rule", "-"),
+            "sell_reason_type": candidate.get("sell_reason_type", "-"),
+            "trigger_profit_rate": candidate.get("trigger_profit_rate", 0.0),
+            "outcome": outcome,
+            "candidate_source": "scalp_simulator",
+            "simulation_book": "scalp_ai_buy_all",
+            "sim_record_id": candidate.get("sim_record_id", ""),
+            "sim_parent_record_id": candidate.get("sim_parent_record_id", ""),
+            "source_event_stage": candidate.get("source_event_stage", ""),
+            **{f"metrics_{horizon}m": metrics for horizon, metrics in metrics_by_horizon.items()},
+        }
+        new_evaluations.append(evaluation)
+
+    if new_evaluations:
+        with _WRITE_LOCK:
+            path = _sim_evaluation_path(target_date)
+            for item in new_evaluations:
+                _append_jsonl(path, item)
+
+    all_evaluations = _dedupe_latest_evaluations(existing_evaluations + new_evaluations)
+    summary.evaluated_candidates = len(all_evaluations)
+
+    outcome_counts: dict[str, int] = {"MISSED_UPSIDE": 0, "GOOD_EXIT": 0, "NEUTRAL": 0}
+    for item in all_evaluations:
+        outcome = str(item.get("outcome", "NEUTRAL") or "NEUTRAL").upper()
+        outcome_counts[outcome] = outcome_counts.get(outcome, 0) + 1
+    summary.outcome_counts = outcome_counts
+    summary.missed_upside_cases = sorted(
+        [item for item in all_evaluations if str(item.get("outcome", "")).upper() == "MISSED_UPSIDE"],
+        key=lambda item: float((item.get("metrics_10m", {}) or {}).get("mfe_pct", 0.0) or 0.0),
+        reverse=True,
+    )[:5]
+    summary.good_exit_cases = sorted(
+        [item for item in all_evaluations if str(item.get("outcome", "")).upper() == "GOOD_EXIT"],
+        key=lambda item: float((item.get("metrics_10m", {}) or {}).get("mae_pct", 0.0) or 0.0),
+    )[:5]
+    return summary
+
+
+def backfill_sim_post_sell_candidates_from_threshold_events(target_date: str) -> dict:
+    path = DATA_DIR / "threshold_cycle" / f"threshold_events_{target_date}.jsonl"
+    rows = _load_jsonl(path)
+    existing_candidates = _load_jsonl(_sim_candidate_path(target_date))
+    existing_keys = {
+        (
+            str(item.get("stock_code") or "").strip()[:6],
+            str(item.get("sim_record_id") or item.get("sim_parent_record_id") or "").strip()
+            or f"{item.get('sell_bucket')}:{item.get('sell_price')}",
+        )
+        for item in existing_candidates
+        if isinstance(item, dict)
+    }
+    seen = 0
+    created = 0
+    for event in rows:
+        if str(event.get("stage") or "") != "scalp_sim_sell_order_assumed_filled":
+            continue
+        seen += 1
+        fields = event.get("fields") if isinstance(event.get("fields"), dict) else {}
+        norm_code = str(event.get("stock_code") or "").strip()[:6]
+        sim_marker = str(fields.get("sim_record_id") or event.get("record_id") or fields.get("sim_parent_record_id") or "").strip()
+        if not sim_marker:
+            sell_dt = _parse_datetime(event.get("emitted_at"), default=datetime.now()) or datetime.now()
+            sim_marker = f"{_minute_bucket(sell_dt)}:{fields.get('assumed_fill_price')}"
+        existing_key = (norm_code, sim_marker)
+        if existing_key in existing_keys:
+            continue
+        candidate = record_sim_post_sell_candidate(
+            sim_record_id=fields.get("sim_record_id") or event.get("record_id"),
+            sim_parent_record_id=fields.get("sim_parent_record_id"),
+            stock={
+                "name": event.get("stock_name") or "",
+                "code": event.get("stock_code") or "",
+                "strategy": "SCALPING",
+                "position_tag": fields.get("position_tag") or "",
+            },
+            code=event.get("stock_code"),
+            sell_time=event.get("emitted_at"),
+            buy_price=fields.get("buy_price"),
+            sell_price=fields.get("assumed_fill_price"),
+            profit_rate=fields.get("profit_rate"),
+            buy_qty=fields.get("qty"),
+            exit_rule=fields.get("exit_rule"),
+            sell_reason_type=fields.get("sell_reason_type"),
+            trigger_profit_rate=fields.get("trigger_profit_rate"),
+        )
+        if candidate:
+            created += 1
+            existing_keys.add(existing_key)
+    return {
+        "date": target_date,
+        "source_path": str(path),
+        "events_seen": seen,
+        "candidates_created": created,
+        "candidate_path": str(_sim_candidate_path(target_date)),
+        "runtime_effect": False,
+    }
 
 
 def post_sell_feedback_summary_to_dict(summary: PostSellFeedbackSummary) -> dict:
@@ -1192,3 +1488,25 @@ def build_post_sell_feedback_report(
             },
         },
     }
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Post-sell feedback report-only utilities.")
+    parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
+    parser.add_argument("--backfill-sim-candidates", action="store_true")
+    parser.add_argument("--evaluate-sim", action="store_true")
+    args = parser.parse_args(argv)
+
+    result: dict = {"date": args.target_date, "runtime_effect": False}
+    if args.backfill_sim_candidates:
+        result["sim_backfill"] = backfill_sim_post_sell_candidates_from_threshold_events(args.target_date)
+    if args.evaluate_sim:
+        summary = evaluate_sim_post_sell_candidates(args.target_date)
+        result["sim_evaluation"] = post_sell_feedback_summary_to_dict(summary)
+        result["sim_evaluation_path"] = str(_sim_evaluation_path(args.target_date))
+    print(json.dumps(result, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
