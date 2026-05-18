@@ -66,6 +66,20 @@ def test_notify_monitor_snapshot_admin_builds_cutoff_message(tmp_path):
     assert "next_prompt_hint:" in message
 
 
+def test_monitor_snapshot_runtime_load_json_line_reads_tail(tmp_path):
+    result_file = tmp_path / "snapshot.out"
+    result_file.write_text(
+        '{"status":"old","value":1}\n'
+        "noise\n"
+        '{"status":"latest","value":2}\n',
+        encoding="utf-8",
+    )
+
+    payload = runtime.load_json_line(result_file)
+
+    assert payload == {"status": "latest", "value": 2}
+
+
 def test_notify_monitor_snapshot_admin_builds_skipped_message():
     message = _build_message(
         {

@@ -16,6 +16,8 @@ def test_codebase_performance_workorder_report_classifies_candidates(tmp_path, m
     expected_hash = hashlib.sha256(source_doc.read_bytes()).hexdigest()
     assert report["source_doc_hash"] == expected_hash
     assert report["summary"]["accepted_count"] == 7
+    assert report["summary"]["implemented_count"] >= 1
+    assert report["summary"]["pending_accepted_count"] <= 6
     assert report["summary"]["deferred_count"] == 3
     assert report["summary"]["rejected_count"] == 2
     assert report["policy"]["runtime_effect"] is False
@@ -30,6 +32,8 @@ def test_codebase_performance_workorder_report_classifies_candidates(tmp_path, m
         assert item["data_quality_effect"] is False
         assert item["tuning_axis_effect"] is False
         assert item["parity_contract"]
+        assert item["implementation_status"] in {"implemented", "pending", "not_checked"}
+        assert isinstance(item["implementation_checks"], list)
         assert "runtime_threshold_mutation" in item["forbidden_uses"]
 
     json_path = report_dir / "codebase_performance_workorder_2026-05-14.json"

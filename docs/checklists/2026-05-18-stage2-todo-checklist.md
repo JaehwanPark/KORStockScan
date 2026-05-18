@@ -118,6 +118,47 @@
 - 조치: KOSPI/KOSDAQ index change는 기본 weight `KOSPI=0.65`, `KOSDAQ=0.35`로 weighted composite을 만들고, 시장별 stock fall/rise ratio는 listed count가 있으면 listed count, 없으면 기본 market weight로 병합하도록 수정했다. 전체 composite 조건을 충족하지 못한 단일시장 악화는 `single_market_risk_off_advisory=true`로 별도 노출하고, `risk_off_advisory`는 전체 시장 패닉 근거로만 유지한다.
 - 영향도: `panic_sell_defense_report`와 `panic_buying_report`는 weighted composite `risk_off_advisory`/`risk_on_advisory`만 시장 전체 confirmation으로 소비하고, single-market advisory는 source-quality/운영 주의 필드로만 노출한다. threshold/provider/order guard, 자동매수/자동매도, bot restart 권한은 없다.
 - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_market_panic_breadth_collector.py src/tests/test_panic_sell_defense_report.py src/tests/test_panic_buying_report.py src/tests/test_notify_panic_state_transition.py` 통과 (`31 passed`). `py_compile`, `git diff --check` 통과. 2026-05-18 report 재생성 결과 `market_panic_breadth.risk_off_advisory=false`, `single_market_risk_off_advisory=true`, weighted index change=`-0.091`, weighted stock fall ratio=`68.288`로 전체 패닉 threshold 미달이며, `panic_sell_defense`는 `panic_state=NORMAL`, `panic_regime_mode=NORMAL`로 닫혔다.
+
+### SystemErrorMainLoopHeartbeatStale0518 운영 incident 기록
+
+- checked_at: `2026-05-18 15:50 KST`
+- 판정: `fixed_operational_restart`
+- 증상: System Error Detector가 `process_health: Main loop heartbeat stale for 102s (timeout=15s)`를 발송했고, 재확인 중 `stale for 26s`가 한 번 더 발생했다.
+- 근거: 경보 직전 `logs/bot_history.log`에는 `15:47:46` Kiwoom WS `code=1000, reason=Bye` disconnect와 재접속 흐름이 있었고, `15:20`에는 스캘핑 보유/주문 대기 종목이 없다고 기록됐다. 재기동 전 `bot_main.py` PID `94794`는 RSS 약 5.8GiB, system available memory 약 696MiB, swap used 약 3.7GiB였으며 `swing_lifecycle_audit`가 별도 D-state로 진행 중이었다.
+- 조치: 장 마감 후 운영 안정성 조치로 `bot_main.py` PID `94794`에 `TERM`을 보내 `run_bot.sh` wrapper가 새 PID `102933`으로 우아하게 재기동하도록 했다. threshold, provider, order guard, score/stop threshold, broker order 상태는 변경하지 않았다.
+- 검증: 재기동 후 `tmp/error_detector_heartbeat.json`은 main_loop PID `102933`, `last_beat=2026-05-18T15:50:48+09:00`로 갱신됐다. `PYTHONPATH=. .venv/bin/python -m src.engine.error_detector --mode full --dry-run` 기준 `process_health=pass`, `main_loop_status=ok`, `main_loop_age_sec=2.2`다. 메모리는 available 약 6.6GiB로 회복됐고, 남은 warning은 `swing_live_dry_run` in-progress 산출물 및 high swap 사용률이다.
+- 다음 액션: `swing_live_dry_run`/`swing_lifecycle_audit`가 완료되는지 계속 확인하고, 16:10 postclose chain 전까지 동일 heartbeat stale가 반복되면 swing audit 리소스 격리 또는 postclose job 순서 조정을 별도 workorder로 분리한다. Project/Calendar 동기화는 표준 명령으로 사용자가 수행한다.
+
+### SwingLiveDryRunResourceIsolation0518 구현 기록
+
+- checked_at: `2026-05-18 15:58 KST`
+- 판정: `implemented_lightweight_1545_deferred_heavy_postclose`
+- 근거: `run_swing_live_dry_run_report.sh`가 15:45에 `swing_selection_funnel_report` 이후 `swing_lifecycle_audit --ai-review-provider openai`를 inline 실행했고, `15:46~15:49` system metric에서 `swing_lifecycle_audit` PID가 메모리 35~44%, iowait 20~56%, swap pressure를 유발했다. heartbeat stale는 이 구간과 겹쳤다.
+- 조치: 15:45 wrapper 기본값을 `SWING_LIVE_DRY_RUN_RUN_LIFECYCLE_AUDIT=false`로 바꿔 selection/funnel report와 status만 생성하도록 했다. status에는 `reason=selection_completed_lifecycle_deferred_to_postclose`, `lifecycle_audit_mode=postclose_deferred`를 남긴다. heavy `swing_lifecycle_audit`, `swing_threshold_ai_review`, `swing_improvement_automation`, `swing_runtime_approval`은 기존 16:10 `run_threshold_cycle_postclose.sh`에서 계속 생성한다.
+- detector 계약: `artifact_freshness`에서 15:45 필수 확인은 `swing_live_dry_run_status`와 `swing_selection_funnel_report`로 유지하고, heavy swing lifecycle/approval artifact window는 16:10~17:10으로 이동했다.
+- 검증: `SWING_LIVE_DRY_RUN_RUN_LIFECYCLE_AUDIT=false bash deploy/run_swing_live_dry_run_report.sh 2026-05-18`는 selection report만 생성하고 `[DONE]`으로 종료했다. `pgrep` 기준 `swing_lifecycle_audit` 잔여 프로세스는 없었다. `PYTHONPATH=. .venv/bin/python -m src.engine.error_detector --mode full --dry-run`은 `summary_severity=pass`, `process_health=pass`, `resource_usage=pass`, `swing_live_dry_run_status=pass`, `swing_lifecycle_audit_report_status=not_yet_due`로 닫혔다. 관련 pytest 43건과 `bash -n`, `git diff --check`를 통과했다.
+- 다음 액션: 16:10 postclose chain에서 deferred heavy swing lifecycle/approval artifact가 생성되는지 확인한다. 동일 리소스 경합이 postclose에서도 반복되면 `swing_lifecycle_audit` 메모리 상한, streaming aggregation, row cap을 별도 code improvement workorder로 분리한다. Project/Calendar 동기화는 표준 명령으로 사용자가 수행한다.
+
+### ThresholdPostcloseResourceGuard0518 구현 기록
+
+- checked_at: `2026-05-18 16:00 KST`
+- 판정: `implemented_postclose_resource_guard`
+- 근거: 15:45 경합은 해소했지만 16:10 `run_threshold_cycle_postclose.sh`는 여전히 `daily_threshold_cycle_report`, `swing_lifecycle_audit`, pattern lab, EV/workorder/summary 같은 heavy 단계를 포함하며, bot은 22:55까지 떠 있어 시간상 경합 가능성이 남아 있었다.
+- 조치: postclose wrapper에 `THRESHOLD_CYCLE_POSTCLOSE_RESOURCE_GUARD=true` 기본 resource gate를 추가했다. heavy 단계 실행 전 `logs/system_metric_samples.jsonl`의 최신 `MemAvailable`, swap used, iowait를 확인하고, 기준 미달이면 최대 `THRESHOLD_CYCLE_POSTCLOSE_RESOURCE_WAIT_SEC=300`초 대기한다. heavy command와 compact backfill은 `nice -n 10`, `ionice -c 2 -n 7`, background CPU affinity로 실행한다.
+- 기본 기준: `THRESHOLD_CYCLE_POSTCLOSE_MIN_MEM_AVAILABLE_MB=4096`, `THRESHOLD_CYCLE_POSTCLOSE_MAX_SWAP_USED_PCT=85`, `THRESHOLD_CYCLE_POSTCLOSE_MAX_IOWAIT_PCT=35`, `THRESHOLD_CYCLE_POSTCLOSE_RESOURCE_WAIT_INTERVAL_SEC=10`, compact availability wait `THRESHOLD_CYCLE_COMPACT_AVAILABILITY_WAIT_SEC=900`, interval `15`.
+- 적용 범위: `daily_threshold_cycle_report`, `swing_daily_simulation`, `swing_lifecycle_audit`, pattern lab, pattern automation, currentness/propagation audit, pipeline verbosity, observation source-quality audit, codebase performance workorder, code improvement workorder, threshold EV, runtime approval summary, plan renewal, next checklist, verifier에 resource gate와 낮은 우선순위를 적용했다. JSON stdout을 직접 파싱하는 compact backfill 구간은 stdout 오염 없이 낮은 우선순위로 실행하고, `paused_by_availability_guard`는 즉시 fail이 아니라 checkpoint 유지 후 대기/재개하도록 보완했다.
+- 금지 확인: 이 변경은 운영 리소스 격리이며 threshold/provider/order guard, broker order, runtime env 값은 변경하지 않는다.
+- 다음 액션: 16:10 postclose 실행 로그에서 `resource guard pass|wait|timeout`, `availability guard wait|timeout`, bot `process_health`를 함께 확인한다. timeout이 발생하면 postclose 산출물 누락을 fail로 보되, bot 재기동/threshold 변경이 아니라 리소스 조정 workorder로 분리한다. Project/Calendar 동기화는 표준 명령으로 사용자가 수행한다.
+
+### SwingPostcloseArtifactConsistencyAudit0518 확인 기록
+
+- checked_at: `2026-05-18 16:28 KST`
+- 판정: `pass_with_warnings`
+- 대상: `deploy/run_swing_live_dry_run_report.sh`, `deploy/run_threshold_cycle_postclose.sh` 생성 산출물 정합성.
+- 근거: `data/report/swing_selection_funnel/status/swing_live_dry_run_2026-05-18.status.json`은 status=`succeeded`, reason=`selection_completed_lifecycle_deferred_to_postclose`, `lifecycle_audit_mode=postclose_deferred`, `runtime_change=false`로 닫혔다. 16:10 postclose recovery 후 `swing_daily_simulation`, `swing_lifecycle_audit`, `swing_threshold_ai_review`, `swing_improvement_automation`, `swing_runtime_approval`, `threshold_cycle_ev`, `runtime_approval_summary`, `pattern_lab_currentness_audit`, `pattern_lab_propagation_audit`, `threshold_cycle_postclose_verification` JSON은 모두 존재하고 parse 가능하다. `threshold_cycle_postclose_verification_2026-05-18.json`은 status=`pass`, missing_required_artifacts=`[]`, missing_downstream_links=`[]`로 닫혔다.
+- warning: 15:45 cron 최초 실행은 패치 전 inline lifecycle을 수행했고, 15:56 수동 재실행 status가 최종 `postclose_deferred`로 덮어썼다. 이후 16:10 postclose가 `swing_selection_funnel_2026-05-18.json`을 다시 생성해 final status의 artifact link가 가리키는 파일 mtime은 status 종료 시각보다 늦다. 산출물 자체는 fresh/pass지만, 15:45 status와 최종 selection artifact의 producer가 1:1로 고정되지는 않는다. `pattern_lab_propagation_audit`는 fail 없이 status=`warning`이며 원인은 `runtime_summary_propagation_source_link` warning이다. `runtime_approval_summary`에는 `pattern_lab_propagation_status=warning`으로 노출됐다.
+- 금지 확인: 정합성 점검은 산출물/로그 확인만 수행했고 threshold/provider/order guard, broker order, runtime env 값은 변경하지 않았다.
+- 다음 액션: 다음 wrapper 보완 시 `swing_selection_funnel` 15:45 산출물과 16:10 postclose 재생성 산출물을 producer/run_id 또는 status snapshot으로 분리하고, `runtime_approval_summary`의 propagation source link warning을 pass로 닫을지 별도 workorder로 판단한다. Project/Calendar 동기화는 표준 명령으로 사용자가 수행한다.
 - 다음 액션: 다음 intraday cycle에서 KOSPI/KOSDAQ 중 한쪽만 악화된 경우 `single_market_risk_off_advisory`로만 노출되고 `PANIC_SELL`로 승격되지 않는지 로그와 Telegram transition state를 확인한다. Project/Calendar 동기화는 표준 명령으로 사용자가 수행한다.
 
 ### ApprovalArtifactRunbookProcedure0518 문서 보강 기록
@@ -180,6 +221,47 @@
 - 조치: `sniper_state_handlers`에 wait6579 계열 entry unlock resolver를 추가하고, 활성 `score65_74_recovery_probe`와 휴면 `buy_recovery_canary_promoted` 모두 source/env/armed 조건을 만족할 때만 공통 75점 gate를 우회하게 했다. `buy_recovery_canary_promoted`는 promote 성공 시에만 arming하고, main recovery canary enabled 시에도 wait6579 cap 적용 대상에 포함했다.
 - 테스트/검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_state_handler_fast_signatures.py src/tests/test_sniper_entry_latency.py src/tests/test_threshold_cycle_preopen_apply.py` 통과 (`65 passed`). `py_compile` 통과.
 - 다음 액션: 장중 추가 표본에서 `score65_74_recovery_probe_entry_unlocked`, `wait6579_probe_canary_applied`, `budget_pass`, `latency_block`, `order_bundle_submitted`, `buy_order_sent` 순서를 재확인한다. postclose에는 selected family별 `env loaded -> family applied -> intended downstream consumer reached|intended safety block`을 `threshold_cycle_ev`와 runtime summary에서 재확인한다.
+
+### ScalpPreAiGateSoftRuntimeOverride0518 실행 기록
+
+- checked_at: `2026-05-18 15:20 KST`
+- 판정: `runtime_applied_operator_override`
+- 근거: `strength_momentum`, `overbought`, `liquidity`는 개발 초기 AI 호출 전 저품질 후보를 줄이기 위한 hard pre-AI gate 성격이었고, 현재 OpenAI 판정, score65_74 probe, latency/price guard, sim/counterfactual 체인이 있는 구조에서는 BUY 병목을 과도하게 앞단에서 막는다. 사용자가 이번 변경을 `지금 바로 런타임 적용` 및 `운영 오버라이드`로 명시했으므로 장중 금지 원칙의 예외로 처리했다.
+- 조치: [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py)는 `blocked_strength_momentum`, `blocked_vpw`, `blocked_overbought`, `blocked_liquidity`를 `gate_action=risk_context_only`로 남기고 AI/counterfactual 경로를 열도록 변경했다. `insufficient_history`, stale WS snapshot, extreme sell dominance는 `source_quality_block`으로 계속 닫는다. `liquidity_pre_submit_guard_p1`은 broker submit 직전 `pre_submit_liquidity_guard_block`, `overbought_pullback_guard_p1`은 pullback/rebreak 미확인 시 `pre_submit_overbought_pullback_guard_block`으로 차단한다.
+- 자동화 영향도: [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py)는 `strength_momentum_soft_gate_p1`, `overbought_pullback_guard_p1`, `liquidity_pre_submit_guard_p1`를 calibration family 후보로 노출하되 `allowed_runtime_apply=false`, `human_approval_required=true`로 유지한다. [threshold_cycle_registry.py](/home/ubuntu/KORStockScan/src/utils/threshold_cycle_registry.py)와 [observation_source_quality_audit.py](/home/ubuntu/KORStockScan/src/engine/observation_source_quality_audit.py)는 pre-submit guard stage와 metric contract를 검사하도록 갱신했다. pattern lab/code-improvement workorder는 threshold EV/source-quality summary를 통해서만 간접 소비하며, 이 변경만으로 provider/order guard/swing dry-run을 바꾸지 않는다.
+- runtime 반영: `data/threshold_cycle/runtime_env/threshold_runtime_env_2026-05-18.{env,json}`에 `KORSTOCKSCAN_SCALP_PRE_AI_SOFT_GATE_ENABLED=true`, `KORSTOCKSCAN_SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED=true`, `KORSTOCKSCAN_SCALP_LIQUIDITY_PRE_SUBMIT_GUARD_ENABLED=true`, `KORSTOCKSCAN_SCALP_OVERBOUGHT_PULLBACK_GUARD_ENABLED=true`를 추가했다. `restart.flag` 기반 graceful restart로 bot PID가 `77742 -> 94794`로 교체됐고, `/proc/94794/environ`에서 위 4개 env와 기존 `KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED=true`, `KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED=true`, `KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_ENABLED=true`, `KORSTOCKSCAN_SWING_LIVE_ORDER_DRY_RUN_ENABLED=true`, OpenAI Responses WS env 로드를 확인했다.
+- 즉시 표본: `15:17:31 KST` 이후 pipeline event는 `blocked_swing_score_vpw`, `blocked_swing_gap`, `swing_probe_discarded`, `blocked_gatekeeper_reject` 등 스윙 중심으로만 발생했고, 스캘핑 pre-AI soft gate post-restart 표본은 아직 없다. 따라서 기능 적용 확인은 env/process 기준 pass, 효과/경로 확인은 아래 POSTCLOSE cohort 항목으로 넘긴다.
+- 금지/범위: score threshold 전면 완화, fallback 재개, provider 변경, 주문가 guard 완화, 스윙 dry-run 해제, 1주 cap 해제는 수행하지 않았다. liquidity와 overbought는 AI 평가는 허용하지만 broker submit 직전 safety guard로 남긴다.
+- 테스트/검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py src/tests/test_missed_entry_counterfactual.py src/tests/test_buy_funnel_sentinel.py src/tests/test_observation_source_quality_audit.py src/tests/test_scalp_live_simulator.py::test_scalp_simulator_threshold_stages_are_included src/tests/test_sniper_scale_in.py::test_scalping_pre_ai_soft_gate_allows_ai_and_blocks_low_liquidity_at_submit src/tests/test_sniper_scale_in.py::test_scalping_overbought_reaches_ai_but_submit_requires_pullback_or_rebreak src/tests/test_sniper_scale_in.py::test_scalping_pre_ai_source_quality_block_keeps_insufficient_history_closed` 통과 (`69 passed`). `py_compile`, `git diff --check`, runtime env JSON parse 통과. `sync_docs_backlog_to_project --dry-run`은 parsed_tasks=`7`, created_or_would_create=`1`로 통과했다. `error_detector --mode full --dry-run`은 process/resource/cron pass이나 `threshold_events` sparse stream stale warning(`3611s > 600s`) 때문에 summary_severity=`warning`으로 닫혔다.
+- 다음 액션: post-restart cohort에서 `blocked_strength_momentum|blocked_vpw|blocked_overbought|blocked_liquidity gate_action=risk_context_only`, `ai_confirmed`, `scalp_sim_entry_armed`, `budget_pass`, `latency_pass|latency_block`, `order_bundle_submitted`, `pre_submit_liquidity_guard_block`, `pre_submit_overbought_pullback_guard_block`, `buy_order_sent`, `COMPLETED + valid profit_rate`를 분리 확인한다. stale submit, pre-submit guard breach, severe loss, receipt/provenance 손상이 있으면 즉시 OFF 후보로 닫는다.
+
+- [ ] `[ScalpPreAiGatePostRestartCohortReview0518] pre-AI soft gate 운영 override post-restart cohort 확인` (`Due: 2026-05-18`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:30`, `Track: ScalpingLogic`)
+  - Source: [pipeline_events_2026-05-18.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-05-18.jsonl), [threshold_events_2026-05-18.jsonl](/home/ubuntu/KORStockScan/data/threshold_cycle/threshold_events_2026-05-18.jsonl), [threshold_runtime_env_2026-05-18.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-05-18.json), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - Section: `ScalpPreAiGateSoftRuntimeOverride0518 실행 기록`
+  - 판정 기준: 새 PID `94794` 이후 risk context stage가 AI/counterfactual로 전달됐는지, liquidity/overbought pre-submit guard가 broker submit 직전에서만 차단하는지 확인한다.
+  - 금지: score threshold 전면 완화, fallback 재개, provider 변경, 주문가 guard 완화, 스윙 dry-run 해제, sim/probe 단독 실주문 전환 금지.
+  - 다음 액션: `pass_entry_path_opened`, `warning_source_quality_blocker`, `warning_pre_submit_safety_block_only`, `fail_runtime_apply_contract_bug`, `fail_safety_breach` 중 하나로 닫는다.
+
+### ScalpPreAiGateLegacyCandidateDedup0518 정리 기록
+
+- checked_at: `2026-05-18 15:45 KST`
+- 판정: `deduped_legacy_candidates`
+- 근거: `blocked_liquidity`와 `blocked_overbought`가 기존 `liquidity_gate_refined_candidate`/`overbought_gate_refined_candidate`와 신규 `liquidity_pre_submit_guard_p1`/`overbought_pullback_guard_p1`를 동시에 만들어 같은 표본이 active calibration candidate에서 중복 해석될 수 있었다.
+- 조치: [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py)는 legacy 두 family를 active family report 생성에서 제거하고, 기존 source bundle metric은 새 `*_p1` family의 `source_metrics`로 승계하도록 변경했다. 새 candidate에는 `supersedes=["liquidity_gate_refined_candidate"]` 또는 `supersedes=["overbought_gate_refined_candidate"]`를 남긴다.
+- 영향도: pattern lab/workorder/runtime summary는 legacy family를 신규 후보로 보지 않고 migration lineage/reference로만 해석해야 한다. active candidate는 `strength_momentum_soft_gate_p1`, `overbought_pullback_guard_p1`, `liquidity_pre_submit_guard_p1` 3개다.
+- 테스트/검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py src/tests/test_missed_entry_counterfactual.py src/tests/test_buy_funnel_sentinel.py` 통과 (`59 passed`). `py_compile`, `git diff --check`, `sync_docs_backlog_to_project --dry-run` 통과.
+- 다음 액션: 장후 `threshold_cycle_ev`와 `runtime_approval_summary`에서 legacy 두 family가 active candidate로 재등장하지 않고, 새 `*_p1` family의 `supersedes`/`source_metrics`로만 노출되는지 확인한다.
+
+### RuntimeApprovalHardGateReview0518 확인 기록
+
+- checked_at: `2026-05-18 15:50 KST`
+- 판정: `warning_contract_gap_not_terminal_analysis_block`
+- 대상: `runtime_approval_summary`에 표시된 스캘핑/스윙 축의 legacy hard gate 잔존 여부, 스윙 구식 병목 hard gate 여부
+- 근거: [runtime_approval_summary_2026-05-15.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-05-15.json)은 새 `gate_review_class`, `legacy_hard_gate_risk`, `tuning_route`, `analysis_coverage`를 노출한다. 스캘핑은 `legacy_summary_superseded=2`(`liquidity_gate_refined_candidate`, `overbought_gate_refined_candidate`)가 남아 있지만 active route는 `liquidity_pre_submit_guard_p1`/`overbought_pullback_guard_p1`로 이관됐다. `pre_submit_price_guard`, `scale_in_price_guard`는 의도적 submit safety guard다.
+- 스윙 판정: `swing_gatekeeper_accept_reject`, `swing_pyramid_trigger`, `swing_avg_down_eligibility`, `swing_trailing_stop_time_stop` 4개는 `contract_gap`이다. 특히 `swing_gatekeeper_accept_reject`는 `blocked_gatekeeper_reject + swing_probe_entry_candidate` 분석 표본이 있지만 accept/reject 자체 runtime env guard가 없어 직접 튜닝 적용이 막힌다. `swing_selection_top_k`, `swing_market_regime_sensitivity`는 구식 hard gate가 아니라 same-stage owner conflict이며, `swing_model_floor`, `swing_gatekeeper_reject_cooldown`, `swing_one_share_real_canary_phase0`는 approval route가 있다.
+- 조치: [runtime_approval_summary.py](/home/ubuntu/KORStockScan/src/engine/runtime_approval_summary.py)에 gate review annotation과 risk count summary를 추가했고, [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md) 및 [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)에 hard gate review contract를 문서화했다.
+- 테스트/검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_runtime_approval_summary.py` 통과 (`7 passed`), `py_compile` 통과. `runtime_approval_summary_2026-05-15` 재생성 후 `scalping_legacy_hard_gate_risk_counts={'approval_or_contract_required': 2, 'intentional_safety_guard': 2, 'legacy_summary_superseded': 2, 'no_unreviewed_hard_gate': 7}`, `swing_legacy_hard_gate_risk_counts={'contract_gap': 4, 'no_unreviewed_hard_gate': 3, 'same_stage_deferred': 2, 'sample_or_contract_gap': 3, 'source_quality_or_approval_required': 1, 'source_quality_or_contract_gap': 1}`로 확인했다.
+- 다음 액션: 장후 생성되는 2026-05-18 summary에서 스캘핑 legacy 두 family가 active candidate로 재등장하지 않는지 확인하고, 스윙 `contract_gap` 4개는 code-improvement workorder 또는 별도 approval contract 설계 대상으로 분리한다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-05-15` postclose -> `2026-05-18`)
@@ -259,11 +341,15 @@
   - 다음 액션: `post_sell_joined`, `sim_post_sell_gap`, `mfe_positive_missed_upside`, `good_cut_after_rebound_check`, `instrumentation_gap` 중 하나로 닫는다.
   - 구현 메모: sim 청산 표본은 실주문 `post_sell_candidates/evaluations`와 분리해 `sim_post_sell_candidates/evaluations`로 기록하고, postclose wrapper가 compact event 수집 직후 backfill/evaluate를 수행하도록 갱신했다. `threshold_cycle_ev`는 `scalp_simulator.post_sell_join` 요약을 노출한다.
 
-- [ ] `[CodeImprovementWorkorderReview0518] code improvement workorder 구현 필요 여부 및 Codex 지시 대상 확인` (`Due: 2026-05-18`, `Slot: POSTCLOSE`, `TimeWindow: 16:45~17:00`, `Track: ScalpingLogic`)
-  - Source: [code_improvement_workorder_2026-05-15.md](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-15.md), [code_improvement_workorder_2026-05-15.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-15.json)
+- [x] `[CodeImprovementWorkorderReview0518] code improvement workorder 구현 필요 여부 및 Codex 지시 대상 확인` (`Due: 2026-05-18`, `Slot: POSTCLOSE`, `TimeWindow: 16:45~17:00`, `Track: ScalpingLogic`)
+  - Source: [code_improvement_workorder_2026-05-18.md](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-18.md), [code_improvement_workorder_2026-05-18.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-18.json)
   - 판정 기준: selected_order_count=12와 `implement_now`, `attach_existing_family`, `design_family_candidate`, `reject` 분류를 확인한다.
   - 금지: code-improvement workorder를 자동 repo 수정으로 취급하지 않는다. 사용자가 Codex 구현을 지시한 경우에만 실행한다.
   - 다음 액션: 구현 필요, 설계 보류, reject, already_implemented 중 하나로 닫는다.
+  - 판정: `implemented_report_only_pass1_pass2_with_residual_freshness_warnings`.
+  - 근거: 사용자 지시에 따라 신규 `implement_now` 중 `runtime_effect=false`만 2-pass 처리했다. `pipeline_event` producer summary는 raw 보존 `shadow` 기본 계측으로 열었고, monitor snapshot tail read, swing simulation iteration, high-volume holding diagnostic contract labels, codebase performance implementation provenance를 추가했다. 재생성된 workorder는 generation_id=`2026-05-18-2150116ce064`, source_hash=`2150116ce0646428a1f0d4a077aea0700e275f708c21c0861de3814533cc3de5`, selected_order_count=`12`, decision_counts=`implement_now:2/attach_existing_family:15/design_family_candidate:6/defer_evidence:11/reject:3`이다.
+  - 보류/주의: `pipeline_event_verbosity`는 기존 2026-05-18 raw에 producer summary가 소급 생성되지 않아 `v2_shadow_missing`으로 남는다. `observation_source_quality_audit`의 `blocked_strength_momentum/blocked_overbought/blocked_liquidity` 경고도 과거 이벤트 계약 누락분이 커서 당일 리포트에는 남는다. 이번 구현은 이후 신규 이벤트부터 provenance를 붙이는 report-only 변경이다.
+  - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_sniper_scale_in.py::test_soft_stop_expert_absorption_extends_after_micro_grace src/tests/test_sniper_scale_in.py::test_holding_fast_reuse_band_logs_review_for_near_safe_profit src/tests/test_observation_source_quality_audit.py src/tests/test_build_code_improvement_workorder.py src/tests/test_pipeline_event_logger.py src/tests/test_log_archive_service.py src/tests/test_codebase_performance_workorder_report.py src/tests/test_swing_model_selection_funnel_repair.py` 85 passed.
 
 - [ ] `[HumanInterventionSummary0518] 자동화체인 사용자 개입 요구사항 분류 및 누락 확인` (`Due: 2026-05-18`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:15`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-15.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-15.json), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)

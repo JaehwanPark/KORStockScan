@@ -25,6 +25,57 @@ FORBIDDEN_USES = [
     "raw_forensic_stream_suppression",
 ]
 
+IMPLEMENTATION_CHECKS: dict[str, list[dict[str, Any]]] = {
+    "order_perf_buy_funnel_json_scan": [
+        {
+            "path": "src/engine/buy_funnel_sentinel.py",
+            "tokens": ["load_pipeline_event_summaries", "--use-summary"],
+        }
+    ],
+    "order_perf_daily_report_bulk_history": [
+        {
+            "path": "src/engine/daily_report_service.py",
+            "tokens": ["history_rows", "history_by_code"],
+        }
+    ],
+    "order_perf_daily_report_engine_singleton": [
+        {
+            "path": "src/engine/daily_report_service.py",
+            "tokens": ["_ENGINE_CACHE", "def _get_engine"],
+        }
+    ],
+    "order_perf_recommend_update_vectorization": [
+        {
+            "path": "src/model/recommend_daily_v2.py",
+            "tokens": ["pd.MultiIndex.from_frame", ".isin(selected_index)"],
+        },
+        {
+            "path": "src/utils/update_kospi.py",
+            "tokens": ["pd.MultiIndex.from_frame", "row_keys.isin(existing_index)"],
+        },
+    ],
+    "order_perf_swing_simulation_iteration": [
+        {
+            "path": "src/engine/swing_daily_simulation_report.py",
+            "tokens": ["_quote_groups_by_code", 'to_dict("records")'],
+            "forbidden_tokens": ["for _, row in recommendations.iterrows()"],
+        }
+    ],
+    "order_perf_monitor_snapshot_stream_tail": [
+        {
+            "path": "src/engine/monitor_snapshot_runtime.py",
+            "tokens": ["TAIL_READ_BYTES", "reversed(text.splitlines())"],
+        }
+    ],
+    "order_perf_final_ensemble_records": [
+        {
+            "path": "src/scanners/final_ensemble_scanner.py",
+            "tokens": ["to_dict('records')"],
+            "forbidden_tokens": ["iterrows()"],
+        }
+    ],
+}
+
 
 def _base_candidate(
     *,
@@ -244,12 +295,50 @@ def _source_doc_hash(path: Path) -> str | None:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _implementation_probe(item_id: str) -> dict[str, Any]:
+    checks = IMPLEMENTATION_CHECKS.get(item_id) or []
+    if not checks:
+        return {"implementation_status": "not_checked", "implementation_checks": []}
+    results: list[dict[str, Any]] = []
+    for check in checks:
+        rel_path = str(check.get("path") or "")
+        path = PROJECT_ROOT / rel_path
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            text = ""
+        required = [str(token) for token in check.get("tokens") or []]
+        forbidden = [str(token) for token in check.get("forbidden_tokens") or []]
+        missing = [token for token in required if token not in text]
+        present_forbidden = [token for token in forbidden if token in text]
+        results.append(
+            {
+                "path": rel_path,
+                "exists": path.exists(),
+                "required_tokens_present": not missing,
+                "missing_tokens": missing,
+                "forbidden_tokens_absent": not present_forbidden,
+                "present_forbidden_tokens": present_forbidden,
+            }
+        )
+    implemented = bool(results) and all(
+        item["exists"] and item["required_tokens_present"] and item["forbidden_tokens_absent"]
+        for item in results
+    )
+    return {
+        "implementation_status": "implemented" if implemented else "pending",
+        "implementation_checks": results,
+    }
+
+
 def build_codebase_performance_workorder_report(target_date: str) -> dict[str, Any]:
     target_date = str(target_date).strip()
     source_hash = _source_doc_hash(SOURCE_DOC)
     accepted = _accepted_candidates()
+    accepted = [{**item, **_implementation_probe(str(item.get("item_id") or ""))} for item in accepted]
     deferred = _deferred_candidates()
     rejected = _rejected_candidates()
+    implemented_count = sum(1 for item in accepted if item.get("implementation_status") == "implemented")
     report = {
         "schema_version": SCHEMA_VERSION,
         "date": target_date,
@@ -270,6 +359,8 @@ def build_codebase_performance_workorder_report(target_date: str) -> dict[str, A
         },
         "summary": {
             "accepted_count": len(accepted),
+            "implemented_count": implemented_count,
+            "pending_accepted_count": len(accepted) - implemented_count,
             "deferred_count": len(deferred),
             "rejected_count": len(rejected),
             "source_doc_hash": source_hash,
@@ -301,7 +392,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         "## Summary",
         f"- source_doc: `{report.get('source_doc')}`",
         f"- source_doc_hash: `{summary.get('source_doc_hash')}`",
-        f"- accepted/deferred/rejected: `{summary.get('accepted_count')}` / `{summary.get('deferred_count')}` / `{summary.get('rejected_count')}`",
+        f"- accepted/implemented/pending/deferred/rejected: `{summary.get('accepted_count')}` / `{summary.get('implemented_count')}` / `{summary.get('pending_accepted_count')}` / `{summary.get('deferred_count')}` / `{summary.get('rejected_count')}`",
         "",
         "## Accepted Candidates",
     ]
@@ -309,7 +400,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         if isinstance(item, dict):
             lines.append(
                 f"- `{item.get('item_id')}` priority=`{item.get('priority')}` risk=`{item.get('risk_tier')}` "
-                f"subsystem=`{item.get('target_subsystem')}`"
+                f"subsystem=`{item.get('target_subsystem')}` implementation_status=`{item.get('implementation_status')}`"
             )
     lines.extend(["", "## Deferred Candidates"])
     for item in report.get("deferred_candidates") or []:

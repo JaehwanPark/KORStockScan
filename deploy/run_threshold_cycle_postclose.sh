@@ -5,10 +5,24 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 VENV_PY="${VENV_PY:-$PROJECT_DIR/.venv/bin/python}"
 TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
+# shellcheck source=cpu_affinity_profile.sh
+. "$SCRIPT_DIR/cpu_affinity_profile.sh"
 MAX_ITERATIONS="${THRESHOLD_CYCLE_MAX_ITERATIONS:-80}"
 MAX_INPUT_LINES="${THRESHOLD_CYCLE_MAX_INPUT_LINES_PER_CHUNK:-20000}"
 MAX_OUTPUT_LINES="${THRESHOLD_CYCLE_MAX_OUTPUT_LINES_PER_PARTITION:-25000}"
 MAX_CPU_BUSY_PCT="${THRESHOLD_CYCLE_MAX_CPU_BUSY_PCT:-95}"
+POSTCLOSE_CPU_AFFINITY="${THRESHOLD_CYCLE_POSTCLOSE_CPU_AFFINITY:-$(korstockscan_default_cpu_affinity threshold)}"
+POSTCLOSE_NICE_LEVEL="${THRESHOLD_CYCLE_POSTCLOSE_NICE_LEVEL:-10}"
+POSTCLOSE_IONICE_CLASS="${THRESHOLD_CYCLE_POSTCLOSE_IONICE_CLASS:-2}"
+POSTCLOSE_IONICE_LEVEL="${THRESHOLD_CYCLE_POSTCLOSE_IONICE_LEVEL:-7}"
+POSTCLOSE_RESOURCE_GUARD="${THRESHOLD_CYCLE_POSTCLOSE_RESOURCE_GUARD:-true}"
+POSTCLOSE_MIN_MEM_AVAILABLE_MB="${THRESHOLD_CYCLE_POSTCLOSE_MIN_MEM_AVAILABLE_MB:-4096}"
+POSTCLOSE_MAX_SWAP_USED_PCT="${THRESHOLD_CYCLE_POSTCLOSE_MAX_SWAP_USED_PCT:-85}"
+POSTCLOSE_MAX_IOWAIT_PCT="${THRESHOLD_CYCLE_POSTCLOSE_MAX_IOWAIT_PCT:-35}"
+POSTCLOSE_RESOURCE_WAIT_SEC="${THRESHOLD_CYCLE_POSTCLOSE_RESOURCE_WAIT_SEC:-300}"
+POSTCLOSE_RESOURCE_WAIT_INTERVAL_SEC="${THRESHOLD_CYCLE_POSTCLOSE_RESOURCE_WAIT_INTERVAL_SEC:-10}"
+COMPACT_AVAILABILITY_WAIT_SEC="${THRESHOLD_CYCLE_COMPACT_AVAILABILITY_WAIT_SEC:-900}"
+COMPACT_AVAILABILITY_WAIT_INTERVAL_SEC="${THRESHOLD_CYCLE_COMPACT_AVAILABILITY_WAIT_INTERVAL_SEC:-15}"
 SKIP_DB="${THRESHOLD_CYCLE_SKIP_DB:-false}"
 USE_SNAPSHOT="${THRESHOLD_CYCLE_USE_SNAPSHOT:-true}"
 AI_CORRECTION_PROVIDER="${THRESHOLD_CYCLE_AI_CORRECTION_PROVIDER:-openai}"
@@ -42,6 +56,100 @@ trap 'failed_at="$(TZ=Asia/Seoul date +%FT%T%z)"; echo "[FAIL] threshold-cycle p
 
 started_at="$(TZ=Asia/Seoul date +%FT%T%z)"
 echo "[START] threshold-cycle postclose target_date=$TARGET_DATE max_iterations=$MAX_ITERATIONS started_at=$started_at"
+
+run_postclose_cmd() {
+  local cmd=("$@")
+  if command -v nice >/dev/null 2>&1; then
+    cmd=(nice -n "$POSTCLOSE_NICE_LEVEL" "${cmd[@]}")
+  fi
+  if command -v ionice >/dev/null 2>&1 && [[ "$POSTCLOSE_IONICE_CLASS" -ge 0 ]]; then
+    cmd=(ionice -c "$POSTCLOSE_IONICE_CLASS" -n "$POSTCLOSE_IONICE_LEVEL" -t "${cmd[@]}")
+  fi
+  korstockscan_apply_taskset "$POSTCLOSE_CPU_AFFINITY" "${cmd[@]}"
+}
+
+resource_guard_enabled() {
+  [ "$POSTCLOSE_RESOURCE_GUARD" = "true" ] || [ "$POSTCLOSE_RESOURCE_GUARD" = "1" ]
+}
+
+postclose_resource_status() {
+  "$VENV_PY" - "$PROJECT_DIR/logs/system_metric_samples.jsonl" \
+    "$POSTCLOSE_MIN_MEM_AVAILABLE_MB" \
+    "$POSTCLOSE_MAX_SWAP_USED_PCT" \
+    "$POSTCLOSE_MAX_IOWAIT_PCT" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+min_mem = float(sys.argv[2])
+max_swap = float(sys.argv[3])
+max_iowait = float(sys.argv[4])
+if not path.exists():
+    print(json.dumps({"ok": True, "reason": "sampler_missing_skip"}))
+    raise SystemExit(0)
+last = None
+for line in path.read_text(encoding="utf-8").splitlines()[-200:]:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        last = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+if not last:
+    print(json.dumps({"ok": True, "reason": "sampler_empty_skip"}))
+    raise SystemExit(0)
+memory = last.get("memory") or {}
+cpu = last.get("cpu") or {}
+swap_total = float(memory.get("swap_total_mb") or 0.0)
+swap_free = float(memory.get("swap_free_mb") or 0.0)
+swap_used_pct = 0.0
+if swap_total > 0:
+    swap_used_pct = ((swap_total - swap_free) / swap_total) * 100.0
+mem_available = float(memory.get("mem_available_mb") or 0.0)
+iowait = float(cpu.get("iowait_pct") or 0.0)
+issues = []
+if mem_available < min_mem:
+    issues.append(f"mem_available_mb={mem_available:.1f}<{min_mem:.1f}")
+if swap_used_pct > max_swap:
+    issues.append(f"swap_used_pct={swap_used_pct:.1f}>{max_swap:.1f}")
+if iowait > max_iowait:
+    issues.append(f"iowait_pct={iowait:.1f}>{max_iowait:.1f}")
+print(json.dumps({
+    "ok": not issues,
+    "issues": issues,
+    "mem_available_mb": round(mem_available, 1),
+    "swap_used_pct": round(swap_used_pct, 1),
+    "iowait_pct": round(iowait, 1),
+    "sample_ts": last.get("ts"),
+}))
+PY
+}
+
+wait_for_postclose_resources() {
+  local label="$1"
+  local waited=0
+  if ! resource_guard_enabled; then
+    return 0
+  fi
+  while true; do
+    local status ok
+    status="$(postclose_resource_status)"
+    ok="$(printf '%s' "$status" | "$VENV_PY" -c 'import json,sys; print(str(json.load(sys.stdin).get("ok", True)).lower())')"
+    if [ "$ok" = "true" ]; then
+      echo "[threshold-cycle] resource guard pass label=$label status=$status" >&2
+      return 0
+    fi
+    if [ "$waited" -ge "$POSTCLOSE_RESOURCE_WAIT_SEC" ]; then
+      echo "[threshold-cycle] resource guard timeout label=$label waited=${waited}s status=$status" >&2
+      return 1
+    fi
+    echo "[threshold-cycle] resource guard wait label=$label waited=${waited}s status=$status" >&2
+    sleep "$POSTCLOSE_RESOURCE_WAIT_INTERVAL_SEC"
+    waited=$((waited + POSTCLOSE_RESOURCE_WAIT_INTERVAL_SEC))
+  done
+}
 
 cleanup_threshold_cycle_snapshots() {
   local snapshot_dir="$1"
@@ -168,7 +276,8 @@ wait_for_report_artifact() {
 run_threshold_cycle_ev_and_wait() {
   local pass_label="$1"
 
-  PYTHONPATH=. "$VENV_PY" -m src.engine.threshold_cycle_ev_report --date "$TARGET_DATE"
+  wait_for_postclose_resources "threshold_cycle_ev_${pass_label}"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.threshold_cycle_ev_report --date "$TARGET_DATE"
   wait_for_report_artifact \
     "$PROJECT_DIR/data/report/threshold_cycle_ev/threshold_cycle_ev_${TARGET_DATE}.json" \
     "$PROJECT_DIR/data/report/threshold_cycle_ev/threshold_cycle_ev_${TARGET_DATE}.md" \
@@ -213,13 +322,14 @@ if [ "$USE_SNAPSHOT" = "true" ]; then
   cleanup_threshold_cycle_snapshots "$SNAPSHOT_DIR" "$SNAPSHOT_RETENTION_DAYS"
 fi
 
+compact_availability_waited=0
 for i in $(seq 1 "$MAX_ITERATIONS"); do
   resume_args=(--resume)
   if [ "$i" = "1" ] && [ "$USE_SNAPSHOT" = "true" ] && [ "${REUSE_EXISTING_SNAPSHOT:-false}" != "true" ]; then
     resume_args=(--overwrite)
   fi
   out="$(
-    PYTHONPATH=. "$VENV_PY" -m src.engine.backfill_threshold_cycle_events \
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.backfill_threshold_cycle_events \
       --date "$TARGET_DATE" \
       --mode incremental \
       "${resume_args[@]}" \
@@ -236,9 +346,16 @@ for i in $(seq 1 "$MAX_ITERATIONS"); do
     break
   fi
   if [ "$status" = "paused_by_availability_guard" ] && [ -n "$paused_reason" ]; then
-    echo "[threshold-cycle] availability guard paused target_date=$TARGET_DATE reason=$paused_reason"
-    break
+    if [ "$compact_availability_waited" -ge "$COMPACT_AVAILABILITY_WAIT_SEC" ]; then
+      echo "[threshold-cycle] availability guard timeout target_date=$TARGET_DATE reason=$paused_reason waited=${compact_availability_waited}s"
+      break
+    fi
+    echo "[threshold-cycle] availability guard wait target_date=$TARGET_DATE reason=$paused_reason waited=${compact_availability_waited}s"
+    sleep "$COMPACT_AVAILABILITY_WAIT_INTERVAL_SEC"
+    compact_availability_waited=$((compact_availability_waited + COMPACT_AVAILABILITY_WAIT_INTERVAL_SEC))
+    continue
   fi
+  compact_availability_waited=0
   sleep 1
 done
 
@@ -283,7 +400,8 @@ if [ "$RUN_PANIC_BUYING_REPORT" = "true" ] || [ "$RUN_PANIC_BUYING_REPORT" = "1"
     "panic_buying_postclose"
 fi
 if [ "$RUN_OPENAI_WS_STABILITY_REPORT" = "true" ] || [ "$RUN_OPENAI_WS_STABILITY_REPORT" = "1" ]; then
-  PYTHONPATH=. "$VENV_PY" -m src.engine.openai_ws_stability_report \
+  wait_for_postclose_resources "openai_ws_stability"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.openai_ws_stability_report \
     --date "$TARGET_DATE"
   wait_for_report_artifact \
     "$PROJECT_DIR/data/report/openai_ws/openai_ws_stability_${TARGET_DATE}.json" \
@@ -301,7 +419,8 @@ else
   report_args+=(--ai-correction-provider "$AI_CORRECTION_PROVIDER")
 fi
 
-PYTHONPATH=. "$VENV_PY" -m src.engine.daily_threshold_cycle_report \
+wait_for_postclose_resources "daily_threshold_cycle_report"
+run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.daily_threshold_cycle_report \
   --calibration-run-phase postclose \
   "${report_args[@]}"
 wait_for_json_artifact \
@@ -327,12 +446,14 @@ wait_for_report_artifact \
   "$PROJECT_DIR/data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_${TARGET_DATE}.md" \
   "threshold_cycle_cumulative"
 if [ "$RUN_SWING_LIFECYCLE_AUDIT" = "true" ] || [ "$RUN_SWING_LIFECYCLE_AUDIT" = "1" ]; then
-  bash "$PROJECT_DIR/deploy/run_swing_daily_simulation_report.sh" "$TARGET_DATE"
+  wait_for_postclose_resources "swing_daily_simulation"
+  run_postclose_cmd bash "$PROJECT_DIR/deploy/run_swing_daily_simulation_report.sh" "$TARGET_DATE"
   wait_for_report_artifact \
     "$PROJECT_DIR/data/report/swing_daily_simulation/swing_daily_simulation_${TARGET_DATE}.json" \
     "$PROJECT_DIR/data/report/swing_daily_simulation/swing_daily_simulation_${TARGET_DATE}.md" \
     "swing_daily_simulation"
-  PYTHONPATH=. "$VENV_PY" -m src.engine.swing_lifecycle_audit \
+  wait_for_postclose_resources "swing_lifecycle_audit"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.swing_lifecycle_audit \
     --date "$TARGET_DATE" \
     --ai-review-provider "$SWING_THRESHOLD_AI_REVIEW_PROVIDER"
   wait_for_report_artifact \
@@ -354,52 +475,61 @@ if [ "$RUN_SWING_LIFECYCLE_AUDIT" = "true" ] || [ "$RUN_SWING_LIFECYCLE_AUDIT" =
 fi
 if [ "$RUN_DEEPSEEK_SWING_LAB" = "true" ] || [ "$RUN_DEEPSEEK_SWING_LAB" = "1" ]; then
   echo "[threshold-cycle] running deepseek swing pattern lab target_date=$TARGET_DATE"
+  wait_for_postclose_resources "deepseek_swing_pattern_lab"
   ANALYSIS_START_DATE="$TARGET_DATE" ANALYSIS_END_DATE="$TARGET_DATE" \
-    bash "$PROJECT_DIR/analysis/deepseek_swing_pattern_lab/run_all.sh" "$TARGET_DATE" || \
+    run_postclose_cmd bash "$PROJECT_DIR/analysis/deepseek_swing_pattern_lab/run_all.sh" "$TARGET_DATE" || \
     echo "[threshold-cycle] deepseek swing pattern lab failed (non-fatal)" >&2
 fi
 if [ "$RUN_PATTERN_LABS" = "true" ] || [ "$RUN_PATTERN_LABS" = "1" ]; then
+  wait_for_postclose_resources "gemini_scalping_pattern_lab"
   ANALYSIS_START_DATE="$PATTERN_LAB_START_DATE" ANALYSIS_END_DATE="$TARGET_DATE" \
-    "$PROJECT_DIR/analysis/gemini_scalping_pattern_lab/run.sh" || \
+    run_postclose_cmd "$PROJECT_DIR/analysis/gemini_scalping_pattern_lab/run.sh" || \
     echo "[threshold-cycle] gemini scalping pattern lab failed (non-fatal); downstream automation will mark freshness=false" >&2
+  wait_for_postclose_resources "claude_scalping_pattern_lab"
   ANALYSIS_START_DATE="$PATTERN_LAB_START_DATE" ANALYSIS_END_DATE="$TARGET_DATE" \
-    "$PROJECT_DIR/analysis/claude_scalping_pattern_lab/run_all.sh" || \
+    run_postclose_cmd "$PROJECT_DIR/analysis/claude_scalping_pattern_lab/run_all.sh" || \
     echo "[threshold-cycle] claude scalping pattern lab failed (non-fatal); downstream automation will mark freshness=false" >&2
 fi
-PYTHONPATH=. "$VENV_PY" -m src.engine.scalping_pattern_lab_automation --date "$TARGET_DATE"
+wait_for_postclose_resources "scalping_pattern_lab_automation"
+run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping_pattern_lab_automation --date "$TARGET_DATE"
 wait_for_report_artifact \
   "$PROJECT_DIR/data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_${TARGET_DATE}.json" \
   "$PROJECT_DIR/data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_${TARGET_DATE}.md" \
   "scalping_pattern_lab_automation"
-PYTHONPATH=. "$VENV_PY" -m src.engine.swing_pattern_lab_automation --date "$TARGET_DATE" || \
+wait_for_postclose_resources "swing_pattern_lab_automation"
+run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.swing_pattern_lab_automation --date "$TARGET_DATE" || \
   echo "[threshold-cycle] swing pattern lab automation failed (non-fatal)" >&2
 wait_for_report_artifact \
   "$PROJECT_DIR/data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_${TARGET_DATE}.json" \
   "$PROJECT_DIR/data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_${TARGET_DATE}.md" \
   "swing_pattern_lab_automation"
 if [ "$RUN_PATTERN_LAB_CURRENTNESS_AUDIT" = "true" ] || [ "$RUN_PATTERN_LAB_CURRENTNESS_AUDIT" = "1" ]; then
-  PYTHONPATH=. "$VENV_PY" -m src.engine.pattern_lab_currentness_audit --date "$TARGET_DATE"
+  wait_for_postclose_resources "pattern_lab_currentness_audit"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.pattern_lab_currentness_audit --date "$TARGET_DATE"
   wait_for_report_artifact \
     "$PROJECT_DIR/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_${TARGET_DATE}.json" \
     "$PROJECT_DIR/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_${TARGET_DATE}.md" \
     "pattern_lab_currentness_audit"
 fi
 if [ "$RUN_PIPELINE_EVENT_VERBOSITY_REPORT" = "true" ] || [ "$RUN_PIPELINE_EVENT_VERBOSITY_REPORT" = "1" ]; then
-  PYTHONPATH=. "$VENV_PY" -m src.engine.pipeline_event_verbosity_report --date "$TARGET_DATE"
+  wait_for_postclose_resources "pipeline_event_verbosity"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.pipeline_event_verbosity_report --date "$TARGET_DATE"
   wait_for_report_artifact \
     "$PROJECT_DIR/data/report/pipeline_event_verbosity/pipeline_event_verbosity_${TARGET_DATE}.json" \
     "$PROJECT_DIR/data/report/pipeline_event_verbosity/pipeline_event_verbosity_${TARGET_DATE}.md" \
     "pipeline_event_verbosity"
 fi
 if [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "true" ] || [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "1" ]; then
-  PYTHONPATH=. "$VENV_PY" -m src.engine.observation_source_quality_audit --target-date "$TARGET_DATE" --write
+  wait_for_postclose_resources "observation_source_quality_audit"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.observation_source_quality_audit --target-date "$TARGET_DATE" --write
   wait_for_report_artifact \
     "$PROJECT_DIR/data/report/observation_source_quality_audit/observation_source_quality_audit_${TARGET_DATE}.json" \
     "$PROJECT_DIR/data/report/observation_source_quality_audit/observation_source_quality_audit_${TARGET_DATE}.md" \
     "observation_source_quality_audit"
 fi
 if [ "$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT" = "true" ] || [ "$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT" = "1" ]; then
-  PYTHONPATH=. "$VENV_PY" -m src.engine.codebase_performance_workorder_report --date "$TARGET_DATE"
+  wait_for_postclose_resources "codebase_performance_workorder"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.codebase_performance_workorder_report --date "$TARGET_DATE"
   wait_for_report_artifact \
     "$PROJECT_DIR/data/report/codebase_performance_workorder/codebase_performance_workorder_${TARGET_DATE}.json" \
     "$PROJECT_DIR/data/report/codebase_performance_workorder/codebase_performance_workorder_${TARGET_DATE}.md" \
@@ -407,7 +537,8 @@ if [ "$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT" = "true" ] || [ "$RUN_CODEBASE
 fi
 run_threshold_cycle_ev_and_wait "pre_workorder"
 if [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "true" ] || [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "1" ]; then
-  PYTHONPATH=. "$VENV_PY" -m src.engine.build_code_improvement_workorder \
+  wait_for_postclose_resources "code_improvement_workorder"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_code_improvement_workorder \
     --date "$TARGET_DATE" \
     --max-orders "$CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS"
   wait_for_report_artifact \
@@ -417,28 +548,33 @@ if [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "true" ] || [ "$BUILD_CODE_IMPROVEMEN
 fi
 run_threshold_cycle_ev_and_wait "post_workorder_refresh"
 if [ "$RUN_PATTERN_LAB_PROPAGATION_AUDIT" = "true" ] || [ "$RUN_PATTERN_LAB_PROPAGATION_AUDIT" = "1" ]; then
-  PYTHONPATH=. "$VENV_PY" -m src.engine.pattern_lab_propagation_audit --date "$TARGET_DATE"
+  wait_for_postclose_resources "pattern_lab_propagation_audit"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.pattern_lab_propagation_audit --date "$TARGET_DATE"
   wait_for_report_artifact \
     "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json" \
     "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.md" \
     "pattern_lab_propagation_audit"
   run_threshold_cycle_ev_and_wait "post_propagation_audit_refresh"
 fi
-PYTHONPATH=. "$VENV_PY" -m src.engine.runtime_approval_summary --date "$TARGET_DATE"
+wait_for_postclose_resources "runtime_approval_summary"
+run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.runtime_approval_summary --date "$TARGET_DATE"
 wait_for_report_artifact \
   "$PROJECT_DIR/data/report/runtime_approval_summary/runtime_approval_summary_${TARGET_DATE}.json" \
   "$PROJECT_DIR/data/report/runtime_approval_summary/runtime_approval_summary_${TARGET_DATE}.md" \
   "runtime_approval_summary"
 if [ "$RUN_PLAN_REBASE_DAILY_RENEWAL" = "true" ] || [ "$RUN_PLAN_REBASE_DAILY_RENEWAL" = "1" ]; then
-  PYTHONPATH=. "$VENV_PY" -m src.engine.plan_rebase_daily_renewal --date "$TARGET_DATE"
+  wait_for_postclose_resources "plan_rebase_daily_renewal"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.plan_rebase_daily_renewal --date "$TARGET_DATE"
   wait_for_report_artifact \
     "$PROJECT_DIR/data/report/plan_rebase_daily_renewal/plan_rebase_daily_renewal_${TARGET_DATE}.json" \
     "$PROJECT_DIR/data/report/plan_rebase_daily_renewal/plan_rebase_daily_renewal_${TARGET_DATE}.md" \
     "plan_rebase_daily_renewal"
 fi
-PYTHONPATH=. "$VENV_PY" -m src.engine.build_next_stage2_checklist --source-date "$TARGET_DATE"
+wait_for_postclose_resources "build_next_stage2_checklist"
+run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_next_stage2_checklist --source-date "$TARGET_DATE"
 wait_for_file_artifact "$(next_stage2_checklist_path)" "next_stage2_checklist"
-PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain --date "$TARGET_DATE"
+wait_for_postclose_resources "verify_threshold_cycle_postclose_chain"
+run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain --date "$TARGET_DATE"
 wait_for_report_artifact \
   "$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json" \
   "$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.md" \

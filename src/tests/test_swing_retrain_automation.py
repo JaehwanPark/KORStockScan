@@ -270,6 +270,9 @@ def test_swing_live_dry_run_wrapper_tracks_runtime_approval_artifact():
     assert "runtime_approval_markdown_artifact" in script
     assert "runtime_approval_missing" in script
     assert "swing_runtime_approval_${TARGET_DATE}.json" in script
+    assert 'RUN_LIFECYCLE_AUDIT="${SWING_LIVE_DRY_RUN_RUN_LIFECYCLE_AUDIT:-false}"' in script
+    assert "selection_completed_lifecycle_deferred_to_postclose" in script
+    assert "lifecycle_audit_mode" in script
 
 
 def test_auto_retrain_status_tracks_promotion_guard():

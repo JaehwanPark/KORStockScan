@@ -14,10 +14,10 @@
 | exit_only | 0 |
 | avg_down_wait | 0 |
 | pyramid_wait | 0 |
-| compact_exit_signal | 31 |
+| compact_exit_signal | 40 |
 | compact_sell_completed | 0 |
 | compact_scale_in_executed | 0 |
-| compact_decision_snapshot | 15 |
+| compact_decision_snapshot | 508 |
 
 ## 데이터 완성도
 
@@ -48,21 +48,21 @@
 
 - status: `report_only`
 - join_status: `post_sell_10m_proxy_when_record_id_matches`
-- sample_snapshots: `15`
-- sample_candidates: `15`
+- sample_snapshots: `508`
+- sample_candidates: `508`
 - post_sell_joined_candidates: `0`
 
 | candidate_action | sample | joined | avg_snapshot_profit | avg_snapshot_dd | avg_post_mfe_10m_proxy | avg_post_mae_10m_proxy |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| avg_down_wait | 3 | 0 | -0.63 | 1.97 | - | - |
-| exit_only | 12 | 0 | -2.1492 | 3.4892 | - | - |
+| avg_down_wait | 174 | 0 | -0.5753 | 0.8717 | - | - |
+| exit_only | 334 | 0 | -0.4283 | 0.9158 | - | - |
 
 ### Chosen Action Proxy
 
 | chosen_action | sample | joined | avg_snapshot_profit | avg_snapshot_dd | avg_post_mfe_10m_proxy | avg_post_mae_10m_proxy |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| exit_only | 1 | 0 | -2.54 | 3.88 | - | - |
-| hold_defer | 14 | 0 | -1.7957 | 3.1357 | - | - |
+| exit_only | 2 | 0 | -2.13 | 2.59 | - | - |
+| hold_defer | 506 | 0 | -0.4721 | 0.894 | - | - |
 
 - `post_decision_*_proxy`는 record_id가 post_sell 평가와 맞는 경우의 10분 proxy이며 live 판단 근거가 아니다.
 - true 후행 quote join이 추가되기 전까지는 selection-bias 점검과 후보 발굴에만 쓴다.

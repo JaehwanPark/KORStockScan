@@ -32,6 +32,7 @@ ASYNC_RESPONSE_RE = re.compile(
     r"worker_pid=(?P<worker_pid>[^ ]+) "
     r"output_file=(?P<output_file>.+)$"
 )
+TAIL_READ_BYTES = 256 * 1024
 
 
 def completion_artifact_path(target_date: str, profile: str) -> Path:
@@ -45,18 +46,25 @@ def load_json_line(path: Path | str | None) -> dict[str, Any]:
     target = Path(path)
     if not target.exists():
         return {}
+    try:
+        size = target.stat().st_size
+        with target.open("rb") as handle:
+            handle.seek(max(0, size - TAIL_READ_BYTES))
+            text = handle.read().decode("utf-8", errors="replace")
+    except OSError:
+        return {}
     payload: dict[str, Any] = {}
-    with target.open("r", encoding="utf-8", errors="replace") as handle:
-        for raw_line in handle:
-            line = raw_line.strip()
-            if not line.startswith("{") or not line.endswith("}"):
-                continue
-            try:
-                parsed = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(parsed, dict):
-                payload = parsed
+    for raw_line in reversed(text.splitlines()):
+        line = raw_line.strip()
+        if not line.startswith("{") or not line.endswith("}"):
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            payload = parsed
+            break
     return payload
 
 

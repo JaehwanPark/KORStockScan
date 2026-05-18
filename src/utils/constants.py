@@ -169,6 +169,16 @@ class TradingConfig:
     VPW_SCALP_LIMIT: int = 120  # 확신도가 낮을 때 매수를 강행하기 위한 체결강도 허들(%)
     SCALP_DYNAMIC_VPW_ENABLED: bool = True  # 동적 체결강도 게이트 관측/사용 여부
     SCALP_DYNAMIC_VPW_OBSERVE_ONLY: bool = False  # False면 동적 체결강도 게이트를 실전 진입에 적용
+    SCALP_PRE_AI_SOFT_GATE_ENABLED: bool = True  # pre-AI mechanical gate는 기본 risk context로 낮춘다
+    SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED: bool = True  # stale/insufficient/extreme sell source는 AI 전 차단
+    SCALP_PRE_AI_MAX_WS_AGE_SEC: float = 3.0  # pre-AI source-quality stale 판단 기준
+    SCALP_PRE_AI_EXTREME_SELL_BUY_RATIO_MAX: float = 0.35  # 극단 매도우위 risk source block 기준
+    SCALP_PRE_AI_EXTREME_SELL_EXEC_BUY_RATIO_MAX: float = 0.35
+    SCALP_OVERBOUGHT_PULLBACK_GUARD_ENABLED: bool = True  # overbought 후보는 AI 후 submit 직전 pullback/rebreak 확인
+    SCALP_OVERBOUGHT_PULLBACK_MIN_DISTANCE_PCT: float = -0.35
+    SCALP_OVERBOUGHT_REBREAK_MIN_STRENGTH: float = 120.0
+    SCALP_OVERBOUGHT_REBREAK_MIN_BUY_PRESSURE: float = 60.0
+    SCALP_LIQUIDITY_PRE_SUBMIT_GUARD_ENABLED: bool = True  # liquidity는 AI 전 관찰, 주문 직전 hard guard 유지
     SCALP_ENTRY_ARM_TTL_SEC: int = 20  # 스캘핑 자격 게이트 통과 후 재평가 없이 주문 단계로 유지할 시간
     WS_REG_BATCH_SIZE: int = 20  # 웹소켓 REG 패킷당 종목 등록 개수
     SCALP_VPW_WINDOW_SECONDS: int = 8  # 단기 체결 가속도 판정 시간창(초)
@@ -915,6 +925,18 @@ def _build_trading_rules() -> TradingConfig:
     env_dynamic_strength_exec_buy_ratio_tol = _env_float("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_RELIEF_EXEC_BUY_RATIO_TOL")
     if env_dynamic_strength_exec_buy_ratio_tol is None:
         env_dynamic_strength_exec_buy_ratio_tol = _env_float("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_CANARY_EXEC_BUY_RATIO_TOL")
+    env_pre_ai_soft_gate_enabled = _env_bool("KORSTOCKSCAN_SCALP_PRE_AI_SOFT_GATE_ENABLED")
+    env_pre_ai_source_quality_block_enabled = _env_bool("KORSTOCKSCAN_SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED")
+    env_pre_ai_max_ws_age_sec = _env_float("KORSTOCKSCAN_SCALP_PRE_AI_MAX_WS_AGE_SEC")
+    env_pre_ai_extreme_sell_buy_ratio = _env_float("KORSTOCKSCAN_SCALP_PRE_AI_EXTREME_SELL_BUY_RATIO_MAX")
+    env_pre_ai_extreme_sell_exec_buy_ratio = _env_float(
+        "KORSTOCKSCAN_SCALP_PRE_AI_EXTREME_SELL_EXEC_BUY_RATIO_MAX"
+    )
+    env_overbought_pullback_guard_enabled = _env_bool("KORSTOCKSCAN_SCALP_OVERBOUGHT_PULLBACK_GUARD_ENABLED")
+    env_overbought_pullback_min_distance = _env_float("KORSTOCKSCAN_SCALP_OVERBOUGHT_PULLBACK_MIN_DISTANCE_PCT")
+    env_overbought_rebreak_min_strength = _env_float("KORSTOCKSCAN_SCALP_OVERBOUGHT_REBREAK_MIN_STRENGTH")
+    env_overbought_rebreak_min_buy_pressure = _env_float("KORSTOCKSCAN_SCALP_OVERBOUGHT_REBREAK_MIN_BUY_PRESSURE")
+    env_liquidity_pre_submit_guard_enabled = _env_bool("KORSTOCKSCAN_SCALP_LIQUIDITY_PRE_SUBMIT_GUARD_ENABLED")
     env_partial_fill_enabled = _env_bool("KORSTOCKSCAN_SCALP_PARTIAL_FILL_RATIO_GUARD_ENABLED")
     if env_partial_fill_enabled is None:
         env_partial_fill_enabled = _env_bool("KORSTOCKSCAN_SCALP_PARTIAL_FILL_RATIO_CANARY_ENABLED")
@@ -984,6 +1006,16 @@ def _build_trading_rules() -> TradingConfig:
         or env_dynamic_strength_min_buy_value_ratio is not None
         or env_dynamic_strength_buy_ratio_tol is not None
         or env_dynamic_strength_exec_buy_ratio_tol is not None
+        or env_pre_ai_soft_gate_enabled is not None
+        or env_pre_ai_source_quality_block_enabled is not None
+        or env_pre_ai_max_ws_age_sec is not None
+        or env_pre_ai_extreme_sell_buy_ratio is not None
+        or env_pre_ai_extreme_sell_exec_buy_ratio is not None
+        or env_overbought_pullback_guard_enabled is not None
+        or env_overbought_pullback_min_distance is not None
+        or env_overbought_rebreak_min_strength is not None
+        or env_overbought_rebreak_min_buy_pressure is not None
+        or env_liquidity_pre_submit_guard_enabled is not None
         or env_partial_fill_enabled is not None
         or env_partial_fill_min_default is not None
         or env_partial_fill_min_strong is not None
@@ -1055,6 +1087,36 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_DYNAMIC_STRENGTH_RELIEF_EXEC_BUY_RATIO_TOL=env_dynamic_strength_exec_buy_ratio_tol
             if env_dynamic_strength_exec_buy_ratio_tol is not None
             else config.SCALP_DYNAMIC_STRENGTH_RELIEF_EXEC_BUY_RATIO_TOL,
+            SCALP_PRE_AI_SOFT_GATE_ENABLED=env_pre_ai_soft_gate_enabled
+            if env_pre_ai_soft_gate_enabled is not None
+            else config.SCALP_PRE_AI_SOFT_GATE_ENABLED,
+            SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED=env_pre_ai_source_quality_block_enabled
+            if env_pre_ai_source_quality_block_enabled is not None
+            else config.SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED,
+            SCALP_PRE_AI_MAX_WS_AGE_SEC=env_pre_ai_max_ws_age_sec
+            if env_pre_ai_max_ws_age_sec is not None
+            else config.SCALP_PRE_AI_MAX_WS_AGE_SEC,
+            SCALP_PRE_AI_EXTREME_SELL_BUY_RATIO_MAX=env_pre_ai_extreme_sell_buy_ratio
+            if env_pre_ai_extreme_sell_buy_ratio is not None
+            else config.SCALP_PRE_AI_EXTREME_SELL_BUY_RATIO_MAX,
+            SCALP_PRE_AI_EXTREME_SELL_EXEC_BUY_RATIO_MAX=env_pre_ai_extreme_sell_exec_buy_ratio
+            if env_pre_ai_extreme_sell_exec_buy_ratio is not None
+            else config.SCALP_PRE_AI_EXTREME_SELL_EXEC_BUY_RATIO_MAX,
+            SCALP_OVERBOUGHT_PULLBACK_GUARD_ENABLED=env_overbought_pullback_guard_enabled
+            if env_overbought_pullback_guard_enabled is not None
+            else config.SCALP_OVERBOUGHT_PULLBACK_GUARD_ENABLED,
+            SCALP_OVERBOUGHT_PULLBACK_MIN_DISTANCE_PCT=env_overbought_pullback_min_distance
+            if env_overbought_pullback_min_distance is not None
+            else config.SCALP_OVERBOUGHT_PULLBACK_MIN_DISTANCE_PCT,
+            SCALP_OVERBOUGHT_REBREAK_MIN_STRENGTH=env_overbought_rebreak_min_strength
+            if env_overbought_rebreak_min_strength is not None
+            else config.SCALP_OVERBOUGHT_REBREAK_MIN_STRENGTH,
+            SCALP_OVERBOUGHT_REBREAK_MIN_BUY_PRESSURE=env_overbought_rebreak_min_buy_pressure
+            if env_overbought_rebreak_min_buy_pressure is not None
+            else config.SCALP_OVERBOUGHT_REBREAK_MIN_BUY_PRESSURE,
+            SCALP_LIQUIDITY_PRE_SUBMIT_GUARD_ENABLED=env_liquidity_pre_submit_guard_enabled
+            if env_liquidity_pre_submit_guard_enabled is not None
+            else config.SCALP_LIQUIDITY_PRE_SUBMIT_GUARD_ENABLED,
             SCALP_PARTIAL_FILL_RATIO_GUARD_ENABLED=env_partial_fill_enabled
             if env_partial_fill_enabled is not None
             else config.SCALP_PARTIAL_FILL_RATIO_GUARD_ENABLED,

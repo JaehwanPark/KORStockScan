@@ -204,9 +204,13 @@ def test_threshold_cycle_report_marks_calibration_sample_and_live_risk_states():
     assert candidates["scale_in_price_guard"]["sample_window"] == "rolling_10d_or_cumulative_sparse"
     assert candidates["pre_submit_price_guard"]["calibration_state"] == "hold_sample"
     assert candidates["pre_submit_price_guard"]["allowed_runtime_apply"] is True
-    assert candidates["liquidity_gate_refined_candidate"]["allowed_runtime_apply"] is False
-    assert candidates["liquidity_gate_refined_candidate"]["apply_mode"] == "report_only_calibration"
-    assert candidates["overbought_gate_refined_candidate"]["allowed_runtime_apply"] is False
+    assert "liquidity_gate_refined_candidate" not in candidates
+    assert "overbought_gate_refined_candidate" not in candidates
+    assert candidates["liquidity_pre_submit_guard_p1"]["allowed_runtime_apply"] is False
+    assert candidates["liquidity_pre_submit_guard_p1"]["apply_mode"] == "report_only_calibration"
+    assert candidates["liquidity_pre_submit_guard_p1"]["supersedes"] == ["liquidity_gate_refined_candidate"]
+    assert candidates["overbought_pullback_guard_p1"]["allowed_runtime_apply"] is False
+    assert candidates["overbought_pullback_guard_p1"]["supersedes"] == ["overbought_gate_refined_candidate"]
     assert candidates["holding_flow_ofi_smoothing"]["sample_window"] == "daily_intraday"
     assert report["post_apply_attribution"]["soft_stop_balanced_policy"]["perfect_win_rate_required"] is False
 
@@ -347,9 +351,15 @@ def test_threshold_cycle_report_routes_entry_filter_ev_sources_to_calibration_fa
     assert candidates["pre_submit_price_guard"]["calibration_state"] == "adjust_up"
     assert candidates["pre_submit_price_guard"]["source_metrics"]["missed_winner_rate"] == 70.0
     assert candidates["score65_74_recovery_probe"]["source_metrics"]["blocked_ai_score_evaluated"] == 22
-    assert candidates["liquidity_gate_refined_candidate"]["calibration_state"] == "hold"
-    assert candidates["liquidity_gate_refined_candidate"]["allowed_runtime_apply"] is False
-    assert candidates["overbought_gate_refined_candidate"]["calibration_state"] == "freeze"
+    assert "liquidity_gate_refined_candidate" not in candidates
+    assert "overbought_gate_refined_candidate" not in candidates
+    assert candidates["liquidity_pre_submit_guard_p1"]["calibration_state"] == "hold"
+    assert candidates["liquidity_pre_submit_guard_p1"]["allowed_runtime_apply"] is False
+    assert candidates["liquidity_pre_submit_guard_p1"]["source_metrics"]["missed_winner_rate"] == 45.0
+    assert candidates["liquidity_pre_submit_guard_p1"]["sample_count"] == 21
+    assert candidates["overbought_pullback_guard_p1"]["calibration_state"] == "hold"
+    assert candidates["overbought_pullback_guard_p1"]["source_metrics"]["avoided_loser_rate"] == 45.0
+    assert candidates["overbought_pullback_guard_p1"]["sample_count"] == 21
 
 
 def test_window_policy_registry_demotes_score65_daily_trigger_without_rolling_denominator():
@@ -2327,13 +2337,14 @@ def test_window_policy_registry_consumes_rolling_source_metrics_when_snapshot_sa
     report = {
         "calibration_candidates": [
             {
-                "family": "liquidity_gate_refined_candidate",
+                "family": "liquidity_pre_submit_guard_p1",
                 "sample_count": 0,
                 "source_sample_count": 0,
                 "sample_floor": 20,
                 "calibration_state": "hold_sample",
                 "apply_mode": "report_only_calibration",
                 "allowed_runtime_apply": False,
+                "supersedes": ["liquidity_gate_refined_candidate"],
                 "window_policy": {
                     "primary": "rolling_5d",
                     "secondary": ["daily_intraday"],
@@ -2345,7 +2356,7 @@ def test_window_policy_registry_consumes_rolling_source_metrics_when_snapshot_sa
     cumulative = {
         "threshold_snapshot_by_window": {
             "rolling_5d": {
-                "liquidity_gate_refined_candidate": {
+                "liquidity_pre_submit_guard_p1": {
                     "sample": {"blocked_events": 0},
                     "sample_ready": False,
                     "current": {"enabled": False},
@@ -2373,6 +2384,7 @@ def test_window_policy_registry_consumes_rolling_source_metrics_when_snapshot_sa
     assert candidate["sample_count"] == 30
     assert candidate["source_metrics"]["evaluated_candidates"] == 30
     assert candidate["allowed_runtime_apply"] is False
+    assert candidate["supersedes"] == ["liquidity_gate_refined_candidate"]
     assert report["window_policy_audit"]["issue_counts"] == {}
     audit_item = report["window_policy_audit"]["items"][0]
     assert audit_item["snapshot_alignment_status"] == "source_denominator_used"

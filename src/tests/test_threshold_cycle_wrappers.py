@@ -23,9 +23,12 @@ def test_postclose_wrapper_runs_swing_daily_simulation_before_lifecycle_audit():
     simulation_idx = script.index('deploy/run_swing_daily_simulation_report.sh" "$TARGET_DATE"')
     simulation_wait_idx = script.index('"$PROJECT_DIR/data/report/swing_daily_simulation/swing_daily_simulation_${TARGET_DATE}.json"')
     audit_idx = script.index("src.engine.swing_lifecycle_audit")
+    resource_idx = script.index('wait_for_postclose_resources "swing_lifecycle_audit"')
 
     assert simulation_idx < audit_idx
     assert simulation_idx < simulation_wait_idx < audit_idx
+    assert resource_idx < audit_idx
+    assert 'run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.swing_lifecycle_audit' in script
 
 
 def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
@@ -122,6 +125,24 @@ def test_postclose_wrapper_reuses_existing_snapshot_when_checkpoint_exists():
     assert '[ -f "$CHECKPOINT_PATH" ] && [ -n "$EXISTING_SNAPSHOT_PATH" ]' in script
     assert 'echo "[threshold-cycle] reusing immutable snapshot source=$EXISTING_SNAPSHOT_PATH checkpoint=$CHECKPOINT_PATH"' in script
     assert '[ "${REUSE_EXISTING_SNAPSHOT:-false}" != "true" ]' in script
+
+
+def test_postclose_wrapper_resource_guards_heavy_steps():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+
+    assert 'POSTCLOSE_RESOURCE_GUARD="${THRESHOLD_CYCLE_POSTCLOSE_RESOURCE_GUARD:-true}"' in script
+    assert 'POSTCLOSE_NICE_LEVEL="${THRESHOLD_CYCLE_POSTCLOSE_NICE_LEVEL:-10}"' in script
+    assert 'POSTCLOSE_IONICE_LEVEL="${THRESHOLD_CYCLE_POSTCLOSE_IONICE_LEVEL:-7}"' in script
+    assert 'COMPACT_AVAILABILITY_WAIT_SEC="${THRESHOLD_CYCLE_COMPACT_AVAILABILITY_WAIT_SEC:-900}"' in script
+    assert "run_postclose_cmd()" in script
+    assert "wait_for_postclose_resources()" in script
+    assert "availability guard wait" in script
+    assert 'wait_for_postclose_resources "daily_threshold_cycle_report"' in script
+    assert 'wait_for_postclose_resources "swing_lifecycle_audit"' in script
+    assert 'wait_for_postclose_resources "gemini_scalping_pattern_lab"' in script
+    assert 'wait_for_postclose_resources "threshold_cycle_ev_${pass_label}"' in script
+    assert 'run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.backfill_threshold_cycle_events' in script
+    assert 'run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.daily_threshold_cycle_report' in script
 
 
 def test_postclose_wrapper_cleans_up_snapshot_duplicates_with_retention():

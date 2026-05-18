@@ -62,7 +62,7 @@ def _threshold_cycle_event_path(target_date: str) -> Path:
 def _compaction_mode() -> str:
     value = os.getenv(
         "PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE",
-        str(getattr(TRADING_RULES, "PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE", "off") or "off"),
+        str(getattr(TRADING_RULES, "PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE", "shadow") or "shadow"),
     )
     normalized = str(value).strip().lower()
     return normalized if normalized in {"off", "shadow", "suppress"} else "off"

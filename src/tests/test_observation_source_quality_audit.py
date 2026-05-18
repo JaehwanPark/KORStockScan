@@ -138,6 +138,52 @@ def test_observation_source_quality_audit_routes_probe_state_persisted_by_contra
     assert "metric_role" in persisted["missing_violations"]
 
 
+def test_observation_source_quality_audit_accepts_pre_ai_and_pre_submit_gate_contracts(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-18",
+        [
+            _event(
+                "blocked_liquidity",
+                {
+                    "metric_role": "risk_context",
+                    "decision_authority": "source_quality_only",
+                    "runtime_effect": False,
+                    "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
+                    "threshold_family": "liquidity_pre_submit_guard_p1",
+                    "gate_action": "risk_context_only",
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "liquidity_value": 100_000_000,
+                    "min_liquidity": 500_000_000,
+                },
+            ),
+            _event(
+                "pre_submit_liquidity_guard_block",
+                {
+                    "metric_role": "source_quality_gate",
+                    "decision_authority": "order_safety_pre_submit_only",
+                    "runtime_effect": "pre_submit_block",
+                    "forbidden_uses": "provider_route_change/bot_restart/runtime_threshold_apply_without_approval",
+                    "threshold_family": "liquidity_pre_submit_guard_p1",
+                    "gate_action": "pre_submit_block",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "liquidity_value": 100_000_000,
+                    "min_liquidity": 500_000_000,
+                },
+                record_id=2,
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-05-18")
+
+    assert report["stage_contracts"]["blocked_liquidity"]["status"] == "pass"
+    assert report["stage_contracts"]["pre_submit_liquidity_guard_block"]["status"] == "pass"
+
+
 def test_observation_source_quality_audit_writes_json_and_markdown(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(tmp_path, "2026-05-15", [_event("swing_probe_entry_candidate", {

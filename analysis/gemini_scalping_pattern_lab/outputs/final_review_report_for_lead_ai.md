@@ -1,9 +1,11 @@
 # Gemini Scalping Pattern Lab Final Review
 
-- generated_at: `2026-05-18 07:58:22`
-- analysis_period: `2026-05-15 ~ 2026-05-15`
+- generated_at: `2026-05-18 16:25:12`
+- analysis_period: `2026-04-21 ~ 2026-05-18`
 
 ## 1. 판정
+
+> 표본 부족: valid_profit_rate=0건 < 30. 결론 확정 대신 방향성만 기록한다.
 
 ### 1-1. 코호트별 EV 요약
 
@@ -11,11 +13,11 @@
 
 ### 1-2. Plan Rebase 관찰축 요약
 
-- `WAIT65~79 total_candidates=19`, `recovery_check=0`, `promoted=0`, `submitted=0`
-- `blocked_ai_score_share=100.0%`, `budget_pass_to_submitted_rate=0.0%`, `gatekeeper_eval_ms_p95=5421ms`
+- `WAIT65~79 total_candidates=12`, `recovery_check=0`, `promoted=0`, `submitted=0`
+- `blocked_ai_score_share=91.7%`, `budget_pass_to_submitted_rate=0.0%`, `gatekeeper_eval_ms_p95=5441ms`
 
-- `AI threshold dominance`: 경고 — `blocked_ai_score_share=100.0%`로 WAIT/BLOCK 비중이 높아 BUY drought 해석을 지지한다.
-- `Budget pass without submit`: 경고 — `budget_pass=82`인데 `submitted=0`라 제출 전 병목이 기대값 회복을 끊고 있다.
+- `AI threshold dominance`: 경고 — `blocked_ai_score_share=91.7%`로 WAIT/BLOCK 비중이 높아 BUY drought 해석을 지지한다.
+- `Budget pass without submit`: 경고 — `budget_pass=11`인데 `submitted=0`라 제출 전 병목이 기대값 회복을 끊고 있다.
 
 ### 1-3. 손실 패턴 Top 5
 
@@ -26,16 +28,16 @@
 ### 1-5. 기회비용 회수 후보 Top 5
 
 **#1** — `AI threshold miss`
-- 차단 건수 합계: 371872건 | 차단 비율: 100.0% | 관찰 일수: 1일
+- 차단 건수 합계: 4412162건 | 차단 비율: 100.0% | 관찰 일수: 24일
 
 **#2** — `overbought gate miss`
-- 차단 건수 합계: 51970건 | 차단 비율: 100.0% | 관찰 일수: 1일
+- 차단 건수 합계: 1404764건 | 차단 비율: 100.0% | 관찰 일수: 24일
 
 **#3** — `liquidity gate miss`
-- 차단 건수 합계: 8371건 | 차단 비율: 100.0% | 관찰 일수: 1일
+- 차단 건수 합계: 82765건 | 차단 비율: 99.6% | 관찰 일수: 24일
 
 **#4** — `latency guard miss`
-- 차단 건수 합계: 82건 | 차단 비율: 100.0% | 관찰 일수: 1일
+- 차단 건수 합계: 60482건 | 차단 비율: 99.5% | 관찰 일수: 24일
 
 ---
 
@@ -49,7 +51,7 @@
 
 ### 2-2. sequence_fact 관찰
 
-- rebase_integrity_flag: 0건
+- rebase_integrity_flag: 6건
 - partial_then_expand_flag: 0건
 - same_symbol_repeat_flag: 0건
 - same_ts_multi_rebase_flag: 0건
@@ -59,9 +61,9 @@
 ### 3-1. EV 개선 우선순위
 
 - `AI threshold miss EV 회수 조건 점검`
-  검증지표: 차단건수=371872, 차단비율=100.0%
+  검증지표: 차단건수=4412162, 차단비율=100.0%
 - `overbought gate miss EV 회수 조건 점검`
-  검증지표: 차단건수=51970, 차단비율=100.0%
+  검증지표: 차단건수=1404764, 차단비율=100.0%
 
 ### 3-2. Plan Rebase 연계 관찰
 

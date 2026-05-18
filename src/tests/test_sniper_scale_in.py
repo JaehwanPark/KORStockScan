@@ -2363,6 +2363,302 @@ def test_watching_state_blocks_deep_below_bid_pre_submit_price(monkeypatch):
     assert by_stage["order_bundle_failed"] == {}
 
 
+def test_scalping_pre_ai_soft_gate_allows_ai_and_blocks_low_liquidity_at_submit(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 5, 18, 13, 55, 0)
+
+    state_handlers.datetime = FixedDateTime
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALP_PRE_AI_SOFT_GATE_ENABLED=True,
+        SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED=True,
+        SCALP_LIQUIDITY_PRE_SUBMIT_GUARD_ENABLED=True,
+        SCALP_OVERBOUGHT_PULLBACK_GUARD_ENABLED=True,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.ACTIVE_TARGETS = []
+    state_handlers.HIGHEST_PRICES = {}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+    state_handlers.KIWOOM_TOKEN = "token"
+
+    class DummyRadar:
+        def get_smart_target_price(self, curr_price, **kwargs):
+            return curr_price, 0.0
+
+    class DummyAI:
+        def __init__(self):
+            self.seen_context = None
+
+        def analyze_target(self, _name, ws_data, *_args, **_kwargs):
+            self.seen_context = ws_data.get("scalp_pre_ai_gate_context")
+            return {"action": "BUY", "score": 90, "reason": "confirmed"}
+
+    class DummyEventBus:
+        def publish(self, *args, **kwargs):
+            return None
+
+    state_handlers.EVENT_BUS = DummyEventBus()
+    logs = []
+    sent_orders = []
+
+    weak_momentum = {
+        "enabled": True,
+        "allowed": False,
+        "reason": "below_buy_ratio",
+        "position_tag": "SCANNER",
+        "threshold_profile": "default",
+        "base_vpw": 100.0,
+        "current_vpw": 100.0,
+        "vpw_delta": 0.0,
+        "slope_per_sec": 0.0,
+        "window_sec": 8,
+        "elapsed_sec": 8.0,
+        "window_total_value": 100_000,
+        "window_buy_value": 48_000,
+        "window_sell_value": 52_000,
+        "window_buy_ratio": 0.48,
+        "window_exec_buy_ratio": 0.45,
+        "window_net_buy_qty": -2,
+    }
+
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(state_handlers, "_publish_buy_signal_submission_notice", lambda *args, **kwargs: None)
+    monkeypatch.setattr(state_handlers, "evaluate_scalping_strength_momentum", lambda ws_data: weak_momentum)
+    monkeypatch.setattr(state_handlers, "arm_big_bite_if_triggered", lambda **kwargs: (False, {}))
+    monkeypatch.setattr(state_handlers, "confirm_big_bite_follow_through", lambda **kwargs: (True, {}))
+    monkeypatch.setattr(state_handlers, "build_tick_data_from_ws", lambda ws_data: {})
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [{"dir": "BUY", "volume": 1, "strength": 100}])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [{"고가": 10000, "저가": 9900}])
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "describe_buy_capacity",
+        lambda *args, **kwargs: (100_000, 95_000, 5, 0.95),
+    )
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "send_buy_order", lambda *args, **kwargs: sent_orders.append(args) or {"return_code": "0", "ord_no": "O1"})
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_live_buy_entry",
+        lambda **kwargs: {
+            "allowed": True,
+            "mode": "normal",
+            "decision": "ALLOW_NORMAL",
+            "reason": "ok",
+            "latency_state": "SAFE",
+            "orders": [{"tag": "normal", "qty": 1, "price": kwargs.get("signal_price"), "tif": "DAY"}],
+            "signal_price": kwargs.get("signal_price"),
+            "latest_price": kwargs.get("signal_price"),
+            "computed_allowed_slippage": 0,
+            "ws_age_ms": 100,
+            "ws_jitter_ms": 10,
+            "spread_ratio": 0.001,
+            "quote_stale": False,
+            "latency_danger_reasons": "",
+            "order_price": kwargs.get("signal_price"),
+        },
+    )
+
+    ai = DummyAI()
+    stock = {"id": 10, "name": "LOWLIQ", "strategy": "SCALPING", "position_tag": "SCANNER", "prob": 0.9, "rt_ai_prob": 0.9}
+    state_handlers.handle_watching_state(
+        stock=stock,
+        code="123123",
+        ws_data={
+            "curr": 10_000,
+            "v_pw": 100.0,
+            "ask_tot": 100,
+            "bid_tot": 100,
+            "open": 9_950,
+            "fluctuation": 1.0,
+            "orderbook": {
+                "asks": [{"price": 10_010, "volume": 100}],
+                "bids": [{"price": 10_000, "volume": 100}],
+            },
+        },
+        admin_id=1,
+        radar=DummyRadar(),
+        ai_engine=ai,
+    )
+
+    by_stage = {stage: fields for stage, fields in logs}
+    assert "ai_confirmed" in by_stage
+    assert "scalp_sim_entry_armed" in by_stage
+    assert by_stage["blocked_strength_momentum"]["gate_action"] == "risk_context_only"
+    assert by_stage["blocked_vpw"]["gate_action"] == "risk_context_only"
+    assert by_stage["blocked_liquidity"]["gate_action"] == "risk_context_only"
+    assert "pre_submit_liquidity_guard_block" in by_stage
+    assert by_stage["pre_submit_liquidity_guard_block"]["broker_order_forbidden"] is True
+    assert sent_orders == []
+    assert ai.seen_context["liquidity"]["threshold_family"] == "liquidity_pre_submit_guard_p1"
+
+
+def test_scalping_overbought_reaches_ai_but_submit_requires_pullback_or_rebreak(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 5, 18, 14, 0, 0)
+
+    state_handlers.datetime = FixedDateTime
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALP_PRE_AI_SOFT_GATE_ENABLED=True,
+        SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED=True,
+        SCALP_OVERBOUGHT_PULLBACK_GUARD_ENABLED=True,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.ACTIVE_TARGETS = []
+    state_handlers.HIGHEST_PRICES = {}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+    state_handlers.KIWOOM_TOKEN = "token"
+
+    class DummyRadar:
+        def get_smart_target_price(self, curr_price, **kwargs):
+            return curr_price, 0.0
+
+    class DummyAI:
+        def analyze_target(self, *args, **kwargs):
+            return {"action": "BUY", "score": 91, "reason": "confirmed"}
+
+    state_handlers.EVENT_BUS = type("DummyEventBus", (), {"publish": lambda self, *args, **kwargs: None})()
+    logs = []
+    sent_orders = []
+
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(state_handlers, "_publish_buy_signal_submission_notice", lambda *args, **kwargs: None)
+    monkeypatch.setattr(state_handlers, "evaluate_scalping_strength_momentum", lambda ws_data: {"enabled": True, "allowed": True, "reason": "ok"})
+    monkeypatch.setattr(state_handlers, "arm_big_bite_if_triggered", lambda **kwargs: (False, {}))
+    monkeypatch.setattr(state_handlers, "confirm_big_bite_follow_through", lambda **kwargs: (True, {}))
+    monkeypatch.setattr(state_handlers, "build_tick_data_from_ws", lambda ws_data: {})
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [{"dir": "BUY", "volume": 1, "strength": 110}])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [{"고가": 12_000, "저가": 10_000}])
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "describe_buy_capacity", lambda *args, **kwargs: (100_000, 95_000, 5, 0.95))
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "send_buy_order", lambda *args, **kwargs: sent_orders.append(args) or {"return_code": "0", "ord_no": "O1"})
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_live_buy_entry",
+        lambda **kwargs: {
+            "allowed": True,
+            "mode": "normal",
+            "decision": "ALLOW_NORMAL",
+            "reason": "ok",
+            "latency_state": "SAFE",
+            "orders": [{"tag": "normal", "qty": 1, "price": kwargs.get("signal_price"), "tif": "DAY"}],
+            "signal_price": kwargs.get("signal_price"),
+            "latest_price": kwargs.get("signal_price"),
+            "computed_allowed_slippage": 0,
+            "ws_age_ms": 100,
+            "ws_jitter_ms": 10,
+            "spread_ratio": 0.001,
+            "quote_stale": False,
+            "latency_danger_reasons": "",
+            "order_price": kwargs.get("signal_price"),
+        },
+    )
+
+    stock = {"id": 11, "name": "HOT", "strategy": "SCALPING", "position_tag": "SCANNER", "prob": 0.9, "rt_ai_prob": 0.9}
+    state_handlers.handle_watching_state(
+        stock=stock,
+        code="456456",
+        ws_data={
+            "curr": 12_000,
+            "v_pw": 110.0,
+            "buy_ratio": 52.0,
+            "ask_tot": 50_000,
+            "bid_tot": 50_000,
+            "open": 10_000,
+            "high": 12_000,
+            "low": 10_000,
+            "fluctuation": 21.0,
+            "orderbook": {
+                "asks": [{"price": 12_010, "volume": 100}],
+                "bids": [{"price": 12_000, "volume": 100}],
+            },
+        },
+        admin_id=1,
+        radar=DummyRadar(),
+        ai_engine=DummyAI(),
+    )
+
+    by_stage = {stage: fields for stage, fields in logs}
+    assert "ai_confirmed" in by_stage
+    assert "scalp_sim_entry_armed" in by_stage
+    assert by_stage["blocked_overbought"]["gate_action"] == "risk_context_only"
+    assert by_stage["blocked_overbought"]["risk_bucket"] == "chase_risk"
+    assert "pre_submit_overbought_pullback_guard_block" in by_stage
+    assert by_stage["pre_submit_overbought_pullback_guard_block"]["broker_order_forbidden"] is True
+    assert sent_orders == []
+
+
+def test_scalping_pre_ai_source_quality_block_keeps_insufficient_history_closed(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 5, 18, 14, 5, 0)
+
+    state_handlers.datetime = FixedDateTime
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALP_PRE_AI_SOFT_GATE_ENABLED=True,
+        SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED=True,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.ACTIVE_TARGETS = []
+    state_handlers.HIGHEST_PRICES = {}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    class DummyRadar:
+        def get_smart_target_price(self, curr_price, **kwargs):
+            return curr_price, 0.0
+
+    class FailingAI:
+        def analyze_target(self, *args, **kwargs):
+            raise AssertionError("source-quality block should stop before AI")
+
+    logs = []
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
+    monkeypatch.setattr(state_handlers, "evaluate_scalping_strength_momentum", lambda ws_data: {"enabled": True, "allowed": False, "reason": "insufficient_history"})
+    monkeypatch.setattr(state_handlers, "arm_big_bite_if_triggered", lambda **kwargs: (False, {}))
+    monkeypatch.setattr(state_handlers, "confirm_big_bite_follow_through", lambda **kwargs: (True, {}))
+    monkeypatch.setattr(state_handlers, "build_tick_data_from_ws", lambda ws_data: {})
+
+    stock = {"id": 12, "name": "STALE", "strategy": "SCALPING", "position_tag": "SCANNER", "prob": 0.9, "rt_ai_prob": 0.9}
+    state_handlers.handle_watching_state(
+        stock=stock,
+        code="789789",
+        ws_data={
+            "curr": 10_000,
+            "v_pw": 121.0,
+            "ask_tot": 50_000,
+            "bid_tot": 50_000,
+            "open": 9_900,
+            "fluctuation": 1.0,
+            "orderbook": {"asks": [{"price": 10_010}], "bids": [{"price": 10_000}]},
+        },
+        admin_id=1,
+        radar=DummyRadar(),
+        ai_engine=FailingAI(),
+    )
+
+    by_stage = {stage: fields for stage, fields in logs}
+    assert by_stage["blocked_strength_momentum"]["gate_action"] == "source_quality_block"
+    assert by_stage["blocked_strength_momentum"]["source_quality_block_reason"] == "insufficient_history"
+    assert "ai_confirmed" not in by_stage
+
+
 def test_scalping_entry_timeout_uses_strategy_profile_not_target_price(monkeypatch):
     monkeypatch.setattr(
         state_handlers,

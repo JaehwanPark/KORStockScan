@@ -501,7 +501,7 @@ def _simulate_path_from_entry(
     max_hold_days = int(entry_decision.get("max_hold_days") or 4)
     exit_date = None
 
-    for _, day in future.iterrows():
+    for day in future.to_dict("records"):
         hold_days += 1
         if as_of is not None and day["quote_date"] > as_of:
             break
@@ -597,7 +597,7 @@ def simulate_swing_recommendations(
     rows = []
     as_of = pd.to_datetime(target_date).normalize() if target_date else None
 
-    for _, row in recommendations.iterrows():
+    for row in recommendations.to_dict("records"):
         signal_date = pd.to_datetime(row.get("date"), errors="coerce").normalize()
         code = str(row.get("code") or row.get("stock_code") or "").zfill(6)
         future = _future_quotes_for_signal(quote_groups, code, signal_date)
@@ -666,7 +666,7 @@ def simulate_swing_observation_arms(
     as_of = pd.to_datetime(target_date).normalize() if target_date else None
     arms = ("selection_only", "gap_pass", "gatekeeper_pass")
 
-    for _, row in recommendations.iterrows():
+    for row in recommendations.to_dict("records"):
         signal_date = pd.to_datetime(row.get("date"), errors="coerce").normalize()
         code = str(row.get("code") or row.get("stock_code") or "").zfill(6)
         future = _future_quotes_for_signal(quote_groups, code, signal_date)

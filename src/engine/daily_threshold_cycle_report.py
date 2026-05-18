@@ -244,6 +244,74 @@ CALIBRATION_FAMILY_METADATA = {
         "sample_denominator_keys": ["blocked_events"],
         "allowed_runtime_apply": False,
     },
+    "strength_momentum_soft_gate_p1": {
+        "priority": 13,
+        "source_family": "strength_momentum_soft_gate_p1",
+        "target_env_keys": [
+            "SCALP_PRE_AI_SOFT_GATE_ENABLED",
+            "SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED",
+            "SCALP_PRE_AI_MAX_WS_AGE_SEC",
+        ],
+        "primary_key": "enabled",
+        "bounds": {},
+        "sample_floor": 20,
+        "sample_window": "rolling_5d_with_daily_guard",
+        "window_policy": {
+            "primary": "rolling_5d",
+            "secondary": ["daily_intraday", "cumulative_since_2026-04-21"],
+            "use": "strength/momentum hard block을 AI 전 폐기하지 않고 risk context로 넘기는 family 후보다. source-quality block은 별도 유지한다.",
+            "daily_only_allowed": False,
+        },
+        "sample_denominator_keys": ["blocked_events"],
+        "allowed_runtime_apply": False,
+        "human_approval_required": True,
+    },
+    "overbought_pullback_guard_p1": {
+        "priority": 14,
+        "source_family": "overbought_pullback_guard_p1",
+        "supersedes": ["overbought_gate_refined_candidate"],
+        "target_env_keys": [
+            "SCALP_OVERBOUGHT_PULLBACK_GUARD_ENABLED",
+            "SCALP_OVERBOUGHT_PULLBACK_MIN_DISTANCE_PCT",
+            "SCALP_OVERBOUGHT_REBREAK_MIN_STRENGTH",
+            "SCALP_OVERBOUGHT_REBREAK_MIN_BUY_PRESSURE",
+        ],
+        "primary_key": "enabled",
+        "bounds": {},
+        "sample_floor": 20,
+        "sample_window": "rolling_5d_with_daily_guard",
+        "window_policy": {
+            "primary": "rolling_5d",
+            "secondary": ["daily_intraday", "cumulative_since_2026-04-21"],
+            "use": "overbought 후보는 AI/counterfactual까지 열되 실주문 직전 pullback/rebreak guard로 chase risk를 차단한다.",
+            "daily_only_allowed": False,
+        },
+        "sample_denominator_keys": ["blocked_events"],
+        "allowed_runtime_apply": False,
+        "human_approval_required": True,
+    },
+    "liquidity_pre_submit_guard_p1": {
+        "priority": 15,
+        "source_family": "liquidity_pre_submit_guard_p1",
+        "supersedes": ["liquidity_gate_refined_candidate"],
+        "target_env_keys": [
+            "SCALP_LIQUIDITY_PRE_SUBMIT_GUARD_ENABLED",
+            "MIN_SCALP_LIQUIDITY",
+        ],
+        "primary_key": "enabled",
+        "bounds": {},
+        "sample_floor": 20,
+        "sample_window": "rolling_5d_with_daily_guard",
+        "window_policy": {
+            "primary": "rolling_5d",
+            "secondary": ["daily_intraday", "cumulative_since_2026-04-21"],
+            "use": "liquidity는 AI/counterfactual 전단 폐기 대상이 아니라 broker submit 직전 hard safety guard다.",
+            "daily_only_allowed": False,
+        },
+        "sample_denominator_keys": ["blocked_events"],
+        "allowed_runtime_apply": False,
+        "human_approval_required": True,
+    },
     "bad_entry_refined_canary": {
         "priority": 20,
         "source_family": "bad_entry_refined_canary",
@@ -4269,20 +4337,29 @@ def _build_family_reports(
         _build_pre_submit_guard_family(events),
         _build_entry_filter_refined_candidate_family(
             events,
-            "blocked_liquidity",
-            "liquidity_gate_refined_candidate",
+            "blocked_strength_momentum",
+            "strength_momentum_soft_gate_p1",
             [
-                "liquidity hard block을 즉시 완화하지 않고 missed-entry EV와 avoided-loser 비율로 refined family 후보만 만든다.",
-                "신규 family는 구현/테스트/provenance가 닫히기 전까지 allowed_runtime_apply=false다.",
+                "strength/momentum 미달은 AI 전 terminal block이 아니라 risk context 후보로 관리한다.",
+                "insufficient/stale/extreme sell source-quality block은 유지하고, live apply는 approval artifact 전까지 금지한다.",
             ],
         ),
         _build_entry_filter_refined_candidate_family(
             events,
             "blocked_overbought",
-            "overbought_gate_refined_candidate",
+            "overbought_pullback_guard_p1",
             [
-                "overbought hard block을 broad 완화하지 않고 과열 차단 후 선후행 EV로 refined family 후보만 만든다.",
-                "GOOD_ENTRY missed-upside와 avoided-loser trade-off가 닫히기 전까지 runtime apply는 금지한다.",
+                "overbought 후보는 AI/counterfactual까지 열고, 실주문은 pullback/rebreak pre-submit guard로만 허용한다.",
+                "broad overbought 완화가 아니며 approval artifact와 rollback guard 전까지 자동 runtime apply는 금지한다.",
+            ],
+        ),
+        _build_entry_filter_refined_candidate_family(
+            events,
+            "blocked_liquidity",
+            "liquidity_pre_submit_guard_p1",
+            [
+                "liquidity 미달은 AI 전 후보 폐기가 아니라 broker submit 직전 hard safety guard로 재배치한다.",
+                "저유동성 후보는 actual_order_submitted=false virtual-only attribution으로만 본다.",
             ],
         ),
         _build_entry_ofi_ai_smoothing_family(events),
@@ -4445,13 +4522,13 @@ def _source_metrics_for_family(output_family: str, report_source_context: dict |
             if isinstance(metrics.get("latency_guard_miss_ev_recovery"), dict)
             else {}
         )
-    if output_family == "liquidity_gate_refined_candidate":
+    if output_family in {"liquidity_gate_refined_candidate", "liquidity_pre_submit_guard_p1"}:
         return (
             metrics.get("liquidity_gate_refined_candidate")
             if isinstance(metrics.get("liquidity_gate_refined_candidate"), dict)
             else {}
         )
-    if output_family == "overbought_gate_refined_candidate":
+    if output_family in {"overbought_gate_refined_candidate", "overbought_pullback_guard_p1"}:
         return (
             metrics.get("overbought_gate_refined_candidate")
             if isinstance(metrics.get("overbought_gate_refined_candidate"), dict)
@@ -4484,12 +4561,12 @@ def _source_sample_count_for_family(output_family: str, source_metrics: dict) ->
             _safe_int(source_metrics.get("evaluated_candidates"), 0) or 0,
             _safe_int(source_metrics.get("performance_latency_block_events"), 0) or 0,
         )
-    if output_family == "liquidity_gate_refined_candidate":
+    if output_family in {"liquidity_gate_refined_candidate", "liquidity_pre_submit_guard_p1"}:
         return max(
             _safe_int(source_metrics.get("evaluated_candidates"), 0) or 0,
             _safe_int(source_metrics.get("performance_blocked_liquidity_events"), 0) or 0,
         )
-    if output_family == "overbought_gate_refined_candidate":
+    if output_family in {"overbought_gate_refined_candidate", "overbought_pullback_guard_p1"}:
         return max(
             _safe_int(source_metrics.get("evaluated_candidates"), 0) or 0,
             _safe_int(source_metrics.get("performance_blocked_overbought_events"), 0) or 0,
@@ -4641,11 +4718,26 @@ def _calibration_state_for_family(
         if missed_rate is not None and avoided_rate is not None and missed_rate > avoided_rate + 10.0:
             return ("adjust_up", "latency_block missed-winner 우위가 있어 max_below_bid_bps bounded 상향 후보")
         return ("hold", "latency guard miss EV 회복 우위가 충분하지 않아 현행 pre-submit guard 유지")
-    if output_family in {"liquidity_gate_refined_candidate", "overbought_gate_refined_candidate"}:
+    if output_family in {
+        "liquidity_gate_refined_candidate",
+        "overbought_gate_refined_candidate",
+        "strength_momentum_soft_gate_p1",
+        "overbought_pullback_guard_p1",
+        "liquidity_pre_submit_guard_p1",
+    }:
         if sample_count < sample_floor:
             return (
                 "hold_sample",
                 f"{output_family} source sample floor 미달({sample_count}/{sample_floor}); 신규 family 설계 후보만 유지",
+            )
+        if output_family in {
+            "strength_momentum_soft_gate_p1",
+            "overbought_pullback_guard_p1",
+            "liquidity_pre_submit_guard_p1",
+        }:
+            return (
+                "hold",
+                f"{output_family}는 pre-AI gate 재설계 family 후보이며 approval artifact 전까지 자동 runtime apply 금지",
             )
         missed_rate = _safe_float(source_metrics.get("missed_winner_rate"), None)
         avoided_rate = _safe_float(source_metrics.get("avoided_loser_rate"), None)
@@ -4894,6 +4986,7 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
             "stage": family.get("stage"),
             "priority": int(metadata.get("priority") or 999),
             "target_env_keys": list(metadata.get("target_env_keys") or []),
+            "supersedes": list(metadata.get("supersedes") or []),
             "current_value": current.get(primary_key),
             "current_values": current,
             "recommended_value": recommended.get(primary_key),

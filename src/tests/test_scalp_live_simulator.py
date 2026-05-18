@@ -837,6 +837,11 @@ def test_swing_probe_scale_in_uses_virtual_budget_not_real_deposit(monkeypatch):
 
 
 def test_scalp_simulator_threshold_stages_are_included():
+    assert threshold_family_for_stage("pre_submit_liquidity_guard_block") == "liquidity_pre_submit_guard_p1"
+    assert (
+        threshold_family_for_stage("pre_submit_overbought_pullback_guard_block")
+        == "overbought_pullback_guard_p1"
+    )
     assert threshold_family_for_stage("scalp_sim_entry_armed") == "entry_mechanical_momentum"
     assert threshold_family_for_stage("scalp_sim_entry_ai_price_applied") == "pre_submit_price_guard"
     assert threshold_family_for_stage("scalp_sim_entry_ai_price_skip_order") == "pre_submit_price_guard"

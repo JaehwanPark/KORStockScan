@@ -1,7 +1,7 @@
 # 스캘핑 패턴 분석 최종 리뷰 보고서 (for Lead AI)
 
-생성일: 2026-05-18 07:58:23
-분석 기간: 2026-05-15 ~ 2026-05-15
+생성일: 2026-05-18 16:25:34
+분석 기간: 2026-04-21 ~ 2026-05-18
 
 ---
 
@@ -17,11 +17,11 @@
 
 ### 1-4. 튜닝 관찰축 요약
 
-- `WAIT65~79 total_candidates=19`, `recovery_check=0`, `promoted=0`, `submitted=0`
-- `blocked_ai_score_share=100.0%`, `gatekeeper_eval_ms_p95=5421ms`, `budget_pass_to_submitted_rate=0.0%`
+- `WAIT65~79 total_candidates=12`, `recovery_check=0`, `promoted=0`, `submitted=0`
+- `blocked_ai_score_share=91.7%`, `gatekeeper_eval_ms_p95=5441ms`, `budget_pass_to_submitted_rate=0.0%`
 
-- `AI threshold dominance`: 경고 — `blocked_ai_score_share=100.0%`로 WAIT/BLOCK 비중이 높아 BUY drought 해석을 지지한다.
-- `Budget pass without submit`: 경고 — `budget_pass=82`인데 `submitted=0`라 제출 전 병목이 기대값 회복을 끊고 있다.
+- `AI threshold dominance`: 경고 — `blocked_ai_score_share=91.7%`로 WAIT/BLOCK 비중이 높아 BUY drought 해석을 지지한다.
+- `Budget pass without submit`: 경고 — `budget_pass=11`인데 `submitted=0`라 제출 전 병목이 기대값 회복을 끊고 있다.
 
 ### 1-2. 손실 패턴 Top 5
 
@@ -67,16 +67,16 @@
 ### 1-4. 기회비용 회수 후보 Top 5
 
 **#1** — `AI threshold miss`
-- 차단 건수 합계: 423924건 | 차단 비율: 100.0% | 관찰 일수: 1일
+- 차단 건수 합계: 5286481건 | 차단 비율: 100.0% | 관찰 일수: 25일
 
 **#2** — `overbought gate miss`
-- 차단 건수 합계: 51970건 | 차단 비율: 100.0% | 관찰 일수: 1일
+- 차단 건수 합계: 1282011건 | 차단 비율: 100.0% | 관찰 일수: 25일
 
 **#3** — `latency guard miss`
-- 차단 건수 합계: 82건 | 차단 비율: 100.0% | 관찰 일수: 1일
+- 차단 건수 합계: 51614건 | 차단 비율: 99.5% | 관찰 일수: 25일
 
 **#4** — `liquidity gate miss`
-- 차단 건수 합계: 0건 | 차단 비율: 0.0% | 관찰 일수: 1일
+- 차단 건수 합계: 0건 | 차단 비율: 0.0% | 관찰 일수: 25일
 
 ---
 
@@ -84,10 +84,10 @@
 
 ### 2-1. split-entry 코호트 핵심 위험
 
-- rebase_integrity_flag: 2건
-- partial_then_expand_flag: 1건
-- same_symbol_repeat_flag: 0건
-- same_ts_multi_rebase_flag: 1건
+- rebase_integrity_flag: 31건
+- partial_then_expand_flag: 21건
+- same_symbol_repeat_flag: 98건
+- same_ts_multi_rebase_flag: 19건
 
 ### 2-2. 전역 손절 강화 비권고 이유
 
@@ -99,17 +99,18 @@
 
 ## 3. 다음 액션
 
-### 3-1. EV 개선 우선순위 (shadow-only 선행)
+### 3-1. EV 개선 우선순위 (report-only observation 선행)
 
-**shadow-only (즉시 시작 가능):**
+**report-only observation (즉시 시작 가능):**
 
-- `split-entry rebase 수량 정합성 shadow 감사` — 검증지표: cum_filled_qty > requested_qty 비율, same_ts_multi_rebase_count 분포
-- `partial → fallback 확대 직후 즉시 재평가 shadow` — 검증지표: 확대 후 90초 내 held_sec soft stop 비율 감소 여부
-- `partial-only 표류 전용 timeout shadow` — 검증지표: partial-only held_sec 중앙값, timeout 이후 실현손익 분포
+- `split-entry rebase 수량 정합성 report-only 감사` — 검증지표: cum_filled_qty > requested_qty 비율, same_ts_multi_rebase_count 분포
+- `partial → fallback 확대 직후 즉시 재평가 report-only` — 검증지표: 확대 후 90초 내 held_sec soft stop 비율 감소 여부
+- `동일 종목 split-entry soft-stop 재진입 cooldown report-only` — 검증지표: same-symbol repeat soft stop 건수, cooldown 차단 후 10분 missed upside
+- `partial-only 표류 전용 timeout report-only` — 검증지표: partial-only held_sec 중앙값, timeout 이후 실현손익 분포
 
-**canary (shadow 결과 확인 후):**
+**canary-only candidate (workorder 구현 후):**
 
-- 없음
+- `latency canary tag 완화 1축 canary 승인` — 필요표본: bugfix-only canary_applied 건수 50건 이상 (현재 19건)
 
 **승격 후보 (canary 통과 후):**
 

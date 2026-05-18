@@ -91,20 +91,26 @@ def test_runtime_approval_summary_combines_scalping_and_swing(tmp_path, monkeypa
     assert report["runtime_mutation_allowed"] is False
     assert report["summary"]["scalping_items"] == 2
     assert report["summary"]["scalping_selected_auto_bounded_live"] == 1
+    assert report["summary"]["scalping_legacy_hard_gate_risk_counts"]["no_unreviewed_hard_gate"] == 1
     assert report["summary"]["swing_blocked"] == 1
+    assert report["summary"]["swing_legacy_hard_gate_risk_counts"]["no_unreviewed_hard_gate"] == 1
     assert report["application_timing"]["runtime_env_file"] == str(env_path)
     assert "WAIT 구간" in report["scalping"][0]["description"]
     assert report["scalping"][0]["current_application"] == "PREOPEN env 적용: 당일 runtime 변경 대상"
+    assert report["scalping"][0]["gate_review_class"] == "entry_unlock_probe"
+    assert report["scalping"][0]["legacy_hard_gate_risk"] == "no_unreviewed_hard_gate"
     assert "PREOPEN env" in report["scalping"][0]["state_interpretation"]
     assert report["scalping"][1]["reason_label"] == "표본 부족"
     assert "표본 부족" in report["scalping"][1]["state_interpretation"]
     assert report["swing"][0]["reason_label"] == "계측 gap, DB gap"
     assert report["swing"][0]["current_application"] == "스윙 dry-run/probe 관찰: 실주문 변경 없음"
+    assert report["swing"][0]["gate_review_class"] == "approval_route_available"
     markdown = (out_dir / "runtime_approval_summary_2026-05-11.md").read_text(encoding="utf-8")
     assert "## Scalping" in markdown
     assert "score65_74_recovery_probe" in markdown
     assert "설명" in markdown
     assert "현재 적용" in markdown
+    assert "Gate 분류" in markdown
     assert "판정 해석" in markdown
     assert "## Swing" in markdown
     assert "swing_model_floor" in markdown
@@ -129,6 +135,72 @@ def test_runtime_approval_summary_warns_when_sources_missing(tmp_path, monkeypat
 
     assert "threshold_cycle_ev_missing" in report["warnings"]
     assert "swing_runtime_approval_missing" in report["warnings"]
+
+
+def test_runtime_approval_summary_classifies_legacy_gate_and_contract_gaps(tmp_path, monkeypatch):
+    ev_dir = tmp_path / "threshold_cycle_ev"
+    swing_dir = tmp_path / "swing_runtime_approval"
+    out_dir = tmp_path / "runtime_approval_summary"
+    ev_dir.mkdir(parents=True)
+    swing_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        mod,
+        "ev_report_paths",
+        lambda target_date: (
+            ev_dir / f"threshold_cycle_ev_{target_date}.json",
+            ev_dir / f"threshold_cycle_ev_{target_date}.md",
+        ),
+    )
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_DIR", swing_dir)
+    monkeypatch.setattr(mod, "SUMMARY_DIR", out_dir)
+
+    (ev_dir / "threshold_cycle_ev_2026-05-15.json").write_text(
+        json.dumps(
+            {
+                "calibration_outcome": {
+                    "decisions": [
+                        {"family": "liquidity_gate_refined_candidate", "calibration_state": "hold"},
+                        {"family": "pre_submit_price_guard", "calibration_state": "freeze"},
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (swing_dir / "swing_runtime_approval_2026-05-15.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-15",
+                "summary": {"requested": 0, "approved": 0},
+                "candidates": [
+                    {"family": "swing_gatekeeper_accept_reject", "sample_count": 27, "sample_floor": 5}
+                ],
+                "blocked_requests": [
+                    {
+                        "family": "swing_gatekeeper_accept_reject",
+                        "calibration_state": "freeze",
+                        "tradeoff_score": 0.8361,
+                        "block_reasons": ["runtime_family_guard_missing"],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_runtime_approval_summary("2026-05-15")
+
+    scalping = {row["family"]: row for row in report["scalping"]}
+    assert scalping["liquidity_gate_refined_candidate"]["gate_review_class"] == "superseded_legacy_pre_ai_gate"
+    assert scalping["liquidity_gate_refined_candidate"]["legacy_hard_gate_risk"] == "legacy_summary_superseded"
+    assert scalping["pre_submit_price_guard"]["legacy_hard_gate_risk"] == "intentional_safety_guard"
+    swing = report["swing"][0]
+    assert swing["gate_review_class"] == "legacy_hard_gate_contract_gap"
+    assert swing["legacy_hard_gate_risk"] == "contract_gap"
+    assert "blocked_gatekeeper_reject" in swing["analysis_coverage"]
+    assert report["summary"]["scalping_legacy_hard_gate_risk_counts"]["legacy_summary_superseded"] == 1
+    assert report["summary"]["swing_legacy_hard_gate_risk_counts"]["contract_gap"] == 1
 
 
 def test_runtime_approval_summary_surfaces_swing_one_share_approval_request(tmp_path, monkeypatch):

@@ -90,6 +90,28 @@ ORDERBOOK_MICRO_FIELDS = (
     "orderbook_micro_observer_healthy",
 )
 
+PRE_AI_RISK_CONTEXT_FIELDS = (
+    "metric_role",
+    "decision_authority",
+    "runtime_effect",
+    "forbidden_uses",
+    "threshold_family",
+    "gate_action",
+    "allowed_runtime_apply",
+    "actual_order_submitted",
+)
+
+PRE_SUBMIT_GUARD_FIELDS = (
+    "metric_role",
+    "decision_authority",
+    "runtime_effect",
+    "forbidden_uses",
+    "threshold_family",
+    "gate_action",
+    "actual_order_submitted",
+    "broker_order_forbidden",
+)
+
 
 STAGE_CONTRACTS: dict[str, StageContract] = {
     "ai_confirmed": StageContract(
@@ -109,14 +131,28 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         max_missing_rate=0.10,
     ),
     "blocked_strength_momentum": StageContract(
-        required_fields=AI_OVERLAP_FIELDS,
+        required_fields=(*AI_OVERLAP_FIELDS, *PRE_AI_RISK_CONTEXT_FIELDS),
+        zero_sensitive_fields=("distance_from_day_high_pct", "intraday_range_pct"),
+        max_zero_rate=0.10,
+    ),
+    "blocked_vpw": StageContract(
+        required_fields=(*AI_OVERLAP_FIELDS, *PRE_AI_RISK_CONTEXT_FIELDS),
         zero_sensitive_fields=("distance_from_day_high_pct", "intraday_range_pct"),
         max_zero_rate=0.10,
     ),
     "blocked_overbought": StageContract(
-        required_fields=AI_OVERLAP_FIELDS,
+        required_fields=(*AI_OVERLAP_FIELDS, *PRE_AI_RISK_CONTEXT_FIELDS),
         zero_sensitive_fields=("distance_from_day_high_pct", "intraday_range_pct"),
         max_zero_rate=0.10,
+    ),
+    "blocked_liquidity": StageContract(
+        required_fields=(*PRE_AI_RISK_CONTEXT_FIELDS, "liquidity_value", "min_liquidity"),
+    ),
+    "pre_submit_liquidity_guard_block": StageContract(
+        required_fields=(*PRE_SUBMIT_GUARD_FIELDS, "liquidity_value", "min_liquidity"),
+    ),
+    "pre_submit_overbought_pullback_guard_block": StageContract(
+        required_fields=(*PRE_SUBMIT_GUARD_FIELDS, "risk_state"),
     ),
     "swing_probe_entry_candidate": StageContract(
         required_fields=(*SIM_PROVENANCE_FIELDS, *SWING_PROBE_FIELDS, "virtual_budget_override", "budget_authority"),

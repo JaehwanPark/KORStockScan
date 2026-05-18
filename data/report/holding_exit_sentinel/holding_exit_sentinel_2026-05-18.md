@@ -13,20 +13,20 @@
 
 ## 근거
 
-- as_of: `2026-05-18T13:10:02`
-- exit_signal unique: `29`
+- as_of: `2026-05-18T15:30:01`
+- exit_signal unique: `30`
 - sell_order_sent unique: `0`
 - sell_completed unique: `0`
 - real exit/sell_sent/sell_completed: `0` / `0` / `0`
-- non-real exit/sell_sent/sell_completed: `29` / `0` / `0`
+- non-real exit/sell_sent/sell_completed: `30` / `0` / `0`
 - sell_sent/exit_signal: `0.0%`
 - real sell_sent/exit_signal: `0.0%`
 - non-real sell_sent/exit_signal: `0.0%`
-- flow defer events: `108`
+- flow defer events: `334`
 - AI holding cache MISS: `100.0%`
 - soft_stop rebound above sell 10m: `90.9%`
 - trailing missed-upside: `27.8%`
-- top reasons: `AI보유감시:cache_miss=119, flow유예:scalp_trailing_take_profit=97, 청산신호:kospi_regime_stop_loss=20, 청산신호:kospi_trailing_start_take_profit=16, soft_stop_grace=15`
+- top reasons: `AI보유감시:cache_miss=216, flow유예:scalp_trailing_take_profit=189, soft_stop_grace=176, flow유예:scalp_soft_stop_pct=145, 청산신호:kospi_regime_stop_loss=20`
 
 ## 금지된 자동변경
 

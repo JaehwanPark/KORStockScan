@@ -503,6 +503,57 @@ def test_build_code_improvement_workorder_adds_codebase_performance_orders(tmp_p
     assert report["source"]["codebase_performance_workorder"] == str(perf_path)
 
 
+def test_build_code_improvement_workorder_attaches_implemented_codebase_performance_order(tmp_path, monkeypatch):
+    perf_dir = tmp_path / "perf"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    ev_dir = tmp_path / "ev"
+    perf_dir.mkdir(parents=True)
+    report_dir.mkdir(parents=True)
+    doc_dir.mkdir(parents=True)
+    ev_dir.mkdir(parents=True)
+    (ev_dir / "threshold_cycle_ev_2026-05-14.json").write_text("{}", encoding="utf-8")
+    perf_path = perf_dir / "codebase_performance_workorder_2026-05-14.json"
+    perf_path.write_text(
+        json.dumps(
+            {
+                "source_doc_hash": "abc123",
+                "accepted_candidates": [
+                    {
+                        "item_id": "order_perf_monitor_snapshot_stream_tail",
+                        "title": "Monitor snapshot runtime streaming tail read",
+                        "risk_tier": "low",
+                        "target_subsystem": "monitor_snapshot",
+                        "priority": 1,
+                        "runtime_effect": False,
+                        "implementation_status": "implemented",
+                        "implementation_checks": [{"path": "src/engine/monitor_snapshot_runtime.py"}],
+                        "files_likely_touched": ["src/engine/monitor_snapshot_runtime.py"],
+                        "acceptance_tests": ["pytest src/tests/test_log_archive_service.py"],
+                        "parity_contract": "last valid JSON line parity",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-automation")
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
+    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", perf_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-14", max_orders=10)
+
+    order = next(item for item in report["orders"] if item["order_id"] == "order_perf_monitor_snapshot_stream_tail")
+    assert order["decision"] == "attach_existing_family"
+    assert order["mapped_family"] == "ops_performance_report_only_implemented"
+    assert order["implementation_status"] == "implemented"
+
+
 def test_build_code_improvement_workorder_adds_panic_lifecycle_orders(tmp_path, monkeypatch):
     automation_dir = tmp_path / "automation"
     ev_dir = tmp_path / "ev"

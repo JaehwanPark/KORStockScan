@@ -250,6 +250,45 @@ def test_emit_pipeline_event_shadow_compaction_keeps_raw_and_writes_producer_sum
     assert manifest["sample_per_bucket"] == 6
 
 
+def test_emit_pipeline_event_default_compaction_is_shadow_report_only(monkeypatch, tmp_path):
+    monkeypatch.setattr(logger_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(logger_mod, "_PRODUCER_COMPACTOR", None)
+    monkeypatch.delenv("PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE", raising=False)
+    monkeypatch.setenv("PIPELINE_EVENT_COMPACTION_FLUSH_SEC", "0")
+    monkeypatch.setattr(
+        logger_mod,
+        "TRADING_RULES",
+        SimpleNamespace(
+            PIPELINE_EVENT_JSONL_ENABLED=True,
+            PIPELINE_EVENT_SCHEMA_VERSION=3,
+            PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED=False,
+        ),
+    )
+    monkeypatch.setattr(logger_mod, "log_info", lambda msg, send_telegram=False: None)
+    monkeypatch.setattr(logger_mod, "upsert_pipeline_event_rows", lambda target_date, rows: None)
+
+    payload = logger_mod.emit_pipeline_event(
+        "ENTRY_PIPELINE",
+        "테스트종목",
+        "123456",
+        "blocked_overbought",
+        record_id=77,
+        fields={"reason": "near_day_high"},
+    )
+    logger_mod.flush_pipeline_event_producer_summary(payload["emitted_date"])
+
+    raw_path = tmp_path / "pipeline_events" / f"pipeline_events_{payload['emitted_date']}.jsonl"
+    summary_path = tmp_path / "pipeline_event_summaries" / f"pipeline_event_producer_summary_{payload['emitted_date']}.jsonl"
+    manifest_path = tmp_path / "pipeline_event_summaries" / f"pipeline_event_producer_summary_manifest_{payload['emitted_date']}.json"
+    raw_rows = [json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert raw_rows and raw_rows[0]["stage"] == "blocked_overbought"
+    assert summary_path.exists()
+    assert manifest["mode"] == "shadow"
+    assert manifest["runtime_effect"] is False
+    assert manifest["raw_suppression_enabled"] is False
+
+
 def test_emit_pipeline_event_suppress_mode_preserves_lossless_allowlist(monkeypatch, tmp_path):
     monkeypatch.setattr(logger_mod, "DATA_DIR", tmp_path)
     monkeypatch.setattr(logger_mod, "_PRODUCER_COMPACTOR", None)

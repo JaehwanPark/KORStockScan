@@ -105,6 +105,222 @@ _STATE_INTERPRETATIONS = {
     "approval_contract_missing": "approval artifact를 만들어도 소비할 코드 계약이 없어 live 반영할 수 없다",
 }
 
+_SCALPING_GATE_REVIEW = {
+    "soft_stop_whipsaw_confirmation": {
+        "gate_review_class": "selected_runtime_canary",
+        "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
+        "hard_gate_review": "보유/청산 canary로, 진입 hard gate 잔존 이슈가 아니다",
+        "tuning_route": "threshold-cycle selected family attribution",
+        "analysis_coverage": "runtime applied cohort",
+    },
+    "holding_flow_ofi_smoothing": {
+        "gate_review_class": "existing_runtime_guard",
+        "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
+        "hard_gate_review": "기존 보유/청산 smoothing guard이며 진입 병목 gate가 아니다",
+        "tuning_route": "holding/exit EV attribution",
+        "analysis_coverage": "holding_flow_override events",
+    },
+    "protect_trailing_smoothing": {
+        "gate_review_class": "report_only_holding_exit_candidate",
+        "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
+        "hard_gate_review": "보호/트레일링 청산 후보이며 BUY 전단 hard gate가 아니다",
+        "tuning_route": "report-only until approval/rollback guard",
+        "analysis_coverage": "holding/exit report source bundle",
+    },
+    "trailing_continuation": {
+        "gate_review_class": "holding_exit_safety_freeze",
+        "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
+        "hard_gate_review": "trailing 이후 보유 연장축으로, 진입 튜닝 병목이 아니다",
+        "tuning_route": "source-quality and GOOD_EXIT risk review",
+        "analysis_coverage": "post-sell/holding-exit source bundle",
+    },
+    "pre_submit_price_guard": {
+        "gate_review_class": "intentional_pre_submit_safety_guard",
+        "legacy_hard_gate_risk": "intentional_safety_guard",
+        "hard_gate_review": "quote stale/spread/passive probe 가격품질 차단은 의도적 submit safety guard다",
+        "tuning_route": "pre_submit_price_guard EV/source-quality only",
+        "analysis_coverage": "pre-submit guard events and missed-entry counterfactual",
+    },
+    "score65_74_recovery_probe": {
+        "gate_review_class": "entry_unlock_probe",
+        "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
+        "hard_gate_review": "AI 점수 WAIT 구간 회수축이며 hard gate 잔존으로 닫힌 축이 아니다",
+        "tuning_route": "runtime env/operator lock plus post-apply attribution",
+        "analysis_coverage": "score65_74 cohort and submitted/probe split",
+    },
+    "liquidity_gate_refined_candidate": {
+        "gate_review_class": "superseded_legacy_pre_ai_gate",
+        "legacy_hard_gate_risk": "legacy_summary_superseded",
+        "hard_gate_review": "legacy 유동성 pre-AI gate 항목이다. active route는 liquidity_pre_submit_guard_p1로 대체한다",
+        "tuning_route": "pre-AI risk context + broker submit 직전 liquidity guard",
+        "analysis_coverage": "blocked_liquidity counterfactual and pre_submit_liquidity_guard_block",
+    },
+    "overbought_gate_refined_candidate": {
+        "gate_review_class": "superseded_legacy_pre_ai_gate",
+        "legacy_hard_gate_risk": "legacy_summary_superseded",
+        "hard_gate_review": "legacy 과열 pre-AI gate 항목이다. active route는 overbought_pullback_guard_p1로 대체한다",
+        "tuning_route": "chase risk context + pullback/rebreak pre-submit guard",
+        "analysis_coverage": "blocked_overbought counterfactual and pre_submit_overbought_pullback_guard_block",
+    },
+    "strength_momentum_soft_gate_p1": {
+        "gate_review_class": "softened_pre_ai_gate",
+        "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
+        "hard_gate_review": "strength/momentum hard pre-AI block을 risk context로 내린 active route다",
+        "tuning_route": "AI/counterfactual risk context, source-quality exception only",
+        "analysis_coverage": "blocked_strength_momentum/blocked_vpw risk-context events",
+    },
+    "overbought_pullback_guard_p1": {
+        "gate_review_class": "softened_pre_ai_plus_pre_submit_guard",
+        "legacy_hard_gate_risk": "intentional_safety_guard",
+        "hard_gate_review": "과열은 AI 평가를 허용하고 submit 직전 pullback/rebreak guard로만 막는다",
+        "tuning_route": "overbought risk bucket EV and pre-submit guard attribution",
+        "analysis_coverage": "blocked_overbought risk context + pre_submit_overbought_pullback_guard_block",
+    },
+    "liquidity_pre_submit_guard_p1": {
+        "gate_review_class": "softened_pre_ai_plus_pre_submit_guard",
+        "legacy_hard_gate_risk": "intentional_safety_guard",
+        "hard_gate_review": "유동성은 AI/counterfactual을 허용하고 broker submit 직전 safety guard로 유지한다",
+        "tuning_route": "liquidity risk bucket EV and real submit guard attribution",
+        "analysis_coverage": "blocked_liquidity risk context + pre_submit_liquidity_guard_block",
+    },
+    "bad_entry_refined_canary": {
+        "gate_review_class": "entry_quality_canary",
+        "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
+        "hard_gate_review": "진입 후 품질 canary이며 BUY 전단 hard gate 잔존 이슈가 아니다",
+        "tuning_route": "bad-entry cohort EV and rollback guard",
+        "analysis_coverage": "bad_entry_refined_candidate events",
+    },
+    "holding_exit_decision_matrix_advisory": {
+        "gate_review_class": "advisory_report_only",
+        "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
+        "hard_gate_review": "advisory layer라 runtime hard gate가 아니다",
+        "tuning_route": "report-only decision support contract",
+        "analysis_coverage": "holding_exit_decision_matrix report",
+    },
+    "scale_in_price_guard": {
+        "gate_review_class": "intentional_pre_submit_safety_guard",
+        "legacy_hard_gate_risk": "intentional_safety_guard",
+        "hard_gate_review": "추가매수 직전 가격품질 safety guard로 유지해야 한다",
+        "tuning_route": "scale-in price quality EV/source-quality only",
+        "analysis_coverage": "scale-in resolver and guard events",
+    },
+    "position_sizing_cap_release": {
+        "gate_review_class": "policy_approval_or_contract_gap",
+        "legacy_hard_gate_risk": "approval_or_contract_required",
+        "hard_gate_review": "1주 cap은 legacy pre-AI gate가 아니라 position-size policy approval 문제다",
+        "tuning_route": "separate approval artifact/workorder before runtime size change",
+        "analysis_coverage": "position sizing EV and downside source bundle",
+    },
+    "position_sizing_dynamic_formula": {
+        "gate_review_class": "policy_contract_gap",
+        "legacy_hard_gate_risk": "approval_or_contract_required",
+        "hard_gate_review": "수량 산식 owner이며 BUY hard gate 잔존 이슈가 아니다",
+        "tuning_route": "notional/source-quality adjusted EV plus approval contract",
+        "analysis_coverage": "position sizing source bundle",
+    },
+}
+
+_SWING_GATE_REVIEW = {
+    "swing_model_floor": {
+        "gate_review_class": "approval_route_available",
+        "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
+        "hard_gate_review": "모델 floor는 approval/env route가 있는 선택축이다",
+        "tuning_route": "swing_runtime_approvals artifact -> next PREOPEN dry-run env",
+        "analysis_coverage": "model selection + combined real/sim EV",
+    },
+    "swing_selection_top_k": {
+        "gate_review_class": "same_stage_deferred_selection_axis",
+        "legacy_hard_gate_risk": "same_stage_deferred",
+        "hard_gate_review": "top-k는 runtime guard가 있으며 현재는 model_floor와 같은 selection stage 충돌로 보류됐다",
+        "tuning_route": "same-stage owner conflict 해소 후 approval route",
+        "analysis_coverage": "recommendation CSV/DB load + simulation opportunity",
+    },
+    "swing_gatekeeper_accept_reject": {
+        "gate_review_class": "legacy_hard_gate_contract_gap",
+        "legacy_hard_gate_risk": "contract_gap",
+        "hard_gate_review": "gatekeeper accept/reject 자체는 분석 표본은 있으나 runtime env guard가 없어 직접 튜닝 적용은 막혀 있다",
+        "tuning_route": "workorder로 accept/reject policy guard를 만들거나 reject cooldown family로 우회 조정",
+        "analysis_coverage": "blocked_gatekeeper_reject + swing_probe_entry_candidate",
+    },
+    "swing_gatekeeper_reject_cooldown": {
+        "gate_review_class": "approval_route_available",
+        "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
+        "hard_gate_review": "reject 판단 자체가 아니라 cooldown 값을 조정하는 승인 가능 축이다",
+        "tuning_route": "ML_GATEKEEPER_REJECT_COOLDOWN approval/env route",
+        "analysis_coverage": "blocked_gatekeeper_reject + cooldown policy distribution",
+    },
+    "swing_market_regime_sensitivity": {
+        "gate_review_class": "same_stage_deferred_entry_axis",
+        "legacy_hard_gate_risk": "same_stage_deferred",
+        "hard_gate_review": "market regime/gap 계열은 분석 표본이 있으나 오늘은 gatekeeper cooldown과 entry stage owner 충돌로 보류됐다",
+        "tuning_route": "same-stage owner conflict 해소 후 SWING_MARKET_REGIME_SENSITIVITY route",
+        "analysis_coverage": "blocked_swing_gap/blocked_swing_score_vpw + swing probe/counterfactual",
+    },
+    "swing_pyramid_trigger": {
+        "gate_review_class": "runtime_contract_gap_scale_in_axis",
+        "legacy_hard_gate_risk": "contract_gap",
+        "hard_gate_review": "scale-in trigger 분석 표본은 있으나 runtime family guard가 없어 직접 적용은 막혀 있다",
+        "tuning_route": "scale-in runtime guard/workorder before approval",
+        "analysis_coverage": "scale_in observation and simulated add outcomes",
+    },
+    "swing_avg_down_eligibility": {
+        "gate_review_class": "runtime_contract_gap_scale_in_axis",
+        "legacy_hard_gate_risk": "contract_gap",
+        "hard_gate_review": "AVG_DOWN은 의도적으로 실주문 차단 중이며 runtime family guard가 없다",
+        "tuning_route": "policy/workorder first, real canary approval later",
+        "analysis_coverage": "scale_in observation and simulated add outcomes",
+    },
+    "swing_trailing_stop_time_stop": {
+        "gate_review_class": "runtime_contract_gap_exit_axis",
+        "legacy_hard_gate_risk": "contract_gap",
+        "hard_gate_review": "exit rule 분석축이나 live guard 계약이 없어 직접 튜닝 적용은 막혀 있다",
+        "tuning_route": "exit runtime guard/workorder before approval",
+        "analysis_coverage": "exit source + post-sell rebound",
+    },
+    "swing_holding_flow_defer": {
+        "gate_review_class": "sample_or_contract_gap_holding_axis",
+        "legacy_hard_gate_risk": "sample_or_contract_gap",
+        "hard_gate_review": "보유/청산 defer 축으로 표본과 runtime guard가 아직 부족하다",
+        "tuning_route": "sample floor + runtime guard contract",
+        "analysis_coverage": "holding flow defer fields",
+    },
+    "swing_entry_ofi_qi_execution_quality": {
+        "gate_review_class": "sample_or_contract_gap_entry_quality_axis",
+        "legacy_hard_gate_risk": "sample_or_contract_gap",
+        "hard_gate_review": "entry OFI/QI 품질축이며 stale/missing source와 runtime guard 계약이 먼저다",
+        "tuning_route": "OFI/QI source-quality close, then approval/workorder",
+        "analysis_coverage": "swing_entry_micro_context_observed",
+    },
+    "swing_scale_in_ofi_qi_confirmation": {
+        "gate_review_class": "source_quality_contract_gap_scale_in_axis",
+        "legacy_hard_gate_risk": "source_quality_or_contract_gap",
+        "hard_gate_review": "scale-in OFI/QI source-quality blocker와 runtime guard 부재가 동시에 있다",
+        "tuning_route": "source-quality blocker close, then scale-in guard contract",
+        "analysis_coverage": "swing_scale_in_micro_context_observed",
+    },
+    "swing_exit_ofi_qi_smoothing": {
+        "gate_review_class": "sample_or_contract_gap_exit_quality_axis",
+        "legacy_hard_gate_risk": "sample_or_contract_gap",
+        "hard_gate_review": "exit smoothing 품질축이며 표본과 runtime guard 계약이 먼저다",
+        "tuning_route": "exit smoothing sample floor + guard contract",
+        "analysis_coverage": "holding_flow_ofi_smoothing_applied",
+    },
+    "swing_scale_in_real_canary_phase0": {
+        "gate_review_class": "policy_source_quality_block",
+        "legacy_hard_gate_risk": "source_quality_or_approval_required",
+        "hard_gate_review": "실제 추가매수 canary 정책축이며 OFI/QI source-quality와 별도 approval이 필요하다",
+        "tuning_route": "scale-in approval artifact after source-quality pass",
+        "analysis_coverage": "scale-in arm decisions + real-only execution quality",
+    },
+    "swing_one_share_real_canary_phase0": {
+        "gate_review_class": "approval_route_available_policy_axis",
+        "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
+        "hard_gate_review": "1주 real canary 정책축이며 승인 artifact로만 열린다",
+        "tuning_route": "one-share approval artifact, global dry-run guard retained",
+        "analysis_coverage": "approved target code provenance + real-only receipt",
+    },
+}
+
 
 def _description(family: str) -> str:
     return _FAMILY_DESCRIPTIONS.get(family, "설명 미등록")
@@ -129,6 +345,30 @@ def _state_interpretation(state: str, selected: bool) -> str:
     if selected:
         return "threshold-cycle guard 통과로 당일 PREOPEN env에 반영됨"
     return _STATE_INTERPRETATIONS.get(state, "판정 해석 미등록")
+
+
+def _gate_review(domain: str, family: str, reasons: list[Any] | None = None) -> dict[str, Any]:
+    reasons = [str(reason or "").strip() for reason in (reasons or []) if str(reason or "").strip()]
+    if domain == "scalping":
+        annotation = dict(_SCALPING_GATE_REVIEW.get(family) or {})
+    elif domain == "swing":
+        annotation = dict(_SWING_GATE_REVIEW.get(family) or {})
+    else:
+        annotation = {}
+    if not annotation:
+        annotation = {
+            "gate_review_class": "not_classified",
+            "legacy_hard_gate_risk": "manual_review_required",
+            "hard_gate_review": "hard gate 분류 미등록",
+            "tuning_route": "manual runtime approval review",
+            "analysis_coverage": "unknown",
+        }
+    if any(reason.startswith("same_stage_owner_conflict:") for reason in reasons):
+        annotation.setdefault("legacy_hard_gate_risk", "same_stage_deferred")
+        annotation["gate_review_class"] = annotation.get("gate_review_class") or "same_stage_deferred"
+    if "runtime_family_guard_missing" in reasons:
+        annotation.setdefault("legacy_hard_gate_risk", "contract_gap")
+    return annotation
 
 
 def summary_paths(target_date: str) -> tuple[Path, Path]:
@@ -185,6 +425,14 @@ def _candidate_by_family(items: Any) -> dict[str, dict[str, Any]]:
     }
 
 
+def _count_field(rows: list[dict[str, Any]], field: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        key = str(row.get(field) or "unknown")
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
 def _scalping_rows(ev_report: dict[str, Any], calibration_report: dict[str, Any]) -> list[dict[str, Any]]:
     outcome = ev_report.get("calibration_outcome") if isinstance(ev_report.get("calibration_outcome"), dict) else {}
     decisions = outcome.get("decisions") if isinstance(outcome.get("decisions"), list) else []
@@ -208,27 +456,27 @@ def _scalping_rows(ev_report: dict[str, Any], calibration_report: dict[str, Any]
             reasons.append("selected_auto_bounded_live")
         elif state in {"hold", "hold_no_edge"}:
             reasons.append(str(item.get("calibration_reason") or state))
-        rows.append(
-            {
-                "domain": "scalping",
-                "family": family,
-                "description": _description(family),
-                "state": state,
-                "current_application": _current_application(family, state, family in selected),
-                "state_interpretation": _state_interpretation(state, family in selected),
-                "score": item.get("tradeoff_score", item.get("confidence", candidate.get("confidence"))),
-                "score_label": _format_score(
-                    item.get("tradeoff_score", item.get("confidence", candidate.get("confidence")))
-                ),
-                "sample": {
-                    "count": item.get("sample_count"),
-                    "floor": item.get("sample_floor"),
-                },
-                "reasons": reasons,
-                "reason_label": _reason_text(reasons),
-                "selected_auto_bounded_live": family in selected,
-            }
-        )
+        row = {
+            "domain": "scalping",
+            "family": family,
+            "description": _description(family),
+            "state": state,
+            "current_application": _current_application(family, state, family in selected),
+            "state_interpretation": _state_interpretation(state, family in selected),
+            "score": item.get("tradeoff_score", item.get("confidence", candidate.get("confidence"))),
+            "score_label": _format_score(
+                item.get("tradeoff_score", item.get("confidence", candidate.get("confidence")))
+            ),
+            "sample": {
+                "count": item.get("sample_count"),
+                "floor": item.get("sample_floor"),
+            },
+            "reasons": reasons,
+            "reason_label": _reason_text(reasons),
+            "selected_auto_bounded_live": family in selected,
+        }
+        row.update(_gate_review("scalping", family, reasons))
+        rows.append(row)
     return rows
 
 
@@ -265,32 +513,33 @@ def _swing_rows(swing_report: dict[str, Any]) -> list[dict[str, Any]]:
         if not family:
             continue
         candidate = candidates.get(family, {})
-        rows.append(
-            {
-                "domain": "swing",
-                "family": family,
-                "description": _description(family),
-                "state": item.get("calibration_state") or candidate.get("calibration_state") or "-",
-                "current_application": _current_application(
-                    family,
-                    str(item.get("calibration_state") or candidate.get("calibration_state") or "-"),
-                    False,
-                ),
-                "state_interpretation": _state_interpretation(
-                    str(item.get("calibration_state") or candidate.get("calibration_state") or "-"),
-                    False,
-                ),
-                "score": item.get("tradeoff_score"),
-                "score_label": _format_score(item.get("tradeoff_score")),
-                "sample": {
-                    "count": candidate.get("sample_count"),
-                    "floor": candidate.get("sample_floor"),
-                },
-                "reasons": list(item.get("block_reasons") or []),
-                "reason_label": _reason_text(item.get("block_reasons") or []),
-                "selected_auto_bounded_live": False,
-            }
-        )
+        reasons = list(item.get("block_reasons") or [])
+        row = {
+            "domain": "swing",
+            "family": family,
+            "description": _description(family),
+            "state": item.get("calibration_state") or candidate.get("calibration_state") or "-",
+            "current_application": _current_application(
+                family,
+                str(item.get("calibration_state") or candidate.get("calibration_state") or "-"),
+                False,
+            ),
+            "state_interpretation": _state_interpretation(
+                str(item.get("calibration_state") or candidate.get("calibration_state") or "-"),
+                False,
+            ),
+            "score": item.get("tradeoff_score"),
+            "score_label": _format_score(item.get("tradeoff_score")),
+            "sample": {
+                "count": candidate.get("sample_count"),
+                "floor": candidate.get("sample_floor"),
+            },
+            "reasons": reasons,
+            "reason_label": _reason_text(reasons),
+            "selected_auto_bounded_live": False,
+        }
+        row.update(_gate_review("swing", family, reasons))
+        rows.append(row)
     requests = swing_report.get("approval_requests") if isinstance(swing_report.get("approval_requests"), list) else []
     blocked_families = {row["family"] for row in rows}
     approved_ids = _approved_swing_request_ids(target_date)
@@ -304,33 +553,34 @@ def _swing_rows(swing_report: dict[str, Any]) -> list[dict[str, Any]]:
         approval_id = str(item.get("approval_id") or "")
         artifact_missing_reason = _swing_approval_artifact_reason(family, target_date)
         approval_reason = "" if approval_id and approval_id in approved_ids else artifact_missing_reason or "approval_request_not_approved"
-        rows.append(
-            {
-                "domain": "swing",
-                "family": family,
-                "description": _description(family),
-                "state": item.get("calibration_state") or "approval_required",
-                "current_application": _current_application(family, str(item.get("calibration_state") or "approval_required"), False),
-                "state_interpretation": _state_interpretation(str(item.get("calibration_state") or "approval_required"), False),
-                "score": item.get("tradeoff_score"),
-                "score_label": _format_score(item.get("tradeoff_score")),
-                "sample": {
-                    "count": item.get("sample_count"),
-                    "floor": item.get("sample_floor"),
-                },
-                "reasons": [approval_reason] if approval_reason else [],
-                "reason_label": _reason_text([approval_reason] if approval_reason else []),
-                "approval_id": item.get("approval_id"),
-                "approval_artifact_approved": bool(approval_id and approval_id in approved_ids),
-                "approval_contract_status": item.get("approval_contract_status") or contract.get("approval_contract_status"),
-                "approval_live_ready": bool(item.get("approval_live_ready") or contract.get("approval_live_ready")),
-                "approval_artifact_path": item.get("approval_artifact_path") or contract.get("approval_artifact_path"),
-                "approval_contract_missing_components": item.get("approval_contract_missing_components")
-                or contract.get("missing_components")
-                or [],
-                "selected_auto_bounded_live": False,
-            }
-        )
+        reasons = [approval_reason] if approval_reason else []
+        row = {
+            "domain": "swing",
+            "family": family,
+            "description": _description(family),
+            "state": item.get("calibration_state") or "approval_required",
+            "current_application": _current_application(family, str(item.get("calibration_state") or "approval_required"), False),
+            "state_interpretation": _state_interpretation(str(item.get("calibration_state") or "approval_required"), False),
+            "score": item.get("tradeoff_score"),
+            "score_label": _format_score(item.get("tradeoff_score")),
+            "sample": {
+                "count": item.get("sample_count"),
+                "floor": item.get("sample_floor"),
+            },
+            "reasons": reasons,
+            "reason_label": _reason_text(reasons),
+            "approval_id": item.get("approval_id"),
+            "approval_artifact_approved": bool(approval_id and approval_id in approved_ids),
+            "approval_contract_status": item.get("approval_contract_status") or contract.get("approval_contract_status"),
+            "approval_live_ready": bool(item.get("approval_live_ready") or contract.get("approval_live_ready")),
+            "approval_artifact_path": item.get("approval_artifact_path") or contract.get("approval_artifact_path"),
+            "approval_contract_missing_components": item.get("approval_contract_missing_components")
+            or contract.get("missing_components")
+            or [],
+            "selected_auto_bounded_live": False,
+        }
+        row.update(_gate_review("swing", family, reasons))
+        rows.append(row)
     return rows
 
 
@@ -587,7 +837,9 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
         "summary": {
             "scalping_items": len(scalping_rows),
             "scalping_selected_auto_bounded_live": sum(1 for row in scalping_rows if row["selected_auto_bounded_live"]),
+            "scalping_legacy_hard_gate_risk_counts": _count_field(scalping_rows, "legacy_hard_gate_risk"),
             "swing_blocked": len(swing_rows),
+            "swing_legacy_hard_gate_risk_counts": _count_field(swing_rows, "legacy_hard_gate_risk"),
             "panic_approval_requested": sum(1 for row in panic_rows if row.get("state") == "approval_required"),
             "swing_requested": int((swing_report.get("summary") or {}).get("requested") or 0)
             if isinstance(swing_report.get("summary"), dict)
@@ -626,18 +878,18 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
 
 def _render_rows(rows: list[dict[str, Any]]) -> list[str]:
     lines = [
-        "| 항목 | 설명 | 현재 적용 | 상태 | 판정 해석 | 점수 | 계약 | 차단/판정 사유 |",
-        "| --- | --- | --- | --- | --- | ---: | --- | --- |",
+        "| 항목 | 설명 | 현재 적용 | 상태 | Gate 분류 | 튜닝 경로 | 판정 해석 | 점수 | 계약 | 차단/판정 사유 |",
+        "| --- | --- | --- | --- | --- | --- | --- | ---: | --- | --- |",
     ]
     if not rows:
-        lines.append("| - | - | - | - | - | - | - | - |")
+        lines.append("| - | - | - | - | - | - | - | - | - | - |")
         return lines
     for row in rows:
         contract_status = row.get("approval_contract_status") or "-"
         if row.get("approval_live_ready") is True:
             contract_status = "ready"
         lines.append(
-            f"| `{row.get('family')}` | {row.get('description') or '-'} | {row.get('current_application') or '-'} | `{row.get('state')}` | {row.get('state_interpretation') or '-'} | {row.get('score_label')} | `{contract_status}` | {row.get('reason_label')} |"
+            f"| `{row.get('family')}` | {row.get('description') or '-'} | {row.get('current_application') or '-'} | `{row.get('state')}` | `{row.get('gate_review_class') or '-'}` | {row.get('tuning_route') or '-'} | {row.get('state_interpretation') or '-'} | {row.get('score_label')} | `{contract_status}` | {row.get('reason_label')} |"
         )
     return lines
 
@@ -656,7 +908,9 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         "- 목적: 스캘핑 threshold-cycle 판정과 스윙 runtime approval 판정을 한 화면에서 보는 읽기 전용 요약이다.",
         "- runtime_mutation_allowed: `False`",
         f"- scalping_items/selected: `{summary.get('scalping_items')}` / `{summary.get('scalping_selected_auto_bounded_live')}`",
+        f"- scalping_legacy_hard_gate_risk_counts: `{summary.get('scalping_legacy_hard_gate_risk_counts')}`",
         f"- swing_blocked/requested/approved: `{summary.get('swing_blocked')}` / `{summary.get('swing_requested')}` / `{summary.get('swing_approved')}`",
+        f"- swing_legacy_hard_gate_risk_counts: `{summary.get('swing_legacy_hard_gate_risk_counts')}`",
         f"- panic_approval_requested: `{summary.get('panic_approval_requested')}`",
         f"- pattern_lab_currentness_status: `{summary.get('pattern_lab_currentness_status')}`",
         f"- pattern_lab_propagation_status: `{summary.get('pattern_lab_propagation_status')}`",

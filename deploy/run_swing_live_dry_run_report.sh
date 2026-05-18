@@ -6,6 +6,7 @@ PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 VENV_PY="${VENV_PY:-$PROJECT_DIR/.venv/bin/python}"
 TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
 SWING_THRESHOLD_AI_REVIEW_PROVIDER="${SWING_THRESHOLD_AI_REVIEW_PROVIDER:-openai}"
+RUN_LIFECYCLE_AUDIT="${SWING_LIVE_DRY_RUN_RUN_LIFECYCLE_AUDIT:-false}"
 
 cd "$PROJECT_DIR"
 
@@ -21,6 +22,10 @@ mkdir -p "$LOG_DIR" "$STATUS_DIR" "$LOCK_ROOT"
 exec > >(tee -a "$LOG_PATH") 2>&1
 echo "[START] swing_live_dry_run target_date=${TARGET_DATE} started_at=${STARTED_AT}"
 trap 'failed_at="$(TZ=Asia/Seoul date --iso-8601=seconds)"; echo "[FAIL] swing_live_dry_run target_date=${TARGET_DATE} failed_at=${failed_at}"' ERR
+
+run_lifecycle_audit_enabled() {
+  [ "$RUN_LIFECYCLE_AUDIT" = "true" ] || [ "$RUN_LIFECYCLE_AUDIT" = "1" ]
+}
 
 write_status() {
   local status="$1"
@@ -45,6 +50,11 @@ write_status() {
   printf '  "improvement_automation_artifact": "%s",\n' "$PROJECT_DIR/data/report/swing_improvement_automation/swing_improvement_automation_${TARGET_DATE}.json" >> "$STATUS_PATH"
   printf '  "runtime_approval_artifact": "%s",\n' "$PROJECT_DIR/data/report/swing_runtime_approval/swing_runtime_approval_${TARGET_DATE}.json" >> "$STATUS_PATH"
   printf '  "runtime_approval_markdown_artifact": "%s",\n' "$PROJECT_DIR/data/report/swing_runtime_approval/swing_runtime_approval_${TARGET_DATE}.md" >> "$STATUS_PATH"
+  if run_lifecycle_audit_enabled; then
+    printf '  "lifecycle_audit_mode": "inline",\n' >> "$STATUS_PATH"
+  else
+    printf '  "lifecycle_audit_mode": "postclose_deferred",\n' >> "$STATUS_PATH"
+  fi
   printf '  "runtime_change": false\n' >> "$STATUS_PATH"
   printf '}\n' >> "$STATUS_PATH"
 }
@@ -65,7 +75,7 @@ trap 'rm -rf "$LOCK_DIR"' EXIT
 set +e
 PYTHONPATH=. "$VENV_PY" -m src.engine.swing_selection_funnel_report "$TARGET_DATE"
 selection_rc=$?
-if [[ "$selection_rc" -eq 0 ]]; then
+if [[ "$selection_rc" -eq 0 ]] && run_lifecycle_audit_enabled; then
   PYTHONPATH=. "$VENV_PY" -m src.engine.swing_lifecycle_audit \
     --date "$TARGET_DATE" \
     --ai-review-provider "$SWING_THRESHOLD_AI_REVIEW_PROVIDER"
@@ -79,7 +89,7 @@ rc="$selection_rc"
 if [[ "$selection_rc" -eq 0 && "$lifecycle_rc" -ne 0 ]]; then
   rc="$lifecycle_rc"
 fi
-if [[ "$selection_rc" -eq 0 && "$lifecycle_rc" -eq 0 ]]; then
+if [[ "$selection_rc" -eq 0 && "$lifecycle_rc" -eq 0 ]] && run_lifecycle_audit_enabled; then
   runtime_approval_json="$PROJECT_DIR/data/report/swing_runtime_approval/swing_runtime_approval_${TARGET_DATE}.json"
   if [[ ! -s "$runtime_approval_json" ]]; then
     echo "runtime approval artifact missing after lifecycle audit: $runtime_approval_json"
@@ -88,7 +98,11 @@ if [[ "$selection_rc" -eq 0 && "$lifecycle_rc" -eq 0 ]]; then
 fi
 
 if [[ "$rc" -eq 0 ]]; then
-  write_status "succeeded" 0 "completed"
+  if run_lifecycle_audit_enabled; then
+    write_status "succeeded" 0 "completed"
+  else
+    write_status "succeeded" 0 "selection_completed_lifecycle_deferred_to_postclose"
+  fi
   finished_at="$(TZ=Asia/Seoul date --iso-8601=seconds)"
   echo "[DONE] swing_live_dry_run target_date=${TARGET_DATE} finished_at=${finished_at}"
 elif [[ "$rc" -eq 66 ]]; then

@@ -251,6 +251,19 @@ def _classify_order(
         )
 
     if order.get("source_report_type") == "codebase_performance_workorder":
+        if str(order.get("implementation_status") or "").strip() == "implemented":
+            return ClassifiedOrder(
+                order=order,
+                decision="attach_existing_family",
+                reason=(
+                    "report-only performance implementation is already present in code; keep the order as provenance "
+                    "and validate through regenerated reports/tests instead of re-implementing"
+                ),
+                mapped_family=mapped_family or "ops_performance_report_only_implemented",
+                route=route or "existing_report_only_implementation",
+                confidence=confidence,
+                automation_reentry="Next postclose codebase performance source report must keep implementation_status=implemented and parity tests green.",
+            )
         state = str(order.get("performance_candidate_state") or order.get("candidate_state") or "").strip()
         if state == "accepted":
             return ClassifiedOrder(
@@ -700,9 +713,12 @@ def _codebase_performance_followup_orders(report: dict[str, Any]) -> list[dict[s
                     "performance_candidate_state": state,
                     "risk_tier": item.get("risk_tier"),
                     "forbidden_uses": item.get("forbidden_uses") or [],
+                    "implementation_status": item.get("implementation_status"),
+                    "implementation_checks": item.get("implementation_checks") or [],
                     "evidence": [
                         f"source_doc_hash={report.get('source_doc_hash')}",
                         f"candidate_state={state}",
+                        f"implementation_status={item.get('implementation_status') or 'unknown'}",
                         f"risk_tier={item.get('risk_tier')}",
                         "runtime_effect=false",
                         "strategy_effect=false",
@@ -1173,6 +1189,8 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
                 "strategy_effect": bool(item.order.get("strategy_effect")),
                 "data_quality_effect": bool(item.order.get("data_quality_effect")),
                 "tuning_axis_effect": bool(item.order.get("tuning_axis_effect")),
+                "implementation_status": item.order.get("implementation_status"),
+                "implementation_checks": item.order.get("implementation_checks") or [],
                 "parity_contract": item.order.get("parity_contract"),
             }
             for item in selected

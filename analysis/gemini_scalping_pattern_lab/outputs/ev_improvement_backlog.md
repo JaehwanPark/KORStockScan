@@ -1,15 +1,15 @@
 # EV Improvement Backlog
 
 1. AI threshold miss EV 회수 조건 점검
-   - 적용단계: canary-ready
+   - 적용단계: canary_only_candidate_after_workorder
    - 기대효과: AI threshold miss 구간에서 놓친 기대값 회수 가능성을 검증한다.
-   - 검증지표: 차단건수=371872, 차단비율=100.0%
+   - 검증지표: 차단건수=4412162, 차단비율=100.0%
    - 필요표본: 장중/장후 snapshot 동시 확인
 
 2. overbought gate miss EV 회수 조건 점검
-   - 적용단계: observability
+   - 적용단계: report_only_observation
    - 기대효과: overbought gate miss 구간에서 놓친 기대값 회수 가능성을 검증한다.
-   - 검증지표: 차단건수=51970, 차단비율=100.0%
+   - 검증지표: 차단건수=1404764, 차단비율=100.0%
    - 필요표본: 장중/장후 snapshot 동시 확인
 
 3. WAIT65~79 -> submitted 단절 원인 점검
@@ -21,5 +21,5 @@
 4. gatekeeper latency 경로 분해(lock/model/quote_fresh)
    - 적용단계: observability
    - 기대효과: latency가 EV 회수 병목인지 성능 문제인지 구간별로 분해한다.
-   - 검증지표: gatekeeper_eval_ms_p95=5421ms, quote_fresh_latency_blocks=81
+   - 검증지표: gatekeeper_eval_ms_p95=5441ms, quote_fresh_latency_blocks=10
    - 필요표본: 장전/장후 snapshot 누적
