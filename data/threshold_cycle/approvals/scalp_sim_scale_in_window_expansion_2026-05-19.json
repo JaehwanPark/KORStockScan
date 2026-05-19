@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "policy_id": "scalp_sim_scale_in_window_expansion",
+  "family": "scalp_sim_scale_in_window_expansion",
+  "stage": "scale_in",
+  "date": "2026-05-19",
+  "generated_at": "2026-05-19T14:50:54+09:00",
+  "approved": false,
+  "approval_state": "approval_required",
+  "decision_authority": "sim_observation_only",
+  "runtime_effect": "sim_only_virtual_scale_in_when_approved",
+  "source_report": "/home/ubuntu/KORStockScan/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_2026-05-19.json",
+  "source_summary": {
+    "matrix_status": "warning",
+    "scale_in_rows": 3,
+    "scale_in_filled_events": 0,
+    "scale_in_unfilled_events": 3,
+    "scale_in_policy_sample": 3,
+    "scale_in_policy_joined_sample": 1,
+    "scale_in_policy_gate": "hold_sample"
+  },
+  "target_env_keys": [
+    "SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED",
+    "SCALP_SIM_SCALE_IN_WINDOW_ALLOWED_ARMS",
+    "SCALP_SIM_SCALE_IN_WINDOW_MIN_PROFIT_PCT",
+    "SCALP_SIM_SCALE_IN_WINDOW_MAX_PROFIT_PCT",
+    "SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_POSITION",
+    "SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_DAY"
+  ],
+  "recommended_values": {
+    "enabled": true,
+    "allowed_arms": "PYRAMID,AVG_DOWN",
+    "min_profit_pct": -2.5,
+    "max_profit_pct": 2.5,
+    "max_orders_per_position": 1,
+    "max_orders_per_day": 30
+  },
+  "approval_contract": {
+    "actual_order_submitted": false,
+    "broker_order_forbidden": true,
+    "real_order_forbidden": true,
+    "same_stage_owner": "scalp_sim_scale_in_window_expansion",
+    "runtime_apply_path": "next_preopen_only_after_approved_true",
+    "operator_action": "set approved=true after reviewing this artifact"
+  },
+  "forbidden_uses": [
+    "real_scale_in_order",
+    "position_size_cap_release",
+    "hard_safety_override",
+    "intraday_threshold_mutation",
+    "real_execution_quality_claim"
+  ]
+}

@@ -560,6 +560,46 @@ def test_scalp_sim_candidate_window_expansion_arms_blocked_wait_candidate(monkey
     assert armed["would_real_submit"] is False
 
 
+def test_scalp_sim_scale_in_window_expansion_returns_sim_only_action(monkeypatch):
+    rules = replace(
+        CONFIG,
+        SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED=True,
+        SCALP_SIM_SCALE_IN_WINDOW_ALLOWED_ARMS="PYRAMID,AVG_DOWN",
+        SCALP_SIM_SCALE_IN_WINDOW_MIN_PROFIT_PCT=-2.5,
+        SCALP_SIM_SCALE_IN_WINDOW_MAX_PROFIT_PCT=2.5,
+        SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_POSITION=1,
+        SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_DAY=30,
+    )
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    state_handlers._SCALP_SIM_SCALE_IN_WINDOW_DAILY_CREATED.clear()
+    stock = {
+        "name": "SIM_SCALE",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_price": 10_000,
+        "buy_qty": 1,
+        "simulation_book": "scalp_ai_buy_all",
+        "scalp_live_simulator": True,
+        "actual_order_submitted": False,
+    }
+
+    action = state_handlers._evaluate_scalp_sim_scale_in_window_expansion(
+        stock=stock,
+        strategy="SCALPING",
+        profit_rate=0.4,
+        peak_profit=0.6,
+        current_ai_score=70,
+        held_sec=120,
+    )
+
+    assert action["should_add"] is True
+    assert action["add_type"] == "PYRAMID"
+    assert action["actual_order_submitted"] is False
+    assert action["broker_order_forbidden"] is True
+    assert action["decision_authority"] == "sim_observation_only"
+
+
 def test_scalp_simulator_preset_tp_sell_does_not_call_real_sell(monkeypatch):
     holding_logs = []
     monkeypatch.setattr(

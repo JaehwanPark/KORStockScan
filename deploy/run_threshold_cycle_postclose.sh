@@ -393,6 +393,11 @@ if [ "$RUN_LIFECYCLE_DECISION_MATRIX" = "true" ] || [ "$RUN_LIFECYCLE_DECISION_M
     "$PROJECT_DIR/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_${TARGET_DATE}.json" \
     "$PROJECT_DIR/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_${TARGET_DATE}.md" \
     "lifecycle_decision_matrix"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalp_sim_scale_in_window_approval --date "$TARGET_DATE"
+  wait_for_report_artifact \
+    "$PROJECT_DIR/data/threshold_cycle/approvals/scalp_sim_scale_in_window_expansion_${TARGET_DATE}.json" \
+    "$PROJECT_DIR/data/threshold_cycle/approvals/scalp_sim_scale_in_window_expansion_${TARGET_DATE}.json" \
+    "scalp_sim_scale_in_window_approval"
 fi
 if [ "$RUN_LATENCY_CLASSIFIER_RECOMMENDATION" = "true" ] || [ "$RUN_LATENCY_CLASSIFIER_RECOMMENDATION" = "1" ]; then
   wait_for_postclose_resources "latency_classifier_recommendation"

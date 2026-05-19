@@ -149,6 +149,7 @@ SCALP_SIM_STATE_PATH = DATA_DIR / "runtime" / "scalp_live_simulator_state.json"
 SWING_INTRADAY_PROBE_BOOK = "swing_intraday_live_equiv_probe"
 SWING_INTRADAY_PROBE_STATE_PATH = DATA_DIR / "runtime" / "swing_intraday_probe_state.json"
 _SCALP_SIM_CANDIDATE_WINDOW_DAILY_CREATED: dict[str, int] = {}
+_SCALP_SIM_SCALE_IN_WINDOW_DAILY_CREATED: dict[str, int] = {}
 _SCALP_SIM_AI_CALL_TIMES: list[float] = []
 _SWING_PROBE_DAILY_CREATED: dict[str, int] = {}
 _SWING_PROBE_DISCARD_LOG_TS: dict[tuple[str, str, str, str], float] = {}
@@ -12576,6 +12577,16 @@ def _evaluate_scale_in_signal(
 
     raw_strategy = (strategy or "").upper()
     if raw_strategy == 'SCALPING':
+        sim_window = _evaluate_scalp_sim_scale_in_window_expansion(
+            stock=stock,
+            strategy=raw_strategy,
+            profit_rate=profit_rate,
+            peak_profit=peak_profit,
+            current_ai_score=current_ai_score,
+            held_sec=held_sec,
+        )
+        if sim_window.get("should_add"):
+            return sim_window
         is_new_high = False
         try:
             highest_prices = HIGHEST_PRICES or {}
@@ -12640,6 +12651,64 @@ def _evaluate_scale_in_signal(
         return None
     else:
         return None
+
+
+def _evaluate_scalp_sim_scale_in_window_expansion(
+    *,
+    stock,
+    strategy,
+    profit_rate,
+    peak_profit,
+    current_ai_score=50,
+    held_sec=0,
+):
+    if not _rule_bool("SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED", False):
+        return {}
+    if not _is_scalp_simulated_position(stock, strategy):
+        return {}
+    if not _rule_bool("SCALP_LIVE_SIMULATOR_ENABLED", True):
+        return {}
+    max_per_position = max(0, _rule_int("SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_POSITION", 1))
+    filled_count = 1 if stock.get("last_simulated_add_ord_no") else 0
+    if max_per_position > 0 and filled_count >= max_per_position:
+        return {}
+    day_key = datetime.now().strftime("%Y-%m-%d")
+    max_daily = max(0, _rule_int("SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_DAY", 30))
+    created_today = int(_SCALP_SIM_SCALE_IN_WINDOW_DAILY_CREATED.get(day_key, 0) or 0)
+    if max_daily > 0 and created_today >= max_daily:
+        return {}
+    min_profit = _rule_float("SCALP_SIM_SCALE_IN_WINDOW_MIN_PROFIT_PCT", -2.5)
+    max_profit = _rule_float("SCALP_SIM_SCALE_IN_WINDOW_MAX_PROFIT_PCT", 2.5)
+    if profit_rate < min_profit or profit_rate > max_profit:
+        return {}
+    allowed = {
+        str(item).strip().upper()
+        for item in str(_rule("SCALP_SIM_SCALE_IN_WINDOW_ALLOWED_ARMS", "PYRAMID,AVG_DOWN") or "").split(",")
+        if str(item).strip()
+    }
+    add_type = "PYRAMID" if profit_rate >= 0 else "AVG_DOWN"
+    if add_type not in allowed:
+        fallback = sorted(allowed & {"PYRAMID", "AVG_DOWN"})
+        if not fallback:
+            return {}
+        add_type = fallback[0]
+    _SCALP_SIM_SCALE_IN_WINDOW_DAILY_CREATED[day_key] = created_today + 1
+    return {
+        "should_add": True,
+        "add_type": add_type,
+        "reason": "scalp_sim_scale_in_window_expansion",
+        "source": "scalp_sim_scale_in_window_expansion",
+        "cohort": "scalp_sim_scale_in_window_expansion",
+        "decision_authority": "sim_observation_only",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "profit_rate": profit_rate,
+        "peak_profit": peak_profit,
+        "current_ai_score": current_ai_score,
+        "held_sec": held_sec,
+        "max_orders_per_position": max_per_position,
+        "max_orders_per_day": max_daily,
+    }
 
 
 def _process_scale_in_action(stock, code, ws_data, action, admin_id):

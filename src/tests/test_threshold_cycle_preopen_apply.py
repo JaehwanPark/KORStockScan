@@ -1158,4 +1158,70 @@ def test_build_preopen_apply_manifest_reports_missing_source(tmp_path, monkeypat
     assert manifest["status"] == "missing_source_report"
     assert manifest["runtime_change"] is False
     assert manifest["candidates"] == []
+
+
+def test_scalp_sim_scale_in_window_approval_writes_runtime_env(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    approval_dir = tmp_path / "approvals"
+    report_dir.mkdir(parents=True)
+    approval_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_ARTIFACT_DIR", approval_dir)
+
+    (report_dir / "threshold_cycle_2026-05-19.json").write_text(
+        json.dumps({"date": "2026-05-19", "calibration_candidates": []}),
+        encoding="utf-8",
+    )
+    (approval_dir / "scalp_sim_scale_in_window_expansion_2026-05-19.json").write_text(
+        json.dumps(
+            {
+                "policy_id": "scalp_sim_scale_in_window_expansion",
+                "family": "scalp_sim_scale_in_window_expansion",
+                "approved": True,
+                "target_env_keys": [
+                    "SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED",
+                    "SCALP_SIM_SCALE_IN_WINDOW_ALLOWED_ARMS",
+                    "SCALP_SIM_SCALE_IN_WINDOW_MIN_PROFIT_PCT",
+                    "SCALP_SIM_SCALE_IN_WINDOW_MAX_PROFIT_PCT",
+                    "SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_POSITION",
+                    "SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_DAY",
+                ],
+                "recommended_values": {
+                    "enabled": True,
+                    "allowed_arms": "PYRAMID,AVG_DOWN",
+                    "min_profit_pct": -2.5,
+                    "max_profit_pct": 2.5,
+                    "max_orders_per_position": 1,
+                    "max_orders_per_day": 30,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-20",
+        source_date="2026-05-19",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    assert manifest["runtime_change"] is True
+    assert (
+        manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED"]
+        == "true"
+    )
+    assert (
+        manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_ALLOWED_ARMS"]
+        == "PYRAMID,AVG_DOWN"
+    )
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_DAY"] == "30"
+    assert manifest["scalp_sim_scale_in_window_approval"]["selected"][0]["family"] == (
+        "scalp_sim_scale_in_window_expansion"
+    )
     assert manifest["calibration_candidates"] == []

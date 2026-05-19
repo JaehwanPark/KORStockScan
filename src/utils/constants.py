@@ -138,6 +138,12 @@ class TradingConfig:
     SCALP_SIM_AI_HOLDING_CRITICAL_COOLDOWN_SEC: int = 30
     SCALP_SIM_AI_HOLDING_MAX_COOLDOWN_SEC: int = 180
     SCALP_SIM_AI_DEFERRED_REVIEW_ENABLED: bool = True
+    SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED: bool = False
+    SCALP_SIM_SCALE_IN_WINDOW_ALLOWED_ARMS: str = "PYRAMID,AVG_DOWN"
+    SCALP_SIM_SCALE_IN_WINDOW_MIN_PROFIT_PCT: float = -2.5
+    SCALP_SIM_SCALE_IN_WINDOW_MAX_PROFIT_PCT: float = 2.5
+    SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_POSITION: int = 1
+    SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_DAY: int = 30
     SIM_VIRTUAL_BUDGET_KRW: int = 10_000_000  # sim/probe/counterfactual 전용 가상 주문가능금액. 실계좌 예산과 분리
 
     # [매매 비중 설정] 전략별 주문 가능 현금 대비 1회 매수 투입 비율
@@ -1445,6 +1451,24 @@ def _build_trading_rules() -> TradingConfig:
     env_scalp_sim_ai_deferred_review_enabled = _env_bool(
         "KORSTOCKSCAN_SCALP_SIM_AI_DEFERRED_REVIEW_ENABLED"
     )
+    env_scalp_sim_scale_in_window_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED"
+    )
+    env_scalp_sim_scale_in_window_allowed_arms = _env_str(
+        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_ALLOWED_ARMS"
+    )
+    env_scalp_sim_scale_in_window_min_profit = _env_float(
+        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_MIN_PROFIT_PCT"
+    )
+    env_scalp_sim_scale_in_window_max_profit = _env_float(
+        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_MAX_PROFIT_PCT"
+    )
+    env_scalp_sim_scale_in_window_max_orders_position = _env_int(
+        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_POSITION"
+    )
+    env_scalp_sim_scale_in_window_max_orders_day = _env_int(
+        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_DAY"
+    )
     env_sim_virtual_budget_krw = _env_int("KORSTOCKSCAN_SIM_VIRTUAL_BUDGET_KRW")
     if env_sim_virtual_budget_krw is None:
         env_sim_virtual_budget_krw = _env_int("KORSTOCKSCAN_SIM_VIRTUAL_NOTIONAL_KRW")
@@ -1732,6 +1756,24 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_SIM_AI_DEFERRED_REVIEW_ENABLED=env_scalp_sim_ai_deferred_review_enabled
             if env_scalp_sim_ai_deferred_review_enabled is not None
             else config.SCALP_SIM_AI_DEFERRED_REVIEW_ENABLED,
+            SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED=env_scalp_sim_scale_in_window_enabled
+            if env_scalp_sim_scale_in_window_enabled is not None
+            else config.SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED,
+            SCALP_SIM_SCALE_IN_WINDOW_ALLOWED_ARMS=env_scalp_sim_scale_in_window_allowed_arms
+            if env_scalp_sim_scale_in_window_allowed_arms is not None
+            else config.SCALP_SIM_SCALE_IN_WINDOW_ALLOWED_ARMS,
+            SCALP_SIM_SCALE_IN_WINDOW_MIN_PROFIT_PCT=env_scalp_sim_scale_in_window_min_profit
+            if env_scalp_sim_scale_in_window_min_profit is not None
+            else config.SCALP_SIM_SCALE_IN_WINDOW_MIN_PROFIT_PCT,
+            SCALP_SIM_SCALE_IN_WINDOW_MAX_PROFIT_PCT=env_scalp_sim_scale_in_window_max_profit
+            if env_scalp_sim_scale_in_window_max_profit is not None
+            else config.SCALP_SIM_SCALE_IN_WINDOW_MAX_PROFIT_PCT,
+            SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_POSITION=env_scalp_sim_scale_in_window_max_orders_position
+            if env_scalp_sim_scale_in_window_max_orders_position is not None
+            else config.SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_POSITION,
+            SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_DAY=env_scalp_sim_scale_in_window_max_orders_day
+            if env_scalp_sim_scale_in_window_max_orders_day is not None
+            else config.SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_DAY,
             SIM_VIRTUAL_BUDGET_KRW=env_sim_virtual_budget_krw
             if env_sim_virtual_budget_krw is not None
             else config.SIM_VIRTUAL_BUDGET_KRW,

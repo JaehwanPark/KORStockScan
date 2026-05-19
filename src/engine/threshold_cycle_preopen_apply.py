@@ -95,6 +95,12 @@ TARGET_ENV_VALUE_KEYS = {
     "LIFECYCLE_DECISION_MATRIX_PROMOTE_ENABLED": "promote_enabled",
     "LIFECYCLE_DECISION_MATRIX_MAX_PROMOTES_PER_DAY": "max_promotes_per_day",
     "LIFECYCLE_DECISION_MATRIX_MIN_STAGE_CONFIDENCE": "min_stage_confidence",
+    "SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED": "enabled",
+    "SCALP_SIM_SCALE_IN_WINDOW_ALLOWED_ARMS": "allowed_arms",
+    "SCALP_SIM_SCALE_IN_WINDOW_MIN_PROFIT_PCT": "min_profit_pct",
+    "SCALP_SIM_SCALE_IN_WINDOW_MAX_PROFIT_PCT": "max_profit_pct",
+    "SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_POSITION": "max_orders_per_position",
+    "SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_DAY": "max_orders_per_day",
 }
 
 
@@ -147,6 +153,10 @@ def swing_scale_in_real_canary_artifact_path(source_date: str) -> Path:
 
 def swing_one_share_real_canary_artifact_path(source_date: str) -> Path:
     return SWING_RUNTIME_APPROVAL_ARTIFACT_DIR / f"swing_one_share_real_canary_{source_date}.json"
+
+
+def scalp_sim_scale_in_window_artifact_path(source_date: str) -> Path:
+    return SWING_RUNTIME_APPROVAL_ARTIFACT_DIR / f"scalp_sim_scale_in_window_expansion_{source_date}.json"
 
 
 def _report_path_for_date(target_date: str, *, source_phase: str | None = None) -> Path:
@@ -629,6 +639,72 @@ def _select_swing_approved_candidates(bundle: dict[str, Any]) -> tuple[list[dict
     return selected, decisions, env_overrides
 
 
+def _load_scalp_sim_scale_in_window_approval(source_date: str | None) -> dict[str, Any]:
+    if not source_date:
+        return {"artifact": None, "approved_request": None, "blocked": ["missing_source_date"]}
+    path = scalp_sim_scale_in_window_artifact_path(source_date)
+    payload = _load_json(path)
+    blocked: list[str] = []
+    if not payload:
+        blocked.append("approval_artifact_missing")
+    elif str(payload.get("policy_id") or payload.get("family") or "") != "scalp_sim_scale_in_window_expansion":
+        blocked.append("approval_policy_mismatch")
+    elif not bool(payload.get("approved")):
+        blocked.append("approval_required")
+    elif bool(payload.get("actual_order_submitted")):
+        blocked.append("actual_order_submitted_not_allowed")
+    request = None
+    if payload and not blocked:
+        recommended = payload.get("recommended_values") if isinstance(payload.get("recommended_values"), dict) else {}
+        request = {
+            "family": "scalp_sim_scale_in_window_expansion",
+            "policy_id": "scalp_sim_scale_in_window_expansion",
+            "stage": "scale_in",
+            "calibration_state": "approved_live",
+            "allowed_runtime_apply": True,
+            "safety_revert_required": False,
+            "target_env_keys": payload.get("target_env_keys") or [],
+            "recommended_values": recommended,
+            "current_values": {
+                "enabled": False,
+                "allowed_arms": "",
+                "min_profit_pct": None,
+                "max_profit_pct": None,
+                "max_orders_per_position": None,
+                "max_orders_per_day": None,
+            },
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "decision_authority": "sim_observation_only",
+        }
+    return {
+        "artifact": str(path) if path.exists() else None,
+        "approved_request": request,
+        "blocked": blocked,
+        "artifact_payload": payload,
+    }
+
+
+def _select_scalp_sim_scale_in_window_approval(bundle: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
+    request = bundle.get("approved_request") if isinstance(bundle.get("approved_request"), dict) else None
+    if not request:
+        return [], [], {}
+    overrides = _env_overrides_for_candidate(request)
+    reject_reason = ""
+    if not overrides:
+        reject_reason = "no_runtime_env_override"
+    decision = {
+        "family": request.get("family"),
+        "stage": request.get("stage"),
+        "selected": not bool(reject_reason),
+        "decision_reason": reject_reason or "user_approval_artifact_accepted",
+        "env_overrides": overrides if not reject_reason else {},
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    return ([request], [decision], overrides) if not reject_reason else ([], [decision], {})
+
+
 def _ai_guard_allows_candidate(candidate: dict[str, Any], ai_review: dict[str, Any], *, require_ai: bool) -> tuple[bool, str]:
     if str(candidate.get("family") or "") == "latency_classifier_runtime_profile":
         return (True, "deterministic_latency_classifier_recommendation")
@@ -772,6 +848,7 @@ def _write_runtime_env(target_date: str, manifest: dict[str, Any], env_overrides
                     for item in [
                         *(manifest.get("auto_apply_selected") or []),
                         *((manifest.get("swing_runtime_approval") or {}).get("selected") or []),
+                        *((manifest.get("scalp_sim_scale_in_window_approval") or {}).get("selected") or []),
                     ]
                 ],
             },
@@ -853,6 +930,8 @@ def build_preopen_apply_manifest(
         selected, decisions, env_overrides = ([], [], {})
         swing_bundle = _load_swing_runtime_approval_bundle(report_source_date)
         swing_selected, swing_decisions, swing_env_overrides = ([], [], {})
+        scalp_scale_bundle = _load_scalp_sim_scale_in_window_approval(report_source_date)
+        scalp_scale_selected, scalp_scale_decisions, scalp_scale_env_overrides = ([], [], {})
         if auto_apply_requested:
             selected, decisions, env_overrides = _select_auto_apply_candidates(
                 calibration_candidates,
@@ -862,7 +941,10 @@ def build_preopen_apply_manifest(
                 operator_locks=operator_runtime_env_locks,
             )
             swing_selected, swing_decisions, swing_env_overrides = _select_swing_approved_candidates(swing_bundle)
-            env_overrides = {**env_overrides, **swing_env_overrides}
+            scalp_scale_selected, scalp_scale_decisions, scalp_scale_env_overrides = (
+                _select_scalp_sim_scale_in_window_approval(scalp_scale_bundle)
+            )
+            env_overrides = {**env_overrides, **swing_env_overrides, **scalp_scale_env_overrides}
         runtime_change = bool(auto_apply_requested and env_overrides)
         status = (
             "auto_bounded_live_ready"
@@ -920,6 +1002,14 @@ def build_preopen_apply_manifest(
                 "selected": swing_selected,
                 "decisions": swing_decisions,
                 "dry_run_forced": bool(swing_env_overrides),
+            },
+            "scalp_sim_scale_in_window_approval": {
+                "artifact": scalp_scale_bundle.get("artifact"),
+                "approved": 1 if scalp_scale_bundle.get("approved_request") else 0,
+                "blocked": scalp_scale_bundle.get("blocked") or [],
+                "approved_request": scalp_scale_bundle.get("approved_request"),
+                "selected": scalp_scale_selected,
+                "decisions": scalp_scale_decisions,
             },
             "runtime_env_file": str(runtime_env_path(target_date)) if auto_apply_requested else None,
             "runtime_env_overrides": env_overrides,

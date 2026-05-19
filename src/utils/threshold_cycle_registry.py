@@ -64,6 +64,7 @@ THRESHOLD_STAGE_FAMILY_MAP = {
     "scalp_sim_holding_started": "statistical_action_weight",
     "scalp_sim_scale_in_order_assumed_filled": "scale_in_price_guard",
     "scalp_sim_scale_in_order_unfilled": "scale_in_price_guard",
+    "scalp_sim_scale_in_window_expansion": "scalp_sim_scale_in_window_expansion",
     "scalp_sim_sell_order_assumed_filled": "statistical_action_weight",
     "scalp_sim_sell_blocked_zero_qty": "statistical_action_weight",
     "scalp_sim_entry_unpriced": "pre_submit_price_guard",
