@@ -138,6 +138,12 @@
   - 금지: score bucket 고정 정책, score 단조 EV 가정, hard safety override, 장중 threshold mutation, sim-only real execution 품질 주장.
   - 다음 액션: `pass`, `hold_sample`, `hold_no_edge`, `source_quality_blocker`, `runtime_env_mapping_gap` 중 하나로 닫고, selected되면 다음 PREOPEN env의 policy file/version/promote cap을 확인한다.
 
+- [ ] `[ScalpSimScaleInMatrixFrameworkPrep0519] 스캘핑 sim scale-in 확대 전 lifecycle matrix scale_in source 귀속 확인` (`Due: 2026-05-19`, `Slot: POSTCLOSE`, `TimeWindow: 17:35~17:50`, `Track: ScalpingLogic`)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md), [lifecycle_decision_matrix.py](/home/ubuntu/KORStockScan/src/engine/lifecycle_decision_matrix.py), [scalp_sim_ev_midcheck.py](/home/ubuntu/KORStockScan/src/engine/scalp_sim_ev_midcheck.py)
+  - 판정 기준: `scalp_sim_scale_in_order_assumed_filled/unfilled`가 `lifecycle_decision_matrix`의 `stage=scale_in` row로 들어가고, add type/가격/수량은 runtime feature, final exit profit/post-add MFE/MAE는 label 전용으로 분리되는지 확인한다.
+  - 금지: scale-in window 확대를 고정 threshold 정책, 실주문 scale-in, 수량 cap 해제, hard safety 완화, 장중 threshold mutation 근거로 쓰지 않는다.
+  - 다음 액션: framework source 귀속이 `pass`면 다음 영업일 PREOPEN/INTRADAY에 `scalp_sim_scale_in_window_expansion` sim-only actuator 후보를 checklist에 열고, source gap이면 actuator보다 adapter/test 보강을 우선한다.
+
 - [ ] `[ShadowCanaryCohortReview0519] shadow/canary/cohort 런타임 분류 및 정리 판정` (`Due: 2026-05-19`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)
   - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)
   - 판정 기준: 당일 변경/관찰 결과를 기준으로 `remove`, `observe-only`, `baseline-promote`, `active-canary` 상태 변동 여부를 닫는다.

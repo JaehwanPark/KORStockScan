@@ -1,0 +1,684 @@
+{
+  "schema_version": 1,
+  "date": "2026-05-19",
+  "generated_at": "2026-05-19T14:07:23+09:00",
+  "report_type": "lifecycle_decision_matrix",
+  "matrix_version": "lifecycle_decision_matrix_v1_2026-05-19",
+  "runtime_effect": false,
+  "decision_authority": "weighted_adm_source_bundle_for_auto_bounded_apply",
+  "metric_role": "primary_ev",
+  "window_policy": "same_day_source_bundle_plus_rolling_threshold_cycle_consumer",
+  "sample_floor": 20,
+  "joined_sample_floor": 10,
+  "primary_decision_metric": "stage_ev_composite_pct",
+  "source_quality_gate": "stage sample, joined outcome, fixed threshold contract, no future-label runtime inputs",
+  "forbidden_uses": [
+    "hard_safety_override",
+    "real_execution_quality_from_sim_only",
+    "intraday_threshold_mutation",
+    "runtime_feature_future_label_leakage"
+  ],
+  "fixed_threshold_contract": {
+    "priority": [
+      "hard_safety_veto",
+      "account_order_broker_guard",
+      "lifecycle_matrix_runtime_policy",
+      "existing_adm_adapter",
+      "baseline_fixed_threshold_fallback"
+    ],
+    "roles": {
+      "hard_safety": [
+        "broker_submit_guard",
+        "stale_quote_submit_block",
+        "price_freshness_guard",
+        "hard_stop",
+        "protect_stop",
+        "emergency_stop",
+        "account_order_cooldown_qty_guard"
+      ],
+      "baseline_prior": [
+        "BUY_SCORE_THRESHOLD",
+        "VPW_MIN_SCORE",
+        "strength_momentum_cutoff",
+        "entry_score_cutoff"
+      ],
+      "bounded_tunable": [
+        "SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION",
+        "SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION",
+        "SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION",
+        "score65_74_recovery_probe",
+        "soft_stop_whipsaw_confirmation",
+        "holding_flow_override",
+        "scale_in_price_guard"
+      ],
+      "legacy_archive": [
+        "fallback_scout_main",
+        "fallback_single",
+        "latency_fallback_split_entry",
+        "legacy_latency_composite",
+        "closed_shadow_axes"
+      ]
+    },
+    "forbidden_uses": [
+      "hard_safety_override",
+      "intraday_threshold_mutation",
+      "legacy_archive_as_runtime_feature",
+      "score_monotonic_ev_assumption"
+    ]
+  },
+  "runtime_feature_keys": [
+    "actual_order_submitted",
+    "add_type",
+    "ai_action",
+    "ai_score",
+    "best_ask",
+    "best_bid",
+    "broker_order_forbidden",
+    "chosen_action",
+    "context_age_ms",
+    "curr_price",
+    "entry_submit_revalidation_block",
+    "entry_submit_revalidation_warning",
+    "gate_action",
+    "held_sec",
+    "limit_price",
+    "liquidity_bucket",
+    "ofi",
+    "overbought_bucket",
+    "peak_profit",
+    "price_resolution_bucket",
+    "profit_rate_live",
+    "qi",
+    "qty",
+    "quote_age_ms",
+    "resolved_order_price",
+    "risk_context_bucket",
+    "score_bucket",
+    "source_quality_block_reason",
+    "stale_bucket",
+    "time_bucket",
+    "would_limit_fill"
+  ],
+  "label_keys": [
+    "avoided_loser",
+    "close_10m_pct",
+    "close_30m_pct",
+    "close_60m_pct",
+    "exit_rule",
+    "mae_10m_pct",
+    "mae_30m_pct",
+    "mae_60m_pct",
+    "mfe_10m_pct",
+    "mfe_30m_pct",
+    "mfe_60m_pct",
+    "missed_winner",
+    "profit_rate",
+    "sim_post_sell_outcome"
+  ],
+  "summary": {
+    "total_rows": 17,
+    "joined_rows": 15,
+    "stage_counts": {
+      "entry": 14,
+      "scale_in": 3
+    },
+    "policy_pass_count": 0,
+    "promote_ready_count": 0,
+    "status": "warning",
+    "warnings": [
+      "all_stage_policy_entries_below_sample_floor"
+    ]
+  },
+  "policy_entries": [
+    {
+      "policy_key": "entry:weighted_adm_v1",
+      "stage": "entry",
+      "sample": 14,
+      "joined_sample": 14,
+      "join_rate": 1.0,
+      "stage_ev_composite_pct": 2.5281,
+      "confidence": 1.0,
+      "source_quality_gate": "hold_sample",
+      "selected_action": "BUY_DEFENSIVE",
+      "promote_ready": false,
+      "allowed_actions": [
+        "BUY_DEFENSIVE",
+        "WAIT_REQUOTE",
+        "DROP",
+        "NO_CHANGE"
+      ]
+    },
+    {
+      "policy_key": "submit:weighted_adm_v1",
+      "stage": "submit",
+      "sample": 0,
+      "joined_sample": 0,
+      "join_rate": 0.0,
+      "stage_ev_composite_pct": null,
+      "confidence": 0.0,
+      "source_quality_gate": "hold_sample",
+      "selected_action": "NO_CHANGE",
+      "promote_ready": false,
+      "allowed_actions": [
+        "ALLOW_SUBMIT",
+        "NO_CHANGE"
+      ]
+    },
+    {
+      "policy_key": "holding:weighted_adm_v1",
+      "stage": "holding",
+      "sample": 0,
+      "joined_sample": 0,
+      "join_rate": 0.0,
+      "stage_ev_composite_pct": null,
+      "confidence": 0.0,
+      "source_quality_gate": "hold_sample",
+      "selected_action": "NO_CHANGE",
+      "promote_ready": false,
+      "allowed_actions": [
+        "HOLD",
+        "EXIT",
+        "NO_CHANGE"
+      ]
+    },
+    {
+      "policy_key": "scale_in:weighted_adm_v1",
+      "stage": "scale_in",
+      "sample": 3,
+      "joined_sample": 1,
+      "join_rate": 0.3333,
+      "stage_ev_composite_pct": 1.386,
+      "confidence": 0.0333,
+      "source_quality_gate": "hold_sample",
+      "selected_action": "PYRAMID_BIAS",
+      "promote_ready": false,
+      "allowed_actions": [
+        "AVG_DOWN_BIAS",
+        "PYRAMID_BIAS",
+        "NO_CHANGE"
+      ]
+    },
+    {
+      "policy_key": "exit:weighted_adm_v1",
+      "stage": "exit",
+      "sample": 0,
+      "joined_sample": 0,
+      "join_rate": 0.0,
+      "stage_ev_composite_pct": null,
+      "confidence": 0.0,
+      "source_quality_gate": "hold_sample",
+      "selected_action": "NO_CHANGE",
+      "promote_ready": false,
+      "allowed_actions": [
+        "HOLD",
+        "EXIT",
+        "NO_CHANGE"
+      ]
+    }
+  ],
+  "examples": [
+    {
+      "candidate_id": "015760:7089:112912",
+      "stock_code": "015760",
+      "event_time": null,
+      "stage": "entry",
+      "source_stage": "wait6579_ev_cohort",
+      "runtime_features": {
+        "ai_score": 66.0,
+        "buy_pressure": 97.9,
+        "tick_accel": 0.0,
+        "micro_vwap_bp": -3.06,
+        "latency_state": "-",
+        "fixed_threshold_contract_role": "baseline_prior"
+      },
+      "labels": {
+        "mfe_10m_pct": 0.3831,
+        "mae_10m_pct": -0.3831,
+        "close_10m_pct": -0.2554,
+        "profit_rate": -0.2203
+      },
+      "stage_ev_composite_pct": -0.0575,
+      "outcome_joined": true,
+      "actual_order_submitted": false,
+      "source": "wait6579_ev_cohort"
+    },
+    {
+      "candidate_id": "000370:7110:112747",
+      "stock_code": "000370",
+      "event_time": null,
+      "stage": "entry",
+      "source_stage": "wait6579_ev_cohort",
+      "runtime_features": {
+        "ai_score": 66.0,
+        "buy_pressure": 100.0,
+        "tick_accel": 1.15,
+        "micro_vwap_bp": -13.26,
+        "latency_state": "-",
+        "fixed_threshold_contract_role": "baseline_prior"
+      },
+      "labels": {
+        "mfe_10m_pct": 6.834,
+        "mae_10m_pct": -0.9763,
+        "close_10m_pct": 6.4156,
+        "profit_rate": 5.5328
+      },
+      "stage_ev_composite_pct": 3.7418,
+      "outcome_joined": true,
+      "actual_order_submitted": false,
+      "source": "wait6579_ev_cohort"
+    },
+    {
+      "candidate_id": "078890:7122:111714",
+      "stock_code": "078890",
+      "event_time": null,
+      "stage": "entry",
+      "source_stage": "wait6579_ev_cohort",
+      "runtime_features": {
+        "ai_score": 66.0,
+        "buy_pressure": 64.57,
+        "tick_accel": 0.25,
+        "micro_vwap_bp": 93.38,
+        "latency_state": "-",
+        "fixed_threshold_contract_role": "baseline_prior"
+      },
+      "labels": {
+        "mfe_10m_pct": 18.642,
+        "mae_10m_pct": -0.6173,
+        "close_10m_pct": 16.5432,
+        "profit_rate": 13.8301
+      },
+      "stage_ev_composite_pct": 8.371,
+      "outcome_joined": true,
+      "actual_order_submitted": false,
+      "source": "wait6579_ev_cohort"
+    },
+    {
+      "candidate_id": "274090:7058:110651",
+      "stock_code": "274090",
+      "event_time": null,
+      "stage": "entry",
+      "source_stage": "wait6579_ev_cohort",
+      "runtime_features": {
+        "ai_score": 66.0,
+        "buy_pressure": 72.73,
+        "tick_accel": 0.5,
+        "micro_vwap_bp": 40.09,
+        "latency_state": "-",
+        "fixed_threshold_contract_role": "baseline_prior"
+      },
+      "labels": {
+        "mfe_10m_pct": 4.6243,
+        "mae_10m_pct": 0.0,
+        "close_10m_pct": 4.6243,
+        "profit_rate": 3.988
+      },
+      "stage_ev_composite_pct": 3.1309,
+      "outcome_joined": true,
+      "actual_order_submitted": false,
+      "source": "wait6579_ev_cohort"
+    },
+    {
+      "candidate_id": "015760:7089:105858",
+      "stock_code": "015760",
+      "event_time": null,
+      "stage": "entry",
+      "source_stage": "wait6579_ev_cohort",
+      "runtime_features": {
+        "ai_score": 68.0,
+        "buy_pressure": 4.46,
+        "tick_accel": 2.0,
+        "micro_vwap_bp": 5.33,
+        "latency_state": "-",
+        "fixed_threshold_contract_role": "baseline_prior"
+      },
+      "labels": {
+        "mfe_10m_pct": 0.3807,
+        "mae_10m_pct": -0.8883,
+        "close_10m_pct": -0.5076,
+        "profit_rate": -0.4378
+      },
+      "stage_ev_composite_pct": -0.2728,
+      "outcome_joined": true,
+      "actual_order_submitted": false,
+      "source": "wait6579_ev_cohort"
+    },
+    {
+      "candidate_id": "080220:7104:105649",
+      "stock_code": "080220",
+      "event_time": null,
+      "stage": "entry",
+      "source_stage": "wait6579_ev_cohort",
+      "runtime_features": {
+        "ai_score": 66.0,
+        "buy_pressure": 77.32,
+        "tick_accel": 1.0,
+        "micro_vwap_bp": 54.29,
+        "latency_state": "-",
+        "fixed_threshold_contract_role": "baseline_prior"
+      },
+      "labels": {
+        "mfe_10m_pct": 12.6478,
+        "mae_10m_pct": -0.9456,
+        "close_10m_pct": 10.0473,
+        "profit_rate": 8.6648
+      },
+      "stage_ev_composite_pct": 5.3822,
+      "outcome_joined": true,
+      "actual_order_submitted": false,
+      "source": "wait6579_ev_cohort"
+    },
+    {
+      "candidate_id": "000660:7073:104616",
+      "stock_code": "000660",
+      "event_time": null,
+      "stage": "entry",
+      "source_stage": "wait6579_ev_cohort",
+      "runtime_features": {
+        "ai_score": 72.0,
+        "buy_pressure": 80.0,
+        "tick_accel": 1.0,
+        "micro_vwap_bp": 0.89,
+        "latency_state": "-",
+        "fixed_threshold_contract_role": "baseline_prior"
+      },
+      "labels": {
+        "mfe_10m_pct": 0.1126,
+        "mae_10m_pct": -0.9009,
+        "close_10m_pct": -0.9009,
+        "profit_rate": -0.7769
+      },
+      "stage_ev_composite_pct": -0.5462,
+      "outcome_joined": true,
+      "actual_order_submitted": false,
+      "source": "wait6579_ev_cohort"
+    },
+    {
+      "candidate_id": "156100:7156:103439",
+      "stock_code": "156100",
+      "event_time": null,
+      "stage": "entry",
+      "source_stage": "wait6579_ev_cohort",
+      "runtime_features": {
+        "ai_score": 66.0,
+        "buy_pressure": 78.26,
+        "tick_accel": 5.333,
+        "micro_vwap_bp": 78.25,
+        "latency_state": "-",
+        "fixed_threshold_contract_role": "baseline_prior"
+      },
+      "labels": {
+        "mfe_10m_pct": 1.4041,
+        "mae_10m_pct": -9.2044,
+        "close_10m_pct": -0.312,
+        "profit_rate": -0.2691
+      },
+      "stage_ev_composite_pct": -1.4898,
+      "outcome_joined": true,
+      "actual_order_submitted": false,
+      "source": "wait6579_ev_cohort"
+    },
+    {
+      "candidate_id": "007390:7086:102150",
+      "stock_code": "007390",
+      "event_time": null,
+      "stage": "entry",
+      "source_stage": "wait6579_ev_cohort",
+      "runtime_features": {
+        "ai_score": 72.0,
+        "buy_pressure": 86.62,
+        "tick_accel": 7.167,
+        "micro_vwap_bp": 25.97,
+        "latency_state": "-",
+        "fixed_threshold_contract_role": "baseline_prior"
+      },
+      "labels": {
+        "mfe_10m_pct": 0.9788,
+        "mae_10m_pct": -7.7216,
+        "close_10m_pct": 0.4894,
+        "profit_rate": 0.4221
+      },
+      "stage_ev_composite_pct": -0.9815,
+      "outcome_joined": true,
+      "actual_order_submitted": false,
+      "source": "wait6579_ev_cohort"
+    },
+    {
+      "candidate_id": "211270:7124:092645",
+      "stock_code": "211270",
+      "event_time": null,
+      "stage": "entry",
+      "source_stage": "wait6579_ev_cohort",
+      "runtime_features": {
+        "ai_score": 65.0,
+        "buy_pressure": 0.46,
+        "tick_accel": 2.0,
+        "micro_vwap_bp": -98.17,
+        "latency_state": "-",
+        "fixed_threshold_contract_role": "baseline_prior"
+      },
+      "labels": {
+        "mfe_10m_pct": 6.9194,
+        "mae_10m_pct": 0.0,
+        "close_10m_pct": 4.6931,
+        "profit_rate": 4.0267
+      },
+      "stage_ev_composite_pct": 3.1619,
+      "outcome_joined": true,
+      "actual_order_submitted": false,
+      "source": "wait6579_ev_cohort"
+    },
+    {
+      "candidate_id": "100790:7108:092620",
+      "stock_code": "100790",
+      "event_time": null,
+      "stage": "entry",
+      "source_stage": "wait6579_ev_cohort",
+      "runtime_features": {
+        "ai_score": 65.0,
+        "buy_pressure": 69.86,
+        "tick_accel": 0.0,
+        "micro_vwap_bp": -57.49,
+        "latency_state": "-",
+        "fixed_threshold_contract_role": "baseline_prior"
+      },
+      "labels": {
+        "mfe_10m_pct": 17.4873,
+        "mae_10m_pct": -0.3396,
+        "close_10m_pct": 9.1681,
+        "profit_rate": 7.2611
+      },
+      "stage_ev_composite_pct": 5.1077,
+      "outcome_joined": true,
+      "actual_order_submitted": false,
+      "source": "wait6579_ev_cohort"
+    },
+    {
+      "candidate_id": "079550:7107:092452",
+      "stock_code": "079550",
+      "event_time": null,
+      "stage": "entry",
+      "source_stage": "wait6579_ev_cohort",
+      "runtime_features": {
+        "ai_score": 65.0,
+        "buy_pressure": 35.29,
+        "tick_accel": 0.0,
+        "micro_vwap_bp": -137.84,
+        "latency_state": "-",
+        "fixed_threshold_contract_role": "baseline_prior"
+      },
+      "labels": {
+        "mfe_10m_pct": 2.2857,
+        "mae_10m_pct": -0.1143,
+        "close_10m_pct": 1.8286,
+        "profit_rate": 1.4483
+      },
+      "stage_ev_composite_pct": 1.6,
+      "outcome_joined": true,
+      "actual_order_submitted": false,
+      "source": "wait6579_ev_cohort"
+    },
+    {
+      "candidate_id": "005290:7097:092211",
+      "stock_code": "005290",
+      "event_time": null,
+      "stage": "entry",
+      "source_stage": "wait6579_ev_cohort",
+      "runtime_features": {
+        "ai_score": 66.0,
+        "buy_pressure": 70.37,
+        "tick_accel": 1.0,
+        "micro_vwap_bp": 80.41,
+        "latency_state": "-",
+        "fixed_threshold_contract_role": "baseline_prior"
+      },
+      "labels": {
+        "mfe_10m_pct": 0.6711,
+        "mae_10m_pct": -2.8523,
+        "close_10m_pct": -0.1678,
+        "profit_rate": -0.1447
+      },
+      "stage_ev_composite_pct": -0.4111,
+      "outcome_joined": true,
+      "actual_order_submitted": false,
+      "source": "wait6579_ev_cohort"
+    },
+    {
+      "candidate_id": "000370:7110:091425",
+      "stock_code": "000370",
+      "event_time": null,
+      "stage": "entry",
+      "source_stage": "wait6579_ev_cohort",
+      "runtime_features": {
+        "ai_score": 66.0,
+        "buy_pressure": 80.78,
+        "tick_accel": 0.0,
+        "micro_vwap_bp": -71.77,
+        "latency_state": "-",
+        "fixed_threshold_contract_role": "baseline_prior"
+      },
+      "labels": {
+        "mfe_10m_pct": 19.9387,
+        "mae_10m_pct": -0.6135,
+        "close_10m_pct": 17.1779,
+        "profit_rate": 14.1718
+      },
+      "stage_ev_composite_pct": 8.6574,
+      "outcome_joined": true,
+      "actual_order_submitted": false,
+      "source": "wait6579_ev_cohort"
+    },
+    {
+      "candidate_id": "SIMADD-036420-1779162873115-8d74fb",
+      "stock_code": "036420",
+      "event_time": "2026-05-19T12:54:33.115166",
+      "stage": "scale_in",
+      "source_stage": "scalp_sim_scale_in_order_unfilled",
+      "runtime_features": {
+        "add_type": "PYRAMID",
+        "qty": "83",
+        "limit_price": "5740",
+        "curr_price": "5750",
+        "best_bid": "5740",
+        "best_ask": "5750",
+        "actual_order_submitted": "False",
+        "broker_order_forbidden": "True",
+        "fixed_threshold_contract_role": "bounded_tunable",
+        "scale_in_fill_observed": false
+      },
+      "labels": {
+        "profit_rate": 1.35,
+        "exit_rule": "scalp_trailing_take_profit",
+        "mfe_10m_pct": 1.53,
+        "mae_10m_pct": 1.35,
+        "close_10m_pct": 1.35
+      },
+      "stage_ev_composite_pct": 1.386,
+      "outcome_joined": true,
+      "actual_order_submitted": false,
+      "source": "scalp_sim_scale_in_pipeline_events"
+    },
+    {
+      "candidate_id": "SIMADD-036930-1779166923199-0f0f66",
+      "stock_code": "036930",
+      "event_time": "2026-05-19T14:02:03.200017",
+      "stage": "scale_in",
+      "source_stage": "scalp_sim_scale_in_order_unfilled",
+      "runtime_features": {
+        "add_type": "PYRAMID",
+        "qty": "2",
+        "limit_price": "176300",
+        "curr_price": "176400",
+        "best_bid": "176300",
+        "best_ask": "176400",
+        "actual_order_submitted": "False",
+        "broker_order_forbidden": "True",
+        "fixed_threshold_contract_role": "bounded_tunable",
+        "scale_in_fill_observed": false
+      },
+      "labels": {
+        "profit_rate": null,
+        "exit_rule": null,
+        "mfe_10m_pct": null,
+        "mae_10m_pct": null,
+        "close_10m_pct": null
+      },
+      "stage_ev_composite_pct": null,
+      "outcome_joined": false,
+      "actual_order_submitted": false,
+      "source": "scalp_sim_scale_in_pipeline_events"
+    },
+    {
+      "candidate_id": "SIMADD-036930-1779166944451-4398a3",
+      "stock_code": "036930",
+      "event_time": "2026-05-19T14:02:24.451643",
+      "stage": "scale_in",
+      "source_stage": "scalp_sim_scale_in_order_unfilled",
+      "runtime_features": {
+        "add_type": "PYRAMID",
+        "qty": "2",
+        "limit_price": "176900",
+        "curr_price": "177000",
+        "best_bid": "176900",
+        "best_ask": "177000",
+        "actual_order_submitted": "False",
+        "broker_order_forbidden": "True",
+        "fixed_threshold_contract_role": "bounded_tunable",
+        "scale_in_fill_observed": false
+      },
+      "labels": {
+        "profit_rate": null,
+        "exit_rule": null,
+        "mfe_10m_pct": null,
+        "mae_10m_pct": null,
+        "close_10m_pct": null
+      },
+      "stage_ev_composite_pct": null,
+      "outcome_joined": false,
+      "actual_order_submitted": false,
+      "source": "scalp_sim_scale_in_pipeline_events"
+    }
+  ],
+  "sources": {
+    "entry": {
+      "artifact": null,
+      "rows": 0
+    },
+    "sim_post_sell": {
+      "artifact": null,
+      "rows": 0
+    },
+    "wait6579": {
+      "artifact": "/home/ubuntu/KORStockScan/data/report/monitor_snapshots/wait6579_ev_cohort_2026-05-19.json",
+      "rows": 14
+    },
+    "scalp_sim_scale_in": {
+      "artifact": "/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-05-19.jsonl",
+      "rows": 3,
+      "filled_events": 0,
+      "unfilled_events": 3
+    }
+  },
+  "warnings": [
+    "all_stage_policy_entries_below_sample_floor"
+  ]
+}

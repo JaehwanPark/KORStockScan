@@ -21,6 +21,7 @@ from src.engine.scalp_entry_action_decision_matrix import report_paths as entry_
 MATRIX_DIR = REPORT_DIR / "lifecycle_decision_matrix"
 POST_SELL_DIR = Path(__file__).resolve().parents[2] / "data" / "post_sell"
 MONITOR_SNAPSHOT_DIR = REPORT_DIR / "monitor_snapshots"
+PIPELINE_EVENTS_DIR = Path(__file__).resolve().parents[2] / "data" / "pipeline_events"
 
 REPORT_SCHEMA_VERSION = 1
 MATRIX_VERSION_PREFIX = "lifecycle_decision_matrix_v1"
@@ -49,6 +50,10 @@ RUNTIME_FEATURE_KEYS = {
     "best_bid",
     "best_ask",
     "resolved_order_price",
+    "add_type",
+    "qty",
+    "limit_price",
+    "curr_price",
     "would_limit_fill",
     "source_quality_block_reason",
     "gate_action",
@@ -336,6 +341,95 @@ def _load_wait6579_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[st
     return rows, {"artifact": str(path) if path.exists() else None, "rows": len(rows)}
 
 
+def _boolish_false(value: Any) -> bool:
+    return str(value).strip().lower() in {"", "0", "false", "none", "no"}
+
+
+def _load_scalp_sim_scale_in_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    path = PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"
+    positions: dict[str, dict[str, Any]] = defaultdict(lambda: {"events": [], "scale_events": [], "completed": None})
+    for item in _iter_jsonl(path) or []:
+        if not isinstance(item, dict):
+            continue
+        stage = str(item.get("stage") or "")
+        fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
+        sim_record_id = fields.get("sim_record_id")
+        if not sim_record_id:
+            continue
+        is_scalp_sim = stage.startswith("scalp_sim_") or fields.get("simulation_book") == "scalp_ai_buy_all"
+        if not is_scalp_sim:
+            continue
+        position = positions[str(sim_record_id)]
+        position["events"].append(item)
+        if stage in {"scalp_sim_scale_in_order_assumed_filled", "scalp_sim_scale_in_order_unfilled"}:
+            position["scale_events"].append(item)
+        if stage == "scalp_sim_sell_order_assumed_filled":
+            position["completed"] = item
+
+    rows: list[dict[str, Any]] = []
+    filled_count = 0
+    unfilled_count = 0
+    for sim_record_id, position in positions.items():
+        completed = position.get("completed") if isinstance(position.get("completed"), dict) else None
+        completed_fields = completed.get("fields") if completed and isinstance(completed.get("fields"), dict) else {}
+        final_profit = _safe_float(completed_fields.get("profit_rate"), None)
+        for scale_event in position.get("scale_events") or []:
+            stage = str(scale_event.get("stage") or "")
+            fields = scale_event.get("fields") if isinstance(scale_event.get("fields"), dict) else {}
+            is_filled = stage == "scalp_sim_scale_in_order_assumed_filled"
+            filled_count += int(is_filled)
+            unfilled_count += int(not is_filled)
+            first_add_at = str(scale_event.get("emitted_at") or "")
+            post_add_values: list[float] = []
+            for event in position.get("events") or []:
+                if str(event.get("emitted_at") or "") < first_add_at:
+                    continue
+                event_fields = event.get("fields") if isinstance(event.get("fields"), dict) else {}
+                for key in ("profit_rate", "trigger_profit_rate"):
+                    value = _safe_float(event_fields.get(key), None)
+                    if value is not None:
+                        post_add_values.append(value)
+            labels = {
+                "profit_rate": final_profit,
+                "exit_rule": completed_fields.get("exit_rule"),
+                "mfe_10m_pct": max(post_add_values) if post_add_values else None,
+                "mae_10m_pct": min(post_add_values) if post_add_values else None,
+                "close_10m_pct": final_profit,
+            }
+            rows.append(
+                {
+                    "candidate_id": fields.get("ord_no") or f"{sim_record_id}:{scale_event.get('emitted_at')}",
+                    "stock_code": scale_event.get("stock_code"),
+                    "event_time": scale_event.get("emitted_at"),
+                    "stage": "scale_in",
+                    "source_stage": stage,
+                    "runtime_features": {
+                        "add_type": fields.get("add_type"),
+                        "qty": fields.get("qty"),
+                        "limit_price": fields.get("limit_price"),
+                        "curr_price": fields.get("curr_price"),
+                        "best_bid": fields.get("best_bid"),
+                        "best_ask": fields.get("best_ask"),
+                        "actual_order_submitted": fields.get("actual_order_submitted"),
+                        "broker_order_forbidden": fields.get("broker_order_forbidden"),
+                        "fixed_threshold_contract_role": "bounded_tunable",
+                        "scale_in_fill_observed": is_filled,
+                    },
+                    "labels": labels,
+                    "stage_ev_composite_pct": _stage_ev("scale_in", labels),
+                    "outcome_joined": completed is not None,
+                    "actual_order_submitted": not _boolish_false(fields.get("actual_order_submitted")),
+                    "source": "scalp_sim_scale_in_pipeline_events",
+                }
+            )
+    return rows, {
+        "artifact": str(path) if path.exists() else None,
+        "rows": len(rows),
+        "filled_events": filled_count,
+        "unfilled_events": unfilled_count,
+    }
+
+
 def _policy_action_for(stage: str, rows: list[dict[str, Any]]) -> str:
     joined = [row for row in rows if row.get("stage_ev_composite_pct") is not None]
     if not joined:
@@ -410,7 +504,7 @@ def _allowed_actions(stage: str) -> list[str]:
 
 def build_lifecycle_decision_matrix_report(target_date: str) -> dict[str, Any]:
     target_date = str(target_date).strip()
-    source_loaders = [_load_entry_rows, _load_sim_post_sell_rows, _load_wait6579_rows]
+    source_loaders = [_load_entry_rows, _load_sim_post_sell_rows, _load_wait6579_rows, _load_scalp_sim_scale_in_rows]
     rows: list[dict[str, Any]] = []
     sources: dict[str, Any] = {}
     for loader in source_loaders:
