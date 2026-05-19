@@ -23,6 +23,15 @@ _READY_RE = re.compile(
     r"artifact ready label=(?P<label>\S+) path=(?P<path>\S+) waited=(?P<waited>\d+)s(?: json_valid=(?P<json_valid>\w+))?"
 )
 _TIMEOUT_RE = re.compile(r"artifact wait timeout label=(?P<label>\S+) path=(?P<path>\S+) waited=(?P<waited>\d+)s")
+_AI_RUNTIME_STATES = {
+    "adjust_up",
+    "adjust_down",
+    "hold",
+    "hold_no_edge",
+}
+_AI_EXEMPT_RUNTIME_FAMILIES = {
+    "latency_classifier_runtime_profile",
+}
 
 
 def verification_report_paths(target_date: str) -> tuple[Path, Path]:
@@ -105,6 +114,82 @@ def _json_valid(path: Path) -> bool:
     return True
 
 
+def _ai_review_path(target_date: str) -> Path:
+    return REPORT_DIR / "threshold_cycle_ai_review" / f"threshold_cycle_ai_review_{target_date}_postclose.json"
+
+
+def _calibration_path(target_date: str) -> Path:
+    return (
+        REPORT_DIR
+        / "threshold_cycle_calibration"
+        / f"threshold_cycle_calibration_{target_date}_postclose.json"
+    )
+
+
+def _runtime_candidates_requiring_ai(calibration_report: dict[str, Any]) -> list[str]:
+    candidates = calibration_report.get("calibration_candidates")
+    if not isinstance(candidates, list):
+        return []
+
+    blocking: list[str] = []
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        family = str(item.get("family") or item.get("source_family") or "").strip()
+        state = str(item.get("calibration_state") or "").strip()
+        if not family or family in _AI_EXEMPT_RUNTIME_FAMILIES:
+            continue
+        if state not in _AI_RUNTIME_STATES:
+            continue
+        if item.get("allowed_runtime_apply") is not True:
+            continue
+        if item.get("human_approval_required") is True:
+            continue
+        blocking.append(family)
+    return sorted(set(blocking))
+
+
+def _ai_correction_status(target_date: str) -> dict[str, Any]:
+    ai_path = _ai_review_path(target_date)
+    calibration_path = _calibration_path(target_date)
+    ai_review = _load_json(ai_path)
+    calibration_report = _load_json(calibration_path)
+    blocking_families = _runtime_candidates_requiring_ai(calibration_report)
+    ai_status = str(ai_review.get("ai_status") or "missing").strip()
+    provider_status = ai_review.get("provider_status")
+    parse_warnings = ai_review.get("parse_warnings")
+    if not isinstance(parse_warnings, list):
+        parse_warnings = []
+
+    if ai_status == "parsed":
+        status = "pass"
+    elif blocking_families:
+        status = "fail"
+    elif ai_path.exists() and ai_status not in {"", "missing"}:
+        status = "warning"
+    else:
+        status = "missing"
+
+    return {
+        "status": status,
+        "ai_status": ai_status,
+        "ai_review_path": str(ai_path),
+        "calibration_path": str(calibration_path),
+        "provider_status": provider_status,
+        "parse_warnings": parse_warnings,
+        "blocking_runtime_candidate_families": blocking_families,
+        "interpretation": (
+            "AI correction parsed successfully"
+            if status == "pass"
+            else "AI correction unavailable blocks runtime-applicable threshold candidates"
+            if status == "fail"
+            else "AI correction unavailable but no runtime-applicable candidate was detected"
+            if status == "warning"
+            else "AI correction artifact missing or unreadable"
+        ),
+    }
+
+
 def _postclose_not_yet_due(target_date: str) -> bool:
     try:
         parsed = date.fromisoformat(target_date)
@@ -173,6 +258,9 @@ def build_threshold_cycle_postclose_verification(
     ev_report = _load_json(_artifact_paths(target_date)["threshold_cycle_ev"])
     workorder = _load_json(_artifact_paths(target_date)["code_improvement_workorder"])
     runtime_summary = _load_json(_artifact_paths(target_date)["runtime_approval_summary"])
+    ai_correction = _ai_correction_status(target_date)
+    if ai_correction.get("status") == "fail":
+        log_issues.append("ai_correction_unavailable_blocks_runtime_candidates")
 
     lineage = workorder.get("lineage") if isinstance(workorder.get("lineage"), dict) else {}
     workorder_snapshot = {
@@ -396,12 +484,14 @@ def build_threshold_cycle_postclose_verification(
         },
         "downstream_links": downstream_links,
         "missing_downstream_links": missing_downstream_links,
+        "ai_correction": ai_correction,
     }
 
 
 def _render_markdown(report: dict[str, Any]) -> str:
     predecessor = report.get("predecessor_integrity") if isinstance(report.get("predecessor_integrity"), dict) else {}
     workorder = report.get("workorder_snapshot") if isinstance(report.get("workorder_snapshot"), dict) else {}
+    ai_correction = report.get("ai_correction") if isinstance(report.get("ai_correction"), dict) else {}
     lines = [
         f"# Threshold Cycle Postclose Verification - {report.get('date')}",
         "",
@@ -420,6 +510,14 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- interpretation: `{(report.get('execution_profile') or {}).get('interpretation') or '-'}`",
         f"- missing_required_artifacts: `{report.get('missing_required_artifacts') or []}`",
         f"- missing_downstream_links: `{report.get('missing_downstream_links') or []}`",
+        "",
+        "## AI Correction",
+        f"- status: `{ai_correction.get('status') or '-'}`",
+        f"- ai_status: `{ai_correction.get('ai_status') or '-'}`",
+        f"- provider_status: `{ai_correction.get('provider_status') or '-'}`",
+        f"- blocking_runtime_candidate_families: `{ai_correction.get('blocking_runtime_candidate_families') or []}`",
+        f"- parse_warnings: `{ai_correction.get('parse_warnings') or []}`",
+        f"- interpretation: `{ai_correction.get('interpretation') or '-'}`",
         "",
         "## Workorder Snapshot",
         f"- generation_id: `{workorder.get('generation_id') or '-'}`",
@@ -456,6 +554,8 @@ def main() -> None:
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     md_path.write_text(_render_markdown(report), encoding="utf-8")
     print(json.dumps({"status": report.get("status"), "json": str(json_path), "md": str(md_path)}, ensure_ascii=False))
+    if report.get("status") == "fail":
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

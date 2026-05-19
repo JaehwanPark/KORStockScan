@@ -4953,7 +4953,7 @@ def _build_orderbook_micro_log_fields(micro):
             "orderbook_micro_ready": False,
             "orderbook_micro_state": "missing",
             "orderbook_micro_reason": "micro_context_missing",
-            "orderbook_micro_snapshot_age_ms": "-",
+            "orderbook_micro_snapshot_age_ms": "not_evaluated",
             "orderbook_micro_observer_healthy": False,
         }
     fields = {
@@ -4999,7 +4999,7 @@ def _build_orderbook_micro_log_fields(micro):
         "ofi_calibration_warning",
     ):
         value = micro.get(key)
-        fields[f"orderbook_micro_{key}"] = "-" if value is None else value
+        fields[f"orderbook_micro_{key}"] = "not_evaluated" if value is None else value
     for key, value in micro.items():
         if not str(key).startswith("wide_") or key == "wide_windows":
             continue
@@ -9695,6 +9695,10 @@ def _activate_entry_arm(stock, code, *, ai_score, ratio, target_buy_price, curre
         stock,
         code,
         'entry_armed',
+        metric_role="source_quality_gate",
+        decision_authority="source_quality_only",
+        runtime_effect=False,
+        forbidden_uses="runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
         ai_score=f"{float(ai_score):.1f}",
         ratio=f"{float(ratio):.4f}",
         target_buy_price=int(target_buy_price or 0),
@@ -9719,6 +9723,10 @@ def _get_live_entry_arm(stock, code):
             stock,
             code,
             expired_stage,
+            metric_role="source_quality_gate",
+            decision_authority="source_quality_only",
+            runtime_effect=False,
+            forbidden_uses="runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
             waited_sec=f"{waited_sec:.1f}",
             resume_count=resume_count,
             reason=stock.get("entry_armed_reason"),

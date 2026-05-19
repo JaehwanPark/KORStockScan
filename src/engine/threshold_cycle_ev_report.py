@@ -461,7 +461,11 @@ def _scalp_entry_adm_summary(target_date: str) -> tuple[dict[str, Any], str | No
                 "joined_sample": 0,
                 "sample_floor": 20,
                 "missing_actions": [],
+                "zero_sample_actions": [],
                 "prompt_applied_count": 0,
+                "runtime_bias_applied_count": 0,
+                "runtime_effect_counts": {},
+                "forced_action_counts": {},
                 "top_actions": [],
                 "runtime_effect": False,
                 "decision_authority": "entry_advisory_prompt_context_only",
@@ -485,7 +489,17 @@ def _scalp_entry_adm_summary(target_date: str) -> tuple[dict[str, Any], str | No
             "joined_sample": _safe_int(summary.get("joined_sample"), 0),
             "sample_floor": _safe_int(summary.get("sample_floor"), 20),
             "missing_actions": summary.get("missing_actions") if isinstance(summary.get("missing_actions"), list) else [],
+            "zero_sample_actions": summary.get("zero_sample_actions")
+            if isinstance(summary.get("zero_sample_actions"), list)
+            else [],
             "prompt_applied_count": _safe_int(summary.get("prompt_applied_count"), 0),
+            "runtime_bias_applied_count": _safe_int(summary.get("runtime_bias_applied_count"), 0),
+            "runtime_effect_counts": summary.get("runtime_effect_counts")
+            if isinstance(summary.get("runtime_effect_counts"), dict)
+            else {},
+            "forced_action_counts": summary.get("forced_action_counts")
+            if isinstance(summary.get("forced_action_counts"), dict)
+            else {},
             "top_actions": [
                 {
                     "action": item.get("action"),
@@ -888,7 +902,11 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- status: `{scalp_entry_adm.get('status')}` / authority: `{scalp_entry_adm.get('decision_authority') or '-'}`",
         f"- total/joined/floor: `{scalp_entry_adm.get('total_candidates')}` / `{scalp_entry_adm.get('joined_sample')}` / `{scalp_entry_adm.get('sample_floor')}`",
         f"- prompt_applied_count: `{scalp_entry_adm.get('prompt_applied_count')}`",
+        f"- runtime_bias_applied_count: `{scalp_entry_adm.get('runtime_bias_applied_count')}`",
+        f"- runtime_effect_counts: `{scalp_entry_adm.get('runtime_effect_counts') or {}}`",
+        f"- forced_action_counts: `{scalp_entry_adm.get('forced_action_counts') or {}}`",
         f"- missing_actions: `{scalp_entry_adm.get('missing_actions') or []}`",
+        f"- zero_sample_actions: `{scalp_entry_adm.get('zero_sample_actions') or []}`",
         f"- top_actions: `{scalp_entry_adm.get('top_actions') or []}`",
         "",
         "## Lifecycle Decision Matrix",

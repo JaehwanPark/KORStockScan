@@ -397,6 +397,68 @@ def test_build_code_improvement_workorder_adds_observation_source_quality_orders
     )
 
 
+def test_build_code_improvement_workorder_treats_implemented_report_order_as_existing_family(
+    tmp_path, monkeypatch
+):
+    automation_dir = tmp_path / "automation"
+    swing_lab_dir = tmp_path / "swing-lab"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    automation_dir.mkdir()
+    swing_lab_dir.mkdir()
+    (automation_dir / "scalping_pattern_lab_automation_2026-05-15.json").write_text(
+        json.dumps({"date": "2026-05-15", "code_improvement_orders": []}),
+        encoding="utf-8",
+    )
+    (swing_lab_dir / "swing_pattern_lab_automation_2026-05-15.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-15",
+                "code_improvement_orders": [
+                    {
+                        "order_id": "order_swing_pattern_lab_deepseek_ofi_qi_stale_missing",
+                        "title": "OFI/QI stale/missing quality review",
+                        "source_report_type": "swing_pattern_lab_automation",
+                        "route": "implement_now",
+                        "mapped_family": "swing_entry_ofi_qi_execution_quality",
+                        "implementation_status": "implemented",
+                        "implementation_checks": [{"name": "contract", "status": "pass"}],
+                        "implementation_provenance": {
+                            "owner": "swing_pattern_lab_automation",
+                            "decision_authority": "source_quality_only",
+                            "runtime_effect": False,
+                        },
+                        "runtime_effect": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", swing_lab_dir)
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
+    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-audit")
+    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-15", max_orders=5)
+
+    order = next(
+        item
+        for item in report["orders"]
+        if item["order_id"] == "order_swing_pattern_lab_deepseek_ofi_qi_stale_missing"
+    )
+    assert order["decision"] == "attach_existing_family"
+    assert order["route"] == "existing_family"
+    assert order["implementation_status"] == "implemented"
+    assert order["implementation_checks"] == [{"name": "contract", "status": "pass"}]
+    assert order["implementation_provenance"]["decision_authority"] == "source_quality_only"
+
+
 def test_build_code_improvement_workorder_adds_window_policy_audit_order(tmp_path, monkeypatch):
     automation_dir = tmp_path / "automation"
     ev_dir = tmp_path / "ev"

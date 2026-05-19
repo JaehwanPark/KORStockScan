@@ -546,6 +546,82 @@ def test_score65_74_entry_unlock_can_use_intraday_source_and_ignore_no_applied_g
     assert "KORSTOCKSCAN_WAIT6579_PROBE_CANARY_MAX_QTY=1" in env_text
 
 
+def test_preopen_apply_does_not_fallback_to_intraday_when_postclose_ai_unavailable(
+    tmp_path, monkeypatch
+):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    ai_dir = report_dir / "threshold_cycle_ai_review"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    ai_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "AI_REVIEW_DIR", ai_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    (report_dir / "threshold_cycle_2026-05-18.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-18",
+                "calibration_candidates": [
+                    {
+                        "family": "soft_stop_whipsaw_confirmation",
+                        "stage": "holding",
+                        "priority": 10,
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": False,
+                        "calibration_state": "adjust_up",
+                        "target_env_keys": ["SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED"],
+                        "recommended_values": {"enabled": True},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (ai_dir / "threshold_cycle_ai_review_2026-05-18_postclose.json").write_text(
+        json.dumps(
+            {
+                "ai_status": "unavailable",
+                "parse_warnings": ["ai correction response not provided"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (ai_dir / "threshold_cycle_ai_review_2026-05-18_intraday.json").write_text(
+        json.dumps(
+            {
+                "ai_status": "parsed",
+                "items": [
+                    {
+                        "family": "soft_stop_whipsaw_confirmation",
+                        "guard_accepted": True,
+                        "ai_anomaly_route": "threshold_candidate",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-19",
+        source_date="2026-05-18",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+    )
+
+    assert manifest["ai_correction_review"]["status"] == "unavailable"
+    assert manifest["ai_correction_review"]["phase"] == "postclose"
+    decision = manifest["auto_apply_decisions"][0]
+    assert decision["selected"] is False
+    assert decision["decision_reason"] == "ai_review_missing"
+
+
 def test_operator_runtime_env_lock_preserves_score65_probe_through_sample_gap(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"
@@ -703,6 +779,58 @@ def test_operator_runtime_env_lock_does_not_preserve_score65_probe_on_safety_rev
     assert decision["decision_reason"] == "safety_revert_required"
     assert decision["operator_runtime_env_lock"]["allowed_close"] is True
     assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED" not in manifest["runtime_env_overrides"]
+
+
+def test_operator_runtime_env_lock_supports_env_overrides_without_env_key(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    report_dir.mkdir(parents=True)
+    lock_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    (report_dir / "threshold_cycle_2026-05-19.json").write_text(
+        json.dumps({"date": "2026-05-19", "calibration_candidates": []}),
+        encoding="utf-8",
+    )
+    (lock_dir / "scalp_sim_ai_budget_manager_2026-05-19.json").write_text(
+        json.dumps(
+            {
+                "lock_id": "scalp_sim_ai_budget_manager_continuous",
+                "enabled": True,
+                "family": "scalp_sim_ai_budget_manager",
+                "stage": "sim_holding_ai_budget",
+                "active_from_date": "2026-05-19",
+                "env_overrides": {
+                    "KORSTOCKSCAN_SCALP_SIM_AI_BUDGET_ENABLED": "true",
+                    "KORSTOCKSCAN_SCALP_SIM_AI_MAX_CALLS_PER_MIN": "10",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-20",
+        source_date="2026-05-19",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    decision = [
+        item for item in manifest["auto_apply_decisions"] if item["family"] == "scalp_sim_ai_budget_manager"
+    ][0]
+    assert decision["selected"] is True
+    assert decision["operator_runtime_env_lock"]["applied"] is True
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SIM_AI_BUDGET_ENABLED"] == "true"
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SIM_AI_MAX_CALLS_PER_MIN"] == "10"
 
 
 def test_swing_approval_required_request_does_not_auto_apply_without_artifact(tmp_path, monkeypatch):
@@ -1171,6 +1299,7 @@ def test_scalp_sim_scale_in_window_approval_writes_runtime_env(tmp_path, monkeyp
     monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
     monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
     monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_ARTIFACT_DIR", approval_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", tmp_path / "latency")
 
     (report_dir / "threshold_cycle_2026-05-19.json").write_text(
         json.dumps({"date": "2026-05-19", "calibration_candidates": []}),

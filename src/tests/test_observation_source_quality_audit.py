@@ -110,6 +110,70 @@ def test_observation_source_quality_audit_accepts_high_volume_contract_labels(mo
     assert report["high_volume_no_source_fields"] == []
 
 
+def test_observation_source_quality_audit_routes_entry_arm_and_loss_diagnostics_by_contract(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    rows = []
+    for idx in range(60):
+        rows.extend(
+            [
+                _event(
+                    "entry_armed",
+                    {
+                        "ai_score": "82.0",
+                        "ratio": "0.1000",
+                        "target_buy_price": 12000,
+                        "current_vpw": "110.0",
+                        "reason": "dynamic_entry",
+                        "ttl_sec": 90,
+                    },
+                    record_id=idx * 4 + 1,
+                ),
+                _event(
+                    "entry_armed_expired_after_wait",
+                    {
+                        "waited_sec": "91.0",
+                        "resume_count": 1,
+                        "reason": "dynamic_entry",
+                    },
+                    record_id=idx * 4 + 2,
+                ),
+                _event(
+                    "loss_fallback_probe",
+                    {
+                        "gate_allowed": False,
+                        "gate_reason": "fallback_disabled",
+                        "fallback_candidate": True,
+                        "fallback_reason": "loss_recovery",
+                        "profit_rate": "-0.2",
+                        "peak_profit": "0.1",
+                    },
+                    record_id=idx * 4 + 3,
+                ),
+                _event(
+                    "soft_stop_whipsaw_confirmation",
+                    {
+                        "threshold_family": "soft_stop_whipsaw_confirmation",
+                        "threshold_version": "v1",
+                        "threshold_calibration_state": "selected",
+                        "profit_rate": "-0.3",
+                        "flow_state": "confirming",
+                        "exit_rule_candidate": "soft_stop",
+                    },
+                    record_id=idx * 4 + 4,
+                ),
+            ]
+        )
+    _write_events(tmp_path, "2026-05-15", rows)
+
+    report = audit.build_observation_source_quality_audit("2026-05-15")
+
+    assert report["high_volume_no_source_fields"] == []
+    assert report["stage_contracts"]["entry_armed"]["status"] == "pass"
+    assert report["stage_contracts"]["entry_armed_expired_after_wait"]["status"] == "pass"
+    assert report["stage_contracts"]["loss_fallback_probe"]["status"] == "pass"
+    assert report["stage_contracts"]["soft_stop_whipsaw_confirmation"]["status"] == "pass"
+
+
 def test_observation_source_quality_audit_routes_holding_diagnostics_by_contract(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     rows = [

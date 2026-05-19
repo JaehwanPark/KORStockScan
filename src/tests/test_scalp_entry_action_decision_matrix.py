@@ -72,7 +72,15 @@ def test_scalp_entry_adm_report_aggregates_actions_and_joins_outcomes(tmp_path, 
                 "record_id": "R6",
                 "emitted_at": "2026-05-18T09:15:00",
                 "emitted_date": "2026-05-18",
-                "fields": {"candidate_id": "ADM2", "chosen_action": "BUY_DEFENSIVE", "entry_adm_prompt_applied": True},
+                "fields": {
+                    "candidate_id": "ADM2",
+                    "chosen_action": "BUY_DEFENSIVE",
+                    "entry_adm_prompt_applied": True,
+                    "entry_adm_runtime_bias_applied": True,
+                    "entry_adm_runtime_effect": "buy_defensive_bias",
+                    "entry_adm_forced_action": "BUY",
+                    "entry_adm_runtime_reason": "matrix_buy_defensive",
+                },
             },
         ],
     )
@@ -115,6 +123,9 @@ def test_scalp_entry_adm_report_aggregates_actions_and_joins_outcomes(tmp_path, 
     assert buy_now["equal_weight_avg_profit_pct"] == 1.25
     assert defensive["equal_weight_avg_profit_pct"] == -1.0
     assert report["summary"]["prompt_applied_count"] == 1
+    assert report["summary"]["runtime_bias_applied_count"] == 1
+    assert report["summary"]["runtime_effect_counts"]["buy_defensive_bias"] == 1
+    assert report["summary"]["forced_action_counts"]["BUY"] == 1
     assert (report_dir / "scalp_entry_action_decision_matrix_2026-05-18.json").exists()
 
 

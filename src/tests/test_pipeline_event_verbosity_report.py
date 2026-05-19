@@ -120,3 +120,39 @@ def test_pipeline_event_verbosity_report_parity_fail(monkeypatch, tmp_path):
     assert report["recommended_workorder_state"] == "block_suppress_and_fix_shadow"
     assert report["parity"]["ok"] is False
     assert "blocked_strength_momentum" in report["parity"]["stage_diff"]
+
+
+def test_pipeline_event_verbosity_report_marks_pending_flush_when_raw_tail_is_newer(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    raw_rows = [
+        _event(
+            "2026-05-06",
+            "10:00:00",
+            "blocked_strength_momentum",
+            record_id=1,
+            fields={"reason": "below_strength_base"},
+        ),
+        _event(
+            "2026-05-06",
+            "10:05:00",
+            "blocked_strength_momentum",
+            record_id=2,
+            fields={"reason": "below_window_buy_value"},
+        ),
+    ]
+    _write_raw(tmp_path, "2026-05-06", raw_rows)
+    _write_producer_summary(tmp_path, "2026-05-06", raw_rows[:1])
+    manifest_path = (
+        tmp_path
+        / "pipeline_event_summaries"
+        / "pipeline_event_producer_summary_manifest_2026-05-06.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["updated_at"] = "2026-05-06T10:00:30"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    report = report_mod.build_pipeline_event_verbosity_report("2026-05-06")
+
+    assert report["state"] == "v2_shadow_pending_flush"
+    assert report["recommended_workorder_state"] == "observe_pending_next_flush"
+    assert report["parity"]["producer_pending_flush"] is True

@@ -183,16 +183,28 @@ def _ai_review_path_for_date(source_date: str, phase: str) -> Path:
 def _load_ai_review(source_date: str | None) -> dict[str, Any]:
     if not source_date:
         return {"status": "missing_source_date", "path": None, "items_by_family": {}}
-    preferred_paths = [_ai_review_path_for_date(source_date, "postclose"), _ai_review_path_for_date(source_date, "intraday")]
-    fallback_payload: dict[str, Any] | None = None
-    fallback_path: Path | None = None
+    postclose_path = _ai_review_path_for_date(source_date, "postclose")
+    intraday_path = _ai_review_path_for_date(source_date, "intraday")
+    preferred_paths = [postclose_path, intraday_path]
     for path in preferred_paths:
         if not path.exists():
             continue
         payload = _load_json(path)
         if str(payload.get("ai_status") or "").lower() != "parsed":
-            fallback_payload = payload
-            fallback_path = path
+            if path == postclose_path:
+                items = payload.get("items") if isinstance(payload.get("items"), list) else []
+                return {
+                    "status": str(payload.get("ai_status") or "unknown"),
+                    "path": str(path),
+                    "phase": "postclose",
+                    "model": payload.get("ai_model"),
+                    "provider_status": payload.get("ai_provider_status") or {},
+                    "items_by_family": {
+                        str(item.get("family") or ""): item
+                        for item in items
+                        if isinstance(item, dict) and item.get("family")
+                    },
+                }
             continue
         items = payload.get("items") if isinstance(payload.get("items"), list) else []
         return {
@@ -201,18 +213,6 @@ def _load_ai_review(source_date: str | None) -> dict[str, Any]:
             "phase": path.stem.rsplit("_", 1)[-1],
             "model": payload.get("ai_model"),
             "provider_status": payload.get("ai_provider_status") or {},
-            "items_by_family": {
-                str(item.get("family") or ""): item for item in items if isinstance(item, dict) and item.get("family")
-            },
-        }
-    if fallback_payload is not None and fallback_path is not None:
-        items = fallback_payload.get("items") if isinstance(fallback_payload.get("items"), list) else []
-        return {
-            "status": str(fallback_payload.get("ai_status") or "unknown"),
-            "path": str(fallback_path),
-            "phase": fallback_path.stem.rsplit("_", 1)[-1],
-            "model": fallback_payload.get("ai_model"),
-            "provider_status": fallback_payload.get("ai_provider_status") or {},
             "items_by_family": {
                 str(item.get("family") or ""): item for item in items if isinstance(item, dict) and item.get("family")
             },
@@ -288,7 +288,8 @@ def _load_operator_runtime_env_locks(source_date: str | None, target_date: str) 
             continue
         family = str(payload.get("family") or "").strip()
         env_key = str(payload.get("env_key") or "").strip()
-        if not family or not env_key:
+        env_overrides = payload.get("env_overrides") if isinstance(payload.get("env_overrides"), dict) else {}
+        if not family or (not env_key and not env_overrides):
             continue
         if not _date_in_lock_window(payload, source_date, target_date):
             continue

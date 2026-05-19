@@ -133,6 +133,8 @@ AI가 제안할 수 있는 범위는 `adjust_up|adjust_down|hold|hold_sample|fre
 
 실행 방식은 세 가지다. `daily_threshold_cycle_report` 직접 실행 기본값은 provider를 호출하지 않고 deterministic calibration과 `ai_status=unavailable` artifact를 남긴다. cron wrapper는 `THRESHOLD_CYCLE_AI_CORRECTION_PROVIDER=openai`를 기본으로 넣어 장중/장후 AI correction proposal 생성을 자동 시도한다. OpenAI correction은 Responses API와 `threshold_ai_correction_v1` strict JSON schema를 사용하며, 모델은 `GPT_THRESHOLD_CORRECTION_MODEL=gpt-5.5`, fallback은 `GPT_THRESHOLD_CORRECTION_FALLBACK_MODELS=gpt-5.4,gpt-5.4-mini`다. 운영상 AI 호출을 끄려면 wrapper/cron env에서 `THRESHOLD_CYCLE_AI_CORRECTION_PROVIDER=none`을 지정하고, 이미 생성된 strict JSON 응답을 검증할 때는 `THRESHOLD_CYCLE_AI_CORRECTION_RESPONSE_JSON=PATH` 또는 `--ai-correction-response-json PATH`를 사용한다. Gemini provider는 수동 fallback/비교용으로 남긴다.
 
+cron wrapper에서 provider가 `openai`인 경우 `ai_status=unavailable|parse_rejected`는 조용히 통과시키지 않는다. `THRESHOLD_CYCLE_AI_CORRECTION_MAX_ATTEMPTS`만큼 재시도하고, 장중 calibration은 최종 실패 시 `[FAIL] threshold-cycle calibration`으로 종료한다. 장후 postclose는 재시도 후에도 실패하면 `threshold_cycle_postclose_verification`이 runtime-applicable candidate 목록과 함께 `fail`을 반환한다. preopen apply는 postclose AI review가 존재하지만 unavailable이면 intraday parsed artifact로 fallback하지 않고 fail-closed한다.
+
 OpenAI correction prompt는 영어 control instruction, 한국어 시장용어 glossary, 원문 enum/raw label 보존 규칙을 포함한다. `BUY/WAIT/DROP/HOLD/TRIM/EXIT/SELL_TODAY`, family id, ticker, field name은 번역하지 않는다. 이 contract는 correction proposal 품질과 schema 안정성을 위한 것이며, AI에게 runtime/env/code 변경 권한을 주지 않는다.
 
 deterministic guard는 AI 제안을 그대로 적용하지 않는다.
@@ -142,7 +144,7 @@ deterministic guard는 AI 제안을 그대로 적용하지 않는다.
 - `soft_stop_whipsaw_confirmation`, `bad_entry_refined_canary`, `scale_in_price_guard`처럼 rolling/cumulative가 필요한 family는 단일 당일 이상치만으로 live 후보를 승격하지 않는다.
 - `holding_flow_ofi_smoothing`처럼 daily_intraday family는 장중 anomaly correction 후보가 될 수 있지만 runtime mutation은 금지하고 다음 장전 apply 후보로만 넘긴다.
 - `score65_74_recovery_probe`, `protect_trailing_smoothing`, `scale_in_price_guard`처럼 rolling/cumulative primary를 가진 family는 daily source가 있더라도 `window_policy_resolution.primary_sample_count` 기준으로 후보 상태를 재평가한다.
-- AI API/parse 실패 시 deterministic calibration artifact는 정상 생성되고 `ai_status=unavailable|parse_rejected`, family item은 `ai_review_state=unavailable`로 남는다.
+- AI API/parse 실패 시 deterministic calibration artifact는 정상 생성되고 `ai_status=unavailable|parse_rejected`, family item은 `ai_review_state=unavailable`로 남는다. 단, wrapper/verification/apply guard는 이 상태를 runtime apply 가능 후보의 pass 조건으로 보지 않는다.
 
 ## calibration window policy
 

@@ -748,6 +748,23 @@ def _read_threshold_jsonl(path: Path) -> list[dict]:
     return rows
 
 
+def _read_jsonl_dicts(path: Path) -> list[dict]:
+    rows: list[dict] = []
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rt", encoding="utf-8", errors="replace") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                rows.append(payload)
+    return rows
+
+
 def _checkpoint_for_date(target_date: str) -> dict:
     path = THRESHOLD_CYCLE_DIR / "checkpoints" / f"{target_date}.json"
     if not path.exists():
@@ -1933,7 +1950,7 @@ def _load_post_sell_evaluation_by_record_id(target_date: str | None) -> dict[str
     if not path.exists():
         return {}
     rows: dict[str, dict] = {}
-    for payload in _read_threshold_jsonl(path):
+    for payload in _read_jsonl_dicts(path):
         if not isinstance(payload, dict):
             continue
         record_id = payload.get("recommendation_id") or payload.get("record_id")
@@ -1950,7 +1967,7 @@ def _load_post_sell_candidate_by_record_id(target_date: str | None) -> dict[str,
     if not path.exists():
         return {}
     rows: dict[str, dict] = {}
-    for payload in _read_threshold_jsonl(path):
+    for payload in _read_jsonl_dicts(path):
         if not isinstance(payload, dict):
             continue
         record_id = payload.get("recommendation_id") or payload.get("record_id")
@@ -1967,7 +1984,7 @@ def _load_sim_post_sell_evaluation_by_sim_id(target_date: str | None) -> dict[st
     if not path.exists():
         return {}
     rows: dict[str, dict] = {}
-    for payload in _read_threshold_jsonl(path):
+    for payload in _read_jsonl_dicts(path):
         if not isinstance(payload, dict):
             continue
         for key in (
@@ -5422,6 +5439,10 @@ def _build_window_policy_resolution(candidate: dict, cumulative_report: dict | N
     )
     if primary == "daily_intraday":
         effective_primary_sample = daily_sample if effective_primary_sample is None else effective_primary_sample
+    elif primary == "latest_report":
+        effective_primary_sample = daily_sample if effective_primary_sample is None else effective_primary_sample
+        if primary_source_sample is None:
+            primary_source_sample = daily_sample
     snapshot_ready = bool(primary_snapshot.get("sample_ready")) if isinstance(primary_snapshot, dict) else False
     sample_count_ready = (
         effective_primary_sample is not None and effective_primary_sample >= sample_floor
@@ -5475,7 +5496,13 @@ def apply_window_policy_registry_to_report(report: dict, cumulative_report: dict
         daily_only_allowed = bool(resolution.get("daily_only_allowed"))
         primary_ready = bool(resolution.get("primary_sample_ready"))
         changes_value_or_state = str(candidate.get("calibration_state") or "") in {"adjust_up", "adjust_down"}
-        if primary and primary != "daily_intraday" and not daily_only_allowed and changes_value_or_state and not primary_ready:
+        if (
+            primary
+            and primary not in {"daily_intraday", "latest_report"}
+            and not daily_only_allowed
+            and changes_value_or_state
+            and not primary_ready
+        ):
             candidate["calibration_state"] = "hold_sample"
             candidate["calibration_reason"] = (
                 f"window_policy primary={primary} 표본/ready 미충족; daily trigger만으로 runtime 후보 승격 금지"

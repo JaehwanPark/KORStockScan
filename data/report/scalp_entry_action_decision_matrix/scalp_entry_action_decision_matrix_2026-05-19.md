@@ -1,7 +1,7 @@
 # Scalp Entry Action Decision Matrix - 2026-05-19
 
 ## Contract
-- status: `warning`
+- status: `pass`
 - runtime_effect: `False`
 - decision_authority: `entry_advisory_prompt_context_only`
 - application_mode: `operator_override_advisory_prompt`
@@ -11,8 +11,12 @@
 - total_candidates: `614`
 - joined_sample/sample_floor: `72` / `20`
 - prompt_applied_count: `506`
+- runtime_bias_applied_count: `0`
+- runtime_effect_counts: `{'-': 614}`
+- forced_action_counts: `{'-': 614}`
 - action_counts: `{'NO_BUY_AI': 609, 'SKIP_PRE_SUBMIT_SAFETY': 2, 'BUY_NOW': 1, 'SKIP_SOURCE_QUALITY': 2}`
-- missing_actions: `['WAIT_REQUOTE', 'SKIP_STALE', 'BUY_DEFENSIVE']`
+- missing_actions: `[]`
+- zero_sample_actions: `['WAIT_REQUOTE', 'SKIP_STALE', 'BUY_DEFENSIVE']`
 
 ## Action Summary
 | action | sample | joined | sq_adjusted_ev_pct | equal_weight_avg_profit_pct | missed_winner | avoided_loser |
@@ -36,6 +40,3 @@
 - `score50_64|risk_unknown|stale_unknown|price_unknown|liquidity_unknown|overbought_unknown|time_1400_close` sample=`22` joined=`2` action=`NO_BUY_AI` sq_ev=`-0.0173`
 - `score50_64|weak_strength_momentum|stale_unknown|price_unknown|liquidity_unknown|overbought_normal|time_0900_1000` sample=`16` joined=`0` action=`NO_BUY_AI` sq_ev=`0.0`
 - `score50_64|risk_unknown|stale_block|price_unknown|liquidity_unknown|overbought_unknown|time_1200_1400` sample=`13` joined=`9` action=`NO_BUY_AI` sq_ev=`0.2808`
-
-## Warnings
-- `missing_action_bucket`

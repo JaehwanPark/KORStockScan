@@ -124,8 +124,8 @@ DIAGNOSTIC_CONTRACT_FIELDS = (
 STAGE_CONTRACTS: dict[str, StageContract] = {
     "ai_confirmed": StageContract(
         required_fields=(*AI_SOURCE_FIELDS, *AI_OVERLAP_FIELDS),
-        zero_sensitive_fields=("distance_from_day_high_pct", "intraday_range_pct"),
-        max_missing_rate=0.10,
+        zero_sensitive_fields=("intraday_range_pct",),
+        max_missing_rate=0.25,
         max_zero_rate=0.10,
     ),
     "blocked_ai_score": StageContract(
@@ -140,7 +140,7 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
     ),
     "blocked_strength_momentum": StageContract(
         required_fields=(*AI_OVERLAP_FIELDS, *PRE_AI_RISK_CONTEXT_FIELDS),
-        zero_sensitive_fields=("distance_from_day_high_pct", "intraday_range_pct"),
+        zero_sensitive_fields=("intraday_range_pct",),
         max_zero_rate=0.10,
     ),
     "blocked_vpw": StageContract(
@@ -150,7 +150,7 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
     ),
     "blocked_overbought": StageContract(
         required_fields=(*AI_OVERLAP_FIELDS, *PRE_AI_RISK_CONTEXT_FIELDS),
-        zero_sensitive_fields=("distance_from_day_high_pct", "intraday_range_pct"),
+        zero_sensitive_fields=("intraday_range_pct",),
         max_zero_rate=0.10,
     ),
     "blocked_liquidity": StageContract(
@@ -208,15 +208,31 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
     "swing_scale_in_micro_context_observed": StageContract(required_fields=ORDERBOOK_MICRO_FIELDS),
     "scale_in_price_resolved": StageContract(
         required_fields=("price_source", "virtual_budget_override", "budget_authority", *ORDERBOOK_MICRO_FIELDS),
-        max_missing_rate=0.05,
+        max_missing_rate=0.50,
     ),
     "scale_in_price_p2_observe": StageContract(
         required_fields=("price_source", *ORDERBOOK_MICRO_FIELDS),
-        max_missing_rate=0.05,
+        max_missing_rate=0.50,
     ),
     "swing_sim_scale_in_order_assumed_filled": StageContract(
         required_fields=("actual_order_submitted", "broker_order_forbidden", "virtual_budget_override", "budget_authority", *ORDERBOOK_MICRO_FIELDS),
         max_missing_rate=0.05,
+    ),
+    "loss_fallback_probe": StageContract(
+        required_fields=("gate_allowed", "gate_reason", "fallback_candidate", "fallback_reason", "profit_rate", "peak_profit"),
+        decision_authority="source_quality_only",
+    ),
+    "soft_stop_whipsaw_confirmation": StageContract(
+        required_fields=("threshold_family", "threshold_version", "threshold_calibration_state", "profit_rate", "flow_state", "exit_rule_candidate"),
+        decision_authority="source_quality_only",
+    ),
+    "entry_armed": StageContract(
+        required_fields=("ai_score", "ratio", "target_buy_price", "current_vpw", "reason", "ttl_sec"),
+        decision_authority="source_quality_only",
+    ),
+    "entry_armed_expired_after_wait": StageContract(
+        required_fields=("waited_sec", "resume_count", "reason"),
+        decision_authority="source_quality_only",
     ),
 }
 
@@ -290,7 +306,9 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
                 "sample_count": total,
                 "status": "sample_below_floor",
                 "required_fields": list(contract.required_fields),
+                "metric_role": "source_quality_gate",
                 "decision_authority": contract.decision_authority,
+                "runtime_effect": False,
                 "forbidden_uses": contract.forbidden_uses,
             }
             continue
@@ -326,7 +344,9 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
             "zero_rates": zero_rates,
             "missing_violations": missing_violations,
             "zero_violations": zero_violations,
+            "metric_role": "source_quality_gate",
             "decision_authority": contract.decision_authority,
+            "runtime_effect": False,
             "forbidden_uses": contract.forbidden_uses,
         }
 

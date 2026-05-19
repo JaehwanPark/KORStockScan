@@ -239,6 +239,26 @@ def _classify_order(
             automation_reentry="Reject artifact and regenerate the source automation report before implementation.",
         )
 
+    if (
+        str(order.get("implementation_status") or "").strip() == "implemented"
+        and order.get("source_report_type") != "codebase_performance_workorder"
+    ):
+        return ClassifiedOrder(
+            order=order,
+            decision="attach_existing_family",
+            reason=(
+                "instrumentation/report/provenance implementation is already present; keep the order as "
+                "existing-family source evidence instead of re-implementing"
+            ),
+            mapped_family=mapped_family or str(order.get("threshold_family") or "").strip() or None,
+            route="existing_family",
+            confidence=confidence,
+            automation_reentry=(
+                "Next postclose workorder should preserve implementation_status=implemented and use the "
+                "source metrics as provenance only."
+            ),
+        )
+
     if order.get("source_report_type") == "pipeline_event_verbosity":
         return ClassifiedOrder(
             order=order,
@@ -782,6 +802,7 @@ def _codebase_performance_followup_orders(report: dict[str, Any]) -> list[dict[s
                     "forbidden_uses": item.get("forbidden_uses") or [],
                     "implementation_status": item.get("implementation_status"),
                     "implementation_checks": item.get("implementation_checks") or [],
+                    "implementation_provenance": item.get("implementation_provenance"),
                     "evidence": [
                         f"source_doc_hash={report.get('source_doc_hash')}",
                         f"candidate_state={state}",
@@ -1266,6 +1287,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
                 "tuning_axis_effect": bool(item.order.get("tuning_axis_effect")),
                 "implementation_status": item.order.get("implementation_status"),
                 "implementation_checks": item.order.get("implementation_checks") or [],
+                "implementation_provenance": item.order.get("implementation_provenance"),
                 "parity_contract": item.order.get("parity_contract"),
             }
             for item in selected
@@ -1433,6 +1455,8 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
                 f"- next_postclose_metric: {item.get('next_postclose_metric') or '-'}",
                 f"- files_likely_touched: {_format_list(item.get('files_likely_touched'))}",
                 f"- acceptance_tests: {_format_list(item.get('acceptance_tests'))}",
+                f"- implementation_status: `{item.get('implementation_status') or '-'}`",
+                f"- implementation_provenance: `{json.dumps(item.get('implementation_provenance'), ensure_ascii=False, sort_keys=True) if item.get('implementation_provenance') else '-'}`",
                 f"- automation_reentry: {item.get('automation_reentry')}",
                 "",
                 "실행 기준:",

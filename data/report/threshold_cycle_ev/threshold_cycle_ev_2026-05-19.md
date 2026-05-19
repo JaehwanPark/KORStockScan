@@ -31,8 +31,8 @@
 - scale_in filled/unfilled: `0` / `8`
 - overnight decision/sell/hold/carry_restored: `0` / `0` / `0` / `0`
 - completed_profit_summary: `{'sample': 100, 'win_count': 50, 'loss_count': 50, 'avg_profit_rate': -0.226, 'median_profit_rate': -0.03, 'downside_p10_profit_rate': -2.53, 'upside_p90_profit_rate': 1.97, 'win_rate': 0.5, 'loss_rate': 0.5, 'stddev_profit_rate': 1.9191}`
-- post_sell_join: joined=`0` / pending=`100`
-- post_sell_mfe_mae_10m: mfe=`None`% / mae=`None`% / close=`None`%
+- post_sell_join: joined=`95` / pending=`5`
+- post_sell_mfe_mae_10m: mfe=`1.6161`% / mae=`-5.8971`% / close=`0.0764`%
 
 ## Missed Probe Counterfactual
 - book: `scalp_score65_74_probe_counterfactual` / role: `missed_buy_probe_counterfactual`
@@ -43,10 +43,14 @@
 
 ## Scalp Entry ADM
 - artifact: `/home/ubuntu/KORStockScan/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_2026-05-19.json`
-- status: `warning` / authority: `entry_advisory_prompt_context_only`
+- status: `pass` / authority: `entry_advisory_prompt_context_only`
 - total/joined/floor: `614` / `72` / `20`
 - prompt_applied_count: `506`
-- missing_actions: `['WAIT_REQUOTE', 'SKIP_STALE', 'BUY_DEFENSIVE']`
+- runtime_bias_applied_count: `0`
+- runtime_effect_counts: `{'-': 614}`
+- forced_action_counts: `{'-': 614}`
+- missing_actions: `[]`
+- zero_sample_actions: `['WAIT_REQUOTE', 'SKIP_STALE', 'BUY_DEFENSIVE']`
 - top_actions: `[{'action': 'BUY_NOW', 'sample_count': 1, 'joined_sample': 1, 'source_quality_adjusted_ev_pct': -1.77}, {'action': 'NO_BUY_AI', 'sample_count': 609, 'joined_sample': 71, 'source_quality_adjusted_ev_pct': -0.0269}, {'action': 'SKIP_SOURCE_QUALITY', 'sample_count': 2, 'joined_sample': 0, 'source_quality_adjusted_ev_pct': 0.0}, {'action': 'SKIP_PRE_SUBMIT_SAFETY', 'sample_count': 2, 'joined_sample': 0, 'source_quality_adjusted_ev_pct': 0.0}]`
 
 ## Lifecycle Decision Matrix
@@ -78,10 +82,10 @@
 
 ## Pipeline Event Verbosity
 - artifact: `/home/ubuntu/KORStockScan/data/report/pipeline_event_verbosity/pipeline_event_verbosity_2026-05-19.json`
-- state: `v2_shadow_parity_fail`
-- recommended_workorder_state: `block_suppress_and_fix_shadow`
-- high_volume_line_count: `388488`
-- high_volume_byte_share_pct: `68.03`
+- state: `v2_shadow_pending_flush`
+- recommended_workorder_state: `observe_pending_next_flush`
+- high_volume_line_count: `412500`
+- high_volume_byte_share_pct: `68.45`
 - parity_ok: `False`
 - suppress_eligibility: `False`
 
@@ -117,7 +121,7 @@
 - artifact: `/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-19.json`
 - markdown: `/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-19.md`
 - selected_order_count: `12`
-- decision_counts: `{'implement_now': 7, 'attach_existing_family': 15, 'design_family_candidate': 6, 'defer_evidence': 11, 'reject': 3}`
+- decision_counts: `{'attach_existing_family': 15, 'design_family_candidate': 6, 'defer_evidence': 11, 'reject': 3}`
 
 ## Approval Requests
 - none
@@ -127,9 +131,9 @@
 
 ## Calibration Decisions
 ## Code Improvement Top Orders
-- `order_ai_source_quality_not_evaluated_provenance` decision=`implement_now` subsystem=`runtime_instrumentation`
-- `order_pipeline_event_compaction_v2_shadow` decision=`implement_now` subsystem=`runtime_instrumentation`
-- `order_high_volume_diagnostic_stage_contract_labels` decision=`implement_now` subsystem=`runtime_instrumentation`
+- `order_ai_threshold_dominance` decision=`attach_existing_family` subsystem=`entry_funnel`
+- `order_perf_buy_funnel_json_scan` decision=`attach_existing_family` subsystem=`buy_funnel_sentinel`
+- `order_ai_threshold_miss_ev_recovery` decision=`attach_existing_family` subsystem=`entry_funnel`
 
 ## Pattern Lab Top Findings
 - `AI threshold dominance` route=`existing_family` family=`score65_74_recovery_probe`
@@ -147,12 +151,11 @@
 - `liquidity_pre_submit_guard_p1`: `hold` sample=`15527/20`
 - `bad_entry_refined_canary`: `adjust_up` sample=`11684/10`
 - `holding_exit_decision_matrix_advisory`: `hold_no_edge` sample=`0/1`
-- `lifecycle_decision_matrix_runtime`: `hold_sample` sample=`207/20`
+- `lifecycle_decision_matrix_runtime`: `adjust_up` sample=`207/20`
 - `scale_in_price_guard`: `hold` sample=`482/20`
 - `position_sizing_cap_release`: `hold_sample` sample=`19/30`
 - `position_sizing_dynamic_formula`: `hold_sample` sample=`0/30`
 
 ## Warnings
 - `swing_lab_dq:OFI/QI stale/missing ratio: 0.9216 (470/510); reasons: micro_missing=470, observer_unhealthy=1, micro_not_ready=24, state_insufficient=24`
-- `scalp_entry_adm:missing_action_bucket`
 - `pattern_lab_propagation_audit_fail`

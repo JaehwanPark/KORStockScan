@@ -2,22 +2,22 @@
 
 ## 판정
 
-- state: `v2_shadow_parity_fail`
-- recommended_workorder_state: `block_suppress_and_fix_shadow`
+- state: `v2_shadow_pending_flush`
+- recommended_workorder_state: `observe_pending_next_flush`
 - runtime_effect: `False`
 - raw_suppression_enabled: `False`
 
 ## 근거
 
-- raw_size_bytes: `832300287`
-- raw_line_count: `477467`
-- high_volume_line_count: `388488`
-- high_volume_byte_share_pct: `68.03`
+- raw_size_bytes: `870581893`
+- raw_line_count: `508946`
+- high_volume_line_count: `412500`
+- high_volume_byte_share_pct: `68.45`
 - producer_summary_exists: `True`
 - producer_manifest_mode: `shadow`
 - parity_ok: `False`
-- raw_derived_event_count: `388524`
-- producer_event_count: `388473`
+- raw_derived_event_count: `412500`
+- producer_event_count: `412377`
 - previous_parity_pass_count: `0`
 
 ## 금지선

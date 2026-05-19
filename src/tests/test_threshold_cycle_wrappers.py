@@ -98,8 +98,11 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
     assert 'ARTIFACT_WAIT_SEC="${THRESHOLD_CYCLE_ARTIFACT_WAIT_SEC:-600}"' in script
+    assert 'AI_CORRECTION_MAX_ATTEMPTS="${THRESHOLD_CYCLE_AI_CORRECTION_MAX_ATTEMPTS:-2}"' in script
+    assert 'AI_CORRECTION_RETRY_DELAY_SEC="${THRESHOLD_CYCLE_AI_CORRECTION_RETRY_DELAY_SEC:-20}"' in script
     assert "wait_for_json_artifact()" in script
     assert "wait_for_report_artifact()" in script
+    assert "threshold_cycle_ai_review_status()" in script
     assert "next_stage2_checklist_path()" in script
     assert '"$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_${TARGET_DATE}.json"' in script
@@ -111,11 +114,14 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert 'wait_for_file_artifact "$(next_stage2_checklist_path)" "next_stage2_checklist"' in script
     assert "src.engine.verify_threshold_cycle_postclose_chain" in script
     assert "--allow-pending-done-marker" in script
+    assert "run_postclose_cmd env PYTHONPATH=. \"$VENV_PY\" -m src.engine.verify_threshold_cycle_postclose_chain" in script
     assert '"$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json"' in script
     assert "pattern_lab_currentness_audit=$RUN_PATTERN_LAB_CURRENTNESS_AUDIT" in script
     assert "pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT" in script
     assert "scalp_entry_adm=$RUN_SCALP_ENTRY_ADM" in script
     assert "lifecycle_decision_matrix=$RUN_LIFECYCLE_DECISION_MATRIX" in script
+    assert "ai correction retry target_date=$TARGET_DATE" in script
+    assert "ai correction final unavailable" in script
 
 
 def test_postclose_wrapper_marks_availability_guard_pause_as_fail():
@@ -175,6 +181,17 @@ def test_tuning_monitoring_wrapper_skips_pattern_labs_by_default():
     assert 'RUN_PATTERN_LABS="${TUNING_MONITORING_RUN_PATTERN_LABS:-false}"' in script
     assert 'canonical_runner=THRESHOLD_CYCLE_POSTCLOSE' in script
     assert 'if [[ "$RUN_PATTERN_LABS" == "1" || "$RUN_PATTERN_LABS" == "true" ]]' in script
+
+
+def test_calibration_wrapper_retries_and_fails_unavailable_ai_correction():
+    script = Path("deploy/run_threshold_cycle_calibration.sh").read_text(encoding="utf-8")
+
+    assert 'AI_CORRECTION_MAX_ATTEMPTS="${THRESHOLD_CYCLE_AI_CORRECTION_MAX_ATTEMPTS:-2}"' in script
+    assert 'AI_CORRECTION_RETRY_DELAY_SEC="${THRESHOLD_CYCLE_AI_CORRECTION_RETRY_DELAY_SEC:-20}"' in script
+    assert "threshold_cycle_ai_review_status()" in script
+    assert "ai correction retry target_date=$TARGET_DATE phase=$RUN_PHASE" in script
+    assert "ai correction final unavailable target_date=$TARGET_DATE phase=$RUN_PHASE" in script
+    assert 'exit 1' in script
 
 
 def test_tuning_monitoring_waits_for_threshold_postclose_done_by_default():

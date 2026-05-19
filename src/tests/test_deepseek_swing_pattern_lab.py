@@ -987,3 +987,71 @@ def test_swing_pattern_lab_automation_orders_have_allowed_runtime_apply_false(tm
         assert order.get("allowed_runtime_apply") is False, f"order {order.get('order_id')} missing allowed_runtime_apply=false"
     for family in report["auto_family_candidates"]:
         assert family.get("allowed_runtime_apply") is False
+
+
+def test_swing_pattern_lab_automation_marks_ofi_qi_instrumentation_implemented(tmp_path, monkeypatch):
+    from src.engine import swing_pattern_lab_automation as mod
+
+    lab_dir = tmp_path / "analysis" / "deepseek_swing_pattern_lab"
+    outputs_dir = lab_dir / "outputs"
+    outputs_dir.mkdir(parents=True)
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "DEEPSEEK_SWING_LAB_DIR", lab_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", report_dir / "swing_pattern_lab_automation")
+
+    (outputs_dir / "run_manifest.json").write_text(
+        json.dumps({"analysis_window": {"start": "2026-05-08", "end": "2026-05-08"}}),
+        encoding="utf-8",
+    )
+    (outputs_dir / "swing_pattern_analysis_result.json").write_text(
+        json.dumps(
+            {
+                "stage_findings": [],
+                "code_improvement_orders": [
+                    {
+                        "order_id": "order_swing_pattern_lab_deepseek_ofi_qi_stale_missing",
+                        "title": "OFI/QI stale/missing quality review",
+                        "route": "implement_now",
+                        "mapped_family": "swing_entry_ofi_qi_execution_quality",
+                        "runtime_effect": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (outputs_dir / "data_quality_report.json").write_text(
+        json.dumps(
+            {
+                "warnings": [],
+                "ofi_qi_quality": {
+                    "sample_count": 3,
+                    "stale_missing_count": 1,
+                    "stale_missing_ratio": 0.3333,
+                    "reason_counts": {"micro_missing": 1},
+                    "reason_combination_counts": {"micro_missing": 1},
+                    "reason_combination_unique_record_counts": {"micro_missing": 1},
+                    "stale_missing_group_counts": {"entry": 1},
+                    "stale_missing_group_unique_record_counts": {"entry": 1},
+                    "observer_unhealthy_overlap": {
+                        "observer_unhealthy_total": 0,
+                        "observer_unhealthy_with_other_reason": 0,
+                        "observer_unhealthy_only": 0,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (outputs_dir / "deepseek_payload_summary.json").write_text(
+        json.dumps({"total_cases": 4}),
+        encoding="utf-8",
+    )
+
+    report = mod.build_swing_pattern_lab_automation_report("2026-05-08")
+    order = report["code_improvement_orders"][0]
+
+    assert order["implementation_status"] == "implemented"
+    assert order["implementation_provenance"]["decision_authority"] == "source_quality_only"
+    assert order["implementation_provenance"]["runtime_effect"] is False
+    assert order["implementation_checks"][0]["status"] == "pass"

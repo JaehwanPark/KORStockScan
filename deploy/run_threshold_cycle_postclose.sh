@@ -27,6 +27,8 @@ SKIP_DB="${THRESHOLD_CYCLE_SKIP_DB:-false}"
 USE_SNAPSHOT="${THRESHOLD_CYCLE_USE_SNAPSHOT:-true}"
 AI_CORRECTION_PROVIDER="${THRESHOLD_CYCLE_AI_CORRECTION_PROVIDER:-openai}"
 AI_CORRECTION_RESPONSE_JSON="${THRESHOLD_CYCLE_AI_CORRECTION_RESPONSE_JSON:-}"
+AI_CORRECTION_MAX_ATTEMPTS="${THRESHOLD_CYCLE_AI_CORRECTION_MAX_ATTEMPTS:-2}"
+AI_CORRECTION_RETRY_DELAY_SEC="${THRESHOLD_CYCLE_AI_CORRECTION_RETRY_DELAY_SEC:-20}"
 RUN_PATTERN_LABS="${THRESHOLD_CYCLE_RUN_PATTERN_LABS:-true}"
 PATTERN_LAB_START_DATE="${PATTERN_LAB_ANALYSIS_START_DATE:-2026-04-21}"
 RUN_SWING_LIFECYCLE_AUDIT="${THRESHOLD_CYCLE_RUN_SWING_LIFECYCLE_AUDIT:-true}"
@@ -277,6 +279,23 @@ wait_for_report_artifact() {
   wait_for_file_artifact "$md_path" "$label.md"
 }
 
+threshold_cycle_ai_review_status() {
+  local path="$1"
+  "$VENV_PY" - "$path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+except Exception:
+    print("missing")
+    raise SystemExit(0)
+print(str(payload.get("ai_status") or "missing"))
+PY
+}
+
 run_threshold_cycle_ev_and_wait() {
   local pass_label="$1"
 
@@ -471,20 +490,37 @@ else
   report_args+=(--ai-correction-provider "$AI_CORRECTION_PROVIDER")
 fi
 
-wait_for_postclose_resources "daily_threshold_cycle_report"
-run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.daily_threshold_cycle_report \
-  --calibration-run-phase postclose \
-  "${report_args[@]}"
-wait_for_json_artifact \
-  "$PROJECT_DIR/data/report/threshold_cycle_${TARGET_DATE}.json" \
-  "threshold_cycle_postclose_report"
-wait_for_json_artifact \
-  "$PROJECT_DIR/data/report/threshold_cycle_calibration/threshold_cycle_calibration_${TARGET_DATE}_postclose.json" \
-  "threshold_cycle_calibration_postclose"
-wait_for_report_artifact \
-  "$PROJECT_DIR/data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_${TARGET_DATE}_postclose.json" \
-  "$PROJECT_DIR/data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_${TARGET_DATE}_postclose.md" \
-  "threshold_cycle_ai_review_postclose"
+ai_review_json="$PROJECT_DIR/data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_${TARGET_DATE}_postclose.json"
+ai_review_md="$PROJECT_DIR/data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_${TARGET_DATE}_postclose.md"
+ai_correction_attempt=1
+ai_correction_status="missing"
+while true; do
+  wait_for_postclose_resources "daily_threshold_cycle_report"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.daily_threshold_cycle_report \
+    --calibration-run-phase postclose \
+    "${report_args[@]}"
+  wait_for_json_artifact \
+    "$PROJECT_DIR/data/report/threshold_cycle_${TARGET_DATE}.json" \
+    "threshold_cycle_postclose_report"
+  wait_for_json_artifact \
+    "$PROJECT_DIR/data/report/threshold_cycle_calibration/threshold_cycle_calibration_${TARGET_DATE}_postclose.json" \
+    "threshold_cycle_calibration_postclose"
+  wait_for_report_artifact \
+    "$ai_review_json" \
+    "$ai_review_md" \
+    "threshold_cycle_ai_review_postclose"
+  ai_correction_status="$(threshold_cycle_ai_review_status "$ai_review_json")"
+  echo "[threshold-cycle] ai correction status target_date=$TARGET_DATE attempt=${ai_correction_attempt}/${AI_CORRECTION_MAX_ATTEMPTS} provider=$AI_CORRECTION_PROVIDER status=$ai_correction_status"
+  if [ "$AI_CORRECTION_PROVIDER" = "none" ] || [ -n "$AI_CORRECTION_RESPONSE_JSON" ] || [ "$ai_correction_status" = "parsed" ] || [ "$ai_correction_attempt" -ge "$AI_CORRECTION_MAX_ATTEMPTS" ]; then
+    break
+  fi
+  echo "[threshold-cycle] ai correction retry target_date=$TARGET_DATE next_attempt=$((ai_correction_attempt + 1)) delay=${AI_CORRECTION_RETRY_DELAY_SEC}s status=$ai_correction_status" >&2
+  sleep "$AI_CORRECTION_RETRY_DELAY_SEC"
+  ai_correction_attempt=$((ai_correction_attempt + 1))
+done
+if [ "$AI_CORRECTION_PROVIDER" != "none" ] && [ -z "$AI_CORRECTION_RESPONSE_JSON" ] && [ "$ai_correction_status" != "parsed" ]; then
+  echo "[threshold-cycle] ai correction final unavailable target_date=$TARGET_DATE provider=$AI_CORRECTION_PROVIDER status=$ai_correction_status action=postclose_verifier_will_fail_if_runtime_candidates_blocked" >&2
+fi
 wait_for_report_artifact \
   "$PROJECT_DIR/data/report/statistical_action_weight/statistical_action_weight_${TARGET_DATE}.json" \
   "$PROJECT_DIR/data/report/statistical_action_weight/statistical_action_weight_${TARGET_DATE}.md" \

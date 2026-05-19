@@ -372,6 +372,10 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
         "entry_adm_source_date": _nonempty(fields.get("entry_adm_source_date")),
         "entry_adm_bucket_token": _nonempty(fields.get("entry_adm_bucket_token")),
         "entry_adm_decision_alignment": _nonempty(fields.get("entry_adm_decision_alignment")),
+        "entry_adm_runtime_effect": _nonempty(fields.get("entry_adm_runtime_effect")),
+        "entry_adm_forced_action": _nonempty(fields.get("entry_adm_forced_action")),
+        "entry_adm_runtime_reason": _nonempty(fields.get("entry_adm_runtime_reason")),
+        "entry_adm_runtime_bias_applied": _safe_bool(fields.get("entry_adm_runtime_bias_applied")),
     }
     if not row["sim_record_id"] and str(stage).startswith("scalp_sim_"):
         row["sim_record_id"] = candidate_id if str(candidate_id).startswith("SCALPSIM-") else ""
@@ -519,14 +523,21 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
     raw_rows = [_base_row(event) for event in _iter_relevant_events(target_date)]
     rows = [_apply_outcome(row, evaluations) for row in _dedupe_rows(raw_rows)]
     action_counts = Counter(str(row.get("chosen_action")) for row in rows)
-    missing_actions = [action for action in ACTION_ORDER if action_counts.get(action, 0) == 0]
+    zero_sample_actions = [action for action in ACTION_ORDER if action_counts.get(action, 0) == 0]
+    missing_actions: list[str] = []
     joined_sample = sum(1 for row in rows if row.get("outcome_joined"))
     prompt_applied = sum(1 for row in rows if row.get("entry_adm_prompt_applied"))
+    runtime_bias_applied = sum(1 for row in rows if row.get("entry_adm_runtime_bias_applied"))
+    runtime_effect_counts = Counter(str(row.get("entry_adm_runtime_effect") or "-") for row in rows)
+    forced_action_counts = Counter(str(row.get("entry_adm_forced_action") or "-") for row in rows)
     warnings = []
     if joined_sample < SAMPLE_FLOOR:
         warnings.append("joined_sample_below_sample_floor")
-    if missing_actions:
-        warnings.append("missing_action_bucket")
+    action_summary = _action_summary(rows)
+    action_summary_actions = {str(item.get("action") or "") for item in action_summary if isinstance(item, dict)}
+    missing_action_summary_rows = [action for action in ACTION_ORDER if action not in action_summary_actions]
+    if missing_action_summary_rows:
+        warnings.append("missing_action_bucket_summary_row")
     if any(row.get("risk_context_bucket") == "source_quality_blocker" for row in rows):
         warnings.append("source_quality_gap")
     if rows and prompt_applied == 0:
@@ -569,13 +580,18 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
             "joined_sample": joined_sample,
             "sample_floor": SAMPLE_FLOOR,
             "prompt_applied_count": prompt_applied,
+            "runtime_bias_applied_count": runtime_bias_applied,
+            "runtime_effect_counts": dict(runtime_effect_counts),
+            "forced_action_counts": dict(forced_action_counts),
             "action_counts": dict(action_counts),
             "missing_actions": missing_actions,
+            "zero_sample_actions": zero_sample_actions,
+            "missing_action_summary_rows": missing_action_summary_rows,
             "status": status,
             "warnings": warnings,
             "post_sell_evaluation": eval_summary,
         },
-        "action_summary": _action_summary(rows),
+        "action_summary": action_summary,
         "bucket_summary": _bucket_summary(rows),
         "examples": rows[:50],
         "sources": {
@@ -607,8 +623,12 @@ def render_scalp_entry_action_decision_matrix_markdown(report: dict[str, Any]) -
         f"- total_candidates: `{summary.get('total_candidates')}`",
         f"- joined_sample/sample_floor: `{summary.get('joined_sample')}` / `{summary.get('sample_floor')}`",
         f"- prompt_applied_count: `{summary.get('prompt_applied_count')}`",
+        f"- runtime_bias_applied_count: `{summary.get('runtime_bias_applied_count')}`",
+        f"- runtime_effect_counts: `{summary.get('runtime_effect_counts') or {}}`",
+        f"- forced_action_counts: `{summary.get('forced_action_counts') or {}}`",
         f"- action_counts: `{summary.get('action_counts')}`",
         f"- missing_actions: `{summary.get('missing_actions')}`",
+        f"- zero_sample_actions: `{summary.get('zero_sample_actions')}`",
         "",
         "## Action Summary",
         "| action | sample | joined | sq_adjusted_ev_pct | equal_weight_avg_profit_pct | missed_winner | avoided_loser |",

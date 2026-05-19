@@ -227,6 +227,65 @@ def _source_quality_blocked_families(ofi_qi_quality: dict[str, Any]) -> list[dic
     return blocked
 
 
+def _ofi_qi_instrumentation_provenance(
+    order: dict[str, Any],
+    ofi_qi_quality: dict[str, Any],
+    source_quality_blocked_families: list[dict[str, Any]],
+) -> dict[str, Any]:
+    order_id = str(order.get("order_id") or "")
+    if order_id != "order_swing_pattern_lab_deepseek_ofi_qi_stale_missing":
+        return {}
+
+    required_metric_keys = (
+        "sample_count",
+        "stale_missing_count",
+        "stale_missing_ratio",
+        "reason_counts",
+        "reason_combination_counts",
+        "reason_combination_unique_record_counts",
+        "stale_missing_group_counts",
+        "stale_missing_group_unique_record_counts",
+        "observer_unhealthy_overlap",
+    )
+    present = {key: key in ofi_qi_quality for key in required_metric_keys}
+    implementation_ok = all(present.values()) and isinstance(source_quality_blocked_families, list)
+    checks = [
+        {
+            "name": "ofi_qi_quality_metric_contract",
+            "status": "pass" if all(present.values()) else "fail",
+            "required_keys": list(required_metric_keys),
+            "missing_keys": [key for key, exists in present.items() if not exists],
+        },
+        {
+            "name": "source_quality_blocked_family_provenance",
+            "status": "pass" if isinstance(source_quality_blocked_families, list) else "fail",
+            "blocked_family_count": len(source_quality_blocked_families)
+            if isinstance(source_quality_blocked_families, list)
+            else 0,
+        },
+        {
+            "name": "runtime_authority_contract",
+            "status": "pass",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "decision_authority": "source_quality_only",
+        },
+    ]
+    return {
+        "implementation_status": "implemented" if implementation_ok else "instrumentation_gap",
+        "implementation_checks": checks,
+        "implementation_provenance": {
+            "owner": "swing_pattern_lab_automation",
+            "implemented_scope": "instrumentation_report_provenance_only",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "decision_authority": "source_quality_only",
+            "source_quality_blocked_families": source_quality_blocked_families,
+            "next_postclose_metric": "swing_ofi_qi_quality_score",
+        },
+    }
+
+
 def build_swing_pattern_lab_automation_report(target_date: str) -> dict[str, Any]:
     target_date = str(target_date).strip()
     paths = _lab_output_paths()
@@ -340,6 +399,7 @@ def build_swing_pattern_lab_automation_report(target_date: str) -> dict[str, Any
                 "automation_reentry": o.get("automation_reentry"),
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
+                **_ofi_qi_instrumentation_provenance(o, ofi_qi_quality, source_quality_blocked_families),
             }
             for o in all_orders
             if isinstance(o, dict)

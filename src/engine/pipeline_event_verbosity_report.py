@@ -65,10 +65,12 @@ def _line_count_and_stage_bytes(raw_path: Path) -> dict[str, Any]:
     high_volume_bytes = 0
     stage_counts: Counter[str] = Counter()
     stage_bytes: Counter[str] = Counter()
+    latest_emitted_at = ""
     for payload in iter_jsonl(raw_path):
         raw_line_count += 1
         if not isinstance(payload, dict) or payload.get("event_type") != "pipeline_event":
             continue
+        latest_emitted_at = max(latest_emitted_at, _safe_str(payload.get("emitted_at")))
         stage = _safe_str(payload.get("stage"))
         if stage not in SUMMARY_STAGES:
             continue
@@ -90,6 +92,7 @@ def _line_count_and_stage_bytes(raw_path: Path) -> dict[str, Any]:
         "high_volume_byte_share_pct": round((high_volume_bytes / raw_size) * 100.0, 2) if raw_size else 0.0,
         "high_volume_stage_counts": dict(sorted(stage_counts.items())),
         "high_volume_stage_bytes": dict(sorted(stage_bytes.items())),
+        "latest_pipeline_event_at": latest_emitted_at or None,
     }
 
 
@@ -158,6 +161,15 @@ def build_pipeline_event_verbosity_report(target_date: str) -> dict[str, Any]:
     blocker_diff = _diff_counter(raw_blocker, producer_blocker)
     producer_exists = producer_path.exists() and bool(producer_rows)
     manifest_exists = producer_manifest_path.exists()
+    producer_updated_at = _safe_str(producer_manifest.get("updated_at"))
+    latest_pipeline_event_at = _safe_str(raw_stats.get("latest_pipeline_event_at"))
+    producer_pending_flush = bool(
+        producer_exists
+        and manifest_exists
+        and latest_pipeline_event_at
+        and producer_updated_at
+        and latest_pipeline_event_at > producer_updated_at
+    )
     parity_ok = bool(producer_exists and not stage_diff and not blocker_diff and raw_total == producer_total)
     previous_pass_count = _previous_parity_pass_count(target_date)
     suppress_candidate = bool(parity_ok and previous_pass_count >= 1)
@@ -167,6 +179,9 @@ def build_pipeline_event_verbosity_report(target_date: str) -> dict[str, Any]:
     elif not producer_exists or not manifest_exists:
         state = "v2_shadow_missing"
         recommended = "open_shadow_order"
+    elif producer_pending_flush:
+        state = "v2_shadow_pending_flush"
+        recommended = "observe_pending_next_flush"
     elif not parity_ok:
         state = "v2_shadow_parity_fail"
         recommended = "block_suppress_and_fix_shadow"
@@ -227,6 +242,9 @@ def build_pipeline_event_verbosity_report(target_date: str) -> dict[str, Any]:
             "producer_event_count": producer_total,
             "previous_parity_pass_count": previous_pass_count,
             "suppress_eligibility": suppress_candidate,
+            "producer_pending_flush": producer_pending_flush,
+            "producer_updated_at": producer_updated_at or None,
+            "latest_pipeline_event_at": latest_pipeline_event_at or None,
         },
     }
     json_path, md_path = report_paths(target_date)
