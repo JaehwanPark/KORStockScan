@@ -815,6 +815,58 @@ def get_industry_list_ka10101(token, market_type="0"):
     return results[0]
 
 
+def get_theme_group_list_ka90001(token):
+    """
+    [ka90001] 테마그룹 리스트 조회.
+
+    This lightweight wrapper is used by source-only swing discovery enrichment.
+    It intentionally returns the raw Kiwoom response chunk so callers can adapt
+    to field-name differences across API wrapper versions.
+    """
+    url = get_api_url("/api/dostk/thme")
+    payload = {
+        "qry_tp": "0",
+        "stk_cd": "",
+        "date_tp": "10",
+        "thema_nm": "",
+        "flu_pl_amt_tp": "1",
+        "stex_tp": "1",
+    }
+    results = fetch_kiwoom_api_continuous(
+        url=url,
+        token=token,
+        api_id="ka90001",
+        payload=payload,
+        use_continuous=False,
+    )
+    return results[0] if results else []
+
+
+def get_stock_theme_groups_ka90001(token, stock_code):
+    """
+    [ka90001] 종목코드 기준 테마그룹 조회.
+
+    This uses qry_tp=2 so swing discovery can enrich each candidate without
+    scanning every theme group and hitting composition-query rate limits.
+    """
+    url = get_api_url("/api/dostk/thme")
+    payload = {
+        "qry_tp": "2",
+        "stk_cd": str(stock_code or "").replace(".0", "").strip().zfill(6),
+        "date_tp": "10",
+        "thema_nm": "",
+        "flu_pl_amt_tp": "1",
+        "stex_tp": "1",
+    }
+    results = fetch_kiwoom_api_continuous(
+        url=url,
+        token=token,
+        api_id="ka90001",
+        payload=payload,
+        use_continuous=False,
+    )
+    return results[0] if results else []
+
 
 def get_nxt_enabled_codes_ka10099(token, mrkt_tps=("0", "10")) -> set[str]:
     """

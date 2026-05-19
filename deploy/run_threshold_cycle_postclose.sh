@@ -32,6 +32,7 @@ AI_CORRECTION_RETRY_DELAY_SEC="${THRESHOLD_CYCLE_AI_CORRECTION_RETRY_DELAY_SEC:-
 RUN_PATTERN_LABS="${THRESHOLD_CYCLE_RUN_PATTERN_LABS:-true}"
 PATTERN_LAB_START_DATE="${PATTERN_LAB_ANALYSIS_START_DATE:-2026-04-21}"
 RUN_SWING_LIFECYCLE_AUDIT="${THRESHOLD_CYCLE_RUN_SWING_LIFECYCLE_AUDIT:-true}"
+RUN_SWING_STRATEGY_DISCOVERY="${THRESHOLD_CYCLE_RUN_SWING_STRATEGY_DISCOVERY:-true}"
 SWING_THRESHOLD_AI_REVIEW_PROVIDER="${SWING_THRESHOLD_AI_REVIEW_PROVIDER:-none}"
 BUILD_CODE_IMPROVEMENT_WORKORDER="${THRESHOLD_CYCLE_BUILD_CODE_IMPROVEMENT_WORKORDER:-true}"
 CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS="${CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS:-12}"
@@ -586,6 +587,28 @@ if [ "$RUN_SWING_LIFECYCLE_AUDIT" = "true" ] || [ "$RUN_SWING_LIFECYCLE_AUDIT" =
     "$PROJECT_DIR/data/report/swing_daily_simulation/swing_daily_simulation_${TARGET_DATE}.json" \
     "$PROJECT_DIR/data/report/swing_daily_simulation/swing_daily_simulation_${TARGET_DATE}.md" \
     "swing_daily_simulation"
+  if [ "$RUN_SWING_STRATEGY_DISCOVERY" = "true" ] || [ "$RUN_SWING_STRATEGY_DISCOVERY" = "1" ]; then
+    wait_for_postclose_resources "swing_strategy_discovery_sim"
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.swing_strategy_discovery_sim --date "$TARGET_DATE"
+    wait_for_report_artifact \
+      "$PROJECT_DIR/data/report/swing_strategy_discovery_sim/swing_strategy_discovery_sim_${TARGET_DATE}.json" \
+      "$PROJECT_DIR/data/report/swing_strategy_discovery_sim/swing_strategy_discovery_sim_${TARGET_DATE}.md" \
+      "swing_strategy_discovery_sim"
+    wait_for_postclose_resources "swing_strategy_discovery_labels"
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.swing_strategy_discovery_label_builder \
+      --date "$TARGET_DATE" \
+      --refresh-matured
+    wait_for_report_artifact \
+      "$PROJECT_DIR/data/report/swing_strategy_discovery_labels/swing_strategy_discovery_labels_${TARGET_DATE}.json" \
+      "$PROJECT_DIR/data/report/swing_strategy_discovery_labels/swing_strategy_discovery_labels_${TARGET_DATE}.md" \
+      "swing_strategy_discovery_labels"
+    wait_for_postclose_resources "swing_strategy_discovery_ev"
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.swing_strategy_discovery_ev_report --date "$TARGET_DATE"
+    wait_for_report_artifact \
+      "$PROJECT_DIR/data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_${TARGET_DATE}.json" \
+      "$PROJECT_DIR/data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_${TARGET_DATE}.md" \
+      "swing_strategy_discovery_ev"
+  fi
   wait_for_postclose_resources "swing_lifecycle_audit"
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.swing_lifecycle_audit \
     --date "$TARGET_DATE" \
@@ -716,4 +739,4 @@ wait_for_report_artifact \
 PYTHONPATH=. "$VENV_PY" -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500 >/dev/null
 finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
 write_postclose_status succeeded completed 0 1
-echo "[DONE] threshold-cycle postclose target_date=$TARGET_DATE ai_correction_provider=$AI_CORRECTION_PROVIDER panic_sell_defense=$RUN_PANIC_SELL_DEFENSE_REPORT panic_buying=$RUN_PANIC_BUYING_REPORT market_panic_breadth=$RUN_MARKET_PANIC_BREADTH_REPORT openai_ws_stability=$RUN_OPENAI_WS_STABILITY_REPORT pipeline_event_verbosity=$RUN_PIPELINE_EVENT_VERBOSITY_REPORT observation_source_quality_audit=$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT codebase_performance_workorder=$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT pattern_lab_currentness_audit=$RUN_PATTERN_LAB_CURRENTNESS_AUDIT pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT scalp_entry_adm=$RUN_SCALP_ENTRY_ADM lifecycle_decision_matrix=$RUN_LIFECYCLE_DECISION_MATRIX latency_classifier_recommendation=$RUN_LATENCY_CLASSIFIER_RECOMMENDATION plan_rebase_daily_renewal=$RUN_PLAN_REBASE_DAILY_RENEWAL swing_lifecycle=$RUN_SWING_LIFECYCLE_AUDIT swing_ai_review_provider=$SWING_THRESHOLD_AI_REVIEW_PROVIDER pattern_labs=$RUN_PATTERN_LABS deepseek_swing_lab=$RUN_DEEPSEEK_SWING_LAB code_improvement_workorder=$BUILD_CODE_IMPROVEMENT_WORKORDER daily_ev=true runtime_approval_summary=true next_stage2_checklist=true finished_at=$finished_at"
+echo "[DONE] threshold-cycle postclose target_date=$TARGET_DATE ai_correction_provider=$AI_CORRECTION_PROVIDER panic_sell_defense=$RUN_PANIC_SELL_DEFENSE_REPORT panic_buying=$RUN_PANIC_BUYING_REPORT market_panic_breadth=$RUN_MARKET_PANIC_BREADTH_REPORT openai_ws_stability=$RUN_OPENAI_WS_STABILITY_REPORT pipeline_event_verbosity=$RUN_PIPELINE_EVENT_VERBOSITY_REPORT observation_source_quality_audit=$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT codebase_performance_workorder=$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT pattern_lab_currentness_audit=$RUN_PATTERN_LAB_CURRENTNESS_AUDIT pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT scalp_entry_adm=$RUN_SCALP_ENTRY_ADM lifecycle_decision_matrix=$RUN_LIFECYCLE_DECISION_MATRIX latency_classifier_recommendation=$RUN_LATENCY_CLASSIFIER_RECOMMENDATION plan_rebase_daily_renewal=$RUN_PLAN_REBASE_DAILY_RENEWAL swing_lifecycle=$RUN_SWING_LIFECYCLE_AUDIT swing_strategy_discovery=$RUN_SWING_STRATEGY_DISCOVERY swing_ai_review_provider=$SWING_THRESHOLD_AI_REVIEW_PROVIDER pattern_labs=$RUN_PATTERN_LABS deepseek_swing_lab=$RUN_DEEPSEEK_SWING_LAB code_improvement_workorder=$BUILD_CODE_IMPROVEMENT_WORKORDER daily_ev=true runtime_approval_summary=true next_stage2_checklist=true finished_at=$finished_at"

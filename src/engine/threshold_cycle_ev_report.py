@@ -14,6 +14,7 @@ from src.engine.approval_contracts import annotate_approval_request
 from src.engine.lifecycle_decision_matrix import report_paths as lifecycle_matrix_report_paths
 from src.engine.scalping_pattern_lab_automation import automation_report_paths
 from src.engine.scalp_entry_action_decision_matrix import report_paths as scalp_entry_adm_report_paths
+from src.engine.swing_strategy_discovery_ev_report import report_paths as swing_strategy_discovery_ev_paths
 from src.engine.swing_pattern_lab_automation import swing_pattern_lab_automation_report_paths
 from src.engine.threshold_cycle_preopen_apply import apply_manifest_path
 
@@ -602,6 +603,49 @@ def _lifecycle_decision_matrix_summary(target_date: str) -> tuple[dict[str, Any]
     )
 
 
+def _swing_strategy_discovery_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
+    json_path, _ = swing_strategy_discovery_ev_paths(target_date)
+    payload = _load_json(json_path)
+    if not payload:
+        return (
+            {
+                "available": False,
+                "artifact": None,
+                "candidate_count": 0,
+                "arm_count": 0,
+                "labeled_sample_count": 0,
+                "pending_future_quote_count": 0,
+                "top_surviving_arm": None,
+                "avoid_bucket_count": 0,
+                "runtime_effect": False,
+                "decision_authority": "swing_sim_exploration_only",
+            },
+            None,
+            ["swing_strategy_discovery_ev_missing"],
+        )
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    warnings = [f"swing_strategy_discovery:{item}" for item in (payload.get("warnings") or []) if str(item)]
+    return (
+        {
+            "available": True,
+            "artifact": str(json_path),
+            "candidate_count": _safe_int(summary.get("candidate_count"), 0),
+            "arm_count": _safe_int(summary.get("arm_count"), 0),
+            "policy_exit_row_count": _safe_int(summary.get("policy_exit_row_count"), 0),
+            "labeled_sample_count": _safe_int(summary.get("labeled_sample_count"), 0),
+            "pending_future_quote_count": _safe_int(summary.get("pending_future_quote_count"), 0),
+            "top_surviving_arm": summary.get("top_surviving_arm"),
+            "surviving_arm_count": _safe_int(summary.get("surviving_arm_count"), 0),
+            "avoid_bucket_count": _safe_int(summary.get("avoid_bucket_count"), 0),
+            "runtime_effect": bool(payload.get("runtime_effect")),
+            "source_only": bool(payload.get("source_only", True)),
+            "decision_authority": payload.get("decision_authority"),
+        },
+        str(json_path),
+        warnings,
+    )
+
+
 def _pipeline_event_verbosity_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
     json_path = REPORT_DIR / "pipeline_event_verbosity" / f"pipeline_event_verbosity_{target_date}.json"
     payload = _load_json(json_path)
@@ -741,6 +785,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
     swing_lab_summary, swing_lab_path, swing_lab_warnings = _swing_pattern_lab_automation_summary(target_date)
     scalp_entry_adm_summary, scalp_entry_adm_path, scalp_entry_adm_warnings = _scalp_entry_adm_summary(target_date)
     lifecycle_matrix_summary, lifecycle_matrix_path, lifecycle_matrix_warnings = _lifecycle_decision_matrix_summary(target_date)
+    swing_discovery_summary, swing_discovery_path, swing_discovery_warnings = _swing_strategy_discovery_summary(target_date)
     code_workorder_summary, code_workorder_path, code_workorder_warnings = _code_improvement_workorder_summary(target_date)
     pipeline_verbosity_summary, pipeline_verbosity_path, pipeline_verbosity_warnings = _pipeline_event_verbosity_summary(target_date)
     codebase_perf_summary, codebase_perf_path, codebase_perf_warnings = _codebase_performance_workorder_summary(target_date)
@@ -821,6 +866,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
         "swing_pattern_lab_automation": swing_lab_summary,
         "scalp_entry_action_decision_matrix": scalp_entry_adm_summary,
         "lifecycle_decision_matrix": lifecycle_matrix_summary,
+        "swing_strategy_discovery": swing_discovery_summary,
         "pipeline_event_verbosity": pipeline_verbosity_summary,
         "codebase_performance_workorder": codebase_perf_summary,
         "pattern_lab_currentness_audit": currentness_audit_summary,
@@ -835,6 +881,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "swing_pattern_lab_automation": swing_lab_path,
             "scalp_entry_action_decision_matrix": scalp_entry_adm_path,
             "lifecycle_decision_matrix": lifecycle_matrix_path,
+            "swing_strategy_discovery": swing_discovery_path,
             "pipeline_event_verbosity": pipeline_verbosity_path,
             "codebase_performance_workorder": codebase_perf_path,
             "pattern_lab_currentness_audit": currentness_audit_path,
@@ -854,6 +901,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
                 *swing_lab_warnings,
                 *scalp_entry_adm_warnings,
                 *lifecycle_matrix_warnings,
+                *swing_discovery_warnings,
                 *pipeline_verbosity_warnings,
                 *codebase_perf_warnings,
                 *currentness_audit_warnings,
@@ -882,6 +930,7 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
     swing_lab = report.get("swing_pattern_lab_automation") if isinstance(report.get("swing_pattern_lab_automation"), dict) else {}
     scalp_entry_adm = report.get("scalp_entry_action_decision_matrix") if isinstance(report.get("scalp_entry_action_decision_matrix"), dict) else {}
     lifecycle_matrix = report.get("lifecycle_decision_matrix") if isinstance(report.get("lifecycle_decision_matrix"), dict) else {}
+    swing_discovery = report.get("swing_strategy_discovery") if isinstance(report.get("swing_strategy_discovery"), dict) else {}
     pipeline_verbosity = report.get("pipeline_event_verbosity") if isinstance(report.get("pipeline_event_verbosity"), dict) else {}
     codebase_perf = report.get("codebase_performance_workorder") if isinstance(report.get("codebase_performance_workorder"), dict) else {}
     currentness_audit = report.get("pattern_lab_currentness_audit") if isinstance(report.get("pattern_lab_currentness_audit"), dict) else {}
@@ -978,6 +1027,15 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- source_quality_blocked_families: `{swing_lab.get('source_quality_blocked_families') or []}`",
         f"- carryover_warnings: `{swing_lab.get('carryover_warning_count')}`",
         f"- population_split_available: `{swing_lab.get('population_split_available')}`",
+        "",
+        "## Swing Strategy Discovery Sim",
+        f"- artifact: `{swing_discovery.get('artifact') or '-'}`",
+        f"- authority: `{swing_discovery.get('decision_authority') or '-'}` / source_only: `{swing_discovery.get('source_only')}`",
+        f"- candidate/arm/policy_exit_rows: `{swing_discovery.get('candidate_count')}` / `{swing_discovery.get('arm_count')}` / `{swing_discovery.get('policy_exit_row_count')}`",
+        f"- labeled/pending_future_quotes: `{swing_discovery.get('labeled_sample_count')}` / `{swing_discovery.get('pending_future_quote_count')}`",
+        f"- top_surviving_arm: `{swing_discovery.get('top_surviving_arm') or '-'}`",
+        f"- surviving/avoid_bucket_count: `{swing_discovery.get('surviving_arm_count')}` / `{swing_discovery.get('avoid_bucket_count')}`",
+        f"- runtime_effect: `{swing_discovery.get('runtime_effect')}`",
         "",
         "## Pipeline Event Verbosity",
         f"- artifact: `{pipeline_verbosity.get('artifact') or '-'}`",

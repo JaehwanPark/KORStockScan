@@ -1,0 +1,132 @@
+import json
+from datetime import date, timedelta
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from src.database.models import (
+    Base,
+    DailyStockQuote,
+    SwingStrategyDiscoveryArm,
+    SwingStrategyDiscoveryCandidate,
+    SwingStrategyDiscoveryLabel,
+)
+from src.engine import swing_strategy_discovery_label_builder as mod
+from src.engine.swing_strategy_discovery_schema import ensure_swing_strategy_discovery_schema
+
+
+def _seed_arm(session, *, entry_policy="next_open_entry", exit_policy="fixed_5d"):
+    candidate = SwingStrategyDiscoveryCandidate(
+        source_date=date(2026, 5, 1),
+        stock_code="000001",
+        stock_name="테스트",
+        policy_version="swing_strategy_discovery_sim_v1",
+        selection_arm="lifecycle_rank",
+        diversity_bucket="BREAKOUT|none|mid",
+        position_tag="BREAKOUT",
+        block_reason="no_block_observed",
+        volatility_bucket="mid",
+        theme_tags=json.dumps(["AI"]),
+        lifecycle_exploration_score=0.8,
+        source_features=json.dumps({"quote_features": {"reference_price": 1000}}),
+        decision_authority="swing_sim_exploration_only",
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+        runtime_effect=False,
+    )
+    session.add(candidate)
+    session.flush()
+    arm = SwingStrategyDiscoveryArm(
+        candidate_id=candidate.id,
+        source_date=date(2026, 5, 1),
+        stock_code="000001",
+        policy_version="swing_strategy_discovery_sim_v1",
+        arm_id=f"test_{entry_policy}_{exit_policy}",
+        entry_policy=entry_policy,
+        sizing_policy="equal_notional",
+        exit_policy=exit_policy,
+        status="PENDING_ENTRY",
+        virtual_entry_price=1000,
+        virtual_qty=10,
+        virtual_notional_krw=10_000,
+        arm_features=json.dumps({}),
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+        runtime_effect=False,
+    )
+    session.add(arm)
+    return arm
+
+
+def _seed_quotes(session, *, days=12):
+    start = date(2026, 5, 2)
+    for idx in range(days):
+        close = 1000 + idx * 10
+        session.add(
+            DailyStockQuote(
+                quote_date=start + timedelta(days=idx),
+                stock_code="000001",
+                stock_name="테스트",
+                open_price=1000 + idx * 5,
+                high_price=close + 40,
+                low_price=close - 30,
+                close_price=close,
+                volume=1000,
+            )
+        )
+
+
+def test_label_builder_generates_horizon_and_policy_exit_labels(tmp_path):
+    db_url = f"sqlite:///{tmp_path / 'labels.db'}"
+    ensure_swing_strategy_discovery_schema(db_url)
+    engine = create_engine(db_url)
+    Base.metadata.create_all(bind=engine, tables=[DailyStockQuote.__table__])
+    Session = sessionmaker(bind=engine)
+    with Session.begin() as session:
+        _seed_arm(session)
+        _seed_quotes(session)
+
+    report = mod.build_swing_strategy_discovery_labels("2026-05-20", db_url=db_url, refresh_matured=True)
+
+    assert report["runtime_effect"] is False
+    assert report["summary"]["processed_arm_count"] == 1
+    with Session() as session:
+        labels = session.query(SwingStrategyDiscoveryLabel).all()
+        arm = session.query(SwingStrategyDiscoveryArm).first()
+    assert {label.label_horizon for label in labels} == {"1d", "5d", "10d", "policy_exit"}
+    assert all(label.label_status == "labeled" for label in labels)
+    assert arm.status == "EXITED"
+    assert arm.actual_order_submitted is False
+    assert arm.broker_order_forbidden is True
+    assert arm.runtime_effect is False
+
+
+def test_pullback_entry_expires_when_limit_not_touched(tmp_path):
+    db_url = f"sqlite:///{tmp_path / 'labels_expire.db'}"
+    ensure_swing_strategy_discovery_schema(db_url)
+    engine = create_engine(db_url)
+    Base.metadata.create_all(bind=engine, tables=[DailyStockQuote.__table__])
+    Session = sessionmaker(bind=engine)
+    with Session.begin() as session:
+        _seed_arm(session, entry_policy="pullback_limit_entry", exit_policy="fixed_5d")
+        for idx in range(5):
+            session.add(
+                DailyStockQuote(
+                    quote_date=date(2026, 5, 2) + timedelta(days=idx),
+                    stock_code="000001",
+                    stock_name="테스트",
+                    open_price=1000,
+                    high_price=1030,
+                    low_price=995,
+                    close_price=1010,
+                    volume=1000,
+                )
+            )
+
+    mod.build_swing_strategy_discovery_labels("2026-05-20", db_url=db_url, refresh_matured=True)
+
+    with Session() as session:
+        arm = session.query(SwingStrategyDiscoveryArm).first()
+        statuses = {label.label_status for label in session.query(SwingStrategyDiscoveryLabel).all()}
+    assert arm.status == "EXPIRED"
+    assert statuses == {"expired_entry_no_trigger"}

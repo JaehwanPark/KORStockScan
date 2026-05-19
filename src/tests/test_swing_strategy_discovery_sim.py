@@ -100,6 +100,24 @@ def test_schema_report_and_persistence_are_idempotent(tmp_path, monkeypatch):
         },
     )
     monkeypatch.setattr(mod, "fetch_quote_features", lambda codes, db_url=mod.POSTGRES_URL: _quote_features(6))
+    monkeypatch.setattr(
+        mod,
+        "build_sector_theme_map",
+        lambda codes, target_date, allow_external=True: {
+            "mapped_code_count": len(list(codes)),
+            "rows_by_code": {
+                f"{idx:06d}": {
+                    "sector": f"sector-{idx % 3}",
+                    "industry": f"industry-{idx % 2}",
+                    "theme_tags": [f"theme-{idx % 4}"],
+                    "theme_source": "test",
+                    "theme_source_quality": "ok",
+                }
+                for idx in range(1, 7)
+            },
+            "warnings": [],
+        },
+    )
 
     paths = mod.write_swing_strategy_discovery_report(
         "2026-05-19",

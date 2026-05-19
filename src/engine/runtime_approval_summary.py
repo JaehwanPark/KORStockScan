@@ -80,6 +80,7 @@ _FAMILY_DESCRIPTIONS = {
     "panic_entry_freeze_guard": "패닉셀 구간에서 scalping 신규 BUY pre-submit freeze canary를 열 수 있는지 보는 축",
     "panic_buy_runner_tp_canary": "패닉바잉 구간에서 fixed TP 전량청산 대비 runner 유지가 missed upside를 줄이는지 보는 축",
     "scalp_sim_overnight_ai_carry": "장마감 후 open 스캘핑 sim 포지션을 overnight_v1로 SELL_TODAY/HOLD_OVERNIGHT 분리해 다음날 lifecycle/EV label로 연결하는 source-only 축",
+    "swing_strategy_discovery_sim": "스윙 safe pool 전체를 공격적 sim-only lifecycle arm으로 전개하고 label/EV를 축적하는 source-only 탐색 축",
 }
 
 _BASELINE_APPLICATION = {
@@ -101,6 +102,7 @@ _BASELINE_APPLICATION = {
     "panic_entry_freeze_guard": "계약 미준비: approval artifact를 만들어도 pre-submit freeze runtime 반영 불가",
     "panic_buy_runner_tp_canary": "report-only: TP/trailing/live exit 변경 없음",
     "scalp_sim_overnight_ai_carry": "source-only: sim 가상 청산/carry 기록만 수행, runtime threshold apply 권한 없음",
+    "swing_strategy_discovery_sim": "source-only: 가상 후보/arm/label/EV 분석만 수행, runtime threshold apply 권한 없음",
 }
 
 _STATE_INTERPRETATIONS = {
@@ -1108,6 +1110,34 @@ def _lifecycle_matrix_summary(ev_report: dict[str, Any], source_path: str | None
     }
 
 
+def _swing_strategy_discovery_summary(ev_report: dict[str, Any]) -> dict[str, Any]:
+    payload = ev_report.get("swing_strategy_discovery") if isinstance(ev_report.get("swing_strategy_discovery"), dict) else {}
+    available = bool(payload.get("available"))
+    warnings = []
+    if not available:
+        warnings.append("swing_strategy_discovery_ev_missing")
+    if int(payload.get("pending_future_quote_count") or 0) > 0:
+        warnings.append("pending_future_quotes")
+    return {
+        "family": "swing_strategy_discovery_sim",
+        "available": available,
+        "artifact": payload.get("artifact"),
+        "description": _FAMILY_DESCRIPTIONS["swing_strategy_discovery_sim"],
+        "baseline_application": _BASELINE_APPLICATION["swing_strategy_discovery_sim"],
+        "runtime_effect": False,
+        "runtime_mutation_allowed": False,
+        "decision_authority": payload.get("decision_authority") or "swing_sim_exploration_only",
+        "candidate_count": int(payload.get("candidate_count") or 0),
+        "arm_count": int(payload.get("arm_count") or 0),
+        "labeled_sample_count": int(payload.get("labeled_sample_count") or 0),
+        "pending_future_quote_count": int(payload.get("pending_future_quote_count") or 0),
+        "top_surviving_arm": payload.get("top_surviving_arm"),
+        "avoid_bucket_count": int(payload.get("avoid_bucket_count") or 0),
+        "state_interpretation": "source-only exploration. Surviving arms can create future source-quality/workorder inputs but cannot apply runtime env.",
+        "warnings": warnings,
+    }
+
+
 def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     _JSON_LOAD_DIAGNOSTICS.clear()
     target_date = str(target_date).strip()
@@ -1129,6 +1159,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     panic_rows = _panic_rows(calibration_report, target_date)
     scalp_entry_adm_summary = _entry_adm_summary(ev_report, scalp_entry_adm_path)
     lifecycle_matrix_summary = _lifecycle_matrix_summary(ev_report, lifecycle_matrix_path)
+    swing_discovery_summary = _swing_strategy_discovery_summary(ev_report)
     source_load_warnings = [
         f"source_load_{item.get('status')}:{Path(str(item.get('path') or '')).name}"
         for item in _JSON_LOAD_DIAGNOSTICS
@@ -1181,10 +1212,14 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             ),
             "lifecycle_matrix_ready_for_bounded_apply": lifecycle_matrix_summary.get("ready_for_bounded_apply"),
             "lifecycle_matrix_warnings": lifecycle_matrix_summary.get("warnings"),
+            "swing_strategy_discovery_available": swing_discovery_summary.get("available"),
+            "swing_strategy_discovery_labeled_sample_count": swing_discovery_summary.get("labeled_sample_count"),
+            "swing_strategy_discovery_pending_future_quote_count": swing_discovery_summary.get("pending_future_quote_count"),
         },
         "application_timing": _application_timing(target_date, ev_report),
         "scalp_entry_action_decision_matrix": scalp_entry_adm_summary,
         "lifecycle_decision_matrix": lifecycle_matrix_summary,
+        "swing_strategy_discovery": swing_discovery_summary,
         "pattern_lab_currentness_audit": currentness_audit,
         "pattern_lab_propagation_audit": propagation_audit,
         "scalping": scalping_rows,
@@ -1245,6 +1280,11 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         if isinstance(report.get("lifecycle_decision_matrix"), dict)
         else {}
     )
+    swing_discovery = (
+        report.get("swing_strategy_discovery")
+        if isinstance(report.get("swing_strategy_discovery"), dict)
+        else {}
+    )
     currentness = report.get("pattern_lab_currentness_audit") if isinstance(report.get("pattern_lab_currentness_audit"), dict) else {}
     propagation = report.get("pattern_lab_propagation_audit") if isinstance(report.get("pattern_lab_propagation_audit"), dict) else {}
     source_load_diagnostics = (
@@ -1262,6 +1302,7 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         f"- panic_approval_requested: `{summary.get('panic_approval_requested')}`",
         f"- scalp_entry_adm_status: `{summary.get('scalp_entry_adm_status')}`",
         f"- lifecycle_matrix_status: `{summary.get('lifecycle_matrix_status')}`",
+        f"- swing_strategy_discovery_labeled/pending: `{summary.get('swing_strategy_discovery_labeled_sample_count')}` / `{summary.get('swing_strategy_discovery_pending_future_quote_count')}`",
         f"- pattern_lab_currentness_status: `{summary.get('pattern_lab_currentness_status')}`",
         f"- pattern_lab_propagation_status: `{summary.get('pattern_lab_propagation_status')}`",
         f"- env_generated_at: `{timing.get('env_generated_at') or '-'}`",
@@ -1295,6 +1336,17 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         "",
         "## Swing",
         *_render_rows(swing),
+        "",
+        "## Swing Strategy Discovery Sim",
+        f"- artifact: `{swing_discovery.get('artifact') or '-'}`",
+        f"- available: `{swing_discovery.get('available')}`",
+        f"- candidate/arm/labeled: `{swing_discovery.get('candidate_count')}` / `{swing_discovery.get('arm_count')}` / `{swing_discovery.get('labeled_sample_count')}`",
+        f"- pending_future_quote_count: `{swing_discovery.get('pending_future_quote_count')}`",
+        f"- top_surviving_arm: `{swing_discovery.get('top_surviving_arm') or '-'}`",
+        f"- avoid_bucket_count: `{swing_discovery.get('avoid_bucket_count')}`",
+        f"- runtime_effect: `{swing_discovery.get('runtime_effect')}`",
+        f"- interpretation: {swing_discovery.get('state_interpretation') or '-'}",
+        f"- warnings: `{swing_discovery.get('warnings') or []}`",
         "",
         "## Panic",
         *_render_rows(panic),

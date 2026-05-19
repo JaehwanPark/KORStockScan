@@ -35,7 +35,9 @@ ON 가능한 시점은 다음 조건이 모두 닫힌 뒤다.
 | Code Improvement Workorder | `docs/code-improvement-workorders/code_improvement_workorder_YYYY-MM-DD.md` | `src.engine.build_code_improvement_workorder` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | Codex 세션 입력용 구현 작업지시서. `generation_id`, `source_hash`, `lineage` diff로 같은 날짜 재생성/2-pass 구현 여부를 추적 |
 | Threshold Cycle Daily EV | `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.md` | `src.engine.threshold_cycle_ev_report` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | 무인 threshold apply 이후 제출 기준 리포트 |
 | Runtime Approval Summary | `data/report/runtime_approval_summary/runtime_approval_summary_YYYY-MM-DD.md` | `src.engine.runtime_approval_summary` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | 스캘핑 threshold-cycle 판정과 스윙 runtime approval을 합친 읽기 전용 요약. runtime 변경 권한 없음 |
-| Swing Strategy Discovery Sim | `data/report/swing_strategy_discovery_sim/swing_strategy_discovery_sim_YYYY-MM-DD.md` | `src.engine.swing_strategy_discovery_sim` | v1은 수동/후속 자동화 source 연결 예정 | 스윙 safe pool 전체를 sim-only candidate와 8-arm 가상 전략 row로 확장하는 감사 리포트. runtime 변경 권한 없음 |
+| Swing Strategy Discovery Sim | `data/report/swing_strategy_discovery_sim/swing_strategy_discovery_sim_YYYY-MM-DD.md` | `src.engine.swing_strategy_discovery_sim` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | 스윙 safe pool 전체를 sim-only candidate와 8-arm 가상 전략 row로 확장하는 감사 리포트. runtime 변경 권한 없음 |
+| Swing Strategy Discovery Labels | `data/report/swing_strategy_discovery_labels/swing_strategy_discovery_labels_YYYY-MM-DD.md` | `src.engine.swing_strategy_discovery_label_builder` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | discovery arm의 1d/5d/10d/policy_exit label과 PENDING_ENTRY/ENTERED/EXITED/EXPIRED 상태 전개 요약 |
+| Swing Strategy Discovery EV | `data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_YYYY-MM-DD.md` | `src.engine.swing_strategy_discovery_ev_report` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | arm/entry/sizing/exit/selection/sector/theme 축 source-only EV 리포트. surviving/avoid bucket을 표시하지만 runtime apply 권한 없음 |
 
 ## 비정기/legacy Markdown
 
@@ -68,6 +70,8 @@ ON 가능한 시점은 다음 조건이 모두 닫힌 뒤다.
 | Threshold Cycle Daily EV | `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.json` | `src.engine.threshold_cycle_ev_report` | `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.md` |
 | Runtime Approval Summary | `data/report/runtime_approval_summary/runtime_approval_summary_YYYY-MM-DD.json` | `src.engine.runtime_approval_summary` | `data/report/runtime_approval_summary/runtime_approval_summary_YYYY-MM-DD.md` |
 | Swing Strategy Discovery Sim | `data/report/swing_strategy_discovery_sim/swing_strategy_discovery_sim_YYYY-MM-DD.json` | `src.engine.swing_strategy_discovery_sim` | `data/report/swing_strategy_discovery_sim/swing_strategy_discovery_sim_YYYY-MM-DD.md` |
+| Swing Strategy Discovery Labels | `data/report/swing_strategy_discovery_labels/swing_strategy_discovery_labels_YYYY-MM-DD.json` | `src.engine.swing_strategy_discovery_label_builder` | `data/report/swing_strategy_discovery_labels/swing_strategy_discovery_labels_YYYY-MM-DD.md` |
+| Swing Strategy Discovery EV | `data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_YYYY-MM-DD.json` | `src.engine.swing_strategy_discovery_ev_report` | `data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_YYYY-MM-DD.md` |
 | Cumulative Threshold Cycle Report | `data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_YYYY-MM-DD.json` | `src.engine.daily_threshold_cycle_report` | `data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_YYYY-MM-DD.md` |
 | Threshold Compact Events | `data/threshold_cycle/date=YYYY-MM-DD/family=*/part-*.jsonl`, `data/threshold_cycle/threshold_events_YYYY-MM-DD.jsonl` | `src.engine.backfill_threshold_cycle_events` | 없음 |
 | Pipeline Events | `data/pipeline_events/pipeline_events_YYYY-MM-DD.jsonl` | runtime pipeline event writer | 없음 |

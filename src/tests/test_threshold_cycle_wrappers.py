@@ -22,14 +22,18 @@ def test_postclose_wrapper_runs_swing_daily_simulation_before_lifecycle_audit():
 
     simulation_idx = script.index('deploy/run_swing_daily_simulation_report.sh" "$TARGET_DATE"')
     simulation_wait_idx = script.index('"$PROJECT_DIR/data/report/swing_daily_simulation/swing_daily_simulation_${TARGET_DATE}.json"')
+    discovery_idx = script.index("src.engine.swing_strategy_discovery_sim")
+    label_idx = script.index("src.engine.swing_strategy_discovery_label_builder")
+    discovery_ev_idx = script.index("src.engine.swing_strategy_discovery_ev_report")
     audit_idx = script.index("src.engine.swing_lifecycle_audit")
     resource_idx = script.index('wait_for_postclose_resources "swing_lifecycle_audit"')
 
     assert simulation_idx < audit_idx
-    assert simulation_idx < simulation_wait_idx < audit_idx
+    assert simulation_idx < simulation_wait_idx < discovery_idx < label_idx < discovery_ev_idx < audit_idx
     assert resource_idx < audit_idx
     assert 'run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.swing_lifecycle_audit' in script
     assert 'SWING_THRESHOLD_AI_REVIEW_PROVIDER="${SWING_THRESHOLD_AI_REVIEW_PROVIDER:-none}"' in script
+    assert 'RUN_SWING_STRATEGY_DISCOVERY="${THRESHOLD_CYCLE_RUN_SWING_STRATEGY_DISCOVERY:-true}"' in script
 
 
 def test_swing_live_dry_run_defaults_ai_review_provider_to_none():

@@ -22,6 +22,7 @@ from src.database.models import (
     SwingStrategyDiscoveryArm,
     SwingStrategyDiscoveryCandidate,
 )
+from src.engine.swing_sector_theme_source import build_sector_theme_map
 from src.engine.swing_strategy_discovery_schema import ensure_swing_strategy_discovery_schema
 from src.model.common_v2 import RECO_DIAGNOSTIC_PATH, RECO_PATH
 from src.utils.constants import DATA_DIR, POSTGRES_URL, TRADING_RULES
@@ -317,17 +318,20 @@ def build_candidate_rows(
     max_candidates: int = DEFAULT_MAX_DAILY_CANDIDATES,
     block_reasons: dict[str, str] | None = None,
     quote_features: dict[str, dict[str, Any]] | None = None,
+    sector_theme_map: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     if source_rows is None or source_rows.empty:
         return []
     block_reasons = block_reasons or {}
     quote_features = quote_features or {}
+    sector_theme_map = sector_theme_map or {}
     rows: list[dict[str, Any]] = []
     for source in source_rows.to_dict("records"):
         code = _norm_code(source.get("code") or source.get("stock_code"))
         if not code.strip("0"):
             continue
         quote = quote_features.get(code, {})
+        sector_theme = sector_theme_map.get(code, {})
         block_reason = block_reasons.get(code, "no_block_observed")
         position_tag = str(source.get("position_tag") or quote.get("position_tag") or "UNKNOWN")
         volatility_bucket = str(quote.get("volatility_bucket") or source.get("volatility_bucket") or "unknown")
@@ -345,9 +349,9 @@ def build_candidate_rows(
                 "position_tag": position_tag,
                 "block_reason": block_reason,
                 "volatility_bucket": volatility_bucket,
-                "sector": str(source.get("sector") or ""),
-                "industry": str(source.get("industry") or ""),
-                "theme_tags": _json_text(source.get("theme_tags") or []),
+                "sector": str(sector_theme.get("sector") or source.get("sector") or ""),
+                "industry": str(sector_theme.get("industry") or source.get("industry") or ""),
+                "theme_tags": _json_text(sector_theme.get("theme_tags") or source.get("theme_tags") or []),
                 "legacy_model_prob": _safe_float(source.get("prob", source.get("hybrid_mean")), 0.0),
                 "legacy_model_rank": _safe_int(source.get("score_rank"), 999),
                 "legacy_selection_mode": _selection_mode(source),
@@ -362,6 +366,10 @@ def build_candidate_rows(
                     "v2_required_fields": V2_REQUIRED_FIELDS,
                     "legacy_ml_role": "feature_and_comparison_cohort_only",
                     "quote_features": quote,
+                    "sector_theme": {
+                        "theme_source": sector_theme.get("theme_source") or "source_row_or_missing",
+                        "theme_source_quality": sector_theme.get("theme_source_quality") or "source_row_or_missing",
+                    },
                     "raw_source": {k: str(v) for k, v in source.items() if k in {"date", "bull_regime", "floor_used", "safe_pool_count", "candidate_count"}},
                 },
                 "decision_authority": DECISION_AUTHORITY,
@@ -602,14 +610,19 @@ def build_swing_strategy_discovery_report(
     source_rows = load_safe_pool_rows(date_key)
     block_reasons = load_block_reason_map(date_key)
     quote_features = fetch_quote_features(source_rows.get("code", pd.Series(dtype=str)).tolist(), db_url=db_url)
+    codes = source_rows.get("code", pd.Series(dtype=str)).tolist()
+    sector_theme_payload = build_sector_theme_map(codes, target_date=date_key, allow_external=True)
+    sector_theme_map = sector_theme_payload.get("rows_by_code") if isinstance(sector_theme_payload.get("rows_by_code"), dict) else {}
     source_count = int(len(source_rows))
     quote_feature_count = int(len(quote_features))
+    sector_theme_mapped = int(sector_theme_payload.get("mapped_code_count") or 0)
     candidates = build_candidate_rows(
         source_rows,
         target_date=date_key,
         max_candidates=max_candidates,
         block_reasons=block_reasons,
         quote_features=quote_features,
+        sector_theme_map=sector_theme_map,
     )
     arms = build_arm_rows(candidates)
     persist_summary = persist_discovery_rows(candidates, arms, db_url=db_url) if persist else {"candidate_rows": 0, "arm_rows": 0}
@@ -621,6 +634,8 @@ def build_swing_strategy_discovery_report(
         warnings.append("quote_features_unavailable")
     elif source_count and quote_feature_count < min(source_count, max_candidates):
         warnings.append("quote_features_partial")
+    for warning in sector_theme_payload.get("warnings") or []:
+        warnings.append(f"sector_theme:{warning}")
     return {
         "schema_version": 1,
         "report_type": "swing_strategy_discovery_sim",
@@ -664,6 +679,9 @@ def build_swing_strategy_discovery_report(
             "safe_pool_source_rows": source_count,
             "quote_feature_rows": quote_feature_count,
             "quote_feature_coverage": round(quote_feature_count / source_count, 6) if source_count else 0.0,
+            "sector_theme_mapped_rows": sector_theme_mapped,
+            "sector_theme_coverage": round(sector_theme_mapped / source_count, 6) if source_count else 0.0,
+            "sector_theme_cache": str((Path(DATA_DIR) / "runtime" / "swing_strategy_discovery" / f"sector_theme_map_{date_key}.json")),
             "warnings": warnings,
         },
         "arm_set": ARM_SET,
@@ -673,6 +691,7 @@ def build_swing_strategy_discovery_report(
             "diagnostic_csv": str(RECO_DIAGNOSTIC_PATH),
             "recommendation_csv": str(RECO_PATH),
             "pipeline_events": str((PIPELINE_EVENTS_DIR / f"pipeline_events_{date_key}.jsonl")),
+            "sector_theme_map": str((Path(DATA_DIR) / "runtime" / "swing_strategy_discovery" / f"sector_theme_map_{date_key}.json")),
         },
         "examples": [
             {

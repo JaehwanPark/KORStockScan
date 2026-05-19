@@ -17,6 +17,7 @@ REPORT_DIR = PROJECT_ROOT / "data" / "report"
 PATTERN_LAB_AUTOMATION_DIR = REPORT_DIR / "scalping_pattern_lab_automation"
 SWING_IMPROVEMENT_AUTOMATION_DIR = REPORT_DIR / "swing_improvement_automation"
 SWING_PATTERN_LAB_AUTOMATION_DIR = REPORT_DIR / "swing_pattern_lab_automation"
+SWING_STRATEGY_DISCOVERY_EV_DIR = REPORT_DIR / "swing_strategy_discovery_ev"
 THRESHOLD_CYCLE_EV_DIR = REPORT_DIR / "threshold_cycle_ev"
 PIPELINE_EVENT_VERBOSITY_DIR = REPORT_DIR / "pipeline_event_verbosity"
 OBSERVATION_SOURCE_QUALITY_AUDIT_DIR = REPORT_DIR / "observation_source_quality_audit"
@@ -151,6 +152,10 @@ def swing_pattern_lab_automation_report_path(target_date: str) -> Path:
 
 def threshold_ev_report_path(target_date: str) -> Path:
     return THRESHOLD_CYCLE_EV_DIR / f"threshold_cycle_ev_{target_date}.json"
+
+
+def swing_strategy_discovery_ev_report_path(target_date: str) -> Path:
+    return SWING_STRATEGY_DISCOVERY_EV_DIR / f"swing_strategy_discovery_ev_{target_date}.json"
 
 
 def code_improvement_workorder_paths(target_date: str) -> tuple[Path, Path]:
@@ -1082,6 +1087,85 @@ def _panic_lifecycle_followup_orders(calibration_report: dict[str, Any]) -> list
     return orders
 
 
+def _swing_strategy_discovery_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+    if not report:
+        return []
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    warnings = [str(item) for item in (report.get("warnings") or []) if str(item).strip()]
+    avoid_count = _safe_int(summary.get("avoid_bucket_count"), 0)
+    pending = _safe_int(summary.get("pending_future_quote_count"), 0)
+    labeled = _safe_int(summary.get("labeled_sample_count"), 0)
+    orders: list[dict[str, Any]] = []
+    if warnings or pending:
+        orders.append(
+            {
+                "order_id": "order_swing_strategy_discovery_source_quality_followup",
+                "title": "swing strategy discovery label/source quality follow-up",
+                "source_report_type": "swing_strategy_discovery_ev",
+                "lifecycle_stage": "source_quality",
+                "target_subsystem": "swing_strategy_discovery_sim",
+                "route": "instrumentation_order",
+                "mapped_family": None,
+                "threshold_family": None,
+                "improvement_type": "source_quality_instrumentation",
+                "confidence": "consensus",
+                "priority": 6,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "expected_ev_effect": "Improve discovery label coverage and source attribution before any swing strategy policy promotion is discussed.",
+                "evidence": [
+                    f"labeled_sample_count={labeled}",
+                    f"pending_future_quote_count={pending}",
+                    f"warnings={warnings}",
+                    "decision_authority=swing_sim_exploration_only",
+                    "allowed_runtime_apply=false",
+                ],
+                "next_postclose_metric": "swing_strategy_discovery_ev should reduce pending_future_quotes where matured and keep source-only authority.",
+                "files_likely_touched": [
+                    "src/engine/swing_strategy_discovery_label_builder.py",
+                    "src/engine/swing_strategy_discovery_ev_report.py",
+                    "src/engine/swing_sector_theme_source.py",
+                ],
+                "acceptance_tests": [
+                    "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_strategy_discovery_label_builder.py src/tests/test_swing_strategy_discovery_ev_report.py src/tests/test_swing_sector_theme_source.py",
+                ],
+            }
+        )
+    if avoid_count > 0:
+        orders.append(
+            {
+                "order_id": "order_swing_strategy_discovery_avoid_bucket_review",
+                "title": "swing strategy discovery avoid bucket report enrichment",
+                "source_report_type": "swing_strategy_discovery_ev",
+                "lifecycle_stage": "selection",
+                "target_subsystem": "swing_strategy_discovery_sim",
+                "route": "instrumentation_order",
+                "mapped_family": None,
+                "threshold_family": None,
+                "improvement_type": "analysis_report_provenance",
+                "confidence": "consensus",
+                "priority": 7,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "expected_ev_effect": "Expose avoid buckets as analysis guidance only; do not mutate swing runtime or recommendation_history.",
+                "evidence": [
+                    f"avoid_bucket_count={avoid_count}",
+                    f"top_surviving_arm={summary.get('top_surviving_arm')}",
+                    "runtime_effect=false",
+                ],
+                "next_postclose_metric": "avoid_buckets should include axis/key/sample/EV/downside with enough sample floor to guide later design.",
+                "files_likely_touched": [
+                    "src/engine/swing_strategy_discovery_ev_report.py",
+                    "docs/swing-strategy-discovery-sim-v1.md",
+                ],
+                "acceptance_tests": [
+                    "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_strategy_discovery_ev_report.py src/tests/test_build_code_improvement_workorder.py",
+                ],
+            }
+        )
+    return orders
+
+
 def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) -> dict[str, Any]:
     target_date = str(target_date).strip()
     json_path, md_path = code_improvement_workorder_paths(target_date)
@@ -1092,6 +1176,8 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     swing_automation = _load_json(swing_source_path)
     swing_lab_source_path = swing_pattern_lab_automation_report_path(target_date)
     swing_lab_automation = _load_json(swing_lab_source_path)
+    swing_discovery_source_path = swing_strategy_discovery_ev_report_path(target_date)
+    swing_discovery_ev = _load_json(swing_discovery_source_path)
     ev_path = threshold_ev_report_path(target_date)
     ev_report = _load_json(ev_path)
     pipeline_event_verbosity_path = _pipeline_event_verbosity_report_path(target_date)
@@ -1108,6 +1194,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "pattern_lab_automation": source_path,
             "swing_improvement_automation": swing_source_path,
             "swing_pattern_lab_automation": swing_lab_source_path,
+            "swing_strategy_discovery_ev": swing_discovery_source_path,
             "threshold_cycle_ev": ev_path,
             "pipeline_event_verbosity": pipeline_event_verbosity_path,
             "observation_source_quality_audit": observation_source_quality_path,
@@ -1143,6 +1230,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         for item in (swing_lab_automation.get("code_improvement_orders") or [])
         if isinstance(item, dict)
     ]
+    swing_discovery_orders = _swing_strategy_discovery_followup_orders(swing_discovery_ev)
     pattern_lab_currentness_orders = [
         {**item, "source_report_type": "pattern_lab_currentness_audit"}
         for item in (pattern_lab_currentness.get("code_improvement_orders") or [])
@@ -1158,7 +1246,14 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         *_codebase_performance_followup_orders(codebase_performance),
     ]
     closed_instrumentation_order_families = _closed_instrumentation_order_families(ev_report)
-    orders = [*scalping_orders, *swing_orders, *swing_lab_orders, *pattern_lab_currentness_orders, *threshold_ev_orders]
+    orders = [
+        *scalping_orders,
+        *swing_orders,
+        *swing_lab_orders,
+        *swing_discovery_orders,
+        *pattern_lab_currentness_orders,
+        *threshold_ev_orders,
+    ]
     seen_keys: set[tuple[str, str, str]] = set()
     deduped_orders: list[dict[str, Any]] = []
     collision_warnings: list[str] = []
@@ -1197,6 +1292,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "pattern_lab_automation": str(source_path),
             "swing_improvement_automation": str(swing_source_path) if swing_source_path.exists() else None,
             "swing_pattern_lab_automation": str(swing_lab_source_path) if swing_lab_source_path.exists() else None,
+            "swing_strategy_discovery_ev": str(swing_discovery_source_path) if swing_discovery_source_path.exists() else None,
             "threshold_cycle_ev": str(ev_path) if ev_path.exists() else None,
             "scalp_entry_action_decision_matrix": str(source_paths["scalp_entry_action_decision_matrix"])
             if "scalp_entry_action_decision_matrix" in source_paths
@@ -1234,6 +1330,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "scalping_source_order_count": len(scalping_orders),
             "swing_source_order_count": len(swing_orders),
             "swing_lab_source_order_count": len(swing_lab_orders),
+            "swing_strategy_discovery_source_order_count": len(swing_discovery_orders),
             "pattern_lab_currentness_source_order_count": len(pattern_lab_currentness_orders),
             "threshold_ev_source_order_count": len(threshold_ev_orders),
             "pipeline_event_verbosity_source_order_count": len(
@@ -1252,6 +1349,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "claude_fresh": ((automation.get("ev_report_summary") or {}).get("claude_fresh")),
             "swing_lifecycle_audit_available": bool(swing_automation),
             "swing_pattern_lab_automation_available": bool(swing_lab_automation),
+            "swing_strategy_discovery_ev_available": bool(swing_discovery_ev),
             "swing_pattern_lab_fresh": ((swing_lab_automation.get("ev_report_summary") or {}).get("deepseek_lab_available")),
             "pattern_lab_currentness_status": pattern_lab_currentness.get("status"),
             "pattern_lab_currentness_fail_count": ((pattern_lab_currentness.get("summary") or {}).get("fail_count")),
@@ -1336,6 +1434,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- pattern_lab_automation: `{source.get('pattern_lab_automation')}`",
         f"- swing_improvement_automation: `{source.get('swing_improvement_automation') or '-'}`",
         f"- swing_pattern_lab_automation: `{source.get('swing_pattern_lab_automation') or '-'}`",
+        f"- swing_strategy_discovery_ev: `{source.get('swing_strategy_discovery_ev') or '-'}`",
         f"- threshold_cycle_ev: `{source.get('threshold_cycle_ev') or '-'}`",
         f"- threshold_cycle_calibration: `{source.get('threshold_cycle_calibration') or '-'}`",
         f"- pipeline_event_verbosity: `{source.get('pipeline_event_verbosity') or '-'}`",
@@ -1378,6 +1477,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- scalping_source_order_count: `{summary.get('scalping_source_order_count')}`",
         f"- swing_source_order_count: `{summary.get('swing_source_order_count')}`",
         f"- swing_lab_source_order_count: `{summary.get('swing_lab_source_order_count')}`",
+        f"- swing_strategy_discovery_source_order_count: `{summary.get('swing_strategy_discovery_source_order_count')}`",
         f"- pattern_lab_currentness_source_order_count: `{summary.get('pattern_lab_currentness_source_order_count')}`",
         f"- threshold_ev_source_order_count: `{summary.get('threshold_ev_source_order_count')}`",
         f"- pipeline_event_verbosity_source_order_count: `{summary.get('pipeline_event_verbosity_source_order_count')}`",
