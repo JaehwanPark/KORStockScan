@@ -91,6 +91,12 @@
   - 금지: approval request만 보고 env 파일을 직접 수정하지 않고, 자동화 산출물에 있는 요청을 답변에만 남기고 checklist/Project 대상에서 누락하지 않는다.
   - 다음 액션: approval request가 있으면 `approval_id`, 후보/대상, artifact path, 승인 여부, 다음 PREOPEN 적용 확인 항목을 남긴다. 누락된 항목이 있으면 다음 영업일 checklist에 parser-friendly checkbox로 추가한다.
 
+- [ ] `[LifecycleDecisionMatrixRuntime0519] lifecycle decision matrix postclose 산출 및 다음 PREOPEN bounded apply 연결 확인` (`Due: 2026-05-19`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:35`, `Track: ScalpingLogic`)
+  - Source: [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md), [lifecycle_decision_matrix.py](/home/ubuntu/KORStockScan/src/engine/lifecycle_decision_matrix.py), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py)
+  - 판정 기준: `lifecycle_decision_matrix_2026-05-19.{json,md}` 생성, `threshold_cycle_ev`/`runtime_approval_summary` source link, fixed threshold role contract, hard safety passthrough, selected/not-applied attribution을 확인한다.
+  - 금지: score bucket 고정 정책, score 단조 EV 가정, hard safety override, 장중 threshold mutation, sim-only real execution 품질 주장.
+  - 다음 액션: `pass`, `hold_sample`, `hold_no_edge`, `source_quality_blocker`, `runtime_env_mapping_gap` 중 하나로 닫고, selected되면 다음 PREOPEN env의 policy file/version/promote cap을 확인한다.
+
 - [ ] `[ShadowCanaryCohortReview0519] shadow/canary/cohort 런타임 분류 및 정리 판정` (`Due: 2026-05-19`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)
   - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)
   - 판정 기준: 당일 변경/관찰 결과를 기준으로 `remove`, `observe-only`, `baseline-promote`, `active-canary` 상태 변동 여부를 닫는다.

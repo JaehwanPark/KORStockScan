@@ -574,6 +574,12 @@ class TradingConfig:
     SCALP_ENTRY_ADM_NEGATIVE_EV_FORCE_WAIT_THRESHOLD_PCT: float = 0.0
     SCALP_ENTRY_ADM_MIN_BUCKET_SAMPLE: int = 1
     SCALP_ENTRY_ADM_MIN_JOINED_SAMPLE: int = 0
+    LIFECYCLE_DECISION_MATRIX_ENABLED: bool = False
+    LIFECYCLE_DECISION_MATRIX_POLICY_FILE: str = ""
+    LIFECYCLE_DECISION_MATRIX_POLICY_VERSION: str = ""
+    LIFECYCLE_DECISION_MATRIX_PROMOTE_ENABLED: bool = False
+    LIFECYCLE_DECISION_MATRIX_MAX_PROMOTES_PER_DAY: int = 3
+    LIFECYCLE_DECISION_MATRIX_MIN_STAGE_CONFIDENCE: float = 0.60
     HOLDING_EXIT_MATRIX_ADVISORY_ENABLED: bool = True  # 운영 override: holding/exit matrix prompt advisory 기본 ON
     HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED: bool = True  # 운영 override: matrix/hypothesis로 HOLD/EXIT action 보정
     HOLDING_EXIT_MATRIX_EXIT_TO_HOLD_ENABLED: bool = True
@@ -1785,6 +1791,18 @@ def _build_trading_rules() -> TradingConfig:
     )
     env_scalp_entry_adm_min_bucket_sample = _env_int("KORSTOCKSCAN_SCALP_ENTRY_ADM_MIN_BUCKET_SAMPLE")
     env_scalp_entry_adm_min_joined_sample = _env_int("KORSTOCKSCAN_SCALP_ENTRY_ADM_MIN_JOINED_SAMPLE")
+    env_lifecycle_decision_matrix_enabled = _env_bool("KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_ENABLED")
+    env_lifecycle_decision_matrix_policy_file = _env_str("KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_POLICY_FILE")
+    env_lifecycle_decision_matrix_policy_version = _env_str("KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_POLICY_VERSION")
+    env_lifecycle_decision_matrix_promote_enabled = _env_bool(
+        "KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_PROMOTE_ENABLED"
+    )
+    env_lifecycle_decision_matrix_max_promotes = _env_int(
+        "KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_MAX_PROMOTES_PER_DAY"
+    )
+    env_lifecycle_decision_matrix_min_confidence = _env_float(
+        "KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_MIN_STAGE_CONFIDENCE"
+    )
     env_scalp_loss_fallback_enabled = _env_bool("KORSTOCKSCAN_SCALP_LOSS_FALLBACK_ENABLED")
     env_scalp_loss_fallback_observe_only = _env_bool("KORSTOCKSCAN_SCALP_LOSS_FALLBACK_OBSERVE_ONLY")
     env_holding_exit_matrix_advisory_enabled = _env_bool("KORSTOCKSCAN_HOLDING_EXIT_MATRIX_ADVISORY_ENABLED")
@@ -1845,6 +1863,12 @@ def _build_trading_rules() -> TradingConfig:
         or env_scalp_entry_adm_negative_ev_force_wait_threshold is not None
         or env_scalp_entry_adm_min_bucket_sample is not None
         or env_scalp_entry_adm_min_joined_sample is not None
+        or env_lifecycle_decision_matrix_enabled is not None
+        or env_lifecycle_decision_matrix_policy_file is not None
+        or env_lifecycle_decision_matrix_policy_version is not None
+        or env_lifecycle_decision_matrix_promote_enabled is not None
+        or env_lifecycle_decision_matrix_max_promotes is not None
+        or env_lifecycle_decision_matrix_min_confidence is not None
         or env_scalp_loss_fallback_enabled is not None
         or env_scalp_loss_fallback_observe_only is not None
         or env_holding_exit_matrix_advisory_enabled is not None
@@ -1895,6 +1919,24 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_ENTRY_ADM_MIN_JOINED_SAMPLE=env_scalp_entry_adm_min_joined_sample
             if env_scalp_entry_adm_min_joined_sample is not None
             else config.SCALP_ENTRY_ADM_MIN_JOINED_SAMPLE,
+            LIFECYCLE_DECISION_MATRIX_ENABLED=env_lifecycle_decision_matrix_enabled
+            if env_lifecycle_decision_matrix_enabled is not None
+            else config.LIFECYCLE_DECISION_MATRIX_ENABLED,
+            LIFECYCLE_DECISION_MATRIX_POLICY_FILE=env_lifecycle_decision_matrix_policy_file
+            if env_lifecycle_decision_matrix_policy_file is not None
+            else config.LIFECYCLE_DECISION_MATRIX_POLICY_FILE,
+            LIFECYCLE_DECISION_MATRIX_POLICY_VERSION=env_lifecycle_decision_matrix_policy_version
+            if env_lifecycle_decision_matrix_policy_version is not None
+            else config.LIFECYCLE_DECISION_MATRIX_POLICY_VERSION,
+            LIFECYCLE_DECISION_MATRIX_PROMOTE_ENABLED=env_lifecycle_decision_matrix_promote_enabled
+            if env_lifecycle_decision_matrix_promote_enabled is not None
+            else config.LIFECYCLE_DECISION_MATRIX_PROMOTE_ENABLED,
+            LIFECYCLE_DECISION_MATRIX_MAX_PROMOTES_PER_DAY=env_lifecycle_decision_matrix_max_promotes
+            if env_lifecycle_decision_matrix_max_promotes is not None
+            else config.LIFECYCLE_DECISION_MATRIX_MAX_PROMOTES_PER_DAY,
+            LIFECYCLE_DECISION_MATRIX_MIN_STAGE_CONFIDENCE=env_lifecycle_decision_matrix_min_confidence
+            if env_lifecycle_decision_matrix_min_confidence is not None
+            else config.LIFECYCLE_DECISION_MATRIX_MIN_STAGE_CONFIDENCE,
             SCALP_LOSS_FALLBACK_ENABLED=env_scalp_loss_fallback_enabled
             if env_scalp_loss_fallback_enabled is not None
             else config.SCALP_LOSS_FALLBACK_ENABLED,

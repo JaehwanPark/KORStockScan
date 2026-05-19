@@ -89,6 +89,12 @@ TARGET_ENV_VALUE_KEYS = {
     "SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION": "max_ws_age_ms_for_caution",
     "SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION": "max_ws_jitter_ms_for_caution",
     "SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION": "max_spread_ratio_for_caution",
+    "LIFECYCLE_DECISION_MATRIX_ENABLED": "enabled",
+    "LIFECYCLE_DECISION_MATRIX_POLICY_FILE": "policy_file",
+    "LIFECYCLE_DECISION_MATRIX_POLICY_VERSION": "policy_version",
+    "LIFECYCLE_DECISION_MATRIX_PROMOTE_ENABLED": "promote_enabled",
+    "LIFECYCLE_DECISION_MATRIX_MAX_PROMOTES_PER_DAY": "max_promotes_per_day",
+    "LIFECYCLE_DECISION_MATRIX_MIN_STAGE_CONFIDENCE": "min_stage_confidence",
 }
 
 

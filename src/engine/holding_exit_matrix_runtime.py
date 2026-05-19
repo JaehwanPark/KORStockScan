@@ -6,6 +6,10 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from src.engine.lifecycle_decision_matrix_runtime import (
+    apply_lifecycle_decision_to_payload,
+    resolve_lifecycle_decision,
+)
 from src.utils.constants import DATA_DIR, TRADING_RULES
 
 
@@ -310,6 +314,30 @@ def resolve_holding_exit_matrix_scale_in_bias(
     held_sec: int,
 ) -> dict[str, Any]:
     """Runtime override hook for ADM-driven avg-down/pyramid proposals."""
+    lifecycle_decision = resolve_lifecycle_decision(
+        stage="scale_in",
+        original_action="NO_CHANGE",
+        context={
+            "profit_rate": profit_rate,
+            "peak_profit": peak_profit,
+            "current_ai_score": current_ai_score,
+            "held_sec": held_sec,
+        },
+    )
+    lifecycle_effect = str(lifecycle_decision.get("lifecycle_matrix_runtime_effect") or "")
+    if lifecycle_effect in {"avg_down_bias", "pyramid_bias"}:
+        add_type = "AVG_DOWN" if lifecycle_effect == "avg_down_bias" else "PYRAMID"
+        return {
+            "should_add": True,
+            "add_type": add_type,
+            "reason": f"lifecycle_decision_matrix_{add_type.lower()}",
+            "profit_rate": profit_rate,
+            "peak_profit": peak_profit,
+            "current_ai_score": current_ai_score,
+            "held_sec": held_sec,
+            "holding_exit_matrix_scale_in_bias": add_type,
+            **lifecycle_decision,
+        }
     if not bool(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED", False)):
         return {"should_add": False, "reason": "holding_exit_matrix_scale_in_bias_disabled"}
     raw_strategy = str(strategy or "").upper()
@@ -524,4 +552,16 @@ def merge_holding_exit_matrix_result_fields(
         list(context.get("matched_entries") or []),
     )
     payload.update(fields)
+    lifecycle_context = {
+        **fields,
+        **(position_ctx or {}),
+        "hard_safety_veto": str((position_ctx or {}).get("exit_rule") or "").lower()
+        in {"hard_stop", "emergency_stop", "market_closed", "invalid_feature"},
+    }
+    lifecycle_decision = resolve_lifecycle_decision(
+        stage="holding",
+        original_action=str(payload.get("action_v2") or payload.get("action") or action or ""),
+        context=lifecycle_context,
+    )
+    payload = apply_lifecycle_decision_to_payload(payload, lifecycle_decision)
     return payload

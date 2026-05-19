@@ -50,6 +50,7 @@ from src.engine.sniper_strength_shadow_feedback import record_shadow_candidate
 from src.engine.sniper_gatekeeper_replay import record_gatekeeper_snapshot
 from src.engine.sniper_post_sell_feedback import record_sim_post_sell_candidate
 from src.engine.holding_exit_matrix_runtime import resolve_holding_exit_matrix_scale_in_bias
+from src.engine.lifecycle_decision_matrix_runtime import resolve_lifecycle_decision
 from src.engine.sniper_dynamic_thresholds import (
     estimate_turnover_hint,
     get_dynamic_scalp_thresholds,
@@ -8470,6 +8471,33 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             },
         )
         return False
+
+    lifecycle_submit_decision = resolve_lifecycle_decision(
+        stage="submit",
+        original_action="ALLOW_SUBMIT",
+        context={
+            **submit_revalidation_fields,
+            **latency_price_snapshot,
+            **entry_orderbook_micro_fields,
+            "ai_score": latency_signal_score,
+            "liquidity_value": int(liquidity_value),
+            "stale_quote_submit_block": False,
+            "broker_submit_blocked": False,
+        },
+    )
+    submit_revalidation_fields.update(lifecycle_submit_decision)
+    if lifecycle_submit_decision.get("lifecycle_matrix_enabled"):
+        lifecycle_submit_log_fields = {
+            **submit_revalidation_fields,
+            **latency_price_snapshot,
+            **entry_orderbook_micro_fields,
+        }
+        _log_entry_pipeline(
+            stock,
+            code,
+            "lifecycle_decision_matrix_runtime_policy",
+            **lifecycle_submit_log_fields,
+        )
 
     big_bite_summary = ""
     if stock.get('big_bite_triggered') or stock.get('big_bite_confirmed'):

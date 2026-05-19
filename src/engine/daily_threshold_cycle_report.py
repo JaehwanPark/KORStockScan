@@ -21,6 +21,7 @@ REPORT_DIR = DATA_DIR / "report"
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
 STAT_ACTION_REPORT_DIR = REPORT_DIR / "statistical_action_weight"
 AI_DECISION_MATRIX_DIR = REPORT_DIR / "holding_exit_decision_matrix"
+LIFECYCLE_DECISION_MATRIX_DIR = REPORT_DIR / "lifecycle_decision_matrix"
 CUMULATIVE_THRESHOLD_REPORT_DIR = REPORT_DIR / "threshold_cycle_cumulative"
 THRESHOLD_CALIBRATION_REPORT_DIR = REPORT_DIR / "threshold_cycle_calibration"
 THRESHOLD_AI_REVIEW_DIR = REPORT_DIR / "threshold_cycle_ai_review"
@@ -354,6 +355,33 @@ CALIBRATION_FAMILY_METADATA = {
             "use": "ADM/SAW advisory는 최신 matrix edge 존재 여부를 보되 bucket confidence는 rolling action weight를 참조한다.",
             "daily_only_allowed": False,
         },
+        "allowed_runtime_apply": True,
+    },
+    "lifecycle_decision_matrix_runtime": {
+        "priority": 31,
+        "source_family": "lifecycle_decision_matrix_runtime",
+        "target_env_keys": [
+            "LIFECYCLE_DECISION_MATRIX_ENABLED",
+            "LIFECYCLE_DECISION_MATRIX_POLICY_FILE",
+            "LIFECYCLE_DECISION_MATRIX_POLICY_VERSION",
+            "LIFECYCLE_DECISION_MATRIX_PROMOTE_ENABLED",
+            "LIFECYCLE_DECISION_MATRIX_MAX_PROMOTES_PER_DAY",
+            "LIFECYCLE_DECISION_MATRIX_MIN_STAGE_CONFIDENCE",
+        ],
+        "primary_key": "enabled",
+        "bounds": {
+            "max_promotes_per_day": {"min": 1, "max": 3, "max_step_per_day": 1},
+            "min_stage_confidence": {"min": 0.40, "max": 0.90, "max_step_per_day": 0.10},
+        },
+        "sample_floor": 20,
+        "sample_window": "same_day_source_bundle_plus_rolling_threshold_cycle_consumer",
+        "window_policy": {
+            "primary": "latest_report",
+            "secondary": ["rolling_5d", "cumulative_since_2026-04-21"],
+            "use": "lifecycle matrix는 기존 fixed threshold를 hard_safety/baseline_prior/bounded_tunable/archive로 분류하고 stage별 weighted ADM action을 다음 장전 bounded micro canary로만 적용한다.",
+            "daily_only_allowed": False,
+        },
+        "sample_denominator_keys": ["total_rows", "joined_rows"],
         "allowed_runtime_apply": True,
     },
     "scale_in_price_guard": {
@@ -4375,6 +4403,7 @@ def _build_family_reports(
         _build_position_sizing_cap_release_family(events, completed_rows),
         _build_position_sizing_dynamic_formula_family(events, completed_rows),
         _build_statistical_action_weight_family(events, completed_rows, target_date=target_date),
+        _build_lifecycle_decision_matrix_runtime_family(target_date),
     ]
 
 
@@ -4429,6 +4458,54 @@ def _build_report_source_families(report_source_context: dict | None) -> list[di
             ],
         }
     ]
+
+
+def _build_lifecycle_decision_matrix_runtime_family(target_date: str | None) -> dict:
+    target = str(target_date or date.today().isoformat())
+    path = LIFECYCLE_DECISION_MATRIX_DIR / f"lifecycle_decision_matrix_{target}.json"
+    payload = _read_json_dict(path)
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    policy_entries = payload.get("policy_entries") if isinstance(payload.get("policy_entries"), list) else []
+    total_rows = _safe_int(summary.get("total_rows"), 0) or 0
+    joined_rows = _safe_int(summary.get("joined_rows"), 0) or 0
+    policy_pass_count = _safe_int(summary.get("policy_pass_count"), 0) or 0
+    promote_ready_count = _safe_int(summary.get("promote_ready_count"), 0) or 0
+    matrix_version = str(payload.get("matrix_version") or "")
+    apply_ready = bool(payload) and total_rows >= 20 and joined_rows >= 10 and policy_pass_count > 0
+    return {
+        "family": "lifecycle_decision_matrix_runtime",
+        "stage": "lifecycle",
+        "sample": {
+            "total_rows": total_rows,
+            "joined_rows": joined_rows,
+            "policy_pass_count": policy_pass_count,
+            "promote_ready_count": promote_ready_count,
+            "policy_entry_count": len([item for item in policy_entries if isinstance(item, dict)]),
+        },
+        "apply_ready": apply_ready,
+        "current": {
+            "enabled": False,
+            "policy_file": "",
+            "policy_version": "",
+            "promote_enabled": False,
+            "max_promotes_per_day": 3,
+            "min_stage_confidence": 0.60,
+        },
+        "recommended": {
+            "enabled": apply_ready,
+            "policy_file": str(path) if path.exists() else "",
+            "policy_version": matrix_version,
+            "promote_enabled": bool(promote_ready_count > 0),
+            "max_promotes_per_day": 3,
+            "min_stage_confidence": 0.60,
+        },
+        "apply_mode": "efficient_tradeoff_canary_candidate" if apply_ready else "report_only_calibration",
+        "notes": [
+            "umbrella family: entry/submit/holding/scale_in/exit stage arms를 하나의 policy version으로 관리한다.",
+            "fixed threshold는 hard_safety/baseline_prior/bounded_tunable/legacy_archive role contract로만 해석한다.",
+            "BUY 승격은 micro canary cap과 hard safety guard 통과 시 BUY_DEFENSIVE로만 제한한다.",
+        ],
+    }
 
 
 def _build_apply_candidate_list(families: list[dict]) -> list[dict]:
@@ -4538,6 +4615,8 @@ def _source_metrics_for_family(output_family: str, report_source_context: dict |
         return metrics.get("bad_entry") if isinstance(metrics.get("bad_entry"), dict) else {}
     if output_family == "holding_exit_decision_matrix_advisory":
         return metrics.get("decision_support") if isinstance(metrics.get("decision_support"), dict) else {}
+    if output_family == "lifecycle_decision_matrix_runtime":
+        return metrics.get("lifecycle_decision_matrix") if isinstance(metrics.get("lifecycle_decision_matrix"), dict) else {}
     if output_family == "scale_in_price_guard":
         return metrics.get("scale_in_price_guard") if isinstance(metrics.get("scale_in_price_guard"), dict) else {}
     if output_family == "soft_stop_whipsaw_confirmation":
@@ -4578,6 +4657,11 @@ def _source_sample_count_for_family(output_family: str, source_metrics: dict) ->
         )
     if output_family == "holding_exit_decision_matrix_advisory":
         return _safe_int(source_metrics.get("matrix_entries"), 0) or 0
+    if output_family == "lifecycle_decision_matrix_runtime":
+        return max(
+            _safe_int(source_metrics.get("total_rows"), 0) or 0,
+            _safe_int(source_metrics.get("joined_rows"), 0) or 0,
+        )
     if output_family == "scale_in_price_guard":
         guard_events = (
             (_safe_int(source_metrics.get("scale_in_price_resolved"), 0) or 0)
@@ -4659,6 +4743,21 @@ def _calibration_state_for_family(
             return ("hold_sample", "SAW candidate_weight_source bucket이 없어 advisory canary 후보 유지")
         if counterfactual_gap_count > 0:
             return ("hold_sample", "ADM action별 exit_only/avg_down/pyramid counterfactual coverage가 닫히지 않음")
+    if output_family == "lifecycle_decision_matrix_runtime":
+        family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
+        joined_rows = _safe_int(family_sample.get("joined_rows"), 0) or 0
+        policy_pass_count = _safe_int(family_sample.get("policy_pass_count"), 0) or 0
+        if sample_count < sample_floor or joined_rows < 10:
+            return (
+                "hold_sample",
+                f"lifecycle matrix source sample floor 미달(rows={sample_count}/{sample_floor}, joined={joined_rows}/10)",
+            )
+        if policy_pass_count <= 0:
+            return ("hold_no_edge", "stage policy 중 source-quality pass arm이 없어 runtime policy 적용 보류")
+        return (
+            "adjust_up",
+            "lifecycle matrix weighted ADM source가 balanced gate를 통과해 다음 장전 umbrella micro canary 후보",
+        )
     if output_family == "score65_74_recovery_probe":
         family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
         avg_ev = _safe_float(source_metrics.get("score65_74_avg_expected_ev_pct"), None)
@@ -4877,6 +4976,22 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
         current = family.get("current") if isinstance(family.get("current"), dict) else {}
         recommended = family.get("recommended") if isinstance(family.get("recommended"), dict) else {}
         source_metrics = dict(_source_metrics_for_family(output_family, report_source_context))
+        if output_family == "lifecycle_decision_matrix_runtime":
+            family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
+            source_metrics.update(
+                {
+                    "total_rows": _safe_int(family_sample.get("total_rows"), 0) or 0,
+                    "joined_rows": _safe_int(family_sample.get("joined_rows"), 0) or 0,
+                    "policy_pass_count": _safe_int(family_sample.get("policy_pass_count"), 0) or 0,
+                    "promote_ready_count": _safe_int(family_sample.get("promote_ready_count"), 0) or 0,
+                    "fixed_threshold_roles": {
+                        "hard_safety": "override_forbidden",
+                        "baseline_prior": "feature_only",
+                        "bounded_tunable": "threshold_cycle_bounds_required",
+                        "legacy_archive": "runtime_feature_forbidden",
+                    },
+                }
+            )
         if output_family == "bad_entry_refined_canary":
             family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
             lifecycle_attribution = family_sample.get("lifecycle_attribution")
@@ -5023,6 +5138,7 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
                     "score65_74_recovery_probe",
                     "bad_entry_refined_canary",
                     "holding_exit_decision_matrix_advisory",
+                    "lifecycle_decision_matrix_runtime",
                 }
             )
             else "calibrated_apply_candidate"
@@ -5230,6 +5346,7 @@ def _apply_mode_for_candidate_state(candidate: dict, state: str, sample_ready: b
         "score65_74_recovery_probe",
         "bad_entry_refined_canary",
         "holding_exit_decision_matrix_advisory",
+        "lifecycle_decision_matrix_runtime",
     }:
         return "efficient_tradeoff_canary_candidate"
     return "calibrated_apply_candidate"

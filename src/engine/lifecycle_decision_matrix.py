@@ -1,0 +1,522 @@
+"""Build the lifecycle decision matrix source artifact.
+
+The matrix is a postclose source bundle. Runtime code may consume the latest
+policy section, but labels such as MFE/MAE/close are never runtime inputs.
+"""
+
+from __future__ import annotations
+
+import argparse
+import gzip
+import json
+from collections import Counter, defaultdict
+from datetime import date, datetime
+from pathlib import Path
+from typing import Any, Iterable
+
+from src.engine.daily_threshold_cycle_report import REPORT_DIR
+from src.engine.scalp_entry_action_decision_matrix import report_paths as entry_adm_report_paths
+
+
+MATRIX_DIR = REPORT_DIR / "lifecycle_decision_matrix"
+POST_SELL_DIR = Path(__file__).resolve().parents[2] / "data" / "post_sell"
+MONITOR_SNAPSHOT_DIR = REPORT_DIR / "monitor_snapshots"
+
+REPORT_SCHEMA_VERSION = 1
+MATRIX_VERSION_PREFIX = "lifecycle_decision_matrix_v1"
+SAMPLE_FLOOR = 20
+JOINED_SAMPLE_FLOOR = 10
+PROMOTE_JOINED_SAMPLE_FLOOR = 20
+PROMOTE_MIN_EV_PCT = 0.30
+
+RUNTIME_FEATURE_KEYS = {
+    "ai_score",
+    "ai_action",
+    "chosen_action",
+    "score_bucket",
+    "risk_context_bucket",
+    "stale_bucket",
+    "price_resolution_bucket",
+    "liquidity_bucket",
+    "overbought_bucket",
+    "time_bucket",
+    "actual_order_submitted",
+    "broker_order_forbidden",
+    "context_age_ms",
+    "quote_age_ms",
+    "entry_submit_revalidation_warning",
+    "entry_submit_revalidation_block",
+    "best_bid",
+    "best_ask",
+    "resolved_order_price",
+    "would_limit_fill",
+    "source_quality_block_reason",
+    "gate_action",
+    "profit_rate_live",
+    "peak_profit",
+    "held_sec",
+    "ofi",
+    "qi",
+}
+
+LABEL_KEYS = {
+    "profit_rate",
+    "exit_rule",
+    "sim_post_sell_outcome",
+    "mfe_10m_pct",
+    "mae_10m_pct",
+    "close_10m_pct",
+    "mfe_30m_pct",
+    "mae_30m_pct",
+    "close_30m_pct",
+    "mfe_60m_pct",
+    "mae_60m_pct",
+    "close_60m_pct",
+    "missed_winner",
+    "avoided_loser",
+}
+
+HARD_SAFETY_THRESHOLDS = [
+    "broker_submit_guard",
+    "stale_quote_submit_block",
+    "price_freshness_guard",
+    "hard_stop",
+    "protect_stop",
+    "emergency_stop",
+    "account_order_cooldown_qty_guard",
+]
+
+BASELINE_PRIOR_THRESHOLDS = [
+    "BUY_SCORE_THRESHOLD",
+    "VPW_MIN_SCORE",
+    "strength_momentum_cutoff",
+    "entry_score_cutoff",
+]
+
+BOUNDED_TUNABLE_THRESHOLDS = [
+    "SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION",
+    "SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION",
+    "SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION",
+    "score65_74_recovery_probe",
+    "soft_stop_whipsaw_confirmation",
+    "holding_flow_override",
+    "scale_in_price_guard",
+]
+
+LEGACY_ARCHIVE_THRESHOLDS = [
+    "fallback_scout_main",
+    "fallback_single",
+    "latency_fallback_split_entry",
+    "legacy_latency_composite",
+    "closed_shadow_axes",
+]
+
+
+def report_paths(target_date: str) -> tuple[Path, Path]:
+    base = MATRIX_DIR / f"lifecycle_decision_matrix_{target_date}"
+    return base.with_suffix(".json"), base.with_suffix(".md")
+
+
+def _safe_float(value: Any, default: float | None = 0.0) -> float | None:
+    try:
+        if value in (None, ""):
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        if value in (None, ""):
+            return default
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _load_json(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _open_text(path: Path):
+    if path.suffix == ".gz":
+        return gzip.open(path, "rt", encoding="utf-8", errors="ignore")
+    return path.open("r", encoding="utf-8", errors="ignore")
+
+
+def _iter_jsonl(path: Path) -> Iterable[dict[str, Any]]:
+    if not path.exists():
+        return
+    try:
+        with _open_text(path) as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(payload, dict):
+                    yield payload
+    except OSError:
+        return
+
+
+def fixed_threshold_contract() -> dict[str, Any]:
+    return {
+        "priority": [
+            "hard_safety_veto",
+            "account_order_broker_guard",
+            "lifecycle_matrix_runtime_policy",
+            "existing_adm_adapter",
+            "baseline_fixed_threshold_fallback",
+        ],
+        "roles": {
+            "hard_safety": HARD_SAFETY_THRESHOLDS,
+            "baseline_prior": BASELINE_PRIOR_THRESHOLDS,
+            "bounded_tunable": BOUNDED_TUNABLE_THRESHOLDS,
+            "legacy_archive": LEGACY_ARCHIVE_THRESHOLDS,
+        },
+        "forbidden_uses": [
+            "hard_safety_override",
+            "intraday_threshold_mutation",
+            "legacy_archive_as_runtime_feature",
+            "score_monotonic_ev_assumption",
+        ],
+    }
+
+
+def _stage_for_row(row: dict[str, Any]) -> str:
+    stage = str(row.get("stage") or "")
+    action = str(row.get("chosen_action") or "").upper()
+    if stage in {"entry_submit_revalidation_warning", "entry_submit_revalidation_block"}:
+        return "submit"
+    if stage.startswith("pre_submit_") or stage in {"latency_pass", "latency_block", "order_bundle_submitted"}:
+        return "submit"
+    if action in {"BUY_NOW", "BUY_DEFENSIVE", "NO_BUY_AI", "WAIT_REQUOTE", "SKIP_STALE", "SKIP_SOURCE_QUALITY"}:
+        return "entry"
+    return "entry"
+
+
+def _runtime_features(row: dict[str, Any]) -> dict[str, Any]:
+    return {key: row.get(key) for key in sorted(RUNTIME_FEATURE_KEYS) if key in row}
+
+
+def _labels(row: dict[str, Any]) -> dict[str, Any]:
+    return {key: row.get(key) for key in sorted(LABEL_KEYS) if key in row}
+
+
+def _stage_ev(stage: str, labels: dict[str, Any]) -> float | None:
+    realized = _safe_float(labels.get("profit_rate"), None)
+    mfe = _safe_float(labels.get("mfe_10m_pct"), None)
+    mae = _safe_float(labels.get("mae_10m_pct"), None)
+    close = _safe_float(labels.get("close_10m_pct"), None)
+    if all(value is None for value in (realized, mfe, mae, close)):
+        return None
+    mfe_capped = min(float(mfe or 0.0), 3.0)
+    mae_value = float(mae or 0.0)
+    close_value = float(close if close is not None else realized or 0.0)
+    realized_value = float(realized if realized is not None else close_value)
+    if stage in {"entry", "submit"}:
+        return round(0.45 * close_value + 0.35 * mfe_capped + 0.20 * mae_value, 4)
+    if stage == "scale_in":
+        return round(0.40 * realized_value + 0.30 * close_value + 0.20 * mfe_capped + 0.10 * mae_value, 4)
+    return round(0.50 * realized_value + 0.25 * close_value + 0.15 * mfe_capped + 0.10 * mae_value, 4)
+
+
+def _load_entry_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    json_path, _ = entry_adm_report_paths(target_date)
+    payload = _load_json(json_path)
+    rows: list[dict[str, Any]] = []
+    for item in payload.get("examples") or []:
+        if not isinstance(item, dict):
+            continue
+        stage = _stage_for_row(item)
+        labels = _labels(item)
+        rows.append(
+            {
+                "candidate_id": item.get("candidate_id"),
+                "stock_code": item.get("stock_code"),
+                "event_time": item.get("event_time"),
+                "stage": stage,
+                "source_stage": item.get("stage"),
+                "runtime_features": _runtime_features(item),
+                "labels": labels,
+                "stage_ev_composite_pct": _stage_ev(stage, labels),
+                "outcome_joined": bool(item.get("outcome_joined")),
+                "actual_order_submitted": bool(item.get("actual_order_submitted")),
+                "source": "scalp_entry_action_decision_matrix",
+            }
+        )
+    return rows, {"artifact": str(json_path) if json_path.exists() else None, "rows": len(rows)}
+
+
+def _load_sim_post_sell_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    path = POST_SELL_DIR / f"sim_post_sell_evaluations_{target_date}.jsonl"
+    rows: list[dict[str, Any]] = []
+    for item in _iter_jsonl(path) or []:
+        if not isinstance(item, dict):
+            continue
+        metrics = item.get("metrics_10m") if isinstance(item.get("metrics_10m"), dict) else {}
+        labels = {
+            "profit_rate": item.get("profit_rate"),
+            "exit_rule": item.get("exit_rule"),
+            "sim_post_sell_outcome": item.get("outcome"),
+            "mfe_10m_pct": metrics.get("mfe_pct"),
+            "mae_10m_pct": metrics.get("mae_pct"),
+            "close_10m_pct": metrics.get("close_ret_pct"),
+        }
+        stage = "exit"
+        rows.append(
+            {
+                "candidate_id": item.get("candidate_id") or item.get("entry_adm_candidate_id") or item.get("sim_record_id"),
+                "stock_code": item.get("stock_code"),
+                "event_time": item.get("evaluated_at") or item.get("exit_time"),
+                "stage": stage,
+                "source_stage": "sim_post_sell_evaluation",
+                "runtime_features": {
+                    "ai_score": item.get("ai_score"),
+                    "chosen_action": item.get("exit_rule"),
+                    "fixed_threshold_contract_role": "bounded_tunable",
+                },
+                "labels": labels,
+                "stage_ev_composite_pct": _stage_ev(stage, labels),
+                "outcome_joined": True,
+                "actual_order_submitted": False,
+                "source": "sim_post_sell_evaluations",
+            }
+        )
+    return rows, {"artifact": str(path) if path.exists() else None, "rows": len(rows)}
+
+
+def _load_wait6579_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    path = MONITOR_SNAPSHOT_DIR / f"wait6579_ev_cohort_{target_date}.json"
+    payload = _load_json(path)
+    candidates = payload.get("rows") if isinstance(payload.get("rows"), list) else []
+    if not candidates:
+        candidates = payload.get("candidates") if isinstance(payload.get("candidates"), list) else []
+    rows: list[dict[str, Any]] = []
+    for item in candidates[:500]:
+        if not isinstance(item, dict):
+            continue
+        labels = {
+            "mfe_10m_pct": item.get("mfe_10m_pct"),
+            "mae_10m_pct": item.get("mae_10m_pct"),
+            "close_10m_pct": item.get("close_10m_pct"),
+            "profit_rate": item.get("expected_ev_pct"),
+        }
+        rows.append(
+            {
+                "candidate_id": item.get("candidate_id") or item.get("record_id") or item.get("stock_code"),
+                "stock_code": item.get("stock_code"),
+                "event_time": item.get("event_time") or item.get("observed_at"),
+                "stage": "entry",
+                "source_stage": "wait6579_ev_cohort",
+                "runtime_features": {
+                    "ai_score": item.get("ai_score"),
+                    "buy_pressure": item.get("buy_pressure"),
+                    "tick_accel": item.get("tick_accel"),
+                    "micro_vwap_bp": item.get("micro_vwap_bp"),
+                    "latency_state": item.get("latency_state"),
+                    "fixed_threshold_contract_role": "baseline_prior",
+                },
+                "labels": labels,
+                "stage_ev_composite_pct": _stage_ev("entry", labels),
+                "outcome_joined": True,
+                "actual_order_submitted": False,
+                "source": "wait6579_ev_cohort",
+            }
+        )
+    return rows, {"artifact": str(path) if path.exists() else None, "rows": len(rows)}
+
+
+def _policy_action_for(stage: str, rows: list[dict[str, Any]]) -> str:
+    joined = [row for row in rows if row.get("stage_ev_composite_pct") is not None]
+    if not joined:
+        return "NO_CHANGE"
+    avg_ev = sum(float(row["stage_ev_composite_pct"]) for row in joined) / len(joined)
+    if stage in {"entry", "submit"}:
+        if avg_ev >= PROMOTE_MIN_EV_PCT:
+            return "BUY_DEFENSIVE" if stage == "entry" else "ALLOW_SUBMIT"
+        if avg_ev < 0:
+            return "WAIT_REQUOTE" if stage == "entry" else "NO_CHANGE"
+    if stage in {"holding", "scale_in", "exit"}:
+        if avg_ev >= PROMOTE_MIN_EV_PCT:
+            return "HOLD" if stage != "scale_in" else "PYRAMID_BIAS"
+        if avg_ev < 0:
+            return "EXIT" if stage != "scale_in" else "NO_CHANGE"
+    return "NO_CHANGE"
+
+
+def _policy_entries(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped[str(row.get("stage") or "unknown")].append(row)
+    entries: list[dict[str, Any]] = []
+    for stage in ("entry", "submit", "holding", "scale_in", "exit"):
+        subset = grouped.get(stage, [])
+        joined = [row for row in subset if row.get("stage_ev_composite_pct") is not None]
+        sample = len(subset)
+        joined_sample = len(joined)
+        join_rate = (joined_sample / sample) if sample else 0.0
+        avg_ev = (
+            round(sum(float(row["stage_ev_composite_pct"]) for row in joined) / joined_sample, 4)
+            if joined_sample
+            else None
+        )
+        confidence = round(min(1.0, (joined_sample / JOINED_SAMPLE_FLOOR) * join_rate), 4) if sample else 0.0
+        source_quality = "pass" if sample >= SAMPLE_FLOOR and joined_sample >= JOINED_SAMPLE_FLOOR else "hold_sample"
+        selected_action = _policy_action_for(stage, subset)
+        promote_ready = (
+            stage == "entry"
+            and selected_action == "BUY_DEFENSIVE"
+            and joined_sample >= PROMOTE_JOINED_SAMPLE_FLOOR
+            and (avg_ev or 0.0) >= PROMOTE_MIN_EV_PCT
+            and source_quality == "pass"
+        )
+        entries.append(
+            {
+                "policy_key": f"{stage}:weighted_adm_v1",
+                "stage": stage,
+                "sample": sample,
+                "joined_sample": joined_sample,
+                "join_rate": round(join_rate, 4),
+                "stage_ev_composite_pct": avg_ev,
+                "confidence": confidence,
+                "source_quality_gate": source_quality,
+                "selected_action": selected_action,
+                "promote_ready": promote_ready,
+                "allowed_actions": _allowed_actions(stage),
+            }
+        )
+    return entries
+
+
+def _allowed_actions(stage: str) -> list[str]:
+    return {
+        "entry": ["BUY_DEFENSIVE", "WAIT_REQUOTE", "DROP", "NO_CHANGE"],
+        "submit": ["ALLOW_SUBMIT", "NO_CHANGE"],
+        "holding": ["HOLD", "EXIT", "NO_CHANGE"],
+        "scale_in": ["AVG_DOWN_BIAS", "PYRAMID_BIAS", "NO_CHANGE"],
+        "exit": ["HOLD", "EXIT", "NO_CHANGE"],
+    }.get(stage, ["NO_CHANGE"])
+
+
+def build_lifecycle_decision_matrix_report(target_date: str) -> dict[str, Any]:
+    target_date = str(target_date).strip()
+    source_loaders = [_load_entry_rows, _load_sim_post_sell_rows, _load_wait6579_rows]
+    rows: list[dict[str, Any]] = []
+    sources: dict[str, Any] = {}
+    for loader in source_loaders:
+        loaded_rows, summary = loader(target_date)
+        rows.extend(loaded_rows)
+        sources[loader.__name__.removeprefix("_load_").removesuffix("_rows")] = summary
+    rows = rows[:2000]
+    policy_entries = _policy_entries(rows)
+    warnings: list[str] = []
+    if not rows:
+        warnings.append("lifecycle_rows_missing")
+    if all(entry.get("source_quality_gate") != "pass" for entry in policy_entries):
+        warnings.append("all_stage_policy_entries_below_sample_floor")
+    report = {
+        "schema_version": REPORT_SCHEMA_VERSION,
+        "date": target_date,
+        "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "report_type": "lifecycle_decision_matrix",
+        "matrix_version": f"{MATRIX_VERSION_PREFIX}_{target_date}",
+        "runtime_effect": False,
+        "decision_authority": "weighted_adm_source_bundle_for_auto_bounded_apply",
+        "metric_role": "primary_ev",
+        "window_policy": "same_day_source_bundle_plus_rolling_threshold_cycle_consumer",
+        "sample_floor": SAMPLE_FLOOR,
+        "joined_sample_floor": JOINED_SAMPLE_FLOOR,
+        "primary_decision_metric": "stage_ev_composite_pct",
+        "source_quality_gate": "stage sample, joined outcome, fixed threshold contract, no future-label runtime inputs",
+        "forbidden_uses": [
+            "hard_safety_override",
+            "real_execution_quality_from_sim_only",
+            "intraday_threshold_mutation",
+            "runtime_feature_future_label_leakage",
+        ],
+        "fixed_threshold_contract": fixed_threshold_contract(),
+        "runtime_feature_keys": sorted(RUNTIME_FEATURE_KEYS),
+        "label_keys": sorted(LABEL_KEYS),
+        "summary": {
+            "total_rows": len(rows),
+            "joined_rows": sum(1 for row in rows if row.get("stage_ev_composite_pct") is not None),
+            "stage_counts": dict(Counter(str(row.get("stage") or "unknown") for row in rows)),
+            "policy_pass_count": sum(1 for entry in policy_entries if entry.get("source_quality_gate") == "pass"),
+            "promote_ready_count": sum(1 for entry in policy_entries if entry.get("promote_ready")),
+            "status": "pass" if not warnings else "warning",
+            "warnings": warnings,
+        },
+        "policy_entries": policy_entries,
+        "examples": rows[:50],
+        "sources": sources,
+        "warnings": warnings,
+    }
+    MATRIX_DIR.mkdir(parents=True, exist_ok=True)
+    json_path, md_path = report_paths(target_date)
+    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    md_path.write_text(render_lifecycle_decision_matrix_markdown(report), encoding="utf-8")
+    return report
+
+
+def render_lifecycle_decision_matrix_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    lines = [
+        f"# Lifecycle Decision Matrix - {report.get('date')}",
+        "",
+        "## Contract",
+        f"- matrix_version: `{report.get('matrix_version')}`",
+        f"- runtime_effect: `{report.get('runtime_effect')}`",
+        f"- decision_authority: `{report.get('decision_authority')}`",
+        f"- primary_decision_metric: `{report.get('primary_decision_metric')}`",
+        "",
+        "## Summary",
+        f"- total_rows: `{summary.get('total_rows')}`",
+        f"- joined_rows: `{summary.get('joined_rows')}`",
+        f"- policy_pass_count: `{summary.get('policy_pass_count')}`",
+        f"- promote_ready_count: `{summary.get('promote_ready_count')}`",
+        f"- warnings: `{summary.get('warnings')}`",
+        "",
+        "## Policy Entries",
+        "| stage | sample | joined | ev | confidence | source_quality | action | promote_ready |",
+        "| --- | ---: | ---: | ---: | ---: | --- | --- | --- |",
+    ]
+    for item in report.get("policy_entries") or []:
+        if not isinstance(item, dict):
+            continue
+        lines.append(
+            f"| `{item.get('stage')}` | {item.get('sample')} | {item.get('joined_sample')} | "
+            f"{item.get('stage_ev_composite_pct')} | {item.get('confidence')} | "
+            f"`{item.get('source_quality_gate')}` | `{item.get('selected_action')}` | {item.get('promote_ready')} |"
+        )
+    contract = report.get("fixed_threshold_contract") if isinstance(report.get("fixed_threshold_contract"), dict) else {}
+    roles = contract.get("roles") if isinstance(contract.get("roles"), dict) else {}
+    lines.extend(["", "## Fixed Threshold Roles", ""])
+    for role, values in roles.items():
+        lines.append(f"- `{role}`: {', '.join(str(value) for value in values)}")
+    lines.extend(["", "## Forbidden Uses", ""])
+    for item in report.get("forbidden_uses") or []:
+        lines.append(f"- `{item}`")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Build lifecycle decision matrix report.")
+    parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
+    args = parser.parse_args(argv)
+    build_lifecycle_decision_matrix_report(args.target_date)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

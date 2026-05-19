@@ -296,6 +296,84 @@ def test_auto_bounded_live_imports_latency_classifier_recommendation(tmp_path, m
     assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION"] == "0.01"
 
 
+def test_auto_bounded_live_writes_lifecycle_decision_matrix_policy_env(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    ai_dir = report_dir / "threshold_cycle_ai_review"
+    report_dir.mkdir(parents=True)
+    ai_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "AI_REVIEW_DIR", ai_dir)
+
+    policy_file = "data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_2026-05-08.json"
+    (report_dir / "threshold_cycle_2026-05-08.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-08",
+                "calibration_candidates": [
+                    {
+                        "family": "lifecycle_decision_matrix_runtime",
+                        "stage": "lifecycle",
+                        "priority": 31,
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": False,
+                        "calibration_state": "adjust_up",
+                        "target_env_keys": [
+                            "LIFECYCLE_DECISION_MATRIX_ENABLED",
+                            "LIFECYCLE_DECISION_MATRIX_POLICY_FILE",
+                            "LIFECYCLE_DECISION_MATRIX_POLICY_VERSION",
+                            "LIFECYCLE_DECISION_MATRIX_PROMOTE_ENABLED",
+                            "LIFECYCLE_DECISION_MATRIX_MAX_PROMOTES_PER_DAY",
+                            "LIFECYCLE_DECISION_MATRIX_MIN_STAGE_CONFIDENCE",
+                        ],
+                        "recommended_values": {
+                            "enabled": True,
+                            "policy_file": policy_file,
+                            "policy_version": "lifecycle_decision_matrix_v1_2026-05-08",
+                            "promote_enabled": True,
+                            "max_promotes_per_day": 3,
+                            "min_stage_confidence": 0.6,
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (ai_dir / "threshold_cycle_ai_review_2026-05-08_postclose.json").write_text(
+        json.dumps(
+            {
+                "ai_status": "parsed",
+                "items": [
+                    {
+                        "family": "lifecycle_decision_matrix_runtime",
+                        "guard_accepted": True,
+                        "ai_anomaly_route": "threshold_candidate",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-11",
+        source_date="2026-05-08",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+    )
+
+    assert manifest["status"] == "auto_bounded_live_ready"
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_ENABLED"] == "true"
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_POLICY_FILE"] == policy_file
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_PROMOTE_ENABLED"] == "true"
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_MAX_PROMOTES_PER_DAY"] == "3"
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_MIN_STAGE_CONFIDENCE"] == "0.6"
+
+
 def test_auto_bounded_live_excludes_ai_instrumentation_gap(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"
@@ -474,6 +552,7 @@ def test_operator_runtime_env_lock_preserves_score65_probe_through_sample_gap(tm
     runtime_dir = tmp_path / "runtime_env"
     ai_dir = report_dir / "threshold_cycle_ai_review"
     lock_dir = tmp_path / "operator_runtime_env_locks"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
     ai_dir.mkdir(parents=True)
     lock_dir.mkdir(parents=True)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
@@ -481,6 +560,7 @@ def test_operator_runtime_env_lock_preserves_score65_probe_through_sample_gap(tm
     monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
     monkeypatch.setattr(mod, "AI_REVIEW_DIR", ai_dir)
     monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
 
     (report_dir / "threshold_cycle_2026-05-18.json").write_text(
         json.dumps(
@@ -560,6 +640,7 @@ def test_operator_runtime_env_lock_does_not_preserve_score65_probe_on_safety_rev
     runtime_dir = tmp_path / "runtime_env"
     ai_dir = report_dir / "threshold_cycle_ai_review"
     lock_dir = tmp_path / "operator_runtime_env_locks"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
     ai_dir.mkdir(parents=True)
     lock_dir.mkdir(parents=True)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
@@ -567,6 +648,7 @@ def test_operator_runtime_env_lock_does_not_preserve_score65_probe_on_safety_rev
     monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
     monkeypatch.setattr(mod, "AI_REVIEW_DIR", ai_dir)
     monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
 
     (report_dir / "threshold_cycle_2026-05-18.json").write_text(
         json.dumps(

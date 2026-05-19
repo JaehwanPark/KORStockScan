@@ -17,6 +17,14 @@ def _isolate_pattern_lab_audit_dirs(tmp_path, monkeypatch):
             tmp_path / "missing_entry_adm" / f"scalp_entry_action_decision_matrix_{target_date}.md",
         ),
     )
+    monkeypatch.setattr(
+        mod,
+        "lifecycle_matrix_report_paths",
+        lambda target_date: (
+            tmp_path / "missing_lifecycle_matrix" / f"lifecycle_decision_matrix_{target_date}.json",
+            tmp_path / "missing_lifecycle_matrix" / f"lifecycle_decision_matrix_{target_date}.md",
+        ),
+    )
 
 
 def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeypatch):
@@ -264,6 +272,7 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
     assert "Missed Probe Counterfactual" in markdown
     assert "Swing Runtime Approval" in markdown
     assert "Scalp Entry ADM" in markdown
+    assert "Lifecycle Decision Matrix" in markdown
     assert "swing_one_share_real_canary_phase0" in markdown
     assert "AVG_DOWN, PYRAMID, SCALE_IN" in markdown
     assert "swing_runtime_approval:2026-05-08:swing_model_floor" in markdown

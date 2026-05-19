@@ -6,6 +6,10 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from src.engine.lifecycle_decision_matrix_runtime import (
+    apply_lifecycle_decision_to_payload,
+    resolve_lifecycle_decision,
+)
 from src.utils.constants import DATA_DIR, TRADING_RULES
 
 
@@ -449,4 +453,15 @@ def merge_scalp_entry_adm_result_fields(
         context.get("matched_bucket") if isinstance(context.get("matched_bucket"), dict) else {},
     )
     payload.update(fields)
+    lifecycle_context = {
+        **fields,
+        "source_quality_block_reason": fields.get("entry_adm_status"),
+        "stale_quote_submit_block": fields.get("entry_adm_stale_bucket") == "stale_high",
+    }
+    lifecycle_decision = resolve_lifecycle_decision(
+        stage="entry",
+        original_action=str(payload.get("action") or payload.get("action_v2") or action or ""),
+        context=lifecycle_context,
+    )
+    payload = apply_lifecycle_decision_to_payload(payload, lifecycle_decision)
     return payload

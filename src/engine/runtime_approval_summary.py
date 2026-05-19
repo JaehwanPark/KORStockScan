@@ -59,6 +59,7 @@ _FAMILY_DESCRIPTIONS = {
     "bad_entry_refined_canary": "진입 직후 never-green/AI fade 위험이 큰 표본을 조기 정리할 수 있는지 보는 축",
     "holding_exit_decision_matrix_advisory": "보유 중 가능한 행동(EXIT/HOLD/AVG_DOWN/PYRAMID)을 matrix 점수로 보조 판단하는 축",
     "scalp_entry_action_decision_matrix_advisory": "스캘핑 entry action(BUY_NOW/WAIT_REQUOTE/SKIP_STALE/BUY_DEFENSIVE 등)을 matrix EV로 비교해 AI action을 보정하는 운영 override 축",
+    "lifecycle_decision_matrix_runtime": "개별 후보 lifecycle row를 entry/submit/holding/scale-in/exit stage별 weighted ADM policy로 해석하는 umbrella runtime 축",
     "scale_in_price_guard": "추가매수 직전 best bid/defensive limit, spread, stale quote로 가격품질을 보장하는 축",
     "position_sizing_cap_release": "신규/추가매수 1주 cap을 풀 수 있는지 EV와 downside 기준으로 보는 축",
     "swing_model_floor": "스윙 추천 모델 floor 값을 올리거나 낮출 수 있는지 보는 선택 기준 축",
@@ -86,6 +87,7 @@ _BASELINE_APPLICATION = {
     "pre_submit_price_guard": "기존 적용/검증 유지: 제출 직전 가격품질 guard 계열",
     "holding_exit_decision_matrix_advisory": "관찰/리포트 only: advisory live 적용 아님",
     "scalp_entry_action_decision_matrix_advisory": "운영 override runtime bias: AI BUY를 WAIT/DROP 또는 defensive bias로 보정, submit safety guard 우선",
+    "lifecycle_decision_matrix_runtime": "기본 OFF: 선택 시 micro canary env로 policy file/version만 연결, hard safety/submit guard 우선",
     "protect_trailing_smoothing": "관찰/리포트 only: protect/trailing live smoothing 미적용",
     "trailing_continuation": "관찰/리포트 only: trailing 연장 live 미적용",
     "bad_entry_refined_canary": "OFF/관찰 only: refined canary live 미적용",
@@ -208,6 +210,13 @@ _SCALPING_GATE_REVIEW = {
         "hard_gate_review": "entry ADM은 bad-entry blacklist가 아니라 BUY_NOW/WAIT_REQUOTE/SKIP_STALE/BUY_DEFENSIVE/NO_BUY action policy를 daily EV로 조정한다",
         "tuning_route": "daily scalp_entry_action_decision_matrix -> threshold EV/runtime summary/workorder/pattern lab -> next runtime env",
         "analysis_coverage": "entry snapshots, sim post-sell join, action bucket EV, runtime forced_action provenance",
+    },
+    "lifecycle_decision_matrix_runtime": {
+        "gate_review_class": "umbrella_weighted_adm_runtime_policy",
+        "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
+        "hard_gate_review": "matrix policy는 hard safety veto, account/order/broker guard 뒤에서만 runtime action proposal을 낸다",
+        "tuning_route": "postclose lifecycle_decision_matrix -> threshold EV/runtime summary -> next preopen bounded env",
+        "analysis_coverage": "candidate lifecycle rows, stage feature matrix, post-decision labels, fixed threshold role attribution",
     },
     "scale_in_price_guard": {
         "gate_review_class": "intentional_pre_submit_safety_guard",
@@ -527,6 +536,69 @@ def _scalping_rows(ev_report: dict[str, Any], calibration_report: dict[str, Any]
             "운영 override runtime bias는 AI BUY를 WAIT/DROP 또는 defensive bias로 보정한다. "
             "daily action bucket EV와 runtime forced_action provenance가 충분해야 다음 env 튜닝 판단으로 넘어간다."
         )
+        rows.append(row)
+    lifecycle_matrix = (
+        ev_report.get("lifecycle_decision_matrix")
+        if isinstance(ev_report.get("lifecycle_decision_matrix"), dict)
+        else {}
+    )
+    if lifecycle_matrix:
+        metrics = lifecycle_matrix.get("metrics") if isinstance(lifecycle_matrix.get("metrics"), dict) else {}
+        total_rows = _as_int(metrics.get("total_rows", lifecycle_matrix.get("total_rows")))
+        joined = _as_int(metrics.get("joined_rows", lifecycle_matrix.get("joined_rows")))
+        floor = _as_int(lifecycle_matrix.get("sample_floor")) or 20
+        pass_count = _as_int(metrics.get("policy_pass_count", lifecycle_matrix.get("policy_pass_count")))
+        promote_ready = _as_int(metrics.get("promote_ready_count", lifecycle_matrix.get("promote_ready_count")))
+        selected_family = "lifecycle_decision_matrix_runtime" in selected
+        if not lifecycle_matrix.get("available"):
+            state = "freeze"
+            reasons = ["source_quality_blocker"]
+        elif total_rows < floor or joined < 10:
+            state = "hold_sample"
+            reasons = ["sample_floor_not_met"]
+        elif pass_count <= 0:
+            state = "hold_no_edge"
+            reasons = ["hold_no_edge"]
+        else:
+            state = "adjust_up" if selected_family else "hold"
+            reasons = ["selected_auto_bounded_live"] if selected_family else ["hold"]
+        policy_entries = (
+            lifecycle_matrix.get("policy_entries")
+            if isinstance(lifecycle_matrix.get("policy_entries"), list)
+            else []
+        )
+        first_ev = next(
+            (
+                item.get("stage_ev_composite_pct")
+                for item in policy_entries
+                if isinstance(item, dict) and item.get("stage_ev_composite_pct") is not None
+            ),
+            None,
+        )
+        row = {
+            "domain": "scalping",
+            "family": "lifecycle_decision_matrix_runtime",
+            "description": _description("lifecycle_decision_matrix_runtime"),
+            "state": state,
+            "current_application": _current_application(
+                "lifecycle_decision_matrix_runtime", state, selected_family
+            ),
+            "state_interpretation": (
+                "선택 시 policy file/version만 다음 PREOPEN env로 연결한다. hard safety와 broker/account/order guard는 "
+                "항상 matrix proposal보다 우선한다."
+            ),
+            "score": first_ev,
+            "score_label": _format_score(first_ev),
+            "sample": {"count": total_rows, "floor": floor, "joined": joined},
+            "reasons": reasons,
+            "reason_label": _reason_text(reasons),
+            "selected_auto_bounded_live": selected_family,
+            "runtime_bias_scope": lifecycle_matrix.get("runtime_bias_scope") or "stage_action_proposal_micro_canary",
+            "fixed_threshold_roles": lifecycle_matrix.get("fixed_threshold_roles") or {},
+            "policy_pass_count": pass_count,
+            "promote_ready_count": promote_ready,
+        }
+        row.update(_gate_review("scalping", "lifecycle_decision_matrix_runtime", reasons))
         rows.append(row)
     return rows
 
@@ -930,6 +1002,59 @@ def _entry_adm_summary(ev_report: dict[str, Any], source_path: str | None) -> di
     }
 
 
+def _lifecycle_matrix_summary(ev_report: dict[str, Any], source_path: str | None) -> dict[str, Any]:
+    matrix = (
+        ev_report.get("lifecycle_decision_matrix")
+        if isinstance(ev_report.get("lifecycle_decision_matrix"), dict)
+        else {}
+    )
+    if not matrix:
+        return {
+            "available": False,
+            "artifact": source_path,
+            "status": "missing",
+            "runtime_effect": False,
+            "decision_authority": "lifecycle_weighted_adm_runtime_policy",
+            "runtime_bias_scope": "stage_action_proposal_micro_canary",
+            "warnings": ["lifecycle_decision_matrix_missing"],
+            "ready_for_bounded_apply": False,
+        }
+
+    total_rows = _as_int(matrix.get("total_rows"))
+    joined_rows = _as_int(matrix.get("joined_rows"))
+    policy_pass_count = _as_int(matrix.get("policy_pass_count"))
+    promote_ready_count = _as_int(matrix.get("promote_ready_count"))
+    warnings: list[str] = []
+    if not matrix.get("available", True):
+        warnings.append("source_quality_blocker")
+    if total_rows < 20 or joined_rows < 10:
+        warnings.append("joined_sample_below_sample_floor")
+    if policy_pass_count <= 0:
+        warnings.append("policy_pass_arm_missing")
+
+    return {
+        "available": bool(matrix.get("available", True)),
+        "artifact": source_path or matrix.get("artifact"),
+        "status": matrix.get("status"),
+        "matrix_version": matrix.get("matrix_version"),
+        "runtime_effect": bool(matrix.get("runtime_effect")),
+        "decision_authority": matrix.get("decision_authority") or "lifecycle_weighted_adm_runtime_policy",
+        "runtime_bias_scope": "stage_action_proposal_micro_canary",
+        "application_mode": "auto_bounded_micro_canary",
+        "primary_decision_metric": matrix.get("primary_decision_metric") or "stage_ev_composite_pct",
+        "total_rows": total_rows,
+        "joined_rows": joined_rows,
+        "sample_floor": 20,
+        "policy_pass_count": policy_pass_count,
+        "promote_ready_count": promote_ready_count,
+        "policy_entries": matrix.get("policy_entries") if isinstance(matrix.get("policy_entries"), list) else [],
+        "fixed_threshold_roles": matrix.get("fixed_threshold_roles") if isinstance(matrix.get("fixed_threshold_roles"), dict) else {},
+        "tuning_cycle": "lifecycle_decision_matrix -> threshold_cycle_ev -> runtime_approval_summary -> next preopen bounded env",
+        "warnings": warnings,
+        "ready_for_bounded_apply": not warnings,
+    }
+
+
 def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     target_date = str(target_date).strip()
     ev_json, _ = ev_report_paths(target_date)
@@ -939,6 +1064,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     sources = ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
     calibration_source = sources.get("calibration")
     scalp_entry_adm_path = sources.get("scalp_entry_action_decision_matrix")
+    lifecycle_matrix_path = sources.get("lifecycle_decision_matrix")
     calibration_report = _load_json(Path(str(calibration_source))) if calibration_source else {}
     currentness_path = Path(str(sources.get("pattern_lab_currentness_audit"))) if sources.get("pattern_lab_currentness_audit") else PATTERN_LAB_CURRENTNESS_AUDIT_DIR / f"pattern_lab_currentness_audit_{target_date}.json"
     propagation_path = Path(str(sources.get("pattern_lab_propagation_audit"))) if sources.get("pattern_lab_propagation_audit") else PATTERN_LAB_PROPAGATION_AUDIT_DIR / f"pattern_lab_propagation_audit_{target_date}.json"
@@ -948,6 +1074,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     swing_rows = _swing_rows(swing_report)
     panic_rows = _panic_rows(calibration_report, target_date)
     scalp_entry_adm_summary = _entry_adm_summary(ev_report, scalp_entry_adm_path)
+    lifecycle_matrix_summary = _lifecycle_matrix_summary(ev_report, lifecycle_matrix_path)
     report = {
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -958,6 +1085,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             "threshold_cycle_ev": str(ev_json) if ev_json.exists() else None,
             "swing_runtime_approval": str(swing_path) if swing_path.exists() else None,
             "scalp_entry_action_decision_matrix": scalp_entry_adm_path,
+            "lifecycle_decision_matrix": lifecycle_matrix_path,
             "pattern_lab_currentness_audit": str(currentness_path) if currentness_path.exists() else None,
             "pattern_lab_propagation_audit": str(propagation_path) if propagation_path.exists() else None,
         },
@@ -987,9 +1115,17 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
                 "ready_for_daily_policy_tuning"
             ),
             "scalp_entry_adm_warnings": scalp_entry_adm_summary.get("warnings"),
+            "lifecycle_matrix_status": (
+                (ev_report.get("lifecycle_decision_matrix") or {}).get("status")
+                if isinstance(ev_report.get("lifecycle_decision_matrix"), dict)
+                else None
+            ),
+            "lifecycle_matrix_ready_for_bounded_apply": lifecycle_matrix_summary.get("ready_for_bounded_apply"),
+            "lifecycle_matrix_warnings": lifecycle_matrix_summary.get("warnings"),
         },
         "application_timing": _application_timing(target_date, ev_report),
         "scalp_entry_action_decision_matrix": scalp_entry_adm_summary,
+        "lifecycle_decision_matrix": lifecycle_matrix_summary,
         "pattern_lab_currentness_audit": currentness_audit,
         "pattern_lab_propagation_audit": propagation_audit,
         "scalping": scalping_rows,
@@ -1001,6 +1137,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
                 "threshold_cycle_ev_missing" if not ev_json.exists() else "",
                 "swing_runtime_approval_missing" if not swing_path.exists() else "",
                 "scalp_entry_action_decision_matrix_missing" if not scalp_entry_adm_path else "",
+                "lifecycle_decision_matrix_missing" if not lifecycle_matrix_path else "",
                 "pattern_lab_currentness_audit_missing" if not currentness_path.exists() else "",
                 "pattern_lab_propagation_audit_missing" if not propagation_path.exists() else "",
             ]
@@ -1043,6 +1180,11 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         if isinstance(report.get("scalp_entry_action_decision_matrix"), dict)
         else {}
     )
+    lifecycle_matrix = (
+        report.get("lifecycle_decision_matrix")
+        if isinstance(report.get("lifecycle_decision_matrix"), dict)
+        else {}
+    )
     currentness = report.get("pattern_lab_currentness_audit") if isinstance(report.get("pattern_lab_currentness_audit"), dict) else {}
     propagation = report.get("pattern_lab_propagation_audit") if isinstance(report.get("pattern_lab_propagation_audit"), dict) else {}
     lines = [
@@ -1056,6 +1198,7 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         f"- swing_legacy_hard_gate_risk_counts: `{summary.get('swing_legacy_hard_gate_risk_counts')}`",
         f"- panic_approval_requested: `{summary.get('panic_approval_requested')}`",
         f"- scalp_entry_adm_status: `{summary.get('scalp_entry_adm_status')}`",
+        f"- lifecycle_matrix_status: `{summary.get('lifecycle_matrix_status')}`",
         f"- pattern_lab_currentness_status: `{summary.get('pattern_lab_currentness_status')}`",
         f"- pattern_lab_propagation_status: `{summary.get('pattern_lab_propagation_status')}`",
         f"- env_generated_at: `{timing.get('env_generated_at') or '-'}`",
@@ -1076,6 +1219,16 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         f"- top_actions: `{entry_adm.get('top_actions') or []}`",
         f"- ready_for_daily_policy_tuning: `{entry_adm.get('ready_for_daily_policy_tuning')}`",
         f"- warnings: `{entry_adm.get('warnings') or []}`",
+        "",
+        "## Lifecycle Decision Matrix",
+        f"- status: `{lifecycle_matrix.get('status')}`",
+        f"- matrix_version: `{lifecycle_matrix.get('matrix_version') or '-'}`",
+        f"- runtime_bias_scope: `{lifecycle_matrix.get('runtime_bias_scope')}`",
+        f"- total/joined/floor: `{lifecycle_matrix.get('total_rows')}` / `{lifecycle_matrix.get('joined_rows')}` / `{lifecycle_matrix.get('sample_floor')}`",
+        f"- policy_pass/promote_ready: `{lifecycle_matrix.get('policy_pass_count')}` / `{lifecycle_matrix.get('promote_ready_count')}`",
+        f"- fixed_threshold_roles: `{lifecycle_matrix.get('fixed_threshold_roles') or {}}`",
+        f"- ready_for_bounded_apply: `{lifecycle_matrix.get('ready_for_bounded_apply')}`",
+        f"- warnings: `{lifecycle_matrix.get('warnings') or []}`",
         "",
         "## Swing",
         *_render_rows(swing),
