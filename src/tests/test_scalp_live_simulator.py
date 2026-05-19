@@ -971,6 +971,10 @@ def _sim_budget_rules(**overrides):
         "SCALP_SIM_AI_HOLDING_CRITICAL_COOLDOWN_SEC": 30,
         "SCALP_SIM_AI_HOLDING_MAX_COOLDOWN_SEC": 180,
         "SCALP_SIM_AI_DEFERRED_REVIEW_ENABLED": True,
+        "SCALP_SIM_AI_HARD_CRITICAL_MIN_LOSS_PCT": -0.70,
+        "SCALP_SIM_AI_SOFT_LOSS_DEFER_ENABLED": True,
+        "SCALP_SIM_AI_SAFE_PROFIT_BYPASS_ENABLED": False,
+        "SCALP_SIM_AI_CRITICAL_DRAWDOWN_PCT": 0.50,
     }
     values.update(overrides)
     return replace(CONFIG, **values)
@@ -1082,6 +1086,82 @@ def test_scalp_sim_ai_budget_critical_bypasses_cap(monkeypatch):
     assert decision["action"] == "call"
     assert decision["critical_bypass"] is True
     assert decision["call_reason"] == "sim_ai_critical_bypass"
+    assert decision["critical_class"] == "hard_critical"
+    assert decision["hard_critical_bypass"] is True
+
+
+def test_scalp_sim_ai_budget_soft_loss_defers_instead_of_bypassing_cap(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", _sim_budget_rules(SCALP_SIM_AI_MAX_CALLS_PER_MIN=1))
+    state_handlers._SCALP_SIM_AI_CALL_TIMES[:] = [1020.0]
+
+    decision = state_handlers._resolve_scalp_sim_ai_budget_decision(
+        _sim_holding_stock(scalp_sim_ai_last_feature_signature="old"),
+        strategy="SCALPING",
+        now_ts=1030.0,
+        profit_rate=-0.05,
+        peak_profit=0.1,
+        held_sec=45,
+        current_ai_score=62,
+        market_signature=("changed",),
+        is_critical_zone=True,
+        near_ai_exit_band=False,
+        near_safe_profit_band=False,
+    )
+
+    assert decision["action"] == "defer"
+    assert decision["defer_reason"] == "sim_ai_budget_exhausted"
+    assert decision["critical_class"] == "soft_critical"
+    assert decision["critical_bypass"] is not True
+    assert decision["soft_critical_deferred"] is True
+
+
+def test_scalp_sim_ai_budget_hard_loss_bypasses_cap(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", _sim_budget_rules(SCALP_SIM_AI_MAX_CALLS_PER_MIN=1))
+    state_handlers._SCALP_SIM_AI_CALL_TIMES[:] = [1020.0]
+
+    decision = state_handlers._resolve_scalp_sim_ai_budget_decision(
+        _sim_holding_stock(scalp_sim_ai_last_feature_signature="old"),
+        strategy="SCALPING",
+        now_ts=1030.0,
+        profit_rate=-0.70,
+        peak_profit=0.1,
+        held_sec=45,
+        current_ai_score=62,
+        market_signature=("changed",),
+        is_critical_zone=True,
+        near_ai_exit_band=False,
+        near_safe_profit_band=False,
+    )
+
+    assert decision["action"] == "call"
+    assert decision["critical_bypass"] is True
+    assert decision["critical_class"] == "hard_critical"
+    assert decision["hard_critical_bypass"] is True
+    assert "hard_loss" in decision["critical_reason"]
+
+
+def test_scalp_sim_ai_budget_safe_profit_near_band_does_not_bypass_cap(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", _sim_budget_rules(SCALP_SIM_AI_MAX_CALLS_PER_MIN=1))
+    state_handlers._SCALP_SIM_AI_CALL_TIMES[:] = [1020.0]
+
+    decision = state_handlers._resolve_scalp_sim_ai_budget_decision(
+        _sim_holding_stock(scalp_sim_ai_last_feature_signature="old"),
+        strategy="SCALPING",
+        now_ts=1030.0,
+        profit_rate=0.45,
+        peak_profit=0.45,
+        held_sec=45,
+        current_ai_score=62,
+        market_signature=("changed",),
+        is_critical_zone=True,
+        near_ai_exit_band=False,
+        near_safe_profit_band=True,
+    )
+
+    assert decision["action"] == "defer"
+    assert decision["critical_class"] == "soft_critical"
+    assert decision["critical_bypass"] is not True
+    assert decision["soft_critical_deferred"] is True
 
 
 def test_ws_prune_retains_active_scalp_simulator_consumer(monkeypatch):

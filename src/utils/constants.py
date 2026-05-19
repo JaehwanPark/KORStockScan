@@ -138,6 +138,10 @@ class TradingConfig:
     SCALP_SIM_AI_HOLDING_CRITICAL_COOLDOWN_SEC: int = 30
     SCALP_SIM_AI_HOLDING_MAX_COOLDOWN_SEC: int = 180
     SCALP_SIM_AI_DEFERRED_REVIEW_ENABLED: bool = True
+    SCALP_SIM_AI_HARD_CRITICAL_MIN_LOSS_PCT: float = -0.70
+    SCALP_SIM_AI_SOFT_LOSS_DEFER_ENABLED: bool = True
+    SCALP_SIM_AI_SAFE_PROFIT_BYPASS_ENABLED: bool = False
+    SCALP_SIM_AI_CRITICAL_DRAWDOWN_PCT: float = 0.50
     SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED: bool = False
     SCALP_SIM_SCALE_IN_WINDOW_ALLOWED_ARMS: str = "PYRAMID,AVG_DOWN"
     SCALP_SIM_SCALE_IN_WINDOW_MIN_PROFIT_PCT: float = -2.5
@@ -1451,6 +1455,18 @@ def _build_trading_rules() -> TradingConfig:
     env_scalp_sim_ai_deferred_review_enabled = _env_bool(
         "KORSTOCKSCAN_SCALP_SIM_AI_DEFERRED_REVIEW_ENABLED"
     )
+    env_scalp_sim_ai_hard_critical_min_loss = _env_float(
+        "KORSTOCKSCAN_SCALP_SIM_AI_HARD_CRITICAL_MIN_LOSS_PCT"
+    )
+    env_scalp_sim_ai_soft_loss_defer_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_SIM_AI_SOFT_LOSS_DEFER_ENABLED"
+    )
+    env_scalp_sim_ai_safe_profit_bypass_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_SIM_AI_SAFE_PROFIT_BYPASS_ENABLED"
+    )
+    env_scalp_sim_ai_critical_drawdown = _env_float(
+        "KORSTOCKSCAN_SCALP_SIM_AI_CRITICAL_DRAWDOWN_PCT"
+    )
     env_scalp_sim_scale_in_window_enabled = _env_bool(
         "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED"
     )
@@ -1569,6 +1585,10 @@ def _build_trading_rules() -> TradingConfig:
         or env_scalp_sim_ai_holding_critical_cooldown is not None
         or env_scalp_sim_ai_holding_max_cooldown is not None
         or env_scalp_sim_ai_deferred_review_enabled is not None
+        or env_scalp_sim_ai_hard_critical_min_loss is not None
+        or env_scalp_sim_ai_soft_loss_defer_enabled is not None
+        or env_scalp_sim_ai_safe_profit_bypass_enabled is not None
+        or env_scalp_sim_ai_critical_drawdown is not None
         or env_sim_virtual_budget_krw is not None
         or env_scalp_live_simulator_timeout is not None
         or env_stat_action_snapshot_enabled is not None
@@ -1756,6 +1776,18 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_SIM_AI_DEFERRED_REVIEW_ENABLED=env_scalp_sim_ai_deferred_review_enabled
             if env_scalp_sim_ai_deferred_review_enabled is not None
             else config.SCALP_SIM_AI_DEFERRED_REVIEW_ENABLED,
+            SCALP_SIM_AI_HARD_CRITICAL_MIN_LOSS_PCT=env_scalp_sim_ai_hard_critical_min_loss
+            if env_scalp_sim_ai_hard_critical_min_loss is not None
+            else config.SCALP_SIM_AI_HARD_CRITICAL_MIN_LOSS_PCT,
+            SCALP_SIM_AI_SOFT_LOSS_DEFER_ENABLED=env_scalp_sim_ai_soft_loss_defer_enabled
+            if env_scalp_sim_ai_soft_loss_defer_enabled is not None
+            else config.SCALP_SIM_AI_SOFT_LOSS_DEFER_ENABLED,
+            SCALP_SIM_AI_SAFE_PROFIT_BYPASS_ENABLED=env_scalp_sim_ai_safe_profit_bypass_enabled
+            if env_scalp_sim_ai_safe_profit_bypass_enabled is not None
+            else config.SCALP_SIM_AI_SAFE_PROFIT_BYPASS_ENABLED,
+            SCALP_SIM_AI_CRITICAL_DRAWDOWN_PCT=env_scalp_sim_ai_critical_drawdown
+            if env_scalp_sim_ai_critical_drawdown is not None
+            else config.SCALP_SIM_AI_CRITICAL_DRAWDOWN_PCT,
             SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED=env_scalp_sim_scale_in_window_enabled
             if env_scalp_sim_scale_in_window_enabled is not None
             else config.SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED,

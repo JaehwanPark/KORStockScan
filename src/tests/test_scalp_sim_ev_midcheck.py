@@ -127,3 +127,54 @@ def test_scalp_sim_midcheck_splits_exit_only_avg_down_pyramid_and_order_check(tm
     assert exit_qty["sim_qty"] == 10
     assert exit_qty["uncapped_qty"] == 10
     assert "one_share_pnl_krw" not in exit_qty
+
+
+def test_scalp_sim_midcheck_summarizes_ai_budget_critical_classes(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    event_dir = data_dir / "pipeline_events"
+    event_dir.mkdir(parents=True)
+    target_date = "2026-05-11"
+    path = event_dir / f"pipeline_events_{target_date}.jsonl"
+    rows = [
+        _event(
+            "scalp_sim_ai_holding_live_call",
+            "SIM-HARD",
+            fields={
+                "critical_class": "hard_critical",
+                "critical_reason": "hard_loss",
+            },
+        ),
+        _event(
+            "scalp_sim_ai_holding_deferred",
+            "SIM-SOFT",
+            fields={
+                "critical_class": "soft_critical",
+                "critical_reason": "soft_loss,feature_signature_changed",
+            },
+        ),
+        _event(
+            "sim_ai_critical_bypass",
+            "SIM-HARD",
+            fields={
+                "critical_class": "hard_critical",
+                "critical_reason": "hard_loss",
+            },
+        ),
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n", encoding="utf-8")
+    monkeypatch.setattr(midcheck, "DATA_DIR", data_dir)
+
+    report = midcheck.build_report(target_date)
+    budget = report["sim_ai_budget_counts"]
+
+    assert budget["scalp_sim_ai_holding_live_call"] == 1
+    assert budget["scalp_sim_ai_holding_deferred"] == 1
+    assert budget["sim_ai_critical_bypass"] == 1
+    assert budget["critical_class_counts"] == {"hard_critical": 1, "soft_critical": 1}
+    assert budget["critical_reason_counts"] == {
+        "feature_signature_changed": 1,
+        "hard_loss": 1,
+        "soft_loss": 1,
+    }
+    assert budget["critical_bypass_ratio_pct"] == 100.0
+    assert budget["deferred_ratio_pct"] == 50.0

@@ -327,10 +327,18 @@ def _build_initial_qty_provenance(positions: dict[str, dict]) -> dict:
     }
 
 
+def _ratio_pct(numerator: int, denominator: int):
+    if denominator <= 0:
+        return None
+    return round(100.0 * numerator / denominator, 2)
+
+
 def build_report(target_date: str) -> dict:
     path = DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
     rows = _load_jsonl(path)
     sim_counts: Counter[str] = Counter()
+    sim_ai_critical_class_counts: Counter[str] = Counter()
+    sim_ai_critical_reason_counts: Counter[str] = Counter()
     completed: list[dict] = []
     expired: list[dict] = []
     real_completed: list[dict] = []
@@ -348,6 +356,16 @@ def build_report(target_date: str) -> dict:
             continue
         if is_sim:
             sim_counts[stage] += 1
+            if stage in {
+                "scalp_sim_ai_holding_live_call",
+                "scalp_sim_ai_holding_reuse",
+                "scalp_sim_ai_holding_deferred",
+            }:
+                critical_class = str(fields.get("critical_class") or "unknown")
+                sim_ai_critical_class_counts[critical_class] += 1
+                for reason in str(fields.get("critical_reason") or "unknown").split(","):
+                    cleaned = reason.strip() or "unknown"
+                    sim_ai_critical_reason_counts[cleaned] += 1
             sim_id = _sim_record_id(row)
             if sim_id:
                 position = positions.setdefault(sim_id, _position_template(row))
@@ -407,6 +425,10 @@ def build_report(target_date: str) -> dict:
     profit_values = [row["profit_rate"] for row in completed if row["profit_rate"] is not None]
     scale_in_analysis = _build_scale_in_analysis(positions)
     initial_qty_provenance = _build_initial_qty_provenance(positions)
+    ai_live_calls = int(sim_counts.get("scalp_sim_ai_holding_live_call", 0))
+    ai_reuse = int(sim_counts.get("scalp_sim_ai_holding_reuse", 0))
+    ai_deferred = int(sim_counts.get("scalp_sim_ai_holding_deferred", 0))
+    ai_critical_bypass = int(sim_counts.get("sim_ai_critical_bypass", 0))
     return {
         "target_date": target_date,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -415,11 +437,16 @@ def build_report(target_date: str) -> dict:
         "synthetic_excluded": synthetic_excluded,
         "sim_counts": dict(sorted(sim_counts.items())),
         "sim_ai_budget_counts": {
-            "scalp_sim_ai_holding_live_call": int(sim_counts.get("scalp_sim_ai_holding_live_call", 0)),
-            "scalp_sim_ai_holding_reuse": int(sim_counts.get("scalp_sim_ai_holding_reuse", 0)),
-            "scalp_sim_ai_holding_deferred": int(sim_counts.get("scalp_sim_ai_holding_deferred", 0)),
+            "scalp_sim_ai_holding_live_call": ai_live_calls,
+            "scalp_sim_ai_holding_reuse": ai_reuse,
+            "scalp_sim_ai_holding_deferred": ai_deferred,
             "sim_ai_budget_exhausted": int(sim_counts.get("sim_ai_budget_exhausted", 0)),
-            "sim_ai_critical_bypass": int(sim_counts.get("sim_ai_critical_bypass", 0)),
+            "sim_ai_critical_bypass": ai_critical_bypass,
+            "critical_class_counts": dict(sorted(sim_ai_critical_class_counts.items())),
+            "critical_reason_counts": dict(sorted(sim_ai_critical_reason_counts.items())),
+            "critical_bypass_ratio_pct": _ratio_pct(ai_critical_bypass, ai_live_calls),
+            "deferred_ratio_pct": _ratio_pct(ai_deferred, ai_live_calls + ai_deferred),
+            "reuse_ratio_pct": _ratio_pct(ai_reuse, ai_live_calls + ai_reuse + ai_deferred),
         },
         "metrics": _metrics(profit_values),
         "scale_in_analysis": scale_in_analysis,
@@ -476,9 +503,24 @@ def write_outputs(report: dict, output_dir: Path) -> tuple[Path, Path]:
             f"- ai_deferred: `{(report.get('sim_ai_budget_counts') or {}).get('scalp_sim_ai_holding_deferred', 0)}`",
             f"- ai_budget_exhausted: `{(report.get('sim_ai_budget_counts') or {}).get('sim_ai_budget_exhausted', 0)}`",
             f"- ai_critical_bypass: `{(report.get('sim_ai_budget_counts') or {}).get('sim_ai_critical_bypass', 0)}`",
+            f"- ai_critical_bypass_ratio_pct: `{(report.get('sim_ai_budget_counts') or {}).get('critical_bypass_ratio_pct', '-')}`",
+            f"- ai_deferred_ratio_pct: `{(report.get('sim_ai_budget_counts') or {}).get('deferred_ratio_pct', '-')}`",
+            f"- ai_reuse_ratio_pct: `{(report.get('sim_ai_budget_counts') or {}).get('reuse_ratio_pct', '-')}`",
             "",
         ]
     )
+    class_counts = (report.get("sim_ai_budget_counts") or {}).get("critical_class_counts") or {}
+    if class_counts:
+        lines.extend(["## AI Budget Critical Classes", ""])
+        for label, count in class_counts.items():
+            lines.append(f"- `{label}`: `{count}`")
+        lines.append("")
+    reason_counts = (report.get("sim_ai_budget_counts") or {}).get("critical_reason_counts") or {}
+    if reason_counts:
+        lines.extend(["## AI Budget Critical Reasons", ""])
+        for label, count in reason_counts.items():
+            lines.append(f"- `{label}`: `{count}`")
+        lines.append("")
     for stage, count in report["sim_counts"].items():
         lines.append(f"- `{stage}`: `{count}`")
     scale = report.get("scale_in_analysis") or {}

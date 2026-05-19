@@ -44,15 +44,25 @@ def build_report(target_date: str) -> dict:
     deferred = [event for event in events if _is_deferred_event(event)]
     reason_counts = Counter(str(_event_fields(event).get("defer_reason") or "-") for event in deferred)
     source_counts = Counter(str(_event_fields(event).get("source_stage") or "-") for event in deferred)
+    critical_class_counts = Counter(str(_event_fields(event).get("critical_class") or "unknown") for event in deferred)
+    critical_reason_counts = Counter()
     rows = []
     for event in deferred:
         fields = _event_fields(event)
+        for reason in str(fields.get("critical_reason") or "unknown").split(","):
+            critical_reason_counts[reason.strip() or "unknown"] += 1
         rows.append(
             {
                 "emitted_at": event.get("emitted_at"),
                 "stock_name": event.get("stock_name"),
                 "stock_code": event.get("stock_code"),
                 "defer_reason": fields.get("defer_reason"),
+                "critical_class": fields.get("critical_class"),
+                "critical_reason": fields.get("critical_reason"),
+                "soft_critical_deferred": fields.get("soft_critical_deferred"),
+                "hard_critical_bypass": fields.get("hard_critical_bypass"),
+                "loss_bucket": fields.get("loss_bucket"),
+                "drawdown_pct": fields.get("drawdown_pct"),
                 "feature_signature": fields.get("feature_signature"),
                 "profit_rate": fields.get("profit_rate"),
                 "peak_profit": fields.get("peak_profit"),
@@ -82,6 +92,8 @@ def build_report(target_date: str) -> dict:
             "deferred_count": len(rows),
             "defer_reason_counts": dict(sorted(reason_counts.items())),
             "source_stage_counts": dict(sorted(source_counts.items())),
+            "critical_class_counts": dict(sorted(critical_class_counts.items())),
+            "critical_reason_counts": dict(sorted(critical_reason_counts.items())),
         },
         "rows": rows,
     }
@@ -110,20 +122,28 @@ def write_outputs(report: dict, output_dir: Path = REPORT_DIR) -> tuple[Path, Pa
     ]
     for reason, count in (summary.get("defer_reason_counts") or {}).items():
         lines.append(f"- `{reason}`: `{count}`")
+    lines.extend(["", "## Critical Classes", ""])
+    for label, count in (summary.get("critical_class_counts") or {}).items():
+        lines.append(f"- `{label}`: `{count}`")
+    lines.extend(["", "## Critical Reasons", ""])
+    for label, count in (summary.get("critical_reason_counts") or {}).items():
+        lines.append(f"- `{label}`: `{count}`")
     lines.extend(
         [
             "",
             "## Deferred Rows",
             "",
-            "| time | stock | reason | profit | peak | held_sec |",
-            "| --- | --- | --- | ---: | ---: | ---: |",
+            "| time | stock | reason | critical_class | critical_reason | profit | peak | drawdown | held_sec |",
+            "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: |",
         ]
     )
     for row in report.get("rows") or []:
         lines.append(
             f"| {row.get('emitted_at') or '-'} | {row.get('stock_name')}({row.get('stock_code')}) | "
-            f"`{row.get('defer_reason') or '-'}` | {row.get('profit_rate') or '-'} | "
-            f"{row.get('peak_profit') or '-'} | {row.get('held_sec') or '-'} |"
+            f"`{row.get('defer_reason') or '-'}` | `{row.get('critical_class') or '-'}` | "
+            f"`{row.get('critical_reason') or '-'}` | {row.get('profit_rate') or '-'} | "
+            f"{row.get('peak_profit') or '-'} | {row.get('drawdown_pct') or '-'} | "
+            f"{row.get('held_sec') or '-'} |"
         )
     md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return json_path, md_path

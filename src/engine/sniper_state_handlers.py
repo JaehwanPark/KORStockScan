@@ -601,6 +601,83 @@ def _scalp_sim_ai_bucket(value, *, step: float = 0.25) -> int:
         return 0
 
 
+def _scalp_sim_ai_loss_bucket(profit_rate: float) -> str:
+    value = _safe_float(profit_rate, 0.0)
+    if value <= -1.00:
+        return "<=-1.00"
+    if value <= -0.70:
+        return "(-1.00,-0.70]"
+    if value <= -0.20:
+        return "(-0.70,-0.20]"
+    if value < 0:
+        return "(-0.20,0)"
+    if value < 0.30:
+        return "[0,0.30)"
+    if value < 0.50:
+        return "[0.30,0.50)"
+    return ">=0.50"
+
+
+def _classify_scalp_sim_ai_criticality(
+    *,
+    profit_rate: float,
+    peak_profit: float,
+    state_changed: bool,
+    is_critical_zone: bool,
+    near_ai_exit_band: bool,
+    near_safe_profit_band: bool,
+) -> dict:
+    profit = _safe_float(profit_rate, 0.0)
+    peak = _safe_float(peak_profit, 0.0)
+    drawdown = max(0.0, peak - profit)
+    safe_profit_pct = _rule_float("SCALP_SAFE_PROFIT", 0.5)
+    hard_loss_pct = _rule_float("SCALP_SIM_AI_HARD_CRITICAL_MIN_LOSS_PCT", -0.70)
+    critical_drawdown_pct = max(0.0, _rule_float("SCALP_SIM_AI_CRITICAL_DRAWDOWN_PCT", 0.50))
+    soft_loss_defer = _rule_bool("SCALP_SIM_AI_SOFT_LOSS_DEFER_ENABLED", True)
+    safe_profit_bypass = _rule_bool("SCALP_SIM_AI_SAFE_PROFIT_BYPASS_ENABLED", False)
+
+    hard_reasons: list[str] = []
+    soft_reasons: list[str] = []
+    if near_ai_exit_band:
+        hard_reasons.append("near_ai_exit_band")
+    if profit <= hard_loss_pct:
+        hard_reasons.append("hard_loss")
+    if peak >= safe_profit_pct and drawdown >= critical_drawdown_pct:
+        hard_reasons.append("safe_profit_drawdown")
+    if safe_profit_bypass and profit >= safe_profit_pct:
+        hard_reasons.append("safe_profit_bypass_enabled")
+
+    if soft_loss_defer and profit < 0:
+        soft_reasons.append("soft_loss")
+    if near_safe_profit_band:
+        soft_reasons.append("near_safe_profit_band")
+    if state_changed:
+        soft_reasons.append("feature_signature_changed")
+    if is_critical_zone:
+        soft_reasons.append("legacy_critical_zone")
+
+    if hard_reasons:
+        critical_class = "hard_critical"
+        reasons = hard_reasons
+    elif soft_reasons:
+        critical_class = "soft_critical"
+        reasons = soft_reasons
+    else:
+        critical_class = "non_critical"
+        reasons = ["normal_review"]
+
+    return {
+        "critical_class": critical_class,
+        "critical_reason": ",".join(reasons),
+        "hard_critical_candidate": critical_class == "hard_critical",
+        "soft_critical_candidate": critical_class == "soft_critical",
+        "hard_critical_bypass": False,
+        "soft_critical_deferred": False,
+        "drawdown_pct": round(drawdown, 4),
+        "loss_bucket": _scalp_sim_ai_loss_bucket(profit),
+    }
+
+
 def _build_scalp_sim_ai_feature_signature(
     stock: dict,
     *,
@@ -683,13 +760,26 @@ def _resolve_scalp_sim_ai_budget_decision(
     state_changed = signature != last_signature
     max_cooldown_expired = elapsed_live_sec is None or elapsed_live_sec >= max_cd
     used = _scalp_sim_ai_budget_usage(now_ts)
+    criticality = _classify_scalp_sim_ai_criticality(
+        profit_rate=profit_rate,
+        peak_profit=peak_profit,
+        state_changed=state_changed,
+        is_critical_zone=is_critical_zone,
+        near_ai_exit_band=near_ai_exit_band,
+        near_safe_profit_band=near_safe_profit_band,
+    )
+    hard_critical = criticality["critical_class"] == "hard_critical"
+    soft_critical = criticality["critical_class"] == "soft_critical"
     common = {
         "target": True,
         "feature_signature": signature,
         "last_feature_signature": last_signature or "-",
         "state_changed": state_changed,
         "first_review": first_review,
-        "critical": critical,
+        "critical": criticality["critical_class"] != "non_critical",
+        "legacy_critical": critical,
+        "critical_bypass": False,
+        **criticality,
         "elapsed_live_sec": None if elapsed_live_sec is None else round(elapsed_live_sec, 2),
         "held_sec": int(_safe_float(held_sec, 0.0)),
         "budget_used_per_min": used,
@@ -698,7 +788,13 @@ def _resolve_scalp_sim_ai_budget_decision(
         "last_ai_score": stock.get("scalp_sim_ai_last_score") or _safe_int(current_ai_score, 0),
     }
 
-    if not first_review and not state_changed and not critical and not max_cooldown_expired:
+    if (
+        not first_review
+        and not state_changed
+        and not hard_critical
+        and not soft_critical
+        and not max_cooldown_expired
+    ):
         return {
             **common,
             "action": "reuse",
@@ -706,18 +802,20 @@ def _resolve_scalp_sim_ai_budget_decision(
         }
 
     if max_calls > 0 and used >= max_calls:
-        if critical:
+        if hard_critical:
             return {
                 **common,
                 "action": "call",
                 "call_reason": "sim_ai_critical_bypass",
                 "critical_bypass": True,
+                "hard_critical_bypass": True,
             }
         if _rule_bool("SCALP_SIM_AI_DEFERRED_REVIEW_ENABLED", True):
             return {
                 **common,
                 "action": "defer",
                 "defer_reason": "sim_ai_budget_exhausted",
+                "soft_critical_deferred": soft_critical,
             }
         return {
             **common,
@@ -727,8 +825,10 @@ def _resolve_scalp_sim_ai_budget_decision(
 
     if first_review:
         call_reason = "first_sim_holding_review"
-    elif critical:
-        call_reason = "critical_zone"
+    elif hard_critical:
+        call_reason = "hard_critical"
+    elif soft_critical:
+        call_reason = "soft_critical"
     elif state_changed:
         call_reason = "feature_signature_changed"
     elif max_cooldown_expired:
@@ -10542,6 +10642,13 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                                 state_changed=sim_ai_budget_gate.get("state_changed"),
                                 first_review=sim_ai_budget_gate.get("first_review"),
                                 critical=sim_ai_budget_gate.get("critical"),
+                                legacy_critical=sim_ai_budget_gate.get("legacy_critical"),
+                                critical_class=sim_ai_budget_gate.get("critical_class"),
+                                critical_reason=sim_ai_budget_gate.get("critical_reason"),
+                                soft_critical_deferred=sim_ai_budget_gate.get("soft_critical_deferred"),
+                                hard_critical_bypass=sim_ai_budget_gate.get("hard_critical_bypass"),
+                                loss_bucket=sim_ai_budget_gate.get("loss_bucket"),
+                                drawdown_pct=sim_ai_budget_gate.get("drawdown_pct"),
                             ),
                         )
                         if event_stage == "scalp_sim_ai_holding_deferred":
@@ -10560,6 +10667,12 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                                     runtime_effect="sim_ai_deferred_review_only",
                                     budget_used_per_min=sim_ai_budget_gate.get("budget_used_per_min"),
                                     budget_cap_per_min=sim_ai_budget_gate.get("budget_cap_per_min"),
+                                    critical_class=sim_ai_budget_gate.get("critical_class"),
+                                    critical_reason=sim_ai_budget_gate.get("critical_reason"),
+                                    soft_critical_deferred=sim_ai_budget_gate.get("soft_critical_deferred"),
+                                    hard_critical_bypass=sim_ai_budget_gate.get("hard_critical_bypass"),
+                                    loss_bucket=sim_ai_budget_gate.get("loss_bucket"),
+                                    drawdown_pct=sim_ai_budget_gate.get("drawdown_pct"),
                                 ),
                             )
                         persist_scalp_simulator_state()
@@ -10579,6 +10692,12 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                                 runtime_effect="sim_ai_live_call_allowed",
                                 budget_used_per_min=sim_ai_budget_gate.get("budget_used_per_min"),
                                 budget_cap_per_min=sim_ai_budget_gate.get("budget_cap_per_min"),
+                                critical_class=sim_ai_budget_gate.get("critical_class"),
+                                critical_reason=sim_ai_budget_gate.get("critical_reason"),
+                                soft_critical_deferred=sim_ai_budget_gate.get("soft_critical_deferred"),
+                                hard_critical_bypass=sim_ai_budget_gate.get("hard_critical_bypass"),
+                                loss_bucket=sim_ai_budget_gate.get("loss_bucket"),
+                                drawdown_pct=sim_ai_budget_gate.get("drawdown_pct"),
                             ),
                         )
 
@@ -10653,6 +10772,12 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                                     runtime_effect="sim_ai_live_call_only",
                                     budget_used_per_min=used_after_record,
                                     budget_cap_per_min=sim_ai_budget_gate.get("budget_cap_per_min"),
+                                    critical_class=sim_ai_budget_gate.get("critical_class"),
+                                    critical_reason=sim_ai_budget_gate.get("critical_reason"),
+                                    soft_critical_deferred=sim_ai_budget_gate.get("soft_critical_deferred"),
+                                    hard_critical_bypass=sim_ai_budget_gate.get("hard_critical_bypass"),
+                                    loss_bucket=sim_ai_budget_gate.get("loss_bucket"),
+                                    drawdown_pct=sim_ai_budget_gate.get("drawdown_pct"),
                                     ai_action=ai_decision.get("action_v2") or ai_decision.get("action"),
                                     ai_score_raw=raw_ai_score,
                                     ai_score_smoothed=current_ai_score,
