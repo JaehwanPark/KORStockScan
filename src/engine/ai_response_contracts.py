@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 
+AI_REASON_LANGUAGE_POLICY = "english_ascii_only"
+AI_REASON_LANGUAGE_FALLBACK = "Reason unavailable: non-English output from AI"
+
+
 AI_RESPONSE_SCHEMA_REGISTRY = {
     "entry_v1": {
         "type": "object",
@@ -230,4 +234,18 @@ def build_openai_response_text_format(schema_name, *, strict=True):
         "name": str(schema_name),
         "schema": schema,
         "strict": bool(strict),
+    }
+
+
+def normalize_ai_reason_language(reason, *, max_len=120):
+    text = str(reason or "").replace("\n", " ").strip()
+    violation = any(ord(ch) > 127 for ch in text)
+    if violation:
+        text = AI_REASON_LANGUAGE_FALLBACK
+    if not text:
+        text = "Reason unavailable"
+    return {
+        "reason": text[:max_len],
+        "ai_reason_language_policy": AI_REASON_LANGUAGE_POLICY,
+        "ai_reason_language_violation": bool(violation),
     }

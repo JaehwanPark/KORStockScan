@@ -8,12 +8,14 @@ from src.engine import ai_engine_openai as ai_engine_openai_module
 from src.engine.ai_engine import (
     GeminiSniperEngine,
     SCALPING_BUY_RECOVERY_CANARY_PROMPT,
+    SCALPING_ENTRY_PRICE_PROMPT,
     SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
     SCALPING_HOLDING_SYSTEM_PROMPT,
     SCALPING_SYSTEM_PROMPT,
     SCALPING_SYSTEM_PROMPT_75_CANARY,
     SCALPING_WATCHING_SYSTEM_PROMPT,
 )
+from src.engine.ai_response_contracts import normalize_ai_reason_language
 from src.engine.ai_engine_deepseek import DeepSeekSniperEngine
 from src.engine.ai_engine_openai import GPTSniperEngine
 
@@ -689,6 +691,36 @@ def test_analyze_target_holding_exit_action_schema_compat(monkeypatch):
     assert result["action_v2"] == "EXIT"
     assert result["action"] == "DROP"
     assert result["action_schema"] == "holding_exit_v1"
+
+
+def test_scalping_reason_language_contract_replaces_non_ascii_reason():
+    engine = _build_provider_engine(GPTSniperEngine)
+
+    result = engine._normalize_scalping_action_schema(
+        {"action": "WAIT", "score": 66, "reason": "ทั้ง curr_vs_ma5_bp positive"},
+        prompt_type="scalping_entry",
+    )
+
+    assert result["reason"] == "Reason unavailable: non-English output from AI"
+    assert result["ai_reason_language_policy"] == "english_ascii_only"
+    assert result["ai_reason_language_violation"] is True
+
+
+def test_scalping_reason_language_contract_keeps_english_reason():
+    result = normalize_ai_reason_language("curr_vs_ma5_bp positive but liquidity weak", max_len=120)
+
+    assert result["reason"] == "curr_vs_ma5_bp positive but liquidity weak"
+    assert result["ai_reason_language_violation"] is False
+
+
+def test_scalping_prompts_require_english_ascii_reason():
+    for prompt in (
+        SCALPING_SYSTEM_PROMPT,
+        SCALPING_WATCHING_SYSTEM_PROMPT,
+        SCALPING_HOLDING_SYSTEM_PROMPT,
+        SCALPING_ENTRY_PRICE_PROMPT,
+    ):
+        assert "English ASCII only" in prompt
 
 
 def test_analyze_target_uses_shared_prompt_when_split_disabled(monkeypatch):

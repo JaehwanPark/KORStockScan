@@ -29,6 +29,7 @@ from openai import OpenAI, RateLimitError
 from src.engine.ai_response_contracts import (
     AI_RESPONSE_SCHEMA_REGISTRY,
     build_openai_response_text_format,
+    normalize_ai_reason_language,
 )
 from src.engine.holding_exit_matrix_runtime import (
     build_holding_exit_matrix_runtime_context,
@@ -736,7 +737,8 @@ class GPTSniperEngine:
             return base_prompt
         output_rule = (
             "Output rule: return only JSON that conforms to the provided schema. "
-            "Do not add markdown, commentary, or schema-external fields."
+            "Do not add markdown, commentary, or schema-external fields. "
+            "For any reason field, use concise English ASCII only; do not use Korean, Thai, or any other non-English language."
             if require_json
             else "Output rule: produce the requested report text. Preserve raw labels and evidence exactly."
         )
@@ -1089,7 +1091,10 @@ class GPTSniperEngine:
     def _normalize_scalping_action_schema(self, result, *, prompt_type):
         payload = dict(result or {}) if isinstance(result, dict) else {}
         raw_action = str(payload.get("action", "WAIT") or "WAIT").upper().strip()
-        reason = str(payload.get("reason", "응답 보정") or "응답 보정").replace("\n", " ").strip()
+        reason_contract = normalize_ai_reason_language(
+            payload.get("reason", "response_normalized") or "response_normalized",
+            max_len=120,
+        )
         try:
             score = int(float(payload.get("score", 50)))
         except Exception:
@@ -1104,7 +1109,9 @@ class GPTSniperEngine:
             payload["action"] = compat.get(action_v2, "WAIT")
             payload["action_schema"] = "holding_exit_v1"
             payload["score"] = score
-            payload["reason"] = reason[:120]
+            payload["reason"] = reason_contract["reason"]
+            payload["ai_reason_language_policy"] = reason_contract["ai_reason_language_policy"]
+            payload["ai_reason_language_violation"] = reason_contract["ai_reason_language_violation"]
             return payload
 
         allowed = {"BUY", "WAIT", "DROP"}
@@ -1113,7 +1120,9 @@ class GPTSniperEngine:
         payload["action_v2"] = action
         payload["action_schema"] = "entry_v1"
         payload["score"] = score
-        payload["reason"] = reason[:120]
+        payload["reason"] = reason_contract["reason"]
+        payload["ai_reason_language_policy"] = reason_contract["ai_reason_language_policy"]
+        payload["ai_reason_language_violation"] = reason_contract["ai_reason_language_violation"]
         return payload
 
     def _merge_last_transport_meta(self, payload):
@@ -1265,13 +1274,13 @@ class GPTSniperEngine:
                 safe_prompt = (
                     "Classify the provided market data. Use only the numeric fields in the input. "
                     "Return JSON only with action HOLD, TRIM, or EXIT; score as 0-100 integer; "
-                    "reason as a short neutral numeric summary."
+                    "reason as a short neutral numeric summary in English ASCII only."
                 )
             else:
                 safe_prompt = (
                     "Classify the provided market data. Use only the numeric fields in the input. "
                     "Return JSON only with action BUY, WAIT, or DROP; score as 0-100 integer; "
-                    "reason as a short neutral numeric summary."
+                    "reason as a short neutral numeric summary in English ASCII only."
                 )
         else:
             safe_prompt = (

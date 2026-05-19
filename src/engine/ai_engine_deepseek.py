@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from itertools import cycle
 from openai import OpenAI, RateLimitError
 
+from src.engine.ai_response_contracts import normalize_ai_reason_language
 from src.engine.scalping_feature_packet import (
     build_scalping_feature_audit_fields,
     extract_scalping_feature_packet,
@@ -461,7 +462,10 @@ class DeepSeekSniperEngine:
     def _normalize_scalping_action_schema(self, result, *, prompt_type):
         payload = dict(result or {}) if isinstance(result, dict) else {}
         raw_action = str(payload.get("action", "WAIT") or "WAIT").upper().strip()
-        reason = str(payload.get("reason", "응답 보정") or "응답 보정").replace("\n", " ").strip()
+        reason_contract = normalize_ai_reason_language(
+            payload.get("reason", "response_normalized") or "response_normalized",
+            max_len=120,
+        )
         try:
             score = int(float(payload.get("score", 50)))
         except Exception:
@@ -476,7 +480,9 @@ class DeepSeekSniperEngine:
             payload["action"] = compat.get(action_v2, "WAIT")
             payload["action_schema"] = "holding_exit_v1"
             payload["score"] = score
-            payload["reason"] = reason[:120]
+            payload["reason"] = reason_contract["reason"]
+            payload["ai_reason_language_policy"] = reason_contract["ai_reason_language_policy"]
+            payload["ai_reason_language_violation"] = reason_contract["ai_reason_language_violation"]
             return payload
 
         allowed = {"BUY", "WAIT", "DROP"}
@@ -485,7 +491,9 @@ class DeepSeekSniperEngine:
         payload["action_v2"] = action
         payload["action_schema"] = "entry_v1"
         payload["score"] = score
-        payload["reason"] = reason[:120]
+        payload["reason"] = reason_contract["reason"]
+        payload["ai_reason_language_policy"] = reason_contract["ai_reason_language_policy"]
+        payload["ai_reason_language_violation"] = reason_contract["ai_reason_language_violation"]
         return payload
 
     def _remote_buy_risk_flags(self, ws_data, recent_ticks, recent_candles):

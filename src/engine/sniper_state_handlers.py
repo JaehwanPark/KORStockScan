@@ -5416,6 +5416,7 @@ def _build_ai_ops_log_fields(
         "entry_adm_original_action",
         "entry_adm_forced_action",
         "entry_adm_runtime_reason",
+        "ai_reason_language_policy",
     ):
         if field_name in payload:
             out[field_name] = str(payload.get(field_name, "-") or "-")
@@ -5468,6 +5469,8 @@ def _build_ai_ops_log_fields(
         out["entry_adm_runtime_bias_enabled"] = bool(payload.get("entry_adm_runtime_bias_enabled"))
     if "entry_adm_runtime_bias_applied" in payload:
         out["entry_adm_runtime_bias_applied"] = bool(payload.get("entry_adm_runtime_bias_applied"))
+    if "ai_reason_language_violation" in payload:
+        out["ai_reason_language_violation"] = bool(payload.get("ai_reason_language_violation"))
     if payload.get("scalp_feature_packet_version"):
         out["scalp_feature_packet_version"] = str(payload.get("scalp_feature_packet_version"))
     for field_name in (

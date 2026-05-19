@@ -24,6 +24,7 @@ from src.utils.constants import TRADING_RULES
 from src.engine.macro_briefing_complete import build_scanner_data_input
 from src.engine.ai_response_contracts import (
     AI_RESPONSE_SCHEMA_REGISTRY,
+    normalize_ai_reason_language,
     resolve_ai_response_schema,
 )
 from src.engine.holding_exit_matrix_runtime import (
@@ -67,6 +68,8 @@ SCALPING_SYSTEM_PROMPT = """
 - 50~79 (WAIT): 관찰 유지
 - 0~49 (DROP): 진입 금지
 
+Output `reason` in concise English ASCII only. Do not use Korean, Thai, or any other non-English language.
+
 반드시 JSON만 반환:
 {
     "action": "BUY" | "WAIT" | "DROP",
@@ -109,6 +112,7 @@ large_sell_print_detected=true 또는 distance_from_day_high_pct >= -0.35이면 
 [WAIT 판단 규칙]
 핵심 BUY 조합이 부족하거나 긍정/부정 신호가 혼합되면 WAIT다.
 reason에는 BUY 또는 DROP을 막은 정량 피처를 1줄로 쓴다.
+Output `reason` in concise English ASCII only. Do not use Korean, Thai, or any other non-English language.
 
 [스코어링 기준 (0~100)]
 - 80~100 (BUY): 즉시 진입 유효
@@ -142,6 +146,8 @@ SCALPING_ENTRY_PRICE_PROMPT = """
 - IMPROVE_LIMIT: reference와 defensive 사이 또는 best bid 근처의 더 나은 지정가 제안
 - SKIP: 지금 제출하면 기대값이 낮아 주문 자체를 보류
 
+Output `reason` in concise English ASCII only. Do not use Korean, Thai, or any other non-English language.
+
 반드시 JSON만 반환:
 {
   "action": "USE_DEFENSIVE" | "USE_REFERENCE" | "IMPROVE_LIMIT" | "SKIP",
@@ -174,12 +180,14 @@ def normalize_scalping_entry_price_result(result, *, fallback_price=0):
     except Exception:
         max_wait_sec = 90
     max_wait_sec = max(5, min(1200, max_wait_sec))
-    reason = str(payload.get("reason") or "no_reason").strip()[:240]
+    reason_contract = normalize_ai_reason_language(payload.get("reason") or "no_reason", max_len=240)
     return {
         "action": action,
         "order_price": order_price,
         "confidence": confidence,
-        "reason": reason,
+        "reason": reason_contract["reason"],
+        "ai_reason_language_policy": reason_contract["ai_reason_language_policy"],
+        "ai_reason_language_violation": reason_contract["ai_reason_language_violation"],
         "max_wait_sec": max_wait_sec,
     }
 
@@ -251,6 +259,8 @@ SCALPING_HOLDING_SYSTEM_PROMPT = """
 - 80~100: 보유 우호
 - 50~79: 중립
 - 0~49: 청산 후보 우호
+
+Output `reason` in concise English ASCII only. Do not use Korean, Thai, or any other non-English language.
 
 반드시 JSON만 반환:
 {
@@ -1084,7 +1094,10 @@ class GeminiSniperEngine:
     def _normalize_scalping_action_schema(self, result, *, prompt_type):
         payload = dict(result or {}) if isinstance(result, dict) else {}
         raw_action = str(payload.get("action", "WAIT") or "WAIT").upper().strip()
-        reason = str(payload.get("reason", "응답 보정") or "응답 보정").replace("\n", " ").strip()
+        reason_contract = normalize_ai_reason_language(
+            payload.get("reason", "response_normalized") or "response_normalized",
+            max_len=120,
+        )
         try:
             score = int(float(payload.get("score", 50)))
         except Exception:
@@ -1101,7 +1114,9 @@ class GeminiSniperEngine:
             payload["action"] = compat.get(action_v2, "WAIT")
             payload["action_schema"] = "holding_exit_v1"
             payload["score"] = score
-            payload["reason"] = reason[:120]
+            payload["reason"] = reason_contract["reason"]
+            payload["ai_reason_language_policy"] = reason_contract["ai_reason_language_policy"]
+            payload["ai_reason_language_violation"] = reason_contract["ai_reason_language_violation"]
             return payload
 
         allowed = {"BUY", "WAIT", "DROP"}
@@ -1110,7 +1125,9 @@ class GeminiSniperEngine:
         payload["action_v2"] = action
         payload["action_schema"] = "entry_v1"
         payload["score"] = score
-        payload["reason"] = reason[:120]
+        payload["reason"] = reason_contract["reason"]
+        payload["ai_reason_language_policy"] = reason_contract["ai_reason_language_policy"]
+        payload["ai_reason_language_violation"] = reason_contract["ai_reason_language_violation"]
         return payload
 
     def _remote_buy_risk_flags(self, ws_data, recent_ticks, recent_candles):
