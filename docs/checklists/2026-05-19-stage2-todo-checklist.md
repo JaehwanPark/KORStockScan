@@ -120,6 +120,12 @@
   - 금지: code-improvement workorder를 자동 repo 수정으로 취급하지 않는다. 사용자가 Codex 구현을 지시한 경우에만 실행한다.
   - 다음 액션: 구현 필요, 설계 보류, reject, already_implemented 중 하나로 닫는다.
 
+- [ ] `[ScalpSimAIBudgetCriticalBypassReview0519] sim holding AI critical bypass 과다 및 deferred 기준 개선 검토` (`Due: 2026-05-19`, `Slot: POSTCLOSE`, `TimeWindow: 16:55~17:10`, `Track: ScalpingLogic`)
+  - Source: [scalp_sim_ev_midcheck_2026-05-19.json](/home/ubuntu/KORStockScan/data/report/scalp_simulator/scalp_sim_ev_midcheck_2026-05-19.json), [scalp_sim_ai_deferred_review_2026-05-19.json](/home/ubuntu/KORStockScan/data/report/scalp_sim_ai_deferred_review/scalp_sim_ai_deferred_review_2026-05-19.json), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [scalp_sim_ai_deferred_review.py](/home/ubuntu/KORStockScan/src/engine/scalp_sim_ai_deferred_review.py)
+  - 판정 기준: `scalp_sim_ai_holding_live_call`, `sim_ai_critical_bypass`, `scalp_sim_ai_holding_deferred`, `sim_ai_budget_exhausted` count와 call_reason을 분리하고, 단순 `profit_rate < 0`로 인한 critical bypass와 soft/hard stop 근접, drawdown 급변, max cooldown 초과를 구분한다.
+  - 금지: 장중 critical 조건 변경, real holding/exit 변경, provider route 변경, BUY/submit threshold 변경, broker guard 우회 근거로 사용하지 않는다.
+  - 다음 액션: `hold_collect_today`, `design_next_preopen_hook`, `attach_code_improvement_workorder`, `reject_no_issue` 중 하나로 닫고, 필요 시 `SCALP_SIM_AI_CRITICAL_MODE`/critical threshold hook 설계 후보를 code-improvement workorder에 연결한다.
+
 - [ ] `[HumanInterventionSummary0519] 자동화체인 사용자 개입 요구사항 분류 및 누락 확인` (`Due: 2026-05-19`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:15`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-18.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-18.json), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
   - 판정 기준: 개입사항을 `approval_artifact_required|created|missing|blocked_by_policy|observe_only`, `Codex 구현 필요`, `수동 동기화 필요`, `관찰만`으로 분류한다.

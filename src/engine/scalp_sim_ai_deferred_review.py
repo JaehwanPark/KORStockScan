@@ -25,13 +25,17 @@ def _event_fields(event: dict) -> dict:
     return fields if isinstance(fields, dict) else {}
 
 
+def _boolish_false(value) -> bool:
+    return str(value).strip().lower() in {"false", "0", "no", "none", ""}
+
+
 def _is_deferred_event(event: dict) -> bool:
     stage = str(event.get("stage") or "")
     fields = _event_fields(event)
     return (
         stage == "scalp_sim_ai_holding_deferred"
         and str(fields.get("simulation_book") or "") == "scalp_ai_buy_all"
-        and fields.get("actual_order_submitted") is False
+        and _boolish_false(fields.get("actual_order_submitted"))
     )
 
 
