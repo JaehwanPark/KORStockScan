@@ -48,29 +48,39 @@
 
 ## 장중 체크리스트 (09:05~15:20)
 
-- [ ] `[RuntimeEnvIntradayObserve0519] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-05-19`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
+- [x] `[RuntimeEnvIntradayObserve0519] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-05-19`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-18.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-18.json)
   - 판정 기준: `score65_74_recovery_probe`는 사용자 지시로 다시 열린 상태를 확인하고, selected_families 중 score65_74_recovery_probe, latency classifier profile, bad_entry_refined_canary, swing_one_share_real_canary_phase0, swing_gatekeeper_reject_cooldown가 runtime event provenance에 찍히는지 확인한다.
   - 금지: 장중 관찰 결과로 runtime threshold mutation을 수행하지 않는다.
-  - 다음 액션: provenance present/missing, rollback guard breach 여부를 분리 기록한다.
+  - 완료 메모 (`2026-05-19 10:51 KST`): `pass`. `threshold_runtime_env_2026-05-19.env`와 봇 PID `7079` `/proc/7079/environ`에서 `KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED=true`, latency classifier age/jitter/spread override, `KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED=true` 로드를 확인했다. 장중 이벤트 기준 `score65_74_recovery_probe=2`, `score65_74_recovery_probe_entry_unlocked=11`, `soft_stop_whipsaw_confirmation=20`, `latency_pass=1`이 관찰됐고 `rollback|safety_revert|runtime_mutation|threshold_runtime_mutation|severe_loss|receipt_missing` 검색성 이벤트는 `0건`이었다.
+  - 다음 액션: runtime env는 유지한다. 장중 threshold/provider/order guard 변경은 하지 않고, postclose `threshold_cycle_ev`에서 selected/applied/not-applied attribution으로 재확인한다.
 
-- [ ] `[LatencyClassifierProfileOverride0519] 스캘핑 latency classifier age/jitter/spread override 로드 및 latency_pass 회복 확인` (`Due: 2026-05-19`, `Slot: INTRADAY`, `TimeWindow: 09:20~09:35`, `Track: ScalpingLogic`)
+- [x] `[LatencyClassifierProfileOverride0519] 스캘핑 latency classifier age/jitter/spread override 로드 및 latency_pass 회복 확인` (`Due: 2026-05-19`, `Slot: INTRADAY`, `TimeWindow: 09:20~09:35`, `Track: ScalpingLogic`)
   - Source: [latency_classifier_recommendation_2026-05-18.json](/home/ubuntu/KORStockScan/data/report/latency_classifier_recommendation/latency_classifier_recommendation_2026-05-18.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [sniper_entry_latency.py](/home/ubuntu/KORStockScan/src/engine/sniper_entry_latency.py), [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py), [pipeline_events_2026-05-18.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-05-18.jsonl)
   - 판정 기준: PREOPEN runtime env에서 `KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION`, `KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION`, `KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION`이 로드됐는지 확인하고, `latency_block` 비중이 줄고 `latency_pass` 또는 `order_leg_request`가 발생하는지 본다.
   - 금지: fallback split-entry 재개, provider 변경, order guard 우회, 장중 threshold mutation으로 해석하지 않는다. `quote_stale`/`spread_too_wide`/stale submit block은 별도 safety로 유지한다.
-  - 다음 액션: `override_loaded_latency_pass_recovered`, `override_loaded_still_blocked_by_quote_or_spread`, `override_missing`, `runtime_restart_needed`, `rollback_guard_breach` 중 하나로 닫는다.
+  - 완료 메모 (`2026-05-19 10:51 KST`): `warning / override_loaded_still_blocked_by_quote_or_spread`. runtime env와 PID `7079` env에서 `KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION=1200`, `KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION=1500`, `KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION=0.01` 로드를 확인했다. 그러나 장중 pipeline 기준 `budget_pass=512`, `latency_block=511`, `latency_pass=1`이며 latency reason은 `latency_state_danger=421`, `latency_fallback_deprecated=90`으로 submit 회복은 아직 미약하다.
+  - 다음 액션: 장중 추가 완화는 금지한다. postclose에서 latency classifier profile의 missed/avoided attribution과 stale/price guard 분리를 다시 보고 `hold_sample|adjust_up|freeze`로 닫는다.
 
-- [ ] `[SimProbeIntradayCoverage0519] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-05-19`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
+- [x] `[SimProbeIntradayCoverage0519] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-05-19`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
   - Source: [threshold_cycle_ev_2026-05-18.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-18.json)
   - 판정 기준: sim/probe 표본이 real execution과 분리되고 `actual_order_submitted=false` provenance가 유지되는지 확인한다.
   - 금지: sim/probe EV를 broker execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
-  - 다음 액션: source-quality split, active state 복원, open/closed count를 같이 기록한다.
+  - 완료 메모 (`2026-05-19 10:51 KST`): `pass`. pipeline 기준 `actual_order_submitted=False` 이벤트 `33,003건`, threshold compact 기준 `31,272건`이며 `actual_order_submitted=True` 혼입은 없었다. sim/probe는 `scalp_sim_buy_order_assumed_filled=5`, `scalp_sim_holding_started=5`, `scalp_sim_sell_order_assumed_filled=2`, `scalp_sim_duplicate_buy_signal=506`, `wait65_79_ev_candidate=8`, `score65_74_recovery_probe=2`로 관찰됐다. `scalp_live_simulator_state.json` active position은 `3건`이고 `네이처셀(72)`, `엘앤케이바이오(66)`는 score65_74 probe, `에스엠(82)`은 AI BUY sim이다.
+  - 다음 액션: sim/probe 손익은 postclose MFE/MAE/close/EV와 lifecycle matrix source로만 사용하고, broker execution 품질 또는 실주문 전환 근거로 단독 사용하지 않는다.
 
-- [ ] `[EntryADMRuntimeEffectObserve0519] Entry ADM runtime effect 및 실제 API prompt 적용 재확인` (`Due: 2026-05-19`, `Slot: INTRADAY`, `TimeWindow: 10:00~10:20`, `Track: ScalpingLogic`)
+- [x] `[EntryADMRuntimeEffectObserve0519] Entry ADM runtime effect 및 실제 API prompt 적용 재확인` (`Due: 2026-05-19`, `Slot: INTRADAY`, `TimeWindow: 10:00~10:20`, `Track: ScalpingLogic`)
   - Source: [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md), [scalp_entry_adm_runtime.py](/home/ubuntu/KORStockScan/src/engine/scalp_entry_adm_runtime.py), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py), [scalp_entry_action_decision_matrix_2026-05-18.json](/home/ubuntu/KORStockScan/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_2026-05-18.json)
   - 판정 기준: `/proc/<bot_pid>/environ` 또는 신규 event에서 `KORSTOCKSCAN_SCALP_ENTRY_ADM_ADVISORY_ENABLED=true`, `KORSTOCKSCAN_SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED=true` 로드를 확인하고, `analyze_target` actual API live 호출 또는 당일 live event에서 `entry_adm_prompt_applied=true`, `openai_endpoint_name=analyze_target`, `openai_schema_name=entry_v1`, `entry_adm_cache_token` prefix를 확인한다. 신규 cohort에 `entry_adm_runtime_effect`, `entry_adm_forced_action`, `entry_adm_runtime_reason`이 찍히는지도 분리 확인한다.
   - 금지: 실제 API smoke를 broker order submit, threshold mutation, provider 변경, bot restart 근거로 사용하지 않는다. `BUY_NOW`/`BUY_DEFENSIVE` positive bucket은 표본 충족 전 강제 BUY 승격으로 해석하지 않는다.
-  - 다음 액션: `api_prompt_loaded_no_forced_effect`, `forced_wait_drop_observed`, `prompt_not_loaded`, `runtime_env_missing`, `fixture_schema_gap`, `api_transport_fail` 중 하나로 닫고, gap은 `order_scalp_entry_adm_daily_tuning_coverage` 또는 후속 workorder로 연결한다.
+  - 완료 메모 (`2026-05-19 10:51 KST`): `pass / api_prompt_loaded_no_forced_effect`. 당일 이벤트에서 `entry_adm_status=advisory_prompt_applied`, `entry_adm_prompt_applied=True`, `entry_adm_cache_token=entry_adm:...`, `openai_endpoint_name=analyze_target`, `openai_schema_name=entry_v1`가 확인됐다. pipeline 기준 OpenAI provenance는 `analyze_target/entry_v1/ws_used=True/http_fallback=False 1,723건`, `holding_exit_v1 116건`, `entry_price_v1 13건`이다. Entry ADM runtime effect는 `non_buy_action_passthrough=2,130`, `no_matching_runtime_bias=6`, forced action은 관찰되지 않았다.
+  - 다음 액션: Entry ADM은 현재 BUY 승격이 아니라 advisory/passthrough 위주로 동작 중이다. forced WAIT/DROP 또는 positive bucket 효과는 postclose `scalp_entry_action_decision_matrix`와 lifecycle matrix source join 이후 재판정한다.
+
+- [x] `[IntradayAutomationHealthCheck20260519] 장중 자동화체인 상태 확인` (`Due: 2026-05-19`, `Slot: INTRADAY`, `TimeWindow: 09:05~15:30`, `Track: RunbookOps`)
+  - Source: [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md#장중-확인-절차)
+  - 판정: `warning`
+  - 근거: pipeline/threshold JSONL은 10:50 KST까지 append 중이고 봇 PID `7079`가 살아 있다. BUY funnel sentinel, holding/exit sentinel, panic sell defense, panic buying report는 반복 `[DONE]` marker와 report artifact를 생성했다. panic sell은 `RECOVERY_WATCH`, panic buying은 `NORMAL`, 둘 다 `runtime_effect=report_only_no_mutation`이다. `threshold_cycle_calibration_intraday`는 12:05 작업이라 10:51 KST 기준 아직 `not_yet_due`이며 fail이 아니다. 장중 runtime mutation/rollback-like 이벤트는 관찰되지 않았다.
+  - 다음 액션: 12:05 이후 `threshold_cycle_calibration_intraday_cron.log`의 `[DONE] threshold-cycle calibration target_date=2026-05-19 phase=intraday`를 별도 확인한다. Sentinel/panic 경고는 report-only로 유지하고 threshold/provider/order/bot 변경 근거로 쓰지 않는다.
 
 ## 장후 체크리스트 (16:30~18:55)
 
