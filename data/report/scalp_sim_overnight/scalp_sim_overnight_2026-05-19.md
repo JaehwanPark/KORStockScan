@@ -1,6 +1,6 @@
 # Scalp Sim Overnight 2026-05-19
 
-- generated_at: `2026-05-19T16:11:58`
+- generated_at: `2026-05-19T16:39:07`
 - artifact_role: `postclose_source_packet_for_scalp_sim_overnight_ai_carry`
 - runtime_effect: `false`
 - decision_authority: `sim_observation_only`
@@ -8,6 +8,9 @@
 - sell_today: `13`
 - hold_overnight: `0`
 - carry_open_count: `0`
+- ai_failure_fallback: `13`
+- ai_timeout_fallback: `5`
+- ai_engine_disabled_fallback: `8`
 
 ## Stage Counts
 

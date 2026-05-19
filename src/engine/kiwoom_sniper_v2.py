@@ -307,6 +307,29 @@ def _is_runtime_simulation_target(stock):
         or stock.get('actual_order_submitted') is False
     )
 
+def _is_runtime_scalp_sim_target(stock):
+    stock = stock or {}
+    strategy = str(stock.get('strategy') or '').strip().upper()
+    simulation_book = str(stock.get('simulation_book') or '').strip()
+    return (
+        bool(stock.get('scalp_live_simulator'))
+        or simulation_book == 'scalp_ai_buy_all'
+        or (
+            strategy == 'SCALPING'
+            and bool(stock.get('simulation_owner'))
+            and stock.get('actual_order_submitted') is False
+        )
+    )
+
+def _is_runtime_probe_target(stock):
+    stock = stock or {}
+    simulation_book = str(stock.get('simulation_book') or '').strip()
+    return (
+        bool(stock.get('swing_live_order_dry_run'))
+        or bool(stock.get('swing_intraday_probe'))
+        or simulation_book == 'swing_intraday_live_equiv_probe'
+    )
+
 def _send_exit_best_ioc(code, qty, token):
     """[공통 긴급 청산 래퍼] 최유리(IOC, 16) 조건으로 즉각 청산 시도"""
     return sniper_trade_utils.send_exit_best_ioc(code, qty, token)
@@ -1199,7 +1222,7 @@ def run_sniper(is_test_mode=False):
         t['strategy'] = normalize_strategy(t.get('strategy'))
         t['position_tag'] = normalize_position_tag(t['strategy'], t.get('position_tag'))
     _restore_holding_runtime_state(ACTIVE_TARGETS)
-    sniper_state_handlers.restore_scalp_simulator_targets(ACTIVE_TARGETS)
+    sniper_state_handlers.sync_scalp_simulator_targets_from_state(ACTIVE_TARGETS)
     sniper_state_handlers.restore_swing_intraday_probe_targets(ACTIVE_TARGETS)
 
     targets = ACTIVE_TARGETS
@@ -1362,10 +1385,17 @@ def run_sniper(is_test_mode=False):
                 watching_count = len([t for t in targets if t.get('status') == 'WATCHING'])
                 holding_targets = [t for t in targets if t.get('status') == 'HOLDING']
                 real_holding_count = len([t for t in holding_targets if not _is_runtime_simulation_target(t)])
-                sim_holding_count = len(holding_targets) - real_holding_count
+                scalp_sim_holding_count = len([t for t in holding_targets if _is_runtime_scalp_sim_target(t)])
+                probe_holding_count = len([t for t in holding_targets if _is_runtime_probe_target(t)])
+                other_sim_holding_count = max(
+                    0,
+                    len(holding_targets) - real_holding_count - scalp_sim_holding_count - probe_holding_count,
+                )
                 print(
                     f"💓 [{now.strftime('%H:%M:%S')}] 다중 감시망 가동 중... "
-                    f"(감시: {watching_count} / 보유: {real_holding_count} / sim: {sim_holding_count})"
+                    f"(감시: {watching_count} / 보유: {real_holding_count} / "
+                    f"scalp_sim: {scalp_sim_holding_count} / probe: {probe_holding_count} / "
+                    f"other_sim: {other_sim_holding_count})"
                 )
                 last_msg_min = now_t.minute
 

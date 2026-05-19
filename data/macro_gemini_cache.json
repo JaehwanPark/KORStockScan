@@ -1,84 +1,85 @@
 {
-  "bundle_as_of": "2026-05-17T22:20:16Z",
+  "bundle_as_of": "2026-05-18T22:20:12Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 7408.5,
-    "prev_value": 7501.24,
-    "change": -92.74,
-    "change_pct": -1.24,
-    "as_of": "2026-05-15T20:00:00Z",
-    "source": "Investing.com"
+    "value": 7403.05,
+    "prev_value": 7408.5,
+    "change": -5.45,
+    "change_pct": -0.07,
+    "as_of": "2026-05-18T20:00:00Z",
+    "source": "Morningstar / Dow Jones Market Data"
   },
   "nasdaq": {
     "name": "NASDAQ Composite",
-    "value": 26225.14,
-    "prev_value": 26635.22,
-    "change": -410.08,
-    "change_pct": -1.54,
-    "as_of": "2026-05-15T20:00:00Z",
-    "source": "Morningstar"
+    "value": 26090.73,
+    "prev_value": 26225.14,
+    "change": -134.41,
+    "change_pct": -0.51,
+    "as_of": "2026-05-18T20:00:00Z",
+    "source": "Morningstar / Dow Jones Market Data"
   },
   "vix": {
     "name": "VIX",
-    "value": 18.43,
-    "prev_value": 17.26,
-    "change": 1.17,
-    "change_pct": 6.78,
-    "as_of": "2026-05-15T20:00:00Z",
-    "source": "CBOE"
+    "value": 18.59,
+    "prev_value": 18.43,
+    "change": 0.16,
+    "change_pct": 0.87,
+    "as_of": "2026-05-18T20:49:00Z",
+    "source": "Cboe Global Markets"
   },
   "us10y": {
-    "name": "US 10Y Treasury Yield",
-    "value": 4.6,
-    "prev_value": 4.49,
-    "change": 0.11,
-    "change_pct": null,
-    "as_of": "2026-05-15T20:00:00Z",
-    "source": "Trading Economics"
+    "name": "US 10-Year Treasury Yield",
+    "value": 4.621,
+    "prev_value": 4.597,
+    "change": 0.024,
+    "change_pct": 0.52,
+    "as_of": "2026-05-18T20:00:00Z",
+    "source": "The Economic Times"
   },
   "brent": {
     "name": "Brent Crude",
-    "value": 109.26,
-    "prev_value": 105.72,
-    "change": 3.54,
-    "change_pct": 3.35,
-    "as_of": "2026-05-15T21:00:00Z",
-    "source": "Investing.com"
+    "value": 112.1,
+    "prev_value": 109.47,
+    "change": 2.63,
+    "change_pct": 2.4,
+    "as_of": "2026-05-18T20:00:00Z",
+    "source": "Los Angeles Times"
   },
   "headlines": [
     {
-      "title": "Oxford Economics: U.S.-Israeli war on Iran deepens global economic fragmentation",
-      "source": "Syrian Arab News Agency (SANA)",
-      "published_at": "2026-05-17T00:00:00Z",
-      "url": ""
+      "title": "Stock Market Today (May 18, 2026): Nasdaq, S&P 500 sink to start week as 10Y Treasury yield hits highest in a year",
+      "source": "TheStreet",
+      "published_at": "2026-05-18T20:17:00Z",
+      "url": "https://www.thestreet.com/"
     },
     {
-      "title": "China Says Trump Visit Trade Deals Are Only Preliminary",
-      "source": "Modern Diplomacy",
-      "published_at": "2026-05-16T00:00:00Z",
-      "url": ""
+      "title": "Is a deeper bond crash ahead? From Washington to Tokyo, governments are paying the highest borrowing costs in decades as global bond yields surge",
+      "source": "The Economic Times",
+      "published_at": "2026-05-18T17:49:04Z",
+      "url": "https://economictimes.indiatimes.com/"
     },
     {
-      "title": "India-US Trade Tensions Cloud Modi's Solar Energy and AI Ambitions",
-      "source": "Fair Observer",
-      "published_at": "2026-05-17T10:06:00Z",
-      "url": ""
+      "title": "Oil prices keep swinging, and so do stocks worldwide",
+      "source": "Los Angeles Times",
+      "published_at": "2026-05-18T20:31:00Z",
+      "url": "https://www.latimes.com/"
     },
     {
-      "title": "Higher Oil Prices Send Shivers Through Bond Market",
-      "source": "Transport Topics",
-      "published_at": "2026-05-15T12:20:00Z",
-      "url": ""
+      "title": "How major US stock indexes fared Monday 5/18/2026",
+      "source": "AP News",
+      "published_at": "2026-05-18T20:19:00Z",
+      "url": "https://apnews.com/"
     },
     {
-      "title": "How China's electric vehicles turn crisis into climate opportunity",
-      "source": "China Daily HK",
-      "published_at": "2026-05-17T09:21:00Z",
-      "url": ""
+      "title": "Dow rises while Nasdaq slides on oil surge, Treasury yields pressure tech",
+      "source": "Invezz",
+      "published_at": "2026-05-18T20:18:00Z",
+      "url": "https://invezz.com/"
     }
   ],
   "notes": [
-    "Market data reflects the close on Friday, May 15, 2026.",
-    "US 10Y Yield values are in percentage points; change_pct is set to null as basis point changes are standard."
+    "미국 증시는 중동 긴장에 따른 국제 유가 급등과 10년물 국채 금리 연고점 경신 여파로 기술주 중심의 하락세를 보이며 혼조세로 마감함.",
+    "브렌트유는 호르무즈 해협 봉쇄 및 공급망 붕괴 우려로 배럴당 장중 112달러 선을 돌파한 후 112.10달러 부근에서 거래를 마쳤음.",
+    "안전자산 선호 및 인플레이션 장기화 우려로 인해 VIX 등 변동성 지표는 전일 대비 상승 마감함."
   ]
 }

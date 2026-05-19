@@ -114,7 +114,11 @@ def _postclose_not_yet_due(target_date: str) -> bool:
     return parsed == now.date() and now.time() < dtime(16, 10)
 
 
-def build_threshold_cycle_postclose_verification(target_date: str) -> dict[str, Any]:
+def build_threshold_cycle_postclose_verification(
+    target_date: str,
+    *,
+    require_done_marker: bool = True,
+) -> dict[str, Any]:
     target_date = str(target_date).strip()
     log_lines = _read_lines(LOG_PATH)
     run_lines, start_line = _latest_run_lines(log_lines, target_date)
@@ -304,11 +308,12 @@ def build_threshold_cycle_postclose_verification(target_date: str) -> dict[str, 
         ]
     if "daily_ev" in disabled_stage_flags or "runtime_approval_summary" in disabled_stage_flags:
         missing_downstream_links = []
+    pending_done_marker = bool(start_line and done_line is None and not require_done_marker)
     execution_profile_status = "full_profile"
     if disabled_stage_flags:
         execution_profile_status = "recovered_partial_profile"
     elif done_line is None and start_line:
-        execution_profile_status = "done_marker_missing"
+        execution_profile_status = "done_marker_missing" if require_done_marker else "pending_done_marker"
 
     status = "pass"
     if not start_line:
@@ -319,7 +324,7 @@ def build_threshold_cycle_postclose_verification(target_date: str) -> dict[str, 
             log_issues.append("postclose_start_marker_missing")
     elif predecessor_timeouts or log_issues:
         status = "fail"
-    elif done_line is None:
+    elif done_line is None and require_done_marker:
         status = "fail"
         log_issues.append("postclose_done_marker_missing")
     elif missing_execution_flags:
@@ -335,6 +340,8 @@ def build_threshold_cycle_postclose_verification(target_date: str) -> dict[str, 
         status = "warning"
     elif workorder_snapshot_status == "missing_snapshot_identity":
         status = "fail"
+    elif pending_done_marker:
+        status = "pass_with_pending_done_marker"
 
     return {
         "date": target_date,
@@ -346,6 +353,8 @@ def build_threshold_cycle_postclose_verification(target_date: str) -> dict[str, 
         "latest_done_marker": done_line,
         "execution_profile": {
             "status": execution_profile_status,
+            "require_done_marker": require_done_marker,
+            "pending_done_marker": pending_done_marker,
             "flags": execution_flags,
             "disabled_stage_flags": disabled_stage_flags,
             "missing_required_flags": missing_execution_flags,
@@ -355,6 +364,8 @@ def build_threshold_cycle_postclose_verification(target_date: str) -> dict[str, 
                 if disabled_stage_flags
                 else "latest DONE marker used full/default stage profile"
                 if done_line
+                else "wrapper-internal verification passed required artifacts; final DONE marker is checked by a later health check"
+                if pending_done_marker
                 else "latest START marker has no matching DONE marker"
             ),
         },
@@ -362,6 +373,8 @@ def build_threshold_cycle_postclose_verification(target_date: str) -> dict[str, 
             "status": (
                 "not_yet_due"
                 if status == "not_yet_due"
+                else "pass_pending_done_marker"
+                if status == "pass_with_pending_done_marker"
                 else "fail"
                 if predecessor_timeouts or log_issues
                 else "warning"
@@ -424,9 +437,20 @@ def _render_markdown(report: dict[str, Any]) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Verify threshold-cycle postclose chain integrity.")
     parser.add_argument("--date", required=True)
+    parser.add_argument(
+        "--allow-pending-done-marker",
+        action="store_true",
+        help=(
+            "Allow wrapper-internal verification to pass when required artifacts are present "
+            "but the wrapper has not emitted its final DONE marker yet."
+        ),
+    )
     args = parser.parse_args()
 
-    report = build_threshold_cycle_postclose_verification(args.date)
+    report = build_threshold_cycle_postclose_verification(
+        args.date,
+        require_done_marker=not args.allow_pending_done_marker,
+    )
     VERIFY_DIR.mkdir(parents=True, exist_ok=True)
     json_path, md_path = verification_report_paths(args.date)
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -160,6 +160,33 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
     artifact_labels = {item["label"] for item in report["artifact_status"]}
     assert {"market_panic_breadth", "panic_sell_defense", "panic_buying"}.issubset(artifact_labels)
 
+    log_path.write_text(
+        "\n".join(
+            [
+                "[START] threshold-cycle postclose target_date=2026-05-12 started_at=2026-05-12T21:00:00+0900",
+                "[threshold-cycle] artifact ready label=swing_daily_simulation.json path=/tmp/a waited=0s json_valid=true",
+                "[threshold-cycle] artifact ready label=threshold_cycle_ev_pre_workorder.json path=/tmp/b waited=0s json_valid=true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    pending_report = mod.build_threshold_cycle_postclose_verification(
+        "2026-05-12",
+        require_done_marker=False,
+    )
+
+    assert pending_report["status"] == "pass_with_pending_done_marker"
+    assert pending_report["execution_profile"]["status"] == "pending_done_marker"
+    assert pending_report["execution_profile"]["pending_done_marker"] is True
+    assert pending_report["predecessor_integrity"]["status"] == "pass_pending_done_marker"
+    assert "postclose_done_marker_missing" not in pending_report["predecessor_integrity"]["log_issues"]
+
+    strict_report = mod.build_threshold_cycle_postclose_verification("2026-05-12")
+
+    assert strict_report["status"] == "fail"
+    assert "postclose_done_marker_missing" in strict_report["predecessor_integrity"]["log_issues"]
+
 
 def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(tmp_path, monkeypatch):
     project_root = tmp_path

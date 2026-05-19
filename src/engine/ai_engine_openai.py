@@ -617,11 +617,22 @@ class GPTSniperEngine:
         return meta
 
     def _get_openai_timeout_ms(self, *, endpoint_name, require_json):
+        if str(endpoint_name or "").strip() == "overnight":
+            return max(1, int(getattr(TRADING_RULES, "OPENAI_OVERNIGHT_TIMEOUT_MS", 12000) or 12000))
         if not require_json:
             return max(1, int(getattr(TRADING_RULES, "OPENAI_RESPONSES_WS_TIMEOUT_MS", 700) or 700))
         if endpoint_name in OPENAI_RESPONSES_WS_ENDPOINTS:
             return max(1, int(getattr(TRADING_RULES, "OPENAI_RESPONSES_WS_TIMEOUT_MS", 700) or 700))
         return max(1, int(getattr(TRADING_RULES, "OPENAI_RESPONSES_WS_TIMEOUT_MS", 700) or 700))
+
+    def _is_sim_observation_overnight_context(self, realtime_ctx):
+        if not isinstance(realtime_ctx, dict):
+            return False
+        if str(realtime_ctx.get("decision_authority") or "") == "sim_observation_only":
+            return True
+        if str(realtime_ctx.get("simulation_book") or "") == "scalp_ai_buy_all":
+            return True
+        return realtime_ctx.get("actual_order_submitted") is False and bool(realtime_ctx.get("broker_order_forbidden"))
 
     def _should_use_openai_schema_registry(self, *, require_json, schema_name):
         return bool(
@@ -3069,9 +3080,13 @@ class GPTSniperEngine:
                 result_source="live",
             )
         except Exception as e:
-            failure_count = self._record_failure_and_maybe_disable(
-                context_name=f"SCALP_OVERNIGHT:{stock_name}:{stock_code}"
-            )
+            sim_observation_only = self._is_sim_observation_overnight_context(realtime_ctx)
+            if sim_observation_only:
+                failure_count = self.consecutive_failures + 1
+            else:
+                failure_count = self._record_failure_and_maybe_disable(
+                    context_name=f"SCALP_OVERNIGHT:{stock_name}:{stock_code}"
+                )
             log_error(f"🚨 [SCALPING 오버나이트 판정] OpenAI 에러 ({stock_name}, 연속 실패 {failure_count}회): {e}")
             return self._annotate_analysis_result(
                 {
@@ -3079,6 +3094,9 @@ class GPTSniperEngine:
                     'confidence': 0,
                     'reason': f'AI 판정 실패로 보수적 청산 폴백: {e}',
                     'risk_note': '데이터 부족 또는 AI 응답 오류',
+                    'ai_exception_type': type(e).__name__,
+                    'ai_exception_message': str(e),
+                    'sim_observation_failure_isolated': sim_observation_only,
                     'raw': {},
                 },
                 prompt_type=prompt_type,

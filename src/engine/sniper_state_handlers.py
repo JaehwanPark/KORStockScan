@@ -1015,6 +1015,41 @@ def restore_scalp_simulator_targets(targets=None) -> int:
     return restored
 
 
+def sync_scalp_simulator_targets_from_state(targets=None) -> dict:
+    target_list = targets if targets is not None else ACTIVE_TARGETS
+    if target_list is None:
+        return {"removed": 0, "restored": 0, "state_exists": False}
+    state_exists = SCALP_SIM_STATE_PATH.exists()
+    active_ids: set[str] = set()
+    if _is_scalp_live_simulator_enabled() and state_exists:
+        try:
+            payload = json.loads(SCALP_SIM_STATE_PATH.read_text(encoding="utf-8"))
+            rows = payload.get("active_positions") if isinstance(payload, dict) else []
+            if isinstance(rows, list):
+                active_ids = {
+                    str((row or {}).get("sim_record_id") or "").strip()
+                    for row in rows
+                    if isinstance(row, dict) and _active_runtime_status(row)
+                }
+                active_ids.discard("")
+        except Exception as exc:
+            log_error(f"[SCALP_SIM_STATE] sync read failed: {exc}")
+            return {"removed": 0, "restored": 0, "state_exists": state_exists, "error": str(exc)}
+
+    before = len(target_list)
+    target_list[:] = [
+        target
+        for target in target_list
+        if not _is_scalp_simulator_target(target)
+        or str((target or {}).get("sim_record_id") or "").strip() in active_ids
+    ]
+    removed = before - len(target_list)
+    restored = restore_scalp_simulator_targets(target_list) if _is_scalp_live_simulator_enabled() and state_exists else 0
+    if removed or restored:
+        log_info(f"[SCALP_SIM_STATE] synced simulator targets removed={removed} restored={restored}")
+    return {"removed": removed, "restored": restored, "state_exists": state_exists}
+
+
 def _swing_probe_active_targets(targets=None) -> list[dict]:
     source = targets if targets is not None else ACTIVE_TARGETS
     return [

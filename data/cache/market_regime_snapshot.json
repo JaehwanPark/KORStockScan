@@ -1,19 +1,19 @@
 {
-  "timestamp": "2026-05-18T18:25:51.400067",
-  "vix_close": 18.989999771118164,
-  "vix_ma3": 18.226666768391926,
+  "timestamp": "2026-05-19T16:50:17.317495",
+  "vix_close": 18.049999237060547,
+  "vix_ma3": 18.099999745686848,
   "vix_peak_passed": false,
   "vix_two_day_down": false,
   "vix_extreme": false,
-  "wti_close": 102.05000305175781,
-  "wti_rsi": 54.267226981343725,
-  "wti_macd": 1.8940454399039197,
-  "wti_macd_signal": 1.7555719040024915,
+  "wti_close": 103.69000244140625,
+  "wti_rsi": 54.894655495810625,
+  "wti_macd": 2.3923973705337716,
+  "wti_macd_signal": 1.9550655664006855,
   "wti_dead_cross": false,
-  "wti_from_recent_high_pct": -4.519081517384393,
+  "wti_from_recent_high_pct": -4.573901208542108,
   "oil_reversal": false,
-  "fng_value": 62.9142857142857,
-  "fng_prev": 62.9142857142857,
+  "fng_value": 62.1714285714286,
+  "fng_prev": 62.1714285714286,
   "fng_description": "greed",
   "fng_extreme_fear": false,
   "fng_recovery": false,
@@ -24,8 +24,8 @@
   "reasons": [],
   "debug": {
     "oil_rsi_turned": false,
-    "fng_curr": 62.9142857142857,
-    "fng_prev": 62.9142857142857,
+    "fng_curr": 62.1714285714286,
+    "fng_prev": 62.1714285714286,
     "score_threshold": 70,
     "component_scores": {
       "vix": 0,
@@ -37,18 +37,18 @@
     "oil_signal": "none",
     "fng_signal": "none",
     "local_market_context": {
-      "ma20_ratio": 45.9,
-      "daily_status_text": "중립장",
-      "quote_date": "2026-05-15",
-      "report_source": "/home/ubuntu/KORStockScan/data/report/report_2026-05-18.json",
+      "ma20_ratio": 33.8,
+      "daily_status_text": "하락장",
+      "quote_date": "2026-05-18",
+      "report_source": "/home/ubuntu/KORStockScan/data/report/report_2026-05-19.json",
       "bull_regime": 1,
-      "safe_pool_count": 131,
+      "safe_pool_count": 145,
       "candidate_count": 295,
       "selection_mode": "SELECTED",
-      "diagnostics_date": "2026-05-15 00:00:00"
+      "diagnostics_date": "2026-05-18 00:00:00"
     },
     "local_breadth_signal": "none"
   },
-  "cached_session_date": "2026-05-18",
-  "cached_at": "2026-05-18T18:25:51.406296+09:00"
+  "cached_session_date": "2026-05-19",
+  "cached_at": "2026-05-19T16:50:17.330504+09:00"
 }

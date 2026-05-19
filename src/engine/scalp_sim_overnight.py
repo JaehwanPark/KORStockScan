@@ -209,6 +209,7 @@ def _build_ai_context(row: dict[str, Any], price: dict[str, Any]) -> dict[str, A
 
 def _normalize_decision(decision: dict[str, Any] | None, *, fallback_reason: str = "decision_missing") -> dict[str, Any]:
     if not isinstance(decision, dict):
+        fallback_class = _classify_ai_fallback(fallback_reason)
         return {
             "action": "SELL_TODAY",
             "confidence": 0,
@@ -216,6 +217,9 @@ def _normalize_decision(decision: dict[str, Any] | None, *, fallback_reason: str
             "risk_note": fallback_reason,
             "ai_parse_ok": False,
             "ai_result_source": "fallback",
+            "ai_fallback": True,
+            "ai_fallback_reason": fallback_reason,
+            "ai_fallback_class": fallback_class,
         }
     action = str(decision.get("action") or "SELL_TODAY").upper()
     if action not in {"SELL_TODAY", "HOLD_OVERNIGHT"}:
@@ -224,13 +228,41 @@ def _normalize_decision(decision: dict[str, Any] | None, *, fallback_reason: str
         confidence = int(float(decision.get("confidence") or 0))
     except (TypeError, ValueError):
         confidence = 0
+    fallback = (
+        decision.get("ai_parse_ok") is False
+        or str(decision.get("ai_result_source") or "") in {"fallback", "exception", "engine_disabled", "lock_contention"}
+    )
+    fallback_reason = str(decision.get("ai_exception_message") or decision.get("reason") or decision.get("risk_note") or "")
     return {
         **decision,
         "action": action,
         "confidence": max(0, min(100, confidence)),
         "reason": str(decision.get("reason") or ""),
         "risk_note": str(decision.get("risk_note") or ""),
+        "ai_fallback": bool(fallback),
+        "ai_fallback_reason": fallback_reason if fallback else "",
+        "ai_fallback_class": _classify_ai_fallback(
+            fallback_reason,
+            result_source=str(decision.get("ai_result_source") or ""),
+        ),
     }
+
+
+def _classify_ai_fallback(reason: str, *, result_source: str = "") -> str:
+    text = f"{reason} {result_source}".lower()
+    if "engine_disabled" in text or "비활성화" in text:
+        return "engine_disabled"
+    if "timeout" in text or "timed out" in text:
+        return "timeout"
+    if "lock_contention" in text or "경합" in text:
+        return "lock_contention"
+    if "parse" in text or "json" in text:
+        return "parse_fail"
+    if "missing" in text:
+        return "missing"
+    if text.strip():
+        return "exception"
+    return "none"
 
 
 def _call_overnight_ai(ai_engine: Any, row: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
@@ -324,10 +356,23 @@ def run_sim_overnight(
         decision = _call_overnight_ai(ai_engine, row, ctx)
         action = str(decision.get("action") or "SELL_TODAY").upper()
         summary_counts["decision_target"] += 1
-        if decision.get("ai_parse_ok") is False or str(decision.get("ai_result_source") or "") in {"fallback", "exception"}:
+        if decision.get("ai_fallback"):
             summary_counts["ai_failure_fallback"] += 1
+            fallback_class = str(decision.get("ai_fallback_class") or "exception")
+            if fallback_class == "timeout":
+                summary_counts["ai_timeout_fallback"] += 1
+            elif fallback_class == "engine_disabled":
+                summary_counts["ai_engine_disabled_fallback"] += 1
+            elif fallback_class == "lock_contention":
+                summary_counts["ai_lock_contention_fallback"] += 1
+            elif fallback_class == "parse_fail":
+                summary_counts["ai_parse_fail_fallback"] += 1
+            else:
+                summary_counts[f"ai_{fallback_class}_fallback"] += 1
             action = "SELL_TODAY"
             decision["action"] = "SELL_TODAY"
+        else:
+            summary_counts["ai_success"] += 1
 
         base_fields = _base_event_fields(row, target_date, price)
         decision_fields = {
@@ -337,6 +382,10 @@ def run_sim_overnight(
             "ai_reason": decision.get("reason"),
             "ai_risk_note": decision.get("risk_note"),
             "ai_parse_ok": decision.get("ai_parse_ok"),
+            "ai_fallback": decision.get("ai_fallback"),
+            "ai_fallback_class": decision.get("ai_fallback_class"),
+            "ai_fallback_reason": decision.get("ai_fallback_reason"),
+            "ai_result_source": decision.get("ai_result_source"),
             "openai_endpoint_name": decision.get("openai_endpoint_name"),
             "openai_schema_name": decision.get("openai_schema_name") or OVERNIGHT_SCHEMA,
             "openai_ws_used": decision.get("openai_ws_used"),
@@ -374,6 +423,9 @@ def run_sim_overnight(
                     "overnight_ai_action": action,
                     "overnight_ai_confidence": decision.get("confidence"),
                     "overnight_ai_reason": decision.get("reason"),
+                    "overnight_ai_fallback": decision.get("ai_fallback"),
+                    "overnight_ai_fallback_class": decision.get("ai_fallback_class"),
+                    "overnight_ai_fallback_reason": decision.get("ai_fallback_reason"),
                     "sell_today_realized_profit_pct": None,
                     "sell_today_realized_pnl_krw": None,
                 }
@@ -431,6 +483,9 @@ def run_sim_overnight(
                 "overnight_ai_action": action,
                 "overnight_ai_confidence": decision.get("confidence"),
                 "overnight_ai_reason": decision.get("reason"),
+                "overnight_ai_fallback": decision.get("ai_fallback"),
+                "overnight_ai_fallback_class": decision.get("ai_fallback_class"),
+                "overnight_ai_fallback_reason": decision.get("ai_fallback_reason"),
                 "sell_today_realized_profit_pct": fill["profit_rate"],
                 "sell_today_realized_pnl_krw": fill["realized_pnl_krw"],
                 "assumed_fill_price": fill["assumed_fill_price"],
@@ -453,7 +508,12 @@ def run_sim_overnight(
             "decision_target": int(summary_counts.get("decision_target", 0)),
             "sell_today": int(summary_counts.get("sell_today", 0)),
             "hold_overnight": int(summary_counts.get("hold_overnight", 0)),
+            "ai_success": int(summary_counts.get("ai_success", 0)),
             "ai_failure_fallback": int(summary_counts.get("ai_failure_fallback", 0)),
+            "ai_timeout_fallback": int(summary_counts.get("ai_timeout_fallback", 0)),
+            "ai_engine_disabled_fallback": int(summary_counts.get("ai_engine_disabled_fallback", 0)),
+            "ai_lock_contention_fallback": int(summary_counts.get("ai_lock_contention_fallback", 0)),
+            "ai_parse_fail_fallback": int(summary_counts.get("ai_parse_fail_fallback", 0)),
             "price_fallback": int(summary_counts.get("price_fallback", 0)),
             "idempotent_skipped": int(summary_counts.get("idempotent_skipped", 0)),
             **dict(summary_counts),
@@ -477,6 +537,22 @@ def _event_fields(event: dict[str, Any]) -> dict[str, Any]:
     return fields if isinstance(fields, dict) else {}
 
 
+def _truthy(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"true", "1", "yes", "y"}
+
+
+def _event_fallback_class(fields: dict[str, Any]) -> str:
+    explicit = str(fields.get("ai_fallback_class") or "").strip()
+    if explicit:
+        return explicit
+    if _truthy(fields.get("ai_fallback")) or str(fields.get("ai_parse_ok") or "").strip().lower() in {"false", "0"}:
+        return _classify_ai_fallback(
+            str(fields.get("ai_fallback_reason") or fields.get("ai_reason") or fields.get("ai_risk_note") or ""),
+            result_source=str(fields.get("ai_result_source") or ""),
+        )
+    return "none"
+
+
 def build_report(target_date: str, state_path: Path = STATE_PATH) -> dict[str, Any]:
     events_path = DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
     events = read_jsonl(events_path, errors="ignore")
@@ -494,6 +570,12 @@ def build_report(target_date: str, state_path: Path = STATE_PATH) -> dict[str, A
         for event in overnight_events
         for action in [_event_fields(event).get("ai_action") or _event_fields(event).get("overnight_ai_action")]
         if action
+    )
+    fallback_counts = Counter(
+        _event_fallback_class(_event_fields(event))
+        for event in overnight_events
+        if str(event.get("stage") or "") == "scalp_sim_overnight_decision"
+        and _event_fallback_class(_event_fields(event)) != "none"
     )
     state = _load_state(state_path)
     active = state.get("active_positions") if isinstance(state.get("active_positions"), list) else []
@@ -523,6 +605,11 @@ def build_report(target_date: str, state_path: Path = STATE_PATH) -> dict[str, A
                 "ai_confidence": fields.get("ai_confidence"),
                 "ai_reason": fields.get("ai_reason"),
                 "ai_risk_note": fields.get("ai_risk_note"),
+                "ai_parse_ok": fields.get("ai_parse_ok"),
+                "ai_fallback": fields.get("ai_fallback") if fields.get("ai_fallback") is not None else (_event_fallback_class(fields) != "none"),
+                "ai_fallback_class": _event_fallback_class(fields),
+                "ai_fallback_reason": fields.get("ai_fallback_reason"),
+                "ai_result_source": fields.get("ai_result_source"),
                 "current_price": fields.get("current_price"),
                 "current_price_source": fields.get("current_price_source"),
                 "profit_rate_live": fields.get("profit_rate_live"),
@@ -553,6 +640,12 @@ def build_report(target_date: str, state_path: Path = STATE_PATH) -> dict[str, A
             "sell_assumed_filled": int(stage_counts.get("scalp_sim_sell_order_assumed_filled", 0)),
             "carry_restored": int(stage_counts.get("scalp_sim_overnight_carry_restored", 0)),
             "carry_open_count": len(carry_open),
+            "ai_failure_fallback": sum(fallback_counts.values()),
+            "ai_timeout_fallback": int(fallback_counts.get("timeout", 0)),
+            "ai_engine_disabled_fallback": int(fallback_counts.get("engine_disabled", 0)),
+            "ai_lock_contention_fallback": int(fallback_counts.get("lock_contention", 0)),
+            "ai_parse_fail_fallback": int(fallback_counts.get("parse_fail", 0)),
+            "ai_fallback_counts": dict(sorted(fallback_counts.items())),
             "stage_counts": dict(sorted(stage_counts.items())),
             "action_counts": dict(sorted(action_counts.items())),
             "forbidden_uses": [
@@ -585,6 +678,9 @@ def write_outputs(report: dict[str, Any], output_dir: Path = REPORT_DIR) -> tupl
         f"- sell_today: `{summary.get('sell_today', 0)}`",
         f"- hold_overnight: `{summary.get('hold_overnight', 0)}`",
         f"- carry_open_count: `{summary.get('carry_open_count', 0)}`",
+        f"- ai_failure_fallback: `{summary.get('ai_failure_fallback', 0)}`",
+        f"- ai_timeout_fallback: `{summary.get('ai_timeout_fallback', 0)}`",
+        f"- ai_engine_disabled_fallback: `{summary.get('ai_engine_disabled_fallback', 0)}`",
         "",
         "## Stage Counts",
         "",

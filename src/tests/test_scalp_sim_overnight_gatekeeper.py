@@ -121,6 +121,34 @@ def test_ai_failure_falls_back_to_sell_today(tmp_path):
     assert report["summary"]["active_after"] == 0
 
 
+def test_ai_timeout_fallback_is_attributed(tmp_path):
+    class _TimeoutAI:
+        def evaluate_scalping_overnight_decision(self, *_args, **_kwargs):
+            return {
+                "action": "SELL_TODAY",
+                "confidence": 0,
+                "reason": "AI 판정 실패로 보수적 청산 폴백: Request timed out.",
+                "risk_note": "timeout",
+                "ai_parse_ok": False,
+                "ai_result_source": "exception",
+                "ai_exception_message": "Request timed out.",
+            }
+
+    path = _state_path(tmp_path, [_position()])
+
+    report = overnight.run_sim_overnight(
+        target_date="2026-05-19",
+        ai_engine=_TimeoutAI(),
+        state_path=path,
+        emit_events=False,
+    )
+
+    assert report["summary"]["ai_failure_fallback"] == 1
+    assert report["summary"]["ai_timeout_fallback"] == 1
+    assert report["rows"][0]["overnight_ai_fallback"] is True
+    assert report["rows"][0]["overnight_ai_fallback_class"] == "timeout"
+
+
 def test_idempotency_skips_same_date_decision(tmp_path):
     path = _state_path(
         tmp_path,

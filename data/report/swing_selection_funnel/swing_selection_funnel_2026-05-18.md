@@ -15,12 +15,13 @@
 
 | stage | raw | unique_records |
 | --- | ---: | ---: |
-| `blocked_gatekeeper_reject` | 140 | 20 |
-| `blocked_swing_gap` | 96353 | 8 |
-| `blocked_swing_score_vpw` | 550610 | 39 |
-| `gatekeeper_fast_reuse_bypass` | 140 | 20 |
+| `blocked_gatekeeper_reject` | 154 | 20 |
+| `blocked_swing_gap` | 139697 | 8 |
+| `blocked_swing_score_vpw` | 666194 | 39 |
+| `gatekeeper_fast_reuse_bypass` | 154 | 20 |
 | `holding_flow_ofi_smoothing_applied` | 62 | 2 |
-| `swing_probe_discarded` | 14749 | 42 |
+| `holding_started` | 1 | 1 |
+| `swing_probe_discarded` | 17469 | 42 |
 | `swing_probe_entry_candidate` | 38 | 21 |
 | `swing_probe_exit_signal` | 38 | 28 |
 | `swing_probe_holding_started` | 38 | 21 |
@@ -33,16 +34,16 @@
 
 ## Top Code Stage
 
-- `blocked_swing_score_vpw` 한온시스템(018880): 19335
-- `blocked_swing_score_vpw` LG디스플레이(034220): 19330
-- `blocked_swing_gap` 에이치브이엠(295310): 19328
-- `blocked_swing_score_vpw` HL만도(204320): 19308
-- `blocked_swing_score_vpw` 한올바이오파마(009420): 19279
-- `blocked_swing_score_vpw` 한미약품(128940): 19258
-- `blocked_swing_score_vpw` 한화(000880): 19258
-- `blocked_swing_score_vpw` 팬오션(028670): 19226
-- `blocked_swing_score_vpw` iM금융지주(139130): 19132
-- `blocked_swing_score_vpw` 삼성에스디에스(018260): 19096
+- `blocked_swing_score_vpw` 한온시스템(018880): 26559
+- `blocked_swing_score_vpw` LG디스플레이(034220): 26554
+- `blocked_swing_gap` 에이치브이엠(295310): 26552
+- `blocked_swing_score_vpw` HL만도(204320): 26532
+- `blocked_swing_score_vpw` 한올바이오파마(009420): 26503
+- `blocked_swing_score_vpw` 한미약품(128940): 26482
+- `blocked_swing_score_vpw` 한화(000880): 26482
+- `blocked_swing_score_vpw` 팬오션(028670): 26450
+- `blocked_swing_score_vpw` iM금융지주(139130): 26356
+- `blocked_swing_score_vpw` 삼성에스디에스(018260): 26320
 
 ## OFI/QI Micro Context
 

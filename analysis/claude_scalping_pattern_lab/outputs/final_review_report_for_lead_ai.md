@@ -1,7 +1,7 @@
 # 스캘핑 패턴 분석 최종 리뷰 보고서 (for Lead AI)
 
-생성일: 2026-05-18 16:25:34
-분석 기간: 2026-04-21 ~ 2026-05-18
+생성일: 2026-05-19 16:20:10
+분석 기간: 2026-04-21 ~ 2026-05-19
 
 ---
 
@@ -17,11 +17,11 @@
 
 ### 1-4. 튜닝 관찰축 요약
 
-- `WAIT65~79 total_candidates=12`, `recovery_check=0`, `promoted=0`, `submitted=0`
-- `blocked_ai_score_share=91.7%`, `gatekeeper_eval_ms_p95=5441ms`, `budget_pass_to_submitted_rate=0.0%`
+- `WAIT65~79 total_candidates=23`, `recovery_check=0`, `promoted=0`, `submitted=0`
+- `blocked_ai_score_share=78.3%`, `gatekeeper_eval_ms_p95=8240ms`, `budget_pass_to_submitted_rate=0.0%`
 
-- `AI threshold dominance`: 경고 — `blocked_ai_score_share=91.7%`로 WAIT/BLOCK 비중이 높아 BUY drought 해석을 지지한다.
-- `Budget pass without submit`: 경고 — `budget_pass=11`인데 `submitted=0`라 제출 전 병목이 기대값 회복을 끊고 있다.
+- `AI threshold dominance`: 경고 — `blocked_ai_score_share=78.3%`로 WAIT/BLOCK 비중이 높아 BUY drought 해석을 지지한다.
+- `Budget pass without submit`: 경고 — `budget_pass=718`인데 `submitted=0`라 제출 전 병목이 기대값 회복을 끊고 있다.
 
 ### 1-2. 손실 패턴 Top 5
 
@@ -67,16 +67,16 @@
 ### 1-4. 기회비용 회수 후보 Top 5
 
 **#1** — `AI threshold miss`
-- 차단 건수 합계: 5286481건 | 차단 비율: 100.0% | 관찰 일수: 25일
+- 차단 건수 합계: 5360351건 | 차단 비율: 100.0% | 관찰 일수: 26일
 
 **#2** — `overbought gate miss`
-- 차단 건수 합계: 1282011건 | 차단 비율: 100.0% | 관찰 일수: 25일
+- 차단 건수 합계: 1300118건 | 차단 비율: 100.0% | 관찰 일수: 26일
 
 **#3** — `latency guard miss`
-- 차단 건수 합계: 51614건 | 차단 비율: 99.5% | 관찰 일수: 25일
+- 차단 건수 합계: 52330건 | 차단 비율: 99.5% | 관찰 일수: 26일
 
 **#4** — `liquidity gate miss`
-- 차단 건수 합계: 0건 | 차단 비율: 0.0% | 관찰 일수: 25일
+- 차단 건수 합계: 0건 | 차단 비율: 0.0% | 관찰 일수: 26일
 
 ---
 
@@ -84,10 +84,10 @@
 
 ### 2-1. split-entry 코호트 핵심 위험
 
-- rebase_integrity_flag: 31건
-- partial_then_expand_flag: 21건
+- rebase_integrity_flag: 33건
+- partial_then_expand_flag: 22건
 - same_symbol_repeat_flag: 98건
-- same_ts_multi_rebase_flag: 19건
+- same_ts_multi_rebase_flag: 20건
 
 ### 2-2. 전역 손절 강화 비권고 이유
 

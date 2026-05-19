@@ -956,6 +956,50 @@ def test_provider_overnight_failure_disables_engine(monkeypatch):
         assert result["ai_parse_fail"] is True
 
 
+def test_openai_overnight_uses_batch_timeout_profile(monkeypatch):
+    monkeypatch.setattr(
+        ai_engine_openai_module,
+        "TRADING_RULES",
+        replace(
+            ai_engine_openai_module.TRADING_RULES,
+            OPENAI_RESPONSES_WS_TIMEOUT_MS=700,
+            OPENAI_OVERNIGHT_TIMEOUT_MS=12000,
+        ),
+    )
+    engine = _build_provider_engine(GPTSniperEngine)
+
+    assert engine._get_openai_timeout_ms(endpoint_name="overnight", require_json=True) == 12000
+    assert engine._get_openai_timeout_ms(endpoint_name="analyze_target", require_json=True) == 700
+
+
+def test_openai_sim_observation_overnight_failure_does_not_disable_engine(monkeypatch):
+    engine = _build_provider_engine(GPTSniperEngine)
+
+    def _raise(*args, **kwargs):
+        raise TimeoutError("Request timed out.")
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _raise)
+
+    result = engine.evaluate_scalping_overnight_decision(
+        "SIM",
+        "000001",
+        {
+            "position_status": "SIM_HOLDING",
+            "simulation_book": "scalp_ai_buy_all",
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "decision_authority": "sim_observation_only",
+            "curr_price": 10000,
+        },
+    )
+
+    assert engine.ai_disabled is False
+    assert engine.consecutive_failures == 0
+    assert result["action"] == "SELL_TODAY"
+    assert result["ai_result_source"] == "exception"
+    assert result["sim_observation_failure_isolated"] is True
+
+
 def test_realtime_report_and_overnight_decision_use_tier2_model(monkeypatch):
     engine = _build_engine()
     used_models = []

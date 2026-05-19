@@ -1,7 +1,7 @@
 # 데이터 품질 보고서
 
-생성일: 2026-05-18 16:25:34
-분석 기간: 2026-04-21 ~ 2026-05-18
+생성일: 2026-05-19 16:20:09
+분석 기간: 2026-04-21 ~ 2026-05-19
 
 ---
 
@@ -29,9 +29,9 @@
 
 ## 2. funnel_fact
 
-- 날짜 수: 25
+- 날짜 수: 26
 - 서버: ['local']
-- 기간 합계 latency_block_events: 51614
+- 기간 합계 latency_block_events: 52330
 - 기간 합계 submitted_events: 278
 
 ---
@@ -40,17 +40,17 @@
 
 | 플래그 | 건수 |
 |---|---|
-| 총 record 수 | 348 |
-| multi_rebase (split-entry) | 31 |
-| partial_then_expand | 21 |
-| rebase_integrity 이상 | 31 |
-| same_ts_multi_rebase | 19 |
+| 총 record 수 | 367 |
+| multi_rebase (split-entry) | 32 |
+| partial_then_expand | 22 |
+| rebase_integrity 이상 | 33 |
+| same_ts_multi_rebase | 20 |
 | same_symbol_repeat_soft_stop | 98 |
 
 **정합성 플래그 분포:**
 
-- `rebase_integrity_flag`: 31건
-- `same_ts_multi_rebase_flag`: 19건
+- `rebase_integrity_flag`: 33건
+- `same_ts_multi_rebase_flag`: 20건
 
 ---
 

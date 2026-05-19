@@ -1228,14 +1228,96 @@ def test_scalp_simulator_restore_skips_synthetic_state(monkeypatch, tmp_path):
     assert [target["code"] for target in targets] == ["005930"]
 
 
-def test_runtime_heartbeat_classifies_scalp_sim_as_non_real_holding():
-    assert sniper_runtime._is_runtime_simulation_target(
+def test_sync_scalp_simulator_targets_prunes_memory_rows_missing_from_state(monkeypatch, tmp_path):
+    state_path = tmp_path / "scalp_live_sim_state.json"
+    state_path.write_text(
+        """
+{
+  "schema_version": 1,
+  "simulation_book": "scalp_ai_buy_all",
+  "active_positions": []
+}
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(state_handlers, "SCALP_SIM_STATE_PATH", state_path)
+    targets = [
         {
+            "code": "005930",
+            "name": "삼성전자",
+            "strategy": "SCALPING",
             "status": "HOLDING",
             "simulation_book": "scalp_ai_buy_all",
-            "actual_order_submitted": False,
-        }
+            "scalp_live_simulator": True,
+            "sim_record_id": "SIM-STALE",
+        },
+        {
+            "code": "000660",
+            "name": "SK하이닉스",
+            "strategy": "SCALPING",
+            "status": "HOLDING",
+            "actual_order_submitted": True,
+        },
+    ]
+
+    result = state_handlers.sync_scalp_simulator_targets_from_state(targets)
+
+    assert result["removed"] == 1
+    assert result["restored"] == 0
+    assert [target["code"] for target in targets] == ["000660"]
+
+
+def test_sync_scalp_simulator_targets_restores_state_rows(monkeypatch, tmp_path):
+    state_path = tmp_path / "scalp_live_sim_state.json"
+    state_path.write_text(
+        """
+{
+  "schema_version": 1,
+  "simulation_book": "scalp_ai_buy_all",
+  "active_positions": [
+    {
+      "code": "005930",
+      "name": "삼성전자",
+      "strategy": "SCALPING",
+      "status": "HOLDING",
+      "simulation_book": "scalp_ai_buy_all",
+      "scalp_live_simulator": true,
+      "sim_record_id": "SIM-ACTIVE"
+    }
+  ]
+}
+""",
+        encoding="utf-8",
     )
+    monkeypatch.setattr(state_handlers, "SCALP_SIM_STATE_PATH", state_path)
+    targets = []
+
+    result = state_handlers.sync_scalp_simulator_targets_from_state(targets)
+
+    assert result["removed"] == 0
+    assert result["restored"] == 1
+    assert [target["sim_record_id"] for target in targets] == ["SIM-ACTIVE"]
+
+
+def test_runtime_heartbeat_classifies_scalp_sim_as_non_real_holding():
+    scalp_sim = {
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "simulation_book": "scalp_ai_buy_all",
+        "actual_order_submitted": False,
+    }
+    swing_probe = {
+        "status": "HOLDING",
+        "strategy": "KOSPI_ML",
+        "simulation_book": "swing_intraday_live_equiv_probe",
+        "actual_order_submitted": False,
+    }
+    assert sniper_runtime._is_runtime_simulation_target(scalp_sim)
+    assert sniper_runtime._is_runtime_scalp_sim_target(scalp_sim)
+    assert not sniper_runtime._is_runtime_probe_target(scalp_sim)
+    assert sniper_runtime._is_runtime_simulation_target(swing_probe)
+    assert not sniper_runtime._is_runtime_scalp_sim_target(swing_probe)
+    assert sniper_runtime._is_runtime_probe_target(swing_probe)
     assert not sniper_runtime._is_runtime_simulation_target(
         {
             "status": "HOLDING",

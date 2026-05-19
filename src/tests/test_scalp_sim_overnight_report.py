@@ -27,6 +27,7 @@ def test_build_report_counts_overnight_events(tmp_path, monkeypatch):
                             "overnight_schema": "overnight_v1",
                             "ai_action": "HOLD_OVERNIGHT",
                             "ai_confidence": "80",
+                            "ai_fallback": "False",
                         },
                     },
                     ensure_ascii=False,
@@ -47,6 +48,30 @@ def test_build_report_counts_overnight_events(tmp_path, monkeypatch):
                             "overnight_schema": "overnight_v1",
                             "ai_action": "HOLD_OVERNIGHT",
                             "ai_confidence": "80",
+                            "ai_fallback": "False",
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "stage": "scalp_sim_overnight_decision",
+                        "stock_name": "B",
+                        "stock_code": "000002",
+                        "emitted_at": "2026-05-19T15:31:02",
+                        "fields": {
+                            "sim_record_id": "SIM-B",
+                            "simulation_book": "scalp_ai_buy_all",
+                            "actual_order_submitted": "False",
+                            "broker_order_forbidden": "True",
+                            "decision_authority": "sim_observation_only",
+                            "runtime_effect": "sim_observation_only",
+                            "overnight_schema": "overnight_v1",
+                            "ai_action": "SELL_TODAY",
+                            "ai_confidence": "0",
+                            "ai_fallback": "True",
+                            "ai_fallback_class": "timeout",
+                            "ai_fallback_reason": "Request timed out.",
                         },
                     },
                     ensure_ascii=False,
@@ -56,7 +81,7 @@ def test_build_report_counts_overnight_events(tmp_path, monkeypatch):
                         "stage": "scalp_sim_sell_order_assumed_filled",
                         "stock_name": "B",
                         "stock_code": "000002",
-                        "emitted_at": "2026-05-19T15:31:02",
+                        "emitted_at": "2026-05-19T15:31:03",
                         "fields": {
                             "sim_record_id": "SIM-B",
                             "simulation_book": "scalp_ai_buy_all",
@@ -94,10 +119,12 @@ def test_build_report_counts_overnight_events(tmp_path, monkeypatch):
 
     assert report["runtime_effect"] is False
     assert report["decision_authority"] == "sim_observation_only"
-    assert report["summary"]["decision_target"] == 1
+    assert report["summary"]["decision_target"] == 2
     assert report["summary"]["hold_overnight"] == 1
     assert report["summary"]["sell_assumed_filled"] == 1
     assert report["summary"]["carry_open_count"] == 1
+    assert report["summary"]["ai_failure_fallback"] == 1
+    assert report["summary"]["ai_timeout_fallback"] == 1
     assert all(row["actual_order_submitted"] in {"False", None} for row in report["rows"])
 
 
