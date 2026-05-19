@@ -18,6 +18,7 @@ from typing import Any
 
 from src.engine.panic_buying_state_detector import summarize_microstructure_detector_from_events
 from src.utils.constants import DATA_DIR
+from src.utils.jsonl_io import read_jsonl
 
 
 SCHEMA_VERSION = 1
@@ -106,21 +107,7 @@ def _load_json(path: Path) -> dict[str, Any] | list[Any] | None:
 
 
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    rows: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8", errors="replace") as handle:
-        for raw_line in handle:
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(payload, dict):
-                rows.append(payload)
-    return rows
+    return read_jsonl(path)
 
 
 def _event_fields(row: dict[str, Any]) -> dict[str, Any]:

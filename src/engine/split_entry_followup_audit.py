@@ -8,18 +8,14 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+from src.utils.jsonl_io import iter_jsonl
+
 
 LATENCY_STAGES = {"latency_block", "latency_pass"}
 
 
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-        raw = line.strip()
-        if not raw:
-            continue
-        rows.append(json.loads(raw))
-    return rows
+    return list(iter_jsonl(path, errors="ignore"))
 
 
 def _to_int(value: Any, default: int = 0) -> int:

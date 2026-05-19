@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import gzip
 import json
 import math
 import time
@@ -9,6 +10,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
+
+from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 
 
 ReasonLabeler = Callable[[str, dict[str, str]], str]
@@ -543,9 +546,10 @@ def _new_aggregate(event: SummaryEvent) -> _SummaryAggregate:
 
 def _load_summary_rows(summary_path: Path, *, include_samples: bool = True) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
+    summary_path = existing_or_gzip_path(summary_path)
     if not summary_path.exists():
         return rows
-    with summary_path.open("r", encoding="utf-8", errors="replace") as handle:
+    with open_text_auto(summary_path, errors="replace") as handle:
         for raw_line in handle:
             line = raw_line.strip()
             if not line:
@@ -598,6 +602,7 @@ def update_and_load_pipeline_event_summaries(
     ignore_payload: IgnorePredicate | None = None,
     include_samples: bool = True,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    raw_path = existing_or_gzip_path(raw_path)
     if not raw_path.exists():
         return [], {
             "enabled": True,
@@ -609,10 +614,11 @@ def update_and_load_pipeline_event_summaries(
     summary_dir.mkdir(parents=True, exist_ok=True)
     summary_path, manifest_path = _summary_paths(summary_dir, target_date)
     stat = raw_path.stat()
+    is_gzip_raw = raw_path.suffix == ".gz"
     raw_inode = getattr(stat, "st_ino", None)
-    raw_size = int(stat.st_size)
     manifest = _read_json(manifest_path)
     raw_offset = int(manifest.get("raw_offset") or 0)
+    raw_size = max(int(stat.st_size), raw_offset) if is_gzip_raw else int(stat.st_size)
     stale_summary = (
         int(manifest.get("schema_version") or 0) != SUMMARY_SCHEMA_VERSION
         or str(manifest.get("raw_path") or "") != str(raw_path)
@@ -631,7 +637,8 @@ def update_and_load_pipeline_event_summaries(
     appended_source_events = 0
     decode_errors = 0
     last_good_offset = raw_offset
-    with raw_path.open("rb") as raw_handle:
+    raw_opener = gzip.open if is_gzip_raw else open
+    with raw_opener(raw_path, "rb") as raw_handle:
         raw_handle.seek(raw_offset)
         while True:
             line_start = raw_handle.tell()
@@ -675,7 +682,8 @@ def update_and_load_pipeline_event_summaries(
                 appended_summary_rows += 1
 
     rows = _load_summary_rows(summary_path, include_samples=include_samples)
-    final_raw_size = int(raw_path.stat().st_size) if raw_path.exists() else raw_size
+    final_stat_size = int(raw_path.stat().st_size) if raw_path.exists() else raw_size
+    final_raw_size = max(final_stat_size, last_good_offset) if is_gzip_raw else final_stat_size
     new_manifest = {
         "schema_version": SUMMARY_SCHEMA_VERSION,
         "raw_path": str(raw_path),

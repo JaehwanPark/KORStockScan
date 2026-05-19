@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from src.utils.constants import DATA_DIR
+from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 from src.engine.pipeline_event_summary import (
     SUMMARY_STAGES,
     default_reason_label,
@@ -48,6 +49,7 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _line_count_and_stage_bytes(raw_path: Path) -> dict[str, Any]:
+    raw_path = existing_or_gzip_path(raw_path)
     if not raw_path.exists():
         return {
             "exists": False,
@@ -63,23 +65,18 @@ def _line_count_and_stage_bytes(raw_path: Path) -> dict[str, Any]:
     high_volume_bytes = 0
     stage_counts: Counter[str] = Counter()
     stage_bytes: Counter[str] = Counter()
-    with raw_path.open("rb") as handle:
-        for raw_line in handle:
-            raw_line_count += 1
-            try:
-                payload = json.loads(raw_line.decode("utf-8", errors="replace"))
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(payload, dict) or payload.get("event_type") != "pipeline_event":
-                continue
-            stage = _safe_str(payload.get("stage"))
-            if stage not in SUMMARY_STAGES:
-                continue
-            line_bytes = len(raw_line)
-            high_volume_line_count += 1
-            high_volume_bytes += line_bytes
-            stage_counts[stage] += 1
-            stage_bytes[stage] += line_bytes
+    for payload in iter_jsonl(raw_path):
+        raw_line_count += 1
+        if not isinstance(payload, dict) or payload.get("event_type") != "pipeline_event":
+            continue
+        stage = _safe_str(payload.get("stage"))
+        if stage not in SUMMARY_STAGES:
+            continue
+        line_bytes = len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        high_volume_line_count += 1
+        high_volume_bytes += line_bytes
+        stage_counts[stage] += 1
+        stage_bytes[stage] += line_bytes
     raw_size = int(raw_path.stat().st_size)
     return {
         "exists": True,
@@ -143,7 +140,7 @@ def _previous_parity_pass_count(target_date: str) -> int:
 
 def build_pipeline_event_verbosity_report(target_date: str) -> dict[str, Any]:
     target_date = str(target_date).strip()
-    raw_path = _pipeline_events_path(target_date)
+    raw_path = existing_or_gzip_path(_pipeline_events_path(target_date))
     raw_stats = _line_count_and_stage_bytes(raw_path)
     raw_summary_rows, raw_summary_meta = update_and_load_pipeline_event_summaries(
         raw_path=raw_path,

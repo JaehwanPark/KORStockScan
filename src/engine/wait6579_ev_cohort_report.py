@@ -10,6 +10,7 @@ from pathlib import Path
 
 from src.engine import kiwoom_orders
 from src.utils.constants import DATA_DIR, TRADING_RULES
+from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto, read_jsonl
 from src.utils.logger import log_error
 
 
@@ -72,19 +73,7 @@ def _pipeline_events_path(target_date: str) -> Path:
 
 
 def _load_jsonl(path: Path) -> list[dict]:
-    if not path.exists():
-        return []
-    rows: list[dict] = []
-    with open(path, "r", encoding="utf-8") as handle:
-        for raw in handle:
-            line = raw.strip()
-            if not line:
-                continue
-            try:
-                rows.append(json.loads(line))
-            except Exception:
-                continue
-    return rows
+    return read_jsonl(path)
 
 
 def _safe_int(value, default: int = 0) -> int:
@@ -700,11 +689,11 @@ def _preflight_summary(rows: list[dict]) -> dict:
 def build_wait6579_preflight_report(target_date: str) -> dict:
     """Build a lightweight observability report without candle/API lookups."""
     safe_date = str(target_date or datetime.now().strftime("%Y-%m-%d")).strip()
-    path = _pipeline_events_path(safe_date)
+    path = existing_or_gzip_path(_pipeline_events_path(safe_date))
     candidate_rows: list[EntryEvent] = []
     events_by_key: dict[tuple[str, str], list[EntryEvent]] = defaultdict(list)
     if path.exists():
-        with open(path, "r", encoding="utf-8") as handle:
+        with open_text_auto(path) as handle:
             for raw in handle:
                 if not any(marker in raw for marker in _PREFLIGHT_STAGE_MARKERS):
                     continue

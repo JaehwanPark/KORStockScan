@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from src.utils.constants import DATA_DIR
+from src.utils.jsonl_io import read_jsonl
 
 
 def _safe_float(value: Any) -> float | None:
@@ -68,18 +69,7 @@ def _stats(values: list[float | None]) -> dict[str, float | int | None]:
 
 def _load_events(target_date: str) -> list[dict[str, Any]]:
     path = DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
-    if not path.exists():
-        return []
-    events: list[dict[str, Any]] = []
-    with path.open(encoding="utf-8") as handle:
-        for line in handle:
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(event, dict):
-                events.append(event)
-    return events
+    return read_jsonl(path)
 
 
 def _unique_openai_calls(events: list[dict[str, Any]], *, transport_mode: str | None = None) -> list[dict[str, Any]]:

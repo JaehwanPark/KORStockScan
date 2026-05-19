@@ -20,6 +20,7 @@ from sqlalchemy import create_engine, text
 from src.engine import kiwoom_orders
 from src.model.common_v2 import RECO_PATH
 from src.utils.constants import DATA_DIR, POSTGRES_URL, TRADING_RULES
+from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
 
 REPORT_DIR = Path(DATA_DIR) / "report" / "swing_daily_simulation"
@@ -762,6 +763,7 @@ def summarize_runtime_entry_funnel(
     path = Path(pipeline_events_path) if pipeline_events_path is not None else (
         Path(DATA_DIR) / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
     )
+    path = existing_or_gzip_path(path)
     stages = {
         "blocked_swing_gap",
         "blocked_gatekeeper_reject",
@@ -781,33 +783,28 @@ def summarize_runtime_entry_funnel(
             "unique_record_counts": {},
             "examples": {},
         }
-    with path.open(encoding="utf-8", errors="ignore") as fh:
-        for line in fh:
-            try:
-                event = json.loads(line)
-            except Exception:
-                continue
-            if event.get("pipeline") != "ENTRY_PIPELINE":
-                continue
-            stage = str(event.get("stage") or "")
-            if stage not in stages:
-                continue
-            fields = event.get("fields") or {}
-            payload = str(event.get("text_payload") or "")
-            strategy = str(fields.get("strategy") or "")
-            is_swing = (
-                stage.startswith("swing_")
-                or strategy in {"KOSPI_ML", "KOSDAQ_ML"}
-                or "KOSPI_ML" in payload
-                or "KOSDAQ_ML" in payload
-            )
-            if not is_swing:
-                continue
-            raw[stage] += 1
-            record_id = str(event.get("record_id") or fields.get("record_id") or fields.get("sim_parent_record_id") or "-")
-            unique[stage].add(record_id)
-            if len(examples[stage]) < 5:
-                examples[stage].append(f"{event.get('stock_name')}({event.get('stock_code')})")
+    for event in iter_jsonl(path, errors="ignore"):
+        if event.get("pipeline") != "ENTRY_PIPELINE":
+            continue
+        stage = str(event.get("stage") or "")
+        if stage not in stages:
+            continue
+        fields = event.get("fields") or {}
+        payload = str(event.get("text_payload") or "")
+        strategy = str(fields.get("strategy") or "")
+        is_swing = (
+            stage.startswith("swing_")
+            or strategy in {"KOSPI_ML", "KOSDAQ_ML"}
+            or "KOSPI_ML" in payload
+            or "KOSDAQ_ML" in payload
+        )
+        if not is_swing:
+            continue
+        raw[stage] += 1
+        record_id = str(event.get("record_id") or fields.get("record_id") or fields.get("sim_parent_record_id") or "-")
+        unique[stage].add(record_id)
+        if len(examples[stage]) < 5:
+            examples[stage].append(f"{event.get('stock_name')}({event.get('stock_code')})")
     return {
         "available": True,
         "path": str(path),

@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from src.utils.constants import DATA_DIR
+from src.utils.jsonl_io import read_jsonl
 
 
 SYNTHETIC_NAMES = {"TEST", "DUMMY", "MOCK"}
@@ -27,19 +28,7 @@ def _as_float(value, default=None):
 
 
 def _load_jsonl(path: Path) -> list[dict]:
-    rows: list[dict] = []
-    if not path.exists():
-        return rows
-    with path.open(encoding="utf-8", errors="ignore") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rows.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-    return rows
+    return read_jsonl(path, errors="ignore")
 
 
 def _is_synthetic_event(row: dict) -> bool:

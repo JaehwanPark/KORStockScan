@@ -15,6 +15,7 @@ from pathlib import Path
 from src.engine.log_archive_service import load_monitor_snapshot
 from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build
 from src.utils.constants import DATA_DIR, TRADING_RULES
+from src.utils.jsonl_io import read_jsonl
 from src.utils.logger import log_error, log_info
 
 
@@ -62,19 +63,7 @@ def _append_jsonl(path: Path, payload: dict) -> None:
 
 
 def _load_jsonl(path: Path) -> list[dict]:
-    if not path.exists():
-        return []
-    rows: list[dict] = []
-    with open(path, "r", encoding="utf-8") as handle:
-        for raw in handle:
-            line = raw.strip()
-            if not line:
-                continue
-            try:
-                rows.append(json.loads(line))
-            except Exception:
-                continue
-    return rows
+    return read_jsonl(path)
 
 
 def _parse_datetime(value, default: datetime | None = None) -> datetime | None:

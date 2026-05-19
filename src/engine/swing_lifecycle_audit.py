@@ -24,6 +24,7 @@ from src.engine.swing_selection_funnel_report import (
 )
 from src.model.common_v2 import RECO_DIAGNOSTIC_JSON_PATH, RECO_PATH, SWING_SELECTION_OWNER
 from src.utils.constants import DATA_DIR, POSTGRES_URL
+from src.utils.jsonl_io import read_jsonl
 
 
 REPORT_TYPE = "swing_lifecycle_audit"
@@ -617,19 +618,7 @@ def summarize_simulation_opportunity(simulation_report: dict[str, Any]) -> dict[
 
 
 def _read_jsonl(path: str | Path) -> list[dict[str, Any]]:
-    p = Path(path)
-    if not p.exists():
-        return []
-    rows: list[dict[str, Any]] = []
-    with p.open(encoding="utf-8") as handle:
-        for line in handle:
-            try:
-                payload = json.loads(line)
-            except Exception:
-                continue
-            if isinstance(payload, dict):
-                rows.append(payload)
-    return rows
+    return read_jsonl(Path(path))
 
 
 def _event_fields(event: dict[str, Any]) -> dict[str, Any]:

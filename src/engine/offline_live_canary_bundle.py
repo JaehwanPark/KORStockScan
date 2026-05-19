@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Iterable
 
 from src.utils.constants import DATA_DIR
+from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 
 
 DEFAULT_OUTPUT_ROOT = Path("tmp/offline_live_canary_exports")
@@ -122,7 +123,8 @@ def _filter_pipeline_events(
     total_rows = 0
     kept_rows = 0
     malformed_rows = 0
-    with source_path.open("r", encoding="utf-8") as src, gzip.open(output_path, "wt", encoding="utf-8") as dst:
+    source_path = existing_or_gzip_path(source_path)
+    with open_text_auto(source_path) as src, gzip.open(output_path, "wt", encoding="utf-8") as dst:
         for line in src:
             total_rows += 1
             try:
@@ -167,8 +169,9 @@ def export_bundle(
     missing_files: list[str] = []
     filtered_files: list[dict[str, object]] = []
 
-    source_pipeline = PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"
-    bundle_pipeline = root / _bundle_rel(source_pipeline)
+    source_pipeline_plain = PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"
+    source_pipeline = existing_or_gzip_path(source_pipeline_plain)
+    bundle_pipeline = root / _bundle_rel(source_pipeline_plain)
     bundle_pipeline = bundle_pipeline.with_suffix(bundle_pipeline.suffix + ".gz")
     if source_pipeline.exists():
         filtered_files.append(

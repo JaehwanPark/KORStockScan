@@ -17,6 +17,7 @@ from src.model.common_v2 import (
     SWING_SELECTION_OWNER,
 )
 from src.utils.constants import DATA_DIR, POSTGRES_URL
+from src.utils.jsonl_io import read_jsonl
 
 
 SWING_STRATEGIES = {"KOSPI_ML", "KOSDAQ_ML", "MAIN"}
@@ -209,17 +210,7 @@ def _safe_read_json(path: str | Path) -> dict:
 
 
 def _read_jsonl(path: str | Path) -> list[dict]:
-    p = Path(path)
-    if not p.exists():
-        return []
-    rows = []
-    with p.open(encoding="utf-8") as f:
-        for line in f:
-            try:
-                rows.append(json.loads(line))
-            except Exception:
-                continue
-    return rows
+    return read_jsonl(Path(path))
 
 
 def _event_fields(event: dict) -> dict:

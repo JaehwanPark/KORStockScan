@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from src.utils.constants import DATA_DIR
+from src.utils.jsonl_io import read_jsonl
 from src.utils.logger import log_error, log_info
 
 
@@ -37,19 +38,7 @@ def _append_jsonl(path: Path, payload: dict) -> None:
 
 
 def _load_jsonl(path: Path) -> list[dict]:
-    if not path.exists():
-        return []
-    rows: list[dict] = []
-    with open(path, "r", encoding="utf-8") as handle:
-        for raw in handle:
-            line = raw.strip()
-            if not line:
-                continue
-            try:
-                rows.append(json.loads(line))
-            except Exception:
-                continue
-    return rows
+    return read_jsonl(path)
 
 
 def _minute_bucket(ts: datetime, bucket_min: int = 5) -> str:

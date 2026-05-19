@@ -33,6 +33,7 @@ def _default_output_paths(local_root: Path, target_date: str, window: str, ts: s
 
 def _build_remote_script(remote_root: str, target_date: str) -> str:
     return f"""
+import gzip
 import json
 import socket
 import subprocess
@@ -41,6 +42,8 @@ from pathlib import Path
 
 root = Path({remote_root!r})
 pipeline_path = root / 'data' / 'pipeline_events' / f'pipeline_events_{target_date}.jsonl'
+if not pipeline_path.exists() and pipeline_path.with_name(pipeline_path.name + '.gz').exists():
+    pipeline_path = pipeline_path.with_name(pipeline_path.name + '.gz')
 
 bot_lines = subprocess.run(
     \"ps -ef | grep -E 'bot_main.py' | grep -v grep\",
@@ -89,7 +92,8 @@ pipeline = {{
     'latest_event_at': None,
 }}
 if pipeline_path.exists():
-    with pipeline_path.open('r', encoding='utf-8') as handle:
+    opener = gzip.open if pipeline_path.suffix == '.gz' else open
+    with opener(pipeline_path, 'rt', encoding='utf-8') as handle:
         for raw in handle:
             line = raw.strip()
             if not line:

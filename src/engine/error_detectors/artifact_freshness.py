@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from src.utils.constants import PROJECT_ROOT
+from src.utils.jsonl_io import existing_or_gzip_path
 from src.utils.market_day import is_krx_trading_day
 
 from src.engine.error_detectors.base import (
@@ -463,6 +464,7 @@ class ArtifactFreshnessDetector(BaseDetector):
             aid = artifact["id"]
             path_str = artifact["path_template"].replace("{date}", today)
             artifact_path = PROJECT_ROOT / path_str
+            artifact_path = existing_or_gzip_path(artifact_path)
             critical = artifact.get("critical", False)
             max_stale = artifact.get("max_staleness_sec", 600)
             trading_day_only = artifact.get("trading_day_only", False)

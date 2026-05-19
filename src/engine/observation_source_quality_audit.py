@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from src.utils.constants import DATA_DIR
+from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
 
 REPORT_DIRNAME = "observation_source_quality_audit"
@@ -254,21 +255,15 @@ def _source_like_field(key: str) -> bool:
 
 def _iter_events(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
+    path = existing_or_gzip_path(path)
     if not path.exists():
         return rows
-    with path.open(encoding="utf-8") as handle:
-        for line in handle:
-            if not line.strip():
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if payload.get("event_type") not in (None, "", "pipeline_event"):
-                continue
-            fields = payload.get("fields")
-            payload["fields"] = fields if isinstance(fields, dict) else {}
-            rows.append(payload)
+    for payload in iter_jsonl(path):
+        if payload.get("event_type") not in (None, "", "pipeline_event"):
+            continue
+        fields = payload.get("fields")
+        payload["fields"] = fields if isinstance(fields, dict) else {}
+        rows.append(payload)
     return rows
 
 
@@ -368,7 +363,7 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
 
 
 def build_observation_source_quality_audit(target_date: str) -> dict[str, Any]:
-    raw_path = _pipeline_events_path(target_date)
+    raw_path = existing_or_gzip_path(_pipeline_events_path(target_date))
     rows = _iter_events(raw_path)
     stage_counts = _stage_counts(rows)
     contract_result = _evaluate_contracts(rows, stage_counts)

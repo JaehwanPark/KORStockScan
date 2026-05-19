@@ -109,7 +109,9 @@ def _event_paths(target_date: str) -> list[Path]:
         if path.exists():
             paths.append(path)
     paths.extend(sorted(THRESHOLD_SNAPSHOT_DIR.glob(f"pipeline_events_{target_date}_*.jsonl")))
+    paths.extend(sorted(THRESHOLD_SNAPSHOT_DIR.glob(f"pipeline_events_{target_date}_*.jsonl.gz")))
     paths.extend(sorted(THRESHOLD_SNAPSHOT_DIR.glob(f"threshold_events_{target_date}_*.jsonl")))
+    paths.extend(sorted(THRESHOLD_SNAPSHOT_DIR.glob(f"threshold_events_{target_date}_*.jsonl.gz")))
     return paths
 
 

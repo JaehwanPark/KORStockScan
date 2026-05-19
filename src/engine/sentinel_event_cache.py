@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import gzip
 import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
+
+from src.utils.jsonl_io import existing_or_gzip_path
 
 
 PayloadParser = Callable[[dict[str, Any]], dict[str, Any] | None]
@@ -51,6 +54,7 @@ def update_and_load_cached_event_rows(
     since the previous run and rereads the slimmer sentinel-owned cache.
     """
 
+    raw_path = existing_or_gzip_path(raw_path)
     if not raw_path.exists():
         return [], {
             "enabled": True,
@@ -62,11 +66,12 @@ def update_and_load_cached_event_rows(
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_path, meta_path = _cache_paths(cache_dir, cache_name, target_date)
     stat = raw_path.stat()
+    is_gzip_raw = raw_path.suffix == ".gz"
     raw_inode = getattr(stat, "st_ino", None)
-    raw_size = int(stat.st_size)
 
     meta = _read_json(meta_path)
     raw_offset = int(meta.get("raw_offset") or 0)
+    raw_size = max(int(stat.st_size), raw_offset) if is_gzip_raw else int(stat.st_size)
     stale_cache = (
         int(meta.get("schema_version") or 0) != schema_version
         or str(meta.get("raw_path") or "") != str(raw_path)
@@ -82,7 +87,8 @@ def update_and_load_cached_event_rows(
     appended_cache_rows = 0
     decode_errors = 0
     last_good_offset = raw_offset
-    with raw_path.open("rb") as raw_handle:
+    raw_opener = gzip.open if is_gzip_raw else open
+    with raw_opener(raw_path, "rb") as raw_handle:
         raw_handle.seek(raw_offset)
         with cache_path.open("a", encoding="utf-8") as cache_handle:
             while True:
@@ -123,7 +129,8 @@ def update_and_load_cached_event_rows(
                 if isinstance(row, dict):
                     rows.append(row)
 
-    final_raw_size = int(raw_path.stat().st_size) if raw_path.exists() else raw_size
+    final_stat_size = int(raw_path.stat().st_size) if raw_path.exists() else raw_size
+    final_raw_size = max(final_stat_size, last_good_offset) if is_gzip_raw else final_stat_size
     new_meta = {
         "schema_version": schema_version,
         "raw_path": str(raw_path),

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from src.engine.log_archive_service import iter_target_log_lines
 from src.utils.constants import LOGS_DIR, DATA_DIR
+from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
 
 _ENTRY_RE = re.compile(
@@ -140,54 +141,46 @@ def _jsonl_path(target_date: str) -> Path:
 
 
 def _load_entry_events_from_jsonl(*, target_date: str) -> list[PipelineEvent]:
-    path = _jsonl_path(target_date)
+    path = existing_or_gzip_path(_jsonl_path(target_date))
     if not path.exists():
         return []
 
     events: list[PipelineEvent] = []
-    with open(path, "r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                payload = json.loads(line)
-            except Exception:
-                continue
-            if str(payload.get("event_type") or "") != "pipeline_event":
-                continue
-            if str(payload.get("pipeline") or "") != "ENTRY_PIPELINE":
-                continue
+    for payload in iter_jsonl(path):
+        if str(payload.get("event_type") or "") != "pipeline_event":
+            continue
+        if str(payload.get("pipeline") or "") != "ENTRY_PIPELINE":
+            continue
 
-            stock_name = str(payload.get("stock_name") or "").strip()
-            stock_code = str(payload.get("stock_code") or "").strip()
-            stage = str(payload.get("stage") or "").strip()
-            emitted_at = str(payload.get("emitted_at") or "").strip()
-            if not stock_name or not stock_code or not stage or not emitted_at:
-                continue
+        stock_name = str(payload.get("stock_name") or "").strip()
+        stock_code = str(payload.get("stock_code") or "").strip()
+        stage = str(payload.get("stage") or "").strip()
+        emitted_at = str(payload.get("emitted_at") or "").strip()
+        if not stock_name or not stock_code or not stage or not emitted_at:
+            continue
 
-            try:
-                timestamp = datetime.fromisoformat(emitted_at).strftime("%Y-%m-%d %H:%M:%S")
-            except Exception:
-                continue
+        try:
+            timestamp = datetime.fromisoformat(emitted_at).strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            continue
 
-            raw_fields = payload.get("fields") or {}
-            fields = {str(k): str(v) for k, v in raw_fields.items()}
-            record_id = payload.get("record_id")
-            if record_id not in (None, "", 0):
-                fields.setdefault("id", str(record_id))
+        raw_fields = payload.get("fields") or {}
+        fields = {str(k): str(v) for k, v in raw_fields.items()}
+        record_id = payload.get("record_id")
+        if record_id not in (None, "", 0):
+            fields.setdefault("id", str(record_id))
 
-            raw_line = str(payload.get("text_payload") or "")
-            events.append(
-                PipelineEvent(
-                    timestamp=timestamp,
-                    name=stock_name,
-                    code=stock_code,
-                    stage=stage,
-                    fields=fields,
-                    raw_line=raw_line,
-                )
+        raw_line = str(payload.get("text_payload") or "")
+        events.append(
+            PipelineEvent(
+                timestamp=timestamp,
+                name=stock_name,
+                code=stock_code,
+                stage=stage,
+                fields=fields,
+                raw_line=raw_line,
             )
+        )
     return events
 
 

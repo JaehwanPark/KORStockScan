@@ -24,6 +24,7 @@ from src.engine.pipeline_event_summary import (
     update_and_load_pipeline_event_summaries,
 )
 from src.engine.sentinel_event_cache import update_and_load_cached_event_rows
+from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
 
 MANUAL_EXCLUDED_STOCKS = {
@@ -243,7 +244,7 @@ def load_pipeline_events(
     use_cache: bool = False,
     exclude_summary_stages: bool = False,
 ) -> list[PipelineEvent]:
-    path = _pipeline_events_path(target_date)
+    path = existing_or_gzip_path(_pipeline_events_path(target_date))
     if not path.exists():
         return []
     if use_cache:
@@ -266,45 +267,37 @@ def load_pipeline_events(
         return events
 
     events: list[PipelineEvent] = []
-    with path.open("r", encoding="utf-8", errors="replace") as handle:
-        for raw_line in handle:
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if _safe_str(payload.get("event_type")) != "pipeline_event":
-                continue
-            if _is_ignored_event(payload):
-                continue
-            emitted_at = _parse_iso_datetime(_safe_str(payload.get("emitted_at")))
-            if emitted_at is None:
-                continue
-            raw_fields = payload.get("fields") or {}
-            raw_field_dict = raw_fields if isinstance(raw_fields, dict) else {}
-            if (
-                exclude_summary_stages
-                and _safe_str(payload.get("stage")) in SUMMARY_STAGES
-                and not _payload_requires_lossless_cache(payload, raw_field_dict)
-            ):
-                continue
-            fields = {str(k): _safe_str(v) for k, v in raw_fields.items()}
-            record_id = payload.get("record_id")
-            if record_id in (None, "", 0):
-                record_id = fields.get("id") or ""
-            events.append(
-                PipelineEvent(
-                    emitted_at=emitted_at,
-                    pipeline=_safe_str(payload.get("pipeline")),
-                    stage=_safe_str(payload.get("stage")),
-                    stock_name=_safe_str(payload.get("stock_name")),
-                    stock_code=_safe_str(payload.get("stock_code"))[:6],
-                    record_id=_safe_str(record_id),
-                    fields=fields,
-                )
+    for payload in iter_jsonl(path):
+        if _safe_str(payload.get("event_type")) != "pipeline_event":
+            continue
+        if _is_ignored_event(payload):
+            continue
+        emitted_at = _parse_iso_datetime(_safe_str(payload.get("emitted_at")))
+        if emitted_at is None:
+            continue
+        raw_fields = payload.get("fields") or {}
+        raw_field_dict = raw_fields if isinstance(raw_fields, dict) else {}
+        if (
+            exclude_summary_stages
+            and _safe_str(payload.get("stage")) in SUMMARY_STAGES
+            and not _payload_requires_lossless_cache(payload, raw_field_dict)
+        ):
+            continue
+        fields = {str(k): _safe_str(v) for k, v in raw_fields.items()}
+        record_id = payload.get("record_id")
+        if record_id in (None, "", 0):
+            record_id = fields.get("id") or ""
+        events.append(
+            PipelineEvent(
+                emitted_at=emitted_at,
+                pipeline=_safe_str(payload.get("pipeline")),
+                stage=_safe_str(payload.get("stage")),
+                stock_name=_safe_str(payload.get("stock_name")),
+                stock_code=_safe_str(payload.get("stock_code"))[:6],
+                record_id=_safe_str(record_id),
+                fields=fields,
             )
+        )
     events.sort(key=lambda event: event.emitted_at)
     return events
 
@@ -377,7 +370,7 @@ def previous_trading_day_with_events(target_date: str, *, max_lookback_days: int
         if not is_krx_trading_day(candidate):
             continue
         candidate_text = candidate.isoformat()
-        if _pipeline_events_path(candidate_text).exists():
+        if existing_or_gzip_path(_pipeline_events_path(candidate_text)).exists():
             return candidate_text
     return None
 

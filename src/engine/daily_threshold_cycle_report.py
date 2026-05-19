@@ -1784,29 +1784,20 @@ def _default_pipeline_load_result(target_date: str) -> PipelineLoadResult:
             },
         )
 
-    jsonl_path = DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
+    jsonl_path = _existing_or_gzip_path(DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl")
     if jsonl_path.exists() and jsonl_path.stat().st_size <= RAW_PIPELINE_FALLBACK_MAX_BYTES:
         rows: list[dict] = []
-        with open(jsonl_path, "r", encoding="utf-8", errors="replace") as handle:
-            for raw_line in handle:
-                line = raw_line.strip()
-                if not line:
-                    continue
-                try:
-                    payload = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(payload, dict):
-                    continue
-                if not is_threshold_cycle_stage(
-                    str(payload.get("stage") or ""),
-                    payload.get("fields") if isinstance(payload.get("fields"), dict) else None,
-                ):
-                    continue
-                if payload.get("event_type") not in (None, "", "pipeline_event"):
-                    continue
-                if isinstance(payload, dict):
-                    rows.append(payload)
+        for payload in _read_threshold_jsonl(jsonl_path):
+            if not isinstance(payload, dict):
+                continue
+            if not is_threshold_cycle_stage(
+                str(payload.get("stage") or ""),
+                payload.get("fields") if isinstance(payload.get("fields"), dict) else None,
+            ):
+                continue
+            if payload.get("event_type") not in (None, "", "pipeline_event"):
+                continue
+            rows.append(payload)
         return PipelineLoadResult(
             rows=rows,
             meta={
@@ -1938,79 +1929,55 @@ def _parse_rejected_action_reasons(value: Any) -> dict[str, str]:
 def _load_post_sell_evaluation_by_record_id(target_date: str | None) -> dict[str, dict]:
     if not target_date:
         return {}
-    path = POST_SELL_DIR / f"post_sell_evaluations_{target_date}.jsonl"
+    path = _existing_or_gzip_path(POST_SELL_DIR / f"post_sell_evaluations_{target_date}.jsonl")
     if not path.exists():
         return {}
     rows: dict[str, dict] = {}
-    with open(path, "r", encoding="utf-8", errors="replace") as handle:
-        for raw_line in handle:
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(payload, dict):
-                continue
-            record_id = payload.get("recommendation_id") or payload.get("record_id")
-            if record_id in (None, "", "-"):
-                continue
-            rows[str(record_id)] = payload
+    for payload in _read_threshold_jsonl(path):
+        if not isinstance(payload, dict):
+            continue
+        record_id = payload.get("recommendation_id") or payload.get("record_id")
+        if record_id in (None, "", "-"):
+            continue
+        rows[str(record_id)] = payload
     return rows
 
 
 def _load_post_sell_candidate_by_record_id(target_date: str | None) -> dict[str, dict]:
     if not target_date:
         return {}
-    path = POST_SELL_DIR / f"post_sell_candidates_{target_date}.jsonl"
+    path = _existing_or_gzip_path(POST_SELL_DIR / f"post_sell_candidates_{target_date}.jsonl")
     if not path.exists():
         return {}
     rows: dict[str, dict] = {}
-    with open(path, "r", encoding="utf-8", errors="replace") as handle:
-        for raw_line in handle:
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(payload, dict):
-                continue
-            record_id = payload.get("recommendation_id") or payload.get("record_id")
-            if record_id in (None, "", "-"):
-                continue
-            rows[str(record_id)] = payload
+    for payload in _read_threshold_jsonl(path):
+        if not isinstance(payload, dict):
+            continue
+        record_id = payload.get("recommendation_id") or payload.get("record_id")
+        if record_id in (None, "", "-"):
+            continue
+        rows[str(record_id)] = payload
     return rows
 
 
 def _load_sim_post_sell_evaluation_by_sim_id(target_date: str | None) -> dict[str, dict]:
     if not target_date:
         return {}
-    path = POST_SELL_DIR / f"sim_post_sell_evaluations_{target_date}.jsonl"
+    path = _existing_or_gzip_path(POST_SELL_DIR / f"sim_post_sell_evaluations_{target_date}.jsonl")
     if not path.exists():
         return {}
     rows: dict[str, dict] = {}
-    with open(path, "r", encoding="utf-8", errors="replace") as handle:
-        for raw_line in handle:
-            line = raw_line.strip()
-            if not line:
+    for payload in _read_threshold_jsonl(path):
+        if not isinstance(payload, dict):
+            continue
+        for key in (
+            payload.get("sim_record_id"),
+            payload.get("sim_parent_record_id"),
+            payload.get("post_sell_id"),
+        ):
+            if key in (None, "", "-"):
                 continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(payload, dict):
-                continue
-            for key in (
-                payload.get("sim_record_id"),
-                payload.get("sim_parent_record_id"),
-                payload.get("post_sell_id"),
-            ):
-                if key in (None, "", "-"):
-                    continue
-                rows[str(key)] = payload
+            rows[str(key)] = payload
     return rows
 
 
