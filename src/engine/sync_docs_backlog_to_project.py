@@ -385,12 +385,24 @@ def _completed_runbook_slots(due_date: str) -> set[str]:
         if _due_date_from_checklist_path(source_path) != due_date or not source_path.exists():
             continue
         text = _read_optional(source_path) or ""
-        for line in text.splitlines():
-            if "운영 확인 기록" not in line:
+        for slot, marker in markers.items():
+            marker_idx = text.find(marker)
+            if marker_idx < 0:
                 continue
-            for slot, marker in markers.items():
-                if marker in line:
-                    completed.add(slot)
+            line_start = text.rfind("\n", 0, marker_idx) + 1
+            line_end = text.find("\n", marker_idx)
+            marker_line = text[line_start : line_end if line_end >= 0 else len(text)]
+            nearby = text[marker_idx : marker_idx + 800]
+            if (
+                "[x]" in marker_line
+                or "운영 확인 기록" in marker_line
+                or "판정" in marker_line
+                or "판정:" in nearby
+                or "판정=" in nearby
+                or "완료 메모" in nearby
+                or "재확인" in nearby
+            ):
+                completed.add(slot)
     return completed
 
 

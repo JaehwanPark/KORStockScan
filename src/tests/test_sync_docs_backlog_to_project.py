@@ -476,6 +476,37 @@ def test_parse_runbook_operational_tasks_skips_completed_preopen(monkeypatch, tm
     assert "Slot: POSTCLOSE" in tasks[1].title
 
 
+def test_parse_runbook_operational_tasks_skips_completed_preopen_checklist_block(monkeypatch, tmp_path):
+    checklist = tmp_path / "2026-05-19-stage2-todo-checklist.md"
+    checklist.write_text(
+        "\n".join(
+            [
+                "# 2026-05-19",
+                "",
+                "## Runbook 운영 확인 기록",
+                "",
+                "- [x] `[PreopenAutomationHealthCheck20260519] 장전 자동화체인 상태 확인` (`Due: 2026-05-19`, `Slot: PREOPEN`, `TimeWindow: 08:00~09:00`, `Track: RunbookOps`)",
+                "  - Source: [time-based-operations-runbook.md](docs/time-based-operations-runbook.md#장전-확인-절차)",
+                "  - 판정: `warning`",
+                "  - 근거: preopen apply `[DONE]` marker와 runtime env 생성은 확인됐다.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DOC_BACKLOG_TODAY", "2026-05-19")
+    monkeypatch.setattr(
+        "src.engine.sync_docs_backlog_to_project._checklist_doc_candidates",
+        lambda: [checklist],
+    )
+
+    tasks = parse_runbook_operational_tasks()
+
+    assert len(tasks) == 2
+    assert all("Slot: PREOPEN" not in task.title for task in tasks)
+    assert "Slot: INTRADAY" in tasks[0].title
+    assert "Slot: POSTCLOSE" in tasks[1].title
+
+
 def test_collect_backlog_tasks_includes_runbook_ops(monkeypatch, tmp_path):
     checklist = tmp_path / "2026-05-11-stage2-todo-checklist.md"
     checklist.write_text("# 2026-05-11\n", encoding="utf-8")
