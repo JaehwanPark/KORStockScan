@@ -62,6 +62,10 @@ RUNTIME_FEATURE_KEYS = {
     "held_sec",
     "ofi",
     "qi",
+    "overnight_action",
+    "overnight_confidence",
+    "overnight_price_source",
+    "overnight_status",
 }
 
 LABEL_KEYS = {
@@ -79,6 +83,12 @@ LABEL_KEYS = {
     "close_60m_pct",
     "missed_winner",
     "avoided_loser",
+    "sell_today_realized_profit_pct",
+    "next_day_open_gap_pct",
+    "next_day_mfe_pct",
+    "next_day_mae_pct",
+    "next_day_close_pct",
+    "final_realized_exit_pct",
 }
 
 HARD_SAFETY_THRESHOLDS = [
@@ -430,6 +440,77 @@ def _load_scalp_sim_scale_in_rows(target_date: str) -> tuple[list[dict[str, Any]
     }
 
 
+def _load_scalp_sim_overnight_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    path = PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"
+    rows: list[dict[str, Any]] = []
+    stage_counts: Counter[str] = Counter()
+    for item in _iter_jsonl(path) or []:
+        if not isinstance(item, dict):
+            continue
+        source_stage = str(item.get("stage") or "")
+        fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
+        if source_stage not in {
+            "scalp_sim_overnight_decision",
+            "scalp_sim_overnight_hold",
+            "scalp_sim_overnight_sell_today",
+            "scalp_sim_sell_order_assumed_filled",
+        }:
+            continue
+        if source_stage == "scalp_sim_sell_order_assumed_filled" and fields.get("exit_rule") != "scalp_sim_overnight_sell_today":
+            continue
+        if fields.get("simulation_book") != "scalp_ai_buy_all":
+            continue
+        stage_counts[source_stage] += 1
+        matrix_stage = "exit" if source_stage in {"scalp_sim_overnight_sell_today", "scalp_sim_sell_order_assumed_filled"} else "holding"
+        profit = _safe_float(fields.get("profit_rate"), None)
+        labels = {
+            "profit_rate": profit,
+            "exit_rule": fields.get("exit_rule"),
+            "sell_today_realized_profit_pct": profit if matrix_stage == "exit" else None,
+            "next_day_open_gap_pct": fields.get("next_day_open_gap_pct"),
+            "next_day_mfe_pct": fields.get("next_day_mfe_pct"),
+            "next_day_mae_pct": fields.get("next_day_mae_pct"),
+            "next_day_close_pct": fields.get("next_day_close_pct"),
+            "final_realized_exit_pct": fields.get("final_realized_exit_pct"),
+        }
+        rows.append(
+            {
+                "candidate_id": fields.get("sim_record_id") or item.get("stock_code"),
+                "stock_code": item.get("stock_code"),
+                "event_time": item.get("emitted_at"),
+                "stage": matrix_stage,
+                "source_stage": source_stage,
+                "runtime_features": {
+                    "ai_score": fields.get("last_holding_ai_score"),
+                    "ai_action": fields.get("last_holding_ai_action"),
+                    "profit_rate_live": fields.get("profit_rate_live"),
+                    "peak_profit": fields.get("peak_profit"),
+                    "held_sec": fields.get("held_sec"),
+                    "curr_price": fields.get("current_price"),
+                    "best_bid": fields.get("best_bid"),
+                    "best_ask": fields.get("best_ask"),
+                    "overnight_action": fields.get("ai_action"),
+                    "overnight_confidence": fields.get("ai_confidence"),
+                    "overnight_price_source": fields.get("current_price_source"),
+                    "overnight_status": "SELL_TODAY" if matrix_stage == "exit" else "HOLD_OVERNIGHT",
+                    "actual_order_submitted": fields.get("actual_order_submitted"),
+                    "broker_order_forbidden": fields.get("broker_order_forbidden"),
+                    "fixed_threshold_contract_role": "bounded_tunable",
+                },
+                "labels": labels,
+                "stage_ev_composite_pct": _stage_ev(matrix_stage, labels),
+                "outcome_joined": matrix_stage == "exit" and profit is not None,
+                "actual_order_submitted": not _boolish_false(fields.get("actual_order_submitted")),
+                "source": "scalp_sim_overnight_pipeline_events",
+            }
+        )
+    return rows, {
+        "artifact": str(path) if path.exists() else None,
+        "rows": len(rows),
+        "stage_counts": dict(sorted(stage_counts.items())),
+    }
+
+
 def _policy_action_for(stage: str, rows: list[dict[str, Any]]) -> str:
     joined = [row for row in rows if row.get("stage_ev_composite_pct") is not None]
     if not joined:
@@ -504,7 +585,13 @@ def _allowed_actions(stage: str) -> list[str]:
 
 def build_lifecycle_decision_matrix_report(target_date: str) -> dict[str, Any]:
     target_date = str(target_date).strip()
-    source_loaders = [_load_entry_rows, _load_sim_post_sell_rows, _load_wait6579_rows, _load_scalp_sim_scale_in_rows]
+    source_loaders = [
+        _load_entry_rows,
+        _load_sim_post_sell_rows,
+        _load_wait6579_rows,
+        _load_scalp_sim_scale_in_rows,
+        _load_scalp_sim_overnight_rows,
+    ]
     rows: list[dict[str, Any]] = []
     sources: dict[str, Any] = {}
     for loader in source_loaders:

@@ -429,6 +429,14 @@ def build_report(target_date: str) -> dict:
     ai_reuse = int(sim_counts.get("scalp_sim_ai_holding_reuse", 0))
     ai_deferred = int(sim_counts.get("scalp_sim_ai_holding_deferred", 0))
     ai_critical_bypass = int(sim_counts.get("sim_ai_critical_bypass", 0))
+    overnight_decisions = int(sim_counts.get("scalp_sim_overnight_decision", 0))
+    overnight_sell_today = int(sim_counts.get("scalp_sim_overnight_sell_today", 0))
+    overnight_hold = int(sim_counts.get("scalp_sim_overnight_hold", 0))
+    overnight_sell_filled = sum(
+        1
+        for row in completed
+        if str(row.get("exit_rule") or "") == "scalp_sim_overnight_sell_today"
+    )
     return {
         "target_date": target_date,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -447,6 +455,15 @@ def build_report(target_date: str) -> dict:
             "critical_bypass_ratio_pct": _ratio_pct(ai_critical_bypass, ai_live_calls),
             "deferred_ratio_pct": _ratio_pct(ai_deferred, ai_live_calls + ai_deferred),
             "reuse_ratio_pct": _ratio_pct(ai_reuse, ai_live_calls + ai_reuse + ai_deferred),
+        },
+        "overnight_counts": {
+            "decision": overnight_decisions,
+            "sell_today": overnight_sell_today,
+            "hold_overnight": overnight_hold,
+            "sell_assumed_filled": overnight_sell_filled,
+            "carry_open_count": overnight_hold,
+            "runtime_effect": False,
+            "decision_authority": "sim_observation_only",
         },
         "metrics": _metrics(profit_values),
         "scale_in_analysis": scale_in_analysis,
@@ -506,6 +523,21 @@ def write_outputs(report: dict, output_dir: Path) -> tuple[Path, Path]:
             f"- ai_critical_bypass_ratio_pct: `{(report.get('sim_ai_budget_counts') or {}).get('critical_bypass_ratio_pct', '-')}`",
             f"- ai_deferred_ratio_pct: `{(report.get('sim_ai_budget_counts') or {}).get('deferred_ratio_pct', '-')}`",
             f"- ai_reuse_ratio_pct: `{(report.get('sim_ai_budget_counts') or {}).get('reuse_ratio_pct', '-')}`",
+            "",
+        ]
+    )
+    overnight = report.get("overnight_counts") or {}
+    lines.extend(
+        [
+            "## Overnight",
+            "",
+            f"- decision: `{overnight.get('decision', 0)}`",
+            f"- sell_today: `{overnight.get('sell_today', 0)}`",
+            f"- hold_overnight: `{overnight.get('hold_overnight', 0)}`",
+            f"- sell_assumed_filled: `{overnight.get('sell_assumed_filled', 0)}`",
+            f"- carry_open_count: `{overnight.get('carry_open_count', 0)}`",
+            f"- decision_authority: `{overnight.get('decision_authority') or '-'}`",
+            f"- runtime_effect: `{str(overnight.get('runtime_effect')).lower()}`",
             "",
         ]
     )

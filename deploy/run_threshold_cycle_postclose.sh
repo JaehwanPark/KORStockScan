@@ -44,6 +44,7 @@ RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT="${THRESHOLD_CYCLE_RUN_CODEBASE_PERFOR
 RUN_PATTERN_LAB_CURRENTNESS_AUDIT="${THRESHOLD_CYCLE_RUN_PATTERN_LAB_CURRENTNESS_AUDIT:-true}"
 RUN_PATTERN_LAB_PROPAGATION_AUDIT="${THRESHOLD_CYCLE_RUN_PATTERN_LAB_PROPAGATION_AUDIT:-true}"
 RUN_SIM_POST_SELL_FEEDBACK="${THRESHOLD_CYCLE_RUN_SIM_POST_SELL_FEEDBACK:-true}"
+RUN_SCALP_SIM_OVERNIGHT_REPORT="${THRESHOLD_CYCLE_RUN_SCALP_SIM_OVERNIGHT_REPORT:-true}"
 RUN_SCALP_ENTRY_ADM="${THRESHOLD_CYCLE_RUN_SCALP_ENTRY_ADM:-true}"
 RUN_LIFECYCLE_DECISION_MATRIX="${THRESHOLD_CYCLE_RUN_LIFECYCLE_DECISION_MATRIX:-true}"
 RUN_LATENCY_CLASSIFIER_RECOMMENDATION="${THRESHOLD_CYCLE_RUN_LATENCY_CLASSIFIER_RECOMMENDATION:-true}"
@@ -385,6 +386,14 @@ if [ "$RUN_SCALP_ENTRY_ADM" = "true" ] || [ "$RUN_SCALP_ENTRY_ADM" = "1" ]; then
     "$PROJECT_DIR/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_${TARGET_DATE}.json" \
     "$PROJECT_DIR/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_${TARGET_DATE}.md" \
     "scalp_entry_action_decision_matrix"
+fi
+if [ "$RUN_SCALP_SIM_OVERNIGHT_REPORT" = "true" ] || [ "$RUN_SCALP_SIM_OVERNIGHT_REPORT" = "1" ]; then
+  wait_for_postclose_resources "scalp_sim_overnight"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalp_sim_overnight --date "$TARGET_DATE" --report-only
+  wait_for_report_artifact \
+    "$PROJECT_DIR/data/report/scalp_sim_overnight/scalp_sim_overnight_${TARGET_DATE}.json" \
+    "$PROJECT_DIR/data/report/scalp_sim_overnight/scalp_sim_overnight_${TARGET_DATE}.md" \
+    "scalp_sim_overnight"
 fi
 if [ "$RUN_LIFECYCLE_DECISION_MATRIX" = "true" ] || [ "$RUN_LIFECYCLE_DECISION_MATRIX" = "1" ]; then
   wait_for_postclose_resources "lifecycle_decision_matrix"

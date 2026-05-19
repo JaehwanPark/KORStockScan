@@ -983,6 +983,30 @@ def restore_scalp_simulator_targets(targets=None) -> int:
         row["actual_order_submitted"] = False
         row["simulated_order"] = True
         target_list.append(row)
+        if str(row.get("scalp_sim_overnight_status") or "") == "HOLD_OVERNIGHT":
+            try:
+                emit_pipeline_event(
+                    "HOLDING_PIPELINE",
+                    str(row.get("name") or row.get("stock_name") or code),
+                    code,
+                    "scalp_sim_overnight_carry_restored",
+                    fields={
+                        "sim_record_id": row.get("sim_record_id"),
+                        "sim_parent_record_id": row.get("sim_parent_record_id"),
+                        "simulation_book": SCALP_SIMULATION_BOOK,
+                        "scalp_live_simulator": True,
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                        "decision_authority": "sim_observation_only",
+                        "runtime_effect": "sim_observation_only_active_carry",
+                        "overnight_schema": "overnight_v1",
+                        "scalp_sim_overnight_status": row.get("scalp_sim_overnight_status"),
+                        "scalp_sim_overnight_decision_date": row.get("scalp_sim_overnight_decision_date"),
+                        "scalp_sim_overnight_decision_at": row.get("scalp_sim_overnight_decision_at"),
+                    },
+                )
+            except Exception as exc:
+                log_error(f"[SCALP_SIM_STATE] carry restore event failed: {exc}")
         if sim_id:
             existing_ids.add(sim_id)
         restored += 1

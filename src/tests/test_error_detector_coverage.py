@@ -44,3 +44,13 @@ def test_new_operational_feature_must_declare_detector_coverage():
     assert "update_kospi_status" in REQUIRED_ARTIFACT_IDS
     assert "main_loop" in REQUIRED_HEARTBEAT_COMPONENTS
     assert DETECTOR_COVERAGE_EXEMPTIONS["install_*"].startswith("installer/")
+
+
+def test_threshold_postclose_report_has_startup_grace_for_long_postclose_chain():
+    artifact = next(item for item in ARTIFACT_REGISTRY if item["id"] == "threshold_postclose_report")
+
+    assert artifact["one_shot"] is True
+    assert artifact["critical"] is True
+    assert artifact["window_start"] == (16, 10)
+    assert artifact["window_grace_sec"] >= 1200
+    assert artifact["suppress_missing_while_cron_in_progress"]["id"] == "threshold_cycle_postclose"

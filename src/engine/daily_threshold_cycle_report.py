@@ -2754,6 +2754,16 @@ def _scalp_simulator_event_summary(
         "scalp_sim_ai_holding_deferred": int(stage_counts.get("scalp_sim_ai_holding_deferred", 0)),
         "sim_ai_budget_exhausted": int(stage_counts.get("sim_ai_budget_exhausted", 0)),
         "sim_ai_critical_bypass": int(stage_counts.get("sim_ai_critical_bypass", 0)),
+        "overnight_decision": int(stage_counts.get("scalp_sim_overnight_decision", 0)),
+        "overnight_sell_today": int(stage_counts.get("scalp_sim_overnight_sell_today", 0)),
+        "overnight_hold": int(stage_counts.get("scalp_sim_overnight_hold", 0)),
+        "overnight_carry_restored": int(stage_counts.get("scalp_sim_overnight_carry_restored", 0)),
+        "overnight_completed_sell": sum(
+            1
+            for event in sim_events
+            if str(event.get("stage") or "") == "scalp_sim_sell_order_assumed_filled"
+            and ((event.get("fields") or {}).get("exit_rule") == "scalp_sim_overnight_sell_today")
+        ),
         "completed_profit_summary": _completed_profit_summary(completed_rows or []),
         "post_sell_join": _scalp_simulator_post_sell_join_summary(
             target_date=target_date,

@@ -79,6 +79,7 @@ _FAMILY_DESCRIPTIONS = {
     "panic_sell_defense": "패닉셀 구간의 stop/rebound simulation 결과로 방어 guard와 rollback 조건을 설계하는 축",
     "panic_entry_freeze_guard": "패닉셀 구간에서 scalping 신규 BUY pre-submit freeze canary를 열 수 있는지 보는 축",
     "panic_buy_runner_tp_canary": "패닉바잉 구간에서 fixed TP 전량청산 대비 runner 유지가 missed upside를 줄이는지 보는 축",
+    "scalp_sim_overnight_ai_carry": "장마감 후 open 스캘핑 sim 포지션을 overnight_v1로 SELL_TODAY/HOLD_OVERNIGHT 분리해 다음날 lifecycle/EV label로 연결하는 source-only 축",
 }
 
 _BASELINE_APPLICATION = {
@@ -99,6 +100,7 @@ _BASELINE_APPLICATION = {
     "panic_sell_defense": "report-only: 주문/청산/threshold/runtime env 변경 없음",
     "panic_entry_freeze_guard": "계약 미준비: approval artifact를 만들어도 pre-submit freeze runtime 반영 불가",
     "panic_buy_runner_tp_canary": "report-only: TP/trailing/live exit 변경 없음",
+    "scalp_sim_overnight_ai_carry": "source-only: sim 가상 청산/carry 기록만 수행, runtime threshold apply 권한 없음",
 }
 
 _STATE_INTERPRETATIONS = {
@@ -599,6 +601,36 @@ def _scalping_rows(ev_report: dict[str, Any], calibration_report: dict[str, Any]
             "promote_ready_count": promote_ready,
         }
         row.update(_gate_review("scalping", "lifecycle_decision_matrix_runtime", reasons))
+        rows.append(row)
+    target_date = str(ev_report.get("date") or "").strip()
+    overnight_path = REPORT_DIR / "scalp_sim_overnight" / f"scalp_sim_overnight_{target_date}.json"
+    overnight_report = _load_json(overnight_path)
+    if overnight_report:
+        summary = overnight_report.get("summary") if isinstance(overnight_report.get("summary"), dict) else {}
+        sample = _as_int(summary.get("decision_target"))
+        row = {
+            "domain": "scalping",
+            "family": "scalp_sim_overnight_ai_carry",
+            "description": _description("scalp_sim_overnight_ai_carry"),
+            "state": "observe_only",
+            "current_application": _current_application("scalp_sim_overnight_ai_carry", "observe_only", False),
+            "state_interpretation": "runtime_effect=false source다. SELL_TODAY는 sim 가상 청산, HOLD_OVERNIGHT는 active_unrealized carry로만 남긴다.",
+            "score": None,
+            "score_label": "-",
+            "sample": {
+                "count": sample,
+                "sell_today": _as_int(summary.get("sell_today")),
+                "hold_overnight": _as_int(summary.get("hold_overnight")),
+                "carry_open_count": _as_int(summary.get("carry_open_count")),
+            },
+            "reasons": ["observe_only"],
+            "reason_label": "관찰 전용",
+            "selected_auto_bounded_live": False,
+            "runtime_effect": bool(overnight_report.get("runtime_effect")),
+            "decision_authority": overnight_report.get("decision_authority"),
+            "artifact": str(overnight_path),
+        }
+        row.update(_gate_review("scalping", "scalp_sim_overnight_ai_carry", ["observe_only"]))
         rows.append(row)
     return rows
 

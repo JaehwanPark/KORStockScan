@@ -85,3 +85,57 @@ def test_live_openai_holding_schema_for_sim_ai_budget(monkeypatch):
     assert result["ai_parse_ok"] is True
     assert result["action_schema"] == "holding_exit_v1"
     assert result["action_v2"] in {"HOLD", "TRIM", "EXIT"}
+
+
+def test_live_openai_scalp_sim_overnight_schema(monkeypatch):
+    if os.getenv("RUN_OPENAI_LIVE_TESTS") != "1":
+        pytest.skip("live OpenAI test disabled; set RUN_OPENAI_LIVE_TESTS=1")
+    keys = _api_keys()
+    if not keys:
+        pytest.fail("RUN_OPENAI_LIVE_TESTS=1 requires OPENAI_API_KEY or OPENAI_API_KEYS")
+
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        _RulesProxy(
+            openai_module.TRADING_RULES,
+            GPT_FAST_MODEL=os.getenv("KORSTOCKSCAN_OPENAI_LIVE_TEST_MODEL", "gpt-5-nano"),
+            OPENAI_TRANSPORT_MODE="responses_ws",
+            OPENAI_RESPONSES_WS_ENABLED=True,
+            OPENAI_RESPONSES_WS_POOL_SIZE=1,
+            OPENAI_RESPONSES_WS_TIMEOUT_MS=10000,
+            OPENAI_RESPONSE_SCHEMA_REGISTRY_ENABLED=False,
+            OPENAI_REASONING_EFFORT="auto",
+            OPENAI_RESPONSES_MAX_OUTPUT_TOKENS=1024,
+        ),
+    )
+    engine = GPTSniperEngine(keys, announce_startup=False)
+    result = engine.evaluate_scalping_overnight_decision(
+        "SIM_OVERNIGHT_LIVE_TEST",
+        "000002",
+        {
+            "position_status": "SIM_HOLDING",
+            "strategy": "SCALPING",
+            "simulation_book": "scalp_ai_buy_all",
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "avg_price": 10000,
+            "buy_price": 10000,
+            "buy_qty": 1,
+            "curr_price": 10020,
+            "pnl_pct": 0.1,
+            "peak_profit_pct": 0.3,
+            "held_minutes": 35,
+            "last_holding_ai_action": "HOLD",
+            "last_holding_ai_score": 72,
+            "order_status_note": "sim-only overnight test; no broker order is allowed",
+        },
+    )
+    pool = getattr(engine, "_responses_ws_pool", None)
+    if pool is not None:
+        pool.close()
+
+    assert result["openai_endpoint_name"] == "overnight"
+    assert result["openai_schema_name"] == "overnight_v1"
+    assert result["ai_parse_ok"] is True
+    assert result["action"] in {"SELL_TODAY", "HOLD_OVERNIGHT"}

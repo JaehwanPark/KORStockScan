@@ -871,6 +871,7 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- entry_ai_price applied/skip: `{scalp_sim.get('entry_ai_price_applied')}` / `{scalp_sim.get('entry_ai_price_skip_order')}`",
         f"- submit_revalidation warning/block: `{scalp_sim.get('entry_submit_revalidation_warning')}` / `{scalp_sim.get('entry_submit_revalidation_block')}`",
         f"- scale_in filled/unfilled: `{scalp_sim.get('scale_in_filled')}` / `{scalp_sim.get('scale_in_unfilled')}`",
+        f"- overnight decision/sell/hold/carry_restored: `{scalp_sim.get('overnight_decision')}` / `{scalp_sim.get('overnight_sell_today')}` / `{scalp_sim.get('overnight_hold')}` / `{scalp_sim.get('overnight_carry_restored')}`",
         f"- completed_profit_summary: `{scalp_sim.get('completed_profit_summary') or {}}`",
         f"- post_sell_join: joined=`{sim_post_sell.get('joined_completed')}` / pending=`{sim_post_sell.get('pending_completed')}`",
         f"- post_sell_mfe_mae_10m: mfe=`{sim_post_sell.get('avg_mfe_10m_pct')}`% / mae=`{sim_post_sell.get('avg_mae_10m_pct')}`% / close=`{sim_post_sell.get('avg_close_10m_pct')}`%",

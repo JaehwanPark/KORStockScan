@@ -166,6 +166,7 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "trading_day_only": True,
         "window_start": (16, 10),
         "window_end": (17, 0),
+        "window_grace_sec": 1200,
         "suppress_missing_while_cron_in_progress": {
             "id": "threshold_cycle_postclose",
             "log": "logs/threshold_cycle_postclose_cron.log",
@@ -487,8 +488,9 @@ class ArtifactFreshnessDetector(BaseDetector):
             if we is not None:
                 window_end = now_dt.replace(hour=we[0], minute=we[1], second=0, microsecond=0)
                 past_window_end = now_dt >= window_end
+            exists = artifact_path.exists()
             grace_sec = int(artifact.get("window_grace_sec") or 0)
-            if grace_sec > 0 and ws and not past_window_end:
+            if not exists and grace_sec > 0 and ws and not past_window_end:
                 window_start = now_dt.replace(hour=ws[0], minute=ws[1], second=0, microsecond=0)
                 elapsed_from_start = (now_dt - window_start).total_seconds()
                 if 0 <= elapsed_from_start <= grace_sec:
@@ -496,8 +498,6 @@ class ArtifactFreshnessDetector(BaseDetector):
                     details[f"{aid}_window"] = f"{ws[0]:02d}:{ws[1]:02d}"
                     details[f"{aid}_grace_sec"] = grace_sec
                     continue
-
-            exists = artifact_path.exists()
 
             if not exists:
                 alternate_status = self._validate_partitioned_compact(

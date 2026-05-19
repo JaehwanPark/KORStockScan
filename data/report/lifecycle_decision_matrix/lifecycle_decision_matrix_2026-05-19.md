@@ -7,20 +7,20 @@
 - primary_decision_metric: `stage_ev_composite_pct`
 
 ## Summary
-- total_rows: `17`
-- joined_rows: `15`
-- policy_pass_count: `0`
-- promote_ready_count: `0`
-- warnings: `['all_stage_policy_entries_below_sample_floor']`
+- total_rows: `207`
+- joined_rows: `144`
+- policy_pass_count: `2`
+- promote_ready_count: `1`
+- warnings: `[]`
 
 ## Policy Entries
 | stage | sample | joined | ev | confidence | source_quality | action | promote_ready |
 | --- | ---: | ---: | ---: | ---: | --- | --- | --- |
-| `entry` | 14 | 14 | 2.5281 | 1.0 | `hold_sample` | `BUY_DEFENSIVE` | False |
+| `entry` | 73 | 23 | 1.2239 | 0.7247 | `pass` | `BUY_DEFENSIVE` | True |
 | `submit` | 0 | 0 | None | 0.0 | `hold_sample` | `NO_CHANGE` | False |
-| `holding` | 0 | 0 | None | 0.0 | `hold_sample` | `NO_CHANGE` | False |
-| `scale_in` | 3 | 1 | 1.386 | 0.0333 | `hold_sample` | `PYRAMID_BIAS` | False |
-| `exit` | 0 | 0 | None | 0.0 | `hold_sample` | `NO_CHANGE` | False |
+| `holding` | 13 | 0 | None | 0.0 | `hold_sample` | `NO_CHANGE` | False |
+| `scale_in` | 8 | 8 | 1.5325 | 0.8 | `hold_sample` | `PYRAMID_BIAS` | False |
+| `exit` | 113 | 113 | -0.4446 | 1.0 | `pass` | `EXIT` | False |
 
 ## Fixed Threshold Roles
 

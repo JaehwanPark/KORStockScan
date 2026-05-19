@@ -128,6 +128,14 @@
   - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_scalp_live_simulator.py src/tests/test_state_handler_fast_signatures.py src/tests/test_scalp_sim_ev_midcheck.py src/tests/test_scalp_sim_ai_deferred_review.py` -> `61 passed, 2 warnings`; `RUN_OPENAI_LIVE_TESTS=1 PYTHONPATH=. .venv/bin/pytest -q src/tests/test_openai_live_sim_ai_budget.py` -> `1 passed`; py_compile 및 `/tmp` report generation 검증 통과.
   - 다음 액션: 장후 실제 postclose 산출물에서 새 attribution은 구현 이후 이벤트부터 hard/soft/non-critical로 분리된다. 기존 5/19 과거 이벤트는 필드가 없어 `unknown`으로 남기는 것이 정상이며, real holding/provider/B.U.Y./submit/broker guard는 변경하지 않는다.
 
+- [x] `[ScalpSimOvernightAIPlusCarry0519] 스캘핑 sim-only overnight AI+carry 및 자동화체인 source 편입` (`Due: 2026-05-19`, `Slot: POSTCLOSE`, `TimeWindow: 15:30~16:10`, `Track: ScalpingLogic`)
+  - Source: [scalp_live_simulator_state.json](/home/ubuntu/KORStockScan/data/runtime/scalp_live_simulator_state.json), [scalp_sim_overnight.py](/home/ubuntu/KORStockScan/src/engine/scalp_sim_overnight.py), [scalp_sim_overnight_2026-05-19.json](/home/ubuntu/KORStockScan/data/report/scalp_sim_overnight/scalp_sim_overnight_2026-05-19.json), [lifecycle_decision_matrix.py](/home/ubuntu/KORStockScan/src/engine/lifecycle_decision_matrix.py)
+  - 판정 기준: `actual_order_submitted=false`, `simulation_book=scalp_ai_buy_all`, `status=HOLDING` active sim만 `overnight_v1` 판단 대상으로 삼고, `SELL_TODAY`는 sim 가상 청산, `HOLD_OVERNIGHT`는 active carry로 유지한다.
+  - 금지: real overnight gatekeeper, broker 주문, provider route, BUY/submit threshold, real holding/exit 로직을 변경하지 않는다. 자동화체인 편입은 source bundle/lifecycle matrix 입력까지만 허용하고 threshold-cycle auto-apply family로 만들지 않는다.
+  - 완료 메모 (`2026-05-19 16:05 KST`): `warning / ai_timeout_fallback_sell_today_completed`. runner/report/restore event/postclose wrapper/lifecycle adapter를 구현했다. one-shot 실행 전 active sim은 `13건`이었고 dry-run 대상도 `13건`으로 확인됐다. 실제 `--live-openai` one-shot에서는 OpenAI overnight 호출이 5회 연속 timeout 후 engine disabled가 되어 설계된 실패 정책대로 `SELL_TODAY` fallback 가상 청산을 적용했다. 결과는 `decision=13`, `sell_today=13`, `hold_overnight=0`, `sell_assumed_filled=13`, `carry_open_count=0`, state active `0건`이다. Telegram 발송은 없다.
+  - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_scalp_sim_overnight_gatekeeper.py src/tests/test_scalp_sim_overnight_report.py src/tests/test_scalp_sim_ev_midcheck.py src/tests/test_scalp_sim_ai_deferred_review.py` -> `10 passed`; `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_scalp_live_simulator.py src/tests/test_state_handler_fast_signatures.py src/tests/test_scalp_sim_ev_midcheck.py src/tests/test_scalp_sim_ai_deferred_review.py` -> `61 passed, 2 warnings`; `RUN_OPENAI_LIVE_TESTS=1 PYTHONPATH=. .venv/bin/pytest -q src/tests/test_openai_live_sim_ai_budget.py` -> `2 passed`; `py_compile`, `bash -n deploy/run_threshold_cycle_postclose.sh` 통과.
+  - 다음 액션: postclose 본체에서 `scalp_sim_overnight`, `scalp_sim_ev_midcheck`, `lifecycle_decision_matrix`, `threshold_cycle_ev`, `runtime_approval_summary`가 source-only로 이어지는지 재확인한다. 오늘 overnight AI timeout은 provider 변경/threshold 변경 근거가 아니라 운영 incident/provenance로만 분리한다.
+
 - [ ] `[HumanInterventionSummary0519] 자동화체인 사용자 개입 요구사항 분류 및 누락 확인` (`Due: 2026-05-19`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:15`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-18.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-18.json), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
   - 판정 기준: 개입사항을 `approval_artifact_required|created|missing|blocked_by_policy|observe_only`, `Codex 구현 필요`, `수동 동기화 필요`, `관찰만`으로 분류한다.
@@ -162,3 +170,18 @@
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
+
+<!-- AUTO_SERVER_COMPARISON_START -->
+### 본서버 vs songstockscan 자동 비교 (`2026-05-19 15:47:01`)
+
+- 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
+- 상세 리포트: `data/report/server_comparison/server_comparison_2026-05-19.md`
+- `Trade Review`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Performance Tuning`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Post Sell Feedback`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Entry Pipeline Flow`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+<!-- AUTO_SERVER_COMPARISON_END -->
