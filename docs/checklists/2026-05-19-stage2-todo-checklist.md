@@ -5,6 +5,7 @@
 - 전일 postclose 자동화가 만든 장전 apply 후보와 사용자 개입 요구사항을 산출물 기준으로 확인한다.
 - 실주문, threshold, provider, sim/probe 관련 변경은 approval artifact와 checklist 기준 없이 열지 않는다.
 - code-improvement workorder는 자동 repo 수정이 아니라 사용자가 Codex에 구현을 지시한 경우에만 실행한다.
+- lifecycle decision matrix는 ADM 확장 umbrella로 문서화하고, 기존 fixed threshold는 `hard_safety|baseline_prior|bounded_tunable|legacy_archive` 역할 계약에 맞춰 판정한다.
 
 ## 오늘 강제 규칙
 
@@ -92,7 +93,7 @@
   - 다음 액션: approval request가 있으면 `approval_id`, 후보/대상, artifact path, 승인 여부, 다음 PREOPEN 적용 확인 항목을 남긴다. 누락된 항목이 있으면 다음 영업일 checklist에 parser-friendly checkbox로 추가한다.
 
 - [ ] `[LifecycleDecisionMatrixRuntime0519] lifecycle decision matrix postclose 산출 및 다음 PREOPEN bounded apply 연결 확인` (`Due: 2026-05-19`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:35`, `Track: ScalpingLogic`)
-  - Source: [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md), [lifecycle_decision_matrix.py](/home/ubuntu/KORStockScan/src/engine/lifecycle_decision_matrix.py), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md), [lifecycle_decision_matrix.py](/home/ubuntu/KORStockScan/src/engine/lifecycle_decision_matrix.py), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py)
   - 판정 기준: `lifecycle_decision_matrix_2026-05-19.{json,md}` 생성, `threshold_cycle_ev`/`runtime_approval_summary` source link, fixed threshold role contract, hard safety passthrough, selected/not-applied attribution을 확인한다.
   - 금지: score bucket 고정 정책, score 단조 EV 가정, hard safety override, 장중 threshold mutation, sim-only real execution 품질 주장.
   - 다음 액션: `pass`, `hold_sample`, `hold_no_edge`, `source_quality_blocker`, `runtime_env_mapping_gap` 중 하나로 닫고, selected되면 다음 PREOPEN env의 policy file/version/promote cap을 확인한다.

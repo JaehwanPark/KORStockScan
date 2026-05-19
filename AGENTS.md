@@ -7,18 +7,21 @@ KORStockScan 작업 기본 규칙:
 - 현재 active/open 상태는 `Plan Rebase` §7~§8을 기준으로 읽되, 과거 checklist의 `[x]` 완료 항목은 현재 OPEN owner로 보지 않는다. 완료 항목은 증적/근거 링크이고, 현재 owner는 같은 행에 명시된 runtime owner 또는 현재 checklist의 열린 항목이다.
 - `docs/plan-korStockScanPerformanceOptimization.prompt.md`는 세션 진입용 경량 포인터다. 일반 작업마다 필수로 읽지 않고, 사용자가 명시적으로 요구했거나 Plan Rebase 위치, Source of Truth 문서 맵, 현재 실행표가 불명확할 때만 확인한다.
 
-## 1.1 현재 상태 기준 (`2026-05-15 KST`)
+## 1.1 현재 상태 기준 (`2026-05-19 KST`)
 
 - 현재 단계는 `Plan Rebase`의 자동화체인 튜닝 단계이며, 목적은 손실 억제가 아니라 기대값/순이익 극대화다.
 - 중심 루프는 `R0_collect -> R1_daily_report -> R2_cumulative_report -> R3_manifest_only -> R4_preopen_apply_candidate -> R5_bounded_calibrated_apply -> R6_post_apply_attribution`다. 산출물/consumer/apply 계약은 `docs/report-based-automation-traceability.md`가 소유한다.
-- `2026-05-15` PREOPEN 기준 `auto_bounded_live` selected runtime family는 `soft_stop_whipsaw_confirmation` 1개다. `score65_74_recovery_probe`는 `2026-05-13` selected 및 5/13 source 재검증상 open 가능 후보였지만, 5/15 실제 preopen apply에서는 5/14 source rolling_5d primary 재평가 결과 `hold/no_runtime_env_override`로 runtime env에 포함되지 않았다. 장중 runtime threshold mutation은 금지한다.
-- `2026-05-14` 장중 사용자 판정으로 sim-first lifecycle 탐색 범위를 명확히 한다. 이것은 신규 report chain이 아니라 기존 threshold-cycle 자동화체인의 입력/해석 범위이며, 목적은 예수금/실주문 가능 여부/현재 selected runtime family에 묶이지 않고 스캘핑과 스윙의 BUY/selection 가능 후보 전체를 `selection -> entry -> holding -> scale_in -> exit` virtual lifecycle로 넓게 실행해 최적 threshold 후보와 기능개선 workorder를 찾는 것이다. 실주문 enable/cap 해제/provider 변경/bot restart의 단독 근거로 쓰지 않는다.
+- 장중 runtime threshold mutation은 금지한다. 기본 적용 경로는 postclose artifact와 AI/deterministic guard를 거친 다음 PREOPEN `auto_bounded_live` runtime env다. 사용자 운영 override 이력은 `docs/archive/plan-rebase-runtime-history-2026-05-19.md`에 보존하고, 현재 owner 판정에는 selected family/provenance/post-apply attribution만 남긴다.
+- `lifecycle_decision_matrix_runtime`은 ADM 확장 umbrella owner다. 기존 Entry ADM, Holding/Exit ADM, submit 관찰, scale-in bias adapter를 `entry`, `submit`, `holding`, `scale_in`, `exit` arm으로 감싸며 기본 OFF, auto-bounded micro canary 후보로만 열린다.
+- 기존 fixed threshold는 삭제하지 않고 역할을 바꾼다. broker submit guard, stale quote submit block, price freshness, hard/protect/emergency stop, account/order/cooldown/qty guard는 `hard_safety`; `BUY_SCORE_THRESHOLD`, VPW/strength/momentum, entry score cutoff는 `baseline_prior`; latency caution, score65_74 probe, soft stop/holding flow, scale-in price guard는 `bounded_tunable`; fallback scout/main, fallback single, latency fallback split-entry, legacy latency composite, closed shadow axes는 `legacy_archive`다.
+- lifecycle matrix와 ADM의 우선순위는 `hard safety veto -> account/order/broker guard -> lifecycle matrix runtime policy -> 기존 ADM adapter -> baseline fixed threshold fallback`이다. matrix/ADM은 broker submit guard나 stale/price freshness/stop/qty guard를 우회할 수 없다.
+- sim-first lifecycle은 새 독립 체인이 아니라 기존 threshold-cycle 자동화체인의 입력/해석 범위다. 스캘핑과 스윙의 BUY/selection 가능 후보 전체를 `selection -> entry -> holding -> scale_in -> exit` virtual lifecycle로 넓게 실행해 최적 threshold 후보와 기능개선 workorder를 찾지만, 실주문 enable/cap 해제/provider 변경/bot restart의 단독 근거로 쓰지 않는다.
 - live 스캘핑 AI route는 OpenAI 고정이다. provider transport/provenance 확인은 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경과 분리한다. OpenAI 초기화 실패로 Gemini fallback이 발생하면 runtime incident로 본다.
 - 스캘핑 entry/price/holding은 자동화체인 attribution으로 판정한다.
   - score 50 fallback/neutral은 신규 BUY 제출로 내려보내지 않고 `blocked_ai_score`로 보류한다.
-  - `score65_74_recovery_probe`는 open 후보지만 5/15 실제 runtime env selected family가 아니며, 장중 수동 threshold 변경 근거가 아니다.
+  - score bucket은 baseline prior와 feature일 뿐 score 단독으로 BUY/WAIT/DROP을 확정하지 않는다.
   - `dynamic_entry_price_resolver_p1`/`dynamic_entry_ai_price_canary_p2`는 entry price owner다. passive probe submit revalidation이 `stale_context_or_quote`이면 브로커 제출 전 차단한다.
-  - `soft_stop_micro_grace`, selected `soft_stop_whipsaw_confirmation`, `holding_flow_override`는 hard/protect/emergency/order safety를 우회하지 않는다.
+  - `soft_stop_micro_grace`, selected `soft_stop_whipsaw_confirmation`, `holding_flow_override`, Entry/Holding ADM, lifecycle matrix는 hard/protect/emergency/order safety를 우회하지 않는다.
   - scale-in price resolver/dynamic qty safety는 유지한다. 신규/추가매수 1주 cap 해제는 `position_sizing_cap_release` approval request 이후 사용자 승인으로만 다룬다.
 - `scalp_ai_buy_all_live_simulator`, swing dry-run, probe/counterfactual 표본은 `actual_order_submitted=false` authority로 본다. source bundle과 approval request 근거가 될 수 있지만 real execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다. sim-first 탐색에서는 예수금 부족, 1주 cap, 실주문 미제출을 후보 제외 사유가 아니라 provenance tag로 남긴다.
 - 스윙은 dry-run self-improvement 체인이다. `swing_lifecycle_audit`, `swing_threshold_ai_review`, `swing_improvement_automation`, `swing_runtime_approval`이 장후 source bundle을 만들 수 있지만 별도 approval artifact 없이는 env apply, one-share real canary, scale-in real canary, 전체 실주문 전환 금지다.

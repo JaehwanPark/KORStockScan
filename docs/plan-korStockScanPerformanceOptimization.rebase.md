@@ -1,10 +1,10 @@
 # KORStockScan Plan Rebase 중심 문서
 
-기준일: `2026-05-18 KST`
+기준일: `2026-05-19 KST`
 역할: 현재 튜닝 원칙, 자동화체인 판정 계약, active/open 상태만 고정하는 중심축 문서다.
 주의: 이 문서는 자동 파싱용 체크리스트를 소유하지 않는다. 실행 작업항목은 날짜별 `stage2 todo checklist`가 소유한다.
 
-과거 5/4~5/8 수동 실행 맵, 종료된 latency/fallback/shadow 경과, 지나간 owner 판정 메모는 archive와 날짜별 checklist 증적으로 본다. 2026-05-13 이전 원문은 [pre-automation-renewal archive](./archive/plan-korStockScanPerformanceOptimization.rebase.pre-automation-renewal-2026-05-13.md)에 보존했다.
+과거 5/4~5/8 수동 실행 맵, 종료된 latency/fallback/shadow 경과, 지나간 owner 판정 메모는 archive와 날짜별 checklist 증적으로 본다. 2026-05-13 이전 원문은 [pre-automation-renewal archive](./archive/plan-korStockScanPerformanceOptimization.rebase.pre-automation-renewal-2026-05-13.md), 2026-05-15~05-19 runtime override/ADM migration 경과는 [runtime history archive](./archive/plan-rebase-runtime-history-2026-05-19.md)에 보존했다.
 
 ---
 
@@ -14,11 +14,12 @@
 2. 중심 루프는 `R0_collect -> R1_daily_report -> R2_cumulative_report -> R3_manifest_only -> R4_preopen_apply_candidate -> R5_bounded_calibrated_apply -> R6_post_apply_attribution`다. 상세 산출물/소비자 계약은 [report-based-automation-traceability](./report-based-automation-traceability.md)를 따른다.
 3. 기준선은 `main-only`, `normal_only`, `post_fallback_deprecation`이다. 원격/server 비교값은 기본 의사결정 입력에서 제외한다.
 4. 실전 변경은 동일 단계 내 단일 owner canary를 기본으로 한다. stage, 조작점, cohort tag, rollback guard가 분리된 경우에만 stage-disjoint concurrent canary를 허용한다.
-5. `2026-05-18` runtime env는 사용자 운영 override를 포함한다. 스캘핑은 `score65_74_recovery_probe`, pre-AI soft gate 재배치, `scalp_entry_adm_runtime_bias_p1`, `holding_exit_matrix_runtime_bias_p1`이 켜져 있고, 스윙은 one-share real canary와 gatekeeper reject cooldown이 env에 명시되어 있다. 이는 자동화체인의 무단 장중 mutation이 아니라 사용자 명시 operator override이며, threshold/provider/broker submit safety guard 우회 권한은 없다.
-6. 스캘핑 live AI route는 OpenAI 고정이다. `KORSTOCKSCAN_SCALPING_AI_ROUTE=openai`, Responses WS transport, numeric compact JSON hot path를 기준으로 보고, Gemini/DeepSeek fallback은 명시 env 또는 OpenAI 초기화 실패/비운영 분석 경로로만 본다.
-7. 스윙은 dry-run self-improvement 체인이다. `selection -> db_load -> entry -> holding -> scale_in -> exit -> attribution` lifecycle을 매 장후 감사하고, approval request는 생성할 수 있지만 별도 approval artifact 없이는 runtime env/live order 전환으로 보지 않는다.
-8. sim/probe/counterfactual은 source bundle과 approval request 근거가 될 수 있지만 real execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
-9. Sentinel, panic sell/buying, system error detector는 운영/attribution/source-quality 입력이다. report-only 상태에서 threshold, provider, 주문, 자동매도, bot restart를 직접 변경하지 않는다.
+5. 운영 override는 사용자 명시 지시, source/provenance, rollback env, safety priority를 남긴 경우에만 인정한다. 기본 적용 경로는 postclose artifact -> 다음 PREOPEN `auto_bounded_live`이며, 2026-05-18~05-19 override 경과는 archive 증적으로만 본다.
+6. `lifecycle_decision_matrix_runtime`은 ADM 확장 umbrella owner다. 기존 Entry ADM, Holding/Exit ADM, submit 관찰, scale-in bias adapter를 `entry/submit/holding/scale_in/exit` stage별 weighted ADM policy로 감싸며, 기본 OFF 상태에서 selected될 때만 다음 PREOPEN env에 policy file/version/promote cap을 연결한다.
+7. 스캘핑 live AI route는 OpenAI 고정이다. `KORSTOCKSCAN_SCALPING_AI_ROUTE=openai`, Responses WS transport, numeric compact JSON hot path를 기준으로 보고, Gemini/DeepSeek fallback은 명시 env 또는 OpenAI 초기화 실패/비운영 분석 경로로만 본다.
+8. 스윙은 dry-run self-improvement 체인이다. `selection -> db_load -> entry -> holding -> scale_in -> exit -> attribution` lifecycle을 매 장후 감사하고, approval request는 생성할 수 있지만 별도 approval artifact 없이는 runtime env/live order 전환으로 보지 않는다.
+9. sim/probe/counterfactual은 source bundle과 approval request 근거가 될 수 있지만 real execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
+10. Sentinel, panic sell/buying, system error detector는 운영/attribution/source-quality 입력이다. report-only 상태에서 threshold, provider, 주문, 자동매도, bot restart를 직접 변경하지 않는다.
 
 ## 2. 용어와 판정 계약
 
@@ -28,6 +29,8 @@
 | `manifest_only` | 후보와 권고는 만들지만 runtime env를 바꾸지 않는 상태 | approval/guard 미충족 기본값 |
 | `report_only` / `observe_only` | runtime 판단을 바꾸지 않고 source bundle, workorder, approval request, operator review에만 쓰는 상태 | live 변경 권한 없음 |
 | `operator_runtime_override` | 사용자가 명시적으로 실적용을 지시해 runtime env와 bot restart까지 실행한 상태 | source/provenance와 rollback env를 반드시 남기며 safety guard 우회 금지 |
+| `lifecycle_matrix_runtime_policy` | 개별 후보 lifecycle row를 stage별 weighted ADM proposal로 해석하는 umbrella runtime policy | hard safety/broker guard 우회 금지, selected PREOPEN env 전 runtime 효과 없음 |
+| `fixed_threshold_contract` | 기존 threshold를 `hard_safety`, `baseline_prior`, `bounded_tunable`, `legacy_archive`로 재분류하는 계약 | score 단독 BUY/WAIT/DROP 확정 금지, role 밖 재사용 금지 |
 | `approval_required` | 자동화체인이 후보를 만들었지만 사용자/approval artifact가 필요한 상태 | artifact 없으면 env apply 금지 |
 | `safety_veto` | severe loss, 주문 실패, provenance 손상, hard/protect/emergency stop 지연 같은 즉시 차단 조건 | daily-only로도 차단 가능 |
 | `source_quality_blocker` | stale/missing/duplicate/provenance 결함 때문에 edge 판정이 막힌 상태 | threshold candidate 아님 |
@@ -69,6 +72,8 @@
 3. rollback/safety revert는 hard/protect/emergency stop 지연, 주문 실패, provenance 손상, same-stage owner 충돌, severe loss guard 초과에만 쓴다.
 4. AI correction과 pattern lab automation은 검토자/제안자/작업지시 layer다. deterministic guard 없이 단독 runtime apply 권한이 없다.
 5. code-improvement workorder는 자동 repo 수정이 아니라 구현 지시 입력이다. `runtime_effect=false` order는 실운영 변경으로 해석하지 않는다.
+6. 기존 fixed threshold는 삭제하지 않고 역할을 바꾼다. broker submit/stale quote/price freshness/stop/account/order/qty/cooldown guard는 `hard_safety`, `BUY_SCORE_THRESHOLD`와 entry score cutoff/VPW/strength/momentum 계열은 후보 생성 `baseline_prior`, latency caution/score65_74/soft stop/holding/scale-in price guard는 `bounded_tunable`, fallback/legacy latency/shadow 축은 `legacy_archive`다.
+7. score가 높을수록 EV가 단조 증가한다는 가정은 runtime 판정 계약에서 제거한다. matrix는 score를 feature로 소비하지만 score bucket 자체를 고정 정책이나 단독 action authority로 쓰지 않는다.
 
 ### 3.3 Canary, Cohort, Live 변경 원칙
 
@@ -97,7 +102,7 @@
 | `R5_bounded_calibrated_apply` | guard 통과 family만 다음 장전 runtime env에 반영 | 있음 |
 | `R6_post_apply_attribution` | selected/applied/not-applied cohort, daily EV, approval summary 제출 | 없음 |
 
-자동화체인은 새 관찰축을 무한히 늘리는 방식이 아니라 기존 source bundle을 재사용한다. BUY 쪽은 `buy_funnel_sentinel`, `wait6579_ev_cohort`, `missed_entry_counterfactual`, `performance_tuning`; 보유/청산 쪽은 `holding_exit_observation`, `post_sell_feedback`, `trade_review`, `holding_exit_sentinel`; 패닉 쪽은 `panic_sell_defense`, `panic_buying`; decision-support 쪽은 `holding_exit_decision_matrix`, `statistical_action_weight`를 우선 source로 쓴다. `sentinel_followup`은 2026-05-07 단발 follow-up 기록으로 archive/reference이며 현재 자동화체인 source bundle owner가 아니다.
+자동화체인은 새 관찰축을 무한히 늘리는 방식이 아니라 기존 source bundle을 재사용한다. BUY 쪽은 `buy_funnel_sentinel`, `wait6579_ev_cohort`, `missed_entry_counterfactual`, `performance_tuning`; ADM/lifecycle 쪽은 `lifecycle_decision_matrix`, `scalp_entry_action_decision_matrix`, `holding_exit_decision_matrix`, `sim_post_sell_evaluations`, `statistical_action_weight`; 보유/청산 쪽은 `holding_exit_observation`, `post_sell_feedback`, `trade_review`, `holding_exit_sentinel`; 패닉 쪽은 `panic_sell_defense`, `panic_buying`을 우선 source로 쓴다. `sentinel_followup`은 2026-05-07 단발 follow-up 기록으로 archive/reference이며 현재 자동화체인 source bundle owner가 아니다.
 
 정리되지 못한 report-only/legacy 산출물은 `calibration_source_bundle.report_only_cleanup_audit`로 관리한다. 이 audit는 `source_quality_gate`이며 `cleanup_candidate_count`를 통해 정리 후보를 표면화하지만, `source_quality_only`라서 threshold/env/order/bot/provider 변경 권한은 없다.
 
@@ -107,8 +112,8 @@
 
 | 영역 | 현재 상태 | 금지선 |
 | --- | --- | --- |
-| scalping entry | `score65_74_recovery_probe`와 `scalp_entry_adm_runtime_bias_p1`이 2026-05-18 operator override로 runtime env에 포함됐다. Entry ADM은 `BUY_NOW/WAIT_REQUOTE/SKIP_STALE/BUY_DEFENSIVE/NO_BUY_AI/SKIP_SOURCE_QUALITY/SKIP_PRE_SUBMIT_SAFETY` bucket과 hypothesis fallback으로 AI `BUY`를 `WAIT`/`DROP`으로 보정할 수 있다. score 50 fallback/neutral은 `blocked_ai_score`로 보류 | threshold/provider/broker submit guard 우회 금지. stale/liquidity/overbought/latency/price freshness pre-submit safety는 ADM보다 우선 |
-| lifecycle decision matrix | `lifecycle_decision_matrix_runtime`은 2026-05-19 구현된 umbrella owner다. 기존 Entry ADM/Holding-Exit ADM과 sim/counterfactual source를 adapter로 감싸 `entry/submit/holding/scale_in/exit` stage별 weighted ADM policy를 만들고, selected될 때만 다음 PREOPEN env로 policy file/version/promote cap을 연결한다 | hard safety, account/order/broker guard, stale quote/price freshness/stop/qty guard 우회 금지. score bucket 고정 정책이나 score 단조 EV 가정으로 쓰지 않는다 |
+| scalping entry | Entry ADM은 `BUY_NOW/WAIT_REQUOTE/SKIP_STALE/BUY_DEFENSIVE/NO_BUY_AI/SKIP_SOURCE_QUALITY/SKIP_PRE_SUBMIT_SAFETY` bucket과 hypothesis fallback으로 AI `BUY`를 `WAIT`/`DROP`으로 보정할 수 있다. score 50 fallback/neutral은 `blocked_ai_score`로 보류한다. 기존 score cutoff는 matrix feature와 baseline prior로만 본다 | threshold/provider/broker submit guard 우회 금지. stale/liquidity/overbought/latency/price freshness pre-submit safety는 ADM보다 우선 |
+| lifecycle decision matrix | `lifecycle_decision_matrix_runtime`은 ADM 확장 umbrella owner다. 기존 Entry ADM/Holding-Exit ADM과 submit/scale-in adapter, sim/counterfactual source를 감싸 `entry/submit/holding/scale_in/exit` stage별 weighted ADM policy를 만들고, selected될 때만 다음 PREOPEN env로 policy file/version/promote cap을 연결한다 | hard safety, account/order/broker guard, stale quote/price freshness/stop/qty guard 우회 금지. score bucket 고정 정책이나 score 단조 EV 가정으로 쓰지 않는다 |
 | entry price | `dynamic_entry_price_resolver_p1` + `dynamic_entry_ai_price_canary_p2`; passive probe submit revalidation이 stale이면 제출 전 block | `ws_data.curr` 직접 추격, stale quote submit 금지 |
 | holding/exit | `soft_stop_micro_grace`, `soft_stop_whipsaw_confirmation`, `holding_flow_override`, `holding_exit_matrix_runtime_bias_p1` 운영 override. Holding/Exit ADM은 flow AI action을 `HOLD`/`EXIT`로 보정하고 `holding_exit_matrix_avg_down_bias`/`holding_exit_matrix_pyramid_bias`로 scale-in action을 제안할 수 있다 | hard/protect/emergency/order/account/cooldown/qty safety 우회 금지 |
 | scale-in/position sizing | scale-in price resolver와 dynamic qty safety 유지. `position_sizing_dynamic_formula`는 score/strategy/volatility/liquidity/spread/price band/recent loss/portfolio exposure를 입력으로 보는 별도 owner이며, 신규/추가매수 1주 cap 해제는 `position_sizing_cap_release` approval request 이후만 검토 | sim/probe 단독 실주문 cap 해제, cap 해제 자동 apply 금지 |
@@ -137,8 +142,9 @@
 
 | 워크스트림 | 현재 owner/상태 | 다음 판정 경로 |
 | --- | --- | --- |
-| threshold auto apply | 2026-05-18 runtime env는 preopen selected family와 사용자 운영 override가 병합되어 있다. `score65_74_recovery_probe`, pre-AI soft gate 재배치, Entry ADM runtime bias, Holding/Exit ADM runtime bias는 post-restart cohort와 장후 EV로 추적한다 | 장후 `threshold_cycle_ev`, `runtime_approval_summary`, post-apply attribution |
+| threshold auto apply | 기본 적용 경로는 postclose source bundle과 AI/deterministic guard를 거친 다음 PREOPEN `auto_bounded_live`다. 사용자 운영 override는 archive 증적으로 분리하고, 현재 owner 판정에는 selected family/provenance/post-apply attribution만 남긴다 | 장후 `threshold_cycle_ev`, `runtime_approval_summary`, post-apply attribution |
 | lifecycle matrix runtime | `lifecycle_decision_matrix_runtime`은 Full runtime용 구조가 구현됐지만 기본 OFF이며 auto-bounded micro canary 후보로만 열린다. fixed threshold는 `hard_safety`, `baseline_prior`, `bounded_tunable`, `legacy_archive` contract에 따라 재해석한다 | postclose `lifecycle_decision_matrix`, `threshold_cycle_ev`, `runtime_approval_summary`, 다음 PREOPEN `threshold_cycle_preopen_apply`; 장중 mutation 없음 |
+| fixed threshold migration | 기존 threshold는 삭제하지 않고 `hard_safety`, `baseline_prior`, `bounded_tunable`, `legacy_archive`로 역할을 바꾼다. lifecycle matrix가 제안할 수 있는 것은 bounded tunable의 다음 PREOPEN 후보뿐이다 | hard safety override 금지, baseline prior 단독 action 금지, legacy archive 무단 재개 금지 |
 | entry funnel | `BUY Funnel Sentinel` + `wait6579_ev_cohort` + `score65_74_recovery_probe` + `scalp_entry_adm_runtime_bias_p1` | BUY/submitted drought와 forced WAIT/DROP은 daily/rolling/cumulative EV, blocker attribution, missed-upside/avoided-loss로 판정 |
 | sim-first lifecycle threshold scope | 신규 산출물 owner가 아니라 기존 `R0_collect -> R1_daily_report -> R2_cumulative_report -> R3_manifest_only -> R4_preopen_apply_candidate -> R5_bounded_calibrated_apply -> R6_post_apply_attribution` 체인의 범위 규칙이다. 스캘핑과 스윙의 BUY/selection 가능 후보 전체를 `selection -> entry -> holding -> scale_in -> exit` virtual lifecycle로 넓게 실행해 최적 threshold 후보와 기능개선 workorder를 찾는다 | 실주문/예수금/cap/selected runtime family는 sim exclusion 사유가 아니라 provenance tag로만 남긴다. 별도 standalone report가 threshold-cycle consumer나 apply authority가 되지 않는다 |
 | entry price quality | P1/P2 price resolver, passive probe lifecycle, submit revalidation block | `pre_submit_price_guard` family와 daily EV attribution |
@@ -174,7 +180,7 @@
 
 | 문서 | 역할 |
 | --- | --- |
-| [2026-05-13-stage2-todo-checklist.md](./2026-05-13-stage2-todo-checklist.md) | 당일 장전/장중/장후 실행표와 postclose 자동 생성 항목 |
+| [2026-05-19-stage2-todo-checklist.md](./checklists/2026-05-19-stage2-todo-checklist.md) | 당일 장전/장중/장후 실행표와 postclose 자동 생성 항목 |
 | [report-based-automation-traceability.md](./report-based-automation-traceability.md) | R0~R6 ladder, source bundle, Metric Decision Contract, 금지선 |
 | [data/threshold_cycle/README.md](../data/threshold_cycle/README.md) | threshold collector/report/apply plan/runtime env 운영방법 |
 | [data/report/README.md](../data/report/README.md) | 정기 report inventory와 Markdown 누락 후보 |
@@ -183,3 +189,4 @@
 | [plan-korStockScanPerformanceOptimization.qna.md](./plan-korStockScanPerformanceOptimization.qna.md) | 반복 판단 기준과 감리 Q&A |
 | [archive/closed-observation-axes-2026-05-01.md](./archive/closed-observation-axes-2026-05-01.md) | 종료된 관찰축 archive |
 | [archive/plan-korStockScanPerformanceOptimization.rebase.pre-automation-renewal-2026-05-13.md](./archive/plan-korStockScanPerformanceOptimization.rebase.pre-automation-renewal-2026-05-13.md) | 자동화체인 리뉴얼 전 Rebase 원문 |
+| [archive/plan-rebase-runtime-history-2026-05-19.md](./archive/plan-rebase-runtime-history-2026-05-19.md) | 2026-05-15~05-19 runtime override, score65 probe, ADM migration 이력 |

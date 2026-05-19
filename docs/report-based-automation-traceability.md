@@ -1,6 +1,6 @@
 # Report-Based Automation Traceability
 
-기준일: `2026-05-18 KST`
+기준일: `2026-05-19 KST`
 
 이 문서는 report 기반 자동화가 누락되지 않도록 `산출물 -> 소비자 -> 적용 단계 -> owner`를 추적하는 registry다. 최종 목표는 기대값/순이익 극대화지만, report 산출물이 곧바로 runtime threshold 변경으로 이어지지는 않는다.
 
@@ -120,7 +120,7 @@ Pipeline Event Compaction V2는 producer-side compactor를 `PIPELINE_EVENT_HIGH_
 
 ### Scalping Pre-AI Gate Risk Context Contract
 
-2026-05-18 operator override 이후 스캘핑 `strength_momentum`, `overbought`, `liquidity`는 AI 호출 전 후보를 폐기하는 terminal gate가 아니라 AI/counterfactual로 전달하는 risk context로 기록한다. 단, source-quality blocker와 broker submit safety는 그대로 fail-closed한다.
+현재 스캘핑 `strength_momentum`, `overbought`, `liquidity`는 AI 호출 전 후보를 폐기하는 terminal gate가 아니라 AI/counterfactual로 전달하는 risk context로 기록한다. 단, source-quality blocker와 broker submit safety는 그대로 fail-closed한다. 과거 operator override 경과는 Plan Rebase runtime history archive에 보존하고, 이 문서는 산출물/consumer/apply 계약만 소유한다.
 
 | family | stage/source | runtime 권한 | consumer |
 | --- | --- | --- | --- |
@@ -146,7 +146,9 @@ AI prompt 반영은 `KORSTOCKSCAN_SCALP_ENTRY_ADM_ADVISORY_ENABLED=true`일 때 
 
 `lifecycle_decision_matrix`는 고정 score bucket 정책이 아니라 개별 후보의 `runtime_features`와 사후 `labels`를 분리한 lifecycle row matrix다. runtime 입력 가능 feature는 AI score/action, microstructure, latency/source quality, price resolver, OFI/QI, position PnL/peak/held_sec, 현재 적용된 fixed threshold 값으로 제한하고, `mfe_10m_pct`, `mae_10m_pct`, `close_10m_pct`, realized profit, fill outcome, avoided loss, missed upside는 label 전용이다. runtime resolver는 label 필드를 읽지 않는다.
 
-`fixed_threshold_contract`는 기존 threshold를 `hard_safety`, `baseline_prior`, `bounded_tunable`, `legacy_archive`로 분류한다. `hard_safety`에는 broker submit guard, stale quote submit block, price freshness, hard/protect/emergency stop, 계좌/order/cooldown/qty guard가 포함되며 matrix가 우회할 수 없다. `BUY_SCORE_THRESHOLD`, VPW/strength/momentum, entry cutoff는 baseline prior feature일 뿐 score 단조 EV 가정을 만들지 않는다. latency caution, score65_74 probe, soft stop/holding flow, scale-in price guard는 bounded tunable로 남고 기존 bounds/max step/sample floor/source-quality gate를 통과해야 한다. fallback scout/main, fallback single, latency fallback split-entry, legacy latency composite, closed shadow axes는 archive로 분리되어 runtime feature로도 쓰지 않는다.
+`fixed_threshold_contract`는 기존 threshold를 `hard_safety`, `baseline_prior`, `bounded_tunable`, `legacy_archive`로 분류한다. `hard_safety`에는 broker submit guard, stale quote submit block, price freshness, hard/protect/emergency stop, 계좌/order/cooldown/qty guard가 포함되며 matrix가 우회할 수 없다. `BUY_SCORE_THRESHOLD`, VPW/strength/momentum, entry cutoff는 baseline prior feature일 뿐 score 단독 action authority나 score 단조 EV 가정을 만들지 않는다. latency caution, score65_74 probe, soft stop/holding flow, scale-in price guard는 bounded tunable로 남고 기존 bounds/max step/sample floor/source-quality gate를 통과해야 한다. fallback scout/main, fallback single, latency fallback split-entry, legacy latency composite, closed shadow axes는 archive로 분리되어 runtime feature로도 쓰지 않는다.
+
+ADM 확장 관계는 `Wrap Then Replace`다. v1에서는 Entry ADM과 Holding/Exit ADM을 제거하지 않고 lifecycle runtime policy가 먼저 proposal을 만들며, 기존 ADM은 adapter/fallback으로 남는다. selected 전에는 기존 ADM env만 직접 작동하고, selected 후에는 lifecycle proposal이 `original_action`, `selected_action`, `fixed_threshold_role`, `safety_passthrough`를 함께 남겨 기존 ADM 보정과 safety block attribution을 한 row로 묶는다.
 
 runtime 우선순위는 `hard safety veto -> account/order/broker guard -> lifecycle matrix runtime policy -> existing ADM adapter -> baseline fixed threshold fallback`이다. `lifecycle_decision_matrix_runtime` family가 selected되면 env는 policy file/version, promote enable, max promotes per day, min stage confidence만 전달한다. BUY 승격은 `BUY_DEFENSIVE` micro canary로 제한하고, submit/holding/scale-in/exit stage는 각 stage별 허용 action만 제안한다. 장중 threshold mutation, hard safety override, sim-only real execution 품질 주장, label future leakage는 금지한다.
 
@@ -335,7 +337,7 @@ Panic Telegram 안내는 report 결과의 상태 전환만 소비한다. `notify
 8. 적용 후 threshold version별 post-apply attribution과 daily EV report가 생성된다.
 9. 조건 미달은 다음 manifest의 `calibration_state`로 조정한다. safety guard 위반 시에만 `safety_revert_required=true`로 원복 후보 처리한다.
 
-현재 auto-bounded calibration 후보군은 `score65_74_recovery_probe`, `soft_stop_whipsaw_confirmation`, `holding_flow_ofi_smoothing`, `protect_trailing_smoothing`, `holding_exit_decision_matrix_advisory`, `bad_entry_refined_canary` 등이다. 단, 후보군에 있다는 사실은 apply 승인과 다르다. `bad_entry_refined_canary`는 2026-05-12 기준 joined lifecycle 표본 부족으로 observe-only hold이며, `trailing_continuation`은 GOOD_EXIT 훼손 리스크가 커서 report/calibration만 수행하고 live apply는 후순위로 둔다. calibration source는 `threshold_cycle` compact event와 함께 `data/report`의 BUY source(`buy_funnel_sentinel`, `wait6579_ev_cohort`, `missed_entry_counterfactual`, `performance_tuning`), 보유/청산 source(`holding_exit_observation`, `post_sell_feedback`, `trade_review`, `holding_exit_sentinel`), decision-support source(`holding_exit_decision_matrix`, `statistical_action_weight`) 요약을 사용한다. rolling/cumulative primary family는 `threshold_snapshot_by_window`뿐 아니라 창별 `calibration_source_bundle_by_window`를 같이 소비하고, source denominator가 snapshot denominator를 보완한 경우 `window_policy_audit`에 rendering/source alignment gap을 남긴다. `sentinel_followup`은 2026-05-07 단발 Markdown follow-up으로 현재 source bundle에서 제외한다. `preclose_sell_target`은 2026-05-10 제거되어 source bundle과 traceability inventory에서 제외한다.
+현재 auto-bounded calibration 후보군은 `lifecycle_decision_matrix_runtime`, `score65_74_recovery_probe`, `soft_stop_whipsaw_confirmation`, `latency_classifier_runtime_profile`, `holding_flow_ofi_smoothing`, `protect_trailing_smoothing`, `holding_exit_decision_matrix_advisory`, `bad_entry_refined_canary` 등이다. 단, 후보군에 있다는 사실은 apply 승인과 다르다. `lifecycle_decision_matrix_runtime`은 micro canary 후보이며 selected 시에도 policy file/version/promote cap만 다음 PREOPEN env로 전달한다. `bad_entry_refined_canary`는 joined lifecycle 표본 부족이면 observe-only hold이고, `trailing_continuation`은 GOOD_EXIT 훼손 리스크가 커서 report/calibration만 수행하고 live apply는 후순위로 둔다. calibration source는 `threshold_cycle` compact event와 함께 `data/report`의 BUY source(`buy_funnel_sentinel`, `wait6579_ev_cohort`, `missed_entry_counterfactual`, `performance_tuning`), ADM/lifecycle source(`lifecycle_decision_matrix`, `scalp_entry_action_decision_matrix`, `holding_exit_decision_matrix`, `sim_post_sell_evaluations`, `statistical_action_weight`), 보유/청산 source(`holding_exit_observation`, `post_sell_feedback`, `trade_review`, `holding_exit_sentinel`) 요약을 사용한다. rolling/cumulative primary family는 `threshold_snapshot_by_window`뿐 아니라 창별 `calibration_source_bundle_by_window`를 같이 소비하고, source denominator가 snapshot denominator를 보완한 경우 `window_policy_audit`에 rendering/source alignment gap을 남긴다. `sentinel_followup`은 2026-05-07 단발 Markdown follow-up으로 현재 source bundle에서 제외한다. `preclose_sell_target`은 2026-05-10 제거되어 source bundle과 traceability inventory에서 제외한다.
 
 `calibration_source_bundle.report_only_cleanup_audit`는 source bundle consumer가 없는 report-only/legacy 산출물을 매 실행마다 `source_quality_gate`로 감사한다. 현재 관리 대상은 `sentinel_followup`, policy-disabled `server_comparison`, 정기 full snapshot에서 제외된 legacy `add_blocked_lock`, 제거된 `preclose_sell_target`이다. `cleanup_candidate_count > 0`이면 source-quality warning과 정리 후보로 표면화하지만, 이 audit는 `source_quality_only`이며 runtime threshold, 주문, 자동매수/자동매도, bot restart, provider route 변경 권한이 없다.
 

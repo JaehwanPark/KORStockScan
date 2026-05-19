@@ -1,6 +1,6 @@
 # Threshold Cycle Operations
 
-작성 기준: `2026-05-10 KST`
+작성 기준: `2026-05-19 KST`
 
 이 디렉토리는 threshold 후보 수집, 장중/장후 calibration, 장전 bounded runtime env apply, daily EV 리포트를 저장한다. 현재 원칙은 완전 무인 `auto_bounded_live` apply이며, 장중 runtime threshold 자동 변경은 계속 금지한다.
 
@@ -13,7 +13,7 @@ report 기반 자동화의 전체 추적성은 [report-based-automation-traceabi
 | 시점 | wrapper | 역할 | 산출물 |
 |---|---|---|---|
 | runtime | `src.utils.pipeline_event_logger` | threshold 후보 stage를 compact stream에 적재 | `threshold_events_YYYY-MM-DD.jsonl` |
-| POSTCLOSE 16:10 | `deploy/run_threshold_cycle_postclose.sh` | raw pipeline event를 family partition으로 backfill하고 장후 report, AI correction, scalping/swing automation, latency classifier 추천, daily EV report, Plan Rebase renewal proposal 생성 | `date=YYYY-MM-DD/family=*/part-*.jsonl`, `data/report/threshold_cycle_YYYY-MM-DD.json`, 파생 `statistical_action_weight`, `holding_exit_decision_matrix`, `threshold_cycle_cumulative` JSON/MD, `threshold_cycle_ai_review_YYYY-MM-DD_postclose.{json,md}`, `latency_classifier_recommendation_YYYY-MM-DD.{json,md}`, `scalping_pattern_lab_automation_YYYY-MM-DD.{json,md}`, `swing_improvement_automation_YYYY-MM-DD.{json,md}`, `swing_runtime_approval_YYYY-MM-DD.{json,md}`, `swing_pattern_lab_automation_YYYY-MM-DD.{json,md}`, `threshold_cycle_ev_YYYY-MM-DD.{json,md}`, `runtime_approval_summary_YYYY-MM-DD.{json,md}`, `plan_rebase_daily_renewal_YYYY-MM-DD.{json,md}` |
+| POSTCLOSE 16:10 | `deploy/run_threshold_cycle_postclose.sh` | raw pipeline event를 family partition으로 backfill하고 장후 report, AI correction, ADM/lifecycle matrix, scalping/swing automation, latency classifier 추천, daily EV report, Plan Rebase renewal proposal 생성 | `date=YYYY-MM-DD/family=*/part-*.jsonl`, `data/report/threshold_cycle_YYYY-MM-DD.json`, 파생 `statistical_action_weight`, `scalp_entry_action_decision_matrix`, `lifecycle_decision_matrix`, `holding_exit_decision_matrix`, `threshold_cycle_cumulative` JSON/MD, `threshold_cycle_ai_review_YYYY-MM-DD_postclose.{json,md}`, `latency_classifier_recommendation_YYYY-MM-DD.{json,md}`, `scalping_pattern_lab_automation_YYYY-MM-DD.{json,md}`, `swing_improvement_automation_YYYY-MM-DD.{json,md}`, `swing_runtime_approval_YYYY-MM-DD.{json,md}`, `swing_pattern_lab_automation_YYYY-MM-DD.{json,md}`, `threshold_cycle_ev_YYYY-MM-DD.{json,md}`, `runtime_approval_summary_YYYY-MM-DD.{json,md}`, `plan_rebase_daily_renewal_YYYY-MM-DD.{json,md}` |
 | INTRADAY 12:05 | `deploy/run_threshold_cycle_calibration.sh` | 기존 report source bundle을 읽어 장중 calibration 및 AI correction artifact 생성 | `data/report/threshold_cycle_calibration/threshold_cycle_calibration_YYYY-MM-DD_intraday.json`, `data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_YYYY-MM-DD_intraday.{json,md}` |
 | PREOPEN 07:35 | `deploy/run_threshold_cycle_preopen.sh` | 최신 threshold report와 AI correction guard를 읽어 auto bounded runtime env 생성 | `apply_plans/threshold_apply_YYYY-MM-DD.json`, `runtime_env/threshold_runtime_env_YYYY-MM-DD.{env,json}` |
 
@@ -30,6 +30,8 @@ cron completion detector는 wrapper log의 terminal marker를 source of truth로
 - 실제 env 반영은 다음 장전 1회 bounded apply로 자동 수행한다. 코드 hot mutation은 하지 않고, `src/run_bot.sh`가 당일 `runtime_env/threshold_runtime_env_YYYY-MM-DD.env`를 기동 시 source한다.
 - calibration artifact는 매일 장중/장후 2회 생성한다. 장중 실행은 기존 보유/청산 report source를 요약하며 canonical postclose threshold report를 덮어쓰지 않는다.
 - postclose 제출물은 `threshold_cycle_ev_YYYY-MM-DD.{json,md}` daily EV 리포트로 통일한다. 스윙은 예외적으로 `swing_runtime_approval`의 `approval_required` 요청을 daily EV와 preopen apply manifest에 노출하지만, 수동 approval artifact 없이는 env를 쓰지 않는다.
+- `lifecycle_decision_matrix_runtime`은 ADM 확장 umbrella family다. 기본 OFF이며 selected될 때만 다음 PREOPEN env에 policy file/version/promote cap을 쓴다. hard safety와 broker/account/order guard는 항상 우선한다.
+- 기존 fixed threshold는 role contract로 처리한다. broker/stale/price freshness/stop/account/order/qty/cooldown은 `hard_safety`, `BUY_SCORE_THRESHOLD`와 entry score cutoff/VPW/strength/momentum은 `baseline_prior`, latency caution/score65_74/soft stop/holding/scale-in price guard는 `bounded_tunable`, fallback/legacy latency/shadow 축은 `legacy_archive`다.
 
 ## 주요 경로
 
@@ -44,6 +46,8 @@ cron completion detector는 wrapper log의 terminal marker를 source of truth로
 | `runtime_env/threshold_runtime_env_YYYY-MM-DD.json` | runtime env override와 selected family provenance |
 | `data/report/threshold_cycle_YYYY-MM-DD.json` | 장후 canonical threshold report |
 | `data/report/statistical_action_weight/statistical_action_weight_YYYY-MM-DD.{json,md}` | action weight 파생 artifact |
+| `data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_YYYY-MM-DD.{json,md}` | Entry ADM action matrix artifact. direct ADM env 또는 lifecycle adapter source |
+| `data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_YYYY-MM-DD.{json,md}` | 개별 후보 lifecycle row, fixed threshold contract, stage별 weighted ADM policy artifact. selected family가 될 때만 다음 PREOPEN policy env로 소비 |
 | `data/report/holding_exit_decision_matrix/holding_exit_decision_matrix_YYYY-MM-DD.{json,md}` | AI decision-support matrix 파생 artifact |
 | `data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_YYYY-MM-DD.{json,md}` | 누적/rolling cohort 기반 threshold cycle 파생 artifact |
 | `data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_YYYY-MM-DD_{intraday,postclose}.{json,md}` | AI correction proposal + deterministic guard 파생 artifact |
@@ -92,15 +96,23 @@ cron completion detector는 wrapper log의 terminal marker를 source of truth로
 - `safety_guard_pack`: 원복 후보를 safety breach로만 제한한다.
 - `calibration_trigger_pack`: 목표 미달, 표본 부족, 방향성 불일치의 다음 calibration action을 담는다.
 
-첫 bounded calibration family는 아래 묶음이다. 목적은 완벽한 threshold spot 탐색이 아니라 efficient trade-off 지점의 bounded live canary와 자동 calibration이다.
+bounded calibration family는 아래 묶음이 중심이다. 목적은 완벽한 threshold spot 탐색이 아니라 efficient trade-off 지점의 bounded live canary와 자동 calibration이다.
 
-1. `score65_74_recovery_probe`: broad score threshold 완화가 아니라 score65~74, latency DANGER 제외, 수급/가속/micro-VWAP 유지, 1주/5만원 cap 후보
-2. `bad_entry_refined_canary`: naive hard block 재개가 아니라 soft-stop tail/defer cost 감소 후보. `bad_entry_refined_candidate`는 runtime provisional signal이며, 최종 유형은 장후 `post_sell_evaluations`가 `record_id`로 join된 뒤 lifecycle attribution으로만 닫는다.
-3. `soft_stop_whipsaw_confirmation`
-4. `holding_flow_ofi_smoothing`
-5. `protect_trailing_smoothing`
-6. `holding_exit_decision_matrix_advisory`: SAW `candidate_weight_source`가 만든 non-`no_clear_edge` matrix bucket만 advisory canary 후보
-7. `trailing_continuation`: GOOD_EXIT 훼손 리스크가 커서 1차 loop에서는 `freeze/report_only_calibration`만 허용
+1. `lifecycle_decision_matrix_runtime`: Entry ADM, Holding/Exit ADM, submit, scale-in adapter를 감싼 umbrella weighted ADM runtime 후보. selected 시에도 hard safety 우회 없이 policy file/version/promote cap만 다음 PREOPEN env로 전달한다.
+2. `score65_74_recovery_probe`: broad score threshold 완화가 아니라 score65~74, latency DANGER 제외, 수급/가속/micro-VWAP 유지, 1주/5만원 cap 후보
+3. `latency_classifier_runtime_profile`: 전일 latency_block의 age/jitter/spread 조합을 bounded tunable env 후보로 계산한다.
+4. `bad_entry_refined_canary`: naive hard block 재개가 아니라 soft-stop tail/defer cost 감소 후보. `bad_entry_refined_candidate`는 runtime provisional signal이며, 최종 유형은 장후 `post_sell_evaluations`가 `record_id`로 join된 뒤 lifecycle attribution으로만 닫는다.
+5. `soft_stop_whipsaw_confirmation`
+6. `holding_flow_ofi_smoothing`
+7. `protect_trailing_smoothing`
+8. `holding_exit_decision_matrix_advisory`: SAW `candidate_weight_source`가 만든 non-`no_clear_edge` matrix bucket만 advisory canary 후보
+9. `trailing_continuation`: GOOD_EXIT 훼손 리스크가 커서 1차 loop에서는 `freeze/report_only_calibration`만 허용
+
+### Lifecycle Decision Matrix와 fixed threshold
+
+`lifecycle_decision_matrix`는 score bucket별 고정 정책이 아니라 개별 sim/real/probe 후보의 lifecycle row를 stage별 matrix로 만든다. runtime feature와 사후 label을 분리하고, `stage_ev_composite_pct`와 confidence를 산출해 `BUY_DEFENSIVE`, `WAIT_REQUOTE`, `DROP`, `ALLOW_SUBMIT`, `HOLD`, `EXIT`, `AVG_DOWN_BIAS`, `PYRAMID_BIAS`, `NO_CHANGE` 중 stage별 허용 action만 제안한다.
+
+fixed threshold의 runtime 우선순위는 `hard safety veto -> account/order/broker guard -> lifecycle matrix runtime policy -> 기존 ADM adapter -> baseline fixed threshold fallback`이다. `baseline_prior`로 전환된 score/strength/momentum threshold는 후보 생성과 feature 역할만 하고 단독으로 BUY/WAIT/DROP을 확정하지 않는다. `bounded_tunable` 값은 matrix가 추천할 수 있지만 기존 bounds, max step, sample floor, source-quality gate를 통과해 다음 PREOPEN에만 반영된다.
 
 soft-stop balanced 기준은 완벽한 승률이 아니라 trade-off 기준이다. GOOD_EXIT 훼손은 `+10%p`까지 허용하고, soft-stop 손실 tail 감소 또는 MISSED_UPSIDE 감소가 있으면 유지 또는 완만 조정 대상으로 본다.
 

@@ -311,6 +311,20 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "allow_missing_after_window_while_cron_in_progress": True,
     },
     {
+        "id": "lifecycle_decision_matrix_report",
+        "path_template": "data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_{date}.json",
+        "max_staleness_sec": 3600,
+        "critical": False,
+        "trading_day_only": True,
+        "window_start": (16, 10),
+        "window_end": (17, 10),
+        "suppress_missing_while_cron_in_progress": {
+            "id": "threshold_cycle_postclose",
+            "log": "logs/threshold_cycle_postclose_cron.log",
+        },
+        "allow_missing_after_window_while_cron_in_progress": True,
+    },
+    {
         "id": "swing_pattern_lab_automation_report",
         "path_template": "data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_{date}.json",
         "max_staleness_sec": 3600,

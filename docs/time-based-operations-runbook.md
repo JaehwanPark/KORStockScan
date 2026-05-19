@@ -1,6 +1,6 @@
 # Time-Based Operations Runbook
 
-작성 기준: `2026-05-18 KST`
+작성 기준: `2026-05-19 KST`
 목적: 장전, 장중, 장후 자동화 체인의 시간대별 실행 주체, 산출물, 운영 확인 기준을 한 장으로 고정한다.
 
 이 문서는 실행 절차 runbook이다. 튜닝 원칙과 active owner는 [Plan Rebase](./plan-korStockScanPerformanceOptimization.rebase.md), 날짜별 작업 소유권은 `docs/checklists/YYYY-MM-DD-stage2-todo-checklist.md`, 산출물 추적성은 [report-based-automation-traceability.md](./report-based-automation-traceability.md), threshold-cycle/apply/daily EV 공통 산출물 정의는 [data/threshold_cycle/README.md](../data/threshold_cycle/README.md)를 기준으로 한다. 이 공통 정의는 스캘핑과 스윙이 threshold-cycle, daily EV, code-improvement workorder 체인에 들어오는 부분에 적용한다. 스윙 전용 lifecycle 산출물은 이 runbook의 `15:45`/장후 확인 절차와 `swing_lifecycle_audit`, `swing_improvement_automation`, `swing_runtime_approval`, `swing_pattern_lab_automation` artifact 정의를 함께 기준으로 본다.
@@ -10,6 +10,8 @@
 - 기본 흐름은 무인 자동화다. 사람의 장전 승인 없이 `auto_bounded_live` guard를 통과한 threshold만 runtime env로 반영한다.
 - 장중 threshold runtime mutation은 금지한다. 장중 산출물은 다음 장전 apply 후보 입력으로만 쓴다.
 - AI correction은 수정안 제안 layer다. 최종 threshold state/value는 deterministic guard가 결정한다.
+- `lifecycle_decision_matrix_runtime`은 ADM 확장 umbrella owner다. Entry ADM, Holding/Exit ADM, submit 관찰, scale-in bias adapter를 stage별 weighted ADM policy로 감싸지만 기본 OFF이며, selected될 때만 다음 PREOPEN runtime env에 policy file/version/promote cap을 쓴다. hard safety, account/order/broker guard, stale quote, price freshness, stop, qty guard는 항상 matrix보다 우선한다.
+- 기존 fixed threshold는 role contract로 재분류한다. broker submit/stale quote/price freshness/stop/account/order/qty/cooldown은 `hard_safety`, `BUY_SCORE_THRESHOLD`와 entry score cutoff/VPW/strength/momentum은 `baseline_prior`, latency caution/score65_74/soft stop/holding/scale-in price guard는 `bounded_tunable`, fallback/legacy latency/shadow 축은 `legacy_archive`다. score는 matrix feature일 뿐 score 단독 BUY/WAIT/DROP 확정 권한이 아니다.
 - Pattern lab은 `code_improvement_order`와 `auto_family_candidate`만 생성한다. runtime/code를 직접 변경하지 않는다. postclose chain에서 lab subprocess가 실패해도 후단 daily EV/workorder/runtime summary 생성을 보호하되, 실패 자체는 같은 checklist/runbook incident에 root cause, 재실행 결과, fresh 복구 여부를 남겨야 한다. `pattern_lab_currentness_audit`는 랩 코드/README/schema/source mode/stale-output 위험을 `runtime_effect=false` workorder 후보로 만들고, `pattern_lab_propagation_audit`는 lab automation -> code workorder -> threshold EV -> runtime summary 연결을 source-quality audit로만 검증한다.
 - sim-first lifecycle은 새 독립 체인이 아니라 기존 threshold-cycle 자동화체인의 입력 범위 확장이다. 스캘핑과 스윙 모두 BUY/선정 가능 후보를 `selection -> entry -> holding -> scale_in -> exit -> attribution` 전주기 가상 관찰 대상으로 최대한 남기고, 실계좌 예수금 부족, 1주 cap, 현재 selected runtime family 여부, approval artifact 부재를 sim/probe 후보 생성 제외 사유로 쓰지 않는다.
 - 스윙은 `SWING_LIVE_ORDER_DRY_RUN_ENABLED=True` 기본값에서 live 선정-진입-보유-추가매수-청산 로직을 실행하되 브로커 주문 접수만 차단한다. `SWING_INTRADAY_LIVE_EQUIV_PROBE_ENABLED=True`이면 진입 전 block stage에서 `swing_probe_*` virtual holding을 생성해 live 보유 이후 데이터를 observe-only로 수집한다. `SWING_ENABLE_AVG_DOWN_SIMULATION=True`와 `SWING_SCALE_IN_DYNAMIC_QTY_ENABLED=True`는 dry-run/probe 안에서 AVG_DOWN/PYRAMID 후보와 `would_qty`/`effective_qty`를 남긴다. `swing_scale_in_real_canary_phase0`는 별도 approval artifact가 있을 때만 승인된 real swing holding의 AVG_DOWN/PYRAMID 추가매수 1주 주문을 허용하며, sim/probe/dry-run 포지션과 OFI/QI `RISK_BEARISH`/stale quote는 fail-closed로 차단한다. `swing_sim_*`/`swing_probe_*` stage와 `actual_order_submitted=false`는 실제 `order_bundle_submitted`/`sell_order_sent`와 분리해서 본다.
@@ -59,7 +61,7 @@
 | --- | --- | --- | --- | --- | --- |
 | `07:20` | cron | `final_ensemble_scanner.py` | `logs/ensemble_scanner.log`, `data/daily_recommendations_v2.csv`, `data/daily_recommendations_v2_diagnostics.json` | 스캐너 실패/빈 결과, fallback diagnostic 혼입, 추천 CSV/DB 적재 gap 여부만 확인 | 스캐너 결과만으로 floor/threshold 수동 변경 금지 |
 | `07:30` | cron | 기존 `tmux bot` 세션 종료 | tmux session 상태 | 기존 세션이 남아 있으면 `tmux ls` 확인 | 장중 실행 중 강제 종료 금지 |
-| `07:35` | cron | `deploy/run_threshold_cycle_preopen.sh` with `THRESHOLD_CYCLE_APPLY_MODE=auto_bounded_live`, `THRESHOLD_CYCLE_AUTO_APPLY_REQUIRE_AI=true` | `data/threshold_cycle/apply_plans/threshold_apply_YYYY-MM-DD.json`, `data/threshold_cycle/runtime_env/threshold_runtime_env_YYYY-MM-DD.{env,json}`, `logs/threshold_cycle_preopen_cron.log` | 실패 시 apply plan의 `blocked_reason`, AI guard, same-stage owner 충돌, `swing_runtime_approval.requested/approved/blocked` 확인 | 실패했다고 수동으로 env 값을 직접 덮어쓰지 않는다. 스윙 approval artifact 없이는 승인 요청만 보고 적용하지 않는다 |
+| `07:35` | cron | `deploy/run_threshold_cycle_preopen.sh` with `THRESHOLD_CYCLE_APPLY_MODE=auto_bounded_live`, `THRESHOLD_CYCLE_AUTO_APPLY_REQUIRE_AI=true` | `data/threshold_cycle/apply_plans/threshold_apply_YYYY-MM-DD.json`, `data/threshold_cycle/runtime_env/threshold_runtime_env_YYYY-MM-DD.{env,json}`, `logs/threshold_cycle_preopen_cron.log` | 실패 시 apply plan의 `blocked_reason`, AI guard, same-stage owner 충돌, `swing_runtime_approval.requested/approved/blocked`를 확인한다. `lifecycle_decision_matrix_runtime`이 selected이면 policy file/version/promote cap/env key와 fixed threshold contract가 함께 기록됐는지 확인한다 | 실패했다고 수동으로 env 값을 직접 덮어쓰지 않는다. 스윙 approval artifact 없이는 승인 요청만 보고 적용하지 않는다. lifecycle matrix selected 전에는 직접 ADM/fixed threshold 역할을 장중 변경하지 않는다 |
 | `07:40` | cron | `src/run_bot.sh`를 tmux `bot` 세션에서 실행 | bot runtime log, source된 runtime env echo | `runtime_env` 적용 여부와 봇 기동 여부 확인. env가 없으면 `run_bot.sh`가 `deploy/run_threshold_cycle_preopen.sh`를 먼저 실행해 env 생성을 시도하고, 그래도 없으면 최대 `KORSTOCKSCAN_THRESHOLD_RUNTIME_ENV_WAIT_SEC` 동안 대기한다 | runtime env 파일이 없으면 봇을 먼저 띄우지 않는다. bootstrap/대기 timeout 시 preopen apply 실패로 보고 원인 확인 |
 | `08:00~09:00` | operator/guard | PREOPEN 안정 구간 | 없음 | checklist 상단 `오늘 목적/강제 규칙`과 전일 EV report를 읽고 불일치가 있으면 `warning`으로 기록 | full monitor snapshot build는 wrapper가 차단한다. 새 workorder 없는 live toggle 금지 |
 | `09:00~09:05` | runtime | 장 시작 후 runtime/sim/probe 이벤트 수집 시작 | `data/pipeline_events/pipeline_events_YYYY-MM-DD.jsonl`, `data/threshold_cycle/threshold_events_YYYY-MM-DD.jsonl` | 봇 연결, 계좌/잔고/주문 가능 상태, `actual_order_submitted` provenance split 확인 | threshold 변경, provider 라우팅 변경 금지. 실계좌 예수금 부족을 sim/probe 후보 제외 사유로 쓰지 않는다 |
@@ -73,7 +75,7 @@
 | `12:05` | cron | `deploy/run_threshold_cycle_calibration.sh` with `THRESHOLD_CYCLE_AI_CORRECTION_PROVIDER=openai` | `data/report/threshold_cycle_calibration/threshold_cycle_calibration_YYYY-MM-DD_intraday.json`, `data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_YYYY-MM-DD_intraday.{json,md}`, `logs/threshold_cycle_calibration_intraday_cron.log` | `[START]/[DONE]/[FAIL] threshold-cycle calibration target_date=YYYY-MM-DD phase=intraday` marker와 `calibration_state`, `safety_revert_required`, `ai_status`, `guard_reject_reason` 확인 | 장중 calibration 결과를 당일 runtime에 적용 금지 |
 | `15:20~15:30` | runtime/cron | 오버나이트 flow, HOLD/EXIT sentinel final window | pipeline events, holding sentinel | `SELL_TODAY`, `HOLD_OVERNIGHT`, force-exit/safety 이벤트 확인 | flow `TRIM`을 부분청산 구현 없이 HOLD로 해석 금지 |
 | `15:45` | cron | `deploy/run_swing_live_dry_run_report.sh` 기본 `SWING_LIVE_DRY_RUN_RUN_LIFECYCLE_AUDIT=false` | `data/report/swing_selection_funnel/swing_selection_funnel_YYYY-MM-DD.{json,md}`, status JSON, `logs/swing_live_dry_run_cron.log` | `swing_sim_*` stage, `actual_order_submitted=false`, `recommendation_db_load.db_load_skip_reason`, 15:45 lightweight selection/funnel completion, status `lifecycle_audit_mode=postclose_deferred` 확인 | 15:45 wrapper는 운영 봇과 리소스 경합을 피하기 위해 lifecycle/AI review/runtime approval을 기본 실행하지 않는다. 스윙 lifecycle/approval 산출물은 16:10 postclose chain에서 생성한다. 스윙 dry-run 결과로 당일 runtime guard 완화 금지 |
-| `16:10` | cron | `deploy/run_threshold_cycle_postclose.sh` with OpenAI correction | threshold partition, `market_panic_breadth`, postclose `panic_sell_defense`, postclose `panic_buying`, `openai_ws_stability`, `threshold_cycle_YYYY-MM-DD.json`, sim post-sell evaluation, `scalp_entry_action_decision_matrix`, `statistical_action_weight`, `holding_exit_decision_matrix`, `threshold_cycle_cumulative`, postclose AI review, swing lifecycle automation, swing runtime approval, pattern lab automation, pattern lab currentness audit, pipeline event verbosity report, observation source-quality audit, codebase performance workorder source, code improvement workorder, daily EV report, pattern lab propagation audit, runtime approval summary, Plan Rebase daily renewal proposal, postclose verification, 다음 영업일 stage2 checklist | `logs/threshold_cycle_postclose_cron.log`, resource guard log lines, `market_panic_breadth_YYYY-MM-DD.json`, `panic_sell_defense_YYYY-MM-DD.md`, `panic_buying_YYYY-MM-DD.md`, `openai_ws_stability_YYYY-MM-DD.md`, `scalp_entry_action_decision_matrix_YYYY-MM-DD.md`, `swing_lifecycle_audit_YYYY-MM-DD.md`, `swing_threshold_ai_review_YYYY-MM-DD.md`, `swing_improvement_automation_YYYY-MM-DD.md`, `swing_runtime_approval_YYYY-MM-DD.md`, `pattern_lab_currentness_audit_YYYY-MM-DD.md`, `pipeline_event_verbosity_YYYY-MM-DD.md`, `observation_source_quality_audit_YYYY-MM-DD.md`, `codebase_performance_workorder_YYYY-MM-DD.md`, `pattern_lab_propagation_audit_YYYY-MM-DD.md`, `threshold_cycle_ev_YYYY-MM-DD.md`, `runtime_approval_summary_YYYY-MM-DD.md`, `plan_rebase_daily_renewal_YYYY-MM-DD.md`, `threshold_cycle_postclose_verification_YYYY-MM-DD.md`, real/sim/combined split, sim-first lifecycle coverage, swing/scalping automation freshness, currentness/propagation audit status, `docs/code-improvement-workorders/code_improvement_workorder_YYYY-MM-DD.md`, 다음 영업일 `docs/checklists/YYYY-MM-DD-stage2-todo-checklist.md`를 확인하고 지연/누락은 `warning` 또는 `fail`로 분류 | wrapper는 direct predecessor artifact가 없으면 `THRESHOLD_CYCLE_ARTIFACT_WAIT_SEC` 동안 대기하고 JSON 검증 후에만 후행 단계를 실행한다. heavy report 단계는 `THRESHOLD_CYCLE_POSTCLOSE_RESOURCE_GUARD=true` 기본값으로 `MemAvailable`, swap, iowait를 확인하고, `nice`/`ionice`/background CPU affinity를 적용해 bot heartbeat를 우선한다. compact backfill도 낮은 우선순위로 실행하며 `paused_by_availability_guard`는 `THRESHOLD_CYCLE_COMPACT_AVAILABILITY_WAIT_SEC` 동안 checkpoint 유지 후 대기/재개한다. postclose wrapper는 threshold-cycle report 전에 market breadth, panic, OpenAI WS report를 생성하고, compact sim post-sell evaluation 직후 scalp entry ADM을 생성한다. 15:45에서 defer된 swing lifecycle/AI review/runtime approval도 여기서 실행한다. `panic_regime_mode`와 `panic_buy_regime_mode`는 source bundle/workorder/runtime approval summary로만 전달하며 approval artifact 전 runtime 변경 권한이 없다. `threshold_cycle_ev`는 workorder source용 pre-pass, workorder summary refresh용 post-pass, propagation audit summary refresh용 post-pass로 생성될 수 있다. scalping/swing pattern lab 실행 실패는 lab freshness/source-quality 경고로 흡수하고 후단 daily EV/workorder/runtime summary 생성을 보호한다. `scalp_entry_action_decision_matrix`, `holding_exit_decision_matrix`, `pattern_lab_currentness_audit`, `pattern_lab_propagation_audit`, `pipeline_event_verbosity_report`, `observation_source_quality_audit`, `codebase_performance_workorder_report`, `plan_rebase_daily_renewal`, `threshold_cycle_postclose_verification`은 산출물 자체로는 report/proposal/verification 계층이다. 단, 사용자가 ADM 운영 override를 명시하면 별도 runtime env flag가 이 산출물을 읽어 AI action 보정에 사용한다 |
+| `16:10` | cron | `deploy/run_threshold_cycle_postclose.sh` with OpenAI correction | threshold partition, `market_panic_breadth`, postclose `panic_sell_defense`, postclose `panic_buying`, `openai_ws_stability`, `threshold_cycle_YYYY-MM-DD.json`, sim post-sell evaluation, `scalp_entry_action_decision_matrix`, `lifecycle_decision_matrix`, `statistical_action_weight`, `holding_exit_decision_matrix`, `threshold_cycle_cumulative`, postclose AI review, swing lifecycle automation, swing runtime approval, pattern lab automation, pattern lab currentness audit, pipeline event verbosity report, observation source-quality audit, codebase performance workorder source, code improvement workorder, daily EV report, pattern lab propagation audit, runtime approval summary, Plan Rebase daily renewal proposal, postclose verification, 다음 영업일 stage2 checklist | `logs/threshold_cycle_postclose_cron.log`, resource guard log lines, `market_panic_breadth_YYYY-MM-DD.json`, `panic_sell_defense_YYYY-MM-DD.md`, `panic_buying_YYYY-MM-DD.md`, `openai_ws_stability_YYYY-MM-DD.md`, `scalp_entry_action_decision_matrix_YYYY-MM-DD.md`, `lifecycle_decision_matrix_YYYY-MM-DD.md`, `swing_lifecycle_audit_YYYY-MM-DD.md`, `swing_threshold_ai_review_YYYY-MM-DD.md`, `swing_improvement_automation_YYYY-MM-DD.md`, `swing_runtime_approval_YYYY-MM-DD.md`, `pattern_lab_currentness_audit_YYYY-MM-DD.md`, `pipeline_event_verbosity_YYYY-MM-DD.md`, `observation_source_quality_audit_YYYY-MM-DD.md`, `codebase_performance_workorder_YYYY-MM-DD.md`, `pattern_lab_propagation_audit_YYYY-MM-DD.md`, `threshold_cycle_ev_YYYY-MM-DD.md`, `runtime_approval_summary_YYYY-MM-DD.md`, `plan_rebase_daily_renewal_YYYY-MM-DD.md`, `threshold_cycle_postclose_verification_YYYY-MM-DD.md`, real/sim/combined split, sim-first lifecycle coverage, lifecycle matrix fixed threshold contract, swing/scalping automation freshness, currentness/propagation audit status, `docs/code-improvement-workorders/code_improvement_workorder_YYYY-MM-DD.md`, 다음 영업일 `docs/checklists/YYYY-MM-DD-stage2-todo-checklist.md`를 확인하고 지연/누락은 `warning` 또는 `fail`로 분류 | wrapper는 direct predecessor artifact가 없으면 `THRESHOLD_CYCLE_ARTIFACT_WAIT_SEC` 동안 대기하고 JSON 검증 후에만 후행 단계를 실행한다. heavy report 단계는 `THRESHOLD_CYCLE_POSTCLOSE_RESOURCE_GUARD=true` 기본값으로 `MemAvailable`, swap, iowait를 확인하고, `nice`/`ionice`/background CPU affinity를 적용해 bot heartbeat를 우선한다. compact backfill도 낮은 우선순위로 실행하며 `paused_by_availability_guard`는 `THRESHOLD_CYCLE_COMPACT_AVAILABILITY_WAIT_SEC` 동안 checkpoint 유지 후 대기/재개한다. postclose wrapper는 threshold-cycle report 전에 market breadth, panic, OpenAI WS report를 생성하고, compact sim post-sell evaluation 직후 scalp entry ADM과 lifecycle decision matrix를 생성한다. 15:45에서 defer된 swing lifecycle/AI review/runtime approval도 여기서 실행한다. `panic_regime_mode`와 `panic_buy_regime_mode`는 source bundle/workorder/runtime approval summary로만 전달하며 approval artifact 전 runtime 변경 권한이 없다. `threshold_cycle_ev`는 workorder source용 pre-pass, workorder summary refresh용 post-pass, propagation audit summary refresh용 post-pass로 생성될 수 있다. scalping/swing pattern lab 실행 실패는 lab freshness/source-quality 경고로 흡수하고 후단 daily EV/workorder/runtime summary 생성을 보호한다. `scalp_entry_action_decision_matrix`, `lifecycle_decision_matrix`, `holding_exit_decision_matrix`, `pattern_lab_currentness_audit`, `pattern_lab_propagation_audit`, `pipeline_event_verbosity_report`, `observation_source_quality_audit`, `codebase_performance_workorder_report`, `plan_rebase_daily_renewal`, `threshold_cycle_postclose_verification`은 산출물 자체로는 report/proposal/verification 계층이다. 단, selected PREOPEN env가 명시하면 lifecycle matrix runtime policy가 기존 ADM adapter를 감싸 stage별 action proposal에 사용된다 |
 | `17:30` | cron | `KORSTOCKSCAN_SWING_RETRAIN_AUTO_PROMOTE=true auto_retrain_pipeline.sh` | `data/report/swing_model_retrain/swing_model_retrain_YYYY-MM-DD.json`, `data/report/swing_model_retrain/diagnosis_YYYY-MM-DD.json`, `data/report/swing_model_retrain/bull_period_ai_review_YYYY-MM-DD.json`, `data/report/swing_model_retrain/status/swing_model_retrain_YYYY-MM-DD.status.json`, `logs/swing_model_retrain_cron.log` | `[START]/[DONE]/[FAIL] swing_model_retrain target_date=YYYY-MM-DD` marker, status, diagnosis, promotion guard, current registry 갱신 여부를 확인한다 | auto-promote는 model artifact promotion guard만 통과할 수 있다. 스윙 dry-run 해제, threshold/floor env 작성, 브로커 주문 허용 근거로 쓰지 않는다 |
 | `20:05` | cron | `deploy/run_tuning_monitoring_postclose.sh` | Parquet/DuckDB refresh status, `data/report/tuning_monitoring/status/*` | `threshold_cycle_postclose` 최신 terminal marker가 같은 날짜 `[DONE]`인지 먼저 확인하고, `canonical_runner=THRESHOLD_CYCLE_POSTCLOSE`인지 확인 | 선행 postclose 완료 전 Parquet/DuckDB refresh 금지. pattern lab 중복 실행 금지 |
 | `18:30~19:00` | checklist checkpoint | 날짜별 checklist의 스윙 실주문/floor 후속 판단 항목 | `swing_runtime_approval`, `swing_live_dry_run` status, `swing_daily_simulation`, `threshold_cycle_ev` | 실주문 전환은 `global dry-run 유지`/`one-share real canary approval request`/`hold_sample\|freeze` 중 하나로만 닫고, floor 변경은 `approval_required\|hold_sample\|freeze`로 닫는다 | 전체 스윙 실주문 전환과 approval artifact 없는 floor env 작성 금지 |
@@ -961,25 +963,53 @@ Holding/Exit ADM 보정 규칙은 아래와 같다.
 
 손절 직전 물타기 경로는 `KORSTOCKSCAN_SCALP_LOSS_FALLBACK_ENABLED=true`, `KORSTOCKSCAN_SCALP_LOSS_FALLBACK_OBSERVE_ONLY=false`일 때 실주문 경로가 열린다. 다만 이 경우에도 scale-in 공통 gate, 계좌 cap, cooldown, price resolver, spread, qty cap, pending order guard를 모두 통과해야 한다.
 
-### 3. Safety Guard 우선순위
+### 3. Lifecycle Decision Matrix Runtime
 
-ADM은 AI action을 보정하지만 broker submit guard를 우회하지 않는다. 우선순위는 항상 아래 순서다.
+Lifecycle Decision Matrix는 기존 ADM을 대체하는 새 단일 bucket 정책이 아니라 ADM 확장 umbrella다. postclose chain이 `data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_YYYY-MM-DD.{json,md}`를 만들고, runtime feature와 label feature를 분리한다.
+
+Runtime 입력 feature는 `ai_score`, AI action, buy pressure, tick accel, micro VWAP, spread, liquidity, latency, stale/source quality, price resolver, OFI/QI, position PnL, peak, held_sec, 현재 적용된 fixed threshold 값이다. `realized_profit`, `mfe_10m_pct`, `mae_10m_pct`, `close_10m_pct`, fill outcome, avoided loss, missed upside 같은 사후 label은 policy 학습/판정 근거에만 쓰고 runtime resolver 입력으로 넣지 않는다.
+
+selected PREOPEN env가 명시할 수 있는 key는 아래다.
+
+```bash
+KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_ENABLED
+KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_POLICY_FILE
+KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_POLICY_VERSION
+KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_PROMOTE_ENABLED
+KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_MAX_PROMOTES_PER_DAY
+KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_MIN_STAGE_CONFIDENCE
+```
+
+Runtime resolver의 proposal은 `policy_version`, `stage`, `matched_policy_key`, `confidence`, `selected_action`, `original_action`, `runtime_effect`, `reason`, `fixed_threshold_role`, `safety_passthrough`를 남긴다. `BUY_DEFENSIVE` 승격은 micro canary cap 안에서만 가능하고, cap 초과 또는 confidence 미달이면 `NO_CHANGE`다. submit stage는 가격/latency/source freshness context를 읽을 수 있지만 hard safety guard를 완화하지 않는다.
+
+기존 fixed threshold는 matrix 안에서 아래 역할로만 쓴다.
+
+| 역할 | 대상 | runtime 사용 |
+| --- | --- | --- |
+| `hard_safety` | broker submit guard, stale quote submit block, price freshness, hard/protect/emergency stop, 계좌/order/cooldown/qty guard | matrix가 우회/완화 불가. proposal에 `safety_passthrough=true`만 기록 |
+| `baseline_prior` | `BUY_SCORE_THRESHOLD`, VPW/strength/momentum, entry score cutoff | 후보 생성 prior와 feature. score 단독 action 확정 금지 |
+| `bounded_tunable` | latency caution, score65_74 probe, soft stop/holding flow, scale-in price guard | policy arm이 추천할 수 있으나 bounds/max step/sample/source-quality gate를 통과해 다음 PREOPEN에만 반영 |
+| `legacy_archive` | fallback scout/main, fallback single, latency fallback split-entry, legacy latency composite, closed shadow axes | framework 입력으로도 사용하지 않음. 재개는 별도 workorder/rollback guard 필요 |
+
+### 4. Safety Guard 우선순위
+
+ADM과 lifecycle matrix는 AI action을 보정하지만 broker submit guard를 우회하지 않는다. 우선순위는 항상 아래 순서다.
 
 1. hard/protect/emergency stop, market closed, invalid feature, active sell order pending
-2. stale quote, latency, price freshness, liquidity, overbought pre-submit guard
-3. account cap, cooldown, pending order, qty cap, scale-in price resolver
-4. ADM runtime bias
-5. AI 원본 action
+2. stale quote submit block, price freshness, hard latency reject, liquidity hard block, account cap, cooldown, pending order, qty cap, scale-in price resolver
+3. lifecycle decision matrix runtime policy
+4. 기존 Entry/Holding ADM adapter
+5. baseline fixed threshold fallback과 AI 원본 action
 
 따라서 ADM이 `BUY`, `HOLD`, `AVG_DOWN`, `PYRAMID` 쪽으로 bias를 주더라도 safety guard가 차단하면 주문은 제출되지 않는다. 반대로 ADM이 `WAIT` 또는 `DROP`으로 보정하면 이후 submit 단계에 도달하지 않는다.
 
-### 4. Provenance와 판정 루프
+### 5. Provenance와 판정 루프
 
 Entry ADM은 `scalp_entry_action_decision_snapshot`에 `entry_adm_runtime_effect`, `entry_adm_forced_action`, `entry_adm_runtime_reason`, bucket token, risk/stale/liquidity/overbought/time bucket을 남긴다. Holding/Exit ADM은 holding pipeline에 `holding_exit_matrix_runtime_effect`, `holding_exit_matrix_forced_action`, `holding_exit_matrix_scale_in_bias`를 남긴다.
 
 장후에는 sim/real/post-sell outcome과 join해 `forced WAIT/DROP이 missed upside를 만들었는지`, `강제 HOLD가 손실 확대인지 missed upside 회수인지`, `AVG_DOWN/PYRAMID bias가 실제 EV를 개선했는지`를 본다. 이 결과는 `threshold_cycle_ev`, `runtime_approval_summary`, `code_improvement_workorder`, pattern lab source bundle로 전달된다.
 
-### 5. Rollback
+### 6. Rollback
 
 ADM runtime override를 끄려면 아래 env를 false로 둔다.
 
@@ -992,7 +1022,7 @@ KORSTOCKSCAN_SCALP_LOSS_FALLBACK_OBSERVE_ONLY=true
 
 rollback 사유는 severe loss, stale submit, order failure, receipt/provenance 손상, safety guard breach 중 하나로 분리해 기록한다. ADM 산출물 자체의 sample 부족이나 missing bucket은 rollback 사유가 아니라 postclose workorder 또는 다음 tuning loop 입력이다.
 
-### 6. 실 API 검증과 개선 계획 누락 방지
+### 7. 실 API 검증과 개선 계획 누락 방지
 
 ADM runtime override가 켜진 날에는 dry-run/mock만으로 닫지 않는다. 최소 1회는 실제 `data/config_prod.json`의 OpenAI API key를 로드해 `analyze_target` live 호출을 수행하고, 아래 필드를 키 값 없이 기록한다.
 
