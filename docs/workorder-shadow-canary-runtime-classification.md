@@ -1,7 +1,7 @@
 # 작업지시서: Shadow/Canary 런타임 경로와 Live Cohort 분류 기준
 
 작성일: `2026-04-25 KST`  
-마지막 갱신: `2026-05-18 KST`
+마지막 갱신: `2026-05-19 KST`
 대상: KORStockScan 메인 코드베이스 운영/튜닝 문서 소유자  
 ApplyTarget: `main` 문서/후속 코드정리 기준  
 
@@ -78,6 +78,22 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
 | `swing_gatekeeper_reject_cooldown` | active selected policy tuning / source-quality 관찰 필요 | runtime env selected family에 포함됐지만 swing_runtime_approval 5/18은 requested=0, blocked=14로 닫힘 | gatekeeper accept/reject contract gap과 cooldown attribution을 분리 |
 
 5/18 결론은 `no_baseline_promote_with_operator_override_cohorts_locked`다. 신규 `remove`와 `baseline-promote`는 없다. 사용자 운영 override 축은 실런타임 bias 영향이 있으므로 `observe-only`가 아니라 `operator override cohort`로 보되, threshold mutation/provider change/broker submit safety 우회 권한은 없다. report-only/pattern lab/source-quality 축은 runtime owner로 승격하지 않는다.
+
+### 2026-05-19 INTRADAY/POSTCLOSE Snapshot Addendum
+
+이 addendum은 `threshold_runtime_env_2026-05-19`, `threshold_apply_2026-05-19`, 당일 sim 확대 override, lifecycle decision matrix, sim AI budget manager, sim scale-in approval flow 기준의 분류 보정이다. 결론은 `active_shadow_none_runtime_shadow_refs_are_off_or_report_only`다.
+
+| 축 | 2026-05-19 판정 | 근거 | 다음 액션 |
+| --- | --- | --- | --- |
+| active shadow runtime | 없음 | `threshold_runtime_env_2026-05-19.json` 기준 `shadow` 문자열 0건이고 shadow env 기본값은 모두 OFF다 | 신규 shadow로 열지 않는다. 남은 shadow 참조는 OFF/historical/report-only cleanup 후보로만 관리 |
+| `pipeline_event_compaction_v2_shadow` | report-only diagnostic aggregation | raw 보존/compaction parity 목적의 diagnostic 이름이다. runtime env에는 반영되지 않았다 | raw suppress나 producer 변경 전 parity/source link 확인 필요 |
+| `lifecycle_decision_matrix_runtime` | umbrella ADM owner / 기본 OFF / micro-canary 후보 | `entry/submit/holding/scale_in/exit` stage별 weighted ADM policy를 만들지만 hard safety와 broker guard를 우회하지 않는다 | selected되면 다음 PREOPEN policy file/version/promote cap만 env에 쓴다 |
+| `scalp_sim_candidate_window_expansion` | sim-only operator override cohort | score 55~100 WAIT/blocked 후보를 `actual_order_submitted=false`, `broker_order_forbidden=true`로 sim lifecycle에 편입한다 | real BUY 승격이나 submit guard 완화 근거로 쓰지 않고 lifecycle matrix source로만 본다 |
+| `scalp_sim_ai_budget_manager` | sim-only operator override cohort | 확대된 sim holding의 OpenAI 호출량을 live/reuse/deferred/critical bypass로 attribution한다 | critical bypass 과다를 `hard_critical/soft_critical/non_critical`로 분해하는 후속 보정 후보 |
+| `scalp_sim_scale_in_window_expansion` | approval-required sim-only actuator | postclose approval artifact는 기본 `approved=false`로 생성되고, 사용자가 승인해야 다음 PREOPEN env가 열린다 | 승인 후에도 sim-only scale-in source actuator이며 real scale-in, cap 해제, hard safety 완화 금지 |
+| `score65_74_recovery_probe` | active operator-selected entry cohort | 5/19 runtime env에 사용자 reopen lock으로 로드됐다 | rolling/cumulative EV와 blocker attribution으로만 판정. score bucket 고정 정책 금지 |
+
+5/19 결론은 active shadow가 없다는 점을 잠그고, 신규 sim 확대축은 `shadow`가 아니라 `sim-only cohort` 또는 `approval-required actuator`로 분류한다. 남아 있는 `hard_time_stop_shadow`, `partial_only_timeout_shadow`, `same_symbol_soft_stop_cooldown_shadow`, `dual_persona_shadow`, prompt shadow 계열은 기본 OFF 또는 historical/dashboard label이며 현재 runtime owner가 아니다.
 
 ## 0.1 Runtime ON/OFF 스냅샷 (`2026-05-12` 기준)
 
@@ -370,6 +386,9 @@ cohort 분류 공통 규칙은 아래로 고정한다.
 | `swing_live_order_dry_run` | `observe-only` | 스윙 선정-진입-보유-추가매수-청산 live lifecycle을 실주문 없이 관찰 | `swing_sim_*`, `actual_order_submitted=false`, closed lifecycle이 `swing_runtime_approval`과 daily EV combined 입력으로 안정 연결될 때 유지. 실주문 전환과 별개 | `2026-05-11 checklist`, `time-based runbook` |
 | `swing_runtime_approval` | `approval-request` | 스윙 threshold/logic 후보를 `proposal -> approval_required -> approved_live(dry-run)`로 연결 | hard floor + trade-off score 기준으로 요청 생성. approval artifact 없이는 env 반영 금지, env 반영 후에도 dry-run 유지 | `2026-05-11 checklist`, `threshold_cycle README` |
 | `swing_one_share_real_canary` | `real-canary-decision` | 스윙 broker execution/receipt/fill 품질을 1주 실주문으로 수집 | 기본 OFF. `swing_runtime_approval` 이후 별도 승인 artifact가 있을 때만 phase0 시작. max 1 new/day, max 3 open, max total notional 300,000 KRW, phase0 scale-in 실주문 금지, dry-run 외 후보 실주문 0건을 rollback guard로 둔다 | `Plan Rebase`, `time-based runbook`, `2026-05-11 checklist` |
+| `scalp_sim_candidate_window_expansion` | `sim-only-cohort` | WAIT/blocked 스캘핑 후보를 실제 주문 없이 virtual lifecycle에 편입 | 사용자 operator override로만 ON. `actual_order_submitted=false`, `broker_order_forbidden=true`, BUY 텔레그램 suppression 유지. real execution 품질이나 broker submit 승인 근거로 쓰지 않는다 | `Plan Rebase`, `2026-05-19 checklist`, `threshold runtime env` |
+| `scalp_sim_ai_budget_manager` | `sim-only-cohort` | 확대된 sim holding의 OpenAI 호출량을 상태변화/예산/deferred로 제어 | real holding, provider route, BUY/submit threshold 변경 권한 없음. critical bypass 과다는 별도 review/checklist로 닫는다 | `Plan Rebase`, `2026-05-19 checklist`, `scalp_sim_ai_deferred_review` |
+| `scalp_sim_scale_in_window_expansion` | `approval-required-sim-actuator` | matrix `scale_in` arm 표본 확보를 위한 sim-only 추가매수 window 확대 | postclose approval artifact 기본 `approved=false`. 사용자가 승인한 경우에만 다음 PREOPEN env 적용. real scale-in, cap 해제, hard safety 완화 금지 | `Plan Rebase`, `report-based automation traceability`, `scalp_sim_scale_in_window_expansion_YYYY-MM-DD.json` |
 
 inventory 운영 규칙은 아래로 고정한다.
 
@@ -1108,5 +1127,9 @@ inventory 운영 규칙은 아래로 고정한다.
   - `spread_relief_canary`
   - `ws_jitter_relief_canary`
   - `other_danger_relief_canary`
+5. `sim-only cohort / approval-required actuator`
+  - `scalp_sim_candidate_window_expansion`
+  - `scalp_sim_ai_budget_manager`
+  - `scalp_sim_scale_in_window_expansion`
 
 이 순서를 지켜 `remove`, `observe-only`, `baseline-promote`, `active-canary`를 섞어 동시에 건드리지 않는다.

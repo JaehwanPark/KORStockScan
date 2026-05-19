@@ -148,7 +148,8 @@
   - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)
   - 판정 기준: 당일 변경/관찰 결과를 기준으로 `remove`, `observe-only`, `baseline-promote`, `active-canary` 상태 변동 여부를 닫는다.
   - 금지: shadow 금지, canary-only, baseline 승격 원칙을 코드/문서 상태와 분리하지 않는다.
-  - 다음 액션: 변경이 있으면 기준문서와 checklist를 함께 갱신하고 cohort 잠금 필드를 남긴다.
+  - 완료 메모 (`2026-05-19 15:10 KST`): `pass / active_shadow_none_runtime_shadow_refs_are_off_or_report_only`. `threshold_runtime_env_2026-05-19.json` 기준 active shadow env는 없고, constants의 shadow류(`hard_time_stop`, `partial_only_timeout`, `same_symbol_soft_stop_cooldown`, split-entry, dual-persona)는 기본 OFF다. `workorder-shadow-canary-runtime-classification.md`를 5/19 기준으로 현행화해 `scalp_sim_candidate_window_expansion`, `scalp_sim_ai_budget_manager`, `scalp_sim_scale_in_window_expansion`을 shadow가 아닌 sim-only cohort/approval-required actuator로 잠갔다.
+  - 다음 액션: 남은 shadow 명칭은 runtime owner가 아니라 OFF/historical/report-only cleanup 후보로 관리한다. 신규 shadow 경로를 열지 않고, sim-only cohort는 lifecycle matrix/source bundle attribution으로만 판정한다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
