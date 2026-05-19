@@ -57,7 +57,7 @@ cron completion detector는 wrapper log의 terminal marker를 source of truth로
 | `data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_YYYY-MM-DD.{json,md}` | Gemini/Claude pattern lab 기반 improvement order 및 auto family 후보 artifact. runtime/code 직접 변경 없음 |
 | `data/runtime/scalp_live_simulator_state.json` | 스캘핑 live simulator open sim 포지션 복원 상태. threshold report 입력은 이 파일이 아니라 `scalp_sim_*` pipeline events를 기준으로 한다 |
 | `data/report/swing_lifecycle_audit/swing_lifecycle_audit_YYYY-MM-DD.{json,md}` | 스윙 선정-DB 적재-진입-보유-추가매수-청산 lifecycle audit artifact. runtime/code 직접 변경 없음 |
-| `data/report/swing_threshold_ai_review/swing_threshold_ai_review_YYYY-MM-DD.{json,md}` | 스윙 threshold/logic proposal-only AI review artifact. deterministic guard와 수동 workorder가 최종 source of truth |
+| `data/report/swing_threshold_ai_review/swing_threshold_ai_review_YYYY-MM-DD.{json,md}` | 스윙 threshold/logic proposal-only review artifact. 기본 `SWING_THRESHOLD_AI_REVIEW_PROVIDER=none`이라 OpenAI 호출 없이 생성하며, 명시적으로 `openai`를 준 경우에만 AI review를 수행한다. deterministic guard와 수동 workorder가 최종 source of truth |
 | `data/report/swing_improvement_automation/swing_improvement_automation_YYYY-MM-DD.{json,md}` | 스윙 lifecycle 기반 improvement order 및 auto family 후보 artifact. 모든 order는 `runtime_effect=false`, family candidate는 `allowed_runtime_apply=false`로 시작 |
 | `data/report/swing_runtime_approval/swing_runtime_approval_YYYY-MM-DD.{json,md}` | 스윙 hard floor + EV trade-off score 기반 `approval_required` 요청과 blocked reason. 요청 자체는 runtime 변경이 아니다 |
 | `data/threshold_cycle/approvals/swing_runtime_approvals_YYYY-MM-DD.json` | 사용자가 승인한 스윙 approval artifact. 여기에 승인 id가 있어야 다음 장전 `threshold_cycle_preopen_apply`가 env override를 쓴다 |

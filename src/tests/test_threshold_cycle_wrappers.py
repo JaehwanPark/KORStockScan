@@ -29,6 +29,14 @@ def test_postclose_wrapper_runs_swing_daily_simulation_before_lifecycle_audit():
     assert simulation_idx < simulation_wait_idx < audit_idx
     assert resource_idx < audit_idx
     assert 'run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.swing_lifecycle_audit' in script
+    assert 'SWING_THRESHOLD_AI_REVIEW_PROVIDER="${SWING_THRESHOLD_AI_REVIEW_PROVIDER:-none}"' in script
+
+
+def test_swing_live_dry_run_defaults_ai_review_provider_to_none():
+    script = Path("deploy/run_swing_live_dry_run_report.sh").read_text(encoding="utf-8")
+
+    assert 'SWING_THRESHOLD_AI_REVIEW_PROVIDER="${SWING_THRESHOLD_AI_REVIEW_PROVIDER:-none}"' in script
+    assert '--ai-review-provider "$SWING_THRESHOLD_AI_REVIEW_PROVIDER"' in script
 
 
 def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():

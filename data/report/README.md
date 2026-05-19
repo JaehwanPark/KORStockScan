@@ -1,6 +1,6 @@
 # Report Directory Inventory
 
-작성 기준: `2026-05-03 KST`
+작성 기준: `2026-05-19 KST`
 
 이 디렉토리는 운영/감리용 산출물을 저장한다. 기본 원칙은 JSON/JSONL을 canonical data로 두고, 사람이 장후 판정에 바로 읽어야 하는 항목만 Markdown 리포트로 별도 생성한다.
 
@@ -35,6 +35,7 @@ ON 가능한 시점은 다음 조건이 모두 닫힌 뒤다.
 | Code Improvement Workorder | `docs/code-improvement-workorders/code_improvement_workorder_YYYY-MM-DD.md` | `src.engine.build_code_improvement_workorder` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | Codex 세션 입력용 구현 작업지시서. `generation_id`, `source_hash`, `lineage` diff로 같은 날짜 재생성/2-pass 구현 여부를 추적 |
 | Threshold Cycle Daily EV | `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.md` | `src.engine.threshold_cycle_ev_report` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | 무인 threshold apply 이후 제출 기준 리포트 |
 | Runtime Approval Summary | `data/report/runtime_approval_summary/runtime_approval_summary_YYYY-MM-DD.md` | `src.engine.runtime_approval_summary` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | 스캘핑 threshold-cycle 판정과 스윙 runtime approval을 합친 읽기 전용 요약. runtime 변경 권한 없음 |
+| Swing Strategy Discovery Sim | `data/report/swing_strategy_discovery_sim/swing_strategy_discovery_sim_YYYY-MM-DD.md` | `src.engine.swing_strategy_discovery_sim` | v1은 수동/후속 자동화 source 연결 예정 | 스윙 safe pool 전체를 sim-only candidate와 8-arm 가상 전략 row로 확장하는 감사 리포트. runtime 변경 권한 없음 |
 
 ## 비정기/legacy Markdown
 
@@ -66,6 +67,7 @@ ON 가능한 시점은 다음 조건이 모두 닫힌 뒤다.
 | Code Improvement Workorder | `data/report/code_improvement_workorder/code_improvement_workorder_YYYY-MM-DD.json` | `src.engine.build_code_improvement_workorder` | `docs/code-improvement-workorders/code_improvement_workorder_YYYY-MM-DD.md`, `generation_id/source_hash/lineage` 포함 |
 | Threshold Cycle Daily EV | `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.json` | `src.engine.threshold_cycle_ev_report` | `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.md` |
 | Runtime Approval Summary | `data/report/runtime_approval_summary/runtime_approval_summary_YYYY-MM-DD.json` | `src.engine.runtime_approval_summary` | `data/report/runtime_approval_summary/runtime_approval_summary_YYYY-MM-DD.md` |
+| Swing Strategy Discovery Sim | `data/report/swing_strategy_discovery_sim/swing_strategy_discovery_sim_YYYY-MM-DD.json` | `src.engine.swing_strategy_discovery_sim` | `data/report/swing_strategy_discovery_sim/swing_strategy_discovery_sim_YYYY-MM-DD.md` |
 | Cumulative Threshold Cycle Report | `data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_YYYY-MM-DD.json` | `src.engine.daily_threshold_cycle_report` | `data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_YYYY-MM-DD.md` |
 | Threshold Compact Events | `data/threshold_cycle/date=YYYY-MM-DD/family=*/part-*.jsonl`, `data/threshold_cycle/threshold_events_YYYY-MM-DD.jsonl` | `src.engine.backfill_threshold_cycle_events` | 없음 |
 | Pipeline Events | `data/pipeline_events/pipeline_events_YYYY-MM-DD.jsonl` | runtime pipeline event writer | 없음 |

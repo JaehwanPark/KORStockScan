@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, BigInteger, Float, String, Text, Date, DateTime, Boolean, Index, text
+from sqlalchemy import Column, Integer, BigInteger, Float, String, Text, Date, DateTime, Boolean, Index, UniqueConstraint, ForeignKey, text
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
@@ -205,6 +205,113 @@ class StrategyPositionPerformanceDaily(Base):
 
     def __repr__(self):
         return f"<StrategyPositionPerformanceDaily(rec_date='{self.rec_date}', strategy='{self.strategy}', position_tag='{self.position_tag}')>"
+
+
+class SwingStrategyDiscoveryCandidate(Base):
+    __tablename__ = 'swing_strategy_discovery_candidates'
+    __table_args__ = (
+        UniqueConstraint('source_date', 'stock_code', 'policy_version', name='uq_ssd_candidate_date_code_policy'),
+        Index('idx_ssd_candidate_date_arm', 'source_date', 'selection_arm'),
+        Index('idx_ssd_candidate_date_score', 'source_date', 'lifecycle_exploration_score'),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_date = Column(Date, nullable=False)
+    stock_code = Column(String(10), nullable=False)
+    stock_name = Column(Text)
+    policy_version = Column(Text, nullable=False)
+    selection_arm = Column(Text, nullable=False)
+    diversity_bucket = Column(Text)
+    position_tag = Column(Text)
+    block_reason = Column(Text)
+    volatility_bucket = Column(Text)
+    sector = Column(Text)
+    industry = Column(Text)
+    theme_tags = Column(Text)
+    legacy_model_prob = Column(Float)
+    legacy_model_rank = Column(Integer)
+    legacy_selection_mode = Column(Text)
+    legacy_pick_type = Column(Text)
+    legacy_meta_score = Column(Float)
+    legacy_hybrid_mean = Column(Float)
+    lifecycle_exploration_score = Column(Float)
+    source_features = Column(Text)
+    decision_authority = Column(Text, server_default=text("'swing_sim_exploration_only'"))
+    actual_order_submitted = Column(Boolean, server_default=text("false"))
+    broker_order_forbidden = Column(Boolean, server_default=text("true"))
+    runtime_effect = Column(Boolean, server_default=text("false"))
+    created_at = Column(DateTime, server_default=text("CURRENT_TIMESTAMP"))
+    updated_at = Column(DateTime, server_default=text("CURRENT_TIMESTAMP"))
+
+    def __repr__(self):
+        return f"<SwingStrategyDiscoveryCandidate(source_date='{self.source_date}', stock_code='{self.stock_code}', policy_version='{self.policy_version}')>"
+
+
+class SwingStrategyDiscoveryArm(Base):
+    __tablename__ = 'swing_strategy_discovery_arms'
+    __table_args__ = (
+        UniqueConstraint('candidate_id', 'arm_id', 'policy_version', name='uq_ssd_arm_candidate_arm_policy'),
+        Index('idx_ssd_arm_date_status', 'source_date', 'status'),
+        Index('idx_ssd_arm_date_policy', 'source_date', 'entry_policy', 'sizing_policy', 'exit_policy'),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    candidate_id = Column(Integer, ForeignKey('swing_strategy_discovery_candidates.id'), nullable=False)
+    source_date = Column(Date, nullable=False)
+    stock_code = Column(String(10), nullable=False)
+    policy_version = Column(Text, nullable=False)
+    arm_id = Column(Text, nullable=False)
+    entry_policy = Column(Text, nullable=False)
+    sizing_policy = Column(Text, nullable=False)
+    exit_policy = Column(Text, nullable=False)
+    status = Column(Text, server_default=text("'PENDING_ENTRY'"))
+    virtual_entry_price = Column(Float)
+    virtual_qty = Column(Integer, server_default=text("0"))
+    virtual_notional_krw = Column(BigInteger, server_default=text("0"))
+    entry_at = Column(DateTime)
+    exit_at = Column(DateTime)
+    exit_price = Column(Float)
+    final_return_pct = Column(Float)
+    arm_features = Column(Text)
+    actual_order_submitted = Column(Boolean, server_default=text("false"))
+    broker_order_forbidden = Column(Boolean, server_default=text("true"))
+    runtime_effect = Column(Boolean, server_default=text("false"))
+    created_at = Column(DateTime, server_default=text("CURRENT_TIMESTAMP"))
+    updated_at = Column(DateTime, server_default=text("CURRENT_TIMESTAMP"))
+
+    def __repr__(self):
+        return f"<SwingStrategyDiscoveryArm(candidate_id={self.candidate_id}, arm_id='{self.arm_id}', policy_version='{self.policy_version}')>"
+
+
+class SwingStrategyDiscoveryLabel(Base):
+    __tablename__ = 'swing_strategy_discovery_labels'
+    __table_args__ = (
+        UniqueConstraint('arm_row_id', 'label_horizon', 'label_version', name='uq_ssd_label_arm_horizon_version'),
+        Index('idx_ssd_label_date_horizon', 'source_date', 'label_horizon'),
+        Index('idx_ssd_label_date_status', 'source_date', 'label_status'),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    arm_row_id = Column(Integer, ForeignKey('swing_strategy_discovery_arms.id'), nullable=False)
+    source_date = Column(Date, nullable=False)
+    stock_code = Column(String(10), nullable=False)
+    policy_version = Column(Text, nullable=False)
+    label_horizon = Column(Text, nullable=False)
+    label_version = Column(Text, nullable=False)
+    label_status = Column(Text, server_default=text("'pending'"))
+    mfe_pct = Column(Float)
+    mae_pct = Column(Float)
+    close_return_pct = Column(Float)
+    final_return_pct = Column(Float)
+    realized_exit_return_pct = Column(Float)
+    exit_only_delta_pct = Column(Float)
+    scale_in_delta_pct = Column(Float)
+    label_features = Column(Text)
+    created_at = Column(DateTime, server_default=text("CURRENT_TIMESTAMP"))
+    updated_at = Column(DateTime, server_default=text("CURRENT_TIMESTAMP"))
+
+    def __repr__(self):
+        return f"<SwingStrategyDiscoveryLabel(arm_row_id={self.arm_row_id}, label_horizon='{self.label_horizon}', label_version='{self.label_version}')>"
 
 
 class User(Base):

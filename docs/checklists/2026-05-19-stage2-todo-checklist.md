@@ -6,6 +6,7 @@
 - 실주문, threshold, provider, sim/probe 관련 변경은 approval artifact와 checklist 기준 없이 열지 않는다.
 - code-improvement workorder는 자동 repo 수정이 아니라 사용자가 Codex에 구현을 지시한 경우에만 실행한다.
 - lifecycle decision matrix는 ADM 확장 umbrella로 문서화하고, 기존 fixed threshold는 `hard_safety|baseline_prior|bounded_tunable|legacy_archive` 역할 계약에 맞춰 판정한다.
+- 스윙은 기존 ML 단독 selector 신뢰가 아니라 `swing_strategy_discovery_sim_v1`로 safe pool 전체를 sim-only 생애주기 실험 대상으로 넓힌다.
 
 ## 오늘 강제 규칙
 
@@ -158,6 +159,22 @@
   - 금지: scale-in window 확대를 고정 threshold 정책, 실주문 scale-in, 수량 cap 해제, hard safety 완화, 장중 threshold mutation 근거로 쓰지 않는다.
   - 완료 메모 (`2026-05-19 18:57 KST`): `pass / source_adapter_ready_approval_created`. `lifecycle_decision_matrix` source link에 `scalp_sim_scale_in`이 포함됐고 `rows=8`, `filled_events=0`, `unfilled_events=8`이다. policy entry는 `stage=scale_in`, `sample=8`, `joined_sample=8`, `join_rate=1.0`, `stage_ev_composite_pct=1.5325`, `confidence=0.8`, `source_quality_gate=hold_sample`, `selected_action=PYRAMID_BIAS`, `promote_ready=false`다. 승인 artifact `scalp_sim_scale_in_window_expansion_2026-05-19.json`은 `approved=true`, recommended values는 enabled `true`, arms `PYRAMID,AVG_DOWN`, profit window `-2.5~2.5`, max orders per position `1`, per day `30`이다.
   - 다음 액션: 실주문 scale-in이나 수량 cap 해제가 아니라 sim-only virtual scale-in window로만 다음 PREOPEN apply에서 확인한다.
+
+- [x] `[SwingStrategyDiscoverySimV1Implement0519] 스윙 전략 탐색 sim v1 schema/candidate/arm/report 1차 구현` (`Due: 2026-05-19`, `Slot: POSTCLOSE`, `TimeWindow: 19:45~20:15`, `Track: SwingLogic`)
+  - Source: [swing-strategy-discovery-sim-v1.md](/home/ubuntu/KORStockScan/docs/swing-strategy-discovery-sim-v1.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [final_ensemble_scanner.py](/home/ubuntu/KORStockScan/src/scanners/final_ensemble_scanner.py), [swing_strategy_discovery_sim.py](/home/ubuntu/KORStockScan/src/engine/swing_strategy_discovery_sim.py), [swing_strategy_discovery_schema.py](/home/ubuntu/KORStockScan/src/engine/swing_strategy_discovery_schema.py), [models.py](/home/ubuntu/KORStockScan/src/database/models.py)
+  - 판정 기준: safe pool 전체를 sim-only discovery 후보로 읽고, 기존 ML은 낮은 가중치의 feature/cohort로만 사용하며, diversity bundle과 bounded 8-arm 전략 row를 생성한다. DB table은 source of truth, JSON/Markdown은 감사 artifact다.
+  - 금지: broker 주문, Telegram BUY 알림, `recommendation_history` 대체, threshold-cycle runtime apply, real execution 품질 주장, 기존 ML score 단독 selector 사용.
+  - 완료 메모 (`2026-05-19 20:10 KST`): `pass / first_pass_implemented`. `swing_strategy_discovery_candidates`, `swing_strategy_discovery_arms`, `swing_strategy_discovery_labels` schema를 추가했고, `swing_strategy_discovery_sim_v1`은 safe pool 후보를 lifecycle rank 60% + diversity exploration 30% + legacy ML 10% bundle로 배정한 뒤 후보당 8개 가상 arm을 만든다. sector/industry/theme_tags는 v2 필수 확장 input으로 row에 남긴다. 모든 candidate/arm은 `actual_order_submitted=false`, `broker_order_forbidden=true`, `runtime_effect=false`, `decision_authority=swing_sim_exploration_only`를 고정한다.
+  - 검증: `PYTHONPATH=. .venv/bin/python -m py_compile src/database/models.py src/engine/swing_strategy_discovery_schema.py src/engine/swing_strategy_discovery_sim.py`; `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_strategy_discovery_sim.py` -> `2 passed, 2 warnings`; `--no-persist --output-dir /tmp/swing_strategy_discovery_sim_check` report 생성 -> `candidate_count=50`, `arm_count=400`, quote feature coverage `1.0`, warning `[]`; checklist parser -> 5/20 미완료 8건만 인식.
+  - 다음 액션: label builder와 postclose source bundle 편입은 후속 단계로 남긴다. 현재 구현은 schema/candidate/arm/report 1차 범위이며 approval artifact 없이 real order/runtime env/threshold apply로 연결하지 않는다.
+
+- [x] `[SwingThresholdAIReviewProviderNone0519] 스윙 threshold AI review OpenAI 호출 기본 차단 영구 반영` (`Due: 2026-05-19`, `Slot: POSTCLOSE`, `TimeWindow: 20:15~20:25`, `Track: SwingLogic`)
+  - Source: [run_threshold_cycle_postclose.sh](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_postclose.sh), [run_swing_live_dry_run_report.sh](/home/ubuntu/KORStockScan/deploy/run_swing_live_dry_run_report.sh), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [data/threshold_cycle/README.md](/home/ubuntu/KORStockScan/data/threshold_cycle/README.md)
+  - 판정 기준: `SWING_THRESHOLD_AI_REVIEW_PROVIDER` 기본값을 `none`으로 두어 스윙 threshold AI review artifact는 유지하되 OpenAI 호출은 기본 실행하지 않는다. 명시적으로 `SWING_THRESHOLD_AI_REVIEW_PROVIDER=openai`를 준 경우에만 AI review를 다시 호출한다.
+  - 금지: 스캘핑 OpenAI route, threshold-cycle AI correction, DeepSeek swing lab, broker/order/runtime threshold, 스윙 sim discovery 후보/arm 생성 로직 변경으로 해석하지 않는다.
+  - 완료 메모 (`2026-05-19 20:20 KST`): `pass / permanent_default_none`. 16:10 postclose wrapper와 15:45 swing dry-run wrapper 모두 default provider를 `none`으로 변경했고, Plan Rebase/런북/threshold-cycle README에 같은 계약을 반영했다. wrapper `[DONE]` marker의 `swing_ai_review_provider`는 기본 `none`으로 남는다.
+  - 검증: `bash -n deploy/run_threshold_cycle_postclose.sh deploy/run_swing_live_dry_run_report.sh`; `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_threshold_cycle_wrappers.py`; `rg SWING_THRESHOLD_AI_REVIEW_PROVIDER`로 기본값 `openai` 잔존 여부 확인.
+  - 다음 액션: 다음 postclose 실행 후 `logs/threshold_cycle_postclose_cron.log`의 `[DONE] ... swing_ai_review_provider=none`을 확인한다. `swing_threshold_ai_review`의 AI 응답 unavailable은 기본 provider `none`에서는 정상 provenance로 해석한다.
 
 - [x] `[ShadowCanaryCohortReview0519] shadow/canary/cohort 런타임 분류 및 정리 판정` (`Due: 2026-05-19`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)
   - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)
