@@ -18,9 +18,9 @@
 - observation_source_quality_audit: `/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-05-19.json`
 - codebase_performance_workorder: `/home/ubuntu/KORStockScan/data/report/codebase_performance_workorder/codebase_performance_workorder_2026-05-19.json`
 - pattern_lab_currentness_audit: `/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-19.json`
-- generated_at: `2026-05-19T18:33:57+09:00`
-- generation_id: `2026-05-19-1b4bfff04bbb`
-- source_hash: `1b4bfff04bbb6d6877c24a1b8d8162a947d874bbd891d9cbf79529d41a9a3c77`
+- generated_at: `2026-05-19T19:18:10+09:00`
+- generation_id: `2026-05-19-0f9672e3e90c`
+- source_hash: `0f9672e3e90c91ea57e6691823231067a70f64e5f7ed8e34c4a77df5363764c4`
 
 ## 운영 원칙
 
@@ -42,8 +42,8 @@
 ## Snapshot Lineage
 
 - previous_exists: `True`
-- previous_generation_id: `2026-05-19-1b4bfff04bbb`
-- previous_source_hash: `1b4bfff04bbb6d6877c24a1b8d8162a947d874bbd891d9cbf79529d41a9a3c77`
+- previous_generation_id: `2026-05-19-d28383c8c69a`
+- previous_source_hash: `d28383c8c69ab84ea8647a711b96d8d0f73931a7f544e891acadbe07d70bc13c`
 - new_order_ids: `[]`
 - removed_order_ids: `[]`
 - decision_changed_order_ids: `[]`

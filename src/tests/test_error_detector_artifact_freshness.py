@@ -66,6 +66,44 @@ class TestArtifactFreshnessDetector:
             result = detector.check()
             assert result.severity == "fail"
 
+    def test_invalid_critical_json_fails(self, tmp_path):
+        artifact_path = tmp_path / "invalid.json"
+        artifact_path.write_text("{bad json", encoding="utf-8")
+        artifact = {
+            "id": "test_invalid_json",
+            "path_template": str(artifact_path),
+            "max_staleness_sec": 600,
+            "critical": True,
+        }
+        with (
+            patch(_TRADING_MOCK, return_value=True),
+            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+        ):
+            detector = ArtifactFreshnessDetector()
+            result = detector.check()
+            assert result.severity == "fail"
+            assert result.details["test_invalid_json_status"] == "fail"
+
+    def test_critical_json_status_not_ok_fails(self, tmp_path):
+        artifact_path = tmp_path / "status.json"
+        artifact_path.write_text('{"status":"running"}', encoding="utf-8")
+        artifact = {
+            "id": "test_status",
+            "path_template": str(artifact_path),
+            "max_staleness_sec": 600,
+            "critical": True,
+            "json_status_field": "status",
+            "json_ok_values": ["succeeded"],
+        }
+        with (
+            patch(_TRADING_MOCK, return_value=True),
+            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+        ):
+            detector = ArtifactFreshnessDetector()
+            result = detector.check()
+            assert result.severity == "fail"
+            assert result.details["test_status_status"] == "fail"
+
     def test_window_not_yet_due(self):
         artifact = {
             "id": "test_future",

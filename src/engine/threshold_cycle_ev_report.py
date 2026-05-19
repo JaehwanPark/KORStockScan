@@ -24,11 +24,31 @@ EV_REPORT_DIR = REPORT_DIR / "threshold_cycle_ev"
 PATTERN_LAB_CURRENTNESS_AUDIT_DIR = REPORT_DIR / "pattern_lab_currentness_audit"
 PATTERN_LAB_PROPAGATION_AUDIT_DIR = REPORT_DIR / "pattern_lab_propagation_audit"
 
+_JSON_LOAD_DIAGNOSTICS: list[dict[str, Any]] = []
+
 
 def _load_json(path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except FileNotFoundError:
+        return {}
+    except Exception as exc:
+        _JSON_LOAD_DIAGNOSTICS.append(
+            {
+                "path": str(path),
+                "status": "parse_error",
+                "error": str(exc),
+            }
+        )
+        return {}
+    if not isinstance(payload, dict):
+        _JSON_LOAD_DIAGNOSTICS.append(
+            {
+                "path": str(path),
+                "status": "non_dict_json",
+                "type": type(payload).__name__,
+            }
+        )
         return {}
     return payload if isinstance(payload, dict) else {}
 
@@ -356,11 +376,24 @@ def _swing_pattern_lab_automation_summary(target_date: str) -> tuple[dict[str, A
             ["swing_pattern_lab_automation_missing"],
         )
     summary = payload.get("ev_report_summary") if isinstance(payload.get("ev_report_summary"), dict) else {}
-    warnings: list[str] = []
     data_quality = payload.get("data_quality") if isinstance(payload.get("data_quality"), dict) else {}
+    source_quality_blocked_families = (
+        summary.get("source_quality_blocked_families")
+        if isinstance(summary.get("source_quality_blocked_families"), list)
+        else data_quality.get("source_quality_blocked_families")
+        if isinstance(data_quality.get("source_quality_blocked_families"), list)
+        else []
+    )
+    warnings: list[str] = []
+    resolved_dq_warnings: list[str] = []
     dq_warnings = data_quality.get("warnings", [])
     if dq_warnings:
-        warnings.extend(f"swing_lab_dq:{w}" for w in (dq_warnings if isinstance(dq_warnings, list) else []))
+        for warning in dq_warnings if isinstance(dq_warnings, list) else []:
+            warning_text = str(warning)
+            if warning_text.startswith("OFI/QI stale/missing ratio:") and source_quality_blocked_families:
+                resolved_dq_warnings.append(warning_text)
+                continue
+            warnings.append(f"swing_lab_dq:{warning_text}")
     if summary.get("stale_reason"):
         warnings.append(f"swing_lab_stale:{summary['stale_reason']}")
     carryover_count = _safe_int(summary.get("carryover_warning_count"), 0)
@@ -374,14 +407,11 @@ def _swing_pattern_lab_automation_summary(target_date: str) -> tuple[dict[str, A
             "findings_count": _safe_int(summary.get("findings_count"), 0),
             "code_improvement_order_count": _safe_int(summary.get("code_improvement_order_count"), 0),
             "data_quality_warning_count": _safe_int(summary.get("data_quality_warning_count"), 0),
+            "top_level_data_quality_warning_count": len(warnings),
+            "resolved_data_quality_warnings": resolved_dq_warnings,
+            "resolved_data_quality_warning_count": len(resolved_dq_warnings),
             "ofi_qi_quality": data_quality.get("ofi_qi_quality") if isinstance(data_quality.get("ofi_qi_quality"), dict) else {},
-            "source_quality_blocked_families": (
-                summary.get("source_quality_blocked_families")
-                if isinstance(summary.get("source_quality_blocked_families"), list)
-                else data_quality.get("source_quality_blocked_families")
-                if isinstance(data_quality.get("source_quality_blocked_families"), list)
-                else []
-            ),
+            "source_quality_blocked_families": source_quality_blocked_families,
             "carryover_warning_count": carryover_count,
             "population_split_available": bool(summary.get("population_split_available")),
             "top_findings": [
@@ -687,6 +717,7 @@ def _audit_summary(target_date: str, report_type: str, report_dir: Path) -> tupl
 
 
 def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
+    _JSON_LOAD_DIAGNOSTICS.clear()
     target_date = str(target_date).strip()
     trade_review_path = MONITOR_SNAPSHOT_DIR / f"trade_review_{target_date}.json"
     performance_path = MONITOR_SNAPSHOT_DIR / f"performance_tuning_{target_date}.json"
@@ -733,6 +764,11 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
     submitted = _safe_int(perf_metrics.get("order_bundle_submitted_events"), 0)
     submitted_rate = round((submitted / budget_pass) * 100.0, 2) if budget_pass else 0.0
     full_fill_completed_avg = _safe_float(perf_metrics.get("full_fill_completed_avg_profit_rate"), 0.0)
+
+    source_load_warnings = [
+        f"source_load_{item.get('status')}:{Path(str(item.get('path') or '')).name}"
+        for item in _JSON_LOAD_DIAGNOSTICS
+    ]
 
     report = {
         "date": target_date,
@@ -806,6 +842,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "code_improvement_workorder": code_workorder_path,
             "missed_probe_counterfactual": wait6579_counterfactual_path,
         },
+        "source_load_diagnostics": _JSON_LOAD_DIAGNOSTICS.copy(),
         "warnings": [
             message
             for message in [
@@ -822,6 +859,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
                 *currentness_audit_warnings,
                 *propagation_audit_warnings,
                 *code_workorder_warnings,
+                *source_load_warnings,
             ]
             if message
         ],
@@ -850,6 +888,9 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
     propagation_audit = report.get("pattern_lab_propagation_audit") if isinstance(report.get("pattern_lab_propagation_audit"), dict) else {}
     swing_runtime = report.get("swing_runtime_approval") if isinstance(report.get("swing_runtime_approval"), dict) else {}
     code_workorder = report.get("code_improvement_workorder") if isinstance(report.get("code_improvement_workorder"), dict) else {}
+    source_load_diagnostics = (
+        report.get("source_load_diagnostics") if isinstance(report.get("source_load_diagnostics"), list) else []
+    )
     approval_requests = report.get("approval_requests") if isinstance(report.get("approval_requests"), list) else []
     decisions = ((report.get("calibration_outcome") or {}).get("decisions") or []) if isinstance(report.get("calibration_outcome"), dict) else []
     sim_post_sell = scalp_sim.get("post_sell_join") if isinstance(scalp_sim.get("post_sell_join"), dict) else {}
@@ -927,6 +968,8 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- deepseek_lab_available: `{swing_lab.get('deepseek_lab_available')}`",
         f"- findings/orders: `{swing_lab.get('findings_count')}` / `{swing_lab.get('code_improvement_order_count')}`",
         f"- data_quality_warnings: `{swing_lab.get('data_quality_warning_count')}`",
+        f"- top_level_data_quality_warnings: `{swing_lab.get('top_level_data_quality_warning_count')}`",
+        f"- resolved_data_quality_warnings: `{swing_lab.get('resolved_data_quality_warning_count')}`",
         f"- ofi_qi_stale_missing_unique_records: `{((swing_lab.get('ofi_qi_quality') or {}).get('stale_missing_unique_record_count')) or 0}`",
         f"- ofi_qi_stale_missing_reasons: `{((swing_lab.get('ofi_qi_quality') or {}).get('reason_counts')) or {}}`",
         f"- ofi_qi_stale_missing_reason_combinations: `{((swing_lab.get('ofi_qi_quality') or {}).get('reason_combination_counts')) or {}}`",
@@ -1041,6 +1084,15 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
     if warnings:
         lines.extend(["", "## Warnings"])
         lines.extend([f"- `{warning}`" for warning in warnings])
+    if source_load_diagnostics:
+        lines.extend(["", "## Source Load Diagnostics"])
+        for item in source_load_diagnostics:
+            if not isinstance(item, dict):
+                continue
+            lines.append(
+                f"- `{Path(str(item.get('path') or '')).name}`: `{item.get('status')}` "
+                f"error=`{item.get('error') or item.get('type') or '-'}`"
+            )
     lines.append("")
     return "\n".join(lines)
 

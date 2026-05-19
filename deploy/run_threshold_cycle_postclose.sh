@@ -54,13 +54,58 @@ RUN_PLAN_REBASE_DAILY_RENEWAL="${THRESHOLD_CYCLE_RUN_PLAN_REBASE_DAILY_RENEWAL:-
 SNAPSHOT_RETENTION_DAYS="${THRESHOLD_CYCLE_SNAPSHOT_RETENTION_DAYS:-7}"
 ARTIFACT_WAIT_SEC="${THRESHOLD_CYCLE_ARTIFACT_WAIT_SEC:-600}"
 ARTIFACT_WAIT_INTERVAL_SEC="${THRESHOLD_CYCLE_ARTIFACT_WAIT_INTERVAL_SEC:-5}"
+STATUS_DIR="$PROJECT_DIR/data/report/threshold_cycle_postclose_status"
+STATUS_FILE="$STATUS_DIR/threshold_cycle_postclose_${TARGET_DATE}.status.json"
+AI_CORRECTION_FINAL_STATUS="not_run"
 
-mkdir -p "$PROJECT_DIR/logs"
+mkdir -p "$PROJECT_DIR/logs" "$STATUS_DIR"
 cd "$PROJECT_DIR"
 
-trap 'failed_at="$(TZ=Asia/Seoul date +%FT%T%z)"; echo "[FAIL] threshold-cycle postclose target_date=$TARGET_DATE failed_at=$failed_at"' ERR
+write_postclose_status() {
+  local status="$1"
+  local reason="${2:-}"
+  local exit_code="${3:-0}"
+  local finished="${4:-0}"
+  "$VENV_PY" - "$STATUS_FILE" "$TARGET_DATE" "$status" "$reason" "$exit_code" "$finished" "$AI_CORRECTION_PROVIDER" "$AI_CORRECTION_FINAL_STATUS" <<'PY'
+import json
+import sys
+from datetime import datetime
+from pathlib import Path
+
+path = Path(sys.argv[1])
+target_date, status, reason, exit_code, finished, ai_provider, ai_status = sys.argv[2:9]
+payload = {}
+if path.exists():
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        payload = {}
+payload.update(
+    {
+        "schema_version": 1,
+        "report_type": "threshold_cycle_postclose_status",
+        "target_date": target_date,
+        "status": status,
+        "reason": reason or None,
+        "exit_code": int(exit_code or 0),
+        "ai_correction_provider": ai_provider,
+        "ai_correction_status": ai_status,
+        "runtime_effect": False,
+        "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+    }
+)
+payload.setdefault("started_at", payload["updated_at"])
+if finished == "1":
+    payload["finished_at"] = payload["updated_at"]
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+PY
+}
+
+trap 'rc=$?; failed_at="$(TZ=Asia/Seoul date +%FT%T%z)"; write_postclose_status failed command_failed "$rc" 1 || true; echo "[FAIL] threshold-cycle postclose target_date=$TARGET_DATE failed_at=$failed_at"; exit "$rc"' ERR
 
 started_at="$(TZ=Asia/Seoul date +%FT%T%z)"
+write_postclose_status running started 0 0
 echo "[START] threshold-cycle postclose target_date=$TARGET_DATE max_iterations=$MAX_ITERATIONS started_at=$started_at"
 
 run_postclose_cmd() {
@@ -515,12 +560,13 @@ while true; do
     break
   fi
   echo "[threshold-cycle] ai correction retry target_date=$TARGET_DATE next_attempt=$((ai_correction_attempt + 1)) delay=${AI_CORRECTION_RETRY_DELAY_SEC}s status=$ai_correction_status" >&2
-  sleep "$AI_CORRECTION_RETRY_DELAY_SEC"
-  ai_correction_attempt=$((ai_correction_attempt + 1))
-done
-if [ "$AI_CORRECTION_PROVIDER" != "none" ] && [ -z "$AI_CORRECTION_RESPONSE_JSON" ] && [ "$ai_correction_status" != "parsed" ]; then
-  echo "[threshold-cycle] ai correction final unavailable target_date=$TARGET_DATE provider=$AI_CORRECTION_PROVIDER status=$ai_correction_status action=postclose_verifier_will_fail_if_runtime_candidates_blocked" >&2
-fi
+	  sleep "$AI_CORRECTION_RETRY_DELAY_SEC"
+	  ai_correction_attempt=$((ai_correction_attempt + 1))
+	done
+	AI_CORRECTION_FINAL_STATUS="$ai_correction_status"
+	if [ "$AI_CORRECTION_PROVIDER" != "none" ] && [ -z "$AI_CORRECTION_RESPONSE_JSON" ] && [ "$ai_correction_status" != "parsed" ]; then
+	  echo "[threshold-cycle] ai correction final unavailable target_date=$TARGET_DATE provider=$AI_CORRECTION_PROVIDER status=$ai_correction_status action=postclose_verifier_will_fail_if_runtime_candidates_blocked" >&2
+	fi
 wait_for_report_artifact \
   "$PROJECT_DIR/data/report/statistical_action_weight/statistical_action_weight_${TARGET_DATE}.json" \
   "$PROJECT_DIR/data/report/statistical_action_weight/statistical_action_weight_${TARGET_DATE}.md" \
@@ -669,4 +715,5 @@ wait_for_report_artifact \
   "threshold_cycle_postclose_verification"
 PYTHONPATH=. "$VENV_PY" -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500 >/dev/null
 finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
+write_postclose_status succeeded completed 0 1
 echo "[DONE] threshold-cycle postclose target_date=$TARGET_DATE ai_correction_provider=$AI_CORRECTION_PROVIDER panic_sell_defense=$RUN_PANIC_SELL_DEFENSE_REPORT panic_buying=$RUN_PANIC_BUYING_REPORT market_panic_breadth=$RUN_MARKET_PANIC_BREADTH_REPORT openai_ws_stability=$RUN_OPENAI_WS_STABILITY_REPORT pipeline_event_verbosity=$RUN_PIPELINE_EVENT_VERBOSITY_REPORT observation_source_quality_audit=$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT codebase_performance_workorder=$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT pattern_lab_currentness_audit=$RUN_PATTERN_LAB_CURRENTNESS_AUDIT pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT scalp_entry_adm=$RUN_SCALP_ENTRY_ADM lifecycle_decision_matrix=$RUN_LIFECYCLE_DECISION_MATRIX latency_classifier_recommendation=$RUN_LATENCY_CLASSIFIER_RECOMMENDATION plan_rebase_daily_renewal=$RUN_PLAN_REBASE_DAILY_RENEWAL swing_lifecycle=$RUN_SWING_LIFECYCLE_AUDIT swing_ai_review_provider=$SWING_THRESHOLD_AI_REVIEW_PROVIDER pattern_labs=$RUN_PATTERN_LABS deepseek_swing_lab=$RUN_DEEPSEEK_SWING_LAB code_improvement_workorder=$BUILD_CODE_IMPROVEMENT_WORKORDER daily_ev=true runtime_approval_summary=true next_stage2_checklist=true finished_at=$finished_at"

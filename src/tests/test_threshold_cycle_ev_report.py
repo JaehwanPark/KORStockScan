@@ -327,6 +327,58 @@ def test_build_threshold_cycle_ev_report_warns_when_pattern_lab_artifact_missing
     assert "codebase_performance_workorder_missing" in report["warnings"]
 
 
+def test_build_threshold_cycle_ev_report_surfaces_source_parse_errors(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    monitor_dir = report_dir / "monitor_snapshots"
+    calibration_dir = report_dir / "threshold_cycle_calibration"
+    apply_dir = tmp_path / "apply_plans"
+    ev_dir = report_dir / "threshold_cycle_ev"
+    workorder_report_dir = report_dir / "code_improvement_workorder"
+    workorder_doc_dir = tmp_path / "docs" / "code-improvement-workorders"
+    for path in (monitor_dir, calibration_dir, apply_dir, workorder_report_dir, workorder_doc_dir):
+        path.mkdir(parents=True)
+    monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", monitor_dir)
+    monkeypatch.setattr(mod, "CALIBRATION_REPORT_DIR", calibration_dir)
+    monkeypatch.setattr(mod, "EV_REPORT_DIR", ev_dir)
+    monkeypatch.setattr(mod, "apply_manifest_path", lambda target_date: apply_dir / f"threshold_apply_{target_date}.json")
+    monkeypatch.setattr(
+        mod,
+        "automation_report_paths",
+        lambda target_date: (
+            tmp_path / "missing" / f"scalping_pattern_lab_automation_{target_date}.json",
+            tmp_path / "missing" / f"scalping_pattern_lab_automation_{target_date}.md",
+        ),
+    )
+    monkeypatch.setattr(
+        mod,
+        "code_improvement_workorder_paths",
+        lambda target_date: (
+            workorder_report_dir / f"code_improvement_workorder_{target_date}.json",
+            workorder_doc_dir / f"code_improvement_workorder_{target_date}.md",
+        ),
+    )
+
+    (monitor_dir / "trade_review_2026-05-08.json").write_text("{bad json", encoding="utf-8")
+    (monitor_dir / "performance_tuning_2026-05-08.json").write_text(json.dumps({"metrics": {}}), encoding="utf-8")
+    (calibration_dir / "threshold_cycle_calibration_2026-05-08_postclose.json").write_text(
+        json.dumps({"run_phase": "postclose"}),
+        encoding="utf-8",
+    )
+    (apply_dir / "threshold_apply_2026-05-08.json").write_text(json.dumps({"status": "manifest_ready"}), encoding="utf-8")
+    (workorder_report_dir / "code_improvement_workorder_2026-05-08.json").write_text(
+        json.dumps({"summary": {}, "orders": []}),
+        encoding="utf-8",
+    )
+    (workorder_doc_dir / "code_improvement_workorder_2026-05-08.md").write_text("# workorder\n", encoding="utf-8")
+
+    report = mod.build_threshold_cycle_ev_report("2026-05-08")
+
+    assert report["source_load_diagnostics"][0]["status"] == "parse_error"
+    assert "source_load_parse_error:trade_review_2026-05-08.json" in report["warnings"]
+    markdown = (ev_dir / "threshold_cycle_ev_2026-05-08.md").read_text(encoding="utf-8")
+    assert "Source Load Diagnostics" in markdown
+
+
 def test_threshold_cycle_ev_report_exposes_codebase_performance_source_as_ops_summary(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     monitor_dir = report_dir / "monitor_snapshots"
@@ -578,7 +630,7 @@ def test_build_threshold_cycle_ev_report_renders_swing_pattern_lab_section(tmp_p
                     {"order_id": "order_f1", "title": "selection gap", "decision": "design_family_candidate"},
                 ],
                 "data_quality": {
-                    "warnings": [],
+                    "warnings": ["OFI/QI stale/missing ratio: 0.5000 (1/2); reasons: micro_missing=1"],
                     "ofi_qi_quality": {"stale_missing_unique_record_count": 1},
                 },
             },
@@ -595,6 +647,8 @@ def test_build_threshold_cycle_ev_report_renders_swing_pattern_lab_section(tmp_p
     assert report["swing_pattern_lab_automation"]["available"] is True
     assert report["swing_pattern_lab_automation"]["findings_count"] == 2
     assert report["swing_pattern_lab_automation"]["carryover_warning_count"] == 1
+    assert report["swing_pattern_lab_automation"]["resolved_data_quality_warning_count"] == 1
+    assert not any("swing_lab_dq:OFI/QI stale/missing" in item for item in report["warnings"])
     assert report["swing_pattern_lab_automation"]["source_quality_blocked_families"][0]["family"] == (
         "swing_scale_in_ofi_qi_confirmation"
     )
@@ -603,5 +657,6 @@ def test_build_threshold_cycle_ev_report_renders_swing_pattern_lab_section(tmp_p
     assert "Swing Pattern Lab Automation" in markdown
     assert "deepseek_lab_available" in markdown
     assert "source_quality_blocked_families" in markdown
+    assert "resolved_data_quality_warnings" in markdown
     assert "carryover_warnings" in markdown
     assert "population_split_available" in markdown

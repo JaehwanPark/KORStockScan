@@ -99,6 +99,17 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "trading_day_only": True,
     },
     {
+        "id": "threshold_preopen_status",
+        "path_template": "data/report/threshold_cycle_preopen_status/threshold_cycle_preopen_{date}.status.json",
+        "max_staleness_sec": 1800,
+        "critical": True,
+        "trading_day_only": True,
+        "window_start": (7, 50),
+        "window_end": (8, 5),
+        "json_status_field": "status",
+        "json_ok_values": ["succeeded"],
+    },
+    {
         "id": "buy_funnel_sentinel_report",
         "path_template": "data/report/buy_funnel_sentinel/buy_funnel_sentinel_{date}.md",
         "max_staleness_sec": 600,
@@ -167,6 +178,22 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "window_start": (16, 10),
         "window_end": (17, 0),
         "window_grace_sec": 1200,
+        "suppress_missing_while_cron_in_progress": {
+            "id": "threshold_cycle_postclose",
+            "log": "logs/threshold_cycle_postclose_cron.log",
+        },
+        "allow_missing_after_window_while_cron_in_progress": True,
+    },
+    {
+        "id": "threshold_postclose_status",
+        "path_template": "data/report/threshold_cycle_postclose_status/threshold_cycle_postclose_{date}.status.json",
+        "max_staleness_sec": 3600,
+        "critical": True,
+        "trading_day_only": True,
+        "window_start": (17, 0),
+        "window_end": (17, 30),
+        "json_status_field": "status",
+        "json_ok_values": ["succeeded"],
         "suppress_missing_while_cron_in_progress": {
             "id": "threshold_cycle_postclose",
             "log": "logs/threshold_cycle_postclose_cron.log",
@@ -549,10 +576,25 @@ class ArtifactFreshnessDetector(BaseDetector):
             mtime = artifact_path.stat().st_mtime
             age_sec = now_ts - mtime
             details[f"{aid}_age_sec"] = round(age_sec, 1)
+            json_error = self._validate_json_artifact(artifact_path)
+            if json_error:
+                details[f"{aid}_content_status"] = "invalid_json"
+                message = f"{aid}: invalid JSON ({json_error})"
+                if critical:
+                    issues.append(message)
+                    details[f"{aid}_status"] = "fail"
+                else:
+                    warnings.append(message)
+                    details[f"{aid}_status"] = "warning"
+                continue
             status_warning = self._validate_json_status(artifact, artifact_path, details)
             if status_warning:
-                warnings.append(status_warning)
-                details[f"{aid}_status"] = "warning"
+                if critical:
+                    issues.append(status_warning)
+                    details[f"{aid}_status"] = "fail"
+                else:
+                    warnings.append(status_warning)
+                    details[f"{aid}_status"] = "warning"
                 continue
             content_warning, content_passed = self._validate_content_freshness(
                 artifact,
@@ -725,6 +767,16 @@ class ArtifactFreshnessDetector(BaseDetector):
         details[f"{aid}_content_status"] = status_value
         if ok_values and status_value not in ok_values:
             return f"{aid}: JSON status is {status_value}"
+        return ""
+
+    @staticmethod
+    def _validate_json_artifact(artifact_path: Path) -> str:
+        if artifact_path.suffix != ".json":
+            return ""
+        try:
+            json.loads(artifact_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return str(exc)
         return ""
 
     @staticmethod

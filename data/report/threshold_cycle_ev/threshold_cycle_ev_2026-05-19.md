@@ -71,6 +71,8 @@
 - deepseek_lab_available: `True`
 - findings/orders: `5` / `4`
 - data_quality_warnings: `1`
+- top_level_data_quality_warnings: `0`
+- resolved_data_quality_warnings: `1`
 - ofi_qi_stale_missing_unique_records: `5`
 - ofi_qi_stale_missing_reasons: `{'micro_missing': 470, 'micro_stale': 0, 'observer_unhealthy': 1, 'micro_not_ready': 24, 'state_insufficient': 24}`
 - ofi_qi_stale_missing_reason_combinations: `{'micro_missing': 446, 'micro_missing+micro_not_ready+state_insufficient': 23, 'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 1}`
@@ -100,7 +102,7 @@
 
 ## Pattern Lab Audits
 - currentness: status=`pass` fail=`0` orders=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-19.json`
-- propagation: status=`fail` fail=`1` warnings=`1` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-19.json`
+- propagation: status=`pass` fail=`0` warnings=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-19.json`
 
 ## Swing Runtime Approval
 - request_report: `/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-05-18.json`
@@ -155,7 +157,3 @@
 - `scale_in_price_guard`: `hold` sample=`482/20`
 - `position_sizing_cap_release`: `hold_sample` sample=`19/30`
 - `position_sizing_dynamic_formula`: `hold_sample` sample=`0/30`
-
-## Warnings
-- `swing_lab_dq:OFI/QI stale/missing ratio: 0.9216 (470/510); reasons: micro_missing=470, observer_unhealthy=1, micro_not_ready=24, state_insufficient=24`
-- `pattern_lab_propagation_audit_fail`

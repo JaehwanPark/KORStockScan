@@ -399,12 +399,33 @@ def summary_paths(target_date: str) -> tuple[Path, Path]:
     return base.with_suffix(".json"), base.with_suffix(".md")
 
 
+_JSON_LOAD_DIAGNOSTICS: list[dict[str, Any]] = []
+
+
 def _load_json(path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except FileNotFoundError:
         return {}
-    return payload if isinstance(payload, dict) else {}
+    except Exception as exc:
+        _JSON_LOAD_DIAGNOSTICS.append(
+            {
+                "path": str(path),
+                "status": "parse_error",
+                "error": str(exc),
+            }
+        )
+        return {}
+    if not isinstance(payload, dict):
+        _JSON_LOAD_DIAGNOSTICS.append(
+            {
+                "path": str(path),
+                "status": "non_dict_json",
+                "type": type(payload).__name__,
+            }
+        )
+        return {}
+    return payload
 
 
 def _format_score(value: Any) -> str:
@@ -1088,6 +1109,7 @@ def _lifecycle_matrix_summary(ev_report: dict[str, Any], source_path: str | None
 
 
 def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
+    _JSON_LOAD_DIAGNOSTICS.clear()
     target_date = str(target_date).strip()
     ev_json, _ = ev_report_paths(target_date)
     swing_path = SWING_RUNTIME_APPROVAL_DIR / f"swing_runtime_approval_{target_date}.json"
@@ -1107,6 +1129,10 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     panic_rows = _panic_rows(calibration_report, target_date)
     scalp_entry_adm_summary = _entry_adm_summary(ev_report, scalp_entry_adm_path)
     lifecycle_matrix_summary = _lifecycle_matrix_summary(ev_report, lifecycle_matrix_path)
+    source_load_warnings = [
+        f"source_load_{item.get('status')}:{Path(str(item.get('path') or '')).name}"
+        for item in _JSON_LOAD_DIAGNOSTICS
+    ]
     report = {
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -1121,6 +1147,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             "pattern_lab_currentness_audit": str(currentness_path) if currentness_path.exists() else None,
             "pattern_lab_propagation_audit": str(propagation_path) if propagation_path.exists() else None,
         },
+        "source_load_diagnostics": _JSON_LOAD_DIAGNOSTICS.copy(),
         "summary": {
             "scalping_items": len(scalping_rows),
             "scalping_selected_auto_bounded_live": sum(1 for row in scalping_rows if row["selected_auto_bounded_live"]),
@@ -1172,6 +1199,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
                 "lifecycle_decision_matrix_missing" if not lifecycle_matrix_path else "",
                 "pattern_lab_currentness_audit_missing" if not currentness_path.exists() else "",
                 "pattern_lab_propagation_audit_missing" if not propagation_path.exists() else "",
+                *source_load_warnings,
             ]
             if message
         ],
@@ -1219,6 +1247,9 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
     )
     currentness = report.get("pattern_lab_currentness_audit") if isinstance(report.get("pattern_lab_currentness_audit"), dict) else {}
     propagation = report.get("pattern_lab_propagation_audit") if isinstance(report.get("pattern_lab_propagation_audit"), dict) else {}
+    source_load_diagnostics = (
+        report.get("source_load_diagnostics") if isinstance(report.get("source_load_diagnostics"), list) else []
+    )
     lines = [
         f"# Runtime Approval Summary - {report.get('date')}",
         "",
@@ -1276,6 +1307,15 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
     if warnings:
         lines.extend(["", "## Warnings"])
         lines.extend(f"- `{warning}`" for warning in warnings)
+    if source_load_diagnostics:
+        lines.extend(["", "## Source Load Diagnostics"])
+        for item in source_load_diagnostics:
+            if not isinstance(item, dict):
+                continue
+            lines.append(
+                f"- `{Path(str(item.get('path') or '')).name}`: `{item.get('status')}` "
+                f"error=`{item.get('error') or item.get('type') or '-'}`"
+            )
     lines.append("")
     return "\n".join(lines)
 

@@ -25,11 +25,11 @@
 - interpretation: `AI correction parsed successfully`
 
 ## Workorder Snapshot
-- generation_id: `2026-05-19-4d6786f25d04`
-- source_hash: `4d6786f25d0431df93f2d6c664c4eb027dc879696709db862d68500508a9fc09`
+- generation_id: `2026-05-19-0f9672e3e90c`
+- source_hash: `0f9672e3e90c91ea57e6691823231067a70f64e5f7ed8e34c4a77df5363764c4`
 - snapshot_status: `source_changed_with_lineage`
-- previous_generation_id: `2026-05-19-34437a30849c`
-- previous_source_hash: `34437a30849c1f73f34afd93a208c89899f7f6dd098ad6769a9dabb52c9cde18`
-- new_order_ids: `['order_perf_swing_simulation_iteration']`
-- removed_order_ids: `['order_scalp_entry_adm_daily_tuning_coverage']`
+- previous_generation_id: `2026-05-19-d28383c8c69a`
+- previous_source_hash: `d28383c8c69ab84ea8647a711b96d8d0f73931a7f544e891acadbe07d70bc13c`
+- new_order_ids: `[]`
+- removed_order_ids: `[]`
 - decision_changed_order_ids: `[]`

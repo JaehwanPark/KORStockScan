@@ -207,6 +207,36 @@ def test_runtime_approval_summary_warns_when_sources_missing(tmp_path, monkeypat
     assert "swing_runtime_approval_missing" in report["warnings"]
 
 
+def test_runtime_approval_summary_surfaces_source_parse_errors(tmp_path, monkeypatch):
+    ev_dir = tmp_path / "threshold_cycle_ev"
+    swing_dir = tmp_path / "swing_runtime_approval"
+    out_dir = tmp_path / "runtime_approval_summary"
+    ev_dir.mkdir(parents=True)
+    swing_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        mod,
+        "ev_report_paths",
+        lambda target_date: (
+            ev_dir / f"threshold_cycle_ev_{target_date}.json",
+            ev_dir / f"threshold_cycle_ev_{target_date}.md",
+        ),
+    )
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_DIR", swing_dir)
+    monkeypatch.setattr(mod, "SUMMARY_DIR", out_dir)
+    (ev_dir / "threshold_cycle_ev_2026-05-11.json").write_text("{bad json", encoding="utf-8")
+    (swing_dir / "swing_runtime_approval_2026-05-11.json").write_text(
+        json.dumps({"summary": {"requested": 0}, "candidates": []}),
+        encoding="utf-8",
+    )
+
+    report = mod.build_runtime_approval_summary("2026-05-11")
+
+    assert report["source_load_diagnostics"][0]["status"] == "parse_error"
+    assert "source_load_parse_error:threshold_cycle_ev_2026-05-11.json" in report["warnings"]
+    markdown = (out_dir / "runtime_approval_summary_2026-05-11.md").read_text(encoding="utf-8")
+    assert "Source Load Diagnostics" in markdown
+
+
 def test_runtime_approval_summary_classifies_legacy_gate_and_contract_gaps(tmp_path, monkeypatch):
     ev_dir = tmp_path / "threshold_cycle_ev"
     swing_dir = tmp_path / "swing_runtime_approval"

@@ -10,7 +10,7 @@
 - scalp_entry_adm_status: `pass`
 - lifecycle_matrix_status: `pass`
 - pattern_lab_currentness_status: `pass`
-- pattern_lab_propagation_status: `fail`
+- pattern_lab_propagation_status: `pass`
 - env_generated_at: `2026-05-19T13:33:21`
 - first_bot_start_at: `2026-05-19T07:40:04`
 - first_bot_start_after_env_at: `2026-05-19T13:38:53`
@@ -85,4 +85,4 @@
 
 ## Pattern Lab Audits
 - currentness: status=`pass` fail=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-19.json`
-- propagation: status=`fail` fail=`1` warnings=`1` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-19.json`
+- propagation: status=`pass` fail=`0` warnings=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-19.json`

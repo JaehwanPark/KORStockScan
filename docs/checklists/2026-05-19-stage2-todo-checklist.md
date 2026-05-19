@@ -108,17 +108,19 @@
 
 ## 장후 체크리스트 (16:30~18:55)
 
-- [ ] `[ThresholdDailyEVReport0519] daily EV real/sim/combined split 및 자동 반영 결과 확인` (`Due: 2026-05-19`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:45`, `Track: RuntimeStability`)
+- [x] `[ThresholdDailyEVReport0519] daily EV real/sim/combined split 및 자동 반영 결과 확인` (`Due: 2026-05-19`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:45`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-18.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-18.json)
   - 판정 기준: real/sim/combined split, selected/blocked family, runtime_change, warning을 분리해 확인한다.
   - 금지: sim/combined EV만으로 broker execution 품질이나 live 전환을 확정하지 않는다.
-  - 다음 액션: 다음 장전 apply 입력으로 쓸 수 있는 항목과 hold_sample/freeze 항목을 분리한다.
+  - 완료 메모 (`2026-05-19 18:57 KST`): `warning / pass_one_shot_with_source_quality_warning`. `threshold_cycle_ev_2026-05-19.{json,md}`는 18:31 재생성됐고 JSON 검증 및 error detector artifact freshness는 `pass_one_shot`이다. runtime apply는 당일 `auto_bounded_live_ready`, selected family는 `soft_stop_whipsaw_confirmation`, `latency_classifier_runtime_profile`, `score65_74_recovery_probe`다. real completed sample은 `0`, sim completed sample은 `105`, combined sample은 `105`이며 combined는 diagnostic only다. warning은 `swing_lab_dq` OFI/QI stale/missing ratio `0.9216`, `pattern_lab_propagation_audit_fail`로 source-quality 성격이다.
+  - 다음 액션: sim/combined EV는 broker execution 품질이나 실주문 전환 근거로 쓰지 않는다. 다음 PREOPEN apply는 5/20 apply plan 생성 후 `ThresholdEnvAutoApplyPreopen0520`에서 확인한다.
 
-- [ ] `[CodeImprovementWorkorderReview0519] code improvement workorder 구현 필요 여부 및 Codex 지시 대상 확인` (`Due: 2026-05-19`, `Slot: POSTCLOSE`, `TimeWindow: 16:45~17:00`, `Track: ScalpingLogic`)
+- [x] `[CodeImprovementWorkorderReview0519] code improvement workorder 구현 필요 여부 및 Codex 지시 대상 확인` (`Due: 2026-05-19`, `Slot: POSTCLOSE`, `TimeWindow: 16:45~17:00`, `Track: ScalpingLogic`)
   - Source: [code_improvement_workorder_2026-05-18.md](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-18.md), [code_improvement_workorder_2026-05-18.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-18.json)
   - 판정 기준: selected_order_count=12와 `implement_now`, `attach_existing_family`, `design_family_candidate`, `reject` 분류를 확인한다.
   - 금지: code-improvement workorder를 자동 repo 수정으로 취급하지 않는다. 사용자가 Codex 구현을 지시한 경우에만 실행한다.
-  - 다음 액션: 구현 필요, 설계 보류, reject, already_implemented 중 하나로 닫는다.
+  - 완료 메모 (`2026-05-19 18:57 KST`): `pass / no_remaining_implement_now_runtime_false`. `code_improvement_workorder_2026-05-19`는 `generation_id=2026-05-19-1b4bfff04bbb`, `source_hash=1b4bfff04bbb6d6877c24a1b8d8162a947d874bbd891d9cbf79529d41a9a3c77`, `selected_order_count=12`, `new_order_ids=[]`, `removed_order_ids=[]`, `decision_changed_order_ids=[]`다. 신규 `implement_now + runtime_effect=false` 잔여는 없고, `order_swing_pattern_lab_deepseek_ofi_qi_stale_missing`은 instrumentation/report/provenance 구현 완료 후 `attach_existing_family/existing_family`, `implementation_status=implemented`, `decision_authority=source_quality_only`로 재분류됐다.
+  - 다음 액션: 신규 구현 지시 대상은 없다. 남은 selected order는 기존 family 귀속 증거 또는 보류/설계 성격으로 다음 postclose source bundle에서 재평가한다.
 
 - [x] `[ScalpSimAIBudgetCriticalBypassReview0519] sim holding AI critical bypass 과다 및 deferred 기준 개선 검토` (`Due: 2026-05-19`, `Slot: POSTCLOSE`, `TimeWindow: 16:55~17:10`, `Track: ScalpingLogic`)
   - Source: [scalp_sim_ev_midcheck_2026-05-19.json](/home/ubuntu/KORStockScan/data/report/scalp_simulator/scalp_sim_ev_midcheck_2026-05-19.json), [scalp_sim_ai_deferred_review_2026-05-19.json](/home/ubuntu/KORStockScan/data/report/scalp_sim_ai_deferred_review/scalp_sim_ai_deferred_review_2026-05-19.json), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [scalp_sim_ai_deferred_review.py](/home/ubuntu/KORStockScan/src/engine/scalp_sim_ai_deferred_review.py)
@@ -136,30 +138,40 @@
   - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_scalp_sim_overnight_gatekeeper.py src/tests/test_scalp_sim_overnight_report.py src/tests/test_scalp_sim_ev_midcheck.py src/tests/test_scalp_sim_ai_deferred_review.py` -> `10 passed`; `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_scalp_live_simulator.py src/tests/test_state_handler_fast_signatures.py src/tests/test_scalp_sim_ev_midcheck.py src/tests/test_scalp_sim_ai_deferred_review.py` -> `61 passed, 2 warnings`; `RUN_OPENAI_LIVE_TESTS=1 PYTHONPATH=. .venv/bin/pytest -q src/tests/test_openai_live_sim_ai_budget.py` -> `2 passed`; `py_compile`, `bash -n deploy/run_threshold_cycle_postclose.sh` 통과.
   - 다음 액션: postclose 본체에서 `scalp_sim_overnight`, `scalp_sim_ev_midcheck`, `lifecycle_decision_matrix`, `threshold_cycle_ev`, `runtime_approval_summary`가 source-only로 이어지는지 재확인한다. 오늘 overnight AI timeout은 provider 변경/threshold 변경 근거가 아니라 운영 incident/provenance로만 분리한다.
 
-- [ ] `[HumanInterventionSummary0519] 자동화체인 사용자 개입 요구사항 분류 및 누락 확인` (`Due: 2026-05-19`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:15`, `Track: RuntimeStability`)
+- [x] `[HumanInterventionSummary0519] 자동화체인 사용자 개입 요구사항 분류 및 누락 확인` (`Due: 2026-05-19`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:15`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-18.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-18.json), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
   - 판정 기준: 개입사항을 `approval_artifact_required|created|missing|blocked_by_policy|observe_only`, `Codex 구현 필요`, `수동 동기화 필요`, `관찰만`으로 분류한다.
   - 금지: approval request만 보고 env 파일을 직접 수정하지 않고, 자동화 산출물에 있는 요청을 답변에만 남기고 checklist/Project 대상에서 누락하지 않는다.
-  - 다음 액션: approval request가 있으면 `approval_id`, 후보/대상, artifact path, 승인 여부, 다음 PREOPEN 적용 확인 항목을 남긴다. 누락된 항목이 있으면 다음 영업일 checklist에 parser-friendly checkbox로 추가한다.
+  - 완료 메모 (`2026-05-19 18:57 KST`): `warning / one_approved_sim_only_artifact_next_preopen_pending`. `runtime_approval_summary_2026-05-19`는 scalping selected auto-bounded live `2`, swing requested/approved `0`, panic approval requested `0`, lifecycle matrix `pass/ready_for_bounded_apply=true`다. 사용자 개입 artifact는 `data/threshold_cycle/approvals/scalp_sim_scale_in_window_expansion_2026-05-19.json` 1개이며 `approved=true`, `decision_authority=sim_observation_only`, `broker_order_forbidden=true`, `real_order_forbidden=true`다. `threshold_apply_2026-05-20.json`과 5/20 runtime env는 아직 생성 전이므로 적용 여부는 다음 PREOPEN 확인 대상이다.
+  - 다음 액션: 5/20 `ThresholdEnvAutoApplyPreopen0520`에서 scale-in sim-only env mapping이 실제로 반영됐는지 확인한다. Project/Calendar 동기화는 사용자 수동 명령으로 수행한다.
 
-- [ ] `[LifecycleDecisionMatrixRuntime0519] lifecycle decision matrix postclose 산출 및 다음 PREOPEN bounded apply 연결 확인` (`Due: 2026-05-19`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:35`, `Track: ScalpingLogic`)
+- [x] `[LifecycleDecisionMatrixRuntime0519] lifecycle decision matrix postclose 산출 및 다음 PREOPEN bounded apply 연결 확인` (`Due: 2026-05-19`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:35`, `Track: ScalpingLogic`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md), [lifecycle_decision_matrix.py](/home/ubuntu/KORStockScan/src/engine/lifecycle_decision_matrix.py), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py)
   - 판정 기준: `lifecycle_decision_matrix_2026-05-19.{json,md}` 생성, `threshold_cycle_ev`/`runtime_approval_summary` source link, fixed threshold role contract, hard safety passthrough, selected/not-applied attribution을 확인한다.
   - 금지: score bucket 고정 정책, score 단조 EV 가정, hard safety override, 장중 threshold mutation, sim-only real execution 품질 주장.
-  - 다음 액션: `pass`, `hold_sample`, `hold_no_edge`, `source_quality_blocker`, `runtime_env_mapping_gap` 중 하나로 닫고, selected되면 다음 PREOPEN env의 policy file/version/promote cap을 확인한다.
+  - 완료 메모 (`2026-05-19 18:57 KST`): `pass / report_ready_bounded_apply_not_yet_materialized`. `lifecycle_decision_matrix_2026-05-19.{json,md}`는 생성됐고 summary는 `total_rows=207`, `joined_rows=144`, stage counts `entry=73`, `exit=113`, `scale_in=8`, `holding=13`, `policy_pass_count=2`, `promote_ready_count=1`, status `pass`다. fixed threshold contract가 포함돼 hard safety는 override forbidden, baseline prior는 feature-only, bounded tunable은 threshold-cycle bounds required, legacy archive는 runtime feature forbidden으로 분리된다. `threshold_cycle_ev`에서는 `lifecycle_decision_matrix_runtime`이 `hold_sample`, `sample_count=207`, `source_sample_count=207`, `source_quality_gate=window_policy_hold_sample`로 귀속됐다. `threshold_cycle_preopen_apply.py`에는 `KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_*` env mapping이 존재하지만 5/20 apply plan은 아직 생성 전이다.
+  - 다음 액션: 5/20 PREOPEN apply plan 생성 후 policy file/version/promote cap 실제 반영 여부를 확인한다. 장중 mutation 또는 hard safety 우회는 하지 않는다.
 
-- [ ] `[ScalpSimScaleInMatrixFrameworkPrep0519] 스캘핑 sim scale-in 확대 전 lifecycle matrix scale_in source 귀속 확인` (`Due: 2026-05-19`, `Slot: POSTCLOSE`, `TimeWindow: 17:35~17:50`, `Track: ScalpingLogic`)
+- [x] `[ScalpSimScaleInMatrixFrameworkPrep0519] 스캘핑 sim scale-in 확대 전 lifecycle matrix scale_in source 귀속 확인` (`Due: 2026-05-19`, `Slot: POSTCLOSE`, `TimeWindow: 17:35~17:50`, `Track: ScalpingLogic`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md), [lifecycle_decision_matrix.py](/home/ubuntu/KORStockScan/src/engine/lifecycle_decision_matrix.py), [scalp_sim_ev_midcheck.py](/home/ubuntu/KORStockScan/src/engine/scalp_sim_ev_midcheck.py)
   - 판정 기준: `scalp_sim_scale_in_order_assumed_filled/unfilled`가 `lifecycle_decision_matrix`의 `stage=scale_in` row로 들어가고, add type/가격/수량은 runtime feature, final exit profit/post-add MFE/MAE는 label 전용으로 분리되는지 확인한다.
   - 금지: scale-in window 확대를 고정 threshold 정책, 실주문 scale-in, 수량 cap 해제, hard safety 완화, 장중 threshold mutation 근거로 쓰지 않는다.
-  - 다음 액션: framework source 귀속이 `pass`면 `data/threshold_cycle/approvals/scalp_sim_scale_in_window_expansion_2026-05-19.json` 승인 artifact를 확인한다. 사용자가 `approved=true`로 승인한 경우에만 다음 영업일 PREOPEN `threshold_cycle_preopen_apply`가 `KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_*` env를 쓰며, source gap이면 actuator보다 adapter/test 보강을 우선한다.
+  - 완료 메모 (`2026-05-19 18:57 KST`): `pass / source_adapter_ready_approval_created`. `lifecycle_decision_matrix` source link에 `scalp_sim_scale_in`이 포함됐고 `rows=8`, `filled_events=0`, `unfilled_events=8`이다. policy entry는 `stage=scale_in`, `sample=8`, `joined_sample=8`, `join_rate=1.0`, `stage_ev_composite_pct=1.5325`, `confidence=0.8`, `source_quality_gate=hold_sample`, `selected_action=PYRAMID_BIAS`, `promote_ready=false`다. 승인 artifact `scalp_sim_scale_in_window_expansion_2026-05-19.json`은 `approved=true`, recommended values는 enabled `true`, arms `PYRAMID,AVG_DOWN`, profit window `-2.5~2.5`, max orders per position `1`, per day `30`이다.
+  - 다음 액션: 실주문 scale-in이나 수량 cap 해제가 아니라 sim-only virtual scale-in window로만 다음 PREOPEN apply에서 확인한다.
 
-- [ ] `[ShadowCanaryCohortReview0519] shadow/canary/cohort 런타임 분류 및 정리 판정` (`Due: 2026-05-19`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)
+- [x] `[ShadowCanaryCohortReview0519] shadow/canary/cohort 런타임 분류 및 정리 판정` (`Due: 2026-05-19`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)
   - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)
   - 판정 기준: 당일 변경/관찰 결과를 기준으로 `remove`, `observe-only`, `baseline-promote`, `active-canary` 상태 변동 여부를 닫는다.
   - 금지: shadow 금지, canary-only, baseline 승격 원칙을 코드/문서 상태와 분리하지 않는다.
   - 완료 메모 (`2026-05-19 15:10 KST`): `pass / active_shadow_none_runtime_shadow_refs_are_off_or_report_only`. `threshold_runtime_env_2026-05-19.json` 기준 active shadow env는 없고, constants의 shadow류(`hard_time_stop`, `partial_only_timeout`, `same_symbol_soft_stop_cooldown`, split-entry, dual-persona)는 기본 OFF다. `workorder-shadow-canary-runtime-classification.md`를 5/19 기준으로 현행화해 `scalp_sim_candidate_window_expansion`, `scalp_sim_ai_budget_manager`, `scalp_sim_scale_in_window_expansion`을 shadow가 아닌 sim-only cohort/approval-required actuator로 잠갔다.
+  - 재확인 (`2026-05-19 18:57 KST`): `pass`. `runtime_approval_summary` 기준 active selected runtime canary는 `soft_stop_whipsaw_confirmation`, `score65_74_recovery_probe`이며 sim-only cohort/approval axis는 real execution 권한이 없다. 신규 shadow runtime owner는 없다.
   - 다음 액션: 남은 shadow 명칭은 runtime owner가 아니라 OFF/historical/report-only cleanup 후보로 관리한다. 신규 shadow 경로를 열지 않고, sim-only cohort는 lifecycle matrix/source bundle attribution으로만 판정한다.
+
+- [x] `[PostcloseAutomationHealthCheck20260519] 장후 자동화체인 상태 확인` (`Due: 2026-05-19`, `Slot: POSTCLOSE`, `TimeWindow: 16:10~20:45`, `Track: RunbookOps`)
+  - Source: [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md#장후-확인-절차)
+  - 판정: `pass`
+  - 근거: `logs/threshold_cycle_postclose_cron.log`는 `[DONE] threshold-cycle postclose target_date=2026-05-19 ... finished_at=2026-05-19T16:20:52+0900`를 남겼다. `threshold_cycle_postclose_verification_2026-05-19` 재검증은 `status=pass`, missing required artifacts `[]`, AI correction `parsed/pass`다. `bash deploy/run_error_detection.sh full`도 18:57 KST 기준 `summary_severity=pass`, `threshold_cycle_postclose_status=pass`, `artifact_freshness=pass`, `threshold_postclose_report_status=pass_one_shot`로 닫혔다. `tuning_monitoring_postclose`, `update_kospi`, `dashboard_db_archive`, `log_rotation_cleanup`은 아직 각자의 time window 전이라 `not_yet_due`가 정상이다.
+  - 다음 액션: 20:05 tuning monitoring과 21:00 update_kospi는 별도 time window에서 확인한다. 현재 장후 threshold-cycle 재실행이나 runtime mutation은 필요 없다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
