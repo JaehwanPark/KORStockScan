@@ -69,6 +69,12 @@ THRESHOLD_STAGE_FAMILY_MAP = {
     "scalp_sim_entry_unpriced": "pre_submit_price_guard",
     "scalp_sim_entry_expired": "pre_submit_price_guard",
     "scalp_sim_duplicate_buy_signal": "entry_mechanical_momentum",
+    "scalp_sim_candidate_window_discarded": "entry_mechanical_momentum",
+    "scalp_sim_ai_holding_live_call": "scalp_sim_ai_budget_manager",
+    "scalp_sim_ai_holding_reuse": "scalp_sim_ai_budget_manager",
+    "scalp_sim_ai_holding_deferred": "scalp_sim_ai_budget_manager",
+    "sim_ai_budget_exhausted": "scalp_sim_ai_budget_manager",
+    "sim_ai_critical_bypass": "scalp_sim_ai_budget_manager",
 }
 
 TARGET_STAGES = frozenset(THRESHOLD_STAGE_FAMILY_MAP)

@@ -14,6 +14,7 @@ from src.engine.sniper_state_handlers import (
     _is_score65_74_recovery_probe_entry_unlocked,
     _resolve_wait6579_probe_entry_unlock,
     _should_apply_ai_score_50_buy_hold_override,
+    _should_publish_watching_buy_analysis_telegram,
     _should_run_score65_74_recovery_probe,
     _should_run_main_buy_recovery_canary,
     _resolve_gatekeeper_fast_reuse_sec,
@@ -564,6 +565,47 @@ def test_ai_score_50_buy_hold_override_can_be_disabled(monkeypatch):
     monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
 
     assert _should_apply_ai_score_50_buy_hold_override(50, {"ai_fallback_score_50": True}) is False
+
+
+def test_watching_buy_analysis_telegram_suppresses_sim_and_probe_context():
+    assert _should_publish_watching_buy_analysis_telegram(
+        {"scalp_live_simulator": True},
+        "SCALPING",
+        90,
+        buy_score_threshold=75,
+    ) == (False, "simulation_context")
+
+    assert _should_publish_watching_buy_analysis_telegram(
+        {"scalp_sim_candidate_window_expansion": True},
+        "SCALPING",
+        90,
+        buy_score_threshold=75,
+    ) == (False, "scalp_sim_candidate_window_expansion")
+
+    assert _should_publish_watching_buy_analysis_telegram(
+        {
+            "wait6579_probe_canary_armed": True,
+            "wait6579_probe_canary_source": "score65_74_recovery_probe",
+        },
+        "SCALPING",
+        66,
+        buy_score_threshold=75,
+    ) == (False, "score65_74_recovery_probe")
+
+
+def test_watching_buy_analysis_telegram_requires_scalp_score_cutoff():
+    assert _should_publish_watching_buy_analysis_telegram(
+        {},
+        "SCALPING",
+        74,
+        buy_score_threshold=75,
+    ) == (False, "below_buy_score_threshold")
+    assert _should_publish_watching_buy_analysis_telegram(
+        {},
+        "SCALPING",
+        75,
+        buy_score_threshold=75,
+    ) == (True, "publish_allowed")
 
 
 def test_apply_wait6579_probe_canary_caps_qty_and_budget():

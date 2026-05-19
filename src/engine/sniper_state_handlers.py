@@ -148,6 +148,8 @@ SCALP_SIM_PENDING_STATUS = "SCALP_SIM_PENDING_BUY"
 SCALP_SIM_STATE_PATH = DATA_DIR / "runtime" / "scalp_live_simulator_state.json"
 SWING_INTRADAY_PROBE_BOOK = "swing_intraday_live_equiv_probe"
 SWING_INTRADAY_PROBE_STATE_PATH = DATA_DIR / "runtime" / "swing_intraday_probe_state.json"
+_SCALP_SIM_CANDIDATE_WINDOW_DAILY_CREATED: dict[str, int] = {}
+_SCALP_SIM_AI_CALL_TIMES: list[float] = []
 _SWING_PROBE_DAILY_CREATED: dict[str, int] = {}
 _SWING_PROBE_DISCARD_LOG_TS: dict[tuple[str, str, str, str], float] = {}
 _SWING_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS: dict[str, dict] = {}
@@ -552,6 +554,10 @@ def _scalp_live_simulator_fill_policy() -> str:
     )
 
 
+def _is_scalp_sim_candidate_window_expansion_enabled() -> bool:
+    return _rule_bool("SCALP_SIM_CANDIDATE_WINDOW_EXPANSION_ENABLED", False)
+
+
 def _is_scalp_simulator_target(stock: dict | None) -> bool:
     if not isinstance(stock, dict):
         return False
@@ -566,6 +572,169 @@ def _is_scalp_simulated_position(stock: dict | None, strategy: str | None = None
         return False
     resolved_strategy = strategy or stock.get("strategy")
     return _is_scalp_strategy(resolved_strategy) and _is_scalp_simulator_target(stock)
+
+
+def _boolish_true(value) -> bool:
+    if value is True:
+        return True
+    if value is False or value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _is_scalp_sim_ai_budget_target(stock: dict | None, strategy: str | None = None) -> bool:
+    if not _rule_bool("SCALP_SIM_AI_BUDGET_ENABLED", False):
+        return False
+    if not _is_scalp_simulated_position(stock, strategy):
+        return False
+    return not _boolish_true((stock or {}).get("actual_order_submitted"))
+
+
+def _scalp_sim_ai_bucket(value, *, step: float = 0.25) -> int:
+    try:
+        numeric = _safe_float(value, 0.0)
+        if step <= 0:
+            return int(round(numeric * 100))
+        return int(math.floor(numeric / step))
+    except Exception:
+        return 0
+
+
+def _build_scalp_sim_ai_feature_signature(
+    stock: dict,
+    *,
+    profit_rate: float,
+    peak_profit: float,
+    current_ai_score: float,
+    market_signature,
+    is_critical_zone: bool,
+    near_ai_exit_band: bool,
+    near_safe_profit_band: bool,
+) -> str:
+    drawdown = _safe_float(peak_profit, 0.0) - _safe_float(profit_rate, 0.0)
+    score_bucket = int(_safe_float(current_ai_score, 0.0) // 5)
+    market_hash = str(abs(hash(str(market_signature))) % 100000)
+    return "|".join(
+        [
+            f"p:{_scalp_sim_ai_bucket(profit_rate)}",
+            f"pk:{_scalp_sim_ai_bucket(peak_profit)}",
+            f"dd:{_scalp_sim_ai_bucket(drawdown)}",
+            f"score5:{score_bucket}",
+            f"critical:{int(bool(is_critical_zone))}",
+            f"near_exit:{int(bool(near_ai_exit_band))}",
+            f"near_safe:{int(bool(near_safe_profit_band))}",
+            f"ra:{stock.get('reversal_add_state') or '-'}",
+            f"ofi:{stock.get('holding_flow_ofi_regime') or stock.get('ofi_regime') or '-'}",
+            f"m:{market_hash}",
+        ]
+    )
+
+
+def _scalp_sim_ai_budget_usage(now_ts: float | None = None) -> int:
+    now = float(now_ts or time.time())
+    cutoff = now - 60.0
+    with ENTRY_LOCK:
+        _SCALP_SIM_AI_CALL_TIMES[:] = [ts for ts in _SCALP_SIM_AI_CALL_TIMES if float(ts or 0) >= cutoff]
+        return len(_SCALP_SIM_AI_CALL_TIMES)
+
+
+def _record_scalp_sim_ai_budget_call(now_ts: float | None = None) -> int:
+    now = float(now_ts or time.time())
+    with ENTRY_LOCK:
+        _SCALP_SIM_AI_CALL_TIMES.append(now)
+    return _scalp_sim_ai_budget_usage(now)
+
+
+def _resolve_scalp_sim_ai_budget_decision(
+    stock: dict,
+    *,
+    strategy: str | None,
+    now_ts: float,
+    profit_rate: float,
+    peak_profit: float,
+    held_sec: float,
+    current_ai_score: float,
+    market_signature,
+    is_critical_zone: bool,
+    near_ai_exit_band: bool,
+    near_safe_profit_band: bool,
+) -> dict:
+    if not _is_scalp_sim_ai_budget_target(stock, strategy):
+        return {"action": "call", "target": False}
+
+    max_calls = max(0, _rule_int("SCALP_SIM_AI_MAX_CALLS_PER_MIN", 10))
+    max_cd = max(1, _rule_int("SCALP_SIM_AI_HOLDING_MAX_COOLDOWN_SEC", 180))
+    critical = bool(is_critical_zone or near_ai_exit_band or near_safe_profit_band)
+    signature = _build_scalp_sim_ai_feature_signature(
+        stock,
+        profit_rate=profit_rate,
+        peak_profit=peak_profit,
+        current_ai_score=current_ai_score,
+        market_signature=market_signature,
+        is_critical_zone=is_critical_zone,
+        near_ai_exit_band=near_ai_exit_band,
+        near_safe_profit_band=near_safe_profit_band,
+    )
+    last_signature = str(stock.get("scalp_sim_ai_last_feature_signature") or "")
+    last_live_call_at = _safe_float(stock.get("scalp_sim_ai_last_live_call_at"), 0.0)
+    elapsed_live_sec = max(0.0, float(now_ts or time.time()) - last_live_call_at) if last_live_call_at > 0 else None
+    first_review = last_live_call_at <= 0 or not stock.get("scalp_sim_ai_last_action")
+    state_changed = signature != last_signature
+    max_cooldown_expired = elapsed_live_sec is None or elapsed_live_sec >= max_cd
+    used = _scalp_sim_ai_budget_usage(now_ts)
+    common = {
+        "target": True,
+        "feature_signature": signature,
+        "last_feature_signature": last_signature or "-",
+        "state_changed": state_changed,
+        "first_review": first_review,
+        "critical": critical,
+        "elapsed_live_sec": None if elapsed_live_sec is None else round(elapsed_live_sec, 2),
+        "held_sec": int(_safe_float(held_sec, 0.0)),
+        "budget_used_per_min": used,
+        "budget_cap_per_min": max_calls,
+        "last_ai_action": stock.get("scalp_sim_ai_last_action") or stock.get("last_ai_action") or "-",
+        "last_ai_score": stock.get("scalp_sim_ai_last_score") or _safe_int(current_ai_score, 0),
+    }
+
+    if not first_review and not state_changed and not critical and not max_cooldown_expired:
+        return {
+            **common,
+            "action": "reuse",
+            "reuse_reason": "unchanged_feature_signature",
+        }
+
+    if max_calls > 0 and used >= max_calls:
+        if critical:
+            return {
+                **common,
+                "action": "call",
+                "call_reason": "sim_ai_critical_bypass",
+                "critical_bypass": True,
+            }
+        if _rule_bool("SCALP_SIM_AI_DEFERRED_REVIEW_ENABLED", True):
+            return {
+                **common,
+                "action": "defer",
+                "defer_reason": "sim_ai_budget_exhausted",
+            }
+        return {
+            **common,
+            "action": "reuse",
+            "reuse_reason": "budget_exhausted_deferred_disabled",
+        }
+
+    if first_review:
+        call_reason = "first_sim_holding_review"
+    elif critical:
+        call_reason = "critical_zone"
+    elif state_changed:
+        call_reason = "feature_signature_changed"
+    elif max_cooldown_expired:
+        call_reason = "max_cooldown_expired"
+    else:
+        call_reason = "scheduled_review"
+    return {**common, "action": "call", "call_reason": call_reason, "critical_bypass": False}
 
 
 def _is_any_simulated_position(stock: dict | None, strategy: str | None = None) -> bool:
@@ -586,6 +755,32 @@ def _resolve_telegram_audience_for_stock(
     default: str = "VIP_ALL",
 ) -> str:
     return "ADMIN_ONLY" if _is_simulation_alert_context(stock, strategy) else default
+
+
+def _should_publish_watching_buy_analysis_telegram(
+    stock: dict | None,
+    strategy: str | None,
+    ai_score,
+    *,
+    buy_score_threshold=None,
+) -> tuple[bool, str]:
+    if _is_simulation_alert_context(stock, strategy):
+        return False, "simulation_context"
+    if bool((stock or {}).get("scalp_sim_candidate_window_expansion")):
+        return False, "scalp_sim_candidate_window_expansion"
+    if (
+        str((stock or {}).get("wait6579_probe_canary_source") or "") == "score65_74_recovery_probe"
+        or _is_score65_74_recovery_probe_entry_unlocked(stock)
+    ):
+        return False, "score65_74_recovery_probe"
+    if _is_scalp_strategy(strategy):
+        threshold = _safe_float(
+            buy_score_threshold,
+            _rule_float("BUY_SCORE_THRESHOLD", 75.0),
+        )
+        if _safe_float(ai_score, 0.0) < threshold:
+            return False, "below_buy_score_threshold"
+    return True, "publish_allowed"
 
 
 def _active_runtime_status(stock: dict | None) -> bool:
@@ -1553,9 +1748,39 @@ def _scalp_sim_event_fields(**extra) -> dict:
         "simulation_fill_policy": _scalp_live_simulator_fill_policy(),
         "simulated_order": True,
         "actual_order_submitted": False,
+        "broker_order_forbidden": True,
         "calibration_authority": "equal_weight",
     }
     fields.update(extra)
+    return fields
+
+
+def _scalp_sim_candidate_window_daily_key(now_ts: float | None = None) -> str:
+    try:
+        return datetime.fromtimestamp(float(now_ts or time.time())).date().isoformat()
+    except Exception:
+        return datetime.now().date().isoformat()
+
+
+def _scalp_sim_candidate_window_context_fields(source: dict | None) -> dict:
+    if not isinstance(source, dict) or not bool(source.get("scalp_sim_candidate_window_expansion")):
+        return {}
+    keys = (
+        "scalp_sim_candidate_window_expansion",
+        "scalp_sim_candidate_window_source_stage",
+        "scalp_sim_candidate_window_blocked_reason",
+        "scalp_sim_candidate_window_original_action",
+        "scalp_sim_candidate_window_original_score",
+        "scalp_sim_candidate_window_original_reason",
+        "scalp_sim_candidate_window_date",
+    )
+    fields = {key: source.get(key) for key in keys if source.get(key) not in (None, "")}
+    fields.update(
+        {
+            "would_real_submit": False,
+            "decision_authority": "sim_observation_only",
+        }
+    )
     return fields
 
 
@@ -1722,6 +1947,7 @@ def _mark_scalp_simulated_holding(
             limit_fill_price=limit_fill_price,
             would_submit_stage="order_leg_sent",
             runtime_effect="simulated_holding_only",
+            **_scalp_sim_candidate_window_context_fields(stock),
         ),
     )
     _log_entry_pipeline(
@@ -1740,6 +1966,7 @@ def _mark_scalp_simulated_holding(
             would_limit_fill=bool(would_limit_fill),
             preset_tp_price=stock.get("preset_tp_price", 0),
             runtime_effect="simulated_holding_only",
+            **_scalp_sim_candidate_window_context_fields(stock),
         ),
     )
     persist_scalp_simulator_state()
@@ -1852,6 +2079,114 @@ def _resolve_scalp_sim_entry_qty(stock: dict, ws_data: dict, runtime: dict) -> d
     }
 
 
+def _maybe_arm_scalp_sim_candidate_window(
+    *,
+    stock: dict,
+    code: str,
+    ws_data: dict,
+    runtime: dict,
+    ai_decision: dict | None = None,
+    ai_score=None,
+    source_stage: str,
+    blocked_reason: str,
+    ai_engine=None,
+) -> bool:
+    if not _is_scalp_sim_candidate_window_expansion_enabled():
+        return False
+    if not isinstance(stock, dict):
+        return False
+    strategy = normalize_strategy((runtime or {}).get("strategy") or stock.get("strategy"))
+    if strategy != "SCALPING":
+        return False
+    score_value = _safe_float(ai_score if ai_score is not None else (ai_decision or {}).get("score"), 0.0)
+    min_score = _rule_int("SCALP_SIM_CANDIDATE_WINDOW_MIN_SCORE", 55)
+    max_score = _rule_int("SCALP_SIM_CANDIDATE_WINDOW_MAX_SCORE", 100)
+    if score_value < float(min_score or 0) or score_value > float(max_score or 100):
+        return False
+    now_ts = _safe_float((runtime or {}).get("now_ts"), time.time())
+    day_key = _scalp_sim_candidate_window_daily_key(now_ts)
+    max_open = max(0, _rule_int("SCALP_SIM_CANDIDATE_WINDOW_MAX_OPEN", 20))
+    open_count = len(_scalp_simulator_active_targets())
+    if max_open > 0 and open_count >= max_open:
+        _log_entry_pipeline(
+            stock,
+            code,
+            "scalp_sim_candidate_window_discarded",
+            **_scalp_sim_event_fields(
+                threshold_family="entry_mechanical_momentum",
+                discard_reason="max_open_reached",
+                source_stage=source_stage,
+                blocked_reason=blocked_reason,
+                ai_score=f"{score_value:.1f}",
+                open_count=open_count,
+                max_open=max_open,
+                runtime_effect="sim_observation_skipped",
+                decision_authority="sim_observation_only",
+            ),
+        )
+        return False
+    restored_today = sum(
+        1
+        for target in _scalp_simulator_active_targets()
+        if str((target or {}).get("scalp_sim_candidate_window_date") or "") == day_key
+    )
+    created_today = max(int(_SCALP_SIM_CANDIDATE_WINDOW_DAILY_CREATED.get(day_key, 0) or 0), restored_today)
+    max_daily = max(0, _rule_int("SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY", 80))
+    if max_daily > 0 and created_today >= max_daily:
+        _log_entry_pipeline(
+            stock,
+            code,
+            "scalp_sim_candidate_window_discarded",
+            **_scalp_sim_event_fields(
+                threshold_family="entry_mechanical_momentum",
+                discard_reason="max_daily_reached",
+                source_stage=source_stage,
+                blocked_reason=blocked_reason,
+                ai_score=f"{score_value:.1f}",
+                created_today=created_today,
+                max_daily=max_daily,
+                runtime_effect="sim_observation_skipped",
+                decision_authority="sim_observation_only",
+            ),
+        )
+        return False
+
+    action = str((ai_decision or {}).get("action") or stock.get("last_watching_ai_action") or "WAIT").upper()
+    reason = str((ai_decision or {}).get("reason") or stock.get("last_watching_ai_reason") or "")[:240]
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "scalp_sim_candidate_window_expansion": True,
+            "scalp_sim_candidate_window_source_stage": str(source_stage or "-"),
+            "scalp_sim_candidate_window_blocked_reason": str(blocked_reason or "-"),
+            "scalp_sim_candidate_window_original_action": action,
+            "scalp_sim_candidate_window_original_score": f"{score_value:.1f}",
+            "scalp_sim_candidate_window_original_reason": reason,
+            "scalp_sim_candidate_window_date": day_key,
+        },
+    )
+    sim_runtime = dict(runtime or {})
+    sim_runtime.update(
+        {
+            "strategy": "SCALPING",
+            "is_trigger": True,
+            "now_ts": now_ts,
+            "current_ai_score": score_value,
+            "scalp_sim_candidate_window_expansion": True,
+        }
+    )
+    armed = maybe_arm_scalp_live_simulator_from_buy_signal(
+        stock,
+        code,
+        ws_data or {},
+        sim_runtime,
+        ai_engine=ai_engine,
+    )
+    if armed:
+        _SCALP_SIM_CANDIDATE_WINDOW_DAILY_CREATED[day_key] = created_today + 1
+    return bool(armed)
+
+
 def maybe_arm_scalp_live_simulator_from_buy_signal(
     stock: dict,
     code: str,
@@ -1907,6 +2242,7 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
             "scalp_live_simulator": True,
             "simulated_order": True,
             "actual_order_submitted": False,
+            "broker_order_forbidden": True,
             "entry_adm_candidate_id": entry_adm_candidate_id,
             "sim_record_id": sim_record_id,
             "sim_parent_record_id": stock.get("id"),
@@ -1928,6 +2264,7 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
             "entry_mode": stock.get("entry_mode") or "scalp_sim_ai_buy_all",
             "rt_ai_prob": current_ai_score / 100.0,
             "msg_audience": "ADMIN_ONLY",
+            **_scalp_sim_candidate_window_context_fields(stock),
         }
     )
     planned_orders = [{"price": limit_price, "qty": qty, "tif": "DAY"}]
@@ -1977,6 +2314,7 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
                     ai_entry_price_canary_confidence=latency_gate.get("ai_entry_price_canary_confidence"),
                     ai_entry_price_canary_reason=latency_gate.get("ai_entry_price_canary_reason"),
                     runtime_effect="simulated_order_skipped",
+                    **_scalp_sim_candidate_window_context_fields(sim_target),
                 ),
             )
             persist_scalp_simulator_state()
@@ -2010,6 +2348,7 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
                     ai_entry_price_canary_confidence=latency_gate.get("ai_entry_price_canary_confidence"),
                     ai_entry_price_canary_reason=latency_gate.get("ai_entry_price_canary_reason"),
                     runtime_effect="simulated_entry_price_only",
+                    **_scalp_sim_candidate_window_context_fields(sim_target),
                 ),
             )
     sim_submit_revalidation_fields = _build_entry_submit_revalidation_fields(
@@ -2036,6 +2375,7 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
                 sim_parent_record_id=stock.get("id"),
                 **sim_submit_revalidation_fields,
                 **sim_price_snapshot,
+                **_scalp_sim_candidate_window_context_fields(sim_target),
             ),
         )
     if _is_passive_probe_stale_submit_block(sim_submit_revalidation_fields):
@@ -2052,6 +2392,7 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
                 runtime_effect="simulated_order_skipped",
                 **sim_submit_revalidation_fields,
                 **sim_price_snapshot,
+                **_scalp_sim_candidate_window_context_fields(sim_target),
             ),
         )
         _emit_scalp_entry_adm_snapshot(
@@ -2090,6 +2431,7 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
             qty=qty,
             **qty_log_fields,
             **pre_ai_context_fields,
+            **_scalp_sim_candidate_window_context_fields(sim_target),
         ),
     )
     _emit_scalp_entry_adm_snapshot(
@@ -2122,6 +2464,7 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
             **pre_ai_context_fields,
             would_submit_stage="order_leg_sent",
             runtime_effect="pending_virtual_fill",
+            **_scalp_sim_candidate_window_context_fields(sim_target),
         ),
     )
     handled = handle_scalp_simulator_pending_entry(sim_target, code, ws_data or {}, now_ts=now_ts)
@@ -7307,26 +7650,47 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 current_ai_score = ai_score
                                 log_info(f"💎 [VIP AI 확답 완료: {stock['name']}] {action} | 점수: {ai_score}점 | {reason}")
                                 if action == "BUY":
-                                    ai_msg = (
-                                        f"🤖 <b>[VIP 종목 실시간 분석]</b>\n"
-                                        f"🎯 종목: {stock['name']}\n"
-                                        f"⚡ 행동: <b>{action} ({ai_score}점)</b>\n"
-                                        f"🧠 사유: {reason}"
-                                    )
-                                    target_audience = (
-                                        'VIP_ALL'
-                                        if liquidity_value >= config["VIP_LIQUIDITY_THRESHOLD"] and current_ai_score >= 90
-                                        else 'ADMIN_ONLY'
-                                    )
-                                    target_audience = _resolve_telegram_audience_for_stock(
+                                    publish_ai_buy_alert, publish_skip_reason = _should_publish_watching_buy_analysis_telegram(
                                         stock,
                                         strategy,
-                                        default=target_audience,
+                                        current_ai_score,
+                                        buy_score_threshold=config.get("BUY_SCORE_THRESHOLD", 75)
+                                        if isinstance(config, dict)
+                                        else 75,
                                     )
-                                    event_bus.publish(
-                                        'TELEGRAM_BROADCAST',
-                                        {'message': ai_msg, 'audience': target_audience, 'parse_mode': 'HTML'},
-                                    )
+                                    if publish_ai_buy_alert:
+                                        ai_msg = (
+                                            f"🤖 <b>[VIP 종목 실시간 분석]</b>\n"
+                                            f"🎯 종목: {stock['name']}\n"
+                                            f"⚡ 행동: <b>{action} ({ai_score}점)</b>\n"
+                                            f"🧠 사유: {reason}"
+                                        )
+                                        target_audience = (
+                                            'VIP_ALL'
+                                            if liquidity_value >= config["VIP_LIQUIDITY_THRESHOLD"] and current_ai_score >= 90
+                                            else 'ADMIN_ONLY'
+                                        )
+                                        target_audience = _resolve_telegram_audience_for_stock(
+                                            stock,
+                                            strategy,
+                                            default=target_audience,
+                                        )
+                                        event_bus.publish(
+                                            'TELEGRAM_BROADCAST',
+                                            {'message': ai_msg, 'audience': target_audience, 'parse_mode': 'HTML'},
+                                        )
+                                    else:
+                                        _log_entry_pipeline(
+                                            stock,
+                                            code,
+                                            "buy_analysis_telegram_suppressed",
+                                            action=action,
+                                            ai_score=f"{float(current_ai_score or 0.0):.1f}",
+                                            reason=publish_skip_reason,
+                                            actual_order_submitted=False,
+                                            broker_order_forbidden=True,
+                                            decision_authority="sim_or_pre_submit_observation_only",
+                                        )
                             else:
                                 log_info(f"⚠️ [{stock['name']}] AI 판단 보류(Score 50). 매수보류 override를 적용합니다.")
                                 current_ai_score = 50
@@ -7362,6 +7726,17 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 ai_score=f"{current_ai_score:.1f}",
                                 big_bite_confirmed=big_bite_confirmed,
                                 vip_target=is_vip_target,
+                            )
+                            _maybe_arm_scalp_sim_candidate_window(
+                                stock=stock,
+                                code=code,
+                                ws_data=ws_data,
+                                runtime=runtime,
+                                ai_decision=ai_decision,
+                                ai_score=current_ai_score,
+                                source_stage="first_ai_wait",
+                                blocked_reason="big_bite_not_confirmed",
+                                ai_engine=ai_engine,
                             )
                             return False
 
@@ -7469,6 +7844,17 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         chosen_action="NO_BUY_AI",
                         actual_order_submitted=False,
                         broker_order_forbidden=True,
+                    )
+                    _maybe_arm_scalp_sim_candidate_window(
+                        stock=stock,
+                        code=code,
+                        ws_data=ws_data,
+                        runtime=runtime,
+                        ai_decision=ai_decision,
+                        ai_score=current_ai_score,
+                        source_stage="blocked_ai_score",
+                        blocked_reason="below_buy_score_threshold",
+                        ai_engine=ai_engine,
                     )
                     return False
                 if wait6579_probe_entry_unlocked and current_ai_score < 75:
@@ -9983,6 +10369,14 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             else _rule_int('AI_HOLDING_MAX_COOLDOWN', 90)
         )
         dynamic_price_trigger = 0.20 if is_critical_zone else 0.40
+        sim_ai_budget_target = _is_scalp_sim_ai_budget_target(stock, strategy)
+        if sim_ai_budget_target:
+            dynamic_min_cd = (
+                _rule_int('SCALP_SIM_AI_HOLDING_CRITICAL_COOLDOWN_SEC', 30)
+                if is_critical_zone
+                else _rule_int('SCALP_SIM_AI_HOLDING_MIN_COOLDOWN_SEC', 90)
+            )
+            dynamic_max_cd = _rule_int('SCALP_SIM_AI_HOLDING_MAX_COOLDOWN_SEC', 180)
 
         if time_elapsed > dynamic_min_cd and (
             near_safe_profit_zone
@@ -10089,10 +10483,119 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                             near_low_score=not near_low_score_band,
                         ),
                     )
-                    recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
-                    recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40)
+                    sim_ai_budget_gate = _resolve_scalp_sim_ai_budget_decision(
+                        stock,
+                        strategy=strategy,
+                        now_ts=now_ts,
+                        profit_rate=profit_rate,
+                        peak_profit=peak_profit,
+                        held_sec=held_sec,
+                        current_ai_score=current_ai_score,
+                        market_signature=market_signature,
+                        is_critical_zone=is_critical_zone,
+                        near_ai_exit_band=near_ai_exit_band,
+                        near_safe_profit_band=near_safe_profit_band,
+                    )
+                    sim_ai_budget_skip = bool(
+                        sim_ai_budget_gate.get("target")
+                        and sim_ai_budget_gate.get("action") in {"reuse", "defer"}
+                    )
+                    if sim_ai_budget_skip:
+                        event_stage = (
+                            "scalp_sim_ai_holding_reuse"
+                            if sim_ai_budget_gate.get("action") == "reuse"
+                            else "scalp_sim_ai_holding_deferred"
+                        )
+                        _mutate_stock_state(
+                            stock,
+                            set_fields={
+                                "scalp_sim_ai_last_feature_signature": sim_ai_budget_gate.get("feature_signature"),
+                                "scalp_sim_ai_last_reuse_at": now_ts
+                                if event_stage == "scalp_sim_ai_holding_reuse"
+                                else stock.get("scalp_sim_ai_last_reuse_at"),
+                                "scalp_sim_ai_last_deferred_at": now_ts
+                                if event_stage == "scalp_sim_ai_holding_deferred"
+                                else stock.get("scalp_sim_ai_last_deferred_at"),
+                            },
+                        )
+                        _log_holding_pipeline(
+                            stock,
+                            code,
+                            event_stage,
+                            **_scalp_sim_event_fields(
+                                reuse_reason=sim_ai_budget_gate.get("reuse_reason"),
+                                defer_reason=sim_ai_budget_gate.get("defer_reason"),
+                                last_ai_action=sim_ai_budget_gate.get("last_ai_action"),
+                                last_ai_score=sim_ai_budget_gate.get("last_ai_score"),
+                                feature_signature=sim_ai_budget_gate.get("feature_signature"),
+                                profit_rate=f"{profit_rate:+.2f}",
+                                peak_profit=f"{peak_profit:+.2f}",
+                                held_sec=int(held_sec),
+                                source_stage="ai_holding_review",
+                                decision_authority="sim_observation_only",
+                                runtime_effect="sim_ai_reuse_only"
+                                if event_stage == "scalp_sim_ai_holding_reuse"
+                                else "sim_ai_deferred_review_only",
+                                budget_used_per_min=sim_ai_budget_gate.get("budget_used_per_min"),
+                                budget_cap_per_min=sim_ai_budget_gate.get("budget_cap_per_min"),
+                                state_changed=sim_ai_budget_gate.get("state_changed"),
+                                first_review=sim_ai_budget_gate.get("first_review"),
+                                critical=sim_ai_budget_gate.get("critical"),
+                            ),
+                        )
+                        if event_stage == "scalp_sim_ai_holding_deferred":
+                            _log_holding_pipeline(
+                                stock,
+                                code,
+                                "sim_ai_budget_exhausted",
+                                **_scalp_sim_event_fields(
+                                    defer_reason=sim_ai_budget_gate.get("defer_reason"),
+                                    feature_signature=sim_ai_budget_gate.get("feature_signature"),
+                                    profit_rate=f"{profit_rate:+.2f}",
+                                    peak_profit=f"{peak_profit:+.2f}",
+                                    held_sec=int(held_sec),
+                                    source_stage="ai_holding_review",
+                                    decision_authority="sim_observation_only",
+                                    runtime_effect="sim_ai_deferred_review_only",
+                                    budget_used_per_min=sim_ai_budget_gate.get("budget_used_per_min"),
+                                    budget_cap_per_min=sim_ai_budget_gate.get("budget_cap_per_min"),
+                                ),
+                            )
+                        persist_scalp_simulator_state()
+                    elif sim_ai_budget_gate.get("target") and sim_ai_budget_gate.get("critical_bypass"):
+                        _log_holding_pipeline(
+                            stock,
+                            code,
+                            "sim_ai_critical_bypass",
+                            **_scalp_sim_event_fields(
+                                call_reason=sim_ai_budget_gate.get("call_reason"),
+                                feature_signature=sim_ai_budget_gate.get("feature_signature"),
+                                profit_rate=f"{profit_rate:+.2f}",
+                                peak_profit=f"{peak_profit:+.2f}",
+                                held_sec=int(held_sec),
+                                source_stage="ai_holding_review",
+                                decision_authority="sim_observation_only",
+                                runtime_effect="sim_ai_live_call_allowed",
+                                budget_used_per_min=sim_ai_budget_gate.get("budget_used_per_min"),
+                                budget_cap_per_min=sim_ai_budget_gate.get("budget_cap_per_min"),
+                            ),
+                        )
 
-                    if ws_data.get('orderbook') and recent_ticks:
+                    ai_decision = {"action": "WAIT", "score": current_ai_score, "reason": "holding_ai_not_called"}
+                    raw_ai_score = current_ai_score
+                    ai_cache_hit = False
+                    recent_ticks = [] if sim_ai_budget_skip else kiwoom_utils.get_tick_history_ka10003(
+                        KIWOOM_TOKEN, code, limit=10
+                    )
+                    recent_candles = [] if sim_ai_budget_skip else kiwoom_utils.get_minute_candles_ka10080(
+                        KIWOOM_TOKEN, code, limit=40
+                    )
+
+                    if (not sim_ai_budget_skip) and ws_data.get('orderbook') and recent_ticks:
+                        if sim_ai_budget_gate.get("target"):
+                            used_after_record = _record_scalp_sim_ai_budget_call(now_ts)
+                        else:
+                            used_after_record = None
                         ai_decision = ai_engine.analyze_target(
                             stock['name'],
                             ws_data,
@@ -10117,9 +10620,48 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                             },
                         )
                         current_ai_score = smoothed_score
+                        if sim_ai_budget_gate.get("target"):
+                            _mutate_stock_state(
+                                stock,
+                                set_fields={
+                                    "scalp_sim_ai_last_feature_signature": sim_ai_budget_gate.get(
+                                        "feature_signature"
+                                    ),
+                                    "scalp_sim_ai_last_action": ai_decision.get("action_v2")
+                                    or ai_decision.get("action"),
+                                    "scalp_sim_ai_last_score": raw_ai_score,
+                                    "scalp_sim_ai_last_live_call_at": now_ts,
+                                    "scalp_sim_ai_live_call_count": _safe_int(
+                                        stock.get("scalp_sim_ai_live_call_count"), 0
+                                    )
+                                    + 1,
+                                },
+                            )
+                            _log_holding_pipeline(
+                                stock,
+                                code,
+                                "scalp_sim_ai_holding_live_call",
+                                **_scalp_sim_event_fields(
+                                    call_reason=sim_ai_budget_gate.get("call_reason"),
+                                    feature_signature=sim_ai_budget_gate.get("feature_signature"),
+                                    profit_rate=f"{profit_rate:+.2f}",
+                                    peak_profit=f"{peak_profit:+.2f}",
+                                    held_sec=int(held_sec),
+                                    source_stage="ai_holding_review",
+                                    decision_authority="sim_observation_only",
+                                    runtime_effect="sim_ai_live_call_only",
+                                    budget_used_per_min=used_after_record,
+                                    budget_cap_per_min=sim_ai_budget_gate.get("budget_cap_per_min"),
+                                    ai_action=ai_decision.get("action_v2") or ai_decision.get("action"),
+                                    ai_score_raw=raw_ai_score,
+                                    ai_score_smoothed=current_ai_score,
+                                    ai_cache="hit" if ai_cache_hit else "miss",
+                                ),
+                            )
+                            persist_scalp_simulator_state()
 
                     # reversal_add: 수급 피처 저장 및 STAGNATION 상태 갱신
-                    if _rule_bool('REVERSAL_ADD_ENABLED', False):
+                    if (not sim_ai_budget_skip) and _rule_bool('REVERSAL_ADD_ENABLED', False):
                         if hasattr(ai_engine, '_extract_scalping_features') and recent_ticks:
                             try:
                                 feat = ai_engine._extract_scalping_features(ws_data, recent_ticks, recent_candles)
@@ -10240,30 +10782,31 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                             elif (not _ra_candidate_ok) and _ra_state == 'REVERSAL_CANDIDATE':
                                 _mutate_stock_state(stock, set_fields={'reversal_add_state': 'STAGNATION'})
 
-                    log_info(
-                        f"👁️ [AI 보유감시: {stock['name']}] 수익: {profit_rate:+.2f}% | "
-                        f"AI: {current_ai_score:.0f}점 | "
-                        f"갱신주기: {dynamic_max_cd}초 | AI캐시: {'HIT' if ai_cache_hit else 'MISS'}"
-                    )
-                    _log_holding_pipeline(
-                        stock,
-                        code,
-                        "ai_holding_review",
-                        profit_rate=f"{profit_rate:+.2f}",
-                        ai_score=f"{current_ai_score:.0f}",
-                        held_sec=int(held_time_min * 60),
-                        price_change=f"{price_change:.2f}",
-                        review_cd_sec=dynamic_max_cd,
-                        review_ms=int((time.perf_counter() - holding_ai_review_started) * 1000),
-                        ai_cache="hit" if ai_cache_hit else "miss",
-                        holding_review_trigger_reason="fast_reuse_bypass",
-                        **_build_ai_ops_log_fields(
-                            ai_decision,
-                            ai_score_raw=raw_ai_score,
-                            ai_score_after_bonus=current_ai_score,
-                            ai_cooldown_blocked=False,
-                        ),
-                    )
+                    if not sim_ai_budget_skip:
+                        log_info(
+                            f"👁️ [AI 보유감시: {stock['name']}] 수익: {profit_rate:+.2f}% | "
+                            f"AI: {current_ai_score:.0f}점 | "
+                            f"갱신주기: {dynamic_max_cd}초 | AI캐시: {'HIT' if ai_cache_hit else 'MISS'}"
+                        )
+                        _log_holding_pipeline(
+                            stock,
+                            code,
+                            "ai_holding_review",
+                            profit_rate=f"{profit_rate:+.2f}",
+                            ai_score=f"{current_ai_score:.0f}",
+                            held_sec=int(held_time_min * 60),
+                            price_change=f"{price_change:.2f}",
+                            review_cd_sec=dynamic_max_cd,
+                            review_ms=int((time.perf_counter() - holding_ai_review_started) * 1000),
+                            ai_cache="hit" if ai_cache_hit else "miss",
+                            holding_review_trigger_reason="fast_reuse_bypass",
+                            **_build_ai_ops_log_fields(
+                                ai_decision,
+                                ai_score_raw=raw_ai_score,
+                                ai_score_after_bonus=current_ai_score,
+                                ai_cooldown_blocked=False,
+                            ),
+                        )
 
             except Exception as e:
                 log_info(f"🚨 [보유 AI 감시 에러] {stock['name']}({code}): {e}")

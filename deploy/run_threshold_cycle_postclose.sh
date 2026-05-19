@@ -440,6 +440,13 @@ if [ "$RUN_OPENAI_WS_STABILITY_REPORT" = "true" ] || [ "$RUN_OPENAI_WS_STABILITY
     "openai_ws_stability_postclose"
 fi
 
+run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalp_sim_ai_deferred_review \
+  --date "$TARGET_DATE"
+wait_for_report_artifact \
+  "$PROJECT_DIR/data/report/scalp_sim_ai_deferred_review/scalp_sim_ai_deferred_review_${TARGET_DATE}.json" \
+  "$PROJECT_DIR/data/report/scalp_sim_ai_deferred_review/scalp_sim_ai_deferred_review_${TARGET_DATE}.md" \
+  "scalp_sim_ai_deferred_review"
+
 report_args=(--date "$TARGET_DATE")
 if [ "$SKIP_DB" = "true" ]; then
   report_args+=(--skip-db)

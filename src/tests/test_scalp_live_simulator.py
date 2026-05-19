@@ -37,6 +37,7 @@ def _reset_state(monkeypatch, tmp_path):
     monkeypatch.setattr(state_handlers, "LAST_LOG_TIMES", {})
     monkeypatch.setattr(state_handlers, "SCALP_SIM_STATE_PATH", tmp_path / "scalp_live_sim_state.json")
     monkeypatch.setattr(state_handlers, "record_sim_post_sell_candidate", lambda **kwargs: None)
+    state_handlers._SCALP_SIM_AI_CALL_TIMES.clear()
     captured_pipeline_events = []
     monkeypatch.setattr(
         state_handlers,
@@ -107,7 +108,8 @@ def test_scalp_simulator_arms_and_fills_without_real_buy_order(monkeypatch):
     assert sim_target["msg_audience"] == "ADMIN_ONLY"
     assert sim_target["buy_qty"] == 1
     assert sim_target["buy_price"] == 9_990
-    assert [stage for stage, _ in logs] == [
+    sim_stages = [stage for stage, _ in logs if stage.startswith("scalp_sim_")]
+    assert sim_stages == [
         "scalp_sim_entry_armed",
         "scalp_sim_buy_order_virtual_pending",
         "scalp_sim_buy_order_assumed_filled",
@@ -493,6 +495,71 @@ def test_scalp_simulator_includes_low_score_triggered_buy_signal():
     assert state_handlers.ACTIVE_TARGETS[0]["buy_price"] == 9_990
 
 
+def test_scalp_sim_candidate_window_expansion_arms_blocked_wait_candidate(monkeypatch):
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: pytest.fail("real buy order must not be called"),
+    )
+    rules = replace(
+        CONFIG,
+        SCALP_SIM_CANDIDATE_WINDOW_EXPANSION_ENABLED=True,
+        SCALP_SIM_CANDIDATE_WINDOW_MIN_SCORE=55,
+        SCALP_SIM_CANDIDATE_WINDOW_MAX_OPEN=10,
+        SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY=10,
+    )
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+
+    stock = {
+        "id": 101,
+        "name": "WAIT_TEST",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "position_tag": "SCALP_BASE",
+        "target_buy_price": 10_000,
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_reason": "below entry threshold",
+    }
+    runtime = {
+        "strategy": "SCALPING",
+        "is_trigger": False,
+        "now_ts": 1_000.0,
+        "current_ai_score": 61.0,
+        "latency_state": "DANGER",
+    }
+    ai_decision = {"action": "WAIT", "score": 61, "reason": "below entry threshold"}
+
+    assert state_handlers._maybe_arm_scalp_sim_candidate_window(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 9_990, "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]}},
+        runtime=runtime,
+        ai_decision=ai_decision,
+        ai_score=61,
+        source_stage="blocked_ai_score",
+        blocked_reason="below_buy_score_threshold",
+    )
+
+    assert len(state_handlers.ACTIVE_TARGETS) == 1
+    sim_target = state_handlers.ACTIVE_TARGETS[0]
+    assert sim_target["status"] == "HOLDING"
+    assert sim_target["actual_order_submitted"] is False
+    assert sim_target["broker_order_forbidden"] is True
+    assert sim_target["scalp_sim_candidate_window_expansion"] is True
+    assert sim_target["scalp_sim_candidate_window_source_stage"] == "blocked_ai_score"
+    assert sim_target["scalp_sim_candidate_window_original_action"] == "WAIT"
+    armed = next(fields for stage, fields in logs if stage == "scalp_sim_entry_armed")
+    assert armed["scalp_sim_candidate_window_expansion"] is True
+    assert armed["decision_authority"] == "sim_observation_only"
+    assert armed["would_real_submit"] is False
+
+
 def test_scalp_simulator_preset_tp_sell_does_not_call_real_sell(monkeypatch):
     holding_logs = []
     monkeypatch.setattr(
@@ -849,6 +916,132 @@ def test_scalp_simulator_threshold_stages_are_included():
     assert threshold_family_for_stage("scalp_sim_entry_submit_revalidation_block") == "pre_submit_price_guard"
     assert threshold_family_for_stage("scalp_sim_buy_order_assumed_filled") == "pre_submit_price_guard"
     assert threshold_family_for_stage("scalp_sim_sell_order_assumed_filled") == "statistical_action_weight"
+    assert threshold_family_for_stage("scalp_sim_ai_holding_live_call") == "scalp_sim_ai_budget_manager"
+    assert threshold_family_for_stage("scalp_sim_ai_holding_reuse") == "scalp_sim_ai_budget_manager"
+    assert threshold_family_for_stage("scalp_sim_ai_holding_deferred") == "scalp_sim_ai_budget_manager"
+    assert threshold_family_for_stage("sim_ai_budget_exhausted") == "scalp_sim_ai_budget_manager"
+    assert threshold_family_for_stage("sim_ai_critical_bypass") == "scalp_sim_ai_budget_manager"
+
+
+def _sim_budget_rules(**overrides):
+    values = {
+        "SCALP_SIM_AI_BUDGET_ENABLED": True,
+        "SCALP_SIM_AI_MAX_CALLS_PER_MIN": 10,
+        "SCALP_SIM_AI_HOLDING_MIN_COOLDOWN_SEC": 90,
+        "SCALP_SIM_AI_HOLDING_CRITICAL_COOLDOWN_SEC": 30,
+        "SCALP_SIM_AI_HOLDING_MAX_COOLDOWN_SEC": 180,
+        "SCALP_SIM_AI_DEFERRED_REVIEW_ENABLED": True,
+    }
+    values.update(overrides)
+    return replace(CONFIG, **values)
+
+
+def _sim_holding_stock(**overrides):
+    stock = {
+        "name": "SIM",
+        "strategy": "SCALPING",
+        "simulation_book": "scalp_ai_buy_all",
+        "scalp_live_simulator": True,
+        "actual_order_submitted": False,
+        "scalp_sim_ai_last_action": "HOLD",
+        "scalp_sim_ai_last_score": 62,
+        "scalp_sim_ai_last_live_call_at": 1000.0,
+    }
+    stock.update(overrides)
+    return stock
+
+
+def test_scalp_sim_ai_budget_targets_sim_only_positions(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", _sim_budget_rules())
+
+    assert state_handlers._is_scalp_sim_ai_budget_target(_sim_holding_stock(), "SCALPING")
+    assert not state_handlers._is_scalp_sim_ai_budget_target(
+        {"strategy": "SCALPING", "actual_order_submitted": True},
+        "SCALPING",
+    )
+    assert not state_handlers._is_scalp_sim_ai_budget_target(
+        {"strategy": "SCALPING", "simulation_book": "scalp_ai_buy_all", "actual_order_submitted": True},
+        "SCALPING",
+    )
+
+
+def test_scalp_sim_ai_budget_reuses_unchanged_signature(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", _sim_budget_rules())
+    stock = _sim_holding_stock()
+    signature = state_handlers._build_scalp_sim_ai_feature_signature(
+        stock,
+        profit_rate=0.12,
+        peak_profit=0.2,
+        current_ai_score=62,
+        market_signature=("flat",),
+        is_critical_zone=False,
+        near_ai_exit_band=False,
+        near_safe_profit_band=False,
+    )
+    stock["scalp_sim_ai_last_feature_signature"] = signature
+
+    decision = state_handlers._resolve_scalp_sim_ai_budget_decision(
+        stock,
+        strategy="SCALPING",
+        now_ts=1030.0,
+        profit_rate=0.12,
+        peak_profit=0.2,
+        held_sec=45,
+        current_ai_score=62,
+        market_signature=("flat",),
+        is_critical_zone=False,
+        near_ai_exit_band=False,
+        near_safe_profit_band=False,
+    )
+
+    assert decision["target"] is True
+    assert decision["action"] == "reuse"
+    assert decision["reuse_reason"] == "unchanged_feature_signature"
+
+
+def test_scalp_sim_ai_budget_defers_when_cap_exhausted(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", _sim_budget_rules(SCALP_SIM_AI_MAX_CALLS_PER_MIN=1))
+    state_handlers._SCALP_SIM_AI_CALL_TIMES[:] = [1020.0]
+
+    decision = state_handlers._resolve_scalp_sim_ai_budget_decision(
+        _sim_holding_stock(scalp_sim_ai_last_feature_signature="old"),
+        strategy="SCALPING",
+        now_ts=1030.0,
+        profit_rate=0.15,
+        peak_profit=0.2,
+        held_sec=45,
+        current_ai_score=62,
+        market_signature=("changed",),
+        is_critical_zone=False,
+        near_ai_exit_band=False,
+        near_safe_profit_band=False,
+    )
+
+    assert decision["action"] == "defer"
+    assert decision["defer_reason"] == "sim_ai_budget_exhausted"
+
+
+def test_scalp_sim_ai_budget_critical_bypasses_cap(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", _sim_budget_rules(SCALP_SIM_AI_MAX_CALLS_PER_MIN=1))
+    state_handlers._SCALP_SIM_AI_CALL_TIMES[:] = [1020.0]
+
+    decision = state_handlers._resolve_scalp_sim_ai_budget_decision(
+        _sim_holding_stock(scalp_sim_ai_last_feature_signature="old"),
+        strategy="SCALPING",
+        now_ts=1030.0,
+        profit_rate=-0.35,
+        peak_profit=0.1,
+        held_sec=45,
+        current_ai_score=52,
+        market_signature=("changed",),
+        is_critical_zone=True,
+        near_ai_exit_band=True,
+        near_safe_profit_band=False,
+    )
+
+    assert decision["action"] == "call"
+    assert decision["critical_bypass"] is True
+    assert decision["call_reason"] == "sim_ai_critical_bypass"
 
 
 def test_ws_prune_retains_active_scalp_simulator_consumer(monkeypatch):

@@ -414,6 +414,13 @@ def build_report(target_date: str) -> dict:
         "latest_event_at": latest,
         "synthetic_excluded": synthetic_excluded,
         "sim_counts": dict(sorted(sim_counts.items())),
+        "sim_ai_budget_counts": {
+            "scalp_sim_ai_holding_live_call": int(sim_counts.get("scalp_sim_ai_holding_live_call", 0)),
+            "scalp_sim_ai_holding_reuse": int(sim_counts.get("scalp_sim_ai_holding_reuse", 0)),
+            "scalp_sim_ai_holding_deferred": int(sim_counts.get("scalp_sim_ai_holding_deferred", 0)),
+            "sim_ai_budget_exhausted": int(sim_counts.get("sim_ai_budget_exhausted", 0)),
+            "sim_ai_critical_bypass": int(sim_counts.get("sim_ai_critical_bypass", 0)),
+        },
         "metrics": _metrics(profit_values),
         "scale_in_analysis": scale_in_analysis,
         "initial_qty_provenance": initial_qty_provenance,
@@ -462,6 +469,16 @@ def write_outputs(report: dict, output_dir: Path) -> tuple[Path, Path]:
         "## Sim Stage Counts",
         "",
     ]
+    lines.extend(
+        [
+            f"- ai_live_call: `{(report.get('sim_ai_budget_counts') or {}).get('scalp_sim_ai_holding_live_call', 0)}`",
+            f"- ai_reuse: `{(report.get('sim_ai_budget_counts') or {}).get('scalp_sim_ai_holding_reuse', 0)}`",
+            f"- ai_deferred: `{(report.get('sim_ai_budget_counts') or {}).get('scalp_sim_ai_holding_deferred', 0)}`",
+            f"- ai_budget_exhausted: `{(report.get('sim_ai_budget_counts') or {}).get('sim_ai_budget_exhausted', 0)}`",
+            f"- ai_critical_bypass: `{(report.get('sim_ai_budget_counts') or {}).get('sim_ai_critical_bypass', 0)}`",
+            "",
+        ]
+    )
     for stage, count in report["sim_counts"].items():
         lines.append(f"- `{stage}`: `{count}`")
     scale = report.get("scale_in_analysis") or {}

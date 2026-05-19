@@ -127,6 +127,17 @@ class TradingConfig:
     SCALP_LIVE_SIMULATOR_FILL_POLICY: str = "signal_inclusive_best_ask_v1"
     SCALP_LIVE_SIMULATOR_QTY: int = 0  # 0 이하는 SIM_VIRTUAL_BUDGET_KRW 기준 실주문 동적수량 산식 사용
     SCALP_LIVE_SIMULATOR_ENTRY_TIMEOUT_SEC: int = 90  # deprecated: BUY signal inclusion no longer expires on quote touch
+    SCALP_SIM_CANDIDATE_WINDOW_EXPANSION_ENABLED: bool = False
+    SCALP_SIM_CANDIDATE_WINDOW_MIN_SCORE: int = 55
+    SCALP_SIM_CANDIDATE_WINDOW_MAX_SCORE: int = 100
+    SCALP_SIM_CANDIDATE_WINDOW_MAX_OPEN: int = 20
+    SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY: int = 80
+    SCALP_SIM_AI_BUDGET_ENABLED: bool = False
+    SCALP_SIM_AI_MAX_CALLS_PER_MIN: int = 10
+    SCALP_SIM_AI_HOLDING_MIN_COOLDOWN_SEC: int = 90
+    SCALP_SIM_AI_HOLDING_CRITICAL_COOLDOWN_SEC: int = 30
+    SCALP_SIM_AI_HOLDING_MAX_COOLDOWN_SEC: int = 180
+    SCALP_SIM_AI_DEFERRED_REVIEW_ENABLED: bool = True
     SIM_VIRTUAL_BUDGET_KRW: int = 10_000_000  # sim/probe/counterfactual 전용 가상 주문가능금액. 실계좌 예산과 분리
 
     # [매매 비중 설정] 전략별 주문 가능 현금 대비 1회 매수 투입 비율
@@ -1405,6 +1416,35 @@ def _build_trading_rules() -> TradingConfig:
     env_scalp_live_simulator_owner = _env_str("KORSTOCKSCAN_SCALP_LIVE_SIMULATOR_OWNER")
     env_scalp_live_simulator_fill_policy = _env_str("KORSTOCKSCAN_SCALP_LIVE_SIMULATOR_FILL_POLICY")
     env_scalp_live_simulator_qty = _env_int("KORSTOCKSCAN_SCALP_LIVE_SIMULATOR_QTY")
+    env_scalp_sim_candidate_window_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_EXPANSION_ENABLED"
+    )
+    env_scalp_sim_candidate_window_min_score = _env_int(
+        "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_MIN_SCORE"
+    )
+    env_scalp_sim_candidate_window_max_score = _env_int(
+        "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_MAX_SCORE"
+    )
+    env_scalp_sim_candidate_window_max_open = _env_int(
+        "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_MAX_OPEN"
+    )
+    env_scalp_sim_candidate_window_max_daily = _env_int(
+        "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY"
+    )
+    env_scalp_sim_ai_budget_enabled = _env_bool("KORSTOCKSCAN_SCALP_SIM_AI_BUDGET_ENABLED")
+    env_scalp_sim_ai_max_calls_per_min = _env_int("KORSTOCKSCAN_SCALP_SIM_AI_MAX_CALLS_PER_MIN")
+    env_scalp_sim_ai_holding_min_cooldown = _env_int(
+        "KORSTOCKSCAN_SCALP_SIM_AI_HOLDING_MIN_COOLDOWN_SEC"
+    )
+    env_scalp_sim_ai_holding_critical_cooldown = _env_int(
+        "KORSTOCKSCAN_SCALP_SIM_AI_HOLDING_CRITICAL_COOLDOWN_SEC"
+    )
+    env_scalp_sim_ai_holding_max_cooldown = _env_int(
+        "KORSTOCKSCAN_SCALP_SIM_AI_HOLDING_MAX_COOLDOWN_SEC"
+    )
+    env_scalp_sim_ai_deferred_review_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_SIM_AI_DEFERRED_REVIEW_ENABLED"
+    )
     env_sim_virtual_budget_krw = _env_int("KORSTOCKSCAN_SIM_VIRTUAL_BUDGET_KRW")
     if env_sim_virtual_budget_krw is None:
         env_sim_virtual_budget_krw = _env_int("KORSTOCKSCAN_SIM_VIRTUAL_NOTIONAL_KRW")
@@ -1494,6 +1534,17 @@ def _build_trading_rules() -> TradingConfig:
         or env_scalp_live_simulator_owner is not None
         or env_scalp_live_simulator_fill_policy is not None
         or env_scalp_live_simulator_qty is not None
+        or env_scalp_sim_candidate_window_enabled is not None
+        or env_scalp_sim_candidate_window_min_score is not None
+        or env_scalp_sim_candidate_window_max_score is not None
+        or env_scalp_sim_candidate_window_max_open is not None
+        or env_scalp_sim_candidate_window_max_daily is not None
+        or env_scalp_sim_ai_budget_enabled is not None
+        or env_scalp_sim_ai_max_calls_per_min is not None
+        or env_scalp_sim_ai_holding_min_cooldown is not None
+        or env_scalp_sim_ai_holding_critical_cooldown is not None
+        or env_scalp_sim_ai_holding_max_cooldown is not None
+        or env_scalp_sim_ai_deferred_review_enabled is not None
         or env_sim_virtual_budget_krw is not None
         or env_scalp_live_simulator_timeout is not None
         or env_stat_action_snapshot_enabled is not None
@@ -1648,6 +1699,39 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_LIVE_SIMULATOR_QTY=env_scalp_live_simulator_qty
             if env_scalp_live_simulator_qty is not None
             else config.SCALP_LIVE_SIMULATOR_QTY,
+            SCALP_SIM_CANDIDATE_WINDOW_EXPANSION_ENABLED=env_scalp_sim_candidate_window_enabled
+            if env_scalp_sim_candidate_window_enabled is not None
+            else config.SCALP_SIM_CANDIDATE_WINDOW_EXPANSION_ENABLED,
+            SCALP_SIM_CANDIDATE_WINDOW_MIN_SCORE=env_scalp_sim_candidate_window_min_score
+            if env_scalp_sim_candidate_window_min_score is not None
+            else config.SCALP_SIM_CANDIDATE_WINDOW_MIN_SCORE,
+            SCALP_SIM_CANDIDATE_WINDOW_MAX_SCORE=env_scalp_sim_candidate_window_max_score
+            if env_scalp_sim_candidate_window_max_score is not None
+            else config.SCALP_SIM_CANDIDATE_WINDOW_MAX_SCORE,
+            SCALP_SIM_CANDIDATE_WINDOW_MAX_OPEN=env_scalp_sim_candidate_window_max_open
+            if env_scalp_sim_candidate_window_max_open is not None
+            else config.SCALP_SIM_CANDIDATE_WINDOW_MAX_OPEN,
+            SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY=env_scalp_sim_candidate_window_max_daily
+            if env_scalp_sim_candidate_window_max_daily is not None
+            else config.SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY,
+            SCALP_SIM_AI_BUDGET_ENABLED=env_scalp_sim_ai_budget_enabled
+            if env_scalp_sim_ai_budget_enabled is not None
+            else config.SCALP_SIM_AI_BUDGET_ENABLED,
+            SCALP_SIM_AI_MAX_CALLS_PER_MIN=env_scalp_sim_ai_max_calls_per_min
+            if env_scalp_sim_ai_max_calls_per_min is not None
+            else config.SCALP_SIM_AI_MAX_CALLS_PER_MIN,
+            SCALP_SIM_AI_HOLDING_MIN_COOLDOWN_SEC=env_scalp_sim_ai_holding_min_cooldown
+            if env_scalp_sim_ai_holding_min_cooldown is not None
+            else config.SCALP_SIM_AI_HOLDING_MIN_COOLDOWN_SEC,
+            SCALP_SIM_AI_HOLDING_CRITICAL_COOLDOWN_SEC=env_scalp_sim_ai_holding_critical_cooldown
+            if env_scalp_sim_ai_holding_critical_cooldown is not None
+            else config.SCALP_SIM_AI_HOLDING_CRITICAL_COOLDOWN_SEC,
+            SCALP_SIM_AI_HOLDING_MAX_COOLDOWN_SEC=env_scalp_sim_ai_holding_max_cooldown
+            if env_scalp_sim_ai_holding_max_cooldown is not None
+            else config.SCALP_SIM_AI_HOLDING_MAX_COOLDOWN_SEC,
+            SCALP_SIM_AI_DEFERRED_REVIEW_ENABLED=env_scalp_sim_ai_deferred_review_enabled
+            if env_scalp_sim_ai_deferred_review_enabled is not None
+            else config.SCALP_SIM_AI_DEFERRED_REVIEW_ENABLED,
             SIM_VIRTUAL_BUDGET_KRW=env_sim_virtual_budget_krw
             if env_sim_virtual_budget_krw is not None
             else config.SIM_VIRTUAL_BUDGET_KRW,

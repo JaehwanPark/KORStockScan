@@ -2749,6 +2749,11 @@ def _scalp_simulator_event_summary(
         "entry_submit_revalidation_block": int(stage_counts.get("scalp_sim_entry_submit_revalidation_block", 0)),
         "scale_in_filled": int(stage_counts.get("scalp_sim_scale_in_order_assumed_filled", 0)),
         "scale_in_unfilled": int(stage_counts.get("scalp_sim_scale_in_order_unfilled", 0)),
+        "scalp_sim_ai_holding_live_call": int(stage_counts.get("scalp_sim_ai_holding_live_call", 0)),
+        "scalp_sim_ai_holding_reuse": int(stage_counts.get("scalp_sim_ai_holding_reuse", 0)),
+        "scalp_sim_ai_holding_deferred": int(stage_counts.get("scalp_sim_ai_holding_deferred", 0)),
+        "sim_ai_budget_exhausted": int(stage_counts.get("sim_ai_budget_exhausted", 0)),
+        "sim_ai_critical_bypass": int(stage_counts.get("sim_ai_critical_bypass", 0)),
         "completed_profit_summary": _completed_profit_summary(completed_rows or []),
         "post_sell_join": _scalp_simulator_post_sell_join_summary(
             target_date=target_date,
