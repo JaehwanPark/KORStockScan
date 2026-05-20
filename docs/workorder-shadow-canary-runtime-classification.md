@@ -380,7 +380,7 @@ cohort 분류 공통 규칙은 아래로 고정한다.
 | `statistical_action_weight` | `observe-only` | 가격대/거래량/시간대별 `exit_only`/`avg_down_wait`/`pyramid_wait` 성과 비교 | sample-ready가 되면 threshold weight 입력으로 연결하되, 직접 live owner로 승격하지 않는다. 단순 평균이 아니라 `confidence_adjusted_score`와 `policy_hint`로만 해석하고, live 적용은 별도 단일축 canary와 rollback guard가 생길 때만 가능 | `threshold_cycle`, `2026-05-06 checklist` |
 | `ai_cache_hit_miss` | `observe-only` | gatekeeper/holding AI cache hit vs miss 영향도 관찰 | structured join 필드가 `submitted/full/partial/COMPLETED`와 안정적으로 연결될 때까지 live go/no-go 입력 금지 | `2026-04-29 checklist` |
 | `execution_receipt_binding_quality` | `observe-only` | WS 실제체결과 active order binding 정합성 관찰 | BUY/SELL `EXEC_IGNORED` 원인이 order number race인지 visibility 문제인지 닫힐 때까지 EV 판정 전제 품질축으로 유지 | `2026-04-29`, `2026-04-30 checklist` |
-| `gemini_schema_registry_flag_off` | `observe-only` | Gemini 6 endpoint response schema registry의 flag-off contract 관찰 | `holding_exit_v1/eod_top5_v1` contract gap이 닫히고 live enable 항목이 별도 승인되기 전까지 flag-off 유지 | `2026-04-29`, `2026-04-30 checklist` |
+| `gemini_schema_registry_flag_off` | `observe-only` | Gemini response schema registry의 flag-off contract 관찰 | `holding_exit_v1` contract gap이 닫히고 live enable 항목이 별도 승인되기 전까지 flag-off 유지. `eod_top5_v1`은 2026-05-21 EOD TOP5 기능 제거로 registry 범위에서 제외 | `2026-04-29`, `2026-04-30 checklist`, `2026-05-21 cleanup` |
 | `deepseek_retry_acceptance_flag_off` | `observe-only` | DeepSeek retry/backoff acceptance snapshot 관찰 | `api_call_lock`, retry log visibility, live-sensitive sleep guard가 문서/테스트로 닫히기 전까지 live enable 금지 | `2026-04-29`, `2026-04-30 checklist` |
 | `openai_responses_ws_shadow_flag_off` | `observe-only` | OpenAI Responses WS transport parity/load/timeout/http-fallback 관찰 | `request_id mismatch=0`, `late_discard=0`, `http fallback<=2%`, `parse_fail<=0.5%`가 shadow 기준으로 닫히고 별도 entry transport canary가 승인되기 전까지 flag-off 유지 | `2026-05-04 checklist` |
 | `swing_live_order_dry_run` | `observe-only` | 스윙 선정-진입-보유-추가매수-청산 live lifecycle을 실주문 없이 관찰 | `swing_sim_*`, `actual_order_submitted=false`, closed lifecycle이 `swing_runtime_approval`과 daily EV combined 입력으로 안정 연결될 때 유지. 실주문 전환과 별개 | `2026-05-11 checklist`, `time-based runbook` |
@@ -1053,7 +1053,7 @@ inventory 운영 규칙은 아래로 고정한다.
 - 코드 유지비: `Medium`
 - 향후 재개 가능성: `Medium`
 - 근거:
-  1. Gemini `holding_exit_v1` enum/normalization contract와 `eod_top5_v1` required field gap은 live enable 전 필수 정합성 항목으로 남아 있다.
+  1. Gemini `holding_exit_v1` enum/normalization contract는 live enable 전 필수 정합성 항목으로 남아 있다. `eod_top5_v1`은 2026-05-21 EOD TOP5 기능 제거로 더 이상 live enable 후보가 아니다.
   2. DeepSeek context-aware backoff guard는 준비됐지만, retry acceptance 문서화와 로그 확인 전에는 enable 불가다.
 - 다음 액션:
   1. flag 기본값 OFF를 유지한다.

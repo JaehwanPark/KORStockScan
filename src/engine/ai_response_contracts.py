@@ -103,32 +103,6 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
             "warning",
         ],
     },
-    "eod_top5_v1": {
-        "type": "object",
-        "properties": {
-            "market_summary": {"type": "string"},
-            "one_point_lesson": {"type": "string"},
-            "top5": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "rank": {"type": "integer"},
-                        "stock_name": {"type": "string"},
-                        "stock_code": {"type": "string"},
-                        "close_price": {"type": "integer"},
-                        "reason": {"type": "string"},
-                        "entry_plan": {"type": "string"},
-                        "target_price_guide": {"type": "string"},
-                        "stop_price_guide": {"type": "string"},
-                        "confidence": {"type": "number"},
-                    },
-                    "required": ["rank", "stock_name", "stock_code", "close_price", "reason"],
-                },
-            },
-        },
-        "required": ["market_summary", "one_point_lesson", "top5"],
-    },
     "threshold_ai_correction_v1": {
         "type": "object",
         "additionalProperties": False,

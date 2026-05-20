@@ -51,6 +51,13 @@
 
 ## Runbook 운영 확인 완료 기록
 
+- `EODTop5FeatureRemoval0521` 내일의 주도주 TOP5 기능 제거
+  - Source: [ai_engine.py](/home/ubuntu/KORStockScan/src/engine/ai_engine.py), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py), [ai_engine_deepseek.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_deepseek.py), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 판정: `removed_no_ai_call_path`
+  - 근거: `src/scanners/eod_analyzer.py` 진입점을 삭제하고, `KORSTOCKSCAN_EOD_TOP5_ENABLED`, `generate_eod_tomorrow_*`, `EOD_TOMORROW_LEADER_*`, `eod_top5_v1` schema/test/live smoke case를 제거했다. 스윙 sim/approval 입력에서 `EOD_TOP5`/`DB_EOD_TOP5` 선택 모드도 제외했다.
+  - 금지: 이 제거를 threshold daily EV, 스윙 dry-run/lifecycle, final ensemble scanner, update_kospi, 실주문 runtime guard 변경 근거로 쓰지 않는다.
+  - 다음 액션: 재개하려면 신규 workorder, 신규 acceptance schema, cron/detector/runbook 복구, AI 비용 guard를 별도 변경 세트로 열어야 한다.
+
 - `PreopenAutomationHealthCheck20260521` 장전 자동화체인 상태 확인
   - Source: [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md) `장전 확인 절차`
   - 판정: `pass`

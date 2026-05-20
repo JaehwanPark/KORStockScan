@@ -23,7 +23,6 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.engine.ai_engine import (
     ENHANCED_MARKET_ANALYSIS_PROMPT,
-    EOD_TOMORROW_LEADER_JSON_PROMPT,
     REALTIME_ANALYSIS_PROMPT_DUAL,
     REALTIME_ANALYSIS_PROMPT_SCALP,
     REALTIME_ANALYSIS_PROMPT_SWING,
@@ -107,15 +106,6 @@ def validate_market_briefing(text):
             "🎯 **[행동 지침]**",
         ],
     )
-
-
-def validate_eod_json(payload):
-    assert isinstance(payload["market_summary"], str) and payload["market_summary"].strip()
-    assert isinstance(payload["one_point_lesson"], str) and payload["one_point_lesson"].strip()
-    assert isinstance(payload["top5"], list) and payload["top5"]
-    top1 = payload["top5"][0]
-    assert isinstance(top1["stock_name"], str) and top1["stock_name"].strip()
-    assert isinstance(top1["stock_code"], str) and len(top1["stock_code"]) == 6
 
 
 LIVE_CASES = [
@@ -288,24 +278,6 @@ LIVE_CASES = [
         "require_json": False,
         "use_google_search": True,
         "validator": validate_market_briefing,
-    },
-    {
-        "name": "eod_top5_json",
-        "model": TRADING_RULES.AI_MODEL_TIER3,
-        "prompt": EOD_TOMORROW_LEADER_JSON_PROMPT,
-        "user_input": """🚨 [1차 필터링 완료: 내일의 주도주 후보군 15선]
-
-1. 테스트반도체(005930): 종가 82,100원, 외인 +210,000주, 기관 +55,000주, 거래량 20일 평균의 2.1배, 20일 박스 상단 돌파 직전
-2. 테스트전력(267260): 종가 54,300원, 외인 +44,000주, 기관 +18,000주, 눌림 후 재상승, 변동성 축소
-3. 테스트조선(010140): 종가 48,700원, 외인 +21,000주, 기관 +14,000주, 신고가 2% 아래, 거래량 증가
-4. 테스트로봇(001234): 종가 31,250원, 외인 +12,000주, 기관 +6,000주, 5일선/20일선 정배열, 거래량 증가
-5. 테스트바이오(123456): 종가 27,800원, 외인 -3,000주, 기관 +1,000주, 급등 후 과열 우려
-6. 테스트금융(024110): 종가 73,500원, 외인 +33,000주, 기관 +8,000주, 장기 박스 상단 근접
-7. 테스트2차전지(654321): 종가 41,900원, 외인 +8,000주, 기관 +2,000주, 낙폭과대 반등
-8. 테스트AI(777777): 종가 18,450원, 외인 +52,000주, 기관 +11,000주, 거래량 급증, 변동성 큼""",
-        "require_json": True,
-        "use_google_search": True,
-        "validator": validate_eod_json,
     },
 ]
 

@@ -120,7 +120,7 @@ res = _get_api_session().post(url, headers={**base_headers, "Authorization": f"B
 
 | 항목 | 내용 |
 |------|------|
-| **파일** | `src/utils/kiwoom_utils.py`, `src/engine/kiwoom_websocket.py`, `src/notify/telegram_manager.py`, `src/engine/daily_threshold_cycle_report.py`, `src/engine/notify_panic_state_transition.py`, `src/engine/notify_error_detection_admin.py`, `src/engine/notify_monitor_snapshot_admin.py`, `src/engine/ipo_listing_day_runner.py`, `src/engine/macro_briefing_complete.py`, `src/scanners/eod_analyzer.py`, `src/scanners/final_ensemble_scanner.py` 등 |
+| **파일** | `src/utils/kiwoom_utils.py`, `src/engine/kiwoom_websocket.py`, `src/notify/telegram_manager.py`, `src/engine/daily_threshold_cycle_report.py`, `src/engine/notify_panic_state_transition.py`, `src/engine/notify_error_detection_admin.py`, `src/engine/notify_monitor_snapshot_admin.py`, `src/engine/ipo_listing_day_runner.py`, `src/engine/macro_briefing_complete.py`, `src/scanners/final_ensemble_scanner.py` 등 |
 | **패턴** | `CONFIG_PATH if CONFIG_PATH.exists() else DEV_PATH` → `open()` → `json.load()` |
 | **문제** | 동일 config JSON을 14개 모듈이 각각 stat→open→read→parse. 봇 기동 시 5회+ 중복 I/O |
 | **영향** | **HIGH** — startup 오버헤드. 각 모듈 초기화 지연 누적 |

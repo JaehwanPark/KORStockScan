@@ -696,8 +696,7 @@ def _recommendation_db_load_summary(
     elif db_rows > 0:
         reason = "loaded"
     elif selection_modes and not any(
-        str(mode).upper() in {"SELECTED", "META_V2", "META_FALLBACK", "EOD_TOP5"}
-        for mode in selection_modes
+        str(mode).upper() in {"SELECTED", "META_V2", "META_FALLBACK"} for mode in selection_modes
     ):
         reason = "diagnostic_only_recommendation_rows"
     else:

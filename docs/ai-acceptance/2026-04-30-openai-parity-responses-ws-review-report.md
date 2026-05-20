@@ -21,7 +21,7 @@
   - `overnight_v1`
   - `condition_entry_v1`
   - `condition_exit_v1`
-  - `eod_top5_v1`
+  - `eod_top5_v1`은 2026-05-21 EOD TOP5 제거로 제외
 
 ### 2.2 Gemini parity 정렬
 
@@ -45,7 +45,7 @@
 - `evaluate_scalping_overnight_decision` -> `overnight_v1`
 - `evaluate_condition_entry` -> `condition_entry_v1`
 - `evaluate_condition_exit` -> `condition_exit_v1`
-- `generate_eod_tomorrow_bundle` -> `eod_top5_v1`
+- `generate_eod_tomorrow_bundle` -> removed by 2026-05-21 EOD TOP5 cleanup
 
 ### 2.5 운영 flag / env override 추가
 

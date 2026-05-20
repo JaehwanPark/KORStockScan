@@ -58,7 +58,7 @@ Source: [workorder_gemini_engine_review.md](/home/ubuntu/KORStockScan/docs/archi
 | `overnight` | `action/confidence/reason/risk_note` | `overnight_v1` | method-local conservative fallback `SELL_TODAY` | overnight JSON contract + fallback preservation | flag-off wired |
 | `condition_entry` | `decision/confidence/order_type/position_size_ratio/invalidation_price/reasons/risks` | `condition_entry_v1` | method-local `SKIP` fallback | contract test + fallback list fields | flag-off wired |
 | `condition_exit` | `decision/confidence/trim_ratio/new_stop_price/reason_primary/warning` | `condition_exit_v1` | method-local `HOLD` fallback | contract test + fallback text fields | flag-off wired |
-| `eod_top5` | `market_summary/one_point_lesson/top5[]` | `eod_top5_v1` | method-local normalized bundle + empty report fallback | top5 item normalization, stock_code/close_price coercion | flag-off wired |
+| `eod_top5` | removed | removed | removed by 2026-05-21 EOD TOP5 cleanup | no longer an acceptance endpoint | removed |
 
 ## 5. Acceptance
 

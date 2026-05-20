@@ -24,7 +24,7 @@ from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
 
 REPORT_DIR = Path(DATA_DIR) / "report" / "swing_daily_simulation"
-LIVE_SELECTION_MODES = {"SELECTED", "META_V2", "META_FALLBACK", "EOD_TOP5", ""}
+LIVE_SELECTION_MODES = {"SELECTED", "META_V2", "META_FALLBACK", ""}
 DIAGNOSTIC_SELECTION_MODES = {"EMPTY", "FALLBACK_DIAGNOSTIC", "DIAGNOSTIC_ONLY"}
 
 
@@ -171,9 +171,7 @@ def fetch_db_swing_recommendations(
             "name": df["stock_name"].fillna("").astype(str),
             "close": pd.to_numeric(df["buy_price"], errors="coerce").fillna(0),
             "strategy": df["strategy"].fillna("KOSPI_ML").astype(str),
-            "selection_mode": df["position_tag"].map(
-                lambda tag: "DB_EOD_TOP5" if str(tag).upper() == "EOD_TOP5" else "DB_FINAL_ENSEMBLE"
-            ),
+            "selection_mode": "DB_FINAL_ENSEMBLE",
             "position_tag": df["position_tag"],
             "trade_type": df["trade_type"].fillna("").astype(str),
             "prob": pd.to_numeric(df["prob"], errors="coerce").fillna(0),

@@ -173,7 +173,8 @@ def test_gemini_response_schema_registry_covers_required_endpoints():
         "overnight_v1",
         "condition_entry_v1",
         "condition_exit_v1",
-        "eod_top5_v1",
+        "threshold_ai_correction_v1",
+        "lifecycle_ai_context_v1",
     }
 
 

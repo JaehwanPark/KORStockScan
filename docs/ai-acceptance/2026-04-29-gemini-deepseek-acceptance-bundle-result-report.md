@@ -39,7 +39,7 @@
 
 ## 3. 코드리뷰 포인트
 
-1. [필수] Gemini registry shape가 현재 normalization contract와 충돌하지 않는지 본다. 특히 `holding_exit_v1`의 `action enum`, `condition_*`의 필수 필드, `eod_top5_v1`의 item required 최소범위를 parser와 정합성.
+1. [필수] Gemini registry shape가 현재 normalization contract와 충돌하지 않는지 본다. 특히 `holding_exit_v1`의 `action enum`, `condition_*`의 필수 필드를 parser와 정합성. `eod_top5_v1`은 2026-05-21 EOD TOP5 제거로 검토 범위에서 제외한다.
 2. [권장] `_call_gemini_safe()`의 `response_schema` 주입이 `require_json=True` 경로에만 한정되는지, prose/text path에 새 부작용이 없는지 본다.
 3. [권장] DeepSeek acceptance snapshot이 retry 로그에만 붙고 일반 성공 경로에는 노이즈를 추가하지 않는지 본다.
 4. [권장] `live_sensitive` 판단이 `tier3 != report/eod`라는 가정에 묶여 있으므로, 추후 model routing 변경 시 acceptance snapshot 의미가 유지되는지 본다.

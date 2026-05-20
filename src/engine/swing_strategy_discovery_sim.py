@@ -299,7 +299,7 @@ def _selection_mode(row: dict[str, Any]) -> str:
 
 def _is_legacy_selected(row: dict[str, Any]) -> bool:
     mode = _selection_mode(row)
-    return mode in {"SELECTED", "META_V2", "DB_FINAL_ENSEMBLE", "DB_EOD_TOP5"} or bool(row.get("selected_by_legacy_model"))
+    return mode in {"SELECTED", "META_V2", "DB_FINAL_ENSEMBLE"} or bool(row.get("selected_by_legacy_model"))
 
 
 def _pick_type(row: dict[str, Any]) -> str:

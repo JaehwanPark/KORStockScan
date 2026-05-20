@@ -1025,7 +1025,7 @@ def test_realtime_report_and_overnight_decision_use_tier2_model(monkeypatch):
     assert used_models == ["tier2-model", "tier2-model"]
 
 
-def test_scanner_briefing_and_eod_bundle_use_tier3_model(monkeypatch):
+def test_scanner_briefing_uses_tier3_model(monkeypatch):
     engine = _build_engine()
     used_models = []
 
@@ -1033,30 +1033,10 @@ def test_scanner_briefing_and_eod_bundle_use_tier3_model(monkeypatch):
 
     def _fake_call(*args, **kwargs):
         used_models.append(kwargs.get("model_override"))
-        if kwargs.get("context_name") == "종가베팅 TOP5 JSON":
-            return {
-                "market_summary": "시장 요약",
-                "one_point_lesson": "원포인트",
-                "top5": [
-                    {
-                        "rank": 1,
-                        "stock_name": "테스트",
-                        "stock_code": "000001",
-                        "close_price": 12345,
-                        "reason": "수급 양호",
-                        "entry_plan": "눌림",
-                        "target_price_guide": "전고점",
-                        "stop_price_guide": "전일 저점",
-                        "confidence": 0.91,
-                    }
-                ],
-            }
         return "브리핑"
 
     monkeypatch.setattr(engine, "_call_gemini_safe", _fake_call)
 
     engine.analyze_scanner_results(100, 5, "stats", "macro")
-    bundle = engine.generate_eod_tomorrow_bundle("candidate text")
 
-    assert used_models == ["tier3-model", "tier3-model"]
-    assert bundle["top5"][0]["stock_code"] == "000001"
+    assert used_models == ["tier3-model"]

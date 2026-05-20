@@ -19,7 +19,7 @@ Source: [2026-04-30-openai-parity-responses-ws-review-report.md](/home/ubuntu/KO
    - `entry_v1`
    - `holding_exit_v1`
    - `overnight_v1`
-   - `eod_top5_v1`
+   - `eod_top5_v1`은 2026-05-21 EOD TOP5 제거로 제외
 3. 하지만 OpenAI는 현재 `main` live 스캘핑 기준 엔진이 아니라 parity/transport 관찰 대상이다.
    - `OPENAI_TRANSPORT_MODE=http`
    - `OPENAI_RESPONSES_WS_ENABLED=False`
