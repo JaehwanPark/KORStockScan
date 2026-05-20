@@ -31,17 +31,32 @@
 
 ## 장전 체크리스트 (08:45~09:00)
 
-- [ ] `[ThresholdEnvAutoApplyPreopen0521] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-05-21`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
+- [x] `[ThresholdEnvAutoApplyPreopen0521] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-05-21`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-20.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-20.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
   - 판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.
   - 금지: blocked family, approval artifact missing, same-stage owner conflict를 수동 env override로 우회하지 않는다.
   - 다음 액션: `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.
+  - 실행 메모 (`2026-05-21 07:41 KST`): [threshold_cycle_preopen_2026-05-21.status.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_preopen_status/threshold_cycle_preopen_2026-05-21.status.json)은 `status=succeeded`, `exit_code=0`, `apply_mode=auto_bounded_live`, `runtime_effect=preopen_runtime_env_apply_only`다. [threshold_apply_2026-05-21.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-05-21.json)은 `status=auto_bounded_live_ready`, `source_date=2026-05-20`, `target_date=2026-05-21`, `runtime_change=true`, `approval_requests=[]`, `approval_contract_gaps=[]`다.
+  - 판정 결과: `applied_guard_passed_env`. runtime env selected family는 `soft_stop_whipsaw_confirmation`, `score65_74_recovery_probe`, `scalp_sim_candidate_window_expansion`, `scalp_sim_ai_budget_manager`, `lifecycle_decision_matrix_runtime`, `scalp_sim_scale_in_window_expansion`이다. `SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY=160` 및 time bucket policy가 반영됐고, `lifecycle_decision_matrix_runtime`의 action mutation은 `RUNTIME_EFFECT_ENABLED=false`로 유지된다. `latency_classifier_recommendation`은 loaded 상태지만 `recommended_action=hold`, `allowed_runtime_apply=false`라 latency env override는 없다.
+  - 다음 액션: 장중 runtime mutation 금지를 유지하고, `RuntimeEnvIntradayObserve0521`에서 selected family provenance/rollback guard를, `SimProbeIntradayCoverage0521`에서 sim-only provenance를 확인한다.
 
-- [ ] `[OpenAIWSPreopenConfirm0521] OpenAI WS 유지 설정 및 entry_price/analyze_target provenance 확인` (`Due: 2026-05-21`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: RuntimeStability`)
+- [x] `[OpenAIWSPreopenConfirm0521] OpenAI WS 유지 설정 및 entry_price/analyze_target provenance 확인` (`Due: 2026-05-21`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: RuntimeStability`)
   - Source: [openai_ws_stability_2026-05-20.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-20.md), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py)
   - 판정 기준: startup env의 OpenAI route/Responses WS 설정과 `analyze_target`, `entry_price` transport provenance를 분리 확인한다.
   - 금지: provider transport 확인을 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경으로 해석하지 않는다.
   - 다음 액션: entry_price transport 표본이 부족하면 장중 표본 재확인 항목과 연결한다.
+  - 실행 메모 (`2026-05-21 07:41 KST`): [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)는 `KORSTOCKSCAN_SCALPING_AI_ROUTE=openai`, `KORSTOCKSCAN_OPENAI_RESPONSES_WS_ENABLED=true`, WS pool size `2`, request timeout `15000ms`를 기본값으로 사용하고 당일 runtime env를 source한다. `bot_history.log` 07:40 startup에는 OpenAI 엔진 고정, `role=main route=openai`, `main_scalping_openai=ON`, `main_scalping_deepseek=OFF`가 기록됐다.
+  - 판정 결과: `pass`. [openai_ws_stability_2026-05-20.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-20.md)는 `decision=keep_ws`, unique WS calls `3074`, `analyze_target=2830`, `entry_price=244`, WS fallback `0`, success rate `1.0`, `entry_price` instrumentation gap `false`로 판정됐다.
+  - 다음 액션: provider transport 확인은 threshold/order guard/provider 변경으로 쓰지 않고, 장중/장후 fallback, fail-closed, latency guard split을 계속 관찰한다.
+
+## Runbook 운영 확인 완료 기록
+
+- `PreopenAutomationHealthCheck20260521` 장전 자동화체인 상태 확인
+  - Source: [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md) `장전 확인 절차`
+  - 판정: `pass`
+  - 근거: preopen cron log에 `[DONE] threshold-cycle preopen target_date=2026-05-21`가 있으며, [threshold_cycle_preopen_2026-05-21.status.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_preopen_status/threshold_cycle_preopen_2026-05-21.status.json)은 `status=succeeded`다. [threshold_runtime_env_2026-05-21.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-05-21.env)는 07:35에 생성됐고, `tmux`의 `bot` 세션 및 `bot_main.py` 프로세스는 07:40 startup 이후 실행 중이다.
+  - 테스트/검증: `PYTHONPATH=. .venv/bin/python -m src.engine.error_detector --mode full --dry-run` 결과 `summary_severity=pass`, `threshold_cycle_preopen_status=pass`, `process_health=pass`, `artifact_freshness=pass`, `resource_usage=pass`, `stale_lock=pass`다.
+  - 다음 액션: 장전 반복 운영 확인은 완료로 닫고, 장중 확인은 `RuntimeEnvIntradayObserve0521`, `SimProbeIntradayCoverage0521`에서 별도 수행한다.
 
 ## 장중 체크리스트 (09:05~15:20)
 
