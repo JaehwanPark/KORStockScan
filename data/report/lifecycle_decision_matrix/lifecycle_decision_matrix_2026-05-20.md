@@ -7,21 +7,24 @@
 - primary_decision_metric: `stage_ev_composite_pct`
 
 ## Summary
-- total_rows: `2000`
-- joined_rows: `1607`
-- policy_pass_count: `3`
-- promote_ready_count: `1`
+- total_rows: `7155`
+- source_rows_total: `7155`
+- retained_rows: `7155`
+- dropped_rows_by_source: `{}`
+- joined_rows: `6109`
+- policy_pass_count: `5`
+- promote_ready_count: `0`
 - lifecycle_ai_context_feedback: `{'implementation_status': 'implemented', 'runtime_effect': False, 'decision_authority': 'lifecycle_ai_context_feedback_source_only', 'policy_entry_count': 5, 'bounded_auxiliary_weight_nonzero_count': 0, 'route_counts': {'hold_sample': 5}, 'quality_counts': {'hold_sample': 5}}`
 - warnings: `[]`
 
 ## Policy Entries
 | stage | sample | joined | ev | confidence | source_quality | action | promote_ready |
 | --- | ---: | ---: | ---: | ---: | --- | --- | --- |
-| `entry` | 442 | 49 | 2.0917 | 0.5432 | `pass` | `BUY_DEFENSIVE` | True |
-| `submit` | 0 | 0 | None | 0.0 | `hold_sample` | `NO_CHANGE` | False |
-| `holding` | 0 | 0 | None | 0.0 | `hold_sample` | `NO_CHANGE` | False |
-| `scale_in` | 1194 | 1194 | -0.2647 | 1.0 | `pass` | `NO_CHANGE` | False |
-| `exit` | 364 | 364 | -0.5841 | 1.0 | `pass` | `EXIT` | False |
+| `entry` | 1143 | 179 | -0.0239 | 1.0 | `pass` | `WAIT_REQUOTE` | False |
+| `submit` | 239 | 238 | -0.6133 | 1.0 | `pass` | `NO_CHANGE` | False |
+| `holding` | 238 | 238 | -0.5938 | 1.0 | `pass` | `EXIT` | False |
+| `scale_in` | 4795 | 4795 | -0.1753 | 1.0 | `pass` | `NO_CHANGE` | False |
+| `exit` | 740 | 659 | -0.5419 | 1.0 | `pass` | `EXIT` | False |
 
 ## Fixed Threshold Roles
 

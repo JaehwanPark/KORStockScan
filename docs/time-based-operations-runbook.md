@@ -1,6 +1,6 @@
 # Time-Based Operations Runbook
 
-작성 기준: `2026-05-19 KST`
+작성 기준: `2026-05-20 KST`
 목적: 장전, 장중, 장후 자동화 체인의 시간대별 실행 주체, 산출물, 운영 확인 기준을 한 장으로 고정한다.
 
 이 문서는 실행 절차 runbook이다. 튜닝 원칙과 active owner는 [Plan Rebase](./plan-korStockScanPerformanceOptimization.rebase.md), 날짜별 작업 소유권은 `docs/checklists/YYYY-MM-DD-stage2-todo-checklist.md`, 산출물 추적성은 [report-based-automation-traceability.md](./report-based-automation-traceability.md), threshold-cycle/apply/daily EV 공통 산출물 정의는 [data/threshold_cycle/README.md](../data/threshold_cycle/README.md)를 기준으로 한다. 이 공통 정의는 스캘핑과 스윙이 threshold-cycle, daily EV, code-improvement workorder 체인에 들어오는 부분에 적용한다. 스윙 전용 lifecycle 산출물은 이 runbook의 `15:45`/장후 확인 절차와 `swing_lifecycle_audit`, `swing_improvement_automation`, `swing_runtime_approval`, `swing_pattern_lab_automation` artifact 정의를 함께 기준으로 본다.
@@ -12,6 +12,7 @@
 - AI correction은 수정안 제안 layer다. 최종 threshold state/value는 deterministic guard가 결정한다.
 - `lifecycle_decision_matrix_runtime`은 ADM 확장 umbrella owner다. Entry ADM, Holding/Exit ADM, submit 관찰, scale-in bias adapter를 stage별 weighted ADM policy로 감싸지만 기본 OFF이며, selected될 때만 다음 PREOPEN runtime env에 policy file/version/promote cap을 쓴다. hard safety, account/order/broker guard, stale quote, price freshness, stop, qty guard는 항상 matrix보다 우선한다.
 - 기존 fixed threshold는 role contract로 재분류한다. broker submit/stale quote/price freshness/stop/account/order/qty/cooldown은 `hard_safety`, `BUY_SCORE_THRESHOLD`와 entry score cutoff/VPW/strength/momentum은 `baseline_prior`, latency caution/score65_74/soft stop/holding/scale-in price guard는 `bounded_tunable`, fallback/legacy latency/shadow 축은 `legacy_archive`다. score는 matrix feature일 뿐 score 단독 BUY/WAIT/DROP 확정 권한이 아니다.
+- `latency_classifier_runtime_profile`은 제출 고갈(submit drought)의 primary tuning owner다. `latency_classifier_recommendation`의 `would_pass_events`는 런타임 `SAFE` 통과만 의미하고, `latency_fallback_deprecated`는 기본 runtime reject인 `CAUTION`으로 수집한다. recovery 후보는 `recommended_action=bounded_apply`와 `allowed_runtime_apply=true`일 때만 다음 PREOPEN 제한 카나리(bounded canary) env로 연결한다. `pre_submit_price_guard`는 후행 가격품질 guard이며 `latency_pass=0`의 primary owner로 쓰지 않는다.
 - Pattern lab은 `code_improvement_order`와 `auto_family_candidate`만 생성한다. runtime/code를 직접 변경하지 않는다. postclose chain에서 lab subprocess가 실패해도 후단 daily EV/workorder/runtime summary 생성을 보호하되, 실패 자체는 같은 checklist/runbook incident에 root cause, 재실행 결과, fresh 복구 여부를 남겨야 한다. `pattern_lab_currentness_audit`는 랩 코드/README/schema/source mode/stale-output 위험을 `runtime_effect=false` workorder 후보로 만들고, `pattern_lab_propagation_audit`는 lab automation -> code workorder -> threshold EV -> runtime summary 연결을 source-quality audit로만 검증한다.
 - sim-first lifecycle은 새 독립 체인이 아니라 기존 threshold-cycle 자동화체인의 입력 범위 확장이다. 스캘핑과 스윙 모두 BUY/선정 가능 후보를 `selection -> entry -> holding -> scale_in -> exit -> attribution` 전주기 가상 관찰 대상으로 최대한 남기고, 실계좌 예수금 부족, 1주 cap, 현재 selected runtime family 여부, approval artifact 부재를 sim/probe 후보 생성 제외 사유로 쓰지 않는다.
 - 스윙은 `SWING_LIVE_ORDER_DRY_RUN_ENABLED=True` 기본값에서 live 선정-진입-보유-추가매수-청산 로직을 실행하되 브로커 주문 접수만 차단한다. `SWING_INTRADAY_LIVE_EQUIV_PROBE_ENABLED=True`이면 진입 전 block stage에서 `swing_probe_*` virtual holding을 생성해 live 보유 이후 데이터를 observe-only로 수집한다. `SWING_ENABLE_AVG_DOWN_SIMULATION=True`와 `SWING_SCALE_IN_DYNAMIC_QTY_ENABLED=True`는 dry-run/probe 안에서 AVG_DOWN/PYRAMID 후보와 `would_qty`/`effective_qty`를 남긴다. `swing_scale_in_real_canary_phase0`는 별도 approval artifact가 있을 때만 승인된 real swing holding의 AVG_DOWN/PYRAMID 추가매수 1주 주문을 허용하며, sim/probe/dry-run 포지션과 OFI/QI `RISK_BEARISH`/stale quote는 fail-closed로 차단한다. `swing_sim_*`/`swing_probe_*` stage와 `actual_order_submitted=false`는 실제 `order_bundle_submitted`/`sell_order_sent`와 분리해서 본다.
@@ -363,6 +364,26 @@ ls -l data/report/panic_sell_defense/panic_sell_defense_$(TZ=Asia/Seoul date +%F
 
 `build_codex_daily_workorder --slot POSTCLOSE`는 이 절차를 `PostcloseAutomationHealthCheckYYYYMMDD`로 자동 포함한다.
 
+POSTCLOSE 최상위 감리는 `Tuning Chain Control State`(튜닝 체인 관제 상태)로 남긴다. 이 관제 상태는 EV 손익의 좋고 나쁨이 아니라 자동화체인이 매일 믿을 수 있게 수집, 분석, 해석, 라우팅, 반영, 피드백까지 이어졌는지 보는 운영 판정이다. 새 리포트나 새 checklist 항목을 만들지 않고, 기존 `PostcloseAutomationHealthCheckYYYYMMDD` 실행 메모에 `상태 / 막힌 단계 / 영향 / 조치` 4요소만 기록한다.
+
+| 상태 | 의미 | 닫는 기준 |
+| --- | --- | --- |
+| `GREEN` | R0~R6, workorder, approval/runtime routing, post-apply attribution이 모두 복원 가능 | 다음 PREOPEN 입력으로 사용할 수 있으며, 별도 신규 조치 없음 |
+| `YELLOW` | 체인은 완료됐지만 일부 판단이 표본/품질/계약/미래 quote/provenance 문제로 보류 | `blocked_stage`, 원인, 영향 범위, 다음 확인 owner를 남기고 observe/workorder/approval 중 하나로 라우팅 |
+| `RED` | artifact 누락, parser 실패, wrapper fail, lineage 깨짐, runtime provenance 손상 등 다음 튜닝 판단을 믿으면 안 되는 상태 | 원천 artifact 복구, postclose 재생성, incident/playbook 또는 instrumentation workorder로 닫음 |
+| `GRAY` | 아직 due 전이거나 postclose chain이 실행 중 | 완료 예정 시각과 재확인 owner만 남김 |
+
+관제 단계는 아래 6개로 고정한다. 상세 리포트가 여러 개여도 최종 메모에는 문제가 발생한 단계만 `blocked_stage`로 적는다.
+
+| 단계 | 확인 초점 | 대표 근거 |
+| --- | --- | --- |
+| `input_health` | source freshness, source-quality, provenance split | error detector, `observation_source_quality_audit`, source load diagnostics |
+| `chain_completion` | postclose wrapper, predecessor, verification 완료 | wrapper status, `[DONE]` marker, `threshold_cycle_postclose_verification` |
+| `decision_integrity` | `selected/blocked/hold_sample/freeze/contract_gap` 해석이 금지선과 맞는지 | `threshold_cycle_ev`, `runtime_approval_summary` |
+| `disposition` | apply/workorder/approval/observe-only/next-checklist 중 하나로 라우팅됐는지 | `code_improvement_workorder`, `HumanInterventionSummary`, approval artifact |
+| `runtime_uptake` | 적용된 축이 runtime env와 pipeline provenance로 복원 가능한지 | apply plan, runtime env, runtime event provenance |
+| `feedback_closure` | attribution 또는 다음날 확인 항목으로 닫혔는지 | post-apply attribution, 다음 checklist, workorder lineage |
+
 1. `threshold_cycle_postclose`가 완료됐는지 먼저 확인한다.
    - `paused_by_availability_guard`로 compact collection이 멈춘 경우는 자동 재시도되지 않는다. wrapper는 `[PAUSED]`와 `[FAIL]` marker를 남기며, I/O 부하가 낮아진 뒤 같은 날짜로 재실행한다. 단, checkpoint가 이미 source 끝까지 처리된 재실행은 availability sampler로 다시 실패시키지 않고 `completed` replay로 통과해야 한다.
    - postclose wrapper는 immutable snapshot을 날짜별 최신 1개만 유지하고, 같은 날짜 중복 snapshot 및 retention(`THRESHOLD_CYCLE_SNAPSHOT_RETENTION_DAYS`, 기본 7일) 초과 snapshot을 자동 정리한다.
@@ -373,8 +394,10 @@ ls -l data/report/panic_sell_defense/panic_sell_defense_$(TZ=Asia/Seoul date +%F
    - `threshold_cycle_ev`는 장후 1회성 제출 artifact다. 파일이 생성되고 JSON parse 검증이 끝난 뒤에는 장중 stream처럼 계속 갱신되지 않아도 `pass_one_shot`으로 본다. 생성 후 age가 `max_staleness_sec`를 넘었다는 이유만으로 재실행/재기동하지 않는다. 단, `.json` 파일이 깨졌거나 dict payload가 아니면 one-shot fresh로 통과시키지 않고 critical source 품질 실패로 닫는다.
 3. 스캘핑/스윙 판정 요약은 `data/report/runtime_approval_summary/runtime_approval_summary_YYYY-MM-DD.md`에서 먼저 본다. `Gate 분류`와 `튜닝 경로` 컬럼으로 legacy hard gate, intentional safety guard, runtime contract gap, same-stage owner conflict, sample/source-quality gap을 분리한다. 이 artifact는 `threshold_cycle_ev`와 `swing_runtime_approval`을 읽기만 하며 runtime flow 조정, 적용, 차단 권한이 없다.
    - `threshold_cycle_ev`와 `runtime_approval_summary`의 `source_load_diagnostics`가 비어 있지 않으면 입력 artifact parse 오류가 report 내부 warning으로 보존된 상태다. 같은 date로 원천 artifact를 복구한 뒤 EV -> runtime summary -> postclose verification 순서로 재생성한다.
+   - `latency_classifier_runtime_profile`은 `entry_funnel.latency_submit_routing`, `recommended_action`, `counterfactual_ev_pct`, `missed_winner_recovered`, `avoided_loser_lost`, `stale_quote_override_events`, `broker_guard_bypass_candidates`를 같이 확인한다. `recommended_action=hold|reject`이면 다음 PREOPEN latency env를 만들지 않는다. `selected_auto_bounded_live=true`가 과거 당일 적용 이력으로 남아 있어도 신규 적용 판단은 최신 `latency_classifier_recommendation`과 PREOPEN apply artifact의 `allowed_runtime_apply`가 우선한다.
 4. README/런북(runbook)/Plan Rebase/prompt/AGENTS daily renewal은 `data/report/plan_rebase_daily_renewal/plan_rebase_daily_renewal_YYYY-MM-DD.md`에서 확인한다. 이 artifact는 `bounded_document_mutation_queue`이며 `document_mutation_allowed=true`, `runtime_mutation_allowed=false`, `document_mutation_self_apply=false`다. 실제 문서 갱신(document mutation)은 후순위 작업으로 `1차 수정(first-pass bounded update) -> 2차 감리(second-pass audit review) -> 최종 수정(finalize after second-pass review)`을 거쳐 닫는다. 이력성 내용은 archive 또는 execution-delta로 보존하고, 영어 약칭은 첫 사용 시 한글/영어 병기 원칙을 적용한다. 이 경로는 checklist 신규 작업항목, runtime env, threshold, 주문, provider, bot restart를 수정하지 않는다.
 5. threshold 후보의 상세 원인은 `threshold_cycle_YYYY-MM-DD.json`, AI correction은 `threshold_cycle_ai_review_*_postclose.md`, lab order는 `scalping_pattern_lab_automation_YYYY-MM-DD.md`, 스윙 lifecycle order는 `swing_improvement_automation_YYYY-MM-DD.json`, 스윙 승인 요청은 `swing_runtime_approval_YYYY-MM-DD.json`을 본다.
+   - latency submit drought를 점검할 때는 `latency_classifier_recommendation_YYYY-MM-DD.json`을 함께 본다. 이 report는 grid/quantile profile별 `SAFE pass`, `CAUTION reject`, 제한 복구 카나리(recovery canary), `hard reject`, counterfactual EV, missed/avoided label을 계산한다. `pre_submit_price_guard`는 이 값을 소비할 수 있지만 소유권은 latency classifier에 있다.
 6. `threshold_cycle_ev_YYYY-MM-DD.{json,md}`에서 `real`, `sim`, `combined` split과 `scalp_simulator.post_sell_join`을 확인한다. combined는 tuning 후보 산출용 통합 EV view이고, broker execution 품질과 주문 실패율은 real만으로 별도 판정한다.
 7. sim 청산 후 MFE/MAE는 `data/post_sell/sim_post_sell_candidates_YYYY-MM-DD.jsonl`과 `sim_post_sell_evaluations_YYYY-MM-DD.jsonl`에서 확인한다. 기존 실주문 `post_sell_candidates/evaluations`와 섞지 않고, join 누락은 `instrumentation_gap` 또는 `source_quality_blocker`로 분류한다.
 8. 스캘핑 Entry ADM은 `data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_YYYY-MM-DD.{json,md}`에서 확인한다. `joined_sample < sample_floor`, `missing_action_bucket`, `prompt_context_not_loaded`는 runtime apply 후보가 아니라 instrumentation/report workorder로만 닫고, `threshold_cycle_ev`, `runtime_approval_summary`, `code_improvement_workorder`, `scalping_pattern_lab_automation` source link가 이어졌는지 본다.

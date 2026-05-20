@@ -187,6 +187,43 @@ def _latency_danger_reasons(latency_status) -> list[str]:
     return reasons
 
 
+def _should_apply_latency_submit_recovery_canary(
+    *,
+    strategy_id: str,
+    signal_strength: float,
+    latency_status,
+) -> tuple[bool, str]:
+    if not bool(getattr(TRADING_RULES, "SCALP_LATENCY_SUBMIT_RECOVERY_CANARY_ENABLED", False)):
+        return False, "disabled"
+    if str(strategy_id or "").upper() != "SCALPING":
+        return False, "non_scalping"
+    if getattr(latency_status, "quote_stale", False):
+        return False, "quote_stale"
+    if str(getattr(getattr(latency_status, "state", None), "value", "")) != "CAUTION":
+        return False, "not_caution"
+
+    normalized_score = _normalize_signal_score(signal_strength)
+    min_signal = _to_float(getattr(TRADING_RULES, "SCALP_LATENCY_SUBMIT_RECOVERY_MIN_SIGNAL_SCORE", 75.0), 75.0)
+    if normalized_score < min_signal:
+        return False, "signal_score_below_floor"
+
+    max_ws_age_ms = int(getattr(TRADING_RULES, "SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_AGE_MS", 1200) or 1200)
+    max_ws_jitter_ms = int(
+        getattr(TRADING_RULES, "SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_JITTER_MS", 1500) or 1500
+    )
+    max_spread_ratio = _to_float(
+        getattr(TRADING_RULES, "SCALP_LATENCY_SUBMIT_RECOVERY_MAX_SPREAD_RATIO", 0.0100),
+        0.0100,
+    )
+    if int(getattr(latency_status, "ws_age_ms", 0) or 0) > max_ws_age_ms:
+        return False, "ws_age_above_recovery_cap"
+    if int(getattr(latency_status, "ws_jitter_ms", 0) or 0) > max_ws_jitter_ms:
+        return False, "ws_jitter_above_recovery_cap"
+    if _to_float(getattr(latency_status, "spread_ratio", 0.0), 0.0) > max_spread_ratio:
+        return False, "spread_above_recovery_cap"
+    return True, "latency_submit_recovery_normal_override"
+
+
 def _should_apply_latency_guard_canary(
     *,
     strategy_id: str,
@@ -791,6 +828,25 @@ def evaluate_live_buy_entry(
     latency_canary_applied = False
     latency_canary_reason = ""
     latency_danger_reasons = ",".join(_latency_danger_reasons(latency))
+    if policy.decision == EntryDecision.REJECT_MARKET_CONDITION and policy.reason == "latency_fallback_deprecated":
+        recovery_ok, recovery_reason = _should_apply_latency_submit_recovery_canary(
+            strategy_id=strategy_id,
+            signal_strength=float(signal_strength or 0.0),
+            latency_status=latency,
+        )
+        if recovery_ok:
+            latency_canary_applied = True
+            latency_canary_reason = recovery_reason
+            effective_decision = EntryDecision.ALLOW_NORMAL
+            effective_reason = recovery_reason
+            log_info(
+                f"[LATENCY_SUBMIT_RECOVERY_CANARY] {stock.get('name')}({code}) "
+                f"signal_score={_normalize_signal_score(signal_strength):.1f} "
+                f"ws_age_ms={latency.ws_age_ms} ws_jitter_ms={latency.ws_jitter_ms} "
+                f"spread_ratio={latency.spread_ratio:.6f}"
+            )
+        else:
+            latency_canary_reason = recovery_reason
     if policy.decision == EntryDecision.REJECT_DANGER:
         quote_fresh_composite_ok, quote_fresh_composite_reason = _should_apply_latency_quote_fresh_composite_canary(
             strategy_id=strategy_id,
@@ -998,6 +1054,11 @@ def evaluate_live_buy_entry(
         "allowed": False,
         "decision": effective_decision.value,
         "reason": effective_reason,
+        "policy_decision": policy.decision.value,
+        "policy_reason": policy.reason,
+        "effective_decision": effective_decision.value,
+        "effective_reason": effective_reason,
+        "threshold_family": "latency_classifier_runtime_profile",
         "latency_state": latency.state.value,
         "latest_price": latest_price,
         "signal_price": frozen_price,

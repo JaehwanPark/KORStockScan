@@ -47,6 +47,8 @@ RELEVANT_STAGES = {
     "order_bundle_submitted",
     "scalp_sim_entry_armed",
     "scalp_sim_entry_ai_price_applied",
+    "scalp_sim_entry_ai_price_skip_order",
+    "scalp_sim_buy_order_virtual_pending",
     "scalp_sim_entry_submit_revalidation_warning",
     "scalp_sim_entry_submit_revalidation_block",
     "scalp_sim_buy_order_assumed_filled",
@@ -289,7 +291,11 @@ def _chosen_action(stage: str, fields: dict[str, Any]) -> str:
     explicit = _nonempty(fields.get("chosen_action") or fields.get("entry_adm_chosen_action"))
     if explicit in ACTION_ORDER:
         return explicit
-    if stage in {"pre_submit_liquidity_guard_block", "pre_submit_overbought_pullback_guard_block"}:
+    if stage in {
+        "pre_submit_liquidity_guard_block",
+        "pre_submit_overbought_pullback_guard_block",
+        "scalp_sim_entry_ai_price_skip_order",
+    }:
         return "SKIP_PRE_SUBMIT_SAFETY"
     if stage in {"entry_submit_revalidation_block", "scalp_sim_entry_submit_revalidation_block"}:
         return "SKIP_STALE"
@@ -430,12 +436,16 @@ def _apply_outcome(row: dict[str, Any], evaluations: dict[str, dict[str, Any]]) 
 
 def _dedupe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     priority = {
+        "scalp_sim_entry_ai_price_skip_order": -1,
         "scalp_entry_action_decision_snapshot": 0,
         "order_bundle_submitted": 1,
         "scalp_sim_buy_order_assumed_filled": 2,
+        "scalp_sim_buy_order_virtual_pending": 3,
         "pre_submit_liquidity_guard_block": 3,
         "pre_submit_overbought_pullback_guard_block": 3,
         "entry_submit_revalidation_block": 4,
+        "scalp_sim_entry_submit_revalidation_block": 4,
+        "scalp_sim_entry_submit_revalidation_warning": 5,
         "blocked_ai_score": 5,
         "ai_confirmed": 6,
     }
@@ -593,6 +603,7 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
         },
         "action_summary": action_summary,
         "bucket_summary": _bucket_summary(rows),
+        "rows": rows,
         "examples": rows[:50],
         "sources": {
             "events": [str(path) for path in _event_paths(target_date)],

@@ -8,12 +8,15 @@ def test_lifecycle_matrix_builder_separates_runtime_features_and_labels(tmp_path
     entry_dir = tmp_path / "entry_adm"
     post_sell_dir = tmp_path / "post_sell"
     monitor_dir = tmp_path / "monitor"
+    pipeline_dir = tmp_path / "pipeline_events"
     entry_dir.mkdir(parents=True)
     post_sell_dir.mkdir(parents=True)
     monitor_dir.mkdir(parents=True)
+    pipeline_dir.mkdir(parents=True)
     monkeypatch.setattr(mod, "MATRIX_DIR", matrix_dir)
     monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
     monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", monitor_dir)
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
     monkeypatch.setattr(
         mod,
         "entry_adm_report_paths",
@@ -58,6 +61,158 @@ def test_lifecycle_matrix_builder_separates_runtime_features_and_labels(tmp_path
     assert any(item["stage"] == "entry" and item["source_quality_gate"] == "pass" for item in report["policy_entries"])
     assert (matrix_dir / "lifecycle_decision_matrix_2026-05-18.json").exists()
     assert (matrix_dir / "lifecycle_decision_matrix_2026-05-18.md").exists()
+
+
+def test_lifecycle_matrix_prefers_entry_adm_rows_and_has_no_policy_cap(tmp_path, monkeypatch):
+    matrix_dir = tmp_path / "matrix"
+    entry_dir = tmp_path / "entry_adm"
+    post_sell_dir = tmp_path / "post_sell"
+    monitor_dir = tmp_path / "monitor"
+    pipeline_dir = tmp_path / "pipeline_events"
+    for directory in (entry_dir, post_sell_dir, monitor_dir, pipeline_dir):
+        directory.mkdir(parents=True)
+    monkeypatch.setattr(mod, "MATRIX_DIR", matrix_dir)
+    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
+    monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", monitor_dir)
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
+    monkeypatch.setattr(
+        mod,
+        "entry_adm_report_paths",
+        lambda target_date: (
+            entry_dir / f"scalp_entry_action_decision_matrix_{target_date}.json",
+            entry_dir / f"scalp_entry_action_decision_matrix_{target_date}.md",
+        ),
+    )
+
+    rows = [
+        {
+            "candidate_id": f"cand-{idx}",
+            "stock_code": f"{idx:06d}",
+            "event_time": "2026-05-20T09:01:00+09:00",
+            "stage": "scalp_entry_action_decision_snapshot",
+            "chosen_action": "BUY_NOW",
+            "ai_score": 80,
+            "profit_rate": 0.3,
+            "mfe_10m_pct": 0.5,
+            "mae_10m_pct": -0.1,
+            "close_10m_pct": 0.2,
+            "outcome_joined": True,
+        }
+        for idx in range(2101)
+    ]
+    (entry_dir / "scalp_entry_action_decision_matrix_2026-05-20.json").write_text(
+        json.dumps({"rows": rows, "examples": rows[:1]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    report = mod.build_lifecycle_decision_matrix_report("2026-05-20")
+
+    assert report["sources"]["entry"]["source_field"] == "rows"
+    assert report["sources"]["entry"]["source_rows"] == 2101
+    assert report["summary"]["source_rows_total"] == 2101
+    assert report["summary"]["retained_rows"] == 2101
+    assert report["summary"]["dropped_rows_by_source"] == {}
+    assert report["policy_entries"][0]["stage"] == "entry"
+    assert report["policy_entries"][0]["sample"] == 2101
+
+
+def test_lifecycle_matrix_ingests_scalp_sim_submit_and_holding_rows(tmp_path, monkeypatch):
+    matrix_dir = tmp_path / "matrix"
+    entry_dir = tmp_path / "entry_adm"
+    post_sell_dir = tmp_path / "post_sell"
+    monitor_dir = tmp_path / "monitor"
+    pipeline_dir = tmp_path / "pipeline_events"
+    for directory in (entry_dir, post_sell_dir, monitor_dir, pipeline_dir):
+        directory.mkdir(parents=True)
+    monkeypatch.setattr(mod, "MATRIX_DIR", matrix_dir)
+    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
+    monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", monitor_dir)
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
+    monkeypatch.setattr(
+        mod,
+        "entry_adm_report_paths",
+        lambda target_date: (
+            entry_dir / f"scalp_entry_action_decision_matrix_{target_date}.json",
+            entry_dir / f"scalp_entry_action_decision_matrix_{target_date}.md",
+        ),
+    )
+
+    common_fields = {
+        "simulation_book": "scalp_ai_buy_all",
+        "simulated_order": True,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "decision_authority": "sim_observation_only",
+        "runtime_effect": False,
+        "sim_record_id": "SIM-1",
+        "entry_adm_candidate_id": "ADM-1",
+    }
+    events = [
+        {
+            "stage": "scalp_sim_buy_order_virtual_pending",
+            "stock_code": "000001",
+            "emitted_at": "2026-05-20T09:10:00+09:00",
+            "fields": {**common_fields, "best_ask": "1000", "would_limit_fill": False},
+        },
+        {
+            "stage": "scalp_sim_buy_order_assumed_filled",
+            "stock_code": "000001",
+            "emitted_at": "2026-05-20T09:10:05+09:00",
+            "fields": {**common_fields, "best_ask": "1000", "would_limit_fill": True, "qty": "1"},
+        },
+        {
+            "stage": "scalp_sim_holding_started",
+            "stock_code": "000001",
+            "emitted_at": "2026-05-20T09:10:06+09:00",
+            "fields": {**common_fields, "assumed_fill_price": "1000", "requested_qty": "1"},
+        },
+        {
+            "stage": "scalp_sim_sell_order_assumed_filled",
+            "stock_code": "000001",
+            "emitted_at": "2026-05-20T09:20:00+09:00",
+            "fields": {**common_fields, "profit_rate": "0.8", "exit_rule": "tp"},
+        },
+    ]
+    (pipeline_dir / "pipeline_events_2026-05-20.jsonl").write_text(
+        "\n".join(json.dumps(event, ensure_ascii=False) for event in events),
+        encoding="utf-8",
+    )
+    (post_sell_dir / "sim_post_sell_evaluations_2026-05-20.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "sim_record_id": "SIM-1",
+                        "entry_adm_candidate_id": "ADM-1",
+                        "profit_rate": 0.8,
+                        "exit_rule": "tp",
+                        "outcome": "GOOD_ENTRY",
+                        "metrics_10m": {"mfe_pct": 1.2, "mae_pct": -0.2, "close_ret_pct": 0.8},
+                    },
+                    ensure_ascii=False,
+                )
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_lifecycle_decision_matrix_report("2026-05-20")
+
+    submit_entry = next(item for item in report["policy_entries"] if item["stage"] == "submit")
+    holding_entry = next(item for item in report["policy_entries"] if item["stage"] == "holding")
+    assert submit_entry["sample"] == 1
+    assert submit_entry["joined_sample"] == 1
+    assert holding_entry["sample"] == 1
+    assert holding_entry["joined_sample"] == 1
+    assert report["sources"]["scalp_sim_submit"]["rows"] == 1
+    assert report["sources"]["scalp_sim_submit"]["joined_rows"] == 1
+    assert report["sources"]["scalp_sim_holding"]["rows"] == 1
+    assert report["sources"]["scalp_sim_holding"]["joined_rows"] == 1
+    submit_row = next(row for row in report["examples"] if row["source"] == "scalp_sim_entry_submit_pipeline_events")
+    assert submit_row["source_stage"] == "scalp_sim_buy_order_assumed_filled"
+    assert submit_row["runtime_features"]["actual_order_submitted"] is False
+    assert submit_row["runtime_features"]["broker_order_forbidden"] is True
+    assert submit_row["runtime_features"]["decision_authority"] == "sim_observation_only"
 
 
 def test_lifecycle_matrix_ingests_scalp_sim_scale_in_rows(tmp_path, monkeypatch):

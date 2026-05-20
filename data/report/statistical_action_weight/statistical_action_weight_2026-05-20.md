@@ -43,7 +43,7 @@
 
 | bucket | best_action | score | edge | sample | avg_profit | loss_rate | policy |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| volume_gte_10m | insufficient_sample | - | - | - | - | - | insufficient_sample |
+| volume_2m_10m | insufficient_sample | - | - | - | - | - | insufficient_sample |
 
 ## Time Bucket
 

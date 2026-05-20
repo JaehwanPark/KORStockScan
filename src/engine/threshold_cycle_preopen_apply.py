@@ -94,6 +94,11 @@ TARGET_ENV_VALUE_KEYS = {
     "SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION": "max_ws_age_ms_for_caution",
     "SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION": "max_ws_jitter_ms_for_caution",
     "SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION": "max_spread_ratio_for_caution",
+    "SCALP_LATENCY_SUBMIT_RECOVERY_CANARY_ENABLED": "recovery_enabled",
+    "SCALP_LATENCY_SUBMIT_RECOVERY_MIN_SIGNAL_SCORE": "recovery_min_signal_score",
+    "SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_AGE_MS": "recovery_max_ws_age_ms",
+    "SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_JITTER_MS": "recovery_max_ws_jitter_ms",
+    "SCALP_LATENCY_SUBMIT_RECOVERY_MAX_SPREAD_RATIO": "recovery_max_spread_ratio",
     "LIFECYCLE_DECISION_MATRIX_ENABLED": "enabled",
     "LIFECYCLE_DECISION_MATRIX_POLICY_FILE": "policy_file",
     "LIFECYCLE_DECISION_MATRIX_POLICY_VERSION": "policy_version",
@@ -254,11 +259,22 @@ def _load_latency_classifier_candidates(source_date: str | None) -> tuple[list[d
         candidate = payload.get("calibration_candidate")
         candidates = [candidate] if isinstance(candidate, dict) else []
     normalized = [item for item in candidates if isinstance(item, dict)]
+    selected_candidate = normalized[0] if normalized else {}
+    selected_metrics = (
+        selected_candidate.get("source_metrics")
+        if isinstance(selected_candidate.get("source_metrics"), dict)
+        else {}
+    )
     return normalized, {
         "status": "loaded",
         "path": str(path),
         "latency_block_count": payload.get("latency_block_count"),
         "selected_profile_id": payload.get("selected_profile_id"),
+        "profile_generation": payload.get("profile_generation"),
+        "recommended_action": selected_metrics.get("recommended_action"),
+        "recommended_action_reason": selected_metrics.get("recommended_action_reason"),
+        "allowed_runtime_apply": selected_candidate.get("allowed_runtime_apply"),
+        "calibration_state": selected_candidate.get("calibration_state"),
     }
 
 
@@ -397,6 +413,7 @@ def _env_overrides_for_candidate(candidate: dict[str, Any]) -> dict[str, str]:
     calibration_state = str(candidate.get("calibration_state") or "")
     policy_or_family = str(candidate.get("policy_id") or candidate.get("family") or "")
     force_emit = policy_or_family in {
+        "latency_classifier_runtime_profile",
         "swing_scale_in_real_canary_phase0",
         "swing_one_share_real_canary_phase0",
         "lifecycle_decision_matrix_runtime",

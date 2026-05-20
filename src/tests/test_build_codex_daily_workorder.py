@@ -144,9 +144,15 @@ def test_build_runbook_operational_checks_for_slot(monkeypatch):
     assert "swing_model_retrain_2026-05-11.status.json" in "\n".join(postclose.artifact_checks)
     assert "swing_model_retrain_2026-05-11.json" in "\n".join(postclose.artifact_checks)
     assert "logs/tuning_monitoring_postclose_cron.log" in postclose.artifact_checks
+    assert "runtime_approval_summary_2026-05-11.md" in "\n".join(postclose.artifact_checks)
+    assert "observation_source_quality_audit_2026-05-11.md" in "\n".join(postclose.artifact_checks)
+    assert "threshold_cycle_postclose_verification_2026-05-11.json" in "\n".join(postclose.artifact_checks)
     assert "tuning monitoring" in postclose.decision_rule
     assert "swing model retrain" in postclose.decision_rule
     assert "real/sim/combined" in postclose.decision_rule
+    assert "Tuning Chain Control State" in postclose.decision_rule
+    assert "blocked_stage=input_health|chain_completion|decision_integrity" in postclose.decision_rule
+    assert "EV 손익은 control state의 primary 기준이 아니다" in postclose.decision_rule
     assert "스윙 dry-run 해제" in postclose.forbidden
     intraday = next(check for check in all_checks if check.slot == "INTRADAY")
     assert "pipeline_events_2026-05-11.jsonl" in "\n".join(intraday.artifact_checks)
@@ -192,6 +198,27 @@ def test_render_markdown_includes_runbook_operational_checks(monkeypatch):
     assert "logs/threshold_cycle_calibration_intraday_cron.log" in md
     assert "[Runbook 운영 확인]" in md
     assert "판정=pass|warning|fail|not_yet_due" in md
+
+    postclose_checks = build_runbook_operational_checks(target_date="2026-05-11", slots=["POSTCLOSE"])
+    postclose_md = render_markdown(
+        owner="JaehwanPark",
+        project_number=1,
+        project_title="KORStockScan Ops",
+        generated_at="2026-05-11T16:10:00+09:00",
+        target_date="2026-05-11",
+        include_overdue=True,
+        holiday_override=False,
+        holiday_reason="",
+        statuses=["Todo", "In Progress"],
+        slots=["POSTCLOSE"],
+        tasks=[],
+        max_items=20,
+        runbook_checks=postclose_checks,
+    )
+    assert "Tuning Chain Control State=GREEN|YELLOW|RED|GRAY" in postclose_md
+    assert "blocked_stage=input_health|chain_completion|decision_integrity" in postclose_md
+    assert "impact=..." in postclose_md
+    assert "next_action=..." in postclose_md
 
 
 def test_matches_slot_case_insensitive():

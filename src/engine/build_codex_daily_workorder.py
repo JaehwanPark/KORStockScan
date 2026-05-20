@@ -703,6 +703,9 @@ def build_runbook_operational_checks(*, target_date: str | None, slots: list[str
                     f"data/report/swing_model_retrain/status/swing_model_retrain_{date_text}.status.json",
                     f"data/report/swing_model_retrain/swing_model_retrain_{date_text}.json",
                     f"data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_{date_text}.md",
+                    f"data/report/runtime_approval_summary/runtime_approval_summary_{date_text}.md",
+                    f"data/report/observation_source_quality_audit/observation_source_quality_audit_{date_text}.md",
+                    f"data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_{date_text}.json",
                     f"docs/code-improvement-workorders/code_improvement_workorder_{date_text}.md",
                     f"data/report/error_detection/error_detection_{date_text}.json",
                 ),
@@ -711,7 +714,10 @@ def build_runbook_operational_checks(*, target_date: str | None, slots: list[str
                     "real/sim/combined split, swing lifecycle automation, swing runtime approval, pattern lab automation, "
                     "swing model retrain status/promotion guard, tuning monitoring의 threshold postclose predecessor DONE 확인, "
                     "code improvement workorder 생성 여부 확인. "
-                    "SystemErrorDetector 하루 누적 fail detector가 있으면 incident/playbook 분류."
+                    "SystemErrorDetector 하루 누적 fail detector가 있으면 incident/playbook 분류. "
+                    "Tuning Chain Control State는 GREEN|YELLOW|RED|GRAY 중 하나로 별도 기록하고, "
+                    "blocked_stage=input_health|chain_completion|decision_integrity|disposition|runtime_uptake|feedback_closure|-와 "
+                    "impact, next_action을 함께 남긴다. EV 손익은 control state의 primary 기준이 아니다."
                 ),
                 forbidden="postclose 실패 시 threshold 수동 변경이 아니라 같은 date wrapper 재실행/복구 우선. "
                           "swing model retrain 결과로 스윙 dry-run 해제/브로커 주문 허용 금지. "
@@ -888,9 +894,17 @@ def render_markdown(
     lines.append("[Runbook 운영 확인]")
     if runbook_checks:
         for check in runbook_checks:
-            lines.append(
-                f"- [{check.check_id}] {check.title} | 슬롯={check.slot} | TimeWindow={check.time_window} | Source={check.source} | Section={check.section} | 판정=pass|warning|fail|not_yet_due"
+            base = (
+                f"- [{check.check_id}] {check.title} | 슬롯={check.slot} | TimeWindow={check.time_window} "
+                f"| Source={check.source} | Section={check.section} | 판정=pass|warning|fail|not_yet_due"
             )
+            if check.slot == "POSTCLOSE":
+                base += (
+                    " | Tuning Chain Control State=GREEN|YELLOW|RED|GRAY"
+                    " | blocked_stage=input_health|chain_completion|decision_integrity|disposition|runtime_uptake|feedback_closure|-"
+                    " | impact=... | next_action=..."
+                )
+            lines.append(base)
     else:
         lines.append("- 없음")
     lines.append("```")

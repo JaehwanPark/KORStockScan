@@ -325,6 +325,11 @@ class TradingConfig:
     SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION: int = 700  # latency classifier CAUTION 최대 ws_age
     SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION: int = 300  # latency classifier CAUTION 최대 ws_jitter
     SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION: float = 0.005  # latency classifier CAUTION 최대 spread_ratio
+    SCALP_LATENCY_SUBMIT_RECOVERY_CANARY_ENABLED: bool = False  # CAUTION reject를 bounded normal-entry canary로 회수
+    SCALP_LATENCY_SUBMIT_RECOVERY_MIN_SIGNAL_SCORE: float = 75.0  # recovery canary 최소 AI 점수
+    SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_AGE_MS: int = 1200  # recovery canary 최대 ws_age
+    SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_JITTER_MS: int = 1500  # recovery canary 최대 ws_jitter
+    SCALP_LATENCY_SUBMIT_RECOVERY_MAX_SPREAD_RATIO: float = 0.0100  # recovery canary 최대 spread_ratio
     SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED: bool = False  # 2026-04-29 OFF 확정: quote freshness 복합 residual canary 기본 비활성
     SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_TAGS: tuple = ("SCANNER", "VWAP_RECLAIM", "OPEN_RECLAIM")  # composite relief 적용 태그
     SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MIN_SIGNAL_SCORE: float = 88.0  # 단일축 실패 후 복합축은 더 강한 신호만 허용
@@ -773,6 +778,21 @@ def _build_trading_rules() -> TradingConfig:
     env_entry_latency_max_spread_caution = _env_float(
         "KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION"
     )
+    env_latency_submit_recovery_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_CANARY_ENABLED"
+    )
+    env_latency_submit_recovery_min_signal = _env_float(
+        "KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_MIN_SIGNAL_SCORE"
+    )
+    env_latency_submit_recovery_max_ws_age = _env_int(
+        "KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_AGE_MS"
+    )
+    env_latency_submit_recovery_max_ws_jitter = _env_int(
+        "KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_JITTER_MS"
+    )
+    env_latency_submit_recovery_max_spread = _env_float(
+        "KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_MAX_SPREAD_RATIO"
+    )
     env_spread_relief_enabled = _env_bool("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED")
     env_spread_relief_tags = _env_csv_tuple("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_TAGS")
     env_spread_relief_min_signal = _env_float("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MIN_SIGNAL_SCORE")
@@ -809,6 +829,11 @@ def _build_trading_rules() -> TradingConfig:
         or env_entry_latency_max_ws_age_caution is not None
         or env_entry_latency_max_ws_jitter_caution is not None
         or env_entry_latency_max_spread_caution is not None
+        or env_latency_submit_recovery_enabled is not None
+        or env_latency_submit_recovery_min_signal is not None
+        or env_latency_submit_recovery_max_ws_age is not None
+        or env_latency_submit_recovery_max_ws_jitter is not None
+        or env_latency_submit_recovery_max_spread is not None
         or env_spread_relief_enabled is not None
         or env_spread_relief_tags is not None
         or env_spread_relief_min_signal is not None
@@ -845,6 +870,21 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION=env_entry_latency_max_spread_caution
             if env_entry_latency_max_spread_caution is not None
             else config.SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION,
+            SCALP_LATENCY_SUBMIT_RECOVERY_CANARY_ENABLED=env_latency_submit_recovery_enabled
+            if env_latency_submit_recovery_enabled is not None
+            else config.SCALP_LATENCY_SUBMIT_RECOVERY_CANARY_ENABLED,
+            SCALP_LATENCY_SUBMIT_RECOVERY_MIN_SIGNAL_SCORE=env_latency_submit_recovery_min_signal
+            if env_latency_submit_recovery_min_signal is not None
+            else config.SCALP_LATENCY_SUBMIT_RECOVERY_MIN_SIGNAL_SCORE,
+            SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_AGE_MS=env_latency_submit_recovery_max_ws_age
+            if env_latency_submit_recovery_max_ws_age is not None
+            else config.SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_AGE_MS,
+            SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_JITTER_MS=env_latency_submit_recovery_max_ws_jitter
+            if env_latency_submit_recovery_max_ws_jitter is not None
+            else config.SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_JITTER_MS,
+            SCALP_LATENCY_SUBMIT_RECOVERY_MAX_SPREAD_RATIO=env_latency_submit_recovery_max_spread
+            if env_latency_submit_recovery_max_spread is not None
+            else config.SCALP_LATENCY_SUBMIT_RECOVERY_MAX_SPREAD_RATIO,
             SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=env_spread_relief_enabled
             if env_spread_relief_enabled is not None
             else config.SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED,

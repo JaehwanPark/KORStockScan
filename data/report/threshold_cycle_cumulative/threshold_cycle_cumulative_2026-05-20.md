@@ -81,7 +81,7 @@
 | cumulative | position_sizing_cap_release | position_sizing | 179 | False | report_only_reference |
 | cumulative | position_sizing_dynamic_formula | position_sizing | 179 | False | report_only_reference |
 | cumulative | statistical_action_weight | decision_support | 179 | False | report_only_reference |
-| cumulative | lifecycle_decision_matrix_runtime | lifecycle | 2000 | True | report_only_reference |
+| cumulative | lifecycle_decision_matrix_runtime | lifecycle | 7155 | True | report_only_reference |
 | rolling_5d | entry_mechanical_momentum | entry | 1467 | False | report_only_reference |
 | rolling_5d | score65_74_recovery_probe | entry | 0 | False | report_only_reference |
 | rolling_5d | pre_submit_price_guard | entry | 0 | False | report_only_reference |
@@ -101,7 +101,7 @@
 | rolling_5d | position_sizing_cap_release | position_sizing | 2 | False | report_only_reference |
 | rolling_5d | position_sizing_dynamic_formula | position_sizing | 2 | False | report_only_reference |
 | rolling_5d | statistical_action_weight | decision_support | 2 | False | report_only_reference |
-| rolling_5d | lifecycle_decision_matrix_runtime | lifecycle | 2000 | True | report_only_reference |
+| rolling_5d | lifecycle_decision_matrix_runtime | lifecycle | 7155 | True | report_only_reference |
 | rolling_10d | entry_mechanical_momentum | entry | 2903 | False | report_only_reference |
 | rolling_10d | score65_74_recovery_probe | entry | 0 | False | report_only_reference |
 | rolling_10d | pre_submit_price_guard | entry | 0 | False | report_only_reference |
@@ -121,7 +121,7 @@
 | rolling_10d | position_sizing_cap_release | position_sizing | 3 | False | report_only_reference |
 | rolling_10d | position_sizing_dynamic_formula | position_sizing | 3 | False | report_only_reference |
 | rolling_10d | statistical_action_weight | decision_support | 3 | False | report_only_reference |
-| rolling_10d | lifecycle_decision_matrix_runtime | lifecycle | 2000 | True | report_only_reference |
+| rolling_10d | lifecycle_decision_matrix_runtime | lifecycle | 7155 | True | report_only_reference |
 | rolling_20d | entry_mechanical_momentum | entry | 13357 | True | report_only_reference |
 | rolling_20d | score65_74_recovery_probe | entry | 0 | False | report_only_reference |
 | rolling_20d | pre_submit_price_guard | entry | 0 | True | report_only_reference |
@@ -141,7 +141,7 @@
 | rolling_20d | position_sizing_cap_release | position_sizing | 53 | False | report_only_reference |
 | rolling_20d | position_sizing_dynamic_formula | position_sizing | 53 | False | report_only_reference |
 | rolling_20d | statistical_action_weight | decision_support | 53 | False | report_only_reference |
-| rolling_20d | lifecycle_decision_matrix_runtime | lifecycle | 2000 | True | report_only_reference |
+| rolling_20d | lifecycle_decision_matrix_runtime | lifecycle | 7155 | True | report_only_reference |
 
 ## 사용 금지선
 

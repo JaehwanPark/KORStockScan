@@ -201,6 +201,15 @@ LEGACY_ARCHIVE_THRESHOLDS = [
     "closed_shadow_axes",
 ]
 
+SCALP_SIM_SUBMIT_STAGES = {
+    "scalp_sim_buy_order_virtual_pending",
+    "scalp_sim_buy_order_assumed_filled",
+    "scalp_sim_entry_submit_revalidation_warning",
+    "scalp_sim_entry_submit_revalidation_block",
+}
+
+SCALP_SIM_HOLDING_STAGE = "scalp_sim_holding_started"
+
 
 def report_paths(target_date: str) -> tuple[Path, Path]:
     base = MATRIX_DIR / f"lifecycle_decision_matrix_{target_date}"
@@ -293,7 +302,11 @@ def fixed_threshold_contract() -> dict[str, Any]:
 def _stage_for_row(row: dict[str, Any]) -> str:
     stage = str(row.get("stage") or "")
     action = str(row.get("chosen_action") or "").upper()
-    if stage in {"entry_submit_revalidation_warning", "entry_submit_revalidation_block"}:
+    if stage in {
+        "entry_submit_revalidation_warning",
+        "entry_submit_revalidation_block",
+        *SCALP_SIM_SUBMIT_STAGES,
+    }:
         return "submit"
     if stage.startswith("pre_submit_") or stage in {"latency_pass", "latency_block", "order_bundle_submitted"}:
         return "submit"
@@ -366,12 +379,26 @@ def _stage_ev(stage: str, labels: dict[str, Any]) -> float | None:
     return round(0.50 * realized_value + 0.25 * close_value + 0.15 * mfe_capped + 0.10 * mae_value, 4)
 
 
+def _adm_source_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
+    if rows:
+        return [row for row in rows if isinstance(row, dict)]
+    examples = payload.get("examples") if isinstance(payload.get("examples"), list) else []
+    return [row for row in examples if isinstance(row, dict)]
+
+
 def _load_entry_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     json_path, _ = entry_adm_report_paths(target_date)
     payload = _load_json(json_path)
+    source_rows = _adm_source_rows(payload)
     rows: list[dict[str, Any]] = []
-    for item in payload.get("examples") or []:
+    skipped_sim_lifecycle_rows = 0
+    for item in source_rows:
         if not isinstance(item, dict):
+            continue
+        source_stage = str(item.get("stage") or "")
+        if source_stage in SCALP_SIM_SUBMIT_STAGES or source_stage == "scalp_sim_sell_order_assumed_filled":
+            skipped_sim_lifecycle_rows += 1
             continue
         stage = _stage_for_row(item)
         labels = _labels(item)
@@ -390,7 +417,63 @@ def _load_entry_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, 
                 "source": "scalp_entry_action_decision_matrix",
             }
         )
-    return rows, {"artifact": str(json_path) if json_path.exists() else None, "rows": len(rows)}
+    return rows, {
+        "artifact": str(json_path) if json_path.exists() else None,
+        "rows": len(rows),
+        "source_rows": len(source_rows),
+        "skipped_sim_lifecycle_rows": skipped_sim_lifecycle_rows,
+        "source_field": "rows" if isinstance(payload.get("rows"), list) else "examples",
+    }
+
+
+def _sim_label_from_evaluation(item: dict[str, Any]) -> dict[str, Any]:
+    metrics = item.get("metrics_10m") if isinstance(item.get("metrics_10m"), dict) else {}
+    return {
+        "profit_rate": item.get("profit_rate"),
+        "exit_rule": item.get("exit_rule"),
+        "sim_post_sell_outcome": item.get("outcome"),
+        "mfe_10m_pct": metrics.get("mfe_pct"),
+        "mae_10m_pct": metrics.get("mae_pct"),
+        "close_10m_pct": metrics.get("close_ret_pct"),
+    }
+
+
+def _sim_labels_from_completed_event(item: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        return {}
+    fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
+    profit = _safe_float(fields.get("profit_rate") or fields.get("trigger_profit_rate"), None)
+    if profit is None:
+        return {}
+    return {
+        "profit_rate": profit,
+        "exit_rule": fields.get("exit_rule"),
+        "mfe_10m_pct": profit,
+        "mae_10m_pct": profit,
+        "close_10m_pct": profit,
+    }
+
+
+def _load_sim_post_sell_label_map(target_date: str) -> dict[str, dict[str, Any]]:
+    path = POST_SELL_DIR / f"sim_post_sell_evaluations_{target_date}.jsonl"
+    labels_by_key: dict[str, dict[str, Any]] = {}
+    for item in _iter_jsonl(path) or []:
+        if not isinstance(item, dict):
+            continue
+        labels = _sim_label_from_evaluation(item)
+        for key in (item.get("sim_record_id"), item.get("candidate_id"), item.get("entry_adm_candidate_id")):
+            raw = str(key or "").strip()
+            if raw:
+                labels_by_key[raw] = labels
+    return labels_by_key
+
+
+def _scalp_sim_fields(item: dict[str, Any]) -> dict[str, Any]:
+    return item.get("fields") if isinstance(item.get("fields"), dict) else {}
+
+
+def _is_scalp_sim_event(stage: str, fields: dict[str, Any]) -> bool:
+    return stage.startswith("scalp_sim_") or fields.get("simulation_book") == "scalp_ai_buy_all"
 
 
 def _load_sim_post_sell_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -474,6 +557,158 @@ def _load_wait6579_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[st
 
 def _boolish_false(value: Any) -> bool:
     return str(value).strip().lower() in {"", "0", "false", "none", "no"}
+
+
+def _load_scalp_sim_submit_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    path = PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"
+    labels_by_key = _load_sim_post_sell_label_map(target_date)
+    submit_priority = {
+        "scalp_sim_buy_order_assumed_filled": 0,
+        "scalp_sim_buy_order_virtual_pending": 1,
+        "scalp_sim_entry_submit_revalidation_block": 2,
+        "scalp_sim_entry_submit_revalidation_warning": 3,
+    }
+    submit_events: dict[str, dict[str, Any]] = {}
+    completed_events: dict[str, dict[str, Any]] = {}
+    stage_counts: Counter[str] = Counter()
+    for item in _iter_jsonl(path) or []:
+        if not isinstance(item, dict):
+            continue
+        stage = str(item.get("stage") or "")
+        fields = _scalp_sim_fields(item)
+        if not _is_scalp_sim_event(stage, fields):
+            continue
+        sim_record_id = str(fields.get("sim_record_id") or "").strip()
+        if not sim_record_id:
+            continue
+        if stage == "scalp_sim_sell_order_assumed_filled":
+            completed_events[sim_record_id] = item
+        if stage not in SCALP_SIM_SUBMIT_STAGES:
+            continue
+        stage_counts[stage] += 1
+        current = submit_events.get(sim_record_id)
+        if current is None or submit_priority.get(stage, 99) < submit_priority.get(str(current.get("stage") or ""), 99):
+            submit_events[sim_record_id] = item
+
+    rows: list[dict[str, Any]] = []
+    joined_count = 0
+    for sim_record_id, event in sorted(submit_events.items(), key=lambda item: str(item[1].get("emitted_at") or "")):
+        fields = _scalp_sim_fields(event)
+        labels = labels_by_key.get(sim_record_id) or labels_by_key.get(str(fields.get("entry_adm_candidate_id") or ""))
+        if not labels:
+            labels = _sim_labels_from_completed_event(completed_events.get(sim_record_id))
+        outcome_joined = bool(labels)
+        joined_count += int(outcome_joined)
+        rows.append(
+            {
+                "candidate_id": fields.get("entry_adm_candidate_id") or sim_record_id,
+                "stock_code": event.get("stock_code"),
+                "event_time": event.get("emitted_at"),
+                "stage": "submit",
+                "source_stage": event.get("stage"),
+                "runtime_features": {
+                    "actual_order_submitted": fields.get("actual_order_submitted"),
+                    "broker_order_forbidden": fields.get("broker_order_forbidden"),
+                    "decision_authority": fields.get("decision_authority"),
+                    "runtime_effect": fields.get("runtime_effect"),
+                    "ai_score": fields.get("scalp_sim_candidate_window_original_score") or fields.get("ai_score"),
+                    "chosen_action": fields.get("scalp_sim_candidate_window_original_action") or fields.get("ai_action"),
+                    "entry_submit_revalidation_warning": fields.get("entry_submit_revalidation_warning"),
+                    "entry_submit_revalidation_block": fields.get("entry_submit_revalidation_block"),
+                    "quote_age_ms": fields.get("quote_age_at_submit_ms"),
+                    "best_bid": fields.get("best_bid") or fields.get("best_bid_at_submit"),
+                    "best_ask": fields.get("best_ask") or fields.get("best_ask_at_submit"),
+                    "resolved_order_price": fields.get("resolved_order_price") or fields.get("submitted_order_price"),
+                    "would_limit_fill": fields.get("would_limit_fill"),
+                    "qty": fields.get("qty"),
+                    "limit_price": fields.get("limit_price"),
+                    "curr_price": fields.get("curr_price") or fields.get("mark_price_at_submit"),
+                    "price_resolution_bucket": fields.get("resolution_reason"),
+                    "fixed_threshold_contract_role": "bounded_tunable",
+                    "sim_record_id": sim_record_id,
+                },
+                "labels": labels,
+                "stage_ev_composite_pct": _stage_ev("submit", labels),
+                "outcome_joined": outcome_joined,
+                "actual_order_submitted": not _boolish_false(fields.get("actual_order_submitted")),
+                "source": "scalp_sim_entry_submit_pipeline_events",
+            }
+        )
+    return rows, {
+        "artifact": str(path) if path.exists() else None,
+        "rows": len(rows),
+        "joined_rows": joined_count,
+        "stage_counts": dict(sorted(stage_counts.items())),
+    }
+
+
+def _load_scalp_sim_holding_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    path = PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"
+    labels_by_key = _load_sim_post_sell_label_map(target_date)
+    holding_events: dict[str, dict[str, Any]] = {}
+    completed_events: dict[str, dict[str, Any]] = {}
+    stage_counts: Counter[str] = Counter()
+    for item in _iter_jsonl(path) or []:
+        if not isinstance(item, dict):
+            continue
+        stage = str(item.get("stage") or "")
+        fields = _scalp_sim_fields(item)
+        if not _is_scalp_sim_event(stage, fields):
+            continue
+        sim_record_id = str(fields.get("sim_record_id") or "").strip()
+        if not sim_record_id:
+            continue
+        if stage == "scalp_sim_sell_order_assumed_filled":
+            completed_events[sim_record_id] = item
+        if stage != SCALP_SIM_HOLDING_STAGE:
+            continue
+        stage_counts[stage] += 1
+        holding_events.setdefault(sim_record_id, item)
+
+    rows: list[dict[str, Any]] = []
+    joined_count = 0
+    for sim_record_id, event in sorted(holding_events.items(), key=lambda item: str(item[1].get("emitted_at") or "")):
+        fields = _scalp_sim_fields(event)
+        labels = labels_by_key.get(sim_record_id) or labels_by_key.get(str(fields.get("entry_adm_candidate_id") or ""))
+        if not labels:
+            labels = _sim_labels_from_completed_event(completed_events.get(sim_record_id))
+        outcome_joined = bool(labels)
+        joined_count += int(outcome_joined)
+        rows.append(
+            {
+                "candidate_id": fields.get("entry_adm_candidate_id") or sim_record_id,
+                "stock_code": event.get("stock_code"),
+                "event_time": event.get("emitted_at"),
+                "stage": "holding",
+                "source_stage": event.get("stage"),
+                "runtime_features": {
+                    "actual_order_submitted": fields.get("actual_order_submitted"),
+                    "broker_order_forbidden": fields.get("broker_order_forbidden"),
+                    "decision_authority": fields.get("decision_authority"),
+                    "runtime_effect": fields.get("runtime_effect"),
+                    "ai_score": fields.get("scalp_sim_candidate_window_original_score") or fields.get("ai_score"),
+                    "chosen_action": fields.get("scalp_sim_candidate_window_original_action"),
+                    "qty": fields.get("requested_qty") or fields.get("qty"),
+                    "limit_price": fields.get("assumed_fill_price"),
+                    "curr_price": fields.get("assumed_fill_price"),
+                    "would_limit_fill": fields.get("would_limit_fill"),
+                    "source_quality_block_reason": fields.get("scalp_sim_candidate_window_blocked_reason"),
+                    "fixed_threshold_contract_role": "bounded_tunable",
+                    "sim_record_id": sim_record_id,
+                },
+                "labels": labels,
+                "stage_ev_composite_pct": _stage_ev("holding", labels),
+                "outcome_joined": outcome_joined,
+                "actual_order_submitted": not _boolish_false(fields.get("actual_order_submitted")),
+                "source": "scalp_sim_holding_pipeline_events",
+            }
+        )
+    return rows, {
+        "artifact": str(path) if path.exists() else None,
+        "rows": len(rows),
+        "joined_rows": joined_count,
+        "stage_counts": dict(sorted(stage_counts.items())),
+    }
 
 
 def _load_scalp_sim_scale_in_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -922,6 +1157,8 @@ def build_lifecycle_decision_matrix_report(target_date: str) -> dict[str, Any]:
         _load_entry_rows,
         _load_sim_post_sell_rows,
         _load_wait6579_rows,
+        _load_scalp_sim_submit_rows,
+        _load_scalp_sim_holding_rows,
         _load_scalp_sim_scale_in_rows,
         _load_scalp_sim_overnight_rows,
         _load_scalp_sim_panic_rows,
@@ -932,6 +1169,9 @@ def build_lifecycle_decision_matrix_report(target_date: str) -> dict[str, Any]:
         loaded_rows, summary = loader(target_date)
         rows.extend(loaded_rows)
         sources[loader.__name__.removeprefix("_load_").removesuffix("_rows")] = summary
+    source_rows_total = len(rows)
+    retained_rows = len(rows)
+    dropped_rows_by_source: dict[str, int] = {}
     institutional_feature_map, institutional_summary = _load_institutional_flow_feature_map(target_date)
     institutional_joined_rows = _apply_institutional_flow_features(rows, institutional_feature_map)
     sources["institutional_flow_context"] = {
@@ -940,7 +1180,6 @@ def build_lifecycle_decision_matrix_report(target_date: str) -> dict[str, Any]:
         "runtime_effect": False,
         "decision_authority": "source_only_lifecycle_feature",
     }
-    rows = rows[:2000]
     attribution_by_stage, attribution_summary = _load_lifecycle_ai_context_attribution(target_date)
     policy_entries = _apply_lifecycle_ai_context_feedback(_policy_entries(rows), attribution_by_stage)
     warnings: list[str] = []
@@ -973,6 +1212,9 @@ def build_lifecycle_decision_matrix_report(target_date: str) -> dict[str, Any]:
         "label_keys": sorted(LABEL_KEYS),
         "summary": {
             "total_rows": len(rows),
+            "source_rows_total": source_rows_total,
+            "retained_rows": retained_rows,
+            "dropped_rows_by_source": dropped_rows_by_source,
             "joined_rows": sum(1 for row in rows if row.get("stage_ev_composite_pct") is not None),
             "stage_counts": dict(Counter(str(row.get("stage") or "unknown") for row in rows)),
             "policy_pass_count": sum(1 for entry in policy_entries if entry.get("source_quality_gate") == "pass"),
@@ -1006,6 +1248,9 @@ def render_lifecycle_decision_matrix_markdown(report: dict[str, Any]) -> str:
         "",
         "## Summary",
         f"- total_rows: `{summary.get('total_rows')}`",
+        f"- source_rows_total: `{summary.get('source_rows_total')}`",
+        f"- retained_rows: `{summary.get('retained_rows')}`",
+        f"- dropped_rows_by_source: `{summary.get('dropped_rows_by_source') or {}}`",
         f"- joined_rows: `{summary.get('joined_rows')}`",
         f"- policy_pass_count: `{summary.get('policy_pass_count')}`",
         f"- promote_ready_count: `{summary.get('promote_ready_count')}`",

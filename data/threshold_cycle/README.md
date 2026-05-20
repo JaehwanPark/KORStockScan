@@ -1,6 +1,6 @@
 # Threshold Cycle Operations
 
-작성 기준: `2026-05-19 KST`
+작성 기준: `2026-05-20 KST`
 
 이 디렉토리는 threshold 후보 수집, 장중/장후 calibration, 장전 bounded runtime env apply, daily EV 리포트를 저장한다. 현재 원칙은 완전 무인 `auto_bounded_live` apply이며, 장중 runtime threshold 자동 변경은 계속 금지한다.
 
@@ -34,6 +34,7 @@ cron completion detector는 wrapper log의 terminal marker를 source of truth로
 - postclose 제출물은 `threshold_cycle_ev_YYYY-MM-DD.{json,md}` daily EV 리포트로 통일한다. 스윙은 예외적으로 `swing_runtime_approval`의 `approval_required` 요청을 daily EV와 preopen apply manifest에 노출하지만, 수동 approval artifact 없이는 env를 쓰지 않는다.
 - `lifecycle_decision_matrix_runtime`은 ADM 확장 umbrella family다. 기본 OFF이며 selected될 때만 다음 PREOPEN env에 policy file/version/promote cap을 쓴다. hard safety와 broker/account/order guard는 항상 우선한다.
 - 기존 fixed threshold는 role contract로 처리한다. broker/stale/price freshness/stop/account/order/qty/cooldown은 `hard_safety`, `BUY_SCORE_THRESHOLD`와 entry score cutoff/VPW/strength/momentum은 `baseline_prior`, latency caution/score65_74/soft stop/holding/scale-in price guard는 `bounded_tunable`, fallback/legacy latency/shadow 축은 `legacy_archive`다.
+- `latency_classifier_runtime_profile`은 `latency_block -> latency_pass/order_bundle_submitted` 회수 후보를 소유한다. `SAFE`만 runtime pass로 보고, `CAUTION -> latency_fallback_deprecated`는 기본 reject이므로 `would_pass_events`에 섞지 않는다. `recommended_action=bounded_apply`와 `allowed_runtime_apply=true`가 동시에 충족될 때만 다음 PREOPEN latency 제한 복구 카나리(recovery canary) env가 생성된다.
 
 ## 주요 경로
 
@@ -55,7 +56,7 @@ cron completion detector는 wrapper log의 terminal marker를 source of truth로
 | `data/report/holding_exit_decision_matrix/holding_exit_decision_matrix_YYYY-MM-DD.{json,md}` | AI decision-support matrix 파생 artifact |
 | `data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_YYYY-MM-DD.{json,md}` | 누적/rolling cohort 기반 threshold cycle 파생 artifact |
 | `data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_YYYY-MM-DD_{intraday,postclose}.{json,md}` | AI correction proposal + deterministic guard 파생 artifact |
-| `data/report/latency_classifier_recommendation/latency_classifier_recommendation_YYYY-MM-DD.{json,md}` | 전일 `latency_block`의 age/jitter/spread 조합별 통과 가능성을 계산하고 `latency_classifier_runtime_profile` calibration candidate를 만든다. 다음 PREOPEN에서 `KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION`, `KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION`, `KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION` env로만 반영된다 |
+| `data/report/latency_classifier_recommendation/latency_classifier_recommendation_YYYY-MM-DD.{json,md}` | 전일 `latency_block`의 age/jitter/spread grid/quantile profile을 평가하고 `latency_classifier_runtime_profile` calibration candidate를 만든다. `would_pass_events`는 `SAFE`만 의미하고, `latency_fallback_deprecated`는 `would_caution_reject_events`와 제한 복구(bounded recovery) 후보로 분리한다. 후보별 counterfactual EV, missed/avoided label, stale/broker exclusion, `recommended_action=bounded_apply|hold|reject`를 기록한다 |
 | `data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_YYYY-MM-DD.{json,md}` | Gemini/Claude pattern lab 기반 improvement order 및 auto family 후보 artifact. runtime/code 직접 변경 없음 |
 | `data/runtime/scalp_live_simulator_state.json` | 스캘핑 live simulator open sim 포지션 복원 상태. threshold report 입력은 이 파일이 아니라 `scalp_sim_*` pipeline events를 기준으로 한다 |
 | `data/report/swing_lifecycle_audit/swing_lifecycle_audit_YYYY-MM-DD.{json,md}` | 스윙 선정-DB 적재-진입-보유-추가매수-청산 lifecycle audit artifact. runtime/code 직접 변경 없음 |
@@ -108,7 +109,7 @@ bounded calibration family는 아래 묶음이 중심이다. 목적은 완벽한
 
 1. `lifecycle_decision_matrix_runtime`: Entry ADM, Holding/Exit ADM, submit, scale-in adapter를 감싼 umbrella weighted ADM runtime 후보. selected 시에도 hard safety 우회 없이 policy file/version/promote cap만 다음 PREOPEN env로 전달한다.
 2. `score65_74_recovery_probe`: broad score threshold 완화가 아니라 score65~74, latency DANGER 제외, 수급/가속/micro-VWAP 유지, 1주/5만원 cap 후보
-3. `latency_classifier_runtime_profile`: 전일 latency_block의 age/jitter/spread 조합을 bounded tunable env 후보로 계산한다.
+3. `latency_classifier_runtime_profile`: 전일 latency_block의 age/jitter/spread grid/quantile 조합을 평가해 runtime semantics와 일치하는 bounded recovery 후보만 만든다.
 4. `bad_entry_refined_canary`: naive hard block 재개가 아니라 soft-stop tail/defer cost 감소 후보. `bad_entry_refined_candidate`는 runtime provisional signal이며, 최종 유형은 장후 `post_sell_evaluations`가 `record_id`로 join된 뒤 lifecycle attribution으로만 닫는다.
 5. `soft_stop_whipsaw_confirmation`
 6. `holding_flow_ofi_smoothing`
@@ -125,6 +126,20 @@ fixed threshold의 runtime 우선순위는 `hard safety veto -> account/order/br
 soft-stop balanced 기준은 완벽한 승률이 아니라 trade-off 기준이다. GOOD_EXIT 훼손은 `+10%p`까지 허용하고, soft-stop 손실 tail 감소 또는 MISSED_UPSIDE 감소가 있으면 유지 또는 완만 조정 대상으로 본다.
 
 `pre_submit_price_guard`는 entry price owner 내부 attribution family다. `WAIT+score>=75+DANGER+1주 cap+USE_DEFENSIVE` 표본은 broad score 완화나 fallback 재개가 아니라 `passive_probe` lifecycle로 태그한다. runtime은 방어가가 best bid보다 과도하게 낮으면 bid-1tick까지 보정하고, passive probe timeout은 30초로 줄이며, submit revalidation age와 cancel request/confirm provenance를 compact event에 남긴다. 이 표본은 `pre_submit_price_guard` report와 daily EV에서 미체결/취소 비용을 평가하는 입력이며, 새 관찰축으로 분리하지 않는다.
+
+### Latency classifier runtime profile
+
+`latency_classifier_runtime_profile`은 실매매 submit 직전 latency policy의 제한 튜닝(bounded tunable) owner다. runtime path는 장전 env에 있는 classifier/recovery 값을 읽어 `EntryPolicy`를 평가하고, hard safety, stale quote, broker/account/order/qty/cooldown guard를 우회하지 않는다.
+
+적용 경로:
+
+1. R0 수집: `latency_block`, `latency_pass`, `order_bundle_submitted`는 `reason`, `latency_state`, `policy_decision`, `effective_decision`, `ws_age_ms`, `ws_jitter_ms`, `spread_ratio`, `quote_stale`, `signal_price`, `latest_price`, `latency_canary_applied`, `latency_canary_reason`, `threshold_family`, `runtime_effect`, `actual_order_submitted`, `broker_order_forbidden`를 남긴다.
+2. R1/R2 분석: `latency_classifier_recommendation`이 `SAFE pass`, `CAUTION reject`, 제한 복구 후보(bounded recovery candidate), `hard reject`를 분리하고, `missed_entry_counterfactual` label로 후보별 EV를 계산한다.
+3. R3 후보: candidate의 primary metric은 `counterfactual_ev_pct_after_runtime_semantics`다. `quote_stale=true`, broker guard 우회 필요 후보, label sample 부족, negative EV는 `hold|reject`로 닫는다.
+4. R4/R5 적용: `threshold_cycle_preopen_apply`는 `allowed_runtime_apply=true` candidate만 env로 쓴다. 생성되는 env는 `KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION`, `KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION`, `KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION`, `KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_CANARY_ENABLED`, `KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_MIN_SIGNAL_SCORE`, `KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_AGE_MS`, `KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_JITTER_MS`, `KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_MAX_SPREAD_RATIO`다.
+5. R6 피드백: 다음 postclose에서 predicted recovery와 실제 `latency_pass`, `order_bundle_submitted`, 후행 fill/exit outcome을 비교한다.
+
+`pre_submit_price_guard`는 이 결과를 daily EV에 함께 노출할 수 있지만, `latency_pass_events=0`의 primary owner가 아니다. price guard는 quote/price 품질을 보는 후행 safety layer로 유지한다.
 
 ## AI correction proposal layer
 
@@ -165,6 +180,7 @@ family별 기준 window는 다르게 적용한다.
 | `protect_trailing_smoothing` | `rolling_10d` | `daily`, `rolling_20d` | 단일 tick/단일 종목이 아니라 반복 이탈과 safety guard를 본다. |
 | `trailing_continuation` | `rolling_10d` | `daily`, `rolling_20d` | GOOD_EXIT 훼손 리스크 때문에 당일 단독 live apply를 금지한다. |
 | `score65_74_recovery_probe` | `rolling_5d` | `daily_intraday`, `cumulative_since_2026-04-21` | BUY drought는 당일 병목을 trigger로 쓰되 EV/close 우위와 false-positive risk는 rolling/cumulative 전용 표본으로 확인한다. 당일만으로 회수축 부활 또는 live/bounded canary 승격을 확정하지 않는다. 전일 `panic_sell_defense.panic_detected` 또는 `panic_state in {PANIC_SELL, RECOVERY_WATCH}`이고 score65~74 표본이 sample floor의 70% 이상, EV/close 우위와 submitted drought guard를 통과하면 `panic_adjusted_ready` 후보가 될 수 있지만, 최종 승격은 window policy guard를 통과해야 한다. |
+| `latency_classifier_runtime_profile` | `same_day_postclose_latency_block_events` | `missed_entry_counterfactual`, 다음날 post-apply attribution | 당일 latency drought는 grid/quantile 후보 생성 trigger로 사용한다. live 반영은 runtime semantics matched recovery 후보, source-quality gate, counterfactual sample/EV, stale/broker exclusion을 통과해야 하며 다음 PREOPEN에만 적용한다. |
 | `bad_entry_refined_canary` | `rolling_10d` | `daily`, `cumulative_since_2026-04-21` | loser classifier 과적합을 피하기 위해 누적/rolling tail, 당일 safety, 장후 post-sell outcome join을 같이 본다. runtime 후보만으로 배드엔트리 확정 라벨을 붙이지 않는다. |
 | `holding_exit_decision_matrix_advisory` | `latest_report` | `rolling_bucket_context` | 최신 matrix edge가 있어야 하며 bucket confidence는 SAW rolling context를 참조한다. |
 | `scale_in_price_guard` | `rolling_10d` | `cumulative_since_2026-04-21`, `daily` | 물타기/불타기는 체결 표본이 희소하므로 당일만으로 guard 값을 정하지 않는다. |

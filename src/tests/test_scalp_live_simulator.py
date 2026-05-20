@@ -122,6 +122,8 @@ def test_scalp_simulator_arms_and_fills_without_real_buy_order(monkeypatch):
     fill_event = next(fields for stage, fields in logs if stage == "scalp_sim_buy_order_assumed_filled")
     assert fill_event["fill_source"] == "best_ask"
     assert fill_event["would_limit_fill"] is True
+    armed_event = next(fields for stage, fields in logs if stage == "scalp_sim_entry_armed")
+    assert armed_event["runtime_effect"] == "simulated_entry_armed_only"
 
 
 def test_scalp_simulator_applies_entry_ai_price_canary_without_real_order(monkeypatch):
@@ -802,6 +804,7 @@ def test_scalp_simulator_sell_profit_uses_assumed_fill_price(monkeypatch):
     event = next(fields for stage, fields in holding_logs if stage == "scalp_sim_sell_order_assumed_filled")
     assert event["profit_rate"] == f"{expected_profit:+.2f}"
     assert event["trigger_profit_rate"] == f"{state_handlers.calculate_net_profit_rate(10_000, 10_150):+.2f}"
+    assert event["decision_authority"] == "sim_observation_only"
     assert len(sim_post_sell_candidates) == 1
     assert sim_post_sell_candidates[0]["sim_record_id"] == "SIM-1"
     assert sim_post_sell_candidates[0]["sell_price"] == 10_130
@@ -1107,6 +1110,21 @@ def test_scalp_sim_ai_budget_targets_sim_only_positions(monkeypatch):
         {"strategy": "SCALPING", "simulation_book": "scalp_ai_buy_all", "actual_order_submitted": True},
         "SCALPING",
     )
+
+
+def test_scalp_sim_ai_budget_event_fields_preserve_position_provenance():
+    fields = state_handlers._scalp_sim_event_fields(
+        sim_record_id="SIM-1",
+        entry_adm_candidate_id="ADM-1",
+        runtime_effect="sim_ai_live_call_only",
+    )
+
+    assert fields["sim_record_id"] == "SIM-1"
+    assert fields["entry_adm_candidate_id"] == "ADM-1"
+    assert fields["simulation_book"] == "scalp_ai_buy_all"
+    assert fields["actual_order_submitted"] is False
+    assert fields["broker_order_forbidden"] is True
+    assert fields["decision_authority"] == "sim_observation_only"
 
 
 def test_scalp_sim_ai_budget_reuses_unchanged_signature(monkeypatch):

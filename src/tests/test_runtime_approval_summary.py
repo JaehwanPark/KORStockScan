@@ -186,6 +186,127 @@ def test_runtime_approval_summary_surfaces_entry_adm_runtime_bias_summary(tmp_pa
     assert "BUY_DEFENSIVE" in markdown
 
 
+def test_runtime_approval_summary_dedupes_lifecycle_matrix_decision_row(tmp_path, monkeypatch):
+    ev_dir = tmp_path / "threshold_cycle_ev"
+    swing_dir = tmp_path / "swing_runtime_approval"
+    out_dir = tmp_path / "runtime_approval_summary"
+    ev_dir.mkdir(parents=True)
+    swing_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        mod,
+        "ev_report_paths",
+        lambda target_date: (
+            ev_dir / f"threshold_cycle_ev_{target_date}.json",
+            ev_dir / f"threshold_cycle_ev_{target_date}.md",
+        ),
+    )
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_DIR", swing_dir)
+    monkeypatch.setattr(mod, "SUMMARY_DIR", out_dir)
+    (ev_dir / "threshold_cycle_ev_2026-05-20.json").write_text(
+        json.dumps(
+            {
+                "runtime_apply": {"selected_families": ["lifecycle_decision_matrix_runtime"]},
+                "calibration_outcome": {
+                    "decisions": [
+                        {
+                            "family": "lifecycle_decision_matrix_runtime",
+                            "calibration_state": "adjust_up",
+                            "tradeoff_score": 1.0,
+                            "sample_count": 2000,
+                            "sample_floor": 20,
+                        }
+                    ]
+                },
+                "lifecycle_decision_matrix": {
+                    "available": True,
+                    "sample_floor": 20,
+                    "metrics": {
+                        "total_rows": 7155,
+                        "joined_rows": 6109,
+                        "policy_pass_count": 5,
+                        "promote_ready_count": 0,
+                    },
+                    "policy_entries": [
+                        {"stage": "entry", "stage_ev_composite_pct": -0.0239},
+                    ],
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (swing_dir / "swing_runtime_approval_2026-05-20.json").write_text(
+        json.dumps({"summary": {"requested": 0, "approved": 0}, "blocked_requests": []}),
+        encoding="utf-8",
+    )
+
+    report = mod.build_runtime_approval_summary("2026-05-20")
+
+    lifecycle_rows = [
+        row for row in report["scalping"] if row["family"] == "lifecycle_decision_matrix_runtime"
+    ]
+    assert len(lifecycle_rows) == 1
+    assert lifecycle_rows[0]["sample"]["count"] == 7155
+    assert report["summary"]["scalping_selected_auto_bounded_live"] == 1
+
+
+def test_runtime_approval_summary_holds_latency_when_recommendation_not_allowed(tmp_path, monkeypatch):
+    ev_dir = tmp_path / "threshold_cycle_ev"
+    swing_dir = tmp_path / "swing_runtime_approval"
+    out_dir = tmp_path / "runtime_approval_summary"
+    ev_dir.mkdir(parents=True)
+    swing_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        mod,
+        "ev_report_paths",
+        lambda target_date: (
+            ev_dir / f"threshold_cycle_ev_{target_date}.json",
+            ev_dir / f"threshold_cycle_ev_{target_date}.md",
+        ),
+    )
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_DIR", swing_dir)
+    monkeypatch.setattr(mod, "SUMMARY_DIR", out_dir)
+    (ev_dir / "threshold_cycle_ev_2026-05-20.json").write_text(
+        json.dumps(
+            {
+                "runtime_apply": {"selected_families": ["latency_classifier_runtime_profile"]},
+                "entry_funnel": {
+                    "latency_submit_routing": "latency_submit_recovery_hold",
+                    "latency_block_events": 621,
+                    "latency_pass_events": 0,
+                    "order_bundle_submitted_events": 0,
+                    "recommended_action": "hold",
+                    "recommended_action_reason": "counterfactual_joined_sample=1 below floor=3",
+                    "allowed_runtime_apply": False,
+                    "would_safe_pass_events": 0,
+                    "would_caution_reject_events": 220,
+                    "would_recovery_canary_events": 220,
+                    "counterfactual_joined_sample": 1,
+                    "counterfactual_ev_pct": -3.704,
+                    "missed_winner_recovered": 0,
+                    "avoided_loser_lost": 1,
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (swing_dir / "swing_runtime_approval_2026-05-20.json").write_text(
+        json.dumps({"summary": {"requested": 0, "approved": 0}, "blocked_requests": []}),
+        encoding="utf-8",
+    )
+
+    report = mod.build_runtime_approval_summary("2026-05-20")
+
+    latency = next(row for row in report["scalping"] if row["family"] == "latency_classifier_runtime_profile")
+    assert latency["state"] == "hold_sample"
+    assert latency["selected_auto_bounded_live"] is False
+    assert latency["previous_selected_auto_bounded_live"] is True
+    assert latency["allowed_runtime_apply"] is False
+    assert latency["current_application"] == "보류: 최신 recommendation 기준 다음 PREOPEN latency env 변경 없음"
+    assert report["summary"]["scalping_selected_auto_bounded_live"] == 0
+
+
 def test_runtime_approval_summary_warns_when_sources_missing(tmp_path, monkeypatch):
     ev_dir = tmp_path / "threshold_cycle_ev"
     swing_dir = tmp_path / "swing_runtime_approval"

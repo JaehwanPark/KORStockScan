@@ -57,12 +57,6 @@
   - 금지: sim/probe EV를 broker execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
   - 다음 액션: source-quality split, active state 복원, open/closed count를 같이 기록한다.
 
-- [ ] `[BotMainMemorySwapAudit0521] bot main RSS/Swap 사용과 릴리즈 가능 지점 점검` (`Due: 2026-05-21`, `Slot: INTRADAY`, `TimeWindow: 10:10~10:25`, `Track: RuntimeStability`)
-  - Source: [kiwoom_sniper_v2.py](/home/ubuntu/KORStockScan/src/engine/kiwoom_sniper_v2.py), [kiwoom_websocket.py](/home/ubuntu/KORStockScan/src/engine/kiwoom_websocket.py), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py), [system_metric_sampler.py](/home/ubuntu/KORStockScan/src/engine/system_metric_sampler.py)
-  - 판정 기준: `bot_main.py` PID의 `VmRSS`, `VmSwap`, `RssAnon`, thread count, fd count와 시스템 swap top 프로세스를 분리한다. 봇 내부 후보는 `ACTIVE_TARGETS`, WS `realtime_data/subscribed_codes`, OpenAI `_analysis_cache/_gatekeeper_cache`, WS metric arrays, sim/probe active state로 나누어 릴리즈 가능 지점을 식별한다.
-  - 금지: swap 사용률만 보고 봇 재기동, `swapoff`, threshold/order/provider 변경을 실행하지 않는다. 봇 `VmSwap=0`이면 시스템 swap pressure와 bot memory pressure를 분리한다.
-  - 다음 액션: `bot_swap_zero_external_swap_pressure`, `bot_rss_growth_needs_instrumentation`, `cache_prune_workorder`, `ws_realtime_data_prune_workorder`, `restart_required_incident` 중 하나로 닫는다.
-
 ## 장후 체크리스트 (16:30~18:55)
 
 - [ ] `[ThresholdDailyEVReport0521] daily EV real/sim/combined split 및 자동 반영 결과 확인` (`Due: 2026-05-21`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:45`, `Track: RuntimeStability`)
@@ -76,12 +70,6 @@
   - 판정 기준: selected_order_count=12와 `implement_now`, `attach_existing_family`, `design_family_candidate`, `reject` 분류를 확인한다.
   - 금지: code-improvement workorder를 자동 repo 수정으로 취급하지 않는다. 사용자가 Codex 구현을 지시한 경우에만 실행한다.
   - 다음 액션: 구현 필요, 설계 보류, reject, already_implemented 중 하나로 닫는다.
-
-- [ ] `[SourceQualityWorkorderGapReview0521] source-quality/workorder 누락 보강 항목 재점검` (`Due: 2026-05-21`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:25`, `Track: ScalpingLogic`)
-  - Source: [observation_source_quality_audit_2026-05-20.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-05-20.json), [code_improvement_workorder_2026-05-20.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-20.json), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py)
-  - 판정 기준: 2026-05-20 보강 이후 `soft_stop_whipsaw_confirmation.flow_state`, `loss_fallback_probe.fallback_reason` missing warning이 재발하지 않는지와 `scalp_sim_panic_action_deduped` 반복 이벤트 throttle이 적용되어 observation source-quality/workorder gap이 다시 생기지 않는지 확인한다.
-  - 금지: source-quality/workorder gap을 runtime threshold mutation, real order gate, Telegram BUY/SELL, provider route, bot restart 근거로 쓰지 않는다.
-  - 다음 액션: `pass_no_recurrence`, `manual_codex_order_required`, `defer_no_repro`, `reject_low_value` 중 하나로 닫고, 재발하면 수동 Codex 구현 지시 대상으로 승격한다.
 
 - [ ] `[HumanInterventionSummary0521] 자동화체인 사용자 개입 요구사항 분류 및 누락 확인` (`Due: 2026-05-21`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:15`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-20.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-20.json), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)

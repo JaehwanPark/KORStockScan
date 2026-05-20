@@ -77,6 +77,32 @@ SIM_PROVENANCE_FIELDS = (
     "runtime_effect",
 )
 
+SCALP_SIM_PROVENANCE_FIELDS = (
+    "simulation_book",
+    "simulated_order",
+    *SIM_PROVENANCE_FIELDS,
+    "decision_authority",
+    "sim_record_id",
+)
+
+SCALP_SIM_AI_BUDGET_FIELDS = (
+    "simulation_book",
+    "simulated_order",
+    *SIM_PROVENANCE_FIELDS,
+    "decision_authority",
+    "sim_record_id",
+    "entry_adm_candidate_id",
+)
+
+SCALP_SIM_RISK_CONTEXT_FIELDS = (
+    "simulation_book",
+    "simulated_order",
+    *SIM_PROVENANCE_FIELDS,
+    "decision_authority",
+    "threshold_family",
+    "source_stage",
+)
+
 SWING_PROBE_FIELDS = (
     "simulated_order",
     "evidence_quality",
@@ -109,6 +135,25 @@ PRE_SUBMIT_GUARD_FIELDS = (
     "forbidden_uses",
     "threshold_family",
     "gate_action",
+    "actual_order_submitted",
+    "broker_order_forbidden",
+)
+
+LATENCY_SUBMIT_FIELDS = (
+    "reason",
+    "latency_state",
+    "policy_decision",
+    "effective_decision",
+    "ws_age_ms",
+    "ws_jitter_ms",
+    "spread_ratio",
+    "quote_stale",
+    "signal_price",
+    "latest_price",
+    "latency_canary_applied",
+    "latency_canary_reason",
+    "threshold_family",
+    "runtime_effect",
     "actual_order_submitted",
     "broker_order_forbidden",
 )
@@ -162,6 +207,57 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
     "pre_submit_overbought_pullback_guard_block": StageContract(
         required_fields=(*PRE_SUBMIT_GUARD_FIELDS, "risk_state"),
     ),
+    "latency_block": StageContract(
+        required_fields=LATENCY_SUBMIT_FIELDS,
+        decision_authority="source_quality_only_known_pre_fix_gap",
+    ),
+    "latency_pass": StageContract(
+        required_fields=LATENCY_SUBMIT_FIELDS,
+        decision_authority="source_quality_only_known_pre_fix_gap",
+    ),
+    "order_bundle_submitted": StageContract(
+        required_fields=LATENCY_SUBMIT_FIELDS,
+        decision_authority="source_quality_only_known_pre_fix_gap",
+    ),
+    "scalp_sim_entry_armed": StageContract(required_fields=SCALP_SIM_PROVENANCE_FIELDS),
+    "scalp_sim_buy_order_virtual_pending": StageContract(required_fields=SCALP_SIM_PROVENANCE_FIELDS),
+    "scalp_sim_buy_order_assumed_filled": StageContract(required_fields=SCALP_SIM_PROVENANCE_FIELDS),
+    "scalp_sim_entry_ai_price_skip_order": StageContract(required_fields=SCALP_SIM_PROVENANCE_FIELDS),
+    "scalp_sim_holding_started": StageContract(required_fields=SCALP_SIM_PROVENANCE_FIELDS),
+    "scalp_sim_sell_order_assumed_filled": StageContract(required_fields=SCALP_SIM_PROVENANCE_FIELDS),
+    "scalp_sim_ai_holding_live_call": StageContract(
+        required_fields=SCALP_SIM_AI_BUDGET_FIELDS,
+        decision_authority="source_quality_only_known_pre_fix_gap",
+    ),
+    "scalp_sim_ai_holding_deferred": StageContract(
+        required_fields=SCALP_SIM_AI_BUDGET_FIELDS,
+        decision_authority="source_quality_only_known_pre_fix_gap",
+    ),
+    "sim_ai_budget_exhausted": StageContract(
+        required_fields=SCALP_SIM_AI_BUDGET_FIELDS,
+        decision_authority="source_quality_only_known_pre_fix_gap",
+    ),
+    "sim_ai_critical_bypass": StageContract(
+        required_fields=SCALP_SIM_AI_BUDGET_FIELDS,
+        decision_authority="source_quality_only_known_pre_fix_gap",
+    ),
+    "scalp_sim_panic_bottoming_entry_allowed": StageContract(required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS),
+    "scalp_sim_panic_level1_entry_observed": StageContract(required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS),
+    "scalp_sim_panic_entry_blocked": StageContract(required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS),
+    "scalp_sim_panic_scale_in_blocked": StageContract(required_fields=(*SCALP_SIM_RISK_CONTEXT_FIELDS, "sim_record_id")),
+    "scalp_sim_panic_action_deduped": StageContract(required_fields=(*SCALP_SIM_RISK_CONTEXT_FIELDS, "sim_record_id")),
+    "scalp_sim_partial_sell_order_assumed_filled": StageContract(
+        required_fields=(*SCALP_SIM_RISK_CONTEXT_FIELDS, "sim_record_id", "entry_adm_candidate_id")
+    ),
+    "scalp_sim_euphoria_context_noop": StageContract(required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS),
+    "scalp_sim_euphoria_entry_blocked": StageContract(required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS),
+    "scalp_sim_euphoria_chase_entry_blocked": StageContract(required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS),
+    "scalp_sim_euphoria_retest_starter_allowed": StageContract(required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS),
+    "scalp_sim_euphoria_level1_starter_observed": StageContract(required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS),
+    "scalp_sim_euphoria_scale_in_blocked": StageContract(required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS),
+    "scalp_sim_euphoria_partial_profit_assumed_filled": StageContract(required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS),
+    "scalp_sim_euphoria_partial_profit_unpriced": StageContract(required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS),
+    "scalp_sim_euphoria_action_deduped": StageContract(required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS),
     "ai_holding_fast_reuse_band": StageContract(
         required_fields=(*DIAGNOSTIC_CONTRACT_FIELDS, "source_quality_route", "telemetry_only", "action"),
         decision_authority="source_quality_only",

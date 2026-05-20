@@ -42,6 +42,7 @@ _REASON_LABELS = {
     "one_share_real_canary_approval_artifact_missing": "1주 real canary approval artifact 없음",
     "scale_in_real_canary_approval_artifact_missing": "scale-in approval artifact 없음",
     "selected_auto_bounded_live": "auto_bounded_live 선택",
+    "latency_recovery_hold_by_counterfactual_ev": "latency recovery 보류",
     "hold": "유지",
     "hold_no_edge": "edge 부족",
     "freeze": "동결",
@@ -53,6 +54,7 @@ _FAMILY_DESCRIPTIONS = {
     "protect_trailing_smoothing": "protect/trailing 청산 후보에서 미시 반등 신호가 있으면 과조기 청산을 줄이는 축",
     "trailing_continuation": "trailing 이후 추가 상승 여지가 큰 표본을 계속 보유할 수 있는지 보는 축",
     "pre_submit_price_guard": "주문 제출 직전 quote stale, spread, passive probe 가격품질 문제를 막는 진입 안전축",
+    "latency_classifier_runtime_profile": "latency SAFE/CAUTION/DANGER classifier와 bounded submit recovery canary를 분리 적용하는 진입 실행품질 축",
     "score65_74_recovery_probe": "AI 점수 65~74 WAIT 구간 중 수급/가속 조건이 좋은 후보를 1주/소액 canary로 회수하는 축",
     "liquidity_gate_refined_candidate": "유동성 gate가 막은 후보의 후행 EV를 보고 gate 완화/유지 필요성을 판단하는 축",
     "overbought_gate_refined_candidate": "과열 gate가 막은 후보의 후행 EV를 보고 과열 차단 기준을 다듬는 축",
@@ -88,6 +90,7 @@ _BASELINE_APPLICATION = {
     "holding_flow_ofi_smoothing": "기존 적용 유지: holding_flow_override 내부 OFI/QI postprocessor ON",
     "scale_in_price_guard": "기존 적용 유지: 추가매수 가격품질 guard ON",
     "pre_submit_price_guard": "기존 적용/검증 유지: 제출 직전 가격품질 guard 계열",
+    "latency_classifier_runtime_profile": "선택 시 다음 PREOPEN latency classifier/recovery env만 적용",
     "holding_exit_decision_matrix_advisory": "관찰/리포트 only: advisory live 적용 아님",
     "scalp_entry_action_decision_matrix_advisory": "운영 override runtime bias: AI BUY를 WAIT/DROP 또는 defensive bias로 보정, submit safety guard 우선",
     "lifecycle_decision_matrix_runtime": "기본 OFF: 선택 시 micro canary env로 policy file/version만 연결, hard safety/submit guard 우선",
@@ -153,6 +156,13 @@ _SCALPING_GATE_REVIEW = {
         "hard_gate_review": "quote stale/spread/passive probe 가격품질 차단은 의도적 submit safety guard다",
         "tuning_route": "pre_submit_price_guard EV/source-quality only",
         "analysis_coverage": "pre-submit guard events and missed-entry counterfactual",
+    },
+    "latency_classifier_runtime_profile": {
+        "gate_review_class": "entry_execution_quality_bounded_tunable",
+        "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
+        "hard_gate_review": "CAUTION은 기본 runtime에서 reject이며 bounded recovery canary가 명시된 경우에만 latency_pass 후보가 된다",
+        "tuning_route": "threshold-cycle latency recommendation plus post-apply latency_pass/order_bundle attribution",
+        "analysis_coverage": "latency_block SAFE/CAUTION/recovery/hard reject split",
     },
     "score65_74_recovery_probe": {
         "gate_review_class": "entry_unlock_probe",
@@ -486,12 +496,19 @@ def _scalping_rows(ev_report: dict[str, Any], calibration_report: dict[str, Any]
     decisions = outcome.get("decisions") if isinstance(outcome.get("decisions"), list) else []
     candidates = _candidate_by_family(calibration_report.get("calibration_candidates"))
     selected = set((ev_report.get("runtime_apply") or {}).get("selected_families") or [])
+    lifecycle_matrix = (
+        ev_report.get("lifecycle_decision_matrix")
+        if isinstance(ev_report.get("lifecycle_decision_matrix"), dict)
+        else {}
+    )
     rows: list[dict[str, Any]] = []
     for item in decisions:
         if not isinstance(item, dict):
             continue
         family = str(item.get("family") or "").strip()
         if not family:
+            continue
+        if family == "lifecycle_decision_matrix_runtime" and lifecycle_matrix:
             continue
         candidate = candidates.get(family, {})
         state = str(item.get("calibration_state") or "-")
@@ -564,11 +581,6 @@ def _scalping_rows(ev_report: dict[str, Any], calibration_report: dict[str, Any]
             "daily action bucket EV와 runtime forced_action provenance가 충분해야 다음 env 튜닝 판단으로 넘어간다."
         )
         rows.append(row)
-    lifecycle_matrix = (
-        ev_report.get("lifecycle_decision_matrix")
-        if isinstance(ev_report.get("lifecycle_decision_matrix"), dict)
-        else {}
-    )
     if lifecycle_matrix:
         metrics = lifecycle_matrix.get("metrics") if isinstance(lifecycle_matrix.get("metrics"), dict) else {}
         total_rows = _as_int(metrics.get("total_rows", lifecycle_matrix.get("total_rows")))
@@ -626,6 +638,69 @@ def _scalping_rows(ev_report: dict[str, Any], calibration_report: dict[str, Any]
             "promote_ready_count": promote_ready,
         }
         row.update(_gate_review("scalping", "lifecycle_decision_matrix_runtime", reasons))
+        rows.append(row)
+    entry_funnel = ev_report.get("entry_funnel") if isinstance(ev_report.get("entry_funnel"), dict) else {}
+    if "latency_classifier_runtime_profile" in selected or entry_funnel.get("latency_submit_routing"):
+        selected_family = "latency_classifier_runtime_profile" in selected
+        recommended_action = str(entry_funnel.get("recommended_action") or "")
+        recommended_reason = str(entry_funnel.get("recommended_action_reason") or "")
+        allowed_runtime_apply = bool(entry_funnel.get("allowed_runtime_apply"))
+        next_preopen_selected = selected_family and recommended_action == "bounded_apply" and allowed_runtime_apply
+        recovery_candidates = _as_int(entry_funnel.get("would_recovery_canary_events"))
+        recovery_attempts = _as_int(entry_funnel.get("would_recovery_canary_attempts"))
+        caution_rejects = _as_int(entry_funnel.get("would_caution_reject_events"))
+        if next_preopen_selected:
+            state = "adjust_up"
+            reasons = ["selected_auto_bounded_live"]
+        elif recovery_candidates > 0:
+            state = "hold_sample" if _as_int(entry_funnel.get("counterfactual_joined_sample")) < 3 else "hold_no_edge"
+            reasons = ["latency_recovery_hold_by_counterfactual_ev"]
+        else:
+            state = "hold_sample"
+            reasons = ["latency_classifier_runtime_semantics_gap"]
+        row = {
+            "domain": "scalping",
+            "family": "latency_classifier_runtime_profile",
+            "description": _description("latency_classifier_runtime_profile"),
+            "state": state,
+            "current_application": (
+                _current_application("latency_classifier_runtime_profile", state, True)
+                if next_preopen_selected
+                else "보류: 최신 recommendation 기준 다음 PREOPEN latency env 변경 없음"
+            ),
+            "state_interpretation": (
+                "SAFE만 runtime pass로 보며 CAUTION은 기본 reject다. "
+                "recovery canary가 명시되고 allowed_runtime_apply=true인 후보만 다음 PREOPEN bounded env로 연결한다."
+            ),
+            "score": recovery_candidates,
+            "score_label": str(recovery_candidates),
+            "sample": {
+                "count": _as_int(entry_funnel.get("latency_block_events")),
+                "floor": 20,
+                "would_safe_pass_events": _as_int(entry_funnel.get("would_safe_pass_events")),
+                "would_caution_reject_events": caution_rejects,
+                "would_recovery_canary_events": recovery_candidates,
+                "would_recovery_canary_attempts": recovery_attempts,
+                "latency_pass_events": _as_int(entry_funnel.get("latency_pass_events")),
+                "order_bundle_submitted_events": _as_int(entry_funnel.get("order_bundle_submitted_events")),
+                "counterfactual_joined_sample": _as_int(entry_funnel.get("counterfactual_joined_sample")),
+                "counterfactual_ev_pct": entry_funnel.get("counterfactual_ev_pct"),
+                "missed_winner_recovered": _as_int(entry_funnel.get("missed_winner_recovered")),
+                "avoided_loser_lost": _as_int(entry_funnel.get("avoided_loser_lost")),
+                "stale_quote_override_events": _as_int(entry_funnel.get("stale_quote_override_events")),
+                "broker_guard_bypass_candidates": _as_int(entry_funnel.get("broker_guard_bypass_candidates")),
+            },
+            "reasons": reasons,
+            "reason_label": _reason_text(reasons),
+            "selected_auto_bounded_live": next_preopen_selected,
+            "previous_selected_auto_bounded_live": selected_family and not next_preopen_selected,
+            "allowed_runtime_apply": allowed_runtime_apply,
+            "runtime_bias_scope": "latency_submit_recovery_bounded_canary",
+            "latency_submit_routing": entry_funnel.get("latency_submit_routing"),
+            "recommended_action": recommended_action,
+            "recommended_action_reason": recommended_reason,
+        }
+        row.update(_gate_review("scalping", "latency_classifier_runtime_profile", reasons))
         rows.append(row)
     target_date = str(ev_report.get("date") or "").strip()
     overnight_path = REPORT_DIR / "scalp_sim_overnight" / f"scalp_sim_overnight_{target_date}.json"

@@ -8,9 +8,9 @@
 ## Stage Contexts
 | stage | prompt | policy_key | hint | contribution | quality |
 | --- | --- | --- | --- | --- | --- |
-| `entry` | `True` | `entry:weighted_adm_v1` | `BUY_DEFENSIVE` | `0.0` | `hold_sample` |
+| `entry` | `True` | `entry:weighted_adm_v1` | `WAIT_REQUOTE` | `0.0` | `hold_sample` |
 | `submit` | `False` | `submit:weighted_adm_v1` | `NO_CHANGE` | `0.0` | `hold_sample` |
-| `holding` | `True` | `holding:weighted_adm_v1` | `NO_CHANGE` | `0.0` | `hold_sample` |
+| `holding` | `True` | `holding:weighted_adm_v1` | `EXIT` | `0.0` | `hold_sample` |
 | `scale_in` | `False` | `scale_in:weighted_adm_v1` | `NO_CHANGE` | `0.0` | `hold_sample` |
 | `exit` | `True` | `exit:weighted_adm_v1` | `EXIT` | `0.0` | `hold_sample` |
 

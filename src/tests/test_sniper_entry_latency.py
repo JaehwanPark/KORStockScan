@@ -128,6 +128,54 @@ def test_latency_entry_caution_rejects_deprecated_fallback():
     clear_signal_reference(stock)
 
 
+def test_latency_submit_recovery_canary_overrides_caution_reject(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_LATENCY_SUBMIT_RECOVERY_CANARY_ENABLED=True,
+            SCALP_LATENCY_SUBMIT_RECOVERY_MIN_SIGNAL_SCORE=75.0,
+            SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_AGE_MS=1200,
+            SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_JITTER_MS=1500,
+            SCALP_LATENCY_SUBMIT_RECOVERY_MAX_SPREAD_RATIO=0.0100,
+        ),
+    )
+    stock = {"name": "TEST", "position_tag": "SCANNER"}
+    freeze_signal_reference(
+        stock,
+        signal_price=10_000,
+        strategy_id="SCALPING",
+        signal_time=datetime.now(UTC),
+    )
+
+    result = evaluate_live_buy_entry(
+        stock=stock,
+        code="123456_recovery",
+        ws_data={
+            "curr": 10_010,
+            "last_ws_update_ts": time.time() - 0.35,
+            "orderbook": {
+                "asks": [{"price": 10_020, "volume": 100}],
+                "bids": [{"price": 10_010, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=1,
+        signal_price=10_000,
+        signal_strength=82.0,
+    )
+
+    assert result["policy_decision"] == "REJECT_MARKET_CONDITION"
+    assert result["policy_reason"] == "latency_fallback_deprecated"
+    assert result["allowed"] is True
+    assert result["decision"] == "ALLOW_NORMAL"
+    assert result["reason"] == "latency_submit_recovery_normal_override"
+    assert result["latency_canary_applied"] is True
+    assert result["latency_state"] == "CAUTION"
+    clear_signal_reference(stock)
+
+
 def test_latency_entry_canary_overrides_reject_danger_for_scanner(monkeypatch):
     monkeypatch.setattr(
         entry_latency_module,

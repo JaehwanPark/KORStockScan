@@ -1,13 +1,20 @@
 # Observation Source Quality Audit - 2026-05-20
 
-- status: `pass`
+- status: `warning`
 - event_count: `593358`
 - decision_authority: `source_quality_only`
 - runtime_effect: `False`
 - forbidden_uses: `runtime_threshold_apply, order_submit, provider_route_change, bot_restart, real_execution_quality_approval`
 
 ## Warning Stages
-- none
+- `latency_block` sample=`624` missing=`{'latency_state': 1.0, 'policy_decision': 1.0, 'effective_decision': 1.0, 'ws_age_ms': 0.0048, 'ws_jitter_ms': 0.0048, 'latency_canary_reason': 0.3574, 'threshold_family': 1.0, 'runtime_effect': 1.0, 'actual_order_submitted': 1.0, 'broker_order_forbidden': 1.0}` zero=`{}`
+- `scalp_sim_entry_armed` sample=`238` missing=`{'runtime_effect': 1.0}` zero=`{}`
+- `scalp_sim_sell_order_assumed_filled` sample=`238` missing=`{'decision_authority': 0.3151}` zero=`{}`
+- `scalp_sim_ai_holding_live_call` sample=`1754` missing=`{'sim_record_id': 1.0, 'entry_adm_candidate_id': 1.0}` zero=`{}`
+- `scalp_sim_ai_holding_deferred` sample=`715` missing=`{'sim_record_id': 1.0, 'entry_adm_candidate_id': 1.0}` zero=`{}`
+- `sim_ai_budget_exhausted` sample=`715` missing=`{'sim_record_id': 1.0, 'entry_adm_candidate_id': 1.0}` zero=`{}`
+- `sim_ai_critical_bypass` sample=`692` missing=`{'sim_record_id': 1.0, 'entry_adm_candidate_id': 1.0}` zero=`{}`
+- `scalp_sim_panic_entry_blocked` sample=`302` missing=`{'decision_authority': 0.0066}` zero=`{}`
 
 ## High Volume Stages Without Source-Like Fields
 - none

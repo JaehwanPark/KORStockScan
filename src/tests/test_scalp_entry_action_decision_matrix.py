@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from datetime import datetime
 
 from src.engine import scalp_entry_action_decision_matrix as mod
@@ -59,12 +60,35 @@ def test_scalp_entry_adm_report_aggregates_actions_and_joins_outcomes(tmp_path, 
                 "fields": {"blocked_reason": "below_min_liquidity"},
             },
             {
+                "stage": "scalp_sim_buy_order_virtual_pending",
+                "stock_code": "555555",
+                "record_id": "R5P",
+                "emitted_at": "2026-05-18T09:13:30",
+                "emitted_date": "2026-05-18",
+                "fields": {"sim_record_id": "SIM1", "best_ask": "1000", "would_limit_fill": False},
+            },
+            {
                 "stage": "scalp_sim_buy_order_assumed_filled",
                 "stock_code": "555555",
                 "record_id": "R5",
                 "emitted_at": "2026-05-18T09:14:00",
                 "emitted_date": "2026-05-18",
                 "fields": {"sim_record_id": "SIM1", "best_ask": "1000", "would_limit_fill": False},
+            },
+            {
+                "stage": "scalp_sim_entry_ai_price_skip_order",
+                "stock_code": "777777",
+                "record_id": "R7",
+                "emitted_at": "2026-05-18T09:14:30",
+                "emitted_date": "2026-05-18",
+                "fields": {
+                    "sim_record_id": "SIM2",
+                    "entry_adm_candidate_id": "ADM-SIM2",
+                    "broker_order_forbidden": True,
+                    "actual_order_submitted": False,
+                    "decision_authority": "sim_observation_only",
+                    "runtime_effect": "simulated_order_skipped",
+                },
             },
             {
                 "stage": "scalp_entry_action_decision_snapshot",
@@ -114,7 +138,7 @@ def test_scalp_entry_adm_report_aggregates_actions_and_joins_outcomes(tmp_path, 
     assert counts["NO_BUY_AI"] == 1
     assert counts["WAIT_REQUOTE"] == 1
     assert counts["SKIP_STALE"] == 1
-    assert counts["SKIP_PRE_SUBMIT_SAFETY"] == 1
+    assert counts["SKIP_PRE_SUBMIT_SAFETY"] == 2
     assert counts["BUY_NOW"] == 1
     assert counts["BUY_DEFENSIVE"] == 1
     assert report["summary"]["joined_sample"] == 2
@@ -126,6 +150,12 @@ def test_scalp_entry_adm_report_aggregates_actions_and_joins_outcomes(tmp_path, 
     assert report["summary"]["runtime_bias_applied_count"] == 1
     assert report["summary"]["runtime_effect_counts"]["buy_defensive_bias"] == 1
     assert report["summary"]["forced_action_counts"]["BUY"] == 1
+    assert len(report["rows"]) == report["summary"]["total_candidates"]
+    assert report["examples"] == report["rows"][:50]
+    sim_row = next(item for item in report["rows"] if item["sim_record_id"] == "SIM1")
+    assert sim_row["stage"] == "scalp_sim_buy_order_assumed_filled"
+    price_skip_row = next(item for item in report["rows"] if item["sim_record_id"] == "SIM2")
+    assert price_skip_row["chosen_action"] == "SKIP_PRE_SUBMIT_SAFETY"
     assert (report_dir / "scalp_entry_action_decision_matrix_2026-05-18.json").exists()
 
 
@@ -199,6 +229,11 @@ def test_scalp_entry_adm_runtime_bias_forces_wait_on_negative_buy_bucket(tmp_pat
     report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
     report_dir.mkdir(parents=True)
     monkeypatch.setattr(runtime_mod, "ADM_DIR", report_dir)
+    monkeypatch.setattr(
+        runtime_mod,
+        "TRADING_RULES",
+        replace(runtime_mod.TRADING_RULES, SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED=True),
+    )
     bucket_token = "score75_84|strong_strength_momentum|fresh|quote_based|liquidity_high|overbought_normal|time_outside_regular"
     (report_dir / "scalp_entry_action_decision_matrix_2026-05-18.json").write_text(
         json.dumps(
@@ -245,6 +280,11 @@ def test_scalp_entry_adm_hypothesis_fallback_forces_wait_on_weak_chase_risk(tmp_
     report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
     report_dir.mkdir(parents=True)
     monkeypatch.setattr(runtime_mod, "ADM_DIR", report_dir)
+    monkeypatch.setattr(
+        runtime_mod,
+        "TRADING_RULES",
+        replace(runtime_mod.TRADING_RULES, SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED=True),
+    )
     (report_dir / "scalp_entry_action_decision_matrix_2026-05-18.json").write_text(
         json.dumps({"date": "2026-05-18", "matrix_version": "scalp_entry_adm_v1_2026-05-18", "bucket_summary": []}),
         encoding="utf-8",

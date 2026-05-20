@@ -92,6 +92,19 @@ THRESHOLD_STAGE_FAMILY_MAP = {
     "scalp_sim_euphoria_partial_profit_assumed_filled": "panic_lifecycle_actuator",
     "scalp_sim_euphoria_partial_profit_unpriced": "panic_lifecycle_actuator",
     "scalp_sim_euphoria_action_deduped": "panic_lifecycle_actuator",
+    "swing_probe_entry_candidate": "swing_strategy_discovery_sim",
+    "swing_probe_holding_started": "swing_strategy_discovery_sim",
+    "swing_probe_exit_signal": "swing_strategy_discovery_sim",
+    "swing_probe_sell_order_assumed_filled": "swing_strategy_discovery_sim",
+    "swing_probe_scale_in_order_assumed_filled": "swing_strategy_discovery_sim",
+    "swing_sim_scale_in_order_assumed_filled": "swing_strategy_discovery_sim",
+    "swing_probe_discarded": "swing_strategy_discovery_sim",
+    "swing_probe_state_persisted": "swing_strategy_discovery_sim",
+    "swing_probe_state_restored": "swing_strategy_discovery_sim",
+    "swing_probe_state_empty_overwrite_blocked": "swing_strategy_discovery_sim",
+    "swing_reentry_counterfactual_after_loss": "swing_strategy_discovery_sim",
+    "swing_same_symbol_loss_reentry_cooldown": "swing_strategy_discovery_sim",
+    "swing_same_symbol_loss_reentry_cooldowns_restored": "swing_strategy_discovery_sim",
 }
 
 TARGET_STAGES = frozenset(THRESHOLD_STAGE_FAMILY_MAP)

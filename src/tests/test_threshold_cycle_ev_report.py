@@ -9,6 +9,7 @@ from src.engine import threshold_cycle_ev_report as mod
 def _isolate_pattern_lab_audit_dirs(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing_currentness_audit")
     monkeypatch.setattr(mod, "PATTERN_LAB_PROPAGATION_AUDIT_DIR", tmp_path / "missing_propagation_audit")
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", tmp_path / "missing_latency_classifier_recommendation")
     monkeypatch.setattr(
         mod,
         "scalp_entry_adm_report_paths",
@@ -304,6 +305,65 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
     assert "swing_one_share_real_canary_phase0" in markdown
     assert "AVG_DOWN, PYRAMID, SCALE_IN" in markdown
     assert "swing_runtime_approval:2026-05-08:swing_model_floor" in markdown
+
+
+def test_build_threshold_cycle_ev_report_surfaces_latency_apply_permission(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    monitor_dir = report_dir / "monitor_snapshots"
+    calibration_dir = report_dir / "threshold_cycle_calibration"
+    latency_dir = report_dir / "latency_classifier_recommendation"
+    apply_dir = tmp_path / "apply_plans"
+    ev_dir = report_dir / "threshold_cycle_ev"
+    for path in (monitor_dir, calibration_dir, latency_dir, apply_dir):
+        path.mkdir(parents=True)
+    monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", monitor_dir)
+    monkeypatch.setattr(mod, "CALIBRATION_REPORT_DIR", calibration_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+    monkeypatch.setattr(mod, "EV_REPORT_DIR", ev_dir)
+    monkeypatch.setattr(mod, "apply_manifest_path", lambda target_date: apply_dir / f"threshold_apply_{target_date}.json")
+
+    (monitor_dir / "trade_review_2026-05-20.json").write_text(json.dumps({"metrics": {}}), encoding="utf-8")
+    (monitor_dir / "performance_tuning_2026-05-20.json").write_text(
+        json.dumps({"metrics": {"latency_block_events": 621, "latency_pass_events": 0}}),
+        encoding="utf-8",
+    )
+    (calibration_dir / "threshold_cycle_calibration_2026-05-20_postclose.json").write_text(
+        json.dumps({"run_phase": "postclose", "calibration_candidates": []}),
+        encoding="utf-8",
+    )
+    (apply_dir / "threshold_apply_2026-05-20.json").write_text(
+        json.dumps({"status": "auto_bounded_live_ready", "auto_apply_selected": []}),
+        encoding="utf-8",
+    )
+    (latency_dir / "latency_classifier_recommendation_2026-05-20.json").write_text(
+        json.dumps(
+            {
+                "profile_generation": {"mode": "grid_quantile_search", "profile_count": 486},
+                "calibration_candidate": {
+                    "family": "latency_classifier_runtime_profile",
+                    "allowed_runtime_apply": False,
+                    "calibration_state": "hold_sample",
+                    "source_metrics": {
+                        "recommended_action": "hold",
+                        "recommended_action_reason": "counterfactual_joined_sample=1 below floor=3",
+                        "would_safe_pass_events": 0,
+                        "would_caution_reject_events": 220,
+                        "would_recovery_canary_events": 220,
+                    },
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_threshold_cycle_ev_report("2026-05-20")
+
+    assert report["entry_funnel"]["latency_submit_routing"] == "latency_submit_recovery_hold"
+    assert report["entry_funnel"]["allowed_runtime_apply"] is False
+    assert report["entry_funnel"]["calibration_state"] == "hold_sample"
+    assert report["entry_funnel"]["recommended_action"] == "hold"
+    assert report["entry_funnel"]["would_recovery_canary_events"] == 220
 
 
 def test_build_threshold_cycle_ev_report_warns_when_pattern_lab_artifact_missing(tmp_path, monkeypatch):

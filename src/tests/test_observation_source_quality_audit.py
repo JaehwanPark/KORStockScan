@@ -334,6 +334,94 @@ def test_observation_source_quality_audit_accepts_pre_ai_and_pre_submit_gate_con
     assert report["stage_contracts"]["pre_submit_liquidity_guard_block"]["status"] == "pass"
 
 
+def test_observation_source_quality_audit_accepts_scalp_sim_stage_contracts(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    fields = {
+        "simulation_book": "scalp_ai_buy_all",
+        "simulated_order": True,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "decision_authority": "sim_observation_only",
+        "runtime_effect": False,
+        "sim_record_id": "SIM-1",
+    }
+    _write_events(
+        tmp_path,
+        "2026-05-20",
+        [
+            _event("scalp_sim_entry_armed", fields, record_id=1),
+            _event("scalp_sim_buy_order_virtual_pending", fields, record_id=2),
+            _event("scalp_sim_buy_order_assumed_filled", fields, record_id=3),
+            _event("scalp_sim_entry_ai_price_skip_order", fields, record_id=4),
+            _event("scalp_sim_holding_started", fields, record_id=5),
+            _event("scalp_sim_sell_order_assumed_filled", fields, record_id=6),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-05-20")
+
+    for stage in (
+        "scalp_sim_entry_armed",
+        "scalp_sim_buy_order_virtual_pending",
+        "scalp_sim_buy_order_assumed_filled",
+        "scalp_sim_entry_ai_price_skip_order",
+        "scalp_sim_holding_started",
+        "scalp_sim_sell_order_assumed_filled",
+    ):
+        assert report["stage_contracts"][stage]["status"] == "pass"
+
+
+def test_observation_source_quality_audit_contracts_sim_budget_and_risk_context(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    budget_fields = {
+        "simulation_book": "scalp_ai_buy_all",
+        "simulated_order": True,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "decision_authority": "sim_observation_only",
+        "runtime_effect": "sim_ai_live_call_only",
+        "sim_record_id": "SIM-1",
+        "entry_adm_candidate_id": "ADM-1",
+    }
+    risk_fields = {
+        "simulation_book": "scalp_ai_buy_all",
+        "simulated_order": True,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "decision_authority": "sim_observation_only",
+        "runtime_effect": "sim_panic_action_deduped",
+        "threshold_family": "panic_lifecycle_actuator",
+        "source_stage": "scalp_sim_holding_started",
+        "sim_record_id": "SIM-1",
+    }
+    _write_events(
+        tmp_path,
+        "2026-05-20",
+        [
+            _event("scalp_sim_ai_holding_live_call", budget_fields, record_id=1),
+            _event("scalp_sim_ai_holding_deferred", budget_fields, record_id=2),
+            _event("sim_ai_budget_exhausted", budget_fields, record_id=3),
+            _event("sim_ai_critical_bypass", budget_fields, record_id=4),
+            _event("scalp_sim_panic_action_deduped", risk_fields, record_id=5),
+            _event("scalp_sim_panic_scale_in_blocked", risk_fields, record_id=6),
+            _event("scalp_sim_euphoria_context_noop", risk_fields, record_id=7),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-05-20")
+
+    for stage in (
+        "scalp_sim_ai_holding_live_call",
+        "scalp_sim_ai_holding_deferred",
+        "sim_ai_budget_exhausted",
+        "sim_ai_critical_bypass",
+        "scalp_sim_panic_action_deduped",
+        "scalp_sim_panic_scale_in_blocked",
+        "scalp_sim_euphoria_context_noop",
+    ):
+        assert report["stage_contracts"][stage]["status"] == "pass"
+
+
 def test_observation_source_quality_audit_writes_json_and_markdown(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(tmp_path, "2026-05-15", [_event("swing_probe_entry_candidate", {

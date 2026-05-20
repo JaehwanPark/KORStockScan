@@ -175,7 +175,7 @@ CALIBRATION_FAMILY_METADATA = {
         "window_policy": {
             "primary": "daily_intraday",
             "secondary": ["rolling_5d", "cumulative_since_2026-04-21"],
-            "use": "latency guard miss는 submitted 직전 차단의 EV 회복 가능성과 quote freshness safety를 같이 보며 장중 mutation 없이 다음 장전 1회만 조정한다.",
+            "use": "후행 가격품질 guard를 관찰한다. latency submit drought/recovery 후보는 latency_classifier_runtime_profile가 소유한다.",
             "daily_only_allowed": True,
         },
         "allowed_runtime_apply": True,
@@ -863,6 +863,9 @@ def _calibration_report_source_paths(target_date: str) -> dict[str, Path]:
         "statistical_action_weight": (
             REPORT_DIR / "statistical_action_weight" / f"statistical_action_weight_{target_date}.json"
         ),
+        "latency_classifier_recommendation": (
+            REPORT_DIR / "latency_classifier_recommendation" / f"latency_classifier_recommendation_{target_date}.json"
+        ),
     }
 
 
@@ -1015,6 +1018,7 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     panic_buying = _read_json_dict(source_paths["panic_buying"])
     decision_matrix = _read_json_dict(source_paths["holding_exit_decision_matrix"])
     stat_action = _read_json_dict(source_paths["statistical_action_weight"])
+    latency_recommendation = _read_json_dict(source_paths["latency_classifier_recommendation"])
 
     buy_current = buy_funnel_sentinel.get("current") if isinstance(buy_funnel_sentinel, dict) else {}
     buy_current = buy_current if isinstance(buy_current, dict) else {}
@@ -1043,6 +1047,16 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     perf_latency_section = (
         perf_sections.get("latency_guard_miss_ev_recovery")
         if isinstance(perf_sections.get("latency_guard_miss_ev_recovery"), dict)
+        else {}
+    )
+    latency_recommendation_candidate = (
+        latency_recommendation.get("calibration_candidate")
+        if isinstance(latency_recommendation.get("calibration_candidate"), dict)
+        else {}
+    )
+    latency_recommendation_metrics = (
+        latency_recommendation_candidate.get("source_metrics")
+        if isinstance(latency_recommendation_candidate.get("source_metrics"), dict)
         else {}
     )
     soft_stop = holding_exit_observation.get("soft_stop_rebound") if isinstance(holding_exit_observation, dict) else {}
@@ -1275,6 +1289,83 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
                 if (_safe_int(perf_metrics.get("latency_block_events"), 0) or 0)
                 > (_safe_int(latency_outcome.get("evaluated_candidates"), 0) or 0)
                 else "use_latency_block_ev_for_refined_guard_review"
+            ),
+            "latency_classifier_recommendation_status": "loaded" if latency_recommendation else "missing",
+            "latency_classifier_selected_profile_id": latency_recommendation.get("selected_profile_id"),
+            "latency_classifier_runtime_semantics": latency_recommendation_metrics.get("profile_runtime_semantics"),
+            "latency_classifier_profile_generation": (
+                latency_recommendation.get("profile_generation") if isinstance(latency_recommendation, dict) else {}
+            ),
+            "latency_classifier_counterfactual_source": (
+                latency_recommendation.get("counterfactual_source") if isinstance(latency_recommendation, dict) else {}
+            ),
+            "recommended_action": latency_recommendation_metrics.get("recommended_action"),
+            "recommended_action_reason": latency_recommendation_metrics.get("recommended_action_reason"),
+            "would_safe_pass_events": _safe_int(
+                latency_recommendation_metrics.get("would_safe_pass_events"),
+                0,
+            )
+            or 0,
+            "would_caution_reject_events": _safe_int(
+                latency_recommendation_metrics.get("would_caution_reject_events"),
+                0,
+            )
+            or 0,
+            "would_recovery_canary_events": _safe_int(
+                latency_recommendation_metrics.get("would_recovery_canary_events"),
+                0,
+            )
+            or 0,
+            "would_recovery_canary_attempts": _safe_int(
+                latency_recommendation_metrics.get("would_recovery_canary_attempts"),
+                0,
+            )
+            or 0,
+            "hard_reject_events": _safe_int(latency_recommendation_metrics.get("hard_reject_events"), 0) or 0,
+            "stale_quote_override_events": _safe_int(
+                latency_recommendation_metrics.get("stale_quote_override_events"),
+                0,
+            )
+            or 0,
+            "broker_guard_bypass_candidates": _safe_int(
+                latency_recommendation_metrics.get("broker_guard_bypass_candidates"),
+                0,
+            )
+            or 0,
+            "fallback_deprecated_excluded_from_pass_events": _safe_int(
+                latency_recommendation_metrics.get("fallback_deprecated_excluded_from_pass_events"),
+                0,
+            )
+            or 0,
+            "counterfactual_joined_sample": _safe_int(
+                latency_recommendation_metrics.get("counterfactual_joined_sample"),
+                0,
+            )
+            or 0,
+            "counterfactual_join_rate_pct": _safe_float(
+                latency_recommendation_metrics.get("counterfactual_join_rate_pct"),
+                None,
+            ),
+            "counterfactual_ev_pct": _safe_float(
+                latency_recommendation_metrics.get("counterfactual_ev_pct"),
+                None,
+            ),
+            "missed_winner_recovered": _safe_int(
+                latency_recommendation_metrics.get("missed_winner_recovered"),
+                0,
+            )
+            or 0,
+            "avoided_loser_lost": _safe_int(
+                latency_recommendation_metrics.get("avoided_loser_lost"),
+                0,
+            )
+            or 0,
+            "latency_submit_routing": (
+                "latency_submit_recovery_candidate"
+                if str(latency_recommendation_metrics.get("recommended_action") or "") == "bounded_apply"
+                else "latency_submit_recovery_hold"
+                if (_safe_int(latency_recommendation_metrics.get("would_recovery_canary_events"), 0) or 0) > 0
+                else "latency_classifier_runtime_semantics_gap"
             ),
         },
         "liquidity_gate_refined_candidate": {
@@ -4844,6 +4935,27 @@ def _calibration_state_for_family(
         if _safe_int(family_sample.get("wait65_79_score65_74_candidate"), 0) or 0:
             return ("hold_sample", "score65~74 후보는 있으나 source/report sample floor가 부족해 cap 유지")
     if output_family == "pre_submit_price_guard":
+        recommended_action = str(source_metrics.get("recommended_action") or "")
+        recovery_count = _safe_int(source_metrics.get("would_recovery_canary_events"), 0) or 0
+        counterfactual_joined = _safe_int(source_metrics.get("counterfactual_joined_sample"), 0) or 0
+        if recommended_action in {"bounded_apply", "hold", "reject"}:
+            if recommended_action == "bounded_apply":
+                return (
+                    "hold",
+                    "latency submit recovery는 latency_classifier_runtime_profile가 소유한다. "
+                    "pre_submit_price_guard는 후행 가격품질 guard로 유지한다.",
+                )
+            if recovery_count > 0:
+                state = "hold_sample" if counterfactual_joined < 3 else "hold_no_edge"
+                return (
+                    state,
+                    "latency recovery 후보가 있으나 counterfactual EV/label gate 미충족으로 "
+                    "pre_submit_price_guard 완화가 아니라 latency classifier 후보 보류로 라우팅한다.",
+                )
+            return (
+                "hold_sample",
+                "latency_classifier runtime semantics 기준 후보가 없어 pre_submit_price_guard는 현행 유지한다.",
+            )
         missed_rate = _safe_float(source_metrics.get("missed_winner_rate"), None)
         avoided_rate = _safe_float(source_metrics.get("avoided_loser_rate"), None)
         quote_pass_rate = _safe_float(source_metrics.get("quote_fresh_latency_pass_rate"), None)
