@@ -169,8 +169,12 @@ def test_panic_sell_market_breadth_watch_notice_names_breadth_context(tmp_path, 
 
     assert mod.notify_from_report(report, kind="panic_sell", state_file=state, now_ts=1000.0) == "sent"
     assert len(sent) == 1
-    assert "시장 breadth risk-off 주의" in sent[0][1]
-    assert "개별 micro panic이나 손절 cluster는 아직 확인되지 않았습니다" in sent[0][1]
+    assert "시장 전반 약세 주의" in sent[0][1]
+    assert "지수와 업종 전반이 약해졌습니다" in sent[0][1]
+    assert "현재 단계\n  시장 전반 약세 관찰" in sent[0][1]
+    assert "breadth" not in sent[0][1]
+    assert "risk-off" not in sent[0][1]
+    assert "cluster" not in sent[0][1]
 
 
 def test_panic_sell_single_market_risk_off_does_not_send_release(tmp_path, monkeypatch):
@@ -249,10 +253,120 @@ def test_panic_sell_single_market_risk_off_starts_watch_notice(tmp_path, monkeyp
 
     assert mod.notify_from_report(report, kind="panic_sell", state_file=state, now_ts=1000.0) == "sent"
     assert len(sent) == 1
-    assert "시장 breadth risk-off 주의" in sent[0][1]
+    assert "시장 전반 약세 주의" in sent[0][1]
     saved = json.loads(state.read_text(encoding="utf-8"))
     assert saved["panic_sell"]["phase"] == "active"
     assert saved["panic_sell"]["state"] == "RECOVERY_WATCH"
+    assert saved["panic_sell"]["context_label"] == "market_breadth_watch"
+
+
+def test_panic_sell_active_context_escalation_sends_friendly_update(tmp_path, monkeypatch):
+    report = tmp_path / "panic_sell.json"
+    state = tmp_path / "state.json"
+    sent = []
+
+    monkeypatch.setattr(mod, "_load_telegram_config", lambda: ("token", "admin"))
+    monkeypatch.setattr(mod, "_load_all_chat_ids", lambda: ["admin"])
+    monkeypatch.setattr(mod, "_send_telegram", lambda token, chat_id, message: sent.append((chat_id, message)))
+
+    report.write_text(
+        json.dumps(
+            {
+                "panic_state": "RECOVERY_WATCH",
+                "panic_state_reasons": ["market breadth risk-off watch without panic confirmation"],
+                "panic_metrics": {"panic_detected": False},
+                "microstructure_detector": {
+                    "panic_signal_count": 0,
+                    "metrics": {"max_panic_score": 0.37},
+                },
+                "microstructure_market_context": {
+                    "market_panic_breadth_risk_off_advisory": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert mod.notify_from_report(report, kind="panic_sell", state_file=state, now_ts=1000.0) == "sent"
+
+    report.write_text(
+        json.dumps(
+            {
+                "panic_state": "PANIC_SELL",
+                "panic_state_reasons": [
+                    "panic thresholds breached",
+                    "live market panic breadth risk_off advisory",
+                    "recovery conditions not yet met",
+                ],
+                "panic_metrics": {"panic_detected": True, "stop_loss_exit_count": 10},
+                "microstructure_detector": {
+                    "panic_signal_count": 0,
+                    "metrics": {"max_panic_score": 0.37},
+                },
+                "microstructure_market_context": {
+                    "market_panic_breadth_risk_off_advisory": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert mod.notify_from_report(report, kind="panic_sell", state_file=state, now_ts=1010.0) == "sent"
+
+    assert len(sent) == 2
+    assert "시장 전반 약세 주의" in sent[0][1]
+    assert "시장 약세 + 손실 방어 구간" in sent[1][1]
+    assert "현재 단계\n  시장 약세와 손실 방어 동시 감지" in sent[1][1]
+    assert "자동매매 변경: 없음" in sent[1][1]
+    assert "breadth" not in sent[1][1]
+    assert "risk-off" not in sent[1][1]
+    assert "cluster" not in sent[1][1]
+    saved = json.loads(state.read_text(encoding="utf-8"))
+    assert saved["panic_sell"]["context_label"] == "market_and_stop_loss"
+
+
+def test_panic_sell_active_state_without_context_sends_same_state_friendly_update(tmp_path, monkeypatch):
+    report = tmp_path / "panic_sell.json"
+    state = tmp_path / "state.json"
+    sent = []
+
+    monkeypatch.setattr(mod, "_load_telegram_config", lambda: ("token", "admin"))
+    monkeypatch.setattr(mod, "_load_all_chat_ids", lambda: ["admin"])
+    monkeypatch.setattr(mod, "_send_telegram", lambda token, chat_id, message: sent.append((chat_id, message)))
+
+    state.write_text(
+        json.dumps(
+            {
+                "panic_sell": {
+                    "phase": "active",
+                    "state": "PANIC_SELL",
+                    "updated_at_ts": 900.0,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    report.write_text(
+        json.dumps(
+            {
+                "panic_state": "PANIC_SELL",
+                "panic_metrics": {"panic_detected": True, "stop_loss_exit_count": 10},
+                "microstructure_detector": {
+                    "panic_signal_count": 0,
+                    "metrics": {"max_panic_score": 0.37},
+                },
+                "microstructure_market_context": {
+                    "market_panic_breadth_risk_off_advisory": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert mod.notify_from_report(report, kind="panic_sell", state_file=state, now_ts=1000.0) == "sent"
+    assert len(sent) == 1
+    assert "시장 약세 + 손실 방어 구간" in sent[0][1]
+    assert "breadth" not in sent[0][1]
+    saved = json.loads(state.read_text(encoding="utf-8"))
+    assert saved["panic_sell"]["context_label"] == "market_and_stop_loss"
 
 
 def test_panic_buying_test_notice_goes_admin_only(tmp_path, monkeypatch):

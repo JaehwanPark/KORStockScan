@@ -138,6 +138,16 @@ def _transition(
     return "none"
 
 
+SELL_CONTEXT_PRIORITY = {
+    "panic_sell_watch": 0,
+    "market_breadth_watch": 1,
+    "microstructure_panic": 2,
+    "stop_loss_cluster": 3,
+    "market_and_stop_loss": 4,
+    "market_and_micro_panic": 4,
+}
+
+
 def _safe_float(value: object) -> float | None:
     try:
         return float(value)
@@ -179,13 +189,62 @@ def _sell_context_label(report: dict) -> str:
     micro_panic = int((report.get("microstructure_detector") or {}).get("panic_signal_count", 0) or 0) > 0
     panic_metrics = report.get("panic_metrics") if isinstance(report.get("panic_metrics"), dict) else {}
     stop_cluster = bool(panic_metrics.get("panic_detected"))
-    if market_breadth_only or ((market_breadth_risk_off or single_market_risk_off) and not micro_panic and not stop_cluster):
+    market_weak = market_breadth_risk_off or single_market_risk_off or market_breadth_only
+    if market_weak and stop_cluster:
+        return "market_and_stop_loss"
+    if market_weak and micro_panic:
+        return "market_and_micro_panic"
+    if market_weak:
         return "market_breadth_watch"
     if stop_cluster:
         return "stop_loss_cluster"
     if micro_panic:
         return "microstructure_panic"
     return "panic_sell_watch"
+
+
+def _sell_context_escalated(previous_context: str | None, current_context: str) -> bool:
+    previous_score = SELL_CONTEXT_PRIORITY.get(str(previous_context or ""), -1)
+    current_score = SELL_CONTEXT_PRIORITY.get(current_context, 0)
+    return current_score > previous_score
+
+
+def _sell_notice_copy(context: str) -> tuple[str, str, str]:
+    if context == "market_breadth_watch":
+        return (
+            "⚠️ 시장 전반 약세 주의",
+            "지수와 업종 전반이 약해졌습니다. 아직 개별 종목의 급한 매도 흐름이나 반복 청산은 뚜렷하지 않습니다.",
+            "시장 전반 약세 관찰",
+        )
+    if context == "stop_loss_cluster":
+        return (
+            "⚠️ 손실 방어 구간 진입",
+            "최근 보유/감시 종목에서 손실 확정성 청산이 평소보다 많이 발생했습니다. 새 진입은 보수적으로 보고 기존 안전장치는 유지합니다.",
+            "손실 방어 구간",
+        )
+    if context == "microstructure_panic":
+        return (
+            "⚠️ 개별 종목 급매도 주의",
+            "일부 종목에서 짧은 시간에 매도 압력이 강해졌습니다. 무리한 신규 진입보다 가격 안정 여부를 먼저 확인할 구간입니다.",
+            "개별 종목 급매도 감지",
+        )
+    if context == "market_and_stop_loss":
+        return (
+            "⚠️ 시장 약세 + 손실 방어 구간",
+            "시장 전반이 약한 가운데 손실 확정성 청산도 늘었습니다. 신규 진입은 더 보수적으로 보고, 자동매매 설정은 바꾸지 않습니다.",
+            "시장 약세와 손실 방어 동시 감지",
+        )
+    if context == "market_and_micro_panic":
+        return (
+            "⚠️ 시장 약세 + 급매도 확산 주의",
+            "시장 전반이 약한 가운데 일부 종목의 매도 압력도 강해졌습니다. 가격 안정 신호가 확인되기 전까지 추격 진입은 피해야 합니다.",
+            "시장 약세와 개별 급매도 동시 감지",
+        )
+    return (
+        "⚠️ 패닉셀 주의",
+        "시장에 급한 매도세가 감지되었습니다. 신규 진입은 평소보다 더 보수적으로 볼 구간입니다.",
+        "패닉셀 관찰",
+    )
 
 
 def _message_for_sell(report: dict, transition: str) -> str:
@@ -201,21 +260,19 @@ def _message_for_sell(report: dict, transition: str) -> str:
         intensity_line = f"- 체감 강도\n  {_score_bar(micro_metrics.get('max_panic_score'))}"
     else:
         context = _sell_context_label(report)
-        if context == "market_breadth_watch":
-            title = "⚠️ 시장 breadth risk-off 주의"
-            body = "시장/업종 breadth가 약해졌지만 개별 micro panic이나 손절 cluster는 아직 확인되지 않았습니다."
-        else:
-            title = "⚠️ 패닉셀 주의"
-            body = "시장에 급한 매도세가 감지되었습니다. 신규 진입은 평소보다 더 보수적으로 볼 구간입니다."
+        title, body, stage_label = _sell_notice_copy(context)
+        if transition == "update":
+            title = title.replace("⚠️", "🔄", 1)
         intensity_line = f"- 체감 강도\n  {_score_bar(micro_metrics.get('max_panic_score'))}"
     return "\n".join(
         [
             title,
             body,
+            f"- 현재 단계\n  {stage_label}" if transition not in {"release", "status"} else "",
             intensity_line,
             "- 자동매매 변경: 없음",
         ]
-    )
+    ).replace("\n\n", "\n")
 
 
 def _message_for_buying(report: dict, transition: str) -> str:
@@ -275,7 +332,19 @@ def notify_from_report(
     state = _load_state(state_file)
     previous = state.get(kind) if isinstance(state.get(kind), dict) else {}
     previous_phase = str(previous.get("phase") or "") or None
+    previous_value = str(previous.get("state") or "") if isinstance(previous, dict) else ""
     transition = _transition(previous_phase, current_phase, force=force, current_value=current_value)
+    current_context = _sell_context_label(report) if kind == "panic_sell" else ""
+    previous_context = str(previous.get("context_label") or "") if isinstance(previous, dict) else ""
+    if (
+        kind == "panic_sell"
+        and transition == "none"
+        and previous_phase == "active"
+        and current_phase == "active"
+        and (bool(previous_context) or previous_value == current_value)
+        and _sell_context_escalated(previous_context, current_context)
+    ):
+        transition = "update"
 
     now = time.time() if now_ts is None else now_ts
     next_phase = "release_pending" if transition == "release_pending" else current_phase
@@ -285,6 +354,8 @@ def notify_from_report(
         "updated_at_ts": now,
         "report_file": str(report_file),
     }
+    if kind == "panic_sell":
+        next_state["context_label"] = current_context
 
     if transition in {"none", "release_pending"}:
         state[kind] = next_state

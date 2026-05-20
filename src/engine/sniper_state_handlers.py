@@ -3460,7 +3460,18 @@ def _complete_scalp_simulated_sell(
             last_panic_action_level=stock.get("last_panic_action_level"),
             last_panic_action_type=stock.get("last_panic_action_type"),
             panic_lifecycle_action_id=stock.get("panic_lifecycle_action_id"),
-            **{key: value for key, value in source_fields.items() if key != "threshold_family"},
+            **{
+                key: value
+                for key, value in source_fields.items()
+                if key
+                not in {
+                    "threshold_family",
+                    "panic_epoch_id",
+                    "last_panic_action_level",
+                    "last_panic_action_type",
+                    "panic_lifecycle_action_id",
+                }
+            },
         ),
     )
     try:

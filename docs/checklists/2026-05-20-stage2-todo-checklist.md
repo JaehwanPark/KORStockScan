@@ -97,6 +97,12 @@
   - 금지: approval request만 보고 env 파일을 직접 수정하지 않고, 자동화 산출물에 있는 요청을 답변에만 남기고 checklist/Project 대상에서 누락하지 않는다.
   - 다음 액션: approval request가 있으면 `approval_id`, 후보/대상, artifact path, 승인 여부, 다음 PREOPEN 적용 확인 항목을 남긴다. 누락된 항목이 있으면 다음 영업일 checklist에 parser-friendly checkbox로 추가한다.
 
+- [ ] `[SourceQualityWorkorderGapReview0520] source-quality/workorder 누락 보강 필요 여부 명시 판정` (`Due: 2026-05-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:25`, `Track: ScalpingLogic`)
+  - Source: [observation_source_quality_audit.py](/home/ubuntu/KORStockScan/src/engine/observation_source_quality_audit.py), [build_code_improvement_workorder.py](/home/ubuntu/KORStockScan/src/engine/build_code_improvement_workorder.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py)
+  - 판정 기준: postclose `observation_source_quality_audit_2026-05-20`와 `code_improvement_workorder_2026-05-20`를 대조해 `soft_stop_whipsaw_confirmation.flow_state`, `loss_fallback_probe.fallback_reason`, `scalp_sim_panic_action_deduped` 반복 이벤트 throttle 보강이 workorder에 명시됐는지 확인한다.
+  - 금지: source-quality/workorder gap을 runtime threshold mutation, real order gate, Telegram BUY/SELL, provider route, bot restart 근거로 쓰지 않는다.
+  - 다음 액션: `covered_by_generated_workorder`, `manual_codex_order_required`, `next_day_checklist_required`, `defer_no_repro` 중 하나로 닫고, 자동 생성 workorder에 없으면 수동 구현 지시 대상 또는 다음 영업일 checklist 항목으로 승격한다.
+
 - [ ] `[ShadowCanaryCohortReview0520] shadow/canary/cohort 런타임 분류 및 정리 판정` (`Due: 2026-05-20`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)
   - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)
   - 판정 기준: 당일 변경/관찰 결과를 기준으로 `remove`, `observe-only`, `baseline-promote`, `active-canary` 상태 변동 여부를 닫는다.
