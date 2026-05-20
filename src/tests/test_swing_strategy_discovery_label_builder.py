@@ -99,6 +99,13 @@ def test_label_builder_generates_horizon_and_policy_exit_labels(tmp_path):
     assert arm.actual_order_submitted is False
     assert arm.broker_order_forbidden is True
     assert arm.runtime_effect is False
+    features = json.loads(arm.arm_features)
+    assert features["label_maturity_status"] == "matured_labeled"
+    assert features["future_quote_count"] == 12
+    assert features["quotes_from_entry_count"] == 12
+    assert features["runtime_effect"] is False
+    assert report["implementation_status"] == "implemented"
+    assert report["summary"]["maturity_status_counts"]["matured_labeled"] == 1
 
 
 def test_pullback_entry_expires_when_limit_not_touched(tmp_path):

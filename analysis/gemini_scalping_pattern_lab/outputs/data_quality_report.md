@@ -1,6 +1,6 @@
 # Data Quality Report
 
-- 총 거래수: 244
+- 총 거래수: 484
 - `COMPLETED` 수: 0
 - `valid_profit_rate` 수: 0
 - 서버별 `valid_profit_rate` 건수:

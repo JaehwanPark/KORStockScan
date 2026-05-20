@@ -27,6 +27,26 @@ def _isolate_pattern_lab_audit_dirs(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         mod,
+        "lifecycle_ai_context_report_paths",
+        lambda target_date: (
+            tmp_path / "missing_lifecycle_ai_context" / f"lifecycle_ai_context_{target_date}.json",
+            tmp_path / "missing_lifecycle_ai_context" / f"lifecycle_ai_context_{target_date}.md",
+        ),
+    )
+    monkeypatch.setattr(
+        mod,
+        "lifecycle_ai_context_attribution_paths",
+        lambda target_date: (
+            tmp_path
+            / "missing_lifecycle_ai_context_attribution"
+            / f"lifecycle_ai_context_attribution_{target_date}.json",
+            tmp_path
+            / "missing_lifecycle_ai_context_attribution"
+            / f"lifecycle_ai_context_attribution_{target_date}.md",
+        ),
+    )
+    monkeypatch.setattr(
+        mod,
         "institutional_flow_report_paths",
         lambda target_date: (
             tmp_path / "missing_institutional_flow_context" / f"institutional_flow_context_{target_date}.json",

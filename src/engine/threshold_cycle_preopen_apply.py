@@ -100,6 +100,15 @@ TARGET_ENV_VALUE_KEYS = {
     "LIFECYCLE_DECISION_MATRIX_PROMOTE_ENABLED": "promote_enabled",
     "LIFECYCLE_DECISION_MATRIX_MAX_PROMOTES_PER_DAY": "max_promotes_per_day",
     "LIFECYCLE_DECISION_MATRIX_MIN_STAGE_CONFIDENCE": "min_stage_confidence",
+    "LIFECYCLE_DECISION_MATRIX_RUNTIME_EFFECT_ENABLED": "runtime_effect_enabled",
+    "LIFECYCLE_AI_CONTEXT_ENABLED": "lifecycle_ai_context_enabled",
+    "LIFECYCLE_AI_CONTEXT_FILE": "lifecycle_ai_context_file",
+    "LIFECYCLE_AI_CONTEXT_VERSION": "lifecycle_ai_context_version",
+    "SCALP_ENTRY_ADM_ADVISORY_ENABLED": "entry_adm_advisory_enabled",
+    "SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED": "entry_adm_runtime_bias_enabled",
+    "HOLDING_EXIT_MATRIX_ADVISORY_ENABLED": "holding_exit_matrix_advisory_enabled",
+    "HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED": "holding_exit_matrix_runtime_bias_enabled",
+    "HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED": "holding_exit_matrix_scale_in_bias_enabled",
     "SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED": "enabled",
     "SCALP_SIM_SCALE_IN_WINDOW_ALLOWED_ARMS": "allowed_arms",
     "SCALP_SIM_SCALE_IN_WINDOW_MIN_PROFIT_PCT": "min_profit_pct",
@@ -383,7 +392,11 @@ def _env_overrides_for_candidate(candidate: dict[str, Any]) -> dict[str, str]:
     current = candidate.get("current_values") if isinstance(candidate.get("current_values"), dict) else {}
     calibration_state = str(candidate.get("calibration_state") or "")
     policy_or_family = str(candidate.get("policy_id") or candidate.get("family") or "")
-    force_emit = policy_or_family in {"swing_scale_in_real_canary_phase0", "swing_one_share_real_canary_phase0"}
+    force_emit = policy_or_family in {
+        "swing_scale_in_real_canary_phase0",
+        "swing_one_share_real_canary_phase0",
+        "lifecycle_decision_matrix_runtime",
+    }
     overrides: dict[str, str] = {}
     for target_key in candidate.get("target_env_keys") or []:
         target_key = str(target_key)
@@ -829,6 +842,82 @@ def _select_auto_apply_candidates(
     return selected_decisions, decisions, env_overrides
 
 
+def _lifecycle_ai_context_overlay_env(
+    calibration_candidates: list[dict[str, Any]],
+    *,
+    include_families: set[str] | None = None,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    if include_families is not None and "lifecycle_decision_matrix_runtime" not in include_families:
+        return (
+            {
+                "selected": False,
+                "decision_reason": "operator_family_filter_excluded",
+                "env_overrides": {},
+            },
+            {},
+        )
+    candidate = next(
+        (
+            item
+            for item in calibration_candidates
+            if isinstance(item, dict) and str(item.get("family") or "") == "lifecycle_decision_matrix_runtime"
+        ),
+        None,
+    )
+    if not candidate:
+        return (
+            {
+                "selected": False,
+                "decision_reason": "lifecycle_decision_matrix_runtime_candidate_missing",
+                "env_overrides": {},
+            },
+            {},
+        )
+    recommended = candidate.get("recommended_values") if isinstance(candidate.get("recommended_values"), dict) else {}
+    context_file = str(recommended.get("lifecycle_ai_context_file") or "")
+    if not bool(recommended.get("lifecycle_ai_context_enabled")) or not context_file:
+        return (
+            {
+                "selected": False,
+                "decision_reason": "lifecycle_ai_context_artifact_missing_or_disabled",
+                "env_overrides": {},
+            },
+            {},
+        )
+
+    overlay_values = {
+        "LIFECYCLE_DECISION_MATRIX_RUNTIME_EFFECT_ENABLED": False,
+        "LIFECYCLE_AI_CONTEXT_ENABLED": True,
+        "LIFECYCLE_AI_CONTEXT_FILE": context_file,
+        "LIFECYCLE_AI_CONTEXT_VERSION": str(recommended.get("lifecycle_ai_context_version") or ""),
+        "SCALP_ENTRY_ADM_ADVISORY_ENABLED": bool(recommended.get("entry_adm_advisory_enabled", True)),
+        "SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED": False,
+        "HOLDING_EXIT_MATRIX_ADVISORY_ENABLED": bool(
+            recommended.get("holding_exit_matrix_advisory_enabled", True)
+        ),
+        "HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED": False,
+        "HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED": False,
+    }
+    env_overrides = {
+        _runtime_env_name(key): _format_env_value(value)
+        for key, value in overlay_values.items()
+        if key in TARGET_ENV_VALUE_KEYS
+    }
+    decision = {
+        "family": "lifecycle_ai_context",
+        "source_family": "lifecycle_decision_matrix_runtime",
+        "family_type": "context_only_env_overlay",
+        "selected": True,
+        "decision_reason": "context_only_advisory_prompt_overlay_bias_off",
+        "runtime_effect": False,
+        "decision_authority": "ai_advisory_prompt_context_only",
+        "live_selectable": False,
+        "standalone_threshold_family": False,
+        "env_overrides": env_overrides,
+    }
+    return decision, env_overrides
+
+
 def _write_runtime_env(target_date: str, manifest: dict[str, Any], env_overrides: dict[str, str]) -> None:
     RUNTIME_ENV_DIR.mkdir(parents=True, exist_ok=True)
     lines = [
@@ -936,6 +1025,7 @@ def build_preopen_apply_manifest(
             target_date,
         )
         selected, decisions, env_overrides = ([], [], {})
+        lifecycle_context_overlay, lifecycle_context_env_overrides = ({}, {})
         swing_bundle = _load_swing_runtime_approval_bundle(report_source_date)
         swing_selected, swing_decisions, swing_env_overrides = ([], [], {})
         scalp_scale_bundle = _load_scalp_sim_scale_in_window_approval(report_source_date)
@@ -952,7 +1042,16 @@ def build_preopen_apply_manifest(
             scalp_scale_selected, scalp_scale_decisions, scalp_scale_env_overrides = (
                 _select_scalp_sim_scale_in_window_approval(scalp_scale_bundle)
             )
-            env_overrides = {**env_overrides, **swing_env_overrides, **scalp_scale_env_overrides}
+            lifecycle_context_overlay, lifecycle_context_env_overrides = _lifecycle_ai_context_overlay_env(
+                calibration_candidates,
+                include_families=include_families,
+            )
+            env_overrides = {
+                **env_overrides,
+                **lifecycle_context_env_overrides,
+                **swing_env_overrides,
+                **scalp_scale_env_overrides,
+            }
         runtime_change = bool(auto_apply_requested and env_overrides)
         status = (
             "auto_bounded_live_ready"
@@ -992,6 +1091,7 @@ def build_preopen_apply_manifest(
             "latency_classifier_recommendation": latency_recommendation,
             "auto_apply_selected": selected,
             "auto_apply_decisions": decisions,
+            "lifecycle_ai_context_overlay": lifecycle_context_overlay,
             "operator_runtime_env_locks": operator_runtime_env_locks,
             "approval_requests": approval_requests,
             "approval_contract_gaps": approval_contract_gaps,

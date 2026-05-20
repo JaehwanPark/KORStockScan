@@ -551,6 +551,89 @@ def _entry_adm_followup_orders(ev_report: dict[str, Any]) -> list[dict[str, Any]
     ]
 
 
+def _lifecycle_ai_context_followup_orders(ev_report: dict[str, Any]) -> list[dict[str, Any]]:
+    attribution = (
+        ev_report.get("lifecycle_ai_context_attribution")
+        if isinstance(ev_report.get("lifecycle_ai_context_attribution"), dict)
+        else {}
+    )
+    context = ev_report.get("lifecycle_ai_context") if isinstance(ev_report.get("lifecycle_ai_context"), dict) else {}
+    if not attribution and not context:
+        return []
+    applied = _safe_int(attribution.get("context_applied_count"), 0)
+    prompt_stage_count = _safe_int(context.get("prompt_stage_count"), 0)
+    issues: list[str] = []
+    if not context.get("available"):
+        issues.append("context_artifact_missing")
+    if prompt_stage_count <= 0:
+        issues.append("prompt_stage_context_missing")
+    if applied <= 0:
+        issues.append("runtime_context_provenance_missing")
+    if not issues:
+        return []
+    sources = ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
+    implementation_status = (
+        "implemented"
+        if attribution.get("implementation_status") == "implemented"
+        and context.get("available")
+        and prompt_stage_count > 0
+        else None
+    )
+    return [
+        {
+            "order_id": "order_lifecycle_ai_context_attribution_feedback",
+            "title": "lifecycle AI context attribution feedback coverage",
+            "source_report_type": "threshold_cycle_ev",
+            "lifecycle_stage": "lifecycle",
+            "target_subsystem": "lifecycle_decision_matrix",
+            "route": "instrumentation_order",
+            "mapped_family": "lifecycle_ai_context",
+            "threshold_family": None,
+            "improvement_type": "instrumentation_report_provenance",
+            "confidence": "consensus",
+            "priority": 4,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "implementation_status": implementation_status,
+            "implementation_checks": attribution.get("implementation_checks") or [],
+            "implementation_provenance": attribution.get("implementation_provenance") or {},
+            "expected_ev_effect": (
+                "Keep lifecycle AI context contribution visible as bounded auxiliary ADM/LDM feedback "
+                "without creating real order gates or standalone threshold families."
+            ),
+            "evidence": [
+                f"context_available={context.get('available')}",
+                f"prompt_stage_count={prompt_stage_count}",
+                f"context_applied_count={applied}",
+                f"replay_budget={attribution.get('replay_budget')}",
+            ],
+            "source_paths": [
+                str(path)
+                for path in (
+                    sources.get("lifecycle_ai_context"),
+                    sources.get("lifecycle_ai_context_attribution"),
+                )
+                if path
+            ],
+            "next_postclose_metric": (
+                "lifecycle_ai_context_attribution should show context_applied_count, stage attribution, "
+                "and bounded auxiliary weights that LDM policy entries can consume."
+            ),
+            "files_likely_touched": [
+                "src/engine/lifecycle_ai_context.py",
+                "src/engine/lifecycle_decision_matrix.py",
+                "src/engine/ai_engine_openai.py",
+                "src/engine/threshold_cycle_ev_report.py",
+            ],
+            "acceptance_tests": [
+                "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_lifecycle_ai_context.py src/tests/test_threshold_cycle_ev_report.py",
+                "runtime_effect remains false and context is not used as real order gate",
+            ],
+            "adm_issue_types": issues,
+        }
+    ]
+
+
 def _pipeline_event_verbosity_report_path(target_date: str) -> Path:
     return PIPELINE_EVENT_VERBOSITY_DIR / f"pipeline_event_verbosity_{target_date}.json"
 
@@ -1091,10 +1174,16 @@ def _swing_strategy_discovery_followup_orders(report: dict[str, Any]) -> list[di
     if not report:
         return []
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    source_quality = (
+        report.get("source_quality_summary") if isinstance(report.get("source_quality_summary"), dict) else {}
+    )
     warnings = [str(item) for item in (report.get("warnings") or []) if str(item).strip()]
     avoid_count = _safe_int(summary.get("avoid_bucket_count"), 0)
     pending = _safe_int(summary.get("pending_future_quote_count"), 0)
     labeled = _safe_int(summary.get("labeled_sample_count"), 0)
+    implementation_status = (
+        "implemented" if source_quality.get("implementation_status") == "implemented" else None
+    )
     orders: list[dict[str, Any]] = []
     if warnings or pending:
         orders.append(
@@ -1112,11 +1201,15 @@ def _swing_strategy_discovery_followup_orders(report: dict[str, Any]) -> list[di
                 "priority": 6,
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
+                "implementation_status": implementation_status,
+                "implementation_checks": source_quality.get("implementation_checks") or [],
+                "implementation_provenance": source_quality.get("implementation_provenance") or {},
                 "expected_ev_effect": "Improve discovery label coverage and source attribution before any swing strategy policy promotion is discussed.",
                 "evidence": [
                     f"labeled_sample_count={labeled}",
                     f"pending_future_quote_count={pending}",
                     f"warnings={warnings}",
+                    f"maturity_status_counts={source_quality.get('maturity_status_counts') or {}}",
                     "decision_authority=swing_sim_exploration_only",
                     "allowed_runtime_apply=false",
                 ],
@@ -1239,6 +1332,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     threshold_ev_orders = [
         *_threshold_ev_followup_orders(ev_report),
         *_entry_adm_followup_orders(ev_report),
+        *_lifecycle_ai_context_followup_orders(ev_report),
         *_window_policy_audit_followup_orders(calibration_report),
         *_panic_lifecycle_followup_orders(calibration_report),
         *_pipeline_event_verbosity_followup_orders(pipeline_event_verbosity),

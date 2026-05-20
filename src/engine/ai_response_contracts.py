@@ -212,6 +212,40 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
         },
         "required": ["schema_version", "corrections"],
     },
+    "lifecycle_ai_context_v1": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "schema_version": {"type": "integer", "enum": [1]},
+            "stage_contexts": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "stage": {
+                            "type": "string",
+                            "enum": ["entry", "submit", "holding", "scale_in", "exit"],
+                        },
+                        "policy_key": {"type": "string"},
+                        "alignment_hint": {"type": "string"},
+                        "context_summary": {"type": "string"},
+                        "risk_notes": {"type": "array", "items": {"type": "string"}},
+                        "forbidden_uses": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": [
+                        "stage",
+                        "policy_key",
+                        "alignment_hint",
+                        "context_summary",
+                        "risk_notes",
+                        "forbidden_uses",
+                    ],
+                },
+            },
+        },
+        "required": ["schema_version", "stage_contexts"],
+    },
 }
 
 

@@ -398,6 +398,210 @@ def test_auto_bounded_live_writes_lifecycle_decision_matrix_policy_env(tmp_path,
     assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_MIN_STAGE_CONFIDENCE"] == "0.6"
 
 
+def test_auto_bounded_live_writes_lifecycle_context_and_bias_off_env(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    ai_dir = report_dir / "threshold_cycle_ai_review"
+    report_dir.mkdir(parents=True)
+    ai_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "AI_REVIEW_DIR", ai_dir)
+
+    context_file = "data/report/lifecycle_ai_context/lifecycle_ai_context_2026-05-08.json"
+    (report_dir / "threshold_cycle_2026-05-08.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-08",
+                "calibration_candidates": [
+                    {
+                        "family": "lifecycle_decision_matrix_runtime",
+                        "stage": "lifecycle",
+                        "priority": 31,
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": False,
+                        "calibration_state": "adjust_up",
+                        "target_env_keys": [
+                            "LIFECYCLE_DECISION_MATRIX_RUNTIME_EFFECT_ENABLED",
+                            "LIFECYCLE_AI_CONTEXT_ENABLED",
+                            "LIFECYCLE_AI_CONTEXT_FILE",
+                            "LIFECYCLE_AI_CONTEXT_VERSION",
+                            "SCALP_ENTRY_ADM_ADVISORY_ENABLED",
+                            "SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED",
+                            "HOLDING_EXIT_MATRIX_ADVISORY_ENABLED",
+                            "HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED",
+                            "HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED",
+                        ],
+                        "recommended_values": {
+                            "runtime_effect_enabled": False,
+                            "lifecycle_ai_context_enabled": True,
+                            "lifecycle_ai_context_file": context_file,
+                            "lifecycle_ai_context_version": "lifecycle_ai_context_v1_2026-05-08",
+                            "entry_adm_advisory_enabled": True,
+                            "entry_adm_runtime_bias_enabled": False,
+                            "holding_exit_matrix_advisory_enabled": True,
+                            "holding_exit_matrix_runtime_bias_enabled": False,
+                            "holding_exit_matrix_scale_in_bias_enabled": False,
+                        },
+                        "current_values": {
+                            "runtime_effect_enabled": True,
+                            "lifecycle_ai_context_enabled": False,
+                            "lifecycle_ai_context_file": "",
+                            "lifecycle_ai_context_version": "",
+                            "entry_adm_advisory_enabled": True,
+                            "entry_adm_runtime_bias_enabled": True,
+                            "holding_exit_matrix_advisory_enabled": True,
+                            "holding_exit_matrix_runtime_bias_enabled": True,
+                            "holding_exit_matrix_scale_in_bias_enabled": True,
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (ai_dir / "threshold_cycle_ai_review_2026-05-08_postclose.json").write_text(
+        json.dumps(
+            {
+                "ai_status": "parsed",
+                "items": [
+                    {
+                        "family": "lifecycle_decision_matrix_runtime",
+                        "guard_accepted": True,
+                        "ai_anomaly_route": "threshold_candidate",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-11",
+        source_date="2026-05-08",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+    )
+
+    env = manifest["runtime_env_overrides"]
+    assert env["KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_RUNTIME_EFFECT_ENABLED"] == "false"
+    assert env["KORSTOCKSCAN_LIFECYCLE_AI_CONTEXT_ENABLED"] == "true"
+    assert env["KORSTOCKSCAN_LIFECYCLE_AI_CONTEXT_FILE"] == context_file
+    assert env["KORSTOCKSCAN_SCALP_ENTRY_ADM_ADVISORY_ENABLED"] == "true"
+    assert env["KORSTOCKSCAN_SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED"] == "false"
+    assert env["KORSTOCKSCAN_HOLDING_EXIT_MATRIX_ADVISORY_ENABLED"] == "true"
+    assert env["KORSTOCKSCAN_HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED"] == "false"
+    assert env["KORSTOCKSCAN_HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED"] == "false"
+
+
+def test_lifecycle_context_overlay_bypasses_same_stage_runtime_selection(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    ai_dir = report_dir / "threshold_cycle_ai_review"
+    report_dir.mkdir(parents=True)
+    ai_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "AI_REVIEW_DIR", ai_dir)
+
+    context_file = "data/report/lifecycle_ai_context/lifecycle_ai_context_2026-05-08.json"
+    (report_dir / "threshold_cycle_2026-05-08.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-08",
+                "calibration_candidates": [
+                    {
+                        "family": "bad_entry_refined_canary",
+                        "stage": "holding_exit",
+                        "priority": 1,
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": False,
+                        "calibration_state": "adjust_up",
+                        "target_env_keys": ["SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED"],
+                        "recommended_values": {"enabled": True},
+                        "current_values": {"enabled": False},
+                    },
+                    {
+                        "family": "lifecycle_decision_matrix_runtime",
+                        "stage": "holding_exit",
+                        "priority": 31,
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": False,
+                        "calibration_state": "adjust_up",
+                        "target_env_keys": [
+                            "LIFECYCLE_DECISION_MATRIX_ENABLED",
+                            "LIFECYCLE_DECISION_MATRIX_RUNTIME_EFFECT_ENABLED",
+                            "LIFECYCLE_AI_CONTEXT_ENABLED",
+                            "LIFECYCLE_AI_CONTEXT_FILE",
+                            "LIFECYCLE_AI_CONTEXT_VERSION",
+                            "SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED",
+                            "HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED",
+                            "HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED",
+                        ],
+                        "recommended_values": {
+                            "enabled": True,
+                            "runtime_effect_enabled": False,
+                            "lifecycle_ai_context_enabled": True,
+                            "lifecycle_ai_context_file": context_file,
+                            "lifecycle_ai_context_version": "lifecycle_ai_context_v1_2026-05-08",
+                            "entry_adm_advisory_enabled": True,
+                            "entry_adm_runtime_bias_enabled": False,
+                            "holding_exit_matrix_advisory_enabled": True,
+                            "holding_exit_matrix_runtime_bias_enabled": False,
+                            "holding_exit_matrix_scale_in_bias_enabled": False,
+                        },
+                        "current_values": {
+                            "enabled": False,
+                            "runtime_effect_enabled": False,
+                            "lifecycle_ai_context_enabled": False,
+                            "lifecycle_ai_context_file": "",
+                            "lifecycle_ai_context_version": "",
+                            "entry_adm_runtime_bias_enabled": False,
+                            "holding_exit_matrix_runtime_bias_enabled": False,
+                            "holding_exit_matrix_scale_in_bias_enabled": False,
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (ai_dir / "threshold_cycle_ai_review_2026-05-08_postclose.json").write_text(
+        json.dumps(
+            {
+                "ai_status": "parsed",
+                "items": [
+                    {"family": "bad_entry_refined_canary", "guard_accepted": True},
+                    {"family": "lifecycle_decision_matrix_runtime", "guard_accepted": True},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-11",
+        source_date="2026-05-08",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+    )
+
+    selected_families = {item["family"] for item in manifest["auto_apply_selected"]}
+    assert "lifecycle_decision_matrix_runtime" not in selected_families
+    assert manifest["lifecycle_ai_context_overlay"]["selected"] is True
+    env = manifest["runtime_env_overrides"]
+    assert env["KORSTOCKSCAN_LIFECYCLE_AI_CONTEXT_ENABLED"] == "true"
+    assert env["KORSTOCKSCAN_LIFECYCLE_AI_CONTEXT_FILE"] == context_file
+    assert env["KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_RUNTIME_EFFECT_ENABLED"] == "false"
+    assert env["KORSTOCKSCAN_SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED"] == "false"
+    assert env["KORSTOCKSCAN_HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED"] == "false"
+    assert env["KORSTOCKSCAN_HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED"] == "false"
+
+
 def test_auto_bounded_live_excludes_ai_instrumentation_gap(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"

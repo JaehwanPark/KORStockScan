@@ -459,6 +459,126 @@ def test_build_code_improvement_workorder_treats_implemented_report_order_as_exi
     assert order["implementation_provenance"]["decision_authority"] == "source_quality_only"
 
 
+def test_build_code_improvement_workorder_attaches_lifecycle_ai_context_instrumentation(
+    tmp_path, monkeypatch
+):
+    automation_dir = tmp_path / "automation"
+    ev_dir = tmp_path / "ev"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    automation_dir.mkdir()
+    ev_dir.mkdir()
+    (automation_dir / "scalping_pattern_lab_automation_2026-05-20.json").write_text(
+        json.dumps({"date": "2026-05-20", "code_improvement_orders": []}),
+        encoding="utf-8",
+    )
+    (ev_dir / "threshold_cycle_ev_2026-05-20.json").write_text(
+        json.dumps(
+            {
+                "sources": {
+                    "lifecycle_ai_context": "data/report/lifecycle_ai_context/lifecycle_ai_context_2026-05-20.json",
+                    "lifecycle_ai_context_attribution": "data/report/lifecycle_ai_context_attribution/lifecycle_ai_context_attribution_2026-05-20.json",
+                },
+                "lifecycle_ai_context": {"available": True, "prompt_stage_count": 3},
+                "lifecycle_ai_context_attribution": {
+                    "available": True,
+                    "context_applied_count": 0,
+                    "replay_budget": 30,
+                    "implementation_status": "implemented",
+                    "implementation_checks": [{"name": "contract", "status": "pass"}],
+                    "implementation_provenance": {
+                        "runtime_effect": False,
+                        "decision_authority": "postclose_context_attribution_only",
+                    },
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
+    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-audit")
+    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness")
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-20", max_orders=5)
+
+    order = next(
+        item
+        for item in report["orders"]
+        if item["order_id"] == "order_lifecycle_ai_context_attribution_feedback"
+    )
+    assert order["decision"] == "attach_existing_family"
+    assert order["implementation_status"] == "implemented"
+    assert order["runtime_effect"] is False
+
+
+def test_build_code_improvement_workorder_attaches_swing_discovery_source_quality_instrumentation(
+    tmp_path, monkeypatch
+):
+    automation_dir = tmp_path / "automation"
+    swing_ev_dir = tmp_path / "swing-ev"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    automation_dir.mkdir()
+    swing_ev_dir.mkdir()
+    (automation_dir / "scalping_pattern_lab_automation_2026-05-20.json").write_text(
+        json.dumps({"date": "2026-05-20", "code_improvement_orders": []}),
+        encoding="utf-8",
+    )
+    (swing_ev_dir / "swing_strategy_discovery_ev_2026-05-20.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "labeled_sample_count": 0,
+                    "pending_future_quote_count": 10,
+                    "avoid_bucket_count": 0,
+                },
+                "source_quality_summary": {
+                    "implementation_status": "implemented",
+                    "implementation_checks": [{"name": "label_maturity_provenance", "status": "pass"}],
+                    "implementation_provenance": {
+                        "runtime_effect": False,
+                        "decision_authority": "swing_sim_exploration_only",
+                    },
+                    "maturity_status_counts": {"pending_future_quotes": 10},
+                },
+                "warnings": ["pending_future_quotes", "sample_floor_not_met"],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "SWING_STRATEGY_DISCOVERY_EV_DIR", swing_ev_dir)
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
+    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-audit")
+    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness")
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-20", max_orders=5)
+
+    order = next(
+        item
+        for item in report["orders"]
+        if item["order_id"] == "order_swing_strategy_discovery_source_quality_followup"
+    )
+    assert order["decision"] == "attach_existing_family"
+    assert order["implementation_status"] == "implemented"
+    assert order["implementation_provenance"]["runtime_effect"] is False
+
+
 def test_build_code_improvement_workorder_adds_window_policy_audit_order(tmp_path, monkeypatch):
     automation_dir = tmp_path / "automation"
     ev_dir = tmp_path / "ev"

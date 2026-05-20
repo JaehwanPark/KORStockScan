@@ -49,6 +49,8 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     sim_post_sell_idx = script.index("src.engine.sniper_post_sell_feedback")
     entry_adm_idx = script.index("src.engine.scalp_entry_action_decision_matrix")
     lifecycle_matrix_idx = script.index("src.engine.lifecycle_decision_matrix")
+    context_attribution_idx = script.index("src.engine.lifecycle_ai_context --date \"$TARGET_DATE\" --mode attribution")
+    context_idx = script.index("src.engine.lifecycle_ai_context --date \"$TARGET_DATE\" --mode context")
     verbosity_idx = script.index("src.engine.pipeline_event_verbosity_report")
     observation_audit_idx = script.index("src.engine.observation_source_quality_audit")
     perf_source_idx = script.index("src.engine.codebase_performance_workorder_report")
@@ -65,6 +67,8 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         sim_post_sell_idx
         < entry_adm_idx
         < lifecycle_matrix_idx
+        < context_attribution_idx
+        < context_idx
         < verbosity_idx
         < observation_audit_idx
         < perf_source_idx
@@ -80,6 +84,8 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     assert 'RUN_PATTERN_LAB_PROPAGATION_AUDIT="${THRESHOLD_CYCLE_RUN_PATTERN_LAB_PROPAGATION_AUDIT:-true}"' in script
     assert 'RUN_SCALP_ENTRY_ADM="${THRESHOLD_CYCLE_RUN_SCALP_ENTRY_ADM:-true}"' in script
     assert 'RUN_LIFECYCLE_DECISION_MATRIX="${THRESHOLD_CYCLE_RUN_LIFECYCLE_DECISION_MATRIX:-true}"' in script
+    assert 'RUN_LIFECYCLE_AI_CONTEXT="${THRESHOLD_CYCLE_RUN_LIFECYCLE_AI_CONTEXT:-true}"' in script
+    assert "lifecycle_ai_context=$RUN_LIFECYCLE_AI_CONTEXT" in script
 
 
 def test_postclose_wrapper_refreshes_market_breadth_before_panic_reports():

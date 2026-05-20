@@ -1181,6 +1181,8 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     calibration_source = sources.get("calibration")
     scalp_entry_adm_path = sources.get("scalp_entry_action_decision_matrix")
     lifecycle_matrix_path = sources.get("lifecycle_decision_matrix")
+    lifecycle_ai_context_path = sources.get("lifecycle_ai_context")
+    lifecycle_ai_context_attribution_path = sources.get("lifecycle_ai_context_attribution")
     institutional_flow_path = sources.get("institutional_flow_context")
     calibration_report = _load_json(Path(str(calibration_source))) if calibration_source else {}
     currentness_path = Path(str(sources.get("pattern_lab_currentness_audit"))) if sources.get("pattern_lab_currentness_audit") else PATTERN_LAB_CURRENTNESS_AUDIT_DIR / f"pattern_lab_currentness_audit_{target_date}.json"
@@ -1209,6 +1211,8 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             "swing_runtime_approval": str(swing_path) if swing_path.exists() else None,
             "scalp_entry_action_decision_matrix": scalp_entry_adm_path,
             "lifecycle_decision_matrix": lifecycle_matrix_path,
+            "lifecycle_ai_context": lifecycle_ai_context_path,
+            "lifecycle_ai_context_attribution": lifecycle_ai_context_attribution_path,
             "institutional_flow_context": institutional_flow_path,
             "pattern_lab_currentness_audit": str(currentness_path) if currentness_path.exists() else None,
             "pattern_lab_propagation_audit": str(propagation_path) if propagation_path.exists() else None,
@@ -1247,6 +1251,16 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             ),
             "lifecycle_matrix_ready_for_bounded_apply": lifecycle_matrix_summary.get("ready_for_bounded_apply"),
             "lifecycle_matrix_warnings": lifecycle_matrix_summary.get("warnings"),
+            "lifecycle_ai_context_applied_count": (
+                (ev_report.get("lifecycle_ai_context_attribution") or {}).get("context_applied_count")
+                if isinstance(ev_report.get("lifecycle_ai_context_attribution"), dict)
+                else 0
+            ),
+            "lifecycle_ai_context_prompt_stage_count": (
+                (ev_report.get("lifecycle_ai_context") or {}).get("prompt_stage_count")
+                if isinstance(ev_report.get("lifecycle_ai_context"), dict)
+                else 0
+            ),
             "swing_strategy_discovery_available": swing_discovery_summary.get("available"),
             "swing_strategy_discovery_labeled_sample_count": swing_discovery_summary.get("labeled_sample_count"),
             "swing_strategy_discovery_pending_future_quote_count": swing_discovery_summary.get("pending_future_quote_count"),
@@ -1256,6 +1270,12 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
         "application_timing": _application_timing(target_date, ev_report),
         "scalp_entry_action_decision_matrix": scalp_entry_adm_summary,
         "lifecycle_decision_matrix": lifecycle_matrix_summary,
+        "lifecycle_ai_context": ev_report.get("lifecycle_ai_context")
+        if isinstance(ev_report.get("lifecycle_ai_context"), dict)
+        else {},
+        "lifecycle_ai_context_attribution": ev_report.get("lifecycle_ai_context_attribution")
+        if isinstance(ev_report.get("lifecycle_ai_context_attribution"), dict)
+        else {},
         "swing_strategy_discovery": swing_discovery_summary,
         "institutional_flow_context": institutional_flow_summary,
         "pattern_lab_currentness_audit": currentness_audit,
@@ -1319,6 +1339,16 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         if isinstance(report.get("lifecycle_decision_matrix"), dict)
         else {}
     )
+    lifecycle_ai_context = (
+        report.get("lifecycle_ai_context")
+        if isinstance(report.get("lifecycle_ai_context"), dict)
+        else {}
+    )
+    lifecycle_ai_context_attribution = (
+        report.get("lifecycle_ai_context_attribution")
+        if isinstance(report.get("lifecycle_ai_context_attribution"), dict)
+        else {}
+    )
     swing_discovery = (
         report.get("swing_strategy_discovery")
         if isinstance(report.get("swing_strategy_discovery"), dict)
@@ -1346,6 +1376,7 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         f"- panic_approval_requested: `{summary.get('panic_approval_requested')}`",
         f"- scalp_entry_adm_status: `{summary.get('scalp_entry_adm_status')}`",
         f"- lifecycle_matrix_status: `{summary.get('lifecycle_matrix_status')}`",
+        f"- lifecycle_ai_context prompt/applied: `{summary.get('lifecycle_ai_context_prompt_stage_count')}` / `{summary.get('lifecycle_ai_context_applied_count')}`",
         f"- swing_strategy_discovery_labeled/pending: `{summary.get('swing_strategy_discovery_labeled_sample_count')}` / `{summary.get('swing_strategy_discovery_pending_future_quote_count')}`",
         f"- institutional_flow_available/join_rate: `{summary.get('institutional_flow_available')}` / `{summary.get('institutional_flow_join_rate_pct')}`",
         f"- pattern_lab_currentness_status: `{summary.get('pattern_lab_currentness_status')}`",
@@ -1387,6 +1418,14 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         f"- fixed_threshold_roles: `{lifecycle_matrix.get('fixed_threshold_roles') or {}}`",
         f"- ready_for_bounded_apply: `{lifecycle_matrix.get('ready_for_bounded_apply')}`",
         f"- warnings: `{lifecycle_matrix.get('warnings') or []}`",
+        "",
+        "## Lifecycle AI Context",
+        f"- context_artifact: `{lifecycle_ai_context.get('artifact') or '-'}`",
+        f"- context_version: `{lifecycle_ai_context.get('context_version') or '-'}`",
+        f"- prompt_stage_count: `{lifecycle_ai_context.get('prompt_stage_count')}`",
+        f"- attribution_artifact: `{lifecycle_ai_context_attribution.get('artifact') or '-'}`",
+        f"- attribution eligible/applied/skipped: `{lifecycle_ai_context_attribution.get('context_eligible_count')}` / `{lifecycle_ai_context_attribution.get('context_applied_count')}` / `{lifecycle_ai_context_attribution.get('context_skipped_count')}`",
+        f"- stage_attribution: `{lifecycle_ai_context_attribution.get('stage_attribution') or {}}`",
         "",
         "## Swing",
         *_render_rows(swing),

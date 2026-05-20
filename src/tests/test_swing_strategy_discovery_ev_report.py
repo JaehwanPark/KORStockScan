@@ -66,8 +66,23 @@ def _seed_labeled_arm(session, idx: int, *, ret: float, selection_arm="lifecycle
             close_return_pct=ret,
             final_return_pct=ret,
             realized_exit_return_pct=ret,
-            label_features=json.dumps({"fill_status": "entered"}),
+            label_features=json.dumps(
+                {
+                    "fill_status": "entered",
+                    "entry_reason": "next_open",
+                    "exit_reason": "fixed_5d_close",
+                    "final_return_basis": "arm_policy_exit",
+                }
+            ),
         )
+    )
+    arm.arm_features = json.dumps(
+        {
+            "label_maturity_status": "matured_labeled",
+            "source_quality_status": "ok",
+            "future_quote_count": 12,
+            "quotes_from_entry_count": 12,
+        }
     )
 
 
@@ -90,3 +105,6 @@ def test_ev_report_aggregates_surviving_arms_and_contract(tmp_path):
     assert report["summary"]["surviving_arm_count"] >= 1
     assert report["surviving_arms"][0]["arm_id"] == "arm01_next_open_equal_fixed5d"
     assert report["legacy_vs_discovery"]["discovery_combined"]["sample_count"] == 6
+    assert report["source_quality_summary"]["implementation_status"] == "implemented"
+    assert report["source_quality_summary"]["maturity_status_counts"]["matured_labeled"] == 7
+    assert report["source_quality_summary"]["runtime_effect"] is False

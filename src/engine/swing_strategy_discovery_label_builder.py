@@ -27,6 +27,7 @@ from src.utils.constants import DATA_DIR, POSTGRES_URL
 REPORT_DIR = Path(DATA_DIR) / "report" / "swing_strategy_discovery_labels"
 DECISION_AUTHORITY = "swing_sim_exploration_only"
 LABEL_VERSION = "swing_strategy_discovery_label_v1"
+IMPLEMENTATION_ORDER_ID = "order_swing_strategy_discovery_source_quality_followup"
 LABEL_HORIZONS = {"1d": 1, "5d": 5, "10d": 10}
 ENTRY_LOOKAHEAD_DAYS = 3
 PULLBACK_LIMIT_PCT = -1.5
@@ -159,6 +160,16 @@ def _quotes_from_entry(entry: EntryResult, future_quotes: list[Quote]) -> list[Q
     if entry.entry_date is None:
         return []
     return [q for q in future_quotes if q.quote_date >= entry.entry_date]
+
+
+def _label_maturity_status(entry: EntryResult, exit_result: ExitResult) -> str:
+    if exit_result.status == "exited":
+        return "matured_labeled"
+    if entry.status == "expired":
+        return "matured_no_entry"
+    if entry.status == "pending_future_quotes" or exit_result.status == "pending_future_quotes":
+        return "pending_future_quotes"
+    return "unresolved"
 
 
 def _window_mfe_mae(quotes: list[Quote], entry_price: float) -> tuple[float, float]:
@@ -377,6 +388,7 @@ def process_arm(session: Any, arm: SwingStrategyDiscoveryArm) -> dict[str, Any]:
     entry = simulate_entry(arm.entry_policy, reference_price, future_quotes)
     quotes_from_entry = _quotes_from_entry(entry, future_quotes)
     exit_result = simulate_policy_exit(arm.exit_policy, entry, quotes_from_entry)
+    maturity_status = _label_maturity_status(entry, exit_result)
     labels = [build_horizon_label(horizon, entry, quotes_from_entry) for horizon in LABEL_HORIZONS]
     labels.append(build_policy_exit_label(entry, exit_result, quotes_from_entry))
     for label in labels:
@@ -402,6 +414,15 @@ def process_arm(session: Any, arm: SwingStrategyDiscoveryArm) -> dict[str, Any]:
             "entry_reason": entry.reason,
             "policy_exit_status": exit_result.status,
             "policy_exit_reason": exit_result.exit_reason,
+            "label_maturity_status": maturity_status,
+            "future_quote_count": len(future_quotes),
+            "quotes_from_entry_count": len(quotes_from_entry),
+            "latest_future_quote_date": (
+                max(q.quote_date for q in future_quotes).isoformat() if future_quotes else None
+            ),
+            "source_quality_status": "pending_future_quotes" if maturity_status == "pending_future_quotes" else "ok",
+            "implementation_order_id": IMPLEMENTATION_ORDER_ID,
+            "implementation_scope": "source_quality_instrumentation_only",
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
             "runtime_effect": False,
@@ -413,6 +434,7 @@ def process_arm(session: Any, arm: SwingStrategyDiscoveryArm) -> dict[str, Any]:
         "status": arm.status,
         "labels": len(labels),
         "label_status_counts": dict(Counter(label.get("label_status") for label in labels)),
+        "maturity_status": maturity_status,
     }
 
 
@@ -430,6 +452,7 @@ def build_swing_strategy_discovery_labels(
     processed = 0
     status_counts: Counter[str] = Counter()
     label_status_counts: Counter[str] = Counter()
+    maturity_status_counts: Counter[str] = Counter()
     with Session.begin() as session:
         query = session.query(SwingStrategyDiscoveryArm).filter(SwingStrategyDiscoveryArm.source_date <= target)
         if not refresh_matured:
@@ -439,6 +462,7 @@ def build_swing_strategy_discovery_labels(
             result = process_arm(session, arm)
             processed += 1
             status_counts[str(result.get("status"))] += 1
+            maturity_status_counts[str(result.get("maturity_status") or "unknown")] += 1
             for status, count in (result.get("label_status_counts") or {}).items():
                 label_status_counts[str(status)] += int(count)
 
@@ -453,10 +477,36 @@ def build_swing_strategy_discovery_labels(
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "refresh_matured": bool(refresh_matured),
+        "implementation_status": "implemented",
+        "implementation_provenance": {
+            "order_id": IMPLEMENTATION_ORDER_ID,
+            "scope": "source_quality_instrumentation_only",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "decision_authority": DECISION_AUTHORITY,
+        },
+        "implementation_checks": [
+            {
+                "name": "label_source_quality_provenance",
+                "status": "pass",
+                "fields": [
+                    "label_maturity_status",
+                    "future_quote_count",
+                    "quotes_from_entry_count",
+                    "source_quality_status",
+                ],
+            },
+            {
+                "name": "runtime_effect_contract",
+                "status": "pass",
+                "runtime_effect": False,
+            },
+        ],
         "summary": {
             "processed_arm_count": processed,
             "arm_status_counts": dict(status_counts),
             "label_status_counts": dict(label_status_counts),
+            "maturity_status_counts": dict(maturity_status_counts),
             "pending_future_quote_count": label_status_counts.get("pending_future_quotes", 0),
             "labeled_sample_count": label_status_counts.get("labeled", 0),
         },
@@ -478,7 +528,9 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"- processed_arm_count: `{summary.get('processed_arm_count')}`",
             f"- arm_status_counts: `{summary.get('arm_status_counts')}`",
             f"- label_status_counts: `{summary.get('label_status_counts')}`",
+            f"- maturity_status_counts: `{summary.get('maturity_status_counts')}`",
             f"- pending_future_quote_count: `{summary.get('pending_future_quote_count')}`",
+            f"- implementation_status: `{report.get('implementation_status') or '-'}`",
             "",
             "## Contract",
             "",

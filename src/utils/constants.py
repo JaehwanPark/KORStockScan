@@ -609,7 +609,7 @@ class TradingConfig:
     AI_HOLDING_FAST_REUSE_MAX_WS_AGE_SEC: float = 1.5  # 보유 AI fast reuse 허용 최대 WS 나이
     AI_GATEKEEPER_FAST_REUSE_MAX_WS_AGE_SEC: float = 2.0  # Gatekeeper fast reuse 허용 최대 WS 나이
     SCALP_ENTRY_ADM_ADVISORY_ENABLED: bool = True  # 운영 override: 스캘핑 entry ADM prompt advisory 기본 ON
-    SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED: bool = True  # 운영 override: ADM bucket/hypothesis로 entry AI action 보정
+    SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED: bool = False  # context-only 기본값: 명시적 운영 override에서만 entry AI action 보정
     SCALP_ENTRY_ADM_HYPOTHESIS_FALLBACK_ENABLED: bool = True  # joined sample 부족 시 stale/chase/weak-momentum 가설 적용
     SCALP_ENTRY_ADM_NEGATIVE_EV_BLOCK_ENABLED: bool = True  # BUY bucket이라도 source-quality EV<기준이면 즉시 진입 대기
     SCALP_ENTRY_ADM_NEGATIVE_EV_FORCE_WAIT_THRESHOLD_PCT: float = 0.0
@@ -621,11 +621,15 @@ class TradingConfig:
     LIFECYCLE_DECISION_MATRIX_PROMOTE_ENABLED: bool = False
     LIFECYCLE_DECISION_MATRIX_MAX_PROMOTES_PER_DAY: int = 3
     LIFECYCLE_DECISION_MATRIX_MIN_STAGE_CONFIDENCE: float = 0.60
+    LIFECYCLE_DECISION_MATRIX_RUNTIME_EFFECT_ENABLED: bool = False
+    LIFECYCLE_AI_CONTEXT_ENABLED: bool = False
+    LIFECYCLE_AI_CONTEXT_FILE: str = ""
+    LIFECYCLE_AI_CONTEXT_VERSION: str = ""
     HOLDING_EXIT_MATRIX_ADVISORY_ENABLED: bool = True  # 운영 override: holding/exit matrix prompt advisory 기본 ON
-    HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED: bool = True  # 운영 override: matrix/hypothesis로 HOLD/EXIT action 보정
+    HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED: bool = False  # context-only 기본값: 명시적 운영 override에서만 HOLD/EXIT action 보정
     HOLDING_EXIT_MATRIX_EXIT_TO_HOLD_ENABLED: bool = True
     HOLDING_EXIT_MATRIX_HOLD_TO_EXIT_ENABLED: bool = True
-    HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED: bool = True
+    HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED: bool = False
     HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_PROFIT_PCT: float = -1.20
     HOLDING_EXIT_MATRIX_AVG_DOWN_MAX_PROFIT_PCT: float = -0.10
     HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_AI_SCORE: int = 65
@@ -2098,6 +2102,12 @@ def _build_trading_rules() -> TradingConfig:
     env_lifecycle_decision_matrix_min_confidence = _env_float(
         "KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_MIN_STAGE_CONFIDENCE"
     )
+    env_lifecycle_decision_matrix_runtime_effect_enabled = _env_bool(
+        "KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_RUNTIME_EFFECT_ENABLED"
+    )
+    env_lifecycle_ai_context_enabled = _env_bool("KORSTOCKSCAN_LIFECYCLE_AI_CONTEXT_ENABLED")
+    env_lifecycle_ai_context_file = _env_str("KORSTOCKSCAN_LIFECYCLE_AI_CONTEXT_FILE")
+    env_lifecycle_ai_context_version = _env_str("KORSTOCKSCAN_LIFECYCLE_AI_CONTEXT_VERSION")
     env_scalp_loss_fallback_enabled = _env_bool("KORSTOCKSCAN_SCALP_LOSS_FALLBACK_ENABLED")
     env_scalp_loss_fallback_observe_only = _env_bool("KORSTOCKSCAN_SCALP_LOSS_FALLBACK_OBSERVE_ONLY")
     env_holding_exit_matrix_advisory_enabled = _env_bool("KORSTOCKSCAN_HOLDING_EXIT_MATRIX_ADVISORY_ENABLED")
@@ -2164,6 +2174,10 @@ def _build_trading_rules() -> TradingConfig:
         or env_lifecycle_decision_matrix_promote_enabled is not None
         or env_lifecycle_decision_matrix_max_promotes is not None
         or env_lifecycle_decision_matrix_min_confidence is not None
+        or env_lifecycle_decision_matrix_runtime_effect_enabled is not None
+        or env_lifecycle_ai_context_enabled is not None
+        or env_lifecycle_ai_context_file is not None
+        or env_lifecycle_ai_context_version is not None
         or env_scalp_loss_fallback_enabled is not None
         or env_scalp_loss_fallback_observe_only is not None
         or env_holding_exit_matrix_advisory_enabled is not None
@@ -2232,6 +2246,18 @@ def _build_trading_rules() -> TradingConfig:
             LIFECYCLE_DECISION_MATRIX_MIN_STAGE_CONFIDENCE=env_lifecycle_decision_matrix_min_confidence
             if env_lifecycle_decision_matrix_min_confidence is not None
             else config.LIFECYCLE_DECISION_MATRIX_MIN_STAGE_CONFIDENCE,
+            LIFECYCLE_DECISION_MATRIX_RUNTIME_EFFECT_ENABLED=env_lifecycle_decision_matrix_runtime_effect_enabled
+            if env_lifecycle_decision_matrix_runtime_effect_enabled is not None
+            else config.LIFECYCLE_DECISION_MATRIX_RUNTIME_EFFECT_ENABLED,
+            LIFECYCLE_AI_CONTEXT_ENABLED=env_lifecycle_ai_context_enabled
+            if env_lifecycle_ai_context_enabled is not None
+            else config.LIFECYCLE_AI_CONTEXT_ENABLED,
+            LIFECYCLE_AI_CONTEXT_FILE=env_lifecycle_ai_context_file
+            if env_lifecycle_ai_context_file is not None
+            else config.LIFECYCLE_AI_CONTEXT_FILE,
+            LIFECYCLE_AI_CONTEXT_VERSION=env_lifecycle_ai_context_version
+            if env_lifecycle_ai_context_version is not None
+            else config.LIFECYCLE_AI_CONTEXT_VERSION,
             SCALP_LOSS_FALLBACK_ENABLED=env_scalp_loss_fallback_enabled
             if env_scalp_loss_fallback_enabled is not None
             else config.SCALP_LOSS_FALLBACK_ENABLED,

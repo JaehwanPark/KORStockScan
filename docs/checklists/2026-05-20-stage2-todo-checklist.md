@@ -103,6 +103,13 @@
   - 금지: source-quality/workorder gap을 runtime threshold mutation, real order gate, Telegram BUY/SELL, provider route, bot restart 근거로 쓰지 않는다.
   - 다음 액션: `covered_by_generated_workorder`, `manual_codex_order_required`, `next_day_checklist_required`, `defer_no_repro` 중 하나로 닫고, 자동 생성 workorder에 없으면 수동 구현 지시 대상 또는 다음 영업일 checklist 항목으로 승격한다.
 
+- [ ] `[LifecycleAIContextV2Decision0520] AI-generated context v2 승격 필요 여부 판정` (`Due: 2026-05-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:45~17:55`, `Track: ScalpingLogic`)
+  - Source: [lifecycle_ai_context.py](/home/ubuntu/KORStockScan/src/engine/lifecycle_ai_context.py), [lifecycle_ai_context_2026-05-20.json](/home/ubuntu/KORStockScan/data/report/lifecycle_ai_context/lifecycle_ai_context_2026-05-20.json), [lifecycle_ai_context_attribution_2026-05-20.json](/home/ubuntu/KORStockScan/data/report/lifecycle_ai_context_attribution/lifecycle_ai_context_attribution_2026-05-20.json), [threshold_cycle_ev_2026-05-20.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-20.json)
+  - 판정 기준: v1 deterministic summary context의 `context_applied_count`, stage별 `ai_action_alignment_rate`, `ai_action_delta_rate`, `ai_score_delta_avg`, `source_quality_adjusted_ev_pct`, `context_contribution_score`, no-context replay coverage를 확인하고, AI-generated context v2가 필요한지 판정한다.
+  - v2 후보 조건: deterministic summary가 과도하게 기계적이거나 stage별 해석 누락이 확인되고, context 적용 표본/리플레이 표본이 충분하며, AI-generated context가 `ai_advisory_prompt_context_only`와 schema/forbidden uses를 유지할 수 있을 때만 `design_family_candidate`로 승격한다.
+  - 금지: AI-generated context v2를 real order gate, deterministic bias, scale-in 생성, threshold env mutation, provider route, Telegram BUY/SELL, bot restart trigger로 직접 연결하지 않는다. v2 설계 전에는 `lifecycle_ai_context_v1` deterministic fallback을 유지한다.
+  - 다음 액션: `keep_deterministic_v1`, `design_ai_generated_context_v2`, `hold_sample_until_attribution`, `workorder_candidate_context_quality`, `reject_runtime_risk` 중 하나로 닫고, v2 검토가 필요하면 다음 영업일 checklist와 code-improvement workorder에 parser-friendly 항목으로 남긴다.
+
 - [ ] `[ScalpSimLdmSamplePolicy0520] LDM 샘플 수집 목적의 scalp sim max_daily 160 및 reserve/bucket quota 구현` (`Due: 2026-05-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:25~17:45`, `Track: ScalpingLogic`)
   - Source: [lifecycle_decision_matrix.py](/home/ubuntu/KORStockScan/src/engine/lifecycle_decision_matrix.py), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [threshold_runtime_env_2026-05-20.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-05-20.env)
   - 판정 기준: `SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY=80`이 LDM stage floor는 통과 가능하나 시간대/시장상태/action bucket 수집에는 부족한지 postclose 원장과 LDM row coverage로 확인한다. 다음 PREOPEN 적용 후보는 `160`으로 두되, 오전 소진 방지를 위해 `blocked_ai_score <= 60%`, `first_ai_wait >= 30%`, panic/euphoria lifecycle source는 별도 cap보다 reserve 소비 허용 원칙을 코드/테스트/문서에 반영한다.
@@ -153,3 +160,18 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - 판정 결과: `implemented_alert_transition_fix`
   - 테스트/검증: `src/tests/test_notify_panic_state_transition.py`와 `src/tests/test_panic_sell_defense_report.py` 총 21개 통과, `py_compile` 통과, 현재 report dry-run 파생값은 `derived_state_value=RECOVERY_WATCH`, `derived_phase=active`, `message_context=market_breadth_watch`.
   - 다음 액션: 후속 panic report에서 `single_market_risk_off_advisory`가 유지되면 해제가 아니라 watch 상태로 유지하고, 전체 breadth/micro panic confirmation 여부만 계속 관찰한다.
+
+<!-- AUTO_SERVER_COMPARISON_START -->
+### 본서버 vs songstockscan 자동 비교 (`2026-05-20 15:46:58`)
+
+- 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
+- 상세 리포트: `data/report/server_comparison/server_comparison_2026-05-20.md`
+- `Trade Review`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Performance Tuning`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Post Sell Feedback`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Entry Pipeline Flow`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+<!-- AUTO_SERVER_COMPARISON_END -->

@@ -38,6 +38,7 @@ def _enable_rules(monkeypatch, *, policy_file, max_promotes=3, min_confidence=0.
             LIFECYCLE_DECISION_MATRIX_PROMOTE_ENABLED=promote_enabled,
             LIFECYCLE_DECISION_MATRIX_MAX_PROMOTES_PER_DAY=max_promotes,
             LIFECYCLE_DECISION_MATRIX_MIN_STAGE_CONFIDENCE=min_confidence,
+            LIFECYCLE_DECISION_MATRIX_RUNTIME_EFFECT_ENABLED=True,
         ),
     )
     mod.reset_lifecycle_decision_matrix_promote_counter()
@@ -141,3 +142,27 @@ def test_lifecycle_runtime_submit_allow_is_observation_not_guard_override(tmp_pa
     assert decision["lifecycle_matrix_runtime_effect"] == "allow_submit_observe"
     assert blocked["lifecycle_matrix_safety_passthrough"] is True
     assert blocked["lifecycle_matrix_runtime_effect"] == "none"
+
+
+def test_lifecycle_runtime_effect_kill_switch_keeps_policy_as_context_only(tmp_path, monkeypatch):
+    policy_file = tmp_path / "lifecycle_decision_matrix_2026-05-18.json"
+    _write_policy(policy_file)
+    _enable_rules(monkeypatch, policy_file=policy_file)
+    monkeypatch.setattr(
+        mod,
+        "TRADING_RULES",
+        replace(mod.TRADING_RULES, LIFECYCLE_DECISION_MATRIX_RUNTIME_EFFECT_ENABLED=False),
+    )
+
+    decision = mod.resolve_lifecycle_decision(
+        stage="entry",
+        original_action="WAIT",
+        context={},
+        now=datetime.fromisoformat("2026-05-19T09:10:00"),
+    )
+    payload = mod.apply_lifecycle_decision_to_payload({"action": "WAIT", "action_v2": "WAIT"}, decision)
+
+    assert decision["lifecycle_matrix_selected_action"] == "BUY_DEFENSIVE"
+    assert decision["lifecycle_matrix_runtime_effect"] == "none"
+    assert decision["lifecycle_matrix_runtime_reason"] == "runtime_effect_disabled_context_only"
+    assert payload["action"] == "WAIT"

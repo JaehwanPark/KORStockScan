@@ -12,6 +12,8 @@ from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.engine.build_code_improvement_workorder import code_improvement_workorder_paths
 from src.engine.approval_contracts import annotate_approval_request
 from src.engine.institutional_flow_context import report_paths as institutional_flow_report_paths
+from src.engine.lifecycle_ai_context import attribution_report_paths as lifecycle_ai_context_attribution_paths
+from src.engine.lifecycle_ai_context import context_report_paths as lifecycle_ai_context_report_paths
 from src.engine.lifecycle_decision_matrix import report_paths as lifecycle_matrix_report_paths
 from src.engine.scalping_pattern_lab_automation import automation_report_paths
 from src.engine.scalp_entry_action_decision_matrix import report_paths as scalp_entry_adm_report_paths
@@ -604,6 +606,102 @@ def _lifecycle_decision_matrix_summary(target_date: str) -> tuple[dict[str, Any]
     )
 
 
+def _lifecycle_ai_context_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
+    json_path, _ = lifecycle_ai_context_report_paths(target_date)
+    payload = _load_json(json_path)
+    if not payload:
+        return (
+            {
+                "available": False,
+                "artifact": None,
+                "context_version": "-",
+                "prompt_stage_count": 0,
+                "runtime_effect": False,
+                "decision_authority": "ai_advisory_prompt_context_only",
+            },
+            None,
+            ["lifecycle_ai_context_missing"],
+        )
+    stages = payload.get("stage_contexts") if isinstance(payload.get("stage_contexts"), list) else []
+    warnings = [f"lifecycle_ai_context:{item}" for item in (payload.get("warnings") or []) if str(item)]
+    return (
+        {
+            "available": True,
+            "artifact": str(json_path),
+            "context_version": payload.get("context_version"),
+            "runtime_effect": bool(payload.get("runtime_effect")),
+            "decision_authority": payload.get("decision_authority"),
+            "provider_status": payload.get("provider_status") if isinstance(payload.get("provider_status"), dict) else {},
+            "prompt_stage_count": sum(1 for item in stages if isinstance(item, dict) and item.get("prompt_injection_allowed")),
+            "stage_contexts": [
+                {
+                    "stage": item.get("stage"),
+                    "prompt_injection_allowed": item.get("prompt_injection_allowed"),
+                    "policy_key": item.get("policy_key"),
+                    "alignment_hint": item.get("alignment_hint"),
+                    "context_contribution_score": item.get("context_contribution_score"),
+                    "attribution_quality_status": item.get("attribution_quality_status"),
+                }
+                for item in stages[:5]
+                if isinstance(item, dict)
+            ],
+        },
+        str(json_path),
+        warnings,
+    )
+
+
+def _lifecycle_ai_context_attribution_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
+    json_path, _ = lifecycle_ai_context_attribution_paths(target_date)
+    payload = _load_json(json_path)
+    if not payload:
+        return (
+            {
+                "available": False,
+                "artifact": None,
+                "context_eligible_count": 0,
+                "context_applied_count": 0,
+                "runtime_effect": False,
+                "decision_authority": "postclose_context_attribution_only",
+            },
+            None,
+            ["lifecycle_ai_context_attribution_missing"],
+        )
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    warnings = [f"lifecycle_ai_context_attribution:{item}" for item in (payload.get("warnings") or []) if str(item)]
+    stage_map = payload.get("stage_attribution") if isinstance(payload.get("stage_attribution"), dict) else {}
+    return (
+        {
+            "available": True,
+            "artifact": str(json_path),
+            "runtime_effect": bool(payload.get("runtime_effect")),
+            "decision_authority": payload.get("decision_authority"),
+            "implementation_status": payload.get("implementation_status"),
+            "implementation_checks": payload.get("implementation_checks") or [],
+            "implementation_provenance": payload.get("implementation_provenance") or {},
+            "context_eligible_count": _safe_int(summary.get("context_eligible_count"), 0),
+            "context_applied_count": _safe_int(summary.get("context_applied_count"), 0),
+            "context_skipped_count": _safe_int(summary.get("context_skipped_count"), 0),
+            "replay_budget": _safe_int(summary.get("replay_budget"), 0),
+            "stage_quality_counts": summary.get("stage_quality_counts") or {},
+            "stage_attribution": {
+                stage: {
+                    "context_contribution_score": item.get("context_contribution_score"),
+                    "bounded_auxiliary_weight": item.get("bounded_auxiliary_weight"),
+                    "attribution_quality_status": item.get("attribution_quality_status"),
+                    "source_quality_adjusted_ev_pct": item.get("source_quality_adjusted_ev_pct"),
+                    "ai_action_alignment_rate": item.get("ai_action_alignment_rate"),
+                    "no_context_replay_observed": item.get("no_context_replay_observed"),
+                }
+                for stage, item in stage_map.items()
+                if isinstance(item, dict)
+            },
+        },
+        str(json_path),
+        warnings,
+    )
+
+
 def _swing_strategy_discovery_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
     json_path, _ = swing_strategy_discovery_ev_paths(target_date)
     payload = _load_json(json_path)
@@ -625,6 +723,9 @@ def _swing_strategy_discovery_summary(target_date: str) -> tuple[dict[str, Any],
             ["swing_strategy_discovery_ev_missing"],
         )
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    source_quality = (
+        payload.get("source_quality_summary") if isinstance(payload.get("source_quality_summary"), dict) else {}
+    )
     warnings = [f"swing_strategy_discovery:{item}" for item in (payload.get("warnings") or []) if str(item)]
     return (
         {
@@ -641,6 +742,10 @@ def _swing_strategy_discovery_summary(target_date: str) -> tuple[dict[str, Any],
             "runtime_effect": bool(payload.get("runtime_effect")),
             "source_only": bool(payload.get("source_only", True)),
             "decision_authority": payload.get("decision_authority"),
+            "source_quality_summary": source_quality,
+            "implementation_status": source_quality.get("implementation_status"),
+            "implementation_checks": source_quality.get("implementation_checks") or [],
+            "implementation_provenance": source_quality.get("implementation_provenance") or {},
         },
         str(json_path),
         warnings,
@@ -830,6 +935,12 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
     swing_lab_summary, swing_lab_path, swing_lab_warnings = _swing_pattern_lab_automation_summary(target_date)
     scalp_entry_adm_summary, scalp_entry_adm_path, scalp_entry_adm_warnings = _scalp_entry_adm_summary(target_date)
     lifecycle_matrix_summary, lifecycle_matrix_path, lifecycle_matrix_warnings = _lifecycle_decision_matrix_summary(target_date)
+    lifecycle_ai_context_summary, lifecycle_ai_context_path, lifecycle_ai_context_warnings = _lifecycle_ai_context_summary(target_date)
+    (
+        lifecycle_ai_context_attribution_summary,
+        lifecycle_ai_context_attribution_path,
+        lifecycle_ai_context_attribution_warnings,
+    ) = _lifecycle_ai_context_attribution_summary(target_date)
     swing_discovery_summary, swing_discovery_path, swing_discovery_warnings = _swing_strategy_discovery_summary(target_date)
     institutional_flow_summary, institutional_flow_path, institutional_flow_warnings = _institutional_flow_context_summary(target_date)
     code_workorder_summary, code_workorder_path, code_workorder_warnings = _code_improvement_workorder_summary(target_date)
@@ -912,6 +1023,8 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
         "swing_pattern_lab_automation": swing_lab_summary,
         "scalp_entry_action_decision_matrix": scalp_entry_adm_summary,
         "lifecycle_decision_matrix": lifecycle_matrix_summary,
+        "lifecycle_ai_context": lifecycle_ai_context_summary,
+        "lifecycle_ai_context_attribution": lifecycle_ai_context_attribution_summary,
         "swing_strategy_discovery": swing_discovery_summary,
         "institutional_flow_context": institutional_flow_summary,
         "pipeline_event_verbosity": pipeline_verbosity_summary,
@@ -928,6 +1041,8 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "swing_pattern_lab_automation": swing_lab_path,
             "scalp_entry_action_decision_matrix": scalp_entry_adm_path,
             "lifecycle_decision_matrix": lifecycle_matrix_path,
+            "lifecycle_ai_context": lifecycle_ai_context_path,
+            "lifecycle_ai_context_attribution": lifecycle_ai_context_attribution_path,
             "swing_strategy_discovery": swing_discovery_path,
             "institutional_flow_context": institutional_flow_path,
             "pipeline_event_verbosity": pipeline_verbosity_path,
@@ -949,6 +1064,8 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
                 *swing_lab_warnings,
                 *scalp_entry_adm_warnings,
                 *lifecycle_matrix_warnings,
+                *lifecycle_ai_context_warnings,
+                *lifecycle_ai_context_attribution_warnings,
                 *swing_discovery_warnings,
                 *institutional_flow_warnings,
                 *pipeline_verbosity_warnings,
@@ -979,6 +1096,12 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
     swing_lab = report.get("swing_pattern_lab_automation") if isinstance(report.get("swing_pattern_lab_automation"), dict) else {}
     scalp_entry_adm = report.get("scalp_entry_action_decision_matrix") if isinstance(report.get("scalp_entry_action_decision_matrix"), dict) else {}
     lifecycle_matrix = report.get("lifecycle_decision_matrix") if isinstance(report.get("lifecycle_decision_matrix"), dict) else {}
+    lifecycle_ai_context = report.get("lifecycle_ai_context") if isinstance(report.get("lifecycle_ai_context"), dict) else {}
+    lifecycle_ai_context_attribution = (
+        report.get("lifecycle_ai_context_attribution")
+        if isinstance(report.get("lifecycle_ai_context_attribution"), dict)
+        else {}
+    )
     swing_discovery = report.get("swing_strategy_discovery") if isinstance(report.get("swing_strategy_discovery"), dict) else {}
     institutional_flow = report.get("institutional_flow_context") if isinstance(report.get("institutional_flow_context"), dict) else {}
     pipeline_verbosity = report.get("pipeline_event_verbosity") if isinstance(report.get("pipeline_event_verbosity"), dict) else {}
@@ -1057,6 +1180,19 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- fixed_threshold_roles: `{lifecycle_matrix.get('fixed_threshold_roles') or {}}`",
         f"- policy_entries: `{lifecycle_matrix.get('policy_entries') or []}`",
         "",
+        "## Lifecycle AI Context",
+        f"- artifact: `{lifecycle_ai_context.get('artifact') or '-'}`",
+        f"- context_version: `{lifecycle_ai_context.get('context_version') or '-'}` / authority: `{lifecycle_ai_context.get('decision_authority') or '-'}`",
+        f"- prompt_stage_count: `{lifecycle_ai_context.get('prompt_stage_count')}` / runtime_effect: `{lifecycle_ai_context.get('runtime_effect')}`",
+        f"- stage_contexts: `{lifecycle_ai_context.get('stage_contexts') or []}`",
+        "",
+        "## Lifecycle AI Context Attribution",
+        f"- artifact: `{lifecycle_ai_context_attribution.get('artifact') or '-'}`",
+        f"- eligible/applied/skipped: `{lifecycle_ai_context_attribution.get('context_eligible_count')}` / `{lifecycle_ai_context_attribution.get('context_applied_count')}` / `{lifecycle_ai_context_attribution.get('context_skipped_count')}`",
+        f"- replay_budget: `{lifecycle_ai_context_attribution.get('replay_budget')}`",
+        f"- implementation_status: `{lifecycle_ai_context_attribution.get('implementation_status') or '-'}`",
+        f"- stage_attribution: `{lifecycle_ai_context_attribution.get('stage_attribution') or {}}`",
+        "",
         "## Institutional Flow Context",
         f"- artifact: `{institutional_flow.get('artifact') or '-'}`",
         f"- status: `{institutional_flow.get('status')}` / authority: `{institutional_flow.get('decision_authority') or '-'}`",
@@ -1091,6 +1227,7 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- authority: `{swing_discovery.get('decision_authority') or '-'}` / source_only: `{swing_discovery.get('source_only')}`",
         f"- candidate/arm/policy_exit_rows: `{swing_discovery.get('candidate_count')}` / `{swing_discovery.get('arm_count')}` / `{swing_discovery.get('policy_exit_row_count')}`",
         f"- labeled/pending_future_quotes: `{swing_discovery.get('labeled_sample_count')}` / `{swing_discovery.get('pending_future_quote_count')}`",
+        f"- implementation_status: `{swing_discovery.get('implementation_status') or '-'}`",
         f"- top_surviving_arm: `{swing_discovery.get('top_surviving_arm') or '-'}`",
         f"- surviving/avoid_bucket_count: `{swing_discovery.get('surviving_arm_count')}` / `{swing_discovery.get('avoid_bucket_count')}`",
         f"- runtime_effect: `{swing_discovery.get('runtime_effect')}`",

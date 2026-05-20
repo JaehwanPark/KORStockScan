@@ -2,11 +2,11 @@
 
 ## 판정
 
-- 분석 기간: `2026-05-19` ~ `2026-05-19`
+- 분석 기간: `2026-05-20` ~ `2026-05-20`
 - trade_rows: `0`
-- lifecycle_event_rows: `80`
+- lifecycle_event_rows: `104`
 - completed_valid_profit_rows: `0`
-- ofi_qi_rows: `510`
+- ofi_qi_rows: `666`
 - total_findings: `5`
 - code_improvement_orders: `4`
 - runtime_change: `False`
@@ -134,4 +134,4 @@
 
 ## Data Quality Warnings
 
-- OFI/QI stale/missing ratio: 0.9216 (470/510); reasons: micro_missing=470, observer_unhealthy=1, micro_not_ready=24, state_insufficient=24
+- OFI/QI stale/missing ratio: 0.955 (636/666); reasons: micro_missing=636, observer_unhealthy=1, micro_not_ready=20, state_insufficient=20

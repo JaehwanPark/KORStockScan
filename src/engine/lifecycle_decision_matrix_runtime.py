@@ -485,9 +485,13 @@ def resolve_lifecycle_decision(
     original = str(original_action or "").upper()
     ctx = dict(context or {})
     enabled = bool(getattr(TRADING_RULES, "LIFECYCLE_DECISION_MATRIX_ENABLED", False))
+    runtime_effect_enabled = bool(
+        getattr(TRADING_RULES, "LIFECYCLE_DECISION_MATRIX_RUNTIME_EFFECT_ENABLED", True)
+    )
     min_confidence = float(getattr(TRADING_RULES, "LIFECYCLE_DECISION_MATRIX_MIN_STAGE_CONFIDENCE", 0.0) or 0.0)
     result = {
         "lifecycle_matrix_enabled": enabled,
+        "lifecycle_matrix_runtime_effect_enabled": runtime_effect_enabled,
         "lifecycle_matrix_stage": stage_name or "-",
         "lifecycle_matrix_policy_version": "-",
         "lifecycle_matrix_policy_file": "-",
@@ -543,6 +547,9 @@ def resolve_lifecycle_decision(
         return result
     if selected_action == "NO_CHANGE":
         result["lifecycle_matrix_runtime_reason"] = "policy_no_change"
+        return result
+    if not runtime_effect_enabled:
+        result["lifecycle_matrix_runtime_reason"] = "runtime_effect_disabled_context_only"
         return result
     if stage_name == "entry":
         if selected_action == "BUY_DEFENSIVE" and original not in {"BUY", "BUY_NOW", "BUY_DEFENSIVE"}:

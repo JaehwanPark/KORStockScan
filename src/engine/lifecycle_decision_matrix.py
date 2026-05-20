@@ -120,6 +120,26 @@ RUNTIME_FEATURE_KEYS = {
     "fill_quality",
     "quote_quality_state",
     "assumed_slippage_bps",
+    "lifecycle_ai_context_enabled",
+    "lifecycle_ai_context_applied",
+    "lifecycle_ai_context_status",
+    "lifecycle_ai_context_version",
+    "lifecycle_ai_context_source_date",
+    "lifecycle_ai_context_stage",
+    "lifecycle_ai_context_policy_key",
+    "lifecycle_ai_context_hash",
+    "lifecycle_ai_context_alignment_hint",
+    "lifecycle_ai_context_decision_authority",
+    "context_eligible_count",
+    "context_applied_count",
+    "context_skipped_count",
+    "ai_action_alignment_rate",
+    "no_context_replay_sample",
+    "ai_action_delta_rate",
+    "ai_score_delta_avg",
+    "context_contribution_score",
+    "bounded_auxiliary_weight",
+    "attribution_quality_status",
     *INSTITUTIONAL_FLOW_FEATURE_KEYS,
 }
 
@@ -185,6 +205,14 @@ LEGACY_ARCHIVE_THRESHOLDS = [
 def report_paths(target_date: str) -> tuple[Path, Path]:
     base = MATRIX_DIR / f"lifecycle_decision_matrix_{target_date}"
     return base.with_suffix(".json"), base.with_suffix(".md")
+
+
+def _read_json_dict(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _safe_float(value: Any, default: float | None = 0.0) -> float | None:
@@ -814,6 +842,70 @@ def _policy_entries(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return entries
 
 
+def _load_lifecycle_ai_context_attribution(target_date: str) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    path = REPORT_DIR / "lifecycle_ai_context_attribution" / f"lifecycle_ai_context_attribution_{target_date}.json"
+    payload = _read_json_dict(path)
+    if not payload:
+        return {}, {"artifact": str(path) if path.exists() else None, "status": "missing"}
+    by_stage = payload.get("stage_attribution") if isinstance(payload.get("stage_attribution"), dict) else {}
+    return (
+        {str(stage): dict(item) for stage, item in by_stage.items() if isinstance(item, dict)},
+        {
+            "artifact": str(path),
+            "status": "available",
+            "summary": payload.get("summary") if isinstance(payload.get("summary"), dict) else {},
+            "runtime_effect": bool(payload.get("runtime_effect")),
+            "decision_authority": payload.get("decision_authority"),
+        },
+    )
+
+
+def _apply_lifecycle_ai_context_feedback(
+    policy_entries: list[dict[str, Any]],
+    attribution_by_stage: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for entry in policy_entries:
+        stage = str(entry.get("stage") or "")
+        attribution = attribution_by_stage.get(stage, {})
+        contribution = _safe_float(attribution.get("context_contribution_score"), 0.0) or 0.0
+        bounded_weight = _safe_float(attribution.get("bounded_auxiliary_weight"), 0.0) or 0.0
+        result.append(
+            {
+                **entry,
+                "context_contribution_score": round(float(contribution), 4),
+                "bounded_auxiliary_weight": round(float(bounded_weight), 4),
+                "context_feedback_route": (
+                    attribution.get("feedback_route")
+                    or ("hold_sample" if not attribution else "bounded_auxiliary_weight")
+                ),
+                "context_attribution_quality_status": attribution.get("attribution_quality_status")
+                or "hold_sample",
+            }
+        )
+    return result
+
+
+def _lifecycle_ai_context_feedback_summary(policy_entries: list[dict[str, Any]]) -> dict[str, Any]:
+    route_counts: Counter[str] = Counter()
+    quality_counts: Counter[str] = Counter()
+    weighted_count = 0
+    for entry in policy_entries:
+        route_counts[str(entry.get("context_feedback_route") or "hold_sample")] += 1
+        quality_counts[str(entry.get("context_attribution_quality_status") or "hold_sample")] += 1
+        if abs(_safe_float(entry.get("bounded_auxiliary_weight"), 0.0) or 0.0) > 0:
+            weighted_count += 1
+    return {
+        "implementation_status": "implemented",
+        "runtime_effect": False,
+        "decision_authority": "lifecycle_ai_context_feedback_source_only",
+        "policy_entry_count": len(policy_entries),
+        "bounded_auxiliary_weight_nonzero_count": weighted_count,
+        "route_counts": dict(route_counts),
+        "quality_counts": dict(quality_counts),
+    }
+
+
 def _allowed_actions(stage: str) -> list[str]:
     return {
         "entry": ["BUY_DEFENSIVE", "WAIT_REQUOTE", "DROP", "NO_CHANGE"],
@@ -849,7 +941,8 @@ def build_lifecycle_decision_matrix_report(target_date: str) -> dict[str, Any]:
         "decision_authority": "source_only_lifecycle_feature",
     }
     rows = rows[:2000]
-    policy_entries = _policy_entries(rows)
+    attribution_by_stage, attribution_summary = _load_lifecycle_ai_context_attribution(target_date)
+    policy_entries = _apply_lifecycle_ai_context_feedback(_policy_entries(rows), attribution_by_stage)
     warnings: list[str] = []
     if not rows:
         warnings.append("lifecycle_rows_missing")
@@ -884,12 +977,13 @@ def build_lifecycle_decision_matrix_report(target_date: str) -> dict[str, Any]:
             "stage_counts": dict(Counter(str(row.get("stage") or "unknown") for row in rows)),
             "policy_pass_count": sum(1 for entry in policy_entries if entry.get("source_quality_gate") == "pass"),
             "promote_ready_count": sum(1 for entry in policy_entries if entry.get("promote_ready")),
+            "lifecycle_ai_context_feedback": _lifecycle_ai_context_feedback_summary(policy_entries),
             "status": "pass" if not warnings else "warning",
             "warnings": warnings,
         },
         "policy_entries": policy_entries,
         "examples": rows[:50],
-        "sources": sources,
+        "sources": {**sources, "lifecycle_ai_context_attribution": attribution_summary},
         "warnings": warnings,
     }
     MATRIX_DIR.mkdir(parents=True, exist_ok=True)
@@ -915,6 +1009,7 @@ def render_lifecycle_decision_matrix_markdown(report: dict[str, Any]) -> str:
         f"- joined_rows: `{summary.get('joined_rows')}`",
         f"- policy_pass_count: `{summary.get('policy_pass_count')}`",
         f"- promote_ready_count: `{summary.get('promote_ready_count')}`",
+        f"- lifecycle_ai_context_feedback: `{summary.get('lifecycle_ai_context_feedback') or {}}`",
         f"- warnings: `{summary.get('warnings')}`",
         "",
         "## Policy Entries",

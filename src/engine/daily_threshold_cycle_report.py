@@ -367,6 +367,15 @@ CALIBRATION_FAMILY_METADATA = {
             "LIFECYCLE_DECISION_MATRIX_PROMOTE_ENABLED",
             "LIFECYCLE_DECISION_MATRIX_MAX_PROMOTES_PER_DAY",
             "LIFECYCLE_DECISION_MATRIX_MIN_STAGE_CONFIDENCE",
+            "LIFECYCLE_DECISION_MATRIX_RUNTIME_EFFECT_ENABLED",
+            "LIFECYCLE_AI_CONTEXT_ENABLED",
+            "LIFECYCLE_AI_CONTEXT_FILE",
+            "LIFECYCLE_AI_CONTEXT_VERSION",
+            "SCALP_ENTRY_ADM_ADVISORY_ENABLED",
+            "SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED",
+            "HOLDING_EXIT_MATRIX_ADVISORY_ENABLED",
+            "HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED",
+            "HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED",
         ],
         "primary_key": "enabled",
         "bounds": {
@@ -4462,6 +4471,8 @@ def _build_report_source_families(report_source_context: dict | None) -> list[di
 def _build_lifecycle_decision_matrix_runtime_family(target_date: str | None) -> dict:
     target = str(target_date or date.today().isoformat())
     path = LIFECYCLE_DECISION_MATRIX_DIR / f"lifecycle_decision_matrix_{target}.json"
+    context_path = REPORT_DIR / "lifecycle_ai_context" / f"lifecycle_ai_context_{target}.json"
+    context_payload = _read_json_dict(context_path)
     payload = _read_json_dict(path)
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     policy_entries = payload.get("policy_entries") if isinstance(payload.get("policy_entries"), list) else []
@@ -4489,6 +4500,27 @@ def _build_lifecycle_decision_matrix_runtime_family(target_date: str | None) -> 
             "promote_enabled": False,
             "max_promotes_per_day": 3,
             "min_stage_confidence": 0.60,
+            "runtime_effect_enabled": bool(
+                getattr(TRADING_RULES, "LIFECYCLE_DECISION_MATRIX_RUNTIME_EFFECT_ENABLED", False)
+            ),
+            "lifecycle_ai_context_enabled": bool(getattr(TRADING_RULES, "LIFECYCLE_AI_CONTEXT_ENABLED", False)),
+            "lifecycle_ai_context_file": str(getattr(TRADING_RULES, "LIFECYCLE_AI_CONTEXT_FILE", "") or ""),
+            "lifecycle_ai_context_version": str(
+                getattr(TRADING_RULES, "LIFECYCLE_AI_CONTEXT_VERSION", "") or ""
+            ),
+            "entry_adm_advisory_enabled": bool(getattr(TRADING_RULES, "SCALP_ENTRY_ADM_ADVISORY_ENABLED", True)),
+            "entry_adm_runtime_bias_enabled": bool(
+                getattr(TRADING_RULES, "SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED", False)
+            ),
+            "holding_exit_matrix_advisory_enabled": bool(
+                getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_ADVISORY_ENABLED", True)
+            ),
+            "holding_exit_matrix_runtime_bias_enabled": bool(
+                getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED", False)
+            ),
+            "holding_exit_matrix_scale_in_bias_enabled": bool(
+                getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED", False)
+            ),
         },
         "recommended": {
             "enabled": apply_ready,
@@ -4497,6 +4529,15 @@ def _build_lifecycle_decision_matrix_runtime_family(target_date: str | None) -> 
             "promote_enabled": bool(promote_ready_count > 0),
             "max_promotes_per_day": 3,
             "min_stage_confidence": 0.60,
+            "runtime_effect_enabled": False,
+            "lifecycle_ai_context_enabled": bool(context_payload),
+            "lifecycle_ai_context_file": str(context_path) if context_path.exists() else "",
+            "lifecycle_ai_context_version": str(context_payload.get("context_version") or ""),
+            "entry_adm_advisory_enabled": True,
+            "entry_adm_runtime_bias_enabled": False,
+            "holding_exit_matrix_advisory_enabled": True,
+            "holding_exit_matrix_runtime_bias_enabled": False,
+            "holding_exit_matrix_scale_in_bias_enabled": False,
         },
         "apply_mode": "efficient_tradeoff_canary_candidate" if apply_ready else "report_only_calibration",
         "notes": [

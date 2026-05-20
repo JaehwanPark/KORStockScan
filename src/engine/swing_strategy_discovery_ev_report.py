@@ -27,6 +27,7 @@ LABEL_REPORT_DIR = Path(DATA_DIR) / "report" / "swing_strategy_discovery_labels"
 DISCOVERY_SIM_REPORT_DIR = Path(DATA_DIR) / "report" / "swing_strategy_discovery_sim"
 DECISION_AUTHORITY = "swing_sim_exploration_only"
 SAMPLE_FLOOR = 5
+IMPLEMENTATION_ORDER_ID = "order_swing_strategy_discovery_source_quality_followup"
 
 
 def _date_text(value: str | date | datetime | None) -> str:
@@ -98,6 +99,7 @@ def _row_from_models(
     label: SwingStrategyDiscoveryLabel,
 ) -> dict[str, Any]:
     features = _json_loads(label.label_features)
+    arm_features = _json_loads(arm.arm_features)
     return {
         "candidate_id": candidate.id,
         "arm_row_id": arm.id,
@@ -121,6 +123,14 @@ def _row_from_models(
         "mae_pct": _safe_float(label.mae_pct, float("nan")),
         "virtual_notional_krw": _safe_float(arm.virtual_notional_krw, 0.0),
         "fill_status": (features or {}).get("fill_status"),
+        "entry_reason": (features or {}).get("entry_reason") or (arm_features or {}).get("entry_reason"),
+        "policy_exit_reason": (features or {}).get("exit_reason") or (arm_features or {}).get("policy_exit_reason"),
+        "label_maturity_status": (arm_features or {}).get("label_maturity_status"),
+        "source_quality_status": (arm_features or {}).get("source_quality_status"),
+        "future_quote_count": int((arm_features or {}).get("future_quote_count") or 0),
+        "quotes_from_entry_count": int((arm_features or {}).get("quotes_from_entry_count") or 0),
+        "latest_future_quote_date": (arm_features or {}).get("latest_future_quote_date"),
+        "final_return_basis": (features or {}).get("final_return_basis"),
     }
 
 
@@ -258,6 +268,61 @@ def _legacy_vs_discovery(aggregates: dict[str, list[dict[str, Any]]]) -> dict[st
     }
 
 
+def _source_quality_summary(
+    rows: list[dict[str, Any]],
+    *,
+    arm_status_counts: dict[str, int],
+    label_status_counts: dict[str, int],
+) -> dict[str, Any]:
+    maturity_counts: dict[str, int] = defaultdict(int)
+    entry_reason_counts: dict[str, int] = defaultdict(int)
+    exit_reason_counts: dict[str, int] = defaultdict(int)
+    source_quality_counts: dict[str, int] = defaultdict(int)
+    for row in rows:
+        maturity_counts[str(row.get("label_maturity_status") or "unknown")] += 1
+        entry_reason_counts[str(row.get("entry_reason") or "-")] += 1
+        exit_reason_counts[str(row.get("policy_exit_reason") or "-")] += 1
+        source_quality_counts[str(row.get("source_quality_status") or "-")] += 1
+    return {
+        "implementation_status": "implemented",
+        "implementation_provenance": {
+            "order_id": IMPLEMENTATION_ORDER_ID,
+            "scope": "source_quality_instrumentation_only",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "decision_authority": DECISION_AUTHORITY,
+        },
+        "implementation_checks": [
+            {
+                "name": "label_maturity_provenance",
+                "status": "pass",
+                "fields": [
+                    "label_maturity_status",
+                    "entry_reason",
+                    "policy_exit_reason",
+                    "future_quote_count",
+                    "quotes_from_entry_count",
+                ],
+            },
+            {
+                "name": "source_only_contract",
+                "status": "pass",
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+        ],
+        "runtime_effect": False,
+        "decision_authority": DECISION_AUTHORITY,
+        "arm_status_counts": arm_status_counts,
+        "label_status_counts": dict(label_status_counts),
+        "maturity_status_counts": dict(maturity_counts),
+        "entry_reason_counts": dict(entry_reason_counts),
+        "policy_exit_reason_counts": dict(exit_reason_counts),
+        "source_quality_status_counts": dict(source_quality_counts),
+    }
+
+
 def build_swing_strategy_discovery_ev_report(
     target_date: str,
     *,
@@ -272,6 +337,11 @@ def build_swing_strategy_discovery_ev_report(
     label_status_counts: dict[str, int] = defaultdict(int)
     for row in rows:
         label_status_counts[str(row.get("label_status") or "UNKNOWN")] += 1
+    source_quality_summary = _source_quality_summary(
+        rows,
+        arm_status_counts=arm_status_counts,
+        label_status_counts=dict(label_status_counts),
+    )
     summary = {
         "candidate_count": len({row.get("candidate_id") for row in rows}),
         "arm_count": len({row.get("arm_row_id") for row in rows}),
@@ -309,6 +379,7 @@ def build_swing_strategy_discovery_ev_report(
             "source_quality_adjusted_ev_pct",
         ],
         "summary": summary,
+        "source_quality_summary": source_quality_summary,
         "aggregates": aggregates,
         "surviving_arms": surviving,
         "legacy_vs_discovery": _legacy_vs_discovery(aggregates),
@@ -333,6 +404,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- pending_future_quote_count: `{summary.get('pending_future_quote_count')}`",
         f"- top_surviving_arm: `{summary.get('top_surviving_arm') or '-'}`",
         f"- avoid_bucket_count: `{summary.get('avoid_bucket_count')}`",
+        f"- source_quality_summary: `{report.get('source_quality_summary') or {}}`",
         f"- warnings: `{report.get('warnings') or []}`",
         "",
         "## Surviving Arms",

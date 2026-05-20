@@ -35,6 +35,10 @@ from src.engine.holding_exit_matrix_runtime import (
     build_holding_exit_matrix_runtime_context,
     merge_holding_exit_matrix_result_fields,
 )
+from src.engine.lifecycle_ai_context import (
+    build_lifecycle_ai_runtime_context,
+    merge_lifecycle_ai_context_fields,
+)
 from src.engine.scalp_entry_adm_runtime import (
     build_scalp_entry_adm_runtime_context,
     merge_scalp_entry_adm_result_fields,
@@ -2207,6 +2211,7 @@ class GPTSniperEngine:
         normalized_profile = "shared"
         matrix_runtime = None
         entry_adm_runtime = None
+        lifecycle_ai_runtime = None
         if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
             prompt_type = "swing"
             prompt = SWING_SYSTEM_PROMPT
@@ -2229,13 +2234,15 @@ class GPTSniperEngine:
                     or getattr(TRADING_RULES, "SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED", False)
                 ),
             )
-            if normalized_profile != "shared":
-                cache_strategy = f"{strategy}:{normalized_profile}"
-                cache_strategy = f"{cache_strategy}:adm:{matrix_runtime.get('cache_token', 'disabled')}"
-                cache_strategy = f"{cache_strategy}:{entry_adm_runtime.get('cache_token', 'disabled')}"
+            lifecycle_ai_runtime = build_lifecycle_ai_runtime_context(prompt_profile=normalized_profile)
+            cache_strategy = f"{strategy}:{normalized_profile}"
+            cache_strategy = f"{cache_strategy}:adm:{matrix_runtime.get('cache_token', 'disabled')}"
+            cache_strategy = f"{cache_strategy}:{entry_adm_runtime.get('cache_token', 'disabled')}"
+            cache_strategy = f"{cache_strategy}:{lifecycle_ai_runtime.get('cache_token', 'disabled')}"
         def _merge_runtime_fields(payload: dict[str, Any] | None) -> dict[str, Any]:
             merged = merge_holding_exit_matrix_result_fields(payload, matrix_runtime)
-            return merge_scalp_entry_adm_result_fields(merged, entry_adm_runtime)
+            merged = merge_scalp_entry_adm_result_fields(merged, entry_adm_runtime)
+            return merge_lifecycle_ai_context_fields(merged, lifecycle_ai_runtime)
 
         cache_key = self._build_analysis_cache_key_with_profile(
             target_name=target_name,
@@ -2331,6 +2338,8 @@ class GPTSniperEngine:
                     formatted_data = f"{formatted_data}\n\n{matrix_runtime['prompt_context']}"
                 if entry_adm_runtime and entry_adm_runtime.get("prompt_context"):
                     formatted_data = f"{formatted_data}\n\n{entry_adm_runtime['prompt_context']}"
+                if lifecycle_ai_runtime and lifecycle_ai_runtime.get("prompt_context"):
+                    formatted_data = f"{formatted_data}\n\n{lifecycle_ai_runtime['prompt_context']}"
                 target_model = self._get_tier1_model()
                 feature_audit_fields = build_scalping_feature_audit_fields(
                     extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles)
@@ -2934,8 +2943,11 @@ class GPTSniperEngine:
                     or getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED", False)
                 ),
             )
+            lifecycle_ai_runtime = build_lifecycle_ai_runtime_context(prompt_profile="holding", stage="holding")
             if matrix_runtime.get("prompt_context"):
                 user_input = f"{user_input}\n\n{matrix_runtime['prompt_context']}"
+            if lifecycle_ai_runtime.get("prompt_context"):
+                user_input = f"{user_input}\n\n{lifecycle_ai_runtime['prompt_context']}"
             result = self._call_openai_safe(
                 SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
                 user_input,
@@ -2952,6 +2964,7 @@ class GPTSniperEngine:
                 matrix_runtime,
                 position_ctx=position_ctx if isinstance(position_ctx, dict) else {},
             )
+            normalized = merge_lifecycle_ai_context_fields(normalized, lifecycle_ai_runtime)
             normalized["ai_model"] = self._get_tier2_model()
             self._mark_successful_ai_call(update_last_call_time=False)
             return self._annotate_analysis_result(
