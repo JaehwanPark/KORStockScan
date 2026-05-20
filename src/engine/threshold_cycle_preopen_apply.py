@@ -115,6 +115,10 @@ TARGET_ENV_VALUE_KEYS = {
     "SCALP_SIM_SCALE_IN_WINDOW_MAX_PROFIT_PCT": "max_profit_pct",
     "SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_POSITION": "max_orders_per_position",
     "SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_DAY": "max_orders_per_day",
+    "SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY": "max_daily",
+    "SCALP_SIM_CANDIDATE_WINDOW_BLOCKED_AI_SCORE_MAX_SHARE_PCT": "blocked_ai_score_max_share_pct",
+    "SCALP_SIM_CANDIDATE_WINDOW_FIRST_AI_WAIT_MIN_SHARE_PCT": "first_ai_wait_min_share_pct",
+    "SCALP_SIM_CANDIDATE_WINDOW_TIME_BUCKET_POLICY": "time_bucket_policy",
 }
 
 

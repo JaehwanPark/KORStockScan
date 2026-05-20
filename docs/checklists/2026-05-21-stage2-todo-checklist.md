@@ -77,6 +77,12 @@
   - 금지: code-improvement workorder를 자동 repo 수정으로 취급하지 않는다. 사용자가 Codex 구현을 지시한 경우에만 실행한다.
   - 다음 액션: 구현 필요, 설계 보류, reject, already_implemented 중 하나로 닫는다.
 
+- [ ] `[SourceQualityWorkorderGapReview0521] source-quality/workorder 누락 보강 항목 재점검` (`Due: 2026-05-21`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:25`, `Track: ScalpingLogic`)
+  - Source: [observation_source_quality_audit_2026-05-20.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-05-20.json), [code_improvement_workorder_2026-05-20.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-20.json), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py)
+  - 판정 기준: 2026-05-20 audit에서 workorder 누락으로 남은 `soft_stop_whipsaw_confirmation.flow_state`, `loss_fallback_probe.fallback_reason`, `scalp_sim_panic_action_deduped` 반복 이벤트 throttle이 2026-05-21 postclose workorder에 생성됐는지 확인한다.
+  - 금지: source-quality/workorder gap을 runtime threshold mutation, real order gate, Telegram BUY/SELL, provider route, bot restart 근거로 쓰지 않는다.
+  - 다음 액션: `covered_by_generated_workorder`, `manual_codex_order_required`, `defer_no_repro`, `reject_low_value` 중 하나로 닫고, 자동 생성이 계속 누락되면 수동 Codex 구현 지시 대상으로 승격한다.
+
 - [ ] `[HumanInterventionSummary0521] 자동화체인 사용자 개입 요구사항 분류 및 누락 확인` (`Due: 2026-05-21`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:15`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-20.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-20.json), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
   - 판정 기준: 개입사항을 `approval_artifact_required|created|missing|blocked_by_policy|observe_only`, `Codex 구현 필요`, `수동 동기화 필요`, `관찰만`으로 분류한다.

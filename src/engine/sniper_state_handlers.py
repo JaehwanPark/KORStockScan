@@ -153,6 +153,8 @@ SCALP_SIM_STATE_PATH = DATA_DIR / "runtime" / "scalp_live_simulator_state.json"
 SWING_INTRADAY_PROBE_BOOK = "swing_intraday_live_equiv_probe"
 SWING_INTRADAY_PROBE_STATE_PATH = DATA_DIR / "runtime" / "swing_intraday_probe_state.json"
 _SCALP_SIM_CANDIDATE_WINDOW_DAILY_CREATED: dict[str, int] = {}
+_SCALP_SIM_CANDIDATE_WINDOW_DAILY_BUCKET_CREATED: dict[tuple[str, str], int] = {}
+_SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED: dict[tuple[str, str], int] = {}
 _SCALP_SIM_SCALE_IN_WINDOW_DAILY_CREATED: dict[str, int] = {}
 _SCALP_SIM_AI_CALL_TIMES: list[float] = []
 _SWING_PROBE_DAILY_CREATED: dict[str, int] = {}
@@ -1952,6 +1954,45 @@ def _scalp_sim_candidate_window_daily_key(now_ts: float | None = None) -> str:
         return datetime.now().date().isoformat()
 
 
+def _parse_scalp_sim_candidate_window_time_bucket_policy(policy: str) -> list[tuple[str, int, int, int]]:
+    buckets: list[tuple[str, int, int, int]] = []
+    for raw_item in str(policy or "").split(","):
+        item = raw_item.strip()
+        if not item or "=" not in item or "-" not in item:
+            continue
+        window, limit_text = item.split("=", 1)
+        start_text, end_text = window.split("-", 1)
+        try:
+            start_hour, start_minute = [int(part) for part in start_text.strip().split(":", 1)]
+            end_hour, end_minute = [int(part) for part in end_text.strip().split(":", 1)]
+            limit = int(limit_text.strip())
+        except Exception:
+            continue
+        start_min = start_hour * 60 + start_minute
+        end_min = end_hour * 60 + end_minute
+        if end_min <= start_min or limit < 0:
+            continue
+        buckets.append((f"{start_text.strip()}-{end_text.strip()}", start_min, end_min, limit))
+    return buckets
+
+
+def _scalp_sim_candidate_window_time_bucket(now_ts: float, policy: str) -> tuple[str, int] | None:
+    try:
+        current_dt = datetime.fromtimestamp(float(now_ts or time.time()))
+    except Exception:
+        current_dt = datetime.now()
+    current_min = current_dt.hour * 60 + current_dt.minute
+    for label, start_min, end_min, limit in _parse_scalp_sim_candidate_window_time_bucket_policy(policy):
+        if start_min <= current_min < end_min:
+            return label, limit
+    return None
+
+
+def _is_scalp_sim_candidate_window_reserve_source(source_stage: str) -> bool:
+    normalized = str(source_stage or "").strip().lower()
+    return "panic" in normalized or "euphoria" in normalized
+
+
 def _scalp_sim_candidate_window_context_fields(source: dict | None) -> dict:
     if not isinstance(source, dict) or not bool(source.get("scalp_sim_candidate_window_expansion")):
         return {}
@@ -1963,6 +2004,8 @@ def _scalp_sim_candidate_window_context_fields(source: dict | None) -> dict:
         "scalp_sim_candidate_window_original_score",
         "scalp_sim_candidate_window_original_reason",
         "scalp_sim_candidate_window_date",
+        "scalp_sim_candidate_window_time_bucket",
+        "scalp_sim_candidate_window_quota_policy",
     )
     fields = {key: source.get(key) for key in keys if source.get(key) not in (None, "")}
     fields.update(
@@ -2793,7 +2836,7 @@ def _maybe_arm_scalp_sim_candidate_window(
         if str((target or {}).get("scalp_sim_candidate_window_date") or "") == day_key
     )
     created_today = max(int(_SCALP_SIM_CANDIDATE_WINDOW_DAILY_CREATED.get(day_key, 0) or 0), restored_today)
-    max_daily = max(0, _rule_int("SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY", 80))
+    max_daily = max(0, _rule_int("SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY", 160))
     if max_daily > 0 and created_today >= max_daily:
         _log_entry_pipeline(
             stock,
@@ -2812,6 +2855,109 @@ def _maybe_arm_scalp_sim_candidate_window(
             ),
         )
         return False
+    source_stage_key = str(source_stage or "-").strip() or "-"
+    reserve_source = _is_scalp_sim_candidate_window_reserve_source(source_stage_key)
+    time_bucket_policy = str(
+        _rule(
+            "SCALP_SIM_CANDIDATE_WINDOW_TIME_BUCKET_POLICY",
+            "09:00-10:00=56,10:00-12:00=32,12:00-14:00=40,14:00-15:30=32",
+        )
+        or ""
+    )
+    time_bucket = _scalp_sim_candidate_window_time_bucket(now_ts, time_bucket_policy)
+    if time_bucket and not reserve_source:
+        bucket_label, bucket_limit = time_bucket
+        bucket_key = (day_key, bucket_label)
+        bucket_created = int(_SCALP_SIM_CANDIDATE_WINDOW_DAILY_BUCKET_CREATED.get(bucket_key, 0) or 0)
+        if bucket_limit > 0 and bucket_created >= bucket_limit:
+            _log_entry_pipeline(
+                stock,
+                code,
+                "scalp_sim_candidate_window_discarded",
+                **_scalp_sim_event_fields(
+                    threshold_family="entry_mechanical_momentum",
+                    discard_reason="time_bucket_quota_reached",
+                    source_stage=source_stage_key,
+                    blocked_reason=blocked_reason,
+                    ai_score=f"{score_value:.1f}",
+                    created_today=created_today,
+                    max_daily=max_daily,
+                    time_bucket=bucket_label,
+                    time_bucket_created=bucket_created,
+                    time_bucket_limit=bucket_limit,
+                    runtime_effect="sim_observation_skipped",
+                    decision_authority="sim_observation_only",
+                ),
+            )
+            return False
+    blocked_max_share = max(
+        0,
+        min(100, _rule_int("SCALP_SIM_CANDIDATE_WINDOW_BLOCKED_AI_SCORE_MAX_SHARE_PCT", 60)),
+    )
+    first_wait_min_share = max(
+        0,
+        min(100, _rule_int("SCALP_SIM_CANDIDATE_WINDOW_FIRST_AI_WAIT_MIN_SHARE_PCT", 30)),
+    )
+    blocked_limit = int(max_daily * blocked_max_share / 100) if max_daily > 0 else 0
+    first_wait_reserve = int(max_daily * first_wait_min_share / 100) if max_daily > 0 else 0
+    blocked_created = int(
+        _SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED.get((day_key, "blocked_ai_score"), 0) or 0
+    )
+    first_wait_created = int(
+        _SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED.get((day_key, "first_ai_wait"), 0) or 0
+    )
+    slots_remaining_after_this = max(0, max_daily - created_today - 1) if max_daily > 0 else 0
+    if (
+        not reserve_source
+        and source_stage_key == "blocked_ai_score"
+        and blocked_limit > 0
+        and blocked_created >= blocked_limit
+    ):
+        _log_entry_pipeline(
+            stock,
+            code,
+            "scalp_sim_candidate_window_discarded",
+            **_scalp_sim_event_fields(
+                threshold_family="entry_mechanical_momentum",
+                discard_reason="source_bucket_quota_reached",
+                source_stage=source_stage_key,
+                blocked_reason=blocked_reason,
+                ai_score=f"{score_value:.1f}",
+                created_today=created_today,
+                max_daily=max_daily,
+                source_bucket_created=blocked_created,
+                source_bucket_limit=blocked_limit,
+                runtime_effect="sim_observation_skipped",
+                decision_authority="sim_observation_only",
+            ),
+        )
+        return False
+    if (
+        not reserve_source
+        and source_stage_key != "first_ai_wait"
+        and first_wait_reserve > 0
+        and first_wait_created < first_wait_reserve
+        and slots_remaining_after_this < (first_wait_reserve - first_wait_created)
+    ):
+        _log_entry_pipeline(
+            stock,
+            code,
+            "scalp_sim_candidate_window_discarded",
+            **_scalp_sim_event_fields(
+                threshold_family="entry_mechanical_momentum",
+                discard_reason="source_bucket_reserved_for_first_ai_wait",
+                source_stage=source_stage_key,
+                blocked_reason=blocked_reason,
+                ai_score=f"{score_value:.1f}",
+                created_today=created_today,
+                max_daily=max_daily,
+                first_ai_wait_created=first_wait_created,
+                first_ai_wait_reserve=first_wait_reserve,
+                runtime_effect="sim_observation_skipped",
+                decision_authority="sim_observation_only",
+            ),
+        )
+        return False
 
     action = str((ai_decision or {}).get("action") or stock.get("last_watching_ai_action") or "WAIT").upper()
     reason = str((ai_decision or {}).get("reason") or stock.get("last_watching_ai_reason") or "")[:240]
@@ -2825,6 +2971,8 @@ def _maybe_arm_scalp_sim_candidate_window(
             "scalp_sim_candidate_window_original_score": f"{score_value:.1f}",
             "scalp_sim_candidate_window_original_reason": reason,
             "scalp_sim_candidate_window_date": day_key,
+            "scalp_sim_candidate_window_time_bucket": time_bucket[0] if time_bucket else "-",
+            "scalp_sim_candidate_window_quota_policy": "ldm_sample_v1",
         },
     )
     sim_runtime = dict(runtime or {})
@@ -2846,6 +2994,15 @@ def _maybe_arm_scalp_sim_candidate_window(
     )
     if armed:
         _SCALP_SIM_CANDIDATE_WINDOW_DAILY_CREATED[day_key] = created_today + 1
+        if time_bucket:
+            bucket_key = (day_key, time_bucket[0])
+            _SCALP_SIM_CANDIDATE_WINDOW_DAILY_BUCKET_CREATED[bucket_key] = (
+                int(_SCALP_SIM_CANDIDATE_WINDOW_DAILY_BUCKET_CREATED.get(bucket_key, 0) or 0) + 1
+            )
+        source_key = (day_key, source_stage_key)
+        _SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED[source_key] = (
+            int(_SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED.get(source_key, 0) or 0) + 1
+        )
     return bool(armed)
 
 

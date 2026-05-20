@@ -79,49 +79,63 @@
 
 ## 장후 체크리스트 (16:30~18:55)
 
-- [ ] `[ThresholdDailyEVReport0520] daily EV real/sim/combined split 및 자동 반영 결과 확인` (`Due: 2026-05-20`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:45`, `Track: RuntimeStability`)
-  - Source: [threshold_cycle_ev_2026-05-19.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-19.json)
+- [x] `[ThresholdDailyEVReport0520] daily EV real/sim/combined split 및 자동 반영 결과 확인` (`Due: 2026-05-20`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:45`, `Track: RuntimeStability`)
+  - Source: [threshold_cycle_ev_2026-05-20.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-20.json), [runtime_approval_summary_2026-05-20.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-05-20.json)
   - 판정 기준: real/sim/combined split, selected/blocked family, runtime_change, warning을 분리해 확인한다.
   - 금지: sim/combined EV만으로 broker execution 품질이나 live 전환을 확정하지 않는다.
   - 다음 액션: 다음 장전 apply 입력으로 쓸 수 있는 항목과 hold_sample/freeze 항목을 분리한다.
+  - 처리 결과(2026-05-20 17:39 KST): `pass / daily_ev_split_available_runtime_apply_ready`. real `sample=2`, `avg_profit_rate_pct=-0.265`, sim `sample=343`, `avg=-0.4434`, combined `sample=345`, `avg=-0.4424`로 분리 확인했다. `runtime_apply.status=auto_bounded_live_ready`, `runtime_change=true`, selected family는 `soft_stop_whipsaw_confirmation`, `latency_classifier_runtime_profile`, `scalp_sim_candidate_window_expansion`, `scalp_sim_ai_budget_manager`, `lifecycle_decision_matrix_runtime`다. 경고는 `lifecycle_ai_context_runtime_provenance_missing`, swing pending future quotes/sample floor, pattern lab propagation audit fail로 분리하며 live execution 품질 근거로 쓰지 않는다.
 
-- [ ] `[CodeImprovementWorkorderReview0520] code improvement workorder 구현 필요 여부 및 Codex 지시 대상 확인` (`Due: 2026-05-20`, `Slot: POSTCLOSE`, `TimeWindow: 16:45~17:00`, `Track: ScalpingLogic`)
-  - Source: [code_improvement_workorder_2026-05-19.md](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-19.md), [code_improvement_workorder_2026-05-19.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-19.json)
+- [x] `[CodeImprovementWorkorderReview0520] code improvement workorder 구현 필요 여부 및 Codex 지시 대상 확인` (`Due: 2026-05-20`, `Slot: POSTCLOSE`, `TimeWindow: 16:45~17:00`, `Track: ScalpingLogic`)
+  - Source: [code_improvement_workorder_2026-05-20.md](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-20.md), [code_improvement_workorder_2026-05-20.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-20.json)
   - 판정 기준: selected_order_count=12와 `implement_now`, `attach_existing_family`, `design_family_candidate`, `reject` 분류를 확인한다.
   - 금지: code-improvement workorder를 자동 repo 수정으로 취급하지 않는다. 사용자가 Codex 구현을 지시한 경우에만 실행한다.
   - 다음 액션: 구현 필요, 설계 보류, reject, already_implemented 중 하나로 닫는다.
+  - 처리 결과(2026-05-20 17:39 KST): `pass / no_new_implement_now`. `source_order_count=38`, `selected_order_count=12`, 분류는 `attach_existing_family=18`, `design_family_candidate=6`, `defer_evidence=11`, `reject=3`이며 재생성 후 신규 `implement_now=0`이다. 앞서 사용자 지시로 처리한 runtime_effect=false 계열은 구현/리포트 재생성 후 workorder diff에서 닫힌 상태로 확인했다.
 
-- [ ] `[HumanInterventionSummary0520] 자동화체인 사용자 개입 요구사항 분류 및 누락 확인` (`Due: 2026-05-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:15`, `Track: RuntimeStability`)
-  - Source: [threshold_cycle_ev_2026-05-19.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-19.json), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+- [x] `[HumanInterventionSummary0520] 자동화체인 사용자 개입 요구사항 분류 및 누락 확인` (`Due: 2026-05-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:15`, `Track: RuntimeStability`)
+  - Source: [threshold_cycle_ev_2026-05-20.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-20.json), [runtime_approval_summary_2026-05-20.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-05-20.json), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
   - 판정 기준: 개입사항을 `approval_artifact_required|created|missing|blocked_by_policy|observe_only`, `Codex 구현 필요`, `수동 동기화 필요`, `관찰만`으로 분류한다.
   - 금지: approval request만 보고 env 파일을 직접 수정하지 않고, 자동화 산출물에 있는 요청을 답변에만 남기고 checklist/Project 대상에서 누락하지 않는다.
   - 다음 액션: approval request가 있으면 `approval_id`, 후보/대상, artifact path, 승인 여부, 다음 PREOPEN 적용 확인 항목을 남긴다. 누락된 항목이 있으면 다음 영업일 checklist에 parser-friendly checkbox로 추가한다.
+  - 처리 결과(2026-05-20 17:39 KST): `warning / one_approved_sim_only_artifact_next_preopen_pending`. 사용자 승인 artifact는 [scalp_sim_scale_in_window_expansion_2026-05-20.json](/home/ubuntu/KORStockScan/data/threshold_cycle/approvals/scalp_sim_scale_in_window_expansion_2026-05-20.json)이며 `approved=true`, `decision_authority=sim_observation_only`, `actual_order_submitted=false`다. swing approval은 `requested=0/approved=0`, panic approval request는 `0`, Codex 신규 implement_now는 `0`. Project/Calendar 동기화는 사용자가 표준 명령으로 수동 실행해야 한다.
 
-- [ ] `[SourceQualityWorkorderGapReview0520] source-quality/workorder 누락 보강 필요 여부 명시 판정` (`Due: 2026-05-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:25`, `Track: ScalpingLogic`)
+- [x] `[SourceQualityWorkorderGapReview0520] source-quality/workorder 누락 보강 필요 여부 명시 판정` (`Due: 2026-05-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:25`, `Track: ScalpingLogic`)
   - Source: [observation_source_quality_audit.py](/home/ubuntu/KORStockScan/src/engine/observation_source_quality_audit.py), [build_code_improvement_workorder.py](/home/ubuntu/KORStockScan/src/engine/build_code_improvement_workorder.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py)
   - 판정 기준: postclose `observation_source_quality_audit_2026-05-20`와 `code_improvement_workorder_2026-05-20`를 대조해 `soft_stop_whipsaw_confirmation.flow_state`, `loss_fallback_probe.fallback_reason`, `scalp_sim_panic_action_deduped` 반복 이벤트 throttle 보강이 workorder에 명시됐는지 확인한다.
   - 금지: source-quality/workorder gap을 runtime threshold mutation, real order gate, Telegram BUY/SELL, provider route, bot restart 근거로 쓰지 않는다.
   - 다음 액션: `covered_by_generated_workorder`, `manual_codex_order_required`, `next_day_checklist_required`, `defer_no_repro` 중 하나로 닫고, 자동 생성 workorder에 없으면 수동 구현 지시 대상 또는 다음 영업일 checklist 항목으로 승격한다.
+  - 처리 결과(2026-05-20 17:39 KST): `warning / next_day_checklist_required`. audit에는 `loss_fallback_probe.fallback_reason` missing `48/90=53.33%`, `soft_stop_whipsaw_confirmation.flow_state` missing `83/83=100%`, `scalp_sim_panic_action_deduped=47298`가 남았지만 5/20 code improvement workorder에는 해당 보강이 명시되지 않았다. 5/21 checklist에 source-quality/workorder gap 재점검 항목을 추가한다.
 
-- [ ] `[LifecycleAIContextV2Decision0520] AI-generated context v2 승격 필요 여부 판정` (`Due: 2026-05-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:45~17:55`, `Track: ScalpingLogic`)
+- [x] `[LifecycleAIContextV2Decision0520] AI-generated context v2 승격 필요 여부 판정` (`Due: 2026-05-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:45~17:55`, `Track: ScalpingLogic`)
   - Source: [lifecycle_ai_context.py](/home/ubuntu/KORStockScan/src/engine/lifecycle_ai_context.py), [lifecycle_ai_context_2026-05-20.json](/home/ubuntu/KORStockScan/data/report/lifecycle_ai_context/lifecycle_ai_context_2026-05-20.json), [lifecycle_ai_context_attribution_2026-05-20.json](/home/ubuntu/KORStockScan/data/report/lifecycle_ai_context_attribution/lifecycle_ai_context_attribution_2026-05-20.json), [threshold_cycle_ev_2026-05-20.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-20.json)
   - 판정 기준: v1 deterministic summary context의 `context_applied_count`, stage별 `ai_action_alignment_rate`, `ai_action_delta_rate`, `ai_score_delta_avg`, `source_quality_adjusted_ev_pct`, `context_contribution_score`, no-context replay coverage를 확인하고, AI-generated context v2가 필요한지 판정한다.
   - v2 후보 조건: deterministic summary가 과도하게 기계적이거나 stage별 해석 누락이 확인되고, context 적용 표본/리플레이 표본이 충분하며, AI-generated context가 `ai_advisory_prompt_context_only`와 schema/forbidden uses를 유지할 수 있을 때만 `design_family_candidate`로 승격한다.
   - 금지: AI-generated context v2를 real order gate, deterministic bias, scale-in 생성, threshold env mutation, provider route, Telegram BUY/SELL, bot restart trigger로 직접 연결하지 않는다. v2 설계 전에는 `lifecycle_ai_context_v1` deterministic fallback을 유지한다.
   - 다음 액션: `keep_deterministic_v1`, `design_ai_generated_context_v2`, `hold_sample_until_attribution`, `workorder_candidate_context_quality`, `reject_runtime_risk` 중 하나로 닫고, v2 검토가 필요하면 다음 영업일 checklist와 code-improvement workorder에 parser-friendly 항목으로 남긴다.
+  - 처리 결과(2026-05-20 17:39 KST): `hold_sample_until_attribution`. `lifecycle_ai_context_2026-05-20`은 `provider=none`, `status=deterministic_fallback`, `prompt_stage_count=3`, `runtime_effect=false`다. attribution은 `context_eligible_count=0`, `context_applied_count=0`, `no_context_replay_sample=0`, `stage_quality_counts.hold_sample=5`, warning=`lifecycle_ai_context_runtime_provenance_missing`이므로 오늘 v2 승격 근거가 없다.
 
-- [ ] `[ScalpSimLdmSamplePolicy0520] LDM 샘플 수집 목적의 scalp sim max_daily 160 및 reserve/bucket quota 구현` (`Due: 2026-05-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:25~17:45`, `Track: ScalpingLogic`)
+- [x] `[ScalpSimLdmSamplePolicy0520] LDM 샘플 수집 목적의 scalp sim max_daily 160 및 reserve/bucket quota 구현` (`Due: 2026-05-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:25~17:45`, `Track: ScalpingLogic`)
   - Source: [lifecycle_decision_matrix.py](/home/ubuntu/KORStockScan/src/engine/lifecycle_decision_matrix.py), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [threshold_runtime_env_2026-05-20.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-05-20.env)
   - 판정 기준: `SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY=80`이 LDM stage floor는 통과 가능하나 시간대/시장상태/action bucket 수집에는 부족한지 postclose 원장과 LDM row coverage로 확인한다. 다음 PREOPEN 적용 후보는 `160`으로 두되, 오전 소진 방지를 위해 `blocked_ai_score <= 60%`, `first_ai_wait >= 30%`, panic/euphoria lifecycle source는 별도 cap보다 reserve 소비 허용 원칙을 코드/테스트/문서에 반영한다.
   - 구현 기준: 시간대 reserve 초안은 `09:00~10:00 max 56`, `10:00~12:00 reserve 32`, `12:00~14:00 max 40`, `14:00~close reserve 32`로 시작한다. quota 판단은 sim-only candidate window에만 적용하며 real entry, broker submit, Telegram BUY/SELL, provider route, bot restart trigger와 연결하지 않는다.
   - 금지: 장중 runtime env 직접 수정, restart만으로 max_daily 변경, sim/probe 표본을 real execution 품질이나 실주문 전환 근거로 사용하는 것을 금지한다.
   - 다음 액션: `implemented_preopen_candidate_160_with_quota`, `implemented_160_only_quota_deferred`, `hold_80_sample_enough`, `needs_persistent_daily_counter_first`, `defer_source_quality_gap` 중 하나로 닫고, 후보 승인 시 다음 PREOPEN `threshold_cycle_preopen_apply` 산출물의 `KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY=160` 및 quota env/정책 반영 여부를 확인한다.
+  - 처리 결과(2026-05-20 17:44 KST): `implemented_preopen_candidate_160_with_quota`. `SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY` 기본값과 operator runtime lock을 `160`으로 상향하고, sim-only candidate window에 `blocked_ai_score <= 60%`, `first_ai_wait >= 30%` reserve, 시간대 quota `09:00-10:00=56,10:00-12:00=32,12:00-14:00=40,14:00-15:30=32`를 구현했다. panic/euphoria source는 별도 cap 차단 대신 reserve 소비를 허용한다. 검증으로 [threshold_runtime_env_2026-05-21.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-05-21.env)에 `KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY=160` 및 quota env가 생성됨을 확인했다.
 
-- [ ] `[ShadowCanaryCohortReview0520] shadow/canary/cohort 런타임 분류 및 정리 판정` (`Due: 2026-05-20`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)
+- [x] `[ShadowCanaryCohortReview0520] shadow/canary/cohort 런타임 분류 및 정리 판정` (`Due: 2026-05-20`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)
   - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)
   - 판정 기준: 당일 변경/관찰 결과를 기준으로 `remove`, `observe-only`, `baseline-promote`, `active-canary` 상태 변동 여부를 닫는다.
   - 금지: shadow 금지, canary-only, baseline 승격 원칙을 코드/문서 상태와 분리하지 않는다.
   - 다음 액션: 변경이 있으면 기준문서와 checklist를 함께 갱신하고 cohort 잠금 필드를 남긴다.
+  - 처리 결과(2026-05-20 17:39 KST): `pass / no_shadow_runtime_reopen`. 5/20 selected runtime family는 PREOPEN bounded env 후보 또는 sim-only/provenance-only 축이며, 폐기된 shadow 축 재개나 baseline 승격은 확인되지 않았다. 신규 `scalp_sim_candidate_window_expansion`, `scalp_sim_scale_in_window_expansion`, `lifecycle_ai_context`는 real order gate/provider/bot restart 권한이 없는 sim/advisory 계층으로 유지한다.
+
+### Runbook 운영 확인 완료 기록
+
+- `[PostcloseAutomationHealthCheck20260520]` 판정: `pass`
+  - Source: [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md), [threshold_cycle_postclose_cron.log](/home/ubuntu/KORStockScan/logs/threshold_cycle_postclose_cron.log), [error_detection](/home/ubuntu/KORStockScan/data/report/error_detection/error_detection_2026-05-20.json)
+  - 근거: `deploy/run_threshold_cycle_postclose.sh` status는 `succeeded`, 시작 `16:10:02`, 종료 `17:07:44`로 확인했다. `PYTHONPATH=. .venv/bin/python -m src.engine.error_detector --mode full --dry-run` 결과 `summary_severity=pass`, `cron_completion=pass`, `artifact_freshness=pass`, `process_health=pass`, `resource_usage=pass`다. 20:05 이후 tuning monitoring, 21:00 이후 KOSPI update, 23시대 archive/cleanup은 아직 `not_yet_due`다.
+  - 다음 액션: 지금 시점의 POSTCLOSE 핵심 체인은 pass로 닫고, 아직 due 전인 야간 cron은 해당 시간대 runbook 확인에서 별도 판정한다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 

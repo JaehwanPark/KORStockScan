@@ -131,7 +131,12 @@ class TradingConfig:
     SCALP_SIM_CANDIDATE_WINDOW_MIN_SCORE: int = 55
     SCALP_SIM_CANDIDATE_WINDOW_MAX_SCORE: int = 100
     SCALP_SIM_CANDIDATE_WINDOW_MAX_OPEN: int = 20
-    SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY: int = 80
+    SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY: int = 160
+    SCALP_SIM_CANDIDATE_WINDOW_BLOCKED_AI_SCORE_MAX_SHARE_PCT: int = 60
+    SCALP_SIM_CANDIDATE_WINDOW_FIRST_AI_WAIT_MIN_SHARE_PCT: int = 30
+    SCALP_SIM_CANDIDATE_WINDOW_TIME_BUCKET_POLICY: str = (
+        "09:00-10:00=56,10:00-12:00=32,12:00-14:00=40,14:00-15:30=32"
+    )
     SCALP_SIM_AI_BUDGET_ENABLED: bool = False
     SCALP_SIM_AI_MAX_CALLS_PER_MIN: int = 10
     SCALP_SIM_AI_HOLDING_MIN_COOLDOWN_SEC: int = 90
@@ -1465,6 +1470,15 @@ def _build_trading_rules() -> TradingConfig:
     env_scalp_sim_candidate_window_max_daily = _env_int(
         "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY"
     )
+    env_scalp_sim_candidate_window_blocked_ai_max_share = _env_int(
+        "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_BLOCKED_AI_SCORE_MAX_SHARE_PCT"
+    )
+    env_scalp_sim_candidate_window_first_ai_min_share = _env_int(
+        "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_FIRST_AI_WAIT_MIN_SHARE_PCT"
+    )
+    env_scalp_sim_candidate_window_time_bucket_policy = _env_str(
+        "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_TIME_BUCKET_POLICY"
+    )
     env_scalp_sim_ai_budget_enabled = _env_bool("KORSTOCKSCAN_SCALP_SIM_AI_BUDGET_ENABLED")
     env_scalp_sim_ai_max_calls_per_min = _env_int("KORSTOCKSCAN_SCALP_SIM_AI_MAX_CALLS_PER_MIN")
     env_scalp_sim_ai_holding_min_cooldown = _env_int(
@@ -1658,6 +1672,9 @@ def _build_trading_rules() -> TradingConfig:
         or env_scalp_sim_candidate_window_max_score is not None
         or env_scalp_sim_candidate_window_max_open is not None
         or env_scalp_sim_candidate_window_max_daily is not None
+        or env_scalp_sim_candidate_window_blocked_ai_max_share is not None
+        or env_scalp_sim_candidate_window_first_ai_min_share is not None
+        or env_scalp_sim_candidate_window_time_bucket_policy is not None
         or env_scalp_sim_ai_budget_enabled is not None
         or env_scalp_sim_ai_max_calls_per_min is not None
         or env_scalp_sim_ai_holding_min_cooldown is not None
@@ -1837,6 +1854,15 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY=env_scalp_sim_candidate_window_max_daily
             if env_scalp_sim_candidate_window_max_daily is not None
             else config.SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY,
+            SCALP_SIM_CANDIDATE_WINDOW_BLOCKED_AI_SCORE_MAX_SHARE_PCT=env_scalp_sim_candidate_window_blocked_ai_max_share
+            if env_scalp_sim_candidate_window_blocked_ai_max_share is not None
+            else config.SCALP_SIM_CANDIDATE_WINDOW_BLOCKED_AI_SCORE_MAX_SHARE_PCT,
+            SCALP_SIM_CANDIDATE_WINDOW_FIRST_AI_WAIT_MIN_SHARE_PCT=env_scalp_sim_candidate_window_first_ai_min_share
+            if env_scalp_sim_candidate_window_first_ai_min_share is not None
+            else config.SCALP_SIM_CANDIDATE_WINDOW_FIRST_AI_WAIT_MIN_SHARE_PCT,
+            SCALP_SIM_CANDIDATE_WINDOW_TIME_BUCKET_POLICY=env_scalp_sim_candidate_window_time_bucket_policy
+            if env_scalp_sim_candidate_window_time_bucket_policy is not None
+            else config.SCALP_SIM_CANDIDATE_WINDOW_TIME_BUCKET_POLICY,
             SCALP_SIM_AI_BUDGET_ENABLED=env_scalp_sim_ai_budget_enabled
             if env_scalp_sim_ai_budget_enabled is not None
             else config.SCALP_SIM_AI_BUDGET_ENABLED,

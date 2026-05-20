@@ -561,6 +561,105 @@ def test_scalp_sim_candidate_window_expansion_arms_blocked_wait_candidate(monkey
     assert armed["would_real_submit"] is False
 
 
+def test_scalp_sim_candidate_window_enforces_ldm_sample_quota_sim_only(monkeypatch):
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: pytest.fail("real buy order must not be called"),
+    )
+    rules = replace(
+        CONFIG,
+        SCALP_SIM_CANDIDATE_WINDOW_EXPANSION_ENABLED=True,
+        SCALP_SIM_CANDIDATE_WINDOW_MIN_SCORE=55,
+        SCALP_SIM_CANDIDATE_WINDOW_MAX_OPEN=10,
+        SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY=10,
+        SCALP_SIM_CANDIDATE_WINDOW_BLOCKED_AI_SCORE_MAX_SHARE_PCT=60,
+        SCALP_SIM_CANDIDATE_WINDOW_FIRST_AI_WAIT_MIN_SHARE_PCT=30,
+        SCALP_SIM_CANDIDATE_WINDOW_TIME_BUCKET_POLICY="09:00-10:00=2,10:00-12:00=8",
+    )
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_CREATED.clear()
+    state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_BUCKET_CREATED.clear()
+    state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED.clear()
+
+    stock = {
+        "id": 201,
+        "name": "QUOTA_TEST",
+        "code": "654321",
+        "strategy": "SCALPING",
+        "position_tag": "SCALP_BASE",
+        "target_buy_price": 10_000,
+        "last_watching_ai_action": "WAIT",
+    }
+    ws_data = {"curr": 10_000, "orderbook": {"asks": [{"price": 10_000}], "bids": [{"price": 9_990}]}}
+    ai_decision = {"action": "WAIT", "score": 61, "reason": "sample"}
+
+    assert state_handlers._maybe_arm_scalp_sim_candidate_window(
+        stock=stock.copy(),
+        code="654321",
+        ws_data=ws_data,
+        runtime={"strategy": "SCALPING", "now_ts": 1_779_235_800.0},
+        ai_decision=ai_decision,
+        ai_score=61,
+        source_stage="blocked_ai_score",
+        blocked_reason="below_buy_score_threshold",
+    )
+    assert state_handlers._maybe_arm_scalp_sim_candidate_window(
+        stock=stock.copy(),
+        code="654322",
+        ws_data=ws_data,
+        runtime={"strategy": "SCALPING", "now_ts": 1_779_236_100.0},
+        ai_decision=ai_decision,
+        ai_score=61,
+        source_stage="blocked_ai_score",
+        blocked_reason="below_buy_score_threshold",
+    )
+    assert not state_handlers._maybe_arm_scalp_sim_candidate_window(
+        stock=stock.copy(),
+        code="654323",
+        ws_data=ws_data,
+        runtime={"strategy": "SCALPING", "now_ts": 1_779_236_400.0},
+        ai_decision=ai_decision,
+        ai_score=61,
+        source_stage="blocked_ai_score",
+        blocked_reason="below_buy_score_threshold",
+    )
+    assert logs[-1][1]["discard_reason"] == "time_bucket_quota_reached"
+    assert logs[-1][1]["runtime_effect"] == "sim_observation_skipped"
+    assert logs[-1][1]["decision_authority"] == "sim_observation_only"
+
+    state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_CREATED["2026-05-20"] = 7
+    state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED[("2026-05-20", "blocked_ai_score")] = 6
+    assert not state_handlers._maybe_arm_scalp_sim_candidate_window(
+        stock=stock.copy(),
+        code="654324",
+        ws_data=ws_data,
+        runtime={"strategy": "SCALPING", "now_ts": 1_779_239_400.0},
+        ai_decision=ai_decision,
+        ai_score=61,
+        source_stage="blocked_ai_score",
+        blocked_reason="below_buy_score_threshold",
+    )
+    assert logs[-1][1]["discard_reason"] == "source_bucket_quota_reached"
+
+    assert state_handlers._maybe_arm_scalp_sim_candidate_window(
+        stock=stock.copy(),
+        code="654325",
+        ws_data=ws_data,
+        runtime={"strategy": "SCALPING", "now_ts": 1_779_239_700.0},
+        ai_decision=ai_decision,
+        ai_score=61,
+        source_stage="panic_lifecycle_source",
+        blocked_reason="panic_context",
+    )
+
+
 def test_scalp_sim_scale_in_window_expansion_returns_sim_only_action(monkeypatch):
     rules = replace(
         CONFIG,
