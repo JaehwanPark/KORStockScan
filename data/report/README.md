@@ -6,6 +6,8 @@
 
 report 산출물이 threshold calibration, 자동 threshold 적용, bot restart, post-apply attribution으로 이어지는 전체 추적성은 [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)를 기준으로 확인한다. calibration은 새 관찰축을 만들지 않고 이 디렉토리의 기존 BUY, 보유/청산, decision-support 리포트를 source bundle로 읽는다.
 
+README, 런북(runbook), Plan Rebase, prompt, AGENTS 갱신은 `plan_rebase_daily_renewal`의 후순위 문서 갱신(document mutation) queue로 다룬다. 이 산출물은 `document_mutation_allowed=true`, `runtime_mutation_allowed=false`이며, 실제 문서 갱신은 `1차 수정(first-pass bounded update) -> 2차 감리(second-pass audit review) -> 최종 수정(finalize after second-pass review)` 순서로 닫는다.
+
 ## Bucket Runtime Calibration ON 기준
 
 `SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_BUCKET_CALIBRATION_ENABLED`는 현재 기본값 `False`다. 즉, OFI/QI는 P2 내부 live 입력 feature로 계속 사용되지만 bucket별 threshold는 아직 runtime에 적용하지 않는다.

@@ -87,19 +87,20 @@
 2. summary에 `approval_required`가 있어도 approval artifact가 없으면 env apply 대상이 아니다.
 3. 다음 장전 적용 여부는 preopen apply manifest와 approval artifact가 닫힌 뒤에만 본다.
 
-### Q6. `plan_rebase_daily_renewal`은 Plan Rebase를 자동으로 고치나?
+### Q6. `plan_rebase_daily_renewal`은 문서를 자동화체인에 어떻게 연결하나?
 
 답변:
 
-1. 아니다. 기본은 `proposal_only`다.
-2. 이 artifact는 Plan Rebase/prompt/AGENTS daily renewal 제안만 만든다.
-3. 생성만으로 Plan Rebase, prompt, AGENTS.md, checklist, runtime env를 수정하지 않는다.
+1. README/런북(runbook)/Plan Rebase/prompt/AGENTS에 한해 후순위 문서 갱신(document mutation) queue를 만든다.
+2. 기본 mode는 `bounded_document_mutation_queue`이며 `document_mutation_allowed=true`, `runtime_mutation_allowed=false`다.
+3. 생성만으로 checklist 신규 작업항목, runtime env, threshold, 주문, provider, bot restart를 수정하지 않는다.
 
 운영 기준:
 
-1. `document_mutation_allowed=false`가 기본이다.
-2. 허용 범위는 기준일, 현재 runtime state summary, prompt source-of-truth summary, AGENTS current snapshot 제안 정도다.
-3. 금지 범위는 Metric Decision Contract 변경, rollback guard 완화, live/real order approval, runtime threshold mutation, archive 삭제다.
+1. 실제 문서 갱신은 `1차 수정(first-pass bounded update) -> 2차 감리(second-pass audit review) -> 최종 수정(finalize after second-pass review)` 순서로만 닫는다.
+2. 허용 범위는 README current overview, 런북(runbook) postclose review, Plan Rebase current snapshot, prompt source-of-truth summary, AGENTS current snapshot이다.
+3. 2차 감리는 이력성 내용 archive 여부, 영어 약칭의 한글/영어 병기, runtime/order/provider/bot mutation 금지선, parser 검증을 확인한다.
+4. 금지 범위는 Metric Decision Contract 변경, rollback guard 완화, live/real order approval, runtime threshold mutation, archive 삭제다.
 
 ### Q7. 새 관찰지표가 생기면 무엇을 같이 정해야 하나?
 

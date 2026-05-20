@@ -6,6 +6,8 @@ KORStockScan은 키움 REST/WebSocket 기반 한국 주식 자동매매 엔진, 
 
 현재 기준일: `2026-05-19 KST`
 
+README, 런북(runbook), Plan Rebase, prompt, AGENTS는 후순위 문서 갱신(document mutation) 대상으로 고정합니다. 자동화체인(automation chain)의 `plan_rebase_daily_renewal`은 `document_mutation_allowed=true`, `runtime_mutation_allowed=false` 계약으로 이 문서들을 queue하며, 실제 갱신은 `1차 수정(first-pass bounded update) -> 2차 감리(second-pass audit review) -> 최종 수정(finalize after second-pass review)` 순서로만 닫습니다. 이력성 내용은 archive 또는 execution-delta에 보존하고, 영어 약칭은 첫 사용 시 한글/영어 병기를 원칙으로 합니다.
+
 ## 현재 운영 기준
 
 목표는 손실 억제형 미세조정이 아니라 기대값(EV)과 순이익 극대화입니다. 손익 판단은 `COMPLETED + valid profit_rate`만 사용하고, 미완료/NULL/fallback 정규화 값은 손익 기준에서 제외합니다.

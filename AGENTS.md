@@ -35,6 +35,8 @@ KORStockScan 작업 기본 규칙:
 - AGENTS.md는 매일 작업 현황에 맞춰 갱신할 수 있는 `작업 지시 snapshot`이다. 단, 실행 작업항목의 원본 소유자는 항상 날짜별 checklist이고, 튜닝 원칙/active-open 판정의 원본은 `Plan Rebase`다.
 - 장전 또는 작업 시작 시에는 `Plan Rebase` §1~§8과 당일 checklist 상단 요약을 읽고, AGENTS.md의 `현재 상태 기준` 날짜와 active owner 요약이 맞는지 확인한다.
 - 장중/장후에 owner, live/observe/off 상태, rollback guard, 다음 판정 checklist가 바뀌면 먼저 `Plan Rebase` 또는 날짜별 checklist를 수정하고, 그 다음 AGENTS.md `1.1 현재 상태 기준`만 짧게 갱신한다.
+- README/런북(runbook)/Plan Rebase/prompt/AGENTS는 후순위 문서 갱신(document mutation) 대상이며 `document_mutation_allowed=true`, `runtime_mutation_allowed=false`로 본다.
+- 위 문서들의 실제 갱신은 `1차 수정(first-pass bounded update) -> 2차 감리(second-pass audit review) -> 최종 수정(finalize after second-pass review)` 순서로만 닫는다. 2차 감리에서는 이력성 내용 archive 여부, 영어 약칭의 한글/영어 병기, runtime/order/provider/bot mutation 금지선, parser 검증을 확인한다.
 - AGENTS.md에는 자동 파싱 대상 `- [ ]` 신규 작업항목을 만들지 않는다. 미래 작업, 특정 시각 작업, 재확인 작업은 날짜별 checklist에만 `Due`, `Slot`, `TimeWindow`, `Track`이 있는 체크박스로 남긴다.
 - AGENTS.md에 과거 checklist ID를 링크할 때는 `완료 기록`, `현재 owner`, `다음 확인 owner`를 구분한다. `[x]` 완료 항목을 현재 OPEN owner처럼 쓰지 않는다.
 - 매일 갱신 시 최소 확인 항목은 `entry owner`, `holding/exit owner`, `operating override`, `observe/report-only 축`, `OFF/폐기 축`, `Project/Calendar 동기화 규칙`이다.

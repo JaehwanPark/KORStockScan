@@ -3,7 +3,7 @@
 기준 시각: `2026-05-13 KST (자동화체인 Rebase 현행화)`
 역할: 다음 세션에서 중심 기준 문서로 진입하기 위한 경량 포인터다.
 
-이 문서는 세션 시작용 포인터만 남긴다. 현재 판단의 source of truth는 [Plan Rebase](./plan-korStockScanPerformanceOptimization.rebase.md), 실행 작업은 날짜별 `stage2 todo checklist`, 자동화 산출물/consumer 계약은 [report-based-automation-traceability](./report-based-automation-traceability.md)가 소유한다. 2026-05-13 이전 prompt 원문은 [pre-automation-renewal archive](./archive/plan-korStockScanPerformanceOptimization.prompt.pre-automation-renewal-2026-05-13.md)에 보존했다.
+이 문서는 세션 시작용 포인터만 남긴다. 현재 판단의 source of truth는 [Plan Rebase](./plan-korStockScanPerformanceOptimization.rebase.md), 실행 작업은 날짜별 `stage2 todo checklist`, 자동화 산출물/consumer 계약은 [report-based-automation-traceability](./report-based-automation-traceability.md)가 소유한다. 2026-05-13 이전 prompt 원문은 [pre-automation-renewal archive](./archive/plan-korStockScanPerformanceOptimization.prompt.pre-automation-renewal-2026-05-13.md)에 보존했다. README/런북(runbook)/Plan Rebase/prompt/AGENTS 갱신은 후순위 문서 갱신(document mutation)이며 `1차 수정(first-pass bounded update) -> 2차 감리(second-pass audit review) -> 최종 수정(finalize after second-pass review)` 순서로만 닫는다.
 
 ## 현재 Source of Truth
 
@@ -42,7 +42,8 @@
 2. 당일 checklist 상단 `오늘 목적`, `오늘 강제 규칙`을 읽는다.
 3. AGENTS.md `현재 상태 기준` 날짜가 Plan Rebase와 맞는지 확인한다.
 4. dirty worktree가 있으면 사용자/runtime 변경을 되돌리지 않는다.
-5. 문서/checklist를 바꾸면 parser 검증을 실행하고, Project/Calendar 동기화는 사용자 수동 명령으로만 남긴다.
+5. README/런북(runbook)/Plan Rebase/prompt/AGENTS를 바꾸면 1차 수정 후 2차 감리에서 이력성 내용 archive 여부, 영어 약칭의 한글/영어 병기, runtime/order/provider/bot mutation 금지선을 확인한 뒤 최종 수정으로 닫는다.
+6. 문서/checklist를 바꾸면 parser 검증을 실행하고, Project/Calendar 동기화는 사용자 수동 명령으로만 남긴다.
 
 ## 문서 운영 규칙
 
