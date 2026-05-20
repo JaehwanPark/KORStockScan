@@ -142,6 +142,31 @@ class TestArtifactFreshnessDetector:
             assert result.severity == "pass"
             assert result.details.get("test_startup_grace_status") == "startup_grace"
 
+    def test_window_startup_grace_suppresses_stale_critical_file(self, tmp_path):
+        now = datetime.now()
+        artifact_path = tmp_path / "stale.jsonl"
+        artifact_path.write_text("old event\n", encoding="utf-8")
+        stale_mtime = time.time() - 900
+        os.utime(artifact_path, (stale_mtime, stale_mtime))
+        artifact = {
+            "id": "test_startup_stale_grace",
+            "path_template": str(artifact_path),
+            "max_staleness_sec": 600,
+            "critical": True,
+            "window_start": (now.hour, now.minute),
+            "window_end": (23, 59),
+            "window_grace_sec": 7200,
+        }
+        with (
+            patch(_TRADING_MOCK, return_value=True),
+            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+        ):
+            detector = ArtifactFreshnessDetector()
+            result = detector.check()
+            assert result.severity == "pass"
+            assert result.details.get("test_startup_stale_grace_status") == "startup_grace"
+            assert result.details.get("test_startup_stale_grace_startup_stale_suppressed") is True
+
     def test_missing_critical_artifact_warns_when_upstream_cron_in_progress(self, tmp_path):
         now = datetime.now()
         today = now.strftime("%Y-%m-%d")

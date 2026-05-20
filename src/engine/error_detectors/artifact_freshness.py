@@ -517,14 +517,16 @@ class ArtifactFreshnessDetector(BaseDetector):
                 past_window_end = now_dt >= window_end
             exists = artifact_path.exists()
             grace_sec = int(artifact.get("window_grace_sec") or 0)
-            if not exists and grace_sec > 0 and ws and not past_window_end:
+            in_startup_grace = False
+            if grace_sec > 0 and ws and not past_window_end:
                 window_start = now_dt.replace(hour=ws[0], minute=ws[1], second=0, microsecond=0)
                 elapsed_from_start = (now_dt - window_start).total_seconds()
-                if 0 <= elapsed_from_start <= grace_sec:
-                    details[f"{aid}_status"] = "startup_grace"
-                    details[f"{aid}_window"] = f"{ws[0]:02d}:{ws[1]:02d}"
-                    details[f"{aid}_grace_sec"] = grace_sec
-                    continue
+                in_startup_grace = 0 <= elapsed_from_start <= grace_sec
+            if not exists and in_startup_grace:
+                details[f"{aid}_status"] = "startup_grace"
+                details[f"{aid}_window"] = f"{ws[0]:02d}:{ws[1]:02d}"
+                details[f"{aid}_grace_sec"] = grace_sec
+                continue
 
             if not exists:
                 alternate_status = self._validate_partitioned_compact(
@@ -619,6 +621,12 @@ class ArtifactFreshnessDetector(BaseDetector):
                 continue
 
             if age_sec > max_stale:
+                if in_startup_grace:
+                    details[f"{aid}_status"] = "startup_grace"
+                    details[f"{aid}_window"] = f"{ws[0]:02d}:{ws[1]:02d}" if ws else ""
+                    details[f"{aid}_grace_sec"] = grace_sec
+                    details[f"{aid}_startup_stale_suppressed"] = True
+                    continue
                 if critical:
                     issues.append(f"{aid}: stale ({age_sec:.0f}s > {max_stale}s)")
                     details[f"{aid}_status"] = "fail"

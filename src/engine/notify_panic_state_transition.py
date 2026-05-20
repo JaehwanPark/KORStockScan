@@ -89,6 +89,16 @@ def _target_chat_ids(audience: str, admin_id: str) -> list[str]:
 
 def _state_value(kind: str, report: dict) -> str:
     if kind == "panic_sell":
+        micro_context = (
+            report.get("microstructure_market_context")
+            if isinstance(report.get("microstructure_market_context"), dict)
+            else {}
+        )
+        single_market_risk_off = bool(
+            micro_context.get("market_panic_breadth_single_market_risk_off_advisory")
+        )
+        if str(report.get("panic_state") or "UNKNOWN") == "NORMAL" and single_market_risk_off:
+            return "RECOVERY_WATCH"
         return str(report.get("panic_state") or "UNKNOWN")
     if kind == "panic_buying":
         return str(report.get("panic_buy_state") or "UNKNOWN")
@@ -165,10 +175,11 @@ def _sell_context_label(report: dict) -> str:
     )
     market_breadth_only = any("market breadth risk-off watch without panic confirmation" in item for item in reasons)
     market_breadth_risk_off = bool(micro_context.get("market_panic_breadth_risk_off_advisory"))
+    single_market_risk_off = bool(micro_context.get("market_panic_breadth_single_market_risk_off_advisory"))
     micro_panic = int((report.get("microstructure_detector") or {}).get("panic_signal_count", 0) or 0) > 0
     panic_metrics = report.get("panic_metrics") if isinstance(report.get("panic_metrics"), dict) else {}
     stop_cluster = bool(panic_metrics.get("panic_detected"))
-    if market_breadth_only or (market_breadth_risk_off and not micro_panic and not stop_cluster):
+    if market_breadth_only or ((market_breadth_risk_off or single_market_risk_off) and not micro_panic and not stop_cluster):
         return "market_breadth_watch"
     if stop_cluster:
         return "stop_loss_cluster"
