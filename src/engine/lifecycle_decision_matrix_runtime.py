@@ -14,6 +14,7 @@ from src.utils.constants import DATA_DIR, TRADING_RULES
 MATRIX_DIR = DATA_DIR / "report" / "lifecycle_decision_matrix"
 MATRIX_FILE_RE = re.compile(r"lifecycle_decision_matrix_(\d{4}-\d{2}-\d{2})\.json$")
 PANIC_SELL_DEFENSE_DIR = DATA_DIR / "report" / "panic_sell_defense"
+PANIC_BUYING_DIR = DATA_DIR / "report" / "panic_buying"
 MARKET_PANIC_BREADTH_DIR = DATA_DIR / "report" / "market_panic_breadth"
 
 _PROMOTE_COUNTER: dict[str, int] = {}
@@ -131,6 +132,10 @@ def _panic_report_path(target_date: date) -> Path:
     return PANIC_SELL_DEFENSE_DIR / f"panic_sell_defense_{target_date.isoformat()}.json"
 
 
+def _panic_buying_report_path(target_date: date) -> Path:
+    return PANIC_BUYING_DIR / f"panic_buying_{target_date.isoformat()}.json"
+
+
 def _breadth_report_path(target_date: date) -> Path:
     return MARKET_PANIC_BREADTH_DIR / f"market_panic_breadth_{target_date.isoformat()}.json"
 
@@ -143,6 +148,16 @@ def _panic_epoch_id(target_date: date, panic_state: str, regime: str, level: int
         minute = (generated.minute // 5) * 5
         bucket = f"{generated.hour:02d}{minute:02d}"
     return f"{target_date.isoformat()}|{panic_state or 'UNKNOWN'}|{regime or 'UNKNOWN'}|L{level}|{bucket}"
+
+
+def _euphoria_epoch_id(target_date: date, panic_buy_state: str, regime: str, level: int, generated_at: Any) -> str:
+    generated = _parse_datetime(generated_at)
+    if generated is None:
+        bucket = "unknown"
+    else:
+        minute = (generated.minute // 2) * 2
+        bucket = f"{generated.hour:02d}{minute:02d}"
+    return f"{target_date.isoformat()}|{panic_buy_state or 'UNKNOWN'}|{regime or 'UNKNOWN'}|E{level}|{bucket}"
 
 
 def _resolve_panic_level(panic_payload: dict[str, Any], breadth_payload: dict[str, Any]) -> tuple[int, str]:
@@ -312,6 +327,109 @@ def resolve_panic_risk_regime_context(
         "panic_regime_mode": regime,
         "generated_at": panic_payload.get("generated_at"),
         "as_of": panic_payload.get("as_of"),
+        "warnings": warnings,
+    }
+
+
+def _resolve_euphoria_level(panic_buy_payload: dict[str, Any]) -> tuple[int, str, str]:
+    mode = str(panic_buy_payload.get("panic_buy_regime_mode") or "NORMAL").upper()
+    state = str(panic_buy_payload.get("panic_buy_state") or "NORMAL").upper()
+    if mode in {"PANIC_BUY_EXHAUSTION", "COOLDOWN"} or state in {"BUYING_EXHAUSTED", "EXHAUSTION_WATCH"}:
+        return 3, mode.lower(), "exhaustion_reversal"
+    if mode == "PANIC_BUY_CONTINUATION" or state == "PANIC_BUY":
+        return 2, "confirmed_panic_buying", "risk_on_euphoria"
+    if mode == "PANIC_BUY_DETECTED" or state == "PANIC_BUY_WATCH":
+        return 1, "momentum_risk_on", "risk_on_euphoria"
+    return 0, "normal", "risk_on_euphoria"
+
+
+def _euphoria_source_quality_blockers(panic_buy_payload: dict[str, Any]) -> list[str]:
+    micro = panic_buy_payload.get("microstructure_detector")
+    if not isinstance(micro, dict):
+        micro = {}
+    market = panic_buy_payload.get("market_breadth_context")
+    if not isinstance(market, dict):
+        market = {}
+    blockers: list[str] = []
+    signal_count = _safe_int(micro.get("panic_buy_signal_count"), 0)
+    if signal_count > 0 and not bool(market.get("market_wide_panic_buy_confirmed")):
+        blockers.append("panic_buy_local_unconfirmed_by_market_breadth")
+    if _safe_int(micro.get("missing_orderbook_count"), 0) > 0:
+        blockers.append("panic_buy_orderbook_collector_coverage_gap")
+    if _safe_int(micro.get("missing_trade_aggressor_count"), 0) > 0:
+        blockers.append("panic_buy_trade_aggressor_coverage_gap")
+    return blockers
+
+
+def resolve_euphoria_risk_context(
+    *,
+    now: datetime | None = None,
+    target_date: date | None = None,
+    max_age_sec: int | None = None,
+) -> dict[str, Any]:
+    """Resolve panic-buying reports into sim-only euphoria lifecycle context."""
+    current_dt = now or datetime.now()
+    resolved_date = target_date or current_dt.date()
+    age_limit = int(
+        max_age_sec
+        if max_age_sec is not None
+        else getattr(TRADING_RULES, "SCALP_SIM_EUPHORIA_CONTEXT_MAX_AGE_SEC", 180) or 180
+    )
+    report_path = _panic_buying_report_path(resolved_date)
+    source_files = {"panic_buying": str(report_path)}
+    warnings: list[str] = []
+    status = "OK"
+    if not report_path.exists():
+        status = "MISSING"
+        warnings.append("missing_source_file")
+    payload = _read_payload(report_path)
+    if status != "MISSING" and not payload:
+        status = "PARSE_ERROR"
+        warnings.append("panic_buying_parse_error")
+    if status == "OK":
+        fresh, reason = _freshness_status(payload, target_date=resolved_date, now=current_dt, max_age_sec=age_limit)
+        if not fresh:
+            status = "STALE"
+            warnings.append(f"panic_buying:{reason}")
+    level, reason, direction = _resolve_euphoria_level(payload) if payload else (0, "context_not_ok", "risk_on_euphoria")
+    blockers = _euphoria_source_quality_blockers(payload) if status == "OK" else []
+    source_quality_status = "OK" if not blockers else "BLOCKED"
+    if status == "OK" and blockers:
+        status = "SOURCE_QUALITY_BLOCKED"
+        warnings.extend(blockers)
+    state = str(payload.get("panic_buy_state") or "NORMAL") if payload else "NORMAL"
+    mode = str(payload.get("panic_buy_regime_mode") or "NORMAL") if payload else "NORMAL"
+    epoch_id = _euphoria_epoch_id(
+        resolved_date,
+        state,
+        mode,
+        level,
+        payload.get("generated_at") or payload.get("as_of") if payload else None,
+    )
+    market = payload.get("market_breadth_context") if isinstance(payload.get("market_breadth_context"), dict) else {}
+    micro = payload.get("microstructure_detector") if isinstance(payload.get("microstructure_detector"), dict) else {}
+    return {
+        "euphoria_context_status": status,
+        "euphoria_risk_level": level,
+        "euphoria_level_reason": reason if status == "OK" else "context_not_ok",
+        "euphoria_risk_mode": mode,
+        "euphoria_epoch_id": epoch_id,
+        "euphoria_source_quality": source_quality_status,
+        "source_quality_blockers": blockers,
+        "risk_context_owner": "euphoria",
+        "risk_direction": direction,
+        "action_namespace": "euphoria_lifecycle",
+        "panic_buy_state": state,
+        "panic_buy_regime_mode": mode,
+        "market_wide_panic_buy_confirmed": bool(market.get("market_wide_panic_buy_confirmed")),
+        "market_breadth_risk_on_advisory": bool(market.get("market_panic_breadth_risk_on_advisory")),
+        "panic_buy_signal_count": _safe_int(micro.get("panic_buy_signal_count"), 0),
+        "missing_orderbook_count": _safe_int(micro.get("missing_orderbook_count"), 0),
+        "missing_trade_aggressor_count": _safe_int(micro.get("missing_trade_aggressor_count"), 0),
+        "euphoria_source_files": source_files,
+        "decision_confidence": 1.0 if status == "OK" and level >= 2 else 0.7 if status == "OK" and level == 1 else 0.0,
+        "generated_at": payload.get("generated_at") if payload else None,
+        "as_of": payload.get("as_of") if payload else None,
         "warnings": warnings,
     }
 

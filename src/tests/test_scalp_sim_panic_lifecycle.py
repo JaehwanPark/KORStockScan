@@ -103,6 +103,44 @@ def _panic_files(
     return panic_dir, breadth_dir
 
 
+def _panic_buying_files(
+    tmp_path,
+    target_date="2026-05-20",
+    generated_at="2026-05-20T09:10:00",
+    *,
+    mode="PANIC_BUY_CONTINUATION",
+    state="PANIC_BUY",
+    market_confirmed=True,
+    missing_orderbook=0,
+    missing_trade=0,
+):
+    panic_buy_dir = tmp_path / "panic_buying"
+    panic_buy_dir.mkdir(parents=True)
+    (panic_buy_dir / f"panic_buying_{target_date}.json").write_text(
+        json.dumps(
+            {
+                "report_type": "panic_buying",
+                "target_date": target_date,
+                "generated_at": generated_at,
+                "as_of": generated_at,
+                "panic_buy_state": state,
+                "panic_buy_regime_mode": mode,
+                "microstructure_detector": {
+                    "panic_buy_signal_count": 1 if state != "NORMAL" else 0,
+                    "missing_orderbook_count": missing_orderbook,
+                    "missing_trade_aggressor_count": missing_trade,
+                },
+                "market_breadth_context": {
+                    "market_wide_panic_buy_confirmed": market_confirmed,
+                    "market_panic_breadth_risk_on_advisory": market_confirmed,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return panic_buy_dir
+
+
 def _sim_position(qty=10):
     return {
         "name": "SIM",
@@ -139,6 +177,34 @@ def test_panic_context_ok_and_stale(monkeypatch, tmp_path):
     assert ok["panic_epoch_id"].startswith("2026-05-20|PANIC_SELL|PANIC_DETECTED|L2")
     assert stale["panic_context_status"] == "STALE"
     assert stale["panic_level"] == 0
+
+
+def test_euphoria_context_maps_modes_and_blocks_bad_source(monkeypatch, tmp_path):
+    panic_buy_dir = _panic_buying_files(tmp_path)
+    monkeypatch.setattr(runtime, "PANIC_BUYING_DIR", panic_buy_dir)
+
+    ok = runtime.resolve_euphoria_risk_context(
+        now=datetime.fromisoformat("2026-05-20T09:11:00"),
+        max_age_sec=600,
+    )
+    assert ok["euphoria_context_status"] == "OK"
+    assert ok["euphoria_risk_level"] == 2
+    assert ok["risk_direction"] == "risk_on_euphoria"
+    assert ok["euphoria_epoch_id"].startswith("2026-05-20|PANIC_BUY|PANIC_BUY_CONTINUATION|E2")
+
+    panic_buy_dir = _panic_buying_files(
+        tmp_path / "bad",
+        market_confirmed=False,
+        missing_orderbook=1,
+    )
+    monkeypatch.setattr(runtime, "PANIC_BUYING_DIR", panic_buy_dir)
+    blocked = runtime.resolve_euphoria_risk_context(
+        now=datetime.fromisoformat("2026-05-20T09:11:00"),
+        max_age_sec=600,
+    )
+    assert blocked["euphoria_context_status"] == "SOURCE_QUALITY_BLOCKED"
+    assert blocked["euphoria_risk_level"] == 2
+    assert "panic_buy_orderbook_collector_coverage_gap" in blocked["source_quality_blockers"]
 
 
 def test_breadth_only_panic_sell_report_maps_to_level1_watch(monkeypatch, tmp_path):
@@ -401,6 +467,131 @@ def test_entry_and_scale_in_are_blocked_for_sim_only_panic(monkeypatch, _state):
     )
     assert result is None
     assert any(stage == "scalp_sim_panic_scale_in_blocked" for stage, _ in _state)
+    event = next(fields for stage, fields in _state if stage == "scalp_sim_panic_entry_blocked")
+    assert event["source_family"] == "panic_lifecycle_actuator"
+    assert event["family_type"] == "sim_lifecycle_source"
+    assert event["live_selectable"] is False
+    assert event["risk_context_owner"] == "panic_sell"
+    assert event["risk_direction"] == "risk_off"
+    assert event["real_order_allowed"] is False
+
+
+def test_euphoria_l2_blocks_chase_and_allows_retest_starter(monkeypatch, _state):
+    monkeypatch.setattr(
+        state_handlers,
+        "_resolve_scalp_sim_euphoria_context",
+        lambda now_ts=None: {
+            "euphoria_context_status": "OK",
+            "euphoria_risk_level": 2,
+            "euphoria_risk_mode": "PANIC_BUY_CONTINUATION",
+            "euphoria_level_reason": "confirmed_panic_buying",
+            "euphoria_epoch_id": "euphoria-1",
+            "euphoria_source_quality": "OK",
+            "risk_direction": "risk_on_euphoria",
+        },
+    )
+    stock = {"id": 101, "name": "CHASE", "strategy": "SCALPING", "target_buy_price": 10_000}
+    blocked = state_handlers._should_block_scalp_sim_entry_for_euphoria(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10_000, "orderbook": {"asks": [{"price": 10_200}], "bids": [{"price": 9_900}]}},
+        runtime={"strategy": "SCALPING", "now_ts": 1000.0, "current_ai_score": 80},
+        current_ai_score=80,
+    )
+    assert blocked is True
+    blocked_event = next(fields for stage, fields in _state if stage == "scalp_sim_euphoria_chase_entry_blocked")
+    assert blocked_event["euphoria_action_type"] == "BLOCK_CHASE_ENTRY"
+    assert blocked_event["risk_context_owner"] == "euphoria"
+    assert blocked_event["family_type"] == "sim_lifecycle_source"
+    assert blocked_event["preopen_apply_allowed"] is False
+
+    stock = {
+        "id": 102,
+        "name": "RETEST",
+        "strategy": "SCALPING",
+        "target_buy_price": 10_000,
+        "last_reversal_features": {"curr_vs_micro_vwap_bp": 5.0, "large_sell_print_detected": False},
+    }
+    allowed_block = state_handlers._should_block_scalp_sim_entry_for_euphoria(
+        stock=stock,
+        code="654321",
+        ws_data={"curr": 10_000, "orderbook": {"asks": [{"price": 10_010}], "bids": [{"price": 10_000}]}},
+        runtime={"strategy": "SCALPING", "now_ts": 1000.0, "current_ai_score": 80},
+        current_ai_score=80,
+    )
+    assert allowed_block is False
+    allowed_event = next(fields for stage, fields in _state if stage == "scalp_sim_euphoria_retest_starter_allowed")
+    assert allowed_event["euphoria_action_type"] == "ALLOW_RETEST_STARTER_ENTRY"
+    assert allowed_event["runtime_effect"] == "sim_arm_allowed"
+    assert allowed_event["actual_order_submitted"] is False
+
+
+def test_euphoria_partial_runner_is_idempotent(monkeypatch, _state):
+    stock = _sim_position(qty=10)
+    context = {
+        "euphoria_context_status": "OK",
+        "euphoria_risk_level": 2,
+        "euphoria_risk_mode": "PANIC_BUY_CONTINUATION",
+        "euphoria_epoch_id": "euphoria-2",
+        "euphoria_source_quality": "OK",
+        "risk_direction": "risk_on_euphoria",
+    }
+    ws_data = {"curr": 10_200, "orderbook": {"bids": [{"price": 10_180}], "asks": [{"price": 10_200}]}}
+    assert state_handlers.complete_scalp_sim_euphoria_partial_profit(
+        stock=stock,
+        code="123456",
+        ws_data=ws_data,
+        curr_price=10_200,
+        now_ts=1000.0,
+        partial_ratio=0.30,
+        euphoria_context=context,
+        euphoria_action_type="TAKE_PARTIAL_PROFIT_RUNNER",
+        profit_rate=1.0,
+    )
+    assert stock["buy_qty"] == 7
+    assert stock["euphoria_partial_tp_count"] == 1
+    assert not state_handlers.complete_scalp_sim_euphoria_partial_profit(
+        stock=stock,
+        code="123456",
+        ws_data=ws_data,
+        curr_price=10_200,
+        now_ts=1010.0,
+        partial_ratio=0.30,
+        euphoria_context=context,
+        euphoria_action_type="TAKE_PARTIAL_PROFIT_RUNNER",
+        profit_rate=1.0,
+    )
+    assert stock["buy_qty"] == 7
+    assert [stage for stage, _ in _state].count("scalp_sim_euphoria_partial_profit_assumed_filled") == 1
+
+
+def test_euphoria_bad_source_quality_creates_noop_not_mutation(monkeypatch, _state):
+    monkeypatch.setattr(
+        state_handlers,
+        "_resolve_scalp_sim_euphoria_context",
+        lambda now_ts=None: {
+            "euphoria_context_status": "SOURCE_QUALITY_BLOCKED",
+            "euphoria_risk_level": 2,
+            "euphoria_risk_mode": "PANIC_BUY_CONTINUATION",
+            "euphoria_epoch_id": "euphoria-bad",
+            "euphoria_source_quality": "BLOCKED",
+            "source_quality_blockers": ["panic_buy_orderbook_collector_coverage_gap"],
+            "risk_direction": "risk_on_euphoria",
+        },
+    )
+    stock = {"id": 101, "name": "BAD", "strategy": "SCALPING", "target_buy_price": 10_000}
+    assert not state_handlers._should_block_scalp_sim_entry_for_euphoria(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10_000},
+        runtime={"now_ts": 1000.0},
+        current_ai_score=80,
+    )
+    event = next(fields for stage, fields in _state if stage == "scalp_sim_euphoria_context_noop")
+    assert event["runtime_effect"] == "SIM_NOOP_CONTEXT_NOT_OK"
+    assert event["exclude_from_ev"] is True
+    assert event["real_gate_allowed"] is False
+    assert event["pre_submit_gate_allowed"] is False
 
 
 def test_level1_breadth_risk_off_bottoming_candidate_allows_sim_entry(monkeypatch, _state):

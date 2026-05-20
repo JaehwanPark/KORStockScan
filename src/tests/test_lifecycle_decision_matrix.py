@@ -233,3 +233,91 @@ def test_lifecycle_matrix_joins_institutional_flow_features(tmp_path, monkeypatc
     assert features["inst_net_roll5"] == 200
     assert features["institutional_flow_status"] == "OK"
     assert report["sources"]["institutional_flow_context"]["joined_rows"] == 1
+
+
+def test_lifecycle_matrix_keeps_panic_lifecycle_source_contract_and_euphoria_split(tmp_path, monkeypatch):
+    matrix_dir = tmp_path / "matrix"
+    entry_dir = tmp_path / "entry_adm"
+    post_sell_dir = tmp_path / "post_sell"
+    monitor_dir = tmp_path / "monitor"
+    pipeline_dir = tmp_path / "pipeline_events"
+    for directory in (entry_dir, post_sell_dir, monitor_dir, pipeline_dir):
+        directory.mkdir(parents=True)
+    monkeypatch.setattr(mod, "MATRIX_DIR", matrix_dir)
+    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
+    monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", monitor_dir)
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
+    monkeypatch.setattr(
+        mod,
+        "entry_adm_report_paths",
+        lambda target_date: (
+            entry_dir / f"scalp_entry_action_decision_matrix_{target_date}.json",
+            entry_dir / f"scalp_entry_action_decision_matrix_{target_date}.md",
+        ),
+    )
+    events = [
+        {
+            "stage": "scalp_sim_euphoria_partial_profit_assumed_filled",
+            "stock_code": "000001",
+            "emitted_at": "2026-05-20T10:00:00+09:00",
+            "fields": {
+                "simulation_book": "scalp_ai_buy_all",
+                "source_family": "panic_lifecycle_actuator",
+                "family_type": "sim_lifecycle_source",
+                "live_selectable": False,
+                "preopen_apply_allowed": False,
+                "env_apply_allowed": False,
+                "threshold_env_mutation_allowed": False,
+                "real_order_allowed": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "decision_authority": "sim_observation_only",
+                "risk_context_owner": "euphoria",
+                "risk_direction": "risk_on_euphoria",
+                "action_namespace": "euphoria_lifecycle",
+                "euphoria_action_type": "TAKE_PARTIAL_PROFIT_RUNNER",
+                "euphoria_risk_level": 2,
+                "euphoria_epoch_id": "euphoria-1",
+                "realized_profit_rate": "0.8",
+                "exit_rule": "scalp_sim_euphoria_runner_partial_profit",
+            },
+        },
+        {
+            "stage": "scalp_sim_euphoria_context_noop",
+            "stock_code": "000002",
+            "emitted_at": "2026-05-20T10:01:00+09:00",
+            "fields": {
+                "simulation_book": "scalp_ai_buy_all",
+                "source_family": "panic_lifecycle_actuator",
+                "family_type": "sim_lifecycle_source",
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "risk_context_owner": "euphoria",
+                "risk_direction": "risk_on_euphoria",
+                "action_namespace": "euphoria_lifecycle",
+                "runtime_effect": "SIM_NOOP_CONTEXT_NOT_OK",
+                "exclude_from_ev": True,
+                "euphoria_context_status": "SOURCE_QUALITY_BLOCKED",
+            },
+        },
+    ]
+    (pipeline_dir / "pipeline_events_2026-05-20.jsonl").write_text(
+        "\n".join(json.dumps(event, ensure_ascii=False) for event in events),
+        encoding="utf-8",
+    )
+
+    report = mod.build_lifecycle_decision_matrix_report("2026-05-20")
+
+    rows = [row for row in report["examples"] if row["source"] == "scalp_sim_panic_pipeline_events"]
+    assert len(rows) == 2
+    euphoria_row = next(row for row in rows if row["runtime_features"].get("euphoria_action_type"))
+    features = euphoria_row["runtime_features"]
+    assert features["source_family"] == "panic_lifecycle_actuator"
+    assert features["family_type"] == "sim_lifecycle_source"
+    assert features["live_selectable"] is False
+    assert features["risk_context_owner"] == "euphoria"
+    assert features["action_namespace"] == "euphoria_lifecycle"
+    assert features["euphoria_action_type"] == "TAKE_PARTIAL_PROFIT_RUNNER"
+    noop_row = next(row for row in rows if row["runtime_features"].get("exclude_from_ev"))
+    assert noop_row["stage_ev_composite_pct"] is None
+    assert noop_row["outcome_joined"] is False

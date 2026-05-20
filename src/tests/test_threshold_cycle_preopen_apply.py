@@ -3,6 +3,30 @@ import json
 from src.engine import threshold_cycle_preopen_apply as mod
 
 
+def test_preopen_apply_rejects_panic_lifecycle_standalone_env_candidate():
+    selected, decisions, env = mod._select_auto_apply_candidates(
+        [
+            {
+                "family": "panic_lifecycle_actuator",
+                "family_type": "sim_lifecycle_source",
+                "stage": "entry",
+                "calibration_state": "adjust_up",
+                "allowed_runtime_apply": True,
+                "safety_revert_required": False,
+                "target_env_keys": ["LIFECYCLE_DECISION_MATRIX_ENABLED"],
+                "recommended_values": {"enabled": True},
+            }
+        ],
+        ai_review={"items_by_family": {}},
+        require_ai=False,
+    )
+
+    assert selected == []
+    assert env == {}
+    assert decisions[0]["selected"] is False
+    assert decisions[0]["decision_reason"] == "non_live_selectable_sim_lifecycle_source"
+
+
 def test_build_preopen_apply_manifest_uses_latest_prior_report(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"

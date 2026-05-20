@@ -82,6 +82,16 @@ THRESHOLD_STAGE_FAMILY_MAP = {
     "scalp_sim_panic_scale_in_blocked": "panic_lifecycle_actuator",
     "scalp_sim_panic_action_deduped": "panic_lifecycle_actuator",
     "scalp_sim_partial_sell_order_assumed_filled": "panic_lifecycle_actuator",
+    "scalp_sim_panic_context_warning": "panic_lifecycle_actuator",
+    "scalp_sim_euphoria_context_noop": "panic_lifecycle_actuator",
+    "scalp_sim_euphoria_entry_blocked": "panic_lifecycle_actuator",
+    "scalp_sim_euphoria_chase_entry_blocked": "panic_lifecycle_actuator",
+    "scalp_sim_euphoria_retest_starter_allowed": "panic_lifecycle_actuator",
+    "scalp_sim_euphoria_level1_starter_observed": "panic_lifecycle_actuator",
+    "scalp_sim_euphoria_scale_in_blocked": "panic_lifecycle_actuator",
+    "scalp_sim_euphoria_partial_profit_assumed_filled": "panic_lifecycle_actuator",
+    "scalp_sim_euphoria_partial_profit_unpriced": "panic_lifecycle_actuator",
+    "scalp_sim_euphoria_action_deduped": "panic_lifecycle_actuator",
 }
 
 TARGET_STAGES = frozenset(THRESHOLD_STAGE_FAMILY_MAP)

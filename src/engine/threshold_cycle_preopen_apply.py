@@ -29,6 +29,11 @@ AUTO_APPLY_ALLOWED_STATES = {"adjust_up", "adjust_down", "hold"}
 AUTO_APPLY_BLOCK_STATES = {"freeze", "hold_sample", "hold_no_edge"}
 AUTO_APPLY_ROUTE_EXCLUDE_ACTIONS = {"exclude_from_threshold_candidate_review"}
 AUTO_APPLY_ALLOWED_ROUTES = {"threshold_candidate", "normal_drift", ""}
+NON_LIVE_SELECTABLE_FAMILIES = {
+    "panic_lifecycle_actuator",
+    "panic_entry_freeze_guard",
+    "panic_buy_runner_tp_canary",
+}
 LOCK_ALLOWED_CLOSE_KEYWORDS = {
     "safety_revert",
     "severe_loss",
@@ -760,6 +765,8 @@ def _select_auto_apply_candidates(
         reject_reason = ""
         if include_families is not None and family not in include_families:
             reject_reason = "operator_family_filter_excluded"
+        elif family in NON_LIVE_SELECTABLE_FAMILIES or str(candidate.get("family_type") or "") == "sim_lifecycle_source":
+            reject_reason = "non_live_selectable_sim_lifecycle_source"
         elif not bool(candidate.get("allowed_runtime_apply")):
             reject_reason = "runtime_apply_not_allowed"
         elif bool(candidate.get("safety_revert_required")):

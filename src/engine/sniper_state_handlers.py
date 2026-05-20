@@ -51,6 +51,7 @@ from src.engine.sniper_gatekeeper_replay import record_gatekeeper_snapshot
 from src.engine.sniper_post_sell_feedback import record_sim_post_sell_candidate
 from src.engine.holding_exit_matrix_runtime import resolve_holding_exit_matrix_scale_in_bias
 from src.engine.lifecycle_decision_matrix_runtime import (
+    resolve_euphoria_risk_context,
     resolve_lifecycle_decision,
     resolve_panic_risk_regime_context,
 )
@@ -1912,10 +1913,36 @@ def _scalp_sim_event_fields(**extra) -> dict:
         "simulated_order": True,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
+        "decision_authority": "sim_observation_only",
         "calibration_authority": "equal_weight",
     }
     fields.update(extra)
     return fields
+
+
+def _sim_lifecycle_source_contract_fields(
+    *,
+    risk_context_owner: str,
+    risk_direction: str,
+    action_namespace: str,
+) -> dict:
+    return {
+        "source_family": "panic_lifecycle_actuator",
+        "decision_family": "panic_lifecycle_actuator",
+        "family_type": "sim_lifecycle_source",
+        "live_selectable": False,
+        "preopen_apply_allowed": False,
+        "env_apply_allowed": False,
+        "threshold_env_mutation_allowed": False,
+        "real_order_allowed": False,
+        "source_quality_gate_scope": "sim_context_only",
+        "real_gate_allowed": False,
+        "pre_submit_gate_allowed": False,
+        "exclude_from_live_approval": True,
+        "risk_context_owner": risk_context_owner,
+        "risk_direction": risk_direction,
+        "action_namespace": action_namespace,
+    }
 
 
 def _scalp_sim_candidate_window_daily_key(now_ts: float | None = None) -> str:
@@ -2029,7 +2056,7 @@ def _scalp_sim_panic_eligible(stock: dict | None, strategy: str | None = None) -
 
 def _scalp_sim_panic_context_fields(panic_context: dict | None) -> dict:
     context = panic_context if isinstance(panic_context, dict) else {}
-    return {
+    fields = {
         "risk_regime_context_owner": "lifecycle_decision_matrix_runtime",
         "panic_context_status": context.get("panic_context_status", "MISSING"),
         "panic_level": context.get("panic_level", 0),
@@ -2043,7 +2070,76 @@ def _scalp_sim_panic_context_fields(panic_context: dict | None) -> dict:
         "risk_off_components": context.get("risk_off_components") or {},
         "panic_source_files": context.get("panic_source_files") or {},
         "decision_confidence": context.get("decision_confidence", 0.0),
+        "risk_regime_context_status": context.get("panic_context_status", "MISSING"),
+        "risk_regime_level": context.get("panic_level", 0),
+        "risk_regime_reason": context.get("panic_level_reason", "-"),
+        "risk_regime_epoch_id": context.get("panic_epoch_id", "-"),
+        "risk_regime_source_files": context.get("panic_source_files") or {},
     }
+    fields.update(
+        _sim_lifecycle_source_contract_fields(
+            risk_context_owner="panic_sell",
+            risk_direction="risk_off",
+            action_namespace="panic_sell_lifecycle",
+        )
+    )
+    return fields
+
+
+def _scalp_sim_panic_stock_context_fields(stock: dict | None) -> dict:
+    payload = stock if isinstance(stock, dict) else {}
+    fields = _sim_lifecycle_source_contract_fields(
+        risk_context_owner="panic_sell",
+        risk_direction="risk_off",
+        action_namespace="panic_sell_lifecycle",
+    )
+    fields.update(
+        {
+            "threshold_family": "panic_lifecycle_actuator",
+            "risk_regime_context_owner": "lifecycle_decision_matrix_runtime",
+            "panic_epoch_id": payload.get("panic_epoch_id"),
+            "last_panic_action_level": payload.get("last_panic_action_level"),
+            "last_panic_action_type": payload.get("last_panic_action_type"),
+            "panic_lifecycle_action_id": payload.get("panic_lifecycle_action_id"),
+            "risk_regime_epoch_id": payload.get("panic_epoch_id"),
+            "risk_regime_level": payload.get("last_panic_action_level"),
+        }
+    )
+    return fields
+
+
+def _scalp_sim_euphoria_context_fields(euphoria_context: dict | None) -> dict:
+    context = euphoria_context if isinstance(euphoria_context, dict) else {}
+    direction = str(context.get("risk_direction") or "risk_on_euphoria")
+    fields = _sim_lifecycle_source_contract_fields(
+        risk_context_owner="euphoria",
+        risk_direction=direction,
+        action_namespace="euphoria_lifecycle",
+    )
+    fields.update(
+        {
+            "risk_regime_context_owner": "lifecycle_decision_matrix_runtime",
+            "euphoria_context_status": context.get("euphoria_context_status", "MISSING"),
+            "euphoria_risk_level": context.get("euphoria_risk_level", 0),
+            "euphoria_risk_mode": context.get("euphoria_risk_mode", "NORMAL"),
+            "euphoria_level_reason": context.get("euphoria_level_reason", "-"),
+            "euphoria_epoch_id": context.get("euphoria_epoch_id", "-"),
+            "euphoria_source_quality": context.get("euphoria_source_quality", "UNKNOWN"),
+            "euphoria_source_files": context.get("euphoria_source_files") or {},
+            "panic_buy_state": context.get("panic_buy_state", "NORMAL"),
+            "panic_buy_regime_mode": context.get("panic_buy_regime_mode", "NORMAL"),
+            "market_wide_panic_buy_confirmed": bool(context.get("market_wide_panic_buy_confirmed")),
+            "market_breadth_risk_on_advisory": bool(context.get("market_breadth_risk_on_advisory")),
+            "source_quality_blockers": context.get("source_quality_blockers") or [],
+            "decision_confidence": context.get("decision_confidence", 0.0),
+            "risk_regime_context_status": context.get("euphoria_context_status", "MISSING"),
+            "risk_regime_level": context.get("euphoria_risk_level", 0),
+            "risk_regime_reason": context.get("euphoria_level_reason", "-"),
+            "risk_regime_epoch_id": context.get("euphoria_epoch_id", "-"),
+            "risk_regime_source_files": context.get("euphoria_source_files") or {},
+        }
+    )
+    return fields
 
 
 def _scalp_sim_panic_bottoming_context_fields(context: dict | None) -> dict:
@@ -2164,6 +2260,104 @@ def _resolve_scalp_sim_panic_context(now_ts: float | None = None) -> dict:
     return resolve_panic_risk_regime_context(now=resolved_now)
 
 
+def _resolve_scalp_sim_euphoria_context(now_ts: float | None = None) -> dict:
+    if not _scalp_sim_panic_enabled():
+        return {"euphoria_context_status": "DISABLED", "euphoria_risk_level": 0, "euphoria_level_reason": "disabled"}
+    resolved_now = None
+    if now_ts:
+        try:
+            resolved_now = datetime.fromtimestamp(float(now_ts))
+        except (TypeError, ValueError, OSError, OverflowError):
+            resolved_now = None
+    return resolve_euphoria_risk_context(now=resolved_now)
+
+
+def _log_scalp_sim_euphoria_context_noop(stock: dict, code: str, stage: str, euphoria_context: dict) -> None:
+    status = str(euphoria_context.get("euphoria_context_status") or "OK")
+    if status == "OK":
+        return
+    warning_key = f"{stage}:{status}:{euphoria_context.get('euphoria_epoch_id')}:{datetime.now().date().isoformat()}"
+    if stock.get("last_scalp_sim_euphoria_context_warning_key") == warning_key:
+        return
+    _mutate_stock_state(stock, set_fields={"last_scalp_sim_euphoria_context_warning_key": warning_key})
+    log_fn = _log_entry_pipeline if stage == "entry" else _log_holding_pipeline
+    log_fn(
+        stock,
+        code,
+        "scalp_sim_euphoria_context_noop",
+        **_scalp_sim_event_fields(
+            threshold_family="panic_lifecycle_actuator",
+            source_stage=stage,
+            runtime_effect="SIM_NOOP_CONTEXT_NOT_OK",
+            exclude_from_ev=True,
+            real_order_gate_reason="-",
+            **_scalp_sim_euphoria_context_fields(euphoria_context),
+        ),
+    )
+
+
+def _scalp_sim_euphoria_action_id(stock: dict, euphoria_context: dict, level: int, action_type: str) -> str:
+    position_id = str(stock.get("sim_record_id") or stock.get("id") or stock.get("code") or "unknown")
+    epoch = str(euphoria_context.get("euphoria_epoch_id") or "-")
+    return f"{position_id}|{epoch}|E{int(level)}|{str(action_type).upper()}"
+
+
+def _scalp_sim_euphoria_action_already_applied(
+    stock: dict,
+    euphoria_context: dict,
+    level: int,
+    action_type: str,
+) -> bool:
+    epoch = str(euphoria_context.get("euphoria_epoch_id") or "")
+    action = str(action_type or "").upper()
+    previous_epoch = str(stock.get("euphoria_epoch_id") or "")
+    previous_level = _safe_int(stock.get("last_euphoria_action_level"), 0)
+    previous_action = str(stock.get("last_euphoria_action_type") or "").upper()
+    if previous_epoch != epoch:
+        return False
+    if previous_level > int(level):
+        return True
+    if previous_level == int(level) and previous_action == action:
+        return True
+    if action in {"TAKE_PARTIAL_PROFIT_RUNNER", "CLEANUP_PARTIAL_PROFIT"} and previous_level == int(level):
+        return _safe_int(stock.get("euphoria_partial_tp_count"), 0) >= 1
+    if action == "ALLOW_PROFIT_LOCKED_SCALE_IN" and previous_level == int(level):
+        return _safe_int(stock.get("euphoria_scale_in_count"), 0) >= 1
+    return False
+
+
+def _mark_scalp_sim_euphoria_action(
+    stock: dict,
+    euphoria_context: dict,
+    level: int,
+    action_type: str,
+    now_ts: float,
+) -> str:
+    action = str(action_type or "").upper()
+    action_id = _scalp_sim_euphoria_action_id(stock, euphoria_context, level, action)
+    partial_count = _safe_int(stock.get("euphoria_partial_tp_count"), 0)
+    scale_in_count = _safe_int(stock.get("euphoria_scale_in_count"), 0)
+    if action in {"TAKE_PARTIAL_PROFIT_RUNNER", "CLEANUP_PARTIAL_PROFIT"}:
+        partial_count += 1
+    if action == "ALLOW_PROFIT_LOCKED_SCALE_IN":
+        scale_in_count += 1
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "euphoria_epoch_id": euphoria_context.get("euphoria_epoch_id"),
+            "last_euphoria_action_level": int(level),
+            "last_euphoria_action_type": action,
+            "last_euphoria_partial_tp_at": now_ts
+            if action in {"TAKE_PARTIAL_PROFIT_RUNNER", "CLEANUP_PARTIAL_PROFIT"}
+            else stock.get("last_euphoria_partial_tp_at"),
+            "euphoria_partial_tp_count": partial_count,
+            "euphoria_scale_in_count": scale_in_count,
+            "euphoria_lifecycle_action_id": action_id,
+        },
+    )
+    return action_id
+
+
 def _log_scalp_sim_panic_context_warning(stock: dict, code: str, stage: str, panic_context: dict) -> None:
     if str(panic_context.get("panic_context_status") or "OK") == "OK":
         return
@@ -2176,6 +2370,7 @@ def _log_scalp_sim_panic_context_warning(stock: dict, code: str, stage: str, pan
         code,
         "scalp_sim_panic_context_warning",
         **_scalp_sim_event_fields(
+            threshold_family="panic_lifecycle_actuator",
             source_stage=stage,
             runtime_effect="sim_noop_context_not_ok",
             decision_authority="sim_observation_only",
@@ -2672,6 +2867,7 @@ def _should_block_scalp_sim_entry_for_panic(
             code,
             "scalp_sim_panic_context_warning",
             **_scalp_sim_event_fields(
+                threshold_family="panic_lifecycle_actuator",
                 source_stage="entry",
                 runtime_effect="sim_noop_context_not_ok",
                 decision_authority="sim_observation_only",
@@ -2750,6 +2946,124 @@ def _should_block_scalp_sim_entry_for_panic(
     return True
 
 
+def _scalp_sim_euphoria_entry_conditions(stock: dict, runtime: dict, ws_data: dict | None, curr_price: int) -> dict:
+    runtime = runtime if isinstance(runtime, dict) else {}
+    explicit_retest = runtime.get("euphoria_retest_confirmed", stock.get("euphoria_retest_confirmed"))
+    if explicit_retest is not None:
+        retest_confirmed = _boolish_true(explicit_retest)
+    else:
+        reversal = stock.get("last_reversal_features") if isinstance(stock.get("last_reversal_features"), dict) else {}
+        micro_vwap_bp = _safe_float(reversal.get("curr_vs_micro_vwap_bp"), 0.0)
+        ma5_bp = _safe_float(reversal.get("curr_vs_ma5_bp"), 0.0)
+        large_sell = _boolish_true(reversal.get("large_sell_print_detected"))
+        retest_confirmed = (micro_vwap_bp >= 0.0 or ma5_bp >= 0.0) and not large_sell
+    spread_bps = _spread_bps_from_ws(ws_data or {}, curr_price) or 0.0
+    spread_ok = spread_bps <= _rule_float("SCALP_SIM_EUPHORIA_MAX_STARTER_SPREAD_BPS", 80.0)
+    chase_risk = not (retest_confirmed and spread_ok)
+    return {
+        "retest_confirmed": bool(retest_confirmed),
+        "spread_bps": round(float(spread_bps or 0.0), 4),
+        "spread_ok": bool(spread_ok),
+        "chase_risk": bool(chase_risk),
+    }
+
+
+def _should_block_scalp_sim_entry_for_euphoria(
+    *,
+    stock: dict,
+    code: str,
+    ws_data: dict | None,
+    runtime: dict,
+    current_ai_score: float,
+) -> bool:
+    euphoria_context = _resolve_scalp_sim_euphoria_context(_safe_float((runtime or {}).get("now_ts"), 0.0))
+    level = _safe_int(euphoria_context.get("euphoria_risk_level"), 0)
+    status = str(euphoria_context.get("euphoria_context_status") or "")
+    if status != "OK":
+        if level > 0 or status not in {"MISSING", "DISABLED"}:
+            _log_scalp_sim_euphoria_context_noop(stock, code, "entry", euphoria_context)
+        return False
+    if level <= 0:
+        return False
+    curr_price = _safe_int((ws_data or {}).get("curr") or stock.get("target_buy_price"), 0)
+    conditions = _scalp_sim_euphoria_entry_conditions(stock, runtime or {}, ws_data or {}, curr_price)
+    if level >= 3:
+        action = "BLOCK_CHASE_ENTRY"
+        action_id = _scalp_sim_euphoria_action_id(stock, euphoria_context, level, action)
+        _log_entry_pipeline(
+            stock,
+            code,
+            "scalp_sim_euphoria_entry_blocked",
+            **_scalp_sim_event_fields(
+                threshold_family="panic_lifecycle_actuator",
+                sim_parent_record_id=stock.get("id"),
+                source_stage="entry",
+                runtime_effect="sim_entry_blocked",
+                euphoria_action_type=action,
+                euphoria_action_id=action_id,
+                ai_score=f"{current_ai_score:.1f}",
+                original_action=str((runtime or {}).get("original_action") or "BUY_SIGNAL"),
+                **conditions,
+                **_scalp_sim_candidate_window_context_fields(stock),
+                **_scalp_sim_euphoria_context_fields(euphoria_context),
+            ),
+        )
+        return True
+    if level == 2 and bool(conditions.get("chase_risk")):
+        action = "BLOCK_CHASE_ENTRY"
+        action_id = _scalp_sim_euphoria_action_id(stock, euphoria_context, level, action)
+        _log_entry_pipeline(
+            stock,
+            code,
+            "scalp_sim_euphoria_chase_entry_blocked",
+            **_scalp_sim_event_fields(
+                threshold_family="panic_lifecycle_actuator",
+                sim_parent_record_id=stock.get("id"),
+                source_stage="entry",
+                runtime_effect="sim_entry_blocked_chase_risk",
+                euphoria_action_type=action,
+                euphoria_action_id=action_id,
+                ai_score=f"{current_ai_score:.1f}",
+                original_action=str((runtime or {}).get("original_action") or "BUY_SIGNAL"),
+                **conditions,
+                **_scalp_sim_candidate_window_context_fields(stock),
+                **_scalp_sim_euphoria_context_fields(euphoria_context),
+            ),
+        )
+        return True
+    action = "ALLOW_RETEST_STARTER_ENTRY" if level == 2 else "NO_CHANGE"
+    action_id = _scalp_sim_euphoria_action_id(stock, euphoria_context, level, action)
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "euphoria_epoch_id": euphoria_context.get("euphoria_epoch_id"),
+            "euphoria_risk_level": level,
+            "euphoria_action_type": action,
+            "euphoria_lifecycle_action_id": action_id,
+            "euphoria_retest_confirmed": bool(conditions.get("retest_confirmed")),
+        },
+    )
+    _log_entry_pipeline(
+        stock,
+        code,
+        "scalp_sim_euphoria_retest_starter_allowed" if level == 2 else "scalp_sim_euphoria_level1_starter_observed",
+        **_scalp_sim_event_fields(
+            threshold_family="panic_lifecycle_actuator",
+            sim_parent_record_id=stock.get("id"),
+            source_stage="entry",
+            runtime_effect="sim_arm_allowed" if level == 2 else "sim_entry_allowed_level1_observation",
+            euphoria_action_type=action,
+            euphoria_action_id=action_id,
+            ai_score=f"{current_ai_score:.1f}",
+            original_action=str((runtime or {}).get("original_action") or "BUY_SIGNAL"),
+            **conditions,
+            **_scalp_sim_candidate_window_context_fields(stock),
+            **_scalp_sim_euphoria_context_fields(euphoria_context),
+        ),
+    )
+    return False
+
+
 def maybe_arm_scalp_live_simulator_from_buy_signal(
     stock: dict,
     code: str,
@@ -2782,6 +3096,14 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
     if _should_block_scalp_sim_entry_for_panic(
         stock=stock,
         code=code,
+        runtime=runtime or {},
+        current_ai_score=current_ai_score,
+    ):
+        return False
+    if _should_block_scalp_sim_entry_for_euphoria(
+        stock=stock,
+        code=code,
+        ws_data=ws_data or {},
         runtime=runtime or {},
         current_ai_score=current_ai_score,
     ):
@@ -3089,17 +3411,40 @@ def _complete_scalp_simulated_sell(
     if isinstance(HIGHEST_PRICES, dict):
         with ENTRY_LOCK:
             HIGHEST_PRICES.pop(_price_tracking_key(stock, code), None)
+    source_fields = {}
+    resolved_exit_rule = exit_rule or stock.get("last_exit_rule") or "-"
+    if str(resolved_exit_rule).startswith("scalp_sim_panic_lifecycle"):
+        source_fields.update(_scalp_sim_panic_stock_context_fields(stock))
+    elif str(resolved_exit_rule).startswith("scalp_sim_euphoria"):
+        source_fields.update(
+            _sim_lifecycle_source_contract_fields(
+                risk_context_owner="euphoria",
+                risk_direction="exhaustion_reversal",
+                action_namespace="euphoria_lifecycle",
+            )
+        )
+        source_fields.update(
+            {
+                "euphoria_epoch_id": stock.get("euphoria_epoch_id"),
+                "last_euphoria_action_level": stock.get("last_euphoria_action_level"),
+                "last_euphoria_action_type": stock.get("last_euphoria_action_type"),
+                "euphoria_action_id": stock.get("euphoria_lifecycle_action_id"),
+                "euphoria_lifecycle_action_id": stock.get("euphoria_lifecycle_action_id"),
+                "risk_regime_epoch_id": stock.get("euphoria_epoch_id"),
+                "risk_regime_level": stock.get("last_euphoria_action_level"),
+            }
+        )
     _log_holding_pipeline(
         stock,
         code,
         "scalp_sim_sell_order_assumed_filled",
         **_scalp_sim_event_fields(
-            threshold_family="statistical_action_weight",
+            threshold_family=source_fields.get("threshold_family", "statistical_action_weight"),
             entry_adm_candidate_id=stock.get("entry_adm_candidate_id"),
             sim_record_id=stock.get("sim_record_id"),
             sim_parent_record_id=stock.get("sim_parent_record_id"),
             sell_reason_type=sell_reason_type,
-            exit_rule=exit_rule or stock.get("last_exit_rule") or "-",
+            exit_rule=resolved_exit_rule,
             exit_decision_source=stock.get("last_exit_decision_source") or "MANUAL",
             qty=buy_qty,
             assumed_fill_price=fill_price,
@@ -3115,6 +3460,7 @@ def _complete_scalp_simulated_sell(
             last_panic_action_level=stock.get("last_panic_action_level"),
             last_panic_action_type=stock.get("last_panic_action_type"),
             panic_lifecycle_action_id=stock.get("panic_lifecycle_action_id"),
+            **{key: value for key, value in source_fields.items() if key != "threshold_family"},
         ),
     )
     try:
@@ -3203,6 +3549,7 @@ def complete_scalp_sim_partial_sell(
             code,
             "scalp_sim_panic_partial_sell_unpriced",
             **_scalp_sim_event_fields(
+                threshold_family="panic_lifecycle_actuator",
                 source_stage="panic_lifecycle_actuator",
                 runtime_effect="sim_partial_sell_skipped",
                 decision_authority="sim_observation_only",
@@ -3258,6 +3605,131 @@ def complete_scalp_sim_partial_sell(
             panic_action_reason=panic_action_reason,
             **fill_event_fields,
             **_scalp_sim_panic_context_fields(panic_context),
+        ),
+    )
+    persist_scalp_simulator_state()
+    return True
+
+
+def complete_scalp_sim_euphoria_partial_profit(
+    *,
+    stock: dict,
+    code: str,
+    ws_data: dict | None,
+    curr_price: int,
+    now_ts: float,
+    partial_ratio: float,
+    euphoria_context: dict,
+    euphoria_action_type: str,
+    profit_rate: float,
+) -> bool:
+    if not _scalp_sim_panic_eligible(stock, stock.get("strategy")):
+        return False
+    prev_buy_qty = _safe_int(stock.get("buy_qty"), 0)
+    if prev_buy_qty <= 0:
+        return False
+    level = _safe_int(euphoria_context.get("euphoria_risk_level"), 0)
+    action = str(euphoria_action_type or "").upper()
+    if _scalp_sim_euphoria_action_already_applied(stock, euphoria_context, level, action):
+        return False
+    ratio = max(0.0, min(1.0, _safe_float(partial_ratio, 0.0)))
+    sell_qty = int(math.floor(prev_buy_qty * ratio))
+    if ratio > 0 and sell_qty <= 0:
+        sell_qty = 1
+    sell_qty = min(prev_buy_qty, sell_qty)
+    min_remaining = max(0, _rule_int("SCALP_SIM_PANIC_MIN_REMAINING_QTY", 1))
+    remaining_qty = prev_buy_qty - sell_qty
+    if sell_qty <= 0:
+        return False
+    if remaining_qty <= 0 or remaining_qty < min_remaining:
+        action = "EXIT_ON_REVERSAL"
+    fill_price, best_ask, best_bid = _scalp_sim_sell_fill_price(ws_data or {}, curr_price)
+    if fill_price <= 0:
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scalp_sim_euphoria_partial_profit_unpriced",
+            **_scalp_sim_event_fields(
+                threshold_family="panic_lifecycle_actuator",
+                source_stage="euphoria_lifecycle",
+                runtime_effect="sim_partial_profit_skipped",
+                euphoria_action_type=action,
+                exclude_from_ev=True,
+                prev_buy_qty=prev_buy_qty,
+                partial_ratio=f"{ratio:.4f}",
+                curr_price=curr_price,
+                **_scalp_sim_euphoria_context_fields(euphoria_context),
+            ),
+        )
+        return False
+    action_id = _mark_scalp_sim_euphoria_action(stock, euphoria_context, level, action, now_ts)
+    buy_price = _safe_int(stock.get("buy_price"), 0)
+    realized_profit_rate = calculate_net_profit_rate(buy_price, fill_price)
+    realized_pnl_krw = round((realized_profit_rate / 100.0) * buy_price * sell_qty)
+    if action == "EXIT_ON_REVERSAL":
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "last_exit_decision_source": "SCALP_SIM_EUPHORIA_LIFECYCLE",
+                "last_exit_rule": "scalp_sim_euphoria_exit_on_reversal",
+                "euphoria_lifecycle_action_id": action_id,
+            },
+        )
+        return _complete_scalp_simulated_sell(
+            stock=stock,
+            code=code,
+            ws_data=ws_data,
+            curr_price=curr_price,
+            now_ts=now_ts,
+            sell_reason_type="EUPHORIA",
+            exit_rule="scalp_sim_euphoria_exit_on_reversal",
+            profit_rate=profit_rate,
+        )
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "buy_qty": remaining_qty,
+            "requested_buy_qty": remaining_qty,
+            "entry_filled_qty": remaining_qty,
+            "last_euphoria_reduced_qty": sell_qty,
+            "last_euphoria_realized_profit_rate": realized_profit_rate,
+            "euphoria_lifecycle_action_id": action_id,
+            "actual_order_submitted": False,
+        },
+    )
+    exit_rule = (
+        "scalp_sim_euphoria_runner_partial_profit"
+        if action == "TAKE_PARTIAL_PROFIT_RUNNER"
+        else "scalp_sim_euphoria_cleanup_partial_profit"
+    )
+    _log_holding_pipeline(
+        stock,
+        code,
+        "scalp_sim_euphoria_partial_profit_assumed_filled",
+        **_scalp_sim_event_fields(
+            threshold_family="panic_lifecycle_actuator",
+            entry_adm_candidate_id=stock.get("entry_adm_candidate_id"),
+            sim_record_id=stock.get("sim_record_id"),
+            sim_parent_record_id=stock.get("sim_parent_record_id"),
+            source_stage="euphoria_lifecycle",
+            runtime_effect="simulated_partial_profit_only",
+            sell_reason_type="EUPHORIA",
+            exit_rule=exit_rule,
+            euphoria_action_type=action,
+            euphoria_action_id=action_id,
+            sell_qty=sell_qty,
+            remaining_qty=remaining_qty,
+            partial_ratio=f"{ratio:.4f}",
+            prev_buy_qty=prev_buy_qty,
+            buy_price=buy_price,
+            sell_price=fill_price,
+            assumed_fill_price=fill_price,
+            best_ask=best_ask,
+            best_bid=best_bid,
+            realized_profit_rate=f"{realized_profit_rate:+.2f}",
+            realized_pnl_krw=realized_pnl_krw,
+            trigger_profit_rate=f"{profit_rate:+.2f}",
+            **_scalp_sim_euphoria_context_fields(euphoria_context),
         ),
     )
     persist_scalp_simulator_state()
@@ -3381,6 +3853,96 @@ def _apply_scalp_sim_panic_holding_actuator(
             profit_rate=profit_rate,
         )
     return False
+
+
+def _euphoria_reversal_signal(stock: dict) -> bool:
+    features = stock.get("last_reversal_features") if isinstance(stock.get("last_reversal_features"), dict) else {}
+    if _boolish_true(features.get("large_sell_print_detected")):
+        return True
+    if _safe_float(features.get("curr_vs_micro_vwap_bp"), 0.0) < 0:
+        return True
+    if _safe_float(features.get("net_aggressive_delta_10t"), 0.0) < 0:
+        return True
+    for key in ("holding_flow_ofi_regime", "ofi_regime", "micro_risk_regime"):
+        if str(stock.get(key) or "").upper() in {"RISK_OFF", "BEARISH", "SELL_PRESSURE"}:
+            return True
+    return False
+
+
+def _apply_scalp_sim_euphoria_holding_actuator(
+    *,
+    stock: dict,
+    code: str,
+    strategy: str,
+    ws_data: dict,
+    curr_price: int,
+    now_ts: float,
+    profit_rate: float,
+    peak_profit: float,
+    current_ai_score: float,
+    held_sec: float,
+) -> bool:
+    if not _scalp_sim_panic_eligible(stock, strategy):
+        return False
+    euphoria_context = _resolve_scalp_sim_euphoria_context(now_ts)
+    level = _safe_int(euphoria_context.get("euphoria_risk_level"), 0)
+    if str(euphoria_context.get("euphoria_context_status") or "") != "OK":
+        if level > 0:
+            _log_scalp_sim_euphoria_context_noop(stock, code, "holding", euphoria_context)
+        return False
+    if level <= 0:
+        return False
+    action = "NO_CHANGE"
+    ratio = 0.0
+    runner_mode = "-"
+    reversal = _euphoria_reversal_signal(stock)
+    if level == 2 and profit_rate >= _rule_float("SCALP_SIM_EUPHORIA_L2_PARTIAL_PROFIT_MIN_PCT", 0.70):
+        action = "TAKE_PARTIAL_PROFIT_RUNNER"
+        ratio = _rule_float("SCALP_SIM_EUPHORIA_L2_PARTIAL_RATIO", 0.30)
+        runner_mode = "loose_runner"
+    elif level >= 3:
+        if reversal and profit_rate <= 0:
+            action = "EXIT_ON_REVERSAL"
+            ratio = 1.0
+        elif profit_rate > 0:
+            action = "CLEANUP_PARTIAL_PROFIT"
+            ratio = _rule_float("SCALP_SIM_EUPHORIA_L3_CLEANUP_RATIO", 0.60)
+            runner_mode = "tight_exhaustion_runner"
+    if action == "NO_CHANGE":
+        return False
+    if _scalp_sim_euphoria_action_already_applied(stock, euphoria_context, level, action):
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scalp_sim_euphoria_action_deduped",
+            **_scalp_sim_event_fields(
+                threshold_family="panic_lifecycle_actuator",
+                sim_record_id=stock.get("sim_record_id"),
+                sim_parent_record_id=stock.get("sim_parent_record_id"),
+                source_stage="holding",
+                runtime_effect="sim_euphoria_action_deduped",
+                euphoria_action_type=action,
+                profit_rate=f"{profit_rate:+.2f}",
+                peak_profit=f"{peak_profit:+.2f}",
+                current_ai_score=f"{current_ai_score:.0f}",
+                held_sec=int(held_sec or 0),
+                runner_mode=runner_mode,
+                reversal_signal=bool(reversal),
+                **_scalp_sim_euphoria_context_fields(euphoria_context),
+            ),
+        )
+        return False
+    return complete_scalp_sim_euphoria_partial_profit(
+        stock=stock,
+        code=code,
+        ws_data=ws_data,
+        curr_price=curr_price,
+        now_ts=now_ts,
+        partial_ratio=ratio,
+        euphoria_context=euphoria_context,
+        euphoria_action_type=action,
+        profit_rate=profit_rate,
+    )
 
 
 def _coerce_optional_timestamp(value):
@@ -12352,6 +12914,20 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
     ):
         return
 
+    if not is_sell_signal and _apply_scalp_sim_euphoria_holding_actuator(
+        stock=stock,
+        code=code,
+        strategy=strategy,
+        ws_data=ws_data,
+        curr_price=curr_p,
+        now_ts=now_ts,
+        profit_rate=profit_rate,
+        peak_profit=peak_profit,
+        current_ai_score=current_ai_score,
+        held_sec=held_sec,
+    ):
+        return
+
     if not is_sell_signal:
         _clear_holding_flow_override_candidate(
             stock,
@@ -13425,6 +14001,97 @@ def _sanitize_pending_add_states(active_targets):
                     _cancel_or_reconcile_pending_add(stock, reason="recovery_timeout")
 
 
+def _evaluate_scalp_sim_euphoria_scale_in(
+    *,
+    stock: dict,
+    code: str,
+    strategy: str,
+    profit_rate: float,
+    peak_profit: float,
+    current_ai_score: float,
+    held_sec: float,
+) -> dict | None:
+    if not _scalp_sim_panic_eligible(stock, strategy):
+        return {}
+    euphoria_context = _resolve_scalp_sim_euphoria_context()
+    level = _safe_int(euphoria_context.get("euphoria_risk_level"), 0)
+    if str(euphoria_context.get("euphoria_context_status") or "") != "OK":
+        if level > 0:
+            _log_scalp_sim_euphoria_context_noop(stock, code, "scale_in", euphoria_context)
+            return None
+        return {}
+    if level <= 0:
+        return {}
+    if level >= 3 or profit_rate <= 0:
+        action_type = "DISABLE_AGGRESSIVE_SCALE_IN"
+        action_id = _scalp_sim_euphoria_action_id(stock, euphoria_context, level, action_type)
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scalp_sim_euphoria_scale_in_blocked",
+            **_scalp_sim_event_fields(
+                threshold_family="panic_lifecycle_actuator",
+                sim_record_id=stock.get("sim_record_id"),
+                sim_parent_record_id=stock.get("sim_parent_record_id"),
+                source_stage="scale_in",
+                runtime_effect="sim_scale_in_blocked",
+                euphoria_action_type=action_type,
+                euphoria_action_id=action_id,
+                profit_rate=f"{profit_rate:+.2f}",
+                peak_profit=f"{peak_profit:+.2f}",
+                current_ai_score=f"{current_ai_score:.0f}",
+                held_sec=int(held_sec or 0),
+                profit_locked=False,
+                **_scalp_sim_euphoria_context_fields(euphoria_context),
+            ),
+        )
+        return None
+    if level == 2:
+        profit_locked = profit_rate >= _rule_float("SCALP_SIM_EUPHORIA_PROFIT_LOCKED_MIN_PCT", 0.30)
+        action_type = "ALLOW_PROFIT_LOCKED_SCALE_IN" if profit_locked else "DISABLE_AGGRESSIVE_SCALE_IN"
+        if not profit_locked or _scalp_sim_euphoria_action_already_applied(stock, euphoria_context, level, action_type):
+            _log_holding_pipeline(
+                stock,
+                code,
+                "scalp_sim_euphoria_scale_in_blocked",
+                **_scalp_sim_event_fields(
+                    threshold_family="panic_lifecycle_actuator",
+                    sim_record_id=stock.get("sim_record_id"),
+                    sim_parent_record_id=stock.get("sim_parent_record_id"),
+                    source_stage="scale_in",
+                    runtime_effect="sim_scale_in_blocked",
+                    euphoria_action_type=action_type,
+                    profit_rate=f"{profit_rate:+.2f}",
+                    peak_profit=f"{peak_profit:+.2f}",
+                    current_ai_score=f"{current_ai_score:.0f}",
+                    held_sec=int(held_sec or 0),
+                    profit_locked=profit_locked,
+                    **_scalp_sim_euphoria_context_fields(euphoria_context),
+                ),
+            )
+            return None
+        action_id = _mark_scalp_sim_euphoria_action(stock, euphoria_context, level, action_type, time.time())
+        return {
+            "should_add": True,
+            "add_type": "PYRAMID",
+            "reason": "euphoria_profit_locked_scale_in",
+            "source": "euphoria_lifecycle",
+            "cohort": "euphoria_lifecycle_profit_locked_scale_in",
+            "decision_authority": "sim_observation_only",
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "profit_rate": profit_rate,
+            "peak_profit": peak_profit,
+            "current_ai_score": current_ai_score,
+            "held_sec": held_sec,
+            "euphoria_action_type": action_type,
+            "euphoria_action_id": action_id,
+            "profit_locked": True,
+            **_scalp_sim_euphoria_context_fields(euphoria_context),
+        }
+    return {}
+
+
 def _evaluate_scale_in_signal(
     stock,
     code,
@@ -13471,6 +14138,19 @@ def _evaluate_scale_in_signal(
                         ),
                     )
                     return None
+        euphoria_scale_in = _evaluate_scalp_sim_euphoria_scale_in(
+            stock=stock,
+            code=code,
+            strategy=raw_strategy,
+            profit_rate=profit_rate,
+            peak_profit=peak_profit,
+            current_ai_score=current_ai_score,
+            held_sec=held_sec,
+        )
+        if euphoria_scale_in is None:
+            return None
+        if euphoria_scale_in.get("should_add"):
+            return euphoria_scale_in
         sim_window = _evaluate_scalp_sim_scale_in_window_expansion(
             stock=stock,
             strategy=raw_strategy,
