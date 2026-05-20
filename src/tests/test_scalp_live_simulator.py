@@ -27,6 +27,7 @@ def _reset_state(monkeypatch, tmp_path):
         SCALP_LIVE_SIMULATOR_QTY=1,
         SCALP_LIVE_SIMULATOR_FILL_POLICY="signal_inclusive_best_ask_v1",
         SCALP_LIVE_SIMULATOR_ENTRY_TIMEOUT_SEC=90,
+        SCALP_SIM_PANIC_FORCE_NOOP=True,
     )
     monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
     monkeypatch.setattr(state_handlers, "ACTIVE_TARGETS", [])

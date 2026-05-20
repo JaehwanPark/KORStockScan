@@ -75,3 +75,19 @@ def test_target_defaults_include_intraday_high_low():
 
     assert target["high"] == 0
     assert target["low"] == 0
+    assert target["foreign_broker_net_est_qty"] == 0
+    assert target["foreign_broker_net_est_delta_qty"] == 0
+
+
+def test_send_reg_subscribes_foreign_broker_and_program_types():
+    manager = KiwoomWSManager("test-token")
+    fake_ws = _FakeWS([])
+    manager.websocket = fake_ws
+    manager._session_ready.set()
+
+    asyncio.run(manager._send_reg(["005930"]))
+
+    payload = json.loads(fake_ws.sent[0])
+    reg_types = [entry["type"][0] for entry in payload["data"]]
+    assert "0F" in reg_types
+    assert "0w" in reg_types

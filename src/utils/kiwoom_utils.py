@@ -2332,6 +2332,216 @@ def get_investor_flow_summary_ka10059(token, code, base_dt=None):
     return res
 
 
+def _kiwoom_signed_int(value, default=0):
+    try:
+        text = str(value if value is not None else "").strip().replace(",", "").replace("+", "")
+        if not text:
+            return default
+        return int(float(text))
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalize_investor_row(row):
+    if not isinstance(row, dict):
+        return {}
+    foreign = _kiwoom_signed_int(row.get("frgnr_invsr"))
+    inst = _kiwoom_signed_int(row.get("orgn"))
+    retail = _kiwoom_signed_int(row.get("ind_invsr"))
+    return {
+        "foreign_net": foreign,
+        "inst_net": inst,
+        "retail_net": retail,
+        "fin_net": _kiwoom_signed_int(row.get("fnnc_invt")),
+        "trust_net": _kiwoom_signed_int(row.get("invtrt")),
+        "pension_net": _kiwoom_signed_int(row.get("penfnd_etc")),
+        "private_net": _kiwoom_signed_int(row.get("samo_fund")),
+        "smart_money_net": foreign + inst,
+    }
+
+
+def get_investor_period_total_ka10061(token, code, start_dt, end_dt, amt_qty_tp="2", trde_tp="0", unit_tp="1", is_nxt=None):
+    """[ka10061] 종목별 외인/기관 기간 합계.
+
+    Kiwoom REST access remains owned by this module; downstream resolvers consume
+    the normalized dict only.
+    """
+    req_code = get_effective_kiwoom_code(code, is_nxt=is_nxt)
+    start_dt = str(start_dt).replace("-", "")
+    end_dt = str(end_dt).replace("-", "")
+    cache_key = (str(req_code), start_dt, end_dt, str(amt_qty_tp), str(trde_tp), str(unit_tp))
+    cached = _cache_get("ka10061_investor_period_total", cache_key)
+    if cached is not None:
+        return cached
+
+    url = get_api_url("/api/dostk/stkinfo")
+    payload = {
+        "stk_cd": str(req_code),
+        "strt_dt": start_dt,
+        "end_dt": end_dt,
+        "amt_qty_tp": str(amt_qty_tp),
+        "trde_tp": str(trde_tp),
+        "unit_tp": str(unit_tp),
+    }
+    result = {
+        "source": "ka10061",
+        "stock_code": str(req_code),
+        "start_dt": start_dt,
+        "end_dt": end_dt,
+        "row_count": 0,
+        **_normalize_investor_row({}),
+    }
+    results = fetch_kiwoom_api_continuous(
+        url=url, token=token, api_id="ka10061", payload=payload, use_continuous=False
+    )
+    rows = []
+    for res in results or []:
+        rows.extend(res.get("stk_invsr_orgn_tot", []) or [])
+    if rows:
+        result.update(_normalize_investor_row(rows[0]))
+        result["row_count"] = len(rows)
+    return _cache_set(
+        "ka10061_investor_period_total",
+        cache_key,
+        result,
+        getattr(TRADING_RULES, "KIWOOM_INVESTOR_CACHE_TTL_SEC", 60.0),
+    )
+
+
+def get_intraday_investor_trade_ka10063(
+    token,
+    market_tp="000",
+    amt_qty_tp="2",
+    investor="6",
+    frgn_all="0",
+    smtm_netprps_tp="0",
+    stex_tp="3",
+):
+    """[ka10063] 장중 투자자별 매매 순위/목록.
+
+    Returns rows keyed by normalized stock code. This helper is intended for
+    one-shot source collection or smoke tests, not per-symbol tight loops.
+    """
+    cache_key = (str(market_tp), str(amt_qty_tp), str(investor), str(frgn_all), str(smtm_netprps_tp), str(stex_tp))
+    cached = _cache_get("ka10063_intraday_investor_trade", cache_key)
+    if cached is not None:
+        return cached
+
+    url = get_api_url("/api/dostk/mrkcond")
+    payload = {
+        "mrkt_tp": str(market_tp),
+        "amt_qty_tp": str(amt_qty_tp),
+        "invsr": str(investor),
+        "frgn_all": str(frgn_all),
+        "smtm_netprps_tp": str(smtm_netprps_tp),
+        "stex_tp": str(stex_tp),
+    }
+    results = fetch_kiwoom_api_continuous(
+        url=url, token=token, api_id="ka10063", payload=payload, use_continuous=False
+    )
+    rows_by_code = {}
+    for res in results or []:
+        for row in res.get("opmr_invsr_trde", []) or []:
+            code = str(row.get("stk_cd") or row.get("stck_cd") or "").strip().lstrip("A")
+            if not code:
+                continue
+            rows_by_code[code] = {
+                "source": "ka10063",
+                "stock_code": code,
+                "stock_name": row.get("stk_nm") or row.get("stck_nm"),
+                "net_qty": _kiwoom_signed_int(row.get("netprps_qty")),
+                "net_amt": _kiwoom_signed_int(row.get("netprps_amt")),
+                "buy_qty": _kiwoom_signed_int(row.get("buy_qty") or row.get("buy_cntr_qty")),
+                "sell_qty": _kiwoom_signed_int(row.get("sell_qty") or row.get("sell_cntr_qty")),
+                "raw": row,
+            }
+    return _cache_set(
+        "ka10063_intraday_investor_trade",
+        cache_key,
+        rows_by_code,
+        getattr(TRADING_RULES, "KIWOOM_INVESTOR_CACHE_TTL_SEC", 60.0),
+    )
+
+
+def get_intraday_investor_chart_ka10064(token, code, market_tp="000", amt_qty_tp="2", trde_tp="0", is_nxt=None):
+    """[ka10064] 종목별 장중 외인/기관 매매 차트 최신값."""
+    req_code = get_effective_kiwoom_code(code, is_nxt=is_nxt)
+    cache_key = (str(req_code), str(market_tp), str(amt_qty_tp), str(trde_tp))
+    cached = _cache_get("ka10064_intraday_investor_chart", cache_key)
+    if cached is not None:
+        return cached
+
+    url = get_api_url("/api/dostk/chart")
+    payload = {
+        "mrkt_tp": str(market_tp),
+        "amt_qty_tp": str(amt_qty_tp),
+        "trde_tp": str(trde_tp),
+        "stk_cd": str(req_code),
+    }
+    results = fetch_kiwoom_api_continuous(
+        url=url, token=token, api_id="ka10064", payload=payload, use_continuous=False
+    )
+    rows = []
+    for res in results or []:
+        rows.extend(res.get("opmr_invsr_trde_chart", []) or [])
+    rows = [row for row in rows if isinstance(row, dict)]
+    rows.sort(key=lambda row: str(row.get("tm") or row.get("time") or ""))
+    latest = rows[-1] if rows else {}
+    result = {
+        "source": "ka10064",
+        "stock_code": str(req_code),
+        "row_count": len(rows),
+        "latest_time": latest.get("tm") or latest.get("time"),
+        **_normalize_investor_row(latest),
+        "raw_latest": latest,
+    }
+    return _cache_set(
+        "ka10064_intraday_investor_chart",
+        cache_key,
+        result,
+        getattr(TRADING_RULES, "KIWOOM_INVESTOR_CACHE_TTL_SEC", 60.0),
+    )
+
+
+def get_postclose_investor_trade_ka10066(token, market_tp="000", amt_qty_tp="2", trde_tp="0", stex_tp="3"):
+    """[ka10066] 장마감 후 투자자별 매매 목록."""
+    cache_key = (str(market_tp), str(amt_qty_tp), str(trde_tp), str(stex_tp))
+    cached = _cache_get("ka10066_postclose_investor_trade", cache_key)
+    if cached is not None:
+        return cached
+
+    url = get_api_url("/api/dostk/mrkcond")
+    payload = {
+        "mrkt_tp": str(market_tp),
+        "amt_qty_tp": str(amt_qty_tp),
+        "trde_tp": str(trde_tp),
+        "stex_tp": str(stex_tp),
+    }
+    results = fetch_kiwoom_api_continuous(
+        url=url, token=token, api_id="ka10066", payload=payload, use_continuous=False
+    )
+    rows_by_code = {}
+    for res in results or []:
+        for row in res.get("opaf_invsr_trde", []) or []:
+            code = str(row.get("stk_cd") or row.get("stck_cd") or "").strip().lstrip("A")
+            if not code:
+                continue
+            normalized = _normalize_investor_row(row)
+            rows_by_code[code] = {
+                "source": "ka10066",
+                "stock_code": code,
+                "stock_name": row.get("stk_nm") or row.get("stck_nm"),
+                **normalized,
+                "raw": row,
+            }
+    return _cache_set(
+        "ka10066_postclose_investor_trade",
+        cache_key,
+        rows_by_code,
+        getattr(TRADING_RULES, "KIWOOM_INVESTOR_CACHE_TTL_SEC", 60.0),
+    )
+
+
 def summarize_ticks_for_realtime_ka10003(token, code, limit=20):
     """[ka10003] 최근 체결정보를 실시간 분석용 매수/매도 편향 요약으로 변환"""
     ticks = get_tick_history_ka10003(token, code, limit=limit)

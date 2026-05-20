@@ -2372,11 +2372,12 @@ def test_scalping_pre_ai_soft_gate_allows_ai_and_blocks_low_liquidity_at_submit(
     state_handlers.datetime = FixedDateTime
     state_handlers.TRADING_RULES = replace(
         CONFIG,
-        SCALP_PRE_AI_SOFT_GATE_ENABLED=True,
-        SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED=True,
-        SCALP_LIQUIDITY_PRE_SUBMIT_GUARD_ENABLED=True,
-        SCALP_OVERBOUGHT_PULLBACK_GUARD_ENABLED=True,
-    )
+            SCALP_PRE_AI_SOFT_GATE_ENABLED=True,
+            SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED=True,
+            SCALP_LIQUIDITY_PRE_SUBMIT_GUARD_ENABLED=True,
+            SCALP_OVERBOUGHT_PULLBACK_GUARD_ENABLED=True,
+            SCALP_SIM_PANIC_FORCE_NOOP=True,
+        )
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()
     state_handlers.ACTIVE_TARGETS = []
@@ -2507,10 +2508,11 @@ def test_scalping_overbought_reaches_ai_but_submit_requires_pullback_or_rebreak(
     state_handlers.datetime = FixedDateTime
     state_handlers.TRADING_RULES = replace(
         CONFIG,
-        SCALP_PRE_AI_SOFT_GATE_ENABLED=True,
-        SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED=True,
-        SCALP_OVERBOUGHT_PULLBACK_GUARD_ENABLED=True,
-    )
+            SCALP_PRE_AI_SOFT_GATE_ENABLED=True,
+            SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED=True,
+            SCALP_OVERBOUGHT_PULLBACK_GUARD_ENABLED=True,
+            SCALP_SIM_PANIC_FORCE_NOOP=True,
+        )
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()
     state_handlers.ACTIVE_TARGETS = []

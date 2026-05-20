@@ -229,6 +229,12 @@ class KiwoomWSManager:
                 'prog_net_amt': 0, 'prog_delta_amt': 0,
                 'prog_buy_qty': 0, 'prog_buy_amt': 0,
                 'prog_sell_qty': 0, 'prog_sell_amt': 0,
+                'foreign_broker_sell_est_qty': 0,
+                'foreign_broker_sell_est_delta_qty': 0,
+                'foreign_broker_buy_est_qty': 0,
+                'foreign_broker_buy_est_delta_qty': 0,
+                'foreign_broker_net_est_qty': 0,
+                'foreign_broker_net_est_delta_qty': 0,
                 'tick_trade_value': 0, 'cum_trade_value': 0,
                 'buy_exec_volume': 0, 'sell_exec_volume': 0,
                 'buy_ratio': 0.0, 'net_buy_exec_volume': 0,
@@ -240,6 +246,7 @@ class KiwoomWSManager:
                 'received_types': set(),
                 'last_ws_update_ts': 0.0,
                 'last_prog_update_ts': 0.0,
+                'last_foreign_broker_update_ts': 0.0,
                 'program_history': deque(maxlen=120),
                 'strength_momentum_history': deque(maxlen=history_maxlen),
                 '_first_tick_logged': False,
@@ -906,6 +913,22 @@ class KiwoomWSManager:
                                     'delta_amt': target['prog_delta_amt'],
                                 })
                                 target['last_prog_update_ts'] = time.time()
+
+                            # '0F' 주식당일거래원: 외국계 거래원 추정 수급
+                            if real_type == '0F':
+                                if '261' in values:
+                                    target['foreign_broker_sell_est_qty'] = self._safe_signed_int(values['261'])
+                                if '262' in values:
+                                    target['foreign_broker_sell_est_delta_qty'] = self._safe_signed_int(values['262'])
+                                if '263' in values:
+                                    target['foreign_broker_buy_est_qty'] = self._safe_signed_int(values['263'])
+                                if '264' in values:
+                                    target['foreign_broker_buy_est_delta_qty'] = self._safe_signed_int(values['264'])
+                                if '267' in values:
+                                    target['foreign_broker_net_est_qty'] = self._safe_signed_int(values['267'])
+                                if '268' in values:
+                                    target['foreign_broker_net_est_delta_qty'] = self._safe_signed_int(values['268'])
+                                target['last_foreign_broker_update_ts'] = time.time()
                             
                             target['received_types'].add(real_type)
                             target['last_ws_update_ts'] = time.time()
@@ -981,7 +1004,8 @@ class KiwoomWSManager:
                         'data': [
                             {'item': batch_codes, 'type': ['0B']},
                             {'item': batch_codes, 'type': ['0D']},
-                            {'item': batch_codes, 'type': ['0w']}
+                            {'item': batch_codes, 'type': ['0w']},
+                            {'item': batch_codes, 'type': ['0F']}
                         ]
                     }
                     await self.websocket.send(json.dumps(reg_packet))

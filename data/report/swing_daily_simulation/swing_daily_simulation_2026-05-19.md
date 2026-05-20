@@ -4,7 +4,7 @@
 - recommendation_rows: `20` / live `20` / diagnostic `0`
 - recommendation_sources: `{'recommendation_history': 17, 'daily_recommendations_v2_csv': 3}`
 - db_recommendation_rows: `17`
-- source_signal_dates: `['2026-05-18', '2026-05-19']`
+- source_signal_dates: `['2026-05-19']`
 - simulated_count: `20`
 - closed_count: `0`
 - planned_or_open_count: `20`
@@ -41,7 +41,7 @@
 | stage | raw | unique_records | examples |
 | --- | ---: | ---: | --- |
 | `blocked_swing_gap` | 14396 | 2 | LX홀딩스(383800), LX홀딩스(383800), LX홀딩스(383800), LX홀딩스(383800), LX홀딩스(383800) |
-| `blocked_gatekeeper_reject` | 39 | 8 | 현대지에프홀딩스(005440), 미스토홀딩스(081660), KT&G(033780), DB손해보험(005830), 현대해상(001450) |
+| `blocked_gatekeeper_reject` | 40 | 8 | 현대지에프홀딩스(005440), 미스토홀딩스(081660), KT&G(033780), DB손해보험(005830), 현대해상(001450) |
 
 ## Simulated Trades
 
@@ -62,8 +62,8 @@
 | `034220` | LG디스플레이 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `081660` | 미스토홀딩스 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `086280` | 현대글로비스 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
+| `091810` | 트리니티항공 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `204320` | HL만도 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
+| `244920` | 에이플러스에셋 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
+| `251270` | 넷마블 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `307950` | 현대오토에버 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `361610` | SK아이이테크놀로지 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `383800` | LX홀딩스 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `900140` | 엘브이엠씨홀딩스 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |

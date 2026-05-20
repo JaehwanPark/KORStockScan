@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "date": "2026-05-20",
+  "generated_at": "2026-05-20T11:40:02+09:00",
+  "report_type": "institutional_flow_context",
+  "runtime_effect": false,
+  "decision_authority": "source_only_lifecycle_feature",
+  "metric_role": "source_quality_feature",
+  "forbidden_uses": [
+    "single_factor_buy_or_scale_in",
+    "broker_guard_override",
+    "threshold_mutation",
+    "provider_route_mutation"
+  ],
+  "runtime_feature_keys": [
+    "foreign_net_intraday_qty",
+    "foreign_net_intraday_amt",
+    "institution_net_intraday_qty",
+    "institution_net_intraday_amt",
+    "foreign_broker_est_net_qty",
+    "foreign_broker_est_delta_qty",
+    "program_net_qty",
+    "program_delta_qty",
+    "program_net_amt",
+    "foreign_net_roll5",
+    "inst_net_roll5",
+    "dual_net_buy",
+    "smart_money_net",
+    "institutional_accumulation_score",
+    "institutional_flow_regime",
+    "institutional_flow_source",
+    "institutional_flow_status",
+    "institutional_flow_age_sec"
+  ],
+  "summary": {
+    "code_count": 1,
+    "row_count": 1,
+    "ok_count": 1,
+    "partial_count": 0,
+    "missing_count": 0,
+    "token_error_count": 0,
+    "parse_error_count": 0,
+    "join_rate_pct": 100.0,
+    "source_mix": {
+      "ka10059+ka10061": 1
+    },
+    "status_counts": {
+      "OK": 1
+    },
+    "top_net_buy": [
+      {
+        "stock_code": "005930",
+        "smart_money_net": 579000,
+        "foreign_net_roll5": 0,
+        "inst_net_roll5": 4920503,
+        "regime": "INSTITUTION_ACCUMULATION"
+      }
+    ]
+  },
+  "rows": [
+    {
+      "stock_code": "005930",
+      "foreign_net_intraday_qty": 0,
+      "foreign_net_intraday_amt": 0,
+      "institution_net_intraday_qty": 0,
+      "institution_net_intraday_amt": 0,
+      "foreign_broker_est_net_qty": 0,
+      "foreign_broker_est_delta_qty": 0,
+      "program_net_qty": 0,
+      "program_delta_qty": 0,
+      "program_net_amt": 0,
+      "foreign_net_roll5": 0,
+      "inst_net_roll5": 4920503,
+      "dual_net_buy": false,
+      "smart_money_net": 579000,
+      "institutional_accumulation_score": 20,
+      "institutional_flow_regime": "INSTITUTION_ACCUMULATION",
+      "institutional_flow_source": "ka10059+ka10061",
+      "institutional_flow_status": "OK",
+      "institutional_flow_age_sec": null,
+      "runtime_effect": false,
+      "decision_authority": "source_only_lifecycle_feature"
+    }
+  ],
+  "warnings": []
+}

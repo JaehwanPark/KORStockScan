@@ -25,6 +25,14 @@ def _isolate_pattern_lab_audit_dirs(tmp_path, monkeypatch):
             tmp_path / "missing_lifecycle_matrix" / f"lifecycle_decision_matrix_{target_date}.md",
         ),
     )
+    monkeypatch.setattr(
+        mod,
+        "institutional_flow_report_paths",
+        lambda target_date: (
+            tmp_path / "missing_institutional_flow_context" / f"institutional_flow_context_{target_date}.json",
+            tmp_path / "missing_institutional_flow_context" / f"institutional_flow_context_{target_date}.md",
+        ),
+    )
 
 
 def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeypatch):

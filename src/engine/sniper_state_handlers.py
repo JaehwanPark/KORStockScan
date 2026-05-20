@@ -50,7 +50,10 @@ from src.engine.sniper_strength_shadow_feedback import record_shadow_candidate
 from src.engine.sniper_gatekeeper_replay import record_gatekeeper_snapshot
 from src.engine.sniper_post_sell_feedback import record_sim_post_sell_candidate
 from src.engine.holding_exit_matrix_runtime import resolve_holding_exit_matrix_scale_in_bias
-from src.engine.lifecycle_decision_matrix_runtime import resolve_lifecycle_decision
+from src.engine.lifecycle_decision_matrix_runtime import (
+    resolve_lifecycle_decision,
+    resolve_panic_risk_regime_context,
+)
 from src.engine.sniper_dynamic_thresholds import (
     estimate_turnover_hint,
     get_dynamic_scalp_thresholds,
@@ -2004,6 +2007,312 @@ def _scalp_sim_sell_fill_price(ws_data: dict, curr_price: int) -> tuple[int, int
     return fill_price, best_ask, best_bid
 
 
+def _scalp_sim_panic_enabled() -> bool:
+    return _rule_bool("SCALP_SIM_PANIC_LIFECYCLE_ENABLED", True) and not _rule_bool(
+        "SCALP_SIM_PANIC_FORCE_NOOP", False
+    )
+
+
+def _scalp_sim_panic_eligible(stock: dict | None, strategy: str | None = None) -> bool:
+    if not _scalp_sim_panic_enabled():
+        return False
+    if not _is_scalp_simulated_position(stock, strategy):
+        return False
+    if _boolish_true((stock or {}).get("actual_order_submitted")):
+        return False
+    if not _boolish_true((stock or {}).get("broker_order_forbidden")):
+        return False
+    if (stock or {}).get("id") and not (stock or {}).get("sim_record_id"):
+        return False
+    return True
+
+
+def _scalp_sim_panic_context_fields(panic_context: dict | None) -> dict:
+    context = panic_context if isinstance(panic_context, dict) else {}
+    return {
+        "risk_regime_context_owner": "lifecycle_decision_matrix_runtime",
+        "panic_context_status": context.get("panic_context_status", "MISSING"),
+        "panic_level": context.get("panic_level", 0),
+        "panic_level_reason": context.get("panic_level_reason", "-"),
+        "panic_epoch_id": context.get("panic_epoch_id", "-"),
+        "market_risk_state": context.get("market_risk_state", "-"),
+        "breadth_risk_off": bool(context.get("breadth_risk_off")),
+        "single_market_risk_off": bool(context.get("single_market_risk_off")),
+        "confirmed_risk_off": bool(context.get("confirmed_risk_off")),
+        "liquidity_state": context.get("liquidity_state", "-"),
+        "risk_off_components": context.get("risk_off_components") or {},
+        "panic_source_files": context.get("panic_source_files") or {},
+        "decision_confidence": context.get("decision_confidence", 0.0),
+    }
+
+
+def _scalp_sim_panic_bottoming_context_fields(context: dict | None) -> dict:
+    payload = context if isinstance(context, dict) else {}
+    return {
+        "market_regime": payload.get("market_regime", "-"),
+        "symbol_regime": payload.get("symbol_regime", "-"),
+        "panic_bottoming_entry_allowed": bool(payload.get("panic_bottoming_entry_allowed")),
+        "panic_bottoming_entry_reason": payload.get("panic_bottoming_entry_reason", "-"),
+        "panic_bottoming_arm": payload.get("panic_bottoming_arm", "-"),
+        "panic_bottoming_ai_score": payload.get("panic_bottoming_ai_score", "-"),
+        "panic_bottoming_buy_pressure_10t": payload.get("panic_bottoming_buy_pressure_10t", "-"),
+        "panic_bottoming_distance_from_high_pct": payload.get(
+            "panic_bottoming_distance_from_high_pct", "-"
+        ),
+        "panic_bottoming_latest_strength": payload.get("panic_bottoming_latest_strength", "-"),
+        "panic_bottoming_micro_vwap_bp": payload.get("panic_bottoming_micro_vwap_bp", "-"),
+        "panic_bottoming_curr_vs_ma5_bp": payload.get("panic_bottoming_curr_vs_ma5_bp", "-"),
+        "panic_bottoming_tick_accel": payload.get("panic_bottoming_tick_accel", "-"),
+        "panic_bottoming_large_sell_print_detected": bool(
+            payload.get("panic_bottoming_large_sell_print_detected", False)
+        ),
+    }
+
+
+def _resolve_scalp_sim_panic_bottoming_entry_context(
+    *,
+    stock: dict,
+    runtime: dict,
+    current_ai_score: float,
+    panic_context: dict,
+) -> dict:
+    """Classify level-1 market risk-off entries that are bottoming candidates.
+
+    This is sim-only.  It deliberately does not relax real entry, broker, or
+    submit guards; it only prevents breadth-only risk-off from erasing useful
+    recovery/bottoming samples in the scalp simulator.
+    """
+    if not _rule_bool("SCALP_SIM_PANIC_BOTTOMING_ENTRY_ENABLED", True):
+        return {"panic_bottoming_entry_allowed": False, "panic_bottoming_entry_reason": "disabled"}
+    if str(panic_context.get("panic_context_status") or "") != "OK":
+        return {"panic_bottoming_entry_allowed": False, "panic_bottoming_entry_reason": "panic_context_not_ok"}
+    level = _safe_int(panic_context.get("panic_level"), 0)
+    max_level = max(0, _rule_int("SCALP_SIM_PANIC_BOTTOMING_ENTRY_MAX_LEVEL", 1))
+    if level <= 0 or level > max_level:
+        return {"panic_bottoming_entry_allowed": False, "panic_bottoming_entry_reason": "panic_level_not_eligible"}
+    if bool(panic_context.get("confirmed_risk_off")):
+        return {"panic_bottoming_entry_allowed": False, "panic_bottoming_entry_reason": "confirmed_risk_off"}
+    if str(panic_context.get("liquidity_state") or "").upper() in {"BROKEN", "LIQUIDITY_BROKEN", "THIN_BROKEN"}:
+        return {"panic_bottoming_entry_allowed": False, "panic_bottoming_entry_reason": "liquidity_broken"}
+
+    overlap = stock.get("last_ai_overlap_snapshot") if isinstance(stock.get("last_ai_overlap_snapshot"), dict) else {}
+    reversal = stock.get("last_reversal_features") if isinstance(stock.get("last_reversal_features"), dict) else {}
+    runtime = runtime if isinstance(runtime, dict) else {}
+    gate_context = runtime.get("scalp_pre_ai_gate_context") if isinstance(runtime.get("scalp_pre_ai_gate_context"), dict) else {}
+    overbought = gate_context.get("overbought") if isinstance(gate_context.get("overbought"), dict) else {}
+
+    ai_score = _safe_float(current_ai_score, 0.0)
+    buy_pressure = _safe_float(
+        reversal.get("buy_pressure_10t", overlap.get("buy_pressure_10t", stock.get("last_buy_pressure_10t", 0.0))),
+        0.0,
+    )
+    distance_from_high = _safe_float(
+        overlap.get("distance_from_day_high_pct", overbought.get("distance_from_day_high_pct", 0.0)),
+        0.0,
+    )
+    latest_strength = _safe_float(
+        overlap.get("latest_strength", stock.get("latest_strength", stock.get("v_pw", 0.0))),
+        0.0,
+    )
+    micro_vwap_bp = _safe_float(reversal.get("curr_vs_micro_vwap_bp"), 0.0)
+    ma5_bp = _safe_float(reversal.get("curr_vs_ma5_bp"), 0.0)
+    tick_accel = _safe_float(
+        reversal.get("tick_acceleration_ratio", reversal.get("tick_acceleration_ratio_raw", 0.0)),
+        0.0,
+    )
+    large_sell = _boolish_true(reversal.get("large_sell_print_detected"))
+
+    min_score = _rule_float("SCALP_SIM_PANIC_BOTTOMING_MIN_AI_SCORE", 60.0)
+    min_pressure = _rule_float("SCALP_SIM_PANIC_BOTTOMING_MIN_BUY_PRESSURE", 55.0)
+    max_distance = _rule_float("SCALP_SIM_PANIC_BOTTOMING_MAX_DISTANCE_FROM_HIGH_PCT", -3.0)
+    min_strength = _rule_float("SCALP_SIM_PANIC_BOTTOMING_MIN_STRENGTH", 65.0)
+    conditions = {
+        "ai_score": ai_score >= min_score,
+        "buy_pressure": buy_pressure >= min_pressure,
+        "distance_from_high": distance_from_high <= max_distance,
+        "latest_strength": latest_strength >= min_strength,
+        "micro_or_ma5_reclaim": micro_vwap_bp >= 0.0 or ma5_bp >= 0.0,
+        "no_large_sell_print": not large_sell,
+    }
+    allowed = all(conditions.values())
+    failed = [key for key, ok in conditions.items() if not ok]
+    return {
+        "market_regime": "RISK_OFF" if bool(panic_context.get("breadth_risk_off")) else str(panic_context.get("market_risk_state") or "-"),
+        "symbol_regime": "BOTTOMING" if allowed else "WEAK",
+        "panic_bottoming_entry_allowed": allowed,
+        "panic_bottoming_entry_reason": "level1_bottoming_candidate" if allowed else "bottoming_conditions_failed:" + ",".join(failed),
+        "panic_bottoming_arm": "risk_off_bottoming_probe_entry" if allowed else "-",
+        "panic_bottoming_ai_score": f"{ai_score:.1f}",
+        "panic_bottoming_buy_pressure_10t": f"{buy_pressure:.2f}",
+        "panic_bottoming_distance_from_high_pct": f"{distance_from_high:.3f}",
+        "panic_bottoming_latest_strength": f"{latest_strength:.1f}",
+        "panic_bottoming_micro_vwap_bp": f"{micro_vwap_bp:.2f}",
+        "panic_bottoming_curr_vs_ma5_bp": f"{ma5_bp:.2f}",
+        "panic_bottoming_tick_accel": f"{tick_accel:.3f}",
+        "panic_bottoming_large_sell_print_detected": large_sell,
+        "panic_bottoming_conditions": conditions,
+    }
+
+
+def _resolve_scalp_sim_panic_context(now_ts: float | None = None) -> dict:
+    if not _scalp_sim_panic_enabled():
+        return {"panic_context_status": "DISABLED", "panic_level": 0, "panic_level_reason": "disabled"}
+    resolved_now = None
+    if now_ts:
+        try:
+            resolved_now = datetime.fromtimestamp(float(now_ts))
+        except (TypeError, ValueError, OSError, OverflowError):
+            resolved_now = None
+    return resolve_panic_risk_regime_context(now=resolved_now)
+
+
+def _log_scalp_sim_panic_context_warning(stock: dict, code: str, stage: str, panic_context: dict) -> None:
+    if str(panic_context.get("panic_context_status") or "OK") == "OK":
+        return
+    warning_key = f"{stage}:{panic_context.get('panic_context_status')}:{datetime.now().date().isoformat()}"
+    if stock.get("last_scalp_sim_panic_context_warning_key") == warning_key:
+        return
+    _mutate_stock_state(stock, set_fields={"last_scalp_sim_panic_context_warning_key": warning_key})
+    _log_holding_pipeline(
+        stock,
+        code,
+        "scalp_sim_panic_context_warning",
+        **_scalp_sim_event_fields(
+            source_stage=stage,
+            runtime_effect="sim_noop_context_not_ok",
+            decision_authority="sim_observation_only",
+            **_scalp_sim_panic_context_fields(panic_context),
+        ),
+    )
+
+
+def _scalp_sim_panic_action_id(stock: dict, panic_context: dict, panic_level: int, action_type: str) -> str:
+    position_id = str(stock.get("sim_record_id") or stock.get("id") or stock.get("code") or "unknown")
+    epoch = str(panic_context.get("panic_epoch_id") or "-")
+    return f"{position_id}|{epoch}|L{int(panic_level)}|{str(action_type).upper()}"
+
+
+def _scalp_sim_panic_action_already_applied(stock: dict, panic_context: dict, panic_level: int, action_type: str) -> bool:
+    epoch = str(panic_context.get("panic_epoch_id") or "")
+    action = str(action_type or "").upper()
+    previous_epoch = str(stock.get("panic_epoch_id") or "")
+    previous_level = _safe_int(stock.get("last_panic_action_level"), 0)
+    previous_action = str(stock.get("last_panic_action_type") or "").upper()
+    if previous_epoch != epoch:
+        return False
+    if previous_level > int(panic_level):
+        return True
+    if previous_level == int(panic_level) and previous_action == action:
+        return True
+    if action == "REDUCE_PARTIAL" and previous_level == int(panic_level):
+        max_count = max(1, _rule_int("SCALP_SIM_PANIC_MAX_PARTIAL_COUNT_PER_EPOCH", 1))
+        return _safe_int(stock.get("panic_partial_exit_count"), 0) >= max_count
+    return False
+
+
+def _mark_scalp_sim_panic_action(stock: dict, panic_context: dict, panic_level: int, action_type: str, now_ts: float) -> str:
+    action = str(action_type or "").upper()
+    action_id = _scalp_sim_panic_action_id(stock, panic_context, panic_level, action)
+    partial_count = _safe_int(stock.get("panic_partial_exit_count"), 0)
+    if action == "REDUCE_PARTIAL":
+        partial_count += 1
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "panic_epoch_id": panic_context.get("panic_epoch_id"),
+            "last_panic_action_level": int(panic_level),
+            "last_panic_action_type": action,
+            "last_panic_partial_exit_at": now_ts if action == "REDUCE_PARTIAL" else stock.get("last_panic_partial_exit_at"),
+            "panic_partial_exit_count": partial_count,
+            "panic_lifecycle_action_id": action_id,
+        },
+    )
+    return action_id
+
+
+def _scalp_sim_panic_extra_deterioration(stock: dict, profit_rate: float) -> bool:
+    if profit_rate < -0.30:
+        return True
+    features = stock.get("last_reversal_features") if isinstance(stock.get("last_reversal_features"), dict) else {}
+    if _safe_float(features.get("curr_vs_micro_vwap_bp"), 0.0) < 0:
+        return True
+    if _safe_float(features.get("net_aggressive_delta_10t"), 0.0) < 0:
+        return True
+    for key in ("holding_flow_ofi_regime", "ofi_regime", "micro_risk_regime"):
+        if str(stock.get(key) or "").upper() in {"RISK_OFF", "BEARISH", "SELL_PRESSURE"}:
+            return True
+    return False
+
+
+def _resolve_scalp_sim_panic_holding_action(
+    *,
+    stock: dict,
+    strategy: str,
+    profit_rate: float,
+    panic_context: dict,
+) -> dict:
+    if not _rule_bool("SCALP_SIM_PANIC_HOLDING_EXIT_ENABLED", True):
+        return {"action": "NO_CHANGE", "reason": "holding_exit_disabled"}
+    if not _scalp_sim_panic_eligible(stock, strategy):
+        return {"action": "NO_CHANGE", "reason": "not_eligible"}
+    if str(panic_context.get("panic_context_status") or "") != "OK":
+        return {"action": "NO_CHANGE", "reason": "panic_context_not_ok"}
+    level = _safe_int(panic_context.get("panic_level"), 0)
+    if level <= 0:
+        return {"action": "NO_CHANGE", "reason": "normal"}
+    if level == 1:
+        if _rule_bool("SCALP_SIM_PANIC_PARTIAL_SELL_ENABLED", True) and _scalp_sim_panic_extra_deterioration(stock, profit_rate):
+            return {"action": "REDUCE_PARTIAL", "partial_ratio": 0.50, "reason": "level1_deterioration_partial"}
+        return {"action": "TRAIL_TIGHT", "partial_ratio": 0.0, "reason": "level1_trail_tight"}
+    if level == 2:
+        if profit_rate < -0.30:
+            return {"action": "REDUCE_PARTIAL", "partial_ratio": 0.80, "reason": "level2_loss_reduce"}
+        if profit_rate < 0.30:
+            return {"action": "REDUCE_PARTIAL", "partial_ratio": 0.50, "reason": "level2_breakeven_reduce"}
+        return {"action": "REDUCE_PARTIAL", "partial_ratio": 0.60, "reason": "level2_profit_protect"}
+    if profit_rate < 0:
+        return {"action": "EXIT", "partial_ratio": 1.0, "reason": "level3_loss_full_exit"}
+    return {"action": "REDUCE_PARTIAL", "partial_ratio": 0.70, "reason": "level3_profit_reduce"}
+
+
+def _resolve_scalp_sim_panic_sell_price(
+    *,
+    ws_data: dict | None,
+    curr_price: int,
+    panic_context: dict,
+) -> dict:
+    best_ask, best_bid = _get_best_levels_from_ws(ws_data or {})
+    spread_bps = _spread_bps_from_ws(ws_data or {}, curr_price) or 0.0
+    liquidity_state = str(panic_context.get("liquidity_state") or "NORMAL").upper()
+    fallback_slippage = max(0.0, _rule_float("SCALP_SIM_PANIC_FALLBACK_SLIPPAGE_BPS", 10.0))
+    haircut = (
+        max(0.0, _rule_float("SCALP_SIM_PANIC_BROKEN_LIQUIDITY_HAIRCUT_BPS", 30.0))
+        if liquidity_state in {"BROKEN", "LIQUIDITY_BROKEN", "THIN", "THIN_BROKEN"}
+        else 0.0
+    )
+    if best_bid > 0:
+        sell_price = best_bid
+        source = "best_bid"
+        slippage_bps = float(spread_bps or 0.0)
+    else:
+        base_price = max(0, _safe_int(curr_price, 0))
+        slippage_bps = fallback_slippage + haircut
+        sell_price = int(max(0, math.floor(base_price * (1.0 - (slippage_bps / 10000.0)))))
+        source = "current_price_slippage" if base_price > 0 else "unpriced"
+    quote_quality = "BAD" if sell_price <= 0 else "DEGRADED" if liquidity_state != "NORMAL" or spread_bps >= 80 else "OK"
+    fill_quality = "DEGRADED" if quote_quality != "OK" or _safe_int(panic_context.get("panic_level"), 0) >= 2 else "NORMAL"
+    return {
+        "sell_price": sell_price,
+        "assumed_fill_price_source": source,
+        "assumed_slippage_bps": round(float(slippage_bps or 0.0), 4),
+        "fill_quality": fill_quality,
+        "quote_quality_state": quote_quality,
+        "best_bid": best_bid,
+        "best_ask": best_ask,
+        "spread_bps": round(float(spread_bps or 0.0), 4),
+    }
+
+
 def _initialize_scalp_sim_holding_defaults(stock: dict, buy_price: int) -> None:
     strategy = "SCALPING"
     position_tag = normalize_position_tag(strategy, stock.get("position_tag"))
@@ -2347,6 +2656,93 @@ def _maybe_arm_scalp_sim_candidate_window(
     return bool(armed)
 
 
+def _should_block_scalp_sim_entry_for_panic(
+    *,
+    stock: dict,
+    code: str,
+    runtime: dict,
+    current_ai_score: float,
+) -> bool:
+    if not _rule_bool("SCALP_SIM_PANIC_ENTRY_BLOCK_ENABLED", True):
+        return False
+    if not _scalp_sim_panic_enabled():
+        return False
+    panic_context = _resolve_scalp_sim_panic_context(_safe_float((runtime or {}).get("now_ts"), 0.0))
+    if str(panic_context.get("panic_context_status") or "") != "OK":
+        _log_entry_pipeline(
+            stock,
+            code,
+            "scalp_sim_panic_context_warning",
+            **_scalp_sim_event_fields(
+                source_stage="entry",
+                runtime_effect="sim_noop_context_not_ok",
+                decision_authority="sim_observation_only",
+                **_scalp_sim_panic_context_fields(panic_context),
+            ),
+        )
+        return False
+    level = _safe_int(panic_context.get("panic_level"), 0)
+    block_level = max(1, _rule_int("SCALP_SIM_PANIC_BLOCK_ENTRY_LEVEL", 1))
+    if level < block_level:
+        return False
+    bottoming_context = _resolve_scalp_sim_panic_bottoming_entry_context(
+        stock=stock,
+        runtime=runtime or {},
+        current_ai_score=current_ai_score,
+        panic_context=panic_context,
+    )
+    if bool(bottoming_context.get("panic_bottoming_entry_allowed")):
+        action_id = _scalp_sim_panic_action_id(stock, panic_context, level, "ALLOW_BOTTOMING_ENTRY")
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "panic_bottoming_entry_allowed": True,
+                "panic_bottoming_arm": bottoming_context.get("panic_bottoming_arm"),
+                "panic_bottoming_entry_reason": bottoming_context.get("panic_bottoming_entry_reason"),
+                "symbol_regime": bottoming_context.get("symbol_regime"),
+                "market_regime": bottoming_context.get("market_regime"),
+            },
+        )
+        _log_entry_pipeline(
+            stock,
+            code,
+            "scalp_sim_panic_bottoming_entry_allowed",
+            **_scalp_sim_event_fields(
+                threshold_family="panic_lifecycle_actuator",
+                sim_parent_record_id=stock.get("id"),
+                source_stage="entry",
+                runtime_effect="sim_entry_allowed_bottoming_probe",
+                decision_authority="sim_observation_only",
+                ai_score=f"{current_ai_score:.1f}",
+                panic_lifecycle_action_id=action_id,
+                original_action=str((runtime or {}).get("original_action") or "BUY_SIGNAL"),
+                **_scalp_sim_candidate_window_context_fields(stock),
+                **_scalp_sim_panic_context_fields(panic_context),
+                **_scalp_sim_panic_bottoming_context_fields(bottoming_context),
+            ),
+        )
+        return False
+    action_id = _scalp_sim_panic_action_id(stock, panic_context, level, "BLOCK_ENTRY")
+    _log_entry_pipeline(
+        stock,
+        code,
+        "scalp_sim_panic_entry_blocked",
+        **_scalp_sim_event_fields(
+            threshold_family="panic_lifecycle_actuator",
+            sim_parent_record_id=stock.get("id"),
+            source_stage="entry",
+            runtime_effect="sim_entry_blocked",
+            ai_score=f"{current_ai_score:.1f}",
+            panic_lifecycle_action_id=action_id,
+            original_action=str((runtime or {}).get("original_action") or "BUY_SIGNAL"),
+            **_scalp_sim_candidate_window_context_fields(stock),
+            **_scalp_sim_panic_context_fields(panic_context),
+            **_scalp_sim_panic_bottoming_context_fields(bottoming_context),
+        ),
+    )
+    return True
+
+
 def maybe_arm_scalp_live_simulator_from_buy_signal(
     stock: dict,
     code: str,
@@ -2375,6 +2771,13 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
                 ai_score=f"{current_ai_score:.1f}",
             ),
         )
+        return False
+    if _should_block_scalp_sim_entry_for_panic(
+        stock=stock,
+        code=code,
+        runtime=runtime or {},
+        current_ai_score=current_ai_score,
+    ):
         return False
     limit_price = _safe_int(
         stock.get("target_buy_price") or stock.get("entry_armed_target_buy_price"),
@@ -2700,6 +3103,11 @@ def _complete_scalp_simulated_sell(
             trigger_profit_rate=f"{profit_rate:+.2f}",
             would_submit_stage="sell_order_sent",
             runtime_effect="simulated_completed_only",
+            decision_authority="sim_observation_only",
+            panic_epoch_id=stock.get("panic_epoch_id"),
+            last_panic_action_level=stock.get("last_panic_action_level"),
+            last_panic_action_type=stock.get("last_panic_action_type"),
+            panic_lifecycle_action_id=stock.get("panic_lifecycle_action_id"),
         ),
     )
     try:
@@ -2722,6 +3130,250 @@ def _complete_scalp_simulated_sell(
         log_error(f"[SCALP_SIM_POST_SELL] candidate record failed: {exc}")
     persist_scalp_simulator_state()
     return True
+
+
+def complete_scalp_sim_partial_sell(
+    *,
+    stock: dict,
+    code: str,
+    ws_data: dict | None,
+    curr_price: int,
+    now_ts: float,
+    partial_ratio: float,
+    panic_context: dict,
+    panic_action_reason: str,
+    profit_rate: float,
+) -> bool:
+    if not _scalp_sim_panic_eligible(stock, stock.get("strategy")):
+        return False
+    if not _rule_bool("SCALP_SIM_PANIC_PARTIAL_SELL_ENABLED", True):
+        return False
+    prev_buy_qty = _safe_int(stock.get("buy_qty"), 0)
+    if prev_buy_qty <= 0:
+        return False
+    ratio = max(0.0, min(1.0, _safe_float(partial_ratio, 0.0)))
+    sell_qty = int(math.floor(prev_buy_qty * ratio))
+    if ratio > 0 and sell_qty <= 0:
+        sell_qty = 1
+    sell_qty = min(prev_buy_qty, sell_qty)
+    min_remaining = max(0, _rule_int("SCALP_SIM_PANIC_MIN_REMAINING_QTY", 1))
+    remaining_qty = prev_buy_qty - sell_qty
+    level = _safe_int(panic_context.get("panic_level"), 0)
+    if sell_qty <= 0:
+        return False
+    if remaining_qty <= 0 or remaining_qty < min_remaining:
+        action_id = _mark_scalp_sim_panic_action(stock, panic_context, level, "EXIT", now_ts)
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "last_exit_decision_source": "SCALP_SIM_PANIC_LIFECYCLE",
+                "last_exit_rule": "scalp_sim_panic_lifecycle_full_exit",
+                "panic_lifecycle_action_id": action_id,
+            },
+        )
+        return _complete_scalp_simulated_sell(
+            stock=stock,
+            code=code,
+            ws_data=ws_data,
+            curr_price=curr_price,
+            now_ts=now_ts,
+            sell_reason_type="PANIC",
+            exit_rule="scalp_sim_panic_lifecycle_full_exit",
+            profit_rate=profit_rate,
+        )
+    if _scalp_sim_panic_action_already_applied(stock, panic_context, level, "REDUCE_PARTIAL"):
+        return False
+    fill = _resolve_scalp_sim_panic_sell_price(
+        ws_data=ws_data or {},
+        curr_price=curr_price,
+        panic_context=panic_context,
+    )
+    sell_price = _safe_int(fill.get("sell_price"), 0)
+    fill_event_fields = {key: value for key, value in fill.items() if key != "sell_price"}
+    if sell_price <= 0:
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scalp_sim_panic_partial_sell_unpriced",
+            **_scalp_sim_event_fields(
+                source_stage="panic_lifecycle_actuator",
+                runtime_effect="sim_partial_sell_skipped",
+                decision_authority="sim_observation_only",
+                prev_buy_qty=prev_buy_qty,
+                partial_ratio=f"{ratio:.4f}",
+                curr_price=curr_price,
+                **_scalp_sim_panic_context_fields(panic_context),
+            ),
+        )
+        return False
+    action_id = _mark_scalp_sim_panic_action(stock, panic_context, level, "REDUCE_PARTIAL", now_ts)
+    buy_price = _safe_int(stock.get("buy_price"), 0)
+    realized_profit_rate = calculate_net_profit_rate(buy_price, sell_price)
+    realized_pnl_krw = round((realized_profit_rate / 100.0) * buy_price * sell_qty)
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "buy_qty": remaining_qty,
+            "requested_buy_qty": remaining_qty,
+            "entry_filled_qty": remaining_qty,
+            "last_panic_reduced_qty": sell_qty,
+            "last_panic_realized_profit_rate": realized_profit_rate,
+            "last_panic_action_reason": panic_action_reason,
+            "panic_lifecycle_action_id": action_id,
+            "actual_order_submitted": False,
+        },
+    )
+    _log_holding_pipeline(
+        stock,
+        code,
+        "scalp_sim_partial_sell_order_assumed_filled",
+        **_scalp_sim_event_fields(
+            threshold_family="panic_lifecycle_actuator",
+            entry_adm_candidate_id=stock.get("entry_adm_candidate_id"),
+            sim_record_id=stock.get("sim_record_id"),
+            sim_parent_record_id=stock.get("sim_parent_record_id"),
+            source_stage="panic_lifecycle_actuator",
+            runtime_effect="simulated_partial_exit_only",
+            decision_authority="sim_observation_only",
+            sell_reason_type="PANIC",
+            exit_rule="scalp_sim_panic_lifecycle_partial_exit",
+            sell_qty=sell_qty,
+            remaining_qty=remaining_qty,
+            partial_ratio=f"{ratio:.4f}",
+            prev_buy_qty=prev_buy_qty,
+            buy_price=buy_price,
+            sell_price=sell_price,
+            assumed_fill_price=sell_price,
+            realized_profit_rate=f"{realized_profit_rate:+.2f}",
+            realized_pnl_krw=realized_pnl_krw,
+            trigger_profit_rate=f"{profit_rate:+.2f}",
+            panic_lifecycle_action_id=action_id,
+            panic_action_reason=panic_action_reason,
+            **fill_event_fields,
+            **_scalp_sim_panic_context_fields(panic_context),
+        ),
+    )
+    persist_scalp_simulator_state()
+    return True
+
+
+def _apply_scalp_sim_panic_holding_actuator(
+    *,
+    stock: dict,
+    code: str,
+    strategy: str,
+    ws_data: dict,
+    curr_price: int,
+    now_ts: float,
+    profit_rate: float,
+    peak_profit: float,
+    current_ai_score: float,
+    held_sec: float,
+) -> bool:
+    if not _scalp_sim_panic_eligible(stock, strategy):
+        return False
+    panic_context = _resolve_scalp_sim_panic_context(now_ts)
+    if str(panic_context.get("panic_context_status") or "") != "OK":
+        _log_scalp_sim_panic_context_warning(stock, code, "holding", panic_context)
+        return False
+    proposal = _resolve_scalp_sim_panic_holding_action(
+        stock=stock,
+        strategy=strategy,
+        profit_rate=profit_rate,
+        panic_context=panic_context,
+    )
+    action = str(proposal.get("action") or "NO_CHANGE").upper()
+    level = _safe_int(panic_context.get("panic_level"), 0)
+    if action == "NO_CHANGE":
+        return False
+    if _scalp_sim_panic_action_already_applied(stock, panic_context, level, action):
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scalp_sim_panic_action_deduped",
+            **_scalp_sim_event_fields(
+                threshold_family="panic_lifecycle_actuator",
+                sim_record_id=stock.get("sim_record_id"),
+                sim_parent_record_id=stock.get("sim_parent_record_id"),
+                source_stage="holding",
+                runtime_effect="sim_panic_action_deduped",
+                decision_authority="sim_observation_only",
+                proposed_action=action,
+                proposed_reason=proposal.get("reason"),
+                profit_rate=f"{profit_rate:+.2f}",
+                peak_profit=f"{peak_profit:+.2f}",
+                current_ai_score=f"{current_ai_score:.0f}",
+                held_sec=int(held_sec or 0),
+                **_scalp_sim_panic_context_fields(panic_context),
+            ),
+        )
+        return False
+    if action == "TRAIL_TIGHT":
+        action_id = _mark_scalp_sim_panic_action(stock, panic_context, level, action, now_ts)
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "scalp_sim_panic_trailing_tightened": True,
+                "scalp_sim_panic_trailing_tightened_at": now_ts,
+                "last_panic_action_reason": proposal.get("reason"),
+            },
+        )
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scalp_sim_panic_trail_tightened",
+            **_scalp_sim_event_fields(
+                threshold_family="panic_lifecycle_actuator",
+                sim_record_id=stock.get("sim_record_id"),
+                sim_parent_record_id=stock.get("sim_parent_record_id"),
+                source_stage="holding",
+                runtime_effect="sim_trail_tightened_state_only",
+                decision_authority="sim_observation_only",
+                panic_lifecycle_action_id=action_id,
+                profit_rate=f"{profit_rate:+.2f}",
+                peak_profit=f"{peak_profit:+.2f}",
+                current_ai_score=f"{current_ai_score:.0f}",
+                held_sec=int(held_sec or 0),
+                proposed_reason=proposal.get("reason"),
+                **_scalp_sim_panic_context_fields(panic_context),
+            ),
+        )
+        persist_scalp_simulator_state()
+        return False
+    if action == "EXIT":
+        action_id = _mark_scalp_sim_panic_action(stock, panic_context, level, action, now_ts)
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "last_exit_decision_source": "SCALP_SIM_PANIC_LIFECYCLE",
+                "last_exit_rule": "scalp_sim_panic_lifecycle_full_exit",
+                "last_panic_action_reason": proposal.get("reason"),
+                "panic_lifecycle_action_id": action_id,
+            },
+        )
+        return _complete_scalp_simulated_sell(
+            stock=stock,
+            code=code,
+            ws_data=ws_data,
+            curr_price=curr_price,
+            now_ts=now_ts,
+            sell_reason_type="PANIC",
+            exit_rule="scalp_sim_panic_lifecycle_full_exit",
+            profit_rate=profit_rate,
+        )
+    if action == "REDUCE_PARTIAL":
+        return complete_scalp_sim_partial_sell(
+            stock=stock,
+            code=code,
+            ws_data=ws_data,
+            curr_price=curr_price,
+            now_ts=now_ts,
+            partial_ratio=_safe_float(proposal.get("partial_ratio"), 0.0),
+            panic_context=panic_context,
+            panic_action_reason=str(proposal.get("reason") or "-"),
+            profit_rate=profit_rate,
+        )
+    return False
 
 
 def _coerce_optional_timestamp(value):
@@ -11679,6 +12331,20 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             reason = f"🛑 손절선 도달 ({regime_name} 기준 {current_stop_loss}%)"
             exit_rule = "kospi_regime_stop_loss"
 
+    if not is_sell_signal and _apply_scalp_sim_panic_holding_actuator(
+        stock=stock,
+        code=code,
+        strategy=strategy,
+        ws_data=ws_data,
+        curr_price=curr_p,
+        now_ts=now_ts,
+        profit_rate=profit_rate,
+        peak_profit=peak_profit,
+        current_ai_score=current_ai_score,
+        held_sec=held_sec,
+    ):
+        return
+
     if not is_sell_signal:
         _clear_holding_flow_override_candidate(
             stock,
@@ -12769,6 +13435,35 @@ def _evaluate_scale_in_signal(
 
     raw_strategy = (strategy or "").upper()
     if raw_strategy == 'SCALPING':
+        if _rule_bool("SCALP_SIM_PANIC_SCALE_IN_BLOCK_ENABLED", True) and _scalp_sim_panic_eligible(stock, raw_strategy):
+            panic_context = _resolve_scalp_sim_panic_context()
+            if str(panic_context.get("panic_context_status") or "") != "OK":
+                _log_scalp_sim_panic_context_warning(stock, code, "scale_in", panic_context)
+            else:
+                level = _safe_int(panic_context.get("panic_level"), 0)
+                block_level = max(1, _rule_int("SCALP_SIM_PANIC_DISABLE_SCALE_IN_LEVEL", 1))
+                if level >= block_level:
+                    action_id = _scalp_sim_panic_action_id(stock, panic_context, level, "BLOCK_SCALE_IN")
+                    _log_holding_pipeline(
+                        stock,
+                        code,
+                        "scalp_sim_panic_scale_in_blocked",
+                        **_scalp_sim_event_fields(
+                            threshold_family="panic_lifecycle_actuator",
+                            sim_record_id=stock.get("sim_record_id"),
+                            sim_parent_record_id=stock.get("sim_parent_record_id"),
+                            source_stage="scale_in",
+                            runtime_effect="sim_scale_in_blocked",
+                            decision_authority="sim_observation_only",
+                            profit_rate=f"{profit_rate:+.2f}",
+                            peak_profit=f"{peak_profit:+.2f}",
+                            current_ai_score=f"{current_ai_score:.0f}",
+                            held_sec=int(held_sec or 0),
+                            panic_lifecycle_action_id=action_id,
+                            **_scalp_sim_panic_context_fields(panic_context),
+                        ),
+                    )
+                    return None
         sim_window = _evaluate_scalp_sim_scale_in_window_expansion(
             stock=stock,
             strategy=raw_strategy,

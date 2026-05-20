@@ -11,6 +11,7 @@ from typing import Any
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.engine.build_code_improvement_workorder import code_improvement_workorder_paths
 from src.engine.approval_contracts import annotate_approval_request
+from src.engine.institutional_flow_context import report_paths as institutional_flow_report_paths
 from src.engine.lifecycle_decision_matrix import report_paths as lifecycle_matrix_report_paths
 from src.engine.scalping_pattern_lab_automation import automation_report_paths
 from src.engine.scalp_entry_action_decision_matrix import report_paths as scalp_entry_adm_report_paths
@@ -646,6 +647,50 @@ def _swing_strategy_discovery_summary(target_date: str) -> tuple[dict[str, Any],
     )
 
 
+def _institutional_flow_context_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
+    json_path, _ = institutional_flow_report_paths(target_date)
+    payload = _load_json(json_path)
+    if not payload:
+        return (
+            {
+                "available": False,
+                "artifact": None,
+                "status": "missing",
+                "row_count": 0,
+                "join_rate_pct": 0.0,
+                "status_counts": {},
+                "source_mix": {},
+                "top_net_buy": [],
+                "runtime_effect": False,
+                "decision_authority": "source_only_lifecycle_feature",
+            },
+            None,
+            ["institutional_flow_context_missing"],
+        )
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    warnings = [f"institutional_flow_context:{item}" for item in (payload.get("warnings") or []) if str(item)]
+    return (
+        {
+            "available": True,
+            "artifact": str(json_path),
+            "status": "warning" if payload.get("warnings") else "pass",
+            "row_count": _safe_int(summary.get("row_count"), 0),
+            "ok_count": _safe_int(summary.get("ok_count"), 0),
+            "partial_count": _safe_int(summary.get("partial_count"), 0),
+            "missing_count": _safe_int(summary.get("missing_count"), 0),
+            "token_error_count": _safe_int(summary.get("token_error_count"), 0),
+            "join_rate_pct": round(_safe_float(summary.get("join_rate_pct"), 0.0), 2),
+            "status_counts": summary.get("status_counts") if isinstance(summary.get("status_counts"), dict) else {},
+            "source_mix": summary.get("source_mix") if isinstance(summary.get("source_mix"), dict) else {},
+            "top_net_buy": summary.get("top_net_buy") if isinstance(summary.get("top_net_buy"), list) else [],
+            "runtime_effect": bool(payload.get("runtime_effect")),
+            "decision_authority": payload.get("decision_authority") or "source_only_lifecycle_feature",
+        },
+        str(json_path),
+        warnings,
+    )
+
+
 def _pipeline_event_verbosity_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
     json_path = REPORT_DIR / "pipeline_event_verbosity" / f"pipeline_event_verbosity_{target_date}.json"
     payload = _load_json(json_path)
@@ -786,6 +831,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
     scalp_entry_adm_summary, scalp_entry_adm_path, scalp_entry_adm_warnings = _scalp_entry_adm_summary(target_date)
     lifecycle_matrix_summary, lifecycle_matrix_path, lifecycle_matrix_warnings = _lifecycle_decision_matrix_summary(target_date)
     swing_discovery_summary, swing_discovery_path, swing_discovery_warnings = _swing_strategy_discovery_summary(target_date)
+    institutional_flow_summary, institutional_flow_path, institutional_flow_warnings = _institutional_flow_context_summary(target_date)
     code_workorder_summary, code_workorder_path, code_workorder_warnings = _code_improvement_workorder_summary(target_date)
     pipeline_verbosity_summary, pipeline_verbosity_path, pipeline_verbosity_warnings = _pipeline_event_verbosity_summary(target_date)
     codebase_perf_summary, codebase_perf_path, codebase_perf_warnings = _codebase_performance_workorder_summary(target_date)
@@ -867,6 +913,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
         "scalp_entry_action_decision_matrix": scalp_entry_adm_summary,
         "lifecycle_decision_matrix": lifecycle_matrix_summary,
         "swing_strategy_discovery": swing_discovery_summary,
+        "institutional_flow_context": institutional_flow_summary,
         "pipeline_event_verbosity": pipeline_verbosity_summary,
         "codebase_performance_workorder": codebase_perf_summary,
         "pattern_lab_currentness_audit": currentness_audit_summary,
@@ -882,6 +929,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "scalp_entry_action_decision_matrix": scalp_entry_adm_path,
             "lifecycle_decision_matrix": lifecycle_matrix_path,
             "swing_strategy_discovery": swing_discovery_path,
+            "institutional_flow_context": institutional_flow_path,
             "pipeline_event_verbosity": pipeline_verbosity_path,
             "codebase_performance_workorder": codebase_perf_path,
             "pattern_lab_currentness_audit": currentness_audit_path,
@@ -902,6 +950,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
                 *scalp_entry_adm_warnings,
                 *lifecycle_matrix_warnings,
                 *swing_discovery_warnings,
+                *institutional_flow_warnings,
                 *pipeline_verbosity_warnings,
                 *codebase_perf_warnings,
                 *currentness_audit_warnings,
@@ -931,6 +980,7 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
     scalp_entry_adm = report.get("scalp_entry_action_decision_matrix") if isinstance(report.get("scalp_entry_action_decision_matrix"), dict) else {}
     lifecycle_matrix = report.get("lifecycle_decision_matrix") if isinstance(report.get("lifecycle_decision_matrix"), dict) else {}
     swing_discovery = report.get("swing_strategy_discovery") if isinstance(report.get("swing_strategy_discovery"), dict) else {}
+    institutional_flow = report.get("institutional_flow_context") if isinstance(report.get("institutional_flow_context"), dict) else {}
     pipeline_verbosity = report.get("pipeline_event_verbosity") if isinstance(report.get("pipeline_event_verbosity"), dict) else {}
     codebase_perf = report.get("codebase_performance_workorder") if isinstance(report.get("codebase_performance_workorder"), dict) else {}
     currentness_audit = report.get("pattern_lab_currentness_audit") if isinstance(report.get("pattern_lab_currentness_audit"), dict) else {}
@@ -1006,6 +1056,14 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- policy_pass/promote_ready: `{lifecycle_matrix.get('policy_pass_count')}` / `{lifecycle_matrix.get('promote_ready_count')}`",
         f"- fixed_threshold_roles: `{lifecycle_matrix.get('fixed_threshold_roles') or {}}`",
         f"- policy_entries: `{lifecycle_matrix.get('policy_entries') or []}`",
+        "",
+        "## Institutional Flow Context",
+        f"- artifact: `{institutional_flow.get('artifact') or '-'}`",
+        f"- status: `{institutional_flow.get('status')}` / authority: `{institutional_flow.get('decision_authority') or '-'}`",
+        f"- rows ok/partial/missing/token_error: `{institutional_flow.get('ok_count')}` / `{institutional_flow.get('partial_count')}` / `{institutional_flow.get('missing_count')}` / `{institutional_flow.get('token_error_count')}`",
+        f"- join_rate_pct: `{institutional_flow.get('join_rate_pct')}`",
+        f"- source_mix: `{institutional_flow.get('source_mix') or {}}`",
+        f"- top_net_buy: `{institutional_flow.get('top_net_buy') or []}`",
         "",
         "## Pattern Lab Automation",
         f"- artifact: `{pattern_lab.get('artifact') or '-'}`",

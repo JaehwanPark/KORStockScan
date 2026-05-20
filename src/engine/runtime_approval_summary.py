@@ -81,6 +81,7 @@ _FAMILY_DESCRIPTIONS = {
     "panic_buy_runner_tp_canary": "패닉바잉 구간에서 fixed TP 전량청산 대비 runner 유지가 missed upside를 줄이는지 보는 축",
     "scalp_sim_overnight_ai_carry": "장마감 후 open 스캘핑 sim 포지션을 overnight_v1로 SELL_TODAY/HOLD_OVERNIGHT 분리해 다음날 lifecycle/EV label로 연결하는 source-only 축",
     "swing_strategy_discovery_sim": "스윙 safe pool 전체를 공격적 sim-only lifecycle arm으로 전개하고 label/EV를 축적하는 source-only 탐색 축",
+    "institutional_flow_context": "외인/기관 수급 REST/WS 원천을 lifecycle matrix 공통 feature로 붙이는 source-only provenance 축",
 }
 
 _BASELINE_APPLICATION = {
@@ -103,6 +104,7 @@ _BASELINE_APPLICATION = {
     "panic_buy_runner_tp_canary": "report-only: TP/trailing/live exit 변경 없음",
     "scalp_sim_overnight_ai_carry": "source-only: sim 가상 청산/carry 기록만 수행, runtime threshold apply 권한 없음",
     "swing_strategy_discovery_sim": "source-only: 가상 후보/arm/label/EV 분석만 수행, runtime threshold apply 권한 없음",
+    "institutional_flow_context": "source-only: lifecycle matrix feature/provenance 입력만 수행, 단독 BUY/scale-in/runtime apply 권한 없음",
 }
 
 _STATE_INTERPRETATIONS = {
@@ -1138,6 +1140,36 @@ def _swing_strategy_discovery_summary(ev_report: dict[str, Any]) -> dict[str, An
     }
 
 
+def _institutional_flow_context_summary(ev_report: dict[str, Any]) -> dict[str, Any]:
+    payload = ev_report.get("institutional_flow_context") if isinstance(ev_report.get("institutional_flow_context"), dict) else {}
+    available = bool(payload.get("available"))
+    warnings = []
+    if not available:
+        warnings.append("institutional_flow_context_missing")
+    if int(payload.get("token_error_count") or 0) > 0:
+        warnings.append("kiwoom_token_error")
+    return {
+        "family": "institutional_flow_context",
+        "available": available,
+        "artifact": payload.get("artifact"),
+        "description": _FAMILY_DESCRIPTIONS["institutional_flow_context"],
+        "baseline_application": _BASELINE_APPLICATION["institutional_flow_context"],
+        "runtime_effect": False,
+        "runtime_mutation_allowed": False,
+        "decision_authority": payload.get("decision_authority") or "source_only_lifecycle_feature",
+        "row_count": int(payload.get("row_count") or 0),
+        "ok_count": int(payload.get("ok_count") or 0),
+        "partial_count": int(payload.get("partial_count") or 0),
+        "missing_count": int(payload.get("missing_count") or 0),
+        "token_error_count": int(payload.get("token_error_count") or 0),
+        "join_rate_pct": payload.get("join_rate_pct"),
+        "source_mix": payload.get("source_mix") or {},
+        "top_net_buy": payload.get("top_net_buy") or [],
+        "state_interpretation": "source-only feature. Missing/stale data cannot change lifecycle runtime action.",
+        "warnings": warnings,
+    }
+
+
 def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     _JSON_LOAD_DIAGNOSTICS.clear()
     target_date = str(target_date).strip()
@@ -1149,6 +1181,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     calibration_source = sources.get("calibration")
     scalp_entry_adm_path = sources.get("scalp_entry_action_decision_matrix")
     lifecycle_matrix_path = sources.get("lifecycle_decision_matrix")
+    institutional_flow_path = sources.get("institutional_flow_context")
     calibration_report = _load_json(Path(str(calibration_source))) if calibration_source else {}
     currentness_path = Path(str(sources.get("pattern_lab_currentness_audit"))) if sources.get("pattern_lab_currentness_audit") else PATTERN_LAB_CURRENTNESS_AUDIT_DIR / f"pattern_lab_currentness_audit_{target_date}.json"
     propagation_path = Path(str(sources.get("pattern_lab_propagation_audit"))) if sources.get("pattern_lab_propagation_audit") else PATTERN_LAB_PROPAGATION_AUDIT_DIR / f"pattern_lab_propagation_audit_{target_date}.json"
@@ -1160,6 +1193,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     scalp_entry_adm_summary = _entry_adm_summary(ev_report, scalp_entry_adm_path)
     lifecycle_matrix_summary = _lifecycle_matrix_summary(ev_report, lifecycle_matrix_path)
     swing_discovery_summary = _swing_strategy_discovery_summary(ev_report)
+    institutional_flow_summary = _institutional_flow_context_summary(ev_report)
     source_load_warnings = [
         f"source_load_{item.get('status')}:{Path(str(item.get('path') or '')).name}"
         for item in _JSON_LOAD_DIAGNOSTICS
@@ -1175,6 +1209,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             "swing_runtime_approval": str(swing_path) if swing_path.exists() else None,
             "scalp_entry_action_decision_matrix": scalp_entry_adm_path,
             "lifecycle_decision_matrix": lifecycle_matrix_path,
+            "institutional_flow_context": institutional_flow_path,
             "pattern_lab_currentness_audit": str(currentness_path) if currentness_path.exists() else None,
             "pattern_lab_propagation_audit": str(propagation_path) if propagation_path.exists() else None,
         },
@@ -1215,11 +1250,14 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             "swing_strategy_discovery_available": swing_discovery_summary.get("available"),
             "swing_strategy_discovery_labeled_sample_count": swing_discovery_summary.get("labeled_sample_count"),
             "swing_strategy_discovery_pending_future_quote_count": swing_discovery_summary.get("pending_future_quote_count"),
+            "institutional_flow_available": institutional_flow_summary.get("available"),
+            "institutional_flow_join_rate_pct": institutional_flow_summary.get("join_rate_pct"),
         },
         "application_timing": _application_timing(target_date, ev_report),
         "scalp_entry_action_decision_matrix": scalp_entry_adm_summary,
         "lifecycle_decision_matrix": lifecycle_matrix_summary,
         "swing_strategy_discovery": swing_discovery_summary,
+        "institutional_flow_context": institutional_flow_summary,
         "pattern_lab_currentness_audit": currentness_audit,
         "pattern_lab_propagation_audit": propagation_audit,
         "scalping": scalping_rows,
@@ -1232,6 +1270,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
                 "swing_runtime_approval_missing" if not swing_path.exists() else "",
                 "scalp_entry_action_decision_matrix_missing" if not scalp_entry_adm_path else "",
                 "lifecycle_decision_matrix_missing" if not lifecycle_matrix_path else "",
+                "institutional_flow_context_missing" if not institutional_flow_path else "",
                 "pattern_lab_currentness_audit_missing" if not currentness_path.exists() else "",
                 "pattern_lab_propagation_audit_missing" if not propagation_path.exists() else "",
                 *source_load_warnings,
@@ -1285,6 +1324,11 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         if isinstance(report.get("swing_strategy_discovery"), dict)
         else {}
     )
+    institutional_flow = (
+        report.get("institutional_flow_context")
+        if isinstance(report.get("institutional_flow_context"), dict)
+        else {}
+    )
     currentness = report.get("pattern_lab_currentness_audit") if isinstance(report.get("pattern_lab_currentness_audit"), dict) else {}
     propagation = report.get("pattern_lab_propagation_audit") if isinstance(report.get("pattern_lab_propagation_audit"), dict) else {}
     source_load_diagnostics = (
@@ -1303,6 +1347,7 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         f"- scalp_entry_adm_status: `{summary.get('scalp_entry_adm_status')}`",
         f"- lifecycle_matrix_status: `{summary.get('lifecycle_matrix_status')}`",
         f"- swing_strategy_discovery_labeled/pending: `{summary.get('swing_strategy_discovery_labeled_sample_count')}` / `{summary.get('swing_strategy_discovery_pending_future_quote_count')}`",
+        f"- institutional_flow_available/join_rate: `{summary.get('institutional_flow_available')}` / `{summary.get('institutional_flow_join_rate_pct')}`",
         f"- pattern_lab_currentness_status: `{summary.get('pattern_lab_currentness_status')}`",
         f"- pattern_lab_propagation_status: `{summary.get('pattern_lab_propagation_status')}`",
         f"- env_generated_at: `{timing.get('env_generated_at') or '-'}`",
@@ -1323,6 +1368,15 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         f"- top_actions: `{entry_adm.get('top_actions') or []}`",
         f"- ready_for_daily_policy_tuning: `{entry_adm.get('ready_for_daily_policy_tuning')}`",
         f"- warnings: `{entry_adm.get('warnings') or []}`",
+        "",
+        "## Institutional Flow Context",
+        f"- artifact: `{institutional_flow.get('artifact') or '-'}`",
+        f"- authority: `{institutional_flow.get('decision_authority') or '-'}`",
+        f"- rows ok/partial/missing/token_error: `{institutional_flow.get('ok_count')}` / `{institutional_flow.get('partial_count')}` / `{institutional_flow.get('missing_count')}` / `{institutional_flow.get('token_error_count')}`",
+        f"- join_rate_pct: `{institutional_flow.get('join_rate_pct')}`",
+        f"- source_mix: `{institutional_flow.get('source_mix') or {}}`",
+        f"- top_net_buy: `{institutional_flow.get('top_net_buy') or []}`",
+        f"- warnings: `{institutional_flow.get('warnings') or []}`",
         "",
         "## Lifecycle Decision Matrix",
         f"- status: `{lifecycle_matrix.get('status')}`",

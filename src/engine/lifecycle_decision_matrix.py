@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
+from src.engine.institutional_flow_context import RUNTIME_FEATURE_KEYS as INSTITUTIONAL_FLOW_FEATURE_KEYS
+from src.engine.institutional_flow_context import report_paths as institutional_flow_report_paths
 from src.engine.scalp_entry_action_decision_matrix import report_paths as entry_adm_report_paths
 
 
@@ -66,6 +68,22 @@ RUNTIME_FEATURE_KEYS = {
     "overnight_confidence",
     "overnight_price_source",
     "overnight_status",
+    "panic_context_status",
+    "panic_level",
+    "panic_level_reason",
+    "panic_epoch_id",
+    "panic_lifecycle_action_id",
+    "risk_regime_context_owner",
+    "market_regime",
+    "symbol_regime",
+    "panic_bottoming_entry_allowed",
+    "panic_bottoming_entry_reason",
+    "panic_bottoming_arm",
+    "liquidity_state",
+    "fill_quality",
+    "quote_quality_state",
+    "assumed_slippage_bps",
+    *INSTITUTIONAL_FLOW_FEATURE_KEYS,
 }
 
 LABEL_KEYS = {
@@ -225,6 +243,44 @@ def _runtime_features(row: dict[str, Any]) -> dict[str, Any]:
 
 def _labels(row: dict[str, Any]) -> dict[str, Any]:
     return {key: row.get(key) for key in sorted(LABEL_KEYS) if key in row}
+
+
+def _load_institutional_flow_feature_map(target_date: str) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    json_path, _ = institutional_flow_report_paths(target_date)
+    payload = _load_json(json_path)
+    rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
+    feature_map: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        code = str(row.get("stock_code") or "").strip().lstrip("A")
+        if not code:
+            continue
+        feature_map[code] = {
+            key: row.get(key)
+            for key in INSTITUTIONAL_FLOW_FEATURE_KEYS
+            if key in row
+        }
+    return feature_map, {
+        "artifact": str(json_path) if json_path.exists() else None,
+        "rows": len(rows),
+        "joined_feature_codes": len(feature_map),
+        "status": (payload.get("summary") or {}).get("status") if isinstance(payload.get("summary"), dict) else None,
+    }
+
+
+def _apply_institutional_flow_features(rows: list[dict[str, Any]], feature_map: dict[str, dict[str, Any]]) -> int:
+    joined = 0
+    for row in rows:
+        code = str(row.get("stock_code") or "").strip().lstrip("A")
+        features = feature_map.get(code)
+        if not features:
+            continue
+        runtime_features = row.setdefault("runtime_features", {})
+        if isinstance(runtime_features, dict):
+            runtime_features.update(features)
+            joined += 1
+    return joined
 
 
 def _stage_ev(stage: str, labels: dict[str, Any]) -> float | None:
@@ -511,6 +567,94 @@ def _load_scalp_sim_overnight_rows(target_date: str) -> tuple[list[dict[str, Any
     }
 
 
+def _load_scalp_sim_panic_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    path = PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"
+    source_stages = {
+        "scalp_sim_panic_bottoming_entry_allowed",
+        "scalp_sim_panic_entry_blocked",
+        "scalp_sim_panic_scale_in_blocked",
+        "scalp_sim_partial_sell_order_assumed_filled",
+        "scalp_sim_sell_order_assumed_filled",
+    }
+    rows: list[dict[str, Any]] = []
+    stage_counts: Counter[str] = Counter()
+    for item in _iter_jsonl(path) or []:
+        if not isinstance(item, dict):
+            continue
+        source_stage = str(item.get("stage") or "")
+        fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
+        if source_stage not in source_stages:
+            continue
+        if source_stage == "scalp_sim_sell_order_assumed_filled" and fields.get("exit_rule") != "scalp_sim_panic_lifecycle_full_exit":
+            continue
+        if fields.get("simulation_book") != "scalp_ai_buy_all":
+            continue
+        stage_counts[source_stage] += 1
+        if source_stage in {"scalp_sim_panic_entry_blocked", "scalp_sim_panic_bottoming_entry_allowed"}:
+            matrix_stage = "entry"
+        elif source_stage == "scalp_sim_panic_scale_in_blocked":
+            matrix_stage = "scale_in"
+        else:
+            matrix_stage = "exit"
+        profit = _safe_float(fields.get("profit_rate") or fields.get("realized_profit_rate"), None)
+        labels = {
+            "profit_rate": profit,
+            "exit_rule": fields.get("exit_rule"),
+            "mfe_10m_pct": profit,
+            "mae_10m_pct": profit,
+            "close_10m_pct": profit,
+        }
+        runtime_features = {
+            "ai_score": fields.get("ai_score") or fields.get("current_ai_score"),
+            "actual_order_submitted": fields.get("actual_order_submitted"),
+            "broker_order_forbidden": fields.get("broker_order_forbidden"),
+            "profit_rate_live": fields.get("trigger_profit_rate") or fields.get("profit_rate"),
+            "peak_profit": fields.get("peak_profit"),
+            "held_sec": fields.get("held_sec"),
+            "curr_price": fields.get("curr_price"),
+            "best_bid": fields.get("best_bid"),
+            "best_ask": fields.get("best_ask"),
+            "panic_context_status": fields.get("panic_context_status"),
+            "panic_level": fields.get("panic_level"),
+            "panic_level_reason": fields.get("panic_level_reason"),
+            "panic_epoch_id": fields.get("panic_epoch_id"),
+            "panic_lifecycle_action_id": fields.get("panic_lifecycle_action_id"),
+            "risk_regime_context_owner": fields.get("risk_regime_context_owner"),
+            "market_regime": fields.get("market_regime"),
+            "symbol_regime": fields.get("symbol_regime"),
+            "panic_bottoming_entry_allowed": fields.get("panic_bottoming_entry_allowed"),
+            "panic_bottoming_entry_reason": fields.get("panic_bottoming_entry_reason"),
+            "panic_bottoming_arm": fields.get("panic_bottoming_arm"),
+            "liquidity_state": fields.get("liquidity_state"),
+            "fill_quality": fields.get("fill_quality"),
+            "quote_quality_state": fields.get("quote_quality_state"),
+            "assumed_slippage_bps": fields.get("assumed_slippage_bps"),
+            "fixed_threshold_contract_role": "bounded_tunable",
+        }
+        rows.append(
+            {
+                "candidate_id": fields.get("panic_lifecycle_action_id")
+                or fields.get("sim_record_id")
+                or f"{item.get('stock_code')}:{item.get('emitted_at')}",
+                "stock_code": item.get("stock_code"),
+                "event_time": item.get("emitted_at"),
+                "stage": matrix_stage,
+                "source_stage": source_stage,
+                "runtime_features": runtime_features,
+                "labels": labels,
+                "stage_ev_composite_pct": _stage_ev(matrix_stage, labels),
+                "outcome_joined": profit is not None,
+                "actual_order_submitted": not _boolish_false(fields.get("actual_order_submitted")),
+                "source": "scalp_sim_panic_pipeline_events",
+            }
+        )
+    return rows, {
+        "artifact": str(path) if path.exists() else None,
+        "rows": len(rows),
+        "stage_counts": dict(sorted(stage_counts.items())),
+    }
+
+
 def _policy_action_for(stage: str, rows: list[dict[str, Any]]) -> str:
     joined = [row for row in rows if row.get("stage_ev_composite_pct") is not None]
     if not joined:
@@ -591,6 +735,7 @@ def build_lifecycle_decision_matrix_report(target_date: str) -> dict[str, Any]:
         _load_wait6579_rows,
         _load_scalp_sim_scale_in_rows,
         _load_scalp_sim_overnight_rows,
+        _load_scalp_sim_panic_rows,
     ]
     rows: list[dict[str, Any]] = []
     sources: dict[str, Any] = {}
@@ -598,6 +743,14 @@ def build_lifecycle_decision_matrix_report(target_date: str) -> dict[str, Any]:
         loaded_rows, summary = loader(target_date)
         rows.extend(loaded_rows)
         sources[loader.__name__.removeprefix("_load_").removesuffix("_rows")] = summary
+    institutional_feature_map, institutional_summary = _load_institutional_flow_feature_map(target_date)
+    institutional_joined_rows = _apply_institutional_flow_features(rows, institutional_feature_map)
+    sources["institutional_flow_context"] = {
+        **institutional_summary,
+        "joined_rows": institutional_joined_rows,
+        "runtime_effect": False,
+        "decision_authority": "source_only_lifecycle_feature",
+    }
     rows = rows[:2000]
     policy_entries = _policy_entries(rows)
     warnings: list[str] = []

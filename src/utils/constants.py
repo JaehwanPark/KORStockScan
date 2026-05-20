@@ -148,6 +148,25 @@ class TradingConfig:
     SCALP_SIM_SCALE_IN_WINDOW_MAX_PROFIT_PCT: float = 2.5
     SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_POSITION: int = 1
     SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_DAY: int = 30
+    SCALP_SIM_PANIC_LIFECYCLE_ENABLED: bool = True
+    SCALP_SIM_PANIC_ENTRY_BLOCK_ENABLED: bool = True
+    SCALP_SIM_PANIC_SCALE_IN_BLOCK_ENABLED: bool = True
+    SCALP_SIM_PANIC_HOLDING_EXIT_ENABLED: bool = True
+    SCALP_SIM_PANIC_PARTIAL_SELL_ENABLED: bool = True
+    SCALP_SIM_PANIC_FORCE_NOOP: bool = False
+    SCALP_SIM_PANIC_BLOCK_ENTRY_LEVEL: int = 1
+    SCALP_SIM_PANIC_DISABLE_SCALE_IN_LEVEL: int = 1
+    SCALP_SIM_PANIC_BOTTOMING_ENTRY_ENABLED: bool = True
+    SCALP_SIM_PANIC_BOTTOMING_ENTRY_MAX_LEVEL: int = 1
+    SCALP_SIM_PANIC_BOTTOMING_MIN_AI_SCORE: float = 60.0
+    SCALP_SIM_PANIC_BOTTOMING_MIN_BUY_PRESSURE: float = 55.0
+    SCALP_SIM_PANIC_BOTTOMING_MAX_DISTANCE_FROM_HIGH_PCT: float = -3.0
+    SCALP_SIM_PANIC_BOTTOMING_MIN_STRENGTH: float = 65.0
+    SCALP_SIM_PANIC_MIN_REMAINING_QTY: int = 1
+    SCALP_SIM_PANIC_MAX_PARTIAL_COUNT_PER_EPOCH: int = 1
+    SCALP_SIM_PANIC_CONTEXT_MAX_AGE_SEC: int = 600
+    SCALP_SIM_PANIC_FALLBACK_SLIPPAGE_BPS: float = 10.0
+    SCALP_SIM_PANIC_BROKEN_LIQUIDITY_HAIRCUT_BPS: float = 30.0
     SIM_VIRTUAL_BUDGET_KRW: int = 10_000_000  # sim/probe/counterfactual 전용 가상 주문가능금액. 실계좌 예산과 분리
 
     # [매매 비중 설정] 전략별 주문 가능 현금 대비 1회 매수 투입 비율
@@ -1486,6 +1505,61 @@ def _build_trading_rules() -> TradingConfig:
     env_scalp_sim_scale_in_window_max_orders_day = _env_int(
         "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_DAY"
     )
+    env_scalp_sim_panic_lifecycle_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_SIM_PANIC_LIFECYCLE_ENABLED"
+    )
+    env_scalp_sim_panic_entry_block_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_SIM_PANIC_ENTRY_BLOCK_ENABLED"
+    )
+    env_scalp_sim_panic_scale_in_block_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_SIM_PANIC_SCALE_IN_BLOCK_ENABLED"
+    )
+    env_scalp_sim_panic_holding_exit_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_SIM_PANIC_HOLDING_EXIT_ENABLED"
+    )
+    env_scalp_sim_panic_partial_sell_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_SIM_PANIC_PARTIAL_SELL_ENABLED"
+    )
+    env_scalp_sim_panic_force_noop = _env_bool("KORSTOCKSCAN_SCALP_SIM_PANIC_FORCE_NOOP")
+    env_scalp_sim_panic_block_entry_level = _env_int(
+        "KORSTOCKSCAN_SCALP_SIM_PANIC_BLOCK_ENTRY_LEVEL"
+    )
+    env_scalp_sim_panic_disable_scale_in_level = _env_int(
+        "KORSTOCKSCAN_SCALP_SIM_PANIC_DISABLE_SCALE_IN_LEVEL"
+    )
+    env_scalp_sim_panic_bottoming_entry_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_SIM_PANIC_BOTTOMING_ENTRY_ENABLED"
+    )
+    env_scalp_sim_panic_bottoming_entry_max_level = _env_int(
+        "KORSTOCKSCAN_SCALP_SIM_PANIC_BOTTOMING_ENTRY_MAX_LEVEL"
+    )
+    env_scalp_sim_panic_bottoming_min_ai_score = _env_float(
+        "KORSTOCKSCAN_SCALP_SIM_PANIC_BOTTOMING_MIN_AI_SCORE"
+    )
+    env_scalp_sim_panic_bottoming_min_buy_pressure = _env_float(
+        "KORSTOCKSCAN_SCALP_SIM_PANIC_BOTTOMING_MIN_BUY_PRESSURE"
+    )
+    env_scalp_sim_panic_bottoming_max_distance = _env_float(
+        "KORSTOCKSCAN_SCALP_SIM_PANIC_BOTTOMING_MAX_DISTANCE_FROM_HIGH_PCT"
+    )
+    env_scalp_sim_panic_bottoming_min_strength = _env_float(
+        "KORSTOCKSCAN_SCALP_SIM_PANIC_BOTTOMING_MIN_STRENGTH"
+    )
+    env_scalp_sim_panic_min_remaining_qty = _env_int(
+        "KORSTOCKSCAN_SCALP_SIM_PANIC_MIN_REMAINING_QTY"
+    )
+    env_scalp_sim_panic_max_partial_count = _env_int(
+        "KORSTOCKSCAN_SCALP_SIM_PANIC_MAX_PARTIAL_COUNT_PER_EPOCH"
+    )
+    env_scalp_sim_panic_context_max_age = _env_int(
+        "KORSTOCKSCAN_SCALP_SIM_PANIC_CONTEXT_MAX_AGE_SEC"
+    )
+    env_scalp_sim_panic_fallback_slippage = _env_float(
+        "KORSTOCKSCAN_SCALP_SIM_PANIC_FALLBACK_SLIPPAGE_BPS"
+    )
+    env_scalp_sim_panic_broken_liquidity_haircut = _env_float(
+        "KORSTOCKSCAN_SCALP_SIM_PANIC_BROKEN_LIQUIDITY_HAIRCUT_BPS"
+    )
     env_sim_virtual_budget_krw = _env_int("KORSTOCKSCAN_SIM_VIRTUAL_BUDGET_KRW")
     if env_sim_virtual_budget_krw is None:
         env_sim_virtual_budget_krw = _env_int("KORSTOCKSCAN_SIM_VIRTUAL_NOTIONAL_KRW")
@@ -1807,6 +1881,63 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_DAY=env_scalp_sim_scale_in_window_max_orders_day
             if env_scalp_sim_scale_in_window_max_orders_day is not None
             else config.SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_DAY,
+            SCALP_SIM_PANIC_LIFECYCLE_ENABLED=env_scalp_sim_panic_lifecycle_enabled
+            if env_scalp_sim_panic_lifecycle_enabled is not None
+            else config.SCALP_SIM_PANIC_LIFECYCLE_ENABLED,
+            SCALP_SIM_PANIC_ENTRY_BLOCK_ENABLED=env_scalp_sim_panic_entry_block_enabled
+            if env_scalp_sim_panic_entry_block_enabled is not None
+            else config.SCALP_SIM_PANIC_ENTRY_BLOCK_ENABLED,
+            SCALP_SIM_PANIC_SCALE_IN_BLOCK_ENABLED=env_scalp_sim_panic_scale_in_block_enabled
+            if env_scalp_sim_panic_scale_in_block_enabled is not None
+            else config.SCALP_SIM_PANIC_SCALE_IN_BLOCK_ENABLED,
+            SCALP_SIM_PANIC_HOLDING_EXIT_ENABLED=env_scalp_sim_panic_holding_exit_enabled
+            if env_scalp_sim_panic_holding_exit_enabled is not None
+            else config.SCALP_SIM_PANIC_HOLDING_EXIT_ENABLED,
+            SCALP_SIM_PANIC_PARTIAL_SELL_ENABLED=env_scalp_sim_panic_partial_sell_enabled
+            if env_scalp_sim_panic_partial_sell_enabled is not None
+            else config.SCALP_SIM_PANIC_PARTIAL_SELL_ENABLED,
+            SCALP_SIM_PANIC_FORCE_NOOP=env_scalp_sim_panic_force_noop
+            if env_scalp_sim_panic_force_noop is not None
+            else config.SCALP_SIM_PANIC_FORCE_NOOP,
+            SCALP_SIM_PANIC_BLOCK_ENTRY_LEVEL=env_scalp_sim_panic_block_entry_level
+            if env_scalp_sim_panic_block_entry_level is not None
+            else config.SCALP_SIM_PANIC_BLOCK_ENTRY_LEVEL,
+            SCALP_SIM_PANIC_DISABLE_SCALE_IN_LEVEL=env_scalp_sim_panic_disable_scale_in_level
+            if env_scalp_sim_panic_disable_scale_in_level is not None
+            else config.SCALP_SIM_PANIC_DISABLE_SCALE_IN_LEVEL,
+            SCALP_SIM_PANIC_BOTTOMING_ENTRY_ENABLED=env_scalp_sim_panic_bottoming_entry_enabled
+            if env_scalp_sim_panic_bottoming_entry_enabled is not None
+            else config.SCALP_SIM_PANIC_BOTTOMING_ENTRY_ENABLED,
+            SCALP_SIM_PANIC_BOTTOMING_ENTRY_MAX_LEVEL=env_scalp_sim_panic_bottoming_entry_max_level
+            if env_scalp_sim_panic_bottoming_entry_max_level is not None
+            else config.SCALP_SIM_PANIC_BOTTOMING_ENTRY_MAX_LEVEL,
+            SCALP_SIM_PANIC_BOTTOMING_MIN_AI_SCORE=env_scalp_sim_panic_bottoming_min_ai_score
+            if env_scalp_sim_panic_bottoming_min_ai_score is not None
+            else config.SCALP_SIM_PANIC_BOTTOMING_MIN_AI_SCORE,
+            SCALP_SIM_PANIC_BOTTOMING_MIN_BUY_PRESSURE=env_scalp_sim_panic_bottoming_min_buy_pressure
+            if env_scalp_sim_panic_bottoming_min_buy_pressure is not None
+            else config.SCALP_SIM_PANIC_BOTTOMING_MIN_BUY_PRESSURE,
+            SCALP_SIM_PANIC_BOTTOMING_MAX_DISTANCE_FROM_HIGH_PCT=env_scalp_sim_panic_bottoming_max_distance
+            if env_scalp_sim_panic_bottoming_max_distance is not None
+            else config.SCALP_SIM_PANIC_BOTTOMING_MAX_DISTANCE_FROM_HIGH_PCT,
+            SCALP_SIM_PANIC_BOTTOMING_MIN_STRENGTH=env_scalp_sim_panic_bottoming_min_strength
+            if env_scalp_sim_panic_bottoming_min_strength is not None
+            else config.SCALP_SIM_PANIC_BOTTOMING_MIN_STRENGTH,
+            SCALP_SIM_PANIC_MIN_REMAINING_QTY=env_scalp_sim_panic_min_remaining_qty
+            if env_scalp_sim_panic_min_remaining_qty is not None
+            else config.SCALP_SIM_PANIC_MIN_REMAINING_QTY,
+            SCALP_SIM_PANIC_MAX_PARTIAL_COUNT_PER_EPOCH=env_scalp_sim_panic_max_partial_count
+            if env_scalp_sim_panic_max_partial_count is not None
+            else config.SCALP_SIM_PANIC_MAX_PARTIAL_COUNT_PER_EPOCH,
+            SCALP_SIM_PANIC_CONTEXT_MAX_AGE_SEC=env_scalp_sim_panic_context_max_age
+            if env_scalp_sim_panic_context_max_age is not None
+            else config.SCALP_SIM_PANIC_CONTEXT_MAX_AGE_SEC,
+            SCALP_SIM_PANIC_FALLBACK_SLIPPAGE_BPS=env_scalp_sim_panic_fallback_slippage
+            if env_scalp_sim_panic_fallback_slippage is not None
+            else config.SCALP_SIM_PANIC_FALLBACK_SLIPPAGE_BPS,
+            SCALP_SIM_PANIC_BROKEN_LIQUIDITY_HAIRCUT_BPS=env_scalp_sim_panic_broken_liquidity_haircut
+            if env_scalp_sim_panic_broken_liquidity_haircut is not None
+            else config.SCALP_SIM_PANIC_BROKEN_LIQUIDITY_HAIRCUT_BPS,
             SIM_VIRTUAL_BUDGET_KRW=env_sim_virtual_budget_krw
             if env_sim_virtual_budget_krw is not None
             else config.SIM_VIRTUAL_BUDGET_KRW,

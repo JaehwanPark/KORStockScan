@@ -1,85 +1,85 @@
 {
-  "bundle_as_of": "2026-05-18T22:20:12Z",
+  "bundle_as_of": "2026-05-19T22:20:16Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 7403.05,
-    "prev_value": 7408.5,
-    "change": -5.45,
-    "change_pct": -0.07,
-    "as_of": "2026-05-18T20:00:00Z",
+    "value": 7353.61,
+    "prev_value": 7403.05,
+    "change": -49.44,
+    "change_pct": -0.67,
+    "as_of": "2026-05-19T20:26:00Z",
     "source": "Morningstar / Dow Jones Market Data"
   },
   "nasdaq": {
     "name": "NASDAQ Composite",
-    "value": 26090.73,
-    "prev_value": 26225.14,
-    "change": -134.41,
-    "change_pct": -0.51,
-    "as_of": "2026-05-18T20:00:00Z",
+    "value": 25870.71,
+    "prev_value": 26090.73,
+    "change": -220.02,
+    "change_pct": -0.84,
+    "as_of": "2026-05-19T20:26:00Z",
     "source": "Morningstar / Dow Jones Market Data"
   },
   "vix": {
     "name": "VIX",
-    "value": 18.59,
-    "prev_value": 18.43,
-    "change": 0.16,
-    "change_pct": 0.87,
-    "as_of": "2026-05-18T20:49:00Z",
-    "source": "Cboe Global Markets"
+    "value": 18.23,
+    "prev_value": 17.82,
+    "change": 0.41,
+    "change_pct": 2.3,
+    "as_of": "2026-05-19T19:27:00Z",
+    "source": "Cboe"
   },
   "us10y": {
     "name": "US 10-Year Treasury Yield",
-    "value": 4.621,
-    "prev_value": 4.597,
-    "change": 0.024,
-    "change_pct": 0.52,
-    "as_of": "2026-05-18T20:00:00Z",
-    "source": "The Economic Times"
+    "value": 4.67,
+    "prev_value": 4.6,
+    "change": 0.07,
+    "change_pct": 1.52,
+    "as_of": "2026-05-19T22:20:16Z",
+    "source": "Trading Economics"
   },
   "brent": {
     "name": "Brent Crude",
-    "value": 112.1,
-    "prev_value": 109.47,
-    "change": 2.63,
-    "change_pct": 2.4,
-    "as_of": "2026-05-18T20:00:00Z",
-    "source": "Los Angeles Times"
+    "value": 111.28,
+    "prev_value": 112.1,
+    "change": -0.82,
+    "change_pct": -0.73,
+    "as_of": "2026-05-19T19:16:00Z",
+    "source": "Morningstar / ICE"
   },
   "headlines": [
     {
-      "title": "Stock Market Today (May 18, 2026): Nasdaq, S&P 500 sink to start week as 10Y Treasury yield hits highest in a year",
-      "source": "TheStreet",
-      "published_at": "2026-05-18T20:17:00Z",
-      "url": "https://www.thestreet.com/"
+      "title": "Trump pauses Iran strike, markets bounce cautiously",
+      "source": "Financial Brief",
+      "published_at": "2026-05-19T18:00:00Z",
+      "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHYmNZgULiG4FQB6rI073SUvn0ECpaER2UtFt2meuTe-g9R7g2Gt01AIHEkAhZS7qcpHKXyRQBmZu4q_xdJdcrqe4eRBS7u8Dqgf6V6WY0Rd0w3roVs0Gd4IncZ0n651dZEfawAaaRfNend9IISrznoA932YEXF8P82DHnddvJ_11Yqx_zef6D1FV-t1aIWCxpbAIyXu00ylV77dW9pR6fF"
     },
     {
-      "title": "Is a deeper bond crash ahead? From Washington to Tokyo, governments are paying the highest borrowing costs in decades as global bond yields surge",
-      "source": "The Economic Times",
-      "published_at": "2026-05-18T17:49:04Z",
-      "url": "https://economictimes.indiatimes.com/"
+      "title": "U.S. stocks fall further from their records after bond markets crank up the pressure",
+      "source": "Associated Press",
+      "published_at": "2026-05-19T20:27:00Z",
+      "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHp_LL0gGqAPaJxi_Iz_nZ-PdkLfppbgNE2p2wskBOi96ZT-zpvE0djsrgF4vXYBnmq8DlElUZp1YMGEG-n9aFSnSdoDXasVKt3xFlUxoDEGCmzJuVLg7wa4MjI0vRYG82iBgtYgjyNRYeAPCvH3os-1jI8gU9WlA-dD6qOhkq4AxyF_QYgeYYszcCwpTS1bHKO7xytXXsxID8Ochsd13BadwX0mPRGOwGyOTyyZRT4UbFJc1r7nBSSGQ=="
     },
     {
-      "title": "Oil prices keep swinging, and so do stocks worldwide",
-      "source": "Los Angeles Times",
-      "published_at": "2026-05-18T20:31:00Z",
-      "url": "https://www.latimes.com/"
+      "title": "Oil retreats as Trump delays planned strike on Iran",
+      "source": "MUFG Research",
+      "published_at": "2026-05-19T07:00:00Z",
+      "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFuqIB0BxTMA6zFxwnmsQK_Mye_E3WtEW3W3BvVzR8ei4ygxipRIn1Fudfy8puSvO1UbqV4nLnZq_wOT4ECV70hAQUl806Al-rQ7uXSLxnhWhb8C97kSC8SfJbkMYKqnLpB4RfIT2T-ANJjjdj-uuOp0OGRRxnQ1w=="
     },
     {
-      "title": "How major US stock indexes fared Monday 5/18/2026",
-      "source": "AP News",
-      "published_at": "2026-05-18T20:19:00Z",
-      "url": "https://apnews.com/"
+      "title": "After the Iran war, the Gulf's next economic phase awaits",
+      "source": "Atlantic Council",
+      "published_at": "2026-05-19T19:00:00Z",
+      "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQGhi58U_ukBNt5tXQpdMi52TKEa0SYeXJTDPMK2GuDOIAieBUddF7zo5OWadrz8I9gMveUjf8yoRlShTd_Q1PMXQhUcsS9O8qXM-Aj8uSlESpCB0rGzqJh7H6jeR11nraxu4uRmfz2Lc_-A8-MzwMOn87ucfSwRbJGpRApnQ4bTM_TSP3R0_WV8lrtHdCbhMTUDrBCKJDN1dwBP8410uI0="
     },
     {
-      "title": "Dow rises while Nasdaq slides on oil surge, Treasury yields pressure tech",
-      "source": "Invezz",
-      "published_at": "2026-05-18T20:18:00Z",
-      "url": "https://invezz.com/"
+      "title": "Will higher costs for retailers be passed on to consumers?",
+      "source": "Marketplace",
+      "published_at": "2026-05-19T21:00:00Z",
+      "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHwConxVk3-QEe0tmW7wOqNV6gRGmABAcNt3Knp8YjW6HsdXioEMuot0oMONh-e-T-kdRUb7dIohN9goOqlxo4ZLpTFxtcAFKiHzV8DLO0kW512XK25ut3dBxv_Jui0VSOXqILII8Rg0RAK-fMrUpLRQZzhgPtDqJWvVCCxLu5LsYrW45acFxUSbFb9ejFydIZvMI9AFK72xMkpsuw="
     }
   ],
   "notes": [
-    "미국 증시는 중동 긴장에 따른 국제 유가 급등과 10년물 국채 금리 연고점 경신 여파로 기술주 중심의 하락세를 보이며 혼조세로 마감함.",
-    "브렌트유는 호르무즈 해협 봉쇄 및 공급망 붕괴 우려로 배럴당 장중 112달러 선을 돌파한 후 112.10달러 부근에서 거래를 마쳤음.",
-    "안전자산 선호 및 인플레이션 장기화 우려로 인해 VIX 등 변동성 지표는 전일 대비 상승 마감함."
+    "S&P 500 and NASDAQ recorded losses following a surge in US Treasury yields.",
+    "Crude oil prices eased from elevated levels after reports that the planned military strike on Iran was delayed, easing some geopolitical risk premiums.",
+    "US 10-Year Treasury yield surged to 4.67%, putting broader pressure on risk assets."
   ]
 }
