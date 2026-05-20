@@ -933,6 +933,34 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 ADM은 `Action Decision Matrix`이며, 단순히 나쁜 feature를 blacklist하는 계층이 아니다. 핵심 목적은 같은 후보에서 `지금 산다`, `호가를 다시 기다린다`, `stale/source-quality 때문에 버린다`, `방어적으로 진입한다`, `AI no-buy를 유지한다`, `보유한다`, `청산한다`, `물타기/불타기를 검토한다` 중 어떤 행동이 더 나았는지를 매일 outcome과 join해 다음 runtime 판단에 반영하는 것이다.
 
+### 0. ADM과 LDM의 관계
+
+ADM은 특정 의사결정면의 전문 matrix이고, LDM(`Lifecycle Decision Matrix`)은 여러 ADM과 sim/counterfactual source를 lifecycle stage로 묶는 상위 umbrella framework다. Entry ADM은 진입 action 품질을 보고, Holding/Exit ADM은 보유/청산 및 scale-in bias를 본다. LDM은 이 결과를 `entry`, `submit`, `holding`, `scale_in`, `exit` stage로 재분류해 stage별 weighted ADM policy를 만든다.
+
+데이터 흐름은 아래 순서로 본다.
+
+```text
+pipeline_events / threshold_events / sim events / post-sell labels
+  -> Entry ADM, Holding/Exit ADM, submit observation, scale-in adapter, panic/euphoria source
+  -> LDM stage rows: entry / submit / holding / scale_in / exit
+  -> threshold_cycle_ev / runtime_approval_summary / threshold_cycle_preopen_apply
+  -> selected PREOPEN env가 있을 때만 bounded runtime policy로 사용
+```
+
+ADM artifact와 LDM artifact는 모두 기본적으로 `runtime_effect=false`인 postclose/source artifact다. Entry ADM 또는 Holding/Exit ADM runtime override가 명시적으로 켜진 경우에는 해당 ADM adapter가 AI action을 보정할 수 있다. LDM은 `lifecycle_decision_matrix_runtime` family가 selected된 다음 장전 env에 policy file/version/promote cap이 기록된 경우에만 기존 ADM adapter를 감싸 stage별 action proposal에 사용된다.
+
+우선순위는 `hard safety veto -> account/order/broker guard -> lifecycle matrix runtime policy -> 기존 ADM adapter -> baseline fixed threshold fallback`이다. 따라서 ADM/LDM이 매수, 보유, 추가매수, 청산 방향의 bias를 제안하더라도 broker submit guard, stale quote, price freshness, hard/protect/emergency stop, 계좌/order/cooldown/qty guard를 우회할 수 없다.
+
+### 0.1 ADM과 LDM의 판정 산출 구조
+
+Entry ADM은 entry 관련 이벤트를 action bucket과 feature bucket으로 묶고 후행 outcome과 join해 action별 `source_quality_adjusted_ev_pct`, missed winner, avoided loser를 만든다. 주요 action은 `BUY_NOW`, `WAIT_REQUOTE`, `SKIP_STALE`, `BUY_DEFENSIVE`, `NO_BUY_AI`, `SKIP_SOURCE_QUALITY`, `SKIP_PRE_SUBMIT_SAFETY`다. joined sample이 충분하고 matched bucket의 dominant action이 확인되면 prompt context 또는 runtime bias가 AI `BUY`를 `WAIT`/`DROP`으로 보정할 수 있다. 양의 action bucket인 `BUY_NOW`/`BUY_DEFENSIVE`는 broker guard를 우회하는 강제 BUY 권한이 아니라 다음 bounded tuning 후보와 provenance 입력이다.
+
+Holding/Exit ADM은 보유/청산 flow AI와 scale-in evaluator가 읽는 advisory matrix다. `prefer_exit`이면 `HOLD`/`TRIM`을 `EXIT`로 보정할 수 있고, `prefer_avg_down_wait` 또는 `prefer_pyramid_wait`이면 `EXIT`/`TRIM`을 `HOLD`로 보정할 수 있다. matrix가 비어 있거나 sample이 부족하면 `no_clear_edge`로 닫고, hypothesis fallback이 손실 회복 구간은 AVG_DOWN bias, 수익 확장 구간은 PYRAMID bias로 scale-in evaluator에 전달할 수 있다.
+
+LDM은 source row마다 runtime feature와 label을 분리한다. runtime feature는 AI score/action, stale/source-quality, liquidity, price resolver, latency, OFI/QI, position PnL/peak/held_sec, risk context 같은 장중에 알 수 있는 값이다. label은 realized profit, MFE/MAE, close horizon, avoided loss, missed upside처럼 사후에만 알 수 있는 값이다. label은 postclose policy 산출에만 쓰고 runtime resolver 입력으로 넣지 않는다.
+
+LDM의 stage별 policy는 joined row의 `stage_ev_composite_pct` 평균, sample floor, joined sample floor, confidence, source-quality gate로 산출한다. entry/submit EV가 양호하면 `BUY_DEFENSIVE` 또는 `ALLOW_SUBMIT`, entry EV가 음수면 `WAIT_REQUOTE`, holding/exit EV가 양호하면 `HOLD`, 음수면 `EXIT`, scale-in EV가 양호하면 `PYRAMID_BIAS`를 제안한다. sample 부족은 rollback이 아니라 `hold_sample` 또는 `NO_CHANGE`로 닫는다. 현재 promote-ready 경로는 entry `BUY_DEFENSIVE` micro canary 중심이며, 다른 stage의 좋은 방향성은 우선 source 수집과 후속 workorder/approval review로 남긴다.
+
 ### 1. Entry ADM
 
 Entry ADM의 source artifact는 `data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_YYYY-MM-DD.{json,md}`다. postclose 체인은 entry snapshot, sim buy/sell, sim post-sell evaluation을 `candidate_id` 또는 `sim_record_id`로 join해 action별 `source_quality_adjusted_ev_pct`, missed upside, avoided loss를 만든다.

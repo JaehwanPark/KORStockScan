@@ -103,6 +103,13 @@
   - 금지: source-quality/workorder gap을 runtime threshold mutation, real order gate, Telegram BUY/SELL, provider route, bot restart 근거로 쓰지 않는다.
   - 다음 액션: `covered_by_generated_workorder`, `manual_codex_order_required`, `next_day_checklist_required`, `defer_no_repro` 중 하나로 닫고, 자동 생성 workorder에 없으면 수동 구현 지시 대상 또는 다음 영업일 checklist 항목으로 승격한다.
 
+- [ ] `[ScalpSimLdmSamplePolicy0520] LDM 샘플 수집 목적의 scalp sim max_daily 160 및 reserve/bucket quota 구현` (`Due: 2026-05-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:25~17:45`, `Track: ScalpingLogic`)
+  - Source: [lifecycle_decision_matrix.py](/home/ubuntu/KORStockScan/src/engine/lifecycle_decision_matrix.py), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [threshold_runtime_env_2026-05-20.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-05-20.env)
+  - 판정 기준: `SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY=80`이 LDM stage floor는 통과 가능하나 시간대/시장상태/action bucket 수집에는 부족한지 postclose 원장과 LDM row coverage로 확인한다. 다음 PREOPEN 적용 후보는 `160`으로 두되, 오전 소진 방지를 위해 `blocked_ai_score <= 60%`, `first_ai_wait >= 30%`, panic/euphoria lifecycle source는 별도 cap보다 reserve 소비 허용 원칙을 코드/테스트/문서에 반영한다.
+  - 구현 기준: 시간대 reserve 초안은 `09:00~10:00 max 56`, `10:00~12:00 reserve 32`, `12:00~14:00 max 40`, `14:00~close reserve 32`로 시작한다. quota 판단은 sim-only candidate window에만 적용하며 real entry, broker submit, Telegram BUY/SELL, provider route, bot restart trigger와 연결하지 않는다.
+  - 금지: 장중 runtime env 직접 수정, restart만으로 max_daily 변경, sim/probe 표본을 real execution 품질이나 실주문 전환 근거로 사용하는 것을 금지한다.
+  - 다음 액션: `implemented_preopen_candidate_160_with_quota`, `implemented_160_only_quota_deferred`, `hold_80_sample_enough`, `needs_persistent_daily_counter_first`, `defer_source_quality_gap` 중 하나로 닫고, 후보 승인 시 다음 PREOPEN `threshold_cycle_preopen_apply` 산출물의 `KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY=160` 및 quota env/정책 반영 여부를 확인한다.
+
 - [ ] `[ShadowCanaryCohortReview0520] shadow/canary/cohort 런타임 분류 및 정리 판정` (`Due: 2026-05-20`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)
   - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)
   - 판정 기준: 당일 변경/관찰 결과를 기준으로 `remove`, `observe-only`, `baseline-promote`, `active-canary` 상태 변동 여부를 닫는다.
