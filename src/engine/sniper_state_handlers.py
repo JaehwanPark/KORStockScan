@@ -2090,8 +2090,6 @@ def _resolve_scalp_sim_panic_bottoming_entry_context(
     max_level = max(0, _rule_int("SCALP_SIM_PANIC_BOTTOMING_ENTRY_MAX_LEVEL", 1))
     if level <= 0 or level > max_level:
         return {"panic_bottoming_entry_allowed": False, "panic_bottoming_entry_reason": "panic_level_not_eligible"}
-    if bool(panic_context.get("confirmed_risk_off")):
-        return {"panic_bottoming_entry_allowed": False, "panic_bottoming_entry_reason": "confirmed_risk_off"}
     if str(panic_context.get("liquidity_state") or "").upper() in {"BROKEN", "LIQUIDITY_BROKEN", "THIN_BROKEN"}:
         return {"panic_bottoming_entry_allowed": False, "panic_bottoming_entry_reason": "liquidity_broken"}
 
@@ -2691,12 +2689,18 @@ def _should_block_scalp_sim_entry_for_panic(
         current_ai_score=current_ai_score,
         panic_context=panic_context,
     )
-    if bool(bottoming_context.get("panic_bottoming_entry_allowed")):
-        action_id = _scalp_sim_panic_action_id(stock, panic_context, level, "ALLOW_BOTTOMING_ENTRY")
+    if level == 1:
+        is_bottoming = bool(bottoming_context.get("panic_bottoming_entry_allowed"))
+        action_id = _scalp_sim_panic_action_id(
+            stock,
+            panic_context,
+            level,
+            "ALLOW_BOTTOMING_ENTRY" if is_bottoming else "ALLOW_LEVEL1_RISK_OFF_ENTRY",
+        )
         _mutate_stock_state(
             stock,
             set_fields={
-                "panic_bottoming_entry_allowed": True,
+                "panic_bottoming_entry_allowed": is_bottoming,
                 "panic_bottoming_arm": bottoming_context.get("panic_bottoming_arm"),
                 "panic_bottoming_entry_reason": bottoming_context.get("panic_bottoming_entry_reason"),
                 "symbol_regime": bottoming_context.get("symbol_regime"),
@@ -2706,13 +2710,16 @@ def _should_block_scalp_sim_entry_for_panic(
         _log_entry_pipeline(
             stock,
             code,
-            "scalp_sim_panic_bottoming_entry_allowed",
+            "scalp_sim_panic_bottoming_entry_allowed" if is_bottoming else "scalp_sim_panic_level1_entry_observed",
             **_scalp_sim_event_fields(
                 threshold_family="panic_lifecycle_actuator",
                 sim_parent_record_id=stock.get("id"),
                 source_stage="entry",
-                runtime_effect="sim_entry_allowed_bottoming_probe",
-                decision_authority="sim_observation_only",
+                runtime_effect=(
+                    "sim_entry_allowed_bottoming_probe"
+                    if is_bottoming
+                    else "sim_entry_allowed_level1_risk_off_observation"
+                ),
                 ai_score=f"{current_ai_score:.1f}",
                 panic_lifecycle_action_id=action_id,
                 original_action=str((runtime or {}).get("original_action") or "BUY_SIGNAL"),

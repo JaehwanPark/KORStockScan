@@ -571,6 +571,7 @@ def _load_scalp_sim_panic_rows(target_date: str) -> tuple[list[dict[str, Any]], 
     path = PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"
     source_stages = {
         "scalp_sim_panic_bottoming_entry_allowed",
+        "scalp_sim_panic_level1_entry_observed",
         "scalp_sim_panic_entry_blocked",
         "scalp_sim_panic_scale_in_blocked",
         "scalp_sim_partial_sell_order_assumed_filled",
@@ -590,7 +591,11 @@ def _load_scalp_sim_panic_rows(target_date: str) -> tuple[list[dict[str, Any]], 
         if fields.get("simulation_book") != "scalp_ai_buy_all":
             continue
         stage_counts[source_stage] += 1
-        if source_stage in {"scalp_sim_panic_entry_blocked", "scalp_sim_panic_bottoming_entry_allowed"}:
+        if source_stage in {
+            "scalp_sim_panic_entry_blocked",
+            "scalp_sim_panic_bottoming_entry_allowed",
+            "scalp_sim_panic_level1_entry_observed",
+        }:
             matrix_stage = "entry"
         elif source_stage == "scalp_sim_panic_scale_in_blocked":
             matrix_stage = "scale_in"

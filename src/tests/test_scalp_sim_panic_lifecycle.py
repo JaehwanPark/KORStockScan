@@ -44,7 +44,17 @@ def _state(monkeypatch, tmp_path):
     return events
 
 
-def _panic_files(tmp_path, target_date="2026-05-20", generated_at="2026-05-20T09:10:00"):
+def _panic_files(
+    tmp_path,
+    target_date="2026-05-20",
+    generated_at="2026-05-20T09:10:00",
+    *,
+    confirmed_risk_off=True,
+    confirmed_micro=True,
+    micro_risk_off_count=1,
+    detector_panic_signal_count=0,
+    current_stop_loss_count=0,
+):
     panic_dir = tmp_path / "panic_sell_defense"
     breadth_dir = tmp_path / "market_panic_breadth"
     panic_dir.mkdir()
@@ -58,10 +68,19 @@ def _panic_files(tmp_path, target_date="2026-05-20", generated_at="2026-05-20T09
                 "as_of": generated_at,
                 "panic_state": "PANIC_SELL",
                 "panic_regime_mode": "PANIC_DETECTED",
+                "panic_metrics": {
+                    "current_30m_stop_loss_exit_count": current_stop_loss_count,
+                },
+                "microstructure_detector": {
+                    "risk_off_advisory_count": micro_risk_off_count,
+                    "panic_signal_count": detector_panic_signal_count,
+                },
                 "microstructure_market_context": {
                     "market_risk_state": "RISK_OFF",
                     "market_panic_breadth_risk_off_advisory": True,
-                    "confirmed_risk_off_advisory": True,
+                    "confirmed_risk_off_advisory": confirmed_risk_off,
+                    "confirmed_micro_risk_off_advisory": confirmed_micro,
+                    "risk_off_advisory_count": micro_risk_off_count,
                     "liquidity_state": "NORMAL",
                 },
             }
@@ -120,6 +139,49 @@ def test_panic_context_ok_and_stale(monkeypatch, tmp_path):
     assert ok["panic_epoch_id"].startswith("2026-05-20|PANIC_SELL|PANIC_DETECTED|L2")
     assert stale["panic_context_status"] == "STALE"
     assert stale["panic_level"] == 0
+
+
+def test_breadth_only_panic_sell_report_maps_to_level1_watch(monkeypatch, tmp_path):
+    panic_dir, breadth_dir = _panic_files(
+        tmp_path,
+        confirmed_risk_off=True,
+        confirmed_micro=False,
+        micro_risk_off_count=0,
+        detector_panic_signal_count=0,
+        current_stop_loss_count=1,
+    )
+    monkeypatch.setattr(runtime, "PANIC_SELL_DEFENSE_DIR", panic_dir)
+    monkeypatch.setattr(runtime, "MARKET_PANIC_BREADTH_DIR", breadth_dir)
+
+    context = runtime.resolve_panic_risk_regime_context(
+        now=datetime.fromisoformat("2026-05-20T09:11:00"),
+        max_age_sec=600,
+    )
+
+    assert context["panic_context_status"] == "OK"
+    assert context["panic_level"] == 1
+    assert context["panic_level_reason"] == "breadth_risk_off_watch"
+    assert context["risk_off_components"]["detector_panic_signal_count"] == 0
+    assert context["risk_off_components"]["current_30m_stop_loss_exit_count"] == 1
+
+
+def test_micro_confirmed_panic_sell_report_maps_to_level2(monkeypatch, tmp_path):
+    panic_dir, breadth_dir = _panic_files(
+        tmp_path,
+        confirmed_risk_off=True,
+        confirmed_micro=True,
+        micro_risk_off_count=1,
+    )
+    monkeypatch.setattr(runtime, "PANIC_SELL_DEFENSE_DIR", panic_dir)
+    monkeypatch.setattr(runtime, "MARKET_PANIC_BREADTH_DIR", breadth_dir)
+
+    context = runtime.resolve_panic_risk_regime_context(
+        now=datetime.fromisoformat("2026-05-20T09:11:00"),
+        max_age_sec=600,
+    )
+
+    assert context["panic_level"] == 2
+    assert context["panic_level_reason"] == "confirmed_panic_sell"
 
 
 def test_partial_sell_idempotency_blocks_repeated_same_epoch(_state):
@@ -359,6 +421,9 @@ def test_level1_breadth_risk_off_bottoming_candidate_allows_sim_entry(monkeypatc
         "name": "BOTTOM",
         "strategy": "SCALPING",
         "target_buy_price": 10_000,
+        "scalp_sim_candidate_window_expansion": True,
+        "scalp_sim_candidate_window_source_stage": "blocked_ai_score",
+        "scalp_sim_candidate_window_blocked_reason": "test_level1_risk_off",
         "last_ai_overlap_snapshot": {
             "buy_pressure_10t": 68.0,
             "distance_from_day_high_pct": -7.0,
@@ -386,7 +451,7 @@ def test_level1_breadth_risk_off_bottoming_candidate_allows_sim_entry(monkeypatc
     assert event["panic_bottoming_arm"] == "risk_off_bottoming_probe_entry"
 
 
-def test_level1_breadth_risk_off_non_bottoming_still_blocks_sim_entry(monkeypatch, _state):
+def test_level1_breadth_risk_off_non_bottoming_is_observed_not_blocked(monkeypatch, _state):
     panic_context = {
         "panic_context_status": "OK",
         "panic_level": 1,
@@ -394,7 +459,7 @@ def test_level1_breadth_risk_off_non_bottoming_still_blocks_sim_entry(monkeypatc
         "panic_epoch_id": "epoch-weak",
         "market_risk_state": "RISK_OFF",
         "breadth_risk_off": True,
-        "confirmed_risk_off": False,
+        "confirmed_risk_off": True,
         "liquidity_state": "NORMAL",
     }
     monkeypatch.setattr(state_handlers, "_resolve_scalp_sim_panic_context", lambda now_ts=None: panic_context)
@@ -416,12 +481,16 @@ def test_level1_breadth_risk_off_non_bottoming_still_blocks_sim_entry(monkeypatc
         },
     }
 
-    assert not state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
+    assert state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
         stock,
         "654321",
         {"curr": 10_000, "orderbook": {"asks": [{"price": 10_000}], "bids": [{"price": 9_990}]}},
         {"strategy": "SCALPING", "is_trigger": True, "now_ts": 1000.0, "current_ai_score": 64},
     )
-    event = next(fields for stage, fields in _state if stage == "scalp_sim_panic_entry_blocked")
+    stages = [stage for stage, _ in _state]
+    assert "scalp_sim_panic_level1_entry_observed" in stages
+    assert "scalp_sim_panic_entry_blocked" not in stages
+    event = next(fields for stage, fields in _state if stage == "scalp_sim_panic_level1_entry_observed")
     assert event["symbol_regime"] == "WEAK"
     assert "bottoming_conditions_failed" in event["panic_bottoming_entry_reason"]
+    assert event["runtime_effect"] == "sim_entry_allowed_level1_risk_off_observation"

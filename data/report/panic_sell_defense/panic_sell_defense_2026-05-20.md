@@ -6,16 +6,16 @@
 - panic_regime_mode: `PANIC_DETECTED`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-05-20T11:48:04`
-- latest_event_at: `2026-05-20T11:48:04`
+- as_of: `2026-05-20T12:16:05`
+- latest_event_at: `2026-05-20T12:16:05`
 - reasons: `panic thresholds breached; live market panic breadth risk_off advisory; recovery conditions not yet met`
 
 ## 패닉 지표
 
 - real_exit_count: `17`
-- non_real_exit_count: `94`
+- non_real_exit_count: `96`
 - stop_loss_exit_count: `10`
-- current_30m_stop_loss_exit_count: `1`
+- current_30m_stop_loss_exit_count: `0`
 - max_rolling_30m_stop_loss_exit_count: `9`
 - stop_loss_exit_ratio_pct: `58.8`
 - avg_exit_profit_rate_pct: `-37.4159`
@@ -24,9 +24,9 @@
 
 ## 회복 지표
 
-- active_positions: `8`
-- active_profit_sample: `8`
-- active_avg_unrealized_profit_rate_pct: `-0.8202`
+- active_positions: `24`
+- active_profit_sample: `24`
+- active_avg_unrealized_profit_rate_pct: `-0.3965`
 - active_win_rate_pct: `12.5`
 - sim_probe_provenance_passed: `true`
 - post_sell_rebound_above_sell_10_20m_pct: `0`
@@ -34,15 +34,15 @@
 
 ## Microstructure Detector
 
-- evaluated_symbol_count: `63`
+- evaluated_symbol_count: `69`
 - risk_off_advisory_count: `0`
 - allow_new_long_false_count: `0`
 - panic_signal_count: `0`
 - recovery_candidate_count: `0`
 - recovery_confirmed_count: `0`
-- missing_orderbook_count: `56`
-- degraded_orderbook_count: `56`
-- max_panic_score: `0.37`
+- missing_orderbook_count: `61`
+- degraded_orderbook_count: `61`
+- max_panic_score: `0.3175`
 - max_recovery_score: `0.5793`
 - micro_cusum_triggered_symbol_count: `0`
 - micro_consensus_pass_symbol_count: `0`
@@ -51,11 +51,11 @@
 ## Microstructure Market Context
 
 - market_risk_state: `RISK_OFF`
-- market_panic_breadth_as_of: `2026-05-20T11:48:01`
+- market_panic_breadth_as_of: `2026-05-20T12:16:02`
 - market_panic_breadth_source_quality_status: `ok`
 - market_panic_breadth_risk_off_advisory: `true`
 - market_panic_breadth_single_market_risk_off_advisory: `false`
-- evaluated_symbol_count: `63`
+- evaluated_symbol_count: `69`
 - risk_off_advisory_ratio_pct: `0`
 - confirmed_micro_risk_off_advisory: `false`
 - confirmed_risk_off_advisory: `true`

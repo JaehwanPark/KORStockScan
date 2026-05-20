@@ -213,6 +213,8 @@ def _is_recoverable_openai_ws_close(exc: Exception) -> bool:
     message = str(exc).lower()
     if error_type == "ConnectionClosedOK":
         return True
+    if "no close frame received or sent" in message:
+        return True
     return "received 1000 (ok)" in message and "sent 1000 (ok)" in message
 
 

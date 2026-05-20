@@ -3,7 +3,7 @@
 ## 판정
 
 - primary: `HOLD_DEFER_DANGER`
-- secondary: `AI_HOLDING_OPS`
+- secondary: `AI_HOLDING_OPS, SOFT_STOP_WHIPSAW`
 - report_only: `true`
 - live_runtime_effect: `false`
 - operator_action_required: `false`
@@ -13,7 +13,7 @@
 
 ## 근거
 
-- as_of: `2026-05-20T11:50:02`
+- as_of: `2026-05-20T12:15:02`
 - exit_signal unique: `59`
 - sell_order_sent unique: `2`
 - sell_completed unique: `2`
@@ -22,11 +22,11 @@
 - sell_sent/exit_signal: `3.4%`
 - real sell_sent/exit_signal: `100.0%`
 - non-real sell_sent/exit_signal: `0.0%`
-- flow defer events: `1900`
+- flow defer events: `1901`
 - AI holding cache MISS: `100.0%`
-- soft_stop rebound above sell 10m: `0.0%`
-- trailing missed-upside: `0.0%`
-- top reasons: `flow유예:scalp_trailing_take_profit=1202, flow유예:scalp_soft_stop_pct=698, AI보유감시:cache_miss=566, soft_stop_grace=522, 청산신호:scalp_hard_stop_pct=28`
+- soft_stop rebound above sell 10m: `90.9%`
+- trailing missed-upside: `27.8%`
+- top reasons: `flow유예:scalp_trailing_take_profit=1202, flow유예:scalp_soft_stop_pct=699, AI보유감시:cache_miss=592, soft_stop_grace=537, 청산신호:scalp_hard_stop_pct=28`
 
 ## 금지된 자동변경
 

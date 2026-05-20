@@ -13,19 +13,19 @@
 
 ## 근거
 
-- as_of: `2026-05-20T11:50:05`
+- as_of: `2026-05-20T12:15:05`
 - baseline_date: `2026-05-19`
-- ai_confirmed unique: `101`
+- ai_confirmed unique: `104`
 - budget_pass unique: `2`
 - latency_pass unique: `0`
 - submitted unique: `0`
 - holding_started unique: `0`
-- budget/ai unique: `2.0%` (baseline `4.3`)
+- budget/ai unique: `1.9%` (baseline `4.2`)
 - submitted/ai unique: `0.0%` (baseline `0.0`)
-- top blockers: `blocked_swing_score_vpw:-=113909, blocked_overbought:-=7658, blocked_strength_momentum:below_window_buy_value=7616, blocked_strength_momentum:below_strength_base=7160, blocked_strength_momentum:insufficient_history=2524`
-- upstream blockers: `blocked_ai_score:score_62.0=528, blocked_ai_score:ai_score_50_buy_hold_override=478, blocked_ai_score:score_58.0=132, first_ai_wait:-=110, blocked_ai_score:score_63.0=63`
+- top blockers: `blocked_swing_score_vpw:-=133554, blocked_overbought:-=9274, blocked_strength_momentum:below_window_buy_value=8787, blocked_strength_momentum:below_strength_base=8458, blocked_strength_momentum:insufficient_history=3344`
+- upstream blockers: `blocked_ai_score:ai_score_50_buy_hold_override=617, blocked_ai_score:score_62.0=580, first_ai_wait:-=160, blocked_ai_score:score_58.0=146, blocked_ai_score:score_63.0=67`
 - latency blockers: `latency_block:latency_state_danger=58`
-- price guards: `scale_in_price_guard_block:micro_vwap_bp>60.0=142, entry_ai_price_canary_fallback:invalid_price=75, scale_in_price_guard_block:spread_bps>80.0=16, scale_in_price_guard_block:micro_vwap_bp<-5.0=5, entry_ai_price_canary_skip_order:Wide ask overhang and weak micro setup; bid depth is thin and orderbook_micro is insufficient, so submit expectancy is poor now.=1`
+- price guards: `scale_in_price_guard_block:micro_vwap_bp>60.0=142, entry_ai_price_canary_fallback:invalid_price=96, scale_in_price_guard_block:spread_bps>80.0=16, scale_in_price_guard_block:micro_vwap_bp<-5.0=5, entry_ai_price_canary_skip_order:Wide ask overhang and weak micro setup; bid depth is thin and orderbook_micro is insufficient, so submit expectancy is poor now.=1`
 
 ## 금지된 자동변경
 
@@ -42,6 +42,6 @@
 
 ## Window Summary
 
-- `5m`: ai=21, budget=0, latency=0, submitted=0, top=`blocked_swing_score_vpw:-=4522, blocked_strength_momentum:below_window_buy_value=1517, blocked_strength_momentum:below_strength_base=1515`, upstream=`blocked_ai_score:ai_score_50_buy_hold_override=27, blocked_ai_score:score_62.0=10, first_ai_wait:-=9`
-- `10m`: ai=29, budget=0, latency=0, submitted=0, top=`blocked_swing_score_vpw:-=9522, blocked_strength_momentum:below_strength_base=1994, blocked_strength_momentum:below_window_buy_value=1834`, upstream=`blocked_ai_score:ai_score_50_buy_hold_override=41, blocked_ai_score:score_62.0=24, first_ai_wait:-=9`
-- `30m`: ai=50, budget=1, latency=0, submitted=0, top=`blocked_swing_score_vpw:-=26849, blocked_strength_momentum:below_strength_base=3212, blocked_strength_momentum:below_window_buy_value=2862`, upstream=`blocked_ai_score:ai_score_50_buy_hold_override=124, blocked_ai_score:score_62.0=86, first_ai_wait:-=38`
+- `5m`: ai=22, budget=0, latency=0, submitted=0, top=`blocked_swing_score_vpw:-=675, blocked_strength_momentum:insufficient_history=169, blocked_strength_momentum:below_strength_base=149`, upstream=`blocked_ai_score:ai_score_50_buy_hold_override=49, first_ai_wait:-=22, blocked_ai_score:score_62.0=9`
+- `10m`: ai=26, budget=0, latency=0, submitted=0, top=`blocked_swing_score_vpw:-=5404, blocked_overbought:-=436, blocked_strength_momentum:below_strength_base=427`, upstream=`blocked_ai_score:ai_score_50_buy_hold_override=68, first_ai_wait:-=27, blocked_ai_score:score_62.0=14`
+- `30m`: ai=40, budget=0, latency=0, submitted=0, top=`blocked_swing_score_vpw:-=24167, blocked_strength_momentum:below_strength_base=2813, blocked_strength_momentum:below_window_buy_value=2688`, upstream=`blocked_ai_score:ai_score_50_buy_hold_override=166, blocked_ai_score:score_62.0=62, first_ai_wait:-=59`

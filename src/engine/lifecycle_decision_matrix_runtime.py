@@ -28,6 +28,15 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        if value is None:
+            return default
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
 def _session_cutoff_source_date(now: datetime) -> date:
     if now.hour >= 16:
         return now.date()
@@ -140,6 +149,12 @@ def _resolve_panic_level(panic_payload: dict[str, Any], breadth_payload: dict[st
     micro = panic_payload.get("microstructure_market_context")
     if not isinstance(micro, dict):
         micro = {}
+    detector = panic_payload.get("microstructure_detector")
+    if not isinstance(detector, dict):
+        detector = {}
+    panic_metrics = panic_payload.get("panic_metrics")
+    if not isinstance(panic_metrics, dict):
+        panic_metrics = {}
     panic_state = str(panic_payload.get("panic_state") or "").upper()
     regime = str(panic_payload.get("panic_regime_mode") or "").upper()
     market_state = str(micro.get("market_risk_state") or "").upper()
@@ -152,13 +167,28 @@ def _resolve_panic_level(panic_payload: dict[str, Any], breadth_payload: dict[st
         micro.get("market_panic_breadth_single_market_risk_off_advisory")
         or breadth_payload.get("single_market_risk_off_advisory")
     )
-    confirmed = bool(micro.get("confirmed_risk_off_advisory"))
+    confirmed_micro = bool(micro.get("confirmed_micro_risk_off_advisory"))
+    micro_risk_off_count = _safe_int(micro.get("risk_off_advisory_count"), 0)
+    detector_risk_off_count = _safe_int(detector.get("risk_off_advisory_count"), 0)
+    detector_panic_signal_count = _safe_int(detector.get("panic_signal_count"), 0)
+    current_stop_loss_count = _safe_int(panic_metrics.get("current_30m_stop_loss_exit_count"), 0)
+    strict_micro_confirmed = (
+        confirmed_micro
+        or micro_risk_off_count > 0
+        or detector_risk_off_count > 0
+        or detector_panic_signal_count > 0
+    )
+    hard_stop_cluster = current_stop_loss_count >= 3
     if liquidity_state in {"BROKEN", "LIQUIDITY_BROKEN", "THIN_BROKEN"}:
         return 3, "liquidity_broken"
-    if panic_state == "PANIC_SELL" or confirmed:
-        return 2, "confirmed_panic_sell" if panic_state == "PANIC_SELL" else "confirmed_risk_off"
+    if panic_state == "PANIC_SELL" and (strict_micro_confirmed or hard_stop_cluster):
+        return 2, "confirmed_panic_sell"
+    if strict_micro_confirmed and (breadth_risk_off or single_market_risk_off or market_state == "RISK_OFF"):
+        return 2, "confirmed_risk_off"
     if breadth_risk_off or single_market_risk_off or market_state == "RISK_OFF" or regime == "STABILIZING":
-        return 1, "breadth_risk_off"
+        return 1, "breadth_risk_off_watch"
+    if panic_state == "PANIC_SELL":
+        return 1, "panic_sell_unconfirmed_watch"
     return 0, "normal"
 
 
@@ -226,6 +256,12 @@ def resolve_panic_risk_regime_context(
     micro = panic_payload.get("microstructure_market_context")
     if not isinstance(micro, dict):
         micro = {}
+    detector = panic_payload.get("microstructure_detector")
+    if not isinstance(detector, dict):
+        detector = {}
+    panic_metrics = panic_payload.get("panic_metrics")
+    if not isinstance(panic_metrics, dict):
+        panic_metrics = {}
     level, reason = _resolve_panic_level(panic_payload, breadth_payload)
     panic_state = str(panic_payload.get("panic_state") or "NORMAL")
     regime = str(panic_payload.get("panic_regime_mode") or "NORMAL")
@@ -246,6 +282,12 @@ def resolve_panic_risk_regime_context(
         "confirmed_micro_risk_off": bool(micro.get("confirmed_micro_risk_off_advisory")),
         "market_confirms_risk_off": bool(micro.get("market_confirms_risk_off")),
         "breadth_confirms_risk_off": bool(micro.get("breadth_confirms_risk_off")),
+        "micro_risk_off_count": _safe_int(micro.get("risk_off_advisory_count"), 0),
+        "detector_risk_off_count": _safe_int(detector.get("risk_off_advisory_count"), 0),
+        "detector_panic_signal_count": _safe_int(detector.get("panic_signal_count"), 0),
+        "current_30m_stop_loss_exit_count": _safe_int(
+            panic_metrics.get("current_30m_stop_loss_exit_count"), 0
+        ),
     }
     return {
         "panic_context_status": "OK",

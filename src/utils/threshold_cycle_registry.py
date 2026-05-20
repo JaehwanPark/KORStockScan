@@ -76,6 +76,12 @@ THRESHOLD_STAGE_FAMILY_MAP = {
     "scalp_sim_ai_holding_deferred": "scalp_sim_ai_budget_manager",
     "sim_ai_budget_exhausted": "scalp_sim_ai_budget_manager",
     "sim_ai_critical_bypass": "scalp_sim_ai_budget_manager",
+    "scalp_sim_panic_bottoming_entry_allowed": "panic_lifecycle_actuator",
+    "scalp_sim_panic_level1_entry_observed": "panic_lifecycle_actuator",
+    "scalp_sim_panic_entry_blocked": "panic_lifecycle_actuator",
+    "scalp_sim_panic_scale_in_blocked": "panic_lifecycle_actuator",
+    "scalp_sim_panic_action_deduped": "panic_lifecycle_actuator",
+    "scalp_sim_partial_sell_order_assumed_filled": "panic_lifecycle_actuator",
 }
 
 TARGET_STAGES = frozenset(THRESHOLD_STAGE_FAMILY_MAP)

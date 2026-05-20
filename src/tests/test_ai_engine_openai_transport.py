@@ -600,6 +600,59 @@ def test_openai_ws_connection_closed_ok_fallback_logs_info_not_error(monkeypatch
     assert not any("[OpenAI WS fallback]" in msg for msg in log_error_calls)
 
 
+def test_openai_ws_missing_close_frame_fallback_logs_info_not_error(monkeypatch):
+    engine = _build_engine()
+    engine.client = SimpleNamespace(responses=SimpleNamespace(create=lambda **kwargs: None))
+    log_info_calls = []
+    log_error_calls = []
+
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_TRANSPORT_MODE="responses_ws",
+            OPENAI_RESPONSES_WS_ENABLED=True,
+        ),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_responses_ws",
+        lambda request: (_ for _ in ()).throw(RuntimeError("no close frame received or sent")),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_responses_http",
+        lambda request: OpenAITransportResult(
+            payload={"action": "WAIT", "score": 62, "reason": "http fallback"},
+            transport_mode="http",
+            ws_used=False,
+            ws_http_fallback=True,
+            roundtrip_ms=15,
+        ),
+    )
+    monkeypatch.setattr(openai_module, "log_info", lambda msg, **kwargs: log_info_calls.append(msg))
+    monkeypatch.setattr(openai_module, "log_error", lambda msg, **kwargs: log_error_calls.append(msg))
+
+    result = GPTSniperEngine._call_openai_safe(
+        engine,
+        "PROMPT",
+        "payload",
+        require_json=True,
+        context_name="test",
+        schema_name="entry_v1",
+        endpoint_name="analyze_target",
+        symbol="005930",
+    )
+    meta = engine._consume_last_transport_meta()
+
+    assert result["action"] == "WAIT"
+    assert meta["openai_ws_http_fallback"] is True
+    assert meta["openai_ws_error_type"] == "RuntimeError"
+    assert any("[OpenAI WS fallback]" in msg for msg in log_info_calls)
+    assert not any("[OpenAI WS fallback]" in msg for msg in log_error_calls)
+
+
 def test_openai_ws_hot_path_does_not_take_http_api_lock(monkeypatch):
     engine = _build_engine()
 
