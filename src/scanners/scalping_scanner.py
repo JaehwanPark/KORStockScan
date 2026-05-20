@@ -501,7 +501,7 @@ def run_scalper(is_test_mode=False):
         
         if not is_test_mode and not (market_open <= now_time <= market_close):
             if time.time() - last_closed_msg_time > 3600:
-                print("🌙 장 마감 혹은 개장 전입니다. 대기 중...")
+                print("🌙 신규 스캘핑 후보 스캔 시간이 아닙니다. 보유/청산 감시는 계속됩니다.")
                 last_closed_msg_time = time.time()
             time.sleep(60)
             continue
