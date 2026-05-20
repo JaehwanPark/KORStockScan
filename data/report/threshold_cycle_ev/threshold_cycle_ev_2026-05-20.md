@@ -133,7 +133,7 @@
 
 ## Pattern Lab Audits
 - currentness: status=`pass` fail=`0` orders=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-20.json`
-- propagation: status=`fail` fail=`1` warnings=`1` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-20.json`
+- propagation: status=`pass` fail=`0` warnings=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-20.json`
 
 ## Swing Runtime Approval
 - request_report: `/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-05-19.json`
@@ -154,7 +154,7 @@
 - artifact: `/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-20.json`
 - markdown: `/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-20.md`
 - selected_order_count: `12`
-- decision_counts: `{'implement_now': 2, 'attach_existing_family': 16, 'design_family_candidate': 6, 'defer_evidence': 11, 'reject': 3}`
+- decision_counts: `{'attach_existing_family': 18, 'design_family_candidate': 6, 'defer_evidence': 11, 'reject': 3}`
 
 ## Approval Requests
 - none
@@ -164,9 +164,9 @@
 
 ## Calibration Decisions
 ## Code Improvement Top Orders
-- `order_lifecycle_ai_context_attribution_feedback` decision=`implement_now` subsystem=`lifecycle_decision_matrix`
-- `order_swing_strategy_discovery_source_quality_followup` decision=`implement_now` subsystem=`swing_strategy_discovery_sim`
 - `order_ai_threshold_dominance` decision=`attach_existing_family` subsystem=`entry_funnel`
+- `order_perf_buy_funnel_json_scan` decision=`attach_existing_family` subsystem=`buy_funnel_sentinel`
+- `order_ai_threshold_miss_ev_recovery` decision=`attach_existing_family` subsystem=`entry_funnel`
 
 ## Pattern Lab Top Findings
 - `AI threshold dominance` route=`existing_family` family=`score65_74_recovery_probe`
@@ -193,4 +193,3 @@
 - `lifecycle_ai_context_attribution:lifecycle_ai_context_runtime_provenance_missing`
 - `swing_strategy_discovery:pending_future_quotes`
 - `swing_strategy_discovery:sample_floor_not_met`
-- `pattern_lab_propagation_audit_fail`

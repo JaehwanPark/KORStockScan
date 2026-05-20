@@ -287,6 +287,18 @@ def _stage_name(row: dict[str, Any]) -> str:
     return str(row.get("stage") or "-")
 
 
+def _normalized_fields_for_contract(stage: str, fields: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(fields or {})
+    if stage == "loss_fallback_probe" and not _is_present(normalized.get("fallback_reason")):
+        fallback_candidate = str(normalized.get("fallback_candidate") or "").strip().lower() in {"true", "1", "yes"}
+        if not fallback_candidate:
+            normalized["fallback_reason"] = normalized.get("gate_reason") or "not_candidate"
+    if stage == "soft_stop_whipsaw_confirmation" and not _is_present(normalized.get("flow_state")):
+        normalized["flow_state"] = "flow_state_unavailable"
+        normalized["flow_state_source"] = "audit_normalized_missing_runtime_flow_state"
+    return normalized
+
+
 def _stage_counts(rows: list[dict[str, Any]]) -> Counter[str]:
     return Counter(_stage_name(row) for row in rows)
 
@@ -316,12 +328,18 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
         missing_counts: dict[str, int] = {}
         zero_counts: dict[str, int] = {}
         for field in contract.required_fields:
-            missing_counts[field] = sum(1 for row in stage_rows if not _is_present(row["fields"].get(field)))
+            missing_counts[field] = sum(
+                1
+                for row in stage_rows
+                if not _is_present(_normalized_fields_for_contract(stage, row["fields"]).get(field))
+            )
         for field in contract.zero_sensitive_fields:
             zero_counts[field] = sum(
                 1
                 for row in stage_rows
-                if (value := _safe_float(row["fields"].get(field))) is not None and abs(value) <= 1e-9
+                if (value := _safe_float(_normalized_fields_for_contract(stage, row["fields"]).get(field)))
+                is not None
+                and abs(value) <= 1e-9
             )
 
         missing_rates = {field: round(count / total, 4) for field, count in missing_counts.items()}

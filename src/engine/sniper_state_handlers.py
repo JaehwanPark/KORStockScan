@@ -157,6 +157,7 @@ _SCALP_SIM_CANDIDATE_WINDOW_DAILY_BUCKET_CREATED: dict[tuple[str, str], int] = {
 _SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED: dict[tuple[str, str], int] = {}
 _SCALP_SIM_SCALE_IN_WINDOW_DAILY_CREATED: dict[str, int] = {}
 _SCALP_SIM_AI_CALL_TIMES: list[float] = []
+_SCALP_SIM_PANIC_DEDUP_LOG_TS: dict[tuple[str, str, int, str], float] = {}
 _SWING_PROBE_DAILY_CREATED: dict[str, int] = {}
 _SWING_PROBE_DISCARD_LOG_TS: dict[tuple[str, str, str, str], float] = {}
 _SWING_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS: dict[str, dict] = {}
@@ -1952,6 +1953,31 @@ def _scalp_sim_candidate_window_daily_key(now_ts: float | None = None) -> str:
         return datetime.fromtimestamp(float(now_ts or time.time())).date().isoformat()
     except Exception:
         return datetime.now().date().isoformat()
+
+
+def _should_log_scalp_sim_panic_dedup_event(
+    stock: dict,
+    panic_context: dict,
+    level: int,
+    action: str,
+    now_ts: float,
+) -> bool:
+    interval_sec = max(0, _rule_int("SCALP_SIM_PANIC_ACTION_DEDUP_LOG_INTERVAL_SEC", 60))
+    if interval_sec <= 0:
+        return True
+    position_id = str(
+        (stock or {}).get("sim_record_id")
+        or (stock or {}).get("record_id")
+        or (stock or {}).get("id")
+        or "-"
+    )
+    epoch_id = str((panic_context or {}).get("panic_epoch_id") or "-")
+    key = (position_id, epoch_id, int(level or 0), str(action or "-").upper())
+    previous_ts = float(_SCALP_SIM_PANIC_DEDUP_LOG_TS.get(key, 0.0) or 0.0)
+    if previous_ts > 0 and float(now_ts or 0.0) - previous_ts < interval_sec:
+        return False
+    _SCALP_SIM_PANIC_DEDUP_LOG_TS[key] = float(now_ts or time.time())
+    return True
 
 
 def _parse_scalp_sim_candidate_window_time_bucket_policy(policy: str) -> list[tuple[str, int, int, int]]:
@@ -3934,26 +3960,27 @@ def _apply_scalp_sim_panic_holding_actuator(
     if action == "NO_CHANGE":
         return False
     if _scalp_sim_panic_action_already_applied(stock, panic_context, level, action):
-        _log_holding_pipeline(
-            stock,
-            code,
-            "scalp_sim_panic_action_deduped",
-            **_scalp_sim_event_fields(
-                threshold_family="panic_lifecycle_actuator",
-                sim_record_id=stock.get("sim_record_id"),
-                sim_parent_record_id=stock.get("sim_parent_record_id"),
-                source_stage="holding",
-                runtime_effect="sim_panic_action_deduped",
-                decision_authority="sim_observation_only",
-                proposed_action=action,
-                proposed_reason=proposal.get("reason"),
-                profit_rate=f"{profit_rate:+.2f}",
-                peak_profit=f"{peak_profit:+.2f}",
-                current_ai_score=f"{current_ai_score:.0f}",
-                held_sec=int(held_sec or 0),
-                **_scalp_sim_panic_context_fields(panic_context),
-            ),
-        )
+        if _should_log_scalp_sim_panic_dedup_event(stock, panic_context, level, action, now_ts):
+            _log_holding_pipeline(
+                stock,
+                code,
+                "scalp_sim_panic_action_deduped",
+                **_scalp_sim_event_fields(
+                    threshold_family="panic_lifecycle_actuator",
+                    sim_record_id=stock.get("sim_record_id"),
+                    sim_parent_record_id=stock.get("sim_parent_record_id"),
+                    source_stage="holding",
+                    runtime_effect="sim_panic_action_deduped",
+                    decision_authority="sim_observation_only",
+                    proposed_action=action,
+                    proposed_reason=proposal.get("reason"),
+                    profit_rate=f"{profit_rate:+.2f}",
+                    peak_profit=f"{peak_profit:+.2f}",
+                    current_ai_score=f"{current_ai_score:.0f}",
+                    held_sec=int(held_sec or 0),
+                    **_scalp_sim_panic_context_fields(panic_context),
+                ),
+            )
         return False
     if action == "TRAIL_TIGHT":
         action_id = _mark_scalp_sim_panic_action(stock, panic_context, level, action, now_ts)
@@ -12836,7 +12863,11 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         "threshold_calibration_state", "runtime_default"
                     ),
                     threshold_applied_value=whipsaw_decision.get("threshold_applied_value", "-"),
-                    flow_state=stock.get("holding_flow_override_state", "-"),
+                    flow_state=(
+                        stock.get("holding_flow_override_last_flow_state")
+                        or stock.get("holding_flow_override_state")
+                        or "flow_state_unavailable"
+                    ),
                     exit_rule_candidate="scalp_soft_stop_pct",
                 )
             elif whipsaw_decision.get("expired"):
@@ -13157,6 +13188,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             )
             min_fallback_ai = _rule_int("SCALP_LOSS_FALLBACK_MIN_AI_SCORE", 65)
             fallback_reason = str((fallback_action or {}).get("reason") or "")
+            fallback_reason_for_event = fallback_reason or str(fallback_gate.get("reason") or "not_candidate")
             fallback_candidate = bool(
                 fallback_action
                 and (not allowed_reasons or fallback_reason in allowed_reasons)
@@ -13169,7 +13201,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 gate_allowed=bool(fallback_gate.get("allowed")),
                 gate_reason=fallback_gate.get("reason", "-"),
                 fallback_candidate=fallback_candidate,
-                fallback_reason=fallback_reason or "-",
+                fallback_reason=fallback_reason_for_event,
                 fallback_add_type=(fallback_action or {}).get("add_type", "-"),
                 current_ai_score=f"{current_ai_score:.0f}",
                 min_ai=min_fallback_ai,

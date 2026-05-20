@@ -174,6 +174,41 @@ def test_observation_source_quality_audit_routes_entry_arm_and_loss_diagnostics_
     assert report["stage_contracts"]["soft_stop_whipsaw_confirmation"]["status"] == "pass"
 
 
+def test_observation_source_quality_audit_normalizes_optional_holding_context(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    rows = [
+        _event(
+            "loss_fallback_probe",
+            {
+                "gate_allowed": False,
+                "gate_reason": "add_judgment_locked",
+                "fallback_candidate": False,
+                "fallback_reason": "-",
+                "profit_rate": "-1.0",
+                "peak_profit": "0.0",
+            },
+        ),
+        _event(
+            "soft_stop_whipsaw_confirmation",
+            {
+                "threshold_family": "soft_stop_whipsaw_confirmation",
+                "threshold_version": "runtime_default",
+                "threshold_calibration_state": "runtime_default",
+                "profit_rate": "-1.5",
+                "flow_state": "-",
+                "exit_rule_candidate": "scalp_soft_stop_pct",
+            },
+            record_id=2,
+        ),
+    ]
+    _write_events(tmp_path, "2026-05-15", rows)
+
+    report = audit.build_observation_source_quality_audit("2026-05-15")
+
+    assert report["stage_contracts"]["loss_fallback_probe"]["status"] == "pass"
+    assert report["stage_contracts"]["soft_stop_whipsaw_confirmation"]["status"] == "pass"
+
+
 def test_observation_source_quality_audit_routes_holding_diagnostics_by_contract(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     rows = [

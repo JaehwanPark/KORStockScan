@@ -1,14 +1,13 @@
 # Observation Source Quality Audit - 2026-05-20
 
-- status: `warning`
+- status: `pass`
 - event_count: `593358`
 - decision_authority: `source_quality_only`
 - runtime_effect: `False`
 - forbidden_uses: `runtime_threshold_apply, order_submit, provider_route_change, bot_restart, real_execution_quality_approval`
 
 ## Warning Stages
-- `loss_fallback_probe` sample=`90` missing=`{'fallback_reason': 0.5333}` zero=`{}`
-- `soft_stop_whipsaw_confirmation` sample=`83` missing=`{'flow_state': 1.0}` zero=`{}`
+- none
 
 ## High Volume Stages Without Source-Like Fields
 - none
