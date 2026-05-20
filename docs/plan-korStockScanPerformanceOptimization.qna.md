@@ -87,22 +87,7 @@
 2. summary에 `approval_required`가 있어도 approval artifact가 없으면 env apply 대상이 아니다.
 3. 다음 장전 적용 여부는 preopen apply manifest와 approval artifact가 닫힌 뒤에만 본다.
 
-### Q6. `plan_rebase_daily_renewal`은 문서를 자동화체인에 어떻게 연결하나?
-
-답변:
-
-1. README/런북(runbook)/Plan Rebase/prompt/AGENTS에 한해 후순위 문서 갱신(document mutation) queue를 만든다.
-2. 기본 mode는 `bounded_document_mutation_queue`이며 `document_mutation_allowed=true`, `runtime_mutation_allowed=false`다.
-3. 생성만으로 checklist 신규 작업항목, runtime env, threshold, 주문, provider, bot restart를 수정하지 않는다.
-
-운영 기준:
-
-1. 실제 문서 갱신은 `1차 수정(first-pass bounded update) -> 2차 감리(second-pass audit review) -> 최종 수정(finalize after second-pass review)` 순서로만 닫는다.
-2. 허용 범위는 README current overview, 런북(runbook) postclose review, Plan Rebase current snapshot, prompt source-of-truth summary, AGENTS current snapshot이다.
-3. 2차 감리는 이력성 내용 archive 여부, 영어 약칭의 한글/영어 병기, runtime/order/provider/bot mutation 금지선, parser 검증을 확인한다.
-4. 금지 범위는 Metric Decision Contract 변경, rollback guard 완화, live/real order approval, runtime threshold mutation, archive 삭제다.
-
-### Q7. 새 관찰지표가 생기면 무엇을 같이 정해야 하나?
+### Q6. 새 관찰지표가 생기면 무엇을 같이 정해야 하나?
 
 답변:
 
@@ -123,7 +108,7 @@
 9. `runtime_effect`
 10. `forbidden_uses`
 
-### Q8. Sentinel, panic, error detector 이상치는 자동 튜닝 명령인가?
+### Q7. Sentinel, panic, error detector 이상치는 자동 튜닝 명령인가?
 
 답변:
 
@@ -137,7 +122,7 @@
 2. panic 결과로 stop/TP/trailing/자동매도/자동매수/provider route를 자동 변경하지 않는다.
 3. System Error Detector 결과로 전략 threshold/order guard를 자동 변경하지 않는다.
 
-### Q9. 스윙 approval request가 있으면 다음 장전 env에 반영하나?
+### Q8. 스윙 approval request가 있으면 다음 장전 env에 반영하나?
 
 답변:
 
@@ -151,7 +136,7 @@
 2. `swing_one_share_real_canary`와 `swing_scale_in_real_canary_phase0`는 전체 스윙 실주문 전환이 아니다.
 3. approval artifact 없이 floor, cooldown, scale-in, real canary env를 수동으로 쓰지 않는다.
 
-### Q10. code-improvement workorder가 생성되면 자동으로 repo를 수정하나?
+### Q9. code-improvement workorder가 생성되면 자동으로 repo를 수정하나?
 
 답변:
 
@@ -165,7 +150,7 @@
 2. workorder 생성은 evidence 정리이지 code mutation이 아니다.
 3. 구현 후에는 관련 테스트와 parser 검증을 실행하고, 다음 postclose EV/report에서 metric을 확인한다.
 
-### Q11. Project/Calendar 동기화는 누가 실행하나?
+### Q10. Project/Calendar 동기화는 누가 실행하나?
 
 답변:
 
@@ -179,7 +164,7 @@
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
 
-### Q12. legacy latency/composite Q&A는 어디서 보나?
+### Q11. legacy latency/composite Q&A는 어디서 보나?
 
 답변:
 

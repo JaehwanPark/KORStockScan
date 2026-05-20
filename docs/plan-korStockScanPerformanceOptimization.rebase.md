@@ -89,8 +89,8 @@
 2. 날짜별 checklist는 실행 작업, 절대 시각, Due/Slot/TimeWindow/Track을 소유한다.
 3. report traceability와 threshold README는 자동화 산출물/consumer/apply contract를 소유한다.
 4. 완료된 과거 checklist 항목은 증적이지 현재 OPEN owner가 아니다.
-5. README/런북(runbook)/Plan Rebase/prompt/AGENTS는 `plan_rebase_daily_renewal`의 후순위 문서 갱신(document mutation) 대상이며 `document_mutation_allowed=true`, `runtime_mutation_allowed=false`다.
-6. 위 문서들의 실제 갱신은 `1차 수정(first-pass bounded update) -> 2차 감리(second-pass audit review) -> 최종 수정(finalize after second-pass review)` 순서로만 닫는다. 2차 감리에서는 이력성 내용 archive 여부, 영어 약칭의 한글/영어 병기, runtime/order/provider/bot mutation 금지선, parser 검증을 확인한다.
+5. README/런북(runbook)/Plan Rebase/prompt/AGENTS 같은 기준 문서는 사용자의 명시 작업지시가 있을 때만 갱신한다.
+6. 위 문서들의 실제 갱신은 runtime/order/provider/bot/threshold 변경과 분리하고, 필요한 경우 1차 수정, 2차 감리, 최종 보완 순서로 parser 검증까지 닫는다.
 7. 이력성 내용은 현재 snapshot에 누적하지 않고 archive 또는 execution-delta에 보존한다.
 8. 문서 변경 후 parser 검증은 AI가 실행한다. Project/Calendar 동기화는 사용자가 표준 명령으로 수동 실행한다.
 

@@ -60,7 +60,6 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     propagation_idx = script.index("src.engine.pattern_lab_propagation_audit")
     post_propagation_ev_idx = script.index('run_threshold_cycle_ev_and_wait "post_propagation_audit_refresh"')
     runtime_summary_idx = script.index("src.engine.runtime_approval_summary")
-    rebase_renewal_idx = script.index("src.engine.plan_rebase_daily_renewal")
     next_checklist_idx = script.rindex("src.engine.build_next_stage2_checklist")
 
     assert (
@@ -78,7 +77,6 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         < propagation_idx
         < post_propagation_ev_idx
         < runtime_summary_idx
-        < rebase_renewal_idx
         < next_checklist_idx
     )
     assert 'RUN_PATTERN_LAB_PROPAGATION_AUDIT="${THRESHOLD_CYCLE_RUN_PATTERN_LAB_PROPAGATION_AUDIT:-true}"' in script
@@ -118,6 +116,8 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert 'ARTIFACT_WAIT_SEC="${THRESHOLD_CYCLE_ARTIFACT_WAIT_SEC:-600}"' in script
     assert 'AI_CORRECTION_MAX_ATTEMPTS="${THRESHOLD_CYCLE_AI_CORRECTION_MAX_ATTEMPTS:-2}"' in script
     assert 'AI_CORRECTION_RETRY_DELAY_SEC="${THRESHOLD_CYCLE_AI_CORRECTION_RETRY_DELAY_SEC:-20}"' in script
+    assert 'AI_CORRECTION_REUSE_IF_VALID="${THRESHOLD_CYCLE_REUSE_AI_REVIEW_IF_VALID:-true}"' in script
+    assert "--reuse-ai-review-if-valid" in script
     assert "wait_for_json_artifact()" in script
     assert "wait_for_report_artifact()" in script
     assert "threshold_cycle_ai_review_status()" in script
@@ -128,7 +128,6 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert '"$PROJECT_DIR/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/runtime_approval_summary/runtime_approval_summary_${TARGET_DATE}.json"' in script
-    assert '"$PROJECT_DIR/data/report/plan_rebase_daily_renewal/plan_rebase_daily_renewal_${TARGET_DATE}.json"' in script
     assert 'wait_for_file_artifact "$(next_stage2_checklist_path)" "next_stage2_checklist"' in script
     assert "src.engine.verify_threshold_cycle_postclose_chain" in script
     assert "--allow-pending-done-marker" in script
@@ -206,6 +205,8 @@ def test_calibration_wrapper_retries_and_fails_unavailable_ai_correction():
 
     assert 'AI_CORRECTION_MAX_ATTEMPTS="${THRESHOLD_CYCLE_AI_CORRECTION_MAX_ATTEMPTS:-2}"' in script
     assert 'AI_CORRECTION_RETRY_DELAY_SEC="${THRESHOLD_CYCLE_AI_CORRECTION_RETRY_DELAY_SEC:-20}"' in script
+    assert 'AI_CORRECTION_REUSE_IF_VALID="${THRESHOLD_CYCLE_REUSE_AI_REVIEW_IF_VALID:-true}"' in script
+    assert "--reuse-ai-review-if-valid" in script
     assert "threshold_cycle_ai_review_status()" in script
     assert "ai correction retry target_date=$TARGET_DATE phase=$RUN_PHASE" in script
     assert "ai correction final unavailable target_date=$TARGET_DATE phase=$RUN_PHASE" in script

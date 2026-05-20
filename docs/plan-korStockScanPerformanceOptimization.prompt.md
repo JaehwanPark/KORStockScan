@@ -1,14 +1,14 @@
 # 계획: KORStockScan 성능 최적화 실행안 (Session Prompt)
 
-기준 시각: `2026-05-13 KST (자동화체인 Rebase 현행화)`
+기준 시각: `2026-05-20 KST (자동화체인 Rebase 현행화)`
 역할: 다음 세션에서 중심 기준 문서로 진입하기 위한 경량 포인터다.
 
-이 문서는 세션 시작용 포인터만 남긴다. 현재 판단의 source of truth는 [Plan Rebase](./plan-korStockScanPerformanceOptimization.rebase.md), 실행 작업은 날짜별 `stage2 todo checklist`, 자동화 산출물/consumer 계약은 [report-based-automation-traceability](./report-based-automation-traceability.md)가 소유한다. 2026-05-13 이전 prompt 원문은 [pre-automation-renewal archive](./archive/plan-korStockScanPerformanceOptimization.prompt.pre-automation-renewal-2026-05-13.md)에 보존했다. README/런북(runbook)/Plan Rebase/prompt/AGENTS 갱신은 후순위 문서 갱신(document mutation)이며 `1차 수정(first-pass bounded update) -> 2차 감리(second-pass audit review) -> 최종 수정(finalize after second-pass review)` 순서로만 닫는다.
+이 문서는 세션 시작용 포인터만 남긴다. 현재 판단의 source of truth는 [Plan Rebase](./plan-korStockScanPerformanceOptimization.rebase.md), 실행 작업은 날짜별 `stage2 todo checklist`, 자동화 산출물/consumer 계약은 [report-based-automation-traceability](./report-based-automation-traceability.md)가 소유한다. 2026-05-13 이전 prompt 원문은 [pre-automation-renewal archive](./archive/plan-korStockScanPerformanceOptimization.prompt.pre-automation-renewal-2026-05-13.md)에 보존했다. 기준 문서 갱신은 사용자의 명시 작업지시가 있을 때만 수행하고 runtime/order/provider/bot/threshold 변경과 분리한다.
 
 ## 현재 Source of Truth
 
 1. 중심 기준: [plan-korStockScanPerformanceOptimization.rebase.md](./plan-korStockScanPerformanceOptimization.rebase.md)
-2. 당일 실행표: [2026-05-13-stage2-todo-checklist.md](./2026-05-13-stage2-todo-checklist.md)
+2. 당일 실행표: [checklists/2026-05-20-stage2-todo-checklist.md](./checklists/2026-05-20-stage2-todo-checklist.md)
 3. 자동화체인/Metric Decision Contract: [report-based-automation-traceability.md](./report-based-automation-traceability.md)
 4. threshold collector/report/apply plan/runtime env: [data/threshold_cycle/README.md](../data/threshold_cycle/README.md)
 5. report inventory와 Markdown 누락 후보: [data/report/README.md](../data/report/README.md)
@@ -21,7 +21,7 @@
 1. 목표는 손실 억제가 아니라 기대값/순이익 극대화다.
 2. 중심 루프는 `R0_collect -> R1_daily_report -> R2_cumulative_report -> R3_manifest_only -> R4_preopen_apply_candidate -> R5_bounded_calibrated_apply -> R6_post_apply_attribution`다.
 3. 장중 runtime threshold mutation은 금지한다. 적용은 장후 report/calibration/AI review와 다음 장전 runtime env를 통해서만 한다.
-4. `2026-05-13` PREOPEN 기준 selected runtime family는 `soft_stop_whipsaw_confirmation`, `score65_74_recovery_probe`다.
+4. `2026-05-20` postclose renewal 기준 selected runtime family는 `soft_stop_whipsaw_confirmation`, `latency_classifier_runtime_profile`, `scalp_sim_candidate_window_expansion`, `scalp_sim_ai_budget_manager`, `lifecycle_decision_matrix_runtime`다.
 5. live AI route는 OpenAI 고정이며 provider transport/provenance는 threshold, 주문가/수량, 스윙 dry-run guard 변경과 분리한다.
 6. 스윙은 dry-run self-improvement 체인이다. approval request가 있어도 별도 approval artifact 없이는 env apply, real canary, live order 전환 금지다.
 7. sim/probe/counterfactual은 source bundle과 approval request 근거가 될 수 있지만 real execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.

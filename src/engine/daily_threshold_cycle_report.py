@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import json
 import math
+import os
+import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -58,6 +61,17 @@ AI_CORRECTION_FORBIDDEN_FIELDS = {
     "restart_required",
     "safety_revert_required",
 }
+AI_CORRECTION_CONTEXT_TOTAL_CHAR_LIMIT = 120_000
+AI_CORRECTION_CONTEXT_SECTION_LIMITS = {
+    "calibration_candidates": 36_000,
+    "calibration_source_bundle": 16_000,
+    "trade_lifecycle_attribution": 14_000,
+    "threshold_cycle_cumulative": 42_000,
+    "recent_anomaly_report": 10_000,
+}
+AI_CORRECTION_SOURCE_METRIC_TOP_N = 12
+AI_CORRECTION_LIST_ITEM_LIMIT = 12
+AI_CORRECTION_HASH_VOLATILE_KEYS = {"generated_at", "reused_at"}
 CALIBRATION_FAMILY_METADATA = {
     "soft_stop_whipsaw_confirmation": {
         "priority": 1,
@@ -6000,7 +6014,248 @@ def _guard_ai_correction_proposal(candidate: dict, proposal: dict) -> dict:
     }
 
 
-def _build_ai_correction_input_context(calibration_report: dict, cumulative_report: dict | None = None) -> dict:
+def _stable_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _json_chars(value: Any) -> int:
+    return len(json.dumps(value, ensure_ascii=False, default=str))
+
+
+def _json_sha256(value: Any) -> str:
+    return hashlib.sha256(_stable_json(value).encode("utf-8")).hexdigest()
+
+
+def _strip_volatile_hash_fields(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): _strip_volatile_hash_fields(item)
+            for key, item in value.items()
+            if str(key) not in AI_CORRECTION_HASH_VOLATILE_KEYS
+        }
+    if isinstance(value, list):
+        return [_strip_volatile_hash_fields(item) for item in value]
+    return value
+
+
+def _json_content_sha256(value: Any) -> str:
+    return _json_sha256(_strip_volatile_hash_fields(value))
+
+
+def _compact_json_value(
+    value: Any,
+    *,
+    max_chars: int,
+    max_dict_keys: int = AI_CORRECTION_SOURCE_METRIC_TOP_N,
+    max_list_items: int = AI_CORRECTION_LIST_ITEM_LIMIT,
+    depth: int = 0,
+) -> Any:
+    current_chars = _json_chars(value)
+    if current_chars <= max_chars:
+        return value
+    if depth >= 4:
+        preview = json.dumps(value, ensure_ascii=False, default=str)[: max(200, max_chars - 300)]
+        return {
+            "_truncated": True,
+            "original_type": type(value).__name__,
+            "original_chars": current_chars,
+            "full_hash": _json_sha256(value),
+            "preview": preview,
+        }
+    if isinstance(value, dict):
+        keys = list(value.keys())
+        per_item_chars = max(600, max_chars // max(1, min(len(keys), max_dict_keys)))
+        compact: dict[str, Any] = {}
+        for key in keys[:max_dict_keys]:
+            compact[str(key)] = _compact_json_value(
+                value.get(key),
+                max_chars=per_item_chars,
+                max_dict_keys=max(4, max_dict_keys // 2),
+                max_list_items=max(3, max_list_items // 2),
+                depth=depth + 1,
+            )
+        if len(keys) > max_dict_keys:
+            compact["_omitted_keys"] = [str(key) for key in keys[max_dict_keys : max_dict_keys + 20]]
+        compact["_compact_meta"] = {
+            "truncated": True,
+            "original_type": "dict",
+            "original_key_count": len(keys),
+            "included_key_count": min(len(keys), max_dict_keys),
+            "original_chars": current_chars,
+            "full_hash": _json_sha256(value),
+        }
+        return compact
+    if isinstance(value, list):
+        per_item_chars = max(500, max_chars // max(1, min(len(value), max_list_items)))
+        return {
+            "_truncated": True,
+            "original_type": "list",
+            "original_count": len(value),
+            "included_count": min(len(value), max_list_items),
+            "original_chars": current_chars,
+            "full_hash": _json_sha256(value),
+            "items": [
+                _compact_json_value(
+                    item,
+                    max_chars=per_item_chars,
+                    max_dict_keys=max(4, max_dict_keys // 2),
+                    max_list_items=max(3, max_list_items // 2),
+                    depth=depth + 1,
+                )
+                for item in value[:max_list_items]
+            ],
+        }
+    text = str(value)
+    return {
+        "_truncated": True,
+        "original_type": type(value).__name__,
+        "original_chars": current_chars,
+        "full_hash": _json_sha256(value),
+        "preview": text[: max(200, max_chars - 300)],
+    }
+
+
+def _cap_ai_context_section(section_name: str, value: Any) -> Any:
+    max_chars = AI_CORRECTION_CONTEXT_SECTION_LIMITS.get(section_name, 10_000)
+    compact = _compact_json_value(value, max_chars=max_chars)
+    if _json_chars(compact) <= max_chars:
+        return compact
+    preview = json.dumps(compact, ensure_ascii=False, default=str)[: max(500, max_chars - 400)]
+    return {
+        "_truncated": True,
+        "section": section_name,
+        "original_chars": _json_chars(value),
+        "compact_chars": _json_chars(compact),
+        "full_hash": _json_sha256(value),
+        "preview": preview,
+    }
+
+
+def _source_availability_summary(sources: Any) -> dict:
+    if not isinstance(sources, dict):
+        return {"source_count": 0, "sources": {}}
+    compact_sources: dict[str, dict] = {}
+    for name, meta in list(sources.items())[:30]:
+        row = meta if isinstance(meta, dict) else {}
+        compact_sources[str(name)] = {
+            "exists": bool(row.get("exists")),
+            "status": row.get("status"),
+            "path": row.get("path"),
+            "warning_count": len(row.get("warnings") or []) if isinstance(row.get("warnings"), list) else 0,
+        }
+    return {
+        "source_count": len(sources),
+        "included_count": len(compact_sources),
+        "sources": compact_sources,
+        "omitted_sources": [str(name) for name in list(sources.keys())[30:50]],
+    }
+
+
+def _candidate_source_metrics_summary(source_metrics: Any) -> Any:
+    return _compact_json_value(
+        source_metrics if source_metrics is not None else {},
+        max_chars=2_500,
+        max_dict_keys=AI_CORRECTION_SOURCE_METRIC_TOP_N,
+        max_list_items=6,
+    )
+
+
+def _cumulative_family_window_context(cumulative_report: dict, families: set[str]) -> dict:
+    snapshots = cumulative_report.get("threshold_snapshot_by_window")
+    bundles = cumulative_report.get("calibration_source_bundle_by_window")
+    result: dict[str, dict] = {}
+    if isinstance(snapshots, dict):
+        for window_name, window_snapshot in snapshots.items():
+            if not isinstance(window_snapshot, dict):
+                continue
+            result[str(window_name)] = {
+                family: _compact_json_value(window_snapshot.get(family), max_chars=2_500, max_dict_keys=10, max_list_items=6)
+                for family in sorted(families)
+                if isinstance(window_snapshot.get(family), dict)
+            }
+    source_metric_context: dict[str, Any] = {}
+    if isinstance(bundles, dict):
+        for window_name, bundle in bundles.items():
+            if not isinstance(bundle, dict):
+                continue
+            source_metric_context[str(window_name)] = {
+                "sources": _source_availability_summary(bundle.get("sources")),
+                "source_metrics": _compact_json_value(
+                    bundle.get("source_metrics") or {},
+                    max_chars=5_000,
+                    max_dict_keys=AI_CORRECTION_SOURCE_METRIC_TOP_N,
+                    max_list_items=6,
+                ),
+                "warnings": list(bundle.get("warnings") or [])[:10],
+            }
+    return {
+        "threshold_snapshot_by_window": result,
+        "calibration_source_bundle_by_window": source_metric_context,
+    }
+
+
+def _finalize_ai_input_context_budget(context: dict) -> dict:
+    context["_context_budget"] = {
+        "total_char_limit": AI_CORRECTION_CONTEXT_TOTAL_CHAR_LIMIT,
+        "section_char_limits": dict(AI_CORRECTION_CONTEXT_SECTION_LIMITS),
+        "full_blob_policy": "hash_and_path_reference_only",
+        "source_metrics_policy": f"compact_top_{AI_CORRECTION_SOURCE_METRIC_TOP_N}",
+    }
+    total_chars = _json_chars(context)
+    if total_chars <= AI_CORRECTION_CONTEXT_TOTAL_CHAR_LIMIT:
+        _refresh_ai_context_budget_counts(context, hard_cap_applied=False)
+        return context
+
+    for section_name in ("threshold_cycle_cumulative", "calibration_source_bundle", "trade_lifecycle_attribution", "recent_anomaly_report"):
+        context[section_name] = _compact_json_value(context.get(section_name), max_chars=8_000, max_dict_keys=8, max_list_items=4)
+        total_chars = _json_chars(context)
+        if total_chars <= AI_CORRECTION_CONTEXT_TOTAL_CHAR_LIMIT:
+            break
+    if total_chars > AI_CORRECTION_CONTEXT_TOTAL_CHAR_LIMIT:
+        context["recent_anomaly_report"] = {
+            "_truncated": True,
+            "reason": "total_context_hard_cap",
+            "full_hash": _json_sha256(context.get("recent_anomaly_report")),
+        }
+        total_chars = _json_chars(context)
+
+    _refresh_ai_context_budget_counts(context, hard_cap_applied=True)
+    return context
+
+
+def _refresh_ai_context_budget_counts(context: dict, *, hard_cap_applied: bool) -> None:
+    budget = context.get("_context_budget")
+    if not isinstance(budget, dict):
+        return
+    budget["section_char_counts"] = {
+        key: _json_chars(value)
+        for key, value in context.items()
+        if key not in {"_context_budget"}
+    }
+    budget["hard_cap_applied"] = bool(hard_cap_applied)
+    previous_chars = None
+    for _ in range(4):
+        current_chars = _json_chars(context)
+        budget["input_context_chars"] = current_chars
+        next_chars = _json_chars(context)
+        if next_chars == current_chars or next_chars == previous_chars:
+            budget["input_context_chars"] = next_chars
+            return
+        previous_chars = current_chars
+    context["_context_budget"]["section_char_counts"] = {
+        key: _json_chars(value)
+        for key, value in context.items()
+        if key not in {"_context_budget"}
+    }
+    budget["input_context_chars"] = _json_chars(context)
+
+
+def _build_ai_correction_input_context(
+    calibration_report: dict,
+    cumulative_report: dict | None = None,
+    *,
+    source_calibration_report_path: str | None = None,
+) -> dict:
     candidates = calibration_report.get("calibration_candidates") or []
     candidate_context = []
     for candidate in candidates if isinstance(candidates, list) else []:
@@ -6022,30 +6277,137 @@ def _build_ai_correction_input_context(calibration_report: dict, cumulative_repo
                 "bounds": candidate.get("bounds"),
                 "max_step_per_day": candidate.get("max_step_per_day"),
                 "safety_revert_required": candidate.get("safety_revert_required"),
-                "source_metrics": candidate.get("source_metrics"),
+                "source_metrics_summary": _candidate_source_metrics_summary(candidate.get("source_metrics")),
+                "source_metrics_full_hash": _json_sha256(candidate.get("source_metrics") or {}),
             }
         )
+    candidate_families = {str(candidate.get("family") or "") for candidate in candidates if isinstance(candidate, dict)}
     cumulative_summary = {}
     if isinstance(cumulative_report, dict):
+        cumulative_json_path, _ = cumulative_threshold_report_paths(str(cumulative_report.get("date") or calibration_report.get("date") or ""))
         cumulative_summary = {
             "date": cumulative_report.get("date"),
             "summary": cumulative_report.get("summary"),
-            "threshold_snapshot_by_window": cumulative_report.get("threshold_snapshot_by_window"),
-            "calibration_source_bundle_by_window": cumulative_report.get("calibration_source_bundle_by_window"),
-            "completed_by_source": cumulative_report.get("completed_by_source"),
-            "source_flags": cumulative_report.get("source_flags"),
-            "warnings": cumulative_report.get("warnings"),
+            "family_window_context": _cumulative_family_window_context(cumulative_report, candidate_families),
+            "completed_by_source": _compact_json_value(
+                cumulative_report.get("completed_by_source") or {},
+                max_chars=6_000,
+                max_dict_keys=AI_CORRECTION_SOURCE_METRIC_TOP_N,
+                max_list_items=6,
+            ),
+            "source_flags": _compact_json_value(
+                cumulative_report.get("source_flags") or {},
+                max_chars=4_000,
+                max_dict_keys=AI_CORRECTION_SOURCE_METRIC_TOP_N,
+                max_list_items=6,
+            ),
+            "warnings": list(cumulative_report.get("warnings") or [])[:20],
+            "full_report_reference": {
+                "path": str(cumulative_json_path),
+                "full_hash": _json_content_sha256(cumulative_report),
+                "full_chars": _json_chars(cumulative_report),
+            },
         }
-    return {
-        "calibration_candidates": candidate_context,
-        "calibration_source_bundle": calibration_report.get("calibration_source_bundle") or {},
-        "trade_lifecycle_attribution": calibration_report.get("trade_lifecycle_attribution") or {},
-        "threshold_cycle_cumulative": cumulative_summary,
-        "recent_anomaly_report": {
-            "source_bundle_reports": (calibration_report.get("calibration_source_bundle") or {}).get("sources", {}),
-            "source_metrics": (calibration_report.get("calibration_source_bundle") or {}).get("source_metrics", {}),
+    calibration_source_bundle = calibration_report.get("calibration_source_bundle") or {}
+    trade_lifecycle_attribution = calibration_report.get("trade_lifecycle_attribution") or {}
+    context = {
+        "context_schema_version": 2,
+        "calibration_candidates": _cap_ai_context_section("calibration_candidates", candidate_context),
+        "calibration_source_bundle": _cap_ai_context_section(
+            "calibration_source_bundle",
+            {
+                "schema_version": calibration_source_bundle.get("schema_version") if isinstance(calibration_source_bundle, dict) else None,
+                "target_date": calibration_source_bundle.get("target_date") if isinstance(calibration_source_bundle, dict) else None,
+                "purpose": calibration_source_bundle.get("purpose") if isinstance(calibration_source_bundle, dict) else None,
+                "sources": _source_availability_summary(calibration_source_bundle.get("sources") if isinstance(calibration_source_bundle, dict) else {}),
+                "source_metrics": _compact_json_value(
+                    calibration_source_bundle.get("source_metrics") if isinstance(calibration_source_bundle, dict) else {},
+                    max_chars=8_000,
+                    max_dict_keys=AI_CORRECTION_SOURCE_METRIC_TOP_N,
+                    max_list_items=6,
+                ),
+                "report_only_cleanup_audit": _compact_json_value(
+                    calibration_source_bundle.get("report_only_cleanup_audit") if isinstance(calibration_source_bundle, dict) else {},
+                    max_chars=2_000,
+                    max_dict_keys=8,
+                    max_list_items=4,
+                ),
+                "warnings": list(calibration_source_bundle.get("warnings") or [])[:20] if isinstance(calibration_source_bundle, dict) else [],
+                "full_bundle_reference": {
+                    "path": source_calibration_report_path or calibration_report.get("source_report"),
+                    "full_hash": _json_content_sha256(calibration_source_bundle),
+                    "full_chars": _json_chars(calibration_source_bundle),
+                },
+            },
+        ),
+        "trade_lifecycle_attribution": _cap_ai_context_section(
+            "trade_lifecycle_attribution",
+            {
+                "schema_version": trade_lifecycle_attribution.get("schema_version") if isinstance(trade_lifecycle_attribution, dict) else None,
+                "status": trade_lifecycle_attribution.get("status") if isinstance(trade_lifecycle_attribution, dict) else None,
+                "runtime_change": trade_lifecycle_attribution.get("runtime_change") if isinstance(trade_lifecycle_attribution, dict) else None,
+                "join_key": trade_lifecycle_attribution.get("join_key") if isinstance(trade_lifecycle_attribution, dict) else None,
+                "phase_counts": trade_lifecycle_attribution.get("phase_counts") if isinstance(trade_lifecycle_attribution, dict) else {},
+                "primary_type_counts": trade_lifecycle_attribution.get("primary_type_counts") if isinstance(trade_lifecycle_attribution, dict) else {},
+                "decision_source_outcomes": _compact_json_value(
+                    trade_lifecycle_attribution.get("decision_source_outcomes") if isinstance(trade_lifecycle_attribution, dict) else {},
+                    max_chars=4_000,
+                    max_dict_keys=10,
+                    max_list_items=6,
+                ),
+                "exit_rule_outcomes": _compact_json_value(
+                    trade_lifecycle_attribution.get("exit_rule_outcomes") if isinstance(trade_lifecycle_attribution, dict) else {},
+                    max_chars=4_000,
+                    max_dict_keys=10,
+                    max_list_items=6,
+                ),
+                "family_views": _compact_json_value(
+                    trade_lifecycle_attribution.get("family_views") if isinstance(trade_lifecycle_attribution, dict) else {},
+                    max_chars=4_000,
+                    max_dict_keys=10,
+                    max_list_items=6,
+                ),
+                "examples": _compact_json_value(
+                    trade_lifecycle_attribution.get("examples") if isinstance(trade_lifecycle_attribution, dict) else [],
+                    max_chars=3_000,
+                    max_dict_keys=8,
+                    max_list_items=5,
+                ),
+                "records_reference": {
+                    "record_count": len(trade_lifecycle_attribution.get("records") or []) if isinstance(trade_lifecycle_attribution, dict) and isinstance(trade_lifecycle_attribution.get("records"), list) else 0,
+                    "records_hash": _json_sha256(trade_lifecycle_attribution.get("records") if isinstance(trade_lifecycle_attribution, dict) else []),
+                },
+            },
+        ),
+        "threshold_cycle_cumulative": _cap_ai_context_section("threshold_cycle_cumulative", cumulative_summary),
+        "recent_anomaly_report": _cap_ai_context_section(
+            "recent_anomaly_report",
+            {
+                "source_bundle_reports": _source_availability_summary(calibration_source_bundle.get("sources") if isinstance(calibration_source_bundle, dict) else {}),
+                "source_metrics_summary": _compact_json_value(
+                    calibration_source_bundle.get("source_metrics") if isinstance(calibration_source_bundle, dict) else {},
+                    max_chars=6_000,
+                    max_dict_keys=AI_CORRECTION_SOURCE_METRIC_TOP_N,
+                    max_list_items=6,
+                ),
+            },
+        ),
+        "source_artifact_references": {
+            "calibration_report": {
+                "path": source_calibration_report_path or calibration_report.get("source_report"),
+                "full_hash": _json_content_sha256(calibration_report),
+                "full_chars": _json_chars(calibration_report),
+            },
+            "cumulative_report": {
+                "path": str(cumulative_threshold_report_paths(str(cumulative_report.get("date")))[0])
+                if isinstance(cumulative_report, dict) and cumulative_report.get("date")
+                else None,
+                "full_hash": _json_content_sha256(cumulative_report or {}),
+                "full_chars": _json_chars(cumulative_report or {}),
+            },
         },
     }
+    return _finalize_ai_input_context_budget(context)
 
 
 def _gemini_key_sort_key(name: str) -> tuple[int, str]:
@@ -6207,6 +6569,42 @@ def _extract_openai_response_text(response: Any) -> str:
     return "\n".join(fragment.strip() for fragment in fragments if fragment.strip()).strip()
 
 
+def _get_usage_value(usage: Any, *names: str) -> int | None:
+    if usage is None:
+        return None
+    for name in names:
+        value = usage.get(name) if isinstance(usage, dict) else getattr(usage, name, None)
+        parsed = _safe_int(value, None)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _response_usage_telemetry(response: Any) -> dict:
+    usage = getattr(response, "usage", None) or getattr(response, "usage_metadata", None)
+    input_tokens = _get_usage_value(usage, "input_tokens", "prompt_tokens", "prompt_token_count")
+    output_tokens = _get_usage_value(usage, "output_tokens", "completion_tokens", "candidates_token_count")
+    total_tokens = _get_usage_value(usage, "total_tokens", "total_token_count")
+    if total_tokens is None and (input_tokens is not None or output_tokens is not None):
+        total_tokens = (input_tokens or 0) + (output_tokens or 0)
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+    }
+
+
+def _threshold_ai_estimated_cost(model_name: str, input_tokens: int | None, output_tokens: int | None) -> tuple[float | None, str]:
+    input_rate = _safe_float(os.getenv("KORSTOCKSCAN_THRESHOLD_AI_INPUT_COST_PER_1M_USD"), None)
+    output_rate = _safe_float(os.getenv("KORSTOCKSCAN_THRESHOLD_AI_OUTPUT_COST_PER_1M_USD"), None)
+    if input_tokens is None or output_tokens is None:
+        return None, "missing_token_usage"
+    if input_rate is None or output_rate is None:
+        return None, "missing_price_contract"
+    estimated = ((input_tokens * input_rate) + (output_tokens * output_rate)) / 1_000_000
+    return round(float(estimated), 8), "estimated_from_env_price_contract"
+
+
 def _call_openai_threshold_ai_correction(input_context: dict, *, run_phase: str) -> tuple[str | None, dict]:
     try:
         from openai import OpenAI, RateLimitError
@@ -6220,14 +6618,24 @@ def _call_openai_threshold_ai_correction(input_context: dict, *, run_phase: str)
     model_sequence = _threshold_ai_openai_model_sequence()
     reasoning_effort = "medium" if str(run_phase) == "intraday" else "high"
     user_input = json.dumps(input_context, ensure_ascii=False, indent=2, default=str)
+    instructions = _build_openai_ai_correction_instructions(run_phase)
+    input_context_hash = _json_sha256(input_context)
+    input_context_chars = len(user_input)
+    prompt_chars = len(instructions) + input_context_chars
     errors: list[dict] = []
+    attempted_key_names: list[str] = []
+    attempted_model_names: list[str] = []
     for model_index, model_name in enumerate(model_sequence, start=1):
         for attempt_index, (key_name, api_key) in enumerate(api_keys, start=1):
+            attempted_key_names.append(key_name)
+            if model_name not in attempted_model_names:
+                attempted_model_names.append(model_name)
+            started = time.monotonic()
             try:
                 client = OpenAI(api_key=api_key)
                 response = client.responses.create(
                     model=model_name,
-                    instructions=_build_openai_ai_correction_instructions(run_phase),
+                    instructions=instructions,
                     input=user_input,
                     text={
                         "format": build_openai_response_text_format("threshold_ai_correction_v1"),
@@ -6242,17 +6650,43 @@ def _call_openai_threshold_ai_correction(input_context: dict, *, run_phase: str)
                     },
                     timeout=180,
                 )
-                return _extract_openai_response_text(response), {
+                elapsed_ms = int(round((time.monotonic() - started) * 1000))
+                response_text = _extract_openai_response_text(response)
+                usage = _response_usage_telemetry(response)
+                estimated_cost, cost_status = _threshold_ai_estimated_cost(
+                    model_name,
+                    usage.get("input_tokens"),
+                    usage.get("output_tokens"),
+                )
+                return response_text, {
                     "provider": "openai",
                     "status": "success",
+                    "new_provider_call": True,
                     "key_name": key_name,
                     "attempt_index": attempt_index,
                     "model_index": model_index,
-                    "attempted_keys": len(api_keys),
-                    "attempted_models": model_sequence,
+                    "configured_key_count": len(api_keys),
+                    "attempted_key_count": len(attempted_key_names),
+                    "attempted_keys": len(attempted_key_names),
+                    "attempted_key_names": attempted_key_names,
+                    "configured_model_count": len(model_sequence),
+                    "attempted_model_count": len(attempted_model_names),
+                    "attempted_models": attempted_model_names,
+                    "configured_models": model_sequence,
                     "model": model_name,
                     "schema_name": "threshold_ai_correction_v1",
                     "reasoning_effort": reasoning_effort,
+                    "prompt_chars": prompt_chars,
+                    "input_context_chars": input_context_chars,
+                    "input_context_hash": input_context_hash,
+                    "elapsed_ms": elapsed_ms,
+                    "output_chars": len(response_text),
+                    "input_tokens": usage.get("input_tokens"),
+                    "output_tokens": usage.get("output_tokens"),
+                    "total_tokens": usage.get("total_tokens"),
+                    "estimated_cost": estimated_cost,
+                    "estimated_cost_usd": estimated_cost,
+                    "cost_estimate_status": cost_status,
                 }
             except RateLimitError as exc:
                 errors.append({"key_name": key_name, "model": model_name, "error": str(exc)})
@@ -6263,10 +6697,27 @@ def _call_openai_threshold_ai_correction(input_context: dict, *, run_phase: str)
     return None, {
         "provider": "openai",
         "status": "failed",
-        "attempted_keys": len(api_keys),
-        "attempted_models": model_sequence,
+        "new_provider_call": True,
+        "configured_key_count": len(api_keys),
+        "attempted_key_count": len(attempted_key_names),
+        "attempted_keys": len(attempted_key_names),
+        "attempted_key_names": attempted_key_names,
+        "configured_model_count": len(model_sequence),
+        "attempted_model_count": len(attempted_model_names),
+        "attempted_models": attempted_model_names,
+        "configured_models": model_sequence,
         "schema_name": "threshold_ai_correction_v1",
         "reasoning_effort": reasoning_effort,
+        "prompt_chars": prompt_chars,
+        "input_context_chars": input_context_chars,
+        "input_context_hash": input_context_hash,
+        "output_chars": 0,
+        "input_tokens": None,
+        "output_tokens": None,
+        "total_tokens": None,
+        "estimated_cost": None,
+        "estimated_cost_usd": None,
+        "cost_estimate_status": "no_successful_response",
         "errors": errors,
     }
 
@@ -6284,8 +6735,14 @@ def _call_gemini_threshold_ai_correction(input_context: dict) -> tuple[str | Non
 
     model_name = str(getattr(TRADING_RULES, "AI_MODEL_TIER3", "") or "models/gemini-3.1-pro-preview-customtools")
     prompt = _build_ai_correction_prompt(input_context)
+    input_context_hash = _json_sha256(input_context)
+    input_context_chars = _json_chars(input_context)
+    prompt_chars = len(prompt)
     errors: list[dict] = []
+    attempted_key_names: list[str] = []
     for attempt_index, (key_name, api_key) in enumerate(api_keys, start=1):
+        attempted_key_names.append(key_name)
+        started = time.monotonic()
         try:
             client = genai.Client(api_key=api_key)
             response = client.models.generate_content(
@@ -6293,21 +6750,58 @@ def _call_gemini_threshold_ai_correction(input_context: dict) -> tuple[str | Non
                 contents=prompt,
                 config=types.GenerateContentConfig(response_mime_type="application/json"),
             )
-            return str(response.text or ""), {
+            response_text = str(response.text or "")
+            elapsed_ms = int(round((time.monotonic() - started) * 1000))
+            usage = _response_usage_telemetry(response)
+            estimated_cost, cost_status = _threshold_ai_estimated_cost(
+                model_name,
+                usage.get("input_tokens"),
+                usage.get("output_tokens"),
+            )
+            return response_text, {
                 "provider": "gemini",
                 "status": "success",
+                "new_provider_call": True,
                 "key_name": key_name,
                 "attempt_index": attempt_index,
-                "attempted_keys": len(api_keys),
+                "configured_key_count": len(api_keys),
+                "attempted_key_count": len(attempted_key_names),
+                "attempted_keys": len(attempted_key_names),
+                "attempted_key_names": attempted_key_names,
                 "model": model_name,
+                "prompt_chars": prompt_chars,
+                "input_context_chars": input_context_chars,
+                "input_context_hash": input_context_hash,
+                "elapsed_ms": elapsed_ms,
+                "output_chars": len(response_text),
+                "input_tokens": usage.get("input_tokens"),
+                "output_tokens": usage.get("output_tokens"),
+                "total_tokens": usage.get("total_tokens"),
+                "estimated_cost": estimated_cost,
+                "estimated_cost_usd": estimated_cost,
+                "cost_estimate_status": cost_status,
             }
         except Exception as exc:
             errors.append({"key_name": key_name, "error": str(exc)})
     return None, {
         "provider": "gemini",
         "status": "failed",
-        "attempted_keys": len(api_keys),
+        "new_provider_call": True,
+        "configured_key_count": len(api_keys),
+        "attempted_key_count": len(attempted_key_names),
+        "attempted_keys": len(attempted_key_names),
+        "attempted_key_names": attempted_key_names,
         "model": model_name,
+        "prompt_chars": prompt_chars,
+        "input_context_chars": input_context_chars,
+        "input_context_hash": input_context_hash,
+        "output_chars": 0,
+        "input_tokens": None,
+        "output_tokens": None,
+        "total_tokens": None,
+        "estimated_cost": None,
+        "estimated_cost_usd": None,
+        "cost_estimate_status": "no_successful_response",
         "errors": errors,
     }
 
@@ -6319,12 +6813,31 @@ def build_threshold_cycle_ai_correction_report(
     cumulative_report: dict | None = None,
     source_calibration_report_path: str | None = None,
     ai_provider_status: dict | None = None,
+    ai_input_context: dict | None = None,
 ) -> dict:
     target_date = str(calibration_report.get("date") or date.today().isoformat())
     meta = calibration_report.get("meta") if isinstance(calibration_report.get("meta"), dict) else {}
     run_phase = str(calibration_report.get("run_phase") or meta.get("calibration_run_phase") or "postclose")
     candidates = calibration_report.get("calibration_candidates") or []
     candidates = candidates if isinstance(candidates, list) else []
+    input_context = ai_input_context or _build_ai_correction_input_context(
+        calibration_report,
+        cumulative_report,
+        source_calibration_report_path=source_calibration_report_path,
+    )
+    input_context_hash = _json_sha256(input_context)
+    input_context_chars = _json_chars(input_context)
+    provider_status = dict(ai_provider_status or {"provider": "none", "status": "not_requested"})
+    provider_status.setdefault("input_context_hash", input_context_hash)
+    provider_status.setdefault("input_context_chars", input_context_chars)
+    provider_status.setdefault("prompt_chars", input_context_chars)
+    provider_status.setdefault("output_chars", len(str(ai_raw_response or "")))
+    provider_status.setdefault("input_tokens", None)
+    provider_status.setdefault("output_tokens", None)
+    provider_status.setdefault("total_tokens", None)
+    provider_status.setdefault("estimated_cost", None)
+    provider_status.setdefault("estimated_cost_usd", provider_status.get("estimated_cost"))
+    provider_status.setdefault("cost_estimate_status", "not_available")
     ai_status, proposals, parse_warnings = _parse_ai_correction_response(ai_raw_response)
     proposals_by_family = {str(item.get("family")): item for item in proposals if isinstance(item, dict)}
 
@@ -6393,7 +6906,11 @@ def build_threshold_cycle_ai_correction_report(
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "runtime_change": False,
         "ai_status": ai_status,
-        "ai_provider_status": ai_provider_status or {"provider": "none", "status": "not_requested"},
+        "ai_provider_status": provider_status,
+        "input_context_hash": input_context_hash,
+        "ai_input_context_hash": input_context_hash,
+        "ai_input_context_chars": input_context_chars,
+        "ai_input_context_budget": input_context.get("_context_budget") if isinstance(input_context, dict) else {},
         "parse_warnings": parse_warnings,
         "policy": {
             "authority": "proposal_only",
@@ -6430,7 +6947,7 @@ def build_threshold_cycle_ai_correction_report(
                 "allowed_proposal_fields": ["proposed_state", "proposed_value", "anomaly_route", "sample_window"],
             },
         },
-        "ai_input_context": _build_ai_correction_input_context(calibration_report, cumulative_report),
+        "ai_input_context": input_context,
         "source_reports": {
             "calibration_report": source_calibration_report_path or calibration_report.get("source_report"),
             "cumulative_report": (cumulative_report or {}).get("report_path") if isinstance(cumulative_report, dict) else None,
@@ -6441,12 +6958,18 @@ def build_threshold_cycle_ai_correction_report(
 
 
 def render_threshold_cycle_ai_correction_markdown(report: dict) -> str:
+    provider_status = report.get("ai_provider_status") if isinstance(report.get("ai_provider_status"), dict) else {}
     lines = [
         f"# Threshold Cycle AI Correction - {report.get('date')} {report.get('run_phase')}",
         "",
         f"- AI status: `{report.get('ai_status')}`",
         "- Authority: proposal-only; deterministic calibration guard is the source of truth.",
         "- Runtime change: `false`",
+        f"- Input context chars: `{report.get('ai_input_context_chars') or provider_status.get('input_context_chars') or '-'}`",
+        f"- Input context hash: `{report.get('ai_input_context_hash') or provider_status.get('input_context_hash') or '-'}`",
+        f"- Provider status: `{provider_status.get('provider') or '-'} / {provider_status.get('status') or '-'}`",
+        f"- Usage: input_tokens=`{provider_status.get('input_tokens')}`, output_tokens=`{provider_status.get('output_tokens')}`, total_tokens=`{provider_status.get('total_tokens')}`, elapsed_ms=`{provider_status.get('elapsed_ms')}`",
+        f"- Cost: estimated_cost_usd=`{provider_status.get('estimated_cost_usd')}`, status=`{provider_status.get('cost_estimate_status') or provider_status.get('incremental_cost_status') or '-'}`",
         "",
         "| family | ai_state | route | proposal | guard | reason |",
         "| --- | --- | --- | --- | --- | --- |",
@@ -6494,6 +7017,47 @@ def save_threshold_cycle_ai_correction_report(report: dict) -> tuple[Path, Path]
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     md_path.write_text(render_threshold_cycle_ai_correction_markdown(report), encoding="utf-8")
     return json_path, md_path
+
+
+def _load_reusable_threshold_ai_review(path: Path, *, input_context_hash: str) -> dict | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if str(payload.get("ai_status") or "").lower() != "parsed":
+        return None
+    if str(payload.get("schema_name") or payload.get("schema_version") or "") not in {
+        str(THRESHOLD_AI_CORRECTION_SCHEMA_VERSION),
+        "threshold_ai_correction_v1",
+    }:
+        provider_status = payload.get("ai_provider_status") if isinstance(payload.get("ai_provider_status"), dict) else {}
+        if str(provider_status.get("schema_name") or "") != "threshold_ai_correction_v1":
+            return None
+    provider_status_payload = payload.get("ai_provider_status") if isinstance(payload.get("ai_provider_status"), dict) else {}
+    existing_hash = payload.get("input_context_hash") or payload.get("ai_input_context_hash") or provider_status_payload.get("input_context_hash")
+    if str(existing_hash or "") != str(input_context_hash):
+        return None
+    provider_status = dict(payload.get("ai_provider_status") or {})
+    provider_status["status"] = "reused_valid_artifact"
+    provider_status["reuse_source_path"] = str(path)
+    provider_status["reused_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    provider_status["new_provider_call"] = False
+    provider_status.setdefault("input_context_hash", input_context_hash)
+    provider_status["estimated_incremental_cost"] = 0.0
+    provider_status["estimated_incremental_cost_usd"] = 0.0
+    provider_status["incremental_cost_status"] = "reused_no_new_provider_call"
+    payload["ai_provider_status"] = provider_status
+    payload["reuse_guard"] = {
+        "enabled": True,
+        "status": "reused",
+        "source_path": str(path),
+        "input_context_hash": input_context_hash,
+        "schema_name": "threshold_ai_correction_v1",
+    }
+    payload["generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return payload
 
 
 def _markdown_value(value: Any) -> str:
@@ -7589,6 +8153,11 @@ def main(argv: list[str] | None = None) -> int:
         default="none",
         help="Optional AI provider for correction proposal generation. Default keeps deterministic calibration only.",
     )
+    parser.add_argument(
+        "--reuse-ai-review-if-valid",
+        action="store_true",
+        help="Reuse an existing parsed AI review when date, phase, schema, and input context hash match.",
+    )
     args = parser.parse_args(argv)
 
     report = build_daily_threshold_cycle_report(
@@ -7603,27 +8172,55 @@ def main(argv: list[str] | None = None) -> int:
     )
     apply_window_policy_registry_to_report(report, cumulative_report)
     calibration_path = save_threshold_calibration_report(report, run_phase=args.calibration_run_phase)
+    ai_input_context = _build_ai_correction_input_context(
+        report,
+        cumulative_report,
+        source_calibration_report_path=str(calibration_path),
+    )
+    ai_input_context_hash = _json_sha256(ai_input_context)
     ai_raw_response = None
     ai_provider_status = {"provider": "none", "status": "not_requested"}
+    ai_correction_report = None
+    existing_ai_review_path = threshold_ai_review_paths(args.target_date, args.calibration_run_phase)[0]
+    if (
+        args.reuse_ai_review_if_valid
+        and not args.ai_correction_response_json
+        and args.ai_correction_provider != "none"
+    ):
+        ai_correction_report = _load_reusable_threshold_ai_review(
+            existing_ai_review_path,
+            input_context_hash=ai_input_context_hash,
+        )
     if args.ai_correction_response_json:
         ai_raw_response = Path(args.ai_correction_response_json).read_text(encoding="utf-8")
-        ai_provider_status = {"provider": "file", "status": "loaded", "path": args.ai_correction_response_json}
+        ai_provider_status = {
+            "provider": "file",
+            "status": "loaded",
+            "path": args.ai_correction_response_json,
+            "input_context_hash": ai_input_context_hash,
+            "input_context_chars": _json_chars(ai_input_context),
+        }
+        ai_correction_report = None
+    elif ai_correction_report is not None:
+        pass
     elif args.ai_correction_provider == "gemini":
         ai_raw_response, ai_provider_status = _call_gemini_threshold_ai_correction(
-            _build_ai_correction_input_context(report, cumulative_report)
+            ai_input_context
         )
     elif args.ai_correction_provider == "openai":
         ai_raw_response, ai_provider_status = _call_openai_threshold_ai_correction(
-            _build_ai_correction_input_context(report, cumulative_report),
+            ai_input_context,
             run_phase=args.calibration_run_phase,
         )
-    ai_correction_report = build_threshold_cycle_ai_correction_report(
-        report,
-        ai_raw_response=ai_raw_response,
-        cumulative_report=cumulative_report,
-        source_calibration_report_path=str(calibration_path),
-        ai_provider_status=ai_provider_status,
-    )
+    if ai_correction_report is None:
+        ai_correction_report = build_threshold_cycle_ai_correction_report(
+            report,
+            ai_raw_response=ai_raw_response,
+            cumulative_report=cumulative_report,
+            source_calibration_report_path=str(calibration_path),
+            ai_provider_status=ai_provider_status,
+            ai_input_context=ai_input_context,
+        )
     save_threshold_cycle_ai_correction_report(ai_correction_report)
     if args.calibration_only:
         if args.print_stdout:

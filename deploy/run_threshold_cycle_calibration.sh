@@ -10,6 +10,7 @@ AI_CORRECTION_PROVIDER="${THRESHOLD_CYCLE_AI_CORRECTION_PROVIDER:-openai}"
 AI_CORRECTION_RESPONSE_JSON="${THRESHOLD_CYCLE_AI_CORRECTION_RESPONSE_JSON:-}"
 AI_CORRECTION_MAX_ATTEMPTS="${THRESHOLD_CYCLE_AI_CORRECTION_MAX_ATTEMPTS:-2}"
 AI_CORRECTION_RETRY_DELAY_SEC="${THRESHOLD_CYCLE_AI_CORRECTION_RETRY_DELAY_SEC:-20}"
+AI_CORRECTION_REUSE_IF_VALID="${THRESHOLD_CYCLE_REUSE_AI_REVIEW_IF_VALID:-true}"
 # shellcheck source=cpu_affinity_profile.sh
 . "$SCRIPT_DIR/cpu_affinity_profile.sh"
 CPU_AFFINITY="${THRESHOLD_CYCLE_CALIBRATION_CPU_AFFINITY:-$(korstockscan_default_cpu_affinity threshold)}"
@@ -25,6 +26,8 @@ echo "[START] threshold-cycle calibration target_date=$TARGET_DATE phase=$RUN_PH
 AI_CORRECTION_ARGS=(--ai-correction-provider "$AI_CORRECTION_PROVIDER")
 if [ -n "$AI_CORRECTION_RESPONSE_JSON" ]; then
   AI_CORRECTION_ARGS=(--ai-correction-response-json "$AI_CORRECTION_RESPONSE_JSON")
+elif [[ "$AI_CORRECTION_REUSE_IF_VALID" == "1" || "$AI_CORRECTION_REUSE_IF_VALID" == "true" ]]; then
+  AI_CORRECTION_ARGS+=(--reuse-ai-review-if-valid)
 fi
 
 threshold_cycle_ai_review_status() {

@@ -7,9 +7,9 @@ KORStockScan 작업 기본 규칙:
 - 현재 active/open 상태는 `Plan Rebase` §7~§8을 기준으로 읽되, 과거 checklist의 `[x]` 완료 항목은 현재 OPEN owner로 보지 않는다. 완료 항목은 증적/근거 링크이고, 현재 owner는 같은 행에 명시된 runtime owner 또는 현재 checklist의 열린 항목이다.
 - `docs/plan-korStockScanPerformanceOptimization.prompt.md`는 세션 진입용 경량 포인터다. 일반 작업마다 필수로 읽지 않고, 사용자가 명시적으로 요구했거나 Plan Rebase 위치, Source of Truth 문서 맵, 현재 실행표가 불명확할 때만 확인한다.
 
-## 1.1 현재 상태 기준 (`2026-05-19 KST`)
+## 1.1 현재 상태 기준 (`2026-05-20 KST`)
 
-- 현재 단계는 `Plan Rebase`의 자동화체인 튜닝 단계이며, 목적은 손실 억제가 아니라 기대값/순이익 극대화다.
+- 현재 단계는 `Plan Rebase`의 자동화체인 튜닝 단계이며, 목적은 손실 억제가 아니라 기대값/순이익 극대화다. `2026-05-20` postclose renewal 기준 selected runtime family는 `soft_stop_whipsaw_confirmation`, `latency_classifier_runtime_profile`, `scalp_sim_candidate_window_expansion`, `scalp_sim_ai_budget_manager`, `lifecycle_decision_matrix_runtime`다.
 - 중심 루프는 `R0_collect -> R1_daily_report -> R2_cumulative_report -> R3_manifest_only -> R4_preopen_apply_candidate -> R5_bounded_calibrated_apply -> R6_post_apply_attribution`다. 산출물/consumer/apply 계약은 `docs/report-based-automation-traceability.md`가 소유한다.
 - 장중 runtime threshold mutation은 금지한다. 기본 적용 경로는 postclose artifact와 AI/deterministic guard를 거친 다음 PREOPEN `auto_bounded_live` runtime env다. 사용자 운영 override 이력은 `docs/archive/plan-rebase-runtime-history-2026-05-19.md`에 보존하고, 현재 owner 판정에는 selected family/provenance/post-apply attribution만 남긴다.
 - `lifecycle_decision_matrix_runtime`은 ADM 확장 umbrella owner다. 기존 Entry ADM, Holding/Exit ADM, submit 관찰, scale-in bias adapter를 `entry`, `submit`, `holding`, `scale_in`, `exit` arm으로 감싸며 기본 OFF, auto-bounded micro canary 후보로만 열린다.
@@ -35,8 +35,8 @@ KORStockScan 작업 기본 규칙:
 - AGENTS.md는 매일 작업 현황에 맞춰 갱신할 수 있는 `작업 지시 snapshot`이다. 단, 실행 작업항목의 원본 소유자는 항상 날짜별 checklist이고, 튜닝 원칙/active-open 판정의 원본은 `Plan Rebase`다.
 - 장전 또는 작업 시작 시에는 `Plan Rebase` §1~§8과 당일 checklist 상단 요약을 읽고, AGENTS.md의 `현재 상태 기준` 날짜와 active owner 요약이 맞는지 확인한다.
 - 장중/장후에 owner, live/observe/off 상태, rollback guard, 다음 판정 checklist가 바뀌면 먼저 `Plan Rebase` 또는 날짜별 checklist를 수정하고, 그 다음 AGENTS.md `1.1 현재 상태 기준`만 짧게 갱신한다.
-- README/런북(runbook)/Plan Rebase/prompt/AGENTS는 후순위 문서 갱신(document mutation) 대상이며 `document_mutation_allowed=true`, `runtime_mutation_allowed=false`로 본다.
-- 위 문서들의 실제 갱신은 `1차 수정(first-pass bounded update) -> 2차 감리(second-pass audit review) -> 최종 수정(finalize after second-pass review)` 순서로만 닫는다. 2차 감리에서는 이력성 내용 archive 여부, 영어 약칭의 한글/영어 병기, runtime/order/provider/bot mutation 금지선, parser 검증을 확인한다.
+- README/런북(runbook)/Plan Rebase/prompt/AGENTS 같은 기준 문서는 사용자의 명시 작업지시가 있을 때만 갱신한다.
+- 위 문서들의 실제 갱신은 runtime/order/provider/bot/threshold 변경과 분리하고, 필요한 경우 1차 수정, 2차 감리, 최종 보완 순서로 parser 검증까지 닫는다.
 - AGENTS.md에는 자동 파싱 대상 `- [ ]` 신규 작업항목을 만들지 않는다. 미래 작업, 특정 시각 작업, 재확인 작업은 날짜별 checklist에만 `Due`, `Slot`, `TimeWindow`, `Track`이 있는 체크박스로 남긴다.
 - AGENTS.md에 과거 checklist ID를 링크할 때는 `완료 기록`, `현재 owner`, `다음 확인 owner`를 구분한다. `[x]` 완료 항목을 현재 OPEN owner처럼 쓰지 않는다.
 - 매일 갱신 시 최소 확인 항목은 `entry owner`, `holding/exit owner`, `operating override`, `observe/report-only 축`, `OFF/폐기 축`, `Project/Calendar 동기화 규칙`이다.

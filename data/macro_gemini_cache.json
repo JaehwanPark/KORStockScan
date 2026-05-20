@@ -1,85 +1,85 @@
 {
-  "bundle_as_of": "2026-05-19T22:20:16Z",
+  "bundle_as_of": "2026-05-20T22:20:18Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 7353.61,
-    "prev_value": 7403.05,
-    "change": -49.44,
-    "change_pct": -0.67,
-    "as_of": "2026-05-19T20:26:00Z",
+    "value": 7432.97,
+    "prev_value": 7353.61,
+    "change": 79.36,
+    "change_pct": 1.08,
+    "as_of": "2026-05-20T20:29:00Z",
     "source": "Morningstar / Dow Jones Market Data"
   },
   "nasdaq": {
     "name": "NASDAQ Composite",
-    "value": 25870.71,
-    "prev_value": 26090.73,
-    "change": -220.02,
-    "change_pct": -0.84,
-    "as_of": "2026-05-19T20:26:00Z",
+    "value": 26270.36,
+    "prev_value": 25870.71,
+    "change": 399.65,
+    "change_pct": 1.54,
+    "as_of": "2026-05-20T20:29:00Z",
     "source": "Morningstar / Dow Jones Market Data"
   },
   "vix": {
     "name": "VIX",
-    "value": 18.23,
-    "prev_value": 17.82,
-    "change": 0.41,
-    "change_pct": 2.3,
-    "as_of": "2026-05-19T19:27:00Z",
-    "source": "Cboe"
+    "value": 17.83,
+    "prev_value": 18.06,
+    "change": -0.23,
+    "change_pct": -1.27,
+    "as_of": "2026-05-20T20:29:26Z",
+    "source": "Cboe Exchange"
   },
   "us10y": {
     "name": "US 10-Year Treasury Yield",
-    "value": 4.67,
-    "prev_value": 4.6,
-    "change": 0.07,
-    "change_pct": 1.52,
-    "as_of": "2026-05-19T22:20:16Z",
-    "source": "Trading Economics"
+    "value": 4.569,
+    "prev_value": 4.669,
+    "change": -0.1,
+    "change_pct": -2.14,
+    "as_of": "2026-05-20T19:45:00Z",
+    "source": "Tradeweb / Morningstar"
   },
   "brent": {
     "name": "Brent Crude",
-    "value": 111.28,
-    "prev_value": 112.1,
-    "change": -0.82,
-    "change_pct": -0.73,
-    "as_of": "2026-05-19T19:16:00Z",
-    "source": "Morningstar / ICE"
+    "value": 105.36,
+    "prev_value": 111.28,
+    "change": -5.92,
+    "change_pct": -5.32,
+    "as_of": "2026-05-20T20:00:00Z",
+    "source": "BNN Bloomberg"
   },
   "headlines": [
     {
-      "title": "Trump pauses Iran strike, markets bounce cautiously",
-      "source": "Financial Brief",
-      "published_at": "2026-05-19T18:00:00Z",
-      "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHYmNZgULiG4FQB6rI073SUvn0ECpaER2UtFt2meuTe-g9R7g2Gt01AIHEkAhZS7qcpHKXyRQBmZu4q_xdJdcrqe4eRBS7u8Dqgf6V6WY0Rd0w3roVs0Gd4IncZ0n651dZEfawAaaRfNend9IISrznoA932YEXF8P82DHnddvJ_11Yqx_zef6D1FV-t1aIWCxpbAIyXu00ylV77dW9pR6fF"
+      "title": "Oil prices fall 6% after Donald Trump says Iran negotiations in final stages",
+      "source": "The Guardian",
+      "published_at": "2026-05-20T17:45:00Z",
+      "url": "https://www.theguardian.com"
     },
     {
-      "title": "U.S. stocks fall further from their records after bond markets crank up the pressure",
+      "title": "Nvidia beats earnings expectations, issues strong Q2 outlook after market close",
+      "source": "TheStreet",
+      "published_at": "2026-05-20T20:22:00Z",
+      "url": "https://www.thestreet.com"
+    },
+    {
+      "title": "U.S. stock market bounces back as pressure eases from bond market and oil drops",
       "source": "Associated Press",
-      "published_at": "2026-05-19T20:27:00Z",
-      "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHp_LL0gGqAPaJxi_Iz_nZ-PdkLfppbgNE2p2wskBOi96ZT-zpvE0djsrgF4vXYBnmq8DlElUZp1YMGEG-n9aFSnSdoDXasVKt3xFlUxoDEGCmzJuVLg7wa4MjI0vRYG82iBgtYgjyNRYeAPCvH3os-1jI8gU9WlA-dD6qOhkq4AxyF_QYgeYYszcCwpTS1bHKO7xytXXsxID8Ochsd13BadwX0mPRGOwGyOTyyZRT4UbFJc1r7nBSSGQ=="
+      "published_at": "2026-05-20T20:17:00Z",
+      "url": "https://apnews.com"
     },
     {
-      "title": "Oil retreats as Trump delays planned strike on Iran",
-      "source": "MUFG Research",
-      "published_at": "2026-05-19T07:00:00Z",
-      "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFuqIB0BxTMA6zFxwnmsQK_Mye_E3WtEW3W3BvVzR8ei4ygxipRIn1Fudfy8puSvO1UbqV4nLnZq_wOT4ECV70hAQUl806Al-rQ7uXSLxnhWhb8C97kSC8SfJbkMYKqnLpB4RfIT2T-ANJjjdj-uuOp0OGRRxnQ1w=="
+      "title": "10-Year Treasury Yield Falls to 4.569%, Snaps Three-Day Streak of Rising Yields",
+      "source": "Morningstar / Dow Jones Newswires",
+      "published_at": "2026-05-20T19:45:00Z",
+      "url": "https://www.morningstar.com"
     },
     {
-      "title": "After the Iran war, the Gulf's next economic phase awaits",
-      "source": "Atlantic Council",
-      "published_at": "2026-05-19T19:00:00Z",
-      "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQGhi58U_ukBNt5tXQpdMi52TKEa0SYeXJTDPMK2GuDOIAieBUddF7zo5OWadrz8I9gMveUjf8yoRlShTd_Q1PMXQhUcsS9O8qXM-Aj8uSlESpCB0rGzqJh7H6jeR11nraxu4uRmfz2Lc_-A8-MzwMOn87ucfSwRbJGpRApnQ4bTM_TSP3R0_WV8lrtHdCbhMTUDrBCKJDN1dwBP8410uI0="
-    },
-    {
-      "title": "Will higher costs for retailers be passed on to consumers?",
-      "source": "Marketplace",
-      "published_at": "2026-05-19T21:00:00Z",
-      "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHwConxVk3-QEe0tmW7wOqNV6gRGmABAcNt3Knp8YjW6HsdXioEMuot0oMONh-e-T-kdRUb7dIohN9goOqlxo4ZLpTFxtcAFKiHzV8DLO0kW512XK25ut3dBxv_Jui0VSOXqILII8Rg0RAK-fMrUpLRQZzhgPtDqJWvVCCxLu5LsYrW45acFxUSbFb9ejFydIZvMI9AFK72xMkpsuw="
+      "title": "S&P 500 Rises 1.08% to 7432.97 on hopes that an end to the U.S.-Iran war could be in sight",
+      "source": "Yahoo Finance",
+      "published_at": "2026-05-20T21:12:00Z",
+      "url": "https://finance.yahoo.com"
     }
   ],
   "notes": [
-    "S&P 500 and NASDAQ recorded losses following a surge in US Treasury yields.",
-    "Crude oil prices eased from elevated levels after reports that the planned military strike on Iran was delayed, easing some geopolitical risk premiums.",
-    "US 10-Year Treasury yield surged to 4.67%, putting broader pressure on risk assets."
+    "Data compiled as of market close on May 20, 2026.",
+    "Brent crude and 10-Year yield saw significant drops due to headlines regarding potential US-Iran peace negotiations.",
+    "Tech stocks led the market rally driven by Nvidia's after-hours earnings beat."
   ]
 }

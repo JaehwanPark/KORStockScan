@@ -1,6 +1,6 @@
 # KORStockScan 문서 구조
 
-작성 기준: 2026-05-12 KST
+작성 기준: 2026-05-20 KST
 
 이 디렉터리는 Plan Rebase 이후의 운영 의사결정, 날짜별 실행 체크리스트, runbook, report traceability, 감리/리포트 증적을 관리한다. 현재 판단의 원본은 루트 기준 문서와 날짜별 checklist이고, 과거 전환 증적은 `archive/`에 보존한다.
 
@@ -17,7 +17,7 @@
 
 작업 시작 시에는 `plan-korStockScanPerformanceOptimization.rebase.md` §1~§8과 당일 checklist의 `오늘 목적`, `오늘 강제 규칙`을 먼저 확인한다. 당일 checklist가 없으면 Plan Rebase §7~§8과 최신 실행표의 상단 요약을 같이 확인한다.
 
-README, 런북(runbook), Plan Rebase, prompt, AGENTS는 `plan_rebase_daily_renewal`의 후순위 문서 갱신(document mutation) 대상이다. 이 문서들의 갱신은 `document_mutation_allowed=true`, `runtime_mutation_allowed=false` 계약으로만 허용하며, 실제 작업은 `1차 수정(first-pass bounded update) -> 2차 감리(second-pass audit review) -> 최종 수정(finalize after second-pass review)` 순서로 닫는다. 이력성 내용은 archive 또는 execution-delta에 보존하고, 영어 약칭은 첫 사용 시 한글/영어 병기를 원칙으로 한다.
+README, 런북(runbook), Plan Rebase, prompt, AGENTS 같은 기준 문서는 사용자의 명시 작업지시가 있을 때만 갱신한다. 문서 갱신은 runtime/order/provider/bot/threshold 변경과 분리하고, 필요한 경우 1차 수정, 2차 감리, 최종 보완 순서로 parser 검증까지 닫는다.
 
 ## 현재 루트 유지 기준
 

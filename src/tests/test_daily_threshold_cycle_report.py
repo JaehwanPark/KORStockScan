@@ -926,7 +926,10 @@ def test_openai_threshold_ai_correction_uses_strict_schema_and_deep_model(monkey
     class _FakeResponses:
         def create(self, **kwargs):
             captured.update(kwargs)
-            return SimpleNamespace(output_text=json.dumps({"schema_version": 1, "corrections": []}))
+            return SimpleNamespace(
+                output_text=json.dumps({"schema_version": 1, "corrections": []}),
+                usage=SimpleNamespace(input_tokens=123, output_tokens=45, total_tokens=168),
+            )
 
     class _FakeOpenAI:
         def __init__(self, api_key):
@@ -945,6 +948,17 @@ def test_openai_threshold_ai_correction_uses_strict_schema_and_deep_model(monkey
     assert status["provider"] == "openai"
     assert status["model"] == "gpt-5.5"
     assert status["reasoning_effort"] == "high"
+    assert status["new_provider_call"] is True
+    assert status["attempted_key_count"] == 1
+    assert status["configured_key_count"] == 1
+    assert status["attempted_model_count"] == 1
+    assert status["input_context_hash"]
+    assert status["prompt_chars"] >= status["input_context_chars"]
+    assert status["output_chars"] == len(raw_response)
+    assert status["input_tokens"] == 123
+    assert status["output_tokens"] == 45
+    assert status["total_tokens"] == 168
+    assert status["cost_estimate_status"] == "missing_price_contract"
     assert captured["model"] == "gpt-5.5"
     assert captured["reasoning"]["effort"] == "high"
     assert captured["text"]["format"]["type"] == "json_schema"
@@ -953,6 +967,96 @@ def test_openai_threshold_ai_correction_uses_strict_schema_and_deep_model(monkey
     assert captured["text"]["format"]["schema"]["additionalProperties"] is False
     assert "Korean domain glossary" in captured["instructions"]
     assert "Return only JSON" in captured["instructions"]
+
+
+def test_ai_correction_input_context_is_compact_and_hash_referenced():
+    huge_metrics = {f"metric_{idx:03d}": {"values": list(range(100)), "note": "x" * 200} for idx in range(80)}
+    calibration_report = {
+        "date": "2026-05-20",
+        "generated_at": "2026-05-21 08:00:00",
+        "run_phase": "postclose",
+        "calibration_candidates": [
+            {
+                "family": "soft_stop_whipsaw_confirmation",
+                "threshold_version": "v1",
+                "current_value": 60,
+                "recommended_value": 70,
+                "calibration_state": "adjust_up",
+                "source_metrics": huge_metrics,
+            }
+        ],
+        "calibration_source_bundle": {
+            "sources": {f"source_{idx}": {"exists": True, "path": f"artifact_{idx}.json"} for idx in range(50)},
+            "source_metrics": huge_metrics,
+            "warnings": ["warn"] * 30,
+        },
+        "trade_lifecycle_attribution": {
+            "status": "ok",
+            "records": [{"id": idx, "payload": "y" * 300} for idx in range(200)],
+            "examples": [{"id": idx, "payload": "z" * 300} for idx in range(30)],
+        },
+    }
+    cumulative_report = {
+        "date": "2026-05-20",
+        "generated_at": "2026-05-21 08:00:00",
+        "summary": {"completed_valid_cumulative": 10},
+        "threshold_snapshot_by_window": {
+            "rolling_10d": {
+                "soft_stop_whipsaw_confirmation": {"sample": huge_metrics, "recommended": {"confirm_sec": 70}},
+            }
+        },
+        "calibration_source_bundle_by_window": {
+            "rolling_10d": {"sources": {}, "source_metrics": huge_metrics, "warnings": []},
+        },
+        "completed_by_source": huge_metrics,
+        "source_flags": huge_metrics,
+    }
+
+    context = report_mod._build_ai_correction_input_context(
+        calibration_report,
+        cumulative_report,
+        source_calibration_report_path="data/report/threshold_cycle_calibration/example.json",
+    )
+
+    assert report_mod._json_chars(context) <= report_mod.AI_CORRECTION_CONTEXT_TOTAL_CHAR_LIMIT
+    assert context["_context_budget"]["full_blob_policy"] == "hash_and_path_reference_only"
+    candidate = context["calibration_candidates"][0]
+    assert "source_metrics_summary" in candidate
+    assert "source_metrics_full_hash" in candidate
+    assert "source_metrics" not in candidate
+    assert context["source_artifact_references"]["calibration_report"]["full_hash"]
+    calibration_report["generated_at"] = "2026-05-21 08:30:00"
+    cumulative_report["generated_at"] = "2026-05-21 08:30:00"
+    rerun_context = report_mod._build_ai_correction_input_context(
+        calibration_report,
+        cumulative_report,
+        source_calibration_report_path="data/report/threshold_cycle_calibration/example.json",
+    )
+    assert report_mod._json_sha256(context) == report_mod._json_sha256(rerun_context)
+
+
+def test_reuse_ai_review_requires_matching_input_hash(tmp_path):
+    input_hash = "abc123"
+    path = tmp_path / "threshold_cycle_ai_review_2026-05-20_postclose.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": report_mod.THRESHOLD_AI_CORRECTION_SCHEMA_VERSION,
+                "ai_status": "parsed",
+                "input_context_hash": input_hash,
+                "ai_provider_status": {"provider": "openai", "status": "success"},
+                "items": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    reused = report_mod._load_reusable_threshold_ai_review(path, input_context_hash=input_hash)
+    assert reused is not None
+    assert reused["ai_provider_status"]["status"] == "reused_valid_artifact"
+    assert reused["ai_provider_status"]["new_provider_call"] is False
+    assert reused["reuse_guard"]["status"] == "reused"
+    assert report_mod._load_reusable_threshold_ai_review(path, input_context_hash="different") is None
 
 
 def test_efficient_tradeoff_calibration_adds_entry_bad_entry_and_adm_candidates():
