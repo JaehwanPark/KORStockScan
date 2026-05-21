@@ -348,6 +348,86 @@ def _build_outcome_linked_performance(target_date: str, rows: list[dict[str, Any
             "lifecycle_tie_count": sum(1 for item in stage_rows if item["lifecycle_model_edge"] == "tie"),
         }
 
+    def _avg_metric(items: list[dict[str, Any]], key: str) -> float | None:
+        values = [_safe_float(item.get(key)) for item in items]
+        values = [value for value in values if value is not None]
+        return round(sum(values) / len(values), 4) if values else None
+
+    def _engine_summary(items: list[dict[str, Any]], engine: str) -> dict[str, Any]:
+        score_key = f"{engine}_lifecycle_quality_score"
+        action_key = f"{engine}_action"
+        scores = [int(item.get(score_key) or 0) for item in items]
+        by_action: dict[str, dict[str, Any]] = {}
+        for action in sorted({str(item.get(action_key) or "unknown") for item in items}):
+            action_rows = [item for item in items if str(item.get(action_key) or "unknown") == action]
+            action_scores = [int(item.get(score_key) or 0) for item in action_rows]
+            by_action[action] = {
+                "count": len(action_rows),
+                "quality_score_sum": sum(action_scores),
+                "quality_score_avg": round(sum(action_scores) / len(action_scores), 4) if action_scores else None,
+                "positive_count": sum(1 for score in action_scores if score > 0),
+                "neutral_count": sum(1 for score in action_scores if score == 0),
+                "negative_count": sum(1 for score in action_scores if score < 0),
+                "avg_profit_rate": _avg_metric(action_rows, "profit_rate"),
+                "avg_mfe_10m_pct": _avg_metric(action_rows, "mfe_10m_pct"),
+                "avg_mae_10m_pct": _avg_metric(action_rows, "mae_10m_pct"),
+                "avg_mfe_60m_pct": _avg_metric(action_rows, "mfe_60m_pct"),
+            }
+        return {
+            "count": len(items),
+            "action_counts": dict(Counter(str(item.get(action_key) or "unknown") for item in items)),
+            "quality_score_sum": sum(scores),
+            "quality_score_avg": round(sum(scores) / len(scores), 4) if scores else None,
+            "positive_count": sum(1 for score in scores if score > 0),
+            "neutral_count": sum(1 for score in scores if score == 0),
+            "negative_count": sum(1 for score in scores if score < 0),
+            "by_action": by_action,
+        }
+
+    def _scope_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
+        disagreement_rows = [
+            item
+            for item in items
+            if str(item.get("openai_action") or "") != str(item.get("nova_action") or "")
+        ]
+        return {
+            "row_count": len(items),
+            "openai": _engine_summary(items, "openai"),
+            "nova": _engine_summary(items, "nova"),
+            "edge_counts": dict(Counter(str(item.get("lifecycle_model_edge") or "unknown") for item in items)),
+            "action_pair_counts": {
+                f"{openai_action}->{nova_action}": count
+                for (openai_action, nova_action), count in Counter(
+                    (
+                        str(item.get("openai_action") or "unknown"),
+                        str(item.get("nova_action") or "unknown"),
+                    )
+                    for item in items
+                ).items()
+            },
+            "disagreement": {
+                "row_count": len(disagreement_rows),
+                "openai": _engine_summary(disagreement_rows, "openai"),
+                "nova": _engine_summary(disagreement_rows, "nova"),
+                "edge_counts": dict(
+                    Counter(str(item.get("lifecycle_model_edge") or "unknown") for item in disagreement_rows)
+                ),
+            },
+        }
+
+    evaluated_matched = [item for item in matched if item.get("post_sell_outcome")]
+    engine_decision_performance = {
+        "metric_role": "shadow_engine_decision_performance",
+        "primary_decision_metric": "engine_action_lifecycle_quality_score",
+        "all_exact_matches": _scope_summary(matched),
+        "evaluated_forward_label_matches": _scope_summary(evaluated_matched),
+        "interpretation_guard": (
+            "Compare each engine by action-level lifecycle quality, not only action agreement, latency, cost, "
+            "or one-dimensional score sums. Provider promotion requires stage-specific action quality and "
+            "source-quality coverage to be sufficient."
+        ),
+    }
+
     return {
         "metric_role": "sim_probe_ev",
         "decision_authority": "shadow_observation_only",
@@ -371,6 +451,7 @@ def _build_outcome_linked_performance(target_date: str, rows: list[dict[str, Any
         },
         "by_stage": by_stage,
         "lifecycle_quality": lifecycle_quality,
+        "engine_decision_performance": engine_decision_performance,
         "sample_rows": matched[:50],
         "scoring_note": "legacy profit-sign score retained for compatibility only; promotion blockers should use lifecycle_quality.",
         "forbidden_uses": ["provider route change", "runtime threshold mutation", "broker order decision", "bot restart trigger"],

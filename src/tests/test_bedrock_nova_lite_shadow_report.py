@@ -130,6 +130,11 @@ def test_bedrock_nova_lite_shadow_report_summarizes_rows(tmp_path, monkeypatch):
     assert lifecycle["overall"]["openai_lifecycle_quality_score_sum"] == 1
     assert lifecycle["overall"]["nova_lifecycle_quality_score_sum"] == 1
     assert lifecycle["by_lifecycle_stage"]["holding_exit"]["matched_count"] == 1
+    performance = report["outcome_linked_performance"]["engine_decision_performance"]
+    assert performance["primary_decision_metric"] == "engine_action_lifecycle_quality_score"
+    assert performance["all_exact_matches"]["openai"]["quality_score_sum"] == 1
+    assert performance["all_exact_matches"]["nova"]["quality_score_sum"] == 1
+    assert performance["evaluated_forward_label_matches"]["row_count"] == 1
     assert report["outcome_linked_performance"]["sample_rows"][0]["mfe_10m_pct"] == 1.1
 
     json_path, md_path = mod.write_report(report)
