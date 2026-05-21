@@ -476,3 +476,96 @@ def test_lifecycle_matrix_keeps_panic_lifecycle_source_contract_and_euphoria_spl
     noop_row = next(row for row in rows if row["runtime_features"].get("exclude_from_ev"))
     assert noop_row["stage_ev_composite_pct"] is None
     assert noop_row["outcome_joined"] is False
+
+
+def test_lifecycle_matrix_emits_entry_bucket_attribution_workorders(tmp_path, monkeypatch):
+    matrix_dir = tmp_path / "matrix"
+    entry_dir = tmp_path / "entry_adm"
+    post_sell_dir = tmp_path / "post_sell"
+    monitor_dir = tmp_path / "monitor"
+    pipeline_dir = tmp_path / "pipeline_events"
+    for directory in (entry_dir, post_sell_dir, monitor_dir, pipeline_dir):
+        directory.mkdir(parents=True)
+    monkeypatch.setattr(mod, "MATRIX_DIR", matrix_dir)
+    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
+    monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", monitor_dir)
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
+    monkeypatch.setattr(
+        mod,
+        "entry_adm_report_paths",
+        lambda target_date: (
+            entry_dir / f"scalp_entry_action_decision_matrix_{target_date}.json",
+            entry_dir / f"scalp_entry_action_decision_matrix_{target_date}.md",
+        ),
+    )
+
+    rows = [
+        {
+            "candidate_id": f"bad-{idx}",
+            "stock_code": f"100{idx:03d}",
+            "event_time": "2026-05-21T09:01:00+09:00",
+            "stage": "scalp_entry_action_decision_snapshot",
+            "source_stage": "scalp_sim_entry_armed",
+            "chosen_action": "WAIT_REQUOTE",
+            "ai_score": 58,
+            "stale_bucket": "fresh",
+            "entry_submit_revalidation_warning": "stale_context_or_quote",
+            "liquidity_bucket": "below_min_liquidity",
+            "risk_context_bucket": "weak_momentum_context",
+            "overbought_bucket": "overbought_normal",
+            "time_bucket": "time_1200_1400",
+            "profit_rate": -1.2,
+            "mfe_10m_pct": 0.1,
+            "mae_10m_pct": -1.5,
+            "close_10m_pct": -1.0,
+            "outcome_joined": True,
+        }
+        for idx in range(22)
+    ]
+    rows.extend(
+        {
+            "candidate_id": f"good-{idx}",
+            "stock_code": f"200{idx:03d}",
+            "event_time": "2026-05-21T10:01:00+09:00",
+            "stage": "scalp_entry_action_decision_snapshot",
+            "source_stage": "scalp_sim_entry_armed",
+            "chosen_action": "WAIT_REQUOTE",
+            "ai_score": 64,
+            "stale_bucket": "fresh",
+            "liquidity_bucket": "liquidity_ok",
+            "risk_context_bucket": "neutral_strength_momentum",
+            "overbought_bucket": "pullback_observed",
+            "time_bucket": "time_1000_1200",
+            "profit_rate": 0.8,
+            "mfe_10m_pct": 1.5,
+            "mae_10m_pct": -0.2,
+            "close_10m_pct": 0.9,
+            "outcome_joined": True,
+        }
+        for idx in range(21)
+    )
+    (entry_dir / "scalp_entry_action_decision_matrix_2026-05-21.json").write_text(
+        json.dumps({"rows": rows}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    report = mod.build_lifecycle_decision_matrix_report("2026-05-21")
+
+    attribution = report["entry_bucket_attribution"]
+    assert attribution["decision_authority"] == "adm_ldm_entry_bucket_attribution_source_only"
+    assert attribution["summary"]["runtime_candidate_count"] >= 1
+    assert attribution["summary"]["workorder_count"] >= 1
+    stale_bucket = next(
+        item
+        for item in attribution["buckets"]
+        if item["bucket_type"] == "stale_bucket" and item["bucket_key"] == "stale_context_or_quote"
+    )
+    assert stale_bucket["recommended_route"] == "candidate_tighten_or_exclude"
+    assert stale_bucket["source_quality_adjusted_ev_pct"] < 0
+    assert any(
+        item["bucket_type"] == "overbought_bucket"
+        and item["bucket_key"] == "pullback_observed"
+        and item["recommended_route"] == "candidate_recovery_or_relax"
+        for item in attribution["buckets"]
+    )
+    assert report["summary"]["entry_bucket_runtime_candidate_count"] >= 1

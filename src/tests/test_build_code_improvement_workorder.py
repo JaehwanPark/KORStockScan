@@ -1364,3 +1364,75 @@ def test_build_code_improvement_workorder_reports_previous_generation_diff(tmp_p
     markdown = (doc_dir / "code_improvement_workorder_2026-05-08.md").read_text(encoding="utf-8")
     assert "order_new" in markdown
     assert "order_old" in markdown
+
+
+def test_build_code_improvement_workorder_consumes_lifecycle_entry_bucket_workorders(tmp_path, monkeypatch):
+    automation_dir = tmp_path / "automation"
+    ev_dir = tmp_path / "ev"
+    ldm_dir = tmp_path / "ldm"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    for directory in (automation_dir, ev_dir, ldm_dir):
+        directory.mkdir()
+    (automation_dir / "scalping_pattern_lab_automation_2026-05-21.json").write_text(
+        json.dumps({"date": "2026-05-21", "code_improvement_orders": []}),
+        encoding="utf-8",
+    )
+    ldm_path = ldm_dir / "lifecycle_decision_matrix_2026-05-21.json"
+    ldm_path.write_text(
+        json.dumps(
+            {
+                "entry_bucket_attribution": {
+                    "metric_role": "sim_probe_ev",
+                    "decision_authority": "adm_ldm_entry_bucket_attribution_source_only",
+                    "window_policy": "daily_lifecycle_rows_plus_threshold_cycle_rolling_consumer",
+                    "sample_floor": 10,
+                    "primary_decision_metric": "source_quality_adjusted_ev_pct",
+                    "source_quality_gate": "joined outcome labels",
+                    "forbidden_uses": ["broker_order_submit"],
+                    "code_improvement_workorders": [
+                        {
+                            "workorder_id": "entry_bucket_source_quality_1",
+                            "bucket_type": "liquidity_bucket",
+                            "bucket_key": "liquidity_unknown",
+                            "reason": "bucket_has_edge_but_needs_rolling_or_feature_confirmation",
+                            "recommended_route": "candidate_recovery_or_relax",
+                            "metric_role": "source_quality_gate",
+                            "runtime_effect": False,
+                        }
+                    ],
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (ev_dir / "threshold_cycle_ev_2026-05-21.json").write_text(
+        json.dumps({"sources": {"lifecycle_decision_matrix": str(ldm_path)}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
+    monkeypatch.setattr(mod, "LIFECYCLE_DECISION_MATRIX_DIR", ldm_dir)
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
+    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-audit")
+    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness")
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-21", max_orders=5)
+
+    order = next(
+        item
+        for item in report["orders"]
+        if item["order_id"] == "order_lifecycle_entry_bucket_liquidity_bucket_liquidity_unknown"
+    )
+    assert order["decision"] == "implement_now"
+    assert order["runtime_effect"] is False
+    assert order["source_report_type"] == "lifecycle_decision_matrix_entry_bucket_attribution"
+    assert "bucket_key=liquidity_unknown" in order["evidence"]
+    assert report["summary"]["lifecycle_entry_bucket_source_order_count"] == 1
+    assert report["source"]["lifecycle_decision_matrix"] == str(ldm_path)

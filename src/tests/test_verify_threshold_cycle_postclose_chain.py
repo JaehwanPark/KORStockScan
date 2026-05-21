@@ -545,3 +545,116 @@ def test_build_threshold_cycle_postclose_verification_not_yet_due_before_postclo
     assert report["status"] == "not_yet_due"
     assert report["predecessor_integrity"]["status"] == "not_yet_due"
     assert report["predecessor_integrity"]["log_issues"] == []
+
+
+def test_build_threshold_cycle_postclose_verification_fails_on_ldm_entry_bucket_handoff_drop(
+    tmp_path, monkeypatch
+):
+    project_root = tmp_path
+    report_dir = project_root / "data" / "report"
+    (project_root / "logs").mkdir(parents=True)
+    for folder in (
+        "threshold_cycle_ev",
+        "code_improvement_workorder",
+        "runtime_approval_summary",
+        "pattern_lab_currentness_audit",
+        "pattern_lab_propagation_audit",
+        "market_panic_breadth",
+        "panic_sell_defense",
+        "panic_buying",
+        "swing_daily_simulation",
+        "swing_lifecycle_audit",
+    ):
+        (report_dir / folder).mkdir(parents=True)
+    (project_root / "docs" / "checklists").mkdir(parents=True)
+    adm_path = _write_adm_artifact(report_dir)
+    lifecycle_path = report_dir / "lifecycle_decision_matrix" / "lifecycle_decision_matrix_2026-05-12.json"
+    lifecycle_path.parent.mkdir(parents=True, exist_ok=True)
+    lifecycle_path.write_text(
+        json.dumps(
+            {
+                "entry_bucket_attribution": {
+                    "runtime_approval_candidates": [
+                        {"candidate_id": "entry_bucket_1", "bucket_type": "score_band", "bucket_key": "score_66_69"}
+                    ],
+                    "code_improvement_workorders": [
+                        {"bucket_type": "liquidity_bucket", "bucket_key": "liquidity_unknown"}
+                    ],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    log_path = project_root / "logs" / "threshold_cycle_postclose_cron.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "[START] threshold-cycle postclose target_date=2026-05-12 started_at=2026-05-12T21:00:00+0900",
+                "[DONE] threshold-cycle postclose target_date=2026-05-12 swing_lifecycle=true pattern_labs=true deepseek_swing_lab=true pattern_lab_currentness_audit=true pattern_lab_propagation_audit=true scalp_entry_adm=true lifecycle_decision_matrix=true code_improvement_workorder=true daily_ev=true runtime_approval_summary=true next_stage2_checklist=true finished_at=2026-05-12T21:30:00+0900",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    workorder_path = report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-05-12.json"
+    ev_path = report_dir / "threshold_cycle_ev" / "threshold_cycle_ev_2026-05-12.json"
+    propagation_path = report_dir / "pattern_lab_propagation_audit" / "pattern_lab_propagation_audit_2026-05-12.json"
+    currentness_path = report_dir / "pattern_lab_currentness_audit" / "pattern_lab_currentness_audit_2026-05-12.json"
+    ev_path.write_text(
+        json.dumps(
+            {
+                "sources": {
+                    "code_improvement_workorder": str(workorder_path),
+                    "pattern_lab_currentness_audit": str(currentness_path),
+                    "pattern_lab_propagation_audit": str(propagation_path),
+                    "scalp_entry_action_decision_matrix": str(adm_path),
+                    "lifecycle_decision_matrix": str(lifecycle_path),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    workorder_path.write_text(json.dumps({"generation_id": "g", "source_hash": "h", "orders": []}), encoding="utf-8")
+    (report_dir / "runtime_approval_summary" / "runtime_approval_summary_2026-05-12.json").write_text(
+        json.dumps(
+            {
+                "sources": {
+                    "threshold_cycle_ev": str(ev_path),
+                    "pattern_lab_propagation_audit": str(propagation_path),
+                    "scalp_entry_action_decision_matrix": str(adm_path),
+                    "lifecycle_decision_matrix": str(lifecycle_path),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    for path in (
+        currentness_path,
+        propagation_path,
+        report_dir / "market_panic_breadth" / "market_panic_breadth_2026-05-12.json",
+        report_dir / "panic_sell_defense" / "panic_sell_defense_2026-05-12.json",
+        report_dir / "panic_buying" / "panic_buying_2026-05-12.json",
+        report_dir / "swing_daily_simulation" / "swing_daily_simulation_2026-05-12.json",
+        report_dir / "swing_lifecycle_audit" / "swing_lifecycle_audit_2026-05-12.json",
+    ):
+        path.write_text("{}", encoding="utf-8")
+    (project_root / "docs" / "checklists" / "2026-05-13-stage2-todo-checklist.md").write_text(
+        "# next\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification")
+    monkeypatch.setattr(mod, "LOG_PATH", log_path)
+    monkeypatch.setattr(mod, "_next_krx_trading_day", lambda target_date: "2026-05-13")
+
+    report = mod.build_threshold_cycle_postclose_verification("2026-05-12")
+
+    assert report["status"] == "fail"
+    assert report["entry_bucket_handoff"]["status"] == "fail"
+    assert report["entry_bucket_handoff"]["missing_ev_candidate_ids"] == ["entry_bucket_1"]
+    assert report["entry_bucket_handoff"]["missing_runtime_summary_candidate_ids"] == ["entry_bucket_1"]
+    assert report["entry_bucket_handoff"]["missing_workorder_order_ids"] == [
+        "order_lifecycle_entry_bucket_liquidity_bucket_liquidity_unknown"
+    ]
+    assert "ldm_entry_bucket_handoff_missing" in report["predecessor_integrity"]["log_issues"]

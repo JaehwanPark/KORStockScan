@@ -90,6 +90,19 @@ def test_bedrock_nova_micro_shadow_report_summarizes_rows(tmp_path, monkeypatch)
         + "\n",
         encoding="utf-8",
     )
+    (post_sell_dir / "sim_post_sell_evaluations_2026-05-21.jsonl").write_text(
+        json.dumps(
+            {
+                "post_sell_id": "POST-1",
+                "sim_record_id": "SIM-1",
+                "outcome": "MISSED_UPSIDE",
+                "metrics_10m": {"mfe_pct": 1.1, "mae_pct": -0.2},
+                "metrics_60m": {"mfe_pct": 1.3},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     monkeypatch.setattr(mod, "shadow_jsonl_path", lambda target_date: source)
     monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
     monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
@@ -112,6 +125,12 @@ def test_bedrock_nova_micro_shadow_report_summarizes_rows(tmp_path, monkeypatch)
     assert report["outcome_linked_performance"]["unmatched_sell_count"] == 1
     assert report["outcome_linked_performance"]["overall"]["openai_outcome_score_sum"] == 1
     assert report["outcome_linked_performance"]["overall"]["nova_outcome_score_sum"] == 1
+    lifecycle = report["outcome_linked_performance"]["lifecycle_quality"]
+    assert lifecycle["evaluation_matched_count"] == 1
+    assert lifecycle["overall"]["openai_lifecycle_quality_score_sum"] == 1
+    assert lifecycle["overall"]["nova_lifecycle_quality_score_sum"] == 1
+    assert lifecycle["by_lifecycle_stage"]["holding_exit"]["matched_count"] == 1
+    assert report["outcome_linked_performance"]["sample_rows"][0]["mfe_10m_pct"] == 1.1
 
     json_path, md_path = mod.write_report(report)
     assert json_path.exists()

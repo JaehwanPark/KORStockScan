@@ -714,6 +714,8 @@ POSTCLOSE `HumanInterventionSummaryYYYYMMDD`는 approval artifact를 code improv
 - `data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_YYYY-MM-DD.md`
 - `data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_YYYY-MM-DD.json`
 - `data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_YYYY-MM-DD.md`
+- `data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_YYYY-MM-DD.json`
+- `data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_YYYY-MM-DD.md`
 - `data/report/swing_lifecycle_audit/swing_lifecycle_audit_YYYY-MM-DD.md`
 - `data/report/swing_threshold_ai_review/swing_threshold_ai_review_YYYY-MM-DD.md`
 - `data/report/swing_improvement_automation/swing_improvement_automation_YYYY-MM-DD.json`
@@ -752,7 +754,7 @@ TARGET_DATE=$(TZ=Asia/Seoul date +%F)
 PYTHONPATH=. .venv/bin/python -m src.engine.build_code_improvement_workorder --date "$TARGET_DATE" --max-orders 12
 ```
 
-같은 날짜 workorder를 재생성하면 `generation_id`, `source_hash`, `lineage` diff를 먼저 확인한다. 동일 source hash면 같은 snapshot 재실행으로 보고, source hash가 바뀌었으면 postclose 산출물 변화로 새 follow-up이 생긴 것으로 분리한다.
+같은 날짜 workorder를 재생성하면 `generation_id`, `source_hash`, `lineage` diff를 먼저 확인한다. 동일 source hash면 같은 snapshot 재실행으로 보고, source hash가 바뀌었으면 postclose 산출물 변화로 새 follow-up이 생긴 것으로 분리한다. LDM `entry_bucket_attribution.code_improvement_workorders`가 존재하면 `lifecycle_decision_matrix_entry_bucket_attribution` order가 생성되어야 하며, 누락은 postclose verifier fail 사유다.
 
 ### 1.1 2-pass 구현 기준
 
@@ -1020,6 +1022,8 @@ Holding/Exit ADM 보정 규칙은 아래와 같다.
 Lifecycle Decision Matrix는 기존 ADM을 대체하는 새 단일 bucket 정책이 아니라 ADM 확장 umbrella다. postclose chain이 `data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_YYYY-MM-DD.{json,md}`를 만들고, runtime feature와 label feature를 분리한다.
 
 Runtime 입력 feature는 `ai_score`, AI action, buy pressure, tick accel, micro VWAP, spread, liquidity, latency, stale/source quality, price resolver, OFI/QI, position PnL, peak, held_sec, 현재 적용된 fixed threshold 값이다. `realized_profit`, `mfe_10m_pct`, `mae_10m_pct`, `close_10m_pct`, fill outcome, avoided loss, missed upside 같은 사후 label은 policy 학습/판정 근거에만 쓰고 runtime resolver 입력으로 넣지 않는다.
+
+`entry_bucket_attribution`은 entry row를 `score_band/source_stage/chosen_action/stale_bucket/liquidity_bucket/strength_bucket/overbought_bucket/time_bucket/exit_rule/combo_entry_spot`으로 자동 분류한다. bucket별 `source_quality_adjusted_ev_pct`, joined sample, MFE/MAE/close label을 만들고, sample/EV/source-quality 조건에 따라 `runtime_approval_candidates`와 `code_improvement_workorders`를 생성한다. 이 layer는 `runtime_effect=false`, `allowed_runtime_apply=false`이며, 후보가 있으면 `threshold_cycle_ev`, `runtime_approval_summary`, `code_improvement_workorder`까지 전달되어야 한다. 전달 누락은 `threshold_cycle_postclose_verification`의 `ldm_entry_bucket_handoff_missing` FAIL이다.
 
 selected PREOPEN env가 명시할 수 있는 key는 아래다.
 

@@ -15,7 +15,6 @@ UTILS_DIR = PROJECT_ROOT / 'src' / 'utils'
 ENGINE_DIR = PROJECT_ROOT / 'src' / 'engine'
 MODEL_DIR = PROJECT_ROOT / 'src' / 'model'
 NOTIFY_DIR = PROJECT_ROOT / 'src' / 'notify'
-# INTEGRATED_DB_PATH = DATA_DIR / 'korstockscan.db'
 POSTGRES_URL = "postgresql://quant_admin:quant_password_123!@localhost:5432/korstockscan"
 
 @dataclass(frozen=True) # frozen=True로 설정하면 읽기 전용(상수)이 되어 안전하게 사용할 수 있습니다.

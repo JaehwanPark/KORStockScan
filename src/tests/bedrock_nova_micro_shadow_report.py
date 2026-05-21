@@ -116,9 +116,76 @@ def _sim_post_sell_path(target_date: str) -> Path:
     return POST_SELL_DIR / f"sim_post_sell_candidates_{target_date}.jsonl"
 
 
+def _sim_post_sell_eval_path(target_date: str) -> Path:
+    return POST_SELL_DIR / f"sim_post_sell_evaluations_{target_date}.jsonl"
+
+
+def _metric(row: dict[str, Any] | None, window: str, key: str) -> float | None:
+    if not isinstance(row, dict):
+        return None
+    metrics = row.get(f"metrics_{window}")
+    if not isinstance(metrics, dict):
+        return None
+    return _safe_float(metrics.get(key))
+
+
+def _lifecycle_stage(row: dict[str, Any]) -> str:
+    stage = str(row.get("source_event_stage") or row.get("pipeline_stage") or row.get("endpoint_name") or "").lower()
+    if "holding" in stage or "exit" in stage or "sell" in stage:
+        return "holding_exit"
+    if "analyze_target" in stage or "watching" in stage or "entry" in stage:
+        return "entry"
+    return "unknown"
+
+
+def _quality_score(action: Any, *, lifecycle_stage: str, profit_rate: Any, evaluation: dict[str, Any] | None) -> tuple[int, str]:
+    profit = _safe_float(profit_rate)
+    if profit is None:
+        return 0, "no_profit_label"
+    bucket = _action_bucket(action)
+    outcome = str((evaluation or {}).get("outcome") or "").upper()
+    mfe10 = _metric(evaluation, "10m", "mfe_pct")
+    mfe60 = _metric(evaluation, "60m", "mfe_pct")
+    mae10 = _metric(evaluation, "10m", "mae_pct")
+    missed_upside = outcome == "MISSED_UPSIDE" or (mfe10 is not None and mfe10 >= 0.8) or (mfe60 is not None and mfe60 >= 1.2)
+
+    if lifecycle_stage == "entry":
+        if bucket == "risk_on_or_hold":
+            return (1, "entered_profitable_candidate") if profit > 0 else (-1, "entered_losing_candidate")
+        if bucket in {"defensive", "neutral_wait"}:
+            return (1, "avoided_losing_candidate") if profit < 0 else (-1, "missed_profitable_or_upside_candidate")
+        return 0, "entry_unknown_action"
+
+    if lifecycle_stage == "holding_exit":
+        if bucket == "risk_on_or_hold":
+            if profit > 0 or missed_upside:
+                return 1, "held_for_profit_or_missed_upside"
+            if profit < 0 and (mae10 is None or mae10 <= -0.5):
+                return -1, "held_into_loss_or_adverse_excursion"
+            return 0, "hold_neutral_without_clear_forward_label"
+        if bucket == "defensive":
+            if missed_upside:
+                return -1, "exited_before_forward_upside"
+            if profit < 0 or outcome == "GOOD_EXIT":
+                return 1, "reduced_loss_or_locked_good_exit"
+            return 0, "exit_neutral_without_forward_upside"
+        if bucket == "neutral_wait":
+            return 0, "wait_neutral_in_holding_exit"
+        return 0, "holding_unknown_action"
+
+    return _outcome_score(action, profit), "legacy_unknown_stage_profit_only"
+
+
 def _build_outcome_linked_performance(target_date: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
     post_sell_path = _sim_post_sell_path(target_date)
+    post_sell_eval_path = _sim_post_sell_eval_path(target_date)
     sells = read_jsonl(post_sell_path) if post_sell_path.exists() else []
+    evaluations = read_jsonl(post_sell_eval_path) if post_sell_eval_path.exists() else []
+    evaluation_by_sim_id = {
+        str(row.get("sim_record_id") or "").strip(): row
+        for row in evaluations
+        if str(row.get("sim_record_id") or "").strip()
+    }
     shadow_by_sim_id: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         sim_record_id = str(row.get("sim_record_id") or "").strip()
@@ -139,6 +206,20 @@ def _build_outcome_linked_performance(target_date: str, rows: list[dict[str, Any
         best = max(candidates, key=lambda item: str(item.get("created_at") or ""))
         openai_score = _outcome_score(best.get("openai_action"), profit)
         nova_score = _outcome_score(best.get("nova_action"), profit)
+        evaluation = evaluation_by_sim_id.get(sim_record_id)
+        lifecycle_stage = _lifecycle_stage(best)
+        openai_quality_score, openai_quality_reason = _quality_score(
+            best.get("openai_action"),
+            lifecycle_stage=lifecycle_stage,
+            profit_rate=profit,
+            evaluation=evaluation,
+        )
+        nova_quality_score, nova_quality_reason = _quality_score(
+            best.get("nova_action"),
+            lifecycle_stage=lifecycle_stage,
+            profit_rate=profit,
+            evaluation=evaluation,
+        )
         matched.append(
             {
                 "sim_record_id": sim_record_id,
@@ -155,6 +236,22 @@ def _build_outcome_linked_performance(target_date: str, rows: list[dict[str, Any
                 "openai_outcome_score": openai_score,
                 "nova_outcome_score": nova_score,
                 "model_edge": "nova" if nova_score > openai_score else "openai" if openai_score > nova_score else "tie",
+                "lifecycle_stage": lifecycle_stage,
+                "post_sell_outcome": (evaluation or {}).get("outcome"),
+                "mfe_10m_pct": _metric(evaluation, "10m", "mfe_pct"),
+                "mae_10m_pct": _metric(evaluation, "10m", "mae_pct"),
+                "mfe_60m_pct": _metric(evaluation, "60m", "mfe_pct"),
+                "openai_lifecycle_quality_score": openai_quality_score,
+                "nova_lifecycle_quality_score": nova_quality_score,
+                "lifecycle_model_edge": (
+                    "nova"
+                    if nova_quality_score > openai_quality_score
+                    else "openai"
+                    if openai_quality_score > nova_quality_score
+                    else "tie"
+                ),
+                "openai_lifecycle_quality_reason": openai_quality_reason,
+                "nova_lifecycle_quality_reason": nova_quality_reason,
                 "join_type": "exact_sim_record_id",
                 "post_sell_id": sell.get("post_sell_id"),
                 "entry_adm_candidate_id": best.get("entry_adm_candidate_id") or sell.get("entry_adm_candidate_id"),
@@ -174,6 +271,14 @@ def _build_outcome_linked_performance(target_date: str, rows: list[dict[str, Any
                 "openai_edge_count": 0,
                 "tie_count": 0,
                 "avg_profit_rate": None,
+                "openai_lifecycle_quality_score_sum": 0,
+                "nova_lifecycle_quality_score_sum": 0,
+                "nova_lifecycle_edge_count": 0,
+                "openai_lifecycle_edge_count": 0,
+                "lifecycle_tie_count": 0,
+                "avg_mfe_10m_pct": None,
+                "avg_mae_10m_pct": None,
+                "avg_mfe_60m_pct": None,
             },
         )
         bucket["matched_count"] += 1
@@ -185,10 +290,63 @@ def _build_outcome_linked_performance(target_date: str, rows: list[dict[str, Any
             bucket["openai_edge_count"] += 1
         else:
             bucket["tie_count"] += 1
+        bucket["openai_lifecycle_quality_score_sum"] += item["openai_lifecycle_quality_score"]
+        bucket["nova_lifecycle_quality_score_sum"] += item["nova_lifecycle_quality_score"]
+        if item["lifecycle_model_edge"] == "nova":
+            bucket["nova_lifecycle_edge_count"] += 1
+        elif item["lifecycle_model_edge"] == "openai":
+            bucket["openai_lifecycle_edge_count"] += 1
+        else:
+            bucket["lifecycle_tie_count"] += 1
 
     for stage, bucket in by_stage.items():
         profits = [item["profit_rate"] for item in matched if str(item.get("source_event_stage") or "unknown") == stage]
         bucket["avg_profit_rate"] = round(sum(profits) / len(profits), 4) if profits else None
+        stage_rows = [item for item in matched if str(item.get("source_event_stage") or "unknown") == stage]
+        for key in ("mfe_10m_pct", "mae_10m_pct", "mfe_60m_pct"):
+            values = [_safe_float(item.get(key)) for item in stage_rows]
+            values = [value for value in values if value is not None]
+            bucket[f"avg_{key}"] = round(sum(values) / len(values), 4) if values else None
+
+    lifecycle_quality = {
+        "metric_role": "shadow_lifecycle_ev_quality",
+        "primary_decision_metric": "entry_avoided_bad_trade + holding_exit_missed_upside_or_loss_reduction",
+        "source_path": str(post_sell_eval_path),
+        "evaluation_matched_count": sum(1 for item in matched if item.get("post_sell_outcome")),
+        "source_quality_warnings": [],
+        "overall": {
+            "openai_lifecycle_quality_score_sum": sum(item["openai_lifecycle_quality_score"] for item in matched),
+            "nova_lifecycle_quality_score_sum": sum(item["nova_lifecycle_quality_score"] for item in matched),
+            "nova_minus_openai_lifecycle_quality_score": sum(
+                item["nova_lifecycle_quality_score"] - item["openai_lifecycle_quality_score"] for item in matched
+            ),
+            "nova_lifecycle_edge_count": sum(1 for item in matched if item["lifecycle_model_edge"] == "nova"),
+            "openai_lifecycle_edge_count": sum(1 for item in matched if item["lifecycle_model_edge"] == "openai"),
+            "lifecycle_tie_count": sum(1 for item in matched if item["lifecycle_model_edge"] == "tie"),
+        },
+        "by_lifecycle_stage": {},
+        "scoring_note": (
+            "entry: BUY/HOLD rewards profitable candidates and penalizes losing candidates; WAIT/DROP rewards avoided losers "
+            "and penalizes missed profitable/upside candidates. holding_exit: HOLD rewards profit or missed-upside continuation; "
+            "EXIT/TRIM rewards loss reduction or good exits and is penalized when post-sell MFE shows missed upside."
+        ),
+    }
+    if matched and lifecycle_quality["evaluation_matched_count"] < len(matched):
+        lifecycle_quality["source_quality_warnings"].append("missing_sim_post_sell_evaluation_for_some_exact_matches")
+    lifecycle_stage_names = sorted({str(item.get("lifecycle_stage") or "unknown") for item in matched})
+    for lifecycle_stage in lifecycle_stage_names:
+        stage_rows = [item for item in matched if str(item.get("lifecycle_stage") or "unknown") == lifecycle_stage]
+        lifecycle_quality["by_lifecycle_stage"][lifecycle_stage] = {
+            "matched_count": len(stage_rows),
+            "openai_lifecycle_quality_score_sum": sum(item["openai_lifecycle_quality_score"] for item in stage_rows),
+            "nova_lifecycle_quality_score_sum": sum(item["nova_lifecycle_quality_score"] for item in stage_rows),
+            "nova_minus_openai_lifecycle_quality_score": sum(
+                item["nova_lifecycle_quality_score"] - item["openai_lifecycle_quality_score"] for item in stage_rows
+            ),
+            "nova_lifecycle_edge_count": sum(1 for item in stage_rows if item["lifecycle_model_edge"] == "nova"),
+            "openai_lifecycle_edge_count": sum(1 for item in stage_rows if item["lifecycle_model_edge"] == "openai"),
+            "lifecycle_tie_count": sum(1 for item in stage_rows if item["lifecycle_model_edge"] == "tie"),
+        }
 
     return {
         "metric_role": "sim_probe_ev",
@@ -212,8 +370,9 @@ def _build_outcome_linked_performance(target_date: str, rows: list[dict[str, Any
             "tie_count": sum(1 for item in matched if item["model_edge"] == "tie"),
         },
         "by_stage": by_stage,
+        "lifecycle_quality": lifecycle_quality,
         "sample_rows": matched[:50],
-        "scoring_note": "defensive action is positive when final sim PnL is negative and negative when final sim PnL is positive; HOLD/BUY is the inverse; WAIT is neutral.",
+        "scoring_note": "legacy profit-sign score retained for compatibility only; promotion blockers should use lifecycle_quality.",
         "forbidden_uses": ["provider route change", "runtime threshold mutation", "broker order decision", "bot restart trigger"],
     }
 

@@ -149,6 +149,100 @@ def _runtime_candidates_requiring_ai(calibration_report: dict[str, Any]) -> list
     return sorted(set(blocking))
 
 
+
+def _slug(value: str) -> str:
+    text = re.sub(r"[^a-zA-Z0-9가-힣]+", "_", str(value or "").strip().lower()).strip("_")
+    return text[:80] or "unknown"
+
+
+def _entry_bucket_order_id(item: dict[str, Any]) -> str:
+    bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
+    bucket_key = _slug(str(item.get("bucket_key") or item.get("workorder_id") or "unknown"))
+    return f"order_lifecycle_entry_bucket_{bucket_type}_{bucket_key}"
+
+
+def _collect_entry_bucket_candidate_ids(payload: Any) -> set[str]:
+    found: set[str] = set()
+    if isinstance(payload, dict):
+        candidates = payload.get("entry_bucket_runtime_approval_candidates")
+        if isinstance(candidates, list):
+            for item in candidates:
+                if isinstance(item, dict) and item.get("candidate_id"):
+                    found.add(str(item.get("candidate_id")))
+        for value in payload.values():
+            found.update(_collect_entry_bucket_candidate_ids(value))
+    elif isinstance(payload, list):
+        for item in payload:
+            found.update(_collect_entry_bucket_candidate_ids(item))
+    return found
+
+
+def _entry_bucket_handoff_status(
+    ldm_report: dict[str, Any],
+    ev_report: dict[str, Any],
+    runtime_summary: dict[str, Any],
+    workorder: dict[str, Any],
+) -> dict[str, Any]:
+    attribution = (
+        ldm_report.get("entry_bucket_attribution")
+        if isinstance(ldm_report.get("entry_bucket_attribution"), dict)
+        else {}
+    )
+    candidates = (
+        attribution.get("runtime_approval_candidates")
+        if isinstance(attribution.get("runtime_approval_candidates"), list)
+        else []
+    )
+    source_workorders = (
+        attribution.get("code_improvement_workorders")
+        if isinstance(attribution.get("code_improvement_workorders"), list)
+        else []
+    )
+    expected_candidate_ids = sorted(
+        str(item.get("candidate_id"))
+        for item in candidates
+        if isinstance(item, dict) and item.get("candidate_id")
+    )
+    expected_order_ids = sorted(
+        _entry_bucket_order_id(item)
+        for item in source_workorders
+        if isinstance(item, dict) and item.get("bucket_type") and item.get("bucket_key")
+    )
+    ev_candidate_ids = _collect_entry_bucket_candidate_ids(ev_report)
+    runtime_candidate_ids = _collect_entry_bucket_candidate_ids(runtime_summary)
+    actual_order_ids = {
+        str(item.get("order_id"))
+        for item in (workorder.get("orders") if isinstance(workorder.get("orders"), list) else [])
+        if isinstance(item, dict) and item.get("order_id")
+    }
+    missing_ev_candidates = sorted(set(expected_candidate_ids) - ev_candidate_ids)
+    missing_runtime_summary_candidates = sorted(set(expected_candidate_ids) - runtime_candidate_ids)
+    missing_workorder_order_ids = sorted(set(expected_order_ids) - actual_order_ids)
+    missing: list[str] = []
+    if missing_ev_candidates:
+        missing.append("threshold_cycle_ev_entry_bucket_candidates_missing")
+    if missing_runtime_summary_candidates:
+        missing.append("runtime_approval_summary_entry_bucket_candidates_missing")
+    if missing_workorder_order_ids:
+        missing.append("code_improvement_workorder_entry_bucket_orders_missing")
+    return {
+        "status": "fail" if missing else "pass",
+        "expected_candidate_ids": expected_candidate_ids,
+        "threshold_cycle_ev_candidate_ids": sorted(ev_candidate_ids),
+        "runtime_approval_summary_candidate_ids": sorted(runtime_candidate_ids),
+        "missing_ev_candidate_ids": missing_ev_candidates,
+        "missing_runtime_summary_candidate_ids": missing_runtime_summary_candidates,
+        "expected_workorder_order_ids": expected_order_ids,
+        "actual_workorder_order_ids": sorted(actual_order_ids),
+        "missing_workorder_order_ids": missing_workorder_order_ids,
+        "missing": missing,
+        "interpretation": (
+            "LDM entry bucket candidates and workorders propagated to threshold EV, runtime summary, and code workorder."
+            if not missing
+            else "LDM entry bucket output was generated but one or more downstream consumers dropped it."
+        ),
+    }
+
 def _ai_correction_status(target_date: str) -> dict[str, Any]:
     ai_path = _ai_review_path(target_date)
     calibration_path = _calibration_path(target_date)
@@ -255,12 +349,17 @@ def build_threshold_cycle_postclose_verification(
             item["json_valid"] = _json_valid(path)
         artifact_status.append(item)
 
-    ev_report = _load_json(_artifact_paths(target_date)["threshold_cycle_ev"])
-    workorder = _load_json(_artifact_paths(target_date)["code_improvement_workorder"])
-    runtime_summary = _load_json(_artifact_paths(target_date)["runtime_approval_summary"])
+    paths = _artifact_paths(target_date)
+    ev_report = _load_json(paths["threshold_cycle_ev"])
+    workorder = _load_json(paths["code_improvement_workorder"])
+    runtime_summary = _load_json(paths["runtime_approval_summary"])
+    ldm_report = _load_json(paths["lifecycle_decision_matrix"])
     ai_correction = _ai_correction_status(target_date)
     if ai_correction.get("status") == "fail":
         log_issues.append("ai_correction_unavailable_blocks_runtime_candidates")
+    entry_bucket_handoff = _entry_bucket_handoff_status(ldm_report, ev_report, runtime_summary, workorder)
+    if entry_bucket_handoff.get("status") == "fail":
+        log_issues.append("ldm_entry_bucket_handoff_missing")
 
     lineage = workorder.get("lineage") if isinstance(workorder.get("lineage"), dict) else {}
     workorder_snapshot = {
@@ -485,6 +584,7 @@ def build_threshold_cycle_postclose_verification(
         "downstream_links": downstream_links,
         "missing_downstream_links": missing_downstream_links,
         "ai_correction": ai_correction,
+        "entry_bucket_handoff": entry_bucket_handoff,
     }
 
 
@@ -492,6 +592,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
     predecessor = report.get("predecessor_integrity") if isinstance(report.get("predecessor_integrity"), dict) else {}
     workorder = report.get("workorder_snapshot") if isinstance(report.get("workorder_snapshot"), dict) else {}
     ai_correction = report.get("ai_correction") if isinstance(report.get("ai_correction"), dict) else {}
+    entry_bucket = report.get("entry_bucket_handoff") if isinstance(report.get("entry_bucket_handoff"), dict) else {}
     lines = [
         f"# Threshold Cycle Postclose Verification - {report.get('date')}",
         "",
@@ -518,6 +619,14 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- blocking_runtime_candidate_families: `{ai_correction.get('blocking_runtime_candidate_families') or []}`",
         f"- parse_warnings: `{ai_correction.get('parse_warnings') or []}`",
         f"- interpretation: `{ai_correction.get('interpretation') or '-'}`",
+        "",
+        "## Entry Bucket Handoff",
+        f"- status: `{entry_bucket.get('status') or '-'}`",
+        f"- expected_candidate_ids: `{entry_bucket.get('expected_candidate_ids') or []}`",
+        f"- missing_ev_candidate_ids: `{entry_bucket.get('missing_ev_candidate_ids') or []}`",
+        f"- missing_runtime_summary_candidate_ids: `{entry_bucket.get('missing_runtime_summary_candidate_ids') or []}`",
+        f"- missing_workorder_order_ids: `{entry_bucket.get('missing_workorder_order_ids') or []}`",
+        f"- interpretation: `{entry_bucket.get('interpretation') or '-'}`",
         "",
         "## Workorder Snapshot",
         f"- generation_id: `{workorder.get('generation_id') or '-'}`",

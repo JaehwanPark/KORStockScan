@@ -1156,6 +1156,8 @@ def _lifecycle_matrix_summary(ev_report: dict[str, Any], source_path: str | None
     joined_rows = _as_int(matrix.get("joined_rows"))
     policy_pass_count = _as_int(matrix.get("policy_pass_count"))
     promote_ready_count = _as_int(matrix.get("promote_ready_count"))
+    entry_bucket_runtime_candidate_count = _as_int(matrix.get("entry_bucket_runtime_candidate_count"))
+    entry_bucket_workorder_count = _as_int(matrix.get("entry_bucket_workorder_count"))
     warnings: list[str] = []
     if not matrix.get("available", True):
         warnings.append("source_quality_blocker")
@@ -1179,6 +1181,19 @@ def _lifecycle_matrix_summary(ev_report: dict[str, Any], source_path: str | None
         "sample_floor": 20,
         "policy_pass_count": policy_pass_count,
         "promote_ready_count": promote_ready_count,
+        "entry_bucket_actionable_count": _as_int(matrix.get("entry_bucket_actionable_count")),
+        "entry_bucket_runtime_candidate_count": entry_bucket_runtime_candidate_count,
+        "entry_bucket_workorder_count": entry_bucket_workorder_count,
+        "entry_bucket_runtime_approval_candidates": (
+            matrix.get("entry_bucket_runtime_approval_candidates")
+            if isinstance(matrix.get("entry_bucket_runtime_approval_candidates"), list)
+            else []
+        ),
+        "entry_bucket_code_improvement_workorders": (
+            matrix.get("entry_bucket_code_improvement_workorders")
+            if isinstance(matrix.get("entry_bucket_code_improvement_workorders"), list)
+            else []
+        ),
         "policy_entries": matrix.get("policy_entries") if isinstance(matrix.get("policy_entries"), list) else [],
         "fixed_threshold_roles": matrix.get("fixed_threshold_roles") if isinstance(matrix.get("fixed_threshold_roles"), dict) else {},
         "tuning_cycle": "lifecycle_decision_matrix -> threshold_cycle_ev -> runtime_approval_summary -> next preopen bounded env",

@@ -4,7 +4,7 @@ KORStockScan은 키움 REST/WebSocket 기반 한국 주식 자동매매 엔진, 
 
 현재 기준 문서는 [Plan Rebase](docs/plan-korStockScanPerformanceOptimization.rebase.md)입니다. 실행 항목과 Due/Slot/TimeWindow/Track은 날짜별 [stage2 checklist](docs/checklists/README.md)가 소유합니다.
 
-현재 기준일: `2026-05-20 KST`
+현재 기준일: `2026-05-21 KST`
 
 README, 런북(runbook), Plan Rebase, prompt, AGENTS 같은 기준 문서는 사용자의 명시 작업지시가 있을 때만 갱신합니다. 문서 갱신은 runtime/order/provider/bot/threshold 변경과 분리하고, 필요한 경우 1차 수정, 2차 감리, 최종 보완 순서로 parser 검증까지 닫습니다.
 
@@ -22,7 +22,8 @@ README, 런북(runbook), Plan Rebase, prompt, AGENTS 같은 기준 문서는 사
 - 실주문 안전장치(hard safety)는 항상 우선합니다. broker submit guard, stale quote submit block, price freshness, hard/protect/emergency stop, 계좌/order/cooldown/qty guard는 우회할 수 없습니다.
 - 시뮬레이션, 실주문 없는 추적관찰(probe), 놓친 경우 복기(counterfactual)는 source bundle과 approval request 근거가 될 수 있지만, 실제 체결 품질(real execution quality)이나 실주문 전환 근거로 단독 사용하지 않습니다.
 - Sentinel, panic sell/buying, system error detector는 리포트 전용(report-only) 또는 source-quality 입력입니다. approval artifact와 rollback guard 없이 주문, 청산, threshold, provider, bot 상태를 바꾸지 않습니다.
-- code-improvement workorder는 자동 repo 수정이 아니라 Codex 구현 지시 입력입니다.
+- code-improvement workorder는 자동 repo 수정이 아니라 Codex 구현 지시 입력입니다. 단, sim-only source 분석, bucket 분류, approval candidate/workorder 산출은 자동화체인이 무인으로 수행해야 하며, 사용자는 `implement_now` 구현 지시와 runtime env approval artifact 승인만 명시합니다.
+- LDM bucket 후보나 workorder를 만든 뒤 downstream consumer가 누락하면 조용히 성공으로 보지 않고 postclose verification에서 FAIL로 닫습니다.
 
 ## 처음 설치하기
 
@@ -191,7 +192,7 @@ PYTHONPATH=. .venv/bin/python src/bot_main.py
 | `R5_bounded_calibrated_apply` | 제한 적용 | guard 통과 family만 다음 장전 runtime env에 반영 | 있음 |
 | `R6_post_apply_attribution` | 적용 후 귀속 | selected/applied/not-applied cohort, daily EV, approval summary 생성 | 없음 |
 
-자동화체인은 신규 관찰축을 무한히 늘리는 방식이 아니라 기존 source bundle을 재사용합니다. BUY 쪽은 `buy_funnel_sentinel`, `wait6579_ev_cohort`, 놓친 진입 복기(`missed_entry_counterfactual`), `performance_tuning`; 관리자 의사결정 모듈(ADM)과 lifecycle 쪽은 `lifecycle_decision_matrix`, `scalp_entry_action_decision_matrix`, `holding_exit_decision_matrix`, `sim_post_sell_evaluations`, `statistical_action_weight`; 보유/청산 쪽은 `holding_exit_observation`, `post_sell_feedback`, `trade_review`, `holding_exit_sentinel`; 패닉 쪽은 `panic_sell_defense`, `panic_buying`을 우선 source로 씁니다.
+자동화체인은 신규 관찰축을 무한히 늘리는 방식이 아니라 기존 source bundle을 재사용합니다. BUY 쪽은 `buy_funnel_sentinel`, `wait6579_ev_cohort`, 놓친 진입 복기(`missed_entry_counterfactual`), `performance_tuning`; 관리자 의사결정 모듈(ADM)과 lifecycle 쪽은 `lifecycle_decision_matrix`, `scalp_entry_action_decision_matrix`, `holding_exit_decision_matrix`, `sim_post_sell_evaluations`, `statistical_action_weight`; 보유/청산 쪽은 `holding_exit_observation`, `post_sell_feedback`, `trade_review`, `holding_exit_sentinel`; 패닉 쪽은 `panic_sell_defense`, `panic_buying`을 우선 source로 씁니다. LDM `entry_bucket_attribution`은 score/source/stale/liquidity/strength/overbought/time/combo bucket을 자동 집계하고, runtime approval 후보와 code-improvement workorder를 생성합니다.
 
 ## 의사결정 매트릭스와 한계값 역할
 

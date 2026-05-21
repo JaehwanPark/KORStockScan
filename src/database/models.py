@@ -28,7 +28,7 @@ class DailyStockQuote(Base):
     macd_sig = Column(Float)
     macd_hist = Column(Float)
 
-    # 💡 [신규 추가] sqlite.sql에 명시된 지표들 완벽 동기화
+    # PostgreSQL daily_stock_quotes DDL에 맞춘 보조지표 컬럼
     bbl = Column(Float)
     bbm = Column(Float)
     bbu = Column(Float)

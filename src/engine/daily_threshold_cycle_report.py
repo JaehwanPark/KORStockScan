@@ -4828,10 +4828,31 @@ def _build_lifecycle_decision_matrix_runtime_family(target_date: str | None) -> 
     payload = _read_json_dict(path)
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     policy_entries = payload.get("policy_entries") if isinstance(payload.get("policy_entries"), list) else []
+    entry_bucket_attribution = (
+        payload.get("entry_bucket_attribution")
+        if isinstance(payload.get("entry_bucket_attribution"), dict)
+        else {}
+    )
+    entry_bucket_summary = (
+        entry_bucket_attribution.get("summary")
+        if isinstance(entry_bucket_attribution.get("summary"), dict)
+        else {}
+    )
+    entry_bucket_candidates = (
+        entry_bucket_attribution.get("runtime_approval_candidates")
+        if isinstance(entry_bucket_attribution.get("runtime_approval_candidates"), list)
+        else []
+    )
+    entry_bucket_workorders = (
+        entry_bucket_attribution.get("code_improvement_workorders")
+        if isinstance(entry_bucket_attribution.get("code_improvement_workorders"), list)
+        else []
+    )
     total_rows = _safe_int(summary.get("total_rows"), 0) or 0
     joined_rows = _safe_int(summary.get("joined_rows"), 0) or 0
     policy_pass_count = _safe_int(summary.get("policy_pass_count"), 0) or 0
     promote_ready_count = _safe_int(summary.get("promote_ready_count"), 0) or 0
+    entry_bucket_runtime_candidate_count = _safe_int(entry_bucket_summary.get("runtime_candidate_count"), 0) or 0
     matrix_version = str(payload.get("matrix_version") or "")
     apply_ready = bool(payload) and total_rows >= 20 and joined_rows >= 10 and policy_pass_count > 0
     return {
@@ -4842,6 +4863,9 @@ def _build_lifecycle_decision_matrix_runtime_family(target_date: str | None) -> 
             "joined_rows": joined_rows,
             "policy_pass_count": policy_pass_count,
             "promote_ready_count": promote_ready_count,
+            "entry_bucket_actionable_count": _safe_int(entry_bucket_summary.get("actionable_bucket_count"), 0) or 0,
+            "entry_bucket_runtime_candidate_count": entry_bucket_runtime_candidate_count,
+            "entry_bucket_workorder_count": _safe_int(entry_bucket_summary.get("workorder_count"), 0) or 0,
             "policy_entry_count": len([item for item in policy_entries if isinstance(item, dict)]),
         },
         "apply_ready": apply_ready,
@@ -4890,6 +4914,8 @@ def _build_lifecycle_decision_matrix_runtime_family(target_date: str | None) -> 
             "holding_exit_matrix_advisory_enabled": True,
             "holding_exit_matrix_runtime_bias_enabled": False,
             "holding_exit_matrix_scale_in_bias_enabled": False,
+            "entry_bucket_runtime_approval_candidates": entry_bucket_candidates[:10],
+            "entry_bucket_code_improvement_workorders": entry_bucket_workorders[:10],
         },
         "apply_mode": "efficient_tradeoff_canary_candidate" if apply_ready else "report_only_calibration",
         "notes": [
@@ -5412,12 +5438,35 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
         source_metrics = dict(_source_metrics_for_family(output_family, report_source_context))
         if output_family == "lifecycle_decision_matrix_runtime":
             family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
+            family_recommended = family.get("recommended") if isinstance(family.get("recommended"), dict) else {}
             source_metrics.update(
                 {
                     "total_rows": _safe_int(family_sample.get("total_rows"), 0) or 0,
                     "joined_rows": _safe_int(family_sample.get("joined_rows"), 0) or 0,
                     "policy_pass_count": _safe_int(family_sample.get("policy_pass_count"), 0) or 0,
                     "promote_ready_count": _safe_int(family_sample.get("promote_ready_count"), 0) or 0,
+                    "entry_bucket_actionable_count": _safe_int(
+                        family_sample.get("entry_bucket_actionable_count"), 0
+                    )
+                    or 0,
+                    "entry_bucket_runtime_candidate_count": _safe_int(
+                        family_sample.get("entry_bucket_runtime_candidate_count"), 0
+                    )
+                    or 0,
+                    "entry_bucket_workorder_count": _safe_int(
+                        family_sample.get("entry_bucket_workorder_count"), 0
+                    )
+                    or 0,
+                    "entry_bucket_runtime_approval_candidates": (
+                        family_recommended.get("entry_bucket_runtime_approval_candidates")
+                        if isinstance(family_recommended.get("entry_bucket_runtime_approval_candidates"), list)
+                        else []
+                    ),
+                    "entry_bucket_code_improvement_workorders": (
+                        family_recommended.get("entry_bucket_code_improvement_workorders")
+                        if isinstance(family_recommended.get("entry_bucket_code_improvement_workorders"), list)
+                        else []
+                    ),
                     "fixed_threshold_roles": {
                         "hard_safety": "override_forbidden",
                         "baseline_prior": "feature_only",

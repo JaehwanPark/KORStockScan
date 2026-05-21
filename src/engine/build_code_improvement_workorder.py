@@ -19,6 +19,7 @@ SWING_IMPROVEMENT_AUTOMATION_DIR = REPORT_DIR / "swing_improvement_automation"
 SWING_PATTERN_LAB_AUTOMATION_DIR = REPORT_DIR / "swing_pattern_lab_automation"
 SWING_STRATEGY_DISCOVERY_EV_DIR = REPORT_DIR / "swing_strategy_discovery_ev"
 THRESHOLD_CYCLE_EV_DIR = REPORT_DIR / "threshold_cycle_ev"
+LIFECYCLE_DECISION_MATRIX_DIR = REPORT_DIR / "lifecycle_decision_matrix"
 PIPELINE_EVENT_VERBOSITY_DIR = REPORT_DIR / "pipeline_event_verbosity"
 OBSERVATION_SOURCE_QUALITY_AUDIT_DIR = REPORT_DIR / "observation_source_quality_audit"
 CODEBASE_PERFORMANCE_WORKORDER_DIR = REPORT_DIR / "codebase_performance_workorder"
@@ -152,6 +153,10 @@ def swing_pattern_lab_automation_report_path(target_date: str) -> Path:
 
 def threshold_ev_report_path(target_date: str) -> Path:
     return THRESHOLD_CYCLE_EV_DIR / f"threshold_cycle_ev_{target_date}.json"
+
+
+def lifecycle_decision_matrix_report_path(target_date: str) -> Path:
+    return LIFECYCLE_DECISION_MATRIX_DIR / f"lifecycle_decision_matrix_{target_date}.json"
 
 
 def swing_strategy_discovery_ev_report_path(target_date: str) -> Path:
@@ -633,6 +638,103 @@ def _lifecycle_ai_context_followup_orders(ev_report: dict[str, Any]) -> list[dic
         }
     ]
 
+
+
+def _lifecycle_entry_bucket_order_id(item: dict[str, Any]) -> str:
+    bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
+    bucket_key = _slug(str(item.get("bucket_key") or item.get("workorder_id") or "unknown"))
+    return f"order_lifecycle_entry_bucket_{bucket_type}_{bucket_key}"
+
+
+def _lifecycle_entry_bucket_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+    attribution = (
+        report.get("entry_bucket_attribution")
+        if isinstance(report.get("entry_bucket_attribution"), dict)
+        else {}
+    )
+    workorders = attribution.get("code_improvement_workorders")
+    if not isinstance(workorders, list) or not workorders:
+        return []
+    contract = {
+        "metric_role": attribution.get("metric_role"),
+        "decision_authority": attribution.get("decision_authority"),
+        "window_policy": attribution.get("window_policy"),
+        "sample_floor": attribution.get("sample_floor"),
+        "primary_decision_metric": attribution.get("primary_decision_metric"),
+        "source_quality_gate": attribution.get("source_quality_gate"),
+        "forbidden_uses": attribution.get("forbidden_uses") or [],
+    }
+    orders: list[dict[str, Any]] = []
+    for item in workorders:
+        if not isinstance(item, dict):
+            continue
+        bucket_type = str(item.get("bucket_type") or "").strip()
+        bucket_key = str(item.get("bucket_key") or "").strip()
+        if not bucket_type or not bucket_key:
+            continue
+        reason = str(item.get("reason") or "").strip()
+        route = "instrumentation_order"
+        if "unknown" not in bucket_key and "missing" not in bucket_key:
+            route = "existing_family"
+        orders.append(
+            {
+                "order_id": _lifecycle_entry_bucket_order_id(item),
+                "title": f"LDM entry bucket attribution follow-up: {bucket_type}={bucket_key}",
+                "source_report_type": "lifecycle_decision_matrix_entry_bucket_attribution",
+                "lifecycle_stage": "entry",
+                "target_subsystem": (
+                    "runtime_instrumentation"
+                    if route == "instrumentation_order"
+                    else "lifecycle_decision_matrix"
+                ),
+                "route": route,
+                "mapped_family": "lifecycle_decision_matrix_runtime",
+                "threshold_family": "lifecycle_decision_matrix_runtime",
+                "improvement_type": "entry_bucket_source_quality_attribution",
+                "confidence": "daily_ldm_source",
+                "priority": 2 if route == "instrumentation_order" else 5,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "expected_ev_effect": (
+                    "Keep entry bucket EV attribution, source-quality gaps, and threshold-cycle approval "
+                    "candidates connected without mutating intraday thresholds or broker submission."
+                ),
+                "evidence": [
+                    f"workorder_id={item.get('workorder_id')}",
+                    f"bucket_type={bucket_type}",
+                    f"bucket_key={bucket_key}",
+                    f"reason={reason}",
+                    f"recommended_route={item.get('recommended_route')}",
+                    f"metric_role={item.get('metric_role') or contract.get('metric_role')}",
+                    f"decision_authority={contract.get('decision_authority')}",
+                    f"primary_decision_metric={contract.get('primary_decision_metric')}",
+                    "runtime_effect=false",
+                    "allowed_runtime_apply=false",
+                ],
+                "intent": (
+                    "If the bucket is unknown/missing, add observation tags or provenance. If it has edge, "
+                    "preserve it as source evidence for LDM/threshold-cycle rolling confirmation."
+                ),
+                "next_postclose_metric": (
+                    "lifecycle_decision_matrix.entry_bucket_attribution should reduce unknown buckets, keep "
+                    "runtime_approval_candidates visible in threshold EV/runtime summary, and regenerate this "
+                    "workorder when source-quality confirmation is still needed."
+                ),
+                "files_likely_touched": [
+                    "src/engine/lifecycle_decision_matrix.py",
+                    "src/engine/scalp_entry_action_decision_matrix.py",
+                    "src/engine/daily_threshold_cycle_report.py",
+                    "src/engine/runtime_approval_summary.py",
+                    "docs/report-based-automation-traceability.md",
+                ],
+                "acceptance_tests": [
+                    "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_decision_matrix.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py",
+                    "postclose verifier fails if LDM entry bucket candidates/workorders are not propagated",
+                ],
+                "metric_contract": contract,
+            }
+        )
+    return orders
 
 def _pipeline_event_verbosity_report_path(target_date: str) -> Path:
     return PIPELINE_EVENT_VERBOSITY_DIR / f"pipeline_event_verbosity_{target_date}.json"
@@ -1273,6 +1375,8 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     swing_discovery_ev = _load_json(swing_discovery_source_path)
     ev_path = threshold_ev_report_path(target_date)
     ev_report = _load_json(ev_path)
+    lifecycle_source_path = lifecycle_decision_matrix_report_path(target_date)
+    lifecycle_report = _load_json(lifecycle_source_path)
     pipeline_event_verbosity_path = _pipeline_event_verbosity_report_path(target_date)
     pipeline_event_verbosity = _load_json(pipeline_event_verbosity_path)
     observation_source_quality_path = _observation_source_quality_audit_path(target_date)
@@ -1289,6 +1393,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "swing_pattern_lab_automation": swing_lab_source_path,
             "swing_strategy_discovery_ev": swing_discovery_source_path,
             "threshold_cycle_ev": ev_path,
+            "lifecycle_decision_matrix": lifecycle_source_path,
             "pipeline_event_verbosity": pipeline_event_verbosity_path,
             "observation_source_quality_audit": observation_source_quality_path,
             "codebase_performance_workorder": codebase_performance_path,
@@ -1297,6 +1402,10 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     ev_sources = ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
     if ev_sources.get("scalp_entry_action_decision_matrix"):
         source_paths["scalp_entry_action_decision_matrix"] = Path(str(ev_sources.get("scalp_entry_action_decision_matrix")))
+    if ev_sources.get("lifecycle_decision_matrix"):
+        lifecycle_source_path = Path(str(ev_sources.get("lifecycle_decision_matrix")))
+        source_paths["lifecycle_decision_matrix"] = lifecycle_source_path
+        lifecycle_report = _load_json(lifecycle_source_path)
     if calibration_source_path is not None:
         source_paths["threshold_cycle_calibration"] = calibration_source_path
     source_fingerprint = _source_fingerprint(source_paths)
@@ -1329,6 +1438,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         for item in (pattern_lab_currentness.get("code_improvement_orders") or [])
         if isinstance(item, dict)
     ]
+    lifecycle_entry_bucket_orders = _lifecycle_entry_bucket_followup_orders(lifecycle_report)
     threshold_ev_orders = [
         *_threshold_ev_followup_orders(ev_report),
         *_entry_adm_followup_orders(ev_report),
@@ -1346,6 +1456,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         *swing_lab_orders,
         *swing_discovery_orders,
         *pattern_lab_currentness_orders,
+        *lifecycle_entry_bucket_orders,
         *threshold_ev_orders,
     ]
     seen_keys: set[tuple[str, str, str]] = set()
@@ -1388,6 +1499,10 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "swing_pattern_lab_automation": str(swing_lab_source_path) if swing_lab_source_path.exists() else None,
             "swing_strategy_discovery_ev": str(swing_discovery_source_path) if swing_discovery_source_path.exists() else None,
             "threshold_cycle_ev": str(ev_path) if ev_path.exists() else None,
+            "lifecycle_decision_matrix": str(source_paths["lifecycle_decision_matrix"])
+            if "lifecycle_decision_matrix" in source_paths
+            and Path(source_paths["lifecycle_decision_matrix"]).exists()
+            else None,
             "scalp_entry_action_decision_matrix": str(source_paths["scalp_entry_action_decision_matrix"])
             if "scalp_entry_action_decision_matrix" in source_paths
             and Path(source_paths["scalp_entry_action_decision_matrix"]).exists()
@@ -1427,6 +1542,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "swing_strategy_discovery_source_order_count": len(swing_discovery_orders),
             "pattern_lab_currentness_source_order_count": len(pattern_lab_currentness_orders),
             "threshold_ev_source_order_count": len(threshold_ev_orders),
+            "lifecycle_entry_bucket_source_order_count": len(lifecycle_entry_bucket_orders),
             "pipeline_event_verbosity_source_order_count": len(
                 _pipeline_event_verbosity_followup_orders(pipeline_event_verbosity)
             ),
@@ -1530,6 +1646,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- swing_pattern_lab_automation: `{source.get('swing_pattern_lab_automation') or '-'}`",
         f"- swing_strategy_discovery_ev: `{source.get('swing_strategy_discovery_ev') or '-'}`",
         f"- threshold_cycle_ev: `{source.get('threshold_cycle_ev') or '-'}`",
+        f"- lifecycle_decision_matrix: `{source.get('lifecycle_decision_matrix') or '-'}`",
         f"- threshold_cycle_calibration: `{source.get('threshold_cycle_calibration') or '-'}`",
         f"- pipeline_event_verbosity: `{source.get('pipeline_event_verbosity') or '-'}`",
         f"- observation_source_quality_audit: `{source.get('observation_source_quality_audit') or '-'}`",

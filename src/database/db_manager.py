@@ -738,7 +738,7 @@ class DBManager:
         from src.database.models import User 
 
         try:
-            # 💡 [핵심 교정] sqlite3 원시 쿼리 대신 SQLAlchemy 세션 사용
+            # 원시 SQL 직접 조회 대신 SQLAlchemy 세션 사용
             with self.get_session() as session:
                 # 1. 대상 유저 조회 (chat_id를 문자열로 캐스팅하여 안전하게 비교)
                 user = session.query(User).filter_by(chat_id=str(chat_id)).first()

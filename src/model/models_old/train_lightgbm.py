@@ -1,5 +1,4 @@
 import os
-import sqlite3
 import FinanceDataReader as fdr
 import joblib
 import os
