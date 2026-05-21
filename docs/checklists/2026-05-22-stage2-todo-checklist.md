@@ -77,9 +77,9 @@
 
 - [ ] `[SwingApprovalArtifactPreopen0522] 스윙 approval request 및 별도 승인 artifact 존재 여부 확인` (`Due: 2026-05-22`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
   - Source: [swing_runtime_approval_2026-05-21.json](/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-05-21.json), [threshold_cycle_ev_2026-05-21.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-21.json)
-  - 판정 기준: approval request가 있더라도 사용자 승인 artifact가 없으면 env apply 대상이 아니다.
-  - 금지: 스윙 dry-run 해제, real canary, floor, scale-in real canary를 서로 자동 승인하지 않는다.
-  - 다음 액션: `approval_artifact_present`, `approval_artifact_missing`, `blocked_by_policy` 중 하나로 닫는다.
+  - 판정 기준: 사용자 승인 방침에 따라 내일 장전에는 dry-run env 전용 `swing_model_floor`, `swing_gatekeeper_reject_cooldown` 2건을 승인하고, `swing_one_share_real_canary_phase0`도 별도 real canary approval artifact로 승인한다. 두 approval은 동일 artifact 의미로 묶지 않고 dry-run env 승인과 live 1주 canary 승인을 분리 기록한다.
+  - 금지: 스윙 dry-run 해제, real canary, floor, scale-in real canary를 서로 자동 승인하지 않는다. 특히 dry-run 2건 승인 artifact를 real canary 승인으로 확장 해석하지 않고, real canary artifact를 dry-run env 승인으로 대체하지 않는다.
+  - 다음 액션: `dry_run_approval_artifact_present_real_canary_artifact_present_separate`, `dry_run_approval_artifact_missing`, `real_canary_approval_artifact_missing`, `blocked_by_policy` 중 하나로 닫는다.
 
 ## 장중 체크리스트 (09:05~15:20)
 
