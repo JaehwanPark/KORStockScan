@@ -33,6 +33,7 @@ cron completion detector는 wrapper log의 terminal marker를 source of truth로
 - calibration artifact는 매일 장중/장후 2회 생성한다. 장중 실행은 기존 보유/청산 report source를 요약하며 canonical postclose threshold report를 덮어쓰지 않는다.
 - postclose 제출물은 `threshold_cycle_ev_YYYY-MM-DD.{json,md}` daily EV 리포트로 통일한다. 스윙은 예외적으로 `swing_runtime_approval`의 `approval_required` 요청을 daily EV와 preopen apply manifest에 노출하지만, 수동 approval artifact 없이는 env를 쓰지 않는다.
 - `lifecycle_decision_matrix_runtime`은 ADM 확장 umbrella family다. 기본 OFF이며 selected될 때만 다음 PREOPEN env에 policy file/version/promote cap을 쓴다. hard safety와 broker/account/order guard는 항상 우선한다.
+- `market_regime_continuous_thresholds`는 daily report/cache의 0~100 시장국면 연속 점수를 threshold-cycle source bundle에 등록하는 1차 family다. `allowed_runtime_apply=false`, `runtime_effect=false`로 시작하며 ADM/LDM `risk_context` feature와 label별 EV 진단 외에는 쓰지 않는다.
 - 기존 fixed threshold는 role contract로 처리한다. broker/stale/price freshness/stop/account/order/qty/cooldown은 `hard_safety`, `BUY_SCORE_THRESHOLD`와 entry score cutoff/VPW/strength/momentum은 `baseline_prior`, latency caution/score65_74/soft stop/holding/scale-in price guard는 `bounded_tunable`, fallback/legacy latency/shadow 축은 `legacy_archive`다.
 - `latency_classifier_runtime_profile`은 `latency_block -> latency_pass/order_bundle_submitted` 회수 후보를 소유한다. `SAFE`만 runtime pass로 보고, `CAUTION -> latency_fallback_deprecated`는 기본 reject이므로 `would_pass_events`에 섞지 않는다. `recommended_action=bounded_apply`와 `allowed_runtime_apply=true`가 동시에 충족될 때만 다음 PREOPEN latency 제한 복구 카나리(recovery canary) env가 생성된다.
 
@@ -48,6 +49,7 @@ cron completion detector는 wrapper log의 terminal marker를 source of truth로
 | `runtime_env/threshold_runtime_env_YYYY-MM-DD.env` | 봇 기동 시 source되는 bounded runtime env override |
 | `runtime_env/threshold_runtime_env_YYYY-MM-DD.json` | runtime env override와 selected family provenance |
 | `data/report/threshold_cycle_YYYY-MM-DD.json` | 장후 canonical threshold report |
+| `data/report/report_YYYY-MM-DD.json` | daily market report. `market_regime_continuous_score`, label, component scores, legacy gate score를 threshold-cycle source bundle과 ADM/LDM risk context에 제공 |
 | `data/report/statistical_action_weight/statistical_action_weight_YYYY-MM-DD.{json,md}` | action weight 파생 artifact |
 | `data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_YYYY-MM-DD.{json,md}` | Entry ADM action matrix artifact. direct ADM env 또는 lifecycle adapter source |
 | `data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_YYYY-MM-DD.{json,md}` | 개별 후보 lifecycle row, fixed threshold contract, stage별 weighted ADM policy artifact. selected family가 될 때만 다음 PREOPEN policy env로 소비 |
@@ -115,6 +117,7 @@ bounded calibration family는 아래 묶음이 중심이다. 목적은 완벽한
 7. `protect_trailing_smoothing`
 8. `holding_exit_decision_matrix_advisory`: SAW `candidate_weight_source`가 만든 non-`no_clear_edge` matrix bucket만 advisory canary 후보
 9. `trailing_continuation`: GOOD_EXIT 훼손 리스크가 커서 1차 loop에서는 `freeze/report_only_calibration`만 허용
+10. `market_regime_continuous_thresholds`: `market_regime_continuous_score` label threshold와 component weight를 rolling 10d source bundle에 등록한다. 1차 개발은 manifest-only/context-only이며, `KORSTOCKSCAN_MARKET_REGIME_*` env 반영은 별도 2차 review 전까지 금지한다.
 
 ### Lifecycle Decision Matrix와 fixed threshold
 
@@ -187,6 +190,7 @@ family별 기준 window는 다르게 적용한다.
 | `bad_entry_refined_canary` | `rolling_10d` | `daily`, `cumulative_since_2026-04-21` | loser classifier 과적합을 피하기 위해 누적/rolling tail, 당일 safety, 장후 post-sell outcome join을 같이 본다. runtime 후보만으로 배드엔트리 확정 라벨을 붙이지 않는다. |
 | `holding_exit_decision_matrix_advisory` | `latest_report` | `rolling_bucket_context` | 최신 matrix edge가 있어야 하며 bucket confidence는 SAW rolling context를 참조한다. |
 | `scale_in_price_guard` | `rolling_10d` | `cumulative_since_2026-04-21`, `daily` | 물타기/불타기는 체결 표본이 희소하므로 당일만으로 guard 값을 정하지 않는다. |
+| `market_regime_continuous_thresholds` | `rolling_10d` | `daily`, `rolling_5d` | VIX/Fear & Greed/국내 breadth/WTI pullback relief/local model 연속 점수를 risk-context feature로 검증한다. sample floor는 valid market cache + daily report 10일이며, 1차에서는 `allowed_runtime_apply=false`로 manifest-only 후보만 만든다. |
 
 `threshold_cycle_cumulative`는 `threshold_snapshot_by_window`와 별도로 `calibration_source_bundle_by_window`를 생성한다. pipeline snapshot denominator가 비어 있어도 기존 source report의 rolling/cumulative metric이 있으면 `window_policy_resolution.primary_source_sample_count`로 소비한다. 이때 snapshot과 source denominator가 다르면 `window_policy_audit.rolling_source_snapshot_mismatch`로 표시해 report rendering/source alignment 보강 대상으로 남긴다.
 

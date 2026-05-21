@@ -21,6 +21,34 @@ BUY_ACTIVE_STATES = {"PANIC_BUY_WATCH", "PANIC_BUY", "EXHAUSTION_WATCH"}
 BUY_RELEASE_STATES = {"NORMAL", "BUYING_EXHAUSTED"}
 
 
+def _report_session_key(report_file: Path, report: dict) -> str:
+    for key in ("target_date", "date", "trade_date"):
+        value = str(report.get(key) or "").strip()
+        if value:
+            return value[:10]
+    stem = report_file.stem
+    for prefix in (
+        "panic_sell_defense_",
+        "panic_buying_",
+        "market_panic_breadth_",
+    ):
+        if stem.startswith(prefix):
+            return stem.replace(prefix, "", 1)[:10]
+    return ""
+
+
+def _previous_session_key(previous: dict) -> str:
+    value = str(previous.get("session_key") or previous.get("target_date") or "").strip()
+    if value:
+        return value[:10]
+    report_file = str(previous.get("report_file") or "")
+    stem = Path(report_file).stem
+    for prefix in ("panic_sell_defense_", "panic_buying_"):
+        if stem.startswith(prefix):
+            return stem.replace(prefix, "", 1)[:10]
+    return ""
+
+
 def _load_telegram_config() -> tuple[str, str]:
     config_path = CONFIG_PATH if CONFIG_PATH.exists() else DEV_PATH
     try:
@@ -332,6 +360,17 @@ def notify_from_report(
     state = _load_state(state_file)
     previous = state.get(kind) if isinstance(state.get(kind), dict) else {}
     previous_phase = str(previous.get("phase") or "") or None
+    current_session_key = _report_session_key(report_file, report)
+    previous_session_key = _previous_session_key(previous) if isinstance(previous, dict) else ""
+    stale_previous_active = (
+        not force
+        and current_phase == "released"
+        and previous_phase in {"active", "release_pending"}
+        and bool(current_session_key)
+        and previous_session_key != current_session_key
+    )
+    if stale_previous_active:
+        previous_phase = None
     previous_value = str(previous.get("state") or "") if isinstance(previous, dict) else ""
     transition = _transition(previous_phase, current_phase, force=force, current_value=current_value)
     current_context = _sell_context_label(report) if kind == "panic_sell" else ""
@@ -351,15 +390,20 @@ def notify_from_report(
     next_state = {
         "phase": next_phase,
         "state": current_value,
+        "session_key": current_session_key,
         "updated_at_ts": now,
         "report_file": str(report_file),
     }
     if kind == "panic_sell":
         next_state["context_label"] = current_context
+    if isinstance(previous, dict) and isinstance(previous.get("last_notification"), dict):
+        next_state["last_notification"] = previous["last_notification"]
 
     if transition in {"none", "release_pending"}:
         state[kind] = next_state
         _write_state(state_file, state)
+        if stale_previous_active:
+            return "stale_previous_active_reset"
         return "release_pending" if transition == "release_pending" else "no_transition"
 
     token, admin_id = _load_telegram_config()

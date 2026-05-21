@@ -134,6 +134,18 @@ def test_apply_cached_market_regime_label_uses_session_cache(tmp_path, monkeypat
                 "risk_state": "RISK_OFF",
                 "allow_swing_entry": False,
                 "swing_score": 20,
+                "swing_entry_recovery_gate_score": 20,
+                "market_regime_continuous_score": 41.5,
+                "market_regime_continuous_label": "RISK_OFF",
+                "market_regime_component_scores": {
+                    "vix_level": 12.5,
+                    "fear_greed_level": 8.0,
+                    "domestic_breadth": 10.0,
+                    "oil_relief": 7.0,
+                    "local_model": 4.0,
+                },
+                "market_regime_score_version": "market_regime_continuous_v1",
+                "market_regime_source_quality": "valid",
                 "cached_session_date": "2026-04-07",
             }
         ),
@@ -149,4 +161,10 @@ def test_apply_cached_market_regime_label_uses_session_cache(tmp_path, monkeypat
     assert snapshot["risk_status_tone"] == "bad"
     assert snapshot["regime_code"] == "BEAR"
     assert snapshot["risk_state"] == "RISK_OFF"
+    assert snapshot["swing_entry_recovery_gate_score"] == 20
+    assert snapshot["market_regime_continuous_score"] == 41.5
+    assert snapshot["market_regime_continuous_label"] == "RISK_OFF"
+    assert snapshot["market_regime_component_scores"]["domestic_breadth"] == 10.0
+    assert snapshot["market_regime_score_version"] == "market_regime_continuous_v1"
+    assert snapshot["market_regime_source_quality"] == "valid"
     assert snapshot["regime_source"] == "market_regime_cache"

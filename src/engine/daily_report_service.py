@@ -526,6 +526,15 @@ def _load_cached_market_regime_summary(target_date: str) -> dict[str, Any] | Non
     summary = summarize_market_regime(payload.get("risk_state"))
     summary["allow_swing_entry"] = bool(payload.get("allow_swing_entry", False))
     summary["swing_score"] = _safe_int(payload.get("swing_score"))
+    summary["swing_entry_recovery_gate_score"] = _safe_int(
+        payload.get("swing_entry_recovery_gate_score", payload.get("swing_score"))
+    )
+    summary["market_regime_continuous_score"] = _safe_float(payload.get("market_regime_continuous_score"))
+    summary["market_regime_continuous_label"] = str(payload.get("market_regime_continuous_label") or "")
+    component_scores = payload.get("market_regime_component_scores", {})
+    summary["market_regime_component_scores"] = component_scores if isinstance(component_scores, dict) else {}
+    summary["market_regime_score_version"] = str(payload.get("market_regime_score_version") or "")
+    summary["market_regime_source_quality"] = str(payload.get("market_regime_source_quality") or "")
     summary["cached_session_date"] = cached_session_date
     return summary
 
@@ -545,6 +554,12 @@ def _apply_cached_market_regime_label(snapshot: dict[str, Any], target_date: str
     snapshot["risk_state"] = summary["risk_state"]
     snapshot["allow_swing_entry"] = bool(summary.get("allow_swing_entry", False))
     snapshot["swing_score"] = int(summary.get("swing_score", 0) or 0)
+    snapshot["swing_entry_recovery_gate_score"] = int(summary.get("swing_entry_recovery_gate_score", 0) or 0)
+    snapshot["market_regime_continuous_score"] = summary.get("market_regime_continuous_score")
+    snapshot["market_regime_continuous_label"] = summary.get("market_regime_continuous_label")
+    snapshot["market_regime_component_scores"] = summary.get("market_regime_component_scores") or {}
+    snapshot["market_regime_score_version"] = summary.get("market_regime_score_version")
+    snapshot["market_regime_source_quality"] = summary.get("market_regime_source_quality")
     snapshot["regime_source"] = "market_regime_cache"
 
 
@@ -764,6 +779,12 @@ def build_daily_report(target_date: str | None = None) -> dict:
             "regime_code": market.get("regime_code"),
             "allow_swing_entry": market.get("allow_swing_entry"),
             "swing_score": market.get("swing_score"),
+            "swing_entry_recovery_gate_score": market.get("swing_entry_recovery_gate_score"),
+            "market_regime_continuous_score": market.get("market_regime_continuous_score"),
+            "market_regime_continuous_label": market.get("market_regime_continuous_label"),
+            "market_regime_component_scores": market.get("market_regime_component_scores"),
+            "market_regime_score_version": market.get("market_regime_score_version"),
+            "market_regime_source_quality": market.get("market_regime_source_quality"),
             "regime_source": market.get("regime_source"),
         },
         "insights": {
@@ -820,4 +841,11 @@ def format_daily_report_summary(report: dict) -> str:
     ]
     if stats.get("risk_status_text"):
         lines.insert(5, f"- 매크로 리스크: {stats.get('risk_status_text')} ({stats.get('risk_state', 'UNKNOWN')})")
+    if stats.get("market_regime_continuous_score") is not None:
+        lines.insert(
+            6,
+            "- 시장 연속 점수: "
+            f"{stats.get('market_regime_continuous_score')} "
+            f"({stats.get('market_regime_continuous_label') or 'UNKNOWN'})",
+        )
     return "\n".join(lines)

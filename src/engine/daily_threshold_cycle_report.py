@@ -98,6 +98,36 @@ CALIBRATION_FAMILY_METADATA = {
         },
         "allowed_runtime_apply": True,
     },
+    "market_regime_continuous_thresholds": {
+        "priority": 8,
+        "source_family": "market_regime_continuous_score",
+        "target_env_keys": [
+            "KORSTOCKSCAN_MARKET_REGIME_CONTINUOUS_ENABLED",
+            "KORSTOCKSCAN_MARKET_REGIME_RISK_ON_MIN_SCORE",
+            "KORSTOCKSCAN_MARKET_REGIME_NEUTRAL_MIN_SCORE",
+            "KORSTOCKSCAN_MARKET_REGIME_OIL_RELIEF_MAX_WEIGHT",
+            "KORSTOCKSCAN_MARKET_REGIME_BREADTH_MAX_WEIGHT",
+        ],
+        "primary_key": "risk_on_min_score",
+        "bounds": {
+            "risk_on_min_score": {"min": 60, "max": 75, "max_step_per_day": 5},
+            "neutral_min_score": {"min": 35, "max": 55, "max_step_per_day": 5},
+            "oil_relief_max_weight": {"min": 5, "max": 15, "max_step_per_day": 2.5},
+            "breadth_max_weight": {"min": 25, "max": 45, "max_step_per_day": 5},
+        },
+        "sample_floor": 10,
+        "sample_window": "rolling_10d_with_valid_market_cache_and_daily_report",
+        "window_policy": {
+            "primary": "rolling_10d",
+            "secondary": ["daily", "rolling_5d"],
+            "use": "market regime continuous score는 ADM/LDM risk_context 및 label별 EV 진단 입력이며 1차 개발에서는 runtime action을 바꾸지 않는다.",
+            "daily_only_allowed": False,
+        },
+        "sample_denominator_keys": ["valid_market_regime_days"],
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "allowed_runtime_apply": False,
+        "runtime_effect": False,
+    },
     "holding_flow_ofi_smoothing": {
         "priority": 2,
         "source_family": "holding_flow_ofi_smoothing",
@@ -880,6 +910,7 @@ def _calibration_report_source_paths(target_date: str) -> dict[str, Path]:
         "latency_classifier_recommendation": (
             REPORT_DIR / "latency_classifier_recommendation" / f"latency_classifier_recommendation_{target_date}.json"
         ),
+        "market_regime_daily_report": REPORT_DIR / f"report_{target_date}.json",
     }
 
 
@@ -978,6 +1009,172 @@ def _audit_report_only_cleanup_candidates(target_date: str, source_paths: dict[s
     }
 
 
+def _recent_market_regime_daily_reports(target_date: str, days: int = 10) -> list[dict[str, Any]]:
+    try:
+        cutoff = datetime.strptime(target_date, "%Y-%m-%d").date()
+    except Exception:
+        return []
+
+    rows: list[dict[str, Any]] = []
+    for path in sorted(REPORT_DIR.glob("report_*.json"), reverse=True):
+        stem_date = path.stem.replace("report_", "", 1)
+        try:
+            report_date = datetime.strptime(stem_date, "%Y-%m-%d").date()
+        except Exception:
+            continue
+        if report_date > cutoff:
+            continue
+        payload = _read_json_dict(path)
+        if not payload:
+            continue
+        stats = payload.get("stats") if isinstance(payload.get("stats"), dict) else {}
+        perf = payload.get("performance") if isinstance(payload.get("performance"), dict) else {}
+        perf_summary = perf.get("summary") if isinstance(perf.get("summary"), dict) else {}
+        score = _safe_float(stats.get("market_regime_continuous_score"), None)
+        label = str(stats.get("market_regime_continuous_label") or "")
+        rows.append(
+            {
+                "date": stem_date,
+                "score": score,
+                "label": label,
+                "component_scores": stats.get("market_regime_component_scores")
+                if isinstance(stats.get("market_regime_component_scores"), dict)
+                else {},
+                "source_quality": str(stats.get("market_regime_source_quality") or ""),
+                "score_version": str(stats.get("market_regime_score_version") or ""),
+                "swing_entry_recovery_gate_score": _safe_int(stats.get("swing_entry_recovery_gate_score"), 0) or 0,
+                "allow_swing_entry": bool(stats.get("allow_swing_entry")),
+                "completed_records": _safe_int(perf_summary.get("completed_records"), 0) or 0,
+                "filled_records": _safe_int(perf_summary.get("filled_records"), 0) or 0,
+                "total_records": _safe_int(perf_summary.get("total_records"), 0) or 0,
+                "win_rate": _safe_float(perf_summary.get("win_rate"), None),
+                "avg_profit_rate": _safe_float(perf_summary.get("avg_profit_rate"), None),
+                "realized_pnl_krw": _safe_int(perf_summary.get("realized_pnl_krw"), 0) or 0,
+            }
+        )
+        if len(rows) >= days:
+            break
+    return list(reversed(rows))
+
+
+def _market_regime_window_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    valid_rows = [
+        row
+        for row in rows
+        if row.get("score") is not None and str(row.get("label") or "") in {"RISK_ON", "NEUTRAL", "RISK_OFF"}
+    ]
+    scores = [float(row["score"]) for row in valid_rows]
+    labels = Counter(str(row.get("label") or "UNKNOWN") for row in valid_rows)
+    completed = sum(_safe_int(row.get("completed_records"), 0) or 0 for row in valid_rows)
+    filled = sum(_safe_int(row.get("filled_records"), 0) or 0 for row in valid_rows)
+    total = sum(_safe_int(row.get("total_records"), 0) or 0 for row in valid_rows)
+    profit_values = [
+        float(row["avg_profit_rate"])
+        for row in valid_rows
+        if row.get("avg_profit_rate") is not None and (_safe_int(row.get("completed_records"), 0) or 0) > 0
+    ]
+    return {
+        "sample_days": len(rows),
+        "valid_market_regime_days": len(valid_rows),
+        "avg_score": round(_avg(scores) or 0.0, 4) if scores else None,
+        "min_score": round(min(scores), 4) if scores else None,
+        "max_score": round(max(scores), 4) if scores else None,
+        "label_counts": dict(labels),
+        "completed_records": completed,
+        "win_rate_avg": round(_avg([float(row["win_rate"]) for row in valid_rows if row.get("win_rate") is not None]) or 0.0, 4)
+        if valid_rows
+        else None,
+        "entry_participation_pct": round((filled / total * 100.0) if total else 0.0, 4),
+        "source_quality_adjusted_ev_pct": round(_avg(profit_values) or 0.0, 4) if profit_values else None,
+        "severe_downside_count": sum(
+            1
+            for row in valid_rows
+            if row.get("avg_profit_rate") is not None and float(row["avg_profit_rate"]) <= -2.0
+        ),
+        "market_regime_pass_opportunity": sum(1 for row in valid_rows if row.get("allow_swing_entry")),
+        "market_regime_block_opportunity": sum(1 for row in valid_rows if not row.get("allow_swing_entry")),
+    }
+
+
+def _market_regime_label_ev_breakdown(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        label = str(row.get("label") or "")
+        if label in {"RISK_ON", "NEUTRAL", "RISK_OFF"} and row.get("score") is not None:
+            grouped[label].append(row)
+
+    breakdown: dict[str, Any] = {}
+    for label, label_rows in sorted(grouped.items()):
+        profit_values = [
+            float(row["avg_profit_rate"])
+            for row in label_rows
+            if row.get("avg_profit_rate") is not None and (_safe_int(row.get("completed_records"), 0) or 0) > 0
+        ]
+        breakdown[label] = {
+            "sample_days": len(label_rows),
+            "completed_records": sum(_safe_int(row.get("completed_records"), 0) or 0 for row in label_rows),
+            "source_quality_adjusted_ev_pct": round(_avg(profit_values) or 0.0, 4) if profit_values else None,
+            "win_rate_avg": round(_avg([float(row["win_rate"]) for row in label_rows if row.get("win_rate") is not None]) or 0.0, 4),
+            "entry_participation_pct": _market_regime_window_summary(label_rows)["entry_participation_pct"],
+            "severe_downside_count": sum(
+                1
+                for row in label_rows
+                if row.get("avg_profit_rate") is not None and float(row["avg_profit_rate"]) <= -2.0
+            ),
+        }
+    return breakdown
+
+
+def _summarize_market_regime_continuous_sources(target_date: str) -> dict[str, Any]:
+    rows = _recent_market_regime_daily_reports(target_date, days=10)
+    latest = rows[-1] if rows else {}
+    valid_days = [
+        row
+        for row in rows
+        if row.get("score") is not None and str(row.get("label") or "") in {"RISK_ON", "NEUTRAL", "RISK_OFF"}
+    ]
+    latest_summary = {
+        "date": latest.get("date"),
+        "score": latest.get("score"),
+        "label": latest.get("label"),
+        "component_scores": latest.get("component_scores") or {},
+        "source_quality": latest.get("source_quality"),
+        "score_version": latest.get("score_version"),
+        "swing_entry_recovery_gate_score": latest.get("swing_entry_recovery_gate_score", 0),
+    } if latest else {}
+    return {
+        "schema_version": 1,
+        "metric_role": "risk_context_feature",
+        "decision_authority": "source_context_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "window_policy": {
+            "primary": "rolling_10d",
+            "secondary": ["daily", "rolling_5d"],
+            "daily_only_allowed": False,
+        },
+        "sample_floor": 10,
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": "rolling_10d valid_market_regime_days >= 10 and daily report contains market_regime_continuous_score",
+        "forbidden_uses": [
+            "single-metric BUY/SELL/scale-in decision",
+            "hard safety/broker/stale quote/price freshness guard bypass",
+            "runtime env mutation before bounded apply approval",
+            "bot restart or provider route change",
+        ],
+        "latest": latest_summary,
+        "rolling_5d": _market_regime_window_summary(rows[-5:]),
+        "rolling_10d": _market_regime_window_summary(rows),
+        "label_ev_breakdown": _market_regime_label_ev_breakdown(rows),
+        "source_quality": {
+            "sample_days": len(rows),
+            "valid_market_regime_days": len(valid_days),
+            "status": "pass" if len(valid_days) >= 10 else "hold_sample",
+            "missing_valid_market_regime_days": max(0, 10 - len(valid_days)),
+        },
+    }
+
+
 def _holding_exit_report_source_paths(target_date: str) -> dict[str, Path]:
     paths = _calibration_report_source_paths(target_date)
     return {
@@ -1033,6 +1230,7 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     decision_matrix = _read_json_dict(source_paths["holding_exit_decision_matrix"])
     stat_action = _read_json_dict(source_paths["statistical_action_weight"])
     latency_recommendation = _read_json_dict(source_paths["latency_classifier_recommendation"])
+    market_regime_continuous = _summarize_market_regime_continuous_sources(target_date)
 
     buy_current = buy_funnel_sentinel.get("current") if isinstance(buy_funnel_sentinel, dict) else {}
     buy_current = buy_current if isinstance(buy_current, dict) else {}
@@ -1249,6 +1447,7 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             "performance_blocked_ai_score_events": _safe_int(perf_metrics.get("entry_blocked_ai_score_events"), 0) or 0,
             "gatekeeper_eval_ms_p95": _safe_float(perf_metrics.get("gatekeeper_eval_ms_p95"), None),
         },
+        "market_regime_continuous": market_regime_continuous,
         "latency_guard_miss_ev_recovery": {
             "instrumentation_status": perf_latency_section.get("instrumentation_status") or "missing_contract",
             "instrumentation_contract_version": _safe_int(
@@ -4524,6 +4723,19 @@ def _build_report_source_families(report_source_context: dict | None) -> list[di
     metrics = (report_source_context or {}).get("source_metrics")
     metrics = metrics if isinstance(metrics, dict) else {}
     decision_support = metrics.get("decision_support") if isinstance(metrics.get("decision_support"), dict) else {}
+    market_regime = (
+        metrics.get("market_regime_continuous") if isinstance(metrics.get("market_regime_continuous"), dict) else {}
+    )
+    market_source_quality = (
+        market_regime.get("source_quality") if isinstance(market_regime.get("source_quality"), dict) else {}
+    )
+    market_rolling_10d = (
+        market_regime.get("rolling_10d") if isinstance(market_regime.get("rolling_10d"), dict) else {}
+    )
+    market_valid_days = max(
+        _safe_int(market_source_quality.get("valid_market_regime_days"), 0) or 0,
+        _safe_int(market_rolling_10d.get("valid_market_regime_days"), 0) or 0,
+    )
     matrix_entries = _safe_int(decision_support.get("matrix_entries"), 0) or 0
     non_clear_edge = _safe_int(decision_support.get("matrix_non_clear_edge"), 0) or 0
     candidate_weight_source = _safe_int(decision_support.get("saw_candidate_weight_source"), 0) or 0
@@ -4569,7 +4781,42 @@ def _build_report_source_families(report_source_context: dict | None) -> list[di
                 "recommended_bias가 전부 no_clear_edge이면 최소 edge 부재라 live AI 응답은 바꾸지 않는다.",
                 "SAW candidate_weight_source bucket만 matrix bias 후보로 연결한다.",
             ],
-        }
+        },
+        {
+            "family": "market_regime_continuous_score",
+            "stage": "risk_context",
+            "sample": {
+                "valid_market_regime_days": market_valid_days,
+                "rolling_5d": market_regime.get("rolling_5d") if isinstance(market_regime.get("rolling_5d"), dict) else {},
+                "rolling_10d": market_rolling_10d,
+                "label_ev_breakdown": (
+                    market_regime.get("label_ev_breakdown")
+                    if isinstance(market_regime.get("label_ev_breakdown"), dict)
+                    else {}
+                ),
+                "source_quality_status": market_source_quality.get("status") or "hold_sample",
+            },
+            "apply_ready": False,
+            "current": {
+                "enabled": False,
+                "risk_on_min_score": 65,
+                "neutral_min_score": 45,
+                "oil_relief_max_weight": 10,
+                "breadth_max_weight": 35,
+            },
+            "recommended": {
+                "enabled": False,
+                "risk_on_min_score": 65,
+                "neutral_min_score": 45,
+                "oil_relief_max_weight": 10,
+                "breadth_max_weight": 35,
+            },
+            "apply_mode": "manifest_only_context_source",
+            "notes": [
+                "market regime continuous score는 ADM/LDM risk_context feature이며 1차 개발에서는 runtime action authority가 없다.",
+                "label threshold 조정 family는 manifest-only로 생성하고 allowed_runtime_apply=false를 유지한다.",
+            ],
+        },
     ]
 
 
@@ -4762,6 +5009,8 @@ def _source_metrics_for_family(output_family: str, report_source_context: dict |
         return metrics.get("decision_support") if isinstance(metrics.get("decision_support"), dict) else {}
     if output_family == "lifecycle_decision_matrix_runtime":
         return metrics.get("lifecycle_decision_matrix") if isinstance(metrics.get("lifecycle_decision_matrix"), dict) else {}
+    if output_family == "market_regime_continuous_thresholds":
+        return metrics.get("market_regime_continuous") if isinstance(metrics.get("market_regime_continuous"), dict) else {}
     if output_family == "scale_in_price_guard":
         return metrics.get("scale_in_price_guard") if isinstance(metrics.get("scale_in_price_guard"), dict) else {}
     if output_family == "soft_stop_whipsaw_confirmation":
@@ -4806,6 +5055,13 @@ def _source_sample_count_for_family(output_family: str, source_metrics: dict) ->
         return max(
             _safe_int(source_metrics.get("total_rows"), 0) or 0,
             _safe_int(source_metrics.get("joined_rows"), 0) or 0,
+        )
+    if output_family == "market_regime_continuous_thresholds":
+        source_quality = source_metrics.get("source_quality") if isinstance(source_metrics.get("source_quality"), dict) else {}
+        rolling_10d = source_metrics.get("rolling_10d") if isinstance(source_metrics.get("rolling_10d"), dict) else {}
+        return max(
+            _safe_int(source_quality.get("valid_market_regime_days"), 0) or 0,
+            _safe_int(rolling_10d.get("valid_market_regime_days"), 0) or 0,
         )
     if output_family == "scale_in_price_guard":
         guard_events = (
@@ -4902,6 +5158,18 @@ def _calibration_state_for_family(
         return (
             "adjust_up",
             "lifecycle matrix weighted ADM source가 balanced gate를 통과해 다음 장전 umbrella micro canary 후보",
+        )
+    if output_family == "market_regime_continuous_thresholds":
+        source_quality = source_metrics.get("source_quality") if isinstance(source_metrics.get("source_quality"), dict) else {}
+        valid_days = _safe_int(source_quality.get("valid_market_regime_days"), 0) or 0
+        if valid_days < sample_floor:
+            return (
+                "hold_sample",
+                f"market regime continuous rolling source sample floor 미달({valid_days}/{sample_floor}); context-only 유지",
+            )
+        return (
+            "hold",
+            "market regime continuous thresholds v1은 1차 개발에서 ADM/LDM risk_context 및 manifest-only 후보로만 유지한다.",
         )
     if output_family == "score65_74_recovery_probe":
         family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
@@ -5316,6 +5584,11 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
             "runtime_change": False,
             "runtime_change_reason": "장중 자동 mutation 금지; 다음 장전 승인된 family만 bounded apply 대상",
         }
+        if output_family == "market_regime_continuous_thresholds":
+            candidate["apply_mode"] = "manifest_only"
+            candidate["runtime_change_reason"] = (
+                "market regime continuous thresholds 1차 개발은 ADM/LDM risk_context와 source bundle만 생성한다."
+            )
         candidates.append(candidate)
     return candidates
 

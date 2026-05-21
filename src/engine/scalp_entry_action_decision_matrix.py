@@ -275,6 +275,20 @@ def _risk_context_bucket(fields: dict[str, Any]) -> str:
     return "neutral_strength_momentum"
 
 
+def _market_regime_continuous_bucket(fields: dict[str, Any]) -> str | None:
+    label = _nonempty(fields.get("market_regime_continuous_label"))
+    score = _safe_float(fields.get("market_regime_continuous_score"), None)
+    if label in {"RISK_ON", "NEUTRAL", "RISK_OFF"}:
+        return f"market_regime_{label.lower()}"
+    if score is None:
+        return None
+    if score >= 65:
+        return "market_regime_risk_on"
+    if score >= 45:
+        return "market_regime_neutral"
+    return "market_regime_risk_off"
+
+
 def _price_resolution_bucket(fields: dict[str, Any]) -> str:
     action = _nonempty(fields.get("ai_entry_price_canary_action"))
     reason = _nonempty(fields.get("price_resolution_reason") or fields.get("entry_price_resolution_reason"))
@@ -356,6 +370,19 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
         "rejected_actions": [item for item in ACTION_ORDER if item not in _eligible_actions(action, fields)],
         "score_bucket": _score_bucket(fields.get("ai_score") or fields.get("ai_score_after_bonus")),
         "risk_context_bucket": _risk_context_bucket(fields),
+        "market_regime_continuous_bucket": _market_regime_continuous_bucket(fields),
+        "market_regime": _nonempty(fields.get("market_regime")),
+        "market_regime_continuous_score": _safe_float(fields.get("market_regime_continuous_score"), None),
+        "market_regime_continuous_label": _nonempty(fields.get("market_regime_continuous_label")),
+        "market_regime_component_scores": (
+            fields.get("market_regime_component_scores")
+            if isinstance(fields.get("market_regime_component_scores"), dict)
+            else None
+        ),
+        "swing_entry_recovery_gate_score": _safe_float(fields.get("swing_entry_recovery_gate_score"), None),
+        "market_regime_score_version": _nonempty(fields.get("market_regime_score_version")),
+        "market_regime_source_quality": _nonempty(fields.get("market_regime_source_quality")),
+        "risk_context_owner": _nonempty(fields.get("risk_context_owner")),
         "stale_bucket": _stale_bucket(fields),
         "price_resolution_bucket": _price_resolution_bucket(fields),
         "liquidity_bucket": _liquidity_bucket(fields),
@@ -495,6 +522,7 @@ def _bucket_token(row: dict[str, Any]) -> str:
         for key in (
             "score_bucket",
             "risk_context_bucket",
+            "market_regime_continuous_bucket",
             "stale_bucket",
             "price_resolution_bucket",
             "liquidity_bucket",

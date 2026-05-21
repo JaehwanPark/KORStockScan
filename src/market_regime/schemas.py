@@ -22,6 +22,7 @@ class MarketRegimeSnapshot:
     wti_dead_cross: bool = False
     wti_from_recent_high_pct: float = 0.0
     oil_reversal: bool = False
+    oil_pullback_relief: bool = False
 
     # --- Fear & Greed ---
     fng_value: float = 0.0
@@ -33,6 +34,12 @@ class MarketRegimeSnapshot:
     # --- Regime decision ---
     allow_swing_entry: bool = False
     swing_score: int = 0
+    swing_entry_recovery_gate_score: int = 0
+    market_regime_continuous_score: float = 0.0
+    market_regime_continuous_label: str = "NEUTRAL"
+    market_regime_component_scores: Dict[str, float] = field(default_factory=dict)
+    market_regime_score_version: str = "market_regime_continuous_v1"
+    market_regime_source_quality: str = "unknown"
     volatility_mode: str = "NORMAL"   # NORMAL / HIGH / EXTREME
     risk_state: str = "NEUTRAL"       # RISK_ON / NEUTRAL / RISK_OFF
 

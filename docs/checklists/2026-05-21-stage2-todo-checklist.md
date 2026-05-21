@@ -51,6 +51,20 @@
 
 ## Runbook 운영 확인 완료 기록
 
+- `PanicSellNotifyStaleReleaseGuard0521` 패닉셀 해제 알림 stale state 오발송 방지
+  - Source: [notify_panic_state_transition.py](/home/ubuntu/KORStockScan/src/engine/notify_panic_state_transition.py), [panic_sell_defense_2026-05-21.json](/home/ubuntu/KORStockScan/data/report/panic_sell_defense/panic_sell_defense_2026-05-21.json), [market_panic_breadth_2026-05-21.json](/home/ubuntu/KORStockScan/data/report/market_panic_breadth/market_panic_breadth_2026-05-21.json)
+  - 판정: `stale_previous_active_release_suppressed`
+  - 근거: 2026-05-21 09:12 리포트는 KOSPI/KOSDAQ 약 `+4.37%`, 상승 종목 비율 80%대, `panic_state=NORMAL`, `panic_detected=false`, `risk_off_advisory=false`, `risk_on_advisory=true`였으나 이전 날짜 active notify state가 남으면 해제 알림만 전송될 수 있었다. notifier state에 `session_key`를 저장하고 이전 active session이 현재 report date와 다르면 release를 보내지 않고 `stale_previous_active_reset`으로 닫도록 보강했다.
+  - 금지: 패닉셀 해제 알림을 runtime threshold/order/provider/bot 변경 근거로 쓰지 않는다. 같은 날짜/session에서 active start/update 알림이 선행된 경우에만 해제 알림을 허용한다.
+  - 검증: `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_notify_panic_state_transition.py -q` 통과.
+
+- `MarketRegimeContinuousScoreV10521` 시장국면 연속 점수 및 ADM/LDM risk-context 연결 1차 개발
+  - Source: [rules.py](/home/ubuntu/KORStockScan/src/market_regime/rules.py), [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py), [lifecycle_decision_matrix.py](/home/ubuntu/KORStockScan/src/engine/lifecycle_decision_matrix.py), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
+  - 판정: `context_only_first_pass`
+  - 근거: 기존 `swing_score` gate는 `swing_entry_recovery_gate_score`로 보존하고, `market_regime_continuous_score/label/component_scores`를 daily report/cache와 LDM runtime feature에 병렬 추가했다. `market_regime_continuous_thresholds` family는 source bundle과 calibration candidate를 만들지만 `allowed_runtime_apply=false`, `runtime_effect=false`로 시작한다.
+  - 금지: 연속 점수 단독 BUY/SELL/scale-in 확정, hard safety/broker/stale quote/price freshness/stop/qty/cooldown guard 우회, 장중 env mutation, provider route/bot restart 변경 금지.
+  - 다음 액션: 자체 코드리뷰 finding은 즉시 보완하고, 2차 review pass 전까지 `KORSTOCKSCAN_MARKET_REGIME_*` env apply 승격을 열지 않는다.
+
 - `EODTop5FeatureRemoval0521` 내일의 주도주 TOP5 기능 제거
   - Source: [ai_engine.py](/home/ubuntu/KORStockScan/src/engine/ai_engine.py), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py), [ai_engine_deepseek.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_deepseek.py), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
   - 판정: `removed_no_ai_call_path`
@@ -65,19 +79,39 @@
   - 테스트/검증: `PYTHONPATH=. .venv/bin/python -m src.engine.error_detector --mode full --dry-run` 결과 `summary_severity=pass`, `threshold_cycle_preopen_status=pass`, `process_health=pass`, `artifact_freshness=pass`, `resource_usage=pass`, `stale_lock=pass`다.
   - 다음 액션: 장전 반복 운영 확인은 완료로 닫고, 장중 확인은 `RuntimeEnvIntradayObserve0521`, `SimProbeIntradayCoverage0521`에서 별도 수행한다.
 
+- `IntradayAutomationHealthCheck20260521` 장중 자동화체인 상태 확인
+  - Source: [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md) `장중 확인 절차`
+  - 판정: `pass`
+  - 근거: `2026-05-21 09:18 KST` 기준 error detector dry-run은 `summary_severity=pass`다. `process_health=pass`로 `bot_main.py` PID `4069`, main loop age 약 `1.2s`, `telegram/crisis_monitor/sniper_engine/scalping_scanner/error_detection` thread가 모두 alive였다. `artifact_freshness=pass`로 `pipeline_events_age_sec=0.0`, `threshold_events_age_sec=0.0`, sentinel/panic report freshness가 정상이고, `cron_completion=pass`에서 장중 전까지 도래한 sentinel/panic 계열 cron은 정상 완료됐다.
+  - 금지: 장중 확인 결과를 runtime threshold/order/provider/bot 변경으로 연결하지 않는다. `threshold_cycle_calibration_intraday`와 장후 체인은 당시 `not_yet_due`로 별도 postclose/12:05 확인 owner가 소유한다.
+  - 테스트/검증: `PYTHONPATH=. .venv/bin/python -m src.engine.error_detector --mode full --dry-run` 통과. `data/pipeline_events/pipeline_events_2026-05-21.jsonl`와 `data/threshold_cycle/threshold_events_2026-05-21.jsonl` append freshness를 확인했다.
+  - 다음 액션: 장중 운영 확인은 `pass`로 닫고, 12:05 calibration과 postclose R1~R6는 기존 POSTCLOSE/RunbookOps 항목에서 확인한다.
+
+- `BuySignalTelegramReceiptBoundary0521` BUY 신호/체결 Telegram 경계 정리
+  - Source: [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [test_sniper_scale_in.py](/home/ubuntu/KORStockScan/src/tests/test_sniper_scale_in.py), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 판정: `signal_only_before_fill_receipt_only_after_fill`
+  - 근거: `2026-05-21 09:12 KST` 엘앤씨바이오(290650)는 원 매수주문 `0017489`가 접수된 뒤 약 29초 후 같은 원주문에 대한 취소주문 `0017596`이 성공했다. 기존 Telegram 문구가 `BUY 신호/주문 제출`, `주문수량`이라 미체결 취소 주문도 뒤늦게 제출 완료처럼 보일 수 있었다.
+  - 변경: 체결 전 알림은 `BUY 신호 감지`, `후보수량`으로만 표기하고 `주문 제출` 표현을 제거했다. BUY 신호 외의 실거래 Telegram은 실제 체결 receipt 확인 후 발송한다는 운영 계약을 runbook에 명시했다.
+  - 금지: Telegram 수신 순서만으로 주문/체결/취소 원천 상태를 판정하지 않는다. 원천 증적은 Kiwoom receipt, DB, pipeline event를 우선한다.
+  - 검증: `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_sniper_scale_in.py -k "publish_buy_signal_submission_notice or buy_execution_thread_receives_snapshot" -q` 통과.
+
 ## 장중 체크리스트 (09:05~15:20)
 
-- [ ] `[RuntimeEnvIntradayObserve0521] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-05-21`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
+- [x] `[RuntimeEnvIntradayObserve0521] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-05-21`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-20.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-20.json)
   - 판정 기준: selected_families=soft_stop_whipsaw_confirmation, latency_classifier_runtime_profile, scalp_sim_candidate_window_expansion, scalp_sim_ai_budget_manager, lifecycle_decision_matrix_runtime가 runtime event provenance에 찍히는지 확인한다.
   - 금지: 장중 관찰 결과로 runtime threshold mutation을 수행하지 않는다.
-  - 다음 액션: provenance present/missing, rollback guard breach 여부를 분리 기록한다.
+  - 실행 메모 (`2026-05-21 09:18 KST`): [threshold_apply_2026-05-21.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-05-21.json)은 `status=auto_bounded_live_ready`, `apply_mode=auto_bounded_live`, `runtime_change=true`, `approval_requests=[]`, `approval_contract_gaps=[]`다. [threshold_runtime_env_2026-05-21.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-05-21.env)는 `lifecycle_decision_matrix_runtime`, `scalp_sim_candidate_window_expansion`, `scalp_sim_ai_budget_manager`, `scalp_sim_scale_in_window_expansion`, `soft_stop_whipsaw_confirmation`, `score65_74_recovery_probe` env를 포함하고, LDM action mutation은 `KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_RUNTIME_EFFECT_ENABLED=false`로 유지한다.
+  - 판정 결과: `pass_provenance_present_no_rollback_breach`. 당일 pipeline event에서 `lifecycle_decision_matrix_runtime` 1081건, `scalp_sim_candidate_window_expansion` 236건, `soft_stop_whipsaw_confirmation` 16건, `latency_classifier_runtime_profile` 6건, `scalp_sim_scale_in_window_expansion` 11건이 확인됐다. `scalp_sim_ai_budget_manager`는 env enabled와 deferred review 설정은 확인됐지만 09:18 기준 별도 family 문자열 event는 아직 없으므로 `runtime_env_present_event_pending`으로 postclose budget report에서 재확인한다. rollback/safety breach 유사 이벤트는 0건이다.
+  - 다음 액션: 장중 runtime mutation 금지를 유지하고, postclose `ThresholdDailyEVReport0521`에서 selected/not-applied attribution과 budget event coverage를 재확인한다.
 
-- [ ] `[SimProbeIntradayCoverage0521] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-05-21`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
+- [x] `[SimProbeIntradayCoverage0521] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-05-21`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
   - Source: [threshold_cycle_ev_2026-05-20.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-20.json)
   - 판정 기준: sim/probe 표본이 real execution과 분리되고 `actual_order_submitted=false` provenance가 유지되는지 확인한다.
   - 금지: sim/probe EV를 broker execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
-  - 다음 액션: source-quality split, active state 복원, open/closed count를 같이 기록한다.
+  - 실행 메모 (`2026-05-21 09:18 KST`): 당일 pipeline event의 sim/probe 전체 후보성 row는 2059건이고, 주문형 sim/probe row 1603건은 모두 `actual_order_submitted=false`, `broker_order_forbidden=true`였다. source-quality/authority 계약은 주문형 row 1602건에서 확인됐고, 누락 1건은 order authority 변경이 아닌 source-quality 계측 보강 후보로만 본다.
+  - 판정 결과: `pass_sim_order_provenance_separated`. `scalp_sim_candidate_window_expansion`은 `scalp_sim_entry_armed`, `scalp_sim_buy_order_virtual_pending`, `scalp_sim_buy_order_assumed_filled`, `scalp_sim_holding_started` 등으로 real execution과 분리됐다. state restore/persist 계열 일부는 `actual_order_submitted` 필드가 없지만 주문형 row가 아니므로 broker execution 품질 판정에 쓰지 않는다.
+  - 다음 액션: postclose LDM joined/action bucket coverage와 source-quality split을 `ScalpSimLdmMaxDaily240Review0521`에서 다시 확인하고, sim/probe EV 단독 실주문 전환은 계속 금지한다.
 
 ## 장후 체크리스트 (16:30~18:55)
 

@@ -212,7 +212,66 @@ def test_threshold_cycle_report_marks_calibration_sample_and_live_risk_states():
     assert candidates["overbought_pullback_guard_p1"]["allowed_runtime_apply"] is False
     assert candidates["overbought_pullback_guard_p1"]["supersedes"] == ["overbought_gate_refined_candidate"]
     assert candidates["holding_flow_ofi_smoothing"]["sample_window"] == "daily_intraday"
+    assert candidates["market_regime_continuous_thresholds"]["allowed_runtime_apply"] is False
+    assert candidates["market_regime_continuous_thresholds"]["runtime_change"] is False
+    assert candidates["market_regime_continuous_thresholds"]["calibration_state"] == "hold_sample"
+    assert candidates["market_regime_continuous_thresholds"]["apply_mode"] == "manifest_only"
+    assert candidates["market_regime_continuous_thresholds"]["sample_window"] == "rolling_10d_with_valid_market_cache_and_daily_report"
     assert report["post_apply_attribution"]["soft_stop_balanced_policy"]["perfect_win_rate_required"] is False
+
+
+def test_market_regime_continuous_threshold_family_metadata_and_source_bundle(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    report_dir.mkdir(parents=True)
+    monkeypatch.setattr(report_mod, "REPORT_DIR", report_dir)
+
+    for day in range(1, 11):
+        label = "RISK_ON" if day >= 7 else ("NEUTRAL" if day >= 4 else "RISK_OFF")
+        score = 35.0 + day * 4.0
+        (report_dir / f"report_2026-05-{day:02d}.json").write_text(
+            json.dumps(
+                {
+                    "date": f"2026-05-{day:02d}",
+                    "stats": {
+                        "market_regime_continuous_score": score,
+                        "market_regime_continuous_label": label,
+                        "market_regime_component_scores": {
+                            "vix_level": 15.0,
+                            "fear_greed_level": 8.0,
+                            "domestic_breadth": 10.0,
+                            "oil_relief": 7.0,
+                            "local_model": 4.0,
+                        },
+                        "market_regime_score_version": "market_regime_continuous_v1",
+                        "market_regime_source_quality": "valid",
+                        "swing_entry_recovery_gate_score": 0,
+                        "allow_swing_entry": day >= 7,
+                    },
+                    "performance": {
+                        "summary": {
+                            "total_records": 5,
+                            "filled_records": 2,
+                            "completed_records": 1,
+                            "win_rate": 50.0,
+                            "avg_profit_rate": 0.1 * day,
+                        }
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+    metrics = report_mod._summarize_market_regime_continuous_sources("2026-05-10")
+    metadata = report_mod.CALIBRATION_FAMILY_METADATA["market_regime_continuous_thresholds"]
+
+    assert metadata["allowed_runtime_apply"] is False
+    assert metadata["runtime_effect"] is False
+    assert metadata["bounds"]["risk_on_min_score"]["max_step_per_day"] == 5
+    assert metrics["latest"]["score"] == 75.0
+    assert metrics["rolling_10d"]["valid_market_regime_days"] == 10
+    assert metrics["source_quality"]["status"] == "pass"
+    assert "RISK_ON" in metrics["label_ev_breakdown"]
 
 
 def test_threshold_cycle_report_counts_scalp_sim_entry_price_and_revalidation_scope():

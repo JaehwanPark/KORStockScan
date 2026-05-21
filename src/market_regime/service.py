@@ -12,7 +12,7 @@ except ImportError:  # optional dependency
 
 from src.utils.constants import DATA_DIR, TRADING_RULES
 from .data_provider import YahooMarketDataProvider
-from .rules import evaluate_market_regime
+from .rules import apply_continuous_market_regime_score, evaluate_market_regime
 from .schemas import MarketRegimeSnapshot
 
 
@@ -132,6 +132,12 @@ class MarketRegimeService:
                 context["daily_status_text"] = str(stats.get("status_text", "") or "")
                 context["quote_date"] = str(stats.get("quote_date", "") or "")
                 context["report_source"] = str(path)
+                if stats.get("avg_bull") is not None:
+                    context["avg_bull"] = float(stats.get("avg_bull") or 0.0)
+                if stats.get("qualified_count") is not None:
+                    context["qualified_count"] = int(stats.get("qualified_count") or 0)
+                if stats.get("total_valid") is not None:
+                    context["total_valid"] = int(stats.get("total_valid") or 0)
                 break
             except Exception as e:
                 context["report_error"] = str(e)
@@ -200,6 +206,8 @@ class MarketRegimeService:
         snapshot.debug["component_scores"] = component_scores
         snapshot.debug["local_market_context"] = context
         snapshot.debug["local_breadth_signal"] = "bullish" if local_score > 0 else "none"
+        snapshot.swing_entry_recovery_gate_score = int(snapshot.swing_score or 0)
+        apply_continuous_market_regime_score(snapshot, context)
         return snapshot
 
     def _clone_snapshot_with_reason(self, snapshot: MarketRegimeSnapshot, reason: str) -> MarketRegimeSnapshot:

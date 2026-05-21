@@ -4593,9 +4593,9 @@ def _publish_buy_signal_submission_notice(
         or '-'
     )
     msg = (
-        f"🛒 **[BUY 신호/주문 제출] {stock.get('name')} ({code})**\n"
+        f"🛒 **[BUY 신호 감지] {stock.get('name')} ({code})**\n"
         f"전략: `{strategy}` | 진입모드: `{entry_mode}`\n"
-        f"현재가: `{int(curr_price):,}원` | 주문수량: `{int(requested_qty or 0)}주`\n"
+        f"현재가: `{int(curr_price):,}원` | 후보수량: `{int(requested_qty or 0)}주`\n"
         f"진입근거: `{dynamic_reason}`\n"
         f"Latency: `{_translate_latency_state(latency_gate.get('latency_state'))}` / "
         f"`{_translate_entry_decision(latency_gate.get('decision'))}`"

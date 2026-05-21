@@ -8,8 +8,13 @@ from src.market_regime import service as service_mod
 def _snapshot(score: int = 35) -> MarketRegimeSnapshot:
     return MarketRegimeSnapshot(
         timestamp=datetime(2026, 5, 12, 8, 30),
+        vix_close=22.0,
+        fng_value=40.0,
+        wti_from_recent_high_pct=-5.0,
         oil_reversal=True,
+        oil_pullback_relief=True,
         swing_score=score,
+        swing_entry_recovery_gate_score=score,
         risk_state="RISK_OFF",
         allow_swing_entry=False,
         debug={
@@ -73,6 +78,9 @@ def test_load_local_market_context_prefers_daily_report_and_adds_diagnostics(mon
                     "quote_date": "2026-05-11",
                     "status_text": "상승장",
                     "ma20_ratio": 62.8,
+                    "avg_bull": 58.2,
+                    "qualified_count": 7,
+                    "total_valid": 12,
                 }
             },
             ensure_ascii=False,
@@ -101,5 +109,36 @@ def test_load_local_market_context_prefers_daily_report_and_adds_diagnostics(mon
     assert context["ma20_ratio"] == 62.8
     assert context["daily_status_text"] == "상승장"
     assert context["quote_date"] == "2026-05-11"
+    assert context["avg_bull"] == 58.2
+    assert context["qualified_count"] == 7
+    assert context["total_valid"] == 12
     assert context["bull_regime"] == 1
     assert context["safe_pool_count"] == 61
+
+
+def test_continuous_score_counts_partial_breadth_even_when_gate_score_is_zero(monkeypatch, tmp_path):
+    monkeypatch.setattr(service_mod, "DATA_DIR", tmp_path)
+    service = service_mod.MarketRegimeService(refresh_minutes=0)
+    snap = _snapshot(score=0)
+    snap.oil_reversal = False
+    snap.oil_pullback_relief = False
+    snap.wti_from_recent_high_pct = 0.0
+    snap.debug["component_scores"] = {"vix": 0, "oil": 0, "fng": 0}
+
+    snap = service._apply_local_market_context(
+        snap,
+        {
+            "ma20_ratio": 20.0,
+            "avg_bull": 53.0,
+            "qualified_count": 3,
+            "total_valid": 15,
+        },
+    )
+
+    assert snap.swing_score == 0
+    assert snap.swing_entry_recovery_gate_score == 0
+    assert snap.market_regime_component_scores["domestic_breadth"] == 10.0
+    assert snap.market_regime_component_scores["local_model"] == 4.0
+    assert snap.market_regime_continuous_score > 0.0
+    assert snap.market_regime_continuous_label in {"RISK_OFF", "NEUTRAL", "RISK_ON"}
+    assert snap.market_regime_source_quality == "valid"
