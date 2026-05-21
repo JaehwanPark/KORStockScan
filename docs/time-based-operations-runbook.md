@@ -391,6 +391,14 @@ POSTCLOSE 최상위 감리는 `Tuning Chain Control State`(튜닝 체인 관제 
 
 ### Runbook 운영 확인 완료 기록
 
+- `[PreopenAutomationHealthCheck20260522] 장전 자동화체인 상태 확인` (`Due: 2026-05-22`, `Slot: PREOPEN`, `TimeWindow: 08:00~09:00`)
+  - 판정: `pass`
+  - Tuning Chain Control State: `GREEN`
+  - blocked_stage: `-`
+  - impact: 2026-05-22 장전 preopen apply, runtime env, bot env uptake, approval artifact 분리, Runtime Apply Bridge 차단 계약, OpenAI WS provenance를 확인했다. 추가 승인 필요 artifact는 없고, `runtime_apply_bridge` 후보 2건은 `bootstrap_pending`/`allowed_runtime_apply=false`라 env 미생성이 정상이다.
+  - 근거: [threshold_apply_2026-05-22.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-05-22.json)은 `status=auto_bounded_live_ready`, `runtime_change=true`이며 [threshold_runtime_env_2026-05-22.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-05-22.env)이 생성됐다. bot tmux 세션과 `bot_main.py` PID가 살아 있고 runtime env에 `KORSTOCKSCAN_SCALPING_AI_ROUTE=openai`, `KORSTOCKSCAN_OPENAI_TRANSPORT_MODE=responses_ws`, `KORSTOCKSCAN_OPENAI_RESPONSES_WS_ENABLED=true`, `KORSTOCKSCAN_SWING_LIVE_ORDER_DRY_RUN_ENABLED=true`, `KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_ENABLED=true`, `KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED=true`가 로드됐다. `error_detector --mode full --dry-run`은 `summary_severity=pass`, process/resource/artifact/cron all pass 또는 not_yet_due다.
+  - 다음 액션: 장중 `RuntimeEnvIntradayObserve0522`, `OpenAIWSIntradaySample0522`, `ScalpSimOvernightPrecloseCron0522`에서 실제 provenance와 15:20 sim overnight 첫 운영을 확인한다. 장전 확인 결과를 threshold/order/provider 변경 근거로 확장하지 않는다.
+
 - `[PostcloseAutomationHealthCheck20260521] 장후 자동화체인 상태 확인` (`Due: 2026-05-21`, `Slot: POSTCLOSE`, `TimeWindow: 16:10~20:45`)
   - 판정: `warning`
   - Tuning Chain Control State: `YELLOW`

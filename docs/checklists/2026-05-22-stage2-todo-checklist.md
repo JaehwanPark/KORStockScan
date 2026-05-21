@@ -65,29 +65,38 @@
 
 ## 장전 체크리스트 (08:40~09:00)
 
-- [ ] `[RuntimeApplyBridgePreopen0522] LDM entry/scale runtime apply bridge 구현/계약/env 누락 추가리뷰 및 확인` (`Due: 2026-05-22`, `Slot: PREOPEN`, `TimeWindow: 08:40~08:45`, `Track: RuntimeStability`)
+- [x] `[RuntimeApplyBridgePreopen0522] LDM entry/scale runtime apply bridge 구현/계약/env 누락 추가리뷰 및 확인` (`Due: 2026-05-22`, `Slot: PREOPEN`, `TimeWindow: 08:40~08:45`, `Track: RuntimeStability`)
   - Source: [runtime_apply_bridge.py](/home/ubuntu/KORStockScan/src/engine/runtime_apply_bridge.py), [runtime_apply_bridge_2026-05-21.json](/home/ubuntu/KORStockScan/data/report/runtime_apply_bridge/runtime_apply_bridge_2026-05-21.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [approval_contracts.py](/home/ubuntu/KORStockScan/src/engine/approval_contracts.py), [runtime_apply_gap_audit_2026-05-21.md](/home/ubuntu/KORStockScan/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_2026-05-21.md)
   - 판정 기준: `entry_wait6579_score66_69_recovery_gate_v1`과 `scale_in_bucket_runtime_policy_v1`이 bridge report, approval contract, target env mapping, runtime hook, post-apply attribution provenance를 갖는지 확인한다. `bridge_candidate_state=ready_for_approval`와 별도 approval artifact가 모두 있을 때만 PREOPEN env가 생성되어야 한다.
   - 금지: `bootstrap_pending`, `blocked_source_quality`, `blocked_rolling_conflict`, artifact missing, unknown family, `runtime_effect=false` source bucket을 수동 env override 또는 실매매 적용 완료로 해석하지 않는다.
   - 다음 액션: `bridge_report_present_no_env_without_artifact`, `ready_candidate_requires_artifact`, `approved_artifact_env_selected`, `blocked_bridge_not_ready`, `fail_contract_or_env_gap` 중 하나로 닫는다.
+  - 완료 기록: 판정=`pass`, 다음 액션=`bridge_report_present_no_env_without_artifact`. [runtime_apply_bridge_2026-05-21.json](/home/ubuntu/KORStockScan/data/report/runtime_apply_bridge/runtime_apply_bridge_2026-05-21.json)은 `status=pass`, `candidate_count=2`, `ready_for_approval_count=0`, `approval_required_count=2`, `runtime_mutation_performed=false`다. `entry_wait6579_score66_69_recovery_gate_v1`과 `scale_in_bucket_runtime_policy_v1`은 모두 `bridge_candidate_state=bootstrap_pending`, `allowed_runtime_apply=false`라 장전 env 미생성이 정상이다.
 
-- [ ] `[ThresholdEnvAutoApplyPreopen0522] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-05-22`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
+- [x] `[ThresholdEnvAutoApplyPreopen0522] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-05-22`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-21.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-21.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
   - 판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.
   - 금지: blocked family, approval artifact missing, same-stage owner conflict를 수동 env override로 우회하지 않는다.
   - 다음 액션: `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.
+  - 완료 기록: 판정=`pass`, 다음 액션=`applied_guard_passed_env`. [threshold_apply_2026-05-22.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-05-22.json)은 `status=auto_bounded_live_ready`, `runtime_change=true`, [threshold_runtime_env_2026-05-22.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-05-22.env)을 생성했다. selected family는 `soft_stop_whipsaw_confirmation`, `score65_74_recovery_probe`, `scalp_sim_candidate_window_expansion`, `scalp_sim_ai_budget_manager`, `lifecycle_decision_matrix_runtime`이고, 사용자 승인된 `scalp_sim_scale_in_window_expansion`도 sim-only env로 반영됐다.
 
-- [ ] `[OpenAIWSPreopenConfirm0522] OpenAI WS 유지 설정 및 entry_price/analyze_target provenance 확인` (`Due: 2026-05-22`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: RuntimeStability`)
+- [x] `[OpenAIWSPreopenConfirm0522] OpenAI WS 유지 설정 및 entry_price/analyze_target provenance 확인` (`Due: 2026-05-22`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: RuntimeStability`)
   - Source: [openai_ws_stability_2026-05-21.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-21.md), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py)
   - 판정 기준: startup env의 OpenAI route/Responses WS 설정과 `analyze_target`, `entry_price` transport provenance를 분리 확인한다.
   - 금지: provider transport 확인을 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경으로 해석하지 않는다.
   - 다음 액션: entry_price transport 표본이 부족하면 장중 표본 재확인 항목과 연결한다.
+  - 완료 기록: 판정=`pass`, 다음 액션=`keep_ws_and_recheck_intraday_sample_if_needed`. [openai_ws_stability_2026-05-21.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-21.md)는 `decision=keep_ws`, unique WS calls `4278`, `analyze_target=4092`, `entry_price=186`, WS fallback `0`, WS success rate `1.0`이다. 봇 프로세스 env에서 `KORSTOCKSCAN_SCALPING_AI_ROUTE=openai`, `KORSTOCKSCAN_OPENAI_TRANSPORT_MODE=responses_ws`, `KORSTOCKSCAN_OPENAI_RESPONSES_WS_ENABLED=true`를 확인했다.
 
-- [ ] `[SwingApprovalArtifactPreopen0522] 스윙 approval request 및 별도 승인 artifact 존재 여부 확인` (`Due: 2026-05-22`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
+- [x] `[SwingApprovalArtifactPreopen0522] 스윙 approval request 및 별도 승인 artifact 존재 여부 확인` (`Due: 2026-05-22`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
   - Source: [swing_runtime_approval_2026-05-21.json](/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-05-21.json), [threshold_cycle_ev_2026-05-21.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-21.json)
   - 판정 기준: 사용자 승인 방침에 따라 내일 장전에는 dry-run env 전용 `swing_model_floor`, `swing_gatekeeper_reject_cooldown` 2건을 승인하고, `swing_one_share_real_canary_phase0`도 별도 real canary approval artifact로 승인한다. 두 approval은 동일 artifact 의미로 묶지 않고 dry-run env 승인과 live 1주 canary 승인을 분리 기록한다.
   - 금지: 스윙 dry-run 해제, real canary, floor, scale-in real canary를 서로 자동 승인하지 않는다. 특히 dry-run 2건 승인 artifact를 real canary 승인으로 확장 해석하지 않고, real canary artifact를 dry-run env 승인으로 대체하지 않는다.
   - 다음 액션: `dry_run_approval_artifact_present_real_canary_artifact_present_separate`, `dry_run_approval_artifact_missing`, `real_canary_approval_artifact_missing`, `blocked_by_policy` 중 하나로 닫는다.
+  - 완료 기록: 판정=`pass`, 다음 액션=`dry_run_approval_artifact_present_real_canary_artifact_present_separate`. [swing_runtime_approvals_2026-05-21.json](/home/ubuntu/KORStockScan/data/threshold_cycle/approvals/swing_runtime_approvals_2026-05-21.json)과 [swing_one_share_real_canary_2026-05-21.json](/home/ubuntu/KORStockScan/data/threshold_cycle/approvals/swing_one_share_real_canary_2026-05-21.json)을 분리 확인했다. apply plan selected는 `swing_gatekeeper_reject_cooldown`과 `swing_one_share_real_canary_phase0`이며, `swing_model_floor`는 artifact에는 있으나 `no_runtime_env_override`로 runtime selected되지 않았다. `KORSTOCKSCAN_SWING_LIVE_ORDER_DRY_RUN_ENABLED=true`는 유지된다.
+
+- [x] `[PreopenAutomationHealthCheck20260522] 장전 자동화체인 상태 확인` (`Due: 2026-05-22`, `Slot: PREOPEN`, `TimeWindow: 08:00~09:00`, `Track: RunbookOps`)
+  - Source: [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md), [threshold_apply_2026-05-22.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-05-22.json), [threshold_runtime_env_2026-05-22.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-05-22.env)
+  - 완료 기록: 판정=`pass`, Tuning Chain Control State=`GREEN`, blocked_stage=`-`. preopen apply/runtime env/bot env uptake/approval artifact 분리/Runtime Apply Bridge 차단 계약/OpenAI WS provenance를 확인했다. `error_detector --mode full --dry-run`은 `summary_severity=pass`다.
+  - 다음 액션: 장중 `RuntimeEnvIntradayObserve0522`, `OpenAIWSIntradaySample0522`, `ScalpSimOvernightPrecloseCron0522`에서 실제 provenance와 15:20 sim overnight 첫 운영을 확인한다.
 
 ## 장중 체크리스트 (09:05~15:20)
 
