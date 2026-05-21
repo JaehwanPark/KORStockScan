@@ -1,5 +1,6 @@
 import json
 
+from src.engine import runtime_apply_bridge as bridge_mod
 from src.engine import threshold_cycle_preopen_apply as mod
 
 
@@ -1597,3 +1598,218 @@ def test_scalp_sim_scale_in_window_approval_writes_runtime_env(tmp_path, monkeyp
         "scalp_sim_scale_in_window_expansion"
     )
     assert manifest["calibration_candidates"] == []
+
+
+def _install_runtime_bridge_test_dirs(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    bridge_dir = tmp_path / "runtime_apply_bridge"
+    approval_dir = tmp_path / "approvals"
+    swing_request_dir = tmp_path / "swing_runtime_approval"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    for directory in (report_dir, bridge_dir, approval_dir, swing_request_dir):
+        directory.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_REPORT_DIR", swing_request_dir)
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_ARTIFACT_DIR", approval_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", tmp_path / "latency")
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(bridge_mod, "REPORT_DIR", bridge_dir)
+    monkeypatch.setattr(bridge_mod, "APPROVAL_DIR", approval_dir)
+    (report_dir / "threshold_cycle_2026-05-30.json").write_text(
+        json.dumps({"date": "2026-05-30", "calibration_candidates": []}),
+        encoding="utf-8",
+    )
+    return runtime_dir, bridge_dir, approval_dir
+
+
+def test_runtime_apply_bridge_entry_requires_ready_state_and_artifact(tmp_path, monkeypatch):
+    runtime_dir, bridge_dir, approval_dir = _install_runtime_bridge_test_dirs(tmp_path, monkeypatch)
+    family = bridge_mod.ENTRY_BRIDGE_FAMILY
+    candidate_id = f"{family}:2026-05-30"
+    (bridge_dir / "runtime_apply_bridge_2026-05-30.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-30",
+                "candidates": [
+                    {
+                        "candidate_id": candidate_id,
+                        "family": family,
+                        "stage": "entry",
+                        "priority": 9,
+                        "bridge_candidate_state": "bootstrap_pending",
+                        "allowed_runtime_apply": False,
+                        "target_env_keys": ["AI_SCORE65_74_RECOVERY_PROBE_ENABLED"],
+                        "recommended_values": {"enabled": True},
+                        "current_values": {"enabled": False},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (approval_dir / "ldm_entry_runtime_bridge_2026-05-30.json").write_text(
+        json.dumps({"approved": True, "family": family, "candidate_id": candidate_id}),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-06-01",
+        source_date="2026-05-30",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    assert manifest["runtime_change"] is False
+    assert (
+        f"runtime_apply_blocked_bridge_not_ready:bootstrap_pending:{family}"
+        in manifest["runtime_apply_bridge"]["blocked"]
+    )
+    env_text = (runtime_dir / "threshold_runtime_env_2026-06-01.env").read_text(encoding="utf-8")
+    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED" not in env_text
+
+
+def test_runtime_apply_bridge_entry_approval_writes_targeted_probe_env(tmp_path, monkeypatch):
+    runtime_dir, bridge_dir, approval_dir = _install_runtime_bridge_test_dirs(tmp_path, monkeypatch)
+    family = bridge_mod.ENTRY_BRIDGE_FAMILY
+    candidate_id = f"{family}:2026-05-30"
+    (bridge_dir / "runtime_apply_bridge_2026-05-30.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-30",
+                "candidates": [
+                    {
+                        "candidate_id": candidate_id,
+                        "family": family,
+                        "stage": "entry",
+                        "priority": 9,
+                        "bridge_candidate_state": "ready_for_approval",
+                        "allowed_runtime_apply": True,
+                        "runtime_effect_after_approval": "bounded_entry_probe_recovery",
+                        "target_env_keys": [
+                            "AI_SCORE65_74_RECOVERY_PROBE_ENABLED",
+                            "AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE",
+                            "AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE",
+                            "AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW",
+                            "AI_WAIT6579_PROBE_CANARY_MAX_QTY",
+                            "AI_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION",
+                        ],
+                        "recommended_values": {
+                            "enabled": True,
+                            "min_score": 66,
+                            "max_score": 69,
+                            "max_budget_krw": 50000,
+                            "max_qty": 1,
+                            "threshold_version": candidate_id,
+                        },
+                        "current_values": {
+                            "enabled": False,
+                            "min_score": 65,
+                            "max_score": 74,
+                            "max_budget_krw": 50000,
+                            "max_qty": 1,
+                            "threshold_version": "runtime_default",
+                        },
+                        "source_bucket_keys": [bridge_mod.ENTRY_TARGET_BUCKET_KEY],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (approval_dir / "ldm_entry_runtime_bridge_2026-05-30.json").write_text(
+        json.dumps({"approved": True, "family": family, "candidate_id": candidate_id, "approval_id": "entry-approve"}),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-06-01",
+        source_date="2026-05-30",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    env = manifest["runtime_env_overrides"]
+    assert manifest["runtime_change"] is True
+    assert env["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED"] == "true"
+    assert env["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_SCORE"] == "66"
+    assert env["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MAX_SCORE"] == "69"
+    assert env["KORSTOCKSCAN_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW"] == "50000"
+    assert env["KORSTOCKSCAN_WAIT6579_PROBE_CANARY_MAX_QTY"] == "1"
+    assert env["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION"] == candidate_id
+    assert manifest["runtime_apply_bridge"]["selected"][0]["runtime_apply_bridge_family"] == family
+    env_manifest = json.loads((runtime_dir / "threshold_runtime_env_2026-06-01.json").read_text(encoding="utf-8"))
+    assert family in env_manifest["selected_families"]
+
+
+def test_runtime_apply_bridge_scale_approval_writes_tighten_env_without_guard_bypass(tmp_path, monkeypatch):
+    _runtime_dir, bridge_dir, approval_dir = _install_runtime_bridge_test_dirs(tmp_path, monkeypatch)
+    family = bridge_mod.SCALE_IN_BRIDGE_FAMILY
+    candidate_id = f"{family}:2026-05-30"
+    (bridge_dir / "runtime_apply_bridge_2026-05-30.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-30",
+                "candidates": [
+                    {
+                        "candidate_id": candidate_id,
+                        "family": family,
+                        "stage": "scale_in",
+                        "priority": 39,
+                        "bridge_candidate_state": "ready_for_approval",
+                        "allowed_runtime_apply": True,
+                        "runtime_effect_after_approval": "bounded_scale_in_policy_tighten",
+                        "target_env_keys": [
+                            "SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP",
+                            "SCALPING_ENABLE_PYRAMID",
+                            "REVERSAL_ADD_MIN_AI_SCORE",
+                            "REVERSAL_ADD_MIN_BUY_PRESSURE",
+                            "REVERSAL_ADD_MIN_TICK_ACCEL",
+                        ],
+                        "recommended_values": {
+                            "effective_qty_cap": 1,
+                            "scalping_enable_pyramid": False,
+                            "reversal_add_min_ai_score": 65,
+                            "reversal_add_min_buy_pressure": 60.0,
+                            "reversal_add_min_tick_accel": 1.05,
+                        },
+                        "current_values": {
+                            "effective_qty_cap": 1,
+                            "scalping_enable_pyramid": True,
+                            "reversal_add_min_ai_score": 60,
+                            "reversal_add_min_buy_pressure": 55.0,
+                            "reversal_add_min_tick_accel": 0.95,
+                        },
+                        "forbidden_uses": ["scale_in_safety_guard_bypass", "position_cap_release"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (approval_dir / "ldm_scale_in_runtime_bridge_2026-05-30.json").write_text(
+        json.dumps({"approved": True, "family": family, "candidate_id": candidate_id, "approval_id": "scale-approve"}),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-06-01",
+        source_date="2026-05-30",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    env = manifest["runtime_env_overrides"]
+    assert manifest["runtime_change"] is True
+    assert env["KORSTOCKSCAN_SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP"] == "1"
+    assert env["KORSTOCKSCAN_SCALPING_ENABLE_PYRAMID"] == "false"
+    assert env["KORSTOCKSCAN_REVERSAL_ADD_MIN_AI_SCORE"] == "65"
+    assert env["KORSTOCKSCAN_REVERSAL_ADD_MIN_BUY_PRESSURE"] == "60"
+    assert env["KORSTOCKSCAN_REVERSAL_ADD_MIN_TICK_ACCEL"] == "1.05"
+    assert "scale_in_safety_guard_bypass" in manifest["runtime_apply_bridge"]["selected"][0]["forbidden_uses"]

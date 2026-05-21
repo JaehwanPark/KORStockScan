@@ -537,6 +537,8 @@ class TradingConfig:
     AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE: float = 65.0
     AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL: float = 1.20
     AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP: float = 0.0
+    AI_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION: str = "runtime_default"
+    AI_SCORE65_74_RECOVERY_PROBE_CALIBRATION_STATE: str = "runtime_default"
     SCALPING_PROMPT_SPLIT_ENABLED: bool = True  # WATCHING/HOLDING 프롬프트 분리 on/off 롤백 토글
     ML_GATEKEEPER_PULLBACK_WAIT_COOLDOWN: int = 60 * 20  # 게이트키퍼 '눌림 대기' 재평가 쿨다운
     ML_GATEKEEPER_REJECT_COOLDOWN: int = 60 * 60 * 2  # 게이트키퍼 '전량 회피' 계열 쿨다운
@@ -941,6 +943,8 @@ def _build_trading_rules() -> TradingConfig:
     env_score6574_probe_min_pressure = _env_float("KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE")
     env_score6574_probe_min_accel = _env_float("KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL")
     env_score6574_probe_min_vwap_bp = _env_float("KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP")
+    env_score6574_probe_threshold_version = _env_str("KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION")
+    env_score6574_probe_calibration_state = _env_str("KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_CALIBRATION_STATE")
     env_scalping_prompt_split_enabled = _env_bool("KORSTOCKSCAN_SCALPING_PROMPT_SPLIT_ENABLED")
     env_ai_watching_cooldown = _env_int("KORSTOCKSCAN_AI_WATCHING_COOLDOWN")
     env_ai_holding_min_cooldown = _env_int("KORSTOCKSCAN_AI_HOLDING_MIN_COOLDOWN")
@@ -966,6 +970,8 @@ def _build_trading_rules() -> TradingConfig:
         or env_score6574_probe_min_pressure is not None
         or env_score6574_probe_min_accel is not None
         or env_score6574_probe_min_vwap_bp is not None
+        or env_score6574_probe_threshold_version is not None
+        or env_score6574_probe_calibration_state is not None
         or env_scalping_prompt_split_enabled is not None
         or env_ai_watching_cooldown is not None
         or env_ai_holding_min_cooldown is not None
@@ -1027,6 +1033,12 @@ def _build_trading_rules() -> TradingConfig:
             AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP=env_score6574_probe_min_vwap_bp
             if env_score6574_probe_min_vwap_bp is not None
             else config.AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP,
+            AI_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION=env_score6574_probe_threshold_version
+            if env_score6574_probe_threshold_version is not None
+            else config.AI_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION,
+            AI_SCORE65_74_RECOVERY_PROBE_CALIBRATION_STATE=env_score6574_probe_calibration_state
+            if env_score6574_probe_calibration_state is not None
+            else config.AI_SCORE65_74_RECOVERY_PROBE_CALIBRATION_STATE,
             SCALPING_PROMPT_SPLIT_ENABLED=env_scalping_prompt_split_enabled
             if env_scalping_prompt_split_enabled is not None
             else config.SCALPING_PROMPT_SPLIT_ENABLED,
@@ -1120,6 +1132,9 @@ def _build_trading_rules() -> TradingConfig:
     env_scalping_pullback_entry_timeout = _env_int("KORSTOCKSCAN_SCALPING_PULLBACK_ENTRY_TIMEOUT_SEC")
     env_scalping_reserve_entry_timeout = _env_int("KORSTOCKSCAN_SCALPING_RESERVE_ENTRY_TIMEOUT_SEC")
     env_reversal_add_enabled = _env_bool("KORSTOCKSCAN_REVERSAL_ADD_ENABLED")
+    env_reversal_add_min_ai_score = _env_int("KORSTOCKSCAN_REVERSAL_ADD_MIN_AI_SCORE")
+    env_reversal_add_min_buy_pressure = _env_float("KORSTOCKSCAN_REVERSAL_ADD_MIN_BUY_PRESSURE")
+    env_reversal_add_min_tick_accel = _env_float("KORSTOCKSCAN_REVERSAL_ADD_MIN_TICK_ACCEL")
     env_reversal_add_size_ratio = _env_float("KORSTOCKSCAN_REVERSAL_ADD_SIZE_RATIO")
     env_reversal_add_min_qty_floor_enabled = _env_bool("KORSTOCKSCAN_REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED")
     env_bad_entry_observe_enabled = _env_bool("KORSTOCKSCAN_SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED")
@@ -1187,6 +1202,9 @@ def _build_trading_rules() -> TradingConfig:
         or env_scalping_pullback_entry_timeout is not None
         or env_scalping_reserve_entry_timeout is not None
         or env_reversal_add_enabled is not None
+        or env_reversal_add_min_ai_score is not None
+        or env_reversal_add_min_buy_pressure is not None
+        or env_reversal_add_min_tick_accel is not None
         or env_reversal_add_size_ratio is not None
         or env_reversal_add_min_qty_floor_enabled is not None
         or env_bad_entry_observe_enabled is not None
@@ -1344,6 +1362,15 @@ def _build_trading_rules() -> TradingConfig:
             REVERSAL_ADD_ENABLED=env_reversal_add_enabled
             if env_reversal_add_enabled is not None
             else config.REVERSAL_ADD_ENABLED,
+            REVERSAL_ADD_MIN_AI_SCORE=env_reversal_add_min_ai_score
+            if env_reversal_add_min_ai_score is not None
+            else config.REVERSAL_ADD_MIN_AI_SCORE,
+            REVERSAL_ADD_MIN_BUY_PRESSURE=env_reversal_add_min_buy_pressure
+            if env_reversal_add_min_buy_pressure is not None
+            else config.REVERSAL_ADD_MIN_BUY_PRESSURE,
+            REVERSAL_ADD_MIN_TICK_ACCEL=env_reversal_add_min_tick_accel
+            if env_reversal_add_min_tick_accel is not None
+            else config.REVERSAL_ADD_MIN_TICK_ACCEL,
             REVERSAL_ADD_SIZE_RATIO=env_reversal_add_size_ratio
             if env_reversal_add_size_ratio is not None
             else config.REVERSAL_ADD_SIZE_RATIO,

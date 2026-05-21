@@ -60,6 +60,22 @@ _CONTRACTS: dict[str, dict[str, Any]] = {
         "runtime_guard_ready": True,
         "runtime_scope": "approved_real_holding_scale_in_only",
     },
+    "entry_wait6579_score66_69_recovery_gate_v1": {
+        "approval_contract_status": "ready",
+        "approval_artifact_template": "ldm_entry_runtime_bridge_{date}.json",
+        "approval_artifact_consumer": "threshold_cycle_preopen_apply.runtime_apply_bridge",
+        "preopen_env_ready": True,
+        "runtime_guard_ready": True,
+        "runtime_scope": "approved_entry_wait6579_score66_69_recovery_gate_only",
+    },
+    "scale_in_bucket_runtime_policy_v1": {
+        "approval_contract_status": "ready",
+        "approval_artifact_template": "ldm_scale_in_runtime_bridge_{date}.json",
+        "approval_artifact_consumer": "threshold_cycle_preopen_apply.runtime_apply_bridge",
+        "preopen_env_ready": True,
+        "runtime_guard_ready": True,
+        "runtime_scope": "approved_scalp_scale_in_policy_env_only",
+    },
     "position_sizing_cap_release": {
         "approval_contract_status": "contract_missing",
         "approval_artifact_template": "position_sizing_cap_release_{date}.json",

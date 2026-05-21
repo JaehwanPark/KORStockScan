@@ -12,6 +12,13 @@ from typing import Any
 
 from src.engine.approval_contracts import annotate_approval_request
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
+from src.engine.runtime_apply_bridge import (
+    ENTRY_BRIDGE_FAMILY,
+    SCALE_IN_BRIDGE_FAMILY,
+    ldm_entry_runtime_bridge_artifact_path,
+    ldm_scale_in_runtime_bridge_artifact_path,
+    runtime_apply_bridge_report_path,
+)
 from src.utils.constants import DATA_DIR
 
 
@@ -59,8 +66,15 @@ TARGET_ENV_VALUE_KEYS = {
     "AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE": "min_buy_pressure",
     "AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL": "min_tick_accel",
     "AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP": "min_micro_vwap_bp",
+    "AI_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION": "threshold_version",
+    "AI_SCORE65_74_RECOVERY_PROBE_CALIBRATION_STATE": "calibration_state",
     "AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW": "max_budget_krw",
     "AI_WAIT6579_PROBE_CANARY_MAX_QTY": "max_qty",
+    "SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP": "effective_qty_cap",
+    "SCALPING_ENABLE_PYRAMID": "scalping_enable_pyramid",
+    "REVERSAL_ADD_MIN_AI_SCORE": "reversal_add_min_ai_score",
+    "REVERSAL_ADD_MIN_BUY_PRESSURE": "reversal_add_min_buy_pressure",
+    "REVERSAL_ADD_MIN_TICK_ACCEL": "reversal_add_min_tick_accel",
     "SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED": "enabled",
     "SCALP_BAD_ENTRY_REFINED_MIN_HOLD_SEC": "min_hold_sec",
     "SCALP_BAD_ENTRY_REFINED_MIN_LOSS_PCT": "min_loss_pct",
@@ -180,6 +194,14 @@ def swing_one_share_real_canary_artifact_path(source_date: str) -> Path:
 
 def scalp_sim_scale_in_window_artifact_path(source_date: str) -> Path:
     return SWING_RUNTIME_APPROVAL_ARTIFACT_DIR / f"scalp_sim_scale_in_window_expansion_{source_date}.json"
+
+
+def _bridge_artifact_path_for_family(family: str, source_date: str) -> Path | None:
+    if family == ENTRY_BRIDGE_FAMILY:
+        return ldm_entry_runtime_bridge_artifact_path(source_date)
+    if family == SCALE_IN_BRIDGE_FAMILY:
+        return ldm_scale_in_runtime_bridge_artifact_path(source_date)
+    return None
 
 
 def _report_path_for_date(target_date: str, *, source_phase: str | None = None) -> Path:
@@ -417,6 +439,8 @@ def _env_overrides_for_candidate(candidate: dict[str, Any]) -> dict[str, str]:
         "swing_scale_in_real_canary_phase0",
         "swing_one_share_real_canary_phase0",
         "lifecycle_decision_matrix_runtime",
+        ENTRY_BRIDGE_FAMILY,
+        SCALE_IN_BRIDGE_FAMILY,
     }
     overrides: dict[str, str] = {}
     for target_key in candidate.get("target_env_keys") or []:
@@ -745,6 +769,150 @@ def _select_scalp_sim_scale_in_window_approval(bundle: dict[str, Any]) -> tuple[
     return ([request], [decision], overrides) if not reject_reason else ([], [decision], {})
 
 
+def _artifact_matches_bridge_candidate(artifact: dict[str, Any], candidate: dict[str, Any]) -> bool:
+    candidate_id = str(candidate.get("candidate_id") or "")
+    explicit_candidate_id = str(artifact.get("candidate_id") or artifact.get("bridge_candidate_id") or "")
+    if explicit_candidate_id and explicit_candidate_id != candidate_id:
+        return False
+    allowed_ids: set[str] = set()
+    for key in ("approved_candidate_ids", "approved_bridge_candidate_ids", "approved_request_ids"):
+        allowed_ids.update(str(value) for value in artifact.get(key) or [] if str(value or "").strip())
+    if allowed_ids and candidate_id not in allowed_ids:
+        return False
+    return True
+
+
+def _load_runtime_apply_bridge_approval(source_date: str | None) -> dict[str, Any]:
+    if not source_date:
+        return {
+            "request_report": None,
+            "artifacts": {},
+            "candidates": [],
+            "approved_requests": [],
+            "blocked": ["missing_source_date"],
+        }
+    report_path = runtime_apply_bridge_report_path(source_date)
+    report = _load_json(report_path)
+    candidates = report.get("candidates") if isinstance(report.get("candidates"), list) else []
+    artifacts: dict[str, str | None] = {}
+    artifact_payloads: dict[str, dict[str, Any]] = {}
+    approved_requests: list[dict[str, Any]] = []
+    blocked: list[str] = []
+    bridge_families = {ENTRY_BRIDGE_FAMILY, SCALE_IN_BRIDGE_FAMILY}
+    if not report:
+        blocked.append("runtime_apply_bridge_report_missing")
+
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        family = str(item.get("family") or "")
+        if family not in bridge_families:
+            continue
+        artifact_path = _bridge_artifact_path_for_family(family, source_date)
+        artifact = _load_json(artifact_path) if artifact_path else {}
+        artifacts[family] = str(artifact_path) if artifact_path and artifact_path.exists() else None
+        artifact_payloads[family] = artifact
+        candidate_id = str(item.get("candidate_id") or "")
+        contract = annotate_approval_request({"family": family}, source_date)
+        item_blocked: list[str] = []
+        if not bool(contract.get("approval_live_ready")):
+            item_blocked.append("approval_contract_not_live_ready")
+        if str(item.get("bridge_candidate_state") or "") != "ready_for_approval":
+            item_blocked.append(f"runtime_apply_blocked_bridge_not_ready:{item.get('bridge_candidate_state')}")
+        if not bool(item.get("allowed_runtime_apply")):
+            item_blocked.append("runtime_apply_not_allowed")
+        if not artifact:
+            item_blocked.append("approval_artifact_missing")
+        elif str(artifact.get("family") or artifact.get("policy_id") or family) != family:
+            item_blocked.append("approval_policy_mismatch")
+        elif not bool(artifact.get("approved")):
+            item_blocked.append("approval_required")
+        elif bool(artifact.get("actual_order_submitted")):
+            item_blocked.append("actual_order_submitted_not_allowed")
+        elif not _artifact_matches_bridge_candidate(artifact, item):
+            item_blocked.append("approval_candidate_id_mismatch")
+        if item_blocked:
+            blocked.extend(f"{reason}:{family}" for reason in item_blocked)
+            continue
+        recommended = item.get("recommended_values") if isinstance(item.get("recommended_values"), dict) else {}
+        approved_requests.append(
+            {
+                **item,
+                "policy_id": family,
+                "approval_id": str(artifact.get("approval_id") or f"{family}:{source_date}"),
+                "approval_state": "approved_live",
+                "approval_artifact": str(artifact_path) if artifact_path else None,
+                "approval_runtime_scope": contract.get("approval_runtime_scope"),
+                "calibration_state": "approved_live",
+                "threshold_version": recommended.get("threshold_version") or f"{family}:{source_date}",
+                "allowed_runtime_apply": True,
+                "safety_revert_required": False,
+                "runtime_apply_bridge_family": family,
+                "bridge_candidate_id": candidate_id,
+                "source_bucket_key": ",".join(str(value) for value in item.get("source_bucket_keys") or []),
+                "actual_runtime_effect": item.get("runtime_effect_after_approval"),
+                "actual_order_submitted": False,
+                "decision_authority": "approved_ldm_bucket_runtime_bridge",
+            }
+        )
+    return {
+        "request_report": str(report_path) if report_path.exists() else None,
+        "artifacts": artifacts,
+        "artifact_payloads": artifact_payloads,
+        "candidates": candidates,
+        "approved_requests": approved_requests,
+        "blocked": blocked,
+    }
+
+
+def _select_runtime_apply_bridge_approval(
+    bundle: dict[str, Any],
+    *,
+    include_families: set[str] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
+    selected: list[dict[str, Any]] = []
+    decisions: list[dict[str, Any]] = []
+    env_overrides: dict[str, str] = {}
+    selected_by_stage: dict[str, str] = {}
+    for item in sorted(bundle.get("approved_requests") or [], key=lambda row: int(row.get("priority") or 999)):
+        if not isinstance(item, dict):
+            continue
+        family = str(item.get("family") or "")
+        stage = str(item.get("stage") or "unknown")
+        overrides = _env_overrides_for_candidate(item)
+        reject_reason = ""
+        if include_families is not None and family not in include_families:
+            reject_reason = "operator_family_filter_excluded"
+        elif bool(item.get("actual_order_submitted")):
+            reject_reason = "actual_order_submission_not_allowed"
+        elif not bool(item.get("allowed_runtime_apply")):
+            reject_reason = "runtime_apply_not_allowed"
+        elif stage in selected_by_stage:
+            reject_reason = f"same_stage_owner_conflict:{selected_by_stage[stage]}"
+        elif not overrides:
+            reject_reason = "no_runtime_env_override"
+        decision = {
+            "approval_id": item.get("approval_id"),
+            "family": family,
+            "stage": stage,
+            "bridge_candidate_id": item.get("bridge_candidate_id"),
+            "runtime_apply_bridge_family": item.get("runtime_apply_bridge_family"),
+            "source_bucket_keys": item.get("source_bucket_keys") or [],
+            "actual_runtime_effect": item.get("actual_runtime_effect"),
+            "selected": not bool(reject_reason),
+            "decision_reason": reject_reason or "user_approval_artifact_accepted_bridge_ready",
+            "env_overrides": overrides if not reject_reason else {},
+            "actual_order_submitted": False,
+        }
+        decisions.append(decision)
+        if reject_reason:
+            continue
+        selected_by_stage[stage] = family
+        selected.append(item)
+        env_overrides.update(overrides)
+    return selected, decisions, env_overrides
+
+
 def _ai_guard_allows_candidate(candidate: dict[str, Any], ai_review: dict[str, Any], *, require_ai: bool) -> tuple[bool, str]:
     if str(candidate.get("family") or "") == "latency_classifier_runtime_profile":
         return (True, "deterministic_latency_classifier_recommendation")
@@ -967,6 +1135,7 @@ def _write_runtime_env(target_date: str, manifest: dict[str, Any], env_overrides
                         *(manifest.get("auto_apply_selected") or []),
                         *((manifest.get("swing_runtime_approval") or {}).get("selected") or []),
                         *((manifest.get("scalp_sim_scale_in_window_approval") or {}).get("selected") or []),
+                        *((manifest.get("runtime_apply_bridge") or {}).get("selected") or []),
                     ]
                 ],
             },
@@ -1051,6 +1220,8 @@ def build_preopen_apply_manifest(
         swing_selected, swing_decisions, swing_env_overrides = ([], [], {})
         scalp_scale_bundle = _load_scalp_sim_scale_in_window_approval(report_source_date)
         scalp_scale_selected, scalp_scale_decisions, scalp_scale_env_overrides = ([], [], {})
+        runtime_bridge_bundle = _load_runtime_apply_bridge_approval(report_source_date)
+        runtime_bridge_selected, runtime_bridge_decisions, runtime_bridge_env_overrides = ([], [], {})
         if auto_apply_requested:
             selected, decisions, env_overrides = _select_auto_apply_candidates(
                 calibration_candidates,
@@ -1063,6 +1234,12 @@ def build_preopen_apply_manifest(
             scalp_scale_selected, scalp_scale_decisions, scalp_scale_env_overrides = (
                 _select_scalp_sim_scale_in_window_approval(scalp_scale_bundle)
             )
+            runtime_bridge_selected, runtime_bridge_decisions, runtime_bridge_env_overrides = (
+                _select_runtime_apply_bridge_approval(
+                    runtime_bridge_bundle,
+                    include_families=include_families,
+                )
+            )
             lifecycle_context_overlay, lifecycle_context_env_overrides = _lifecycle_ai_context_overlay_env(
                 calibration_candidates,
                 include_families=include_families,
@@ -1072,6 +1249,7 @@ def build_preopen_apply_manifest(
                 **lifecycle_context_env_overrides,
                 **swing_env_overrides,
                 **scalp_scale_env_overrides,
+                **runtime_bridge_env_overrides,
             }
         runtime_change = bool(auto_apply_requested and env_overrides)
         status = (
@@ -1139,6 +1317,16 @@ def build_preopen_apply_manifest(
                 "approved_request": scalp_scale_bundle.get("approved_request"),
                 "selected": scalp_scale_selected,
                 "decisions": scalp_scale_decisions,
+            },
+            "runtime_apply_bridge": {
+                "request_report": runtime_bridge_bundle.get("request_report"),
+                "artifacts": runtime_bridge_bundle.get("artifacts") or {},
+                "candidate_count": len(runtime_bridge_bundle.get("candidates") or []),
+                "approved": len(runtime_bridge_bundle.get("approved_requests") or []),
+                "blocked": runtime_bridge_bundle.get("blocked") or [],
+                "approved_requests": runtime_bridge_bundle.get("approved_requests") or [],
+                "selected": runtime_bridge_selected,
+                "decisions": runtime_bridge_decisions,
             },
             "runtime_env_file": str(runtime_env_path(target_date)) if auto_apply_requested else None,
             "runtime_env_overrides": env_overrides,

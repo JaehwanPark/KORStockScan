@@ -5,6 +5,51 @@ import pytest
 from src.engine import threshold_cycle_ev_report as mod
 
 
+def test_runtime_apply_bridge_summary_preserves_post_apply_provenance():
+    manifest = {
+        "runtime_apply_bridge": {
+            "request_report": "data/report/runtime_apply_bridge/runtime_apply_bridge_2026-05-21.json",
+            "artifacts": {
+                "entry_wait6579_score66_69_recovery_gate_v1": (
+                    "data/threshold_cycle/approvals/ldm_entry_runtime_bridge_2026-05-21.json"
+                )
+            },
+            "candidate_count": 2,
+            "approved": 1,
+            "blocked": [],
+            "selected": [
+                {
+                    "family": "entry_wait6579_score66_69_recovery_gate_v1",
+                    "stage": "entry",
+                    "approval_id": "entry-approval",
+                    "runtime_apply_bridge_family": "entry_wait6579_score66_69_recovery_gate_v1",
+                    "bridge_candidate_id": "entry_wait6579_score66_69_recovery_gate_v1:2026-05-21",
+                    "source_bucket_key": "score=score_66_69|source=wait6579_ev_cohort",
+                    "actual_runtime_effect": "bounded_entry_probe_recovery",
+                }
+            ],
+            "decisions": [
+                {
+                    "family": "entry_wait6579_score66_69_recovery_gate_v1",
+                    "stage": "entry",
+                    "selected": True,
+                    "decision_reason": "user_approval_artifact_accepted_bridge_ready",
+                    "approval_id": "entry-approval",
+                    "bridge_candidate_id": "entry_wait6579_score66_69_recovery_gate_v1:2026-05-21",
+                    "actual_runtime_effect": "bounded_entry_probe_recovery",
+                }
+            ],
+        }
+    }
+
+    assert mod._selected_families(manifest) == ["entry_wait6579_score66_69_recovery_gate_v1"]
+    summary = mod._runtime_apply_bridge_summary(manifest)
+    assert summary["selected_count"] == 1
+    assert summary["selected"][0]["approval_id"] == "entry-approval"
+    assert summary["selected"][0]["source_bucket_key"] == "score=score_66_69|source=wait6579_ev_cohort"
+    assert summary["selected"][0]["actual_runtime_effect"] == "bounded_entry_probe_recovery"
+
+
 @pytest.fixture(autouse=True)
 def _isolate_pattern_lab_audit_dirs(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing_currentness_audit")

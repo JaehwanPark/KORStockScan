@@ -173,17 +173,28 @@ def _selected_families(apply_manifest: dict[str, Any]) -> list[str]:
             if str(value or "").strip()
         ]
     selected = apply_manifest.get("auto_apply_selected")
+    bridge_selected = ((apply_manifest.get("runtime_apply_bridge") or {}).get("selected") or [])
     if isinstance(selected, list) and selected:
         families = [str(item.get("family") or "") for item in selected if isinstance(item, dict) and item.get("family")]
         swing_selected = ((apply_manifest.get("swing_runtime_approval") or {}).get("selected") or [])
         families.extend(
             str(item.get("family") or "") for item in swing_selected if isinstance(item, dict) and item.get("family")
         )
+        families.extend(
+            str(item.get("family") or "") for item in bridge_selected if isinstance(item, dict) and item.get("family")
+        )
         families.extend(preserved)
         return _dedupe(families)
     swing_selected = ((apply_manifest.get("swing_runtime_approval") or {}).get("selected") or [])
     if isinstance(swing_selected, list) and swing_selected:
         families = [str(item.get("family") or "") for item in swing_selected if isinstance(item, dict) and item.get("family")]
+        families.extend(
+            str(item.get("family") or "") for item in bridge_selected if isinstance(item, dict) and item.get("family")
+        )
+        families.extend(preserved)
+        return _dedupe(families)
+    if isinstance(bridge_selected, list) and bridge_selected:
+        families = [str(item.get("family") or "") for item in bridge_selected if isinstance(item, dict) and item.get("family")]
         families.extend(preserved)
         return _dedupe(families)
     if preserved:
@@ -258,6 +269,46 @@ def _swing_runtime_approval_summary(apply_manifest: dict[str, Any]) -> dict[str,
             if isinstance(item, dict)
         ],
         "decisions": decisions,
+    }
+
+
+def _runtime_apply_bridge_summary(apply_manifest: dict[str, Any]) -> dict[str, Any]:
+    bridge = apply_manifest.get("runtime_apply_bridge") if isinstance(apply_manifest.get("runtime_apply_bridge"), dict) else {}
+    selected = bridge.get("selected") if isinstance(bridge.get("selected"), list) else []
+    decisions = bridge.get("decisions") if isinstance(bridge.get("decisions"), list) else []
+    return {
+        "request_report": bridge.get("request_report"),
+        "artifacts": bridge.get("artifacts") or {},
+        "candidate_count": _safe_int(bridge.get("candidate_count"), len(bridge.get("candidates") or [])),
+        "approved": _safe_int(bridge.get("approved"), len(bridge.get("approved_requests") or [])),
+        "selected_count": len(selected),
+        "blocked": bridge.get("blocked") or [],
+        "selected": [
+            {
+                "family": item.get("family"),
+                "stage": item.get("stage"),
+                "approval_id": item.get("approval_id"),
+                "runtime_apply_bridge_family": item.get("runtime_apply_bridge_family"),
+                "bridge_candidate_id": item.get("bridge_candidate_id"),
+                "source_bucket_key": item.get("source_bucket_key"),
+                "actual_runtime_effect": item.get("actual_runtime_effect"),
+            }
+            for item in selected
+            if isinstance(item, dict)
+        ],
+        "decisions": [
+            {
+                "family": item.get("family"),
+                "stage": item.get("stage"),
+                "selected": bool(item.get("selected")),
+                "decision_reason": item.get("decision_reason"),
+                "approval_id": item.get("approval_id"),
+                "bridge_candidate_id": item.get("bridge_candidate_id"),
+                "actual_runtime_effect": item.get("actual_runtime_effect"),
+            }
+            for item in decisions
+            if isinstance(item, dict)
+        ],
     }
 
 
@@ -1028,6 +1079,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "status": apply_manifest.get("status"),
             "selected_families": selected_families,
             "runtime_env_file": apply_manifest.get("runtime_env_file"),
+            "runtime_apply_bridge": _runtime_apply_bridge_summary(apply_manifest),
         },
         "daily_ev_summary": {
             "completed_trades": completed,
