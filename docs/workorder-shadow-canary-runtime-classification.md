@@ -1,7 +1,7 @@
 # 작업지시서: Shadow/Canary 런타임 경로와 Live Cohort 분류 기준
 
 작성일: `2026-04-25 KST`  
-마지막 갱신: `2026-05-19 KST`
+마지막 갱신: `2026-05-21 KST`
 대상: KORStockScan 메인 코드베이스 운영/튜닝 문서 소유자  
 ApplyTarget: `main` 문서/후속 코드정리 기준  
 
@@ -94,6 +94,22 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
 | `score65_74_recovery_probe` | active operator-selected entry cohort | 5/19 runtime env에 사용자 reopen lock으로 로드됐다 | rolling/cumulative EV와 blocker attribution으로만 판정. score bucket 고정 정책 금지 |
 
 5/19 결론은 active shadow가 없다는 점을 잠그고, 신규 sim 확대축은 `shadow`가 아니라 `sim-only cohort` 또는 `approval-required actuator`로 분류한다. 남아 있는 `hard_time_stop_shadow`, `partial_only_timeout_shadow`, `same_symbol_soft_stop_cooldown_shadow`, `dual_persona_shadow`, prompt shadow 계열은 기본 OFF 또는 historical/dashboard label이며 현재 runtime owner가 아니다.
+
+### 2026-05-21 POSTCLOSE Snapshot Addendum
+
+이 addendum은 `threshold_cycle_ev_2026-05-21`, `runtime_approval_summary_2026-05-21`, `lifecycle_decision_matrix_2026-05-21`, `bedrock_nova_micro_shadow_report_2026-05-21`, `threshold_cycle_postclose_verification_2026-05-21` 기준의 당일 분류 보정이다. 결론은 `no_runtime_classification_change_with_2026_05_21_snapshot`이다.
+
+| 축 | 2026-05-21 판정 | 근거 | 다음 액션 |
+| --- | --- | --- | --- |
+| `Bedrock Nova Micro bypass` | shadow observation only / primary 승격 없음 | Micro shadow는 `row_count=2516`, parse ok rate `0.9996`, latency/cost 이점이 있으나 exact outcome match `30/157`, `nova_minus_openai=-6`으로 primary 우회 근거가 닫히지 않음 | exact `sim_record_id` outcome 표본과 stage별 품질이 충분해질 때까지 `keep_shadow_collecting` |
+| `Bedrock Nova Lite overnight shadow` | shadow observation only | overnight 주판정은 OpenAI `gpt-5.4-mini`이며 Lite는 동일 입력 observation/report만 남긴다. action 결정, provider route 변경, live order enable 권한 없음 | shadow JSONL/report에서 latency/cost/action drift만 누적 |
+| `scalp_sim_overnight_ai_carry` | sim-only source / hard gate 아님 | 15:20 preclose runner와 LDM 소비 경로는 `decision_authority=sim_observation_only`, `actual_order_submitted=false`, `broker_order_forbidden=true`를 유지한다 | 다음 postclose에서 decision coverage와 carry label join을 source-quality로 확인 |
+| `lifecycle_decision_matrix_runtime` | selected source-bundle owner / promote 없음 | LDM은 `total_rows=40910`, `joined=39149`, policy pass `5`지만 `promote_ready_count=0`; entry/scale bucket 후보는 approval-required source-only다 | entry/scale/overnight bucket handoff를 verifier로 계속 감리하고 runtime mutation은 PREOPEN guard 이후만 허용 |
+| `scalp_sim_candidate_window_expansion` | sim-only selected cohort / 160 유지 | `max_daily=160`에서 sim completed `166`, duplicate buy signal `374`, candidate window discarded `1645`, entry join rate `0.1388`; 240 상향 근거 부족 | `hold_160_until_persistent_counter_fixed`로 닫고 다음 postclose에서 재판정 |
+| `scalp_sim_ai_budget_manager` | sim-only budget/provenance owner | live/reuse/deferred/critical bypass attribution은 sim lifecycle source 품질 확인용이며 provider route, BUY/submit threshold, broker guard 변경 권한 없음 | deferred/exhausted row가 LDM/source-quality consumer로 이어지는지 계속 확인 |
+| postclose bot restart isolation | operations/runbook control, strategy cohort 아님 | 16:10 wrapper의 bot stop/restart 격리는 resource isolation이다. 5/21 wrapper는 daily report 단계에서 kill됐고 수동 복구로 verifier가 `pass_with_pending_done_marker`를 냈다 | 다음 postclose에서 `[DONE]` marker와 resource guard를 확인하고 daily report RSS workorder로 보완 |
+
+5/21 결론은 신규 `remove`, `baseline-promote`, 추가 `active-canary` 전환 없음이다. Bedrock shadow, scalp sim overnight, LDM bucket attribution, runbook restart isolation은 모두 실주문/threshold/provider/bot 전략 변경 권한을 갖지 않는다.
 
 ## 0.1 Runtime ON/OFF 스냅샷 (`2026-05-12` 기준)
 

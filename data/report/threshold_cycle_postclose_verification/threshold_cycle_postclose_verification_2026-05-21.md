@@ -62,11 +62,11 @@
 - interpretation: `LDM overnight bucket candidates and workorders propagated to threshold EV, runtime summary, and code workorder.`
 
 ## Workorder Snapshot
-- generation_id: `2026-05-21-bd7e0459a9e4`
-- source_hash: `bd7e0459a9e460d343c654e73ce3b43e773b264a04eb77977ba72805a4f1d1c4`
+- generation_id: `2026-05-21-16f7750b449e`
+- source_hash: `16f7750b449e1d042c227fc2486b758606989a639a73c64efe835add754ce9aa`
 - snapshot_status: `source_changed_with_lineage`
-- previous_generation_id: `2026-05-21-e9f745d9030d`
-- previous_source_hash: `e9f745d9030dcc02b77c0f8313caeb1ccf4538095fc501bfd20a4e59f343b147`
+- previous_generation_id: `2026-05-21-bd7e0459a9e4`
+- previous_source_hash: `bd7e0459a9e460d343c654e73ce3b43e773b264a04eb77977ba72805a4f1d1c4`
 - new_order_ids: `[]`
-- removed_order_ids: `[]`
+- removed_order_ids: `['order_ai_source_quality_not_evaluated_provenance', 'order_high_volume_diagnostic_stage_contract_labels']`
 - decision_changed_order_ids: `[]`

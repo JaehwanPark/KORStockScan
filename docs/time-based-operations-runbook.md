@@ -367,6 +367,16 @@ ls -l data/report/panic_sell_defense/panic_sell_defense_$(TZ=Asia/Seoul date +%F
 
 POSTCLOSE 최상위 감리는 `Tuning Chain Control State`(튜닝 체인 관제 상태)로 남긴다. 이 관제 상태는 EV 손익의 좋고 나쁨이 아니라 자동화체인이 매일 믿을 수 있게 수집, 분석, 해석, 라우팅, 반영, 피드백까지 이어졌는지 보는 운영 판정이다. 새 리포트나 새 checklist 항목을 만들지 않고, 기존 `PostcloseAutomationHealthCheckYYYYMMDD` 실행 메모에 `상태 / 막힌 단계 / 영향 / 조치` 4요소만 기록한다.
 
+### Runbook 운영 확인 완료 기록
+
+- `[PostcloseAutomationHealthCheck20260521] 장후 자동화체인 상태 확인` (`Due: 2026-05-21`, `Slot: POSTCLOSE`, `TimeWindow: 16:10~20:45`)
+  - 판정: `warning`
+  - Tuning Chain Control State: `YELLOW`
+  - blocked_stage: `chain_completion`
+  - impact: 16:10 postclose wrapper는 `daily_threshold_cycle_report` 단계에서 OS kill로 terminal `[DONE]` marker 없이 종료됐다. 이후 수동 복구로 `threshold_cycle_ev`, `runtime_approval_summary`, `lifecycle_decision_matrix`, `code_improvement_workorder`, `threshold_cycle_postclose_verification` 산출물과 downstream handoff는 복원됐으므로 다음 PREOPEN 입력은 artifact 기준으로 읽을 수 있지만, 원천 wrapper 완료성은 경고로 남긴다.
+  - 근거: [threshold_cycle_postclose_cron.log](/home/ubuntu/KORStockScan/logs/threshold_cycle_postclose_cron.log)는 `deploy/cpu_affinity_profile.sh ... Killed taskset ... daily_threshold_cycle_report`를 남겼다. [threshold_cycle_postclose_verification_2026-05-21.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_2026-05-21.json)은 `status=pass_with_pending_done_marker`, `missing_required_artifacts=[]`, `missing_downstream_links=[]`, `entry/scale_in/overnight handoff=pass`다. `error_detector --mode full --dry-run` 기준 process/resource/artifact freshness는 pass이며, 남은 warning은 preclose overnight log 미도래/미생성 계열이다.
+  - 다음 액션: 다음 16:10 postclose에서 bot restart isolation이 `[DONE]` marker까지 닫히는지 확인한다. `daily_threshold_cycle_report` peak RSS는 streaming/chunked aggregation workorder로 줄이고, 이 운영 경고를 threshold/order/provider/bot restart 전략 효과 근거로 쓰지 않는다.
+
 | 상태 | 의미 | 닫는 기준 |
 | --- | --- | --- |
 | `GREEN` | R0~R6, workorder, approval/runtime routing, post-apply attribution이 모두 복원 가능 | 다음 PREOPEN 입력으로 사용할 수 있으며, 별도 신규 조치 없음 |
