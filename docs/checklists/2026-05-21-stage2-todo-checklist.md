@@ -24,6 +24,14 @@
   - 금지: `240` 상향을 장중 runtime env 직접 수정, restart만으로 적용, real order enable, Telegram BUY/SELL, provider route, bot restart trigger로 연결하지 않는다.
   - 다음 액션: `keep_160_coverage_enough`, `preopen_candidate_240`, `hold_160_until_persistent_counter_fixed`, `defer_source_quality_or_bucket_skew` 중 하나로 닫고, `preopen_candidate_240`이면 다음 PREOPEN `threshold_cycle_preopen_apply` 확인 항목을 생성한다.
 
+- [ ] `[BedrockNovaMicroBypassPromotionReview0521] OpenAI nano 호출 지점의 Bedrock Nova Micro 우회 정식 승격 여부 판단` (`Due: 2026-05-21`, `Slot: POSTCLOSE`, `TimeWindow: 17:40~18:05`, `Track: AITransport`)
+  - Source: [bedrock_nova_micro_shadow_report_2026-05-21.json](/home/ubuntu/KORStockScan/data/report/bedrock_nova_micro_shadow/bedrock_nova_micro_shadow_report_2026-05-21.json), [bedrock_nova_micro_shadow_report_2026-05-21.md](/home/ubuntu/KORStockScan/data/report/bedrock_nova_micro_shadow/bedrock_nova_micro_shadow_report_2026-05-21.md), [bedrock_nova_micro_shadow_2026-05-21.jsonl](/home/ubuntu/KORStockScan/data/report/bedrock_nova_micro_shadow/bedrock_nova_micro_shadow_2026-05-21.jsonl), [sim_post_sell_candidates_2026-05-21.jsonl](/home/ubuntu/KORStockScan/data/post_sell/sim_post_sell_candidates_2026-05-21.jsonl), [bedrock_nova_provider.py](/home/ubuntu/KORStockScan/src/engine/bedrock_nova_provider.py), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py)
+  - 판정 기준: `outcome_linked_performance`의 exact `sim_record_id` matched sample을 primary로 보고, `entry/watch`, `scalp_sim_holding_review`, `unknown/no-stage`를 분리한다. `nova_minus_openai_outcome_score`, `nova_edge_count/openai_edge_count/tie_count`, stage별 `avg_profit_rate`, action confusion, parse_ok_rate, cache 포함 cost ratio, p50/p90/p95 latency를 함께 확인한다.
+  - 코드 준비 확인: Micro 승격은 `KORSTOCKSCAN_BEDROCK_NOVA_MICRO_ROUTE_MODE=primary`만 사용하고 Lite 승격과 분리한다. Micro primary 성공 시 OpenAI 호출과 Micro shadow enqueue가 발생하지 않아야 하며, Bedrock primary 실패 후 OpenAI failback 시에도 같은 모델 shadow 재호출로 중복 지출하지 않아야 한다.
+  - 표본 기준: exact outcome match가 부족하거나 stage별 표본이 한쪽에 쏠리면 `defer_source_quality_gap` 또는 `keep_shadow_collecting`으로 닫는다. unmatched row, 근접 시간 매칭, instrumentation 이전 row는 승격 근거가 아니라 join-quality 보완 근거로만 쓴다.
+  - 금지: 장중 provider route 변경, threshold 변경, 주문 판단 변경, real order enable, bot restart trigger, OpenAI route 즉시 대체, Lite 승격과 합산 판단, 튜닝체인 자동 apply 연결 금지. 승격 후보가 나오면 별도 approval/workorder와 rollback guard를 만든 뒤 다음 PREOPEN 후보로만 넘긴다.
+  - 다음 액션: `promote_candidate_requires_approval`, `keep_shadow_collecting`, `reject_provider_bypass`, `defer_source_quality_gap` 중 하나로 닫고, 승격 후보일 경우 `target_stage`, `baseline cohort`, `candidate provider cohort`, `observe-only cohort`, `excluded cohort`, `rollback owner`, `cross-contamination check`를 함께 기록한다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-05-20` postclose -> `2026-05-21`)
 

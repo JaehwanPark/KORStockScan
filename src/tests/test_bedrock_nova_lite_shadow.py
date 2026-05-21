@@ -1,18 +1,19 @@
 import json
 
-from src.tests import bedrock_nova_micro_shadow as mod
+from src.tests import bedrock_nova_lite_shadow as mod
 
 
 def test_shadow_disabled_does_not_enqueue():
-    manager = mod.BedrockNovaMicroShadowManager(enabled=False)
-    assert manager.should_shadow(model_name="gpt-5-nano", require_json=True) is False
-
-
-def test_shadow_filter_only_accepts_gpt5_nano_json():
-    manager = mod.BedrockNovaMicroShadowManager(enabled=True)
-    assert manager.should_shadow(model_name="gpt-5-nano", require_json=True) is True
+    manager = mod.BedrockNovaLiteShadowManager(enabled=False)
     assert manager.should_shadow(model_name="gpt-5.4-mini", require_json=True) is False
-    assert manager.should_shadow(model_name="gpt-5-nano", require_json=False) is False
+
+
+def test_shadow_filter_only_accepts_gpt54_mini_json():
+    manager = mod.BedrockNovaLiteShadowManager(enabled=True)
+    assert manager.should_shadow(model_name="gpt-5.4-mini", require_json=True) is True
+    assert manager.should_shadow(model_name="gpt-5-nano", require_json=True) is False
+    assert manager.should_shadow(model_name="gpt-5.4", require_json=True) is False
+    assert manager.should_shadow(model_name="gpt-5.4-mini", require_json=False) is False
 
 
 def test_loads_bedrock_api_key_from_config(tmp_path, monkeypatch):
@@ -55,7 +56,7 @@ def test_worker_error_and_queue_full_do_not_raise(tmp_path, monkeypatch):
         def converse(self, **kwargs):
             raise RuntimeError("aws down")
 
-    manager = mod.BedrockNovaMicroShadowManager(
+    manager = mod.BedrockNovaLiteShadowManager(
         enabled=True,
         client_factory=lambda: FailingClient(),
         queue_max=1,
@@ -85,7 +86,7 @@ def test_successful_worker_writes_comparison_row(tmp_path, monkeypatch):
                 "usage": {"inputTokens": 90, "outputTokens": 12},
             }
 
-    manager = mod.BedrockNovaMicroShadowManager(enabled=True, client_factory=lambda: Client(), workers=1)
+    manager = mod.BedrockNovaLiteShadowManager(enabled=True, client_factory=lambda: Client(), workers=1)
     assert manager.enqueue(
         prompt="p",
         user_input="u",
@@ -134,7 +135,7 @@ def test_prompt_cache_adds_cachepoint_and_records_cache_usage(tmp_path, monkeypa
                 },
             }
 
-    manager = mod.BedrockNovaMicroShadowManager(
+    manager = mod.BedrockNovaLiteShadowManager(
         enabled=True,
         client_factory=lambda: Client(),
         workers=1,

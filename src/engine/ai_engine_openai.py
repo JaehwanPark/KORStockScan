@@ -1440,6 +1440,9 @@ class GPTSniperEngine:
             "openai_endpoint_name": request.endpoint_name,
             "openai_schema_name": request.schema_name or "-",
         }
+        bedrock_primary_payload = self._try_bedrock_primary_provider(request=request, transport_meta=transport_meta)
+        if isinstance(bedrock_primary_payload, dict):
+            return bedrock_primary_payload
         result = None
         if self._should_use_responses_ws(request):
             try:
@@ -1524,7 +1527,7 @@ class GPTSniperEngine:
             transport_meta.update(result.usage_meta)
         self._set_last_transport_meta(transport_meta)
         if isinstance(result.payload, dict):
-            self._enqueue_bedrock_nova_micro_runtime_shadow(
+            self._enqueue_bedrock_runtime_shadows(
                 request=request,
                 openai_payload=result.payload,
                 transport_meta=transport_meta,
@@ -1532,6 +1535,128 @@ class GPTSniperEngine:
             )
             return result.payload
         return str(result.payload or "").strip()
+
+    def _try_bedrock_primary_provider(self, *, request: OpenAIResponseRequest, transport_meta: dict[str, Any]):
+        if not bool(request.require_json):
+            return None
+        model_name = str(request.model_name or "")
+        if model_name == "gpt-5-nano":
+            configured_route_mode = os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_ROUTE_MODE", "shadow")
+        elif model_name == "gpt-5.4-mini":
+            configured_route_mode = os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "shadow")
+        else:
+            return None
+        if str(configured_route_mode or "").strip().lower() != "primary":
+            return None
+        try:
+            from src.engine.bedrock_nova_provider import (
+                BedrockNovaProviderError,
+                provider_audit_row,
+                route_mode_for_model,
+                runtime_provider,
+                write_provider_audit_row,
+            )
+
+            route_mode, profile = route_mode_for_model(request.model_name)
+            if route_mode != "primary" or profile is None:
+                return None
+            result = runtime_provider().converse(prompt=request.prompt or "", user_input=request.user_input, profile=profile)
+            request_meta = self._build_bedrock_shadow_request_meta(request=request, transport_meta=transport_meta, roundtrip_ms=result.latency_ms)
+            request_meta["request_id"] = request.request_id
+            if not result.parse_ok or not isinstance(result.payload, dict) or not result.payload:
+                write_provider_audit_row(
+                    provider_audit_row(
+                        request_meta=request_meta,
+                        result=result,
+                        payload=result.payload,
+                        error_type=result.parse_error or "parse_failed",
+                    )
+                )
+                raise BedrockNovaProviderError(
+                    result.parse_error or "Bedrock Nova primary returned invalid JSON",
+                    error_type=result.parse_error or "parse_failed",
+                    attempts=result.attempted_key_count,
+                )
+            transport_meta.update(result.transport_meta())
+            transport_meta.update(
+                {
+                    "openai_transport_mode": "bedrock_primary",
+                    "openai_ws_used": False,
+                    "openai_ws_http_fallback": False,
+                    "openai_ws_roundtrip_ms": int(result.latency_ms),
+                    "bedrock_primary_used": True,
+                    "bedrock_failback_used": False,
+                }
+            )
+            self._set_last_transport_meta(transport_meta)
+            write_provider_audit_row(provider_audit_row(request_meta=request_meta, result=result, payload=result.payload))
+            return result.payload
+        except Exception as exc:
+            failback_enabled = str(os.getenv("KORSTOCKSCAN_BEDROCK_PRIMARY_FAILBACK_TO_OPENAI", "true")).strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "y",
+                "on",
+            }
+            transport_meta.update(
+                {
+                    "bedrock_primary_used": False,
+                    "bedrock_failback_used": True,
+                    "bedrock_failback_error_type": type(exc).__name__,
+                }
+            )
+            try:
+                from src.engine.bedrock_nova_provider import provider_audit_row, write_provider_audit_row
+
+                request_meta = self._build_bedrock_shadow_request_meta(request=request, transport_meta=transport_meta, roundtrip_ms=0)
+                request_meta["request_id"] = request.request_id
+                write_provider_audit_row(
+                    provider_audit_row(
+                        request_meta=request_meta,
+                        result=None,
+                        payload={},
+                        error_type=type(exc).__name__,
+                        error_message=str(exc),
+                    )
+                )
+            except Exception:
+                pass
+            if not failback_enabled:
+                raise
+            log_error(f"⚠️ [Bedrock Nova primary failback] {request.context_name}: {type(exc).__name__}")
+            return None
+
+    def _build_bedrock_shadow_request_meta(self, *, request, transport_meta, roundtrip_ms=0):
+        return {
+            "openai_request_id": transport_meta.get("openai_request_id") or request.request_id,
+            "endpoint_name": request.endpoint_name,
+            "prompt_type": request.endpoint_name,
+            "symbol": request.symbol,
+            "cache_key": request.cache_key,
+            "pipeline_stage": request.endpoint_name,
+            "record_id": (request.metadata or {}).get("record_id"),
+            "sim_record_id": (request.metadata or {}).get("sim_record_id"),
+            "sim_parent_record_id": (request.metadata or {}).get("sim_parent_record_id"),
+            "entry_adm_candidate_id": (request.metadata or {}).get("entry_adm_candidate_id"),
+            "source_event_stage": (request.metadata or {}).get("source_event_stage"),
+            "pipeline_event_emitted_at": (request.metadata or {}).get("pipeline_event_emitted_at"),
+            "openai_latency_ms": roundtrip_ms or transport_meta.get("openai_ws_roundtrip_ms") or 0,
+        }
+
+    def _enqueue_bedrock_runtime_shadows(self, *, request, openai_payload, transport_meta, roundtrip_ms=0):
+        self._enqueue_bedrock_nova_micro_runtime_shadow(
+            request=request,
+            openai_payload=openai_payload,
+            transport_meta=transport_meta,
+            roundtrip_ms=roundtrip_ms,
+        )
+        self._enqueue_bedrock_nova_lite_runtime_shadow(
+            request=request,
+            openai_payload=openai_payload,
+            transport_meta=transport_meta,
+            roundtrip_ms=roundtrip_ms,
+        )
 
     def _enqueue_bedrock_nova_micro_runtime_shadow(self, *, request, openai_payload, transport_meta, roundtrip_ms=0):
         try:
@@ -1545,7 +1670,9 @@ class GPTSniperEngine:
                 return
             if not (bool(request.require_json) and str(request.model_name) == "gpt-5-nano"):
                 return
-            from src.tests.bedrock_nova_micro_shadow import enqueue_runtime_shadow
+            if str(os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_ROUTE_MODE", "shadow")).strip().lower() == "primary":
+                return
+            from src.engine.bedrock_nova_micro_shadow import enqueue_runtime_shadow
 
             enqueue_runtime_shadow(
                 model_name=str(request.model_name),
@@ -1554,24 +1681,46 @@ class GPTSniperEngine:
                 user_input=request.user_input,
                 openai_payload=openai_payload,
                 transport_meta=transport_meta,
-                request_meta={
-                    "openai_request_id": transport_meta.get("openai_request_id") or request.request_id,
-                    "endpoint_name": request.endpoint_name,
-                    "prompt_type": request.endpoint_name,
-                    "symbol": request.symbol,
-                    "cache_key": request.cache_key,
-                    "pipeline_stage": request.endpoint_name,
-                    "record_id": (request.metadata or {}).get("record_id"),
-                    "sim_record_id": (request.metadata or {}).get("sim_record_id"),
-                    "sim_parent_record_id": (request.metadata or {}).get("sim_parent_record_id"),
-                    "entry_adm_candidate_id": (request.metadata or {}).get("entry_adm_candidate_id"),
-                    "source_event_stage": (request.metadata or {}).get("source_event_stage"),
-                    "pipeline_event_emitted_at": (request.metadata or {}).get("pipeline_event_emitted_at"),
-                    "openai_latency_ms": roundtrip_ms or transport_meta.get("openai_ws_roundtrip_ms") or 0,
-                },
+                request_meta=self._build_bedrock_shadow_request_meta(
+                    request=request,
+                    transport_meta=transport_meta,
+                    roundtrip_ms=roundtrip_ms,
+                ),
             )
         except Exception as exc:
             log_error(f"[BedrockNovaMicroShadow] enqueue skipped: {exc}")
+
+    def _enqueue_bedrock_nova_lite_runtime_shadow(self, *, request, openai_payload, transport_meta, roundtrip_ms=0):
+        try:
+            if str(os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_SHADOW_ENABLED", "")).strip().lower() not in {
+                "1",
+                "true",
+                "yes",
+                "y",
+                "on",
+            }:
+                return
+            if not (bool(request.require_json) and str(request.model_name) == "gpt-5.4-mini"):
+                return
+            if str(os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "shadow")).strip().lower() == "primary":
+                return
+            from src.engine.bedrock_nova_lite_shadow import enqueue_runtime_shadow
+
+            enqueue_runtime_shadow(
+                model_name=str(request.model_name),
+                require_json=bool(request.require_json),
+                prompt=request.prompt,
+                user_input=request.user_input,
+                openai_payload=openai_payload,
+                transport_meta=transport_meta,
+                request_meta=self._build_bedrock_shadow_request_meta(
+                    request=request,
+                    transport_meta=transport_meta,
+                    roundtrip_ms=roundtrip_ms,
+                ),
+            )
+        except Exception as exc:
+            log_error(f"[BedrockNovaLiteShadow] enqueue skipped: {exc}")
 
     # ==========================================
     # 데이터 포맷팅 (ai_engine.py 동일 복사)

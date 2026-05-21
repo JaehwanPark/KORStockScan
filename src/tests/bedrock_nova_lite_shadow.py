@@ -17,16 +17,16 @@ from src.utils.constants import CONFIG_PATH, DATA_DIR, DEV_PATH
 from src.utils.logger import log_error
 
 
-REPORT_DIR = DATA_DIR / "report" / "bedrock_nova_micro_shadow"
+REPORT_DIR = DATA_DIR / "report" / "bedrock_nova_lite_shadow"
 DECISION_AUTHORITY = "shadow_observation_only"
-DEFAULT_MODEL_ID = "apac.amazon.nova-micro-v1:0"
+DEFAULT_MODEL_ID = "apac.amazon.nova-lite-v1:0"
 DEFAULT_REGION = "ap-northeast-2"
-OPENAI_GPT5_NANO_INPUT_USD_PER_1M = 0.05
-OPENAI_GPT5_NANO_OUTPUT_USD_PER_1M = 0.40
-NOVA_MICRO_INPUT_USD_PER_1M = 0.035
-NOVA_MICRO_OUTPUT_USD_PER_1M = 0.14
-NOVA_MICRO_CACHE_READ_INPUT_USD_PER_1M = 0.0035
-NOVA_MICRO_CACHE_WRITE_INPUT_USD_PER_1M = 0.035
+OPENAI_GPT54_MINI_INPUT_USD_PER_1M = 0.75
+OPENAI_GPT54_MINI_OUTPUT_USD_PER_1M = 4.50
+NOVA_LITE_INPUT_USD_PER_1M = 0.06
+NOVA_LITE_OUTPUT_USD_PER_1M = 0.24
+NOVA_LITE_CACHE_READ_INPUT_USD_PER_1M = 0.006
+NOVA_LITE_CACHE_WRITE_INPUT_USD_PER_1M = 0.06
 
 
 def load_bedrock_api_key_from_config(config_path: Path | None = None) -> str:
@@ -119,10 +119,10 @@ def estimate_nova_cost_usd(
     output_tokens: Any,
     cache_read_input_tokens: Any = None,
     cache_write_input_tokens: Any = None,
-    input_usd_per_1m: float = NOVA_MICRO_INPUT_USD_PER_1M,
-    output_usd_per_1m: float = NOVA_MICRO_OUTPUT_USD_PER_1M,
-    cache_read_input_usd_per_1m: float = NOVA_MICRO_CACHE_READ_INPUT_USD_PER_1M,
-    cache_write_input_usd_per_1m: float = NOVA_MICRO_CACHE_WRITE_INPUT_USD_PER_1M,
+    input_usd_per_1m: float = NOVA_LITE_INPUT_USD_PER_1M,
+    output_usd_per_1m: float = NOVA_LITE_OUTPUT_USD_PER_1M,
+    cache_read_input_usd_per_1m: float = NOVA_LITE_CACHE_READ_INPUT_USD_PER_1M,
+    cache_write_input_usd_per_1m: float = NOVA_LITE_CACHE_WRITE_INPUT_USD_PER_1M,
 ) -> float:
     in_tokens = max(0, _safe_int(input_tokens) or 0)
     out_tokens = max(0, _safe_int(output_tokens) or 0)
@@ -142,7 +142,7 @@ def estimate_nova_cost_usd(
 
 def shadow_jsonl_path(target_date: str | None = None) -> Path:
     safe_date = target_date or datetime.now().strftime("%Y-%m-%d")
-    return REPORT_DIR / f"bedrock_nova_micro_shadow_{safe_date}.jsonl"
+    return REPORT_DIR / f"bedrock_nova_lite_shadow_{safe_date}.jsonl"
 
 
 @dataclass(frozen=True)
@@ -154,7 +154,7 @@ class NovaShadowJob:
     request_meta: dict[str, Any]
 
 
-class BedrockNovaMicroShadowManager:
+class BedrockNovaLiteShadowManager:
     def __init__(
         self,
         *,
@@ -168,8 +168,8 @@ class BedrockNovaMicroShadowManager:
         sample_rate: float = 1.0,
         max_output_tokens: int = 512,
         prompt_cache_enabled: bool = False,
-        cache_read_input_usd_per_1m: float = NOVA_MICRO_CACHE_READ_INPUT_USD_PER_1M,
-        cache_write_input_usd_per_1m: float = NOVA_MICRO_CACHE_WRITE_INPUT_USD_PER_1M,
+        cache_read_input_usd_per_1m: float = NOVA_LITE_CACHE_READ_INPUT_USD_PER_1M,
+        cache_write_input_usd_per_1m: float = NOVA_LITE_CACHE_WRITE_INPUT_USD_PER_1M,
         config_path: Path | None = None,
     ):
         self.is_enabled = bool(enabled)
@@ -191,7 +191,7 @@ class BedrockNovaMicroShadowManager:
         self._client = None
 
     def should_shadow(self, *, model_name: str, require_json: bool) -> bool:
-        return bool(self.is_enabled and require_json and str(model_name or "") == "gpt-5-nano")
+        return bool(self.is_enabled and require_json and str(model_name or "") == "gpt-5.4-mini")
 
     def enqueue(self, *, prompt: str, user_input: str, openai_payload: dict[str, Any], transport_meta: dict[str, Any], request_meta: dict[str, Any]) -> bool:
         if not self.is_enabled:
@@ -224,7 +224,7 @@ class BedrockNovaMicroShadowManager:
                 return
             self._queue = queue.Queue(maxsize=self.queue_max)
             for idx in range(self.workers):
-                thread = threading.Thread(target=self._worker_loop, name=f"bedrock-nova-micro-shadow-test-{idx}", daemon=True)
+                thread = threading.Thread(target=self._worker_loop, name=f"bedrock-nova-lite-shadow-test-{idx}", daemon=True)
                 thread.start()
                 self._threads.append(thread)
 
@@ -298,16 +298,16 @@ class BedrockNovaMicroShadowManager:
                 "estimated_openai_cost_usd": estimate_cost_usd(
                     job.transport_meta.get("openai_input_tokens"),
                     job.transport_meta.get("openai_output_tokens"),
-                    input_usd_per_1m=OPENAI_GPT5_NANO_INPUT_USD_PER_1M,
-                    output_usd_per_1m=OPENAI_GPT5_NANO_OUTPUT_USD_PER_1M,
+                    input_usd_per_1m=OPENAI_GPT54_MINI_INPUT_USD_PER_1M,
+                    output_usd_per_1m=OPENAI_GPT54_MINI_OUTPUT_USD_PER_1M,
                 ),
                 "estimated_nova_cost_usd": estimate_nova_cost_usd(
                     input_tokens=nova_input_tokens,
                     output_tokens=nova_output_tokens,
                     cache_read_input_tokens=nova_cache_read_input_tokens,
                     cache_write_input_tokens=nova_cache_write_input_tokens,
-                    input_usd_per_1m=NOVA_MICRO_INPUT_USD_PER_1M,
-                    output_usd_per_1m=NOVA_MICRO_OUTPUT_USD_PER_1M,
+                    input_usd_per_1m=NOVA_LITE_INPUT_USD_PER_1M,
+                    output_usd_per_1m=NOVA_LITE_OUTPUT_USD_PER_1M,
                     cache_read_input_usd_per_1m=self.cache_read_input_usd_per_1m,
                     cache_write_input_usd_per_1m=self.cache_write_input_usd_per_1m,
                 ),
@@ -360,7 +360,7 @@ class BedrockNovaMicroShadowManager:
         openai_action, openai_score = normalize_action_score(openai_payload)
         return {
             "schema_version": 1,
-            "event_type": "bedrock_nova_micro_shadow",
+            "event_type": "bedrock_nova_lite_shadow",
             "request_id": str(uuid.uuid4()),
             "openai_request_id": str(transport_meta.get("openai_request_id") or request_meta.get("openai_request_id") or ""),
             "endpoint_name": str(request_meta.get("endpoint_name") or transport_meta.get("openai_endpoint_name") or ""),
@@ -407,8 +407,8 @@ class BedrockNovaMicroShadowManager:
                 "estimated_openai_cost_usd": estimate_cost_usd(
                     transport_meta.get("openai_input_tokens"),
                     transport_meta.get("openai_output_tokens"),
-                    input_usd_per_1m=OPENAI_GPT5_NANO_INPUT_USD_PER_1M,
-                    output_usd_per_1m=OPENAI_GPT5_NANO_OUTPUT_USD_PER_1M,
+                    input_usd_per_1m=OPENAI_GPT54_MINI_INPUT_USD_PER_1M,
+                    output_usd_per_1m=OPENAI_GPT54_MINI_OUTPUT_USD_PER_1M,
                 ),
                 "estimated_nova_cost_usd": 0.0,
                 "parse_ok": False,
@@ -425,10 +425,10 @@ class BedrockNovaMicroShadowManager:
             with shadow_jsonl_path().open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
         except Exception as exc:
-            log_error(f"[BedrockNovaMicroShadowTest] write failed: {exc}")
+            log_error(f"[BedrockNovaLiteShadowTest] write failed: {exc}")
 
 
-_RUNTIME_MANAGER: BedrockNovaMicroShadowManager | None = None
+_RUNTIME_MANAGER: BedrockNovaLiteShadowManager | None = None
 _RUNTIME_SIGNATURE: tuple[Any, ...] | None = None
 
 
@@ -453,26 +453,26 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-def runtime_manager() -> BedrockNovaMicroShadowManager:
+def runtime_manager() -> BedrockNovaLiteShadowManager:
     global _RUNTIME_MANAGER, _RUNTIME_SIGNATURE
-    enabled = _env_bool("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_SHADOW_ENABLED", False)
-    model_id = os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_MODEL_ID", DEFAULT_MODEL_ID)
-    region_name = os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_REGION", DEFAULT_REGION)
+    enabled = _env_bool("KORSTOCKSCAN_BEDROCK_NOVA_LITE_SHADOW_ENABLED", False)
+    model_id = os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_MODEL_ID", DEFAULT_MODEL_ID)
+    region_name = os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_REGION", DEFAULT_REGION)
     signature = (
         enabled,
         model_id,
         region_name,
-        _env_int("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_WORKERS", 1),
-        _env_int("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_QUEUE_MAX", 200),
-        _env_int("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_TIMEOUT_MS", 5000),
-        _env_float("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_SAMPLE_RATE", 1.0),
-        _env_int("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_MAX_OUTPUT_TOKENS", 512),
-        _env_bool("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_PROMPT_CACHE_ENABLED", False),
-        _env_float("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_CACHE_READ_INPUT_USD_PER_1M", NOVA_MICRO_CACHE_READ_INPUT_USD_PER_1M),
-        _env_float("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_CACHE_WRITE_INPUT_USD_PER_1M", NOVA_MICRO_CACHE_WRITE_INPUT_USD_PER_1M),
+        _env_int("KORSTOCKSCAN_BEDROCK_NOVA_LITE_WORKERS", 1),
+        _env_int("KORSTOCKSCAN_BEDROCK_NOVA_LITE_QUEUE_MAX", 200),
+        _env_int("KORSTOCKSCAN_BEDROCK_NOVA_LITE_TIMEOUT_MS", 5000),
+        _env_float("KORSTOCKSCAN_BEDROCK_NOVA_LITE_SAMPLE_RATE", 1.0),
+        _env_int("KORSTOCKSCAN_BEDROCK_NOVA_LITE_MAX_OUTPUT_TOKENS", 512),
+        _env_bool("KORSTOCKSCAN_BEDROCK_NOVA_LITE_PROMPT_CACHE_ENABLED", False),
+        _env_float("KORSTOCKSCAN_BEDROCK_NOVA_LITE_CACHE_READ_INPUT_USD_PER_1M", NOVA_LITE_CACHE_READ_INPUT_USD_PER_1M),
+        _env_float("KORSTOCKSCAN_BEDROCK_NOVA_LITE_CACHE_WRITE_INPUT_USD_PER_1M", NOVA_LITE_CACHE_WRITE_INPUT_USD_PER_1M),
     )
     if _RUNTIME_MANAGER is None or _RUNTIME_SIGNATURE != signature:
-        _RUNTIME_MANAGER = BedrockNovaMicroShadowManager(
+        _RUNTIME_MANAGER = BedrockNovaLiteShadowManager(
             enabled=enabled,
             model_id=model_id,
             region_name=region_name,
@@ -512,7 +512,7 @@ def enqueue_runtime_shadow(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run one test-only Bedrock Nova Micro shadow request.")
+    parser = argparse.ArgumentParser(description="Run one test-only Bedrock Nova Lite shadow request.")
     parser.add_argument("--prompt", default="Return JSON only with action and score.")
     parser.add_argument("--user-input", default='{"action_request":"classify","symbol":"TEST"}')
     parser.add_argument("--openai-action", default="WAIT")
@@ -520,7 +520,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model-id", default=DEFAULT_MODEL_ID)
     parser.add_argument("--region", default=DEFAULT_REGION)
     args = parser.parse_args(argv)
-    manager = BedrockNovaMicroShadowManager(
+    manager = BedrockNovaLiteShadowManager(
         enabled=True,
         model_id=args.model_id,
         region_name=args.region,
@@ -532,7 +532,7 @@ def main(argv: list[str] | None = None) -> int:
         user_input=args.user_input,
         openai_payload={"action": args.openai_action, "score": args.openai_score},
         transport_meta={"openai_request_id": "manual-test", "openai_input_tokens": 0, "openai_output_tokens": 0},
-        request_meta={"endpoint_name": "manual_bedrock_nova_micro_test", "symbol": "TEST", "cache_key": "manual"},
+        request_meta={"endpoint_name": "manual_bedrock_nova_lite_test", "symbol": "TEST", "cache_key": "manual"},
     )
     if manager._queue is not None:
         manager._queue.join()

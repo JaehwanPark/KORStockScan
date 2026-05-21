@@ -38,7 +38,9 @@ ON 가능한 시점은 다음 조건이 모두 닫힌 뒤다.
 | Swing Strategy Discovery Sim | `data/report/swing_strategy_discovery_sim/swing_strategy_discovery_sim_YYYY-MM-DD.md` | `src.engine.swing_strategy_discovery_sim` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | 스윙 safe pool 전체를 sim-only candidate와 8-arm 가상 전략 row로 확장하는 감사 리포트. runtime 변경 권한 없음 |
 | Swing Strategy Discovery Labels | `data/report/swing_strategy_discovery_labels/swing_strategy_discovery_labels_YYYY-MM-DD.md` | `src.engine.swing_strategy_discovery_label_builder` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | discovery arm의 1d/5d/10d/policy_exit label과 PENDING_ENTRY/ENTERED/EXITED/EXPIRED 상태 전개 요약 |
 | Swing Strategy Discovery EV | `data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_YYYY-MM-DD.md` | `src.engine.swing_strategy_discovery_ev_report` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | arm/entry/sizing/exit/selection/sector/theme 축 source-only EV 리포트. surviving/avoid bucket을 표시하지만 runtime apply 권한 없음 |
-| Bedrock Nova Micro Shadow | `data/report/bedrock_nova_micro_shadow/bedrock_nova_micro_shadow_report_YYYY-MM-DD.md` | `src.tests.bedrock_nova_micro_shadow_report` | 수동 테스트 또는 shadow 토글 실행 | `gpt-5-nano` Tier1 payload에 대한 Nova Micro 테스트 비교. latency/cost/prompt cache/action agreement/source linkage만 제공하며 runtime 변경 권한 없음 |
+| Bedrock Nova Micro Shadow | `data/report/bedrock_nova_micro_shadow/bedrock_nova_micro_shadow_report_YYYY-MM-DD.md` | `src.tests.bedrock_nova_micro_shadow_report` | 수동 테스트 또는 shadow 토글 실행 | `gpt-5-nano` Tier1 payload에 대한 Nova Micro 테스트 비교. runtime enqueue는 `src.engine.bedrock_nova_micro_shadow`가 담당하며, latency/cost/prompt cache/action agreement/source linkage만 제공한다 |
+| Bedrock Nova Lite Shadow | `data/report/bedrock_nova_lite_shadow/bedrock_nova_lite_shadow_report_YYYY-MM-DD.md` | `src.tests.bedrock_nova_lite_shadow_report` | 수동 테스트 또는 shadow 토글 실행 | `gpt-5.4-mini` Tier2 payload에 대한 Nova Lite v1 테스트 비교. runtime enqueue는 `src.engine.bedrock_nova_lite_shadow`가 담당하며, latency/cost/prompt cache/action agreement/source linkage만 제공한다 |
+| Bedrock Nova Primary Provider Audit | `data/report/bedrock_nova_primary_provider/bedrock_nova_primary_provider_YYYY-MM-DD.jsonl` | `src.engine.bedrock_nova_provider` | `KORSTOCKSCAN_BEDROCK_NOVA_{MICRO,LITE}_ROUTE_MODE=primary`일 때 | Bedrock primary 우회 호출과 OpenAI failback 감사 row. nano/mini 모델 단위 우회만 기록하며 장후 approval 전 기본 route mode는 `shadow` |
 
 ## 비정기/legacy Markdown
 
@@ -78,7 +80,9 @@ ON 가능한 시점은 다음 조건이 모두 닫힌 뒤다.
 | Pipeline Events | `data/pipeline_events/pipeline_events_YYYY-MM-DD.jsonl` | runtime pipeline event writer | 없음 |
 | Gatekeeper Snapshots | `data/gatekeeper/gatekeeper_snapshots_YYYY-MM-DD.jsonl` | gatekeeper snapshot writer | 없음 |
 | Post-sell Candidates/Evaluations | `data/post_sell/post_sell_candidates_YYYY-MM-DD.jsonl`, `data/post_sell/post_sell_evaluations_YYYY-MM-DD.jsonl` | post-sell feedback collector | 없음 |
-| Bedrock Nova Micro Shadow Rows | `data/report/bedrock_nova_micro_shadow/bedrock_nova_micro_shadow_YYYY-MM-DD.jsonl` | `src.tests.bedrock_nova_micro_shadow` | `data/report/bedrock_nova_micro_shadow/bedrock_nova_micro_shadow_report_YYYY-MM-DD.md`; Bedrock explicit prompt cache 사용 시 `nova_cache_read_input_tokens`/`nova_cache_write_input_tokens`/`nova_total_input_tokens` 포함 |
+| Bedrock Nova Micro Shadow Rows | `data/report/bedrock_nova_micro_shadow/bedrock_nova_micro_shadow_YYYY-MM-DD.jsonl` | `src.engine.bedrock_nova_micro_shadow` | `data/report/bedrock_nova_micro_shadow/bedrock_nova_micro_shadow_report_YYYY-MM-DD.md`; Bedrock explicit prompt cache 사용 시 `nova_cache_read_input_tokens`/`nova_cache_write_input_tokens`/`nova_total_input_tokens` 포함 |
+| Bedrock Nova Lite Shadow Rows | `data/report/bedrock_nova_lite_shadow/bedrock_nova_lite_shadow_YYYY-MM-DD.jsonl` | `src.engine.bedrock_nova_lite_shadow` | `data/report/bedrock_nova_lite_shadow/bedrock_nova_lite_shadow_report_YYYY-MM-DD.md`; `gpt-5.4-mini` Tier2 호출 지점만 수집하며 Bedrock explicit prompt cache token bucket 포함 |
+| Bedrock Nova Primary Provider Audit Rows | `data/report/bedrock_nova_primary_provider/bedrock_nova_primary_provider_YYYY-MM-DD.jsonl` | `src.engine.bedrock_nova_provider` | Markdown 없음. Bedrock primary route가 켜진 호출의 provider/model/key-index/latency/usage/parse/failback audit trail |
 
 ## Markdown 누락 후보
 
