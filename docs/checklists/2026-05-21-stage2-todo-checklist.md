@@ -117,6 +117,28 @@
 
 ## 장후 체크리스트 (16:30~18:55)
 
+- [x] `[ScalpSimPanicLifecycleL1FullExitGuard0521] L1 panic sim partial의 full-exit 승격 차단` (`Due: 2026-05-21`, `Slot: INTRADAY`, `TimeWindow: 11:40~11:55`, `Track: RuntimeStability`)
+  - Source: [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [test_scalp_sim_panic_lifecycle.py](/home/ubuntu/KORStockScan/src/tests/test_scalp_sim_panic_lifecycle.py), [panic_sell_defense_2026-05-21.json](/home/ubuntu/KORStockScan/data/report/panic_sell_defense/panic_sell_defense_2026-05-21.json), [market_panic_breadth_2026-05-21.json](/home/ubuntu/KORStockScan/data/report/market_panic_breadth/market_panic_breadth_2026-05-21.json)
+  - owner/status: `scalp_sim_panic_lifecycle`, `sim_only`, `runtime_effect=simulated_state_only`, `decision_authority=sim_observation_only`
+  - 근거: 당일 report는 `panic_state=NORMAL`, `panic_regime_mode=NORMAL`, market breadth `risk_off_advisory=false`인데 `panic_epoch_id=NORMAL|NORMAL|L1` sim row에서 `scalp_sim_panic_lifecycle_full_exit`가 발생했다. L1 partial이 소량 포지션에서 full exit로 승격되는 경로를 차단한다.
+  - 금지: real auto-sell, order cancel, threshold/provider/bot 변경, 실계좌 holding 강제 축소/청산 금지.
+  - 검증 결과: `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_scalp_sim_panic_lifecycle.py src/tests/test_bedrock_nova_micro_shadow.py src/tests/test_bedrock_nova_micro_shadow_report.py -q`, `py_compile`, `git diff --check`, checklist parser 검증 통과.
+  - 판정 결과: `implemented_l1_no_full_exit_escalation`. L1에서 partial 후 잔량이 `min_remaining` 미만이면 full exit 대신 `scalp_sim_panic_level1_partial_skipped_min_remaining`와 `TRAIL_TIGHT` 상태만 남긴다.
+
+- [x] `[BedrockNovaMicroShadowObservation0521] gpt-5-nano Tier1 호출 대상 Nova Micro shadow 비교 구현/검증` (`Due: 2026-05-21`, `Slot: POSTCLOSE`, `TimeWindow: 18:10~18:25`, `Track: RuntimeStability`)
+  - Source: [bedrock_nova_micro_shadow.py](/home/ubuntu/KORStockScan/src/tests/bedrock_nova_micro_shadow.py), [bedrock_nova_micro_shadow_report.py](/home/ubuntu/KORStockScan/src/tests/bedrock_nova_micro_shadow_report.py), [data/report/README.md](/home/ubuntu/KORStockScan/data/report/README.md), [config_prod.json](/home/ubuntu/KORStockScan/data/config_prod.json)
+  - owner/status: `bedrock_nova_micro_shadow_observation`, `report_only`, `runtime_effect=false`, `decision_authority=shadow_observation_only`
+  - 판정 기준: 기본 설계는 토글 기반이며, 사용자가 당일 남은 시간 shadow 수집을 명시해 `run_bot.sh`에서 enable한 운영 세션만 `gpt-5-nano` Tier1 JSON 호출을 Nova Micro 비동기 shadow enqueue 대상으로 본다. OpenAI primary result/order flow/threshold/provider route가 변경되지 않아야 한다. 장후 report는 latency, cost, prompt cache, action agreement, parse/schema quality, tuning linkage join key를 제공해야 한다.
+  - 금지: provider route 변경, threshold 변경, 주문 판단 변경, bot restart trigger, threshold-cycle 자동 apply 연결 금지.
+  - 검증: `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_bedrock_nova_micro_shadow.py src/tests/test_bedrock_nova_micro_shadow_report.py -q`, `py_compile`, checklist parser 검증을 실행한다.
+  - 실행 메모: `bedrock_nova_micro_shadow_observation` 구현 완료. `src/tests`의 Bedrock 전용 모듈이 JSONL/report를 소유하고, 운영 engine에는 `KORSTOCKSCAN_BEDROCK_NOVA_MICRO_SHADOW_ENABLED`가 켜진 경우 `gpt-5-nano` JSON 결과 반환 뒤에만 enqueue하는 최소 hook을 둔다. `config_prod.json`에는 장기 테스트 API key 입력용 `BEDROCK_API_KEY`를 사용하고, 기본 region은 한국 `ap-northeast-2`, 기본 model id는 한국 리전에서 호출 가능한 APAC inference profile `apac.amazon.nova-micro-v1:0`다. 장후 report CLI는 `PYTHONPATH=. .venv/bin/python -m src.tests.bedrock_nova_micro_shadow_report --date YYYY-MM-DD`다.
+  - cache 준비: `KORSTOCKSCAN_BEDROCK_NOVA_MICRO_PROMPT_CACHE_ENABLED=true`이면 Nova system prompt 뒤에 Bedrock explicit `cachePoint`를 추가하고, JSONL/report에 `nova_cache_read_input_tokens`, `nova_cache_write_input_tokens`, `nova_total_input_tokens`를 남긴다. 비용 계산은 cache read/write 단가 env override를 허용하며, prompt cache는 shadow observation 비용/latency 계측용일 뿐 provider route/order/threshold를 바꾸지 않는다.
+  - join key 보강: 장후 sim lifecycle 교차분석을 위해 shadow JSONL/report에 `record_id`, `sim_record_id`, `sim_parent_record_id`, `entry_adm_candidate_id`, `source_event_stage`를 남긴다. 기존 row는 소급 보정하지 않고 보강 이후 row부터 적용한다.
+  - 코드리뷰 결과: OpenAI primary payload 반환 후 비동기 enqueue만 수행하며 queue/AWS/cache/parse 실패는 shadow artifact로만 남긴다. 남은 high/medium finding 없음.
+  - 검증 결과: `pytest` 대상 24건 통과, shadow report test 1건 통과, cache 준비 후 `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_bedrock_nova_micro_shadow.py src/tests/test_bedrock_nova_micro_shadow_report.py -q` 8건 통과, `py_compile`, `git diff --check`, `sync_docs_backlog_to_project --print-backlog-only --limit 500` 통과.
+  - 다음 액션: `implemented_operator_enabled_shadow_only`, `hold_review_finding`, `blocked_dependency_or_credentials`, `reject_primary_path_risk` 중 하나로 닫는다.
+  - 판정 결과: `implemented_operator_enabled_shadow_only`. 실제 장중 수집은 AWS credentials/region 권한이 준비되고 사용자가 env enable을 지시한 운영 세션에서만 시작하며, `decision_authority=shadow_observation_only`와 `runtime_effect=false`를 유지한다.
+
 - [ ] `[ThresholdDailyEVReport0521] daily EV real/sim/combined split 및 자동 반영 결과 확인` (`Due: 2026-05-21`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:45`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-20.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-20.json)
   - 판정 기준: real/sim/combined split, selected/blocked family, runtime_change, warning을 분리해 확인한다.

@@ -19,6 +19,7 @@ cryptography
 deep-translator
 google-genai
 openai
+boto3
 SQLAlchemy>=2.0.0
 psycopg2-binary
 yfinance

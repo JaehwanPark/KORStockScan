@@ -15,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
 import time
 import threading
 import json
+import os
 import re
 import hashlib
 import queue
@@ -709,6 +710,7 @@ class GPTSniperEngine:
         cache_key,
         max_output_tokens=None,
         reasoning_effort=None,
+        metadata_extra=None,
     ):
         request_id = self._build_openai_request_id(endpoint_name=endpoint_name, symbol=symbol or "-")
         metadata = {
@@ -718,6 +720,10 @@ class GPTSniperEngine:
             "symbol": str(symbol or "-"),
             "cache_key": str(cache_key or "-"),
         }
+        if isinstance(metadata_extra, dict):
+            for key, value in metadata_extra.items():
+                if value not in (None, ""):
+                    metadata[str(key)] = str(value)
         prompt = self._wrap_openai_prompt_contract(
             prompt,
             require_json=bool(require_json),
@@ -1398,6 +1404,7 @@ class GPTSniperEngine:
         endpoint_name="generic",
         symbol="-",
         cache_key="-",
+        metadata_extra=None,
     ):
         """Responses API HTTP/WS transport와 예외 처리를 전담하는 중앙 호출기."""
         target_model = model_override if model_override else self.current_model_name
@@ -1421,6 +1428,7 @@ class GPTSniperEngine:
             endpoint_name=endpoint_name,
             symbol=symbol,
             cache_key=cache_key,
+            metadata_extra=metadata_extra,
         )
         transport_meta = {
             "openai_transport_mode": "http",
@@ -1516,8 +1524,54 @@ class GPTSniperEngine:
             transport_meta.update(result.usage_meta)
         self._set_last_transport_meta(transport_meta)
         if isinstance(result.payload, dict):
+            self._enqueue_bedrock_nova_micro_runtime_shadow(
+                request=request,
+                openai_payload=result.payload,
+                transport_meta=transport_meta,
+                roundtrip_ms=int(getattr(result, "roundtrip_ms", 0) or 0),
+            )
             return result.payload
         return str(result.payload or "").strip()
+
+    def _enqueue_bedrock_nova_micro_runtime_shadow(self, *, request, openai_payload, transport_meta, roundtrip_ms=0):
+        try:
+            if str(os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_SHADOW_ENABLED", "")).strip().lower() not in {
+                "1",
+                "true",
+                "yes",
+                "y",
+                "on",
+            }:
+                return
+            if not (bool(request.require_json) and str(request.model_name) == "gpt-5-nano"):
+                return
+            from src.tests.bedrock_nova_micro_shadow import enqueue_runtime_shadow
+
+            enqueue_runtime_shadow(
+                model_name=str(request.model_name),
+                require_json=bool(request.require_json),
+                prompt=request.prompt,
+                user_input=request.user_input,
+                openai_payload=openai_payload,
+                transport_meta=transport_meta,
+                request_meta={
+                    "openai_request_id": transport_meta.get("openai_request_id") or request.request_id,
+                    "endpoint_name": request.endpoint_name,
+                    "prompt_type": request.endpoint_name,
+                    "symbol": request.symbol,
+                    "cache_key": request.cache_key,
+                    "pipeline_stage": request.endpoint_name,
+                    "record_id": (request.metadata or {}).get("record_id"),
+                    "sim_record_id": (request.metadata or {}).get("sim_record_id"),
+                    "sim_parent_record_id": (request.metadata or {}).get("sim_parent_record_id"),
+                    "entry_adm_candidate_id": (request.metadata or {}).get("entry_adm_candidate_id"),
+                    "source_event_stage": (request.metadata or {}).get("source_event_stage"),
+                    "pipeline_event_emitted_at": (request.metadata or {}).get("pipeline_event_emitted_at"),
+                    "openai_latency_ms": roundtrip_ms or transport_meta.get("openai_ws_roundtrip_ms") or 0,
+                },
+            )
+        except Exception as exc:
+            log_error(f"[BedrockNovaMicroShadow] enqueue skipped: {exc}")
 
     # ==========================================
     # 데이터 포맷팅 (ai_engine.py 동일 복사)
@@ -2202,6 +2256,7 @@ class GPTSniperEngine:
         program_net_qty=0,
         cache_profile="default",
         prompt_profile="shared",
+        metadata_extra=None,
     ):
         analysis_started = time.perf_counter()
         prompt_version = "default_v1"
@@ -2353,6 +2408,7 @@ class GPTSniperEngine:
                 endpoint_name="analyze_target",
                 symbol=target_name,
                 cache_key=cache_key,
+                metadata_extra=metadata_extra,
             )
             result = self._merge_last_transport_meta(result)
 
@@ -2436,6 +2492,7 @@ class GPTSniperEngine:
         prompt_override=None,
         prompt_type="scalping_shadow",
         cache_profile="shadow",
+        metadata_extra=None,
     ):
         if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
             return self._annotate_analysis_result(
@@ -2533,6 +2590,7 @@ class GPTSniperEngine:
                 endpoint_name="analyze_target_shadow_prompt",
                 symbol=target_name,
                 cache_key=cache_key,
+                metadata_extra=metadata_extra,
             )
             result = self._merge_last_transport_meta(result)
             result["ai_model"] = self._get_tier1_model()

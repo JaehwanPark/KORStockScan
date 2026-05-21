@@ -3710,6 +3710,40 @@ def complete_scalp_sim_partial_sell(
     if sell_qty <= 0:
         return False
     if remaining_qty <= 0 or remaining_qty < min_remaining:
+        if level <= 1:
+            action_id = _mark_scalp_sim_panic_action(stock, panic_context, level, "TRAIL_TIGHT", now_ts)
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "scalp_sim_panic_trailing_tightened": True,
+                    "scalp_sim_panic_trailing_tightened_at": now_ts,
+                    "last_panic_action_reason": f"{panic_action_reason}|partial_skipped_min_remaining",
+                    "panic_lifecycle_action_id": action_id,
+                },
+            )
+            _log_holding_pipeline(
+                stock,
+                code,
+                "scalp_sim_panic_level1_partial_skipped_min_remaining",
+                **_scalp_sim_event_fields(
+                    threshold_family="panic_lifecycle_actuator",
+                    sim_record_id=stock.get("sim_record_id"),
+                    sim_parent_record_id=stock.get("sim_parent_record_id"),
+                    source_stage="holding",
+                    runtime_effect="sim_trail_tightened_state_only",
+                    decision_authority="sim_observation_only",
+                    panic_lifecycle_action_id=action_id,
+                    profit_rate=f"{profit_rate:+.2f}",
+                    proposed_partial_ratio=f"{ratio:.2f}",
+                    proposed_sell_qty=sell_qty,
+                    remaining_qty=remaining_qty,
+                    min_remaining_qty=min_remaining,
+                    skip_reason="level1_partial_would_be_full_exit",
+                    **_scalp_sim_panic_context_fields(panic_context),
+                ),
+            )
+            persist_scalp_simulator_state()
+            return False
         action_id = _mark_scalp_sim_panic_action(stock, panic_context, level, "EXIT", now_ts)
         _mutate_stock_state(
             stock,
@@ -8994,6 +9028,13 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 recent_ticks,
                                 recent_candles,
                                 prompt_profile="watching",
+                                metadata_extra={
+                                    "record_id": stock.get("id"),
+                                    "sim_record_id": stock.get("sim_record_id"),
+                                    "sim_parent_record_id": stock.get("sim_parent_record_id"),
+                                    "entry_adm_candidate_id": stock.get("entry_adm_candidate_id"),
+                                    "source_event_stage": "watching_analyze_target",
+                                },
                             )
                             ai_call_executed = True
                             _mutate_stock_state(
@@ -11849,6 +11890,13 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         strategy="SCALPING",
                         cache_profile="holding",
                         prompt_profile="holding",
+                        metadata_extra={
+                            "record_id": stock.get("id"),
+                            "sim_record_id": stock.get("sim_record_id"),
+                            "sim_parent_record_id": stock.get("sim_parent_record_id"),
+                            "entry_adm_candidate_id": stock.get("entry_adm_candidate_id"),
+                            "source_event_stage": "holding_profit_review",
+                        },
                     )
                     ai_action = ai_decision.get('action', 'WAIT')
                     ai_score = ai_decision.get('score', 50)
@@ -12250,6 +12298,13 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                             recent_candles,
                             cache_profile="holding",
                             prompt_profile="holding",
+                            metadata_extra={
+                                "record_id": stock.get("id"),
+                                "sim_record_id": stock.get("sim_record_id"),
+                                "sim_parent_record_id": stock.get("sim_parent_record_id"),
+                                "entry_adm_candidate_id": stock.get("entry_adm_candidate_id"),
+                                "source_event_stage": "scalp_sim_holding_review",
+                            },
                         )
                         raw_ai_score = ai_decision.get('score', 50)
                         ai_cache_hit = bool(ai_decision.get('cache_hit', False))

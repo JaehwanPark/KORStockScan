@@ -290,6 +290,34 @@ def test_partial_sell_idempotency_blocks_repeated_same_epoch(_state):
     assert [stage for stage, _ in _state].count("scalp_sim_partial_sell_order_assumed_filled") == 1
 
 
+def test_level1_partial_does_not_escalate_to_full_exit_for_small_qty(_state):
+    stock = _sim_position(qty=1)
+    panic_context = {
+        "panic_context_status": "OK",
+        "panic_level": 1,
+        "panic_epoch_id": "epoch-l1",
+        "liquidity_state": "NORMAL",
+    }
+
+    assert not state_handlers.complete_scalp_sim_partial_sell(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 9900, "orderbook": {"bids": [{"price": 9890}], "asks": [{"price": 9910}]}},
+        curr_price=9900,
+        now_ts=1000.0,
+        partial_ratio=0.5,
+        panic_context=panic_context,
+        panic_action_reason="level1_deterioration_partial",
+        profit_rate=-0.4,
+    )
+
+    assert stock["buy_qty"] == 1
+    assert stock["last_panic_action_type"] == "TRAIL_TIGHT"
+    stages = [stage for stage, _ in _state]
+    assert "scalp_sim_panic_level1_partial_skipped_min_remaining" in stages
+    assert "scalp_sim_sell_order_assumed_filled" not in stages
+
+
 def test_level_rise_allows_additional_reduction(_state):
     stock = _sim_position(qty=10)
     ws_data = {"curr": 9900, "orderbook": {"bids": [{"price": 9890}], "asks": [{"price": 9910}]}}

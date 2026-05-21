@@ -121,6 +121,7 @@ class RuntimeAIEngineRouter:
         program_net_qty=0,
         cache_profile="default",
         prompt_profile="shared",
+        metadata_extra=None,
     ):
         engine = self._selected_scalping_engine(strategy=strategy)
         return engine.analyze_target(
@@ -132,6 +133,7 @@ class RuntimeAIEngineRouter:
             program_net_qty=program_net_qty,
             cache_profile=cache_profile,
             prompt_profile=prompt_profile,
+            metadata_extra=metadata_extra,
         )
 
     def generate_realtime_report(self, *args, **kwargs):
