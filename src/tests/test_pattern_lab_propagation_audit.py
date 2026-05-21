@@ -38,6 +38,7 @@ def _seed_propagation_chain(tmp_path: Path, report_dir: Path, target_date: str) 
     ev_path = report_dir / "threshold_cycle_ev" / f"threshold_cycle_ev_{target_date}.json"
     runtime_path = report_dir / "runtime_approval_summary" / f"runtime_approval_summary_{target_date}.json"
     propagation_path = report_dir / "pattern_lab_propagation_audit" / f"pattern_lab_propagation_audit_{target_date}.json"
+    ldm_path = report_dir / "lifecycle_decision_matrix" / f"lifecycle_decision_matrix_{target_date}.json"
 
     _write_json(
         scalping_path,
@@ -66,8 +67,16 @@ def _seed_propagation_chain(tmp_path: Path, report_dir: Path, target_date: str) 
     _write_json(
         workorder_path,
         {
-            "source": {"pattern_lab_currentness_audit": str(currentness_path)},
-            "summary": {"pattern_lab_currentness_source_order_count": 1},
+            "source": {
+                "pattern_lab_currentness_audit": str(currentness_path),
+                "lifecycle_decision_matrix": str(ldm_path),
+            },
+            "summary": {
+                "pattern_lab_currentness_source_order_count": 1,
+                "lifecycle_entry_bucket_source_order_count": 0,
+                "lifecycle_scale_in_bucket_source_order_count": 0,
+                "lifecycle_overnight_bucket_source_order_count": 0,
+            },
             "orders": [{"order_id": "order_currentness", "runtime_effect": False}],
         },
     )
@@ -78,7 +87,16 @@ def _seed_propagation_chain(tmp_path: Path, report_dir: Path, target_date: str) 
             "sources": {
                 "pattern_lab_currentness_audit": str(currentness_path),
                 "pattern_lab_propagation_audit": str(propagation_path),
+                "lifecycle_decision_matrix": str(ldm_path),
             },
+        },
+    )
+    _write_json(
+        ldm_path,
+        {
+            "entry_bucket_attribution": {"code_improvement_workorders": []},
+            "scale_in_bucket_attribution": {"code_improvement_workorders": []},
+            "overnight_bucket_attribution": {"code_improvement_workorders": []},
         },
     )
     _write_json(

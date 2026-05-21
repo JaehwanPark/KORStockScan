@@ -13,6 +13,7 @@ REQUIRED_CRON_JOB_IDS: set[str] = {
     "buy_pause_guard",
     "monitor_snapshot",
     "threshold_cycle_calibration_intraday",
+    "scalp_sim_overnight_preclose",
     "swing_live_dry_run",
     "threshold_cycle_postclose",
     "swing_model_retrain_postclose",

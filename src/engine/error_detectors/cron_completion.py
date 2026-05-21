@@ -119,6 +119,15 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "trading_day_only": True,
     },
     {
+        "id": "scalp_sim_overnight_preclose",
+        "log": "logs/scalp_sim_overnight_preclose_cron.log",
+        "window_start": (15, 20),
+        "window_end": (15, 35),
+        "mode": "once",
+        "critical": False,
+        "trading_day_only": True,
+    },
+    {
         "id": "swing_live_dry_run",
         "log": "logs/swing_live_dry_run_cron.log",
         "window_start": (15, 45),

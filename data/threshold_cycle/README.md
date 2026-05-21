@@ -121,7 +121,7 @@ bounded calibration family는 아래 묶음이 중심이다. 목적은 완벽한
 
 ### Lifecycle Decision Matrix와 fixed threshold
 
-`lifecycle_decision_matrix`는 score bucket별 고정 정책이 아니라 개별 sim/real/probe 후보의 lifecycle row를 stage별 matrix로 만든다. runtime feature와 사후 label을 분리하고, `stage_ev_composite_pct`와 confidence를 산출해 `BUY_DEFENSIVE`, `WAIT_REQUOTE`, `DROP`, `ALLOW_SUBMIT`, `HOLD`, `EXIT`, `AVG_DOWN_BIAS`, `PYRAMID_BIAS`, `NO_CHANGE` 중 stage별 허용 action만 제안한다.
+`lifecycle_decision_matrix`는 score bucket별 고정 정책이 아니라 개별 sim/real/probe 후보의 lifecycle row를 stage별 matrix로 만든다. runtime feature와 사후 label을 분리하고, `stage_ev_composite_pct`와 confidence를 산출해 `BUY_DEFENSIVE`, `WAIT_REQUOTE`, `DROP`, `ALLOW_SUBMIT`, `HOLD`, `EXIT`, `AVG_DOWN_BIAS`, `PYRAMID_BIAS`, `NO_CHANGE` 중 stage별 허용 action만 제안한다. `entry_bucket_attribution`과 `scale_in_bucket_attribution`은 source-only bucket EV, runtime approval candidate, code-improvement workorder를 만들며, `threshold_cycle_ev`/`runtime_approval_summary`/`code_improvement_workorder`로 전달되지 않으면 postclose verifier가 fail-closed한다.
 
 fixed threshold의 runtime 우선순위는 `hard safety veto -> account/order/broker guard -> lifecycle matrix runtime policy -> 기존 ADM adapter -> baseline fixed threshold fallback`이다. `baseline_prior`로 전환된 score/strength/momentum threshold는 후보 생성과 feature 역할만 하고 단독으로 BUY/WAIT/DROP을 확정하지 않는다. `bounded_tunable` 값은 matrix가 추천할 수 있지만 기존 bounds, max step, sample floor, source-quality gate를 통과해 다음 PREOPEN에만 반영된다.
 

@@ -1134,12 +1134,41 @@ def _entry_adm_summary(ev_report: dict[str, Any], source_path: str | None) -> di
     }
 
 
+def _bucket_list_from_lifecycle_source(
+    source_payload: dict[str, Any],
+    attribution_key: str,
+    list_key: str,
+) -> list[Any]:
+    attribution = (
+        source_payload.get(attribution_key)
+        if isinstance(source_payload.get(attribution_key), dict)
+        else {}
+    )
+    value = attribution.get(list_key)
+    return value if isinstance(value, list) else []
+
+
+def _bucket_count_from_lifecycle_source(
+    source_payload: dict[str, Any],
+    attribution_key: str,
+    summary_key: str,
+) -> int:
+    attribution = (
+        source_payload.get(attribution_key)
+        if isinstance(source_payload.get(attribution_key), dict)
+        else {}
+    )
+    summary = attribution.get("summary") if isinstance(attribution.get("summary"), dict) else {}
+    return _as_int(summary.get(summary_key))
+
+
 def _lifecycle_matrix_summary(ev_report: dict[str, Any], source_path: str | None) -> dict[str, Any]:
     matrix = (
         ev_report.get("lifecycle_decision_matrix")
         if isinstance(ev_report.get("lifecycle_decision_matrix"), dict)
         else {}
     )
+    source_payload = _load_json(Path(str(source_path))) if source_path else {}
     if not matrix:
         return {
             "available": False,
@@ -1156,8 +1185,90 @@ def _lifecycle_matrix_summary(ev_report: dict[str, Any], source_path: str | None
     joined_rows = _as_int(matrix.get("joined_rows"))
     policy_pass_count = _as_int(matrix.get("policy_pass_count"))
     promote_ready_count = _as_int(matrix.get("promote_ready_count"))
-    entry_bucket_runtime_candidate_count = _as_int(matrix.get("entry_bucket_runtime_candidate_count"))
-    entry_bucket_workorder_count = _as_int(matrix.get("entry_bucket_workorder_count"))
+    entry_bucket_candidates = (
+        matrix.get("entry_bucket_runtime_approval_candidates")
+        if isinstance(matrix.get("entry_bucket_runtime_approval_candidates"), list)
+        else _bucket_list_from_lifecycle_source(
+            source_payload,
+            "entry_bucket_attribution",
+            "runtime_approval_candidates",
+        )
+    )
+    entry_bucket_workorders = (
+        matrix.get("entry_bucket_code_improvement_workorders")
+        if isinstance(matrix.get("entry_bucket_code_improvement_workorders"), list)
+        else _bucket_list_from_lifecycle_source(
+            source_payload,
+            "entry_bucket_attribution",
+            "code_improvement_workorders",
+        )
+    )
+    scale_in_bucket_candidates = (
+        matrix.get("scale_in_bucket_runtime_approval_candidates")
+        if isinstance(matrix.get("scale_in_bucket_runtime_approval_candidates"), list)
+        else _bucket_list_from_lifecycle_source(
+            source_payload,
+            "scale_in_bucket_attribution",
+            "runtime_approval_candidates",
+        )
+    )
+    scale_in_bucket_workorders = (
+        matrix.get("scale_in_bucket_code_improvement_workorders")
+        if isinstance(matrix.get("scale_in_bucket_code_improvement_workorders"), list)
+        else _bucket_list_from_lifecycle_source(
+            source_payload,
+            "scale_in_bucket_attribution",
+            "code_improvement_workorders",
+        )
+    )
+    overnight_bucket_candidates = (
+        matrix.get("overnight_bucket_runtime_approval_candidates")
+        if isinstance(matrix.get("overnight_bucket_runtime_approval_candidates"), list)
+        else _bucket_list_from_lifecycle_source(
+            source_payload,
+            "overnight_bucket_attribution",
+            "runtime_approval_candidates",
+        )
+    )
+    overnight_bucket_workorders = (
+        matrix.get("overnight_bucket_code_improvement_workorders")
+        if isinstance(matrix.get("overnight_bucket_code_improvement_workorders"), list)
+        else _bucket_list_from_lifecycle_source(
+            source_payload,
+            "overnight_bucket_attribution",
+            "code_improvement_workorders",
+        )
+    )
+    entry_bucket_runtime_candidate_count = _as_int(matrix.get("entry_bucket_runtime_candidate_count")) or _bucket_count_from_lifecycle_source(
+        source_payload,
+        "entry_bucket_attribution",
+        "runtime_candidate_count",
+    )
+    entry_bucket_workorder_count = _as_int(matrix.get("entry_bucket_workorder_count")) or _bucket_count_from_lifecycle_source(
+        source_payload,
+        "entry_bucket_attribution",
+        "workorder_count",
+    )
+    scale_in_bucket_runtime_candidate_count = _as_int(matrix.get("scale_in_bucket_runtime_candidate_count")) or _bucket_count_from_lifecycle_source(
+        source_payload,
+        "scale_in_bucket_attribution",
+        "runtime_candidate_count",
+    )
+    scale_in_bucket_workorder_count = _as_int(matrix.get("scale_in_bucket_workorder_count")) or _bucket_count_from_lifecycle_source(
+        source_payload,
+        "scale_in_bucket_attribution",
+        "workorder_count",
+    )
+    overnight_bucket_runtime_candidate_count = _as_int(matrix.get("overnight_bucket_runtime_candidate_count")) or _bucket_count_from_lifecycle_source(
+        source_payload,
+        "overnight_bucket_attribution",
+        "runtime_candidate_count",
+    )
+    overnight_bucket_workorder_count = _as_int(matrix.get("overnight_bucket_workorder_count")) or _bucket_count_from_lifecycle_source(
+        source_payload,
+        "overnight_bucket_attribution",
+        "workorder_count",
+    )
     warnings: list[str] = []
     if not matrix.get("available", True):
         warnings.append("source_quality_blocker")
@@ -1170,7 +1281,7 @@ def _lifecycle_matrix_summary(ev_report: dict[str, Any], source_path: str | None
         "available": bool(matrix.get("available", True)),
         "artifact": source_path or matrix.get("artifact"),
         "status": matrix.get("status"),
-        "matrix_version": matrix.get("matrix_version"),
+        "matrix_version": matrix.get("matrix_version") or source_payload.get("matrix_version"),
         "runtime_effect": bool(matrix.get("runtime_effect")),
         "decision_authority": matrix.get("decision_authority") or "lifecycle_weighted_adm_runtime_policy",
         "runtime_bias_scope": "stage_action_proposal_micro_canary",
@@ -1184,16 +1295,18 @@ def _lifecycle_matrix_summary(ev_report: dict[str, Any], source_path: str | None
         "entry_bucket_actionable_count": _as_int(matrix.get("entry_bucket_actionable_count")),
         "entry_bucket_runtime_candidate_count": entry_bucket_runtime_candidate_count,
         "entry_bucket_workorder_count": entry_bucket_workorder_count,
-        "entry_bucket_runtime_approval_candidates": (
-            matrix.get("entry_bucket_runtime_approval_candidates")
-            if isinstance(matrix.get("entry_bucket_runtime_approval_candidates"), list)
-            else []
-        ),
-        "entry_bucket_code_improvement_workorders": (
-            matrix.get("entry_bucket_code_improvement_workorders")
-            if isinstance(matrix.get("entry_bucket_code_improvement_workorders"), list)
-            else []
-        ),
+        "scale_in_bucket_actionable_count": _as_int(matrix.get("scale_in_bucket_actionable_count")),
+        "scale_in_bucket_runtime_candidate_count": scale_in_bucket_runtime_candidate_count,
+        "scale_in_bucket_workorder_count": scale_in_bucket_workorder_count,
+        "overnight_bucket_actionable_count": _as_int(matrix.get("overnight_bucket_actionable_count")),
+        "overnight_bucket_runtime_candidate_count": overnight_bucket_runtime_candidate_count,
+        "overnight_bucket_workorder_count": overnight_bucket_workorder_count,
+        "entry_bucket_runtime_approval_candidates": entry_bucket_candidates,
+        "entry_bucket_code_improvement_workorders": entry_bucket_workorders,
+        "scale_in_bucket_runtime_approval_candidates": scale_in_bucket_candidates,
+        "scale_in_bucket_code_improvement_workorders": scale_in_bucket_workorders,
+        "overnight_bucket_runtime_approval_candidates": overnight_bucket_candidates,
+        "overnight_bucket_code_improvement_workorders": overnight_bucket_workorders,
         "policy_entries": matrix.get("policy_entries") if isinstance(matrix.get("policy_entries"), list) else [],
         "fixed_threshold_roles": matrix.get("fixed_threshold_roles") if isinstance(matrix.get("fixed_threshold_roles"), dict) else {},
         "tuning_cycle": "lifecycle_decision_matrix -> threshold_cycle_ev -> runtime_approval_summary -> next preopen bounded env",

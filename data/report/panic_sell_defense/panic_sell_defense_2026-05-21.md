@@ -2,32 +2,32 @@
 
 ## 판정
 
-- panic_state: `NORMAL`
-- panic_regime_mode: `NORMAL`
+- panic_state: `PANIC_SELL`
+- panic_regime_mode: `PANIC_DETECTED`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-05-21T14:48:09`
-- latest_event_at: `2026-05-21T14:48:08`
-- reasons: `panic thresholds not breached`
+- as_of: `2026-05-21T17:31:17`
+- latest_event_at: `2026-05-21T17:17:18`
+- reasons: `panic thresholds breached; recovery conditions not yet met`
 
 ## 패닉 지표
 
-- real_exit_count: `6`
-- non_real_exit_count: `128`
-- stop_loss_exit_count: `3`
+- real_exit_count: `34`
+- non_real_exit_count: `136`
+- stop_loss_exit_count: `17`
 - current_30m_stop_loss_exit_count: `0`
-- max_rolling_30m_stop_loss_exit_count: `3`
+- max_rolling_30m_stop_loss_exit_count: `14`
 - stop_loss_exit_ratio_pct: `50`
-- avg_exit_profit_rate_pct: `-34.54`
-- confirmation_eligible_exit_count: `3`
-- never_delay_exit_count: `3`
+- avg_exit_profit_rate_pct: `-29.3126`
+- confirmation_eligible_exit_count: `17`
+- never_delay_exit_count: `17`
 
 ## 회복 지표
 
-- active_positions: `30`
-- active_profit_sample: `30`
-- active_avg_unrealized_profit_rate_pct: `-0.1574`
-- active_win_rate_pct: `33.3`
+- active_positions: `11`
+- active_profit_sample: `11`
+- active_avg_unrealized_profit_rate_pct: `0.0875`
+- active_win_rate_pct: `54.5`
 - sim_probe_provenance_passed: `true`
 - post_sell_rebound_above_sell_10_20m_pct: `0`
 - post_sell_rebound_above_buy_10_20m_pct: `0`
@@ -51,7 +51,7 @@
 ## Microstructure Market Context
 
 - market_risk_state: `RISK_OFF`
-- market_panic_breadth_as_of: `2026-05-21T14:48:01`
+- market_panic_breadth_as_of: `2026-05-21T17:31:08`
 - market_panic_breadth_source_quality_status: `ok`
 - market_panic_breadth_risk_off_advisory: `false`
 - market_panic_breadth_single_market_risk_off_advisory: `false`
@@ -67,11 +67,12 @@
 
 - `hard_protect_emergency_delay_forbidden`: `enforced` / runtime_effect=`false`
 - `live_threshold_mutation_forbidden`: `enforced` / runtime_effect=`false`
+- `entry_relaxation_blocked`: `report_only_recommendation` / runtime_effect=`false`
 - `soft_trailing_flow_confirmation_review`: `candidate_only` / runtime_effect=`false`
 
 ## Canary Candidates
 
-- `panic_entry_freeze_guard`: `inactive_no_panic`, allowed_runtime_apply=`false`
+- `panic_entry_freeze_guard`: `report_only_candidate`, allowed_runtime_apply=`false`
 - `panic_stop_confirmation`: `report_only_candidate`, allowed_runtime_apply=`false`
 - `panic_rebound_probe`: `hold_until_recovery_confirmed`, allowed_runtime_apply=`false`
 - `panic_attribution_pack`: `active_report_only`, allowed_runtime_apply=`false`

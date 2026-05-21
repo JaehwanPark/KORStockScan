@@ -110,6 +110,101 @@ def test_observation_source_quality_audit_accepts_high_volume_contract_labels(mo
     assert report["high_volume_no_source_fields"] == []
 
 
+def test_observation_source_quality_audit_normalizes_pre_contract_ai_and_latency(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-21",
+        [
+            _event(
+                "ai_confirmed",
+                {
+                    "latest_strength": "120.0",
+                    "buy_pressure_10t": "61.0",
+                    "distance_from_day_high_pct": "-1.0",
+                    "intraday_range_pct": "4.0",
+                },
+                record_id=1,
+            ),
+            _event(
+                "latency_block",
+                {
+                    "reason": "latency_fallback_deprecated",
+                    "latency_state": "CAUTION",
+                    "effective_decision": "WAIT_REQUOTE",
+                    "quote_stale": False,
+                    "signal_price": 10000,
+                    "latest_price": 10010,
+                    "latency_canary_applied": False,
+                    "threshold_family": "latency_classifier_runtime_profile",
+                    "runtime_effect": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                record_id=2,
+            ),
+            _event(
+                "latency_pass",
+                {
+                    "reason": "safe",
+                    "latency_state": "SAFE",
+                    "policy_decision": "ALLOW_SUBMIT",
+                    "effective_decision": "ALLOW_SUBMIT",
+                    "ws_age_ms": 10,
+                    "ws_jitter_ms": 2,
+                    "spread_ratio": "0.001",
+                    "quote_stale": False,
+                    "signal_price": 10000,
+                    "latest_price": 10000,
+                    "latency_canary_applied": False,
+                    "threshold_family": "latency_classifier_runtime_profile",
+                    "runtime_effect": False,
+                    "actual_order_submitted": True,
+                    "broker_order_forbidden": False,
+                },
+                record_id=3,
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-05-21")
+
+    assert report["stage_contracts"]["ai_confirmed"]["status"] == "pass"
+    assert report["stage_contracts"]["latency_block"]["status"] == "pass"
+    assert report["stage_contracts"]["latency_pass"]["status"] == "pass"
+
+
+def test_observation_source_quality_audit_accepts_real_execution_diagnostic_contracts(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-21",
+        [
+            _event("holding_started", {"strategy": "SCALPING", "buy_qty": 1}, record_id=idx)
+            for idx in range(60)
+        ]
+        + [
+            _event("scale_in_executed", {"add_type": "PYRAMID", "new_buy_qty": 2}, record_id=100 + idx)
+            for idx in range(60)
+        ]
+        + [
+            _event(
+                "same_symbol_loss_reentry_cooldown",
+                {"exit_rule": "scalp_soft_stop_pct", "profit_rate": "-1.0", "cooldown_sec": 3600},
+                record_id=200 + idx,
+            )
+            for idx in range(60)
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-05-21")
+
+    assert report["high_volume_no_source_fields"] == []
+    assert report["stage_contracts"]["holding_started"]["status"] == "pass"
+    assert report["stage_contracts"]["scale_in_executed"]["status"] == "pass"
+    assert report["stage_contracts"]["same_symbol_loss_reentry_cooldown"]["status"] == "pass"
+
+
 def test_observation_source_quality_audit_routes_entry_arm_and_loss_diagnostics_by_contract(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     rows = []

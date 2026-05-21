@@ -336,6 +336,23 @@ def _classify_order(
             automation_reentry="After implementation, rerun pattern labs, currentness audit, workorder, EV, and propagation audit.",
         )
 
+    if order.get("source_report_type") == "lifecycle_decision_matrix_scale_in_bucket_attribution":
+        return ClassifiedOrder(
+            order=order,
+            decision="implement_now",
+            reason=(
+                "LDM scale-in bucket workorder is source-only attribution/handoff instrumentation; "
+                "runtime scale-in changes still require a separate approval artifact"
+            ),
+            mapped_family=mapped_family or "lifecycle_decision_matrix_runtime",
+            route=route or "instrumentation_order",
+            confidence=confidence,
+            automation_reentry=(
+                "Next postclose LDM, threshold EV, runtime approval summary, and verifier must preserve "
+                "scale-in bucket candidates/workorders without runtime mutation."
+            ),
+        )
+
     if _contains_any(text, ("fallback", "shadow")):
         return ClassifiedOrder(
             order=order,
@@ -735,6 +752,181 @@ def _lifecycle_entry_bucket_followup_orders(report: dict[str, Any]) -> list[dict
             }
         )
     return orders
+
+
+def _lifecycle_scale_in_bucket_order_id(item: dict[str, Any]) -> str:
+    bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
+    bucket_key = _slug(str(item.get("bucket_key") or item.get("workorder_id") or "unknown"))
+    return f"order_lifecycle_scale_in_bucket_{bucket_type}_{bucket_key}"
+
+
+def _lifecycle_scale_in_bucket_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+    attribution = (
+        report.get("scale_in_bucket_attribution")
+        if isinstance(report.get("scale_in_bucket_attribution"), dict)
+        else {}
+    )
+    workorders = attribution.get("code_improvement_workorders")
+    if not isinstance(workorders, list) or not workorders:
+        return []
+    contract = {
+        "metric_role": attribution.get("metric_role"),
+        "decision_authority": attribution.get("decision_authority"),
+        "window_policy": attribution.get("window_policy"),
+        "sample_floor": attribution.get("sample_floor"),
+        "primary_decision_metric": attribution.get("primary_decision_metric"),
+        "source_quality_gate": attribution.get("source_quality_gate"),
+        "forbidden_uses": attribution.get("forbidden_uses") or [],
+    }
+    orders: list[dict[str, Any]] = []
+    for item in workorders:
+        if not isinstance(item, dict):
+            continue
+        bucket_type = str(item.get("bucket_type") or "").strip()
+        bucket_key = str(item.get("bucket_key") or "").strip()
+        if not bucket_type or not bucket_key:
+            continue
+        orders.append(
+            {
+                "order_id": _lifecycle_scale_in_bucket_order_id(item),
+                "title": f"LDM scale-in bucket attribution follow-up: {bucket_type}={bucket_key}",
+                "source_report_type": "lifecycle_decision_matrix_scale_in_bucket_attribution",
+                "lifecycle_stage": "scale_in",
+                "target_subsystem": "lifecycle_decision_matrix",
+                "route": "source_quality_or_bounded_tunable_candidate",
+                "mapped_family": "lifecycle_decision_matrix_runtime",
+                "threshold_family": "lifecycle_decision_matrix_runtime",
+                "improvement_type": "scale_in_bucket_source_quality_attribution",
+                "confidence": "daily_ldm_source",
+                "priority": 4,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "expected_ev_effect": (
+                    "Separate AVG_DOWN/PYRAMID attribution and keep scale-in threshold/cap candidates "
+                    "as source-only evidence until rolling confirmation and approval artifact."
+                ),
+                "evidence": [
+                    f"workorder_id={item.get('workorder_id')}",
+                    f"bucket_type={bucket_type}",
+                    f"bucket_key={bucket_key}",
+                    f"reason={item.get('reason')}",
+                    f"recommended_route={item.get('recommended_route')}",
+                    f"metric_role={item.get('metric_role') or contract.get('metric_role')}",
+                    f"decision_authority={contract.get('decision_authority')}",
+                    f"primary_decision_metric={contract.get('primary_decision_metric')}",
+                    "runtime_effect=false",
+                    "allowed_runtime_apply=false",
+                ],
+                "intent": (
+                    "Preserve scale-in arm/blocker attribution and route any PYRAMID/AVG_DOWN threshold "
+                    "changes through source-only LDM/threshold-cycle handoff."
+                ),
+                "next_postclose_metric": (
+                    "lifecycle_decision_matrix.scale_in_bucket_attribution candidates/workorders must remain "
+                    "visible in threshold EV/runtime summary, and postclose verifier must fail if dropped."
+                ),
+                "files_likely_touched": [
+                    "src/engine/sniper_state_handlers.py",
+                    "src/engine/lifecycle_decision_matrix.py",
+                    "src/engine/daily_threshold_cycle_report.py",
+                    "src/engine/runtime_approval_summary.py",
+                ],
+                "acceptance_tests": [
+                    "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_decision_matrix.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py",
+                    "postclose verifier fails if LDM scale-in bucket candidates/workorders are not propagated",
+                ],
+                "metric_contract": contract,
+            }
+        )
+    return orders
+
+
+def _lifecycle_overnight_bucket_order_id(item: dict[str, Any]) -> str:
+    bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
+    bucket_key = _slug(str(item.get("bucket_key") or item.get("workorder_id") or "unknown"))
+    return f"order_lifecycle_overnight_bucket_{bucket_type}_{bucket_key}"
+
+
+def _lifecycle_overnight_bucket_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+    attribution = (
+        report.get("overnight_bucket_attribution")
+        if isinstance(report.get("overnight_bucket_attribution"), dict)
+        else {}
+    )
+    workorders = attribution.get("code_improvement_workorders")
+    if not isinstance(workorders, list) or not workorders:
+        return []
+    contract = {
+        "metric_role": attribution.get("metric_role"),
+        "decision_authority": attribution.get("decision_authority"),
+        "window_policy": attribution.get("window_policy"),
+        "sample_floor": attribution.get("sample_floor"),
+        "primary_decision_metric": attribution.get("primary_decision_metric"),
+        "source_quality_gate": attribution.get("source_quality_gate"),
+        "forbidden_uses": attribution.get("forbidden_uses") or [],
+    }
+    orders: list[dict[str, Any]] = []
+    for item in workorders:
+        if not isinstance(item, dict):
+            continue
+        bucket_type = str(item.get("bucket_type") or "").strip()
+        bucket_key = str(item.get("bucket_key") or "").strip()
+        if not bucket_type or not bucket_key:
+            continue
+        orders.append(
+            {
+                "order_id": _lifecycle_overnight_bucket_order_id(item),
+                "title": f"LDM overnight bucket attribution follow-up: {bucket_type}={bucket_key}",
+                "source_report_type": "lifecycle_decision_matrix_overnight_bucket_attribution",
+                "lifecycle_stage": "overnight",
+                "target_subsystem": "lifecycle_decision_matrix",
+                "route": "source_quality_or_bounded_tunable_candidate",
+                "mapped_family": "scalp_sim_overnight_ai_carry",
+                "threshold_family": "scalp_sim_overnight_ai_carry",
+                "improvement_type": "overnight_bucket_source_quality_attribution",
+                "confidence": "daily_ldm_source",
+                "priority": 4,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "expected_ev_effect": (
+                    "Keep SELL_TODAY/HOLD_OVERNIGHT bucket attribution and next-day carry labels connected "
+                    "as source-only evidence for threshold-cycle rolling confirmation."
+                ),
+                "evidence": [
+                    f"workorder_id={item.get('workorder_id')}",
+                    f"bucket_type={bucket_type}",
+                    f"bucket_key={bucket_key}",
+                    f"reason={item.get('reason')}",
+                    f"recommended_route={item.get('recommended_route')}",
+                    f"metric_role={item.get('metric_role') or contract.get('metric_role')}",
+                    f"decision_authority={contract.get('decision_authority')}",
+                    f"primary_decision_metric={contract.get('primary_decision_metric')}",
+                    "runtime_effect=false",
+                    "allowed_runtime_apply=false",
+                ],
+                "intent": (
+                    "Preserve overnight action/status/confidence/source-quality attribution without turning "
+                    "the sim-only decision into a hard gate or real sell/order route."
+                ),
+                "next_postclose_metric": (
+                    "lifecycle_decision_matrix.overnight_bucket_attribution candidates/workorders must remain "
+                    "visible in threshold EV/runtime summary, and postclose verifier must fail if dropped."
+                ),
+                "files_likely_touched": [
+                    "src/engine/scalp_sim_overnight.py",
+                    "src/engine/lifecycle_decision_matrix.py",
+                    "src/engine/daily_threshold_cycle_report.py",
+                    "src/engine/runtime_approval_summary.py",
+                ],
+                "acceptance_tests": [
+                    "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_decision_matrix.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py",
+                    "postclose verifier fails if LDM overnight bucket candidates/workorders are not propagated",
+                ],
+                "metric_contract": contract,
+            }
+        )
+    return orders
+
 
 def _pipeline_event_verbosity_report_path(target_date: str) -> Path:
     return PIPELINE_EVENT_VERBOSITY_DIR / f"pipeline_event_verbosity_{target_date}.json"
@@ -1439,6 +1631,8 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         if isinstance(item, dict)
     ]
     lifecycle_entry_bucket_orders = _lifecycle_entry_bucket_followup_orders(lifecycle_report)
+    lifecycle_scale_in_bucket_orders = _lifecycle_scale_in_bucket_followup_orders(lifecycle_report)
+    lifecycle_overnight_bucket_orders = _lifecycle_overnight_bucket_followup_orders(lifecycle_report)
     threshold_ev_orders = [
         *_threshold_ev_followup_orders(ev_report),
         *_entry_adm_followup_orders(ev_report),
@@ -1457,6 +1651,8 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         *swing_discovery_orders,
         *pattern_lab_currentness_orders,
         *lifecycle_entry_bucket_orders,
+        *lifecycle_scale_in_bucket_orders,
+        *lifecycle_overnight_bucket_orders,
         *threshold_ev_orders,
     ]
     seen_keys: set[tuple[str, str, str]] = set()
@@ -1483,6 +1679,22 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         ]
     )
     selected = classified[: max(1, int(max_orders))]
+    required_handoff_order_ids = {
+        str(order.get("order_id"))
+        for order in [*lifecycle_entry_bucket_orders, *lifecycle_scale_in_bucket_orders]
+        if order.get("order_id")
+    }
+    required_handoff_order_ids.update(
+        str(order.get("order_id"))
+        for order in lifecycle_overnight_bucket_orders
+        if order.get("order_id")
+    )
+    selected_order_ids = {str(item.order.get("order_id")) for item in selected if item.order.get("order_id")}
+    for item in classified:
+        order_id = str(item.order.get("order_id") or "")
+        if order_id in required_handoff_order_ids and order_id not in selected_order_ids:
+            selected.append(item)
+            selected_order_ids.add(order_id)
     counts: dict[str, int] = {}
     for item in classified:
         counts[item.decision] = counts.get(item.decision, 0) + 1
@@ -1543,6 +1755,8 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "pattern_lab_currentness_source_order_count": len(pattern_lab_currentness_orders),
             "threshold_ev_source_order_count": len(threshold_ev_orders),
             "lifecycle_entry_bucket_source_order_count": len(lifecycle_entry_bucket_orders),
+            "lifecycle_scale_in_bucket_source_order_count": len(lifecycle_scale_in_bucket_orders),
+            "lifecycle_overnight_bucket_source_order_count": len(lifecycle_overnight_bucket_orders),
             "pipeline_event_verbosity_source_order_count": len(
                 _pipeline_event_verbosity_followup_orders(pipeline_event_verbosity)
             ),
@@ -1590,6 +1804,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
                 "acceptance_tests": item.order.get("acceptance_tests") or [],
                 "automation_reentry": item.automation_reentry,
                 "runtime_effect": bool(item.order.get("runtime_effect")),
+                "allowed_runtime_apply": bool(item.order.get("allowed_runtime_apply")),
                 "strategy_effect": bool(item.order.get("strategy_effect")),
                 "data_quality_effect": bool(item.order.get("data_quality_effect")),
                 "tuning_axis_effect": bool(item.order.get("tuning_axis_effect")),

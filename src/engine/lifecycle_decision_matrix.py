@@ -35,6 +35,14 @@ ENTRY_BUCKET_SAMPLE_FLOOR = 10
 ENTRY_BUCKET_PROMOTE_SAMPLE_FLOOR = 20
 ENTRY_BUCKET_NEGATIVE_EV_PCT = -0.30
 ENTRY_BUCKET_POSITIVE_EV_PCT = 0.30
+SCALE_IN_BUCKET_SAMPLE_FLOOR = 5
+SCALE_IN_BUCKET_PROMOTE_SAMPLE_FLOOR = 10
+SCALE_IN_BUCKET_NEGATIVE_EV_PCT = -0.30
+SCALE_IN_BUCKET_POSITIVE_EV_PCT = 0.30
+OVERNIGHT_BUCKET_SAMPLE_FLOOR = 5
+OVERNIGHT_BUCKET_PROMOTE_SAMPLE_FLOOR = 10
+OVERNIGHT_BUCKET_NEGATIVE_EV_PCT = -0.30
+OVERNIGHT_BUCKET_POSITIVE_EV_PCT = 0.30
 
 RUNTIME_FEATURE_KEYS = {
     "ai_score",
@@ -57,9 +65,16 @@ RUNTIME_FEATURE_KEYS = {
     "best_ask",
     "resolved_order_price",
     "add_type",
+    "scale_in_arm",
+    "scale_in_blocker_namespace",
+    "scale_in_blocker_reason",
     "qty",
     "limit_price",
     "curr_price",
+    "price_guard_reason",
+    "qty_reason",
+    "ai_score_source",
+    "supply_pass_count",
     "would_limit_fill",
     "source_quality_block_reason",
     "gate_action",
@@ -806,6 +821,143 @@ def _load_scalp_sim_scale_in_rows(target_date: str) -> tuple[list[dict[str, Any]
     }
 
 
+def _scale_in_arm_from_fields(stage: str, fields: dict[str, Any]) -> str:
+    arm = str(fields.get("scale_in_arm") or fields.get("add_type") or fields.get("scale_in_action_type") or "").upper()
+    if arm in {"AVG_DOWN", "PYRAMID"}:
+        return arm
+    chosen = str(fields.get("chosen_action") or "").lower()
+    rejected = str(fields.get("rejected_actions") or "").lower()
+    reason = str(fields.get("blocked_reason") or fields.get("reason") or "").lower()
+    if "pyramid" in "|".join([stage.lower(), chosen, rejected, reason]):
+        return "PYRAMID"
+    if "avg_down" in rejected or "reversal" in stage.lower() or "reversal" in reason:
+        return "AVG_DOWN"
+    profit = _safe_float(fields.get("profit_rate"), None)
+    if profit is not None and profit >= 0:
+        return "PYRAMID"
+    return "AVG_DOWN"
+
+
+def _scale_in_blocker_namespace(stage: str, fields: dict[str, Any], arm: str) -> str:
+    namespace = str(fields.get("scale_in_blocker_namespace") or "").strip().upper()
+    if namespace:
+        return namespace
+    if stage == "scale_in_price_guard_block":
+        return "PRICE_GUARD"
+    if stage == "scale_in_qty_block":
+        return "QTY_GUARD"
+    if "hold_sec_out_of_range" in str(fields.get("blocked_reason") or fields.get("reason") or ""):
+        return "AVG_DOWN_ONLY"
+    return arm or "NONE"
+
+
+def _load_scale_in_attribution_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    path = PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"
+    source_stages = {
+        "stat_action_decision_snapshot",
+        "pyramid_blocked_reason",
+        "scale_in_arm_blocked",
+        "reversal_add_blocked_reason",
+        "reversal_add_gate_blocked",
+        "scale_in_price_guard_block",
+        "scale_in_qty_block",
+    }
+    rows: list[dict[str, Any]] = []
+    stage_counts: Counter[str] = Counter()
+    arm_counts: Counter[str] = Counter()
+    for item in _iter_jsonl(path) or []:
+        if not isinstance(item, dict):
+            continue
+        source_stage = str(item.get("stage") or "")
+        if source_stage not in source_stages:
+            continue
+        fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
+        chosen = str(fields.get("chosen_action") or "")
+        action_type = str(fields.get("scale_in_action_type") or fields.get("add_type") or "")
+        rejected = str(fields.get("rejected_actions") or "")
+        if source_stage == "stat_action_decision_snapshot" and not (
+            chosen in {"avg_down_wait", "pyramid_wait"}
+            or action_type in {"AVG_DOWN", "PYRAMID"}
+            or "avg_down_wait" in rejected
+            or "pyramid_wait" in rejected
+        ):
+            continue
+        arm = _scale_in_arm_from_fields(source_stage, fields)
+        namespace = _scale_in_blocker_namespace(source_stage, fields, arm)
+        reason = (
+            fields.get("scale_in_blocker_reason")
+            or fields.get("blocked_reason")
+            or fields.get("gate_reason")
+            or fields.get("reason")
+            or fields.get("scale_in_action_reason")
+            or "-"
+        )
+        profit = _safe_float(fields.get("profit_rate"), None)
+        peak = _safe_float(fields.get("peak_profit"), None)
+        labels = {
+            "profit_rate": profit,
+            "mfe_10m_pct": peak if peak is not None else profit,
+            "mae_10m_pct": profit,
+            "close_10m_pct": profit,
+        }
+        runtime_features = {
+            "add_type": arm,
+            "scale_in_arm": arm,
+            "scale_in_blocker_namespace": namespace,
+            "scale_in_blocker_reason": reason,
+            "chosen_action": chosen,
+            "profit_rate_live": profit,
+            "peak_profit": peak,
+            "held_sec": fields.get("held_sec"),
+            "ai_score": fields.get("current_ai_score") or fields.get("ai_score"),
+            "ai_score_source": fields.get("ai_score_source") or "-",
+            "supply_pass_count": fields.get("supply_pass_count"),
+            "price_guard_reason": fields.get("reason") if source_stage == "scale_in_price_guard_block" else None,
+            "qty_reason": fields.get("reason") if source_stage == "scale_in_qty_block" else None,
+            "source_quality_block_reason": reason,
+            "actual_order_submitted": fields.get("actual_order_submitted", False),
+            "broker_order_forbidden": fields.get("broker_order_forbidden", True),
+            "fixed_threshold_contract_role": "bounded_tunable",
+            "time_bucket": fields.get("time_bucket"),
+            "runtime_effect": False,
+            "decision_authority": fields.get("decision_authority") or "scale_in_attribution_source_only",
+        }
+        candidate_id = (
+            fields.get("candidate_id")
+            or fields.get("sim_record_id")
+            or item.get("record_id")
+            or f"{item.get('stock_code')}:{source_stage}:{item.get('emitted_at')}"
+        )
+        rows.append(
+            {
+                "candidate_id": candidate_id,
+                "stock_code": item.get("stock_code"),
+                "event_time": item.get("emitted_at"),
+                "stage": "scale_in",
+                "source_stage": source_stage,
+                "runtime_features": runtime_features,
+                "labels": labels,
+                "stage_ev_composite_pct": _stage_ev("scale_in", labels),
+                "outcome_joined": profit is not None,
+                "actual_order_submitted": (
+                    False
+                    if fields.get("actual_order_submitted") is None
+                    else not _boolish_false(fields.get("actual_order_submitted"))
+                ),
+                "source": "scale_in_attribution_pipeline_events",
+            }
+        )
+        stage_counts[source_stage] += 1
+        arm_counts[arm] += 1
+    return rows, {
+        "artifact": str(path) if path.exists() else None,
+        "rows": len(rows),
+        "stage_counts": dict(sorted(stage_counts.items())),
+        "arm_counts": dict(sorted(arm_counts.items())),
+        "decision_authority": "scale_in_attribution_source_only",
+    }
+
+
 def _load_scalp_sim_overnight_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     path = PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"
     rows: list[dict[str, Any]] = []
@@ -837,6 +989,9 @@ def _load_scalp_sim_overnight_rows(target_date: str) -> tuple[list[dict[str, Any
             "next_day_mfe_pct": fields.get("next_day_mfe_pct"),
             "next_day_mae_pct": fields.get("next_day_mae_pct"),
             "next_day_close_pct": fields.get("next_day_close_pct"),
+            "mfe_10m_pct": fields.get("next_day_mfe_pct"),
+            "mae_10m_pct": fields.get("next_day_mae_pct"),
+            "close_10m_pct": fields.get("next_day_close_pct"),
             "final_realized_exit_pct": fields.get("final_realized_exit_pct"),
         }
         rows.append(
@@ -859,6 +1014,11 @@ def _load_scalp_sim_overnight_rows(target_date: str) -> tuple[list[dict[str, Any
                     "overnight_confidence": fields.get("ai_confidence"),
                     "overnight_price_source": fields.get("current_price_source"),
                     "overnight_status": "SELL_TODAY" if matrix_stage == "exit" else "HOLD_OVERNIGHT",
+                    "source_quality_gate": fields.get("source_quality_gate"),
+                    "metric_role": fields.get("metric_role"),
+                    "openai_model": fields.get("openai_model"),
+                    "openai_transport_mode": fields.get("openai_transport_mode"),
+                    "bedrock_shadow_route_mode": fields.get("bedrock_shadow_route_mode"),
                     "actual_order_submitted": fields.get("actual_order_submitted"),
                     "broker_order_forbidden": fields.get("broker_order_forbidden"),
                     "fixed_threshold_contract_role": "bounded_tunable",
@@ -1292,6 +1452,389 @@ def _entry_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _numeric_band(value: Any, *, prefix: str, cuts: list[tuple[float, str]], unknown: str) -> str:
+    number = _safe_float(value, None)
+    if number is None:
+        return unknown
+    for upper, label in cuts:
+        if number < upper:
+            return f"{prefix}_{label}"
+    return f"{prefix}_{cuts[-1][1]}_plus"
+
+
+def _scale_in_bucket_features(row: dict[str, Any]) -> dict[str, str]:
+    features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
+    labels = row.get("labels") if isinstance(row.get("labels"), dict) else {}
+    return {
+        "arm": _bucket_value(features.get("scale_in_arm") or features.get("add_type"), "arm_unknown"),
+        "blocker_namespace": _bucket_value(features.get("scale_in_blocker_namespace"), "blocker_namespace_unknown"),
+        "blocker_reason": _bucket_value(features.get("scale_in_blocker_reason") or features.get("source_quality_block_reason"), "blocker_reason_unknown"),
+        "profit_band": _numeric_band(
+            features.get("profit_rate_live") if features.get("profit_rate_live") is not None else labels.get("profit_rate"),
+            prefix="profit",
+            cuts=[(-0.7, "lt_neg070"), (-0.1, "neg070_neg010"), (0.8, "neg010_pos080"), (1.5, "pos080_pos150"), (3.0, "pos150_pos300")],
+            unknown="profit_unknown",
+        ),
+        "peak_profit_band": _numeric_band(
+            features.get("peak_profit"),
+            prefix="peak",
+            cuts=[(0.0, "lt_zero"), (0.8, "zero_pos080"), (1.5, "pos080_pos150"), (3.0, "pos150_pos300")],
+            unknown="peak_unknown",
+        ),
+        "held_bucket": _numeric_band(
+            features.get("held_sec"),
+            prefix="held",
+            cuts=[(20, "lt020s"), (180, "020_180s"), (600, "180_600s"), (1800, "600_1800s")],
+            unknown="held_unknown",
+        ),
+        "ai_score_band": _entry_score_band(features.get("ai_score")),
+        "ai_score_source": _bucket_value(features.get("ai_score_source"), "ai_source_unknown"),
+        "supply_pass_bucket": _numeric_band(
+            features.get("supply_pass_count"),
+            prefix="supply_pass",
+            cuts=[(1, "0"), (2, "1"), (3, "2"), (4, "3")],
+            unknown="supply_pass_unknown",
+        ),
+        "price_guard_reason": _bucket_value(features.get("price_guard_reason"), "price_guard_none"),
+        "qty_reason": _bucket_value(features.get("qty_reason"), "qty_none"),
+        "time_bucket": _bucket_value(features.get("time_bucket"), "time_unknown"),
+    }
+
+
+def _scale_in_bucket_row(bucket_type: str, bucket_key: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    joined = [row for row in rows if row.get("stage_ev_composite_pct") is not None]
+    joined_sample = len(joined)
+    ev_values = [float(row["stage_ev_composite_pct"]) for row in joined]
+    profit_values = [
+        _safe_float((row.get("labels") or {}).get("profit_rate"), None)
+        for row in joined
+        if isinstance(row.get("labels"), dict)
+    ]
+    valid_profit = [float(value) for value in profit_values if value is not None]
+    avg_ev = round(sum(ev_values) / len(ev_values), 4) if ev_values else None
+    avg_profit = round(sum(valid_profit) / len(valid_profit), 4) if valid_profit else None
+    source_quality = (
+        "pass"
+        if len(rows) >= SCALE_IN_BUCKET_SAMPLE_FLOOR and joined_sample >= SCALE_IN_BUCKET_SAMPLE_FLOOR
+        else "hold_sample"
+    )
+    if avg_ev is None or source_quality != "pass":
+        recommended_route = "hold_sample"
+    elif avg_ev <= SCALE_IN_BUCKET_NEGATIVE_EV_PCT:
+        recommended_route = "candidate_tighten_or_exclude"
+    elif avg_ev >= SCALE_IN_BUCKET_POSITIVE_EV_PCT:
+        recommended_route = "candidate_recovery_or_relax"
+    else:
+        recommended_route = "hold_no_edge"
+    return {
+        "bucket_type": bucket_type,
+        "bucket_key": bucket_key,
+        "sample": len(rows),
+        "joined_sample": joined_sample,
+        "join_rate": round(joined_sample / len(rows), 4) if rows else 0.0,
+        "source_quality_gate": source_quality,
+        "source_quality_adjusted_ev_pct": avg_ev,
+        "equal_weight_avg_profit_pct": avg_profit,
+        "diagnostic_win_rate": (
+            round(sum(1 for value in valid_profit if value > 0) / len(valid_profit), 4)
+            if valid_profit
+            else None
+        ),
+        "mfe_10m_pct": _avg_label(joined, "mfe_10m_pct"),
+        "mae_10m_pct": _avg_label(joined, "mae_10m_pct"),
+        "close_10m_pct": _avg_label(joined, "close_10m_pct"),
+        "recommended_route": recommended_route,
+        "decision_authority": "adm_ldm_scale_in_bucket_attribution_source_only",
+        "runtime_effect": False,
+        "fixed_threshold_contract_role": "bounded_tunable",
+    }
+
+
+def _scale_in_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    scale_rows = [row for row in rows if str(row.get("stage") or "") == "scale_in"]
+    bucket_groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in scale_rows:
+        buckets = _scale_in_bucket_features(row)
+        for bucket_type, bucket_key in buckets.items():
+            bucket_groups[(bucket_type, bucket_key)].append(row)
+
+    buckets = [
+        _scale_in_bucket_row(bucket_type, bucket_key, subset)
+        for (bucket_type, bucket_key), subset in bucket_groups.items()
+    ]
+    buckets.sort(
+        key=lambda item: (
+            str(item.get("bucket_type") or ""),
+            -int(item.get("joined_sample") or 0),
+            str(item.get("bucket_key") or ""),
+        )
+    )
+    actionable = [
+        item
+        for item in buckets
+        if item.get("source_quality_gate") == "pass"
+        and item.get("recommended_route") in {"candidate_tighten_or_exclude", "candidate_recovery_or_relax"}
+    ]
+
+    def approval_eligible(item: dict[str, Any]) -> bool:
+        key = str(item.get("bucket_key") or "")
+        if "unknown" in key:
+            return False
+        return int(item.get("joined_sample") or 0) >= SCALE_IN_BUCKET_PROMOTE_SAMPLE_FLOOR
+
+    runtime_candidates = [
+        {
+            "candidate_id": f"scale_in_bucket_{idx+1}",
+            "bucket_type": item.get("bucket_type"),
+            "bucket_key": item.get("bucket_key"),
+            "recommended_route": item.get("recommended_route"),
+            "source_quality_adjusted_ev_pct": item.get("source_quality_adjusted_ev_pct"),
+            "joined_sample": item.get("joined_sample"),
+            "approval_required": True,
+            "allowed_runtime_apply": False,
+            "decision_authority": "adm_ldm_scale_in_bucket_attribution_source_only",
+            "next_route": "threshold_cycle_runtime_approval_request_after_rolling_confirmation",
+        }
+        for idx, item in enumerate(actionable)
+        if approval_eligible(item)
+    ][:10]
+    workorders = [
+        {
+            "workorder_id": f"scale_in_bucket_source_quality_{idx+1}",
+            "bucket_type": item.get("bucket_type"),
+            "bucket_key": item.get("bucket_key"),
+            "reason": "scale_in_arm_bucket_needs_source_quality_or_threshold_cycle_confirmation",
+            "recommended_route": item.get("recommended_route"),
+            "metric_role": "source_quality_gate",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+        for idx, item in enumerate(actionable[:10])
+    ]
+    return {
+        "metric_role": "sim_probe_ev",
+        "decision_authority": "adm_ldm_scale_in_bucket_attribution_source_only",
+        "runtime_effect": False,
+        "window_policy": "daily_lifecycle_rows_plus_threshold_cycle_rolling_consumer",
+        "sample_floor": SCALE_IN_BUCKET_SAMPLE_FLOOR,
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": "scale_in arm + blocker namespace + joined source labels",
+        "forbidden_uses": [
+            "real_scale_in_submit",
+            "position_cap_release",
+            "intraday_threshold_mutation",
+            "provider_route_change",
+            "bot_restart_trigger",
+        ],
+        "summary": {
+            "scale_in_rows": len(scale_rows),
+            "bucket_count": len(buckets),
+            "actionable_bucket_count": len(actionable),
+            "runtime_candidate_count": len(runtime_candidates),
+            "workorder_count": len(workorders),
+            "arm_counts": dict(Counter(_scale_in_bucket_features(row)["arm"] for row in scale_rows)),
+        },
+        "buckets": buckets[:200],
+        "runtime_approval_candidates": runtime_candidates,
+        "code_improvement_workorders": workorders,
+    }
+
+
+def _confidence_band(value: Any) -> str:
+    confidence = _safe_float(value, None)
+    if confidence is None:
+        return "confidence_unknown"
+    if confidence < 0.4:
+        return "confidence_lt040"
+    if confidence < 0.7:
+        return "confidence_040_069"
+    return "confidence_070p"
+
+
+def _overnight_bucket_features(row: dict[str, Any]) -> dict[str, str]:
+    features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
+    labels = row.get("labels") if isinstance(row.get("labels"), dict) else {}
+    return {
+        "stage": _bucket_value(row.get("stage"), "stage_unknown"),
+        "source_stage": _bucket_value(row.get("source_stage"), "source_unknown"),
+        "overnight_action": _bucket_value(features.get("overnight_action"), "action_unknown"),
+        "overnight_status": _bucket_value(features.get("overnight_status"), "status_unknown"),
+        "confidence_band": _confidence_band(features.get("overnight_confidence")),
+        "profit_band": _numeric_band(
+            features.get("profit_rate_live") if features.get("profit_rate_live") is not None else labels.get("profit_rate"),
+            prefix="profit",
+            cuts=[(-0.7, "lt_neg070"), (-0.1, "neg070_neg010"), (0.8, "neg010_pos080"), (1.5, "pos080_pos150"), (3.0, "pos150_pos300")],
+            unknown="profit_unknown",
+        ),
+        "peak_profit_band": _numeric_band(
+            features.get("peak_profit"),
+            prefix="peak",
+            cuts=[(0.0, "lt_zero"), (0.8, "zero_pos080"), (1.5, "pos080_pos150"), (3.0, "pos150_pos300")],
+            unknown="peak_unknown",
+        ),
+        "held_bucket": _numeric_band(
+            features.get("held_sec"),
+            prefix="held",
+            cuts=[(20, "lt020s"), (180, "020_180s"), (600, "180_600s"), (1800, "600_1800s")],
+            unknown="held_unknown",
+        ),
+        "price_source": _bucket_value(features.get("overnight_price_source"), "price_source_unknown"),
+        "source_quality_gate": _bucket_value(features.get("source_quality_gate"), "source_quality_unknown"),
+    }
+
+
+def _overnight_bucket_row(bucket_type: str, bucket_key: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    joined = [row for row in rows if row.get("stage_ev_composite_pct") is not None]
+    joined_sample = len(joined)
+    ev_values = [float(row["stage_ev_composite_pct"]) for row in joined]
+    profit_values = [
+        _safe_float((row.get("labels") or {}).get("profit_rate"), None)
+        for row in joined
+        if isinstance(row.get("labels"), dict)
+    ]
+    valid_profit = [float(value) for value in profit_values if value is not None]
+    avg_ev = round(sum(ev_values) / len(ev_values), 4) if ev_values else None
+    avg_profit = round(sum(valid_profit) / len(valid_profit), 4) if valid_profit else None
+    source_quality = (
+        "pass"
+        if len(rows) >= OVERNIGHT_BUCKET_SAMPLE_FLOOR and joined_sample >= OVERNIGHT_BUCKET_SAMPLE_FLOOR
+        else "hold_sample"
+    )
+    if avg_ev is None or source_quality != "pass":
+        recommended_route = "hold_sample"
+    elif avg_ev <= OVERNIGHT_BUCKET_NEGATIVE_EV_PCT:
+        recommended_route = "candidate_tighten_or_exclude"
+    elif avg_ev >= OVERNIGHT_BUCKET_POSITIVE_EV_PCT:
+        recommended_route = "candidate_recovery_or_relax"
+    else:
+        recommended_route = "hold_no_edge"
+    return {
+        "bucket_type": bucket_type,
+        "bucket_key": bucket_key,
+        "sample": len(rows),
+        "joined_sample": joined_sample,
+        "join_rate": round(joined_sample / len(rows), 4) if rows else 0.0,
+        "source_quality_gate": source_quality,
+        "source_quality_adjusted_ev_pct": avg_ev,
+        "equal_weight_avg_profit_pct": avg_profit,
+        "diagnostic_win_rate": (
+            round(sum(1 for value in valid_profit if value > 0) / len(valid_profit), 4)
+            if valid_profit
+            else None
+        ),
+        "next_day_mfe_pct": _avg_label(joined, "next_day_mfe_pct"),
+        "next_day_mae_pct": _avg_label(joined, "next_day_mae_pct"),
+        "next_day_close_pct": _avg_label(joined, "next_day_close_pct"),
+        "recommended_route": recommended_route,
+        "decision_authority": "adm_ldm_overnight_bucket_attribution_source_only",
+        "runtime_effect": False,
+        "fixed_threshold_contract_role": "bounded_tunable",
+    }
+
+
+def _overnight_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    overnight_rows = [
+        row
+        for row in rows
+        if str(row.get("source") or "") == "scalp_sim_overnight_pipeline_events"
+    ]
+    bucket_groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in overnight_rows:
+        buckets = _overnight_bucket_features(row)
+        for bucket_type, bucket_key in buckets.items():
+            bucket_groups[(bucket_type, bucket_key)].append(row)
+        combo_key = "|".join(
+            [
+                f"action={buckets['overnight_action']}",
+                f"status={buckets['overnight_status']}",
+                f"confidence={buckets['confidence_band']}",
+                f"profit={buckets['profit_band']}",
+            ]
+        )
+        bucket_groups[("combo_overnight_decision", combo_key)].append(row)
+
+    buckets = [
+        _overnight_bucket_row(bucket_type, bucket_key, subset)
+        for (bucket_type, bucket_key), subset in bucket_groups.items()
+    ]
+    buckets.sort(
+        key=lambda item: (
+            str(item.get("bucket_type") or ""),
+            -int(item.get("joined_sample") or 0),
+            str(item.get("bucket_key") or ""),
+        )
+    )
+    actionable = [
+        item
+        for item in buckets
+        if item.get("source_quality_gate") == "pass"
+        and item.get("recommended_route") in {"candidate_tighten_or_exclude", "candidate_recovery_or_relax"}
+    ]
+
+    def approval_eligible(item: dict[str, Any]) -> bool:
+        bucket_key = str(item.get("bucket_key") or "")
+        if "unknown" in bucket_key:
+            return False
+        return int(item.get("joined_sample") or 0) >= OVERNIGHT_BUCKET_PROMOTE_SAMPLE_FLOOR
+
+    runtime_candidates = [
+        {
+            "candidate_id": f"overnight_bucket_{idx+1}",
+            "bucket_type": item.get("bucket_type"),
+            "bucket_key": item.get("bucket_key"),
+            "recommended_route": item.get("recommended_route"),
+            "source_quality_adjusted_ev_pct": item.get("source_quality_adjusted_ev_pct"),
+            "joined_sample": item.get("joined_sample"),
+            "approval_required": True,
+            "allowed_runtime_apply": False,
+            "decision_authority": "adm_ldm_overnight_bucket_attribution_source_only",
+            "next_route": "threshold_cycle_runtime_approval_request_after_rolling_confirmation",
+        }
+        for idx, item in enumerate(actionable)
+        if approval_eligible(item)
+    ][:10]
+    workorders = [
+        {
+            "workorder_id": f"overnight_bucket_source_quality_{idx+1}",
+            "bucket_type": item.get("bucket_type"),
+            "bucket_key": item.get("bucket_key"),
+            "reason": "overnight_decision_bucket_needs_source_quality_or_threshold_cycle_confirmation",
+            "recommended_route": item.get("recommended_route"),
+            "metric_role": "source_quality_gate",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+        for idx, item in enumerate(actionable[:10])
+    ]
+    return {
+        "metric_role": "sim_probe_ev",
+        "decision_authority": "adm_ldm_overnight_bucket_attribution_source_only",
+        "runtime_effect": False,
+        "window_policy": "daily_overnight_rows_plus_next_day_carry_label_join_consumer",
+        "sample_floor": OVERNIGHT_BUCKET_SAMPLE_FLOOR,
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": "overnight decision coverage + joined same/next-day source labels",
+        "forbidden_uses": [
+            "hard_overnight_gate",
+            "real_sell_order_submit",
+            "intraday_threshold_mutation",
+            "provider_route_change",
+            "bot_restart_trigger",
+        ],
+        "summary": {
+            "overnight_rows": len(overnight_rows),
+            "bucket_count": len(buckets),
+            "actionable_bucket_count": len(actionable),
+            "runtime_candidate_count": len(runtime_candidates),
+            "workorder_count": len(workorders),
+            "status_counts": dict(Counter(_overnight_bucket_features(row)["overnight_status"] for row in overnight_rows)),
+        },
+        "buckets": buckets[:200],
+        "runtime_approval_candidates": runtime_candidates,
+        "code_improvement_workorders": workorders,
+    }
+
+
 def _policy_entries(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -1419,6 +1962,7 @@ def build_lifecycle_decision_matrix_report(target_date: str) -> dict[str, Any]:
         _load_scalp_sim_submit_rows,
         _load_scalp_sim_holding_rows,
         _load_scalp_sim_scale_in_rows,
+        _load_scale_in_attribution_rows,
         _load_scalp_sim_overnight_rows,
         _load_scalp_sim_panic_rows,
     ]
@@ -1447,6 +1991,8 @@ def build_lifecycle_decision_matrix_report(target_date: str) -> dict[str, Any]:
     if all(entry.get("source_quality_gate") != "pass" for entry in policy_entries):
         warnings.append("all_stage_policy_entries_below_sample_floor")
     entry_bucket_attribution = _entry_bucket_attribution(rows)
+    scale_in_bucket_attribution = _scale_in_bucket_attribution(rows)
+    overnight_bucket_attribution = _overnight_bucket_attribution(rows)
     report = {
         "schema_version": REPORT_SCHEMA_VERSION,
         "date": target_date,
@@ -1489,12 +2035,44 @@ def build_lifecycle_decision_matrix_report(target_date: str) -> dict[str, Any]:
                 if isinstance(entry_bucket_attribution.get("summary"), dict)
                 else 0
             ),
+            "scale_in_bucket_actionable_count": (
+                scale_in_bucket_attribution.get("summary", {}).get("actionable_bucket_count")
+                if isinstance(scale_in_bucket_attribution.get("summary"), dict)
+                else 0
+            ),
+            "scale_in_bucket_runtime_candidate_count": (
+                scale_in_bucket_attribution.get("summary", {}).get("runtime_candidate_count")
+                if isinstance(scale_in_bucket_attribution.get("summary"), dict)
+                else 0
+            ),
+            "scale_in_bucket_workorder_count": (
+                scale_in_bucket_attribution.get("summary", {}).get("workorder_count")
+                if isinstance(scale_in_bucket_attribution.get("summary"), dict)
+                else 0
+            ),
+            "overnight_bucket_actionable_count": (
+                overnight_bucket_attribution.get("summary", {}).get("actionable_bucket_count")
+                if isinstance(overnight_bucket_attribution.get("summary"), dict)
+                else 0
+            ),
+            "overnight_bucket_runtime_candidate_count": (
+                overnight_bucket_attribution.get("summary", {}).get("runtime_candidate_count")
+                if isinstance(overnight_bucket_attribution.get("summary"), dict)
+                else 0
+            ),
+            "overnight_bucket_workorder_count": (
+                overnight_bucket_attribution.get("summary", {}).get("workorder_count")
+                if isinstance(overnight_bucket_attribution.get("summary"), dict)
+                else 0
+            ),
             "lifecycle_ai_context_feedback": _lifecycle_ai_context_feedback_summary(policy_entries),
             "status": "pass" if not warnings else "warning",
             "warnings": warnings,
         },
         "policy_entries": policy_entries,
         "entry_bucket_attribution": entry_bucket_attribution,
+        "scale_in_bucket_attribution": scale_in_bucket_attribution,
+        "overnight_bucket_attribution": overnight_bucket_attribution,
         "examples": rows[:50],
         "sources": {**sources, "lifecycle_ai_context_attribution": attribution_summary},
         "warnings": warnings,
@@ -1527,6 +2105,10 @@ def render_lifecycle_decision_matrix_markdown(report: dict[str, Any]) -> str:
         f"- promote_ready_count: `{summary.get('promote_ready_count')}`",
         f"- entry_bucket_actionable_count: `{summary.get('entry_bucket_actionable_count')}`",
         f"- entry_bucket_runtime_candidate_count: `{summary.get('entry_bucket_runtime_candidate_count')}`",
+        f"- scale_in_bucket_actionable_count: `{summary.get('scale_in_bucket_actionable_count')}`",
+        f"- scale_in_bucket_runtime_candidate_count: `{summary.get('scale_in_bucket_runtime_candidate_count')}`",
+        f"- overnight_bucket_actionable_count: `{summary.get('overnight_bucket_actionable_count')}`",
+        f"- overnight_bucket_runtime_candidate_count: `{summary.get('overnight_bucket_runtime_candidate_count')}`",
         f"- lifecycle_ai_context_feedback: `{summary.get('lifecycle_ai_context_feedback') or {}}`",
         f"- warnings: `{summary.get('warnings')}`",
         "",
@@ -1588,6 +2170,106 @@ def render_lifecycle_decision_matrix_markdown(report: dict[str, Any]) -> str:
     lines.extend(["", "### Entry Bucket Workorders", ""])
     if workorders:
         for item in workorders:
+            if isinstance(item, dict):
+                lines.append(f"- `{item.get('workorder_id')}`: `{item.get('bucket_type')}` / `{item.get('bucket_key')}` -> `{item.get('reason')}`")
+    else:
+        lines.append("- none")
+    scale_buckets = (
+        report.get("scale_in_bucket_attribution")
+        if isinstance(report.get("scale_in_bucket_attribution"), dict)
+        else {}
+    )
+    scale_summary = scale_buckets.get("summary") if isinstance(scale_buckets.get("summary"), dict) else {}
+    lines.extend(
+        [
+            "",
+            "## Scale-In Bucket Attribution",
+            "",
+            f"- decision_authority: `{scale_buckets.get('decision_authority')}`",
+            f"- primary_decision_metric: `{scale_buckets.get('primary_decision_metric')}`",
+            f"- summary: `{scale_summary}`",
+            "",
+            "| bucket_type | bucket_key | sample | joined | ev | avg_profit | win_rate | route |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |",
+        ]
+    )
+    shown = 0
+    for item in scale_buckets.get("buckets") or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("source_quality_gate") != "pass" and shown >= 20:
+            continue
+        lines.append(
+            f"| `{item.get('bucket_type')}` | `{item.get('bucket_key')}` | {item.get('sample')} | "
+            f"{item.get('joined_sample')} | {item.get('source_quality_adjusted_ev_pct')} | "
+            f"{item.get('equal_weight_avg_profit_pct')} | {item.get('diagnostic_win_rate')} | "
+            f"`{item.get('recommended_route')}` |"
+        )
+        shown += 1
+        if shown >= 40:
+            break
+    scale_candidates = scale_buckets.get("runtime_approval_candidates") or []
+    lines.extend(["", "### Scale-In Bucket Runtime Approval Candidates", ""])
+    if scale_candidates:
+        for item in scale_candidates:
+            if isinstance(item, dict):
+                lines.append(f"- `{item.get('candidate_id')}`: `{item.get('bucket_type')}` / `{item.get('bucket_key')}` -> `{item.get('recommended_route')}`")
+    else:
+        lines.append("- none")
+    scale_workorders = scale_buckets.get("code_improvement_workorders") or []
+    lines.extend(["", "### Scale-In Bucket Workorders", ""])
+    if scale_workorders:
+        for item in scale_workorders:
+            if isinstance(item, dict):
+                lines.append(f"- `{item.get('workorder_id')}`: `{item.get('bucket_type')}` / `{item.get('bucket_key')}` -> `{item.get('reason')}`")
+    else:
+        lines.append("- none")
+    overnight_buckets = (
+        report.get("overnight_bucket_attribution")
+        if isinstance(report.get("overnight_bucket_attribution"), dict)
+        else {}
+    )
+    overnight_summary = overnight_buckets.get("summary") if isinstance(overnight_buckets.get("summary"), dict) else {}
+    lines.extend(
+        [
+            "",
+            "## Overnight Bucket Attribution",
+            "",
+            f"- decision_authority: `{overnight_buckets.get('decision_authority')}`",
+            f"- primary_decision_metric: `{overnight_buckets.get('primary_decision_metric')}`",
+            f"- summary: `{overnight_summary}`",
+            "",
+            "| bucket_type | bucket_key | sample | joined | ev | avg_profit | win_rate | route |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |",
+        ]
+    )
+    shown = 0
+    for item in overnight_buckets.get("buckets") or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("source_quality_gate") != "pass" and shown >= 20:
+            continue
+        lines.append(
+            f"| `{item.get('bucket_type')}` | `{item.get('bucket_key')}` | {item.get('sample')} | "
+            f"{item.get('joined_sample')} | {item.get('source_quality_adjusted_ev_pct')} | "
+            f"{item.get('equal_weight_avg_profit_pct')} | {item.get('diagnostic_win_rate')} | "
+            f"`{item.get('recommended_route')}` |"
+        )
+        shown += 1
+        if shown >= 40:
+            break
+    overnight_candidates = overnight_buckets.get("runtime_approval_candidates") or []
+    lines.extend(["", "### Overnight Bucket Runtime Approval Candidates", ""])
+    if overnight_candidates:
+        for item in overnight_candidates:
+            if isinstance(item, dict):
+                lines.append(f"- `{item.get('candidate_id')}`: `{item.get('bucket_type')}` / `{item.get('bucket_key')}` -> `{item.get('recommended_route')}`")
+    else:
+        lines.append("- none")
+    overnight_workorders = overnight_buckets.get("code_improvement_workorders") or []
+    lines.extend(["", "### Overnight Bucket Workorders", ""])
+    if overnight_workorders:
+        for item in overnight_workorders:
             if isinstance(item, dict):
                 lines.append(f"- `{item.get('workorder_id')}`: `{item.get('bucket_type')}` / `{item.get('bucket_key')}` -> `{item.get('reason')}`")
     else:

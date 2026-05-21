@@ -17,10 +17,16 @@ POSTCLOSE_IONICE_CLASS="${THRESHOLD_CYCLE_POSTCLOSE_IONICE_CLASS:-2}"
 POSTCLOSE_IONICE_LEVEL="${THRESHOLD_CYCLE_POSTCLOSE_IONICE_LEVEL:-7}"
 POSTCLOSE_RESOURCE_GUARD="${THRESHOLD_CYCLE_POSTCLOSE_RESOURCE_GUARD:-true}"
 POSTCLOSE_MIN_MEM_AVAILABLE_MB="${THRESHOLD_CYCLE_POSTCLOSE_MIN_MEM_AVAILABLE_MB:-4096}"
+POSTCLOSE_MIN_SWAP_FREE_MB="${THRESHOLD_CYCLE_POSTCLOSE_MIN_SWAP_FREE_MB:-256}"
 POSTCLOSE_MAX_SWAP_USED_PCT="${THRESHOLD_CYCLE_POSTCLOSE_MAX_SWAP_USED_PCT:-85}"
 POSTCLOSE_MAX_IOWAIT_PCT="${THRESHOLD_CYCLE_POSTCLOSE_MAX_IOWAIT_PCT:-35}"
+POSTCLOSE_MAX_SAMPLE_AGE_SEC="${THRESHOLD_CYCLE_POSTCLOSE_MAX_SAMPLE_AGE_SEC:-180}"
+POSTCLOSE_MAX_LOAD1="${THRESHOLD_CYCLE_POSTCLOSE_MAX_LOAD1:-64}"
 POSTCLOSE_RESOURCE_WAIT_SEC="${THRESHOLD_CYCLE_POSTCLOSE_RESOURCE_WAIT_SEC:-300}"
 POSTCLOSE_RESOURCE_WAIT_INTERVAL_SEC="${THRESHOLD_CYCLE_POSTCLOSE_RESOURCE_WAIT_INTERVAL_SEC:-10}"
+POSTCLOSE_BOT_ACTION="${THRESHOLD_CYCLE_POSTCLOSE_BOT_ACTION:-none}"
+POSTCLOSE_BOT_SESSION="${THRESHOLD_CYCLE_POSTCLOSE_BOT_SESSION:-bot}"
+POSTCLOSE_BOT_RESTART_WAIT_SEC="${THRESHOLD_CYCLE_POSTCLOSE_BOT_RESTART_WAIT_SEC:-5}"
 COMPACT_AVAILABILITY_WAIT_SEC="${THRESHOLD_CYCLE_COMPACT_AVAILABILITY_WAIT_SEC:-900}"
 COMPACT_AVAILABILITY_WAIT_INTERVAL_SEC="${THRESHOLD_CYCLE_COMPACT_AVAILABILITY_WAIT_INTERVAL_SEC:-15}"
 SKIP_DB="${THRESHOLD_CYCLE_SKIP_DB:-false}"
@@ -100,16 +106,81 @@ payload.update(
 payload.setdefault("started_at", payload["updated_at"])
 if finished == "1":
     payload["finished_at"] = payload["updated_at"]
+else:
+    payload.pop("finished_at", None)
 path.parent.mkdir(parents=True, exist_ok=True)
 path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 PY
 }
 
-trap 'rc=$?; failed_at="$(TZ=Asia/Seoul date +%FT%T%z)"; write_postclose_status failed command_failed "$rc" 1 || true; echo "[FAIL] threshold-cycle postclose target_date=$TARGET_DATE failed_at=$failed_at"; exit "$rc"' ERR
+BOT_WAS_RUNNING=false
+BOT_RESTART_DONE=false
+
+bot_session_exists() {
+  command -v tmux >/dev/null 2>&1 && tmux has-session -t "$POSTCLOSE_BOT_SESSION" 2>/dev/null
+}
+
+stop_postclose_bot_if_requested() {
+  case "$POSTCLOSE_BOT_ACTION" in
+    none|"")
+      return 0
+      ;;
+    stop|restart)
+      ;;
+    *)
+      echo "[threshold-cycle] postclose bot action ignored unknown_action=$POSTCLOSE_BOT_ACTION" >&2
+      return 0
+      ;;
+  esac
+
+  if bot_session_exists; then
+    BOT_WAS_RUNNING=true
+    echo "[threshold-cycle] stopping bot for postclose resource isolation session=$POSTCLOSE_BOT_SESSION action=$POSTCLOSE_BOT_ACTION"
+    tmux kill-session -t "$POSTCLOSE_BOT_SESSION" 2>/dev/null || true
+    sleep "$POSTCLOSE_BOT_RESTART_WAIT_SEC"
+  else
+    echo "[threshold-cycle] bot stop skipped reason=session_not_running session=$POSTCLOSE_BOT_SESSION action=$POSTCLOSE_BOT_ACTION"
+  fi
+}
+
+restart_postclose_bot_if_requested() {
+  if [ "$POSTCLOSE_BOT_ACTION" != "restart" ] || [ "$BOT_RESTART_DONE" = "true" ]; then
+    return 0
+  fi
+  BOT_RESTART_DONE=true
+  if bot_session_exists; then
+    echo "[threshold-cycle] bot restart skipped reason=session_already_running session=$POSTCLOSE_BOT_SESSION"
+    return 0
+  fi
+  if [ "$BOT_WAS_RUNNING" = "true" ]; then
+    echo "[threshold-cycle] restarting bot after postclose session=$POSTCLOSE_BOT_SESSION"
+  else
+    echo "[threshold-cycle] starting bot after postclose session=$POSTCLOSE_BOT_SESSION reason=restart_action_requested"
+  fi
+  tmux new-session -d -s "$POSTCLOSE_BOT_SESSION" \
+    "/bin/bash -c 'cd \"$PROJECT_DIR/src\" && source ../.venv/bin/activate && ./run_bot.sh'" || {
+      echo "[threshold-cycle] bot restart failed session=$POSTCLOSE_BOT_SESSION" >&2
+      return 0
+    }
+}
+
+mark_postclose_failed() {
+  local reason="${1:-command_failed}"
+  local rc="${2:-1}"
+  local failed_at
+  failed_at="$(TZ=Asia/Seoul date +%FT%T%z)"
+  write_postclose_status failed "$reason" "$rc" 1 || true
+  echo "[FAIL] threshold-cycle postclose target_date=$TARGET_DATE reason=$reason failed_at=$failed_at"
+}
+
+trap 'rc=$?; mark_postclose_failed command_failed "$rc"; restart_postclose_bot_if_requested; exit "$rc"' ERR
+trap 'mark_postclose_failed interrupted 130; restart_postclose_bot_if_requested; exit 130' INT
+trap 'mark_postclose_failed terminated 143; restart_postclose_bot_if_requested; exit 143' TERM
 
 started_at="$(TZ=Asia/Seoul date +%FT%T%z)"
 write_postclose_status running started 0 0
 echo "[START] threshold-cycle postclose target_date=$TARGET_DATE max_iterations=$MAX_ITERATIONS started_at=$started_at"
+stop_postclose_bot_if_requested
 
 run_postclose_cmd() {
   local cmd=("$@")
@@ -129,21 +200,36 @@ resource_guard_enabled() {
 postclose_resource_status() {
   "$VENV_PY" - "$PROJECT_DIR/logs/system_metric_samples.jsonl" \
     "$POSTCLOSE_MIN_MEM_AVAILABLE_MB" \
+    "$POSTCLOSE_MIN_SWAP_FREE_MB" \
     "$POSTCLOSE_MAX_SWAP_USED_PCT" \
-    "$POSTCLOSE_MAX_IOWAIT_PCT" <<'PY'
+    "$POSTCLOSE_MAX_IOWAIT_PCT" \
+    "$MAX_CPU_BUSY_PCT" \
+    "$POSTCLOSE_MAX_SAMPLE_AGE_SEC" \
+    "$POSTCLOSE_MAX_LOAD1" <<'PY'
 import json
 import sys
+import time
 from pathlib import Path
 
 path = Path(sys.argv[1])
 min_mem = float(sys.argv[2])
-max_swap = float(sys.argv[3])
-max_iowait = float(sys.argv[4])
+min_swap_free = float(sys.argv[3])
+max_swap = float(sys.argv[4])
+max_iowait = float(sys.argv[5])
+max_cpu_busy = float(sys.argv[6])
+max_sample_age = float(sys.argv[7])
+max_load1 = float(sys.argv[8])
 if not path.exists():
-    print(json.dumps({"ok": True, "reason": "sampler_missing_skip"}))
+    print(json.dumps({"ok": False, "issues": ["sampler_missing"]}))
     raise SystemExit(0)
 last = None
-for line in path.read_text(encoding="utf-8").splitlines()[-200:]:
+with path.open("rb") as fh:
+    try:
+        fh.seek(-65536, 2)
+    except OSError:
+        fh.seek(0)
+    lines = fh.read().decode("utf-8", errors="ignore").splitlines()
+for line in lines[-200:]:
     line = line.strip()
     if not line:
         continue
@@ -152,10 +238,11 @@ for line in path.read_text(encoding="utf-8").splitlines()[-200:]:
     except json.JSONDecodeError:
         continue
 if not last:
-    print(json.dumps({"ok": True, "reason": "sampler_empty_skip"}))
+    print(json.dumps({"ok": False, "issues": ["sampler_empty"]}))
     raise SystemExit(0)
 memory = last.get("memory") or {}
 cpu = last.get("cpu") or {}
+loadavg = last.get("loadavg") or {}
 swap_total = float(memory.get("swap_total_mb") or 0.0)
 swap_free = float(memory.get("swap_free_mb") or 0.0)
 swap_used_pct = 0.0
@@ -163,19 +250,35 @@ if swap_total > 0:
     swap_used_pct = ((swap_total - swap_free) / swap_total) * 100.0
 mem_available = float(memory.get("mem_available_mb") or 0.0)
 iowait = float(cpu.get("iowait_pct") or 0.0)
+cpu_busy = float(cpu.get("cpu_busy_pct") or 0.0)
+load1 = float(loadavg.get("1m") or 0.0)
+sample_epoch = float(last.get("epoch") or 0.0)
+sample_age_sec = max(0.0, time.time() - sample_epoch) if sample_epoch > 0 else 999999.0
 issues = []
+if sample_age_sec > max_sample_age:
+    issues.append(f"sample_age_sec={sample_age_sec:.0f}>{max_sample_age:.0f}")
 if mem_available < min_mem:
     issues.append(f"mem_available_mb={mem_available:.1f}<{min_mem:.1f}")
+if swap_total > 0 and swap_free < min_swap_free:
+    issues.append(f"swap_free_mb={swap_free:.1f}<{min_swap_free:.1f}")
 if swap_used_pct > max_swap:
     issues.append(f"swap_used_pct={swap_used_pct:.1f}>{max_swap:.1f}")
 if iowait > max_iowait:
     issues.append(f"iowait_pct={iowait:.1f}>{max_iowait:.1f}")
+if cpu_busy > max_cpu_busy:
+    issues.append(f"cpu_busy_pct={cpu_busy:.1f}>{max_cpu_busy:.1f}")
+if load1 > max_load1:
+    issues.append(f"load1={load1:.1f}>{max_load1:.1f}")
 print(json.dumps({
     "ok": not issues,
     "issues": issues,
     "mem_available_mb": round(mem_available, 1),
+    "swap_free_mb": round(swap_free, 1),
     "swap_used_pct": round(swap_used_pct, 1),
     "iowait_pct": round(iowait, 1),
+    "cpu_busy_pct": round(cpu_busy, 1),
+    "load1": round(load1, 1),
+    "sample_age_sec": round(sample_age_sec, 1),
     "sample_ts": last.get("ts"),
 }))
 PY
@@ -759,6 +862,7 @@ wait_for_report_artifact \
   "$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.md" \
   "threshold_cycle_postclose_verification"
 PYTHONPATH=. "$VENV_PY" -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500 >/dev/null
+restart_postclose_bot_if_requested
 finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
 write_postclose_status succeeded completed 0 1
-echo "[DONE] threshold-cycle postclose target_date=$TARGET_DATE ai_correction_provider=$AI_CORRECTION_PROVIDER panic_sell_defense=$RUN_PANIC_SELL_DEFENSE_REPORT panic_buying=$RUN_PANIC_BUYING_REPORT market_panic_breadth=$RUN_MARKET_PANIC_BREADTH_REPORT openai_ws_stability=$RUN_OPENAI_WS_STABILITY_REPORT pipeline_event_verbosity=$RUN_PIPELINE_EVENT_VERBOSITY_REPORT observation_source_quality_audit=$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT codebase_performance_workorder=$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT pattern_lab_currentness_audit=$RUN_PATTERN_LAB_CURRENTNESS_AUDIT pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT scalp_entry_adm=$RUN_SCALP_ENTRY_ADM institutional_flow_context=$RUN_INSTITUTIONAL_FLOW_CONTEXT lifecycle_decision_matrix=$RUN_LIFECYCLE_DECISION_MATRIX lifecycle_ai_context=$RUN_LIFECYCLE_AI_CONTEXT latency_classifier_recommendation=$RUN_LATENCY_CLASSIFIER_RECOMMENDATION swing_lifecycle=$RUN_SWING_LIFECYCLE_AUDIT swing_strategy_discovery=$RUN_SWING_STRATEGY_DISCOVERY swing_ai_review_provider=$SWING_THRESHOLD_AI_REVIEW_PROVIDER pattern_labs=$RUN_PATTERN_LABS deepseek_swing_lab=$RUN_DEEPSEEK_SWING_LAB code_improvement_workorder=$BUILD_CODE_IMPROVEMENT_WORKORDER daily_ev=true runtime_approval_summary=true next_stage2_checklist=true finished_at=$finished_at"
+echo "[DONE] threshold-cycle postclose target_date=$TARGET_DATE ai_correction_provider=$AI_CORRECTION_PROVIDER panic_sell_defense=$RUN_PANIC_SELL_DEFENSE_REPORT panic_buying=$RUN_PANIC_BUYING_REPORT market_panic_breadth=$RUN_MARKET_PANIC_BREADTH_REPORT openai_ws_stability=$RUN_OPENAI_WS_STABILITY_REPORT pipeline_event_verbosity=$RUN_PIPELINE_EVENT_VERBOSITY_REPORT observation_source_quality_audit=$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT codebase_performance_workorder=$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT pattern_lab_currentness_audit=$RUN_PATTERN_LAB_CURRENTNESS_AUDIT pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT scalp_sim_overnight=$RUN_SCALP_SIM_OVERNIGHT_REPORT scalp_entry_adm=$RUN_SCALP_ENTRY_ADM institutional_flow_context=$RUN_INSTITUTIONAL_FLOW_CONTEXT lifecycle_decision_matrix=$RUN_LIFECYCLE_DECISION_MATRIX lifecycle_ai_context=$RUN_LIFECYCLE_AI_CONTEXT latency_classifier_recommendation=$RUN_LATENCY_CLASSIFIER_RECOMMENDATION swing_lifecycle=$RUN_SWING_LIFECYCLE_AUDIT swing_strategy_discovery=$RUN_SWING_STRATEGY_DISCOVERY swing_ai_review_provider=$SWING_THRESHOLD_AI_REVIEW_PROVIDER pattern_labs=$RUN_PATTERN_LABS deepseek_swing_lab=$RUN_DEEPSEEK_SWING_LAB code_improvement_workorder=$BUILD_CODE_IMPROVEMENT_WORKORDER daily_ev=true runtime_approval_summary=true next_stage2_checklist=true finished_at=$finished_at"

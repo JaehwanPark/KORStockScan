@@ -3274,6 +3274,11 @@ class GPTSniperEngine:
                 schema_name="overnight_v1",
                 endpoint_name="overnight",
                 symbol=stock_code,
+                metadata_extra={
+                    "sim_record_id": realtime_ctx.get("sim_record_id") if isinstance(realtime_ctx, dict) else None,
+                    "sim_parent_record_id": realtime_ctx.get("sim_parent_record_id") if isinstance(realtime_ctx, dict) else None,
+                    "source_event_stage": "scalp_sim_overnight_decision",
+                },
             )
             result = self._merge_last_transport_meta(result)
             action = str(result.get('action', 'SELL_TODAY') or 'SELL_TODAY').upper()

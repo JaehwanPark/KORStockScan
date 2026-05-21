@@ -341,6 +341,11 @@ def test_stat_action_decision_snapshot_logs_observe_only_with_rate_limit(monkeyp
     assert logs[0][1]["chosen_action"] == "hold_wait"
     assert logs[0][1]["rejected_actions"] == "avg_down_wait:pnl_out_of_range"
     assert logs[0][1]["scale_in_gate_allowed"] is True
+    assert logs[0][1]["scale_in_arm"] == "AVG_DOWN"
+    assert logs[0][1]["scale_in_blocker_namespace"] == "AVG_DOWN"
+    assert logs[0][1]["scale_in_blocker_reason"] == "pnl_out_of_range"
+    assert logs[0][1]["ai_score_source"] == "-"
+    assert logs[0][1]["source_quality_gate"] == "stat_action_snapshot_source_only"
     assert "spread_bps" in logs[0][1]
 
     now["ts"] = 1_010.0
@@ -353,6 +358,50 @@ def test_stat_action_decision_snapshot_logs_observe_only_with_rate_limit(monkeyp
     )
     assert emitted_again is False
     assert len(logs) == 1
+
+
+def test_stat_action_decision_snapshot_separates_pyramid_namespace(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    logs = []
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        STAT_ACTION_DECISION_SNAPSHOT_ENABLED=True,
+        STAT_ACTION_DECISION_SNAPSHOT_MIN_INTERVAL_SEC=0,
+    )
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 2_000.0)
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    emitted = state_handlers._emit_stat_action_decision_snapshot(
+        stock={"id": 2, "name": "PYR", "buy_qty": 1, "holding_ai_score": 72},
+        code="654321",
+        strategy="SCALPING",
+        ws_data={},
+        chosen_action="hold_wait",
+        eligible_actions=["hold_wait"],
+        rejected_actions=["pyramid_wait:profit_not_enough"],
+        profit_rate=0.3,
+        peak_profit=0.5,
+        current_ai_score=72,
+        held_sec=45,
+        curr_price=10050,
+        buy_price=10000,
+        scale_in_gate={"allowed": True, "reason": "ok"},
+        scale_in_action={"add_type": "PYRAMID", "reason": "profit_not_enough"},
+        reason="unit_test",
+    )
+
+    assert emitted is True
+    assert logs[0][0] == "stat_action_decision_snapshot"
+    assert logs[0][1]["scale_in_arm"] == "PYRAMID"
+    assert logs[0][1]["scale_in_blocker_namespace"] == "PYRAMID"
+    assert logs[0][1]["scale_in_blocker_reason"] == "profit_not_enough"
+    assert "reversal_add" not in logs[0][1]["rejected_actions"]
 
 
 def test_add_count_increment_once_on_partial_fills(monkeypatch):

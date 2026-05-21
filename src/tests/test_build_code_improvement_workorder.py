@@ -1401,6 +1401,46 @@ def test_build_code_improvement_workorder_consumes_lifecycle_entry_bucket_workor
                             "runtime_effect": False,
                         }
                     ],
+                },
+                "scale_in_bucket_attribution": {
+                    "metric_role": "sim_probe_ev",
+                    "decision_authority": "adm_ldm_scale_in_bucket_attribution_source_only",
+                    "window_policy": "daily_lifecycle_rows_plus_threshold_cycle_rolling_consumer",
+                    "sample_floor": 5,
+                    "primary_decision_metric": "source_quality_adjusted_ev_pct",
+                    "source_quality_gate": "scale_in arm + blocker namespace + joined source labels",
+                    "forbidden_uses": ["real_scale_in_submit"],
+                    "code_improvement_workorders": [
+                        {
+                            "workorder_id": "scale_in_bucket_source_quality_1",
+                            "bucket_type": "blocker_namespace",
+                            "bucket_key": "PRICE_GUARD",
+                            "reason": "scale_in_arm_bucket_needs_source_quality_or_threshold_cycle_confirmation",
+                            "recommended_route": "candidate_recovery_or_relax",
+                            "metric_role": "source_quality_gate",
+                            "runtime_effect": False,
+                        }
+                    ],
+                },
+                "overnight_bucket_attribution": {
+                    "metric_role": "sim_probe_ev",
+                    "decision_authority": "adm_ldm_overnight_bucket_attribution_source_only",
+                    "window_policy": "daily_overnight_rows_plus_next_day_carry_label_join_consumer",
+                    "sample_floor": 5,
+                    "primary_decision_metric": "source_quality_adjusted_ev_pct",
+                    "source_quality_gate": "overnight decision coverage + joined same/next-day source labels",
+                    "forbidden_uses": ["hard_overnight_gate"],
+                    "code_improvement_workorders": [
+                        {
+                            "workorder_id": "overnight_bucket_source_quality_1",
+                            "bucket_type": "overnight_action",
+                            "bucket_key": "SELL_TODAY",
+                            "reason": "overnight_decision_bucket_needs_source_quality_or_threshold_cycle_confirmation",
+                            "recommended_route": "candidate_recovery_or_relax",
+                            "metric_role": "source_quality_gate",
+                            "runtime_effect": False,
+                        }
+                    ],
                 }
             },
             ensure_ascii=False,
@@ -1434,5 +1474,27 @@ def test_build_code_improvement_workorder_consumes_lifecycle_entry_bucket_workor
     assert order["runtime_effect"] is False
     assert order["source_report_type"] == "lifecycle_decision_matrix_entry_bucket_attribution"
     assert "bucket_key=liquidity_unknown" in order["evidence"]
+    scale_order = next(
+        item
+        for item in report["orders"]
+        if item["order_id"] == "order_lifecycle_scale_in_bucket_blocker_namespace_price_guard"
+    )
+    assert scale_order["decision"] == "implement_now"
+    assert scale_order["runtime_effect"] is False
+    assert scale_order["allowed_runtime_apply"] is False
+    assert scale_order["source_report_type"] == "lifecycle_decision_matrix_scale_in_bucket_attribution"
+    assert "bucket_key=PRICE_GUARD" in scale_order["evidence"]
+    overnight_order = next(
+        item
+        for item in report["orders"]
+        if item["order_id"] == "order_lifecycle_overnight_bucket_overnight_action_sell_today"
+    )
+    assert overnight_order["decision"] == "attach_existing_family"
+    assert overnight_order["runtime_effect"] is False
+    assert overnight_order["allowed_runtime_apply"] is False
+    assert overnight_order["source_report_type"] == "lifecycle_decision_matrix_overnight_bucket_attribution"
+    assert "bucket_key=SELL_TODAY" in overnight_order["evidence"]
     assert report["summary"]["lifecycle_entry_bucket_source_order_count"] == 1
+    assert report["summary"]["lifecycle_scale_in_bucket_source_order_count"] == 1
+    assert report["summary"]["lifecycle_overnight_bucket_source_order_count"] == 1
     assert report["source"]["lifecycle_decision_matrix"] == str(ldm_path)

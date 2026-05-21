@@ -4848,6 +4848,46 @@ def _build_lifecycle_decision_matrix_runtime_family(target_date: str | None) -> 
         if isinstance(entry_bucket_attribution.get("code_improvement_workorders"), list)
         else []
     )
+    scale_in_bucket_attribution = (
+        payload.get("scale_in_bucket_attribution")
+        if isinstance(payload.get("scale_in_bucket_attribution"), dict)
+        else {}
+    )
+    scale_in_bucket_summary = (
+        scale_in_bucket_attribution.get("summary")
+        if isinstance(scale_in_bucket_attribution.get("summary"), dict)
+        else {}
+    )
+    scale_in_bucket_candidates = (
+        scale_in_bucket_attribution.get("runtime_approval_candidates")
+        if isinstance(scale_in_bucket_attribution.get("runtime_approval_candidates"), list)
+        else []
+    )
+    scale_in_bucket_workorders = (
+        scale_in_bucket_attribution.get("code_improvement_workorders")
+        if isinstance(scale_in_bucket_attribution.get("code_improvement_workorders"), list)
+        else []
+    )
+    overnight_bucket_attribution = (
+        payload.get("overnight_bucket_attribution")
+        if isinstance(payload.get("overnight_bucket_attribution"), dict)
+        else {}
+    )
+    overnight_bucket_summary = (
+        overnight_bucket_attribution.get("summary")
+        if isinstance(overnight_bucket_attribution.get("summary"), dict)
+        else {}
+    )
+    overnight_bucket_candidates = (
+        overnight_bucket_attribution.get("runtime_approval_candidates")
+        if isinstance(overnight_bucket_attribution.get("runtime_approval_candidates"), list)
+        else []
+    )
+    overnight_bucket_workorders = (
+        overnight_bucket_attribution.get("code_improvement_workorders")
+        if isinstance(overnight_bucket_attribution.get("code_improvement_workorders"), list)
+        else []
+    )
     total_rows = _safe_int(summary.get("total_rows"), 0) or 0
     joined_rows = _safe_int(summary.get("joined_rows"), 0) or 0
     policy_pass_count = _safe_int(summary.get("policy_pass_count"), 0) or 0
@@ -4866,6 +4906,12 @@ def _build_lifecycle_decision_matrix_runtime_family(target_date: str | None) -> 
             "entry_bucket_actionable_count": _safe_int(entry_bucket_summary.get("actionable_bucket_count"), 0) or 0,
             "entry_bucket_runtime_candidate_count": entry_bucket_runtime_candidate_count,
             "entry_bucket_workorder_count": _safe_int(entry_bucket_summary.get("workorder_count"), 0) or 0,
+            "scale_in_bucket_actionable_count": _safe_int(scale_in_bucket_summary.get("actionable_bucket_count"), 0) or 0,
+            "scale_in_bucket_runtime_candidate_count": _safe_int(scale_in_bucket_summary.get("runtime_candidate_count"), 0) or 0,
+            "scale_in_bucket_workorder_count": _safe_int(scale_in_bucket_summary.get("workorder_count"), 0) or 0,
+            "overnight_bucket_actionable_count": _safe_int(overnight_bucket_summary.get("actionable_bucket_count"), 0) or 0,
+            "overnight_bucket_runtime_candidate_count": _safe_int(overnight_bucket_summary.get("runtime_candidate_count"), 0) or 0,
+            "overnight_bucket_workorder_count": _safe_int(overnight_bucket_summary.get("workorder_count"), 0) or 0,
             "policy_entry_count": len([item for item in policy_entries if isinstance(item, dict)]),
         },
         "apply_ready": apply_ready,
@@ -4916,6 +4962,10 @@ def _build_lifecycle_decision_matrix_runtime_family(target_date: str | None) -> 
             "holding_exit_matrix_scale_in_bias_enabled": False,
             "entry_bucket_runtime_approval_candidates": entry_bucket_candidates[:10],
             "entry_bucket_code_improvement_workorders": entry_bucket_workorders[:10],
+            "scale_in_bucket_runtime_approval_candidates": scale_in_bucket_candidates[:10],
+            "scale_in_bucket_code_improvement_workorders": scale_in_bucket_workorders[:10],
+            "overnight_bucket_runtime_approval_candidates": overnight_bucket_candidates[:10],
+            "overnight_bucket_code_improvement_workorders": overnight_bucket_workorders[:10],
         },
         "apply_mode": "efficient_tradeoff_canary_candidate" if apply_ready else "report_only_calibration",
         "notes": [
@@ -5465,6 +5515,26 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
                     "entry_bucket_code_improvement_workorders": (
                         family_recommended.get("entry_bucket_code_improvement_workorders")
                         if isinstance(family_recommended.get("entry_bucket_code_improvement_workorders"), list)
+                        else []
+                    ),
+                    "scale_in_bucket_runtime_approval_candidates": (
+                        family_recommended.get("scale_in_bucket_runtime_approval_candidates")
+                        if isinstance(family_recommended.get("scale_in_bucket_runtime_approval_candidates"), list)
+                        else []
+                    ),
+                    "scale_in_bucket_code_improvement_workorders": (
+                        family_recommended.get("scale_in_bucket_code_improvement_workorders")
+                        if isinstance(family_recommended.get("scale_in_bucket_code_improvement_workorders"), list)
+                        else []
+                    ),
+                    "overnight_bucket_runtime_approval_candidates": (
+                        family_recommended.get("overnight_bucket_runtime_approval_candidates")
+                        if isinstance(family_recommended.get("overnight_bucket_runtime_approval_candidates"), list)
+                        else []
+                    ),
+                    "overnight_bucket_code_improvement_workorders": (
+                        family_recommended.get("overnight_bucket_code_improvement_workorders")
+                        if isinstance(family_recommended.get("overnight_bucket_code_improvement_workorders"), list)
                         else []
                     ),
                     "fixed_threshold_roles": {

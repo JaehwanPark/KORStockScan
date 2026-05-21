@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import json
 import math
 import os
@@ -20,11 +22,20 @@ from src.utils.pipeline_event_logger import emit_pipeline_event
 
 
 STATE_PATH = DATA_DIR / "runtime" / "scalp_live_simulator_state.json"
+LOCK_PATH = DATA_DIR / "runtime" / "scalp_live_simulator_state.lock"
 REPORT_DIR = DATA_DIR / "report" / "scalp_sim_overnight"
 SIM_BOOK = "scalp_ai_buy_all"
 SCHEMA_VERSION = 1
 OVERNIGHT_SCHEMA = "overnight_v1"
 DECISION_AUTHORITY = "sim_observation_only"
+SOURCE_QUALITY_GATE = "overnight_decision_coverage"
+FORBIDDEN_USES = [
+    "broker_submit",
+    "real_execution_quality_claim",
+    "runtime_threshold_apply",
+    "provider_route_change",
+    "live_order_enable",
+]
 
 
 def _now_iso() -> str:
@@ -68,12 +79,34 @@ def _load_state(path: Path = STATE_PATH) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {"schema_version": 1, "simulation_book": SIM_BOOK, "active_positions": []}
 
 
-def _write_state(payload: dict[str, Any], path: Path = STATE_PATH) -> None:
+@contextlib.contextmanager
+def _state_file_lock(path: Path = STATE_PATH, *, blocking: bool = True):
+    lock_path = path.with_suffix(".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = lock_path.open("a+", encoding="utf-8")
+    try:
+        flags = fcntl.LOCK_EX if blocking else (fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(handle.fileno(), flags)
+        yield
+    finally:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
+
+def _write_state(payload: dict[str, Any], path: Path = STATE_PATH, *, already_locked: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload["updated_at"] = _now_iso()
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    def _write() -> None:
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(path)
+    if already_locked:
+        _write()
+    else:
+        with _state_file_lock(path):
+            _write()
 
 
 def _is_active_sim_position(row: dict[str, Any]) -> bool:
@@ -149,11 +182,15 @@ def _base_event_fields(row: dict[str, Any], target_date: str, price: dict[str, A
         "sim_parent_record_id": row.get("sim_parent_record_id"),
         "simulation_book": SIM_BOOK,
         "scalp_live_simulator": True,
+        "metric_role": "sim_probe_ev",
+        "threshold_family": "scalp_sim_overnight_ai_carry",
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "decision_authority": DECISION_AUTHORITY,
         "runtime_effect": DECISION_AUTHORITY,
         "overnight_schema": OVERNIGHT_SCHEMA,
+        "source_quality_gate": SOURCE_QUALITY_GATE,
+        "forbidden_uses": "/".join(FORBIDDEN_USES),
         "target_date": target_date,
         "current_price": price.get("current_price"),
         "best_bid": price.get("best_bid"),
@@ -173,6 +210,28 @@ def _emit(row: dict[str, Any], stage: str, fields: dict[str, Any]) -> None:
     )
 
 
+def _emit_lock_skipped(target_date: str, state_path: Path, reason: str) -> None:
+    emit_pipeline_event(
+        "HOLDING_PIPELINE",
+        "SCALP_SIM_OVERNIGHT",
+        "-",
+        "scalp_sim_overnight_lock_skipped",
+        fields={
+            "metric_role": "source_quality_gate",
+            "decision_authority": DECISION_AUTHORITY,
+            "runtime_effect": False,
+            "source_quality_gate": SOURCE_QUALITY_GATE,
+            "source_quality_status": "source_quality_blocker",
+            "source_quality_warning": reason,
+            "target_date": target_date,
+            "state_path": str(state_path),
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "forbidden_uses": "/".join(FORBIDDEN_USES),
+        },
+    )
+
+
 def _build_ai_context(row: dict[str, Any], price: dict[str, Any]) -> dict[str, Any]:
     current_price = _safe_int(price.get("current_price"), 0)
     profit = _profit_pct(row, current_price)
@@ -182,6 +241,8 @@ def _build_ai_context(row: dict[str, Any], price: dict[str, Any]) -> dict[str, A
         "position_status": "SIM_HOLDING",
         "strategy": "SCALPING",
         "simulation_book": SIM_BOOK,
+        "sim_record_id": row.get("sim_record_id"),
+        "sim_parent_record_id": row.get("sim_parent_record_id"),
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "decision_authority": DECISION_AUTHORITY,
@@ -324,6 +385,79 @@ def run_sim_overnight(
     mutate_state: bool = True,
     emit_events: bool = True,
 ) -> dict[str, Any]:
+    if mutate_state:
+        try:
+            lock_context = _state_file_lock(state_path, blocking=False)
+            lock_context.__enter__()
+        except BlockingIOError:
+            if emit_events:
+                _emit_lock_skipped(target_date, state_path, "state_lock_busy")
+            return {
+                "target_date": target_date,
+                "generated_at": _now_iso(),
+                "schema_version": SCHEMA_VERSION,
+                "artifact_role": "postclose_source_packet_for_scalp_sim_overnight_ai_carry",
+                "runtime_effect": False,
+                "decision_authority": DECISION_AUTHORITY,
+                "state_path": str(state_path),
+                "summary": {
+                    "decision_target": 0,
+                    "sell_today": 0,
+                    "hold_overnight": 0,
+                    "lock_skipped": 1,
+                    "source_quality_status": "source_quality_blocker",
+                    "source_quality_warnings": ["state_lock_busy"],
+                    "forbidden_uses": FORBIDDEN_USES,
+                },
+                "rows": [],
+            }
+        except Exception as exc:
+            if emit_events:
+                _emit_lock_skipped(target_date, state_path, f"state_lock_error:{type(exc).__name__}")
+            return {
+                "target_date": target_date,
+                "generated_at": _now_iso(),
+                "schema_version": SCHEMA_VERSION,
+                "artifact_role": "postclose_source_packet_for_scalp_sim_overnight_ai_carry",
+                "runtime_effect": False,
+                "decision_authority": DECISION_AUTHORITY,
+                "state_path": str(state_path),
+                "summary": {
+                    "decision_target": 0,
+                    "sell_today": 0,
+                    "hold_overnight": 0,
+                    "lock_skipped": 1,
+                    "source_quality_status": "source_quality_blocker",
+                    "source_quality_warnings": [f"state_lock_error:{type(exc).__name__}"],
+                    "forbidden_uses": FORBIDDEN_USES,
+                },
+                "rows": [],
+            }
+    else:
+        lock_context = None
+    try:
+        return _run_sim_overnight_locked(
+            target_date=target_date,
+            ai_engine=ai_engine,
+            state_path=state_path,
+            mutate_state=mutate_state,
+            emit_events=emit_events,
+            already_locked=bool(lock_context),
+        )
+    finally:
+        if lock_context is not None:
+            lock_context.__exit__(None, None, None)
+
+
+def _run_sim_overnight_locked(
+    *,
+    target_date: str,
+    ai_engine: Any | None,
+    state_path: Path,
+    mutate_state: bool,
+    emit_events: bool,
+    already_locked: bool,
+) -> dict[str, Any]:
     payload = _load_state(state_path)
     active = payload.get("active_positions") if isinstance(payload.get("active_positions"), list) else []
     remaining: list[dict[str, Any]] = []
@@ -388,7 +522,10 @@ def run_sim_overnight(
             "ai_result_source": decision.get("ai_result_source"),
             "openai_endpoint_name": decision.get("openai_endpoint_name"),
             "openai_schema_name": decision.get("openai_schema_name") or OVERNIGHT_SCHEMA,
+            "openai_model": decision.get("ai_model") or decision.get("openai_model") or getattr(ai_engine, "report_model_name", None),
+            "openai_transport_mode": decision.get("openai_transport_mode"),
             "openai_ws_used": decision.get("openai_ws_used"),
+            "openai_response_ms": decision.get("ai_response_ms"),
             "profit_rate_live": ctx.get("pnl_pct"),
             "peak_profit": ctx.get("peak_profit_pct"),
             "held_sec": ctx.get("held_sec"),
@@ -494,7 +631,7 @@ def run_sim_overnight(
 
     if mutate_state:
         payload["active_positions"] = remaining
-        _write_state(payload, state_path)
+        _write_state(payload, state_path, already_locked=already_locked)
 
     return {
         "target_date": target_date,
@@ -520,13 +657,9 @@ def run_sim_overnight(
             "active_before": len(active),
             "active_after": len(remaining),
             "carry_open_count": sum(1 for row in remaining if str(row.get("scalp_sim_overnight_status") or "") == "HOLD_OVERNIGHT"),
-            "forbidden_uses": [
-                "broker_submit",
-                "real_execution_quality_claim",
-                "runtime_threshold_apply",
-                "provider_route_change",
-                "live_order_enable",
-            ],
+            "source_quality_status": "pass",
+            "source_quality_warnings": [],
+            "forbidden_uses": FORBIDDEN_USES,
         },
         "rows": rows,
     }
@@ -585,6 +718,18 @@ def build_report(target_date: str, state_path: Path = STATE_PATH) -> dict[str, A
         and str(row.get("scalp_sim_overnight_status") or "") == "HOLD_OVERNIGHT"
         and str(row.get("scalp_sim_overnight_decision_date") or "") == target_date
     ]
+    active_eligible = [row for row in active if isinstance(row, dict) and _is_active_sim_position(row)]
+    active_undecided = [
+        row
+        for row in active_eligible
+        if str(row.get("scalp_sim_overnight_decision_date") or "") != target_date
+    ]
+    decision_target = int(stage_counts.get("scalp_sim_overnight_decision", 0))
+    coverage_denominator = decision_target + len(active_undecided)
+    decision_coverage_rate = 1.0 if coverage_denominator == 0 else round(decision_target / coverage_denominator, 4)
+    source_quality_warnings: list[str] = []
+    if active_undecided:
+        source_quality_warnings.append("active_undecided_scalp_sim_overnight_positions")
     rows: list[dict[str, Any]] = []
     for event in overnight_events:
         fields = _event_fields(event)
@@ -610,6 +755,10 @@ def build_report(target_date: str, state_path: Path = STATE_PATH) -> dict[str, A
                 "ai_fallback_class": _event_fallback_class(fields),
                 "ai_fallback_reason": fields.get("ai_fallback_reason"),
                 "ai_result_source": fields.get("ai_result_source"),
+                "openai_model": fields.get("openai_model"),
+                "openai_transport_mode": fields.get("openai_transport_mode"),
+                "openai_ws_used": fields.get("openai_ws_used"),
+                "openai_response_ms": fields.get("openai_response_ms"),
                 "current_price": fields.get("current_price"),
                 "current_price_source": fields.get("current_price_source"),
                 "profit_rate_live": fields.get("profit_rate_live"),
@@ -634,7 +783,7 @@ def build_report(target_date: str, state_path: Path = STATE_PATH) -> dict[str, A
         "source_path": str(events_path),
         "state_path": str(state_path),
         "summary": {
-            "decision_target": int(stage_counts.get("scalp_sim_overnight_decision", 0)),
+            "decision_target": decision_target,
             "sell_today": int(stage_counts.get("scalp_sim_overnight_sell_today", 0)),
             "hold_overnight": int(stage_counts.get("scalp_sim_overnight_hold", 0)),
             "sell_assumed_filled": int(stage_counts.get("scalp_sim_sell_order_assumed_filled", 0)),
@@ -648,13 +797,17 @@ def build_report(target_date: str, state_path: Path = STATE_PATH) -> dict[str, A
             "ai_fallback_counts": dict(sorted(fallback_counts.items())),
             "stage_counts": dict(sorted(stage_counts.items())),
             "action_counts": dict(sorted(action_counts.items())),
-            "forbidden_uses": [
-                "broker_submit",
-                "real_execution_quality_claim",
-                "runtime_threshold_apply",
-                "provider_route_change",
-                "live_order_enable",
+            "active_eligible_before_report": len(active_eligible),
+            "active_undecided_count": len(active_undecided),
+            "active_undecided_sim_record_ids": [
+                str(row.get("sim_record_id") or "")
+                for row in active_undecided
+                if str(row.get("sim_record_id") or "")
             ],
+            "decision_coverage_rate": decision_coverage_rate,
+            "source_quality_status": "source_quality_blocker" if source_quality_warnings else "pass",
+            "source_quality_warnings": source_quality_warnings,
+            "forbidden_uses": FORBIDDEN_USES,
         },
         "rows": rows,
     }
@@ -678,6 +831,11 @@ def write_outputs(report: dict[str, Any], output_dir: Path = REPORT_DIR) -> tupl
         f"- sell_today: `{summary.get('sell_today', 0)}`",
         f"- hold_overnight: `{summary.get('hold_overnight', 0)}`",
         f"- carry_open_count: `{summary.get('carry_open_count', 0)}`",
+        f"- active_eligible_before_report: `{summary.get('active_eligible_before_report', 0)}`",
+        f"- active_undecided_count: `{summary.get('active_undecided_count', 0)}`",
+        f"- decision_coverage_rate: `{summary.get('decision_coverage_rate', 1.0)}`",
+        f"- source_quality_status: `{summary.get('source_quality_status', 'pass')}`",
+        f"- source_quality_warnings: `{summary.get('source_quality_warnings') or []}`",
         f"- ai_failure_fallback: `{summary.get('ai_failure_fallback', 0)}`",
         f"- ai_timeout_fallback: `{summary.get('ai_timeout_fallback', 0)}`",
         f"- ai_engine_disabled_fallback: `{summary.get('ai_engine_disabled_fallback', 0)}`",

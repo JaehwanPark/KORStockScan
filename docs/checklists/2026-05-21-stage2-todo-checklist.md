@@ -16,6 +16,14 @@
 
 ## 장후 체크리스트
 
+- [ ] `[PostcloseResourceIsolationAndDailyReportMemory0521] 16:10 threshold-cycle swap 부족 대응 및 daily report peak RSS 최적화 후속` (`Due: 2026-05-21`, `Slot: POSTCLOSE`, `TimeWindow: 18:20~18:40`, `Track: RuntimeStability`)
+  - Source: [run_threshold_cycle_postclose.sh](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_postclose.sh), [install_threshold_cycle_cron.sh](/home/ubuntu/KORStockScan/deploy/install_threshold_cycle_cron.sh), [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md), [system_metric_samples.jsonl](/home/ubuntu/KORStockScan/logs/system_metric_samples.jsonl)
+  - 판정 기준: 16:10 postclose 시작 전 bot swap/RSS가 high-water 상태이면 postclose wrapper가 `THRESHOLD_CYCLE_POSTCLOSE_BOT_ACTION=restart`로 bot을 내리고 종료/실패/인터럽트 후 재기동하는지 확인한다. resource guard는 fresh sampler, `MemAvailable`, swap free/used, iowait, CPU busy, load를 모두 확인해야 하며 stale sampler나 swap pressure를 pass로 처리하지 않는다.
+  - 즉시 보강 메모 (`2026-05-21 KST`): wrapper에 postclose bot stop/restart 격리 옵션과 status `finished_at` stale 제거를 추가했다. cron installer는 16:10 `THRESHOLD_CYCLE_POSTCLOSE`에 `THRESHOLD_CYCLE_POSTCLOSE_BOT_ACTION=restart`를 포함한다. 이는 장후 운영 리소스 격리이며 threshold/order/provider 변경 권한이 아니다.
+  - 후속 코드개선: `daily_threshold_cycle_report`가 단일 프로세스에서 10GB+ RSS까지 치솟는 경로를 streaming/chunked aggregation으로 줄인다. 후보 작업은 large JSON serialization, raw/snapshot full materialization, cumulative/report-only source bundle 중복 보유, AI review context build 메모리 상한을 분리해 측정한다.
+  - 금지: resource pressure를 이유로 장중 runtime threshold mutation, provider route 변경, broker guard 완화, 실주문 enable/cap 해제, bot restart만을 전략 효과 근거로 사용하는 것 금지.
+  - 다음 액션: `cron_restart_isolation_installed`, `guard_blocks_until_resources_recover`, `daily_report_memory_workorder_required`, `postclose_completed_after_isolation` 중 하나로 닫는다.
+
 - [ ] `[ScalpSimLdmMaxDaily240Review0521] LDM joined/action bucket coverage 확인 후 scalp sim max_daily 240 상향 여부 결정` (`Due: 2026-05-21`, `Slot: POSTCLOSE`, `TimeWindow: 17:25~17:40`, `Track: ScalpingLogic`)
   - Source: [lifecycle_decision_matrix.py](/home/ubuntu/KORStockScan/src/engine/lifecycle_decision_matrix.py), [lifecycle_decision_matrix_2026-05-21.json](/home/ubuntu/KORStockScan/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_2026-05-21.json), [threshold_runtime_env_2026-05-21.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-05-21.env)
   - 판정 기준: EV보다 먼저 데이터 수집/소비 계약을 확인한다. `max_daily=160`과 reserve/bucket quota 적용 후 postclose LDM의 `stage sample`, `joined_sample`, `join_rate`, `action_namespace`, `source_stage`, `risk_context_owner`, `risk_direction` bucket coverage를 확인한다. stage floor만 통과한 상태가 아니라 entry/scale_in/exit와 panic/euphoria action bucket이 한쪽으로 과도하게 쏠리지 않았는지 본 뒤 `240` 상향 후보 여부를 결정한다.
@@ -24,6 +32,13 @@
   - AI budget 확인: [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)의 `scalp_sim_ai_budget_manager` 계약에 따라 `scalp_sim_ai_holding_live_call`, `scalp_sim_ai_holding_reuse`, `scalp_sim_ai_holding_deferred`, `sim_ai_budget_exhausted`, `sim_ai_critical_bypass`를 집계하고, deferred/exhausted feature packet이 장후 `scalp_sim_ai_deferred_review` 또는 LDM source row로 소비됐는지 확인한다. AI 호출 절약이 `sim_record_id`/stage/action bucket 누락으로 이어졌으면 `defer_source_quality_or_bucket_skew`로 닫고 source-quality workorder 후보를 남긴다.
   - 금지: `240` 상향을 장중 runtime env 직접 수정, restart만으로 적용, real order enable, Telegram BUY/SELL, provider route, bot restart trigger로 연결하지 않는다.
   - 다음 액션: `keep_160_coverage_enough`, `preopen_candidate_240`, `hold_160_until_persistent_counter_fixed`, `defer_source_quality_or_bucket_skew` 중 하나로 닫고, `preopen_candidate_240`이면 다음 PREOPEN `threshold_cycle_preopen_apply` 확인 항목을 생성한다.
+
+- [ ] `[ScaleInBucketAttributionHandoff0521] LDM scale-in AVG_DOWN/PYRAMID bucket attribution 및 downstream handoff 확인` (`Due: 2026-05-21`, `Slot: POSTCLOSE`, `TimeWindow: 18:05~18:20`, `Track: ScalpingLogic`)
+  - Source: [lifecycle_decision_matrix.py](/home/ubuntu/KORStockScan/src/engine/lifecycle_decision_matrix.py), [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py), [runtime_approval_summary.py](/home/ubuntu/KORStockScan/src/engine/runtime_approval_summary.py), [build_code_improvement_workorder.py](/home/ubuntu/KORStockScan/src/engine/build_code_improvement_workorder.py), [verify_threshold_cycle_postclose_chain.py](/home/ubuntu/KORStockScan/src/engine/verify_threshold_cycle_postclose_chain.py)
+  - 판정 기준: `scale_in_bucket_attribution`이 `arm/blocker_namespace/blocker_reason/profit_band/peak_profit_band/held_bucket/ai_score_band/ai_score_source/supply_pass_bucket/price_guard_reason/qty_reason/time_bucket`을 생성하고, PYRAMID 후보가 reversal-add namespace로 오염되지 않는지 확인한다.
+  - 필수 확인: 후보가 있으면 `threshold_cycle_ev.scale_in_bucket_runtime_approval_candidates`, `runtime_approval_summary.scale_in_bucket_runtime_approval_candidates`, `code_improvement_workorder`의 `lifecycle_decision_matrix_scale_in_bucket_attribution` order가 모두 존재해야 한다. source row가 있는데 attribution이 없으면 `ldm_scale_in_bucket_attribution_missing`, downstream 누락이면 `ldm_scale_in_bucket_handoff_missing`으로 FAIL 처리한다.
+  - 금지: real scale-in threshold 완화, 신규/추가매수 cap 해제, provider 변경, bot restart, 장중 threshold mutation으로 연결하지 않는다. sim-only 확대는 승인 artifact가 있는 PREOPEN env hook에서만 허용한다.
+  - 다음 액션: `handoff_pass`, `fail_ldm_scale_in_bucket_attribution_missing`, `fail_ldm_scale_in_bucket_handoff_missing`, `hold_sample_no_scale_in_source` 중 하나로 닫는다.
 
 - [ ] `[BedrockNovaMicroBypassPromotionReview0521] OpenAI nano 호출 지점의 Bedrock Nova Micro 우회 정식 승격 여부 판단` (`Due: 2026-05-21`, `Slot: POSTCLOSE`, `TimeWindow: 17:40~18:05`, `Track: AITransport`)
   - Source: [bedrock_nova_micro_shadow_report_2026-05-21.json](/home/ubuntu/KORStockScan/data/report/bedrock_nova_micro_shadow/bedrock_nova_micro_shadow_report_2026-05-21.json), [bedrock_nova_micro_shadow_report_2026-05-21.md](/home/ubuntu/KORStockScan/data/report/bedrock_nova_micro_shadow/bedrock_nova_micro_shadow_report_2026-05-21.md), [bedrock_nova_micro_shadow_2026-05-21.jsonl](/home/ubuntu/KORStockScan/data/report/bedrock_nova_micro_shadow/bedrock_nova_micro_shadow_2026-05-21.jsonl), [sim_post_sell_candidates_2026-05-21.jsonl](/home/ubuntu/KORStockScan/data/post_sell/sim_post_sell_candidates_2026-05-21.jsonl), [bedrock_nova_provider.py](/home/ubuntu/KORStockScan/src/engine/bedrock_nova_provider.py), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py)
@@ -173,3 +188,18 @@
   - 다음 액션: 변경이 있으면 기준문서와 checklist를 함께 갱신하고 cohort 잠금 필드를 남긴다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
+
+<!-- AUTO_SERVER_COMPARISON_START -->
+### 본서버 vs songstockscan 자동 비교 (`2026-05-21 15:47:08`)
+
+- 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
+- 상세 리포트: `data/report/server_comparison/server_comparison_2026-05-21.md`
+- `Trade Review`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Performance Tuning`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Post Sell Feedback`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Entry Pipeline Flow`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+<!-- AUTO_SERVER_COMPARISON_END -->

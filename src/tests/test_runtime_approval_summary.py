@@ -250,6 +250,94 @@ def test_runtime_approval_summary_dedupes_lifecycle_matrix_decision_row(tmp_path
     assert report["summary"]["scalping_selected_auto_bounded_live"] == 1
 
 
+def test_runtime_approval_summary_falls_back_to_lifecycle_bucket_source(tmp_path, monkeypatch):
+    ev_dir = tmp_path / "threshold_cycle_ev"
+    matrix_dir = tmp_path / "lifecycle_decision_matrix"
+    swing_dir = tmp_path / "swing_runtime_approval"
+    out_dir = tmp_path / "runtime_approval_summary"
+    ev_dir.mkdir(parents=True)
+    matrix_dir.mkdir(parents=True)
+    swing_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        mod,
+        "ev_report_paths",
+        lambda target_date: (
+            ev_dir / f"threshold_cycle_ev_{target_date}.json",
+            ev_dir / f"threshold_cycle_ev_{target_date}.md",
+        ),
+    )
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_DIR", swing_dir)
+    monkeypatch.setattr(mod, "SUMMARY_DIR", out_dir)
+    matrix_path = matrix_dir / "lifecycle_decision_matrix_2026-05-21.json"
+    matrix_path.write_text(
+        json.dumps(
+            {
+                "matrix_version": "ldm-test",
+                "entry_bucket_attribution": {
+                    "summary": {"runtime_candidate_count": 1, "workorder_count": 1},
+                    "runtime_approval_candidates": [{"candidate_id": "entry_bucket_1"}],
+                    "code_improvement_workorders": [{"workorder_id": "entry_order"}],
+                },
+                "scale_in_bucket_attribution": {
+                    "summary": {"runtime_candidate_count": 1, "workorder_count": 1},
+                    "runtime_approval_candidates": [{"candidate_id": "scale_in_bucket_1"}],
+                    "code_improvement_workorders": [{"workorder_id": "scale_order"}],
+                },
+                "overnight_bucket_attribution": {
+                    "summary": {"runtime_candidate_count": 1, "workorder_count": 1},
+                    "runtime_approval_candidates": [{"candidate_id": "overnight_bucket_1"}],
+                    "code_improvement_workorders": [{"workorder_id": "overnight_order"}],
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (ev_dir / "threshold_cycle_ev_2026-05-21.json").write_text(
+        json.dumps(
+            {
+                "sources": {"lifecycle_decision_matrix": str(matrix_path)},
+                "runtime_apply": {"selected_families": ["lifecycle_decision_matrix_runtime"]},
+                "calibration_outcome": {
+                    "decisions": [
+                        {
+                            "family": "lifecycle_decision_matrix_runtime",
+                            "calibration_state": "adjust_up",
+                            "sample_count": 2000,
+                            "sample_floor": 20,
+                        }
+                    ]
+                },
+                "lifecycle_decision_matrix": {
+                    "available": True,
+                    "status": "ready",
+                    "total_rows": 2000,
+                    "joined_rows": 1900,
+                    "policy_pass_count": 3,
+                    "promote_ready_count": 0,
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (swing_dir / "swing_runtime_approval_2026-05-21.json").write_text(
+        json.dumps({"summary": {"requested": 0, "approved": 0}, "blocked_requests": []}),
+        encoding="utf-8",
+    )
+
+    report = mod.build_runtime_approval_summary("2026-05-21")
+    matrix = report["lifecycle_decision_matrix"]
+
+    assert matrix["matrix_version"] == "ldm-test"
+    assert matrix["entry_bucket_runtime_candidate_count"] == 1
+    assert matrix["entry_bucket_runtime_approval_candidates"] == [{"candidate_id": "entry_bucket_1"}]
+    assert matrix["scale_in_bucket_runtime_candidate_count"] == 1
+    assert matrix["scale_in_bucket_runtime_approval_candidates"] == [{"candidate_id": "scale_in_bucket_1"}]
+    assert matrix["overnight_bucket_runtime_candidate_count"] == 1
+    assert matrix["overnight_bucket_runtime_approval_candidates"] == [{"candidate_id": "overnight_bucket_1"}]
+
+
 def test_runtime_approval_summary_holds_latency_when_recommendation_not_allowed(tmp_path, monkeypatch):
     ev_dir = tmp_path / "threshold_cycle_ev"
     swing_dir = tmp_path / "swing_runtime_approval"

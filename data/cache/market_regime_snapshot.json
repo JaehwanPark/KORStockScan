@@ -1,19 +1,19 @@
 {
-  "timestamp": "2026-05-21T14:14:35.475816",
+  "timestamp": "2026-05-21T17:17:16.182829",
   "vix_close": 17.440000534057617,
-  "vix_ma3": 17.773333231608074,
+  "vix_ma3": 17.64666684468587,
   "vix_peak_passed": false,
   "vix_two_day_down": false,
   "vix_extreme": false,
-  "wti_close": 98.91999816894531,
-  "wti_rsi": 49.14724359251282,
-  "wti_macd": 1.7674311134993559,
-  "wti_macd_signal": 1.9945484546295598,
+  "wti_close": 98.83000183105469,
+  "wti_rsi": 49.048471351659764,
+  "wti_macd": 1.760251918453946,
+  "wti_macd_signal": 1.9931126156204777,
   "wti_dead_cross": true,
-  "wti_from_recent_high_pct": -8.963744860023859,
+  "wti_from_recent_high_pct": -9.046568654297305,
   "oil_reversal": true,
   "oil_pullback_relief": true,
-  "fng_value": 60.8571428571429,
+  "fng_value": 60.8285714285714,
   "fng_prev": 60.8571428571429,
   "fng_description": "greed",
   "fng_extreme_fear": false,
@@ -21,13 +21,13 @@
   "allow_swing_entry": false,
   "swing_score": 35,
   "swing_entry_recovery_gate_score": 35,
-  "market_regime_continuous_score": 61.4668,
+  "market_regime_continuous_score": 61.5022,
   "market_regime_continuous_label": "NEUTRAL",
   "market_regime_component_scores": {
     "vix_level": 22.56,
-    "fear_greed_level": 15.4286,
+    "fear_greed_level": 15.4143,
     "domestic_breadth": 10.0,
-    "oil_relief": 9.3782,
+    "oil_relief": 9.4279,
     "local_model": 4.1
   },
   "market_regime_score_version": "market_regime_continuous_v1",
@@ -39,7 +39,7 @@
   ],
   "debug": {
     "oil_rsi_turned": false,
-    "fng_curr": 60.8571428571429,
+    "fng_curr": 60.8285714285714,
     "fng_prev": 60.8571428571429,
     "score_threshold": 70,
     "component_scores": {
@@ -59,9 +59,9 @@
       },
       "component_scores": {
         "vix_level": 22.56,
-        "fear_greed_level": 15.4286,
+        "fear_greed_level": 15.4143,
         "domestic_breadth": 10.0,
-        "oil_relief": 9.3782,
+        "oil_relief": 9.4279,
         "local_model": 4.1
       },
       "source_quality": "valid",
@@ -85,5 +85,5 @@
     "local_breadth_signal": "none"
   },
   "cached_session_date": "2026-05-21",
-  "cached_at": "2026-05-21T14:14:35.482515+09:00"
+  "cached_at": "2026-05-21T17:17:16.189090+09:00"
 }

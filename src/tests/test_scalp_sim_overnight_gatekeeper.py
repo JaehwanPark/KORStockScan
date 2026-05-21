@@ -17,8 +17,12 @@ class _FakeOvernightAI:
             "reason": "unit-test decision",
             "risk_note": "unit-test",
             "ai_parse_ok": True,
+            "ai_response_ms": 123,
+            "ai_model": "gpt-5.4-mini",
             "openai_endpoint_name": "overnight",
             "openai_schema_name": "overnight_v1",
+            "openai_transport_mode": "responses_ws",
+            "openai_ws_used": True,
         }
 
 
@@ -80,6 +84,36 @@ def test_sell_today_closes_sim_without_real_order(tmp_path):
     assert row["sell_today_realized_profit_pct"] is not None
     assert row["runtime_features"]["actual_order_submitted"] is False
     assert row["runtime_features"]["broker_order_forbidden"] is True
+
+
+def test_emitted_events_include_metric_contract_and_openai_provenance(tmp_path, monkeypatch):
+    emitted = []
+    monkeypatch.setattr(
+        overnight,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, fields: emitted.append((stage, fields)),
+    )
+    path = _state_path(tmp_path, [_position()])
+
+    overnight.run_sim_overnight(
+        target_date="2026-05-19",
+        ai_engine=_FakeOvernightAI("SELL_TODAY"),
+        state_path=path,
+        emit_events=True,
+    )
+
+    decision_fields = dict(emitted[0][1])
+    sell_fields = dict(emitted[1][1])
+    assert emitted[0][0] == "scalp_sim_overnight_decision"
+    assert decision_fields["metric_role"] == "sim_probe_ev"
+    assert decision_fields["decision_authority"] == "sim_observation_only"
+    assert decision_fields["threshold_family"] == "scalp_sim_overnight_ai_carry"
+    assert decision_fields["source_quality_gate"] == "overnight_decision_coverage"
+    assert decision_fields["openai_model"] == "gpt-5.4-mini"
+    assert decision_fields["openai_transport_mode"] == "responses_ws"
+    assert decision_fields["openai_ws_used"] is True
+    assert decision_fields["openai_response_ms"] == 123
+    assert sell_fields["runtime_effect"] == "simulated_completed_only"
 
 
 def test_hold_overnight_keeps_active_state_with_carry_fields(tmp_path):

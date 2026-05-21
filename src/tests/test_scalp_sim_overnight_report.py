@@ -123,9 +123,50 @@ def test_build_report_counts_overnight_events(tmp_path, monkeypatch):
     assert report["summary"]["hold_overnight"] == 1
     assert report["summary"]["sell_assumed_filled"] == 1
     assert report["summary"]["carry_open_count"] == 1
+    assert report["summary"]["active_eligible_before_report"] == 0
+    assert report["summary"]["active_undecided_count"] == 0
+    assert report["summary"]["source_quality_status"] == "pass"
     assert report["summary"]["ai_failure_fallback"] == 1
     assert report["summary"]["ai_timeout_fallback"] == 1
     assert all(row["actual_order_submitted"] in {"False", None} for row in report["rows"])
+
+
+def test_build_report_flags_active_undecided_positions(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    events_dir = data_dir / "pipeline_events"
+    events_dir.mkdir(parents=True)
+    target_date = "2026-05-19"
+    (events_dir / f"pipeline_events_{target_date}.jsonl").write_text("", encoding="utf-8")
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "active_positions": [
+                    {
+                        "name": "A",
+                        "code": "000001",
+                        "status": "HOLDING",
+                        "strategy": "SCALPING",
+                        "simulation_book": "scalp_ai_buy_all",
+                        "scalp_live_simulator": True,
+                        "actual_order_submitted": False,
+                        "sim_record_id": "SIM-A",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(overnight, "DATA_DIR", data_dir)
+
+    report = overnight.build_report(target_date, state_path)
+
+    assert report["summary"]["decision_target"] == 0
+    assert report["summary"]["active_eligible_before_report"] == 1
+    assert report["summary"]["active_undecided_count"] == 1
+    assert report["summary"]["decision_coverage_rate"] == 0.0
+    assert report["summary"]["source_quality_status"] == "source_quality_blocker"
+    assert "active_undecided_scalp_sim_overnight_positions" in report["summary"]["source_quality_warnings"]
 
 
 def test_write_outputs_creates_json_and_md(tmp_path):

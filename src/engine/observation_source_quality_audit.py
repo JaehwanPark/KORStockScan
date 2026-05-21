@@ -165,6 +165,12 @@ DIAGNOSTIC_CONTRACT_FIELDS = (
     "forbidden_uses",
 )
 
+REAL_EXECUTION_DIAGNOSTIC_FIELDS = (
+    *DIAGNOSTIC_CONTRACT_FIELDS,
+    "actual_order_submitted",
+    "broker_order_forbidden",
+)
+
 
 STAGE_CONTRACTS: dict[str, StageContract] = {
     "ai_confirmed": StageContract(
@@ -330,6 +336,24 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         required_fields=("waited_sec", "resume_count", "reason"),
         decision_authority="source_quality_only",
     ),
+    "holding_started": StageContract(
+        required_fields=REAL_EXECUTION_DIAGNOSTIC_FIELDS,
+        decision_authority="broker_receipt_observation_only",
+    ),
+    "scale_in_executed": StageContract(
+        required_fields=REAL_EXECUTION_DIAGNOSTIC_FIELDS,
+        decision_authority="broker_receipt_observation_only",
+    ),
+    "same_symbol_loss_reentry_cooldown": StageContract(
+        required_fields=(
+            *DIAGNOSTIC_CONTRACT_FIELDS,
+            "actual_order_submitted",
+            "broker_order_forbidden",
+            "source_stage",
+            "guard_family",
+        ),
+        decision_authority="same_symbol_loss_reentry_guard_observation_only",
+    ),
 }
 
 
@@ -385,6 +409,44 @@ def _stage_name(row: dict[str, Any]) -> str:
 
 def _normalized_fields_for_contract(stage: str, fields: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(fields or {})
+    if stage == "ai_confirmed":
+        for field in AI_SOURCE_FIELDS:
+            if not _is_present(normalized.get(field)):
+                normalized[field] = "not_evaluated_pre_contract" if field != "tick_source_quality_fields_sent" else False
+        normalized.setdefault("ai_input_source_quality_status", "not_evaluated")
+        normalized.setdefault("ai_input_source_quality_reason", "pre_contract_or_cooldown_score50_path")
+    if stage in {"latency_block", "latency_pass", "order_bundle_submitted"}:
+        if not _is_present(normalized.get("policy_decision")):
+            normalized["policy_decision"] = normalized.get("decision") or normalized.get("effective_decision") or "unknown_pre_contract"
+        if not _is_present(normalized.get("effective_decision")):
+            normalized["effective_decision"] = normalized.get("policy_decision") or "unknown_pre_contract"
+        for field in ("ws_age_ms", "ws_jitter_ms", "spread_ratio"):
+            if not _is_present(normalized.get(field)):
+                normalized[field] = "unknown_pre_contract"
+        if not _is_present(normalized.get("latency_canary_reason")):
+            normalized["latency_canary_reason"] = "not_applicable_or_pre_contract"
+    if stage in {"holding_started", "scale_in_executed"}:
+        normalized.setdefault("metric_role", "execution_quality_real_only")
+        normalized.setdefault("decision_authority", "broker_receipt_observation_only")
+        normalized.setdefault("runtime_effect", False)
+        normalized.setdefault(
+            "forbidden_uses",
+            "runtime_threshold_apply/provider_route_change/bot_restart/sim_execution_quality_claim",
+        )
+        normalized.setdefault("actual_order_submitted", True)
+        normalized.setdefault("broker_order_forbidden", False)
+    if stage == "same_symbol_loss_reentry_cooldown":
+        normalized.setdefault("metric_role", "safety_veto")
+        normalized.setdefault("decision_authority", "same_symbol_loss_reentry_guard_observation_only")
+        normalized.setdefault("runtime_effect", False)
+        normalized.setdefault(
+            "forbidden_uses",
+            "runtime_threshold_apply/provider_route_change/bot_restart/position_sizing_cap_release",
+        )
+        normalized.setdefault("actual_order_submitted", True)
+        normalized.setdefault("broker_order_forbidden", False)
+        normalized.setdefault("source_stage", "sell_order_sent")
+        normalized.setdefault("guard_family", "same_symbol_loss_reentry_guard")
     if stage == "loss_fallback_probe" and not _is_present(normalized.get("fallback_reason")):
         fallback_candidate = str(normalized.get("fallback_candidate") or "").strip().lower() in {"true", "1", "yes"}
         if not fallback_candidate:

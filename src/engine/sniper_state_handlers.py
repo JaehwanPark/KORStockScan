@@ -1,5 +1,6 @@
 """State machine handlers for the sniper engine."""
 
+import fcntl
 import json
 import re
 import time
@@ -942,9 +943,15 @@ def persist_scalp_simulator_state(targets=None) -> None:
             "active_positions": active_positions,
         }
         SCALP_SIM_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = SCALP_SIM_STATE_PATH.with_suffix(".lock")
         tmp_path = SCALP_SIM_STATE_PATH.with_suffix(".tmp")
-        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp_path.replace(SCALP_SIM_STATE_PATH)
+        with lock_path.open("a+", encoding="utf-8") as lock_handle:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            try:
+                tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+                tmp_path.replace(SCALP_SIM_STATE_PATH)
+            finally:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
     except Exception as exc:
         log_error(f"[SCALP_SIM_STATE] persist failed: {exc}")
 
@@ -4804,6 +4811,63 @@ def _format_action_list(values):
     return "|".join(cleaned) if cleaned else "-"
 
 
+def _scale_in_arm_from_context(profit_rate=0.0, action=None, rejected_actions=None):
+    action = action if isinstance(action, dict) else {}
+    add_type = str(action.get("add_type") or "").strip().upper()
+    if add_type in {"AVG_DOWN", "PYRAMID"}:
+        return add_type
+    rejected_iter = rejected_actions if isinstance(rejected_actions, (list, tuple, set)) else [rejected_actions]
+    joined_rejected = "|".join(str(item or "") for item in (rejected_iter or [])).lower()
+    if "pyramid" in joined_rejected:
+        return "PYRAMID"
+    if "avg_down" in joined_rejected or "reversal" in joined_rejected:
+        return "AVG_DOWN"
+    if _safe_float(profit_rate, 0.0) >= 0:
+        return "PYRAMID"
+    return "AVG_DOWN"
+
+
+def _scale_in_namespace_for_arm(arm, reason=None):
+    arm_text = str(arm or "").strip().upper()
+    reason_text = str(reason or "")
+    if arm_text == "PYRAMID":
+        return "PYRAMID"
+    if "hold_sec_out_of_range" in reason_text:
+        return "AVG_DOWN_ONLY"
+    if arm_text == "AVG_DOWN":
+        return "AVG_DOWN"
+    return "NONE"
+
+
+def _scale_in_blocker_reason_from_context(action, gate, rejected_actions, fallback_reason="-"):
+    if isinstance(action, dict) and action.get("reason"):
+        return str(action.get("reason"))
+    if rejected_actions:
+        first = list(rejected_actions)[0] if isinstance(rejected_actions, (list, tuple, set)) else rejected_actions
+        text = str(first or "")
+        if ":" in text:
+            return text.split(":", 1)[1] or "-"
+        if text:
+            return text
+    if isinstance(gate, dict) and gate.get("reason"):
+        return str(gate.get("reason"))
+    return str(fallback_reason or "-")
+
+
+def _ai_score_source_for_snapshot(stock):
+    if not isinstance(stock, dict):
+        return "-"
+    if bool(stock.get("ai_fallback_score_50")):
+        return "fallback_score_50"
+    source = str(stock.get("ai_result_source") or stock.get("last_ai_result_source") or "").strip()
+    if source:
+        return source
+    model = str(stock.get("ai_model") or stock.get("last_ai_model") or "").strip()
+    if model:
+        return "model"
+    return "-"
+
+
 def _spread_bps_from_ws(ws_data, curr_price):
     orderbook = ws_data.get("orderbook") if isinstance(ws_data, dict) else None
     if not isinstance(orderbook, dict):
@@ -4869,6 +4933,13 @@ def _emit_stat_action_decision_snapshot(
 
     gate = scale_in_gate if isinstance(scale_in_gate, dict) else {}
     action = scale_in_action if isinstance(scale_in_action, dict) else {}
+    blocker_reason = _scale_in_blocker_reason_from_context(action, gate, rejected_actions, reason)
+    scale_in_arm = _scale_in_arm_from_context(
+        profit_rate=profit_rate,
+        action=action,
+        rejected_actions=rejected_actions,
+    )
+    blocker_namespace = _scale_in_namespace_for_arm(scale_in_arm, blocker_reason)
     feat = stock.get("last_reversal_features", {}) if isinstance(stock, dict) else {}
     if not isinstance(feat, dict):
         feat = {}
@@ -4905,6 +4976,11 @@ def _emit_stat_action_decision_snapshot(
         "scale_in_gate_reason": gate.get("reason", "-"),
         "scale_in_action_type": action.get("add_type", "-"),
         "scale_in_action_reason": action.get("reason", "-"),
+        "scale_in_arm": scale_in_arm,
+        "scale_in_blocker_namespace": blocker_namespace,
+        "scale_in_blocker_reason": blocker_reason,
+        "ai_score_source": _ai_score_source_for_snapshot(stock),
+        "source_quality_gate": "stat_action_snapshot_source_only",
         "reason": str(reason or "-"),
         "spread_bps": "-" if _spread_bps_from_ws(ws_data, curr_price_int) is None else f"{_spread_bps_from_ws(ws_data, curr_price_int):.2f}",
         "top3_depth_ratio": "-" if _top3_depth_ratio_from_ws(ws_data) is None else f"{_top3_depth_ratio_from_ws(ws_data):.4f}",
@@ -4920,6 +4996,35 @@ def _emit_stat_action_decision_snapshot(
     _log_holding_pipeline(stock, code, "stat_action_decision_snapshot", **fields)
     _mutate_stock_state(stock, set_fields={"last_stat_action_snapshot_ts": now_ts})
     return True
+
+
+def _log_scale_in_arm_blocked(stock, code, *, arm, blocked_reason, profit_rate, peak_profit, current_ai_score, held_sec, gate=None, probe=None):
+    gate = gate if isinstance(gate, dict) else {}
+    namespace = _scale_in_namespace_for_arm(arm, blocked_reason)
+    fields = {
+        "scale_in_arm": str(arm or "NONE").upper(),
+        "scale_in_blocker_namespace": namespace,
+        "scale_in_blocker_reason": blocked_reason or "-",
+        "blocked_reason": blocked_reason or "-",
+        "gate_reason": gate.get("reason") or "-",
+        "profit_rate": f"{_safe_float(profit_rate, 0.0):+.2f}",
+        "peak_profit": f"{_safe_float(peak_profit, 0.0):+.2f}",
+        "ai_score": f"{_safe_float(current_ai_score, 0.0):.0f}",
+        "held_sec": _safe_int(held_sec, 0),
+        "metric_role": "funnel_count",
+        "decision_authority": "scale_in_attribution_source_only",
+        "runtime_effect": False,
+        "source_quality_gate": "scale_in_arm_and_blocker_namespace_present",
+        "forbidden_uses": "real_scale_in_submit|intraday_threshold_mutation|cap_release",
+    }
+    if namespace.startswith("AVG_DOWN"):
+        fields = _append_reversal_add_probe_fields(fields, probe)
+    _log_holding_pipeline(
+        stock,
+        code,
+        "pyramid_blocked_reason" if str(arm or "").upper() == "PYRAMID" else "scale_in_arm_blocked",
+        **fields,
+    )
 
 
 def _append_reversal_add_probe_fields(fields: dict, probe: dict | None) -> dict:
@@ -13754,6 +13859,17 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         stock,
                         code,
                         "same_symbol_loss_reentry_cooldown",
+                        metric_role="safety_veto",
+                        decision_authority="same_symbol_loss_reentry_guard_observation_only",
+                        runtime_effect=False,
+                        forbidden_uses=(
+                            "runtime_threshold_apply/provider_route_change/bot_restart/"
+                            "position_sizing_cap_release"
+                        ),
+                        actual_order_submitted=True,
+                        broker_order_forbidden=False,
+                        source_stage="sell_order_sent",
+                        guard_family="same_symbol_loss_reentry_guard",
                         exit_rule=exit_rule or stock.get("last_exit_rule") or "-",
                         profit_rate=f"{profit_rate:+.2f}",
                         cooldown_sec=cooldown_sec,
@@ -13897,41 +14013,84 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         if strategy == 'SCALPING' and _rule_bool('REVERSAL_ADD_ENABLED', False):
             _last_ra_probe_log = float(stock.get('last_reversal_add_probe_log_ts', 0) or 0)
             if now_ts - _last_ra_probe_log >= 30:
-                _ra_probe = evaluate_scalping_reversal_add(stock, profit_rate, current_ai_score, held_sec)
-                _ra_probe_reason = str(_ra_probe.get("reason") or "")
-                if _ra_probe_reason and _ra_probe_reason != "reversal_add_ok":
-                    _log_holding_pipeline(
-                        stock,
-                        code,
-                        "reversal_add_blocked_reason",
-                        **_append_reversal_add_probe_fields(
-                            {
-                                "state": stock.get('reversal_add_state', '') or "-",
-                                "blocked_reason": _ra_probe_reason,
-                                "profit_rate": f"{profit_rate:+.2f}",
-                                "ai_score": f"{current_ai_score:.0f}",
-                            },
-                            _ra_probe.get("probe"),
-                        ),
-                    )
-                    _emit_stat_action_decision_snapshot(
-                        stock=stock,
-                        code=code,
-                        strategy=strategy,
-                        ws_data=ws_data,
-                        chosen_action="hold_wait",
-                        eligible_actions=["hold_wait"],
-                        rejected_actions=[f"avg_down_wait:{_ra_probe_reason}"],
-                        profit_rate=profit_rate,
-                        peak_profit=peak_profit,
-                        current_ai_score=current_ai_score,
-                        held_sec=held_sec,
-                        curr_price=curr_p,
-                        buy_price=buy_p,
-                        scale_in_gate=gate,
-                        scale_in_action=_ra_probe,
-                        reason="scale_in_probe_blocked",
-                    )
+                if _safe_float(profit_rate, 0.0) >= 0:
+                    is_new_high = False
+                    try:
+                        highest_prices = HIGHEST_PRICES or {}
+                        is_new_high = curr_p >= float(highest_prices.get(_price_tracking_key(stock, code), curr_p))
+                    except Exception:
+                        is_new_high = False
+                    _pyramid_probe = evaluate_scalping_pyramid(stock, profit_rate, peak_profit, is_new_high)
+                    _pyramid_reason = str(_pyramid_probe.get("reason") or "pyramid_not_selected")
+                    if _pyramid_reason and _pyramid_reason != "scalping_pyramid_ok":
+                        _log_scale_in_arm_blocked(
+                            stock,
+                            code,
+                            arm="PYRAMID",
+                            blocked_reason=_pyramid_reason,
+                            profit_rate=profit_rate,
+                            peak_profit=peak_profit,
+                            current_ai_score=current_ai_score,
+                            held_sec=held_sec,
+                            gate=gate,
+                        )
+                        _emit_stat_action_decision_snapshot(
+                            stock=stock,
+                            code=code,
+                            strategy=strategy,
+                            ws_data=ws_data,
+                            chosen_action="hold_wait",
+                            eligible_actions=["hold_wait"],
+                            rejected_actions=[f"pyramid_wait:{_pyramid_reason}"],
+                            profit_rate=profit_rate,
+                            peak_profit=peak_profit,
+                            current_ai_score=current_ai_score,
+                            held_sec=held_sec,
+                            curr_price=curr_p,
+                            buy_price=buy_p,
+                            scale_in_gate=gate,
+                            scale_in_action={"add_type": "PYRAMID", "reason": _pyramid_reason},
+                            reason="scale_in_probe_blocked",
+                        )
+                else:
+                    _ra_probe = evaluate_scalping_reversal_add(stock, profit_rate, current_ai_score, held_sec)
+                    _ra_probe_reason = str(_ra_probe.get("reason") or "")
+                    if _ra_probe_reason and _ra_probe_reason != "reversal_add_ok":
+                        _log_holding_pipeline(
+                            stock,
+                            code,
+                            "reversal_add_blocked_reason",
+                            **_append_reversal_add_probe_fields(
+                                {
+                                    "state": stock.get('reversal_add_state', '') or "-",
+                                    "scale_in_arm": "AVG_DOWN",
+                                    "scale_in_blocker_namespace": _scale_in_namespace_for_arm("AVG_DOWN", _ra_probe_reason),
+                                    "scale_in_blocker_reason": _ra_probe_reason,
+                                    "blocked_reason": _ra_probe_reason,
+                                    "profit_rate": f"{profit_rate:+.2f}",
+                                    "ai_score": f"{current_ai_score:.0f}",
+                                },
+                                _ra_probe.get("probe"),
+                            ),
+                        )
+                        _emit_stat_action_decision_snapshot(
+                            stock=stock,
+                            code=code,
+                            strategy=strategy,
+                            ws_data=ws_data,
+                            chosen_action="hold_wait",
+                            eligible_actions=["hold_wait"],
+                            rejected_actions=[f"avg_down_wait:{_ra_probe_reason}"],
+                            profit_rate=profit_rate,
+                            peak_profit=peak_profit,
+                            current_ai_score=current_ai_score,
+                            held_sec=held_sec,
+                            curr_price=curr_p,
+                            buy_price=buy_p,
+                            scale_in_gate=gate,
+                            scale_in_action={**_ra_probe, "add_type": "AVG_DOWN"},
+                            reason="scale_in_probe_blocked",
+                        )
                 _mutate_stock_state(stock, set_fields={'last_reversal_add_probe_log_ts': now_ts})
             return
     else:
@@ -13961,20 +14120,40 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 reversal_probe
                 and stock.get('reversal_add_state') in ('STAGNATION', 'REVERSAL_CANDIDATE')
             ):
-                _log_holding_pipeline(
-                    stock,
-                    code,
-                    "reversal_add_gate_blocked",
-                    **_append_reversal_add_probe_fields(
-                        {
-                            "state": stock.get('reversal_add_state', '') or "-",
-                            "gate_reason": gate.get('reason') or "-",
-                            "profit_rate": f"{profit_rate:+.2f}",
-                            "ai_score": f"{current_ai_score:.0f}",
-                        },
-                        reversal_probe.get("probe"),
-                    ),
-                )
+                if _safe_float(profit_rate, 0.0) >= 0:
+                    _log_scale_in_arm_blocked(
+                        stock,
+                        code,
+                        arm="PYRAMID",
+                        blocked_reason=gate.get('reason') or "-",
+                        profit_rate=profit_rate,
+                        peak_profit=peak_profit,
+                        current_ai_score=current_ai_score,
+                        held_sec=held_sec,
+                        gate=gate,
+                    )
+                    rejected_action = f"pyramid_wait:{gate.get('reason') or '-'}"
+                    action_for_snapshot = {"add_type": "PYRAMID", "reason": gate.get('reason') or "-"}
+                else:
+                    _log_holding_pipeline(
+                        stock,
+                        code,
+                        "reversal_add_gate_blocked",
+                        **_append_reversal_add_probe_fields(
+                            {
+                                "state": stock.get('reversal_add_state', '') or "-",
+                                "scale_in_arm": "AVG_DOWN",
+                                "scale_in_blocker_namespace": _scale_in_namespace_for_arm("AVG_DOWN", gate.get('reason') or "-"),
+                                "scale_in_blocker_reason": gate.get('reason') or "-",
+                                "gate_reason": gate.get('reason') or "-",
+                                "profit_rate": f"{profit_rate:+.2f}",
+                                "ai_score": f"{current_ai_score:.0f}",
+                            },
+                            reversal_probe.get("probe"),
+                        ),
+                    )
+                    rejected_action = f"avg_down_wait:{gate.get('reason') or '-'}"
+                    action_for_snapshot = {**reversal_probe, "add_type": "AVG_DOWN"}
                 _emit_stat_action_decision_snapshot(
                     stock=stock,
                     code=code,
@@ -13982,7 +14161,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     ws_data=ws_data,
                     chosen_action="hold_wait",
                     eligible_actions=["hold_wait"],
-                    rejected_actions=[f"avg_down_wait:{gate.get('reason') or '-'}"],
+                    rejected_actions=[rejected_action],
                     profit_rate=profit_rate,
                     peak_profit=peak_profit,
                     current_ai_score=current_ai_score,
@@ -13990,7 +14169,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     curr_price=curr_p,
                     buy_price=buy_p,
                     scale_in_gate=gate,
-                    scale_in_action=reversal_probe,
+                    scale_in_action=action_for_snapshot,
                     reason="scale_in_gate_blocked",
                 )
             _mutate_stock_state(stock, set_fields={'last_add_block_log_ts': now_ts})
@@ -14670,6 +14849,9 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             code,
             "scale_in_price_guard_block",
             add_type=add_type,
+            scale_in_arm=add_type,
+            scale_in_blocker_namespace=add_type,
+            scale_in_blocker_reason=price_resolution.get("reason"),
             reason=price_resolution.get("reason"),
             curr_price=curr_price,
             resolved_price=resolved_price,
@@ -14723,6 +14905,9 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             code,
             "scale_in_qty_block",
             add_type=add_type,
+            scale_in_arm=add_type,
+            scale_in_blocker_namespace=add_type,
+            scale_in_blocker_reason=qty_reason,
             reason=qty_reason,
             curr_price=curr_price,
             resolved_price=resolved_price,

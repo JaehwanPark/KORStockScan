@@ -118,6 +118,10 @@ def _ai_review_path(target_date: str) -> Path:
     return REPORT_DIR / "threshold_cycle_ai_review" / f"threshold_cycle_ai_review_{target_date}_postclose.json"
 
 
+def _scalp_sim_overnight_path(target_date: str) -> Path:
+    return REPORT_DIR / "scalp_sim_overnight" / f"scalp_sim_overnight_{target_date}.json"
+
+
 def _calibration_path(target_date: str) -> Path:
     return (
         REPORT_DIR
@@ -161,6 +165,18 @@ def _entry_bucket_order_id(item: dict[str, Any]) -> str:
     return f"order_lifecycle_entry_bucket_{bucket_type}_{bucket_key}"
 
 
+def _scale_in_bucket_order_id(item: dict[str, Any]) -> str:
+    bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
+    bucket_key = _slug(str(item.get("bucket_key") or item.get("workorder_id") or "unknown"))
+    return f"order_lifecycle_scale_in_bucket_{bucket_type}_{bucket_key}"
+
+
+def _overnight_bucket_order_id(item: dict[str, Any]) -> str:
+    bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
+    bucket_key = _slug(str(item.get("bucket_key") or item.get("workorder_id") or "unknown"))
+    return f"order_lifecycle_overnight_bucket_{bucket_type}_{bucket_key}"
+
+
 def _collect_entry_bucket_candidate_ids(payload: Any) -> set[str]:
     found: set[str] = set()
     if isinstance(payload, dict):
@@ -174,6 +190,38 @@ def _collect_entry_bucket_candidate_ids(payload: Any) -> set[str]:
     elif isinstance(payload, list):
         for item in payload:
             found.update(_collect_entry_bucket_candidate_ids(item))
+    return found
+
+
+def _collect_scale_in_bucket_candidate_ids(payload: Any) -> set[str]:
+    found: set[str] = set()
+    if isinstance(payload, dict):
+        candidates = payload.get("scale_in_bucket_runtime_approval_candidates")
+        if isinstance(candidates, list):
+            for item in candidates:
+                if isinstance(item, dict) and item.get("candidate_id"):
+                    found.add(str(item.get("candidate_id")))
+        for value in payload.values():
+            found.update(_collect_scale_in_bucket_candidate_ids(value))
+    elif isinstance(payload, list):
+        for item in payload:
+            found.update(_collect_scale_in_bucket_candidate_ids(item))
+    return found
+
+
+def _collect_overnight_bucket_candidate_ids(payload: Any) -> set[str]:
+    found: set[str] = set()
+    if isinstance(payload, dict):
+        candidates = payload.get("overnight_bucket_runtime_approval_candidates")
+        if isinstance(candidates, list):
+            for item in candidates:
+                if isinstance(item, dict) and item.get("candidate_id"):
+                    found.add(str(item.get("candidate_id")))
+        for value in payload.values():
+            found.update(_collect_overnight_bucket_candidate_ids(value))
+    elif isinstance(payload, list):
+        for item in payload:
+            found.update(_collect_overnight_bucket_candidate_ids(item))
     return found
 
 
@@ -240,6 +288,187 @@ def _entry_bucket_handoff_status(
             "LDM entry bucket candidates and workorders propagated to threshold EV, runtime summary, and code workorder."
             if not missing
             else "LDM entry bucket output was generated but one or more downstream consumers dropped it."
+        ),
+    }
+
+
+def _scale_in_bucket_handoff_status(
+    ldm_report: dict[str, Any],
+    ev_report: dict[str, Any],
+    runtime_summary: dict[str, Any],
+    workorder: dict[str, Any],
+) -> dict[str, Any]:
+    attribution = (
+        ldm_report.get("scale_in_bucket_attribution")
+        if isinstance(ldm_report.get("scale_in_bucket_attribution"), dict)
+        else {}
+    )
+    candidates = (
+        attribution.get("runtime_approval_candidates")
+        if isinstance(attribution.get("runtime_approval_candidates"), list)
+        else []
+    )
+    source_workorders = (
+        attribution.get("code_improvement_workorders")
+        if isinstance(attribution.get("code_improvement_workorders"), list)
+        else []
+    )
+    expected_candidate_ids = sorted(
+        str(item.get("candidate_id"))
+        for item in candidates
+        if isinstance(item, dict) and item.get("candidate_id")
+    )
+    expected_order_ids = sorted(
+        _scale_in_bucket_order_id(item)
+        for item in source_workorders
+        if isinstance(item, dict) and item.get("bucket_type") and item.get("bucket_key")
+    )
+    ev_candidate_ids = _collect_scale_in_bucket_candidate_ids(ev_report)
+    runtime_candidate_ids = _collect_scale_in_bucket_candidate_ids(runtime_summary)
+    actual_order_ids = {
+        str(item.get("order_id"))
+        for item in (workorder.get("orders") if isinstance(workorder.get("orders"), list) else [])
+        if isinstance(item, dict) and item.get("order_id")
+    }
+    missing_ev_candidates = sorted(set(expected_candidate_ids) - ev_candidate_ids)
+    missing_runtime_summary_candidates = sorted(set(expected_candidate_ids) - runtime_candidate_ids)
+    missing_workorder_order_ids = sorted(set(expected_order_ids) - actual_order_ids)
+    missing: list[str] = []
+    if missing_ev_candidates:
+        missing.append("threshold_cycle_ev_scale_in_bucket_candidates_missing")
+    if missing_runtime_summary_candidates:
+        missing.append("runtime_approval_summary_scale_in_bucket_candidates_missing")
+    if missing_workorder_order_ids:
+        missing.append("code_improvement_workorder_scale_in_bucket_orders_missing")
+    return {
+        "status": "fail" if missing else "pass",
+        "expected_candidate_ids": expected_candidate_ids,
+        "threshold_cycle_ev_candidate_ids": sorted(ev_candidate_ids),
+        "runtime_approval_summary_candidate_ids": sorted(runtime_candidate_ids),
+        "missing_ev_candidate_ids": missing_ev_candidates,
+        "missing_runtime_summary_candidate_ids": missing_runtime_summary_candidates,
+        "expected_workorder_order_ids": expected_order_ids,
+        "actual_workorder_order_ids": sorted(actual_order_ids),
+        "missing_workorder_order_ids": missing_workorder_order_ids,
+        "missing": missing,
+        "interpretation": (
+            "LDM scale-in bucket candidates and workorders propagated to threshold EV, runtime summary, and code workorder."
+            if not missing
+            else "LDM scale-in bucket output was generated but one or more downstream consumers dropped it."
+        ),
+    }
+
+
+def _overnight_bucket_handoff_status(
+    ldm_report: dict[str, Any],
+    ev_report: dict[str, Any],
+    runtime_summary: dict[str, Any],
+    workorder: dict[str, Any],
+) -> dict[str, Any]:
+    attribution = (
+        ldm_report.get("overnight_bucket_attribution")
+        if isinstance(ldm_report.get("overnight_bucket_attribution"), dict)
+        else {}
+    )
+    candidates = (
+        attribution.get("runtime_approval_candidates")
+        if isinstance(attribution.get("runtime_approval_candidates"), list)
+        else []
+    )
+    source_workorders = (
+        attribution.get("code_improvement_workorders")
+        if isinstance(attribution.get("code_improvement_workorders"), list)
+        else []
+    )
+    expected_candidate_ids = sorted(
+        str(item.get("candidate_id"))
+        for item in candidates
+        if isinstance(item, dict) and item.get("candidate_id")
+    )
+    expected_order_ids = sorted(
+        _overnight_bucket_order_id(item)
+        for item in source_workorders
+        if isinstance(item, dict) and item.get("bucket_type") and item.get("bucket_key")
+    )
+    ev_candidate_ids = _collect_overnight_bucket_candidate_ids(ev_report)
+    runtime_candidate_ids = _collect_overnight_bucket_candidate_ids(runtime_summary)
+    actual_order_ids = {
+        str(item.get("order_id"))
+        for item in (workorder.get("orders") if isinstance(workorder.get("orders"), list) else [])
+        if isinstance(item, dict) and item.get("order_id")
+    }
+    missing_ev_candidates = sorted(set(expected_candidate_ids) - ev_candidate_ids)
+    missing_runtime_summary_candidates = sorted(set(expected_candidate_ids) - runtime_candidate_ids)
+    missing_workorder_order_ids = sorted(set(expected_order_ids) - actual_order_ids)
+    missing: list[str] = []
+    if missing_ev_candidates:
+        missing.append("threshold_cycle_ev_overnight_bucket_candidates_missing")
+    if missing_runtime_summary_candidates:
+        missing.append("runtime_approval_summary_overnight_bucket_candidates_missing")
+    if missing_workorder_order_ids:
+        missing.append("code_improvement_workorder_overnight_bucket_orders_missing")
+    return {
+        "status": "fail" if missing else "pass",
+        "expected_candidate_ids": expected_candidate_ids,
+        "threshold_cycle_ev_candidate_ids": sorted(ev_candidate_ids),
+        "runtime_approval_summary_candidate_ids": sorted(runtime_candidate_ids),
+        "missing_ev_candidate_ids": missing_ev_candidates,
+        "missing_runtime_summary_candidate_ids": missing_runtime_summary_candidates,
+        "expected_workorder_order_ids": expected_order_ids,
+        "actual_workorder_order_ids": sorted(actual_order_ids),
+        "missing_workorder_order_ids": missing_workorder_order_ids,
+        "missing": missing,
+        "interpretation": (
+            "LDM overnight bucket candidates and workorders propagated to threshold EV, runtime summary, and code workorder."
+            if not missing
+            else "LDM overnight bucket output was generated but one or more downstream consumers dropped it."
+        ),
+    }
+
+
+def _has_scale_in_source(ldm_report: dict[str, Any]) -> bool:
+    sources = ldm_report.get("sources") if isinstance(ldm_report.get("sources"), dict) else {}
+    summary = sources.get("scale_in_attribution") if isinstance(sources.get("scale_in_attribution"), dict) else {}
+    if int(summary.get("rows") or 0) > 0:
+        return True
+    report_summary = ldm_report.get("summary") if isinstance(ldm_report.get("summary"), dict) else {}
+    stage_counts = report_summary.get("stage_counts") if isinstance(report_summary.get("stage_counts"), dict) else {}
+    return int(stage_counts.get("scale_in") or 0) > 0
+
+
+def _has_overnight_source(ldm_report: dict[str, Any]) -> bool:
+    sources = ldm_report.get("sources") if isinstance(ldm_report.get("sources"), dict) else {}
+    summary = sources.get("scalp_sim_overnight") if isinstance(sources.get("scalp_sim_overnight"), dict) else {}
+    return int(summary.get("rows") or 0) > 0
+
+
+def _scalp_sim_overnight_source_quality(report: dict[str, Any], *, report_exists: bool) -> dict[str, Any]:
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    active_undecided_count = int(summary.get("active_undecided_count") or 0)
+    decision_target = int(summary.get("decision_target") or 0)
+    source_quality_status = str(summary.get("source_quality_status") or "missing").strip()
+    warnings = summary.get("source_quality_warnings") if isinstance(summary.get("source_quality_warnings"), list) else []
+    missing: list[str] = []
+    if report_exists and not summary:
+        missing.append("scalp_sim_overnight_report_missing_or_invalid")
+    if active_undecided_count > 0 and decision_target == 0:
+        missing.append("scalp_sim_overnight_active_undecided_without_decision")
+    if source_quality_status == "source_quality_blocker":
+        missing.append("scalp_sim_overnight_source_quality_blocker")
+    return {
+        "status": "fail" if missing else ("missing" if not report_exists else "pass"),
+        "decision_target": decision_target,
+        "active_undecided_count": active_undecided_count,
+        "decision_coverage_rate": summary.get("decision_coverage_rate"),
+        "source_quality_status": source_quality_status,
+        "source_quality_warnings": warnings,
+        "missing": missing,
+        "interpretation": (
+            "scalp sim overnight report was not present in this verification fixture/run"
+            if not report_exists
+            else "scalp sim overnight preclose decisions covered active sim positions"
+            if not missing
+            else "active scalp sim overnight positions were not covered by preclose decision events"
         ),
     }
 
@@ -354,12 +583,34 @@ def build_threshold_cycle_postclose_verification(
     workorder = _load_json(paths["code_improvement_workorder"])
     runtime_summary = _load_json(paths["runtime_approval_summary"])
     ldm_report = _load_json(paths["lifecycle_decision_matrix"])
+    scalp_sim_overnight_path = _scalp_sim_overnight_path(target_date)
+    scalp_sim_overnight = _load_json(scalp_sim_overnight_path)
+    scalp_sim_overnight_quality = _scalp_sim_overnight_source_quality(
+        scalp_sim_overnight,
+        report_exists=scalp_sim_overnight_path.exists(),
+    )
+    if scalp_sim_overnight_quality.get("status") == "fail":
+        log_issues.extend(scalp_sim_overnight_quality.get("missing") or [])
     ai_correction = _ai_correction_status(target_date)
     if ai_correction.get("status") == "fail":
         log_issues.append("ai_correction_unavailable_blocks_runtime_candidates")
     entry_bucket_handoff = _entry_bucket_handoff_status(ldm_report, ev_report, runtime_summary, workorder)
     if entry_bucket_handoff.get("status") == "fail":
         log_issues.append("ldm_entry_bucket_handoff_missing")
+    scale_in_attribution = ldm_report.get("scale_in_bucket_attribution")
+    scale_in_source_present = _has_scale_in_source(ldm_report)
+    if scale_in_source_present and not isinstance(scale_in_attribution, dict):
+        log_issues.append("ldm_scale_in_bucket_attribution_missing")
+    scale_in_bucket_handoff = _scale_in_bucket_handoff_status(ldm_report, ev_report, runtime_summary, workorder)
+    if isinstance(scale_in_attribution, dict) and scale_in_bucket_handoff.get("status") == "fail":
+        log_issues.append("ldm_scale_in_bucket_handoff_missing")
+    overnight_attribution = ldm_report.get("overnight_bucket_attribution")
+    overnight_source_present = _has_overnight_source(ldm_report)
+    if overnight_source_present and not isinstance(overnight_attribution, dict):
+        log_issues.append("ldm_overnight_bucket_attribution_missing")
+    overnight_bucket_handoff = _overnight_bucket_handoff_status(ldm_report, ev_report, runtime_summary, workorder)
+    if isinstance(overnight_attribution, dict) and overnight_bucket_handoff.get("status") == "fail":
+        log_issues.append("ldm_overnight_bucket_handoff_missing")
 
     lineage = workorder.get("lineage") if isinstance(workorder.get("lineage"), dict) else {}
     workorder_snapshot = {
@@ -584,7 +835,14 @@ def build_threshold_cycle_postclose_verification(
         "downstream_links": downstream_links,
         "missing_downstream_links": missing_downstream_links,
         "ai_correction": ai_correction,
+        "scalp_sim_overnight_source_quality": scalp_sim_overnight_quality,
         "entry_bucket_handoff": entry_bucket_handoff,
+        "scale_in_bucket_handoff": scale_in_bucket_handoff,
+        "scale_in_bucket_attribution_present": isinstance(scale_in_attribution, dict),
+        "scale_in_source_present": scale_in_source_present,
+        "overnight_bucket_handoff": overnight_bucket_handoff,
+        "overnight_bucket_attribution_present": isinstance(overnight_attribution, dict),
+        "overnight_source_present": overnight_source_present,
     }
 
 
@@ -592,7 +850,14 @@ def _render_markdown(report: dict[str, Any]) -> str:
     predecessor = report.get("predecessor_integrity") if isinstance(report.get("predecessor_integrity"), dict) else {}
     workorder = report.get("workorder_snapshot") if isinstance(report.get("workorder_snapshot"), dict) else {}
     ai_correction = report.get("ai_correction") if isinstance(report.get("ai_correction"), dict) else {}
+    overnight_quality = (
+        report.get("scalp_sim_overnight_source_quality")
+        if isinstance(report.get("scalp_sim_overnight_source_quality"), dict)
+        else {}
+    )
     entry_bucket = report.get("entry_bucket_handoff") if isinstance(report.get("entry_bucket_handoff"), dict) else {}
+    scale_in_bucket = report.get("scale_in_bucket_handoff") if isinstance(report.get("scale_in_bucket_handoff"), dict) else {}
+    overnight_bucket = report.get("overnight_bucket_handoff") if isinstance(report.get("overnight_bucket_handoff"), dict) else {}
     lines = [
         f"# Threshold Cycle Postclose Verification - {report.get('date')}",
         "",
@@ -620,6 +885,15 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- parse_warnings: `{ai_correction.get('parse_warnings') or []}`",
         f"- interpretation: `{ai_correction.get('interpretation') or '-'}`",
         "",
+        "## Scalp Sim Overnight",
+        f"- status: `{overnight_quality.get('status') or '-'}`",
+        f"- decision_target: `{overnight_quality.get('decision_target') or 0}`",
+        f"- active_undecided_count: `{overnight_quality.get('active_undecided_count') or 0}`",
+        f"- decision_coverage_rate: `{overnight_quality.get('decision_coverage_rate')}`",
+        f"- source_quality_status: `{overnight_quality.get('source_quality_status') or '-'}`",
+        f"- source_quality_warnings: `{overnight_quality.get('source_quality_warnings') or []}`",
+        f"- interpretation: `{overnight_quality.get('interpretation') or '-'}`",
+        "",
         "## Entry Bucket Handoff",
         f"- status: `{entry_bucket.get('status') or '-'}`",
         f"- expected_candidate_ids: `{entry_bucket.get('expected_candidate_ids') or []}`",
@@ -627,6 +901,26 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- missing_runtime_summary_candidate_ids: `{entry_bucket.get('missing_runtime_summary_candidate_ids') or []}`",
         f"- missing_workorder_order_ids: `{entry_bucket.get('missing_workorder_order_ids') or []}`",
         f"- interpretation: `{entry_bucket.get('interpretation') or '-'}`",
+        "",
+        "## Scale-In Bucket Handoff",
+        f"- attribution_present: `{report.get('scale_in_bucket_attribution_present')}`",
+        f"- source_present: `{report.get('scale_in_source_present')}`",
+        f"- status: `{scale_in_bucket.get('status') or '-'}`",
+        f"- expected_candidate_ids: `{scale_in_bucket.get('expected_candidate_ids') or []}`",
+        f"- missing_ev_candidate_ids: `{scale_in_bucket.get('missing_ev_candidate_ids') or []}`",
+        f"- missing_runtime_summary_candidate_ids: `{scale_in_bucket.get('missing_runtime_summary_candidate_ids') or []}`",
+        f"- missing_workorder_order_ids: `{scale_in_bucket.get('missing_workorder_order_ids') or []}`",
+        f"- interpretation: `{scale_in_bucket.get('interpretation') or '-'}`",
+        "",
+        "## Overnight Bucket Handoff",
+        f"- attribution_present: `{report.get('overnight_bucket_attribution_present')}`",
+        f"- source_present: `{report.get('overnight_source_present')}`",
+        f"- status: `{overnight_bucket.get('status') or '-'}`",
+        f"- expected_candidate_ids: `{overnight_bucket.get('expected_candidate_ids') or []}`",
+        f"- missing_ev_candidate_ids: `{overnight_bucket.get('missing_ev_candidate_ids') or []}`",
+        f"- missing_runtime_summary_candidate_ids: `{overnight_bucket.get('missing_runtime_summary_candidate_ids') or []}`",
+        f"- missing_workorder_order_ids: `{overnight_bucket.get('missing_workorder_order_ids') or []}`",
+        f"- interpretation: `{overnight_bucket.get('interpretation') or '-'}`",
         "",
         "## Workorder Snapshot",
         f"- generation_id: `{workorder.get('generation_id') or '-'}`",

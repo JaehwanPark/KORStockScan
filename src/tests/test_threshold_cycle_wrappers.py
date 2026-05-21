@@ -17,6 +17,26 @@ def test_postclose_wrapper_runs_pattern_labs_before_automation_and_ev_report():
     assert 'RUN_PATTERN_LAB_CURRENTNESS_AUDIT="${THRESHOLD_CYCLE_RUN_PATTERN_LAB_CURRENTNESS_AUDIT:-true}"' in script
 
 
+def test_scalp_sim_overnight_preclose_wrapper_uses_live_openai_and_bedrock_lite_shadow():
+    script = Path("deploy/run_scalp_sim_overnight_preclose.sh").read_text(encoding="utf-8")
+
+    assert "PYTHONPATH=." in script
+    assert "src.engine.scalp_sim_overnight --date \"$TARGET_DATE\" --live-openai" in script
+    assert "--report-only" not in script
+    assert 'KORSTOCKSCAN_SCALPING_AI_ROUTE="${KORSTOCKSCAN_SCALPING_AI_ROUTE:-openai}"' in script
+    assert 'KORSTOCKSCAN_BEDROCK_NOVA_LITE_SHADOW_ENABLED="${KORSTOCKSCAN_BEDROCK_NOVA_LITE_SHADOW_ENABLED:-true}"' in script
+    assert 'KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE="${KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE:-shadow}"' in script
+
+
+def test_threshold_cycle_cron_installs_scalp_sim_overnight_preclose_once():
+    script = Path("deploy/install_threshold_cycle_cron.sh").read_text(encoding="utf-8")
+
+    assert "SCALP_SIM_OVERNIGHT_PRECLOSE" in script
+    assert "20 15 * * 1-5" in script
+    assert "deploy/run_scalp_sim_overnight_preclose.sh" in script
+    assert "!/SCALP_SIM_OVERNIGHT_PRECLOSE/" in script
+
+
 def test_postclose_wrapper_runs_swing_daily_simulation_before_lifecycle_audit():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
@@ -169,9 +189,25 @@ def test_postclose_wrapper_resource_guards_heavy_steps():
     assert 'POSTCLOSE_RESOURCE_GUARD="${THRESHOLD_CYCLE_POSTCLOSE_RESOURCE_GUARD:-true}"' in script
     assert 'POSTCLOSE_NICE_LEVEL="${THRESHOLD_CYCLE_POSTCLOSE_NICE_LEVEL:-10}"' in script
     assert 'POSTCLOSE_IONICE_LEVEL="${THRESHOLD_CYCLE_POSTCLOSE_IONICE_LEVEL:-7}"' in script
+    assert 'POSTCLOSE_MIN_SWAP_FREE_MB="${THRESHOLD_CYCLE_POSTCLOSE_MIN_SWAP_FREE_MB:-256}"' in script
+    assert 'POSTCLOSE_MAX_SAMPLE_AGE_SEC="${THRESHOLD_CYCLE_POSTCLOSE_MAX_SAMPLE_AGE_SEC:-180}"' in script
+    assert 'POSTCLOSE_MAX_LOAD1="${THRESHOLD_CYCLE_POSTCLOSE_MAX_LOAD1:-64}"' in script
+    assert 'POSTCLOSE_BOT_ACTION="${THRESHOLD_CYCLE_POSTCLOSE_BOT_ACTION:-none}"' in script
     assert 'COMPACT_AVAILABILITY_WAIT_SEC="${THRESHOLD_CYCLE_COMPACT_AVAILABILITY_WAIT_SEC:-900}"' in script
     assert "run_postclose_cmd()" in script
+    assert "mark_postclose_failed()" in script
+    assert "stop_postclose_bot_if_requested()" in script
+    assert "restart_postclose_bot_if_requested()" in script
+    assert "stopping bot for postclose resource isolation" in script
+    assert "restarting bot after postclose" in script
+    assert "starting bot after postclose" in script
+    assert "reason=restart_action_requested" in script
     assert "wait_for_postclose_resources()" in script
+    assert "sample_age_sec=" in script
+    assert "swap_free_mb=" in script
+    assert "cpu_busy_pct=" in script
+    assert "load1=" in script
+    assert "sampler_missing" in script
     assert "availability guard wait" in script
     assert 'wait_for_postclose_resources "daily_threshold_cycle_report"' in script
     assert 'wait_for_postclose_resources "swing_lifecycle_audit"' in script
@@ -179,6 +215,13 @@ def test_postclose_wrapper_resource_guards_heavy_steps():
     assert 'wait_for_postclose_resources "threshold_cycle_ev_${pass_label}"' in script
     assert 'run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.backfill_threshold_cycle_events' in script
     assert 'run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.daily_threshold_cycle_report' in script
+
+
+def test_threshold_cycle_cron_restarts_bot_around_postclose():
+    script = Path("deploy/install_threshold_cycle_cron.sh").read_text(encoding="utf-8")
+
+    assert "THRESHOLD_CYCLE_POSTCLOSE_BOT_ACTION=restart" in script
+    assert "THRESHOLD_CYCLE_POSTCLOSE" in script
 
 
 def test_postclose_wrapper_cleans_up_snapshot_duplicates_with_retention():

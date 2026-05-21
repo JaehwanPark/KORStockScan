@@ -60,6 +60,12 @@ def _has_source(source: dict[str, Any], key: str) -> bool:
     return value not in (None, "", "-", [])
 
 
+def _ldm_bucket_workorder_count(payload: dict[str, Any], key: str) -> int:
+    attribution = payload.get(key) if isinstance(payload.get(key), dict) else {}
+    workorders = attribution.get("code_improvement_workorders")
+    return len(workorders) if isinstance(workorders, list) else 0
+
+
 def _check(
     check_id: str,
     *,
@@ -159,6 +165,9 @@ def build_pattern_lab_propagation_audit(target_date: str) -> dict[str, Any]:
     workorder = _load_json(workorder_path)
     ev_report = _load_json(ev_path)
     runtime_summary = _load_json(runtime_path)
+    ev_source = _source_dict(ev_report)
+    ldm_path = Path(str(ev_source.get("lifecycle_decision_matrix"))) if ev_source.get("lifecycle_decision_matrix") else None
+    lifecycle_report = _load_json(ldm_path) if ldm_path else {}
 
     checks: list[dict[str, Any]] = []
 
@@ -208,7 +217,6 @@ def build_pattern_lab_propagation_audit(target_date: str) -> dict[str, Any]:
         )
     )
 
-    ev_source = _source_dict(ev_report)
     ev_currentness_ok = bool(ev_report) and _has_source(ev_source, "pattern_lab_currentness_audit")
     ev_propagation_ok = bool(ev_report) and _has_source(ev_source, "pattern_lab_propagation_audit")
     checks.append(
@@ -246,6 +254,43 @@ def build_pattern_lab_propagation_audit(target_date: str) -> dict[str, Any]:
             finding="runtime_approval_summary must expose pattern_lab_propagation_audit source link when generated after this audit.",
             source_paths=[runtime_path, report_paths(target_date)[0]],
             recommended_order=None if runtime_status != "fail" else _order("runtime_summary_propagation_source_link", "Expose propagation audit in runtime approval summary", [runtime_path]),
+        )
+    )
+
+    workorder_ldm_ok = bool(workorder) and _has_source(workorder_source, "lifecycle_decision_matrix")
+    checks.append(
+        _check(
+            "workorder_consumes_lifecycle_decision_matrix",
+            status="pass" if workorder_ldm_ok else "fail",
+            severity="info" if workorder_ldm_ok else "source_quality_blocker",
+            finding="code_improvement_workorder must include lifecycle_decision_matrix source so entry/scale-in/overnight bucket workorders are not dropped.",
+            source_paths=[workorder_path, ldm_path or ev_path],
+            recommended_order=None if workorder_ldm_ok else _order("workorder_consumes_lifecycle_decision_matrix", "Add lifecycle_decision_matrix source to code improvement workorder", [workorder_path, ldm_path or ev_path]),
+        )
+    )
+
+    expected_bucket_counts = {
+        "entry": _ldm_bucket_workorder_count(lifecycle_report, "entry_bucket_attribution"),
+        "scale_in": _ldm_bucket_workorder_count(lifecycle_report, "scale_in_bucket_attribution"),
+        "overnight": _ldm_bucket_workorder_count(lifecycle_report, "overnight_bucket_attribution"),
+    }
+    actual_bucket_counts = {
+        "entry": int(workorder_summary.get("lifecycle_entry_bucket_source_order_count") or 0),
+        "scale_in": int(workorder_summary.get("lifecycle_scale_in_bucket_source_order_count") or 0),
+        "overnight": int(workorder_summary.get("lifecycle_overnight_bucket_source_order_count") or 0),
+    }
+    bucket_counts_ok = all(actual_bucket_counts[key] >= expected_bucket_counts[key] for key in expected_bucket_counts)
+    checks.append(
+        _check(
+            "workorder_lifecycle_bucket_order_counts",
+            status="pass" if bucket_counts_ok else "fail",
+            severity="info" if bucket_counts_ok else "source_quality_blocker",
+            finding=(
+                "code_improvement_workorder must count LDM entry/scale-in/overnight bucket workorders. "
+                f"expected={expected_bucket_counts}, actual={actual_bucket_counts}"
+            ),
+            source_paths=[workorder_path, ldm_path or ev_path],
+            recommended_order=None if bucket_counts_ok else _order("workorder_lifecycle_bucket_order_counts", "Consume all LDM lifecycle bucket workorders", [workorder_path, ldm_path or ev_path]),
         )
     )
 

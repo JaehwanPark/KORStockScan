@@ -569,3 +569,127 @@ def test_lifecycle_matrix_emits_entry_bucket_attribution_workorders(tmp_path, mo
         for item in attribution["buckets"]
     )
     assert report["summary"]["entry_bucket_runtime_candidate_count"] >= 1
+
+
+def test_lifecycle_matrix_emits_scale_in_bucket_attribution_workorders(tmp_path, monkeypatch):
+    matrix_dir = tmp_path / "matrix"
+    entry_dir = tmp_path / "entry_adm"
+    post_sell_dir = tmp_path / "post_sell"
+    monitor_dir = tmp_path / "monitor"
+    pipeline_dir = tmp_path / "pipeline_events"
+    for directory in (entry_dir, post_sell_dir, monitor_dir, pipeline_dir):
+        directory.mkdir(parents=True)
+    monkeypatch.setattr(mod, "MATRIX_DIR", matrix_dir)
+    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
+    monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", monitor_dir)
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
+    monkeypatch.setattr(
+        mod,
+        "entry_adm_report_paths",
+        lambda target_date: (
+            entry_dir / f"scalp_entry_action_decision_matrix_{target_date}.json",
+            entry_dir / f"scalp_entry_action_decision_matrix_{target_date}.md",
+        ),
+    )
+
+    events = [
+        {
+            "stage": "stat_action_decision_snapshot",
+            "stock_code": f"9{idx:05d}",
+            "record_id": idx,
+            "emitted_at": f"2026-05-21T13:{idx:02d}:00+09:00",
+            "fields": {
+                "chosen_action": "pyramid_wait",
+                "scale_in_action_type": "PYRAMID",
+                "scale_in_action_reason": "scalping_pyramid_ok",
+                "scale_in_arm": "PYRAMID",
+                "scale_in_blocker_namespace": "PYRAMID",
+                "scale_in_blocker_reason": "scalping_pyramid_ok",
+                "profit_rate": "+1.20",
+                "peak_profit": "+1.80",
+                "held_sec": "240",
+                "current_ai_score": "76",
+                "ai_score_source": "model",
+                "supply_pass_count": "3",
+            },
+        }
+        for idx in range(11)
+    ]
+    (pipeline_dir / "pipeline_events_2026-05-21.jsonl").write_text(
+        "\n".join(json.dumps(event, ensure_ascii=False) for event in events),
+        encoding="utf-8",
+    )
+
+    report = mod.build_lifecycle_decision_matrix_report("2026-05-21")
+
+    attribution = report["scale_in_bucket_attribution"]
+    assert attribution["decision_authority"] == "adm_ldm_scale_in_bucket_attribution_source_only"
+    assert attribution["summary"]["arm_counts"]["PYRAMID"] == 11
+    assert attribution["summary"]["runtime_candidate_count"] >= 1
+    assert attribution["summary"]["workorder_count"] >= 1
+    arm_bucket = next(item for item in attribution["buckets"] if item["bucket_type"] == "arm")
+    assert arm_bucket["bucket_key"] == "PYRAMID"
+    assert arm_bucket["recommended_route"] == "candidate_recovery_or_relax"
+    assert report["summary"]["scale_in_bucket_runtime_candidate_count"] >= 1
+
+
+def test_lifecycle_matrix_emits_overnight_bucket_attribution_workorders(tmp_path, monkeypatch):
+    matrix_dir = tmp_path / "matrix"
+    entry_dir = tmp_path / "entry_adm"
+    post_sell_dir = tmp_path / "post_sell"
+    monitor_dir = tmp_path / "monitor"
+    pipeline_dir = tmp_path / "pipeline_events"
+    for directory in (entry_dir, post_sell_dir, monitor_dir, pipeline_dir):
+        directory.mkdir(parents=True)
+    monkeypatch.setattr(mod, "MATRIX_DIR", matrix_dir)
+    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
+    monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", monitor_dir)
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
+    monkeypatch.setattr(
+        mod,
+        "entry_adm_report_paths",
+        lambda target_date: (
+            entry_dir / f"scalp_entry_action_decision_matrix_{target_date}.json",
+            entry_dir / f"scalp_entry_action_decision_matrix_{target_date}.md",
+        ),
+    )
+
+    events = [
+        {
+            "stage": "scalp_sim_overnight_sell_today",
+            "stock_code": f"8{idx:05d}",
+            "record_id": idx,
+            "emitted_at": f"2026-05-21T15:2{idx % 10}:00+09:00",
+            "fields": {
+                "simulation_book": "scalp_ai_buy_all",
+                "sim_record_id": f"SIM-ON-{idx}",
+                "ai_action": "SELL_TODAY",
+                "ai_confidence": "0.82",
+                "profit_rate": "+1.10",
+                "profit_rate_live": "+1.10",
+                "peak_profit": "+1.70",
+                "held_sec": "900",
+                "current_price_source": "best_bid",
+                "source_quality_gate": "overnight_decision_coverage",
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+        }
+        for idx in range(11)
+    ]
+    (pipeline_dir / "pipeline_events_2026-05-21.jsonl").write_text(
+        "\n".join(json.dumps(event, ensure_ascii=False) for event in events),
+        encoding="utf-8",
+    )
+
+    report = mod.build_lifecycle_decision_matrix_report("2026-05-21")
+
+    attribution = report["overnight_bucket_attribution"]
+    assert attribution["decision_authority"] == "adm_ldm_overnight_bucket_attribution_source_only"
+    assert attribution["summary"]["status_counts"]["SELL_TODAY"] == 11
+    assert attribution["summary"]["runtime_candidate_count"] >= 1
+    assert attribution["summary"]["workorder_count"] >= 1
+    action_bucket = next(item for item in attribution["buckets"] if item["bucket_type"] == "overnight_action")
+    assert action_bucket["bucket_key"] == "SELL_TODAY"
+    assert action_bucket["recommended_route"] == "candidate_recovery_or_relax"
+    assert report["summary"]["overnight_bucket_runtime_candidate_count"] >= 1

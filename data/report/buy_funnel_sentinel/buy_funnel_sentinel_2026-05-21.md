@@ -13,19 +13,19 @@
 
 ## 근거
 
-- as_of: `2026-05-21T14:45:08`
+- as_of: `2026-05-21T15:20:08`
 - baseline_date: `2026-05-20`
-- ai_confirmed unique: `222`
+- ai_confirmed unique: `224`
 - budget_pass unique: `14`
 - latency_pass unique: `6`
 - submitted unique: `5`
 - holding_started unique: `1`
-- budget/ai unique: `6.3%` (baseline `2.6`)
-- submitted/ai unique: `2.3%` (baseline `0.0`)
-- top blockers: `blocked_swing_score_vpw:-=82608, blocked_swing_gap:-=68914, blocked_overbought:-=27335, blocked_strength_momentum:below_window_buy_value=18056, blocked_strength_momentum:insufficient_history=16624`
-- upstream blockers: `blocked_ai_score:ai_score_50_buy_hold_override=1337, blocked_ai_score:score_62.0=861, first_ai_wait:-=410, blocked_ai_score:score_60.0=197, blocked_ai_score:score_58.0=143`
+- budget/ai unique: `6.2%` (baseline `2.5`)
+- submitted/ai unique: `2.2%` (baseline `0.0`)
+- top blockers: `blocked_swing_score_vpw:-=95350, blocked_swing_gap:-=77791, blocked_overbought:-=29807, blocked_strength_momentum:below_window_buy_value=18903, blocked_strength_momentum:insufficient_history=17949`
+- upstream blockers: `blocked_ai_score:ai_score_50_buy_hold_override=1401, blocked_ai_score:score_62.0=888, first_ai_wait:-=412, blocked_ai_score:score_60.0=205, blocked_ai_score:score_58.0=148`
 - latency blockers: `latency_block:latency_state_danger=254`
-- price guards: `entry_ai_price_canary_fallback:invalid_price=164, scale_in_price_guard_block:micro_vwap_bp>60.0=23, entry_ai_price_canary_fallback:skip_low_confidence=1, entry_ai_price_canary_skip_order:orderbook_micro missing and raw tape shows sell pressure with weak bid follow-through; spread is wide so entry is unfavorable=1, entry_ai_price_canary_fallback:pre_submit_price_guard=1`
+- price guards: `entry_ai_price_canary_fallback:invalid_price=167, scale_in_price_guard_block:micro_vwap_bp>60.0=23, entry_ai_price_canary_fallback:skip_low_confidence=1, entry_ai_price_canary_skip_order:orderbook_micro missing and raw tape shows sell pressure with weak bid follow-through; spread is wide so entry is unfavorable=1, entry_ai_price_canary_fallback:pre_submit_price_guard=1`
 
 ## 금지된 자동변경
 
@@ -42,6 +42,6 @@
 
 ## Window Summary
 
-- `5m`: ai=40, budget=0, latency=0, submitted=0, top=`blocked_swing_score_vpw:-=1872, blocked_swing_gap:-=779, blocked_overbought:-=531`, upstream=`blocked_ai_score:ai_score_50_buy_hold_override=18, blocked_ai_score:score_62.0=14, blocked_ai_score:score_60.0=5`
-- `10m`: ai=45, budget=0, latency=0, submitted=0, top=`blocked_swing_score_vpw:-=3965, blocked_swing_gap:-=1932, blocked_overbought:-=1187`, upstream=`blocked_ai_score:ai_score_50_buy_hold_override=29, blocked_ai_score:score_62.0=24, blocked_ai_score:score_60.0=7`
-- `30m`: ai=52, budget=0, latency=0, submitted=0, top=`blocked_swing_score_vpw:-=11682, blocked_swing_gap:-=6063, blocked_overbought:-=4453`, upstream=`blocked_ai_score:ai_score_50_buy_hold_override=102, blocked_ai_score:score_62.0=65, first_ai_wait:-=22`
+- `5m`: ai=0, budget=0, latency=0, submitted=0, top=`blocked_swing_score_vpw:-=1417, blocked_swing_gap:-=1355`, upstream=`-`
+- `10m`: ai=0, budget=0, latency=0, submitted=0, top=`blocked_swing_score_vpw:-=3171, blocked_swing_gap:-=2961, blocked_gatekeeper_reject:눌림 대기=3`, upstream=`-`
+- `30m`: ai=28, budget=0, latency=0, submitted=0, top=`blocked_swing_score_vpw:-=11052, blocked_swing_gap:-=8153, blocked_overbought:-=1596`, upstream=`blocked_ai_score:ai_score_50_buy_hold_override=35, blocked_ai_score:score_62.0=16, blocked_ai_score:score_60.0=4`
