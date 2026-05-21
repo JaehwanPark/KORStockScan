@@ -203,6 +203,83 @@ def _alignment_for_action(action_label: str, matched_entries: list[dict[str, Any
     return "mixed_or_unknown"
 
 
+def _truthy_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on", "blocked", "block"}
+
+
+def has_holding_exit_matrix_safety_veto(context: dict[str, Any] | None) -> bool:
+    """Return True when ADM/LDM runtime bias must never mutate the action."""
+    ctx = context or {}
+    for key in (
+        "hard_safety_veto",
+        "safety_veto",
+        "broker_guard_block",
+        "broker_submit_blocked",
+        "broker_order_forbidden",
+        "stale_quote_submit_block",
+        "quote_stale_at_submit",
+        "price_context_stale_at_submit",
+        "price_freshness_block",
+        "protect_stop",
+        "hard_stop",
+        "emergency_stop",
+        "account_guard_block",
+        "order_guard_block",
+        "cooldown_guard_block",
+        "qty_guard_block",
+        "receipt_missing",
+        "provenance_missing",
+    ):
+        if _truthy_flag(ctx.get(key)):
+            return True
+    reason_blob = " ".join(
+        str(ctx.get(key) or "").lower()
+        for key in (
+            "exit_rule",
+            "sell_reason_type",
+            "blocked_reason",
+            "source_quality_block_reason",
+            "entry_submit_revalidation_warning",
+            "entry_submit_revalidation_block",
+            "order_receipt_status",
+            "provenance_status",
+        )
+    )
+    return any(
+        token in reason_blob
+        for token in (
+            "hard_stop",
+            "protect_stop",
+            "emergency",
+            "market_closed",
+            "invalid",
+            "broker",
+            "account_guard",
+            "order_guard",
+            "cooldown",
+            "qty_guard",
+            "stale_context",
+            "stale_quote",
+            "price_freshness",
+            "receipt_missing",
+            "provenance_missing",
+        )
+    )
+
+
+def _exit_to_hold_candidate_actions() -> set[str]:
+    actions = {"EXIT", "DROP", "SELL"}
+    if bool(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_TRIM_TO_HOLD_ENABLED", False)):
+        actions.add("TRIM")
+    return actions
+
+
 def _runtime_bias_from_entries(
     *,
     action_label: str,
@@ -215,8 +292,7 @@ def _runtime_bias_from_entries(
     profit_rate = _safe_float((position_ctx or {}).get("profit_rate"), 0.0)
     peak_profit = _safe_float((position_ctx or {}).get("peak_profit"), profit_rate)
     current_ai_score = _safe_float((position_ctx or {}).get("current_ai_score"), 50.0)
-    exit_rule = str((position_ctx or {}).get("exit_rule") or "").lower()
-    hard_veto = any(token in exit_rule for token in ("hard_stop", "emergency", "market_closed", "invalid"))
+    safety_veto = has_holding_exit_matrix_safety_veto(position_ctx)
     result = {
         "holding_exit_matrix_runtime_bias_enabled": runtime_enabled,
         "holding_exit_matrix_runtime_bias_applied": False,
@@ -235,8 +311,8 @@ def _runtime_bias_from_entries(
     if not action:
         result["holding_exit_matrix_runtime_reason"] = "missing_ai_action"
         return result
-    if hard_veto:
-        result["holding_exit_matrix_runtime_reason"] = "hard_veto_passthrough"
+    if safety_veto:
+        result["holding_exit_matrix_runtime_reason"] = "safety_veto_passthrough"
         return result
 
     forced_action = ""
@@ -252,7 +328,7 @@ def _runtime_bias_from_entries(
         reason = "matrix_prefer_exit"
     elif (
         biases & {"prefer_avg_down_wait", "prefer_pyramid_wait"}
-        and action in {"EXIT", "DROP", "SELL", "TRIM"}
+        and action in _exit_to_hold_candidate_actions()
         and bool(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_EXIT_TO_HOLD_ENABLED", True))
     ):
         forced_action = "HOLD"
@@ -267,7 +343,7 @@ def _runtime_bias_from_entries(
     if not forced_action and position_ctx:
         drawdown_from_peak = float(peak_profit or 0.0) - float(profit_rate or 0.0)
         if (
-            action in {"EXIT", "DROP", "SELL"}
+            action in _exit_to_hold_candidate_actions()
             and bool(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_EXIT_TO_HOLD_ENABLED", True))
             and current_ai_score >= float(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_AI_SCORE", 65) or 65)
             and profit_rate >= float(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_PROFIT_PCT", -1.2) or -1.2)
@@ -278,7 +354,7 @@ def _runtime_bias_from_entries(
             reason = "hypothesis_avg_down_wait_window"
             result["holding_exit_matrix_scale_in_bias"] = "AVG_DOWN"
         elif (
-            action in {"EXIT", "DROP", "SELL", "TRIM"}
+            action in _exit_to_hold_candidate_actions()
             and bool(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_EXIT_TO_HOLD_ENABLED", True))
             and current_ai_score >= float(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_PYRAMID_MIN_AI_SCORE", 75) or 75)
             and profit_rate >= float(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_PYRAMID_MIN_PROFIT_PCT", 0.8) or 0.8)
@@ -312,12 +388,20 @@ def resolve_holding_exit_matrix_scale_in_bias(
     peak_profit: float,
     current_ai_score: float,
     held_sec: int,
+    safety_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Runtime override hook for ADM-driven avg-down/pyramid proposals."""
+    raw_strategy = str(strategy or "").upper()
+    if raw_strategy not in {"SCALPING", "SCALP"}:
+        return {"should_add": False, "reason": "holding_exit_matrix_scale_in_bias_scalping_only"}
+    if has_holding_exit_matrix_safety_veto(safety_context):
+        return {"should_add": False, "reason": "holding_exit_matrix_scale_in_safety_veto_passthrough"}
+    scale_in_enabled = bool(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED", False))
     lifecycle_decision = resolve_lifecycle_decision(
         stage="scale_in",
         original_action="NO_CHANGE",
         context={
+            **(safety_context or {}),
             "profit_rate": profit_rate,
             "peak_profit": peak_profit,
             "current_ai_score": current_ai_score,
@@ -325,6 +409,12 @@ def resolve_holding_exit_matrix_scale_in_bias(
         },
     )
     lifecycle_effect = str(lifecycle_decision.get("lifecycle_matrix_runtime_effect") or "")
+    if not scale_in_enabled:
+        return {
+            "should_add": False,
+            "reason": "holding_exit_matrix_scale_in_bias_disabled",
+            **lifecycle_decision,
+        }
     if lifecycle_effect in {"avg_down_bias", "pyramid_bias"}:
         add_type = "AVG_DOWN" if lifecycle_effect == "avg_down_bias" else "PYRAMID"
         return {
@@ -338,11 +428,6 @@ def resolve_holding_exit_matrix_scale_in_bias(
             "holding_exit_matrix_scale_in_bias": add_type,
             **lifecycle_decision,
         }
-    if not bool(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED", False)):
-        return {"should_add": False, "reason": "holding_exit_matrix_scale_in_bias_disabled"}
-    raw_strategy = str(strategy or "").upper()
-    if raw_strategy not in {"SCALPING", "SCALP"}:
-        return {"should_add": False, "reason": "holding_exit_matrix_scale_in_bias_scalping_only"}
     avg_min = float(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_PROFIT_PCT", -1.2) or -1.2)
     avg_max = float(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MAX_PROFIT_PCT", -0.1) or -0.1)
     avg_ai = int(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_AI_SCORE", 65) or 65)
@@ -555,8 +640,7 @@ def merge_holding_exit_matrix_result_fields(
     lifecycle_context = {
         **fields,
         **(position_ctx or {}),
-        "hard_safety_veto": str((position_ctx or {}).get("exit_rule") or "").lower()
-        in {"hard_stop", "emergency_stop", "market_closed", "invalid_feature"},
+        "hard_safety_veto": has_holding_exit_matrix_safety_veto({**fields, **(position_ctx or {})}),
     }
     lifecycle_decision = resolve_lifecycle_decision(
         stage="holding",

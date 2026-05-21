@@ -422,6 +422,12 @@ def test_openai_holding_flow_uses_flow_schema_and_normalizes_payload(monkeypatch
             }
         ],
         decision_kind="intraday_exit",
+        metadata_extra={
+            "sim_record_id": "SIM-HOLD-1",
+            "sim_parent_record_id": "PARENT-1",
+            "entry_adm_candidate_id": "ADM-1",
+            "source_event_stage": "holding_flow",
+        },
     )
 
     assert result["action"] == "TRIM"
@@ -429,6 +435,8 @@ def test_openai_holding_flow_uses_flow_schema_and_normalizes_payload(monkeypatch
     assert result["next_review_sec"] == 44
     assert captured["kwargs"]["schema_name"] == "holding_exit_flow_v1"
     assert captured["kwargs"]["endpoint_name"] == "holding_flow"
+    assert captured["kwargs"]["metadata_extra"]["sim_record_id"] == "SIM-HOLD-1"
+    assert captured["kwargs"]["metadata_extra"]["entry_adm_candidate_id"] == "ADM-1"
     assert "직전 action을 뒤집으려면" in captured["prompt"]
     assert "시스템 guard" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
     assert "단일 score cutoff로 자르지 말고" in captured["user_input"]

@@ -231,6 +231,7 @@ def _entry_adm_runtime_bias(
     original_action = str(action_label or "").upper()
     runtime_enabled = bool(getattr(TRADING_RULES, "SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED", False))
     hypothesis_enabled = bool(getattr(TRADING_RULES, "SCALP_ENTRY_ADM_HYPOTHESIS_FALLBACK_ENABLED", False))
+    hypothesis_force_enabled = bool(getattr(TRADING_RULES, "SCALP_ENTRY_ADM_HYPOTHESIS_FORCE_ENABLED", False))
     sample = _safe_int(bucket.get("sample_count"), 0)
     joined = _safe_int(bucket.get("joined_sample"), 0)
     sq_ev = _safe_float(bucket.get("source_quality_adjusted_ev_pct"), 0.0)
@@ -248,6 +249,7 @@ def _entry_adm_runtime_bias(
         "entry_adm_bucket_joined_sample": joined,
         "entry_adm_bucket_source_quality_adjusted_ev_pct": sq_ev,
         "entry_adm_hypothesis_fallback_enabled": hypothesis_enabled,
+        "entry_adm_hypothesis_force_enabled": hypothesis_force_enabled,
     }
     if not runtime_enabled:
         result["entry_adm_runtime_reason"] = "runtime_bias_disabled"
@@ -293,28 +295,39 @@ def _entry_adm_runtime_bias(
         stale_bucket = str(fields.get("entry_adm_stale_bucket") or "").lower()
         liquidity_bucket = str(fields.get("entry_adm_liquidity_bucket") or "").lower()
         overbought_bucket = str(fields.get("entry_adm_overbought_bucket") or "").lower()
+        hypothesis_action = ""
+        hypothesis_effect = "none"
+        hypothesis_reason = ""
         if risk_bucket == "source_quality_blocker":
-            forced_action = "DROP"
-            effect = "force_drop"
-            reason = "hypothesis_source_quality_blocker"
+            hypothesis_action = "DROP"
+            hypothesis_effect = "force_drop"
+            hypothesis_reason = "hypothesis_source_quality_blocker"
         elif stale_bucket == "stale_high":
-            forced_action = "WAIT"
-            effect = "force_wait"
-            reason = "hypothesis_stale_quote_wait_requote"
+            hypothesis_action = "WAIT"
+            hypothesis_effect = "force_wait"
+            hypothesis_reason = "hypothesis_stale_quote_wait_requote"
         elif liquidity_bucket == "liquidity_low":
-            forced_action = "WAIT"
-            effect = "force_wait"
-            reason = "hypothesis_low_liquidity_wait"
+            hypothesis_action = "WAIT"
+            hypothesis_effect = "force_wait"
+            hypothesis_reason = "hypothesis_low_liquidity_wait"
         elif risk_bucket == "weak_strength_momentum" and overbought_bucket in {
             "overbought_watch",
             "overbought_chase_risk",
         }:
-            forced_action = "WAIT"
-            effect = "force_wait"
-            reason = "hypothesis_weak_momentum_chase_risk"
+            hypothesis_action = "WAIT"
+            hypothesis_effect = "force_wait"
+            hypothesis_reason = "hypothesis_weak_momentum_chase_risk"
+        if hypothesis_action:
+            if hypothesis_force_enabled:
+                forced_action = hypothesis_action
+                effect = hypothesis_effect
+                reason = hypothesis_reason
+            else:
+                result["entry_adm_runtime_reason"] = f"{hypothesis_reason}_provenance_only"
+                return result
 
     if not forced_action:
-        result["entry_adm_runtime_reason"] = "no_matching_runtime_bias"
+        result["entry_adm_runtime_reason"] = "bucket_sample_below_floor" if bucket and not enough_sample else "no_matching_runtime_bias"
         return result
     result.update(
         {

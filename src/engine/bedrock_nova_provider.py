@@ -26,6 +26,11 @@ LITE_OUTPUT_USD_PER_1M = 0.24
 LITE_CACHE_READ_INPUT_USD_PER_1M = 0.006
 LITE_CACHE_WRITE_INPUT_USD_PER_1M = 0.06
 
+OPENAI_GPT5_NANO_INPUT_USD_PER_1M = 0.05
+OPENAI_GPT5_NANO_OUTPUT_USD_PER_1M = 0.40
+OPENAI_GPT54_MINI_INPUT_USD_PER_1M = 0.75
+OPENAI_GPT54_MINI_OUTPUT_USD_PER_1M = 4.50
+
 
 class BedrockNovaProviderError(RuntimeError):
     def __init__(self, message: str, *, error_type: str = "BedrockNovaProviderError", attempts: int = 0):

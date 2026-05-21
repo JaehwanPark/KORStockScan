@@ -2293,6 +2293,7 @@ class GPTSniperEngine:
         recent_ticks,
         recent_candles,
         price_ctx,
+        metadata_extra=None,
     ):
         started = time.perf_counter()
         fallback_price = int((price_ctx or {}).get("resolved_order_price", 0) or 0)
@@ -2352,6 +2353,7 @@ class GPTSniperEngine:
                 schema_name="entry_price_v1",
                 endpoint_name="entry_price",
                 symbol=stock_code,
+                metadata_extra=metadata_extra,
             )
             result = self._merge_last_transport_meta(result)
             normalized = normalize_scalping_entry_price_result(result, fallback_price=fallback_price)
@@ -3082,6 +3084,7 @@ class GPTSniperEngine:
         position_ctx,
         flow_history=None,
         decision_kind="intraday_exit",
+        metadata_extra=None,
     ):
         started = time.perf_counter()
         if not self.lock.acquire(blocking=False):
@@ -3162,6 +3165,7 @@ class GPTSniperEngine:
                 schema_name="holding_exit_flow_v1",
                 endpoint_name="holding_flow",
                 symbol=stock_code,
+                metadata_extra=metadata_extra,
             )
             normalized = self._normalize_holding_flow_result(result, decision_kind=decision_kind)
             normalized = merge_holding_exit_matrix_result_fields(

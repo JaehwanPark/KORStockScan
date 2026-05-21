@@ -244,8 +244,8 @@ def test_scalp_entry_adm_runtime_bias_forces_wait_on_negative_buy_bucket(tmp_pat
                     {
                         "bucket_token": bucket_token,
                         "dominant_action": "BUY_NOW",
-                        "sample_count": 4,
-                        "joined_sample": 1,
+                        "sample_count": 20,
+                        "joined_sample": 10,
                         "source_quality_adjusted_ev_pct": -2.54,
                     }
                 ],
@@ -276,7 +276,7 @@ def test_scalp_entry_adm_runtime_bias_forces_wait_on_negative_buy_bucket(tmp_pat
     assert merged["entry_adm_runtime_reason"] == "bucket_negative_source_quality_adjusted_ev"
 
 
-def test_scalp_entry_adm_hypothesis_fallback_forces_wait_on_weak_chase_risk(tmp_path, monkeypatch):
+def test_scalp_entry_adm_bucket_sample_floor_blocks_force_wait(tmp_path, monkeypatch):
     report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
     report_dir.mkdir(parents=True)
     monkeypatch.setattr(runtime_mod, "ADM_DIR", report_dir)
@@ -284,6 +284,96 @@ def test_scalp_entry_adm_hypothesis_fallback_forces_wait_on_weak_chase_risk(tmp_
         runtime_mod,
         "TRADING_RULES",
         replace(runtime_mod.TRADING_RULES, SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED=True),
+    )
+    bucket_token = "score75_84|strong_strength_momentum|fresh|quote_based|liquidity_high|overbought_normal|time_outside_regular"
+    (report_dir / "scalp_entry_action_decision_matrix_2026-05-18.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-18",
+                "matrix_version": "scalp_entry_adm_v1_2026-05-18",
+                "bucket_summary": [
+                    {
+                        "bucket_token": bucket_token,
+                        "dominant_action": "WAIT_REQUOTE",
+                        "sample_count": 4,
+                        "joined_sample": 1,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    context = runtime_mod.build_scalp_entry_adm_runtime_context(
+        prompt_profile="watching",
+        ws_data={
+            "latest_strength": 151,
+            "quote_age_ms": 300,
+            "curr": 10000,
+            "volume": 100000,
+            "intraday_range_pct": 4.0,
+            "best_ask": 10010,
+        },
+        advisory_enabled=True,
+        now=datetime(2026, 5, 18, 16, 30),
+        ai_score=78,
+    )
+
+    merged = runtime_mod.merge_scalp_entry_adm_result_fields({"action": "BUY", "score": 78}, context)
+
+    assert merged["action"] == "BUY"
+    assert merged["entry_adm_runtime_bias_applied"] is False
+    assert merged["entry_adm_runtime_reason"] == "bucket_sample_below_floor"
+
+
+def test_scalp_entry_adm_hypothesis_fallback_is_provenance_only_by_default(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
+    report_dir.mkdir(parents=True)
+    monkeypatch.setattr(runtime_mod, "ADM_DIR", report_dir)
+    monkeypatch.setattr(
+        runtime_mod,
+        "TRADING_RULES",
+        replace(runtime_mod.TRADING_RULES, SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED=True),
+    )
+    (report_dir / "scalp_entry_action_decision_matrix_2026-05-18.json").write_text(
+        json.dumps({"date": "2026-05-18", "matrix_version": "scalp_entry_adm_v1_2026-05-18", "bucket_summary": []}),
+        encoding="utf-8",
+    )
+    context = runtime_mod.build_scalp_entry_adm_runtime_context(
+        prompt_profile="watching",
+        ws_data={
+            "latest_strength": 70,
+            "buy_pressure": 35,
+            "quote_age_ms": 300,
+            "curr": 10000,
+            "volume": 100000,
+            "intraday_range_pct": 19.0,
+            "distance_from_day_high_pct": -0.3,
+            "best_ask": 10010,
+        },
+        advisory_enabled=True,
+        now=datetime(2026, 5, 18, 16, 30),
+        ai_score=78,
+    )
+
+    merged = runtime_mod.merge_scalp_entry_adm_result_fields({"action": "BUY", "score": 78}, context)
+
+    assert merged["action"] == "BUY"
+    assert merged["entry_adm_runtime_bias_applied"] is False
+    assert merged["entry_adm_runtime_reason"] == "hypothesis_weak_momentum_chase_risk_provenance_only"
+
+
+def test_scalp_entry_adm_hypothesis_force_requires_explicit_flag(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
+    report_dir.mkdir(parents=True)
+    monkeypatch.setattr(runtime_mod, "ADM_DIR", report_dir)
+    monkeypatch.setattr(
+        runtime_mod,
+        "TRADING_RULES",
+        replace(
+            runtime_mod.TRADING_RULES,
+            SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED=True,
+            SCALP_ENTRY_ADM_HYPOTHESIS_FORCE_ENABLED=True,
+        ),
     )
     (report_dir / "scalp_entry_action_decision_matrix_2026-05-18.json").write_text(
         json.dumps({"date": "2026-05-18", "matrix_version": "scalp_entry_adm_v1_2026-05-18", "bucket_summary": []}),

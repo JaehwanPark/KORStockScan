@@ -1725,6 +1725,7 @@ class GeminiSniperEngine:
         recent_ticks,
         recent_candles,
         price_ctx,
+        metadata_extra=None,
     ):
         started = time.perf_counter()
         fallback_price = int((price_ctx or {}).get("resolved_order_price", 0) or 0)
@@ -1860,10 +1861,9 @@ class GeminiSniperEngine:
                     or getattr(TRADING_RULES, "SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED", False)
                 ),
             )
-            if normalized_profile != "shared":
-                cache_strategy = f"{strategy}:{normalized_profile}"
-                cache_strategy = f"{cache_strategy}:adm:{matrix_runtime.get('cache_token', 'disabled')}"
-                cache_strategy = f"{cache_strategy}:{entry_adm_runtime.get('cache_token', 'disabled')}"
+            cache_strategy = f"{strategy}:{normalized_profile}"
+            cache_strategy = f"{cache_strategy}:adm:{matrix_runtime.get('cache_token', 'disabled')}"
+            cache_strategy = f"{cache_strategy}:{entry_adm_runtime.get('cache_token', 'disabled')}"
         def _merge_runtime_fields(payload):
             merged = merge_holding_exit_matrix_result_fields(payload, matrix_runtime)
             return merge_scalp_entry_adm_result_fields(merged, entry_adm_runtime)
@@ -2556,6 +2556,7 @@ class GeminiSniperEngine:
         position_ctx,
         flow_history=None,
         decision_kind="intraday_exit",
+        metadata_extra=None,
     ):
         """Long-window holding/exit flow review used as an operational override."""
         started = time.perf_counter()

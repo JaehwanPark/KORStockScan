@@ -620,11 +620,12 @@ class TradingConfig:
     AI_GATEKEEPER_FAST_REUSE_MAX_WS_AGE_SEC: float = 2.0  # Gatekeeper fast reuse 허용 최대 WS 나이
     SCALP_ENTRY_ADM_ADVISORY_ENABLED: bool = True  # 운영 override: 스캘핑 entry ADM prompt advisory 기본 ON
     SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED: bool = False  # context-only 기본값: 명시적 운영 override에서만 entry AI action 보정
-    SCALP_ENTRY_ADM_HYPOTHESIS_FALLBACK_ENABLED: bool = True  # joined sample 부족 시 stale/chase/weak-momentum 가설 적용
+    SCALP_ENTRY_ADM_HYPOTHESIS_FALLBACK_ENABLED: bool = True  # joined sample 부족 시 stale/chase/weak-momentum 가설 provenance
+    SCALP_ENTRY_ADM_HYPOTHESIS_FORCE_ENABLED: bool = False  # hypothesis fallback의 직접 action 보정은 명시 override에서만 허용
     SCALP_ENTRY_ADM_NEGATIVE_EV_BLOCK_ENABLED: bool = True  # BUY bucket이라도 source-quality EV<기준이면 즉시 진입 대기
     SCALP_ENTRY_ADM_NEGATIVE_EV_FORCE_WAIT_THRESHOLD_PCT: float = 0.0
-    SCALP_ENTRY_ADM_MIN_BUCKET_SAMPLE: int = 1
-    SCALP_ENTRY_ADM_MIN_JOINED_SAMPLE: int = 0
+    SCALP_ENTRY_ADM_MIN_BUCKET_SAMPLE: int = 20
+    SCALP_ENTRY_ADM_MIN_JOINED_SAMPLE: int = 10
     LIFECYCLE_DECISION_MATRIX_ENABLED: bool = False
     LIFECYCLE_DECISION_MATRIX_POLICY_FILE: str = ""
     LIFECYCLE_DECISION_MATRIX_POLICY_VERSION: str = ""
@@ -638,6 +639,7 @@ class TradingConfig:
     HOLDING_EXIT_MATRIX_ADVISORY_ENABLED: bool = True  # 운영 override: holding/exit matrix prompt advisory 기본 ON
     HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED: bool = False  # context-only 기본값: 명시적 운영 override에서만 HOLD/EXIT action 보정
     HOLDING_EXIT_MATRIX_EXIT_TO_HOLD_ENABLED: bool = True
+    HOLDING_EXIT_MATRIX_TRIM_TO_HOLD_ENABLED: bool = False
     HOLDING_EXIT_MATRIX_HOLD_TO_EXIT_ENABLED: bool = True
     HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED: bool = False
     HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_PROFIT_PCT: float = -1.20
@@ -2148,6 +2150,9 @@ def _build_trading_rules() -> TradingConfig:
     env_scalp_entry_adm_hypothesis_fallback_enabled = _env_bool(
         "KORSTOCKSCAN_SCALP_ENTRY_ADM_HYPOTHESIS_FALLBACK_ENABLED"
     )
+    env_scalp_entry_adm_hypothesis_force_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_ENTRY_ADM_HYPOTHESIS_FORCE_ENABLED"
+    )
     env_scalp_entry_adm_negative_ev_block_enabled = _env_bool(
         "KORSTOCKSCAN_SCALP_ENTRY_ADM_NEGATIVE_EV_BLOCK_ENABLED"
     )
@@ -2182,6 +2187,9 @@ def _build_trading_rules() -> TradingConfig:
     )
     env_holding_exit_matrix_exit_to_hold_enabled = _env_bool(
         "KORSTOCKSCAN_HOLDING_EXIT_MATRIX_EXIT_TO_HOLD_ENABLED"
+    )
+    env_holding_exit_matrix_trim_to_hold_enabled = _env_bool(
+        "KORSTOCKSCAN_HOLDING_EXIT_MATRIX_TRIM_TO_HOLD_ENABLED"
     )
     env_holding_exit_matrix_hold_to_exit_enabled = _env_bool(
         "KORSTOCKSCAN_HOLDING_EXIT_MATRIX_HOLD_TO_EXIT_ENABLED"
@@ -2230,6 +2238,7 @@ def _build_trading_rules() -> TradingConfig:
         env_scalp_entry_adm_advisory_enabled is not None
         or env_scalp_entry_adm_runtime_bias_enabled is not None
         or env_scalp_entry_adm_hypothesis_fallback_enabled is not None
+        or env_scalp_entry_adm_hypothesis_force_enabled is not None
         or env_scalp_entry_adm_negative_ev_block_enabled is not None
         or env_scalp_entry_adm_negative_ev_force_wait_threshold is not None
         or env_scalp_entry_adm_min_bucket_sample is not None
@@ -2249,6 +2258,7 @@ def _build_trading_rules() -> TradingConfig:
         or env_holding_exit_matrix_advisory_enabled is not None
         or env_holding_exit_matrix_runtime_bias_enabled is not None
         or env_holding_exit_matrix_exit_to_hold_enabled is not None
+        or env_holding_exit_matrix_trim_to_hold_enabled is not None
         or env_holding_exit_matrix_hold_to_exit_enabled is not None
         or env_holding_exit_matrix_scale_in_bias_enabled is not None
         or env_holding_exit_matrix_avg_down_min_profit is not None
@@ -2282,6 +2292,9 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_ENTRY_ADM_HYPOTHESIS_FALLBACK_ENABLED=env_scalp_entry_adm_hypothesis_fallback_enabled
             if env_scalp_entry_adm_hypothesis_fallback_enabled is not None
             else config.SCALP_ENTRY_ADM_HYPOTHESIS_FALLBACK_ENABLED,
+            SCALP_ENTRY_ADM_HYPOTHESIS_FORCE_ENABLED=env_scalp_entry_adm_hypothesis_force_enabled
+            if env_scalp_entry_adm_hypothesis_force_enabled is not None
+            else config.SCALP_ENTRY_ADM_HYPOTHESIS_FORCE_ENABLED,
             SCALP_ENTRY_ADM_NEGATIVE_EV_BLOCK_ENABLED=env_scalp_entry_adm_negative_ev_block_enabled
             if env_scalp_entry_adm_negative_ev_block_enabled is not None
             else config.SCALP_ENTRY_ADM_NEGATIVE_EV_BLOCK_ENABLED,
@@ -2339,6 +2352,9 @@ def _build_trading_rules() -> TradingConfig:
             HOLDING_EXIT_MATRIX_EXIT_TO_HOLD_ENABLED=env_holding_exit_matrix_exit_to_hold_enabled
             if env_holding_exit_matrix_exit_to_hold_enabled is not None
             else config.HOLDING_EXIT_MATRIX_EXIT_TO_HOLD_ENABLED,
+            HOLDING_EXIT_MATRIX_TRIM_TO_HOLD_ENABLED=env_holding_exit_matrix_trim_to_hold_enabled
+            if env_holding_exit_matrix_trim_to_hold_enabled is not None
+            else config.HOLDING_EXIT_MATRIX_TRIM_TO_HOLD_ENABLED,
             HOLDING_EXIT_MATRIX_HOLD_TO_EXIT_ENABLED=env_holding_exit_matrix_hold_to_exit_enabled
             if env_holding_exit_matrix_hold_to_exit_enabled is not None
             else config.HOLDING_EXIT_MATRIX_HOLD_TO_EXIT_ENABLED,

@@ -489,6 +489,16 @@ def _apply_overnight_flow_override(record, mem_stock, ws_data, ctx, decision, ai
         position_ctx,
         flow_history=(mem_stock or {}).get("holding_flow_review_history") or [],
         decision_kind="overnight_sell_today",
+        metadata_extra={
+            "record_id": (mem_stock or {}).get("record_id") or (mem_stock or {}).get("id"),
+            "sim_record_id": (mem_stock or {}).get("sim_record_id"),
+            "sim_parent_record_id": (mem_stock or {}).get("sim_parent_record_id")
+            or (mem_stock or {}).get("record_id")
+            or (mem_stock or {}).get("id"),
+            "entry_adm_candidate_id": (mem_stock or {}).get("entry_adm_candidate_id")
+            or (mem_stock or {}).get("candidate_id"),
+            "source_event_stage": "overnight_holding_flow",
+        },
     )
     _append_mem_flow_history(mem_stock, exit_rule="overnight_sell_today", profit_rate=pnl_pct, flow_result=flow_result)
     flow_action = str(flow_result.get("action", "EXIT") or "EXIT").upper()

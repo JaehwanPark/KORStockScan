@@ -6943,6 +6943,13 @@ def _apply_entry_ai_price_canary(
         return planned_orders, False
 
     ai_eval_started_at = time.perf_counter()
+    entry_price_metadata = {
+        "record_id": stock.get("record_id") or stock.get("id"),
+        "sim_record_id": stock.get("sim_record_id"),
+        "sim_parent_record_id": stock.get("sim_parent_record_id") or stock.get("record_id") or stock.get("id"),
+        "entry_adm_candidate_id": stock.get("entry_adm_candidate_id") or stock.get("candidate_id"),
+        "source_event_stage": "entry_price",
+    }
     result = ai_engine.evaluate_scalping_entry_price(
         stock.get("name"),
         code,
@@ -6950,6 +6957,7 @@ def _apply_entry_ai_price_canary(
         recent_ticks,
         recent_candles,
         price_ctx,
+        metadata_extra=entry_price_metadata,
     )
     ai_eval_ms = int(round((time.perf_counter() - ai_eval_started_at) * 1000.0))
     decision_ts = time.time()
@@ -8065,6 +8073,13 @@ def _evaluate_holding_flow_override(
         "current_ai_score": current_ai_score,
         "worsen_pct": worsen_pct,
     }
+    holding_flow_metadata = {
+        "record_id": stock.get("record_id") or stock.get("id"),
+        "sim_record_id": stock.get("sim_record_id"),
+        "sim_parent_record_id": stock.get("sim_parent_record_id") or stock.get("record_id") or stock.get("id"),
+        "entry_adm_candidate_id": stock.get("entry_adm_candidate_id") or stock.get("candidate_id"),
+        "source_event_stage": "holding_flow",
+    }
     flow_result = ai_engine.evaluate_scalping_holding_flow(
         stock.get("name", code),
         code,
@@ -8074,6 +8089,7 @@ def _evaluate_holding_flow_override(
         position_ctx,
         flow_history=stock.get("holding_flow_review_history") or [],
         decision_kind="intraday_exit",
+        metadata_extra=holding_flow_metadata,
     )
     _mutate_stock_state(
         stock,
@@ -14497,6 +14513,7 @@ def _evaluate_scale_in_signal(
             peak_profit=peak_profit,
             current_ai_score=current_ai_score,
             held_sec=held_sec,
+            safety_context=stock if isinstance(stock, dict) else {},
         )
         if adm_scale_in.get("should_add"):
             return adm_scale_in

@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.engine.bedrock_nova_provider import LITE_INPUT_USD_PER_1M, LITE_OUTPUT_USD_PER_1M, lite_profile_from_env
+from src.engine.bedrock_nova_provider import (
+    OPENAI_GPT54_MINI_INPUT_USD_PER_1M,
+    OPENAI_GPT54_MINI_OUTPUT_USD_PER_1M,
+    lite_profile_from_env,
+)
 from src.engine.bedrock_nova_shadow_runtime import BedrockNovaShadowManager, env_bool, env_float, env_int
 from src.utils.constants import DATA_DIR
 
@@ -32,8 +36,8 @@ def runtime_manager() -> BedrockNovaShadowManager:
             event_type=EVENT_TYPE,
             target_model_name=TARGET_MODEL_NAME,
             profile=profile,
-            openai_input_usd_per_1m=LITE_INPUT_USD_PER_1M,
-            openai_output_usd_per_1m=LITE_OUTPUT_USD_PER_1M,
+            openai_input_usd_per_1m=OPENAI_GPT54_MINI_INPUT_USD_PER_1M,
+            openai_output_usd_per_1m=OPENAI_GPT54_MINI_OUTPUT_USD_PER_1M,
             workers=signature[2],
             queue_max=signature[3],
             sample_rate=signature[4],
