@@ -245,6 +245,7 @@ def test_bedrock_primary_routes_gpt54_mini_independently(monkeypatch):
 
     monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_ROUTE_MODE", "shadow")
     monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "primary")
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_PRIMARY_ENDPOINTS", "entry_price,holding_flow")
     monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
     monkeypatch.setattr(bedrock_nova_provider, "write_provider_audit_row", lambda row: None)
 
@@ -263,6 +264,153 @@ def test_bedrock_primary_routes_gpt54_mini_independently(monkeypatch):
     meta = engine._consume_last_transport_meta()
     assert meta["provider"] == "bedrock"
     assert meta["bedrock_primary_used"] is True
+
+
+def test_lite_primary_entry_price_and_holding_flow_do_not_call_openai(monkeypatch):
+    engine = _build_engine()
+    provider_endpoints = []
+    openai_called = {"value": False}
+
+    class Responses:
+        def create(self, **kwargs):
+            openai_called["value"] = True
+            raise AssertionError("OpenAI must not be called for Lite primary endpoints")
+
+    class Provider:
+        def converse(self, *, prompt, user_input, profile):
+            provider_endpoints.append(profile.family)
+            return bedrock_nova_provider.BedrockNovaResult(
+                payload={"action": "HOLD", "score": 64, "reason": "lite-primary"},
+                raw_text='{"action":"HOLD","score":64,"reason":"lite-primary"}',
+                parse_ok=True,
+                parse_error="",
+                model_id=profile.model_id,
+                region_name=profile.region_name,
+                key_index=0,
+                latency_ms=123,
+                input_tokens=20,
+                output_tokens=8,
+                cache_read_input_tokens=0,
+                cache_write_input_tokens=0,
+                total_input_tokens=20,
+                estimated_cost_usd=0.2,
+                attempted_key_count=1,
+            )
+
+    engine.client = SimpleNamespace(responses=Responses())
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "primary")
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_PRIMARY_ENDPOINTS", "entry_price,holding_flow")
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_V2_SHADOW_ENABLED", "false")
+    monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
+    monkeypatch.setattr(bedrock_nova_provider, "write_provider_audit_row", lambda row: None)
+
+    for endpoint_name in ("entry_price", "holding_flow"):
+        result = GPTSniperEngine._call_openai_safe(
+            engine,
+            "PROMPT",
+            "payload",
+            require_json=True,
+            context_name="test",
+            model_override="gpt-5.4-mini",
+            endpoint_name=endpoint_name,
+        )
+        assert result["reason"] == "lite-primary"
+        meta = engine._consume_last_transport_meta()
+        assert meta["provider"] == "bedrock"
+        assert meta["openai_transport_mode"] == "bedrock_primary"
+        assert meta["bedrock_primary_used"] is True
+        assert meta["bedrock_failback_used"] is False
+
+    assert provider_endpoints == ["lite", "lite"]
+    assert openai_called["value"] is False
+
+
+def test_bedrock_lite_primary_endpoint_allowlist_keeps_other_tier2_on_openai(monkeypatch):
+    engine = _build_engine()
+    provider_called = {"value": False}
+
+    def _fake_create(**kwargs):
+        return SimpleNamespace(output_text='{"action":"WAIT","score":50}')
+
+    class Provider:
+        def converse(self, **kwargs):
+            provider_called["value"] = True
+            raise AssertionError("should not route non-allowlisted endpoint")
+
+    engine.client = SimpleNamespace(responses=SimpleNamespace(create=_fake_create))
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "primary")
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_PRIMARY_ENDPOINTS", "entry_price,holding_flow")
+    monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(openai_module.TRADING_RULES, OPENAI_TRANSPORT_MODE="http"),
+    )
+
+    result = GPTSniperEngine._call_openai_safe(
+        engine,
+        "PROMPT",
+        "payload",
+        require_json=True,
+        context_name="test",
+        model_override="gpt-5.4-mini",
+        endpoint_name="other_tier2",
+    )
+
+    assert result["action"] == "WAIT"
+    assert provider_called["value"] is False
+
+
+def test_bedrock_lite_primary_enqueues_lite_v2_shadow(monkeypatch):
+    engine = _build_engine()
+    captured = {}
+
+    class Provider:
+        def converse(self, *, prompt, user_input, profile):
+            return bedrock_nova_provider.BedrockNovaResult(
+                payload={"action": "HOLD", "score": 70, "reason": "lite-v1"},
+                raw_text='{"action":"HOLD","score":70,"reason":"lite-v1"}',
+                parse_ok=True,
+                parse_error="",
+                model_id=profile.model_id,
+                region_name=profile.region_name,
+                key_index=0,
+                latency_ms=100,
+                input_tokens=20,
+                output_tokens=8,
+                cache_read_input_tokens=0,
+                cache_write_input_tokens=0,
+                total_input_tokens=20,
+                estimated_cost_usd=0.2,
+                attempted_key_count=1,
+            )
+
+    def _capture_shadow(**kwargs):
+        captured.update(kwargs)
+        return True
+
+    from src.engine import bedrock_nova_lite_v2_shadow
+
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "primary")
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_PRIMARY_ENDPOINTS", "holding_flow")
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_V2_SHADOW_ENABLED", "true")
+    monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
+    monkeypatch.setattr(bedrock_nova_provider, "write_provider_audit_row", lambda row: None)
+    monkeypatch.setattr(bedrock_nova_lite_v2_shadow, "enqueue_runtime_shadow", _capture_shadow)
+
+    result = GPTSniperEngine._call_openai_safe(
+        engine,
+        "PROMPT",
+        "payload",
+        require_json=True,
+        context_name="test",
+        model_override="gpt-5.4-mini",
+        endpoint_name="holding_flow",
+    )
+
+    assert result["action"] == "HOLD"
+    assert captured["baseline_payload"]["action"] == "HOLD"
+    assert captured["request_meta"]["baseline_bedrock_model_id"] == "apac.amazon.nova-lite-v1:0"
 
 
 def test_bedrock_primary_does_not_route_other_models(monkeypatch):

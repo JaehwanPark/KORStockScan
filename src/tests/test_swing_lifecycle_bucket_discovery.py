@@ -143,6 +143,10 @@ def test_bucket_discovery_surfaces_ai_review_augmentation_workorders(tmp_path, m
 
     assert report["ai_review_policy"]["status"] == "not_configured"
     assert report["summary"]["ai_review_augmentation_point_count"] >= 3
+    assert report["summary"]["ai_audit_point_count"] >= 3
+    assert report["ai_audit"]["sim_auto_policy_preserved"] is True
+    assert all(item["runtime_effect"] is False for item in report["ai_audit"]["audit_points"])
+    assert all(item["allowed_runtime_apply"] is False for item in report["ai_audit"]["audit_points"])
     assert "swing_ldm_ai_review_not_configured" in report["warnings"]
     ai_workorders = [
         item

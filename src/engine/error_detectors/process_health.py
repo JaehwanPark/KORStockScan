@@ -18,6 +18,7 @@ from src.engine.error_detectors.base import (
 
 
 HEARTBEAT_PATH = PROJECT_ROOT / "tmp" / "error_detector_heartbeat.json"
+POSTCLOSE_BOT_ISOLATION_PATH = PROJECT_ROOT / "tmp" / "postclose_bot_isolation.json"
 _HEARTBEAT_LOCK = threading.Lock()
 
 
@@ -72,6 +73,10 @@ class ProcessHealthDetector(BaseDetector):
     def startup_grace_sec(self) -> int:
         return int(getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_STARTUP_GRACE_SEC", 180))
 
+    @property
+    def postclose_isolation_max_age_sec(self) -> int:
+        return int(getattr(TRADING_RULES, "ERROR_DETECTOR_POSTCLOSE_BOT_ISOLATION_MAX_AGE_SEC", 21600))
+
     def check(self) -> DetectionResult:
         now_ts = time.time()
         details: dict = {}
@@ -96,6 +101,12 @@ class ProcessHealthDetector(BaseDetector):
             and seconds_since_start is not None
             and 0 <= seconds_since_start < startup_grace
         )
+        postclose_isolation = _load_postclose_bot_isolation(
+            now_ts=now_ts,
+            max_age_sec=self.postclose_isolation_max_age_sec,
+        )
+        if postclose_isolation:
+            details["postclose_bot_isolation"] = postclose_isolation
 
         if not HEARTBEAT_PATH.exists():
             if not expected_running:
@@ -119,12 +130,19 @@ class ProcessHealthDetector(BaseDetector):
                     details=details,
                     recommended_action="Recheck after startup grace before restarting bot_main.py.",
                 )
+            if postclose_isolation:
+                details["main_loop_status"] = "postclose_isolation_no_heartbeat"
+                details["heartbeat_path"] = str(HEARTBEAT_PATH)
+                return self._postclose_isolation_warning(
+                    "Heartbeat file not found while postclose bot resource isolation is active.",
+                    details,
+                )
             return DetectionResult(
                 detector_id=self.id,
                 category=self.category,
                 severity="fail",
                 summary="Heartbeat file not found. bot_main.py may not be running.",
-                details={"heartbeat_path": str(HEARTBEAT_PATH)},
+                details={**details, "heartbeat_path": str(HEARTBEAT_PATH)},
                 recommended_action="Check bot_main.py process status and restart if needed.",
             )
 
@@ -191,6 +209,12 @@ class ProcessHealthDetector(BaseDetector):
                         details=details,
                         recommended_action="Recheck shortly; do not restart again unless grace expires.",
                     )
+                if postclose_isolation:
+                    details["main_loop_status"] = "postclose_isolation_pid_dead"
+                    return self._postclose_isolation_warning(
+                        f"bot_main.py PID {pid} is intentionally stopped for postclose resource isolation.",
+                        details,
+                    )
                 return DetectionResult(
                     detector_id=self.id,
                     category=self.category,
@@ -217,6 +241,12 @@ class ProcessHealthDetector(BaseDetector):
                         summary=f"Main loop heartbeat stale during startup grace window ({main_age:.0f}s).",
                         details=details,
                         recommended_action="Recheck after startup grace before restarting bot_main.py.",
+                    )
+                if postclose_isolation:
+                    details["main_loop_status"] = "postclose_isolation_stale"
+                    return self._postclose_isolation_warning(
+                        f"Main loop heartbeat stale for {main_age:.0f}s while postclose isolation is active.",
+                        details,
                     )
                 return DetectionResult(
                     detector_id=self.id,
@@ -246,6 +276,12 @@ class ProcessHealthDetector(BaseDetector):
                     summary="No main_loop heartbeat entry found during startup grace window.",
                     details=details,
                     recommended_action="Recheck after startup grace before restarting bot_main.py.",
+                )
+            if postclose_isolation:
+                details["main_loop_status"] = "postclose_isolation_no_main_loop"
+                return self._postclose_isolation_warning(
+                    "No main_loop heartbeat entry while postclose bot resource isolation is active.",
+                    details,
                 )
             return DetectionResult(
                 detector_id=self.id,
@@ -301,6 +337,19 @@ class ProcessHealthDetector(BaseDetector):
             details=details,
         )
 
+    def _postclose_isolation_warning(self, summary: str, details: dict) -> DetectionResult:
+        details["postclose_bot_isolation_marker_path"] = str(POSTCLOSE_BOT_ISOLATION_PATH)
+        return DetectionResult(
+            detector_id=self.id,
+            category=self.category,
+            severity="warning",
+            summary=summary,
+            details=details,
+            recommended_action=(
+                "No immediate restart. The postclose wrapper owns bot restart after resource isolation."
+            ),
+        )
+
 
 def _parse_iso(iso_str: str) -> float | None:
     if not iso_str:
@@ -310,6 +359,33 @@ def _parse_iso(iso_str: str) -> float | None:
         return dt.timestamp()
     except (ValueError, TypeError):
         return None
+
+
+def _load_postclose_bot_isolation(now_ts: float, max_age_sec: int) -> dict | None:
+    if max_age_sec <= 0 or not POSTCLOSE_BOT_ISOLATION_PATH.exists():
+        return None
+    try:
+        payload = json.loads(POSTCLOSE_BOT_ISOLATION_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not payload.get("active"):
+        return None
+    started_ts = _parse_iso(str(payload.get("started_at") or ""))
+    if started_ts is None:
+        return None
+    age_sec = now_ts - started_ts
+    if age_sec < 0 or age_sec > max_age_sec:
+        return None
+    return {
+        "status": "active",
+        "age_sec": round(age_sec, 1),
+        "max_age_sec": max_age_sec,
+        "target_date": payload.get("target_date"),
+        "session": payload.get("session"),
+        "action": payload.get("action"),
+        "reason": payload.get("reason"),
+        "started_at": payload.get("started_at"),
+    }
 
 
 def _is_bot_expected_running(now: datetime | None = None) -> bool:

@@ -9,8 +9,8 @@
 - panic_confirmation_policy: `portfolio stop-loss clusters are evidence; PANIC_DETECTED requires market or microstructure confirmation`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-05-22T15:28:08`
-- latest_event_at: `2026-05-22T15:28:08`
+- as_of: `2026-05-22T16:55:33`
+- latest_event_at: `2026-05-22T16:20:00`
 - reasons: `panic thresholds not breached`
 
 ## 패닉 지표
@@ -39,7 +39,7 @@
 
 - active_positions: `30`
 - active_profit_sample: `30`
-- active_avg_unrealized_profit_rate_pct: `0.4829`
+- active_avg_unrealized_profit_rate_pct: `0.4934`
 - active_win_rate_pct: `76.7`
 - sim_probe_provenance_passed: `true`
 - post_sell_rebound_above_sell_10_20m_pct: `0`
@@ -64,7 +64,7 @@
 ## Microstructure Market Context
 
 - market_risk_state: `RISK_OFF`
-- market_panic_breadth_as_of: `2026-05-22T15:28:01`
+- market_panic_breadth_as_of: `2026-05-22T16:55:26`
 - market_panic_breadth_source_quality_status: `ok`
 - market_panic_breadth_risk_off_advisory: `false`
 - market_panic_breadth_single_market_risk_off_advisory: `false`

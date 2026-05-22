@@ -1,6 +1,6 @@
 {
   "date": "2026-05-22",
-  "generated_at": "2026-05-22T11:24:38+09:00",
+  "generated_at": "2026-05-22T17:55:50+09:00",
   "purpose": "daily_ev_performance_report_for_unattended_threshold_calibration",
   "runtime_apply": {
     "apply_manifest": "/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-05-22.json",
@@ -56,24 +56,72 @@
     "avg_profit_rate_pct": 0.0,
     "realized_pnl_krw": 0,
     "full_fill_completed_avg_profit_rate_pct": 0.0,
-    "source_split": {}
+    "source_split": {
+      "real": {
+        "sample": 3,
+        "win_count": 2,
+        "loss_count": 1,
+        "avg_profit_rate": 1.3667,
+        "median_profit_rate": 0.23,
+        "downside_p10_profit_rate": -0.76,
+        "upside_p90_profit_rate": 4.63,
+        "win_rate": 0.6667,
+        "loss_rate": 0.3333,
+        "stddev_profit_rate": 2.8692
+      },
+      "sim": {
+        "sample": 629,
+        "win_count": 226,
+        "loss_count": 402,
+        "avg_profit_rate": -0.4173,
+        "median_profit_rate": -0.46,
+        "downside_p10_profit_rate": -2.56,
+        "upside_p90_profit_rate": 1.97,
+        "win_rate": 0.3593,
+        "loss_rate": 0.6391,
+        "stddev_profit_rate": 1.8714
+      },
+      "combined": {
+        "sample": 632,
+        "win_count": 228,
+        "loss_count": 403,
+        "avg_profit_rate": -0.4088,
+        "median_profit_rate": -0.46,
+        "downside_p10_profit_rate": -2.56,
+        "upside_p90_profit_rate": 1.97,
+        "win_rate": 0.3608,
+        "loss_rate": 0.6377,
+        "stddev_profit_rate": 1.878
+      },
+      "real_family_candidate_authority": "real_only",
+      "sim_calibration_authority": "sim_equal_weight",
+      "combined_authority": "diagnostic_only_not_family_candidate_input"
+    }
   },
   "entry_funnel": {
-    "budget_pass_events": 86,
+    "budget_pass_events": 92,
     "order_bundle_submitted_events": 0,
     "budget_pass_to_submitted_rate_pct": 0.0,
-    "latency_block_events": 80,
-    "latency_pass_events": 6,
+    "latency_block_events": 82,
+    "latency_pass_events": 10,
     "latency_submit_routing": "latency_classifier_runtime_semantics_gap",
-    "latency_classifier_runtime_semantics": null,
-    "latency_classifier_recommendation_status": "missing",
-    "latency_classifier_profile_generation": null,
-    "recommended_action": null,
-    "recommended_action_reason": null,
+    "latency_classifier_runtime_semantics": "SAFE passes; CAUTION rejects unless bounded recovery canary is explicitly enabled",
+    "latency_classifier_recommendation_status": "loaded",
+    "latency_classifier_profile_generation": {
+      "mode": "grid_quantile_search",
+      "profile_count": 378,
+      "age_cap_ms": 1500,
+      "jitter_cap_ms": 1500,
+      "spread_cap_ratio": 0.012,
+      "counterfactual_sample_floor": 3,
+      "recovery_event_floor_ratio": 0.1
+    },
+    "recommended_action": "reject",
+    "recommended_action_reason": "recovery_count=0 below floor=10",
     "allowed_runtime_apply": false,
-    "calibration_state": null,
+    "calibration_state": "hold_sample",
     "would_safe_pass_events": 0,
-    "would_caution_reject_events": 0,
+    "would_caution_reject_events": 1,
     "would_recovery_canary_events": 0,
     "would_recovery_canary_attempts": 0,
     "stale_quote_override_events": 0,
@@ -82,16 +130,162 @@
     "counterfactual_ev_pct": null,
     "missed_winner_recovered": 0,
     "avoided_loser_lost": 0,
-    "full_fill_events": 15,
-    "partial_fill_events": 15
+    "full_fill_events": 18,
+    "partial_fill_events": 18
   },
   "holding_exit": {
-    "holding_reviews": 1288,
-    "exit_signals": 121,
-    "holding_review_ms_p95": 1749.0,
-    "holding_ai_cache_hit_ratio": 0.0
+    "holding_reviews": 2848,
+    "exit_signals": 142,
+    "holding_review_ms_p95": 1888.0,
+    "holding_ai_cache_hit_ratio": 0.2
   },
-  "scalp_simulator": {},
+  "scalp_simulator": {
+    "enabled_default": true,
+    "simulation_book": "scalp_ai_buy_all",
+    "fill_policy": "signal_inclusive_best_ask_v1",
+    "calibration_authority": "equal_weight",
+    "event_count": 38369,
+    "stage_counts": {
+      "scalp_sim_entry_armed": 125,
+      "scalp_sim_duplicate_buy_signal": 49,
+      "scalp_sim_candidate_window_discarded": 1444,
+      "scalp_sim_panic_context_warning": 44,
+      "scalp_sim_panic_level1_entry_observed": 111,
+      "scalp_sim_partial_sell_order_assumed_filled": 311,
+      "scalp_sim_panic_trail_tightened": 575,
+      "scalp_sim_panic_bottoming_entry_allowed": 9,
+      "scalp_sim_panic_scale_in_blocked": 13107,
+      "scalp_sim_panic_action_deduped": 5829,
+      "scalp_sim_euphoria_context_noop": 115,
+      "scalp_sim_panic_level1_partial_skipped_min_remaining": 9540,
+      "scalp_sim_panic_entry_blocked": 63,
+      "scalp_sim_entry_submit_revalidation_warning": 117,
+      "scalp_sim_buy_order_virtual_pending": 125,
+      "scalp_sim_buy_order_assumed_filled": 125,
+      "scalp_sim_entry_ai_price_skip_order": 1,
+      "scalp_sim_entry_ai_price_applied": 2,
+      "scalp_sim_ai_holding_live_call": 2848,
+      "sim_ai_critical_bypass": 1107,
+      "scalp_sim_ai_holding_deferred": 1217,
+      "sim_ai_budget_exhausted": 1217,
+      "scalp_sim_overnight_decision": 20,
+      "scalp_sim_overnight_sell_today": 20,
+      "scalp_sim_holding_started": 125,
+      "scalp_sim_sell_order_assumed_filled": 123
+    },
+    "entry_armed": 125,
+    "buy_filled": 125,
+    "holding_started": 125,
+    "sell_completed": 123,
+    "entry_expired": 0,
+    "entry_unpriced": 0,
+    "duplicate_buy_signal": 49,
+    "entry_ai_price_applied": 2,
+    "entry_ai_price_skip_order": 1,
+    "entry_submit_revalidation_warning": 117,
+    "entry_submit_revalidation_block": 0,
+    "scale_in_filled": 0,
+    "scale_in_unfilled": 0,
+    "scalp_sim_ai_holding_live_call": 2848,
+    "scalp_sim_ai_holding_reuse": 0,
+    "scalp_sim_ai_holding_deferred": 1217,
+    "sim_ai_budget_exhausted": 1217,
+    "sim_ai_critical_bypass": 1107,
+    "overnight_decision": 20,
+    "overnight_sell_today": 20,
+    "overnight_hold": 0,
+    "overnight_carry_restored": 0,
+    "overnight_completed_sell": 20,
+    "completed_profit_summary": {
+      "sample": 123,
+      "win_count": 46,
+      "loss_count": 76,
+      "avg_profit_rate": -0.5776,
+      "median_profit_rate": -0.6,
+      "downside_p10_profit_rate": -2.66,
+      "upside_p90_profit_rate": 1.66,
+      "win_rate": 0.374,
+      "loss_rate": 0.6179,
+      "stddev_profit_rate": 1.9006
+    },
+    "post_sell_join": {
+      "join_status": "sim_record_id_to_sim_post_sell_evaluations_after_postclose",
+      "candidate_artifact": "data/post_sell/sim_post_sell_candidates_2026-05-22.jsonl",
+      "evaluation_artifact": "data/post_sell/sim_post_sell_evaluations_2026-05-22.jsonl",
+      "completed_sample": 123,
+      "joined_completed": 111,
+      "pending_completed": 12,
+      "outcome_counts": {
+        "MISSED_UPSIDE": 48,
+        "GOOD_EXIT": 38,
+        "NEUTRAL": 25
+      },
+      "avg_mfe_10m_pct": 1.4753,
+      "avg_mae_10m_pct": -4.3798,
+      "avg_close_10m_pct": 0.0908,
+      "runtime_effect": false,
+      "decision_authority": "sim_equal_weight_observation_only",
+      "forbidden_uses": [
+        "threshold mutation",
+        "order guard mutation",
+        "provider change",
+        "bot restart",
+        "broker order submit"
+      ],
+      "examples": [
+        {
+          "stock_code": "010060",
+          "stock_name": "OCI홀딩스",
+          "sim_record_id": "SCALPSIM-010060-1779408362676-cebe9f",
+          "profit_rate": -3.74,
+          "outcome": "MISSED_UPSIDE",
+          "mfe_10m_pct": 3.011,
+          "mae_10m_pct": -1.743,
+          "close_10m_pct": 3.011
+        },
+        {
+          "stock_code": "036830",
+          "stock_name": "솔브레인홀딩스",
+          "sim_record_id": "SCALPSIM-036830-1779408350560-8f4b86",
+          "profit_rate": -1.99,
+          "outcome": "MISSED_UPSIDE",
+          "mfe_10m_pct": 2.518,
+          "mae_10m_pct": 0.36,
+          "close_10m_pct": 1.619
+        },
+        {
+          "stock_code": "418420",
+          "stock_name": "라온텍",
+          "sim_record_id": "SCALPSIM-418420-1779408236672-925676",
+          "profit_rate": 1.12,
+          "outcome": "GOOD_EXIT",
+          "mfe_10m_pct": 0.822,
+          "mae_10m_pct": -3.392,
+          "close_10m_pct": -2.775
+        },
+        {
+          "stock_code": "429270",
+          "stock_name": "시지트로닉스",
+          "sim_record_id": "SCALPSIM-429270-1779408628867-e91194",
+          "profit_rate": -3.57,
+          "outcome": "GOOD_EXIT",
+          "mfe_10m_pct": 1.196,
+          "mae_10m_pct": -14.474,
+          "close_10m_pct": -5.263
+        },
+        {
+          "stock_code": "025560",
+          "stock_name": "미래산업",
+          "sim_record_id": "SCALPSIM-025560-1779408631620-608f46",
+          "profit_rate": -3.66,
+          "outcome": "MISSED_UPSIDE",
+          "mfe_10m_pct": 4.889,
+          "mae_10m_pct": -17.037,
+          "close_10m_pct": 3.704
+        }
+      ]
+    }
+  },
   "missed_probe_counterfactual": {
     "book": "scalp_score65_74_probe_counterfactual",
     "role": "missed_buy_probe_counterfactual",
@@ -99,28 +293,932 @@
     "broker_order_forbidden": true,
     "runtime_effect": "counterfactual_report_only",
     "calibration_authority": "missed_probe_ev_only_not_broker_execution",
-    "total_candidates": 19,
-    "score65_74_probe_candidates": 3,
-    "full_samples": 18,
+    "total_candidates": 35,
+    "score65_74_probe_candidates": 5,
+    "full_samples": 33,
     "partial_samples": 0,
-    "avg_expected_ev_pct": 4.8144,
-    "score65_74_avg_expected_ev_pct": -0.1213,
-    "score65_74_avg_close_10m_pct": 1.3087,
-    "expected_ev_krw_sum": 1024684,
+    "avg_expected_ev_pct": 3.6844,
+    "score65_74_avg_expected_ev_pct": 0.4039,
+    "score65_74_avg_close_10m_pct": 1.6616,
+    "expected_ev_krw_sum": 3633989,
     "source_authority": "observe_only_threshold_relaxation_input",
     "real_execution_quality_source": "none",
     "approval_gate": {
       "min_sample_gate_passed": false,
       "threshold_relaxation_approved": false,
-      "full_samples": 18,
+      "full_samples": 33,
       "partial_samples": 0
     }
   },
   "calibration_outcome": {
-    "calibration_report": null,
-    "run_phase": null,
+    "calibration_report": "/home/ubuntu/KORStockScan/data/report/threshold_cycle_calibration/threshold_cycle_calibration_2026-05-22_postclose.json",
+    "run_phase": "postclose",
     "runtime_change": false,
-    "decisions": []
+    "decisions": [
+      {
+        "family": "soft_stop_whipsaw_confirmation",
+        "threshold_version": "soft_stop_whipsaw_confirmation:calibrated_apply_candidate:ready",
+        "calibration_state": "adjust_up",
+        "sample_count": 6103,
+        "source_sample_count": 22,
+        "sample_floor": 10,
+        "sample_floor_status": "ready",
+        "source_metrics": {
+          "cooldown_would_block_rate": "59.1",
+          "holding_exit_observation_rebound_above_buy_10m_rate": "31.8",
+          "holding_exit_observation_rebound_above_sell_10m_rate": "90.9",
+          "holding_exit_observation_total": 22.0,
+          "holding_exit_observation_whipsaw_signal": true,
+          "post_sell_rebound_above_buy_10m_rate": "0.0",
+          "post_sell_rebound_above_buy_20m_rate": "0.0",
+          "post_sell_rebound_above_buy_30m_rate": "0.0",
+          "post_sell_rebound_above_buy_60m_rate": "0.0",
+          "post_sell_rebound_above_sell_10m_rate": "0.0",
+          "post_sell_rebound_above_sell_20m_rate": "0.0",
+          "post_sell_rebound_above_sell_30m_rate": "0.0",
+          "post_sell_rebound_above_sell_60m_rate": "0.0",
+          "post_sell_soft_stop_total": 0.0
+        },
+        "safety_revert_required": false
+      },
+      {
+        "family": "holding_flow_ofi_smoothing",
+        "threshold_version": "holding_flow_ofi_smoothing:observe_only:ready",
+        "calibration_state": "hold",
+        "sample_count": 3425,
+        "source_sample_count": 3425,
+        "sample_floor": 20,
+        "sample_floor_status": "ready",
+        "source_metrics": {
+          "sentinel_primary": "HOLD_DEFER_DANGER",
+          "sentinel_secondary": [
+            "AI_HOLDING_OPS",
+            "SOFT_STOP_WHIPSAW",
+            "TRAILING_EARLY_EXIT"
+          ],
+          "holding_flow_override_defer_exit": 3425,
+          "holding_flow_override_force_exit": 52,
+          "holding_flow_override_exit_confirmed": 12,
+          "holding_flow_ofi_smoothing_applied": 517,
+          "max_defer_worsen_pct": 0.8
+        },
+        "safety_revert_required": false
+      },
+      {
+        "family": "protect_trailing_smoothing",
+        "threshold_version": "protect_trailing_smoothing:calibrated_apply_candidate:ready",
+        "calibration_state": "adjust_down",
+        "sample_count": 96,
+        "source_sample_count": 19,
+        "sample_floor": 20,
+        "sample_floor_status": "ready",
+        "source_metrics": {
+          "eligible_for_live_review": false,
+          "evaluated_trailing": 19.0,
+          "good_exit_rate": "42.1",
+          "missed_upside_rate": "31.6",
+          "qualifying_cohort_count": 96
+        },
+        "safety_revert_required": false
+      },
+      {
+        "family": "trailing_continuation",
+        "threshold_version": "trailing_continuation:report_only_calibration:direction_conflict_or_live_risk",
+        "calibration_state": "freeze",
+        "sample_count": 185,
+        "source_sample_count": 19,
+        "sample_floor": 20,
+        "sample_floor_status": "direction_conflict_or_live_risk",
+        "source_metrics": {
+          "eligible_for_live_review": false,
+          "evaluated_trailing": 19.0,
+          "good_exit_rate": "42.1",
+          "missed_upside_rate": "31.6",
+          "qualifying_cohort_count": 96
+        },
+        "safety_revert_required": false
+      },
+      {
+        "family": "market_regime_continuous_thresholds",
+        "threshold_version": "market_regime_continuous_thresholds:manifest_only_context_source:hold_sample",
+        "calibration_state": "hold_sample",
+        "sample_count": 2,
+        "source_sample_count": 2,
+        "sample_floor": 10,
+        "sample_floor_status": "hold_sample",
+        "source_metrics": {
+          "schema_version": 1,
+          "metric_role": "risk_context_feature",
+          "decision_authority": "source_context_only",
+          "runtime_effect": false,
+          "allowed_runtime_apply": false,
+          "window_policy": {
+            "primary": "rolling_10d",
+            "secondary": [
+              "daily",
+              "rolling_5d"
+            ],
+            "daily_only_allowed": false
+          },
+          "sample_floor": 10,
+          "primary_decision_metric": "source_quality_adjusted_ev_pct",
+          "source_quality_gate": "rolling_10d valid_market_regime_days >= 10 and daily report contains market_regime_continuous_score",
+          "forbidden_uses": [
+            "single-metric BUY/SELL/scale-in decision",
+            "hard safety/broker/stale quote/price freshness guard bypass",
+            "runtime env mutation before bounded apply approval",
+            "bot restart or provider route change"
+          ],
+          "latest": {
+            "date": "2026-05-22",
+            "score": 64.5971,
+            "label": "NEUTRAL",
+            "component_scores": {
+              "vix_level": 23.24,
+              "fear_greed_level": 14.1571,
+              "domestic_breadth": 16.55,
+              "oil_relief": 10.0,
+              "local_model": 0.65
+            },
+            "source_quality": "valid",
+            "score_version": "market_regime_continuous_v1",
+            "swing_entry_recovery_gate_score": 35
+          },
+          "rolling_5d": {
+            "sample_days": 5,
+            "valid_market_regime_days": 2,
+            "avg_score": 63.0496,
+            "min_score": 61.5022,
+            "max_score": 64.5971,
+            "label_counts": {
+              "NEUTRAL": 2
+            },
+            "completed_records": 3,
+            "win_rate_avg": 75.0,
+            "entry_participation_pct": 0.6466,
+            "source_quality_adjusted_ev_pct": 2.18,
+            "severe_downside_count": 0,
+            "market_regime_pass_opportunity": 0,
+            "market_regime_block_opportunity": 2
+          },
+          "rolling_10d": {
+            "sample_days": 10,
+            "valid_market_regime_days": 2,
+            "avg_score": 63.0496,
+            "min_score": 61.5022,
+            "max_score": 64.5971,
+            "label_counts": {
+              "NEUTRAL": 2
+            },
+            "completed_records": 3,
+            "win_rate_avg": 75.0,
+            "entry_participation_pct": 0.6466,
+            "source_quality_adjusted_ev_pct": 2.18,
+            "severe_downside_count": 0,
+            "market_regime_pass_opportunity": 0,
+            "market_regime_block_opportunity": 2
+          },
+          "label_ev_breakdown": {
+            "NEUTRAL": {
+              "sample_days": 2,
+              "completed_records": 3,
+              "source_quality_adjusted_ev_pct": 2.18,
+              "win_rate_avg": 75.0,
+              "entry_participation_pct": 0.6466,
+              "severe_downside_count": 0
+            }
+          },
+          "source_quality": {
+            "sample_days": 10,
+            "valid_market_regime_days": 2,
+            "status": "hold_sample",
+            "missing_valid_market_regime_days": 8
+          }
+        },
+        "safety_revert_required": false
+      },
+      {
+        "family": "pre_submit_price_guard",
+        "threshold_version": "pre_submit_price_guard:observe_only:hold_sample",
+        "calibration_state": "hold_sample",
+        "sample_count": 82,
+        "source_sample_count": 82,
+        "sample_floor": 20,
+        "sample_floor_status": "hold_sample",
+        "source_metrics": {
+          "instrumentation_status": "implemented",
+          "instrumentation_contract_version": 1,
+          "provenance_contract": [
+            "latency_block_events",
+            "latency_guard_miss_unique_stocks",
+            "quote_fresh_latency_pass_rate",
+            "latency_reason_breakdown"
+          ],
+          "coverage_status": "reason_breakdown_ready",
+          "coverage_gap_type": "counterfactual_join_gap",
+          "counterfactual_join_gap_count": 82,
+          "missing_contract_fields": [],
+          "evaluated_candidates": 0,
+          "missed_winner_count": 0,
+          "avoided_loser_count": 0,
+          "missed_winner_rate": null,
+          "avoided_loser_rate": null,
+          "avg_close_10m_pct": null,
+          "avg_mfe_10m_pct": null,
+          "avg_mae_10m_pct": null,
+          "performance_latency_block_events": 82,
+          "performance_latency_pass_events": 10,
+          "quote_fresh_latency_pass_rate": 25.0,
+          "gatekeeper_eval_ms_p95": 5221.0,
+          "attribution_ready": false,
+          "attribution_gap": true,
+          "events_without_counterfactual": 82,
+          "next_action": "backfill_latency_block_counterfactual_join",
+          "latency_classifier_recommendation_status": "loaded",
+          "latency_classifier_selected_profile_id": "grid_age172_jitter203_spread0035",
+          "latency_classifier_runtime_semantics": "SAFE passes; CAUTION rejects unless bounded recovery canary is explicitly enabled",
+          "latency_classifier_profile_generation": {
+            "mode": "grid_quantile_search",
+            "profile_count": 378,
+            "age_cap_ms": 1500,
+            "jitter_cap_ms": 1500,
+            "spread_cap_ratio": 0.012,
+            "counterfactual_sample_floor": 3,
+            "recovery_event_floor_ratio": 0.1
+          },
+          "latency_classifier_counterfactual_source": {
+            "path": "/home/ubuntu/KORStockScan/data/report/monitor_snapshots/missed_entry_counterfactual_2026-05-22.json",
+            "status": "loaded",
+            "row_count": 0,
+            "latency_block_label_count": 0,
+            "duplicate_latency_block_label_keys": 0,
+            "terminal_stage_counts": {}
+          },
+          "recommended_action": "reject",
+          "recommended_action_reason": "recovery_count=0 below floor=10",
+          "would_safe_pass_events": 0,
+          "would_caution_reject_events": 1,
+          "would_recovery_canary_events": 0,
+          "would_recovery_canary_attempts": 0,
+          "hard_reject_events": 75,
+          "stale_quote_override_events": 0,
+          "broker_guard_bypass_candidates": 0,
+          "fallback_deprecated_excluded_from_pass_events": 1,
+          "counterfactual_joined_sample": 0,
+          "counterfactual_join_rate_pct": 0.0,
+          "counterfactual_ev_pct": null,
+          "missed_winner_recovered": 0,
+          "avoided_loser_lost": 0,
+          "latency_submit_routing": "latency_classifier_runtime_semantics_gap"
+        },
+        "safety_revert_required": false
+      },
+      {
+        "family": "score65_74_recovery_probe",
+        "threshold_version": "score65_74_recovery_probe:efficient_tradeoff_canary_candidate:ready",
+        "calibration_state": "adjust_up",
+        "sample_count": 152,
+        "source_sample_count": 35,
+        "sample_floor": 20,
+        "sample_floor_status": "ready",
+        "source_metrics": {
+          "avoided_loser_rate": 6.66,
+          "blocked_ai_score_avg_close_10m_pct": "3.073",
+          "blocked_ai_score_avoided_loser_rate": "20.0",
+          "blocked_ai_score_evaluated": 0.0,
+          "blocked_ai_score_missed_winner_rate": "80.0",
+          "budget_pass": 86.0,
+          "full_samples": 147,
+          "gatekeeper_eval_ms_p95": 6026.4,
+          "latency_pass": 10.0,
+          "missed_winner_rate": 53.34,
+          "order_bundle_submitted": 0.0,
+          "panic_by_stop_loss_count": true,
+          "panic_detected": true,
+          "panic_regime_mode": "NORMAL",
+          "panic_state": "NORMAL",
+          "panic_stop_loss_exit_count": 27,
+          "partial_sample_zero_is_calibration_target": true,
+          "partial_samples": 1,
+          "performance_blocked_ai_score_events": 11376,
+          "position_rebased_after_fill": 0.0,
+          "risk_regime_gate_authority": "source_quality_only",
+          "risk_regime_gate_state": "normal",
+          "risk_regime_threshold_mode": "insufficient_sample",
+          "score65_74_avg_close_10m_pct": 4.9055,
+          "score65_74_avg_expected_ev_pct": 4.1327,
+          "score65_74_avg_mfe_10m_pct": 6.5123,
+          "score65_74_candidates": 152,
+          "sentinel_primary": "PRICE_GUARD_DROUGHT",
+          "sentinel_secondary": [
+            "LATENCY_DROUGHT",
+            "UPSTREAM_AI_THRESHOLD",
+            "LATENCY_DROUGHT",
+            "UPSTREAM_AI_THRESHOLD",
+            "LATENCY_DROUGHT",
+            "UPSTREAM_AI_THRESHOLD",
+            "LATENCY_DROUGHT",
+            "UPSTREAM_AI_THRESHOLD"
+          ],
+          "submitted_to_ai_unique_pct": 0.44,
+          "submitted_to_budget_unique_pct": 7.14,
+          "threshold_relaxation_approved": false,
+          "wait6579_avg_close_10m_pct": 4.9055,
+          "wait6579_avg_expected_ev_pct": 4.1327,
+          "wait6579_entered_attempts": 0,
+          "wait6579_missed_attempts": 152,
+          "wait6579_total_candidates": 152,
+          "entry_unlock_probe_ready": true
+        },
+        "safety_revert_required": false
+      },
+      {
+        "family": "strength_momentum_soft_gate_p1",
+        "threshold_version": "strength_momentum_soft_gate_p1:report_only_calibration:ready",
+        "calibration_state": "hold",
+        "sample_count": 200027,
+        "source_sample_count": 0,
+        "sample_floor": 20,
+        "sample_floor_status": "ready",
+        "source_metrics": {},
+        "safety_revert_required": false
+      },
+      {
+        "family": "overbought_pullback_guard_p1",
+        "threshold_version": "overbought_pullback_guard_p1:report_only_calibration:ready",
+        "calibration_state": "hold",
+        "sample_count": 116572,
+        "source_sample_count": 24884,
+        "sample_floor": 20,
+        "sample_floor_status": "ready",
+        "source_metrics": {
+          "allowed_runtime_apply": false,
+          "avg_close_10m_pct": "0.398",
+          "avg_mae_10m_pct": "-16.578",
+          "avg_mfe_10m_pct": "1.061",
+          "avoided_loser_count": 0,
+          "avoided_loser_rate": "0.0",
+          "evaluated_candidates": 1,
+          "missed_winner_count": 1,
+          "missed_winner_rate": "100.0",
+          "performance_blocked_overbought_events": 116572,
+          "target_metric": "과열 차단 후 missed_upside/avoided_loss trade-off"
+        },
+        "safety_revert_required": false
+      },
+      {
+        "family": "liquidity_pre_submit_guard_p1",
+        "threshold_version": "liquidity_pre_submit_guard_p1:report_only_calibration:ready",
+        "calibration_state": "hold",
+        "sample_count": 10903,
+        "source_sample_count": 1176,
+        "sample_floor": 20,
+        "sample_floor_status": "ready",
+        "source_metrics": {
+          "allowed_runtime_apply": false,
+          "avoided_loser_count": 0,
+          "evaluated_candidates": 0,
+          "missed_winner_count": 0,
+          "performance_blocked_liquidity_events": 10903,
+          "target_metric": "missed_upside 감소와 avoided_loser 보존의 trade-off"
+        },
+        "safety_revert_required": false
+      },
+      {
+        "family": "bad_entry_refined_canary",
+        "threshold_version": "bad_entry_refined_canary:efficient_tradeoff_canary_candidate:ready",
+        "calibration_state": "adjust_up",
+        "sample_count": 47899,
+        "source_sample_count": 12273,
+        "sample_floor": 10,
+        "sample_floor_status": "ready",
+        "source_metrics": {
+          "bad_entry_block_observed": 55.0,
+          "holding_flow_override_defer_exit": 3425.0,
+          "refined_candidate": 12273.0,
+          "sell_completed": 0.0,
+          "sell_order_sent": 0.0,
+          "soft_stop_rebound_above_sell_10m_rate": "90.9",
+          "soft_stop_tail_sample": 22.0
+        },
+        "safety_revert_required": false
+      },
+      {
+        "family": "holding_exit_decision_matrix_advisory",
+        "threshold_version": "holding_exit_decision_matrix_advisory:report_only_readiness:minimum_edge_missing",
+        "calibration_state": "hold_no_edge",
+        "sample_count": 5,
+        "source_sample_count": 5,
+        "sample_floor": 1,
+        "sample_floor_status": "minimum_edge_missing",
+        "source_metrics": {
+          "matrix_version": "holding_exit_decision_matrix_v1_2026-05-22",
+          "instrumentation_status": "implemented",
+          "instrumentation_contract_version": 1,
+          "provenance_contract": [
+            "summary.non_no_clear_edge_count",
+            "counterfactual_coverage_summary.per_action_samples",
+            "counterfactual_proxy_summary.per_action_samples",
+            "counterfactual_proxy_summary.per_action_joined"
+          ],
+          "matrix_entries": 5,
+          "matrix_non_clear_edge": 0,
+          "matrix_no_clear_edge": 5,
+          "saw_weight_source_ready": false,
+          "saw_candidate_weight_source": 0,
+          "saw_defensive_only_high_loss_rate": 0,
+          "saw_insufficient_sample": 5,
+          "counterfactual_entry_count": 5,
+          "counterfactual_ready_count": 0,
+          "counterfactual_gap_count": 5,
+          "counterfactual_ready_rate": 0.0,
+          "counterfactual_per_action_samples": {
+            "exit_only": 9,
+            "avg_down_wait": 0,
+            "pyramid_wait": 0
+          },
+          "eligible_but_not_chosen_status": "report_only",
+          "eligible_but_not_chosen_sample_snapshots": 11783,
+          "eligible_but_not_chosen_sample_candidates": 11750,
+          "eligible_but_not_chosen_post_sell_joined_candidates": 0,
+          "counterfactual_proxy_ready": true,
+          "counterfactual_proxy_actions_present": [
+            "hold_defer",
+            "exit_only",
+            "avg_down_wait",
+            "pyramid_wait"
+          ],
+          "counterfactual_proxy_missing_actions": [],
+          "counterfactual_proxy_per_action_samples": {
+            "hold_defer": 11671,
+            "exit_only": 3504,
+            "avg_down_wait": 6086,
+            "pyramid_wait": 2231
+          },
+          "counterfactual_proxy_per_action_joined": {
+            "hold_defer": 0,
+            "exit_only": 0,
+            "avg_down_wait": 0,
+            "pyramid_wait": 0
+          },
+          "excluded_reports": {}
+        },
+        "safety_revert_required": false
+      },
+      {
+        "family": "lifecycle_decision_matrix_runtime",
+        "threshold_version": "lifecycle_decision_matrix_runtime:efficient_tradeoff_canary_candidate:ready",
+        "calibration_state": "adjust_up",
+        "sample_count": 35228,
+        "source_sample_count": 35228,
+        "sample_floor": 20,
+        "sample_floor_status": "ready",
+        "source_metrics": {
+          "total_rows": 35228,
+          "joined_rows": 33631,
+          "policy_pass_count": 5,
+          "promote_ready_count": 1,
+          "entry_bucket_actionable_count": 19,
+          "entry_bucket_runtime_candidate_count": 6,
+          "entry_bucket_workorder_count": 10,
+          "entry_bucket_runtime_approval_candidates": [
+            {
+              "candidate_id": "entry_bucket_10",
+              "bucket_type": "score_band",
+              "bucket_key": "score_66_69",
+              "recommended_route": "candidate_recovery_or_relax",
+              "source_quality_adjusted_ev_pct": 1.6584,
+              "joined_sample": 28,
+              "approval_required": true,
+              "allowed_runtime_apply": false,
+              "next_route": "threshold_cycle_runtime_approval_request_after_rolling_confirmation"
+            },
+            {
+              "candidate_id": "entry_bucket_12",
+              "bucket_type": "source_stage",
+              "bucket_key": "scalp_entry_action_decision_snapshot",
+              "recommended_route": "candidate_tighten_or_exclude",
+              "source_quality_adjusted_ev_pct": -0.3299,
+              "joined_sample": 102,
+              "approval_required": true,
+              "allowed_runtime_apply": false,
+              "next_route": "threshold_cycle_runtime_approval_request_after_rolling_confirmation"
+            },
+            {
+              "candidate_id": "entry_bucket_13",
+              "bucket_type": "source_stage",
+              "bucket_key": "wait6579_ev_cohort",
+              "recommended_route": "candidate_recovery_or_relax",
+              "source_quality_adjusted_ev_pct": 2.3199,
+              "joined_sample": 35,
+              "approval_required": true,
+              "allowed_runtime_apply": false,
+              "next_route": "threshold_cycle_runtime_approval_request_after_rolling_confirmation"
+            },
+            {
+              "candidate_id": "entry_bucket_14",
+              "bucket_type": "stale_bucket",
+              "bucket_key": "fresh",
+              "recommended_route": "candidate_tighten_or_exclude",
+              "source_quality_adjusted_ev_pct": -0.3696,
+              "joined_sample": 80,
+              "approval_required": true,
+              "allowed_runtime_apply": false,
+              "next_route": "threshold_cycle_runtime_approval_request_after_rolling_confirmation"
+            },
+            {
+              "candidate_id": "entry_bucket_15",
+              "bucket_type": "stale_bucket",
+              "bucket_key": "fresh_or_unflagged",
+              "recommended_route": "candidate_recovery_or_relax",
+              "source_quality_adjusted_ev_pct": 2.3199,
+              "joined_sample": 35,
+              "approval_required": true,
+              "allowed_runtime_apply": false,
+              "next_route": "threshold_cycle_runtime_approval_request_after_rolling_confirmation"
+            },
+            {
+              "candidate_id": "entry_bucket_19",
+              "bucket_type": "time_bucket",
+              "bucket_key": "time_1000_1200",
+              "recommended_route": "candidate_tighten_or_exclude",
+              "source_quality_adjusted_ev_pct": -0.8942,
+              "joined_sample": 33,
+              "approval_required": true,
+              "allowed_runtime_apply": false,
+              "next_route": "threshold_cycle_runtime_approval_request_after_rolling_confirmation"
+            }
+          ],
+          "entry_bucket_code_improvement_workorders": [
+            {
+              "workorder_id": "entry_bucket_source_quality_1",
+              "bucket_type": "chosen_action",
+              "bucket_key": "NO_BUY_AI",
+              "reason": "bucket_has_edge_but_needs_rolling_or_feature_confirmation",
+              "recommended_route": "candidate_tighten_or_exclude",
+              "metric_role": "source_quality_gate",
+              "runtime_effect": false
+            },
+            {
+              "workorder_id": "entry_bucket_source_quality_2",
+              "bucket_type": "chosen_action",
+              "bucket_key": "action_unknown",
+              "reason": "bucket_has_edge_but_needs_rolling_or_feature_confirmation",
+              "recommended_route": "candidate_recovery_or_relax",
+              "metric_role": "source_quality_gate",
+              "runtime_effect": false
+            },
+            {
+              "workorder_id": "entry_bucket_source_quality_3",
+              "bucket_type": "combo_entry_spot",
+              "bucket_key": "score=score_66_69|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_unknown|overbought=overbought_unknown|time=time_unknown",
+              "reason": "bucket_has_edge_but_needs_rolling_or_feature_confirmation",
+              "recommended_route": "candidate_recovery_or_relax",
+              "metric_role": "source_quality_gate",
+              "runtime_effect": false
+            },
+            {
+              "workorder_id": "entry_bucket_source_quality_4",
+              "bucket_type": "combo_entry_spot",
+              "bucket_key": "score=score_60_62|source=scalp_entry_action_decision_snapshot|stale=fresh|liquidity=liquidity_unknown|overbought=overbought_unknown|time=time_1000_1200",
+              "reason": "bucket_has_edge_but_needs_rolling_or_feature_confirmation",
+              "recommended_route": "candidate_tighten_or_exclude",
+              "metric_role": "source_quality_gate",
+              "runtime_effect": false
+            },
+            {
+              "workorder_id": "entry_bucket_source_quality_5",
+              "bucket_type": "exit_rule",
+              "bucket_key": "exit_unknown",
+              "reason": "bucket_has_edge_but_needs_rolling_or_feature_confirmation",
+              "recommended_route": "candidate_recovery_or_relax",
+              "metric_role": "source_quality_gate",
+              "runtime_effect": false
+            },
+            {
+              "workorder_id": "entry_bucket_source_quality_6",
+              "bucket_type": "exit_rule",
+              "bucket_key": "scalp_trailing_take_profit",
+              "reason": "bucket_has_edge_but_needs_rolling_or_feature_confirmation",
+              "recommended_route": "candidate_tighten_or_exclude",
+              "metric_role": "source_quality_gate",
+              "runtime_effect": false
+            },
+            {
+              "workorder_id": "entry_bucket_source_quality_7",
+              "bucket_type": "exit_rule",
+              "bucket_key": "scalp_hard_stop_pct",
+              "reason": "bucket_has_edge_but_needs_rolling_or_feature_confirmation",
+              "recommended_route": "candidate_tighten_or_exclude",
+              "metric_role": "source_quality_gate",
+              "runtime_effect": false
+            },
+            {
+              "workorder_id": "entry_bucket_source_quality_8",
+              "bucket_type": "liquidity_bucket",
+              "bucket_key": "liquidity_unknown",
+              "reason": "bucket_has_edge_but_needs_rolling_or_feature_confirmation",
+              "recommended_route": "candidate_recovery_or_relax",
+              "metric_role": "source_quality_gate",
+              "runtime_effect": false
+            },
+            {
+              "workorder_id": "entry_bucket_source_quality_9",
+              "bucket_type": "overbought_bucket",
+              "bucket_key": "overbought_unknown",
+              "reason": "bucket_has_edge_but_needs_rolling_or_feature_confirmation",
+              "recommended_route": "candidate_recovery_or_relax",
+              "metric_role": "source_quality_gate",
+              "runtime_effect": false
+            },
+            {
+              "workorder_id": "entry_bucket_source_quality_10",
+              "bucket_type": "score_band",
+              "bucket_key": "score_66_69",
+              "reason": "bucket_has_edge_but_needs_rolling_or_feature_confirmation",
+              "recommended_route": "candidate_recovery_or_relax",
+              "metric_role": "source_quality_gate",
+              "runtime_effect": false
+            }
+          ],
+          "scale_in_bucket_runtime_approval_candidates": [
+            {
+              "candidate_id": "scale_in_bucket_1",
+              "bucket_type": "arm",
+              "bucket_key": "AVG_DOWN",
+              "recommended_route": "candidate_tighten_or_exclude",
+              "source_quality_adjusted_ev_pct": -0.3673,
+              "joined_sample": 14657,
+              "approval_required": true,
+              "allowed_runtime_apply": false,
+              "decision_authority": "adm_ldm_scale_in_bucket_attribution_source_only",
+              "next_route": "threshold_cycle_runtime_approval_request_after_rolling_confirmation"
+            },
+            {
+              "candidate_id": "scale_in_bucket_2",
+              "bucket_type": "blocker_namespace",
+              "bucket_key": "AVG_DOWN",
+              "recommended_route": "candidate_tighten_or_exclude",
+              "source_quality_adjusted_ev_pct": -0.4206,
+              "joined_sample": 9960,
+              "approval_required": true,
+              "allowed_runtime_apply": false,
+              "decision_authority": "adm_ldm_scale_in_bucket_attribution_source_only",
+              "next_route": "threshold_cycle_runtime_approval_request_after_rolling_confirmation"
+            },
+            {
+              "candidate_id": "scale_in_bucket_3",
+              "bucket_type": "blocker_reason",
+              "bucket_key": "profit_not_enough",
+              "recommended_route": "candidate_recovery_or_relax",
+              "source_quality_adjusted_ev_pct": 0.3993,
+              "joined_sample": 3633,
+              "approval_required": true,
+              "allowed_runtime_apply": false,
+              "decision_authority": "adm_ldm_scale_in_bucket_attribution_source_only",
+              "next_route": "threshold_cycle_runtime_approval_request_after_rolling_confirmation"
+            },
+            {
+              "candidate_id": "scale_in_bucket_4",
+              "bucket_type": "blocker_reason",
+              "bucket_key": "low_broken",
+              "recommended_route": "candidate_tighten_or_exclude",
+              "source_quality_adjusted_ev_pct": -0.3394,
+              "joined_sample": 402,
+              "approval_required": true,
+              "allowed_runtime_apply": false,
+              "decision_authority": "adm_ldm_scale_in_bucket_attribution_source_only",
+              "next_route": "threshold_cycle_runtime_approval_request_after_rolling_confirmation"
+            },
+            {
+              "candidate_id": "scale_in_bucket_5",
+              "bucket_type": "blocker_reason",
+              "bucket_key": "pnl_out_of_range(-0.74)",
+              "recommended_route": "candidate_tighten_or_exclude",
+              "source_quality_adjusted_ev_pct": -0.6702,
+              "joined_sample": 335,
+              "approval_required": true,
+              "allowed_runtime_apply": false,
+              "decision_authority": "adm_ldm_scale_in_bucket_attribution_source_only",
+              "next_route": "threshold_cycle_runtime_approval_request_after_rolling_confirmation"
+            },
+            {
+              "candidate_id": "scale_in_bucket_6",
+              "bucket_type": "blocker_reason",
+              "bucket_key": "pnl_out_of_range(-1.29)",
+              "recommended_route": "candidate_tighten_or_exclude",
+              "source_quality_adjusted_ev_pct": -1.184,
+              "joined_sample": 286,
+              "approval_required": true,
+              "allowed_runtime_apply": false,
+              "decision_authority": "adm_ldm_scale_in_bucket_attribution_source_only",
+              "next_route": "threshold_cycle_runtime_approval_request_after_rolling_confirmation"
+            },
+            {
+              "candidate_id": "scale_in_bucket_7",
+              "bucket_type": "blocker_reason",
+              "bucket_key": "pnl_out_of_range(-0.76)",
+              "recommended_route": "candidate_tighten_or_exclude",
+              "source_quality_adjusted_ev_pct": -0.6967,
+              "joined_sample": 89,
+              "approval_required": true,
+              "allowed_runtime_apply": false,
+              "decision_authority": "adm_ldm_scale_in_bucket_attribution_source_only",
+              "next_route": "threshold_cycle_runtime_approval_request_after_rolling_confirmation"
+            },
+            {
+              "candidate_id": "scale_in_bucket_8",
+              "bucket_type": "blocker_reason",
+              "bucket_key": "pnl_out_of_range(-0.71)",
+              "recommended_route": "candidate_tighten_or_exclude",
+              "source_quality_adjusted_ev_pct": -0.5846,
+              "joined_sample": 76,
+              "approval_required": true,
+              "allowed_runtime_apply": false,
+              "decision_authority": "adm_ldm_scale_in_bucket_attribution_source_only",
+              "next_route": "threshold_cycle_runtime_approval_request_after_rolling_confirmation"
+            },
+            {
+              "candidate_id": "scale_in_bucket_9",
+              "bucket_type": "blocker_reason",
+              "bucket_key": "pnl_out_of_range(-0.96)",
+              "recommended_route": "candidate_tighten_or_exclude",
+              "source_quality_adjusted_ev_pct": -0.7814,
+              "joined_sample": 73,
+              "approval_required": true,
+              "allowed_runtime_apply": false,
+              "decision_authority": "adm_ldm_scale_in_bucket_attribution_source_only",
+              "next_route": "threshold_cycle_runtime_approval_request_after_rolling_confirmation"
+            },
+            {
+              "candidate_id": "scale_in_bucket_10",
+              "bucket_type": "blocker_reason",
+              "bucket_key": "pnl_out_of_range(-0.82)",
+              "recommended_route": "candidate_tighten_or_exclude",
+              "source_quality_adjusted_ev_pct": -0.7168,
+              "joined_sample": 66,
+              "approval_required": true,
+              "allowed_runtime_apply": false,
+              "decision_authority": "adm_ldm_scale_in_bucket_attribution_source_only",
+              "next_route": "threshold_cycle_runtime_approval_request_after_rolling_confirmation"
+            }
+          ],
+          "scale_in_bucket_code_improvement_workorders": [
+            {
+              "workorder_id": "scale_in_bucket_source_quality_1",
+              "bucket_type": "arm",
+              "bucket_key": "AVG_DOWN",
+              "reason": "scale_in_arm_bucket_needs_source_quality_or_threshold_cycle_confirmation",
+              "recommended_route": "candidate_tighten_or_exclude",
+              "metric_role": "source_quality_gate",
+              "runtime_effect": false,
+              "allowed_runtime_apply": false
+            },
+            {
+              "workorder_id": "scale_in_bucket_source_quality_2",
+              "bucket_type": "blocker_namespace",
+              "bucket_key": "AVG_DOWN",
+              "reason": "scale_in_arm_bucket_needs_source_quality_or_threshold_cycle_confirmation",
+              "recommended_route": "candidate_tighten_or_exclude",
+              "metric_role": "source_quality_gate",
+              "runtime_effect": false,
+              "allowed_runtime_apply": false
+            },
+            {
+              "workorder_id": "scale_in_bucket_source_quality_3",
+              "bucket_type": "blocker_reason",
+              "bucket_key": "profit_not_enough",
+              "reason": "scale_in_arm_bucket_needs_source_quality_or_threshold_cycle_confirmation",
+              "recommended_route": "candidate_recovery_or_relax",
+              "metric_role": "source_quality_gate",
+              "runtime_effect": false,
+              "allowed_runtime_apply": false
+            },
+            {
+              "workorder_id": "scale_in_bucket_source_quality_4",
+              "bucket_type": "blocker_reason",
+              "bucket_key": "low_broken",
+              "reason": "scale_in_arm_bucket_needs_source_quality_or_threshold_cycle_confirmation",
+              "recommended_route": "candidate_tighten_or_exclude",
+              "metric_role": "source_quality_gate",
+              "runtime_effect": false,
+              "allowed_runtime_apply": false
+            },
+            {
+              "workorder_id": "scale_in_bucket_source_quality_5",
+              "bucket_type": "blocker_reason",
+              "bucket_key": "pnl_out_of_range(-0.74)",
+              "reason": "scale_in_arm_bucket_needs_source_quality_or_threshold_cycle_confirmation",
+              "recommended_route": "candidate_tighten_or_exclude",
+              "metric_role": "source_quality_gate",
+              "runtime_effect": false,
+              "allowed_runtime_apply": false
+            },
+            {
+              "workorder_id": "scale_in_bucket_source_quality_6",
+              "bucket_type": "blocker_reason",
+              "bucket_key": "pnl_out_of_range(-1.29)",
+              "reason": "scale_in_arm_bucket_needs_source_quality_or_threshold_cycle_confirmation",
+              "recommended_route": "candidate_tighten_or_exclude",
+              "metric_role": "source_quality_gate",
+              "runtime_effect": false,
+              "allowed_runtime_apply": false
+            },
+            {
+              "workorder_id": "scale_in_bucket_source_quality_7",
+              "bucket_type": "blocker_reason",
+              "bucket_key": "pnl_out_of_range(-0.76)",
+              "reason": "scale_in_arm_bucket_needs_source_quality_or_threshold_cycle_confirmation",
+              "recommended_route": "candidate_tighten_or_exclude",
+              "metric_role": "source_quality_gate",
+              "runtime_effect": false,
+              "allowed_runtime_apply": false
+            },
+            {
+              "workorder_id": "scale_in_bucket_source_quality_8",
+              "bucket_type": "blocker_reason",
+              "bucket_key": "pnl_out_of_range(-0.71)",
+              "reason": "scale_in_arm_bucket_needs_source_quality_or_threshold_cycle_confirmation",
+              "recommended_route": "candidate_tighten_or_exclude",
+              "metric_role": "source_quality_gate",
+              "runtime_effect": false,
+              "allowed_runtime_apply": false
+            },
+            {
+              "workorder_id": "scale_in_bucket_source_quality_9",
+              "bucket_type": "blocker_reason",
+              "bucket_key": "pnl_out_of_range(-0.96)",
+              "reason": "scale_in_arm_bucket_needs_source_quality_or_threshold_cycle_confirmation",
+              "recommended_route": "candidate_tighten_or_exclude",
+              "metric_role": "source_quality_gate",
+              "runtime_effect": false,
+              "allowed_runtime_apply": false
+            },
+            {
+              "workorder_id": "scale_in_bucket_source_quality_10",
+              "bucket_type": "blocker_reason",
+              "bucket_key": "pnl_out_of_range(-0.82)",
+              "reason": "scale_in_arm_bucket_needs_source_quality_or_threshold_cycle_confirmation",
+              "recommended_route": "candidate_tighten_or_exclude",
+              "metric_role": "source_quality_gate",
+              "runtime_effect": false,
+              "allowed_runtime_apply": false
+            }
+          ],
+          "overnight_bucket_runtime_approval_candidates": [],
+          "overnight_bucket_code_improvement_workorders": [],
+          "fixed_threshold_roles": {
+            "hard_safety": "override_forbidden",
+            "baseline_prior": "feature_only",
+            "bounded_tunable": "threshold_cycle_bounds_required",
+            "legacy_archive": "runtime_feature_forbidden"
+          }
+        },
+        "safety_revert_required": false
+      },
+      {
+        "family": "scale_in_price_guard",
+        "threshold_version": "scale_in_price_guard:report_only_calibration:ready",
+        "calibration_state": "hold",
+        "sample_count": 666,
+        "source_sample_count": 42,
+        "sample_floor": 20,
+        "sample_floor_status": "ready",
+        "source_metrics": {
+          "avg_down_wait": 0,
+          "compact_scale_in_executed": 105,
+          "pyramid_wait": 0,
+          "saw_candidate_weight_source": 0.0,
+          "saw_weight_source_ready": false,
+          "scale_in_price_guard_block": 372,
+          "scale_in_price_p2_observe": 115,
+          "scale_in_price_resolved": 115
+        },
+        "safety_revert_required": false
+      },
+      {
+        "family": "position_sizing_cap_release",
+        "threshold_version": "position_sizing_cap_release:observe_only:hold_sample",
+        "calibration_state": "hold_sample",
+        "sample_count": 42,
+        "source_sample_count": 0,
+        "sample_floor": 30,
+        "sample_floor_status": "hold_sample",
+        "source_metrics": {},
+        "safety_revert_required": false
+      },
+      {
+        "family": "position_sizing_dynamic_formula",
+        "threshold_version": "position_sizing_dynamic_formula:report_only_design:hold_sample",
+        "calibration_state": "hold_sample",
+        "sample_count": 3,
+        "source_sample_count": 0,
+        "sample_floor": 30,
+        "sample_floor_status": "hold_sample",
+        "source_metrics": {},
+        "safety_revert_required": false
+      }
+    ]
   },
   "approval_requests": [],
   "swing_runtime_approval": {
@@ -399,43 +1497,336 @@
     ]
   },
   "pattern_lab_automation": {
-    "available": false,
-    "artifact": null,
-    "gemini_fresh": false,
-    "claude_fresh": false,
-    "consensus_count": 0,
-    "auto_family_candidate_count": 0,
-    "code_improvement_order_count": 0,
-    "top_consensus_findings": [],
-    "top_code_improvement_orders": []
+    "available": true,
+    "artifact": "/home/ubuntu/KORStockScan/data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_2026-05-22.json",
+    "gemini_fresh": true,
+    "claude_fresh": true,
+    "consensus_count": 6,
+    "auto_family_candidate_count": 3,
+    "code_improvement_order_count": 13,
+    "top_consensus_findings": [
+      {
+        "title": "AI threshold dominance",
+        "route": "existing_family",
+        "mapped_family": "score65_74_recovery_probe"
+      },
+      {
+        "title": "AI threshold miss EV recovery",
+        "route": "existing_family",
+        "mapped_family": "score65_74_recovery_probe"
+      },
+      {
+        "title": "Budget pass without submit",
+        "route": "auto_family_candidate",
+        "mapped_family": null
+      }
+    ],
+    "top_code_improvement_orders": [
+      {
+        "order_id": "order_ai_threshold_dominance",
+        "title": "AI threshold dominance",
+        "target_subsystem": "entry_funnel"
+      },
+      {
+        "order_id": "order_ai_threshold_miss_ev_recovery",
+        "title": "AI threshold miss EV recovery",
+        "target_subsystem": "entry_funnel"
+      },
+      {
+        "order_id": "order_budget_pass_without_submit",
+        "title": "Budget pass without submit",
+        "target_subsystem": "scalping_logic"
+      }
+    ]
   },
   "swing_pattern_lab_automation": {
-    "available": false,
-    "artifact": null,
-    "findings_count": 0,
-    "code_improvement_order_count": 0,
-    "data_quality_warning_count": 0,
+    "available": true,
+    "artifact": "/home/ubuntu/KORStockScan/data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_2026-05-22.json",
+    "deepseek_lab_available": true,
+    "findings_count": 5,
+    "code_improvement_order_count": 4,
+    "data_quality_warning_count": 1,
+    "top_level_data_quality_warning_count": 1,
+    "resolved_data_quality_warnings": [],
+    "resolved_data_quality_warning_count": 0,
+    "ofi_qi_quality": {
+      "sample_count": 565,
+      "stale_missing_count": 517,
+      "stale_missing_unique_record_count": 0,
+      "stale_missing_ratio": 0.915,
+      "reason_counts": {
+        "micro_missing": 517,
+        "micro_stale": 0,
+        "observer_unhealthy": 0,
+        "micro_not_ready": 1,
+        "state_insufficient": 1
+      },
+      "reason_ratios": {
+        "micro_missing": 0.915,
+        "micro_stale": 0.0,
+        "observer_unhealthy": 0.0,
+        "micro_not_ready": 0.0018,
+        "state_insufficient": 0.0018
+      },
+      "reason_combination_counts": {
+        "micro_missing": 516,
+        "micro_missing+micro_not_ready+state_insufficient": 1
+      },
+      "reason_combination_unique_record_counts": {},
+      "stale_missing_group_counts": {
+        "holding": 517
+      },
+      "stale_missing_group_unique_record_counts": {},
+      "stale_missing_stage_counts": {
+        "holding_flow_ofi_smoothing_applied": 517
+      },
+      "observer_unhealthy_overlap": {
+        "observer_unhealthy_total": 0,
+        "observer_unhealthy_with_other_reason": 0,
+        "observer_unhealthy_only": 0
+      },
+      "examples": [
+        {
+          "date": "2026-05-22",
+          "record_id": "",
+          "stock_code": "356680",
+          "stock_name": "엑스게이트",
+          "stage": "holding_flow_ofi_smoothing_applied",
+          "group": "holding",
+          "reasons": [
+            "micro_missing"
+          ],
+          "orderbook_micro_state": "neutral",
+          "swing_micro_advice": "",
+          "orderbook_micro_ready": true,
+          "orderbook_micro_observer_healthy": true
+        },
+        {
+          "date": "2026-05-22",
+          "record_id": "",
+          "stock_code": "356680",
+          "stock_name": "엑스게이트",
+          "stage": "holding_flow_ofi_smoothing_applied",
+          "group": "holding",
+          "reasons": [
+            "micro_missing"
+          ],
+          "orderbook_micro_state": "neutral",
+          "swing_micro_advice": "",
+          "orderbook_micro_ready": true,
+          "orderbook_micro_observer_healthy": true
+        },
+        {
+          "date": "2026-05-22",
+          "record_id": "",
+          "stock_code": "356680",
+          "stock_name": "엑스게이트",
+          "stage": "holding_flow_ofi_smoothing_applied",
+          "group": "holding",
+          "reasons": [
+            "micro_missing"
+          ],
+          "orderbook_micro_state": "neutral",
+          "swing_micro_advice": "",
+          "orderbook_micro_ready": true,
+          "orderbook_micro_observer_healthy": true
+        },
+        {
+          "date": "2026-05-22",
+          "record_id": "",
+          "stock_code": "036830",
+          "stock_name": "솔브레인홀딩스",
+          "stage": "holding_flow_ofi_smoothing_applied",
+          "group": "holding",
+          "reasons": [
+            "micro_missing"
+          ],
+          "orderbook_micro_state": "neutral",
+          "swing_micro_advice": "",
+          "orderbook_micro_ready": true,
+          "orderbook_micro_observer_healthy": true
+        },
+        {
+          "date": "2026-05-22",
+          "record_id": "",
+          "stock_code": "356680",
+          "stock_name": "엑스게이트",
+          "stage": "holding_flow_ofi_smoothing_applied",
+          "group": "holding",
+          "reasons": [
+            "micro_missing"
+          ],
+          "orderbook_micro_state": "neutral",
+          "swing_micro_advice": "",
+          "orderbook_micro_ready": true,
+          "orderbook_micro_observer_healthy": true
+        },
+        {
+          "date": "2026-05-22",
+          "record_id": "",
+          "stock_code": "393890",
+          "stock_name": "더블유씨피",
+          "stage": "holding_flow_ofi_smoothing_applied",
+          "group": "holding",
+          "reasons": [
+            "micro_missing"
+          ],
+          "orderbook_micro_state": "neutral",
+          "swing_micro_advice": "",
+          "orderbook_micro_ready": true,
+          "orderbook_micro_observer_healthy": true
+        },
+        {
+          "date": "2026-05-22",
+          "record_id": "",
+          "stock_code": "356680",
+          "stock_name": "엑스게이트",
+          "stage": "holding_flow_ofi_smoothing_applied",
+          "group": "holding",
+          "reasons": [
+            "micro_missing"
+          ],
+          "orderbook_micro_state": "neutral",
+          "swing_micro_advice": "",
+          "orderbook_micro_ready": true,
+          "orderbook_micro_observer_healthy": true
+        },
+        {
+          "date": "2026-05-22",
+          "record_id": "",
+          "stock_code": "036830",
+          "stock_name": "솔브레인홀딩스",
+          "stage": "holding_flow_ofi_smoothing_applied",
+          "group": "holding",
+          "reasons": [
+            "micro_missing"
+          ],
+          "orderbook_micro_state": "neutral",
+          "swing_micro_advice": "",
+          "orderbook_micro_ready": true,
+          "orderbook_micro_observer_healthy": true
+        },
+        {
+          "date": "2026-05-22",
+          "record_id": "",
+          "stock_code": "418420",
+          "stock_name": "라온텍",
+          "stage": "holding_flow_ofi_smoothing_applied",
+          "group": "holding",
+          "reasons": [
+            "micro_missing"
+          ],
+          "orderbook_micro_state": "bearish",
+          "swing_micro_advice": "",
+          "orderbook_micro_ready": true,
+          "orderbook_micro_observer_healthy": true
+        },
+        {
+          "date": "2026-05-22",
+          "record_id": "",
+          "stock_code": "010060",
+          "stock_name": "OCI홀딩스",
+          "stage": "holding_flow_ofi_smoothing_applied",
+          "group": "holding",
+          "reasons": [
+            "micro_missing"
+          ],
+          "orderbook_micro_state": "neutral",
+          "swing_micro_advice": "",
+          "orderbook_micro_ready": true,
+          "orderbook_micro_observer_healthy": true
+        }
+      ]
+    },
+    "source_quality_blocked_families": [],
     "carryover_warning_count": 0,
-    "population_split_available": false,
-    "top_findings": [],
-    "top_orders": []
+    "population_split_available": true,
+    "top_findings": [
+      {
+        "finding_id": "swing_pattern_lab_deepseek_entry_no_submissions",
+        "title": "All selected candidates failed to reach order submission",
+        "route": "design_family_candidate"
+      },
+      {
+        "finding_id": "swing_pattern_lab_deepseek_holding_exit_no_trades",
+        "title": "No completed swing trades in analysis window",
+        "route": "defer_evidence"
+      },
+      {
+        "finding_id": "swing_pattern_lab_deepseek_scale_in_events_observed",
+        "title": "Scale-in events observed for swing positions",
+        "route": "attach_existing_family"
+      }
+    ],
+    "top_orders": [
+      {
+        "order_id": "order_swing_pattern_lab_deepseek_entry_no_submissions",
+        "title": "All selected candidates failed to reach order submission",
+        "decision": "design_family_candidate"
+      },
+      {
+        "order_id": "order_swing_pattern_lab_deepseek_scale_in_events_observed",
+        "title": "Scale-in events observed for swing positions",
+        "decision": "attach_existing_family"
+      },
+      {
+        "order_id": "order_swing_pattern_lab_deepseek_ofi_qi_stale_missing",
+        "title": "OFI/QI stale/missing quality review",
+        "decision": "implement_now"
+      }
+    ]
   },
   "scalp_entry_action_decision_matrix": {
-    "available": false,
-    "artifact": null,
-    "status": "missing",
-    "total_candidates": 0,
-    "joined_sample": 0,
+    "available": true,
+    "artifact": "/home/ubuntu/KORStockScan/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_2026-05-22.json",
+    "status": "pass",
+    "runtime_effect": false,
+    "decision_authority": "entry_advisory_prompt_context_only",
+    "application_mode": "operator_override_advisory_prompt",
+    "primary_decision_metric": "source_quality_adjusted_ev_pct",
+    "total_candidates": 1327,
+    "joined_sample": 102,
     "sample_floor": 20,
     "missing_actions": [],
-    "zero_sample_actions": [],
-    "prompt_applied_count": 0,
+    "zero_sample_actions": [
+      "BUY_NOW",
+      "SKIP_STALE",
+      "BUY_DEFENSIVE"
+    ],
+    "prompt_applied_count": 1132,
     "runtime_bias_applied_count": 0,
-    "runtime_effect_counts": {},
-    "forced_action_counts": {},
-    "top_actions": [],
-    "runtime_effect": false,
-    "decision_authority": "entry_advisory_prompt_context_only"
+    "runtime_effect_counts": {
+      "-": 1327
+    },
+    "forced_action_counts": {
+      "-": 1327
+    },
+    "top_actions": [
+      {
+        "action": "WAIT_REQUOTE",
+        "sample_count": 5,
+        "joined_sample": 0,
+        "source_quality_adjusted_ev_pct": 0.0
+      },
+      {
+        "action": "NO_BUY_AI",
+        "sample_count": 1317,
+        "joined_sample": 102,
+        "source_quality_adjusted_ev_pct": -0.0523
+      },
+      {
+        "action": "SKIP_SOURCE_QUALITY",
+        "sample_count": 1,
+        "joined_sample": 0,
+        "source_quality_adjusted_ev_pct": 0.0
+      },
+      {
+        "action": "SKIP_PRE_SUBMIT_SAFETY",
+        "sample_count": 4,
+        "joined_sample": 0,
+        "source_quality_adjusted_ev_pct": 0.0
+      }
+    ]
   },
   "lifecycle_decision_matrix": {
     "available": true,
@@ -445,26 +1836,26 @@
     "runtime_effect": false,
     "decision_authority": "weighted_adm_source_bundle_for_auto_bounded_apply",
     "primary_decision_metric": "stage_ev_composite_pct",
-    "total_rows": 9863,
-    "joined_rows": 9641,
+    "total_rows": 35228,
+    "joined_rows": 33631,
     "policy_pass_count": 5,
-    "promote_ready_count": 0,
+    "promote_ready_count": 1,
     "policy_entries": [
       {
         "stage": "entry",
-        "sample": 100,
-        "joined_sample": 16,
-        "stage_ev_composite_pct": 3.4568,
-        "confidence": 0.256,
+        "sample": 1521,
+        "joined_sample": 137,
+        "stage_ev_composite_pct": 0.3471,
+        "confidence": 1.0,
         "selected_action": "BUY_DEFENSIVE",
         "source_quality_gate": "pass",
-        "promote_ready": false
+        "promote_ready": true
       },
       {
         "stage": "submit",
-        "sample": 89,
-        "joined_sample": 75,
-        "stage_ev_composite_pct": -0.6286,
+        "sample": 129,
+        "joined_sample": 123,
+        "stage_ev_composite_pct": -0.2676,
         "confidence": 1.0,
         "selected_action": "NO_CHANGE",
         "source_quality_gate": "pass",
@@ -472,9 +1863,9 @@
       },
       {
         "stage": "holding",
-        "sample": 89,
-        "joined_sample": 75,
-        "stage_ev_composite_pct": -0.6204,
+        "sample": 145,
+        "joined_sample": 123,
+        "stage_ev_composite_pct": -0.4473,
         "confidence": 1.0,
         "selected_action": "EXIT",
         "source_quality_gate": "pass",
@@ -482,9 +1873,9 @@
       },
       {
         "stage": "scale_in",
-        "sample": 9296,
-        "joined_sample": 9289,
-        "stage_ev_composite_pct": -0.142,
+        "sample": 32811,
+        "joined_sample": 32785,
+        "stage_ev_composite_pct": -0.159,
         "confidence": 1.0,
         "selected_action": "NO_CHANGE",
         "source_quality_gate": "pass",
@@ -492,9 +1883,9 @@
       },
       {
         "stage": "exit",
-        "sample": 289,
-        "joined_sample": 186,
-        "stage_ev_composite_pct": -0.4256,
+        "sample": 622,
+        "joined_sample": 463,
+        "stage_ev_composite_pct": -0.428,
         "confidence": 1.0,
         "selected_action": "EXIT",
         "source_quality_gate": "pass",
@@ -539,35 +1930,72 @@
     "available": true,
     "artifact": "/home/ubuntu/KORStockScan/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_2026-05-22.json",
     "status": "pass",
-    "candidate_count": 229,
-    "surfaced_candidate_count": 94,
-    "sim_auto_approved_count": 84,
-    "live_auto_apply_ready_count": 0,
-    "new_bucket_candidate_count": 10,
+    "candidate_count": 379,
+    "surfaced_candidate_count": 120,
+    "sim_auto_approved_count": 119,
+    "live_auto_apply_ready_count": 1,
+    "new_bucket_candidate_count": 0,
     "code_patch_required_count": 0,
     "automation_handoff_gap_count": 0,
     "human_intervention_required": false,
     "state_counts": {
-      "sim_auto_approved": 84,
-      "new_bucket_candidate": 10,
-      "source_only_keep_collecting": 135
+      "live_auto_apply_ready": 1,
+      "sim_auto_approved": 119,
+      "source_only_keep_collecting": 259
     },
     "stage_counts": {
-      "entry": 25,
+      "entry": 140,
       "scale_in": 201,
+      "overnight": 35,
       "submit": 1,
       "holding": 1,
       "exit": 1
     },
     "top_surfaced": [
       {
+        "bucket_id": "entry:combo_entry_spot:score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liquidity_unknown",
+        "stage": "entry",
+        "classification_state": "live_auto_apply_ready",
+        "live_auto_apply_family": "entry_wait6579_score66_69_recovery_gate_v1",
+        "recommended_action": "relax_or_recover",
+        "joined_sample": 24,
+        "source_quality_adjusted_ev_pct": 2.1843
+      },
+      {
+        "bucket_id": "entry:chosen_action:no_buy_ai",
+        "stage": "entry",
+        "classification_state": "sim_auto_approved",
+        "live_auto_apply_family": null,
+        "recommended_action": "tighten_or_exclude",
+        "joined_sample": 102,
+        "source_quality_adjusted_ev_pct": -0.3299
+      },
+      {
+        "bucket_id": "entry:source_stage:scalp_entry_action_decision_snapshot",
+        "stage": "entry",
+        "classification_state": "sim_auto_approved",
+        "live_auto_apply_family": null,
+        "recommended_action": "tighten_or_exclude",
+        "joined_sample": 102,
+        "source_quality_adjusted_ev_pct": -0.3299
+      },
+      {
+        "bucket_id": "entry:stale_bucket:fresh",
+        "stage": "entry",
+        "classification_state": "sim_auto_approved",
+        "live_auto_apply_family": null,
+        "recommended_action": "tighten_or_exclude",
+        "joined_sample": 80,
+        "source_quality_adjusted_ev_pct": -0.3696
+      },
+      {
         "bucket_id": "entry:source_stage:wait6579_ev_cohort",
         "stage": "entry",
         "classification_state": "sim_auto_approved",
         "live_auto_apply_family": null,
         "recommended_action": "relax_or_recover",
-        "joined_sample": 16,
-        "source_quality_adjusted_ev_pct": 3.4568
+        "joined_sample": 35,
+        "source_quality_adjusted_ev_pct": 2.3199
       },
       {
         "bucket_id": "entry:stale_bucket:fresh_or_unflagged",
@@ -575,199 +2003,951 @@
         "classification_state": "sim_auto_approved",
         "live_auto_apply_family": null,
         "recommended_action": "relax_or_recover",
-        "joined_sample": 16,
-        "source_quality_adjusted_ev_pct": 3.4568
+        "joined_sample": 35,
+        "source_quality_adjusted_ev_pct": 2.3199
       },
       {
-        "bucket_id": "entry:chosen_action:action_unknown",
+        "bucket_id": "entry:exit_rule:scalp_trailing_take_profit",
         "stage": "entry",
-        "classification_state": "new_bucket_candidate",
+        "classification_state": "sim_auto_approved",
         "live_auto_apply_family": null,
-        "recommended_action": "relax_or_recover",
-        "joined_sample": 16,
-        "source_quality_adjusted_ev_pct": 3.4568
+        "recommended_action": "tighten_or_exclude",
+        "joined_sample": 34,
+        "source_quality_adjusted_ev_pct": -0.3781
       },
       {
-        "bucket_id": "entry:exit_rule:exit_unknown",
+        "bucket_id": "entry:time_bucket:time_1000_1200",
         "stage": "entry",
-        "classification_state": "new_bucket_candidate",
+        "classification_state": "sim_auto_approved",
         "live_auto_apply_family": null,
-        "recommended_action": "relax_or_recover",
-        "joined_sample": 16,
-        "source_quality_adjusted_ev_pct": 3.4568
-      },
-      {
-        "bucket_id": "entry:liquidity_bucket:liquidity_unknown",
-        "stage": "entry",
-        "classification_state": "new_bucket_candidate",
-        "live_auto_apply_family": null,
-        "recommended_action": "relax_or_recover",
-        "joined_sample": 16,
-        "source_quality_adjusted_ev_pct": 3.4568
-      },
-      {
-        "bucket_id": "entry:overbought_bucket:overbought_unknown",
-        "stage": "entry",
-        "classification_state": "new_bucket_candidate",
-        "live_auto_apply_family": null,
-        "recommended_action": "relax_or_recover",
-        "joined_sample": 16,
-        "source_quality_adjusted_ev_pct": 3.4568
-      },
-      {
-        "bucket_id": "entry:strength_bucket:strength_unknown",
-        "stage": "entry",
-        "classification_state": "new_bucket_candidate",
-        "live_auto_apply_family": null,
-        "recommended_action": "relax_or_recover",
-        "joined_sample": 16,
-        "source_quality_adjusted_ev_pct": 3.4568
-      },
-      {
-        "bucket_id": "entry:time_bucket:time_unknown",
-        "stage": "entry",
-        "classification_state": "new_bucket_candidate",
-        "live_auto_apply_family": null,
-        "recommended_action": "relax_or_recover",
-        "joined_sample": 16,
-        "source_quality_adjusted_ev_pct": 3.4568
+        "recommended_action": "tighten_or_exclude",
+        "joined_sample": 33,
+        "source_quality_adjusted_ev_pct": -0.8942
       }
     ]
   },
   "lifecycle_ai_context": {
-    "available": false,
-    "artifact": null,
-    "context_version": "-",
-    "prompt_stage_count": 0,
+    "available": true,
+    "artifact": "/home/ubuntu/KORStockScan/data/report/lifecycle_ai_context/lifecycle_ai_context_2026-05-22.json",
+    "context_version": "lifecycle_ai_context_v1_2026-05-22",
     "runtime_effect": false,
-    "decision_authority": "ai_advisory_prompt_context_only"
+    "decision_authority": "ai_advisory_prompt_context_only",
+    "provider_status": {
+      "provider": "none",
+      "status": "deterministic_fallback",
+      "schema_name": "lifecycle_ai_context_v1",
+      "fallback_used": true
+    },
+    "prompt_stage_count": 3,
+    "stage_contexts": [
+      {
+        "stage": "entry",
+        "prompt_injection_allowed": true,
+        "policy_key": "entry:weighted_adm_v1",
+        "alignment_hint": "BUY_DEFENSIVE",
+        "context_contribution_score": 0.3478,
+        "attribution_quality_status": "observational_only_pending_outcome"
+      },
+      {
+        "stage": "submit",
+        "prompt_injection_allowed": false,
+        "policy_key": "submit:weighted_adm_v1",
+        "alignment_hint": "NO_CHANGE",
+        "context_contribution_score": 0.0,
+        "attribution_quality_status": "hold_sample"
+      },
+      {
+        "stage": "holding",
+        "prompt_injection_allowed": true,
+        "policy_key": "holding:weighted_adm_v1",
+        "alignment_hint": "EXIT",
+        "context_contribution_score": 0.0,
+        "attribution_quality_status": "hold_sample"
+      },
+      {
+        "stage": "scale_in",
+        "prompt_injection_allowed": false,
+        "policy_key": "scale_in:weighted_adm_v1",
+        "alignment_hint": "NO_CHANGE",
+        "context_contribution_score": 0.0,
+        "attribution_quality_status": "hold_sample"
+      },
+      {
+        "stage": "exit",
+        "prompt_injection_allowed": true,
+        "policy_key": "exit:weighted_adm_v1",
+        "alignment_hint": "EXIT",
+        "context_contribution_score": 0.0,
+        "attribution_quality_status": "hold_sample"
+      }
+    ]
   },
   "lifecycle_ai_context_attribution": {
-    "available": false,
-    "artifact": null,
-    "context_eligible_count": 0,
-    "context_applied_count": 0,
+    "available": true,
+    "artifact": "/home/ubuntu/KORStockScan/data/report/lifecycle_ai_context_attribution/lifecycle_ai_context_attribution_2026-05-22.json",
     "runtime_effect": false,
-    "decision_authority": "postclose_context_attribution_only"
+    "decision_authority": "postclose_context_attribution_only",
+    "implementation_status": "implemented",
+    "implementation_checks": [
+      {
+        "name": "stage_attribution_contract",
+        "status": "pass",
+        "observed_stage_count": 5,
+        "expected_stage_count": 5
+      },
+      {
+        "name": "runtime_effect_contract",
+        "status": "pass",
+        "runtime_effect": false
+      },
+      {
+        "name": "forbidden_use_contract",
+        "status": "pass",
+        "forbidden_uses": [
+          "real_order_gate",
+          "pre_submit_block",
+          "provider_route",
+          "bot_restart",
+          "threshold_env_mutation",
+          "telegram_buy_sell"
+        ]
+      }
+    ],
+    "implementation_provenance": {
+      "order_id": "order_lifecycle_ai_context_attribution_feedback",
+      "scope": "instrumentation_report_provenance_only",
+      "runtime_effect": false,
+      "allowed_runtime_apply": false,
+      "decision_authority": "postclose_context_attribution_only",
+      "feedback_target": "lifecycle_decision_matrix.policy_entries",
+      "forbidden_uses": [
+        "real_order_gate",
+        "pre_submit_block",
+        "provider_route",
+        "bot_restart",
+        "threshold_env_mutation",
+        "telegram_buy_sell"
+      ]
+    },
+    "context_eligible_count": 3237,
+    "context_applied_count": 3237,
+    "context_skipped_count": 0,
+    "replay_budget": 30,
+    "stage_quality_counts": {
+      "observational_only_pending_outcome": 1,
+      "hold_sample": 4
+    },
+    "stage_attribution": {
+      "entry": {
+        "context_contribution_score": 0.3478,
+        "bounded_auxiliary_weight": 0.0522,
+        "attribution_quality_status": "observational_only_pending_outcome",
+        "source_quality_adjusted_ev_pct": null,
+        "ai_action_alignment_rate": 0.9969,
+        "no_context_replay_observed": 0
+      },
+      "submit": {
+        "context_contribution_score": 0.0,
+        "bounded_auxiliary_weight": 0.0,
+        "attribution_quality_status": "hold_sample",
+        "source_quality_adjusted_ev_pct": null,
+        "ai_action_alignment_rate": null,
+        "no_context_replay_observed": 0
+      },
+      "holding": {
+        "context_contribution_score": 0.0,
+        "bounded_auxiliary_weight": 0.0,
+        "attribution_quality_status": "hold_sample",
+        "source_quality_adjusted_ev_pct": null,
+        "ai_action_alignment_rate": null,
+        "no_context_replay_observed": 0
+      },
+      "scale_in": {
+        "context_contribution_score": 0.0,
+        "bounded_auxiliary_weight": 0.0,
+        "attribution_quality_status": "hold_sample",
+        "source_quality_adjusted_ev_pct": null,
+        "ai_action_alignment_rate": null,
+        "no_context_replay_observed": 0
+      },
+      "exit": {
+        "context_contribution_score": 0.0,
+        "bounded_auxiliary_weight": 0.0,
+        "attribution_quality_status": "hold_sample",
+        "source_quality_adjusted_ev_pct": null,
+        "ai_action_alignment_rate": null,
+        "no_context_replay_observed": 0
+      }
+    }
   },
   "swing_strategy_discovery": {
-    "available": false,
-    "artifact": null,
-    "candidate_count": 0,
-    "arm_count": 0,
-    "labeled_sample_count": 0,
-    "pending_future_quote_count": 0,
-    "top_surviving_arm": null,
-    "avoid_bucket_count": 0,
+    "available": true,
+    "artifact": "/home/ubuntu/KORStockScan/data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_2026-05-22.json",
+    "candidate_count": 150,
+    "arm_count": 1200,
+    "policy_exit_row_count": 1200,
+    "labeled_sample_count": 32,
+    "pending_future_quote_count": 1118,
+    "top_surviving_arm": "arm05_breakout_conf_trailing",
+    "surviving_arm_count": 1,
+    "avoid_bucket_count": 1,
     "runtime_effect": false,
-    "decision_authority": "swing_sim_exploration_only"
+    "source_only": true,
+    "decision_authority": "swing_sim_exploration_only",
+    "source_quality_summary": {
+      "implementation_status": "implemented",
+      "implementation_provenance": {
+        "order_id": "order_swing_strategy_discovery_source_quality_followup",
+        "scope": "source_quality_instrumentation_only",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "decision_authority": "swing_sim_exploration_only"
+      },
+      "implementation_checks": [
+        {
+          "name": "label_maturity_provenance",
+          "status": "pass",
+          "fields": [
+            "label_maturity_status",
+            "entry_reason",
+            "policy_exit_reason",
+            "future_quote_count",
+            "quotes_from_entry_count"
+          ]
+        },
+        {
+          "name": "source_only_contract",
+          "status": "pass",
+          "runtime_effect": false,
+          "actual_order_submitted": false,
+          "broker_order_forbidden": true
+        }
+      ],
+      "runtime_effect": false,
+      "decision_authority": "swing_sim_exploration_only",
+      "arm_status_counts": {
+        "PENDING_ENTRY": 898,
+        "ENTERED": 220,
+        "EXITED": 32,
+        "EXPIRED": 50
+      },
+      "label_status_counts": {
+        "pending_future_quotes": 1118,
+        "labeled": 32,
+        "expired_entry_no_trigger": 50
+      },
+      "maturity_status_counts": {
+        "pending_future_quotes": 1118,
+        "matured_labeled": 32,
+        "matured_no_entry": 50
+      },
+      "entry_reason_counts": {
+        "next_open": 100,
+        "pullback_not_touched": 66,
+        "breakout_trigger_touched": 68,
+        "gap_fade_condition_not_met": 50,
+        "pullback_limit_touched": 84,
+        "breakout_not_touched": 32,
+        "missing_next_quote": 800
+      },
+      "policy_exit_reason_counts": {
+        "need_5_quotes": 50,
+        "need_10_quotes": 170,
+        "pullback_not_touched": 66,
+        "trailing_after_mfe_stop": 15,
+        "gap_fade_condition_not_met": 50,
+        "mae_stop_touched": 17,
+        "breakout_not_touched": 32,
+        "missing_next_quote": 800
+      },
+      "source_quality_status_counts": {
+        "pending_future_quotes": 1118,
+        "ok": 82
+      }
+    },
+    "implementation_status": "implemented",
+    "implementation_checks": [
+      {
+        "name": "label_maturity_provenance",
+        "status": "pass",
+        "fields": [
+          "label_maturity_status",
+          "entry_reason",
+          "policy_exit_reason",
+          "future_quote_count",
+          "quotes_from_entry_count"
+        ]
+      },
+      {
+        "name": "source_only_contract",
+        "status": "pass",
+        "runtime_effect": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      }
+    ],
+    "implementation_provenance": {
+      "order_id": "order_swing_strategy_discovery_source_quality_followup",
+      "scope": "source_quality_instrumentation_only",
+      "runtime_effect": false,
+      "allowed_runtime_apply": false,
+      "decision_authority": "swing_sim_exploration_only"
+    }
+  },
+  "swing_lifecycle_decision_matrix": {
+    "available": true,
+    "artifact": "/home/ubuntu/KORStockScan/data/report/swing_lifecycle_decision_matrix/swing_lifecycle_decision_matrix_2026-05-22.json",
+    "matrix_version": "swing_lifecycle_decision_matrix_v1",
+    "runtime_effect": false,
+    "source_only": true,
+    "decision_authority": "swing_ldm_source_only",
+    "total_rows": 1200,
+    "probe_rows": 0,
+    "discovery_rows": 1200,
+    "labeled_rows": 32,
+    "pending_future_quote_count": 1118,
+    "sim_auto_candidate_count": 4,
+    "workorder_count": 0,
+    "daily_simulation_consumed": false,
+    "stage_counts": {
+      "carry": 1168,
+      "exit": 32
+    },
+    "source_book_counts": {
+      "swing_strategy_discovery_sim": 1200
+    },
+    "sim_auto_candidate_ids": [
+      "swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_high_mae_green_held_missing_trailing_after_mfe_stop",
+      "swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_high_mae_low_held_missing_trailing_after_mfe_stop",
+      "swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_low_mae_mid_held_missing_mae_stop_touched",
+      "swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_neg_mae_mid_held_missing_mae_stop_touched"
+    ],
+    "workorder_ids": []
+  },
+  "swing_lifecycle_bucket_discovery": {
+    "available": true,
+    "artifact": "/home/ubuntu/KORStockScan/data/report/swing_lifecycle_bucket_discovery/swing_lifecycle_bucket_discovery_2026-05-22.json",
+    "runtime_effect": false,
+    "source_only": true,
+    "decision_authority": "swing_ldm_bucket_discovery_sim_auto",
+    "source_contract_status": "pass",
+    "candidate_count": 390,
+    "surfaced_candidate_count": 390,
+    "sim_auto_approved_count": 4,
+    "source_only_keep_collecting_count": 386,
+    "code_patch_required_count": 4,
+    "runtime_blocked_contract_gap_count": 0,
+    "automation_handoff_gap_count": 0,
+    "state_counts": {
+      "sim_auto_approved": 4,
+      "source_only_keep_collecting": 386
+    },
+    "stage_counts": {
+      "entry": 159,
+      "holding_exit": 31,
+      "selection": 200
+    },
+    "surfaced_candidate_ids": [
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_middle_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_middle_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_middle_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_middle_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_middle_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_middle_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_middle_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_bottom_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_bottom_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_bottom_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_bottom_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_bottom_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_bottom_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_bottom_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_bottom_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_bottom_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_bottom_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_bottom_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_bottom_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_middle_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_middle_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_middle_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_middle_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_middle_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_middle_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_bottom_discovery_gap_unobserve",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_high_mae_green_held_missing_trailing_after_mfe_stop",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_high_mae_low_held_missing_trailing_after_mfe_stop",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_low_mae_mid_held_missing_mae_stop_touched",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_neg_mae_mid_held_missing_mae_stop_touched",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_high_mae_mid_held_missing_trailing_after_mfe_stop",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_high_mae_flat_held_missing_trailing_after_mfe_stop",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_high_mae_mid_held_missing_mae_stop_touched",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_mid_mae_low_held_missing_trailing_after_mfe_stop",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_mid_mae_flat_held_missing_trailing_after_mfe_stop",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_high_mae_low_held_missing_need_5_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_high_mae_low_held_missing_need_10_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_missing_missing_held_missing_pullback_not_touched",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_missing_missing_held_missing_gap_fade_condition_not_met",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_high_mae_green_held_missing_need_10_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_low_mae_low_held_missing_need_5_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_low_mae_low_held_missing_need_10_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_neg_mae_mid_held_missing_need_10_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_missing_missing_held_missing_breakout_not_touched",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_mid_mae_low_held_missing_need_5_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_mid_mae_low_held_missing_need_10_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_low_mae_mid_held_missing_need_10_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_low_mae_mid_held_missing_need_5_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_high_mae_flat_held_missing_need_5_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_high_mae_flat_held_missing_need_10_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_mid_mae_flat_held_missing_need_10_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_mid_mae_flat_held_missing_need_5_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_mid_mae_mid_held_missing_need_5_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_mid_mae_mid_held_missing_need_10_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_low_mae_flat_held_missing_need_5_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_low_mae_flat_held_missing_need_10_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_missing_missing_held_missing_missing_next_quote",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_par",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_ele",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_ele",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_other_financial_in",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_ele",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_passenger_air_tran",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_insurance_보험_생명보험_",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_spe",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_par",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_par",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_sem",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_ele",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_real_estate_activities_with_",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_general_pur",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_activities_auxiliary_to_in",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_special_pur",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_retail_sale_in_non_special",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_other_trans",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_activities_auxiliary_to_fi",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_tel",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_activities_auxilia",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_data_processing_hosting_and_",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_basic_iron_",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_parts_and_a",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_insurance_보험_손해보험_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_architectural_engineering_",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_other_financial_intermediati",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_rubber_prod",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_basic_iron_",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_medicaments",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_telecommunications",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_parts_and_accessories_for",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_parts_and_accessori",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_manufacture_of_parts_and_accessori",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_parts_and_acc",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_manufacture_of_parts_and_accessories_for_mot",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_manufacture_of_parts_",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_parts_and_a",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_data_processing_hosting_and_related_acti",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_data_processing_hosting_and_relate",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_data_processing_hosting_and_relate",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_data_processing_ho",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_data_processing_hosting_and_related_activiti",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_data_processing_hosti",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_data_processing_hosting_an",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_basic_iron_and_steel_diag",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_basic_iron_and_stee",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_manufacture_of_basic_iron_and_stee",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_basic_iron_an",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_bas",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_manufacture_of_basic_iron_and_steel_diagnost",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_manufacture_of_basic_",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_general_purpose_machinery",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_general_purpose_mac",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_manufacture_of_general_purpose_mac",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_general_purpo",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_gen",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_manufacture_of_general_purpose_machinery_dia",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_manufacture_of_genera",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_general_pur",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_building_of_ships_and_boats_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_building_of_ships_and_boats_diagno",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_building_of_ships_and_boats_diagno",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_building_of_ships_and_boats_",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_building_of_ships_",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_building_of_ships_and_boats_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_building_of_ships_and",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_building_of_ships_and_boat",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_parts_and_accessories_for",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_parts_and_accessori",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_manufacture_of_parts_and_accessori",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_parts_and_acc",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_manufacture_of_parts_and_accessories_for_mot",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_manufacture_of_parts_",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_heavy_construction_방위산업_조선_eco선_diagnost",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_heavy_construction_방위산업_조선_eco선_di",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_heavy_construction_방위산업_조선_eco선_di",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_heavy_construction_방위산업_조선_e",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_heavy_construction",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_heavy_construction_방위산업_조선_eco선_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_heavy_construction_방위",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_heavy_construction_방위산업_조선",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_general_purpose_machinery",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_general_purpose_mac",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_manufacture_of_general_purpose_mac",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_general_purpo",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_gen",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_manufacture_of_general_purpose_machinery_원자력",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_manufacture_of_genera",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_electronic_components_pcb",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_electronic_componen",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_manufacture_of_electronic_componen",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_electronic_co",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_manufacture_of_electronic_components_pcb_인쇄회",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_manufacture_of_electr",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_electronic_",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_aircraft_spacecraft_and_i",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_aircraft_spacecraft",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_manufacture_of_aircraft_spacecraft",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_aircraft_spac",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_air",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_manufacture_of_aircraft_spacecraft_and_its_p",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_manufacture_of_aircra",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_aircraft_sp",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_insurance_보험_손해보험_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_insurance_보험_손해보험_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_insurance_보험_손해보험_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_insurance_보험_손해보험_",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_insurance_보험_손해보험_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_insurance_보험_손해보험_dia",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_insurance_보험_손해보험_diagnost",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_architectural_engineering_and_related_te",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_architectural_engineering_and_rela",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_architectural_engineering_and_rela",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_architectural_engineering_an",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_architectural_engi",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_architectural_engineering_and_related_techni",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_architectural_enginee",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_heavy_construction_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_heavy_construction_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_heavy_construction_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_heavy_construction_diagnosti",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_heavy_construction",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_heavy_construction_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_heavy_construction_di",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_heavy_construction_diagnos",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_other_financial_intermediation_diagnosti",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_other_financial_intermediation_dia",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_other_financial_intermediation_dia",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_other_financial_intermediation_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_other_financial_inter",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_other_financial_intermedia",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_activities_auxiliary_to_financial_servic",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_activities_auxiliary_to_financial_",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_activities_auxiliary_to_financial_",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_activities_auxiliary_to_fina",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_activities_auxiliary_to_financial_service_ac",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_activities_auxiliary_",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_activities_auxiliary_to_fi",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_software_development_and_supply_main",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_software_development_and_supply_ma",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_software_development_and_supply_ma",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_software_development_and_sup",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_software_developme",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_software_development_and_supply_main",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_software_development_",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_software_development_and_s",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_activities_auxiliary_to_insurance_and_pe",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_activities_auxiliary_to_insurance_",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_activities_auxiliary_to_insurance_",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_activities_auxiliary_to_insu",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_activities_auxilia",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_activities_auxiliary_to_insurance_and_pensio",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_activities_auxiliary_",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_telecommunications_클라우드_컴퓨팅_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_telecommunications_클라우드_컴퓨팅_diagno",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_telecommunications_클라우드_컴퓨팅_diagno",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_telecommunications_클라우드_컴퓨팅_",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_telecommunications_클라우드_컴퓨팅_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_telecommunications_클라",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_telecommunications_클라우드_컴퓨",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_passenger_air_transport_main",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_passenger_air_transport_main",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_passenger_air_transport_main",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_passenger_air_transport_main",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_passenger_air_transport_main",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_passenger_air_transpo",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_passenger_air_transport_ma",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_audio_publishing_and_original_master_rec",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_audio_publishing_and_original_mast",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_audio_publishing_and_original_mast",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_audio_publishing_and_origina",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_audio_publishing_a",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_audio_publishing_and_original_master_recordi",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_audio_publishing_and_",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_audio_publishing_and_origi",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_rubber_products_타이어_diagn",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_rubber_products_타이어",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_manufacture_of_rubber_products_타이어",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_rubber_produc",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_rub",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_manufacture_of_rubber_products_타이어_diagnosti",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_manufacture_of_rubber",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_parts_and_accessories_for",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_parts_and_accessori",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_manufacture_of_parts_and_accessori",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_parts_and_acc",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_manufacture_of_parts_and_accessories_for_mot",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_manufacture_of_parts_",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_parts_and_a",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_electronic_components_dia",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_electronic_componen",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_manufacture_of_electronic_componen",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_electronic_co",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_manufacture_of_electronic_components_diagnos",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_manufacture_of_electr",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_electronic_",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_special_purpose_machinery",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_special_purpose_mac",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_manufacture_of_special_purpose_mac"
+    ]
   },
   "institutional_flow_context": {
-    "available": false,
-    "artifact": null,
-    "status": "missing",
-    "row_count": 0,
-    "join_rate_pct": 0.0,
-    "status_counts": {},
-    "source_mix": {},
-    "top_net_buy": [],
+    "available": true,
+    "artifact": "/home/ubuntu/KORStockScan/data/report/institutional_flow_context/institutional_flow_context_2026-05-22.json",
+    "status": "pass",
+    "row_count": 120,
+    "ok_count": 120,
+    "partial_count": 0,
+    "missing_count": 0,
+    "token_error_count": 0,
+    "join_rate_pct": 100.0,
+    "status_counts": {
+      "OK": 120
+    },
+    "source_mix": {
+      "ka10059+ka10061": 120
+    },
+    "top_net_buy": [
+      {
+        "stock_code": "069540",
+        "smart_money_net": 5888940,
+        "foreign_net_roll5": 4362265,
+        "inst_net_roll5": 0,
+        "regime": "FOREIGN_ACCUMULATION"
+      },
+      {
+        "stock_code": "034220",
+        "smart_money_net": 3297688,
+        "foreign_net_roll5": 3330662,
+        "inst_net_roll5": 196025,
+        "regime": "DUAL_ACCUMULATION"
+      },
+      {
+        "stock_code": "050890",
+        "smart_money_net": 1809007,
+        "foreign_net_roll5": 2493467,
+        "inst_net_roll5": 0,
+        "regime": "FOREIGN_ACCUMULATION"
+      },
+      {
+        "stock_code": "036540",
+        "smart_money_net": 1155545,
+        "foreign_net_roll5": 4766791,
+        "inst_net_roll5": 56671,
+        "regime": "DUAL_ACCUMULATION"
+      },
+      {
+        "stock_code": "088350",
+        "smart_money_net": 1086488,
+        "foreign_net_roll5": 1753025,
+        "inst_net_roll5": 4195272,
+        "regime": "DUAL_ACCUMULATION"
+      },
+      {
+        "stock_code": "064400",
+        "smart_money_net": 632665,
+        "foreign_net_roll5": 0,
+        "inst_net_roll5": 408612,
+        "regime": "INSTITUTION_ACCUMULATION"
+      },
+      {
+        "stock_code": "032500",
+        "smart_money_net": 582864,
+        "foreign_net_roll5": 842641,
+        "inst_net_roll5": 0,
+        "regime": "FOREIGN_ACCUMULATION"
+      },
+      {
+        "stock_code": "036710",
+        "smart_money_net": 546007,
+        "foreign_net_roll5": 491026,
+        "inst_net_roll5": 196376,
+        "regime": "DUAL_ACCUMULATION"
+      },
+      {
+        "stock_code": "003490",
+        "smart_money_net": 533874,
+        "foreign_net_roll5": 1053077,
+        "inst_net_roll5": 803838,
+        "regime": "DUAL_ACCUMULATION"
+      },
+      {
+        "stock_code": "011200",
+        "smart_money_net": 502761,
+        "foreign_net_roll5": 2619076,
+        "inst_net_roll5": 0,
+        "regime": "FOREIGN_ACCUMULATION"
+      }
+    ],
     "runtime_effect": false,
     "decision_authority": "source_only_lifecycle_feature"
   },
   "pipeline_event_verbosity": {
-    "available": false,
-    "artifact": null,
-    "state": "missing",
-    "recommended_workorder_state": "missing"
+    "available": true,
+    "artifact": "/home/ubuntu/KORStockScan/data/report/pipeline_event_verbosity/pipeline_event_verbosity_2026-05-22.json",
+    "state": "v2_shadow_pending_flush",
+    "recommended_workorder_state": "observe_pending_next_flush",
+    "raw_size_bytes": 901402208,
+    "high_volume_line_count": 285741,
+    "high_volume_byte_share_pct": 50.05,
+    "parity_ok": false,
+    "suppress_eligibility": false,
+    "runtime_effect": false
   },
   "codebase_performance_workorder": {
-    "available": false,
-    "artifact": null,
-    "accepted_count": 0,
-    "deferred_count": 0,
-    "rejected_count": 0,
-    "runtime_effect": false
+    "available": true,
+    "artifact": "/home/ubuntu/KORStockScan/data/report/codebase_performance_workorder/codebase_performance_workorder_2026-05-22.json",
+    "source_doc_hash": "f8e1e34e7a411616d75bac5f67e04c7c9d3c2e3a43efa8862c9fb7a1d5960450",
+    "accepted_count": 7,
+    "deferred_count": 3,
+    "rejected_count": 2,
+    "runtime_effect": false,
+    "strategy_effect": false,
+    "data_quality_effect": false,
+    "tuning_axis_effect": false,
+    "decision_authority": "ops_performance_workorder_source"
   },
   "pattern_lab_currentness_audit": {
-    "available": false,
-    "artifact": null,
-    "status": "missing",
+    "available": true,
+    "artifact": "/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-22.json",
+    "status": "pass",
     "fail_count": 0,
     "warning_count": 0,
     "code_improvement_order_count": 0,
-    "runtime_effect": false
+    "runtime_effect": false,
+    "decision_authority": "source_quality_only"
+  },
+  "pattern_lab_ai_review": {
+    "available": true,
+    "artifact": "/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-05-22.json",
+    "status": "warning",
+    "fail_count": 0,
+    "warning_count": 0,
+    "code_improvement_order_count": 0,
+    "runtime_effect": false,
+    "decision_authority": "pattern_lab_ai_review_source_only"
   },
   "pattern_lab_propagation_audit": {
-    "available": false,
-    "artifact": null,
-    "status": "missing",
+    "available": true,
+    "artifact": "/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-22.json",
+    "status": "pass",
     "fail_count": 0,
     "warning_count": 0,
     "code_improvement_order_count": 0,
-    "runtime_effect": false
+    "runtime_effect": false,
+    "decision_authority": "source_quality_only"
   },
   "code_improvement_workorder": {
     "available": true,
     "artifact": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-22.json",
     "markdown": "/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-22.md",
-    "selected_order_count": 30,
+    "selected_order_count": 28,
     "decision_counts": {
-      "implement_now": 18,
-      "attach_existing_family": 12
+      "attach_existing_family": 41,
+      "design_family_candidate": 7,
+      "defer_evidence": 10,
+      "reject": 3
     },
     "top_orders": [
       {
-        "order_id": "order_lifecycle_entry_bucket_chosen_action_action_unknown",
-        "decision": "implement_now",
-        "target_subsystem": "runtime_instrumentation"
+        "order_id": "order_ai_threshold_dominance",
+        "decision": "attach_existing_family",
+        "target_subsystem": "entry_funnel"
       },
       {
-        "order_id": "order_lifecycle_entry_bucket_exit_rule_exit_unknown",
-        "decision": "implement_now",
-        "target_subsystem": "runtime_instrumentation"
+        "order_id": "order_perf_buy_funnel_json_scan",
+        "decision": "attach_existing_family",
+        "target_subsystem": "buy_funnel_sentinel"
       },
       {
-        "order_id": "order_lifecycle_entry_bucket_liquidity_bucket_liquidity_unknown",
-        "decision": "implement_now",
-        "target_subsystem": "runtime_instrumentation"
+        "order_id": "order_ai_threshold_miss_ev_recovery",
+        "decision": "attach_existing_family",
+        "target_subsystem": "entry_funnel"
       }
     ]
   },
   "sources": {
     "trade_review": "/home/ubuntu/KORStockScan/data/report/monitor_snapshots/trade_review_2026-05-22.json",
     "performance_tuning": "/home/ubuntu/KORStockScan/data/report/monitor_snapshots/performance_tuning_2026-05-22.json",
-    "calibration": null,
+    "calibration": "/home/ubuntu/KORStockScan/data/report/threshold_cycle_calibration/threshold_cycle_calibration_2026-05-22_postclose.json",
     "apply_manifest": "/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-05-22.json",
-    "pattern_lab_automation": null,
-    "swing_pattern_lab_automation": null,
-    "scalp_entry_action_decision_matrix": null,
+    "pattern_lab_automation": "/home/ubuntu/KORStockScan/data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_2026-05-22.json",
+    "swing_pattern_lab_automation": "/home/ubuntu/KORStockScan/data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_2026-05-22.json",
+    "scalp_entry_action_decision_matrix": "/home/ubuntu/KORStockScan/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_2026-05-22.json",
     "lifecycle_decision_matrix": "/home/ubuntu/KORStockScan/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_2026-05-22.json",
     "lifecycle_bucket_discovery": "/home/ubuntu/KORStockScan/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_2026-05-22.json",
-    "lifecycle_ai_context": null,
-    "lifecycle_ai_context_attribution": null,
-    "swing_strategy_discovery": null,
-    "institutional_flow_context": null,
-    "pipeline_event_verbosity": null,
-    "codebase_performance_workorder": null,
-    "pattern_lab_currentness_audit": null,
-    "pattern_lab_propagation_audit": null,
+    "lifecycle_ai_context": "/home/ubuntu/KORStockScan/data/report/lifecycle_ai_context/lifecycle_ai_context_2026-05-22.json",
+    "lifecycle_ai_context_attribution": "/home/ubuntu/KORStockScan/data/report/lifecycle_ai_context_attribution/lifecycle_ai_context_attribution_2026-05-22.json",
+    "swing_strategy_discovery": "/home/ubuntu/KORStockScan/data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_2026-05-22.json",
+    "swing_lifecycle_decision_matrix": "/home/ubuntu/KORStockScan/data/report/swing_lifecycle_decision_matrix/swing_lifecycle_decision_matrix_2026-05-22.json",
+    "swing_lifecycle_bucket_discovery": "/home/ubuntu/KORStockScan/data/report/swing_lifecycle_bucket_discovery/swing_lifecycle_bucket_discovery_2026-05-22.json",
+    "institutional_flow_context": "/home/ubuntu/KORStockScan/data/report/institutional_flow_context/institutional_flow_context_2026-05-22.json",
+    "pipeline_event_verbosity": "/home/ubuntu/KORStockScan/data/report/pipeline_event_verbosity/pipeline_event_verbosity_2026-05-22.json",
+    "codebase_performance_workorder": "/home/ubuntu/KORStockScan/data/report/codebase_performance_workorder/codebase_performance_workorder_2026-05-22.json",
+    "pattern_lab_currentness_audit": "/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-22.json",
+    "pattern_lab_ai_review": "/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-05-22.json",
+    "pattern_lab_propagation_audit": "/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-22.json",
     "code_improvement_workorder": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-22.json",
     "missed_probe_counterfactual": "/home/ubuntu/KORStockScan/data/report/monitor_snapshots/wait6579_ev_cohort_2026-05-22.json"
   },
   "source_load_diagnostics": [],
   "warnings": [
-    "calibration_report_missing",
-    "pattern_lab_automation_missing",
-    "swing_pattern_lab_automation_missing",
-    "scalp_entry_action_decision_matrix_missing",
+    "swing_lab_dq:OFI/QI stale/missing ratio: 0.915 (517/565); reasons: micro_missing=517, micro_not_ready=1, state_insufficient=1",
     "lifecycle_bucket_discovery:ai_review_provider_disabled",
-    "lifecycle_ai_context_missing",
-    "lifecycle_ai_context_attribution_missing",
-    "swing_strategy_discovery_ev_missing",
-    "institutional_flow_context_missing",
-    "pipeline_event_verbosity_missing",
-    "codebase_performance_workorder_missing",
-    "pattern_lab_currentness_audit_missing",
-    "pattern_lab_propagation_audit_missing"
+    "lifecycle_bucket_discovery:ai_two_pass_review_disabled_live_auto_deferred_to_post_apply",
+    "swing_strategy_discovery:pending_future_quotes",
+    "swing_lifecycle_decision_matrix:swing_intraday_live_equiv_probe_missing",
+    "swing_lifecycle_decision_matrix:pending_future_quotes",
+    "swing_lifecycle_bucket_discovery:swing_ldm_ai_review_not_configured",
+    "pattern_lab_ai_review_warning"
   ]
 }

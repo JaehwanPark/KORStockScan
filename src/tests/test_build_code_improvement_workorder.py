@@ -164,6 +164,68 @@ def test_build_code_improvement_workorder_limits_selected_orders(tmp_path, monke
     assert report["deferred_or_rejected_count"] == 3
 
 
+def test_build_code_improvement_workorder_preserves_lifecycle_discovery_handoff_orders(tmp_path, monkeypatch):
+    automation_dir = tmp_path / "automation"
+    discovery_dir = tmp_path / "discovery"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    automation_dir.mkdir()
+    discovery_dir.mkdir()
+    (automation_dir / "scalping_pattern_lab_automation_2026-05-22.json").write_text(
+        json.dumps({"date": "2026-05-22", "code_improvement_orders": []}),
+        encoding="utf-8",
+    )
+    bucket_id = "entry:combo_entry_spot:score_score_60_62_source_scalp_entry_action_decision_snapshot_stale_fresh_liquidity_liquidity_unknown"
+    (discovery_dir / "lifecycle_bucket_discovery_2026-05-22.json").write_text(
+        json.dumps(
+            {
+                "metric_role": "source_quality_gate",
+                "decision_authority": "postclose_discovery_only",
+                "window_policy": "daily_postclose",
+                "sample_floor": 1,
+                "primary_decision_metric": "source_quality_adjusted_ev_pct",
+                "source_quality_gate": "pass",
+                "surfaced_candidates": [
+                    {
+                        "bucket_id": bucket_id,
+                        "stage": "entry",
+                        "classification_state": "new_bucket_candidate",
+                        "bucket_relation": "new",
+                        "recommended_action": "code_patch_required",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "SWING_STRATEGY_DISCOVERY_EV_DIR", tmp_path / "missing-swing-discovery")
+    monkeypatch.setattr(mod, "SWING_LIFECYCLE_DECISION_MATRIX_DIR", tmp_path / "missing-swing-ldm")
+    monkeypatch.setattr(mod, "SWING_LIFECYCLE_BUCKET_DISCOVERY_DIR", tmp_path / "missing-swing-bucket")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "LIFECYCLE_DECISION_MATRIX_DIR", tmp_path / "missing-ldm")
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
+    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-observation-audit")
+    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness")
+    monkeypatch.setattr(mod, "PATTERN_LAB_AI_REVIEW_DIR", tmp_path / "missing-ai-review")
+    monkeypatch.setattr(mod, "_lifecycle_bucket_discovery_report_path", lambda target_date: discovery_dir / f"lifecycle_bucket_discovery_{target_date}.json")
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-22", max_orders=1)
+
+    order = next(item for item in report["orders"] if item["source_report_type"] == "lifecycle_bucket_discovery")
+    assert order["decision"] == "implement_now"
+    assert order["runtime_effect"] is False
+    assert order["source_bucket_id"] == bucket_id
+    assert order["order_id"].startswith("order_lifecycle_bucket_discovery_entry_")
+    assert report["summary"]["lifecycle_bucket_discovery_source_order_count"] == 1
+
+
 def test_build_code_improvement_workorder_consumes_pattern_lab_currentness_audit(tmp_path, monkeypatch):
     automation_dir = tmp_path / "automation"
     currentness_dir = tmp_path / "currentness"

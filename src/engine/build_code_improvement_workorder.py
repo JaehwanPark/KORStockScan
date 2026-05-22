@@ -135,6 +135,13 @@ def _slug(value: str) -> str:
     return text[:80] or "unknown"
 
 
+def _slug_with_hash(value: str, *, limit: int = 80) -> str:
+    base = _slug(value)
+    digest = hashlib.sha1(str(value or "").encode("utf-8")).hexdigest()[:8]
+    keep = max(1, int(limit) - len(digest) - 1)
+    return f"{base[:keep].rstrip('_')}_{digest}"
+
+
 def _next_calendar_day(target_date: str) -> str:
     try:
         return (date.fromisoformat(target_date) + timedelta(days=1)).isoformat()
@@ -385,6 +392,23 @@ def _classify_order(
             automation_reentry=(
                 "Next postclose LDM, threshold EV, runtime approval summary, and verifier must preserve "
                 "scale-in bucket candidates/workorders without runtime mutation."
+            ),
+        )
+
+    if order.get("source_report_type") == "lifecycle_bucket_discovery":
+        return ClassifiedOrder(
+            order=order,
+            decision="implement_now",
+            reason=(
+                "lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains "
+                "blocked until the regenerated reports and verifier pass"
+            ),
+            mapped_family=mapped_family,
+            route=route or "instrumentation_order",
+            confidence=confidence,
+            automation_reentry=(
+                "After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime "
+                "approval summary, threshold EV, and postclose verifier."
             ),
         )
 
@@ -747,6 +771,8 @@ def _lifecycle_entry_bucket_followup_orders(report: dict[str, Any]) -> list[dict
                 "priority": 2 if route == "instrumentation_order" else 5,
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
+                "implementation_status": item.get("implementation_status"),
+                "implementation_provenance": item.get("implementation_provenance"),
                 "expected_ev_effect": (
                     "Keep entry bucket EV attribution, source-quality gaps, and threshold-cycle approval "
                     "candidates connected without mutating intraday thresholds or broker submission."
@@ -836,6 +862,8 @@ def _lifecycle_scale_in_bucket_followup_orders(report: dict[str, Any]) -> list[d
                 "priority": 4,
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
+                "implementation_status": item.get("implementation_status"),
+                "implementation_provenance": item.get("implementation_provenance"),
                 "expected_ev_effect": (
                     "Separate AVG_DOWN/PYRAMID attribution and keep scale-in threshold/cap candidates "
                     "as source-only evidence until rolling confirmation and approval artifact."
@@ -888,13 +916,14 @@ def _lifecycle_bucket_discovery_report_path(target_date: str) -> Path:
 
 def _lifecycle_bucket_discovery_order_id(item: dict[str, Any]) -> str:
     stage = _slug(str(item.get("stage") or "stage"))
-    bucket_id = _slug(str(item.get("bucket_id") or item.get("bucket_key") or "unknown"))
+    bucket_id = _slug_with_hash(str(item.get("source_bucket_id") or item.get("bucket_id") or item.get("bucket_key") or "unknown"))
     return f"order_lifecycle_bucket_discovery_{stage}_{bucket_id}"
 
 
 def _lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
     candidates = report.get("surfaced_candidates") if isinstance(report.get("surfaced_candidates"), list) else []
     orders: list[dict[str, Any]] = []
+    seen_bucket_keys: set[tuple[str, str]] = set()
     for item in candidates:
         if not isinstance(item, dict):
             continue
@@ -903,13 +932,19 @@ def _lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) -> list[
             continue
         stage = str(item.get("stage") or "unknown")
         bucket_id = str(item.get("bucket_id") or "")
+        source_bucket_id = str(item.get("source_bucket_id") or bucket_id)
+        bucket_key = (stage, source_bucket_id)
+        if bucket_key in seen_bucket_keys:
+            continue
+        seen_bucket_keys.add(bucket_key)
         orders.append(
             {
                 "order_id": _lifecycle_bucket_discovery_order_id(item),
+                "source_bucket_id": source_bucket_id,
                 "title": f"Lifecycle bucket discovery follow-up: {bucket_id}",
                 "source_report_type": "lifecycle_bucket_discovery",
                 "lifecycle_stage": stage,
-                "target_subsystem": "lifecycle_bucket_discovery_runtime_hook",
+                "target_subsystem": "lifecycle_bucket_discovery_taxonomy_provenance",
                 "route": "auto_patch_required",
                 "mapped_family": item.get("live_auto_apply_family") or "lifecycle_bucket_discovery",
                 "threshold_family": item.get("live_auto_apply_family") or "lifecycle_bucket_discovery",
@@ -924,16 +959,20 @@ def _lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) -> list[
                 ),
                 "evidence": [
                     f"bucket_id={bucket_id}",
+                    f"source_bucket_id={source_bucket_id}",
+                    f"source_bucket_kind={item.get('source_bucket_kind')}",
                     f"stage={stage}",
                     f"classification_state={state}",
                     f"bucket_relation={item.get('bucket_relation')}",
                     f"recommended_action={item.get('recommended_action')}",
+                    f"recommended_resolution={item.get('recommended_resolution')}",
+                    f"unknown_reason_counts={item.get('unknown_reason_counts') or {}}",
                     f"source_quality_adjusted_ev_pct={item.get('source_quality_adjusted_ev_pct')}",
                     "runtime_effect=false_until_patch_review_passes",
                     "allowed_runtime_apply=false_until_contract_hook_tests_pass",
                 ],
                 "intent": (
-                    "Add missing bucket taxonomy/runtime hook/post-apply attribution, then rerun discovery, "
+                    "Add missing bucket taxonomy/provenance/post-apply attribution, then rerun discovery, "
                     "self review, and targeted tests before any runtime env selection."
                 ),
                 "next_postclose_metric": (
@@ -1600,6 +1639,15 @@ def _swing_strategy_discovery_followup_orders(report: dict[str, Any]) -> list[di
     )
     warnings = [str(item) for item in (report.get("warnings") or []) if str(item).strip()]
     avoid_count = _safe_int(summary.get("avoid_bucket_count"), 0)
+    avoid_buckets = report.get("avoid_buckets") if isinstance(report.get("avoid_buckets"), list) else []
+    avoid_contract_implemented = bool(avoid_buckets) and all(
+        isinstance(item, dict)
+        and "axis" in item
+        and "sample_count" in item
+        and "source_quality_adjusted_ev_pct" in item
+        and "downside_p10_pct" in item
+        for item in avoid_buckets
+    )
     pending = _safe_int(summary.get("pending_future_quote_count"), 0)
     labeled = _safe_int(summary.get("labeled_sample_count"), 0)
     implementation_status = (
@@ -1661,6 +1709,18 @@ def _swing_strategy_discovery_followup_orders(report: dict[str, Any]) -> list[di
                 "priority": 7,
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
+                "implementation_status": "implemented" if avoid_contract_implemented else None,
+                "implementation_provenance": {
+                    "avoid_bucket_contract_fields": [
+                        "axis",
+                        "sample_count",
+                        "source_quality_adjusted_ev_pct",
+                        "downside_p10_pct",
+                    ],
+                    "avoid_bucket_count": avoid_count,
+                }
+                if avoid_contract_implemented
+                else None,
                 "expected_ev_effect": "Expose avoid buckets as analysis guidance only; do not mutate swing runtime or recommendation_history.",
                 "evidence": [
                     f"avoid_bucket_count={avoid_count}",
@@ -1761,6 +1821,8 @@ def _swing_lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) ->
                 "priority": 2,
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
+                "implementation_status": item.get("implementation_status"),
+                "implementation_provenance": item.get("implementation_provenance"),
                 "expected_ev_effect": "Keep Swing bucket discovery handoff explicit without allowing sim-only output to mutate real runtime.",
                 "evidence": [
                     f"bucket_id={bucket_id}",
@@ -1969,6 +2031,11 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         for order in [*swing_lifecycle_matrix_orders, *swing_lifecycle_bucket_discovery_orders]
         if order.get("order_id")
     )
+    required_handoff_order_ids.update(
+        str(order.get("order_id"))
+        for order in lifecycle_bucket_discovery_orders
+        if order.get("order_id")
+    )
     selected_order_ids = {str(item.order.get("order_id")) for item in selected if item.order.get("order_id")}
     for item in classified:
         order_id = str(item.order.get("order_id") or "")
@@ -2109,6 +2176,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
                 "implementation_checks": item.order.get("implementation_checks") or [],
                 "implementation_provenance": item.order.get("implementation_provenance"),
                 "parity_contract": item.order.get("parity_contract"),
+                "source_bucket_id": item.order.get("source_bucket_id"),
             }
             for item in selected
         ],

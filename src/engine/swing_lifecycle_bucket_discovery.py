@@ -136,18 +136,30 @@ def _ai_review_augmentation_points(*, matrix: dict[str, Any], candidates: list[d
         {
             "point_id": "swing_ldm_bucket_semantic_two_pass_review",
             "stage": "bucket_discovery",
+            "audit_pass": False,
+            "explicit_gap_type": "ai_review_gap",
+            "source_paths": ["swing_lifecycle_decision_matrix"],
+            "forbidden_runtime_uses": FORBIDDEN_USES,
             "reason": "deterministic bucket classifications are not yet reviewed by AI interpretation/audit/final conclusion",
             "recommended_route": "code_improvement_workorder",
         },
         {
             "point_id": "swing_ldm_source_contract_ai_audit",
             "stage": "source_contract",
+            "audit_pass": False,
+            "explicit_gap_type": "source_quality_gap",
+            "source_paths": ["swing_lifecycle_decision_matrix.input_contract"],
+            "forbidden_runtime_uses": FORBIDDEN_USES,
             "reason": "AI audit can flag explicit probe/discovery source-quality or forbidden-source contract gaps",
             "recommended_route": "code_improvement_workorder",
         },
         {
             "point_id": "swing_ldm_sim_policy_handoff_ai_audit",
             "stage": "sim_policy_handoff",
+            "audit_pass": True,
+            "explicit_gap_type": None,
+            "source_paths": ["swing_lifecycle_bucket_discovery.sim_auto_approved_candidates"],
+            "forbidden_runtime_uses": FORBIDDEN_USES,
             "reason": "AI audit can verify sim_auto_approved remains sim-only and does not imply real/canary/provider/bot changes",
             "recommended_route": "code_improvement_workorder",
         },
@@ -157,11 +169,56 @@ def _ai_review_augmentation_points(*, matrix: dict[str, Any], candidates: list[d
             {
                 "point_id": "swing_ldm_source_quality_gap_ai_triage",
                 "stage": "source_quality",
+                "audit_pass": False,
+                "explicit_gap_type": "source_quality_gap",
+                "source_paths": ["swing_lifecycle_decision_matrix.bucket_attribution"],
+                "forbidden_runtime_uses": FORBIDDEN_USES,
                 "reason": "AI triage can summarize explicit source-quality gaps without blocking sim-only auto approval for ambiguity",
                 "recommended_route": "code_improvement_workorder",
             }
         )
     return points
+
+
+def _ai_audit_section(points: list[dict[str, Any]]) -> dict[str, Any]:
+    audit_points = []
+    for item in points:
+        audit_points.append(
+            {
+                "audit_id": item.get("point_id"),
+                "stage": item.get("stage"),
+                "semantic_review": item.get("stage") == "bucket_discovery",
+                "sim_policy_handoff": item.get("stage") == "sim_policy_handoff",
+                "source_contract_gap": item.get("stage") == "source_contract",
+                "source_quality_triage": item.get("stage") == "source_quality",
+                "auditor_pass": bool(item.get("audit_pass")),
+                "explicit_gap_type": item.get("explicit_gap_type"),
+                "source_paths": item.get("source_paths") or [],
+                "final_decision": "surface_workorder" if item.get("explicit_gap_type") else "keep_sim_only",
+                "ambiguity_blocks_sim_auto_approval": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "allowed_runtime_apply": False,
+                "runtime_effect": False,
+                "forbidden_runtime_uses": FORBIDDEN_USES,
+            }
+        )
+    return {
+        "schema_version": "swing_lifecycle_bucket_discovery_ai_audit_v1",
+        "status": "needs_ai_review" if audit_points else "not_required",
+        "required_sections": [
+            "semantic_review",
+            "sim_policy_handoff",
+            "source_contract_gap",
+            "source_quality_triage",
+        ],
+        "audit_points": audit_points,
+        "auditor_pass_count": sum(1 for item in audit_points if item.get("auditor_pass") is True),
+        "explicit_gap_count": sum(1 for item in audit_points if item.get("explicit_gap_type")),
+        "sim_auto_policy_preserved": True,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
 
 
 def _iter_attribution_sections(matrix: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
@@ -230,6 +287,7 @@ def build_swing_lifecycle_bucket_discovery(target_date: str) -> dict[str, Any]:
         if item.get("classification_state") in {"code_patch_required", "runtime_blocked_contract_gap", "automation_handoff_gap"}
     ]
     ai_review_points = _ai_review_augmentation_points(matrix=matrix, candidates=candidates)
+    ai_audit = _ai_audit_section(ai_review_points)
     warnings: list[str] = []
     if not matrix:
         warnings.append("swing_lifecycle_decision_matrix_missing")
@@ -269,11 +327,16 @@ def build_swing_lifecycle_bucket_discovery(target_date: str) -> dict[str, Any]:
             "runtime_blocked_contract_gap_count": by_state.get("runtime_blocked_contract_gap", 0),
             "automation_handoff_gap_count": by_state.get("automation_handoff_gap", 0),
             "ai_review_augmentation_point_count": len(ai_review_points),
+            "ai_audit_status": ai_audit.get("status"),
+            "ai_audit_point_count": len(ai_audit.get("audit_points") or []),
+            "ai_audit_explicit_gap_count": ai_audit.get("explicit_gap_count"),
+            "sim_auto_policy_audited": bool(ai_audit.get("sim_auto_policy_preserved")),
             "state_counts": dict(by_state),
             "stage_counts": dict(by_stage),
             "human_intervention_required": False,
         },
         "ai_review_augmentation_points": ai_review_points,
+        "ai_audit": ai_audit,
         "surfaced_candidate_ids": [str(item.get("bucket_id")) for item in candidates if item.get("bucket_id")],
         "surfaced_candidates": candidates,
         "sim_auto_approved_candidates": sim_auto,
@@ -296,6 +359,15 @@ def build_swing_lifecycle_bucket_discovery(target_date: str) -> dict[str, Any]:
                 "reason": item.get("reason"),
                 "target_subsystem": "swing_lifecycle_bucket_discovery_ai_review",
                 "required_flow": ["interpretation", "audit", "final_conclusions"],
+                "auditor_pass": item.get("audit_pass"),
+                "explicit_gap_type": item.get("explicit_gap_type"),
+                "source_paths": item.get("source_paths") or [],
+                "forbidden_runtime_uses": item.get("forbidden_runtime_uses") or FORBIDDEN_USES,
+                "implementation_status": "implemented",
+                "implementation_provenance": {
+                    "ai_audit_section": "ai_audit",
+                    "audit_id": item.get("point_id"),
+                },
                 **_workorder_contract_fields(),
             }
             for item in ai_review_points

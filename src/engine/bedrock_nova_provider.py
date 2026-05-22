@@ -14,6 +14,7 @@ from src.utils.constants import CONFIG_PATH, DATA_DIR, DEV_PATH
 DEFAULT_REGION = "ap-northeast-2"
 DEFAULT_MICRO_MODEL_ID = "apac.amazon.nova-micro-v1:0"
 DEFAULT_LITE_MODEL_ID = "apac.amazon.nova-lite-v1:0"
+DEFAULT_LITE_V2_MODEL_ID = "amazon.nova-2-lite-v1:0"
 PRIMARY_AUDIT_DIR = DATA_DIR / "report" / "bedrock_nova_primary_provider"
 
 MICRO_INPUT_USD_PER_1M = 0.035
@@ -25,6 +26,11 @@ LITE_INPUT_USD_PER_1M = 0.06
 LITE_OUTPUT_USD_PER_1M = 0.24
 LITE_CACHE_READ_INPUT_USD_PER_1M = 0.006
 LITE_CACHE_WRITE_INPUT_USD_PER_1M = 0.06
+
+LITE_V2_INPUT_USD_PER_1M = LITE_INPUT_USD_PER_1M
+LITE_V2_OUTPUT_USD_PER_1M = LITE_OUTPUT_USD_PER_1M
+LITE_V2_CACHE_READ_INPUT_USD_PER_1M = LITE_CACHE_READ_INPUT_USD_PER_1M
+LITE_V2_CACHE_WRITE_INPUT_USD_PER_1M = LITE_CACHE_WRITE_INPUT_USD_PER_1M
 
 OPENAI_GPT5_NANO_INPUT_USD_PER_1M = 0.05
 OPENAI_GPT5_NANO_OUTPUT_USD_PER_1M = 0.40
@@ -120,6 +126,19 @@ def _env_int(name: str, default: int) -> int:
         return int(os.getenv(name, str(default)) or default)
     except Exception:
         return default
+
+
+def _env_csv_set(name: str, default: str = "") -> set[str]:
+    raw = os.getenv(name, default)
+    return {part.strip().lower() for part in str(raw or "").split(",") if part.strip()}
+
+
+def endpoint_allowed_for_lite_primary(endpoint_name: str) -> bool:
+    allowed = _env_csv_set("KORSTOCKSCAN_BEDROCK_NOVA_LITE_PRIMARY_ENDPOINTS")
+    if not allowed:
+        return True
+    endpoint = str(endpoint_name or "").strip().lower()
+    return endpoint in allowed
 
 
 def _extract_json_text(text: str) -> str:
@@ -437,6 +456,36 @@ def lite_profile_from_env() -> BedrockNovaModelProfile:
         cache_write_input_usd_per_1m=_safe_float(
             os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_CACHE_WRITE_INPUT_USD_PER_1M"),
             LITE_CACHE_WRITE_INPUT_USD_PER_1M,
+        ),
+    )
+
+
+def lite_v2_profile_from_env() -> BedrockNovaModelProfile:
+    return BedrockNovaModelProfile(
+        family="lite_v2",
+        model_id=os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_V2_MODEL_ID", DEFAULT_LITE_V2_MODEL_ID),
+        region_name=os.getenv(
+            "KORSTOCKSCAN_BEDROCK_NOVA_LITE_V2_REGION",
+            os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_REGION", DEFAULT_REGION),
+        ),
+        max_output_tokens=_env_int("KORSTOCKSCAN_BEDROCK_NOVA_LITE_V2_MAX_OUTPUT_TOKENS", 768),
+        timeout_ms=_env_int("KORSTOCKSCAN_BEDROCK_NOVA_LITE_V2_TIMEOUT_MS", 7000),
+        prompt_cache_enabled=_env_bool("KORSTOCKSCAN_BEDROCK_NOVA_LITE_V2_PROMPT_CACHE_ENABLED", False),
+        input_usd_per_1m=_safe_float(
+            os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_V2_INPUT_USD_PER_1M"),
+            LITE_V2_INPUT_USD_PER_1M,
+        ),
+        output_usd_per_1m=_safe_float(
+            os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_V2_OUTPUT_USD_PER_1M"),
+            LITE_V2_OUTPUT_USD_PER_1M,
+        ),
+        cache_read_input_usd_per_1m=_safe_float(
+            os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_V2_CACHE_READ_INPUT_USD_PER_1M"),
+            LITE_V2_CACHE_READ_INPUT_USD_PER_1M,
+        ),
+        cache_write_input_usd_per_1m=_safe_float(
+            os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_V2_CACHE_WRITE_INPUT_USD_PER_1M"),
+            LITE_V2_CACHE_WRITE_INPUT_USD_PER_1M,
         ),
     )
 

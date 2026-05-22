@@ -131,13 +131,18 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     states = {item["bucket_id"]: item for item in report["surfaced_candidates"]}
     live = [item for item in states.values() if item["classification_state"] == "live_auto_apply_ready"]
     sim = [item for item in states.values() if item["classification_state"] == "sim_auto_approved"]
-    new = [item for item in states.values() if item["classification_state"] == "new_bucket_candidate"]
+    taxonomy = [item for item in report["candidates"] if item.get("source_bucket_kind") == "taxonomy_provenance_gap"]
     assert {item["live_auto_apply_family"] for item in live} == {
         mod.ENTRY_LIVE_AUTO_FAMILY,
         mod.SCALE_IN_LIVE_AUTO_FAMILY,
     }
     assert sim
-    assert new[0]["bucket_relation"] == "new_bucket_candidate"
+    assert taxonomy
+    assert taxonomy[0]["bucket_relation"] == "new_bucket_candidate"
+    assert taxonomy[0]["classification_state"] == "source_only_keep_collecting"
+    assert taxonomy[0]["source_bucket_id"]
+    assert "recommended_resolution" in taxonomy[0]
+    assert "source_bucket_kind_counts" in report["summary"]
     assert report["summary"]["human_intervention_required"] is False
     assert (report_dir / "lifecycle_bucket_discovery_2026-05-22.json").exists()
     assert (catalog_dir / "lifecycle_bucket_catalog_2026-05-22.json").exists()

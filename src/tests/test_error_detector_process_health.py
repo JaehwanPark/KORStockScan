@@ -14,6 +14,7 @@ from src.engine.error_detectors.process_health import (
     reset_heartbeat,
     write_heartbeat,
     HEARTBEAT_PATH,
+    POSTCLOSE_BOT_ISOLATION_PATH,
 )
 
 
@@ -26,10 +27,14 @@ class TestProcessHealthDetector:
     def setup_method(self):
         if HEARTBEAT_PATH.exists():
             HEARTBEAT_PATH.unlink()
+        if POSTCLOSE_BOT_ISOLATION_PATH.exists():
+            POSTCLOSE_BOT_ISOLATION_PATH.unlink()
 
     def teardown_method(self):
         if HEARTBEAT_PATH.exists():
             HEARTBEAT_PATH.unlink()
+        if POSTCLOSE_BOT_ISOLATION_PATH.exists():
+            POSTCLOSE_BOT_ISOLATION_PATH.unlink()
 
     def test_heartbeat_write_main_loop(self):
         write_heartbeat("main_loop")
@@ -144,6 +149,70 @@ class TestProcessHealthDetector:
 
         assert result.severity == "fail"
         assert "no longer alive" in result.summary
+
+    def test_detector_warns_when_pid_dead_during_postclose_bot_isolation(self, monkeypatch):
+        monkeypatch.setattr(process_health_module, "_is_bot_expected_running", lambda: True)
+        monkeypatch.setattr(process_health_module, "_seconds_since_expected_start", lambda: 600.0)
+        data = {
+            "main_loop": {
+                "last_beat": "2000-01-01T00:00:00+00:00",
+                "pid": 99999999,
+            }
+        }
+        HEARTBEAT_PATH.write_text(json.dumps(data), encoding="utf-8")
+        POSTCLOSE_BOT_ISOLATION_PATH.parent.mkdir(parents=True, exist_ok=True)
+        POSTCLOSE_BOT_ISOLATION_PATH.write_text(
+            json.dumps(
+                {
+                    "active": True,
+                    "target_date": "2026-05-22",
+                    "session": "bot",
+                    "action": "restart",
+                    "reason": "threshold_cycle_postclose_resource_isolation",
+                    "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = ProcessHealthDetector().check()
+
+        assert result.severity == "warning"
+        assert result.details["main_loop_status"] == "postclose_isolation_pid_dead"
+        assert result.details["postclose_bot_isolation"]["reason"] == (
+            "threshold_cycle_postclose_resource_isolation"
+        )
+        assert "No immediate restart" in result.recommended_action
+
+    def test_detector_fail_when_postclose_bot_isolation_marker_is_stale(self, monkeypatch):
+        monkeypatch.setattr(process_health_module, "_is_bot_expected_running", lambda: True)
+        monkeypatch.setattr(process_health_module, "_seconds_since_expected_start", lambda: 600.0)
+        data = {
+            "main_loop": {
+                "last_beat": "2000-01-01T00:00:00+00:00",
+                "pid": 99999999,
+            }
+        }
+        HEARTBEAT_PATH.write_text(json.dumps(data), encoding="utf-8")
+        POSTCLOSE_BOT_ISOLATION_PATH.parent.mkdir(parents=True, exist_ok=True)
+        POSTCLOSE_BOT_ISOLATION_PATH.write_text(
+            json.dumps(
+                {
+                    "active": True,
+                    "target_date": "2026-05-22",
+                    "session": "bot",
+                    "action": "restart",
+                    "reason": "threshold_cycle_postclose_resource_isolation",
+                    "started_at": "2000-01-01T00:00:00+00:00",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = ProcessHealthDetector().check()
+
+        assert result.severity == "fail"
+        assert "postclose_bot_isolation" not in result.details
 
     def test_detector_warns_for_dead_pid_during_restart_grace(self, monkeypatch):
         monkeypatch.setattr(process_health_module, "_is_bot_expected_running", lambda: True)

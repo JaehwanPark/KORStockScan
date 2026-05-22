@@ -10,9 +10,15 @@ from typing import Any
 
 import pandas as pd
 
-from analysis.deepseek_swing_pattern_lab.config import OUTPUT_DIR, PROMPT_DIR
+from analysis.deepseek_swing_pattern_lab.config import END_DATE, OUTPUT_DIR, PROMPT_DIR, REPORT_DIR
 
 SCHEMA_VERSION = 2
+SWING_FEEDBACK_SOURCES = {
+    "threshold_cycle_ev": ("threshold_cycle_ev", "threshold_cycle_ev"),
+    "swing_lifecycle_decision_matrix": ("swing_lifecycle_decision_matrix", "swing_lifecycle_decision_matrix"),
+    "swing_lifecycle_bucket_discovery": ("swing_lifecycle_bucket_discovery", "swing_lifecycle_bucket_discovery"),
+    "swing_strategy_discovery_ev": ("swing_strategy_discovery_ev", "swing_strategy_discovery_ev"),
+}
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -50,6 +56,40 @@ def _load_json(name: str) -> dict[str, Any]:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
+
+
+def _load_feedback_sources() -> dict[str, Any]:
+    consumed = []
+    missing = []
+    for source_id, (report_name, stem) in SWING_FEEDBACK_SOURCES.items():
+        path = REPORT_DIR / report_name / f"{stem}_{END_DATE}.json"
+        item = {
+            "source_id": source_id,
+            "path": str(path),
+            "runtime_effect": False,
+            "decision_authority": "source_quality_only",
+        }
+        if path.exists():
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                payload = {}
+            summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+            consumed.append(
+                {
+                    **item,
+                    "status": payload.get("status") or summary.get("status"),
+                    "warnings": payload.get("warnings") or summary.get("warnings") or [],
+                }
+            )
+        else:
+            missing.append({**item, "gap_type": "source_quality_gap"})
+    return {
+        "consumed_feedback_sources": consumed,
+        "missing_feedback_sources": missing,
+        "runtime_effect": False,
+        "decision_authority": "source_quality_only",
+    }
 
 
 def _load_prompt(name: str) -> str:
@@ -109,6 +149,7 @@ def build_payload_summary(
         "order_count": len(analysis_result.get("code_improvement_orders", [])),
         "case_counts": case_counts,
         "total_cases": sum(case_counts.values()),
+        "feedback_sources": _load_feedback_sources(),
     }
     return summary
 

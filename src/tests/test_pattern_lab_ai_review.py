@@ -47,6 +47,10 @@ def test_pattern_lab_ai_review_builds_two_pass_source_only_report(tmp_path, monk
     assert report["summary"]["ai_two_pass_review_status"] == "disabled_deterministic_review"
     assert report["ai_two_pass_review"]["interpretation"]["review_items"]
     assert report["ai_two_pass_review"]["audit"]["status"] == "pass"
+    conclusion = report["ai_two_pass_review"]["final_conclusions"][0]
+    assert "auditor_pass" in conclusion
+    assert conclusion["explicit_gap_type"] == "automation_handoff_gap"
+    assert conclusion["forbidden_runtime_uses"]
     assert {order["improvement_type"] for order in report["code_improvement_orders"]} == {
         "automation_handoff_gap",
         "ai_review_gap",
@@ -96,4 +100,8 @@ def test_pattern_lab_ai_review_accepts_strict_ai_response_with_audit(tmp_path, m
     assert report["status"] == "pass"
     assert report["summary"]["ai_two_pass_review_status"] == "parsed"
     assert report["summary"]["audit_status"] == "pass"
+    conclusion = report["ai_two_pass_review"]["final_conclusions"][0]
+    assert conclusion["auditor_pass"] is True
+    assert conclusion["explicit_gap_type"] is None
+    assert conclusion["forbidden_runtime_uses"] == mod.FORBIDDEN_USES
     assert report["code_improvement_orders"] == []

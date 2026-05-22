@@ -4,7 +4,7 @@ import argparse
 import json
 import math
 from collections import Counter, OrderedDict, defaultdict
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -354,7 +354,72 @@ def _choose_overall_winner(entry_scope: dict[str, Any], holding_scope: dict[str,
     return winner, profile, reason
 
 
-def build_decision(target_date: str) -> dict[str, Any]:
+def _date_range(start_date: str, end_date: str) -> list[str]:
+    start = datetime.fromisoformat(start_date).date()
+    end = datetime.fromisoformat(end_date).date()
+    if start > end:
+        start, end = end, start
+    days = []
+    current = start
+    while current <= end:
+        days.append(current.isoformat())
+        current += timedelta(days=1)
+    return days
+
+
+def _merge_scope_results(scope_name: str, daily_scopes: list[dict[str, Any]]) -> dict[str, Any]:
+    total_unique = sum(int(scope.get("unique_valid_join_rows") or 0) for scope in daily_scopes)
+    openai_weighted = sum(
+        float(scope.get("openai_source_quality_adjusted_ev_pct") or 0.0)
+        * int(scope.get("unique_valid_join_rows") or 0)
+        for scope in daily_scopes
+    )
+    nova_weighted = sum(
+        float(scope.get("nova_micro_source_quality_adjusted_ev_pct") or 0.0)
+        * int(scope.get("unique_valid_join_rows") or 0)
+        for scope in daily_scopes
+    )
+    join_methods: Counter[str] = Counter()
+    action_pairs: Counter[str] = Counter()
+    outcomes: Counter[str] = Counter()
+    sample_rows: list[dict[str, Any]] = []
+    weak_rows: list[dict[str, Any]] = []
+    for scope in daily_scopes:
+        join_methods.update(scope.get("join_methods") or {})
+        action_pairs.update(scope.get("action_pair_counts") or {})
+        outcomes.update(scope.get("outcome_counts") or {})
+        sample_rows.extend(scope.get("sample_rows") or [])
+        weak_rows.extend(scope.get("weak_reference_rows") or [])
+    openai_ev = round(openai_weighted / total_unique, 4) if total_unique else 0.0
+    nova_ev = round(nova_weighted / total_unique, 4) if total_unique else 0.0
+    mae_weighted_values = [
+        float(scope.get("avg_mae_10m_pct") or 0.0) * int(scope.get("unique_valid_join_rows") or 0)
+        for scope in daily_scopes
+        if int(scope.get("unique_valid_join_rows") or 0) > 0
+    ]
+    return {
+        "scope": scope_name,
+        "source_rows": sum(int(scope.get("source_rows") or 0) for scope in daily_scopes),
+        "valid_join_rows": sum(int(scope.get("valid_join_rows") or 0) for scope in daily_scopes),
+        "unique_valid_join_rows": total_unique,
+        "prior_only_excluded_count": sum(int(scope.get("prior_only_excluded_count") or 0) for scope in daily_scopes),
+        "unjoined_count": sum(int(scope.get("unjoined_count") or 0) for scope in daily_scopes),
+        "weak_reference_count": sum(int(scope.get("weak_reference_count") or 0) for scope in daily_scopes),
+        "weak_reference_rows": weak_rows[:50],
+        "join_methods": dict(join_methods),
+        "action_pair_counts": dict(action_pairs),
+        "openai_source_quality_adjusted_ev_pct": openai_ev,
+        "nova_micro_source_quality_adjusted_ev_pct": nova_ev,
+        "nova_minus_openai_source_quality_adjusted_ev_pct": round(nova_ev - openai_ev, 4),
+        "avg_mae_10m_pct": round(sum(mae_weighted_values) / total_unique, 4) if total_unique else 0.0,
+        "missed_upside_count": sum(int(scope.get("missed_upside_count") or 0) for scope in daily_scopes),
+        "outcome_counts": dict(outcomes),
+        "sample_rows": sample_rows[:50],
+        "primary_join_policy": "daily exact joins merged by date; EV is unique-sample weighted across source dates",
+    }
+
+
+def _build_single_day_scopes(target_date: str) -> tuple[dict[str, Any], dict[str, Any]]:
     shadow_rows = _load_comparable_shadow_rows(target_date)
     evaluations = read_jsonl(_post_sell_eval_path(target_date)) if _post_sell_eval_path(target_date).exists() else []
     entry_rows = [row for row in shadow_rows if _is_entry_watch(row) and _is_buy_related(row)]
@@ -366,16 +431,52 @@ def build_decision(target_date: str) -> dict[str, Any]:
         evaluations=evaluations,
         scope_name="holding_continuation",
     )
+    return entry_scope, holding_scope
+
+
+def build_decision(target_date: str, *, start_date: str | None = None) -> dict[str, Any]:
+    source_dates = _date_range(start_date, target_date) if start_date else [target_date]
+    entry_daily: list[dict[str, Any]] = []
+    holding_daily: list[dict[str, Any]] = []
+    for source_date in source_dates:
+        entry_scope, holding_scope = _build_single_day_scopes(source_date)
+        entry_scope["source_date"] = source_date
+        holding_scope["source_date"] = source_date
+        entry_daily.append(entry_scope)
+        holding_daily.append(holding_scope)
+    entry_scope = (
+        _merge_scope_results("entry_watch_buy", entry_daily)
+        if len(entry_daily) > 1
+        else entry_daily[0]
+    )
+    holding_scope = (
+        _merge_scope_results("holding_continuation", holding_daily)
+        if len(holding_daily) > 1
+        else holding_daily[0]
+    )
     winner, profile, reason = _choose_overall_winner(entry_scope, holding_scope)
+    cumulative = len(source_dates) > 1
     return {
-        "report_type": "bedrock_nova_micro_one_day_decision",
+        "report_type": "bedrock_nova_micro_cumulative_decision" if cumulative else "bedrock_nova_micro_one_day_decision",
         "target_date": target_date,
+        "start_date": source_dates[0],
+        "end_date": target_date,
+        "source_dates": source_dates,
+        "window_policy": "cumulative" if cumulative else "one_day",
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "decision_authority": "one_day_operator_decision_artifact",
+        "decision_authority": (
+            "cumulative_operator_decision_artifact"
+            if cumulative
+            else "one_day_operator_decision_artifact"
+        ),
         "runtime_effect": False,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
-        "metric_role": "provider_engine_one_day_decision",
+        "metric_role": (
+            "provider_engine_cumulative_decision"
+            if cumulative
+            else "provider_engine_one_day_decision"
+        ),
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "winner": winner,
         "winning_profile": profile,
@@ -383,9 +484,9 @@ def build_decision(target_date: str) -> dict[str, Any]:
         "no_defer_policy": True,
         "min_edge_pct": MIN_EDGE_PCT,
         "source_paths": {
-            "shadow_jsonl": str(shadow_jsonl_path(target_date)),
-            "sim_post_sell_evaluations": str(_post_sell_eval_path(target_date)),
-            "sim_post_sell_candidates": str(_post_sell_candidate_path(target_date)),
+            "shadow_jsonl": [str(shadow_jsonl_path(source_date)) for source_date in source_dates],
+            "sim_post_sell_evaluations": [str(_post_sell_eval_path(source_date)) for source_date in source_dates],
+            "sim_post_sell_candidates": [str(_post_sell_candidate_path(source_date)) for source_date in source_dates],
         },
         "scope_results": {
             "entry_watch_buy": entry_scope,
@@ -409,11 +510,15 @@ def build_decision(target_date: str) -> dict[str, Any]:
 def render_markdown(report: dict[str, Any]) -> str:
     entry = report["scope_results"]["entry_watch_buy"]
     holding = report["scope_results"]["holding_continuation"]
+    window_policy = str(report.get("window_policy") or "one_day")
+    title_prefix = "Bedrock Nova Micro Cumulative Decision" if window_policy == "cumulative" else "Bedrock Nova Micro One-Day Decision"
     lines = [
-        f"# Bedrock Nova Micro One-Day Decision - {report['target_date']}",
+        f"# {title_prefix} - {report['target_date']}",
         "",
         "## 판정",
         "",
+        f"- window_policy: `{window_policy}`",
+        f"- source_dates: `{report.get('source_dates')}`",
         f"- winner: `{report['winner']}`",
         f"- winning_profile: `{report['winning_profile']}`",
         f"- winner_reason: `{report['winner_reason']}`",
@@ -450,8 +555,13 @@ def render_markdown(report: dict[str, Any]) -> str:
 def write_decision(report: dict[str, Any]) -> tuple[Path, Path]:
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     target_date = str(report["target_date"])
-    json_path = REPORT_DIR / f"bedrock_nova_micro_one_day_decision_{target_date}.json"
-    md_path = REPORT_DIR / f"bedrock_nova_micro_one_day_decision_{target_date}.md"
+    if str(report.get("window_policy") or "") == "cumulative":
+        start_date = str(report.get("start_date") or target_date)
+        stem = f"bedrock_nova_micro_cumulative_decision_{start_date}_to_{target_date}"
+    else:
+        stem = f"bedrock_nova_micro_one_day_decision_{target_date}"
+    json_path = REPORT_DIR / f"{stem}.json"
+    md_path = REPORT_DIR / f"{stem}.md"
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     md_path.write_text(render_markdown(report), encoding="utf-8")
     return json_path, md_path
@@ -460,8 +570,9 @@ def write_decision(report: dict[str, Any]) -> tuple[Path, Path]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build one-day OpenAI vs Bedrock Nova Micro decision artifact.")
     parser.add_argument("--date", default=datetime.now().strftime("%Y-%m-%d"))
+    parser.add_argument("--start-date", default="")
     args = parser.parse_args(argv)
-    report = build_decision(args.date)
+    report = build_decision(args.date, start_date=args.start_date or None)
     json_path, md_path = write_decision(report)
     print(
         json.dumps(

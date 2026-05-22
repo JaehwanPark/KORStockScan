@@ -111,6 +111,21 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
 
 5/21 결론은 신규 `remove`, `baseline-promote`, 추가 `active-canary` 전환 없음이다. Bedrock shadow, scalp sim overnight, LDM bucket attribution, runbook restart isolation은 모두 실주문/threshold/provider/bot 전략 변경 권한을 갖지 않는다.
 
+### 2026-05-22 POSTCLOSE Snapshot Addendum
+
+이 addendum은 `threshold_cycle_ev_2026-05-22`, `runtime_approval_summary_2026-05-22`, `runtime_apply_bridge_2026-05-22`, `bedrock_nova_micro_one_day_decision_2026-05-22`, `bedrock_nova_lite_one_day_decision_2026-05-22`, `threshold_cycle_postclose_verification_2026-05-22` 기준의 당일 분류 보정이다. 결론은 `no_baseline_promote_with_route_candidates_and_source_quality_gaps_locked`이다.
+
+| 축 | 2026-05-22 판정 | 근거 | 다음 액션 |
+| --- | --- | --- | --- |
+| `Bedrock Nova Micro one-day` | observe-only 종료 후보 / OpenAI 유지 | one-day decider winner=`openai`, next_action=`turn_micro_shadow_off_keep_openai`. `runtime_effect=false`, `broker_order_forbidden=true`, `actual_order_submitted=false`를 유지했다 | Micro shadow/duel은 OFF 후보로 닫고, provider route/threshold/order guard 변경 금지 |
+| `Bedrock Nova Lite v1 Tier2` | route candidate / approval-workorder required | one-day decider winner=`lite`, route_candidate=`tier2_nova_lite_v1`. `holding_flow` exact join 82건에서 Lite source-quality adjusted EV가 OpenAI보다 `+0.0472%p` 높았다 | candidate만 보관한다. 실제 provider route 변경은 별도 approval/workorder와 rollback/off switch 전까지 금지 |
+| `Bedrock Nova Lite v2` | source-quality/contract gap | 공식 model id는 확인됐지만 현재 운영 코드는 v1용 `KORSTOCKSCAN_BEDROCK_NOVA_LITE_*` 단일 env/model path라 v1/v2 비용, region/profile, timeout, queue, artifact path를 분리하지 못한다 | 2026-05-26 source-quality/contract 확인 항목으로 넘기고 즉시 shadow 시행은 보류 |
+| `lifecycle_bucket_discovery` / `runtime_apply_bridge` | active automation bridge / live-auto 후보 1건 | `runtime_apply_bridge` status=`pass`, candidate_count=`2`, live_auto_apply_ready_count=`1`, runtime_mutation_performed=`false`; postclose verifier status=`pass` | 05-26 PREOPEN에서 env uptake와 post-apply attribution을 확인한다. hard safety/provider/bot/cap guard는 우회하지 않는다 |
+| `swing_runtime_approval` | approval-required dry-run/real-canary split | `runtime_approval_summary` 기준 swing_requested=`3`, swing_approved=`0`; 대상은 `swing_model_floor`, `swing_gatekeeper_reject_cooldown`, `swing_one_share_real_canary_phase0` | 사용자가 approval artifact를 승인한 경우에만 다음 PREOPEN dry-run/real-canary 경로로 소비한다 |
+| `scalp_sim_candidate_window_expansion` / `scalp_sim_ai_budget_manager` | sim-only selected cohort 유지 | sim split은 threshold EV 입력으로 유지되지만 broker execution 품질이나 live 전환 단독 근거가 아니다 | sim-only auto approval과 provenance 수집만 유지 |
+
+5/22 결론은 신규 `baseline-promote`, 신규 `remove`, 실주문 전환 없음이다. Nova Lite v1은 route 후보일 뿐 현재 provider route가 바뀐 것이 아니고, Nova Lite v2는 별도 source-quality/contract gap이 닫히기 전까지 shadow 시행 후보도 아니다. lifecycle bridge live-auto 후보는 자동화체인 범위의 entry/scale 후보이며 provider route, bot restart, position cap release, broker safety를 우회하지 않는다.
+
 ## 0.1 Runtime ON/OFF 스냅샷 (`2026-05-12` 기준)
 
 이 표는 `src/utils/constants.py` 기본값과 현재 운영문서 기준의 runtime 상태를 한곳에 잠그기 위한 스냅샷이다. env override가 있으면 장전 로드 확인에서 반드시 이 표와 비교한다.

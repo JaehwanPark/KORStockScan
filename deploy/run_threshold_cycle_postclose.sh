@@ -71,6 +71,7 @@ ARTIFACT_WAIT_SEC="${THRESHOLD_CYCLE_ARTIFACT_WAIT_SEC:-600}"
 ARTIFACT_WAIT_INTERVAL_SEC="${THRESHOLD_CYCLE_ARTIFACT_WAIT_INTERVAL_SEC:-5}"
 STATUS_DIR="$PROJECT_DIR/data/report/threshold_cycle_postclose_status"
 STATUS_FILE="$STATUS_DIR/threshold_cycle_postclose_${TARGET_DATE}.status.json"
+POSTCLOSE_BOT_ISOLATION_MARKER="$PROJECT_DIR/tmp/postclose_bot_isolation.json"
 AI_CORRECTION_FINAL_STATUS="not_run"
 
 mkdir -p "$PROJECT_DIR/logs" "$STATUS_DIR"
@@ -122,6 +123,35 @@ PY
 BOT_WAS_RUNNING=false
 BOT_RESTART_DONE=false
 
+write_postclose_bot_isolation_marker() {
+  local started_at
+  started_at="$(TZ=Asia/Seoul date +%FT%T%:z)"
+  "$VENV_PY" - "$POSTCLOSE_BOT_ISOLATION_MARKER" "$TARGET_DATE" "$POSTCLOSE_BOT_SESSION" "$POSTCLOSE_BOT_ACTION" "$started_at" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+target_date, session, action, started_at = sys.argv[2:6]
+payload = {
+    "schema_version": 1,
+    "active": True,
+    "target_date": target_date,
+    "session": session,
+    "action": action,
+    "reason": "threshold_cycle_postclose_resource_isolation",
+    "started_at": started_at,
+    "runtime_effect": False,
+}
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+PY
+}
+
+clear_postclose_bot_isolation_marker() {
+  rm -f "$POSTCLOSE_BOT_ISOLATION_MARKER"
+}
+
 bot_session_exists() {
   command -v tmux >/dev/null 2>&1 && tmux has-session -t "$POSTCLOSE_BOT_SESSION" 2>/dev/null
 }
@@ -143,9 +173,13 @@ stop_postclose_bot_if_requested() {
     BOT_WAS_RUNNING=true
     echo "[threshold-cycle] stopping bot for postclose resource isolation session=$POSTCLOSE_BOT_SESSION action=$POSTCLOSE_BOT_ACTION"
     tmux kill-session -t "$POSTCLOSE_BOT_SESSION" 2>/dev/null || true
+    write_postclose_bot_isolation_marker
     sleep "$POSTCLOSE_BOT_RESTART_WAIT_SEC"
   else
     echo "[threshold-cycle] bot stop skipped reason=session_not_running session=$POSTCLOSE_BOT_SESSION action=$POSTCLOSE_BOT_ACTION"
+    if [ "$POSTCLOSE_BOT_ACTION" = "restart" ]; then
+      write_postclose_bot_isolation_marker
+    fi
   fi
 }
 
@@ -156,6 +190,7 @@ restart_postclose_bot_if_requested() {
   BOT_RESTART_DONE=true
   if bot_session_exists; then
     echo "[threshold-cycle] bot restart skipped reason=session_already_running session=$POSTCLOSE_BOT_SESSION"
+    clear_postclose_bot_isolation_marker
     return 0
   fi
   if [ "$BOT_WAS_RUNNING" = "true" ]; then
@@ -168,6 +203,7 @@ restart_postclose_bot_if_requested() {
       echo "[threshold-cycle] bot restart failed session=$POSTCLOSE_BOT_SESSION" >&2
       return 0
     }
+  clear_postclose_bot_isolation_marker
 }
 
 mark_postclose_failed() {

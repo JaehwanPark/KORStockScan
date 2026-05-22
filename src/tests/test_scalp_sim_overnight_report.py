@@ -169,6 +169,63 @@ def test_build_report_flags_active_undecided_positions(tmp_path, monkeypatch):
     assert "active_undecided_scalp_sim_overnight_positions" in report["summary"]["source_quality_warnings"]
 
 
+def test_build_report_does_not_reflag_event_decided_active_state(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    events_dir = data_dir / "pipeline_events"
+    events_dir.mkdir(parents=True)
+    target_date = "2026-05-19"
+    (events_dir / f"pipeline_events_{target_date}.jsonl").write_text(
+        json.dumps(
+            {
+                "stage": "scalp_sim_overnight_decision",
+                "stock_name": "A",
+                "stock_code": "000001",
+                "emitted_at": "2026-05-19T15:31:00",
+                "fields": {
+                    "sim_record_id": "SIM-A",
+                    "ai_action": "SELL_TODAY",
+                    "actual_order_submitted": "False",
+                    "broker_order_forbidden": "True",
+                    "decision_authority": "sim_observation_only",
+                    "runtime_effect": "sim_observation_only",
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "active_positions": [
+                    {
+                        "name": "A",
+                        "code": "000001",
+                        "status": "HOLDING",
+                        "strategy": "SCALPING",
+                        "simulation_book": "scalp_ai_buy_all",
+                        "scalp_live_simulator": True,
+                        "actual_order_submitted": False,
+                        "sim_record_id": "SIM-A",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(overnight, "DATA_DIR", data_dir)
+
+    report = overnight.build_report(target_date, state_path)
+
+    assert report["summary"]["decision_target"] == 1
+    assert report["summary"]["active_eligible_before_report"] == 1
+    assert report["summary"]["active_undecided_count"] == 0
+    assert report["summary"]["decision_coverage_rate"] == 1.0
+    assert report["summary"]["source_quality_status"] == "pass"
+
+
 def test_write_outputs_creates_json_and_md(tmp_path):
     report = {
         "target_date": "2026-05-19",

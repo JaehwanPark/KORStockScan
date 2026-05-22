@@ -1,55 +1,69 @@
 {
   "date": "2026-05-22",
-  "generated_at": "2026-05-22T11:24:32+09:00",
+  "generated_at": "2026-05-22T17:55:50+09:00",
   "report_type": "runtime_approval_summary",
   "purpose": "read_only_summary_only_no_runtime_mutation",
   "runtime_mutation_allowed": false,
   "sources": {
     "threshold_cycle_ev": "/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-22.json",
-    "swing_runtime_approval": null,
-    "scalp_entry_action_decision_matrix": null,
+    "swing_runtime_approval": "/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-05-22.json",
+    "scalp_entry_action_decision_matrix": "/home/ubuntu/KORStockScan/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_2026-05-22.json",
     "lifecycle_decision_matrix": "/home/ubuntu/KORStockScan/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_2026-05-22.json",
     "lifecycle_bucket_discovery": "/home/ubuntu/KORStockScan/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_2026-05-22.json",
-    "lifecycle_ai_context": null,
-    "lifecycle_ai_context_attribution": null,
-    "institutional_flow_context": null,
-    "pattern_lab_currentness_audit": null,
-    "pattern_lab_propagation_audit": null
+    "lifecycle_ai_context": "/home/ubuntu/KORStockScan/data/report/lifecycle_ai_context/lifecycle_ai_context_2026-05-22.json",
+    "lifecycle_ai_context_attribution": "/home/ubuntu/KORStockScan/data/report/lifecycle_ai_context_attribution/lifecycle_ai_context_attribution_2026-05-22.json",
+    "swing_lifecycle_decision_matrix": "/home/ubuntu/KORStockScan/data/report/swing_lifecycle_decision_matrix/swing_lifecycle_decision_matrix_2026-05-22.json",
+    "swing_lifecycle_bucket_discovery": "/home/ubuntu/KORStockScan/data/report/swing_lifecycle_bucket_discovery/swing_lifecycle_bucket_discovery_2026-05-22.json",
+    "institutional_flow_context": "/home/ubuntu/KORStockScan/data/report/institutional_flow_context/institutional_flow_context_2026-05-22.json",
+    "pattern_lab_currentness_audit": "/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-22.json",
+    "pattern_lab_ai_review": "/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-05-22.json",
+    "pattern_lab_propagation_audit": "/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-22.json"
   },
   "source_load_diagnostics": [],
   "summary": {
-    "scalping_items": 3,
-    "scalping_selected_auto_bounded_live": 1,
+    "scalping_items": 19,
+    "scalping_selected_auto_bounded_live": 3,
     "scalping_legacy_hard_gate_risk_counts": {
-      "no_unreviewed_hard_gate": 3
+      "approval_or_contract_required": 2,
+      "intentional_safety_guard": 4,
+      "manual_review_required": 2,
+      "no_unreviewed_hard_gate": 11
     },
-    "swing_blocked": 0,
-    "swing_legacy_hard_gate_risk_counts": {},
+    "swing_blocked": 14,
+    "swing_legacy_hard_gate_risk_counts": {
+      "contract_gap": 4,
+      "no_unreviewed_hard_gate": 3,
+      "same_stage_deferred": 2,
+      "sample_or_contract_gap": 3,
+      "source_quality_or_approval_required": 1,
+      "source_quality_or_contract_gap": 1
+    },
     "panic_approval_requested": 0,
-    "swing_requested": 0,
+    "swing_requested": 3,
     "swing_approved": 0,
-    "pattern_lab_currentness_status": "missing",
-    "pattern_lab_propagation_status": "missing",
-    "scalp_entry_adm_status": "missing",
-    "scalp_entry_adm_ready_for_daily_policy_tuning": false,
-    "scalp_entry_adm_warnings": [
-      "source_quality_blocker",
-      "joined_sample_below_sample_floor",
-      "prompt_context_not_loaded"
-    ],
+    "pattern_lab_currentness_status": "pass",
+    "pattern_lab_ai_review_status": "warning",
+    "pattern_lab_propagation_status": "pass",
+    "scalp_entry_adm_status": "pass",
+    "scalp_entry_adm_ready_for_daily_policy_tuning": true,
+    "scalp_entry_adm_warnings": [],
     "lifecycle_matrix_status": "pass",
     "lifecycle_matrix_ready_for_bounded_apply": true,
     "lifecycle_matrix_warnings": [],
     "lifecycle_bucket_discovery_status": "pass",
-    "lifecycle_bucket_discovery_surfaced_candidate_count": 94,
-    "lifecycle_bucket_discovery_live_auto_apply_ready_count": 0,
-    "lifecycle_ai_context_applied_count": 0,
-    "lifecycle_ai_context_prompt_stage_count": 0,
-    "swing_strategy_discovery_available": false,
-    "swing_strategy_discovery_labeled_sample_count": 0,
-    "swing_strategy_discovery_pending_future_quote_count": 0,
-    "institutional_flow_available": false,
-    "institutional_flow_join_rate_pct": 0.0
+    "lifecycle_bucket_discovery_surfaced_candidate_count": 120,
+    "lifecycle_bucket_discovery_live_auto_apply_ready_count": 1,
+    "lifecycle_ai_context_applied_count": 3237,
+    "lifecycle_ai_context_prompt_stage_count": 3,
+    "swing_strategy_discovery_available": true,
+    "swing_strategy_discovery_labeled_sample_count": 32,
+    "swing_strategy_discovery_pending_future_quote_count": 1118,
+    "swing_lifecycle_matrix_available": true,
+    "swing_lifecycle_matrix_sim_auto_candidate_count": 4,
+    "swing_lifecycle_bucket_discovery_available": true,
+    "swing_lifecycle_bucket_discovery_sim_auto_approved_count": 4,
+    "institutional_flow_available": true,
+    "institutional_flow_join_rate_pct": 100.0
   },
   "application_timing": {
     "runtime_env_file": "/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-05-22.env",
@@ -59,20 +73,45 @@
     "pre_env_boot_gap": true
   },
   "scalp_entry_action_decision_matrix": {
-    "available": false,
-    "artifact": null,
-    "status": "missing",
+    "available": true,
+    "artifact": "/home/ubuntu/KORStockScan/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_2026-05-22.json",
+    "status": "pass",
     "runtime_effect": false,
     "decision_authority": "entry_adm_runtime_bias_operator_override",
     "runtime_bias_scope": "force_wait_force_drop_buy_defensive_bias",
     "application_mode": "operator_override_runtime_bias",
     "primary_decision_metric": "source_quality_adjusted_ev_pct",
     "source_quality_adjusted_ev_pct": null,
-    "joined_action_ev_pct": null,
-    "top_actions": [],
-    "joined_sample": 0,
+    "joined_action_ev_pct": -0.0523,
+    "top_actions": [
+      {
+        "action": "WAIT_REQUOTE",
+        "sample_count": 5,
+        "joined_sample": 0,
+        "source_quality_adjusted_ev_pct": 0.0
+      },
+      {
+        "action": "NO_BUY_AI",
+        "sample_count": 1317,
+        "joined_sample": 102,
+        "source_quality_adjusted_ev_pct": -0.0523
+      },
+      {
+        "action": "SKIP_SOURCE_QUALITY",
+        "sample_count": 1,
+        "joined_sample": 0,
+        "source_quality_adjusted_ev_pct": 0.0
+      },
+      {
+        "action": "SKIP_PRE_SUBMIT_SAFETY",
+        "sample_count": 4,
+        "joined_sample": 0,
+        "source_quality_adjusted_ev_pct": 0.0
+      }
+    ],
+    "joined_sample": 102,
     "sample_floor": 20,
-    "prompt_applied_count": 0,
+    "prompt_applied_count": 1132,
     "missing_actions": [],
     "expected_actions": [
       "BUY_NOW",
@@ -84,12 +123,8 @@
       "SKIP_PRE_SUBMIT_SAFETY"
     ],
     "tuning_cycle": "scalp_entry_action_decision_matrix -> threshold_cycle_ev -> runtime_approval_summary -> code_improvement_workorder -> pattern_lab source bundle -> next runtime env",
-    "warnings": [
-      "source_quality_blocker",
-      "joined_sample_below_sample_floor",
-      "prompt_context_not_loaded"
-    ],
-    "ready_for_daily_policy_tuning": false
+    "warnings": [],
+    "ready_for_daily_policy_tuning": true
   },
   "lifecycle_decision_matrix": {
     "available": true,
@@ -101,92 +136,327 @@
     "runtime_bias_scope": "stage_action_proposal_micro_canary",
     "application_mode": "auto_bounded_micro_canary",
     "primary_decision_metric": "stage_ev_composite_pct",
-    "total_rows": 9863,
-    "joined_rows": 9641,
+    "total_rows": 35228,
+    "joined_rows": 33631,
     "sample_floor": 20,
     "policy_pass_count": 5,
-    "promote_ready_count": 0,
+    "promote_ready_count": 1,
     "entry_bucket_actionable_count": 0,
-    "entry_bucket_runtime_candidate_count": 0,
-    "entry_bucket_workorder_count": 8,
+    "entry_bucket_runtime_candidate_count": 6,
+    "entry_bucket_workorder_count": 10,
     "scale_in_bucket_actionable_count": 0,
     "scale_in_bucket_runtime_candidate_count": 10,
     "scale_in_bucket_workorder_count": 10,
     "overnight_bucket_actionable_count": 0,
     "overnight_bucket_runtime_candidate_count": 0,
     "overnight_bucket_workorder_count": 0,
-    "entry_bucket_runtime_approval_candidates": [],
+    "entry_bucket_runtime_approval_candidates": [
+      {
+        "candidate_id": "entry_bucket_10",
+        "bucket_type": "score_band",
+        "bucket_key": "score_66_69",
+        "recommended_route": "candidate_recovery_or_relax",
+        "source_quality_adjusted_ev_pct": 1.6584,
+        "joined_sample": 28,
+        "approval_required": true,
+        "allowed_runtime_apply": false,
+        "next_route": "threshold_cycle_runtime_approval_request_after_rolling_confirmation"
+      },
+      {
+        "candidate_id": "entry_bucket_12",
+        "bucket_type": "source_stage",
+        "bucket_key": "scalp_entry_action_decision_snapshot",
+        "recommended_route": "candidate_tighten_or_exclude",
+        "source_quality_adjusted_ev_pct": -0.3299,
+        "joined_sample": 102,
+        "approval_required": true,
+        "allowed_runtime_apply": false,
+        "next_route": "threshold_cycle_runtime_approval_request_after_rolling_confirmation"
+      },
+      {
+        "candidate_id": "entry_bucket_13",
+        "bucket_type": "source_stage",
+        "bucket_key": "wait6579_ev_cohort",
+        "recommended_route": "candidate_recovery_or_relax",
+        "source_quality_adjusted_ev_pct": 2.3199,
+        "joined_sample": 35,
+        "approval_required": true,
+        "allowed_runtime_apply": false,
+        "next_route": "threshold_cycle_runtime_approval_request_after_rolling_confirmation"
+      },
+      {
+        "candidate_id": "entry_bucket_14",
+        "bucket_type": "stale_bucket",
+        "bucket_key": "fresh",
+        "recommended_route": "candidate_tighten_or_exclude",
+        "source_quality_adjusted_ev_pct": -0.3696,
+        "joined_sample": 80,
+        "approval_required": true,
+        "allowed_runtime_apply": false,
+        "next_route": "threshold_cycle_runtime_approval_request_after_rolling_confirmation"
+      },
+      {
+        "candidate_id": "entry_bucket_15",
+        "bucket_type": "stale_bucket",
+        "bucket_key": "fresh_or_unflagged",
+        "recommended_route": "candidate_recovery_or_relax",
+        "source_quality_adjusted_ev_pct": 2.3199,
+        "joined_sample": 35,
+        "approval_required": true,
+        "allowed_runtime_apply": false,
+        "next_route": "threshold_cycle_runtime_approval_request_after_rolling_confirmation"
+      },
+      {
+        "candidate_id": "entry_bucket_19",
+        "bucket_type": "time_bucket",
+        "bucket_key": "time_1000_1200",
+        "recommended_route": "candidate_tighten_or_exclude",
+        "source_quality_adjusted_ev_pct": -0.8942,
+        "joined_sample": 33,
+        "approval_required": true,
+        "allowed_runtime_apply": false,
+        "next_route": "threshold_cycle_runtime_approval_request_after_rolling_confirmation"
+      }
+    ],
     "entry_bucket_code_improvement_workorders": [
       {
         "workorder_id": "entry_bucket_source_quality_1",
+        "bucket_type": "chosen_action",
+        "bucket_key": "NO_BUY_AI",
+        "reason": "bucket_has_edge_but_needs_rolling_or_feature_confirmation",
+        "recommended_route": "candidate_tighten_or_exclude",
+        "metric_role": "source_quality_gate",
+        "implementation_status": "implemented",
+        "implementation_provenance": {
+          "source_field_coverage": {},
+          "unknown_reason_counts": {},
+          "recommended_resolution": "none"
+        },
+        "runtime_effect": false
+      },
+      {
+        "workorder_id": "entry_bucket_source_quality_2",
         "bucket_type": "chosen_action",
         "bucket_key": "action_unknown",
         "reason": "bucket_has_edge_but_needs_rolling_or_feature_confirmation",
         "recommended_route": "candidate_recovery_or_relax",
         "metric_role": "source_quality_gate",
+        "implementation_status": "implemented",
+        "implementation_provenance": {
+          "source_field_coverage": {
+            "chosen_action": {
+              "source_fields": [
+                "runtime_features.chosen_action"
+              ],
+              "present_count": 0,
+              "sample_count": 218,
+              "coverage_rate": 0.0
+            }
+          },
+          "unknown_reason_counts": {
+            "missing_source_field": 1
+          },
+          "recommended_resolution": "emit_or_backfill_source_field"
+        },
         "runtime_effect": false
       },
       {
-        "workorder_id": "entry_bucket_source_quality_2",
+        "workorder_id": "entry_bucket_source_quality_3",
+        "bucket_type": "combo_entry_spot",
+        "bucket_key": "score=score_66_69|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_unknown|overbought=overbought_unknown|time=time_unknown",
+        "reason": "bucket_has_edge_but_needs_rolling_or_feature_confirmation",
+        "recommended_route": "candidate_recovery_or_relax",
+        "metric_role": "source_quality_gate",
+        "implementation_status": "implemented",
+        "implementation_provenance": {
+          "source_field_coverage": {
+            "liquidity": {
+              "source_fields": [
+                "runtime_features.liquidity_bucket"
+              ],
+              "present_count": 0,
+              "sample_count": 24,
+              "coverage_rate": 0.0
+            },
+            "overbought": {
+              "source_fields": [
+                "runtime_features.overbought_bucket"
+              ],
+              "present_count": 0,
+              "sample_count": 24,
+              "coverage_rate": 0.0
+            },
+            "time": {
+              "source_fields": [
+                "runtime_features.time_bucket"
+              ],
+              "present_count": 0,
+              "sample_count": 24,
+              "coverage_rate": 0.0
+            }
+          },
+          "unknown_reason_counts": {
+            "missing_source_field": 3
+          },
+          "recommended_resolution": "emit_or_backfill_source_field"
+        },
+        "runtime_effect": false
+      },
+      {
+        "workorder_id": "entry_bucket_source_quality_4",
+        "bucket_type": "combo_entry_spot",
+        "bucket_key": "score=score_60_62|source=scalp_entry_action_decision_snapshot|stale=fresh|liquidity=liquidity_unknown|overbought=overbought_unknown|time=time_1000_1200",
+        "reason": "bucket_has_edge_but_needs_rolling_or_feature_confirmation",
+        "recommended_route": "candidate_tighten_or_exclude",
+        "metric_role": "source_quality_gate",
+        "implementation_status": "implemented",
+        "implementation_provenance": {
+          "source_field_coverage": {
+            "liquidity": {
+              "source_fields": [
+                "runtime_features.liquidity_bucket"
+              ],
+              "present_count": 168,
+              "sample_count": 168,
+              "coverage_rate": 1.0
+            },
+            "overbought": {
+              "source_fields": [
+                "runtime_features.overbought_bucket"
+              ],
+              "present_count": 168,
+              "sample_count": 168,
+              "coverage_rate": 1.0
+            }
+          },
+          "unknown_reason_counts": {
+            "not_applicable": 2
+          },
+          "recommended_resolution": "mark_not_applicable_explicitly"
+        },
+        "runtime_effect": false
+      },
+      {
+        "workorder_id": "entry_bucket_source_quality_5",
         "bucket_type": "exit_rule",
         "bucket_key": "exit_unknown",
         "reason": "bucket_has_edge_but_needs_rolling_or_feature_confirmation",
         "recommended_route": "candidate_recovery_or_relax",
         "metric_role": "source_quality_gate",
+        "implementation_status": "implemented",
+        "implementation_provenance": {
+          "source_field_coverage": {
+            "exit_rule": {
+              "source_fields": [
+                "labels.exit_rule"
+              ],
+              "present_count": 0,
+              "sample_count": 1419,
+              "coverage_rate": 0.0
+            }
+          },
+          "unknown_reason_counts": {
+            "missing_source_field": 1
+          },
+          "recommended_resolution": "emit_or_backfill_source_field"
+        },
         "runtime_effect": false
       },
       {
-        "workorder_id": "entry_bucket_source_quality_3",
+        "workorder_id": "entry_bucket_source_quality_6",
+        "bucket_type": "exit_rule",
+        "bucket_key": "scalp_trailing_take_profit",
+        "reason": "bucket_has_edge_but_needs_rolling_or_feature_confirmation",
+        "recommended_route": "candidate_tighten_or_exclude",
+        "metric_role": "source_quality_gate",
+        "implementation_status": "implemented",
+        "implementation_provenance": {
+          "source_field_coverage": {},
+          "unknown_reason_counts": {},
+          "recommended_resolution": "none"
+        },
+        "runtime_effect": false
+      },
+      {
+        "workorder_id": "entry_bucket_source_quality_7",
+        "bucket_type": "exit_rule",
+        "bucket_key": "scalp_hard_stop_pct",
+        "reason": "bucket_has_edge_but_needs_rolling_or_feature_confirmation",
+        "recommended_route": "candidate_tighten_or_exclude",
+        "metric_role": "source_quality_gate",
+        "implementation_status": "implemented",
+        "implementation_provenance": {
+          "source_field_coverage": {},
+          "unknown_reason_counts": {},
+          "recommended_resolution": "none"
+        },
+        "runtime_effect": false
+      },
+      {
+        "workorder_id": "entry_bucket_source_quality_8",
         "bucket_type": "liquidity_bucket",
         "bucket_key": "liquidity_unknown",
         "reason": "bucket_has_edge_but_needs_rolling_or_feature_confirmation",
         "recommended_route": "candidate_recovery_or_relax",
         "metric_role": "source_quality_gate",
+        "implementation_status": "implemented",
+        "implementation_provenance": {
+          "source_field_coverage": {
+            "liquidity_bucket": {
+              "source_fields": [
+                "runtime_features.liquidity_bucket"
+              ],
+              "present_count": 1303,
+              "sample_count": 1521,
+              "coverage_rate": 0.8567
+            }
+          },
+          "unknown_reason_counts": {
+            "pre_instrumentation": 1
+          },
+          "recommended_resolution": "keep_collecting_post_instrumentation"
+        },
         "runtime_effect": false
       },
       {
-        "workorder_id": "entry_bucket_source_quality_4",
+        "workorder_id": "entry_bucket_source_quality_9",
         "bucket_type": "overbought_bucket",
         "bucket_key": "overbought_unknown",
         "reason": "bucket_has_edge_but_needs_rolling_or_feature_confirmation",
         "recommended_route": "candidate_recovery_or_relax",
         "metric_role": "source_quality_gate",
+        "implementation_status": "implemented",
+        "implementation_provenance": {
+          "source_field_coverage": {
+            "overbought_bucket": {
+              "source_fields": [
+                "runtime_features.overbought_bucket"
+              ],
+              "present_count": 1066,
+              "sample_count": 1284,
+              "coverage_rate": 0.8302
+            }
+          },
+          "unknown_reason_counts": {
+            "pre_instrumentation": 1
+          },
+          "recommended_resolution": "keep_collecting_post_instrumentation"
+        },
         "runtime_effect": false
       },
       {
-        "workorder_id": "entry_bucket_source_quality_5",
-        "bucket_type": "source_stage",
-        "bucket_key": "wait6579_ev_cohort",
+        "workorder_id": "entry_bucket_source_quality_10",
+        "bucket_type": "score_band",
+        "bucket_key": "score_66_69",
         "reason": "bucket_has_edge_but_needs_rolling_or_feature_confirmation",
         "recommended_route": "candidate_recovery_or_relax",
         "metric_role": "source_quality_gate",
-        "runtime_effect": false
-      },
-      {
-        "workorder_id": "entry_bucket_source_quality_6",
-        "bucket_type": "stale_bucket",
-        "bucket_key": "fresh_or_unflagged",
-        "reason": "bucket_has_edge_but_needs_rolling_or_feature_confirmation",
-        "recommended_route": "candidate_recovery_or_relax",
-        "metric_role": "source_quality_gate",
-        "runtime_effect": false
-      },
-      {
-        "workorder_id": "entry_bucket_source_quality_7",
-        "bucket_type": "strength_bucket",
-        "bucket_key": "strength_unknown",
-        "reason": "bucket_has_edge_but_needs_rolling_or_feature_confirmation",
-        "recommended_route": "candidate_recovery_or_relax",
-        "metric_role": "source_quality_gate",
-        "runtime_effect": false
-      },
-      {
-        "workorder_id": "entry_bucket_source_quality_8",
-        "bucket_type": "time_bucket",
-        "bucket_key": "time_unknown",
-        "reason": "bucket_has_edge_but_needs_rolling_or_feature_confirmation",
-        "recommended_route": "candidate_recovery_or_relax",
-        "metric_role": "source_quality_gate",
+        "implementation_status": "implemented",
+        "implementation_provenance": {
+          "source_field_coverage": {},
+          "unknown_reason_counts": {},
+          "recommended_resolution": "none"
+        },
         "runtime_effect": false
       }
     ],
@@ -196,8 +466,8 @@
         "bucket_type": "arm",
         "bucket_key": "AVG_DOWN",
         "recommended_route": "candidate_tighten_or_exclude",
-        "source_quality_adjusted_ev_pct": -0.5472,
-        "joined_sample": 3306,
+        "source_quality_adjusted_ev_pct": -0.3673,
+        "joined_sample": 14657,
         "approval_required": true,
         "allowed_runtime_apply": false,
         "decision_authority": "adm_ldm_scale_in_bucket_attribution_source_only",
@@ -205,11 +475,11 @@
       },
       {
         "candidate_id": "scale_in_bucket_2",
-        "bucket_type": "arm",
-        "bucket_key": "PYRAMID",
-        "recommended_route": "candidate_recovery_or_relax",
-        "source_quality_adjusted_ev_pct": 0.5504,
-        "joined_sample": 1560,
+        "bucket_type": "blocker_namespace",
+        "bucket_key": "AVG_DOWN",
+        "recommended_route": "candidate_tighten_or_exclude",
+        "source_quality_adjusted_ev_pct": -0.4206,
+        "joined_sample": 9960,
         "approval_required": true,
         "allowed_runtime_apply": false,
         "decision_authority": "adm_ldm_scale_in_bucket_attribution_source_only",
@@ -217,11 +487,11 @@
       },
       {
         "candidate_id": "scale_in_bucket_3",
-        "bucket_type": "blocker_namespace",
-        "bucket_key": "AVG_DOWN",
-        "recommended_route": "candidate_tighten_or_exclude",
-        "source_quality_adjusted_ev_pct": -0.6893,
-        "joined_sample": 2141,
+        "bucket_type": "blocker_reason",
+        "bucket_key": "profit_not_enough",
+        "recommended_route": "candidate_recovery_or_relax",
+        "source_quality_adjusted_ev_pct": 0.3993,
+        "joined_sample": 3633,
         "approval_required": true,
         "allowed_runtime_apply": false,
         "decision_authority": "adm_ldm_scale_in_bucket_attribution_source_only",
@@ -229,11 +499,11 @@
       },
       {
         "candidate_id": "scale_in_bucket_4",
-        "bucket_type": "blocker_namespace",
-        "bucket_key": "PYRAMID",
-        "recommended_route": "candidate_recovery_or_relax",
-        "source_quality_adjusted_ev_pct": 0.5504,
-        "joined_sample": 1560,
+        "bucket_type": "blocker_reason",
+        "bucket_key": "low_broken",
+        "recommended_route": "candidate_tighten_or_exclude",
+        "source_quality_adjusted_ev_pct": -0.3394,
+        "joined_sample": 402,
         "approval_required": true,
         "allowed_runtime_apply": false,
         "decision_authority": "adm_ldm_scale_in_bucket_attribution_source_only",
@@ -242,10 +512,10 @@
       {
         "candidate_id": "scale_in_bucket_5",
         "bucket_type": "blocker_reason",
-        "bucket_key": "profit_not_enough",
-        "recommended_route": "candidate_recovery_or_relax",
-        "source_quality_adjusted_ev_pct": 0.525,
-        "joined_sample": 1324,
+        "bucket_key": "pnl_out_of_range(-0.74)",
+        "recommended_route": "candidate_tighten_or_exclude",
+        "source_quality_adjusted_ev_pct": -0.6702,
+        "joined_sample": 335,
         "approval_required": true,
         "allowed_runtime_apply": false,
         "decision_authority": "adm_ldm_scale_in_bucket_attribution_source_only",
@@ -254,10 +524,10 @@
       {
         "candidate_id": "scale_in_bucket_6",
         "bucket_type": "blocker_reason",
-        "bucket_key": "low_broken",
+        "bucket_key": "pnl_out_of_range(-1.29)",
         "recommended_route": "candidate_tighten_or_exclude",
-        "source_quality_adjusted_ev_pct": -0.3345,
-        "joined_sample": 234,
+        "source_quality_adjusted_ev_pct": -1.184,
+        "joined_sample": 286,
         "approval_required": true,
         "allowed_runtime_apply": false,
         "decision_authority": "adm_ldm_scale_in_bucket_attribution_source_only",
@@ -266,10 +536,10 @@
       {
         "candidate_id": "scale_in_bucket_7",
         "bucket_type": "blocker_reason",
-        "bucket_key": "pnl_out_of_range(-0.82)",
+        "bucket_key": "pnl_out_of_range(-0.76)",
         "recommended_route": "candidate_tighten_or_exclude",
-        "source_quality_adjusted_ev_pct": -0.7169,
-        "joined_sample": 52,
+        "source_quality_adjusted_ev_pct": -0.6967,
+        "joined_sample": 89,
         "approval_required": true,
         "allowed_runtime_apply": false,
         "decision_authority": "adm_ldm_scale_in_bucket_attribution_source_only",
@@ -278,10 +548,10 @@
       {
         "candidate_id": "scale_in_bucket_8",
         "bucket_type": "blocker_reason",
-        "bucket_key": "pnl_out_of_range(-0.96)",
+        "bucket_key": "pnl_out_of_range(-0.71)",
         "recommended_route": "candidate_tighten_or_exclude",
-        "source_quality_adjusted_ev_pct": -0.7881,
-        "joined_sample": 51,
+        "source_quality_adjusted_ev_pct": -0.5846,
+        "joined_sample": 76,
         "approval_required": true,
         "allowed_runtime_apply": false,
         "decision_authority": "adm_ldm_scale_in_bucket_attribution_source_only",
@@ -290,10 +560,10 @@
       {
         "candidate_id": "scale_in_bucket_9",
         "bucket_type": "blocker_reason",
-        "bucket_key": "pnl_out_of_range(-0.76)",
+        "bucket_key": "pnl_out_of_range(-0.96)",
         "recommended_route": "candidate_tighten_or_exclude",
-        "source_quality_adjusted_ev_pct": -0.6882,
-        "joined_sample": 46,
+        "source_quality_adjusted_ev_pct": -0.7814,
+        "joined_sample": 73,
         "approval_required": true,
         "allowed_runtime_apply": false,
         "decision_authority": "adm_ldm_scale_in_bucket_attribution_source_only",
@@ -302,10 +572,10 @@
       {
         "candidate_id": "scale_in_bucket_10",
         "bucket_type": "blocker_reason",
-        "bucket_key": "pnl_out_of_range(-0.90)",
+        "bucket_key": "pnl_out_of_range(-0.82)",
         "recommended_route": "candidate_tighten_or_exclude",
-        "source_quality_adjusted_ev_pct": -0.7983,
-        "joined_sample": 38,
+        "source_quality_adjusted_ev_pct": -0.7168,
+        "joined_sample": 66,
         "approval_required": true,
         "allowed_runtime_apply": false,
         "decision_authority": "adm_ldm_scale_in_bucket_attribution_source_only",
@@ -320,96 +590,156 @@
         "reason": "scale_in_arm_bucket_needs_source_quality_or_threshold_cycle_confirmation",
         "recommended_route": "candidate_tighten_or_exclude",
         "metric_role": "source_quality_gate",
+        "implementation_status": "implemented",
+        "implementation_provenance": {
+          "source_field_coverage": {},
+          "unknown_reason_counts": {},
+          "recommended_resolution": "none"
+        },
         "runtime_effect": false,
         "allowed_runtime_apply": false
       },
       {
         "workorder_id": "scale_in_bucket_source_quality_2",
-        "bucket_type": "arm",
-        "bucket_key": "PYRAMID",
-        "reason": "scale_in_arm_bucket_needs_source_quality_or_threshold_cycle_confirmation",
-        "recommended_route": "candidate_recovery_or_relax",
-        "metric_role": "source_quality_gate",
-        "runtime_effect": false,
-        "allowed_runtime_apply": false
-      },
-      {
-        "workorder_id": "scale_in_bucket_source_quality_3",
         "bucket_type": "blocker_namespace",
         "bucket_key": "AVG_DOWN",
         "reason": "scale_in_arm_bucket_needs_source_quality_or_threshold_cycle_confirmation",
         "recommended_route": "candidate_tighten_or_exclude",
         "metric_role": "source_quality_gate",
+        "implementation_status": "implemented",
+        "implementation_provenance": {
+          "source_field_coverage": {},
+          "unknown_reason_counts": {},
+          "recommended_resolution": "none"
+        },
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      {
+        "workorder_id": "scale_in_bucket_source_quality_3",
+        "bucket_type": "blocker_reason",
+        "bucket_key": "profit_not_enough",
+        "reason": "scale_in_arm_bucket_needs_source_quality_or_threshold_cycle_confirmation",
+        "recommended_route": "candidate_recovery_or_relax",
+        "metric_role": "source_quality_gate",
+        "implementation_status": "implemented",
+        "implementation_provenance": {
+          "source_field_coverage": {},
+          "unknown_reason_counts": {},
+          "recommended_resolution": "none"
+        },
         "runtime_effect": false,
         "allowed_runtime_apply": false
       },
       {
         "workorder_id": "scale_in_bucket_source_quality_4",
-        "bucket_type": "blocker_namespace",
-        "bucket_key": "PYRAMID",
+        "bucket_type": "blocker_reason",
+        "bucket_key": "low_broken",
         "reason": "scale_in_arm_bucket_needs_source_quality_or_threshold_cycle_confirmation",
-        "recommended_route": "candidate_recovery_or_relax",
+        "recommended_route": "candidate_tighten_or_exclude",
         "metric_role": "source_quality_gate",
+        "implementation_status": "implemented",
+        "implementation_provenance": {
+          "source_field_coverage": {},
+          "unknown_reason_counts": {},
+          "recommended_resolution": "none"
+        },
         "runtime_effect": false,
         "allowed_runtime_apply": false
       },
       {
         "workorder_id": "scale_in_bucket_source_quality_5",
         "bucket_type": "blocker_reason",
-        "bucket_key": "profit_not_enough",
+        "bucket_key": "pnl_out_of_range(-0.74)",
         "reason": "scale_in_arm_bucket_needs_source_quality_or_threshold_cycle_confirmation",
-        "recommended_route": "candidate_recovery_or_relax",
+        "recommended_route": "candidate_tighten_or_exclude",
         "metric_role": "source_quality_gate",
+        "implementation_status": "implemented",
+        "implementation_provenance": {
+          "source_field_coverage": {},
+          "unknown_reason_counts": {},
+          "recommended_resolution": "none"
+        },
         "runtime_effect": false,
         "allowed_runtime_apply": false
       },
       {
         "workorder_id": "scale_in_bucket_source_quality_6",
         "bucket_type": "blocker_reason",
-        "bucket_key": "low_broken",
+        "bucket_key": "pnl_out_of_range(-1.29)",
         "reason": "scale_in_arm_bucket_needs_source_quality_or_threshold_cycle_confirmation",
         "recommended_route": "candidate_tighten_or_exclude",
         "metric_role": "source_quality_gate",
+        "implementation_status": "implemented",
+        "implementation_provenance": {
+          "source_field_coverage": {},
+          "unknown_reason_counts": {},
+          "recommended_resolution": "none"
+        },
         "runtime_effect": false,
         "allowed_runtime_apply": false
       },
       {
         "workorder_id": "scale_in_bucket_source_quality_7",
         "bucket_type": "blocker_reason",
-        "bucket_key": "pnl_out_of_range(-0.82)",
+        "bucket_key": "pnl_out_of_range(-0.76)",
         "reason": "scale_in_arm_bucket_needs_source_quality_or_threshold_cycle_confirmation",
         "recommended_route": "candidate_tighten_or_exclude",
         "metric_role": "source_quality_gate",
+        "implementation_status": "implemented",
+        "implementation_provenance": {
+          "source_field_coverage": {},
+          "unknown_reason_counts": {},
+          "recommended_resolution": "none"
+        },
         "runtime_effect": false,
         "allowed_runtime_apply": false
       },
       {
         "workorder_id": "scale_in_bucket_source_quality_8",
         "bucket_type": "blocker_reason",
-        "bucket_key": "pnl_out_of_range(-0.96)",
+        "bucket_key": "pnl_out_of_range(-0.71)",
         "reason": "scale_in_arm_bucket_needs_source_quality_or_threshold_cycle_confirmation",
         "recommended_route": "candidate_tighten_or_exclude",
         "metric_role": "source_quality_gate",
+        "implementation_status": "implemented",
+        "implementation_provenance": {
+          "source_field_coverage": {},
+          "unknown_reason_counts": {},
+          "recommended_resolution": "none"
+        },
         "runtime_effect": false,
         "allowed_runtime_apply": false
       },
       {
         "workorder_id": "scale_in_bucket_source_quality_9",
         "bucket_type": "blocker_reason",
-        "bucket_key": "pnl_out_of_range(-0.76)",
+        "bucket_key": "pnl_out_of_range(-0.96)",
         "reason": "scale_in_arm_bucket_needs_source_quality_or_threshold_cycle_confirmation",
         "recommended_route": "candidate_tighten_or_exclude",
         "metric_role": "source_quality_gate",
+        "implementation_status": "implemented",
+        "implementation_provenance": {
+          "source_field_coverage": {},
+          "unknown_reason_counts": {},
+          "recommended_resolution": "none"
+        },
         "runtime_effect": false,
         "allowed_runtime_apply": false
       },
       {
         "workorder_id": "scale_in_bucket_source_quality_10",
         "bucket_type": "blocker_reason",
-        "bucket_key": "pnl_out_of_range(-0.90)",
+        "bucket_key": "pnl_out_of_range(-0.82)",
         "reason": "scale_in_arm_bucket_needs_source_quality_or_threshold_cycle_confirmation",
         "recommended_route": "candidate_tighten_or_exclude",
         "metric_role": "source_quality_gate",
+        "implementation_status": "implemented",
+        "implementation_provenance": {
+          "source_field_coverage": {},
+          "unknown_reason_counts": {},
+          "recommended_resolution": "none"
+        },
         "runtime_effect": false,
         "allowed_runtime_apply": false
       }
@@ -419,19 +749,19 @@
     "policy_entries": [
       {
         "stage": "entry",
-        "sample": 100,
-        "joined_sample": 16,
-        "stage_ev_composite_pct": 3.4568,
-        "confidence": 0.256,
+        "sample": 1521,
+        "joined_sample": 137,
+        "stage_ev_composite_pct": 0.3471,
+        "confidence": 1.0,
         "selected_action": "BUY_DEFENSIVE",
         "source_quality_gate": "pass",
-        "promote_ready": false
+        "promote_ready": true
       },
       {
         "stage": "submit",
-        "sample": 89,
-        "joined_sample": 75,
-        "stage_ev_composite_pct": -0.6286,
+        "sample": 129,
+        "joined_sample": 123,
+        "stage_ev_composite_pct": -0.2676,
         "confidence": 1.0,
         "selected_action": "NO_CHANGE",
         "source_quality_gate": "pass",
@@ -439,9 +769,9 @@
       },
       {
         "stage": "holding",
-        "sample": 89,
-        "joined_sample": 75,
-        "stage_ev_composite_pct": -0.6204,
+        "sample": 145,
+        "joined_sample": 123,
+        "stage_ev_composite_pct": -0.4473,
         "confidence": 1.0,
         "selected_action": "EXIT",
         "source_quality_gate": "pass",
@@ -449,9 +779,9 @@
       },
       {
         "stage": "scale_in",
-        "sample": 9296,
-        "joined_sample": 9289,
-        "stage_ev_composite_pct": -0.142,
+        "sample": 32811,
+        "joined_sample": 32785,
+        "stage_ev_composite_pct": -0.159,
         "confidence": 1.0,
         "selected_action": "NO_CHANGE",
         "source_quality_gate": "pass",
@@ -459,9 +789,9 @@
       },
       {
         "stage": "exit",
-        "sample": 289,
-        "joined_sample": 186,
-        "stage_ev_composite_pct": -0.4256,
+        "sample": 622,
+        "joined_sample": 463,
+        "stage_ev_composite_pct": -0.428,
         "confidence": 1.0,
         "selected_action": "EXIT",
         "source_quality_gate": "pass",
@@ -511,106 +841,132 @@
     "status": "pass",
     "runtime_effect": false,
     "decision_authority": "postclose_lifecycle_bucket_discovery_classifier",
-    "candidate_count": 229,
-    "surfaced_candidate_count": 94,
-    "sim_auto_approved_count": 84,
-    "live_auto_apply_ready_count": 0,
+    "candidate_count": 379,
+    "surfaced_candidate_count": 120,
+    "sim_auto_approved_count": 119,
+    "live_auto_apply_ready_count": 1,
     "human_intervention_required": false,
     "state_counts": {
-      "sim_auto_approved": 84,
-      "new_bucket_candidate": 10,
-      "source_only_keep_collecting": 135
+      "live_auto_apply_ready": 1,
+      "sim_auto_approved": 119,
+      "source_only_keep_collecting": 259
     },
     "surfaced_candidate_ids": [
+      "entry:combo_entry_spot:score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liquidity_unknown",
+      "entry:chosen_action:no_buy_ai",
+      "entry:source_stage:scalp_entry_action_decision_snapshot",
+      "entry:stale_bucket:fresh",
       "entry:source_stage:wait6579_ev_cohort",
       "entry:stale_bucket:fresh_or_unflagged",
-      "entry:chosen_action:action_unknown",
-      "entry:exit_rule:exit_unknown",
-      "entry:liquidity_bucket:liquidity_unknown",
-      "entry:overbought_bucket:overbought_unknown",
-      "entry:strength_bucket:strength_unknown",
-      "entry:time_bucket:time_unknown",
+      "entry:exit_rule:scalp_trailing_take_profit",
+      "entry:time_bucket:time_1000_1200",
+      "entry:score_band:score_66_69",
+      "entry:exit_rule:scalp_hard_stop_pct",
+      "entry:score_band:score_63_65",
       "scale_in:arm:avg_down",
       "scale_in:blocker_namespace:avg_down",
-      "scale_in:arm:pyramid",
-      "scale_in:blocker_namespace:pyramid",
       "scale_in:blocker_reason:profit_not_enough",
       "scale_in:blocker_reason:low_broken",
-      "scale_in:blocker_reason:pnl_out_of_range_0_82",
-      "scale_in:blocker_reason:pnl_out_of_range_0_96",
+      "scale_in:blocker_reason:pnl_out_of_range_0_74",
+      "scale_in:blocker_reason:pnl_out_of_range_1_29",
       "scale_in:blocker_reason:pnl_out_of_range_0_76",
-      "scale_in:blocker_reason:pnl_out_of_range_0_90",
-      "scale_in:blocker_reason:pnl_out_of_range_1_12",
-      "scale_in:blocker_reason:pnl_out_of_range_1_20",
-      "scale_in:blocker_reason:trend_not_strong",
-      "scale_in:blocker_reason:ok",
       "scale_in:blocker_reason:pnl_out_of_range_0_71",
-      "scale_in:blocker_reason:pnl_out_of_range_0_94",
+      "scale_in:blocker_reason:pnl_out_of_range_0_96",
+      "scale_in:blocker_reason:pnl_out_of_range_0_82",
+      "scale_in:blocker_reason:pnl_out_of_range_1_12",
       "scale_in:blocker_reason:pnl_out_of_range_1_28",
       "scale_in:blocker_reason:pnl_out_of_range_0_73",
+      "scale_in:blocker_reason:pnl_out_of_range_0_94",
+      "scale_in:blocker_reason:pnl_out_of_range_1_15",
       "scale_in:blocker_reason:pnl_out_of_range_1_24",
-      "scale_in:blocker_reason:pnl_out_of_range_1_41",
-      "scale_in:blocker_reason:pnl_out_of_range_0_74",
-      "scale_in:blocker_reason:pnl_out_of_range_0_75",
+      "scale_in:blocker_reason:ok",
+      "scale_in:blocker_reason:pnl_out_of_range_1_20",
+      "scale_in:blocker_reason:pnl_out_of_range_0_85",
+      "scale_in:blocker_reason:pnl_out_of_range_0_90",
+      "scale_in:blocker_reason:pnl_out_of_range_1_05",
+      "scale_in:blocker_reason:trend_not_strong",
+      "scale_in:blocker_reason:pnl_out_of_range_0_86",
       "scale_in:blocker_reason:pnl_out_of_range_0_89",
-      "scale_in:blocker_reason:pnl_out_of_range_1_38",
-      "scale_in:blocker_reason:pnl_out_of_range_1_30",
-      "scale_in:blocker_reason:pnl_out_of_range_0_99",
+      "scale_in:blocker_reason:pnl_out_of_range_0_78",
+      "scale_in:blocker_reason:pnl_out_of_range_0_87",
+      "scale_in:blocker_reason:pnl_out_of_range_0_98",
       "scale_in:blocker_reason:pnl_out_of_range_1_07",
+      "scale_in:blocker_reason:pnl_out_of_range_0_97",
+      "scale_in:blocker_reason:pnl_out_of_range_0_95",
+      "scale_in:blocker_reason:pnl_out_of_range_1_09",
+      "scale_in:blocker_reason:pnl_out_of_range_1_11",
       "scale_in:blocker_reason:pnl_out_of_range_1_25",
+      "scale_in:blocker_reason:pnl_out_of_range_1_41",
+      "scale_in:blocker_reason:pnl_out_of_range_1_23",
+      "scale_in:blocker_reason:pnl_out_of_range_0_99",
       "scale_in:blocker_reason:pnl_out_of_range_1_44",
+      "scale_in:blocker_reason:pnl_out_of_range_1_02",
+      "scale_in:blocker_reason:pnl_out_of_range_1_33",
+      "scale_in:blocker_reason:pnl_out_of_range_1_38",
+      "scale_in:blocker_reason:pnl_out_of_range_1_49",
+      "scale_in:blocker_reason:pnl_out_of_range_0_75",
+      "scale_in:blocker_reason:hold_sec_out_of_range_7s",
+      "scale_in:blocker_reason:pnl_out_of_range_0_72",
+      "scale_in:blocker_reason:pnl_out_of_range_1_30",
+      "scale_in:blocker_reason:pnl_out_of_range_0_92",
+      "scale_in:blocker_reason:pnl_out_of_range_1_03",
+      "scale_in:blocker_reason:pnl_out_of_range_1_18",
+      "scale_in:blocker_reason:pnl_out_of_range_1_35",
       "scale_in:blocker_reason:pnl_out_of_range_1_68",
+      "scale_in:blocker_reason:pnl_out_of_range_0_88",
       "scale_in:blocker_reason:pnl_out_of_range_1_00",
       "scale_in:blocker_reason:pnl_out_of_range_0_79",
-      "scale_in:blocker_reason:pnl_out_of_range_0_86",
-      "scale_in:blocker_reason:pnl_out_of_range_1_05",
-      "scale_in:blocker_reason:pnl_out_of_range_1_09",
-      "scale_in:blocker_reason:pnl_out_of_range_1_23",
-      "scale_in:blocker_reason:pnl_out_of_range_1_49",
-      "scale_in:blocker_reason:pnl_out_of_range_1_11",
-      "scale_in:blocker_reason:pnl_out_of_range_1_18",
+      "scale_in:blocker_reason:pnl_out_of_range_1_17",
       "scale_in:blocker_reason:pnl_out_of_range_1_50",
-      "scale_in:blocker_reason:pnl_out_of_range_0_81",
-      "scale_in:blocker_reason:pnl_out_of_range_0_85",
-      "scale_in:blocker_reason:pnl_out_of_range_1_13",
-      "scale_in:blocker_reason:hold_sec_out_of_range_7s",
-      "scale_in:blocker_reason:pnl_out_of_range_1_15",
-      "scale_in:blocker_reason:pnl_out_of_range_1_16",
-      "scale_in:blocker_reason:pnl_out_of_range_1_35",
-      "scale_in:blocker_reason:pnl_out_of_range_1_26",
-      "scale_in:blocker_reason:pnl_out_of_range_1_32",
+      "scale_in:blocker_reason:pnl_out_of_range_0_91",
       "scale_in:blocker_reason:pnl_out_of_range_1_36",
       "scale_in:blocker_reason:hold_sec_out_of_range_11s",
-      "scale_in:blocker_reason:pnl_out_of_range_0_95",
-      "scale_in:blocker_reason:pnl_out_of_range_1_02",
-      "scale_in:blocker_reason:pnl_out_of_range_1_48",
+      "scale_in:blocker_reason:pnl_out_of_range_1_19",
       "scale_in:blocker_reason:pnl_out_of_range_1_51",
+      "scale_in:blocker_reason:pnl_out_of_range_0_81",
       "scale_in:blocker_reason:pnl_out_of_range_0_83",
-      "scale_in:blocker_reason:pnl_out_of_range_0_92",
-      "scale_in:blocker_reason:pnl_out_of_range_0_87",
+      "scale_in:blocker_reason:pnl_out_of_range_1_13",
+      "scale_in:blocker_reason:pnl_out_of_range_1_32",
+      "scale_in:blocker_reason:pnl_out_of_range_0_84",
+      "scale_in:blocker_reason:pnl_out_of_range_1_16",
+      "scale_in:blocker_reason:pnl_out_of_range_1_43",
+      "scale_in:blocker_reason:pnl_out_of_range_1_26",
+      "scale_in:blocker_reason:pnl_out_of_range_1_37",
+      "scale_in:blocker_reason:pnl_out_of_range_1_40",
+      "scale_in:blocker_reason:pnl_out_of_range_1_46",
+      "scale_in:blocker_reason:pnl_out_of_range_1_48",
+      "scale_in:blocker_reason:hold_sec_out_of_range_220s",
       "scale_in:blocker_reason:pnl_out_of_range_0_93",
+      "scale_in:blocker_reason:pnl_out_of_range_1_14",
+      "scale_in:blocker_reason:pnl_out_of_range_1_31",
       "scale_in:blocker_reason:pnl_out_of_range_1_62",
       "scale_in:blocker_reason:pnl_out_of_range_1_66",
+      "scale_in:blocker_reason:pnl_out_of_range_1_78",
+      "scale_in:blocker_reason:scalp_sim_scale_in_window_expansion",
       "scale_in:blocker_reason:pnl_out_of_range_0_80",
       "scale_in:blocker_reason:pnl_out_of_range_1_42",
-      "scale_in:blocker_reason:pnl_out_of_range_0_78",
-      "scale_in:blocker_reason:pnl_out_of_range_0_88",
-      "scale_in:blocker_reason:pnl_out_of_range_1_03",
-      "scale_in:blocker_reason:pnl_out_of_range_1_33",
-      "scale_in:blocker_reason:pnl_out_of_range_1_40",
-      "scale_in:blocker_reason:pnl_out_of_range_1_43",
+      "scale_in:blocker_reason:buy_side_paused",
+      "scale_in:blocker_reason:forced",
+      "scale_in:blocker_reason:hold_sec_out_of_range_182s",
+      "scale_in:blocker_reason:hold_sec_out_of_range_265s",
+      "scale_in:blocker_reason:hold_sec_out_of_range_2975s",
+      "scale_in:blocker_reason:hold_sec_out_of_range_357s",
+      "scale_in:blocker_reason:hold_sec_out_of_range_399s",
+      "scale_in:blocker_reason:pnl_out_of_range_1_10",
+      "scale_in:blocker_reason:pnl_out_of_range_1_39",
       "scale_in:blocker_reason:pnl_out_of_range_1_45",
       "scale_in:blocker_reason:pnl_out_of_range_1_47",
       "scale_in:blocker_reason:pnl_out_of_range_1_61",
       "scale_in:blocker_reason:pnl_out_of_range_1_63",
-      "scale_in:blocker_reason:pnl_out_of_range_1_78",
       "scale_in:blocker_reason:hold_sec_out_of_range_1186s",
+      "scale_in:blocker_reason:hold_sec_out_of_range_1860s",
+      "scale_in:blocker_reason:hold_sec_out_of_range_229s",
+      "scale_in:blocker_reason:hold_sec_out_of_range_252s",
+      "scale_in:blocker_reason:hold_sec_out_of_range_2587s",
       "scale_in:blocker_reason:hold_sec_out_of_range_264s",
-      "scale_in:blocker_reason:pnl_out_of_range_1_10",
-      "scale_in:ai_score_source:ai_source_unknown",
-      "scale_in:arm:arm_unknown",
-      "scale_in:blocker_namespace:blocker_namespace_unknown",
-      "scale_in:blocker_reason:blocker_reason_unknown",
+      "scale_in:blocker_reason:hold_sec_out_of_range_285s",
+      "scale_in:blocker_reason:hold_sec_out_of_range_507s",
+      "scale_in:blocker_reason:pnl_out_of_range_1_58",
       "entry:stage_policy:entry_weighted_adm_v1",
       "submit:stage_policy:submit_weighted_adm_v1",
       "holding:stage_policy:holding_weighted_adm_v1",
@@ -619,100 +975,1108 @@
     ]
   },
   "lifecycle_ai_context": {
-    "available": false,
-    "artifact": null,
-    "context_version": "-",
-    "prompt_stage_count": 0,
+    "available": true,
+    "artifact": "/home/ubuntu/KORStockScan/data/report/lifecycle_ai_context/lifecycle_ai_context_2026-05-22.json",
+    "context_version": "lifecycle_ai_context_v1_2026-05-22",
     "runtime_effect": false,
-    "decision_authority": "ai_advisory_prompt_context_only"
+    "decision_authority": "ai_advisory_prompt_context_only",
+    "provider_status": {
+      "provider": "none",
+      "status": "deterministic_fallback",
+      "schema_name": "lifecycle_ai_context_v1",
+      "fallback_used": true
+    },
+    "prompt_stage_count": 3,
+    "stage_contexts": [
+      {
+        "stage": "entry",
+        "prompt_injection_allowed": true,
+        "policy_key": "entry:weighted_adm_v1",
+        "alignment_hint": "BUY_DEFENSIVE",
+        "context_contribution_score": 0.3478,
+        "attribution_quality_status": "observational_only_pending_outcome"
+      },
+      {
+        "stage": "submit",
+        "prompt_injection_allowed": false,
+        "policy_key": "submit:weighted_adm_v1",
+        "alignment_hint": "NO_CHANGE",
+        "context_contribution_score": 0.0,
+        "attribution_quality_status": "hold_sample"
+      },
+      {
+        "stage": "holding",
+        "prompt_injection_allowed": true,
+        "policy_key": "holding:weighted_adm_v1",
+        "alignment_hint": "EXIT",
+        "context_contribution_score": 0.0,
+        "attribution_quality_status": "hold_sample"
+      },
+      {
+        "stage": "scale_in",
+        "prompt_injection_allowed": false,
+        "policy_key": "scale_in:weighted_adm_v1",
+        "alignment_hint": "NO_CHANGE",
+        "context_contribution_score": 0.0,
+        "attribution_quality_status": "hold_sample"
+      },
+      {
+        "stage": "exit",
+        "prompt_injection_allowed": true,
+        "policy_key": "exit:weighted_adm_v1",
+        "alignment_hint": "EXIT",
+        "context_contribution_score": 0.0,
+        "attribution_quality_status": "hold_sample"
+      }
+    ]
   },
   "lifecycle_ai_context_attribution": {
-    "available": false,
-    "artifact": null,
-    "context_eligible_count": 0,
-    "context_applied_count": 0,
+    "available": true,
+    "artifact": "/home/ubuntu/KORStockScan/data/report/lifecycle_ai_context_attribution/lifecycle_ai_context_attribution_2026-05-22.json",
     "runtime_effect": false,
-    "decision_authority": "postclose_context_attribution_only"
+    "decision_authority": "postclose_context_attribution_only",
+    "implementation_status": "implemented",
+    "implementation_checks": [
+      {
+        "name": "stage_attribution_contract",
+        "status": "pass",
+        "observed_stage_count": 5,
+        "expected_stage_count": 5
+      },
+      {
+        "name": "runtime_effect_contract",
+        "status": "pass",
+        "runtime_effect": false
+      },
+      {
+        "name": "forbidden_use_contract",
+        "status": "pass",
+        "forbidden_uses": [
+          "real_order_gate",
+          "pre_submit_block",
+          "provider_route",
+          "bot_restart",
+          "threshold_env_mutation",
+          "telegram_buy_sell"
+        ]
+      }
+    ],
+    "implementation_provenance": {
+      "order_id": "order_lifecycle_ai_context_attribution_feedback",
+      "scope": "instrumentation_report_provenance_only",
+      "runtime_effect": false,
+      "allowed_runtime_apply": false,
+      "decision_authority": "postclose_context_attribution_only",
+      "feedback_target": "lifecycle_decision_matrix.policy_entries",
+      "forbidden_uses": [
+        "real_order_gate",
+        "pre_submit_block",
+        "provider_route",
+        "bot_restart",
+        "threshold_env_mutation",
+        "telegram_buy_sell"
+      ]
+    },
+    "context_eligible_count": 3237,
+    "context_applied_count": 3237,
+    "context_skipped_count": 0,
+    "replay_budget": 30,
+    "stage_quality_counts": {
+      "observational_only_pending_outcome": 1,
+      "hold_sample": 4
+    },
+    "stage_attribution": {
+      "entry": {
+        "context_contribution_score": 0.3478,
+        "bounded_auxiliary_weight": 0.0522,
+        "attribution_quality_status": "observational_only_pending_outcome",
+        "source_quality_adjusted_ev_pct": null,
+        "ai_action_alignment_rate": 0.9969,
+        "no_context_replay_observed": 0
+      },
+      "submit": {
+        "context_contribution_score": 0.0,
+        "bounded_auxiliary_weight": 0.0,
+        "attribution_quality_status": "hold_sample",
+        "source_quality_adjusted_ev_pct": null,
+        "ai_action_alignment_rate": null,
+        "no_context_replay_observed": 0
+      },
+      "holding": {
+        "context_contribution_score": 0.0,
+        "bounded_auxiliary_weight": 0.0,
+        "attribution_quality_status": "hold_sample",
+        "source_quality_adjusted_ev_pct": null,
+        "ai_action_alignment_rate": null,
+        "no_context_replay_observed": 0
+      },
+      "scale_in": {
+        "context_contribution_score": 0.0,
+        "bounded_auxiliary_weight": 0.0,
+        "attribution_quality_status": "hold_sample",
+        "source_quality_adjusted_ev_pct": null,
+        "ai_action_alignment_rate": null,
+        "no_context_replay_observed": 0
+      },
+      "exit": {
+        "context_contribution_score": 0.0,
+        "bounded_auxiliary_weight": 0.0,
+        "attribution_quality_status": "hold_sample",
+        "source_quality_adjusted_ev_pct": null,
+        "ai_action_alignment_rate": null,
+        "no_context_replay_observed": 0
+      }
+    }
   },
   "swing_strategy_discovery": {
     "family": "swing_strategy_discovery_sim",
-    "available": false,
-    "artifact": null,
+    "available": true,
+    "artifact": "/home/ubuntu/KORStockScan/data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_2026-05-22.json",
     "description": "스윙 safe pool 전체를 공격적 sim-only lifecycle arm으로 전개하고 label/EV를 축적하는 source-only 탐색 축",
     "baseline_application": "source-only: 가상 후보/arm/label/EV 분석만 수행, runtime threshold apply 권한 없음",
     "runtime_effect": false,
     "runtime_mutation_allowed": false,
     "decision_authority": "swing_sim_exploration_only",
-    "candidate_count": 0,
-    "arm_count": 0,
-    "labeled_sample_count": 0,
-    "pending_future_quote_count": 0,
-    "top_surviving_arm": null,
-    "avoid_bucket_count": 0,
+    "candidate_count": 150,
+    "arm_count": 1200,
+    "labeled_sample_count": 32,
+    "pending_future_quote_count": 1118,
+    "top_surviving_arm": "arm05_breakout_conf_trailing",
+    "avoid_bucket_count": 1,
     "state_interpretation": "source-only exploration. Surviving arms can create future source-quality/workorder inputs but cannot apply runtime env.",
     "warnings": [
-      "swing_strategy_discovery_ev_missing"
+      "pending_future_quotes"
     ]
+  },
+  "swing_lifecycle_decision_matrix": {
+    "family": "swing_lifecycle_decision_matrix",
+    "available": true,
+    "artifact": "/home/ubuntu/KORStockScan/data/report/swing_lifecycle_decision_matrix/swing_lifecycle_decision_matrix_2026-05-22.json",
+    "description": "스윙 probe와 discovery sim을 하나의 lifecycle bucket attribution으로 통합하는 source-only Swing LDM",
+    "baseline_application": "source-only: sim 후보 자동승인 입력만 만들며 real order/approval/env apply 권한 없음",
+    "runtime_effect": false,
+    "runtime_mutation_allowed": false,
+    "decision_authority": "swing_ldm_source_only",
+    "total_rows": 1200,
+    "probe_rows": 0,
+    "discovery_rows": 1200,
+    "sim_auto_candidate_count": 4,
+    "workorder_count": 0,
+    "daily_simulation_consumed": false,
+    "sim_auto_candidate_ids": [
+      "swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_high_mae_green_held_missing_trailing_after_mfe_stop",
+      "swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_high_mae_low_held_missing_trailing_after_mfe_stop",
+      "swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_low_mae_mid_held_missing_mae_stop_touched",
+      "swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_neg_mae_mid_held_missing_mae_stop_touched"
+    ],
+    "state_interpretation": "source-only Swing LDM. sim-only candidates are auto-approved for simulation policy input only.",
+    "warnings": []
+  },
+  "swing_lifecycle_bucket_discovery": {
+    "family": "swing_lifecycle_bucket_discovery",
+    "available": true,
+    "artifact": "/home/ubuntu/KORStockScan/data/report/swing_lifecycle_bucket_discovery/swing_lifecycle_bucket_discovery_2026-05-22.json",
+    "description": "Swing LDM bucket을 sim-only 자동승인 후보와 source-quality workorder 후보로 분류하는 postclose handoff 축",
+    "baseline_application": "source-only: 다음 PREOPEN swing sim policy 입력으로만 surfaced candidate를 전달",
+    "runtime_effect": false,
+    "runtime_mutation_allowed": false,
+    "decision_authority": "swing_ldm_bucket_discovery_sim_auto",
+    "source_contract_status": "pass",
+    "candidate_count": 390,
+    "surfaced_candidate_count": 390,
+    "sim_auto_approved_count": 4,
+    "code_patch_required_count": 4,
+    "runtime_blocked_contract_gap_count": 0,
+    "automation_handoff_gap_count": 0,
+    "surfaced_candidate_ids": [
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_middle_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_middle_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_middle_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_middle_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_middle_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_middle_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_middle_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_bottom_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_bottom_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_bottom_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_bottom_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_bottom_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_bottom_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_bottom_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_bottom_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_bottom_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_bottom_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_bottom_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_bottom_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_middle_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_middle_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_middle_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_middle_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_middle_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_score_vpw_middle_discovery_gap_uno",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_bottom_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_middle_discovery_gap_u",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_breakout_discovery_gap_unobser",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_gatekeeper_reject_breakout_discovery_gap",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_bottom_discovery_gap_unobserve",
+      "swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_bottom_discovery_gap_unobserve",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_high_mae_green_held_missing_trailing_after_mfe_stop",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_high_mae_low_held_missing_trailing_after_mfe_stop",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_low_mae_mid_held_missing_mae_stop_touched",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_neg_mae_mid_held_missing_mae_stop_touched",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_high_mae_mid_held_missing_trailing_after_mfe_stop",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_high_mae_flat_held_missing_trailing_after_mfe_stop",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_high_mae_mid_held_missing_mae_stop_touched",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_mid_mae_low_held_missing_trailing_after_mfe_stop",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_mid_mae_flat_held_missing_trailing_after_mfe_stop",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_high_mae_low_held_missing_need_5_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_high_mae_low_held_missing_need_10_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_missing_missing_held_missing_pullback_not_touched",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_missing_missing_held_missing_gap_fade_condition_not_met",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_high_mae_green_held_missing_need_10_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_low_mae_low_held_missing_need_5_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_low_mae_low_held_missing_need_10_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_neg_mae_mid_held_missing_need_10_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_missing_missing_held_missing_breakout_not_touched",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_mid_mae_low_held_missing_need_5_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_mid_mae_low_held_missing_need_10_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_low_mae_mid_held_missing_need_10_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_low_mae_mid_held_missing_need_5_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_high_mae_flat_held_missing_need_5_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_high_mae_flat_held_missing_need_10_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_mid_mae_flat_held_missing_need_10_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_mid_mae_flat_held_missing_need_5_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_mid_mae_mid_held_missing_need_5_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_mid_mae_mid_held_missing_need_10_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_low_mae_flat_held_missing_need_5_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_low_mae_flat_held_missing_need_10_quotes",
+      "swing_bucket_holding_exit_holding_exit_bucket_attribution_missing_missing_held_missing_missing_next_quote",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_par",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_ele",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_ele",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_other_financial_in",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_ele",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_passenger_air_tran",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_insurance_보험_생명보험_",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_spe",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_par",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_par",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_sem",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_ele",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_real_estate_activities_with_",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_general_pur",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_activities_auxiliary_to_in",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_special_pur",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_retail_sale_in_non_special",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_other_trans",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_activities_auxiliary_to_fi",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_tel",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_activities_auxilia",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_data_processing_hosting_and_",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_basic_iron_",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_parts_and_a",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_insurance_보험_손해보험_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_architectural_engineering_",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_other_financial_intermediati",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_rubber_prod",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_basic_iron_",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_medicaments",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_telecommunications",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_parts_and_accessories_for",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_parts_and_accessori",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_manufacture_of_parts_and_accessori",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_parts_and_acc",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_manufacture_of_parts_and_accessories_for_mot",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_manufacture_of_parts_",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_parts_and_a",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_data_processing_hosting_and_related_acti",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_data_processing_hosting_and_relate",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_data_processing_hosting_and_relate",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_data_processing_ho",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_data_processing_hosting_and_related_activiti",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_data_processing_hosti",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_data_processing_hosting_an",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_basic_iron_and_steel_diag",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_basic_iron_and_stee",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_manufacture_of_basic_iron_and_stee",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_basic_iron_an",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_bas",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_manufacture_of_basic_iron_and_steel_diagnost",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_manufacture_of_basic_",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_general_purpose_machinery",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_general_purpose_mac",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_manufacture_of_general_purpose_mac",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_general_purpo",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_gen",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_manufacture_of_general_purpose_machinery_dia",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_manufacture_of_genera",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_general_pur",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_building_of_ships_and_boats_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_building_of_ships_and_boats_diagno",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_building_of_ships_and_boats_diagno",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_building_of_ships_and_boats_",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_building_of_ships_",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_building_of_ships_and_boats_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_building_of_ships_and",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_building_of_ships_and_boat",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_parts_and_accessories_for",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_parts_and_accessori",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_manufacture_of_parts_and_accessori",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_parts_and_acc",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_manufacture_of_parts_and_accessories_for_mot",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_manufacture_of_parts_",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_heavy_construction_방위산업_조선_eco선_diagnost",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_heavy_construction_방위산업_조선_eco선_di",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_heavy_construction_방위산업_조선_eco선_di",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_heavy_construction_방위산업_조선_e",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_heavy_construction",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_heavy_construction_방위산업_조선_eco선_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_heavy_construction_방위",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_heavy_construction_방위산업_조선",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_general_purpose_machinery",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_general_purpose_mac",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_manufacture_of_general_purpose_mac",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_general_purpo",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_gen",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_manufacture_of_general_purpose_machinery_원자력",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_manufacture_of_genera",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_electronic_components_pcb",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_electronic_componen",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_manufacture_of_electronic_componen",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_electronic_co",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_manufacture_of_electronic_components_pcb_인쇄회",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_manufacture_of_electr",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_electronic_",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_aircraft_spacecraft_and_i",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_aircraft_spacecraft",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_manufacture_of_aircraft_spacecraft",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_aircraft_spac",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_air",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_manufacture_of_aircraft_spacecraft_and_its_p",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_manufacture_of_aircra",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_aircraft_sp",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_insurance_보험_손해보험_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_insurance_보험_손해보험_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_insurance_보험_손해보험_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_insurance_보험_손해보험_",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_insurance_보험_손해보험_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_insurance_보험_손해보험_dia",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_insurance_보험_손해보험_diagnost",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_architectural_engineering_and_related_te",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_architectural_engineering_and_rela",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_architectural_engineering_and_rela",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_architectural_engineering_an",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_architectural_engi",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_architectural_engineering_and_related_techni",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_architectural_enginee",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_heavy_construction_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_heavy_construction_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_heavy_construction_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_heavy_construction_diagnosti",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_heavy_construction",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_heavy_construction_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_heavy_construction_di",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_heavy_construction_diagnos",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_other_financial_intermediation_diagnosti",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_other_financial_intermediation_dia",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_other_financial_intermediation_dia",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_other_financial_intermediation_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_other_financial_inter",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_other_financial_intermedia",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_activities_auxiliary_to_financial_servic",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_activities_auxiliary_to_financial_",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_activities_auxiliary_to_financial_",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_activities_auxiliary_to_fina",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_activities_auxiliary_to_financial_service_ac",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_activities_auxiliary_",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_activities_auxiliary_to_fi",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_software_development_and_supply_main",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_software_development_and_supply_ma",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_software_development_and_supply_ma",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_software_development_and_sup",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_software_developme",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_software_development_and_supply_main",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_software_development_",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_software_development_and_s",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_activities_auxiliary_to_insurance_and_pe",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_activities_auxiliary_to_insurance_",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_activities_auxiliary_to_insurance_",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_activities_auxiliary_to_insu",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_activities_auxilia",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_activities_auxiliary_to_insurance_and_pensio",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_activities_auxiliary_",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_telecommunications_클라우드_컴퓨팅_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_telecommunications_클라우드_컴퓨팅_diagno",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_telecommunications_클라우드_컴퓨팅_diagno",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_telecommunications_클라우드_컴퓨팅_",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_telecommunications_클라우드_컴퓨팅_diagnostic",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_telecommunications_클라",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_telecommunications_클라우드_컴퓨",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_passenger_air_transport_main",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_passenger_air_transport_main",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_passenger_air_transport_main",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_passenger_air_transport_main",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_passenger_air_transport_main",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_passenger_air_transpo",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_passenger_air_transport_ma",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_audio_publishing_and_original_master_rec",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_audio_publishing_and_original_mast",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_audio_publishing_and_original_mast",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_audio_publishing_and_origina",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_audio_publishing_a",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_audio_publishing_and_original_master_recordi",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_audio_publishing_and_",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_audio_publishing_and_origi",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_rubber_products_타이어_diagn",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_rubber_products_타이어",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_manufacture_of_rubber_products_타이어",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_rubber_produc",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_rub",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_manufacture_of_rubber_products_타이어_diagnosti",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_manufacture_of_rubber",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_parts_and_accessories_for",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_parts_and_accessori",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_manufacture_of_parts_and_accessori",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_parts_and_acc",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_manufacture_of_parts_and_accessories_for_mot",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_manufacture_of_parts_",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_parts_and_a",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_electronic_components_dia",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_electronic_componen",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_manufacture_of_electronic_componen",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_electronic_co",
+      "swing_bucket_selection_discovery_arm_attribution_gap_fade_entry_risk_capped_fixed_5d_manufacture_of_electronic_components_diagnos",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_volatility_adjusted_scale_in_recovery_manufacture_of_electr",
+      "swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_electronic_",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_equal_notional_fixed_5d_manufacture_of_special_purpose_machinery",
+      "swing_bucket_selection_discovery_arm_attribution_next_open_entry_volatility_adjusted_fixed_10d_manufacture_of_special_purpose_mac",
+      "swing_bucket_selection_discovery_arm_attribution_pullback_limit_entry_equal_notional_fixed_10d_manufacture_of_special_purpose_mac"
+    ],
+    "state_interpretation": "sim-only candidates are auto-approved and surfaced to the next PREOPEN swing sim policy input.",
+    "warnings": []
   },
   "institutional_flow_context": {
     "family": "institutional_flow_context",
-    "available": false,
-    "artifact": null,
+    "available": true,
+    "artifact": "/home/ubuntu/KORStockScan/data/report/institutional_flow_context/institutional_flow_context_2026-05-22.json",
     "description": "외인/기관 수급 REST/WS 원천을 lifecycle matrix 공통 feature로 붙이는 source-only provenance 축",
     "baseline_application": "source-only: lifecycle matrix feature/provenance 입력만 수행, 단독 BUY/scale-in/runtime apply 권한 없음",
     "runtime_effect": false,
     "runtime_mutation_allowed": false,
     "decision_authority": "source_only_lifecycle_feature",
-    "row_count": 0,
-    "ok_count": 0,
+    "row_count": 120,
+    "ok_count": 120,
     "partial_count": 0,
     "missing_count": 0,
     "token_error_count": 0,
-    "join_rate_pct": 0.0,
-    "source_mix": {},
-    "top_net_buy": [],
+    "join_rate_pct": 100.0,
+    "source_mix": {
+      "ka10059+ka10061": 120
+    },
+    "top_net_buy": [
+      {
+        "stock_code": "069540",
+        "smart_money_net": 5888940,
+        "foreign_net_roll5": 4362265,
+        "inst_net_roll5": 0,
+        "regime": "FOREIGN_ACCUMULATION"
+      },
+      {
+        "stock_code": "034220",
+        "smart_money_net": 3297688,
+        "foreign_net_roll5": 3330662,
+        "inst_net_roll5": 196025,
+        "regime": "DUAL_ACCUMULATION"
+      },
+      {
+        "stock_code": "050890",
+        "smart_money_net": 1809007,
+        "foreign_net_roll5": 2493467,
+        "inst_net_roll5": 0,
+        "regime": "FOREIGN_ACCUMULATION"
+      },
+      {
+        "stock_code": "036540",
+        "smart_money_net": 1155545,
+        "foreign_net_roll5": 4766791,
+        "inst_net_roll5": 56671,
+        "regime": "DUAL_ACCUMULATION"
+      },
+      {
+        "stock_code": "088350",
+        "smart_money_net": 1086488,
+        "foreign_net_roll5": 1753025,
+        "inst_net_roll5": 4195272,
+        "regime": "DUAL_ACCUMULATION"
+      },
+      {
+        "stock_code": "064400",
+        "smart_money_net": 632665,
+        "foreign_net_roll5": 0,
+        "inst_net_roll5": 408612,
+        "regime": "INSTITUTION_ACCUMULATION"
+      },
+      {
+        "stock_code": "032500",
+        "smart_money_net": 582864,
+        "foreign_net_roll5": 842641,
+        "inst_net_roll5": 0,
+        "regime": "FOREIGN_ACCUMULATION"
+      },
+      {
+        "stock_code": "036710",
+        "smart_money_net": 546007,
+        "foreign_net_roll5": 491026,
+        "inst_net_roll5": 196376,
+        "regime": "DUAL_ACCUMULATION"
+      },
+      {
+        "stock_code": "003490",
+        "smart_money_net": 533874,
+        "foreign_net_roll5": 1053077,
+        "inst_net_roll5": 803838,
+        "regime": "DUAL_ACCUMULATION"
+      },
+      {
+        "stock_code": "011200",
+        "smart_money_net": 502761,
+        "foreign_net_roll5": 2619076,
+        "inst_net_roll5": 0,
+        "regime": "FOREIGN_ACCUMULATION"
+      }
+    ],
     "state_interpretation": "source-only feature. Missing/stale data cannot change lifecycle runtime action.",
-    "warnings": [
-      "institutional_flow_context_missing"
-    ]
+    "warnings": []
   },
   "pattern_lab_currentness_audit": {
-    "available": false,
-    "artifact": null,
-    "status": "missing",
+    "available": true,
+    "artifact": "/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-22.json",
+    "status": "pass",
     "fail_count": 0,
     "warning_count": 0,
     "runtime_effect": false,
-    "decision_authority": null
+    "decision_authority": "source_quality_only"
+  },
+  "pattern_lab_ai_review": {
+    "available": true,
+    "artifact": "/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-05-22.json",
+    "status": "warning",
+    "fail_count": 0,
+    "warning_count": 0,
+    "runtime_effect": false,
+    "decision_authority": "pattern_lab_ai_review_source_only"
   },
   "pattern_lab_propagation_audit": {
-    "available": false,
-    "artifact": null,
-    "status": "missing",
+    "available": true,
+    "artifact": "/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-22.json",
+    "status": "pass",
     "fail_count": 0,
     "warning_count": 0,
     "runtime_effect": false,
-    "decision_authority": null
+    "decision_authority": "source_quality_only"
   },
   "scalping": [
     {
       "domain": "scalping",
+      "family": "soft_stop_whipsaw_confirmation",
+      "description": "soft stop 직후 반등 가능성이 큰 표본은 1회 확인 시간을 두고 성급한 청산을 줄이는 축",
+      "state": "adjust_up",
+      "current_application": "PREOPEN env 적용: 당일 runtime 변경 대상",
+      "state_interpretation": "threshold-cycle guard 통과로 당일 PREOPEN env에 반영됨",
+      "score": 1.0,
+      "score_label": "1",
+      "sample": {
+        "count": 6103,
+        "floor": 10
+      },
+      "reasons": [
+        "selected_auto_bounded_live"
+      ],
+      "reason_label": "auto_bounded_live 선택",
+      "selected_auto_bounded_live": true,
+      "gate_review_class": "selected_runtime_canary",
+      "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
+      "hard_gate_review": "보유/청산 canary로, 진입 hard gate 잔존 이슈가 아니다",
+      "tuning_route": "threshold-cycle selected family attribution",
+      "analysis_coverage": "runtime applied cohort"
+    },
+    {
+      "domain": "scalping",
+      "family": "holding_flow_ofi_smoothing",
+      "description": "보유/청산 AI flow 결과에 OFI/QI 미시수급을 붙여 EXIT 확정 또는 보류를 다듬는 축",
+      "state": "hold",
+      "current_application": "기존 적용 유지: holding_flow_override 내부 OFI/QI postprocessor ON",
+      "state_interpretation": "현재 적용 상태와 값을 유지하고 추가 env 변경은 하지 않는다",
+      "score": 1.0,
+      "score_label": "1",
+      "sample": {
+        "count": 3425,
+        "floor": 20
+      },
+      "reasons": [
+        "hold"
+      ],
+      "reason_label": "유지",
+      "selected_auto_bounded_live": false,
+      "gate_review_class": "existing_runtime_guard",
+      "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
+      "hard_gate_review": "기존 보유/청산 smoothing guard이며 진입 병목 gate가 아니다",
+      "tuning_route": "holding/exit EV attribution",
+      "analysis_coverage": "holding_flow_override events"
+    },
+    {
+      "domain": "scalping",
+      "family": "protect_trailing_smoothing",
+      "description": "protect/trailing 청산 후보에서 미시 반등 신호가 있으면 과조기 청산을 줄이는 축",
+      "state": "adjust_down",
+      "current_application": "관찰/리포트 only: protect/trailing live smoothing 미적용",
+      "state_interpretation": "자동 반영 후보로 선택되면 PREOPEN env에 적용된다",
+      "score": 1.0,
+      "score_label": "1",
+      "sample": {
+        "count": 96,
+        "floor": 20
+      },
+      "reasons": [],
+      "reason_label": "-",
+      "selected_auto_bounded_live": false,
+      "gate_review_class": "report_only_holding_exit_candidate",
+      "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
+      "hard_gate_review": "보호/트레일링 청산 후보이며 BUY 전단 hard gate가 아니다",
+      "tuning_route": "report-only until approval/rollback guard",
+      "analysis_coverage": "holding/exit report source bundle"
+    },
+    {
+      "domain": "scalping",
+      "family": "trailing_continuation",
+      "description": "trailing 이후 추가 상승 여지가 큰 표본을 계속 보유할 수 있는지 보는 축",
+      "state": "freeze",
+      "current_application": "관찰/리포트 only: trailing 연장 live 미적용",
+      "state_interpretation": "계측/DB/safety 문제로 runtime 변경을 금지한다",
+      "score": 1.0,
+      "score_label": "1",
+      "sample": {
+        "count": 185,
+        "floor": 20
+      },
+      "reasons": [
+        "freeze"
+      ],
+      "reason_label": "동결",
+      "selected_auto_bounded_live": false,
+      "gate_review_class": "holding_exit_safety_freeze",
+      "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
+      "hard_gate_review": "trailing 이후 보유 연장축으로, 진입 튜닝 병목이 아니다",
+      "tuning_route": "source-quality and GOOD_EXIT risk review",
+      "analysis_coverage": "post-sell/holding-exit source bundle"
+    },
+    {
+      "domain": "scalping",
+      "family": "market_regime_continuous_thresholds",
+      "description": "설명 미등록",
+      "state": "hold_sample",
+      "current_application": "관찰/리포트 only: runtime 변경 없음",
+      "state_interpretation": "축은 유지/관찰하지만 표본 부족으로 runtime 변경은 하지 않는다",
+      "score": 0.2,
+      "score_label": "0.2",
+      "sample": {
+        "count": 2,
+        "floor": 10
+      },
+      "reasons": [
+        "family_sample_floor_not_met"
+      ],
+      "reason_label": "표본 부족",
+      "selected_auto_bounded_live": false,
+      "gate_review_class": "not_classified",
+      "legacy_hard_gate_risk": "manual_review_required",
+      "hard_gate_review": "hard gate 분류 미등록",
+      "tuning_route": "manual runtime approval review",
+      "analysis_coverage": "unknown"
+    },
+    {
+      "domain": "scalping",
+      "family": "pre_submit_price_guard",
+      "description": "주문 제출 직전 quote stale, spread, passive probe 가격품질 문제를 막는 진입 안전축",
+      "state": "hold_sample",
+      "current_application": "기존 적용/검증 유지: 제출 직전 가격품질 guard 계열",
+      "state_interpretation": "축은 유지/관찰하지만 표본 부족으로 runtime 변경은 하지 않는다",
+      "score": 1.0,
+      "score_label": "1",
+      "sample": {
+        "count": 82,
+        "floor": 20
+      },
+      "reasons": [
+        "family_sample_floor_not_met"
+      ],
+      "reason_label": "표본 부족",
+      "selected_auto_bounded_live": false,
+      "gate_review_class": "intentional_pre_submit_safety_guard",
+      "legacy_hard_gate_risk": "intentional_safety_guard",
+      "hard_gate_review": "quote stale/spread/passive probe 가격품질 차단은 의도적 submit safety guard다",
+      "tuning_route": "pre_submit_price_guard EV/source-quality only",
+      "analysis_coverage": "pre-submit guard events and missed-entry counterfactual"
+    },
+    {
+      "domain": "scalping",
+      "family": "score65_74_recovery_probe",
+      "description": "AI 점수 65~74 WAIT 구간 중 수급/가속 조건이 좋은 후보를 1주/소액 canary로 회수하는 축",
+      "state": "adjust_up",
+      "current_application": "PREOPEN env 적용: 당일 runtime 변경 대상",
+      "state_interpretation": "threshold-cycle guard 통과로 당일 PREOPEN env에 반영됨",
+      "score": 1.0,
+      "score_label": "1",
+      "sample": {
+        "count": 152,
+        "floor": 20
+      },
+      "reasons": [
+        "selected_auto_bounded_live"
+      ],
+      "reason_label": "auto_bounded_live 선택",
+      "selected_auto_bounded_live": true,
+      "gate_review_class": "entry_unlock_probe",
+      "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
+      "hard_gate_review": "AI 점수 WAIT 구간 회수축이며 hard gate 잔존으로 닫힌 축이 아니다",
+      "tuning_route": "runtime env/operator lock plus post-apply attribution",
+      "analysis_coverage": "score65_74 cohort and submitted/probe split"
+    },
+    {
+      "domain": "scalping",
+      "family": "strength_momentum_soft_gate_p1",
+      "description": "설명 미등록",
+      "state": "hold",
+      "current_application": "기존 상태 유지: runtime 변경 없음",
+      "state_interpretation": "현재 적용 상태와 값을 유지하고 추가 env 변경은 하지 않는다",
+      "score": 1.0,
+      "score_label": "1",
+      "sample": {
+        "count": 200027,
+        "floor": 20
+      },
+      "reasons": [
+        "hold"
+      ],
+      "reason_label": "유지",
+      "selected_auto_bounded_live": false,
+      "gate_review_class": "softened_pre_ai_gate",
+      "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
+      "hard_gate_review": "strength/momentum hard pre-AI block을 risk context로 내린 active route다",
+      "tuning_route": "AI/counterfactual risk context, source-quality exception only",
+      "analysis_coverage": "blocked_strength_momentum/blocked_vpw risk-context events"
+    },
+    {
+      "domain": "scalping",
+      "family": "overbought_pullback_guard_p1",
+      "description": "설명 미등록",
+      "state": "hold",
+      "current_application": "기존 상태 유지: runtime 변경 없음",
+      "state_interpretation": "현재 적용 상태와 값을 유지하고 추가 env 변경은 하지 않는다",
+      "score": 1.0,
+      "score_label": "1",
+      "sample": {
+        "count": 116572,
+        "floor": 20
+      },
+      "reasons": [
+        "hold"
+      ],
+      "reason_label": "유지",
+      "selected_auto_bounded_live": false,
+      "gate_review_class": "softened_pre_ai_plus_pre_submit_guard",
+      "legacy_hard_gate_risk": "intentional_safety_guard",
+      "hard_gate_review": "과열은 AI 평가를 허용하고 submit 직전 pullback/rebreak guard로만 막는다",
+      "tuning_route": "overbought risk bucket EV and pre-submit guard attribution",
+      "analysis_coverage": "blocked_overbought risk context + pre_submit_overbought_pullback_guard_block"
+    },
+    {
+      "domain": "scalping",
+      "family": "liquidity_pre_submit_guard_p1",
+      "description": "설명 미등록",
+      "state": "hold",
+      "current_application": "기존 상태 유지: runtime 변경 없음",
+      "state_interpretation": "현재 적용 상태와 값을 유지하고 추가 env 변경은 하지 않는다",
+      "score": 1.0,
+      "score_label": "1",
+      "sample": {
+        "count": 10903,
+        "floor": 20
+      },
+      "reasons": [
+        "hold"
+      ],
+      "reason_label": "유지",
+      "selected_auto_bounded_live": false,
+      "gate_review_class": "softened_pre_ai_plus_pre_submit_guard",
+      "legacy_hard_gate_risk": "intentional_safety_guard",
+      "hard_gate_review": "유동성은 AI/counterfactual을 허용하고 broker submit 직전 safety guard로 유지한다",
+      "tuning_route": "liquidity risk bucket EV and real submit guard attribution",
+      "analysis_coverage": "blocked_liquidity risk context + pre_submit_liquidity_guard_block"
+    },
+    {
+      "domain": "scalping",
+      "family": "bad_entry_refined_canary",
+      "description": "진입 직후 never-green/AI fade 위험이 큰 표본을 조기 정리할 수 있는지 보는 축",
+      "state": "adjust_up",
+      "current_application": "OFF/관찰 only: refined canary live 미적용",
+      "state_interpretation": "자동 반영 후보로 선택되면 PREOPEN env에 적용된다",
+      "score": 1.0,
+      "score_label": "1",
+      "sample": {
+        "count": 47899,
+        "floor": 10
+      },
+      "reasons": [],
+      "reason_label": "-",
+      "selected_auto_bounded_live": false,
+      "gate_review_class": "entry_quality_canary",
+      "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
+      "hard_gate_review": "진입 후 품질 canary이며 BUY 전단 hard gate 잔존 이슈가 아니다",
+      "tuning_route": "bad-entry cohort EV and rollback guard",
+      "analysis_coverage": "bad_entry_refined_candidate events"
+    },
+    {
+      "domain": "scalping",
+      "family": "holding_exit_decision_matrix_advisory",
+      "description": "보유 중 가능한 행동(EXIT/HOLD/AVG_DOWN/PYRAMID)을 matrix 점수로 보조 판단하는 축",
+      "state": "hold_no_edge",
+      "current_application": "관찰/리포트 only: advisory live 적용 아님",
+      "state_interpretation": "명확한 edge가 없어 runtime 변경은 하지 않는다",
+      "score": 1.0,
+      "score_label": "1",
+      "sample": {
+        "count": 5,
+        "floor": 1
+      },
+      "reasons": [
+        "hold_no_edge"
+      ],
+      "reason_label": "edge 부족",
+      "selected_auto_bounded_live": false,
+      "gate_review_class": "advisory_report_only",
+      "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
+      "hard_gate_review": "advisory layer라 runtime hard gate가 아니다",
+      "tuning_route": "report-only decision support contract",
+      "analysis_coverage": "holding_exit_decision_matrix report"
+    },
+    {
+      "domain": "scalping",
+      "family": "scale_in_price_guard",
+      "description": "추가매수 직전 best bid/defensive limit, spread, stale quote로 가격품질을 보장하는 축",
+      "state": "hold",
+      "current_application": "기존 적용 유지: 추가매수 가격품질 guard ON",
+      "state_interpretation": "현재 적용 상태와 값을 유지하고 추가 env 변경은 하지 않는다",
+      "score": 1.0,
+      "score_label": "1",
+      "sample": {
+        "count": 666,
+        "floor": 20
+      },
+      "reasons": [
+        "hold"
+      ],
+      "reason_label": "유지",
+      "selected_auto_bounded_live": false,
+      "gate_review_class": "intentional_pre_submit_safety_guard",
+      "legacy_hard_gate_risk": "intentional_safety_guard",
+      "hard_gate_review": "추가매수 직전 가격품질 safety guard로 유지해야 한다",
+      "tuning_route": "scale-in price quality EV/source-quality only",
+      "analysis_coverage": "scale-in resolver and guard events"
+    },
+    {
+      "domain": "scalping",
+      "family": "position_sizing_cap_release",
+      "description": "신규/추가매수 1주 cap을 풀 수 있는지 EV와 downside 기준으로 보는 축",
+      "state": "hold_sample",
+      "current_application": "미적용: 1주 cap 유지",
+      "state_interpretation": "축은 유지/관찰하지만 표본 부족으로 runtime 변경은 하지 않는다",
+      "score": 1.0,
+      "score_label": "1",
+      "sample": {
+        "count": 42,
+        "floor": 30
+      },
+      "reasons": [
+        "family_sample_floor_not_met"
+      ],
+      "reason_label": "표본 부족",
+      "selected_auto_bounded_live": false,
+      "gate_review_class": "policy_approval_or_contract_gap",
+      "legacy_hard_gate_risk": "approval_or_contract_required",
+      "hard_gate_review": "1주 cap은 legacy pre-AI gate가 아니라 position-size policy approval 문제다",
+      "tuning_route": "separate approval artifact/workorder before runtime size change",
+      "analysis_coverage": "position sizing EV and downside source bundle"
+    },
+    {
+      "domain": "scalping",
+      "family": "position_sizing_dynamic_formula",
+      "description": "설명 미등록",
+      "state": "hold_sample",
+      "current_application": "관찰/리포트 only: runtime 변경 없음",
+      "state_interpretation": "축은 유지/관찰하지만 표본 부족으로 runtime 변경은 하지 않는다",
+      "score": 0.1,
+      "score_label": "0.1",
+      "sample": {
+        "count": 3,
+        "floor": 30
+      },
+      "reasons": [
+        "family_sample_floor_not_met"
+      ],
+      "reason_label": "표본 부족",
+      "selected_auto_bounded_live": false,
+      "gate_review_class": "policy_contract_gap",
+      "legacy_hard_gate_risk": "approval_or_contract_required",
+      "hard_gate_review": "수량 산식 owner이며 BUY hard gate 잔존 이슈가 아니다",
+      "tuning_route": "notional/source-quality adjusted EV plus approval contract",
+      "analysis_coverage": "position sizing source bundle"
+    },
+    {
+      "domain": "scalping",
       "family": "scalp_entry_action_decision_matrix_advisory",
       "description": "스캘핑 entry action(BUY_NOW/WAIT_REQUOTE/SKIP_STALE/BUY_DEFENSIVE 등)을 matrix EV로 비교해 AI action을 보정하는 운영 override 축",
-      "state": "hold_sample",
+      "state": "hold",
       "current_application": "운영 override runtime bias: AI BUY를 WAIT/DROP 또는 defensive bias로 보정, submit safety guard 우선",
       "state_interpretation": "운영 override runtime bias는 AI BUY를 WAIT/DROP 또는 defensive bias로 보정한다. daily action bucket EV와 runtime forced_action provenance가 충분해야 다음 env 튜닝 판단으로 넘어간다.",
       "score": null,
       "score_label": "없음",
       "sample": {
-        "count": 0,
+        "count": 102,
         "floor": 20
       },
       "reasons": [
-        "source_quality_blocker",
-        "prompt_context_not_loaded"
+        "hold"
       ],
-      "reason_label": "소스 품질 차단, ADM prompt context 미적재",
+      "reason_label": "유지",
       "selected_auto_bounded_live": false,
       "runtime_bias_scope": "force_wait_force_drop_buy_defensive_bias",
       "gate_review_class": "entry_adm_runtime_bias_operator_override",
@@ -728,12 +2092,12 @@
       "state": "adjust_up",
       "current_application": "PREOPEN env 적용: 당일 runtime 변경 대상",
       "state_interpretation": "선택 시 policy file/version만 다음 PREOPEN env로 연결한다. hard safety와 broker/account/order guard는 항상 matrix proposal보다 우선한다.",
-      "score": 3.4568,
-      "score_label": "3.4568",
+      "score": 0.3471,
+      "score_label": "0.3471",
       "sample": {
-        "count": 9863,
+        "count": 35228,
         "floor": 20,
-        "joined": 9641
+        "joined": 33631
       },
       "reasons": [
         "selected_auto_bounded_live"
@@ -775,7 +2139,7 @@
         ]
       },
       "policy_pass_count": 5,
-      "promote_ready_count": 0,
+      "promote_ready_count": 1,
       "gate_review_class": "umbrella_weighted_adm_runtime_policy",
       "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
       "hard_gate_review": "matrix policy는 hard safety veto, account/order/broker guard 뒤에서만 runtime action proposal을 낸다",
@@ -792,13 +2156,13 @@
       "score": 0,
       "score_label": "0",
       "sample": {
-        "count": 80,
+        "count": 82,
         "floor": 20,
         "would_safe_pass_events": 0,
-        "would_caution_reject_events": 0,
+        "would_caution_reject_events": 1,
         "would_recovery_canary_events": 0,
         "would_recovery_canary_attempts": 0,
-        "latency_pass_events": 6,
+        "latency_pass_events": 10,
         "order_bundle_submitted_events": 0,
         "counterfactual_joined_sample": 0,
         "counterfactual_ev_pct": null,
@@ -816,22 +2180,494 @@
       "allowed_runtime_apply": false,
       "runtime_bias_scope": "latency_submit_recovery_bounded_canary",
       "latency_submit_routing": "latency_classifier_runtime_semantics_gap",
-      "recommended_action": "",
-      "recommended_action_reason": "",
+      "recommended_action": "reject",
+      "recommended_action_reason": "recovery_count=0 below floor=10",
       "gate_review_class": "entry_execution_quality_bounded_tunable",
       "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
       "hard_gate_review": "CAUTION은 기본 runtime에서 reject이며 bounded recovery canary가 명시된 경우에만 latency_pass 후보가 된다",
       "tuning_route": "threshold-cycle latency recommendation plus post-apply latency_pass/order_bundle attribution",
       "analysis_coverage": "latency_block SAFE/CAUTION/recovery/hard reject split"
+    },
+    {
+      "domain": "scalping",
+      "family": "scalp_sim_overnight_ai_carry",
+      "description": "장마감 후 open 스캘핑 sim 포지션을 overnight_v1로 SELL_TODAY/HOLD_OVERNIGHT 분리해 다음날 lifecycle/EV label로 연결하는 source-only 축",
+      "state": "observe_only",
+      "current_application": "source-only: sim 가상 청산/carry 기록만 수행, runtime threshold apply 권한 없음",
+      "state_interpretation": "runtime_effect=false source다. SELL_TODAY는 sim 가상 청산, HOLD_OVERNIGHT는 active_unrealized carry로만 남긴다.",
+      "score": null,
+      "score_label": "-",
+      "sample": {
+        "count": 20,
+        "sell_today": 20,
+        "hold_overnight": 0,
+        "carry_open_count": 0
+      },
+      "reasons": [
+        "observe_only"
+      ],
+      "reason_label": "관찰 전용",
+      "selected_auto_bounded_live": false,
+      "runtime_effect": false,
+      "decision_authority": "sim_observation_only",
+      "artifact": "/home/ubuntu/KORStockScan/data/report/scalp_sim_overnight/scalp_sim_overnight_2026-05-22.json",
+      "gate_review_class": "not_classified",
+      "legacy_hard_gate_risk": "manual_review_required",
+      "hard_gate_review": "hard gate 분류 미등록",
+      "tuning_route": "manual runtime approval review",
+      "analysis_coverage": "unknown"
     }
   ],
-  "swing": [],
-  "panic": [],
-  "warnings": [
-    "swing_runtime_approval_missing",
-    "scalp_entry_action_decision_matrix_missing",
-    "institutional_flow_context_missing",
-    "pattern_lab_currentness_audit_missing",
-    "pattern_lab_propagation_audit_missing"
-  ]
+  "swing": [
+    {
+      "domain": "swing",
+      "family": "swing_selection_top_k",
+      "description": "스윙 추천 후보 수(top-k)를 늘리거나 줄일 수 있는지 보는 선택 폭 축",
+      "state": "freeze",
+      "current_application": "스윙 dry-run/probe 관찰: 실주문 변경 없음",
+      "state_interpretation": "계측/DB/safety 문제로 runtime 변경을 금지한다",
+      "score": 0.955,
+      "score_label": "0.955",
+      "sample": {
+        "count": 3,
+        "floor": 3
+      },
+      "reasons": [
+        "same_stage_owner_conflict:swing_model_floor"
+      ],
+      "reason_label": "same_stage_owner_conflict:swing_model_floor",
+      "selected_auto_bounded_live": false,
+      "gate_review_class": "same_stage_deferred_selection_axis",
+      "legacy_hard_gate_risk": "same_stage_deferred",
+      "hard_gate_review": "top-k는 runtime guard가 있으며 현재는 model_floor와 같은 selection stage 충돌로 보류됐다",
+      "tuning_route": "same-stage owner conflict 해소 후 approval route",
+      "analysis_coverage": "recommendation CSV/DB load + simulation opportunity"
+    },
+    {
+      "domain": "swing",
+      "family": "swing_gatekeeper_accept_reject",
+      "description": "스윙 gatekeeper가 accept/reject한 후보의 후행 성과를 비교하는 진입 판단 축",
+      "state": "freeze",
+      "current_application": "스윙 dry-run/probe 관찰: 실주문 변경 없음",
+      "state_interpretation": "계측/DB/safety 문제로 runtime 변경을 금지한다",
+      "score": 0.955,
+      "score_label": "0.955",
+      "sample": {
+        "count": 23,
+        "floor": 5
+      },
+      "reasons": [
+        "runtime_family_guard_missing"
+      ],
+      "reason_label": "runtime guard 없음",
+      "selected_auto_bounded_live": false,
+      "gate_review_class": "legacy_hard_gate_contract_gap",
+      "legacy_hard_gate_risk": "contract_gap",
+      "hard_gate_review": "gatekeeper accept/reject 자체는 분석 표본은 있으나 runtime env guard가 없어 직접 튜닝 적용은 막혀 있다",
+      "tuning_route": "workorder로 accept/reject policy guard를 만들거나 reject cooldown family로 우회 조정",
+      "analysis_coverage": "blocked_gatekeeper_reject + swing_probe_entry_candidate"
+    },
+    {
+      "domain": "swing",
+      "family": "swing_market_regime_sensitivity",
+      "description": "시장 regime에 따라 스윙 진입 민감도를 완화/강화할지 보는 축",
+      "state": "freeze",
+      "current_application": "스윙 dry-run/probe 관찰: 실주문 변경 없음",
+      "state_interpretation": "계측/DB/safety 문제로 runtime 변경을 금지한다",
+      "score": 0.955,
+      "score_label": "0.955",
+      "sample": {
+        "count": 12,
+        "floor": 3
+      },
+      "reasons": [
+        "same_stage_owner_conflict:swing_gatekeeper_reject_cooldown"
+      ],
+      "reason_label": "same_stage_owner_conflict:swing_gatekeeper_reject_cooldown",
+      "selected_auto_bounded_live": false,
+      "gate_review_class": "same_stage_deferred_entry_axis",
+      "legacy_hard_gate_risk": "same_stage_deferred",
+      "hard_gate_review": "market regime/gap 계열은 분석 표본이 있으나 오늘은 gatekeeper cooldown과 entry stage owner 충돌로 보류됐다",
+      "tuning_route": "same-stage owner conflict 해소 후 SWING_MARKET_REGIME_SENSITIVITY route",
+      "analysis_coverage": "blocked_swing_gap/blocked_swing_score_vpw + swing probe/counterfactual"
+    },
+    {
+      "domain": "swing",
+      "family": "swing_pyramid_trigger",
+      "description": "스윙 보유 후 불타기(PYRAMID) 조건이 유효한지 보는 추가매수 축",
+      "state": "freeze",
+      "current_application": "스윙 dry-run/probe 관찰: 실주문 변경 없음",
+      "state_interpretation": "계측/DB/safety 문제로 runtime 변경을 금지한다",
+      "score": 0.955,
+      "score_label": "0.955",
+      "sample": {
+        "count": 8,
+        "floor": 3
+      },
+      "reasons": [
+        "runtime_family_guard_missing"
+      ],
+      "reason_label": "runtime guard 없음",
+      "selected_auto_bounded_live": false,
+      "gate_review_class": "runtime_contract_gap_scale_in_axis",
+      "legacy_hard_gate_risk": "contract_gap",
+      "hard_gate_review": "scale-in trigger 분석 표본은 있으나 runtime family guard가 없어 직접 적용은 막혀 있다",
+      "tuning_route": "scale-in runtime guard/workorder before approval",
+      "analysis_coverage": "scale_in observation and simulated add outcomes"
+    },
+    {
+      "domain": "swing",
+      "family": "swing_avg_down_eligibility",
+      "description": "스윙 보유 후 물타기(AVG_DOWN) 조건이 유효한지 보는 추가매수 축",
+      "state": "freeze",
+      "current_application": "스윙 dry-run/probe 관찰: 실주문 변경 없음",
+      "state_interpretation": "계측/DB/safety 문제로 runtime 변경을 금지한다",
+      "score": 0.955,
+      "score_label": "0.955",
+      "sample": {
+        "count": 8,
+        "floor": 5
+      },
+      "reasons": [
+        "runtime_family_guard_missing"
+      ],
+      "reason_label": "runtime guard 없음",
+      "selected_auto_bounded_live": false,
+      "gate_review_class": "runtime_contract_gap_scale_in_axis",
+      "legacy_hard_gate_risk": "contract_gap",
+      "hard_gate_review": "AVG_DOWN은 의도적으로 실주문 차단 중이며 runtime family guard가 없다",
+      "tuning_route": "policy/workorder first, real canary approval later",
+      "analysis_coverage": "scale_in observation and simulated add outcomes"
+    },
+    {
+      "domain": "swing",
+      "family": "swing_trailing_stop_time_stop",
+      "description": "스윙 trailing/time stop 청산 조건의 적정성을 보는 exit 축",
+      "state": "freeze",
+      "current_application": "스윙 dry-run/probe 관찰: 실주문 변경 없음",
+      "state_interpretation": "계측/DB/safety 문제로 runtime 변경을 금지한다",
+      "score": 0.955,
+      "score_label": "0.955",
+      "sample": {
+        "count": 16,
+        "floor": 5
+      },
+      "reasons": [
+        "runtime_family_guard_missing"
+      ],
+      "reason_label": "runtime guard 없음",
+      "selected_auto_bounded_live": false,
+      "gate_review_class": "runtime_contract_gap_exit_axis",
+      "legacy_hard_gate_risk": "contract_gap",
+      "hard_gate_review": "exit rule 분석축이나 live guard 계약이 없어 직접 튜닝 적용은 막혀 있다",
+      "tuning_route": "exit runtime guard/workorder before approval",
+      "analysis_coverage": "exit source + post-sell rebound"
+    },
+    {
+      "domain": "swing",
+      "family": "swing_holding_flow_defer",
+      "description": "스윙 보유/청산 AI가 청산 보류를 결정한 뒤 성과가 개선되는지 보는 축",
+      "state": "freeze",
+      "current_application": "스윙 dry-run/probe 관찰: 실주문 변경 없음",
+      "state_interpretation": "계측/DB/safety 문제로 runtime 변경을 금지한다",
+      "score": 0.955,
+      "score_label": "0.955",
+      "sample": {
+        "count": 75,
+        "floor": 5
+      },
+      "reasons": [
+        "runtime_family_guard_missing"
+      ],
+      "reason_label": "runtime guard 없음",
+      "selected_auto_bounded_live": false,
+      "gate_review_class": "sample_or_contract_gap_holding_axis",
+      "legacy_hard_gate_risk": "sample_or_contract_gap",
+      "hard_gate_review": "보유/청산 defer 축으로 표본과 runtime guard가 아직 부족하다",
+      "tuning_route": "sample floor + runtime guard contract",
+      "analysis_coverage": "holding flow defer fields"
+    },
+    {
+      "domain": "swing",
+      "family": "swing_entry_ofi_qi_execution_quality",
+      "description": "스윙 진입 시 OFI/QI와 주문품질이 실제 성과에 도움이 되는지 보는 축",
+      "state": "hold_sample",
+      "current_application": "스윙 dry-run/probe 관찰: 실주문 변경 없음",
+      "state_interpretation": "축은 유지/관찰하지만 표본 부족으로 runtime 변경은 하지 않는다",
+      "score": 0.905,
+      "score_label": "0.905",
+      "sample": {
+        "count": 0,
+        "floor": 5
+      },
+      "reasons": [
+        "family_sample_floor_not_met",
+        "runtime_family_guard_missing"
+      ],
+      "reason_label": "표본 부족, runtime guard 없음",
+      "selected_auto_bounded_live": false,
+      "gate_review_class": "sample_or_contract_gap_entry_quality_axis",
+      "legacy_hard_gate_risk": "sample_or_contract_gap",
+      "hard_gate_review": "entry OFI/QI 품질축이며 stale/missing source와 runtime guard 계약이 먼저다",
+      "tuning_route": "OFI/QI source-quality close, then approval/workorder",
+      "analysis_coverage": "swing_entry_micro_context_observed"
+    },
+    {
+      "domain": "swing",
+      "family": "swing_scale_in_ofi_qi_confirmation",
+      "description": "스윙 추가매수 직전 OFI/QI 확인 신호가 유효한지 보는 축",
+      "state": "freeze",
+      "current_application": "스윙 dry-run/probe 관찰: 실주문 변경 없음",
+      "state_interpretation": "계측/DB/safety 문제로 runtime 변경을 금지한다",
+      "score": 0.955,
+      "score_label": "0.955",
+      "sample": {
+        "count": 30,
+        "floor": 3
+      },
+      "reasons": [
+        "runtime_family_guard_missing"
+      ],
+      "reason_label": "runtime guard 없음",
+      "selected_auto_bounded_live": false,
+      "gate_review_class": "source_quality_contract_gap_scale_in_axis",
+      "legacy_hard_gate_risk": "source_quality_or_contract_gap",
+      "hard_gate_review": "scale-in OFI/QI source-quality blocker와 runtime guard 부재가 동시에 있다",
+      "tuning_route": "source-quality blocker close, then scale-in guard contract",
+      "analysis_coverage": "swing_scale_in_micro_context_observed"
+    },
+    {
+      "domain": "swing",
+      "family": "swing_exit_ofi_qi_smoothing",
+      "description": "스윙 청산 직전 OFI/QI로 EXIT 확정/보류를 다듬을 수 있는지 보는 축",
+      "state": "freeze",
+      "current_application": "스윙 dry-run/probe 관찰: 실주문 변경 없음",
+      "state_interpretation": "계측/DB/safety 문제로 runtime 변경을 금지한다",
+      "score": 0.955,
+      "score_label": "0.955",
+      "sample": {
+        "count": 517,
+        "floor": 5
+      },
+      "reasons": [
+        "runtime_family_guard_missing"
+      ],
+      "reason_label": "runtime guard 없음",
+      "selected_auto_bounded_live": false,
+      "gate_review_class": "sample_or_contract_gap_exit_quality_axis",
+      "legacy_hard_gate_risk": "sample_or_contract_gap",
+      "hard_gate_review": "exit smoothing 품질축이며 표본과 runtime guard 계약이 먼저다",
+      "tuning_route": "exit smoothing sample floor + guard contract",
+      "analysis_coverage": "holding_flow_ofi_smoothing_applied"
+    },
+    {
+      "domain": "swing",
+      "family": "swing_scale_in_real_canary_phase0",
+      "description": "승인된 실제 스윙 보유분에 한해 PYRAMID/AVG_DOWN 1주 추가매수 canary를 열 수 있는지 보는 정책 축",
+      "state": "freeze",
+      "current_application": "미적용: approval artifact 없이는 실주문 추가매수 금지",
+      "state_interpretation": "계측/DB/safety 문제로 runtime 변경을 금지한다",
+      "score": null,
+      "score_label": "없음",
+      "sample": {
+        "count": null,
+        "floor": null
+      },
+      "reasons": [
+        "pyramid_sample_floor_not_met",
+        "final_exit_return_missing",
+        "exit_only_delta_missing",
+        "post_add_mae_missing",
+        "final_exit_return_missing",
+        "exit_only_delta_missing",
+        "post_add_mae_missing"
+      ],
+      "reason_label": "PYRAMID 표본 부족, 최종 exit 수익률 누락, exit-only 비교 누락, 추가매수 MAE 누락",
+      "selected_auto_bounded_live": false,
+      "gate_review_class": "policy_source_quality_block",
+      "legacy_hard_gate_risk": "source_quality_or_approval_required",
+      "hard_gate_review": "실제 추가매수 canary 정책축이며 OFI/QI source-quality와 별도 approval이 필요하다",
+      "tuning_route": "scale-in approval artifact after source-quality pass",
+      "analysis_coverage": "scale-in arm decisions + real-only execution quality"
+    },
+    {
+      "domain": "swing",
+      "family": "swing_model_floor",
+      "description": "스윙 추천 모델 floor 값을 올리거나 낮출 수 있는지 보는 선택 기준 축",
+      "state": "approval_required",
+      "current_application": "스윙 dry-run/probe 관찰: 실주문 변경 없음",
+      "state_interpretation": "approval artifact가 있어야 다음 PREOPEN env 반영 후보가 된다",
+      "score": 0.955,
+      "score_label": "0.955",
+      "sample": {
+        "count": 3,
+        "floor": 3
+      },
+      "reasons": [
+        "approval_artifact_missing"
+      ],
+      "reason_label": "approval artifact 없음",
+      "approval_id": "swing_runtime_approval:2026-05-22:swing_model_floor",
+      "approval_artifact_approved": false,
+      "approval_contract_status": "ready",
+      "approval_live_ready": true,
+      "approval_artifact_path": "/home/ubuntu/KORStockScan/data/threshold_cycle/approvals/swing_runtime_approvals_2026-05-22.json",
+      "approval_contract_missing_components": [],
+      "selected_auto_bounded_live": false,
+      "gate_review_class": "approval_route_available",
+      "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
+      "hard_gate_review": "모델 floor는 approval/env route가 있는 선택축이다",
+      "tuning_route": "swing_runtime_approvals artifact -> next PREOPEN dry-run env",
+      "analysis_coverage": "model selection + combined real/sim EV"
+    },
+    {
+      "domain": "swing",
+      "family": "swing_gatekeeper_reject_cooldown",
+      "description": "gatekeeper reject 이후 같은 후보를 다시 볼 cooldown 시간을 조정하는 축",
+      "state": "approval_required",
+      "current_application": "스윙 dry-run/probe 관찰: 실주문 변경 없음",
+      "state_interpretation": "approval artifact가 있어야 다음 PREOPEN env 반영 후보가 된다",
+      "score": 0.955,
+      "score_label": "0.955",
+      "sample": {
+        "count": 11,
+        "floor": 5
+      },
+      "reasons": [
+        "approval_artifact_missing"
+      ],
+      "reason_label": "approval artifact 없음",
+      "approval_id": "swing_runtime_approval:2026-05-22:swing_gatekeeper_reject_cooldown",
+      "approval_artifact_approved": false,
+      "approval_contract_status": "ready",
+      "approval_live_ready": true,
+      "approval_artifact_path": "/home/ubuntu/KORStockScan/data/threshold_cycle/approvals/swing_runtime_approvals_2026-05-22.json",
+      "approval_contract_missing_components": [],
+      "selected_auto_bounded_live": false,
+      "gate_review_class": "approval_route_available",
+      "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
+      "hard_gate_review": "reject 판단 자체가 아니라 cooldown 값을 조정하는 승인 가능 축이다",
+      "tuning_route": "ML_GATEKEEPER_REJECT_COOLDOWN approval/env route",
+      "analysis_coverage": "blocked_gatekeeper_reject + cooldown policy distribution"
+    },
+    {
+      "domain": "swing",
+      "family": "swing_one_share_real_canary_phase0",
+      "description": "승인된 스윙 후보에 한해 초기 BUY/SELL 1주 real canary execution 품질을 수집하는 정책 축",
+      "state": "approval_required",
+      "current_application": "미적용: approval artifact 없이는 초기 BUY 실주문 금지",
+      "state_interpretation": "approval artifact가 있어야 다음 PREOPEN env 반영 후보가 된다",
+      "score": 0.955,
+      "score_label": "0.955",
+      "sample": {
+        "count": 14,
+        "floor": 5
+      },
+      "reasons": [
+        "one_share_real_canary_approval_artifact_missing"
+      ],
+      "reason_label": "1주 real canary approval artifact 없음",
+      "approval_id": "swing_one_share_real_canary:2026-05-22:phase0",
+      "approval_artifact_approved": false,
+      "approval_contract_status": "ready",
+      "approval_live_ready": true,
+      "approval_artifact_path": "/home/ubuntu/KORStockScan/data/threshold_cycle/approvals/swing_one_share_real_canary_2026-05-22.json",
+      "approval_contract_missing_components": [],
+      "selected_auto_bounded_live": false,
+      "gate_review_class": "approval_route_available_policy_axis",
+      "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
+      "hard_gate_review": "1주 real canary 정책축이며 승인 artifact로만 열린다",
+      "tuning_route": "one-share approval artifact, global dry-run guard retained",
+      "analysis_coverage": "approved target code provenance + real-only receipt"
+    }
+  ],
+  "panic": [
+    {
+      "domain": "panic_sell",
+      "family": "panic_entry_freeze_guard",
+      "description": "패닉셀 구간에서 scalping 신규 BUY pre-submit freeze canary를 열 수 있는지 보는 축",
+      "state": "hold",
+      "current_application": "계약 미준비: approval artifact를 만들어도 pre-submit freeze runtime 반영 불가",
+      "state_interpretation": "현재 적용 상태와 값을 유지하고 추가 env 변경은 하지 않는다",
+      "score": 0.371821,
+      "score_label": "0.3718",
+      "sample": {
+        "count": 1,
+        "floor": 1
+      },
+      "reasons": [
+        "hold"
+      ],
+      "reason_label": "유지",
+      "panic_regime_mode": "NORMAL",
+      "risk_regime_gate_state": "normal",
+      "risk_regime_gate_authority": "source_quality_only",
+      "risk_regime_threshold_mode": "insufficient_sample",
+      "panic_regime_decision_authority": "source_quality_only",
+      "panic_regime_runtime_effect": "report_only_no_mutation",
+      "selected_auto_bounded_live": false,
+      "candidate_status": {
+        "panic_entry_freeze_guard": "inactive_no_panic",
+        "panic_stop_confirmation": "hold_no_eligible_exit",
+        "panic_rebound_probe": "hold_until_recovery_confirmed",
+        "panic_attribution_pack": "active_report_only"
+      },
+      "source_quality_blockers": [],
+      "market_breadth_followup_candidate": false,
+      "approval_contract_status": "contract_missing",
+      "approval_live_ready": false,
+      "approval_artifact_path": "/home/ubuntu/KORStockScan/data/threshold_cycle/approvals/panic_entry_freeze_guard_2026-05-22.json",
+      "approval_contract_missing_components": [
+        "approval_artifact_loader",
+        "preopen_env_mapping",
+        "entry_pre_submit_runtime_guard",
+        "rollback_tests"
+      ]
+    },
+    {
+      "domain": "panic_buying",
+      "family": "panic_buy_runner_tp_canary",
+      "description": "패닉바잉 구간에서 fixed TP 전량청산 대비 runner 유지가 missed upside를 줄이는지 보는 축",
+      "state": "freeze",
+      "current_application": "report-only: TP/trailing/live exit 변경 없음",
+      "state_interpretation": "계측/DB/safety 문제로 runtime 변경을 금지한다",
+      "score": 0.45,
+      "score_label": "0.45",
+      "sample": {
+        "count": 2,
+        "floor": 1
+      },
+      "reasons": [
+        "source_quality_blocker",
+        "panic_buy_orderbook_collector_coverage_gap"
+      ],
+      "reason_label": "소스 품질 차단, panic_buy_orderbook_collector_coverage_gap",
+      "panic_buy_regime_mode": "NORMAL",
+      "panic_buy_regime_decision_authority": "source_quality_only",
+      "panic_buy_regime_runtime_effect": "report_only_no_mutation",
+      "risk_regime_gate_state": "normal",
+      "risk_regime_gate_authority": "source_quality_only",
+      "risk_regime_threshold_mode": "dynamic_quantile",
+      "confirmed_evidence_count": 2,
+      "market_wide_panic_buy_confirmed": false,
+      "market_breadth_risk_on_advisory": true,
+      "source_quality_blockers": [
+        "panic_buy_orderbook_collector_coverage_gap"
+      ],
+      "selected_auto_bounded_live": false,
+      "candidate_status": {
+        "panic_buy_runner_tp_canary": "hold_until_confirmed_panic_buy_with_tp_context"
+      },
+      "approval_contract_status": "contract_missing",
+      "approval_live_ready": false,
+      "approval_artifact_path": "/home/ubuntu/KORStockScan/data/threshold_cycle/approvals/panic_buy_runner_tp_canary_2026-05-22.json",
+      "approval_contract_missing_components": [
+        "approval_artifact_loader",
+        "preopen_env_mapping",
+        "tp_runner_runtime_guard",
+        "rollback_tests"
+      ]
+    }
+  ],
+  "warnings": []
 }

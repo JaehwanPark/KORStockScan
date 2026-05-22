@@ -150,6 +150,39 @@ def _source_dimensions(bucket_type: str, bucket_key: str) -> dict[str, str]:
     return dimensions or {bucket_type: bucket_key}
 
 
+def _stable_source_bucket_id(stage: str, bucket_type: str, bucket_key: str) -> str:
+    raw = f"{stage}|{bucket_type}|{bucket_key}"
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:10]
+    return f"{stage}:{bucket_type}:{_slug(bucket_key, max_len=60)}:{digest}"
+
+
+def _source_bucket_kind(candidate_state: str, bucket: dict[str, Any]) -> str:
+    if candidate_state == "live_auto_apply_ready":
+        return "live_auto_candidate"
+    if candidate_state == "sim_auto_approved":
+        return "sim_auto_policy"
+    if bucket.get("unknown_dimension_counts") or "unknown" in str(bucket.get("bucket_key") or ""):
+        return "taxonomy_provenance_gap"
+    if candidate_state in {"code_patch_required", "automation_handoff_gap", "runtime_blocked_contract_gap"}:
+        return "source_quality_gap"
+    return "source_only_observation"
+
+
+def _recommended_resolution(candidate_state: str, bucket: dict[str, Any]) -> str:
+    existing = str(bucket.get("recommended_resolution") or "").strip()
+    if existing and existing != "none":
+        return existing
+    if bucket.get("unknown_dimension_counts") or "unknown" in str(bucket.get("bucket_key") or ""):
+        return "resolve_unknown_source_dimensions"
+    if candidate_state == "live_auto_apply_ready":
+        return "preopen_live_auto_bridge"
+    if candidate_state == "sim_auto_approved":
+        return "next_preopen_sim_policy_input"
+    if str(bucket.get("source_quality_gate") or "") != "pass":
+        return "keep_collecting_until_sample_floor"
+    return "keep_collecting"
+
+
 def _source_contract_snapshot(ldm: dict[str, Any]) -> dict[str, Any]:
     source_map = ldm.get("sources") if isinstance(ldm.get("sources"), dict) else {}
     sections: dict[str, Any] = {}
@@ -284,7 +317,7 @@ def _classify_bucket(stage: str, bucket: dict[str, Any]) -> tuple[str, str | Non
     ):
         return "live_auto_apply_ready", live_family
     if "unknown" in bucket_key:
-        return "new_bucket_candidate", None
+        return "source_only_keep_collecting", None
     if route in {"candidate_recovery_or_relax", "candidate_tighten_or_exclude"}:
         return "sim_auto_approved", None
     return "source_only_keep_collecting", None
@@ -296,14 +329,17 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
     state, live_family = _classify_bucket(stage, bucket)
     relation = _relation_for(bucket_type, bucket_key)
     bucket_id = f"{stage}:{bucket_type}:{_slug(bucket_key)}"
+    source_bucket_id = _stable_source_bucket_id(stage, bucket_type, bucket_key)
     joined_sample = _safe_int(bucket.get("joined_sample"))
     sample = _safe_int(bucket.get("sample"), joined_sample)
     return {
         "bucket_id": bucket_id,
+        "source_bucket_id": source_bucket_id,
         "parent_bucket_id": f"{stage}:{bucket_type}",
         "stage": stage,
         "bucket_type": bucket_type,
         "bucket_key": bucket_key,
+        "source_bucket_kind": _source_bucket_kind(state, bucket),
         "bucket_relation": relation,
         "classification_state": state,
         "live_auto_apply_family": live_family,
@@ -326,6 +362,10 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
         "source_quality_gate": bucket.get("source_quality_gate"),
         "recommended_route": bucket.get("recommended_route"),
         "recommended_action": _recommended_action(str(bucket.get("recommended_route") or "")),
+        "recommended_resolution": _recommended_resolution(state, bucket),
+        "unknown_dimension_counts": bucket.get("unknown_dimension_counts") or {},
+        "unknown_reason_counts": bucket.get("unknown_reason_counts") or {},
+        "source_field_coverage": bucket.get("source_field_coverage") or {},
         "actual_order_submitted": False,
         "broker_order_forbidden": state != "live_auto_apply_ready",
         "decision_authority": (
@@ -366,10 +406,12 @@ def _source_drift_candidates(changes: list[dict[str, Any]]) -> list[dict[str, An
         candidates.append(
             {
                 "bucket_id": bucket_id,
+                "source_bucket_id": _stable_source_bucket_id("source_contract", change_type, subject),
                 "parent_bucket_id": "source_contract:schema_drift",
                 "stage": "source_contract",
                 "bucket_type": change_type,
                 "bucket_key": subject,
+                "source_bucket_kind": "source_contract_gap",
                 "bucket_relation": "new_bucket_candidate",
                 "classification_state": state,
                 "live_auto_apply_family": None,
@@ -382,6 +424,10 @@ def _source_drift_candidates(changes: list[dict[str, Any]]) -> list[dict[str, An
                 "source_quality_gate": "source_contract_drift",
                 "recommended_route": "instrumentation_gap",
                 "recommended_action": "update_source_contract_or_taxonomy",
+                "recommended_resolution": "update_source_contract_or_taxonomy",
+                "unknown_dimension_counts": {},
+                "unknown_reason_counts": {},
+                "source_field_coverage": {},
                 "actual_order_submitted": False,
                 "broker_order_forbidden": True,
                 "decision_authority": "source_contract_drift_detection",
@@ -423,6 +469,7 @@ def _policy_stage_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         stage = str(entry.get("stage") or "unknown")
         bucket_id = f"{stage}:stage_policy:{_slug(entry.get('policy_key') or stage)}"
+        policy_key = str(entry.get("policy_key") or stage)
         state = (
             "sim_auto_approved"
             if str(entry.get("source_quality_gate") or "") == "pass"
@@ -431,10 +478,12 @@ def _policy_stage_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
         candidates.append(
             {
                 "bucket_id": bucket_id,
+                "source_bucket_id": _stable_source_bucket_id(stage, "stage_policy", policy_key),
                 "parent_bucket_id": f"{stage}:stage_policy",
                 "stage": stage,
                 "bucket_type": "stage_policy",
-                "bucket_key": str(entry.get("policy_key") or stage),
+                "bucket_key": policy_key,
+                "source_bucket_kind": "sim_auto_policy" if state == "sim_auto_approved" else "source_only_observation",
                 "bucket_relation": "existing_bucket_refinement",
                 "classification_state": state,
                 "live_auto_apply_family": None,
@@ -446,6 +495,12 @@ def _policy_stage_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "source_quality_adjusted_ev_pct": _safe_float(entry.get("stage_ev_composite_pct"), None),
                 "source_quality_gate": entry.get("source_quality_gate"),
                 "recommended_action": str(entry.get("selected_action") or "NO_CHANGE"),
+                "recommended_resolution": "next_preopen_sim_policy_input"
+                if state == "sim_auto_approved"
+                else "keep_collecting_until_sample_floor",
+                "unknown_dimension_counts": {},
+                "unknown_reason_counts": {},
+                "source_field_coverage": {},
                 "actual_order_submitted": False,
                 "broker_order_forbidden": True,
                 "decision_authority": "lifecycle_bucket_discovery_stage_policy_sim_auto",
@@ -737,6 +792,12 @@ def _finalize_report(
 ) -> dict[str, Any]:
     state_counts = Counter(str(item.get("classification_state") or "unknown") for item in candidates)
     stage_counts = Counter(str(item.get("stage") or "unknown") for item in candidates)
+    source_bucket_kind_counts = Counter(str(item.get("source_bucket_kind") or "unknown") for item in candidates)
+    unknown_reason_counts: Counter[str] = Counter()
+    for item in candidates:
+        counts = item.get("unknown_reason_counts") if isinstance(item.get("unknown_reason_counts"), dict) else {}
+        for key, value in counts.items():
+            unknown_reason_counts[str(key)] += _safe_int(value)
     surfaced = [
         item
         for item in candidates
@@ -754,6 +815,8 @@ def _finalize_report(
             "automation_handoff_gap_count": state_counts.get("automation_handoff_gap", 0),
             "state_counts": dict(state_counts),
             "stage_counts": dict(stage_counts),
+            "source_bucket_kind_counts": dict(source_bucket_kind_counts),
+            "unknown_reason_counts": dict(unknown_reason_counts),
             "human_intervention_required": False,
             "warnings": warnings,
         }

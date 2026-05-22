@@ -30,6 +30,7 @@ try:
         ANALYSIS_START,
         MIN_VALID_PROFIT_SAMPLES,
         OUTPUT_DIR,
+        PROJECT_ROOT,
         SOFT_STOP_RULES,
         TOP_N_PATTERNS,
         TRAILING_TP_RULES,
@@ -40,6 +41,7 @@ except ImportError:  # pragma: no cover - direct script execution
         ANALYSIS_START,
         MIN_VALID_PROFIT_SAMPLES,
         OUTPUT_DIR,
+        PROJECT_ROOT,
         SOFT_STOP_RULES,
         TOP_N_PATTERNS,
         TRAILING_TP_RULES,
@@ -47,6 +49,13 @@ except ImportError:  # pragma: no cover - direct script execution
 from tuning_observability_summary import write_tuning_observability_outputs
 
 LAB_DIR = Path(__file__).resolve().parent
+REPORT_DIR = PROJECT_ROOT / "data" / "report"
+SCALPING_FEEDBACK_SOURCES = {
+    "threshold_cycle_ev": ("threshold_cycle_ev", "threshold_cycle_ev"),
+    "lifecycle_decision_matrix": ("lifecycle_decision_matrix", "lifecycle_decision_matrix"),
+    "lifecycle_bucket_discovery": ("lifecycle_bucket_discovery", "lifecycle_bucket_discovery"),
+    "runtime_approval_summary": ("runtime_approval_summary", "runtime_approval_summary"),
+}
 
 
 # ── 로드 ──────────────────────────────────────────────────────────────────────
@@ -57,6 +66,40 @@ def _load_json(name: str) -> dict:
         return {}
     with open(p, encoding="utf-8") as f:
         return json.load(f)
+
+
+def _load_feedback_sources() -> dict:
+    consumed = []
+    missing = []
+    for source_id, (report_name, stem) in SCALPING_FEEDBACK_SOURCES.items():
+        path = REPORT_DIR / report_name / f"{stem}_{ANALYSIS_END.isoformat()}.json"
+        item = {
+            "source_id": source_id,
+            "path": str(path),
+            "runtime_effect": False,
+            "decision_authority": "source_quality_only",
+        }
+        if path.exists():
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                payload = {}
+            summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+            consumed.append(
+                {
+                    **item,
+                    "status": payload.get("status") or summary.get("status"),
+                    "warnings": payload.get("warnings") or summary.get("warnings") or [],
+                }
+            )
+        else:
+            missing.append({**item, "gap_type": "source_quality_gap"})
+    return {
+        "consumed_feedback_sources": consumed,
+        "missing_feedback_sources": missing,
+        "runtime_effect": False,
+        "decision_authority": "source_quality_only",
+    }
 
 
 def _load_csv(name: str) -> pd.DataFrame:
@@ -127,6 +170,7 @@ def build_summary_payload(ev_result: dict, trade_df: pd.DataFrame) -> dict:
         "opportunity_cost": ev_result.get("opportunity_cost", []),
         "ev_backlog_titles": [b["title"] for b in ev_result.get("ev_backlog", [])],
         "daily_stats":      daily_stats,
+        "feedback_sources": _load_feedback_sources(),
         "instructions": {
             "rule_1": "full_fill / partial_fill / split-entry 혼합 해석 금지",
             "rule_2": "전역 손절 강화 같은 단일축 일반화 결론 금지",

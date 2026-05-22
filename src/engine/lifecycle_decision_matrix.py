@@ -1258,6 +1258,122 @@ def _entry_bucket_features(row: dict[str, Any]) -> dict[str, str]:
     }
 
 
+ENTRY_BUCKET_FIELD_MAP = {
+    "score": "runtime_features.ai_score",
+    "source": "source_stage",
+    "liquidity": "runtime_features.liquidity_bucket",
+    "overbought": "runtime_features.overbought_bucket",
+    "time": "runtime_features.time_bucket",
+    "stale": "runtime_features.entry_submit_revalidation_warning|runtime_features.entry_submit_revalidation_block|runtime_features.stale_bucket",
+    "score_band": "runtime_features.ai_score",
+    "source_stage": "source_stage",
+    "chosen_action": "runtime_features.chosen_action",
+    "stale_bucket": "runtime_features.entry_submit_revalidation_warning|runtime_features.entry_submit_revalidation_block|runtime_features.stale_bucket",
+    "liquidity_bucket": "runtime_features.liquidity_bucket",
+    "strength_bucket": "runtime_features.risk_context_bucket",
+    "overbought_bucket": "runtime_features.overbought_bucket",
+    "time_bucket": "runtime_features.time_bucket",
+    "exit_rule": "labels.exit_rule",
+    "combo_entry_spot": "runtime_features.ai_score|source_stage|runtime_features.stale_bucket|runtime_features.liquidity_bucket|runtime_features.overbought_bucket|runtime_features.time_bucket",
+}
+
+
+SCALE_IN_BUCKET_FIELD_MAP = {
+    "arm": "runtime_features.scale_in_arm|runtime_features.add_type",
+    "blocker_namespace": "runtime_features.scale_in_blocker_namespace",
+    "blocker_reason": "runtime_features.scale_in_blocker_reason|runtime_features.source_quality_block_reason",
+    "profit_band": "runtime_features.profit_rate_live|labels.profit_rate",
+    "peak_profit_band": "runtime_features.peak_profit",
+    "held_bucket": "runtime_features.held_sec",
+    "ai_score_band": "runtime_features.ai_score",
+    "ai_score_source": "runtime_features.ai_score_source",
+    "supply_pass_bucket": "runtime_features.supply_pass_count",
+    "price_guard_reason": "runtime_features.price_guard_reason",
+    "qty_reason": "runtime_features.qty_reason",
+    "time_bucket": "runtime_features.time_bucket",
+}
+
+
+def _nested_present(row: dict[str, Any], path: str) -> bool:
+    current: Any = row
+    for part in path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return False
+        current = current.get(part)
+    return current not in (None, "", "-", "None", "none", "null")
+
+
+def _field_coverage(rows: list[dict[str, Any]], paths: str) -> dict[str, Any]:
+    field_paths = [part for part in paths.split("|") if part]
+    present = 0
+    for row in rows:
+        if any(_nested_present(row, path) for path in field_paths):
+            present += 1
+    total = len(rows)
+    return {
+        "source_fields": field_paths,
+        "present_count": present,
+        "sample_count": total,
+        "coverage_rate": round(present / total, 4) if total else 0.0,
+    }
+
+
+def _unknown_taxonomy_context(
+    *,
+    bucket_type: str,
+    bucket_key: str,
+    rows: list[dict[str, Any]],
+    joined_sample: int,
+    field_map: dict[str, str],
+) -> dict[str, Any]:
+    if "unknown" not in str(bucket_key):
+        return {
+            "unknown_dimension_counts": {},
+            "unknown_reason_counts": {},
+            "source_field_coverage": {},
+            "recommended_resolution": "none",
+        }
+    source_dimensions: list[str] = []
+    if bucket_type.startswith("combo_") and "=" in bucket_key:
+        for part in str(bucket_key).split("|"):
+            if "=" not in part:
+                continue
+            dimension, value = part.split("=", 1)
+            if "unknown" in value:
+                source_dimensions.append(dimension)
+    else:
+        source_dimensions.append(bucket_type)
+    source_field_coverage: dict[str, Any] = {}
+    reason_counts: Counter[str] = Counter()
+    for dimension in source_dimensions:
+        source_path = field_map.get(dimension) or field_map.get(bucket_type) or dimension
+        coverage = _field_coverage(rows, source_path)
+        source_field_coverage[dimension] = coverage
+        if joined_sample <= 0:
+            reason = "join_gap"
+        elif coverage["present_count"] <= 0:
+            reason = "missing_source_field"
+        elif coverage["coverage_rate"] < 1.0:
+            reason = "pre_instrumentation"
+        else:
+            reason = "not_applicable"
+        reason_counts[reason] += 1
+    if reason_counts.get("join_gap"):
+        recommended = "join_labels_before_bucket_decision"
+    elif reason_counts.get("missing_source_field"):
+        recommended = "emit_or_backfill_source_field"
+    elif reason_counts.get("pre_instrumentation"):
+        recommended = "keep_collecting_post_instrumentation"
+    else:
+        recommended = "mark_not_applicable_explicitly"
+    return {
+        "unknown_dimension_counts": dict(Counter(source_dimensions)),
+        "unknown_reason_counts": dict(reason_counts),
+        "source_field_coverage": source_field_coverage,
+        "recommended_resolution": recommended,
+    }
+
+
 def _avg_label(rows: list[dict[str, Any]], key: str) -> float | None:
     values: list[float] = []
     for row in rows:
@@ -1295,6 +1411,13 @@ def _entry_bucket_row(bucket_type: str, bucket_key: str, rows: list[dict[str, An
         recommended_route = "candidate_recovery_or_relax"
     else:
         recommended_route = "hold_no_edge"
+    unknown_context = _unknown_taxonomy_context(
+        bucket_type=bucket_type,
+        bucket_key=bucket_key,
+        rows=rows,
+        joined_sample=joined_sample,
+        field_map=ENTRY_BUCKET_FIELD_MAP,
+    )
     return {
         "bucket_type": bucket_type,
         "bucket_key": bucket_key,
@@ -1319,6 +1442,7 @@ def _entry_bucket_row(bucket_type: str, bucket_key: str, rows: list[dict[str, An
         "mae_60m_pct": _avg_label(joined, "mae_60m_pct"),
         "close_60m_pct": _avg_label(joined, "close_60m_pct"),
         "recommended_route": recommended_route,
+        **unknown_context,
         "decision_authority": "adm_weight_candidate_source_only",
         "runtime_effect": False,
         "forbidden_uses": [
@@ -1420,6 +1544,12 @@ def _entry_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "reason": "bucket_has_edge_but_needs_rolling_or_feature_confirmation",
             "recommended_route": item.get("recommended_route"),
             "metric_role": "source_quality_gate",
+            "implementation_status": "implemented",
+            "implementation_provenance": {
+                "source_field_coverage": item.get("source_field_coverage") or {},
+                "unknown_reason_counts": item.get("unknown_reason_counts") or {},
+                "recommended_resolution": item.get("recommended_resolution"),
+            },
             "runtime_effect": False,
         }
         for idx, item in enumerate(actionable[:10])
@@ -1526,6 +1656,13 @@ def _scale_in_bucket_row(bucket_type: str, bucket_key: str, rows: list[dict[str,
         recommended_route = "candidate_recovery_or_relax"
     else:
         recommended_route = "hold_no_edge"
+    unknown_context = _unknown_taxonomy_context(
+        bucket_type=bucket_type,
+        bucket_key=bucket_key,
+        rows=rows,
+        joined_sample=joined_sample,
+        field_map=SCALE_IN_BUCKET_FIELD_MAP,
+    )
     return {
         "bucket_type": bucket_type,
         "bucket_key": bucket_key,
@@ -1544,6 +1681,7 @@ def _scale_in_bucket_row(bucket_type: str, bucket_key: str, rows: list[dict[str,
         "mae_10m_pct": _avg_label(joined, "mae_10m_pct"),
         "close_10m_pct": _avg_label(joined, "close_10m_pct"),
         "recommended_route": recommended_route,
+        **unknown_context,
         "decision_authority": "adm_ldm_scale_in_bucket_attribution_source_only",
         "runtime_effect": False,
         "fixed_threshold_contract_role": "bounded_tunable",
@@ -1606,6 +1744,12 @@ def _scale_in_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "reason": "scale_in_arm_bucket_needs_source_quality_or_threshold_cycle_confirmation",
             "recommended_route": item.get("recommended_route"),
             "metric_role": "source_quality_gate",
+            "implementation_status": "implemented",
+            "implementation_provenance": {
+                "source_field_coverage": item.get("source_field_coverage") or {},
+                "unknown_reason_counts": item.get("unknown_reason_counts") or {},
+                "recommended_resolution": item.get("recommended_resolution"),
+            },
             "runtime_effect": False,
             "allowed_runtime_apply": False,
         }

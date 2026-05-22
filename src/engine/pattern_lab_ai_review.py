@@ -198,6 +198,76 @@ def _domain_for_check(check_id: str) -> str:
     return "cross_domain"
 
 
+def _explicit_gap_type(final_state: str) -> str | None:
+    if final_state == "automation_handoff_gap":
+        return "automation_handoff_gap"
+    if final_state == "source_quality_gap":
+        return "source_quality_gap"
+    if final_state == "ai_review_gap":
+        return "ai_review_gap"
+    if final_state == "code_patch_required":
+        return "code_patch_required"
+    return None
+
+
+def _source_path_labels_for_domain(context: dict[str, Any], domain: str) -> list[str]:
+    sources = context.get("sources") if isinstance(context.get("sources"), dict) else {}
+    if domain == "scalping":
+        labels = [
+            "scalping_pattern_lab_automation",
+            "pattern_lab_currentness_audit",
+            "threshold_cycle_ev",
+            "lifecycle_decision_matrix",
+            "lifecycle_bucket_discovery",
+        ]
+    elif domain == "swing":
+        labels = [
+            "swing_pattern_lab_automation",
+            "pattern_lab_currentness_audit",
+            "threshold_cycle_ev",
+            "swing_lifecycle_decision_matrix",
+            "swing_lifecycle_bucket_discovery",
+            "swing_strategy_discovery_ev",
+        ]
+    else:
+        labels = list(sources)
+    result: list[str] = []
+    for label in labels:
+        source = sources.get(label) if isinstance(sources.get(label), dict) else {}
+        path = source.get("path")
+        if path:
+            result.append(str(path))
+    return result[:12]
+
+
+def _normalize_final_conclusion(item: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    final_state = str(item.get("final_state") or "source_only_keep_collecting")
+    if final_state not in FINAL_STATES:
+        final_state = "code_patch_required"
+    final_decision = str(item.get("final_decision") or "")
+    if final_decision not in FINAL_DECISIONS:
+        final_decision = "surface_workorder" if final_state in GAP_STATES else "keep"
+    domain = str(item.get("domain") or "cross_domain")
+    auditor_pass = item.get("auditor_pass")
+    if auditor_pass is None:
+        auditor_pass = final_decision != "block_runtime_use" and final_state not in {"ai_review_gap"}
+    explicit_gap_type = item.get("explicit_gap_type") or _explicit_gap_type(final_state)
+    source_paths = item.get("source_paths") if isinstance(item.get("source_paths"), list) else []
+    if not source_paths:
+        source_paths = _source_path_labels_for_domain(context, domain)
+    return {
+        **item,
+        "review_id": str(item.get("review_id") or "unknown"),
+        "domain": domain,
+        "final_state": final_state,
+        "final_decision": final_decision,
+        "auditor_pass": bool(auditor_pass),
+        "explicit_gap_type": explicit_gap_type,
+        "source_paths": [str(path) for path in source_paths][:12],
+        "forbidden_runtime_uses": FORBIDDEN_USES,
+    }
+
+
 def _deterministic_two_pass_review(context: dict[str, Any]) -> dict[str, Any]:
     checks = [
         item
@@ -242,7 +312,8 @@ def _deterministic_two_pass_review(context: dict[str, Any]) -> dict[str, Any]:
         if state in GAP_STATES and count > 0
     ]
     final_conclusions = [
-        {
+        _normalize_final_conclusion(
+            {
             "review_id": item["review_id"],
             "domain": item["domain"],
             "final_state": item["interpreted_state"],
@@ -259,7 +330,9 @@ def _deterministic_two_pass_review(context: dict[str, Any]) -> dict[str, Any]:
                 if item["interpreted_state"] in GAP_STATES
                 else ["keep_collecting"]
             ),
-        }
+            },
+            context,
+        )
         for item in review_items
     ]
     return {
@@ -420,6 +493,9 @@ def _order_from_conclusion(conclusion: dict[str, Any]) -> dict[str, Any]:
             f"domain={conclusion.get('domain')}",
             f"final_state={final_state}",
             f"final_decision={conclusion.get('final_decision')}",
+            f"auditor_pass={conclusion.get('auditor_pass')}",
+            f"explicit_gap_type={conclusion.get('explicit_gap_type')}",
+            f"source_paths={conclusion.get('source_paths') or []}",
         ],
         "files_likely_touched": [
             "src/engine/pattern_lab_ai_review.py",
@@ -477,6 +553,12 @@ def build_pattern_lab_ai_review_report(
         if isinstance(ai_payload.get("final_conclusions"), list)
         else []
     )
+    conclusions = [
+        _normalize_final_conclusion(item, context)
+        for item in conclusions
+        if isinstance(item, dict)
+    ]
+    ai_payload["final_conclusions"] = conclusions
     orders = [
         _order_from_conclusion(item)
         for item in conclusions

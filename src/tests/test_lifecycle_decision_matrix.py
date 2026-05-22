@@ -3,6 +3,27 @@ import json
 from src.engine import lifecycle_decision_matrix as mod
 
 
+def test_lifecycle_bucket_rows_explain_unknown_source_field_causes():
+    rows = [
+        {
+            "runtime_features": {"ai_score": 67},
+            "labels": {"profit_rate": 0.4},
+            "stage_ev_composite_pct": 0.4,
+        }
+        for _ in range(3)
+    ]
+
+    entry = mod._entry_bucket_row("liquidity_bucket", "liquidity_unknown", rows)
+    scale = mod._scale_in_bucket_row("blocker_reason", "blocker_reason_unknown", rows)
+
+    assert entry["unknown_reason_counts"]["missing_source_field"] == 1
+    assert entry["source_field_coverage"]["liquidity_bucket"]["source_fields"] == [
+        "runtime_features.liquidity_bucket"
+    ]
+    assert scale["unknown_reason_counts"]["missing_source_field"] == 1
+    assert scale["recommended_resolution"] == "emit_or_backfill_source_field"
+
+
 def test_lifecycle_matrix_builder_separates_runtime_features_and_labels(tmp_path, monkeypatch):
     matrix_dir = tmp_path / "matrix"
     entry_dir = tmp_path / "entry_adm"

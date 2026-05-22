@@ -48,6 +48,27 @@ SWING_REENTRY_TERMS = (
     "swing_strategy_discovery_ev",
 )
 
+FEEDBACK_SOURCE_CONTRACTS = {
+    "scalping": {
+        "terms": SCALPING_REENTRY_TERMS,
+        "artifact_dirs": {
+            "threshold_cycle_ev": ("threshold_cycle_ev", "threshold_cycle_ev"),
+            "lifecycle_decision_matrix": ("lifecycle_decision_matrix", "lifecycle_decision_matrix"),
+            "lifecycle_bucket_discovery": ("lifecycle_bucket_discovery", "lifecycle_bucket_discovery"),
+            "runtime_approval_summary": ("runtime_approval_summary", "runtime_approval_summary"),
+        },
+    },
+    "swing": {
+        "terms": SWING_REENTRY_TERMS,
+        "artifact_dirs": {
+            "threshold_cycle_ev": ("threshold_cycle_ev", "threshold_cycle_ev"),
+            "swing_lifecycle_decision_matrix": ("swing_lifecycle_decision_matrix", "swing_lifecycle_decision_matrix"),
+            "swing_lifecycle_bucket_discovery": ("swing_lifecycle_bucket_discovery", "swing_lifecycle_bucket_discovery"),
+            "swing_strategy_discovery_ev": ("swing_strategy_discovery_ev", "swing_strategy_discovery_ev"),
+        },
+    },
+}
+
 
 def report_paths(target_date: str) -> tuple[Path, Path]:
     base = REPORT_DIR / REPORT_DIRNAME / f"{REPORT_TYPE}_{target_date}"
@@ -222,6 +243,51 @@ def _source_mentions_all(paths: list[Path], terms: tuple[str, ...]) -> bool:
     return bool(text) and all(term.lower() in text for term in terms)
 
 
+def _feedback_artifact_path(report_name: str, stem: str, target_date: str) -> Path:
+    return REPORT_DIR / report_name / f"{stem}_{target_date}.json"
+
+
+def _feedback_source_status(
+    *,
+    target_date: str,
+    domain: str,
+    source_paths: list[Path],
+) -> dict[str, Any]:
+    contract = FEEDBACK_SOURCE_CONTRACTS[domain]
+    active_text = _active_source_text(source_paths)
+    consumed: list[dict[str, Any]] = []
+    missing: list[dict[str, Any]] = []
+    for source_id, (report_name, stem) in contract["artifact_dirs"].items():
+        artifact_path = _feedback_artifact_path(report_name, stem, target_date)
+        mentioned = source_id.lower() in active_text
+        exists = artifact_path.exists()
+        item = {
+            "source_id": source_id,
+            "artifact_path": str(artifact_path) if exists else None,
+            "active_source_mentions": mentioned,
+            "artifact_exists": exists,
+            "decision_authority": "source_quality_only",
+            "runtime_effect": False,
+        }
+        if mentioned and exists:
+            consumed.append(item)
+        else:
+            reason = []
+            if not mentioned:
+                reason.append("active_source_missing_reference")
+            if not exists:
+                reason.append("same_day_artifact_missing")
+            missing.append({**item, "gap_type": "source_quality_gap", "reason": reason})
+    return {
+        "domain": domain,
+        "consumed_feedback_sources": consumed,
+        "missing_feedback_sources": missing,
+        "decision_authority": "source_quality_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+
+
 def _pattern_lab_ai_review_contract_ok() -> bool:
     candidates = [
         PROJECT_ROOT / "src" / "engine" / "pattern_lab_ai_review.py",
@@ -232,6 +298,9 @@ def _pattern_lab_ai_review_contract_ok() -> bool:
         "interpretation",
         "audit",
         "final_conclusions",
+        "auditor_pass",
+        "explicit_gap_type",
+        "source_paths",
         "runtime_effect",
         "allowed_runtime_apply",
         "FORBIDDEN_USES",
@@ -378,10 +447,23 @@ def build_pattern_lab_currentness_audit(target_date: str) -> dict[str, Any]:
         paths["gemini_scalping"]["lab_dir"],
         paths["claude_scalping"]["lab_dir"],
     ]
+    feedback_sources = {
+        "scalping": _feedback_source_status(
+            target_date=target_date,
+            domain="scalping",
+            source_paths=scalping_lab_dirs,
+        ),
+        "swing": _feedback_source_status(
+            target_date=target_date,
+            domain="swing",
+            source_paths=[paths["deepseek_swing"]["lab_dir"]],
+        ),
+    }
     checks.append(
         _check(
             check_id="scalping_ldm_threshold_reentry_sources",
-            ok=_source_mentions_all(scalping_lab_dirs, SCALPING_REENTRY_TERMS),
+            ok=_source_mentions_all(scalping_lab_dirs, SCALPING_REENTRY_TERMS)
+            and not feedback_sources["scalping"]["missing_feedback_sources"],
             finding=(
                 "Scalping pattern labs must consume threshold_cycle_ev, lifecycle_decision_matrix, "
                 "and lifecycle_bucket_discovery as re-entry sources so LDM/threshold outcomes improve the next lab run."
@@ -406,7 +488,8 @@ def build_pattern_lab_currentness_audit(target_date: str) -> dict[str, Any]:
     checks.append(
         _check(
             check_id="swing_ldm_threshold_reentry_sources",
-            ok=_source_mentions_all([paths["deepseek_swing"]["lab_dir"]], SWING_REENTRY_TERMS),
+            ok=_source_mentions_all([paths["deepseek_swing"]["lab_dir"]], SWING_REENTRY_TERMS)
+            and not feedback_sources["swing"]["missing_feedback_sources"],
             finding=(
                 "DeepSeek swing pattern lab must consume threshold_cycle_ev, swing_lifecycle_decision_matrix, "
                 "swing_lifecycle_bucket_discovery, and swing_strategy_discovery_ev as re-entry sources."
@@ -479,7 +562,16 @@ def build_pattern_lab_currentness_audit(target_date: str) -> dict[str, Any]:
             "check_count": len(checks),
             "fail_count": fail_count,
             "order_count": len(orders),
+            "consumed_feedback_source_count": sum(
+                len(item.get("consumed_feedback_sources") or [])
+                for item in feedback_sources.values()
+            ),
+            "missing_feedback_source_count": sum(
+                len(item.get("missing_feedback_sources") or [])
+                for item in feedback_sources.values()
+            ),
         },
+        "feedback_sources": feedback_sources,
         "checks": checks,
         "code_improvement_orders": orders,
     }

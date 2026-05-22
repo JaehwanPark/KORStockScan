@@ -23,6 +23,17 @@ def _write_json(path: Path, payload: dict) -> None:
 
 
 def _seed_labs(project_root: Path, target_date: str) -> None:
+    report_dir = project_root / "data" / "report"
+    for report_name, stem in (
+        ("threshold_cycle_ev", "threshold_cycle_ev"),
+        ("lifecycle_decision_matrix", "lifecycle_decision_matrix"),
+        ("lifecycle_bucket_discovery", "lifecycle_bucket_discovery"),
+        ("runtime_approval_summary", "runtime_approval_summary"),
+        ("swing_lifecycle_decision_matrix", "swing_lifecycle_decision_matrix"),
+        ("swing_lifecycle_bucket_discovery", "swing_lifecycle_bucket_discovery"),
+        ("swing_strategy_discovery_ev", "swing_strategy_discovery_ev"),
+    ):
+        _write_json(report_dir / report_name / f"{stem}_{target_date}.json", {"runtime_effect": False})
     for lab in ("gemini_scalping_pattern_lab", "claude_scalping_pattern_lab"):
         lab_dir = project_root / "analysis" / lab
         outputs = lab_dir / "outputs"
@@ -31,7 +42,8 @@ def _seed_labs(project_root: Path, target_date: str) -> None:
         _write_json(outputs / "tuning_observability_summary.json", {"schema_version": 2, "metric_contract": _metric_contract()})
         _write_json(outputs / "run_manifest.json", {"run_at": target_date, "history_coverage_end": target_date})
         (lab_dir / "README.md").write_text(
-            "report_only_observation\nthreshold_cycle_ev\nlifecycle_decision_matrix\nlifecycle_bucket_discovery\n",
+            "report_only_observation\nthreshold_cycle_ev\nlifecycle_decision_matrix\n"
+            "lifecycle_bucket_discovery\nruntime_approval_summary\n",
             encoding="utf-8",
         )
         (lab_dir / "config.py").write_text('INCLUDE_REMOTE = os.getenv("PATTERN_LAB_INCLUDE_REMOTE", "false")\n', encoding="utf-8")
@@ -61,6 +73,9 @@ def _seed_labs(project_root: Path, target_date: str) -> None:
         "FORBIDDEN_USES = []\n"
         "runtime_effect = False\n"
         "allowed_runtime_apply = False\n"
+        "auditor_pass = True\n"
+        "explicit_gap_type = None\n"
+        "source_paths = []\n"
         "ai_two_pass_review = {'interpretation': {}, 'audit': {}, 'final_conclusions': []}\n",
         encoding="utf-8",
     )
@@ -79,6 +94,8 @@ def test_currentness_audit_passes_when_contracts_and_guards_exist(tmp_path, monk
 
     assert report["status"] == "pass"
     assert report["runtime_effect"] is False
+    assert report["summary"]["missing_feedback_source_count"] == 0
+    assert report["feedback_sources"]["scalping"]["consumed_feedback_sources"]
     assert report["code_improvement_orders"] == []
     assert (report_dir / "pattern_lab_currentness_audit" / f"pattern_lab_currentness_audit_{target_date}.json").exists()
 

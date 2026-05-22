@@ -1,0 +1,128 @@
+# 2026-05-26 Stage2 To-Do Checklist
+
+## 오늘 목적
+
+- 전일 postclose 자동화가 만든 장전 apply 후보와 사용자 개입 요구사항을 산출물 기준으로 확인한다.
+- 실주문, threshold, provider, sim/probe 관련 변경은 approval artifact와 checklist 기준 없이 열지 않는다.
+- code-improvement workorder는 자동 repo 수정이 아니라 사용자가 Codex에 구현을 지시한 경우에만 실행한다.
+- `gpt-5.4-mini` Tier2 중 `entry_price`/`holding_flow`는 Nova Lite v1 primary 전환 후 provenance와 OpenAI failback을 확인한다.
+- Nova Micro는 하루 더 shadow 관찰하고, 장후에는 05-21/05-22/05-26 누적 exact join 기준으로 다시 판정한다.
+- OFI/QI stale/missing 급증과 스윙 probe handoff gap은 runtime 변경이 아니라 source-quality/producer readiness 작업으로 닫는다.
+
+## 오늘 강제 규칙
+
+- 장중 runtime threshold mutation은 금지한다. 적용은 PREOPEN `threshold_cycle_preopen_apply`가 생성한 runtime env만 source로 본다.
+- provider transport/provenance 확인은 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경과 분리한다.
+- Nova Lite v1 primary 적용 범위는 `entry_price,holding_flow`로 제한한다. 기타 Tier2 endpoint는 OpenAI 유지다.
+- Nova Lite v2는 Lite v1 primary와 비교하는 shadow-only다. v2 결과를 Lite v1 승격 근거와 혼합하지 않는다.
+- `actual_order_submitted=false`인 sim/probe 표본은 EV/source-quality 입력이며 실주문 전환 근거가 아니다.
+- pattern lab AI review warning은 source-only warning으로만 보고, 명시적 workorder/code patch가 생성될 때만 구현 대상으로 삼는다.
+- Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
+
+<!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
+## 자동 생성 체크리스트 (`2026-05-22` postclose -> `2026-05-26`)
+
+- 이 블록은 postclose 자동화 산출물에서 생성된다.
+- `codex_daily_workorder_*.md`는 downstream 전달물이라 입력 source로 사용하지 않는다.
+- RunbookOps 반복 확인은 `build_codex_daily_workorder`와 Project/Calendar 동기화 경로가 별도로 소유한다.
+
+## 장전 체크리스트 (08:40~09:00)
+
+- [ ] `[BedrockNovaLiteRouteAndV2ShadowPreopen0526] Nova Lite v1 entry_price/holding_flow primary 및 v2 shadow 계약 확인` (`Due: 2026-05-26`, `Slot: PREOPEN`, `TimeWindow: 08:40~08:45`, `Track: AITransport`)
+  - Source: [2026-05-22 checklist](/home/ubuntu/KORStockScan/docs/checklists/2026-05-22-stage2-todo-checklist.md), [bedrock_nova_lite_shadow.py](/home/ubuntu/KORStockScan/src/engine/bedrock_nova_lite_shadow.py), [bedrock_nova_lite_v2_shadow.py](/home/ubuntu/KORStockScan/src/engine/bedrock_nova_lite_v2_shadow.py), [bedrock_nova_provider.py](/home/ubuntu/KORStockScan/src/engine/bedrock_nova_provider.py), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py), AWS Bedrock Nova 2 Lite model documentation
+  - 판정 기준: startup env에 `KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE=primary`, `KORSTOCKSCAN_BEDROCK_NOVA_LITE_PRIMARY_ENDPOINTS=entry_price,holding_flow`, `KORSTOCKSCAN_BEDROCK_NOVA_LITE_V2_SHADOW_ENABLED=true`가 있고, provider audit에서 `entry_price`/`holding_flow`만 Bedrock Lite primary로 들어가며 OpenAI failback guard가 켜져 있는지 확인한다. v2 shadow는 `bedrock_nova_lite_v2_shadow_YYYY-MM-DD.jsonl`에 `baseline_bedrock_model_id`, `candidate_bedrock_model_id`, `v1_v2_action_match`, `v2_parse_ok`, `v2_latency_ms`, `v2_estimated_cost_usd`를 남겨야 한다.
+  - 금지: Lite v2 shadow를 Lite v1 route candidate, OpenAI `gpt-5.4-mini` 즉시 대체, provider route 변경, threshold/order guard 변경, bot restart trigger로 해석하지 않는다.
+  - 다음 액션: `lite_v1_primary_scope_confirmed_v2_shadow_collecting`, `openai_failback_active_with_v2_shadow_gap`, `defer_region_or_model_gap`, `fail_endpoint_scope_leak` 중 하나로 닫는다.
+
+- [ ] `[ThresholdEnvAutoApplyPreopen0526] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-05-26`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
+  - Source: [threshold_cycle_ev_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-22.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
+  - 판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.
+  - 금지: blocked family, approval artifact missing, same-stage owner conflict를 수동 env override로 우회하지 않는다.
+  - 다음 액션: `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.
+
+- [ ] `[OpenAIAndLiteTransportPreopenConfirm0526] OpenAI WS 유지 및 Lite endpoint provenance 확인` (`Due: 2026-05-26`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: RuntimeStability`)
+  - Source: [openai_ws_stability_2026-05-22.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-22.md), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py)
+  - 판정 기준: startup env의 OpenAI route/Responses WS 설정과 `analyze_target` OpenAI provenance, `entry_price`/`holding_flow` Lite primary provenance, 기타 Tier2 endpoint OpenAI 유지 여부를 분리 확인한다.
+  - 금지: provider transport 확인을 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경으로 해석하지 않는다.
+  - 다음 액션: Lite endpoint 또는 OpenAI 유지 표본이 부족하면 장중 표본 재확인 항목과 연결한다.
+
+- [ ] `[SwingApprovalArtifactPreopen0526] 스윙 approval request 및 별도 승인 artifact 존재 여부 확인` (`Due: 2026-05-26`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
+  - Source: [swing_runtime_approval_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-05-22.json), [threshold_cycle_ev_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-22.json)
+  - 판정 기준: approval request가 있더라도 사용자 승인 artifact가 없으면 env apply 대상이 아니다. 확인 대상은 `swing_runtime_approval:2026-05-22:swing_model_floor`, `swing_runtime_approval:2026-05-22:swing_gatekeeper_reject_cooldown`, `swing_one_share_real_canary:2026-05-22:phase0`다. dry-run 승인은 `data/threshold_cycle/approvals/swing_runtime_approvals_2026-05-22.json`, real canary 승인은 `data/threshold_cycle/approvals/swing_one_share_real_canary_2026-05-22.json`만 소비한다.
+  - 금지: 스윙 dry-run 해제, real canary, floor, scale-in real canary를 서로 자동 승인하지 않는다.
+  - 다음 액션: `approval_artifact_present`, `approval_artifact_missing`, `blocked_by_policy` 중 하나로 닫는다.
+
+## 장중 체크리스트 (09:05~15:20)
+
+- [ ] `[RuntimeEnvIntradayObserve0526] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-05-26`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
+  - Source: [threshold_cycle_ev_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-22.json)
+  - 판정 기준: selected_families=soft_stop_whipsaw_confirmation, score65_74_recovery_probe, scalp_sim_candidate_window_expansion, scalp_sim_ai_budget_manager, lifecycle_decision_matrix_runtime, swing_one_share_real_canary_phase0, swing_gatekeeper_reject_cooldown가 runtime event provenance에 찍히는지 확인한다.
+  - 금지: 장중 관찰 결과로 runtime threshold mutation을 수행하지 않는다.
+  - 다음 액션: provenance present/missing, rollback guard breach 여부를 분리 기록한다.
+
+- [ ] `[SimProbeIntradayCoverage0526] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-05-26`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
+  - Source: [threshold_cycle_ev_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-22.json)
+  - 판정 기준: sim/probe 표본이 real execution과 분리되고 `actual_order_submitted=false` provenance가 유지되는지 확인한다.
+  - 금지: sim/probe EV를 broker execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
+  - 다음 액션: source-quality split, active state 복원, open/closed count를 같이 기록한다.
+
+- [ ] `[OFIQProducerReadiness0526] OFI/QI producer readiness 및 stale/missing reason별 수집 보강 확인` (`Due: 2026-05-26`, `Slot: INTRADAY`, `TimeWindow: 09:50~10:05`, `Track: RuntimeStability`)
+  - Source: [threshold_cycle_ev_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-22.json), [observation_source_quality_audit_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-05-22.json), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 판정 기준: `swing_lab_dq:OFI/QI stale/missing ratio=0.915 (517/565)`를 기준으로 `micro_missing`, `micro_stale`, `observer_unhealthy`, `micro_not_ready`, `state_insufficient`, `observer_gap_with_fresh_ws_quote`를 reason별 count와 unique record count로 분해한다. producer/consumer readiness는 WS quote freshness, orderbook micro cache ready, state sufficient, symbol coverage를 분리해서 확인한다.
+  - 금지: OFI/QI missing/stale warning을 단독 BUY/EXIT/scale-in hard gate, threshold 변경, provider route 변경, bot restart trigger로 해석하지 않는다.
+  - 다음 액션: `producer_ready_warning_resolved`, `source_quality_keep_collecting`, `code_workorder_needed_for_missing_field`, `fail_producer_handoff_gap` 중 하나로 닫는다.
+
+- [ ] `[SwingProbeSourceBookHandoff0526] swing_intraday_live_equiv_probe 생성 및 Swing LDM source_book handoff 확인` (`Due: 2026-05-26`, `Slot: INTRADAY`, `TimeWindow: 10:05~10:20`, `Track: SwingLogic`)
+  - Source: [swing_lifecycle_decision_matrix_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/swing_lifecycle_decision_matrix/swing_lifecycle_decision_matrix_2026-05-22.json), [threshold_cycle_ev_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-22.json), [swing_lifecycle_decision_matrix.py](/home/ubuntu/KORStockScan/src/engine/swing_lifecycle_decision_matrix.py)
+  - 판정 기준: 장중 `swing_intraday_live_equiv_probe` source row가 생성되고, 장후 Swing LDM의 `source_book_counts`에 `swing_intraday_live_equiv_probe > 0`으로 소비되는지 확인한다. `swing_lifecycle_decision_matrix:swing_intraday_live_equiv_probe_missing`이 재발하면 source producer, event naming, source_book join, postclose wrapper input 순서 중 어느 단계 gap인지 분리한다.
+  - 금지: probe source gap을 스윙 real order 승인, dry-run 해제, threshold apply, broker/provider/bot 변경 근거로 쓰지 않는다.
+  - 다음 액션: `probe_handoff_pass`, `producer_missing`, `source_book_join_gap`, `postclose_consumer_gap` 중 하나로 닫는다.
+
+## 장후 체크리스트 (16:30~18:55)
+
+- [ ] `[BedrockNovaMicroCumulativeDecision0526] Nova Micro 하루 추가 관찰 후 누적 exact join 판정` (`Due: 2026-05-26`, `Slot: POSTCLOSE`, `TimeWindow: 17:40~18:05`, `Track: AITransport`)
+  - Source: [bedrock_nova_micro_one_day_decision.py](/home/ubuntu/KORStockScan/src/tests/bedrock_nova_micro_one_day_decision.py), [bedrock_nova_micro_shadow_2026-05-21.jsonl](/home/ubuntu/KORStockScan/data/report/bedrock_nova_micro_shadow/bedrock_nova_micro_shadow_2026-05-21.jsonl), [bedrock_nova_micro_shadow_2026-05-22.jsonl](/home/ubuntu/KORStockScan/data/report/bedrock_nova_micro_shadow/bedrock_nova_micro_shadow_2026-05-22.jsonl), `bedrock_nova_micro_shadow_2026-05-26.jsonl`, `sim_post_sell_evaluations_YYYY-MM-DD.jsonl`
+  - 실행 명령: `PYTHONPATH=. .venv/bin/python -m src.tests.bedrock_nova_micro_one_day_decision --start-date 2026-05-21 --date 2026-05-26`
+  - 판정 기준: 05-21/05-22/05-26 누적 exact join만 primary로 쓰고, `entry_watch_buy`와 `holding_continuation`을 분리한다. action match, parse_ok, latency, cost, token/cache 절감, 일일 단독 EV로 winner를 정하지 않는다.
+  - 금지: 누적 판정 전 Micro shadow/duel OFF, global provider route 변경, threshold/order guard 변경, bot restart trigger 금지.
+  - 다음 액션: `winner_openai_turn_micro_shadow_off`, `winner_nova_micro_record_profile_candidate_turn_shadow_off`, `keep_shadow_collecting_source_quality_gap`, `fail_primary_metric_join_contract` 중 하나로 닫는다.
+
+- [ ] `[ThresholdDailyEVReport0526] daily EV real/sim/combined split 및 자동 반영 결과 확인` (`Due: 2026-05-26`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:45`, `Track: RuntimeStability`)
+  - Source: [threshold_cycle_ev_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-22.json)
+  - 판정 기준: real/sim/combined split, selected/blocked family, runtime_change, warning을 분리해 확인한다.
+  - 금지: sim/combined EV만으로 broker execution 품질이나 live 전환을 확정하지 않는다.
+  - 다음 액션: 다음 장전 apply 입력으로 쓸 수 있는 항목과 hold_sample/freeze 항목을 분리한다.
+
+- [ ] `[CodeImprovementWorkorderReview0526] code improvement workorder 구현 필요 여부 및 Codex 지시 대상 확인` (`Due: 2026-05-26`, `Slot: POSTCLOSE`, `TimeWindow: 16:45~17:00`, `Track: ScalpingLogic`)
+  - Source: [code_improvement_workorder_2026-05-22.md](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-22.md), [code_improvement_workorder_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-22.json)
+  - 판정 기준: selected_order_count=29와 `implement_now`, `attach_existing_family`, `design_family_candidate`, `reject` 분류를 확인한다.
+  - 금지: code-improvement workorder를 자동 repo 수정으로 취급하지 않는다. 사용자가 Codex 구현을 지시한 경우에만 실행한다.
+  - 다음 액션: 구현 필요, 설계 보류, reject, already_implemented 중 하나로 닫는다.
+
+- [ ] `[PatternLabAIReviewWarningDisposition0526] pattern_lab_ai_review_warning source-only 처리 및 workorder 표면화 여부 확인` (`Due: 2026-05-26`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:25`, `Track: RuntimeStability`)
+  - Source: [pattern_lab_ai_review_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-05-22.json), [runtime_approval_summary_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-05-22.json), [code_improvement_workorder_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-22.json)
+  - 판정 기준: `pattern_lab_ai_review_warning`은 `decision_authority=pattern_lab_ai_review_source_only`, `runtime_effect=false`로 유지한다. `fail_count`, `warning_count`, `code_improvement_order_count`, `explicit_gap_type`, `source_paths`, `forbidden_runtime_uses`를 확인하고, 명시적 source-quality/automation handoff gap이 있을 때만 code workorder로 표면화한다.
+  - 금지: AI review ambiguity 또는 source-only warning을 runtime mutation, threshold/order/provider/bot 변경, 자동 approval artifact 생성으로 연결하지 않는다.
+  - 다음 액션: `source_only_no_workorder`, `workorder_surface_required`, `fail_runtime_mutation_leak` 중 하나로 닫는다.
+
+- [ ] `[HumanInterventionSummary0526] 자동화체인 사용자 개입 요구사항 분류 및 누락 확인` (`Due: 2026-05-26`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:15`, `Track: RuntimeStability`)
+  - Source: [threshold_cycle_ev_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-22.json), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 판정 기준: 개입사항을 `approval_artifact_required|created|missing|blocked_by_policy|observe_only`, `Codex 구현 필요`, `수동 동기화 필요`, `관찰만`으로 분류한다.
+  - 금지: approval request만 보고 env 파일을 직접 수정하지 않고, 자동화 산출물에 있는 요청을 답변에만 남기고 checklist/Project 대상에서 누락하지 않는다.
+  - 다음 액션: approval request가 있으면 `approval_id`, 후보/대상, artifact path, 승인 여부, 다음 PREOPEN 적용 확인 항목을 남긴다. 누락된 항목이 있으면 다음 영업일 checklist에 parser-friendly checkbox로 추가한다.
+
+- [ ] `[ShadowCanaryCohortReview0526] shadow/canary/cohort 런타임 분류 및 정리 판정` (`Due: 2026-05-26`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)
+  - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)
+  - 판정 기준: 당일 변경/관찰 결과를 기준으로 `remove`, `observe-only`, `baseline-promote`, `active-canary` 상태 변동 여부를 닫는다.
+  - 금지: shadow 금지, canary-only, baseline 승격 원칙을 코드/문서 상태와 분리하지 않는다.
+  - 다음 액션: 변경이 있으면 기준문서와 checklist를 함께 갱신하고 cohort 잠금 필드를 남긴다.
+
+<!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
+
+## Project/Calendar 동기화
+
+문서/checklist를 수정했으면 parser 검증은 실행하고, Project/Calendar 동기화는 사용자가 아래 명령으로 수동 실행한다.
+
+```bash
+PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
+```

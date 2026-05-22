@@ -4,11 +4,11 @@
 - status: `pass`
 - source_contract_status: `pass` / changes: `0`
 - ai_two_pass_review: `disabled` / model: `-` / tier: `tier3`
-- surfaced_candidate_count: `94`
-- sim_auto_approved_count: `84`
-- live_auto_apply_ready_count: `0`
+- surfaced_candidate_count: `120`
+- sim_auto_approved_count: `119`
+- live_auto_apply_ready_count: `1`
 - human_intervention_required: `False`
-- warnings: `['ai_review_provider_disabled']`
+- warnings: `['ai_review_provider_disabled', 'ai_two_pass_review_disabled_live_auto_deferred_to_post_apply']`
 
 ## 근거
 
@@ -18,26 +18,26 @@
 - audit_issues: `[]`
 - audit_reason: `-`
 
-- `entry:source_stage:wait6579_ev_cohort` stage=`entry` state=`sim_auto_approved` action=`relax_or_recover` relation=`existing_bucket_refinement` joined=`16` ev=`3.4568` ai_final=`-`
-- `entry:stale_bucket:fresh_or_unflagged` stage=`entry` state=`sim_auto_approved` action=`relax_or_recover` relation=`existing_bucket_refinement` joined=`16` ev=`3.4568` ai_final=`-`
-- `entry:chosen_action:action_unknown` stage=`entry` state=`new_bucket_candidate` action=`relax_or_recover` relation=`new_bucket_candidate` joined=`16` ev=`3.4568` ai_final=`-`
-- `entry:exit_rule:exit_unknown` stage=`entry` state=`new_bucket_candidate` action=`relax_or_recover` relation=`new_bucket_candidate` joined=`16` ev=`3.4568` ai_final=`-`
-- `entry:liquidity_bucket:liquidity_unknown` stage=`entry` state=`new_bucket_candidate` action=`relax_or_recover` relation=`new_bucket_candidate` joined=`16` ev=`3.4568` ai_final=`-`
-- `entry:overbought_bucket:overbought_unknown` stage=`entry` state=`new_bucket_candidate` action=`relax_or_recover` relation=`new_bucket_candidate` joined=`16` ev=`3.4568` ai_final=`-`
-- `entry:strength_bucket:strength_unknown` stage=`entry` state=`new_bucket_candidate` action=`relax_or_recover` relation=`new_bucket_candidate` joined=`16` ev=`3.4568` ai_final=`-`
-- `entry:time_bucket:time_unknown` stage=`entry` state=`new_bucket_candidate` action=`relax_or_recover` relation=`new_bucket_candidate` joined=`16` ev=`3.4568` ai_final=`-`
-- `scale_in:arm:avg_down` stage=`scale_in` state=`sim_auto_approved` action=`tighten_or_exclude` relation=`existing_bucket_refinement` joined=`3306` ev=`-0.5472` ai_final=`-`
-- `scale_in:blocker_namespace:avg_down` stage=`scale_in` state=`sim_auto_approved` action=`tighten_or_exclude` relation=`existing_bucket_refinement` joined=`2141` ev=`-0.6893` ai_final=`-`
-- `scale_in:arm:pyramid` stage=`scale_in` state=`sim_auto_approved` action=`relax_or_recover` relation=`existing_bucket_refinement` joined=`1560` ev=`0.5504` ai_final=`-`
-- `scale_in:blocker_namespace:pyramid` stage=`scale_in` state=`sim_auto_approved` action=`relax_or_recover` relation=`existing_bucket_refinement` joined=`1560` ev=`0.5504` ai_final=`-`
-- `scale_in:blocker_reason:profit_not_enough` stage=`scale_in` state=`sim_auto_approved` action=`relax_or_recover` relation=`existing_bucket_refinement` joined=`1324` ev=`0.525` ai_final=`-`
-- `scale_in:blocker_reason:low_broken` stage=`scale_in` state=`sim_auto_approved` action=`tighten_or_exclude` relation=`existing_bucket_refinement` joined=`234` ev=`-0.3345` ai_final=`-`
-- `scale_in:blocker_reason:pnl_out_of_range_0_82` stage=`scale_in` state=`sim_auto_approved` action=`tighten_or_exclude` relation=`existing_bucket_refinement` joined=`52` ev=`-0.7169` ai_final=`-`
-- `scale_in:blocker_reason:pnl_out_of_range_0_96` stage=`scale_in` state=`sim_auto_approved` action=`tighten_or_exclude` relation=`existing_bucket_refinement` joined=`51` ev=`-0.7881` ai_final=`-`
-- `scale_in:blocker_reason:pnl_out_of_range_0_76` stage=`scale_in` state=`sim_auto_approved` action=`tighten_or_exclude` relation=`existing_bucket_refinement` joined=`46` ev=`-0.6882` ai_final=`-`
-- `scale_in:blocker_reason:pnl_out_of_range_0_90` stage=`scale_in` state=`sim_auto_approved` action=`tighten_or_exclude` relation=`existing_bucket_refinement` joined=`38` ev=`-0.7983` ai_final=`-`
-- `scale_in:blocker_reason:pnl_out_of_range_1_12` stage=`scale_in` state=`sim_auto_approved` action=`tighten_or_exclude` relation=`existing_bucket_refinement` joined=`38` ev=`-0.9804` ai_final=`-`
-- `scale_in:blocker_reason:pnl_out_of_range_1_20` stage=`scale_in` state=`sim_auto_approved` action=`tighten_or_exclude` relation=`existing_bucket_refinement` joined=`32` ev=`-1.0006` ai_final=`-`
+- `entry:combo_entry_spot:score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liquidity_unknown` stage=`entry` state=`live_auto_apply_ready` action=`relax_or_recover` relation=`new_bucket_candidate` joined=`24` ev=`2.1843` ai_final=`-`
+- `entry:chosen_action:no_buy_ai` stage=`entry` state=`sim_auto_approved` action=`tighten_or_exclude` relation=`existing_bucket_refinement` joined=`102` ev=`-0.3299` ai_final=`-`
+- `entry:source_stage:scalp_entry_action_decision_snapshot` stage=`entry` state=`sim_auto_approved` action=`tighten_or_exclude` relation=`existing_bucket_refinement` joined=`102` ev=`-0.3299` ai_final=`-`
+- `entry:stale_bucket:fresh` stage=`entry` state=`sim_auto_approved` action=`tighten_or_exclude` relation=`existing_bucket_refinement` joined=`80` ev=`-0.3696` ai_final=`-`
+- `entry:source_stage:wait6579_ev_cohort` stage=`entry` state=`sim_auto_approved` action=`relax_or_recover` relation=`existing_bucket_refinement` joined=`35` ev=`2.3199` ai_final=`-`
+- `entry:stale_bucket:fresh_or_unflagged` stage=`entry` state=`sim_auto_approved` action=`relax_or_recover` relation=`existing_bucket_refinement` joined=`35` ev=`2.3199` ai_final=`-`
+- `entry:exit_rule:scalp_trailing_take_profit` stage=`entry` state=`sim_auto_approved` action=`tighten_or_exclude` relation=`existing_bucket_refinement` joined=`34` ev=`-0.3781` ai_final=`-`
+- `entry:time_bucket:time_1000_1200` stage=`entry` state=`sim_auto_approved` action=`tighten_or_exclude` relation=`existing_bucket_refinement` joined=`33` ev=`-0.8942` ai_final=`-`
+- `entry:score_band:score_66_69` stage=`entry` state=`sim_auto_approved` action=`relax_or_recover` relation=`existing_bucket_refinement` joined=`28` ev=`1.6584` ai_final=`-`
+- `entry:exit_rule:scalp_hard_stop_pct` stage=`entry` state=`sim_auto_approved` action=`tighten_or_exclude` relation=`existing_bucket_refinement` joined=`23` ev=`-0.4198` ai_final=`-`
+- `entry:score_band:score_63_65` stage=`entry` state=`sim_auto_approved` action=`relax_or_recover` relation=`existing_bucket_refinement` joined=`16` ev=`1.5141` ai_final=`-`
+- `scale_in:arm:avg_down` stage=`scale_in` state=`sim_auto_approved` action=`tighten_or_exclude` relation=`existing_bucket_refinement` joined=`14657` ev=`-0.3673` ai_final=`-`
+- `scale_in:blocker_namespace:avg_down` stage=`scale_in` state=`sim_auto_approved` action=`tighten_or_exclude` relation=`existing_bucket_refinement` joined=`9960` ev=`-0.4206` ai_final=`-`
+- `scale_in:blocker_reason:profit_not_enough` stage=`scale_in` state=`sim_auto_approved` action=`relax_or_recover` relation=`existing_bucket_refinement` joined=`3633` ev=`0.3993` ai_final=`-`
+- `scale_in:blocker_reason:low_broken` stage=`scale_in` state=`sim_auto_approved` action=`tighten_or_exclude` relation=`existing_bucket_refinement` joined=`402` ev=`-0.3394` ai_final=`-`
+- `scale_in:blocker_reason:pnl_out_of_range_0_74` stage=`scale_in` state=`sim_auto_approved` action=`tighten_or_exclude` relation=`existing_bucket_refinement` joined=`335` ev=`-0.6702` ai_final=`-`
+- `scale_in:blocker_reason:pnl_out_of_range_1_29` stage=`scale_in` state=`sim_auto_approved` action=`tighten_or_exclude` relation=`existing_bucket_refinement` joined=`286` ev=`-1.184` ai_final=`-`
+- `scale_in:blocker_reason:pnl_out_of_range_0_76` stage=`scale_in` state=`sim_auto_approved` action=`tighten_or_exclude` relation=`existing_bucket_refinement` joined=`89` ev=`-0.6967` ai_final=`-`
+- `scale_in:blocker_reason:pnl_out_of_range_0_71` stage=`scale_in` state=`sim_auto_approved` action=`tighten_or_exclude` relation=`existing_bucket_refinement` joined=`76` ev=`-0.5846` ai_final=`-`
+- `scale_in:blocker_reason:pnl_out_of_range_0_96` stage=`scale_in` state=`sim_auto_approved` action=`tighten_or_exclude` relation=`existing_bucket_refinement` joined=`73` ev=`-0.7814` ai_final=`-`
 
 ## 다음 액션
 - `sim_auto_approved` bucket은 다음 PREOPEN sim policy에 자동 반영한다.

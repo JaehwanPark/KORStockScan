@@ -710,6 +710,12 @@ def build_report(target_date: str, state_path: Path = STATE_PATH) -> dict[str, A
         if str(event.get("stage") or "") == "scalp_sim_overnight_decision"
         and _event_fallback_class(_event_fields(event)) != "none"
     )
+    decided_sim_record_ids = {
+        str(_event_fields(event).get("sim_record_id") or "").strip()
+        for event in overnight_events
+        if str(event.get("stage") or "") == "scalp_sim_overnight_decision"
+        and str(_event_fields(event).get("sim_record_id") or "").strip()
+    }
     state = _load_state(state_path)
     active = state.get("active_positions") if isinstance(state.get("active_positions"), list) else []
     carry_open = [
@@ -723,6 +729,7 @@ def build_report(target_date: str, state_path: Path = STATE_PATH) -> dict[str, A
         row
         for row in active_eligible
         if str(row.get("scalp_sim_overnight_decision_date") or "") != target_date
+        and str(row.get("sim_record_id") or "").strip() not in decided_sim_record_ids
     ]
     decision_target = int(stage_counts.get("scalp_sim_overnight_decision", 0))
     coverage_denominator = decision_target + len(active_undecided)

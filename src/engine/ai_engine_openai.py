@@ -1551,6 +1551,7 @@ class GPTSniperEngine:
         try:
             from src.engine.bedrock_nova_provider import (
                 BedrockNovaProviderError,
+                endpoint_allowed_for_lite_primary,
                 provider_audit_row,
                 route_mode_for_model,
                 runtime_provider,
@@ -1559,6 +1560,10 @@ class GPTSniperEngine:
 
             route_mode, profile = route_mode_for_model(request.model_name)
             if route_mode != "primary" or profile is None:
+                return None
+            if str(request.model_name or "") == "gpt-5.4-mini" and not endpoint_allowed_for_lite_primary(
+                request.endpoint_name
+            ):
                 return None
             result = runtime_provider().converse(prompt=request.prompt or "", user_input=request.user_input, profile=profile)
             request_meta = self._build_bedrock_shadow_request_meta(request=request, transport_meta=transport_meta, roundtrip_ms=result.latency_ms)
@@ -1590,6 +1595,13 @@ class GPTSniperEngine:
             )
             self._set_last_transport_meta(transport_meta)
             write_provider_audit_row(provider_audit_row(request_meta=request_meta, result=result, payload=result.payload))
+            if str(request.model_name or "") == "gpt-5.4-mini":
+                self._enqueue_bedrock_nova_lite_v2_runtime_shadow(
+                    request=request,
+                    baseline_payload=result.payload,
+                    transport_meta=transport_meta,
+                    roundtrip_ms=result.latency_ms,
+                )
             return result.payload
         except Exception as exc:
             failback_enabled = str(os.getenv("KORSTOCKSCAN_BEDROCK_PRIMARY_FAILBACK_TO_OPENAI", "true")).strip().lower() in {
@@ -1721,6 +1733,39 @@ class GPTSniperEngine:
             )
         except Exception as exc:
             log_error(f"[BedrockNovaLiteShadow] enqueue skipped: {exc}")
+
+    def _enqueue_bedrock_nova_lite_v2_runtime_shadow(self, *, request, baseline_payload, transport_meta, roundtrip_ms=0):
+        try:
+            if str(os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_V2_SHADOW_ENABLED", "")).strip().lower() not in {
+                "1",
+                "true",
+                "yes",
+                "y",
+                "on",
+            }:
+                return
+            if not (bool(request.require_json) and str(request.model_name) == "gpt-5.4-mini"):
+                return
+            from src.engine.bedrock_nova_lite_v2_shadow import enqueue_runtime_shadow
+
+            request_meta = self._build_bedrock_shadow_request_meta(
+                request=request,
+                transport_meta=transport_meta,
+                roundtrip_ms=roundtrip_ms,
+            )
+            request_meta["target_run_date"] = os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_V2_TARGET_RUN_DATE", "")
+            request_meta["baseline_bedrock_model_id"] = str(transport_meta.get("bedrock_model_id") or "")
+            enqueue_runtime_shadow(
+                model_name=str(request.model_name),
+                require_json=bool(request.require_json),
+                prompt=request.prompt,
+                user_input=request.user_input,
+                baseline_payload=baseline_payload,
+                transport_meta=transport_meta,
+                request_meta=request_meta,
+            )
+        except Exception as exc:
+            log_error(f"[BedrockNovaLiteV2Shadow] enqueue skipped: {exc}")
 
     # ==========================================
     # 데이터 포맷팅 (ai_engine.py 동일 복사)

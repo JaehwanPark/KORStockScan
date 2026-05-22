@@ -1,7 +1,7 @@
 {
   "schema_version": "runtime_apply_bridge_v1",
   "date": "2026-05-22",
-  "generated_at": "2026-05-22T11:23:00+09:00",
+  "generated_at": "2026-05-22T16:55:20+09:00",
   "source": {
     "lifecycle_decision_matrix": "/home/ubuntu/KORStockScan/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_2026-05-22.json",
     "lifecycle_bucket_discovery": "/home/ubuntu/KORStockScan/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_2026-05-22.json",
@@ -11,10 +11,10 @@
   "summary": {
     "candidate_count": 2,
     "ready_for_approval_count": 0,
-    "live_auto_apply_ready_count": 0,
+    "live_auto_apply_ready_count": 1,
     "lifecycle_bucket_discovery_status": "present",
     "lifecycle_bucket_discovery_source_contract_status": "pass",
-    "lifecycle_bucket_discovery_ai_review_status": "disabled",
+    "lifecycle_bucket_discovery_ai_review_status": "parsed",
     "lifecycle_bucket_discovery_live_followup_count": 0,
     "approval_required_count": 0,
     "human_approval_required": false,
@@ -26,11 +26,11 @@
       "family": "entry_wait6579_score66_69_recovery_gate_v1",
       "stage": "entry",
       "priority": 9,
-      "bridge_candidate_state": "blocked_source_quality",
+      "bridge_candidate_state": "live_auto_apply_ready",
       "approval_required": false,
       "human_approval_required": false,
-      "live_auto_apply": false,
-      "allowed_runtime_apply": false,
+      "live_auto_apply": true,
+      "allowed_runtime_apply": true,
       "runtime_effect": false,
       "runtime_effect_after_approval": "bounded_entry_probe_recovery_live_auto",
       "target_env_keys": [
@@ -55,7 +55,7 @@
         "max_budget_krw": 50000,
         "max_qty": 1,
         "threshold_version": "entry_wait6579_score66_69_recovery_gate_v1:2026-05-22",
-        "calibration_state": "runtime_apply_bridge:blocked_source_quality"
+        "calibration_state": "runtime_apply_bridge:live_auto_apply_ready"
       },
       "current_values": {
         "enabled": false,
@@ -72,23 +72,23 @@
       "source_bucket": {
         "bucket_type": "combo_entry_spot",
         "bucket_key": "score=score_66_69|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_unknown|overbought=overbought_unknown|time=time_unknown",
-        "sample": 9,
-        "joined_sample": 9,
+        "sample": 24,
+        "joined_sample": 24,
         "join_rate": 1.0,
-        "source_quality_gate": "hold_sample",
-        "source_quality_adjusted_ev_pct": 2.7786,
-        "equal_weight_avg_profit_pct": 4.9087,
-        "diagnostic_win_rate": 0.8889,
-        "mfe_10m_pct": 7.1464,
-        "mae_10m_pct": -3.1759,
-        "close_10m_pct": 6.2226,
+        "source_quality_gate": "pass",
+        "source_quality_adjusted_ev_pct": 2.1843,
+        "equal_weight_avg_profit_pct": 3.3856,
+        "diagnostic_win_rate": 0.875,
+        "mfe_10m_pct": 4.8001,
+        "mae_10m_pct": -1.4519,
+        "close_10m_pct": 4.2044,
         "mfe_30m_pct": null,
         "mae_30m_pct": null,
         "close_30m_pct": null,
         "mfe_60m_pct": null,
         "mae_60m_pct": null,
         "close_60m_pct": null,
-        "recommended_route": "hold_sample",
+        "recommended_route": "candidate_recovery_or_relax",
         "decision_authority": "adm_weight_candidate_source_only",
         "runtime_effect": false,
         "forbidden_uses": [
@@ -100,11 +100,18 @@
         ]
       },
       "rolling_confirmation": {
-        "confirmation_count": 0,
-        "conflict_count": 0
+        "confirmation_count": 1,
+        "conflict_count": 0,
+        "daily_only_auto_apply": false,
+        "lifecycle_bucket_discovery_gate": "pass"
       },
       "lifecycle_bucket_discovery_source_contract_status": "pass",
-      "lifecycle_bucket_discovery_ai_review_status": "disabled",
+      "lifecycle_bucket_discovery_ai_review_status": "parsed",
+      "lifecycle_bucket_discovery_bucket_id": "entry:combo_entry_spot:score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liquidity_unknown",
+      "lifecycle_bucket_discovery_classification_state": "live_auto_apply_ready",
+      "lifecycle_bucket_discovery_bucket_relation": "existing_bucket_refinement",
+      "lifecycle_bucket_discovery_ai_final_decision": "correct",
+      "lifecycle_bucket_discovery_ai_final_reason": "Known combo_entry_spot taxonomy; keep existing live state.",
       "primary_decision_metric": "source_quality_adjusted_ev_pct",
       "decision_authority": "lifecycle_bucket_discovery_live_auto_apply",
       "forbidden_uses": [
@@ -150,17 +157,17 @@
           "role": "pyramid_tighten_or_disable",
           "bucket_type": "arm",
           "bucket_key": "PYRAMID",
-          "joined_sample": 1560,
-          "source_quality_adjusted_ev_pct": 0.5504,
-          "recommended_route": "candidate_recovery_or_relax",
+          "joined_sample": 5021,
+          "source_quality_adjusted_ev_pct": 0.2457,
+          "recommended_route": "hold_no_edge",
           "source_quality_gate": "pass"
         },
         {
           "role": "avg_down_reversal_tighten",
           "bucket_type": "blocker_namespace",
           "bucket_key": "AVG_DOWN_ONLY",
-          "joined_sample": 1165,
-          "source_quality_adjusted_ev_pct": -0.2861,
+          "joined_sample": 4697,
+          "source_quality_adjusted_ev_pct": -0.2543,
           "recommended_route": "hold_no_edge",
           "source_quality_gate": "pass"
         }
@@ -168,28 +175,10 @@
       "observe_only_reference_buckets": [
         {
           "role": "observe_only_reference",
-          "bucket_type": "arm",
-          "bucket_key": "PYRAMID",
-          "joined_sample": 1560,
-          "source_quality_adjusted_ev_pct": 0.5504,
-          "recommended_route": "candidate_recovery_or_relax",
-          "source_quality_gate": "pass"
-        },
-        {
-          "role": "observe_only_reference",
-          "bucket_type": "blocker_namespace",
-          "bucket_key": "PYRAMID",
-          "joined_sample": 1560,
-          "source_quality_adjusted_ev_pct": 0.5504,
-          "recommended_route": "candidate_recovery_or_relax",
-          "source_quality_gate": "pass"
-        },
-        {
-          "role": "observe_only_reference",
           "bucket_type": "blocker_reason",
           "bucket_key": "profit_not_enough",
-          "joined_sample": 1324,
-          "source_quality_adjusted_ev_pct": 0.525,
+          "joined_sample": 3633,
+          "source_quality_adjusted_ev_pct": 0.3993,
           "recommended_route": "candidate_recovery_or_relax",
           "source_quality_gate": "pass"
         },
@@ -197,8 +186,8 @@
           "role": "observe_only_reference",
           "bucket_type": "blocker_reason",
           "bucket_key": "trend_not_strong",
-          "joined_sample": 31,
-          "source_quality_adjusted_ev_pct": 3.0538,
+          "joined_sample": 37,
+          "source_quality_adjusted_ev_pct": 2.8673,
           "recommended_route": "candidate_recovery_or_relax",
           "source_quality_gate": "pass"
         }
@@ -207,7 +196,7 @@
         "pyramid": {
           "confirmation_count": 0,
           "conflict_count": 0,
-          "blocked_route": "candidate_recovery_or_relax",
+          "blocked_route": "hold_no_edge",
           "expected_route": "candidate_tighten_or_exclude"
         },
         "avg_down": {
@@ -220,7 +209,7 @@
         "avg_down_state": "blocked_source_quality"
       },
       "lifecycle_bucket_discovery_source_contract_status": "pass",
-      "lifecycle_bucket_discovery_ai_review_status": "disabled",
+      "lifecycle_bucket_discovery_ai_review_status": "parsed",
       "primary_decision_metric": "source_quality_adjusted_ev_pct",
       "decision_authority": "lifecycle_bucket_discovery_live_auto_apply",
       "forbidden_uses": [
@@ -232,7 +221,5 @@
       ]
     }
   ],
-  "warnings": [
-    "ai_review_provider_disabled"
-  ]
+  "warnings": []
 }

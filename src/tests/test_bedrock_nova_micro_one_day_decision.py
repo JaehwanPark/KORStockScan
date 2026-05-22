@@ -206,3 +206,50 @@ def test_one_day_decision_weak_join_is_reference_only(tmp_path, monkeypatch):
     assert entry["unique_valid_join_rows"] == 0
     assert entry["nova_micro_source_quality_adjusted_ev_pct"] == 0.0
     assert report["winner"] == "openai"
+
+
+def test_cumulative_decision_merges_daily_exact_join_scopes(tmp_path, monkeypatch):
+    post_sell = tmp_path / "post_sell"
+    post_sell.mkdir()
+    shadow_by_date = {}
+    for day, record_id, profit in [
+        ("2026-05-21", "R1", 1.0),
+        ("2026-05-22", "R2", -3.0),
+    ]:
+        shadow = tmp_path / f"shadow_{day}.jsonl"
+        shadow_by_date[day] = shadow
+        _write_jsonl(
+            shadow,
+            [
+                {
+                    "parse_ok": True,
+                    "created_at": f"{day}T10:00:00+09:00",
+                    "endpoint_name": "analyze_target",
+                    "source_event_stage": "watching_analyze_target",
+                    "record_id": record_id,
+                    "openai_action": "WAIT",
+                    "nova_action": "BUY",
+                }
+            ],
+        )
+        _write_jsonl(
+            post_sell / f"sim_post_sell_evaluations_{day}.jsonl",
+            [
+                {
+                    "sim_record_id": f"SIM-{record_id}",
+                    "sim_parent_record_id": record_id,
+                    "sell_time": "10:30:00",
+                    "profit_rate": profit,
+                }
+            ],
+        )
+    monkeypatch.setattr(mod, "shadow_jsonl_path", lambda target_date: shadow_by_date[target_date])
+    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell)
+
+    report = mod.build_decision("2026-05-22", start_date="2026-05-21")
+    entry = report["scope_results"]["entry_watch_buy"]
+
+    assert report["window_policy"] == "cumulative"
+    assert report["source_dates"] == ["2026-05-21", "2026-05-22"]
+    assert entry["unique_valid_join_rows"] == 2
+    assert entry["nova_micro_source_quality_adjusted_ev_pct"] == -1.0

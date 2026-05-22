@@ -2,16 +2,18 @@
 
 ## 판정
 
+- window_policy: `one_day`
+- source_dates: `['2026-05-22']`
 - winner: `openai`
 - winning_profile: `openai_baseline`
-- winner_reason: `no_valid_samples_final_tie_breaker_openai_baseline`
+- winner_reason: `openai_ev_edge_1.4036_pct`
 - no_defer_policy: `True`
 
 ## 근거
 
-- entry_watch_buy: unique_valid_join_rows=`0`, openai_ev=`0.0`, nova_micro_ev=`0.0`, diff=`0.0`
-- holding_continuation: unique_valid_join_rows=`0`, openai_ev=`0.0`, nova_micro_ev=`0.0`, diff=`0.0`
-- source_paths: `{'shadow_jsonl': '/home/ubuntu/KORStockScan/data/report/bedrock_nova_micro_shadow/bedrock_nova_micro_shadow_2026-05-22.jsonl', 'sim_post_sell_evaluations': 'data/post_sell/sim_post_sell_evaluations_2026-05-22.jsonl', 'sim_post_sell_candidates': 'data/post_sell/sim_post_sell_candidates_2026-05-22.jsonl'}`
+- entry_watch_buy: unique_valid_join_rows=`11`, openai_ev=`0.0`, nova_micro_ev=`-1.4036`, diff=`-1.4036`
+- holding_continuation: unique_valid_join_rows=`79`, openai_ev=`-0.0353`, nova_micro_ev=`-0.0063`, diff=`0.029`
+- source_paths: `{'shadow_jsonl': ['/home/ubuntu/KORStockScan/data/report/bedrock_nova_micro_shadow/bedrock_nova_micro_shadow_2026-05-22.jsonl'], 'sim_post_sell_evaluations': ['data/post_sell/sim_post_sell_evaluations_2026-05-22.jsonl'], 'sim_post_sell_candidates': ['data/post_sell/sim_post_sell_candidates_2026-05-22.jsonl']}`
 
 ## 다음 액션
 

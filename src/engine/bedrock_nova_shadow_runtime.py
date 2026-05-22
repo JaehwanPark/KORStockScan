@@ -56,6 +56,8 @@ class BedrockNovaShadowManager:
         workers: int = 1,
         queue_max: int = 200,
         sample_rate: float = 1.0,
+        baseline_provider_label: str = "openai",
+        candidate_provider_label: str = "nova",
     ):
         self.is_enabled = bool(enabled)
         self.report_dir = report_dir
@@ -68,6 +70,8 @@ class BedrockNovaShadowManager:
         self.workers = max(1, int(workers or 1))
         self.queue_max = max(1, int(queue_max or 200))
         self.sample_rate = max(0.0, min(1.0, float(sample_rate if sample_rate is not None else 1.0)))
+        self.baseline_provider_label = str(baseline_provider_label or "openai")
+        self.candidate_provider_label = str(candidate_provider_label or "nova")
         self._queue: queue.Queue[NovaShadowJob] | None = None
         self._threads: list[threading.Thread] = []
         self._lock = threading.Lock()
@@ -132,6 +136,10 @@ class BedrockNovaShadowManager:
                 "region_name": result.region_name,
                 "nova_action": nova_action,
                 "nova_score": nova_score,
+                "baseline_action": openai_action,
+                "baseline_score": openai_score,
+                "candidate_action": nova_action,
+                "candidate_score": nova_score,
                 "action_match": bool(openai_action and nova_action and openai_action == nova_action),
                 "score_delta": (nova_score - openai_score) if nova_score is not None and openai_score is not None else None,
                 "nova_latency_ms": result.latency_ms,
@@ -156,6 +164,21 @@ class BedrockNovaShadowManager:
                 "raw_text_sample": str(result.raw_text or "")[:500],
             }
         )
+        if self.event_type == "bedrock_nova_lite_v2_shadow":
+            row.update(
+                {
+                    "target_run_date": str(job.request_meta.get("target_run_date") or ""),
+                    "target_endpoint_scope": "tier2_gpt_5_4_mini",
+                    "candidate_model_family": "lite_v2",
+                    "baseline_bedrock_model_id": str(job.request_meta.get("baseline_bedrock_model_id") or ""),
+                    "candidate_bedrock_model_id": result.model_id,
+                    "v1_v2_action_match": bool(openai_action and nova_action and openai_action == nova_action),
+                    "v1_v2_score_delta": (nova_score - openai_score) if nova_score is not None and openai_score is not None else None,
+                    "v2_parse_ok": result.parse_ok,
+                    "v2_latency_ms": result.latency_ms,
+                    "v2_estimated_cost_usd": result.estimated_cost_usd,
+                }
+            )
         return row
 
     def _base_row(self, request_meta: dict[str, Any], transport_meta: dict[str, Any], openai_payload: dict[str, Any]) -> dict[str, Any]:
@@ -178,6 +201,12 @@ class BedrockNovaShadowManager:
             "pipeline_event_emitted_at": str(request_meta.get("pipeline_event_emitted_at") or ""),
             "openai_action": openai_action,
             "openai_score": openai_score,
+            "baseline_provider": self.baseline_provider_label,
+            "candidate_provider": self.candidate_provider_label,
+            "baseline_model_id": str(request_meta.get("baseline_model_id") or request_meta.get("baseline_bedrock_model_id") or ""),
+            "candidate_model_family": self.profile.family,
+            "baseline_action": openai_action,
+            "baseline_score": openai_score,
             "openai_latency_ms": _safe_int(request_meta.get("openai_latency_ms") or transport_meta.get("openai_ws_roundtrip_ms")),
             "decision_authority": DECISION_AUTHORITY,
             "runtime_effect": False,
