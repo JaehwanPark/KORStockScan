@@ -1469,12 +1469,19 @@ def _panic_lifecycle_followup_orders(calibration_report: dict[str, Any]) -> list
         if isinstance(panic_buy.get("source_quality_blockers"), list)
         else []
     )
-    panic_buy_triggered = bool(panic_buy_candidates) or (_safe_int(panic_buy.get("panic_buy_active_count"), 0) > 0)
-    panic_buy_triggered = panic_buy_triggered or (_safe_int(panic_buy.get("tp_counterfactual_count"), 0) > 0)
+    panic_buy_gate_state = str(panic_buy.get("risk_regime_gate_state") or "normal")
+    panic_buy_confirmed_evidence_count = _safe_int(panic_buy.get("confirmed_evidence_count"), 0)
+    panic_buy_report_candidate = any(
+        str(status) == "report_only_candidate" for status in panic_buy_candidates.values()
+    )
+    panic_buy_triggered = panic_buy_report_candidate
+    panic_buy_triggered = panic_buy_triggered or panic_buy_gate_state not in {"", "normal", "None"}
+    panic_buy_triggered = panic_buy_triggered or panic_buy_confirmed_evidence_count > 0
+    panic_buy_triggered = panic_buy_triggered or (_safe_int(panic_buy.get("tp_like_exit_count"), 0) > 0)
     panic_buy_triggered = panic_buy_triggered or (_safe_int(panic_buy.get("trailing_winner_count"), 0) > 0)
     panic_buy_triggered = panic_buy_triggered or bool(panic_buy_source_quality_blockers)
     if panic_buy_triggered:
-        source_quality_only = bool(panic_buy_source_quality_blockers)
+        source_quality_only = bool(panic_buy_source_quality_blockers) or panic_buy_gate_state == "source_quality_blocked"
         orders.append(
             {
                 "order_id": (
@@ -1508,9 +1515,13 @@ def _panic_lifecycle_followup_orders(calibration_report: dict[str, Any]) -> list
                 "evidence": [
                     f"panic_buy_state={panic_buy.get('panic_buy_state')}",
                     f"panic_buy_regime_mode={panic_buy.get('panic_buy_regime_mode')}",
+                    f"risk_regime_gate_state={panic_buy.get('risk_regime_gate_state')}",
+                    f"risk_regime_threshold_mode={panic_buy.get('risk_regime_threshold_mode')}",
+                    f"confirmed_evidence_count={panic_buy.get('confirmed_evidence_count')}",
                     f"panic_buy_active_count={panic_buy.get('panic_buy_active_count')}",
                     f"exhaustion_confirmed_count={panic_buy.get('exhaustion_confirmed_count')}",
                     f"tp_counterfactual_count={panic_buy.get('tp_counterfactual_count')}",
+                    f"tp_like_exit_count={panic_buy.get('tp_like_exit_count')}",
                     f"trailing_winner_count={panic_buy.get('trailing_winner_count')}",
                     f"market_wide_panic_buy_confirmed={panic_buy.get('market_wide_panic_buy_confirmed')}",
                     f"market_breadth_risk_on_advisory={panic_buy.get('market_breadth_risk_on_advisory')}",

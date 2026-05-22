@@ -48,6 +48,8 @@ def _write_market_breadth(tmp_path, payload: dict) -> None:
 
 
 def _micro_event(hhmmss: str, *, close: float, volume: float = 100.0, buy: float = 52.0, sell: float = 48.0, **fields):
+    stock_code = fields.pop("stock_code", "000001")
+    record_id = fields.pop("record_id", 1)
     payload = {
         "curr_price": close,
         "open": fields.pop("open", close),
@@ -58,7 +60,7 @@ def _micro_event(hhmmss: str, *, close: float, volume: float = 100.0, buy: float
         "sell_exec_volume": sell,
         **fields,
     }
-    return _event(hhmmss, fields=payload)
+    return _event(hhmmss, stock_code=stock_code, record_id=record_id, fields=payload)
 
 
 def test_normal_state_without_panic_buying_threshold(monkeypatch, tmp_path):
@@ -147,6 +149,8 @@ def test_microstructure_detector_adds_report_only_runner_flags(monkeypatch, tmp_
     micro = report["microstructure_detector"]
     assert report["panic_buy_state"] == "PANIC_BUY"
     assert report["panic_buy_regime_mode"] == "PANIC_BUY_CONTINUATION"
+    assert report["risk_regime_gate_state"] == "source_quality_blocked"
+    assert report["risk_regime_threshold_mode"] == "insufficient_sample"
     assert report["policy"]["runtime_effect"] == "report_only_no_mutation"
     assert "report_runner_hold_candidate" in report["panic_buy_regime_contract"]["allowed_actions"]
     assert "auto_buy" in report["panic_buy_regime_contract"]["forbidden_uses"]
@@ -160,6 +164,7 @@ def test_microstructure_detector_adds_report_only_runner_flags(monkeypatch, tmp_
     assert micro["micro_cusum_observer"]["consensus_pass_symbol_count"] == 1
     assert "order_submit" in micro["micro_cusum_observer"]["forbidden_uses"]
     assert all(item["allowed_runtime_apply"] is False for item in report["canary_candidates"])
+    assert report["canary_candidates"][0]["status"] == "hold_source_quality_blocked"
 
 
 def test_microstructure_detector_carries_recent_micro_snapshot_to_price_row(monkeypatch, tmp_path):
@@ -282,6 +287,10 @@ def test_tp_counterfactual_does_not_create_order_decision(monkeypatch, tmp_path)
     tp = report["tp_counterfactual_summary"]
     assert tp["tp_like_exit_count"] == 1
     assert tp["trailing_winner_count"] == 1
+    assert tp["candidate_context_count"] == 1
+    assert tp["real_exit_count"] == 1
+    assert tp["unproven_exit_count"] == 0
+    assert tp["real_exit_provenance_required"] is True
     assert tp["policy"]["runtime_effect"] == "counterfactual_only_no_order_change"
     assert report["canary_candidates"][0]["family"] == "panic_buy_runner_tp_canary"
     assert report["canary_candidates"][0]["allowed_runtime_apply"] is False
@@ -353,5 +362,107 @@ def test_tp_counterfactual_propagates_non_real_sibling_to_sparse_exit(monkeypatc
     tp = report["tp_counterfactual_summary"]
     assert tp["real_exit_count"] == 0
     assert tp["non_real_exit_count"] == 2
+    assert tp["unproven_exit_count"] == 0
     assert tp["tp_like_exit_count"] == 0
     assert tp["non_real_tp_like_exit_count"] == 2
+
+
+def test_tp_counterfactual_requires_real_order_provenance(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        [
+            _event(
+                "10:00:00",
+                pipeline="HOLDING_PIPELINE",
+                stage="exit_signal",
+                fields={
+                    "exit_rule": "scalp_trailing_take_profit",
+                    "profit_rate": "1.2",
+                    "peak_profit": "1.8",
+                },
+            )
+        ],
+    )
+
+    report = report_mod.build_panic_buying_report(
+        TARGET_DATE,
+        as_of=datetime.fromisoformat(f"{TARGET_DATE}T10:01:00"),
+    )
+
+    tp = report["tp_counterfactual_summary"]
+    assert tp["real_exit_count"] == 0
+    assert tp["unproven_exit_count"] == 1
+    assert tp["tp_like_exit_count"] == 0
+    assert tp["candidate_context_count"] == 0
+
+
+def test_confirmed_panic_buy_gate_requires_market_and_sample_ready(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    rows = []
+    for idx in range(8):
+        code = f"{idx + 1:06d}"
+        rows.extend(
+            [
+                _micro_event(
+                    "10:00:00",
+                    close=100.0,
+                    stock_code=code,
+                    record_id=idx + 1,
+                    best_bid=9900,
+                    best_ask=10000,
+                    bid_depth_l5=1000,
+                    ask_depth_l5=1000,
+                    orderbook_micro_ready=True,
+                    orderbook_micro_observer_healthy=True,
+                ),
+                _micro_event(
+                    "10:01:00",
+                    close=100.0,
+                    stock_code=code,
+                    record_id=idx + 1,
+                    best_bid=9900,
+                    best_ask=10000,
+                    bid_depth_l5=1000,
+                    ask_depth_l5=1000,
+                    orderbook_micro_ready=True,
+                    orderbook_micro_observer_healthy=True,
+                ),
+            ]
+        )
+    rows.extend(
+        [
+            _micro_event("10:02:00", close=102.6, open=100.0, high=102.8, low=99.9, volume=430, buy=76, sell=24, stock_code="000001", record_id=1, best_bid=10250, best_ask=10260, bid_depth_l5=1300, ask_depth_l5=520, ask_depth_drop_ratio=0.48, bid_depth_support_ratio=1.30, panic_buy_spread_ratio=2.0, orderbook_micro_ofi_z=3.0, orderbook_micro_ready=True, orderbook_micro_observer_healthy=True),
+            _micro_event("10:03:00", close=103.2, open=102.5, high=103.4, low=102.4, volume=440, buy=75, sell=25, stock_code="000001", record_id=1, best_bid=10310, best_ask=10320, bid_depth_l5=1350, ask_depth_l5=500, ask_depth_drop_ratio=0.50, bid_depth_support_ratio=1.35, panic_buy_spread_ratio=2.1, orderbook_micro_ofi_z=3.1, orderbook_micro_ready=True, orderbook_micro_observer_healthy=True),
+            _event(
+                "10:03:30",
+                pipeline="HOLDING_PIPELINE",
+                stage="exit_signal",
+                record_id=100,
+                stock_code="000001",
+                fields={
+                    "exit_rule": "scalp_trailing_take_profit",
+                    "profit_rate": "1.2",
+                    "actual_order_submitted": "true",
+                },
+            ),
+        ]
+    )
+    _write_events(tmp_path, rows)
+    _write_market_breadth(
+        tmp_path,
+        {
+            "as_of": f"{TARGET_DATE}T10:03:00",
+            "source_quality": {"status": "ok"},
+            "panic_breadth": {"risk_on_advisory": True, "risk_off_advisory": False},
+        },
+    )
+
+    report = report_mod.build_panic_buying_report(
+        TARGET_DATE,
+        as_of=datetime.fromisoformat(f"{TARGET_DATE}T10:04:00"),
+    )
+
+    assert report["risk_regime_gate_state"] == "confirmed_panic_buy"
+    assert report["risk_regime_threshold_mode"] == "dynamic_quantile"
+    assert report["canary_candidates"][0]["status"] == "report_only_candidate"

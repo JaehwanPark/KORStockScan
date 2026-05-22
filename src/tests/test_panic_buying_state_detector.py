@@ -6,6 +6,7 @@ from src.engine.panic_buying_state_detector import (
     PanicBuyingOrderbookMicro,
     PanicBuyingStateDetector,
     PanicBuyingTradeFlow,
+    summarize_microstructure_detector_from_events,
 )
 
 
@@ -160,6 +161,37 @@ def test_ofi_cusum_is_report_only_metric_not_required_for_state():
     assert signal.metrics["ofi_cusum_direction"] == "positive"
     assert signal.metrics["ofi_cusum_triggered"] is True
     assert signal.metrics["micro_consensus_pass"] is False
+
+
+def test_microstructure_summary_exposes_static_threshold_contract():
+    events = []
+    for offset, close in enumerate([100.0, 100.1, 100.2]):
+        events.append(
+            {
+                "pipeline": "ENTRY_PIPELINE",
+                "stage": "orderbook_stability_observed",
+                "stock_code": "000001",
+                "stock_name": "테스트종목",
+                "record_id": 1,
+                "emitted_at": (BASE + timedelta(minutes=offset)).isoformat(timespec="seconds"),
+                "fields": {
+                    "curr_price": close,
+                    "volume": 100,
+                    "buy_exec_volume": 52,
+                    "sell_exec_volume": 48,
+                    "best_bid": 9900,
+                    "best_ask": 10000,
+                },
+            }
+        )
+
+    summary = summarize_microstructure_detector_from_events(events, as_of=BASE + timedelta(minutes=3))
+
+    assert summary["threshold_mode"] == "static_fallback"
+    assert summary["threshold_contract"]["decision_authority"] == "source_quality_only"
+    assert summary["threshold_contract"]["runtime_effect"] == "report_only_no_mutation"
+    assert "panic_buy_entry_score_threshold" in summary["threshold_contract"]["static_fallback_values"]
+    assert "runtime_threshold_apply" in summary["threshold_contract"]["forbidden_uses"]
 
 
 def test_single_small_red_bar_does_not_confirm_exhaustion_when_buy_flow_stays_strong():

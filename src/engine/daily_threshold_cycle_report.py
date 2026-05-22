@@ -1355,6 +1355,8 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     panic_buy_micro = panic_buy_micro if isinstance(panic_buy_micro, dict) else {}
     panic_buy_market = panic_buying.get("market_breadth_context") if isinstance(panic_buying, dict) else {}
     panic_buy_market = panic_buy_market if isinstance(panic_buy_market, dict) else {}
+    panic_buy_gate = panic_buying.get("risk_regime_gate") if isinstance(panic_buying, dict) else {}
+    panic_buy_gate = panic_buy_gate if isinstance(panic_buy_gate, dict) else {}
     panic_buy_candidates = (
         panic_buying.get("canary_candidates")
         if isinstance(panic_buying.get("canary_candidates"), list)
@@ -1366,11 +1368,14 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
         if isinstance(item, dict) and item.get("family")
     }
     panic_buy_source_quality_blockers: list[str] = []
+    if isinstance(panic_buy_gate.get("source_quality_blockers"), list):
+        panic_buy_source_quality_blockers.extend(str(item) for item in panic_buy_gate["source_quality_blockers"])
     panic_buy_signal_count = _safe_int(panic_buy_micro.get("panic_buy_signal_count"), 0) or 0
     if panic_buy_signal_count > 0 and not bool(panic_buy_market.get("market_wide_panic_buy_confirmed")):
         panic_buy_source_quality_blockers.append("panic_buy_local_unconfirmed_by_market_breadth")
     if (_safe_int(panic_buy_micro.get("missing_orderbook_count"), 0) or 0) > 0:
         panic_buy_source_quality_blockers.append("panic_buy_orderbook_collector_coverage_gap")
+    panic_buy_source_quality_blockers = list(dict.fromkeys(panic_buy_source_quality_blockers))
     matrix_entries = decision_matrix.get("entries") if isinstance(decision_matrix.get("entries"), list) else []
     non_clear_matrix_entries = [
         entry
@@ -1852,6 +1857,16 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
                 if isinstance(panic_buying.get("panic_buy_regime_contract"), dict)
                 else []
             ),
+            "risk_regime_gate_state": panic_buying.get("risk_regime_gate_state")
+            if isinstance(panic_buying, dict)
+            else None,
+            "risk_regime_gate_authority": panic_buying.get("risk_regime_gate_authority")
+            if isinstance(panic_buying, dict)
+            else None,
+            "risk_regime_threshold_mode": panic_buying.get("risk_regime_threshold_mode")
+            if isinstance(panic_buying, dict)
+            else None,
+            "confirmed_evidence_count": _safe_int(panic_buy_gate.get("confirmed_evidence_count"), 0) or 0,
             "runtime_effect": (
                 (panic_buying.get("policy") or {}).get("runtime_effect")
                 if isinstance(panic_buying.get("policy"), dict)

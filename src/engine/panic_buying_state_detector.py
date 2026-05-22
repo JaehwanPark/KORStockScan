@@ -77,6 +77,39 @@ class PanicBuyingDetectorConfig:
     degrade_when_trade_aggressor_missing: bool = True
 
 
+def _detector_threshold_contract(config: PanicBuyingDetectorConfig, *, sample_count: int) -> dict[str, Any]:
+    return {
+        "threshold_mode": "static_fallback",
+        "threshold_sample_ready": sample_count >= max(1, config.min_bars_required),
+        "decision_authority": "source_quality_only",
+        "runtime_effect": "report_only_no_mutation",
+        "static_fallback_values": {
+            "panic_buy_entry_score_threshold": config.panic_buy_entry_score_threshold,
+            "panic_buy_confirm_bars": config.panic_buy_confirm_bars,
+            "panic_buy_confirm_window": config.panic_buy_confirm_window,
+            "min_abs_rise_short_pct": config.min_abs_rise_short_pct,
+            "min_abs_rise_mid_pct": config.min_abs_rise_mid_pct,
+            "return_z_panic_buy_threshold": config.return_z_panic_buy_threshold,
+            "volume_spike_threshold": config.volume_spike_threshold,
+            "buy_ratio_threshold": config.buy_ratio_threshold,
+            "ofi_z_panic_buy_threshold": config.ofi_z_panic_buy_threshold,
+            "ask_depth_drop_threshold": config.ask_depth_drop_threshold,
+            "spread_widen_threshold": config.spread_widen_threshold,
+            "exhaustion_score_threshold": config.exhaustion_score_threshold,
+            "buy_ratio_exhaustion_max": config.buy_ratio_exhaustion_max,
+            "ofi_z_exhaustion_max": config.ofi_z_exhaustion_max,
+        },
+        "forbidden_uses": [
+            "runtime_threshold_apply",
+            "order_submit",
+            "auto_sell",
+            "auto_buy",
+            "bot_restart",
+            "provider_route_change",
+        ],
+    }
+
+
 @dataclass(frozen=True)
 class PanicBuyingCandle:
     ts: datetime
@@ -1323,6 +1356,9 @@ def summarize_microstructure_detector_from_events(
             "runtime_effect": "report_only_no_mutation",
             "does_not_submit_orders": True,
         },
+        "threshold_mode": "static_fallback",
+        "threshold_contract": _detector_threshold_contract(cfg, sample_count=len(symbol_signals)),
+        "threshold_sample_ready": len(symbol_signals) >= max(1, cfg.min_bars_required),
         "evaluated_symbol_count": len(symbol_signals),
         "panic_buy_signal_count": active_count + watch_count,
         "panic_buy_active_count": active_count,

@@ -40,6 +40,14 @@ FORBIDDEN_AUTOMATIONS = [
     "bot_restart",
     "provider_route_change",
 ]
+BROKER_ORDER_ID_FIELDS = (
+    "order_no",
+    "sell_order_no",
+    "kiwoom_order_no",
+    "broker_order_no",
+    "broker_order_id",
+    "actual_order_id",
+)
 
 
 def _pipeline_events_path(target_date: str) -> Path:
@@ -97,6 +105,47 @@ def _avg(values: list[float]) -> float | None:
     return round(sum(values) / len(values), 4) if values else None
 
 
+def _quantile(values: list[float], q: float) -> float | None:
+    clean = sorted(float(value) for value in values if math.isfinite(float(value)))
+    if not clean:
+        return None
+    if len(clean) == 1:
+        return round(clean[0], 6)
+    pos = (len(clean) - 1) * max(0.0, min(1.0, float(q)))
+    lo = math.floor(pos)
+    hi = math.ceil(pos)
+    if lo == hi:
+        return round(clean[int(pos)], 6)
+    weight = pos - lo
+    return round(clean[lo] * (1.0 - weight) + clean[hi] * weight, 6)
+
+
+def _threshold_contract(
+    name: str,
+    *,
+    observed_value: Any,
+    dynamic_threshold_value: Any,
+    sample_count: int,
+    sample_floor: int,
+    static_fallback_value: Any = None,
+    threshold_source: str = "same_day_intraday_distribution",
+) -> dict[str, Any]:
+    sample_ready = sample_count >= sample_floor and dynamic_threshold_value is not None
+    return {
+        "name": name,
+        "threshold_mode": "dynamic_quantile" if sample_ready else "insufficient_sample",
+        "threshold_source": threshold_source if sample_ready else "insufficient_quantile_baseline",
+        "observed_value": observed_value,
+        "dynamic_threshold_value": dynamic_threshold_value,
+        "static_fallback_value": static_fallback_value,
+        "sample_count": int(sample_count),
+        "sample_floor": int(sample_floor),
+        "sample_ready": bool(sample_ready),
+        "decision_authority": "source_quality_only",
+        "runtime_effect": "report_only_no_mutation",
+    }
+
+
 def _load_json(path: Path) -> dict[str, Any] | list[Any] | None:
     if not path.exists():
         return None
@@ -139,6 +188,13 @@ def _is_non_real_observation(row: dict[str, Any]) -> bool:
     if fields.get("probe_id") or fields.get("probe_origin_stage"):
         return True
     return "sim_" in stage or "_probe_" in stage or stage.startswith("swing_probe_")
+
+
+def _has_real_exit_provenance(row: dict[str, Any]) -> bool:
+    fields = _event_fields(row)
+    if _truthy(fields.get("actual_order_submitted")):
+        return True
+    return any(_safe_str(fields.get(name)) for name in BROKER_ORDER_ID_FIELDS)
 
 
 def _attempt_key(row: dict[str, Any]) -> str:
@@ -205,12 +261,19 @@ def _summarize_tp_counterfactual(events: list[dict[str, Any]]) -> dict[str, Any]
     real_exit_rows = [
         row
         for row in exit_rows
-        if _attempt_key(row) not in non_real_keys and not _is_non_real_observation(row)
+        if _attempt_key(row) not in non_real_keys
+        and not _is_non_real_observation(row)
+        and _has_real_exit_provenance(row)
     ]
     non_real_exit_rows = [
         row
         for row in exit_rows
         if _attempt_key(row) in non_real_keys or _is_non_real_observation(row)
+    ]
+    unproven_exit_rows = [
+        row
+        for row in exit_rows
+        if row not in real_exit_rows and row not in non_real_exit_rows
     ]
     tp_rows = [row for row in real_exit_rows if _is_tp_like_exit(row)]
     non_real_tp_rows = [row for row in non_real_exit_rows if _is_tp_like_exit(row)]
@@ -230,12 +293,14 @@ def _summarize_tp_counterfactual(events: list[dict[str, Any]]) -> dict[str, Any]
         },
         "real_exit_count": len(real_exit_rows),
         "non_real_exit_count": len(non_real_exit_rows),
+        "unproven_exit_count": len(unproven_exit_rows),
+        "real_exit_provenance_required": True,
         "tp_like_exit_count": len(tp_rows),
         "non_real_tp_like_exit_count": len(non_real_tp_rows),
         "trailing_winner_count": len(trailing_rows),
         "avg_tp_profit_rate_pct": _avg(profits),
         "avg_tp_peak_profit_rate_pct": _avg(peak_profits),
-        "candidate_context_count": len(tp_rows) + len(trailing_rows),
+        "candidate_context_count": len(tp_rows),
         "exit_rule_counts": dict(sorted(Counter(_safe_str(_event_fields(row).get("exit_rule") or "-") for row in tp_rows).items())),
     }
 
@@ -325,6 +390,118 @@ def _market_breadth_context(source_summary: dict[str, Any], micro: dict[str, Any
         "stock_breadth": market.get("stock_breadth") or {},
         "reasons": reasons or ["no market-wide panic-buy confirmation required for NORMAL state"],
         "forbidden_uses": list(dict.fromkeys(FORBIDDEN_AUTOMATIONS + ["order_submit"])),
+    }
+
+
+def _risk_regime_gate(
+    panic_buy_state: str,
+    panic_buy_regime_mode: str,
+    panic_metrics: dict[str, Any],
+    exhaustion_metrics: dict[str, Any],
+    market_breadth_context: dict[str, Any],
+    tp_counterfactual: dict[str, Any],
+    micro: dict[str, Any],
+) -> dict[str, Any]:
+    evaluated = _safe_int(panic_metrics.get("evaluated_symbol_count"), 0)
+    active = _safe_int(panic_metrics.get("panic_buy_active_count"), 0)
+    watch = _safe_int(panic_metrics.get("panic_buy_watch_count"), 0)
+    exhausted = _safe_int(exhaustion_metrics.get("exhaustion_confirmed_count"), 0)
+    exhaustion_watch = _safe_int(exhaustion_metrics.get("exhaustion_candidate_count"), 0)
+    sample_floor = 8
+    sample_ready = evaluated >= sample_floor
+    market_confirmed = bool(market_breadth_context.get("market_wide_panic_buy_confirmed"))
+    market_source_ok = _safe_str(market_breadth_context.get("market_panic_breadth_source_quality_status")) == "ok"
+    orderbook_missing = _safe_int(micro.get("missing_orderbook_count"), 0)
+    missing_ratio = (orderbook_missing / evaluated) if evaluated > 0 else 1.0
+    source_blockers: list[str] = []
+    if not sample_ready:
+        source_blockers.append("insufficient_quantile_baseline")
+    if not market_source_ok and active + watch + exhausted + exhaustion_watch > 0:
+        source_blockers.append("market_panic_breadth_source_unavailable")
+    if evaluated > 0 and missing_ratio >= 0.50 and active + watch + exhausted + exhaustion_watch > 0:
+        source_blockers.append("panic_buy_orderbook_collector_coverage_gap")
+
+    signal_counts = [
+        float(active),
+        float(watch),
+        float(exhausted),
+        float(exhaustion_watch),
+        float(_safe_int(panic_metrics.get("allow_runner_count"), 0)),
+    ]
+    signal_threshold = _quantile(signal_counts, 0.95)
+    score_values = [
+        value
+        for value in [
+            _safe_float(panic_metrics.get("max_panic_buy_score"), None),
+            _safe_float(exhaustion_metrics.get("max_exhaustion_score"), None),
+            _safe_float(panic_metrics.get("avg_confidence"), None),
+        ]
+        if value is not None
+    ]
+    score_threshold = _quantile(score_values, 0.95)
+    tp_context = _safe_int(tp_counterfactual.get("candidate_context_count"), 0)
+    real_tp_count = _safe_int(tp_counterfactual.get("tp_like_exit_count"), 0)
+    confirmed_evidence_count = sum(
+        1
+        for ok in (
+            active > 0,
+            market_confirmed,
+            sample_ready,
+            real_tp_count > 0,
+            not source_blockers,
+        )
+        if ok
+    )
+
+    if source_blockers and active + watch + exhausted + exhaustion_watch > 0:
+        state = "source_quality_blocked"
+    elif exhausted > 0:
+        state = "exhaustion_confirmed" if market_confirmed and sample_ready else "watch"
+    elif panic_buy_state == "PANIC_BUY" and active > 0 and market_confirmed and sample_ready:
+        state = "confirmed_panic_buy"
+    elif panic_buy_state in {"PANIC_BUY", "PANIC_BUY_WATCH", "EXHAUSTION_WATCH", "BUYING_EXHAUSTED"}:
+        state = "watch"
+    else:
+        state = "normal"
+    threshold_mode = "dynamic_quantile" if sample_ready else "insufficient_sample"
+    return {
+        "risk_regime_gate_state": state,
+        "risk_regime_gate_authority": "source_quality_only",
+        "risk_regime_threshold_mode": threshold_mode,
+        "confirmed_evidence_count": confirmed_evidence_count,
+        "source_quality_blockers": source_blockers,
+        "market_confirmed": market_confirmed,
+        "tp_counterfactual_real_context_count": real_tp_count,
+        "tp_counterfactual_context_count": tp_context,
+        "threshold_contract": {
+            "panic_buy_signal_count": _threshold_contract(
+                "panic_buy_signal_count",
+                observed_value=active + watch,
+                dynamic_threshold_value=signal_threshold,
+                static_fallback_value=1,
+                sample_count=evaluated,
+                sample_floor=sample_floor,
+            ),
+            "panic_buy_score": _threshold_contract(
+                "panic_buy_score",
+                observed_value=panic_metrics.get("max_panic_buy_score"),
+                dynamic_threshold_value=score_threshold,
+                static_fallback_value=0.72,
+                sample_count=len(score_values),
+                sample_floor=3,
+                threshold_source="same_day_detector_score_distribution",
+            ),
+            "tp_counterfactual_real_context": _threshold_contract(
+                "tp_counterfactual_real_context",
+                observed_value=real_tp_count,
+                dynamic_threshold_value=_quantile([float(real_tp_count), float(tp_context)], 0.95),
+                static_fallback_value=1,
+                sample_count=_safe_int(tp_counterfactual.get("real_exit_count"), 0),
+                sample_floor=1,
+                threshold_source="real_exit_provenance_tp_distribution",
+            ),
+        },
+        "forbidden_uses": list(dict.fromkeys(FORBIDDEN_AUTOMATIONS + ["order_submit", "runtime_threshold_apply"])),
     }
 
 
@@ -460,14 +637,22 @@ def _canary_candidates(
     panic_metrics: dict[str, Any],
     exhaustion_metrics: dict[str, Any],
     tp_counterfactual: dict[str, Any],
+    risk_regime_gate: dict[str, Any],
 ) -> list[dict[str, Any]]:
     active = _safe_int(panic_metrics.get("panic_buy_active_count"), 0)
     tp_context = _safe_int(tp_counterfactual.get("candidate_context_count"), 0)
     avg_confidence = _safe_float(panic_metrics.get("avg_confidence"), 0.0) or 0.0
-    candidate_ready = panic_buy_state == "PANIC_BUY" and active > 0 and tp_context > 0 and avg_confidence >= 0.55
+    candidate_ready = (
+        risk_regime_gate.get("risk_regime_gate_state") == "confirmed_panic_buy"
+        and active > 0
+        and _safe_int(tp_counterfactual.get("tp_like_exit_count"), 0) > 0
+        and avg_confidence >= 0.55
+    )
     status = "report_only_candidate" if candidate_ready else "hold_until_confirmed_panic_buy_with_tp_context"
     if avg_confidence < 0.55 and active > 0:
         status = "hold_low_detector_confidence"
+    if risk_regime_gate.get("risk_regime_gate_state") == "source_quality_blocked":
+        status = "hold_source_quality_blocked"
     return [
         {
             "family": "panic_buy_runner_tp_canary",
@@ -485,6 +670,8 @@ def _canary_candidates(
                 "exhaustion_confirmed_count": _safe_int(exhaustion_metrics.get("exhaustion_confirmed_count"), 0),
                 "tp_counterfactual_count": tp_context,
                 "avg_confidence": avg_confidence,
+                "risk_regime_gate_state": risk_regime_gate.get("risk_regime_gate_state"),
+                "confirmed_evidence_count": risk_regime_gate.get("confirmed_evidence_count"),
             },
         }
     ]
@@ -509,6 +696,15 @@ def build_panic_buying_report(
     panic_metrics = _panic_buy_metrics(micro)
     exhaustion = _exhaustion_metrics(micro)
     tp_counterfactual = _summarize_tp_counterfactual(events)
+    risk_regime_gate = _risk_regime_gate(
+        panic_buy_state,
+        panic_buy_regime_mode,
+        panic_metrics,
+        exhaustion,
+        market_breadth_context,
+        tp_counterfactual,
+        micro,
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "report_type": "panic_buying",
@@ -526,6 +722,10 @@ def build_panic_buying_report(
         "panic_buy_state": panic_buy_state,
         "panic_buy_regime_mode": panic_buy_regime_mode,
         "panic_buy_regime_contract": _panic_buy_regime_contract(panic_buy_regime_mode),
+        "risk_regime_gate": risk_regime_gate,
+        "risk_regime_gate_state": risk_regime_gate["risk_regime_gate_state"],
+        "risk_regime_gate_authority": risk_regime_gate["risk_regime_gate_authority"],
+        "risk_regime_threshold_mode": risk_regime_gate["risk_regime_threshold_mode"],
         "panic_buy_state_reasons": reasons,
         "panic_buy_metrics": panic_metrics,
         "exhaustion_metrics": exhaustion,
@@ -538,6 +738,7 @@ def build_panic_buying_report(
             panic_metrics,
             exhaustion,
             tp_counterfactual,
+            risk_regime_gate,
         ),
         "source_summary": source_summary,
         "qna_policy": {
@@ -570,6 +771,8 @@ def build_markdown(report: dict[str, Any]) -> str:
         "",
         f"- panic_buy_state: `{report['panic_buy_state']}`",
         f"- panic_buy_regime_mode: `{report.get('panic_buy_regime_mode', '-')}`",
+        f"- risk_regime_gate_state: `{report.get('risk_regime_gate_state', '-')}`",
+        f"- risk_regime_threshold_mode: `{report.get('risk_regime_threshold_mode', '-')}`",
         f"- report_only: `{str(report['policy']['report_only']).lower()}`",
         f"- runtime_effect: `{report['policy']['runtime_effect']}`",
         f"- as_of: `{report['as_of']}`",
@@ -596,6 +799,9 @@ def build_markdown(report: dict[str, Any]) -> str:
         "## TP Counterfactual",
         "",
         f"- tp_like_exit_count: `{tp['tp_like_exit_count']}`",
+        f"- real_exit_count: `{tp['real_exit_count']}`",
+        f"- non_real_exit_count: `{tp['non_real_exit_count']}`",
+        f"- unproven_exit_count: `{tp.get('unproven_exit_count', 0)}`",
         f"- trailing_winner_count: `{tp['trailing_winner_count']}`",
         f"- candidate_context_count: `{tp['candidate_context_count']}`",
         f"- avg_tp_profit_rate_pct: `{_fmt(tp['avg_tp_profit_rate_pct'])}`",

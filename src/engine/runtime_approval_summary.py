@@ -961,8 +961,8 @@ def _panic_rows(calibration_report: dict[str, Any], target_date: str) -> list[di
             else []
         )
         sample_count = max(
-            _as_int(panic_buy.get("panic_buy_active_count")),
-            _as_int(panic_buy.get("tp_counterfactual_count")),
+            _as_int(panic_buy.get("confirmed_evidence_count")),
+            _as_int(panic_buy.get("tp_like_exit_count")),
             _as_int(panic_buy.get("trailing_winner_count")),
         )
         contract = approval_contract_for("panic_buy_runner_tp_canary", target_date)
@@ -993,6 +993,10 @@ def _panic_rows(calibration_report: dict[str, Any], target_date: str) -> list[di
                 "panic_buy_regime_mode": panic_buy.get("panic_buy_regime_mode"),
                 "panic_buy_regime_decision_authority": panic_buy.get("panic_buy_regime_decision_authority"),
                 "panic_buy_regime_runtime_effect": panic_buy.get("panic_buy_regime_runtime_effect"),
+                "risk_regime_gate_state": panic_buy.get("risk_regime_gate_state"),
+                "risk_regime_gate_authority": panic_buy.get("risk_regime_gate_authority"),
+                "risk_regime_threshold_mode": panic_buy.get("risk_regime_threshold_mode"),
+                "confirmed_evidence_count": _as_int(panic_buy.get("confirmed_evidence_count")),
                 "market_wide_panic_buy_confirmed": bool(panic_buy.get("market_wide_panic_buy_confirmed")),
                 "market_breadth_risk_on_advisory": bool(panic_buy.get("market_breadth_risk_on_advisory")),
                 "source_quality_blockers": source_quality_blockers,

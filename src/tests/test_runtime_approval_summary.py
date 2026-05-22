@@ -595,6 +595,10 @@ def test_runtime_approval_summary_surfaces_panic_approval_requests(tmp_path, mon
                             "panic_buy_regime_mode": "PANIC_BUY_CONTINUATION",
                             "panic_buy_regime_decision_authority": "source_quality_only",
                             "panic_buy_regime_runtime_effect": "report_only_no_mutation",
+                            "risk_regime_gate_state": "confirmed_panic_buy",
+                            "risk_regime_gate_authority": "source_quality_only",
+                            "risk_regime_threshold_mode": "dynamic_quantile",
+                            "confirmed_evidence_count": 4,
                             "panic_buy_active_count": 1,
                             "tp_counterfactual_count": 3,
                             "trailing_winner_count": 1,
@@ -642,6 +646,9 @@ def test_runtime_approval_summary_surfaces_panic_approval_requests(tmp_path, mon
     panic_buy = next(row for row in report["panic"] if row["family"] == "panic_buy_runner_tp_canary")
     assert panic_buy["panic_buy_regime_mode"] == "PANIC_BUY_CONTINUATION"
     assert panic_buy["panic_buy_regime_decision_authority"] == "source_quality_only"
+    assert panic_buy["risk_regime_gate_state"] == "confirmed_panic_buy"
+    assert panic_buy["risk_regime_threshold_mode"] == "dynamic_quantile"
+    assert panic_buy["confirmed_evidence_count"] == 4
     assert panic_buy["market_wide_panic_buy_confirmed"] is True
     assert panic_buy["market_breadth_risk_on_advisory"] is True
     markdown = (out_dir / "runtime_approval_summary_2026-05-13.md").read_text(encoding="utf-8")
@@ -677,6 +684,10 @@ def test_runtime_approval_summary_freezes_panic_request_on_source_quality_blocke
                             "panic_buy_regime_mode": "PANIC_BUY_CONTINUATION",
                             "panic_buy_regime_decision_authority": "source_quality_only",
                             "panic_buy_regime_runtime_effect": "report_only_no_mutation",
+                            "risk_regime_gate_state": "watch",
+                            "risk_regime_gate_authority": "source_quality_only",
+                            "risk_regime_threshold_mode": "dynamic_quantile",
+                            "confirmed_evidence_count": 2,
                             "panic_buy_active_count": 1,
                             "tp_counterfactual_count": 3,
                             "max_panic_buy_score": 0.88,

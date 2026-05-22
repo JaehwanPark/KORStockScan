@@ -642,6 +642,13 @@ def test_calibration_source_bundle_includes_panic_buying_read_only(monkeypatch, 
                     "allowed_actions": ["report_runner_hold_candidate"],
                     "forbidden_uses": ["auto_buy", "full_market_sell"],
                 },
+                "risk_regime_gate_state": "watch",
+                "risk_regime_gate_authority": "source_quality_only",
+                "risk_regime_threshold_mode": "dynamic_quantile",
+                "risk_regime_gate": {
+                    "confirmed_evidence_count": 2,
+                    "source_quality_blockers": ["panic_buy_local_unconfirmed_by_market_breadth"],
+                },
                 "policy": {"runtime_effect": "report_only_no_mutation"},
                 "panic_buy_metrics": {
                     "panic_buy_active_count": 2,
@@ -689,6 +696,10 @@ def test_calibration_source_bundle_includes_panic_buying_read_only(monkeypatch, 
     assert metrics["panic_buy_regime_mode"] == "PANIC_BUY_CONTINUATION"
     assert metrics["panic_buy_regime_decision_authority"] == "source_quality_only"
     assert metrics["panic_buy_regime_runtime_effect"] == "report_only_no_mutation"
+    assert metrics["risk_regime_gate_state"] == "watch"
+    assert metrics["risk_regime_gate_authority"] == "source_quality_only"
+    assert metrics["risk_regime_threshold_mode"] == "dynamic_quantile"
+    assert metrics["confirmed_evidence_count"] == 2
     assert "report_runner_hold_candidate" in metrics["panic_buy_regime_allowed_actions"]
     assert "full_market_sell" in metrics["panic_buy_regime_forbidden_uses"]
     assert metrics["runtime_effect"] == "report_only_no_mutation"

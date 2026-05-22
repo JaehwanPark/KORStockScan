@@ -823,6 +823,9 @@ def test_build_code_improvement_workorder_adds_panic_lifecycle_orders(tmp_path, 
                         "panic_buying": {
                             "panic_buy_state": "PANIC_BUY",
                             "panic_buy_regime_mode": "PANIC_BUY_CONTINUATION",
+                            "risk_regime_gate_state": "confirmed_panic_buy",
+                            "risk_regime_threshold_mode": "dynamic_quantile",
+                            "confirmed_evidence_count": 4,
                             "runtime_effect": "report_only_no_mutation",
                             "panic_buy_active_count": 1,
                             "tp_counterfactual_count": 4,
@@ -865,6 +868,7 @@ def test_build_code_improvement_workorder_adds_panic_lifecycle_orders(tmp_path, 
         item for item in report["orders"] if item["order_id"] == "order_panic_buy_runner_tp_canary_lifecycle_pack"
     )
     assert any("panic_buy_regime_mode=PANIC_BUY_CONTINUATION" in item for item in panic_buy_order["evidence"])
+    assert any("risk_regime_gate_state=confirmed_panic_buy" in item for item in panic_buy_order["evidence"])
     assert any("market_wide_panic_buy_confirmed=True" in item for item in panic_buy_order["evidence"])
     markdown = (doc_dir / "code_improvement_workorder_2026-05-13.md").read_text(encoding="utf-8")
     assert "panic_buy_runner_tp_canary" in markdown
@@ -888,6 +892,9 @@ def test_build_code_improvement_workorder_routes_panic_buy_source_quality_only(t
                             "runtime_effect": "report_only_no_mutation",
                             "panic_buy_state": "NORMAL",
                             "panic_buy_regime_mode": "NORMAL",
+                            "risk_regime_gate_state": "source_quality_blocked",
+                            "risk_regime_threshold_mode": "insufficient_sample",
+                            "confirmed_evidence_count": 0,
                             "panic_buy_active_count": 0,
                             "tp_counterfactual_count": 0,
                             "trailing_winner_count": 0,
@@ -925,6 +932,7 @@ def test_build_code_improvement_workorder_routes_panic_buy_source_quality_only(t
     assert order["route"] == "source_quality_blocker"
     assert order["runtime_effect"] is False
     assert order["threshold_family"] is None
+    assert any("risk_regime_gate_state=source_quality_blocked" in item for item in order["evidence"])
     assert any("source_quality_blockers=['panic_buy_orderbook_collector_coverage_gap']" in item for item in order["evidence"])
 
 
