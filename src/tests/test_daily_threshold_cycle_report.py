@@ -1193,7 +1193,7 @@ def test_efficient_tradeoff_calibration_adds_entry_bad_entry_and_adm_candidates(
     assert candidates["holding_exit_decision_matrix_advisory"]["sample_floor_status"] == "minimum_edge_missing"
 
 
-def test_score65_74_recovery_probe_uses_panic_adjusted_floor():
+def test_score65_74_recovery_probe_does_not_use_raw_panic_adjusted_floor():
     report_sources = {
         "schema_version": 1,
         "target_date": "2026-05-12",
@@ -1209,6 +1209,7 @@ def test_score65_74_recovery_probe_uses_panic_adjusted_floor():
                 "panic_state": "RECOVERY_WATCH",
                 "panic_detected": True,
                 "panic_by_stop_loss_count": True,
+                "risk_regime_gate_state": "watch",
                 "score65_74_candidates": 14,
                 "wait6579_total_candidates": 14,
                 "score65_74_avg_expected_ev_pct": 2.2277,
@@ -1234,12 +1235,12 @@ def test_score65_74_recovery_probe_uses_panic_adjusted_floor():
     )
 
     candidate = {item["family"]: item for item in report["calibration_candidates"]}["score65_74_recovery_probe"]
-    assert candidate["calibration_state"] == "adjust_up"
+    assert candidate["calibration_state"] == "hold_sample"
     assert candidate["sample_count"] == 14
     assert candidate["sample_floor"] == 20
-    assert candidate["sample_floor_status"] == "panic_adjusted_ready"
-    assert candidate["recommended_values"]["enabled"] is True
-    assert "panic-adjusted floor" in candidate["calibration_reason"]
+    assert candidate["sample_floor_status"] == "hold_sample"
+    assert candidate["recommended_values"]["enabled"] is False
+    assert "sample floor" in candidate["calibration_reason"]
 
 
 def test_score65_74_recovery_probe_opens_existing_entry_unlock_when_rolling_primary_ready():

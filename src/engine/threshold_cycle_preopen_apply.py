@@ -485,15 +485,13 @@ def _score65_74_entry_unlock_candidate(candidate: dict[str, Any]) -> bool:
         avg_close = float(metrics.get("score65_74_avg_close_10m_pct") or 0.0)
     except Exception:
         return False
-    panic_state = str(metrics.get("panic_state") or "").upper()
-    panic_regime = str(metrics.get("panic_regime_mode") or "").upper()
+    risk_gate = str(metrics.get("risk_regime_gate_state") or "").lower()
     submitted = float(metrics.get("order_bundle_submitted") or 0.0)
     return (
         avg_ev >= 2.0
         and avg_close >= 1.0
         and submitted <= 0.0
-        and panic_state not in {"PANIC_SELL", "RECOVERY_WATCH"}
-        and panic_regime != "PANIC_DETECTED"
+        and risk_gate != "confirmed_panic"
     )
 
 

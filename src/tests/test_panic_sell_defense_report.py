@@ -82,7 +82,12 @@ def _panic_rows() -> list[dict]:
         _event(
             f"10:{idx:02d}:00",
             record_id=idx,
-            fields={"exit_rule": "scalp_soft_stop_loss", "profit_rate": "-2.5"},
+            fields={
+                "exit_rule": "scalp_soft_stop_loss",
+                "profit_rate": "-2.5",
+                "actual_order_submitted": "true",
+                "sell_order_no": f"S{idx:04d}",
+            },
         )
         for idx in range(5)
     ]
@@ -162,6 +167,8 @@ def test_live_market_panic_breadth_only_marks_watch_not_panic(monkeypatch, tmp_p
 def test_panic_sell_state_from_five_stop_losses_in_30_minutes(monkeypatch, tmp_path):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     _write_events(tmp_path, _panic_rows())
+    _write_market_regime(tmp_path, risk_state="RISK_OFF")
+    _write_market_panic_breadth(tmp_path, risk_off=True)
 
     report = report_mod.build_panic_sell_defense_report(
         TARGET_DATE,
@@ -172,11 +179,66 @@ def test_panic_sell_state_from_five_stop_losses_in_30_minutes(monkeypatch, tmp_p
     assert report["panic_regime_mode"] == "PANIC_DETECTED"
     assert report["panic_metrics"]["current_30m_stop_loss_exit_count"] == 5
     assert report["panic_metrics"]["panic_by_stop_loss_count"] is True
+    assert report["panic_metrics"]["rolling_30m_stop_loss_count_quantile"] == 0.95
+    assert report["panic_metrics"]["rolling_30m_stop_loss_count_quantile_threshold"] == 5
+    assert report["panic_metrics"]["rolling_30m_stop_loss_count_sample_ready"] is True
+    assert "panic thresholds breached with market/microstructure confirmation" in report["panic_state_reasons"]
     assert "candidate_entry_pre_submit_freeze" in report["panic_regime_contract"]["allowed_actions"]
     assert "auto_sell" in report["panic_regime_contract"]["forbidden_uses"]
     freeze = next(item for item in report["canary_candidates"] if item["family"] == "panic_entry_freeze_guard")
     assert freeze["status"] == "report_only_candidate"
     assert freeze["allowed_runtime_apply"] is False
+
+
+def test_portfolio_stop_loss_cluster_without_market_confirmation_is_watch(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    _write_events(tmp_path, _panic_rows())
+    _write_market_regime(tmp_path, risk_state="NEUTRAL")
+    _write_market_panic_breadth(tmp_path, risk_off=False)
+
+    report = report_mod.build_panic_sell_defense_report(
+        TARGET_DATE,
+        as_of=datetime.fromisoformat(f"{TARGET_DATE}T10:29:00"),
+    )
+
+    assert report["panic_state"] == "RECOVERY_WATCH"
+    assert report["panic_regime_mode"] == "STABILIZING"
+    assert report["panic_metrics"]["panic_by_stop_loss_count"] is True
+    assert report["panic_metrics"]["rolling_30m_stop_loss_count_quantile_threshold"] == 5
+    assert "portfolio stop-loss cluster observed" in report["panic_state_reasons"]
+    assert "portfolio stop-loss cluster unconfirmed by market/breadth context" in report["panic_state_reasons"]
+    assert "portfolio-local stop-loss cluster watch without panic confirmation" in report["panic_state_reasons"]
+
+
+def test_stop_loss_count_quantile_requires_minimum_sample(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    rows = [
+        _event(
+            f"10:0{idx}:00",
+            record_id=idx,
+            fields={
+                "exit_rule": "scalp_soft_stop_loss",
+                "profit_rate": "-2.5",
+                "actual_order_submitted": "true",
+                "sell_order_no": f"S{idx:04d}",
+            },
+        )
+        for idx in range(2)
+    ]
+    _write_events(tmp_path, rows)
+    _write_market_regime(tmp_path, risk_state="NEUTRAL")
+    _write_market_panic_breadth(tmp_path, risk_off=False)
+
+    report = report_mod.build_panic_sell_defense_report(
+        TARGET_DATE,
+        as_of=datetime.fromisoformat(f"{TARGET_DATE}T10:29:00"),
+    )
+
+    assert report["panic_state"] == "NORMAL"
+    assert report["panic_metrics"]["rolling_30m_stop_loss_count_quantile_threshold"] == 2
+    assert report["panic_metrics"]["rolling_30m_stop_loss_count_sample"] == 2
+    assert report["panic_metrics"]["rolling_30m_stop_loss_count_sample_ready"] is False
+    assert report["panic_metrics"]["panic_by_stop_loss_count"] is False
 
 
 def test_probe_sibling_marks_sparse_exit_signal_as_non_real(monkeypatch, tmp_path):
@@ -216,6 +278,35 @@ def test_probe_sibling_marks_sparse_exit_signal_as_non_real(monkeypatch, tmp_pat
     assert report["panic_metrics"]["non_real_exit_count"] == 10
     assert report["panic_metrics"]["stop_loss_exit_count"] == 0
     assert report["panic_metrics"]["panic_by_stop_loss_count"] is False
+
+
+def test_unproven_exit_signal_is_not_real_panic_basis(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        [
+            _event(
+                f"10:{idx:02d}:00",
+                record_id=idx,
+                fields={"exit_rule": "scalp_hard_stop_pct", "profit_rate": "-2.5"},
+            )
+            for idx in range(5)
+        ],
+    )
+
+    report = report_mod.build_panic_sell_defense_report(
+        TARGET_DATE,
+        as_of=datetime.fromisoformat(f"{TARGET_DATE}T10:29:00"),
+    )
+
+    assert report["panic_state"] == "NORMAL"
+    assert report["panic_metrics"]["panic_decision_basis"] == "real_exit_with_broker_provenance_only"
+    assert report["panic_metrics"]["real_exit_provenance_required"] is True
+    assert report["panic_metrics"]["real_exit_count"] == 0
+    assert report["panic_metrics"]["non_real_exit_count"] == 5
+    assert report["panic_metrics"]["unproven_exit_count"] == 5
+    assert report["panic_metrics"]["stop_loss_exit_count"] == 0
+    assert report["panic_metrics"]["panic_detected"] is False
 
 
 def test_non_real_assumed_fill_marks_sparse_exit_signal_as_non_real(monkeypatch, tmp_path):

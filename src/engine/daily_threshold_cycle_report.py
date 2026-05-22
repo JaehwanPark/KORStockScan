@@ -1435,6 +1435,15 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             "panic_regime_mode": panic_sell_defense.get("panic_regime_mode")
             if isinstance(panic_sell_defense, dict)
             else None,
+            "risk_regime_gate_state": panic_sell_defense.get("risk_regime_gate_state")
+            if isinstance(panic_sell_defense, dict)
+            else None,
+            "risk_regime_gate_authority": panic_sell_defense.get("risk_regime_gate_authority")
+            if isinstance(panic_sell_defense, dict)
+            else None,
+            "risk_regime_threshold_mode": panic_sell_defense.get("risk_regime_threshold_mode")
+            if isinstance(panic_sell_defense, dict)
+            else None,
             "panic_detected": bool(panic_metrics.get("panic_detected")),
             "panic_by_stop_loss_count": bool(panic_metrics.get("panic_by_stop_loss_count")),
             "panic_stop_loss_exit_count": _safe_int(panic_metrics.get("stop_loss_exit_count"), 0) or 0,
@@ -1702,6 +1711,22 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             "panic_regime_mode": panic_sell_defense.get("panic_regime_mode")
             if isinstance(panic_sell_defense, dict)
             else None,
+            "risk_regime_gate_state": panic_sell_defense.get("risk_regime_gate_state")
+            if isinstance(panic_sell_defense, dict)
+            else None,
+            "risk_regime_gate_authority": panic_sell_defense.get("risk_regime_gate_authority")
+            if isinstance(panic_sell_defense, dict)
+            else None,
+            "risk_regime_threshold_mode": panic_sell_defense.get("risk_regime_threshold_mode")
+            if isinstance(panic_sell_defense, dict)
+            else None,
+            "risk_regime_confirmed_evidence_count": _safe_int(
+                ((panic_sell_defense.get("risk_regime_gate") or {}).get("confirmed_evidence_count"))
+                if isinstance(panic_sell_defense.get("risk_regime_gate"), dict)
+                else 0,
+                0,
+            )
+            or 0,
             "panic_regime_decision_authority": panic_regime_contract.get("decision_authority"),
             "panic_regime_runtime_effect": panic_regime_contract.get("runtime_effect"),
             "panic_regime_allowed_actions": [
@@ -5186,10 +5211,8 @@ def _score65_74_entry_unlock_probe_ready(source_metrics: dict, *, sample_count: 
     avg_mfe = _safe_float(source_metrics.get("score65_74_avg_mfe_10m_pct"), None)
     submitted_to_budget = _safe_float(source_metrics.get("submitted_to_budget_unique_pct"), None)
     order_bundle_submitted = _safe_float(source_metrics.get("order_bundle_submitted"), None)
-    panic_state = str(source_metrics.get("panic_state") or "").upper()
-    panic_regime = str(source_metrics.get("panic_regime_mode") or "").upper()
-    panic_detected = bool(source_metrics.get("panic_detected")) or bool(source_metrics.get("panic_by_stop_loss_count"))
-    if panic_detected or panic_state in {"PANIC_SELL", "RECOVERY_WATCH"} or panic_regime == "PANIC_DETECTED":
+    risk_gate = str(source_metrics.get("risk_regime_gate_state") or "").lower()
+    if risk_gate == "confirmed_panic":
         return False
     if avg_ev is None or avg_ev < 2.0:
         return False
@@ -5264,11 +5287,7 @@ def _calibration_state_for_family(
         family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
         avg_ev = _safe_float(source_metrics.get("score65_74_avg_expected_ev_pct"), None)
         avg_close = _safe_float(source_metrics.get("score65_74_avg_close_10m_pct"), None)
-        panic_state = str(source_metrics.get("panic_state") or "")
-        panic_detected = bool(source_metrics.get("panic_detected")) or bool(
-            source_metrics.get("panic_by_stop_loss_count")
-        )
-        panic_adjusted_floor = max(1, int(round(sample_floor * 0.7))) if sample_floor > 0 else 0
+        risk_gate = str(source_metrics.get("risk_regime_gate_state") or "").lower()
         submitted_to_budget = _safe_float(source_metrics.get("submitted_to_budget_unique_pct"), None)
         if sample_count >= sample_floor and ((avg_ev is not None and avg_ev < 2.0) or (avg_close is not None and avg_close < 1.0)):
             return ("hold", "score65~74 EV/close_10m 우위가 efficient trade-off gate에 미달해 값 유지")
@@ -5284,20 +5303,8 @@ def _calibration_state_for_family(
                 "rolling primary score65~74 missed EV가 양수이고 panic/source guard가 정상이다. "
                 "submitted drought를 풀기 위해 기존 1주/5만원 bounded entry probe를 연다.",
             )
-        if (
-            0 < panic_adjusted_floor <= sample_count < sample_floor
-            and (panic_detected or panic_state in {"PANIC_SELL", "RECOVERY_WATCH"})
-            and avg_ev is not None
-            and avg_ev >= 2.0
-            and avg_close is not None
-            and avg_close >= 1.0
-            and (submitted_to_budget is None or submitted_to_budget <= 10.0)
-        ):
-            return (
-                "adjust_up",
-                f"panic-adjusted floor 통과({sample_count}/{sample_floor}, adjusted_floor={panic_adjusted_floor}); "
-                "BUY drought일의 양호한 score65~74 missed EV를 1주/5만원 bounded canary로 유지",
-            )
+        if risk_gate == "confirmed_panic":
+            return ("hold_sample", "confirmed panic risk-regime에서는 score65~74 live 확대 없이 source-quality review로 보류")
         if sample_count >= sample_floor and ready:
             return (
                 "adjust_up",
@@ -5603,27 +5610,11 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
         sample_floor = int(metadata.get("sample_floor") or 0)
         source_ready = source_sample_count >= sample_floor
         if output_family == "score65_74_recovery_probe":
-            adjusted_floor = max(1, int(round(sample_floor * 0.7))) if sample_floor > 0 else 0
-            avg_ev = _safe_float(source_metrics.get("score65_74_avg_expected_ev_pct"), None)
-            avg_close = _safe_float(source_metrics.get("score65_74_avg_close_10m_pct"), None)
-            submitted_to_budget = _safe_float(source_metrics.get("submitted_to_budget_unique_pct"), None)
-            panic_state = str(source_metrics.get("panic_state") or "")
-            panic_detected = bool(source_metrics.get("panic_detected")) or bool(
-                source_metrics.get("panic_by_stop_loss_count")
-            )
-            panic_adjusted_ready = (
-                0 < adjusted_floor <= sample_count < sample_floor
-                and (panic_detected or panic_state in {"PANIC_SELL", "RECOVERY_WATCH"})
-                and avg_ev is not None
-                and avg_ev >= 2.0
-                and avg_close is not None
-                and avg_close >= 1.0
-                and (submitted_to_budget is None or submitted_to_budget <= 10.0)
-            )
-            if panic_adjusted_ready:
-                source_ready = True
+            risk_gate = str(source_metrics.get("risk_regime_gate_state") or "").lower()
+            if risk_gate == "confirmed_panic":
+                source_ready = False
                 recommended = dict(recommended)
-                recommended["enabled"] = True
+                recommended["enabled"] = False
             elif _score65_74_entry_unlock_probe_ready(
                 source_metrics,
                 sample_count=sample_count,
@@ -5643,8 +5634,6 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
             sample_ready=sample_ready,
         )
         sample_floor_status = "ready" if sample_count >= sample_floor and sample_ready else "hold_sample"
-        if output_family == "score65_74_recovery_probe" and sample_ready and sample_count < sample_floor:
-            sample_floor_status = "panic_adjusted_ready"
         if calibration_state == "freeze":
             sample_floor_status = "direction_conflict_or_live_risk"
         if calibration_state == "hold_no_edge":

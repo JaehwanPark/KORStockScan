@@ -898,11 +898,13 @@ def _panic_rows(calibration_report: dict[str, Any], target_date: str) -> list[di
     panic_sell = source_metrics.get("panic_sell_defense") if isinstance(source_metrics.get("panic_sell_defense"), dict) else {}
     if panic_sell:
         candidate_status = panic_sell.get("candidate_status") if isinstance(panic_sell.get("candidate_status"), dict) else {}
-        sample_count = max(
-            _as_int(panic_sell.get("stop_loss_exit_count")),
-            _as_int(panic_sell.get("confirmation_eligible_exit_count")),
-            _as_int(panic_sell.get("active_sim_probe_positions")),
-        )
+        risk_gate = str(panic_sell.get("risk_regime_gate_state") or "").lower()
+        legacy_panic_state = str(panic_sell.get("panic_state") or "").upper()
+        sample_count = _as_int(panic_sell.get("risk_regime_confirmed_evidence_count"))
+        if sample_count <= 0 and (risk_gate == "confirmed_panic" or legacy_panic_state == "PANIC_SELL"):
+            sample_count = 1
+        if sample_count <= 0 and not _has_report_only_candidate(candidate_status):
+            sample_count = 1
         source_quality_blockers = (
             panic_sell.get("source_quality_blockers")
             if isinstance(panic_sell.get("source_quality_blockers"), list)
@@ -934,6 +936,9 @@ def _panic_rows(calibration_report: dict[str, Any], target_date: str) -> list[di
                 "reasons": reasons,
                 "reason_label": _reason_text(reasons),
                 "panic_regime_mode": panic_sell.get("panic_regime_mode"),
+                "risk_regime_gate_state": panic_sell.get("risk_regime_gate_state"),
+                "risk_regime_gate_authority": panic_sell.get("risk_regime_gate_authority"),
+                "risk_regime_threshold_mode": panic_sell.get("risk_regime_threshold_mode"),
                 "panic_regime_decision_authority": panic_sell.get("panic_regime_decision_authority"),
                 "panic_regime_runtime_effect": panic_sell.get("panic_regime_runtime_effect"),
                 "selected_auto_bounded_live": False,
