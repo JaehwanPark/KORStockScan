@@ -1,4 +1,8 @@
-"""Build runtime-apply bridge candidates from LDM bucket attribution."""
+"""Build runtime-apply bridge candidates from LDM bucket attribution.
+
+The bridge now consumes lifecycle bucket discovery policy: entry/scale-in bridge
+families are auto-applied when source-quality and safety contracts are closed.
+"""
 
 from __future__ import annotations
 
@@ -9,19 +13,22 @@ from pathlib import Path
 from typing import Any
 
 from src.utils.constants import DATA_DIR
+from src.engine.lifecycle_bucket_discovery import (
+    ENTRY_LIVE_AUTO_FAMILY,
+    ENTRY_LIVE_AUTO_BUCKET_KEY,
+    SCALE_IN_LIVE_AUTO_FAMILY,
+    discovery_report_path,
+)
 
 
 REPORT_DIR = DATA_DIR / "report" / "runtime_apply_bridge"
 LDM_REPORT_DIR = DATA_DIR / "report" / "lifecycle_decision_matrix"
 APPROVAL_DIR = DATA_DIR / "threshold_cycle" / "approvals"
 
-ENTRY_BRIDGE_FAMILY = "entry_wait6579_score66_69_recovery_gate_v1"
-SCALE_IN_BRIDGE_FAMILY = "scale_in_bucket_runtime_policy_v1"
+ENTRY_BRIDGE_FAMILY = ENTRY_LIVE_AUTO_FAMILY
+SCALE_IN_BRIDGE_FAMILY = SCALE_IN_LIVE_AUTO_FAMILY
 
-ENTRY_TARGET_BUCKET_KEY = (
-    "score=score_66_69|source=wait6579_ev_cohort|stale=fresh_or_unflagged|"
-    "liquidity=liquidity_unknown|overbought=overbought_unknown|time=time_unknown"
-)
+ENTRY_TARGET_BUCKET_KEY = ENTRY_LIVE_AUTO_BUCKET_KEY
 
 
 def runtime_apply_bridge_report_path(target_date: str) -> Path:
@@ -107,6 +114,15 @@ def _state_for_bucket(
 ) -> tuple[str, dict[str, Any]]:
     if not current or str(current.get("source_quality_gate") or "") != "pass":
         return "blocked_source_quality", {"confirmation_count": 0, "conflict_count": 0}
+    route = str(current.get("recommended_route") or "")
+    expected_route = "candidate_recovery_or_relax" if positive_edge else "candidate_tighten_or_exclude"
+    if route != expected_route:
+        return "blocked_source_quality", {
+            "confirmation_count": 0,
+            "conflict_count": 0,
+            "blocked_route": route or "missing",
+            "expected_route": expected_route,
+        }
     current_ev = _safe_float(current.get("source_quality_adjusted_ev_pct"), 0.0) or 0.0
     if positive_edge and current_ev <= 0:
         return "blocked_source_quality", {"confirmation_count": 0, "conflict_count": 0}
@@ -129,12 +145,98 @@ def _state_for_bucket(
     meta = {"confirmation_count": confirmations, "conflict_count": conflicts}
     if conflicts:
         return "blocked_rolling_conflict", meta
-    if confirmations <= 0:
-        return "bootstrap_pending", meta
-    return "ready_for_approval", meta
+    meta["daily_only_auto_apply"] = confirmations <= 0
+    return "live_auto_apply_ready", meta
 
 
-def _entry_candidate(payload: dict[str, Any], history: list[dict[str, Any]], target_date: str) -> dict[str, Any]:
+def _discovery_live_families(discovery: dict[str, Any]) -> set[str]:
+    return {
+        str(item.get("live_auto_apply_family"))
+        for item in (
+            discovery.get("live_auto_apply_candidates")
+            if isinstance(discovery.get("live_auto_apply_candidates"), list)
+            else []
+        )
+        if isinstance(item, dict) and item.get("live_auto_apply_family")
+    }
+
+
+def _discovery_live_candidate_by_family(discovery: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    candidates = (
+        discovery.get("live_auto_apply_candidates")
+        if isinstance(discovery.get("live_auto_apply_candidates"), list)
+        else []
+    )
+    by_family: dict[str, dict[str, Any]] = {}
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        family = str(item.get("live_auto_apply_family") or "")
+        if family and family not in by_family:
+            by_family[family] = item
+    return by_family
+
+
+def _discovery_summary_meta(discovery: dict[str, Any]) -> dict[str, Any]:
+    summary = discovery.get("summary") if isinstance(discovery.get("summary"), dict) else {}
+    return {
+        "lifecycle_bucket_discovery_source_contract_status": summary.get("source_contract_status"),
+        "lifecycle_bucket_discovery_ai_review_status": summary.get("ai_two_pass_review_status"),
+    }
+
+
+def _discovery_candidate_meta(
+    *,
+    family: str,
+    discovery: dict[str, Any],
+    discovery_live_by_family: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    meta = _discovery_summary_meta(discovery)
+    item = discovery_live_by_family.get(family) or {}
+    if item:
+        meta.update(
+            {
+                "lifecycle_bucket_discovery_bucket_id": item.get("bucket_id"),
+                "lifecycle_bucket_discovery_classification_state": item.get("classification_state"),
+                "lifecycle_bucket_discovery_bucket_relation": item.get("bucket_relation"),
+                "lifecycle_bucket_discovery_ai_final_decision": item.get("ai_final_decision"),
+                "lifecycle_bucket_discovery_ai_final_reason": item.get("ai_final_reason"),
+                "lifecycle_bucket_discovery_ai_followup_required": item.get("ai_review_followup_required"),
+                "lifecycle_bucket_discovery_ai_block_ignored_reason": item.get("ai_review_block_ignored_reason"),
+            }
+        )
+    return {key: value for key, value in meta.items() if value not in (None, "", [])}
+
+
+def _align_with_discovery(
+    state: str,
+    rolling: dict[str, Any],
+    *,
+    family: str,
+    discovery_live_families: set[str],
+    discovery_available: bool,
+) -> tuple[str, dict[str, Any]]:
+    aligned = dict(rolling)
+    if state != "live_auto_apply_ready":
+        return state, aligned
+    if family in discovery_live_families:
+        aligned["lifecycle_bucket_discovery_gate"] = "pass"
+        return state, aligned
+    aligned["lifecycle_bucket_discovery_gate"] = "blocked"
+    aligned["lifecycle_bucket_discovery_available"] = bool(discovery_available)
+    return "runtime_blocked_contract_gap", aligned
+
+
+def _entry_candidate(
+    payload: dict[str, Any],
+    history: list[dict[str, Any]],
+    target_date: str,
+    *,
+    discovery_live_families: set[str],
+    discovery_live_by_family: dict[str, dict[str, Any]],
+    discovery: dict[str, Any],
+    discovery_available: bool,
+) -> dict[str, Any]:
     bucket = _find_bucket(payload, "entry_bucket_attribution", "combo_entry_spot", ENTRY_TARGET_BUCKET_KEY)
     state, rolling = _state_for_bucket(
         bucket,
@@ -144,16 +246,30 @@ def _entry_candidate(payload: dict[str, Any], history: list[dict[str, Any]], tar
         bucket_key=ENTRY_TARGET_BUCKET_KEY,
         positive_edge=True,
     )
+    state, rolling = _align_with_discovery(
+        state,
+        rolling,
+        family=ENTRY_BRIDGE_FAMILY,
+        discovery_live_families=discovery_live_families,
+        discovery_available=discovery_available,
+    )
+    discovery_meta = _discovery_candidate_meta(
+        family=ENTRY_BRIDGE_FAMILY,
+        discovery=discovery,
+        discovery_live_by_family=discovery_live_by_family,
+    )
     return {
         "candidate_id": f"{ENTRY_BRIDGE_FAMILY}:{target_date}",
         "family": ENTRY_BRIDGE_FAMILY,
         "stage": "entry",
         "priority": 9,
         "bridge_candidate_state": state,
-        "approval_required": True,
-        "allowed_runtime_apply": state == "ready_for_approval",
+        "approval_required": False,
+        "human_approval_required": False,
+        "live_auto_apply": state == "live_auto_apply_ready",
+        "allowed_runtime_apply": state == "live_auto_apply_ready",
         "runtime_effect": False,
-        "runtime_effect_after_approval": "bounded_entry_probe_recovery",
+        "runtime_effect_after_approval": "bounded_entry_probe_recovery_live_auto",
         "target_env_keys": [
             "AI_SCORE65_74_RECOVERY_PROBE_ENABLED",
             "AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE",
@@ -190,10 +306,10 @@ def _entry_candidate(payload: dict[str, Any], history: list[dict[str, Any]], tar
         "source_bucket_keys": [ENTRY_TARGET_BUCKET_KEY],
         "source_bucket": bucket,
         "rolling_confirmation": rolling,
+        **discovery_meta,
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
-        "decision_authority": "ldm_bucket_runtime_bridge_approval_required",
+        "decision_authority": "lifecycle_bucket_discovery_live_auto_apply",
         "forbidden_uses": [
-            "artifactless_runtime_apply",
             "intraday_threshold_mutation",
             "broker_guard_bypass",
             "provider_route_change",
@@ -214,7 +330,16 @@ def _scale_source(bucket: dict[str, Any], *, role: str) -> dict[str, Any]:
     }
 
 
-def _scale_candidate(payload: dict[str, Any], history: list[dict[str, Any]], target_date: str) -> dict[str, Any]:
+def _scale_candidate(
+    payload: dict[str, Any],
+    history: list[dict[str, Any]],
+    target_date: str,
+    *,
+    discovery_live_families: set[str],
+    discovery_live_by_family: dict[str, dict[str, Any]],
+    discovery: dict[str, Any],
+    discovery_available: bool,
+) -> dict[str, Any]:
     pyramid = _find_bucket(payload, "scale_in_bucket_attribution", "arm", "PYRAMID")
     avg_down = _find_bucket(payload, "scale_in_bucket_attribution", "blocker_namespace", "AVG_DOWN_ONLY")
     pyramid_state, pyramid_roll = _state_for_bucket(
@@ -233,17 +358,28 @@ def _scale_candidate(payload: dict[str, Any], history: list[dict[str, Any]], tar
         bucket_key="AVG_DOWN_ONLY",
         positive_edge=False,
     )
-    ready = pyramid_state == "ready_for_approval" or avg_state == "ready_for_approval"
+    ready = pyramid_state == "live_auto_apply_ready" or avg_state == "live_auto_apply_ready"
     blocked_conflict = pyramid_state == "blocked_rolling_conflict" or avg_state == "blocked_rolling_conflict"
     blocked_source = pyramid_state == "blocked_source_quality" and avg_state == "blocked_source_quality"
     if blocked_conflict:
         state = "blocked_rolling_conflict"
     elif ready:
-        state = "ready_for_approval"
+        state = "live_auto_apply_ready"
     elif blocked_source:
         state = "blocked_source_quality"
     else:
         state = "bootstrap_pending"
+    if state == "live_auto_apply_ready" and SCALE_IN_BRIDGE_FAMILY not in discovery_live_families:
+        state = "runtime_blocked_contract_gap"
+        pyramid_roll = {**pyramid_roll, "lifecycle_bucket_discovery_gate": "blocked"}
+        avg_roll = {**avg_roll, "lifecycle_bucket_discovery_gate": "blocked"}
+        pyramid_roll["lifecycle_bucket_discovery_available"] = bool(discovery_available)
+        avg_roll["lifecycle_bucket_discovery_available"] = bool(discovery_available)
+    discovery_meta = _discovery_candidate_meta(
+        family=SCALE_IN_BRIDGE_FAMILY,
+        discovery=discovery,
+        discovery_live_by_family=discovery_live_by_family,
+    )
 
     target_env_keys = ["SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP"]
     recommended_values: dict[str, Any] = {
@@ -258,10 +394,10 @@ def _scale_candidate(payload: dict[str, Any], history: list[dict[str, Any]], tar
         "reversal_add_min_buy_pressure": 55.0,
         "reversal_add_min_tick_accel": 0.95,
     }
-    if pyramid:
+    if pyramid_state == "live_auto_apply_ready":
         target_env_keys.append("SCALPING_ENABLE_PYRAMID")
         recommended_values["scalping_enable_pyramid"] = False
-    if avg_down:
+    if avg_state == "live_auto_apply_ready":
         target_env_keys.extend(
             [
                 "REVERSAL_ADD_MIN_AI_SCORE",
@@ -295,10 +431,12 @@ def _scale_candidate(payload: dict[str, Any], history: list[dict[str, Any]], tar
         "stage": "scale_in",
         "priority": 39,
         "bridge_candidate_state": state,
-        "approval_required": True,
-        "allowed_runtime_apply": state == "ready_for_approval",
+        "approval_required": False,
+        "human_approval_required": False,
+        "live_auto_apply": state == "live_auto_apply_ready",
+        "allowed_runtime_apply": state == "live_auto_apply_ready",
         "runtime_effect": False,
-        "runtime_effect_after_approval": "bounded_scale_in_policy_tighten",
+        "runtime_effect_after_approval": "bounded_scale_in_policy_tighten_live_auto",
         "target_env_keys": list(dict.fromkeys(target_env_keys)),
         "recommended_values": recommended_values,
         "current_values": current_values,
@@ -311,10 +449,10 @@ def _scale_candidate(payload: dict[str, Any], history: list[dict[str, Any]], tar
             "pyramid_state": pyramid_state,
             "avg_down_state": avg_state,
         },
+        **discovery_meta,
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
-        "decision_authority": "ldm_bucket_runtime_bridge_approval_required",
+        "decision_authority": "lifecycle_bucket_discovery_live_auto_apply",
         "forbidden_uses": [
-            "artifactless_runtime_apply",
             "position_cap_release",
             "scale_in_safety_guard_bypass",
             "intraday_threshold_mutation",
@@ -328,22 +466,69 @@ def build_runtime_apply_bridge_report(target_date: str) -> dict[str, Any]:
     target_date = str(target_date).strip()
     source_path = _ldm_report_path(target_date)
     payload = _load_json(source_path)
+    discovery_path = discovery_report_path(target_date)
+    discovery = _load_json(discovery_path)
+    discovery_live_families = _discovery_live_families(discovery)
+    discovery_live_by_family = _discovery_live_candidate_by_family(discovery)
+    discovery_summary = discovery.get("summary") if isinstance(discovery.get("summary"), dict) else {}
+    discovery_warnings = [str(item) for item in (discovery.get("warnings") or []) if str(item)]
+    discovery_source_contract_status = str(discovery_summary.get("source_contract_status") or "")
+    discovery_ai_review_status = str(discovery_summary.get("ai_two_pass_review_status") or "")
     warnings: list[str] = []
     candidates: list[dict[str, Any]] = []
     if not payload:
         warnings.append("lifecycle_decision_matrix_missing")
     else:
         history = _history_reports(target_date)
-        candidates.append(_entry_candidate(payload, history, target_date))
-        candidates.append(_scale_candidate(payload, history, target_date))
+        if not discovery:
+            warnings.append("lifecycle_bucket_discovery_missing")
+        candidates.append(
+            _entry_candidate(
+                payload,
+                history,
+                target_date,
+                discovery_live_families=discovery_live_families,
+                discovery_live_by_family=discovery_live_by_family,
+                discovery=discovery,
+                discovery_available=bool(discovery),
+            )
+        )
+        candidates.append(
+            _scale_candidate(
+                payload,
+                history,
+                target_date,
+                discovery_live_families=discovery_live_families,
+                discovery_live_by_family=discovery_live_by_family,
+                discovery=discovery,
+                discovery_available=bool(discovery),
+            )
+        )
+    if discovery and discovery_source_contract_status and discovery_source_contract_status != "pass":
+        warnings.append(f"lifecycle_bucket_discovery_source_contract_{discovery_source_contract_status}")
+    if discovery and any(item.get("lifecycle_bucket_discovery_ai_followup_required") for item in candidates):
+        warnings.append("lifecycle_bucket_discovery_live_auto_post_apply_followup_required")
+    warnings.extend(
+        item
+        for item in discovery_warnings
+        if item.startswith("ai_") or item.startswith("source_contract_")
+    )
+    warnings = list(dict.fromkeys(warnings))
     status = "pass" if candidates else "fail"
-    ready_count = sum(1 for item in candidates if item.get("bridge_candidate_state") == "ready_for_approval")
+    live_ready_count = sum(1 for item in candidates if item.get("bridge_candidate_state") == "live_auto_apply_ready")
+    live_followup_count = sum(
+        1
+        for item in candidates
+        if item.get("bridge_candidate_state") == "live_auto_apply_ready"
+        and item.get("lifecycle_bucket_discovery_ai_followup_required")
+    )
     report = {
         "schema_version": "runtime_apply_bridge_v1",
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "source": {
             "lifecycle_decision_matrix": str(source_path) if source_path.exists() else None,
+            "lifecycle_bucket_discovery": str(discovery_path) if discovery_path.exists() else None,
             "runtime_approval_summary": str(
                 DATA_DIR / "report" / "runtime_approval_summary" / f"runtime_approval_summary_{target_date}.json"
             ),
@@ -351,8 +536,14 @@ def build_runtime_apply_bridge_report(target_date: str) -> dict[str, Any]:
         "status": status,
         "summary": {
             "candidate_count": len(candidates),
-            "ready_for_approval_count": ready_count,
+            "ready_for_approval_count": 0,
+            "live_auto_apply_ready_count": live_ready_count,
+            "lifecycle_bucket_discovery_status": "present" if discovery else "missing",
+            "lifecycle_bucket_discovery_source_contract_status": discovery_source_contract_status or None,
+            "lifecycle_bucket_discovery_ai_review_status": discovery_ai_review_status or None,
+            "lifecycle_bucket_discovery_live_followup_count": live_followup_count,
             "approval_required_count": sum(1 for item in candidates if item.get("approval_required")),
+            "human_approval_required": False,
             "runtime_mutation_performed": False,
         },
         "candidates": candidates,
@@ -369,8 +560,13 @@ def _write_markdown(report: dict[str, Any]) -> None:
         "## 판정",
         "",
         f"- status: `{report.get('status')}`",
-        f"- ready_for_approval_count: `{report.get('summary', {}).get('ready_for_approval_count')}`",
+        f"- live_auto_apply_ready_count: `{report.get('summary', {}).get('live_auto_apply_ready_count')}`",
+        f"- lifecycle_bucket_discovery_source_contract_status: `{report.get('summary', {}).get('lifecycle_bucket_discovery_source_contract_status') or '-'}`",
+        f"- lifecycle_bucket_discovery_ai_review_status: `{report.get('summary', {}).get('lifecycle_bucket_discovery_ai_review_status') or '-'}`",
+        f"- lifecycle_bucket_discovery_live_followup_count: `{report.get('summary', {}).get('lifecycle_bucket_discovery_live_followup_count')}`",
+        f"- human_approval_required: `{report.get('summary', {}).get('human_approval_required')}`",
         "- runtime mutation: `none`",
+        f"- warnings: `{report.get('warnings') or []}`",
         "",
         "## 근거",
         "",
@@ -380,7 +576,9 @@ def _write_markdown(report: dict[str, Any]) -> None:
             [
                 f"- `{item.get('family')}`: state=`{item.get('bridge_candidate_state')}`, "
                 f"allowed_runtime_apply=`{item.get('allowed_runtime_apply')}`, "
-                f"approval_required=`{item.get('approval_required')}`",
+                f"approval_required=`{item.get('approval_required')}`, "
+                f"live_auto_apply=`{item.get('live_auto_apply')}`, "
+                f"ai_followup=`{item.get('lifecycle_bucket_discovery_ai_followup_required') or '-'}`",
             ]
         )
     lines.extend(
@@ -388,8 +586,8 @@ def _write_markdown(report: dict[str, Any]) -> None:
             "",
             "## 다음 액션",
             "",
-            "- `ready_for_approval` 후보만 별도 approval artifact가 있으면 다음 PREOPEN env 후보로 소비한다.",
-            "- `bootstrap_pending` 후보는 rolling confirmation 후 다시 판정한다.",
+            "- `live_auto_apply_ready` 후보는 별도 approval artifact 없이 다음 PREOPEN env 후보로 소비한다.",
+            "- `blocked_*` 후보는 source-quality/rolling conflict가 해소될 때까지 env로 소비하지 않는다.",
         ]
     )
     runtime_apply_bridge_markdown_path(target_date).write_text("\n".join(lines) + "\n", encoding="utf-8")

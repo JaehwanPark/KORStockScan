@@ -2,6 +2,7 @@ import json
 
 from src.engine import runtime_apply_bridge as bridge_mod
 from src.engine import threshold_cycle_preopen_apply as mod
+from src.engine import lifecycle_bucket_discovery as discovery_mod
 
 
 def test_preopen_apply_rejects_panic_lifecycle_standalone_env_candidate():
@@ -250,6 +251,98 @@ def test_auto_bounded_live_writes_runtime_env_with_ai_guard_and_stage_priority(t
     assert "KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_SEC=45" in env_text
     assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED=true" in env_text
     assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE=65" in env_text
+
+
+def test_preopen_apply_consumes_lifecycle_bucket_auto_apply_without_human_artifact(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    bridge_dir = tmp_path / "bridge"
+    catalog_dir = tmp_path / "catalog"
+    sim_dir = tmp_path / "sim_auto"
+    report_dir.mkdir(parents=True)
+    bridge_dir.mkdir(parents=True)
+    catalog_dir.mkdir(parents=True)
+    sim_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(bridge_mod, "REPORT_DIR", bridge_dir)
+    monkeypatch.setattr(discovery_mod, "CATALOG_DIR", catalog_dir)
+    monkeypatch.setattr(discovery_mod, "SIM_AUTO_APPROVAL_DIR", sim_dir)
+    monkeypatch.setattr(discovery_mod, "REPORT_DIR", report_dir / "lifecycle_bucket_discovery")
+
+    (report_dir / "threshold_cycle_2026-05-22.json").write_text(
+        json.dumps({"date": "2026-05-22", "apply_candidate_list": [], "calibration_candidates": []}),
+        encoding="utf-8",
+    )
+    (bridge_dir / "runtime_apply_bridge_2026-05-22.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-22",
+                "candidates": [
+                    {
+                        "candidate_id": "entry_wait6579_score66_69_recovery_gate_v1:2026-05-22",
+                        "family": bridge_mod.ENTRY_BRIDGE_FAMILY,
+                        "stage": "entry",
+                        "priority": 9,
+                        "bridge_candidate_state": "live_auto_apply_ready",
+                        "approval_required": False,
+                        "live_auto_apply": True,
+                        "allowed_runtime_apply": True,
+                        "target_env_keys": [
+                            "AI_SCORE65_74_RECOVERY_PROBE_ENABLED",
+                            "AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE",
+                            "AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE",
+                        ],
+                        "recommended_values": {"enabled": True, "min_score": 66, "max_score": 69},
+                        "current_values": {"enabled": False, "min_score": 65, "max_score": 74},
+                        "runtime_effect_after_approval": "bounded_entry_probe_recovery_live_auto",
+                        "lifecycle_bucket_discovery_bucket_id": "entry:combo_entry_spot:score_66_69",
+                        "lifecycle_bucket_discovery_ai_review_status": "unavailable",
+                        "lifecycle_bucket_discovery_ai_followup_required": "post_apply_verification",
+                        "lifecycle_bucket_discovery_ai_block_ignored_reason": "ambiguous_or_non_contract_gap_live_then_verify",
+                        "source_bucket_keys": ["score=score_66_69"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (catalog_dir / "lifecycle_bucket_catalog_2026-05-22.json").write_text("{}", encoding="utf-8")
+    (sim_dir / "lifecycle_bucket_sim_auto_approval_2026-05-22.json").write_text(
+        json.dumps(
+            {
+                "approved": True,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "approved_bucket_ids": ["entry:combo:test"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-23",
+        source_date="2026-05-22",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+    )
+
+    assert manifest["status"] == "auto_bounded_live_ready"
+    assert manifest["runtime_apply_bridge"]["approved"] == 1
+    assert manifest["runtime_apply_bridge"]["selected"][0]["approval_state"] == "auto_live"
+    assert manifest["runtime_apply_bridge"]["decisions"][0]["decision_reason"] == "lifecycle_bucket_discovery_live_auto_apply"
+    assert manifest["runtime_apply_bridge"]["selected"][0]["post_apply_verification_required"] is True
+    assert (
+        manifest["runtime_apply_bridge"]["decisions"][0]["lifecycle_bucket_discovery_ai_followup_required"]
+        == "post_apply_verification"
+    )
+    assert manifest["lifecycle_bucket_discovery"]["approved"] == 1
+    env_text = (runtime_dir / "threshold_runtime_env_2026-05-23.env").read_text(encoding="utf-8")
+    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED=true" in env_text
+    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_SCORE=66" in env_text
+    assert "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_ENABLED=true" in env_text
 
 
 def test_auto_bounded_live_imports_latency_classifier_recommendation(tmp_path, monkeypatch):
@@ -1673,7 +1766,7 @@ def test_runtime_apply_bridge_entry_requires_ready_state_and_artifact(tmp_path, 
     assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED" not in env_text
 
 
-def test_runtime_apply_bridge_entry_approval_writes_targeted_probe_env(tmp_path, monkeypatch):
+def test_runtime_apply_bridge_entry_live_auto_writes_targeted_probe_env_without_artifact(tmp_path, monkeypatch):
     runtime_dir, bridge_dir, approval_dir = _install_runtime_bridge_test_dirs(tmp_path, monkeypatch)
     family = bridge_mod.ENTRY_BRIDGE_FAMILY
     candidate_id = f"{family}:2026-05-30"
@@ -1687,9 +1780,11 @@ def test_runtime_apply_bridge_entry_approval_writes_targeted_probe_env(tmp_path,
                         "family": family,
                         "stage": "entry",
                         "priority": 9,
-                        "bridge_candidate_state": "ready_for_approval",
+                        "bridge_candidate_state": "live_auto_apply_ready",
+                        "approval_required": False,
+                        "live_auto_apply": True,
                         "allowed_runtime_apply": True,
-                        "runtime_effect_after_approval": "bounded_entry_probe_recovery",
+                        "runtime_effect_after_approval": "bounded_entry_probe_recovery_live_auto",
                         "target_env_keys": [
                             "AI_SCORE65_74_RECOVERY_PROBE_ENABLED",
                             "AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE",
@@ -1721,10 +1816,6 @@ def test_runtime_apply_bridge_entry_approval_writes_targeted_probe_env(tmp_path,
         ),
         encoding="utf-8",
     )
-    (approval_dir / "ldm_entry_runtime_bridge_2026-05-30.json").write_text(
-        json.dumps({"approved": True, "family": family, "candidate_id": candidate_id, "approval_id": "entry-approve"}),
-        encoding="utf-8",
-    )
 
     manifest = mod.build_preopen_apply_manifest(
         "2026-06-01",
@@ -1743,11 +1834,60 @@ def test_runtime_apply_bridge_entry_approval_writes_targeted_probe_env(tmp_path,
     assert env["KORSTOCKSCAN_WAIT6579_PROBE_CANARY_MAX_QTY"] == "1"
     assert env["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION"] == candidate_id
     assert manifest["runtime_apply_bridge"]["selected"][0]["runtime_apply_bridge_family"] == family
+    assert manifest["runtime_apply_bridge"]["selected"][0]["approval_state"] == "auto_live"
+    assert manifest["runtime_apply_bridge"]["selected"][0]["approval_artifact"] is None
     env_manifest = json.loads((runtime_dir / "threshold_runtime_env_2026-06-01.json").read_text(encoding="utf-8"))
     assert family in env_manifest["selected_families"]
 
 
-def test_runtime_apply_bridge_scale_approval_writes_tighten_env_without_guard_bypass(tmp_path, monkeypatch):
+def test_runtime_apply_bridge_legacy_ready_for_approval_is_blocked(tmp_path, monkeypatch):
+    runtime_dir, bridge_dir, approval_dir = _install_runtime_bridge_test_dirs(tmp_path, monkeypatch)
+    family = bridge_mod.ENTRY_BRIDGE_FAMILY
+    candidate_id = f"{family}:2026-05-30"
+    (bridge_dir / "runtime_apply_bridge_2026-05-30.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-30",
+                "candidates": [
+                    {
+                        "candidate_id": candidate_id,
+                        "family": family,
+                        "stage": "entry",
+                        "priority": 9,
+                        "bridge_candidate_state": "ready_for_approval",
+                        "allowed_runtime_apply": True,
+                        "target_env_keys": ["AI_SCORE65_74_RECOVERY_PROBE_ENABLED"],
+                        "recommended_values": {"enabled": True},
+                        "current_values": {"enabled": False},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (approval_dir / "ldm_entry_runtime_bridge_2026-05-30.json").write_text(
+        json.dumps({"approved": True, "family": family, "candidate_id": candidate_id, "approval_id": "entry-approve"}),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-06-01",
+        source_date="2026-05-30",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    assert manifest["runtime_change"] is False
+    assert (
+        f"runtime_apply_blocked_bridge_not_ready:ready_for_approval:{family}"
+        in manifest["runtime_apply_bridge"]["blocked"]
+    )
+    env_text = (runtime_dir / "threshold_runtime_env_2026-06-01.env").read_text(encoding="utf-8")
+    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED" not in env_text
+
+
+def test_runtime_apply_bridge_scale_live_auto_writes_tighten_env_without_guard_bypass(tmp_path, monkeypatch):
     _runtime_dir, bridge_dir, approval_dir = _install_runtime_bridge_test_dirs(tmp_path, monkeypatch)
     family = bridge_mod.SCALE_IN_BRIDGE_FAMILY
     candidate_id = f"{family}:2026-05-30"
@@ -1761,9 +1901,11 @@ def test_runtime_apply_bridge_scale_approval_writes_tighten_env_without_guard_by
                         "family": family,
                         "stage": "scale_in",
                         "priority": 39,
-                        "bridge_candidate_state": "ready_for_approval",
+                        "bridge_candidate_state": "live_auto_apply_ready",
+                        "approval_required": False,
+                        "live_auto_apply": True,
                         "allowed_runtime_apply": True,
-                        "runtime_effect_after_approval": "bounded_scale_in_policy_tighten",
+                        "runtime_effect_after_approval": "bounded_scale_in_policy_tighten_live_auto",
                         "target_env_keys": [
                             "SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP",
                             "SCALPING_ENABLE_PYRAMID",
@@ -1790,10 +1932,6 @@ def test_runtime_apply_bridge_scale_approval_writes_tighten_env_without_guard_by
                 ],
             }
         ),
-        encoding="utf-8",
-    )
-    (approval_dir / "ldm_scale_in_runtime_bridge_2026-05-30.json").write_text(
-        json.dumps({"approved": True, "family": family, "candidate_id": candidate_id, "approval_id": "scale-approve"}),
         encoding="utf-8",
     )
 

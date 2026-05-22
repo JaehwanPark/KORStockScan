@@ -27,6 +27,67 @@ def test_overnight_bucket_handoff_status_detects_downstream_drops():
     ]
 
 
+def test_lifecycle_bucket_discovery_handoff_detects_missing_downstream():
+    discovery = {
+        "surfaced_candidates": [
+            {
+                "bucket_id": "entry:combo:test",
+                "classification_state": "live_auto_apply_ready",
+                "live_auto_apply_family": "entry_wait6579_score66_69_recovery_gate_v1",
+            },
+            {
+                "bucket_id": "entry:combo:unknown",
+                "classification_state": "new_bucket_candidate",
+            },
+        ]
+    }
+
+    report = mod._lifecycle_bucket_discovery_handoff_status(discovery, {}, {}, {"orders": []})
+
+    assert report["status"] == "fail"
+    assert report["missing_bridge_families"] == ["entry_wait6579_score66_69_recovery_gate_v1"]
+    assert "runtime_approval_summary_lifecycle_bucket_discovery_missing" in report["missing"]
+    assert "code_improvement_workorder_lifecycle_bucket_discovery_orders_missing" in report["missing"]
+
+
+def test_lifecycle_bucket_discovery_handoff_surfaces_ai_followup_without_fail():
+    discovery = {
+        "summary": {
+            "source_contract_status": "pass",
+            "ai_two_pass_review_status": "unavailable",
+        },
+        "warnings": ["ai_two_pass_review_unavailable_live_auto_deferred_to_post_apply"],
+        "surfaced_candidates": [
+            {
+                "bucket_id": "entry:combo:test",
+                "classification_state": "live_auto_apply_ready",
+                "live_auto_apply_family": "entry_wait6579_score66_69_recovery_gate_v1",
+                "ai_review_followup_required": "post_apply_verification",
+            }
+        ],
+    }
+    bridge = {"candidates": [{"family": "entry_wait6579_score66_69_recovery_gate_v1"}]}
+    runtime_summary = {"surfaced_candidate_ids": ["entry:combo:test"]}
+
+    report = mod._lifecycle_bucket_discovery_handoff_status(discovery, bridge, runtime_summary, {"orders": []})
+
+    assert report["status"] == "pass"
+    assert report["ai_post_apply_followup_bucket_ids"] == ["entry:combo:test"]
+    assert "lifecycle_bucket_discovery_ai_post_apply_followup_required" in report["warnings"]
+
+
+def test_lifecycle_bucket_discovery_handoff_fails_source_contract_fail():
+    discovery = {
+        "summary": {"source_contract_status": "fail"},
+        "surfaced_candidates": [],
+    }
+
+    report = mod._lifecycle_bucket_discovery_handoff_status(discovery, {}, {}, {"orders": []})
+
+    assert report["status"] == "fail"
+    assert "lifecycle_bucket_discovery_source_contract_fail" in report["missing"]
+
+
 def _write_adm_artifact(report_dir: Path, target_date: str = "2026-05-12") -> Path:
     path = (
         report_dir

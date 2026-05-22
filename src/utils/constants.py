@@ -637,6 +637,10 @@ class TradingConfig:
     LIFECYCLE_AI_CONTEXT_ENABLED: bool = False
     LIFECYCLE_AI_CONTEXT_FILE: str = ""
     LIFECYCLE_AI_CONTEXT_VERSION: str = ""
+    LIFECYCLE_BUCKET_DISCOVERY_ENABLED: bool = False
+    LIFECYCLE_BUCKET_DISCOVERY_POLICY_FILE: str = ""
+    LIFECYCLE_BUCKET_DISCOVERY_POLICY_VERSION: str = ""
+    LIFECYCLE_BUCKET_DISCOVERY_LIVE_AUTO_APPLY_ENABLED: bool = False
     HOLDING_EXIT_MATRIX_ADVISORY_ENABLED: bool = True  # 운영 override: holding/exit matrix prompt advisory 기본 ON
     HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED: bool = False  # context-only 기본값: 명시적 운영 override에서만 HOLD/EXIT action 보정
     HOLDING_EXIT_MATRIX_EXIT_TO_HOLD_ENABLED: bool = True
@@ -2205,6 +2209,16 @@ def _build_trading_rules() -> TradingConfig:
     env_lifecycle_ai_context_enabled = _env_bool("KORSTOCKSCAN_LIFECYCLE_AI_CONTEXT_ENABLED")
     env_lifecycle_ai_context_file = _env_str("KORSTOCKSCAN_LIFECYCLE_AI_CONTEXT_FILE")
     env_lifecycle_ai_context_version = _env_str("KORSTOCKSCAN_LIFECYCLE_AI_CONTEXT_VERSION")
+    env_lifecycle_bucket_discovery_enabled = _env_bool("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_ENABLED")
+    env_lifecycle_bucket_discovery_policy_file = _env_str(
+        "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_POLICY_FILE"
+    )
+    env_lifecycle_bucket_discovery_policy_version = _env_str(
+        "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_POLICY_VERSION"
+    )
+    env_lifecycle_bucket_discovery_live_auto_apply_enabled = _env_bool(
+        "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_LIVE_AUTO_APPLY_ENABLED"
+    )
     env_scalp_loss_fallback_enabled = _env_bool("KORSTOCKSCAN_SCALP_LOSS_FALLBACK_ENABLED")
     env_scalp_loss_fallback_observe_only = _env_bool("KORSTOCKSCAN_SCALP_LOSS_FALLBACK_OBSERVE_ONLY")
     env_holding_exit_matrix_advisory_enabled = _env_bool("KORSTOCKSCAN_HOLDING_EXIT_MATRIX_ADVISORY_ENABLED")
@@ -2279,6 +2293,10 @@ def _build_trading_rules() -> TradingConfig:
         or env_lifecycle_ai_context_enabled is not None
         or env_lifecycle_ai_context_file is not None
         or env_lifecycle_ai_context_version is not None
+        or env_lifecycle_bucket_discovery_enabled is not None
+        or env_lifecycle_bucket_discovery_policy_file is not None
+        or env_lifecycle_bucket_discovery_policy_version is not None
+        or env_lifecycle_bucket_discovery_live_auto_apply_enabled is not None
         or env_scalp_loss_fallback_enabled is not None
         or env_scalp_loss_fallback_observe_only is not None
         or env_holding_exit_matrix_advisory_enabled is not None
@@ -2363,6 +2381,18 @@ def _build_trading_rules() -> TradingConfig:
             LIFECYCLE_AI_CONTEXT_VERSION=env_lifecycle_ai_context_version
             if env_lifecycle_ai_context_version is not None
             else config.LIFECYCLE_AI_CONTEXT_VERSION,
+            LIFECYCLE_BUCKET_DISCOVERY_ENABLED=env_lifecycle_bucket_discovery_enabled
+            if env_lifecycle_bucket_discovery_enabled is not None
+            else config.LIFECYCLE_BUCKET_DISCOVERY_ENABLED,
+            LIFECYCLE_BUCKET_DISCOVERY_POLICY_FILE=env_lifecycle_bucket_discovery_policy_file
+            if env_lifecycle_bucket_discovery_policy_file is not None
+            else config.LIFECYCLE_BUCKET_DISCOVERY_POLICY_FILE,
+            LIFECYCLE_BUCKET_DISCOVERY_POLICY_VERSION=env_lifecycle_bucket_discovery_policy_version
+            if env_lifecycle_bucket_discovery_policy_version is not None
+            else config.LIFECYCLE_BUCKET_DISCOVERY_POLICY_VERSION,
+            LIFECYCLE_BUCKET_DISCOVERY_LIVE_AUTO_APPLY_ENABLED=env_lifecycle_bucket_discovery_live_auto_apply_enabled
+            if env_lifecycle_bucket_discovery_live_auto_apply_enabled is not None
+            else config.LIFECYCLE_BUCKET_DISCOVERY_LIVE_AUTO_APPLY_ENABLED,
             SCALP_LOSS_FALLBACK_ENABLED=env_scalp_loss_fallback_enabled
             if env_scalp_loss_fallback_enabled is not None
             else config.SCALP_LOSS_FALLBACK_ENABLED,

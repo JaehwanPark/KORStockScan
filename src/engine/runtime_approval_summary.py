@@ -11,6 +11,7 @@ from typing import Any
 
 from src.engine.approval_contracts import approval_contract_for
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
+from src.engine.lifecycle_bucket_discovery import discovery_report_path
 from src.engine.threshold_cycle_ev_report import ev_report_paths
 
 
@@ -1315,6 +1316,32 @@ def _lifecycle_matrix_summary(ev_report: dict[str, Any], source_path: str | None
     }
 
 
+def _lifecycle_bucket_discovery_summary(target_date: str) -> dict[str, Any]:
+    path = discovery_report_path(target_date)
+    payload = _load_json(path)
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    candidates = payload.get("surfaced_candidates") if isinstance(payload.get("surfaced_candidates"), list) else []
+    return {
+        "available": bool(payload),
+        "artifact": str(path) if path.exists() else None,
+        "status": summary.get("status") or ("missing" if not payload else "unknown"),
+        "runtime_effect": False,
+        "decision_authority": payload.get("decision_authority")
+        or "postclose_lifecycle_bucket_discovery_classifier",
+        "candidate_count": _as_int(summary.get("candidate_count")),
+        "surfaced_candidate_count": _as_int(summary.get("surfaced_candidate_count")),
+        "sim_auto_approved_count": _as_int(summary.get("sim_auto_approved_count")),
+        "live_auto_apply_ready_count": _as_int(summary.get("live_auto_apply_ready_count")),
+        "human_intervention_required": bool(summary.get("human_intervention_required")),
+        "state_counts": summary.get("state_counts") if isinstance(summary.get("state_counts"), dict) else {},
+        "surfaced_candidate_ids": [
+            str(item.get("bucket_id"))
+            for item in candidates
+            if isinstance(item, dict) and item.get("bucket_id")
+        ],
+    }
+
+
 def _swing_strategy_discovery_summary(ev_report: dict[str, Any]) -> dict[str, Any]:
     payload = ev_report.get("swing_strategy_discovery") if isinstance(ev_report.get("swing_strategy_discovery"), dict) else {}
     available = bool(payload.get("available"))
@@ -1397,6 +1424,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     panic_rows = _panic_rows(calibration_report, target_date)
     scalp_entry_adm_summary = _entry_adm_summary(ev_report, scalp_entry_adm_path)
     lifecycle_matrix_summary = _lifecycle_matrix_summary(ev_report, lifecycle_matrix_path)
+    lifecycle_bucket_discovery_summary = _lifecycle_bucket_discovery_summary(target_date)
     swing_discovery_summary = _swing_strategy_discovery_summary(ev_report)
     institutional_flow_summary = _institutional_flow_context_summary(ev_report)
     source_load_warnings = [
@@ -1414,6 +1442,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             "swing_runtime_approval": str(swing_path) if swing_path.exists() else None,
             "scalp_entry_action_decision_matrix": scalp_entry_adm_path,
             "lifecycle_decision_matrix": lifecycle_matrix_path,
+            "lifecycle_bucket_discovery": lifecycle_bucket_discovery_summary.get("artifact"),
             "lifecycle_ai_context": lifecycle_ai_context_path,
             "lifecycle_ai_context_attribution": lifecycle_ai_context_attribution_path,
             "institutional_flow_context": institutional_flow_path,
@@ -1454,6 +1483,13 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             ),
             "lifecycle_matrix_ready_for_bounded_apply": lifecycle_matrix_summary.get("ready_for_bounded_apply"),
             "lifecycle_matrix_warnings": lifecycle_matrix_summary.get("warnings"),
+            "lifecycle_bucket_discovery_status": lifecycle_bucket_discovery_summary.get("status"),
+            "lifecycle_bucket_discovery_surfaced_candidate_count": lifecycle_bucket_discovery_summary.get(
+                "surfaced_candidate_count"
+            ),
+            "lifecycle_bucket_discovery_live_auto_apply_ready_count": lifecycle_bucket_discovery_summary.get(
+                "live_auto_apply_ready_count"
+            ),
             "lifecycle_ai_context_applied_count": (
                 (ev_report.get("lifecycle_ai_context_attribution") or {}).get("context_applied_count")
                 if isinstance(ev_report.get("lifecycle_ai_context_attribution"), dict)
@@ -1473,6 +1509,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
         "application_timing": _application_timing(target_date, ev_report),
         "scalp_entry_action_decision_matrix": scalp_entry_adm_summary,
         "lifecycle_decision_matrix": lifecycle_matrix_summary,
+        "lifecycle_bucket_discovery": lifecycle_bucket_discovery_summary,
         "lifecycle_ai_context": ev_report.get("lifecycle_ai_context")
         if isinstance(ev_report.get("lifecycle_ai_context"), dict)
         else {},
@@ -1493,6 +1530,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
                 "swing_runtime_approval_missing" if not swing_path.exists() else "",
                 "scalp_entry_action_decision_matrix_missing" if not scalp_entry_adm_path else "",
                 "lifecycle_decision_matrix_missing" if not lifecycle_matrix_path else "",
+                "lifecycle_bucket_discovery_missing" if not lifecycle_bucket_discovery_summary.get("available") else "",
                 "institutional_flow_context_missing" if not institutional_flow_path else "",
                 "pattern_lab_currentness_audit_missing" if not currentness_path.exists() else "",
                 "pattern_lab_propagation_audit_missing" if not propagation_path.exists() else "",

@@ -29,6 +29,9 @@ _AI_RUNTIME_STATES = {
     "hold",
     "hold_no_edge",
 }
+_OPTIONAL_ARTIFACT_LABELS = {
+    "lifecycle_bucket_discovery",
+}
 _AI_EXEMPT_RUNTIME_FAMILIES = {
     "latency_classifier_runtime_profile",
 }
@@ -86,6 +89,9 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "lifecycle_decision_matrix": REPORT_DIR
         / "lifecycle_decision_matrix"
         / f"lifecycle_decision_matrix_{target_date}.json",
+        "lifecycle_bucket_discovery": REPORT_DIR
+        / "lifecycle_bucket_discovery"
+        / f"lifecycle_bucket_discovery_{target_date}.json",
         "code_improvement_workorder": REPORT_DIR / "code_improvement_workorder" / f"code_improvement_workorder_{target_date}.json",
         "runtime_approval_summary": REPORT_DIR / "runtime_approval_summary" / f"runtime_approval_summary_{target_date}.json",
         "pattern_lab_currentness_audit": REPORT_DIR
@@ -223,6 +229,121 @@ def _collect_overnight_bucket_candidate_ids(payload: Any) -> set[str]:
         for item in payload:
             found.update(_collect_overnight_bucket_candidate_ids(item))
     return found
+
+
+def _collect_lifecycle_bucket_discovery_ids(payload: Any) -> set[str]:
+    found: set[str] = set()
+    if isinstance(payload, dict):
+        for key in ("surfaced_candidate_ids", "approved_bucket_ids"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                found.update(str(item) for item in value if item)
+        for key in ("surfaced_candidates", "live_auto_apply_candidates", "sim_auto_approved_candidates"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                for item in value:
+                    if isinstance(item, dict) and item.get("bucket_id"):
+                        found.add(str(item.get("bucket_id")))
+        for value in payload.values():
+            found.update(_collect_lifecycle_bucket_discovery_ids(value))
+    elif isinstance(payload, list):
+        for item in payload:
+            found.update(_collect_lifecycle_bucket_discovery_ids(item))
+    return found
+
+
+def _lifecycle_bucket_discovery_handoff_status(
+    discovery: dict[str, Any],
+    bridge_report: dict[str, Any],
+    runtime_summary: dict[str, Any],
+    workorder: dict[str, Any],
+) -> dict[str, Any]:
+    discovery_summary = discovery.get("summary") if isinstance(discovery.get("summary"), dict) else {}
+    discovery_warnings = [str(item) for item in (discovery.get("warnings") or []) if str(item)]
+    source_contract_status = str(discovery_summary.get("source_contract_status") or "")
+    ai_review_status = str(discovery_summary.get("ai_two_pass_review_status") or "")
+    candidates = discovery.get("surfaced_candidates") if isinstance(discovery.get("surfaced_candidates"), list) else []
+    expected_ids = sorted(
+        str(item.get("bucket_id"))
+        for item in candidates
+        if isinstance(item, dict) and item.get("bucket_id")
+    )
+    live_families = sorted(
+        {
+            str(item.get("live_auto_apply_family"))
+            for item in candidates
+            if isinstance(item, dict) and item.get("classification_state") == "live_auto_apply_ready" and item.get("live_auto_apply_family")
+        }
+    )
+    bridge_families = {
+        str(item.get("family"))
+        for item in (bridge_report.get("candidates") if isinstance(bridge_report.get("candidates"), list) else [])
+        if isinstance(item, dict) and item.get("family")
+    }
+    runtime_ids = _collect_lifecycle_bucket_discovery_ids(runtime_summary)
+    order_ids = {
+        str(item.get("order_id"))
+        for item in (workorder.get("orders") if isinstance(workorder.get("orders"), list) else [])
+        if isinstance(item, dict) and item.get("order_id")
+    }
+    expected_workorder_prefix = "order_lifecycle_bucket_discovery_"
+    workorder_needed = [
+        str(item.get("bucket_id"))
+        for item in candidates
+        if isinstance(item, dict)
+        and str(item.get("classification_state") or "") in {"new_bucket_candidate", "runtime_blocked_contract_gap", "code_patch_required", "code_review_failed"}
+    ]
+    ai_followup_ids = sorted(
+        str(item.get("bucket_id"))
+        for item in candidates
+        if isinstance(item, dict) and item.get("bucket_id") and item.get("ai_review_followup_required")
+    )
+    missing_bridge_families = sorted(set(live_families) - bridge_families)
+    missing_runtime_summary_ids = sorted(set(expected_ids) - runtime_ids) if runtime_ids else expected_ids
+    has_discovery_workorder = any(order_id.startswith(expected_workorder_prefix) for order_id in order_ids)
+    missing: list[str] = []
+    warnings: list[str] = []
+    if missing_bridge_families:
+        missing.append("lifecycle_bucket_discovery_live_auto_bridge_missing")
+    if expected_ids and missing_runtime_summary_ids:
+        missing.append("runtime_approval_summary_lifecycle_bucket_discovery_missing")
+    if workorder_needed and not has_discovery_workorder:
+        missing.append("code_improvement_workorder_lifecycle_bucket_discovery_orders_missing")
+    if source_contract_status == "fail":
+        missing.append("lifecycle_bucket_discovery_source_contract_fail")
+    elif source_contract_status and source_contract_status != "pass":
+        warnings.append(f"lifecycle_bucket_discovery_source_contract_{source_contract_status}")
+    if ai_followup_ids:
+        warnings.append("lifecycle_bucket_discovery_ai_post_apply_followup_required")
+    warnings.extend(
+        item
+        for item in discovery_warnings
+        if item.startswith("ai_") or item.startswith("source_contract_")
+    )
+    warnings = list(dict.fromkeys(warnings))
+    return {
+        "status": "fail" if missing else ("missing" if not discovery else "pass"),
+        "source_contract_status": source_contract_status or None,
+        "ai_two_pass_review_status": ai_review_status or None,
+        "expected_candidate_ids": expected_ids,
+        "live_auto_apply_families": live_families,
+        "runtime_apply_bridge_families": sorted(bridge_families),
+        "runtime_approval_summary_candidate_ids": sorted(runtime_ids),
+        "missing_bridge_families": missing_bridge_families,
+        "missing_runtime_summary_candidate_ids": missing_runtime_summary_ids,
+        "workorder_needed_bucket_ids": workorder_needed,
+        "ai_post_apply_followup_bucket_ids": ai_followup_ids,
+        "has_discovery_workorder": has_discovery_workorder,
+        "missing": missing,
+        "warnings": warnings,
+        "interpretation": (
+            "lifecycle bucket discovery candidates propagated to bridge/runtime summary/workorder"
+            if discovery and not missing
+            else "lifecycle bucket discovery produced surfaced candidates that downstream consumers dropped"
+            if discovery
+            else "lifecycle bucket discovery report missing"
+        ),
+    }
 
 
 def _entry_bucket_handoff_status(
@@ -583,6 +704,8 @@ def build_threshold_cycle_postclose_verification(
     workorder = _load_json(paths["code_improvement_workorder"])
     runtime_summary = _load_json(paths["runtime_approval_summary"])
     ldm_report = _load_json(paths["lifecycle_decision_matrix"])
+    discovery_report = _load_json(paths["lifecycle_bucket_discovery"])
+    bridge_report = _load_json(REPORT_DIR / "runtime_apply_bridge" / f"runtime_apply_bridge_{target_date}.json")
     scalp_sim_overnight_path = _scalp_sim_overnight_path(target_date)
     scalp_sim_overnight = _load_json(scalp_sim_overnight_path)
     scalp_sim_overnight_quality = _scalp_sim_overnight_source_quality(
@@ -611,6 +734,14 @@ def build_threshold_cycle_postclose_verification(
     overnight_bucket_handoff = _overnight_bucket_handoff_status(ldm_report, ev_report, runtime_summary, workorder)
     if isinstance(overnight_attribution, dict) and overnight_bucket_handoff.get("status") == "fail":
         log_issues.append("ldm_overnight_bucket_handoff_missing")
+    lifecycle_bucket_discovery_handoff = _lifecycle_bucket_discovery_handoff_status(
+        discovery_report,
+        bridge_report,
+        runtime_summary,
+        workorder,
+    )
+    if lifecycle_bucket_discovery_handoff.get("status") == "fail":
+        log_issues.append("lifecycle_bucket_discovery_handoff_missing")
 
     lineage = workorder.get("lineage") if isinstance(workorder.get("lineage"), dict) else {}
     workorder_snapshot = {
@@ -716,6 +847,10 @@ def build_threshold_cycle_postclose_verification(
         item["label"]
         for item in artifact_status
         if item["label"] not in disabled_artifact_labels
+        and (
+            item["label"] not in _OPTIONAL_ARTIFACT_LABELS
+            or item.get("exists")
+        )
         and (
             not item.get("exists")
             or (item.get("json_valid") is False)
@@ -843,6 +978,7 @@ def build_threshold_cycle_postclose_verification(
         "overnight_bucket_handoff": overnight_bucket_handoff,
         "overnight_bucket_attribution_present": isinstance(overnight_attribution, dict),
         "overnight_source_present": overnight_source_present,
+        "lifecycle_bucket_discovery_handoff": lifecycle_bucket_discovery_handoff,
     }
 
 
@@ -858,6 +994,11 @@ def _render_markdown(report: dict[str, Any]) -> str:
     entry_bucket = report.get("entry_bucket_handoff") if isinstance(report.get("entry_bucket_handoff"), dict) else {}
     scale_in_bucket = report.get("scale_in_bucket_handoff") if isinstance(report.get("scale_in_bucket_handoff"), dict) else {}
     overnight_bucket = report.get("overnight_bucket_handoff") if isinstance(report.get("overnight_bucket_handoff"), dict) else {}
+    lifecycle_bucket = (
+        report.get("lifecycle_bucket_discovery_handoff")
+        if isinstance(report.get("lifecycle_bucket_discovery_handoff"), dict)
+        else {}
+    )
     lines = [
         f"# Threshold Cycle Postclose Verification - {report.get('date')}",
         "",
@@ -921,6 +1062,19 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- missing_runtime_summary_candidate_ids: `{overnight_bucket.get('missing_runtime_summary_candidate_ids') or []}`",
         f"- missing_workorder_order_ids: `{overnight_bucket.get('missing_workorder_order_ids') or []}`",
         f"- interpretation: `{overnight_bucket.get('interpretation') or '-'}`",
+        "",
+        "## Lifecycle Bucket Discovery Handoff",
+        f"- status: `{lifecycle_bucket.get('status') or '-'}`",
+        f"- source_contract_status: `{lifecycle_bucket.get('source_contract_status') or '-'}`",
+        f"- ai_two_pass_review_status: `{lifecycle_bucket.get('ai_two_pass_review_status') or '-'}`",
+        f"- expected_candidate_ids: `{lifecycle_bucket.get('expected_candidate_ids') or []}`",
+        f"- live_auto_apply_families: `{lifecycle_bucket.get('live_auto_apply_families') or []}`",
+        f"- missing_bridge_families: `{lifecycle_bucket.get('missing_bridge_families') or []}`",
+        f"- missing_runtime_summary_candidate_ids: `{lifecycle_bucket.get('missing_runtime_summary_candidate_ids') or []}`",
+        f"- workorder_needed_bucket_ids: `{lifecycle_bucket.get('workorder_needed_bucket_ids') or []}`",
+        f"- ai_post_apply_followup_bucket_ids: `{lifecycle_bucket.get('ai_post_apply_followup_bucket_ids') or []}`",
+        f"- warnings: `{lifecycle_bucket.get('warnings') or []}`",
+        f"- interpretation: `{lifecycle_bucket.get('interpretation') or '-'}`",
         "",
         "## Workorder Snapshot",
         f"- generation_id: `{workorder.get('generation_id') or '-'}`",

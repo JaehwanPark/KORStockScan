@@ -14,6 +14,7 @@ from src.engine.approval_contracts import annotate_approval_request
 from src.engine.institutional_flow_context import report_paths as institutional_flow_report_paths
 from src.engine.lifecycle_ai_context import attribution_report_paths as lifecycle_ai_context_attribution_paths
 from src.engine.lifecycle_ai_context import context_report_paths as lifecycle_ai_context_report_paths
+from src.engine.lifecycle_bucket_discovery import discovery_report_path as lifecycle_bucket_discovery_report_path
 from src.engine.lifecycle_decision_matrix import report_paths as lifecycle_matrix_report_paths
 from src.engine.scalping_pattern_lab_automation import automation_report_paths
 from src.engine.scalp_entry_action_decision_matrix import report_paths as scalp_entry_adm_report_paths
@@ -305,6 +306,44 @@ def _runtime_apply_bridge_summary(apply_manifest: dict[str, Any]) -> dict[str, A
                 "approval_id": item.get("approval_id"),
                 "bridge_candidate_id": item.get("bridge_candidate_id"),
                 "actual_runtime_effect": item.get("actual_runtime_effect"),
+            }
+            for item in decisions
+            if isinstance(item, dict)
+        ],
+    }
+
+
+def _lifecycle_bucket_discovery_apply_summary(apply_manifest: dict[str, Any]) -> dict[str, Any]:
+    payload = (
+        apply_manifest.get("lifecycle_bucket_discovery")
+        if isinstance(apply_manifest.get("lifecycle_bucket_discovery"), dict)
+        else {}
+    )
+    selected = payload.get("selected") if isinstance(payload.get("selected"), list) else []
+    decisions = payload.get("decisions") if isinstance(payload.get("decisions"), list) else []
+    return {
+        "artifact": payload.get("artifact"),
+        "discovery_report": payload.get("discovery_report"),
+        "catalog": payload.get("catalog"),
+        "approved": _safe_int(payload.get("approved"), 0),
+        "selected_count": len(selected),
+        "blocked": payload.get("blocked") or [],
+        "selected": [
+            {
+                "family": item.get("family"),
+                "stage": item.get("stage"),
+                "approval_id": item.get("approval_id"),
+                "decision_authority": item.get("decision_authority"),
+            }
+            for item in selected
+            if isinstance(item, dict)
+        ],
+        "decisions": [
+            {
+                "family": item.get("family"),
+                "stage": item.get("stage"),
+                "selected": bool(item.get("selected")),
+                "decision_reason": item.get("decision_reason"),
             }
             for item in decisions
             if isinstance(item, dict)
@@ -994,6 +1033,61 @@ def _audit_summary(target_date: str, report_type: str, report_dir: Path) -> tupl
     )
 
 
+def _lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
+    json_path = lifecycle_bucket_discovery_report_path(target_date)
+    payload = _load_json(json_path)
+    if not payload:
+        return (
+            {
+                "available": False,
+                "artifact": None,
+                "status": "missing",
+                "candidate_count": 0,
+                "surfaced_candidate_count": 0,
+                "sim_auto_approved_count": 0,
+                "live_auto_apply_ready_count": 0,
+                "new_bucket_candidate_count": 0,
+                "human_intervention_required": False,
+            },
+            None,
+            ["lifecycle_bucket_discovery_missing"],
+        )
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    warnings = [f"lifecycle_bucket_discovery:{item}" for item in (payload.get("warnings") or []) if str(item)]
+    return (
+        {
+            "available": True,
+            "artifact": str(json_path),
+            "status": summary.get("status"),
+            "candidate_count": _safe_int(summary.get("candidate_count"), 0),
+            "surfaced_candidate_count": _safe_int(summary.get("surfaced_candidate_count"), 0),
+            "sim_auto_approved_count": _safe_int(summary.get("sim_auto_approved_count"), 0),
+            "live_auto_apply_ready_count": _safe_int(summary.get("live_auto_apply_ready_count"), 0),
+            "new_bucket_candidate_count": _safe_int(summary.get("new_bucket_candidate_count"), 0),
+            "code_patch_required_count": _safe_int(summary.get("code_patch_required_count"), 0),
+            "automation_handoff_gap_count": _safe_int(summary.get("automation_handoff_gap_count"), 0),
+            "human_intervention_required": bool(summary.get("human_intervention_required")),
+            "state_counts": summary.get("state_counts") if isinstance(summary.get("state_counts"), dict) else {},
+            "stage_counts": summary.get("stage_counts") if isinstance(summary.get("stage_counts"), dict) else {},
+            "top_surfaced": [
+                {
+                    "bucket_id": item.get("bucket_id"),
+                    "stage": item.get("stage"),
+                    "classification_state": item.get("classification_state"),
+                    "live_auto_apply_family": item.get("live_auto_apply_family"),
+                    "recommended_action": item.get("recommended_action"),
+                    "joined_sample": item.get("joined_sample"),
+                    "source_quality_adjusted_ev_pct": item.get("source_quality_adjusted_ev_pct"),
+                }
+                for item in (payload.get("surfaced_candidates") or [])[:8]
+                if isinstance(item, dict)
+            ],
+        },
+        str(json_path),
+        warnings,
+    )
+
+
 def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
     _JSON_LOAD_DIAGNOSTICS.clear()
     target_date = str(target_date).strip()
@@ -1019,6 +1113,11 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
     swing_lab_summary, swing_lab_path, swing_lab_warnings = _swing_pattern_lab_automation_summary(target_date)
     scalp_entry_adm_summary, scalp_entry_adm_path, scalp_entry_adm_warnings = _scalp_entry_adm_summary(target_date)
     lifecycle_matrix_summary, lifecycle_matrix_path, lifecycle_matrix_warnings = _lifecycle_decision_matrix_summary(target_date)
+    (
+        lifecycle_bucket_discovery_summary,
+        lifecycle_bucket_discovery_path,
+        lifecycle_bucket_discovery_warnings,
+    ) = _lifecycle_bucket_discovery_summary(target_date)
     lifecycle_ai_context_summary, lifecycle_ai_context_path, lifecycle_ai_context_warnings = _lifecycle_ai_context_summary(target_date)
     (
         lifecycle_ai_context_attribution_summary,
@@ -1080,6 +1179,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "selected_families": selected_families,
             "runtime_env_file": apply_manifest.get("runtime_env_file"),
             "runtime_apply_bridge": _runtime_apply_bridge_summary(apply_manifest),
+            "lifecycle_bucket_discovery": _lifecycle_bucket_discovery_apply_summary(apply_manifest),
         },
         "daily_ev_summary": {
             "completed_trades": completed,
@@ -1153,6 +1253,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
         "swing_pattern_lab_automation": swing_lab_summary,
         "scalp_entry_action_decision_matrix": scalp_entry_adm_summary,
         "lifecycle_decision_matrix": lifecycle_matrix_summary,
+        "lifecycle_bucket_discovery": lifecycle_bucket_discovery_summary,
         "lifecycle_ai_context": lifecycle_ai_context_summary,
         "lifecycle_ai_context_attribution": lifecycle_ai_context_attribution_summary,
         "swing_strategy_discovery": swing_discovery_summary,
@@ -1171,6 +1272,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "swing_pattern_lab_automation": swing_lab_path,
             "scalp_entry_action_decision_matrix": scalp_entry_adm_path,
             "lifecycle_decision_matrix": lifecycle_matrix_path,
+            "lifecycle_bucket_discovery": lifecycle_bucket_discovery_path,
             "lifecycle_ai_context": lifecycle_ai_context_path,
             "lifecycle_ai_context_attribution": lifecycle_ai_context_attribution_path,
             "swing_strategy_discovery": swing_discovery_path,
@@ -1194,6 +1296,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
                 *swing_lab_warnings,
                 *scalp_entry_adm_warnings,
                 *lifecycle_matrix_warnings,
+                *lifecycle_bucket_discovery_warnings,
                 *lifecycle_ai_context_warnings,
                 *lifecycle_ai_context_attribution_warnings,
                 *swing_discovery_warnings,
@@ -1226,6 +1329,11 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
     swing_lab = report.get("swing_pattern_lab_automation") if isinstance(report.get("swing_pattern_lab_automation"), dict) else {}
     scalp_entry_adm = report.get("scalp_entry_action_decision_matrix") if isinstance(report.get("scalp_entry_action_decision_matrix"), dict) else {}
     lifecycle_matrix = report.get("lifecycle_decision_matrix") if isinstance(report.get("lifecycle_decision_matrix"), dict) else {}
+    lifecycle_bucket_discovery = (
+        report.get("lifecycle_bucket_discovery")
+        if isinstance(report.get("lifecycle_bucket_discovery"), dict)
+        else {}
+    )
     lifecycle_ai_context = report.get("lifecycle_ai_context") if isinstance(report.get("lifecycle_ai_context"), dict) else {}
     lifecycle_ai_context_attribution = (
         report.get("lifecycle_ai_context_attribution")
@@ -1316,6 +1424,14 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- policy_pass/promote_ready: `{lifecycle_matrix.get('policy_pass_count')}` / `{lifecycle_matrix.get('promote_ready_count')}`",
         f"- fixed_threshold_roles: `{lifecycle_matrix.get('fixed_threshold_roles') or {}}`",
         f"- policy_entries: `{lifecycle_matrix.get('policy_entries') or []}`",
+        "",
+        "## Lifecycle Bucket Discovery",
+        f"- artifact: `{lifecycle_bucket_discovery.get('artifact') or '-'}`",
+        f"- status: `{lifecycle_bucket_discovery.get('status')}` / human_intervention_required: `{lifecycle_bucket_discovery.get('human_intervention_required')}`",
+        f"- candidates/surfaced: `{lifecycle_bucket_discovery.get('candidate_count')}` / `{lifecycle_bucket_discovery.get('surfaced_candidate_count')}`",
+        f"- sim_auto/live_auto/new_bucket: `{lifecycle_bucket_discovery.get('sim_auto_approved_count')}` / `{lifecycle_bucket_discovery.get('live_auto_apply_ready_count')}` / `{lifecycle_bucket_discovery.get('new_bucket_candidate_count')}`",
+        f"- state_counts: `{lifecycle_bucket_discovery.get('state_counts') or {}}`",
+        f"- top_surfaced: `{lifecycle_bucket_discovery.get('top_surfaced') or []}`",
         "",
         "## Lifecycle AI Context",
         f"- artifact: `{lifecycle_ai_context.get('artifact') or '-'}`",

@@ -847,6 +847,87 @@ def _lifecycle_overnight_bucket_order_id(item: dict[str, Any]) -> str:
     return f"order_lifecycle_overnight_bucket_{bucket_type}_{bucket_key}"
 
 
+def _lifecycle_bucket_discovery_report_path(target_date: str) -> Path:
+    return REPORT_DIR / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target_date}.json"
+
+
+def _lifecycle_bucket_discovery_order_id(item: dict[str, Any]) -> str:
+    stage = _slug(str(item.get("stage") or "stage"))
+    bucket_id = _slug(str(item.get("bucket_id") or item.get("bucket_key") or "unknown"))
+    return f"order_lifecycle_bucket_discovery_{stage}_{bucket_id}"
+
+
+def _lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates = report.get("surfaced_candidates") if isinstance(report.get("surfaced_candidates"), list) else []
+    orders: list[dict[str, Any]] = []
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        state = str(item.get("classification_state") or "")
+        if state not in {"new_bucket_candidate", "runtime_blocked_contract_gap", "code_patch_required", "code_review_failed"}:
+            continue
+        stage = str(item.get("stage") or "unknown")
+        bucket_id = str(item.get("bucket_id") or "")
+        orders.append(
+            {
+                "order_id": _lifecycle_bucket_discovery_order_id(item),
+                "title": f"Lifecycle bucket discovery follow-up: {bucket_id}",
+                "source_report_type": "lifecycle_bucket_discovery",
+                "lifecycle_stage": stage,
+                "target_subsystem": "lifecycle_bucket_discovery_runtime_hook",
+                "route": "auto_patch_required",
+                "mapped_family": item.get("live_auto_apply_family") or "lifecycle_bucket_discovery",
+                "threshold_family": item.get("live_auto_apply_family") or "lifecycle_bucket_discovery",
+                "improvement_type": "bucket_classifier_hook_or_taxonomy_gap",
+                "confidence": "postclose_discovery_source",
+                "priority": 1 if state in {"code_patch_required", "runtime_blocked_contract_gap"} else 3,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "expected_ev_effect": (
+                    "Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can "
+                    "auto-classify and auto-apply without operator memory."
+                ),
+                "evidence": [
+                    f"bucket_id={bucket_id}",
+                    f"stage={stage}",
+                    f"classification_state={state}",
+                    f"bucket_relation={item.get('bucket_relation')}",
+                    f"recommended_action={item.get('recommended_action')}",
+                    f"source_quality_adjusted_ev_pct={item.get('source_quality_adjusted_ev_pct')}",
+                    "runtime_effect=false_until_patch_review_passes",
+                    "allowed_runtime_apply=false_until_contract_hook_tests_pass",
+                ],
+                "intent": (
+                    "Add missing bucket taxonomy/runtime hook/post-apply attribution, then rerun discovery, "
+                    "self review, and targeted tests before any runtime env selection."
+                ),
+                "next_postclose_metric": (
+                    "lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or "
+                    "live_auto_apply_ready, or keep it source-only with an explicit blocker."
+                ),
+                "files_likely_touched": [
+                    "src/engine/lifecycle_bucket_discovery.py",
+                    "src/engine/threshold_cycle_preopen_apply.py",
+                    "src/engine/verify_threshold_cycle_postclose_chain.py",
+                ],
+                "acceptance_tests": [
+                    "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py",
+                    "postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped",
+                ],
+                "metric_contract": {
+                    "metric_role": report.get("metric_role"),
+                    "decision_authority": report.get("decision_authority"),
+                    "window_policy": report.get("window_policy"),
+                    "sample_floor": report.get("sample_floor"),
+                    "primary_decision_metric": report.get("primary_decision_metric"),
+                    "source_quality_gate": report.get("source_quality_gate"),
+                    "forbidden_uses": report.get("forbidden_uses") or [],
+                },
+            }
+        )
+    return orders
+
+
 def _lifecycle_overnight_bucket_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
     attribution = (
         report.get("overnight_bucket_attribution")
@@ -1569,6 +1650,8 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     ev_report = _load_json(ev_path)
     lifecycle_source_path = lifecycle_decision_matrix_report_path(target_date)
     lifecycle_report = _load_json(lifecycle_source_path)
+    lifecycle_bucket_discovery_path = _lifecycle_bucket_discovery_report_path(target_date)
+    lifecycle_bucket_discovery = _load_json(lifecycle_bucket_discovery_path)
     pipeline_event_verbosity_path = _pipeline_event_verbosity_report_path(target_date)
     pipeline_event_verbosity = _load_json(pipeline_event_verbosity_path)
     observation_source_quality_path = _observation_source_quality_audit_path(target_date)
@@ -1586,6 +1669,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "swing_strategy_discovery_ev": swing_discovery_source_path,
             "threshold_cycle_ev": ev_path,
             "lifecycle_decision_matrix": lifecycle_source_path,
+            "lifecycle_bucket_discovery": lifecycle_bucket_discovery_path,
             "pipeline_event_verbosity": pipeline_event_verbosity_path,
             "observation_source_quality_audit": observation_source_quality_path,
             "codebase_performance_workorder": codebase_performance_path,
@@ -1633,6 +1717,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     lifecycle_entry_bucket_orders = _lifecycle_entry_bucket_followup_orders(lifecycle_report)
     lifecycle_scale_in_bucket_orders = _lifecycle_scale_in_bucket_followup_orders(lifecycle_report)
     lifecycle_overnight_bucket_orders = _lifecycle_overnight_bucket_followup_orders(lifecycle_report)
+    lifecycle_bucket_discovery_orders = _lifecycle_bucket_discovery_followup_orders(lifecycle_bucket_discovery)
     threshold_ev_orders = [
         *_threshold_ev_followup_orders(ev_report),
         *_entry_adm_followup_orders(ev_report),
@@ -1653,6 +1738,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         *lifecycle_entry_bucket_orders,
         *lifecycle_scale_in_bucket_orders,
         *lifecycle_overnight_bucket_orders,
+        *lifecycle_bucket_discovery_orders,
         *threshold_ev_orders,
     ]
     seen_keys: set[tuple[str, str, str]] = set()
@@ -1715,6 +1801,9 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             if "lifecycle_decision_matrix" in source_paths
             and Path(source_paths["lifecycle_decision_matrix"]).exists()
             else None,
+            "lifecycle_bucket_discovery": str(lifecycle_bucket_discovery_path)
+            if lifecycle_bucket_discovery_path.exists()
+            else None,
             "scalp_entry_action_decision_matrix": str(source_paths["scalp_entry_action_decision_matrix"])
             if "scalp_entry_action_decision_matrix" in source_paths
             and Path(source_paths["scalp_entry_action_decision_matrix"]).exists()
@@ -1737,13 +1826,12 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         },
         "source_fingerprint": source_fingerprint["files"],
         "policy": {
-            "runtime_patch_automation": False,
-            "user_intervention_point": "paste generated markdown into a Codex session and request implementation",
+            "runtime_patch_automation": "lifecycle_bucket_discovery_patch_candidate_only",
+            "user_intervention_point": "none_for_bucket_discovery_classification",
             "post_implementation_reentry": "postclose reports and daily EV consume the updated source metrics automatically",
             "recommended_operator_instruction": (
-                "implement_now를 2-pass로 처리: Pass1 instrumentation/report/provenance 구현, "
-                "관련 리포트 재생성 후 workorder diff 확인, 신규 runtime_effect=false 항목만 Pass2 구현, "
-                "마지막에 generation_id/source_hash 기준으로 final freeze 보고"
+                "lifecycle bucket discovery hook gap은 자동 patch 후보를 만들고, self code review + fix "
+                "2-pass + targeted tests 통과 전에는 runtime env로 소비하지 않는다."
             ),
         },
         "summary": {
@@ -1757,6 +1845,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "lifecycle_entry_bucket_source_order_count": len(lifecycle_entry_bucket_orders),
             "lifecycle_scale_in_bucket_source_order_count": len(lifecycle_scale_in_bucket_orders),
             "lifecycle_overnight_bucket_source_order_count": len(lifecycle_overnight_bucket_orders),
+            "lifecycle_bucket_discovery_source_order_count": len(lifecycle_bucket_discovery_orders),
             "pipeline_event_verbosity_source_order_count": len(
                 _pipeline_event_verbosity_followup_orders(pipeline_event_verbosity)
             ),

@@ -19,6 +19,11 @@ from src.engine.runtime_apply_bridge import (
     ldm_scale_in_runtime_bridge_artifact_path,
     runtime_apply_bridge_report_path,
 )
+from src.engine.lifecycle_bucket_discovery import (
+    bucket_catalog_path,
+    discovery_report_path,
+    sim_auto_approval_path,
+)
 from src.utils.constants import DATA_DIR
 
 
@@ -138,6 +143,10 @@ TARGET_ENV_VALUE_KEYS = {
     "SCALP_SIM_CANDIDATE_WINDOW_BLOCKED_AI_SCORE_MAX_SHARE_PCT": "blocked_ai_score_max_share_pct",
     "SCALP_SIM_CANDIDATE_WINDOW_FIRST_AI_WAIT_MIN_SHARE_PCT": "first_ai_wait_min_share_pct",
     "SCALP_SIM_CANDIDATE_WINDOW_TIME_BUCKET_POLICY": "time_bucket_policy",
+    "LIFECYCLE_BUCKET_DISCOVERY_ENABLED": "enabled",
+    "LIFECYCLE_BUCKET_DISCOVERY_POLICY_FILE": "policy_file",
+    "LIFECYCLE_BUCKET_DISCOVERY_POLICY_VERSION": "policy_version",
+    "LIFECYCLE_BUCKET_DISCOVERY_LIVE_AUTO_APPLY_ENABLED": "live_auto_apply_enabled",
 }
 
 
@@ -441,6 +450,7 @@ def _env_overrides_for_candidate(candidate: dict[str, Any]) -> dict[str, str]:
         "lifecycle_decision_matrix_runtime",
         ENTRY_BRIDGE_FAMILY,
         SCALE_IN_BRIDGE_FAMILY,
+        "lifecycle_bucket_discovery_sim_auto_approval",
     }
     overrides: dict[str, str] = {}
     for target_key in candidate.get("target_env_keys") or []:
@@ -815,22 +825,20 @@ def _load_runtime_apply_bridge_approval(source_date: str | None) -> dict[str, An
         candidate_id = str(item.get("candidate_id") or "")
         contract = annotate_approval_request({"family": family}, source_date)
         item_blocked: list[str] = []
+        auto_live = (
+            str(item.get("bridge_candidate_state") or "") == "live_auto_apply_ready"
+            and bool(item.get("allowed_runtime_apply"))
+            and bool(item.get("live_auto_apply"))
+            and not bool(item.get("approval_required"))
+        )
         if not bool(contract.get("approval_live_ready")):
             item_blocked.append("approval_contract_not_live_ready")
-        if str(item.get("bridge_candidate_state") or "") != "ready_for_approval":
+        if str(item.get("bridge_candidate_state") or "") != "live_auto_apply_ready":
             item_blocked.append(f"runtime_apply_blocked_bridge_not_ready:{item.get('bridge_candidate_state')}")
         if not bool(item.get("allowed_runtime_apply")):
             item_blocked.append("runtime_apply_not_allowed")
-        if not artifact:
-            item_blocked.append("approval_artifact_missing")
-        elif str(artifact.get("family") or artifact.get("policy_id") or family) != family:
-            item_blocked.append("approval_policy_mismatch")
-        elif not bool(artifact.get("approved")):
-            item_blocked.append("approval_required")
-        elif bool(artifact.get("actual_order_submitted")):
-            item_blocked.append("actual_order_submitted_not_allowed")
-        elif not _artifact_matches_bridge_candidate(artifact, item):
-            item_blocked.append("approval_candidate_id_mismatch")
+        if not auto_live:
+            item_blocked.append("runtime_apply_bridge_auto_live_contract_missing")
         if item_blocked:
             blocked.extend(f"{reason}:{family}" for reason in item_blocked)
             continue
@@ -839,11 +847,11 @@ def _load_runtime_apply_bridge_approval(source_date: str | None) -> dict[str, An
             {
                 **item,
                 "policy_id": family,
-                "approval_id": str(artifact.get("approval_id") or f"{family}:{source_date}"),
-                "approval_state": "approved_live",
-                "approval_artifact": str(artifact_path) if artifact_path else None,
+                "approval_id": f"{family}:live_auto_apply:{source_date}",
+                "approval_state": "auto_live",
+                "approval_artifact": None,
                 "approval_runtime_scope": contract.get("approval_runtime_scope"),
-                "calibration_state": "approved_live",
+                "calibration_state": "live_auto_apply",
                 "threshold_version": recommended.get("threshold_version") or f"{family}:{source_date}",
                 "allowed_runtime_apply": True,
                 "safety_revert_required": False,
@@ -851,8 +859,23 @@ def _load_runtime_apply_bridge_approval(source_date: str | None) -> dict[str, An
                 "bridge_candidate_id": candidate_id,
                 "source_bucket_key": ",".join(str(value) for value in item.get("source_bucket_keys") or []),
                 "actual_runtime_effect": item.get("runtime_effect_after_approval"),
+                "lifecycle_bucket_discovery_bucket_id": item.get("lifecycle_bucket_discovery_bucket_id"),
+                "lifecycle_bucket_discovery_ai_review_status": item.get(
+                    "lifecycle_bucket_discovery_ai_review_status"
+                ),
+                "lifecycle_bucket_discovery_ai_followup_required": item.get(
+                    "lifecycle_bucket_discovery_ai_followup_required"
+                ),
+                "lifecycle_bucket_discovery_ai_block_ignored_reason": item.get(
+                    "lifecycle_bucket_discovery_ai_block_ignored_reason"
+                ),
+                "post_apply_verification_required": bool(
+                    item.get("lifecycle_bucket_discovery_ai_followup_required")
+                ),
                 "actual_order_submitted": False,
-                "decision_authority": "approved_ldm_bucket_runtime_bridge",
+                "decision_authority": (
+                    "lifecycle_bucket_discovery_live_auto_apply"
+                ),
             }
         )
     return {
@@ -899,8 +922,26 @@ def _select_runtime_apply_bridge_approval(
             "runtime_apply_bridge_family": item.get("runtime_apply_bridge_family"),
             "source_bucket_keys": item.get("source_bucket_keys") or [],
             "actual_runtime_effect": item.get("actual_runtime_effect"),
+            "lifecycle_bucket_discovery_bucket_id": item.get("lifecycle_bucket_discovery_bucket_id"),
+            "lifecycle_bucket_discovery_ai_review_status": item.get(
+                "lifecycle_bucket_discovery_ai_review_status"
+            ),
+            "lifecycle_bucket_discovery_ai_followup_required": item.get(
+                "lifecycle_bucket_discovery_ai_followup_required"
+            ),
+            "lifecycle_bucket_discovery_ai_block_ignored_reason": item.get(
+                "lifecycle_bucket_discovery_ai_block_ignored_reason"
+            ),
+            "post_apply_verification_required": bool(
+                item.get("lifecycle_bucket_discovery_ai_followup_required")
+            ),
             "selected": not bool(reject_reason),
-            "decision_reason": reject_reason or "user_approval_artifact_accepted_bridge_ready",
+            "decision_reason": reject_reason
+            or (
+                "lifecycle_bucket_discovery_live_auto_apply"
+                if str(item.get("approval_state") or "") == "auto_live"
+                else "user_approval_artifact_accepted_bridge_ready"
+            ),
             "env_overrides": overrides if not reject_reason else {},
             "actual_order_submitted": False,
         }
@@ -910,6 +951,105 @@ def _select_runtime_apply_bridge_approval(
         selected_by_stage[stage] = family
         selected.append(item)
         env_overrides.update(overrides)
+    return selected, decisions, env_overrides
+
+
+def _load_lifecycle_bucket_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
+    if not source_date:
+        return {"artifact": None, "approved_request": None, "blocked": ["missing_source_date"]}
+    artifact_path = sim_auto_approval_path(source_date)
+    discovery_path = discovery_report_path(source_date)
+    catalog_path = bucket_catalog_path(source_date)
+    payload = _load_json(artifact_path)
+    blocked: list[str] = []
+    if not payload:
+        blocked.append("sim_auto_approval_missing")
+    elif not bool(payload.get("approved")):
+        blocked.append("sim_auto_approval_not_approved")
+    elif bool(payload.get("actual_order_submitted")):
+        blocked.append("actual_order_submitted_not_allowed")
+    if not catalog_path.exists():
+        blocked.append("bucket_catalog_missing")
+    approved_request = None
+    if not blocked:
+        approved_request = {
+            "family": "lifecycle_bucket_discovery_sim_auto_approval",
+            "policy_id": "lifecycle_bucket_discovery_sim_auto_approval",
+            "stage": "sim_lifecycle",
+            "priority": 89,
+            "approval_id": f"lifecycle_bucket_discovery_sim_auto_approval:{source_date}",
+            "approval_state": "auto_sim",
+            "allowed_runtime_apply": True,
+            "safety_revert_required": False,
+            "calibration_state": "sim_auto_approved",
+            "target_env_keys": [
+                "LIFECYCLE_BUCKET_DISCOVERY_ENABLED",
+                "LIFECYCLE_BUCKET_DISCOVERY_POLICY_FILE",
+                "LIFECYCLE_BUCKET_DISCOVERY_POLICY_VERSION",
+                "LIFECYCLE_BUCKET_DISCOVERY_LIVE_AUTO_APPLY_ENABLED",
+            ],
+            "recommended_values": {
+                "enabled": True,
+                "policy_file": str(catalog_path),
+                "policy_version": f"lifecycle_bucket_discovery:{source_date}",
+                "live_auto_apply_enabled": True,
+            },
+            "current_values": {
+                "enabled": False,
+                "policy_file": "",
+                "policy_version": "",
+                "live_auto_apply_enabled": False,
+            },
+            "actual_order_submitted": False,
+            "decision_authority": "postclose_lifecycle_bucket_discovery_sim_auto",
+        }
+    return {
+        "artifact": str(artifact_path) if artifact_path.exists() else None,
+        "discovery_report": str(discovery_path) if discovery_path.exists() else None,
+        "catalog": str(catalog_path) if catalog_path.exists() else None,
+        "approved_request": approved_request,
+        "blocked": blocked,
+    }
+
+
+def _select_lifecycle_bucket_sim_auto_approval(bundle: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
+    item = bundle.get("approved_request")
+    decisions: list[dict[str, Any]] = []
+    selected: list[dict[str, Any]] = []
+    env_overrides: dict[str, str] = {}
+    if not isinstance(item, dict):
+        decisions.append(
+            {
+                "family": "lifecycle_bucket_discovery_sim_auto_approval",
+                "selected": False,
+                "decision_reason": ",".join(str(reason) for reason in bundle.get("blocked") or []) or "sim_auto_approval_missing",
+                "env_overrides": {},
+                "actual_order_submitted": False,
+            }
+        )
+        return selected, decisions, env_overrides
+    overrides = _env_overrides_for_candidate(item)
+    reject_reason = ""
+    if not bool(item.get("allowed_runtime_apply")):
+        reject_reason = "runtime_apply_not_allowed"
+    elif bool(item.get("actual_order_submitted")):
+        reject_reason = "actual_order_submitted_not_allowed"
+    elif not overrides:
+        reject_reason = "no_runtime_env_override"
+    decision = {
+        "approval_id": item.get("approval_id"),
+        "family": item.get("family"),
+        "stage": item.get("stage"),
+        "selected": not bool(reject_reason),
+        "decision_reason": reject_reason or "lifecycle_bucket_discovery_sim_auto_apply",
+        "env_overrides": overrides if not reject_reason else {},
+        "actual_order_submitted": False,
+    }
+    decisions.append(decision)
+    if reject_reason:
+        return selected, decisions, env_overrides
+    selected.append(item)
+    env_overrides.update(overrides)
     return selected, decisions, env_overrides
 
 
@@ -1136,6 +1276,7 @@ def _write_runtime_env(target_date: str, manifest: dict[str, Any], env_overrides
                         *((manifest.get("swing_runtime_approval") or {}).get("selected") or []),
                         *((manifest.get("scalp_sim_scale_in_window_approval") or {}).get("selected") or []),
                         *((manifest.get("runtime_apply_bridge") or {}).get("selected") or []),
+                        *((manifest.get("lifecycle_bucket_discovery") or {}).get("selected") or []),
                     ]
                 ],
             },
@@ -1222,6 +1363,8 @@ def build_preopen_apply_manifest(
         scalp_scale_selected, scalp_scale_decisions, scalp_scale_env_overrides = ([], [], {})
         runtime_bridge_bundle = _load_runtime_apply_bridge_approval(report_source_date)
         runtime_bridge_selected, runtime_bridge_decisions, runtime_bridge_env_overrides = ([], [], {})
+        lifecycle_bucket_bundle = _load_lifecycle_bucket_sim_auto_approval(report_source_date)
+        lifecycle_bucket_selected, lifecycle_bucket_decisions, lifecycle_bucket_env_overrides = ([], [], {})
         if auto_apply_requested:
             selected, decisions, env_overrides = _select_auto_apply_candidates(
                 calibration_candidates,
@@ -1240,6 +1383,9 @@ def build_preopen_apply_manifest(
                     include_families=include_families,
                 )
             )
+            lifecycle_bucket_selected, lifecycle_bucket_decisions, lifecycle_bucket_env_overrides = (
+                _select_lifecycle_bucket_sim_auto_approval(lifecycle_bucket_bundle)
+            )
             lifecycle_context_overlay, lifecycle_context_env_overrides = _lifecycle_ai_context_overlay_env(
                 calibration_candidates,
                 include_families=include_families,
@@ -1250,6 +1396,7 @@ def build_preopen_apply_manifest(
                 **swing_env_overrides,
                 **scalp_scale_env_overrides,
                 **runtime_bridge_env_overrides,
+                **lifecycle_bucket_env_overrides,
             }
         runtime_change = bool(auto_apply_requested and env_overrides)
         status = (
@@ -1328,6 +1475,16 @@ def build_preopen_apply_manifest(
                 "selected": runtime_bridge_selected,
                 "decisions": runtime_bridge_decisions,
             },
+            "lifecycle_bucket_discovery": {
+                "artifact": lifecycle_bucket_bundle.get("artifact"),
+                "discovery_report": lifecycle_bucket_bundle.get("discovery_report"),
+                "catalog": lifecycle_bucket_bundle.get("catalog"),
+                "approved": 1 if lifecycle_bucket_bundle.get("approved_request") else 0,
+                "blocked": lifecycle_bucket_bundle.get("blocked") or [],
+                "approved_request": lifecycle_bucket_bundle.get("approved_request"),
+                "selected": lifecycle_bucket_selected,
+                "decisions": lifecycle_bucket_decisions,
+            },
             "runtime_env_file": str(runtime_env_path(target_date)) if auto_apply_requested else None,
             "runtime_env_overrides": env_overrides,
             "threshold_snapshot": report.get("threshold_snapshot") or {},
@@ -1358,7 +1515,13 @@ def build_preopen_apply_manifest(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build preopen threshold apply manifest.")
-    parser.add_argument("--date", dest="target_date", default=date.today().isoformat(), help="Target preopen date")
+    parser.add_argument(
+        "--date",
+        "--target-date",
+        dest="target_date",
+        default=date.today().isoformat(),
+        help="Target preopen date",
+    )
     parser.add_argument("--source-date", dest="source_date", default=None, help="Postclose report date to apply")
     parser.add_argument(
         "--source-phase",

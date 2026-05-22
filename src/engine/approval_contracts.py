@@ -63,18 +63,18 @@ _CONTRACTS: dict[str, dict[str, Any]] = {
     "entry_wait6579_score66_69_recovery_gate_v1": {
         "approval_contract_status": "ready",
         "approval_artifact_template": "ldm_entry_runtime_bridge_{date}.json",
-        "approval_artifact_consumer": "threshold_cycle_preopen_apply.runtime_apply_bridge",
+        "approval_artifact_consumer": "threshold_cycle_preopen_apply.runtime_apply_bridge_live_auto",
         "preopen_env_ready": True,
         "runtime_guard_ready": True,
-        "runtime_scope": "approved_entry_wait6579_score66_69_recovery_gate_only",
+        "runtime_scope": "live_auto_entry_wait6579_score66_69_recovery_gate_only",
     },
     "scale_in_bucket_runtime_policy_v1": {
         "approval_contract_status": "ready",
         "approval_artifact_template": "ldm_scale_in_runtime_bridge_{date}.json",
-        "approval_artifact_consumer": "threshold_cycle_preopen_apply.runtime_apply_bridge",
+        "approval_artifact_consumer": "threshold_cycle_preopen_apply.runtime_apply_bridge_live_auto",
         "preopen_env_ready": True,
         "runtime_guard_ready": True,
-        "runtime_scope": "approved_scalp_scale_in_policy_env_only",
+        "runtime_scope": "live_auto_scalp_scale_in_policy_env_only",
     },
     "position_sizing_cap_release": {
         "approval_contract_status": "contract_missing",

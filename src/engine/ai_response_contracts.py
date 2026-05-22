@@ -186,6 +186,119 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
         },
         "required": ["schema_version", "corrections"],
     },
+    "lifecycle_bucket_discovery_review_v1": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "schema_version": {"type": "integer", "enum": [1]},
+            "interpretation": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "bucket_reviews": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "bucket_id": {"type": "string"},
+                                "interpreted_relation": {
+                                    "type": "string",
+                                    "enum": ["existing_bucket_refinement", "new_bucket_candidate", "unclear"],
+                                },
+                                "interpreted_state": {
+                                    "type": "string",
+                                    "enum": [
+                                        "source_only_keep_collecting",
+                                        "sim_auto_approved",
+                                        "live_auto_apply_ready",
+                                        "runtime_blocked_contract_gap",
+                                        "code_patch_required",
+                                        "code_review_failed",
+                                        "automation_handoff_gap",
+                                        "new_bucket_candidate",
+                                    ],
+                                },
+                                "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+                                "reason": {"type": "string"},
+                            },
+                            "required": [
+                                "bucket_id",
+                                "interpreted_relation",
+                                "interpreted_state",
+                                "confidence",
+                                "reason",
+                            ],
+                        },
+                    },
+                    "source_contract_review": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "status": {"type": "string", "enum": ["pass", "warning", "fail"]},
+                            "changes": {"type": "array", "items": {"type": "string"}},
+                            "reason": {"type": "string"},
+                        },
+                        "required": ["status", "changes", "reason"],
+                    },
+                },
+                "required": ["bucket_reviews", "source_contract_review"],
+            },
+            "audit": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "enum": ["pass", "correction_required", "insufficient_context"],
+                    },
+                    "issues": {"type": "array", "items": {"type": "string"}},
+                    "reason": {"type": "string"},
+                },
+                "required": ["status", "issues", "reason"],
+            },
+            "final_conclusions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "bucket_id": {"type": "string"},
+                        "final_bucket_relation": {
+                            "type": "string",
+                            "enum": ["existing_bucket_refinement", "new_bucket_candidate", "unclear"],
+                        },
+                        "final_classification_state": {
+                            "type": "string",
+                            "enum": [
+                                "source_only_keep_collecting",
+                                "sim_auto_approved",
+                                "live_auto_apply_ready",
+                                "runtime_blocked_contract_gap",
+                                "code_patch_required",
+                                "code_review_failed",
+                                "automation_handoff_gap",
+                                "new_bucket_candidate",
+                            ],
+                        },
+                        "final_decision": {
+                            "type": "string",
+                            "enum": ["keep", "correct", "block"],
+                        },
+                        "reason": {"type": "string"},
+                    },
+                    "required": [
+                        "bucket_id",
+                        "final_bucket_relation",
+                        "final_classification_state",
+                        "final_decision",
+                        "reason",
+                    ],
+                },
+            },
+        },
+        "required": ["schema_version", "interpretation", "audit", "final_conclusions"],
+    },
     "lifecycle_ai_context_v1": {
         "type": "object",
         "additionalProperties": False,
