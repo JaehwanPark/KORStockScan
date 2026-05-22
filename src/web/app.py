@@ -35,11 +35,11 @@ from src.engine.daily_report_service import (
     list_available_report_dates,
     load_or_build_daily_report,
 )
+from src.web.bucket_tracking_routes import bucket_tracking_bp
 from src.web.investor_margin_routes import investor_margin_bp
-from src.web.ipo_intraday_routes import ipo_intraday_bp
 
+app.register_blueprint(bucket_tracking_bp)
 app.register_blueprint(investor_margin_bp)
-app.register_blueprint(ipo_intraday_bp)
 
 _DEFAULT_DASHBOARD_LOOKBACK_MINUTES = 120
 _TRUTHY_QUERY_VALUES = {"1", "true", "yes", "y"}
@@ -438,6 +438,8 @@ def dashboard_home():
     target_date = _request_target_date()
     resolved_since = _request_since(target_date)
     top = _request_top(10)
+    bucket_top = request.args.get("top", default=200, type=int)
+    bucket_top = max(1, min(1000, int(bucket_top or 200)))
     theme = (request.args.get("theme") or "light").strip().lower()
     if theme not in {"light", "dark"}:
         theme = "light"
@@ -450,7 +452,7 @@ def dashboard_home():
         "gatekeeper-replay": "Gatekeeper 리플레이",
         "performance-tuning": "성능 튜닝 모니터",
         "investor-margin": "수급·미수 분석",
-        "ipo-intraday": "IPO 1~2일차",
+        "bucket-tracking": "버킷 추적",
     }
 
     tab_map = {
@@ -462,8 +464,10 @@ def dashboard_home():
         "gatekeeper-replay": f"/gatekeeper-replay?date={target_date}",
         "performance-tuning": f"/performance-tuning?date={target_date}" + (f"&since={resolved_since}" if resolved_since else ""),
         "investor-margin": "/investor-margin",
-        "ipo-intraday": "/ipo-intraday",
+        "bucket-tracking": f"/bucket-tracking?date={target_date}&days=5&top={bucket_top}",
     }
+    if default_tab not in tab_map:
+        default_tab = "daily-report"
     active_src = tab_map.get(default_tab, tab_map["daily-report"])
 
     template = """
@@ -814,7 +818,7 @@ def dashboard_home():
           <div class="hero-top">
             <div class="hero-copy">
               <h2>운영 화면을 한 셸에서 읽는 통합 대시보드</h2>
-              <p>일일 전략 리포트, 진입 게이트 차단, 실제 매매 복기, post-sell 피드백, 전략 성과 분석, Gatekeeper 리플레이, 성능 튜닝 모니터, 수급·미수 분석을 같은 관제 흐름에서 넘겨보도록 정리했습니다.</p>
+              <p>일일 전략 리포트, 진입 게이트 차단, 실제 매매 복기, post-sell 피드백, 전략 성과 분석, Gatekeeper 리플레이, 성능 튜닝 모니터, 수급·미수 분석, 버킷 추적을 같은 관제 흐름에서 넘겨보도록 정리했습니다.</p>
               <div class="hero-status">
                 <span class="hero-status-dot"></span>
                 <span>현재 보고 있는 탭: {{ active_tab_label }}</span>
@@ -868,8 +872,8 @@ def dashboard_home():
           <a class="tab {% if active_tab == 'investor-margin' %}active{% endif %}" href="/dashboard?tab=investor-margin&date={{ target_date }}">
             <span class="tab-label">수급·미수 분석<small>상관관계 + 증거금 계산</small></span>
           </a>
-          <a class="tab {% if active_tab == 'ipo-intraday' %}active{% endif %}" href="/dashboard?tab=ipo-intraday&date={{ target_date }}">
-            <span class="tab-label">IPO 1~2일차<small>가격·거래량 구간 바차트</small></span>
+          <a class="tab {% if active_tab == 'bucket-tracking' %}active{% endif %}" href="/dashboard?tab=bucket-tracking&date={{ target_date }}">
+            <span class="tab-label">버킷 추적<small>LDM 상태·live bridge 흐름</small></span>
           </a>
         </div>
 
@@ -933,12 +937,12 @@ def dashboard_home():
                 <li>`/api/performance-tuning?date=YYYY-MM-DD&since=HH:MM:SS`</li>
                 <li>`/api/investor-margin?mode=flow&stock_query=종목명`</li>
                 <li>`/api/investor-margin?mode=margin&stock_query=종목명&quantity=10`</li>
-                <li>`/ipo-intraday?code=000000&listing_date=YYYY-MM-DD`</li>
+                <li>`/api/bucket-tracking?date=YYYY-MM-DD&days=5&stage=all&state=all`</li>
               </ul>
             </div>
             <div class="rail-card">
               <h3>디자인 메모</h3>
-              <p>`develop` 브랜치에서 진행했던 topbar, 테마 전환, 넓은 셸 레이아웃을 `main`의 최신 대시보드 기능과 합쳐 반영했습니다. 기존 데이터 경로와 라우팅은 그대로 유지합니다.</p>
+              <p>`main` 기준 운영 탭을 유지하되 IPO 화면은 제거하고, LDM bucket discovery와 runtime apply bridge 상태를 관제하는 버킷 추적 화면을 연결했습니다.</p>
             </div>
           </div>
         </div>
