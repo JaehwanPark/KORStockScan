@@ -36,10 +36,10 @@ from src.engine.daily_report_service import (
     load_or_build_daily_report,
 )
 from src.web.bucket_tracking_routes import bucket_tracking_bp
-from src.web.investor_margin_routes import investor_margin_bp
+from src.web.bd_fbuy_accum_pre_routes import bd_fbuy_accum_pre_bp
 
 app.register_blueprint(bucket_tracking_bp)
-app.register_blueprint(investor_margin_bp)
+app.register_blueprint(bd_fbuy_accum_pre_bp)
 
 _DEFAULT_DASHBOARD_LOOKBACK_MINUTES = 120
 _TRUTHY_QUERY_VALUES = {"1", "true", "yes", "y"}
@@ -451,7 +451,7 @@ def dashboard_home():
         "strategy-performance": "전략 성과 분석",
         "gatekeeper-replay": "Gatekeeper 리플레이",
         "performance-tuning": "성능 튜닝 모니터",
-        "investor-margin": "수급·미수 분석",
+        "investor-margin": "BD 외인유입",
         "bucket-tracking": "버킷 추적",
     }
 
@@ -463,7 +463,7 @@ def dashboard_home():
         "strategy-performance": f"/strategy-performance?date={target_date}",
         "gatekeeper-replay": f"/gatekeeper-replay?date={target_date}",
         "performance-tuning": f"/performance-tuning?date={target_date}" + (f"&since={resolved_since}" if resolved_since else ""),
-        "investor-margin": "/investor-margin",
+        "investor-margin": f"/investor-margin?date={target_date}",
         "bucket-tracking": f"/bucket-tracking?date={target_date}&days=5&top={bucket_top}",
     }
     if default_tab not in tab_map:
@@ -818,7 +818,7 @@ def dashboard_home():
           <div class="hero-top">
             <div class="hero-copy">
               <h2>운영 화면을 한 셸에서 읽는 통합 대시보드</h2>
-              <p>일일 전략 리포트, 진입 게이트 차단, 실제 매매 복기, post-sell 피드백, 전략 성과 분석, Gatekeeper 리플레이, 성능 튜닝 모니터, 수급·미수 분석, 버킷 추적을 같은 관제 흐름에서 넘겨보도록 정리했습니다.</p>
+              <p>일일 전략 리포트, 진입 게이트 차단, 실제 매매 복기, post-sell 피드백, 전략 성과 분석, Gatekeeper 리플레이, 성능 튜닝 모니터, BD 외인유입, 버킷 추적을 같은 관제 흐름에서 넘겨보도록 정리했습니다.</p>
               <div class="hero-status">
                 <span class="hero-status-dot"></span>
                 <span>현재 보고 있는 탭: {{ active_tab_label }}</span>
@@ -870,7 +870,7 @@ def dashboard_home():
             <span class="tab-label">성능 튜닝 모니터<small>최적화 조정 포인트</small></span>
           </a>
           <a class="tab {% if active_tab == 'investor-margin' %}active{% endif %}" href="/dashboard?tab=investor-margin&date={{ target_date }}">
-            <span class="tab-label">수급·미수 분석<small>상관관계 + 증거금 계산</small></span>
+            <span class="tab-label">BD 외인유입<small>DB-first + live confirm</small></span>
           </a>
           <a class="tab {% if active_tab == 'bucket-tracking' %}active{% endif %}" href="/dashboard?tab=bucket-tracking&date={{ target_date }}">
             <span class="tab-label">버킷 추적<small>LDM 상태·live bridge 흐름</small></span>
@@ -935,8 +935,7 @@ def dashboard_home():
                 <li>`/api/strategy-performance?date=YYYY-MM-DD`</li>
                 <li>`/api/gatekeeper-replay?date=YYYY-MM-DD`</li>
                 <li>`/api/performance-tuning?date=YYYY-MM-DD&since=HH:MM:SS`</li>
-                <li>`/api/investor-margin?mode=flow&stock_query=종목명`</li>
-                <li>`/api/investor-margin?mode=margin&stock_query=종목명&quantity=10`</li>
+                <li>`/api/investor-margin?date=YYYY-MM-DD&refresh=1`</li>
                 <li>`/api/bucket-tracking?date=YYYY-MM-DD&days=5&stage=all&state=all`</li>
               </ul>
             </div>

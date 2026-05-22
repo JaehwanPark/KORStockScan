@@ -2563,19 +2563,11 @@ class GPTSniperEngine:
                     result_source="engine_disabled",
                 )
 
-            if time.time() - self.last_call_time < self.min_interval:
-                return self._annotate_analysis_result(
-                    _merge_runtime_fields({"action": "WAIT", "score": 50, "reason": "AI 쿨타임"}),
-                    prompt_type=prompt_type,
-                    prompt_version=prompt_version,
-                    response_ms=int((time.perf_counter() - analysis_started) * 1000),
-                    parse_ok=False,
-                    parse_fail=False,
-                    fallback_score_50=True,
-                    cache_hit=False,
-                    cache_mode="miss",
-                    result_source="cooldown",
-                )
+            min_interval_wait_ms = 0
+            min_interval_remaining = float(self.min_interval or 0.0) - (time.time() - self.last_call_time)
+            if min_interval_remaining > 0:
+                time.sleep(min_interval_remaining)
+                min_interval_wait_ms = int(round(min_interval_remaining * 1000))
 
             if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
                 formatted_data = self._format_swing_market_data(ws_data, recent_candles, program_net_qty)
@@ -2621,6 +2613,7 @@ class GPTSniperEngine:
                 result["ai_model"] = target_model
 
             result = _merge_runtime_fields(result)
+            result["openai_min_interval_wait_ms"] = min_interval_wait_ms
             self._mark_successful_ai_call()
             self._cache_set(
                 "_analysis_cache",

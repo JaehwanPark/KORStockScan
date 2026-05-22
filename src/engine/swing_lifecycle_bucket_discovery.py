@@ -109,6 +109,39 @@ def _candidate_from_bucket(section_name: str, bucket: dict[str, Any]) -> dict[st
     }
 
 
+def _swing_entry_bottleneck_candidate(matrix: dict[str, Any]) -> dict[str, Any] | None:
+    bottleneck = matrix.get("swing_entry_bottleneck") if isinstance(matrix.get("swing_entry_bottleneck"), dict) else {}
+    matches = bottleneck.get("matches") if isinstance(bottleneck.get("matches"), list) else []
+    if bottleneck.get("primary") != "SWING_ENTRY_DROUGHT_CRITICAL" and "SWING_ENTRY_DROUGHT_CRITICAL" not in matches:
+        return None
+    counts = bottleneck.get("counts") if isinstance(bottleneck.get("counts"), dict) else {}
+    ratios = bottleneck.get("ratios") if isinstance(bottleneck.get("ratios"), dict) else {}
+    return {
+        "bucket_id": "swing_entry_bottleneck_swing_entry_drought_critical",
+        "source_section": "swing_entry_bottleneck",
+        "lifecycle_stage": "entry",
+        "bucket_type": "swing_entry_bottleneck",
+        "bucket_key": "SWING_ENTRY_DROUGHT_CRITICAL",
+        "classification_state": "code_patch_required",
+        "source_quality_gate": "source_only_bottleneck_handoff",
+        "joined_sample": counts.get("entry_unique"),
+        "sample_count": counts.get("entry_unique"),
+        "source_quality_adjusted_ev_pct": None,
+        "decision_authority": DECISION_AUTHORITY,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "human_approval_required": False,
+        "next_route": "code_improvement_workorder",
+        "forbidden_uses": FORBIDDEN_USES,
+        "classification_primary": bottleneck.get("primary"),
+        "classification_matches": matches,
+        "counts": counts,
+        "ratios": ratios,
+    }
+
+
 def _workorder_contract_fields() -> dict[str, Any]:
     return {
         "decision_authority": DECISION_AUTHORITY,
@@ -249,6 +282,9 @@ def build_swing_lifecycle_bucket_discovery(target_date: str) -> dict[str, Any]:
         for item in section.get("code_improvement_workorders") or []:
             if isinstance(item, dict):
                 explicit_workorders.append(item)
+    entry_bottleneck_candidate = _swing_entry_bottleneck_candidate(matrix)
+    if entry_bottleneck_candidate:
+        candidates.append(entry_bottleneck_candidate)
 
     by_state: dict[str, int] = defaultdict(int)
     by_stage: dict[str, int] = defaultdict(int)
@@ -258,6 +294,7 @@ def build_swing_lifecycle_bucket_discovery(target_date: str) -> dict[str, Any]:
 
     source_contract_status = "missing" if not matrix else "pass"
     contract = matrix.get("input_contract") if isinstance(matrix.get("input_contract"), dict) else {}
+    entry_bottleneck = matrix.get("swing_entry_bottleneck") if isinstance(matrix.get("swing_entry_bottleneck"), dict) else {}
     if contract and contract.get("swing_daily_simulation_consumed") is not False:
         source_contract_status = "fail"
         candidates.append(
@@ -331,6 +368,8 @@ def build_swing_lifecycle_bucket_discovery(target_date: str) -> dict[str, Any]:
             "ai_audit_point_count": len(ai_audit.get("audit_points") or []),
             "ai_audit_explicit_gap_count": ai_audit.get("explicit_gap_count"),
             "sim_auto_policy_audited": bool(ai_audit.get("sim_auto_policy_preserved")),
+            "swing_entry_bottleneck_primary": entry_bottleneck.get("primary"),
+            "swing_entry_bottleneck_candidate_present": bool(entry_bottleneck_candidate),
             "state_counts": dict(by_state),
             "stage_counts": dict(by_stage),
             "human_intervention_required": False,

@@ -13,6 +13,20 @@ from src.engine.sniper_entry_latency import (
 from src.utils.constants import TRADING_RULES as CONFIG
 
 
+def _assert_danger_hard_safety_block(result, *, danger_reasons=None):
+    assert result["latency_state"] == "DANGER"
+    assert result["latency_canary_applied"] is False
+    assert result["latency_canary_reason"] == "danger_hard_safety_block"
+    assert result["allowed"] is False
+    assert result["decision"] == "REJECT_DANGER"
+    if danger_reasons is not None:
+        if isinstance(danger_reasons, str):
+            assert result["latency_danger_reasons"] == danger_reasons
+        else:
+            for reason in danger_reasons:
+                assert reason in result["latency_danger_reasons"]
+
+
 def test_latency_entry_normal_mode_uses_defensive_limit_price():
     stock = {"name": "TEST", "position_tag": "MIDDLE"}
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
@@ -94,7 +108,7 @@ def test_latency_entry_blocks_stale_quote_as_danger():
     assert result["latency_danger_reasons"] == "quote_stale,ws_age_too_high"
 
 
-def test_latency_entry_caution_rejects_deprecated_fallback():
+def test_latency_entry_caution_submits_normal_after_slippage_check():
     stock = {"name": "TEST", "position_tag": "MIDDLE"}
     signal_time = datetime.now(UTC)
     freeze_signal_reference(
@@ -121,14 +135,14 @@ def test_latency_entry_caution_rejects_deprecated_fallback():
         signal_strength=0.9,
     )
 
-    assert result["allowed"] is False
-    assert result["decision"] == "REJECT_MARKET_CONDITION"
-    assert result["reason"] == "latency_fallback_deprecated"
-    assert result["mode"] == "reject"
+    assert result["allowed"] is True
+    assert result["decision"] == "ALLOW_NORMAL"
+    assert result["reason"] == "caution_normal_entry_allowed"
+    assert result["mode"] == "normal"
     clear_signal_reference(stock)
 
 
-def test_latency_submit_recovery_canary_overrides_caution_reject(monkeypatch):
+def test_latency_submit_recovery_canary_not_needed_for_caution_normal(monkeypatch):
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -166,12 +180,12 @@ def test_latency_submit_recovery_canary_overrides_caution_reject(monkeypatch):
         signal_strength=82.0,
     )
 
-    assert result["policy_decision"] == "REJECT_MARKET_CONDITION"
-    assert result["policy_reason"] == "latency_fallback_deprecated"
+    assert result["policy_decision"] == "ALLOW_NORMAL"
+    assert result["policy_reason"] == "caution_normal_entry_allowed"
     assert result["allowed"] is True
     assert result["decision"] == "ALLOW_NORMAL"
-    assert result["reason"] == "latency_submit_recovery_normal_override"
-    assert result["latency_canary_applied"] is True
+    assert result["reason"] == "caution_normal_entry_allowed"
+    assert result["latency_canary_applied"] is False
     assert result["latency_state"] == "CAUTION"
     clear_signal_reference(stock)
 
@@ -214,13 +228,7 @@ def test_latency_entry_canary_overrides_reject_danger_for_scanner(monkeypatch):
         signal_strength=90.0,
     )
 
-    assert result["latency_state"] == "DANGER"
-    assert result["latency_canary_applied"] is True
-    assert result["allowed"] is False
-    assert result["decision"] == "REJECT_MARKET_CONDITION"
-    assert result["reason"] == "latency_fallback_deprecated"
-    assert result["mode"] == "reject"
-    assert result["latency_danger_reasons"] == "other_danger"
+    _assert_danger_hard_safety_block(result, danger_reasons="other_danger")
 
 
 def test_latency_entry_canary_normalizes_probability_signal_strength(monkeypatch):
@@ -261,11 +269,7 @@ def test_latency_entry_canary_normalizes_probability_signal_strength(monkeypatch
         signal_strength=0.90,
     )
 
-    assert result["latency_state"] == "DANGER"
-    assert result["latency_canary_applied"] is True
-    assert result["allowed"] is False
-    assert result["decision"] == "REJECT_MARKET_CONDITION"
-    assert result["reason"] == "latency_fallback_deprecated"
+    _assert_danger_hard_safety_block(result, danger_reasons="other_danger")
 
 
 def test_latency_entry_canary_does_not_apply_when_signal_score_low(monkeypatch):
@@ -306,9 +310,7 @@ def test_latency_entry_canary_does_not_apply_when_signal_score_low(monkeypatch):
         signal_strength=90.0,
     )
 
-    assert result["latency_state"] == "DANGER"
-    assert result["latency_canary_applied"] is False
-    assert result["decision"] == "REJECT_DANGER"
+    _assert_danger_hard_safety_block(result, danger_reasons="other_danger")
 
 
 def test_latency_spread_relief_canary_overrides_reject_danger_to_normal(monkeypatch):
@@ -346,14 +348,7 @@ def test_latency_spread_relief_canary_overrides_reject_danger_to_normal(monkeypa
         signal_strength=90.0,
     )
 
-    assert result["latency_state"] == "DANGER"
-    assert result["latency_canary_applied"] is True
-    assert result["latency_canary_reason"] == "spread_relief_canary_applied"
-    assert result["allowed"] is True
-    assert result["decision"] == "ALLOW_NORMAL"
-    assert result["reason"] == "latency_spread_relief_normal_override"
-    assert result["mode"] == "normal"
-    assert result["latency_danger_reasons"] == "spread_too_wide"
+    _assert_danger_hard_safety_block(result, danger_reasons="spread_too_wide")
 
 
 def test_latency_spread_relief_canary_requires_spread_only_danger(monkeypatch):
@@ -391,10 +386,10 @@ def test_latency_spread_relief_canary_requires_spread_only_danger(monkeypatch):
         signal_strength=90.0,
     )
 
-    assert result["latency_state"] == "DANGER"
-    assert result["latency_canary_applied"] is False
-    assert result["latency_canary_reason"] == "spread_only_required"
-    assert result["decision"] == "REJECT_DANGER"
+    _assert_danger_hard_safety_block(
+        result,
+        danger_reasons=("ws_age_too_high", "spread_too_wide"),
+    )
     assert "ws_age_too_high" in result["latency_danger_reasons"]
     assert "spread_too_wide" in result["latency_danger_reasons"]
 
@@ -447,14 +442,7 @@ def test_latency_ws_jitter_relief_canary_overrides_reject_danger_to_normal(monke
         signal_strength=90.0,
     )
 
-    assert result["latency_state"] == "DANGER"
-    assert result["latency_canary_applied"] is True
-    assert result["latency_canary_reason"] == "ws_jitter_relief_canary_applied"
-    assert result["allowed"] is True
-    assert result["decision"] == "ALLOW_NORMAL"
-    assert result["reason"] == "latency_ws_jitter_relief_normal_override"
-    assert result["mode"] == "normal"
-    assert result["latency_danger_reasons"] == "ws_jitter_too_high"
+    _assert_danger_hard_safety_block(result, danger_reasons="ws_jitter_too_high")
 
 
 def test_latency_ws_jitter_relief_canary_requires_jitter_only_danger(monkeypatch):
@@ -505,10 +493,10 @@ def test_latency_ws_jitter_relief_canary_requires_jitter_only_danger(monkeypatch
         signal_strength=90.0,
     )
 
-    assert result["latency_state"] == "DANGER"
-    assert result["latency_canary_applied"] is False
-    assert result["latency_canary_reason"] == "ws_jitter_only_required"
-    assert result["decision"] == "REJECT_DANGER"
+    _assert_danger_hard_safety_block(
+        result,
+        danger_reasons=("ws_age_too_high", "ws_jitter_too_high"),
+    )
     assert "ws_age_too_high" in result["latency_danger_reasons"]
     assert "ws_jitter_too_high" in result["latency_danger_reasons"]
 
@@ -561,14 +549,7 @@ def test_latency_other_danger_relief_canary_overrides_reject_danger_to_normal(mo
         signal_strength=85.0,
     )
 
-    assert result["latency_state"] == "DANGER"
-    assert result["latency_canary_applied"] is True
-    assert result["latency_canary_reason"] == "other_danger_relief_canary_applied"
-    assert result["allowed"] is True
-    assert result["decision"] == "ALLOW_NORMAL"
-    assert result["reason"] == "latency_other_danger_relief_normal_override"
-    assert result["mode"] == "normal"
-    assert result["latency_danger_reasons"] == "other_danger"
+    _assert_danger_hard_safety_block(result, danger_reasons="other_danger")
 
 
 def test_latency_other_danger_relief_canary_enforces_stricter_residual_limits(monkeypatch):
@@ -619,11 +600,7 @@ def test_latency_other_danger_relief_canary_enforces_stricter_residual_limits(mo
         signal_strength=92.0,
     )
 
-    assert result["latency_state"] == "DANGER"
-    assert result["latency_canary_applied"] is False
-    assert result["latency_canary_reason"] == "ws_jitter_limit_exceeded"
-    assert result["decision"] == "REJECT_DANGER"
-    assert result["latency_danger_reasons"] == "other_danger"
+    _assert_danger_hard_safety_block(result, danger_reasons="other_danger")
 
 
 def test_latency_other_danger_relief_canary_blocks_below_85_signal(monkeypatch):
@@ -673,11 +650,7 @@ def test_latency_other_danger_relief_canary_blocks_below_85_signal(monkeypatch):
         signal_strength=84.9,
     )
 
-    assert result["latency_state"] == "DANGER"
-    assert result["latency_canary_applied"] is False
-    assert result["latency_canary_reason"] == "low_signal"
-    assert result["decision"] == "REJECT_DANGER"
-    assert result["latency_danger_reasons"] == "other_danger"
+    _assert_danger_hard_safety_block(result, danger_reasons="other_danger")
 
 
 def test_latency_quote_fresh_composite_canary_overrides_mixed_danger_to_normal(monkeypatch):
@@ -727,20 +700,10 @@ def test_latency_quote_fresh_composite_canary_overrides_mixed_danger_to_normal(m
         signal_strength=88.0,
     )
 
-    assert result["latency_state"] == "DANGER"
-    assert result["latency_canary_applied"] is True
-    assert result["latency_canary_reason"] == "quote_fresh_composite_canary_applied"
-    assert result["allowed"] is True
-    assert result["decision"] == "ALLOW_NORMAL"
-    assert result["reason"] == "latency_quote_fresh_composite_normal_override"
-    assert result["mode"] == "normal"
-    assert result["latency_danger_reasons"] == "ws_age_too_high,ws_jitter_too_high"
-    assert result["entry_price_guard"] == "latency_danger_override_defensive"
-    assert result["entry_price_defensive_ticks"] == 3
-    assert result["normal_defensive_order_price"] == 10_010
-    assert result["counterfactual_order_price_1tick"] == 10_010
-    assert result["latency_guarded_order_price"] == 9_990
-    assert result["order_price"] == 9_990
+    _assert_danger_hard_safety_block(
+        result,
+        danger_reasons="ws_age_too_high,ws_jitter_too_high",
+    )
 
 
 def test_latency_quote_fresh_composite_price_guard_respects_target_buy_price(monkeypatch):
@@ -790,12 +753,10 @@ def test_latency_quote_fresh_composite_price_guard_respects_target_buy_price(mon
         target_buy_price=9_980,
     )
 
-    assert result["allowed"] is True
-    assert result["latency_guarded_order_price"] == 9_990
-    assert result["counterfactual_order_price_1tick"] == 9_980
-    assert result["order_price"] == 9_980
-    assert result["price_resolution_reason"] == "reference_target_cap"
-    assert result["reference_target_applied"] is True
+    _assert_danger_hard_safety_block(
+        result,
+        danger_reasons="ws_age_too_high,ws_jitter_too_high",
+    )
 
 
 def test_scalping_target_buy_price_can_override_defensive_order_price_for_daehan_cable():
@@ -896,10 +857,10 @@ def test_latency_quote_fresh_composite_price_guard_uses_valid_tick_at_price_boun
         signal_strength=88.0,
     )
 
-    assert result["allowed"] is True
-    assert result["normal_defensive_order_price"] == 199_900
-    assert result["latency_guarded_order_price"] == 199_700
-    assert result["order_price"] == 199_700
+    _assert_danger_hard_safety_block(
+        result,
+        danger_reasons="ws_age_too_high,ws_jitter_too_high",
+    )
 
 
 def test_latency_quote_fresh_composite_canary_blocks_below_88_signal(monkeypatch):
@@ -949,10 +910,10 @@ def test_latency_quote_fresh_composite_canary_blocks_below_88_signal(monkeypatch
         signal_strength=87.9,
     )
 
-    assert result["latency_state"] == "DANGER"
-    assert result["latency_canary_applied"] is False
-    assert result["latency_canary_reason"] == "low_signal"
-    assert result["decision"] == "REJECT_DANGER"
+    _assert_danger_hard_safety_block(
+        result,
+        danger_reasons="ws_age_too_high,ws_jitter_too_high",
+    )
 
 
 def test_latency_signal_quality_quote_composite_backup_canary_overrides_to_normal(monkeypatch):
@@ -1007,12 +968,10 @@ def test_latency_signal_quality_quote_composite_backup_canary_overrides_to_norma
         signal_strength=90.0,
     )
 
-    assert result["latency_state"] == "DANGER"
-    assert result["latency_canary_applied"] is True
-    assert result["latency_canary_reason"] == "signal_quality_quote_composite_canary_applied"
-    assert result["allowed"] is True
-    assert result["decision"] == "ALLOW_NORMAL"
-    assert result["reason"] == "latency_signal_quality_quote_composite_normal_override"
+    _assert_danger_hard_safety_block(
+        result,
+        danger_reasons="ws_age_too_high,ws_jitter_too_high",
+    )
 
 
 def test_latency_signal_quality_quote_composite_backup_blocks_weak_buy_pressure(monkeypatch):
@@ -1064,9 +1023,10 @@ def test_latency_signal_quality_quote_composite_backup_blocks_weak_buy_pressure(
         signal_strength=90.0,
     )
 
-    assert result["latency_canary_applied"] is False
-    assert result["latency_canary_reason"] == "low_buy_pressure"
-    assert result["decision"] == "REJECT_DANGER"
+    _assert_danger_hard_safety_block(
+        result,
+        danger_reasons="ws_age_too_high,ws_jitter_too_high",
+    )
 
 
 def test_latency_mechanical_momentum_relief_overrides_low_ai_score_quote_family(monkeypatch):
@@ -1122,12 +1082,10 @@ def test_latency_mechanical_momentum_relief_overrides_low_ai_score_quote_family(
         signal_strength=0.50,
     )
 
-    assert result["latency_state"] == "DANGER"
-    assert result["latency_canary_applied"] is True
-    assert result["latency_canary_reason"] == "mechanical_momentum_relief_canary_applied"
-    assert result["allowed"] is True
-    assert result["decision"] == "ALLOW_NORMAL"
-    assert result["reason"] == "latency_mechanical_momentum_relief_normal_override"
+    _assert_danger_hard_safety_block(
+        result,
+        danger_reasons="ws_jitter_too_high",
+    )
 
 
 def test_latency_mechanical_momentum_relief_blocks_high_ai_score_to_avoid_axis_overlap(monkeypatch):
@@ -1180,9 +1138,10 @@ def test_latency_mechanical_momentum_relief_blocks_high_ai_score_to_avoid_axis_o
         signal_strength=0.90,
     )
 
-    assert result["latency_canary_applied"] is False
-    assert result["latency_canary_reason"] == "signal_not_mechanical"
-    assert result["decision"] == "REJECT_DANGER"
+    _assert_danger_hard_safety_block(
+        result,
+        danger_reasons="ws_jitter_too_high",
+    )
 
 
 def test_latency_danger_reasons_are_allowlist_controllable(monkeypatch):
@@ -1225,9 +1184,7 @@ def test_latency_danger_reasons_are_allowlist_controllable(monkeypatch):
         signal_strength=90.0,
     )
 
-    assert result["latency_state"] == "DANGER"
-    assert result["latency_canary_applied"] is False
-    assert result["latency_canary_reason"] == "danger_reason_not_allowed"
+    _assert_danger_hard_safety_block(result, danger_reasons=("spread_too_wide",))
     assert "spread_too_wide" in result["latency_danger_reasons"]
 
 

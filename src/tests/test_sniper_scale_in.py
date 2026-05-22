@@ -3486,12 +3486,11 @@ def test_publish_buy_signal_submission_notice_enqueues_once(monkeypatch):
     assert len(published) == 1
     topic, payload = published[0]
     assert topic == "TELEGRAM_BROADCAST"
-    assert payload["audience"] == "ADMIN_ONLY"
+    assert payload["audience"] == "VIP_ALL"
     assert payload["parse_mode"] == "Markdown"
-    assert "BUY 신호 감지" in payload["message"]
+    assert "BUY 주문 제출" in payload["message"]
     assert "덕산하이메탈 (077360)" in payload["message"]
-    assert "후보수량" in payload["message"]
-    assert "주문 제출" not in payload["message"]
+    assert "제출수량" in payload["message"]
     assert "strong_absolute_override" in payload["message"]
     assert pipeline_stages == ["buy_signal_telegram_enqueued"]
 

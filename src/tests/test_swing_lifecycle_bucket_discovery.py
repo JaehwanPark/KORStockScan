@@ -157,3 +157,41 @@ def test_bucket_discovery_surfaces_ai_review_augmentation_workorders(tmp_path, m
     assert all(item["runtime_effect"] is False for item in ai_workorders)
     assert all(item["allowed_runtime_apply"] is False for item in ai_workorders)
     assert all(item["required_flow"] == ["interpretation", "audit", "final_conclusions"] for item in ai_workorders)
+
+
+def test_bucket_discovery_surfaces_swing_entry_bottleneck_handoff(tmp_path, monkeypatch):
+    target = "2026-05-22"
+    matrix_dir = tmp_path / "matrix"
+    matrix_dir.mkdir()
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "discovery")
+
+    matrix_path = matrix_dir / f"swing_lifecycle_decision_matrix_{target}.json"
+    matrix_path.write_text(
+        json.dumps(
+            {
+                "input_contract": {"swing_daily_simulation_consumed": False},
+                "swing_entry_bottleneck": {
+                    "primary": "SWING_ENTRY_DROUGHT_CRITICAL",
+                    "matches": ["GATEKEEPER_PULLBACK_WAIT", "SUBMIT_ZERO"],
+                    "counts": {"entry_unique": 15, "submitted_unique_records": 0},
+                    "ratios": {"probe_to_blocked_unique_pct": 0.0},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+
+    report = mod.build_swing_lifecycle_bucket_discovery(target)
+
+    candidate = next(
+        item
+        for item in report["surfaced_candidates"]
+        if item["bucket_id"] == "swing_entry_bottleneck_swing_entry_drought_critical"
+    )
+    assert candidate["classification_state"] == "code_patch_required"
+    assert candidate["next_route"] == "code_improvement_workorder"
+    assert candidate["runtime_effect"] is False
+    assert candidate["allowed_runtime_apply"] is False
+    assert report["summary"]["swing_entry_bottleneck_primary"] == "SWING_ENTRY_DROUGHT_CRITICAL"
+    assert report["summary"]["swing_entry_bottleneck_candidate_present"] is True

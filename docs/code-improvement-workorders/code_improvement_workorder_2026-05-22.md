@@ -23,9 +23,10 @@
 - codebase_performance_workorder: `/home/ubuntu/KORStockScan/data/report/codebase_performance_workorder/codebase_performance_workorder_2026-05-22.json`
 - pattern_lab_currentness_audit: `/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-22.json`
 - pattern_lab_ai_review: `/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-05-22.json`
-- generated_at: `2026-05-22T17:55:49+09:00`
-- generation_id: `2026-05-22-a8621e17bb95`
-- source_hash: `a8621e17bb955537257cb89acc704c44c4471e42cddb9baea77dbbb03b45e44b`
+- buy_funnel_sentinel: `/home/ubuntu/KORStockScan/data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-05-22.json`
+- generated_at: `2026-05-22T22:59:06+09:00`
+- generation_id: `2026-05-22-8f912c4d1c2a`
+- source_hash: `8f912c4d1c2a80cc5a7aa916102a486baaf209608a3f02dee7e928c3d4bc18cc`
 
 ## 운영 원칙
 
@@ -47,15 +48,15 @@
 ## Snapshot Lineage
 
 - previous_exists: `True`
-- previous_generation_id: `2026-05-22-d95cb56cb72a`
-- previous_source_hash: `d95cb56cb72a134ec7ac11f5bbed079263cb1efa15ef6ecc06e80f953c3c20a2`
+- previous_generation_id: `2026-05-22-89d9055438ce`
+- previous_source_hash: `89d9055438ce38e83f09a6388badfd20c9c3c847829d24a3a22219d071bc639d`
 - new_order_ids: `[]`
 - removed_order_ids: `[]`
 - decision_changed_order_ids: `[]`
 
 ## Summary
 
-- source_order_count: `61`
+- source_order_count: `62`
 - scalping_source_order_count: `13`
 - swing_source_order_count: `4`
 - swing_lab_source_order_count: `4`
@@ -64,13 +65,14 @@
 - swing_lifecycle_bucket_discovery_source_order_count: `4`
 - pattern_lab_currentness_source_order_count: `0`
 - pattern_lab_ai_review_source_order_count: `0`
-- threshold_ev_source_order_count: `14`
+- threshold_ev_source_order_count: `15`
 - pipeline_event_verbosity_source_order_count: `0`
 - observation_source_quality_source_order_count: `0`
 - codebase_performance_source_order_count: `12`
+- buy_funnel_sentinel_source_order_count: `1`
 - panic_lifecycle_source_order_count: `2`
-- selected_order_count: `28`
-- decision_counts: `{'attach_existing_family': 41, 'design_family_candidate': 7, 'defer_evidence': 10, 'reject': 3}`
+- selected_order_count: `29`
+- decision_counts: `{'implement_now': 1, 'attach_existing_family': 41, 'design_family_candidate': 7, 'defer_evidence': 10, 'reject': 3}`
 - gemini_fresh: `True`
 - claude_fresh: `True`
 - swing_lifecycle_audit_available: `True`
@@ -104,7 +106,41 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 
 ## Implementation Orders
 
-### 1. `order_ai_threshold_dominance`
+### 1. `order_entry_submit_drought_auto_resolution`
+
+- title: Entry submit drought automatic resolution handoff
+- decision: `implement_now`
+- decision_reason: instrumentation/provenance work can improve attribution without direct runtime mutation
+- source_report_type: `buy_funnel_sentinel`
+- lifecycle_stage: `entry_submit`
+- target_subsystem: `runtime_instrumentation`
+- route: `instrumentation_order`
+- mapped_family: `lifecycle_decision_matrix_runtime`
+- threshold_family: `lifecycle_decision_matrix_runtime`
+- improvement_type: `-`
+- confidence: `-`
+- priority: `0`
+- runtime_effect: `False`
+- strategy_effect: `True`
+- data_quality_effect: `True`
+- tuning_axis_effect: `True`
+- expected_ev_effect: restore submitted coverage before evaluating EV edge
+- evidence: `ai_confirmed_unique=235`, `budget_pass_unique=3`, `latency_pass_unique=3`, `submitted_unique=0`, `submitted_to_ai_pct=0.0`, `submitted_to_budget_pct=0.0`, `blocker:blocked_swing_score_vpw:-=80953`, `blocker:blocked_swing_gap:-=58064`, `blocker:blocked_strength_momentum:below_window_buy_value=33321`, `upstream:blocked_ai_score:ai_score_50_buy_hold_override=1158`, `upstream:blocked_ai_score:score_62.0=931`, `upstream:first_ai_wait:-=198`, `latency:latency_block:latency_state_danger=64`
+- parity_contract: -
+- next_postclose_metric: SUBMIT_DROUGHT_CRITICAL must produce a selected implement_now workorder and the next postclose LDM/runtime summary must show submit blocker attribution.
+- files_likely_touched: `src/engine/buy_funnel_sentinel.py`, `src/engine/build_code_improvement_workorder.py`, `src/engine/lifecycle_decision_matrix.py`, `src/engine/runtime_apply_bridge.py`, `src/engine/threshold_cycle_ev_report.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_approval_summary.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, next postclose report must show source freshness or warning reduction.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 2. `order_ai_threshold_dominance`
 
 - title: AI threshold dominance
 - decision: `attach_existing_family`
@@ -138,7 +174,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 2. `order_perf_buy_funnel_json_scan`
+### 3. `order_perf_buy_funnel_json_scan`
 
 - title: BUY funnel sentinel field scan without repeated json.dumps
 - decision: `attach_existing_family`
@@ -172,7 +208,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 3. `order_ai_threshold_miss_ev_recovery`
+### 4. `order_ai_threshold_miss_ev_recovery`
 
 - title: AI threshold miss EV recovery
 - decision: `attach_existing_family`
@@ -206,7 +242,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 4. `order_lifecycle_entry_bucket_chosen_action_action_unknown`
+### 5. `order_lifecycle_entry_bucket_chosen_action_action_unknown`
 
 - title: LDM entry bucket attribution follow-up: chosen_action=action_unknown
 - decision: `attach_existing_family`
@@ -240,7 +276,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 5. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale_fresh_liquid`
+### 6. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale_fresh_liquid`
 
 - title: LDM entry bucket attribution follow-up: combo_entry_spot=score=score_60_62|source=scalp_entry_action_decision_snapshot|stale=fresh|liquidity=liquidity_unknown|overbought=overbought_unknown|time=time_1000_1200
 - decision: `attach_existing_family`
@@ -274,7 +310,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 6. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_l`
+### 7. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_l`
 
 - title: LDM entry bucket attribution follow-up: combo_entry_spot=score=score_66_69|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_unknown|overbought=overbought_unknown|time=time_unknown
 - decision: `attach_existing_family`
@@ -308,7 +344,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 7. `order_lifecycle_entry_bucket_exit_rule_exit_unknown`
+### 8. `order_lifecycle_entry_bucket_exit_rule_exit_unknown`
 
 - title: LDM entry bucket attribution follow-up: exit_rule=exit_unknown
 - decision: `attach_existing_family`
@@ -342,7 +378,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 8. `order_lifecycle_entry_bucket_liquidity_bucket_liquidity_unknown`
+### 9. `order_lifecycle_entry_bucket_liquidity_bucket_liquidity_unknown`
 
 - title: LDM entry bucket attribution follow-up: liquidity_bucket=liquidity_unknown
 - decision: `attach_existing_family`
@@ -376,7 +412,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 9. `order_lifecycle_entry_bucket_overbought_bucket_overbought_unknown`
+### 10. `order_lifecycle_entry_bucket_overbought_bucket_overbought_unknown`
 
 - title: LDM entry bucket attribution follow-up: overbought_bucket=overbought_unknown
 - decision: `attach_existing_family`
@@ -410,7 +446,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 10. `order_perf_daily_report_bulk_history`
+### 11. `order_perf_daily_report_bulk_history`
 
 - title: Daily report market snapshot bulk history query
 - decision: `attach_existing_family`
@@ -444,7 +480,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 11. `order_swing_lifecycle_bucket_discovery_swing_ldm_bucket_semantic_two_pass_review`
+### 12. `order_swing_lifecycle_bucket_discovery_swing_ldm_bucket_semantic_two_pass_review`
 
 - title: Swing lifecycle bucket discovery handoff follow-up: swing_ldm_bucket_semantic_two_pass_review
 - decision: `attach_existing_family`
@@ -478,7 +514,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 12. `order_swing_lifecycle_bucket_discovery_swing_ldm_sim_policy_handoff_ai_audit`
+### 13. `order_swing_lifecycle_bucket_discovery_swing_ldm_sim_policy_handoff_ai_audit`
 
 - title: Swing lifecycle bucket discovery handoff follow-up: swing_ldm_sim_policy_handoff_ai_audit
 - decision: `attach_existing_family`
@@ -512,7 +548,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 13. `order_swing_lifecycle_bucket_discovery_swing_ldm_source_contract_ai_audit`
+### 14. `order_swing_lifecycle_bucket_discovery_swing_ldm_source_contract_ai_audit`
 
 - title: Swing lifecycle bucket discovery handoff follow-up: swing_ldm_source_contract_ai_audit
 - decision: `attach_existing_family`
@@ -546,7 +582,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 14. `order_swing_lifecycle_bucket_discovery_swing_ldm_source_quality_gap_ai_triage`
+### 15. `order_swing_lifecycle_bucket_discovery_swing_ldm_source_quality_gap_ai_triage`
 
 - title: Swing lifecycle bucket discovery handoff follow-up: swing_ldm_source_quality_gap_ai_triage
 - decision: `attach_existing_family`
@@ -580,7 +616,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 15. `order_lifecycle_scale_in_bucket_arm_avg_down`
+### 16. `order_lifecycle_scale_in_bucket_arm_avg_down`
 
 - title: LDM scale-in bucket attribution follow-up: arm=AVG_DOWN
 - decision: `attach_existing_family`
@@ -614,7 +650,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 16. `order_lifecycle_scale_in_bucket_blocker_namespace_avg_down`
+### 17. `order_lifecycle_scale_in_bucket_blocker_namespace_avg_down`
 
 - title: LDM scale-in bucket attribution follow-up: blocker_namespace=AVG_DOWN
 - decision: `attach_existing_family`
@@ -648,7 +684,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 17. `order_lifecycle_scale_in_bucket_blocker_reason_low_broken`
+### 18. `order_lifecycle_scale_in_bucket_blocker_reason_low_broken`
 
 - title: LDM scale-in bucket attribution follow-up: blocker_reason=low_broken
 - decision: `attach_existing_family`
@@ -682,7 +718,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 18. `order_lifecycle_scale_in_bucket_blocker_reason_pnl_out_of_range_0_71`
+### 19. `order_lifecycle_scale_in_bucket_blocker_reason_pnl_out_of_range_0_71`
 
 - title: LDM scale-in bucket attribution follow-up: blocker_reason=pnl_out_of_range(-0.71)
 - decision: `attach_existing_family`
@@ -716,7 +752,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 19. `order_lifecycle_scale_in_bucket_blocker_reason_pnl_out_of_range_0_74`
+### 20. `order_lifecycle_scale_in_bucket_blocker_reason_pnl_out_of_range_0_74`
 
 - title: LDM scale-in bucket attribution follow-up: blocker_reason=pnl_out_of_range(-0.74)
 - decision: `attach_existing_family`
@@ -750,7 +786,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 20. `order_lifecycle_scale_in_bucket_blocker_reason_pnl_out_of_range_0_76`
+### 21. `order_lifecycle_scale_in_bucket_blocker_reason_pnl_out_of_range_0_76`
 
 - title: LDM scale-in bucket attribution follow-up: blocker_reason=pnl_out_of_range(-0.76)
 - decision: `attach_existing_family`
@@ -784,7 +820,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 21. `order_lifecycle_scale_in_bucket_blocker_reason_pnl_out_of_range_0_82`
+### 22. `order_lifecycle_scale_in_bucket_blocker_reason_pnl_out_of_range_0_82`
 
 - title: LDM scale-in bucket attribution follow-up: blocker_reason=pnl_out_of_range(-0.82)
 - decision: `attach_existing_family`
@@ -818,7 +854,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 22. `order_lifecycle_scale_in_bucket_blocker_reason_pnl_out_of_range_0_96`
+### 23. `order_lifecycle_scale_in_bucket_blocker_reason_pnl_out_of_range_0_96`
 
 - title: LDM scale-in bucket attribution follow-up: blocker_reason=pnl_out_of_range(-0.96)
 - decision: `attach_existing_family`
@@ -852,7 +888,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 23. `order_lifecycle_scale_in_bucket_blocker_reason_pnl_out_of_range_1_29`
+### 24. `order_lifecycle_scale_in_bucket_blocker_reason_pnl_out_of_range_1_29`
 
 - title: LDM scale-in bucket attribution follow-up: blocker_reason=pnl_out_of_range(-1.29)
 - decision: `attach_existing_family`
@@ -886,7 +922,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 24. `order_lifecycle_scale_in_bucket_blocker_reason_profit_not_enough`
+### 25. `order_lifecycle_scale_in_bucket_blocker_reason_profit_not_enough`
 
 - title: LDM scale-in bucket attribution follow-up: blocker_reason=profit_not_enough
 - decision: `attach_existing_family`
@@ -920,7 +956,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 25. `order_lifecycle_entry_bucket_chosen_action_no_buy_ai`
+### 26. `order_lifecycle_entry_bucket_chosen_action_no_buy_ai`
 
 - title: LDM entry bucket attribution follow-up: chosen_action=NO_BUY_AI
 - decision: `attach_existing_family`
@@ -954,7 +990,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 26. `order_lifecycle_entry_bucket_exit_rule_scalp_hard_stop_pct`
+### 27. `order_lifecycle_entry_bucket_exit_rule_scalp_hard_stop_pct`
 
 - title: LDM entry bucket attribution follow-up: exit_rule=scalp_hard_stop_pct
 - decision: `attach_existing_family`
@@ -988,7 +1024,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 27. `order_lifecycle_entry_bucket_exit_rule_scalp_trailing_take_profit`
+### 28. `order_lifecycle_entry_bucket_exit_rule_scalp_trailing_take_profit`
 
 - title: LDM entry bucket attribution follow-up: exit_rule=scalp_trailing_take_profit
 - decision: `attach_existing_family`
@@ -1022,7 +1058,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 28. `order_lifecycle_entry_bucket_score_band_score_66_69`
+### 29. `order_lifecycle_entry_bucket_score_band_score_66_69`
 
 - title: LDM entry bucket attribution follow-up: score_band=score_66_69
 - decision: `attach_existing_family`

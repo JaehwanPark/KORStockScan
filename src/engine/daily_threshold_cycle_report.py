@@ -1533,8 +1533,10 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
                 0,
             )
             or 0,
-            "would_caution_reject_events": _safe_int(
-                latency_recommendation_metrics.get("would_caution_reject_events"),
+            "would_caution_normal_events": _safe_int(
+                latency_recommendation_metrics.get("would_caution_normal_events")
+                if latency_recommendation_metrics.get("would_caution_normal_events") is not None
+                else latency_recommendation_metrics.get("would_caution_reject_events"),
                 0,
             )
             or 0,
@@ -3596,7 +3598,7 @@ def _event_score(event: dict) -> float:
 def _build_score65_74_recovery_probe_family(events: list[dict]) -> dict:
     current = {
         "enabled": bool(getattr(TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_ENABLED", False)),
-        "min_score": int(getattr(TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE", 65) or 65),
+        "min_score": int(getattr(TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE", 60) or 60),
         "max_score": int(getattr(TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE", 74) or 74),
         "min_buy_pressure": float(
             getattr(TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE", 65.0) or 65.0
@@ -3610,6 +3612,8 @@ def _build_score65_74_recovery_probe_family(events: list[dict]) -> dict:
         "max_budget_krw": int(getattr(TRADING_RULES, "AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW", 50_000) or 50_000),
         "max_qty": int(getattr(TRADING_RULES, "AI_WAIT6579_PROBE_CANARY_MAX_QTY", 0) or 0),
     }
+    current["effective_score_range"] = f"{current['min_score']}-{current['max_score']}"
+    current["family_id_compat_note"] = "score65_74_recovery_probe id is retained for artifact compatibility"
     wait_candidates = [
         event
         for event in events
@@ -3635,7 +3639,12 @@ def _build_score65_74_recovery_probe_family(events: list[dict]) -> dict:
         "stage": "entry",
         "sample": {
             "wait65_79_score65_74_candidate": len(wait_candidates),
+            "wait65_79_score60_74_candidate": len(wait_candidates),
             "blocked_score65_74": len(blocked_score),
+            "blocked_score60_74": len(blocked_score),
+            "effective_score_min": current["min_score"],
+            "effective_score_max": current["max_score"],
+            "effective_score_range": current["effective_score_range"],
             "probe_applied": len(applied),
             "budget_pass": len(budget_pass),
             "submitted": len(submitted),
@@ -3646,7 +3655,7 @@ def _build_score65_74_recovery_probe_family(events: list[dict]) -> dict:
         "recommended": recommended,
         "apply_mode": "efficient_tradeoff_canary_candidate" if sample_ready else "observe_only",
         "notes": [
-            "broad score threshold 완화가 아니라 score65~74 전용 예산 bounded canary 후보만 만든다.",
+            "family id는 호환성을 위해 score65_74를 유지하지만 현재 runtime floor 기준 score60~74 예산 bounded canary 후보만 만든다.",
             "partial sample 0은 live 전면 차단이 아니라 post-apply calibration target으로 남긴다.",
             "latency DANGER 제외, 수급/가속/micro-VWAP gate와 예산/position/protection guard는 유지한다.",
         ],
@@ -5113,7 +5122,11 @@ def _source_metrics_for_family(output_family: str, report_source_context: dict |
     metrics = (report_source_context or {}).get("source_metrics")
     metrics = metrics if isinstance(metrics, dict) else {}
     if output_family == "score65_74_recovery_probe":
-        return metrics.get("buy_score65_74") if isinstance(metrics.get("buy_score65_74"), dict) else {}
+        legacy = metrics.get("buy_score65_74") if isinstance(metrics.get("buy_score65_74"), dict) else {}
+        alias = metrics.get("buy_score60_74") if isinstance(metrics.get("buy_score60_74"), dict) else {}
+        combined = dict(legacy)
+        combined.update(alias)
+        return combined
     if output_family == "pre_submit_price_guard":
         return (
             metrics.get("latency_guard_miss_ev_recovery")
@@ -5154,6 +5167,7 @@ def _source_metrics_for_family(output_family: str, report_source_context: dict |
 def _source_sample_count_for_family(output_family: str, source_metrics: dict) -> int:
     if output_family == "score65_74_recovery_probe":
         return max(
+            _safe_int(source_metrics.get("score60_74_candidates"), 0) or 0,
             _safe_int(source_metrics.get("score65_74_candidates"), 0) or 0,
             _safe_int(source_metrics.get("wait6579_total_candidates"), 0) or 0,
             _safe_int(source_metrics.get("blocked_ai_score_evaluated"), 0) or 0,
@@ -5218,12 +5232,27 @@ def _source_sample_count_for_family(output_family: str, source_metrics: dict) ->
 
 
 def _score65_74_entry_unlock_probe_ready(source_metrics: dict, *, sample_count: int, sample_floor: int) -> bool:
-    """Return True when the existing score65~74 entry probe should open to collect applied samples."""
+    """Return True when the bounded low-score entry probe should open to collect applied samples."""
     if sample_count < sample_floor:
         return False
-    avg_ev = _safe_float(source_metrics.get("score65_74_avg_expected_ev_pct"), None)
-    avg_close = _safe_float(source_metrics.get("score65_74_avg_close_10m_pct"), None)
-    avg_mfe = _safe_float(source_metrics.get("score65_74_avg_mfe_10m_pct"), None)
+    avg_ev = _safe_float(
+        source_metrics.get("score60_74_avg_expected_ev_pct")
+        if source_metrics.get("score60_74_avg_expected_ev_pct") is not None
+        else source_metrics.get("score65_74_avg_expected_ev_pct"),
+        None,
+    )
+    avg_close = _safe_float(
+        source_metrics.get("score60_74_avg_close_10m_pct")
+        if source_metrics.get("score60_74_avg_close_10m_pct") is not None
+        else source_metrics.get("score65_74_avg_close_10m_pct"),
+        None,
+    )
+    avg_mfe = _safe_float(
+        source_metrics.get("score60_74_avg_mfe_10m_pct")
+        if source_metrics.get("score60_74_avg_mfe_10m_pct") is not None
+        else source_metrics.get("score65_74_avg_mfe_10m_pct"),
+        None,
+    )
     submitted_to_budget = _safe_float(source_metrics.get("submitted_to_budget_unique_pct"), None)
     order_bundle_submitted = _safe_float(source_metrics.get("order_bundle_submitted"), None)
     risk_gate = str(source_metrics.get("risk_regime_gate_state") or "").lower()
@@ -5300,12 +5329,23 @@ def _calibration_state_for_family(
         )
     if output_family == "score65_74_recovery_probe":
         family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
-        avg_ev = _safe_float(source_metrics.get("score65_74_avg_expected_ev_pct"), None)
-        avg_close = _safe_float(source_metrics.get("score65_74_avg_close_10m_pct"), None)
+        effective_range = str(family_sample.get("effective_score_range") or "60-74")
+        avg_ev = _safe_float(
+            source_metrics.get("score60_74_avg_expected_ev_pct")
+            if source_metrics.get("score60_74_avg_expected_ev_pct") is not None
+            else source_metrics.get("score65_74_avg_expected_ev_pct"),
+            None,
+        )
+        avg_close = _safe_float(
+            source_metrics.get("score60_74_avg_close_10m_pct")
+            if source_metrics.get("score60_74_avg_close_10m_pct") is not None
+            else source_metrics.get("score65_74_avg_close_10m_pct"),
+            None,
+        )
         risk_gate = str(source_metrics.get("risk_regime_gate_state") or "").lower()
         submitted_to_budget = _safe_float(source_metrics.get("submitted_to_budget_unique_pct"), None)
         if sample_count >= sample_floor and ((avg_ev is not None and avg_ev < 2.0) or (avg_close is not None and avg_close < 1.0)):
-            return ("hold", "score65~74 EV/close_10m 우위가 efficient trade-off gate에 미달해 값 유지")
+            return ("hold", f"score{effective_range} EV/close_10m 우위가 efficient trade-off gate에 미달해 값 유지")
         if submitted_to_budget is not None and submitted_to_budget > 60.0:
             return ("hold", "submitted drought가 아니므로 probe live 확대보다 baseline funnel 유지")
         if _score65_74_entry_unlock_probe_ready(
@@ -5315,18 +5355,22 @@ def _calibration_state_for_family(
         ):
             return (
                 "adjust_up",
-                "rolling primary score65~74 missed EV가 양수이고 panic/source guard가 정상이다. "
+                f"rolling primary score{effective_range} missed EV가 양수이고 panic/source guard가 정상이다. "
                 "submitted drought를 풀기 위해 기존 1주/5만원 bounded entry probe를 연다.",
             )
         if risk_gate == "confirmed_panic":
-            return ("hold_sample", "confirmed panic risk-regime에서는 score65~74 live 확대 없이 source-quality review로 보류")
+            return ("hold_sample", f"confirmed panic risk-regime에서는 score{effective_range} live 확대 없이 source-quality review로 보류")
         if sample_count >= sample_floor and ready:
             return (
                 "adjust_up",
                 "partial_samples=0은 전면 금지가 아니라 post-apply calibration target; 1주/5만원 bounded canary 후보",
             )
-        if _safe_int(family_sample.get("wait65_79_score65_74_candidate"), 0) or 0:
-            return ("hold_sample", "score65~74 후보는 있으나 source/report sample floor가 부족해 cap 유지")
+        if (
+            _safe_int(family_sample.get("wait65_79_score60_74_candidate"), 0)
+            or _safe_int(family_sample.get("wait65_79_score65_74_candidate"), 0)
+            or 0
+        ):
+            return ("hold_sample", f"score{effective_range} 후보는 있으나 source/report sample floor가 부족해 cap 유지")
     if output_family == "pre_submit_price_guard":
         recommended_action = str(source_metrics.get("recommended_action") or "")
         recovery_count = _safe_int(source_metrics.get("would_recovery_canary_events"), 0) or 0
@@ -5615,7 +5659,7 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
                 )
         if output_family == "score65_74_recovery_probe":
             # The family sample includes broad funnel events such as budget_pass.
-            # Runtime readiness must use the score65~74 source cohort only.
+            # Runtime readiness must use the bounded low-score source cohort only.
             sample_count = source_sample_count
         elif output_family == "position_sizing_dynamic_formula":
             family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
@@ -5625,6 +5669,15 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
         sample_floor = int(metadata.get("sample_floor") or 0)
         source_ready = source_sample_count >= sample_floor
         if output_family == "score65_74_recovery_probe":
+            score_min = _safe_int(current.get("min_score"), 60) or 60
+            score_max = _safe_int(current.get("max_score"), 74) or 74
+            source_metrics.setdefault("effective_score_min", score_min)
+            source_metrics.setdefault("effective_score_max", score_max)
+            source_metrics.setdefault("effective_score_range", f"{score_min}-{score_max}")
+            source_metrics.setdefault(
+                "family_id_compat_note",
+                "score65_74_recovery_probe id is retained for artifact compatibility",
+            )
             risk_gate = str(source_metrics.get("risk_regime_gate_state") or "").lower()
             if risk_gate == "confirmed_panic":
                 source_ready = False

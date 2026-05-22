@@ -883,14 +883,7 @@ def _should_publish_watching_buy_analysis_telegram(
         or _is_score65_74_recovery_probe_entry_unlocked(stock)
     ):
         return False, "score65_74_recovery_probe"
-    if _is_scalp_strategy(strategy):
-        threshold = _safe_float(
-            buy_score_threshold,
-            _rule_float("BUY_SCORE_THRESHOLD", 75.0),
-        )
-        if _safe_float(ai_score, 0.0) < threshold:
-            return False, "below_buy_score_threshold"
-    return True, "publish_allowed"
+    return False, "pre_submit_buy_telegram_disabled_until_order_submitted"
 
 
 def _active_runtime_status(stock: dict | None) -> bool:
@@ -4688,20 +4681,16 @@ def _publish_buy_signal_submission_notice(
     if bundle_id and stock.get('last_buy_signal_telegram_bundle_id') == bundle_id:
         return
 
-    audience = _resolve_telegram_audience_for_stock(
-        stock,
-        strategy,
-        default=_resolve_buy_signal_audience(liquidity_value=liquidity_value, ai_score=ai_score),
-    )
+    audience = _resolve_telegram_audience_for_stock(stock, strategy, default="VIP_ALL")
     dynamic_reason = (
         stock.get('entry_dynamic_reason')
         or stock.get('entry_armed_dynamic_reason')
         or '-'
     )
     msg = (
-        f"🛒 **[BUY 신호 감지] {stock.get('name')} ({code})**\n"
+        f"🛒 **[BUY 주문 제출] {stock.get('name')} ({code})**\n"
         f"전략: `{strategy}` | 진입모드: `{entry_mode}`\n"
-        f"현재가: `{int(curr_price):,}원` | 후보수량: `{int(requested_qty or 0)}주`\n"
+        f"현재가: `{int(curr_price):,}원` | 제출수량: `{int(requested_qty or 0)}주`\n"
         f"진입근거: `{dynamic_reason}`\n"
         f"Latency: `{_translate_latency_state(latency_gate.get('latency_state'))}` / "
         f"`{_translate_entry_decision(latency_gate.get('decision'))}`"
@@ -4725,6 +4714,8 @@ def _publish_buy_signal_submission_notice(
             latency=latency_gate.get('latency_state'),
             decision=latency_gate.get('decision'),
             dynamic_reason=dynamic_reason,
+            actual_order_submitted=True,
+            broker_order_forbidden=False,
         )
     except Exception as exc:
         log_error(f"🚨 [BUY 신호 알림 실패] {stock.get('name')}({code}): {exc}")
@@ -8652,7 +8643,7 @@ def _should_run_score65_74_recovery_probe(
         score = float(ai_score or 0.0)
     except Exception:
         return False
-    min_score = _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE", 65)
+    min_score = _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE", 60)
     max_score = _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE", 74)
     if score < min_score or score > max_score:
         return False
@@ -9358,7 +9349,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                         or "runtime_default"
                                     ),
                                     threshold_applied_value=(
-                                        f"enabled=True|score={int(_rule('AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE', 65) or 65)}-"
+                                        f"enabled=True|score={int(_rule('AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE', 60) or 60)}-"
                                         f"{int(_rule('AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE', 74) or 74)}|"
                                         f"budget={int(_rule('AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW', 50_000) or 50_000)}|qty=1"
                                     ),
@@ -10978,8 +10969,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     _finalize_buy_order_submission(
         stock=stock, code=code, curr_price=curr_price, requested_qty=requested_qty, msg=msg, entry_orders=successful_orders,
     )
+    submitted_qty = sum(_safe_int(order.get('qty'), 0) for order in successful_orders if isinstance(order, dict))
     _publish_buy_signal_submission_notice(
-        stock, code, strategy=strategy, curr_price=curr_price, requested_qty=requested_qty, entry_mode=entry_mode,
+        stock, code, strategy=strategy, curr_price=curr_price, requested_qty=submitted_qty, entry_mode=entry_mode,
         latency_gate=latency_gate, liquidity_value=liquidity_value, ai_score=latency_signal_score,
     )
     bundle_primary_price = successful_orders[0].get('price', latency_gate.get('order_price', 0))

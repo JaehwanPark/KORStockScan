@@ -7,6 +7,8 @@ from src.engine import ai_engine_deepseek as ai_engine_deepseek_module
 from src.engine import ai_engine_openai as ai_engine_openai_module
 from src.engine.ai_engine import (
     GeminiSniperEngine,
+    REALTIME_ANALYSIS_PROMPT_SCALP,
+    REALTIME_ANALYSIS_PROMPT_SWING,
     SCALPING_BUY_RECOVERY_CANARY_PROMPT,
     SCALPING_ENTRY_PRICE_PROMPT,
     SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
@@ -14,6 +16,7 @@ from src.engine.ai_engine import (
     SCALPING_SYSTEM_PROMPT,
     SCALPING_SYSTEM_PROMPT_75_CANARY,
     SCALPING_WATCHING_SYSTEM_PROMPT,
+    SWING_SYSTEM_PROMPT,
 )
 from src.engine.ai_response_contracts import normalize_ai_reason_language
 from src.engine.ai_engine_deepseek import DeepSeekSniperEngine
@@ -64,6 +67,14 @@ def _build_provider_engine(engine_cls):
     engine.model_tier3_deep = "tier3-model"
     engine.current_model_name = engine.model_tier1_fast
     return engine
+
+
+def test_pullback_wait_prompt_requires_explicit_reentry_condition():
+    assert "WAIT is not the default" in SWING_SYSTEM_PROMPT
+    assert "If there is no explicit wait condition" in SWING_SYSTEM_PROMPT
+    assert "`[눌림 대기]` is not a safe default answer" in REALTIME_ANALYSIS_PROMPT_SCALP
+    assert "`[눌림 대기]` is not the default hold answer" in REALTIME_ANALYSIS_PROMPT_SWING
+    assert "If the wait condition cannot be derived from the input, choose `[전량 회피]`" in REALTIME_ANALYSIS_PROMPT_SWING
 
 
 def test_holding_flow_prompt_includes_consistency_rule_and_history_reason():
@@ -433,14 +444,14 @@ def test_holding_cache_profile_absorbs_micro_market_noise(monkeypatch):
 
 
 def test_scalping_prompt_75_canary_rewrites_buy_band():
-    assert "75~100 (BUY)" in SCALPING_SYSTEM_PROMPT_75_CANARY
-    assert "50~74 (WAIT)" in SCALPING_SYSTEM_PROMPT_75_CANARY
+    assert "75-100 BUY" in SCALPING_SYSTEM_PROMPT_75_CANARY
+    assert "50-74 WAIT" in SCALPING_SYSTEM_PROMPT_75_CANARY
 
 
 def test_scalping_buy_recovery_prompt_mentions_recovery_band():
-    assert "WAIT 65~79 BUY 회복" in SCALPING_BUY_RECOVERY_CANARY_PROMPT
-    assert "75~100 (BUY)" in SCALPING_BUY_RECOVERY_CANARY_PROMPT
-    assert "50~74 (WAIT)" in SCALPING_BUY_RECOVERY_CANARY_PROMPT
+    assert "WAIT 65-79 candidates" in SCALPING_BUY_RECOVERY_CANARY_PROMPT
+    assert "75-100 BUY" in SCALPING_BUY_RECOVERY_CANARY_PROMPT
+    assert "50-74 WAIT" in SCALPING_BUY_RECOVERY_CANARY_PROMPT
 
 
 def test_analyze_target_shadow_prompt_uses_shadow_prompt_type(monkeypatch):
@@ -868,6 +879,39 @@ def test_provider_holding_matrix_context_appends_prompt_and_tags_result(monkeypa
         assert result["holding_exit_matrix_version"] == "matrix_v1"
         assert result["holding_exit_matrix_cohort"] == "candidate"
         assert result["holding_exit_matrix_decision_alignment"] == "neutral_no_clear_edge"
+
+
+def test_openai_analyze_target_waits_min_interval_instead_of_score50_cooldown(monkeypatch):
+    engine = _build_provider_engine(GPTSniperEngine)
+    engine.last_call_time = 100.0
+    engine.min_interval = 0.5
+    sleeps = []
+
+    monkeypatch.setattr(ai_engine_openai_module.time, "time", lambda: 100.2)
+    monkeypatch.setattr(ai_engine_openai_module.time, "sleep", lambda sec: sleeps.append(sec))
+    monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "packet")
+    monkeypatch.setattr(engine, "_apply_remote_entry_guard", lambda result, **kwargs: result)
+
+    def _fake_call(*args, **kwargs):
+        return {"action": "BUY", "score": 88, "reason": "strong"}
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
+
+    result = engine.analyze_target(
+        "테스트",
+        {"curr": 10000, "fluctuation": 1.0, "orderbook": {"asks": [], "bids": []}},
+        [{"time": "10:00:00", "price": 10000, "volume": 10, "dir": "BUY"}],
+        [{"체결시간": "10:00:00", "현재가": 10000, "거래량": 100}],
+        strategy="SCALPING",
+    )
+
+    assert len(sleeps) == 1
+    assert abs(sleeps[0] - 0.3) < 1e-9
+    assert result["action"] == "BUY"
+    assert result["score"] == 88
+    assert result["ai_result_source"] == "live"
+    assert result["ai_fallback_score_50"] is False
+    assert result["openai_min_interval_wait_ms"] == 300
 
 
 def test_provider_holding_matrix_cache_token_separates_cache_variants(monkeypatch):

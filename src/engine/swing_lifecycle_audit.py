@@ -48,6 +48,11 @@ SWING_RUNTIME_APPROVAL_LIVE_FAMILIES = {
     "swing_gatekeeper_reject_cooldown",
     "swing_market_regime_sensitivity",
 }
+SWING_ENTRY_BOTTLENECK_PRIMARY = "SWING_ENTRY_DROUGHT_CRITICAL"
+SWING_ENTRY_BOTTLENECK_ENTRY_FLOOR = 10
+SWING_ENTRY_BOTTLENECK_BLOCKER_FLOOR = 5
+SWING_ENTRY_BOTTLENECK_CONVERSION_PCT = 20.0
+SWING_ENTRY_BOTTLENECK_PROBE_ENTRY_PCT = 50.0
 
 
 def swing_one_share_real_canary_phase0_policy() -> dict[str, Any]:
@@ -1130,6 +1135,210 @@ def _observed_field_names(events: dict[str, Any], keys: Iterable[str]) -> list[s
     return [str(key) for key in keys if _safe_int(coverage.get(key), 0) > 0]
 
 
+def _ratio_pct(numerator: int, denominator: int) -> float | None:
+    if denominator <= 0:
+        return None
+    return round(float(numerator) / float(denominator) * 100.0, 4)
+
+
+def build_swing_entry_bottleneck(events: dict[str, Any]) -> dict[str, Any]:
+    raw = events.get("raw_counts") if isinstance(events.get("raw_counts"), dict) else {}
+    unique = events.get("unique_record_counts") if isinstance(events.get("unique_record_counts"), dict) else {}
+    group_unique = events.get("group_unique_counts") if isinstance(events.get("group_unique_counts"), dict) else {}
+    ofi_qi = events.get("ofi_qi_summary") if isinstance(events.get("ofi_qi_summary"), dict) else {}
+    gatekeeper_actions = events.get("gatekeeper_actions") if isinstance(events.get("gatekeeper_actions"), dict) else {}
+    cooldown_policies = events.get("cooldown_policies") if isinstance(events.get("cooldown_policies"), dict) else {}
+
+    gatekeeper_reject_unique = _safe_int(unique.get("blocked_gatekeeper_reject"), 0)
+    score_vpw_unique = _safe_int(unique.get("blocked_swing_score_vpw"), 0)
+    gap_unique = _safe_int(unique.get("blocked_swing_gap"), 0)
+    market_block_unique = _safe_int(unique.get("market_regime_block"), 0)
+    probe_entry_unique = _safe_int(unique.get("swing_probe_entry_candidate"), 0)
+    submitted_unique = _safe_int(events.get("submitted_unique_records"), 0)
+    simulated_unique = _safe_int(events.get("simulated_order_unique_records"), 0)
+    blocker_unique_total = gatekeeper_reject_unique + score_vpw_unique + gap_unique + market_block_unique
+    entry_unique = max(
+        _safe_int(group_unique.get("entry"), 0),
+        blocker_unique_total,
+        probe_entry_unique,
+        submitted_unique,
+        simulated_unique,
+    )
+
+    submitted_to_entry_pct = _ratio_pct(submitted_unique, entry_unique)
+    simulated_to_entry_pct = _ratio_pct(simulated_unique, entry_unique)
+    probe_to_blocked_pct = _ratio_pct(probe_entry_unique, blocker_unique_total)
+    probe_to_entry_pct = _ratio_pct(probe_entry_unique, entry_unique)
+
+    stale_missing_ratio = _safe_float(ofi_qi.get("stale_missing_ratio"), 0.0) or 0.0
+    entry_source_quality = _ofi_qi_source_quality_for_group(ofi_qi, "entry")
+    entry_micro_valid = _safe_int(entry_source_quality.get("valid_micro_context_count"), 0)
+    entry_micro_invalid = _safe_int(entry_source_quality.get("invalid_micro_context_unique_record_count"), 0)
+
+    action_text = " ".join(str(key) for key in gatekeeper_actions)
+    matches: list[str] = []
+    if gatekeeper_reject_unique >= SWING_ENTRY_BOTTLENECK_BLOCKER_FLOOR or "눌림" in action_text or "pullback" in action_text.lower():
+        matches.append("GATEKEEPER_PULLBACK_WAIT")
+    if score_vpw_unique >= SWING_ENTRY_BOTTLENECK_BLOCKER_FLOOR:
+        matches.append("SCORE_VPW_BLOCK")
+    if gap_unique >= SWING_ENTRY_BOTTLENECK_BLOCKER_FLOOR or market_block_unique >= SWING_ENTRY_BOTTLENECK_BLOCKER_FLOOR:
+        matches.append("GAP_REGIME_BLOCK")
+    if stale_missing_ratio >= 0.5 or entry_micro_invalid > entry_micro_valid:
+        matches.append("ENTRY_MICRO_CONTEXT_GAP")
+    if submitted_unique == 0 and entry_unique >= SWING_ENTRY_BOTTLENECK_ENTRY_FLOOR:
+        matches.append("SUBMIT_ZERO")
+
+    blocker_floor_hit = max(gatekeeper_reject_unique, score_vpw_unique, gap_unique, market_block_unique) >= SWING_ENTRY_BOTTLENECK_BLOCKER_FLOOR
+    low_probe_or_sim_conversion = (
+        (probe_to_blocked_pct is not None and probe_to_blocked_pct < SWING_ENTRY_BOTTLENECK_CONVERSION_PCT)
+        or (simulated_to_entry_pct is not None and simulated_to_entry_pct < SWING_ENTRY_BOTTLENECK_CONVERSION_PCT)
+    )
+    blocker_dominates_probe = blocker_floor_hit and (
+        probe_to_entry_pct is None or probe_to_entry_pct < SWING_ENTRY_BOTTLENECK_PROBE_ENTRY_PCT
+    )
+    critical = (
+        entry_unique >= SWING_ENTRY_BOTTLENECK_ENTRY_FLOOR
+        and submitted_unique == 0
+        and (low_probe_or_sim_conversion or blocker_floor_hit or blocker_dominates_probe)
+    )
+    primary = SWING_ENTRY_BOTTLENECK_PRIMARY if critical else "SWING_ENTRY_BOTTLENECK_OBSERVE"
+    if not matches:
+        matches.append("ENTRY_OBSERVATION_ONLY")
+
+    return {
+        "schema_version": "swing_entry_bottleneck_v1",
+        "primary": primary,
+        "matches": matches,
+        "critical": bool(critical),
+        "operator_action_required": False,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "decision_authority": "swing_entry_bottleneck_source_only",
+        "thresholds": {
+            "entry_unique_floor": SWING_ENTRY_BOTTLENECK_ENTRY_FLOOR,
+            "blocker_unique_floor": SWING_ENTRY_BOTTLENECK_BLOCKER_FLOOR,
+            "conversion_pct_floor": SWING_ENTRY_BOTTLENECK_CONVERSION_PCT,
+            "probe_entry_pct_floor": SWING_ENTRY_BOTTLENECK_PROBE_ENTRY_PCT,
+        },
+        "counts": {
+            "entry_unique": entry_unique,
+            "blocked_gatekeeper_reject_unique": gatekeeper_reject_unique,
+            "blocked_swing_score_vpw_unique": score_vpw_unique,
+            "blocked_swing_gap_unique": gap_unique,
+            "market_regime_block_unique": market_block_unique,
+            "blocker_unique_total": blocker_unique_total,
+            "swing_probe_entry_candidate_unique": probe_entry_unique,
+            "simulated_order_unique_records": simulated_unique,
+            "submitted_unique_records": submitted_unique,
+            "blocked_gatekeeper_reject_raw": _safe_int(raw.get("blocked_gatekeeper_reject"), 0),
+            "blocked_swing_score_vpw_raw": _safe_int(raw.get("blocked_swing_score_vpw"), 0),
+            "blocked_swing_gap_raw": _safe_int(raw.get("blocked_swing_gap"), 0),
+        },
+        "ratios": {
+            "submitted_to_entry_unique_pct": submitted_to_entry_pct,
+            "simulated_to_entry_unique_pct": simulated_to_entry_pct,
+            "probe_to_blocked_unique_pct": probe_to_blocked_pct,
+            "probe_to_entry_unique_pct": probe_to_entry_pct,
+        },
+        "gatekeeper_actions": gatekeeper_actions,
+        "cooldown_policies": cooldown_policies,
+        "entry_micro_context": {
+            "stale_missing_ratio": stale_missing_ratio,
+            "source_quality": entry_source_quality,
+        },
+        "next_route": "code_improvement_workorder" if critical else "postclose_source_quality_or_sample_collection",
+    }
+
+
+def build_swing_lifecycle_contract_gaps(audit_report: dict[str, Any], entry_bottleneck: dict[str, Any]) -> dict[str, Any]:
+    events = audit_report.get("lifecycle_events") if isinstance(audit_report.get("lifecycle_events"), dict) else {}
+    ofi_qi = events.get("ofi_qi_summary") if isinstance(events.get("ofi_qi_summary"), dict) else {}
+    group_unique = events.get("group_unique_counts") if isinstance(events.get("group_unique_counts"), dict) else {}
+    scale_in_observation = events.get("scale_in_observation") if isinstance(events.get("scale_in_observation"), dict) else {}
+    ai_contract_metrics = events.get("ai_contract_metrics") if isinstance(events.get("ai_contract_metrics"), dict) else {}
+    discovery = audit_report.get("simulation_opportunity") if isinstance(audit_report.get("simulation_opportunity"), dict) else {}
+
+    gaps: list[dict[str, Any]] = []
+    stale_missing_ratio = _safe_float(ofi_qi.get("stale_missing_ratio"), 0.0) or 0.0
+    holding_exit_issue = any(issue.get("issue_id") == "swing_holding_flow_scalping_prompt_reuse" for issue in AI_CONTRACT_ISSUES)
+    if stale_missing_ratio >= 0.5 or holding_exit_issue or _safe_int(ai_contract_metrics.get("parse_fail_count"), 0) > 0:
+        gaps.append(
+            {
+                "gap_id": "SWING_HOLDING_EXIT_CONTRACT_GAP",
+                "lifecycle_stage": "holding_exit",
+                "next_route": "code_improvement_workorder",
+                "reason": "holding/exit source quality or prompt/schema contract is not strong enough for runtime use",
+                "evidence": {
+                    "stale_missing_ratio": stale_missing_ratio,
+                    "holding_exit_unique": _safe_int(group_unique.get("holding"), 0) + _safe_int(group_unique.get("exit"), 0),
+                    "scalping_prompt_reuse_issue": holding_exit_issue,
+                    "ai_parse_fail_count": _safe_int(ai_contract_metrics.get("parse_fail_count"), 0),
+                },
+            }
+        )
+
+    post_add_outcomes = scale_in_observation.get("post_add_outcomes") if isinstance(scale_in_observation.get("post_add_outcomes"), dict) else {}
+    scale_issue = any(issue.get("issue_id") == "swing_scale_in_ai_contract_missing" for issue in AI_CONTRACT_ISSUES)
+    if not post_add_outcomes or scale_issue:
+        gaps.append(
+            {
+                "gap_id": "SWING_SCALE_IN_CONTRACT_GAP",
+                "lifecycle_stage": "scale_in",
+                "next_route": "code_improvement_workorder",
+                "reason": "scale-in AVG_DOWN/PYRAMID outcome and dedicated AI contract are not fully closed",
+                "evidence": {
+                    "scale_in_unique": _safe_int(group_unique.get("scale_in"), 0),
+                    "post_add_outcomes": post_add_outcomes,
+                    "scale_in_ai_contract_missing": scale_issue,
+                },
+            }
+        )
+
+    real_canary_policy = swing_one_share_real_canary_phase0_policy()
+    gaps.append(
+        {
+            "gap_id": "SWING_REAL_CANARY_EXECUTION_CONTRACT",
+            "lifecycle_stage": "real_canary_execution",
+            "next_route": "approval_required" if real_canary_policy.get("policy_state") == "approval_required" else "code_improvement_workorder",
+            "reason": "real broker receipt/fill/slippage/cancel/sell binding is only valid after separate approval artifact",
+            "evidence": {
+                "policy_state": real_canary_policy.get("policy_state"),
+                "runtime_apply_allowed": real_canary_policy.get("runtime_apply_allowed"),
+                "required_provenance": real_canary_policy.get("required_provenance"),
+            },
+        }
+    )
+
+    pending_count = _safe_int(discovery.get("pending_future_quote_count"), 0)
+    if pending_count > 0 or discovery.get("sample_state") in {"hold_sample", "pending_future_quotes"}:
+        gaps.append(
+            {
+                "gap_id": "SWING_DISCOVERY_LABEL_CONTRACT_GAP",
+                "lifecycle_stage": "discovery_label",
+                "next_route": "source_quality_workorder",
+                "reason": "discovery labels are still pending or below source-quality floor",
+                "evidence": {
+                    "pending_future_quote_count": pending_count,
+                    "sample_state": discovery.get("sample_state"),
+                    "closed_count": discovery.get("closed_count"),
+                },
+            }
+        )
+
+    return {
+        "schema_version": "swing_lifecycle_contract_gap_v1",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "entry_bottleneck_primary": entry_bottleneck.get("primary"),
+        "gap_count": len(gaps),
+        "gaps": gaps,
+    }
+
+
 def build_observation_axes(
     *,
     model_selection: dict[str, Any],
@@ -1467,8 +1676,9 @@ def build_swing_lifecycle_audit_report(
     )
     observation_axis_coverage = summarize_observation_axis_coverage(observation_axes)
     status_counts = Counter(axis["status"] for axis in observation_axes)
+    entry_bottleneck = build_swing_entry_bottleneck(lifecycle_events)
 
-    return {
+    report = {
         "schema_version": SCHEMA_VERSION,
         "report_type": REPORT_TYPE,
         "date": date_key,
@@ -1489,6 +1699,7 @@ def build_swing_lifecycle_audit_report(
         "db_lifecycle": db_summary,
         "pipeline_events": pipeline_summary,
         "lifecycle_events": lifecycle_events,
+        "swing_entry_bottleneck": entry_bottleneck,
         "simulation_opportunity": simulation_opportunity,
         "panic_context": panic_context,
         "observation_axes": observation_axes,
@@ -1516,6 +1727,8 @@ def build_swing_lifecycle_audit_report(
             },
         },
     }
+    report["swing_lifecycle_contract_gaps"] = build_swing_lifecycle_contract_gaps(report, entry_bottleneck)
+    return report
 
 
 def _family_metric_snapshot(audit_report: dict[str, Any], family: str) -> dict[str, Any]:
@@ -2814,12 +3027,95 @@ def build_swing_improvement_automation_report(
     scale_in_observation = events.get("scale_in_observation") or {}
     ai_contract_metrics = events.get("ai_contract_metrics") or {}
     sim_opportunity = audit_report.get("simulation_opportunity") or {}
+    entry_bottleneck = audit_report.get("swing_entry_bottleneck") if isinstance(audit_report.get("swing_entry_bottleneck"), dict) else {}
+    lifecycle_contract_gaps = (
+        audit_report.get("swing_lifecycle_contract_gaps")
+        if isinstance(audit_report.get("swing_lifecycle_contract_gaps"), dict)
+        else {}
+    )
     scale_in_ofi_qi_quality = _ofi_qi_source_quality_for_group(ofi_qi, "scale_in")
     entry_ofi_qi_quality = _ofi_qi_source_quality_for_group(ofi_qi, "entry")
 
     findings: list[dict[str, Any]] = []
     orders: list[dict[str, Any]] = []
     auto_family_candidates: list[dict[str, Any]] = []
+
+    entry_matches = entry_bottleneck.get("matches") if isinstance(entry_bottleneck.get("matches"), list) else []
+    if entry_bottleneck.get("primary") == SWING_ENTRY_BOTTLENECK_PRIMARY or SWING_ENTRY_BOTTLENECK_PRIMARY in entry_matches:
+        mapped_family = "swing_entry_ofi_qi_execution_quality"
+        if "GATEKEEPER_PULLBACK_WAIT" in entry_matches:
+            mapped_family = "swing_gatekeeper_accept_reject"
+        elif "GAP_REGIME_BLOCK" in entry_matches:
+            mapped_family = "swing_market_regime_sensitivity"
+        elif "SCORE_VPW_BLOCK" in entry_matches:
+            mapped_family = "swing_gatekeeper_reject_cooldown"
+        counts = entry_bottleneck.get("counts") if isinstance(entry_bottleneck.get("counts"), dict) else {}
+        ratios = entry_bottleneck.get("ratios") if isinstance(entry_bottleneck.get("ratios"), dict) else {}
+        findings.append(
+            {
+                "finding_id": "swing_entry_bottleneck_auto_resolution",
+                "title": "swing entry bottleneck automatic resolution handoff",
+                "confidence": "consensus",
+                "route": "instrumentation_order",
+                "mapped_family": mapped_family,
+                "target_subsystem": "swing_entry",
+                "lifecycle_stage": "entry",
+            }
+        )
+        order = _order(
+            order_id="order_swing_entry_bottleneck_auto_resolution",
+            title="swing entry bottleneck automatic resolution handoff",
+            lifecycle_stage="entry",
+            target_subsystem="swing_entry",
+            priority=0,
+            route="instrumentation_order",
+            mapped_family=mapped_family,
+            intent=(
+                "Automatically surface swing entry drought as a source-only code-improvement handoff so gatekeeper, "
+                "score/VPW, gap/regime, micro-context, and submit-zero blockers cannot disappear in postclose selection."
+            ),
+            expected_ev_effect="restore swing entry/probe/submit coverage before evaluating dry-run or real-canary EV.",
+            files_likely_touched=[
+                "src/engine/swing_lifecycle_audit.py",
+                "src/engine/build_code_improvement_workorder.py",
+                "src/engine/swing_lifecycle_decision_matrix.py",
+                "src/engine/swing_lifecycle_bucket_discovery.py",
+                "src/engine/verify_threshold_cycle_postclose_chain.py",
+            ],
+            acceptance_tests=[
+                "pytest swing lifecycle audit tests",
+                "pytest code improvement workorder swing entry bottleneck tests",
+                "pytest swing LDM/bucket discovery handoff tests",
+            ],
+            evidence=[
+                f"primary={entry_bottleneck.get('primary')}",
+                f"matches={entry_matches}",
+                f"entry_unique={counts.get('entry_unique')}",
+                f"submitted_unique_records={counts.get('submitted_unique_records')}",
+                f"blocker_unique_total={counts.get('blocker_unique_total')}",
+                f"probe_to_blocked_unique_pct={ratios.get('probe_to_blocked_unique_pct')}",
+                f"simulated_to_entry_unique_pct={ratios.get('simulated_to_entry_unique_pct')}",
+                f"gatekeeper_actions={entry_bottleneck.get('gatekeeper_actions')}",
+            ],
+            improvement_type="entry_bottleneck_handoff",
+        )
+        order.update(
+            {
+                "decision_hint": "implement_now",
+                "classification_primary": entry_bottleneck.get("primary"),
+                "classification_matches": entry_matches,
+                "mapped_family_candidates": [
+                    "swing_gatekeeper_accept_reject",
+                    "swing_gatekeeper_reject_cooldown",
+                    "swing_market_regime_sensitivity",
+                    "swing_entry_ofi_qi_execution_quality",
+                ],
+                "operator_action_required": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            }
+        )
+        orders.append(order)
 
     if int(axis_summary.get("instrumentation_gap_count") or 0) > 0:
         findings.append(
@@ -3120,6 +3416,87 @@ def build_swing_improvement_automation_report(
             )
         )
 
+    contract_gap_orders = {
+        "SWING_HOLDING_EXIT_CONTRACT_GAP": {
+            "order_id": "order_swing_holding_exit_contract_gap_review",
+            "title": "swing holding/exit contract gap review",
+            "stage": "holding_exit",
+            "subsystem": "swing_holding_exit",
+            "mapped_family": "swing_exit_ofi_qi_smoothing",
+            "priority": 4,
+            "intent": "Surface stale/missing OFI/QI, scalping prompt reuse, and schema gaps before holding/exit logic is used for runtime decisions.",
+            "ev": "holding/exit source-quality and structured contract gaps are visible without changing sell logic.",
+            "files": ["src/engine/swing_lifecycle_audit.py", "src/engine/ai_engine.py", "src/engine/ai_engine_openai.py"],
+        },
+        "SWING_SCALE_IN_CONTRACT_GAP": {
+            "order_id": "order_swing_scale_in_contract_gap_review",
+            "title": "swing scale-in contract gap review",
+            "stage": "scale_in",
+            "subsystem": "swing_scale_in",
+            "mapped_family": "swing_scale_in_ofi_qi_confirmation",
+            "priority": 4,
+            "intent": "Surface AVG_DOWN/PYRAMID post-add outcome and dedicated AI contract gaps before any scale-in runtime use.",
+            "ev": "scale-in post-add outcome coverage and AI contract readiness are tracked as source-only evidence.",
+            "files": ["src/engine/swing_lifecycle_audit.py", "src/engine/sniper_scale_in.py"],
+        },
+        "SWING_DISCOVERY_LABEL_CONTRACT_GAP": {
+            "order_id": "order_swing_discovery_label_contract_gap_review",
+            "title": "swing discovery label contract gap review",
+            "stage": "selection",
+            "subsystem": "swing_strategy_discovery",
+            "mapped_family": None,
+            "priority": 5,
+            "intent": "Keep pending future quote and label maturity gaps in source-quality workorders instead of treating them as runtime evidence.",
+            "ev": "discovery label maturity and pending quote coverage are visible before EV interpretation.",
+            "files": [
+                "src/engine/swing_strategy_discovery_label_builder.py",
+                "src/engine/swing_strategy_discovery_ev_report.py",
+            ],
+        },
+    }
+    for gap in lifecycle_contract_gaps.get("gaps") or []:
+        if not isinstance(gap, dict):
+            continue
+        gap_id = str(gap.get("gap_id") or "")
+        meta = contract_gap_orders.get(gap_id)
+        if not meta:
+            continue
+        findings.append(
+            {
+                "finding_id": meta["order_id"].replace("order_", ""),
+                "title": meta["title"],
+                "confidence": "consensus",
+                "route": "instrumentation_order",
+                "mapped_family": meta["mapped_family"],
+                "target_subsystem": meta["subsystem"],
+                "lifecycle_stage": meta["stage"],
+            }
+        )
+        orders.append(
+            _order(
+                order_id=meta["order_id"],
+                title=meta["title"],
+                lifecycle_stage=meta["stage"],
+                target_subsystem=meta["subsystem"],
+                priority=meta["priority"],
+                route="instrumentation_order",
+                mapped_family=meta["mapped_family"],
+                intent=meta["intent"],
+                expected_ev_effect=meta["ev"],
+                files_likely_touched=meta["files"],
+                acceptance_tests=["pytest swing lifecycle audit tests"],
+                evidence=[
+                    f"gap_id={gap_id}",
+                    f"next_route={gap.get('next_route')}",
+                    f"reason={gap.get('reason')}",
+                    f"evidence={gap.get('evidence')}",
+                    "runtime_effect=false",
+                    "allowed_runtime_apply=false",
+                ],
+                improvement_type="lifecycle_contract_gap",
+            )
+        )
+
     scale_risk_count = int((ofi_qi.get("scale_in_micro_advice_counts") or {}).get("RISK_BEARISH", 0) or 0)
     if scale_risk_count > 0:
         findings.append(
@@ -3316,7 +3693,12 @@ def build_swing_improvement_automation_report(
             "source_quality_blocked_family_count": len(source_quality_blocked_families),
             "source_quality_blocked_families": source_quality_blocked_families,
             "scale_in_ofi_qi_source_quality": scale_in_ofi_qi_quality,
+            "swing_entry_bottleneck_primary": entry_bottleneck.get("primary"),
+            "swing_entry_bottleneck_matches": entry_bottleneck.get("matches") or [],
+            "swing_lifecycle_contract_gap_count": lifecycle_contract_gaps.get("gap_count"),
         },
+        "swing_entry_bottleneck": entry_bottleneck,
+        "swing_lifecycle_contract_gaps": lifecycle_contract_gaps,
         "consensus_findings": [item for item in findings if item.get("confidence") != "solo"],
         "solo_findings": [item for item in findings if item.get("confidence") == "solo"],
         "auto_family_candidates": auto_family_candidates,

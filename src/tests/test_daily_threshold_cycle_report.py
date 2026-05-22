@@ -221,6 +221,23 @@ def test_threshold_cycle_report_marks_calibration_sample_and_live_risk_states():
     assert report["post_apply_attribution"]["soft_stop_balanced_policy"]["perfect_win_rate_required"] is False
 
 
+def test_score65_74_recovery_probe_reports_effective_score60_aliases():
+    family = report_mod._build_score65_74_recovery_probe_family(
+        [
+            {"stage": "wait65_79_ev_candidate", "fields": {"ai_score": "61"}},
+            {"stage": "blocked_ai_score", "fields": {"ai_score": "62"}},
+            {"stage": "blocked_ai_score", "fields": {"ai_score": "59"}},
+        ]
+    )
+
+    assert family["current"]["min_score"] == 60
+    assert family["current"]["effective_score_range"] == "60-74"
+    assert family["sample"]["wait65_79_score60_74_candidate"] == 1
+    assert family["sample"]["blocked_score60_74"] == 1
+    assert family["sample"]["wait65_79_score65_74_candidate"] == 1
+    assert family["sample"]["effective_score_range"] == "60-74"
+
+
 def test_market_regime_continuous_threshold_family_metadata_and_source_bundle(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     report_dir.mkdir(parents=True)
@@ -1302,6 +1319,52 @@ def test_score65_74_recovery_probe_opens_existing_entry_unlock_when_rolling_prim
     assert candidate["recommended_values"]["enabled"] is True
     assert candidate["source_metrics"]["entry_unlock_probe_ready"] is True
     assert "bounded entry probe" in candidate["calibration_reason"]
+
+
+def test_score65_74_recovery_probe_reads_score60_74_alias_metrics():
+    report_sources = {
+        "schema_version": 1,
+        "target_date": "2026-05-18",
+        "sources": {
+            "buy_funnel_sentinel": {"path": "sentinel.json", "exists": True},
+            "wait6579_ev_cohort": {"path": "cohort.json", "exists": True},
+        },
+        "source_metrics": {
+            "buy_score60_74": {
+                "sentinel_primary": "UPSTREAM_AI_THRESHOLD",
+                "sentinel_secondary": [],
+                "panic_state": "NORMAL",
+                "panic_regime_mode": "NORMAL",
+                "panic_detected": False,
+                "panic_by_stop_loss_count": False,
+                "score60_74_candidates": 41,
+                "wait6579_total_candidates": 41,
+                "score60_74_avg_expected_ev_pct": 3.2,
+                "score60_74_avg_close_10m_pct": 1.8,
+                "score60_74_avg_mfe_10m_pct": 4.4,
+                "full_samples": 41,
+                "partial_samples": 0,
+                "threshold_relaxation_approved": False,
+                "budget_pass": 4,
+                "latency_pass": 0,
+                "order_bundle_submitted": 0,
+            }
+        },
+    }
+
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-05-18",
+        pipeline_loader=lambda target_date: [],
+        report_source_loader=lambda target_date: report_sources,
+        completed_rows_loader=lambda start_date, end_date: [],
+    )
+
+    candidate = {item["family"]: item for item in report["calibration_candidates"]}["score65_74_recovery_probe"]
+    assert candidate["sample_count"] == 41
+    assert candidate["sample_floor_status"] == "ready"
+    assert candidate["calibration_state"] == "adjust_up"
+    assert candidate["source_metrics"]["entry_unlock_probe_ready"] is True
+    assert candidate["source_metrics"]["score60_74_avg_expected_ev_pct"] == 3.2
 
 
 def test_bad_entry_refined_candidate_waits_for_postclose_lifecycle_attribution(tmp_path, monkeypatch):

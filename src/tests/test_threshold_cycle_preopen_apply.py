@@ -74,6 +74,21 @@ def test_build_preopen_apply_manifest_uses_latest_prior_report(tmp_path, monkeyp
     assert saved["source_date"] == "2026-04-30"
 
 
+def test_score65_74_entry_unlock_candidate_accepts_score60_74_alias_metrics():
+    assert mod._score65_74_entry_unlock_candidate(
+        {
+            "family": "score65_74_recovery_probe",
+            "sample_count": 24,
+            "sample_floor": 20,
+            "source_metrics": {
+                "score60_74_avg_expected_ev_pct": 3.1,
+                "score60_74_avg_close_10m_pct": 1.4,
+                "order_bundle_submitted": 0,
+            },
+        }
+    ) is True
+
+
 def test_build_preopen_apply_manifest_accepts_calibrated_apply_candidate(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"

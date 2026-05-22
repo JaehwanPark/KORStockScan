@@ -119,6 +119,17 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "window_end": (15, 30),
     },
     {
+        "id": "bd_fbuy_accum_pre_artifact",
+        "path_template": "data/runtime/bd_fbuy_accum_pre/BD_FBUY_ACCUM_PRE_V1_{date}.json",
+        "max_staleness_sec": 900,
+        "critical": False,
+        "trading_day_only": True,
+        "window_start": (9, 5),
+        "window_end": (15, 20),
+        "json_status_field": "schema_version",
+        "json_ok_values": ["BD_FBUY_ACCUM_PRE_V1"],
+    },
+    {
         "id": "holding_exit_sentinel_report",
         "path_template": "data/report/holding_exit_sentinel/holding_exit_sentinel_{date}.md",
         "max_staleness_sec": 600,

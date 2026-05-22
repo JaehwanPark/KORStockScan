@@ -390,7 +390,7 @@ def _profile_result(
     total_events: int,
 ) -> dict[str, Any]:
     safe_passed: list[dict[str, Any]] = []
-    caution_rejected: list[dict[str, Any]] = []
+    caution_normal_candidates: list[dict[str, Any]] = []
     hard_rejected: list[dict[str, Any]] = []
     recovery_candidates: list[dict[str, Any]] = []
     stale_quote_candidates: list[dict[str, Any]] = []
@@ -418,7 +418,7 @@ def _profile_result(
         if safe:
             safe_passed.append(event)
         elif caution:
-            caution_rejected.append(event)
+            caution_normal_candidates.append(event)
             if reason == "latency_fallback_deprecated":
                 fallback_deprecated_excluded_from_pass += 1
             ai_score = _to_float(event.get("ai_score"), 0.0) or 0.0
@@ -498,7 +498,7 @@ def _profile_result(
         "would_pass_ratio": round(len(safe_passed) / total, 6) if total else 0.0,
         "would_safe_pass_events": len(safe_passed),
         "would_safe_pass_unique_codes": len(unique_safe_codes),
-        "would_caution_reject_events": len(caution_rejected),
+        "would_caution_normal_events": len(caution_normal_candidates),
         "would_recovery_canary_events": len(recovery_candidates),
         "would_recovery_canary_unique_codes": len(unique_recovery_codes),
         "would_recovery_canary_attempts": len(unique_recovery_attempts),
@@ -509,9 +509,9 @@ def _profile_result(
         "fallback_deprecated_excluded_from_pass_events": fallback_deprecated_excluded_from_pass,
         "runtime_semantics": {
             "safe": "EntryPolicy.ALLOW_NORMAL",
-            "caution": "EntryPolicy.REJECT_MARKET_CONDITION:latency_fallback_deprecated",
+            "caution": "EntryPolicy.ALLOW_NORMAL:caution_normal_entry_allowed",
             "danger": "EntryPolicy.REJECT_DANGER",
-            "recovery": "bounded_latency_submit_recovery_canary",
+            "recovery": "deprecated_not_needed_for_caution",
         },
         "reason_breakdown": reason_breakdown,
         "recovery_reason_breakdown": recovery_reason_breakdown,
@@ -528,15 +528,12 @@ def _build_candidate(target_date: str, profile: dict[str, Any], total_events: in
     quote_stale_override = int(profile.get("quote_stale_override_events") or 0)
     broker_guard_bypass = int(profile.get("broker_guard_bypass_candidates") or 0)
     recommended_action = str(profile.get("recommended_action") or "reject")
-    eligible = (
-        total_events >= sample_floor
-        and recovery_count >= recovery_floor
-        and quote_stale_override <= 0
-        and broker_guard_bypass <= 0
-        and recommended_action == "bounded_apply"
-    )
+    runtime_simplified = True
+    eligible = False
     if eligible:
         state = "adjust_up"
+    elif runtime_simplified:
+        state = "hold"
     elif recovery_count < recovery_floor or int(profile.get("counterfactual_joined_sample") or 0) < COUNTERFACTUAL_SAMPLE_FLOOR:
         state = "hold_sample"
     elif quote_stale_override > 0 or broker_guard_bypass > 0:
@@ -546,6 +543,11 @@ def _build_candidate(target_date: str, profile: dict[str, Any], total_events: in
     reason = (
         f"recommended_action=bounded_apply; {profile.get('recommended_action_reason')}"
         if eligible
+        else (
+            "latency runtime simplified: CAUTION no longer blocks submit after slippage check; "
+            "DANGER/stale/broker safety remains blocked; no adaptive latency env apply"
+        )
+        if runtime_simplified
         else (
             f"recommended_action={recommended_action}; {profile.get('recommended_action_reason')}; "
             f"latency_blocks={total_events} recovery_count={recovery_count} floor={recovery_floor} "
@@ -557,7 +559,7 @@ def _build_candidate(target_date: str, profile: dict[str, Any], total_events: in
         "stage": STAGE,
         "priority": 6,
         "allowed_runtime_apply": eligible,
-        "runtime_effect": True,
+        "runtime_effect": False if runtime_simplified else True,
         "safety_revert_required": False,
         "calibration_state": state,
         "calibration_reason": reason,
@@ -587,11 +589,15 @@ def _build_candidate(target_date: str, profile: dict[str, Any], total_events: in
                 "ENTRY_PIPELINE latency_block numeric fields + missed_entry_counterfactual latency_block join "
                 "+ stale/broker bypass exclusion"
             ),
-            "profile_runtime_semantics": "SAFE passes; CAUTION rejects unless bounded recovery canary is explicitly enabled",
+            "profile_runtime_semantics": "SAFE and CAUTION pass after slippage check; DANGER remains blocked",
+            "simplified_runtime_semantics": (
+                "SAFE and CAUTION pass after slippage check; DANGER, stale quote, broker/account/order/qty/cooldown "
+                "guards remain blocking. Historical latency_fallback_deprecated rows are audit evidence, not runtime apply proof."
+            ),
             "recommended_action": recommended_action,
             "recommended_action_reason": profile.get("recommended_action_reason"),
             "would_safe_pass_events": int(profile.get("would_safe_pass_events") or 0),
-            "would_caution_reject_events": int(profile.get("would_caution_reject_events") or 0),
+            "would_caution_normal_events": int(profile.get("would_caution_normal_events") or 0),
             "would_recovery_canary_events": recovery_count,
             "would_recovery_canary_attempts": int(profile.get("would_recovery_canary_attempts") or 0),
             "hard_reject_events": int(profile.get("hard_reject_events") or 0),
@@ -616,11 +622,11 @@ def _build_candidate(target_date: str, profile: dict[str, Any], total_events: in
             "recovery_reason_breakdown": profile.get("recovery_reason_breakdown") or {},
             "r0_r6_consumer_map": {
                 "R0_collect": "latency_block/latency_pass/order_bundle_submitted provenance",
-                "R1_daily_report": "SAFE/CAUTION/recovery/hard reject split plus counterfactual EV",
+                "R1_daily_report": "SAFE/CAUTION normal/DANGER hard reject split plus counterfactual EV",
                 "R2_cumulative_report": "rolling latency submit recovery attribution and label coverage",
                 "R3_manifest_only": "runtime-semantics-matched EV-ranked profile candidate",
                 "R4_preopen_apply_candidate": "auto_bounded_live guard consumes recommended_action",
-                "R5_bounded_calibrated_apply": "bounded recovery canary env only when recommended_action=bounded_apply",
+                "R5_bounded_calibrated_apply": "no adaptive latency env apply after CAUTION normal-submit simplification",
                 "R6_post_apply_attribution": "predicted recovery vs actual latency_pass/order_bundle_submitted and EV",
             },
             "forbidden_uses": [
@@ -694,7 +700,7 @@ def _render_md(payload: dict[str, Any]) -> str:
         f"- profile_generation: `{json.dumps(payload.get('profile_generation') or {}, ensure_ascii=False)}`",
         f"- counterfactual_source_status: `{(payload.get('counterfactual_source') or {}).get('status')}`",
         "",
-        "| profile | action | age_ms | jitter_ms | spread | safe_pass | caution_reject | recovery | cf_sample | cf_ev_pct | missed_win | avoided_loser | stale_override | broker_bypass |",
+        "| profile | action | age_ms | jitter_ms | spread | safe_pass | caution_normal | recovery | cf_sample | cf_ev_pct | missed_win | avoided_loser | stale_override | broker_bypass |",
         "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     ranked = sorted(
@@ -715,7 +721,7 @@ def _render_md(payload: dict[str, Any]) -> str:
                 jitter=item.get("max_ws_jitter_ms_for_caution"),
                 spread=float(item.get("max_spread_ratio_for_caution") or 0.0),
                 safe=item.get("would_safe_pass_events"),
-                caution=item.get("would_caution_reject_events"),
+                caution=item.get("would_caution_normal_events"),
                 recovery=item.get("would_recovery_canary_events"),
                 cf_sample=item.get("counterfactual_joined_sample"),
                 cf_ev=item.get("counterfactual_ev_pct"),

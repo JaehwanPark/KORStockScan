@@ -761,8 +761,8 @@ def evaluate_live_buy_entry(
 
     Notes:
     - Final truth still comes from the current websocket cache snapshot.
-    - CAUTION submits the fallback bundle in the live engine as scout + main
-      orders, while delayed receipts are reconciled through shared entry state.
+    - CAUTION now follows the normal submit path after the slippage check.
+      DANGER/stale/broker safety still blocks before submit.
     """
 
     latest_price = int(float((ws_data or {}).get("curr", 0) or 0))
@@ -828,6 +828,9 @@ def evaluate_live_buy_entry(
     latency_canary_applied = False
     latency_canary_reason = ""
     latency_danger_reasons = ",".join(_latency_danger_reasons(latency))
+    danger_relief_forbidden = policy.decision == EntryDecision.REJECT_DANGER
+    if danger_relief_forbidden:
+        latency_canary_reason = "danger_hard_safety_block"
     if policy.decision == EntryDecision.REJECT_MARKET_CONDITION and policy.reason == "latency_fallback_deprecated":
         recovery_ok, recovery_reason = _should_apply_latency_submit_recovery_canary(
             strategy_id=strategy_id,
@@ -847,7 +850,7 @@ def evaluate_live_buy_entry(
             )
         else:
             latency_canary_reason = recovery_reason
-    if policy.decision == EntryDecision.REJECT_DANGER:
+    if policy.decision == EntryDecision.REJECT_DANGER and not danger_relief_forbidden:
         quote_fresh_composite_ok, quote_fresh_composite_reason = _should_apply_latency_quote_fresh_composite_canary(
             strategy_id=strategy_id,
             position_tag=str(stock.get("position_tag") or ""),
@@ -872,7 +875,7 @@ def evaluate_live_buy_entry(
         else:
             latency_canary_reason = quote_fresh_composite_reason
 
-    if policy.decision == EntryDecision.REJECT_DANGER and effective_decision == EntryDecision.REJECT_DANGER:
+    if policy.decision == EntryDecision.REJECT_DANGER and not danger_relief_forbidden and effective_decision == EntryDecision.REJECT_DANGER:
         signal_quality_ok, signal_quality_reason = _should_apply_latency_signal_quality_quote_composite_canary(
             strategy_id=strategy_id,
             position_tag=str(stock.get("position_tag") or ""),
@@ -902,7 +905,7 @@ def evaluate_live_buy_entry(
             if not latency_canary_reason or latency_canary_reason == "disabled":
                 latency_canary_reason = signal_quality_reason
 
-    if policy.decision == EntryDecision.REJECT_DANGER and effective_decision == EntryDecision.REJECT_DANGER:
+    if policy.decision == EntryDecision.REJECT_DANGER and not danger_relief_forbidden and effective_decision == EntryDecision.REJECT_DANGER:
         other_danger_relief_ok, other_danger_relief_reason = _should_apply_latency_other_danger_relief_canary(
             strategy_id=strategy_id,
             position_tag=str(stock.get("position_tag") or ""),
@@ -928,7 +931,7 @@ def evaluate_live_buy_entry(
             if not latency_canary_reason or latency_canary_reason == "disabled":
                 latency_canary_reason = other_danger_relief_reason
 
-    if policy.decision == EntryDecision.REJECT_DANGER and effective_decision == EntryDecision.REJECT_DANGER:
+    if policy.decision == EntryDecision.REJECT_DANGER and not danger_relief_forbidden and effective_decision == EntryDecision.REJECT_DANGER:
         ws_jitter_relief_ok, ws_jitter_relief_reason = _should_apply_latency_ws_jitter_relief_canary(
             strategy_id=strategy_id,
             position_tag=str(stock.get("position_tag") or ""),
@@ -954,7 +957,7 @@ def evaluate_live_buy_entry(
             if not latency_canary_reason or latency_canary_reason == "disabled":
                 latency_canary_reason = ws_jitter_relief_reason
 
-    if policy.decision == EntryDecision.REJECT_DANGER and effective_decision == EntryDecision.REJECT_DANGER:
+    if policy.decision == EntryDecision.REJECT_DANGER and not danger_relief_forbidden and effective_decision == EntryDecision.REJECT_DANGER:
         spread_relief_ok, spread_relief_reason = _should_apply_latency_spread_relief_canary(
             strategy_id=strategy_id,
             position_tag=str(stock.get("position_tag") or ""),
@@ -980,7 +983,7 @@ def evaluate_live_buy_entry(
             if not latency_canary_reason or latency_canary_reason == "disabled":
                 latency_canary_reason = spread_relief_reason
 
-    if policy.decision == EntryDecision.REJECT_DANGER and effective_decision == EntryDecision.REJECT_DANGER:
+    if policy.decision == EntryDecision.REJECT_DANGER and not danger_relief_forbidden and effective_decision == EntryDecision.REJECT_DANGER:
         canary_ok, canary_reason = _should_apply_latency_guard_canary(
             strategy_id=strategy_id,
             position_tag=str(stock.get("position_tag") or ""),
@@ -1006,7 +1009,7 @@ def evaluate_live_buy_entry(
             if not latency_canary_reason or latency_canary_reason == "disabled":
                 latency_canary_reason = canary_reason
 
-    if policy.decision == EntryDecision.REJECT_DANGER and effective_decision == EntryDecision.REJECT_DANGER:
+    if policy.decision == EntryDecision.REJECT_DANGER and not danger_relief_forbidden and effective_decision == EntryDecision.REJECT_DANGER:
         mechanical_momentum_ok, mechanical_momentum_reason = _should_apply_latency_mechanical_momentum_relief_canary(
             strategy_id=strategy_id,
             position_tag=str(stock.get("position_tag") or ""),

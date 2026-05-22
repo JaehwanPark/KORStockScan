@@ -60,6 +60,16 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "trading_day_only": True,
     },
     {
+        "id": "bd_fbuy_accum_pre_intraday",
+        "log": "logs/bd_fbuy_accum_pre_intraday_cron.log",
+        "window_start": (9, 5),
+        "window_end": (15, 20),
+        "mode": "recurring",
+        "interval_min": 10,
+        "critical": False,
+        "trading_day_only": True,
+    },
+    {
         "id": "holding_exit_sentinel",
         "log": "logs/run_holding_exit_sentinel_cron.log",
         "window_start": (9, 5),

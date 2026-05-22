@@ -19,6 +19,7 @@ from src.utils.jsonl_io import iter_jsonl
 
 REPORT_DIR = Path(DATA_DIR) / "report" / "swing_lifecycle_decision_matrix"
 PIPELINE_EVENTS_DIR = Path(DATA_DIR) / "pipeline_events"
+SWING_LIFECYCLE_AUDIT_DIR = Path(DATA_DIR) / "report" / "swing_lifecycle_audit"
 REPORT_TYPE = "swing_lifecycle_decision_matrix"
 MATRIX_VERSION = "swing_lifecycle_decision_matrix_v1"
 DECISION_AUTHORITY = "swing_ldm_source_only"
@@ -126,6 +127,18 @@ def report_paths(target_date: str) -> tuple[Path, Path]:
 
 def _pipeline_event_path(target_date: str) -> Path:
     return PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"
+
+
+def _swing_lifecycle_audit_path(target_date: str) -> Path:
+    return SWING_LIFECYCLE_AUDIT_DIR / f"swing_lifecycle_audit_{target_date}.json"
+
+
+def _load_json(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _is_probe_event(record: dict[str, Any]) -> bool:
@@ -543,6 +556,18 @@ def build_swing_lifecycle_decision_matrix(
         db_url=db_url,
         lookback_days=lookback_days,
     )
+    audit_path = _swing_lifecycle_audit_path(date_key)
+    audit_report = _load_json(audit_path)
+    swing_entry_bottleneck = (
+        audit_report.get("swing_entry_bottleneck")
+        if isinstance(audit_report.get("swing_entry_bottleneck"), dict)
+        else {}
+    )
+    swing_lifecycle_contract_gaps = (
+        audit_report.get("swing_lifecycle_contract_gaps")
+        if isinstance(audit_report.get("swing_lifecycle_contract_gaps"), dict)
+        else {}
+    )
     rows = [*probe_rows, *discovery_rows]
     if any(row.get("source_book") not in ALLOWED_SOURCE_BOOKS for row in rows):
         raise RuntimeError("Swing LDM consumed an unexpected source_book")
@@ -589,6 +614,7 @@ def build_swing_lifecycle_decision_matrix(
         "input_contract": {
             "allowed_source_books": sorted(ALLOWED_SOURCE_BOOKS),
             "swing_daily_simulation_consumed": False,
+            "swing_lifecycle_audit_summary_consumed": bool(audit_report),
             "forbidden_sources": ["swing_daily_simulation"],
         },
         "summary": {
@@ -603,8 +629,12 @@ def build_swing_lifecycle_decision_matrix(
             "sim_auto_candidate_count": sim_count,
             "workorder_count": workorder_count,
             "daily_simulation_consumed": False,
+            "swing_entry_bottleneck_primary": swing_entry_bottleneck.get("primary"),
+            "swing_lifecycle_contract_gap_count": swing_lifecycle_contract_gaps.get("gap_count"),
             "arm_status_counts": arm_status_counts,
         },
+        "swing_entry_bottleneck": swing_entry_bottleneck,
+        "swing_lifecycle_contract_gaps": swing_lifecycle_contract_gaps,
         "entry_bucket_attribution": entry,
         "holding_exit_bucket_attribution": holding_exit,
         "scale_in_bucket_attribution": scale_in,
@@ -613,6 +643,7 @@ def build_swing_lifecycle_decision_matrix(
         "sources": {
             "pipeline_events": str(_pipeline_event_path(date_key)),
             "swing_strategy_discovery_ev": str(discovery_json) if discovery_json.exists() else None,
+            "swing_lifecycle_audit": str(audit_path) if audit_path.exists() else None,
             "swing_daily_simulation": None,
         },
         "artifact_paths": {"json": str(json_path), "markdown": str(md_path)},
@@ -634,6 +665,8 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- discovery_rows: `{summary.get('discovery_rows')}`",
         f"- sim_auto_candidate_count: `{summary.get('sim_auto_candidate_count')}`",
         f"- workorder_count: `{summary.get('workorder_count')}`",
+        f"- swing_entry_bottleneck_primary: `{summary.get('swing_entry_bottleneck_primary')}`",
+        f"- swing_lifecycle_contract_gap_count: `{summary.get('swing_lifecycle_contract_gap_count')}`",
         f"- daily_simulation_consumed: `{summary.get('daily_simulation_consumed')}`",
         f"- warnings: `{report.get('warnings') or []}`",
         "",

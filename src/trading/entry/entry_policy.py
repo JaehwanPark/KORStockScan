@@ -88,8 +88,8 @@ class EntryPolicy:
                 latest_price=int(latest_price),
             )
         return PolicyResult(
-            decision=EntryDecision.REJECT_MARKET_CONDITION,
-            reason="latency_fallback_deprecated",
+            decision=EntryDecision.ALLOW_NORMAL,
+            reason="caution_normal_entry_allowed",
             fallback_allowed=False,
             computed_allowed_slippage=allowed,
             computed_deadline_ms=self.config.entry_deadline_ms,

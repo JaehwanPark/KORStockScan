@@ -479,6 +479,32 @@ def test_should_run_score65_74_recovery_probe_uses_dedicated_default_off_flag(mo
     ) is False
 
 
+def test_score65_74_recovery_probe_default_floor_includes_low_60s(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE=65.0,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL=1.2,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP=0.0,
+    )
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+
+    assert _should_run_score65_74_recovery_probe(
+        {"action": "WAIT"},
+        62,
+        {"latency_state": "OK"},
+        [],
+        [],
+        None,
+        feature_probe={
+            "buy_pressure": 72.0,
+            "tick_accel": 1.35,
+            "micro_vwap_bp": 2.0,
+            "large_sell_print": False,
+        },
+    ) is True
+
+
 def test_score65_74_recovery_probe_entry_unlock_requires_armed_source(monkeypatch):
     rules = replace(TRADING_RULES, AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True)
     monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
@@ -599,13 +625,13 @@ def test_watching_buy_analysis_telegram_requires_scalp_score_cutoff():
         "SCALPING",
         74,
         buy_score_threshold=75,
-    ) == (False, "below_buy_score_threshold")
+    ) == (False, "pre_submit_buy_telegram_disabled_until_order_submitted")
     assert _should_publish_watching_buy_analysis_telegram(
         {},
         "SCALPING",
         75,
         buy_score_threshold=75,
-    ) == (True, "publish_allowed")
+    ) == (False, "pre_submit_buy_telegram_disabled_until_order_submitted")
 
 
 def test_apply_wait6579_probe_canary_caps_qty_and_budget():

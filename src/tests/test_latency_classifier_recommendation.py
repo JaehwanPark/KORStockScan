@@ -50,7 +50,7 @@ def _counterfactual_row(code, record_id, *, outcome="MISSED_WINNER", close_10m_p
     }
 
 
-def test_latency_classifier_recommendation_builds_apply_candidate(tmp_path, monkeypatch):
+def test_latency_classifier_recommendation_holds_after_runtime_simplification(tmp_path, monkeypatch):
     event_dir = tmp_path / "pipeline_events"
     report_dir = tmp_path / "report"
     monitor_dir = tmp_path / "monitor_snapshots"
@@ -86,24 +86,25 @@ def test_latency_classifier_recommendation_builds_apply_candidate(tmp_path, monk
     assert payload["latency_block_count"] == 24
     assert payload["profile_generation"]["mode"] == "grid_quantile_search"
     candidate = payload["calibration_candidate"]
-    assert candidate["calibration_state"] == "adjust_up"
-    assert candidate["allowed_runtime_apply"] is True
+    assert candidate["calibration_state"] == "hold"
+    assert candidate["allowed_runtime_apply"] is False
     assert candidate["target_env_keys"] == mod.TARGET_ENV_KEYS
     assert candidate["recommended_values"] == {
         "max_ws_age_ms_for_caution": 800,
         "max_ws_jitter_ms_for_caution": 900,
         "max_spread_ratio_for_caution": 0.008,
-        "recovery_enabled": True,
+        "recovery_enabled": False,
         "recovery_min_signal_score": 75.0,
         "recovery_max_ws_age_ms": 800,
         "recovery_max_ws_jitter_ms": 900,
         "recovery_max_spread_ratio": 0.008,
     }
+    assert "CAUTION no longer blocks submit" in candidate["calibration_reason"]
     selected = candidate["source_metrics"]["selected_profile"]
     assert selected["recommended_action"] == "bounded_apply"
     assert selected["would_pass_events"] == 0
     assert selected["would_safe_pass_events"] == 0
-    assert selected["would_caution_reject_events"] == 24
+    assert selected["would_caution_normal_events"] == 24
     assert selected["would_recovery_canary_events"] == 24
     assert selected["counterfactual_joined_sample"] == 3
     assert selected["counterfactual_ev_pct"] == 2.5
@@ -135,5 +136,5 @@ def test_latency_classifier_recommendation_holds_when_sample_short(tmp_path, mon
 
     assert payload["latency_block_count"] == 3
     assert payload["calibration_candidate"]["source_metrics"]["selected_profile"]["recommended_action"] == "reject"
-    assert payload["calibration_candidate"]["calibration_state"] == "hold_sample"
+    assert payload["calibration_candidate"]["calibration_state"] == "hold"
     assert payload["calibration_candidate"]["allowed_runtime_apply"] is False

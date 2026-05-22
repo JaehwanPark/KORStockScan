@@ -481,8 +481,18 @@ def _score65_74_entry_unlock_candidate(candidate: dict[str, Any]) -> bool:
     if sample_floor <= 0 or sample_count < sample_floor:
         return False
     try:
-        avg_ev = float(metrics.get("score65_74_avg_expected_ev_pct") or 0.0)
-        avg_close = float(metrics.get("score65_74_avg_close_10m_pct") or 0.0)
+        avg_ev = float(
+            metrics.get("score60_74_avg_expected_ev_pct")
+            if metrics.get("score60_74_avg_expected_ev_pct") is not None
+            else metrics.get("score65_74_avg_expected_ev_pct")
+            or 0.0
+        )
+        avg_close = float(
+            metrics.get("score60_74_avg_close_10m_pct")
+            if metrics.get("score60_74_avg_close_10m_pct") is not None
+            else metrics.get("score65_74_avg_close_10m_pct")
+            or 0.0
+        )
     except Exception:
         return False
     risk_gate = str(metrics.get("risk_regime_gate_state") or "").lower()

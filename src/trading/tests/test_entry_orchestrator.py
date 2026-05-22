@@ -49,16 +49,15 @@ def test_orchestrator_safe_path_returns_normal():
     assert result["status"] == "ORDER_FILLED"
 
 
-def test_orchestrator_caution_path_rejects_deprecated_fallback():
+def test_orchestrator_caution_path_submits_normal():
     config = EntryConfig(
         max_order_rtt_avg_ms_for_safe=50,
         max_order_rtt_avg_ms_for_caution=300,
     )
     orchestrator = _build_orchestrator(config, order_rtt_avg_ms=120)
     result = orchestrator.process(_snapshot())
-    assert result["mode"] == "reject"
-    assert result["status"] == "REJECTED_MARKET_CONDITION"
-    assert result["reason"] == "latency_fallback_deprecated"
+    assert result["mode"] == "normal"
+    assert result["status"] == "ORDER_FILLED"
 
 
 def test_orchestrator_danger_path_rejects():

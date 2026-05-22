@@ -44,11 +44,11 @@ def test_policy_rejects_slippage_in_safe():
     assert result.decision == EntryDecision.REJECT_SLIPPAGE
 
 
-def test_policy_rejects_deprecated_fallback_in_caution():
+def test_policy_allows_caution_after_slippage_check():
     policy = EntryPolicy(EntryConfig())
     result = policy.evaluate(snapshot=_snapshot(), latency_status=_latency(LatencyState.CAUTION), latest_price=10_020)
-    assert result.decision == EntryDecision.REJECT_MARKET_CONDITION
-    assert result.reason == "latency_fallback_deprecated"
+    assert result.decision == EntryDecision.ALLOW_NORMAL
+    assert result.reason == "caution_normal_entry_allowed"
 
 
 def test_policy_rejects_danger():

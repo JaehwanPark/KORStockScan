@@ -13,6 +13,7 @@ from datetime import datetime
 from src.utils.logger import log_error
 from src.core.event_bus import EventBus
 from src.utils.constants import CONFIG_PATH, DEV_PATH, TRADING_RULES
+from src.engine.bd_fbuy_accum_pre_scanner import write_ws_snapshot
 from src.trading.entry.orderbook_stability_observer import ORDERBOOK_STABILITY_OBSERVER
 
 
@@ -59,6 +60,8 @@ class KiwoomWSManager:
         self._pending_future_lock = threading.Lock()
         self._session_ready = threading.Event()
         self._last_token_refresh_at = 0.0
+        self._last_dashboard_snapshot_at = 0.0
+        self._dashboard_snapshot_write_inflight = False
         
         # 전역 EventBus 인스턴스 획득 및 외부 명령 수신기 장착
         self.event_bus = EventBus()
@@ -298,6 +301,23 @@ class KiwoomWSManager:
             if isinstance(snapshot.get(key), deque):
                 snapshot[key] = list(snapshot[key])
         return snapshot
+
+    def _maybe_write_dashboard_snapshot(self):
+        now_ts = time.time()
+        if self._dashboard_snapshot_write_inflight or now_ts - float(self._last_dashboard_snapshot_at or 0.0) < 10.0:
+            return
+        self._last_dashboard_snapshot_at = now_ts
+        self._dashboard_snapshot_write_inflight = True
+
+        def _write_snapshot_async():
+            try:
+                write_ws_snapshot(self.realtime_data, now_ts=now_ts)
+            except Exception as e:
+                log_error(f"[WS] dashboard snapshot write failed: {e}")
+            finally:
+                self._dashboard_snapshot_write_inflight = False
+
+        threading.Thread(target=_write_snapshot_async, name="bd-fbuy-ws-snapshot", daemon=True).start()
     
     def _enqueue_state_event(self, event_type, payload):
         if self._stop_event.is_set():
@@ -938,6 +958,7 @@ class KiwoomWSManager:
                                 received = sorted(list(target.get('received_types') or []))
                                 print(f"✅ [WS] 첫 실시간 데이터 수신 확인: {item_code} / types={received}")
                                 target['_first_tick_logged'] = True
+                            self._maybe_write_dashboard_snapshot()
                             
                             # 💡 파싱 완료 후 구독자들에게 전파
                             self._queue_tick_event(item_code, self._snapshot_target(target))
