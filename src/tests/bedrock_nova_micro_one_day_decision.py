@@ -341,11 +341,58 @@ def _choose_scope_winner(scope: dict[str, Any]) -> tuple[str, str]:
     return "openai", "final_tie_breaker_openai_baseline"
 
 
+def _scope_decision_summary(scope: dict[str, Any]) -> dict[str, Any]:
+    winner, reason = _choose_scope_winner(scope)
+    return {
+        "scope": scope.get("scope"),
+        "winner": winner,
+        "reason": reason,
+        "unique_valid_join_rows": int(scope.get("unique_valid_join_rows") or 0),
+        "openai_source_quality_adjusted_ev_pct": float(scope.get("openai_source_quality_adjusted_ev_pct") or 0.0),
+        "nova_micro_source_quality_adjusted_ev_pct": float(
+            scope.get("nova_micro_source_quality_adjusted_ev_pct") or 0.0
+        ),
+        "nova_minus_openai_source_quality_adjusted_ev_pct": float(
+            scope.get("nova_minus_openai_source_quality_adjusted_ev_pct") or 0.0
+        ),
+        "action_pair_counts": scope.get("action_pair_counts") or {},
+        "outcome_counts": scope.get("outcome_counts") or {},
+    }
+
+
 def _choose_overall_winner(entry_scope: dict[str, Any], holding_scope: dict[str, Any]) -> tuple[str, str, str]:
     candidates = [entry_scope, holding_scope]
     usable = [scope for scope in candidates if int(scope.get("unique_valid_join_rows") or 0) > 0]
     if not usable:
         return "openai", "openai_baseline", "no_valid_samples_final_tie_breaker_openai_baseline"
+    if len(usable) == 1:
+        winner, reason = _choose_scope_winner(usable[0])
+        profile = "entry_watch_buy_nova_micro_v1" if usable[0].get("scope") == "entry_watch_buy" else "holding_continuation_nova_micro_v1"
+        if winner == "openai":
+            profile = "openai_baseline"
+        return winner, profile, reason
+    scope_decisions = {scope["scope"]: _scope_decision_summary(scope) for scope in (entry_scope, holding_scope)}
+    entry_decision = scope_decisions.get("entry_watch_buy") or {}
+    holding_decision = scope_decisions.get("holding_continuation") or {}
+    if entry_decision.get("winner") == "openai" and holding_decision.get("winner") == "nova_micro":
+        return (
+            "openai",
+            "openai_baseline_with_holding_continuation_nova_micro_candidate",
+            "split_profile_entry_openai_holding_nova_micro_candidate_no_global_route_change",
+        )
+    if entry_decision.get("winner") == "nova_micro" and holding_decision.get("winner") == "openai":
+        return (
+            "openai",
+            "openai_baseline_with_entry_watch_buy_nova_micro_candidate",
+            "split_profile_entry_nova_micro_holding_openai_candidate_no_global_route_change",
+        )
+    if entry_decision.get("winner") == holding_decision.get("winner") == "nova_micro":
+        entry_diff = abs(float(entry_decision.get("nova_minus_openai_source_quality_adjusted_ev_pct") or 0.0))
+        holding_diff = abs(float(holding_decision.get("nova_minus_openai_source_quality_adjusted_ev_pct") or 0.0))
+        profile = "entry_watch_buy_nova_micro_v1" if entry_diff >= holding_diff else "holding_continuation_nova_micro_v1"
+        return "nova_micro", profile, "both_profiles_nova_micro_ev_edge"
+    if entry_decision.get("winner") == holding_decision.get("winner") == "openai":
+        return "openai", "openai_baseline", "both_profiles_openai_or_tie_breaker"
     best = max(usable, key=lambda scope: abs(float(scope.get("nova_minus_openai_source_quality_adjusted_ev_pct") or 0.0)))
     winner, reason = _choose_scope_winner(best)
     profile = "entry_watch_buy_nova_micro_v1" if best.get("scope") == "entry_watch_buy" else "holding_continuation_nova_micro_v1"
@@ -455,6 +502,10 @@ def build_decision(target_date: str, *, start_date: str | None = None) -> dict[s
         else holding_daily[0]
     )
     winner, profile, reason = _choose_overall_winner(entry_scope, holding_scope)
+    scope_decisions = {
+        "entry_watch_buy": _scope_decision_summary(entry_scope),
+        "holding_continuation": _scope_decision_summary(holding_scope),
+    }
     cumulative = len(source_dates) > 1
     return {
         "report_type": "bedrock_nova_micro_cumulative_decision" if cumulative else "bedrock_nova_micro_one_day_decision",
@@ -481,6 +532,7 @@ def build_decision(target_date: str, *, start_date: str | None = None) -> dict[s
         "winner": winner,
         "winning_profile": profile,
         "winner_reason": reason,
+        "scope_decisions": scope_decisions,
         "no_defer_policy": True,
         "min_edge_pct": MIN_EDGE_PCT,
         "source_paths": {
@@ -493,7 +545,9 @@ def build_decision(target_date: str, *, start_date: str | None = None) -> dict[s
             "holding_continuation": holding_scope,
         },
         "next_action": (
-            "turn_micro_shadow_off_keep_openai"
+            "keep_micro_shadow_collecting_for_profile_split"
+            if "candidate" in profile
+            else "turn_micro_shadow_off_keep_openai"
             if winner == "openai"
             else f"record_profile_candidate_{profile}_without_global_provider_route_change"
         ),
@@ -524,6 +578,24 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- winner_reason: `{report['winner_reason']}`",
         f"- no_defer_policy: `{report['no_defer_policy']}`",
         "",
+        "## Profile Decisions",
+        "",
+    ]
+    for scope_name, decision in (report.get("scope_decisions") or {}).items():
+        lines.extend(
+            [
+                f"- {scope_name}: winner=`{decision.get('winner')}`, reason=`{decision.get('reason')}`, "
+                f"unique_valid_join_rows=`{decision.get('unique_valid_join_rows')}`, "
+                f"openai_ev=`{decision.get('openai_source_quality_adjusted_ev_pct')}`, "
+                f"nova_micro_ev=`{decision.get('nova_micro_source_quality_adjusted_ev_pct')}`, "
+                f"diff=`{decision.get('nova_minus_openai_source_quality_adjusted_ev_pct')}`",
+                f"  action_pair_counts: `{decision.get('action_pair_counts')}`",
+                f"  outcome_counts: `{decision.get('outcome_counts')}`",
+            ]
+        )
+    lines.extend(
+        [
+        "",
         "## 근거",
         "",
         (
@@ -548,7 +620,8 @@ def render_markdown(report: dict[str, Any]) -> str:
         "- 기존 threshold/postclose/LDM/runtime approval 자동화체인에는 연결하지 않는다.",
         "- global provider route, broker order, threshold mutation 근거로 사용하지 않는다.",
         "",
-    ]
+        ]
+    )
     return "\n".join(lines)
 
 

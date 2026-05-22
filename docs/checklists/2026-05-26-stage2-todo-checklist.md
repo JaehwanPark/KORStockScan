@@ -6,7 +6,7 @@
 - 실주문, threshold, provider, sim/probe 관련 변경은 approval artifact와 checklist 기준 없이 열지 않는다.
 - code-improvement workorder는 자동 repo 수정이 아니라 사용자가 Codex에 구현을 지시한 경우에만 실행한다.
 - `gpt-5.4-mini` Tier2 중 `entry_price`/`holding_flow`는 Nova Lite v1 primary 전환 후 provenance와 OpenAI failback을 확인한다.
-- Nova Micro는 하루 더 shadow 관찰하고, 장후에는 05-21/05-22/05-26 누적 exact join 기준으로 다시 판정한다.
+- Nova Micro는 2026-05-22 사용자 최종 override로 shadow/duel과 누적 판정을 중단한다. Tier1은 OpenAI `gpt-5-nano` 라우팅을 유지한다.
 - OFI/QI stale/missing 급증과 스윙 probe handoff gap은 runtime 변경이 아니라 source-quality/producer readiness 작업으로 닫는다.
 
 ## 오늘 강제 규칙
@@ -80,12 +80,13 @@
 
 ## 장후 체크리스트 (16:30~18:55)
 
-- [ ] `[BedrockNovaMicroCumulativeDecision0526] Nova Micro 하루 추가 관찰 후 누적 exact join 판정` (`Due: 2026-05-26`, `Slot: POSTCLOSE`, `TimeWindow: 17:40~18:05`, `Track: AITransport`)
+- [x] `[BedrockNovaMicroCumulativeDecision0526] Nova Micro 하루 추가 관찰 후 누적 exact join 판정` (`Due: 2026-05-26`, `Slot: POSTCLOSE`, `TimeWindow: 17:40~18:05`, `Track: AITransport`)
   - Source: [bedrock_nova_micro_one_day_decision.py](/home/ubuntu/KORStockScan/src/tests/bedrock_nova_micro_one_day_decision.py), [bedrock_nova_micro_shadow_2026-05-21.jsonl](/home/ubuntu/KORStockScan/data/report/bedrock_nova_micro_shadow/bedrock_nova_micro_shadow_2026-05-21.jsonl), [bedrock_nova_micro_shadow_2026-05-22.jsonl](/home/ubuntu/KORStockScan/data/report/bedrock_nova_micro_shadow/bedrock_nova_micro_shadow_2026-05-22.jsonl), `bedrock_nova_micro_shadow_2026-05-26.jsonl`, `sim_post_sell_evaluations_YYYY-MM-DD.jsonl`
   - 실행 명령: `PYTHONPATH=. .venv/bin/python -m src.tests.bedrock_nova_micro_one_day_decision --start-date 2026-05-21 --date 2026-05-26`
   - 판정 기준: 05-21/05-22/05-26 누적 exact join만 primary로 쓰고, `entry_watch_buy`와 `holding_continuation`을 분리한다. action match, parse_ok, latency, cost, token/cache 절감, 일일 단독 EV로 winner를 정하지 않는다.
   - 금지: 누적 판정 전 Micro shadow/duel OFF, global provider route 변경, threshold/order guard 변경, bot restart trigger 금지.
   - 다음 액션: `winner_openai_turn_micro_shadow_off`, `winner_nova_micro_record_profile_candidate_turn_shadow_off`, `keep_shadow_collecting_source_quality_gap`, `fail_primary_metric_join_contract` 중 하나로 닫는다.
+  - 취소 기록 (`2026-05-22`): 사용자 최종 override로 Micro shadow/duel과 누적 판정을 중단한다. 이유는 Micro action score가 `WAIT->BUY 95`로 과도하게 공격적인 편향을 보였고 손실 BUY 표본이 현재 LDM/ADM 기준 자동 BUY 대상이 아니었기 때문이다. 05-26에는 `bedrock_nova_micro_shadow_2026-05-26.jsonl`을 만들지 않고 Tier1 OpenAI `gpt-5-nano` 라우팅을 유지한다. 이 취소는 provider route를 Micro로 변경하지 않으며 threshold/order guard/bot restart 권한이 없다.
 
 - [ ] `[ThresholdDailyEVReport0526] daily EV real/sim/combined split 및 자동 반영 결과 확인` (`Due: 2026-05-26`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:45`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-22.json)
