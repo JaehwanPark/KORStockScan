@@ -18,6 +18,7 @@ from src.engine.threshold_cycle_ev_report import ev_report_paths
 SUMMARY_DIR = REPORT_DIR / "runtime_approval_summary"
 SWING_RUNTIME_APPROVAL_DIR = REPORT_DIR / "swing_runtime_approval"
 PATTERN_LAB_CURRENTNESS_AUDIT_DIR = REPORT_DIR / "pattern_lab_currentness_audit"
+PATTERN_LAB_AI_REVIEW_DIR = REPORT_DIR / "pattern_lab_ai_review"
 PATTERN_LAB_PROPAGATION_AUDIT_DIR = REPORT_DIR / "pattern_lab_propagation_audit"
 SWING_RUNTIME_APPROVAL_ARTIFACT_DIR = Path(__file__).resolve().parents[2] / "data" / "threshold_cycle" / "approvals"
 BOT_HISTORY_LOG = Path(__file__).resolve().parents[2] / "logs" / "bot_history.log"
@@ -84,6 +85,8 @@ _FAMILY_DESCRIPTIONS = {
     "panic_buy_runner_tp_canary": "패닉바잉 구간에서 fixed TP 전량청산 대비 runner 유지가 missed upside를 줄이는지 보는 축",
     "scalp_sim_overnight_ai_carry": "장마감 후 open 스캘핑 sim 포지션을 overnight_v1로 SELL_TODAY/HOLD_OVERNIGHT 분리해 다음날 lifecycle/EV label로 연결하는 source-only 축",
     "swing_strategy_discovery_sim": "스윙 safe pool 전체를 공격적 sim-only lifecycle arm으로 전개하고 label/EV를 축적하는 source-only 탐색 축",
+    "swing_lifecycle_decision_matrix": "스윙 probe와 discovery sim을 하나의 lifecycle bucket attribution으로 통합하는 source-only Swing LDM",
+    "swing_lifecycle_bucket_discovery": "Swing LDM bucket을 sim-only 자동승인 후보와 source-quality workorder 후보로 분류하는 postclose handoff 축",
     "institutional_flow_context": "외인/기관 수급 REST/WS 원천을 lifecycle matrix 공통 feature로 붙이는 source-only provenance 축",
 }
 
@@ -108,6 +111,8 @@ _BASELINE_APPLICATION = {
     "panic_buy_runner_tp_canary": "report-only: TP/trailing/live exit 변경 없음",
     "scalp_sim_overnight_ai_carry": "source-only: sim 가상 청산/carry 기록만 수행, runtime threshold apply 권한 없음",
     "swing_strategy_discovery_sim": "source-only: 가상 후보/arm/label/EV 분석만 수행, runtime threshold apply 권한 없음",
+    "swing_lifecycle_decision_matrix": "source-only: sim 후보 자동승인 입력만 만들며 real order/approval/env apply 권한 없음",
+    "swing_lifecycle_bucket_discovery": "source-only: 다음 PREOPEN swing sim policy 입력으로만 surfaced candidate를 전달",
     "institutional_flow_context": "source-only: lifecycle matrix feature/provenance 입력만 수행, 단독 BUY/scale-in/runtime apply 권한 없음",
 }
 
@@ -1379,6 +1384,73 @@ def _swing_strategy_discovery_summary(ev_report: dict[str, Any]) -> dict[str, An
     }
 
 
+def _swing_lifecycle_matrix_summary(ev_report: dict[str, Any]) -> dict[str, Any]:
+    payload = (
+        ev_report.get("swing_lifecycle_decision_matrix")
+        if isinstance(ev_report.get("swing_lifecycle_decision_matrix"), dict)
+        else {}
+    )
+    available = bool(payload.get("available"))
+    warnings = []
+    if not available:
+        warnings.append("swing_lifecycle_decision_matrix_missing")
+    if bool(payload.get("daily_simulation_consumed")):
+        warnings.append("forbidden_daily_simulation_consumed")
+    return {
+        "family": "swing_lifecycle_decision_matrix",
+        "available": available,
+        "artifact": payload.get("artifact"),
+        "description": _FAMILY_DESCRIPTIONS["swing_lifecycle_decision_matrix"],
+        "baseline_application": _BASELINE_APPLICATION["swing_lifecycle_decision_matrix"],
+        "runtime_effect": False,
+        "runtime_mutation_allowed": False,
+        "decision_authority": payload.get("decision_authority") or "swing_ldm_source_only",
+        "total_rows": int(payload.get("total_rows") or 0),
+        "probe_rows": int(payload.get("probe_rows") or 0),
+        "discovery_rows": int(payload.get("discovery_rows") or 0),
+        "sim_auto_candidate_count": int(payload.get("sim_auto_candidate_count") or 0),
+        "workorder_count": int(payload.get("workorder_count") or 0),
+        "daily_simulation_consumed": bool(payload.get("daily_simulation_consumed")),
+        "sim_auto_candidate_ids": payload.get("sim_auto_candidate_ids") if isinstance(payload.get("sim_auto_candidate_ids"), list) else [],
+        "state_interpretation": "source-only Swing LDM. sim-only candidates are auto-approved for simulation policy input only.",
+        "warnings": warnings,
+    }
+
+
+def _swing_lifecycle_bucket_discovery_summary(ev_report: dict[str, Any]) -> dict[str, Any]:
+    payload = (
+        ev_report.get("swing_lifecycle_bucket_discovery")
+        if isinstance(ev_report.get("swing_lifecycle_bucket_discovery"), dict)
+        else {}
+    )
+    available = bool(payload.get("available"))
+    warnings = []
+    if not available:
+        warnings.append("swing_lifecycle_bucket_discovery_missing")
+    if str(payload.get("source_contract_status") or "") == "fail":
+        warnings.append("source_contract_fail")
+    return {
+        "family": "swing_lifecycle_bucket_discovery",
+        "available": available,
+        "artifact": payload.get("artifact"),
+        "description": _FAMILY_DESCRIPTIONS["swing_lifecycle_bucket_discovery"],
+        "baseline_application": _BASELINE_APPLICATION["swing_lifecycle_bucket_discovery"],
+        "runtime_effect": False,
+        "runtime_mutation_allowed": False,
+        "decision_authority": payload.get("decision_authority") or "swing_ldm_bucket_discovery_sim_auto",
+        "source_contract_status": payload.get("source_contract_status"),
+        "candidate_count": int(payload.get("candidate_count") or 0),
+        "surfaced_candidate_count": int(payload.get("surfaced_candidate_count") or 0),
+        "sim_auto_approved_count": int(payload.get("sim_auto_approved_count") or 0),
+        "code_patch_required_count": int(payload.get("code_patch_required_count") or 0),
+        "runtime_blocked_contract_gap_count": int(payload.get("runtime_blocked_contract_gap_count") or 0),
+        "automation_handoff_gap_count": int(payload.get("automation_handoff_gap_count") or 0),
+        "surfaced_candidate_ids": payload.get("surfaced_candidate_ids") if isinstance(payload.get("surfaced_candidate_ids"), list) else [],
+        "state_interpretation": "sim-only candidates are auto-approved and surfaced to the next PREOPEN swing sim policy input.",
+        "warnings": warnings,
+    }
+
+
 def _institutional_flow_context_summary(ev_report: dict[str, Any]) -> dict[str, Any]:
     payload = ev_report.get("institutional_flow_context") if isinstance(ev_report.get("institutional_flow_context"), dict) else {}
     available = bool(payload.get("available"))
@@ -1425,8 +1497,10 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     institutional_flow_path = sources.get("institutional_flow_context")
     calibration_report = _load_json(Path(str(calibration_source))) if calibration_source else {}
     currentness_path = Path(str(sources.get("pattern_lab_currentness_audit"))) if sources.get("pattern_lab_currentness_audit") else PATTERN_LAB_CURRENTNESS_AUDIT_DIR / f"pattern_lab_currentness_audit_{target_date}.json"
+    pattern_lab_ai_review_path = Path(str(sources.get("pattern_lab_ai_review"))) if sources.get("pattern_lab_ai_review") else PATTERN_LAB_AI_REVIEW_DIR / f"pattern_lab_ai_review_{target_date}.json"
     propagation_path = Path(str(sources.get("pattern_lab_propagation_audit"))) if sources.get("pattern_lab_propagation_audit") else PATTERN_LAB_PROPAGATION_AUDIT_DIR / f"pattern_lab_propagation_audit_{target_date}.json"
     currentness_audit = _audit_summary(currentness_path)
+    pattern_lab_ai_review = _audit_summary(pattern_lab_ai_review_path)
     propagation_audit = _audit_summary(propagation_path)
     scalping_rows = _scalping_rows(ev_report, calibration_report)
     swing_rows = _swing_rows(swing_report)
@@ -1435,6 +1509,8 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     lifecycle_matrix_summary = _lifecycle_matrix_summary(ev_report, lifecycle_matrix_path)
     lifecycle_bucket_discovery_summary = _lifecycle_bucket_discovery_summary(target_date)
     swing_discovery_summary = _swing_strategy_discovery_summary(ev_report)
+    swing_lifecycle_matrix_summary = _swing_lifecycle_matrix_summary(ev_report)
+    swing_lifecycle_bucket_discovery_summary = _swing_lifecycle_bucket_discovery_summary(ev_report)
     institutional_flow_summary = _institutional_flow_context_summary(ev_report)
     source_load_warnings = [
         f"source_load_{item.get('status')}:{Path(str(item.get('path') or '')).name}"
@@ -1454,8 +1530,11 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             "lifecycle_bucket_discovery": lifecycle_bucket_discovery_summary.get("artifact"),
             "lifecycle_ai_context": lifecycle_ai_context_path,
             "lifecycle_ai_context_attribution": lifecycle_ai_context_attribution_path,
+            "swing_lifecycle_decision_matrix": swing_lifecycle_matrix_summary.get("artifact"),
+            "swing_lifecycle_bucket_discovery": swing_lifecycle_bucket_discovery_summary.get("artifact"),
             "institutional_flow_context": institutional_flow_path,
             "pattern_lab_currentness_audit": str(currentness_path) if currentness_path.exists() else None,
+            "pattern_lab_ai_review": str(pattern_lab_ai_review_path) if pattern_lab_ai_review_path.exists() else None,
             "pattern_lab_propagation_audit": str(propagation_path) if propagation_path.exists() else None,
         },
         "source_load_diagnostics": _JSON_LOAD_DIAGNOSTICS.copy(),
@@ -1475,6 +1554,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
                 if row.get("state") == "approval_required" and bool(row.get("approval_artifact_approved"))
             ),
             "pattern_lab_currentness_status": currentness_audit.get("status"),
+            "pattern_lab_ai_review_status": pattern_lab_ai_review.get("status"),
             "pattern_lab_propagation_status": propagation_audit.get("status"),
             "scalp_entry_adm_status": (
                 (ev_report.get("scalp_entry_action_decision_matrix") or {}).get("status")
@@ -1512,6 +1592,14 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             "swing_strategy_discovery_available": swing_discovery_summary.get("available"),
             "swing_strategy_discovery_labeled_sample_count": swing_discovery_summary.get("labeled_sample_count"),
             "swing_strategy_discovery_pending_future_quote_count": swing_discovery_summary.get("pending_future_quote_count"),
+            "swing_lifecycle_matrix_available": swing_lifecycle_matrix_summary.get("available"),
+            "swing_lifecycle_matrix_sim_auto_candidate_count": swing_lifecycle_matrix_summary.get(
+                "sim_auto_candidate_count"
+            ),
+            "swing_lifecycle_bucket_discovery_available": swing_lifecycle_bucket_discovery_summary.get("available"),
+            "swing_lifecycle_bucket_discovery_sim_auto_approved_count": swing_lifecycle_bucket_discovery_summary.get(
+                "sim_auto_approved_count"
+            ),
             "institutional_flow_available": institutional_flow_summary.get("available"),
             "institutional_flow_join_rate_pct": institutional_flow_summary.get("join_rate_pct"),
         },
@@ -1526,8 +1614,11 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
         if isinstance(ev_report.get("lifecycle_ai_context_attribution"), dict)
         else {},
         "swing_strategy_discovery": swing_discovery_summary,
+        "swing_lifecycle_decision_matrix": swing_lifecycle_matrix_summary,
+        "swing_lifecycle_bucket_discovery": swing_lifecycle_bucket_discovery_summary,
         "institutional_flow_context": institutional_flow_summary,
         "pattern_lab_currentness_audit": currentness_audit,
+        "pattern_lab_ai_review": pattern_lab_ai_review,
         "pattern_lab_propagation_audit": propagation_audit,
         "scalping": scalping_rows,
         "swing": swing_rows,
@@ -1540,8 +1631,11 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
                 "scalp_entry_action_decision_matrix_missing" if not scalp_entry_adm_path else "",
                 "lifecycle_decision_matrix_missing" if not lifecycle_matrix_path else "",
                 "lifecycle_bucket_discovery_missing" if not lifecycle_bucket_discovery_summary.get("available") else "",
+                "swing_lifecycle_decision_matrix_missing" if not swing_lifecycle_matrix_summary.get("available") else "",
+                "swing_lifecycle_bucket_discovery_missing" if not swing_lifecycle_bucket_discovery_summary.get("available") else "",
                 "institutional_flow_context_missing" if not institutional_flow_path else "",
                 "pattern_lab_currentness_audit_missing" if not currentness_path.exists() else "",
+                "pattern_lab_ai_review_missing" if not pattern_lab_ai_review_path.exists() else "",
                 "pattern_lab_propagation_audit_missing" if not propagation_path.exists() else "",
                 *source_load_warnings,
             ]
@@ -1604,12 +1698,23 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         if isinstance(report.get("swing_strategy_discovery"), dict)
         else {}
     )
+    swing_lifecycle_matrix = (
+        report.get("swing_lifecycle_decision_matrix")
+        if isinstance(report.get("swing_lifecycle_decision_matrix"), dict)
+        else {}
+    )
+    swing_lifecycle_bucket_discovery = (
+        report.get("swing_lifecycle_bucket_discovery")
+        if isinstance(report.get("swing_lifecycle_bucket_discovery"), dict)
+        else {}
+    )
     institutional_flow = (
         report.get("institutional_flow_context")
         if isinstance(report.get("institutional_flow_context"), dict)
         else {}
     )
     currentness = report.get("pattern_lab_currentness_audit") if isinstance(report.get("pattern_lab_currentness_audit"), dict) else {}
+    pattern_lab_ai_review = report.get("pattern_lab_ai_review") if isinstance(report.get("pattern_lab_ai_review"), dict) else {}
     propagation = report.get("pattern_lab_propagation_audit") if isinstance(report.get("pattern_lab_propagation_audit"), dict) else {}
     source_load_diagnostics = (
         report.get("source_load_diagnostics") if isinstance(report.get("source_load_diagnostics"), list) else []
@@ -1628,8 +1733,11 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         f"- lifecycle_matrix_status: `{summary.get('lifecycle_matrix_status')}`",
         f"- lifecycle_ai_context prompt/applied: `{summary.get('lifecycle_ai_context_prompt_stage_count')}` / `{summary.get('lifecycle_ai_context_applied_count')}`",
         f"- swing_strategy_discovery_labeled/pending: `{summary.get('swing_strategy_discovery_labeled_sample_count')}` / `{summary.get('swing_strategy_discovery_pending_future_quote_count')}`",
+        f"- swing_lifecycle_matrix_auto: `{summary.get('swing_lifecycle_matrix_sim_auto_candidate_count')}`",
+        f"- swing_lifecycle_bucket_auto: `{summary.get('swing_lifecycle_bucket_discovery_sim_auto_approved_count')}`",
         f"- institutional_flow_available/join_rate: `{summary.get('institutional_flow_available')}` / `{summary.get('institutional_flow_join_rate_pct')}`",
         f"- pattern_lab_currentness_status: `{summary.get('pattern_lab_currentness_status')}`",
+        f"- pattern_lab_ai_review_status: `{summary.get('pattern_lab_ai_review_status')}`",
         f"- pattern_lab_propagation_status: `{summary.get('pattern_lab_propagation_status')}`",
         f"- env_generated_at: `{timing.get('env_generated_at') or '-'}`",
         f"- first_bot_start_at: `{timing.get('first_bot_start_at') or '-'}`",
@@ -1691,11 +1799,30 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         f"- interpretation: {swing_discovery.get('state_interpretation') or '-'}",
         f"- warnings: `{swing_discovery.get('warnings') or []}`",
         "",
+        "## Swing Lifecycle Matrix",
+        f"- artifact: `{swing_lifecycle_matrix.get('artifact') or '-'}`",
+        f"- available: `{swing_lifecycle_matrix.get('available')}`",
+        f"- total/probe/discovery: `{swing_lifecycle_matrix.get('total_rows')}` / `{swing_lifecycle_matrix.get('probe_rows')}` / `{swing_lifecycle_matrix.get('discovery_rows')}`",
+        f"- sim_auto_candidate_count: `{swing_lifecycle_matrix.get('sim_auto_candidate_count')}`",
+        f"- workorder_count: `{swing_lifecycle_matrix.get('workorder_count')}`",
+        f"- daily_simulation_consumed: `{swing_lifecycle_matrix.get('daily_simulation_consumed')}`",
+        f"- runtime_effect: `{swing_lifecycle_matrix.get('runtime_effect')}`",
+        f"- warnings: `{swing_lifecycle_matrix.get('warnings') or []}`",
+        "",
+        "## Swing Lifecycle Bucket Discovery",
+        f"- artifact: `{swing_lifecycle_bucket_discovery.get('artifact') or '-'}`",
+        f"- available: `{swing_lifecycle_bucket_discovery.get('available')}`",
+        f"- source_contract_status: `{swing_lifecycle_bucket_discovery.get('source_contract_status')}`",
+        f"- surfaced/sim_auto/code_patch: `{swing_lifecycle_bucket_discovery.get('surfaced_candidate_count')}` / `{swing_lifecycle_bucket_discovery.get('sim_auto_approved_count')}` / `{swing_lifecycle_bucket_discovery.get('code_patch_required_count')}`",
+        f"- runtime_effect: `{swing_lifecycle_bucket_discovery.get('runtime_effect')}`",
+        f"- warnings: `{swing_lifecycle_bucket_discovery.get('warnings') or []}`",
+        "",
         "## Panic",
         *_render_rows(panic),
         "",
         "## Pattern Lab Audits",
         f"- currentness: status=`{currentness.get('status')}` fail=`{currentness.get('fail_count')}` artifact=`{currentness.get('artifact') or '-'}`",
+        f"- ai_review: status=`{pattern_lab_ai_review.get('status')}` artifact=`{pattern_lab_ai_review.get('artifact') or '-'}`",
         f"- propagation: status=`{propagation.get('status')}` fail=`{propagation.get('fail_count')}` warnings=`{propagation.get('warning_count')}` artifact=`{propagation.get('artifact') or '-'}`",
     ]
     warnings = report.get("warnings") if isinstance(report.get("warnings"), list) else []

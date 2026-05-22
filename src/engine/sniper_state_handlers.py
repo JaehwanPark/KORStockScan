@@ -151,6 +151,7 @@ _HOLDING_FLOW_OVERRIDE_EXIT_RULES = {
 SCALP_SIMULATION_BOOK = "scalp_ai_buy_all"
 SCALP_SIM_PENDING_STATUS = "SCALP_SIM_PENDING_BUY"
 SCALP_SIM_STATE_PATH = DATA_DIR / "runtime" / "scalp_live_simulator_state.json"
+_SCALP_SIM_STATE_LAST_SEEN_MTIME_NS: int | None = None
 SWING_INTRADAY_PROBE_BOOK = "swing_intraday_live_equiv_probe"
 SWING_INTRADAY_PROBE_STATE_PATH = DATA_DIR / "runtime" / "swing_intraday_probe_state.json"
 _SCALP_SIM_CANDIDATE_WINDOW_DAILY_CREATED: dict[str, int] = {}
@@ -929,27 +930,49 @@ def _scalp_simulator_active_targets(targets=None) -> list[dict]:
     ]
 
 
-def persist_scalp_simulator_state(targets=None) -> None:
+def _scalp_sim_state_mtime_ns() -> int | None:
     try:
-        active_positions = [
-            _json_safe_value(dict(target))
-            for target in _scalp_simulator_active_targets(targets)
-        ]
-        payload = {
-            "schema_version": 1,
-            "simulation_book": SCALP_SIMULATION_BOOK,
-            "owner": _scalp_live_simulator_owner(),
-            "updated_at": datetime.now().isoformat(timespec="seconds"),
-            "active_positions": active_positions,
-        }
+        return SCALP_SIM_STATE_PATH.stat().st_mtime_ns if SCALP_SIM_STATE_PATH.exists() else None
+    except Exception:
+        return None
+
+
+def persist_scalp_simulator_state(targets=None) -> None:
+    global _SCALP_SIM_STATE_LAST_SEEN_MTIME_NS
+    try:
+        target_list = targets if targets is not None else ACTIVE_TARGETS
         SCALP_SIM_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
         lock_path = SCALP_SIM_STATE_PATH.with_suffix(".lock")
         tmp_path = SCALP_SIM_STATE_PATH.with_suffix(".tmp")
         with lock_path.open("a+", encoding="utf-8") as lock_handle:
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
             try:
+                current_mtime = _scalp_sim_state_mtime_ns()
+                if (
+                    _SCALP_SIM_STATE_LAST_SEEN_MTIME_NS is not None
+                    and current_mtime is not None
+                    and current_mtime != _SCALP_SIM_STATE_LAST_SEEN_MTIME_NS
+                ):
+                    sync_result = sync_scalp_simulator_targets_from_state(target_list)
+                    if sync_result.get("removed") or sync_result.get("restored"):
+                        log_info(
+                            "[SCALP_SIM_STATE] reconciled external state before persist "
+                            f"removed={sync_result.get('removed')} restored={sync_result.get('restored')}"
+                        )
+                active_positions = [
+                    _json_safe_value(dict(target))
+                    for target in _scalp_simulator_active_targets(target_list)
+                ]
+                payload = {
+                    "schema_version": 1,
+                    "simulation_book": SCALP_SIMULATION_BOOK,
+                    "owner": _scalp_live_simulator_owner(),
+                    "updated_at": datetime.now().isoformat(timespec="seconds"),
+                    "active_positions": active_positions,
+                }
                 tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
                 tmp_path.replace(SCALP_SIM_STATE_PATH)
+                _SCALP_SIM_STATE_LAST_SEEN_MTIME_NS = _scalp_sim_state_mtime_ns()
             finally:
                 fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
     except Exception as exc:
@@ -1030,6 +1053,7 @@ def restore_scalp_simulator_targets(targets=None) -> int:
 
 
 def sync_scalp_simulator_targets_from_state(targets=None) -> dict:
+    global _SCALP_SIM_STATE_LAST_SEEN_MTIME_NS
     target_list = targets if targets is not None else ACTIVE_TARGETS
     if target_list is None:
         return {"removed": 0, "restored": 0, "state_exists": False}
@@ -1059,9 +1083,50 @@ def sync_scalp_simulator_targets_from_state(targets=None) -> dict:
     ]
     removed = before - len(target_list)
     restored = restore_scalp_simulator_targets(target_list) if _is_scalp_live_simulator_enabled() and state_exists else 0
+    _SCALP_SIM_STATE_LAST_SEEN_MTIME_NS = _scalp_sim_state_mtime_ns()
     if removed or restored:
         log_info(f"[SCALP_SIM_STATE] synced simulator targets removed={removed} restored={restored}")
     return {"removed": removed, "restored": restored, "state_exists": state_exists}
+
+
+def sync_scalp_simulator_targets_if_state_changed(targets=None, *, last_mtime: int | float | None = None) -> dict:
+    """Synchronize in-memory scalp sim targets after an external state-file mutation."""
+    global _SCALP_SIM_STATE_LAST_SEEN_MTIME_NS
+    try:
+        current_mtime = _scalp_sim_state_mtime_ns()
+    except Exception as exc:
+        log_error(f"[SCALP_SIM_STATE] mtime check failed: {exc}")
+        return {
+            "synced": False,
+            "removed": 0,
+            "restored": 0,
+            "state_exists": False,
+            "state_mtime": last_mtime,
+            "error": str(exc),
+        }
+    if current_mtime is None:
+        return {
+            "synced": False,
+            "removed": 0,
+            "restored": 0,
+            "state_exists": False,
+            "state_mtime": None,
+        }
+    if last_mtime is not None and current_mtime == last_mtime:
+        return {
+            "synced": False,
+            "removed": 0,
+            "restored": 0,
+            "state_exists": True,
+            "state_mtime": current_mtime,
+        }
+    result = sync_scalp_simulator_targets_from_state(targets)
+    _SCALP_SIM_STATE_LAST_SEEN_MTIME_NS = current_mtime
+    return {
+        **result,
+        "synced": True,
+        "state_mtime": current_mtime,
+    }
 
 
 def _swing_probe_active_targets(targets=None) -> list[dict]:

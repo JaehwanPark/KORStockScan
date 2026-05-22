@@ -982,11 +982,18 @@ def test_swing_pattern_lab_automation_orders_have_allowed_runtime_apply_false(tm
     )
 
     report = mod.build_swing_pattern_lab_automation_report("2026-05-08")
+    assert report["runtime_effect"] is False
+    assert report["runtime_mutation_allowed"] is False
+    assert report["decision_authority"] == "swing_pattern_lab_analysis_workorder_source_only"
     for order in report["code_improvement_orders"]:
         assert order.get("runtime_effect") is False
         assert order.get("allowed_runtime_apply") is False, f"order {order.get('order_id')} missing allowed_runtime_apply=false"
+        assert order.get("decision_authority") == "swing_pattern_lab_analysis_workorder_source_only"
+        assert "swing_real_order_enable" in order.get("forbidden_uses", [])
     for family in report["auto_family_candidates"]:
+        assert family.get("runtime_effect") is False
         assert family.get("allowed_runtime_apply") is False
+        assert family.get("decision_authority") == "swing_pattern_lab_analysis_workorder_source_only"
 
 
 def test_swing_pattern_lab_automation_marks_ofi_qi_instrumentation_implemented(tmp_path, monkeypatch):
@@ -1052,6 +1059,6 @@ def test_swing_pattern_lab_automation_marks_ofi_qi_instrumentation_implemented(t
     order = report["code_improvement_orders"][0]
 
     assert order["implementation_status"] == "implemented"
-    assert order["implementation_provenance"]["decision_authority"] == "source_quality_only"
+    assert order["implementation_provenance"]["decision_authority"] == "swing_pattern_lab_analysis_workorder_source_only"
     assert order["implementation_provenance"]["runtime_effect"] is False
     assert order["implementation_checks"][0]["status"] == "pass"

@@ -13,6 +13,8 @@
 - swing_improvement_automation: `/home/ubuntu/KORStockScan/data/report/swing_improvement_automation/swing_improvement_automation_2026-05-21.json`
 - swing_pattern_lab_automation: `/home/ubuntu/KORStockScan/data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_2026-05-21.json`
 - swing_strategy_discovery_ev: `/home/ubuntu/KORStockScan/data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_2026-05-21.json`
+- swing_lifecycle_decision_matrix: `-`
+- swing_lifecycle_bucket_discovery: `-`
 - threshold_cycle_ev: `/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-21.json`
 - lifecycle_decision_matrix: `/home/ubuntu/KORStockScan/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_2026-05-21.json`
 - threshold_cycle_calibration: `/home/ubuntu/KORStockScan/data/report/threshold_cycle_calibration/threshold_cycle_calibration_2026-05-21_postclose.json`
@@ -20,9 +22,10 @@
 - observation_source_quality_audit: `/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-05-21.json`
 - codebase_performance_workorder: `/home/ubuntu/KORStockScan/data/report/codebase_performance_workorder/codebase_performance_workorder_2026-05-21.json`
 - pattern_lab_currentness_audit: `/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-21.json`
-- generated_at: `2026-05-21T18:48:21+09:00`
-- generation_id: `2026-05-21-16f7750b449e`
-- source_hash: `16f7750b449e1d042c227fc2486b758606989a639a73c64efe835add754ce9aa`
+- pattern_lab_ai_review: `/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-05-21.json`
+- generated_at: `2026-05-22T16:03:34+09:00`
+- generation_id: `2026-05-21-0727d489f91d`
+- source_hash: `0727d489f91dc083bd3e20261d46a6777f961c0f2c76f7f5fddec7b4dfedc2b4`
 
 ## 운영 원칙
 
@@ -39,39 +42,44 @@
 - Regeneration: 관련 postclose report와 이 workorder를 재생성하고 `lineage` diff를 확인한다.
 - Pass 2: 재생성 후 새로 생긴 `runtime_effect=false` order만 추가 구현한다.
 - Final freeze: `generation_id`, `source_hash`, 신규/삭제/판정변경 order를 최종 보고에 남긴다.
-- 권장 지시문: `implement_now를 2-pass로 처리: Pass1 instrumentation/report/provenance 구현, 관련 리포트 재생성 후 workorder diff 확인, 신규 runtime_effect=false 항목만 Pass2 구현, 마지막에 generation_id/source_hash 기준으로 final freeze 보고`
+- 권장 지시문: `lifecycle bucket discovery hook gap은 자동 patch 후보를 만들고, self code review + fix 2-pass + targeted tests 통과 전에는 runtime env로 소비하지 않는다.`
 
 ## Snapshot Lineage
 
 - previous_exists: `True`
-- previous_generation_id: `2026-05-21-bd7e0459a9e4`
-- previous_source_hash: `bd7e0459a9e460d343c654e73ce3b43e773b264a04eb77977ba72805a4f1d1c4`
-- new_order_ids: `[]`
-- removed_order_ids: `['order_ai_source_quality_not_evaluated_provenance', 'order_high_volume_diagnostic_stage_contract_labels']`
+- previous_generation_id: `2026-05-21-87cba26c3580`
+- previous_source_hash: `87cba26c3580095b57e93194a3283d5ad3420f557f41438e3bf1e449aaf87f73`
+- new_order_ids: `['order_pattern_lab_ai_review_currentness_scalping_ldm_threshold_reentry_sources', 'order_pattern_lab_ai_review_currentness_swing_ldm_threshold_reentry_sources']`
+- removed_order_ids: `['order_pattern_lab_currentness_audit_pattern_lab_ai_review_contract']`
 - decision_changed_order_ids: `[]`
 
 ## Summary
 
-- source_order_count: `54`
+- source_order_count: `58`
 - scalping_source_order_count: `12`
 - swing_source_order_count: `4`
 - swing_lab_source_order_count: `4`
 - swing_strategy_discovery_source_order_count: `1`
-- pattern_lab_currentness_source_order_count: `0`
+- swing_lifecycle_matrix_source_order_count: `0`
+- swing_lifecycle_bucket_discovery_source_order_count: `0`
+- pattern_lab_currentness_source_order_count: `2`
+- pattern_lab_ai_review_source_order_count: `2`
 - threshold_ev_source_order_count: `15`
 - pipeline_event_verbosity_source_order_count: `0`
 - observation_source_quality_source_order_count: `0`
 - codebase_performance_source_order_count: `12`
 - panic_lifecycle_source_order_count: `2`
-- selected_order_count: `19`
-- decision_counts: `{'implement_now': 16, 'attach_existing_family': 18, 'design_family_candidate': 6, 'defer_evidence': 11, 'reject': 3}`
+- selected_order_count: `23`
+- decision_counts: `{'implement_now': 20, 'attach_existing_family': 18, 'design_family_candidate': 7, 'defer_evidence': 10, 'reject': 3}`
 - gemini_fresh: `True`
 - claude_fresh: `True`
 - swing_lifecycle_audit_available: `True`
 - swing_pattern_lab_automation_available: `True`
 - swing_pattern_lab_fresh: `True`
-- pattern_lab_currentness_status: `pass`
-- pattern_lab_currentness_fail_count: `0`
+- pattern_lab_currentness_status: `warning`
+- pattern_lab_currentness_fail_count: `2`
+- pattern_lab_ai_review_status: `warning`
+- pattern_lab_ai_review_workorder_count: `2`
 - swing_threshold_ai_status: `unavailable`
 - daily_ev_available: `True`
 
@@ -644,7 +652,143 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - runtime 판단값을 직접 바꾸지 않는다.
 - 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
 
-### 17. `order_lifecycle_entry_bucket_chosen_action_no_buy_ai`
+### 17. `order_pattern_lab_ai_review_currentness_scalping_ldm_threshold_reentry_sources`
+
+- title: Pattern Lab AI review follow-up: currentness:scalping_ldm_threshold_reentry_sources
+- decision: `implement_now`
+- decision_reason: pattern lab audit/review order is report/source-quality instrumentation only and must remain runtime_effect=false
+- source_report_type: `pattern_lab_ai_review`
+- lifecycle_stage: `pattern_lab_ai_review`
+- target_subsystem: `pattern_lab`
+- route: `implement_now`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `automation_handoff_gap`
+- confidence: `ai_two_pass_review`
+- priority: `10`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `True`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Improve pattern lab feedback quality without runtime mutation.
+- evidence: `review_id=currentness:scalping_ldm_threshold_reentry_sources`, `domain=scalping`, `final_state=automation_handoff_gap`, `final_decision=surface_workorder`
+- parity_contract: -
+- next_postclose_metric: pattern_lab_ai_review.currentness:scalping_ldm_threshold_reentry_sources
+- files_likely_touched: `src/engine/pattern_lab_ai_review.py`, `src/engine/pattern_lab_currentness_audit.py`, `analysis/gemini_scalping_pattern_lab`, `analysis/claude_scalping_pattern_lab`, `analysis/deepseek_swing_pattern_lab`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_ai_review.py src/tests/test_pattern_lab_currentness_audit.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun pattern labs, currentness audit, workorder, EV, and propagation audit.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 18. `order_pattern_lab_ai_review_currentness_swing_ldm_threshold_reentry_sources`
+
+- title: Pattern Lab AI review follow-up: currentness:swing_ldm_threshold_reentry_sources
+- decision: `implement_now`
+- decision_reason: pattern lab audit/review order is report/source-quality instrumentation only and must remain runtime_effect=false
+- source_report_type: `pattern_lab_ai_review`
+- lifecycle_stage: `pattern_lab_ai_review`
+- target_subsystem: `pattern_lab`
+- route: `implement_now`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `automation_handoff_gap`
+- confidence: `ai_two_pass_review`
+- priority: `10`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `True`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Improve pattern lab feedback quality without runtime mutation.
+- evidence: `review_id=currentness:swing_ldm_threshold_reentry_sources`, `domain=swing`, `final_state=automation_handoff_gap`, `final_decision=surface_workorder`
+- parity_contract: -
+- next_postclose_metric: pattern_lab_ai_review.currentness:swing_ldm_threshold_reentry_sources
+- files_likely_touched: `src/engine/pattern_lab_ai_review.py`, `src/engine/pattern_lab_currentness_audit.py`, `analysis/gemini_scalping_pattern_lab`, `analysis/claude_scalping_pattern_lab`, `analysis/deepseek_swing_pattern_lab`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_ai_review.py src/tests/test_pattern_lab_currentness_audit.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun pattern labs, currentness audit, workorder, EV, and propagation audit.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 19. `order_pattern_lab_currentness_audit_scalping_ldm_threshold_reentry_sources`
+
+- title: Feed LDM/threshold feedback into scalping pattern labs
+- decision: `implement_now`
+- decision_reason: pattern lab audit/review order is report/source-quality instrumentation only and must remain runtime_effect=false
+- source_report_type: `pattern_lab_currentness_audit`
+- lifecycle_stage: `pattern_lab_currentness`
+- target_subsystem: `pattern_lab`
+- route: `implement_now`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `automation_handoff_gap`
+- confidence: `consensus`
+- priority: `10`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `True`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Improve report/source-quality attribution without runtime mutation.
+- evidence: `analysis/gemini_scalping_pattern_lab`, `analysis/claude_scalping_pattern_lab`
+- parity_contract: -
+- next_postclose_metric: pattern_lab_currentness_audit.scalping_ldm_threshold_reentry_sources
+- files_likely_touched: `analysis/gemini_scalping_pattern_lab/build_dataset.py`, `analysis/gemini_scalping_pattern_lab/build_llm_payload.py`, `analysis/claude_scalping_pattern_lab/prepare_dataset.py`, `analysis/claude_scalping_pattern_lab/build_claude_payload.py`, `src/engine/pattern_lab_currentness_audit.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_currentness_audit.py`, `pattern lab payloads include LDM bucket/discovery and threshold EV feedback context with runtime_effect=false`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun pattern labs, currentness audit, workorder, EV, and propagation audit.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 20. `order_pattern_lab_currentness_audit_swing_ldm_threshold_reentry_sources`
+
+- title: Feed Swing LDM/discovery feedback into DeepSeek swing pattern lab
+- decision: `implement_now`
+- decision_reason: pattern lab audit/review order is report/source-quality instrumentation only and must remain runtime_effect=false
+- source_report_type: `pattern_lab_currentness_audit`
+- lifecycle_stage: `pattern_lab_currentness`
+- target_subsystem: `pattern_lab`
+- route: `implement_now`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `automation_handoff_gap`
+- confidence: `consensus`
+- priority: `10`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `True`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Improve report/source-quality attribution without runtime mutation.
+- evidence: `analysis/deepseek_swing_pattern_lab`
+- parity_contract: -
+- next_postclose_metric: pattern_lab_currentness_audit.swing_ldm_threshold_reentry_sources
+- files_likely_touched: `analysis/deepseek_swing_pattern_lab/prepare_dataset.py`, `analysis/deepseek_swing_pattern_lab/build_deepseek_payload.py`, `analysis/deepseek_swing_pattern_lab/prompts/prompt_swing_lifecycle_patterns.md`, `src/engine/pattern_lab_currentness_audit.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_deepseek_swing_pattern_lab.py src/tests/test_pattern_lab_currentness_audit.py`, `DeepSeek payload summary/cases expose Swing LDM bucket/discovery and threshold EV feedback context with runtime_effect=false`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun pattern labs, currentness audit, workorder, EV, and propagation audit.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 21. `order_lifecycle_entry_bucket_chosen_action_no_buy_ai`
 
 - title: LDM entry bucket attribution follow-up: chosen_action=NO_BUY_AI
 - decision: `attach_existing_family`
@@ -678,7 +822,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 18. `order_lifecycle_entry_bucket_exit_rule_scalp_sim_panic_lifecycle_full_exit`
+### 22. `order_lifecycle_entry_bucket_exit_rule_scalp_sim_panic_lifecycle_full_exit`
 
 - title: LDM entry bucket attribution follow-up: exit_rule=scalp_sim_panic_lifecycle_full_exit
 - decision: `attach_existing_family`
@@ -712,7 +856,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 19. `order_lifecycle_entry_bucket_exit_rule_scalp_trailing_take_profit`
+### 23. `order_lifecycle_entry_bucket_exit_rule_scalp_trailing_take_profit`
 
 - title: LDM entry bucket attribution follow-up: exit_rule=scalp_trailing_take_profit
 - decision: `attach_existing_family`
@@ -750,7 +894,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 
 - 구현 결과는 `2026-05-22` 이후 postclose `threshold_cycle`, `scalping_pattern_lab_automation`, `threshold_cycle_ev`가 자동으로 다시 읽는다.
 - 구현자가 수동으로 threshold 값을 바꾸는 것이 아니라, source/report/provenance를 닫아 다음 calibration이 판단하게 한다.
-- 다음 Codex 세션 입력 문구: `paste generated markdown into a Codex session and request implementation`
+- 다음 Codex 세션 입력 문구: `none_for_bucket_discovery_classification`
 
 ## Project/Calendar 동기화
 

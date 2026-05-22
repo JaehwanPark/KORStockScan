@@ -50,6 +50,22 @@ def _load_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _parse_generated_at(payload: dict[str, Any]) -> datetime | None:
+    raw = str(payload.get("generated_at") or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def _consumer_stale(consumer: dict[str, Any], source: dict[str, Any]) -> bool:
+    consumer_dt = _parse_generated_at(consumer)
+    source_dt = _parse_generated_at(source)
+    return bool(consumer_dt and source_dt and consumer_dt < source_dt)
+
+
 def _read_lines(path: Path) -> list[str]:
     try:
         return path.read_text(encoding="utf-8").splitlines()
@@ -97,10 +113,17 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "pattern_lab_currentness_audit": REPORT_DIR
         / "pattern_lab_currentness_audit"
         / f"pattern_lab_currentness_audit_{target_date}.json",
+        "pattern_lab_ai_review": REPORT_DIR / "pattern_lab_ai_review" / f"pattern_lab_ai_review_{target_date}.json",
         "pattern_lab_propagation_audit": REPORT_DIR
         / "pattern_lab_propagation_audit"
         / f"pattern_lab_propagation_audit_{target_date}.json",
         "swing_daily_simulation": REPORT_DIR / "swing_daily_simulation" / f"swing_daily_simulation_{target_date}.json",
+        "swing_lifecycle_decision_matrix": REPORT_DIR
+        / "swing_lifecycle_decision_matrix"
+        / f"swing_lifecycle_decision_matrix_{target_date}.json",
+        "swing_lifecycle_bucket_discovery": REPORT_DIR
+        / "swing_lifecycle_bucket_discovery"
+        / f"swing_lifecycle_bucket_discovery_{target_date}.json",
         "swing_lifecycle_audit": REPORT_DIR / "swing_lifecycle_audit" / f"swing_lifecycle_audit_{target_date}.json",
         "next_stage2_checklist": PROJECT_ROOT / "docs" / "checklists" / f"{next_day}-stage2-todo-checklist.md",
     }
@@ -183,6 +206,13 @@ def _overnight_bucket_order_id(item: dict[str, Any]) -> str:
     return f"order_lifecycle_overnight_bucket_{bucket_type}_{bucket_key}"
 
 
+def _swing_ldm_order_id(item: dict[str, Any]) -> str:
+    stage = _slug(str(item.get("lifecycle_stage") or "swing"))
+    bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
+    bucket_key = _slug(str(item.get("bucket_key") or item.get("workorder_id") or "unknown"))
+    return f"order_swing_ldm_{stage}_{bucket_type}_{bucket_key}"
+
+
 def _collect_entry_bucket_candidate_ids(payload: Any) -> set[str]:
     found: set[str] = set()
     if isinstance(payload, dict):
@@ -249,6 +279,27 @@ def _collect_lifecycle_bucket_discovery_ids(payload: Any) -> set[str]:
     elif isinstance(payload, list):
         for item in payload:
             found.update(_collect_lifecycle_bucket_discovery_ids(item))
+    return found
+
+
+def _collect_swing_lifecycle_ids(payload: Any) -> set[str]:
+    found: set[str] = set()
+    if isinstance(payload, dict):
+        for key in ("sim_auto_candidate_ids", "surfaced_candidate_ids"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                found.update(str(item) for item in value if item)
+        for key in ("sim_auto_approval_candidates", "runtime_approval_candidates", "surfaced_candidates", "sim_auto_approved_candidates"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                for item in value:
+                    if isinstance(item, dict) and (item.get("candidate_id") or item.get("bucket_id")):
+                        found.add(str(item.get("candidate_id") or item.get("bucket_id")))
+        for value in payload.values():
+            found.update(_collect_swing_lifecycle_ids(value))
+    elif isinstance(payload, list):
+        for item in payload:
+            found.update(_collect_swing_lifecycle_ids(item))
     return found
 
 
@@ -342,6 +393,90 @@ def _lifecycle_bucket_discovery_handoff_status(
             else "lifecycle bucket discovery produced surfaced candidates that downstream consumers dropped"
             if discovery
             else "lifecycle bucket discovery report missing"
+        ),
+    }
+
+
+def _swing_lifecycle_handoff_status(
+    matrix: dict[str, Any],
+    discovery: dict[str, Any],
+    ev_report: dict[str, Any],
+    runtime_summary: dict[str, Any],
+    workorder: dict[str, Any],
+) -> dict[str, Any]:
+    expected_candidate_ids = _collect_swing_lifecycle_ids(matrix) | _collect_swing_lifecycle_ids(discovery)
+    ev_candidate_ids = _collect_swing_lifecycle_ids(
+        {
+            "swing_lifecycle_decision_matrix": ev_report.get("swing_lifecycle_decision_matrix"),
+            "swing_lifecycle_bucket_discovery": ev_report.get("swing_lifecycle_bucket_discovery"),
+        }
+    )
+    runtime_candidate_ids = _collect_swing_lifecycle_ids(
+        {
+            "swing_lifecycle_decision_matrix": runtime_summary.get("swing_lifecycle_decision_matrix"),
+            "swing_lifecycle_bucket_discovery": runtime_summary.get("swing_lifecycle_bucket_discovery"),
+        }
+    )
+    source_workorders: list[dict[str, Any]] = []
+    for section_name in (
+        "entry_bucket_attribution",
+        "holding_exit_bucket_attribution",
+        "scale_in_bucket_attribution",
+        "discovery_arm_attribution",
+    ):
+        section = matrix.get(section_name) if isinstance(matrix.get(section_name), dict) else {}
+        source_workorders.extend(
+            item for item in (section.get("code_improvement_workorders") or []) if isinstance(item, dict)
+        )
+    expected_order_ids = {_swing_ldm_order_id(item) for item in source_workorders}
+    discovery_workorders = (
+        discovery.get("code_improvement_workorders")
+        if isinstance(discovery.get("code_improvement_workorders"), list)
+        else []
+    )
+    for item in discovery_workorders:
+        if isinstance(item, dict):
+            bucket_id = str(item.get("bucket_id") or item.get("workorder_id") or "")
+            if bucket_id:
+                expected_order_ids.add(f"order_swing_lifecycle_bucket_discovery_{_slug(bucket_id)}")
+    actual_order_ids = {
+        str(item.get("order_id"))
+        for item in (workorder.get("orders") if isinstance(workorder.get("orders"), list) else [])
+        if isinstance(item, dict) and item.get("order_id")
+    }
+    missing_ev_candidates = sorted(expected_candidate_ids - ev_candidate_ids) if expected_candidate_ids else []
+    missing_runtime_candidates = sorted(expected_candidate_ids - runtime_candidate_ids) if expected_candidate_ids else []
+    missing_order_ids = sorted(expected_order_ids - actual_order_ids)
+    missing: list[str] = []
+    if matrix and not discovery:
+        missing.append("swing_lifecycle_bucket_discovery_missing")
+    if missing_ev_candidates:
+        missing.append("threshold_cycle_ev_swing_lifecycle_candidates_missing")
+    if missing_runtime_candidates:
+        missing.append("runtime_approval_summary_swing_lifecycle_candidates_missing")
+    if missing_order_ids:
+        missing.append("code_improvement_workorder_swing_lifecycle_orders_missing")
+    contract = matrix.get("input_contract") if isinstance(matrix.get("input_contract"), dict) else {}
+    if matrix and contract.get("swing_daily_simulation_consumed") is not False:
+        missing.append("swing_lifecycle_forbidden_daily_simulation_consumed")
+    return {
+        "status": "fail" if missing else ("missing" if not matrix else "pass"),
+        "expected_candidate_ids": sorted(expected_candidate_ids),
+        "threshold_cycle_ev_candidate_ids": sorted(ev_candidate_ids),
+        "runtime_approval_summary_candidate_ids": sorted(runtime_candidate_ids),
+        "missing_ev_candidate_ids": missing_ev_candidates,
+        "missing_runtime_summary_candidate_ids": missing_runtime_candidates,
+        "expected_workorder_order_ids": sorted(expected_order_ids),
+        "actual_workorder_order_ids": sorted(actual_order_ids),
+        "missing_workorder_order_ids": missing_order_ids,
+        "daily_simulation_consumed": bool(contract.get("swing_daily_simulation_consumed")),
+        "missing": missing,
+        "interpretation": (
+            "Swing LDM candidates/workorders propagated through EV, runtime summary, workorder, and verifier."
+            if matrix and not missing
+            else "Swing LDM generated output but one or more downstream consumers dropped it."
+            if matrix
+            else "Swing LDM report missing"
         ),
     }
 
@@ -703,8 +838,13 @@ def build_threshold_cycle_postclose_verification(
     ev_report = _load_json(paths["threshold_cycle_ev"])
     workorder = _load_json(paths["code_improvement_workorder"])
     runtime_summary = _load_json(paths["runtime_approval_summary"])
+    currentness_audit = _load_json(paths["pattern_lab_currentness_audit"])
+    pattern_lab_ai_review = _load_json(paths["pattern_lab_ai_review"])
+    propagation_audit = _load_json(paths["pattern_lab_propagation_audit"])
     ldm_report = _load_json(paths["lifecycle_decision_matrix"])
     discovery_report = _load_json(paths["lifecycle_bucket_discovery"])
+    swing_ldm_report = _load_json(paths["swing_lifecycle_decision_matrix"])
+    swing_bucket_discovery_report = _load_json(paths["swing_lifecycle_bucket_discovery"])
     bridge_report = _load_json(REPORT_DIR / "runtime_apply_bridge" / f"runtime_apply_bridge_{target_date}.json")
     scalp_sim_overnight_path = _scalp_sim_overnight_path(target_date)
     scalp_sim_overnight = _load_json(scalp_sim_overnight_path)
@@ -742,6 +882,15 @@ def build_threshold_cycle_postclose_verification(
     )
     if lifecycle_bucket_discovery_handoff.get("status") == "fail":
         log_issues.append("lifecycle_bucket_discovery_handoff_missing")
+    swing_lifecycle_handoff = _swing_lifecycle_handoff_status(
+        swing_ldm_report,
+        swing_bucket_discovery_report,
+        ev_report,
+        runtime_summary,
+        workorder,
+    )
+    if swing_lifecycle_handoff.get("status") == "fail":
+        log_issues.append("swing_lifecycle_handoff_missing")
 
     lineage = workorder.get("lineage") if isinstance(workorder.get("lineage"), dict) else {}
     workorder_snapshot = {
@@ -778,6 +927,9 @@ def build_threshold_cycle_postclose_verification(
         "threshold_cycle_ev_sources_pattern_lab_currentness_audit": (
             ((ev_report.get("sources") or {}).get("pattern_lab_currentness_audit")) or None
         ),
+        "threshold_cycle_ev_sources_pattern_lab_ai_review": (
+            ((ev_report.get("sources") or {}).get("pattern_lab_ai_review")) or None
+        ),
         "threshold_cycle_ev_sources_pattern_lab_propagation_audit": (
             ((ev_report.get("sources") or {}).get("pattern_lab_propagation_audit")) or None
         ),
@@ -793,8 +945,23 @@ def build_threshold_cycle_postclose_verification(
         "runtime_approval_summary_sources_lifecycle_decision_matrix": (
             ((runtime_summary.get("sources") or {}).get("lifecycle_decision_matrix")) or None
         ),
+        "threshold_cycle_ev_sources_swing_lifecycle_decision_matrix": (
+            ((ev_report.get("sources") or {}).get("swing_lifecycle_decision_matrix")) or None
+        ),
+        "threshold_cycle_ev_sources_swing_lifecycle_bucket_discovery": (
+            ((ev_report.get("sources") or {}).get("swing_lifecycle_bucket_discovery")) or None
+        ),
+        "runtime_approval_summary_sources_swing_lifecycle_decision_matrix": (
+            ((runtime_summary.get("sources") or {}).get("swing_lifecycle_decision_matrix")) or None
+        ),
+        "runtime_approval_summary_sources_swing_lifecycle_bucket_discovery": (
+            ((runtime_summary.get("sources") or {}).get("swing_lifecycle_bucket_discovery")) or None
+        ),
         "runtime_approval_summary_sources_pattern_lab_propagation_audit": (
             ((runtime_summary.get("sources") or {}).get("pattern_lab_propagation_audit")) or None
+        ),
+        "runtime_approval_summary_sources_pattern_lab_ai_review": (
+            ((runtime_summary.get("sources") or {}).get("pattern_lab_ai_review")) or None
         ),
     }
 
@@ -815,13 +982,21 @@ def build_threshold_cycle_postclose_verification(
     missing_execution_flags = [
         key for key in required_execution_flags if done_line and key not in execution_flags
     ]
+    for key in ("swing_lifecycle_matrix", "swing_lifecycle_bucket_discovery"):
+        if done_line and key in execution_flags and key not in missing_execution_flags:
+            required_execution_flags = (*required_execution_flags, key)
+    if done_line and "pattern_lab_ai_review" in execution_flags and "pattern_lab_ai_review" not in missing_execution_flags:
+        required_execution_flags = (*required_execution_flags, "pattern_lab_ai_review")
     disabled_stage_flags = [
         key
         for key in (
             "swing_lifecycle",
+            "swing_lifecycle_matrix",
+            "swing_lifecycle_bucket_discovery",
             "pattern_labs",
             "deepseek_swing_lab",
             "pattern_lab_currentness_audit",
+            "pattern_lab_ai_review",
             "pattern_lab_propagation_audit",
             "scalp_entry_adm",
             "lifecycle_decision_matrix",
@@ -834,14 +1009,23 @@ def build_threshold_cycle_postclose_verification(
     ]
     disabled_artifact_labels = {
         "pattern_lab_currentness_audit" if "pattern_lab_currentness_audit" in disabled_stage_flags else "",
+        "pattern_lab_ai_review" if "pattern_lab_ai_review" in disabled_stage_flags else "",
         "pattern_lab_propagation_audit" if "pattern_lab_propagation_audit" in disabled_stage_flags else "",
         "scalp_entry_action_decision_matrix" if "scalp_entry_adm" in disabled_stage_flags else "",
         "lifecycle_decision_matrix" if "lifecycle_decision_matrix" in disabled_stage_flags else "",
+        "swing_lifecycle_decision_matrix" if "swing_lifecycle_matrix" in disabled_stage_flags else "",
+        "swing_lifecycle_bucket_discovery" if "swing_lifecycle_bucket_discovery" in disabled_stage_flags else "",
         "code_improvement_workorder" if "code_improvement_workorder" in disabled_stage_flags else "",
         "threshold_cycle_ev" if "daily_ev" in disabled_stage_flags else "",
         "runtime_approval_summary" if "runtime_approval_summary" in disabled_stage_flags else "",
         "next_stage2_checklist" if "next_stage2_checklist" in disabled_stage_flags else "",
     }
+    if "swing_lifecycle_matrix" not in execution_flags:
+        disabled_artifact_labels.add("swing_lifecycle_decision_matrix")
+    if "swing_lifecycle_bucket_discovery" not in execution_flags:
+        disabled_artifact_labels.add("swing_lifecycle_bucket_discovery")
+    if "pattern_lab_ai_review" not in execution_flags:
+        disabled_artifact_labels.add("pattern_lab_ai_review")
     disabled_artifact_labels.discard("")
     missing_required_artifacts = [
         item["label"]
@@ -863,6 +1047,10 @@ def build_threshold_cycle_postclose_verification(
         missing_downstream_links = [
             key for key in missing_downstream_links if "pattern_lab_currentness_audit" not in key
         ]
+    if "pattern_lab_ai_review" not in execution_flags or "pattern_lab_ai_review" in disabled_stage_flags:
+        missing_downstream_links = [
+            key for key in missing_downstream_links if "pattern_lab_ai_review" not in key
+        ]
     if "pattern_lab_propagation_audit" in disabled_stage_flags:
         missing_downstream_links = [
             key for key in missing_downstream_links if "pattern_lab_propagation_audit" not in key
@@ -879,8 +1067,73 @@ def build_threshold_cycle_postclose_verification(
         missing_downstream_links = [
             key for key in missing_downstream_links if "lifecycle_decision_matrix" not in key
         ]
+    if "swing_lifecycle_matrix" in disabled_stage_flags:
+        missing_downstream_links = [
+            key for key in missing_downstream_links if "swing_lifecycle_decision_matrix" not in key
+        ]
+    if "swing_lifecycle_matrix" not in execution_flags:
+        missing_downstream_links = [
+            key for key in missing_downstream_links if "swing_lifecycle_decision_matrix" not in key
+        ]
+    if "swing_lifecycle_bucket_discovery" in disabled_stage_flags:
+        missing_downstream_links = [
+            key for key in missing_downstream_links if "swing_lifecycle_bucket_discovery" not in key
+        ]
+    if "swing_lifecycle_bucket_discovery" not in execution_flags:
+        missing_downstream_links = [
+            key for key in missing_downstream_links if "swing_lifecycle_bucket_discovery" not in key
+        ]
     if "daily_ev" in disabled_stage_flags or "runtime_approval_summary" in disabled_stage_flags:
         missing_downstream_links = []
+    stale_downstream_links: list[str] = []
+    if "daily_ev" not in disabled_stage_flags:
+        if downstream_links.get("threshold_cycle_ev_sources_workorder") and _consumer_stale(ev_report, workorder):
+            stale_downstream_links.append("threshold_cycle_ev_stale_before_code_improvement_workorder")
+        if (
+            "pattern_lab_currentness_audit" not in disabled_stage_flags
+            and downstream_links.get("threshold_cycle_ev_sources_pattern_lab_currentness_audit")
+            and _consumer_stale(ev_report, currentness_audit)
+        ):
+            stale_downstream_links.append("threshold_cycle_ev_stale_before_pattern_lab_currentness_audit")
+        if (
+            "pattern_lab_ai_review" in execution_flags
+            and "pattern_lab_ai_review" not in disabled_stage_flags
+            and downstream_links.get("threshold_cycle_ev_sources_pattern_lab_ai_review")
+            and _consumer_stale(ev_report, pattern_lab_ai_review)
+        ):
+            stale_downstream_links.append("threshold_cycle_ev_stale_before_pattern_lab_ai_review")
+        if (
+            "pattern_lab_propagation_audit" not in disabled_stage_flags
+            and downstream_links.get("threshold_cycle_ev_sources_pattern_lab_propagation_audit")
+            and _consumer_stale(ev_report, propagation_audit)
+        ):
+            stale_downstream_links.append("threshold_cycle_ev_stale_before_pattern_lab_propagation_audit")
+    if "runtime_approval_summary" not in disabled_stage_flags:
+        if downstream_links.get("runtime_approval_summary_sources_ev") and _consumer_stale(runtime_summary, ev_report):
+            stale_downstream_links.append("runtime_approval_summary_stale_before_threshold_cycle_ev")
+        if (
+            "pattern_lab_propagation_audit" not in disabled_stage_flags
+            and downstream_links.get("runtime_approval_summary_sources_pattern_lab_propagation_audit")
+            and _consumer_stale(runtime_summary, propagation_audit)
+        ):
+            stale_downstream_links.append("runtime_approval_summary_stale_before_pattern_lab_propagation_audit")
+        if (
+            "pattern_lab_ai_review" in execution_flags
+            and "pattern_lab_ai_review" not in disabled_stage_flags
+            and downstream_links.get("runtime_approval_summary_sources_pattern_lab_ai_review")
+            and _consumer_stale(runtime_summary, pattern_lab_ai_review)
+        ):
+            stale_downstream_links.append("runtime_approval_summary_stale_before_pattern_lab_ai_review")
+    if "code_improvement_workorder" in disabled_stage_flags:
+        stale_downstream_links = [key for key in stale_downstream_links if "code_improvement_workorder" not in key]
+    if "pattern_lab_currentness_audit" in disabled_stage_flags:
+        stale_downstream_links = [key for key in stale_downstream_links if "pattern_lab_currentness_audit" not in key]
+    if "pattern_lab_ai_review" not in execution_flags or "pattern_lab_ai_review" in disabled_stage_flags:
+        stale_downstream_links = [key for key in stale_downstream_links if "pattern_lab_ai_review" not in key]
+    if "pattern_lab_propagation_audit" in disabled_stage_flags:
+        stale_downstream_links = [key for key in stale_downstream_links if "pattern_lab_propagation_audit" not in key]
+    if "daily_ev" in disabled_stage_flags or "runtime_approval_summary" in disabled_stage_flags:
+        stale_downstream_links = []
     pending_done_marker = bool(start_line and done_line is None and not require_done_marker)
     execution_profile_status = "full_profile"
     if disabled_stage_flags:
@@ -906,6 +1159,8 @@ def build_threshold_cycle_postclose_verification(
     elif missing_required_artifacts:
         status = "fail"
     elif missing_downstream_links:
+        status = "fail"
+    elif stale_downstream_links:
         status = "fail"
     elif predecessor_waits:
         status = "warning"
@@ -969,6 +1224,7 @@ def build_threshold_cycle_postclose_verification(
         },
         "downstream_links": downstream_links,
         "missing_downstream_links": missing_downstream_links,
+        "stale_downstream_links": stale_downstream_links,
         "ai_correction": ai_correction,
         "scalp_sim_overnight_source_quality": scalp_sim_overnight_quality,
         "entry_bucket_handoff": entry_bucket_handoff,
@@ -979,6 +1235,7 @@ def build_threshold_cycle_postclose_verification(
         "overnight_bucket_attribution_present": isinstance(overnight_attribution, dict),
         "overnight_source_present": overnight_source_present,
         "lifecycle_bucket_discovery_handoff": lifecycle_bucket_discovery_handoff,
+        "swing_lifecycle_handoff": swing_lifecycle_handoff,
     }
 
 
@@ -999,6 +1256,11 @@ def _render_markdown(report: dict[str, Any]) -> str:
         if isinstance(report.get("lifecycle_bucket_discovery_handoff"), dict)
         else {}
     )
+    swing_lifecycle = (
+        report.get("swing_lifecycle_handoff")
+        if isinstance(report.get("swing_lifecycle_handoff"), dict)
+        else {}
+    )
     lines = [
         f"# Threshold Cycle Postclose Verification - {report.get('date')}",
         "",
@@ -1017,6 +1279,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- interpretation: `{(report.get('execution_profile') or {}).get('interpretation') or '-'}`",
         f"- missing_required_artifacts: `{report.get('missing_required_artifacts') or []}`",
         f"- missing_downstream_links: `{report.get('missing_downstream_links') or []}`",
+        f"- stale_downstream_links: `{report.get('stale_downstream_links') or []}`",
         "",
         "## AI Correction",
         f"- status: `{ai_correction.get('status') or '-'}`",
@@ -1075,6 +1338,15 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- ai_post_apply_followup_bucket_ids: `{lifecycle_bucket.get('ai_post_apply_followup_bucket_ids') or []}`",
         f"- warnings: `{lifecycle_bucket.get('warnings') or []}`",
         f"- interpretation: `{lifecycle_bucket.get('interpretation') or '-'}`",
+        "",
+        "## Swing Lifecycle Handoff",
+        f"- status: `{swing_lifecycle.get('status') or '-'}`",
+        f"- expected_candidate_ids: `{swing_lifecycle.get('expected_candidate_ids') or []}`",
+        f"- missing_ev_candidate_ids: `{swing_lifecycle.get('missing_ev_candidate_ids') or []}`",
+        f"- missing_runtime_summary_candidate_ids: `{swing_lifecycle.get('missing_runtime_summary_candidate_ids') or []}`",
+        f"- missing_workorder_order_ids: `{swing_lifecycle.get('missing_workorder_order_ids') or []}`",
+        f"- daily_simulation_consumed: `{swing_lifecycle.get('daily_simulation_consumed')}`",
+        f"- interpretation: `{swing_lifecycle.get('interpretation') or '-'}`",
         "",
         "## Workorder Snapshot",
         f"- generation_id: `{workorder.get('generation_id') or '-'}`",

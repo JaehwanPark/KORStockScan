@@ -68,6 +68,14 @@
 - fixed_threshold_roles: `{'hard_safety': ['broker_submit_guard', 'stale_quote_submit_block', 'price_freshness_guard', 'hard_stop', 'protect_stop', 'emergency_stop', 'account_order_cooldown_qty_guard'], 'baseline_prior': ['BUY_SCORE_THRESHOLD', 'VPW_MIN_SCORE', 'strength_momentum_cutoff', 'entry_score_cutoff'], 'bounded_tunable': ['SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION', 'SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION', 'SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION', 'score65_74_recovery_probe', 'soft_stop_whipsaw_confirmation', 'holding_flow_override', 'scale_in_price_guard'], 'legacy_archive': ['fallback_scout_main', 'fallback_single', 'latency_fallback_split_entry', 'legacy_latency_composite', 'closed_shadow_axes']}`
 - policy_entries: `[{'stage': 'entry', 'sample': 1671, 'joined_sample': 232, 'stage_ev_composite_pct': -0.2995, 'confidence': 1.0, 'selected_action': 'WAIT_REQUOTE', 'source_quality_gate': 'pass', 'promote_ready': False}, {'stage': 'submit', 'sample': 196, 'joined_sample': 180, 'stage_ev_composite_pct': -1.011, 'confidence': 1.0, 'selected_action': 'NO_CHANGE', 'source_quality_gate': 'pass', 'promote_ready': False}, {'stage': 'holding', 'sample': 189, 'joined_sample': 180, 'stage_ev_composite_pct': -0.6538, 'confidence': 1.0, 'selected_action': 'EXIT', 'source_quality_gate': 'pass', 'promote_ready': False}, {'stage': 'scale_in', 'sample': 37853, 'joined_sample': 37788, 'stage_ev_composite_pct': -0.1504, 'confidence': 1.0, 'selected_action': 'NO_CHANGE', 'source_quality_gate': 'pass', 'promote_ready': False}, {'stage': 'exit', 'sample': 1001, 'joined_sample': 769, 'stage_ev_composite_pct': -0.5019, 'confidence': 1.0, 'selected_action': 'EXIT', 'source_quality_gate': 'pass', 'promote_ready': False}]`
 
+## Lifecycle Bucket Discovery
+- artifact: `-`
+- status: `missing` / human_intervention_required: `False`
+- candidates/surfaced: `0` / `0`
+- sim_auto/live_auto/new_bucket: `0` / `0` / `0`
+- state_counts: `{}`
+- top_surfaced: `[]`
+
 ## Lifecycle AI Context
 - artifact: `/home/ubuntu/KORStockScan/data/report/lifecycle_ai_context/lifecycle_ai_context_2026-05-21.json`
 - context_version: `lifecycle_ai_context_v1_2026-05-21` / authority: `ai_advisory_prompt_context_only`
@@ -139,8 +147,9 @@
 - tuning_axis_effect: `False`
 
 ## Pattern Lab Audits
-- currentness: status=`pass` fail=`0` orders=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-21.json`
-- propagation: status=`warning` fail=`0` warnings=`2` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-21.json`
+- currentness: status=`warning` fail=`2` orders=`2` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-21.json`
+- ai_review: status=`warning` orders=`2` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-05-21.json`
+- propagation: status=`pass` fail=`0` warnings=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-21.json`
 
 ## Swing Runtime Approval
 - request_report: `/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-05-20.json`
@@ -160,8 +169,8 @@
 ## Code Improvement Workorder
 - artifact: `/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-21.json`
 - markdown: `/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-21.md`
-- selected_order_count: `12`
-- decision_counts: `{'implement_now': 18, 'attach_existing_family': 18, 'design_family_candidate': 6, 'defer_evidence': 11, 'reject': 3}`
+- selected_order_count: `23`
+- decision_counts: `{'implement_now': 20, 'attach_existing_family': 18, 'design_family_candidate': 7, 'defer_evidence': 10, 'reject': 3}`
 
 ## Approval Requests
 - none
@@ -171,9 +180,9 @@
 
 ## Calibration Decisions
 ## Code Improvement Top Orders
-- `order_ai_source_quality_not_evaluated_provenance` decision=`implement_now` subsystem=`runtime_instrumentation`
-- `order_high_volume_diagnostic_stage_contract_labels` decision=`implement_now` subsystem=`runtime_instrumentation`
 - `order_lifecycle_entry_bucket_chosen_action_action_unknown` decision=`implement_now` subsystem=`runtime_instrumentation`
+- `order_lifecycle_entry_bucket_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale_fresh_liquid` decision=`implement_now` subsystem=`runtime_instrumentation`
+- `order_lifecycle_entry_bucket_combo_entry_spot_score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_l` decision=`implement_now` subsystem=`runtime_instrumentation`
 
 ## Pattern Lab Top Findings
 - `AI threshold miss EV recovery` route=`existing_family` family=`score65_74_recovery_probe`
@@ -198,6 +207,10 @@
 - `position_sizing_dynamic_formula`: `hold_sample` sample=`3/30`
 
 ## Warnings
+- `lifecycle_bucket_discovery_missing`
 - `swing_strategy_discovery:pending_future_quotes`
 - `swing_strategy_discovery:sample_floor_not_met`
-- `pattern_lab_propagation_audit_warning`
+- `swing_lifecycle_decision_matrix_missing`
+- `swing_lifecycle_bucket_discovery_missing`
+- `pattern_lab_currentness_audit_warning`
+- `pattern_lab_ai_review_warning`

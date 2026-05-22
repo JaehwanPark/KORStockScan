@@ -8,13 +8,16 @@ def test_postclose_wrapper_runs_pattern_labs_before_automation_and_ev_report():
     claude_idx = script.index("analysis/claude_scalping_pattern_lab/run_all.sh")
     automation_idx = script.index("src.engine.scalping_pattern_lab_automation")
     currentness_idx = script.index("src.engine.pattern_lab_currentness_audit")
+    ai_review_idx = script.index("src.engine.pattern_lab_ai_review")
     ev_idx = script.index('run_threshold_cycle_ev_and_wait "pre_workorder"')
 
     assert "ANALYSIS_START_DATE=\"$PATTERN_LAB_START_DATE\" ANALYSIS_END_DATE=\"$TARGET_DATE\"" in script
     assert gemini_idx < automation_idx
     assert claude_idx < automation_idx
-    assert automation_idx < currentness_idx < ev_idx
+    assert automation_idx < currentness_idx < ai_review_idx < ev_idx
     assert 'RUN_PATTERN_LAB_CURRENTNESS_AUDIT="${THRESHOLD_CYCLE_RUN_PATTERN_LAB_CURRENTNESS_AUDIT:-true}"' in script
+    assert 'RUN_PATTERN_LAB_AI_REVIEW="${THRESHOLD_CYCLE_RUN_PATTERN_LAB_AI_REVIEW:-true}"' in script
+    assert 'PATTERN_LAB_AI_REVIEW_PROVIDER="${KORSTOCKSCAN_PATTERN_LAB_AI_REVIEW_PROVIDER:-openai}"' in script
 
 
 def test_scalp_sim_overnight_preclose_wrapper_uses_live_openai_and_bedrock_lite_shadow():
@@ -45,15 +48,19 @@ def test_postclose_wrapper_runs_swing_daily_simulation_before_lifecycle_audit():
     discovery_idx = script.index("src.engine.swing_strategy_discovery_sim")
     label_idx = script.index("src.engine.swing_strategy_discovery_label_builder")
     discovery_ev_idx = script.index("src.engine.swing_strategy_discovery_ev_report")
+    swing_ldm_idx = script.index("src.engine.swing_lifecycle_decision_matrix")
+    swing_bucket_idx = script.index("src.engine.swing_lifecycle_bucket_discovery")
     audit_idx = script.index("src.engine.swing_lifecycle_audit")
     resource_idx = script.index('wait_for_postclose_resources "swing_lifecycle_audit"')
 
     assert simulation_idx < audit_idx
-    assert simulation_idx < simulation_wait_idx < discovery_idx < label_idx < discovery_ev_idx < audit_idx
+    assert simulation_idx < simulation_wait_idx < discovery_idx < label_idx < discovery_ev_idx < swing_ldm_idx < swing_bucket_idx < audit_idx
     assert resource_idx < audit_idx
     assert 'run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.swing_lifecycle_audit' in script
     assert 'SWING_THRESHOLD_AI_REVIEW_PROVIDER="${SWING_THRESHOLD_AI_REVIEW_PROVIDER:-none}"' in script
     assert 'RUN_SWING_STRATEGY_DISCOVERY="${THRESHOLD_CYCLE_RUN_SWING_STRATEGY_DISCOVERY:-true}"' in script
+    assert 'RUN_SWING_LIFECYCLE_MATRIX="${THRESHOLD_CYCLE_RUN_SWING_LIFECYCLE_MATRIX:-$RUN_SWING_STRATEGY_DISCOVERY}"' in script
+    assert 'RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY="${THRESHOLD_CYCLE_RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY:-$RUN_SWING_LIFECYCLE_MATRIX}"' in script
 
 
 def test_swing_live_dry_run_defaults_ai_review_provider_to_none():
@@ -112,6 +119,8 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     assert "lifecycle_ai_context=$RUN_LIFECYCLE_AI_CONTEXT" in script
     assert "lifecycle_bucket_discovery=$RUN_LIFECYCLE_BUCKET_DISCOVERY" in script
     assert "runtime_apply_bridge=$RUN_RUNTIME_APPLY_BRIDGE" in script
+    assert "swing_lifecycle_matrix=$RUN_SWING_LIFECYCLE_MATRIX" in script
+    assert "swing_lifecycle_bucket_discovery=$RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY" in script
 
 
 def test_postclose_wrapper_refreshes_market_breadth_before_panic_reports():
@@ -152,10 +161,13 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert "next_stage2_checklist_path()" in script
     assert '"$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_${TARGET_DATE}.json"' in script
+    assert '"$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_${TARGET_DATE}.json"' in script
+    assert '"$PROJECT_DIR/data/report/swing_lifecycle_decision_matrix/swing_lifecycle_decision_matrix_${TARGET_DATE}.json"' in script
+    assert '"$PROJECT_DIR/data/report/swing_lifecycle_bucket_discovery/swing_lifecycle_bucket_discovery_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/runtime_apply_bridge/runtime_apply_bridge_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/runtime_approval_summary/runtime_approval_summary_${TARGET_DATE}.json"' in script
     assert 'wait_for_file_artifact "$(next_stage2_checklist_path)" "next_stage2_checklist"' in script
@@ -164,11 +176,15 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert "run_postclose_cmd env PYTHONPATH=. \"$VENV_PY\" -m src.engine.verify_threshold_cycle_postclose_chain" in script
     assert '"$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json"' in script
     assert "pattern_lab_currentness_audit=$RUN_PATTERN_LAB_CURRENTNESS_AUDIT" in script
+    assert "pattern_lab_ai_review=$RUN_PATTERN_LAB_AI_REVIEW" in script
+    assert "pattern_lab_ai_review_provider=$PATTERN_LAB_AI_REVIEW_PROVIDER" in script
     assert "pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT" in script
     assert "scalp_entry_adm=$RUN_SCALP_ENTRY_ADM" in script
     assert "lifecycle_decision_matrix=$RUN_LIFECYCLE_DECISION_MATRIX" in script
     assert "lifecycle_bucket_discovery=$RUN_LIFECYCLE_BUCKET_DISCOVERY" in script
     assert "runtime_apply_bridge=$RUN_RUNTIME_APPLY_BRIDGE" in script
+    assert "swing_lifecycle_matrix=$RUN_SWING_LIFECYCLE_MATRIX" in script
+    assert "swing_lifecycle_bucket_discovery=$RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY" in script
     assert "ai correction retry target_date=$TARGET_DATE" in script
     assert "ai correction final unavailable" in script
 

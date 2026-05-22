@@ -4,19 +4,22 @@
 - runtime_mutation_allowed: `False`
 - scalping_items/selected: `19` / `3`
 - scalping_legacy_hard_gate_risk_counts: `{'approval_or_contract_required': 2, 'intentional_safety_guard': 4, 'manual_review_required': 2, 'no_unreviewed_hard_gate': 11}`
-- swing_blocked/requested/approved: `14` / `3` / `0`
+- swing_blocked/requested/approved: `14` / `3` / `3`
 - swing_legacy_hard_gate_risk_counts: `{'contract_gap': 4, 'no_unreviewed_hard_gate': 3, 'same_stage_deferred': 2, 'sample_or_contract_gap': 3, 'source_quality_or_approval_required': 1, 'source_quality_or_contract_gap': 1}`
 - panic_approval_requested: `0`
 - scalp_entry_adm_status: `pass`
 - lifecycle_matrix_status: `pass`
 - lifecycle_ai_context prompt/applied: `3` / `3196`
 - swing_strategy_discovery_labeled/pending: `0` / `800`
+- swing_lifecycle_matrix_auto: `0`
+- swing_lifecycle_bucket_auto: `0`
 - institutional_flow_available/join_rate: `True` / `100.0`
-- pattern_lab_currentness_status: `pass`
+- pattern_lab_currentness_status: `warning`
+- pattern_lab_ai_review_status: `warning`
 - pattern_lab_propagation_status: `pass`
 - env_generated_at: `2026-05-21T07:35:01`
-- first_bot_start_at: `2026-05-21T07:40:04`
-- first_bot_start_after_env_at: `2026-05-21T07:40:04`
+- first_bot_start_at: `-`
+- first_bot_start_after_env_at: `-`
 - pre_env_boot_gap: `False`
 
 ## Scalping
@@ -94,9 +97,9 @@
 | `swing_scale_in_ofi_qi_confirmation` | 스윙 추가매수 직전 OFI/QI 확인 신호가 유효한지 보는 축 | 스윙 dry-run/probe 관찰: 실주문 변경 없음 | `freeze` | `source_quality_contract_gap_scale_in_axis` | source-quality blocker close, then scale-in guard contract | 계측/DB/safety 문제로 runtime 변경을 금지한다 | 0.955 | `-` | scale_in_ofi_qi_invalid_micro_context, runtime guard 없음 |
 | `swing_exit_ofi_qi_smoothing` | 스윙 청산 직전 OFI/QI로 EXIT 확정/보류를 다듬을 수 있는지 보는 축 | 스윙 dry-run/probe 관찰: 실주문 변경 없음 | `freeze` | `sample_or_contract_gap_exit_quality_axis` | exit smoothing sample floor + guard contract | 계측/DB/safety 문제로 runtime 변경을 금지한다 | 0.955 | `-` | runtime guard 없음 |
 | `swing_scale_in_real_canary_phase0` | 승인된 실제 스윙 보유분에 한해 PYRAMID/AVG_DOWN 1주 추가매수 canary를 열 수 있는지 보는 정책 축 | 미적용: approval artifact 없이는 실주문 추가매수 금지 | `freeze` | `policy_source_quality_block` | scale-in approval artifact after source-quality pass | 계측/DB/safety 문제로 runtime 변경을 금지한다 | 없음 | `-` | PYRAMID 표본 부족, scale_in_ofi_qi_invalid_micro_context, 최종 exit 수익률 누락, exit-only 비교 누락, 추가매수 MAE 누락 |
-| `swing_model_floor` | 스윙 추천 모델 floor 값을 올리거나 낮출 수 있는지 보는 선택 기준 축 | 스윙 dry-run/probe 관찰: 실주문 변경 없음 | `approval_required` | `approval_route_available` | swing_runtime_approvals artifact -> next PREOPEN dry-run env | approval artifact가 있어야 다음 PREOPEN env 반영 후보가 된다 | 0.955 | `ready` | approval artifact 없음 |
-| `swing_gatekeeper_reject_cooldown` | gatekeeper reject 이후 같은 후보를 다시 볼 cooldown 시간을 조정하는 축 | 스윙 dry-run/probe 관찰: 실주문 변경 없음 | `approval_required` | `approval_route_available` | ML_GATEKEEPER_REJECT_COOLDOWN approval/env route | approval artifact가 있어야 다음 PREOPEN env 반영 후보가 된다 | 0.955 | `ready` | approval artifact 없음 |
-| `swing_one_share_real_canary_phase0` | 승인된 스윙 후보에 한해 초기 BUY/SELL 1주 real canary execution 품질을 수집하는 정책 축 | 미적용: approval artifact 없이는 초기 BUY 실주문 금지 | `approval_required` | `approval_route_available_policy_axis` | one-share approval artifact, global dry-run guard retained | approval artifact가 있어야 다음 PREOPEN env 반영 후보가 된다 | 0.955 | `ready` | 1주 real canary approval artifact 없음 |
+| `swing_model_floor` | 스윙 추천 모델 floor 값을 올리거나 낮출 수 있는지 보는 선택 기준 축 | 스윙 dry-run/probe 관찰: 실주문 변경 없음 | `approval_required` | `approval_route_available` | swing_runtime_approvals artifact -> next PREOPEN dry-run env | approval artifact가 있어야 다음 PREOPEN env 반영 후보가 된다 | 0.955 | `ready` | - |
+| `swing_gatekeeper_reject_cooldown` | gatekeeper reject 이후 같은 후보를 다시 볼 cooldown 시간을 조정하는 축 | 스윙 dry-run/probe 관찰: 실주문 변경 없음 | `approval_required` | `approval_route_available` | ML_GATEKEEPER_REJECT_COOLDOWN approval/env route | approval artifact가 있어야 다음 PREOPEN env 반영 후보가 된다 | 0.955 | `ready` | - |
+| `swing_one_share_real_canary_phase0` | 승인된 스윙 후보에 한해 초기 BUY/SELL 1주 real canary execution 품질을 수집하는 정책 축 | 미적용: approval artifact 없이는 초기 BUY 실주문 금지 | `approval_required` | `approval_route_available_policy_axis` | one-share approval artifact, global dry-run guard retained | approval artifact가 있어야 다음 PREOPEN env 반영 후보가 된다 | 0.955 | `ready` | - |
 
 ## Swing Strategy Discovery Sim
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_2026-05-21.json`
@@ -109,6 +112,24 @@
 - interpretation: source-only exploration. Surviving arms can create future source-quality/workorder inputs but cannot apply runtime env.
 - warnings: `['pending_future_quotes']`
 
+## Swing Lifecycle Matrix
+- artifact: `-`
+- available: `False`
+- total/probe/discovery: `0` / `0` / `0`
+- sim_auto_candidate_count: `0`
+- workorder_count: `0`
+- daily_simulation_consumed: `False`
+- runtime_effect: `False`
+- warnings: `['swing_lifecycle_decision_matrix_missing']`
+
+## Swing Lifecycle Bucket Discovery
+- artifact: `-`
+- available: `False`
+- source_contract_status: `None`
+- surfaced/sim_auto/code_patch: `0` / `0` / `0`
+- runtime_effect: `False`
+- warnings: `['swing_lifecycle_bucket_discovery_missing']`
+
 ## Panic
 | 항목 | 설명 | 현재 적용 | 상태 | Gate 분류 | 튜닝 경로 | 판정 해석 | 점수 | 계약 | 차단/판정 사유 |
 | --- | --- | --- | --- | --- | --- | --- | ---: | --- | --- |
@@ -116,5 +137,11 @@
 | `panic_buy_runner_tp_canary` | 패닉바잉 구간에서 fixed TP 전량청산 대비 runner 유지가 missed upside를 줄이는지 보는 축 | report-only: TP/trailing/live exit 변경 없음 | `freeze` | `-` | - | 계측/DB/safety 문제로 runtime 변경을 금지한다 | 0.45 | `contract_missing` | 소스 품질 차단, panic_buy_orderbook_collector_coverage_gap |
 
 ## Pattern Lab Audits
-- currentness: status=`pass` fail=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-21.json`
+- currentness: status=`warning` fail=`2` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-21.json`
+- ai_review: status=`warning` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-05-21.json`
 - propagation: status=`pass` fail=`0` warnings=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-21.json`
+
+## Warnings
+- `lifecycle_bucket_discovery_missing`
+- `swing_lifecycle_decision_matrix_missing`
+- `swing_lifecycle_bucket_discovery_missing`

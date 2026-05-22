@@ -101,11 +101,14 @@
 
 ## 장중 체크리스트 (09:05~15:20)
 
-- [ ] `[ScalpSimOvernightPrecloseCron0522] 15:20 스캘핑 sim 오버나이트 판정 자동화 첫 운영 확인` (`Due: 2026-05-22`, `Slot: INTRADAY`, `TimeWindow: 15:20~15:30`, `Track: ScalpingLogic`)
+- [x] `[ScalpSimOvernightPrecloseCron0522] 15:20 스캘핑 sim 오버나이트 판정 자동화 첫 운영 확인` (`Due: 2026-05-22`, `Slot: INTRADAY`, `TimeWindow: 15:20~15:30`, `Track: ScalpingLogic`)
   - Source: [run_scalp_sim_overnight_preclose.sh](/home/ubuntu/KORStockScan/deploy/run_scalp_sim_overnight_preclose.sh), [scalp_sim_overnight.py](/home/ubuntu/KORStockScan/src/engine/scalp_sim_overnight.py), [lifecycle_decision_matrix.py](/home/ubuntu/KORStockScan/src/engine/lifecycle_decision_matrix.py)
   - 판정 기준: cron이 `--live-openai`로 실행되고, active 스캘핑 sim position에 대해 `scalp_sim_overnight_decision` 이벤트와 `SELL_TODAY`/`HOLD_OVERNIGHT` 후속 이벤트가 생성되는지 확인한다. report-only 산출물의 `active_undecided_count=0`, `source_quality_status=pass`, OpenAI `overnight_v1` provenance, Bedrock Nova Lite shadow row를 확인한다.
   - 금지: sim overnight action을 hard gate, 실주문, 자동매도, threshold apply, provider route 변경, bot restart 근거로 쓰지 않는다. LDM feature/source row로만 소비한다.
   - 다음 액션: `preclose_overnight_pass`, `fail_active_undecided_source_quality`, `fail_cron_or_openai`, `warning_bedrock_shadow_missing` 중 하나로 닫는다.
+  - 완료 기록 (`2026-05-22 15:40 KST`): 판정=`warning`, 다음 액션=`warning_bedrock_shadow_missing`. cron은 `15:20:01` `--live-openai` wrapper로 시작해 `15:20:34` [scalp_sim_overnight_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/scalp_sim_overnight/scalp_sim_overnight_2026-05-22.json)과 [scalp_sim_overnight_2026-05-22.md](/home/ubuntu/KORStockScan/data/report/scalp_sim_overnight/scalp_sim_overnight_2026-05-22.md)를 생성하고 `[DONE]`으로 닫혔다.
+  - 근거: report summary는 `decision_target=20`, `active_before=20`, `sell_today=20`, `hold_overnight=0`, `active_after=0`, `carry_open_count=0`, `ai_success=20`, `ai_*_fallback=0`, `source_quality_status=pass`, `source_quality_warnings=[]`다. [pipeline_events_2026-05-22.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-05-22.jsonl)와 [threshold_events_2026-05-22.jsonl](/home/ubuntu/KORStockScan/data/threshold_cycle/threshold_events_2026-05-22.jsonl)는 각각 `scalp_sim_overnight_decision=20`, `scalp_sim_overnight_sell_today=20`, `scalp_sim_sell_order_assumed_filled(exit_rule=scalp_sim_overnight_sell_today)=20`을 남겼다. OpenAI provenance는 `ai_result_source=live`, `openai_schema_name=overnight_v1`, `openai_model=gpt-5.4-mini`로 확인했다.
+  - 보류/주의: [bedrock_nova_lite_shadow_2026-05-22.jsonl](/home/ubuntu/KORStockScan/data/report/bedrock_nova_lite_shadow/bedrock_nova_lite_shadow_2026-05-22.jsonl)은 overnight shadow row `19/20`이며 `SCALPSIM-354320-1779427802278-8ee536` 1건이 누락됐다. shadow row 19건은 `pipeline_stage=overnight`, `source_event_stage=scalp_sim_overnight_decision`, `endpoint_name=overnight`, `parse_ok=true`, `action_match=true`다. 누락은 source-quality warning으로만 보고, sim overnight 결과를 provider route 변경이나 실주문/자동매도 근거로 사용하지 않는다.
 
 - [x] `[RuntimeEnvIntradayObserve0522] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-05-22`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-21.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-21.json)
@@ -128,10 +131,11 @@
   - 다음 액션: source-quality split, active state 복원, open/closed count를 같이 기록한다.
   - 완료 기록 (`2026-05-22 09:36 KST`): 판정=`pass`, 다음 액션=`sim_probe_source_quality_split_present`. 장중 이벤트에서 `actual_order_submitted=False` 7544건, `broker_order_forbidden=True` 6008건, `decision_authority=sim_observation_only` 5303건, `simulation_book=scalp_ai_buy_all` 5303건을 확인했다. sim/probe source는 `panic_lifecycle_actuator`, `scalp_sim_candidate_window_expansion`, `scalp_sim_ai_budget_manager`, `swing_intraday_live_equiv_probe` 등으로 분리되어 있고, `source_quality_only` 8526건도 별도 authority로 남는다. sim/probe EV 또는 panic lifecycle source를 broker execution 품질이나 실주문 전환 근거로 사용하지 않았다.
 
-- RunbookOps 현재 기록: `[IntradayAutomationHealthCheck20260522] 장중 자동화체인 상태 확인` (`Due: 2026-05-22`, `Slot: INTRADAY`, `TimeWindow: 09:05~15:30`, `Track: RunbookOps`)
+- RunbookOps 운영 확인 기록: `[IntradayAutomationHealthCheck20260522] 장중 자동화체인 상태 확인` (`Due: 2026-05-22`, `Slot: INTRADAY`, `TimeWindow: 09:05~15:30`, `Track: RunbookOps`)
   - Source: [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md), [error_detection_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/error_detection/error_detection_2026-05-22.json), [run_buy_funnel_sentinel_cron.log](/home/ubuntu/KORStockScan/logs/run_buy_funnel_sentinel_cron.log), [run_holding_exit_sentinel_cron.log](/home/ubuntu/KORStockScan/logs/run_holding_exit_sentinel_cron.log), [run_panic_sell_defense_cron.log](/home/ubuntu/KORStockScan/logs/run_panic_sell_defense_cron.log), [run_panic_buying_cron.log](/home/ubuntu/KORStockScan/logs/run_panic_buying_cron.log)
-  - 현재 기록 (`2026-05-22 09:36 KST`): 판정=`pass_so_far`, Tuning Chain Control State=`GREEN`, blocked_stage=`-`. `buy_funnel_sentinel`, `holding_exit_sentinel`, `panic_sell_defense`, `panic_buying`은 09:35~09:36 최신 run에서 `[DONE]`이며, [error_detection_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/error_detection/error_detection_2026-05-22.json)은 `summary_severity=pass`다. `12:05` intraday calibration은 후속 검토에서 scheduled chain에서 제거됐으므로 현재 cron completion 필수 확인 대상이 아니다.
-  - 다음 액션: 15:20 `ScalpSimOvernightPrecloseCron0522` 완료 후 최종 `pass|warning|fail`로 닫는다.
+  - 완료 기록 (`2026-05-22 15:40 KST`): 판정=`warning`, Tuning Chain Control State=`YELLOW`, blocked_stage=`shadow_coverage`. [error_detection_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/error_detection/error_detection_2026-05-22.json)은 `summary_severity=pass`이고 `cron_completion`, `log_scanner`, `kiwoom_auth_8005_restart`, `process_health`, `artifact_freshness`, `resource_usage`, `stale_lock`가 모두 `pass`다. `scalp_sim_overnight_preclose_status=pass`, `buy_funnel_sentinel_status=pass`, `holding_exit_sentinel_status=pass`, `panic_sell_defense_status=pass`, `panic_buying_status=pass`, `system_metric_sampler_status=pass`로 장중 필수 체인은 정상이다.
+  - 보류/주의: 15:20 `ScalpSimOvernightPrecloseCron0522`는 cron/OpenAI/source-quality/후속 이벤트가 모두 정상이나 Bedrock Nova Lite overnight shadow가 `19/20`으로 1건 부족해 `warning_bedrock_shadow_missing`으로 닫았다. 이 경고는 shadow source-quality 범위이며 runtime threshold, order/provider route, bot restart, 실주문 정책 변경 근거가 아니다.
+  - 다음 액션: 16:10 이후 postclose chain과 `BedrockNovaLiteTier2PromotionReview0522`에서 shadow coverage gap을 source-quality 입력으로만 확인한다. 장중 확인 결과로 runtime mutation은 수행하지 않았다.
 
 - [x] `[NoonCronResourceIncident0522] 12시 이후 cron resource fail 및 봇 복구/재발방지 반영` (`Due: 2026-05-22`, `Slot: INTRADAY`, `TimeWindow: 12:30~12:40`, `Track: RunbookOps`)
   - Source: [threshold_cycle_calibration_intraday_cron.log](/home/ubuntu/KORStockScan/logs/threshold_cycle_calibration_intraday_cron.log), [system_metric_samples.jsonl](/home/ubuntu/KORStockScan/logs/system_metric_samples.jsonl), [error_detection_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/error_detection/error_detection_2026-05-22.json), [run_threshold_cycle_calibration.sh](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_calibration.sh), [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
@@ -187,3 +191,18 @@
   - 다음 액션: 변경이 있으면 기준문서와 checklist를 함께 갱신하고 cohort 잠금 필드를 남긴다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
+
+<!-- AUTO_SERVER_COMPARISON_START -->
+### 본서버 vs songstockscan 자동 비교 (`2026-05-22 15:46:52`)
+
+- 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
+- 상세 리포트: `data/report/server_comparison/server_comparison_2026-05-22.md`
+- `Trade Review`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Performance Tuning`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Post Sell Feedback`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Entry Pipeline Flow`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+<!-- AUTO_SERVER_COMPARISON_END -->

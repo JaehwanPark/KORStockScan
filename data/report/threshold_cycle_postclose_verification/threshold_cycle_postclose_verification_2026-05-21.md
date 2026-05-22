@@ -1,20 +1,21 @@
 # Threshold Cycle Postclose Verification - 2026-05-21
 
-- status: `pass_with_pending_done_marker`
+- status: `fail`
 - latest_start_marker: `[START] threshold-cycle postclose target_date=2026-05-21 max_iterations=80 started_at=2026-05-21T16:10:01+0900`
 - latest_done_marker: `-`
-- predecessor_status: `pass_pending_done_marker`
+- predecessor_status: `fail`
 - predecessor_wait_count: `0`
 - predecessor_timeout_count: `0`
-- log_issues: `[]`
+- log_issues: `['postclose_done_marker_missing']`
 
 ## Execution Profile
-- profile_status: `pending_done_marker`
+- profile_status: `done_marker_missing`
 - disabled_stage_flags: `[]`
 - missing_required_flags: `[]`
-- interpretation: `wrapper-internal verification passed required artifacts; final DONE marker is checked by a later health check`
+- interpretation: `latest START marker has no matching DONE marker`
 - missing_required_artifacts: `[]`
 - missing_downstream_links: `[]`
+- stale_downstream_links: `[]`
 
 ## AI Correction
 - status: `pass`
@@ -61,12 +62,34 @@
 - missing_workorder_order_ids: `[]`
 - interpretation: `LDM overnight bucket candidates and workorders propagated to threshold EV, runtime summary, and code workorder.`
 
+## Lifecycle Bucket Discovery Handoff
+- status: `missing`
+- source_contract_status: `-`
+- ai_two_pass_review_status: `-`
+- expected_candidate_ids: `[]`
+- live_auto_apply_families: `[]`
+- missing_bridge_families: `[]`
+- missing_runtime_summary_candidate_ids: `[]`
+- workorder_needed_bucket_ids: `[]`
+- ai_post_apply_followup_bucket_ids: `[]`
+- warnings: `[]`
+- interpretation: `lifecycle bucket discovery report missing`
+
+## Swing Lifecycle Handoff
+- status: `missing`
+- expected_candidate_ids: `[]`
+- missing_ev_candidate_ids: `[]`
+- missing_runtime_summary_candidate_ids: `[]`
+- missing_workorder_order_ids: `[]`
+- daily_simulation_consumed: `False`
+- interpretation: `Swing LDM report missing`
+
 ## Workorder Snapshot
-- generation_id: `2026-05-21-16f7750b449e`
-- source_hash: `16f7750b449e1d042c227fc2486b758606989a639a73c64efe835add754ce9aa`
+- generation_id: `2026-05-21-0727d489f91d`
+- source_hash: `0727d489f91dc083bd3e20261d46a6777f961c0f2c76f7f5fddec7b4dfedc2b4`
 - snapshot_status: `source_changed_with_lineage`
-- previous_generation_id: `2026-05-21-bd7e0459a9e4`
-- previous_source_hash: `bd7e0459a9e460d343c654e73ce3b43e773b264a04eb77977ba72805a4f1d1c4`
-- new_order_ids: `[]`
-- removed_order_ids: `['order_ai_source_quality_not_evaluated_provenance', 'order_high_volume_diagnostic_stage_contract_labels']`
+- previous_generation_id: `2026-05-21-87cba26c3580`
+- previous_source_hash: `87cba26c3580095b57e93194a3283d5ad3420f557f41438e3bf1e449aaf87f73`
+- new_order_ids: `['order_pattern_lab_ai_review_currentness_scalping_ldm_threshold_reentry_sources', 'order_pattern_lab_ai_review_currentness_swing_ldm_threshold_reentry_sources']`
+- removed_order_ids: `['order_pattern_lab_currentness_audit_pattern_lab_ai_review_contract']`
 - decision_changed_order_ids: `[]`

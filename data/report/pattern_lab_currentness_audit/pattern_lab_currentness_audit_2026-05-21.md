@@ -2,12 +2,12 @@
 
 ## Summary
 
-- status: `pass`
+- status: `warning`
 - runtime_effect: `False`
 - decision_authority: `source_quality_only`
-- check_count: `12`
-- fail_count: `0`
-- code_improvement_orders: `0`
+- check_count: `15`
+- fail_count: `2`
+- code_improvement_orders: `2`
 
 ## Checks
 
@@ -94,3 +94,24 @@
 - severity: `info`
 - finding: DeepSeek swing sim/probe/dry-run outputs must include actual_order_submitted/broker_order_forbidden/decision_authority provenance.
 - sources: `['analysis/deepseek_swing_pattern_lab/outputs/data_quality_report.json']`
+
+### `scalping_ldm_threshold_reentry_sources`
+
+- status: `fail`
+- severity: `automation_handoff_gap`
+- finding: Scalping pattern labs must consume threshold_cycle_ev, lifecycle_decision_matrix, and lifecycle_bucket_discovery as re-entry sources so LDM/threshold outcomes improve the next lab run.
+- sources: `['analysis/gemini_scalping_pattern_lab', 'analysis/claude_scalping_pattern_lab']`
+
+### `swing_ldm_threshold_reentry_sources`
+
+- status: `fail`
+- severity: `automation_handoff_gap`
+- finding: DeepSeek swing pattern lab must consume threshold_cycle_ev, swing_lifecycle_decision_matrix, swing_lifecycle_bucket_discovery, and swing_strategy_discovery_ev as re-entry sources.
+- sources: `['analysis/deepseek_swing_pattern_lab']`
+
+### `pattern_lab_ai_review_contract`
+
+- status: `pass`
+- severity: `info`
+- finding: Pattern lab must have a source-only two-pass AI reviewer contract: first interpretation, second-pass audit, and final conclusions that re-rank findings against LDM/threshold/workorder feedback and emit explicit source-quality gaps.
+- sources: `['src/engine', 'analysis/gemini_scalping_pattern_lab', 'analysis/claude_scalping_pattern_lab', 'analysis/deepseek_swing_pattern_lab']`

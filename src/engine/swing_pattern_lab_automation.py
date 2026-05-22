@@ -15,6 +15,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEEPSEEK_SWING_LAB_DIR = PROJECT_ROOT / "analysis" / "deepseek_swing_pattern_lab"
 SWING_PATTERN_LAB_AUTOMATION_DIR = REPORT_DIR / "swing_pattern_lab_automation"
 AUTOMATION_SCHEMA_VERSION = 1
+DECISION_AUTHORITY = "swing_pattern_lab_analysis_workorder_source_only"
+FORBIDDEN_USES = [
+    "swing_real_order_enable",
+    "one_share_real_canary",
+    "scale_in_real_canary",
+    "runtime_threshold_mutation",
+    "provider_route_change",
+    "bot_restart",
+    "recommendation_history_replace",
+]
 
 SWING_TARGET_SUBSYSTEM_MAP = {
     "selection": "swing_model_selection",
@@ -167,8 +177,10 @@ def _classify_order(order: dict[str, Any], data_quality_warnings: list[str]) -> 
         return {
             **order,
             "decision": "design_family_candidate",
-            "decision_reason": "New threshold family candidate; allowed_runtime_apply remains false until closed.",
-            "automation_reentry": "Create report-only family metadata first; only later can auto_bounded_live consider it.",
+            "decision_reason": (
+                "Pattern lab can only propose source-only family design input; allowed_runtime_apply remains false."
+            ),
+            "automation_reentry": "Create report-only family metadata and validate through Swing LDM before runtime approval review.",
         }
 
     return {
@@ -268,7 +280,7 @@ def _ofi_qi_instrumentation_provenance(
             "status": "pass",
             "runtime_effect": False,
             "allowed_runtime_apply": False,
-            "decision_authority": "source_quality_only",
+            "decision_authority": DECISION_AUTHORITY,
         },
     ]
     return {
@@ -279,7 +291,7 @@ def _ofi_qi_instrumentation_provenance(
             "implemented_scope": "instrumentation_report_provenance_only",
             "runtime_effect": False,
             "allowed_runtime_apply": False,
-            "decision_authority": "source_quality_only",
+            "decision_authority": DECISION_AUTHORITY,
             "source_quality_blocked_families": source_quality_blocked_families,
             "next_postclose_metric": "swing_ofi_qi_quality_score",
         },
@@ -326,10 +338,19 @@ def build_swing_pattern_lab_automation_report(target_date: str) -> dict[str, Any
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "owner": "DeepSeekSwingPatternLabAutomation",
+        "runtime_effect": False,
         "runtime_change": False,
+        "runtime_mutation_allowed": False,
+        "allowed_runtime_apply": False,
+        "decision_authority": DECISION_AUTHORITY,
         "policy": {
+            "role": "analysis_review_source_quality_and_workorder_source",
             "runtime_patch_automation": False,
+            "direct_family_design_authority": False,
+            "downstream_route": "threshold_cycle_ev -> code_improvement_workorder -> implementation_review",
+            "swing_lifecycle_owner": "swing_lifecycle_decision_matrix",
             "user_intervention_point": "generated code improvement workorder is pasted into Codex manually",
+            "forbidden_uses": FORBIDDEN_USES,
         },
         "source_reports": {
             "swing_pattern_analysis_result": str(paths["analysis_result"]),
@@ -346,6 +367,8 @@ def build_swing_pattern_lab_automation_report(target_date: str) -> dict[str, Any
             "population_split_available": freshness["fresh"],
             "source_quality_blocked_family_count": len(source_quality_blocked_families),
             "source_quality_blocked_families": source_quality_blocked_families,
+            "decision_authority": DECISION_AUTHORITY,
+            "runtime_mutation_allowed": False,
         },
         "consensus_findings": [
             {
@@ -371,7 +394,11 @@ def build_swing_pattern_lab_automation_report(target_date: str) -> dict[str, Any
                 "target_metric": "daily_ev_delta_or_missed_upside_reduction",
                 "proposed_runtime_touchpoint": SWING_TARGET_SUBSYSTEM_MAP.get(f.get("lifecycle_stage", ""), "swing_logic"),
                 "implementation_order_id": f"order_{f.get('finding_id', '')}",
+                "runtime_effect": False,
                 "allowed_runtime_apply": False,
+                "decision_authority": DECISION_AUTHORITY,
+                "candidate_role": "analysis_only_family_design_input",
+                "forbidden_uses": FORBIDDEN_USES,
             }
             for f in findings
             if isinstance(f, dict) and f.get("route") == "design_family_candidate"
@@ -397,8 +424,10 @@ def build_swing_pattern_lab_automation_report(target_date: str) -> dict[str, Any
                 "files_likely_touched": o.get("files_likely_touched") or [],
                 "acceptance_tests": o.get("acceptance_tests") or [],
                 "automation_reentry": o.get("automation_reentry"),
+                "decision_authority": DECISION_AUTHORITY,
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
+                "forbidden_uses": FORBIDDEN_USES,
                 **_ofi_qi_instrumentation_provenance(o, ofi_qi_quality, source_quality_blocked_families),
             }
             for o in all_orders
@@ -435,6 +464,8 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- data_quality_warning_count: `{summary.get('data_quality_warning_count')}`",
         f"- carryover_warning_count: `{summary.get('carryover_warning_count')}`",
         f"- runtime_change: `{report.get('runtime_change')}`",
+        f"- decision_authority: `{report.get('decision_authority')}`",
+        f"- runtime_mutation_allowed: `{report.get('runtime_mutation_allowed')}`",
         "",
         "## Consensus Findings",
     ]

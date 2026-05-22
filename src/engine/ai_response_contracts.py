@@ -299,6 +299,92 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
         },
         "required": ["schema_version", "interpretation", "audit", "final_conclusions"],
     },
+    "pattern_lab_ai_review_v1": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "schema_version": {"type": "integer", "enum": [1]},
+            "interpretation": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "review_items": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "review_id": {"type": "string"},
+                                "domain": {"type": "string", "enum": ["scalping", "swing", "cross_domain"]},
+                                "interpreted_state": {
+                                    "type": "string",
+                                    "enum": [
+                                        "source_only_keep_collecting",
+                                        "automation_handoff_gap",
+                                        "source_quality_gap",
+                                        "ai_review_gap",
+                                        "code_patch_required",
+                                    ],
+                                },
+                                "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+                                "reason": {"type": "string"},
+                            },
+                            "required": ["review_id", "domain", "interpreted_state", "confidence", "reason"],
+                        },
+                    },
+                    "source_feedback_status": {
+                        "type": "string",
+                        "enum": ["pass", "warning", "fail", "insufficient_context"],
+                    },
+                },
+                "required": ["review_items", "source_feedback_status"],
+            },
+            "audit": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "status": {"type": "string", "enum": ["pass", "correction_required", "insufficient_context"]},
+                    "issues": {"type": "array", "items": {"type": "string"}},
+                    "forbidden_use_violations": {"type": "array", "items": {"type": "string"}},
+                    "reason": {"type": "string"},
+                },
+                "required": ["status", "issues", "forbidden_use_violations", "reason"],
+            },
+            "final_conclusions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "review_id": {"type": "string"},
+                        "domain": {"type": "string", "enum": ["scalping", "swing", "cross_domain"]},
+                        "final_state": {
+                            "type": "string",
+                            "enum": [
+                                "source_only_keep_collecting",
+                                "automation_handoff_gap",
+                                "source_quality_gap",
+                                "ai_review_gap",
+                                "code_patch_required",
+                            ],
+                        },
+                        "final_decision": {"type": "string", "enum": ["keep", "surface_workorder", "block_runtime_use"]},
+                        "reason": {"type": "string"},
+                        "required_followup": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": [
+                        "review_id",
+                        "domain",
+                        "final_state",
+                        "final_decision",
+                        "reason",
+                        "required_followup",
+                    ],
+                },
+            },
+        },
+        "required": ["schema_version", "interpretation", "audit", "final_conclusions"],
+    },
     "lifecycle_ai_context_v1": {
         "type": "object",
         "additionalProperties": False,

@@ -57,11 +57,15 @@ def test_pattern_lab_automation_builds_consensus_orders_and_family_candidates(tm
     report = mod.build_scalping_pattern_lab_automation_report("2026-05-08")
 
     assert report["runtime_effect"] is False
+    assert report["runtime_mutation_allowed"] is False
+    assert report["decision_authority"] == "pattern_lab_analysis_workorder_source_only"
     assert report["lab_freshness"]["gemini"]["fresh"] is True
     assert report["lab_freshness"]["claude"]["fresh"] is True
     assert any(item["mapped_family"] == "score65_74_recovery_probe" for item in report["consensus_findings"])
     assert any(item["target_subsystem"] == "runtime_instrumentation" for item in report["code_improvement_orders"])
+    assert all(item["allowed_runtime_apply"] is False for item in report["code_improvement_orders"])
     assert report["auto_family_candidates"]
+    assert report["auto_family_candidates"][0]["runtime_effect"] is False
     assert report["auto_family_candidates"][0]["allowed_runtime_apply"] is False
     assert report["ev_report_summary"]["consensus_count"] >= 2
     assert report["ev_report_summary"]["code_improvement_order_count"] >= 2

@@ -30,7 +30,10 @@ def _seed_labs(project_root: Path, target_date: str) -> None:
         _write_json(outputs / "ev_analysis_result.json", {"schema_version": 2, "metric_contract": _metric_contract()})
         _write_json(outputs / "tuning_observability_summary.json", {"schema_version": 2, "metric_contract": _metric_contract()})
         _write_json(outputs / "run_manifest.json", {"run_at": target_date, "history_coverage_end": target_date})
-        (lab_dir / "README.md").write_text("report_only_observation\n", encoding="utf-8")
+        (lab_dir / "README.md").write_text(
+            "report_only_observation\nthreshold_cycle_ev\nlifecycle_decision_matrix\nlifecycle_bucket_discovery\n",
+            encoding="utf-8",
+        )
         (lab_dir / "config.py").write_text('INCLUDE_REMOTE = os.getenv("PATTERN_LAB_INCLUDE_REMOTE", "false")\n', encoding="utf-8")
         (lab_dir / "prepare_dataset.py").write_text(
             "TRADE_FACT_COLUMNS = []\npd.DataFrame(columns=TRADE_FACT_COLUMNS).to_csv(path)\n",
@@ -46,7 +49,21 @@ def _seed_labs(project_root: Path, target_date: str) -> None:
         {"schema_version": 2, "sim_probe_provenance": {"trade_fact_actual_order_submitted_false": 1}},
     )
     _write_json(outputs / "run_manifest.json", {"analysis_window": {"start": target_date, "end": target_date}})
-    (deep_dir / "README.md").write_text("report_only_observation\n", encoding="utf-8")
+    (deep_dir / "README.md").write_text(
+        "report_only_observation\nthreshold_cycle_ev\nswing_lifecycle_decision_matrix\n"
+        "swing_lifecycle_bucket_discovery\nswing_strategy_discovery_ev\n",
+        encoding="utf-8",
+    )
+
+    engine_dir = project_root / "src" / "engine"
+    engine_dir.mkdir(parents=True, exist_ok=True)
+    (engine_dir / "pattern_lab_ai_review.py").write_text(
+        "FORBIDDEN_USES = []\n"
+        "runtime_effect = False\n"
+        "allowed_runtime_apply = False\n"
+        "ai_two_pass_review = {'interpretation': {}, 'audit': {}, 'final_conclusions': []}\n",
+        encoding="utf-8",
+    )
 
 
 def test_currentness_audit_passes_when_contracts_and_guards_exist(tmp_path, monkeypatch):
@@ -97,3 +114,36 @@ def test_currentness_audit_emits_runtime_false_orders_for_gaps(tmp_path, monkeyp
     assert "order_pattern_lab_currentness_audit_deepseek_sim_probe_provenance" in order_ids
     assert all(order["runtime_effect"] is False for order in report["code_improvement_orders"])
     assert all(order["allowed_runtime_apply"] is False for order in report["code_improvement_orders"])
+
+
+def test_currentness_audit_surfaces_pattern_lab_feedback_and_ai_review_gaps(tmp_path, monkeypatch):
+    project_root = tmp_path
+    report_dir = project_root / "data" / "report"
+    target_date = "2026-05-15"
+    _seed_labs(project_root, target_date)
+
+    (project_root / "analysis" / "gemini_scalping_pattern_lab" / "README.md").write_text(
+        "report_only_observation\n",
+        encoding="utf-8",
+    )
+    (project_root / "analysis" / "claude_scalping_pattern_lab" / "README.md").write_text(
+        "report_only_observation\n",
+        encoding="utf-8",
+    )
+    (project_root / "analysis" / "deepseek_swing_pattern_lab" / "README.md").write_text(
+        "report_only_observation\n",
+        encoding="utf-8",
+    )
+    (project_root / "src" / "engine" / "pattern_lab_ai_review.py").unlink()
+
+    monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+
+    report = mod.build_pattern_lab_currentness_audit(target_date)
+
+    assert report["status"] == "warning"
+    order_ids = {order["order_id"] for order in report["code_improvement_orders"]}
+    assert "order_pattern_lab_currentness_audit_scalping_ldm_threshold_reentry_sources" in order_ids
+    assert "order_pattern_lab_currentness_audit_swing_ldm_threshold_reentry_sources" in order_ids
+    assert "order_pattern_lab_currentness_audit_pattern_lab_ai_review_contract" in order_ids
+    assert all(order["runtime_effect"] is False for order in report["code_improvement_orders"])

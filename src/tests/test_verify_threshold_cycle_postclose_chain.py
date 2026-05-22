@@ -88,6 +88,14 @@ def test_lifecycle_bucket_discovery_handoff_fails_source_contract_fail():
     assert "lifecycle_bucket_discovery_source_contract_fail" in report["missing"]
 
 
+def test_consumer_stale_detects_generated_at_ordering():
+    consumer = {"generated_at": "2026-05-12T21:20:00+09:00"}
+    source = {"generated_at": "2026-05-12T21:21:00+09:00"}
+
+    assert mod._consumer_stale(consumer, source) is True
+    assert mod._consumer_stale(source, consumer) is False
+
+
 def _write_adm_artifact(report_dir: Path, target_date: str = "2026-05-12") -> Path:
     path = (
         report_dir

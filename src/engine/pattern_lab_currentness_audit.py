@@ -34,6 +34,19 @@ REQUIRED_METRIC_CONTRACT_FIELDS = (
     "runtime_effect",
 )
 FORBIDDEN_TERMS = ("shadow-only", "canary-ready")
+ACTIVE_SOURCE_SUFFIXES = {".py", ".md", ".sh", ".txt", ".json"}
+
+SCALPING_REENTRY_TERMS = (
+    "threshold_cycle_ev",
+    "lifecycle_decision_matrix",
+    "lifecycle_bucket_discovery",
+)
+SWING_REENTRY_TERMS = (
+    "threshold_cycle_ev",
+    "swing_lifecycle_decision_matrix",
+    "swing_lifecycle_bucket_discovery",
+    "swing_strategy_discovery_ev",
+)
 
 
 def report_paths(target_date: str) -> tuple[Path, Path]:
@@ -165,9 +178,8 @@ def _observability_contract_ok(path: Path) -> bool:
 
 def _scan_forbidden_terms(lab_dir: Path) -> list[dict[str, Any]]:
     hits: list[dict[str, Any]] = []
-    allowed_suffixes = {".py", ".md", ".sh", ".txt", ".json"}
     for path in sorted(lab_dir.rglob("*")):
-        if not path.is_file() or path.suffix not in allowed_suffixes:
+        if not path.is_file() or path.suffix not in ACTIVE_SOURCE_SUFFIXES:
             continue
         parts = set(path.relative_to(lab_dir).parts)
         if "outputs" in parts or "__pycache__" in parts:
@@ -181,6 +193,59 @@ def _scan_forbidden_terms(lab_dir: Path) -> list[dict[str, Any]]:
                 line_no = text.count("\n", 0, match.start()) + 1
                 hits.append({"path": path, "line": line_no, "term": term})
     return hits
+
+
+def _active_source_text(paths: list[Path]) -> str:
+    chunks: list[str] = []
+    for base in paths:
+        if not base.exists():
+            continue
+        files = [base] if base.is_file() else sorted(base.rglob("*"))
+        for path in files:
+            if not path.is_file() or path.suffix not in ACTIVE_SOURCE_SUFFIXES:
+                continue
+            try:
+                rel_parts = set(path.relative_to(base).parts) if base.is_dir() else set()
+            except ValueError:
+                rel_parts = set(path.parts)
+            if "outputs" in rel_parts or "__pycache__" in rel_parts:
+                continue
+            try:
+                chunks.append(path.read_text(encoding="utf-8"))
+            except UnicodeDecodeError:
+                continue
+    return "\n".join(chunks).lower()
+
+
+def _source_mentions_all(paths: list[Path], terms: tuple[str, ...]) -> bool:
+    text = _active_source_text(paths)
+    return bool(text) and all(term.lower() in text for term in terms)
+
+
+def _pattern_lab_ai_review_contract_ok() -> bool:
+    candidates = [
+        PROJECT_ROOT / "src" / "engine" / "pattern_lab_ai_review.py",
+        PROJECT_ROOT / "src" / "engine" / "pattern_lab_ai_reviewer.py",
+    ]
+    required_terms = (
+        "ai_two_pass_review",
+        "interpretation",
+        "audit",
+        "final_conclusions",
+        "runtime_effect",
+        "allowed_runtime_apply",
+        "FORBIDDEN_USES",
+    )
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        if all(term in text for term in required_terms):
+            return True
+    return False
 
 
 def _manifest_covers_target(path: Path, target_date: str) -> bool:
@@ -306,6 +371,91 @@ def build_pattern_lab_currentness_audit(target_date: str) -> dict[str, Any]:
             order_title="Add DeepSeek swing sim/probe provenance",
             files_likely_touched=["analysis/deepseek_swing_pattern_lab/prepare_dataset.py"],
             acceptance_tests=["PYTHONPATH=. .venv/bin/pytest -q src/tests/test_deepseek_swing_pattern_lab.py"],
+        )
+    )
+
+    scalping_lab_dirs = [
+        paths["gemini_scalping"]["lab_dir"],
+        paths["claude_scalping"]["lab_dir"],
+    ]
+    checks.append(
+        _check(
+            check_id="scalping_ldm_threshold_reentry_sources",
+            ok=_source_mentions_all(scalping_lab_dirs, SCALPING_REENTRY_TERMS),
+            finding=(
+                "Scalping pattern labs must consume threshold_cycle_ev, lifecycle_decision_matrix, "
+                "and lifecycle_bucket_discovery as re-entry sources so LDM/threshold outcomes improve the next lab run."
+            ),
+            source_paths=scalping_lab_dirs,
+            severity="automation_handoff_gap",
+            order_title="Feed LDM/threshold feedback into scalping pattern labs",
+            files_likely_touched=[
+                "analysis/gemini_scalping_pattern_lab/build_dataset.py",
+                "analysis/gemini_scalping_pattern_lab/build_llm_payload.py",
+                "analysis/claude_scalping_pattern_lab/prepare_dataset.py",
+                "analysis/claude_scalping_pattern_lab/build_claude_payload.py",
+                "src/engine/pattern_lab_currentness_audit.py",
+            ],
+            acceptance_tests=[
+                "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_currentness_audit.py",
+                "pattern lab payloads include LDM bucket/discovery and threshold EV feedback context with runtime_effect=false",
+            ],
+        )
+    )
+
+    checks.append(
+        _check(
+            check_id="swing_ldm_threshold_reentry_sources",
+            ok=_source_mentions_all([paths["deepseek_swing"]["lab_dir"]], SWING_REENTRY_TERMS),
+            finding=(
+                "DeepSeek swing pattern lab must consume threshold_cycle_ev, swing_lifecycle_decision_matrix, "
+                "swing_lifecycle_bucket_discovery, and swing_strategy_discovery_ev as re-entry sources."
+            ),
+            source_paths=[paths["deepseek_swing"]["lab_dir"]],
+            severity="automation_handoff_gap",
+            order_title="Feed Swing LDM/discovery feedback into DeepSeek swing pattern lab",
+            files_likely_touched=[
+                "analysis/deepseek_swing_pattern_lab/prepare_dataset.py",
+                "analysis/deepseek_swing_pattern_lab/build_deepseek_payload.py",
+                "analysis/deepseek_swing_pattern_lab/prompts/prompt_swing_lifecycle_patterns.md",
+                "src/engine/pattern_lab_currentness_audit.py",
+            ],
+            acceptance_tests=[
+                "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_deepseek_swing_pattern_lab.py src/tests/test_pattern_lab_currentness_audit.py",
+                "DeepSeek payload summary/cases expose Swing LDM bucket/discovery and threshold EV feedback context with runtime_effect=false",
+            ],
+        )
+    )
+
+    checks.append(
+        _check(
+            check_id="pattern_lab_ai_review_contract",
+            ok=_pattern_lab_ai_review_contract_ok(),
+            finding=(
+                "Pattern lab must have a source-only two-pass AI reviewer contract: first interpretation, second-pass audit, "
+                "and final conclusions that re-rank findings against LDM/threshold/workorder feedback and emit explicit "
+                "source-quality gaps."
+            ),
+            source_paths=[
+                PROJECT_ROOT / "src" / "engine",
+                PROJECT_ROOT / "analysis" / "gemini_scalping_pattern_lab",
+                PROJECT_ROOT / "analysis" / "claude_scalping_pattern_lab",
+                PROJECT_ROOT / "analysis" / "deepseek_swing_pattern_lab",
+            ],
+            severity="ai_review_gap",
+            order_title="Add source-only Pattern Lab AI reviewer",
+            files_likely_touched=[
+                "src/engine/pattern_lab_ai_review.py",
+                "deploy/run_threshold_cycle_postclose.sh",
+                "src/engine/threshold_cycle_ev_report.py",
+                "src/engine/runtime_approval_summary.py",
+                "src/engine/build_code_improvement_workorder.py",
+                "src/engine/pattern_lab_currentness_audit.py",
+            ],
+            acceptance_tests=[
+                "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_currentness_audit.py src/tests/test_threshold_cycle_wrappers.py src/tests/test_build_code_improvement_workorder.py",
+                "AI reviewer output must be runtime_effect=false, allowed_runtime_apply=false, and forbidden from order/provider/bot/threshold mutation",
+            ],
         )
     )
 

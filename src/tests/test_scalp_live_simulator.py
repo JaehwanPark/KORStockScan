@@ -1,3 +1,5 @@
+import json
+import os
 from dataclasses import replace
 
 import pytest
@@ -37,6 +39,7 @@ def _reset_state(monkeypatch, tmp_path):
     monkeypatch.setattr(state_handlers, "ALERTED_STOCKS", set())
     monkeypatch.setattr(state_handlers, "LAST_LOG_TIMES", {})
     monkeypatch.setattr(state_handlers, "SCALP_SIM_STATE_PATH", tmp_path / "scalp_live_sim_state.json")
+    monkeypatch.setattr(state_handlers, "_SCALP_SIM_STATE_LAST_SEEN_MTIME_NS", None)
     monkeypatch.setattr(state_handlers, "record_sim_post_sell_candidate", lambda **kwargs: None)
     state_handlers._SCALP_SIM_AI_CALL_TIMES.clear()
     captured_pipeline_events = []
@@ -1415,6 +1418,130 @@ def test_sync_scalp_simulator_targets_restores_state_rows(monkeypatch, tmp_path)
     assert result["removed"] == 0
     assert result["restored"] == 1
     assert [target["sim_record_id"] for target in targets] == ["SIM-ACTIVE"]
+
+
+def test_sync_scalp_simulator_targets_if_state_changed_prunes_external_preclose_sell(monkeypatch, tmp_path):
+    state_path = tmp_path / "scalp_live_sim_state.json"
+    state_path.write_text(
+        """
+{
+  "schema_version": 1,
+  "simulation_book": "scalp_ai_buy_all",
+  "active_positions": [
+    {
+      "code": "005930",
+      "name": "삼성전자",
+      "strategy": "SCALPING",
+      "status": "HOLDING",
+      "simulation_book": "scalp_ai_buy_all",
+      "scalp_live_simulator": true,
+      "sim_record_id": "SIM-ACTIVE"
+    }
+  ]
+}
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(state_handlers, "SCALP_SIM_STATE_PATH", state_path)
+    targets = [
+        {
+            "code": "005930",
+            "name": "삼성전자",
+            "strategy": "SCALPING",
+            "status": "HOLDING",
+            "simulation_book": "scalp_ai_buy_all",
+            "scalp_live_simulator": True,
+            "sim_record_id": "SIM-ACTIVE",
+        }
+    ]
+    last_mtime = state_path.stat().st_mtime_ns
+    state_path.write_text(
+        '{"schema_version":1,"simulation_book":"scalp_ai_buy_all","active_positions":[]}',
+        encoding="utf-8",
+    )
+    os.utime(state_path, ns=(last_mtime + 1_000_000_000, last_mtime + 1_000_000_000))
+
+    result = state_handlers.sync_scalp_simulator_targets_if_state_changed(targets, last_mtime=last_mtime)
+
+    assert result["synced"] is True
+    assert result["removed"] == 1
+    assert targets == []
+
+
+def test_sync_scalp_simulator_targets_if_state_unchanged_does_not_prune(monkeypatch, tmp_path):
+    state_path = tmp_path / "scalp_live_sim_state.json"
+    state_path.write_text(
+        '{"schema_version":1,"simulation_book":"scalp_ai_buy_all","active_positions":[]}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(state_handlers, "SCALP_SIM_STATE_PATH", state_path)
+    targets = [
+        {
+            "code": "005930",
+            "strategy": "SCALPING",
+            "status": "HOLDING",
+            "simulation_book": "scalp_ai_buy_all",
+            "scalp_live_simulator": True,
+            "sim_record_id": "SIM-STALE",
+        }
+    ]
+
+    result = state_handlers.sync_scalp_simulator_targets_if_state_changed(
+        targets,
+        last_mtime=state_path.stat().st_mtime_ns,
+    )
+
+    assert result["synced"] is False
+    assert len(targets) == 1
+
+
+def test_persist_scalp_simulator_state_reconciles_external_preclose_sell(monkeypatch, tmp_path):
+    state_path = tmp_path / "scalp_live_sim_state.json"
+    state_path.write_text(
+        """
+{
+  "schema_version": 1,
+  "simulation_book": "scalp_ai_buy_all",
+  "active_positions": [
+    {
+      "code": "005930",
+      "name": "삼성전자",
+      "strategy": "SCALPING",
+      "status": "HOLDING",
+      "simulation_book": "scalp_ai_buy_all",
+      "scalp_live_simulator": true,
+      "sim_record_id": "SIM-ACTIVE"
+    }
+  ]
+}
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(state_handlers, "SCALP_SIM_STATE_PATH", state_path)
+    targets = [
+        {
+            "code": "005930",
+            "name": "삼성전자",
+            "strategy": "SCALPING",
+            "status": "HOLDING",
+            "simulation_book": "scalp_ai_buy_all",
+            "scalp_live_simulator": True,
+            "sim_record_id": "SIM-ACTIVE",
+        }
+    ]
+    last_mtime = state_path.stat().st_mtime_ns
+    monkeypatch.setattr(state_handlers, "_SCALP_SIM_STATE_LAST_SEEN_MTIME_NS", last_mtime)
+    state_path.write_text(
+        '{"schema_version":1,"simulation_book":"scalp_ai_buy_all","active_positions":[]}',
+        encoding="utf-8",
+    )
+    os.utime(state_path, ns=(last_mtime + 1_000_000_000, last_mtime + 1_000_000_000))
+
+    state_handlers.persist_scalp_simulator_state(targets)
+
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    assert targets == []
+    assert payload["active_positions"] == []
 
 
 def test_runtime_heartbeat_classifies_scalp_sim_as_non_real_holding():

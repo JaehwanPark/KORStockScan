@@ -18,6 +18,14 @@ CLAUDE_LAB_DIR = PROJECT_ROOT / "analysis" / "claude_scalping_pattern_lab"
 PATTERN_LAB_AUTOMATION_DIR = REPORT_DIR / "scalping_pattern_lab_automation"
 SCALP_ENTRY_ADM_DIR = REPORT_DIR / "scalp_entry_action_decision_matrix"
 AUTOMATION_SCHEMA_VERSION = 1
+DECISION_AUTHORITY = "pattern_lab_analysis_workorder_source_only"
+FORBIDDEN_USES = [
+    "runtime_threshold_mutation",
+    "broker_order_submit",
+    "provider_route_change",
+    "bot_restart",
+    "real_order_gate",
+]
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -341,7 +349,11 @@ def _auto_family_candidates(findings: list[dict[str, Any]]) -> list[dict[str, An
                 "safety_guard": list(CALIBRATION_SAFETY_GUARDS),
                 "proposed_runtime_touchpoint": finding.get("target_subsystem") or "scalping_logic",
                 "implementation_order_id": f"order_{family_id}",
+                "runtime_effect": False,
                 "allowed_runtime_apply": False,
+                "decision_authority": DECISION_AUTHORITY,
+                "candidate_role": "analysis_only_family_design_input",
+                "forbidden_uses": FORBIDDEN_USES,
             }
         )
     return candidates
@@ -377,7 +389,11 @@ def _code_improvement_orders(findings: list[dict[str, Any]], solo_findings: list
                     "runtime_effect remains false until a separate implementation order is completed",
                     "daily EV report includes the order summary",
                 ],
+                "source_report_type": "scalping_pattern_lab_automation",
+                "decision_authority": DECISION_AUTHORITY,
                 "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "forbidden_uses": FORBIDDEN_USES,
                 "priority": priority,
             }
         )
@@ -402,7 +418,18 @@ def build_scalping_pattern_lab_automation_report(target_date: str) -> dict[str, 
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "runtime_effect": False,
+        "runtime_change": False,
+        "runtime_mutation_allowed": False,
+        "allowed_runtime_apply": False,
+        "decision_authority": DECISION_AUTHORITY,
         "purpose": "pattern_lab_to_improvement_order_automation",
+        "policy": {
+            "role": "analysis_review_and_workorder_source",
+            "runtime_patch_automation": False,
+            "direct_family_design_authority": False,
+            "downstream_route": "threshold_cycle_ev -> code_improvement_workorder -> implementation_review",
+            "forbidden_uses": FORBIDDEN_USES,
+        },
         "lab_freshness": {result["lab"]: result["freshness"] for result in lab_results},
         "consensus_findings": consensus,
         "solo_findings": solo,
@@ -427,6 +454,8 @@ def build_scalping_pattern_lab_automation_report(target_date: str) -> dict[str, 
             ],
             "scalp_entry_adm_status": entry_adm_summary.get("status"),
             "scalp_entry_adm_joined_sample": entry_adm_summary.get("joined_sample"),
+            "decision_authority": DECISION_AUTHORITY,
+            "runtime_mutation_allowed": False,
         },
         "sources": {
             **{result["lab"]: result["paths"] for result in lab_results},
@@ -454,6 +483,8 @@ def render_scalping_pattern_lab_automation_markdown(report: dict[str, Any]) -> s
         f"- code_improvement_order_count: `{summary.get('code_improvement_order_count')}`",
         f"- scalp_entry_adm_status/joined: `{summary.get('scalp_entry_adm_status')}` / `{summary.get('scalp_entry_adm_joined_sample')}`",
         f"- runtime_effect: `{report.get('runtime_effect')}`",
+        f"- decision_authority: `{report.get('decision_authority')}`",
+        f"- runtime_mutation_allowed: `{report.get('runtime_mutation_allowed')}`",
         "",
         "## Consensus Findings",
     ]

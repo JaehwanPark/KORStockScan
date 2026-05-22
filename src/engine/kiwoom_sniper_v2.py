@@ -1223,6 +1223,14 @@ def run_sniper(is_test_mode=False):
         t['position_tag'] = normalize_position_tag(t['strategy'], t.get('position_tag'))
     _restore_holding_runtime_state(ACTIVE_TARGETS)
     sniper_state_handlers.sync_scalp_simulator_targets_from_state(ACTIVE_TARGETS)
+    try:
+        run_sniper.last_scalp_sim_state_mtime = (
+            sniper_state_handlers.SCALP_SIM_STATE_PATH.stat().st_mtime_ns
+            if sniper_state_handlers.SCALP_SIM_STATE_PATH.exists()
+            else None
+        )
+    except Exception:
+        run_sniper.last_scalp_sim_state_mtime = None
     sniper_state_handlers.restore_swing_intraday_probe_targets(ACTIVE_TARGETS)
 
     targets = ACTIVE_TARGETS
@@ -1262,6 +1270,12 @@ def run_sniper(is_test_mode=False):
                 RESTART_FLAG_PATH.unlink()
                 _sn_whb("sniper_engine", alive=False)
                 break
+
+            scalp_sim_sync = sniper_state_handlers.sync_scalp_simulator_targets_if_state_changed(
+                targets,
+                last_mtime=getattr(run_sniper, 'last_scalp_sim_state_mtime', None),
+            )
+            run_sniper.last_scalp_sim_state_mtime = scalp_sim_sync.get("state_mtime")
 
             if not is_test_mode and now_t >= TIME_20_00:
                 print("🌙 장 마감 시간이 다가와 감시를 종료합니다.")
