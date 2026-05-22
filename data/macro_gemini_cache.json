@@ -1,85 +1,84 @@
 {
-  "bundle_as_of": "2026-05-20T22:20:18Z",
+  "bundle_as_of": "2026-05-21T22:20:14Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 7432.97,
-    "prev_value": 7353.61,
-    "change": 79.36,
-    "change_pct": 1.08,
-    "as_of": "2026-05-20T20:29:00Z",
-    "source": "Morningstar / Dow Jones Market Data"
+    "value": 7445.72,
+    "prev_value": 7432.97,
+    "change": 12.75,
+    "change_pct": 0.17,
+    "as_of": "2026-05-21T20:00:00Z",
+    "source": "AP / wkyc.com"
   },
   "nasdaq": {
     "name": "NASDAQ Composite",
-    "value": 26270.36,
-    "prev_value": 25870.71,
-    "change": 399.65,
-    "change_pct": 1.54,
-    "as_of": "2026-05-20T20:29:00Z",
-    "source": "Morningstar / Dow Jones Market Data"
+    "value": 26293.1,
+    "prev_value": 26270.36,
+    "change": 22.74,
+    "change_pct": 0.09,
+    "as_of": "2026-05-21T20:00:00Z",
+    "source": "Morningstar / Dow Jones"
   },
   "vix": {
     "name": "VIX",
-    "value": 17.83,
-    "prev_value": 18.06,
-    "change": -0.23,
-    "change_pct": -1.27,
-    "as_of": "2026-05-20T20:29:26Z",
-    "source": "Cboe Exchange"
+    "value": 17.2,
+    "prev_value": 17.44,
+    "change": -0.24,
+    "change_pct": -1.38,
+    "as_of": "2026-05-21T20:00:00Z",
+    "source": "Investing.com"
   },
   "us10y": {
-    "name": "US 10-Year Treasury Yield",
-    "value": 4.569,
-    "prev_value": 4.669,
-    "change": -0.1,
-    "change_pct": -2.14,
-    "as_of": "2026-05-20T19:45:00Z",
-    "source": "Tradeweb / Morningstar"
+    "name": "US 10Y Treasury Yield",
+    "value": 4.56,
+    "prev_value": 4.59,
+    "change": -0.03,
+    "change_pct": -0.65,
+    "as_of": "2026-05-21T22:20:14Z",
+    "source": "Trading Economics"
   },
   "brent": {
     "name": "Brent Crude",
-    "value": 105.36,
-    "prev_value": 111.28,
-    "change": -5.92,
-    "change_pct": -5.32,
-    "as_of": "2026-05-20T20:00:00Z",
-    "source": "BNN Bloomberg"
+    "value": 104.88,
+    "prev_value": 105.02,
+    "change": -0.14,
+    "change_pct": -0.13,
+    "as_of": "2026-05-21T22:20:14Z",
+    "source": "Trading Economics"
   },
   "headlines": [
     {
-      "title": "Oil prices fall 6% after Donald Trump says Iran negotiations in final stages",
-      "source": "The Guardian",
-      "published_at": "2026-05-20T17:45:00Z",
-      "url": "https://www.theguardian.com"
+      "title": "Oil Prices On May 21: Brent Crude Steadies At $105 After Trump Says US-Iran Deal Is In Final Stages",
+      "source": "NDTV Profit",
+      "published_at": "2026-05-21T06:37:00Z",
+      "url": "https://www.ndtvprofit.com"
     },
     {
-      "title": "Nvidia beats earnings expectations, issues strong Q2 outlook after market close",
-      "source": "TheStreet",
-      "published_at": "2026-05-20T20:22:00Z",
-      "url": "https://www.thestreet.com"
+      "title": "U.S. stocks swing from losses to small gains following the latest reversal for oil prices",
+      "source": "CP24",
+      "published_at": "2026-05-21T18:18:00Z",
+      "url": "https://www.cp24.com"
     },
     {
-      "title": "U.S. stock market bounces back as pressure eases from bond market and oil drops",
-      "source": "Associated Press",
-      "published_at": "2026-05-20T20:17:00Z",
-      "url": "https://apnews.com"
+      "title": "Gold eases on higher yields, firm dollar; US-Iran talks in focus",
+      "source": "The Star",
+      "published_at": "2026-05-21T06:44:00Z",
+      "url": "https://www.thestar.com.my"
     },
     {
-      "title": "10-Year Treasury Yield Falls to 4.569%, Snaps Three-Day Streak of Rising Yields",
-      "source": "Morningstar / Dow Jones Newswires",
-      "published_at": "2026-05-20T19:45:00Z",
-      "url": "https://www.morningstar.com"
+      "title": "Crude Oil Prices Jump on Doubts the Strait of Hormuz Will Reopen",
+      "source": "Barchart",
+      "published_at": "2026-05-21T15:31:00Z",
+      "url": "https://www.barchart.com"
     },
     {
-      "title": "S&P 500 Rises 1.08% to 7432.97 on hopes that an end to the U.S.-Iran war could be in sight",
-      "source": "Yahoo Finance",
-      "published_at": "2026-05-20T21:12:00Z",
-      "url": "https://finance.yahoo.com"
+      "title": "Market Quick Take: US Treasuries rallied as crude oil prices dropped sharply Wednesday",
+      "source": "Saxo Bank",
+      "published_at": "2026-05-21T07:20:00Z",
+      "url": "https://www.home.saxo"
     }
   ],
   "notes": [
-    "Data compiled as of market close on May 20, 2026.",
-    "Brent crude and 10-Year yield saw significant drops due to headlines regarding potential US-Iran peace negotiations.",
-    "Tech stocks led the market rally driven by Nvidia's after-hours earnings beat."
+    "Market indexes ticked higher Thursday following an easing in oil prices due to developments in US-Iran negotiations.",
+    "Data reflects the most recently available verified close or real-time estimates as of the bundle_as_of timestamp."
   ]
 }

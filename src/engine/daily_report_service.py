@@ -563,6 +563,27 @@ def _apply_cached_market_regime_label(snapshot: dict[str, Any], target_date: str
     snapshot["regime_source"] = "market_regime_cache"
 
 
+def format_market_status_with_context(stats: dict[str, Any]) -> str:
+    """Return a compact user-facing market status with breadth and continuous regime split."""
+    status_text = str(stats.get("status_text") or "-")
+    ma20_ratio = stats.get("ma20_ratio")
+    if ma20_ratio is not None:
+        try:
+            status_text = f"{status_text}(20일선 breadth {float(ma20_ratio):.1f}%)"
+        except (TypeError, ValueError):
+            pass
+
+    continuous_score = stats.get("market_regime_continuous_score")
+    if continuous_score is None:
+        return status_text
+
+    continuous_label = str(stats.get("market_regime_continuous_label") or "UNKNOWN")
+    try:
+        return f"{status_text}, 연속국면={continuous_label} {float(continuous_score):.1f}"
+    except (TypeError, ValueError):
+        return f"{status_text}, 연속국면={continuous_label}"
+
+
 def _trade_status(row: dict[str, Any]) -> str:
     return str(row.get("status") or "").upper()
 
@@ -765,6 +786,7 @@ def build_daily_report(target_date: str | None = None) -> dict:
         "stats": {
             "quote_date": market.get("quote_date"),
             "ma20_ratio": market.get("ma20_ratio", 0.0),
+            "status_basis": "20일선 breadth",
             "avg_rsi": market.get("avg_rsi", 0.0),
             "avg_prob": market.get("avg_prob", 0.0),
             "avg_bull": market.get("avg_bull", 0.0),
@@ -830,7 +852,7 @@ def format_daily_report_summary(report: dict) -> str:
     warnings = report.get("meta", {}).get("warnings", []) or []
     lines = [
         f"📘 Daily Report ({report.get('date', '')})",
-        f"- 시장 상태: {stats.get('status_text', '-')}",
+        f"- 시장 상태: {format_market_status_with_context(stats)}",
         f"- 20일선 위 비율: {stats.get('ma20_ratio', 0)}%",
         f"- 평균 RSI: {stats.get('avg_rsi', 0)}",
         f"- 평균 AI 확신도: {stats.get('avg_prob', 0)}%",

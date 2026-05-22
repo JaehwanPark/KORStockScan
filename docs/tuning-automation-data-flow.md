@@ -14,6 +14,53 @@
 - 주요 사람 개입 지점은 `workorder_needs_codex_implementation` 구현 지시, `ready_for_approval` approval artifact 승인 판단, one-day decider 판정/확인, 생성된 approval artifact 승인 여부 결정, Project/Calendar 수동 동기화다.
 - `selected` 또는 runtime env 반영은 real trading authority와 다르다. selected family라도 runtime effect가 `false`일 수 있고, sim-only env는 실제 주문/청산 권한을 갖지 않는다.
 
+## 현재 적용/대기/구현 스냅샷
+
+이 표는 `2026-05-22` 장전 apply plan과 `2026-05-21` postclose 산출물을 기준으로 한다. 자동화 흐름을 이해한 뒤 “그래서 지금 무엇을 적용하고 무엇을 기다리는가”를 확인하는 운영용 요약이다.
+
+### 적용/승인 완료 및 미반영 승인
+
+| 항목 | 현재 상태 | runtime 의미 | 다음 확인 |
+| --- | --- | --- | --- |
+| `soft_stop_whipsaw_confirmation` | `selected=true`, `calibration_state=adjust_up`, env 반영 | 스캘핑 holding/exit bounded tunable. hard/protect/emergency/order guard 우회 없음 | 장후 post-apply attribution과 HOLD/EXIT EV 확인 |
+| `score65_74_recovery_probe` | `selected=true`, `calibration_state=adjust_up`, env 반영 | 스코어 65~74 회복 probe. entry hard safety, stale quote, broker/account/order/qty/cooldown guard 우선 | 장중 provenance와 장후 submitted drought/EV 확인 |
+| `scalp_sim_candidate_window_expansion` | `operator_locked`, env 반영 | 스캘핑 sim 후보창 확대. score 55~100 WAIT/blocked 후보를 sim-only로 수집 | sim/probe source-quality와 open/closed count 확인 |
+| `scalp_sim_ai_budget_manager` | `operator_locked`, env 반영 | 확대된 sim holding의 AI 호출 예산/쿨다운 제어 | OpenAI 호출량, deferred review, sim holding coverage 확인 |
+| `lifecycle_decision_matrix_runtime` | `selected=true`, env 반영 | LDM/ADM advisory와 AI context 연결. `RUNTIME_EFFECT_ENABLED=false`, `PROMOTE_ENABLED=false`라 실매매 action 변경 권한 없음 | LDM entry/scale-in/holding bucket attribution과 bridge 후보 확인 |
+| `scalp_sim_scale_in_window_expansion` | 사용자 approval artifact 승인, env 반영 | `PYRAMID,AVG_DOWN` scale-in window를 sim-only로 관찰. `actual_order_submitted=false`, `broker_order_forbidden=true` | scale-in sim row, 후행 MFE/MAE/exit label, LDM scale-in bucket join 확인 |
+| `swing_gatekeeper_reject_cooldown` | 별도 approval artifact 승인, selected | 스윙 dry-run entry cooldown `7200 -> 6600` 적용 | swing dry-run attribution 확인 |
+| `swing_one_share_real_canary_phase0` | 별도 real canary approval artifact 승인, selected | 승인된 3개 코드에 한해 1주 real canary `BUY_INITIAL/SELL_CLOSE` scope. non-canary/sim/scale-in action은 계속 차단 | real receipt/provenance, 1주 cap, daily/open position cap 확인 |
+| `swing_model_floor` | approval artifact에는 포함됐지만 `selected=false` | `no_runtime_env_override`라 이번 apply에서는 env 변경 없음 | 다음 approval/apply에서 env override 필요 여부 확인 |
+
+### 대기 중이지만 아직 승인 대상이 아닌 항목
+
+| 항목 | 현재 상태 | 왜 바로 적용하지 않는가 | 다음 판정 |
+| --- | --- | --- | --- |
+| `entry_wait6579_score66_69_recovery_gate_v1` | `bridge_candidate_state=bootstrap_pending`, `approval_required=true`, `allowed_runtime_apply=false` | score 66~69 wait6579 bucket은 후보로 surfaced 됐지만 rolling/source-quality confirmation과 ready bridge가 아직 부족 | `ready_for_approval`가 되면 approval artifact 생성/승인 판단 |
+| `scale_in_bucket_runtime_policy_v1` | `bridge_candidate_state=bootstrap_pending`, `approval_required=true`, `allowed_runtime_apply=false` | `PYRAMID`, `AVG_DOWN_ONLY` bucket은 runtime policy 후보지만 safety guard, source-quality, confirmation이 아직 부족 | negative EV가 rolling-confirmed되면 tighten/disable 후보를 approval로 승격 |
+| `swing_scale_in_real_canary_phase0` | policy는 `approval_required`, `runtime_apply_allowed=false` | source-quality blocker, final exit/post-add MAE 등 승인 계약 미충족 | 별도 approval artifact 생성 전 source-quality/label 보강 |
+| `BedrockNovaMicroOneDayDecision0522` | 05-22 POSTCLOSE one-day decider 예정 | provider 비교는 기존 threshold/LDM apply에 연결하지 않는 임시 판정 artifact | winner 확정 후 Micro shadow/duel OFF 또는 profile candidate 기록 |
+| `BedrockNovaLiteTier2PromotionReview0522` | 05-22 POSTCLOSE one-day decider 예정 | Lite v1은 Tier2 route 후보만 만들며 즉시 provider route 변경 금지 | winner가 Lite이면 `tier2_nova_lite_v1` route 후보 기록, 별도 approval/workorder 필요 |
+| `BedrockNovaLiteV2ShadowImplementation0522` | 05-26 report-only shadow 준비 판정 예정 | Lite v2는 v1 승격 판단과 별개인 future report-only 실험 | 05-26 시행 조건, model id, env toggle, artifact path 확정 |
+| `ScalpSimOvernightPrecloseCron0522` | 15:20 첫 운영 확인 예정 | sim overnight action은 LDM feature/source row이며 hard gate가 아님 | active undecided/source-quality/OpenAI provenance/Bedrock shadow 확인 |
+
+### 구현 예정 또는 구현 검토 항목
+
+| 항목 | 현재 owner | 구현해야 할 것 | runtime 적용과의 관계 |
+| --- | --- | --- | --- |
+| `RuntimeApplyBridgeAutomationImplementation0522` | 05-22 POSTCLOSE checklist | 성과 후보 bucket 자동 발굴, `source_only/workorder_needed/approval_ready/runtime_blocked` 자동 분류, surfaced 누락 시 `automation_handoff_gap` 처리 | 구현 전에는 operator가 후보를 기억해야 하는 gap이 남는다. 구현 후에도 approval artifact 없이는 env 변경 없음 |
+| `RuntimeApplyBridgeGapAudit0522` | 05-22 POSTCLOSE checklist | workorder/approval artifact가 `contract -> env mapping -> runtime hook -> post-apply attribution`까지 이어지는지 audit | audit 자체는 적용이 아니라 누락 탐지. 누락은 구현 workorder로 넘긴다 |
+| `code_improvement_workorder_2026-05-21` implement_now 묶음 | code improvement workorder | selected 19건 중 `implement_now` 16건. entry bucket unknown/source-quality, holding-exit counterfactual, scale-in bucket handoff instrumentation/report/provenance 보강 | 대부분 `runtime_effect=false`, `allowed_runtime_apply=false`다. 코드 보강 후 bridge/approval 후보를 만드는 입력이 된다 |
+| holding/exit, provider, position sizing, panic bucket bridge 확장 | 아직 별도 bridge owner 필요 | entry/scale-in 외 bucket에 대해 별도 owner, approval contract, env mapping, runtime hook, rollback/post-apply attribution 정의 | 현재 `runtime_apply_bridge` 범위 밖이다. 성과가 확인되면 새 workorder로 bridge 확장 |
+
+### 현재 해석 요약
+
+- 스캘핑 실매매 영향 후보는 `soft_stop_whipsaw_confirmation`, `score65_74_recovery_probe`처럼 apply plan에서 selected되고 runtime hook이 있는 bounded family다. 스윙 실매매 영향은 `swing_one_share_real_canary_phase0`의 승인된 1주 canary scope로 제한된다.
+- 이미 적용됐지만 실매매 권한이 없는 항목은 `scalp_sim_candidate_window_expansion`, `scalp_sim_ai_budget_manager`, `scalp_sim_scale_in_window_expansion`, `lifecycle_decision_matrix_runtime`의 advisory/context 부분이다.
+- 이미 승인됐지만 이번 env에 실제 값이 안 들어간 항목도 있다. `swing_model_floor`가 그 경우다.
+- `approval_required=true`는 “지금 승인하라”가 아니라 “나중에 approval route가 필요할 수 있다”는 뜻이다. 현재 bridge 후보 2건은 모두 `bootstrap_pending`이라 승인 대상이 아니다.
+- “무엇을 적용할 것인가”는 매일 POSTCLOSE에서 후보 surfaced, bridge/approval readiness, source-quality, sample/EV를 닫고, 다음 PREOPEN에서 apply plan이 최종 결정한다.
+
 ## 전체 흐름
 
 | 단계 | 역할 | 주요 산출물 | 소비 주체 | 결과 적용 여부 | 사람 개입 |
@@ -89,6 +136,7 @@
 | --- | --- | --- |
 | `approval_required=true` | 언젠가 승인 경로가 필요하다는 뜻 | 지금 승인 가능하다는 뜻은 아님 |
 | `allowed_runtime_apply=false` | runtime apply 차단 | approval artifact가 있어도 env로 들어가면 안 됨 |
+| `runtime_apply_allowed=false` | swing policy 계층의 runtime apply 차단 필드 | threshold/bridge 계층은 주로 `allowed_runtime_apply`, swing policy 계층은 `runtime_apply_allowed`를 쓴다 |
 | `runtime_effect=false` | report/source/workorder 계층 | 실매매 로직 변경 아님 |
 | `bridge_candidate_state=bootstrap_pending` | 후보는 발견됐지만 rolling/confirmation 부족 | 승인하지 않고 다음 표본 확인 |
 | `bridge_candidate_state=ready_for_approval` | contract/env/hook/attribution이 닫힌 적용 후보 | approval artifact 생성 여부 판단 가능 |

@@ -166,6 +166,18 @@ def _legacy_calendar_title_key(summary: str, *, event_prefix: str) -> str:
     return ""
 
 
+def _codex_daily_workorder_slot(summary: str) -> str:
+    normalized = str(summary or "").strip()
+    m = re.search(
+        r"\bCodex\s+Daily\s+Workorder\b.*\((PREOPEN|INTRADAY|POSTCLOSE)\)",
+        normalized,
+        re.IGNORECASE,
+    )
+    if not m:
+        return ""
+    return m.group(1).upper()
+
+
 def _graphql_query() -> str:
     return """
 query($owner: String!, $number: Int!, $cursor: String) {
@@ -657,6 +669,7 @@ def prune_stale_events(
     project_number: int,
     live_item_ids: set[str],
     live_managed_title_keys: set[str] | None = None,
+    live_codex_workorder_slots: set[str] | None = None,
     event_prefix: str = "",
     legacy_time_min: str = "",
     legacy_time_max: str = "",
@@ -667,6 +680,8 @@ def prune_stale_events(
     dry_run_deleted = 0
     legacy_deleted = 0
     legacy_dry_run_deleted = 0
+    codex_workorder_deleted = 0
+    codex_workorder_dry_run_deleted = 0
     seen_event_ids: set[str] = set()
     owner_prop = f"gh_project_owner={owner}"
     number_prop = f"gh_project_number={project_number}"
@@ -742,11 +757,50 @@ def prune_stale_events(
             if not page_token:
                 break
 
+        if live_codex_workorder_slots is not None:
+            page_token = None
+            live_slots = {str(slot or "").strip().upper() for slot in live_codex_workorder_slots if str(slot or "").strip()}
+            while True:
+                resp = (
+                    service.events()
+                    .list(
+                        calendarId=calendar_id,
+                        q="Codex Daily Workorder",
+                        timeMin=legacy_time_min,
+                        timeMax=legacy_time_max,
+                        singleEvents=True,
+                        maxResults=250,
+                        pageToken=page_token,
+                    )
+                    .execute()
+                )
+                for event in resp.get("items", []):
+                    private = ((event.get("extendedProperties") or {}).get("private") or {})
+                    if str(private.get("gh_project_item_id") or "").strip():
+                        continue
+                    event_id = str(event.get("id") or "").strip()
+                    if not event_id or event_id in seen_event_ids:
+                        continue
+                    slot = _codex_daily_workorder_slot(str(event.get("summary") or ""))
+                    if not slot or slot in live_slots:
+                        continue
+                    if dry_run:
+                        codex_workorder_dry_run_deleted += 1
+                        continue
+                    service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
+                    codex_workorder_deleted += 1
+
+                page_token = resp.get("nextPageToken")
+                if not page_token:
+                    break
+
     return {
         "deleted": deleted,
         "dry_run_deleted": dry_run_deleted,
         "legacy_deleted": legacy_deleted,
         "legacy_dry_run_deleted": legacy_dry_run_deleted,
+        "codex_workorder_deleted": codex_workorder_deleted,
+        "codex_workorder_dry_run_deleted": codex_workorder_dry_run_deleted,
     }
 
 
@@ -819,6 +873,9 @@ def main() -> int:
         project_number=project_number,
         live_item_ids={item.item_id for item in items},
         live_managed_title_keys={_managed_title_key(item.title) for item in items if _is_managed_project_title(item.title)}
+        if legacy_prune_enabled
+        else None,
+        live_codex_workorder_slots={item.slot.strip().upper() for item in items if item.slot.strip()}
         if legacy_prune_enabled
         else None,
         event_prefix=event_prefix,
