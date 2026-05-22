@@ -32,6 +32,7 @@ LATENCY_CLASSIFIER_RECOMMENDATION_DIR = REPORT_DIR / "latency_classifier_recomme
 PATTERN_LAB_CURRENTNESS_AUDIT_DIR = REPORT_DIR / "pattern_lab_currentness_audit"
 PATTERN_LAB_AI_REVIEW_DIR = REPORT_DIR / "pattern_lab_ai_review"
 PATTERN_LAB_PROPAGATION_AUDIT_DIR = REPORT_DIR / "pattern_lab_propagation_audit"
+BUY_FUNNEL_SENTINEL_DIR = REPORT_DIR / "buy_funnel_sentinel"
 
 _JSON_LOAD_DIAGNOSTICS: list[dict[str, Any]] = []
 
@@ -590,6 +591,13 @@ def _code_improvement_workorder_summary(target_date: str) -> tuple[dict[str, Any
             "markdown": str(md_path) if md_path.exists() else None,
             "selected_order_count": _safe_int(summary.get("selected_order_count"), 0),
             "decision_counts": summary.get("decision_counts") if isinstance(summary.get("decision_counts"), dict) else {},
+            "entry_submit_drought_selected": bool(summary.get("entry_submit_drought_selected")),
+            "entry_submit_drought_handoff_missing": bool(summary.get("entry_submit_drought_handoff_missing")),
+            "orders": [
+                {"order_id": item.get("order_id"), "decision": item.get("decision")}
+                for item in orders
+                if isinstance(item, dict)
+            ],
             "top_orders": [
                 {
                     "order_id": item.get("order_id"),
@@ -694,6 +702,12 @@ def _lifecycle_decision_matrix_summary(target_date: str) -> tuple[dict[str, Any]
         )
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     contract = payload.get("fixed_threshold_contract") if isinstance(payload.get("fixed_threshold_contract"), dict) else {}
+    submit_bucket = (
+        payload.get("submit_bucket_attribution")
+        if isinstance(payload.get("submit_bucket_attribution"), dict)
+        else {}
+    )
+    submit_summary = submit_bucket.get("summary") if isinstance(submit_bucket.get("summary"), dict) else {}
     warnings = [f"lifecycle_decision_matrix:{item}" for item in (payload.get("warnings") or []) if str(item)]
     return (
         {
@@ -708,6 +722,24 @@ def _lifecycle_decision_matrix_summary(target_date: str) -> tuple[dict[str, Any]
             "joined_rows": _safe_int(summary.get("joined_rows"), 0),
             "policy_pass_count": _safe_int(summary.get("policy_pass_count"), 0),
             "promote_ready_count": _safe_int(summary.get("promote_ready_count"), 0),
+            "submit_bucket_attribution_summary": submit_summary,
+            "submit_bucket_runtime_approval_candidates": (
+                submit_bucket.get("runtime_approval_candidates")
+                if isinstance(submit_bucket.get("runtime_approval_candidates"), list)
+                else []
+            ),
+            "submit_bucket_code_improvement_workorders": (
+                submit_bucket.get("code_improvement_workorders")
+                if isinstance(submit_bucket.get("code_improvement_workorders"), list)
+                else []
+            ),
+            "post_submit_contract_gaps": (
+                submit_bucket.get("post_submit_contract_gaps")
+                if isinstance(submit_bucket.get("post_submit_contract_gaps"), list)
+                else []
+            ),
+            "submit_bucket_workorder_count": _safe_int(summary.get("submit_bucket_workorder_count"), 0),
+            "submit_bucket_contract_gap_count": _safe_int(summary.get("submit_bucket_contract_gap_count"), 0),
             "policy_entries": [
                 {
                     "stage": item.get("stage"),
@@ -726,6 +758,43 @@ def _lifecycle_decision_matrix_summary(target_date: str) -> tuple[dict[str, Any]
         },
         str(json_path),
         warnings,
+    )
+
+
+def _buy_funnel_sentinel_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
+    path = BUY_FUNNEL_SENTINEL_DIR / f"buy_funnel_sentinel_{target_date}.json"
+    payload = _load_json(path)
+    if not payload:
+        return (
+            {
+                "available": False,
+                "artifact": None,
+                "primary": None,
+                "matches": [],
+                "entry_submit_drought_contract": {},
+            },
+            None,
+            ["buy_funnel_sentinel_missing"],
+        )
+    classification = payload.get("classification") if isinstance(payload.get("classification"), dict) else {}
+    contract = (
+        payload.get("entry_submit_drought_contract")
+        if isinstance(payload.get("entry_submit_drought_contract"), dict)
+        else {}
+    )
+    return (
+        {
+            "available": True,
+            "artifact": str(path),
+            "primary": classification.get("primary"),
+            "matches": classification.get("matches") if isinstance(classification.get("matches"), list) else [],
+            "entry_submit_drought_contract": contract,
+            "weak_contract_matches": contract.get("weak_contract_matches") if isinstance(contract.get("weak_contract_matches"), list) else [],
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
+        str(path),
+        [],
     )
 
 
@@ -896,6 +965,7 @@ def _swing_lifecycle_matrix_summary(target_date: str) -> tuple[dict[str, Any], s
             ["swing_lifecycle_decision_matrix_missing"],
         )
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    entry_bottleneck = payload.get("swing_entry_bottleneck") if isinstance(payload.get("swing_entry_bottleneck"), dict) else {}
     warnings = [f"swing_lifecycle_decision_matrix:{item}" for item in (payload.get("warnings") or []) if str(item)]
     candidate_ids: list[str] = []
     workorder_ids: list[str] = []
@@ -928,6 +998,9 @@ def _swing_lifecycle_matrix_summary(target_date: str) -> tuple[dict[str, Any], s
             "sim_auto_candidate_count": _safe_int(summary.get("sim_auto_candidate_count"), 0),
             "workorder_count": _safe_int(summary.get("workorder_count"), 0),
             "daily_simulation_consumed": bool(summary.get("daily_simulation_consumed")),
+            "swing_entry_bottleneck_primary": summary.get("swing_entry_bottleneck_primary")
+            or entry_bottleneck.get("primary"),
+            "swing_lifecycle_contract_gap_count": _safe_int(summary.get("swing_lifecycle_contract_gap_count"), 0),
             "stage_counts": summary.get("stage_counts") if isinstance(summary.get("stage_counts"), dict) else {},
             "source_book_counts": summary.get("source_book_counts")
             if isinstance(summary.get("source_book_counts"), dict)
@@ -975,6 +1048,12 @@ def _swing_lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[st
             "code_patch_required_count": _safe_int(summary.get("code_patch_required_count"), 0),
             "runtime_blocked_contract_gap_count": _safe_int(summary.get("runtime_blocked_contract_gap_count"), 0),
             "automation_handoff_gap_count": _safe_int(summary.get("automation_handoff_gap_count"), 0),
+            "swing_entry_bottleneck_primary": summary.get("swing_entry_bottleneck_primary"),
+            "swing_entry_bottleneck_candidate_present": any(
+                str(item.get("bucket_id") or "") == "swing_entry_bottleneck_swing_entry_drought_critical"
+                for item in (payload.get("surfaced_candidates") or [])
+                if isinstance(item, dict)
+            ),
             "state_counts": summary.get("state_counts") if isinstance(summary.get("state_counts"), dict) else {},
             "stage_counts": summary.get("stage_counts") if isinstance(summary.get("stage_counts"), dict) else {},
             "surfaced_candidate_ids": [
@@ -1224,6 +1303,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
     swing_lab_summary, swing_lab_path, swing_lab_warnings = _swing_pattern_lab_automation_summary(target_date)
     scalp_entry_adm_summary, scalp_entry_adm_path, scalp_entry_adm_warnings = _scalp_entry_adm_summary(target_date)
     lifecycle_matrix_summary, lifecycle_matrix_path, lifecycle_matrix_warnings = _lifecycle_decision_matrix_summary(target_date)
+    buy_funnel_sentinel_summary, buy_funnel_sentinel_path, buy_funnel_sentinel_warnings = _buy_funnel_sentinel_summary(target_date)
     (
         lifecycle_bucket_discovery_summary,
         lifecycle_bucket_discovery_path,
@@ -1291,6 +1371,13 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
         f"source_load_{item.get('status')}:{Path(str(item.get('path') or '')).name}"
         for item in _JSON_LOAD_DIAGNOSTICS
     ]
+    workorder_orders = code_workorder_summary.get("orders") if isinstance(code_workorder_summary.get("orders"), list) else []
+    entry_submit_drought_handoff_selected = bool(
+        code_workorder_summary.get("entry_submit_drought_selected")
+    ) or any(
+        isinstance(item, dict) and item.get("order_id") == "order_entry_submit_drought_auto_resolution"
+        for item in workorder_orders
+    )
 
     report = {
         "date": target_date,
@@ -1333,7 +1420,12 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "allowed_runtime_apply": bool(latency_source_metrics.get("allowed_runtime_apply")),
             "calibration_state": latency_source_metrics.get("calibration_state"),
             "would_safe_pass_events": _safe_int(latency_source_metrics.get("would_safe_pass_events"), 0),
-            "would_caution_reject_events": _safe_int(latency_source_metrics.get("would_caution_reject_events"), 0),
+            "would_caution_normal_events": _safe_int(
+                latency_source_metrics.get("would_caution_normal_events")
+                if latency_source_metrics.get("would_caution_normal_events") is not None
+                else latency_source_metrics.get("would_caution_reject_events"),
+                0,
+            ),
             "would_recovery_canary_events": _safe_int(
                 latency_source_metrics.get("would_recovery_canary_events"),
                 0,
@@ -1356,6 +1448,10 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "avoided_loser_lost": _safe_int(latency_source_metrics.get("avoided_loser_lost"), 0),
             "full_fill_events": _safe_int(perf_metrics.get("full_fill_events"), 0),
             "partial_fill_events": _safe_int(perf_metrics.get("partial_fill_events"), 0),
+            "buy_funnel_sentinel_primary": buy_funnel_sentinel_summary.get("primary"),
+            "entry_submit_drought_handoff_selected": entry_submit_drought_handoff_selected,
+            "submit_bucket_attribution_summary": lifecycle_matrix_summary.get("submit_bucket_attribution_summary"),
+            "post_submit_contract_gaps": lifecycle_matrix_summary.get("post_submit_contract_gaps"),
         },
         "holding_exit": {
             "holding_reviews": _safe_int(perf_metrics.get("holding_reviews"), 0),
@@ -1376,6 +1472,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
         "pattern_lab_automation": pattern_lab_summary,
         "swing_pattern_lab_automation": swing_lab_summary,
         "scalp_entry_action_decision_matrix": scalp_entry_adm_summary,
+        "buy_funnel_sentinel": buy_funnel_sentinel_summary,
         "lifecycle_decision_matrix": lifecycle_matrix_summary,
         "lifecycle_bucket_discovery": lifecycle_bucket_discovery_summary,
         "lifecycle_ai_context": lifecycle_ai_context_summary,
@@ -1398,6 +1495,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "pattern_lab_automation": pattern_lab_path,
             "swing_pattern_lab_automation": swing_lab_path,
             "scalp_entry_action_decision_matrix": scalp_entry_adm_path,
+            "buy_funnel_sentinel": buy_funnel_sentinel_path,
             "lifecycle_decision_matrix": lifecycle_matrix_path,
             "lifecycle_bucket_discovery": lifecycle_bucket_discovery_path,
             "lifecycle_ai_context": lifecycle_ai_context_path,
@@ -1425,6 +1523,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
                 *pattern_lab_warnings,
                 *swing_lab_warnings,
                 *scalp_entry_adm_warnings,
+                *buy_funnel_sentinel_warnings,
                 *lifecycle_matrix_warnings,
                 *lifecycle_bucket_discovery_warnings,
                 *lifecycle_ai_context_warnings,
@@ -1509,7 +1608,7 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- latency submit routing: `{funnel.get('latency_submit_routing') or '-'}`",
         f"- latency recommended action: `{funnel.get('recommended_action') or '-'}` (`{funnel.get('recommended_action_reason') or '-'}`)",
         f"- latency profile generation: `{funnel.get('latency_classifier_profile_generation') or {}}`",
-        f"- safe/caution/recovery: `{funnel.get('would_safe_pass_events')}` / `{funnel.get('would_caution_reject_events')}` / `{funnel.get('would_recovery_canary_events')}`",
+        f"- safe/caution_normal/recovery: `{funnel.get('would_safe_pass_events')}` / `{funnel.get('would_caution_normal_events')}` / `{funnel.get('would_recovery_canary_events')}`",
         f"- recovery attempts/cf sample/cf ev: `{funnel.get('would_recovery_canary_attempts')}` / `{funnel.get('counterfactual_joined_sample')}` / `{funnel.get('counterfactual_ev_pct')}`%",
         f"- recovered/lost labels: `{funnel.get('missed_winner_recovered')}` / `{funnel.get('avoided_loser_lost')}`",
         f"- stale/broker override excluded: `{funnel.get('stale_quote_override_events')}` / `{funnel.get('broker_guard_bypass_candidates')}`",

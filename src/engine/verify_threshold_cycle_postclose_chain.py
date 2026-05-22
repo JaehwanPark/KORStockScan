@@ -30,11 +30,20 @@ _AI_RUNTIME_STATES = {
     "hold_no_edge",
 }
 _OPTIONAL_ARTIFACT_LABELS = {
+    "buy_funnel_sentinel",
     "lifecycle_bucket_discovery",
 }
 _AI_EXEMPT_RUNTIME_FAMILIES = {
     "latency_classifier_runtime_profile",
 }
+ENTRY_SUBMIT_DROUGHT_REQUIRED_ORDER_IDS = [
+    "order_entry_submit_drought_auto_resolution",
+    "order_entry_post_submit_contract_gap_review",
+    "order_entry_broker_receipt_contract_gap_review",
+    "order_entry_fill_quality_contract_gap_review",
+    "order_entry_telegram_post_submit_contract_gap_review",
+    "order_entry_source_taxonomy_contract_gap_review",
+]
 
 
 def verification_report_paths(target_date: str) -> tuple[Path, Path]:
@@ -102,6 +111,7 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "scalp_entry_action_decision_matrix": REPORT_DIR
         / "scalp_entry_action_decision_matrix"
         / f"scalp_entry_action_decision_matrix_{target_date}.json",
+        "buy_funnel_sentinel": REPORT_DIR / "buy_funnel_sentinel" / f"buy_funnel_sentinel_{target_date}.json",
         "lifecycle_decision_matrix": REPORT_DIR
         / "lifecycle_decision_matrix"
         / f"lifecycle_decision_matrix_{target_date}.json",
@@ -200,6 +210,15 @@ def _scale_in_bucket_order_id(item: dict[str, Any]) -> str:
     return f"order_lifecycle_scale_in_bucket_{bucket_type}_{bucket_key}"
 
 
+def _submit_bucket_order_id(item: dict[str, Any]) -> str:
+    workorder_id = str(item.get("workorder_id") or "").strip()
+    if workorder_id.startswith("order_entry_"):
+        return workorder_id
+    bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
+    bucket_key = _slug(str(item.get("bucket_key") or item.get("workorder_id") or "unknown"))
+    return f"order_lifecycle_submit_bucket_{bucket_type}_{bucket_key}"
+
+
 def _overnight_bucket_order_id(item: dict[str, Any]) -> str:
     bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
     bucket_key = _slug(str(item.get("bucket_key") or item.get("workorder_id") or "unknown"))
@@ -242,6 +261,22 @@ def _collect_scale_in_bucket_candidate_ids(payload: Any) -> set[str]:
     elif isinstance(payload, list):
         for item in payload:
             found.update(_collect_scale_in_bucket_candidate_ids(item))
+    return found
+
+
+def _collect_submit_bucket_candidate_ids(payload: Any) -> set[str]:
+    found: set[str] = set()
+    if isinstance(payload, dict):
+        candidates = payload.get("submit_bucket_runtime_approval_candidates")
+        if isinstance(candidates, list):
+            for item in candidates:
+                if isinstance(item, dict) and item.get("candidate_id"):
+                    found.add(str(item.get("candidate_id")))
+        for value in payload.values():
+            found.update(_collect_submit_bucket_candidate_ids(value))
+    elif isinstance(payload, list):
+        for item in payload:
+            found.update(_collect_submit_bucket_candidate_ids(item))
     return found
 
 
@@ -429,6 +464,15 @@ def _swing_lifecycle_handoff_status(
             item for item in (section.get("code_improvement_workorders") or []) if isinstance(item, dict)
         )
     expected_order_ids = {_swing_ldm_order_id(item) for item in source_workorders}
+    bottleneck = matrix.get("swing_entry_bottleneck") if isinstance(matrix.get("swing_entry_bottleneck"), dict) else {}
+    bottleneck_matches = bottleneck.get("matches") if isinstance(bottleneck.get("matches"), list) else []
+    swing_entry_bottleneck_critical = (
+        bottleneck.get("primary") == "SWING_ENTRY_DROUGHT_CRITICAL"
+        or "SWING_ENTRY_DROUGHT_CRITICAL" in bottleneck_matches
+    )
+    if swing_entry_bottleneck_critical:
+        expected_candidate_ids.add("swing_entry_bottleneck_swing_entry_drought_critical")
+        expected_order_ids.add("order_swing_entry_bottleneck_auto_resolution")
     discovery_workorders = (
         discovery.get("code_improvement_workorders")
         if isinstance(discovery.get("code_improvement_workorders"), list)
@@ -456,6 +500,19 @@ def _swing_lifecycle_handoff_status(
         missing.append("runtime_approval_summary_swing_lifecycle_candidates_missing")
     if missing_order_ids:
         missing.append("code_improvement_workorder_swing_lifecycle_orders_missing")
+    if swing_entry_bottleneck_critical:
+        ev_bottleneck = (
+            (ev_report.get("swing_lifecycle_decision_matrix") or {}).get("swing_entry_bottleneck_primary")
+            if isinstance(ev_report.get("swing_lifecycle_decision_matrix"), dict)
+            else None
+        )
+        runtime_bottleneck = (
+            (runtime_summary.get("swing_lifecycle_decision_matrix") or {}).get("swing_entry_bottleneck_primary")
+            if isinstance(runtime_summary.get("swing_lifecycle_decision_matrix"), dict)
+            else None
+        )
+        if ev_bottleneck != "SWING_ENTRY_DROUGHT_CRITICAL" or runtime_bottleneck != "SWING_ENTRY_DROUGHT_CRITICAL":
+            missing.append("swing_entry_bottleneck_handoff_missing")
     contract = matrix.get("input_contract") if isinstance(matrix.get("input_contract"), dict) else {}
     if matrix and contract.get("swing_daily_simulation_consumed") is not False:
         missing.append("swing_lifecycle_forbidden_daily_simulation_consumed")
@@ -467,6 +524,7 @@ def _swing_lifecycle_handoff_status(
         "missing_ev_candidate_ids": missing_ev_candidates,
         "missing_runtime_summary_candidate_ids": missing_runtime_candidates,
         "expected_workorder_order_ids": sorted(expected_order_ids),
+        "swing_entry_bottleneck_critical": swing_entry_bottleneck_critical,
         "actual_workorder_order_ids": sorted(actual_order_ids),
         "missing_workorder_order_ids": missing_order_ids,
         "daily_simulation_consumed": bool(contract.get("swing_daily_simulation_consumed")),
@@ -544,6 +602,151 @@ def _entry_bucket_handoff_status(
             "LDM entry bucket candidates and workorders propagated to threshold EV, runtime summary, and code workorder."
             if not missing
             else "LDM entry bucket output was generated but one or more downstream consumers dropped it."
+        ),
+    }
+
+
+def _submit_bucket_handoff_status(
+    ldm_report: dict[str, Any],
+    ev_report: dict[str, Any],
+    runtime_summary: dict[str, Any],
+    workorder: dict[str, Any],
+) -> dict[str, Any]:
+    attribution = (
+        ldm_report.get("submit_bucket_attribution")
+        if isinstance(ldm_report.get("submit_bucket_attribution"), dict)
+        else {}
+    )
+    candidates = (
+        attribution.get("runtime_approval_candidates")
+        if isinstance(attribution.get("runtime_approval_candidates"), list)
+        else []
+    )
+    source_workorders = (
+        attribution.get("code_improvement_workorders")
+        if isinstance(attribution.get("code_improvement_workorders"), list)
+        else []
+    )
+    expected_candidate_ids = sorted(
+        str(item.get("candidate_id"))
+        for item in candidates
+        if isinstance(item, dict) and item.get("candidate_id")
+    )
+    expected_order_ids = sorted(
+        _submit_bucket_order_id(item)
+        for item in source_workorders
+        if isinstance(item, dict) and item.get("bucket_type") and item.get("bucket_key")
+    )
+    ev_candidate_ids = _collect_submit_bucket_candidate_ids(ev_report)
+    runtime_candidate_ids = _collect_submit_bucket_candidate_ids(runtime_summary)
+    actual_order_ids = {
+        str(item.get("order_id"))
+        for item in (workorder.get("orders") if isinstance(workorder.get("orders"), list) else [])
+        if isinstance(item, dict) and item.get("order_id")
+    }
+    missing_ev_candidates = sorted(set(expected_candidate_ids) - ev_candidate_ids)
+    missing_runtime_summary_candidates = sorted(set(expected_candidate_ids) - runtime_candidate_ids)
+    missing_workorder_order_ids = sorted(set(expected_order_ids) - actual_order_ids)
+    missing: list[str] = []
+    if missing_ev_candidates:
+        missing.append("threshold_cycle_ev_submit_bucket_candidates_missing")
+    if missing_runtime_summary_candidates:
+        missing.append("runtime_approval_summary_submit_bucket_candidates_missing")
+    if missing_workorder_order_ids:
+        missing.append("code_improvement_workorder_submit_bucket_orders_missing")
+    return {
+        "status": "fail" if missing else ("missing" if not attribution else "pass"),
+        "expected_candidate_ids": expected_candidate_ids,
+        "threshold_cycle_ev_candidate_ids": sorted(ev_candidate_ids),
+        "runtime_approval_summary_candidate_ids": sorted(runtime_candidate_ids),
+        "missing_ev_candidate_ids": missing_ev_candidates,
+        "missing_runtime_summary_candidate_ids": missing_runtime_summary_candidates,
+        "expected_workorder_order_ids": expected_order_ids,
+        "actual_workorder_order_ids": sorted(actual_order_ids),
+        "missing_workorder_order_ids": missing_workorder_order_ids,
+        "missing": missing,
+        "interpretation": (
+            "LDM submit bucket attribution propagated to threshold EV, runtime summary, and code workorder."
+            if attribution and not missing
+            else "LDM submit bucket output was generated but one or more downstream consumers dropped it."
+            if attribution
+            else "LDM submit bucket attribution missing"
+        ),
+    }
+
+
+def _buy_funnel_submit_drought_handoff_status(
+    buy_funnel: dict[str, Any],
+    ldm_report: dict[str, Any],
+    ev_report: dict[str, Any],
+    runtime_summary: dict[str, Any],
+    workorder: dict[str, Any],
+) -> dict[str, Any]:
+    classification = (
+        buy_funnel.get("classification")
+        if isinstance(buy_funnel.get("classification"), dict)
+        else {}
+    )
+    matches = classification.get("matches") if isinstance(classification.get("matches"), list) else []
+    critical = (
+        classification.get("primary") == "SUBMIT_DROUGHT_CRITICAL"
+        or "SUBMIT_DROUGHT_CRITICAL" in matches
+    )
+    actual_order_ids = {
+        str(item.get("order_id"))
+        for item in (workorder.get("orders") if isinstance(workorder.get("orders"), list) else [])
+        if isinstance(item, dict) and item.get("order_id")
+    }
+    ldm_submit = (
+        ldm_report.get("submit_bucket_attribution")
+        if isinstance(ldm_report.get("submit_bucket_attribution"), dict)
+        else {}
+    )
+    ev_entry_funnel = ev_report.get("entry_funnel") if isinstance(ev_report.get("entry_funnel"), dict) else {}
+    ev_buy = ev_report.get("buy_funnel_sentinel") if isinstance(ev_report.get("buy_funnel_sentinel"), dict) else {}
+    runtime_buy = (
+        runtime_summary.get("buy_funnel_sentinel")
+        if isinstance(runtime_summary.get("buy_funnel_sentinel"), dict)
+        else {}
+    )
+    runtime_summary_section = (
+        runtime_summary.get("summary") if isinstance(runtime_summary.get("summary"), dict) else {}
+    )
+    missing: list[str] = []
+    if critical:
+        missing_order_ids = sorted(set(ENTRY_SUBMIT_DROUGHT_REQUIRED_ORDER_IDS) - actual_order_ids)
+        if missing_order_ids:
+            missing.append("code_improvement_workorder_entry_submit_drought_orders_missing")
+        if not ldm_submit:
+            missing.append("ldm_submit_bucket_attribution_missing")
+        if ev_buy.get("primary") != "SUBMIT_DROUGHT_CRITICAL":
+            missing.append("threshold_cycle_ev_buy_funnel_sentinel_missing")
+        if not ev_entry_funnel.get("entry_submit_drought_handoff_selected"):
+            missing.append("threshold_cycle_ev_entry_submit_drought_handoff_missing")
+        if runtime_buy.get("primary") != "SUBMIT_DROUGHT_CRITICAL":
+            missing.append("runtime_approval_summary_buy_funnel_sentinel_missing")
+        if not runtime_summary_section.get("entry_submit_drought_handoff_selected"):
+            missing.append("runtime_approval_summary_entry_submit_drought_handoff_missing")
+    return {
+        "status": "fail" if missing else ("pass" if critical else "not_applicable"),
+        "critical": critical,
+        "primary": classification.get("primary"),
+        "matches": matches,
+        "expected_workorder_order_ids": ENTRY_SUBMIT_DROUGHT_REQUIRED_ORDER_IDS if critical else [],
+        "actual_workorder_order_ids": sorted(actual_order_ids),
+        "missing_workorder_order_ids": (
+            sorted(set(ENTRY_SUBMIT_DROUGHT_REQUIRED_ORDER_IDS) - actual_order_ids) if critical else []
+        ),
+        "ldm_submit_bucket_attribution_present": bool(ldm_submit),
+        "threshold_cycle_ev_primary": ev_buy.get("primary"),
+        "runtime_approval_summary_primary": runtime_buy.get("primary"),
+        "missing": missing,
+        "interpretation": (
+            "BUY Funnel Sentinel SUBMIT_DROUGHT_CRITICAL propagated through workorder, LDM submit attribution, EV, and runtime summary."
+            if critical and not missing
+            else "BUY Funnel Sentinel critical source was generated but one or more downstream consumers dropped it."
+            if critical
+            else "BUY Funnel Sentinel submit drought is not critical."
         ),
     }
 
@@ -838,6 +1041,7 @@ def build_threshold_cycle_postclose_verification(
     ev_report = _load_json(paths["threshold_cycle_ev"])
     workorder = _load_json(paths["code_improvement_workorder"])
     runtime_summary = _load_json(paths["runtime_approval_summary"])
+    buy_funnel_report = _load_json(paths["buy_funnel_sentinel"])
     currentness_audit = _load_json(paths["pattern_lab_currentness_audit"])
     pattern_lab_ai_review = _load_json(paths["pattern_lab_ai_review"])
     propagation_audit = _load_json(paths["pattern_lab_propagation_audit"])
@@ -860,6 +1064,19 @@ def build_threshold_cycle_postclose_verification(
     entry_bucket_handoff = _entry_bucket_handoff_status(ldm_report, ev_report, runtime_summary, workorder)
     if entry_bucket_handoff.get("status") == "fail":
         log_issues.append("ldm_entry_bucket_handoff_missing")
+    submit_attribution = ldm_report.get("submit_bucket_attribution")
+    submit_bucket_handoff = _submit_bucket_handoff_status(ldm_report, ev_report, runtime_summary, workorder)
+    if isinstance(submit_attribution, dict) and submit_bucket_handoff.get("status") == "fail":
+        log_issues.append("ldm_submit_bucket_handoff_missing")
+    buy_funnel_submit_drought_handoff = _buy_funnel_submit_drought_handoff_status(
+        buy_funnel_report,
+        ldm_report,
+        ev_report,
+        runtime_summary,
+        workorder,
+    )
+    if buy_funnel_submit_drought_handoff.get("status") == "fail":
+        log_issues.append("buy_funnel_submit_drought_handoff_missing")
     scale_in_attribution = ldm_report.get("scale_in_bucket_attribution")
     scale_in_source_present = _has_scale_in_source(ldm_report)
     if scale_in_source_present and not isinstance(scale_in_attribution, dict):
@@ -1228,6 +1445,9 @@ def build_threshold_cycle_postclose_verification(
         "ai_correction": ai_correction,
         "scalp_sim_overnight_source_quality": scalp_sim_overnight_quality,
         "entry_bucket_handoff": entry_bucket_handoff,
+        "submit_bucket_handoff": submit_bucket_handoff,
+        "submit_bucket_attribution_present": isinstance(submit_attribution, dict),
+        "buy_funnel_submit_drought_handoff": buy_funnel_submit_drought_handoff,
         "scale_in_bucket_handoff": scale_in_bucket_handoff,
         "scale_in_bucket_attribution_present": isinstance(scale_in_attribution, dict),
         "scale_in_source_present": scale_in_source_present,
@@ -1249,6 +1469,12 @@ def _render_markdown(report: dict[str, Any]) -> str:
         else {}
     )
     entry_bucket = report.get("entry_bucket_handoff") if isinstance(report.get("entry_bucket_handoff"), dict) else {}
+    submit_bucket = report.get("submit_bucket_handoff") if isinstance(report.get("submit_bucket_handoff"), dict) else {}
+    buy_funnel_handoff = (
+        report.get("buy_funnel_submit_drought_handoff")
+        if isinstance(report.get("buy_funnel_submit_drought_handoff"), dict)
+        else {}
+    )
     scale_in_bucket = report.get("scale_in_bucket_handoff") if isinstance(report.get("scale_in_bucket_handoff"), dict) else {}
     overnight_bucket = report.get("overnight_bucket_handoff") if isinstance(report.get("overnight_bucket_handoff"), dict) else {}
     lifecycle_bucket = (
@@ -1280,6 +1506,16 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- missing_required_artifacts: `{report.get('missing_required_artifacts') or []}`",
         f"- missing_downstream_links: `{report.get('missing_downstream_links') or []}`",
         f"- stale_downstream_links: `{report.get('stale_downstream_links') or []}`",
+        "",
+        "## BUY Funnel Submit Drought Handoff",
+        f"- status: `{buy_funnel_handoff.get('status')}`",
+        f"- critical: `{buy_funnel_handoff.get('critical')}`",
+        f"- missing: `{buy_funnel_handoff.get('missing') or []}`",
+        "",
+        "## Submit Bucket Handoff",
+        f"- status: `{submit_bucket.get('status')}`",
+        f"- attribution_present: `{report.get('submit_bucket_attribution_present')}`",
+        f"- missing: `{submit_bucket.get('missing') or []}`",
         "",
         "## AI Correction",
         f"- status: `{ai_correction.get('status') or '-'}`",

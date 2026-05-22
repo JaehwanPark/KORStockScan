@@ -57,7 +57,7 @@ _FAMILY_DESCRIPTIONS = {
     "trailing_continuation": "trailing 이후 추가 상승 여지가 큰 표본을 계속 보유할 수 있는지 보는 축",
     "pre_submit_price_guard": "주문 제출 직전 quote stale, spread, passive probe 가격품질 문제를 막는 진입 안전축",
     "latency_classifier_runtime_profile": "latency SAFE/CAUTION/DANGER classifier와 bounded submit recovery canary를 분리 적용하는 진입 실행품질 축",
-    "score65_74_recovery_probe": "AI 점수 65~74 WAIT 구간 중 수급/가속 조건이 좋은 후보를 1주/소액 canary로 회수하는 축",
+    "score65_74_recovery_probe": "family id는 score65_74로 유지하지만 현 runtime floor 기준 AI 점수 60~74 WAIT 구간 중 수급/가속 조건이 좋은 후보를 1주/소액 canary로 회수하는 축",
     "liquidity_gate_refined_candidate": "유동성 gate가 막은 후보의 후행 EV를 보고 gate 완화/유지 필요성을 판단하는 축",
     "overbought_gate_refined_candidate": "과열 gate가 막은 후보의 후행 EV를 보고 과열 차단 기준을 다듬는 축",
     "bad_entry_refined_canary": "진입 직후 never-green/AI fade 위험이 큰 표본을 조기 정리할 수 있는지 보는 축",
@@ -166,16 +166,16 @@ _SCALPING_GATE_REVIEW = {
     "latency_classifier_runtime_profile": {
         "gate_review_class": "entry_execution_quality_bounded_tunable",
         "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
-        "hard_gate_review": "CAUTION은 기본 runtime에서 reject이며 bounded recovery canary가 명시된 경우에만 latency_pass 후보가 된다",
-        "tuning_route": "threshold-cycle latency recommendation plus post-apply latency_pass/order_bundle attribution",
-        "analysis_coverage": "latency_block SAFE/CAUTION/recovery/hard reject split",
+        "hard_gate_review": "CAUTION은 slippage check 후 normal submit으로 단순화하고, DANGER/stale/broker safety만 차단한다",
+        "tuning_route": "threshold-cycle latency audit plus post-apply latency_pass/order_bundle attribution",
+        "analysis_coverage": "latency_block DANGER/stale/broker audit and submit drought attribution",
     },
     "score65_74_recovery_probe": {
         "gate_review_class": "entry_unlock_probe",
         "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
         "hard_gate_review": "AI 점수 WAIT 구간 회수축이며 hard gate 잔존으로 닫힌 축이 아니다",
         "tuning_route": "runtime env/operator lock plus post-apply attribution",
-        "analysis_coverage": "score65_74 cohort and submitted/probe split",
+        "analysis_coverage": "effective score60_74 cohort and submitted/probe split; legacy score65_74 family id retained",
     },
     "liquidity_gate_refined_candidate": {
         "gate_review_class": "superseded_legacy_pre_ai_gate",
@@ -654,7 +654,11 @@ def _scalping_rows(ev_report: dict[str, Any], calibration_report: dict[str, Any]
         next_preopen_selected = selected_family and recommended_action == "bounded_apply" and allowed_runtime_apply
         recovery_candidates = _as_int(entry_funnel.get("would_recovery_canary_events"))
         recovery_attempts = _as_int(entry_funnel.get("would_recovery_canary_attempts"))
-        caution_rejects = _as_int(entry_funnel.get("would_caution_reject_events"))
+        caution_normal_semantics = _as_int(
+            entry_funnel.get("would_caution_normal_events")
+            if entry_funnel.get("would_caution_normal_events") is not None
+            else entry_funnel.get("would_caution_reject_events")
+        )
         if next_preopen_selected:
             state = "adjust_up"
             reasons = ["selected_auto_bounded_live"]
@@ -675,8 +679,8 @@ def _scalping_rows(ev_report: dict[str, Any], calibration_report: dict[str, Any]
                 else "보류: 최신 recommendation 기준 다음 PREOPEN latency env 변경 없음"
             ),
             "state_interpretation": (
-                "SAFE만 runtime pass로 보며 CAUTION은 기본 reject다. "
-                "recovery canary가 명시되고 allowed_runtime_apply=true인 후보만 다음 PREOPEN bounded env로 연결한다."
+                "SAFE/CAUTION은 slippage check 후 normal submit으로 보내고, "
+                "DANGER/stale/broker safety만 submit 차단으로 유지한다."
             ),
             "score": recovery_candidates,
             "score_label": str(recovery_candidates),
@@ -684,7 +688,7 @@ def _scalping_rows(ev_report: dict[str, Any], calibration_report: dict[str, Any]
                 "count": _as_int(entry_funnel.get("latency_block_events")),
                 "floor": 20,
                 "would_safe_pass_events": _as_int(entry_funnel.get("would_safe_pass_events")),
-                "would_caution_reject_events": caution_rejects,
+                "historical_caution_audit_events": caution_normal_semantics,
                 "would_recovery_canary_events": recovery_candidates,
                 "would_recovery_canary_attempts": recovery_attempts,
                 "latency_pass_events": _as_int(entry_funnel.get("latency_pass_events")),
@@ -1254,6 +1258,43 @@ def _lifecycle_matrix_summary(ev_report: dict[str, Any], source_path: str | None
             "code_improvement_workorders",
         )
     )
+    submit_bucket_candidates = (
+        matrix.get("submit_bucket_runtime_approval_candidates")
+        if isinstance(matrix.get("submit_bucket_runtime_approval_candidates"), list)
+        else _bucket_list_from_lifecycle_source(
+            source_payload,
+            "submit_bucket_attribution",
+            "runtime_approval_candidates",
+        )
+    )
+    submit_bucket_workorders = (
+        matrix.get("submit_bucket_code_improvement_workorders")
+        if isinstance(matrix.get("submit_bucket_code_improvement_workorders"), list)
+        else _bucket_list_from_lifecycle_source(
+            source_payload,
+            "submit_bucket_attribution",
+            "code_improvement_workorders",
+        )
+    )
+    submit_attribution = (
+        source_payload.get("submit_bucket_attribution")
+        if isinstance(source_payload.get("submit_bucket_attribution"), dict)
+        else {}
+    )
+    submit_attribution_summary = (
+        matrix.get("submit_bucket_attribution_summary")
+        if isinstance(matrix.get("submit_bucket_attribution_summary"), dict)
+        else submit_attribution.get("summary")
+        if isinstance(submit_attribution.get("summary"), dict)
+        else {}
+    )
+    post_submit_contract_gaps = (
+        matrix.get("post_submit_contract_gaps")
+        if isinstance(matrix.get("post_submit_contract_gaps"), list)
+        else submit_attribution.get("post_submit_contract_gaps")
+        if isinstance(submit_attribution.get("post_submit_contract_gaps"), list)
+        else []
+    )
     entry_bucket_runtime_candidate_count = _as_int(matrix.get("entry_bucket_runtime_candidate_count")) or _bucket_count_from_lifecycle_source(
         source_payload,
         "entry_bucket_attribution",
@@ -1318,6 +1359,10 @@ def _lifecycle_matrix_summary(ev_report: dict[str, Any], source_path: str | None
         "overnight_bucket_workorder_count": overnight_bucket_workorder_count,
         "entry_bucket_runtime_approval_candidates": entry_bucket_candidates,
         "entry_bucket_code_improvement_workorders": entry_bucket_workorders,
+        "submit_bucket_attribution_summary": submit_attribution_summary,
+        "submit_bucket_runtime_approval_candidates": submit_bucket_candidates,
+        "submit_bucket_code_improvement_workorders": submit_bucket_workorders,
+        "post_submit_contract_gaps": post_submit_contract_gaps,
         "scale_in_bucket_runtime_approval_candidates": scale_in_bucket_candidates,
         "scale_in_bucket_code_improvement_workorders": scale_in_bucket_workorders,
         "overnight_bucket_runtime_approval_candidates": overnight_bucket_candidates,
@@ -1411,6 +1456,8 @@ def _swing_lifecycle_matrix_summary(ev_report: dict[str, Any]) -> dict[str, Any]
         "sim_auto_candidate_count": int(payload.get("sim_auto_candidate_count") or 0),
         "workorder_count": int(payload.get("workorder_count") or 0),
         "daily_simulation_consumed": bool(payload.get("daily_simulation_consumed")),
+        "swing_entry_bottleneck_primary": payload.get("swing_entry_bottleneck_primary"),
+        "swing_lifecycle_contract_gap_count": int(payload.get("swing_lifecycle_contract_gap_count") or 0),
         "sim_auto_candidate_ids": payload.get("sim_auto_candidate_ids") if isinstance(payload.get("sim_auto_candidate_ids"), list) else [],
         "state_interpretation": "source-only Swing LDM. sim-only candidates are auto-approved for simulation policy input only.",
         "warnings": warnings,
@@ -1445,6 +1492,8 @@ def _swing_lifecycle_bucket_discovery_summary(ev_report: dict[str, Any]) -> dict
         "code_patch_required_count": int(payload.get("code_patch_required_count") or 0),
         "runtime_blocked_contract_gap_count": int(payload.get("runtime_blocked_contract_gap_count") or 0),
         "automation_handoff_gap_count": int(payload.get("automation_handoff_gap_count") or 0),
+        "swing_entry_bottleneck_primary": payload.get("swing_entry_bottleneck_primary"),
+        "swing_entry_bottleneck_candidate_present": bool(payload.get("swing_entry_bottleneck_candidate_present")),
         "surfaced_candidate_ids": payload.get("surfaced_candidate_ids") if isinstance(payload.get("surfaced_candidate_ids"), list) else [],
         "state_interpretation": "sim-only candidates are auto-approved and surfaced to the next PREOPEN swing sim policy input.",
         "warnings": warnings,
@@ -1491,6 +1540,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     sources = ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
     calibration_source = sources.get("calibration")
     scalp_entry_adm_path = sources.get("scalp_entry_action_decision_matrix")
+    buy_funnel_sentinel_path = sources.get("buy_funnel_sentinel")
     lifecycle_matrix_path = sources.get("lifecycle_decision_matrix")
     lifecycle_ai_context_path = sources.get("lifecycle_ai_context")
     lifecycle_ai_context_attribution_path = sources.get("lifecycle_ai_context_attribution")
@@ -1526,6 +1576,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             "threshold_cycle_ev": str(ev_json) if ev_json.exists() else None,
             "swing_runtime_approval": str(swing_path) if swing_path.exists() else None,
             "scalp_entry_action_decision_matrix": scalp_entry_adm_path,
+            "buy_funnel_sentinel": buy_funnel_sentinel_path,
             "lifecycle_decision_matrix": lifecycle_matrix_path,
             "lifecycle_bucket_discovery": lifecycle_bucket_discovery_summary.get("artifact"),
             "lifecycle_ai_context": lifecycle_ai_context_path,
@@ -1565,6 +1616,16 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
                 "ready_for_daily_policy_tuning"
             ),
             "scalp_entry_adm_warnings": scalp_entry_adm_summary.get("warnings"),
+            "buy_funnel_sentinel_primary": (
+                (ev_report.get("buy_funnel_sentinel") or {}).get("primary")
+                if isinstance(ev_report.get("buy_funnel_sentinel"), dict)
+                else None
+            ),
+            "entry_submit_drought_handoff_selected": (
+                (ev_report.get("entry_funnel") or {}).get("entry_submit_drought_handoff_selected")
+                if isinstance(ev_report.get("entry_funnel"), dict)
+                else False
+            ),
             "lifecycle_matrix_status": (
                 (ev_report.get("lifecycle_decision_matrix") or {}).get("status")
                 if isinstance(ev_report.get("lifecycle_decision_matrix"), dict)
@@ -1605,6 +1666,9 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
         },
         "application_timing": _application_timing(target_date, ev_report),
         "scalp_entry_action_decision_matrix": scalp_entry_adm_summary,
+        "buy_funnel_sentinel": ev_report.get("buy_funnel_sentinel")
+        if isinstance(ev_report.get("buy_funnel_sentinel"), dict)
+        else {},
         "lifecycle_decision_matrix": lifecycle_matrix_summary,
         "lifecycle_bucket_discovery": lifecycle_bucket_discovery_summary,
         "lifecycle_ai_context": ev_report.get("lifecycle_ai_context")

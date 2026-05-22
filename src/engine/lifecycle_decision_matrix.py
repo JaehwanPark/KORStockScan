@@ -43,6 +43,7 @@ OVERNIGHT_BUCKET_SAMPLE_FLOOR = 5
 OVERNIGHT_BUCKET_PROMOTE_SAMPLE_FLOOR = 10
 OVERNIGHT_BUCKET_NEGATIVE_EV_PCT = -0.30
 OVERNIGHT_BUCKET_POSITIVE_EV_PCT = 0.30
+SUBMIT_BUCKET_SAMPLE_FLOOR = 3
 
 RUNTIME_FEATURE_KEYS = {
     "ai_score",
@@ -1294,6 +1295,18 @@ SCALE_IN_BUCKET_FIELD_MAP = {
 }
 
 
+SUBMIT_BUCKET_FIELD_MAP = {
+    "submit_source_stage": "source_stage",
+    "revalidation_state": "runtime_features.entry_submit_revalidation_warning|runtime_features.entry_submit_revalidation_block",
+    "quote_age_bucket": "runtime_features.quote_age_ms",
+    "price_resolution_bucket": "runtime_features.price_resolution_bucket|runtime_features.resolved_order_price|runtime_features.limit_price",
+    "would_limit_fill": "runtime_features.would_limit_fill",
+    "actual_order_submitted": "runtime_features.actual_order_submitted|actual_order_submitted",
+    "broker_order_forbidden": "runtime_features.broker_order_forbidden",
+    "combo_submit_quality": "source_stage|runtime_features.entry_submit_revalidation_warning|runtime_features.entry_submit_revalidation_block|runtime_features.quote_age_ms|runtime_features.would_limit_fill|runtime_features.actual_order_submitted",
+}
+
+
 def _nested_present(row: dict[str, Any], path: str) -> bool:
     current: Any = row
     for part in path.split("."):
@@ -1579,6 +1592,225 @@ def _entry_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "buckets": buckets[:200],
         "runtime_approval_candidates": runtime_candidates,
         "code_improvement_workorders": workorders,
+    }
+
+
+def _quote_age_bucket(value: Any) -> str:
+    age = _safe_float(value, None)
+    if age is None:
+        return "quote_age_unknown"
+    if age < 1000:
+        return "quote_age_lt1s"
+    if age < 3000:
+        return "quote_age_1_3s"
+    if age < 10000:
+        return "quote_age_3_10s"
+    return "quote_age_10s_plus"
+
+
+def _bool_bucket(value: Any, *, unknown: str) -> str:
+    if value in (None, "", "-", "None", "none", "null"):
+        return unknown
+    return "true" if not _boolish_false(value) else "false"
+
+
+def _submit_revalidation_state(features: dict[str, Any]) -> str:
+    block = _bucket_value(features.get("entry_submit_revalidation_block"), "")
+    if block:
+        return f"block_{block}"
+    warning = _bucket_value(features.get("entry_submit_revalidation_warning"), "")
+    if warning:
+        return f"warning_{warning}"
+    return "ok_or_unflagged"
+
+
+def _submit_bucket_features(row: dict[str, Any]) -> dict[str, str]:
+    features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
+    return {
+        "submit_source_stage": _bucket_value(row.get("source_stage"), "source_unknown"),
+        "revalidation_state": _submit_revalidation_state(features),
+        "quote_age_bucket": _quote_age_bucket(features.get("quote_age_ms")),
+        "price_resolution_bucket": _bucket_value(
+            features.get("price_resolution_bucket"),
+            "price_resolution_unknown",
+        ),
+        "would_limit_fill": _bool_bucket(features.get("would_limit_fill"), unknown="would_limit_fill_unknown"),
+        "actual_order_submitted": _bool_bucket(
+            features.get("actual_order_submitted", row.get("actual_order_submitted")),
+            unknown="actual_order_submitted_unknown",
+        ),
+        "broker_order_forbidden": _bool_bucket(
+            features.get("broker_order_forbidden"),
+            unknown="broker_order_forbidden_unknown",
+        ),
+    }
+
+
+def _submit_bucket_row(bucket_type: str, bucket_key: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    joined = [row for row in rows if row.get("stage_ev_composite_pct") is not None]
+    joined_sample = len(joined)
+    ev_values = [float(row["stage_ev_composite_pct"]) for row in joined]
+    avg_ev = round(sum(ev_values) / len(ev_values), 4) if ev_values else None
+    source_quality = "pass" if len(rows) >= SUBMIT_BUCKET_SAMPLE_FLOOR else "hold_sample"
+    unknown_context = _unknown_taxonomy_context(
+        bucket_type=bucket_type,
+        bucket_key=bucket_key,
+        rows=rows,
+        joined_sample=joined_sample,
+        field_map=SUBMIT_BUCKET_FIELD_MAP,
+    )
+    return {
+        "bucket_type": bucket_type,
+        "bucket_key": bucket_key,
+        "sample": len(rows),
+        "joined_sample": joined_sample,
+        "join_rate": round(joined_sample / len(rows), 4) if rows else 0.0,
+        "source_quality_gate": source_quality,
+        "source_quality_adjusted_ev_pct": avg_ev,
+        "recommended_route": "source_quality_workorder" if "unknown" in bucket_key else "keep_collecting",
+        **unknown_context,
+        "decision_authority": "adm_ldm_submit_bucket_attribution_source_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": [
+            "broker_order_submit",
+            "intraday_threshold_mutation",
+            "provider_route_change",
+            "bot_restart_trigger",
+            "hard_safety_override",
+        ],
+    }
+
+
+def _submit_contract_gaps(submit_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not submit_rows:
+        return []
+    gap_specs = [
+        (
+            "post_submit_contract_gap",
+            "order_entry_post_submit_contract_gap_review",
+            "runtime_features.entry_submit_revalidation_warning|runtime_features.entry_submit_revalidation_block|runtime_features.quote_age_ms",
+            "price_revalidation_or_submit_state_missing",
+        ),
+        (
+            "broker_receipt_contract_gap",
+            "order_entry_broker_receipt_contract_gap_review",
+            "runtime_features.actual_order_submitted|actual_order_submitted",
+            "broker_receipt_or_real_submit_flag_missing",
+        ),
+        (
+            "fill_quality_contract_gap",
+            "order_entry_fill_quality_contract_gap_review",
+            "runtime_features.would_limit_fill|runtime_features.resolved_order_price|runtime_features.limit_price",
+            "limit_fill_or_price_quality_missing",
+        ),
+        (
+            "telegram_post_submit_contract_gap",
+            "order_entry_telegram_post_submit_contract_gap_review",
+            "runtime_features.actual_order_submitted|actual_order_submitted",
+            "buy_telegram_must_be_bound_to_submitted_only",
+        ),
+    ]
+    gaps: list[dict[str, Any]] = []
+    for gap_type, workorder_id, paths, reason in gap_specs:
+        coverage = _field_coverage(submit_rows, paths)
+        if coverage["present_count"] <= 0:
+            gaps.append(
+                {
+                    "gap_type": gap_type,
+                    "workorder_id": workorder_id,
+                    "bucket_type": gap_type,
+                    "bucket_key": reason,
+                    "reason": reason,
+                    "source_field_coverage": coverage,
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                }
+            )
+    return gaps
+
+
+def _submit_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    submit_rows = [row for row in rows if str(row.get("stage") or "") == "submit"]
+    bucket_groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in submit_rows:
+        buckets = _submit_bucket_features(row)
+        for bucket_type in (
+            "submit_source_stage",
+            "revalidation_state",
+            "quote_age_bucket",
+            "price_resolution_bucket",
+            "would_limit_fill",
+            "actual_order_submitted",
+            "broker_order_forbidden",
+        ):
+            bucket_groups[(bucket_type, buckets[bucket_type])].append(row)
+        combo_key = "|".join(
+            [
+                f"source={buckets['submit_source_stage']}",
+                f"revalidation={buckets['revalidation_state']}",
+                f"quote_age={buckets['quote_age_bucket']}",
+                f"fill={buckets['would_limit_fill']}",
+                f"submitted={buckets['actual_order_submitted']}",
+            ]
+        )
+        bucket_groups[("combo_submit_quality", combo_key)].append(row)
+    buckets = [
+        _submit_bucket_row(bucket_type, bucket_key, subset)
+        for (bucket_type, bucket_key), subset in bucket_groups.items()
+    ]
+    buckets.sort(
+        key=lambda item: (
+            str(item.get("bucket_type") or ""),
+            -int(item.get("sample") or 0),
+            str(item.get("bucket_key") or ""),
+        )
+    )
+    contract_gaps = _submit_contract_gaps(submit_rows)
+    workorders = [
+        {
+            "workorder_id": item["workorder_id"],
+            "bucket_type": item["bucket_type"],
+            "bucket_key": item["bucket_key"],
+            "reason": item["reason"],
+            "metric_role": "source_quality_gate",
+            "implementation_status": "open",
+            "implementation_provenance": {
+                "source_field_coverage": item.get("source_field_coverage") or {},
+                "recommended_resolution": "emit_or_backfill_submit_contract_field",
+            },
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+        for item in contract_gaps
+    ]
+    return {
+        "metric_role": "submit_funnel_source_quality_gate",
+        "decision_authority": "adm_ldm_submit_bucket_attribution_source_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "window_policy": "daily_lifecycle_submit_rows_plus_threshold_cycle_rolling_consumer",
+        "sample_floor": SUBMIT_BUCKET_SAMPLE_FLOOR,
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": "submit row sample + revalidation/broker/fill provenance + no runtime mutation",
+        "forbidden_uses": [
+            "broker_order_submit",
+            "intraday_threshold_mutation",
+            "provider_route_change",
+            "bot_restart_trigger",
+            "hard_safety_override",
+        ],
+        "summary": {
+            "submit_rows": len(submit_rows),
+            "bucket_count": len(buckets),
+            "contract_gap_count": len(contract_gaps),
+            "workorder_count": len(workorders),
+            "runtime_candidate_count": 0,
+        },
+        "buckets": buckets[:200],
+        "runtime_approval_candidates": [],
+        "code_improvement_workorders": workorders,
+        "post_submit_contract_gaps": contract_gaps,
     }
 
 
@@ -2135,6 +2367,7 @@ def build_lifecycle_decision_matrix_report(target_date: str) -> dict[str, Any]:
     if all(entry.get("source_quality_gate") != "pass" for entry in policy_entries):
         warnings.append("all_stage_policy_entries_below_sample_floor")
     entry_bucket_attribution = _entry_bucket_attribution(rows)
+    submit_bucket_attribution = _submit_bucket_attribution(rows)
     scale_in_bucket_attribution = _scale_in_bucket_attribution(rows)
     overnight_bucket_attribution = _overnight_bucket_attribution(rows)
     report = {
@@ -2179,6 +2412,16 @@ def build_lifecycle_decision_matrix_report(target_date: str) -> dict[str, Any]:
                 if isinstance(entry_bucket_attribution.get("summary"), dict)
                 else 0
             ),
+            "submit_bucket_contract_gap_count": (
+                submit_bucket_attribution.get("summary", {}).get("contract_gap_count")
+                if isinstance(submit_bucket_attribution.get("summary"), dict)
+                else 0
+            ),
+            "submit_bucket_workorder_count": (
+                submit_bucket_attribution.get("summary", {}).get("workorder_count")
+                if isinstance(submit_bucket_attribution.get("summary"), dict)
+                else 0
+            ),
             "scale_in_bucket_actionable_count": (
                 scale_in_bucket_attribution.get("summary", {}).get("actionable_bucket_count")
                 if isinstance(scale_in_bucket_attribution.get("summary"), dict)
@@ -2215,6 +2458,7 @@ def build_lifecycle_decision_matrix_report(target_date: str) -> dict[str, Any]:
         },
         "policy_entries": policy_entries,
         "entry_bucket_attribution": entry_bucket_attribution,
+        "submit_bucket_attribution": submit_bucket_attribution,
         "scale_in_bucket_attribution": scale_in_bucket_attribution,
         "overnight_bucket_attribution": overnight_bucket_attribution,
         "examples": rows[:50],
@@ -2314,6 +2558,45 @@ def render_lifecycle_decision_matrix_markdown(report: dict[str, Any]) -> str:
     lines.extend(["", "### Entry Bucket Workorders", ""])
     if workorders:
         for item in workorders:
+            if isinstance(item, dict):
+                lines.append(f"- `{item.get('workorder_id')}`: `{item.get('bucket_type')}` / `{item.get('bucket_key')}` -> `{item.get('reason')}`")
+    else:
+        lines.append("- none")
+    submit_buckets = (
+        report.get("submit_bucket_attribution")
+        if isinstance(report.get("submit_bucket_attribution"), dict)
+        else {}
+    )
+    submit_summary = submit_buckets.get("summary") if isinstance(submit_buckets.get("summary"), dict) else {}
+    lines.extend(
+        [
+            "",
+            "## Submit Bucket Attribution",
+            "",
+            f"- decision_authority: `{submit_buckets.get('decision_authority')}`",
+            f"- primary_decision_metric: `{submit_buckets.get('primary_decision_metric')}`",
+            f"- summary: `{submit_summary}`",
+            "",
+            "| bucket_type | bucket_key | sample | joined | ev | route |",
+            "| --- | --- | ---: | ---: | ---: | --- |",
+        ]
+    )
+    shown = 0
+    for item in submit_buckets.get("buckets") or []:
+        if not isinstance(item, dict):
+            continue
+        lines.append(
+            f"| `{item.get('bucket_type')}` | `{item.get('bucket_key')}` | {item.get('sample')} | "
+            f"{item.get('joined_sample')} | {item.get('source_quality_adjusted_ev_pct')} | "
+            f"`{item.get('recommended_route')}` |"
+        )
+        shown += 1
+        if shown >= 40:
+            break
+    submit_workorders = submit_buckets.get("code_improvement_workorders") or []
+    lines.extend(["", "### Submit Bucket Workorders", ""])
+    if submit_workorders:
+        for item in submit_workorders:
             if isinstance(item, dict):
                 lines.append(f"- `{item.get('workorder_id')}`: `{item.get('bucket_type')}` / `{item.get('bucket_key')}` -> `{item.get('reason')}`")
     else:

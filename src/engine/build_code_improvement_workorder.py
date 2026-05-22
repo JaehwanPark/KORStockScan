@@ -27,6 +27,7 @@ PIPELINE_EVENT_VERBOSITY_DIR = REPORT_DIR / "pipeline_event_verbosity"
 OBSERVATION_SOURCE_QUALITY_AUDIT_DIR = REPORT_DIR / "observation_source_quality_audit"
 CODEBASE_PERFORMANCE_WORKORDER_DIR = REPORT_DIR / "codebase_performance_workorder"
 PATTERN_LAB_CURRENTNESS_AUDIT_DIR = REPORT_DIR / "pattern_lab_currentness_audit"
+BUY_FUNNEL_SENTINEL_DIR = REPORT_DIR / "buy_funnel_sentinel"
 CODE_IMPROVEMENT_WORKORDER_DIR = PROJECT_ROOT / "docs" / "code-improvement-workorders"
 CODE_IMPROVEMENT_WORKORDER_REPORT_DIR = REPORT_DIR / "code_improvement_workorder"
 WORKORDER_SCHEMA_VERSION = 1
@@ -197,6 +198,10 @@ def pattern_lab_ai_review_report_path(target_date: str) -> Path:
     return PATTERN_LAB_AI_REVIEW_DIR / f"pattern_lab_ai_review_{target_date}.json"
 
 
+def buy_funnel_sentinel_report_path(target_date: str) -> Path:
+    return BUY_FUNNEL_SENTINEL_DIR / f"buy_funnel_sentinel_{target_date}.json"
+
+
 def _finding_maps(report: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     by_order_id: dict[str, dict[str, Any]] = {}
     by_title_slug: dict[str, dict[str, Any]] = {}
@@ -269,6 +274,26 @@ def _classify_order(
             route=route,
             confidence=confidence,
             automation_reentry="Reject artifact and regenerate the source automation report before implementation.",
+        )
+
+    if (
+        order.get("source_report_type") == "swing_improvement_automation"
+        and order_id == "order_swing_entry_bottleneck_auto_resolution"
+    ):
+        return ClassifiedOrder(
+            order=order,
+            decision="implement_now",
+            reason=(
+                "SWING_ENTRY_DROUGHT_CRITICAL is a source-only swing entry bottleneck handoff and must not be "
+                "dropped by workorder selection limits"
+            ),
+            mapped_family=mapped_family or "swing_gatekeeper_accept_reject",
+            route=route or "instrumentation_order",
+            confidence=confidence or "consensus",
+            automation_reentry=(
+                "After implementation, regenerate swing audit, Swing LDM, bucket discovery, code workorder, "
+                "EV/runtime summary, and postclose verifier; runtime/live order guards remain unchanged."
+            ),
         )
 
     if (
@@ -810,6 +835,187 @@ def _lifecycle_entry_bucket_followup_orders(report: dict[str, Any]) -> list[dict
                     "postclose verifier fails if LDM entry bucket candidates/workorders are not propagated",
                 ],
                 "metric_contract": contract,
+            }
+        )
+    return orders
+
+
+def _lifecycle_submit_bucket_order_id(item: dict[str, Any]) -> str:
+    workorder_id = str(item.get("workorder_id") or "").strip()
+    if workorder_id.startswith("order_entry_"):
+        return workorder_id
+    bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
+    bucket_key = _slug(str(item.get("bucket_key") or item.get("workorder_id") or "unknown"))
+    return f"order_lifecycle_submit_bucket_{bucket_type}_{bucket_key}"
+
+
+def _lifecycle_submit_bucket_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+    attribution = (
+        report.get("submit_bucket_attribution")
+        if isinstance(report.get("submit_bucket_attribution"), dict)
+        else {}
+    )
+    workorders = attribution.get("code_improvement_workorders")
+    if not isinstance(workorders, list) or not workorders:
+        return []
+    contract = {
+        "metric_role": attribution.get("metric_role"),
+        "decision_authority": attribution.get("decision_authority"),
+        "window_policy": attribution.get("window_policy"),
+        "sample_floor": attribution.get("sample_floor"),
+        "primary_decision_metric": attribution.get("primary_decision_metric"),
+        "source_quality_gate": attribution.get("source_quality_gate"),
+        "forbidden_uses": attribution.get("forbidden_uses") or [],
+    }
+    orders: list[dict[str, Any]] = []
+    for item in workorders:
+        if not isinstance(item, dict):
+            continue
+        bucket_type = str(item.get("bucket_type") or "").strip()
+        bucket_key = str(item.get("bucket_key") or "").strip()
+        if not bucket_type or not bucket_key:
+            continue
+        orders.append(
+            {
+                "order_id": _lifecycle_submit_bucket_order_id(item),
+                "title": f"LDM submit bucket contract follow-up: {bucket_type}={bucket_key}",
+                "source_report_type": "lifecycle_decision_matrix_submit_bucket_attribution",
+                "lifecycle_stage": "submit",
+                "target_subsystem": "runtime_instrumentation",
+                "route": "instrumentation_order",
+                "mapped_family": "lifecycle_decision_matrix_runtime",
+                "threshold_family": "lifecycle_decision_matrix_runtime",
+                "improvement_type": "submit_bucket_contract_gap",
+                "confidence": "daily_ldm_source",
+                "priority": 1,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "implementation_status": item.get("implementation_status"),
+                "implementation_provenance": item.get("implementation_provenance"),
+                "expected_ev_effect": (
+                    "Make submit revalidation, broker receipt, fill quality, and post-submit messaging "
+                    "contracts observable before any threshold or broker behavior tuning."
+                ),
+                "evidence": [
+                    f"workorder_id={item.get('workorder_id')}",
+                    f"bucket_type={bucket_type}",
+                    f"bucket_key={bucket_key}",
+                    f"reason={item.get('reason')}",
+                    f"metric_role={item.get('metric_role') or contract.get('metric_role')}",
+                    f"decision_authority={contract.get('decision_authority')}",
+                    f"primary_decision_metric={contract.get('primary_decision_metric')}",
+                    "runtime_effect=false",
+                    "allowed_runtime_apply=false",
+                ],
+                "intent": (
+                    "Close post-entry submit observability gaps as source-only instrumentation/workorder handoff. "
+                    "Do not change broker submit guards, provider routing, Telegram semantics, or thresholds here."
+                ),
+                "next_postclose_metric": (
+                    "lifecycle_decision_matrix.submit_bucket_attribution must remain visible in EV/runtime "
+                    "summary, and postclose verifier must fail if dropped."
+                ),
+                "files_likely_touched": [
+                    "src/engine/lifecycle_decision_matrix.py",
+                    "src/engine/threshold_cycle_ev_report.py",
+                    "src/engine/runtime_approval_summary.py",
+                    "src/engine/verify_threshold_cycle_postclose_chain.py",
+                ],
+                "acceptance_tests": [
+                    "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_decision_matrix.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py",
+                ],
+                "metric_contract": contract,
+            }
+        )
+    return orders
+
+
+ENTRY_POST_SUBMIT_WEAK_CONTRACT_ORDERS = (
+    (
+        "order_entry_post_submit_contract_gap_review",
+        "Entry post-submit contract gap review",
+        "post_submit_contract_gap",
+        "Ensure pre-submit revalidation, cancel, and post-submit state transitions are observable.",
+    ),
+    (
+        "order_entry_broker_receipt_contract_gap_review",
+        "Entry broker receipt contract gap review",
+        "broker_receipt_contract_gap",
+        "Ensure real submitted orders bind broker receipt/order number/fill/cancel provenance.",
+    ),
+    (
+        "order_entry_fill_quality_contract_gap_review",
+        "Entry fill quality contract gap review",
+        "fill_quality_contract_gap",
+        "Ensure full fill, partial fill, slippage, limit fill, and no-fill outcomes are separated.",
+    ),
+    (
+        "order_entry_telegram_post_submit_contract_gap_review",
+        "Entry Telegram post-submit contract gap review",
+        "telegram_post_submit_contract_gap",
+        "Ensure BUY Telegram messages are emitted only for orders submitted to the broker path.",
+    ),
+    (
+        "order_entry_source_taxonomy_contract_gap_review",
+        "Entry source taxonomy contract gap review",
+        "source_taxonomy_contract_gap",
+        "Ensure scalping and swing blocker namespaces are separated in BUY funnel attribution.",
+    ),
+)
+
+
+def _entry_post_submit_weak_contract_orders(
+    *,
+    evidence: list[str],
+    contract: dict[str, Any],
+    weak_contract_matches: list[Any],
+    taxonomy_leakage_labels: list[str],
+) -> list[dict[str, Any]]:
+    required_downstream = contract.get("required_downstream") if contract else []
+    orders: list[dict[str, Any]] = []
+    for order_id, title, gap_type, intent in ENTRY_POST_SUBMIT_WEAK_CONTRACT_ORDERS:
+        order_evidence = [
+            *evidence,
+            f"weak_contract_gap={gap_type}",
+            "runtime_effect=false",
+            "allowed_runtime_apply=false",
+        ]
+        if order_id == "order_entry_source_taxonomy_contract_gap_review":
+            order_evidence.append(f"taxonomy_leakage_labels={taxonomy_leakage_labels}")
+        orders.append(
+            {
+                "order_id": order_id,
+                "title": title,
+                "source_report_type": "buy_funnel_sentinel",
+                "target_subsystem": "runtime_instrumentation",
+                "lifecycle_stage": "entry_submit",
+                "route": "instrumentation_order",
+                "mapped_family": "lifecycle_decision_matrix_runtime",
+                "threshold_family": "lifecycle_decision_matrix_runtime",
+                "priority": 1,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "strategy_effect": gap_type,
+                "data_quality_effect": "post_entry_contract_gap",
+                "tuning_axis_effect": "source_quality_only",
+                "expected_ev_effect": "none_direct_source_quality_only",
+                "intent": intent,
+                "evidence": order_evidence,
+                "required_downstream": required_downstream,
+                "weak_contract_matches": weak_contract_matches,
+                "files_likely_touched": [
+                    "src/engine/buy_funnel_sentinel.py",
+                    "src/engine/lifecycle_decision_matrix.py",
+                    "src/engine/build_code_improvement_workorder.py",
+                    "src/engine/verify_threshold_cycle_postclose_chain.py",
+                ],
+                "acceptance_tests": [
+                    "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py",
+                ],
+                "next_postclose_metric": (
+                    "Entry post-submit weak contracts remain source-only workorders with runtime_effect=false "
+                    "and allowed_runtime_apply=false until explicit implementation and verification."
+                ),
             }
         )
     return orders
@@ -1363,6 +1569,112 @@ def _codebase_performance_followup_orders(report: dict[str, Any]) -> list[dict[s
     return result
 
 
+def _buy_funnel_sentinel_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+    if not report:
+        return []
+    classification = report.get("classification") if isinstance(report.get("classification"), dict) else {}
+    matches = classification.get("matches") if isinstance(classification.get("matches"), list) else []
+    if classification.get("primary") != "SUBMIT_DROUGHT_CRITICAL" and "SUBMIT_DROUGHT_CRITICAL" not in matches:
+        return []
+    session = (
+        ((report.get("current") or {}).get("session") or {})
+        if isinstance(report.get("current"), dict)
+        else {}
+    )
+    ratios = session.get("ratios") if isinstance(session.get("ratios"), dict) else {}
+    unique = session.get("stage_unique") if isinstance(session.get("stage_unique"), dict) else {}
+    blockers = session.get("blocker_top") if isinstance(session.get("blocker_top"), list) else []
+    upstream = session.get("upstream_blocker_top") if isinstance(session.get("upstream_blocker_top"), list) else []
+    latency = session.get("latency_blocker_top") if isinstance(session.get("latency_blocker_top"), list) else []
+    contract = (
+        report.get("entry_submit_drought_contract")
+        if isinstance(report.get("entry_submit_drought_contract"), dict)
+        else {}
+    )
+    weak_contract_matches = (
+        contract.get("weak_contract_matches") if isinstance(contract.get("weak_contract_matches"), list) else []
+    )
+    evidence = [
+        f"ai_confirmed_unique={_safe_int(unique.get('ai_confirmed'), 0)}",
+        f"budget_pass_unique={_safe_int(unique.get('budget_pass'), 0)}",
+        f"latency_pass_unique={_safe_int(unique.get('latency_pass'), 0)}",
+        f"submitted_unique={_safe_int(unique.get('order_bundle_submitted'), 0)}",
+        f"submitted_to_ai_pct={ratios.get('submitted_to_ai_unique_pct')}",
+        f"submitted_to_budget_pct={ratios.get('submitted_to_budget_unique_pct')}",
+    ]
+    for label, items in (("blocker", blockers), ("upstream", upstream), ("latency", latency)):
+        for item in items[:3]:
+            if isinstance(item, dict):
+                evidence.append(f"{label}:{item.get('label')}={item.get('count')}")
+    orders = [
+        {
+            "order_id": "order_entry_submit_drought_auto_resolution",
+            "title": "Entry submit drought automatic resolution handoff",
+            "source_report_type": "buy_funnel_sentinel",
+            "target_subsystem": "runtime_instrumentation",
+            "lifecycle_stage": "entry_submit",
+            "route": "instrumentation_order",
+            "mapped_family": "lifecycle_decision_matrix_runtime",
+            "threshold_family": "lifecycle_decision_matrix_runtime",
+            "priority": 0,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "strategy_effect": "entry_submit_drought_handoff",
+            "data_quality_effect": "funnel_root_cause_split_required",
+            "tuning_axis_effect": "auto_surface_to_ldm_and_workorder",
+            "expected_ev_effect": "restore submitted coverage before evaluating EV edge",
+            "intent": (
+                "When submitted/ai is below the critical threshold, automatically create a Codex workorder/LDM "
+                "handoff so upstream gate, budget pass, latency/pre-submit, and broker receipt blockers are fixed "
+                "or routed without operator approval."
+            ),
+            "evidence": evidence,
+            "required_downstream": (
+                contract.get("required_downstream")
+                if contract
+                else [
+                    "code_improvement_workorder",
+                    "lifecycle_decision_matrix.submit_bucket_attribution",
+                    "threshold_cycle_ev_report",
+                    "runtime_approval_summary",
+                    "postclose_verifier",
+                ]
+            ),
+            "weak_contract_matches": weak_contract_matches,
+            "files_likely_touched": [
+                "src/engine/buy_funnel_sentinel.py",
+                "src/engine/build_code_improvement_workorder.py",
+                "src/engine/lifecycle_decision_matrix.py",
+                "src/engine/runtime_apply_bridge.py",
+                "src/engine/threshold_cycle_ev_report.py",
+            ],
+            "acceptance_tests": [
+                "PYTHONPATH=. .venv/bin/python -m pytest -q "
+                "src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py "
+                "src/tests/test_runtime_approval_summary.py",
+            ],
+            "next_postclose_metric": (
+                "SUBMIT_DROUGHT_CRITICAL must produce a selected implement_now workorder and the next "
+                "postclose LDM/runtime summary must show submit blocker attribution."
+            ),
+        }
+    ]
+    taxonomy_leakage_labels = [
+        str(item.get("label") or "")
+        for item in blockers
+        if isinstance(item, dict) and str(item.get("label") or "").startswith("blocked_swing_")
+    ]
+    orders.extend(
+        _entry_post_submit_weak_contract_orders(
+            evidence=evidence,
+            contract=contract,
+            weak_contract_matches=weak_contract_matches,
+            taxonomy_leakage_labels=taxonomy_leakage_labels,
+        )
+    )
+    return orders
+
+
 def _closed_instrumentation_order_families(ev_report: dict[str, Any]) -> dict[str, str]:
     outcome = ev_report.get("calibration_outcome") if isinstance(ev_report.get("calibration_outcome"), dict) else {}
     decisions = outcome.get("decisions") if isinstance(outcome.get("decisions"), list) else []
@@ -1878,6 +2190,8 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     pattern_lab_currentness = _load_json(pattern_lab_currentness_path)
     pattern_lab_ai_review_path = pattern_lab_ai_review_report_path(target_date)
     pattern_lab_ai_review = _load_json(pattern_lab_ai_review_path)
+    buy_funnel_sentinel_path = buy_funnel_sentinel_report_path(target_date)
+    buy_funnel_sentinel = _load_json(buy_funnel_sentinel_path)
     calibration_source_path = _calibration_report_path_from_ev(ev_report)
     calibration_report = _calibration_report_from_ev(ev_report)
     source_paths = {
@@ -1895,6 +2209,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "codebase_performance_workorder": codebase_performance_path,
             "pattern_lab_currentness_audit": pattern_lab_currentness_path,
             "pattern_lab_ai_review": pattern_lab_ai_review_path,
+            "buy_funnel_sentinel": buy_funnel_sentinel_path,
     }
     ev_sources = ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
     if ev_sources.get("scalp_entry_action_decision_matrix"):
@@ -1932,6 +2247,20 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         for item in (swing_automation.get("code_improvement_orders") or [])
         if isinstance(item, dict)
     ]
+    swing_entry_bottleneck = (
+        swing_automation.get("swing_entry_bottleneck")
+        if isinstance(swing_automation.get("swing_entry_bottleneck"), dict)
+        else {}
+    )
+    swing_entry_bottleneck_primary = str(swing_entry_bottleneck.get("primary") or "")
+    swing_entry_bottleneck_matches = (
+        swing_entry_bottleneck.get("matches") if isinstance(swing_entry_bottleneck.get("matches"), list) else []
+    )
+    swing_entry_bottleneck_order_ids = {
+        str(item.get("order_id"))
+        for item in swing_orders
+        if item.get("order_id") == "order_swing_entry_bottleneck_auto_resolution"
+    }
     swing_lab_orders = [
         {**item, "source_report_type": "swing_pattern_lab_automation"}
         for item in (swing_lab_automation.get("code_improvement_orders") or [])
@@ -1952,7 +2281,18 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         for item in (pattern_lab_ai_review.get("code_improvement_orders") or [])
         if isinstance(item, dict)
     ]
+    buy_funnel_sentinel_orders = _buy_funnel_sentinel_followup_orders(buy_funnel_sentinel)
+    buy_funnel_sentinel_order_ids = {
+        str(order.get("order_id"))
+        for order in buy_funnel_sentinel_orders
+        if order.get("order_id")
+    }
     lifecycle_entry_bucket_orders = _lifecycle_entry_bucket_followup_orders(lifecycle_report)
+    lifecycle_submit_bucket_orders = [
+        order
+        for order in _lifecycle_submit_bucket_followup_orders(lifecycle_report)
+        if str(order.get("order_id") or "") not in buy_funnel_sentinel_order_ids
+    ]
     lifecycle_scale_in_bucket_orders = _lifecycle_scale_in_bucket_followup_orders(lifecycle_report)
     lifecycle_overnight_bucket_orders = _lifecycle_overnight_bucket_followup_orders(lifecycle_report)
     lifecycle_bucket_discovery_orders = _lifecycle_bucket_discovery_followup_orders(lifecycle_bucket_discovery)
@@ -1965,6 +2305,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         *_pipeline_event_verbosity_followup_orders(pipeline_event_verbosity),
         *_observation_source_quality_followup_orders(observation_source_quality),
         *_codebase_performance_followup_orders(codebase_performance),
+        *buy_funnel_sentinel_orders,
     ]
     closed_instrumentation_order_families = _closed_instrumentation_order_families(ev_report)
     orders = [
@@ -1977,6 +2318,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         *pattern_lab_currentness_orders,
         *pattern_lab_ai_review_orders,
         *lifecycle_entry_bucket_orders,
+        *lifecycle_submit_bucket_orders,
         *lifecycle_scale_in_bucket_orders,
         *lifecycle_overnight_bucket_orders,
         *lifecycle_bucket_discovery_orders,
@@ -2008,7 +2350,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     selected = classified[: max(1, int(max_orders))]
     required_handoff_order_ids = {
         str(order.get("order_id"))
-        for order in [*lifecycle_entry_bucket_orders, *lifecycle_scale_in_bucket_orders]
+        for order in [*lifecycle_entry_bucket_orders, *lifecycle_submit_bucket_orders, *lifecycle_scale_in_bucket_orders]
         if order.get("order_id")
     }
     required_handoff_order_ids.update(
@@ -2031,9 +2373,15 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         for order in [*swing_lifecycle_matrix_orders, *swing_lifecycle_bucket_discovery_orders]
         if order.get("order_id")
     )
+    required_handoff_order_ids.update(swing_entry_bottleneck_order_ids)
     required_handoff_order_ids.update(
         str(order.get("order_id"))
         for order in lifecycle_bucket_discovery_orders
+        if order.get("order_id")
+    )
+    required_handoff_order_ids.update(
+        str(order.get("order_id"))
+        for order in buy_funnel_sentinel_orders
         if order.get("order_id")
     )
     selected_order_ids = {str(item.order.get("order_id")) for item in selected if item.order.get("order_id")}
@@ -2088,6 +2436,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             if pattern_lab_currentness_path.exists()
             else None,
             "pattern_lab_ai_review": str(pattern_lab_ai_review_path) if pattern_lab_ai_review_path.exists() else None,
+            "buy_funnel_sentinel": str(buy_funnel_sentinel_path) if buy_funnel_sentinel_path.exists() else None,
             "threshold_cycle_calibration": str(calibration_source_path)
             if calibration_source_path and calibration_source_path.exists()
             else None,
@@ -2106,6 +2455,13 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "source_order_count": len(orders),
             "scalping_source_order_count": len(scalping_orders),
             "swing_source_order_count": len(swing_orders),
+            "swing_entry_bottleneck_primary": swing_entry_bottleneck_primary or None,
+            "swing_entry_bottleneck_source_order_count": len(swing_entry_bottleneck_order_ids),
+            "swing_entry_bottleneck_selected": bool(
+                swing_entry_bottleneck_order_ids
+                and swing_entry_bottleneck_order_ids.issubset(selected_order_ids)
+            ),
+            "swing_entry_bottleneck_matches": swing_entry_bottleneck_matches,
             "swing_lab_source_order_count": len(swing_lab_orders),
             "swing_strategy_discovery_source_order_count": len(swing_discovery_orders),
             "swing_lifecycle_matrix_source_order_count": len(swing_lifecycle_matrix_orders),
@@ -2114,6 +2470,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "pattern_lab_ai_review_source_order_count": len(pattern_lab_ai_review_orders),
             "threshold_ev_source_order_count": len(threshold_ev_orders),
             "lifecycle_entry_bucket_source_order_count": len(lifecycle_entry_bucket_orders),
+            "lifecycle_submit_bucket_source_order_count": len(lifecycle_submit_bucket_orders),
             "lifecycle_scale_in_bucket_source_order_count": len(lifecycle_scale_in_bucket_orders),
             "lifecycle_overnight_bucket_source_order_count": len(lifecycle_overnight_bucket_orders),
             "lifecycle_bucket_discovery_source_order_count": len(lifecycle_bucket_discovery_orders),
@@ -2141,6 +2498,30 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "pattern_lab_currentness_fail_count": ((pattern_lab_currentness.get("summary") or {}).get("fail_count")),
             "pattern_lab_ai_review_status": pattern_lab_ai_review.get("status"),
             "pattern_lab_ai_review_workorder_count": ((pattern_lab_ai_review.get("summary") or {}).get("workorder_count")),
+            "buy_funnel_sentinel_source_order_count": len(buy_funnel_sentinel_orders),
+            "buy_funnel_sentinel_primary": ((buy_funnel_sentinel.get("classification") or {}).get("primary")),
+            "entry_submit_drought_primary": ((buy_funnel_sentinel.get("classification") or {}).get("primary")),
+            "entry_submit_drought_selected": bool(
+                buy_funnel_sentinel_orders
+                and {
+                    str(order.get("order_id"))
+                    for order in buy_funnel_sentinel_orders
+                    if order.get("order_id")
+                }.issubset(selected_order_ids)
+            ),
+            "entry_submit_drought_required_downstream": (
+                (buy_funnel_sentinel.get("entry_submit_drought_contract") or {}).get("required_downstream")
+                if isinstance(buy_funnel_sentinel.get("entry_submit_drought_contract"), dict)
+                else []
+            ),
+            "entry_submit_drought_handoff_missing": bool(
+                buy_funnel_sentinel_orders
+                and not {
+                    str(order.get("order_id"))
+                    for order in buy_funnel_sentinel_orders
+                    if order.get("order_id")
+                }.issubset(selected_order_ids)
+            ),
             "swing_threshold_ai_status": ((swing_automation.get("ev_report_summary") or {}).get("threshold_ai_status")),
             "daily_ev_available": bool(ev_report),
             "duplicate_order_warnings": collision_warnings,
@@ -2163,6 +2544,8 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
                 "intent": item.order.get("intent"),
                 "expected_ev_effect": item.order.get("expected_ev_effect"),
                 "evidence": item.order.get("evidence") or [],
+                "required_downstream": item.order.get("required_downstream") or [],
+                "weak_contract_matches": item.order.get("weak_contract_matches") or [],
                 "next_postclose_metric": item.order.get("next_postclose_metric"),
                 "files_likely_touched": item.order.get("files_likely_touched") or [],
                 "acceptance_tests": item.order.get("acceptance_tests") or [],
@@ -2235,6 +2618,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- codebase_performance_workorder: `{source.get('codebase_performance_workorder') or '-'}`",
         f"- pattern_lab_currentness_audit: `{source.get('pattern_lab_currentness_audit') or '-'}`",
         f"- pattern_lab_ai_review: `{source.get('pattern_lab_ai_review') or '-'}`",
+        f"- buy_funnel_sentinel: `{source.get('buy_funnel_sentinel') or '-'}`",
         f"- generated_at: `{report.get('generated_at')}`",
         f"- generation_id: `{report.get('generation_id')}`",
         f"- source_hash: `{report.get('source_hash')}`",
@@ -2270,6 +2654,8 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- source_order_count: `{summary.get('source_order_count')}`",
         f"- scalping_source_order_count: `{summary.get('scalping_source_order_count')}`",
         f"- swing_source_order_count: `{summary.get('swing_source_order_count')}`",
+        f"- swing_entry_bottleneck_primary: `{summary.get('swing_entry_bottleneck_primary')}`",
+        f"- swing_entry_bottleneck_selected: `{summary.get('swing_entry_bottleneck_selected')}`",
         f"- swing_lab_source_order_count: `{summary.get('swing_lab_source_order_count')}`",
         f"- swing_strategy_discovery_source_order_count: `{summary.get('swing_strategy_discovery_source_order_count')}`",
         f"- swing_lifecycle_matrix_source_order_count: `{summary.get('swing_lifecycle_matrix_source_order_count')}`",
@@ -2277,9 +2663,13 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- pattern_lab_currentness_source_order_count: `{summary.get('pattern_lab_currentness_source_order_count')}`",
         f"- pattern_lab_ai_review_source_order_count: `{summary.get('pattern_lab_ai_review_source_order_count')}`",
         f"- threshold_ev_source_order_count: `{summary.get('threshold_ev_source_order_count')}`",
+        f"- lifecycle_submit_bucket_source_order_count: `{summary.get('lifecycle_submit_bucket_source_order_count')}`",
         f"- pipeline_event_verbosity_source_order_count: `{summary.get('pipeline_event_verbosity_source_order_count')}`",
         f"- observation_source_quality_source_order_count: `{summary.get('observation_source_quality_source_order_count')}`",
         f"- codebase_performance_source_order_count: `{summary.get('codebase_performance_source_order_count')}`",
+        f"- buy_funnel_sentinel_source_order_count: `{summary.get('buy_funnel_sentinel_source_order_count')}`",
+        f"- entry_submit_drought_selected: `{summary.get('entry_submit_drought_selected')}`",
+        f"- entry_submit_drought_handoff_missing: `{summary.get('entry_submit_drought_handoff_missing')}`",
         f"- panic_lifecycle_source_order_count: `{summary.get('panic_lifecycle_source_order_count')}`",
         f"- selected_order_count: `{summary.get('selected_order_count')}`",
         f"- decision_counts: `{summary.get('decision_counts')}`",

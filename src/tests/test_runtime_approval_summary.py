@@ -278,6 +278,12 @@ def test_runtime_approval_summary_falls_back_to_lifecycle_bucket_source(tmp_path
                     "runtime_approval_candidates": [{"candidate_id": "entry_bucket_1"}],
                     "code_improvement_workorders": [{"workorder_id": "entry_order"}],
                 },
+                "submit_bucket_attribution": {
+                    "summary": {"runtime_candidate_count": 0, "workorder_count": 1, "contract_gap_count": 1},
+                    "runtime_approval_candidates": [],
+                    "code_improvement_workorders": [{"workorder_id": "submit_order"}],
+                    "post_submit_contract_gaps": [{"gap_type": "broker_receipt_contract_gap"}],
+                },
                 "scale_in_bucket_attribution": {
                     "summary": {"runtime_candidate_count": 1, "workorder_count": 1},
                     "runtime_approval_candidates": [{"candidate_id": "scale_in_bucket_1"}],
@@ -332,6 +338,9 @@ def test_runtime_approval_summary_falls_back_to_lifecycle_bucket_source(tmp_path
     assert matrix["matrix_version"] == "ldm-test"
     assert matrix["entry_bucket_runtime_candidate_count"] == 1
     assert matrix["entry_bucket_runtime_approval_candidates"] == [{"candidate_id": "entry_bucket_1"}]
+    assert matrix["submit_bucket_attribution_summary"]["contract_gap_count"] == 1
+    assert matrix["submit_bucket_code_improvement_workorders"] == [{"workorder_id": "submit_order"}]
+    assert matrix["post_submit_contract_gaps"] == [{"gap_type": "broker_receipt_contract_gap"}]
     assert matrix["scale_in_bucket_runtime_candidate_count"] == 1
     assert matrix["scale_in_bucket_runtime_approval_candidates"] == [{"candidate_id": "scale_in_bucket_1"}]
     assert matrix["overnight_bucket_runtime_candidate_count"] == 1
@@ -367,7 +376,7 @@ def test_runtime_approval_summary_holds_latency_when_recommendation_not_allowed(
                     "recommended_action_reason": "counterfactual_joined_sample=1 below floor=3",
                     "allowed_runtime_apply": False,
                     "would_safe_pass_events": 0,
-                    "would_caution_reject_events": 220,
+                    "would_caution_normal_events": 220,
                     "would_recovery_canary_events": 220,
                     "counterfactual_joined_sample": 1,
                     "counterfactual_ev_pct": -3.704,

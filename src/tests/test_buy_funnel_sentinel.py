@@ -119,7 +119,17 @@ def test_latency_drought_when_budget_pass_exists_but_no_submitted(monkeypatch, t
         as_of=sentinel._parse_as_of("2026-05-06", "10:10:00"),
     )
 
-    assert report["classification"]["primary"] == "LATENCY_DROUGHT"
+    assert report["classification"]["primary"] == "SUBMIT_DROUGHT_CRITICAL"
+    assert "LATENCY_DROUGHT" in report["classification"]["secondary"]
+    assert report["followup"]["route"] == "entry_submit_drought_auto_workorder"
+    assert report["followup"]["operator_action_required"] is False
+    contract = report["entry_submit_drought_contract"]
+    assert contract["operator_action_required"] is False
+    assert contract["runtime_effect"] is False
+    assert contract["allowed_runtime_apply"] is False
+    assert "code_improvement_workorder" in contract["required_downstream"]
+    assert "lifecycle_decision_matrix.submit_bucket_attribution" in contract["required_downstream"]
+    assert "BROKER_RECEIPT" in contract["weak_contract_matches"]
     assert report["current"]["session"]["stage_unique"]["budget_pass"] == 5
     assert report["current"]["session"]["stage_unique"]["order_bundle_submitted"] == 0
 
@@ -193,6 +203,20 @@ def test_followup_route_is_report_only_for_upstream_threshold(monkeypatch, tmp_p
     assert report["followup"]["route"] == "score65_74_counterfactual_review"
     assert report["followup"]["operator_action_required"] is False
     assert report["followup"]["runtime_effect"] == "report_only_no_mutation"
+
+
+def test_followup_route_auto_handoffs_submit_drought_even_when_runtime_ops_primary():
+    actions = sentinel._recommend_actions(
+        {"primary": "RUNTIME_OPS", "matches": ["RUNTIME_OPS", "SUBMIT_DROUGHT_CRITICAL"]}
+    )
+    followup = sentinel._followup_route(
+        {"primary": "RUNTIME_OPS", "matches": ["RUNTIME_OPS", "SUBMIT_DROUGHT_CRITICAL"]}
+    )
+
+    assert actions[0].startswith("Auto-route")
+    assert followup["route"] == "entry_submit_drought_auto_workorder"
+    assert followup["operator_action_required"] is False
+    assert followup["runtime_effect"] == "auto_workorder_no_intraday_mutation"
 
 
 def test_use_cache_reads_only_appended_raw_bytes(monkeypatch, tmp_path):

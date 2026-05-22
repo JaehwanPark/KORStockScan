@@ -24,6 +24,94 @@ def test_lifecycle_bucket_rows_explain_unknown_source_field_causes():
     assert scale["recommended_resolution"] == "emit_or_backfill_source_field"
 
 
+def test_lifecycle_entry_score_bands_keep_score60_floor_granular():
+    assert mod._entry_score_band(59) == "score_lt60"
+    assert mod._entry_score_band(61) == "score_60_62"
+    assert mod._entry_score_band(64) == "score_63_65"
+    assert mod._entry_score_band(67) == "score_66_69"
+    assert mod._entry_score_band(70) == "score_70p"
+
+
+def test_lifecycle_submit_bucket_attribution_is_source_only_and_surfaces_gaps():
+    rows = [
+        {
+            "stage": "submit",
+            "source_stage": "scalp_sim_buy_order_virtual_pending",
+            "runtime_features": {
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "quote_age_ms": 1200,
+                "would_limit_fill": True,
+                "price_resolution_bucket": "passive_limit",
+            },
+            "labels": {"profit_rate": 0.2},
+            "stage_ev_composite_pct": 0.2,
+        },
+        {
+            "stage": "submit",
+            "source_stage": "scalp_sim_entry_submit_revalidation_block",
+            "runtime_features": {
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "entry_submit_revalidation_block": "stale_context_or_quote",
+                "quote_age_ms": 12000,
+                "would_limit_fill": False,
+                "price_resolution_bucket": "stale_block",
+            },
+            "labels": {"profit_rate": -0.4},
+            "stage_ev_composite_pct": -0.4,
+        },
+        {
+            "stage": "submit",
+            "source_stage": "scalp_sim_buy_order_assumed_filled",
+            "runtime_features": {
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "quote_age_ms": 500,
+                "would_limit_fill": True,
+                "price_resolution_bucket": "assumed_fill",
+            },
+            "labels": {"profit_rate": 0.1},
+            "stage_ev_composite_pct": 0.1,
+        },
+    ]
+
+    attribution = mod._submit_bucket_attribution(rows)
+
+    assert attribution["decision_authority"] == "adm_ldm_submit_bucket_attribution_source_only"
+    assert attribution["runtime_effect"] is False
+    assert attribution["allowed_runtime_apply"] is False
+    assert "broker_order_submit" in attribution["forbidden_uses"]
+    assert attribution["summary"]["submit_rows"] == 3
+    assert attribution["summary"]["bucket_count"] > 0
+    assert attribution["runtime_approval_candidates"] == []
+
+
+def test_lifecycle_submit_bucket_attribution_creates_contract_gap_workorders():
+    rows = [
+        {
+            "stage": "submit",
+            "source_stage": "scalp_sim_buy_order_virtual_pending",
+            "runtime_features": {},
+            "labels": {},
+            "stage_ev_composite_pct": None,
+        }
+    ]
+
+    attribution = mod._submit_bucket_attribution(rows)
+
+    assert attribution["summary"]["contract_gap_count"] >= 1
+    assert {
+        item["workorder_id"]
+        for item in attribution["code_improvement_workorders"]
+    } >= {
+        "order_entry_post_submit_contract_gap_review",
+        "order_entry_broker_receipt_contract_gap_review",
+        "order_entry_fill_quality_contract_gap_review",
+        "order_entry_telegram_post_submit_contract_gap_review",
+    }
+
+
 def test_lifecycle_matrix_builder_separates_runtime_features_and_labels(tmp_path, monkeypatch):
     matrix_dir = tmp_path / "matrix"
     entry_dir = tmp_path / "entry_adm"

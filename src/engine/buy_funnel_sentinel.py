@@ -63,6 +63,10 @@ BLOCKER_STAGES = {
 DEFAULT_WINDOWS = (5, 10, 30)
 SESSION_START = time(9, 0)
 SENTINEL_END = time(15, 20)
+SUBMIT_DROUGHT_MIN_AI_UNIQUE = 20
+SUBMIT_DROUGHT_MIN_BUDGET_UNIQUE = 3
+SUBMIT_TO_AI_CRITICAL_PCT = 20.0
+SUBMIT_TO_BUDGET_CRITICAL_PCT = 10.0
 REPORT_DIRNAME = "buy_funnel_sentinel"
 EVENT_CACHE_SCHEMA_VERSION = 3
 LOSSLESS_EVENT_CACHE_SCHEMA_VERSION = 5
@@ -622,9 +626,28 @@ def _classify(current: dict[str, Any], baseline: dict[str, Any] | None, *, as_of
         matches.append("UPSTREAM_AI_THRESHOLD")
         reasons.append("AI threshold/wait blockers suppress budget_pass before submit")
 
+    submitted_to_ai = float(ratios.get("submitted_to_ai_unique_pct", 0.0) or 0.0)
+    submitted_to_budget = float(ratios.get("submitted_to_budget_unique_pct", 0.0) or 0.0)
+    submit_drought_critical = (
+        ai_unique >= SUBMIT_DROUGHT_MIN_AI_UNIQUE
+        and submitted_to_ai < SUBMIT_TO_AI_CRITICAL_PCT
+    ) or (
+        budget_unique >= SUBMIT_DROUGHT_MIN_BUDGET_UNIQUE
+        and submitted_to_budget <= SUBMIT_TO_BUDGET_CRITICAL_PCT
+    )
+    if submit_drought_critical:
+        matches.append("SUBMIT_DROUGHT_CRITICAL")
+        reasons.append(
+            "submitted conversion breached critical floor: "
+            f"submitted/ai={submitted_to_ai:.2f}% < {SUBMIT_TO_AI_CRITICAL_PCT:.2f}% "
+            f"or submitted/budget={submitted_to_budget:.2f}% <= {SUBMIT_TO_BUDGET_CRITICAL_PCT:.2f}%"
+        )
+
     primary = "NORMAL"
     if "RUNTIME_OPS" in matches:
         primary = "RUNTIME_OPS"
+    elif "SUBMIT_DROUGHT_CRITICAL" in matches:
+        primary = "SUBMIT_DROUGHT_CRITICAL"
     elif "PRICE_GUARD_DROUGHT" in matches:
         primary = "PRICE_GUARD_DROUGHT"
     elif "UPSTREAM_AI_THRESHOLD" in matches and (
@@ -648,6 +671,12 @@ def _classify(current: dict[str, Any], baseline: dict[str, Any] | None, *, as_of
         "stale_sec": stale_sec,
         "baseline_budget_to_ai_unique_pct": baseline_budget_to_ai,
         "baseline_submitted_to_ai_unique_pct": baseline_submitted_to_ai,
+        "submit_drought_thresholds": {
+            "min_ai_unique": SUBMIT_DROUGHT_MIN_AI_UNIQUE,
+            "min_budget_unique": SUBMIT_DROUGHT_MIN_BUDGET_UNIQUE,
+            "submitted_to_ai_critical_pct": SUBMIT_TO_AI_CRITICAL_PCT,
+            "submitted_to_budget_critical_pct": SUBMIT_TO_BUDGET_CRITICAL_PCT,
+        },
         "live_runtime_effect": False,
         "forbidden_automations": FORBIDDEN_AUTOMATIONS,
     }
@@ -655,6 +684,9 @@ def _classify(current: dict[str, Any], baseline: dict[str, Any] | None, *, as_of
 
 def _recommend_actions(classification: dict[str, Any]) -> list[str]:
     primary = classification.get("primary")
+    matches = classification.get("matches") if isinstance(classification.get("matches"), list) else []
+    if "SUBMIT_DROUGHT_CRITICAL" in matches:
+        primary = "SUBMIT_DROUGHT_CRITICAL"
     if primary == "RUNTIME_OPS":
         return [
             "Check WS/token/event stream health immediately.",
@@ -664,6 +696,12 @@ def _recommend_actions(classification: dict[str, Any]) -> list[str]:
         return [
             "Review top price guard block labels and affected symbols.",
             "Keep threshold/runtime mutation blocked before ThresholdOpsTransition0506.",
+        ]
+    if primary == "SUBMIT_DROUGHT_CRITICAL":
+        return [
+            "Auto-route ai_confirmed -> budget_pass -> latency_pass -> order_bundle_submitted drought into postclose workorder/LDM handoff.",
+            "Split root cause into upstream gate, budget pass, latency/pre-submit guard, and broker receipt buckets before tuning thresholds.",
+            "Do not require operator approval for submitted drought surfacing or downstream workorder generation.",
         ]
     if primary == "UPSTREAM_AI_THRESHOLD":
         return [
@@ -680,6 +718,9 @@ def _recommend_actions(classification: dict[str, Any]) -> list[str]:
 
 def _followup_route(classification: dict[str, Any]) -> dict[str, Any]:
     primary = classification.get("primary")
+    matches = classification.get("matches") if isinstance(classification.get("matches"), list) else []
+    if "SUBMIT_DROUGHT_CRITICAL" in matches:
+        primary = "SUBMIT_DROUGHT_CRITICAL"
     if primary == "RUNTIME_OPS":
         return {
             "route": "runtime_ops_playbook",
@@ -695,6 +736,14 @@ def _followup_route(classification: dict[str, Any]) -> dict[str, Any]:
             "operator_action_required": False,
             "runtime_effect": "report_only_no_mutation",
             "next_artifact": "threshold_cycle_calibration_source_bundle",
+        }
+    if primary == "SUBMIT_DROUGHT_CRITICAL":
+        return {
+            "route": "entry_submit_drought_auto_workorder",
+            "owner": "postclose_threshold_cycle_and_lifecycle_decision_matrix",
+            "operator_action_required": False,
+            "runtime_effect": "auto_workorder_no_intraday_mutation",
+            "next_artifact": "code_improvement_workorder_and_lifecycle_decision_matrix",
         }
     if primary == "UPSTREAM_AI_THRESHOLD":
         return {
@@ -718,6 +767,78 @@ def _followup_route(classification: dict[str, Any]) -> dict[str, Any]:
         "operator_action_required": False,
         "runtime_effect": "report_only_no_mutation",
         "next_artifact": "none",
+    }
+
+
+def _entry_submit_drought_contract(
+    classification: dict[str, Any],
+    session_summary: dict[str, Any],
+) -> dict[str, Any]:
+    matches = classification.get("matches") if isinstance(classification.get("matches"), list) else []
+    ratios = session_summary.get("ratios") if isinstance(session_summary.get("ratios"), dict) else {}
+    unique = session_summary.get("stage_unique") if isinstance(session_summary.get("stage_unique"), dict) else {}
+    blocker_labels = [
+        str(item.get("label") or "")
+        for item in (session_summary.get("blocker_top") or [])
+        if isinstance(item, dict)
+    ]
+    taxonomy_leakage = any(label.startswith("blocked_swing_") for label in blocker_labels)
+    weak_contract_matches = []
+    if "UPSTREAM_AI_THRESHOLD" in matches:
+        weak_contract_matches.append("UPSTREAM_GATE")
+    if "SUBMIT_DROUGHT_CRITICAL" in matches:
+        weak_contract_matches.extend(
+            [
+                "BUDGET_PASS_COLLAPSE",
+                "BROKER_RECEIPT",
+                "FILL_QUALITY",
+                "TELEGRAM_POST_SUBMIT_ONLY",
+                "SIM_REAL_AUTHORITY",
+            ]
+        )
+    if "LATENCY_DROUGHT" in matches:
+        weak_contract_matches.append("LATENCY_PRE_SUBMIT")
+    if "PRICE_GUARD_DROUGHT" in matches:
+        weak_contract_matches.append("PRICE_REVALIDATION")
+    if taxonomy_leakage:
+        weak_contract_matches.append("SOURCE_TAXONOMY_LEAKAGE")
+    return {
+        "primary": classification.get("primary"),
+        "matches": matches,
+        "critical": "SUBMIT_DROUGHT_CRITICAL" in matches,
+        "operator_action_required": False,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "broker_order_submit_allowed": False,
+        "required_downstream": [
+            "code_improvement_workorder",
+            "lifecycle_decision_matrix.submit_bucket_attribution",
+            "threshold_cycle_ev_report",
+            "runtime_approval_summary",
+            "postclose_verifier",
+        ],
+        "stage_unique": {
+            "ai_confirmed": int(unique.get("ai_confirmed", 0) or 0),
+            "budget_pass": int(unique.get("budget_pass", 0) or 0),
+            "latency_pass": int(unique.get("latency_pass", 0) or 0),
+            "order_bundle_submitted": int(unique.get("order_bundle_submitted", 0) or 0),
+        },
+        "ratios": {
+            "submitted_to_ai_unique_pct": ratios.get("submitted_to_ai_unique_pct"),
+            "submitted_to_budget_unique_pct": ratios.get("submitted_to_budget_unique_pct"),
+            "budget_to_ai_unique_pct": ratios.get("budget_to_ai_unique_pct"),
+            "latency_to_budget_unique_pct": ratios.get("latency_to_budget_unique_pct"),
+        },
+        "thresholds": classification.get("submit_drought_thresholds") or {},
+        "weak_contract_matches": sorted(set(weak_contract_matches)),
+        "source_taxonomy_leakage": taxonomy_leakage,
+        "forbidden_uses": [
+            "intraday_threshold_mutation",
+            "broker_guard_bypass",
+            "provider_route_change",
+            "bot_restart_trigger",
+            "telegram_pre_submit_buy_alert",
+        ],
     }
 
 
@@ -779,6 +900,7 @@ def build_buy_funnel_sentinel_report(
     classification = _classify(session_summary, baseline_summary, as_of=as_of)
     followup = _followup_route(classification)
     recommended_actions = _recommend_actions(classification)
+    entry_submit_drought_contract = _entry_submit_drought_contract(classification, session_summary)
 
     return {
         "schema_version": 2,
@@ -813,6 +935,7 @@ def build_buy_funnel_sentinel_report(
             "windows": windows,
         },
         "classification": classification,
+        "entry_submit_drought_contract": entry_submit_drought_contract,
         "followup": followup,
         "recommended_actions": recommended_actions,
     }
@@ -844,6 +967,8 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"- followup_route: `{report['followup']['route']}`",
         f"- followup_owner: `{report['followup']['owner']}`",
         f"- runtime_effect: `{report['followup']['runtime_effect']}`",
+        f"- submit_contract_downstream: `{', '.join((report.get('entry_submit_drought_contract') or {}).get('required_downstream') or []) or '-'}`",
+        f"- submit_contract_weak_matches: `{', '.join((report.get('entry_submit_drought_contract') or {}).get('weak_contract_matches') or []) or '-'}`",
         "",
         "## 근거",
         "",
@@ -858,6 +983,9 @@ def build_markdown(report: dict[str, Any]) -> str:
         f" (baseline `{baseline_ratios.get('budget_to_ai_unique_pct', '-')}`)",
         f"- submitted/ai unique: `{ratios.get('submitted_to_ai_unique_pct', 0.0)}%`"
         f" (baseline `{baseline_ratios.get('submitted_to_ai_unique_pct', '-')}`)",
+        f"- critical submit thresholds: `submitted/ai < {SUBMIT_TO_AI_CRITICAL_PCT}%` "
+        f"or `submitted/budget <= {SUBMIT_TO_BUDGET_CRITICAL_PCT}%` "
+        f"(floors: ai>={SUBMIT_DROUGHT_MIN_AI_UNIQUE}, budget>={SUBMIT_DROUGHT_MIN_BUDGET_UNIQUE})",
         f"- top blockers: `{_format_top_blockers(session['blocker_top'])}`",
         f"- upstream blockers: `{_format_top_blockers(session['upstream_blocker_top'])}`",
         f"- latency blockers: `{_format_top_blockers(session['latency_blocker_top'])}`",

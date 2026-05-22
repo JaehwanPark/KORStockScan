@@ -404,7 +404,7 @@ def test_build_threshold_cycle_ev_report_surfaces_latency_apply_permission(tmp_p
                         "recommended_action": "hold",
                         "recommended_action_reason": "counterfactual_joined_sample=1 below floor=3",
                         "would_safe_pass_events": 0,
-                        "would_caution_reject_events": 220,
+                        "would_caution_normal_events": 220,
                         "would_recovery_canary_events": 220,
                     },
                 },
@@ -421,6 +421,49 @@ def test_build_threshold_cycle_ev_report_surfaces_latency_apply_permission(tmp_p
     assert report["entry_funnel"]["calibration_state"] == "hold_sample"
     assert report["entry_funnel"]["recommended_action"] == "hold"
     assert report["entry_funnel"]["would_recovery_canary_events"] == 220
+
+
+def test_threshold_cycle_ev_lifecycle_summary_surfaces_submit_contract(tmp_path, monkeypatch):
+    matrix_dir = tmp_path / "ldm"
+    matrix_dir.mkdir()
+    matrix_path = matrix_dir / "lifecycle_decision_matrix_2026-05-20.json"
+    matrix_path.write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "status": "pass",
+                    "total_rows": 10,
+                    "joined_rows": 5,
+                    "submit_bucket_workorder_count": 1,
+                    "submit_bucket_contract_gap_count": 1,
+                },
+                "submit_bucket_attribution": {
+                    "summary": {"submit_rows": 4, "contract_gap_count": 1, "workorder_count": 1},
+                    "runtime_approval_candidates": [],
+                    "code_improvement_workorders": [{"workorder_id": "submit_order"}],
+                    "post_submit_contract_gaps": [{"gap_type": "broker_receipt_contract_gap"}],
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        mod,
+        "lifecycle_matrix_report_paths",
+        lambda target_date: (
+            matrix_dir / f"lifecycle_decision_matrix_{target_date}.json",
+            matrix_dir / f"lifecycle_decision_matrix_{target_date}.md",
+        ),
+    )
+
+    summary, path, warnings = mod._lifecycle_decision_matrix_summary("2026-05-20")
+
+    assert path == str(matrix_path)
+    assert warnings == []
+    assert summary["submit_bucket_contract_gap_count"] == 1
+    assert summary["submit_bucket_code_improvement_workorders"] == [{"workorder_id": "submit_order"}]
+    assert summary["post_submit_contract_gaps"] == [{"gap_type": "broker_receipt_contract_gap"}]
 
 
 def test_build_threshold_cycle_ev_report_warns_when_pattern_lab_artifact_missing(tmp_path, monkeypatch):

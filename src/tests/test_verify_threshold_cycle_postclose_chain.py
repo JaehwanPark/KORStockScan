@@ -88,6 +88,150 @@ def test_lifecycle_bucket_discovery_handoff_fails_source_contract_fail():
     assert "lifecycle_bucket_discovery_source_contract_fail" in report["missing"]
 
 
+def test_submit_bucket_handoff_status_detects_downstream_drops():
+    ldm = {
+        "submit_bucket_attribution": {
+            "runtime_approval_candidates": [
+                {"candidate_id": "submit_bucket_1", "bucket_type": "revalidation_state", "bucket_key": "ok"}
+            ],
+            "code_improvement_workorders": [
+                {
+                    "bucket_type": "broker_receipt_contract_gap",
+                    "bucket_key": "broker_receipt_or_real_submit_flag_missing",
+                }
+            ],
+        }
+    }
+
+    report = mod._submit_bucket_handoff_status(ldm, {}, {}, {"orders": []})
+
+    assert report["status"] == "fail"
+    assert report["missing_ev_candidate_ids"] == ["submit_bucket_1"]
+    assert report["missing_runtime_summary_candidate_ids"] == ["submit_bucket_1"]
+    assert report["missing_workorder_order_ids"] == [
+        "order_lifecycle_submit_bucket_broker_receipt_contract_gap_broker_receipt_or_real_submit_flag_missing"
+    ]
+
+
+def test_submit_bucket_handoff_preserves_named_entry_contract_order_ids():
+    ldm = {
+        "submit_bucket_attribution": {
+            "code_improvement_workorders": [
+                {
+                    "workorder_id": "order_entry_broker_receipt_contract_gap_review",
+                    "bucket_type": "broker_receipt_contract_gap",
+                    "bucket_key": "broker_receipt_or_real_submit_flag_missing",
+                }
+            ],
+        }
+    }
+
+    report = mod._submit_bucket_handoff_status(ldm, {}, {}, {"orders": []})
+
+    assert report["missing_workorder_order_ids"] == ["order_entry_broker_receipt_contract_gap_review"]
+
+
+def test_buy_funnel_submit_drought_handoff_fails_when_downstream_missing():
+    buy = {
+        "classification": {
+            "primary": "SUBMIT_DROUGHT_CRITICAL",
+            "matches": ["SUBMIT_DROUGHT_CRITICAL"],
+        }
+    }
+
+    report = mod._buy_funnel_submit_drought_handoff_status(buy, {}, {}, {}, {"orders": []})
+
+    assert report["status"] == "fail"
+    assert report["critical"] is True
+    assert "code_improvement_workorder_entry_submit_drought_orders_missing" in report["missing"]
+    assert "order_entry_submit_drought_auto_resolution" in report["missing_workorder_order_ids"]
+    assert "order_entry_broker_receipt_contract_gap_review" in report["missing_workorder_order_ids"]
+    assert "ldm_submit_bucket_attribution_missing" in report["missing"]
+
+
+def test_buy_funnel_submit_drought_handoff_passes_when_surfaced():
+    buy = {
+        "classification": {
+            "primary": "SUBMIT_DROUGHT_CRITICAL",
+            "matches": ["SUBMIT_DROUGHT_CRITICAL"],
+        }
+    }
+    ldm = {"submit_bucket_attribution": {"summary": {"submit_rows": 3}}}
+    ev_report = {
+        "buy_funnel_sentinel": {"primary": "SUBMIT_DROUGHT_CRITICAL"},
+        "entry_funnel": {"entry_submit_drought_handoff_selected": True},
+    }
+    runtime_summary = {
+        "buy_funnel_sentinel": {"primary": "SUBMIT_DROUGHT_CRITICAL"},
+        "summary": {"entry_submit_drought_handoff_selected": True},
+    }
+    workorder = {
+        "orders": [
+            {"order_id": "order_entry_submit_drought_auto_resolution"},
+            {"order_id": "order_entry_post_submit_contract_gap_review"},
+            {"order_id": "order_entry_broker_receipt_contract_gap_review"},
+            {"order_id": "order_entry_fill_quality_contract_gap_review"},
+            {"order_id": "order_entry_telegram_post_submit_contract_gap_review"},
+            {"order_id": "order_entry_source_taxonomy_contract_gap_review"},
+        ]
+    }
+
+    report = mod._buy_funnel_submit_drought_handoff_status(
+        buy, ldm, ev_report, runtime_summary, workorder
+    )
+
+    assert report["status"] == "pass"
+    assert report["missing"] == []
+
+
+def test_swing_entry_bottleneck_handoff_fails_when_downstream_missing():
+    matrix = {
+        "input_contract": {"swing_daily_simulation_consumed": False},
+        "swing_entry_bottleneck": {
+            "primary": "SWING_ENTRY_DROUGHT_CRITICAL",
+            "matches": ["GATEKEEPER_PULLBACK_WAIT", "SUBMIT_ZERO"],
+        },
+    }
+
+    report = mod._swing_lifecycle_handoff_status(matrix, {}, {}, {}, {"orders": []})
+
+    assert report["status"] == "fail"
+    assert report["swing_entry_bottleneck_critical"] is True
+    assert "swing_entry_bottleneck_handoff_missing" in report["missing"]
+    assert "order_swing_entry_bottleneck_auto_resolution" in report["missing_workorder_order_ids"]
+
+
+def test_swing_entry_bottleneck_handoff_passes_when_surfaced():
+    matrix = {
+        "input_contract": {"swing_daily_simulation_consumed": False},
+        "swing_entry_bottleneck": {
+            "primary": "SWING_ENTRY_DROUGHT_CRITICAL",
+            "matches": ["GATEKEEPER_PULLBACK_WAIT", "SUBMIT_ZERO"],
+        },
+    }
+    discovery = {
+        "surfaced_candidate_ids": ["swing_entry_bottleneck_swing_entry_drought_critical"],
+    }
+    ev_report = {
+        "swing_lifecycle_decision_matrix": {
+            "swing_entry_bottleneck_primary": "SWING_ENTRY_DROUGHT_CRITICAL",
+        },
+        "swing_lifecycle_bucket_discovery": discovery,
+    }
+    runtime_summary = {
+        "swing_lifecycle_decision_matrix": {
+            "swing_entry_bottleneck_primary": "SWING_ENTRY_DROUGHT_CRITICAL",
+        },
+        "swing_lifecycle_bucket_discovery": discovery,
+    }
+    workorder = {"orders": [{"order_id": "order_swing_entry_bottleneck_auto_resolution"}]}
+
+    report = mod._swing_lifecycle_handoff_status(matrix, discovery, ev_report, runtime_summary, workorder)
+
+    assert report["status"] == "pass"
+    assert report["missing"] == []
+
+
 def test_consumer_stale_detects_generated_at_ordering():
     consumer = {"generated_at": "2026-05-12T21:20:00+09:00"}
     source = {"generated_at": "2026-05-12T21:21:00+09:00"}

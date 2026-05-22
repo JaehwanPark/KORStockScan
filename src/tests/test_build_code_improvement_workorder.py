@@ -335,6 +335,272 @@ def test_build_code_improvement_workorder_consumes_pattern_lab_ai_review(tmp_pat
     )
 
 
+def test_build_code_improvement_workorder_auto_selects_buy_funnel_submit_drought(
+    tmp_path, monkeypatch
+):
+    target_date = "2099-01-02"
+    automation_dir = tmp_path / "automation"
+    sentinel_dir = tmp_path / "buy-funnel"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    automation_dir.mkdir()
+    sentinel_dir.mkdir()
+    (automation_dir / f"scalping_pattern_lab_automation_{target_date}.json").write_text(
+        json.dumps({"date": target_date, "code_improvement_orders": []}),
+        encoding="utf-8",
+    )
+    (sentinel_dir / f"buy_funnel_sentinel_{target_date}.json").write_text(
+        json.dumps(
+            {
+                "classification": {"primary": "SUBMIT_DROUGHT_CRITICAL"},
+                "current": {
+                    "session": {
+                        "stage_unique": {
+                            "ai_confirmed": 52,
+                            "budget_pass": 18,
+                            "latency_pass": 7,
+                            "order_bundle_submitted": 3,
+                        },
+                        "ratios": {
+                            "submitted_to_ai_unique_pct": 5.77,
+                            "submitted_to_budget_unique_pct": 16.67,
+                        },
+                        "blocker_top": [{"label": "latency_block", "count": 15}],
+                        "upstream_blocker_top": [{"label": "blocked_ai_score", "count": 8}],
+                        "latency_blocker_top": [{"label": "spread_too_wide", "count": 11}],
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "SWING_STRATEGY_DISCOVERY_EV_DIR", tmp_path / "missing-swing-discovery")
+    monkeypatch.setattr(mod, "SWING_LIFECYCLE_DECISION_MATRIX_DIR", tmp_path / "missing-swing-ldm")
+    monkeypatch.setattr(mod, "SWING_LIFECYCLE_BUCKET_DISCOVERY_DIR", tmp_path / "missing-swing-bucket")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "LIFECYCLE_DECISION_MATRIX_DIR", tmp_path / "missing-ldm")
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
+    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-observation-audit")
+    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness")
+    monkeypatch.setattr(mod, "PATTERN_LAB_AI_REVIEW_DIR", tmp_path / "missing-ai-review")
+    monkeypatch.setattr(mod, "BUY_FUNNEL_SENTINEL_DIR", sentinel_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder(target_date, max_orders=1)
+
+    order = next(item for item in report["orders"] if item["order_id"] == "order_entry_submit_drought_auto_resolution")
+    assert order["decision"] == "implement_now"
+    assert order["runtime_effect"] is False
+    assert order["source_report_type"] == "buy_funnel_sentinel"
+    assert order["mapped_family"] == "lifecycle_decision_matrix_runtime"
+    assert "submitted_to_ai_pct=5.77" in order["evidence"]
+    assert report["summary"]["buy_funnel_sentinel_source_order_count"] == 6
+    assert report["summary"]["buy_funnel_sentinel_primary"] == "SUBMIT_DROUGHT_CRITICAL"
+    assert report["summary"]["entry_submit_drought_selected"] is True
+    assert report["summary"]["entry_submit_drought_handoff_missing"] is False
+    assert report["source"]["buy_funnel_sentinel"] == str(
+        sentinel_dir / f"buy_funnel_sentinel_{target_date}.json"
+    )
+
+
+def test_buy_funnel_submit_drought_workorder_uses_matches_when_primary_runtime_ops():
+    orders = mod._buy_funnel_sentinel_followup_orders(
+        {
+            "classification": {
+                "primary": "RUNTIME_OPS",
+                "matches": ["RUNTIME_OPS", "SUBMIT_DROUGHT_CRITICAL"],
+            },
+            "current": {
+                "session": {
+                    "stage_unique": {
+                        "ai_confirmed": 235,
+                        "budget_pass": 3,
+                        "latency_pass": 0,
+                        "order_bundle_submitted": 0,
+                    },
+                    "ratios": {
+                        "submitted_to_ai_unique_pct": 0.0,
+                        "submitted_to_budget_unique_pct": 0.0,
+                    },
+                    "blocker_top": [{"label": "blocked_ai_score", "count": 180}],
+                    "upstream_blocker_top": [{"label": "score_wait", "count": 120}],
+                    "latency_blocker_top": [{"label": "stale_context_or_quote", "count": 64}],
+                }
+            },
+        }
+    )
+
+    assert {
+        order["order_id"] for order in orders
+    } >= {
+        "order_entry_submit_drought_auto_resolution",
+        "order_entry_post_submit_contract_gap_review",
+        "order_entry_broker_receipt_contract_gap_review",
+        "order_entry_fill_quality_contract_gap_review",
+        "order_entry_telegram_post_submit_contract_gap_review",
+        "order_entry_source_taxonomy_contract_gap_review",
+    }
+    assert orders[0]["priority"] == 0
+    assert orders[0]["route"] == "instrumentation_order"
+    assert "submitted_unique=0" in orders[0]["evidence"]
+
+
+def test_buy_funnel_submit_drought_creates_source_taxonomy_gap_workorder():
+    orders = mod._buy_funnel_sentinel_followup_orders(
+        {
+            "classification": {
+                "primary": "SUBMIT_DROUGHT_CRITICAL",
+                "matches": ["SUBMIT_DROUGHT_CRITICAL"],
+            },
+            "entry_submit_drought_contract": {
+                "weak_contract_matches": ["SOURCE_TAXONOMY_LEAKAGE"],
+                "required_downstream": ["code_improvement_workorder"],
+            },
+            "current": {
+                "session": {
+                    "stage_unique": {
+                        "ai_confirmed": 235,
+                        "budget_pass": 3,
+                        "latency_pass": 0,
+                        "order_bundle_submitted": 0,
+                    },
+                    "ratios": {
+                        "submitted_to_ai_unique_pct": 0.0,
+                        "submitted_to_budget_unique_pct": 0.0,
+                    },
+                    "blocker_top": [{"label": "blocked_swing_score_vpw", "count": 64}],
+                    "upstream_blocker_top": [],
+                    "latency_blocker_top": [],
+                }
+            },
+        }
+    )
+
+    taxonomy_order = next(
+        item for item in orders if item["order_id"] == "order_entry_source_taxonomy_contract_gap_review"
+    )
+    assert taxonomy_order["runtime_effect"] is False
+    assert taxonomy_order["allowed_runtime_apply"] is False
+    assert taxonomy_order["route"] == "instrumentation_order"
+    assert "SOURCE_TAXONOMY_LEAKAGE" in taxonomy_order["weak_contract_matches"]
+
+
+def test_buy_funnel_submit_drought_creates_all_post_submit_weak_contract_workorders():
+    orders = mod._buy_funnel_sentinel_followup_orders(
+        {
+            "classification": {
+                "primary": "SUBMIT_DROUGHT_CRITICAL",
+                "matches": ["SUBMIT_DROUGHT_CRITICAL"],
+            },
+            "current": {
+                "session": {
+                    "stage_unique": {
+                        "ai_confirmed": 235,
+                        "budget_pass": 3,
+                        "latency_pass": 3,
+                        "order_bundle_submitted": 0,
+                    },
+                    "ratios": {
+                        "submitted_to_ai_unique_pct": 0.0,
+                        "submitted_to_budget_unique_pct": 0.0,
+                    },
+                    "blocker_top": [],
+                    "upstream_blocker_top": [],
+                    "latency_blocker_top": [],
+                }
+            },
+        }
+    )
+
+    by_id = {item["order_id"]: item for item in orders}
+    for order_id in {
+        "order_entry_post_submit_contract_gap_review",
+        "order_entry_broker_receipt_contract_gap_review",
+        "order_entry_fill_quality_contract_gap_review",
+        "order_entry_telegram_post_submit_contract_gap_review",
+        "order_entry_source_taxonomy_contract_gap_review",
+    }:
+        assert by_id[order_id]["runtime_effect"] is False
+        assert by_id[order_id]["allowed_runtime_apply"] is False
+        assert by_id[order_id]["source_report_type"] == "buy_funnel_sentinel"
+
+
+def test_build_code_improvement_workorder_consumes_ldm_submit_bucket_workorders(tmp_path, monkeypatch):
+    target_date = "2099-01-03"
+    automation_dir = tmp_path / "automation"
+    ldm_dir = tmp_path / "ldm"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    automation_dir.mkdir()
+    ldm_dir.mkdir()
+    (automation_dir / f"scalping_pattern_lab_automation_{target_date}.json").write_text(
+        json.dumps({"date": target_date, "code_improvement_orders": []}),
+        encoding="utf-8",
+    )
+    (ldm_dir / f"lifecycle_decision_matrix_{target_date}.json").write_text(
+        json.dumps(
+            {
+                "submit_bucket_attribution": {
+                    "metric_role": "submit_funnel_source_quality_gate",
+                    "decision_authority": "adm_ldm_submit_bucket_attribution_source_only",
+                    "window_policy": "daily_lifecycle_submit_rows_plus_threshold_cycle_rolling_consumer",
+                    "sample_floor": 3,
+                    "primary_decision_metric": "source_quality_adjusted_ev_pct",
+                    "source_quality_gate": "submit row sample + provenance",
+                    "forbidden_uses": ["broker_order_submit"],
+                    "code_improvement_workorders": [
+                        {
+                            "workorder_id": "order_entry_broker_receipt_contract_gap_review",
+                            "bucket_type": "broker_receipt_contract_gap",
+                            "bucket_key": "broker_receipt_or_real_submit_flag_missing",
+                            "reason": "broker_receipt_or_real_submit_flag_missing",
+                            "runtime_effect": False,
+                            "allowed_runtime_apply": False,
+                        }
+                    ],
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "LIFECYCLE_DECISION_MATRIX_DIR", ldm_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "SWING_STRATEGY_DISCOVERY_EV_DIR", tmp_path / "missing-swing-discovery")
+    monkeypatch.setattr(mod, "SWING_LIFECYCLE_DECISION_MATRIX_DIR", tmp_path / "missing-swing-ldm")
+    monkeypatch.setattr(mod, "SWING_LIFECYCLE_BUCKET_DISCOVERY_DIR", tmp_path / "missing-swing-bucket")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
+    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-observation-audit")
+    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness")
+    monkeypatch.setattr(mod, "PATTERN_LAB_AI_REVIEW_DIR", tmp_path / "missing-ai-review")
+    monkeypatch.setattr(mod, "BUY_FUNNEL_SENTINEL_DIR", tmp_path / "missing-buy")
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder(target_date, max_orders=1)
+
+    order = next(
+        item
+        for item in report["orders"]
+        if item["order_id"] == "order_entry_broker_receipt_contract_gap_review"
+    )
+    assert order["decision"] == "implement_now"
+    assert order["source_report_type"] == "lifecycle_decision_matrix_submit_bucket_attribution"
+    assert order["runtime_effect"] is False
+    assert order["allowed_runtime_apply"] is False
+    assert report["summary"]["lifecycle_submit_bucket_source_order_count"] == 1
+
+
 def test_build_code_improvement_workorder_adds_entry_adm_gap_order(tmp_path, monkeypatch):
     automation_dir = tmp_path / "automation"
     ev_dir = tmp_path / "ev"
@@ -1129,6 +1395,90 @@ def test_build_code_improvement_workorder_merges_swing_automation(tmp_path, monk
     markdown = (doc_dir / "code_improvement_workorder_2026-05-08.md").read_text(encoding="utf-8")
     assert "swing_improvement_automation" in markdown
     assert "lifecycle_stage" in markdown
+
+
+def test_build_code_improvement_workorder_forces_swing_entry_bottleneck_selected(tmp_path, monkeypatch):
+    scalping_dir = tmp_path / "scalping"
+    swing_dir = tmp_path / "swing"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    scalping_dir.mkdir()
+    swing_dir.mkdir()
+    (scalping_dir / "scalping_pattern_lab_automation_2026-05-22.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-22",
+                "consensus_findings": [],
+                "solo_findings": [],
+                "auto_family_candidates": [],
+                "code_improvement_orders": [
+                    {
+                        "order_id": "order_alpha_pipeline_event_compaction",
+                        "title": "alpha pipeline event compaction",
+                        "lifecycle_stage": "ops",
+                        "target_subsystem": "runtime_instrumentation",
+                        "priority": 0,
+                        "runtime_effect": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (swing_dir / "swing_improvement_automation_2026-05-22.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-22",
+                "swing_entry_bottleneck": {
+                    "primary": "SWING_ENTRY_DROUGHT_CRITICAL",
+                    "matches": ["GATEKEEPER_PULLBACK_WAIT", "SUBMIT_ZERO"],
+                },
+                "consensus_findings": [
+                    {
+                        "finding_id": "swing_entry_bottleneck_auto_resolution",
+                        "title": "swing entry bottleneck automatic resolution handoff",
+                        "confidence": "consensus",
+                        "route": "instrumentation_order",
+                        "mapped_family": "swing_gatekeeper_accept_reject",
+                        "target_subsystem": "swing_entry",
+                    }
+                ],
+                "solo_findings": [],
+                "auto_family_candidates": [],
+                "code_improvement_orders": [
+                    {
+                        "order_id": "order_swing_entry_bottleneck_auto_resolution",
+                        "title": "swing entry bottleneck automatic resolution handoff",
+                        "lifecycle_stage": "entry",
+                        "target_subsystem": "swing_entry",
+                        "route": "instrumentation_order",
+                        "mapped_family": "swing_gatekeeper_accept_reject",
+                        "threshold_family": "swing_gatekeeper_accept_reject",
+                        "priority": 0,
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", scalping_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", swing_dir)
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-22", max_orders=1)
+
+    selected_ids = {item["order_id"] for item in report["orders"]}
+    assert "order_swing_entry_bottleneck_auto_resolution" in selected_ids
+    order = next(item for item in report["orders"] if item["order_id"] == "order_swing_entry_bottleneck_auto_resolution")
+    assert order["decision"] == "implement_now"
+    assert order["runtime_effect"] is False
+    assert order["allowed_runtime_apply"] is False
+    assert report["summary"]["swing_entry_bottleneck_primary"] == "SWING_ENTRY_DROUGHT_CRITICAL"
+    assert report["summary"]["swing_entry_bottleneck_selected"] is True
 
 
 def test_build_code_improvement_workorder_dedupes_duplicate_orders(tmp_path, monkeypatch):
