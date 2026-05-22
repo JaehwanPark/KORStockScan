@@ -231,7 +231,7 @@ scale-in 핸드오프도 fail-closed다. LDM 후보가 있으면 `threshold_cycl
 
 이 artifact의 금지선은 `runtime_threshold_mutation`, `provider_route_change`, `broker_order_guard_change`, `bot_restart`, `tuning_axis_change`, `source_quality_policy_change`, `raw_forensic_stream_suppression`이다. `kiwoom_orders` transport 재사용, config cache, legacy dashboard DB pool, WS tick parsing, raw suppression처럼 runtime/data-quality semantics가 바뀔 수 있는 후보는 accepted로 승격하지 않고 deferred/rejected로 남긴다.
 
-## 2.3 Metric Decision Contract
+## 2.6 Metric Decision Contract
 
 자동화 체인이 소비하는 새 관찰지표와 새 report section은 생성 시점에 판정 계약을 함께 선언해야 한다. 계약이 없으면 해당 지표는 `instrumentation_gap` 또는 `source_quality_blocker`로만 라우팅하고, threshold candidate, approval request, runtime env apply 입력으로 쓰지 않는다.
 
@@ -299,7 +299,7 @@ window 해석은 아래처럼 분리한다.
 | 9 | JSON/Markdown field names |
 | 10 | fail-closed behavior |
 
-## 2.6 Sim-to-Live Approval Contract
+## 2.7 Sim-to-Live Approval Contract
 
 sim/probe 결과는 source bundle, approval request, workorder evidence에는 들어갈 수 있지만 live 반영에는 반드시 별도 계약이 필요하다. 최소 계약은 `approval request`, `approval artifact`, `preopen env key mapping`, `runtime guard`, `rollback/provenance`, `real/sim metric split`이다.
 

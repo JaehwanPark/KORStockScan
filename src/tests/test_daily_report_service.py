@@ -168,3 +168,16 @@ def test_apply_cached_market_regime_label_uses_session_cache(tmp_path, monkeypat
     assert snapshot["market_regime_score_version"] == "market_regime_continuous_v1"
     assert snapshot["market_regime_source_quality"] == "valid"
     assert snapshot["regime_source"] == "market_regime_cache"
+
+
+def test_format_market_status_with_context_splits_breadth_and_continuous_regime():
+    text = report_mod.format_market_status_with_context(
+        {
+            "status_text": "하락장",
+            "ma20_ratio": 33.1,
+            "market_regime_continuous_score": 64.5971,
+            "market_regime_continuous_label": "NEUTRAL",
+        }
+    )
+
+    assert text == "하락장(20일선 breadth 33.1%), 연속국면=NEUTRAL 64.6"

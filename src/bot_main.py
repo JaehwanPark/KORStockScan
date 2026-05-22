@@ -34,7 +34,7 @@ from src.database.db_manager import DBManager
 from src.core.event_bus import EventBus
 import src.engine.kiwoom_sniper_v2 as kiwoom_sniper_v2
 import src.notify.telegram_manager as telegram_manager # 우리가 완성한 텔레그램 수신탑
-from src.engine.daily_report_service import save_daily_report, build_daily_report
+from src.engine.daily_report_service import save_daily_report, build_daily_report, format_market_status_with_context
 from src.engine.log_archive_service import archive_target_date_logs, save_monitor_snapshots_for_date
 from src.engine.strategy_position_performance_report import sync_trade_performance_for_date
 from src.utils.constants import RESTART_FLAG_PATH, TRADING_RULES
@@ -224,11 +224,12 @@ def generate_daily_report_job(target_date: str | None = None):
         path = save_daily_report(report)
         warnings = report.get("meta", {}).get("warnings", []) or []
         stats = report.get("stats", {}) or {}
+        market_status = format_market_status_with_context(stats)
         risk_text = stats.get("risk_status_text")
         risk_part = f", 리스크={risk_text}" if risk_text else ""
         print(
             f"📘 [시스템] 일일 리포트 생성 완료: {path} "
-            f"(시장상태={stats.get('status_text', '-')}{risk_part}, 경고={len(warnings)}건)"
+            f"(시장상태={market_status}{risk_part}, 경고={len(warnings)}건)"
         )
         return report
     except Exception as e:

@@ -111,7 +111,7 @@
 
 정리되지 못한 report-only/legacy 산출물은 `calibration_source_bundle.report_only_cleanup_audit`로 관리한다. 이 audit는 `source_quality_gate`이며 `cleanup_candidate_count`를 통해 정리 후보를 표면화하지만, `source_quality_only`라서 threshold/env/order/bot/provider 변경 권한은 없다.
 
-`Metric Decision Contract`는 [report-based-automation-traceability](./report-based-automation-traceability.md#23-metric-decision-contract)가 소유한다. 새 report나 새 metric이 이 계약을 만족하지 못하면 threshold candidate가 아니라 source-quality/instrumentation backlog다.
+`Metric Decision Contract`는 [report-based-automation-traceability](./report-based-automation-traceability.md#26-metric-decision-contract)가 소유한다. 새 report나 새 metric이 이 계약을 만족하지 못하면 threshold candidate가 아니라 source-quality/instrumentation backlog다.
 
 ## 5. 현재 런타임/관찰 축
 

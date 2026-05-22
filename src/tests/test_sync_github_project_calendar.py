@@ -1,6 +1,7 @@
 from io import BytesIO
 
 from src.engine.sync_github_project_calendar import (
+    _codex_daily_workorder_slot,
     _graphql_request,
     _event_body,
     _parse_project_item,
@@ -785,6 +786,8 @@ def test_prune_stale_events_dry_run_counts_candidates():
         "dry_run_deleted": 1,
         "legacy_deleted": 0,
         "legacy_dry_run_deleted": 0,
+        "codex_workorder_deleted": 0,
+        "codex_workorder_dry_run_deleted": 0,
     }
     assert service._events.deleted == []
 
@@ -815,6 +818,8 @@ def test_prune_stale_events_deletes_removed_items():
         "dry_run_deleted": 0,
         "legacy_deleted": 0,
         "legacy_dry_run_deleted": 0,
+        "codex_workorder_deleted": 0,
+        "codex_workorder_dry_run_deleted": 0,
     }
     assert service._events.deleted == ["evt_drop"]
 
@@ -858,6 +863,8 @@ def test_prune_stale_events_deletes_legacy_managed_event_without_private_propert
         "dry_run_deleted": 0,
         "legacy_deleted": 1,
         "legacy_dry_run_deleted": 0,
+        "codex_workorder_deleted": 0,
+        "codex_workorder_dry_run_deleted": 0,
     }
     assert service._events.deleted == ["evt_legacy_drop"]
 
@@ -896,5 +903,60 @@ def test_prune_stale_events_ignores_legacy_event_without_project_marker():
         "dry_run_deleted": 0,
         "legacy_deleted": 0,
         "legacy_dry_run_deleted": 0,
+        "codex_workorder_deleted": 0,
+        "codex_workorder_dry_run_deleted": 0,
     }
     assert service._events.deleted == []
+
+
+def test_codex_daily_workorder_slot_parser():
+    assert _codex_daily_workorder_slot("Codex Daily Workorder (PREOPEN)") == "PREOPEN"
+    assert _codex_daily_workorder_slot("[KORStockScan] Codex Daily Workorder (POSTCLOSE)") == "POSTCLOSE"
+    assert _codex_daily_workorder_slot("regular task") == ""
+
+
+def test_prune_stale_events_deletes_stale_codex_daily_workorder_without_project_marker():
+    service = _FakeCalendarService(
+        [
+            {"items": []},
+            {"items": []},
+            {
+                "items": [
+                    {
+                        "id": "evt_preopen_drop",
+                        "summary": "Codex Daily Workorder (PREOPEN)",
+                        "description": "",
+                    },
+                    {
+                        "id": "evt_intraday_keep",
+                        "summary": "Codex Daily Workorder (INTRADAY)",
+                        "description": "",
+                    },
+                ]
+            },
+        ]
+    )
+
+    summary = prune_stale_events(
+        service=service,
+        calendar_id="primary",
+        owner="JaehwanPark",
+        project_number=1,
+        live_item_ids=set(),
+        live_managed_title_keys=set(),
+        live_codex_workorder_slots={"INTRADAY", "POSTCLOSE"},
+        event_prefix="[KORStockScan]",
+        legacy_time_min="2026-05-22T00:00:00+09:00",
+        legacy_time_max="2026-05-23T00:00:00+09:00",
+        dry_run=False,
+    )
+
+    assert summary == {
+        "deleted": 0,
+        "dry_run_deleted": 0,
+        "legacy_deleted": 0,
+        "legacy_dry_run_deleted": 0,
+        "codex_workorder_deleted": 1,
+        "codex_workorder_dry_run_deleted": 0,
+    }
+    assert service._events.deleted == ["evt_preopen_drop"]
