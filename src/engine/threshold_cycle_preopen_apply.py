@@ -224,9 +224,6 @@ def _report_path_for_date(target_date: str, *, source_phase: str | None = None) 
     postclose = CALIBRATION_REPORT_DIR / f"threshold_cycle_calibration_{target_date}_postclose.json"
     if postclose.exists():
         return postclose
-    intraday = CALIBRATION_REPORT_DIR / f"threshold_cycle_calibration_{target_date}_intraday.json"
-    if intraday.exists():
-        return intraday
     return canonical
 
 
@@ -234,12 +231,15 @@ def _ai_review_path_for_date(source_date: str, phase: str) -> Path:
     return AI_REVIEW_DIR / f"threshold_cycle_ai_review_{source_date}_{phase}.json"
 
 
-def _load_ai_review(source_date: str | None) -> dict[str, Any]:
+def _load_ai_review(source_date: str | None, *, source_phase: str | None = None) -> dict[str, Any]:
     if not source_date:
         return {"status": "missing_source_date", "path": None, "items_by_family": {}}
     postclose_path = _ai_review_path_for_date(source_date, "postclose")
     intraday_path = _ai_review_path_for_date(source_date, "intraday")
-    preferred_paths = [postclose_path, intraday_path]
+    if source_phase == "intraday":
+        preferred_paths = [intraday_path]
+    else:
+        preferred_paths = [postclose_path]
     for path in preferred_paths:
         if not path.exists():
             continue
@@ -1350,7 +1350,8 @@ def build_preopen_apply_manifest(
             if isinstance(item, dict) and not bool(item.get("approval_live_ready"))
         ]
         auto_apply_requested = bool(auto_apply) or apply_mode in AUTO_APPLY_MODES
-        ai_review = _load_ai_review(report_source_date)
+        ai_review = _load_ai_review(report_source_date, source_phase=source_phase)
+        intraday_source_auto_apply_blocked = bool(auto_apply_requested and source_phase == "intraday")
         operator_runtime_env_locks = _load_operator_runtime_env_locks(
             report_source_date,
             target_date,
@@ -1365,7 +1366,7 @@ def build_preopen_apply_manifest(
         runtime_bridge_selected, runtime_bridge_decisions, runtime_bridge_env_overrides = ([], [], {})
         lifecycle_bucket_bundle = _load_lifecycle_bucket_sim_auto_approval(report_source_date)
         lifecycle_bucket_selected, lifecycle_bucket_decisions, lifecycle_bucket_env_overrides = ([], [], {})
-        if auto_apply_requested:
+        if auto_apply_requested and not intraday_source_auto_apply_blocked:
             selected, decisions, env_overrides = _select_auto_apply_candidates(
                 calibration_candidates,
                 ai_review=ai_review,
@@ -1418,6 +1419,9 @@ def build_preopen_apply_manifest(
             "apply_mode": apply_mode,
             "runtime_change": runtime_change,
             "runtime_change_reason": (
+                "intraday source phase는 manual forensic/legacy manifest-only이며 runtime env apply 금지"
+                if intraday_source_auto_apply_blocked
+                else
                 "장전 자동 bounded env apply; 장중 threshold mutation은 계속 금지"
                 if runtime_change
                 else "장전 자동 bounded env apply 후보 없음; 장중 threshold mutation은 계속 금지"
@@ -1426,6 +1430,8 @@ def build_preopen_apply_manifest(
             ),
             "candidates": candidates,
             "calibration_candidates": calibration_candidates,
+            "source_phase": source_phase or "canonical",
+            "source_phase_auto_apply_blocked": intraday_source_auto_apply_blocked,
             "ai_correction_review": {
                 "required": bool(require_ai),
                 "status": ai_review.get("status"),
@@ -1485,7 +1491,11 @@ def build_preopen_apply_manifest(
                 "selected": lifecycle_bucket_selected,
                 "decisions": lifecycle_bucket_decisions,
             },
-            "runtime_env_file": str(runtime_env_path(target_date)) if auto_apply_requested else None,
+            "runtime_env_file": (
+                str(runtime_env_path(target_date))
+                if auto_apply_requested and not intraday_source_auto_apply_blocked
+                else None
+            ),
             "runtime_env_overrides": env_overrides,
             "threshold_snapshot": report.get("threshold_snapshot") or {},
             "post_apply_attribution": report.get("post_apply_attribution") or {},
@@ -1503,10 +1513,12 @@ def build_preopen_apply_manifest(
                 "same_stage_owner_rule": "one_selected_family_per_stage_by_priority",
                 "daily_ev_report_only": True,
                 "operator_family_filter": sorted(include_families) if include_families is not None else None,
+                "intraday_source_auto_apply": False,
             },
+            "warnings": ["intraday_source_phase_auto_apply_blocked"] if intraday_source_auto_apply_blocked else [],
             "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         }
-        if auto_apply_requested:
+        if auto_apply_requested and not intraday_source_auto_apply_blocked:
             _write_runtime_env(target_date, manifest, env_overrides)
     APPLY_PLAN_DIR.mkdir(parents=True, exist_ok=True)
     apply_manifest_path(target_date).write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")

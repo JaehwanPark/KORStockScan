@@ -115,10 +115,7 @@ def _latency_classifier_source_metrics(
 
 
 def _calibration_path(target_date: str) -> Path:
-    postclose = CALIBRATION_REPORT_DIR / f"threshold_cycle_calibration_{target_date}_postclose.json"
-    if postclose.exists():
-        return postclose
-    return CALIBRATION_REPORT_DIR / f"threshold_cycle_calibration_{target_date}_intraday.json"
+    return CALIBRATION_REPORT_DIR / f"threshold_cycle_calibration_{target_date}_postclose.json"
 
 
 def _wait6579_counterfactual_summary(target_date: str) -> tuple[dict[str, Any], str | None]:

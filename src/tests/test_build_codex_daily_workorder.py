@@ -195,7 +195,8 @@ def test_render_markdown_includes_runbook_operational_checks(monkeypatch):
 
     assert "Runbook 운영 확인 큐" in md
     assert "IntradayAutomationHealthCheck20260511" in md
-    assert "logs/threshold_cycle_calibration_intraday_cron.log" in md
+    assert "logs/run_buy_funnel_sentinel_cron.log" in md
+    assert "threshold_cycle_calibration_intraday_cron.log" not in md
     assert "[Runbook 운영 확인]" in md
     assert "판정=pass|warning|fail|not_yet_due" in md
 

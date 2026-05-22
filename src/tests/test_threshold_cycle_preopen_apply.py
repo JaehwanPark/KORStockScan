@@ -776,7 +776,57 @@ def test_auto_bounded_live_excludes_ai_instrumentation_gap(tmp_path, monkeypatch
     assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED" not in env_text
 
 
-def test_score65_74_entry_unlock_can_use_intraday_source_and_ignore_no_applied_gap(tmp_path, monkeypatch):
+def test_latest_preopen_source_ignores_intraday_only_artifact(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    ai_dir = report_dir / "threshold_cycle_ai_review"
+    calibration_dir = report_dir / "threshold_cycle_calibration"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    ai_dir.mkdir(parents=True)
+    calibration_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "AI_REVIEW_DIR", ai_dir)
+    monkeypatch.setattr(mod, "CALIBRATION_REPORT_DIR", calibration_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    (calibration_dir / "threshold_cycle_calibration_2026-05-18_intraday.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-18",
+                "run_phase": "intraday",
+                "calibration_candidates": [
+                    {
+                        "family": "score65_74_recovery_probe",
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": False,
+                        "calibration_state": "adjust_up",
+                        "target_env_keys": ["AI_SCORE65_74_RECOVERY_PROBE_ENABLED"],
+                        "recommended_values": {"enabled": True},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (ai_dir / "threshold_cycle_ai_review_2026-05-18_intraday.json").write_text(
+        json.dumps({"ai_status": "parsed", "items": []}),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-19",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+    )
+
+    assert manifest["status"] == "missing_source_report"
+    assert manifest["runtime_change"] is False
+
+
+def test_intraday_source_phase_blocks_auto_apply_even_when_candidate_ready(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"
     runtime_dir = tmp_path / "runtime_env"
@@ -871,16 +921,13 @@ def test_score65_74_entry_unlock_can_use_intraday_source_and_ignore_no_applied_g
         include_families={"score65_74_recovery_probe"},
     )
 
-    assert manifest["status"] == "auto_bounded_live_ready"
-    blocked = [item for item in manifest["auto_apply_decisions"] if item["family"] == "soft_stop_whipsaw_confirmation"][0]
-    assert blocked["decision_reason"] == "operator_family_filter_excluded"
-    decision = [item for item in manifest["auto_apply_decisions"] if item["family"] == "score65_74_recovery_probe"][0]
-    assert decision["selected"] is True
-    assert decision["decision_reason"] == "entry_unlock_probe_ready_overrides_no_applied_probe_gap"
-    env_text = (runtime_dir / "threshold_runtime_env_2026-05-18.env").read_text(encoding="utf-8")
-    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED=true" in env_text
-    assert "KORSTOCKSCAN_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW=50000" in env_text
-    assert "KORSTOCKSCAN_WAIT6579_PROBE_CANARY_MAX_QTY=1" in env_text
+    assert manifest["status"] == "auto_bounded_live_blocked"
+    assert manifest["runtime_change"] is False
+    assert manifest["source_phase_auto_apply_blocked"] is True
+    assert manifest["warnings"] == ["intraday_source_phase_auto_apply_blocked"]
+    assert manifest["auto_apply_decisions"] == []
+    assert manifest["runtime_env_overrides"] == {}
+    assert not (runtime_dir / "threshold_runtime_env_2026-05-18.env").exists()
 
 
 def test_preopen_apply_does_not_fallback_to_intraday_when_postclose_ai_unavailable(

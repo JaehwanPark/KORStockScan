@@ -2969,10 +2969,23 @@ def _extract_scalp_sim_completed_rows(events: list[dict]) -> list[dict]:
                 "simulation_book": "scalp_ai_buy_all",
                 "sim_record_id": sim_record_id,
                 "sim_parent_record_id": fields.get("sim_parent_record_id"),
+                "source_event_key": key,
                 "actual_order_submitted": False,
             }
         )
     return rows
+
+
+def _extend_unique_scalp_sim_completed_rows(target: list[dict], rows: list[dict], seen: set[str]) -> None:
+    for row in rows or []:
+        sim_record_id = str(row.get("sim_record_id") or "").strip()
+        key = sim_record_id or str(row.get("source_event_key") or "").strip()
+        if not key:
+            key = f"{row.get('stock_code')}-{row.get('rec_date')}-{row.get('sell_price')}"
+        if key in seen:
+            continue
+        seen.add(key)
+        target.append(row)
 
 
 def _completed_by_source_summary(real_rows: list[dict], sim_rows: list[dict]) -> dict:
@@ -8090,9 +8103,9 @@ def build_cumulative_threshold_cycle_report(
             if datetime.strptime(value, "%Y-%m-%d").date() >= start_dt
         ]
 
-    events_by_window: dict[str, list[dict]] = {}
     pipeline_meta_by_date: dict[str, dict] = {}
-    for label, dates in window_dates.items():
+
+    def load_events_for_window(label: str, dates: list[str]) -> list[dict]:
         rows: list[dict] = []
         for event_date in dates:
             try:
@@ -8106,7 +8119,7 @@ def build_cumulative_threshold_cycle_report(
                     rows.extend(custom_pipeline_loader(event_date))
             except Exception as exc:
                 ctx.warnings.append(f"pipeline event 로드 실패({label}/{event_date}): {exc}")
-        events_by_window[label] = rows
+        return rows
 
     report_sources_by_window: dict[str, dict] = {}
     if report_source_loader is not None:
@@ -8139,29 +8152,40 @@ def build_cumulative_threshold_cycle_report(
     real_completed_by_window: dict[str, list[dict]] = {}
     sim_completed_by_window: dict[str, list[dict]] = {}
     completed_by_window: dict[str, list[dict]] = {}
+    family_snapshots: dict[str, dict] = {}
+    family_apply_candidates: dict[str, list[dict]] = {}
+    scalp_simulator_by_window: dict[str, dict] = {}
+    event_count_by_window: dict[str, int] = {}
     for label, dates in window_dates.items():
         if not dates:
             real_completed_by_window[label] = []
             sim_completed_by_window[label] = []
             completed_by_window[label] = []
+            family_snapshots[label] = {}
+            family_apply_candidates[label] = []
+            scalp_simulator_by_window[label] = _scalp_simulator_event_summary([], [], target_date=target_date)
+            event_count_by_window[label] = 0
             continue
+        window_events = load_events_for_window(label, dates)
         real_rows = _filter_completed_rows_by_date(completed_rows, dates[0], dates[-1])
-        sim_rows = _extract_scalp_sim_completed_rows(events_by_window.get(label, []))
+        sim_rows = _extract_scalp_sim_completed_rows(window_events)
         real_completed_by_window[label] = real_rows
         sim_completed_by_window[label] = sim_rows
         completed_by_window[label] = real_rows
-
-    family_snapshots: dict[str, dict] = {}
-    family_apply_candidates: dict[str, list[dict]] = {}
-    for label, dates in window_dates.items():
         window_target_date = dates[-1] if dates else target_date
         families = _build_family_reports(
-            events_by_window.get(label, []),
+            window_events,
             real_completed_by_window.get(label, []),
             target_date=window_target_date,
         )
         family_snapshots[label] = _threshold_snapshot_from_families(families, report_only=True)
         family_apply_candidates[label] = []
+        scalp_simulator_by_window[label] = _scalp_simulator_event_summary(
+            window_events,
+            sim_rows,
+            target_date=target_date,
+        )
+        event_count_by_window[label] = len(window_events)
 
     completed_summary_by_window = {
         label: _completed_cohort_summary(rows)
@@ -8174,15 +8198,6 @@ def build_cumulative_threshold_cycle_report(
         )
         for label in completed_by_window
     }
-    scalp_simulator_by_window = {
-        label: _scalp_simulator_event_summary(
-            events_by_window.get(label, []),
-            sim_completed_by_window.get(label, []),
-            target_date=target_date,
-        )
-        for label in events_by_window
-    }
-    event_count_by_window = {label: len(rows) for label, rows in events_by_window.items()}
     source_flags = {
         "profit_basis": "real COMPLETED + valid profit_rate; scalp_sim completed rows are split into completed_by_source/scalp_simulator only",
         "scalp_sim_calibration_authority": "equal_weight",
@@ -8398,23 +8413,34 @@ def build_daily_threshold_cycle_report(
     rolling_3d = _date_range(target_date, 3)
     rolling_7d = _date_range(target_date, 7)
 
-    event_windows: dict[str, list[dict]] = {}
     pipeline_meta_by_date: dict[str, dict] = {}
-    for label, dates in {"same_day": same_day, "rolling_3d": rolling_3d, "rolling_7d": rolling_7d}.items():
-        rows: list[dict] = []
-        for event_date in dates:
-            try:
-                if custom_pipeline_loader is None:
-                    load_result = _default_pipeline_load_result(event_date)
-                    rows.extend(load_result.rows)
-                    pipeline_meta_by_date[event_date] = load_result.meta
-                    for warning in load_result.meta.get("warnings", []):
-                        ctx.warnings.append(f"pipeline event 로드 경고({event_date}): {warning}")
-                else:
-                    rows.extend(custom_pipeline_loader(event_date))
-            except Exception as exc:
-                ctx.warnings.append(f"pipeline event 로드 실패({event_date}): {exc}")
-        event_windows[label] = rows
+
+    def load_events_for_date(event_date: str, label: str) -> list[dict]:
+        try:
+            if custom_pipeline_loader is None:
+                load_result = _default_pipeline_load_result(event_date)
+                pipeline_meta_by_date.setdefault(event_date, load_result.meta)
+                for warning in load_result.meta.get("warnings", []):
+                    ctx.warnings.append(f"pipeline event 로드 경고({label}/{event_date}): {warning}")
+                return load_result.rows
+            return list(custom_pipeline_loader(event_date))
+        except Exception as exc:
+            ctx.warnings.append(f"pipeline event 로드 실패({label}/{event_date}): {exc}")
+            return []
+
+    same_day_events: list[dict] = []
+    for event_date in same_day:
+        same_day_events.extend(load_events_for_date(event_date, "same_day"))
+
+    sim_completed_rows: list[dict] = []
+    sim_completed_seen: set[str] = set()
+    for event_date in rolling_7d:
+        window_events = same_day_events if event_date == target_date else load_events_for_date(event_date, "rolling_7d")
+        _extend_unique_scalp_sim_completed_rows(
+            sim_completed_rows,
+            _extract_scalp_sim_completed_rows(window_events),
+            sim_completed_seen,
+        )
 
     completed_rows: list[dict] = []
     if not skip_completed_rows:
@@ -8438,9 +8464,8 @@ def build_daily_threshold_cycle_report(
         ctx.warnings.append("calibration source loader가 dict를 반환하지 않음")
 
     real_completed_rows = list(completed_rows)
-    sim_completed_rows = _extract_scalp_sim_completed_rows(event_windows["rolling_7d"])
-    same_day_sim_completed_rows = _extract_scalp_sim_completed_rows(event_windows["same_day"])
-    families = _build_family_reports(event_windows["same_day"], real_completed_rows, target_date=target_date)
+    same_day_sim_completed_rows = _extract_scalp_sim_completed_rows(same_day_events)
+    families = _build_family_reports(same_day_events, real_completed_rows, target_date=target_date)
     families.extend(_build_report_source_families(report_source_context))
     completed = _completed_summary(real_completed_rows)
     threshold_snapshot = {
@@ -8466,7 +8491,7 @@ def build_daily_threshold_cycle_report(
         }
         for family in families
     ]
-    trade_lifecycle_attribution = _build_trade_lifecycle_attribution(event_windows["same_day"], target_date)
+    trade_lifecycle_attribution = _build_trade_lifecycle_attribution(same_day_events, target_date)
     calibration_candidates = _build_calibration_candidates(families, report_source_context)
     report = {
         "date": target_date,
@@ -8476,7 +8501,7 @@ def build_daily_threshold_cycle_report(
             "report_path": str(report_path_for_date(target_date)),
             "pipeline_load": pipeline_meta_by_date,
             "calibration_run_phase": str(calibration_run_phase or "postclose"),
-            "calibration_cadence": "twice_daily_intraday_and_postclose",
+            "calibration_cadence": "scheduled_postclose_manual_intraday",
         },
         "windows": {
             "same_day": same_day,
@@ -8488,11 +8513,11 @@ def build_daily_threshold_cycle_report(
             "loss_count_rolling_7d": completed["loss_count"],
             "real_completed_valid_rolling_7d": len(_valid_profit_rows(real_completed_rows)),
             "sim_completed_valid_rolling_7d": len(_valid_profit_rows(sim_completed_rows)),
-            "event_count_same_day": len(event_windows["same_day"]),
+            "event_count_same_day": len(same_day_events),
         },
         "completed_by_source": _completed_by_source_summary(real_completed_rows, sim_completed_rows),
         "scalp_simulator": _scalp_simulator_event_summary(
-            event_windows["same_day"],
+            same_day_events,
             same_day_sim_completed_rows,
             target_date=target_date,
         ),
@@ -8528,7 +8553,7 @@ def main(argv: list[str] | None = None) -> int:
         "--calibration-run-phase",
         choices=["intraday", "postclose"],
         default="postclose",
-        help="Calibration run phase. Calibration is scheduled twice daily: intraday and postclose.",
+        help="Calibration run phase. postclose is scheduled; intraday is manual forensic/legacy only.",
     )
     parser.add_argument(
         "--calibration-only",

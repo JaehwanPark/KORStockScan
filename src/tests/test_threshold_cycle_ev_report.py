@@ -50,6 +50,18 @@ def test_runtime_apply_bridge_summary_preserves_post_apply_provenance():
     assert summary["selected"][0]["actual_runtime_effect"] == "bounded_entry_probe_recovery"
 
 
+def test_calibration_path_does_not_fallback_to_intraday_artifact(tmp_path, monkeypatch):
+    calibration_dir = tmp_path / "threshold_cycle_calibration"
+    calibration_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "CALIBRATION_REPORT_DIR", calibration_dir)
+
+    intraday = calibration_dir / "threshold_cycle_calibration_2026-05-22_intraday.json"
+    postclose = calibration_dir / "threshold_cycle_calibration_2026-05-22_postclose.json"
+    intraday.write_text(json.dumps({"run_phase": "intraday"}), encoding="utf-8")
+
+    assert mod._calibration_path("2026-05-22") == postclose
+
+
 @pytest.fixture(autouse=True)
 def _isolate_pattern_lab_audit_dirs(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing_currentness_audit")

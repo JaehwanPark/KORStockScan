@@ -229,6 +229,22 @@ def test_postclose_wrapper_resource_guards_heavy_steps():
     assert 'run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.daily_threshold_cycle_report' in script
 
 
+def test_manual_calibration_wrapper_limits_resource_pressure():
+    script = Path("deploy/run_threshold_cycle_calibration.sh").read_text(encoding="utf-8")
+    installer = Path("deploy/install_threshold_cycle_cron.sh").read_text(encoding="utf-8")
+
+    assert 'RUN_PHASE="${THRESHOLD_CYCLE_CALIBRATION_PHASE:-postclose}"' in script
+    assert 'CALIBRATION_TIMEOUT_SEC="${THRESHOLD_CYCLE_CALIBRATION_TIMEOUT_SEC:-600}"' in script
+    assert 'LOCK_FILE="${THRESHOLD_CYCLE_CALIBRATION_LOCK_FILE:-$PROJECT_DIR/tmp/threshold_cycle_calibration_${RUN_PHASE}.lock}"' in script
+    assert 'IONICE_LEVEL="${THRESHOLD_CYCLE_CALIBRATION_IONICE_LEVEL:-7}"' in script
+    assert 'NICE_LEVEL="${THRESHOLD_CYCLE_CALIBRATION_NICE_LEVEL:-12}"' in script
+    assert 'flock -n 9' in script
+    assert 'timeout --kill-after=30s "$CALIBRATION_TIMEOUT_SEC"' in script
+    assert "5 12 * * 1-5" not in installer
+    assert "deploy/run_threshold_cycle_calibration.sh" not in installer
+    assert "threshold_cycle_calibration_intraday_cron.log" not in installer
+
+
 def test_threshold_cycle_cron_restarts_bot_around_postclose():
     script = Path("deploy/install_threshold_cycle_cron.sh").read_text(encoding="utf-8")
 

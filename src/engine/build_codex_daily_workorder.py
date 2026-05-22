@@ -663,21 +663,19 @@ def build_runbook_operational_checks(*, target_date: str | None, slots: list[str
                     "logs/run_buy_funnel_sentinel_cron.log",
                     "logs/run_holding_exit_sentinel_cron.log",
                     "logs/run_panic_sell_defense_cron.log",
-                    "logs/threshold_cycle_calibration_intraday_cron.log",
                     f"data/pipeline_events/pipeline_events_{date_text}.jsonl",
                     f"data/threshold_cycle/threshold_events_{date_text}.jsonl",
                     f"data/report/panic_sell_defense/panic_sell_defense_{date_text}.md",
-                    f"data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_{date_text}_intraday.md",
                     f"data/report/error_detection/error_detection_{date_text}.json",
                 ),
                 decision_rule=(
                     "pass|warning|fail|not_yet_due 중 하나로 판정. Sentinel RUNTIME_OPS, panic_state, "
-                    "pipeline/threshold event append, intraday calibration 생성 여부, AI correction ai_status, "
+                    "pipeline/threshold event append, "
                     "스윙 dry-run provenance, runtime_change=false 유지 확인. "
                     "SystemErrorDetector report의 summary_severity 및 fail detector 확인. "
                     "fail이면 detector별 details을 읽고 운영장애/계측/incident로 분류."
                 ),
-                forbidden="장중 calibration이나 Sentinel 결과로 당일 runtime threshold 변경 금지. "
+                forbidden="Sentinel 결과로 당일 runtime threshold 변경 금지. "
                           "SystemErrorDetector 탐지 결과로 runtime threshold/spread/주문/재시작 변경 금지.",
             )
         )

@@ -8,7 +8,8 @@
 
 - 자동화체인의 기본 흐름은 `R0_collect -> R1_daily_report -> R2_cumulative_report -> R3_manifest_only -> R4_preopen_apply_candidate -> R5_bounded_calibrated_apply -> R6_post_apply_attribution`이다.
 - 목표는 손실 억제가 아니라 기대값/순이익 극대화다. 승률은 보조 진단이고, runtime 적용 판단은 EV와 source-quality/contract/guard를 함께 본다.
-- 장중 runtime threshold mutation은 금지한다. 기본 적용 단위는 장후 report/calibration/approval -> 다음 PREOPEN runtime env -> 장후 attribution이다.
+- 장중 runtime threshold mutation은 금지한다. 기본 적용 단위는 장후 report/postclose calibration/approval -> 다음 PREOPEN runtime env -> 장후 attribution이다.
+- `2026-05-22`부터 `12:05` intraday calibration cron은 제거됐다. scheduled calibration은 postclose 1회이며, intraday phase artifact는 명시 수동 forensic/legacy manifest-only source다. `threshold_cycle_preopen_apply --source-phase intraday`는 runtime env를 만들 수 없고 장중 entry unlock/bot restart 근거로 쓰지 않는다.
 - sim/probe/counterfactual은 후보 발굴과 source bundle에는 쓸 수 있지만 real execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
 - `workorder 승인`은 코드 구현 착수 승인이고, `approval artifact 승인`은 이미 구현된 approval contract의 PREOPEN 적용 승인이다. 두 경로 모두 `allowed_runtime_apply=true`, preopen env mapping, runtime hook, rollback/post-apply attribution이 없으면 실매매 로직 변경으로 해석하지 않는다.
 - 주요 사람 개입 지점은 one-day decider 판정/확인, real canary/provider/cap release처럼 discovery 범위 밖 approval 판단, Project/Calendar 수동 동기화다. lifecycle bucket discovery의 sim-auto/live-auto 분류와 entry/scale bridge 적용에는 사람 approval을 요구하지 않는다.
@@ -44,13 +45,13 @@
 | `BedrockNovaLiteTier2PromotionReview0522` | 05-22 POSTCLOSE one-day decider 예정 | Lite v1은 Tier2 route 후보만 만들며 즉시 provider route 변경 금지 | winner가 Lite이면 `tier2_nova_lite_v1` route 후보 기록, 별도 approval/workorder 필요 |
 | `BedrockNovaLiteV2ShadowImplementation0522` | 05-26 report-only shadow 준비 판정 예정 | Lite v2는 v1 승격 판단과 별개인 future report-only 실험 | 05-26 시행 조건, model id, env toggle, artifact path 확정 |
 | `ScalpSimOvernightPrecloseCron0522` | 15:20 첫 운영 확인 예정 | sim overnight action은 LDM feature/source row이며 hard gate가 아님 | active undecided/source-quality/OpenAI provenance/Bedrock shadow 확인 |
-| `lifecycle_bucket_discovery` | 신규 구현 | 전체 lifecycle bucket을 deterministic 분류한 뒤 tier3 AI 2-pass review로 `existing_bucket_refinement`, `new_bucket_candidate`, `sim_auto_approved`, `live_auto_apply_ready`, `runtime_blocked_contract_gap`, `code_patch_required`, `automation_handoff_gap`을 최종화한다. AI prompt는 영어로 유지하고, 모호함/작은 효과는 차단 근거가 아니다. LDM source contract drift도 `source_contract_changes`로 표면화한다 | 다음 PREOPEN sim policy/live auto bridge와 postclose verifier handoff 확인 |
+| `lifecycle_bucket_discovery` | 구현 완료, postclose chain 연결 | 전체 lifecycle bucket을 deterministic 분류한 뒤 tier3 AI 2-pass review로 `existing_bucket_refinement`, `new_bucket_candidate`, `sim_auto_approved`, `live_auto_apply_ready`, `runtime_blocked_contract_gap`, `code_patch_required`, `automation_handoff_gap`을 최종화한다. AI prompt는 영어로 유지하고, 모호함/작은 효과는 차단 근거가 아니다. LDM source contract drift도 `source_contract_changes`로 표면화한다 | 다음 PREOPEN sim policy/live auto bridge와 postclose verifier handoff 확인 |
 
-### 구현 예정 또는 구현 검토 항목
+### 구현 완료 및 추가 구현 검토 항목
 
-| 항목 | 현재 owner | 구현해야 할 것 | runtime 적용과의 관계 |
+| 항목 | 현재 owner | 현 상태/할 일 | runtime 적용과의 관계 |
 | --- | --- | --- | --- |
-| `RuntimeApplyBridgeAutomationImplementation0522` | 05-22 POSTCLOSE checklist | `lifecycle_bucket_discovery`로 성과 후보 bucket 자동 발굴, tier3 AI 2-pass 검증, source contract drift 감지, sim-auto/live-auto/runtime-blocked/code-patch/new-bucket 자동 분류, surfaced 누락 시 `automation_handoff_gap` 처리 | 구현 후 sim-auto는 사람 승인 없이 적용되고, 명시적 AI gap이 없는 entry/scale `live_auto_apply_ready`는 approval artifact 없이 다음 PREOPEN live auto apply 후보가 된다 |
+| `RuntimeApplyBridgeAutomationImplementation0522` | 05-22 checklist 완료 항목 | 구현 완료. `lifecycle_bucket_discovery` 자동 발굴, tier3 AI 2-pass 검증, source contract drift 감지, sim-auto/live-auto/runtime-blocked/code-patch/new-bucket 자동 분류, surfaced 누락 시 `automation_handoff_gap` 처리까지 연결됐다. 검증 기준은 05-22 checklist의 targeted pytest, discovery/bridge/verifier handoff 결과다 | sim-auto는 사람 승인 없이 다음 PREOPEN sim policy 후보가 되고, 명시적 AI gap이 없는 entry/scale `live_auto_apply_ready`는 approval artifact 없이 다음 PREOPEN live auto apply 후보가 된다 |
 | `RuntimeApplyBridgeGapAudit0522` | 05-22 POSTCLOSE checklist | workorder/approval artifact가 `contract -> env mapping -> runtime hook -> post-apply attribution`까지 이어지는지 audit | audit 자체는 적용이 아니라 누락 탐지. 누락은 구현 workorder로 넘긴다 |
 | `code_improvement_workorder_2026-05-21` implement_now 묶음 | code improvement workorder | selected 19건 중 `implement_now` 16건. entry bucket unknown/source-quality, holding-exit counterfactual, scale-in bucket handoff instrumentation/report/provenance 보강 | 대부분 `runtime_effect=false`, `allowed_runtime_apply=false`다. 코드 보강 후 bridge/approval 후보를 만드는 입력이 된다 |
 | holding/exit, provider, position sizing, panic bucket bridge 확장 | 아직 별도 bridge owner 필요 | entry/scale-in 외 bucket에 대해 별도 owner, approval contract, env mapping, runtime hook, rollback/post-apply attribution 정의 | 현재 `runtime_apply_bridge` 범위 밖이다. 성과가 확인되면 새 workorder로 bridge 확장 |
@@ -58,7 +59,7 @@
 ### 현재 해석 요약
 
 - 스캘핑 실매매 영향 후보는 `soft_stop_whipsaw_confirmation`, `score65_74_recovery_probe`처럼 apply plan에서 selected되고 runtime hook이 있는 bounded family다. 스윙 실매매 영향은 `swing_one_share_real_canary_phase0`의 승인된 1주 canary scope로 제한된다.
-- 이미 적용됐지만 실매매 권한이 없는 항목은 `scalp_sim_candidate_window_expansion`, `scalp_sim_ai_budget_manager`, `scalp_sim_scale_in_window_expansion`, `lifecycle_decision_matrix_runtime`의 advisory/context 부분이다.
+- 이미 적용됐지만 실매매 권한이 없는 항목은 `scalp_sim_candidate_window_expansion`, `scalp_sim_ai_budget_manager`, `scalp_sim_scale_in_window_expansion`, `lifecycle_decision_matrix_runtime`의 advisory/context 부분이다. `scalp_sim_scale_in_window_expansion` approval artifact는 `decision_authority=sim_observation_only`, `actual_order_submitted=false`, `broker_order_forbidden=true` 계약을 유지한다.
 - 이미 승인됐지만 이번 env에 실제 값이 안 들어간 항목도 있다. `swing_model_floor`가 그 경우다.
 - `approval_required=true`는 discovery 범위 밖에서 “나중에 approval route가 필요할 수 있다”는 뜻이다. entry/scale discovery bridge는 `approval_required=false`, `live_auto_apply_ready`일 때 사람 승인 없이 다음 PREOPEN 후보로 소비된다.
 - “무엇을 적용할 것인가”는 매일 POSTCLOSE에서 후보 surfaced, bridge/approval readiness, source-quality, sample/EV를 닫고, 다음 PREOPEN에서 apply plan이 최종 결정한다.
@@ -70,7 +71,7 @@
 | `R0_collect` | 런타임, 시뮬레이션, 감시 이벤트 수집 | `pipeline_events`, `threshold_events`, `post_sell_*`, sim state, broker receipt | 장중/장후 리포트 | 없음 | 없음 |
 | `R1_daily_report` | 당일 source를 report로 정규화 | `buy_funnel_sentinel`, `holding_exit_sentinel`, `panic_*`, `swing_*`, `openai_ws`, `threshold_cycle_*` | threshold-cycle, runtime summary | 없음 | 장애 시 확인 |
 | `R2_cumulative_report` | daily-only를 rolling/cumulative와 대조 | `threshold_cycle_cumulative`, LDM history, bucket history | preopen apply, bridge, EV report | 없음 | 없음 |
-| `R3_manifest_only` | 후보 family와 source bundle 생성 | `threshold_cycle_YYYY-MM-DD.json`, calibration, AI review | `threshold_cycle_preopen_apply` | 직접 적용 없음 | workorder 검토 가능 |
+| `R3_manifest_only` | 후보 family와 source bundle 생성 | `threshold_cycle_YYYY-MM-DD.json`, postclose calibration, postclose AI review | `threshold_cycle_preopen_apply` | 직접 적용 없음 | workorder 검토 가능 |
 | `R4_preopen_apply_candidate` | guard, contract, approval, artifact 확인 | `threshold_apply_YYYY-MM-DD.json` | runtime env 생성기 | 조건부 적용 후보 | approval artifact 승인 |
 | `R5_bounded_calibrated_apply` | 다음 장전 env 생성 | `threshold_runtime_env_YYYY-MM-DD.env/json` | `run_bot.sh`, runtime hooks | 있음 | 승인된 경우만 |
 | `R6_post_apply_attribution` | 적용/미적용/차단 결과를 장후 평가 | `threshold_cycle_ev`, `runtime_approval_summary`, LDM, workorder | 다음날 튜닝 입력 | 다음 cycle 입력 | workorder 구현 지시 |
@@ -81,21 +82,23 @@
 | --- | --- | --- | --- | --- |
 | Real execution | broker order, fill, sell receipt, completed trade | 실제 체결, 손익, execution 품질 평가 | `threshold_cycle_ev`, runtime approval, post-apply attribution | sim/probe와 섞어 real quality 주장 금지 |
 | Sim/probe | `scalp_ai_buy_all`, `scalp_sim_*`, swing dry-run/probe | 진입, 보유, scale-in, exit 가상 표본 확대 | LDM, EV report, workorder, approval request | 단독 실주문 승인 금지 |
-| Counterfactual | missed entry, wait6579 EV, post-sell MFE/MAE | 놓친 기회, 회피손실, 후행성과 측정 | calibration, LDM bucket, bridge 후보 | 실현손익과 합산 금지 |
+| Counterfactual | missed entry, wait6579 EV, post-sell MFE/MAE | 놓친 기회, 회피손실, 후행성과 측정 | postclose calibration, LDM bucket, bridge 후보 | 실현손익과 합산 금지 |
 | Sentinel/report-only | BUY/HOLD/EXIT sentinel, panic sell/buying | 운영 이상치와 source-quality 감시 | incident, source bundle, workorder | threshold/order/provider 변경 금지 |
 | AI transport/shadow | OpenAI WS, Bedrock Micro/Lite shadow | transport/provenance/provider 후보 비교 | one-day decider, AITransport checklist | 장중 provider route 변경 금지. 2026-05-22 기준 Micro one-day, Lite v1 Tier2, Lite v2 report-only 준비는 서로 다른 판정 경로다 |
 | Runtime env/apply | selected family env, approval artifact | 실제 다음 장전 적용 | bot runtime, post-apply attribution | artifact/contract 없는 수동 env 우회 금지 |
+| Manual intraday forensic | `_intraday` calibration/AI review artifact | 운영 장애/legacy 비교용 manifest-only source | operator forensic review | scheduled chain, daily EV, preopen auto apply source로 사용 금지 |
 
 ## 소비와 해석 계층
 
 | 소비 계층 | 입력 | 하는 일 | 산출 | 적용 권한 |
 | --- | --- | --- | --- | --- |
-| `threshold_cycle_ev` | threshold report, runtime summary, sim/real split | family별 EV, selected/blocked/hold 판단 | daily EV report | 직접 없음 |
+| `threshold_cycle_ev` | postclose threshold report, runtime summary, sim/real split | family별 EV, selected/blocked/hold 판단 | daily EV report | 직접 없음 |
 | `runtime_approval_summary` | EV, swing approval, LDM bucket | 사용자 승인 필요, 차단, observe-only 분류 | approval summary | 직접 없음 |
 | `lifecycle_decision_matrix` | entry/submit/holding/scale_in/exit source | bucket attribution, source-only 후보 생성 | LDM report | 기본 없음 |
 | `runtime_apply_bridge` | LDM entry/scale-in bucket | discovery에서 AI 2-pass를 통과한 bucket 후보를 runtime family 후보로 정규화 | bridge report | 직접 없음 |
 | `code_improvement_workorder` | pattern lab, EV, LDM, source-quality gaps | 코드 구현 필요 항목 생성 | workorder md/json | 직접 없음 |
 | `threshold_cycle_preopen_apply` | threshold report, approval artifact, bridge, AI guard | 다음 장전 env 생성 여부 결정 | apply plan, runtime env | 있음 |
+| `threshold_cycle_preopen_apply --source-phase intraday` | manual `_intraday` calibration/AI review | forensic manifest 확인 | apply plan | runtime env apply 차단 |
 | Runtime hooks | env file, bot startup | 실제 매매 로직에서 feature/guard 반영 | runtime events | 있음 |
 | Post-apply attribution | runtime events, completed trades | 적용 효과, 부작용, 차단 사유 평가 | 다음날 tuning source | 다음 cycle 입력 |
 
@@ -110,6 +113,7 @@
 | Code workorder | pattern lab/workorder `implement_now` | 사용자가 Codex 구현 지시, 코드/테스트 통과 | 구현 후 다음 cycle | 기능, 계측, 계약 보강 |
 | Source-only bucket | LDM score/scale bucket, sim-only EV | rolling/source-quality 충족 후 bridge/workorder로 승격 필요. holding/exit, provider, position sizing, panic bucket은 별도 owner/contract/env hook이 있어야 bridge 확장 대상 | 없음 | 관찰 유지 |
 | Shadow/provider 후보 | Nova Micro/Lite 비교 | one-day decider + 별도 approval/workorder. Micro, Lite v1, Lite v2는 합산하지 않고 profile/scope별로 판정 | 다음 PREOPEN 이후 | route 후보 기록, 즉시 변경 아님 |
+| Intraday source phase | `_intraday` calibration/AI review | 명시 수동 forensic/legacy 검토만 허용 | 없음 | `auto_apply` 요청이 있어도 runtime env 파일을 쓰지 않음 |
 
 ## 승인과 구현의 차이
 
@@ -118,7 +122,7 @@
 | Workorder 승인 | 코드를 구현해도 된다는 지시 | bucket 자동 발굴, bridge gap 보강 | Codex에 구현 지시 | 아님 |
 | Approval artifact 승인 | 이미 구현된 contract를 다음 PREOPEN에 적용 승인 | `scalp_sim_scale_in_window_expansion`, swing canary | artifact 승인 | 조건부 가능. `allowed_runtime_apply=true`, env mapping, runtime hook, rollback/post-apply attribution, artifact/contract scope match가 모두 필요 |
 | Bridge ready 확인 | approval 전에 runtime 연결 계약 확인 | `runtime_apply_bridge` | ready 후보만 승인 판단 | 자체 적용 아님 |
-| Operator override | 사용자가 명시적으로 runtime env/bot 적용 지시 | 장중 특수 override | 명시 지시 필요 | 가능하지만 예외 |
+| Operator override | 사용자가 명시적으로 runtime env/bot 적용 지시 | postclose/PREOPEN 기준 운영 override | 명시 지시 필요 | 가능하지만 예외. 단 intraday source phase는 auto apply 차단 |
 
 ## 자동화체인이 닫아야 하는 질문
 
@@ -141,6 +145,8 @@
 | `allowed_runtime_apply=false` | runtime apply 차단 | approval artifact가 있어도 env로 들어가면 안 됨 |
 | `runtime_apply_allowed=false` | swing policy 계층의 runtime apply 차단 필드 | threshold/bridge 계층은 주로 `allowed_runtime_apply`, swing policy 계층은 `runtime_apply_allowed`를 쓴다 |
 | `runtime_effect=false` | report/source/workorder 계층 | 실매매 로직 변경 아님 |
+| `source_phase=intraday` | manual forensic/legacy calibration source | manifest-only. `auto_apply` 요청이 있어도 runtime env 생성 금지 |
+| `source_phase_auto_apply_blocked=true` | preopen apply가 intraday source 기반 env 생성을 차단 | 정상 차단. postclose/canonical source로 다음 PREOPEN에 재판정 |
 | `bridge_candidate_state=bootstrap_pending` | 후보는 발견됐지만 rolling/confirmation 부족 | 승인하지 않고 다음 표본 확인 |
 | `bridge_candidate_state=live_auto_apply_ready` | AI 2-pass, contract/env/hook/attribution이 닫힌 적용 후보 | approval artifact 없이 다음 PREOPEN env 후보 |
 | `classification_state=sim_auto_approved` | discovery가 다음 PREOPEN sim policy에 자동 적용할 bucket | 실주문/청산/provider/bot/cap 변경 권한 없음 |
@@ -161,7 +167,7 @@
 | Entry bucket tuning | wait6579 EV, missed entry, buy funnel, LDM entry attribution, lifecycle bucket discovery | score/source/stale/liquidity/time bucket EV + tier3 AI 명시적 gap review | `live_auto_apply_ready` + preopen apply | entry probe/env 조정 |
 | Scale-in bucket tuning | LDM scale-in attribution, sim scale-in rows, post-sell labels, lifecycle bucket discovery | `PYRAMID`, `AVG_DOWN_ONLY`, blocker reason EV + tier3 AI 명시적 gap review | `live_auto_apply_ready` + safety guard 유지 | scale-in tighten/env 조정 |
 | Holding/exit tuning | holding_exit_sentinel, post_sell_feedback, holding_exit_matrix, SAW | HOLD/EXIT/TRIM/defer/late rebound 판단 | selected family guard + runtime env | holding/exit bias 또는 soft-stop 조정 |
-| Swing dry-run tuning | swing lifecycle audit, swing approval, swing simulation | dry-run floor/cooldown/canary 후보 | separate approval artifact | dry-run env 또는 one-share canary |
+| Swing dry-run tuning | swing lifecycle audit, swing approval, swing simulation | dry-run floor/cooldown/canary 후보 | separate approval artifact | dry-run env 또는 one-share canary. real canary scope 밖 action은 계속 차단 |
 | Provider/AI transport | OpenAI WS, Bedrock Micro/Lite shadow rows, one-day decider | profile별 outcome-linked EV/MFE/MAE. Micro one-day는 winner 강제, Lite v1은 `gpt-5.4-mini` Tier2 profile별 판정, Lite v2는 2026-05-26 report-only 준비로 분리 | 별도 approval/workorder | route 후보 기록 또는 shadow OFF |
 | Source-quality/instrumentation | detector, source-quality audit, pattern lab currentness/propagation | parse/stale/join/downstream gap | workorder 구현 | 계측/리포트/consumer 보강 |
 
@@ -174,6 +180,7 @@
 | `workorder_needs_codex_implementation` | Codex 구현 지시 여부 결정 | 구현 승인과 runtime 적용 승인 혼동 금지 |
 | `approval_contract_ready` | discovery 범위 밖 approval artifact 생성 여부 결정 | contract 범위 밖으로 해석 금지 |
 | `live_auto_apply_ready` | discovery/bridge 자동 적용 판단 | hard/broker/stale/qty/cooldown guard 우회 금지 |
+| intraday forensic source 확인 | 장애 재현/legacy 비교 | runtime env, bot restart, entry unlock 근거로 사용 금지 |
 | one-day decider 판정/확인 | Micro/Lite 같은 임시 비교 artifact를 실행하고 winner/next action을 확인 | latency/cost/parse/action match만으로 1차원 판정 금지 |
 | Project/Calendar 수동 동기화 | 문서 backlog를 외부 Project/Calendar에 반영 | AI가 직접 동기화 실행 금지 |
 | `runtime_apply_blocked_contract_gap` | 구현 workorder로 넘김 | 수동 env override 금지 |
@@ -198,4 +205,5 @@
 - surfaced 되어야 할 후보가 `threshold_cycle_ev`, `runtime_approval_summary`, `code_improvement_workorder`, `runtime_apply_bridge`, `threshold_cycle_postclose_verification` 중 어디에도 나타나지 않으면 `automation_handoff_gap`으로 봐야 한다. 수집계층 신규/삭제/변경은 LDM source contract drift로 따로 surfaced 되어야 한다.
 - `workorder`만 있어서는 runtime이 바뀌지 않는다. 코드 구현, 테스트, report 재생성, approval contract/env mapping/runtime hook/post-apply attribution이 닫혀야 한다.
 - discovery 범위 밖 approval artifact는 `allowed_runtime_apply=false`, contract mismatch, env mapping missing이면 apply가 차단되어야 정상이다. discovery entry/scale bridge는 `bridge_candidate_state=live_auto_apply_ready`일 때 approval artifact 없이 적용된다.
+- 12:05 제거 후 intraday artifact는 운영 surface가 아니다. current crontab, cron completion detector, daily EV fallback, 기본 preopen apply는 intraday calibration을 요구하거나 소비하지 않는다.
 - 새 source/report/metric을 추가할 때는 `metric_role`, `decision_authority`, `window_policy`, `sample_floor`, `primary_decision_metric`, `source_quality_gate`, `forbidden_uses`, `runtime_effect`를 선언해야 한다. 계약이 없으면 `instrumentation_gap` 또는 `source_quality_blocker`로만 라우팅한다.

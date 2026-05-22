@@ -110,15 +110,6 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "trading_day_only": True,
     },
     {
-        "id": "threshold_cycle_calibration_intraday",
-        "log": "logs/threshold_cycle_calibration_intraday_cron.log",
-        "window_start": (12, 5),
-        "window_end": (12, 30),
-        "mode": "once",
-        "critical": False,
-        "trading_day_only": True,
-    },
-    {
         "id": "scalp_sim_overnight_preclose",
         "log": "logs/scalp_sim_overnight_preclose_cron.log",
         "window_start": (15, 20),

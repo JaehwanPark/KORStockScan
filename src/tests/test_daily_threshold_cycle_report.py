@@ -1,5 +1,6 @@
 import gzip
 import json
+from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -513,7 +514,7 @@ def test_threshold_cycle_calibration_uses_holding_exit_report_sources():
     )
 
     assert report["meta"]["calibration_run_phase"] == "intraday"
-    assert report["meta"]["calibration_cadence"] == "twice_daily_intraday_and_postclose"
+    assert report["meta"]["calibration_cadence"] == "scheduled_postclose_manual_intraday"
     assert report["calibration_source_bundle"]["new_observation_axis_created"] is False
     candidates = {item["family"]: item for item in report["calibration_candidates"]}
     assert candidates["soft_stop_whipsaw_confirmation"]["source_sample_count"] == 20
@@ -2208,6 +2209,68 @@ def test_default_pipeline_loader_prefers_partitioned_compact_over_legacy(tmp_pat
     assert load_result.meta["data_source"] == "partitioned_compact"
     assert load_result.meta["partition_count"] == 1
     assert load_result.meta["checkpoint_completed"] is True
+
+
+def test_daily_threshold_cycle_report_does_not_reload_same_day_for_rolling_sim_rows():
+    calls: Counter[str] = Counter()
+
+    def pipeline_loader(target_date: str) -> list[dict]:
+        calls[target_date] += 1
+        if target_date == "2026-04-30":
+            return [
+                {"stage": "budget_pass", "fields": {"signal_score": "72"}},
+                {
+                    "stage": "scalp_sim_sell_order_assumed_filled",
+                    "emitted_date": "2026-04-30",
+                    "stock_code": "005930",
+                    "fields": {
+                        "profit_rate": "0.3",
+                        "sim_record_id": "same-day-sim",
+                        "assumed_fill_price": "70100",
+                    },
+                },
+            ]
+        if target_date == "2026-04-29":
+            return [
+                {
+                    "stage": "scalp_sim_sell_order_assumed_filled",
+                    "emitted_date": "2026-04-29",
+                    "stock_code": "000660",
+                    "fields": {
+                        "profit_rate": "-0.2",
+                        "sim_record_id": "prev-day-sim",
+                        "assumed_fill_price": "180000",
+                    },
+                }
+            ]
+        if target_date == "2026-04-28":
+            return [
+                {
+                    "stage": "scalp_sim_sell_order_assumed_filled",
+                    "emitted_date": "2026-04-28",
+                    "stock_code": "000660",
+                    "fields": {
+                        "profit_rate": "0.9",
+                        "sim_record_id": "prev-day-sim",
+                        "assumed_fill_price": "181000",
+                    },
+                }
+            ]
+        return []
+
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-04-30",
+        pipeline_loader=pipeline_loader,
+        report_source_loader=lambda target_date: {},
+        completed_rows_loader=lambda start_date, end_date: [],
+    )
+
+    assert calls["2026-04-30"] == 1
+    assert calls["2026-04-29"] == 1
+    assert calls["2026-04-28"] == 1
+    assert report["summary"]["event_count_same_day"] == 2
+    assert report["summary"]["sim_completed_valid_rolling_7d"] == 2
+    assert report["scalp_simulator"]["completed_profit_summary"]["sample"] == 1
 
 
 def test_daily_threshold_cycle_report_includes_pipeline_load_meta(tmp_path, monkeypatch):
