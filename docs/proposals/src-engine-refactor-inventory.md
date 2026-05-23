@@ -61,3 +61,21 @@
 - `infrastructure`
 
 파일 이동, deploy 변경, runtime env 변경은 하지 않는다.
+
+## Phase 2 Slice 1: monitoring report-only
+
+첫 safe slice는 monitoring/report-only 성격의 두 파일만 이동한다.
+
+- `src.engine.monitoring.server_report_comparison`
+  - old path: `src.engine.server_report_comparison`
+  - compatibility: wrapper module 유지, old CLI `python -m src.engine.server_report_comparison` 유지
+- `src.engine.monitoring.error_detector_coverage`
+  - old path: `src.engine.error_detector_coverage`
+  - compatibility: wrapper module 유지
+
+코드리뷰 기준:
+
+- runtime/order/provider/threshold/bot restart 경로와 무관해야 한다.
+- old import/monkeypatch path를 깨지 않아야 한다.
+- old CLI와 new CLI가 모두 동작해야 한다.
+- deploy 문서는 즉시 migration하지 않고 old wrapper path를 유지한다.
