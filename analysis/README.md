@@ -1,37 +1,22 @@
 # Analysis Codebase Status
 
-기준: `2026-05-04 KST`
+기준: `2026-05-23 KST`
 
 ## 판정
 
-- `offline_live_canary_bundle`: 유지. 장중/장후 fresh 로그가 없을 때 same-slot 판정을 닫는 standby diagnostic/report-only 표준 경로다.
-- `offline_gatekeeper_fast_reuse_bundle`: retired/deprecated. 과거 증적 링크와 legacy wrapper만 남기고 active codebase로 보지 않는다.
+- `offline_live_canary_bundle`: retired/removed. EC2 서버 증설 후 로컬 offline export/analyze 경로를 운영 복구 수단으로 쓰지 않아 codebase와 CLI를 삭제했다.
+- `offline_gatekeeper_fast_reuse_bundle`: retired/removed. 과거 증적 링크만 남기고 codebase와 legacy wrapper를 삭제했다.
+- `april_follow_through_backfill.py`: retired/removed. 2026-04-28 월간 lightweight backfill 증적 이후 현재 자동화 consumer가 없어 삭제했다.
 - `claude_scalping_pattern_lab`, `gemini_scalping_pattern_lab`: postclose monitoring 분석랩이며, `scalping_pattern_lab_automation`이 두 lab의 EV backlog/observability를 machine-readable `code_improvement_order`와 `auto_family_candidate`로 집계한다. live routing, threshold mutation, 주문/청산 판단, repo code patch를 직접 수행하지 않는다.
 
 ## 근거
 
 - gatekeeper 전용 offline bundle/codebase는 `2026-04-27` checklist에서 삭제 대상으로 닫혔다.
-- Plan Rebase 기준으로 offline/live bundle은 heavy builder 반복을 피하는 판정 입력이며, hard pass/fail 전제와 direction-only 사유 확인에만 쓴다.
-- `offline_live_canary_bundle`은 legacy `gatekeeper_fast_reuse`/`entry_latency_offline` compatibility summary까지 생성한다.
-
-## 표준 명령
-
-```bash
-PYTHONPATH=. .venv/bin/python analysis/offline_live_canary_bundle/export_server_bundle.py \
-  --target-date YYYY-MM-DD \
-  --slot-label h1000 \
-  --evidence-cutoff 10:00:00
-```
-
-```bash
-PYTHONPATH=. .venv/bin/python analysis/offline_live_canary_bundle/run_local_canary_bundle_analysis.py \
-  --bundle-dir tmp/offline_live_canary_exports/YYYY-MM-DD/h1000 \
-  --since 09:00:00 \
-  --until 10:00:00 \
-  --label h1000
-```
+- 최근 운영 사용 이력은 `2026-04-27` gatekeeper export와 `2026-04-28` live canary export 이후 확인되지 않았고, 로컬 분석 경로는 더 이상 사용하지 않는다.
+- legacy `gatekeeper_fast_reuse`/`entry_latency_offline` compatibility summary 생성도 함께 폐기했다.
+- `april_follow_through_backfill.py` 참조는 과거 `2026-04-28~04-29` checklist 증적뿐이며 현재 import/cron/test consumer가 없다.
 
 ## 금지선
 
-- analysis bundle/lab 산출물만으로 live threshold/order/exit 판단이나 repo code를 직접 변경하지 않는다.
-- `gatekeeper_fast_reuse_ratio`, latency p95, pattern lab 제안은 submitted/full/partial, blocker, 체결품질, `COMPLETED + valid profit_rate`와 분리해 `code_improvement_order` 또는 `auto_family_candidate(allowed_runtime_apply=false)`로만 넘긴다.
+- analysis lab 산출물만으로 live threshold/order/exit 판단이나 repo code를 직접 변경하지 않는다.
+- performance report의 core runtime `gatekeeper_fast_reuse_ratio`/latency p95와 pattern lab 제안은 submitted/full/partial, blocker, 체결품질, `COMPLETED + valid profit_rate`와 분리해 `code_improvement_order` 또는 `auto_family_candidate(allowed_runtime_apply=false)`로만 넘긴다. 삭제된 offline compatibility summary를 현재 판단 source로 되살리지 않는다.
