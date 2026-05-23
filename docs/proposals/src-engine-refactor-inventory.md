@@ -42,6 +42,11 @@
   - 단 현재 `src.trading`은 `sniper_entry_latency`, `kiwoom_websocket`, `sniper_state_handlers`가 소비하는 runtime entry/order hot path이므로 report-only/infra 초기 slice 대상이 아니다.
   - 별도 `TradingToScalping` inventory에서 consumer, monkeypatch, runtime submit/stale/qty/cooldown guard 연결, old import compatibility wrapper 전략을 먼저 닫은 뒤 safe slice로만 이동한다.
   - 이동하더라도 기존 `src.trading.*` import는 wrapper로 유지하고, 최소 한 번의 preopen/postclose 안정 검증 전에는 제거하지 않는다.
+- `src/utils/*`:
+  - `src.engine` 장기 패키지와 경계가 겹치는 파일이 있지만, 현재 `src/engine`, `src/scanners`, `src/notify`, `src/core`가 광범위하게 소비하는 shared surface다.
+  - 별도 `UtilsBoundaryAudit` inventory 없이 이동하지 않는다.
+  - `constants.py`, `logger.py`, `kiwoom_utils.py`는 영향 범위가 커서 초기 slice 대상이 아니다.
+  - `pipeline_event_logger.py`, `threshold_cycle_registry.py`, `runtime_flags.py`, `update_kospi.py`는 장기 경계 재배치 후보지만 wrapper와 consumer migration gate가 필요하다.
 
 ## 단계별 Gate
 
@@ -122,3 +127,38 @@
 - runtime threshold, provider route, broker submit semantics, order qty/cap/cooldown guard, stale quote handling, bot restart 경로를 이 migration의 부수효과로 바꾸지 않는다.
 - `src/trading` 전체 디렉터리 일괄 이동이나 direct import rewrite를 금지한다.
 - `src.engine.scalping` package `__init__.py`에 import side effect를 만들지 않는다.
+
+## Long-Running Track: src/utils boundary audit
+
+`src/utils`는 공통 기반 모듈이지만 일부 파일은 `src.engine` 장기 패키지 경계와 겹친다. 이 트랙은 `src/utils`를 통째로 없애는 작업이 아니라, shared primitive와 engine-owned automation/infrastructure를 분리하는 장기 inventory다.
+
+현재 판정:
+
+- 유지 적합 shared primitive:
+  - `src.utils.jsonl_io`: gzip/jsonl 파일 IO helper. automation/monitoring/report 전반에서 재사용한다.
+  - `src.utils.market_day`: KRX calendar helper. automation/monitoring/checklist sync가 공통 소비한다.
+  - `src.utils.constants`: 경로/DB URL/TradingConfig의 central surface라 영향 범위가 매우 크다. 별도 config refactor 전까지 유지한다.
+  - `src.utils.logger`: 전역 logging surface라 영향 범위가 크다. log archive/monitoring과 겹치지만 초기 이동 금지다.
+- 장기 이동 후보:
+  - `src.utils.pipeline_event_logger` -> `src.engine.automation` 또는 `src.engine.infrastructure`
+  - `src.utils.threshold_cycle_registry` -> `src.engine.automation`
+  - `src.utils.runtime_flags` -> `src.engine.infrastructure` 또는 `src.core`
+  - `src.utils.update_kospi` -> `src.engine.infrastructure`
+  - `src.utils.migrate_scale_in_fields` -> migration/archive 정리 후보
+- 후순위 대형 후보:
+  - `src.utils.kiwoom_utils` -> `src.engine.infrastructure.kiwoom` 후보지만 scanners/notify/scalping/runtime 소비자가 많아 별도 inventory 전 이동 금지다.
+
+진행 조건:
+
+1. `rg` inventory로 `src.utils.*` consumer를 파일별로 수집한다.
+2. 각 후보가 shared primitive인지 engine-owned automation/infrastructure인지 판정한다.
+3. pure registry/helper slice만 먼저 검토한다. 1차 후보는 `threshold_cycle_registry.py`다.
+4. 이동 시 기존 `src.utils.<module>` wrapper를 유지하고, canonical path consumer migration은 안정화된 slice만 점진 진행한다.
+5. `constants.py`, `logger.py`, `kiwoom_utils.py`는 별도 proof와 넓은 targeted test 전까지 이동하지 않는다.
+
+금지선:
+
+- `src/utils` 전체 일괄 이동 또는 direct import rewrite를 금지한다.
+- runtime threshold, provider route, broker submit, order qty/cooldown/stale quote, bot restart, config/env 로딩 semantics를 변경하지 않는다.
+- `src.engine`과 `src.utils` 사이의 순환 import를 새로 만들지 않는다.
+- wrapper 제거는 최소 한 번의 preopen/postclose 안정 검증 이후 Phase Final gate에서만 검토한다.
