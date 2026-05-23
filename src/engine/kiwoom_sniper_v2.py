@@ -28,6 +28,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 	
 import os
+import socket
 import time
 from datetime import datetime
 import threading
@@ -128,10 +129,7 @@ from src.engine.sniper_post_sell_feedback import should_retain_ws_subscription
 from src.engine import kiwoom_orders
 from src.engine.kiwoom_websocket import KiwoomWSManager
 from src.engine.signal_radar import SniperRadar
-from src.engine.ai_engine import GeminiSniperEngine
 from src.engine.ai_engine_openai import GPTSniperEngine, OpenAIDualPersonaShadowEngine
-from src.engine.ai_engine_deepseek import DeepSeekSniperEngine
-from src.engine.runtime_ai_router import RuntimeAIEngineRouter, resolve_runtime_role, resolve_scalping_ai_route
 
 # 💡 VIX, 유가지표 임포트
 from src.market_regime import MarketRegimeService, summarize_market_regime_snapshot
@@ -150,6 +148,33 @@ except ImportError:
             text = text.replace(ch, '\\' + ch)
         return text
 bind_condition_dependencies(escape_markdown_fn=escape_markdown)
+
+
+def resolve_runtime_role() -> str:
+    """Return runtime role: main (default) or remote."""
+    host = socket.gethostname().strip().lower()
+    remote_host_hints = ("remote", "windy", "songstockscan", "korstock-test-server")
+    host_looks_remote = any(token in host for token in remote_host_hints)
+    force_main_on_remote = str(os.getenv("KORSTOCKSCAN_FORCE_MAIN_ON_REMOTE", "") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+    explicit = str(os.getenv("KORSTOCKSCAN_RUNTIME_ROLE", "") or "").strip().lower()
+    if explicit in {"main", "remote"}:
+        if explicit == "main" and host_looks_remote and not force_main_on_remote:
+            log_info("[AI_RUNTIME] override main->remote on known remote host")
+            return "remote"
+        return explicit
+
+    latency_profile = str(os.getenv("KORSTOCKSCAN_LATENCY_CANARY_PROFILE", "") or "").strip().lower()
+    if "remote" in latency_profile:
+        return "remote"
+    if host_looks_remote:
+        return "remote"
+    return "main"
 
 # --- [전역 상태 변수] -----------------------------------------------
 highest_prices = {}
@@ -1097,74 +1122,44 @@ def run_sniper(is_test_mode=False):
     time.sleep(2)
 
     # ==========================================
-    # 🤖 [신규] 제미나이 엔진 가동
+    # 🤖 OpenAI runtime AI engine
     # ==========================================
-    # 1. CONF에서 GEMINI_API_KEY 관련 값들만 추출
-    # GEMINI_API_KEY, GEMINI_API_KEY_2, GEMINI_API_KEY_3 등을 모두 가져옵니다.
     ai_engine = None
-    gemini_engine = None
-    openai_scalping_engine = None
-    deepseek_scalping_engine = None
     AI_ENGINE = None
     dual_persona_engine = None
     global DUAL_PERSONA_ENGINE
     runtime_role = resolve_runtime_role()
-    scalping_ai_route = resolve_scalping_ai_route()
-
-    api_keys = [v for k, v in CONF.items() if k.startswith("GEMINI_API_KEY") and v]
-    if not api_keys:
-        log_error("❌ 제미나이 키 발급 실패로 엔진을 중단합니다.")
-        event_bus.publish('TELEGRAM_BROADCAST', {'message': "🚨 [시스템 에러] 제미나이 키 발급 실패로 엔진을 중단합니다."})
-    else:
-        gemini_engine = GeminiSniperEngine(api_keys=api_keys)
-        ai_engine = gemini_engine
-        AI_ENGINE = gemini_engine
-        print(f"🤖 제미나이 AI 엔진이 {len(api_keys)}개의 API 키로 가동됩니다.")
 
     openai_dual_enabled = bool(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_ENABLED", True))
     openai_shadow_mode = bool(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_SHADOW_MODE", True))
     openai_api_keys = [v for k, v in CONF.items() if k.startswith("OPENAI_API_KEY") and v]
-    deepseek_api_keys = [v for k, v in CONF.items() if k.startswith("DEEPSEEK_API_KEY") and v]
-    if scalping_ai_route == "openai" and runtime_role == "main" and openai_api_keys:
+    if runtime_role == "main" and openai_api_keys:
         try:
-            openai_scalping_engine = GPTSniperEngine(api_keys=openai_api_keys, announce_startup=False)
+            ai_engine = GPTSniperEngine(api_keys=openai_api_keys, announce_startup=False)
             fast_model = str(getattr(TRADING_RULES, "GPT_FAST_MODEL", "gpt-5-nano") or "gpt-5-nano")
             deep_model = str(getattr(TRADING_RULES, "GPT_DEEP_MODEL", fast_model) or fast_model)
             report_model = str(getattr(TRADING_RULES, "GPT_REPORT_MODEL", fast_model) or fast_model)
-            openai_scalping_engine.set_model_names(
+            ai_engine.set_model_names(
                 fast_model=fast_model,
                 deep_model=deep_model,
                 report_model=report_model,
                 announce=True,
             )
+            AI_ENGINE = ai_engine
             print(
-                "🧠 메인 스캘핑 OpenAI 엔진 고정 완료 "
+                "🧠 메인 OpenAI AI 엔진 고정 완료 "
                 f"(FAST: {fast_model} / DEEP: {deep_model} / REPORT: {report_model})"
             )
         except Exception as e:
-            log_error(f"🚨 OpenAI 스캘핑 엔진 초기화 실패: {e}")
-            openai_scalping_engine = None
-    elif scalping_ai_route == "deepseek" and runtime_role == "main" and deepseek_api_keys:
-        try:
-            deepseek_scalping_engine = DeepSeekSniperEngine(
-                api_keys=deepseek_api_keys,
-                announce_startup=False,
-            )
-            print(
-                "🧠 메인 스캘핑 DeepSeek 엔진 고정 완료 "
-                f"(T1: {deepseek_scalping_engine._get_tier1_model()} / "
-                f"T2: {deepseek_scalping_engine._get_tier2_model()} / "
-                f"T3: {deepseek_scalping_engine._get_tier3_model()})"
-            )
-        except Exception as e:
-            log_error(f"🚨 DeepSeek 스캘핑 엔진 초기화 실패: {e}")
-            deepseek_scalping_engine = None
-    elif scalping_ai_route == "gemini":
-        log_info("ℹ️ Plan Rebase: 스캘핑 live AI 라우팅을 Gemini로 고정하고 OpenAI 스캘핑 엔진 초기화를 건너뜁니다.")
-    elif scalping_ai_route == "openai" and runtime_role == "main" and not openai_api_keys:
-        log_error("🚨 KORSTOCKSCAN_SCALPING_AI_ROUTE=openai 이지만 OPENAI_API_KEY가 없어 Gemini 기본 라우트로 유지합니다.")
-    elif scalping_ai_route == "deepseek" and runtime_role == "main" and not deepseek_api_keys:
-        log_error("🚨 KORSTOCKSCAN_SCALPING_AI_ROUTE=deepseek 이지만 DEEPSEEK_API_KEY가 없어 Gemini 기본 라우트로 유지합니다.")
+            log_error(f"🚨 OpenAI AI 엔진 초기화 실패: {e}")
+            event_bus.publish('TELEGRAM_BROADCAST', {'message': f"🚨 [시스템 에러] OpenAI AI 엔진 초기화 실패: {e}"})
+            ai_engine = None
+            AI_ENGINE = None
+    elif runtime_role == "main" and not openai_api_keys:
+        log_error("🚨 OPENAI_API_KEY가 없어 AI 엔진을 비활성화합니다.")
+        event_bus.publish('TELEGRAM_BROADCAST', {'message': "🚨 [시스템 에러] OPENAI_API_KEY 미설정으로 AI 엔진을 비활성화합니다."})
+    else:
+        log_info(f"ℹ️ runtime_role={runtime_role}: main OpenAI AI 엔진 초기화를 건너뜁니다.")
 
     if openai_dual_enabled and openai_shadow_mode and openai_api_keys:
         try:
@@ -1178,20 +1173,10 @@ def run_sniper(is_test_mode=False):
     elif openai_dual_enabled and not openai_api_keys:
         log_info("ℹ️ OPENAI_API_KEY 미설정으로 듀얼 페르소나 shadow 엔진은 비활성화됩니다.")
 
-    if gemini_engine is not None:
-        ai_engine = RuntimeAIEngineRouter(
-            gemini_engine=gemini_engine,
-            openai_scalping_engine=openai_scalping_engine,
-            deepseek_scalping_engine=deepseek_scalping_engine,
-            runtime_role=runtime_role,
-            scalping_ai_route=scalping_ai_route,
-        )
-        AI_ENGINE = ai_engine
+    if AI_ENGINE is not None:
         print(
             f"🧭 AI 라우팅 활성화: role={runtime_role} "
-            f"route={scalping_ai_route} "
-            f"(main_scalping_openai={'ON' if scalping_ai_route == 'openai' and runtime_role == 'main' and openai_scalping_engine else 'OFF'} / "
-            f"main_scalping_deepseek={'ON' if scalping_ai_route == 'deepseek' and runtime_role == 'main' and deepseek_scalping_engine else 'OFF'})"
+            f"(main_openai={'ON' if runtime_role == 'main' else 'OFF'})"
         )
 
     bind_analysis_dependencies(ai_engine=AI_ENGINE)

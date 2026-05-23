@@ -206,12 +206,12 @@ def analyze_stock_now(code):
     )
 
     ai_report = "⚠️ AI 리포트 생성 실패"
-    api_keys = [v for k, v in CONF.items() if k.startswith("GEMINI_API_KEY")]
+    api_keys = [v for k, v in CONF.items() if k.startswith("OPENAI_API_KEY")]
 
     if AI_ENGINE is None and api_keys:
         try:
-            from src.engine.ai_engine import GeminiSniperEngine
-            AI_ENGINE = GeminiSniperEngine(api_keys=api_keys)
+            from src.engine.ai_engine_openai import GPTSniperEngine
+            AI_ENGINE = GPTSniperEngine(api_keys=api_keys, announce_startup=False)
             bind_s15_dependencies(ai_engine=AI_ENGINE)
             if AI_ENGINE_SETTER is not None:
                 AI_ENGINE_SETTER(AI_ENGINE)
@@ -224,7 +224,7 @@ def analyze_stock_now(code):
         except Exception as exc:
             ai_report = f"⚠️ AI 리포트 생성 중 오류: {exc}"
     elif not api_keys:
-        ai_report = "⚠️ GEMINI_API_KEY 미설정으로 AI 리포트를 생성할 수 없습니다."
+        ai_report = "⚠️ OPENAI_API_KEY 미설정으로 AI 리포트를 생성할 수 없습니다."
 
     bars = int(ratio_val / 10) if ratio_val > 0 else 0
     visual = f"📊 매수세: [{'🟥'*bars}{'⬜'*(10-bars)}] ({ratio_val:.1f}%)"
@@ -238,7 +238,7 @@ def analyze_stock_now(code):
         f"   └ 📝 사유: *{target_reason}*\n"
         f"🔄 거래량: `평균대비 {vol_ratio:.1f}%`\n"
         f"{prog_sign} 프로그램: `{prog_net_qty:,}주 / {prog_delta_qty:+,}주`\n\n"
-        f"🧠 **[Gemini 수석 트레이더 AI 브리핑]**\n"
+        f"🧠 **[OpenAI 수석 트레이더 AI 브리핑]**\n"
         f"{ai_report}\n\n"
         f"📊 **[퀀트 소나 데이터]**\n"
         f"{visual}\n"

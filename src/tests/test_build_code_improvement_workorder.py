@@ -88,7 +88,7 @@ def test_build_code_improvement_workorder_classifies_and_renders(tmp_path, monke
                 "title": "cache signature noise",
                 "target_subsystem": "runtime_instrumentation",
                 "priority": 4,
-                "files_likely_touched": ["src/engine/ai_engine.py"],
+                "files_likely_touched": ["src/engine/ai_engine_openai.py"],
                 "acceptance_tests": ["pytest cache tests"],
                 "runtime_effect": False,
             },

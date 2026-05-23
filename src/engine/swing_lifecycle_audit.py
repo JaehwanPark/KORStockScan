@@ -3426,7 +3426,7 @@ def build_swing_improvement_automation_report(
             "priority": 4,
             "intent": "Surface stale/missing OFI/QI, scalping prompt reuse, and schema gaps before holding/exit logic is used for runtime decisions.",
             "ev": "holding/exit source-quality and structured contract gaps are visible without changing sell logic.",
-            "files": ["src/engine/swing_lifecycle_audit.py", "src/engine/ai_engine.py", "src/engine/ai_engine_openai.py"],
+            "files": ["src/engine/swing_lifecycle_audit.py", "src/engine/ai_prompt_contracts.py", "src/engine/ai_engine_openai.py"],
         },
         "SWING_SCALE_IN_CONTRACT_GAP": {
             "order_id": "order_swing_scale_in_contract_gap_review",
@@ -3595,7 +3595,7 @@ def build_swing_improvement_automation_report(
             intent="Replay Korean prompt vs English-control prompt vs strict schema prompt before adopting a swing AI contract.",
             expected_ev_effect="schema_valid_rate, decision disagreement, latency, and cost are reported before model/prompt change.",
             files_likely_touched=[
-                "src/engine/ai_engine.py",
+                "src/engine/ai_prompt_contracts.py",
                 "src/engine/ai_engine_openai.py",
                 "src/engine/ai_response_contracts.py",
             ],

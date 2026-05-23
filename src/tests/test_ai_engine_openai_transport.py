@@ -13,7 +13,7 @@ from src.engine.ai_engine_openai import (
     OpenAITransportResult,
     OpenAIWSRequestIdMismatchError,
 )
-from src.engine.ai_engine import SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
+from src.engine.ai_prompt_contracts import SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
 from src.engine import bedrock_nova_provider
 
 
@@ -164,40 +164,26 @@ def test_openai_call_applies_endpoint_response_schema_when_flag_enabled(monkeypa
     assert "PROMPT" in captured["instructions"]
 
 
-def test_bedrock_primary_only_routes_gpt5_nano_json(monkeypatch):
+def test_gpt5_nano_always_uses_openai_after_micro_removal(monkeypatch):
     engine = _build_engine()
-    openai_called = {"value": False}
+    provider_called = {"value": False}
 
-    engine.client = SimpleNamespace(
-        responses=SimpleNamespace(
-            create=lambda **kwargs: openai_called.__setitem__("value", True)
-        )
-    )
+    def _fake_create(**kwargs):
+        return SimpleNamespace(output_text='{"action":"WAIT","score":61,"reason":"openai"}')
 
     class Provider:
-        def converse(self, *, prompt, user_input, profile):
-            return bedrock_nova_provider.BedrockNovaResult(
-                payload={"action": "WAIT", "score": 61, "reason": "bedrock"},
-                raw_text='{"action":"WAIT","score":61,"reason":"bedrock"}',
-                parse_ok=True,
-                parse_error="",
-                model_id=profile.model_id,
-                region_name=profile.region_name,
-                key_index=0,
-                latency_ms=123,
-                input_tokens=10,
-                output_tokens=5,
-                cache_read_input_tokens=0,
-                cache_write_input_tokens=0,
-                total_input_tokens=10,
-                estimated_cost_usd=0.1,
-                attempted_key_count=1,
-            )
+        def converse(self, **kwargs):
+            provider_called["value"] = True
+            raise AssertionError("gpt-5-nano must not route to Bedrock")
 
-    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_ROUTE_MODE", "primary")
+    engine.client = SimpleNamespace(responses=SimpleNamespace(create=_fake_create))
     monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "shadow")
     monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
-    monkeypatch.setattr(bedrock_nova_provider, "write_provider_audit_row", lambda row: None)
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(openai_module.TRADING_RULES, OPENAI_TRANSPORT_MODE="http"),
+    )
 
     result = GPTSniperEngine._call_openai_safe(
         engine,
@@ -210,11 +196,11 @@ def test_bedrock_primary_only_routes_gpt5_nano_json(monkeypatch):
     )
 
     assert result["action"] == "WAIT"
-    assert openai_called["value"] is False
+    assert result["reason"] == "openai"
+    assert provider_called["value"] is False
     meta = engine._consume_last_transport_meta()
-    assert meta["provider"] == "bedrock"
-    assert meta["bedrock_primary_used"] is True
-    assert meta["bedrock_failback_used"] is False
+    assert meta["openai_transport_mode"] == "http"
+    assert "bedrock_primary_used" not in meta
 
 
 def test_bedrock_primary_routes_gpt54_mini_independently(monkeypatch):
@@ -243,7 +229,6 @@ def test_bedrock_primary_routes_gpt54_mini_independently(monkeypatch):
                 attempted_key_count=1,
             )
 
-    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_ROUTE_MODE", "shadow")
     monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "primary")
     monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_PRIMARY_ENDPOINTS", "entry_price,holding_flow")
     monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
@@ -428,7 +413,6 @@ def test_bedrock_primary_does_not_route_other_models(monkeypatch):
             raise AssertionError("should not route")
 
     engine.client = SimpleNamespace(responses=SimpleNamespace(create=_fake_create))
-    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_ROUTE_MODE", "primary")
     monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "primary")
     monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
     monkeypatch.setattr(
@@ -463,7 +447,8 @@ def test_bedrock_primary_failure_falls_back_to_openai(monkeypatch):
             raise RuntimeError("429 throttling")
 
     engine.client = SimpleNamespace(responses=SimpleNamespace(create=_fake_create))
-    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_ROUTE_MODE", "primary")
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "primary")
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_PRIMARY_ENDPOINTS", "holding_flow")
     monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_PRIMARY_FAILBACK_TO_OPENAI", "true")
     monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
     monkeypatch.setattr(bedrock_nova_provider, "write_provider_audit_row", lambda row: None)
@@ -479,53 +464,14 @@ def test_bedrock_primary_failure_falls_back_to_openai(monkeypatch):
         "payload",
         require_json=True,
         context_name="test",
-        model_override="gpt-5-nano",
-        endpoint_name="analyze_target",
+        model_override="gpt-5.4-mini",
+        endpoint_name="holding_flow",
     )
 
     assert result["action"] == "BUY"
     meta = engine._consume_last_transport_meta()
     assert meta["bedrock_failback_used"] is True
     assert meta["openai_transport_mode"] == "http"
-
-
-def test_bedrock_primary_mode_suppresses_same_model_shadow_enqueue(monkeypatch):
-    engine = _build_engine()
-    request = OpenAIResponseRequest(
-        prompt="PROMPT",
-        user_input="payload",
-        require_json=True,
-        context_name="test",
-        model_name="gpt-5-nano",
-        temperature=None,
-        max_output_tokens=128,
-        reasoning_effort=None,
-        schema_name=None,
-        endpoint_name="analyze_target",
-        request_id="req-1",
-        symbol="000001",
-        cache_key="-",
-        submitted_at_perf=0.0,
-        timeout_ms=1000,
-        metadata={},
-    )
-
-    from src.engine import bedrock_nova_micro_shadow
-
-    def _raise_if_called(**kwargs):
-        raise AssertionError("shadow should not run in primary route mode")
-
-    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_SHADOW_ENABLED", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_ROUTE_MODE", "primary")
-    monkeypatch.setattr(bedrock_nova_micro_shadow, "enqueue_runtime_shadow", _raise_if_called)
-
-    GPTSniperEngine._enqueue_bedrock_nova_micro_runtime_shadow(
-        engine,
-        request=request,
-        openai_payload={"action": "WAIT", "score": 50},
-        transport_meta={"openai_request_id": "req-1"},
-        roundtrip_ms=100,
-    )
 
 
 def test_openai_holding_flow_uses_flow_schema_and_normalizes_payload(monkeypatch):

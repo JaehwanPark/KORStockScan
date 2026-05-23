@@ -353,22 +353,22 @@ def rerun_gatekeeper_snapshot(snapshot: dict, conf: dict | None = None) -> dict:
     snapshot = snapshot or {}
     conf = conf or {}
     try:
-        from src.engine.ai_engine import GeminiSniperEngine
+        from src.engine.ai_engine_openai import GPTSniperEngine
     except Exception as exc:
         return {
             "ok": False,
             "error": f"AI 엔진 import 실패: {exc}",
         }
 
-    api_keys = [v for k, v in conf.items() if str(k).startswith("GEMINI_API_KEY") and v]
+    api_keys = [v for k, v in conf.items() if str(k).startswith("OPENAI_API_KEY") and v]
     if not api_keys:
         return {
             "ok": False,
-            "error": "GEMINI_API_KEY 설정이 없어 재실행할 수 없습니다.",
+            "error": "OPENAI_API_KEY 설정이 없어 재실행할 수 없습니다.",
         }
 
     try:
-        engine = GeminiSniperEngine(api_keys=api_keys)
+        engine = GPTSniperEngine(api_keys=api_keys, announce_startup=False)
         realtime_ctx = snapshot.get("realtime_ctx") or {}
         result = engine.evaluate_realtime_gatekeeper(
             stock_name=str(snapshot.get("stock_name", "") or ""),

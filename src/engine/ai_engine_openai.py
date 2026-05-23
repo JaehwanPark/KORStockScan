@@ -2,7 +2,7 @@
 """
 OpenAI API 기반 Sniper Engine (GPTSniperEngine)
 - OpenAI SDK 사용
-- GeminiSniperEngine(ai_engine.py)과 동일한 퍼블릭 인터페이스
+- runtime AI engine 퍼블릭 인터페이스 제공
 """
 
 import sys
@@ -51,7 +51,7 @@ from src.engine.scalping_feature_packet import (
 from src.utils.logger import log_error, log_info
 from src.utils.constants import TRADING_RULES
 from src.engine.macro_briefing_complete import build_scanner_data_input
-from src.engine.ai_engine import (
+from src.engine.ai_prompt_contracts import (
     SCALPING_SYSTEM_PROMPT,
     SCALPING_WATCHING_SYSTEM_PROMPT,
     SCALPING_HOLDING_SYSTEM_PROMPT,
@@ -474,7 +474,7 @@ class OpenAIResponsesWSPool:
 class GPTSniperEngine:
     """
     OpenAI API 기반 스나이퍼 엔진.
-    GeminiSniperEngine(ai_engine.py)과 동일한 퍼블릭 인터페이스를 제공한다.
+    Runtime AI engine 퍼블릭 인터페이스를 제공한다.
     내부적으로 OpenAI REST API를 호출한다.
     """
 
@@ -486,7 +486,7 @@ class GPTSniperEngine:
         self.key_cycle = cycle(self.api_keys)
         self._rotate_client()
 
-        # OpenAI 엔진도 Gemini/DeepSeek과 동일한 tier 구조를 사용한다.
+        # OpenAI runtime uses the existing fast/deep/report tier structure.
         self.model_tier1_fast = getattr(TRADING_RULES, 'GPT_FAST_MODEL', 'gpt-5-nano')
         self.model_tier2_balanced = getattr(TRADING_RULES, 'GPT_REPORT_MODEL', self.model_tier1_fast)
         self.model_tier3_deep = getattr(TRADING_RULES, 'GPT_DEEP_MODEL', self.model_tier2_balanced)
@@ -795,7 +795,7 @@ class GPTSniperEngine:
         return self._responses_ws_pool
 
     # ==========================================
-    # 캐시 유틸리티 (GeminiSniperEngine 동일 복사)
+    # 캐시 유틸리티
     # ==========================================
 
     def _normalize_for_cache(self, value):
@@ -1540,9 +1540,7 @@ class GPTSniperEngine:
         if not bool(request.require_json):
             return None
         model_name = str(request.model_name or "")
-        if model_name == "gpt-5-nano":
-            configured_route_mode = os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_ROUTE_MODE", "shadow")
-        elif model_name == "gpt-5.4-mini":
+        if model_name == "gpt-5.4-mini":
             configured_route_mode = os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "shadow")
         else:
             return None
@@ -1657,50 +1655,12 @@ class GPTSniperEngine:
         }
 
     def _enqueue_bedrock_runtime_shadows(self, *, request, openai_payload, transport_meta, roundtrip_ms=0):
-        self._enqueue_bedrock_nova_micro_runtime_shadow(
-            request=request,
-            openai_payload=openai_payload,
-            transport_meta=transport_meta,
-            roundtrip_ms=roundtrip_ms,
-        )
         self._enqueue_bedrock_nova_lite_runtime_shadow(
             request=request,
             openai_payload=openai_payload,
             transport_meta=transport_meta,
             roundtrip_ms=roundtrip_ms,
         )
-
-    def _enqueue_bedrock_nova_micro_runtime_shadow(self, *, request, openai_payload, transport_meta, roundtrip_ms=0):
-        try:
-            if str(os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_SHADOW_ENABLED", "")).strip().lower() not in {
-                "1",
-                "true",
-                "yes",
-                "y",
-                "on",
-            }:
-                return
-            if not (bool(request.require_json) and str(request.model_name) == "gpt-5-nano"):
-                return
-            if str(os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_ROUTE_MODE", "shadow")).strip().lower() == "primary":
-                return
-            from src.engine.bedrock_nova_micro_shadow import enqueue_runtime_shadow
-
-            enqueue_runtime_shadow(
-                model_name=str(request.model_name),
-                require_json=bool(request.require_json),
-                prompt=request.prompt,
-                user_input=request.user_input,
-                openai_payload=openai_payload,
-                transport_meta=transport_meta,
-                request_meta=self._build_bedrock_shadow_request_meta(
-                    request=request,
-                    transport_meta=transport_meta,
-                    roundtrip_ms=roundtrip_ms,
-                ),
-            )
-        except Exception as exc:
-            log_error(f"[BedrockNovaMicroShadow] enqueue skipped: {exc}")
 
     def _enqueue_bedrock_nova_lite_runtime_shadow(self, *, request, openai_payload, transport_meta, roundtrip_ms=0):
         try:
@@ -1768,7 +1728,7 @@ class GPTSniperEngine:
             log_error(f"[BedrockNovaLiteV2Shadow] enqueue skipped: {exc}")
 
     # ==========================================
-    # 데이터 포맷팅 (ai_engine.py 동일 복사)
+    # 데이터 포맷팅
     # ==========================================
 
     def _format_market_data(self, ws_data, recent_ticks, recent_candles=None):
@@ -2202,7 +2162,7 @@ class GPTSniperEngine:
         return common_block + scalp_block + swing_block
 
     # ==========================================
-    # 게이트키퍼 캐시 (ai_engine.py 동일 복사)
+    # 게이트키퍼 캐시
     # ==========================================
 
     def _compact_gatekeeper_ctx_for_cache(self, realtime_ctx):

@@ -1,6 +1,7 @@
+import json
 from datetime import datetime, timedelta
 
-from src.engine.ai_engine import GeminiSniperEngine
+from src.engine.ai_engine_openai import GPTSniperEngine
 from src.engine.scalping_feature_packet import (
     SCALP_FEATURE_PACKET_VERSION,
     build_scalping_feature_audit_fields,
@@ -159,14 +160,14 @@ def test_extract_scalping_feature_packet_treats_same_second_ticks_as_burst():
     assert packet["tick_context_quality"] == "fresh_computed"
 
 
-def test_gemini_market_packet_includes_quant_feature_section():
-    engine = GeminiSniperEngine.__new__(GeminiSniperEngine)
+def test_openai_market_packet_includes_quant_feature_section():
+    engine = GPTSniperEngine.__new__(GPTSniperEngine)
 
     packet = engine._format_market_data(_sample_ws_data(), _sample_ticks(), _sample_candles())
+    payload = json.loads(packet)
 
-    assert "[정량형 수급 피처]" in packet
-    assert f"packet_version: {SCALP_FEATURE_PACKET_VERSION}" in packet
-    assert "- tick_acceleration_ratio:" in packet
-    assert "- same_price_buy_absorption:" in packet
-    assert "- ask_depth_ratio: 93.5" in packet
-    assert "- net_ask_depth: -4200" in packet
+    assert payload["features"]["packet_version"] == SCALP_FEATURE_PACKET_VERSION
+    assert "tick_acceleration_ratio" in payload["features"]
+    assert "same_price_buy_absorption" in payload["features"]
+    assert payload["features"]["ask_depth_ratio"] == 93.5
+    assert payload["features"]["net_ask_depth"] == -4200

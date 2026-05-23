@@ -1,9 +1,9 @@
-from src.engine.ai_engine import GeminiSniperEngine
+from src.engine.ai_engine_openai import GPTSniperEngine
 from src.utils.constants import TRADING_RULES
 
 
 def _build_engine():
-    return GeminiSniperEngine.__new__(GeminiSniperEngine)
+    return GPTSniperEngine.__new__(GPTSniperEngine)
 
 
 def test_realtime_quant_packet_includes_ws_microstructure_fields():

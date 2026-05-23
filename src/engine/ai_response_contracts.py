@@ -1,4 +1,4 @@
-"""Shared AI response schema contracts for Gemini/OpenAI engines."""
+"""Shared AI response schema contracts for runtime AI engines."""
 
 from __future__ import annotations
 

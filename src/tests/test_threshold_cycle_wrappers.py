@@ -26,7 +26,6 @@ def test_scalp_sim_overnight_preclose_wrapper_uses_live_openai_and_bedrock_lite_
     assert "PYTHONPATH=." in script
     assert "src.engine.scalp_sim_overnight --date \"$TARGET_DATE\" --live-openai" in script
     assert "--report-only" not in script
-    assert 'KORSTOCKSCAN_SCALPING_AI_ROUTE="${KORSTOCKSCAN_SCALPING_AI_ROUTE:-openai}"' in script
     assert 'KORSTOCKSCAN_BEDROCK_NOVA_LITE_SHADOW_ENABLED="${KORSTOCKSCAN_BEDROCK_NOVA_LITE_SHADOW_ENABLED:-true}"' in script
     assert 'KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE="${KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE:-shadow}"' in script
 

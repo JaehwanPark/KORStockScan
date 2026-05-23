@@ -12,15 +12,9 @@ from src.utils.constants import CONFIG_PATH, DATA_DIR, DEV_PATH
 
 
 DEFAULT_REGION = "ap-northeast-2"
-DEFAULT_MICRO_MODEL_ID = "apac.amazon.nova-micro-v1:0"
 DEFAULT_LITE_MODEL_ID = "apac.amazon.nova-lite-v1:0"
 DEFAULT_LITE_V2_MODEL_ID = "amazon.nova-2-lite-v1:0"
 PRIMARY_AUDIT_DIR = DATA_DIR / "report" / "bedrock_nova_primary_provider"
-
-MICRO_INPUT_USD_PER_1M = 0.035
-MICRO_OUTPUT_USD_PER_1M = 0.14
-MICRO_CACHE_READ_INPUT_USD_PER_1M = 0.0035
-MICRO_CACHE_WRITE_INPUT_USD_PER_1M = 0.035
 
 LITE_INPUT_USD_PER_1M = 0.06
 LITE_OUTPUT_USD_PER_1M = 0.24
@@ -418,27 +412,6 @@ class BedrockNovaProvider:
         raise BedrockNovaProviderError(str(last_error or "Bedrock Nova call failed"), error_type=error_type, attempts=len(keys))
 
 
-def micro_profile_from_env() -> BedrockNovaModelProfile:
-    return BedrockNovaModelProfile(
-        family="micro",
-        model_id=os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_MODEL_ID", DEFAULT_MICRO_MODEL_ID),
-        region_name=os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_REGION", DEFAULT_REGION),
-        max_output_tokens=_env_int("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_MAX_OUTPUT_TOKENS", 512),
-        timeout_ms=_env_int("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_TIMEOUT_MS", 5000),
-        prompt_cache_enabled=_env_bool("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_PROMPT_CACHE_ENABLED", False),
-        input_usd_per_1m=_safe_float(os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_INPUT_USD_PER_1M"), MICRO_INPUT_USD_PER_1M),
-        output_usd_per_1m=_safe_float(os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_OUTPUT_USD_PER_1M"), MICRO_OUTPUT_USD_PER_1M),
-        cache_read_input_usd_per_1m=_safe_float(
-            os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_CACHE_READ_INPUT_USD_PER_1M"),
-            MICRO_CACHE_READ_INPUT_USD_PER_1M,
-        ),
-        cache_write_input_usd_per_1m=_safe_float(
-            os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_CACHE_WRITE_INPUT_USD_PER_1M"),
-            MICRO_CACHE_WRITE_INPUT_USD_PER_1M,
-        ),
-    )
-
-
 def lite_profile_from_env() -> BedrockNovaModelProfile:
     return BedrockNovaModelProfile(
         family="lite",
@@ -492,8 +465,6 @@ def lite_v2_profile_from_env() -> BedrockNovaModelProfile:
 
 def route_mode_for_model(model_name: str) -> tuple[str, BedrockNovaModelProfile | None]:
     model = str(model_name or "")
-    if model == "gpt-5-nano":
-        return str(os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_MICRO_ROUTE_MODE", "shadow")).strip().lower(), micro_profile_from_env()
     if model == "gpt-5.4-mini":
         return str(os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "shadow")).strip().lower(), lite_profile_from_env()
     return "off", None

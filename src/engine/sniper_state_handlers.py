@@ -67,7 +67,7 @@ from src.engine.sniper_position_tags import (
     normalize_position_tag,
     normalize_strategy,
 )
-from src.engine.ai_engine import SCALPING_BUY_RECOVERY_CANARY_PROMPT
+from src.engine.ai_prompt_contracts import SCALPING_BUY_RECOVERY_CANARY_PROMPT
 from src.engine.ofi_ai_smoothing import (
     NEUTRAL as OFI_NEUTRAL,
     STABLE_BEARISH as OFI_STABLE_BEARISH,
@@ -12087,7 +12087,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         },
                     )
 
-                    # Gemini holding/exit action schema(HOLD/TRIM/EXIT)는 action_v2로 전달된다.
+                    # Holding/exit action schema(HOLD/TRIM/EXIT)는 action_v2로 전달된다.
                     # 현 실행경로는 기존 호환을 위해 action(legacy: WAIT/SELL/DROP)을 함께 사용한다.
                     if ai_action in ['SELL', 'DROP']:
                         _log_holding_pipeline(

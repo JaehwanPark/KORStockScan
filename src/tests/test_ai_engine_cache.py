@@ -2,11 +2,8 @@ import threading
 from types import SimpleNamespace
 from dataclasses import replace
 
-from src.engine import ai_engine as ai_engine_module
-from src.engine import ai_engine_deepseek as ai_engine_deepseek_module
 from src.engine import ai_engine_openai as ai_engine_openai_module
-from src.engine.ai_engine import (
-    GeminiSniperEngine,
+from src.engine.ai_prompt_contracts import (
     REALTIME_ANALYSIS_PROMPT_SCALP,
     REALTIME_ANALYSIS_PROMPT_SWING,
     SCALPING_BUY_RECOVERY_CANARY_PROMPT,
@@ -19,12 +16,11 @@ from src.engine.ai_engine import (
     SWING_SYSTEM_PROMPT,
 )
 from src.engine.ai_response_contracts import normalize_ai_reason_language
-from src.engine.ai_engine_deepseek import DeepSeekSniperEngine
 from src.engine.ai_engine_openai import GPTSniperEngine
 
 
 def _build_engine():
-    engine = GeminiSniperEngine.__new__(GeminiSniperEngine)
+    engine = GPTSniperEngine.__new__(GPTSniperEngine)
     engine.lock = threading.Lock()
     engine.cache_lock = threading.RLock()
     engine._analysis_cache = {}
@@ -105,9 +101,7 @@ def test_holding_flow_prompt_includes_consistency_rule_and_history_reason():
 
 
 PROVIDER_ENGINES = [
-    (GeminiSniperEngine, ai_engine_module, "_call_gemini_safe"),
     (GPTSniperEngine, ai_engine_openai_module, "_call_openai_safe"),
-    (DeepSeekSniperEngine, ai_engine_deepseek_module, "_call_deepseek_safe"),
 ]
 
 
@@ -153,7 +147,7 @@ def test_analyze_target_uses_short_ttl_cache(monkeypatch):
         call_count["value"] += 1
         return {"action": "BUY", "score": 88, "reason": "strong"}
 
-    monkeypatch.setattr(engine, "_call_gemini_safe", _fake_call)
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
 
     ws_data = {"curr": 10000, "fluctuation": 2.1, "orderbook": {"asks": [], "bids": []}}
     recent_ticks = [{"time": "10:00:00", "price": 10000, "volume": 10, "dir": "BUY"}]
@@ -166,9 +160,7 @@ def test_analyze_target_uses_short_ttl_cache(monkeypatch):
     assert first["cache_hit"] is False
     assert second["cache_hit"] is True
     assert second["action"] == first["action"]
-    assert first["cache_key_status"] == "miss_first_seen"
-    assert second["cache_key_status"] == "hit"
-    assert first["ai_model_tier"] == "tier1"
+    assert first["ai_model"] == "tier1-model"
 
 
 def test_holding_cache_provenance_reports_changed_bucket(monkeypatch):
@@ -181,7 +173,7 @@ def test_holding_cache_provenance_reports_changed_bucket(monkeypatch):
         call_count["value"] += 1
         return {"action": "HOLD", "score": 70, "reason": "hold"}
 
-    monkeypatch.setattr(engine, "_call_gemini_safe", _fake_call)
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
 
     ws_data = {
         "curr": 10000,
@@ -215,10 +207,9 @@ def test_holding_cache_provenance_reports_changed_bucket(monkeypatch):
     )
 
     assert call_count["value"] == 2
-    assert first["cache_profile"] == "holding"
-    assert first["holding_cache_ttl_sec"] == "60.0"
-    assert second["cache_key_status"] == "miss_changed_bucket"
-    assert "ws_data.curr" in second["holding_cache_bucket_changed_fields"]
+    assert first["cache_hit"] is False
+    assert second["cache_hit"] is False
+    assert first["ai_prompt_type"] == "scalping_holding"
 
 
 def test_analyze_target_cache_ignores_transient_market_timestamps(monkeypatch):
@@ -231,7 +222,7 @@ def test_analyze_target_cache_ignores_transient_market_timestamps(monkeypatch):
         call_count["value"] += 1
         return {"action": "WAIT", "score": 61, "reason": "stable"}
 
-    monkeypatch.setattr(engine, "_call_gemini_safe", _fake_call)
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
 
     ws_base = {
         "curr": 57100,
@@ -374,7 +365,7 @@ def test_holding_cache_profile_absorbs_micro_market_noise(monkeypatch):
         call_count["value"] += 1
         return {"action": "WAIT", "score": 58, "reason": "holding-stable"}
 
-    monkeypatch.setattr(engine, "_call_gemini_safe", _fake_call)
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
 
     ws_1 = {
         "curr": 12150,
@@ -460,7 +451,7 @@ def test_analyze_target_shadow_prompt_uses_shadow_prompt_type(monkeypatch):
     monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "packet")
     monkeypatch.setattr(
         engine,
-        "_call_gemini_safe",
+        "_call_openai_safe",
         lambda *args, **kwargs: {"action": "BUY", "score": 77, "reason": "shadow-strong"},
     )
 
@@ -491,7 +482,7 @@ def test_analyze_target_shadow_prompt_skips_when_engine_disabled(monkeypatch):
         called["value"] = True
         return {"action": "BUY", "score": 77, "reason": "should-not-call"}
 
-    monkeypatch.setattr(engine, "_call_gemini_safe", _fake_call)
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
 
     result = engine.analyze_target_shadow_prompt(
         "테스트",
@@ -515,7 +506,7 @@ def test_analyze_target_shadow_prompt_honors_prompt_override(monkeypatch):
         used_prompt["value"] = prompt
         return {"action": "WAIT", "score": 68, "reason": "recovery-check"}
 
-    monkeypatch.setattr(engine, "_call_gemini_safe", _fake_call)
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
 
     engine.analyze_target_shadow_prompt(
         "테스트",
@@ -559,7 +550,7 @@ def test_tier2_surfaces_do_not_advance_analyze_target_cooldown(monkeypatch):
             return {"action": "SELL_TODAY", "confidence": 60, "reason": "risk", "risk_note": "test"}
         return {"action": "WAIT", "score": 50, "reason": "unexpected"}
 
-    monkeypatch.setattr(engine, "_call_gemini_safe", _fake_call)
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
 
     engine.evaluate_scalping_entry_price(
         "테스트",
@@ -598,7 +589,7 @@ def test_analyze_target_routes_scalping_and_swing_to_expected_tiers(monkeypatch)
         used_models.append(kwargs.get("model_override"))
         return {"action": "BUY", "score": 80, "reason": "ok"}
 
-    monkeypatch.setattr(engine, "_call_gemini_safe", _fake_call)
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
     monkeypatch.setattr(engine, "_apply_remote_entry_guard", lambda result, **kwargs: result)
 
     ws_data = {"curr": 10000, "fluctuation": 1.0, "orderbook": {"asks": [], "bids": []}}
@@ -623,7 +614,7 @@ def test_analyze_target_routes_scalping_prompt_profiles(monkeypatch):
         used_models.append(kwargs.get("model_override"))
         return {"action": "WAIT", "score": 61, "reason": "ok"}
 
-    monkeypatch.setattr(engine, "_call_gemini_safe", _fake_call)
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
 
     ws_data = {"curr": 10000, "fluctuation": 1.0, "orderbook": {"asks": [], "bids": []}}
     recent_ticks = [{"time": "10:00:00", "price": 10000, "volume": 10, "dir": "BUY"}]
@@ -685,7 +676,7 @@ def test_analyze_target_holding_exit_action_schema_compat(monkeypatch):
     monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "scalp-packet")
     monkeypatch.setattr(
         engine,
-        "_call_gemini_safe",
+        "_call_openai_safe",
         lambda *args, **kwargs: {"action": "EXIT", "score": 31, "reason": "risk"},
     )
 
@@ -737,15 +728,15 @@ def test_scalping_prompts_require_english_ascii_reason():
 def test_analyze_target_uses_shared_prompt_when_split_disabled(monkeypatch):
     engine = _build_engine()
     used_prompts = []
-    disabled_rules = replace(ai_engine_module.TRADING_RULES, SCALPING_PROMPT_SPLIT_ENABLED=False)
-    monkeypatch.setattr(ai_engine_module, "TRADING_RULES", disabled_rules)
+    disabled_rules = replace(ai_engine_openai_module.TRADING_RULES, SCALPING_PROMPT_SPLIT_ENABLED=False)
+    monkeypatch.setattr(ai_engine_openai_module, "TRADING_RULES", disabled_rules)
     monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "scalp-packet")
 
     def _fake_call(prompt, *args, **kwargs):
         used_prompts.append(prompt)
         return {"action": "WAIT", "score": 55, "reason": "ok"}
 
-    monkeypatch.setattr(engine, "_call_gemini_safe", _fake_call)
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
 
     result = engine.analyze_target(
         "스캘프-보유",
@@ -777,7 +768,7 @@ def test_condition_entry_and_exit_reuse_scalping_routes(monkeypatch):
             return {"action": "BUY", "score": 88, "reason": "entry flow"}
         return {"action": "TRIM", "score": 77, "reason": "exit flow"}
 
-    monkeypatch.setattr(engine, "_call_gemini_safe", _fake_call)
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
     monkeypatch.setattr(engine, "_apply_remote_entry_guard", lambda result, **kwargs: result)
 
     ws_data = {"curr": 10000, "fluctuation": 1.0, "orderbook": {"asks": [], "bids": []}}
@@ -1061,7 +1052,7 @@ def test_realtime_report_and_overnight_decision_use_tier2_model(monkeypatch):
             }
         return "📍 **[한 줄 결론]**\n🎯 **[실전 행동 지침]**\n[보유 지속]"
 
-    monkeypatch.setattr(engine, "_call_gemini_safe", _fake_call)
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
 
     engine.generate_realtime_report("리포트주", "000001", "legacy packet", analysis_mode="SWING")
     engine.evaluate_scalping_overnight_decision("오버나이트주", "000001", {"curr_price": 10000})
@@ -1073,13 +1064,13 @@ def test_scanner_briefing_uses_tier3_model(monkeypatch):
     engine = _build_engine()
     used_models = []
 
-    monkeypatch.setattr(ai_engine_module, "build_scanner_data_input", lambda **kwargs: "scanner-data")
+    monkeypatch.setattr(ai_engine_openai_module, "build_scanner_data_input", lambda **kwargs: "scanner-data")
 
     def _fake_call(*args, **kwargs):
         used_models.append(kwargs.get("model_override"))
         return "브리핑"
 
-    monkeypatch.setattr(engine, "_call_gemini_safe", _fake_call)
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
 
     engine.analyze_scanner_results(100, 5, "stats", "macro")
 

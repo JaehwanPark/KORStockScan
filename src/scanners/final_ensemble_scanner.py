@@ -8,7 +8,7 @@
 -run_integrated_scanner() - 장 마감/장전 배치 작업:
    1. 코스피 시총/거래량 상위 150~200개 종목을 대상으로 AI 콰트로 앙상블(XGB/LGBM) 예측 수행.
    2. 지수 상대강도(RS), 단기 정배열, 수급(스마트 머니) 필터를 거쳐 'MAIN', 'RUNNER' 추천 종목을 DB에 적재.
-   3. Gemini 및 OpenAI 등 LLM 합의체에 장전 브리핑 데이터(Context)를 제공.
+   3. OpenAI 등 LLM 경로에 장전 브리핑 데이터(Context)를 제공.
 
 💡 아키텍처 설계 사상 (Decoupling & Event-Driven):
 - 이 파일은 오직 '계산(Compute)과 필터링(Filtering)'에만 집중합니다.
@@ -49,7 +49,7 @@ from src.engine.macro_briefing_complete import MacroBriefingBuilder
 import src.engine.ml_predictor as ml_predictor
 
 # 💡 [신규] AI 브리핑 엔진 준비
-from src.engine.ai_engine import GeminiSniperEngine
+from src.engine.ai_engine_openai import GPTSniperEngine
 
 # 💡 [핵심 교정] 텔레그램 매니저를 초대해야 수신기가 EventBus에 정상 등록됩니다!
 import src.notify.telegram_manager as telegram_manager
@@ -417,13 +417,12 @@ def run_integrated_scanner():
         # 💡 [핵심] 아침 브리핑(START_OF_DAY_REPORT)을 위해 CSV 종목을 실시간 MAIN 종목 맨 앞에 병합
         main_picks = csv_picks + main_picks
 
-        # --- Gemini AI 수석 트레이더 장전 브리핑 ---
-        ai_briefing = "⚠️ GEMINI_API_KEY 미설정"
-        
-        # 💡 [핵심 교정 1] 복수형 api_keys 변수로 정확히 받음
-        api_keys = [v for k, v in CONF.items() if k.startswith("GEMINI_API_KEY")]
+        # --- OpenAI 수석 트레이더 장전 브리핑 ---
+        ai_briefing = "⚠️ OPENAI_API_KEY 미설정"
+
+        api_keys = [v for k, v in CONF.items() if k.startswith("OPENAI_API_KEY")]
     
-        # 매크로 데이터 수집 - Gemini API 호출이 실시간 시장 데이터에 grounded되지 않음
+        # 매크로 데이터 수집 - 별도 macro bundle은 실시간 시장 데이터에 grounded되지 않음
         builder = MacroBriefingBuilder.from_system_config()
         try:
             snap, macro_text = builder.build_macro_context(include_debug=True)
@@ -435,12 +434,11 @@ def run_integrated_scanner():
             print("notes =", snap.notes)
 
         if not api_keys:
-            log_error("❌ 제미나이 키 발급 실패로 엔진을 중단합니다.")
-            event_bus.publish('TELEGRAM_BROADCAST', {'message': "🚨 [시스템 에러] 제미나이 키 발급 실패로 엔진을 중단합니다."})
+            log_error("❌ OpenAI 키 미설정으로 AI 브리핑을 건너뜁니다.")
+            event_bus.publish('TELEGRAM_BROADCAST', {'message': "🚨 [시스템 에러] OPENAI_API_KEY 미설정으로 AI 브리핑을 건너뜁니다."})
         else:
             try:
-                # 💡 [핵심 교정 2] api_keys=api_keys 로 오타 수정!
-                ai_engine = GeminiSniperEngine(api_keys=api_keys)
+                ai_engine = GPTSniperEngine(api_keys=api_keys, announce_startup=False)
                 ai_briefing = ai_engine.analyze_scanner_results(len(target_list), len(all_results), debug_msg, macro_text)
             except Exception as e:
                 ai_briefing = f"⚠️ AI 브리핑 생성 실패: {e}"

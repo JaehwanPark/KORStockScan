@@ -40,7 +40,7 @@ def test_provider_rotates_keys_on_retryable_error():
         api_keys=["key-1", "key-2"],
         client_factory=lambda key_index, api_key, region_name, timeout_ms: Client(key_index),
     )
-    result = provider.converse(prompt="p", user_input="u", profile=mod.micro_profile_from_env())
+    result = provider.converse(prompt="p", user_input="u", profile=mod.lite_profile_from_env())
 
     assert [idx for idx, _ in calls] == [0, 1]
     assert result.payload["action"] == "WAIT"
@@ -62,3 +62,10 @@ def test_provider_result_records_parse_failure_without_raising():
     assert result.parse_ok is False
     assert result.parse_error == "JSONDecodeError"
     assert result.payload == {}
+
+
+def test_route_mode_for_gpt5_nano_is_off_after_micro_removal():
+    route_mode, profile = mod.route_mode_for_model("gpt-5-nano")
+
+    assert route_mode == "off"
+    assert profile is None

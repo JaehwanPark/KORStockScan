@@ -7195,7 +7195,7 @@ def _call_gemini_threshold_ai_correction(input_context: dict) -> tuple[str | Non
     if not api_keys:
         return None, {"provider": "gemini", "status": "unavailable", "reason": "GEMINI_API_KEY not configured"}
 
-    model_name = str(getattr(TRADING_RULES, "AI_MODEL_TIER3", "") or "models/gemini-3.1-pro-preview-customtools")
+    model_name = "models/gemini-3.1-pro-preview-customtools"
     prompt = _build_ai_correction_prompt(input_context)
     input_context_hash = _json_sha256(input_context)
     input_context_chars = _json_chars(input_context)
