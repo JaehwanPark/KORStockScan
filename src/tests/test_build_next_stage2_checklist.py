@@ -11,7 +11,8 @@ def _patch_dirs(monkeypatch, tmp_path):
     openai = tmp_path / "data" / "report" / "openai_ws"
     swing = tmp_path / "data" / "report" / "swing_runtime_approval"
     code = tmp_path / "data" / "report" / "code_improvement_workorder"
-    for path in (docs, ev, openai, swing, code):
+    runtime_gap = tmp_path / "data" / "report" / "runtime_apply_gap_audit"
+    for path in (docs, ev, openai, swing, code, runtime_gap):
         path.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(mod, "DOCS_DIR", docs)
     monkeypatch.setattr(mod, "CHECKLIST_DIR", docs / "checklists")
@@ -19,6 +20,7 @@ def _patch_dirs(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "OPENAI_WS_REPORT_DIR", openai)
     monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_DIR", swing)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_REPORT_DIR", code)
+    monkeypatch.setattr(mod, "RUNTIME_APPLY_GAP_REPORT_DIR", runtime_gap)
     return docs, ev, openai, swing, code
 
 
@@ -144,3 +146,86 @@ def test_generated_checklist_is_parser_friendly(monkeypatch, tmp_path):
     assert any("ThresholdEnvAutoApplyPreopen0512" in title for title in titles)
     assert any("RuntimeEnvIntradayObserve0512" in title for title in titles)
     assert all(task.due_date == "2026-05-12" for task in tasks)
+
+
+def test_runtime_apply_gap_pending_is_surfaced_in_preopen_task(monkeypatch, tmp_path):
+    docs, ev_dir, openai_dir, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
+    runtime_gap_dir = mod.RUNTIME_APPLY_GAP_REPORT_DIR
+    _write_json(ev_dir / "threshold_cycle_ev_2026-05-22.json", {"runtime_apply": {"runtime_change": False}})
+    _write_json(
+        openai_dir / "openai_ws_stability_2026-05-22.json",
+        {"decision": "keep_ws", "entry_price_canary_summary": {"canary_event_count": 0}},
+    )
+    _write_json(swing_dir / "swing_runtime_approval_2026-05-22.json", {"approval_requests": []})
+    _write_json(code_dir / "code_improvement_workorder_2026-05-22.json", {"summary": {"selected_order_count": 0}})
+    _write_json(
+        runtime_gap_dir / "runtime_apply_gap_audit_2026-05-22.json",
+        {
+            "candidate_route_ledger": [
+                {
+                    "candidate_id": "entry_wait6579_score66_69_recovery_gate_v1:2026-05-22",
+                    "family": "entry_wait6579_score66_69_recovery_gate_v1",
+                    "final_disposition": "post_apply_attribution_pending",
+                    "failure_state": "retry_pending",
+                    "failure_reason": "ready_but_not_applied",
+                    "next_retry_stage": "preopen_apply_candidate",
+                }
+            ],
+            "retry_queue": [],
+        },
+    )
+
+    mod.build_next_stage2_checklist("2026-05-22")
+
+    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(encoding="utf-8")
+    assert "runtime_apply_gap_audit_2026-05-22.json" in text
+    assert "post_apply_attribution_pending" in text
+    assert "entry_wait6579_score66_69_recovery_gate_v1:2026-05-22" in text
+    assert "runtime_gap_pending_not_consumed" in text
+
+
+def test_build_next_stage2_checklist_preserves_unknown_tasks_inside_auto_block(monkeypatch, tmp_path):
+    docs, ev_dir, openai_dir, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
+    _write_json(ev_dir / "threshold_cycle_ev_2026-05-22.json", {"runtime_apply": {"runtime_change": False}})
+    _write_json(
+        openai_dir / "openai_ws_stability_2026-05-22.json",
+        {"decision": "keep_ws", "entry_price_canary_summary": {"canary_event_count": 0}},
+    )
+    _write_json(swing_dir / "swing_runtime_approval_2026-05-22.json", {"approval_requests": []})
+    _write_json(code_dir / "code_improvement_workorder_2026-05-22.json", {"summary": {"selected_order_count": 0}})
+    target = docs / "checklists" / "2026-05-26-stage2-todo-checklist.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        "\n".join(
+            [
+                "# 2026-05-26 Stage2 To-Do Checklist",
+                "",
+                mod.AUTO_START,
+                "## 자동 생성 체크리스트 (`2026-05-22` postclose -> `2026-05-26`)",
+                "",
+                "## 장전 체크리스트 (08:45~09:00)",
+                "",
+                "- [ ] `[CustomPreopen0526] 자동 블록 안 수동 보강 항목` (`Due: 2026-05-26`, `Slot: PREOPEN`, `TimeWindow: 08:40~08:45`, `Track: RuntimeStability`)",
+                "  - Source: [manual.md](/home/ubuntu/KORStockScan/docs/manual.md)",
+                "  - 판정 기준: 지우면 안 된다.",
+                "",
+                "## 장후 체크리스트 (16:30~18:55)",
+                "",
+                "- [ ] `[CustomPostclose0526] 자동 블록 안 장후 보강 항목` (`Due: 2026-05-26`, `Slot: POSTCLOSE`, `TimeWindow: 18:00~18:10`, `Track: Plan`)",
+                "  - Source: [manual.md](/home/ubuntu/KORStockScan/docs/manual.md)",
+                "  - 판정 기준: 지우면 안 된다.",
+                "",
+                mod.AUTO_END,
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    mod.build_next_stage2_checklist("2026-05-22")
+
+    text = target.read_text(encoding="utf-8")
+    assert "[ThresholdEnvAutoApplyPreopen0526]" in text
+    assert "[CustomPreopen0526]" in text
+    assert "[CustomPostclose0526]" in text
+    assert text.index("[CustomPreopen0526]") < text.index("## 장중 체크리스트")
+    assert text.index("[CustomPostclose0526]") > text.index("## 장후 체크리스트")

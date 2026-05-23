@@ -76,6 +76,26 @@ def _consumer_stale(consumer: dict[str, Any], source: dict[str, Any]) -> bool:
 
 
 def _read_lines(path: Path) -> list[str]:
+    lines: list[str] = []
+    for item in _log_bundle_paths(path):
+        lines.extend(_read_single_log_lines(item))
+    return lines
+
+
+def _log_bundle_paths(path: Path) -> list[Path]:
+    rotated: list[tuple[int, Path]] = []
+    try:
+        candidates = path.parent.glob(f"{path.name}.*")
+    except OSError:
+        candidates = []
+    for candidate in candidates:
+        suffix = candidate.name.removeprefix(f"{path.name}.")
+        if suffix.isdigit():
+            rotated.append((int(suffix), candidate))
+    return [item for _, item in sorted(rotated, reverse=True)] + [path]
+
+
+def _read_single_log_lines(path: Path) -> list[str]:
     try:
         return path.read_text(encoding="utf-8").splitlines()
     except Exception:
@@ -120,6 +140,9 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         / f"lifecycle_bucket_discovery_{target_date}.json",
         "code_improvement_workorder": REPORT_DIR / "code_improvement_workorder" / f"code_improvement_workorder_{target_date}.json",
         "runtime_approval_summary": REPORT_DIR / "runtime_approval_summary" / f"runtime_approval_summary_{target_date}.json",
+        "runtime_apply_gap_audit": REPORT_DIR
+        / "runtime_apply_gap_audit"
+        / f"runtime_apply_gap_audit_{target_date}.json",
         "pattern_lab_currentness_audit": REPORT_DIR
         / "pattern_lab_currentness_audit"
         / f"pattern_lab_currentness_audit_{target_date}.json",
@@ -1041,6 +1064,7 @@ def build_threshold_cycle_postclose_verification(
     ev_report = _load_json(paths["threshold_cycle_ev"])
     workorder = _load_json(paths["code_improvement_workorder"])
     runtime_summary = _load_json(paths["runtime_approval_summary"])
+    runtime_apply_gap_audit = _load_json(paths["runtime_apply_gap_audit"])
     buy_funnel_report = _load_json(paths["buy_funnel_sentinel"])
     currentness_audit = _load_json(paths["pattern_lab_currentness_audit"])
     pattern_lab_ai_review = _load_json(paths["pattern_lab_ai_review"])
@@ -1204,6 +1228,8 @@ def build_threshold_cycle_postclose_verification(
             required_execution_flags = (*required_execution_flags, key)
     if done_line and "pattern_lab_ai_review" in execution_flags and "pattern_lab_ai_review" not in missing_execution_flags:
         required_execution_flags = (*required_execution_flags, "pattern_lab_ai_review")
+    if done_line and "runtime_apply_gap_audit" in execution_flags and "runtime_apply_gap_audit" not in missing_execution_flags:
+        required_execution_flags = (*required_execution_flags, "runtime_apply_gap_audit")
     disabled_stage_flags = [
         key
         for key in (
@@ -1220,6 +1246,7 @@ def build_threshold_cycle_postclose_verification(
             "code_improvement_workorder",
             "daily_ev",
             "runtime_approval_summary",
+            "runtime_apply_gap_audit",
             "next_stage2_checklist",
         )
         if key in execution_flags and not execution_flags[key]
@@ -1235,8 +1262,11 @@ def build_threshold_cycle_postclose_verification(
         "code_improvement_workorder" if "code_improvement_workorder" in disabled_stage_flags else "",
         "threshold_cycle_ev" if "daily_ev" in disabled_stage_flags else "",
         "runtime_approval_summary" if "runtime_approval_summary" in disabled_stage_flags else "",
+        "runtime_apply_gap_audit" if "runtime_apply_gap_audit" in disabled_stage_flags else "",
         "next_stage2_checklist" if "next_stage2_checklist" in disabled_stage_flags else "",
     }
+    if "runtime_apply_gap_audit" not in execution_flags:
+        disabled_artifact_labels.add("runtime_apply_gap_audit")
     if "swing_lifecycle_matrix" not in execution_flags:
         disabled_artifact_labels.add("swing_lifecycle_decision_matrix")
     if "swing_lifecycle_bucket_discovery" not in execution_flags:
@@ -1302,6 +1332,23 @@ def build_threshold_cycle_postclose_verification(
         ]
     if "daily_ev" in disabled_stage_flags or "runtime_approval_summary" in disabled_stage_flags:
         missing_downstream_links = []
+    runtime_apply_gap_audit_status = str(runtime_apply_gap_audit.get("status") or "missing").strip()
+    runtime_apply_gap_audit_summary = (
+        runtime_apply_gap_audit.get("summary") if isinstance(runtime_apply_gap_audit.get("summary"), dict) else {}
+    )
+    runtime_apply_gap_audit_issues: list[str] = []
+    if "runtime_apply_gap_audit" in execution_flags and "runtime_apply_gap_audit" not in disabled_stage_flags:
+        if not runtime_apply_gap_audit:
+            runtime_apply_gap_audit_issues.append("runtime_apply_gap_audit_missing")
+        if runtime_apply_gap_audit_status == "fail":
+            runtime_apply_gap_audit_issues.append("runtime_apply_gap_audit_failed")
+        if runtime_apply_gap_audit_summary.get("ai_review_retry_pending") is True:
+            runtime_apply_gap_audit_issues.append("runtime_apply_gap_ai_review_retry_pending")
+        if (
+            int(runtime_apply_gap_audit_summary.get("critical_failure_count") or 0) > 0
+            and not runtime_apply_gap_audit.get("retry_queue")
+        ):
+            runtime_apply_gap_audit_issues.append("runtime_apply_gap_fail_without_retry_queue")
     stale_downstream_links: list[str] = []
     if "daily_ev" not in disabled_stage_flags:
         if downstream_links.get("threshold_cycle_ev_sources_workorder") and _consumer_stale(ev_report, workorder):
@@ -1377,6 +1424,8 @@ def build_threshold_cycle_postclose_verification(
         status = "fail"
     elif missing_downstream_links:
         status = "fail"
+    elif runtime_apply_gap_audit_issues:
+        status = "fail"
     elif stale_downstream_links:
         status = "fail"
     elif predecessor_waits:
@@ -1442,6 +1491,13 @@ def build_threshold_cycle_postclose_verification(
         "downstream_links": downstream_links,
         "missing_downstream_links": missing_downstream_links,
         "stale_downstream_links": stale_downstream_links,
+        "runtime_apply_gap_audit": {
+            "status": runtime_apply_gap_audit_status,
+            "issues": runtime_apply_gap_audit_issues,
+            "summary": runtime_apply_gap_audit_summary,
+            "retry_queue_count": len(runtime_apply_gap_audit.get("retry_queue") or []),
+            "codex_directive_count": len(runtime_apply_gap_audit.get("codex_workorder_directives") or []),
+        },
         "ai_correction": ai_correction,
         "scalp_sim_overnight_source_quality": scalp_sim_overnight_quality,
         "entry_bucket_handoff": entry_bucket_handoff,
@@ -1463,6 +1519,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
     predecessor = report.get("predecessor_integrity") if isinstance(report.get("predecessor_integrity"), dict) else {}
     workorder = report.get("workorder_snapshot") if isinstance(report.get("workorder_snapshot"), dict) else {}
     ai_correction = report.get("ai_correction") if isinstance(report.get("ai_correction"), dict) else {}
+    runtime_gap = report.get("runtime_apply_gap_audit") if isinstance(report.get("runtime_apply_gap_audit"), dict) else {}
     overnight_quality = (
         report.get("scalp_sim_overnight_source_quality")
         if isinstance(report.get("scalp_sim_overnight_source_quality"), dict)
@@ -1506,6 +1563,13 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- missing_required_artifacts: `{report.get('missing_required_artifacts') or []}`",
         f"- missing_downstream_links: `{report.get('missing_downstream_links') or []}`",
         f"- stale_downstream_links: `{report.get('stale_downstream_links') or []}`",
+        f"- runtime_apply_gap_issues: `{runtime_gap.get('issues') or []}`",
+        "",
+        "## Runtime Apply Gap Audit",
+        f"- status: `{runtime_gap.get('status') or '-'}`",
+        f"- retry_queue_count: `{runtime_gap.get('retry_queue_count') or 0}`",
+        f"- codex_directive_count: `{runtime_gap.get('codex_directive_count') or 0}`",
+        f"- summary: `{runtime_gap.get('summary') or {}}`",
         "",
         "## BUY Funnel Submit Drought Handoff",
         f"- status: `{buy_funnel_handoff.get('status')}`",

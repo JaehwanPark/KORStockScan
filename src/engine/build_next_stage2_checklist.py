@@ -22,6 +22,7 @@ EV_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "threshold_cycle_ev"
 OPENAI_WS_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "openai_ws"
 SWING_RUNTIME_APPROVAL_DIR = PROJECT_ROOT / "data" / "report" / "swing_runtime_approval"
 CODE_IMPROVEMENT_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "code_improvement_workorder"
+RUNTIME_APPLY_GAP_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "runtime_apply_gap_audit"
 
 AUTO_START = "<!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->"
 AUTO_END = "<!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->"
@@ -157,6 +158,58 @@ def _code_workorder_count(ev_report: dict[str, Any], code_report: dict[str, Any]
     return 0
 
 
+def _runtime_gap_preopen_pending_items(runtime_gap_report: dict[str, Any]) -> list[dict[str, Any]]:
+    if not runtime_gap_report:
+        return []
+    by_id: dict[str, dict[str, Any]] = {}
+    ledger = runtime_gap_report.get("candidate_route_ledger")
+    if isinstance(ledger, list):
+        for item in ledger:
+            if not isinstance(item, dict):
+                continue
+            candidate_id = str(item.get("candidate_id") or item.get("family") or "").strip()
+            if not candidate_id:
+                continue
+            final_disposition = str(item.get("final_disposition") or "").strip()
+            failure_state = str(item.get("failure_state") or "").strip()
+            next_stage = str(item.get("next_retry_stage") or item.get("preopen_apply_state") or "").strip()
+            if (
+                final_disposition == "post_apply_attribution_pending"
+                or failure_state == "retry_pending"
+                or next_stage == "preopen_apply_candidate"
+            ):
+                by_id[candidate_id] = item
+    retry_queue = runtime_gap_report.get("retry_queue")
+    if isinstance(retry_queue, list):
+        for item in retry_queue:
+            if not isinstance(item, dict):
+                continue
+            candidate_id = str(item.get("candidate_id") or "").strip()
+            if not candidate_id:
+                continue
+            current = dict(by_id.get(candidate_id) or {})
+            current.update(item)
+            by_id[candidate_id] = current
+    return sorted(by_id.values(), key=lambda item: str(item.get("candidate_id") or item.get("family") or ""))
+
+
+def _runtime_gap_preopen_pending_summary(runtime_gap_report: dict[str, Any]) -> str:
+    items = _runtime_gap_preopen_pending_items(runtime_gap_report)
+    if not items:
+        return ""
+    rendered = []
+    for item in items[:5]:
+        candidate_id = str(item.get("candidate_id") or item.get("family") or "-")
+        family = str(item.get("family") or "").strip()
+        state = str(item.get("failure_state") or item.get("final_disposition") or "-")
+        reason = str(item.get("failure_reason") or item.get("failure_code") or item.get("retry_reason") or "-")
+        if family and family not in candidate_id:
+            candidate_id = f"{candidate_id} / family={family}"
+        rendered.append(f"`{candidate_id}`({state}, reason={reason})")
+    suffix = f" 외 {len(items) - 5}건" if len(items) > 5 else ""
+    return ", ".join(rendered) + suffix
+
+
 def _task_line(task: GeneratedTask, target_date: str) -> str:
     return (
         f"- [ ] `[{task.task_id}] {task.title}` "
@@ -179,11 +232,37 @@ def _build_tasks(
     openai_report: dict[str, Any],
     swing_report: dict[str, Any],
     code_report: dict[str, Any],
+    runtime_gap_report: dict[str, Any],
 ) -> list[GeneratedTask]:
     mmdd = _compact_mmdd(target_date)
     ev_path = EV_REPORT_DIR / f"threshold_cycle_ev_{source_date}.json"
     openai_path = OPENAI_WS_REPORT_DIR / f"openai_ws_stability_{source_date}.md"
     code_md_path = DOCS_DIR / "code-improvement-workorders" / f"code_improvement_workorder_{source_date}.md"
+    runtime_gap_path = RUNTIME_APPLY_GAP_REPORT_DIR / f"runtime_apply_gap_audit_{source_date}.json"
+    runtime_gap_pending = _runtime_gap_preopen_pending_summary(runtime_gap_report)
+    threshold_source = (
+        f"[threshold_cycle_ev_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(ev_path)}), "
+        "[threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), "
+        "[run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)"
+    )
+    threshold_lines = [
+        f"판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.",
+        "금지: blocked family, approval artifact missing, same-stage owner conflict를 수동 env override로 우회하지 않는다.",
+        "다음 액션: `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.",
+    ]
+    if runtime_gap_pending:
+        threshold_source = (
+            f"[threshold_cycle_ev_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(ev_path)}), "
+            f"[runtime_apply_gap_audit_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(runtime_gap_path)}), "
+            "[threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), "
+            "[run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)"
+        )
+        threshold_lines = [
+            threshold_lines[0],
+            f"판정 기준: runtime apply gap audit의 `post_apply_attribution_pending`/`retry_pending` 후보가 다음 PREOPEN apply plan과 runtime env에서 소비되는지 사용자에게 표면화한다. 확인 대상: {runtime_gap_pending}.",
+            threshold_lines[1],
+            "다음 액션: `runtime_gap_pending_consumed`, `runtime_gap_pending_not_consumed`, `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.",
+        ]
     tasks = [
         GeneratedTask(
             task_id=f"ThresholdEnvAutoApplyPreopen{mmdd}",
@@ -191,16 +270,8 @@ def _build_tasks(
             slot="PREOPEN",
             time_window="08:50~08:55",
             track="RuntimeStability",
-            source=(
-                f"[threshold_cycle_ev_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(ev_path)}), "
-                "[threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), "
-                "[run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)"
-            ),
-            lines=(
-                f"판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.",
-                "금지: blocked family, approval artifact missing, same-stage owner conflict를 수동 env override로 우회하지 않는다.",
-                "다음 액션: `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.",
-            ),
+            source=threshold_source,
+            lines=tuple(threshold_lines),
         ),
         GeneratedTask(
             task_id=f"OpenAIWSPreopenConfirm{mmdd}",
@@ -361,6 +432,7 @@ def _render_auto_block(
     openai_report: dict[str, Any],
     swing_report: dict[str, Any],
     code_report: dict[str, Any],
+    runtime_gap_report: dict[str, Any],
     exclude_task_ids: set[str] | None = None,
 ) -> str:
     tasks = _build_tasks(
@@ -370,6 +442,7 @@ def _render_auto_block(
         openai_report=openai_report,
         swing_report=swing_report,
         code_report=code_report,
+        runtime_gap_report=runtime_gap_report,
     )
     exclude_task_ids = exclude_task_ids or set()
     tasks = [task for task in tasks if task.task_id not in exclude_task_ids]
@@ -467,9 +540,117 @@ def _manual_text_without_auto_block(existing: str) -> str:
     return prefix + suffix
 
 
+def _auto_block_text(existing: str) -> str:
+    if AUTO_START not in existing or AUTO_END not in existing:
+        return ""
+    _, rest = existing.split(AUTO_START, 1)
+    body, _ = rest.split(AUTO_END, 1)
+    return AUTO_START + body + AUTO_END
+
+
 def _existing_manual_task_ids(existing: str) -> set[str]:
     text = _manual_text_without_auto_block(existing)
     return {match.group(1) for match in re.finditer(r"`\[([A-Za-z0-9_:-]+)\]", text)}
+
+
+def _task_ids_from_text(text: str) -> set[str]:
+    return {match.group(1) for match in re.finditer(r"^- \[[ xX]\] `\[([A-Za-z0-9_:-]+)\]", text, re.MULTILINE)}
+
+
+def _task_slot_from_block(block: str, fallback_slot: str) -> str:
+    match = re.search(r"`Slot:\s*([A-Z_]+)`", block)
+    if match:
+        return match.group(1)
+    return fallback_slot
+
+
+def _preserved_auto_task_blocks(existing: str, generated_task_ids: set[str]) -> dict[str, list[str]]:
+    text = _auto_block_text(existing)
+    if not text:
+        return {}
+    preserved: dict[str, list[str]] = {"PREOPEN": [], "INTRADAY": [], "POSTCLOSE": []}
+    current_slot = ""
+    current: list[str] = []
+    for line in text.splitlines():
+        if line.startswith("## 장전"):
+            current_slot = "PREOPEN"
+        elif line.startswith("## 장중"):
+            current_slot = "INTRADAY"
+        elif line.startswith("## 장후"):
+            current_slot = "POSTCLOSE"
+
+        if re.match(r"^- \[[ xX]\] `\[[A-Za-z0-9_:-]+]", line):
+            if current:
+                block = "\n".join(current).rstrip()
+                task_id_match = re.match(r"^- \[[ xX]\] `\[([A-Za-z0-9_:-]+)]", current[0])
+                task_id = task_id_match.group(1) if task_id_match else ""
+                if task_id and task_id not in generated_task_ids:
+                    slot = _task_slot_from_block(block, current_slot or "POSTCLOSE")
+                    preserved.setdefault(slot, []).append(block)
+            current = [line]
+            continue
+
+        if current:
+            if line.startswith("## ") or line == AUTO_END:
+                block = "\n".join(current).rstrip()
+                task_id_match = re.match(r"^- \[[ xX]\] `\[([A-Za-z0-9_:-]+)]", current[0])
+                task_id = task_id_match.group(1) if task_id_match else ""
+                if task_id and task_id not in generated_task_ids:
+                    slot = _task_slot_from_block(block, current_slot or "POSTCLOSE")
+                    preserved.setdefault(slot, []).append(block)
+                current = []
+            else:
+                current.append(line)
+    if current:
+        block = "\n".join(current).rstrip()
+        task_id_match = re.match(r"^- \[[ xX]\] `\[([A-Za-z0-9_:-]+)]", current[0])
+        task_id = task_id_match.group(1) if task_id_match else ""
+        if task_id and task_id not in generated_task_ids:
+            slot = _task_slot_from_block(block, current_slot or "POSTCLOSE")
+            preserved.setdefault(slot, []).append(block)
+    return {slot: blocks for slot, blocks in preserved.items() if blocks}
+
+
+def _merge_preserved_auto_tasks(existing: str, auto_block: str) -> str:
+    preserved = _preserved_auto_task_blocks(existing, _task_ids_from_text(auto_block))
+    if not preserved:
+        return auto_block
+    lines: list[str] = []
+    current_slot = ""
+    def flush_slot(slot: str) -> None:
+        if not slot:
+            return
+        for block in preserved.pop(slot, []):
+            if lines and lines[-1] != "":
+                lines.append("")
+            lines.extend(block.splitlines())
+            lines.append("")
+
+    for line in auto_block.splitlines():
+        if line.startswith("## 장전"):
+            flush_slot(current_slot)
+            current_slot = "PREOPEN"
+        elif line.startswith("## 장중"):
+            flush_slot(current_slot)
+            current_slot = "INTRADAY"
+        elif line.startswith("## 장후"):
+            flush_slot(current_slot)
+            current_slot = "POSTCLOSE"
+        if line == AUTO_END:
+            flush_slot(current_slot)
+            current_slot = ""
+        lines.append(line)
+    if preserved:
+        insert_at = len(lines) - 1 if lines and lines[-1] == AUTO_END else len(lines)
+        extra: list[str] = []
+        for blocks in preserved.values():
+            for block in blocks:
+                if extra and extra[-1] != "":
+                    extra.append("")
+                extra.extend(block.splitlines())
+                extra.append("")
+        lines[insert_at:insert_at] = extra
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def build_next_stage2_checklist(source_date: str) -> dict[str, Any]:
@@ -483,6 +664,7 @@ def build_next_stage2_checklist(source_date: str) -> dict[str, Any]:
     openai_report = _load_json(OPENAI_WS_REPORT_DIR / f"openai_ws_stability_{source_date}.json")
     swing_report = _load_json(SWING_RUNTIME_APPROVAL_DIR / f"swing_runtime_approval_{source_date}.json")
     code_report = _load_json(CODE_IMPROVEMENT_REPORT_DIR / f"code_improvement_workorder_{source_date}.json")
+    runtime_gap_report = _load_json(RUNTIME_APPLY_GAP_REPORT_DIR / f"runtime_apply_gap_audit_{source_date}.json")
     existing = target_path.read_text(encoding="utf-8") if target_path.exists() else ""
     exclude_task_ids = _existing_manual_task_ids(existing) if existing else set()
     auto_block = _render_auto_block(
@@ -492,8 +674,11 @@ def build_next_stage2_checklist(source_date: str) -> dict[str, Any]:
         openai_report=openai_report,
         swing_report=swing_report,
         code_report=code_report,
+        runtime_gap_report=runtime_gap_report,
         exclude_task_ids=exclude_task_ids,
     )
+    if existing:
+        auto_block = _merge_preserved_auto_tasks(existing, auto_block)
 
     if existing:
         content = _upsert_auto_block(existing, auto_block)
@@ -511,6 +696,7 @@ def build_next_stage2_checklist(source_date: str) -> dict[str, Any]:
         openai_report=openai_report,
         swing_report=swing_report,
         code_report=code_report,
+        runtime_gap_report=runtime_gap_report,
     )
     tasks = [task for task in tasks if task.task_id not in exclude_task_ids]
     return {

@@ -5,6 +5,67 @@ from pathlib import Path
 from src.engine import verify_threshold_cycle_postclose_chain as mod
 
 
+def test_read_lines_includes_rotated_numeric_log(tmp_path):
+    log_path = tmp_path / "threshold_cycle_postclose_cron.log"
+    (tmp_path / "threshold_cycle_postclose_cron.log.1").write_text(
+        "[START] threshold-cycle postclose target_date=2026-05-22\n"
+        "[DONE] threshold-cycle postclose target_date=2026-05-22\n",
+        encoding="utf-8",
+    )
+    log_path.write_text("", encoding="utf-8")
+
+    lines = mod._read_lines(log_path)
+
+    assert any("[DONE] threshold-cycle postclose target_date=2026-05-22" in line for line in lines)
+
+
+def test_postclose_verifier_fails_runtime_apply_gap_audit_fail(tmp_path, monkeypatch):
+    project_root = tmp_path
+    report_dir = project_root / "data" / "report"
+    log_path = project_root / "logs" / "threshold_cycle_postclose_cron.log"
+    (project_root / "logs").mkdir(parents=True)
+    monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "LOG_PATH", log_path)
+    monkeypatch.setattr(mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification")
+    monkeypatch.setattr(mod, "_next_krx_trading_day", lambda target_date: "2026-05-13")
+    (project_root / "docs" / "checklists").mkdir(parents=True)
+    (project_root / "docs" / "checklists" / "2026-05-13-stage2-todo-checklist.md").write_text(
+        "# checklist\n",
+        encoding="utf-8",
+    )
+    for label, path in mod._artifact_paths("2026-05-12").items():
+        if label == "next_stage2_checklist":
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"report_type": label}
+        if label == "runtime_apply_gap_audit":
+            payload = {
+                "report_type": label,
+                "status": "fail",
+                "summary": {
+                    "critical_failure_count": 1,
+                    "ai_review_retry_pending": False,
+                },
+                "retry_queue": [{"failure_code": "producer_consumer_handoff_missing"}],
+            }
+        path.write_text(json.dumps(payload), encoding="utf-8")
+    log_path.write_text(
+        "\n".join(
+            [
+                "[START] threshold-cycle postclose target_date=2026-05-12 started_at=2026-05-12T21:00:00+0900",
+                "[DONE] threshold-cycle postclose target_date=2026-05-12 swing_lifecycle=false pattern_labs=false deepseek_swing_lab=false pattern_lab_currentness_audit=false pattern_lab_propagation_audit=false scalp_entry_adm=false lifecycle_decision_matrix=false code_improvement_workorder=false daily_ev=false runtime_approval_summary=false runtime_apply_gap_audit=true next_stage2_checklist=false finished_at=2026-05-12T21:30:00+0900",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_threshold_cycle_postclose_verification("2026-05-12")
+
+    assert report["status"] == "fail"
+    assert "runtime_apply_gap_audit_failed" in report["runtime_apply_gap_audit"]["issues"]
+
+
 def test_overnight_bucket_handoff_status_detects_downstream_drops():
     ldm = {
         "overnight_bucket_attribution": {

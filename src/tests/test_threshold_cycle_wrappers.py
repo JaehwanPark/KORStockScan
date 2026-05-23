@@ -89,6 +89,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     propagation_idx = script.index("src.engine.pattern_lab_propagation_audit")
     post_propagation_ev_idx = script.index('run_threshold_cycle_ev_and_wait "post_propagation_audit_refresh"')
     runtime_summary_idx = script.index("src.engine.runtime_approval_summary")
+    runtime_gap_idx = script.index("src.engine.runtime_apply_gap_audit")
     next_checklist_idx = script.rindex("src.engine.build_next_stage2_checklist")
 
     assert (
@@ -108,6 +109,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         < propagation_idx
         < post_propagation_ev_idx
         < runtime_summary_idx
+        < runtime_gap_idx
         < next_checklist_idx
     )
     assert 'RUN_PATTERN_LAB_PROPAGATION_AUDIT="${THRESHOLD_CYCLE_RUN_PATTERN_LAB_PROPAGATION_AUDIT:-true}"' in script
@@ -170,6 +172,7 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert '"$PROJECT_DIR/data/report/swing_lifecycle_bucket_discovery/swing_lifecycle_bucket_discovery_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/runtime_apply_bridge/runtime_apply_bridge_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/runtime_approval_summary/runtime_approval_summary_${TARGET_DATE}.json"' in script
+    assert '"$PROJECT_DIR/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_${TARGET_DATE}.json"' in script
     assert 'wait_for_file_artifact "$(next_stage2_checklist_path)" "next_stage2_checklist"' in script
     assert "src.engine.verify_threshold_cycle_postclose_chain" in script
     assert "--allow-pending-done-marker" in script
@@ -183,6 +186,7 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert "lifecycle_decision_matrix=$RUN_LIFECYCLE_DECISION_MATRIX" in script
     assert "lifecycle_bucket_discovery=$RUN_LIFECYCLE_BUCKET_DISCOVERY" in script
     assert "runtime_apply_bridge=$RUN_RUNTIME_APPLY_BRIDGE" in script
+    assert "runtime_apply_gap_audit=true" in script
     assert "swing_lifecycle_matrix=$RUN_SWING_LIFECYCLE_MATRIX" in script
     assert "swing_lifecycle_bucket_discovery=$RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY" in script
     assert "ai correction retry target_date=$TARGET_DATE" in script

@@ -86,6 +86,38 @@ def _seed_bucket_reports(root: Path, target_date: str = "2026-05-22") -> None:
             ],
         },
     )
+    _write_json(
+        root / "report" / "runtime_apply_gap_audit" / f"runtime_apply_gap_audit_{target_date}.json",
+        {
+            "date": target_date,
+            "status": "warning",
+            "summary": {
+                "retry_queue_count": 1,
+                "codex_directive_count": 0,
+            },
+            "runtime_uptake_kpi": {
+                "runtime_uptake_rate_pct": 0.0,
+            },
+            "aggressive_push_targets": [
+                {"candidate_id": "entry_wait6579_score66_69_recovery_gate_v1:2026-05-22"}
+            ],
+            "candidate_route_ledger": [
+                {
+                    "candidate_id": "entry_wait6579_score66_69_recovery_gate_v1:2026-05-22",
+                    "family": "entry_wait6579_score66_69_recovery_gate_v1",
+                    "stage": "entry",
+                    "final_disposition": "post_apply_attribution_pending",
+                    "failure_state": "retry_pending",
+                    "failure_reason": "ready_but_not_applied",
+                    "retry_reason": "candidate must be consumed by preopen apply",
+                    "sample": 30,
+                    "primary_ev": 1.23,
+                    "source_quality_gate": "pass",
+                    "recommended_route": "runtime_apply_bridge",
+                }
+            ],
+        },
+    )
 
 
 def test_bucket_tracking_api_returns_summary_timeline_buckets_and_missing(monkeypatch, tmp_path):
@@ -106,6 +138,11 @@ def test_bucket_tracking_api_returns_summary_timeline_buckets_and_missing(monkey
     assert model["summary"]["surfaced_count"] == 2
     assert model["summary"]["sim_auto_approved_count"] == 1
     assert model["summary"]["live_auto_apply_ready_count"] == 1
+    assert model["summary"]["runtime_apply_gap_status"] == "warning"
+    assert model["summary"]["runtime_apply_gap_retry_count"] == 1
+    assert model["summary"]["runtime_apply_gap_push_target_count"] == 1
+    assert model["summary"]["bridge_candidate_count"] == 1
+    assert model["summary"]["blocked_count"] == 0
     assert model["summary"]["mode"] == "current_date_with_history"
     assert model["timeline"]
     assert model["buckets"]
@@ -115,6 +152,10 @@ def test_bucket_tracking_api_returns_summary_timeline_buckets_and_missing(monkey
         "runtime_apply_bridge",
         "lifecycle_decision_matrix",
     ]} in model["missing_dates"]
+    assert any(
+        row["row_type"] == "runtime_apply_gap" and row["state_group"] == "retry"
+        for row in model["buckets"]
+    )
 
 
 def test_bucket_tracking_routes_and_dashboard_replace_ipo(monkeypatch, tmp_path):
@@ -147,12 +188,15 @@ def test_bucket_tracking_routes_and_dashboard_replace_ipo(monkeypatch, tmp_path)
         assert "현재 상세 버킷" in page_html
         assert "sim_auto_approved" in page_html
         assert "live_auto_apply_ready" in page_html
+        assert "Runtime Uptake" in page_html
+        assert "ready_but_not_applied" in page_html
 
         api = client.get("/api/bucket-tracking?date=2026-05-22&days=1")
         assert api.status_code == 200
         data = api.get_json()
         assert set(["summary", "timeline", "groups", "buckets", "missing_dates"]).issubset(data)
         assert data["summary"]["current_date"] == "2026-05-22"
+        assert data["summary"]["runtime_apply_gap_status"] == "warning"
 
         removed = client.get("/ipo-intraday")
         assert removed.status_code == 404

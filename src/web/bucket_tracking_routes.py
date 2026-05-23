@@ -20,28 +20,53 @@ MAX_DAYS = 20
 DEFAULT_TOP = 200
 MAX_TOP = 1000
 STAGES = ("entry", "submit", "holding", "scale_in", "exit", "overnight")
+RUNTIME_APPLY_GAP_FIRST_DATE = "2026-05-22"
 BLOCKED_STATES = {
+    "fail",
+    "blocked_contract",
+    "blocked_safety",
     "blocked_source_quality",
     "blocked_rolling_conflict",
     "runtime_blocked_contract_gap",
+    "source_quality_blocker",
 }
 HUMAN_STATES = {
+    "approval_required",
     "new_bucket_candidate",
     "code_patch_required",
     "automation_handoff_gap",
     "runtime_blocked_contract_gap",
 }
+RETRY_STATES = {
+    "retry_pending",
+    "post_apply_attribution_pending",
+}
 STATE_PRIORITY = {
     "live_auto_apply_ready": 0,
-    "runtime_blocked_contract_gap": 1,
-    "blocked_source_quality": 1,
-    "blocked_rolling_conflict": 1,
-    "code_patch_required": 2,
-    "automation_handoff_gap": 2,
-    "new_bucket_candidate": 2,
-    "sim_auto_approved": 3,
-    "source_only_keep_collecting": 4,
-    "bootstrap_pending": 4,
+    "retry_pending": 1,
+    "post_apply_attribution_pending": 1,
+    "fail": 2,
+    "runtime_blocked_contract_gap": 2,
+    "blocked_contract": 2,
+    "blocked_safety": 2,
+    "blocked_source_quality": 2,
+    "blocked_rolling_conflict": 2,
+    "source_quality_blocker": 2,
+    "approval_required": 3,
+    "code_patch_required": 3,
+    "automation_handoff_gap": 3,
+    "new_bucket_candidate": 3,
+    "sim_auto_approved": 4,
+    "source_only_keep_collecting": 5,
+    "bootstrap_pending": 5,
+}
+GROUP_PRIORITY = {
+    "live": 0,
+    "retry": 1,
+    "blocked": 2,
+    "human": 3,
+    "sim": 4,
+    "source": 5,
 }
 
 
@@ -109,6 +134,10 @@ def _bridge_path(target_date: str) -> Path:
     return DATA_DIR / "report" / "runtime_apply_bridge" / f"runtime_apply_bridge_{target_date}.json"
 
 
+def _runtime_apply_gap_path(target_date: str) -> Path:
+    return DATA_DIR / "report" / "runtime_apply_gap_audit" / f"runtime_apply_gap_audit_{target_date}.json"
+
+
 def _ldm_path(target_date: str) -> Path:
     return DATA_DIR / "report" / "lifecycle_decision_matrix" / f"lifecycle_decision_matrix_{target_date}.json"
 
@@ -128,13 +157,23 @@ def _source_count_from_ldm(ldm: dict[str, Any]) -> int:
 def _state_group(state: str) -> str:
     if state == "live_auto_apply_ready":
         return "live"
+    if state in RETRY_STATES:
+        return "retry"
     if state in BLOCKED_STATES:
         return "blocked"
-    if state in {"code_patch_required", "automation_handoff_gap", "new_bucket_candidate"}:
+    if state in HUMAN_STATES:
         return "human"
     if state == "sim_auto_approved":
         return "sim"
     return "source"
+
+
+def _is_blocked_state(state: str) -> bool:
+    return state in BLOCKED_STATES
+
+
+def _runtime_apply_gap_expected(item_date: str) -> bool:
+    return item_date >= RUNTIME_APPLY_GAP_FIRST_DATE
 
 
 def _candidate_row(target_date: str, item: dict[str, Any]) -> dict[str, Any]:
@@ -205,6 +244,37 @@ def _bridge_row(target_date: str, item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _runtime_apply_gap_row(target_date: str, item: dict[str, Any]) -> dict[str, Any]:
+    disposition = str(item.get("final_disposition") or "post_apply_attribution_pending")
+    failure_state = str(item.get("failure_state") or "pass")
+    state = failure_state if failure_state != "pass" else disposition
+    state_group = _state_group(state if failure_state != "pass" else disposition)
+    return {
+        "date": target_date,
+        "row_type": "runtime_apply_gap",
+        "bucket_id": str(item.get("candidate_id") or item.get("family") or "-"),
+        "stage": str(item.get("stage") or "unknown"),
+        "bucket_type": "runtime_apply_gap_audit",
+        "bucket_key": str(item.get("family") or item.get("source_artifact") or "-"),
+        "classification_state": disposition,
+        "bridge_candidate_state": state,
+        "state_group": state_group,
+        "recommended_route": str(item.get("recommended_route") or "-"),
+        "recommended_action": str(item.get("final_disposition") or "-"),
+        "sample": _safe_int(item.get("sample")),
+        "joined_sample": _safe_int(item.get("sample")),
+        "ev": _safe_float(item.get("primary_ev")),
+        "source_quality_gate": str(item.get("source_quality_gate") or "-"),
+        "live_auto_apply_family": str(item.get("family") or "-"),
+        "decision_authority": "runtime_apply_gap_aggressive_watcher_source_only",
+        "runtime_effect": False,
+        "ai_followup": str(item.get("ai_route_decision") or "-"),
+        "ai_block_reason": str(item.get("reason_ko") or item.get("ai_reason_en") or "-"),
+        "blocked_reason": str(item.get("failure_reason") or item.get("retry_reason") or "-"),
+        "last_seen": target_date,
+    }
+
+
 def _sort_key(row: dict[str, Any]) -> tuple[int, int, str, str]:
     state = row.get("bridge_candidate_state") or row.get("classification_state") or ""
     return (
@@ -253,7 +323,7 @@ def _summarize_groups(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         groups.values(),
         key=lambda item: (
             STAGES.index(item["stage"]) if item["stage"] in STAGES else 99,
-            STATE_PRIORITY.get(item["state_group"], 8),
+            GROUP_PRIORITY.get(item["state_group"], 8),
             -int(item["count"]),
             item["bucket_type"],
         ),
@@ -281,17 +351,26 @@ def build_bucket_tracking_view_model(
     current_blocked_total = 0
     current_code_patch_total = 0
     current_human_intervention = False
+    current_gap_status = "-"
+    current_runtime_uptake_rate_pct = 0.0
+    current_gap_retry_count = 0
+    current_gap_directive_count = 0
+    current_gap_push_target_count = 0
+    current_bridge_candidate_count = 0
 
     for item_date in dates:
         date_rows: list[dict[str, Any]] = []
         discovery = _load_json(_discovery_path(item_date))
         bridge = _load_json(_bridge_path(item_date))
+        runtime_gap = _load_json(_runtime_apply_gap_path(item_date))
         ldm = _load_json(_ldm_path(item_date))
         missing = []
         if not discovery:
             missing.append("lifecycle_bucket_discovery")
         if not bridge:
             missing.append("runtime_apply_bridge")
+        if not runtime_gap and _runtime_apply_gap_expected(item_date):
+            missing.append("runtime_apply_gap_audit")
         if not ldm:
             missing.append("lifecycle_decision_matrix")
         if missing:
@@ -300,12 +379,15 @@ def build_bucket_tracking_view_model(
         ldm_source_count = _source_count_from_ldm(ldm)
         discovery_summary = discovery.get("summary") if isinstance(discovery.get("summary"), dict) else {}
         bridge_summary = bridge.get("summary") if isinstance(bridge.get("summary"), dict) else {}
+        gap_summary = runtime_gap.get("summary") if isinstance(runtime_gap.get("summary"), dict) else {}
+        gap_kpi = runtime_gap.get("runtime_uptake_kpi") if isinstance(runtime_gap.get("runtime_uptake_kpi"), dict) else {}
         surfaced_count = _safe_int(discovery_summary.get("surfaced_candidate_count"))
         sim_count = _safe_int(discovery_summary.get("sim_auto_approved_count"))
         live_count = max(
             _safe_int(discovery_summary.get("live_auto_apply_ready_count")),
             _safe_int(bridge_summary.get("live_auto_apply_ready_count")),
         )
+        bridge_candidate_count = _safe_int(bridge_summary.get("candidate_count"))
         blocked_count = 0
         code_patch_count = _safe_int(discovery_summary.get("code_patch_required_count"))
 
@@ -314,7 +396,7 @@ def build_bucket_tracking_view_model(
             if not isinstance(candidate, dict):
                 continue
             row = _candidate_row(item_date, candidate)
-            if row["classification_state"] in BLOCKED_STATES:
+            if _is_blocked_state(str(row["classification_state"])):
                 blocked_count += 1
             date_rows.append(row)
 
@@ -323,7 +405,15 @@ def build_bucket_tracking_view_model(
             if not isinstance(candidate, dict):
                 continue
             row = _bridge_row(item_date, candidate)
-            if row["bridge_candidate_state"] in BLOCKED_STATES:
+            if _is_blocked_state(str(row["bridge_candidate_state"])):
+                blocked_count += 1
+            date_rows.append(row)
+        gap_ledger = runtime_gap.get("candidate_route_ledger") if isinstance(runtime_gap.get("candidate_route_ledger"), list) else []
+        for candidate in gap_ledger:
+            if not isinstance(candidate, dict):
+                continue
+            row = _runtime_apply_gap_row(item_date, candidate)
+            if _is_blocked_state(str(row["bridge_candidate_state"])):
                 blocked_count += 1
             date_rows.append(row)
 
@@ -335,10 +425,21 @@ def build_bucket_tracking_view_model(
             current_live_total = live_count
             current_blocked_total = blocked_count
             current_code_patch_total = code_patch_count
+            current_gap_status = str(runtime_gap.get("status") or "-")
+            current_runtime_uptake_rate_pct = _safe_float(gap_kpi.get("runtime_uptake_rate_pct")) or 0.0
+            current_gap_retry_count = _safe_int(gap_summary.get("retry_queue_count"))
+            current_gap_directive_count = _safe_int(gap_summary.get("codex_directive_count"))
+            current_bridge_candidate_count = bridge_candidate_count
+            current_gap_push_target_count = len(
+                runtime_gap.get("aggressive_push_targets")
+                if isinstance(runtime_gap.get("aggressive_push_targets"), list)
+                else []
+            )
             current_human_intervention = (
                 bool(discovery_summary.get("human_intervention_required"))
                 or bool(bridge_summary.get("human_approval_required"))
                 or code_patch_count > 0
+                or current_gap_directive_count > 0
             )
             for row in date_rows:
                 state = _row_state(row)
@@ -353,7 +454,11 @@ def build_bucket_tracking_view_model(
                 "surfaced_count": surfaced_count,
                 "sim_auto_approved_count": sim_count,
                 "live_auto_apply_ready_count": live_count,
-                "bridge_candidate_count": _safe_int(bridge_summary.get("candidate_count")),
+                "bridge_candidate_count": bridge_candidate_count,
+                "runtime_apply_gap_status": runtime_gap.get("status") or "-",
+                "runtime_uptake_rate_pct": _safe_float(gap_kpi.get("runtime_uptake_rate_pct")) or 0.0,
+                "runtime_apply_gap_retry_count": _safe_int(gap_summary.get("retry_queue_count")),
+                "runtime_apply_gap_directive_count": _safe_int(gap_summary.get("codex_directive_count")),
                 "blocked_count": blocked_count,
                 "code_patch_required_count": code_patch_count,
                 "ai_review_status": discovery_summary.get("ai_two_pass_review_status") or "-",
@@ -417,16 +522,25 @@ def build_bucket_tracking_view_model(
                 "all",
                 "live",
                 "blocked",
+                "retry",
                 "human",
                 "sim",
                 "source",
                 "live_auto_apply_ready",
                 "sim_auto_approved",
                 "runtime_blocked_contract_gap",
+                "blocked_contract",
+                "blocked_safety",
+                "blocked_source_quality",
+                "source_quality_blocker",
                 "code_patch_required",
+                "approval_required",
                 "new_bucket_candidate",
                 "source_only_keep_collecting",
                 "bootstrap_pending",
+                "post_apply_attribution_pending",
+                "retry_pending",
+                "fail",
             ],
         },
         "summary": {
@@ -439,6 +553,12 @@ def build_bucket_tracking_view_model(
             "live_auto_apply_ready_count": current_live_total,
             "blocked_count": current_blocked_total,
             "code_patch_required_count": current_code_patch_total,
+            "runtime_apply_gap_status": current_gap_status,
+            "runtime_uptake_rate_pct": current_runtime_uptake_rate_pct,
+            "runtime_apply_gap_retry_count": current_gap_retry_count,
+            "runtime_apply_gap_directive_count": current_gap_directive_count,
+            "runtime_apply_gap_push_target_count": current_gap_push_target_count,
+            "bridge_candidate_count": current_bridge_candidate_count,
             "human_intervention_required": current_human_intervention,
             "row_count": len(filtered_rows),
             "state_counts": dict(current_state_counts),
@@ -517,7 +637,7 @@ def bucket_tracking_view():
         .filters { display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
         input, select, button { border:1px solid var(--line); border-radius:8px; padding:9px 10px; background:#fff; color:var(--ink); font:inherit; }
         button { background:var(--accent); color:#fff; font-weight:700; cursor:pointer; }
-        .kpis { display:grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap:10px; margin-bottom:14px; }
+        .kpis { display:grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap:10px; margin-bottom:14px; }
         .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:14px; }
         .label { color:var(--muted); font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; }
         .value { font-size:24px; font-weight:800; margin-top:6px; }
@@ -539,6 +659,7 @@ def bucket_tracking_view():
         .state { display:inline-flex; border-radius:999px; padding:3px 8px; font-weight:800; font-size:11px; background:var(--soft); color:var(--accent); white-space:nowrap; }
         .state.live, .state.sim { background:#dcfce7; color:var(--ok); }
         .state.blocked, .state.human { background:#fee2e2; color:var(--bad); }
+        .state.retry { background:#fef3c7; color:var(--warn); }
         .state.source { background:#fef3c7; color:var(--warn); }
         .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; overflow-wrap:anywhere; }
         .muted { color:var(--muted); }
@@ -581,6 +702,7 @@ def bucket_tracking_view():
           <div class="card"><div class="label">Surfaced</div><div class="value">{{ model.summary.surfaced_count }}</div></div>
           <div class="card"><div class="label">Sim Auto</div><div class="value">{{ model.summary.sim_auto_approved_count }}</div></div>
           <div class="card"><div class="label">Live Ready</div><div class="value">{{ model.summary.live_auto_apply_ready_count }}</div></div>
+          <div class="card"><div class="label">Runtime Uptake</div><div class="value">{{ '%.1f'|format(model.summary.runtime_uptake_rate_pct) }}%</div></div>
           <div class="card"><div class="label">Blocked / Code</div><div class="value">{{ model.summary.blocked_count }} / {{ model.summary.code_patch_required_count }}</div></div>
         </div>
 
@@ -588,9 +710,9 @@ def bucket_tracking_view():
           <div class="card"><div class="label">1. LDM source bucket</div><div class="value">{{ model.summary.ldm_source_bucket_count }}</div><p>entry/scale/overnight bucket source</p></div>
           <div class="card"><div class="label">2. Discovery surfaced</div><div class="value">{{ model.summary.surfaced_count }}</div><p>자동화체인이 표면화한 후보</p></div>
           <div class="card"><div class="label">3. Sim auto</div><div class="value">{{ model.summary.sim_auto_approved_count }}</div><p>실주문 권한 없는 sim policy</p></div>
-          <div class="card"><div class="label">4. Bridge candidate</div><div class="value">{{ model.summary.state_counts.get('blocked_source_quality', 0) + model.summary.state_counts.get('bootstrap_pending', 0) + model.summary.live_auto_apply_ready_count }}</div><p>entry/scale live bridge 검토</p></div>
+          <div class="card"><div class="label">4. Bridge candidate</div><div class="value">{{ model.summary.bridge_candidate_count }}</div><p>entry/scale live bridge 검토</p></div>
           <div class="card"><div class="label">5. Live ready</div><div class="value">{{ model.summary.live_auto_apply_ready_count }}</div><p>다음 PREOPEN env 후보</p></div>
-          <div class="card"><div class="label">6. Follow-up</div><div class="value">{{ model.summary.blocked_count + model.summary.code_patch_required_count }}</div><p>차단 또는 구현 필요</p></div>
+          <div class="card"><div class="label">6. Runtime gap</div><div class="value">{{ model.summary.runtime_apply_gap_retry_count }} / {{ model.summary.runtime_apply_gap_directive_count }}</div><p>재시도 / Codex 지시</p></div>
         </div>
 
         <div class="timeline">
@@ -605,6 +727,9 @@ def bucket_tracking_view():
                 <span>surfaced</span><strong>{{ day.surfaced_count }}</strong>
                 <span>sim</span><strong>{{ day.sim_auto_approved_count }}</strong>
                 <span>live</span><strong>{{ day.live_auto_apply_ready_count }}</strong>
+                <span>uptake</span><strong>{{ '%.1f'|format(day.runtime_uptake_rate_pct) }}%</strong>
+                <span>gap</span><strong>{{ day.runtime_apply_gap_status }}</strong>
+                <span>retry/directive</span><strong>{{ day.runtime_apply_gap_retry_count }}/{{ day.runtime_apply_gap_directive_count }}</strong>
                 <span>blocked</span><strong>{{ day.blocked_count }}</strong>
                 <span>AI</span><strong>{{ day.ai_review_status }}</strong>
               </div>
@@ -641,7 +766,8 @@ def bucket_tracking_view():
                 </div>
               {% endfor %}
             </div>
-            <p style="margin-top:14px;">human intervention: <strong>{{ 'required' if model.summary.human_intervention_required else 'none' }}</strong></p>
+            <p style="margin-top:14px;">runtime gap: <strong>{{ model.summary.runtime_apply_gap_status }}</strong>, push targets: <strong>{{ model.summary.runtime_apply_gap_push_target_count }}</strong></p>
+            <p style="margin-top:8px;">human intervention: <strong>{{ 'required' if model.summary.human_intervention_required else 'none' }}</strong></p>
           </div>
           <div class="card">
             <h2 style="margin-top:0;font-size:18px;">현재 상세 버킷</h2>

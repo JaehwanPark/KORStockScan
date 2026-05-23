@@ -6,11 +6,13 @@ import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
+import fcntl
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LOG_PATH = PROJECT_ROOT / "logs" / "system_metric_samples.jsonl"
 STATE_PATH = PROJECT_ROOT / "tmp" / "system_metric_sampler_state.json"
+LOCK_PATH = PROJECT_ROOT / "tmp" / "system_metric_samples.lock"
 
 
 def _read_proc_stat() -> dict[str, int]:
@@ -138,9 +140,12 @@ def sample_once() -> dict:
         "top": _top_processes(),
     }
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with LOG_PATH.open("a", encoding="utf-8") as fp:
-        fp.write(json.dumps(sample, ensure_ascii=True) + "\n")
-    _save_state({"cpu": cpu, "disk": disk, "epoch": int(now_ts)})
+    LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with LOCK_PATH.open("w", encoding="utf-8") as lock_fp:
+        fcntl.flock(lock_fp.fileno(), fcntl.LOCK_EX)
+        with LOG_PATH.open("a", encoding="utf-8") as fp:
+            fp.write(json.dumps(sample, ensure_ascii=True) + "\n")
+        _save_state({"cpu": cpu, "disk": disk, "epoch": int(now_ts)})
     return sample
 
 

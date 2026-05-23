@@ -61,6 +61,20 @@ class TestCronCompletionDetector:
         result = detector._read_tail(Path("/nonexistent/log.log"), 100)
         assert result == ""
 
+    def test_read_tail_includes_rotated_numeric_logs(self, tmp_path):
+        log_file = tmp_path / "threshold_cycle_postclose_cron.log"
+        (tmp_path / "threshold_cycle_postclose_cron.log.1").write_text(
+            "[START] threshold-cycle postclose target_date=2026-05-22\n"
+            "[DONE] threshold-cycle postclose target_date=2026-05-22\n",
+            encoding="utf-8",
+        )
+        log_file.write_text("", encoding="utf-8")
+
+        result = CronCompletionDetector._read_tail(log_file, 100)
+
+        assert "target_date=2026-05-22" in result
+        assert "[DONE] threshold-cycle postclose" in result
+
     def test_last_terminal_marker_fail_after_done(self):
         detector = CronCompletionDetector()
         lines = "[DONE] target_date=2026-05-09\n[FAIL] target_date=2026-05-09\n"
@@ -136,6 +150,40 @@ class TestCronCompletionDetector:
         )
 
         with _mock_time(19, 55):
+            result = CronCompletionDetector().check()
+
+        assert result.severity == "pass"
+        assert result.details["threshold_cycle_postclose_status"] == "pass"
+
+    def test_rotated_once_job_done_marker_keeps_cron_status_pass(self, monkeypatch, tmp_path):
+        import src.engine.error_detectors.cron_completion as cc
+
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir(parents=True)
+        (logs_dir / "threshold_cycle_postclose_cron.log.1").write_text(
+            "[START] threshold-cycle postclose target_date=2026-05-22 started_at=2026-05-22T16:10:01+0900\n"
+            "[DONE] threshold-cycle postclose target_date=2026-05-22 finished_at=2026-05-22T17:22:41+0900\n",
+            encoding="utf-8",
+        )
+        (logs_dir / "threshold_cycle_postclose_cron.log").write_text("", encoding="utf-8")
+        monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
+        monkeypatch.setattr(cc, "_today_kst", lambda: "2026-05-22")
+        monkeypatch.setattr(
+            cc,
+            "CRON_JOB_REGISTRY",
+            [
+                {
+                    "id": "threshold_cycle_postclose",
+                    "log": "logs/threshold_cycle_postclose_cron.log",
+                    "window_start": (16, 10),
+                    "window_end": (17, 0),
+                    "mode": "once",
+                    "critical": True,
+                }
+            ],
+        )
+
+        with _mock_time(23, 25):
             result = CronCompletionDetector().check()
 
         assert result.severity == "pass"

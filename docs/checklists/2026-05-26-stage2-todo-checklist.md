@@ -35,10 +35,10 @@
   - 다음 액션: `lite_v1_primary_scope_confirmed_v2_shadow_collecting`, `openai_failback_active_with_v2_shadow_gap`, `defer_region_or_model_gap`, `fail_endpoint_scope_leak` 중 하나로 닫는다.
 
 - [ ] `[ThresholdEnvAutoApplyPreopen0526] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-05-26`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
-  - Source: [threshold_cycle_ev_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-22.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
-  - 판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.
+  - Source: [threshold_cycle_ev_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-22.json), [runtime_apply_gap_audit_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_2026-05-22.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
+  - 판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다. 특히 runtime apply gap retry queue의 `entry_wait6579_score66_69_recovery_gate_v1:2026-05-22`는 `producer_state=live_auto_apply_ready`, `bridge_state=live_auto_apply_ready`, `runtime_hook_state=mapped`, `failure_state=retry_pending`, `next_retry_stage=preopen_apply_candidate`이므로 05-26 장전 apply plan/runtime env에서 소비됐는지 family 단위로 확인한다.
   - 금지: blocked family, approval artifact missing, same-stage owner conflict를 수동 env override로 우회하지 않는다.
-  - 다음 액션: `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.
+  - 다음 액션: `entry_wait6579_score66_69_env_generated`, `entry_wait6579_score66_69_retry_not_consumed`, `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.
 
 - [ ] `[OpenAIAndLiteTransportPreopenConfirm0526] OpenAI WS 유지 및 Lite endpoint provenance 확인` (`Due: 2026-05-26`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: RuntimeStability`)
   - Source: [openai_ws_stability_2026-05-22.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-22.md), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py)

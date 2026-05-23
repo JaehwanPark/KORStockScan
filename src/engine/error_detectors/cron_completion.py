@@ -332,12 +332,33 @@ class CronCompletionDetector(BaseDetector):
 
     @staticmethod
     def _read_tail(path: Path, n: int) -> str:
+        paths = CronCompletionDetector._log_bundle_paths(path)
+        lines: list[str] = []
+        for item in paths:
+            lines.extend(CronCompletionDetector._read_tail_lines(item, n))
+        return "".join(lines[-n:])
+
+    @staticmethod
+    def _log_bundle_paths(path: Path) -> list[Path]:
+        rotated: list[tuple[int, Path]] = []
+        try:
+            candidates = path.parent.glob(f"{path.name}.*")
+        except OSError:
+            candidates = []
+        for candidate in candidates:
+            suffix = candidate.name.removeprefix(f"{path.name}.")
+            if suffix.isdigit():
+                rotated.append((int(suffix), candidate))
+        return [item for _, item in sorted(rotated, reverse=True)] + [path]
+
+    @staticmethod
+    def _read_tail_lines(path: Path, n: int) -> list[str]:
         try:
             with open(path, "r", encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
-                return "".join(lines[-n:])
+                return lines[-n:]
         except OSError:
-            return ""
+            return []
 
     @staticmethod
     def _count_errors(text: str) -> int:

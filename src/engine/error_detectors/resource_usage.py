@@ -133,7 +133,12 @@ class ResourceUsageDetector(BaseDetector):
         if not SAMPLER_JSONL.exists():
             return None
         try:
-            lines = SAMPLER_JSONL.read_text(encoding="utf-8").strip().splitlines()
+            with SAMPLER_JSONL.open("rb") as fh:
+                try:
+                    fh.seek(-65536, os.SEEK_END)
+                except OSError:
+                    fh.seek(0)
+                lines = fh.read().decode("utf-8", errors="replace").strip().splitlines()
             if not lines:
                 return None
             latest = lines[-1]

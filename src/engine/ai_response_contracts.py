@@ -385,6 +385,96 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
         },
         "required": ["schema_version", "interpretation", "audit", "final_conclusions"],
     },
+    "runtime_apply_gap_ai_review_v1": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "schema_version": {"type": "integer", "enum": [1]},
+            "reviewer": {"type": "string", "enum": ["runtime_apply_gap_ai_review"]},
+            "candidate_reviews": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "candidate_id": {"type": "string"},
+                        "recommended_disposition": {
+                            "type": "string",
+                            "enum": [
+                                "live_auto_apply_ready",
+                                "sim_auto_approved",
+                                "approval_required",
+                                "code_patch_required",
+                                "runtime_blocked_contract_gap",
+                                "source_quality_blocker",
+                                "safety_veto",
+                                "post_apply_attribution_pending",
+                            ],
+                        },
+                        "route_decision": {
+                            "type": "string",
+                            "enum": [
+                                "push_runtime",
+                                "keep_sim_policy",
+                                "require_approval",
+                                "require_code_patch",
+                                "block_source_quality",
+                                "block_safety",
+                                "retry_handoff",
+                            ],
+                        },
+                        "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+                        "reason": {"type": "string"},
+                        "required_followup": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": [
+                        "candidate_id",
+                        "recommended_disposition",
+                        "route_decision",
+                        "confidence",
+                        "reason",
+                        "required_followup",
+                    ],
+                },
+            },
+            "audit": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "status": {"type": "string", "enum": ["pass", "retry_required", "correction_required"]},
+                    "issues": {"type": "array", "items": {"type": "string"}},
+                    "reason": {"type": "string"},
+                },
+                "required": ["status", "issues", "reason"],
+            },
+            "codex_directives": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "directive_type": {
+                            "type": "string",
+                            "enum": [
+                                "IMPLEMENT_RUNTIME_BRIDGE_FOR_ENTRY_BUCKET",
+                                "IMPLEMENT_SCALE_IN_POLICY_CONTRACT",
+                                "FIX_PRODUCER_CONSUMER_HANDOFF",
+                                "ADD_POST_APPLY_ATTRIBUTION",
+                                "RESOLVE_SOURCE_ONLY_STUCK_POSITIVE_EDGE",
+                                "PROMOTE_APPROVAL_READY_DRY_RUN_AXIS",
+                                "RETRY_FAILED_AI_REVIEW",
+                                "RETRY_MISSING_ARTIFACT_CHAIN",
+                            ],
+                        },
+                        "candidate_id": {"type": "string"},
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["directive_type", "candidate_id", "reason"],
+                },
+            },
+        },
+        "required": ["schema_version", "reviewer", "candidate_reviews", "audit", "codex_directives"],
+    },
     "lifecycle_ai_context_v1": {
         "type": "object",
         "additionalProperties": False,
