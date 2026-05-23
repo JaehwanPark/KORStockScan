@@ -78,7 +78,7 @@
   - 금지: probe source gap을 스윙 real order 승인, dry-run 해제, threshold apply, broker/provider/bot 변경 근거로 쓰지 않는다.
   - 다음 액션: `probe_handoff_pass`, `producer_missing`, `source_book_join_gap`, `postclose_consumer_gap` 중 하나로 닫는다.
 
-## 장후 체크리스트 (16:30~18:55)
+## 장후 체크리스트 (16:30~19:10)
 
 - [x] `[BedrockNovaMicroCumulativeDecision0526] Nova Micro 하루 추가 관찰 후 누적 exact join 판정` (`Due: 2026-05-26`, `Slot: POSTCLOSE`, `TimeWindow: 17:40~18:05`, `Track: AITransport`)
   - Source: [bedrock_nova_micro_one_day_decision.py](/home/ubuntu/KORStockScan/src/tests/bedrock_nova_micro_one_day_decision.py), [bedrock_nova_micro_shadow_2026-05-21.jsonl](/home/ubuntu/KORStockScan/data/report/bedrock_nova_micro_shadow/bedrock_nova_micro_shadow_2026-05-21.jsonl), [bedrock_nova_micro_shadow_2026-05-22.jsonl](/home/ubuntu/KORStockScan/data/report/bedrock_nova_micro_shadow/bedrock_nova_micro_shadow_2026-05-22.jsonl), `bedrock_nova_micro_shadow_2026-05-26.jsonl`, `sim_post_sell_evaluations_YYYY-MM-DD.jsonl`
@@ -117,6 +117,12 @@
   - 판정 기준: 당일 변경/관찰 결과를 기준으로 `remove`, `observe-only`, `baseline-promote`, `active-canary` 상태 변동 여부를 닫는다.
   - 금지: shadow 금지, canary-only, baseline 승격 원칙을 코드/문서 상태와 분리하지 않는다.
   - 다음 액션: 변경이 있으면 기준문서와 checklist를 함께 갱신하고 cohort 잠금 필드를 남긴다.
+
+- [ ] `[EngineRefactorSafeSliceNext0526] src.engine Phase 2+ 다음 safe slice 선정 및 Phase Final gate 확인` (`Due: 2026-05-26`, `Slot: POSTCLOSE`, `TimeWindow: 18:55~19:10`, `Track: Plan`)
+  - Source: [src-engine-refactor-inventory.md](/home/ubuntu/KORStockScan/docs/proposals/src-engine-refactor-inventory.md), [server_report_comparison.py](/home/ubuntu/KORStockScan/src/engine/server_report_comparison.py), [monitoring/server_report_comparison.py](/home/ubuntu/KORStockScan/src/engine/monitoring/server_report_comparison.py), [error_detector_coverage.py](/home/ubuntu/KORStockScan/src/engine/error_detector_coverage.py), [monitoring/error_detector_coverage.py](/home/ubuntu/KORStockScan/src/engine/monitoring/error_detector_coverage.py)
+  - 판정 기준: Phase 2 Slice 1 wrapper/old-new import/CLI smoke와 targeted test 결과를 기준으로 다음 slice를 report-only 또는 infra 성격 2~4개 파일로만 선정한다. 새 canonical path는 `src.engine.<package>.<module>`로 두고, 기존 `src.engine.<module>` wrapper는 유지한다. Phase Final consumer migration은 안정화된 slice에 한해 deploy/test/docs current path를 점진 변경할 준비 상태만 판정한다.
+  - 금지: 초기 slice에서 runtime/order/provider/threshold/bot restart 경로를 이동하지 않는다. bulk move, `MetaPathFinder` shim, preopen/postclose 안정 검증 전 wrapper 제거, retired/offline/backup 파일 재편입을 금지한다.
+  - 다음 액션: `next_slice_selected`, `defer_dirty_worktree`, `consumer_migration_ready_keep_wrappers`, `wrapper_keep_required`, `blocked_by_runtime_path` 중 하나로 닫고, 구현 시 각 slice마다 `구현 -> 코드리뷰 -> 수정보완 -> 재검증` 결과를 남긴다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
