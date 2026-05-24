@@ -31,6 +31,8 @@ IMPLEMENTATION_ORDER_ID = "order_swing_strategy_discovery_source_quality_followu
 LABEL_HORIZONS = {"1d": 1, "5d": 5, "10d": 10}
 ENTRY_LOOKAHEAD_DAYS = 3
 PULLBACK_LIMIT_PCT = -1.5
+BOTTOM_REBOUND_RETEST_LIMIT_PCT = -0.2
+BOTTOM_REBOUND_ATR_PULLBACK_LIMIT_PCT = -1.0
 BREAKOUT_TRIGGER_PCT = 1.5
 GAP_FADE_GAP_PCT = 1.5
 GAP_FADE_LIMIT_PCT = 0.3
@@ -133,6 +135,9 @@ def simulate_entry(entry_policy: str, reference_price: float, future_quotes: lis
     if entry_policy == "next_open_entry":
         q = future_quotes[0]
         return EntryResult("entered", q.quote_date, q.open_price, "next_open")
+    if entry_policy == "bottom_rebound_next_open_entry":
+        q = future_quotes[0]
+        return EntryResult("entered", q.quote_date, q.open_price, "bottom_rebound_next_open")
     lookahead = future_quotes[:ENTRY_LOOKAHEAD_DAYS]
     if entry_policy == "pullback_limit_entry":
         limit_price = _price_at_pct(reference_price, PULLBACK_LIMIT_PCT)
@@ -140,6 +145,24 @@ def simulate_entry(entry_policy: str, reference_price: float, future_quotes: lis
             if q.low_price <= limit_price:
                 return EntryResult("entered", q.quote_date, limit_price, "pullback_limit_touched")
         return EntryResult("expired" if len(lookahead) >= ENTRY_LOOKAHEAD_DAYS else "pending_future_quotes", reason="pullback_not_touched")
+    if entry_policy == "bottom_rebound_signal_close_retest_limit_entry":
+        limit_price = _price_at_pct(reference_price, BOTTOM_REBOUND_RETEST_LIMIT_PCT)
+        for q in lookahead:
+            if q.low_price <= limit_price:
+                return EntryResult("entered", q.quote_date, limit_price, "bottom_rebound_signal_close_retest_touched")
+        return EntryResult(
+            "expired" if len(lookahead) >= ENTRY_LOOKAHEAD_DAYS else "pending_future_quotes",
+            reason="bottom_rebound_signal_close_retest_not_touched",
+        )
+    if entry_policy == "bottom_rebound_atr_pullback_limit_entry":
+        limit_price = _price_at_pct(reference_price, BOTTOM_REBOUND_ATR_PULLBACK_LIMIT_PCT)
+        for q in lookahead:
+            if q.low_price <= limit_price:
+                return EntryResult("entered", q.quote_date, limit_price, "bottom_rebound_atr_pullback_touched")
+        return EntryResult(
+            "expired" if len(lookahead) >= ENTRY_LOOKAHEAD_DAYS else "pending_future_quotes",
+            reason="bottom_rebound_atr_pullback_not_touched",
+        )
     if entry_policy == "breakout_confirm_entry":
         trigger_price = _price_at_pct(reference_price, BREAKOUT_TRIGGER_PCT)
         for q in lookahead:
@@ -426,6 +449,7 @@ def process_arm(session: Any, arm: SwingStrategyDiscoveryArm) -> dict[str, Any]:
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
             "runtime_effect": False,
+            "allowed_runtime_apply": False,
         }
     )
     arm.arm_features = json.dumps(features, ensure_ascii=False, sort_keys=True, default=str)
@@ -476,6 +500,7 @@ def build_swing_strategy_discovery_labels(
         "decision_authority": DECISION_AUTHORITY,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
+        "allowed_runtime_apply": False,
         "refresh_matured": bool(refresh_matured),
         "implementation_status": "implemented",
         "implementation_provenance": {

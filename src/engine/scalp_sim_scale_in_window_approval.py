@@ -1,4 +1,4 @@
-"""Build the sim-only scalp scale-in window expansion approval artifact."""
+"""Build the sim-auto scalp scale-in window expansion artifact."""
 
 from __future__ import annotations
 
@@ -31,6 +31,7 @@ def _read_json(path: Path) -> dict[str, Any]:
 def build_scalp_sim_scale_in_window_approval(target_date: str) -> dict[str, Any]:
     target_date = str(target_date).strip()
     matrix_path = REPORT_DIR / f"lifecycle_decision_matrix_{target_date}.json"
+    matrix_exists = matrix_path.exists()
     matrix = _read_json(matrix_path)
     summary = matrix.get("summary") if isinstance(matrix.get("summary"), dict) else {}
     source = matrix.get("sources") if isinstance(matrix.get("sources"), dict) else {}
@@ -40,6 +41,13 @@ def build_scalp_sim_scale_in_window_approval(target_date: str) -> dict[str, Any]
         (item for item in policy_entries if isinstance(item, dict) and item.get("stage") == "scale_in"),
         {},
     )
+    if not matrix_exists:
+        source_quality_status = "source_report_missing"
+    elif not matrix:
+        source_quality_status = "source_report_unreadable"
+    else:
+        source_quality_status = "pass"
+    auto_approved = source_quality_status == "pass"
     artifact = {
         "schema_version": 1,
         "policy_id": POLICY_ID,
@@ -47,11 +55,18 @@ def build_scalp_sim_scale_in_window_approval(target_date: str) -> dict[str, Any]
         "stage": "scale_in",
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "approved": False,
-        "approval_state": "approval_required",
-        "decision_authority": "sim_observation_only",
-        "runtime_effect": "sim_only_virtual_scale_in_when_approved",
-        "source_report": str(matrix_path) if matrix_path.exists() else None,
+        "approved": auto_approved,
+        "approval_state": "sim_auto_approved" if auto_approved else "source_quality_blocked",
+        "human_approval_required": False,
+        "decision_authority": "sim_auto_approval_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": True,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "real_order_forbidden": True,
+        "source_report": str(matrix_path) if matrix_exists else None,
+        "source_quality_status": source_quality_status,
+        "blocked_reasons": [] if auto_approved else [source_quality_status],
         "source_summary": {
             "matrix_status": summary.get("status"),
             "scale_in_rows": scale_source.get("rows", 0),
@@ -82,8 +97,9 @@ def build_scalp_sim_scale_in_window_approval(target_date: str) -> dict[str, Any]
             "broker_order_forbidden": True,
             "real_order_forbidden": True,
             "same_stage_owner": "scalp_sim_scale_in_window_expansion",
-            "runtime_apply_path": "next_preopen_only_after_approved_true",
-            "operator_action": "set approved=true after reviewing this artifact",
+            "runtime_apply_path": "next_preopen_sim_policy_auto",
+            "operator_action": "none_required_for_sim_policy",
+            "human_approval_required": False,
         },
         "forbidden_uses": [
             "real_scale_in_order",
@@ -99,11 +115,11 @@ def build_scalp_sim_scale_in_window_approval(target_date: str) -> dict[str, Any]
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build scalp sim scale-in window approval artifact.")
+    parser = argparse.ArgumentParser(description="Build scalp sim scale-in window sim-auto artifact.")
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
     args = parser.parse_args(argv)
     artifact = build_scalp_sim_scale_in_window_approval(args.target_date)
-    print(json.dumps(artifact, ensure_ascii=False))
+    print(json.dumps(artifact, ensure_ascii=True))
     return 0
 
 

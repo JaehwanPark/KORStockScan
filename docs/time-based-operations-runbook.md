@@ -18,16 +18,16 @@
 - `latency_classifier_runtime_profile`은 제출 고갈을 숨기는 CAUTION 차단 owner가 아니다. `EntryPolicy`는 slippage check 이후 `SAFE`와 `CAUTION`을 normal submit으로 보내고, `DANGER`, stale quote, broker/account/order/qty/cooldown guard만 차단한다. `latency_classifier_recommendation`은 DANGER/stale/broker submit 품질 감사와 counterfactual proof 확인용 report로 남기며 adaptive latency env apply는 기본 차단한다. `pre_submit_price_guard`는 후행 가격품질 guard이며 `submitted=0`의 primary owner로 쓰지 않는다.
 - Pattern lab은 `code_improvement_order`와 `auto_family_candidate`만 생성한다. runtime/code를 직접 변경하지 않는다. postclose chain에서 lab subprocess가 실패해도 후단 daily EV/workorder/runtime summary 생성을 보호하되, 실패 자체는 같은 checklist/runbook incident에 root cause, 재실행 결과, fresh 복구 여부를 남겨야 한다. `pattern_lab_currentness_audit`는 랩 코드/README/schema/source mode/stale-output 위험을 `runtime_effect=false` workorder 후보로 만들고, `pattern_lab_propagation_audit`는 lab automation -> code workorder -> threshold EV -> runtime summary 연결을 source-quality audit로만 검증한다.
 - sim-first lifecycle은 새 독립 체인이 아니라 기존 threshold-cycle 자동화체인의 입력 범위 확장이다. 스캘핑과 스윙 모두 BUY/선정 가능 후보를 `selection -> entry -> holding -> scale_in -> exit -> attribution` 전주기 가상 관찰 대상으로 최대한 남기고, 실계좌 예수금 부족, 1주 cap, 현재 selected runtime family 여부, approval artifact 부재를 sim/probe 후보 생성 제외 사유로 쓰지 않는다.
-- 스윙은 `SWING_LIVE_ORDER_DRY_RUN_ENABLED=True` 기본값에서 live 선정-진입-보유-추가매수-청산 로직을 실행하되 브로커 주문 접수만 차단한다. `SWING_INTRADAY_LIVE_EQUIV_PROBE_ENABLED=True`이면 진입 전 block stage에서 `swing_probe_*` virtual holding을 생성해 live 보유 이후 데이터를 observe-only로 수집한다. `SWING_ENABLE_AVG_DOWN_SIMULATION=True`와 `SWING_SCALE_IN_DYNAMIC_QTY_ENABLED=True`는 dry-run/probe 안에서 AVG_DOWN/PYRAMID 후보와 `would_qty`/`effective_qty`를 남긴다. `swing_scale_in_real_canary_phase0`는 별도 approval artifact가 있을 때만 승인된 real swing holding의 AVG_DOWN/PYRAMID 추가매수 1주 주문을 허용하며, sim/probe/dry-run 포지션과 OFI/QI `RISK_BEARISH`/stale quote는 fail-closed로 차단한다. `swing_sim_*`/`swing_probe_*` stage와 `actual_order_submitted=false`는 실제 `order_bundle_submitted`/`sell_order_sent`와 분리해서 본다.
-- 추가매수 arm은 공통 master gate와 arm별 gate를 분리해서 판정한다. `ENABLE_SCALE_IN=False`는 AVG_DOWN/PYRAMID를 모두 닫는 공통 차단이고, 스캘핑은 `REVERSAL_ADD_ENABLED`(AVG_DOWN)와 `SCALPING_ENABLE_PYRAMID`(PYRAMID), 스윙 sim/probe는 `SWING_ENABLE_AVG_DOWN_SIMULATION`(AVG_DOWN)와 `SWING_ENABLE_PYRAMID`(PYRAMID)로 한쪽 arm만 열 수 있다. 스윙 scale-in real canary는 별도 approval artifact의 `allowed_actions`와 `SWING_SCALE_IN_REAL_CANARY_ALLOWED_ARMS`가 일치한 arm만 허용한다.
+- 스윙은 `SWING_LIVE_ORDER_DRY_RUN_ENABLED=True` 기본값에서 live 선정-진입-보유-추가매수-청산 로직을 실행하되 브로커 주문 접수만 차단한다. `SWING_INTRADAY_LIVE_EQUIV_PROBE_ENABLED=True`이면 진입 전 block stage에서 `swing_probe_*` virtual holding을 생성해 live 보유 이후 데이터를 observe-only로 수집한다. `SWING_ENABLE_AVG_DOWN_SIMULATION=True`와 `SWING_SCALE_IN_DYNAMIC_QTY_ENABLED=True`는 dry-run/probe 안에서 AVG_DOWN/PYRAMID 후보와 `would_qty`/`effective_qty`를 남긴다. `swing_one_share_real_canary_phase0`와 `swing_scale_in_real_canary_phase0`는 source report hard floor/source-quality/allowlist/cap 통과 시 phase0 자동승인으로 각각 초기 1주 BUY/SELL과 승인된 real swing holding의 AVG_DOWN/PYRAMID 1주 추가매수를 허용한다. sim/probe/dry-run 포지션과 OFI/QI `RISK_BEARISH`/stale quote는 fail-closed로 차단한다. `swing_sim_*`/`swing_probe_*` stage와 `actual_order_submitted=false`는 실제 `order_bundle_submitted`/`sell_order_sent`와 분리해서 본다.
+- 추가매수 arm은 공통 master gate와 arm별 gate를 분리해서 판정한다. `ENABLE_SCALE_IN=False`는 AVG_DOWN/PYRAMID를 모두 닫는 공통 차단이고, 스캘핑은 `REVERSAL_ADD_ENABLED`(AVG_DOWN)와 `SCALPING_ENABLE_PYRAMID`(PYRAMID), 스윙 sim/probe는 `SWING_ENABLE_AVG_DOWN_SIMULATION`(AVG_DOWN)와 `SWING_ENABLE_PYRAMID`(PYRAMID)로 한쪽 arm만 열 수 있다. 스윙 scale-in real canary는 source report auto approval의 `allowed_actions`와 `SWING_SCALE_IN_REAL_CANARY_ALLOWED_ARMS`가 일치한 arm만 허용하며, optional artifact가 있으면 더 좁은 arm/cap을 적용한다.
 - 스윙 self-improvement는 `selection -> db_load -> entry -> holding -> scale_in -> exit -> attribution` 전체 lifecycle을 대상으로 하며, DB load gap, OFI/QI, AI contract, AVG_DOWN/PYRAMID 관찰축은 report-only/proposal-only다.
-- 스윙 runtime 반영은 `proposal -> approval_required -> approved_live(dry-run)`만 허용한다. `swing_runtime_approval`이 hard floor와 EV trade-off score로 승인 요청을 만들 수 있지만, `approval_required`만으로 env를 쓰지 않는다. 사용자가 approval artifact를 남긴 경우에만 다음 장전 preopen apply가 env를 생성하며, 이때도 `SWING_LIVE_ORDER_DRY_RUN_ENABLED=True`와 브로커 주문 차단은 유지한다.
-- 스윙 1주 real canary는 별도 approval-required 축이다. 전체 dry-run 해제가 아니라 승인된 극소수 스윙 후보에만 실제 1주 BUY/SELL을 보내 broker execution 품질을 수집하는 경로이며, phase0에서는 추가매수/AVG_DOWN/PYRAMID 실주문을 열지 않는다.
+- 일반 스윙 runtime 반영은 `proposal -> approval_required -> approved_live(dry-run)`만 허용한다. `swing_runtime_approval`이 hard floor와 EV trade-off score로 승인 요청을 만들 수 있지만, 일반 `approval_required`만으로 env를 쓰지 않는다. 사용자가 approval artifact를 남긴 경우에만 다음 장전 preopen apply가 env를 생성하며, 이때도 `SWING_LIVE_ORDER_DRY_RUN_ENABLED=True`와 브로커 주문 차단은 유지한다.
+- 스윙 1주 real canary와 scale-in 1주 real canary는 phase0 auto-approved 축이다. 전체 dry-run 해제가 아니라 source report hard floor/source-quality/allowlist/cap을 통과한 극소수 스윙 후보나 승인된 real holding에만 실제 1주 주문을 보내 broker execution 품질을 수집하는 경로다.
 - 스캘핑 simulator와 스윙 dry-run 성과는 `real`, `sim`, `combined`로 분리해 본다. `real`은 실제 브로커 주문이 접수된 포지션/체결, `sim`은 `actual_order_submitted=false`인 가상 체결, `combined`는 둘을 합친 calibration view다. sim/probe 수량은 기본 `SIM_VIRTUAL_BUDGET_KRW=10,000,000` 가상 주문가능금액과 실주문 동적수량 산식으로 계산하며 실계좌 주문가능금액과 분리한다. tuning 후보 산출에는 combined를 사용할 수 있지만, provenance와 execution-quality 평가는 real/sim을 절대 섞지 않는다.
 - OFI/QI source-quality, DeepSeek data-quality, workorder lineage 같은 report-only 값은 자동화 체인의 입력으로 쓸 수 있다. 단, source-quality blocker나 workorder 생성 자체는 runtime mutation 권한이 아니며, approval artifact 또는 `auto_bounded_live` guard 없이 live env/order guard로 승격하지 않는다.
 - Sentinel은 Telegram 알림 기능을 제거한 운영 감시/report-only 축이다. 이상치는 mutation이 아니라 threshold source bundle, incident, instrumentation gap, normal drift로 라우팅한다.
 - BUY Telegram은 브로커 주문 제출에 성공한 BUY만 전체 대상에게 보낸다. AI confirmed/BUY 후보/시뮬레이션/probe/pre-submit 분석 단계는 Telegram으로 보내지 않는다.
-- 사람이 반드시 개입하는 지점은 운영 장애, discovery 범위 밖 approval request를 검토해 approval artifact 생성 여부를 결정하는 단계, 생성된 code improvement workorder를 Codex 세션에 넣어 구현을 요청하는 단계, 문서 backlog Project/Calendar 동기화다. `lifecycle_bucket_discovery`/`runtime_apply_bridge` 때문에 사용자가 눌러야 할 승인 종류가 새로 늘어난 것은 아니다. entry/scale live-auto 후보는 AI 2-pass와 contract/env/runtime hook/post-apply attribution이 닫힌 경우 approval artifact 없이 다음 PREOPEN 후보로 소비되고, discovery 범위 밖 approval-required 후보만 기존 방식대로 approval artifact 생성 여부를 결정한다.
+- 사람이 반드시 개입하는 지점은 운영 장애, discovery 범위 밖 일반 approval request를 검토해 approval artifact 생성 여부를 결정하는 단계, 생성된 code improvement workorder를 Codex 세션에 넣어 구현을 요청하는 단계, 문서 backlog Project/Calendar 동기화다. `lifecycle_bucket_discovery`/`runtime_apply_bridge` 때문에 사용자가 눌러야 할 승인 종류가 새로 늘어난 것은 아니다. entry/scale live-auto 후보와 phase0 swing real canary 후보는 contract/env/runtime hook/post-apply attribution 및 source-quality/cap/allowlist가 닫힌 경우 approval artifact 없이 다음 PREOPEN 후보로 소비되고, discovery 범위 밖 일반 approval-required 후보만 기존 방식대로 approval artifact 생성 여부를 결정한다.
 - `build_codex_daily_workorder`는 이 runbook의 장전/장중/장후 확인절차를 `Runbook 운영 확인` 블록으로 자동 포함한다. 단, 같은 날짜 checklist에 `PreopenAutomationHealthCheckYYYYMMDD`/`IntradayAutomationHealthCheckYYYYMMDD`/`PostcloseAutomationHealthCheckYYYYMMDD` 운영 확인 기록이 남은 슬롯은 이미 처리된 것으로 보고 같은 날짜 workorder에서 제외한다. 같은 확인 큐는 `RunbookOps` track으로 GitHub Project와 Google Calendar에도 동기화되어 operator가 놓치지 않게 한다. GitHub Project 동기화가 rate limit 등으로 지연돼도 workorder는 기본값 `CODEX_WORKORDER_INCLUDE_LOCAL_DOCS=true`로 로컬 checklist 미완료 항목을 병합한다.
 - 이 문서에서 “확인”은 artifact, log, source-of-truth 문서를 읽고 아래 `판정 상태 정의` 중 하나로 분류하는 행위다. 확인만으로 live env, runtime threshold, broker 주문 상태를 변경하지 않는다.
 
@@ -567,40 +567,40 @@ ls -l data/daily_recommendations_v2.csv data/daily_recommendations_v2_diagnostic
 | gatekeeper/market regime sensitivity | gatekeeper reject, regime split, open/entered funnel을 dry-run lifecycle로 수집 | `swing_gatekeeper_reject_cooldown`, `swing_market_regime_sensitivity` 승인 요청 생성에 사용 | instrumentation gap, same-stage owner conflict, regime label 생성 오류 |
 | entry/holding/exit | sim lifecycle이 청산까지 닫힌 row를 completed EV, downside tail, hold/defer cost, exit timing 후보로 사용 | entry/holding/exit trade-off score와 승인 요청 근거로 사용. 일부 soft metric이 부족해도 hard floor와 총점이 통과하면 요청 가능 | 실제 매수/매도 execution 품질은 현재 스윙 dry-run 상태에서는 판정하지 않음 |
 | AVG_DOWN/PYRAMID/OFI-QI/AI contract | 관찰/제안 입력으로 사용하되 live env apply 대상은 아님 | workorder 또는 approval request 후보까지 허용 | 별도 family guard가 생기기 전까지 runtime live env 반영 차단 |
-| 승인 요청 생성 | closed sim lifecycle과 real completed가 함께 hard floor 및 trade-off score 입력이 된다 | `overall_ev 45% + downside_tail 20% + participation/funnel 15% + regime_robustness 10% + attribution_quality 10%` 총점이 `0.68` 이상이면 요청 가능 | approval artifact 없이는 preopen env 반영 금지. 반영되더라도 dry-run 유지 |
+| 승인 요청 생성 | closed sim lifecycle과 real completed가 함께 hard floor 및 trade-off score 입력이 된다 | `overall_ev 45% + downside_tail 20% + participation/funnel 15% + regime_robustness 10% + attribution_quality 10%` 총점이 `0.68` 이상이면 요청 가능 | 일반 요청은 approval artifact 없이는 preopen env 반영 금지. Phase0 real canary는 source report auto approval을 사용한다. 반영되더라도 dry-run 유지 |
 | 1주 real canary | EV 후보 선별과 approval request 생성에는 closed sim lifecycle을 사용 | 승인 대상 우선순위와 expected EV trade-off 산정에 combined 사용 | 실제 BUY/SELL receipt, order number binding, fill ratio, slippage, cancel/timeout, sell receipt는 real-only |
 | 전체 실주문 전환 | 사용하지 않음 | 사용하지 않음 | 별도 2차 계획/승인, broker execution guard, dry-run 해제 승인 없이는 금지 |
 
 ### 스윙 1주 Real Canary 진행 기준
 
-`swing_one_share_real_canary`는 스윙 dry-run 체계를 유지한 상태에서 broker execution 품질만 real source로 보강하는 phase0 축이다. 이 축은 `swing_runtime_approval`과 별도 approval artifact가 있어야만 다음 장전 preopen apply에서 열 수 있다.
+`swing_one_share_real_canary`는 스윙 dry-run 체계를 유지한 상태에서 broker execution 품질만 real source로 보강하는 phase0 축이다. 이 축은 `swing_runtime_approval` source report가 phase0 auto approval로 닫혀야 다음 장전 preopen apply에서 열 수 있다. 별도 artifact는 allowlist/cap narrowing 용도다.
 
 | 항목 | phase0 기준 |
 | --- | --- |
-| 기본 상태 | OFF / approval-required |
+| 기본 상태 | OFF / phase0 auto-approved when source gates pass |
 | 전제 | `swing_runtime_approval` hard floor 통과, EV trade-off score 통과, DB load gap 없음, fallback diagnostic contamination 없음, critical instrumentation gap 없음, severe downside guard 통과, same-stage owner conflict 없음 |
-| 승인 | `approval_required`만으로는 부족하다. 사용자가 `data/threshold_cycle/approvals/swing_one_share_real_canary_YYYY-MM-DD.json` approval artifact를 남긴 경우에만 다음 장전 적용한다 |
+| 승인 | `auto_approved_real_canary` source request가 있어야 다음 장전 적용한다. Optional `data/threshold_cycle/approvals/swing_one_share_real_canary_YYYY-MM-DD.json` artifact는 allowlist/cap narrowing에만 사용한다 |
 | env | `KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_ENABLED`, `KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_ALLOWED_CODES`, `KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_MAX_QTY`, `KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_MAX_NEW_ENTRIES_PER_DAY`, `KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_MAX_OPEN_POSITIONS`, `KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_MAX_TOTAL_NOTIONAL_KRW`, `KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT` |
 | 수량/노출 | `qty=1`, `max_new_entries_per_day=1`, `max_open_positions=3`, `max_total_notional_krw=300000`, same-symbol active real canary 1개 |
 | 주문 범위 | 승인 후보의 BUY와 해당 포지션 청산 SELL만 실제 주문. phase0에서는 AVG_DOWN/PYRAMID/scale-in 실주문 금지 |
 | provenance | `actual_order_submitted=true`, `simulation_book` 없음, `cohort=swing_one_share_real_canary`, `canary_qty_cap=1`, 승인 id 기록 |
 | real-only metric | broker receipt, order number binding, submit/reject, partial/full fill, slippage, cancel/timeout, sell receipt, 주문 실패율 |
 | combined metric | realized PnL과 lifecycle outcome은 combined EV에 들어갈 수 있지만 sim fill quality와 real fill quality는 합산하지 않는다 |
-| rollback | approval artifact 밖 실주문 1건, qty > 1, global dry-run 해제, receipt/order number mismatch, sell failure, price guard breach, daily/open/notional cap 초과, provenance 누락 |
+| rollback | auto approval/allowlist 밖 실주문 1건, qty > 1, global dry-run 해제, receipt/order number mismatch, sell failure, price guard breach, daily/open/notional cap 초과, provenance 누락 |
 
-`threshold_cycle_preopen_apply`는 artifact가 없으면 `one_share_real_canary_approval_artifact_missing`으로 env를 만들지 않는다. artifact가 있어도 `SWING_LIVE_ORDER_DRY_RUN_ENABLED=True`를 유지하고 승인 code allowlist 밖 초기 BUY는 runtime에서 fail-closed 차단한다.
+`threshold_cycle_preopen_apply`는 source report auto approval이 없으면 env를 만들지 않는다. Auto approval이 있어도 `SWING_LIVE_ORDER_DRY_RUN_ENABLED=True`를 유지하고 승인 code allowlist 밖 초기 BUY는 runtime에서 fail-closed 차단한다.
 
 운영자는 이 기준이 충족되어도 스윙 전체 실주문 전환으로 해석하지 않는다. real canary가 통과한 뒤 전체 dry-run 해제를 검토하려면 별도 2차 계획, broker execution guard, 사용자 승인이 필요하다.
 
 ### 스윙 Scale-In Real Canary 진행 기준
 
-`swing_scale_in_real_canary_phase0`는 initial BUY/SELL real canary와 분리된 별도 approval-required 축이다. 이 축은 전체 스윙 실매매 전환이 아니라 이미 승인된 real swing holding에서 AVG_DOWN/PYRAMID 추가매수 주문 품질을 1주 cap으로 수집한다.
+`swing_scale_in_real_canary_phase0`는 initial BUY/SELL real canary와 분리된 phase0 auto-approved 축이다. 이 축은 전체 스윙 실매매 전환이 아니라 이미 승인된 real swing holding에서 AVG_DOWN/PYRAMID 추가매수 주문 품질을 1주 cap으로 수집한다.
 
 | 항목 | phase0 기준 |
 | --- | --- |
 | 기본 상태 | OFF / `KORSTOCKSCAN_SWING_SCALE_IN_REAL_CANARY_ENABLED=false` |
-| 승인 artifact | `data/threshold_cycle/approvals/swing_scale_in_real_canary_YYYY-MM-DD.json` |
-| 허용 arm | `PYRAMID`, `AVG_DOWN` 중 arm별 hard floor를 통과하고 artifact의 `allowed_actions`에 포함된 arm만 허용 |
+| 승인 source | `data/report/swing_runtime_approval/swing_runtime_approval_YYYY-MM-DD.json`의 phase0 auto approval. Optional narrowing artifact: `data/threshold_cycle/approvals/swing_scale_in_real_canary_YYYY-MM-DD.json` |
+| 허용 arm | `PYRAMID`, `AVG_DOWN` 중 arm별 hard floor를 통과하고 source report `allowed_actions`에 포함된 arm만 허용. Optional artifact가 있으면 그 subset만 허용 |
 | 수량/노출 | `real_canary_actual_qty=1`, `max_orders_per_day=1`, `max_orders_per_position=1`, `max_daily_notional_krw=100000` |
 | 주문 방식 | 시장가 금지. best bid 또는 defensive limit resolver 가격만 허용 |
 | block | sim/probe/dry-run 포지션, 승인되지 않은 arm, stale quote, `orderbook_micro_ready=false`, OFI/QI `RISK_BEARISH`, pending add/sell, cap 초과 |
@@ -609,7 +609,7 @@ ls -l data/daily_recommendations_v2.csv data/daily_recommendations_v2_diagnostic
 
 ## 신규 Approval Artifact 처리 절차
 
-`approval_request`는 자동화체인이 만든 사용자 승인 요청이다. 생성 자체는 runtime 효과가 없으며, approval artifact가 없으면 `threshold_cycle_preopen_apply`는 env를 쓰지 않는다. 사람/operator가 남는 지점은 장후 산출물에서 승인 요청을 검토한 뒤 다음 장전 apply에 넘길 approval artifact를 만들지 결정하는 단계다. 이 절차는 code improvement workorder 검토와 같은 POSTCLOSE 수동 triage 대상이다.
+`approval_request`는 자동화체인이 만든 승인 요청이다. 일반 요청 생성 자체는 runtime 효과가 없으며, approval artifact가 없으면 `threshold_cycle_preopen_apply`는 env를 쓰지 않는다. 예외는 `swing_one_share_real_canary_phase0`와 `swing_scale_in_real_canary_phase0`의 phase0 auto approval이다. 두 축은 source report hard floor/source-quality/allowlist/cap 통과 시 다음 PREOPEN에 소비될 수 있고, optional artifact는 allowlist/cap narrowing만 수행한다. 사람/operator가 남는 지점은 장후 산출물에서 일반 승인 요청을 검토한 뒤 다음 장전 apply에 넘길 approval artifact를 만들지 결정하는 단계다. 이 절차는 code improvement workorder 검토와 같은 POSTCLOSE 수동 triage 대상이다.
 
 ### 1. Intake
 
@@ -630,13 +630,13 @@ ls -l data/daily_recommendations_v2.csv data/daily_recommendations_v2_diagnostic
 | --- | --- | --- |
 | `approval_id` | 승인 요청 식별자 | approval artifact의 `approved_request_ids`에 그대로 보존 |
 | `policy_id` / `family` | 승인 대상 축 | 지원되는 approval contract인지 확인. contract missing이면 artifact를 만들어도 live 반영 금지 |
-| `calibration_state` | 승인 요청 상태 | `approval_required`만 artifact 검토 대상. `hold_sample`, `freeze`, `blocked_by_policy`는 승인하지 않는다 |
+| `calibration_state` | 승인 요청 상태 | 일반 요청은 `approval_required`만 artifact 검토 대상. Phase0 real canary의 `auto_approved_real_canary`는 artifact 없이 PREOPEN 소비 대상이다. `hold_sample`, `freeze`, `blocked_by_policy`는 승인하지 않는다 |
 | `candidate_codes` / `candidate_rows` | 승인 후보 종목/대상 | allowlist와 일치해야 한다. 후보 밖 코드는 승인 artifact에 넣지 않는다 |
 | `allowed_actions` | scale-in real canary 허용 arm | artifact의 `allowed_actions`는 request의 subset이어야 한다 |
 | `recommended_values` | env 후보값 | cap, allowed codes, dry-run 유지 조건이 policy와 일치하는지 확인 |
 | `approval_contract_status` | artifact loader/env/runtime guard 준비 여부 | `ready`가 아니면 approval artifact 생성 대신 workorder 또는 보류로 닫는다 |
-| `approval_artifact_path` | 소비될 artifact 경로 | 해당 날짜 파일이 있어야 다음 PREOPEN apply가 소비한다 |
-| `approval_artifact_approved` | 이미 승인 artifact가 있는지 | true면 중복 생성하지 않고 target date와 approved ids를 확인한다 |
+| `approval_artifact_path` | 소비될 artifact 경로 | 일반 요청은 해당 날짜 파일이 있어야 다음 PREOPEN apply가 소비한다. Phase0 real canary는 optional narrowing artifact 경로다 |
+| `approval_artifact_approved` | 이미 승인 artifact가 있는지 | 일반 요청은 true면 중복 생성하지 않고 target date와 approved ids를 확인한다. Phase0 real canary는 `auto_approval_approved`를 우선 확인한다 |
 | `blocked_reason` / `block_reasons` | 차단 사유 | 차단이 남아 있으면 artifact를 만들지 않는다 |
 | `dry_run_required` / `global_swing_dry_run_must_remain_enabled` | dry-run 유지 계약 | approval artifact가 있어도 global dry-run 해제 금지 |
 
@@ -647,6 +647,7 @@ ls -l data/daily_recommendations_v2.csv data/daily_recommendations_v2_diagnostic
 | 판정 | 조건 | 다음 액션 |
 | --- | --- | --- |
 | `approval_artifact_required` | `approval_required`, contract ready, blocker 없음, 후보/cap이 policy와 일치 | operator가 approval artifact 생성 여부를 결정한다 |
+| `real_canary_phase0_auto_approved` | phase0 real canary, source report hard floor/source-quality/allowlist/cap 통과 | 다음 PREOPEN apply에서 selected/blocked reason과 env cap을 확인한다 |
 | `approval_artifact_created` | artifact가 생성되어 `approved=true`와 request id가 일치 | 다음 PREOPEN apply에서 selected/blocked reason을 확인한다 |
 | `approval_artifact_missing` | 승인 요청은 있으나 사용자가 아직 승인하지 않음 | env 미반영이 정상 차단임을 기록하고 다음 영업일 재검토 |
 | `blocked_by_policy` | contract missing, source-quality blocker, sample 부족, severe downside, same-stage conflict | artifact 생성 금지. workorder 또는 관찰로 라우팅 |
@@ -655,15 +656,15 @@ ls -l data/daily_recommendations_v2.csv data/daily_recommendations_v2_diagnostic
 금지선:
 
 - approval artifact를 만든다고 장중 runtime이 바뀌지 않는다. 소비 시점은 다음 PREOPEN apply다.
-- approval request만 보고 env 파일을 직접 수정하지 않는다.
+- 일반 approval request만 보고 env 파일을 직접 수정하지 않는다. Phase0 real canary도 preopen apply artifact가 env를 생성해야 한다.
 - `SWING_LIVE_ORDER_DRY_RUN_ENABLED=True`를 approval artifact로 해제하지 않는다.
-- `swing_one_share_real_canary_phase0` approval은 초기 BUY/해당 포지션 SELL 1주 execution 품질 수집만 허용한다. 전체 스윙 실매매 전환이나 scale-in 실주문 승인이 아니다.
-- `swing_scale_in_real_canary_phase0` approval은 이미 승인된 real swing holding의 승인 arm만 허용한다. sim/probe/dry-run 포지션에는 실주문을 내지 않는다.
+- `swing_one_share_real_canary_phase0` auto approval은 초기 BUY/해당 포지션 SELL 1주 execution 품질 수집만 허용한다. 전체 스윙 실매매 전환이나 scale-in 실주문 승인이 아니다.
+- `swing_scale_in_real_canary_phase0` auto approval은 이미 승인된 real swing holding의 승인 arm만 허용한다. sim/probe/dry-run 포지션에는 실주문을 내지 않는다.
 - panic/position-sizing 등 `approval_contract_missing` 축은 artifact를 만들어도 preopen env/runtime guard가 소비할 수 없으므로 먼저 code improvement workorder로 계약을 구현한다.
 
 ### 3. 현재 지원되는 Approval Artifact 작성 형식
 
-아래 3가지는 `threshold_cycle_preopen_apply`가 현재 실제로 소비하는 approval artifact 형식이다. 단순 예시가 아니며, 이 형식과 경로를 벗어난 approval artifact는 현재 preopen env 반영 근거가 아니다. panic, position sizing, 기타 신규 runtime 승인 후보처럼 `approval_contract_missing`으로 분류되는 축은 approval request가 있더라도 artifact loader, env mapping, runtime guard, rollback test가 구현되기 전까지 approval artifact를 만들어도 소비되지 않는다.
+아래 형식은 `threshold_cycle_preopen_apply`가 현재 실제로 소비하는 approval/narrowing artifact 형식이다. 단순 예시가 아니며, 이 형식과 경로를 벗어난 approval artifact는 현재 preopen env 반영 근거가 아니다. Phase0 swing real canary는 source report auto approval이 primary이고 아래 real-canary artifact는 optional narrowing이다. panic, position sizing, 기타 신규 runtime 승인 후보처럼 `approval_contract_missing`으로 분류되는 축은 approval request가 있더라도 artifact loader, env mapping, runtime guard, rollback test가 구현되기 전까지 approval artifact를 만들어도 소비되지 않는다.
 
 스윙 1주 real canary:
 

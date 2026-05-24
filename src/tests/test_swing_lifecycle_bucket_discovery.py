@@ -7,8 +7,12 @@ def test_bucket_discovery_auto_approves_sim_only_candidates(tmp_path, monkeypatc
     target = "2026-05-22"
     matrix_dir = tmp_path / "matrix"
     discovery_dir = tmp_path / "discovery"
+    sim_approval_dir = tmp_path / "sim_auto_approvals"
+    sim_policy_dir = tmp_path / "swing_sim_policies"
     matrix_dir.mkdir()
     monkeypatch.setattr(mod, "REPORT_DIR", discovery_dir)
+    monkeypatch.setattr("src.engine.swing.sim_auto_approval_control_tower.SIM_AUTO_APPROVAL_DIR", sim_approval_dir)
+    monkeypatch.setattr("src.engine.swing.sim_auto_approval_control_tower.SWING_SIM_POLICY_DIR", sim_policy_dir)
 
     matrix_path = matrix_dir / f"swing_lifecycle_decision_matrix_{target}.json"
     matrix_path.write_text(
@@ -47,6 +51,14 @@ def test_bucket_discovery_auto_approves_sim_only_candidates(tmp_path, monkeypatc
     assert candidate["allowed_runtime_apply"] is False
     assert "real_order_submit" in candidate["forbidden_uses"]
     assert report["human_intervention_required"] is False
+    assert report["allowed_runtime_apply"] is False
+
+    mod.write_report(report)
+    approval = json.loads((sim_approval_dir / "swing_sim_auto_approval_2026-05-22.json").read_text())
+    catalog = json.loads((sim_policy_dir / "swing_sim_policy_catalog_2026-05-22.json").read_text())
+    assert approval["approved"] is True
+    assert approval["approved_source_ids"] == ["swing_lifecycle_bucket_discovery"]
+    assert catalog["policies"][0]["bucket_id"] == candidate["bucket_id"]
 
 
 def test_bucket_discovery_flags_daily_simulation_contract_gap(tmp_path, monkeypatch):

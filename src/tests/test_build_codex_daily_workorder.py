@@ -131,7 +131,7 @@ def test_build_runbook_operational_checks_for_slot(monkeypatch):
     assert "threshold_apply_2026-05-11.json" in "\n".join(checks[0].artifact_checks)
     assert "swing_runtime_approval" in "\n".join(checks[0].artifact_checks)
     assert "수동 env override" in checks[0].forbidden
-    assert "approval artifact 없는 스윙 env 반영" in checks[0].forbidden
+    assert "approval artifact 또는 phase0 auto-approval 없는 스윙 env 반영" in checks[0].forbidden
     assert "스윙 dry-run 해제" in checks[0].forbidden
 
     all_checks = build_runbook_operational_checks(target_date="2026-05-11", slots=None)

@@ -372,6 +372,7 @@ def build_swing_strategy_discovery_ev_report(
         "decision_authority": DECISION_AUTHORITY,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
+        "allowed_runtime_apply": False,
         "sample_floor": SAMPLE_FLOOR,
         "primary_metrics": [
             "equal_weight_avg_final_return_pct",

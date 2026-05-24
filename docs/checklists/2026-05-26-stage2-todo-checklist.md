@@ -3,7 +3,7 @@
 ## 오늘 목적
 
 - 전일 postclose 자동화가 만든 장전 apply 후보와 사용자 개입 요구사항을 산출물 기준으로 확인한다.
-- 실주문, threshold, provider, sim/probe 관련 변경은 approval artifact와 checklist 기준 없이 열지 않는다.
+- 실주문, threshold, provider, sim/probe 관련 변경은 approval artifact 또는 명시적 phase0 auto-approval 계약과 checklist 기준 없이 열지 않는다.
 - code-improvement workorder는 자동 repo 수정이 아니라 사용자가 Codex에 구현을 지시한 경우에만 실행한다.
 - `gpt-5.4-mini` Tier2 중 `entry_price`/`holding_flow`는 Nova Lite v1 primary 전환 후 provenance와 OpenAI failback을 확인한다.
 - Nova Micro는 2026-05-22 사용자 최종 override로 shadow/duel과 누적 판정을 중단한다. Tier1은 OpenAI `gpt-5-nano` 라우팅을 유지한다.
@@ -46,11 +46,11 @@
   - 금지: provider transport 확인을 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경으로 해석하지 않는다.
   - 다음 액션: Lite endpoint 또는 OpenAI 유지 표본이 부족하면 장중 표본 재확인 항목과 연결한다.
 
-- [ ] `[SwingApprovalArtifactPreopen0526] 스윙 approval request 및 별도 승인 artifact 존재 여부 확인` (`Due: 2026-05-26`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
+- [ ] `[SwingApprovalAndCanaryPreopen0526] 스윙 approval request, phase0 auto-approval, 별도 승인 artifact 존재 여부 확인` (`Due: 2026-05-26`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
   - Source: [swing_runtime_approval_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-05-22.json), [threshold_cycle_ev_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-22.json)
-  - 판정 기준: approval request가 있더라도 사용자 승인 artifact가 없으면 env apply 대상이 아니다. 확인 대상은 `swing_runtime_approval:2026-05-22:swing_model_floor`, `swing_runtime_approval:2026-05-22:swing_gatekeeper_reject_cooldown`, `swing_one_share_real_canary:2026-05-22:phase0`다. dry-run 승인은 `data/threshold_cycle/approvals/swing_runtime_approvals_2026-05-22.json`, real canary 승인은 `data/threshold_cycle/approvals/swing_one_share_real_canary_2026-05-22.json`만 소비한다.
-  - 금지: 스윙 dry-run 해제, real canary, floor, scale-in real canary를 서로 자동 승인하지 않는다.
-  - 다음 액션: `approval_artifact_present`, `approval_artifact_missing`, `blocked_by_policy` 중 하나로 닫는다.
+  - 판정 기준: 일반 approval request는 사용자 승인 artifact가 없으면 env apply 대상이 아니다. 확인 대상은 `swing_runtime_approval:2026-05-22:swing_model_floor`, `swing_runtime_approval:2026-05-22:swing_gatekeeper_reject_cooldown`, `swing_one_share_real_canary:2026-05-22:phase0`다. dry-run 승인은 `data/threshold_cycle/approvals/swing_runtime_approvals_2026-05-22.json`을 소비한다. `swing_one_share_real_canary_phase0`와 `swing_scale_in_real_canary_phase0`는 source report hard floor/source-quality/allowlist/cap 통과 시 phase0 auto-approval로 소비하며, 별도 artifact는 allowlist/cap narrowing 용도다.
+  - 금지: 스윙 dry-run 해제, full real-order conversion, floor 일반 runtime 변경, cap release를 phase0 real canary auto-approval과 섞지 않는다.
+  - 다음 액션: `general_approval_artifact_present`, `general_approval_artifact_missing`, `real_canary_phase0_auto_approved`, `real_canary_blocked_by_policy` 중 하나로 닫는다.
 
 ## 장중 체크리스트 (09:05~15:20)
 

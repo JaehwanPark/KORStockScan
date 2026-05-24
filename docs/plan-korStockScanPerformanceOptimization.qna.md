@@ -126,9 +126,10 @@
 
 답변:
 
-1. approval request만으로는 반영하지 않는다.
-2. 별도 approval artifact가 있어야 한다.
-3. 승인 후에도 기본 스윙 dry-run과 `actual_order_submitted=false` 원칙은 유지된다. real canary는 별도 approval-required 축이다.
+1. 일반 approval request만으로는 반영하지 않는다.
+2. 일반 swing runtime env 변경은 별도 approval artifact가 있어야 한다.
+3. `swing_one_share_real_canary_phase0`와 `swing_scale_in_real_canary_phase0`는 source report hard floor/source-quality/allowlist/cap 통과 시 phase0 auto approval로 반영될 수 있다.
+4. 승인 후에도 기본 스윙 dry-run은 유지된다. Phase0 real canary만 `actual_order_submitted=true` source를 만들 수 있으며 full swing live conversion은 아니다.
 
 운영 기준:
 

@@ -143,6 +143,37 @@ def test_update_kospi_status_payload_records_warning_steps(monkeypatch, tmp_path
     assert written["failed_steps"] == ["recommend_daily_v2"]
 
 
+def test_update_kospi_bottom_rebound_sim_auto_loop_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_RUN_BOTTOM_REBOUND_SIM_AUTO_LOOP", "false")
+
+    result = update_kospi._run_bottom_rebound_sim_auto_loop("2026-05-22")
+
+    assert result == {"status": "skipped_disabled"}
+
+
+def test_update_kospi_bottom_rebound_sim_auto_loop_command_order(monkeypatch):
+    calls = []
+
+    def fake_run(command, check, cwd):
+        calls.append(command)
+
+    monkeypatch.setenv("KORSTOCKSCAN_RUN_BOTTOM_REBOUND_SIM_AUTO_LOOP", "true")
+    monkeypatch.setattr(update_kospi.subprocess, "run", fake_run)
+
+    result = update_kospi._run_bottom_rebound_sim_auto_loop("2026-05-22")
+
+    assert result["status"] == "completed"
+    assert calls[0][2] == "src.engine.swing.bottom_rebound_pattern_research"
+    assert calls[1][2] == "src.engine.swing.bottom_rebound_policy_auto_loop"
+    assert calls[2][2] == "src.engine.swing.bottom_rebound_candidate_source"
+    assert "--require-sim-auto-policy" in calls[2]
+    assert calls[3][2] == "src.engine.swing_strategy_discovery_sim"
+    assert "--include-bottom-rebound-source" in calls[3]
+    assert result["runtime_effect"] is False
+    assert result["allowed_runtime_apply"] is False
+    assert result["broker_order_forbidden"] is True
+
+
 def test_calculate_all_features_produces_swing_training_core_features():
     raw = _raw_quote_fixture()
     features = common_v2.calculate_all_features(raw)

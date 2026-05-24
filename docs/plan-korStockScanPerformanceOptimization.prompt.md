@@ -23,7 +23,7 @@
 3. 장중 runtime threshold mutation은 금지한다. 적용은 장후 report/calibration/AI review와 다음 장전 runtime env를 통해서만 한다.
 4. `2026-05-20` postclose renewal 기준 selected runtime family는 `soft_stop_whipsaw_confirmation`, `latency_classifier_runtime_profile`, `scalp_sim_candidate_window_expansion`, `scalp_sim_ai_budget_manager`, `lifecycle_decision_matrix_runtime`다.
 5. live AI route는 OpenAI 고정이며 provider transport/provenance는 threshold, 주문가/수량, 스윙 dry-run guard 변경과 분리한다.
-6. 스윙은 dry-run self-improvement 체인이다. approval request가 있어도 별도 approval artifact 없이는 env apply, real canary, live order 전환 금지다.
+6. 스윙은 기본적으로 dry-run self-improvement 체인이다. 일반 swing runtime env 변경은 별도 approval artifact가 필요하지만, `swing_one_share_real_canary_phase0`와 `swing_scale_in_real_canary_phase0`는 source report hard floor/source-quality/allowlist/cap 통과 시 phase0 자동승인으로 다음 PREOPEN에 반영될 수 있다. 이는 full live order 전환, cap release, provider/bot/threshold 변경 근거가 아니다.
 7. sim/probe/counterfactual은 source bundle과 approval request 근거가 될 수 있지만 real execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
 8. Sentinel, panic sell/buying, system error detector는 report-only/source-quality/incident 입력이며 자동 threshold/order/provider/bot restart 변경 권한이 없다.
 

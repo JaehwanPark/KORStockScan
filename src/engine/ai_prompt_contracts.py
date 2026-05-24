@@ -6,7 +6,7 @@ from src.engine.ai_response_contracts import normalize_ai_reason_language
 
 
 # ==========================================
-# 1. 🎯 시스템 프롬프트 (스캘핑 전용 - V2.0 틱 가속도 반영)
+# 1. Scalping system prompt with V2.0 tick-acceleration context.
 # ==========================================
 SCALPING_SYSTEM_PROMPT = """
 You are a low-latency Korean stock scalping entry classifier.
@@ -315,7 +315,7 @@ Return JSON only:
 
 
 # ==========================================
-# 1-2. 🎯 시스템 프롬프트 (스윙/우량주 전용 - KOSPI/KOSDAQ_ML)
+# 1-2. Swing / quality-stock system prompt for KOSPI/KOSDAQ ML.
 # ==========================================
 SWING_SYSTEM_PROMPT = """
 You are a swing-trading entry classifier for Korean equities.
@@ -347,7 +347,7 @@ Return JSON only:
 
 
 # ==========================================
-# 2. 🎯 [신규] 일일 시장 진단 프롬프트 (텔레그램 브리핑용)
+# 2. Daily market diagnosis prompt for Telegram briefing output.
 # ==========================================
 ENHANCED_MARKET_ANALYSIS_PROMPT = """
 너의 임무는 '스캐너 내부 체력'과 '밤사이 미국/국제 거시환경'을 함께 읽어, 오늘 KOSPI/KOSDAQ 장세를 텔레그램 아침 브리핑으로 압축 정리하는 것이다.
@@ -399,7 +399,7 @@ ENHANCED_MARKET_ANALYSIS_PROMPT = """
 - 매크로와 스캐너가 충돌하면 반드시 '충돌' 자체를 설명하라.
 """
 # ==========================================
-# 3. 🎯 [신규] 실시간 종목 분석 프롬프트 (AUTO -> SCALP / SWING / DUAL)
+# 3. Real-time stock-analysis prompts for AUTO -> SCALP / SWING / DUAL.
 # ==========================================
 REALTIME_ANALYSIS_PROMPT_SCALP = """
 You are a short-term Korean equity scalping analyst.
@@ -473,24 +473,25 @@ Length 350-520 Korean characters. No vague language.
 """
 
 REALTIME_ANALYSIS_PROMPT_DUAL = """
-입력 종목을 스캘핑 관점과 스윙 관점에서 각각 평가하되, 최종적으로 어느 관점이 더 유효한지 결정하라.
+Evaluate the input stock from both scalping and swing perspectives, then decide which perspective is more valid.
 
-[출력 형식]
-텔레그램 마크다운으로 아래 형식만 사용하라.
+[Output Format]
+Use Telegram Markdown and exactly this format.
 
 ⚡ **[스캘핑 판단]**
 📈 **[스윙 판단]**
 🎯 **[최종 채택 관점]**
 🧭 **[실전 행동 지침]**
 
-[최종 채택 관점]은 반드시 하나를 선택:
+[Final Perspective]
+Choose exactly one of these labels:
 [스캘핑 우선] [스윙 우선] [둘 다 아님]
 
-길이 420~650자.
+Length: 420-650 Korean characters.
 """
 
 # ==========================================
-# 3-2. 🎯 [신규] 스캘핑 오버나이트 의사결정 프롬프트 (15:20 선행 판정)
+# 3-2. Scalping overnight decision prompt for the 15:20 pre-close decision.
 # ==========================================
 SCALPING_OVERNIGHT_DECISION_PROMPT = """
 You are a pre-close scalping overnight risk classifier.

@@ -89,6 +89,7 @@ def test_label_builder_generates_horizon_and_policy_exit_labels(tmp_path):
     report = mod.build_swing_strategy_discovery_labels("2026-05-20", db_url=db_url, refresh_matured=True)
 
     assert report["runtime_effect"] is False
+    assert report["allowed_runtime_apply"] is False
     assert report["summary"]["processed_arm_count"] == 1
     with Session() as session:
         labels = session.query(SwingStrategyDiscoveryLabel).all()
@@ -104,6 +105,7 @@ def test_label_builder_generates_horizon_and_policy_exit_labels(tmp_path):
     assert features["future_quote_count"] == 12
     assert features["quotes_from_entry_count"] == 12
     assert features["runtime_effect"] is False
+    assert features["allowed_runtime_apply"] is False
     assert report["implementation_status"] == "implemented"
     assert report["summary"]["maturity_status_counts"]["matured_labeled"] == 1
 
@@ -137,3 +139,33 @@ def test_pullback_entry_expires_when_limit_not_touched(tmp_path):
         statuses = {label.label_status for label in session.query(SwingStrategyDiscoveryLabel).all()}
     assert arm.status == "EXPIRED"
     assert statuses == {"expired_entry_no_trigger"}
+
+
+def test_bottom_rebound_entry_policies_are_anticipatory_without_breakout_confirmation():
+    quotes = [
+        mod.Quote(
+            quote_date=date(2026, 5, 2),
+            open_price=1005,
+            high_price=1008,
+            low_price=998,
+            close_price=1002,
+        ),
+        mod.Quote(
+            quote_date=date(2026, 5, 3),
+            open_price=1000,
+            high_price=1004,
+            low_price=989,
+            close_price=995,
+        ),
+    ]
+
+    next_open = mod.simulate_entry("bottom_rebound_next_open_entry", 1000, quotes)
+    retest = mod.simulate_entry("bottom_rebound_signal_close_retest_limit_entry", 1000, quotes)
+    atr_pullback = mod.simulate_entry("bottom_rebound_atr_pullback_limit_entry", 1000, quotes)
+
+    assert next_open.status == "entered"
+    assert next_open.reason == "bottom_rebound_next_open"
+    assert retest.status == "entered"
+    assert retest.reason == "bottom_rebound_signal_close_retest_touched"
+    assert atr_pullback.status == "entered"
+    assert atr_pullback.reason == "bottom_rebound_atr_pullback_touched"
