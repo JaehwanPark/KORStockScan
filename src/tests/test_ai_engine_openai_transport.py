@@ -531,9 +531,9 @@ def test_openai_holding_flow_uses_flow_schema_and_normalizes_payload(monkeypatch
     assert captured["kwargs"]["endpoint_name"] == "holding_flow"
     assert captured["kwargs"]["metadata_extra"]["sim_record_id"] == "SIM-HOLD-1"
     assert captured["kwargs"]["metadata_extra"]["entry_adm_candidate_id"] == "ADM-1"
-    assert "직전 action을 뒤집으려면" in captured["prompt"]
-    assert "시스템 guard" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
-    assert "단일 score cutoff로 자르지 말고" in captured["user_input"]
+    assert "To reverse the previous flow-review action" in captured["prompt"]
+    assert "If a system guard applies" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
+    assert "Do not cut by a single score cutoff" in captured["user_input"]
     assert "reason=매수 흡수 유지" in captured["user_input"]
 
 

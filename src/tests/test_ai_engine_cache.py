@@ -10,6 +10,7 @@ from src.engine.ai_prompt_contracts import (
     SCALPING_ENTRY_PRICE_PROMPT,
     SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
     SCALPING_HOLDING_SYSTEM_PROMPT,
+    SCALPING_OVERNIGHT_DECISION_PROMPT,
     SCALPING_SYSTEM_PROMPT,
     SCALPING_SYSTEM_PROMPT_75_CANARY,
     SCALPING_WATCHING_SYSTEM_PROMPT,
@@ -95,8 +96,8 @@ def test_holding_flow_prompt_includes_consistency_rule_and_history_reason():
         ],
     )
 
-    assert "직전 action을 뒤집으려면" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
-    assert "시스템 guard" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
+    assert "To reverse the previous flow-review action" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
+    assert "If a system guard applies" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
     assert "reason=매수 흡수 유지" in context
 
 
@@ -720,9 +721,55 @@ def test_scalping_prompts_require_english_ascii_reason():
         SCALPING_SYSTEM_PROMPT,
         SCALPING_WATCHING_SYSTEM_PROMPT,
         SCALPING_HOLDING_SYSTEM_PROMPT,
+        SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
         SCALPING_ENTRY_PRICE_PROMPT,
+        SCALPING_OVERNIGHT_DECISION_PROMPT,
     ):
         assert "English ASCII only" in prompt
+
+
+def test_internal_json_classifier_prompts_use_english_instruction_text():
+    for prompt in (
+        SCALPING_ENTRY_PRICE_PROMPT,
+        SCALPING_HOLDING_SYSTEM_PROMPT,
+        SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
+        SCALPING_OVERNIGHT_DECISION_PROMPT,
+    ):
+        assert "Return JSON only" in prompt
+        assert "반드시 JSON" not in prompt
+        assert "너는" not in prompt
+        assert "판정 규칙" not in prompt
+
+    assert "pre-submit scalping order-price classifier" in SCALPING_ENTRY_PRICE_PROMPT
+    assert "low-latency scalping position-state classifier" in SCALPING_HOLDING_SYSTEM_PROMPT
+    assert "scalping holding/overnight flow classifier" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
+
+
+def test_dual_shadow_prompts_use_functional_english_reviewers():
+    for prompt in (
+        ai_engine_openai_module.DUAL_PERSONA_AGGRESSIVE_PROMPT,
+        ai_engine_openai_module.DUAL_PERSONA_CONSERVATIVE_PROMPT,
+    ):
+        assert "Return JSON only" in prompt
+        assert "quantitative reviewer" in prompt
+        assert "concise English ASCII only" in prompt
+        assert "너는" not in prompt
+        assert "반드시 JSON" not in prompt
+
+    assert "opportunity-side quantitative reviewer" in ai_engine_openai_module.DUAL_PERSONA_AGGRESSIVE_PROMPT
+    assert "risk-side quantitative reviewer" in ai_engine_openai_module.DUAL_PERSONA_CONSERVATIVE_PROMPT
+
+
+def test_overnight_prompt_is_internal_english_schema_first_classifier():
+    assert "pre-close scalping overnight risk classifier" in SCALPING_OVERNIGHT_DECISION_PROMPT
+    assert "Default action is SELL_TODAY" in SCALPING_OVERNIGHT_DECISION_PROMPT
+    assert "HOLD_OVERNIGHT is a strict exception" in SCALPING_OVERNIGHT_DECISION_PROMPT
+    assert "stale, missing, insufficient, or mixed" in SCALPING_OVERNIGHT_DECISION_PROMPT
+    assert "one concise overnight decision rationale" in SCALPING_OVERNIGHT_DECISION_PROMPT
+    assert "one concise main risk" in SCALPING_OVERNIGHT_DECISION_PROMPT
+    assert "15년" not in SCALPING_OVERNIGHT_DECISION_PROMPT
+    assert "베테랑" not in SCALPING_OVERNIGHT_DECISION_PROMPT
+    assert "판단 근거" not in SCALPING_OVERNIGHT_DECISION_PROMPT
 
 
 def test_analyze_target_uses_shared_prompt_when_split_disabled(monkeypatch):
@@ -965,6 +1012,8 @@ def test_provider_overnight_engine_disabled_is_annotated():
         )
 
         assert result["action"] == "SELL_TODAY"
+        assert result["reason"] == "engine_disabled_sell_today_fallback"
+        assert result["risk_note"] == "engine_disabled"
         assert result["ai_prompt_type"] == "scalping_overnight"
         assert result["ai_prompt_version"] == "overnight_v1"
         assert result["ai_result_source"] == "engine_disabled"
@@ -987,6 +1036,8 @@ def test_provider_overnight_failure_disables_engine(monkeypatch):
 
         assert engine.ai_disabled is True
         assert result["action"] == "SELL_TODAY"
+        assert result["reason"] == "ai_failure_sell_today_fallback"
+        assert result["risk_note"] == "ai_response_error_or_insufficient_context"
         assert result["ai_result_source"] == "exception"
         assert result["ai_parse_fail"] is True
 
@@ -1031,6 +1082,8 @@ def test_openai_sim_observation_overnight_failure_does_not_disable_engine(monkey
     assert engine.ai_disabled is False
     assert engine.consecutive_failures == 0
     assert result["action"] == "SELL_TODAY"
+    assert result["reason"] == "ai_failure_sell_today_fallback"
+    assert result["risk_note"] == "ai_response_error_or_insufficient_context"
     assert result["ai_result_source"] == "exception"
     assert result["sim_observation_failure_isolated"] is True
 

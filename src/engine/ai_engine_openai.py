@@ -72,22 +72,23 @@ from src.engine.ai_prompt_contracts import (
 
 
 DUAL_PERSONA_AGGRESSIVE_PROMPT = """
-너는 기회비용을 크게 보는 공격적 투자자다.
-입력된 정량 컨텍스트를 보고, 너무 늦기 전에 타야 하는지 판단한다.
+You are an opportunity-side quantitative reviewer for shadow calibration.
+Use only the provided context to judge whether opportunity cost is high enough to act before momentum fades.
 
-[성향]
-- 돌파 초입, 수급 가속, 프로그램 순매수, 고가 재도전을 높게 평가한다.
-- 다만 명백한 리스크 신호는 무시하지 않는다.
-- 애매한 장면에서는 WAIT보다 기회 포착 쪽으로 약간 기울 수 있다.
+[Review Bias]
+- Give positive weight to early breakout, supply-demand acceleration, program net buying, and day-high reclaim attempts.
+- Do not ignore explicit risk signals.
+- In ambiguous cases, this reviewer may lean slightly toward opportunity capture over passive WAIT.
 
-[출력 규칙]
-- 반드시 JSON만 반환한다.
-- decision_type이 GATEKEEPER면 action은 ALLOW_ENTRY | WAIT | REJECT 중 하나만 사용한다.
-- decision_type이 OVERNIGHT면 action은 HOLD_OVERNIGHT | SELL_TODAY 중 하나만 사용한다.
-- confidence는 0~1 float, score는 0~100 int로 반환한다.
-- risk_flags는 문자열 배열로 반환한다.
+[Output Rules]
+- Return JSON only.
+- If decision_type is GATEKEEPER, action must be ALLOW_ENTRY, WAIT, or REJECT.
+- If decision_type is OVERNIGHT, action must be HOLD_OVERNIGHT or SELL_TODAY.
+- confidence must be a 0-1 float; score must be a 0-100 integer.
+- risk_flags must be a string array.
+- Output `thesis` and `invalidator` in concise English ASCII only.
 
-반드시 아래 형식만 반환:
+Return JSON only:
 {
   "action": "ALLOW_ENTRY | WAIT | REJECT | HOLD_OVERNIGHT | SELL_TODAY",
   "score": 0,
@@ -95,28 +96,29 @@ DUAL_PERSONA_AGGRESSIVE_PROMPT = """
   "risk_flags": ["FLAG"],
   "size_bias": -2,
   "veto": false,
-  "thesis": "핵심 논거 한 줄",
-  "invalidator": "무효 조건 한 줄"
+  "thesis": "one concise opportunity-side rationale",
+  "invalidator": "one concise invalidation condition"
 }
 """
 
 DUAL_PERSONA_CONSERVATIVE_PROMPT = """
-너는 손실 회피와 생존을 최우선으로 보는 보수적 투자자다.
-입력된 정량 컨텍스트를 보고, 지금은 피해야 하는지 엄격하게 판단한다.
+You are a risk-side quantitative reviewer for shadow calibration.
+Use only the provided context to judge whether the setup should be avoided or de-risked now.
 
-[성향]
-- VWAP 하회, 대량 매도틱, 공급 우위, 갭 부담, 유동성 저하, 돌파 실패를 강하게 본다.
-- 애매한 장면에서는 공격 진입보다 WAIT 또는 회피를 선호한다.
-- 하드 리스크가 겹치면 veto=true를 사용할 수 있다.
+[Review Bias]
+- Give negative weight to VWAP break, large sell prints, supply dominance, gap burden, thin liquidity, and failed breakout.
+- In ambiguous cases, prefer WAIT or rejection over aggressive entry.
+- If hard risk signals overlap, set veto=true and include the matching risk flags.
 
-[출력 규칙]
-- 반드시 JSON만 반환한다.
-- decision_type이 GATEKEEPER면 action은 ALLOW_ENTRY | WAIT | REJECT 중 하나만 사용한다.
-- decision_type이 OVERNIGHT면 action은 HOLD_OVERNIGHT | SELL_TODAY 중 하나만 사용한다.
-- confidence는 0~1 float, score는 0~100 int로 반환한다.
-- risk_flags는 문자열 배열로 반환한다.
+[Output Rules]
+- Return JSON only.
+- If decision_type is GATEKEEPER, action must be ALLOW_ENTRY, WAIT, or REJECT.
+- If decision_type is OVERNIGHT, action must be HOLD_OVERNIGHT or SELL_TODAY.
+- confidence must be a 0-1 float; score must be a 0-100 integer.
+- risk_flags must be a string array.
+- Output `thesis` and `invalidator` in concise English ASCII only.
 
-반드시 아래 형식만 반환:
+Return JSON only:
 {
   "action": "ALLOW_ENTRY | WAIT | REJECT | HOLD_OVERNIGHT | SELL_TODAY",
   "score": 0,
@@ -124,8 +126,8 @@ DUAL_PERSONA_CONSERVATIVE_PROMPT = """
   "risk_flags": ["FLAG"],
   "size_bias": -2,
   "veto": false,
-  "thesis": "핵심 논거 한 줄",
-  "invalidator": "무효 조건 한 줄"
+  "thesis": "one concise risk-side rationale",
+  "invalidator": "one concise invalidation condition"
 }
 """
 
@@ -2305,7 +2307,13 @@ class GPTSniperEngine:
         if not self.lock.acquire(blocking=False):
             return self._annotate_analysis_result(
                 normalize_scalping_entry_price_result(
-                    {"action": "USE_DEFENSIVE", "order_price": fallback_price, "confidence": 0, "reason": "AI 경합", "max_wait_sec": 90},
+                    {
+                        "action": "USE_DEFENSIVE",
+                        "order_price": fallback_price,
+                        "confidence": 0,
+                        "reason": "ai_lock_contention_use_defensive_fallback",
+                        "max_wait_sec": 90,
+                    },
                     fallback_price=fallback_price,
                 ),
                 prompt_type="entry_price",
@@ -2323,7 +2331,13 @@ class GPTSniperEngine:
             if self.ai_disabled:
                 return self._annotate_analysis_result(
                     normalize_scalping_entry_price_result(
-                        {"action": "USE_DEFENSIVE", "order_price": fallback_price, "confidence": 0, "reason": "AI 엔진 비활성화", "max_wait_sec": 90},
+                        {
+                            "action": "USE_DEFENSIVE",
+                            "order_price": fallback_price,
+                            "confidence": 0,
+                            "reason": "engine_disabled_use_defensive_fallback",
+                            "max_wait_sec": 90,
+                        },
                         fallback_price=fallback_price,
                     ),
                     prompt_type="entry_price",
@@ -2386,7 +2400,13 @@ class GPTSniperEngine:
             log_error(f"🚨 [ENTRY_PRICE] OpenAI 가격결정 에러 ({stock_name}, 연속 실패 {failure_count}회): {e}")
             return self._annotate_analysis_result(
                 normalize_scalping_entry_price_result(
-                    {"action": "USE_DEFENSIVE", "order_price": fallback_price, "confidence": 0, "reason": f"AI 실패: {e}", "max_wait_sec": 90},
+                    {
+                        "action": "USE_DEFENSIVE",
+                        "order_price": fallback_price,
+                        "confidence": 0,
+                        "reason": "ai_failure_use_defensive_fallback",
+                        "max_wait_sec": 90,
+                    },
                     fallback_price=fallback_price,
                 ),
                 prompt_type="entry_price",
@@ -2684,7 +2704,7 @@ class GPTSniperEngine:
 
         if self.ai_disabled:
             return self._annotate_analysis_result(
-                {"action": "WAIT", "score": 50, "reason": "AI 엔진 비활성화로 shadow 호출 생략"},
+                {"action": "WAIT", "score": 50, "reason": "engine_disabled_skip_shadow_call"},
                 prompt_type=prompt_type,
                 prompt_version="shadow_v1",
                 response_ms=int((time.perf_counter() - analysis_started) * 1000),
@@ -3003,45 +3023,47 @@ class GPTSniperEngine:
         day_high = self._safe_float(ctx.get("day_high", 0), 0.0)
         distance_from_day_high = ((curr_price - day_high) / day_high * 100.0) if curr_price > 0 and day_high > 0 else self._safe_float(ctx.get("distance_from_day_high_pct", 0), 0.0)
         cadence_guide = (
-            "오버나이트 SELL_TODAY 재검문은 단발성이다. 추가 호출이 필요 없으면 next_review_sec=0, "
-            "재검문이 꼭 필요할 때만 300~600초를 선택하라."
+            "For overnight SELL_TODAY re-checks, this should be one-shot. Use next_review_sec=0 unless another review is clearly required; otherwise use 300-600 seconds."
             if str(decision_kind or "") == "overnight_sell_today"
-            else "장중 청산 후보 재검문은 30~90초 범위에서만 요청하고, HOLD/TRIM은 근거가 강할 때만 선택하라."
+            else "For intraday exit-candidate re-checks, request only 30-90 seconds. Choose HOLD/TRIM only with strong evidence."
         )
         return f"""
-[판정 종류]
+[DECISION_TYPE]
 - kind: {decision_kind}
-- 종목: {stock_name}({stock_code})
-- 후보 exit_rule: {ctx.get('exit_rule', '-')}
+- stock: {stock_name}({stock_code})
+- candidate_exit_rule: {ctx.get('exit_rule', '-')}
 - review_cadence: {cadence_guide}
 
-[포지션 맥락]
-- 평균단가: {buy_price:,.2f}원 | 현재가: {curr_price:,}원
-- 현재 손익: {self._safe_float(ctx.get('profit_rate', ctx.get('pnl_pct', 0.0))):+.2f}%
-- 고점 손익: {self._safe_float(ctx.get('peak_profit', 0.0)):+.2f}%
-- 고점 대비 되밀림: {self._safe_float(ctx.get('drawdown', 0.0)):.2f}%
-- 보유시간: {int(self._safe_float(ctx.get('held_sec', self._safe_float(ctx.get('held_minutes', 0.0)) * 60.0), 0.0))}초
-- 현재 AI 점수: {self._safe_float(ctx.get('current_ai_score', ctx.get('score', 0.0))):.1f}
-- 당일 고점 대비 위치: {distance_from_day_high:+.2f}%
-- 추가악화 허용폭: {self._safe_float(ctx.get('worsen_pct', 0.80)):.2f}%p
+[POSITION_CONTEXT]
+- average_entry_price: {buy_price:,.2f}
+- current_price: {curr_price:,}
+- current_pnl_pct: {self._safe_float(ctx.get('profit_rate', ctx.get('pnl_pct', 0.0))):+.2f}
+- peak_pnl_pct: {self._safe_float(ctx.get('peak_profit', 0.0)):+.2f}
+- drawdown_from_peak_pct: {self._safe_float(ctx.get('drawdown', 0.0)):.2f}
+- held_sec: {int(self._safe_float(ctx.get('held_sec', self._safe_float(ctx.get('held_minutes', 0.0)) * 60.0), 0.0))}
+- current_ai_score: {self._safe_float(ctx.get('current_ai_score', ctx.get('score', 0.0))):.1f}
+- distance_from_day_high_pct: {distance_from_day_high:+.2f}
+- allowed_worsen_pct: {self._safe_float(ctx.get('worsen_pct', 0.80)):.2f}
 
-[최근 flow review]
+[RECENT_FLOW_REVIEW]
 {self._format_flow_history(flow_history)}
 
-[틱 흐름 요약]
+[TICK_FLOW_SUMMARY]
 {self._summarize_flow_ticks(recent_ticks)}
 
-[분봉 흐름 요약]
+[MINUTE_CANDLE_FLOW_SUMMARY]
 {self._summarize_flow_candles(recent_candles)}
 
-[실시간 수급/호가]
-- 체결강도: {self._safe_float((ws_data or {}).get('v_pw', 0.0)):.1f}
-- 매수비율: {self._safe_float((ws_data or {}).get('buy_ratio', 0.0)):.1f}
-- 매수체결량/매도체결량: {int(self._safe_float((ws_data or {}).get('buy_exec_volume', 0))):,} / {int(self._safe_float((ws_data or {}).get('sell_exec_volume', 0))):,}
-- 총매도잔량/총매수잔량: {int(self._safe_float((ws_data or {}).get('ask_tot', 0))):,} / {int(self._safe_float((ws_data or {}).get('bid_tot', 0))):,}
+[LIVE_SUPPLY_DEMAND_AND_ORDERBOOK]
+- execution_strength: {self._safe_float((ws_data or {}).get('v_pw', 0.0)):.1f}
+- buy_ratio: {self._safe_float((ws_data or {}).get('buy_ratio', 0.0)):.1f}
+- buy_exec_volume: {int(self._safe_float((ws_data or {}).get('buy_exec_volume', 0))):,}
+- sell_exec_volume: {int(self._safe_float((ws_data or {}).get('sell_exec_volume', 0))):,}
+- ask_total_depth: {int(self._safe_float((ws_data or {}).get('ask_tot', 0))):,}
+- bid_total_depth: {int(self._safe_float((ws_data or {}).get('bid_tot', 0))):,}
 
-[판정 요청]
-단일 score cutoff로 자르지 말고, 위 흐름이 흡수/회복/분배/붕괴/소강 중 어디에 가까운지 먼저 판단한 뒤 HOLD/TRIM/EXIT를 선택하라.
+[DECISION_REQUEST]
+Do not cut by a single score cutoff. First classify the flow as closest to 흡수, 회복, 분배, 붕괴, or 소강, then choose HOLD, TRIM, or EXIT.
 """
 
     def _normalize_holding_flow_result(self, result, *, decision_kind="intraday_exit"):
@@ -3091,9 +3113,9 @@ class GPTSniperEngine:
                     "action": "EXIT",
                     "score": 0,
                     "flow_state": "ai_lock_contention",
-                    "thesis": "AI 경합으로 flow 판정 불가",
+                    "thesis": "ai_lock_contention",
                     "evidence": ["lock_contention"],
-                    "reason": "AI 경합으로 기존 청산 후보를 유지",
+                    "reason": "ai_lock_contention_keep_exit_candidate",
                     "next_review_sec": 30,
                 },
                 prompt_type="holding_exit_flow",
@@ -3114,9 +3136,9 @@ class GPTSniperEngine:
                         "action": "EXIT",
                         "score": 0,
                         "flow_state": "engine_disabled",
-                        "thesis": "AI 엔진 비활성화",
+                        "thesis": "engine_disabled",
                         "evidence": ["engine_disabled"],
-                        "reason": "AI 엔진 비활성화로 기존 청산 후보 유지",
+                        "reason": "engine_disabled_keep_exit_candidate",
                         "next_review_sec": 30,
                     },
                     prompt_type="holding_exit_flow",
@@ -3196,9 +3218,9 @@ class GPTSniperEngine:
                     "action": "EXIT",
                     "score": 0,
                     "flow_state": "exception",
-                    "thesis": "AI flow 판정 실패",
+                    "thesis": "ai_flow_failure",
                     "evidence": [str(e)],
-                    "reason": f"AI flow 판정 실패로 기존 청산 후보 유지: {e}",
+                    "reason": "ai_flow_failure_keep_exit_candidate",
                     "next_review_sec": 30,
                 },
                 prompt_type="holding_exit_flow",
@@ -3224,7 +3246,7 @@ class GPTSniperEngine:
                 {
                     'action': 'SELL_TODAY',
                     'confidence': 0,
-                    'reason': 'AI 경합으로 오버나이트 판정 불가',
+                    'reason': 'ai_lock_contention',
                     'risk_note': 'lock_contention',
                     'raw': {},
                 },
@@ -3244,7 +3266,7 @@ class GPTSniperEngine:
                     {
                         'action': 'SELL_TODAY',
                         'confidence': 0,
-                        'reason': 'AI 엔진 비활성화로 당일청산 폴백',
+                        'reason': 'engine_disabled_sell_today_fallback',
                         'risk_note': 'engine_disabled',
                         'raw': {},
                     },
@@ -3259,9 +3281,9 @@ class GPTSniperEngine:
                     result_source="engine_disabled",
                 )
             user_input = (
-                f"🚨 [SCALPING 오버나이트 판정 요청]\n"
-                f"종목명: {stock_name}\n종목코드: {stock_code}\n\n"
-                f"📊 [판정 입력 데이터]\n{self._format_scalping_overnight_context(realtime_ctx)}"
+                f"[SCALPING_OVERNIGHT_DECISION_REQUEST]\n"
+                f"stock_name: {stock_name}\nstock_code: {stock_code}\n\n"
+                f"[DECISION_INPUT]\n{self._format_scalping_overnight_context(realtime_ctx)}"
             )
             result = self._call_openai_safe(
                 SCALPING_OVERNIGHT_DECISION_PROMPT,
@@ -3282,11 +3304,15 @@ class GPTSniperEngine:
             action = str(result.get('action', 'SELL_TODAY') or 'SELL_TODAY').upper()
             if action not in {'SELL_TODAY', 'HOLD_OVERNIGHT'}:
                 action = 'SELL_TODAY'
+            try:
+                confidence = int(float(result.get('confidence', 0) or 0))
+            except Exception:
+                confidence = 0
             payload = {
                 'action': action,
-                'confidence': int(result.get('confidence', 0) or 0),
-                'reason': str(result.get('reason', '') or ''),
-                'risk_note': str(result.get('risk_note', '') or ''),
+                'confidence': max(0, min(100, confidence)),
+                'reason': str(result.get('reason', '') or 'reason_unavailable'),
+                'risk_note': str(result.get('risk_note', '') or 'risk_unavailable'),
                 'ai_model': self._get_tier2_model(),
                 'raw': result,
             }
@@ -3319,8 +3345,8 @@ class GPTSniperEngine:
                 {
                     'action': 'SELL_TODAY',
                     'confidence': 0,
-                    'reason': f'AI 판정 실패로 보수적 청산 폴백: {e}',
-                    'risk_note': '데이터 부족 또는 AI 응답 오류',
+                    'reason': 'ai_failure_sell_today_fallback',
+                    'risk_note': 'ai_response_error_or_insufficient_context',
                     'ai_exception_type': type(e).__name__,
                     'ai_exception_message': str(e),
                     'sim_observation_failure_isolated': sim_observation_only,
