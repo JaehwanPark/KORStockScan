@@ -12,6 +12,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from src.engine.auto_promotion_contracts import tier2_validation_passed
 from src.utils.constants import DATA_DIR
 from src.engine.lifecycle_bucket_discovery import (
     ENTRY_LIVE_AUTO_FAMILY,
@@ -157,8 +158,22 @@ def _discovery_live_families(discovery: dict[str, Any]) -> set[str]:
             if isinstance(discovery.get("live_auto_apply_candidates"), list)
             else []
         )
-        if isinstance(item, dict) and item.get("live_auto_apply_family")
+        if (
+            isinstance(item, dict)
+            and item.get("live_auto_apply_family")
+            and _discovery_candidate_tier2_passed(item)
+        )
     }
+
+
+def _discovery_candidate_tier2_passed(item: dict[str, Any]) -> bool:
+    contract = item.get("auto_promotion_contract") if isinstance(item.get("auto_promotion_contract"), dict) else {}
+    status = (
+        item.get("ai_review_status")
+        or item.get("lifecycle_bucket_discovery_ai_review_status")
+        or contract.get("tier2_status")
+    )
+    return tier2_validation_passed(status)
 
 
 def _discovery_live_candidate_by_family(discovery: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -172,7 +187,7 @@ def _discovery_live_candidate_by_family(discovery: dict[str, Any]) -> dict[str, 
         if not isinstance(item, dict):
             continue
         family = str(item.get("live_auto_apply_family") or "")
-        if family and family not in by_family:
+        if family and _discovery_candidate_tier2_passed(item) and family not in by_family:
             by_family[family] = item
     return by_family
 

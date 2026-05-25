@@ -12,6 +12,12 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from src.engine.auto_promotion_contracts import (
+    explicit_tier2_block_allowed,
+    pre_final_promotion_contract,
+    primary_ev_uplift_passes,
+    tier2_fail_closed_reason,
+)
 from src.utils.constants import DATA_DIR, TRADING_RULES
 
 
@@ -52,27 +58,6 @@ FINAL_CLASSIFICATION_STATES = {
     "new_bucket_candidate",
 }
 FINAL_RELATIONS = {"existing_bucket_refinement", "new_bucket_candidate", "unclear"}
-AI_EXPLICIT_BLOCK_TERMS = {
-    "contract",
-    "schema",
-    "source_quality",
-    "source quality",
-    "env",
-    "mapping",
-    "hook",
-    "attribution",
-    "safety",
-    "broker",
-    "stale",
-    "qty",
-    "cooldown",
-    "provider",
-    "cap",
-    "forbidden",
-    "leak",
-    "missing",
-}
-
 
 def discovery_report_path(target_date: str) -> Path:
     return REPORT_DIR / f"lifecycle_bucket_discovery_{target_date}.json"
@@ -306,14 +291,17 @@ def _classify_bucket(stage: str, bucket: dict[str, Any]) -> tuple[str, str | Non
     if quality != "pass":
         return "source_only_keep_collecting", None
     live_family = _live_family_for(stage, bucket_type, bucket_key)
+    ev = _safe_float(bucket.get("source_quality_adjusted_ev_pct"), None)
     if (
         live_family
         and stage == "entry"
         and route == "candidate_recovery_or_relax"
+        and primary_ev_uplift_passes(ev, positive_edge=True)
     ) or (
         live_family
         and stage == "scale_in"
         and route == "candidate_tighten_or_exclude"
+        and primary_ev_uplift_passes(ev, positive_edge=False)
     ):
         return "live_auto_apply_ready", live_family
     if "unknown" in bucket_key:
@@ -379,6 +367,17 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
         "runtime_effect_after_approval": "live_auto_apply_without_human_approval"
         if state == "live_auto_apply_ready"
         else "sim_only_bucket_policy",
+        "auto_promotion_contract": {
+            "state": "bounded_live_auto_apply_ready"
+            if state == "live_auto_apply_ready"
+            else "sim_auto_approved"
+            if state == "sim_auto_approved"
+            else "source_only",
+            "tier2_required": state == "live_auto_apply_ready",
+            "tier2_policy": "fail_closed",
+            "primary_ev_uplift_threshold_pct": 1.0,
+            "final_user_approval_boundary": "full_live_only",
+        },
         "forbidden_uses": [
             "hard_safety_bypass",
             "broker_account_order_guard_bypass",
@@ -576,7 +575,7 @@ def _build_ai_review_context(report: dict[str, Any]) -> dict[str, Any]:
 
 def _build_ai_review_instructions() -> str:
     return (
-        "You are the tier3 lifecycle bucket discovery reviewer.\n"
+        "You are the AI Tier2 lifecycle bucket discovery reviewer.\n"
         "Use English only and keep wording concise to reduce tokens.\n"
         "Your job is a two-pass review: first interpret bucket taxonomy, then audit that interpretation.\n"
         "Return only strict JSON using lifecycle_bucket_discovery_review_v1.\n"
@@ -641,7 +640,7 @@ def _call_openai_ai_review(input_context: dict[str, Any]) -> tuple[Any | None, d
     if not api_keys:
         return None, {"provider": "openai", "status": "unavailable", "reason": "OPENAI_API_KEY not configured"}
 
-    prompt = json.dumps(input_context, ensure_ascii=False, indent=2, default=str)
+    prompt = json.dumps(input_context, ensure_ascii=True, indent=2, default=str)
     errors: list[dict[str, str]] = []
     for attempt_index, (key_name, api_key) in enumerate(api_keys, start=1):
         try:
@@ -702,18 +701,6 @@ def _candidate_index(candidates: list[dict[str, Any]]) -> dict[str, dict[str, An
     }
 
 
-def _explicit_ai_block_allowed(reason: str, final_state: str) -> bool:
-    if final_state not in {
-        "runtime_blocked_contract_gap",
-        "code_patch_required",
-        "code_review_failed",
-        "automation_handoff_gap",
-    }:
-        return False
-    text = reason.lower()
-    return any(term in text for term in AI_EXPLICIT_BLOCK_TERMS)
-
-
 def _apply_ai_review(
     candidates: list[dict[str, Any]],
     *,
@@ -726,10 +713,21 @@ def _apply_ai_review(
     if ai_status != "parsed":
         for item in updated:
             if item.get("classification_state") == "live_auto_apply_ready":
+                item["classification_state"] = "runtime_blocked_contract_gap"
+                item["runtime_effect"] = False
+                item["broker_order_forbidden"] = True
                 item["ai_review_status"] = ai_status
-                item["ai_review_followup_required"] = "post_apply_verification"
-        if any(item.get("ai_review_followup_required") for item in updated):
-            warnings.append(f"ai_two_pass_review_{ai_status}_live_auto_deferred_to_post_apply")
+                item["ai_tier2_blocked_reason"] = tier2_fail_closed_reason(ai_status)
+                item["recommended_resolution"] = "retry_tier2_review_before_pre_final_auto_apply"
+                contract = item.get("auto_promotion_contract") if isinstance(item.get("auto_promotion_contract"), dict) else {}
+                item["auto_promotion_contract"] = {
+                    **contract,
+                    "state": "source_only",
+                    "tier2_status": ai_status,
+                    "tier2_fail_closed": True,
+                }
+        if any(item.get("ai_tier2_blocked_reason") for item in updated):
+            warnings.append(f"ai_two_pass_review_{ai_status}_fail_closed_live_auto_blocked")
         return updated
 
     conclusions = ai_payload.get("final_conclusions") if isinstance(ai_payload.get("final_conclusions"), list) else []
@@ -771,7 +769,7 @@ def _apply_ai_review(
             if (
                 item.get("classification_state") == "live_auto_apply_ready"
                 and item.get("live_auto_apply_family")
-                and not _explicit_ai_block_allowed(final_reason, final_state)
+                and not explicit_tier2_block_allowed(final_reason, final_state)
             ):
                 item["ai_review_block_ignored_reason"] = (
                     "ambiguous_or_non_contract_gap_live_then_verify"
@@ -782,6 +780,25 @@ def _apply_ai_review(
             item["classification_state"] = final_state
             item["runtime_effect"] = False if final_state != "live_auto_apply_ready" else item.get("runtime_effect")
             item["broker_order_forbidden"] = final_state != "live_auto_apply_ready"
+            if final_state == "live_auto_apply_ready":
+                contract = item.get("auto_promotion_contract") if isinstance(item.get("auto_promotion_contract"), dict) else {}
+                item["auto_promotion_contract"] = {
+                    **contract,
+                    "state": "bounded_live_auto_apply_ready",
+                    "tier2_status": ai_status,
+                    "tier2_fail_closed": False,
+                }
+    for item in updated:
+        if item.get("classification_state") != "live_auto_apply_ready":
+            continue
+        contract = item.get("auto_promotion_contract") if isinstance(item.get("auto_promotion_contract"), dict) else {}
+        item["ai_review_status"] = ai_status
+        item["auto_promotion_contract"] = {
+            **contract,
+            "state": "bounded_live_auto_apply_ready",
+            "tier2_status": ai_status,
+            "tier2_fail_closed": False,
+        }
     return updated
 
 
@@ -897,6 +914,7 @@ def build_lifecycle_bucket_discovery_report(
         "source_contract_previous_hash": _text_hash(previous_contract) if previous_contract else None,
         "source_contract_hash": _text_hash(source_contract) if source_contract else None,
         "source_contract_changes": source_contract_changes,
+        "pre_final_auto_promotion_contract": pre_final_promotion_contract(),
         "summary": {
             "human_intervention_required": False,
             "status": "pass" if ldm else "fail",
@@ -934,7 +952,7 @@ def build_lifecycle_bucket_discovery_report(
         "provider": provider,
         "status": ai_status,
         "model": provider_status.get("model") or (AI_REVIEW_MODEL if provider == "openai" else None),
-        "model_tier": "tier3",
+        "model_tier": "tier2",
         "schema_name": AI_REVIEW_SCHEMA_NAME,
         "provider_status": provider_status,
         "input_context_hash": _text_hash(ai_context),
@@ -1091,7 +1109,7 @@ def main(argv: list[str] | None = None) -> int:
         "--ai-review-provider",
         default=os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_REVIEW_PROVIDER", AI_REVIEW_DEFAULT_PROVIDER),
         choices=["openai", "none", "off", "false", "0"],
-        help="Provider for tier3 two-pass bucket interpretation/audit.",
+        help="Provider for AI Tier2 two-pass bucket interpretation/audit.",
     )
     args = parser.parse_args(argv)
     report = write_lifecycle_bucket_discovery_report(

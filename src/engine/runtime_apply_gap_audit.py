@@ -887,7 +887,7 @@ def _reason_ko_from_ai_route(route_decision: str, disposition: str) -> str:
     if route == "block_safety":
         return "hard safety 계약 때문에 런타임 적용이 차단됩니다."
     if route == "require_approval":
-        return "기존 승인 artifact가 필요한 후보입니다."
+        return "final-stage 사용자 승인 또는 pre-final auto-promotion 계약 확인이 필요한 후보입니다."
     return f"AI reviewer 권고 disposition은 {disposition_text or 'unknown'}입니다."
 
 

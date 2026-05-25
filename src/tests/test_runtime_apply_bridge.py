@@ -3,7 +3,7 @@ import json
 from src.engine import runtime_apply_bridge as mod
 
 
-def _write_discovery(path, *, live=True):
+def _write_discovery(path, *, live=True, tier2_status="parsed"):
     path.parent.mkdir(parents=True, exist_ok=True)
     live_candidates = []
     if live:
@@ -12,14 +12,15 @@ def _write_discovery(path, *, live=True):
                 "bucket_id": "entry:combo_entry_spot:score_66_69",
                 "classification_state": "live_auto_apply_ready",
                 "live_auto_apply_family": mod.ENTRY_BRIDGE_FAMILY,
-                "ai_review_status": "unavailable",
-                "ai_review_followup_required": "post_apply_verification",
-                "ai_review_block_ignored_reason": "ambiguous_or_non_contract_gap_live_then_verify",
+                "ai_review_status": tier2_status,
+                "auto_promotion_contract": {"tier2_status": tier2_status, "tier2_policy": "fail_closed"},
             },
             {
                 "bucket_id": "scale_in:arm:pyramid",
                 "classification_state": "live_auto_apply_ready",
                 "live_auto_apply_family": mod.SCALE_IN_BRIDGE_FAMILY,
+                "ai_review_status": tier2_status,
+                "auto_promotion_contract": {"tier2_status": tier2_status, "tier2_policy": "fail_closed"},
             },
         ]
     path.write_text(
@@ -29,10 +30,10 @@ def _write_discovery(path, *, live=True):
                 "summary": {
                     "live_auto_apply_ready_count": len(live_candidates),
                     "source_contract_status": "pass",
-                    "ai_two_pass_review_status": "unavailable" if live else None,
+                    "ai_two_pass_review_status": tier2_status if live else None,
                 },
                 "live_auto_apply_candidates": live_candidates,
-                "warnings": ["ai_two_pass_review_unavailable_live_auto_deferred_to_post_apply"] if live else [],
+                "warnings": [],
             }
         ),
         encoding="utf-8",
@@ -108,11 +109,9 @@ def test_runtime_apply_bridge_marks_daily_only_bucket_live_auto_ready(tmp_path, 
     assert states[mod.ENTRY_BRIDGE_FAMILY] == "live_auto_apply_ready"
     assert states[mod.SCALE_IN_BRIDGE_FAMILY] == "live_auto_apply_ready"
     assert report["summary"]["live_auto_apply_ready_count"] == 2
-    assert report["summary"]["lifecycle_bucket_discovery_live_followup_count"] == 1
-    assert "lifecycle_bucket_discovery_live_auto_post_apply_followup_required" in report["warnings"]
+    assert report["summary"]["lifecycle_bucket_discovery_live_followup_count"] == 0
     entry = {item["family"]: item for item in report["candidates"]}[mod.ENTRY_BRIDGE_FAMILY]
-    assert entry["lifecycle_bucket_discovery_ai_followup_required"] == "post_apply_verification"
-    assert entry["lifecycle_bucket_discovery_ai_block_ignored_reason"] == "ambiguous_or_non_contract_gap_live_then_verify"
+    assert entry["lifecycle_bucket_discovery_ai_review_status"] == "parsed"
     assert report["summary"]["approval_required_count"] == 0
     assert report["summary"]["runtime_mutation_performed"] is False
     assert (report_dir / "runtime_apply_bridge_2026-05-21.json").exists()
@@ -162,3 +161,19 @@ def test_runtime_apply_bridge_blocks_live_when_discovery_does_not_confirm(tmp_pa
     assert states[mod.ENTRY_BRIDGE_FAMILY] == "runtime_blocked_contract_gap"
     assert states[mod.SCALE_IN_BRIDGE_FAMILY] == "runtime_blocked_contract_gap"
     assert report["summary"]["live_auto_apply_ready_count"] == 0
+
+
+def test_runtime_apply_bridge_blocks_live_when_discovery_tier2_not_parsed(tmp_path, monkeypatch):
+    ldm_dir = tmp_path / "ldm"
+    ldm_dir.mkdir()
+    discovery_path = tmp_path / "discovery" / "lifecycle_bucket_discovery_2026-05-21.json"
+    monkeypatch.setattr(mod, "LDM_REPORT_DIR", ldm_dir)
+    monkeypatch.setattr(mod, "discovery_report_path", lambda target_date: discovery_path)
+    _write_ldm(ldm_dir / "lifecycle_decision_matrix_2026-05-21.json")
+    _write_discovery(discovery_path, live=True, tier2_status="parse_rejected")
+
+    report = mod.build_runtime_apply_bridge_report("2026-05-21")
+    states = {item["family"]: item["bridge_candidate_state"] for item in report["candidates"]}
+
+    assert states[mod.ENTRY_BRIDGE_FAMILY] == "runtime_blocked_contract_gap"
+    assert states[mod.SCALE_IN_BRIDGE_FAMILY] == "runtime_blocked_contract_gap"

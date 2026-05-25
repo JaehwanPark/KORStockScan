@@ -6,6 +6,153 @@ from __future__ import annotations
 AI_REASON_LANGUAGE_POLICY = "english_ascii_only"
 AI_REASON_LANGUAGE_FALLBACK = "Reason unavailable: non-English output from AI"
 
+FLOW_STATE_LABELS = {
+    "흡수": "absorption",
+    "회복": "recovery",
+    "분배": "distribution",
+    "붕괴": "breakdown",
+    "소강": "quiet",
+    "absorb": "absorption",
+    "absorbing": "absorption",
+    "absorption": "absorption",
+    "recover": "recovery",
+    "recovering": "recovery",
+    "recovery": "recovery",
+    "distribute": "distribution",
+    "distributing": "distribution",
+    "distribution": "distribution",
+    "break": "breakdown",
+    "breaking": "breakdown",
+    "breakdown": "breakdown",
+    "collapse": "breakdown",
+    "collapsed": "breakdown",
+    "calm": "quiet",
+    "quiet": "quiet",
+    "neutral": "quiet",
+    "sideways": "quiet",
+}
+
+CANONICAL_FLOW_STATES = {"absorption", "recovery", "distribution", "breakdown", "quiet"}
+KNOWN_FLOW_STATE_SENTINELS = {
+    "-",
+    "unknown",
+    "flow_state_unavailable",
+    "ai_lock_contention",
+    "engine_disabled",
+    "exception",
+}
+
+GATEKEEPER_ACTION_KEYS = {
+    "즉시 매수": "immediate_buy",
+    "immediate buy": "immediate_buy",
+    "immediate_buy": "immediate_buy",
+    "buy_now": "immediate_buy",
+    "buy": "immediate_buy",
+    "눌림 대기": "pullback_wait",
+    "눌림|대기": "pullback_wait",
+    "눌림": "pullback_wait",
+    "pullback wait": "pullback_wait",
+    "pullback_wait": "pullback_wait",
+    "wait_for_pullback": "pullback_wait",
+    "보유 지속": "hold_continue",
+    "hold continue": "hold_continue",
+    "hold_continue": "hold_continue",
+    "hold": "hold_continue",
+    "일부 익절": "partial_take_profit",
+    "partial take profit": "partial_take_profit",
+    "partial_take_profit": "partial_take_profit",
+    "trim": "partial_take_profit",
+    "전량 회피": "full_avoid",
+    "전량|회피": "full_avoid",
+    "전량": "full_avoid",
+    "full avoid": "full_avoid",
+    "full_avoid": "full_avoid",
+    "avoid_all": "full_avoid",
+    "drop": "full_avoid",
+    "스캘핑 우선": "scalping_preferred",
+    "scalping preferred": "scalping_preferred",
+    "scalping_preferred": "scalping_preferred",
+    "스윙 우선": "swing_preferred",
+    "swing preferred": "swing_preferred",
+    "swing_preferred": "swing_preferred",
+    "둘 다 아님": "neither",
+    "둘|다|아님": "neither",
+    "neither": "neither",
+    "unknown": "unknown",
+}
+
+CANONICAL_GATEKEEPER_ACTION_KEYS = {
+    "immediate_buy",
+    "pullback_wait",
+    "hold_continue",
+    "partial_take_profit",
+    "full_avoid",
+    "scalping_preferred",
+    "swing_preferred",
+    "neither",
+    "unknown",
+}
+
+GATEKEEPER_ACTION_DISPLAY = {
+    "immediate_buy": "즉시 매수",
+    "pullback_wait": "눌림 대기",
+    "hold_continue": "보유 지속",
+    "partial_take_profit": "일부 익절",
+    "full_avoid": "전량 회피",
+    "scalping_preferred": "스캘핑 우선",
+    "swing_preferred": "스윙 우선",
+    "neither": "둘 다 아님",
+    "unknown": "UNKNOWN",
+}
+
+
+def normalize_flow_state_label(value: object) -> str:
+    text = str(value or "-").strip().lower()
+    mapped = FLOW_STATE_LABELS.get(text)
+    if mapped:
+        return mapped
+    if text in KNOWN_FLOW_STATE_SENTINELS:
+        return text
+    return "unknown_flow_state"
+
+
+def is_known_flow_state_label(value: object) -> bool:
+    text = str(value or "-").strip().lower()
+    return text in FLOW_STATE_LABELS or text in CANONICAL_FLOW_STATES or text in KNOWN_FLOW_STATE_SENTINELS
+
+
+def normalize_gatekeeper_action_key(value: object) -> str:
+    text = str(value or "UNKNOWN").strip().replace("|", " ")
+    folded = " ".join(text.split()).lower()
+    if folded in {"", "-", "none", "null", "nan", "unknown"}:
+        return "unknown"
+    key = GATEKEEPER_ACTION_KEYS.get(folded)
+    if key:
+        return key
+    compact = text.strip().replace(" ", "|")
+    key = GATEKEEPER_ACTION_KEYS.get(compact)
+    if key:
+        return key
+    return "unknown"
+
+
+def is_known_gatekeeper_action_label(value: object) -> bool:
+    text = str(value or "UNKNOWN").strip().replace("|", " ")
+    folded = " ".join(text.split()).lower()
+    if folded in {"", "-", "none", "null", "nan", "unknown"}:
+        return True
+    compact = text.strip().replace(" ", "|")
+    return (
+        folded in GATEKEEPER_ACTION_KEYS
+        or compact in GATEKEEPER_ACTION_KEYS
+        or folded.replace(" ", "_") in CANONICAL_GATEKEEPER_ACTION_KEYS
+    )
+
+
+def display_gatekeeper_action_label(value: object) -> str:
+    key = normalize_gatekeeper_action_key(value)
+    return GATEKEEPER_ACTION_DISPLAY.get(key, str(value or "UNKNOWN").replace("|", " ").strip() or "UNKNOWN")
+
 
 AI_RESPONSE_SCHEMA_REGISTRY = {
     "entry_v1": {

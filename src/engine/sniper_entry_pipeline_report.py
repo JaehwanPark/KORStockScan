@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from src.engine.ai_response_contracts import display_gatekeeper_action_label, normalize_gatekeeper_action_key
 from src.engine.log_archive_service import iter_target_log_lines
 from src.utils.constants import LOGS_DIR, DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
@@ -375,13 +376,16 @@ def _display_reason_label(reason: str) -> str:
 
 
 def _extract_gatekeeper_action(event: PipelineEvent) -> str:
+    action_key = str(event.fields.get("action_key") or "").strip()
+    if action_key:
+        return display_gatekeeper_action_label(action_key)
     action = str(event.fields.get("action") or "").replace("|", " ").strip()
     if action and action not in {"눌림", "전량", "둘", "스윙"}:
-        return action
+        return display_gatekeeper_action_label(action)
     match = _GATEKEEPER_ACTION_RE.search(event.raw_line or "")
     if match:
-        return str(match.group("action") or "").replace("|", " ").strip()
-    return action
+        return display_gatekeeper_action_label(str(match.group("action") or "").replace("|", " ").strip())
+    return display_gatekeeper_action_label(action) if action else action
 
 
 def _extract_event_reason(event: PipelineEvent) -> str:
@@ -725,6 +729,9 @@ def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = 
                 "timestamp": latest_gatekeeper_event.timestamp,
                 "time": replay_time,
                 "action": latest_gatekeeper_event.fields.get("action") or "",
+                "action_key": normalize_gatekeeper_action_key(
+                    latest_gatekeeper_event.fields.get("action_key") or latest_gatekeeper_event.fields.get("action")
+                ),
                 "url": (
                     f"/gatekeeper-replay?date={target_date}&code={latest.code}"
                     + (f"&time={replay_time}" if replay_time else "")

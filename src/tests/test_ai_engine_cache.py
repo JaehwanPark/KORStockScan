@@ -17,6 +17,7 @@ from src.engine.ai_prompt_contracts import (
     SWING_SYSTEM_PROMPT,
 )
 from src.engine.ai_response_contracts import normalize_ai_reason_language
+from src.engine.ai_response_contracts import normalize_gatekeeper_action_key, display_gatekeeper_action_label
 from src.engine.ai_engine_openai import GPTSniperEngine
 
 
@@ -41,6 +42,10 @@ def _build_engine():
     engine.model_tier3_deep = "tier3-model"
     engine.current_model_name = engine.model_tier1_fast
     return engine
+
+
+def _has_hangul(text: str) -> bool:
+    return any("\uac00" <= char <= "\ud7a3" for char in text)
 
 
 def _build_provider_engine(engine_cls):
@@ -98,7 +103,44 @@ def test_holding_flow_prompt_includes_consistency_rule_and_history_reason():
 
     assert "To reverse the previous flow-review action" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
     assert "If a system guard applies" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
+    assert "state=absorption" in context
     assert "reason=매수 흡수 유지" in context
+
+
+def test_holding_flow_state_normalizer_accepts_legacy_korean_and_new_english_labels():
+    engine = _build_engine()
+
+    assert engine._normalize_flow_state_label("흡수") == "absorption"
+    assert engine._normalize_flow_state_label("회복") == "recovery"
+    assert engine._normalize_flow_state_label("breakdown") == "breakdown"
+    assert engine._normalize_flow_state_label("sideways") == "quiet"
+
+    result = engine._normalize_holding_flow_result(
+        {
+            "action": "TRIM",
+            "score": 67,
+            "flow_state": "회복",
+            "thesis": "legacy korean label",
+            "evidence": ["ok"],
+            "reason": "ok",
+            "next_review_sec": 44,
+        }
+    )
+
+    assert result["flow_state"] == "recovery"
+    assert result["raw_flow_state"] == "회복"
+
+
+def test_gatekeeper_action_normalizer_accepts_korean_and_english_labels():
+    assert normalize_gatekeeper_action_key("눌림 대기") == "pullback_wait"
+    assert normalize_gatekeeper_action_key("눌림|대기") == "pullback_wait"
+    assert normalize_gatekeeper_action_key("pullback_wait") == "pullback_wait"
+    assert normalize_gatekeeper_action_key("전량 회피") == "full_avoid"
+    assert normalize_gatekeeper_action_key("full avoid") == "full_avoid"
+    assert normalize_gatekeeper_action_key("즉시 매수") == "immediate_buy"
+    assert normalize_gatekeeper_action_key("None") == "unknown"
+    assert normalize_gatekeeper_action_key("ambiguous_chase") == "unknown"
+    assert display_gatekeeper_action_label("pullback_wait") == "눌림 대기"
 
 
 PROVIDER_ENGINES = [
@@ -285,6 +327,7 @@ def test_gatekeeper_cache_ignores_captured_at(monkeypatch):
     assert first["cache_hit"] is False
     assert second["cache_hit"] is True
     assert second["allow_entry"] is True
+    assert second["action_key"] == "immediate_buy"
 
 
 def test_gatekeeper_cache_absorbs_small_context_noise(monkeypatch):
@@ -354,6 +397,7 @@ def test_gatekeeper_cache_absorbs_small_context_noise(monkeypatch):
     assert first["cache_hit"] is False
     assert second["cache_hit"] is True
     assert second["allow_entry"] is False
+    assert second["action_key"] == "pullback_wait"
 
 
 def test_holding_cache_profile_absorbs_micro_market_noise(monkeypatch):
@@ -739,10 +783,30 @@ def test_internal_json_classifier_prompts_use_english_instruction_text():
         assert "반드시 JSON" not in prompt
         assert "너는" not in prompt
         assert "판정 규칙" not in prompt
+        assert not _has_hangul(prompt)
 
     assert "pre-submit scalping order-price classifier" in SCALPING_ENTRY_PRICE_PROMPT
     assert "low-latency scalping position-state classifier" in SCALPING_HOLDING_SYSTEM_PROMPT
     assert "scalping holding/overnight flow classifier" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
+    assert "absorption, recovery, distribution, breakdown, quiet" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
+
+
+def test_swing_tier2_analyze_target_input_labels_are_english_ascii():
+    engine = _build_engine()
+    candles = [
+        {"체결시간": f"10:{idx:02d}:00", "현재가": 10000 + idx, "거래량": 1000 + idx}
+        for idx in range(20)
+    ]
+
+    payload = engine._format_swing_market_data(
+        {"curr": 10030, "fluctuation": 1.2, "v_pw": 132, "volume": 100000},
+        candles,
+        program_net_qty=5000,
+    )
+
+    assert "[CURRENT_STATE_SWING_VIEW]" in payload
+    assert "program_flow: net_buy" in payload
+    assert not _has_hangul(payload)
 
 
 def test_dual_shadow_prompts_use_functional_english_reviewers():

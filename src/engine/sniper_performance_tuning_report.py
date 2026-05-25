@@ -12,6 +12,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from src.engine.log_archive_service import iter_target_log_lines, load_monitor_snapshot
+from src.engine.ai_response_contracts import normalize_gatekeeper_action_key
 from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build
 from src.engine.sniper_trade_review_report import build_trade_review_report
 from src.market_regime import summarize_market_regime
@@ -895,6 +896,7 @@ def _build_swing_daily_summary(
     blocker_counts: Counter[str] = Counter()
     blocker_stock_sets: dict[str, set[str]] = defaultdict(set)
     gatekeeper_actions: Counter[str] = Counter()
+    gatekeeper_action_keys: Counter[str] = Counter()
 
     for event in swing_events:
         label = _SWING_DAILY_BLOCKER_LABELS.get(event.stage)
@@ -905,6 +907,7 @@ def _build_swing_daily_summary(
         if event.stage == "blocked_gatekeeper_reject":
             action = _extract_gatekeeper_action(event) or "UNKNOWN"
             gatekeeper_actions[action] += 1
+            gatekeeper_action_keys[normalize_gatekeeper_action_key(event.fields.get("action_key") or action)] += 1
 
     market_regime = _load_cached_market_regime_summary(target_date) or summarize_market_regime(None)
     market_regime["allow_swing_entry"] = bool(market_regime.get("allow_swing_entry", False))
@@ -999,6 +1002,7 @@ def _build_swing_daily_summary(
         "blocker_families": _summarize_counter_with_stock_counts(blocker_counts, blocker_stock_sets),
         "latest_blockers": list(swing_pipeline.get("latest_blockers") or []),
         "gatekeeper_actions": _summarize_top_counts(gatekeeper_actions, limit=5),
+        "gatekeeper_action_keys": _summarize_top_counts(gatekeeper_action_keys, limit=5),
     }
 
 
@@ -1950,6 +1954,11 @@ def build_performance_tuning_report(
     holding_ai_cache_modes = Counter(str(e.fields.get("ai_cache", "miss") or "miss") for e in holding_reviews)
     gatekeeper_cache_modes = Counter(str(e.fields.get("gatekeeper_cache", "miss") or "miss") for e in gatekeeper_decisions)
     gatekeeper_actions = Counter(str(e.fields.get("action", "UNKNOWN") or "UNKNOWN") for e in gatekeeper_decisions if e.stage == "blocked_gatekeeper_reject")
+    gatekeeper_action_keys = Counter(
+        normalize_gatekeeper_action_key(e.fields.get("action_key") or e.fields.get("action", "UNKNOWN"))
+        for e in gatekeeper_decisions
+        if e.stage == "blocked_gatekeeper_reject"
+    )
     exit_rule_counts = Counter(str(e.fields.get("exit_rule", "-") or "-") for e in exit_signals)
     dual_persona_agreement = Counter(str(e.fields.get("agreement_bucket", "-") or "-") for e in dual_persona_events)
     dual_persona_winners = Counter(str(e.fields.get("winner", "-") or "-") for e in dual_persona_events)
@@ -2243,6 +2252,7 @@ def build_performance_tuning_report(
                 "gatekeeper_total_internal_ms": _safe_int(e.fields.get("gatekeeper_total_internal_ms"), 0) or 0,
                 "cache": e.fields.get("gatekeeper_cache", "miss"),
                 "action": e.fields.get("action", e.fields.get("gatekeeper", "")),
+                "action_key": normalize_gatekeeper_action_key(e.fields.get("action_key") or e.fields.get("action", e.fields.get("gatekeeper", ""))),
             }
             for e in gatekeeper_decisions
         ],
@@ -2316,6 +2326,7 @@ def build_performance_tuning_report(
         "gatekeeper_reuse_blockers": [{"label": key, "count": value} for key, value in gatekeeper_reuse_blockers.most_common()],
         "gatekeeper_sig_deltas": [{"label": key, "count": value} for key, value in gatekeeper_sig_deltas.most_common()],
         "gatekeeper_actions": [{"label": key, "count": value} for key, value in gatekeeper_actions.most_common()],
+        "gatekeeper_action_keys": [{"label": key, "count": value} for key, value in gatekeeper_action_keys.most_common()],
         "exit_rules": [{"label": key, "count": value} for key, value in exit_rule_counts.most_common()],
         "fill_quality_cohorts": [
             {

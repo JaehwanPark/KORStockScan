@@ -12,6 +12,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from src.engine.auto_promotion_contracts import tier2_validation_passed
 from src.utils.constants import DATA_DIR
 
 
@@ -24,6 +25,7 @@ SIM_AUTO_APPROVAL_DIR = Path(DATA_DIR) / "threshold_cycle" / "sim_auto_approvals
 SWING_SIM_POLICY_DIR = Path(DATA_DIR) / "threshold_cycle" / "swing_sim_policies"
 SWING_LIFECYCLE_BUCKET_REPORT_DIR = Path(DATA_DIR) / "report" / "swing_lifecycle_bucket_discovery"
 BOTTOM_REBOUND_POLICY_REPORT_DIR = Path(DATA_DIR) / "report" / "swing_bottom_rebound_policy_auto_loop"
+SWING_RUNTIME_APPROVAL_REPORT_DIR = Path(DATA_DIR) / "report" / "swing_runtime_approval"
 
 FORBIDDEN_USES = [
     "broker_order_submit",
@@ -66,6 +68,10 @@ def swing_lifecycle_bucket_report_path(target_date: str) -> Path:
 
 def bottom_rebound_policy_report_path(target_date: str) -> Path:
     return BOTTOM_REBOUND_POLICY_REPORT_DIR / f"swing_bottom_rebound_policy_auto_loop_{target_date}.json"
+
+
+def swing_runtime_approval_report_path(target_date: str) -> Path:
+    return SWING_RUNTIME_APPROVAL_REPORT_DIR / f"swing_runtime_approval_{target_date}.json"
 
 
 def _source_contract_ok(payload: dict[str, Any], expected_report_type: str) -> bool:
@@ -134,18 +140,72 @@ def _bottom_rebound_policy_item(report: dict[str, Any]) -> dict[str, Any] | None
     }
 
 
+def _request_tier2_passed(request: dict[str, Any]) -> bool:
+    contract = request.get("auto_promotion_contract")
+    if not isinstance(contract, dict):
+        return False
+    return tier2_validation_passed(contract.get("tier2_status"))
+
+
+def _swing_runtime_pre_final_items(report: dict[str, Any]) -> list[dict[str, Any]]:
+    if report.get("report_type") != "swing_runtime_approval":
+        return []
+    items: list[dict[str, Any]] = []
+    for request in report.get("approval_requests") or []:
+        if not isinstance(request, dict):
+            continue
+        if not _request_tier2_passed(request):
+            continue
+        state = str(request.get("calibration_state") or "")
+        auto_state = str(request.get("auto_approval_state") or "")
+        family = str(request.get("family") or request.get("policy_id") or "")
+        if state == "dry_run_auto_apply_ready" and auto_state == "ai_tier2_auto_approved":
+            policy_kind = "swing_runtime_dry_run_pre_final_policy"
+        elif state in {"auto_approved_real_canary", "auto_approved_real_canary_phase0"} and family in {
+            "swing_one_share_real_canary_phase0",
+            "swing_scale_in_real_canary_phase0",
+        }:
+            policy_kind = "swing_bounded_real_canary_pre_final_policy"
+        else:
+            continue
+        items.append(
+            {
+                "source_id": "swing_runtime_approval",
+                "policy_kind": policy_kind,
+                "approval_id": request.get("approval_id"),
+                "family": family,
+                "stage": request.get("stage"),
+                "classification_state": state,
+                "auto_approval_state": request.get("auto_approval_state"),
+                "tradeoff_score": request.get("tradeoff_score"),
+                "sample_count": request.get("sample_count"),
+                "sample_floor": request.get("sample_floor"),
+                "auto_promotion_contract": request.get("auto_promotion_contract") or {},
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "forbidden_uses": FORBIDDEN_USES,
+            }
+        )
+    return items
+
+
 def build_swing_sim_auto_approval(
     target_date: str,
     *,
     swing_lifecycle_bucket_report: dict[str, Any] | None = None,
     bottom_rebound_policy_report: dict[str, Any] | None = None,
+    swing_runtime_approval_report: dict[str, Any] | None = None,
     source_paths: dict[str, Path] | None = None,
 ) -> dict[str, Any]:
     date_key = _date_text(target_date)
-    paths = source_paths or {
+    default_paths = {
         "swing_lifecycle_bucket_discovery": swing_lifecycle_bucket_report_path(date_key),
         "bottom_rebound_policy_auto_loop": bottom_rebound_policy_report_path(date_key),
+        "swing_runtime_approval": swing_runtime_approval_report_path(date_key),
     }
+    paths = {**default_paths, **(source_paths or {})}
     swing_report = (
         swing_lifecycle_bucket_report
         if isinstance(swing_lifecycle_bucket_report, dict)
@@ -156,10 +216,16 @@ def build_swing_sim_auto_approval(
         if isinstance(bottom_rebound_policy_report, dict)
         else _load_json(paths["bottom_rebound_policy_auto_loop"])
     )
+    runtime_report = (
+        swing_runtime_approval_report
+        if isinstance(swing_runtime_approval_report, dict)
+        else _load_json(paths["swing_runtime_approval"])
+    )
     policy_items = _swing_ldm_policy_items(swing_report)
     bottom_policy = _bottom_rebound_policy_item(bottom_report)
     if bottom_policy:
         policy_items.append(bottom_policy)
+    policy_items.extend(_swing_runtime_pre_final_items(runtime_report))
     approved_source_ids = sorted({str(item.get("source_id")) for item in policy_items if item.get("source_id")})
     catalog_path = swing_sim_policy_catalog_path(date_key)
     return {
@@ -176,7 +242,9 @@ def build_swing_sim_auto_approval(
         "broker_order_forbidden": True,
         "allowed_runtime_apply": False,
         "decision_authority": DECISION_AUTHORITY,
-        "approval_scope": "next_preopen_swing_sim_policy_only",
+        "approval_scope": "next_preopen_swing_pre_final_auto_policy",
+        "final_user_approval_boundary": "full_live_only",
+        "tier2_policy": "fail_closed",
         "policy_file": str(catalog_path),
         "approved_source_ids": approved_source_ids,
         "approved_policy_count": len(policy_items),
@@ -193,6 +261,11 @@ def build_swing_sim_auto_approval(
                 "present": bool(bottom_report),
                 "contract_ok": _source_contract_ok(bottom_report, "swing_bottom_rebound_policy_auto_loop"),
                 "sim_auto_approved": bottom_policy is not None,
+            },
+            "swing_runtime_approval": {
+                "path": str(paths["swing_runtime_approval"]),
+                "present": bool(runtime_report),
+                "pre_final_auto_policy_count": len(_swing_runtime_pre_final_items(runtime_report)),
             },
         },
         "forbidden_uses": FORBIDDEN_USES,
@@ -234,11 +307,13 @@ def refresh_swing_sim_auto_approval(
     *,
     swing_lifecycle_bucket_report: dict[str, Any] | None = None,
     bottom_rebound_policy_report: dict[str, Any] | None = None,
+    swing_runtime_approval_report: dict[str, Any] | None = None,
 ) -> dict[str, Path]:
     approval = build_swing_sim_auto_approval(
         target_date,
         swing_lifecycle_bucket_report=swing_lifecycle_bucket_report,
         bottom_rebound_policy_report=bottom_rebound_policy_report,
+        swing_runtime_approval_report=swing_runtime_approval_report,
     )
     return write_swing_sim_auto_approval(approval)
 

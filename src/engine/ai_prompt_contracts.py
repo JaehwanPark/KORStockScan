@@ -237,20 +237,20 @@ Decide whether full exit now improves expected value by using the longer input w
 
 [Decision Rules]
 1. `score` is confidence only. Do not choose HOLD/TRIM/EXIT from a score bucket alone.
-2. Classify flow state first. Use one canonical `flow_state` label: 흡수, 회복, 분배, 붕괴, 소강.
+2. Classify flow state first. Use one canonical `flow_state` label: absorption, recovery, distribution, breakdown, quiet.
 3. Choose EXIT only when price, supply-demand, and orderbook flow are breaking down together.
 4. HOLD/TRIM means defer full exit. In v1, TRIM is a risk-reduction preference label, not a direct real-order instruction.
 5. `reason` must explain in one line why the flow supports this action instead of relying on a momentary value.
 6. To reverse the previous flow-review action, require at least two new and clear changes across price, supply-demand, orderbook, minute candles, or PnL.
 7. If a system guard applies, such as hard stop, protect hard stop, order/balance safety, post-candidate deterioration, stale data, parse failure, or context failure, prioritize the guard over the previous action.
 
-Output `reason`, `thesis`, and `evidence` in concise English ASCII only. Do not use Korean, Thai, or any other non-English language except the canonical `flow_state` labels.
+Output `reason`, `thesis`, `evidence`, and `flow_state` in concise English ASCII only. Do not use Korean, Thai, or any other non-English language.
 
 Return JSON only:
 {
     "action": "HOLD" | "TRIM" | "EXIT",
     "score": integer from 0 to 100,
-    "flow_state": "흡수|회복|분배|붕괴|소강",
+    "flow_state": "absorption|recovery|distribution|breakdown|quiet",
     "thesis": "one concise current-position thesis",
     "evidence": ["evidence item 1", "evidence item 2"],
     "reason": "one concise flow decision rationale",

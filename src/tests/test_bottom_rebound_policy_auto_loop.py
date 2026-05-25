@@ -10,6 +10,10 @@ from src.engine.swing.bottom_rebound_policy_auto_loop import (
 from src.engine.swing import bottom_rebound_policy_auto_loop as loop_mod
 
 
+def _has_hangul(text: str) -> bool:
+    return any("\uac00" <= char <= "\ud7a3" for char in text)
+
+
 def _research() -> dict:
     return {
         "report_type": "bottom_rebound_pattern_research",
@@ -89,6 +93,13 @@ def test_policy_auto_loop_promotes_sim_only_when_tier2_ai_passes_and_one_percent
     assert report["allowed_runtime_apply"] is False
     assert report["broker_order_forbidden"] is True
     assert "broker_order_submit" in report["forbidden_uses"]
+
+
+def test_policy_auto_loop_tier2_prompt_contract_is_english_ascii() -> None:
+    instructions = loop_mod._ai_instructions()
+
+    assert "Tier-2 swing simulation policy reviewer" in instructions
+    assert not _has_hangul(instructions)
 
 
 def test_policy_auto_loop_refreshes_control_tower_when_written_to_default_report_dir(tmp_path: Path, monkeypatch) -> None:

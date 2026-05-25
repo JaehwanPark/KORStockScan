@@ -9,6 +9,7 @@ from src.utils import kiwoom_utils
 from src.utils.constants import TRADING_RULES
 from src.utils.logger import log_error, log_info
 from src.utils.pipeline_event_logger import emit_pipeline_event
+from src.engine.ai_response_contracts import normalize_flow_state_label
 
 
 KIWOOM_TOKEN = None
@@ -378,12 +379,13 @@ def _flow_evidence_text(flow_result: dict) -> str:
 def _append_mem_flow_history(mem_stock, *, exit_rule, profit_rate, flow_result):
     if mem_stock is None:
         return
+    flow_state = normalize_flow_state_label(flow_result.get("flow_state", "-"))
     history = list(mem_stock.get("holding_flow_review_history") or [])
     history.append(
         {
             "time": datetime.now().strftime("%H:%M:%S"),
             "action": str(flow_result.get("action", "-") or "-"),
-            "flow_state": str(flow_result.get("flow_state", "-") or "-"),
+            "flow_state": flow_state,
             "score": _safe_int(flow_result.get("score"), 0),
             "profit_rate": f"{float(profit_rate or 0.0):+.2f}",
             "exit_rule": exit_rule,
@@ -502,6 +504,7 @@ def _apply_overnight_flow_override(record, mem_stock, ws_data, ctx, decision, ai
     )
     _append_mem_flow_history(mem_stock, exit_rule="overnight_sell_today", profit_rate=pnl_pct, flow_result=flow_result)
     flow_action = str(flow_result.get("action", "EXIT") or "EXIT").upper()
+    flow_state = normalize_flow_state_label(flow_result.get("flow_state", "-"))
     parse_failed = bool(flow_result.get("ai_parse_fail")) or flow_action not in {"HOLD", "TRIM", "EXIT"}
     _log_holding_pipeline(
         name,
@@ -509,7 +512,7 @@ def _apply_overnight_flow_override(record, mem_stock, ws_data, ctx, decision, ai
         "overnight_flow_override_review",
         original_action="SELL_TODAY",
         flow_action=flow_action,
-        flow_state=flow_result.get("flow_state", "-"),
+        flow_state=flow_state,
         flow_score=_safe_int(flow_result.get("score"), 0),
         flow_reason=flow_result.get("reason", "-"),
         flow_evidence=_flow_evidence_text(flow_result),
@@ -536,7 +539,7 @@ def _apply_overnight_flow_override(record, mem_stock, ws_data, ctx, decision, ai
     overridden["confidence"] = _safe_int(flow_result.get("score"), _safe_int(overridden.get("confidence"), 0))
     overridden["reason"] = f"flow override {flow_action}: {flow_result.get('reason', '-')}"
     overridden["risk_note"] = (
-        f"SELL_TODAY 재검문에서 {flow_result.get('flow_state', '-')} 흐름. "
+        f"SELL_TODAY 재검문에서 {flow_state} 흐름. "
         f"추가악화 {worsen_pct:.2f}%p 도달 시 당일청산 복귀."
     )
     if mem_stock is not None:
@@ -545,7 +548,7 @@ def _apply_overnight_flow_override(record, mem_stock, ws_data, ctx, decision, ai
         mem_stock["overnight_flow_override_candidate_profit"] = pnl_pct
         mem_stock["overnight_flow_override_worsen_pct"] = worsen_pct
         mem_stock["overnight_flow_override_flow_action"] = flow_action
-        mem_stock["overnight_flow_override_flow_state"] = str(flow_result.get("flow_state", "-") or "-")
+        mem_stock["overnight_flow_override_flow_state"] = flow_state
     _log_holding_pipeline(
         name,
         code,
@@ -553,7 +556,7 @@ def _apply_overnight_flow_override(record, mem_stock, ws_data, ctx, decision, ai
         original_action="SELL_TODAY",
         final_action="HOLD_OVERNIGHT",
         flow_action=flow_action,
-        flow_state=flow_result.get("flow_state", "-"),
+        flow_state=flow_state,
         flow_score=_safe_int(flow_result.get("score"), 0),
         profit_rate=f"{pnl_pct:+.2f}",
         worsen_pct=f"{worsen_pct:.2f}",

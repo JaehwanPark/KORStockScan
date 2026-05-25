@@ -10,6 +10,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from src.engine.auto_promotion_contracts import tier2_validation_passed
 from src.engine.approval_contracts import annotate_approval_request
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.engine.runtime_apply_bridge import (
@@ -177,10 +178,28 @@ def _int_or_default(value: Any, default: int) -> int | None:
 
 def _is_phase0_real_canary_auto_approved(request: dict[str, Any]) -> bool:
     state = str(request.get("calibration_state") or "").strip()
-    return state in {"auto_approved_real_canary", "auto_approved_real_canary_phase0"} and (
-        bool(request.get("auto_approved_real_canary"))
-        or bool(request.get("auto_approval_required"))
-        or str(request.get("auto_approval_state") or "").strip() == "real_canary_phase0_auto_approved"
+    contract = request.get("auto_promotion_contract") if isinstance(request.get("auto_promotion_contract"), dict) else {}
+    return (
+        state in {"auto_approved_real_canary", "auto_approved_real_canary_phase0"}
+        and (
+            bool(request.get("auto_approved_real_canary"))
+            or bool(request.get("auto_approval_required"))
+            or str(request.get("auto_approval_state") or "").strip() == "real_canary_phase0_auto_approved"
+        )
+        and tier2_validation_passed(contract.get("tier2_status"))
+        and contract.get("final_user_approval_boundary") == "full_live_only"
+    )
+
+
+def _is_swing_pre_final_auto_approved(request: dict[str, Any]) -> bool:
+    state = str(request.get("calibration_state") or "").strip()
+    contract = request.get("auto_promotion_contract") if isinstance(request.get("auto_promotion_contract"), dict) else {}
+    return (
+        state == "dry_run_auto_apply_ready"
+        and bool(request.get("auto_approval_required"))
+        and str(request.get("auto_approval_state") or "") == "ai_tier2_auto_approved"
+        and tier2_validation_passed(contract.get("tier2_status"))
+        and contract.get("final_user_approval_boundary") == "full_live_only"
     )
 
 
@@ -598,10 +617,18 @@ def _load_swing_runtime_approval_bundle(source_date: str | None) -> dict[str, An
     ]
     approved_requests = []
     blocked: list[str] = []
-    if non_scale_requests and not artifact:
+    manual_non_scale_requests = [
+        item for item in non_scale_requests if not _is_swing_pre_final_auto_approved(item)
+    ]
+    if manual_non_scale_requests and not artifact:
         blocked.append("approval_artifact_missing")
-    # Phase0 real canaries are auto-approved from the source request report. Optional
-    # artifacts may still narrow allowlists/caps, but missing artifacts no longer block.
+    for item in non_scale_requests:
+        approval_id = str(item.get("approval_id") or "")
+        if approval_id and _is_swing_pre_final_auto_approved(item):
+            approved_ids.add(approval_id)
+    # Phase0 real canaries are auto-approved only when the source request report
+    # carries parsed Tier2 validation. Optional artifacts may still narrow
+    # allowlists/caps, but missing artifacts no longer block.
     for item in one_share_requests:
         approval_id = str(item.get("approval_id") or "")
         if approval_id and _is_phase0_real_canary_auto_approved(item):
@@ -734,6 +761,8 @@ def _load_swing_runtime_approval_bundle(source_date: str | None) -> dict[str, An
         approval_state = (
             "auto_approved_real_canary_phase0"
             if request_policy in {"swing_one_share_real_canary_phase0", "swing_scale_in_real_canary_phase0"}
+            else "ai_tier2_pre_final_auto_approved"
+            if _is_swing_pre_final_auto_approved(request)
             else "approved_live"
         )
         approved_requests.append({**request, "approval_state": approval_state})
@@ -769,6 +798,7 @@ def _select_swing_approved_candidates(bundle: dict[str, Any]) -> tuple[list[dict
         policy_id = str(item.get("policy_id") or "")
         is_scale_in_real_canary = policy_id == "swing_scale_in_real_canary_phase0" or family == "swing_scale_in_real_canary_phase0"
         is_one_share_real_canary = policy_id == "swing_one_share_real_canary_phase0" or family == "swing_one_share_real_canary_phase0"
+        is_pre_final_auto = _is_swing_pre_final_auto_approved(item)
         stage = str(item.get("stage") or "unknown")
         candidate = {
             **item,
@@ -797,6 +827,8 @@ def _select_swing_approved_candidates(bundle: dict[str, Any]) -> tuple[list[dict
             or (
                 "real_canary_phase0_auto_approval_accepted"
                 if is_scale_in_real_canary or is_one_share_real_canary
+                else "ai_tier2_pre_final_auto_approval_accepted"
+                if is_pre_final_auto
                 else "user_approval_artifact_accepted"
             ),
             "env_overrides": overrides if not reject_reason else {},
@@ -943,8 +975,19 @@ def _load_runtime_apply_bridge_approval(source_date: str | None) -> dict[str, An
             and bool(item.get("live_auto_apply"))
             and not bool(item.get("approval_required"))
         )
+        tier2_status = (
+            item.get("lifecycle_bucket_discovery_ai_review_status")
+            or item.get("ai_review_status")
+            or (
+                item.get("auto_promotion_contract", {}).get("tier2_status")
+                if isinstance(item.get("auto_promotion_contract"), dict)
+                else None
+            )
+        )
         if not bool(contract.get("approval_live_ready")):
             item_blocked.append("approval_contract_not_live_ready")
+        if not tier2_validation_passed(tier2_status):
+            item_blocked.append(f"ai_tier2_validation_not_parsed:{tier2_status or 'missing'}")
         if str(item.get("bridge_candidate_state") or "") != "live_auto_apply_ready":
             item_blocked.append(f"runtime_apply_blocked_bridge_not_ready:{item.get('bridge_candidate_state')}")
         if not bool(item.get("allowed_runtime_apply")):

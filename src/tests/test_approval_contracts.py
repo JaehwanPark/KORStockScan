@@ -29,7 +29,8 @@ def test_approval_contract_registry_marks_ready_runtime_apply_bridge_contracts()
 def test_approval_contract_registry_marks_missing_scalping_manual_contract():
     request = annotate_approval_request({"family": "position_sizing_cap_release"}, "2026-05-15")
 
-    assert request["approval_contract_status"] == "contract_missing"
+    assert request["approval_contract_status"] == "final_user_approval_required"
+    assert request["approval_mode"] == "final_user_approval_required"
+    assert request["approval_artifact_required"] is True
     assert request["approval_live_ready"] is False
     assert request["approval_artifact_path"].endswith("position_sizing_cap_release_2026-05-15.json")
-    assert "approval_artifact_loader" in request["approval_contract_missing_components"]

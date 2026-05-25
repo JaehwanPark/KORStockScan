@@ -248,7 +248,7 @@ def _call_openai_review(context: dict[str, Any], *, model: str) -> tuple[Any | N
     keys = _load_threshold_ai_openai_keys()
     if not keys:
         return None, {"provider": "openai", "status": "unavailable", "reason": "OPENAI_API_KEY not configured", "model": model}
-    prompt = json.dumps(context, ensure_ascii=False, indent=2, default=str)
+    prompt = json.dumps(context, ensure_ascii=True, indent=2, default=str)
     errors: list[dict[str, str]] = []
     for attempt_index, (key_name, api_key) in enumerate(keys, start=1):
         try:

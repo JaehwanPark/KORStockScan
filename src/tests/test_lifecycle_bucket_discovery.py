@@ -152,7 +152,7 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     assert auto["actual_order_submitted"] is False
 
 
-def test_lifecycle_bucket_discovery_keeps_deterministic_live_when_ai_review_disabled(tmp_path, monkeypatch):
+def test_lifecycle_bucket_discovery_blocks_deterministic_live_when_ai_review_disabled(tmp_path, monkeypatch):
     ldm_dir = tmp_path / "ldm"
     report_dir = tmp_path / "report"
     catalog_dir = tmp_path / "catalog"
@@ -166,15 +166,14 @@ def test_lifecycle_bucket_discovery_keeps_deterministic_live_when_ai_review_disa
 
     report = mod.write_lifecycle_bucket_discovery_report("2026-05-22", ai_review_provider="none")
 
-    live = [item for item in report["surfaced_candidates"] if item["classification_state"] == "live_auto_apply_ready"]
-    deferred = [item for item in live if item.get("ai_review_followup_required") == "post_apply_verification"]
-    assert {item["live_auto_apply_family"] for item in live} == {
+    blocked = [item for item in report["surfaced_candidates"] if item["classification_state"] == "runtime_blocked_contract_gap"]
+    assert {item["live_auto_apply_family"] for item in blocked if item.get("live_auto_apply_family")} == {
         mod.ENTRY_LIVE_AUTO_FAMILY,
         mod.SCALE_IN_LIVE_AUTO_FAMILY,
     }
-    assert len(deferred) == len(live)
+    assert all(item.get("ai_tier2_blocked_reason") == "ai_tier2_validation_not_parsed:disabled" for item in blocked)
     assert report["summary"]["ai_two_pass_review_status"] == "disabled"
-    assert "ai_two_pass_review_disabled_live_auto_deferred_to_post_apply" in report["warnings"]
+    assert "ai_two_pass_review_disabled_fail_closed_live_auto_blocked" in report["warnings"]
 
 
 def test_lifecycle_bucket_discovery_ignores_ambiguous_ai_block_for_live_candidate(tmp_path, monkeypatch):
@@ -197,6 +196,7 @@ def test_lifecycle_bucket_discovery_ignores_ambiguous_ai_block_for_live_candidat
     live = [item for item in report["surfaced_candidates"] if item["classification_state"] == "live_auto_apply_ready"]
     ignored = [item for item in live if item.get("ai_review_block_ignored_reason")]
     assert ignored
+    assert all((item.get("auto_promotion_contract") or {}).get("tier2_status") == "parsed" for item in live)
     assert report["summary"]["live_auto_apply_ready_count"] == 2
     assert "ai_review_ambiguous_live_candidate_kept_for_post_apply" in report["warnings"]
 
@@ -276,7 +276,7 @@ def test_lifecycle_bucket_discovery_surfaces_source_contract_drift(tmp_path, mon
     assert drift
 
 
-def test_lifecycle_bucket_discovery_openai_review_uses_tier3_schema(monkeypatch):
+def test_lifecycle_bucket_discovery_openai_review_uses_tier2_schema_and_english_prompt(monkeypatch):
     captured = {}
 
     class _FakeResponses:
@@ -292,7 +292,7 @@ def test_lifecycle_bucket_discovery_openai_review_uses_tier3_schema(monkeypatch)
     monkeypatch.setattr("src.engine.daily_threshold_cycle_report._load_threshold_ai_openai_keys", lambda: [("OPENAI_API_KEY", "key")])
     monkeypatch.setattr("openai.OpenAI", _FakeOpenAI)
 
-    raw, status = mod._call_openai_ai_review({"surfaced_candidates": []})
+    raw, status = mod._call_openai_ai_review({"surfaced_candidates": [{"label": "수급"}]})
 
     assert json.loads(raw)["schema_version"] == 1
     assert status["model"] == mod.AI_REVIEW_MODEL
@@ -300,3 +300,7 @@ def test_lifecycle_bucket_discovery_openai_review_uses_tier3_schema(monkeypatch)
     assert captured["model"] == mod.AI_REVIEW_MODEL
     assert captured["text"]["format"]["name"] == mod.AI_REVIEW_SCHEMA_NAME
     assert captured["text"]["format"]["strict"] is True
+    assert "AI Tier2" in captured["instructions"]
+    assert "\\uc218\\uae09" in captured["input"]
+    assert not any("\uac00" <= char <= "\ud7a3" for char in captured["instructions"])
+    assert not any("\uac00" <= char <= "\ud7a3" for char in captured["input"])

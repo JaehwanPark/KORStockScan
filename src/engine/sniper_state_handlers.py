@@ -49,6 +49,7 @@ from src.engine.sniper_entry_state import ENTRY_LOCK, move_orders_to_terminal
 from src.engine.sniper_strength_momentum import evaluate_scalping_strength_momentum
 from src.engine.sniper_strength_shadow_feedback import record_shadow_candidate
 from src.engine.sniper_gatekeeper_replay import record_gatekeeper_snapshot
+from src.engine.ai_response_contracts import normalize_flow_state_label, normalize_gatekeeper_action_key
 from src.engine.sniper_post_sell_feedback import record_sim_post_sell_candidate
 from src.engine.holding_exit_matrix_runtime import resolve_holding_exit_matrix_scale_in_bias
 from src.engine.lifecycle_decision_matrix_runtime import (
@@ -6231,13 +6232,13 @@ def _get_swing_gap_threshold(strategy: str) -> float:
 
 
 def _resolve_gatekeeper_reject_cooldown(action_label: str) -> tuple[int, str]:
-    action = str(action_label or '').strip()
-    if action == '눌림 대기':
+    action_key = normalize_gatekeeper_action_key(action_label)
+    if action_key == "pullback_wait":
         return (
             _rule_int('ML_GATEKEEPER_PULLBACK_WAIT_COOLDOWN', 60 * 20),
             'pullback_wait',
         )
-    if action in {'전량 회피', '둘 다 아님'}:
+    if action_key in {"full_avoid", "neither"}:
         return (
             _rule_int('ML_GATEKEEPER_REJECT_COOLDOWN', 60 * 60 * 2),
             'hard_reject',
@@ -7903,12 +7904,13 @@ def _overbought_pre_submit_allowed(context: dict | None) -> bool:
 
 
 def _append_holding_flow_history(stock: dict, *, now_ts: float, exit_rule: str, profit_rate: float, flow_result: dict) -> None:
+    flow_state = normalize_flow_state_label(flow_result.get("flow_state", "-"))
     history = list(stock.get("holding_flow_review_history") or [])
     history.append(
         {
             "time": datetime.fromtimestamp(float(now_ts or time.time())).strftime("%H:%M:%S"),
             "action": str(flow_result.get("action", "-") or "-"),
-            "flow_state": str(flow_result.get("flow_state", "-") or "-"),
+            "flow_state": flow_state,
             "score": _safe_int(flow_result.get("score"), 0),
             "profit_rate": f"{float(profit_rate or 0.0):+.2f}",
             "exit_rule": exit_rule or "-",
@@ -8123,7 +8125,7 @@ def _evaluate_holding_flow_override(
                     code,
                     "holding_flow_override_exit_confirmed",
                     exit_rule=exit_rule,
-                    flow_state=stock.get("holding_flow_override_last_flow_state", "-"),
+                    flow_state=normalize_flow_state_label(stock.get("holding_flow_override_last_flow_state", "-")),
                     flow_score=_safe_int(stock.get("holding_flow_override_last_score"), 0),
                     profit_rate=f"{profit_rate:+.2f}",
                     confirm_reason="ofi_stable_bearish_interval",
@@ -8136,7 +8138,7 @@ def _evaluate_holding_flow_override(
             exit_rule=exit_rule,
             original_sell_reason_type=sell_reason_type,
             flow_action=last_review_action,
-            flow_state=stock.get("holding_flow_override_last_flow_state", "-"),
+            flow_state=normalize_flow_state_label(stock.get("holding_flow_override_last_flow_state", "-")),
             flow_score=_safe_int(stock.get("holding_flow_override_last_score"), 0),
             flow_reason=stock.get("holding_flow_override_last_reason", "review_interval_hold"),
             profit_rate=f"{profit_rate:+.2f}",
@@ -8258,7 +8260,7 @@ def _evaluate_holding_flow_override(
             "holding_flow_override_last_review_at": now_ts,
             "holding_flow_override_last_review_profit": profit_rate,
             "holding_flow_override_last_action": str(flow_result.get("action", "EXIT") or "EXIT").upper(),
-            "holding_flow_override_last_flow_state": str(flow_result.get("flow_state", "-") or "-"),
+            "holding_flow_override_last_flow_state": normalize_flow_state_label(flow_result.get("flow_state", "-")),
             "holding_flow_override_last_score": _safe_int(flow_result.get("score"), 0),
             "holding_flow_override_last_reason": str(flow_result.get("reason", "-") or "-")[:160],
             "holding_flow_override_next_review_sec": _safe_int(flow_result.get("next_review_sec"), min_review_sec),
@@ -8272,6 +8274,7 @@ def _evaluate_holding_flow_override(
         flow_result=flow_result,
     )
     flow_action = str(flow_result.get("action", "EXIT") or "EXIT").upper()
+    flow_state = normalize_flow_state_label(flow_result.get("flow_state", "-"))
     parse_failed = bool(flow_result.get("ai_parse_fail")) or flow_action not in {"HOLD", "TRIM", "EXIT"}
     orderbook_micro = None
     ofi_state = None
@@ -8303,7 +8306,7 @@ def _evaluate_holding_flow_override(
         exit_rule=exit_rule,
         candidate_reason=reason,
         flow_action=flow_action,
-        flow_state=flow_result.get("flow_state", "-"),
+        flow_state=flow_state,
         flow_score=_safe_int(flow_result.get("score"), 0),
         flow_reason=flow_result.get("reason", "-"),
         flow_evidence=_flow_evidence_text(flow_result),
@@ -8356,7 +8359,7 @@ def _evaluate_holding_flow_override(
                 exit_rule=exit_rule,
                 original_sell_reason_type=sell_reason_type,
                 flow_action="EXIT",
-                flow_state=flow_result.get("flow_state", "-"),
+                flow_state=flow_state,
                 flow_score=_safe_int(flow_result.get("score"), 0),
                 flow_reason=flow_result.get("reason", "-"),
                 flow_evidence=_flow_evidence_text(flow_result),
@@ -8415,7 +8418,7 @@ def _evaluate_holding_flow_override(
                 code,
                 "holding_flow_override_exit_confirmed",
                 exit_rule=exit_rule,
-                flow_state=flow_result.get("flow_state", "-"),
+                flow_state=flow_state,
                 flow_score=_safe_int(flow_result.get("score"), 0),
                 profit_rate=f"{profit_rate:+.2f}",
                 confirm_reason="ofi_stable_bearish",
@@ -8441,7 +8444,7 @@ def _evaluate_holding_flow_override(
             code,
             "holding_flow_override_exit_confirmed",
             exit_rule=exit_rule,
-            flow_state=flow_result.get("flow_state", "-"),
+            flow_state=flow_state,
             flow_score=_safe_int(flow_result.get("score"), 0),
             profit_rate=f"{profit_rate:+.2f}",
         )
@@ -8454,7 +8457,7 @@ def _evaluate_holding_flow_override(
         exit_rule=exit_rule,
         original_sell_reason_type=sell_reason_type,
         flow_action=flow_action,
-        flow_state=flow_result.get("flow_state", "-"),
+        flow_state=flow_state,
         flow_score=_safe_int(flow_result.get("score"), 0),
         flow_reason=flow_result.get("reason", "-"),
         flow_evidence=_flow_evidence_text(flow_result),
@@ -9844,6 +9847,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                 gatekeeper = {
                     'allow_entry': bool(stock.get('last_gatekeeper_allow_entry', False)),
                     'action_label': stock.get('last_gatekeeper_action', 'UNKNOWN'),
+                    'action_key': stock.get('last_gatekeeper_action_key') or normalize_gatekeeper_action_key(stock.get('last_gatekeeper_action', 'UNKNOWN')),
                     'report': stock.get('last_gatekeeper_report', ''),
                     'eval_ms': 0,
                     'lock_wait_ms': 0,
@@ -9860,6 +9864,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                     "gatekeeper_fast_reuse",
                     strategy=strategy,
                     action=gatekeeper.get('action_label', 'UNKNOWN'),
+                    action_key=gatekeeper.get('action_key', 'unknown'),
                     age_sec=fast_sig_age_str,
                     ws_age_sec="-" if gatekeeper_ws_age_sec is None else f"{gatekeeper_ws_age_sec:.2f}",
                 )
@@ -9931,12 +9936,14 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                     with ENTRY_LOCK:
                         LAST_AI_CALL_TIMES[code] = now_ts
                     action_label = gatekeeper.get('action_label', 'UNKNOWN')
+                    action_key = normalize_gatekeeper_action_key(gatekeeper.get('action_key') or action_label)
                     gatekeeper_allow = bool(gatekeeper.get('allow_entry', False))
                     gatekeeper_cache_mode = str(gatekeeper.get('cache_mode', 'hit' if gatekeeper.get('cache_hit') else 'miss'))
                     _mutate_stock_state(
                         stock,
                         set_fields={
                             'last_gatekeeper_action': action_label,
+                            'last_gatekeeper_action_key': action_key,
                             'last_gatekeeper_report': gatekeeper.get('report', ''),
                             'last_gatekeeper_eval_ms': gatekeeper_eval_ms,
                             'last_gatekeeper_allow_entry': gatekeeper_allow,
@@ -9971,13 +9978,17 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                     )
                     return False
 
+            action_label = gatekeeper.get('action_label', 'UNKNOWN')
+            action_key = normalize_gatekeeper_action_key(gatekeeper.get('action_key') or action_label)
+            gatekeeper_allow = bool(gatekeeper.get('allow_entry', False))
             if not gatekeeper_allow:
-                gatekeeper_reject_cd, gatekeeper_cd_policy = _resolve_gatekeeper_reject_cooldown(action_label)
+                gatekeeper_reject_cd, gatekeeper_cd_policy = _resolve_gatekeeper_reject_cooldown(action_key)
                 log_info(f"🚫 [{strategy} Gatekeeper 거부] {stock['name']} ({action_label})")
                 with ENTRY_LOCK:
                     cooldowns[code] = now_ts + gatekeeper_reject_cd
                 _log_entry_pipeline(
                     stock, code, "blocked_gatekeeper_reject", strategy=strategy, action=action_label,
+                    action_key=action_key,
                     cooldown_sec=gatekeeper_reject_cd, cooldown_policy=gatekeeper_cd_policy,
                     gatekeeper_eval_ms=gatekeeper_eval_ms, gatekeeper_cache=stock.get('last_gatekeeper_cache_mode', 'miss'),
                     gatekeeper_lock_wait_ms=stock.get('last_gatekeeper_lock_wait_ms', 0),
@@ -9997,6 +10008,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         "score": round(float(score), 2),
                         "runtime_score_proxy": round(float(score), 2),
                         "gatekeeper_action": action_label,
+                        "gatekeeper_action_key": action_key,
                         "gatekeeper_allow_entry": False,
                         "gatekeeper_eval_ms": gatekeeper_eval_ms,
                         "gatekeeper_cache": stock.get('last_gatekeeper_cache_mode', 'miss'),
@@ -13143,9 +13155,11 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     ),
                     threshold_applied_value=whipsaw_decision.get("threshold_applied_value", "-"),
                     flow_state=(
-                        stock.get("holding_flow_override_last_flow_state")
-                        or stock.get("holding_flow_override_state")
-                        or "flow_state_unavailable"
+                        normalize_flow_state_label(
+                            stock.get("holding_flow_override_last_flow_state")
+                            or stock.get("holding_flow_override_state")
+                            or "flow_state_unavailable"
+                        )
                     ),
                     exit_rule_candidate="scalp_soft_stop_pct",
                 )

@@ -84,8 +84,8 @@
 운영 기준:
 
 1. `runtime_mutation_allowed=false`면 flow 조정, 주문 차단, threshold mutation 권한이 없다.
-2. summary에 `approval_required`가 있어도 approval artifact가 없으면 env apply 대상이 아니다.
-3. 다음 장전 적용 여부는 preopen apply manifest와 approval artifact가 닫힌 뒤에만 본다.
+2. summary에 `approval_required`가 있으면 final-stage user approval 후보로 본다. Pre-final 후보는 `sim_auto_approved`, `dry_run_auto_apply_ready`, `live_auto_apply_ready`, or `auto_approved_real_canary`처럼 별도 auto state를 가져야 한다.
+3. 다음 장전 적용 여부는 preopen apply manifest와 parsed AI Tier2/deterministic guard 또는 final user approval artifact가 닫힌 뒤에만 본다.
 
 ### Q6. 새 관찰지표가 생기면 무엇을 같이 정해야 하나?
 
@@ -127,15 +127,15 @@
 답변:
 
 1. 일반 approval request만으로는 반영하지 않는다.
-2. 일반 swing runtime env 변경은 별도 approval artifact가 있어야 한다.
-3. `swing_one_share_real_canary_phase0`와 `swing_scale_in_real_canary_phase0`는 source report hard floor/source-quality/allowlist/cap 통과 시 phase0 auto approval로 반영될 수 있다.
+2. 일반 swing dry-run env 변경은 hard floor/source-quality와 parsed AI Tier2 review가 닫힌 `dry_run_auto_apply_ready`일 때만 pre-final auto approval로 반영될 수 있다. Tier2 missing/unavailable/parse-rejected는 fail-closed다.
+3. `swing_one_share_real_canary_phase0`와 `swing_scale_in_real_canary_phase0`는 parsed AI Tier2 review와 source report hard floor/source-quality/allowlist/cap 통과 시 phase0 auto approval로 반영될 수 있다.
 4. 승인 후에도 기본 스윙 dry-run은 유지된다. Phase0 real canary만 `actual_order_submitted=true` source를 만들 수 있으며 full swing live conversion은 아니다.
 
 운영 기준:
 
-1. `swing_runtime_approval`은 proposal/approval request layer다.
+1. `swing_runtime_approval`은 pre-final auto approval과 final-stage approval request를 분리하는 layer다.
 2. `swing_one_share_real_canary`와 `swing_scale_in_real_canary_phase0`는 전체 스윙 실주문 전환이 아니다.
-3. approval artifact 없이 floor, cooldown, scale-in, real canary env를 수동으로 쓰지 않는다.
+3. final full-live conversion, cap release beyond bounded limits, provider/bot changes, and hard/protect/emergency safety relaxation require user approval.
 
 ### Q9. code-improvement workorder가 생성되면 자동으로 repo를 수정하나?
 

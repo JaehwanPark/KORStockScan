@@ -10,6 +10,7 @@ from sqlalchemy import delete
 
 from src.database.db_manager import DBManager
 from src.database.models import StrategyPositionPerformanceDaily, TradePerformanceFact
+from src.engine.ai_response_contracts import normalize_gatekeeper_action_key
 from src.engine.sniper_position_tags import normalize_position_tag, normalize_strategy
 from src.engine.sniper_trade_review_report import build_trade_review_report
 
@@ -94,6 +95,7 @@ def _build_trade_fact_rows(target_date: str) -> tuple[list[dict[str, Any]], list
                 "pyramid_count": _safe_int(row.get("pyramid_count")),
                 "ai_review_headline": str(ai_summary.get("headline") or ""),
                 "gatekeeper_action": str(gatekeeper.get("action") or ""),
+                "gatekeeper_action_key": normalize_gatekeeper_action_key(gatekeeper.get("action_key") or gatekeeper.get("action")),
                 "gatekeeper_allow_entry": bool(gatekeeper.get("allow_entry")) if gatekeeper else None,
             }
         )

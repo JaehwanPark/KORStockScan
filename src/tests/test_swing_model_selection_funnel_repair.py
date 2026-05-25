@@ -7,6 +7,7 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 
 import src.engine.sniper_state_handlers as state_handlers
+import src.engine.swing_lifecycle_audit as lifecycle_audit_mod
 from src.engine.swing_selection_funnel_report import (
     build_swing_selection_funnel_report,
     summarize_pipeline_events,
@@ -32,6 +33,10 @@ from src.model import common_v2
 from src.model.common_v2 import daily_selection_stats, select_daily_candidates
 from src.scanners.final_ensemble_scanner import classify_v2_csv_pick
 from src.utils.constants import TRADING_RULES as CONFIG
+
+
+def _has_hangul(text: str) -> bool:
+    return any("\uac00" <= char <= "\ud7a3" for char in text)
 
 
 class FakeEventBus:
@@ -209,6 +214,7 @@ def test_swing_funnel_report_separates_raw_and_unique_event_counts():
     assert summary["raw_counts"]["blocked_swing_gap"] == 2
     assert summary["unique_record_counts"]["blocked_swing_gap"] == 1
     assert summary["gatekeeper_actions"]["눌림 대기"] == 1
+    assert summary["gatekeeper_action_keys"]["pullback_wait"] == 1
     assert summary["submitted_unique_records"] == 1
     assert summary["simulated_order_unique_records"] == 1
     assert summary["ofi_qi_summary"]["entry_micro_state_counts"]["bullish"] == 1
@@ -1510,6 +1516,7 @@ def test_swing_lifecycle_audit_tracks_full_funnel_and_observation_axes():
     assert report["report_type"] == "swing_lifecycle_audit"
     assert report["lifecycle_events"]["unique_record_counts"]["blocked_swing_gap"] == 1
     assert report["lifecycle_events"]["gatekeeper_actions"]["눌림 대기"] == 1
+    assert report["lifecycle_events"]["gatekeeper_action_keys"]["pullback_wait"] == 1
     assert report["lifecycle_events"]["add_types"]["PYRAMID"] == 1
     assert report["recommendation_db_load"]["db_load_skip_reason"] == "loaded"
     assert report["lifecycle_events"]["scale_in_observation"]["action_groups"]["PYRAMID"] == 1
@@ -1741,6 +1748,14 @@ def test_swing_threshold_ai_review_is_proposal_only_and_guarded():
     assert item["guard_decision"]["runtime_change"] is False
 
 
+def test_swing_threshold_ai_review_prompt_contract_is_english_ascii():
+    instructions = lifecycle_audit_mod._build_openai_review_instructions()
+
+    assert "swing-trading lifecycle threshold reviewer" in instructions
+    assert "Domain glossary" in instructions
+    assert not _has_hangul(instructions)
+
+
 def _approval_ready_audit(**overrides):
     audit = {
         "date": "2026-05-08",
@@ -1817,13 +1832,15 @@ def test_swing_runtime_approval_blocks_hard_floor_failures():
 
 
 def test_swing_runtime_approval_report_emits_machine_readable_requests():
-    report = build_swing_runtime_approval_report(_approval_ready_audit())
+    report = build_swing_runtime_approval_report(_approval_ready_audit(), {"ai_status": "parsed"})
 
     assert report["report_type"] == "swing_runtime_approval"
     assert report["policy"]["perfect_spot_required"] is False
     assert report["policy"]["ev_calibration_source"] == "combined_real_plus_sim"
     assert report["policy"]["sim_authority"] == "equal_for_ev_calibration_when_sim_lifecycle_closed"
     assert report["policy"]["execution_quality_source"] == "real_only"
+    assert report["policy"]["runtime_apply_requires_user_approval_artifact"] is False
+    assert report["policy"]["final_full_live_requires_user_approval"] is True
     assert report["real_canary_policy"]["policy_id"] == "swing_one_share_real_canary_phase0"
     assert report["real_canary_policy"]["real_order_allowed_actions"] == ["BUY_INITIAL", "SELL_CLOSE"]
     assert report["real_canary_policy"]["sim_only_actions"] == ["AVG_DOWN", "PYRAMID", "SCALE_IN"]
@@ -1831,6 +1848,9 @@ def test_swing_runtime_approval_report_emits_machine_readable_requests():
     assert report["approval_requests"]
     request = report["approval_requests"][0]
     assert request["approval_id"].startswith("swing_runtime_approval:2026-05-08:")
+    assert request["calibration_state"] == "dry_run_auto_apply_ready"
+    assert request["auto_approval_state"] == "ai_tier2_auto_approved"
+    assert request["human_approval_required"] is False
     assert request["actual_order_submitted"] is False
     assert request["combined_ev_authority"] is True
     assert request["execution_quality_authority"] == "real_only"
@@ -1841,6 +1861,22 @@ def test_swing_runtime_approval_report_emits_machine_readable_requests():
         report["rolling_source_bundle"]["source_authority"]["combined"]
         == "primary_tradeoff_view_for_approval_request_generation"
     )
+
+
+def test_swing_runtime_approval_report_blocks_pre_final_auto_when_tier2_missing():
+    report = build_swing_runtime_approval_report(_approval_ready_audit())
+
+    assert not [
+        item
+        for item in report["approval_requests"]
+        if item.get("calibration_state") == "dry_run_auto_apply_ready"
+    ]
+    blocked = [
+        item
+        for item in report["blocked_requests"]
+        if item.get("family") == "swing_gatekeeper_reject_cooldown"
+    ][0]
+    assert "ai_tier2_validation_not_parsed:missing" in blocked["block_reasons"]
 
 
 def test_swing_runtime_approval_emits_scale_in_real_canary_request_when_arm_ready():
@@ -1881,7 +1917,7 @@ def test_swing_runtime_approval_emits_scale_in_real_canary_request_when_arm_read
         },
     )
 
-    report = build_swing_runtime_approval_report(audit)
+    report = build_swing_runtime_approval_report(audit, {"ai_status": "parsed"})
     request = next(
         item
         for item in report["approval_requests"]
@@ -1893,6 +1929,8 @@ def test_swing_runtime_approval_emits_scale_in_real_canary_request_when_arm_read
     assert request["recommended_values"]["max_order_qty"] == 1
     assert request["recommended_values"]["enabled"] is True
     assert request["dry_run_required"] is False
+    assert request["auto_promotion_contract"]["state"] == "bounded_real_canary_auto_approved"
+    assert request["auto_promotion_contract"]["tier2_status"] == "parsed"
     assert report["scale_in_real_canary_policy"]["policy_id"] == "swing_scale_in_real_canary_phase0"
 
 

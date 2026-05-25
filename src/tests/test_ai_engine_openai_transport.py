@@ -65,6 +65,10 @@ def _build_engine():
     return engine
 
 
+def _has_hangul(text: str) -> bool:
+    return any("\uac00" <= char <= "\ud7a3" for char in text)
+
+
 def _sample_ws_data():
     return {
         "curr": 10100,
@@ -159,8 +163,9 @@ def test_openai_call_applies_endpoint_response_schema_when_flag_enabled(monkeypa
     assert captured["text"]["format"]["schema"] == OPENAI_RESPONSE_SCHEMA_REGISTRY["condition_entry_v1"]
     assert OPENAI_PROMPT_CONTRACT_MARKER in captured["instructions"]
     assert "Control language: English" in captured["instructions"]
-    assert "Korean domain glossary" in captured["instructions"]
+    assert "Domain glossary for interpretation" in captured["instructions"]
     assert "Preserve all raw enum labels" in captured["instructions"]
+    assert not _has_hangul(captured["instructions"])
     assert "PROMPT" in captured["instructions"]
 
 
@@ -526,6 +531,8 @@ def test_openai_holding_flow_uses_flow_schema_and_normalizes_payload(monkeypatch
 
     assert result["action"] == "TRIM"
     assert result["score"] == 67
+    assert result["flow_state"] == "recovery"
+    assert result["raw_flow_state"] == "회복"
     assert result["next_review_sec"] == 44
     assert captured["kwargs"]["schema_name"] == "holding_exit_flow_v1"
     assert captured["kwargs"]["endpoint_name"] == "holding_flow"
@@ -533,8 +540,48 @@ def test_openai_holding_flow_uses_flow_schema_and_normalizes_payload(monkeypatch
     assert captured["kwargs"]["metadata_extra"]["entry_adm_candidate_id"] == "ADM-1"
     assert "To reverse the previous flow-review action" in captured["prompt"]
     assert "If a system guard applies" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
+    assert "absorption, recovery, distribution, breakdown, or quiet" in captured["user_input"]
+    assert "state=absorption" in captured["user_input"]
+    assert not _has_hangul(captured["prompt"])
     assert "Do not cut by a single score cutoff" in captured["user_input"]
     assert "reason=매수 흡수 유지" in captured["user_input"]
+
+
+def test_openai_entry_price_tier2_input_escapes_non_english_payload(monkeypatch):
+    engine = _build_engine()
+    captured = {}
+
+    def _fake_call(prompt, user_input, **kwargs):
+        captured["prompt"] = prompt
+        captured["user_input"] = user_input
+        captured["kwargs"] = kwargs
+        return {
+            "action": "USE_REFERENCE",
+            "order_price": 10000,
+            "confidence": 80,
+            "reason": "reference price is acceptable",
+            "max_wait_sec": 30,
+        }
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
+
+    result = GPTSniperEngine.evaluate_scalping_entry_price(
+        engine,
+        "테스트",
+        "005930",
+        {"curr": 10000, "note": "수급 확인"},
+        [{"price": 10000, "volume": 10, "side": "BUY"}],
+        [{"close": 10000, "high": 10020, "low": 9980, "volume": 1200}],
+        {"resolved_order_price": 9900},
+    )
+
+    assert result["action"] == "USE_REFERENCE"
+    assert captured["kwargs"]["schema_name"] == "entry_price_v1"
+    assert captured["kwargs"]["endpoint_name"] == "entry_price"
+    assert not _has_hangul(captured["prompt"])
+    assert not _has_hangul(captured["user_input"])
+    assert "\\ud14c\\uc2a4\\ud2b8" in captured["user_input"]
+    assert "\\uc218\\uae09" in captured["user_input"]
 
 
 def test_openai_deterministic_config_is_limited_to_json_path(monkeypatch):

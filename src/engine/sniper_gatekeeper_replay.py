@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
+from src.engine.ai_response_contracts import normalize_gatekeeper_action_key
 from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.logger import log_error, log_info
 
@@ -164,6 +165,7 @@ def _snapshot_signature(payload: dict) -> str:
         "stock_code": payload.get("stock_code", ""),
         "strategy": payload.get("strategy", ""),
         "action_label": payload.get("action_label", ""),
+        "action_key": payload.get("action_key", ""),
         "allow_entry": payload.get("allow_entry", False),
         "ctx_summary": payload.get("ctx_summary", {}),
     }
@@ -213,6 +215,7 @@ def record_gatekeeper_snapshot(
         "strategy": str(strategy or stock.get("strategy", "") or ""),
         "position_tag": str(stock.get("position_tag", "") or ""),
         "action_label": str(gatekeeper.get("action_label", "") or "UNKNOWN"),
+        "action_key": normalize_gatekeeper_action_key(gatekeeper.get("action_key") or gatekeeper.get("action_label")),
         "allow_entry": bool(gatekeeper.get("allow_entry", False)),
         "cache_mode": str(gatekeeper.get("cache_mode", "") or ""),
         "eval_ms": int(gatekeeper.get("eval_ms", 0) or 0),

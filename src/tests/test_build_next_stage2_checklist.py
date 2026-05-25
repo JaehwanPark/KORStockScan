@@ -62,7 +62,7 @@ def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(monkey
     checklist = docs / "checklists" / "2026-05-11-stage2-todo-checklist.md"
     text = checklist.read_text(encoding="utf-8")
     assert "[ThresholdEnvAutoApplyPreopen0511]" in text
-    assert "[SwingApprovalArtifactPreopen0511]" in text
+    assert "[SwingPreFinalAutoAndFinalApprovalPreopen0511]" in text
     assert "[RuntimeEnvIntradayObserve0511]" in text
     assert "[OpenAIWSIntradaySample0511]" in text
     assert "[SimProbeIntradayCoverage0511]" in text

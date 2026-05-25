@@ -570,7 +570,7 @@ def test_runtime_approval_summary_surfaces_swing_one_share_approval_request(tmp_
     assert report["summary"]["swing_requested"] == 1
     assert report["swing"][0]["family"] == "swing_one_share_real_canary_phase0"
     assert report["swing"][0]["state"] == "approval_required"
-    assert report["swing"][0]["reason_label"] == "1주 real canary approval artifact 없음"
+    assert report["swing"][0]["reason_label"] == "approval request 미승인"
     assert report["swing"][0]["approval_id"] == "swing_one_share_real_canary:2026-05-15:phase0"
 
 

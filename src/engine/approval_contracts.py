@@ -14,6 +14,8 @@ APPROVAL_DIR = DATA_DIR / "threshold_cycle" / "approvals"
 _CONTRACTS: dict[str, dict[str, Any]] = {
     "swing_model_floor": {
         "approval_contract_status": "ready",
+        "approval_mode": "ai_tier2_pre_final_auto",
+        "approval_artifact_required": False,
         "approval_artifact_template": "swing_runtime_approvals_{date}.json",
         "approval_artifact_consumer": "threshold_cycle_preopen_apply.swing_runtime_approvals",
         "preopen_env_ready": True,
@@ -22,6 +24,8 @@ _CONTRACTS: dict[str, dict[str, Any]] = {
     },
     "swing_selection_top_k": {
         "approval_contract_status": "ready",
+        "approval_mode": "ai_tier2_pre_final_auto",
+        "approval_artifact_required": False,
         "approval_artifact_template": "swing_runtime_approvals_{date}.json",
         "approval_artifact_consumer": "threshold_cycle_preopen_apply.swing_runtime_approvals",
         "preopen_env_ready": True,
@@ -30,6 +34,8 @@ _CONTRACTS: dict[str, dict[str, Any]] = {
     },
     "swing_gatekeeper_reject_cooldown": {
         "approval_contract_status": "ready",
+        "approval_mode": "ai_tier2_pre_final_auto",
+        "approval_artifact_required": False,
         "approval_artifact_template": "swing_runtime_approvals_{date}.json",
         "approval_artifact_consumer": "threshold_cycle_preopen_apply.swing_runtime_approvals",
         "preopen_env_ready": True,
@@ -38,6 +44,8 @@ _CONTRACTS: dict[str, dict[str, Any]] = {
     },
     "swing_market_regime_sensitivity": {
         "approval_contract_status": "ready",
+        "approval_mode": "ai_tier2_pre_final_auto",
+        "approval_artifact_required": False,
         "approval_artifact_template": "swing_runtime_approvals_{date}.json",
         "approval_artifact_consumer": "threshold_cycle_preopen_apply.swing_runtime_approvals",
         "preopen_env_ready": True,
@@ -81,7 +89,9 @@ _CONTRACTS: dict[str, dict[str, Any]] = {
         "runtime_scope": "live_auto_scalp_scale_in_policy_env_only",
     },
     "position_sizing_cap_release": {
-        "approval_contract_status": "contract_missing",
+        "approval_contract_status": "final_user_approval_required",
+        "approval_mode": "final_user_approval_required",
+        "approval_artifact_required": True,
         "approval_artifact_template": "position_sizing_cap_release_{date}.json",
         "approval_artifact_consumer": None,
         "preopen_env_ready": False,

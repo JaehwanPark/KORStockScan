@@ -7,6 +7,17 @@ from src.engine import lifecycle_bucket_discovery as discovery_mod
 from src.engine.swing import sim_auto_approval_control_tower as swing_sim_mod
 
 
+def _bounded_real_canary_tier2_contract() -> dict:
+    return {
+        "state": "bounded_real_canary_auto_approved",
+        "tier2_status": "parsed",
+        "tier2_policy": "fail_closed",
+        "tier2_fail_closed": False,
+        "primary_ev_uplift_threshold_pct": 1.0,
+        "final_user_approval_boundary": "full_live_only",
+    }
+
+
 def test_preopen_apply_rejects_panic_lifecycle_standalone_env_candidate():
     selected, decisions, env = mod._select_auto_apply_candidates(
         [
@@ -322,9 +333,8 @@ def test_preopen_apply_consumes_lifecycle_bucket_auto_apply_without_human_artifa
                         "current_values": {"enabled": False, "min_score": 65, "max_score": 74},
                         "runtime_effect_after_approval": "bounded_entry_probe_recovery_live_auto",
                         "lifecycle_bucket_discovery_bucket_id": "entry:combo_entry_spot:score_66_69",
-                        "lifecycle_bucket_discovery_ai_review_status": "unavailable",
-                        "lifecycle_bucket_discovery_ai_followup_required": "post_apply_verification",
-                        "lifecycle_bucket_discovery_ai_block_ignored_reason": "ambiguous_or_non_contract_gap_live_then_verify",
+                        "lifecycle_bucket_discovery_ai_review_status": "parsed",
+                        "auto_promotion_contract": {"tier2_status": "parsed", "tier2_policy": "fail_closed"},
                         "source_bucket_keys": ["score=score_66_69"],
                     }
                 ],
@@ -372,11 +382,7 @@ def test_preopen_apply_consumes_lifecycle_bucket_auto_apply_without_human_artifa
     assert manifest["runtime_apply_bridge"]["approved"] == 1
     assert manifest["runtime_apply_bridge"]["selected"][0]["approval_state"] == "auto_live"
     assert manifest["runtime_apply_bridge"]["decisions"][0]["decision_reason"] == "lifecycle_bucket_discovery_live_auto_apply"
-    assert manifest["runtime_apply_bridge"]["selected"][0]["post_apply_verification_required"] is True
-    assert (
-        manifest["runtime_apply_bridge"]["decisions"][0]["lifecycle_bucket_discovery_ai_followup_required"]
-        == "post_apply_verification"
-    )
+    assert manifest["runtime_apply_bridge"]["selected"][0]["post_apply_verification_required"] is False
     assert manifest["lifecycle_bucket_discovery"]["approved"] == 1
     assert manifest["swing_sim_auto_approval"]["approved"] == 1
     assert manifest["swing_sim_auto_approval"]["selected"][0]["approved_source_ids"] == [
@@ -1431,6 +1437,7 @@ def test_swing_scale_in_real_canary_auto_approves_without_separate_artifact(tmp_
                         "calibration_state": "auto_approved_real_canary",
                         "auto_approved_real_canary": True,
                         "auto_approval_state": "real_canary_phase0_auto_approved",
+                        "auto_promotion_contract": _bounded_real_canary_tier2_contract(),
                         "allowed_actions": ["PYRAMID", "AVG_DOWN"],
                         "target_env_keys": [
                             "SWING_SCALE_IN_REAL_CANARY_ENABLED",
@@ -1508,6 +1515,7 @@ def test_swing_one_share_real_canary_auto_approves_without_separate_artifact(tmp
                         "calibration_state": "auto_approved_real_canary",
                         "auto_approved_real_canary": True,
                         "auto_approval_state": "real_canary_phase0_auto_approved",
+                        "auto_promotion_contract": _bounded_real_canary_tier2_contract(),
                         "target_env_keys": [
                             "SWING_ONE_SHARE_REAL_CANARY_ENABLED",
                             "SWING_ONE_SHARE_REAL_CANARY_ALLOWED_CODES",
@@ -1588,6 +1596,7 @@ def test_swing_scale_in_real_canary_rejects_qty_cap_above_phase0(tmp_path, monke
                         "calibration_state": "auto_approved_real_canary",
                         "auto_approved_real_canary": True,
                         "auto_approval_state": "real_canary_phase0_auto_approved",
+                        "auto_promotion_contract": _bounded_real_canary_tier2_contract(),
                         "allowed_actions": ["PYRAMID", "AVG_DOWN"],
                         "target_env_keys": [
                             "SWING_SCALE_IN_REAL_CANARY_ENABLED",
@@ -1711,6 +1720,10 @@ def test_swing_one_share_real_canary_artifact_applies_env_and_keeps_dry_run(tmp_
                         "policy_id": "swing_one_share_real_canary_phase0",
                         "family": "swing_one_share_real_canary_phase0",
                         "stage": "real_canary_entry",
+                        "calibration_state": "auto_approved_real_canary",
+                        "auto_approved_real_canary": True,
+                        "auto_approval_state": "real_canary_phase0_auto_approved",
+                        "auto_promotion_contract": _bounded_real_canary_tier2_contract(),
                         "target_env_keys": [
                             "SWING_ONE_SHARE_REAL_CANARY_ENABLED",
                             "SWING_ONE_SHARE_REAL_CANARY_ALLOWED_CODES",
@@ -1812,6 +1825,10 @@ def test_swing_scale_in_real_canary_artifact_applies_env(tmp_path, monkeypatch):
                         "policy_id": "swing_scale_in_real_canary_phase0",
                         "family": "swing_scale_in_real_canary_phase0",
                         "stage": "scale_in",
+                        "calibration_state": "auto_approved_real_canary",
+                        "auto_approved_real_canary": True,
+                        "auto_approval_state": "real_canary_phase0_auto_approved",
+                        "auto_promotion_contract": _bounded_real_canary_tier2_contract(),
                         "allowed_actions": ["PYRAMID", "AVG_DOWN"],
                         "target_env_keys": [
                             "SWING_SCALE_IN_REAL_CANARY_ENABLED",
@@ -2180,6 +2197,8 @@ def test_runtime_apply_bridge_entry_live_auto_writes_targeted_probe_env_without_
                         "live_auto_apply": True,
                         "allowed_runtime_apply": True,
                         "runtime_effect_after_approval": "bounded_entry_probe_recovery_live_auto",
+                        "lifecycle_bucket_discovery_ai_review_status": "parsed",
+                        "auto_promotion_contract": {"tier2_status": "parsed", "tier2_policy": "fail_closed"},
                         "target_env_keys": [
                             "AI_SCORE65_74_RECOVERY_PROBE_ENABLED",
                             "AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE",
@@ -2301,6 +2320,8 @@ def test_runtime_apply_bridge_scale_live_auto_writes_tighten_env_without_guard_b
                         "live_auto_apply": True,
                         "allowed_runtime_apply": True,
                         "runtime_effect_after_approval": "bounded_scale_in_policy_tighten_live_auto",
+                        "lifecycle_bucket_discovery_ai_review_status": "parsed",
+                        "auto_promotion_contract": {"tier2_status": "parsed", "tier2_policy": "fail_closed"},
                         "target_env_keys": [
                             "SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP",
                             "SCALPING_ENABLE_PYRAMID",

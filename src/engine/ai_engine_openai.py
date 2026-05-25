@@ -30,7 +30,10 @@ from openai import OpenAI, RateLimitError
 from src.engine.ai_response_contracts import (
     AI_RESPONSE_SCHEMA_REGISTRY,
     build_openai_response_text_format,
+    display_gatekeeper_action_label,
+    normalize_flow_state_label,
     normalize_ai_reason_language,
+    normalize_gatekeeper_action_key,
 )
 from src.engine.holding_exit_matrix_runtime import (
     build_holding_exit_matrix_runtime_context,
@@ -143,18 +146,18 @@ OPENAI_PROMPT_CONTRACT_HEADER = f"""
 [{OPENAI_PROMPT_CONTRACT_MARKER}]
 Control language: English. Market data, raw labels, and operator notes may remain in Korean.
 Preserve all raw enum labels exactly as provided. Do not translate labels such as BUY, WAIT, DROP, HOLD, TRIM, EXIT, SELL_TODAY, HOLD_OVERNIGHT, ALLOW_ENTRY, REJECT, USE_DEFENSIVE, USE_REFERENCE, IMPROVE_LIMIT, SKIP.
-Korean domain glossary:
-- 수급 = order-flow pressure
-- 호가 = order book quote/depth
-- 체결강도 = execution strength
-- 틱가속 = tick acceleration
-- 매수압 = buy pressure
-- 매도벽/매수벽 = ask/bid depth wall
-- 휩쏘 = whipsaw rebound
-- 소프트손절 = soft stop
-- 물타기 = averaging down / REVERSAL_ADD
-- 불타기 = pyramiding / PYRAMID
-Use the glossary to interpret Korean terms, but keep the original field names, enum labels, ticker names, and quoted evidence unchanged.
+Domain glossary for interpretation:
+- order_flow = order-flow pressure
+- quote_depth = order book quote/depth
+- execution_strength = execution strength
+- tick_acceleration = tick acceleration
+- buy_pressure = buy pressure
+- ask_bid_depth_wall = ask/bid depth wall
+- whipsaw_rebound = whipsaw rebound
+- soft_stop = soft stop
+- averaging_down = averaging down / REVERSAL_ADD
+- pyramiding = pyramiding / PYRAMID
+Use the glossary to interpret domain terms, but keep the original field names, enum labels, ticker names, and quoted evidence unchanged.
 """
 
 
@@ -1960,35 +1963,35 @@ class GPTSniperEngine:
         v_pw = ws_data.get('v_pw', 0)
         today_vol = ws_data.get('volume', 0)
 
-        candle_str = "분봉 데이터 없음"
+        candle_str = "minute candle data unavailable"
         ma5, ma20 = 0, 0
         if recent_candles and len(recent_candles) >= 20:
             closes = [c['현재가'] for c in recent_candles]
             ma5 = sum(closes[-5:]) / 5
             ma20 = sum(closes[-20:]) / 20
 
-            trend = "정배열 (상승세)" if ma5 > ma20 else "역배열 (하락세)"
-            position = "MA5 위 (강세)" if curr_price > ma5 else "MA5 아래 (조정)"
+            trend = "bullish_alignment" if ma5 > ma20 else "bearish_alignment"
+            position = "above_ma5" if curr_price > ma5 else "below_ma5"
 
             candle_str = (
-                f"- 현재 단기 추세: {trend}\n"
-                f"- MA5: {ma5:,.0f}원 / MA20: {ma20:,.0f}원\n"
-                f"- 주가 위치: {position}\n"
-                f"- 최근 5봉 흐름: " + " -> ".join([f"{c['현재가']:,}" for c in recent_candles[-5:]])
+                f"- short_term_trend: {trend}\n"
+                f"- ma5: {ma5:,.0f} / ma20: {ma20:,.0f}\n"
+                f"- price_position: {position}\n"
+                f"- recent_5_candle_closes: " + " -> ".join([f"{c['현재가']:,}" for c in recent_candles[-5:]])
             )
 
-        prog_sign = "🔴 순매수" if program_net_qty > 0 else "🔵 순매도"
+        prog_sign = "net_buy" if program_net_qty > 0 else "net_sell"
 
         user_input = f"""
-[현재 상태 (스윙 관점)]
-- 현재가: {curr_price:,}원 (전일대비 {fluctuation:+.2f}%)
-- 당일 누적 거래량: {today_vol:,}주
-- 당일 체결강도: {v_pw}%
+[CURRENT_STATE_SWING_VIEW]
+- current_price: {curr_price:,} (change_pct {fluctuation:+.2f}%)
+- intraday_cumulative_volume: {today_vol:,}
+- execution_strength: {v_pw}%
 
-[메이저 수급 지표]
-- 프로그램 동향: {prog_sign} ({program_net_qty:,}주)
+[MAJOR_FLOW]
+- program_flow: {prog_sign} ({program_net_qty:,})
 
-[차트/위치 분석]
+[CHART_POSITION]
 {candle_str}
 """
         return user_input
@@ -2360,7 +2363,7 @@ class GPTSniperEngine:
                     "recent_candles": (recent_candles or [])[:20],
                     "price_context": price_ctx or {},
                 },
-                ensure_ascii=False,
+                ensure_ascii=True,
                 default=str,
             )
             result = self._call_openai_safe(
@@ -2885,10 +2888,13 @@ class GPTSniperEngine:
         )
         report = report_payload["report"]
         action_label = self.extract_realtime_gatekeeper_action(report)
-        allow_entry = action_label == "즉시 매수"
+        action_key = normalize_gatekeeper_action_key(action_label)
+        action_label = display_gatekeeper_action_label(action_key)
+        allow_entry = action_key == "immediate_buy"
         result = {
             "allow_entry": allow_entry,
             "action_label": action_label,
+            "action_key": action_key,
             "report": report,
             "selected_mode": report_payload.get("selected_mode", ""),
             "lock_wait_ms": int(report_payload.get("lock_wait_ms", 0) or 0),
@@ -2999,12 +3005,17 @@ class GPTSniperEngine:
         for item in (flow_history or [])[-5:]:
             if not isinstance(item, dict):
                 continue
+            flow_state = self._normalize_flow_state_label(item.get("flow_state", "-"))
             rows.append(
                 f"- {item.get('time', '-')}: action={item.get('action', '-')}, "
-                f"state={item.get('flow_state', '-')}, pnl={item.get('profit_rate', '-')}, "
+                f"state={flow_state}, pnl={item.get('profit_rate', '-')}, "
                 f"rule={item.get('exit_rule', '-')}, reason={item.get('reason', '-')}"
             )
-        return "\n".join(rows) if rows else "이전 flow review 없음"
+        return "\n".join(rows) if rows else "no_previous_flow_review"
+
+    @staticmethod
+    def _normalize_flow_state_label(value):
+        return normalize_flow_state_label(value)
 
     def _format_scalping_holding_flow_context(
         self,
@@ -3063,7 +3074,7 @@ class GPTSniperEngine:
 - bid_total_depth: {int(self._safe_float((ws_data or {}).get('bid_tot', 0))):,}
 
 [DECISION_REQUEST]
-Do not cut by a single score cutoff. First classify the flow as closest to 흡수, 회복, 분배, 붕괴, or 소강, then choose HOLD, TRIM, or EXIT.
+Do not cut by a single score cutoff. First classify the flow as closest to absorption, recovery, distribution, breakdown, or quiet, then choose HOLD, TRIM, or EXIT.
 """
 
     def _normalize_holding_flow_result(self, result, *, decision_kind="intraday_exit"):
@@ -3086,7 +3097,8 @@ Do not cut by a single score cutoff. First classify the flow as closest to 흡�
         return {
             "action": action,
             "score": max(0, min(100, score)),
-            "flow_state": str(payload.get("flow_state", "-") or "-")[:80],
+            "flow_state": self._normalize_flow_state_label(payload.get("flow_state", "-")),
+            "raw_flow_state": str(payload.get("flow_state", "-") or "-")[:80],
             "thesis": str(payload.get("thesis", "-") or "-")[:160],
             "evidence": [str(item).replace("\n", " ")[:160] for item in evidence[:5]],
             "reason": str(payload.get("reason", "-") or "-").replace("\n", " ")[:180],
@@ -3536,12 +3548,14 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
         gemini_result = gemini_result or {}
         if decision_type == "gatekeeper":
             action_label = str(gemini_result.get("action_label", "UNKNOWN") or "UNKNOWN")
+            action_key = normalize_gatekeeper_action_key(gemini_result.get("action_key") or action_label)
+            action_label = display_gatekeeper_action_label(action_key)
             allow_entry = bool(gemini_result.get("allow_entry", False))
             if allow_entry:
-                return {"action": "ALLOW_ENTRY", "score": 85, "confidence": 0.85, "action_label": action_label}
-            if action_label in {"전량 회피", "둘 다 아님"}:
-                return {"action": "REJECT", "score": 20, "confidence": 0.75, "action_label": action_label}
-            return {"action": "WAIT", "score": 55, "confidence": 0.6, "action_label": action_label}
+                return {"action": "ALLOW_ENTRY", "score": 85, "confidence": 0.85, "action_label": action_label, "action_key": action_key}
+            if action_key in {"full_avoid", "neither"}:
+                return {"action": "REJECT", "score": 20, "confidence": 0.75, "action_label": action_label, "action_key": action_key}
+            return {"action": "WAIT", "score": 55, "confidence": 0.6, "action_label": action_label, "action_key": action_key}
 
         action = str(gemini_result.get("action", "SELL_TODAY") or "SELL_TODAY").upper()
         confidence = self._normalize_confidence(gemini_result.get("confidence", 0))
