@@ -51,10 +51,15 @@ import src.engine.ml_predictor as ml_predictor
 # 💡 [신규] AI 브리핑 엔진 준비
 from src.engine.ai_engine_openai import GPTSniperEngine
 
-# 💡 [핵심 교정] 텔레그램 매니저를 초대해야 수신기가 EventBus에 정상 등록됩니다!
-import src.notify.telegram_manager as telegram_manager
-
 warnings.filterwarnings('ignore')
+
+
+def _ensure_telegram_listener():
+    """Register Telegram EventBus subscribers only when the scanner actually runs."""
+    try:
+        import src.notify.telegram_manager  # noqa: F401
+    except Exception as exc:
+        log_error(f"텔레그램 매니저 로드 실패. 스캐너 이벤트만 생성합니다: {exc}")
 
 
 def _safe_float(value, default=0.0):
@@ -183,6 +188,7 @@ def run_integrated_scanner():
     
     db = DBManager()
     event_bus = EventBus() # 💡 이벤트 버스 장착!
+    _ensure_telegram_listener()
 
     try:
         # ==========================================

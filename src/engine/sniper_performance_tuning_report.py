@@ -729,7 +729,7 @@ def _build_flow_bottleneck_lane(
                 if blocker_count > 0 and zero_qty_hint:
                     status = "bottleneck"
                     tuning_point = "zero_qty 반복 차단, 추가매수 미발생"
-                    next_action = "swing_daily_summary blocker와 raw log 확인, 필요 시 새 workorder로 add_blocked_lock_report 재개"
+                    next_action = "swing_daily_summary blocker와 raw log 확인, 필요 시 새 report workorder 생성"
                 else:
                     status = "waiting"
                     tuning_point = "-"

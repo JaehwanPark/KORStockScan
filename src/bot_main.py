@@ -32,8 +32,6 @@ from src.utils import kiwoom_utils
 from src.utils.runtime_flags import is_trading_paused
 from src.database.db_manager import DBManager
 from src.core.event_bus import EventBus
-import src.engine.kiwoom_sniper_v2 as kiwoom_sniper_v2
-import src.notify.telegram_manager as telegram_manager # 우리가 완성한 텔레그램 수신탑
 from src.engine.daily_report_service import save_daily_report, build_daily_report, format_market_status_with_context
 from src.engine.log_archive_service import archive_target_date_logs, save_monitor_snapshots_for_date
 from src.engine.strategy_position_performance_report import sync_trade_performance_for_date
@@ -62,18 +60,23 @@ class DualLogger:
         
         self.logger = logging.getLogger('SniperBot')
         self.logger.setLevel(logging.INFO)
+        self.logger.propagate = False
         
-        file_handler = TimedRotatingFileHandler(
-            filename=str(log_dir / 'bot_history.log'),
-            when='midnight',
-            interval=1,
-            backupCount=getattr(TRADING_RULES, 'BOT_HISTORY_BACKUP_COUNT', 7),
-            encoding='utf-8'
-        )
-        formatter = logging.Formatter('[%(asctime)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
-        file_handler.setFormatter(formatter)
-        
-        self.logger.addHandler(file_handler)
+        if not any(
+            isinstance(handler, TimedRotatingFileHandler)
+            and Path(getattr(handler, "baseFilename", "")).name == "bot_history.log"
+            for handler in self.logger.handlers
+        ):
+            file_handler = TimedRotatingFileHandler(
+                filename=str(log_dir / 'bot_history.log'),
+                when='midnight',
+                interval=1,
+                backupCount=getattr(TRADING_RULES, 'BOT_HISTORY_BACKUP_COUNT', 7),
+                encoding='utf-8'
+            )
+            formatter = logging.Formatter('[%(asctime)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+            file_handler.setFormatter(formatter)
+            self.logger.addHandler(file_handler)
         self.terminal = sys.stdout
 
     def write(self, message):
@@ -84,8 +87,15 @@ class DualLogger:
     def flush(self):
         self.terminal.flush()
 
-sys.stdout = DualLogger()
-sys.stderr = sys.stdout 
+
+def install_dual_logger():
+    """Install file-backed stdout/stderr only for the real bot process."""
+    if isinstance(sys.stdout, DualLogger):
+        return sys.stdout
+    logger = DualLogger()
+    sys.stdout = logger
+    sys.stderr = logger
+    return logger
 
 # ==========================================
 # ⏰ 스케줄러 (배치 작업) 함수
@@ -290,6 +300,7 @@ def run_scheduler_job_async(job_name: str, func, *args, **kwargs):
 # 🎯 메인 실행부 (Main Thread)
 # ==========================================
 if __name__ == '__main__':
+    install_dual_logger()
     print("🤖 KORStockScan v13.0 통합 관제 시스템 기동 중...")
     
     db_manager = DBManager()
@@ -302,6 +313,7 @@ if __name__ == '__main__':
     event_bus = EventBus()
 
     # 💡 1. 텔레그램 매니저를 별도의 데몬 쓰레드로 실행 (블로킹 방지)
+    import src.notify.telegram_manager as telegram_manager # 우리가 완성한 텔레그램 수신탑
     tele_thread = threading.Thread(target=telegram_manager.start_telegram_bot, daemon=True)
     tele_thread.start()
     print("✅ [시스템] 텔레그램 수신탑 (백그라운드) 가동 완료.")
@@ -345,6 +357,8 @@ if __name__ == '__main__':
     print("🌍 [시스템] 글로벌 위기 감지 모니터 (60분 수집, 장전/정오/장후 알림 제한) 가동 완료.")
 
     if is_open:
+        import src.engine.kiwoom_sniper_v2 as kiwoom_sniper_v2
+
         # 💡 [아키텍처 포인트 3] 콜백(broadcast_alert) 파라미터 완전 제거!
         engine_thread = threading.Thread(target=kiwoom_sniper_v2.run_sniper, daemon=True)
         engine_thread.start()

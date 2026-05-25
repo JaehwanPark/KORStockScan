@@ -143,7 +143,7 @@ def build_cases_payload(trade_df: pd.DataFrame, seq_df: pd.DataFrame) -> dict:
         return cases
 
     seq_df = _normalize_trade_id(seq_df)
-    if not seq_df.empty:
+    if not seq_df.empty and "trade_id" in seq_df.columns:
         valid_trades["trade_id"] = valid_trades["trade_id"].astype("string").str.strip()
         join_cols = [
             "trade_id",

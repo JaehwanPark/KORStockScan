@@ -156,15 +156,19 @@ def extract_loss_patterns(df: pd.DataFrame, seq_df: pd.DataFrame) -> list[dict]:
 
     # sequence_fact join
     seq_df = _normalize_trade_id(seq_df)
-    if not seq_df.empty:
+    if not seq_df.empty and "trade_id" in seq_df.columns:
         loss_df["trade_id"] = loss_df["trade_id"].astype("string").str.strip()
-        seq_flags = seq_df[["trade_id", "multi_rebase_flag",
-                             "partial_then_expand_flag", "rebase_integrity_flag",
-                             "same_symbol_repeat_flag"]].drop_duplicates("trade_id")
+        flag_cols = [
+            "multi_rebase_flag",
+            "partial_then_expand_flag",
+            "rebase_integrity_flag",
+            "same_symbol_repeat_flag",
+        ]
+        seq_cols = ["trade_id", *[col for col in flag_cols if col in seq_df.columns]]
+        seq_flags = seq_df[seq_cols].drop_duplicates("trade_id")
         seq_flags["trade_id"] = seq_flags["trade_id"].astype("string").str.strip()
         loss_df = loss_df.merge(seq_flags, on="trade_id", how="left")
-        for col in ["multi_rebase_flag", "partial_then_expand_flag",
-                    "rebase_integrity_flag", "same_symbol_repeat_flag"]:
+        for col in flag_cols:
             if col in loss_df.columns:
                 loss_df[col] = loss_df[col].fillna(False)
 

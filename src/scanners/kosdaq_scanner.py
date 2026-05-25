@@ -39,6 +39,42 @@ from src.core.event_bus import EventBus
 from src.utils.constants import TRADING_RULES
 import src.engine.ml_predictor as ml_predictor
 
+
+def build_kosdaq_candidate_map(raw_targets, supernova_targets):
+    all_candidate_codes = {}
+
+    for t in raw_targets or []:
+        code = kiwoom_utils.normalize_stock_code(t.get('Code', t.get('code', '')))
+        if not code:
+            continue
+        all_candidate_codes[code] = {
+            'Code': code,
+            'Name': t.get('Name', t.get('name', 'Unknown')),
+            'Price': t.get('Price', t.get('cur_prc', 0)),
+            'flu_rate': t.get('FluRate', t.get('flu_rate', 0.0)),
+            'spike_rate': 0.0,
+            'source': 'TOP'
+        }
+
+    for s in supernova_targets or []:
+        code = kiwoom_utils.normalize_stock_code(s.get('code', s.get('Code', '')))
+        if not code:
+            continue
+        if code not in all_candidate_codes:
+            all_candidate_codes[code] = {
+                'Code': code,
+                'Name': s.get('name', s.get('Name', 'Unknown')),
+                'Price': s.get('Price', s.get('cur_prc', 0)),
+                'flu_rate': s.get('flu_rate', s.get('FluRate', 0.0)),
+                'spike_rate': s.get('spike_rate', 0.0),
+                'source': 'SUPERNOVA'
+            }
+        else:
+            all_candidate_codes[code]['spike_rate'] = s.get('spike_rate', 0.0)
+
+    return all_candidate_codes
+
+
 # ==========================================
 # 🧠 KOSDAQ 하이브리드 AI 스캐너 엔진
 # ==========================================
@@ -77,36 +113,7 @@ def run_kosdaq_scanner(is_test_mode=False):
         raw_targets = kiwoom_utils.get_top_open_fluctuation_ka10028(token, mrkt_tp="101", limit=40)
         supernova = kiwoom_utils.scan_volume_spike_ka10023(token, mrkt_tp="101")
         
-        # 💡 [핵심 교정 1] 데이터 병합 로직 완전 무결점화 (딕셔너리 키 매핑 안전하게 처리)
-        all_candidate_codes = {}
-        
-        # 트랙 A: 시가대비 상위 종목 맵핑
-        for t in raw_targets:
-            all_candidate_codes[t['Code']] = {
-                'Code': t['Code'], 
-                'Name': t['Name'], 
-                'Price': t['Price'],
-                'flu_rate': t.get('FluRate', 0.0), # 💡 대문자(FluRate)를 소문자(flu_rate)로 안전하게 치환
-                'spike_rate': 0.0,
-                'source': 'TOP'
-            }
-            
-        # 트랙 B: 초신성 수급 종목 병합
-        for s in supernova:
-            # ka10023이 소문자(code)와 대문자(Code)를 혼용할 경우를 모두 방어
-            code = s.get('code', s.get('Code'))
-            if code not in all_candidate_codes:
-                all_candidate_codes[code] = {
-                    'Code': code, 
-                    'Name': s.get('name', s.get('Name')), 
-                    'Price': s.get('Price', s.get('cur_prc', 0)),
-                    'flu_rate': s.get('flu_rate', s.get('FluRate', 0.0)),
-                    'spike_rate': s.get('spike_rate', 0.0),
-                    'source': 'SUPERNOVA' 
-                }
-            else:
-                # 이미 트랙 A로 뽑힌 종목이면, 초신성의 '거래량 급증률' 데이터만 추가 주입
-                all_candidate_codes[code]['spike_rate'] = s.get('spike_rate', 0.0)
+        all_candidate_codes = build_kosdaq_candidate_map(raw_targets, supernova)
 
         kosdaq_picks = []
         new_codes_found = [] # 웹소켓 등록용

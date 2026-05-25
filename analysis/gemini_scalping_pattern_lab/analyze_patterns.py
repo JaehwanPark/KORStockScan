@@ -120,7 +120,7 @@ def extract_loss_patterns(trade_df: pd.DataFrame, seq_df: pd.DataFrame) -> list[
         return []
 
     seq_df = _normalize_trade_id(_normalize_sequence_flags(seq_df))
-    if not seq_df.empty:
+    if not seq_df.empty and "trade_id" in seq_df.columns:
         loss_df["trade_id"] = loss_df["trade_id"].astype("string").str.strip()
         join_cols = [
             "trade_id",

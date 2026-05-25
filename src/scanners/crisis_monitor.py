@@ -35,9 +35,6 @@ CRISIS_ALERT_WINDOWS = {
     "postclose": ("15:30", "16:30"),
 }
 
-db_manager = DBManager()
-event_bus = EventBus()
-
 def calculate_severity(title):
     title_lower = title.lower()
     is_war = any(kw in title_lower for kw in WAR_KEYWORDS)
@@ -136,7 +133,9 @@ def mark_crisis_risk_alert_sent(now=None, slot=None, risk_count=None, path=ALERT
     }
     _save_alert_state(state, path)
 
-def run_crisis_monitor():
+def run_crisis_monitor(db_manager=None, event_bus=None):
+    db_manager = db_manager or DBManager()
+    event_bus = event_bus or EventBus()
     now = datetime.now(KST)
     print(f"🌍 [{now.strftime('%Y-%m-%d %H:%M:%S')}] 글로벌 위기 감지 스캐너 가동...")
 

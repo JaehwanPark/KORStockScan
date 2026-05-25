@@ -210,11 +210,17 @@ def build_cases_payload(
 
     # seq_df join
     seq_df = _normalize_trade_id(seq_df)
-    if not seq_df.empty:
+    if not seq_df.empty and "trade_id" in seq_df.columns:
         vt["trade_id"] = vt["trade_id"].astype("string").str.strip()
-        seq_key = seq_df[["trade_id", "multi_rebase_flag", "partial_then_expand_flag",
-                           "rebase_integrity_flag", "same_symbol_repeat_flag",
-                           "rebase_count"]].drop_duplicates("trade_id")
+        seq_join_cols = [
+            "trade_id",
+            "multi_rebase_flag",
+            "partial_then_expand_flag",
+            "rebase_integrity_flag",
+            "same_symbol_repeat_flag",
+            "rebase_count",
+        ]
+        seq_key = seq_df[[col for col in seq_join_cols if col in seq_df.columns]].drop_duplicates("trade_id")
         seq_key["trade_id"] = seq_key["trade_id"].astype("string").str.strip()
         vt = vt.merge(seq_key, on="trade_id", how="left")
 

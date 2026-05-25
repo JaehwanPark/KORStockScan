@@ -574,13 +574,19 @@ def enrich_trade_cohort(
     trade_df: pd.DataFrame,
     seq_df: pd.DataFrame,
 ) -> pd.DataFrame:
-    if trade_df.empty or seq_df.empty:
+    if trade_df.empty or seq_df.empty or "trade_id" not in seq_df.columns:
         return trade_df
 
     # sequence_fact에서 split-entry 판정용 컬럼만 추출
-    seq_key = seq_df[["trade_id", "multi_rebase_flag",
-                       "partial_then_expand_flag", "rebase_integrity_flag",
-                       "same_symbol_repeat_flag", "rebase_count"]].copy()
+    seq_join_cols = [
+        "trade_id",
+        "multi_rebase_flag",
+        "partial_then_expand_flag",
+        "rebase_integrity_flag",
+        "same_symbol_repeat_flag",
+        "rebase_count",
+    ]
+    seq_key = seq_df[[col for col in seq_join_cols if col in seq_df.columns]].copy()
     seq_key = seq_key.rename(columns={"trade_id": "trade_id"})
     # trade_id 기준 중복 제거 (마지막 우선)
     seq_key = seq_key.drop_duplicates(subset="trade_id", keep="last")
