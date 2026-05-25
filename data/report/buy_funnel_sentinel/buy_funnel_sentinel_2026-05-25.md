@@ -15,14 +15,14 @@
 
 ## 근거
 
-- as_of: `2026-05-25T12:45:03`
+- as_of: `2026-05-25T15:20:03`
 - baseline_date: `2026-05-22`
 - ai_confirmed unique: `0`
 - budget_pass unique: `0`
 - latency_pass unique: `0`
 - submitted unique: `0`
 - holding_started unique: `0`
-- budget/ai unique: `0.0%` (baseline `1.1`)
+- budget/ai unique: `0.0%` (baseline `1.3`)
 - submitted/ai unique: `0.0%` (baseline `0.0`)
 - critical submit thresholds: `submitted/ai < 20.0%` or `submitted/budget <= 10.0%` (floors: ai>=20, budget>=3)
 - top blockers: `-`

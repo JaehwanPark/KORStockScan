@@ -2,18 +2,18 @@
 
 ## 판정
 
-- primary: `RUNTIME_OPS`
-- secondary: `SOFT_STOP_WHIPSAW, TRAILING_EARLY_EXIT`
+- primary: `SOFT_STOP_WHIPSAW`
+- secondary: `TRAILING_EARLY_EXIT`
 - report_only: `true`
 - live_runtime_effect: `false`
-- operator_action_required: `true`
-- followup_route: `holding_runtime_ops_playbook`
-- followup_owner: `operator_review`
+- operator_action_required: `false`
+- followup_route: `soft_stop_whipsaw_calibration_review`
+- followup_owner: `postclose_threshold_cycle`
 - runtime_effect: `report_only_no_mutation`
 
 ## 근거
 
-- as_of: `2026-05-25T12:45:03`
+- as_of: `2026-05-25T15:30:02`
 - exit_signal unique: `0`
 - sell_order_sent unique: `0`
 - sell_completed unique: `0`
@@ -38,4 +38,4 @@
 
 ## 권고 액션
 
-- Check holding pipeline event freshness; restart only after explicit approval.
+- Append soft-stop rebound examples to postclose threshold review.

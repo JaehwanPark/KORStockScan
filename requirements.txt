@@ -7,6 +7,10 @@ xgboost
 scikit-learn
 numpy
 lightgbm
+optuna==4.8.0
+catboost==1.2.10
+shap==0.51.0
+mlflow-skinny==3.12.0
 matplotlib
 websockets
 pytelegrambotapi

@@ -1,8 +1,17 @@
+import warnings
+
 import numpy as np
 import pandas as pd
-import pandas_ta as ta
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    import pandas_ta as ta
 
-pd.set_option('future.no_silent_downcasting', True)
+try:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        pd.set_option('future.no_silent_downcasting', True)
+except (AttributeError, KeyError, ValueError, pd.errors.OptionError):
+    pass
 
 
 def calculate_all_features(df_raw: pd.DataFrame) -> pd.DataFrame:

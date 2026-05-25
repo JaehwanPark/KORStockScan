@@ -36,6 +36,7 @@ def run_backtest_v2(
     tp=0.055,               # 4.5% -> 5.5% (익절 폭 확대)
     sl_bull=0.040,          # 4.5% -> 4.0% (손절 폭 소폭 축소)
     sl_bear=0.035,          # 💡 (수정) 0.025 -> 0.035: 하락장 손절폭 완화
+    max_hold_days=4,        # TIME 아웃 17건을 구제하기 위해 보유 기간 하루 연장
     output_path=None,
     save=True,
 ):
@@ -91,8 +92,8 @@ def run_backtest_v2(
         code = row['code']
         regime = row.get('bull_regime', 0)
 
-        # 시그널 다음날부터 최대 3일치 데이터
-        future = px[(px['stock_code'] == code) & (px['quote_date'] > sig_date)].head(3).copy()
+        # 시그널 다음날부터 최대 보유기간까지 데이터
+        future = px[(px['stock_code'] == code) & (px['quote_date'] > sig_date)].head(max_hold_days).copy()
         if len(future) < 1:
             continue
 
@@ -117,7 +118,7 @@ def run_backtest_v2(
                 tp_price=tp_price,
                 sl_price=sl_price,
                 hold_day=hold_days,
-                max_hold=4              # TIME 아웃 17건을 구제하기 위해 보유 기간 하루 연장
+                max_hold=max_hold_days
             )
             if exit_price is not None:
                 break

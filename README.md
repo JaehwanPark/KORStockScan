@@ -153,6 +153,24 @@ LDM은 기존의 고정 점수표를 대체하는 “단독 매수 엔진”이 
 
 중요한 금지선도 있습니다. LDM은 hard safety, 브로커 제출 가드, stale quote, 계좌/수량/쿨다운 가드를 우회하지 않습니다. 또한 점수가 높을수록 항상 좋은 매매라는 가정을 쓰지 않습니다. 점수는 feature일 뿐이고, 최종 판단은 장후 기대값과 source-quality를 함께 봅니다.
 
+## 장중후보 수집
+
+장중후보 수집은 두 경로가 합쳐져 움직입니다. 하나는 장전/장후에 준비되는 스윙 모델 추천 CSV이고, 다른 하나는 장중에 계속 도는 스캘핑 스캐너입니다. 둘 다 종목 선정 입력이지만 권한은 다릅니다. 스윙 모델은 다음날 후보군을 준비하고, 스캘핑 스캐너는 당일 수급 변화가 살아난 종목을 감시 대상으로 올립니다.
+
+| 경로 | 주기 | 입력 | 산출물 | 역할 |
+| --- | --- | --- | --- | --- |
+| Swing model retrain | 장후 cron | 일봉 패널, backtest, AI Tier2 review | `data/model_registry/swing_v2/current.json`, `data/daily_recommendations_v2.csv`, diagnostics | 다음 장전 스윙 추천 후보 생성 |
+| Final ensemble scanner | 장전/배치 | model artifact, KOSPI 유동성 pool, `daily_recommendations_v2.csv` | `recommendation_history`의 `KOSPI_ML` 추천 | 스윙/중기 후보를 DB 추천으로 적재 |
+| Scalping scanner | 장중 2~3분 | 키움 등락률, 수급 급증, 거래대금, VI | `recommendation_history`의 `SCALPING` WATCHING row, WS 등록 이벤트 | 당일 실시간 스캘핑 감시 후보 수집 |
+
+스윙 모델학습은 `auto_retrain_pipeline.sh`와 `src.model.swing_retrain_pipeline`이 담당합니다. 흐름은 `train -> backtest -> deterministic gate -> AI Tier2 review -> active artifact promotion -> recommend_daily_v2 smoke`입니다. 후보가 통과하면 active model artifact와 `current.json`이 갱신되고, `recommend_daily_v2`가 `data/daily_recommendations_v2.csv`와 diagnostics JSON을 만듭니다. AI Tier2가 차단하면 active artifact는 유지되고, 안전한 경우에만 remediation manifest가 다음 cron 재학습 입력으로 남습니다.
+
+`final_ensemble_scanner`는 `daily_recommendations_v2.csv`를 읽어 `KOSPI_ML` 전략의 추천 DB row로 적재합니다. CSV schema와 diagnostics는 active model promotion smoke에서 검증되며, CSV가 없으면 실시간 스캐닝 결과만 처리합니다. 이 경로는 추천 후보를 DB에 올리는 단계이지, 스윙 dry-run 해제나 full-live 전환 권한이 아닙니다.
+
+스캘핑 스캐너는 장중 09:05~15:00 사이에 2~3분 주기로 돕니다. `ka10028` 시가대비 상위, Supernova 수급 급증, `ka10032` 거래대금 상위, `ka10054` VI 발동 종목을 합쳐 candidate pool을 만들고, 신선도 점수와 source 우선순위로 정렬합니다. 유효 종목만 `RecommendationHistory`에 `SCALPING`/`WATCHING`으로 upsert하고, `COMMAND_WS_REG` 이벤트로 실시간 웹소켓 감시 등록을 요청합니다.
+
+두 경로 모두 실제 주문 안전장치를 우회하지 않습니다. 스윙 CSV는 추천 후보이며, 스캘핑 WATCHING row는 감시 후보입니다. 이후 AI 판단, stale quote, 브로커 제출 가드, 계좌/수량/쿨다운, hard/protect/emergency safety가 별도로 통과해야 주문 단계로 갈 수 있습니다.
+
 ## 시뮬레이션 자동화
 
 시뮬레이션 자동화는 아래 흐름으로 움직입니다. 핵심은 “장중에는 넓게 관찰하고, 장후에는 숫자로 분류하고, 다음 장전에는 검증된 작은 변경만 반영한다”입니다.

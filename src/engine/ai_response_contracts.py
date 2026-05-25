@@ -155,6 +155,45 @@ def display_gatekeeper_action_label(value: object) -> str:
 
 
 AI_RESPONSE_SCHEMA_REGISTRY = {
+    "swing_model_tier2_review_v1": {
+        "type": "object",
+        "properties": {
+            "schema_version": {"type": "integer"},
+            "status": {"type": "string", "enum": ["parsed", "parse_rejected", "unavailable"]},
+            "decision": {"type": "string", "enum": ["approved", "blocked"]},
+            "blocking_reasons": {"type": "array", "items": {"type": "string"}},
+            "reviewed_candidate_family": {"type": "string"},
+            "reviewed_bull_mode": {"type": "string", "enum": ["enabled", "disabled", "hold_current"]},
+            "checks": {
+                "type": "object",
+                "properties": {
+                    "label_leakage": {"type": "string", "enum": ["pass", "block", "warning"]},
+                    "source_quality": {"type": "string", "enum": ["pass", "block", "warning"]},
+                    "schema_compatibility": {"type": "string", "enum": ["pass", "block", "warning"]},
+                    "metric_interpretation": {"type": "string", "enum": ["pass", "block", "warning"]},
+                    "forbidden_use": {"type": "string", "enum": ["pass", "block", "warning"]},
+                },
+                "required": [
+                    "label_leakage",
+                    "source_quality",
+                    "schema_compatibility",
+                    "metric_interpretation",
+                    "forbidden_use",
+                ],
+                "additionalProperties": False,
+            },
+        },
+        "required": [
+            "schema_version",
+            "status",
+            "decision",
+            "blocking_reasons",
+            "reviewed_candidate_family",
+            "reviewed_bull_mode",
+            "checks",
+        ],
+        "additionalProperties": False,
+    },
     "entry_v1": {
         "type": "object",
         "properties": {

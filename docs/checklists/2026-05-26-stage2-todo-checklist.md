@@ -112,6 +112,24 @@
   - 금지: approval request만 보고 env 파일을 직접 수정하지 않고, 자동화 산출물에 있는 요청을 답변에만 남기고 checklist/Project 대상에서 누락하지 않는다.
   - 다음 액션: approval request가 있으면 `approval_id`, 후보/대상, artifact path, 승인 여부, 다음 PREOPEN 적용 확인 항목을 남긴다. 누락된 항목이 있으면 다음 영업일 checklist에 parser-friendly checkbox로 추가한다.
 
+- [ ] `[SwingModelMLflowTracking0526] 스윙 학습모델 MLflow 추적성 및 active artifact 승격 계약 확인` (`Due: 2026-05-26`, `Slot: POSTCLOSE`, `TimeWindow: 18:25~18:40`, `Track: RuntimeStability`)
+  - Source: [model-training-traceability.md](/home/ubuntu/KORStockScan/docs/model-training-traceability.md), [swing_retrain_pipeline.py](/home/ubuntu/KORStockScan/src/model/swing_retrain_pipeline.py), [swing_model_upgrade.py](/home/ubuntu/KORStockScan/src/model/swing_model_upgrade.py)
+  - 판정 기준: MLflow tracking URI는 `file:data/model_registry/swing_v2/mlruns`, experiment는 `korstockscan_swing_v2_model_upgrade`이며, promotion manifest에는 `active_live_behavior=true`, `runtime_change=model_artifact_promote_only`, `swing_live_order_dry_run_required=true`가 있어야 한다. active 적용 범위는 model artifact와 `daily_recommendations_v2` 생성 경로까지다.
+  - 금지: MLflow run 또는 model artifact promotion을 스윙 dry-run 해제, real-order conversion, cap release, provider route 변경, bot restart, hard safety 완화, 장중 threshold mutation 근거로 쓰지 않는다.
+  - 다음 액션: `tracking_contract_pass`, `tracking_missing`, `promotion_gate_blocked`, `active_artifact_promoted_model_only`, `fail_runtime_authority_leak` 중 하나로 닫는다.
+
+- [ ] `[SwingModelAutoRetrainNoHuman0526] 사람 개입 없는 스윙 모델 학습/AI Tier2/승격 자동화 계약 확인` (`Due: 2026-05-26`, `Slot: POSTCLOSE`, `TimeWindow: 18:10~18:25`, `Track: RuntimeStability`)
+  - Source: [auto_retrain_pipeline.sh](/home/ubuntu/KORStockScan/auto_retrain_pipeline.sh), [swing_retrain_pipeline.py](/home/ubuntu/KORStockScan/src/model/swing_retrain_pipeline.py), [swing_model_tier2_review.py](/home/ubuntu/KORStockScan/src/model/swing_model_tier2_review.py), [model-training-traceability.md](/home/ubuntu/KORStockScan/docs/model-training-traceability.md)
+  - 판정 기준: 17:30 KST 자동학습은 `train -> backtest -> deterministic gate -> AI Tier2 review -> active artifact promotion -> recommendation CSV smoke` 순서이며, `auto_retrain` status에는 `ai_tier2_review`, `selected_candidate_family`, `current_manifest`, `recommendation_smoke`, `rollback_files`가 있어야 한다. AI Tier2는 `status=parsed` 및 `decision=approved`일 때만 승격을 계속 진행하고, 차단 시 `blocked_ai_tier2` 또는 `not_promoted_ai_tier2_blocked`로 active artifact를 유지한다.
+  - 금지: no-human 자동화를 스윙 dry-run 해제, phase0 real canary, real-order conversion, cap release, provider/bot 변경, hard safety 완화, 장중 threshold mutation 권한으로 해석하지 않는다.
+  - 다음 액션: `model_auto_retrain_promoted`, `blocked_ai_tier2`, `blocked_deterministic_gate`, `rolled_back_smoke_schema`, `fail_runtime_authority_leak` 중 하나로 닫는다.
+
+- [ ] `[SwingModelAutoRemediationNoHuman0526] AI Tier2 차단 사유 자동 조치 및 다음 cron 재학습 계약 확인` (`Due: 2026-05-26`, `Slot: POSTCLOSE`, `TimeWindow: 18:00~18:10`, `Track: RuntimeStability`)
+  - Source: [auto_retrain_pipeline.sh](/home/ubuntu/KORStockScan/auto_retrain_pipeline.sh), [swing_retrain_pipeline.py](/home/ubuntu/KORStockScan/src/model/swing_retrain_pipeline.py), [swing_model_auto_remediation.py](/home/ubuntu/KORStockScan/src/model/swing_model_auto_remediation.py), [model-training-traceability.md](/home/ubuntu/KORStockScan/docs/model-training-traceability.md)
+  - 판정 기준: `blocked_ai_tier2` 발생 시 remediation manifest/report가 생성되고, 다음 cron은 `retry_allowed`에서 allowlist env만 적용한다. `retry_deferred`, `manual_required`, `blocked_forbidden_use`는 active artifact를 유지하며, retry 후에도 deterministic gate, AI Tier2 approved, recommendation smoke를 모두 통과해야 승격된다.
+  - 금지: remediation을 label policy, feature semantics, metric contract, active promotion 기준, dry-run 해제, real-order conversion, cap release, provider/bot 변경, hard safety 완화, 장중 threshold mutation 변경 권한으로 해석하지 않는다.
+  - 다음 액션: `remediation_retry_allowed`, `remediation_retry_deferred`, `remediation_manual_required`, `remediation_blocked_forbidden_use`, `fail_remediation_runtime_authority_leak` 중 하나로 닫는다.
+
 - [ ] `[ShadowCanaryCohortReview0526] shadow/canary/cohort 런타임 분류 및 정리 판정` (`Due: 2026-05-26`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)
   - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)
   - 판정 기준: 당일 변경/관찰 결과를 기준으로 `remove`, `observe-only`, `baseline-promote`, `active-canary` 상태 변동 여부를 닫는다.

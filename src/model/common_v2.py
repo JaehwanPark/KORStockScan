@@ -137,11 +137,24 @@ class PassThroughCalibrator:
         return np.asarray(x, dtype=float)
 
 
+class PredictProbaScoreAdapter:
+    """Expose classifier positive probability through a ranker-like predict API."""
+    def __init__(self, model, positive_class_index=1):
+        self.model = model
+        self.positive_class_index = positive_class_index
+
+    def predict(self, x):
+        proba = self.model.predict_proba(x)
+        return np.asarray(proba)[:, self.positive_class_index]
+
+
 def ensure_pickle_compat():
     """Load legacy artifacts that pickled PassThroughCalibrator from __main__."""
     main_mod = sys.modules.get('__main__')
     if main_mod is not None and not hasattr(main_mod, 'PassThroughCalibrator'):
         setattr(main_mod, 'PassThroughCalibrator', PassThroughCalibrator)
+    if main_mod is not None and not hasattr(main_mod, 'PredictProbaScoreAdapter'):
+        setattr(main_mod, 'PredictProbaScoreAdapter', PredictProbaScoreAdapter)
 
 
 def load_model_artifact(path):
