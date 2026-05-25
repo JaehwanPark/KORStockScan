@@ -3,7 +3,7 @@
 ## 오늘 목적
 
 - 전일 postclose 자동화가 만든 장전 apply 후보와 사용자 개입 요구사항을 산출물 기준으로 확인한다.
-- 실주문, threshold, provider, sim/probe 관련 변경은 approval artifact와 checklist 기준 없이 열지 않는다.
+- 실주문, threshold, provider, sim/probe 관련 변경은 approval artifact 또는 명시적 phase0 auto-approval 계약과 checklist 기준 없이 열지 않는다.
 - code-improvement workorder는 자동 repo 수정이 아니라 사용자가 Codex에 구현을 지시한 경우에만 실행한다.
 - `gpt-5.4-mini` Tier2 중 `entry_price`/`holding_flow`는 Nova Lite v1 primary 전환 후 provenance와 OpenAI failback을 확인한다.
 - Nova Micro는 2026-05-22 사용자 최종 override로 shadow/duel과 누적 판정을 중단한다. Tier1은 OpenAI `gpt-5-nano` 라우팅을 유지한다.
@@ -46,11 +46,11 @@
   - 금지: provider transport 확인을 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경으로 해석하지 않는다.
   - 다음 액션: Lite endpoint 또는 OpenAI 유지 표본이 부족하면 장중 표본 재확인 항목과 연결한다.
 
-- [ ] `[SwingApprovalArtifactPreopen0526] 스윙 approval request 및 별도 승인 artifact 존재 여부 확인` (`Due: 2026-05-26`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
+- [ ] `[SwingPreFinalAutoAndFinalApprovalPreopen0526] 스윙 pre-final auto state 및 final approval artifact 확인` (`Due: 2026-05-26`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
   - Source: [swing_runtime_approval_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-05-22.json), [threshold_cycle_ev_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-22.json)
-  - 판정 기준: approval request가 있더라도 사용자 승인 artifact가 없으면 env apply 대상이 아니다. 확인 대상은 `swing_runtime_approval:2026-05-22:swing_model_floor`, `swing_runtime_approval:2026-05-22:swing_gatekeeper_reject_cooldown`, `swing_one_share_real_canary:2026-05-22:phase0`다. dry-run 승인은 `data/threshold_cycle/approvals/swing_runtime_approvals_2026-05-22.json`, real canary 승인은 `data/threshold_cycle/approvals/swing_one_share_real_canary_2026-05-22.json`만 소비한다.
-  - 금지: 스윙 dry-run 해제, real canary, floor, scale-in real canary를 서로 자동 승인하지 않는다.
-  - 다음 액션: `approval_artifact_present`, `approval_artifact_missing`, `blocked_by_policy` 중 하나로 닫는다.
+  - 판정 기준: pre-final 후보는 parsed AI Tier2 auto state가 있어야 env apply 대상이고, final-stage 후보만 사용자 승인 artifact가 필요하다. 확인 대상은 `swing_runtime_approval:2026-05-22:swing_model_floor`, `swing_runtime_approval:2026-05-22:swing_gatekeeper_reject_cooldown`, `swing_one_share_real_canary:2026-05-22:phase0`다. `swing_one_share_real_canary_phase0`와 `swing_scale_in_real_canary_phase0`는 parsed AI Tier2 review와 source report hard floor/source-quality/allowlist/cap 통과 시 phase0 auto-approval로 소비하며, 별도 artifact는 allowlist/cap narrowing 용도다.
+  - 금지: 스윙 dry-run 해제, full real-order conversion, floor 일반 runtime 변경, cap release를 phase0 real canary auto-approval과 섞지 않는다.
+  - 다음 액션: `general_approval_artifact_present`, `general_approval_artifact_missing`, `real_canary_phase0_auto_approved`, `real_canary_blocked_by_policy` 중 하나로 닫는다.
 
 ## 장중 체크리스트 (09:05~15:20)
 
@@ -78,7 +78,7 @@
   - 금지: probe source gap을 스윙 real order 승인, dry-run 해제, threshold apply, broker/provider/bot 변경 근거로 쓰지 않는다.
   - 다음 액션: `probe_handoff_pass`, `producer_missing`, `source_book_join_gap`, `postclose_consumer_gap` 중 하나로 닫는다.
 
-## 장후 체크리스트 (16:30~18:55)
+## 장후 체크리스트 (16:30~19:10)
 
 - [x] `[BedrockNovaMicroCumulativeDecision0526] Nova Micro 하루 추가 관찰 후 누적 exact join 판정` (`Due: 2026-05-26`, `Slot: POSTCLOSE`, `TimeWindow: 17:40~18:05`, `Track: AITransport`)
   - Source: [bedrock_nova_micro_one_day_decision.py](/home/ubuntu/KORStockScan/src/tests/bedrock_nova_micro_one_day_decision.py), [bedrock_nova_micro_shadow_2026-05-21.jsonl](/home/ubuntu/KORStockScan/data/report/bedrock_nova_micro_shadow/bedrock_nova_micro_shadow_2026-05-21.jsonl), [bedrock_nova_micro_shadow_2026-05-22.jsonl](/home/ubuntu/KORStockScan/data/report/bedrock_nova_micro_shadow/bedrock_nova_micro_shadow_2026-05-22.jsonl), `bedrock_nova_micro_shadow_2026-05-26.jsonl`, `sim_post_sell_evaluations_YYYY-MM-DD.jsonl`
@@ -117,6 +117,12 @@
   - 판정 기준: 당일 변경/관찰 결과를 기준으로 `remove`, `observe-only`, `baseline-promote`, `active-canary` 상태 변동 여부를 닫는다.
   - 금지: shadow 금지, canary-only, baseline 승격 원칙을 코드/문서 상태와 분리하지 않는다.
   - 다음 액션: 변경이 있으면 기준문서와 checklist를 함께 갱신하고 cohort 잠금 필드를 남긴다.
+
+- [ ] `[EngineRefactorSafeSliceNext0526] src.engine Phase 2+ 다음 safe slice 선정 및 Phase Final gate 확인` (`Due: 2026-05-26`, `Slot: POSTCLOSE`, `TimeWindow: 18:55~19:10`, `Track: Plan`)
+  - Source: [src-engine-refactor-inventory.md](/home/ubuntu/KORStockScan/docs/proposals/src-engine-refactor-inventory.md), [server_report_comparison.py](/home/ubuntu/KORStockScan/src/engine/server_report_comparison.py), [monitoring/server_report_comparison.py](/home/ubuntu/KORStockScan/src/engine/monitoring/server_report_comparison.py), [error_detector_coverage.py](/home/ubuntu/KORStockScan/src/engine/error_detector_coverage.py), [monitoring/error_detector_coverage.py](/home/ubuntu/KORStockScan/src/engine/monitoring/error_detector_coverage.py), [src/trading](/home/ubuntu/KORStockScan/src/trading), [src/utils](/home/ubuntu/KORStockScan/src/utils)
+  - 판정 기준: Phase 2 Slice 1 wrapper/old-new import/CLI smoke와 targeted test 결과를 기준으로 다음 slice를 report-only 또는 infra 성격 2~4개 파일로만 선정한다. 새 canonical path는 `src.engine.<package>.<module>`로 두고, 기존 `src.engine.<module>` wrapper는 유지한다. Phase Final consumer migration은 안정화된 slice에 한해 deploy/test/docs current path를 점진 변경할 준비 상태만 판정한다. `src/trading -> src.engine.scalping`은 장기 hierarchy 목표로 등록하되 runtime entry/order hot path이므로 별도 `TradingToScalping` inventory와 pure type/util slice 검증 전에는 이동하지 않는다. `src/utils`는 `UtilsBoundaryAudit`로 shared primitive와 engine-owned automation/infrastructure 후보를 분리한 뒤 pure registry/helper slice만 검토한다.
+  - 금지: 초기 slice에서 runtime/order/provider/threshold/bot restart 경로를 이동하지 않는다. bulk move, `MetaPathFinder` shim, preopen/postclose 안정 검증 전 wrapper 제거, retired/offline/backup 파일 재편입을 금지한다. `src/trading` 또는 `src/utils` 전체 일괄 이동, direct import rewrite, `src.engine.scalping.__init__` side effect, broker submit/qty/cooldown/stale quote/config env semantics 변경, 신규 순환 import 생성을 금지한다.
+  - 다음 액션: `next_slice_selected`, `trading_to_scalping_inventory_required`, `utils_boundary_inventory_required`, `defer_dirty_worktree`, `consumer_migration_ready_keep_wrappers`, `wrapper_keep_required`, `blocked_by_runtime_path` 중 하나로 닫고, 구현 시 각 slice마다 `구현 -> 코드리뷰 -> 수정보완 -> 재검증` 결과를 남긴다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
