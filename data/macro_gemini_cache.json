@@ -1,84 +1,83 @@
 {
-  "bundle_as_of": "2026-05-21T22:20:14Z",
+  "bundle_as_of": "2026-05-24T22:20:24Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 7445.72,
-    "prev_value": 7432.97,
-    "change": 12.75,
-    "change_pct": 0.17,
-    "as_of": "2026-05-21T20:00:00Z",
-    "source": "AP / wkyc.com"
+    "value": 7473.47,
+    "prev_value": 7445.72,
+    "change": 27.75,
+    "change_pct": 0.37,
+    "as_of": "2026-05-22T20:00:00Z",
+    "source": "Morningstar / Investing.com"
   },
   "nasdaq": {
     "name": "NASDAQ Composite",
-    "value": 26293.1,
-    "prev_value": 26270.36,
-    "change": 22.74,
-    "change_pct": 0.09,
-    "as_of": "2026-05-21T20:00:00Z",
-    "source": "Morningstar / Dow Jones"
+    "value": 26343.97,
+    "prev_value": 26293.1,
+    "change": 50.87,
+    "change_pct": 0.19,
+    "as_of": "2026-05-22T20:00:00Z",
+    "source": "Dow Jones Market Data / Morningstar"
   },
   "vix": {
     "name": "VIX",
-    "value": 17.2,
-    "prev_value": 17.44,
-    "change": -0.24,
-    "change_pct": -1.38,
-    "as_of": "2026-05-21T20:00:00Z",
-    "source": "Investing.com"
+    "value": 16.7,
+    "prev_value": 16.76,
+    "change": -0.06,
+    "change_pct": -0.36,
+    "as_of": "2026-05-22T20:15:00Z",
+    "source": "Cboe Global Markets / Investing.com"
   },
   "us10y": {
     "name": "US 10Y Treasury Yield",
     "value": 4.56,
-    "prev_value": 4.59,
-    "change": -0.03,
-    "change_pct": -0.65,
-    "as_of": "2026-05-21T22:20:14Z",
-    "source": "Trading Economics"
+    "prev_value": 4.57,
+    "change": -0.01,
+    "change_pct": -0.22,
+    "as_of": "2026-05-22T20:00:00Z",
+    "source": "U.S. Department of the Treasury / YCharts"
   },
   "brent": {
     "name": "Brent Crude",
-    "value": 104.88,
-    "prev_value": 105.02,
-    "change": -0.14,
-    "change_pct": -0.13,
-    "as_of": "2026-05-21T22:20:14Z",
-    "source": "Trading Economics"
+    "value": 103.54,
+    "prev_value": 102.58,
+    "change": 0.96,
+    "change_pct": 0.94,
+    "as_of": "2026-05-22T21:00:00Z",
+    "source": "Investing.com"
   },
   "headlines": [
     {
-      "title": "Oil Prices On May 21: Brent Crude Steadies At $105 After Trump Says US-Iran Deal Is In Final Stages",
-      "source": "NDTV Profit",
-      "published_at": "2026-05-21T06:37:00Z",
-      "url": "https://www.ndtvprofit.com"
+      "title": "Middle East crisis live: Trump claims 'I don't make bad deals' as questions remain over negotiation progress",
+      "source": "The Guardian",
+      "published_at": "2026-05-24T21:00:00Z",
+      "url": "https://www.theguardian.com/world/live/2026/may/24/middle-east-crisis-live"
     },
     {
-      "title": "U.S. stocks swing from losses to small gains following the latest reversal for oil prices",
-      "source": "CP24",
-      "published_at": "2026-05-21T18:18:00Z",
-      "url": "https://www.cp24.com"
+      "title": "Live Updates: Iran-U.S. negotiators have agreed to broad principles of agreement, official says; Trump says \"time is on our side\"",
+      "source": "CBS News",
+      "published_at": "2026-05-24T19:00:00Z",
+      "url": "https://www.cbsnews.com/news/live-updates-iran-us-negotiators-have-agreed-to-broad-principles/"
     },
     {
-      "title": "Gold eases on higher yields, firm dollar; US-Iran talks in focus",
-      "source": "The Star",
-      "published_at": "2026-05-21T06:44:00Z",
-      "url": "https://www.thestar.com.my"
+      "title": "Most Middle East markets gain on expectations for U.S.-Iran peace deal",
+      "source": "Investing.com",
+      "published_at": "2026-05-24T20:00:00Z",
+      "url": "https://www.investing.com/news/stock-market-news/most-middle-east-markets-gain-on-expectations-for-usiran-peace-deal"
     },
     {
-      "title": "Crude Oil Prices Jump on Doubts the Strait of Hormuz Will Reopen",
-      "source": "Barchart",
-      "published_at": "2026-05-21T15:31:00Z",
-      "url": "https://www.barchart.com"
+      "title": "Trump tempers expectations of a Middle East deal with Iran",
+      "source": "Al-Monitor",
+      "published_at": "2026-05-24T16:00:00Z",
+      "url": "https://www.al-monitor.com/originals/2026/05/trump-tempers-expectations-middle-east-deal-iran"
     },
     {
-      "title": "Market Quick Take: US Treasuries rallied as crude oil prices dropped sharply Wednesday",
-      "source": "Saxo Bank",
-      "published_at": "2026-05-21T07:20:00Z",
-      "url": "https://www.home.saxo"
+      "title": "$5 Gas Is Back on the Table: What 14 Straight Weeks of Inventory Declines Mean for Consumers",
+      "source": "24/7 Wall St.",
+      "published_at": "2026-05-24T14:00:00Z",
+      "url": "https://247wallst.com/energy-business/2026/05/24/5-gas-is-back-on-the-table-what-14-straight-weeks-of-inventory-declines-mean-for-consumers/"
     }
   ],
   "notes": [
-    "Market indexes ticked higher Thursday following an easing in oil prices due to developments in US-Iran negotiations.",
-    "Data reflects the most recently available verified close or real-time estimates as of the bundle_as_of timestamp."
+    "Market data points reflect Friday, May 22, 2026 closing values as traditional markets remain closed for the weekend."
   ]
 }

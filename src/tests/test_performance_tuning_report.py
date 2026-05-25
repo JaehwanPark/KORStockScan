@@ -817,6 +817,7 @@ def test_swing_daily_summary_includes_market_regime_and_blockers(monkeypatch, tm
     swing_summary = report["sections"]["swing_daily_summary"]
     blocker_rows = {item["label"]: item for item in swing_summary["blocker_families"]}
     gatekeeper_actions = {item["label"]: item["count"] for item in swing_summary["gatekeeper_actions"]}
+    gatekeeper_action_keys = {item["label"]: item["count"] for item in swing_summary["gatekeeper_action_keys"]}
 
     assert swing_summary["market_regime"]["risk_state"] == "RISK_OFF"
     assert swing_summary["market_regime"]["allow_swing_entry"] is False
@@ -826,6 +827,7 @@ def test_swing_daily_summary_includes_market_regime_and_blockers(monkeypatch, tm
     assert blocker_rows["시장 국면 제한"]["count"] == 1
     assert blocker_rows["스윙 갭상승"]["count"] == 1
     assert gatekeeper_actions["눌림 대기"] == 2
+    assert gatekeeper_action_keys["pullback_wait"] == 2
 
 
 def test_performance_tuning_report_accepts_dynamic_trend_window(monkeypatch):

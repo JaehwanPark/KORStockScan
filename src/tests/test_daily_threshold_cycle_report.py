@@ -1053,8 +1053,18 @@ def test_openai_threshold_ai_correction_uses_strict_schema_and_deep_model(monkey
     assert captured["text"]["format"]["name"] == "threshold_ai_correction_v1"
     assert captured["text"]["format"]["strict"] is True
     assert captured["text"]["format"]["schema"]["additionalProperties"] is False
-    assert "Korean domain glossary" in captured["instructions"]
+    assert "Domain glossary" in captured["instructions"]
+    assert not any("\uac00" <= char <= "\ud7a3" for char in captured["instructions"])
+    assert not any("\uac00" <= char <= "\ud7a3" for char in captured["input"])
     assert "Return only JSON" in captured["instructions"]
+
+
+def test_threshold_ai_correction_fallback_prompt_is_english_ascii():
+    prompt = report_mod._build_ai_correction_prompt({"note": "수급 확인"})
+
+    assert "You are the threshold-cycle calibration AI reviewer" in prompt
+    assert "\\uc218\\uae09" in prompt
+    assert not any("\uac00" <= char <= "\ud7a3" for char in prompt)
 
 
 def test_ai_correction_input_context_is_compact_and_hash_referenced():

@@ -78,6 +78,8 @@ def test_build_candidate_and_arm_rows_keep_sim_only_contract():
     assert all(row["actual_order_submitted"] is False for row in arms)
     assert all(row["broker_order_forbidden"] is True for row in arms)
     assert all(row["runtime_effect"] is False for row in arms)
+    assert all(row["allowed_runtime_apply"] is False for row in arms)
+    assert all(row["arm_features"]["allowed_runtime_apply"] is False for row in arms)
     assert all("legacy_ml_role" in row["source_features"] for row in candidates)
     assert all(row["sector"] for row in candidates)
     assert all(row["theme_tags"] for row in candidates)
@@ -155,3 +157,162 @@ def test_schema_report_and_persistence_are_idempotent(tmp_path, monkeypatch):
     with Session() as session:
         assert session.query(SwingStrategyDiscoveryCandidate).count() == 6
         assert session.query(SwingStrategyDiscoveryArm).count() == 6 * len(mod.ARM_SET)
+
+
+def test_discovery_can_include_bottom_rebound_source_without_runtime_authority(tmp_path, monkeypatch):
+    source_path = tmp_path / "swing_bottom_rebound_candidate_source_2026-05-22.json"
+    source_path.write_text(
+        json.dumps(
+            {
+                "report_type": "swing_bottom_rebound_candidate_source",
+                "date": "2026-05-22",
+                "policy_version": "bottom_rebound_swing_source_v1",
+                "decision_authority": "swing_sim_candidate_source_only",
+                "runtime_effect": False,
+                "broker_order_forbidden": True,
+                "allowed_runtime_apply": False,
+                "candidate_rows": [
+                    {
+                        "candidate_id": "br:2026-05-22:000101",
+                        "stock_code": "000101",
+                        "stock_name": "BottomOnly",
+                        "candidate_rank": 1,
+                        "lifecycle_exploration_score": 5.5,
+                        "source_quality_adjusted_ev_pct": 1.2,
+                        "recommended_sim_entry_policy": "atr_pullback_entry",
+                        "diagnostic_features": {
+                            "kiwoom_sector": "Software",
+                            "kiwoom_theme_tags": ["AI"],
+                        },
+                        "source_features": {"source_primary_adjusted_ev_pct": 1.2},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(mod, "load_safe_pool_rows", lambda target_date: pd.DataFrame())
+    monkeypatch.setattr(mod, "load_block_reason_map", lambda target_date: {})
+    monkeypatch.setattr(
+        mod,
+        "fetch_quote_features",
+        lambda codes, db_url=mod.POSTGRES_URL: {
+            "000101": {
+                "stock_name": "BottomOnly",
+                "reference_price": 1000,
+                "position_tag": "BOTTOM",
+                "position_ratio_60d": 0.1,
+                "volatility_20d_pct": 2.0,
+                "volatility_bucket": "mid",
+                "marcap": 10_000_000_000,
+                "volume": 100000,
+            }
+        },
+    )
+    monkeypatch.setattr(
+        mod,
+        "build_sector_theme_map",
+        lambda codes, target_date, allow_external=True: {
+            "mapped_code_count": 1,
+            "rows_by_code": {
+                "000101": {
+                    "sector": "Software",
+                    "industry": "Software",
+                    "theme_tags": ["AI"],
+                    "theme_source": "test",
+                    "theme_source_quality": "ok",
+                }
+            },
+            "warnings": [],
+        },
+    )
+
+    report = mod.build_swing_strategy_discovery_report(
+        "2026-05-22",
+        db_url="sqlite://",
+        max_candidates=3,
+        persist=False,
+        include_bottom_rebound_source=True,
+        bottom_rebound_source_path=source_path,
+    )
+
+    assert report["summary"]["candidate_count"] == 1
+    assert report["source_quality"]["safe_pool_source_rows"] == 0
+    assert report["source_quality"]["bottom_rebound_source_rows"] == 1
+    assert report["source_quality"]["combined_source_rows"] == 1
+    assert report["source_quality"]["bottom_rebound_source"]["status"] == "ok"
+    assert "safe_pool_empty_bottom_rebound_source_used" in report["warnings"]
+    example = report["examples"][0]
+    assert example["stock_code"] == "000101"
+    assert report["runtime_effect"] is False
+    assert report["actual_order_submitted"] is False
+    assert report["broker_order_forbidden"] is True
+    assert report["allowed_runtime_apply"] is False
+    assert report["summary"]["arm_count"] == len(mod.BOTTOM_REBOUND_ARM_SET)
+    assert set(report["summary"]["arm_policy_counts"]) == {item["arm_id"] for item in mod.BOTTOM_REBOUND_ARM_SET}
+    assert report["bottom_rebound_arm_set"] == mod.BOTTOM_REBOUND_ARM_SET
+    assert report["examples"][0]["bottom_rebound_source"]["present"] is True
+
+
+def test_bottom_rebound_source_contract_must_be_source_only(tmp_path):
+    source_path = tmp_path / "bad_source.json"
+    source_path.write_text(
+        json.dumps(
+            {
+                "decision_authority": "swing_sim_candidate_source_only",
+                "runtime_effect": True,
+                "broker_order_forbidden": True,
+                "allowed_runtime_apply": False,
+                "candidate_rows": [{"stock_code": "000101"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rows, diagnostics = mod.load_bottom_rebound_source_rows("2026-05-22", source_path=source_path)
+
+    assert rows.empty
+    assert diagnostics["status"] == "blocked_contract"
+
+
+def test_bottom_rebound_candidate_uses_dedicated_anticipatory_arm_context():
+    candidate = {
+        "candidate_key": "000101",
+        "source_date": "2026-05-22",
+        "stock_code": "000101",
+        "policy_version": mod.POLICY_VERSION,
+        "volatility_bucket": "bottom_rebound",
+        "lifecycle_exploration_score": 0.8,
+        "_reference_price": 1000.0,
+        "source_features": {
+            "bottom_rebound_source": {
+                "present": True,
+                "entry_context": {"setup_type": "anticipatory_bottom_rebound_swing"},
+            }
+        },
+    }
+
+    arms = mod.build_arm_rows([candidate], virtual_budget_krw=1_000_000)
+
+    assert [row["arm_id"] for row in arms] == [item["arm_id"] for item in mod.BOTTOM_REBOUND_ARM_SET]
+    assert {row["entry_policy"] for row in arms} == {
+        "bottom_rebound_next_open_entry",
+        "bottom_rebound_signal_close_retest_limit_entry",
+        "bottom_rebound_atr_pullback_limit_entry",
+    }
+    assert all(row["arm_features"]["arm_policy_version"] == mod.BOTTOM_REBOUND_ARM_POLICY_VERSION for row in arms)
+    assert all(row["allowed_runtime_apply"] is False for row in arms)
+    assert all(row["arm_features"]["allowed_runtime_apply"] is False for row in arms)
+    assert all(
+        row["arm_features"]["bottom_rebound_entry_context"]["entry_context_contract"][
+            "do_not_require_breakout_confirmation"
+        ]
+        is True
+        for row in arms
+    )
+    assert all(
+        row["arm_features"]["bottom_rebound_entry_context"]["entry_context_contract"]["allowed_runtime_apply"] is False
+        for row in arms
+    )
+    assert all(row["actual_order_submitted"] is False for row in arms)

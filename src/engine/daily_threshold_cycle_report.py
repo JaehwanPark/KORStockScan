@@ -6948,20 +6948,21 @@ def _threshold_ai_openai_model_sequence() -> list[str]:
 
 def _build_ai_correction_prompt(input_context: dict) -> str:
     return (
-        "너는 threshold-cycle calibration AI reviewer + anomaly corrector다.\n"
-        "역할은 수정안 제안까지이며 env/code/runtime 직접 변경 명령을 내면 안 된다.\n"
-        "최종 source of truth는 deterministic calibration guard다.\n\n"
-        "허용 제안:\n"
+        "You are the threshold-cycle calibration AI reviewer and anomaly corrector.\n"
+        "Your authority is proposal-only. You must not command env, code, runtime, restart, "
+        "or intraday threshold mutation.\n"
+        "The deterministic calibration guard remains the final source of truth.\n\n"
+        "Allowed proposals:\n"
         "- proposed_state: adjust_up|adjust_down|hold|hold_sample|freeze\n"
-        "- proposed_value: family bounds와 max_step_per_day 안에서 검증될 후보값\n"
+        "- proposed_value: a candidate value that will be validated against family bounds and max_step_per_day\n"
         "- anomaly_route: threshold_candidate|incident|instrumentation_gap|normal_drift\n"
         "- sample_window: daily_intraday|rolling_5d|rolling_10d|cumulative\n\n"
-        "금지:\n"
-        "- env/code/runtime 직접 변경\n"
-        "- 장중 threshold mutation\n"
-        "- safety guard 우회 또는 safety_revert_required 변경\n"
-        "- 단일 사례 기반 live enable 확정\n\n"
-        "반드시 JSON only로 출력한다. schema 외 field를 넣지 않는다:\n"
+        "Forbidden actions:\n"
+        "- direct env/code/runtime changes\n"
+        "- intraday threshold mutation\n"
+        "- safety guard bypass or safety_revert_required changes\n"
+        "- live enablement based on a single case\n\n"
+        "Return JSON only. Do not add fields outside this schema:\n"
         "{\n"
         '  "schema_version": 1,\n'
         '  "corrections": [\n'
@@ -6981,8 +6982,8 @@ def _build_ai_correction_prompt(input_context: dict) -> str:
         "    }\n"
         "  ]\n"
         "}\n\n"
-        "[입력]\n"
-        f"{json.dumps(input_context, ensure_ascii=False, indent=2)}"
+        "Input context:\n"
+        f"{json.dumps(input_context, ensure_ascii=True, indent=2)}"
     )
 
 
@@ -7000,16 +7001,16 @@ def _build_openai_ai_correction_instructions(run_phase: str) -> str:
         "- Use sample windows only as daily_intraday, rolling_5d, rolling_10d, or cumulative.\n"
         "- Never change safety_revert_required and never infer live enable from a single case.\n"
         "- Preserve raw enum labels, family ids, ticker names, field names, and quoted evidence exactly.\n\n"
-        "Korean domain glossary for interpretation only:\n"
-        "- 수급 = order-flow pressure\n"
-        "- 호가 = order book quote/depth\n"
-        "- 체결강도 = execution strength\n"
-        "- 틱가속 = tick acceleration\n"
-        "- 매수압 = buy pressure\n"
-        "- 휩쏘 = whipsaw rebound\n"
-        "- 소프트손절 = soft stop\n"
-        "- 물타기 = averaging down / REVERSAL_ADD\n"
-        "- 불타기 = pyramiding / PYRAMID\n\n"
+        "Domain glossary for interpretation only:\n"
+        "- order_flow = order-flow pressure\n"
+        "- quote_depth = order book quote/depth\n"
+        "- execution_strength = execution strength\n"
+        "- tick_acceleration = tick acceleration\n"
+        "- buy_pressure = buy pressure\n"
+        "- whipsaw_rebound = whipsaw rebound\n"
+        "- soft_stop = soft stop\n"
+        "- averaging_down = averaging down / REVERSAL_ADD\n"
+        "- pyramiding = pyramiding / PYRAMID\n\n"
         "Return only JSON that conforms to the strict threshold_ai_correction_v1 schema."
     )
 
@@ -7079,7 +7080,7 @@ def _call_openai_threshold_ai_correction(input_context: dict, *, run_phase: str)
 
     model_sequence = _threshold_ai_openai_model_sequence()
     reasoning_effort = "medium" if str(run_phase) == "intraday" else "high"
-    user_input = json.dumps(input_context, ensure_ascii=False, indent=2, default=str)
+    user_input = json.dumps(input_context, ensure_ascii=True, indent=2, default=str)
     instructions = _build_openai_ai_correction_instructions(run_phase)
     input_context_hash = _json_sha256(input_context)
     input_context_chars = len(user_input)

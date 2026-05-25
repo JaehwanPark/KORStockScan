@@ -1,8 +1,21 @@
 import json
 
 from src.engine import runtime_apply_bridge as bridge_mod
+from src.engine import scalp_sim_scale_in_window_approval as scale_in_approval_mod
 from src.engine import threshold_cycle_preopen_apply as mod
 from src.engine import lifecycle_bucket_discovery as discovery_mod
+from src.engine.swing import sim_auto_approval_control_tower as swing_sim_mod
+
+
+def _bounded_real_canary_tier2_contract() -> dict:
+    return {
+        "state": "bounded_real_canary_auto_approved",
+        "tier2_status": "parsed",
+        "tier2_policy": "fail_closed",
+        "tier2_fail_closed": False,
+        "primary_ev_uplift_threshold_pct": 1.0,
+        "final_user_approval_boundary": "full_live_only",
+    }
 
 
 def test_preopen_apply_rejects_panic_lifecycle_standalone_env_candidate():
@@ -275,10 +288,14 @@ def test_preopen_apply_consumes_lifecycle_bucket_auto_apply_without_human_artifa
     bridge_dir = tmp_path / "bridge"
     catalog_dir = tmp_path / "catalog"
     sim_dir = tmp_path / "sim_auto"
+    swing_sim_approval_dir = tmp_path / "swing_sim_auto"
+    swing_sim_policy_dir = tmp_path / "swing_sim_policy"
     report_dir.mkdir(parents=True)
     bridge_dir.mkdir(parents=True)
     catalog_dir.mkdir(parents=True)
     sim_dir.mkdir(parents=True)
+    swing_sim_approval_dir.mkdir(parents=True)
+    swing_sim_policy_dir.mkdir(parents=True)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
     monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
@@ -286,6 +303,8 @@ def test_preopen_apply_consumes_lifecycle_bucket_auto_apply_without_human_artifa
     monkeypatch.setattr(discovery_mod, "CATALOG_DIR", catalog_dir)
     monkeypatch.setattr(discovery_mod, "SIM_AUTO_APPROVAL_DIR", sim_dir)
     monkeypatch.setattr(discovery_mod, "REPORT_DIR", report_dir / "lifecycle_bucket_discovery")
+    monkeypatch.setattr(swing_sim_mod, "SIM_AUTO_APPROVAL_DIR", swing_sim_approval_dir)
+    monkeypatch.setattr(swing_sim_mod, "SWING_SIM_POLICY_DIR", swing_sim_policy_dir)
 
     (report_dir / "threshold_cycle_2026-05-22.json").write_text(
         json.dumps({"date": "2026-05-22", "apply_candidate_list": [], "calibration_candidates": []}),
@@ -314,9 +333,8 @@ def test_preopen_apply_consumes_lifecycle_bucket_auto_apply_without_human_artifa
                         "current_values": {"enabled": False, "min_score": 65, "max_score": 74},
                         "runtime_effect_after_approval": "bounded_entry_probe_recovery_live_auto",
                         "lifecycle_bucket_discovery_bucket_id": "entry:combo_entry_spot:score_66_69",
-                        "lifecycle_bucket_discovery_ai_review_status": "unavailable",
-                        "lifecycle_bucket_discovery_ai_followup_required": "post_apply_verification",
-                        "lifecycle_bucket_discovery_ai_block_ignored_reason": "ambiguous_or_non_contract_gap_live_then_verify",
+                        "lifecycle_bucket_discovery_ai_review_status": "parsed",
+                        "auto_promotion_contract": {"tier2_status": "parsed", "tier2_policy": "fail_closed"},
                         "source_bucket_keys": ["score=score_66_69"],
                     }
                 ],
@@ -336,6 +354,22 @@ def test_preopen_apply_consumes_lifecycle_bucket_auto_apply_without_human_artifa
         ),
         encoding="utf-8",
     )
+    (swing_sim_policy_dir / "swing_sim_policy_catalog_2026-05-22.json").write_text("{}", encoding="utf-8")
+    (swing_sim_approval_dir / "swing_sim_auto_approval_2026-05-22.json").write_text(
+        json.dumps(
+            {
+                "report_type": "swing_sim_auto_approval",
+                "approved": True,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "approved_source_ids": ["swing_lifecycle_bucket_discovery", "bottom_rebound_policy_auto_loop"],
+                "approved_policy_count": 2,
+            }
+        ),
+        encoding="utf-8",
+    )
 
     manifest = mod.build_preopen_apply_manifest(
         "2026-05-23",
@@ -348,16 +382,19 @@ def test_preopen_apply_consumes_lifecycle_bucket_auto_apply_without_human_artifa
     assert manifest["runtime_apply_bridge"]["approved"] == 1
     assert manifest["runtime_apply_bridge"]["selected"][0]["approval_state"] == "auto_live"
     assert manifest["runtime_apply_bridge"]["decisions"][0]["decision_reason"] == "lifecycle_bucket_discovery_live_auto_apply"
-    assert manifest["runtime_apply_bridge"]["selected"][0]["post_apply_verification_required"] is True
-    assert (
-        manifest["runtime_apply_bridge"]["decisions"][0]["lifecycle_bucket_discovery_ai_followup_required"]
-        == "post_apply_verification"
-    )
+    assert manifest["runtime_apply_bridge"]["selected"][0]["post_apply_verification_required"] is False
     assert manifest["lifecycle_bucket_discovery"]["approved"] == 1
+    assert manifest["swing_sim_auto_approval"]["approved"] == 1
+    assert manifest["swing_sim_auto_approval"]["selected"][0]["approved_source_ids"] == [
+        "swing_lifecycle_bucket_discovery",
+        "bottom_rebound_policy_auto_loop",
+    ]
     env_text = (runtime_dir / "threshold_runtime_env_2026-05-23.env").read_text(encoding="utf-8")
     assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED=true" in env_text
     assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_SCORE=66" in env_text
     assert "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_ENABLED=true" in env_text
+    assert "KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_ENABLED=true" in env_text
+    assert "KORSTOCKSCAN_SWING_SIM_AUTO_BOTTOM_REBOUND_SOURCE_ENABLED=true" in env_text
 
 
 def test_auto_bounded_live_imports_latency_classifier_recommendation(tmp_path, monkeypatch):
@@ -1368,7 +1405,7 @@ def test_swing_user_approval_artifact_applies_env_and_keeps_dry_run(tmp_path, mo
     assert "KORSTOCKSCAN_SWING_LIVE_ORDER_DRY_RUN_ENABLED=true" in env_text
 
 
-def test_swing_scale_in_real_canary_requires_separate_artifact(tmp_path, monkeypatch):
+def test_swing_scale_in_real_canary_auto_approves_without_separate_artifact(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"
     runtime_dir = tmp_path / "runtime_env"
@@ -1397,10 +1434,27 @@ def test_swing_scale_in_real_canary_requires_separate_artifact(tmp_path, monkeyp
                         "policy_id": "swing_scale_in_real_canary_phase0",
                         "family": "swing_scale_in_real_canary_phase0",
                         "stage": "scale_in",
+                        "calibration_state": "auto_approved_real_canary",
+                        "auto_approved_real_canary": True,
+                        "auto_approval_state": "real_canary_phase0_auto_approved",
+                        "auto_promotion_contract": _bounded_real_canary_tier2_contract(),
                         "allowed_actions": ["PYRAMID", "AVG_DOWN"],
-                        "target_env_keys": ["SWING_SCALE_IN_REAL_CANARY_ENABLED"],
+                        "target_env_keys": [
+                            "SWING_SCALE_IN_REAL_CANARY_ENABLED",
+                            "SWING_SCALE_IN_REAL_CANARY_ALLOWED_ARMS",
+                            "SWING_SCALE_IN_REAL_CANARY_MAX_QTY",
+                            "SWING_SCALE_IN_REAL_CANARY_MAX_ORDERS_PER_DAY",
+                            "SWING_SCALE_IN_REAL_CANARY_MAX_ORDERS_PER_POSITION",
+                            "SWING_SCALE_IN_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT",
+                        ],
                         "current_values": {"enabled": False},
-                        "recommended_values": {"enabled": True},
+                        "recommended_values": {
+                            "enabled": True,
+                            "max_order_qty": 1,
+                            "max_orders_per_day": 1,
+                            "max_orders_per_position": 1,
+                            "require_approval_artifact": False,
+                        },
                         "dry_run_required": False,
                         "actual_order_submitted": False,
                     }
@@ -1418,14 +1472,18 @@ def test_swing_scale_in_real_canary_requires_separate_artifact(tmp_path, monkeyp
         require_ai=False,
     )
 
-    assert manifest["runtime_change"] is False
-    assert "scale_in_real_canary_approval_artifact_missing" in manifest["swing_runtime_approval"]["blocked"]
+    assert manifest["runtime_change"] is True
+    assert "scale_in_real_canary_approval_artifact_missing" not in manifest["swing_runtime_approval"]["blocked"]
+    assert manifest["swing_runtime_approval"]["approved"] == 1
+    assert manifest["swing_runtime_approval"]["decisions"][0]["decision_reason"] == "real_canary_phase0_auto_approval_accepted"
     env_text = (runtime_dir / "threshold_runtime_env_2026-05-11.env").read_text(encoding="utf-8")
     assert "KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED=true" in env_text
-    assert "KORSTOCKSCAN_SWING_SCALE_IN_REAL_CANARY_ENABLED" not in env_text
+    assert "KORSTOCKSCAN_SWING_SCALE_IN_REAL_CANARY_ENABLED=true" in env_text
+    assert "KORSTOCKSCAN_SWING_SCALE_IN_REAL_CANARY_ALLOWED_ARMS=AVG_DOWN,PYRAMID" in env_text
+    assert "KORSTOCKSCAN_SWING_SCALE_IN_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT=false" in env_text
 
 
-def test_swing_one_share_real_canary_requires_separate_artifact(tmp_path, monkeypatch):
+def test_swing_one_share_real_canary_auto_approves_without_separate_artifact(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"
     runtime_dir = tmp_path / "runtime_env"
@@ -1454,8 +1512,157 @@ def test_swing_one_share_real_canary_requires_separate_artifact(tmp_path, monkey
                         "policy_id": "swing_one_share_real_canary_phase0",
                         "family": "swing_one_share_real_canary_phase0",
                         "stage": "real_canary_entry",
-                        "target_env_keys": ["SWING_ONE_SHARE_REAL_CANARY_ENABLED"],
+                        "calibration_state": "auto_approved_real_canary",
+                        "auto_approved_real_canary": True,
+                        "auto_approval_state": "real_canary_phase0_auto_approved",
+                        "auto_promotion_contract": _bounded_real_canary_tier2_contract(),
+                        "target_env_keys": [
+                            "SWING_ONE_SHARE_REAL_CANARY_ENABLED",
+                            "SWING_ONE_SHARE_REAL_CANARY_ALLOWED_CODES",
+                            "SWING_ONE_SHARE_REAL_CANARY_MAX_QTY",
+                            "SWING_ONE_SHARE_REAL_CANARY_MAX_NEW_ENTRIES_PER_DAY",
+                            "SWING_ONE_SHARE_REAL_CANARY_MAX_OPEN_POSITIONS",
+                            "SWING_ONE_SHARE_REAL_CANARY_MAX_TOTAL_NOTIONAL_KRW",
+                            "SWING_ONE_SHARE_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT",
+                        ],
                         "current_values": {"enabled": False},
+                        "recommended_values": {
+                            "enabled": True,
+                            "allowed_codes": "123456",
+                            "max_order_qty": 1,
+                            "max_new_entries_per_day": 1,
+                            "max_open_positions": 3,
+                            "max_total_notional_krw": 300000,
+                            "require_approval_artifact": False,
+                        },
+                        "candidate_codes": ["123456"],
+                        "dry_run_required": True,
+                        "actual_order_submitted": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-11",
+        source_date="2026-05-08",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    assert manifest["runtime_change"] is True
+    assert "one_share_real_canary_approval_artifact_missing" not in manifest["swing_runtime_approval"]["blocked"]
+    assert manifest["swing_runtime_approval"]["approved"] == 1
+    assert manifest["swing_runtime_approval"]["decisions"][0]["decision_reason"] == "real_canary_phase0_auto_approval_accepted"
+    env_text = (runtime_dir / "threshold_runtime_env_2026-05-11.env").read_text(encoding="utf-8")
+    assert "KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED=true" in env_text
+    assert "KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_ENABLED=true" in env_text
+    assert "KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_ALLOWED_CODES=123456" in env_text
+    assert "KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT=false" in env_text
+
+
+def test_swing_scale_in_real_canary_rejects_qty_cap_above_phase0(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    swing_request_dir = tmp_path / "swing_runtime_approval"
+    approval_dir = tmp_path / "approvals"
+    for directory in (report_dir, swing_request_dir, approval_dir):
+        directory.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_REPORT_DIR", swing_request_dir)
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_ARTIFACT_DIR", approval_dir)
+
+    approval_id = "swing_scale_in_real_canary:2026-05-08:phase0"
+    (report_dir / "threshold_cycle_2026-05-08.json").write_text(
+        json.dumps({"date": "2026-05-08", "calibration_candidates": []}),
+        encoding="utf-8",
+    )
+    (swing_request_dir / "swing_runtime_approval_2026-05-08.json").write_text(
+        json.dumps(
+            {
+                "scale_in_real_canary_policy": {"policy_id": "swing_scale_in_real_canary_phase0"},
+                "approval_requests": [
+                    {
+                        "approval_id": approval_id,
+                        "policy_id": "swing_scale_in_real_canary_phase0",
+                        "family": "swing_scale_in_real_canary_phase0",
+                        "stage": "scale_in",
+                        "calibration_state": "auto_approved_real_canary",
+                        "auto_approved_real_canary": True,
+                        "auto_approval_state": "real_canary_phase0_auto_approved",
+                        "auto_promotion_contract": _bounded_real_canary_tier2_contract(),
+                        "allowed_actions": ["PYRAMID", "AVG_DOWN"],
+                        "target_env_keys": [
+                            "SWING_SCALE_IN_REAL_CANARY_ENABLED",
+                            "SWING_SCALE_IN_REAL_CANARY_MAX_QTY",
+                        ],
+                        "recommended_values": {"enabled": True, "max_order_qty": 2},
+                        "dry_run_required": False,
+                        "actual_order_submitted": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-11",
+        source_date="2026-05-08",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    assert manifest["runtime_change"] is False
+    assert (
+        "scale_in_real_canary_qty_cap_mismatch:swing_scale_in_real_canary:2026-05-08:phase0"
+        in manifest["swing_runtime_approval"]["blocked"]
+    )
+    env_text = (runtime_dir / "threshold_runtime_env_2026-05-11.env").read_text(encoding="utf-8")
+    assert "KORSTOCKSCAN_SWING_SCALE_IN_REAL_CANARY_ENABLED" not in env_text
+
+
+def test_swing_real_canary_does_not_auto_apply_without_auto_approval_state(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    swing_request_dir = tmp_path / "swing_runtime_approval"
+    approval_dir = tmp_path / "approvals"
+    for directory in (report_dir, swing_request_dir, approval_dir):
+        directory.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_REPORT_DIR", swing_request_dir)
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_ARTIFACT_DIR", approval_dir)
+
+    approval_id = "swing_one_share_real_canary:2026-05-08:phase0"
+    (report_dir / "threshold_cycle_2026-05-08.json").write_text(
+        json.dumps({"date": "2026-05-08", "calibration_candidates": []}),
+        encoding="utf-8",
+    )
+    (swing_request_dir / "swing_runtime_approval_2026-05-08.json").write_text(
+        json.dumps(
+            {
+                "real_canary_policy": {"policy_id": "swing_one_share_real_canary_phase0"},
+                "approval_requests": [
+                    {
+                        "approval_id": approval_id,
+                        "policy_id": "swing_one_share_real_canary_phase0",
+                        "family": "swing_one_share_real_canary_phase0",
+                        "stage": "real_canary_entry",
+                        "calibration_state": "approval_required",
+                        "target_env_keys": [
+                            "SWING_ONE_SHARE_REAL_CANARY_ENABLED",
+                            "SWING_ONE_SHARE_REAL_CANARY_ALLOWED_CODES",
+                        ],
                         "recommended_values": {"enabled": True, "allowed_codes": "123456"},
                         "candidate_codes": ["123456"],
                         "dry_run_required": True,
@@ -1476,9 +1683,11 @@ def test_swing_one_share_real_canary_requires_separate_artifact(tmp_path, monkey
     )
 
     assert manifest["runtime_change"] is False
-    assert "one_share_real_canary_approval_artifact_missing" in manifest["swing_runtime_approval"]["blocked"]
+    assert (
+        "one_share_real_canary_auto_approval_missing:swing_one_share_real_canary:2026-05-08:phase0"
+        in manifest["swing_runtime_approval"]["blocked"]
+    )
     env_text = (runtime_dir / "threshold_runtime_env_2026-05-11.env").read_text(encoding="utf-8")
-    assert "KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED=true" in env_text
     assert "KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_ENABLED" not in env_text
 
 
@@ -1511,6 +1720,10 @@ def test_swing_one_share_real_canary_artifact_applies_env_and_keeps_dry_run(tmp_
                         "policy_id": "swing_one_share_real_canary_phase0",
                         "family": "swing_one_share_real_canary_phase0",
                         "stage": "real_canary_entry",
+                        "calibration_state": "auto_approved_real_canary",
+                        "auto_approved_real_canary": True,
+                        "auto_approval_state": "real_canary_phase0_auto_approved",
+                        "auto_promotion_contract": _bounded_real_canary_tier2_contract(),
                         "target_env_keys": [
                             "SWING_ONE_SHARE_REAL_CANARY_ENABLED",
                             "SWING_ONE_SHARE_REAL_CANARY_ALLOWED_CODES",
@@ -1612,6 +1825,10 @@ def test_swing_scale_in_real_canary_artifact_applies_env(tmp_path, monkeypatch):
                         "policy_id": "swing_scale_in_real_canary_phase0",
                         "family": "swing_scale_in_real_canary_phase0",
                         "stage": "scale_in",
+                        "calibration_state": "auto_approved_real_canary",
+                        "auto_approved_real_canary": True,
+                        "auto_approval_state": "real_canary_phase0_auto_approved",
+                        "auto_promotion_contract": _bounded_real_canary_tier2_contract(),
                         "allowed_actions": ["PYRAMID", "AVG_DOWN"],
                         "target_env_keys": [
                             "SWING_SCALE_IN_REAL_CANARY_ENABLED",
@@ -1710,6 +1927,12 @@ def test_scalp_sim_scale_in_window_approval_writes_runtime_env(tmp_path, monkeyp
                 "policy_id": "scalp_sim_scale_in_window_expansion",
                 "family": "scalp_sim_scale_in_window_expansion",
                 "approved": True,
+                "approval_state": "sim_auto_approved",
+                "human_approval_required": False,
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "source_quality_status": "pass",
                 "target_env_keys": [
                     "SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED",
                     "SCALP_SIM_SCALE_IN_WINDOW_ALLOWED_ARMS",
@@ -1752,7 +1975,134 @@ def test_scalp_sim_scale_in_window_approval_writes_runtime_env(tmp_path, monkeyp
     assert manifest["scalp_sim_scale_in_window_approval"]["selected"][0]["family"] == (
         "scalp_sim_scale_in_window_expansion"
     )
+    assert manifest["scalp_sim_scale_in_window_approval"]["decisions"][0]["decision_reason"] == (
+        "sim_auto_approval_artifact_accepted"
+    )
     assert manifest["calibration_candidates"] == []
+
+
+def test_scalp_sim_scale_in_window_artifact_is_sim_auto_approved(tmp_path, monkeypatch):
+    approval_dir = tmp_path / "approvals"
+    report_dir = tmp_path / "lifecycle_decision_matrix"
+    report_dir.mkdir(parents=True)
+    monkeypatch.setattr(scale_in_approval_mod, "APPROVAL_DIR", approval_dir)
+    monkeypatch.setattr(scale_in_approval_mod, "REPORT_DIR", report_dir)
+
+    (report_dir / "lifecycle_decision_matrix_2026-05-22.json").write_text(
+        json.dumps(
+            {
+                "summary": {"status": "pass"},
+                "sources": {"scalp_sim_scale_in": {"rows": 3, "filled_events": 1, "unfilled_events": 2}},
+                "policy_entries": [
+                    {
+                        "stage": "scale_in",
+                        "sample": 3,
+                        "joined_sample": 3,
+                        "source_quality_gate": "hold_sample",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    artifact = scale_in_approval_mod.build_scalp_sim_scale_in_window_approval("2026-05-22")
+
+    assert artifact["approved"] is True
+    assert artifact["approval_state"] == "sim_auto_approved"
+    assert artifact["human_approval_required"] is False
+    assert artifact["decision_authority"] == "sim_auto_approval_only"
+    assert artifact["runtime_effect"] is False
+    assert artifact["allowed_runtime_apply"] is True
+    assert artifact["actual_order_submitted"] is False
+    assert artifact["broker_order_forbidden"] is True
+    assert artifact["source_quality_status"] == "pass"
+    assert artifact["blocked_reasons"] == []
+    assert artifact["approval_contract"]["operator_action"] == "none_required_for_sim_policy"
+    saved = json.loads(
+        (approval_dir / "scalp_sim_scale_in_window_expansion_2026-05-22.json").read_text(encoding="utf-8")
+    )
+    assert saved["approval_state"] == "sim_auto_approved"
+
+
+def test_scalp_sim_scale_in_window_artifact_blocks_missing_source_report(tmp_path, monkeypatch):
+    approval_dir = tmp_path / "approvals"
+    report_dir = tmp_path / "lifecycle_decision_matrix"
+    report_dir.mkdir(parents=True)
+    monkeypatch.setattr(scale_in_approval_mod, "APPROVAL_DIR", approval_dir)
+    monkeypatch.setattr(scale_in_approval_mod, "REPORT_DIR", report_dir)
+
+    artifact = scale_in_approval_mod.build_scalp_sim_scale_in_window_approval("2026-05-22")
+
+    assert artifact["approved"] is False
+    assert artifact["approval_state"] == "source_quality_blocked"
+    assert artifact["source_quality_status"] == "source_report_missing"
+    assert artifact["blocked_reasons"] == ["source_report_missing"]
+
+
+def test_scalp_sim_scale_in_window_artifact_blocks_unreadable_source_report(tmp_path, monkeypatch):
+    approval_dir = tmp_path / "approvals"
+    report_dir = tmp_path / "lifecycle_decision_matrix"
+    report_dir.mkdir(parents=True)
+    monkeypatch.setattr(scale_in_approval_mod, "APPROVAL_DIR", approval_dir)
+    monkeypatch.setattr(scale_in_approval_mod, "REPORT_DIR", report_dir)
+    (report_dir / "lifecycle_decision_matrix_2026-05-22.json").write_text("{not-json", encoding="utf-8")
+
+    artifact = scale_in_approval_mod.build_scalp_sim_scale_in_window_approval("2026-05-22")
+
+    assert artifact["approved"] is False
+    assert artifact["approval_state"] == "source_quality_blocked"
+    assert artifact["source_quality_status"] == "source_report_unreadable"
+    assert artifact["blocked_reasons"] == ["source_report_unreadable"]
+
+
+def test_scalp_sim_scale_in_window_preopen_rejects_source_quality_blocked_artifact(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    approval_dir = tmp_path / "approvals"
+    report_dir.mkdir(parents=True)
+    approval_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_ARTIFACT_DIR", approval_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", tmp_path / "latency")
+
+    (report_dir / "threshold_cycle_2026-05-22.json").write_text(
+        json.dumps({"date": "2026-05-22", "calibration_candidates": []}),
+        encoding="utf-8",
+    )
+    (approval_dir / "scalp_sim_scale_in_window_expansion_2026-05-22.json").write_text(
+        json.dumps(
+            {
+                "policy_id": "scalp_sim_scale_in_window_expansion",
+                "family": "scalp_sim_scale_in_window_expansion",
+                "approved": False,
+                "approval_state": "source_quality_blocked",
+                "human_approval_required": False,
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "source_quality_status": "source_report_missing",
+                "target_env_keys": ["SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED"],
+                "recommended_values": {"enabled": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-26",
+        source_date="2026-05-22",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    assert manifest["runtime_env_overrides"].get("KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED") is None
+    assert manifest["scalp_sim_scale_in_window_approval"]["selected"] == []
+    assert "sim_auto_approval_not_approved" in manifest["scalp_sim_scale_in_window_approval"]["blocked"]
 
 
 def _install_runtime_bridge_test_dirs(tmp_path, monkeypatch):
@@ -1847,6 +2197,8 @@ def test_runtime_apply_bridge_entry_live_auto_writes_targeted_probe_env_without_
                         "live_auto_apply": True,
                         "allowed_runtime_apply": True,
                         "runtime_effect_after_approval": "bounded_entry_probe_recovery_live_auto",
+                        "lifecycle_bucket_discovery_ai_review_status": "parsed",
+                        "auto_promotion_contract": {"tier2_status": "parsed", "tier2_policy": "fail_closed"},
                         "target_env_keys": [
                             "AI_SCORE65_74_RECOVERY_PROBE_ENABLED",
                             "AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE",
@@ -1968,6 +2320,8 @@ def test_runtime_apply_bridge_scale_live_auto_writes_tighten_env_without_guard_b
                         "live_auto_apply": True,
                         "allowed_runtime_apply": True,
                         "runtime_effect_after_approval": "bounded_scale_in_policy_tighten_live_auto",
+                        "lifecycle_bucket_discovery_ai_review_status": "parsed",
+                        "auto_promotion_contract": {"tier2_status": "parsed", "tier2_policy": "fail_closed"},
                         "target_env_keys": [
                             "SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP",
                             "SCALPING_ENABLE_PYRAMID",

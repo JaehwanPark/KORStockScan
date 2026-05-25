@@ -10,12 +10,14 @@ from src.engine.ai_prompt_contracts import (
     SCALPING_ENTRY_PRICE_PROMPT,
     SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
     SCALPING_HOLDING_SYSTEM_PROMPT,
+    SCALPING_OVERNIGHT_DECISION_PROMPT,
     SCALPING_SYSTEM_PROMPT,
     SCALPING_SYSTEM_PROMPT_75_CANARY,
     SCALPING_WATCHING_SYSTEM_PROMPT,
     SWING_SYSTEM_PROMPT,
 )
 from src.engine.ai_response_contracts import normalize_ai_reason_language
+from src.engine.ai_response_contracts import normalize_gatekeeper_action_key, display_gatekeeper_action_label
 from src.engine.ai_engine_openai import GPTSniperEngine
 
 
@@ -40,6 +42,10 @@ def _build_engine():
     engine.model_tier3_deep = "tier3-model"
     engine.current_model_name = engine.model_tier1_fast
     return engine
+
+
+def _has_hangul(text: str) -> bool:
+    return any("\uac00" <= char <= "\ud7a3" for char in text)
 
 
 def _build_provider_engine(engine_cls):
@@ -95,9 +101,46 @@ def test_holding_flow_prompt_includes_consistency_rule_and_history_reason():
         ],
     )
 
-    assert "직전 action을 뒤집으려면" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
-    assert "시스템 guard" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
+    assert "To reverse the previous flow-review action" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
+    assert "If a system guard applies" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
+    assert "state=absorption" in context
     assert "reason=매수 흡수 유지" in context
+
+
+def test_holding_flow_state_normalizer_accepts_legacy_korean_and_new_english_labels():
+    engine = _build_engine()
+
+    assert engine._normalize_flow_state_label("흡수") == "absorption"
+    assert engine._normalize_flow_state_label("회복") == "recovery"
+    assert engine._normalize_flow_state_label("breakdown") == "breakdown"
+    assert engine._normalize_flow_state_label("sideways") == "quiet"
+
+    result = engine._normalize_holding_flow_result(
+        {
+            "action": "TRIM",
+            "score": 67,
+            "flow_state": "회복",
+            "thesis": "legacy korean label",
+            "evidence": ["ok"],
+            "reason": "ok",
+            "next_review_sec": 44,
+        }
+    )
+
+    assert result["flow_state"] == "recovery"
+    assert result["raw_flow_state"] == "회복"
+
+
+def test_gatekeeper_action_normalizer_accepts_korean_and_english_labels():
+    assert normalize_gatekeeper_action_key("눌림 대기") == "pullback_wait"
+    assert normalize_gatekeeper_action_key("눌림|대기") == "pullback_wait"
+    assert normalize_gatekeeper_action_key("pullback_wait") == "pullback_wait"
+    assert normalize_gatekeeper_action_key("전량 회피") == "full_avoid"
+    assert normalize_gatekeeper_action_key("full avoid") == "full_avoid"
+    assert normalize_gatekeeper_action_key("즉시 매수") == "immediate_buy"
+    assert normalize_gatekeeper_action_key("None") == "unknown"
+    assert normalize_gatekeeper_action_key("ambiguous_chase") == "unknown"
+    assert display_gatekeeper_action_label("pullback_wait") == "눌림 대기"
 
 
 PROVIDER_ENGINES = [
@@ -284,6 +327,7 @@ def test_gatekeeper_cache_ignores_captured_at(monkeypatch):
     assert first["cache_hit"] is False
     assert second["cache_hit"] is True
     assert second["allow_entry"] is True
+    assert second["action_key"] == "immediate_buy"
 
 
 def test_gatekeeper_cache_absorbs_small_context_noise(monkeypatch):
@@ -353,6 +397,7 @@ def test_gatekeeper_cache_absorbs_small_context_noise(monkeypatch):
     assert first["cache_hit"] is False
     assert second["cache_hit"] is True
     assert second["allow_entry"] is False
+    assert second["action_key"] == "pullback_wait"
 
 
 def test_holding_cache_profile_absorbs_micro_market_noise(monkeypatch):
@@ -720,9 +765,75 @@ def test_scalping_prompts_require_english_ascii_reason():
         SCALPING_SYSTEM_PROMPT,
         SCALPING_WATCHING_SYSTEM_PROMPT,
         SCALPING_HOLDING_SYSTEM_PROMPT,
+        SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
         SCALPING_ENTRY_PRICE_PROMPT,
+        SCALPING_OVERNIGHT_DECISION_PROMPT,
     ):
         assert "English ASCII only" in prompt
+
+
+def test_internal_json_classifier_prompts_use_english_instruction_text():
+    for prompt in (
+        SCALPING_ENTRY_PRICE_PROMPT,
+        SCALPING_HOLDING_SYSTEM_PROMPT,
+        SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
+        SCALPING_OVERNIGHT_DECISION_PROMPT,
+    ):
+        assert "Return JSON only" in prompt
+        assert "반드시 JSON" not in prompt
+        assert "너는" not in prompt
+        assert "판정 규칙" not in prompt
+        assert not _has_hangul(prompt)
+
+    assert "pre-submit scalping order-price classifier" in SCALPING_ENTRY_PRICE_PROMPT
+    assert "low-latency scalping position-state classifier" in SCALPING_HOLDING_SYSTEM_PROMPT
+    assert "scalping holding/overnight flow classifier" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
+    assert "absorption, recovery, distribution, breakdown, quiet" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
+
+
+def test_swing_tier2_analyze_target_input_labels_are_english_ascii():
+    engine = _build_engine()
+    candles = [
+        {"체결시간": f"10:{idx:02d}:00", "현재가": 10000 + idx, "거래량": 1000 + idx}
+        for idx in range(20)
+    ]
+
+    payload = engine._format_swing_market_data(
+        {"curr": 10030, "fluctuation": 1.2, "v_pw": 132, "volume": 100000},
+        candles,
+        program_net_qty=5000,
+    )
+
+    assert "[CURRENT_STATE_SWING_VIEW]" in payload
+    assert "program_flow: net_buy" in payload
+    assert not _has_hangul(payload)
+
+
+def test_dual_shadow_prompts_use_functional_english_reviewers():
+    for prompt in (
+        ai_engine_openai_module.DUAL_PERSONA_AGGRESSIVE_PROMPT,
+        ai_engine_openai_module.DUAL_PERSONA_CONSERVATIVE_PROMPT,
+    ):
+        assert "Return JSON only" in prompt
+        assert "quantitative reviewer" in prompt
+        assert "concise English ASCII only" in prompt
+        assert "너는" not in prompt
+        assert "반드시 JSON" not in prompt
+
+    assert "opportunity-side quantitative reviewer" in ai_engine_openai_module.DUAL_PERSONA_AGGRESSIVE_PROMPT
+    assert "risk-side quantitative reviewer" in ai_engine_openai_module.DUAL_PERSONA_CONSERVATIVE_PROMPT
+
+
+def test_overnight_prompt_is_internal_english_schema_first_classifier():
+    assert "pre-close scalping overnight risk classifier" in SCALPING_OVERNIGHT_DECISION_PROMPT
+    assert "Default action is SELL_TODAY" in SCALPING_OVERNIGHT_DECISION_PROMPT
+    assert "HOLD_OVERNIGHT is a strict exception" in SCALPING_OVERNIGHT_DECISION_PROMPT
+    assert "stale, missing, insufficient, or mixed" in SCALPING_OVERNIGHT_DECISION_PROMPT
+    assert "one concise overnight decision rationale" in SCALPING_OVERNIGHT_DECISION_PROMPT
+    assert "one concise main risk" in SCALPING_OVERNIGHT_DECISION_PROMPT
+    assert "15년" not in SCALPING_OVERNIGHT_DECISION_PROMPT
+    assert "베테랑" not in SCALPING_OVERNIGHT_DECISION_PROMPT
+    assert "판단 근거" not in SCALPING_OVERNIGHT_DECISION_PROMPT
 
 
 def test_analyze_target_uses_shared_prompt_when_split_disabled(monkeypatch):
@@ -965,6 +1076,8 @@ def test_provider_overnight_engine_disabled_is_annotated():
         )
 
         assert result["action"] == "SELL_TODAY"
+        assert result["reason"] == "engine_disabled_sell_today_fallback"
+        assert result["risk_note"] == "engine_disabled"
         assert result["ai_prompt_type"] == "scalping_overnight"
         assert result["ai_prompt_version"] == "overnight_v1"
         assert result["ai_result_source"] == "engine_disabled"
@@ -987,6 +1100,8 @@ def test_provider_overnight_failure_disables_engine(monkeypatch):
 
         assert engine.ai_disabled is True
         assert result["action"] == "SELL_TODAY"
+        assert result["reason"] == "ai_failure_sell_today_fallback"
+        assert result["risk_note"] == "ai_response_error_or_insufficient_context"
         assert result["ai_result_source"] == "exception"
         assert result["ai_parse_fail"] is True
 
@@ -1031,6 +1146,8 @@ def test_openai_sim_observation_overnight_failure_does_not_disable_engine(monkey
     assert engine.ai_disabled is False
     assert engine.consecutive_failures == 0
     assert result["action"] == "SELL_TODAY"
+    assert result["reason"] == "ai_failure_sell_today_fallback"
+    assert result["risk_note"] == "ai_response_error_or_insufficient_context"
     assert result["ai_result_source"] == "exception"
     assert result["sim_observation_failure_isolated"] is True
 

@@ -10,6 +10,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from src.engine.swing.sim_auto_approval_control_tower import refresh_swing_sim_auto_approval
 from src.engine.swing_lifecycle_decision_matrix import report_paths as matrix_report_paths
 from src.utils.constants import DATA_DIR
 
@@ -344,6 +345,7 @@ def build_swing_lifecycle_bucket_discovery(target_date: str) -> dict[str, Any]:
         "decision_authority": DECISION_AUTHORITY,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
+        "allowed_runtime_apply": False,
         "human_intervention_required": False,
         "ai_review_policy": {
             "status": "not_configured",
@@ -458,6 +460,7 @@ def write_report(report: dict[str, Any]) -> tuple[Path, Path]:
     md_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
     md_path.write_text(render_markdown(report), encoding="utf-8")
+    refresh_swing_sim_auto_approval(str(report.get("date")), swing_lifecycle_bucket_report=report)
     return json_path, md_path
 
 

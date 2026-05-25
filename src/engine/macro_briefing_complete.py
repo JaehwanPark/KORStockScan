@@ -22,13 +22,13 @@ DEFAULT_USER_AGENT = "Mozilla/5.0 (MacroBriefingBot/2.0)"
 GEMINI_MARKET_KEYS = ["sp500", "nasdaq", "vix", "us10y", "brent"]
 
 MACRO_GEMINI_SYSTEM_PROMPT = """
-너는 한국 주식시장을 위한 오버나이트 매크로 데이터 수집기다.
-역할은 "요약"이 아니라 "구조화 JSON 데이터 공급"이다.
+You are an overnight macro data collector for the Korean equity market.
+Your role is structured JSON data supply, not prose summarization.
 
-반드시 아래 규칙을 지켜라.
-1. 출력은 JSON 객체 하나만 반환한다. 마크다운, 설명, 코드블록 금지.
-2. 각 시장 항목(sp500, nasdaq, vix, us10y, brent)은 객체로 반환한다.
-3. 각 항목에는 가능하면 아래 필드를 채운다.
+Follow these rules strictly.
+1. Return exactly one JSON object. Do not use Markdown, explanations, or code fences.
+2. Return each market item (sp500, nasdaq, vix, us10y, brent) as an object.
+3. Fill these fields when available:
    - name
    - value
    - prev_value
@@ -36,21 +36,21 @@ MACRO_GEMINI_SYSTEM_PROMPT = """
    - change_pct
    - as_of
    - source
-4. as_of 와 bundle_as_of 는 반드시 ISO 8601 UTC 형식으로 쓴다.
-   예: 2026-03-30T10:45:00Z
-   ET, EDT, EST, KST 같은 약식 시간대 표기는 금지한다.
-5. 모르면 추정하지 말고 null 또는 빈 문자열로 둔다.
-6. headlines 는 최대 5개로 제한한다.
-7. headlines 각 원소는 아래 필드를 가진다.
+4. Always write as_of and bundle_as_of in ISO 8601 UTC format.
+   Example: 2026-03-30T10:45:00Z
+   Do not use timezone abbreviations such as ET, EDT, EST, or KST.
+5. If a value is unknown, do not guess. Use null or an empty string.
+6. Limit headlines to at most five items.
+7. Each headline item must contain:
    - title
    - source
    - published_at
    - url
-8. headlines 의 published_at 도 ISO 8601 UTC 형식으로 작성한다.
-9. 미국 증시/금리/변동성/원유는 "가장 최근의 신뢰 가능한 마감 또는 최신 확인 시점" 기준으로 쓴다.
-10. bundle_as_of 는 네가 이 JSON을 확정한 기준 시각이다.
+8. Write headline published_at values in ISO 8601 UTC format too.
+9. For US equities, rates, volatility, and oil, use the most recent reliable close or latest verified timestamp.
+10. bundle_as_of is the timestamp at which you finalized this JSON.
 
-반드시 아래 형태를 따른다.
+Use exactly this shape.
 {
   "bundle_as_of": "...",
   "sp500": {"name": "S&P500", "value": 0, "prev_value": 0, "change": 0, "change_pct": 0, "as_of": "...", "source": "..." },
@@ -67,13 +67,13 @@ MACRO_GEMINI_SYSTEM_PROMPT = """
 
 
 def _load_system_config() -> Dict[str, Any]:
-    """프로젝트 공통 규약에 맞춘 설정 로더"""
+    """Load project configuration using the shared config path convention."""
     target = CONFIG_PATH if CONFIG_PATH.exists() else DEV_PATH
     try:
         with open(target, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception as e:
-        log_error(f"🚨 설정 로드 실패: {e}")
+        log_error(f"[MACRO CONFIG LOAD FAILED] {e}")
         return {}
 
 
@@ -479,9 +479,9 @@ class MacroBriefingBuilder:
         model_override=None,
         extra_config=None,
     ):
-        """Gemini 호출 + JSON 파싱을 최대한 안전하게 처리"""
+        """Call Gemini and parse JSON with defensive fallback handling."""
         if not self.api_keys or not self.client:
-            raise RuntimeError("GEMINI_API_KEY 계열 설정이 없습니다.")
+            raise RuntimeError("No GEMINI_API_KEY configuration is available.")
 
         contents = [prompt, user_input] if prompt else [user_input]
 
@@ -515,9 +515,9 @@ class MacroBriefingBuilder:
 
                 if require_json:
                     if not raw_text:
-                        raise ValueError("Gemini 응답 텍스트가 비어 있음")
+                        raise ValueError("Gemini response text is empty")
 
-                    # 1차: 응답 전체가 JSON이라고 가정
+                    # First pass: assume the entire response is JSON.
                     try:
                         parsed = json.loads(raw_text)
                         if isinstance(parsed, dict):
@@ -525,7 +525,7 @@ class MacroBriefingBuilder:
                     except Exception:
                         pass
 
-                    # 2차: 혹시 앞뒤에 설명이 섞였으면 JSON 블록만 추출
+                    # Second pass: extract a JSON block if surrounding prose leaked in.
                     match = re.search(r"\{.*\}", raw_text, re.DOTALL)
                     if match:
                         clean_json = match.group()
@@ -533,7 +533,7 @@ class MacroBriefingBuilder:
                         if isinstance(parsed, dict):
                             return parsed
 
-                    raise ValueError(f"JSON 형식을 찾을 수 없음: {raw_text[:500]}...")
+                    raise ValueError(f"Could not find JSON content: {raw_text[:500]}...")
 
                 return raw_text
 
@@ -554,24 +554,24 @@ class MacroBriefingBuilder:
                     new_key = self.current_key[-5:] if self.current_key else "none"
 
                     warn_msg = (
-                        f"⚠️ [Macro Gemini 재시도] {context_name} | "
+                        f"[MACRO GEMINI RETRY] {context_name} | "
                         f"{old_key} -> {new_key} ({attempt + 1}/{max_attempts}) | {e}"
                     )
                     log_error(warn_msg)
                     time.sleep(min(0.8 + attempt * 0.4, 3.0))
                     continue
 
-                raise RuntimeError(f"API 응답/파싱 실패: {e}")
+                raise RuntimeError(f"API response or parsing failed: {e}")
 
-        fatal_msg = f"🚨 [Macro Gemini 고갈] 모든 API 키 사용 불가. 마지막 에러: {last_error}"
+        fatal_msg = f"[MACRO GEMINI EXHAUSTED] All API keys failed. Last error: {last_error}"
         log_error(fatal_msg)
         raise RuntimeError(fatal_msg)
     
     @staticmethod
     def _extract_response_text(response: Any) -> str:
         """
-        Gemini Python SDK 응답에서 text를 최대한 안전하게 추출한다.
-        웹 UI에서는 정상인데 SDK에서는 response.text가 비는 경우를 대비.
+        Extract response text defensively from the Gemini Python SDK response.
+        Some responses can render in the web UI while response.text is empty in the SDK.
         """
         try:
             txt = getattr(response, "text", None)
@@ -613,33 +613,33 @@ class MacroBriefingBuilder:
             with open(config_path, "r", encoding="utf-8") as f:
                 return cls(json.load(f))
         except Exception as e:
-            log_error(f"🚨 설정 로드 실패({config_path}): {e}")
+            log_error(f"[MACRO CONFIG LOAD FAILED] {config_path}: {e}")
             return cls({})
 
     def _build_macro_user_input(self) -> str:
         now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         return f"""
-현재 UTC 시각은 {now_utc} 이다.
+The current UTC time is {now_utc}.
 
-이 시각 기준으로 가장 최근에 확인 가능한 신뢰할 수 있는 오버나이트 매크로 데이터를
-반드시 Google Search를 사용해 조회하고 JSON 객체 하나만 반환하라.
+Use Google Search to retrieve the most recent reliable overnight macro data available at this time.
+Return exactly one JSON object.
 
-[수집 대상]
+[Collection Targets]
 1. S&P500
 2. NASDAQ
 3. VIX
 4. US 10Y Treasury Yield
 5. Brent Crude
-6. 미국 정치/전쟁/관세/중동/시장 관련 핵심 headline 5개 이내
+6. Up to five key headlines about US politics, war, tariffs, the Middle East, or markets
 
-[엄격 규칙]
-- 각 시장 항목의 as_of를 반드시 채워라.
-- 개별 as_of가 확실하지 않으면 bundle_as_of와 같은 시각을 넣어라.
-- 시간은 반드시 ISO 8601 UTC 형식으로 작성하라.
-- ET, EDT, EST, KST 같은 약식 시간대는 절대 쓰지 마라.
-- 숫자를 추정하지 마라. 불확실하면 null 로 둬라.
-- 최신 웹 검색 결과에 근거하지 않은 값은 쓰지 마라.
-- 출력은 JSON 객체 하나만 반환하라.
+[Strict Rules]
+- Fill as_of for each market item.
+- If an individual as_of is uncertain, use the same timestamp as bundle_as_of.
+- Write all timestamps in ISO 8601 UTC format.
+- Never use timezone abbreviations such as ET, EDT, EST, or KST.
+- Do not estimate numeric values. Use null when uncertain.
+- Do not use values that are not grounded in the latest web search results.
+- Return exactly one JSON object.
 """.strip()
 
     def _load_cached_bundle(self) -> Optional[Dict[str, Any]]:

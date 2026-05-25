@@ -161,8 +161,8 @@ def test_ai_timeout_fallback_is_attributed(tmp_path):
             return {
                 "action": "SELL_TODAY",
                 "confidence": 0,
-                "reason": "AI 판정 실패로 보수적 청산 폴백: Request timed out.",
-                "risk_note": "timeout",
+                "reason": "ai_failure_sell_today_fallback",
+                "risk_note": "ai_response_error_or_insufficient_context",
                 "ai_parse_ok": False,
                 "ai_result_source": "exception",
                 "ai_exception_message": "Request timed out.",

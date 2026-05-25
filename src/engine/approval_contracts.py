@@ -14,6 +14,8 @@ APPROVAL_DIR = DATA_DIR / "threshold_cycle" / "approvals"
 _CONTRACTS: dict[str, dict[str, Any]] = {
     "swing_model_floor": {
         "approval_contract_status": "ready",
+        "approval_mode": "ai_tier2_pre_final_auto",
+        "approval_artifact_required": False,
         "approval_artifact_template": "swing_runtime_approvals_{date}.json",
         "approval_artifact_consumer": "threshold_cycle_preopen_apply.swing_runtime_approvals",
         "preopen_env_ready": True,
@@ -22,6 +24,8 @@ _CONTRACTS: dict[str, dict[str, Any]] = {
     },
     "swing_selection_top_k": {
         "approval_contract_status": "ready",
+        "approval_mode": "ai_tier2_pre_final_auto",
+        "approval_artifact_required": False,
         "approval_artifact_template": "swing_runtime_approvals_{date}.json",
         "approval_artifact_consumer": "threshold_cycle_preopen_apply.swing_runtime_approvals",
         "preopen_env_ready": True,
@@ -30,6 +34,8 @@ _CONTRACTS: dict[str, dict[str, Any]] = {
     },
     "swing_gatekeeper_reject_cooldown": {
         "approval_contract_status": "ready",
+        "approval_mode": "ai_tier2_pre_final_auto",
+        "approval_artifact_required": False,
         "approval_artifact_template": "swing_runtime_approvals_{date}.json",
         "approval_artifact_consumer": "threshold_cycle_preopen_apply.swing_runtime_approvals",
         "preopen_env_ready": True,
@@ -38,6 +44,8 @@ _CONTRACTS: dict[str, dict[str, Any]] = {
     },
     "swing_market_regime_sensitivity": {
         "approval_contract_status": "ready",
+        "approval_mode": "ai_tier2_pre_final_auto",
+        "approval_artifact_required": False,
         "approval_artifact_template": "swing_runtime_approvals_{date}.json",
         "approval_artifact_consumer": "threshold_cycle_preopen_apply.swing_runtime_approvals",
         "preopen_env_ready": True,
@@ -46,16 +54,20 @@ _CONTRACTS: dict[str, dict[str, Any]] = {
     },
     "swing_one_share_real_canary_phase0": {
         "approval_contract_status": "ready",
+        "approval_mode": "auto_approved_real_canary_phase0",
+        "approval_artifact_required": False,
         "approval_artifact_template": "swing_one_share_real_canary_{date}.json",
-        "approval_artifact_consumer": "threshold_cycle_preopen_apply.swing_one_share_real_canary",
+        "approval_artifact_consumer": "threshold_cycle_preopen_apply.swing_one_share_real_canary_auto_approval",
         "preopen_env_ready": True,
         "runtime_guard_ready": True,
         "runtime_scope": "approved_one_share_buy_and_closing_sell_only",
     },
     "swing_scale_in_real_canary_phase0": {
         "approval_contract_status": "ready",
+        "approval_mode": "auto_approved_real_canary_phase0",
+        "approval_artifact_required": False,
         "approval_artifact_template": "swing_scale_in_real_canary_{date}.json",
-        "approval_artifact_consumer": "threshold_cycle_preopen_apply.swing_scale_in_real_canary",
+        "approval_artifact_consumer": "threshold_cycle_preopen_apply.swing_scale_in_real_canary_auto_approval",
         "preopen_env_ready": True,
         "runtime_guard_ready": True,
         "runtime_scope": "approved_real_holding_scale_in_only",
@@ -77,7 +89,9 @@ _CONTRACTS: dict[str, dict[str, Any]] = {
         "runtime_scope": "live_auto_scalp_scale_in_policy_env_only",
     },
     "position_sizing_cap_release": {
-        "approval_contract_status": "contract_missing",
+        "approval_contract_status": "final_user_approval_required",
+        "approval_mode": "final_user_approval_required",
+        "approval_artifact_required": True,
         "approval_artifact_template": "position_sizing_cap_release_{date}.json",
         "approval_artifact_consumer": None,
         "preopen_env_ready": False,
@@ -174,6 +188,8 @@ def annotate_approval_request(request: dict[str, Any], source_date: str | None =
     return {
         **request,
         "approval_contract_status": contract.get("approval_contract_status"),
+        "approval_mode": contract.get("approval_mode") or "artifact_required",
+        "approval_artifact_required": bool(contract.get("approval_artifact_required", True)),
         "approval_live_ready": bool(contract.get("approval_live_ready")),
         "approval_artifact_path": contract.get("approval_artifact_path"),
         "approval_artifact_consumer": contract.get("approval_artifact_consumer"),

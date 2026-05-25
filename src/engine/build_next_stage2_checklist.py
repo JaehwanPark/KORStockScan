@@ -294,8 +294,8 @@ def _build_tasks(
     if _has_approval_request(ev_report, swing_report):
         tasks.append(
             GeneratedTask(
-                task_id=f"SwingApprovalArtifactPreopen{mmdd}",
-                title="스윙 approval request 및 별도 승인 artifact 존재 여부 확인",
+                task_id=f"SwingPreFinalAutoAndFinalApprovalPreopen{mmdd}",
+                title="스윙 pre-final auto state 및 final approval artifact 확인",
                 slot="PREOPEN",
                 time_window="08:45~08:50",
                 track="RuntimeStability",
@@ -304,9 +304,9 @@ def _build_tasks(
                     f"[threshold_cycle_ev_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(ev_path)})"
                 ),
                 lines=(
-                    "판정 기준: approval request가 있더라도 사용자 승인 artifact가 없으면 env apply 대상이 아니다.",
-                    "금지: 스윙 dry-run 해제, real canary, floor, scale-in real canary를 서로 자동 승인하지 않는다.",
-                    "다음 액션: `approval_artifact_present`, `approval_artifact_missing`, `blocked_by_policy` 중 하나로 닫는다.",
+                    "판정 기준: pre-final은 parsed AI Tier2 auto state가 있어야 하고, final-stage는 사용자 승인 artifact가 있어야 한다.",
+                    "금지: 스윙 full-live 전환, cap release, provider/bot 변경, hard-safety 완화를 pre-final auto state로 처리하지 않는다.",
+                    "다음 액션: `pre_final_auto_selected`, `final_approval_artifact_present`, `blocked_by_policy` 중 하나로 닫는다.",
                 ),
             )
         )

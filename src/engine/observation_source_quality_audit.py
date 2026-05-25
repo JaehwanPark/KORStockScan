@@ -8,6 +8,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from src.engine.ai_response_contracts import (
+    is_known_flow_state_label,
+    is_known_gatekeeper_action_label,
+    normalize_flow_state_label,
+    normalize_gatekeeper_action_key,
+)
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
@@ -328,6 +334,10 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         required_fields=("threshold_family", "threshold_version", "threshold_calibration_state", "profit_rate", "flow_state", "exit_rule_candidate"),
         decision_authority="source_quality_only",
     ),
+    "blocked_gatekeeper_reject": StageContract(
+        required_fields=("action", "cooldown_policy"),
+        decision_authority="source_quality_only",
+    ),
     "entry_armed": StageContract(
         required_fields=("ai_score", "ratio", "target_buy_price", "current_vpw", "reason", "ttl_sec"),
         decision_authority="source_quality_only",
@@ -454,6 +464,26 @@ def _normalized_fields_for_contract(stage: str, fields: dict[str, Any]) -> dict[
     if stage == "soft_stop_whipsaw_confirmation" and not _is_present(normalized.get("flow_state")):
         normalized["flow_state"] = "flow_state_unavailable"
         normalized["flow_state_source"] = "audit_normalized_missing_runtime_flow_state"
+    elif _is_present(normalized.get("flow_state")):
+        raw_flow_state = normalized.get("flow_state")
+        if not is_known_flow_state_label(raw_flow_state):
+            normalized["invalid_flow_state_label"] = raw_flow_state
+            normalized["source_quality_blocker"] = "unknown_flow_state_label"
+        normalized["flow_state"] = normalize_flow_state_label(raw_flow_state)
+        if normalized["flow_state"] != raw_flow_state:
+            normalized["raw_flow_state"] = raw_flow_state
+            normalized["flow_state_source"] = "audit_normalized_legacy_runtime_flow_state"
+    if "gatekeeper" in stage or any(
+        _is_present(normalized.get(field)) for field in ("action_key", "gatekeeper_action_key", "gatekeeper_action")
+    ):
+        raw_action = normalized.get("action_key") or normalized.get("gatekeeper_action_key") or normalized.get(
+            "gatekeeper_action"
+        ) or normalized.get("action")
+        if _is_present(raw_action):
+            if not is_known_gatekeeper_action_label(raw_action):
+                normalized["invalid_gatekeeper_action_label"] = raw_action
+                normalized["source_quality_blocker"] = "unknown_gatekeeper_action_label"
+            normalized["action_key"] = normalize_gatekeeper_action_key(raw_action)
     return normalized
 
 
@@ -485,11 +515,28 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
 
         missing_counts: dict[str, int] = {}
         zero_counts: dict[str, int] = {}
+        invalid_label_counts: dict[str, int] = {}
         for field in contract.required_fields:
             missing_counts[field] = sum(
                 1
                 for row in stage_rows
                 if not _is_present(_normalized_fields_for_contract(stage, row["fields"]).get(field))
+            )
+        if stage == "soft_stop_whipsaw_confirmation":
+            invalid_label_counts["flow_state"] = sum(
+                1
+                for row in stage_rows
+                if _is_present(
+                    _normalized_fields_for_contract(stage, row["fields"]).get("invalid_flow_state_label")
+                )
+            )
+        if "gatekeeper" in stage:
+            invalid_label_counts["action"] = sum(
+                1
+                for row in stage_rows
+                if _is_present(
+                    _normalized_fields_for_contract(stage, row["fields"]).get("invalid_gatekeeper_action_label")
+                )
             )
         for field in contract.zero_sensitive_fields:
             zero_counts[field] = sum(
@@ -502,12 +549,20 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
 
         missing_rates = {field: round(count / total, 4) for field, count in missing_counts.items()}
         zero_rates = {field: round(count / total, 4) for field, count in zero_counts.items()}
+        invalid_label_rates = {field: round(count / total, 4) for field, count in invalid_label_counts.items()}
         missing_violations = {
             field: rate for field, rate in missing_rates.items() if rate > contract.max_missing_rate
         }
         zero_violations = {field: rate for field, rate in zero_rates.items() if rate > contract.max_zero_rate}
-        status = "pass" if not missing_violations and not zero_violations else "warning"
+        invalid_label_violations = {field: rate for field, rate in invalid_label_rates.items() if rate > 0}
+        status = (
+            "fail"
+            if invalid_label_violations
+            else ("pass" if not missing_violations and not zero_violations else "warning")
+        )
         if status == "warning":
+            warnings.append(stage)
+        if status == "fail":
             warnings.append(stage)
         results[stage] = {
             "sample_count": total,
@@ -518,8 +573,11 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
             "zero_sensitive_fields": list(contract.zero_sensitive_fields),
             "zero_counts": zero_counts,
             "zero_rates": zero_rates,
+            "invalid_label_counts": invalid_label_counts,
+            "invalid_label_rates": invalid_label_rates,
             "missing_violations": missing_violations,
             "zero_violations": zero_violations,
+            "invalid_label_violations": invalid_label_violations,
             "metric_role": "source_quality_gate",
             "decision_authority": contract.decision_authority,
             "runtime_effect": False,
@@ -527,11 +585,43 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
         }
 
     high_volume_no_source_fields: list[dict[str, Any]] = []
+    invalid_label_findings: dict[str, dict[str, Any]] = {}
     field_presence: dict[str, Counter[str]] = defaultdict(Counter)
     example_keys: dict[str, list[str]] = {}
     for row in rows:
         stage = _stage_name(row)
         fields = row["fields"]
+        normalized = _normalized_fields_for_contract(stage, fields)
+        if _is_present(normalized.get("invalid_flow_state_label")):
+            key = f"{stage}:flow_state"
+            finding = invalid_label_findings.setdefault(
+                key,
+                {
+                    "stage": stage,
+                    "field": "flow_state",
+                    "count": 0,
+                    "examples": [],
+                    "routing": "source_quality_blocker",
+                },
+            )
+            finding["count"] += 1
+            if len(finding["examples"]) < 5:
+                finding["examples"].append(str(normalized.get("invalid_flow_state_label")))
+        if _is_present(normalized.get("invalid_gatekeeper_action_label")):
+            key = f"{stage}:gatekeeper_action"
+            finding = invalid_label_findings.setdefault(
+                key,
+                {
+                    "stage": stage,
+                    "field": "gatekeeper_action",
+                    "count": 0,
+                    "examples": [],
+                    "routing": "source_quality_blocker",
+                },
+            )
+            finding["count"] += 1
+            if len(finding["examples"]) < 5:
+                finding["examples"].append(str(normalized.get("invalid_gatekeeper_action_label")))
         example_keys.setdefault(stage, list(fields.keys())[:30])
         for key, value in fields.items():
             if _source_like_field(key) and _is_present(value):
@@ -550,6 +640,7 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
     return {
         "stage_contracts": results,
         "warning_stages": warnings,
+        "invalid_label_findings": list(invalid_label_findings.values()),
         "high_volume_no_source_fields": high_volume_no_source_fields,
         "field_presence_top": {
             stage: dict(counter.most_common(20))
@@ -564,6 +655,10 @@ def build_observation_source_quality_audit(target_date: str) -> dict[str, Any]:
     stage_counts = _stage_counts(rows)
     contract_result = _evaluate_contracts(rows, stage_counts)
     status = (
+        "fail"
+        if any((item.get("status") == "fail") for item in contract_result["stage_contracts"].values())
+        or contract_result["invalid_label_findings"]
+        else
         "warning"
         if contract_result["warning_stages"] or contract_result["high_volume_no_source_fields"]
         else "pass"
@@ -617,6 +712,15 @@ def _write_markdown(report: dict[str, Any], path: Path) -> None:
             detail = report.get("stage_contracts", {}).get(stage, {})
             lines.append(
                 f"- `{stage}` sample=`{detail.get('sample_count')}` missing=`{detail.get('missing_violations')}` zero=`{detail.get('zero_violations')}`"
+            )
+    else:
+        lines.append("- none")
+    lines.extend(["", "## Invalid Label Findings"])
+    invalid_labels = report.get("invalid_label_findings") or []
+    if invalid_labels:
+        for item in invalid_labels:
+            lines.append(
+                f"- `{item.get('stage')}` field=`{item.get('field')}` count=`{item.get('count')}` routing=`{item.get('routing')}` examples=`{item.get('examples')}`"
             )
     else:
         lines.append("- none")

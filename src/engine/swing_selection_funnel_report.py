@@ -11,6 +11,7 @@ from typing import Iterable
 import pandas as pd
 from sqlalchemy import create_engine, text
 
+from src.engine.ai_response_contracts import normalize_gatekeeper_action_key
 from src.model.common_v2 import (
     RECO_DIAGNOSTIC_JSON_PATH,
     RECO_PATH,
@@ -250,6 +251,7 @@ def summarize_pipeline_events(events: Iterable[dict]) -> dict:
     raw_counts = Counter()
     unique_records = defaultdict(set)
     gatekeeper_actions = Counter()
+    gatekeeper_action_keys = Counter()
     by_code_stage = Counter()
     discard_reason_counts = Counter()
     discard_origin_reason_counts = Counter()
@@ -271,7 +273,9 @@ def summarize_pipeline_events(events: Iterable[dict]) -> dict:
         by_code_stage[(identity[1], identity[2], stage)] += 1
 
         if stage == "blocked_gatekeeper_reject":
-            gatekeeper_actions[str(fields.get("action", "UNKNOWN") or "UNKNOWN")] += 1
+            action = str(fields.get("action", "UNKNOWN") or "UNKNOWN")
+            gatekeeper_actions[action] += 1
+            gatekeeper_action_keys[normalize_gatekeeper_action_key(fields.get("action_key") or action)] += 1
         if stage == "swing_probe_discarded":
             reason = str(fields.get("discard_reason") or "UNKNOWN")
             origin = str(fields.get("probe_origin_stage") or "UNKNOWN")
@@ -288,6 +292,7 @@ def summarize_pipeline_events(events: Iterable[dict]) -> dict:
             stage: int(len(unique_records.get(stage, set()))) for stage in key_stages
         },
         "gatekeeper_actions": dict(gatekeeper_actions),
+        "gatekeeper_action_keys": dict(gatekeeper_action_keys),
         "top_code_stage": [
             {
                 "code": code,

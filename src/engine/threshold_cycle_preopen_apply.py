@@ -10,6 +10,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from src.engine.auto_promotion_contracts import tier2_validation_passed
 from src.engine.approval_contracts import annotate_approval_request
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.engine.runtime_apply_bridge import (
@@ -23,6 +24,10 @@ from src.engine.lifecycle_bucket_discovery import (
     bucket_catalog_path,
     discovery_report_path,
     sim_auto_approval_path,
+)
+from src.engine.swing.sim_auto_approval_control_tower import (
+    swing_sim_auto_approval_path,
+    swing_sim_policy_catalog_path,
 )
 from src.utils.constants import DATA_DIR
 
@@ -147,6 +152,10 @@ TARGET_ENV_VALUE_KEYS = {
     "LIFECYCLE_BUCKET_DISCOVERY_POLICY_FILE": "policy_file",
     "LIFECYCLE_BUCKET_DISCOVERY_POLICY_VERSION": "policy_version",
     "LIFECYCLE_BUCKET_DISCOVERY_LIVE_AUTO_APPLY_ENABLED": "live_auto_apply_enabled",
+    "SWING_SIM_AUTO_POLICY_ENABLED": "enabled",
+    "SWING_SIM_AUTO_POLICY_FILE": "policy_file",
+    "SWING_SIM_AUTO_POLICY_VERSION": "policy_version",
+    "SWING_SIM_AUTO_BOTTOM_REBOUND_SOURCE_ENABLED": "bottom_rebound_source_enabled",
 }
 
 
@@ -156,6 +165,42 @@ def _load_json(path: Path) -> dict[str, Any]:
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _int_or_default(value: Any, default: int) -> int | None:
+    if value is None or value == "":
+        return int(default)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_phase0_real_canary_auto_approved(request: dict[str, Any]) -> bool:
+    state = str(request.get("calibration_state") or "").strip()
+    contract = request.get("auto_promotion_contract") if isinstance(request.get("auto_promotion_contract"), dict) else {}
+    return (
+        state in {"auto_approved_real_canary", "auto_approved_real_canary_phase0"}
+        and (
+            bool(request.get("auto_approved_real_canary"))
+            or bool(request.get("auto_approval_required"))
+            or str(request.get("auto_approval_state") or "").strip() == "real_canary_phase0_auto_approved"
+        )
+        and tier2_validation_passed(contract.get("tier2_status"))
+        and contract.get("final_user_approval_boundary") == "full_live_only"
+    )
+
+
+def _is_swing_pre_final_auto_approved(request: dict[str, Any]) -> bool:
+    state = str(request.get("calibration_state") or "").strip()
+    contract = request.get("auto_promotion_contract") if isinstance(request.get("auto_promotion_contract"), dict) else {}
+    return (
+        state == "dry_run_auto_apply_ready"
+        and bool(request.get("auto_approval_required"))
+        and str(request.get("auto_approval_state") or "") == "ai_tier2_auto_approved"
+        and tier2_validation_passed(contract.get("tier2_status"))
+        and contract.get("final_user_approval_boundary") == "full_live_only"
+    )
 
 
 def _latest_report_before(target_date: str) -> Path | None:
@@ -451,6 +496,7 @@ def _env_overrides_for_candidate(candidate: dict[str, Any]) -> dict[str, str]:
         ENTRY_BRIDGE_FAMILY,
         SCALE_IN_BRIDGE_FAMILY,
         "lifecycle_bucket_discovery_sim_auto_approval",
+        "swing_sim_auto_approval",
     }
     overrides: dict[str, str] = {}
     for target_key in candidate.get("target_env_keys") or []:
@@ -571,12 +617,30 @@ def _load_swing_runtime_approval_bundle(source_date: str | None) -> dict[str, An
     ]
     approved_requests = []
     blocked: list[str] = []
-    if non_scale_requests and not artifact:
+    manual_non_scale_requests = [
+        item for item in non_scale_requests if not _is_swing_pre_final_auto_approved(item)
+    ]
+    if manual_non_scale_requests and not artifact:
         blocked.append("approval_artifact_missing")
-    if one_share_requests and not one_share_artifact:
-        blocked.append("one_share_real_canary_approval_artifact_missing")
-    if scale_requests and not scale_artifact:
-        blocked.append("scale_in_real_canary_approval_artifact_missing")
+    for item in non_scale_requests:
+        approval_id = str(item.get("approval_id") or "")
+        if approval_id and _is_swing_pre_final_auto_approved(item):
+            approved_ids.add(approval_id)
+    # Phase0 real canaries are auto-approved only when the source request report
+    # carries parsed Tier2 validation. Optional artifacts may still narrow
+    # allowlists/caps, but missing artifacts no longer block.
+    for item in one_share_requests:
+        approval_id = str(item.get("approval_id") or "")
+        if approval_id and _is_phase0_real_canary_auto_approved(item):
+            approved_ids.add(approval_id)
+        elif approval_id and approval_id not in approved_ids:
+            blocked.append(f"one_share_real_canary_auto_approval_missing:{approval_id}")
+    for item in scale_requests:
+        approval_id = str(item.get("approval_id") or "")
+        if approval_id and _is_phase0_real_canary_auto_approved(item):
+            approved_ids.add(approval_id)
+        elif approval_id and approval_id not in approved_ids:
+            blocked.append(f"scale_in_real_canary_auto_approval_missing:{approval_id}")
     for approval_id in sorted(approved_ids):
         request = requests_by_id.get(approval_id)
         if not request:
@@ -599,25 +663,39 @@ def _load_swing_runtime_approval_bundle(source_date: str | None) -> dict[str, An
                 if str(value or "").strip()
             }
             if not artifact_codes:
+                artifact_codes = set(request_codes)
+            if not artifact_codes:
                 blocked.append(f"one_share_real_canary_allowed_codes_missing:{approval_id}")
                 continue
             if request_codes and not artifact_codes.issubset(request_codes):
                 blocked.append(f"one_share_real_canary_allowed_codes_mismatch:{approval_id}")
                 continue
-            max_order_qty = int(one_share_artifact.get("max_order_qty") or 1)
-            max_new_entries = int(one_share_artifact.get("max_new_entries_per_day") or 1)
-            max_open_positions = int(one_share_artifact.get("max_open_positions") or 3)
-            max_total_notional = int(one_share_artifact.get("max_total_notional_krw") or 300000)
+            request_values = request.get("recommended_values") if isinstance(request.get("recommended_values"), dict) else {}
+            max_order_qty = _int_or_default(one_share_artifact.get("max_order_qty") or request_values.get("max_order_qty"), 1)
+            max_new_entries = _int_or_default(
+                one_share_artifact.get("max_new_entries_per_day")
+                or request_values.get("max_new_entries_per_day"),
+                1,
+            )
+            max_open_positions = _int_or_default(
+                one_share_artifact.get("max_open_positions") or request_values.get("max_open_positions"),
+                3,
+            )
+            max_total_notional = _int_or_default(
+                one_share_artifact.get("max_total_notional_krw")
+                or request_values.get("max_total_notional_krw"),
+                300000,
+            )
             if max_order_qty != 1:
                 blocked.append(f"one_share_real_canary_qty_cap_mismatch:{approval_id}")
                 continue
-            if max_new_entries < 1 or max_new_entries > 1:
+            if max_new_entries != 1:
                 blocked.append(f"one_share_real_canary_daily_entry_cap_mismatch:{approval_id}")
                 continue
-            if max_open_positions < 1 or max_open_positions > 3:
+            if not isinstance(max_open_positions, int) or max_open_positions < 1 or max_open_positions > 3:
                 blocked.append(f"one_share_real_canary_open_position_cap_mismatch:{approval_id}")
                 continue
-            if max_total_notional < 1 or max_total_notional > 300000:
+            if not isinstance(max_total_notional, int) or max_total_notional < 1 or max_total_notional > 300000:
                 blocked.append(f"one_share_real_canary_notional_cap_mismatch:{approval_id}")
                 continue
             request = {
@@ -629,25 +707,65 @@ def _load_swing_runtime_approval_bundle(source_date: str | None) -> dict[str, An
                     "max_new_entries_per_day": max_new_entries,
                     "max_open_positions": max_open_positions,
                     "max_total_notional_krw": max_total_notional,
+                    "require_approval_artifact": False,
                 },
+                "auto_approval_state": "real_canary_phase0_auto_approved",
             }
         if request_policy == "swing_scale_in_real_canary_phase0":
             allowed = set(str(value).upper() for value in (request.get("allowed_actions") or []))
             artifact_allowed = set(str(value).upper() for value in (scale_artifact.get("allowed_actions") or []))
+            if not artifact_allowed:
+                artifact_allowed = set(allowed)
             if not artifact_allowed or not artifact_allowed.issubset(allowed):
                 blocked.append(f"scale_in_real_canary_allowed_actions_mismatch:{approval_id}")
+                continue
+            request_values = request.get("recommended_values") if isinstance(request.get("recommended_values"), dict) else {}
+            max_order_qty = _int_or_default(scale_artifact.get("max_order_qty") or request_values.get("max_order_qty"), 1)
+            max_orders_per_day = _int_or_default(
+                scale_artifact.get("max_orders_per_day") or request_values.get("max_orders_per_day"),
+                1,
+            )
+            max_orders_per_position = _int_or_default(
+                scale_artifact.get("max_orders_per_position") or request_values.get("max_orders_per_position"),
+                1,
+            )
+            max_daily_notional = _int_or_default(
+                scale_artifact.get("max_daily_notional_krw") or request_values.get("max_daily_notional_krw"),
+                100000,
+            )
+            if max_order_qty != 1:
+                blocked.append(f"scale_in_real_canary_qty_cap_mismatch:{approval_id}")
+                continue
+            if max_orders_per_day != 1:
+                blocked.append(f"scale_in_real_canary_daily_order_cap_mismatch:{approval_id}")
+                continue
+            if max_orders_per_position != 1:
+                blocked.append(f"scale_in_real_canary_position_order_cap_mismatch:{approval_id}")
+                continue
+            if not isinstance(max_daily_notional, int) or max_daily_notional < 1 or max_daily_notional > 100000:
+                blocked.append(f"scale_in_real_canary_daily_notional_cap_mismatch:{approval_id}")
                 continue
             request = {
                 **request,
                 "recommended_values": {
                     **(request.get("recommended_values") or {}),
                     "allowed_arms": ",".join(sorted(artifact_allowed)),
-                    "max_order_qty": int(scale_artifact.get("max_order_qty") or 1),
-                    "max_orders_per_day": int(scale_artifact.get("max_orders_per_day") or 1),
-                    "max_orders_per_position": int(scale_artifact.get("max_orders_per_position") or 1),
+                    "max_order_qty": max_order_qty,
+                    "max_orders_per_day": max_orders_per_day,
+                    "max_orders_per_position": max_orders_per_position,
+                    "max_daily_notional_krw": max_daily_notional,
+                    "require_approval_artifact": False,
                 },
+                "auto_approval_state": "real_canary_phase0_auto_approved",
             }
-        approved_requests.append({**request, "approval_state": "approved_live"})
+        approval_state = (
+            "auto_approved_real_canary_phase0"
+            if request_policy in {"swing_one_share_real_canary_phase0", "swing_scale_in_real_canary_phase0"}
+            else "ai_tier2_pre_final_auto_approved"
+            if _is_swing_pre_final_auto_approved(request)
+            else "approved_live"
+        )
+        approved_requests.append({**request, "approval_state": approval_state})
     return {
         "request_report": str(request_path) if request_path.exists() else None,
         "approval_artifact": str(artifact_path) if artifact_path.exists() else None,
@@ -680,6 +798,7 @@ def _select_swing_approved_candidates(bundle: dict[str, Any]) -> tuple[list[dict
         policy_id = str(item.get("policy_id") or "")
         is_scale_in_real_canary = policy_id == "swing_scale_in_real_canary_phase0" or family == "swing_scale_in_real_canary_phase0"
         is_one_share_real_canary = policy_id == "swing_one_share_real_canary_phase0" or family == "swing_one_share_real_canary_phase0"
+        is_pre_final_auto = _is_swing_pre_final_auto_approved(item)
         stage = str(item.get("stage") or "unknown")
         candidate = {
             **item,
@@ -704,7 +823,14 @@ def _select_swing_approved_candidates(bundle: dict[str, Any]) -> tuple[list[dict
             "family": family,
             "stage": stage,
             "selected": not bool(reject_reason),
-            "decision_reason": reject_reason or "user_approval_artifact_accepted",
+            "decision_reason": reject_reason
+            or (
+                "real_canary_phase0_auto_approval_accepted"
+                if is_scale_in_real_canary or is_one_share_real_canary
+                else "ai_tier2_pre_final_auto_approval_accepted"
+                if is_pre_final_auto
+                else "user_approval_artifact_accepted"
+            ),
             "env_overrides": overrides if not reject_reason else {},
             "dry_run_required": not is_scale_in_real_canary,
             "one_share_real_canary": bool(is_one_share_real_canary),
@@ -732,9 +858,19 @@ def _load_scalp_sim_scale_in_window_approval(source_date: str | None) -> dict[st
     elif str(payload.get("policy_id") or payload.get("family") or "") != "scalp_sim_scale_in_window_expansion":
         blocked.append("approval_policy_mismatch")
     elif not bool(payload.get("approved")):
-        blocked.append("approval_required")
+        blocked.append("sim_auto_approval_not_approved")
+    elif payload.get("approval_state") != "sim_auto_approved":
+        blocked.append("sim_auto_approval_state_invalid")
+    elif bool(payload.get("human_approval_required")):
+        blocked.append("human_approval_required_not_allowed_for_sim_auto")
     elif bool(payload.get("actual_order_submitted")):
         blocked.append("actual_order_submitted_not_allowed")
+    elif payload.get("runtime_effect") is not False:
+        blocked.append("runtime_effect_not_allowed")
+    elif payload.get("broker_order_forbidden") is not True:
+        blocked.append("broker_order_forbidden_contract_missing")
+    elif payload.get("source_quality_status") not in {None, "pass"}:
+        blocked.append("source_quality_blocked")
     request = None
     if payload and not blocked:
         recommended = payload.get("recommended_values") if isinstance(payload.get("recommended_values"), dict) else {}
@@ -742,7 +878,7 @@ def _load_scalp_sim_scale_in_window_approval(source_date: str | None) -> dict[st
             "family": "scalp_sim_scale_in_window_expansion",
             "policy_id": "scalp_sim_scale_in_window_expansion",
             "stage": "scale_in",
-            "calibration_state": "approved_live",
+            "calibration_state": "sim_auto_approved",
             "allowed_runtime_apply": True,
             "safety_revert_required": False,
             "target_env_keys": payload.get("target_env_keys") or [],
@@ -757,7 +893,7 @@ def _load_scalp_sim_scale_in_window_approval(source_date: str | None) -> dict[st
             },
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
-            "decision_authority": "sim_observation_only",
+            "decision_authority": "sim_auto_approval_only",
         }
     return {
         "artifact": str(path) if path.exists() else None,
@@ -779,7 +915,7 @@ def _select_scalp_sim_scale_in_window_approval(bundle: dict[str, Any]) -> tuple[
         "family": request.get("family"),
         "stage": request.get("stage"),
         "selected": not bool(reject_reason),
-        "decision_reason": reject_reason or "user_approval_artifact_accepted",
+        "decision_reason": reject_reason or "sim_auto_approval_artifact_accepted",
         "env_overrides": overrides if not reject_reason else {},
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
@@ -839,8 +975,19 @@ def _load_runtime_apply_bridge_approval(source_date: str | None) -> dict[str, An
             and bool(item.get("live_auto_apply"))
             and not bool(item.get("approval_required"))
         )
+        tier2_status = (
+            item.get("lifecycle_bucket_discovery_ai_review_status")
+            or item.get("ai_review_status")
+            or (
+                item.get("auto_promotion_contract", {}).get("tier2_status")
+                if isinstance(item.get("auto_promotion_contract"), dict)
+                else None
+            )
+        )
         if not bool(contract.get("approval_live_ready")):
             item_blocked.append("approval_contract_not_live_ready")
+        if not tier2_validation_passed(tier2_status):
+            item_blocked.append(f"ai_tier2_validation_not_parsed:{tier2_status or 'missing'}")
         if str(item.get("bridge_candidate_state") or "") != "live_auto_apply_ready":
             item_blocked.append(f"runtime_apply_blocked_bridge_not_ready:{item.get('bridge_candidate_state')}")
         if not bool(item.get("allowed_runtime_apply")):
@@ -1050,6 +1197,117 @@ def _select_lifecycle_bucket_sim_auto_approval(bundle: dict[str, Any]) -> tuple[
         "stage": item.get("stage"),
         "selected": not bool(reject_reason),
         "decision_reason": reject_reason or "lifecycle_bucket_discovery_sim_auto_apply",
+        "env_overrides": overrides if not reject_reason else {},
+        "actual_order_submitted": False,
+    }
+    decisions.append(decision)
+    if reject_reason:
+        return selected, decisions, env_overrides
+    selected.append(item)
+    env_overrides.update(overrides)
+    return selected, decisions, env_overrides
+
+
+def _load_swing_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
+    if not source_date:
+        return {"artifact": None, "catalog": None, "approved_request": None, "blocked": ["missing_source_date"]}
+    artifact_path = swing_sim_auto_approval_path(source_date)
+    catalog_path = swing_sim_policy_catalog_path(source_date)
+    payload = _load_json(artifact_path)
+    blocked: list[str] = []
+    if not payload:
+        blocked.append("swing_sim_auto_approval_missing")
+    elif payload.get("report_type") != "swing_sim_auto_approval":
+        blocked.append("swing_sim_auto_approval_report_type_invalid")
+    elif not bool(payload.get("approved")):
+        blocked.append("swing_sim_auto_approval_not_approved")
+    elif bool(payload.get("actual_order_submitted")):
+        blocked.append("actual_order_submitted_not_allowed")
+    elif payload.get("runtime_effect") is not False:
+        blocked.append("runtime_effect_not_allowed")
+    elif payload.get("allowed_runtime_apply") is not False:
+        blocked.append("artifact_allowed_runtime_apply_must_be_false")
+    elif payload.get("broker_order_forbidden") is not True:
+        blocked.append("broker_order_forbidden_contract_missing")
+    if not catalog_path.exists():
+        blocked.append("swing_sim_policy_catalog_missing")
+    approved_request = None
+    if not blocked:
+        approved_source_ids = [str(item) for item in (payload.get("approved_source_ids") or [])]
+        approved_request = {
+            "family": "swing_sim_auto_approval",
+            "policy_id": "swing_sim_auto_approval",
+            "stage": "swing_sim_lifecycle",
+            "priority": 88,
+            "approval_id": f"swing_sim_auto_approval:{source_date}",
+            "approval_state": "auto_sim",
+            "allowed_runtime_apply": True,
+            "safety_revert_required": False,
+            "calibration_state": "sim_auto_approved",
+            "target_env_keys": [
+                "SWING_SIM_AUTO_POLICY_ENABLED",
+                "SWING_SIM_AUTO_POLICY_FILE",
+                "SWING_SIM_AUTO_POLICY_VERSION",
+                "SWING_SIM_AUTO_BOTTOM_REBOUND_SOURCE_ENABLED",
+            ],
+            "recommended_values": {
+                "enabled": True,
+                "policy_file": str(catalog_path),
+                "policy_version": f"swing_sim_auto_approval:{source_date}",
+                "bottom_rebound_source_enabled": "bottom_rebound_policy_auto_loop" in set(approved_source_ids),
+            },
+            "current_values": {
+                "enabled": False,
+                "policy_file": "",
+                "policy_version": "",
+                "bottom_rebound_source_enabled": False,
+            },
+            "approved_source_ids": approved_source_ids,
+            "approved_policy_count": int(payload.get("approved_policy_count") or 0),
+            "actual_order_submitted": False,
+            "decision_authority": "swing_sim_auto_approval_control_tower",
+        }
+    return {
+        "artifact": str(artifact_path) if artifact_path.exists() else None,
+        "catalog": str(catalog_path) if catalog_path.exists() else None,
+        "approved_request": approved_request,
+        "blocked": blocked,
+        "approved_source_ids": payload.get("approved_source_ids") or [],
+        "approved_policy_count": payload.get("approved_policy_count"),
+    }
+
+
+def _select_swing_sim_auto_approval(bundle: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
+    item = bundle.get("approved_request")
+    decisions: list[dict[str, Any]] = []
+    selected: list[dict[str, Any]] = []
+    env_overrides: dict[str, str] = {}
+    if not isinstance(item, dict):
+        decisions.append(
+            {
+                "family": "swing_sim_auto_approval",
+                "selected": False,
+                "decision_reason": ",".join(str(reason) for reason in bundle.get("blocked") or []) or "swing_sim_auto_approval_missing",
+                "env_overrides": {},
+                "actual_order_submitted": False,
+            }
+        )
+        return selected, decisions, env_overrides
+    overrides = _env_overrides_for_candidate(item)
+    reject_reason = ""
+    if not bool(item.get("allowed_runtime_apply")):
+        reject_reason = "runtime_apply_not_allowed"
+    elif bool(item.get("actual_order_submitted")):
+        reject_reason = "actual_order_submitted_not_allowed"
+    elif not overrides:
+        reject_reason = "no_runtime_env_override"
+    decision = {
+        "approval_id": item.get("approval_id"),
+        "family": item.get("family"),
+        "stage": item.get("stage"),
+        "approved_source_ids": item.get("approved_source_ids") or [],
+        "selected": not bool(reject_reason),
+        "decision_reason": reject_reason or "swing_sim_auto_approval_apply",
         "env_overrides": overrides if not reject_reason else {},
         "actual_order_submitted": False,
     }
@@ -1374,6 +1632,8 @@ def build_preopen_apply_manifest(
         runtime_bridge_selected, runtime_bridge_decisions, runtime_bridge_env_overrides = ([], [], {})
         lifecycle_bucket_bundle = _load_lifecycle_bucket_sim_auto_approval(report_source_date)
         lifecycle_bucket_selected, lifecycle_bucket_decisions, lifecycle_bucket_env_overrides = ([], [], {})
+        swing_sim_auto_bundle = _load_swing_sim_auto_approval(report_source_date)
+        swing_sim_auto_selected, swing_sim_auto_decisions, swing_sim_auto_env_overrides = ([], [], {})
         if auto_apply_requested and not intraday_source_auto_apply_blocked:
             selected, decisions, env_overrides = _select_auto_apply_candidates(
                 calibration_candidates,
@@ -1395,6 +1655,9 @@ def build_preopen_apply_manifest(
             lifecycle_bucket_selected, lifecycle_bucket_decisions, lifecycle_bucket_env_overrides = (
                 _select_lifecycle_bucket_sim_auto_approval(lifecycle_bucket_bundle)
             )
+            swing_sim_auto_selected, swing_sim_auto_decisions, swing_sim_auto_env_overrides = (
+                _select_swing_sim_auto_approval(swing_sim_auto_bundle)
+            )
             lifecycle_context_overlay, lifecycle_context_env_overrides = _lifecycle_ai_context_overlay_env(
                 calibration_candidates,
                 include_families=include_families,
@@ -1406,6 +1669,7 @@ def build_preopen_apply_manifest(
                 **scalp_scale_env_overrides,
                 **runtime_bridge_env_overrides,
                 **lifecycle_bucket_env_overrides,
+                **swing_sim_auto_env_overrides,
             }
         runtime_change = bool(auto_apply_requested and env_overrides)
         status = (
@@ -1498,6 +1762,17 @@ def build_preopen_apply_manifest(
                 "approved_request": lifecycle_bucket_bundle.get("approved_request"),
                 "selected": lifecycle_bucket_selected,
                 "decisions": lifecycle_bucket_decisions,
+            },
+            "swing_sim_auto_approval": {
+                "artifact": swing_sim_auto_bundle.get("artifact"),
+                "catalog": swing_sim_auto_bundle.get("catalog"),
+                "approved": 1 if swing_sim_auto_bundle.get("approved_request") else 0,
+                "approved_policy_count": swing_sim_auto_bundle.get("approved_policy_count"),
+                "approved_source_ids": swing_sim_auto_bundle.get("approved_source_ids") or [],
+                "blocked": swing_sim_auto_bundle.get("blocked") or [],
+                "approved_request": swing_sim_auto_bundle.get("approved_request"),
+                "selected": swing_sim_auto_selected,
+                "decisions": swing_sim_auto_decisions,
             },
             "runtime_env_file": (
                 str(runtime_env_path(target_date))

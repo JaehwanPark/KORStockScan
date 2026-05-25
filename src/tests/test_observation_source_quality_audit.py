@@ -251,7 +251,7 @@ def test_observation_source_quality_audit_routes_entry_arm_and_loss_diagnostics_
                         "threshold_version": "v1",
                         "threshold_calibration_state": "selected",
                         "profit_rate": "-0.3",
-                        "flow_state": "confirming",
+                        "flow_state": "recovery",
                         "exit_rule_candidate": "soft_stop",
                     },
                     record_id=idx * 4 + 4,
@@ -302,6 +302,127 @@ def test_observation_source_quality_audit_normalizes_optional_holding_context(mo
 
     assert report["stage_contracts"]["loss_fallback_probe"]["status"] == "pass"
     assert report["stage_contracts"]["soft_stop_whipsaw_confirmation"]["status"] == "pass"
+
+
+def test_observation_source_quality_audit_normalizes_legacy_flow_state_label():
+    normalized = audit._normalized_fields_for_contract(
+        "soft_stop_whipsaw_confirmation",
+        {
+            "threshold_family": "soft_stop_whipsaw_confirmation",
+            "threshold_version": "runtime_default",
+            "threshold_calibration_state": "runtime_default",
+            "profit_rate": "-1.5",
+            "flow_state": "흡수",
+            "exit_rule_candidate": "scalp_soft_stop_pct",
+        },
+    )
+
+    assert normalized["flow_state"] == "absorption"
+    assert normalized["raw_flow_state"] == "흡수"
+    assert normalized["flow_state_source"] == "audit_normalized_legacy_runtime_flow_state"
+
+
+def test_observation_source_quality_audit_fails_unknown_flow_state_label(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-15",
+        [
+            _event(
+                "soft_stop_whipsaw_confirmation",
+                {
+                    "threshold_family": "soft_stop_whipsaw_confirmation",
+                    "threshold_version": "runtime_default",
+                    "threshold_calibration_state": "runtime_default",
+                    "profit_rate": "-1.5",
+                    "flow_state": "confirming",
+                    "exit_rule_candidate": "scalp_soft_stop_pct",
+                },
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-05-15")
+
+    contract = report["stage_contracts"]["soft_stop_whipsaw_confirmation"]
+    assert report["status"] == "fail"
+    assert contract["status"] == "fail"
+    assert contract["invalid_label_violations"] == {"flow_state": 1.0}
+    assert report["invalid_label_findings"][0]["field"] == "flow_state"
+
+
+def test_observation_source_quality_audit_fails_unknown_gatekeeper_action_label(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-15",
+        [
+            _event(
+                "blocked_gatekeeper_reject",
+                {
+                    "action": "ambiguous_chase",
+                    "cooldown_policy": "pullback_wait",
+                },
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-05-15")
+
+    contract = report["stage_contracts"]["blocked_gatekeeper_reject"]
+    assert report["status"] == "fail"
+    assert contract["status"] == "fail"
+    assert contract["invalid_label_violations"] == {"action": 1.0}
+    assert report["invalid_label_findings"][0]["field"] == "gatekeeper_action"
+
+
+def test_observation_source_quality_audit_fails_unknown_labels_on_uncontracted_stage(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-15",
+        [
+            _event(
+                "holding_flow_override_review",
+                {
+                    "flow_state": "confirming",
+                    "flow_action": "HOLD",
+                },
+            ),
+            _event(
+                "swing_probe_entry_candidate",
+                {
+                    "simulation_book": "swing_intraday_live_equiv_probe",
+                    "simulation_owner": "SwingIntradayLiveEquivalentProbe0511",
+                    "simulated_order": True,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": "in_memory_probe_only",
+                    "probe_origin_stage": "blocked_gatekeeper_reject",
+                    "gatekeeper_action": "None",
+                    "curr_price": "1000",
+                    "assumed_fill_price": "1000",
+                    "score": "50",
+                    "v_pw": "120",
+                    "virtual_budget_override": True,
+                    "budget_authority": "sim_virtual_not_real_orderable_amount",
+                },
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-05-15")
+
+    assert report["status"] == "fail"
+    assert report["invalid_label_findings"] == [
+        {
+            "stage": "holding_flow_override_review",
+            "field": "flow_state",
+            "count": 1,
+            "examples": ["confirming"],
+            "routing": "source_quality_blocker",
+        }
+    ]
 
 
 def test_observation_source_quality_audit_routes_holding_diagnostics_by_contract(monkeypatch, tmp_path):

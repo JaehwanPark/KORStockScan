@@ -90,10 +90,10 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
 | `lifecycle_decision_matrix_runtime` | umbrella ADM owner / 기본 OFF / micro-canary 후보 | `entry/submit/holding/scale_in/exit` stage별 weighted ADM policy를 만들지만 hard safety와 broker guard를 우회하지 않는다 | selected되면 다음 PREOPEN policy file/version/promote cap만 env에 쓴다 |
 | `scalp_sim_candidate_window_expansion` | sim-only operator override cohort | score 55~100 WAIT/blocked 후보를 `actual_order_submitted=false`, `broker_order_forbidden=true`로 sim lifecycle에 편입한다 | real BUY 승격이나 submit guard 완화 근거로 쓰지 않고 lifecycle matrix source로만 본다 |
 | `scalp_sim_ai_budget_manager` | sim-only operator override cohort | 확대된 sim holding의 OpenAI 호출량을 live/reuse/deferred/critical bypass로 attribution한다 | critical bypass 과다를 `hard_critical/soft_critical/non_critical`로 분해하는 후속 보정 후보 |
-| `scalp_sim_scale_in_window_expansion` | approval-required sim-only actuator | postclose approval artifact는 기본 `approved=false`로 생성되고, 사용자가 승인해야 다음 PREOPEN env가 열린다 | 승인 후에도 sim-only scale-in source actuator이며 real scale-in, cap 해제, hard safety 완화 금지 |
+| `scalp_sim_scale_in_window_expansion` | sim-auto-approved sim-only actuator | postclose artifact is generated with `approved=true`, `approval_state=sim_auto_approved`, and `human_approval_required=false` only when the lifecycle matrix source report is readable; it can open only the next PREOPEN sim-source env window | Still a sim-only scale-in source actuator. Real scale-in, cap release, hard-safety relaxation, provider changes, and bot restart are forbidden |
 | `score65_74_recovery_probe` | active operator-selected entry cohort | 5/19 runtime env에 사용자 reopen lock으로 로드됐다 | rolling/cumulative EV와 blocker attribution으로만 판정. score bucket 고정 정책 금지 |
 
-5/19 결론은 active shadow가 없다는 점을 잠그고, 신규 sim 확대축은 `shadow`가 아니라 `sim-only cohort` 또는 `approval-required actuator`로 분류한다. 남아 있는 `hard_time_stop_shadow`, `partial_only_timeout_shadow`, `same_symbol_soft_stop_cooldown_shadow`, `dual_persona_shadow`, prompt shadow 계열은 기본 OFF 또는 historical/dashboard label이며 현재 runtime owner가 아니다.
+5/19 결론은 active shadow가 없다는 점을 잠그고, 신규 sim 확대축은 `shadow`가 아니라 `sim-only cohort` 또는 `sim-auto-approved actuator`로 분류한다. 남아 있는 `hard_time_stop_shadow`, `partial_only_timeout_shadow`, `same_symbol_soft_stop_cooldown_shadow`, `dual_persona_shadow`, prompt shadow 계열은 기본 OFF 또는 historical/dashboard label이며 현재 runtime owner가 아니다.
 
 ### 2026-05-21 POSTCLOSE Snapshot Addendum
 
@@ -419,7 +419,7 @@ cohort 분류 공통 규칙은 아래로 고정한다.
 | `swing_one_share_real_canary` | `real-canary-decision` | 스윙 broker execution/receipt/fill 품질을 1주 실주문으로 수집 | 기본 OFF. `swing_runtime_approval` 이후 별도 승인 artifact가 있을 때만 phase0 시작. max 1 new/day, max 3 open, max total notional 300,000 KRW, phase0 scale-in 실주문 금지, dry-run 외 후보 실주문 0건을 rollback guard로 둔다 | `Plan Rebase`, `time-based runbook`, `2026-05-11 checklist` |
 | `scalp_sim_candidate_window_expansion` | `sim-only-cohort` | WAIT/blocked 스캘핑 후보를 실제 주문 없이 virtual lifecycle에 편입 | 사용자 operator override로만 ON. `actual_order_submitted=false`, `broker_order_forbidden=true`, BUY 텔레그램 suppression 유지. real execution 품질이나 broker submit 승인 근거로 쓰지 않는다 | `Plan Rebase`, `2026-05-19 checklist`, `threshold runtime env` |
 | `scalp_sim_ai_budget_manager` | `sim-only-cohort` | 확대된 sim holding의 OpenAI 호출량을 상태변화/예산/deferred로 제어 | real holding, provider route, BUY/submit threshold 변경 권한 없음. critical bypass 과다는 별도 review/checklist로 닫는다 | `Plan Rebase`, `2026-05-19 checklist`, `scalp_sim_ai_deferred_review` |
-| `scalp_sim_scale_in_window_expansion` | `approval-required-sim-actuator` | matrix `scale_in` arm 표본 확보를 위한 sim-only 추가매수 window 확대 | postclose approval artifact 기본 `approved=false`. 사용자가 승인한 경우에만 다음 PREOPEN env 적용. real scale-in, cap 해제, hard safety 완화 금지 | `Plan Rebase`, `report-based automation traceability`, `scalp_sim_scale_in_window_expansion_YYYY-MM-DD.json` |
+| `scalp_sim_scale_in_window_expansion` | `sim-auto-approved-sim-actuator` | Expand the sim-only additional-buy window to collect matrix `scale_in` arm samples | The postclose artifact defaults to `approved=true` with `approval_state=sim_auto_approved` only after the lifecycle matrix source report is readable; next PREOPEN env applies only sim-source policy values. Real scale-in, cap release, hard-safety relaxation, provider changes, and bot restart are forbidden | `Plan Rebase`, `report-based automation traceability`, `scalp_sim_scale_in_window_expansion_YYYY-MM-DD.json` |
 
 inventory 운영 규칙은 아래로 고정한다.
 
@@ -1158,7 +1158,7 @@ inventory 운영 규칙은 아래로 고정한다.
   - `spread_relief_canary`
   - `ws_jitter_relief_canary`
   - `other_danger_relief_canary`
-5. `sim-only cohort / approval-required actuator`
+5. `sim-only cohort / sim-auto-approved actuator`
   - `scalp_sim_candidate_window_expansion`
   - `scalp_sim_ai_budget_manager`
   - `scalp_sim_scale_in_window_expansion`

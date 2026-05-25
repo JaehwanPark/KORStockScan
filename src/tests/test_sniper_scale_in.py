@@ -4669,7 +4669,9 @@ def test_gatekeeper_cooldown_split_by_action():
     )
 
     assert state_handlers._resolve_gatekeeper_reject_cooldown("눌림 대기") == (600, "pullback_wait")
+    assert state_handlers._resolve_gatekeeper_reject_cooldown("pullback_wait") == (600, "pullback_wait")
     assert state_handlers._resolve_gatekeeper_reject_cooldown("전량 회피") == (7200, "hard_reject")
+    assert state_handlers._resolve_gatekeeper_reject_cooldown("full_avoid") == (7200, "hard_reject")
     assert state_handlers._resolve_gatekeeper_reject_cooldown("UNKNOWN") == (1800, "neutral_hold")
 
 

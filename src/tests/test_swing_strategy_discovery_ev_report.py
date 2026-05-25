@@ -101,6 +101,8 @@ def test_ev_report_aggregates_surviving_arms_and_contract(tmp_path):
     assert report["runtime_effect"] is False
     assert report["source_only"] is True
     assert report["decision_authority"] == "swing_sim_exploration_only"
+    assert report["allowed_runtime_apply"] is False
+    assert report["broker_order_forbidden"] is True
     assert report["summary"]["labeled_sample_count"] == 7
     assert report["summary"]["surviving_arm_count"] >= 1
     assert report["surviving_arms"][0]["arm_id"] == "arm01_next_open_equal_fixed5d"

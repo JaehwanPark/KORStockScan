@@ -104,8 +104,8 @@ _BASELINE_APPLICATION = {
     "liquidity_gate_refined_candidate": "관찰/리포트 only: gate 기준 변경 없음",
     "overbought_gate_refined_candidate": "관찰/리포트 only: gate 기준 변경 없음",
     "position_sizing_cap_release": "미적용: 1주 cap 유지",
-    "swing_one_share_real_canary_phase0": "미적용: approval artifact 없이는 초기 BUY 실주문 금지",
-    "swing_scale_in_real_canary_phase0": "미적용: approval artifact 없이는 실주문 추가매수 금지",
+    "swing_one_share_real_canary_phase0": "미적용: PREOPEN phase0 auto approval이 없으면 초기 BUY 실주문 금지",
+    "swing_scale_in_real_canary_phase0": "미적용: PREOPEN phase0 auto approval이 없으면 실주문 추가매수 금지",
     "panic_sell_defense": "report-only: 주문/청산/threshold/runtime env 변경 없음",
     "panic_entry_freeze_guard": "계약 미준비: approval artifact를 만들어도 pre-submit freeze runtime 반영 불가",
     "panic_buy_runner_tp_canary": "report-only: TP/trailing/live exit 변경 없음",
@@ -351,15 +351,15 @@ _SWING_GATE_REVIEW = {
     "swing_scale_in_real_canary_phase0": {
         "gate_review_class": "policy_source_quality_block",
         "legacy_hard_gate_risk": "source_quality_or_approval_required",
-        "hard_gate_review": "실제 추가매수 canary 정책축이며 OFI/QI source-quality와 별도 approval이 필요하다",
-        "tuning_route": "scale-in approval artifact after source-quality pass",
+        "hard_gate_review": "실제 추가매수 canary 정책축이며 OFI/QI source-quality와 phase0 auto approval이 필요하다",
+        "tuning_route": "phase0 auto approval after source-quality pass; optional artifact may narrow caps/arms",
         "analysis_coverage": "scale-in arm decisions + real-only execution quality",
     },
     "swing_one_share_real_canary_phase0": {
         "gate_review_class": "approval_route_available_policy_axis",
         "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
-        "hard_gate_review": "1주 real canary 정책축이며 승인 artifact로만 열린다",
-        "tuning_route": "one-share approval artifact, global dry-run guard retained",
+        "hard_gate_review": "1주 real canary 정책축이며 phase0 auto approval과 allowlist로만 열린다",
+        "tuning_route": "phase0 auto approval, optional allowlist artifact, global dry-run guard retained",
         "analysis_coverage": "approved target code provenance + real-only receipt",
     },
 }
@@ -817,7 +817,18 @@ def _swing_rows(swing_report: dict[str, Any]) -> list[dict[str, Any]]:
         contract = approval_contract_for(family, target_date)
         approval_id = str(item.get("approval_id") or "")
         artifact_missing_reason = _swing_approval_artifact_reason(family, target_date)
-        approval_reason = "" if approval_id and approval_id in approved_ids else artifact_missing_reason or "approval_request_not_approved"
+        auto_real_canary = family in {
+            "swing_one_share_real_canary_phase0",
+            "swing_scale_in_real_canary_phase0",
+        } and str(item.get("calibration_state") or "") in {
+            "auto_approved_real_canary",
+            "auto_approved_real_canary_phase0",
+        }
+        approval_reason = (
+            ""
+            if auto_real_canary or (approval_id and approval_id in approved_ids)
+            else artifact_missing_reason or "approval_request_not_approved"
+        )
         reasons = [approval_reason] if approval_reason else []
         row = {
             "domain": "swing",
@@ -836,6 +847,7 @@ def _swing_rows(swing_report: dict[str, Any]) -> list[dict[str, Any]]:
             "reason_label": _reason_text(reasons),
             "approval_id": item.get("approval_id"),
             "approval_artifact_approved": bool(approval_id and approval_id in approved_ids),
+            "auto_approval_approved": bool(auto_real_canary),
             "approval_contract_status": item.get("approval_contract_status") or contract.get("approval_contract_status"),
             "approval_live_ready": bool(item.get("approval_live_ready") or contract.get("approval_live_ready")),
             "approval_artifact_path": item.get("approval_artifact_path") or contract.get("approval_artifact_path"),
@@ -853,11 +865,9 @@ def _swing_approval_artifact_reason(family: str, target_date: str) -> str:
     if not target_date:
         return "approval_artifact_missing"
     if family == "swing_one_share_real_canary_phase0":
-        artifact = SWING_RUNTIME_APPROVAL_ARTIFACT_DIR / f"swing_one_share_real_canary_{target_date}.json"
-        return "" if artifact.exists() else "one_share_real_canary_approval_artifact_missing"
+        return ""
     if family == "swing_scale_in_real_canary_phase0":
-        artifact = SWING_RUNTIME_APPROVAL_ARTIFACT_DIR / f"swing_scale_in_real_canary_{target_date}.json"
-        return "" if artifact.exists() else "scale_in_real_canary_approval_artifact_missing"
+        return ""
     artifact = SWING_RUNTIME_APPROVAL_ARTIFACT_DIR / f"swing_runtime_approvals_{target_date}.json"
     return "" if artifact.exists() else "approval_artifact_missing"
 

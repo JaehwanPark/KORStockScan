@@ -12,8 +12,13 @@ from typing import Any, Iterable
 import pandas as pd
 from sqlalchemy import create_engine, text
 
+from src.engine.auto_promotion_contracts import (
+    pre_final_promotion_contract,
+    tier2_fail_closed_reason,
+    tier2_validation_passed,
+)
 from src.engine.approval_contracts import annotate_approval_request
-from src.engine.ai_response_contracts import build_openai_response_text_format
+from src.engine.ai_response_contracts import build_openai_response_text_format, normalize_gatekeeper_action_key
 from src.engine.swing_selection_funnel_report import (
     SWING_EVENT_STAGES,
     SWING_STRATEGIES,
@@ -58,9 +63,9 @@ SWING_ENTRY_BOTTLENECK_PROBE_ENTRY_PCT = 50.0
 def swing_one_share_real_canary_phase0_policy() -> dict[str, Any]:
     return {
         "policy_id": "swing_one_share_real_canary_phase0",
-        "policy_state": "approval_required",
-        "runtime_apply_allowed": False,
-        "separate_user_approval_artifact_required": True,
+        "policy_state": "auto_approved_real_canary_phase0",
+        "runtime_apply_allowed": True,
+        "separate_user_approval_artifact_required": False,
         "global_swing_dry_run_must_remain_enabled": True,
         "broker_order_submission_scope": "approved_one_share_buy_and_closing_sell_only",
         "max_order_qty": 1,
@@ -77,11 +82,12 @@ def swing_one_share_real_canary_phase0_policy() -> dict[str, Any]:
             "cohort": "swing_one_share_real_canary",
             "actual_order_submitted": True,
             "canary_qty_cap": 1,
-            "approval_id_required": True,
+            "approval_id_required": False,
+            "auto_approval_id_required": True,
             "simulation_book": None,
         },
         "rollback_triggers": [
-            "real_order_without_approval_artifact",
+            "real_order_without_auto_approval_provenance",
             "order_qty_gt_1",
             "global_swing_dry_run_disabled",
             "receipt_order_number_mismatch",
@@ -99,9 +105,9 @@ def swing_one_share_real_canary_phase0_policy() -> dict[str, Any]:
 def swing_scale_in_real_canary_phase0_policy() -> dict[str, Any]:
     return {
         "policy_id": "swing_scale_in_real_canary_phase0",
-        "policy_state": "approval_required",
-        "runtime_apply_allowed": False,
-        "separate_user_approval_artifact_required": True,
+        "policy_state": "auto_approved_real_canary_phase0",
+        "runtime_apply_allowed": True,
+        "separate_user_approval_artifact_required": False,
         "broker_order_submission_scope": "approved_real_holding_scale_in_only",
         "allowed_actions": ["PYRAMID", "AVG_DOWN"],
         "max_order_qty": 1,
@@ -115,6 +121,7 @@ def swing_scale_in_real_canary_phase0_policy() -> dict[str, Any]:
             "actual_order_submitted": True,
             "real_canary_actual_qty": 1,
             "real_canary_qty_cap": 1,
+            "auto_approval_id_required": True,
             "simulation_book": None,
         },
         "rollback_triggers": [
@@ -854,6 +861,7 @@ def summarize_lifecycle_events(events: Iterable[dict[str, Any]]) -> dict[str, An
     unique_by_group: dict[str, set[tuple[str, str, str]]] = defaultdict(set)
     field_coverage = Counter()
     gatekeeper_actions = Counter()
+    gatekeeper_action_keys = Counter()
     cooldown_policies = Counter()
     add_types = Counter()
     exit_sources = Counter()
@@ -922,6 +930,9 @@ def summarize_lifecycle_events(events: Iterable[dict[str, Any]]) -> dict[str, An
         action = _first_present(fields, ("action", "gatekeeper_action", "flow_action"))
         if "gatekeeper" in stage and action is not None:
             gatekeeper_actions[str(action)] += 1
+            gatekeeper_action_keys[
+                normalize_gatekeeper_action_key(_first_present(fields, ("action_key", "gatekeeper_action_key")) or action)
+            ] += 1
         cooldown_policy = fields.get("cooldown_policy")
         if cooldown_policy not in (None, ""):
             cooldown_policies[str(cooldown_policy)] += 1
@@ -1054,6 +1065,7 @@ def summarize_lifecycle_events(events: Iterable[dict[str, Any]]) -> dict[str, An
             group: int(len(unique_by_group.get(group, set()))) for group in groups
         },
         "gatekeeper_actions": dict(gatekeeper_actions),
+        "gatekeeper_action_keys": dict(gatekeeper_action_keys),
         "cooldown_policies": dict(cooldown_policies),
         "add_types": dict(add_types),
         "exit_sources": dict(exit_sources),
@@ -1147,6 +1159,9 @@ def build_swing_entry_bottleneck(events: dict[str, Any]) -> dict[str, Any]:
     group_unique = events.get("group_unique_counts") if isinstance(events.get("group_unique_counts"), dict) else {}
     ofi_qi = events.get("ofi_qi_summary") if isinstance(events.get("ofi_qi_summary"), dict) else {}
     gatekeeper_actions = events.get("gatekeeper_actions") if isinstance(events.get("gatekeeper_actions"), dict) else {}
+    gatekeeper_action_keys = (
+        events.get("gatekeeper_action_keys") if isinstance(events.get("gatekeeper_action_keys"), dict) else {}
+    )
     cooldown_policies = events.get("cooldown_policies") if isinstance(events.get("cooldown_policies"), dict) else {}
 
     gatekeeper_reject_unique = _safe_int(unique.get("blocked_gatekeeper_reject"), 0)
@@ -1176,8 +1191,14 @@ def build_swing_entry_bottleneck(events: dict[str, Any]) -> dict[str, Any]:
     entry_micro_invalid = _safe_int(entry_source_quality.get("invalid_micro_context_unique_record_count"), 0)
 
     action_text = " ".join(str(key) for key in gatekeeper_actions)
+    action_key_text = " ".join(str(key) for key in gatekeeper_action_keys)
     matches: list[str] = []
-    if gatekeeper_reject_unique >= SWING_ENTRY_BOTTLENECK_BLOCKER_FLOOR or "눌림" in action_text or "pullback" in action_text.lower():
+    if (
+        gatekeeper_reject_unique >= SWING_ENTRY_BOTTLENECK_BLOCKER_FLOOR
+        or "pullback_wait" in action_key_text
+        or "눌림" in action_text
+        or "pullback" in action_text.lower()
+    ):
         matches.append("GATEKEEPER_PULLBACK_WAIT")
     if score_vpw_unique >= SWING_ENTRY_BOTTLENECK_BLOCKER_FLOOR:
         matches.append("SCORE_VPW_BLOCK")
@@ -1243,6 +1264,7 @@ def build_swing_entry_bottleneck(events: dict[str, Any]) -> dict[str, Any]:
             "probe_to_entry_unique_pct": probe_to_entry_pct,
         },
         "gatekeeper_actions": gatekeeper_actions,
+        "gatekeeper_action_keys": gatekeeper_action_keys,
         "cooldown_policies": cooldown_policies,
         "entry_micro_context": {
             "stale_missing_ratio": stale_missing_ratio,
@@ -1301,8 +1323,12 @@ def build_swing_lifecycle_contract_gaps(audit_report: dict[str, Any], entry_bott
         {
             "gap_id": "SWING_REAL_CANARY_EXECUTION_CONTRACT",
             "lifecycle_stage": "real_canary_execution",
-            "next_route": "approval_required" if real_canary_policy.get("policy_state") == "approval_required" else "code_improvement_workorder",
-            "reason": "real broker receipt/fill/slippage/cancel/sell binding is only valid after separate approval artifact",
+            "next_route": (
+                "real_canary_phase0_auto_approval"
+                if real_canary_policy.get("policy_state") == "auto_approved_real_canary_phase0"
+                else "code_improvement_workorder"
+            ),
+            "reason": "real broker receipt/fill/slippage/cancel/sell binding is valid only after phase0 auto approval and allowlist/cap guards",
             "evidence": {
                 "policy_state": real_canary_policy.get("policy_state"),
                 "runtime_apply_allowed": real_canary_policy.get("runtime_apply_allowed"),
@@ -2121,9 +2147,11 @@ def _build_swing_scale_in_real_canary_request(audit_report: dict[str, Any]) -> t
         "policy_id": policy["policy_id"],
         "family": policy["policy_id"],
         "stage": "scale_in",
-        "calibration_state": "approval_required",
-        "approval_reason": "scale-in arm hard floor 통과 및 별도 사용자 approval artifact 필요",
-        "human_approval_required": True,
+        "calibration_state": "auto_approved_real_canary",
+        "approval_reason": "scale-in arm hard floor passed; phase0 real canary auto-approved with 1-share caps",
+        "human_approval_required": False,
+        "auto_approval_required": True,
+        "auto_approval_state": "real_canary_phase0_auto_approved",
         "tradeoff_score": None,
         "sample_count": sum(
             int((audit_report.get("lifecycle_events") or {}).get("group_unique_counts", {}).get("scale_in", 0) or 0)
@@ -2147,7 +2175,7 @@ def _build_swing_scale_in_real_canary_request(audit_report: dict[str, Any]) -> t
             "max_orders_per_day": 1,
             "max_orders_per_position": 1,
             "max_daily_notional_krw": 100000,
-            "require_approval_artifact": True,
+            "require_approval_artifact": False,
         },
         "recommended_values": {
             "enabled": True,
@@ -2156,11 +2184,12 @@ def _build_swing_scale_in_real_canary_request(audit_report: dict[str, Any]) -> t
             "max_orders_per_day": 1,
             "max_orders_per_position": 1,
             "max_daily_notional_krw": 100000,
-            "require_approval_artifact": True,
+            "require_approval_artifact": False,
         },
         "actual_order_submitted": False,
         "dry_run_required": False,
         "real_order_canary_required": True,
+        "auto_approved_real_canary": True,
         "real_canary_policy_ref": policy["policy_id"],
         "real_order_allowed_actions": allowed_actions,
         "blocked_contexts": policy["blocked_contexts"],
@@ -2344,6 +2373,70 @@ def build_swing_threshold_candidates(audit_report: dict[str, Any]) -> list[dict[
     return candidates
 
 
+def _tier2_status_from_threshold_review(threshold_ai_review: dict[str, Any] | None) -> str:
+    review = threshold_ai_review if isinstance(threshold_ai_review, dict) else {}
+    return str(
+        review.get("ai_status")
+        or review.get("status")
+        or ((review.get("provider_status") or {}).get("status") if isinstance(review.get("provider_status"), dict) else "")
+        or "missing"
+    )
+
+
+def _apply_swing_pre_final_auto_promotion(
+    candidates: list[dict[str, Any]],
+    threshold_ai_review: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    tier2_status = _tier2_status_from_threshold_review(threshold_ai_review)
+    passed = tier2_validation_passed(tier2_status)
+    updated: list[dict[str, Any]] = []
+    for candidate in candidates:
+        item = dict(candidate)
+        if str(item.get("calibration_state") or "") != "approval_required":
+            updated.append(item)
+            continue
+        item["auto_promotion_contract"] = {
+            "state": "dry_run_auto_apply_ready" if passed else "source_only",
+            "tier2_status": tier2_status,
+            "tier2_policy": "fail_closed",
+            "tier2_fail_closed": not passed,
+            "primary_ev_uplift_threshold_pct": 1.0,
+            "final_user_approval_boundary": "full_live_only",
+        }
+        if passed:
+            item["calibration_state"] = "dry_run_auto_apply_ready"
+            item["calibration_reason"] = "ai_tier2_validated_pre_final_dry_run_auto_apply"
+            item["human_approval_required"] = False
+            item["auto_approval_required"] = True
+            item["auto_approval_state"] = "ai_tier2_auto_approved"
+            item["approval_reason"] = "hard floors passed and AI Tier2 validated pre-final dry-run auto promotion"
+        else:
+            item["calibration_state"] = "freeze"
+            item["calibration_reason"] = tier2_fail_closed_reason(tier2_status)
+            item["human_approval_required"] = False
+            item["approval_id"] = None
+            item["approval_reason"] = None
+            item["hard_floor_passed"] = False
+            item["hard_floor_block_reasons"] = [
+                *list(item.get("hard_floor_block_reasons") or []),
+                tier2_fail_closed_reason(tier2_status),
+            ]
+        updated.append(item)
+    return updated
+
+
+def _bounded_real_canary_auto_promotion_contract(tier2_status: str) -> dict[str, Any]:
+    passed = tier2_validation_passed(tier2_status)
+    return {
+        "state": "bounded_real_canary_auto_approved" if passed else "source_only",
+        "tier2_status": tier2_status,
+        "tier2_policy": "fail_closed",
+        "tier2_fail_closed": not passed,
+        "primary_ev_uplift_threshold_pct": 1.0,
+        "final_user_approval_boundary": "full_live_only",
+    }
+
+
 def _swing_one_share_candidate_rows(audit_report: dict[str, Any]) -> list[dict[str, Any]]:
     source_paths = audit_report.get("source_paths") if isinstance(audit_report.get("source_paths"), dict) else {}
     csv_path = Path(str(source_paths.get("recommendations_csv") or RECO_PATH))
@@ -2388,8 +2481,7 @@ def _build_swing_one_share_real_canary_request(
     eligible_requests = [
         item
         for item in candidates
-        if str(item.get("calibration_state") or "") == "approval_required"
-        and bool(item.get("human_approval_required"))
+        if str(item.get("calibration_state") or "") in {"approval_required", "dry_run_auto_apply_ready"}
         and str(item.get("family") or "") in SWING_RUNTIME_APPROVAL_LIVE_FAMILIES
     ]
     db_load = audit_report.get("recommendation_db_load") if isinstance(audit_report.get("recommendation_db_load"), dict) else {}
@@ -2427,9 +2519,11 @@ def _build_swing_one_share_real_canary_request(
         "policy_id": policy["policy_id"],
         "family": policy["policy_id"],
         "stage": "real_canary_entry",
-        "calibration_state": "approval_required",
-        "approval_reason": "swing runtime hard floor/trade-off 통과 후보의 broker execution 품질 1주 real canary 수집",
-        "human_approval_required": True,
+        "calibration_state": "auto_approved_real_canary",
+        "approval_reason": "swing runtime hard floor/trade-off passed; phase0 one-share real canary auto-approved",
+        "human_approval_required": False,
+        "auto_approval_required": True,
+        "auto_approval_state": "real_canary_phase0_auto_approved",
         "tradeoff_score": round(float(tradeoff_score), 4),
         "sample_count": sample_count,
         "sample_floor": sample_floor,
@@ -2451,7 +2545,7 @@ def _build_swing_one_share_real_canary_request(
             "max_new_entries_per_day": 1,
             "max_open_positions": 3,
             "max_total_notional_krw": 300000,
-            "require_approval_artifact": True,
+            "require_approval_artifact": False,
         },
         "recommended_values": {
             "enabled": True,
@@ -2460,10 +2554,11 @@ def _build_swing_one_share_real_canary_request(
             "max_new_entries_per_day": 1,
             "max_open_positions": 3,
             "max_total_notional_krw": 300000,
-            "require_approval_artifact": True,
+            "require_approval_artifact": False,
         },
         "actual_order_submitted": False,
         "dry_run_required": True,
+        "auto_approved_real_canary": True,
         "global_swing_dry_run_must_remain_enabled": True,
         "broker_order_submission_scope": policy["broker_order_submission_scope"],
         "real_order_allowed_actions": list(policy["real_order_allowed_actions"]),
@@ -2482,11 +2577,46 @@ def build_swing_runtime_approval_report(
     automation_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     date_key = str(audit_report.get("date") or "")
-    candidates = build_swing_threshold_candidates(audit_report)
+    tier2_status = _tier2_status_from_threshold_review(threshold_ai_review)
+    tier2_passed = tier2_validation_passed(tier2_status)
+    candidates = _apply_swing_pre_final_auto_promotion(
+        build_swing_threshold_candidates(audit_report),
+        threshold_ai_review,
+    )
     real_canary_policy = swing_one_share_real_canary_phase0_policy()
     scale_in_real_canary_policy = swing_scale_in_real_canary_phase0_policy()
     one_share_request, one_share_block = _build_swing_one_share_real_canary_request(audit_report, candidates)
     scale_in_request, scale_in_arm_decisions = _build_swing_scale_in_real_canary_request(audit_report)
+    scale_in_tier2_block: dict[str, Any] | None = None
+    if scale_in_request is not None:
+        if tier2_passed:
+            scale_in_request = {
+                **scale_in_request,
+                "approval_reason": (
+                    "scale-in arm hard floor and AI Tier2 validation passed; "
+                    "phase0 real canary auto-approved with 1-share caps"
+                ),
+                "auto_promotion_contract": _bounded_real_canary_auto_promotion_contract(tier2_status),
+            }
+        else:
+            scale_in_tier2_block = {
+                "family": scale_in_real_canary_policy["policy_id"],
+                "stage": "scale_in",
+                "calibration_state": "freeze",
+                "tradeoff_score": None,
+                "block_reasons": [tier2_fail_closed_reason(tier2_status)],
+                "arm_decisions": scale_in_arm_decisions,
+            }
+            scale_in_request = None
+    if one_share_request is not None:
+        one_share_request = {
+            **one_share_request,
+            "approval_reason": (
+                "swing runtime hard floor/trade-off and AI Tier2 validation passed; "
+                "phase0 one-share real canary auto-approved"
+            ),
+            "auto_promotion_contract": _bounded_real_canary_auto_promotion_contract(tier2_status),
+        }
     source_quality_blocked_families = [
         {
             "family": item.get("family"),
@@ -2536,6 +2666,10 @@ def build_swing_runtime_approval_report(
             "current_values": item.get("current_values"),
             "recommended_values": item.get("recommended_values"),
             "actual_order_submitted": False,
+            "human_approval_required": False,
+            "auto_approval_required": True,
+            "auto_approval_state": item.get("auto_approval_state") or "ai_tier2_auto_approved",
+            "auto_promotion_contract": item.get("auto_promotion_contract") or {},
             "dry_run_required": True,
             "ev_calibration_source": "combined_real_plus_sim",
             "combined_ev_authority": True,
@@ -2549,7 +2683,7 @@ def build_swing_runtime_approval_report(
             "blocked_real_order_actions": list(real_canary_policy["blocked_real_order_actions"]),
         }
         for item in candidates
-        if bool(item.get("human_approval_required"))
+        if str(item.get("calibration_state") or "") == "dry_run_auto_apply_ready"
     ]
     if scale_in_request is not None:
         requests.append(scale_in_request)
@@ -2569,7 +2703,8 @@ def build_swing_runtime_approval_report(
     ]
     if scale_in_request is None:
         blocked.append(
-            {
+            scale_in_tier2_block
+            or {
                 "family": scale_in_real_canary_policy["policy_id"],
                 "stage": "scale_in",
                 "calibration_state": "freeze",
@@ -2594,7 +2729,7 @@ def build_swing_runtime_approval_report(
         "owner": SWING_RUNTIME_APPROVAL_OWNER,
         "runtime_change": False,
         "policy": {
-            "state_flow": "proposal -> approval_required -> approved_live_dry_run",
+            "state_flow": "proposal -> ai_tier2_auto_approved -> dry_run_auto_apply_ready; real_canary_phase0 -> auto_approved_real_canary -> preopen_bounded_real_canary; final full live -> user approval",
             "live_meaning": "next_preopen_runtime_env_apply_inside_swing_dry_run",
             "broker_order_submission": False,
             "swing_live_order_dry_run_required": True,
@@ -2607,8 +2742,13 @@ def build_swing_runtime_approval_report(
             "combined_ev_authority": True,
             "execution_quality_source": "real_only",
             "broker_execution_quality_source": "real_only",
-            "runtime_apply_requires_user_approval_artifact": True,
+            "runtime_apply_requires_user_approval_artifact": False,
+            "final_full_live_requires_user_approval": True,
+            "tier2_policy": "fail_closed",
+            "real_canary_phase0_auto_approval": True,
+            "real_canary_phase0_user_approval_artifact_required": False,
         },
+        "pre_final_auto_promotion_contract": pre_final_promotion_contract(),
         "real_canary_policy": real_canary_policy,
         "scale_in_real_canary_policy": {
             **scale_in_real_canary_policy,
@@ -2802,8 +2942,9 @@ def _build_openai_review_instructions() -> str:
         "Use proposed_state values only from adjust_up, adjust_down, hold, hold_sample, or freeze.\n"
         "Use anomaly_route values only from threshold_candidate, incident, instrumentation_gap, or normal_drift.\n"
         "Preserve family ids, enum labels, ticker names, and raw evidence exactly.\n"
-        "Korean glossary: selection=종목선정, entry=진입, holding=보유, exit=청산, "
-        "AVG_DOWN=물타기, PYRAMID=불타기, 수급=order-flow pressure, 호가=quote/order book.\n"
+        "Domain glossary for interpretation only: selection=stock selection, entry=entry, holding=holding, "
+        "exit=exit, AVG_DOWN=averaging down, PYRAMID=pyramiding, order_flow=order-flow pressure, "
+        "quote_depth=quote/order book.\n"
     )
 
 
@@ -2831,7 +2972,7 @@ def _call_openai_swing_threshold_review(input_context: dict[str, Any]) -> tuple[
                 response = client.responses.create(
                     model=model_name,
                     instructions=_build_openai_review_instructions(),
-                    input=json.dumps(input_context, ensure_ascii=False, indent=2, default=str),
+                    input=json.dumps(input_context, ensure_ascii=True, indent=2, default=str),
                     text={
                         "format": build_openai_response_text_format("threshold_ai_correction_v1"),
                         "verbosity": "low",
@@ -3663,7 +3804,7 @@ def build_swing_improvement_automation_report(
             "runtime_patch_automation": False,
             "user_intervention_point": "generated code improvement workorder is pasted into Codex manually",
             "threshold_ai_review_authority": "proposal_only",
-            "runtime_approval_authority": "approval_required_requests_only_until_user_approval_artifact",
+            "runtime_approval_authority": "general_approval_required_requests_need_user_artifact; phase0_real_canaries_use_auto_approval",
             "broker_order_submission": False,
         },
         "source_reports": {
@@ -3937,7 +4078,7 @@ def render_swing_runtime_approval_markdown(report: dict[str, Any]) -> str:
         f"# Swing Runtime Approval - {report.get('date')}",
         "",
         "- Runtime change: `false`",
-        "- Approval state: `proposal -> approval_required -> approved_live_dry_run`",
+        "- Approval state: `proposal -> approval_required -> approved_live_dry_run`; phase0 real canary: `auto_approved_real_canary -> preopen_bounded_real_canary`",
         "- Broker order submission: `false`",
         f"- tradeoff_score_threshold: `{(report.get('policy') or {}).get('tradeoff_score_threshold')}`",
         f"- EV calibration source: `{(report.get('policy') or {}).get('ev_calibration_source')}`",

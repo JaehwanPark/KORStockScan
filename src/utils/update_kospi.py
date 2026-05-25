@@ -594,6 +594,56 @@ def _resolve_latest_report_date() -> str:
     return latest_report_date
 
 
+def _run_bottom_rebound_sim_auto_loop(report_date: str) -> dict:
+    if str(os.getenv('KORSTOCKSCAN_RUN_BOTTOM_REBOUND_SIM_AUTO_LOOP', 'true')).lower() in {'0', 'false', 'off', 'no'}:
+        return {'status': 'skipped_disabled'}
+    commands = [
+        [
+            sys.executable,
+            '-m',
+            'src.engine.swing.bottom_rebound_pattern_research',
+            '--as-of',
+            report_date,
+        ],
+        [
+            sys.executable,
+            '-m',
+            'src.engine.swing.bottom_rebound_policy_auto_loop',
+            '--date',
+            report_date,
+        ],
+        [
+            sys.executable,
+            '-m',
+            'src.engine.swing.bottom_rebound_candidate_source',
+            '--date',
+            report_date,
+            '--require-sim-auto-policy',
+        ],
+        [
+            sys.executable,
+            '-m',
+            'src.engine.swing_strategy_discovery_sim',
+            '--date',
+            report_date,
+            '--include-bottom-rebound-source',
+        ],
+    ]
+    completed: list[str] = []
+    for command in commands:
+        subprocess.run(command, check=True, cwd=PROJECT_ROOT)
+        completed.append(' '.join(command[2:]))
+    return {
+        'status': 'completed',
+        'report_date': report_date,
+        'decision_authority': 'swing_bottom_rebound_sim_policy_auto_approval',
+        'runtime_effect': False,
+        'allowed_runtime_apply': False,
+        'broker_order_forbidden': True,
+        'commands': completed,
+    }
+
+
 def run_update_kospi_chain() -> dict:
     target_date = _today_str()
     started_at = _now_iso()
@@ -655,6 +705,15 @@ def run_update_kospi_chain() -> dict:
     except subprocess.CalledProcessError as e:
         logger.error(f"❌ 스윙 일일 리포트 생성 실패 (무시하고 진행): {e}")
         steps.append(_step('swing_daily_reports', 'failed', report_date=latest_report_date, returncode=e.returncode, error=str(e)))
+
+    logger.info("🧪 바닥 반등 스윙 sim-only 자동승인 루프 실행 시작...")
+    try:
+        loop_summary = _run_bottom_rebound_sim_auto_loop(latest_report_date)
+        logger.info(f"✅ 바닥 반등 sim-only 자동승인 루프 완료: {loop_summary.get('status')}")
+        steps.append(_step('bottom_rebound_sim_auto_loop', str(loop_summary.get('status', 'completed')), details=loop_summary))
+    except subprocess.CalledProcessError as e:
+        logger.error(f"❌ 바닥 반등 sim-only 자동승인 루프 실패 (무시하고 진행): {e}")
+        steps.append(_step('bottom_rebound_sim_auto_loop', 'failed', report_date=latest_report_date, returncode=e.returncode, error=str(e)))
 
     payload = _build_update_kospi_status(target_date, started_at, steps)
     status_path = _write_update_kospi_status(payload)
