@@ -46,6 +46,15 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        if value in (None, ""):
+            return default
+        return int(float(value))
+    except Exception:
+        return default
+
+
 def _json_loads(value: Any) -> Any:
     if isinstance(value, (dict, list)):
         return value
@@ -93,6 +102,22 @@ def _source_paths(target_date: str) -> dict[str, str | None]:
     }
 
 
+def _bottom_rebound_sim_expected(target_date: str) -> bool:
+    sim_json = DISCOVERY_SIM_REPORT_DIR / f"swing_strategy_discovery_sim_{target_date}.json"
+    try:
+        payload = json.loads(sim_json.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    source_quality = payload.get("source_quality") if isinstance(payload.get("source_quality"), dict) else {}
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    bottom_source = source_quality.get("bottom_rebound_source") if isinstance(source_quality.get("bottom_rebound_source"), dict) else {}
+    return (
+        bottom_source.get("status") == "ok"
+        and _safe_int(source_quality.get("bottom_rebound_source_rows")) > 0
+        and _safe_int(summary.get("bottom_rebound_persisted_arm_count")) > 0
+    )
+
+
 def _row_from_models(
     candidate: SwingStrategyDiscoveryCandidate,
     arm: SwingStrategyDiscoveryArm,
@@ -100,6 +125,11 @@ def _row_from_models(
 ) -> dict[str, Any]:
     features = _json_loads(label.label_features)
     arm_features = _json_loads(arm.arm_features)
+    candidate_features = _json_loads(candidate.source_features)
+    bottom = candidate_features.get("bottom_rebound_source") if isinstance(candidate_features.get("bottom_rebound_source"), dict) else {}
+    source_family_bucket = str(candidate_features.get("source_family_bucket") or "")
+    if not source_family_bucket:
+        source_family_bucket = "bottom_rebound" if bottom.get("present") or str(arm.entry_policy or "").startswith("bottom_rebound_") else "safe_pool"
     return {
         "candidate_id": candidate.id,
         "arm_row_id": arm.id,
@@ -113,6 +143,7 @@ def _row_from_models(
         "legacy_pick_type": candidate.legacy_pick_type or "-",
         "position_tag": candidate.position_tag or "-",
         "volatility_bucket": candidate.volatility_bucket or "-",
+        "source_family_bucket": source_family_bucket,
         "block_reason": candidate.block_reason or "-",
         "sector": candidate.sector or "-",
         "theme_tags": _theme_key(candidate.theme_tags),
@@ -210,6 +241,7 @@ def _aggregate_all(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]
         "legacy_pick_type",
         "position_tag",
         "volatility_bucket",
+        "source_family_bucket",
         "block_reason",
         "sector",
         "theme_tags",
@@ -278,11 +310,16 @@ def _source_quality_summary(
     entry_reason_counts: dict[str, int] = defaultdict(int)
     exit_reason_counts: dict[str, int] = defaultdict(int)
     source_quality_counts: dict[str, int] = defaultdict(int)
+    bottom_label_status_counts: dict[str, int] = defaultdict(int)
+    bottom_maturity_counts: dict[str, int] = defaultdict(int)
     for row in rows:
         maturity_counts[str(row.get("label_maturity_status") or "unknown")] += 1
         entry_reason_counts[str(row.get("entry_reason") or "-")] += 1
         exit_reason_counts[str(row.get("policy_exit_reason") or "-")] += 1
         source_quality_counts[str(row.get("source_quality_status") or "-")] += 1
+        if row.get("source_family_bucket") == "bottom_rebound":
+            bottom_label_status_counts[str(row.get("label_status") or "UNKNOWN")] += 1
+            bottom_maturity_counts[str(row.get("label_maturity_status") or "unknown")] += 1
     return {
         "implementation_status": "implemented",
         "implementation_provenance": {
@@ -316,6 +353,11 @@ def _source_quality_summary(
         "decision_authority": DECISION_AUTHORITY,
         "arm_status_counts": arm_status_counts,
         "label_status_counts": dict(label_status_counts),
+        "bottom_rebound_label_status_counts": dict(bottom_label_status_counts),
+        "bottom_rebound_maturity_status_counts": dict(bottom_maturity_counts),
+        "bottom_rebound_pending_future_quote_count": bottom_label_status_counts.get("pending_future_quotes", 0),
+        "bottom_rebound_labeled_sample_count": bottom_label_status_counts.get("labeled", 0),
+        "bottom_rebound_expired_entry_count": bottom_label_status_counts.get("expired_entry_no_trigger", 0),
         "maturity_status_counts": dict(maturity_counts),
         "entry_reason_counts": dict(entry_reason_counts),
         "policy_exit_reason_counts": dict(exit_reason_counts),
@@ -335,8 +377,12 @@ def build_swing_strategy_discovery_ev_report(
     surviving = _surviving_arms(aggregates)
     avoid = _avoid_buckets(aggregates)
     label_status_counts: dict[str, int] = defaultdict(int)
+    bottom_label_status_counts: dict[str, int] = defaultdict(int)
     for row in rows:
         label_status_counts[str(row.get("label_status") or "UNKNOWN")] += 1
+        if row.get("source_family_bucket") == "bottom_rebound":
+            bottom_label_status_counts[str(row.get("label_status") or "UNKNOWN")] += 1
+    bottom_rows = [row for row in rows if row.get("source_family_bucket") == "bottom_rebound"]
     source_quality_summary = _source_quality_summary(
         rows,
         arm_status_counts=arm_status_counts,
@@ -349,6 +395,11 @@ def build_swing_strategy_discovery_ev_report(
         "labeled_sample_count": label_status_counts.get("labeled", 0),
         "pending_future_quote_count": label_status_counts.get("pending_future_quotes", 0),
         "expired_entry_count": label_status_counts.get("expired_entry_no_trigger", 0),
+        "bottom_rebound_policy_exit_row_count": len(bottom_rows),
+        "bottom_rebound_labeled_sample_count": bottom_label_status_counts.get("labeled", 0),
+        "bottom_rebound_pending_future_quote_count": bottom_label_status_counts.get("pending_future_quotes", 0),
+        "bottom_rebound_expired_entry_count": bottom_label_status_counts.get("expired_entry_no_trigger", 0),
+        "bottom_rebound_label_status_counts": dict(bottom_label_status_counts),
         "surviving_arm_count": len(surviving),
         "avoid_bucket_count": len(avoid),
         "top_surviving_arm": (surviving[0].get("arm_id") if surviving else None),
@@ -362,6 +413,8 @@ def build_swing_strategy_discovery_ev_report(
         warnings.append("pending_future_quotes")
     if summary["labeled_sample_count"] < SAMPLE_FLOOR:
         warnings.append("sample_floor_not_met")
+    if _bottom_rebound_sim_expected(date_key) and not bottom_rows:
+        warnings.append("bottom_rebound_ev_handoff_missing")
     report = {
         "schema_version": 1,
         "report_type": "swing_strategy_discovery_ev",
@@ -403,6 +456,8 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- candidate/arm/policy_exit_rows: `{summary.get('candidate_count')}` / `{summary.get('arm_count')}` / `{summary.get('policy_exit_row_count')}`",
         f"- labeled_sample_count: `{summary.get('labeled_sample_count')}`",
         f"- pending_future_quote_count: `{summary.get('pending_future_quote_count')}`",
+        f"- bottom_rebound_policy_exit_row_count: `{summary.get('bottom_rebound_policy_exit_row_count')}`",
+        f"- bottom_rebound_label_status_counts: `{summary.get('bottom_rebound_label_status_counts') or {}}`",
         f"- top_surviving_arm: `{summary.get('top_surviving_arm') or '-'}`",
         f"- avoid_bucket_count: `{summary.get('avoid_bucket_count')}`",
         f"- source_quality_summary: `{report.get('source_quality_summary') or {}}`",

@@ -119,6 +119,15 @@ def _parse_bool_flags(line: str) -> dict[str, bool]:
     return flags
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        if value in (None, ""):
+            return default
+        return int(float(value))
+    except Exception:
+        return default
+
+
 def _artifact_paths(target_date: str) -> dict[str, Path]:
     next_day = _next_krx_trading_day(target_date)
     return {
@@ -154,6 +163,9 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         / "pattern_lab_propagation_audit"
         / f"pattern_lab_propagation_audit_{target_date}.json",
         "swing_daily_simulation": REPORT_DIR / "swing_daily_simulation" / f"swing_daily_simulation_{target_date}.json",
+        "swing_strategy_discovery_sim": REPORT_DIR
+        / "swing_strategy_discovery_sim"
+        / f"swing_strategy_discovery_sim_{target_date}.json",
         "swing_lifecycle_decision_matrix": REPORT_DIR
         / "swing_lifecycle_decision_matrix"
         / f"swing_lifecycle_decision_matrix_{target_date}.json",
@@ -831,6 +843,67 @@ def _producer_gap_discovery_handoff_status(
             else "producer gap discovery failed closed or workorder handoff is missing"
         ),
     }
+
+
+def _bottom_rebound_sim_handoff_status(sim_report: dict[str, Any]) -> dict[str, Any]:
+    if not sim_report:
+        return {
+            "status": "missing",
+            "included": False,
+            "missing": ["swing_strategy_discovery_sim_missing"],
+            "interpretation": "swing_strategy_discovery_sim artifact missing",
+        }
+    source_quality = (
+        sim_report.get("source_quality") if isinstance(sim_report.get("source_quality"), dict) else {}
+    )
+    bottom_source = (
+        source_quality.get("bottom_rebound_source")
+        if isinstance(source_quality.get("bottom_rebound_source"), dict)
+        else {}
+    )
+    summary = sim_report.get("summary") if isinstance(sim_report.get("summary"), dict) else {}
+    persist_summary = (
+        sim_report.get("persist_summary") if isinstance(sim_report.get("persist_summary"), dict) else {}
+    )
+    source_rows = _safe_int(source_quality.get("bottom_rebound_source_rows"))
+    included = bottom_source.get("status") == "ok" and source_rows > 0
+    selected_count = _safe_int(summary.get("bottom_rebound_selected_candidate_count"))
+    arm_count = _safe_int(summary.get("bottom_rebound_arm_count"))
+    persisted_candidates = _safe_int(summary.get("bottom_rebound_persisted_candidate_count"))
+    persisted_arms = _safe_int(summary.get("bottom_rebound_persisted_arm_count"))
+    total_persisted_candidates = _safe_int(persist_summary.get("candidate_rows"))
+    total_persisted_arms = _safe_int(persist_summary.get("arm_rows"))
+    missing: list[str] = []
+    if included:
+        if selected_count <= 0:
+            missing.append("bottom_rebound_selected_candidates_missing")
+        if arm_count <= 0:
+            missing.append("bottom_rebound_arms_missing")
+        if total_persisted_candidates <= 0 or persisted_candidates <= 0:
+            missing.append("bottom_rebound_persisted_candidates_missing")
+        if total_persisted_arms <= 0 or persisted_arms <= 0:
+            missing.append("bottom_rebound_persisted_arms_missing")
+    return {
+        "status": "fail" if missing else ("pass" if included else "not_applicable"),
+        "included": included,
+        "bottom_rebound_source_status": bottom_source.get("status") or "missing",
+        "bottom_rebound_source_rows": source_rows,
+        "bottom_rebound_selected_candidate_count": selected_count,
+        "bottom_rebound_arm_count": arm_count,
+        "bottom_rebound_persisted_candidate_count": persisted_candidates,
+        "bottom_rebound_persisted_arm_count": persisted_arms,
+        "persist_summary": persist_summary,
+        "missing": missing,
+        "interpretation": (
+            "bottom_rebound source candidates were selected, armed, and persisted for label/EV handoff"
+            if included and not missing
+            else "bottom_rebound source was included but sim DB handoff is incomplete"
+            if included
+            else "bottom_rebound source was absent or blocked; safe-pool-only swing sim path applies"
+        ),
+    }
+
+
 def _scale_in_bucket_handoff_status(
     ldm_report: dict[str, Any],
     ev_report: dict[str, Any],
@@ -1127,6 +1200,7 @@ def build_threshold_cycle_postclose_verification(
     pattern_lab_ai_review = _load_json(paths["pattern_lab_ai_review"])
     producer_gap_discovery = _load_json(paths["producer_gap_discovery"])
     propagation_audit = _load_json(paths["pattern_lab_propagation_audit"])
+    swing_strategy_discovery_sim = _load_json(paths["swing_strategy_discovery_sim"])
     ldm_report = _load_json(paths["lifecycle_decision_matrix"])
     discovery_report = _load_json(paths["lifecycle_bucket_discovery"])
     swing_ldm_report = _load_json(paths["swing_lifecycle_decision_matrix"])
@@ -1193,6 +1267,9 @@ def build_threshold_cycle_postclose_verification(
     producer_gap_handoff = _producer_gap_discovery_handoff_status(producer_gap_discovery, workorder)
     if producer_gap_handoff.get("status") == "fail":
         log_issues.append("producer_gap_discovery_handoff_missing")
+    bottom_rebound_sim_handoff = _bottom_rebound_sim_handoff_status(swing_strategy_discovery_sim)
+    if bottom_rebound_sim_handoff.get("status") == "fail":
+        log_issues.append("bottom_rebound_sim_handoff_missing")
 
     lineage = workorder.get("lineage") if isinstance(workorder.get("lineage"), dict) else {}
     workorder_snapshot = {
@@ -1287,7 +1364,7 @@ def build_threshold_cycle_postclose_verification(
     missing_execution_flags = [
         key for key in required_execution_flags if done_line and key not in execution_flags
     ]
-    for key in ("swing_lifecycle_matrix", "swing_lifecycle_bucket_discovery"):
+    for key in ("swing_strategy_discovery", "swing_lifecycle_matrix", "swing_lifecycle_bucket_discovery"):
         if done_line and key in execution_flags and key not in missing_execution_flags:
             required_execution_flags = (*required_execution_flags, key)
     if done_line and "pattern_lab_ai_review" in execution_flags and "pattern_lab_ai_review" not in missing_execution_flags:
@@ -1300,6 +1377,7 @@ def build_threshold_cycle_postclose_verification(
         key
         for key in (
             "swing_lifecycle",
+            "swing_strategy_discovery",
             "swing_lifecycle_matrix",
             "swing_lifecycle_bucket_discovery",
             "pattern_labs",
@@ -1325,6 +1403,7 @@ def build_threshold_cycle_postclose_verification(
         "pattern_lab_propagation_audit" if "pattern_lab_propagation_audit" in disabled_stage_flags else "",
         "scalp_entry_action_decision_matrix" if "scalp_entry_adm" in disabled_stage_flags else "",
         "lifecycle_decision_matrix" if "lifecycle_decision_matrix" in disabled_stage_flags else "",
+        "swing_strategy_discovery_sim" if "swing_strategy_discovery" in disabled_stage_flags else "",
         "swing_lifecycle_decision_matrix" if "swing_lifecycle_matrix" in disabled_stage_flags else "",
         "swing_lifecycle_bucket_discovery" if "swing_lifecycle_bucket_discovery" in disabled_stage_flags else "",
         "code_improvement_workorder" if "code_improvement_workorder" in disabled_stage_flags else "",
@@ -1335,6 +1414,8 @@ def build_threshold_cycle_postclose_verification(
     }
     if "runtime_apply_gap_audit" not in execution_flags:
         disabled_artifact_labels.add("runtime_apply_gap_audit")
+    if "swing_strategy_discovery" not in execution_flags:
+        disabled_artifact_labels.add("swing_strategy_discovery_sim")
     if "swing_lifecycle_matrix" not in execution_flags:
         disabled_artifact_labels.add("swing_lifecycle_decision_matrix")
     if "swing_lifecycle_bucket_discovery" not in execution_flags:
@@ -1596,6 +1677,7 @@ def build_threshold_cycle_postclose_verification(
         "lifecycle_bucket_discovery_handoff": lifecycle_bucket_discovery_handoff,
         "swing_lifecycle_handoff": swing_lifecycle_handoff,
         "producer_gap_discovery_handoff": producer_gap_handoff,
+        "bottom_rebound_sim_handoff": bottom_rebound_sim_handoff,
     }
 
 
@@ -1631,6 +1713,11 @@ def _render_markdown(report: dict[str, Any]) -> str:
     producer_gap = (
         report.get("producer_gap_discovery_handoff")
         if isinstance(report.get("producer_gap_discovery_handoff"), dict)
+        else {}
+    )
+    bottom_rebound = (
+        report.get("bottom_rebound_sim_handoff")
+        if isinstance(report.get("bottom_rebound_sim_handoff"), dict)
         else {}
     )
     lines = [
@@ -1745,6 +1832,17 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- missing_workorder_order_ids: `{producer_gap.get('missing_workorder_order_ids') or []}`",
         f"- missing: `{producer_gap.get('missing') or []}`",
         f"- interpretation: `{producer_gap.get('interpretation') or '-'}`",
+        "",
+        "## Bottom Rebound Sim Handoff",
+        f"- status: `{bottom_rebound.get('status') or '-'}`",
+        f"- included: `{bottom_rebound.get('included')}`",
+        f"- source_rows: `{bottom_rebound.get('bottom_rebound_source_rows') or 0}`",
+        f"- selected_candidate_count: `{bottom_rebound.get('bottom_rebound_selected_candidate_count') or 0}`",
+        f"- arm_count: `{bottom_rebound.get('bottom_rebound_arm_count') or 0}`",
+        f"- persisted_candidate_count: `{bottom_rebound.get('bottom_rebound_persisted_candidate_count') or 0}`",
+        f"- persisted_arm_count: `{bottom_rebound.get('bottom_rebound_persisted_arm_count') or 0}`",
+        f"- missing: `{bottom_rebound.get('missing') or []}`",
+        f"- interpretation: `{bottom_rebound.get('interpretation') or '-'}`",
         "",
         "## Workorder Snapshot",
         f"- generation_id: `{workorder.get('generation_id') or '-'}`",

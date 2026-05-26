@@ -251,8 +251,176 @@ def test_discovery_can_include_bottom_rebound_source_without_runtime_authority(t
     assert report["allowed_runtime_apply"] is False
     assert report["summary"]["arm_count"] == len(mod.BOTTOM_REBOUND_ARM_SET)
     assert set(report["summary"]["arm_policy_counts"]) == {item["arm_id"] for item in mod.BOTTOM_REBOUND_ARM_SET}
+    assert report["summary"]["source_family_bucket_counts"] == {"bottom_rebound": 1}
+    assert report["summary"]["bottom_rebound_selected_candidate_count"] == 1
+    assert report["summary"]["bottom_rebound_arm_count"] == len(mod.BOTTOM_REBOUND_ARM_SET)
     assert report["bottom_rebound_arm_set"] == mod.BOTTOM_REBOUND_ARM_SET
     assert report["examples"][0]["bottom_rebound_source"]["present"] is True
+    assert report["examples"][0]["source_family_bucket"] == "bottom_rebound"
+
+
+def test_bottom_rebound_source_persists_candidate_and_dedicated_arms(tmp_path, monkeypatch):
+    db_url = f"sqlite:///{tmp_path / 'bottom_rebound.db'}"
+    source_path = tmp_path / "swing_bottom_rebound_candidate_source_2026-05-22.json"
+    source_path.write_text(
+        json.dumps(
+            {
+                "report_type": "swing_bottom_rebound_candidate_source",
+                "date": "2026-05-22",
+                "decision_authority": "swing_sim_candidate_source_only",
+                "runtime_effect": False,
+                "broker_order_forbidden": True,
+                "allowed_runtime_apply": False,
+                "candidate_rows": [
+                    {
+                        "candidate_id": "br:2026-05-22:000101",
+                        "stock_code": "000101",
+                        "stock_name": "BottomOnly",
+                        "candidate_rank": 1,
+                        "lifecycle_exploration_score": 5.5,
+                        "source_quality_adjusted_ev_pct": 1.2,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "load_safe_pool_rows", lambda target_date: pd.DataFrame())
+    monkeypatch.setattr(mod, "load_block_reason_map", lambda target_date: {})
+    monkeypatch.setattr(
+        mod,
+        "fetch_quote_features",
+        lambda codes, db_url=mod.POSTGRES_URL: {
+            "000101": {
+                "stock_name": "BottomOnly",
+                "reference_price": 1000,
+                "position_tag": "BOTTOM",
+                "position_ratio_60d": 0.1,
+                "volatility_20d_pct": 2.0,
+                "volatility_bucket": "mid",
+                "marcap": 10_000_000_000,
+                "volume": 100000,
+            }
+        },
+    )
+    monkeypatch.setattr(
+        mod,
+        "build_sector_theme_map",
+        lambda codes, target_date, allow_external=True: {
+            "mapped_code_count": 1,
+            "rows_by_code": {},
+            "warnings": [],
+        },
+    )
+
+    report = mod.build_swing_strategy_discovery_report(
+        "2026-05-22",
+        db_url=db_url,
+        max_candidates=3,
+        persist=True,
+        include_bottom_rebound_source=True,
+        bottom_rebound_source_path=source_path,
+    )
+
+    assert report["persist_summary"] == {
+        "candidate_rows": 1,
+        "arm_rows": len(mod.BOTTOM_REBOUND_ARM_SET),
+    }
+    assert report["summary"]["bottom_rebound_persisted_candidate_count"] == 1
+    assert report["summary"]["bottom_rebound_persisted_arm_count"] == len(mod.BOTTOM_REBOUND_ARM_SET)
+    engine = create_engine(db_url)
+    Session = sessionmaker(bind=engine)
+    with Session() as session:
+        candidate = session.query(SwingStrategyDiscoveryCandidate).one()
+        arms = session.query(SwingStrategyDiscoveryArm).all()
+        source_features = json.loads(candidate.source_features)
+        assert source_features["bottom_rebound_source"]["present"] is True
+        assert source_features["source_family_bucket"] == "bottom_rebound"
+        assert {arm.arm_id for arm in arms} == {item["arm_id"] for item in mod.BOTTOM_REBOUND_ARM_SET}
+        assert all(arm.actual_order_submitted is False for arm in arms)
+        assert all(arm.broker_order_forbidden is True for arm in arms)
+        assert all(arm.runtime_effect is False for arm in arms)
+
+
+def test_safe_pool_nan_bottom_metadata_is_not_bottom_candidate():
+    safe_rows = pd.DataFrame(
+        [
+            {
+                "date": "2026-05-22",
+                "code": "000001",
+                "name": "SafeOnly",
+                "hybrid_mean": 0.8,
+                "prob": 0.8,
+                "score_rank": 1,
+                "selection_mode": "SELECTED",
+            }
+        ]
+    )
+    bottom_rows = pd.DataFrame(
+        [
+            {
+                "date": "2026-05-22",
+                "code": "000002",
+                "name": "BottomOnly",
+                "hybrid_mean": 0.9,
+                "prob": 0.9,
+                "score_rank": 1,
+                "selection_mode": "BOTTOM_REBOUND_SOURCE",
+                "bottom_rebound_source_present": True,
+                "bottom_rebound_candidate_id": "br:2026-05-22:000002",
+            }
+        ]
+    )
+    merged = mod.merge_optional_source_rows(safe_rows, bottom_rows)
+
+    candidates = mod.build_candidate_rows(
+        merged,
+        target_date="2026-05-22",
+        max_candidates=2,
+        quote_features=_quote_features(2),
+    )
+    by_code = {row["stock_code"]: row for row in candidates}
+    assert by_code["000001"]["source_family_bucket"] == "safe_pool"
+    assert by_code["000001"]["source_features"]["bottom_rebound_source"]["present"] is False
+    assert by_code["000002"]["source_family_bucket"] == "bottom_rebound"
+    arms = mod.build_arm_rows(candidates)
+    safe_arms = [row for row in arms if row["stock_code"] == "000001"]
+    bottom_arms = [row for row in arms if row["stock_code"] == "000002"]
+    assert len(safe_arms) == len(mod.ARM_SET)
+    assert len(bottom_arms) == len(mod.BOTTOM_REBOUND_ARM_SET)
+
+
+def test_bottom_rebound_overlap_preserves_metadata_and_dedicated_arms():
+    safe_rows = _source_rows(1)
+    bottom_rows = pd.DataFrame(
+        [
+            {
+                "date": "2026-05-22",
+                "code": "000001",
+                "name": "Overlap",
+                "hybrid_mean": 0.9,
+                "prob": 0.9,
+                "score_rank": 1,
+                "selection_mode": "BOTTOM_REBOUND_SOURCE",
+                "bottom_rebound_source_present": True,
+                "bottom_rebound_candidate_id": "br:2026-05-22:000001",
+                "bottom_rebound_candidate_rank": 1,
+            }
+        ]
+    )
+    merged = mod.merge_optional_source_rows(safe_rows, bottom_rows)
+    candidates = mod.build_candidate_rows(
+        merged,
+        target_date="2026-05-22",
+        max_candidates=1,
+        quote_features=_quote_features(1),
+    )
+    assert candidates[0]["stock_code"] == "000001"
+    assert candidates[0]["source_family_bucket"] == "bottom_rebound"
+    assert candidates[0]["source_features"]["bottom_rebound_source"]["present"] is True
+    assert candidates[0]["source_features"]["bottom_rebound_source"]["candidate_id"] == "br:2026-05-22:000001"
+    arms = mod.build_arm_rows(candidates)
+    assert [row["arm_id"] for row in arms] == [item["arm_id"] for item in mod.BOTTOM_REBOUND_ARM_SET]
 
 
 def test_bottom_rebound_source_contract_must_be_source_only(tmp_path):

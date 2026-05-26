@@ -474,6 +474,31 @@ wait_for_report_artifact() {
   wait_for_file_artifact "$md_path" "$label.md"
 }
 
+bottom_rebound_source_contract_ok() {
+  local path="$1"
+  [ -s "$path" ] || return 1
+  "$VENV_PY" - "$path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+ok = (
+    payload.get("report_type") == "swing_bottom_rebound_candidate_source"
+    and payload.get("decision_authority") == "swing_sim_candidate_source_only"
+    and payload.get("runtime_effect") is False
+    and payload.get("broker_order_forbidden") is True
+    and payload.get("allowed_runtime_apply") is False
+    and bool(payload.get("candidate_rows"))
+)
+raise SystemExit(0 if ok else 1)
+PY
+}
+
 threshold_cycle_ai_review_status() {
   local path="$1"
   "$VENV_PY" - "$path" <<'PY'
@@ -782,7 +807,16 @@ if [ "$RUN_SWING_LIFECYCLE_AUDIT" = "true" ] || [ "$RUN_SWING_LIFECYCLE_AUDIT" =
     "swing_daily_simulation"
   if [ "$RUN_SWING_STRATEGY_DISCOVERY" = "true" ] || [ "$RUN_SWING_STRATEGY_DISCOVERY" = "1" ]; then
     wait_for_postclose_resources "swing_strategy_discovery_sim"
-    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.swing_strategy_discovery_sim --date "$TARGET_DATE"
+    BOTTOM_REBOUND_SOURCE_JSON="$PROJECT_DIR/data/report/swing_bottom_rebound_candidate_source/swing_bottom_rebound_candidate_source_${TARGET_DATE}.json"
+    if bottom_rebound_source_contract_ok "$BOTTOM_REBOUND_SOURCE_JSON"; then
+      echo "[threshold-cycle] bottom_rebound_source_contract=pass path=$BOTTOM_REBOUND_SOURCE_JSON"
+      run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.swing_strategy_discovery_sim \
+        --date "$TARGET_DATE" \
+        --include-bottom-rebound-source
+    else
+      echo "[threshold-cycle] bottom_rebound_source_contract=missing_or_invalid path=$BOTTOM_REBOUND_SOURCE_JSON safe_pool_only=true"
+      run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.swing_strategy_discovery_sim --date "$TARGET_DATE"
+    fi
     wait_for_report_artifact \
       "$PROJECT_DIR/data/report/swing_strategy_discovery_sim/swing_strategy_discovery_sim_${TARGET_DATE}.json" \
       "$PROJECT_DIR/data/report/swing_strategy_discovery_sim/swing_strategy_discovery_sim_${TARGET_DATE}.md" \

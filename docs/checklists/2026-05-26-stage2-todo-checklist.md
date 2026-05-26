@@ -155,6 +155,12 @@
   - 금지: missing producer 후보를 실주문 enable, threshold mutation, provider change, bot restart, cap release, entry/exit override 근거로 사용하지 않는다. AI unavailable/parse reject/audit fail은 경고 지속이 아니라 fail-closed로 처리한다.
   - 다음 액션: `pass_workorder_handoff`, `fail_ai_review`, `fail_workorder_handoff`, `source_only_no_candidate` 중 하나로 닫는다.
 
+- [ ] `[BottomReboundSimHandoffPostclose0526] bottom_rebound source 후보의 swing discovery sim DB handoff 확인` (`Due: 2026-05-26`, `Slot: POSTCLOSE`, `TimeWindow: 17:35~17:40`, `Track: SwingLogic`)
+  - Source: [swing_strategy_discovery_sim.py](/home/ubuntu/KORStockScan/src/engine/swing_strategy_discovery_sim.py), [run_threshold_cycle_postclose.sh](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_postclose.sh), [verify_threshold_cycle_postclose_chain.py](/home/ubuntu/KORStockScan/src/engine/verify_threshold_cycle_postclose_chain.py), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
+  - 판정 기준: `swing_bottom_rebound_candidate_source_2026-05-26.json`이 source-only contract pass이고 후보가 있으면 postclose wrapper가 `swing_strategy_discovery_sim --include-bottom-rebound-source`를 실행한다. sim report의 `bottom_rebound_selected_candidate_count`, `bottom_rebound_arm_count`, `bottom_rebound_persisted_candidate_count`, `bottom_rebound_persisted_arm_count`가 모두 0보다 크고 verifier가 `bottom_rebound_sim_handoff.status=pass`로 닫혀야 한다.
+  - 금지: bottom rebound source 후보 또는 virtual arm을 실주문, swing real canary, threshold apply, provider route, bot restart, recommendation_history 변경 근거로 쓰지 않는다.
+  - 다음 액션: `pass_bottom_rebound_persisted`, `safe_pool_only_source_missing_or_invalid`, `fail_bottom_rebound_persist_missing`, `fail_source_only_contract` 중 하나로 닫는다.
+
 - [ ] `[HumanInterventionSummary0526] 자동화체인 사용자 개입 요구사항 분류 및 누락 확인` (`Due: 2026-05-26`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:15`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-22.json), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
   - 판정 기준: 개입사항을 `approval_artifact_required|created|missing|blocked_by_policy|observe_only`, `Codex 구현 필요`, `수동 동기화 필요`, `관찰만`으로 분류한다.

@@ -296,6 +296,66 @@ def test_producer_gap_discovery_handoff_passes_when_ai_and_workorder_close():
     assert report["missing"] == []
 
 
+def test_bottom_rebound_sim_handoff_passes_when_persisted():
+    sim_report = {
+        "source_quality": {
+            "bottom_rebound_source": {"status": "ok"},
+            "bottom_rebound_source_rows": 3,
+        },
+        "summary": {
+            "bottom_rebound_selected_candidate_count": 3,
+            "bottom_rebound_arm_count": 9,
+            "bottom_rebound_persisted_candidate_count": 3,
+            "bottom_rebound_persisted_arm_count": 9,
+        },
+        "persist_summary": {"candidate_rows": 3, "arm_rows": 9},
+    }
+
+    report = mod._bottom_rebound_sim_handoff_status(sim_report)
+
+    assert report["status"] == "pass"
+    assert report["included"] is True
+    assert report["missing"] == []
+
+
+def test_bottom_rebound_sim_handoff_fails_when_included_but_not_persisted():
+    sim_report = {
+        "source_quality": {
+            "bottom_rebound_source": {"status": "ok"},
+            "bottom_rebound_source_rows": 2,
+        },
+        "summary": {
+            "bottom_rebound_selected_candidate_count": 2,
+            "bottom_rebound_arm_count": 6,
+            "bottom_rebound_persisted_candidate_count": 0,
+            "bottom_rebound_persisted_arm_count": 0,
+        },
+        "persist_summary": {"candidate_rows": 0, "arm_rows": 0},
+    }
+
+    report = mod._bottom_rebound_sim_handoff_status(sim_report)
+
+    assert report["status"] == "fail"
+    assert "bottom_rebound_persisted_candidates_missing" in report["missing"]
+    assert "bottom_rebound_persisted_arms_missing" in report["missing"]
+
+
+def test_bottom_rebound_sim_handoff_not_applicable_when_source_absent():
+    report = mod._bottom_rebound_sim_handoff_status(
+        {
+            "source_quality": {
+                "bottom_rebound_source": {"status": "disabled"},
+                "bottom_rebound_source_rows": 0,
+            },
+            "summary": {},
+            "persist_summary": {"candidate_rows": 5, "arm_rows": 30},
+        }
+    )
+
+    assert report["status"] == "not_applicable"
+    assert report["included"] is False
+
+
 def test_swing_entry_bottleneck_handoff_fails_when_downstream_missing():
     matrix = {
         "input_contract": {"swing_daily_simulation_consumed": False},
@@ -370,6 +430,26 @@ def _write_lifecycle_artifact(report_dir: Path, target_date: str = "2026-05-12")
     return path
 
 
+def _write_swing_discovery_sim_artifact(report_dir: Path, target_date: str = "2026-05-12") -> Path:
+    path = report_dir / "swing_strategy_discovery_sim" / f"swing_strategy_discovery_sim_{target_date}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "report_type": "swing_strategy_discovery_sim",
+                "source_quality": {
+                    "bottom_rebound_source": {"status": "disabled"},
+                    "bottom_rebound_source_rows": 0,
+                },
+                "summary": {},
+                "persist_summary": {"candidate_rows": 0, "arm_rows": 0},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(tmp_path, monkeypatch):
     project_root = tmp_path
     report_dir = project_root / "data" / "report"
@@ -383,6 +463,7 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
     (report_dir / "panic_sell_defense").mkdir(parents=True)
     (report_dir / "panic_buying").mkdir(parents=True)
     (report_dir / "swing_daily_simulation").mkdir(parents=True)
+    (report_dir / "swing_strategy_discovery_sim").mkdir(parents=True)
     (report_dir / "swing_lifecycle_audit").mkdir(parents=True)
     (project_root / "docs").mkdir(parents=True)
     adm_path = _write_adm_artifact(report_dir)
@@ -480,6 +561,7 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
     )
     (report_dir / "swing_daily_simulation" / "swing_daily_simulation_2026-05-12.json").write_text("{}", encoding="utf-8")
     (report_dir / "swing_lifecycle_audit" / "swing_lifecycle_audit_2026-05-12.json").write_text("{}", encoding="utf-8")
+    _write_swing_discovery_sim_artifact(report_dir)
     (project_root / "docs" / "checklists").mkdir(parents=True)
     (project_root / "docs" / "checklists" / "2026-05-13-stage2-todo-checklist.md").write_text(
         "# next\n",
@@ -548,6 +630,7 @@ def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(
     (report_dir / "panic_sell_defense").mkdir(parents=True)
     (report_dir / "panic_buying").mkdir(parents=True)
     (report_dir / "swing_daily_simulation").mkdir(parents=True)
+    (report_dir / "swing_strategy_discovery_sim").mkdir(parents=True)
     (report_dir / "swing_lifecycle_audit").mkdir(parents=True)
     (project_root / "docs").mkdir(parents=True)
     adm_path = _write_adm_artifact(report_dir)
@@ -574,6 +657,7 @@ def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(
         "panic_sell_defense/panic_sell_defense_2026-05-12.json",
         "panic_buying/panic_buying_2026-05-12.json",
         "swing_daily_simulation/swing_daily_simulation_2026-05-12.json",
+        "swing_strategy_discovery_sim/swing_strategy_discovery_sim_2026-05-12.json",
         "swing_lifecycle_audit/swing_lifecycle_audit_2026-05-12.json",
         "lifecycle_decision_matrix/lifecycle_decision_matrix_2026-05-12.json",
     ):

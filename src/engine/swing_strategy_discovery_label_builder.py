@@ -25,6 +25,7 @@ from src.utils.constants import DATA_DIR, POSTGRES_URL
 
 
 REPORT_DIR = Path(DATA_DIR) / "report" / "swing_strategy_discovery_labels"
+DISCOVERY_SIM_REPORT_DIR = Path(DATA_DIR) / "report" / "swing_strategy_discovery_sim"
 DECISION_AUTHORITY = "swing_sim_exploration_only"
 LABEL_VERSION = "swing_strategy_discovery_label_v1"
 IMPLEMENTATION_ORDER_ID = "order_swing_strategy_discovery_source_quality_followup"
@@ -89,6 +90,15 @@ def _as_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        if value in (None, ""):
+            return default
+        return int(float(value))
+    except Exception:
+        return default
+
+
 def _pct(value: float, base: float) -> float:
     if base <= 0:
         return 0.0
@@ -109,6 +119,30 @@ def _json_loads(value: Any) -> dict[str, Any]:
     except Exception:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _arm_is_bottom_rebound(arm: SwingStrategyDiscoveryArm) -> bool:
+    if str(arm.entry_policy or "").startswith("bottom_rebound_"):
+        return True
+    features = _json_loads(arm.arm_features)
+    context = features.get("bottom_rebound_entry_context")
+    return bool(isinstance(context, dict) and context.get("setup_type") == "anticipatory_bottom_rebound_swing")
+
+
+def _bottom_rebound_sim_expected(target_date: str) -> bool:
+    path = DISCOVERY_SIM_REPORT_DIR / f"swing_strategy_discovery_sim_{target_date}.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    source_quality = payload.get("source_quality") if isinstance(payload.get("source_quality"), dict) else {}
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    bottom_source = source_quality.get("bottom_rebound_source") if isinstance(source_quality.get("bottom_rebound_source"), dict) else {}
+    return (
+        bottom_source.get("status") == "ok"
+        and _safe_int(source_quality.get("bottom_rebound_source_rows")) > 0
+        and _safe_int(summary.get("bottom_rebound_persisted_arm_count")) > 0
+    )
 
 
 def _quote_from_model(row: DailyStockQuote) -> Quote | None:
@@ -477,18 +511,33 @@ def build_swing_strategy_discovery_labels(
     status_counts: Counter[str] = Counter()
     label_status_counts: Counter[str] = Counter()
     maturity_status_counts: Counter[str] = Counter()
+    bottom_processed = 0
+    bottom_status_counts: Counter[str] = Counter()
+    bottom_label_status_counts: Counter[str] = Counter()
+    bottom_maturity_status_counts: Counter[str] = Counter()
     with Session.begin() as session:
         query = session.query(SwingStrategyDiscoveryArm).filter(SwingStrategyDiscoveryArm.source_date <= target)
         if not refresh_matured:
             query = query.filter(SwingStrategyDiscoveryArm.source_date == target)
         arms = query.order_by(SwingStrategyDiscoveryArm.source_date.asc(), SwingStrategyDiscoveryArm.id.asc()).all()
         for arm in arms:
+            is_bottom = _arm_is_bottom_rebound(arm)
             result = process_arm(session, arm)
             processed += 1
             status_counts[str(result.get("status"))] += 1
             maturity_status_counts[str(result.get("maturity_status") or "unknown")] += 1
             for status, count in (result.get("label_status_counts") or {}).items():
                 label_status_counts[str(status)] += int(count)
+            if is_bottom:
+                bottom_processed += 1
+                bottom_status_counts[str(result.get("status"))] += 1
+                bottom_maturity_status_counts[str(result.get("maturity_status") or "unknown")] += 1
+                for status, count in (result.get("label_status_counts") or {}).items():
+                    bottom_label_status_counts[str(status)] += int(count)
+
+    warnings = ["pending_future_quotes"] if label_status_counts.get("pending_future_quotes", 0) else []
+    if _bottom_rebound_sim_expected(date_key) and bottom_processed == 0:
+        warnings.append("bottom_rebound_label_handoff_missing")
 
     report = {
         "schema_version": 1,
@@ -534,8 +583,15 @@ def build_swing_strategy_discovery_labels(
             "maturity_status_counts": dict(maturity_status_counts),
             "pending_future_quote_count": label_status_counts.get("pending_future_quotes", 0),
             "labeled_sample_count": label_status_counts.get("labeled", 0),
+            "bottom_rebound_processed_arm_count": bottom_processed,
+            "bottom_rebound_arm_status_counts": dict(bottom_status_counts),
+            "bottom_rebound_label_status_counts": dict(bottom_label_status_counts),
+            "bottom_rebound_maturity_status_counts": dict(bottom_maturity_status_counts),
+            "bottom_rebound_pending_future_quote_count": bottom_label_status_counts.get("pending_future_quotes", 0),
+            "bottom_rebound_labeled_sample_count": bottom_label_status_counts.get("labeled", 0),
+            "bottom_rebound_expired_entry_count": bottom_label_status_counts.get("expired_entry_no_trigger", 0),
         },
-        "warnings": ["pending_future_quotes"] if label_status_counts.get("pending_future_quotes", 0) else [],
+        "warnings": warnings,
     }
     return report
 
@@ -555,6 +611,8 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"- label_status_counts: `{summary.get('label_status_counts')}`",
             f"- maturity_status_counts: `{summary.get('maturity_status_counts')}`",
             f"- pending_future_quote_count: `{summary.get('pending_future_quote_count')}`",
+            f"- bottom_rebound_processed_arm_count: `{summary.get('bottom_rebound_processed_arm_count')}`",
+            f"- bottom_rebound_label_status_counts: `{summary.get('bottom_rebound_label_status_counts') or {}}`",
             f"- implementation_status: `{report.get('implementation_status') or '-'}`",
             "",
             "## Contract",

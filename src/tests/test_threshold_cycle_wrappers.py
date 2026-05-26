@@ -62,6 +62,26 @@ def test_postclose_wrapper_runs_swing_daily_simulation_before_lifecycle_audit():
     assert 'RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY="${THRESHOLD_CYCLE_RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY:-$RUN_SWING_LIFECYCLE_MATRIX}"' in script
 
 
+def test_postclose_wrapper_includes_valid_bottom_rebound_source_for_swing_discovery():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+
+    contract_idx = script.index("bottom_rebound_source_contract_ok()")
+    source_path_idx = script.index("swing_bottom_rebound_candidate_source_${TARGET_DATE}.json")
+    include_idx = script.index("--include-bottom-rebound-source")
+    fallback_idx = script.index("safe_pool_only=true")
+    discovery_idx = script.index("src.engine.swing_strategy_discovery_sim")
+
+    assert contract_idx < source_path_idx < discovery_idx
+    assert discovery_idx < include_idx
+    assert source_path_idx < fallback_idx
+    assert "bottom_rebound_source_contract=pass" in script
+    assert "bottom_rebound_source_contract=missing_or_invalid" in script
+    assert 'payload.get("report_type") == "swing_bottom_rebound_candidate_source"' in script
+    assert 'payload.get("runtime_effect") is False' in script
+    assert 'payload.get("broker_order_forbidden") is True' in script
+    assert 'payload.get("allowed_runtime_apply") is False' in script
+
+
 def test_swing_live_dry_run_defaults_ai_review_provider_to_none():
     script = Path("deploy/run_swing_live_dry_run_report.sh").read_text(encoding="utf-8")
 

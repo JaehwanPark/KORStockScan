@@ -148,6 +148,19 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _is_present(value: Any) -> bool:
+    try:
+        if value in (None, "") or pd.isna(value):
+            return False
+    except Exception:
+        if value in (None, ""):
+            return False
+    text = str(value).strip().lower()
+    if text in {"", "nan", "none", "null", "false", "0"}:
+        return False
+    return bool(value)
+
+
 def _norm_code(value: Any) -> str:
     return str(value or "").replace(".0", "").strip().zfill(6)
 
@@ -284,7 +297,7 @@ def merge_optional_source_rows(safe_pool_rows: pd.DataFrame, bottom_rows: pd.Dat
         if extra:
             row = {
                 **row,
-                "bottom_rebound_source_present": True,
+                "bottom_rebound_source_present": _is_present(extra.get("bottom_rebound_source_present")),
                 "bottom_rebound_candidate_id": extra.get("bottom_rebound_candidate_id"),
                 "bottom_rebound_candidate_rank": extra.get("bottom_rebound_candidate_rank"),
                 "bottom_rebound_source_quality_adjusted_ev_pct": extra.get("bottom_rebound_source_quality_adjusted_ev_pct"),
@@ -459,6 +472,7 @@ def build_candidate_rows(
         block_reason = block_reasons.get(code, "no_block_observed")
         position_tag = str(source.get("position_tag") or quote.get("position_tag") or "UNKNOWN")
         volatility_bucket = str(quote.get("volatility_bucket") or source.get("volatility_bucket") or "unknown")
+        source_family_bucket = "bottom_rebound" if _is_present(source.get("bottom_rebound_source_present")) else "safe_pool"
         diversity_bucket = "|".join([position_tag, block_reason, volatility_bucket])
         score = _lifecycle_bootstrap_score(source, quote, block_reason)
         rows.append(
@@ -473,6 +487,7 @@ def build_candidate_rows(
                 "position_tag": position_tag,
                 "block_reason": block_reason,
                 "volatility_bucket": volatility_bucket,
+                "source_family_bucket": source_family_bucket,
                 "sector": str(sector_theme.get("sector") or source.get("sector") or ""),
                 "industry": str(sector_theme.get("industry") or source.get("industry") or ""),
                 "theme_tags": _json_text(sector_theme.get("theme_tags") or source.get("theme_tags") or []),
@@ -489,13 +504,14 @@ def build_candidate_rows(
                     "arm_allocation": ARM_ALLOCATION,
                     "v2_required_fields": V2_REQUIRED_FIELDS,
                     "legacy_ml_role": "feature_and_comparison_cohort_only",
+                    "source_family_bucket": source_family_bucket,
                     "quote_features": quote,
                     "sector_theme": {
                         "theme_source": sector_theme.get("theme_source") or "source_row_or_missing",
                         "theme_source_quality": sector_theme.get("theme_source_quality") or "source_row_or_missing",
                     },
                     "bottom_rebound_source": {
-                        "present": bool(source.get("bottom_rebound_source_present")),
+                        "present": _is_present(source.get("bottom_rebound_source_present")),
                         "candidate_id": source.get("bottom_rebound_candidate_id"),
                         "candidate_rank": source.get("bottom_rebound_candidate_rank"),
                         "source_quality_adjusted_ev_pct": source.get("bottom_rebound_source_quality_adjusted_ev_pct"),
@@ -516,7 +532,7 @@ def build_candidate_rows(
                                     "treat_as_momentum_chase_setup",
                                 ],
                             }
-                            if source.get("bottom_rebound_source_present")
+                            if _is_present(source.get("bottom_rebound_source_present"))
                             else {}
                         ),
                     },
@@ -613,7 +629,7 @@ def _sizing_ratio(sizing_policy: str, candidate: dict[str, Any]) -> float:
 def _is_bottom_rebound_candidate(candidate: dict[str, Any]) -> bool:
     source_features = candidate.get("source_features") if isinstance(candidate.get("source_features"), dict) else {}
     bottom = source_features.get("bottom_rebound_source") if isinstance(source_features.get("bottom_rebound_source"), dict) else {}
-    return bool(bottom.get("present")) or str(candidate.get("volatility_bucket") or "") == "bottom_rebound"
+    return _is_present(bottom.get("present")) or str(candidate.get("source_family_bucket") or "") == "bottom_rebound"
 
 
 def _arm_set_for_candidate(candidate: dict[str, Any]) -> tuple[list[dict[str, str]], str, dict[str, Any]]:
@@ -767,6 +783,9 @@ def persist_discovery_rows(candidates: list[dict[str, Any]], arms: list[dict[str
 
 
 def summarize_candidates(candidates: list[dict[str, Any]], arms: list[dict[str, Any]]) -> dict[str, Any]:
+    bottom_candidate_count = sum(1 for row in candidates if _is_bottom_rebound_candidate(row))
+    bottom_codes = {row["stock_code"] for row in candidates if _is_bottom_rebound_candidate(row)}
+    bottom_arm_count = sum(1 for row in arms if row.get("stock_code") in bottom_codes)
     return {
         "candidate_count": len(candidates),
         "arm_count": len(arms),
@@ -774,6 +793,9 @@ def summarize_candidates(candidates: list[dict[str, Any]], arms: list[dict[str, 
         "position_tag_counts": dict(Counter(row["position_tag"] for row in candidates)),
         "block_reason_counts": dict(Counter(row["block_reason"] for row in candidates)),
         "volatility_bucket_counts": dict(Counter(row["volatility_bucket"] for row in candidates)),
+        "source_family_bucket_counts": dict(Counter(row.get("source_family_bucket", "safe_pool") for row in candidates)),
+        "bottom_rebound_selected_candidate_count": bottom_candidate_count,
+        "bottom_rebound_arm_count": bottom_arm_count,
         "arm_policy_counts": dict(Counter(row["arm_id"] for row in arms)),
     }
 
@@ -816,6 +838,12 @@ def build_swing_strategy_discovery_report(
     arms = build_arm_rows(candidates)
     persist_summary = persist_discovery_rows(candidates, arms, db_url=db_url) if persist else {"candidate_rows": 0, "arm_rows": 0}
     summary = summarize_candidates(candidates, arms)
+    summary["bottom_rebound_persisted_candidate_count"] = (
+        summary["bottom_rebound_selected_candidate_count"] if persist_summary.get("candidate_rows") else 0
+    )
+    summary["bottom_rebound_persisted_arm_count"] = (
+        summary["bottom_rebound_arm_count"] if persist_summary.get("arm_rows") else 0
+    )
     warnings: list[str] = []
     if not candidates:
         warnings.append("safe_pool_source_empty")
@@ -823,6 +851,14 @@ def build_swing_strategy_discovery_report(
         warnings.append("safe_pool_empty_bottom_rebound_source_used")
     if include_bottom_rebound_source and bottom_rebound_diag.get("status") != "ok":
         warnings.append(f"bottom_rebound_source:{bottom_rebound_diag.get('status')}")
+    if (
+        include_bottom_rebound_source
+        and bottom_rebound_diag.get("status") == "ok"
+        and summary.get("bottom_rebound_selected_candidate_count", 0) > 0
+        and persist
+        and (persist_summary.get("candidate_rows", 0) <= 0 or persist_summary.get("arm_rows", 0) <= 0)
+    ):
+        warnings.append("bottom_rebound_persist_missing")
     if source_count and quote_feature_count == 0:
         warnings.append("quote_features_unavailable")
     elif source_count and quote_feature_count < min(source_count, max_candidates):
@@ -905,6 +941,7 @@ def build_swing_strategy_discovery_report(
                         "stock_name",
                         "selection_arm",
                         "diversity_bucket",
+                        "source_family_bucket",
                         "lifecycle_exploration_score",
                         "legacy_selection_mode",
                     )
@@ -934,8 +971,13 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- decision_authority: `{report.get('decision_authority')}`",
         f"- candidate_count: `{summary.get('candidate_count', 0)}`",
         f"- arm_count: `{summary.get('arm_count', 0)}`",
+        f"- bottom_rebound_selected_candidate_count: `{summary.get('bottom_rebound_selected_candidate_count', 0)}`",
+        f"- bottom_rebound_arm_count: `{summary.get('bottom_rebound_arm_count', 0)}`",
+        f"- bottom_rebound_persisted_candidate_count: `{summary.get('bottom_rebound_persisted_candidate_count', 0)}`",
+        f"- bottom_rebound_persisted_arm_count: `{summary.get('bottom_rebound_persisted_arm_count', 0)}`",
         f"- selection_arm_counts: `{summary.get('selection_arm_counts', {})}`",
         f"- block_reason_counts: `{summary.get('block_reason_counts', {})}`",
+        f"- source_family_bucket_counts: `{summary.get('source_family_bucket_counts', {})}`",
         f"- quote_feature_coverage: `{source_quality.get('quote_feature_coverage', 0.0)}`",
         f"- warnings: `{report.get('warnings', [])}`",
         "",
