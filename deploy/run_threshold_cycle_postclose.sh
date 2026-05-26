@@ -947,7 +947,7 @@ if [ "$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT" = "true" ] || [ "$RUN_CODEBASE
 fi
 if [ "$RUN_PRODUCER_GAP_DISCOVERY" = "true" ] || [ "$RUN_PRODUCER_GAP_DISCOVERY" = "1" ]; then
   wait_for_postclose_resources "producer_gap_discovery"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.producer_gap_discovery \
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.producer_gap_discovery \
     --date "$TARGET_DATE" \
     --provider "$PRODUCER_GAP_DISCOVERY_AI_PROVIDER"
   wait_for_report_artifact \

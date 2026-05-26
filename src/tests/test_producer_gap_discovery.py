@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from src.engine import producer_gap_discovery as mod
+from src.engine.automation import producer_gap_discovery as mod
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -35,7 +35,7 @@ def _ai_response(candidate_ids: list[str]) -> dict:
                 "reason": "dedicated source-only producer is required",
                 "implementation_requirements": ["preserve runtime_effect=false"],
                 "acceptance_tests": ["pytest producer gap tests"],
-                "files_likely_touched": ["src/engine/producer_gap_discovery.py"],
+                "files_likely_touched": ["src/engine/automation/producer_gap_discovery.py"],
             }
             for candidate_id in candidate_ids
         ],

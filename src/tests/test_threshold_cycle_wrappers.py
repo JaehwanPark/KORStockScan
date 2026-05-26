@@ -102,7 +102,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     verbosity_idx = script.index("src.engine.pipeline_event_verbosity_report")
     observation_audit_idx = script.index("src.engine.observation_source_quality_audit")
     perf_source_idx = script.index("src.engine.codebase_performance_workorder_report")
-    producer_gap_idx = script.index("src.engine.producer_gap_discovery")
+    producer_gap_idx = script.index("src.engine.automation.producer_gap_discovery")
     pre_ev_idx = script.index('run_threshold_cycle_ev_and_wait "pre_workorder"')
     workorder_idx = script.index("src.engine.build_code_improvement_workorder")
     post_ev_idx = script.index('run_threshold_cycle_ev_and_wait "post_workorder_refresh"')

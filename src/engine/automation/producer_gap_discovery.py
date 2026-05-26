@@ -471,7 +471,7 @@ def _order_from_candidate(candidate: dict[str, Any], review: dict[str, Any]) -> 
         "source_paths": candidate.get("source_paths") or [],
         "files_likely_touched": review.get("files_likely_touched")
         or [
-            "src/engine/producer_gap_discovery.py",
+            "src/engine/automation/producer_gap_discovery.py",
             "src/engine/build_code_improvement_workorder.py",
             "src/engine/verify_threshold_cycle_postclose_chain.py",
         ],
