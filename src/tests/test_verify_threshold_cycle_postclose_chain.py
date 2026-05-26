@@ -282,6 +282,13 @@ def test_producer_gap_discovery_handoff_passes_when_ai_and_workorder_close():
             "audit_status": "pass",
             "candidate_count": 1,
             "workorder_count": 1,
+            "provider": "openai",
+            "model": "gpt-5.4",
+        },
+        "ai_two_pass_review": {
+            "provider": "openai",
+            "model": "gpt-5.4",
+            "provider_status": {"provider": "openai", "status": "success", "model": "gpt-5.4"},
         },
         "code_improvement_orders": [
             {
@@ -296,6 +303,71 @@ def test_producer_gap_discovery_handoff_passes_when_ai_and_workorder_close():
 
     assert report["status"] == "pass"
     assert report["missing"] == []
+
+
+def test_producer_gap_discovery_handoff_fails_without_openai_tier2_review():
+    producer_gap = {
+        "status": "warning",
+        "summary": {
+            "ai_two_pass_review_status": "parsed",
+            "audit_status": "pass",
+            "candidate_count": 1,
+            "workorder_count": 1,
+            "provider": "none",
+            "model": None,
+        },
+        "ai_two_pass_review": {
+            "provider": "none",
+            "model": None,
+            "provider_status": {"provider": "none", "status": "provided_response", "model": None},
+        },
+        "code_improvement_orders": [
+            {
+                "order_id": "order_producer_gap_discovery_scale_in",
+                "producer_gap_priority": "high",
+            }
+        ],
+    }
+    workorder = {"orders": [{"order_id": "order_producer_gap_discovery_scale_in"}]}
+
+    report = mod._producer_gap_discovery_handoff_status(producer_gap, workorder)
+
+    assert report["status"] == "fail"
+    assert "producer_gap_discovery_tier2_provider_review_missing" in report["missing"]
+
+
+def test_ai_correction_status_reads_current_provider_status_key(tmp_path, monkeypatch):
+    project_root = tmp_path
+    report_dir = project_root / "data" / "report"
+    monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    review_dir = report_dir / "threshold_cycle_ai_review"
+    calibration_dir = report_dir / "threshold_cycle_calibration"
+    review_dir.mkdir(parents=True)
+    calibration_dir.mkdir(parents=True)
+    (review_dir / "threshold_cycle_ai_review_2026-05-26_postclose.json").write_text(
+        json.dumps(
+            {
+                "ai_status": "parsed",
+                "ai_provider_status": {
+                    "provider": "openai",
+                    "status": "success",
+                    "schema_name": "threshold_ai_correction_v1",
+                },
+                "parse_warnings": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (calibration_dir / "threshold_cycle_calibration_2026-05-26_postclose.json").write_text(
+        json.dumps({"calibration_candidates": []}),
+        encoding="utf-8",
+    )
+
+    report = mod._ai_correction_status("2026-05-26")
+
+    assert report["status"] == "pass"
+    assert report["provider_status"]["provider"] == "openai"
 
 
 def test_producer_gap_discovery_handoff_fails_sim_first_coverage_gap_without_workorder():

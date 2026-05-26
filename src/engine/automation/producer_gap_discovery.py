@@ -37,18 +37,6 @@ FORBIDDEN_USES = [
     "exit decision override",
     "broker order submit",
 ]
-RUNTIME_HOOK_FORBIDDEN_USES = sorted(
-    {
-        *FORBIDDEN_USES,
-        "hard stop override",
-        "protect stop override",
-        "emergency stop override",
-        "broker guard bypass",
-        "account guard bypass",
-        "quantity guard bypass",
-        "cooldown guard bypass",
-    }
-)
 PATTERN_TYPES = {
     "stop_recovery_counterfactual_missing",
     "missed_fill_recovery_counterfactual_missing",
@@ -254,7 +242,6 @@ def _candidate(
     source_scope: str | None = None,
 ) -> dict[str, Any]:
     contract = next((item for item in DETECTOR_REGISTRY if item.pattern_type == pattern_type), None)
-    runtime_hook_contract = _runtime_hook_candidate_contract(pattern_type)
     return {
         "candidate_id": candidate_id,
         "domain": domain,
@@ -277,7 +264,6 @@ def _candidate(
         "source_scope": source_scope or (contract.source_scope if contract else "mixed_source"),
         "coverage_family": contract.coverage_family if contract else pattern_type,
         "real_case_anchor": bool(contract and contract.source_scope == "real_anchor"),
-        "runtime_hook_candidate_contract": runtime_hook_contract,
         "evidence": evidence[:20],
         "source_paths": source_paths[:12],
         "recommended_producer_contract": {
@@ -296,101 +282,6 @@ def _candidate(
             ],
         },
     }
-
-
-def _runtime_hook_candidate_contract(pattern_type: str) -> dict[str, Any] | None:
-    common = {
-        "initial_authority": "source_only_proposal",
-        "runtime_effect": False,
-        "allowed_runtime_apply": False,
-        "actual_order_submitted": False,
-        "broker_order_forbidden": True,
-        "eligible_after": [
-            "dedicated_source_only_producer_implemented",
-            "rolling_completed_sim_ev_positive",
-            "source_quality_pass",
-            "runtime_hook_mapping_test_passed",
-            "rollback_guard_defined",
-        ],
-        "apply_boundary": "postclose_artifact_to_next_preopen_candidate_only",
-        "safety_vetoes": [
-            "hard_stop",
-            "protect_stop",
-            "emergency_stop",
-            "broker_guard",
-            "account_guard",
-            "order_guard",
-            "quantity_guard",
-            "cooldown_guard",
-            "stale_quote_guard",
-        ],
-        "rollback_guards": [
-            "max_defer_seconds_exceeded",
-            "max_review_ticks_exceeded",
-            "deferred_exit_loss_worsen_breach",
-            "ws_or_ofi_source_stale",
-            "stable_bearish_ofi_confirm",
-            "post_apply_attribution_breach",
-        ],
-        "required_ev_evidence": [
-            "completed_sim_equal_weight_avg_profit_pct_positive",
-            "source_quality_adjusted_ev_pct_positive",
-            "strict_chronology_sample_floor_pass",
-        ],
-        "forbidden_uses": RUNTIME_HOOK_FORBIDDEN_USES,
-    }
-    if pattern_type == "sim_holding_runner_gap_missing":
-        return {
-            **common,
-            "hook_name": "holding_flow_runner_debounce_guard",
-            "stage": "holding_exit",
-            "hook_intent": "Debounce profit-taking, trailing, or weak-momentum exit candidates when runner microstructure remains bullish.",
-            "eligible_exit_candidates": ["profit_taking", "trailing", "weak_momentum"],
-            "action_namespace": ["EXIT_CONFIRM", "HOLD_REVIEW", "TRIM"],
-            "required_source_artifacts": ["runner_regime_counterfactual_producer"],
-            "required_microstructure_features": [
-                "ws_orderbook_churn",
-                "ofi_qi_persistence",
-                "large_trade_absorption",
-                "spread_flicker",
-                "top_depth_replenishment",
-                "holding_flow_cache_freshness",
-            ],
-        }
-    if pattern_type == "sim_exit_plateau_breakdown_gap_missing":
-        return {
-            **common,
-            "hook_name": "plateau_breakdown_exit_arbitration_probe",
-            "stage": "exit",
-            "hook_intent": "Compare plateau take-profit, hold-review, and breakdown exit outcomes before proposing any exit arbitration hook.",
-            "eligible_exit_candidates": ["profit_taking", "trailing", "plateau_hold"],
-            "action_namespace": ["EXIT_CONFIRM", "TAKE_PROFIT_ON_PLATEAU", "HOLD_REVIEW"],
-            "required_source_artifacts": ["plateau_breakdown_exit_counterfactual_producer"],
-            "required_microstructure_features": [
-                "limit_up_or_fixed_price_plateau",
-                "plateau_duration",
-                "breakdown_depth",
-                "post_plateau_giveback",
-                "ofi_qi_persistence",
-            ],
-        }
-    if pattern_type == "sim_stop_recovery_gap_missing":
-        return {
-            **common,
-            "hook_name": "stop_recovery_review_probe",
-            "stage": "exit",
-            "hook_intent": "Surface soft-stop or whipsaw recovery review candidates without weakening hard/protect/emergency stops.",
-            "eligible_exit_candidates": ["soft_stop", "whipsaw_confirmation"],
-            "action_namespace": ["EXIT_CONFIRM", "HOLD_REVIEW"],
-            "required_source_artifacts": ["sim_stop_recovery_counterfactual_producer"],
-            "required_microstructure_features": [
-                "post_stop_recovery_mfe",
-                "ofi_qi_persistence",
-                "bid_replenishment",
-                "source_time_join_quality",
-            ],
-        }
-    return None
 
 
 def _detect_stop_recovery(rows: list[dict[str, Any]], source_path: Path) -> list[dict[str, Any]]:
@@ -1436,8 +1327,8 @@ def _build_ai_review_instructions() -> str:
         "You may adjust priority, recommended route, implementation requirements, and acceptance tests.\n"
         "You must not delete deterministic candidates and must not grant runtime, threshold, provider, bot, cap, "
         "entry, exit, or broker order authority. Any forbidden-use leak must be surfaced in the audit.\n"
-        "If a candidate includes runtime_hook_candidate_contract, treat it only as a follow-up source-only proposal. "
-        "Do not convert it to runtime permission, live apply authority, exit override authority, or broker/order authority.\n"
+        "Do not request or infer runtime hooks, live apply authority, exit override authority, or broker/order authority. "
+        "This report is limited to missing source-only producers and source-quality handoff gaps.\n"
         "For time_window_policy_exception_missing, treat operator seed cutoffs such as 09:30 as source-only "
         "hypotheses, not hard gates. Prefer a dedicated time_window_regime_counterfactual producer that compares "
         "allow_all_in_window, block_all_in_window, and block_general_allow_exception_in_window across cutoff and "
@@ -1451,7 +1342,8 @@ def _build_ai_review_instructions() -> str:
         "a separate approved runtime workorder.\n"
         "Real-anchor evidence is incident evidence only. Sim-first rolling evidence is the default missing producer "
         "basis. For sim_* patterns, require dedicated source-only producers and preserve strict versus ambiguous "
-        "chronology/source-quality separation.\n"
+        "chronology/source-quality separation. Do not describe current-scope work as hooks, probes, exit actions, "
+        "trim actions, stop review actions, or broker/order behavior.\n"
         "Do not mark absent swing artifacts as correction_required unless a deterministic swing candidate is present. "
         "If an existing producer artifact already handles a family, recommend extension or audit only when the "
         "deterministic candidate explicitly requests it.\n"
@@ -1549,6 +1441,17 @@ def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, 
     return "parsed", payload, []
 
 
+def _load_ai_review_response(path: str | None) -> Any | None:
+    if not path:
+        return None
+    review_path = Path(path)
+    text = review_path.read_text(encoding="utf-8")
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return text
+
+
 def _review_by_candidate(ai_payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
     for item in ai_payload.get("candidate_reviews") or []:
@@ -1595,7 +1498,6 @@ def _order_from_candidate(candidate: dict[str, Any], review: dict[str, Any]) -> 
         "next_postclose_metric": f"{REPORT_TYPE}.{candidate_id}",
         "forbidden_uses": FORBIDDEN_USES,
         "implementation_requirements": review.get("implementation_requirements") or [],
-        "runtime_hook_candidate_contract": candidate.get("runtime_hook_candidate_contract"),
     }
 
 
@@ -1621,6 +1523,8 @@ def build_producer_gap_discovery_report(
         "input_context_hash": _text_hash(context),
     }
     raw_response = ai_raw_response
+    if raw_response is not None:
+        provider_status["status"] = "provided_response"
     if raw_response is None and resolved_provider == "openai":
         raw_response, provider_status = _call_openai_ai_review(context)
     ai_status, ai_payload, ai_warnings = _parse_ai_review_response(raw_response)
@@ -1785,11 +1689,16 @@ def main(argv: list[str] | None = None) -> int:
         default=os.getenv("KORSTOCKSCAN_PRODUCER_GAP_DISCOVERY_AI_PROVIDER", AI_REVIEW_DEFAULT_PROVIDER),
         choices=["openai", "none", "off", "false", "0"],
     )
+    parser.add_argument(
+        "--ai-review-response-json",
+        help="Strict producer_gap_discovery_ai_review_v1 JSON response to parse instead of calling a provider.",
+    )
     parser.add_argument("--rolling-sim-scan", action="store_true", help="Scan all available historical sim rows.")
     args = parser.parse_args(argv)
     report = build_producer_gap_discovery_report(
         args.date,
         provider=args.provider,
+        ai_raw_response=_load_ai_review_response(args.ai_review_response_json),
         rolling_sim_scan=bool(args.rolling_sim_scan),
     )
     json_path, md_path = report_paths(args.date)

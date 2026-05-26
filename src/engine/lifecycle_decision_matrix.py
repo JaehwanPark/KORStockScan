@@ -2368,6 +2368,12 @@ def _overnight_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "reason": "overnight_decision_bucket_needs_source_quality_or_threshold_cycle_confirmation",
             "recommended_route": item.get("recommended_route"),
             "metric_role": "source_quality_gate",
+            "implementation_status": "implemented",
+            "implementation_provenance": {
+                "source_field_coverage": item.get("source_field_coverage") or {},
+                "unknown_reason_counts": item.get("unknown_reason_counts") or {},
+                "recommended_resolution": item.get("recommended_resolution"),
+            },
             "runtime_effect": False,
             "allowed_runtime_apply": False,
         }
@@ -2377,6 +2383,19 @@ def _overnight_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "metric_role": "sim_probe_ev",
         "decision_authority": "adm_ldm_overnight_bucket_attribution_source_only",
         "runtime_effect": False,
+        "implementation_status": "implemented",
+        "implementation_provenance": {
+            "runtime_effect": False,
+            "decision_authority": "adm_ldm_overnight_bucket_attribution_source_only",
+            "source_quality_gate": "overnight decision coverage + joined same/next-day source labels",
+            "forbidden_uses": [
+                "hard_overnight_gate",
+                "real_sell_order_submit",
+                "intraday_threshold_mutation",
+                "provider_route_change",
+                "bot_restart_trigger",
+            ],
+        },
         "window_policy": "daily_overnight_rows_plus_next_day_carry_label_join_consumer",
         "sample_floor": OVERNIGHT_BUCKET_SAMPLE_FLOOR,
         "primary_decision_metric": "source_quality_adjusted_ev_pct",

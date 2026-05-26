@@ -983,7 +983,8 @@ if [ "$RUN_PRODUCER_GAP_DISCOVERY" = "true" ] || [ "$RUN_PRODUCER_GAP_DISCOVERY"
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.producer_gap_discovery \
     --date "$TARGET_DATE" \
     --provider "$PRODUCER_GAP_DISCOVERY_AI_PROVIDER" \
-    --rolling-sim-scan
+    --rolling-sim-scan || \
+    echo "[threshold-cycle] producer gap discovery returned fail-closed report (non-fatal); downstream verification will consume artifact" >&2
   wait_for_report_artifact \
     "$PROJECT_DIR/data/report/producer_gap_discovery/producer_gap_discovery_${TARGET_DATE}.json" \
     "$PROJECT_DIR/data/report/producer_gap_discovery/producer_gap_discovery_${TARGET_DATE}.md" \

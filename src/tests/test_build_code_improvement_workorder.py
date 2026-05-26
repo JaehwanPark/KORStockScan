@@ -373,6 +373,8 @@ def test_build_code_improvement_workorder_force_selects_producer_gap_orders(tmp_
                         "route": "implement_now",
                         "runtime_effect": False,
                         "allowed_runtime_apply": False,
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
                     }
                 ],
             }
@@ -396,6 +398,13 @@ def test_build_code_improvement_workorder_force_selects_producer_gap_orders(tmp_
 
     decisions = {item["order_id"]: item["decision"] for item in report["orders"]}
     assert decisions["order_producer_gap_discovery_time_window_policy_exception"] == "implement_now"
+    order = next(
+        item
+        for item in report["orders"]
+        if item["order_id"] == "order_producer_gap_discovery_time_window_policy_exception"
+    )
+    assert order["actual_order_submitted"] is False
+    assert order["broker_order_forbidden"] is True
     assert report["summary"]["producer_gap_discovery_source_order_count"] == 1
     assert report["summary"]["producer_gap_discovery_high_priority_selected"] is True
     assert report["source"]["producer_gap_discovery"] == str(
@@ -404,7 +413,69 @@ def test_build_code_improvement_workorder_force_selects_producer_gap_orders(tmp_
     assert "Runtime hook candidate:" not in mod.render_code_improvement_workorder_markdown(report)
 
 
-def test_build_code_improvement_workorder_preserves_runtime_hook_candidate_contract(tmp_path, monkeypatch):
+def test_build_code_improvement_workorder_exposes_non_selected_source_orders(tmp_path, monkeypatch):
+    target_date = "2099-01-03"
+    automation_dir = tmp_path / "automation"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    automation_dir.mkdir()
+    (automation_dir / f"scalping_pattern_lab_automation_{target_date}.json").write_text(
+        json.dumps(
+            {
+                "date": target_date,
+                "solo_findings": [
+                    {
+                        "order_id": "order_deferred_solo",
+                        "confidence": "solo",
+                    }
+                ],
+                "code_improvement_orders": [
+                    {
+                        "order_id": "order_runtime_instrumentation",
+                        "title": "runtime instrumentation",
+                        "target_subsystem": "runtime_instrumentation",
+                        "priority": 1,
+                        "runtime_effect": False,
+                    },
+                    {
+                        "order_id": "order_deferred_solo",
+                        "title": "single lab candidate",
+                        "target_subsystem": "entry_funnel",
+                        "priority": 9,
+                        "runtime_effect": False,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
+    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-observation-audit")
+    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness")
+    monkeypatch.setattr(mod, "PATTERN_LAB_AI_REVIEW_DIR", tmp_path / "missing-ai-review")
+    monkeypatch.setattr(mod, "PRODUCER_GAP_DISCOVERY_DIR", tmp_path / "missing-producer-gap")
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder(target_date, max_orders=1)
+
+    assert [item["order_id"] for item in report["orders"]] == ["order_runtime_instrumentation"]
+    assert report["non_selected_orders"][0]["order_id"] == "order_deferred_solo"
+    assert report["non_selected_orders"][0]["decision"] == "defer_evidence"
+    assert report["summary"]["non_selected_order_count"] == 1
+    assert report["summary"]["non_selected_decision_counts"] == {"defer_evidence": 1}
+    assert report["deferred_or_rejected_count"] == 1
+    markdown = mod.render_code_improvement_workorder_markdown(report)
+    assert "## Non-Selected Source Orders" in markdown
+    assert "order_deferred_solo" in markdown
+
+
+def test_build_code_improvement_workorder_strips_producer_gap_runtime_hook_candidate_contract(tmp_path, monkeypatch):
     automation_dir = tmp_path / "automation"
     producer_gap_dir = tmp_path / "producer-gap"
     report_dir = tmp_path / "report"
@@ -468,11 +539,11 @@ def test_build_code_improvement_workorder_preserves_runtime_hook_candidate_contr
     report = mod.build_code_improvement_workorder("2026-05-26", max_orders=1)
 
     order = next(item for item in report["orders"] if item["order_id"] == "order_producer_gap_discovery_runner")
-    assert order["runtime_hook_candidate_contract"]["hook_name"] == "holding_flow_runner_debounce_guard"
+    assert order["runtime_hook_candidate_contract"] is None
     markdown = mod.render_code_improvement_workorder_markdown(report)
-    assert "Runtime hook candidate:" in markdown
-    assert "holding_flow_runner_debounce_guard" in markdown
-    assert "hard stop override" in markdown
+    assert "Runtime hook candidate:" not in markdown
+    assert "holding_flow_runner_debounce_guard" not in markdown
+    assert "hard stop override" not in markdown
 
 
 def test_build_code_improvement_workorder_auto_selects_buy_funnel_submit_drought(
@@ -2040,6 +2111,8 @@ def test_build_code_improvement_workorder_consumes_lifecycle_entry_bucket_workor
                 "overnight_bucket_attribution": {
                     "metric_role": "sim_probe_ev",
                     "decision_authority": "adm_ldm_overnight_bucket_attribution_source_only",
+                    "runtime_effect": False,
+                    "implementation_status": "implemented",
                     "window_policy": "daily_overnight_rows_plus_next_day_carry_label_join_consumer",
                     "sample_floor": 5,
                     "primary_decision_metric": "source_quality_adjusted_ev_pct",
@@ -2107,6 +2180,12 @@ def test_build_code_improvement_workorder_consumes_lifecycle_entry_bucket_workor
     assert overnight_order["decision"] == "attach_existing_family"
     assert overnight_order["runtime_effect"] is False
     assert overnight_order["allowed_runtime_apply"] is False
+    assert overnight_order["implementation_status"] == "implemented"
+    assert overnight_order["implementation_provenance"]["runtime_effect"] is False
+    assert (
+        overnight_order["implementation_provenance"]["decision_authority"]
+        == "adm_ldm_overnight_bucket_attribution_source_only"
+    )
     assert overnight_order["source_report_type"] == "lifecycle_decision_matrix_overnight_bucket_attribution"
     assert "bucket_key=SELL_TODAY" in overnight_order["evidence"]
     assert report["summary"]["lifecycle_entry_bucket_source_order_count"] == 1

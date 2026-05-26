@@ -806,8 +806,13 @@ def _producer_gap_discovery_handoff_status(
             "interpretation": "producer_gap_discovery artifact missing",
         }
     summary = producer_gap.get("summary") if isinstance(producer_gap.get("summary"), dict) else {}
+    ai_review = producer_gap.get("ai_two_pass_review") if isinstance(producer_gap.get("ai_two_pass_review"), dict) else {}
+    provider_status = ai_review.get("provider_status") if isinstance(ai_review.get("provider_status"), dict) else {}
     ai_status = str(summary.get("ai_two_pass_review_status") or "").strip()
     audit_status = str(summary.get("audit_status") or "").strip()
+    ai_provider = str(ai_review.get("provider") or summary.get("provider") or provider_status.get("provider") or "").strip()
+    ai_provider_status = str(provider_status.get("status") or "").strip()
+    ai_model = ai_review.get("model") or summary.get("model") or provider_status.get("model")
     expected_order_ids = {
         str(item.get("order_id"))
         for item in (producer_gap.get("code_improvement_orders") if isinstance(producer_gap.get("code_improvement_orders"), list) else [])
@@ -836,6 +841,8 @@ def _producer_gap_discovery_handoff_status(
         missing.append("producer_gap_discovery_ai_review_not_parsed")
     if audit_status != "pass":
         missing.append("producer_gap_discovery_ai_audit_not_pass")
+    if ai_provider != "openai" or ai_provider_status != "success" or not ai_model:
+        missing.append("producer_gap_discovery_tier2_provider_review_missing")
     if missing_order_ids:
         missing.append("code_improvement_workorder_producer_gap_orders_missing")
     if high_priority_candidate_ids and missing_order_ids:
@@ -848,6 +855,9 @@ def _producer_gap_discovery_handoff_status(
         "missing_workorder_order_ids": missing_order_ids,
         "ai_two_pass_review_status": ai_status or "missing",
         "audit_status": audit_status or "missing",
+        "provider": ai_provider or "missing",
+        "provider_status": ai_provider_status or "missing",
+        "model": ai_model,
         "candidate_count": summary.get("candidate_count"),
         "workorder_count": summary.get("workorder_count"),
         "interpretation": (
@@ -1104,7 +1114,7 @@ def _ai_correction_status(target_date: str) -> dict[str, Any]:
     calibration_report = _load_json(calibration_path)
     blocking_families = _runtime_candidates_requiring_ai(calibration_report)
     ai_status = str(ai_review.get("ai_status") or "missing").strip()
-    provider_status = ai_review.get("provider_status")
+    provider_status = ai_review.get("provider_status") or ai_review.get("ai_provider_status")
     parse_warnings = ai_review.get("parse_warnings")
     if not isinstance(parse_warnings, list):
         parse_warnings = []

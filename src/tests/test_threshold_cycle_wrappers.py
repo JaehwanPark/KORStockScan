@@ -152,6 +152,18 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     assert "swing_lifecycle_bucket_discovery=$RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY" in script
 
 
+def test_postclose_wrapper_treats_producer_gap_fail_closed_as_report_artifact():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+
+    producer_gap_idx = script.index("src.engine.automation.producer_gap_discovery")
+    nonfatal_idx = script.index("producer gap discovery returned fail-closed report (non-fatal)")
+    artifact_idx = script.index('"$PROJECT_DIR/data/report/producer_gap_discovery/producer_gap_discovery_${TARGET_DATE}.json"')
+    ev_idx = script.index('run_threshold_cycle_ev_and_wait "pre_workorder"')
+
+    assert producer_gap_idx < nonfatal_idx < artifact_idx < ev_idx
+    assert "downstream verification will consume artifact" in script
+
+
 def test_postclose_wrapper_refreshes_market_breadth_before_panic_reports():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 

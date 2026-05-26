@@ -102,10 +102,11 @@ def test_swing_improvement_automation_surfaces_downstream_contract_gap_orders():
             "matches": [],
         },
         "swing_lifecycle_contract_gaps": {
-            "gap_count": 2,
+            "gap_count": 3,
             "gaps": [
                 {"gap_id": "SWING_HOLDING_EXIT_CONTRACT_GAP", "next_route": "code_improvement_workorder"},
                 {"gap_id": "SWING_SCALE_IN_CONTRACT_GAP", "next_route": "code_improvement_workorder"},
+                {"gap_id": "SWING_DISCOVERY_LABEL_CONTRACT_GAP", "next_route": "source_quality_workorder"},
             ],
         },
         "observation_axis_summary": {},
@@ -117,11 +118,22 @@ def test_swing_improvement_automation_surfaces_downstream_contract_gap_orders():
 
     assert "order_swing_holding_exit_contract_gap_review" in order_ids
     assert "order_swing_scale_in_contract_gap_review" in order_ids
+    assert "order_swing_discovery_label_contract_gap_review" in order_ids
     assert all(
         item["runtime_effect"] is False and item["allowed_runtime_apply"] is False
         for item in report["code_improvement_orders"]
         if item["order_id"] in {
             "order_swing_holding_exit_contract_gap_review",
             "order_swing_scale_in_contract_gap_review",
+            "order_swing_discovery_label_contract_gap_review",
         }
     )
+    for order_id in {
+        "order_swing_holding_exit_contract_gap_review",
+        "order_swing_scale_in_contract_gap_review",
+        "order_swing_discovery_label_contract_gap_review",
+    }:
+        order = next(item for item in report["code_improvement_orders"] if item["order_id"] == order_id)
+        assert order["implementation_status"] == "implemented"
+        assert order["implementation_provenance"]["source_contract"] == "swing_lifecycle_contract_gap_v1"
+        assert order["implementation_provenance"]["runtime_effect"] is False

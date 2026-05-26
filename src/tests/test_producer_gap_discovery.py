@@ -348,28 +348,20 @@ def test_sim_first_rolling_detects_runner_plateau_and_ambiguous_chronology(tmp_p
     assert "strict_match_count=1" in runner["evidence"]
     assert "ambiguous_match_count=1" in runner["evidence"]
     assert "strict_match_count=1" in plateau["evidence"]
-    hook = runner["runtime_hook_candidate_contract"]
-    assert hook["hook_name"] == "holding_flow_runner_debounce_guard"
-    assert hook["initial_authority"] == "source_only_proposal"
-    assert hook["runtime_effect"] is False
-    assert hook["allowed_runtime_apply"] is False
-    assert hook["action_namespace"] == ["EXIT_CONFIRM", "HOLD_REVIEW", "TRIM"]
-    forbidden = " ".join(hook["forbidden_uses"])
-    assert "hard stop override" in forbidden
-    assert "broker guard bypass" in forbidden
     runner_order = next(
         item
         for item in report["code_improvement_orders"]
         if item["improvement_type"] == "sim_holding_runner_gap_missing"
     )
-    assert runner_order["runtime_hook_candidate_contract"]["hook_name"] == "holding_flow_runner_debounce_guard"
     assert runner_order["runtime_effect"] is False
+    assert "runtime_hook_candidate_contract" not in runner
+    assert "runtime_hook_candidate_contract" not in runner_order
     assert report["summary"]["rolling_sim_scan_enabled"] is True
     assert report["summary"]["sim_rows_scanned"] == 6
     assert all(item["runtime_effect"] is False for item in report["producer_gap_candidates"])
 
 
-def test_runtime_hook_contract_is_deterministic_and_ai_cannot_escalate_authority(tmp_path, monkeypatch):
+def test_ai_runtime_hook_contract_is_ignored_and_cannot_escalate_authority(tmp_path, monkeypatch):
     report_dir = tmp_path / "data" / "report"
     post_sell_dir = tmp_path / "data" / "post_sell"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
@@ -394,17 +386,17 @@ def test_runtime_hook_contract_is_deterministic_and_ai_cannot_escalate_authority
         for item in report["producer_gap_candidates"]
         if item["pattern_type"] == "sim_holding_runner_gap_missing"
     )
-    hook = runner["runtime_hook_candidate_contract"]
-    assert hook["hook_name"] == "holding_flow_runner_debounce_guard"
-    assert hook["runtime_effect"] is False
-    assert hook["allowed_runtime_apply"] is False
     order = next(
         item
         for item in report["code_improvement_orders"]
         if item["improvement_type"] == "sim_holding_runner_gap_missing"
     )
-    assert order["runtime_hook_candidate_contract"]["hook_name"] == "holding_flow_runner_debounce_guard"
-    assert order["runtime_hook_candidate_contract"]["allowed_runtime_apply"] is False
+    assert "runtime_hook_candidate_contract" not in runner
+    assert "runtime_hook_candidate_contract" not in order
+    assert runner["runtime_effect"] is False
+    assert runner["allowed_runtime_apply"] is False
+    assert order["runtime_effect"] is False
+    assert order["allowed_runtime_apply"] is False
 
 
 def test_ai_forbidden_use_violation_fails_closed_without_orders(tmp_path, monkeypatch):
@@ -426,6 +418,70 @@ def test_ai_forbidden_use_violation_fails_closed_without_orders(tmp_path, monkey
     assert report["status"] == "fail"
     assert report["summary"]["ai_fail_closed"] is True
     assert report["code_improvement_orders"] == []
+
+
+def test_main_accepts_ai_review_response_json(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    post_sell_dir = tmp_path / "data" / "post_sell"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
+    _write_jsonl(
+        post_sell_dir / "sim_post_sell_evaluations_2026-05-26.jsonl",
+        [
+            {
+                "sim_record_id": "sim-1",
+                "stock_code": "000001",
+                "exit_reason": "hard_stop",
+                "outcome": "MISSED_UPSIDE",
+                "profit_rate": -1.0,
+                "mfe_pct": 3.0,
+                "mfe_10m_pct": 3.0,
+                "close_10m_pct": 2.0,
+            }
+        ],
+    )
+    response_path = tmp_path / "review.json"
+    response_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "reviewer": "producer_gap_discovery_ai_review",
+                "audit": {"status": "pass", "forbidden_use_violations": []},
+                "candidate_reviews": [
+                    {
+                        "candidate_id": "producer_gap_stop_recovery_counterfactual_missing",
+                        "priority": "high",
+                        "recommended_route": "implement_now",
+                        "confidence": "fixture_review",
+                        "reason": "source-only producer gap is valid",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = mod.main(
+        [
+            "--date",
+            "2026-05-26",
+            "--provider",
+            "none",
+            "--ai-review-response-json",
+            str(response_path),
+        ]
+    )
+
+    assert exit_code == 0
+    report = json.loads(
+        (report_dir / "producer_gap_discovery" / "producer_gap_discovery_2026-05-26.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert report["summary"]["ai_two_pass_review_status"] == "parsed"
+    assert report["summary"]["audit_status"] == "pass"
+    assert report["ai_two_pass_review"]["provider_status"]["status"] == "provided_response"
+    assert report["code_improvement_orders"]
 
 
 def test_sim_submit_quality_gap_ignores_false_actual_order_submitted(tmp_path, monkeypatch):

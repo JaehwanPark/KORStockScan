@@ -3128,8 +3128,10 @@ def _order(
     acceptance_tests: list[str],
     evidence: list[str],
     improvement_type: str,
+    implementation_status: str | None = None,
+    implementation_provenance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    order = {
         "order_id": order_id,
         "title": title,
         "lifecycle_stage": lifecycle_stage,
@@ -3149,6 +3151,11 @@ def _order(
         "allowed_runtime_apply": False,
         "next_postclose_metric": expected_ev_effect,
     }
+    if implementation_status:
+        order["implementation_status"] = implementation_status
+    if implementation_provenance:
+        order["implementation_provenance"] = implementation_provenance
+    return order
 
 
 def build_swing_improvement_automation_report(
@@ -3568,6 +3575,7 @@ def build_swing_improvement_automation_report(
             "intent": "Surface stale/missing OFI/QI, scalping prompt reuse, and schema gaps before holding/exit logic is used for runtime decisions.",
             "ev": "holding/exit source-quality and structured contract gaps are visible without changing sell logic.",
             "files": ["src/engine/swing_lifecycle_audit.py", "src/engine/ai_prompt_contracts.py", "src/engine/ai_engine_openai.py"],
+            "implemented_scope": "swing_holding_exit_contract_gap_source_only_review",
         },
         "SWING_SCALE_IN_CONTRACT_GAP": {
             "order_id": "order_swing_scale_in_contract_gap_review",
@@ -3579,6 +3587,7 @@ def build_swing_improvement_automation_report(
             "intent": "Surface AVG_DOWN/PYRAMID post-add outcome and dedicated AI contract gaps before any scale-in runtime use.",
             "ev": "scale-in post-add outcome coverage and AI contract readiness are tracked as source-only evidence.",
             "files": ["src/engine/swing_lifecycle_audit.py", "src/engine/sniper_scale_in.py"],
+            "implemented_scope": "swing_scale_in_contract_gap_source_only_review",
         },
         "SWING_DISCOVERY_LABEL_CONTRACT_GAP": {
             "order_id": "order_swing_discovery_label_contract_gap_review",
@@ -3593,6 +3602,7 @@ def build_swing_improvement_automation_report(
                 "src/engine/swing_strategy_discovery_label_builder.py",
                 "src/engine/swing_strategy_discovery_ev_report.py",
             ],
+            "implemented_scope": "swing_discovery_label_contract_gap_source_only_review",
         },
     }
     for gap in lifecycle_contract_gaps.get("gaps") or []:
@@ -3635,6 +3645,22 @@ def build_swing_improvement_automation_report(
                     "allowed_runtime_apply=false",
                 ],
                 improvement_type="lifecycle_contract_gap",
+                implementation_status="implemented",
+                implementation_provenance={
+                    "scope": meta["implemented_scope"],
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "source_contract": "swing_lifecycle_contract_gap_v1",
+                    "source_fields": [
+                        "gap_id",
+                        "lifecycle_stage",
+                        "next_route",
+                        "reason",
+                        "evidence",
+                    ],
+                },
             )
         )
 

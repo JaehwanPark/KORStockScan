@@ -207,6 +207,86 @@ def producer_gap_discovery_report_path(target_date: str) -> Path:
     return PRODUCER_GAP_DISCOVERY_DIR / f"producer_gap_discovery_{target_date}.json"
 
 
+def _implementation_marker_from_attribution(attribution: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
+    implementation_status = "implemented" if attribution.get("implementation_status") == "implemented" else None
+    implementation_provenance = (
+        attribution.get("implementation_provenance")
+        if isinstance(attribution.get("implementation_provenance"), dict)
+        else {}
+    )
+    if implementation_status == "implemented" and not implementation_provenance:
+        implementation_provenance = {
+            "runtime_effect": False,
+            "decision_authority": attribution.get("decision_authority"),
+            "primary_decision_metric": attribution.get("primary_decision_metric"),
+            "source_quality_gate": attribution.get("source_quality_gate"),
+            "forbidden_uses": attribution.get("forbidden_uses") or [],
+        }
+    return implementation_status, implementation_provenance
+
+
+def _implementation_status_for_bucket(
+    item: dict[str, Any],
+    attribution_status: str | None,
+) -> str | None:
+    return item.get("implementation_status") or attribution_status
+
+
+def _implementation_provenance_for_bucket(
+    item: dict[str, Any],
+    attribution_provenance: dict[str, Any],
+) -> dict[str, Any] | None:
+    if isinstance(item.get("implementation_provenance"), dict):
+        return item.get("implementation_provenance")
+    return attribution_provenance or None
+
+
+def _sanitize_producer_gap_order(order: dict[str, Any]) -> dict[str, Any]:
+    sanitized = {**order, "source_report_type": "producer_gap_discovery"}
+    sanitized.pop("runtime_hook_candidate_contract", None)
+    return sanitized
+
+
+def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
+    return {
+        "order_id": item.order.get("order_id"),
+        "title": item.order.get("title"),
+        "target_subsystem": item.order.get("target_subsystem"),
+        "source_report_type": item.order.get("source_report_type"),
+        "lifecycle_stage": item.order.get("lifecycle_stage"),
+        "threshold_family": item.order.get("threshold_family"),
+        "improvement_type": item.order.get("improvement_type"),
+        "priority": item.order.get("priority"),
+        "decision": item.decision,
+        "decision_reason": item.reason,
+        "route": item.route,
+        "mapped_family": item.mapped_family,
+        "confidence": item.confidence,
+        "intent": item.order.get("intent"),
+        "expected_ev_effect": item.order.get("expected_ev_effect"),
+        "evidence": item.order.get("evidence") or [],
+        "required_downstream": item.order.get("required_downstream") or [],
+        "weak_contract_matches": item.order.get("weak_contract_matches") or [],
+        "next_postclose_metric": item.order.get("next_postclose_metric"),
+        "files_likely_touched": item.order.get("files_likely_touched") or [],
+        "acceptance_tests": item.order.get("acceptance_tests") or [],
+        "automation_reentry": item.automation_reentry,
+        "runtime_effect": bool(item.order.get("runtime_effect")),
+        "allowed_runtime_apply": bool(item.order.get("allowed_runtime_apply")),
+        "actual_order_submitted": item.order.get("actual_order_submitted"),
+        "broker_order_forbidden": item.order.get("broker_order_forbidden"),
+        "strategy_effect": bool(item.order.get("strategy_effect")),
+        "data_quality_effect": bool(item.order.get("data_quality_effect")),
+        "tuning_axis_effect": bool(item.order.get("tuning_axis_effect")),
+        "implementation_status": item.order.get("implementation_status"),
+        "implementation_checks": item.order.get("implementation_checks") or [],
+        "implementation_provenance": item.order.get("implementation_provenance"),
+        "parity_contract": item.order.get("parity_contract"),
+        "source_bucket_id": item.order.get("source_bucket_id"),
+        "runtime_hook_candidate_contract": item.order.get("runtime_hook_candidate_contract"),
+    }
+
+
 def _finding_maps(report: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     by_order_id: dict[str, dict[str, Any]] = {}
     by_title_slug: dict[str, dict[str, Any]] = {}
@@ -787,6 +867,7 @@ def _lifecycle_entry_bucket_followup_orders(report: dict[str, Any]) -> list[dict
         "source_quality_gate": attribution.get("source_quality_gate"),
         "forbidden_uses": attribution.get("forbidden_uses") or [],
     }
+    implementation_status, implementation_provenance = _implementation_marker_from_attribution(attribution)
     orders: list[dict[str, Any]] = []
     for item in workorders:
         if not isinstance(item, dict):
@@ -818,8 +899,11 @@ def _lifecycle_entry_bucket_followup_orders(report: dict[str, Any]) -> list[dict
                 "priority": 2 if route == "instrumentation_order" else 5,
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
-                "implementation_status": item.get("implementation_status"),
-                "implementation_provenance": item.get("implementation_provenance"),
+                "implementation_status": _implementation_status_for_bucket(item, implementation_status),
+                "implementation_provenance": _implementation_provenance_for_bucket(
+                    item,
+                    implementation_provenance,
+                ),
                 "expected_ev_effect": (
                     "Keep entry bucket EV attribution, source-quality gaps, and threshold-cycle approval "
                     "candidates connected without mutating intraday thresholds or broker submission."
@@ -889,6 +973,7 @@ def _lifecycle_submit_bucket_followup_orders(report: dict[str, Any]) -> list[dic
         "source_quality_gate": attribution.get("source_quality_gate"),
         "forbidden_uses": attribution.get("forbidden_uses") or [],
     }
+    implementation_status, implementation_provenance = _implementation_marker_from_attribution(attribution)
     orders: list[dict[str, Any]] = []
     for item in workorders:
         if not isinstance(item, dict):
@@ -912,8 +997,11 @@ def _lifecycle_submit_bucket_followup_orders(report: dict[str, Any]) -> list[dic
                 "priority": 1,
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
-                "implementation_status": item.get("implementation_status"),
-                "implementation_provenance": item.get("implementation_provenance"),
+                "implementation_status": _implementation_status_for_bucket(item, implementation_status),
+                "implementation_provenance": _implementation_provenance_for_bucket(
+                    item,
+                    implementation_provenance,
+                ),
                 "expected_ev_effect": (
                     "Make submit revalidation, broker receipt, fill quality, and post-submit messaging "
                     "contracts observable before any threshold or broker behavior tuning."
@@ -1248,6 +1336,7 @@ def _lifecycle_overnight_bucket_followup_orders(report: dict[str, Any]) -> list[
         "source_quality_gate": attribution.get("source_quality_gate"),
         "forbidden_uses": attribution.get("forbidden_uses") or [],
     }
+    implementation_status, implementation_provenance = _implementation_marker_from_attribution(attribution)
     orders: list[dict[str, Any]] = []
     for item in workorders:
         if not isinstance(item, dict):
@@ -1271,6 +1360,11 @@ def _lifecycle_overnight_bucket_followup_orders(report: dict[str, Any]) -> list[
                 "priority": 4,
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
+                "implementation_status": _implementation_status_for_bucket(item, implementation_status),
+                "implementation_provenance": _implementation_provenance_for_bucket(
+                    item,
+                    implementation_provenance,
+                ),
                 "expected_ev_effect": (
                     "Keep SELL_TODAY/HOLD_OVERNIGHT bucket attribution and next-day carry labels connected "
                     "as source-only evidence for threshold-cycle rolling confirmation."
@@ -2307,7 +2401,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         if isinstance(item, dict)
     ]
     producer_gap_discovery_orders = [
-        {**item, "source_report_type": "producer_gap_discovery"}
+        _sanitize_producer_gap_order(item)
         for item in (producer_gap_discovery.get("code_improvement_orders") or [])
         if isinstance(item, dict)
     ]
@@ -2427,9 +2521,18 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         if order_id in required_handoff_order_ids and order_id not in selected_order_ids:
             selected.append(item)
             selected_order_ids.add(order_id)
+    selected_identity = {id(item) for item in selected}
+    non_selected = [item for item in classified if id(item) not in selected_identity]
     counts: dict[str, int] = {}
     for item in classified:
         counts[item.decision] = counts.get(item.decision, 0) + 1
+    non_selected_counts: dict[str, int] = {}
+    for item in non_selected:
+        non_selected_counts[item.decision] = non_selected_counts.get(item.decision, 0) + 1
+    deferred_or_rejected_count = sum(
+        non_selected_counts.get(decision, 0)
+        for decision in ("design_family_candidate", "defer_evidence", "reject")
+    )
     report = {
         "schema_version": WORKORDER_SCHEMA_VERSION,
         "date": target_date,
@@ -2533,7 +2636,9 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             ),
             "panic_lifecycle_source_order_count": len(_panic_lifecycle_followup_orders(calibration_report)),
             "selected_order_count": len(selected),
+            "non_selected_order_count": len(non_selected),
             "decision_counts": counts,
+            "non_selected_decision_counts": non_selected_counts,
             "gemini_fresh": ((automation.get("ev_report_summary") or {}).get("gemini_fresh")),
             "claude_fresh": ((automation.get("ev_report_summary") or {}).get("claude_fresh")),
             "swing_lifecycle_audit_available": bool(swing_automation),
@@ -2574,45 +2679,9 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "daily_ev_available": bool(ev_report),
             "duplicate_order_warnings": collision_warnings,
         },
-        "orders": [
-            {
-                "order_id": item.order.get("order_id"),
-                "title": item.order.get("title"),
-                "target_subsystem": item.order.get("target_subsystem"),
-                "source_report_type": item.order.get("source_report_type"),
-                "lifecycle_stage": item.order.get("lifecycle_stage"),
-                "threshold_family": item.order.get("threshold_family"),
-                "improvement_type": item.order.get("improvement_type"),
-                "priority": item.order.get("priority"),
-                "decision": item.decision,
-                "decision_reason": item.reason,
-                "route": item.route,
-                "mapped_family": item.mapped_family,
-                "confidence": item.confidence,
-                "intent": item.order.get("intent"),
-                "expected_ev_effect": item.order.get("expected_ev_effect"),
-                "evidence": item.order.get("evidence") or [],
-                "required_downstream": item.order.get("required_downstream") or [],
-                "weak_contract_matches": item.order.get("weak_contract_matches") or [],
-                "next_postclose_metric": item.order.get("next_postclose_metric"),
-                "files_likely_touched": item.order.get("files_likely_touched") or [],
-                "acceptance_tests": item.order.get("acceptance_tests") or [],
-                "automation_reentry": item.automation_reentry,
-                "runtime_effect": bool(item.order.get("runtime_effect")),
-                "allowed_runtime_apply": bool(item.order.get("allowed_runtime_apply")),
-                "strategy_effect": bool(item.order.get("strategy_effect")),
-                "data_quality_effect": bool(item.order.get("data_quality_effect")),
-                "tuning_axis_effect": bool(item.order.get("tuning_axis_effect")),
-                "implementation_status": item.order.get("implementation_status"),
-                "implementation_checks": item.order.get("implementation_checks") or [],
-                "implementation_provenance": item.order.get("implementation_provenance"),
-                "parity_contract": item.order.get("parity_contract"),
-                "source_bucket_id": item.order.get("source_bucket_id"),
-                "runtime_hook_candidate_contract": item.order.get("runtime_hook_candidate_contract"),
-            }
-            for item in selected
-        ],
-        "deferred_or_rejected_count": max(0, len(classified) - len(selected)),
+        "orders": [_serialize_classified_order(item) for item in selected],
+        "non_selected_orders": [_serialize_classified_order(item) for item in non_selected],
+        "deferred_or_rejected_count": deferred_or_rejected_count,
         "next_codex_session": {
             "instruction": "Paste the generated markdown into Codex and ask: '이 code improvement workorder를 순서대로 구현하고 검증해줘.'",
             "workorder_markdown": str(code_improvement_workorder_paths(target_date)[1]),
@@ -2722,7 +2791,9 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- entry_submit_drought_handoff_missing: `{summary.get('entry_submit_drought_handoff_missing')}`",
         f"- panic_lifecycle_source_order_count: `{summary.get('panic_lifecycle_source_order_count')}`",
         f"- selected_order_count: `{summary.get('selected_order_count')}`",
+        f"- non_selected_order_count: `{summary.get('non_selected_order_count')}`",
         f"- decision_counts: `{summary.get('decision_counts')}`",
+        f"- non_selected_decision_counts: `{summary.get('non_selected_decision_counts')}`",
         f"- gemini_fresh: `{summary.get('gemini_fresh')}`",
         f"- claude_fresh: `{summary.get('claude_fresh')}`",
         f"- swing_lifecycle_audit_available: `{summary.get('swing_lifecycle_audit_available')}`",
@@ -2868,6 +2939,35 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
     if not report.get("orders"):
         lines.append("- none")
         lines.append("")
+    non_selected_orders = [item for item in (report.get("non_selected_orders") or []) if isinstance(item, dict)]
+    if non_selected_orders:
+        lines.extend(
+            [
+                "## Non-Selected Source Orders",
+                "",
+                "아래 항목은 source order로 분류됐지만 selected implementation order에는 포함되지 않았다. 재작업 지시 시 `decision`, `decision_reason`, `runtime_effect`를 먼저 재판정한다.",
+                "",
+            ]
+        )
+        for index, item in enumerate(non_selected_orders, start=1):
+            lines.extend(
+                [
+                    f"### N{index}. `{item.get('order_id')}`",
+                    "",
+                    f"- title: {item.get('title')}",
+                    f"- decision: `{item.get('decision')}`",
+                    f"- decision_reason: {item.get('decision_reason')}",
+                    f"- source_report_type: `{item.get('source_report_type') or '-'}`",
+                    f"- lifecycle_stage: `{item.get('lifecycle_stage') or '-'}`",
+                    f"- target_subsystem: `{item.get('target_subsystem')}`",
+                    f"- runtime_effect: `{item.get('runtime_effect')}`",
+                    f"- allowed_runtime_apply: `{item.get('allowed_runtime_apply')}`",
+                    f"- implementation_status: `{item.get('implementation_status') or '-'}`",
+                    f"- files_likely_touched: {_format_list(item.get('files_likely_touched'))}",
+                    f"- acceptance_tests: {_format_list(item.get('acceptance_tests'))}",
+                    "",
+                ]
+            )
     lines.extend(
         [
             "## 자동화체인 재투입",

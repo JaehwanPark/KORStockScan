@@ -878,9 +878,13 @@ def test_lifecycle_matrix_emits_overnight_bucket_attribution_workorders(tmp_path
 
     attribution = report["overnight_bucket_attribution"]
     assert attribution["decision_authority"] == "adm_ldm_overnight_bucket_attribution_source_only"
+    assert attribution["implementation_status"] == "implemented"
+    assert attribution["implementation_provenance"]["runtime_effect"] is False
     assert attribution["summary"]["status_counts"]["SELL_TODAY"] == 11
     assert attribution["summary"]["runtime_candidate_count"] >= 1
     assert attribution["summary"]["workorder_count"] >= 1
+    assert attribution["code_improvement_workorders"][0]["implementation_status"] == "implemented"
+    assert attribution["code_improvement_workorders"][0]["implementation_provenance"]["source_field_coverage"] == {}
     action_bucket = next(item for item in attribution["buckets"] if item["bucket_type"] == "overnight_action")
     assert action_bucket["bucket_key"] == "SELL_TODAY"
     assert action_bucket["recommended_route"] == "candidate_recovery_or_relax"
