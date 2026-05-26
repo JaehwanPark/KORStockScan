@@ -132,11 +132,11 @@
 - interpretation: `bottom_rebound source was absent or blocked; safe-pool-only swing sim path applies`
 
 ## Workorder Snapshot
-- generation_id: `2026-05-26-08d2752ec439`
-- source_hash: `08d2752ec4395b5c9d4418da7ecabd9a971d7cffadef84246024c7677877c1dc`
+- generation_id: `2026-05-26-68b2d715123d`
+- source_hash: `68b2d715123de9941b2a299a4ce1a01c4a1649e445e5ec18882c41f7bc6e0f20`
 - snapshot_status: `source_changed_with_lineage`
-- previous_generation_id: `2026-05-26-37c68e5d2938`
-- previous_source_hash: `37c68e5d2938de08deb5092a26527f3377ecf797f7577dd3d6dc557b4c00d33b`
+- previous_generation_id: `2026-05-26-645b10a14417`
+- previous_source_hash: `645b10a14417a7e5a3bf776aa1e29096c09cc44e131fa8affdf5c2f94277f506`
 - new_order_ids: `[]`
 - removed_order_ids: `[]`
 - decision_changed_order_ids: `[]`

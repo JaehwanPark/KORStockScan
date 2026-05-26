@@ -2610,6 +2610,20 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     counts: dict[str, int] = {}
     for item in classified:
         counts[item.decision] = counts.get(item.decision, 0) + 1
+    selected_decision_counts: dict[str, int] = {}
+    selected_route_counts: dict[str, int] = {}
+    selected_unimplemented_route_counts: dict[str, int] = {}
+    selected_runtime_effect_false_count = 0
+    selected_unimplemented_runtime_effect_false_count = 0
+    for item in selected:
+        selected_decision_counts[item.decision] = selected_decision_counts.get(item.decision, 0) + 1
+        route = str(item.route or item.order.get("route") or item.decision or "unknown")
+        selected_route_counts[route] = selected_route_counts.get(route, 0) + 1
+        if item.order.get("runtime_effect") is False:
+            selected_runtime_effect_false_count += 1
+            if item.order.get("implementation_status") != "implemented":
+                selected_unimplemented_runtime_effect_false_count += 1
+                selected_unimplemented_route_counts[route] = selected_unimplemented_route_counts.get(route, 0) + 1
     non_selected_counts: dict[str, int] = {}
     for item in non_selected:
         non_selected_counts[item.decision] = non_selected_counts.get(item.decision, 0) + 1
@@ -2731,7 +2745,14 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "panic_lifecycle_source_order_count": len(_panic_lifecycle_followup_orders(calibration_report)),
             "selected_order_count": len(selected),
             "non_selected_order_count": len(non_selected),
+            "source_decision_counts": counts,
             "decision_counts": counts,
+            "selected_decision_counts": selected_decision_counts,
+            "selected_route_counts": selected_route_counts,
+            "selected_implement_now_route_count": selected_route_counts.get("implement_now", 0),
+            "selected_runtime_effect_false_count": selected_runtime_effect_false_count,
+            "selected_unimplemented_runtime_effect_false_count": selected_unimplemented_runtime_effect_false_count,
+            "selected_unimplemented_route_counts": selected_unimplemented_route_counts,
             "non_selected_decision_counts": non_selected_counts,
             "gemini_fresh": ((automation.get("ev_report_summary") or {}).get("gemini_fresh")),
             "claude_fresh": ((automation.get("ev_report_summary") or {}).get("claude_fresh")),
@@ -2888,7 +2909,13 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- panic_lifecycle_source_order_count: `{summary.get('panic_lifecycle_source_order_count')}`",
         f"- selected_order_count: `{summary.get('selected_order_count')}`",
         f"- non_selected_order_count: `{summary.get('non_selected_order_count')}`",
-        f"- decision_counts: `{summary.get('decision_counts')}`",
+        f"- source_decision_counts: `{summary.get('source_decision_counts')}`",
+        f"- selected_decision_counts: `{summary.get('selected_decision_counts')}`",
+        f"- selected_route_counts: `{summary.get('selected_route_counts')}`",
+        f"- selected_implement_now_route_count: `{summary.get('selected_implement_now_route_count')}`",
+        f"- selected_runtime_effect_false_count: `{summary.get('selected_runtime_effect_false_count')}`",
+        f"- selected_unimplemented_runtime_effect_false_count: `{summary.get('selected_unimplemented_runtime_effect_false_count')}`",
+        f"- selected_unimplemented_route_counts: `{summary.get('selected_unimplemented_route_counts')}`",
         f"- non_selected_decision_counts: `{summary.get('non_selected_decision_counts')}`",
         f"- gemini_fresh: `{summary.get('gemini_fresh')}`",
         f"- claude_fresh: `{summary.get('claude_fresh')}`",

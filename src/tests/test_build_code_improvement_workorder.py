@@ -161,6 +161,12 @@ def test_build_code_improvement_workorder_limits_selected_orders(tmp_path, monke
 
     assert report["summary"]["source_order_count"] == 5
     assert report["summary"]["selected_order_count"] == 2
+    assert report["summary"]["source_decision_counts"] == {"defer_evidence": 5}
+    assert report["summary"]["selected_decision_counts"] == {"defer_evidence": 2}
+    assert report["summary"]["selected_route_counts"] == {"defer_evidence": 2}
+    assert report["summary"]["selected_implement_now_route_count"] == 0
+    assert report["summary"]["selected_unimplemented_runtime_effect_false_count"] == 2
+    assert report["summary"]["selected_unimplemented_route_counts"] == {"defer_evidence": 2}
     assert report["deferred_or_rejected_count"] == 3
 
 
