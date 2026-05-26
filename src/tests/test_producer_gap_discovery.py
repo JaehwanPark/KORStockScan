@@ -4,6 +4,11 @@ from pathlib import Path
 from src.engine.automation import producer_gap_discovery as mod
 
 
+def test_project_root_resolves_repo_root_after_package_move():
+    assert mod.PROJECT_ROOT.name == "KORStockScan"
+    assert mod.POST_SELL_DIR == mod.PROJECT_ROOT / "data" / "post_sell"
+
+
 def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")

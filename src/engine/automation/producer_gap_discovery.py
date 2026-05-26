@@ -16,7 +16,7 @@ from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.utils.constants import TRADING_RULES
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 REPORT_TYPE = "producer_gap_discovery"
 REPORT_SCHEMA_VERSION = 1
 DISCOVERY_VERSION = "producer_gap_discovery_v1"
