@@ -42,6 +42,7 @@ TRAILING_ARM_MFE_PCT = 4.0
 TRAILING_GIVEBACK_PCT = -2.0
 SCALE_IN_DRAWDOWN_PCT = -3.0
 SCALE_IN_ADD_RATIO = 0.5
+NOT_ENTERED_OR_PENDING_BUCKET = "not_entered_or_pending"
 
 
 @dataclass
@@ -107,6 +108,147 @@ def _pct(value: float, base: float) -> float:
 
 def _price_at_pct(base: float, pct: float) -> float:
     return base * (1.0 + pct / 100.0)
+
+
+def _entry_price_delta_bucket(delta_pct: float | None) -> str:
+    if delta_pct is None or not math.isfinite(delta_pct):
+        return "unknown"
+    if delta_pct <= -3.0:
+        return "discount_ge_3pct"
+    if delta_pct <= -1.0:
+        return "discount_1_3pct"
+    if delta_pct < 1.0:
+        return "near_reference"
+    if delta_pct < 3.0:
+        return "premium_1_3pct"
+    return "premium_ge_3pct"
+
+
+def _entry_day_gap_bucket(gap_pct: float | None) -> str:
+    if gap_pct is None or not math.isfinite(gap_pct):
+        return "unknown"
+    if gap_pct <= -3.0:
+        return "gap_down_ge_3pct"
+    if gap_pct <= -1.0:
+        return "gap_down_1_3pct"
+    if gap_pct < 1.0:
+        return "flat_gap"
+    if gap_pct < 3.0:
+        return "gap_up_1_3pct"
+    return "gap_up_ge_3pct"
+
+
+def _entry_day_low_from_entry_bucket(low_pct: float | None) -> str:
+    if low_pct is None or not math.isfinite(low_pct):
+        return "unknown"
+    if low_pct >= 0.0:
+        return "no_intraday_drawdown"
+    if low_pct > -1.0:
+        return "drawdown_0_1pct"
+    if low_pct > MAE_STOP_PCT:
+        return "drawdown_1_3pct"
+    if low_pct > -5.0:
+        return "stop_zone_3_5pct"
+    return "deep_drawdown_ge_5pct"
+
+
+def _entry_day_close_from_entry_bucket(close_pct: float | None) -> str:
+    if close_pct is None or not math.isfinite(close_pct):
+        return "unknown"
+    if close_pct <= MAE_STOP_PCT:
+        return "close_below_stop"
+    if close_pct < -1.0:
+        return "close_loss_1_3pct"
+    if close_pct < 1.0:
+        return "close_near_entry"
+    if close_pct < 3.0:
+        return "close_gain_1_3pct"
+    return "close_gain_ge_3pct"
+
+
+def _entry_position_opportunity_bucket(
+    entry_delta_pct: float | None,
+    gap_pct: float | None,
+    low_from_entry_pct: float,
+    close_from_entry_pct: float,
+    stop_touch_outcome: str,
+) -> str:
+    if entry_delta_pct is None or gap_pct is None:
+        return "source_quality_unknown_observation"
+    if stop_touch_outcome == "wick_stop_recovered_close_above_stop":
+        return "pullback_retest_observation"
+    if stop_touch_outcome == "close_below_stop":
+        return "invalidation_observation"
+    if low_from_entry_pct <= -1.0 and close_from_entry_pct >= 0.0:
+        return "below_entry_recovery_observation"
+    if gap_pct >= 1.0 and close_from_entry_pct >= 1.0:
+        return "momentum_chase_observation"
+    if entry_delta_pct >= 1.0 and close_from_entry_pct >= 0.0:
+        return "premium_entry_continuation_observation"
+    if entry_delta_pct <= -1.0 and close_from_entry_pct >= -1.0:
+        return "discount_entry_observation"
+    return "neutral_location_observation"
+
+
+def _entry_day_observation_features(
+    entry: EntryResult,
+    reference_price: float,
+    quotes_from_entry: list[Quote],
+) -> dict[str, Any]:
+    """Build source-only entry-day observation buckets without changing exits."""
+    if entry.status != "entered" or not entry.entry_price or not quotes_from_entry:
+        return {
+            "entry_price_delta_bucket": NOT_ENTERED_OR_PENDING_BUCKET,
+            "entry_day_gap_bucket": NOT_ENTERED_OR_PENDING_BUCKET,
+            "entry_day_low_from_entry_bucket": NOT_ENTERED_OR_PENDING_BUCKET,
+            "entry_day_close_from_entry_bucket": NOT_ENTERED_OR_PENDING_BUCKET,
+            "stop_touch_outcome_bucket": NOT_ENTERED_OR_PENDING_BUCKET,
+            "entry_position_opportunity_bucket": NOT_ENTERED_OR_PENDING_BUCKET,
+            "entry_day_observation_role": "source_only_no_hard_gate",
+            "entry_day_observation_stop_pct": MAE_STOP_PCT,
+            "entry_day_observation_runtime_effect": False,
+            "entry_day_observation_allowed_runtime_apply": False,
+            "entry_position_objective": "observe_entry_location_for_better_price_or_momentum_entry",
+        }
+
+    entry_price = float(entry.entry_price)
+    entry_day = quotes_from_entry[0]
+    entry_delta_pct = round(_pct(entry_price, reference_price), 6) if reference_price > 0 else None
+    gap_pct = round(_pct(entry_day.open_price, reference_price), 6) if reference_price > 0 else None
+    low_from_entry_pct = round(_pct(entry_day.low_price, entry_price), 6)
+    close_from_entry_pct = round(_pct(entry_day.close_price, entry_price), 6)
+    stop_price = _price_at_pct(entry_price, MAE_STOP_PCT)
+    if entry_day.low_price > stop_price:
+        stop_touch_outcome = "no_touch"
+    elif entry_day.close_price <= stop_price:
+        stop_touch_outcome = "close_below_stop"
+    else:
+        stop_touch_outcome = "wick_stop_recovered_close_above_stop"
+    opportunity_bucket = _entry_position_opportunity_bucket(
+        entry_delta_pct,
+        gap_pct,
+        low_from_entry_pct,
+        close_from_entry_pct,
+        stop_touch_outcome,
+    )
+    return {
+        "entry_day_observation_role": "source_only_no_hard_gate",
+        "entry_day_observation_stop_pct": MAE_STOP_PCT,
+        "entry_day_observation_runtime_effect": False,
+        "entry_day_observation_allowed_runtime_apply": False,
+        "entry_position_objective": "observe_entry_location_for_better_price_or_momentum_entry",
+        "entry_day_observation_stop_price": round(stop_price, 6),
+        "entry_price_delta_pct": entry_delta_pct,
+        "entry_day_gap_pct": gap_pct,
+        "entry_day_low_from_entry_pct": low_from_entry_pct,
+        "entry_day_close_from_entry_pct": close_from_entry_pct,
+        "entry_price_delta_bucket": _entry_price_delta_bucket(entry_delta_pct),
+        "entry_day_gap_bucket": _entry_day_gap_bucket(gap_pct),
+        "entry_day_low_from_entry_bucket": _entry_day_low_from_entry_bucket(low_from_entry_pct),
+        "entry_day_close_from_entry_bucket": _entry_day_close_from_entry_bucket(close_from_entry_pct),
+        "stop_touch_outcome_bucket": stop_touch_outcome,
+        "entry_position_opportunity_bucket": opportunity_bucket,
+    }
 
 
 def _json_loads(value: Any) -> dict[str, Any]:
@@ -320,19 +462,35 @@ def simulate_policy_exit(exit_policy: str, entry: EntryResult, quotes_from_entry
     return ExitResult("expired", exit_reason=f"unknown_exit_policy:{exit_policy}")
 
 
-def build_horizon_label(horizon: str, entry: EntryResult, quotes_from_entry: list[Quote]) -> dict[str, Any]:
+def build_horizon_label(
+    horizon: str,
+    entry: EntryResult,
+    quotes_from_entry: list[Quote],
+    entry_day_observation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     days = LABEL_HORIZONS[horizon]
+    observation = entry_day_observation or {}
     if entry.status != "entered" or not entry.entry_price:
         return {
             "label_horizon": horizon,
             "label_status": "expired_entry_no_trigger" if entry.status == "expired" else "pending_future_quotes",
-            "label_features": {"fill_status": entry.status, "final_return_basis": "horizon_close", "entry_reason": entry.reason},
+            "label_features": {
+                "fill_status": entry.status,
+                "final_return_basis": "horizon_close",
+                "entry_reason": entry.reason,
+                **observation,
+            },
         }
     if len(quotes_from_entry) < days:
         return {
             "label_horizon": horizon,
             "label_status": "pending_future_quotes",
-            "label_features": {"fill_status": "entered", "final_return_basis": "horizon_close", "required_days": days},
+            "label_features": {
+                "fill_status": "entered",
+                "final_return_basis": "horizon_close",
+                "required_days": days,
+                **observation,
+            },
         }
     window = quotes_from_entry[:days]
     mfe, mae = _window_mfe_mae(window, entry.entry_price)
@@ -350,15 +508,22 @@ def build_horizon_label(horizon: str, entry: EntryResult, quotes_from_entry: lis
             "entry_date": entry.entry_date.isoformat() if entry.entry_date else None,
             "entry_price": entry.entry_price,
             "horizon_days": days,
+            **observation,
         },
     }
 
 
-def build_policy_exit_label(entry: EntryResult, exit_result: ExitResult, quotes_from_entry: list[Quote]) -> dict[str, Any]:
+def build_policy_exit_label(
+    entry: EntryResult,
+    exit_result: ExitResult,
+    quotes_from_entry: list[Quote],
+    entry_day_observation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     mfe, mae = _window_mfe_mae(quotes_from_entry[: max(1, int(exit_result.holding_days or 10))], entry.entry_price or 0.0)
     status = "labeled" if exit_result.status == "exited" else (
         "expired_entry_no_trigger" if entry.status == "expired" else "pending_future_quotes"
     )
+    observation = entry_day_observation or {}
     return {
         "label_horizon": "policy_exit",
         "label_status": status,
@@ -378,6 +543,7 @@ def build_policy_exit_label(entry: EntryResult, exit_result: ExitResult, quotes_
             "exit_price": exit_result.exit_price,
             "exit_reason": exit_result.exit_reason,
             "holding_days": exit_result.holding_days,
+            **observation,
         },
     }
 
@@ -446,8 +612,9 @@ def process_arm(session: Any, arm: SwingStrategyDiscoveryArm) -> dict[str, Any]:
     quotes_from_entry = _quotes_from_entry(entry, future_quotes)
     exit_result = simulate_policy_exit(arm.exit_policy, entry, quotes_from_entry)
     maturity_status = _label_maturity_status(entry, exit_result)
-    labels = [build_horizon_label(horizon, entry, quotes_from_entry) for horizon in LABEL_HORIZONS]
-    labels.append(build_policy_exit_label(entry, exit_result, quotes_from_entry))
+    entry_day_observation = _entry_day_observation_features(entry, reference_price, quotes_from_entry)
+    labels = [build_horizon_label(horizon, entry, quotes_from_entry, entry_day_observation) for horizon in LABEL_HORIZONS]
+    labels.append(build_policy_exit_label(entry, exit_result, quotes_from_entry, entry_day_observation))
     for label in labels:
         _upsert_label(session, arm, label)
 
@@ -472,6 +639,7 @@ def process_arm(session: Any, arm: SwingStrategyDiscoveryArm) -> dict[str, Any]:
             "policy_exit_status": exit_result.status,
             "policy_exit_reason": exit_result.exit_reason,
             "label_maturity_status": maturity_status,
+            **entry_day_observation,
             "future_quote_count": len(future_quotes),
             "quotes_from_entry_count": len(quotes_from_entry),
             "latest_future_quote_date": (

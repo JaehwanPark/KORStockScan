@@ -13,7 +13,15 @@ from src.engine import swing_strategy_discovery_ev_report as mod
 from src.engine.swing_strategy_discovery_schema import ensure_swing_strategy_discovery_schema
 
 
-def _seed_labeled_arm(session, idx: int, *, ret: float, selection_arm="lifecycle_rank"):
+def _seed_labeled_arm(
+    session,
+    idx: int,
+    *,
+    ret: float,
+    selection_arm="lifecycle_rank",
+    stop_touch_outcome_bucket="no_touch",
+    entry_position_opportunity_bucket="neutral_location_observation",
+):
     candidate = SwingStrategyDiscoveryCandidate(
         source_date=date(2026, 5, 1),
         stock_code=f"{idx:06d}",
@@ -72,6 +80,12 @@ def _seed_labeled_arm(session, idx: int, *, ret: float, selection_arm="lifecycle
                     "entry_reason": "next_open",
                     "exit_reason": "fixed_5d_close",
                     "final_return_basis": "arm_policy_exit",
+                    "entry_price_delta_bucket": "near_reference",
+                    "entry_day_gap_bucket": "flat_gap",
+                    "entry_day_low_from_entry_bucket": "drawdown_1_3pct",
+                    "entry_day_close_from_entry_bucket": "close_near_entry",
+                    "stop_touch_outcome_bucket": stop_touch_outcome_bucket,
+                    "entry_position_opportunity_bucket": entry_position_opportunity_bucket,
                 }
             ),
         )
@@ -82,6 +96,12 @@ def _seed_labeled_arm(session, idx: int, *, ret: float, selection_arm="lifecycle
             "source_quality_status": "ok",
             "future_quote_count": 12,
             "quotes_from_entry_count": 12,
+            "entry_price_delta_bucket": "near_reference",
+            "entry_day_gap_bucket": "flat_gap",
+            "entry_day_low_from_entry_bucket": "drawdown_1_3pct",
+            "entry_day_close_from_entry_bucket": "close_near_entry",
+            "stop_touch_outcome_bucket": stop_touch_outcome_bucket,
+            "entry_position_opportunity_bucket": entry_position_opportunity_bucket,
         }
     )
 
@@ -110,3 +130,54 @@ def test_ev_report_aggregates_surviving_arms_and_contract(tmp_path):
     assert report["source_quality_summary"]["implementation_status"] == "implemented"
     assert report["source_quality_summary"]["maturity_status_counts"]["matured_labeled"] == 7
     assert report["source_quality_summary"]["runtime_effect"] is False
+
+
+def test_ev_report_adds_source_only_morning_turbulence_analysis(tmp_path):
+    db_url = f"sqlite:///{tmp_path / 'ev_morning.db'}"
+    ensure_swing_strategy_discovery_schema(db_url)
+    engine = create_engine(db_url)
+    Session = sessionmaker(bind=engine)
+    with Session.begin() as session:
+        for idx, ret in enumerate([1.0, 0.5, -0.2, 1.2, 0.8], start=1):
+            _seed_labeled_arm(
+                session,
+                idx,
+                ret=ret,
+                stop_touch_outcome_bucket="wick_stop_recovered_close_above_stop",
+                entry_position_opportunity_bucket="pullback_retest_observation",
+            )
+        _seed_labeled_arm(
+            session,
+            10,
+            ret=-3.2,
+            stop_touch_outcome_bucket="close_below_stop",
+            entry_position_opportunity_bucket="invalidation_observation",
+        )
+
+    report = mod.build_swing_strategy_discovery_ev_report("2026-05-20", db_url=db_url, lookback_days=30)
+    analysis = report["morning_turbulence_analysis"]
+    contract = analysis["metric_contract"]
+    stop_rows = {
+        item["stop_touch_outcome_bucket"]: item
+        for item in analysis["axes"]["stop_touch_outcome_bucket"]
+    }
+    opportunity_rows = {
+        item["entry_position_opportunity_bucket"]: item
+        for item in analysis["axes"]["entry_position_opportunity_bucket"]
+    }
+
+    assert report["runtime_effect"] is False
+    assert report["allowed_runtime_apply"] is False
+    assert report["broker_order_forbidden"] is True
+    assert report["morning_turbulence_metric_contract"]["allowed_runtime_apply"] is False
+    assert contract["metric_role"] == "sim_probe_ev"
+    assert contract["sample_floor_behavior"] == "hold_sample"
+    assert "time_hard_gate" in contract["forbidden_uses"]
+    assert "real_canary_approval_standalone" in contract["forbidden_uses"]
+    assert "volatile_symbol_exclusion" in contract["forbidden_uses"]
+    assert analysis["runtime_effect"] is False
+    assert analysis["allowed_runtime_apply"] is False
+    assert stop_rows["wick_stop_recovered_close_above_stop"]["sample_count"] == 5
+    assert stop_rows["close_below_stop"]["sample_count"] == 1
+    assert opportunity_rows["pullback_retest_observation"]["sample_count"] == 5
+    assert opportunity_rows["invalidation_observation"]["sample_count"] == 1

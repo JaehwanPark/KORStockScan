@@ -137,8 +137,136 @@ def test_pullback_entry_expires_when_limit_not_touched(tmp_path):
     with Session() as session:
         arm = session.query(SwingStrategyDiscoveryArm).first()
         statuses = {label.label_status for label in session.query(SwingStrategyDiscoveryLabel).all()}
+        features = json.loads(session.query(SwingStrategyDiscoveryLabel).first().label_features)
     assert arm.status == "EXPIRED"
     assert statuses == {"expired_entry_no_trigger"}
+    assert features["stop_touch_outcome_bucket"] == "not_entered_or_pending"
+
+
+def test_entry_day_stop_touch_recovered_bucket_is_recorded(tmp_path):
+    db_url = f"sqlite:///{tmp_path / 'labels_recovered.db'}"
+    ensure_swing_strategy_discovery_schema(db_url)
+    engine = create_engine(db_url)
+    Base.metadata.create_all(bind=engine, tables=[DailyStockQuote.__table__])
+    Session = sessionmaker(bind=engine)
+    with Session.begin() as session:
+        _seed_arm(session, entry_policy="next_open_entry", exit_policy="fixed_5d")
+        quotes = [
+            (1000, 1040, 960, 990),
+            (990, 1020, 980, 1010),
+            (1010, 1030, 1000, 1020),
+            (1020, 1040, 1010, 1030),
+            (1030, 1050, 1020, 1040),
+        ]
+        for idx, (open_price, high_price, low_price, close_price) in enumerate(quotes):
+            session.add(
+                DailyStockQuote(
+                    quote_date=date(2026, 5, 2) + timedelta(days=idx),
+                    stock_code="000001",
+                    stock_name="테스트",
+                    open_price=open_price,
+                    high_price=high_price,
+                    low_price=low_price,
+                    close_price=close_price,
+                    volume=1000,
+                )
+            )
+
+    mod.build_swing_strategy_discovery_labels("2026-05-20", db_url=db_url, refresh_matured=True)
+
+    with Session() as session:
+        arm = session.query(SwingStrategyDiscoveryArm).first()
+        policy_label = session.query(SwingStrategyDiscoveryLabel).filter_by(label_horizon="policy_exit").first()
+    arm_features = json.loads(arm.arm_features)
+    label_features = json.loads(policy_label.label_features)
+    assert arm_features["stop_touch_outcome_bucket"] == "wick_stop_recovered_close_above_stop"
+    assert label_features["stop_touch_outcome_bucket"] == "wick_stop_recovered_close_above_stop"
+    assert label_features["entry_day_low_from_entry_bucket"] == "stop_zone_3_5pct"
+    assert label_features["entry_day_observation_role"] == "source_only_no_hard_gate"
+    assert label_features["entry_day_observation_runtime_effect"] is False
+    assert label_features["entry_day_observation_allowed_runtime_apply"] is False
+    assert label_features["entry_position_objective"] == "observe_entry_location_for_better_price_or_momentum_entry"
+    assert label_features["entry_position_opportunity_bucket"] == "pullback_retest_observation"
+    assert arm_features["allowed_runtime_apply"] is False
+    assert arm_features["runtime_effect"] is False
+
+
+def test_entry_day_stop_touch_close_below_stop_bucket_is_recorded(tmp_path):
+    db_url = f"sqlite:///{tmp_path / 'labels_close_below.db'}"
+    ensure_swing_strategy_discovery_schema(db_url)
+    engine = create_engine(db_url)
+    Base.metadata.create_all(bind=engine, tables=[DailyStockQuote.__table__])
+    Session = sessionmaker(bind=engine)
+    with Session.begin() as session:
+        _seed_arm(session, entry_policy="next_open_entry", exit_policy="fixed_5d")
+        quotes = [
+            (1000, 1010, 960, 965),
+            (965, 980, 950, 970),
+            (970, 990, 960, 980),
+            (980, 1000, 970, 990),
+            (990, 1010, 980, 1000),
+        ]
+        for idx, (open_price, high_price, low_price, close_price) in enumerate(quotes):
+            session.add(
+                DailyStockQuote(
+                    quote_date=date(2026, 5, 2) + timedelta(days=idx),
+                    stock_code="000001",
+                    stock_name="테스트",
+                    open_price=open_price,
+                    high_price=high_price,
+                    low_price=low_price,
+                    close_price=close_price,
+                    volume=1000,
+                )
+            )
+
+    mod.build_swing_strategy_discovery_labels("2026-05-20", db_url=db_url, refresh_matured=True)
+
+    with Session() as session:
+        policy_label = session.query(SwingStrategyDiscoveryLabel).filter_by(label_horizon="policy_exit").first()
+    features = json.loads(policy_label.label_features)
+    assert features["stop_touch_outcome_bucket"] == "close_below_stop"
+    assert features["entry_day_close_from_entry_bucket"] == "close_below_stop"
+    assert features["entry_position_opportunity_bucket"] == "invalidation_observation"
+
+
+def test_entry_day_momentum_chase_opportunity_bucket_is_source_only(tmp_path):
+    db_url = f"sqlite:///{tmp_path / 'labels_momentum_chase.db'}"
+    ensure_swing_strategy_discovery_schema(db_url)
+    engine = create_engine(db_url)
+    Base.metadata.create_all(bind=engine, tables=[DailyStockQuote.__table__])
+    Session = sessionmaker(bind=engine)
+    with Session.begin() as session:
+        _seed_arm(session, entry_policy="next_open_entry", exit_policy="fixed_5d")
+        quotes = [
+            (1020, 1050, 1010, 1040),
+            (1040, 1060, 1030, 1050),
+            (1050, 1070, 1040, 1060),
+            (1060, 1080, 1050, 1070),
+            (1070, 1090, 1060, 1080),
+        ]
+        for idx, (open_price, high_price, low_price, close_price) in enumerate(quotes):
+            session.add(
+                DailyStockQuote(
+                    quote_date=date(2026, 5, 2) + timedelta(days=idx),
+                    stock_code="000001",
+                    stock_name="테스트",
+                    open_price=open_price,
+                    high_price=high_price,
+                    low_price=low_price,
+                    close_price=close_price,
+                    volume=1000,
+                )
+            )
+
+    mod.build_swing_strategy_discovery_labels("2026-05-20", db_url=db_url, refresh_matured=True)
+
+    with Session() as session:
+        policy_label = session.query(SwingStrategyDiscoveryLabel).filter_by(label_horizon="policy_exit").first()
+    features = json.loads(policy_label.label_features)
+    assert features["stop_touch_outcome_bucket"] == "no_touch"
+    assert features["entry_position_opportunity_bucket"] == "momentum_chase_observation"
+    assert features["entry_day_observation_allowed_runtime_apply"] is False
 
 
 def test_bottom_rebound_entry_policies_are_anticipatory_without_breakout_confirmation():

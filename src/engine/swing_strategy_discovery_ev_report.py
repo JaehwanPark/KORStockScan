@@ -28,6 +28,36 @@ DISCOVERY_SIM_REPORT_DIR = Path(DATA_DIR) / "report" / "swing_strategy_discovery
 DECISION_AUTHORITY = "swing_sim_exploration_only"
 SAMPLE_FLOOR = 5
 IMPLEMENTATION_ORDER_ID = "order_swing_strategy_discovery_source_quality_followup"
+MORNING_TURBULENCE_AXES = [
+    "entry_price_delta_bucket",
+    "entry_day_gap_bucket",
+    "entry_day_low_from_entry_bucket",
+    "entry_day_close_from_entry_bucket",
+    "stop_touch_outcome_bucket",
+    "entry_position_opportunity_bucket",
+]
+MORNING_TURBULENCE_METRIC_CONTRACT = {
+    "metric_role": "sim_probe_ev",
+    "decision_authority": DECISION_AUTHORITY,
+    "window_policy": "rolling_90d",
+    "sample_floor": SAMPLE_FLOOR,
+    "sample_floor_behavior": "hold_sample",
+    "primary_decision_metric": "source_quality_adjusted_ev_pct",
+    "source_quality_gate": "label_status_labeled_and_source_quality_status_ok",
+    "runtime_effect": False,
+    "allowed_runtime_apply": False,
+    "actual_order_submitted": False,
+    "broker_order_forbidden": True,
+    "forbidden_uses": [
+        "time_hard_gate",
+        "broker_order_submit",
+        "runtime_threshold_apply",
+        "stop_relaxation_or_tightening",
+        "swing_dry_run_guard_change",
+        "real_canary_approval_standalone",
+        "volatile_symbol_exclusion",
+    ],
+}
 
 
 def _date_text(value: str | date | datetime | None) -> str:
@@ -130,6 +160,9 @@ def _row_from_models(
     source_family_bucket = str(candidate_features.get("source_family_bucket") or "")
     if not source_family_bucket:
         source_family_bucket = "bottom_rebound" if bottom.get("present") or str(arm.entry_policy or "").startswith("bottom_rebound_") else "safe_pool"
+    def _feature_value(name: str) -> Any:
+        return (features or {}).get(name) or (arm_features or {}).get(name) or "unknown"
+
     return {
         "candidate_id": candidate.id,
         "arm_row_id": arm.id,
@@ -162,6 +195,12 @@ def _row_from_models(
         "quotes_from_entry_count": int((arm_features or {}).get("quotes_from_entry_count") or 0),
         "latest_future_quote_date": (arm_features or {}).get("latest_future_quote_date"),
         "final_return_basis": (features or {}).get("final_return_basis"),
+        "entry_price_delta_bucket": _feature_value("entry_price_delta_bucket"),
+        "entry_day_gap_bucket": _feature_value("entry_day_gap_bucket"),
+        "entry_day_low_from_entry_bucket": _feature_value("entry_day_low_from_entry_bucket"),
+        "entry_day_close_from_entry_bucket": _feature_value("entry_day_close_from_entry_bucket"),
+        "stop_touch_outcome_bucket": _feature_value("stop_touch_outcome_bucket"),
+        "entry_position_opportunity_bucket": _feature_value("entry_position_opportunity_bucket"),
     }
 
 
@@ -247,6 +286,18 @@ def _aggregate_all(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]
         "theme_tags",
     ]
     return {axis: _aggregate(rows, axis) for axis in axes}
+
+
+def _morning_turbulence_analysis(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "analysis_role": "source_only_observation",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "metric_contract": MORNING_TURBULENCE_METRIC_CONTRACT,
+        "axes": {axis: _aggregate(rows, axis) for axis in MORNING_TURBULENCE_AXES},
+    }
 
 
 def _surviving_arms(aggregates: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
@@ -374,6 +425,7 @@ def build_swing_strategy_discovery_ev_report(
     date_key = _date_text(target_date)
     rows, arm_status_counts = _load_rows(date_key, db_url=db_url, lookback_days=lookback_days)
     aggregates = _aggregate_all(rows)
+    morning_turbulence = _morning_turbulence_analysis(rows)
     surviving = _surviving_arms(aggregates)
     avoid = _avoid_buckets(aggregates)
     label_status_counts: dict[str, int] = defaultdict(int)
@@ -427,6 +479,7 @@ def build_swing_strategy_discovery_ev_report(
         "broker_order_forbidden": True,
         "allowed_runtime_apply": False,
         "sample_floor": SAMPLE_FLOOR,
+        "morning_turbulence_metric_contract": MORNING_TURBULENCE_METRIC_CONTRACT,
         "primary_metrics": [
             "equal_weight_avg_final_return_pct",
             "notional_weighted_ev_pct",
@@ -435,6 +488,7 @@ def build_swing_strategy_discovery_ev_report(
         "summary": summary,
         "source_quality_summary": source_quality_summary,
         "aggregates": aggregates,
+        "morning_turbulence_analysis": morning_turbulence,
         "surviving_arms": surviving,
         "legacy_vs_discovery": _legacy_vs_discovery(aggregates),
         "avoid_buckets": avoid,
@@ -447,6 +501,11 @@ def build_swing_strategy_discovery_ev_report(
 def render_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
     legacy = report.get("legacy_vs_discovery") if isinstance(report.get("legacy_vs_discovery"), dict) else {}
+    morning = report.get("morning_turbulence_analysis") if isinstance(report.get("morning_turbulence_analysis"), dict) else {}
+    morning_axes = morning.get("axes") if isinstance(morning.get("axes"), dict) else {}
+    stop_touch_rows = morning_axes.get("stop_touch_outcome_bucket") or []
+    opportunity_rows = morning_axes.get("entry_position_opportunity_bucket") or []
+    morning_contract = morning.get("metric_contract") if isinstance(morning.get("metric_contract"), dict) else {}
     lines = [
         f"# Swing Strategy Discovery EV - {report.get('date')}",
         "",
@@ -481,6 +540,37 @@ def render_markdown(report: dict[str, Any]) -> str:
             "",
             f"- legacy_ml: `{legacy.get('legacy_ml') or {}}`",
             f"- discovery_combined: `{legacy.get('discovery_combined') or {}}`",
+            "",
+            "## Morning Turbulence Observation",
+            "",
+            f"- analysis_role: `{morning.get('analysis_role') or 'source_only_observation'}`",
+            f"- metric_contract: `{morning_contract}`",
+            "",
+            "| stop_touch_outcome_bucket | sample | source_quality_ev | downside_p10 | win_rate |",
+            "| --- | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for item in stop_touch_rows[:10]:
+        lines.append(
+            f"| `{item.get('stop_touch_outcome_bucket')}` | `{item.get('sample_count')}` | `{item.get('source_quality_adjusted_ev_pct')}` | `{item.get('downside_p10_pct')}` | `{item.get('diagnostic_win_rate')}` |"
+        )
+    if not stop_touch_rows:
+        lines.append("| - | 0 | - | - | - |")
+    lines.extend(
+        [
+            "",
+            "| entry_position_opportunity_bucket | sample | source_quality_ev | downside_p10 | win_rate |",
+            "| --- | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for item in opportunity_rows[:10]:
+        lines.append(
+            f"| `{item.get('entry_position_opportunity_bucket')}` | `{item.get('sample_count')}` | `{item.get('source_quality_adjusted_ev_pct')}` | `{item.get('downside_p10_pct')}` | `{item.get('diagnostic_win_rate')}` |"
+        )
+    if not opportunity_rows:
+        lines.append("| - | 0 | - | - | - |")
+    lines.extend(
+        [
             "",
             "## Avoid Buckets",
             "",
