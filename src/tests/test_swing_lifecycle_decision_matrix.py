@@ -89,6 +89,49 @@ def test_probe_and_discovery_rows_build_swing_ldm_contract(tmp_path, monkeypatch
     assert all(row["source_book"] != "swing_daily_simulation" for row in report["lifecycle_rows"])
 
 
+def test_pipeline_event_probe_fields_are_consumed(tmp_path, monkeypatch):
+    target = "2026-05-22"
+    event_dir = tmp_path / "pipeline_events"
+    event_dir.mkdir()
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", event_dir)
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "report" / "swing_lifecycle_decision_matrix")
+
+    with (event_dir / f"pipeline_events_{target}.jsonl").open("w", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "event_type": "pipeline_event",
+                    "stage": "swing_probe_sell_order_assumed_filled",
+                    "stock_code": "005930",
+                    "record_id": None,
+                    "fields": {
+                        "simulation_book": "swing_intraday_live_equiv_probe",
+                        "swing_intraday_probe": "True",
+                        "actual_order_submitted": "False",
+                        "broker_order_forbidden": "True",
+                        "record_id": "field-record-10",
+                        "probe_origin_stage": "blocked_gatekeeper_reject",
+                        "position_tag": "probe",
+                        "strategy": "probe_v1",
+                        "profit_rate": "2.4",
+                        "exit_rule": "time_stop",
+                    },
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
+    monkeypatch.setattr(mod, "_load_discovery_lifecycle_rows", lambda target_date, db_url, lookback_days: ([], {}))
+
+    report = mod.build_swing_lifecycle_decision_matrix(target, db_url="sqlite://")
+
+    assert report["summary"]["probe_rows"] == 1
+    assert report["summary"]["source_book_counts"]["swing_intraday_live_equiv_probe"] == 1
+    assert "swing_intraday_live_equiv_probe_missing" not in report["warnings"]
+    assert report["lifecycle_rows"][0]["source_stage"] == "swing_probe_sell_order_assumed_filled"
+    assert report["lifecycle_rows"][0]["row_id"] == "field-record-10"
+
+
 def test_swing_ldm_sim_auto_candidates_remain_sim_only(tmp_path, monkeypatch):
     target = "2026-05-22"
     event_dir = tmp_path / "pipeline_events"

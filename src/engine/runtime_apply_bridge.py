@@ -12,13 +12,12 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from src.engine.auto_promotion_contracts import tier2_validation_passed
+from src.engine.auto_promotion_contracts import primary_ev_uplift_passes, tier2_validation_passed
 from src.utils.constants import DATA_DIR
 from src.engine.lifecycle_bucket_discovery import (
     ENTRY_LIVE_AUTO_FAMILY,
     ENTRY_LIVE_AUTO_BUCKET_KEY,
     EVIDENCE_GRADE_2_COUNTERFACTUAL,
-    WAIT6579_LIVE_EXCEPTION_ARCHIVED_REASON,
     SCALE_IN_LIVE_AUTO_FAMILY,
     discovery_report_path,
 )
@@ -32,7 +31,7 @@ ENTRY_BRIDGE_FAMILY = ENTRY_LIVE_AUTO_FAMILY
 SCALE_IN_BRIDGE_FAMILY = SCALE_IN_LIVE_AUTO_FAMILY
 
 ENTRY_TARGET_BUCKET_KEY = ENTRY_LIVE_AUTO_BUCKET_KEY
-ARCHIVED_RUNTIME_APPLY_BRIDGE_FAMILIES = {ENTRY_BRIDGE_FAMILY}
+ARCHIVED_RUNTIME_APPLY_BRIDGE_FAMILIES: set[str] = set()
 
 
 def runtime_apply_bridge_report_path(target_date: str) -> Path:
@@ -132,6 +131,14 @@ def _state_for_bucket(
         return "blocked_source_quality", {"confirmation_count": 0, "conflict_count": 0}
     if (not positive_edge) and current_ev >= 0:
         return "blocked_source_quality", {"confirmation_count": 0, "conflict_count": 0}
+    if not primary_ev_uplift_passes(current_ev, positive_edge=positive_edge):
+        return "hold_no_edge", {
+            "confirmation_count": 0,
+            "conflict_count": 0,
+            "primary_ev_uplift_floor_passed": False,
+            "primary_ev_uplift_threshold_pct": 1.0,
+            "runtime_bridge_exclusion_reason": "primary_ev_uplift_below_live_floor",
+        }
 
     confirmations = 0
     conflicts = 0
@@ -142,7 +149,7 @@ def _state_for_bucket(
         ev = _safe_float(bucket.get("source_quality_adjusted_ev_pct"), None)
         if ev is None:
             continue
-        if (positive_edge and ev > 0) or ((not positive_edge) and ev < 0):
+        if primary_ev_uplift_passes(ev, positive_edge=positive_edge):
             confirmations += 1
         else:
             conflicts += 1
@@ -161,12 +168,7 @@ def _discovery_live_families(discovery: dict[str, Any]) -> set[str]:
             if isinstance(discovery.get("live_auto_apply_candidates"), list)
             else []
         )
-        if (
-            isinstance(item, dict)
-            and item.get("live_auto_apply_family")
-            and str(item.get("live_auto_apply_family")) not in ARCHIVED_RUNTIME_APPLY_BRIDGE_FAMILIES
-            and _discovery_candidate_tier2_passed(item)
-        )
+        if _discovery_live_candidate_contract_passed(item)
     }
 
 
@@ -180,6 +182,23 @@ def _discovery_candidate_tier2_passed(item: dict[str, Any]) -> bool:
     return tier2_validation_passed(status)
 
 
+def _discovery_live_candidate_contract_passed(item: Any) -> bool:
+    if not isinstance(item, dict):
+        return False
+    family = str(item.get("live_auto_apply_family") or "")
+    if not family or family in ARCHIVED_RUNTIME_APPLY_BRIDGE_FAMILIES:
+        return False
+    if str(item.get("classification_state") or "") != "live_auto_apply_ready":
+        return False
+    if item.get("allowed_runtime_apply") is False:
+        return False
+    if item.get("broker_order_forbidden") is True:
+        return False
+    if str(item.get("source_quality_gate") or "pass") != "pass":
+        return False
+    return _discovery_candidate_tier2_passed(item)
+
+
 def _discovery_live_candidate_by_family(discovery: dict[str, Any]) -> dict[str, dict[str, Any]]:
     candidates = (
         discovery.get("live_auto_apply_candidates")
@@ -188,12 +207,10 @@ def _discovery_live_candidate_by_family(discovery: dict[str, Any]) -> dict[str, 
     )
     by_family: dict[str, dict[str, Any]] = {}
     for item in candidates:
-        if not isinstance(item, dict):
+        if not _discovery_live_candidate_contract_passed(item):
             continue
         family = str(item.get("live_auto_apply_family") or "")
-        if family in ARCHIVED_RUNTIME_APPLY_BRIDGE_FAMILIES:
-            continue
-        if family and _discovery_candidate_tier2_passed(item) and family not in by_family:
+        if family not in by_family:
             by_family[family] = item
     return by_family
 
@@ -274,18 +291,25 @@ def _entry_candidate(
         discovery_live_families=discovery_live_families,
         discovery_available=discovery_available,
     )
-    observed_state = state
-    state = "legacy_counterfactual_live_exception_removed"
-    rolling = {
-        **rolling,
-        "observed_bridge_state_before_archive": observed_state,
-        "archived_live_exception_reason": WAIT6579_LIVE_EXCEPTION_ARCHIVED_REASON,
-    }
     discovery_meta = _discovery_candidate_meta(
         family=ENTRY_BRIDGE_FAMILY,
         discovery=discovery,
         discovery_live_by_family=discovery_live_by_family,
     )
+    target_env_keys = []
+    if state == "live_auto_apply_ready":
+        target_env_keys = [
+            "AI_SCORE65_74_RECOVERY_PROBE_ENABLED",
+            "AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE",
+            "AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE",
+            "AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE",
+            "AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL",
+            "AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP",
+            "AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW",
+            "AI_WAIT6579_PROBE_CANARY_MAX_QTY",
+            "AI_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION",
+            "AI_SCORE65_74_RECOVERY_PROBE_CALIBRATION_STATE",
+        ]
     return {
         "candidate_id": f"{ENTRY_BRIDGE_FAMILY}:{target_date}",
         "family": ENTRY_BRIDGE_FAMILY,
@@ -294,12 +318,22 @@ def _entry_candidate(
         "bridge_candidate_state": state,
         "approval_required": False,
         "human_approval_required": False,
-        "live_auto_apply": False,
-        "allowed_runtime_apply": False,
+        "live_auto_apply": state == "live_auto_apply_ready",
+        "allowed_runtime_apply": state == "live_auto_apply_ready",
         "runtime_effect": False,
-        "runtime_effect_after_approval": "none_archived_counterfactual_live_exception",
-        "target_env_keys": [],
+        "runtime_effect_after_approval": "bounded_entry_probe_recovery_live_auto"
+        if state == "live_auto_apply_ready"
+        else "none",
+        "target_env_keys": target_env_keys,
         "recommended_values": {
+            "enabled": state == "live_auto_apply_ready",
+            "min_score": 66,
+            "max_score": 69,
+            "min_buy_pressure": 0.0,
+            "min_tick_accel": 0.0,
+            "min_micro_vwap_bp": -999.0,
+            "max_budget_krw": 50000,
+            "max_qty": 1,
             "threshold_version": f"{ENTRY_BRIDGE_FAMILY}:{target_date}",
             "calibration_state": f"runtime_apply_bridge:{state}",
         },
@@ -317,15 +351,16 @@ def _entry_candidate(
         "rolling_confirmation": rolling,
         **discovery_meta,
         "evidence_grade": EVIDENCE_GRADE_2_COUNTERFACTUAL,
-        "transition_target": "sim_lifecycle_handoff",
+        "transition_target": "bounded_live_canary" if state == "live_auto_apply_ready" else "sim_lifecycle_handoff",
         "grade_reason": "wait6579_ev_cohort_is_counterfactual_source_not_completed_lifecycle_evidence",
         "full_real_conversion_allowed": False,
-        "legacy_family_archived": True,
-        "archived_live_exception_reason": WAIT6579_LIVE_EXCEPTION_ARCHIVED_REASON,
+        "legacy_family_archived": False,
+        "archived_live_exception_reason": None,
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
-        "decision_authority": "runtime_apply_bridge_archived_counterfactual_exception",
+        "decision_authority": "lifecycle_bucket_discovery_live_auto_apply"
+        if state == "live_auto_apply_ready"
+        else "runtime_apply_bridge_source_quality",
         "forbidden_uses": [
-            "bounded_live_apply",
             "intraday_threshold_mutation",
             "broker_guard_bypass",
             "provider_route_change",

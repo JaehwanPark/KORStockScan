@@ -126,6 +126,22 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
 
 5/22 결론은 신규 `baseline-promote`, 신규 `remove`, 실주문 전환 없음이다. Nova Lite v1은 route 후보일 뿐 현재 provider route가 바뀐 것이 아니고, Nova Lite v2는 별도 source-quality/contract gap이 닫히기 전까지 shadow 시행 후보도 아니다. lifecycle bridge live-auto 후보는 자동화체인 범위의 entry/scale 후보이며 provider route, bot restart, position cap release, broker safety를 우회하지 않는다.
 
+### 2026-05-26 POSTCLOSE Snapshot Addendum
+
+이 addendum은 `threshold_cycle_ev_2026-05-26`, `runtime_approval_summary_2026-05-26`, `lifecycle_bucket_discovery_2026-05-26`, `swing_model_retrain_2026-05-26`, `threshold_cycle_postclose_verification_2026-05-26` 기준의 당일 분류 보정이다. 결론은 `no_baseline_promote_with_v2_primary_override_and_model_artifact_promotion_locked`이다.
+
+| 축 | 2026-05-26 판정 | 근거 | 다음 액션 |
+| --- | --- | --- | --- |
+| `Bedrock Nova Lite v2 entry_price/holding_flow` | operator provider override / endpoint-scoped primary | 사용자 명시 override로 `entry_price`/`holding_flow`만 Nova Lite v2 primary, OpenAI failback, Nova Lite v1 shadow comparison으로 전환됐다. 이는 provider transport/provenance 범위이며 threshold/order guard/cap 변경과 분리한다 | endpoint allowlist, failback, v1 shadow row, provider audit를 계속 확인한다. 기타 Tier2 endpoint는 OpenAI 유지 |
+| `Bedrock Nova Lite v1 shadow` | shadow observation only / v2 comparison baseline | v1은 v2 primary와 비교하는 shadow-only 역할로 바뀌었고 `actual_order_submitted=false`, `runtime_effect=false` provenance만 남긴다 | v1/v2 action drift, parse, latency, cost를 source-quality로만 누적한다. threshold/order/provider 확대 근거로 쓰지 않는다 |
+| `lifecycle_bucket_discovery` | sim-auto source owner / 신규 live-auto 없음 | 05-26 discovery는 `candidate_count=414`, `sim_auto_approved_count=184`, `live_auto_apply_ready_count=0`, `automation_handoff_gap_count=0`, AI two-pass `parsed`다 | 신규 live-auto 후보가 없으므로 다음 PREOPEN live env 예외를 만들지 않는다. sim-auto는 sim policy/source-only로만 소비한다 |
+| `code_improvement_workorder` | runtime_effect=false implementation backlog | selected order `58`, selected `implement_now=28`, selected `attach_existing_family=30`이다. 모든 selected order는 `runtime_effect=false`로 남았다 | 사용자가 Codex 구현을 지시한 경우에만 해당 workorder source/section 기준으로 구현한다. 자동 repo 수정 또는 runtime mutation 없음 |
+| `swing_model_auto_retrain` | model artifact promotion only | AI Tier2 `parsed/approved`, MLflow logged, `current.json`은 `active_live_behavior=true`, `runtime_change=model_artifact_promote_only`, `swing_live_order_dry_run_required=true`다 | active model artifact와 daily recommendations 경로만 새 artifact로 본다. dry-run 해제, real-order conversion, cap release, provider/bot 변경 금지 |
+| `bottom_rebound swing discovery` | not applicable / safe-pool-only sim path | bottom rebound source는 disabled/absent이고 verifier는 `bottom_rebound_sim_handoff.status=not_applicable`로 닫혔다. safe-pool sim candidate/arm은 persisted됐다 | bottom rebound source가 contract pass로 생성되는 날에만 persisted candidate/arm handoff를 재확인한다 |
+| `postclose DONE marker` | operations warning / strategy cohort 아님 | wrapper status는 succeeded지만 verifier는 `pass_with_pending_done_marker`다 | 다음 postclose에서 marker completion을 확인한다. 운영 경고는 EV/strategy/provider/order/bot 변경 근거가 아니다 |
+
+5/26 결론은 신규 `baseline-promote`, 신규 `remove`, 실주문 전환 없음이다. Nova Lite v2 primary는 사용자 명시 provider override지만 endpoint-scoped transport 변경이며, lifecycle/swing/model 산출물의 sim/source/model-only 권한과 섞지 않는다.
+
 ## 0.1 Runtime ON/OFF 스냅샷 (`2026-05-12` 기준)
 
 이 표는 `src/utils/constants.py` 기본값과 현재 운영문서 기준의 runtime 상태를 한곳에 잠그기 위한 스냅샷이다. env override가 있으면 장전 로드 확인에서 반드시 이 표와 비교한다.

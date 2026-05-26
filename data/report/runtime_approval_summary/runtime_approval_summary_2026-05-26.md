@@ -14,10 +14,10 @@
 - swing_lifecycle_matrix_auto: `6`
 - swing_lifecycle_bucket_auto: `6`
 - institutional_flow_available/join_rate: `True` / `100.0`
-- pattern_lab_currentness_status: `warning`
-- pattern_lab_ai_review_status: `warning`
+- pattern_lab_currentness_status: `pass`
+- pattern_lab_ai_review_status: `pass`
 - producer_gap_discovery_status: `warning`
-- pattern_lab_propagation_status: `warning`
+- pattern_lab_propagation_status: `pass`
 - env_generated_at: `2026-05-26T07:35:01`
 - first_bot_start_at: `2026-05-26T07:40:02`
 - first_bot_start_after_env_at: `2026-05-26T07:40:02`
@@ -116,9 +116,9 @@
 ## Swing Lifecycle Matrix
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_lifecycle_decision_matrix/swing_lifecycle_decision_matrix_2026-05-26.json`
 - available: `True`
-- total/probe/discovery: `1600` / `0` / `1600`
+- total/probe/discovery: `1721` / `121` / `1600`
 - sim_auto_candidate_count: `6`
-- workorder_count: `4`
+- workorder_count: `9`
 - daily_simulation_consumed: `False`
 - runtime_effect: `False`
 - warnings: `[]`
@@ -127,7 +127,7 @@
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_lifecycle_bucket_discovery/swing_lifecycle_bucket_discovery_2026-05-26.json`
 - available: `True`
 - source_contract_status: `pass`
-- surfaced/sim_auto/code_patch: `415` / `6` / `12`
+- surfaced/sim_auto/code_patch: `442` / `6` / `19`
 - runtime_effect: `False`
 - warnings: `[]`
 
@@ -138,7 +138,7 @@
 | `panic_buy_runner_tp_canary` | 패닉바잉 구간에서 fixed TP 전량청산 대비 runner 유지가 missed upside를 줄이는지 보는 축 | report-only: TP/trailing/live exit 변경 없음 | `freeze` | `-` | - | 계측/DB/safety 문제로 runtime 변경을 금지한다 | 0.45 | `contract_missing` | 소스 품질 차단, panic_buy_orderbook_collector_coverage_gap |
 
 ## Pattern Lab Audits
-- currentness: status=`warning` fail=`2` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-26.json`
-- ai_review: status=`warning` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-05-26.json`
+- currentness: status=`pass` fail=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-26.json`
+- ai_review: status=`pass` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-05-26.json`
 - producer_gap_discovery: status=`warning` artifact=`/home/ubuntu/KORStockScan/data/report/producer_gap_discovery/producer_gap_discovery_2026-05-26.json`
-- propagation: status=`warning` fail=`0` warnings=`2` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-26.json`
+- propagation: status=`pass` fail=`0` warnings=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-26.json`

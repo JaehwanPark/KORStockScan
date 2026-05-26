@@ -1168,10 +1168,16 @@ def build_swing_entry_bottleneck(events: dict[str, Any]) -> dict[str, Any]:
     score_vpw_unique = _safe_int(unique.get("blocked_swing_score_vpw"), 0)
     gap_unique = _safe_int(unique.get("blocked_swing_gap"), 0)
     market_block_unique = _safe_int(unique.get("market_regime_block"), 0)
+    policy_evaluated_unique = _safe_int(unique.get("swing_entry_policy_evaluated"), 0)
     probe_entry_unique = _safe_int(unique.get("swing_probe_entry_candidate"), 0)
     submitted_unique = _safe_int(events.get("submitted_unique_records"), 0)
-    simulated_unique = _safe_int(events.get("simulated_order_unique_records"), 0)
+    simulated_unique = max(
+        _safe_int(events.get("simulated_order_unique_records"), 0),
+        _safe_int(unique.get("swing_sim_buy_order_assumed_filled"), 0),
+        _safe_int(unique.get("swing_sim_order_bundle_assumed_filled"), 0),
+    )
     blocker_unique_total = gatekeeper_reject_unique + score_vpw_unique + gap_unique + market_block_unique
+    legacy_prior_unique_total = gatekeeper_reject_unique + score_vpw_unique + gap_unique
     entry_unique = max(
         _safe_int(group_unique.get("entry"), 0),
         blocker_unique_total,
@@ -1189,6 +1195,11 @@ def build_swing_entry_bottleneck(events: dict[str, Any]) -> dict[str, Any]:
     entry_source_quality = _ofi_qi_source_quality_for_group(ofi_qi, "entry")
     entry_micro_valid = _safe_int(entry_source_quality.get("valid_micro_context_count"), 0)
     entry_micro_invalid = _safe_int(entry_source_quality.get("invalid_micro_context_unique_record_count"), 0)
+    entry_micro_sample = _safe_int(entry_source_quality.get("sample_count"), 0)
+    entry_micro_context_gap = entry_micro_sample > 0 and entry_micro_invalid > entry_micro_valid
+    dry_run_equivalent_submit_unique = simulated_unique
+    submit_zero_gap = submitted_unique == 0 and dry_run_equivalent_submit_unique == 0
+    submit_decision_entry_unique = max(policy_evaluated_unique, probe_entry_unique, submitted_unique, simulated_unique)
 
     action_text = " ".join(str(key) for key in gatekeeper_actions)
     action_key_text = " ".join(str(key) for key in gatekeeper_action_keys)
@@ -1204,23 +1215,28 @@ def build_swing_entry_bottleneck(events: dict[str, Any]) -> dict[str, Any]:
         matches.append("SCORE_VPW_BLOCK")
     if gap_unique >= SWING_ENTRY_BOTTLENECK_BLOCKER_FLOOR or market_block_unique >= SWING_ENTRY_BOTTLENECK_BLOCKER_FLOOR:
         matches.append("GAP_REGIME_BLOCK")
-    if stale_missing_ratio >= 0.5 or entry_micro_invalid > entry_micro_valid:
+    if entry_micro_context_gap:
         matches.append("ENTRY_MICRO_CONTEXT_GAP")
-    if submitted_unique == 0 and entry_unique >= SWING_ENTRY_BOTTLENECK_ENTRY_FLOOR:
+    if submit_zero_gap and submit_decision_entry_unique >= SWING_ENTRY_BOTTLENECK_ENTRY_FLOOR:
         matches.append("SUBMIT_ZERO")
 
-    blocker_floor_hit = max(gatekeeper_reject_unique, score_vpw_unique, gap_unique, market_block_unique) >= SWING_ENTRY_BOTTLENECK_BLOCKER_FLOOR
+    hard_blocker_floor_hit = False
+    legacy_prior_floor_hit = max(gatekeeper_reject_unique, score_vpw_unique, gap_unique) >= SWING_ENTRY_BOTTLENECK_BLOCKER_FLOOR
     low_probe_or_sim_conversion = (
         (probe_to_blocked_pct is not None and probe_to_blocked_pct < SWING_ENTRY_BOTTLENECK_CONVERSION_PCT)
-        or (simulated_to_entry_pct is not None and simulated_to_entry_pct < SWING_ENTRY_BOTTLENECK_CONVERSION_PCT)
+        or (
+            dry_run_equivalent_submit_unique == 0
+            and simulated_to_entry_pct is not None
+            and simulated_to_entry_pct < SWING_ENTRY_BOTTLENECK_CONVERSION_PCT
+        )
     )
-    blocker_dominates_probe = blocker_floor_hit and (
+    blocker_dominates_probe = hard_blocker_floor_hit and (
         probe_to_entry_pct is None or probe_to_entry_pct < SWING_ENTRY_BOTTLENECK_PROBE_ENTRY_PCT
     )
     critical = (
-        entry_unique >= SWING_ENTRY_BOTTLENECK_ENTRY_FLOOR
-        and submitted_unique == 0
-        and (low_probe_or_sim_conversion or blocker_floor_hit or blocker_dominates_probe)
+        submit_decision_entry_unique >= SWING_ENTRY_BOTTLENECK_ENTRY_FLOOR
+        and submit_zero_gap
+        and (low_probe_or_sim_conversion or hard_blocker_floor_hit or blocker_dominates_probe)
     )
     primary = SWING_ENTRY_BOTTLENECK_PRIMARY if critical else "SWING_ENTRY_BOTTLENECK_OBSERVE"
     if not matches:
@@ -1250,12 +1266,28 @@ def build_swing_entry_bottleneck(events: dict[str, Any]) -> dict[str, Any]:
             "blocked_swing_gap_unique": gap_unique,
             "market_regime_block_unique": market_block_unique,
             "blocker_unique_total": blocker_unique_total,
+            "legacy_prior_unique_total": legacy_prior_unique_total,
+            "hard_blocker_unique_total": 0,
+            "swing_entry_policy_evaluated_unique": policy_evaluated_unique,
+            "submit_decision_entry_unique": submit_decision_entry_unique,
             "swing_probe_entry_candidate_unique": probe_entry_unique,
             "simulated_order_unique_records": simulated_unique,
+            "dry_run_equivalent_submit_unique": dry_run_equivalent_submit_unique,
             "submitted_unique_records": submitted_unique,
+            "submitted_zero_ignored_for_dry_run": bool(
+                submitted_unique == 0 and dry_run_equivalent_submit_unique > 0
+            ),
             "blocked_gatekeeper_reject_raw": _safe_int(raw.get("blocked_gatekeeper_reject"), 0),
             "blocked_swing_score_vpw_raw": _safe_int(raw.get("blocked_swing_score_vpw"), 0),
             "blocked_swing_gap_raw": _safe_int(raw.get("blocked_swing_gap"), 0),
+            "legacy_prior_event_counts": {
+                "blocked_gatekeeper_reject_unique": gatekeeper_reject_unique,
+                "blocked_swing_score_vpw_unique": score_vpw_unique,
+                "blocked_swing_gap_unique": gap_unique,
+                "market_regime_block_unique": market_block_unique,
+                "legacy_prior_floor_hit": bool(legacy_prior_floor_hit),
+                "metric_role": "baseline_prior_feature",
+            },
         },
         "ratios": {
             "submitted_to_entry_unique_pct": submitted_to_entry_pct,
@@ -1267,7 +1299,8 @@ def build_swing_entry_bottleneck(events: dict[str, Any]) -> dict[str, Any]:
         "gatekeeper_action_keys": gatekeeper_action_keys,
         "cooldown_policies": cooldown_policies,
         "entry_micro_context": {
-            "stale_missing_ratio": stale_missing_ratio,
+            "global_stale_missing_ratio": stale_missing_ratio,
+            "entry_micro_context_gap": bool(entry_micro_context_gap),
             "source_quality": entry_source_quality,
         },
         "next_route": "code_improvement_workorder" if critical else "postclose_source_quality_or_sample_collection",
@@ -3422,7 +3455,7 @@ def build_swing_improvement_automation_report(
                 priority=4,
                 route="existing_family",
                 mapped_family="swing_market_regime_sensitivity",
-                intent="Attribute market-regime hard blocks before proposing sensitivity changes.",
+                intent="Attribute market-regime baseline-prior features before proposing sensitivity changes.",
                 expected_ev_effect="market_regime_block/pass and missed-entry outcome are visible in the next audit.",
                 files_likely_touched=["src/engine/sniper_state_handlers.py", "src/engine/swing_lifecycle_audit.py"],
                 acceptance_tests=["pytest swing lifecycle audit tests"],

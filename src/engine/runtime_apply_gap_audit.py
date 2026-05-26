@@ -17,6 +17,7 @@ from src.utils.constants import DATA_DIR, TRADING_RULES
 
 REPORT_SCHEMA_VERSION = 1
 REPORT_DIR = DATA_DIR / "report" / "runtime_apply_gap_audit"
+APPLY_PLAN_DIR = DATA_DIR / "threshold_cycle" / "apply_plans"
 AI_REVIEW_SCHEMA_NAME = "runtime_apply_gap_ai_review_v1"
 AI_REVIEWER_NAME = "runtime_apply_gap_ai_review"
 AI_REVIEW_MODEL = str(getattr(TRADING_RULES, "GPT_DEEP_MODEL", "gpt-5.4") or "gpt-5.4")
@@ -31,6 +32,7 @@ FINAL_DISPOSITIONS = {
     "source_quality_blocker",
     "safety_veto",
     "post_apply_attribution_pending",
+    "source_only_keep_collecting",
 }
 FAILURE_STATES = {
     "pass",
@@ -88,6 +90,18 @@ def _text_hash(payload: Any) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
+def _next_preopen_apply_path(target_date: str) -> Path:
+    if APPLY_PLAN_DIR.exists():
+        candidates: list[tuple[str, Path]] = []
+        for path in APPLY_PLAN_DIR.glob("threshold_apply_*.json"):
+            apply_date = path.stem.removeprefix("threshold_apply_")
+            if apply_date > target_date:
+                candidates.append((apply_date, path))
+        if candidates:
+            return sorted(candidates)[0][1]
+    return APPLY_PLAN_DIR / f"threshold_apply_{_next_day(target_date)}.json"
+
+
 def _artifact_path(label: str, target_date: str) -> Path:
     file_map = {
         "lifecycle_bucket_discovery": BASE_REPORT_DIR
@@ -110,6 +124,7 @@ def _artifact_path(label: str, target_date: str) -> Path:
         "swing_lifecycle_decision_matrix": BASE_REPORT_DIR
         / "swing_lifecycle_decision_matrix"
         / f"swing_lifecycle_decision_matrix_{target_date}.json",
+        "threshold_preopen_apply_next": _next_preopen_apply_path(target_date),
     }
     return file_map[label]
 
@@ -124,6 +139,7 @@ def _artifact_status(target_date: str) -> tuple[dict[str, dict[str, Any]], dict[
         "threshold_cycle_ev",
         "lifecycle_decision_matrix",
         "swing_lifecycle_decision_matrix",
+        "threshold_preopen_apply_next",
     )
     status: dict[str, dict[str, Any]] = {}
     payloads: dict[str, dict[str, Any]] = {}
@@ -143,6 +159,29 @@ def _artifact_status(target_date: str) -> tuple[dict[str, dict[str, Any]], dict[
         }
         payloads[label] = payload
     return status, payloads
+
+
+def _preopen_apply_consumed_candidate(apply_plan: dict[str, Any], candidate_id: str, family: str) -> bool:
+    if not apply_plan:
+        return False
+    bridge = apply_plan.get("runtime_apply_bridge") if isinstance(apply_plan.get("runtime_apply_bridge"), dict) else {}
+    approved = bridge.get("approved_requests") if isinstance(bridge.get("approved_requests"), list) else []
+    for item in approved:
+        if not isinstance(item, dict):
+            continue
+        if candidate_id and str(item.get("candidate_id") or item.get("bridge_candidate_id") or "") == candidate_id:
+            return True
+        if family and str(item.get("family") or item.get("policy_id") or "") == family:
+            return True
+    selected = apply_plan.get("auto_apply_selected") if isinstance(apply_plan.get("auto_apply_selected"), list) else []
+    for item in selected:
+        if not isinstance(item, dict):
+            continue
+        if candidate_id and str(item.get("candidate_id") or item.get("bridge_candidate_id") or "") == candidate_id:
+            return True
+        if family and str(item.get("family") or item.get("policy_id") or "") == family:
+            return True
+    return False
 
 
 def _model_at_least_gpt54(model: str) -> bool:
@@ -224,6 +263,8 @@ def _source_state_to_disposition(state: str, gate: str) -> str:
         return "live_auto_apply_ready"
     if state == "sim_auto_approved":
         return "sim_auto_approved"
+    if state in {"bootstrap_pending", "hold_no_edge"}:
+        return "source_only_keep_collecting"
     return "code_patch_required"
 
 
@@ -291,7 +332,12 @@ def _ledger_from_discovery(
     return ledger
 
 
-def _ledger_from_bridge(bridge: dict[str, Any], *, target_date: str) -> list[dict[str, Any]]:
+def _ledger_from_bridge(
+    bridge: dict[str, Any],
+    *,
+    target_date: str,
+    preopen_apply: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     ledger: list[dict[str, Any]] = []
     candidates = bridge.get("candidates") if isinstance(bridge.get("candidates"), list) else []
     for item in candidates:
@@ -300,6 +346,8 @@ def _ledger_from_bridge(bridge: dict[str, Any], *, target_date: str) -> list[dic
         state = str(item.get("bridge_candidate_state") or "unknown")
         gate = _source_quality_gate(item)
         family = _candidate_family(item)
+        candidate_id = _candidate_id(item, "runtime_apply_bridge")
+        preopen_consumed = _preopen_apply_consumed_candidate(preopen_apply or {}, candidate_id, family)
         disposition = _source_state_to_disposition(state, gate)
         failure_state = "pass"
         failure_reason = ""
@@ -310,13 +358,17 @@ def _ledger_from_bridge(bridge: dict[str, Any], *, target_date: str) -> list[dic
         retry_deadline = ""
         if state == "live_auto_apply_ready":
             disposition = "post_apply_attribution_pending"
-            failure_state = "retry_pending"
-            failure_reason = "ready_but_not_applied"
-            retryable = True
-            retry_reason = "candidate must be consumed by the next PREOPEN bounded apply pass"
-            retry_owner = "preopen_apply_candidate"
-            next_retry_stage = "preopen_apply_candidate"
-            retry_deadline = _next_day(target_date)
+            if preopen_consumed:
+                failure_state = "pass"
+                failure_reason = ""
+            else:
+                failure_state = "retry_pending"
+                failure_reason = "ready_but_not_applied"
+                retryable = True
+                retry_reason = "candidate must be consumed by the next PREOPEN bounded apply pass"
+                retry_owner = "preopen_apply_candidate"
+                next_retry_stage = "preopen_apply_candidate"
+                retry_deadline = _next_day(target_date)
         elif state in {"runtime_blocked_contract_gap", "blocked_rolling_conflict"}:
             failure_state = "blocked_contract"
             failure_reason = state
@@ -327,7 +379,7 @@ def _ledger_from_bridge(bridge: dict[str, Any], *, target_date: str) -> list[dic
             disposition = "source_quality_blocker"
         ledger.append(
             {
-                "candidate_id": _candidate_id(item, "runtime_apply_bridge"),
+                "candidate_id": candidate_id,
                 "family": family,
                 "domain": "scalping",
                 "stage": str(item.get("stage") or "unknown"),
@@ -340,7 +392,13 @@ def _ledger_from_bridge(bridge: dict[str, Any], *, target_date: str) -> list[dic
                 "recommended_route": "runtime_apply_bridge",
                 "actual_route": state,
                 "bridge_state": state,
-                "preopen_apply_state": "pending_next_preopen" if state == "live_auto_apply_ready" else "not_ready",
+                "preopen_apply_state": (
+                    "consumed_by_next_preopen"
+                    if preopen_consumed
+                    else "pending_next_preopen"
+                    if state == "live_auto_apply_ready"
+                    else "not_ready"
+                ),
                 "runtime_hook_state": "mapped" if item.get("target_env_keys") else "env_mapping_missing",
                 "post_apply_attribution_state": "pending" if state == "live_auto_apply_ready" else "not_applicable",
                 "final_disposition": disposition,
@@ -990,7 +1048,13 @@ def build_runtime_apply_gap_audit(
         )
     bridge = payloads.get("runtime_apply_bridge") or {}
     if bridge:
-        ledger_rows.extend(_ledger_from_bridge(bridge, target_date=target_date))
+        ledger_rows.extend(
+            _ledger_from_bridge(
+                bridge,
+                target_date=target_date,
+                preopen_apply=payloads.get("threshold_preopen_apply_next") or {},
+            )
+        )
     ledger = _merge_ledger_rows(ledger_rows)
     drift = _producer_consumer_contract_drift(ledger, payloads)
     retry_queue = _retry_queue_from_failures(ledger, artifact_status)

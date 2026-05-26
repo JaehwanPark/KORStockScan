@@ -501,11 +501,11 @@ def _classify_order(
             automation_reentry="Do not implement from this workorder source.",
         )
 
-    if order.get("source_report_type") in {"pattern_lab_currentness_audit", "pattern_lab_ai_review"}:
+    if order.get("source_report_type") in {"pattern_lab_currentness_audit", "pattern_lab_ai_review", "tuning_observability_summary"}:
         return ClassifiedOrder(
             order=order,
             decision="implement_now",
-            reason="pattern lab audit/review order is report/source-quality instrumentation only and must remain runtime_effect=false",
+            reason="pattern lab audit/review/observability order is report/source-quality instrumentation only and must remain runtime_effect=false",
             mapped_family=mapped_family,
             route=route or "instrumentation_order",
             confidence=confidence or "consensus",
@@ -2459,7 +2459,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         swing_lifecycle_bucket_discovery
     )
     pattern_lab_currentness_orders = [
-        {**item, "source_report_type": "pattern_lab_currentness_audit"}
+        {**item, "source_report_type": item.get("source_report_type") or "pattern_lab_currentness_audit"}
         for item in (pattern_lab_currentness.get("code_improvement_orders") or [])
         if isinstance(item, dict)
     ]

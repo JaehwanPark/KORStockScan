@@ -3,42 +3,43 @@
 ## Summary
 - runtime_effect: `False`
 - decision_authority: `swing_ldm_source_only`
-- total_rows: `1600`
-- probe_rows: `0`
+- total_rows: `1721`
+- probe_rows: `121`
 - discovery_rows: `1600`
 - sim_auto_candidate_count: `6`
-- workorder_count: `4`
-- swing_entry_bottleneck_primary: `None`
-- swing_lifecycle_contract_gap_count: `None`
+- workorder_count: `9`
+- swing_entry_bottleneck_primary: `SWING_ENTRY_DROUGHT_CRITICAL`
+- swing_lifecycle_contract_gap_count: `4`
 - daily_simulation_consumed: `False`
-- warnings: `['swing_intraday_live_equiv_probe_missing', 'pending_future_quotes']`
+- warnings: `['pending_future_quotes']`
 
 ## Bucket Attribution
 ### entry_bucket_attribution
-- source_row_count: `1529`
-- bucket_count: `180`
+- source_row_count: `1589`
+- bucket_count: `192`
 - sim_auto_candidate_count: `0`
 - workorder_count: `0`
-- `swing_strategy_discovery_sim_v1|blocked_swing_gap|MIDDLE|discovery_gap_unobserved|discovery_score_unobserved|discovery_vpw_unobserved|pullback_limit_entry|pullback_not_touched|risk_capped` route=`source_only_keep_collecting` joined=`0` ev=`0.0`
-- `swing_strategy_discovery_sim_v1|blocked_swing_gap|MIDDLE|discovery_gap_unobserved|discovery_score_unobserved|discovery_vpw_unobserved|gap_fade_entry|gap_fade_condition_not_met|risk_capped` route=`source_only_keep_collecting` joined=`0` ev=`0.0`
-- `swing_strategy_discovery_sim_v1|blocked_swing_gap|MIDDLE|discovery_gap_unobserved|discovery_score_unobserved|discovery_vpw_unobserved|pullback_limit_entry|pullback_not_touched|volatility_adjusted` route=`source_only_keep_collecting` joined=`0` ev=`0.0`
-- `swing_strategy_discovery_sim_v1|blocked_swing_gap|MIDDLE|discovery_gap_unobserved|discovery_score_unobserved|discovery_vpw_unobserved|breakout_confirm_entry|breakout_trigger_touched|risk_capped` route=`source_only_keep_collecting` joined=`0` ev=`0.0`
-- `swing_strategy_discovery_sim_v1|no_block_observed|BOTTOM|discovery_gap_unobserved|discovery_score_unobserved|discovery_vpw_unobserved|next_open_entry|next_open|equal_notional` route=`source_only_keep_collecting` joined=`0` ev=`0.0`
+- `blocked_swing_score_vpw|-|BOTTOM|flat_up|lt55|vpw_extreme|KOSPI_ML|-|sim_virtual_budget_dynamic_formula` route=`source_only_keep_collecting` joined=`0` ev=`0.0`
+- `blocked_swing_score_vpw|-|BREAKOUT|flat_up|lt55|vpw_extreme|KOSPI_ML|-|sim_virtual_budget_dynamic_formula` route=`source_only_keep_collecting` joined=`0` ev=`0.0`
+- `blocked_swing_score_vpw|-|BREAKOUT|gap_down|lt55|vpw_extreme|KOSPI_ML|-|sim_virtual_budget_dynamic_formula` route=`source_only_keep_collecting` joined=`0` ev=`0.0`
+- `blocked_gatekeeper_reject|-|KOSPI_BASE|flat_up|lt55|vpw_extreme|KOSPI_ML|-|sim_virtual_budget_dynamic_formula` route=`source_only_keep_collecting` joined=`0` ev=`0.0`
+- `blocked_swing_gap|-|KOSPI_BASE|gap_up|missing|vpw_extreme|KOSPI_ML|-|sim_virtual_budget_dynamic_formula` route=`source_only_keep_collecting` joined=`0` ev=`0.0`
 ### holding_exit_bucket_attribution
-- source_row_count: `1600`
-- bucket_count: `35`
+- source_row_count: `1672`
+- bucket_count: `48`
 - sim_auto_candidate_count: `6`
-- workorder_count: `0`
+- workorder_count: `5`
 - `mfe_high|mae_green|held_missing|trailing_after_mfe_stop|-|-|-` route=`sim_auto_approved` joined=`29` ev=`14.597777`
 - `mfe_high|mae_low|held_missing|trailing_after_mfe_stop|-|-|-` route=`sim_auto_approved` joined=`4` ev=`11.058628`
 - `mfe_high|mae_flat|held_missing|trailing_after_mfe_stop|-|-|-` route=`sim_auto_approved` joined=`7` ev=`6.947201`
 - `mfe_mid|mae_flat|held_missing|trailing_after_mfe_stop|-|-|-` route=`sim_auto_approved` joined=`18` ev=`3.139001`
 - `mfe_low|mae_mid|held_missing|mae_stop_touched|-|-|-` route=`sim_auto_approved` joined=`8` ev=`-3.0`
 ### scale_in_bucket_attribution
-- source_row_count: `0`
-- bucket_count: `0`
+- source_row_count: `19`
+- bucket_count: `1`
 - sim_auto_candidate_count: `0`
 - workorder_count: `0`
+- `AVG_DOWN|instrumentation_gap|swing_dynamic_allowed|market` route=`source_only_keep_collecting` joined=`0` ev=`0.0`
 ### discovery_arm_attribution
 - source_row_count: `1600`
 - bucket_count: `760`

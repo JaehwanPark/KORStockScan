@@ -197,6 +197,38 @@ def _observability_contract_ok(path: Path) -> bool:
     return _metric_contract_ok(payload)
 
 
+def _observability_source_contract_ok(path: Path) -> bool:
+    payload = _load_json(path)
+    if not payload:
+        return False
+    if int(payload.get("schema_version") or 0) < 3:
+        return False
+    source_quality = payload.get("source_quality")
+    if not isinstance(source_quality, dict):
+        return False
+    return str(payload.get("source_contract_status") or "") == "pass"
+
+
+def _observability_embedded_orders(path: Path) -> list[dict[str, Any]]:
+    payload = _load_json(path)
+    orders = payload.get("code_improvement_orders") if isinstance(payload.get("code_improvement_orders"), list) else []
+    return [
+        {
+            **item,
+            "source_report_type": "tuning_observability_summary",
+            "handoff_source_report_type": REPORT_TYPE,
+            "route": "source_contract_gap",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "strategy_effect": False,
+            "data_quality_effect": True,
+            "tuning_axis_effect": False,
+        }
+        for item in orders
+        if isinstance(item, dict)
+    ]
+
+
 def _scan_forbidden_terms(lab_dir: Path) -> list[dict[str, Any]]:
     hits: list[dict[str, Any]] = []
     for path in sorted(lab_dir.rglob("*")):
@@ -365,6 +397,23 @@ def build_pattern_lab_currentness_audit(target_date: str) -> dict[str, Any]:
                     order_title=f"{lab_name} observability metric contract currentness",
                     files_likely_touched=["analysis/tuning_observability_summary.py"],
                     acceptance_tests=["PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_currentness_audit.py"],
+                )
+            )
+            checks.append(
+                _check(
+                    check_id=f"{lab_name}_observability_source_contract",
+                    ok=_observability_source_contract_ok(observability_path),
+                    finding=(
+                        f"{lab_name} tuning observability output must expose schema_version>=3, source_quality, "
+                        "source_contract_status=pass, and source contract workorders when producer/consumer inputs drift."
+                    ),
+                    source_paths=[observability_path],
+                    severity="automation_handoff_gap",
+                    order_title=f"{lab_name} observability source contract handoff",
+                    files_likely_touched=["analysis/tuning_observability_summary.py", "src/engine/pattern_lab_currentness_audit.py"],
+                    acceptance_tests=[
+                        "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_tuning_observability_summary.py src/tests/test_pattern_lab_currentness_audit.py"
+                    ],
                 )
             )
         manifest_path = lab["manifest"]
@@ -542,11 +591,17 @@ def build_pattern_lab_currentness_audit(target_date: str) -> dict[str, Any]:
         )
     )
 
+    embedded_observability_orders: list[dict[str, Any]] = []
+    for lab in paths.values():
+        if lab.get("observability"):
+            embedded_observability_orders.extend(_observability_embedded_orders(lab["observability"]))
+
     orders = [
         check["recommended_order"]
         for check in checks
         if isinstance(check.get("recommended_order"), dict)
     ]
+    orders.extend(embedded_observability_orders)
     fail_count = sum(1 for check in checks if check["status"] == "fail")
     status = "pass" if fail_count == 0 else "warning"
     report = {
@@ -562,6 +617,7 @@ def build_pattern_lab_currentness_audit(target_date: str) -> dict[str, Any]:
             "check_count": len(checks),
             "fail_count": fail_count,
             "order_count": len(orders),
+            "observability_embedded_order_count": len(embedded_observability_orders),
             "consumed_feedback_source_count": sum(
                 len(item.get("consumed_feedback_sources") or [])
                 for item in feedback_sources.values()

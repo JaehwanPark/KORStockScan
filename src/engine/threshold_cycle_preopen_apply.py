@@ -21,6 +21,10 @@ from src.engine.runtime_apply_bridge import (
     ldm_scale_in_runtime_bridge_artifact_path,
     runtime_apply_bridge_report_path,
 )
+from src.engine.scalping.scalp_sim_auto_approval_control_tower import (
+    scalp_sim_auto_approval_path,
+    scalp_sim_policy_catalog_path,
+)
 from src.engine.lifecycle_bucket_discovery import (
     bucket_catalog_path,
     discovery_report_path,
@@ -153,6 +157,9 @@ TARGET_ENV_VALUE_KEYS = {
     "LIFECYCLE_BUCKET_DISCOVERY_POLICY_FILE": "policy_file",
     "LIFECYCLE_BUCKET_DISCOVERY_POLICY_VERSION": "policy_version",
     "LIFECYCLE_BUCKET_DISCOVERY_LIVE_AUTO_APPLY_ENABLED": "live_auto_apply_enabled",
+    "SCALP_SIM_AUTO_POLICY_ENABLED": "enabled",
+    "SCALP_SIM_AUTO_POLICY_FILE": "policy_file",
+    "SCALP_SIM_AUTO_POLICY_VERSION": "policy_version",
     "SWING_SIM_AUTO_POLICY_ENABLED": "enabled",
     "SWING_SIM_AUTO_POLICY_FILE": "policy_file",
     "SWING_SIM_AUTO_POLICY_VERSION": "policy_version",
@@ -497,6 +504,7 @@ def _env_overrides_for_candidate(candidate: dict[str, Any]) -> dict[str, str]:
         ENTRY_BRIDGE_FAMILY,
         SCALE_IN_BRIDGE_FAMILY,
         "lifecycle_bucket_discovery_sim_auto_approval",
+        "scalp_sim_auto_approval",
         "swing_sim_auto_approval",
     }
     overrides: dict[str, str] = {}
@@ -1222,6 +1230,153 @@ def _select_lifecycle_bucket_sim_auto_approval(bundle: dict[str, Any]) -> tuple[
     return selected, decisions, env_overrides
 
 
+def _load_scalp_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
+    if not source_date:
+        return {"artifact": None, "catalog": None, "approved_request": None, "blocked": ["missing_source_date"]}
+    artifact_path = scalp_sim_auto_approval_path(source_date)
+    catalog_path = scalp_sim_policy_catalog_path(source_date)
+    payload = _load_json(artifact_path)
+    catalog_payload = _load_json(catalog_path)
+    policies = payload.get("approved_policies") if isinstance(payload.get("approved_policies"), list) else []
+    approved_source_ids = [str(item) for item in (payload.get("approved_source_ids") or []) if str(item or "").strip()]
+    approved_policy_count = _int_or_default(payload.get("approved_policy_count"), 0) or 0
+    blocked: list[str] = []
+    if not payload:
+        blocked.append("scalp_sim_auto_approval_missing")
+    elif payload.get("report_type") != "scalp_sim_auto_approval":
+        blocked.append("scalp_sim_auto_approval_report_type_invalid")
+    elif not bool(payload.get("approved")):
+        blocked.append("scalp_sim_auto_approval_not_approved")
+    elif bool(payload.get("actual_order_submitted")):
+        blocked.append("actual_order_submitted_not_allowed")
+    elif payload.get("runtime_effect") is not False:
+        blocked.append("runtime_effect_not_allowed")
+    elif payload.get("allowed_runtime_apply") is not False:
+        blocked.append("artifact_allowed_runtime_apply_must_be_false")
+    elif payload.get("broker_order_forbidden") is not True:
+        blocked.append("broker_order_forbidden_contract_missing")
+    elif bool(payload.get("human_approval_required")):
+        blocked.append("human_approval_required_not_allowed_for_sim_auto")
+    elif payload.get("decision_authority") not in {None, "scalp_sim_auto_approval_control_tower"}:
+        blocked.append("decision_authority_invalid")
+    elif not policies or approved_policy_count <= 0 or not approved_source_ids:
+        blocked.append("scalp_sim_auto_approval_empty")
+    if not catalog_path.exists():
+        blocked.append("scalp_sim_policy_catalog_missing")
+    elif not catalog_payload:
+        blocked.append("scalp_sim_policy_catalog_invalid")
+    elif catalog_payload.get("schema_version") != "scalp_sim_policy_catalog_v1":
+        blocked.append("scalp_sim_policy_catalog_schema_invalid")
+    approved_request = None
+    if not blocked:
+        recommended_values = {
+            "enabled": True,
+            "policy_file": str(catalog_path),
+            "policy_version": f"scalp_sim_auto_approval:{source_date}",
+        }
+        target_env_keys = [
+            "SCALP_SIM_AUTO_POLICY_ENABLED",
+            "SCALP_SIM_AUTO_POLICY_FILE",
+            "SCALP_SIM_AUTO_POLICY_VERSION",
+            "LIFECYCLE_BUCKET_DISCOVERY_ENABLED",
+        ]
+        current_values = {
+            "enabled": False,
+            "policy_file": "",
+            "policy_version": "",
+        }
+        for policy in policies:
+            if not isinstance(policy, dict) or policy.get("policy_id") != "scalp_sim_scale_in_window_expansion":
+                continue
+            scale_values = policy.get("recommended_values") if isinstance(policy.get("recommended_values"), dict) else {}
+            recommended_values.update(scale_values)
+            target_env_keys.extend(
+                str(item)
+                for item in (policy.get("target_env_keys") or [])
+                if str(item or "").startswith("SCALP_SIM_SCALE_IN_WINDOW_")
+            )
+            current_values.update(
+                {
+                    "allowed_arms": "",
+                    "min_profit_pct": None,
+                    "max_profit_pct": None,
+                    "max_orders_per_position": None,
+                    "max_orders_per_day": None,
+                }
+            )
+        approved_request = {
+            "family": "scalp_sim_auto_approval",
+            "policy_id": "scalp_sim_auto_approval",
+            "stage": "scalp_sim_lifecycle",
+            "priority": 87,
+            "approval_id": f"scalp_sim_auto_approval:{source_date}",
+            "approval_state": "auto_sim",
+            "allowed_runtime_apply": True,
+            "safety_revert_required": False,
+            "calibration_state": "sim_auto_approved",
+            "target_env_keys": list(dict.fromkeys(target_env_keys)),
+            "recommended_values": recommended_values,
+            "current_values": current_values,
+            "approved_source_ids": approved_source_ids,
+            "approved_policy_count": approved_policy_count,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "decision_authority": "scalp_sim_auto_approval_control_tower",
+        }
+    return {
+        "artifact": str(artifact_path) if artifact_path.exists() else None,
+        "catalog": str(catalog_path) if catalog_path.exists() else None,
+        "approved_request": approved_request,
+        "blocked": blocked,
+        "approved_source_ids": payload.get("approved_source_ids") or [],
+        "approved_policy_count": payload.get("approved_policy_count"),
+    }
+
+
+def _select_scalp_sim_auto_approval(bundle: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
+    item = bundle.get("approved_request")
+    decisions: list[dict[str, Any]] = []
+    selected: list[dict[str, Any]] = []
+    env_overrides: dict[str, str] = {}
+    if not isinstance(item, dict):
+        decisions.append(
+            {
+                "family": "scalp_sim_auto_approval",
+                "selected": False,
+                "decision_reason": ",".join(str(reason) for reason in bundle.get("blocked") or [])
+                or "scalp_sim_auto_approval_missing",
+                "env_overrides": {},
+                "actual_order_submitted": False,
+            }
+        )
+        return selected, decisions, env_overrides
+    overrides = _env_overrides_for_candidate(item)
+    reject_reason = ""
+    if not bool(item.get("allowed_runtime_apply")):
+        reject_reason = "runtime_apply_not_allowed"
+    elif bool(item.get("actual_order_submitted")):
+        reject_reason = "actual_order_submitted_not_allowed"
+    elif not overrides:
+        reject_reason = "no_runtime_env_override"
+    decision = {
+        "approval_id": item.get("approval_id"),
+        "family": item.get("family"),
+        "stage": item.get("stage"),
+        "approved_source_ids": item.get("approved_source_ids") or [],
+        "selected": not bool(reject_reason),
+        "decision_reason": reject_reason or "scalp_sim_auto_approval_apply",
+        "env_overrides": overrides if not reject_reason else {},
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    decisions.append(decision)
+    if reject_reason:
+        return selected, decisions, env_overrides
+    selected.append(item)
+    env_overrides.update(overrides)
+    return selected, decisions, env_overrides
+
+
 def _load_swing_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
     if not source_date:
         return {"artifact": None, "catalog": None, "approved_request": None, "blocked": ["missing_source_date"]}
@@ -1554,9 +1709,11 @@ def _write_runtime_env(target_date: str, manifest: dict[str, Any], env_overrides
                     for item in [
                         *(manifest.get("auto_apply_selected") or []),
                         *((manifest.get("swing_runtime_approval") or {}).get("selected") or []),
+                        *((manifest.get("scalp_sim_auto_approval") or {}).get("selected") or []),
                         *((manifest.get("scalp_sim_scale_in_window_approval") or {}).get("selected") or []),
                         *((manifest.get("runtime_apply_bridge") or {}).get("selected") or []),
                         *((manifest.get("lifecycle_bucket_discovery") or {}).get("selected") or []),
+                        *((manifest.get("swing_sim_auto_approval") or {}).get("selected") or []),
                     ]
                 ],
             },
@@ -1640,6 +1797,8 @@ def build_preopen_apply_manifest(
         lifecycle_context_overlay, lifecycle_context_env_overrides = ({}, {})
         swing_bundle = _load_swing_runtime_approval_bundle(report_source_date)
         swing_selected, swing_decisions, swing_env_overrides = ([], [], {})
+        scalp_sim_auto_bundle = _load_scalp_sim_auto_approval(report_source_date)
+        scalp_sim_auto_selected, scalp_sim_auto_decisions, scalp_sim_auto_env_overrides = ([], [], {})
         scalp_scale_bundle = _load_scalp_sim_scale_in_window_approval(report_source_date)
         scalp_scale_selected, scalp_scale_decisions, scalp_scale_env_overrides = ([], [], {})
         runtime_bridge_bundle = _load_runtime_apply_bridge_approval(report_source_date)
@@ -1657,18 +1816,43 @@ def build_preopen_apply_manifest(
                 operator_locks=operator_runtime_env_locks,
             )
             swing_selected, swing_decisions, swing_env_overrides = _select_swing_approved_candidates(swing_bundle)
-            scalp_scale_selected, scalp_scale_decisions, scalp_scale_env_overrides = (
-                _select_scalp_sim_scale_in_window_approval(scalp_scale_bundle)
+            scalp_sim_auto_selected, scalp_sim_auto_decisions, scalp_sim_auto_env_overrides = (
+                _select_scalp_sim_auto_approval(scalp_sim_auto_bundle)
             )
+            if scalp_sim_auto_selected:
+                scalp_scale_decisions = [
+                    {
+                        "family": "scalp_sim_scale_in_window_expansion",
+                        "selected": False,
+                        "decision_reason": "covered_by_scalp_sim_auto_approval_control_tower",
+                        "env_overrides": {},
+                        "actual_order_submitted": False,
+                    }
+                ]
+            else:
+                scalp_scale_selected, scalp_scale_decisions, scalp_scale_env_overrides = (
+                    _select_scalp_sim_scale_in_window_approval(scalp_scale_bundle)
+                )
             runtime_bridge_selected, runtime_bridge_decisions, runtime_bridge_env_overrides = (
                 _select_runtime_apply_bridge_approval(
                     runtime_bridge_bundle,
                     include_families=include_families,
                 )
             )
-            lifecycle_bucket_selected, lifecycle_bucket_decisions, lifecycle_bucket_env_overrides = (
-                _select_lifecycle_bucket_sim_auto_approval(lifecycle_bucket_bundle)
-            )
+            if scalp_sim_auto_selected:
+                lifecycle_bucket_decisions = [
+                    {
+                        "family": "lifecycle_bucket_discovery_sim_auto_approval",
+                        "selected": False,
+                        "decision_reason": "covered_by_scalp_sim_auto_approval_control_tower",
+                        "env_overrides": {},
+                        "actual_order_submitted": False,
+                    }
+                ]
+            else:
+                lifecycle_bucket_selected, lifecycle_bucket_decisions, lifecycle_bucket_env_overrides = (
+                    _select_lifecycle_bucket_sim_auto_approval(lifecycle_bucket_bundle)
+                )
             swing_sim_auto_selected, swing_sim_auto_decisions, swing_sim_auto_env_overrides = (
                 _select_swing_sim_auto_approval(swing_sim_auto_bundle)
             )
@@ -1680,6 +1864,7 @@ def build_preopen_apply_manifest(
                 **env_overrides,
                 **lifecycle_context_env_overrides,
                 **swing_env_overrides,
+                **scalp_sim_auto_env_overrides,
                 **scalp_scale_env_overrides,
                 **runtime_bridge_env_overrides,
                 **lifecycle_bucket_env_overrides,
@@ -1748,6 +1933,17 @@ def build_preopen_apply_manifest(
                 "selected": swing_selected,
                 "decisions": swing_decisions,
                 "dry_run_forced": bool(swing_env_overrides),
+            },
+            "scalp_sim_auto_approval": {
+                "artifact": scalp_sim_auto_bundle.get("artifact"),
+                "catalog": scalp_sim_auto_bundle.get("catalog"),
+                "approved": 1 if scalp_sim_auto_bundle.get("approved_request") else 0,
+                "approved_policy_count": scalp_sim_auto_bundle.get("approved_policy_count"),
+                "approved_source_ids": scalp_sim_auto_bundle.get("approved_source_ids") or [],
+                "blocked": scalp_sim_auto_bundle.get("blocked") or [],
+                "approved_request": scalp_sim_auto_bundle.get("approved_request"),
+                "selected": scalp_sim_auto_selected,
+                "decisions": scalp_sim_auto_decisions,
             },
             "scalp_sim_scale_in_window_approval": {
                 "artifact": scalp_scale_bundle.get("artifact"),

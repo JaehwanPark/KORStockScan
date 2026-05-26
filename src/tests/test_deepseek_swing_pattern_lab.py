@@ -344,6 +344,40 @@ class TestPrepareDataset:
         assert report["ofi_qi_quality"]["examples"][0]["record_id"] == "2"
         assert not any("funnel fact has only" in warning for warning in report["warnings"])
 
+    def test_ofi_qi_ready_neutral_without_advice_is_not_missing(self, tmp_path, monkeypatch):
+        target_date = "2026-05-08"
+        event_dir = tmp_path / "pipeline_events"
+        event_dir.mkdir()
+        monkeypatch.setattr(prepare_mod, "PIPELINE_EVENTS_DIR", event_dir)
+        (event_dir / f"pipeline_events_{target_date}.jsonl").write_text(
+            json.dumps(
+                {
+                    "stage": "holding_flow_ofi_smoothing_applied",
+                    "stock_code": "005930",
+                    "record_id": "1",
+                    "fields": {
+                        "strategy": "KOSPI_ML",
+                        "orderbook_micro_ready": "True",
+                        "orderbook_micro_state": "neutral",
+                        "orderbook_micro_qi": "0.5",
+                        "orderbook_micro_ofi_norm": "0.0",
+                        "orderbook_micro_observer_healthy": "True",
+                    },
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        ofi_qi = prepare_mod.build_swing_ofi_qi_fact([target_date])
+
+        assert len(ofi_qi) == 1
+        assert bool(ofi_qi.iloc[0]["micro_missing_flag"]) is False
+        assert bool(ofi_qi.iloc[0]["stale_missing_flag"]) is False
+        report = build_data_quality_report(pd.DataFrame(), pd.DataFrame({"date": [target_date]}), pd.DataFrame(), ofi_qi, [target_date])
+        assert not any(str(warning).startswith("OFI/QI stale/missing ratio:") for warning in report["warnings"])
+
     def test_build_data_quality_report_warns_when_funnel_rows_below_window_floor(self):
         trade = _sample_trade_fact()
         funnel = _sample_funnel_fact().iloc[:1].copy()

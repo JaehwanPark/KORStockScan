@@ -112,6 +112,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     propagation_idx = script.index("src.engine.pattern_lab_propagation_audit")
     post_propagation_ev_idx = script.index('run_threshold_cycle_ev_and_wait "post_propagation_audit_refresh"')
     runtime_summary_idx = script.index("src.engine.runtime_approval_summary")
+    tuning_control_idx = script.index("src.engine.automation.tuning_performance_control_tower")
     runtime_gap_idx = script.index("src.engine.runtime_apply_gap_audit")
     next_checklist_idx = script.rindex("src.engine.build_next_stage2_checklist")
 
@@ -136,6 +137,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         < propagation_idx
         < post_propagation_ev_idx
         < runtime_summary_idx
+        < tuning_control_idx
         < runtime_gap_idx
         < next_checklist_idx
     )
@@ -149,9 +151,11 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     assert 'RUN_LIFECYCLE_AI_CONTEXT="${THRESHOLD_CYCLE_RUN_LIFECYCLE_AI_CONTEXT:-true}"' in script
     assert 'RUN_LIFECYCLE_BUCKET_DISCOVERY="${THRESHOLD_CYCLE_RUN_LIFECYCLE_BUCKET_DISCOVERY:-$RUN_LIFECYCLE_DECISION_MATRIX}"' in script
     assert 'RUN_RUNTIME_APPLY_BRIDGE="${THRESHOLD_CYCLE_RUN_RUNTIME_APPLY_BRIDGE:-$RUN_LIFECYCLE_BUCKET_DISCOVERY}"' in script
+    assert 'RUN_TUNING_PERFORMANCE_CONTROL_TOWER="${THRESHOLD_CYCLE_RUN_TUNING_PERFORMANCE_CONTROL_TOWER:-true}"' in script
     assert "lifecycle_ai_context=$RUN_LIFECYCLE_AI_CONTEXT" in script
     assert "lifecycle_bucket_discovery=$RUN_LIFECYCLE_BUCKET_DISCOVERY" in script
     assert "runtime_apply_bridge=$RUN_RUNTIME_APPLY_BRIDGE" in script
+    assert "tuning_performance_control_tower=$RUN_TUNING_PERFORMANCE_CONTROL_TOWER" in script
     assert "time_window_regime_counterfactual=$RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL" in script
     assert "producer_gap_discovery=$RUN_PRODUCER_GAP_DISCOVERY" in script
     assert "stage_hook_workorder_discovery=$RUN_STAGE_HOOK_WORKORDER_DISCOVERY" in script
@@ -248,6 +252,7 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert '"$PROJECT_DIR/data/report/swing_lifecycle_bucket_discovery/swing_lifecycle_bucket_discovery_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/runtime_apply_bridge/runtime_apply_bridge_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/runtime_approval_summary/runtime_approval_summary_${TARGET_DATE}.json"' in script
+    assert '"$PROJECT_DIR/data/report/tuning_performance_control_tower/tuning_performance_control_tower_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_${TARGET_DATE}.json"' in script
     assert 'wait_for_file_artifact "$(next_stage2_checklist_path)" "next_stage2_checklist"' in script
     assert "src.engine.verify_threshold_cycle_postclose_chain" in script
@@ -266,6 +271,7 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert "lifecycle_decision_matrix=$RUN_LIFECYCLE_DECISION_MATRIX" in script
     assert "lifecycle_bucket_discovery=$RUN_LIFECYCLE_BUCKET_DISCOVERY" in script
     assert "runtime_apply_bridge=$RUN_RUNTIME_APPLY_BRIDGE" in script
+    assert "tuning_performance_control_tower=$RUN_TUNING_PERFORMANCE_CONTROL_TOWER" in script
     assert "runtime_apply_gap_audit=true" in script
     assert "swing_lifecycle_matrix=$RUN_SWING_LIFECYCLE_MATRIX" in script
     assert "swing_lifecycle_bucket_discovery=$RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY" in script

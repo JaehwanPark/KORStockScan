@@ -13,14 +13,14 @@
 
 ## OFI/QI Quality
 
-- stale_missing_count: `795`
-- stale_missing_unique_record_count: `7`
-- stale_missing_ratio: `0.9117`
-- reason_counts: `{'micro_missing': 795, 'micro_stale': 0, 'observer_unhealthy': 1, 'micro_not_ready': 4, 'state_insufficient': 4}`
-- reason_combination_counts: `{'micro_missing': 791, 'micro_missing+micro_not_ready+state_insufficient': 3, 'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 1}`
-- reason_combination_unique_record_counts: `{'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 1, 'micro_missing': 6}`
-- stale_missing_group_counts: `{'holding': 794, 'exit': 1}`
-- stale_missing_group_unique_record_counts: `{'exit': 1, 'holding': 6}`
+- stale_missing_count: `4`
+- stale_missing_unique_record_count: `1`
+- stale_missing_ratio: `0.0046`
+- reason_counts: `{'micro_missing': 1, 'micro_stale': 0, 'observer_unhealthy': 1, 'micro_not_ready': 4, 'state_insufficient': 4}`
+- reason_combination_counts: `{'micro_not_ready+state_insufficient': 3, 'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 1}`
+- reason_combination_unique_record_counts: `{'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 1}`
+- stale_missing_group_counts: `{'holding': 3, 'exit': 1}`
+- stale_missing_group_unique_record_counts: `{'exit': 1}`
 - observer_unhealthy_overlap: `{'observer_unhealthy_total': 1, 'observer_unhealthy_with_other_reason': 1, 'observer_unhealthy_only': 0}`
 
 ## Sim/Probe Provenance
@@ -37,4 +37,4 @@
 
 ## Warnings
 
-- OFI/QI stale/missing ratio: 0.9117 (795/872); reasons: micro_missing=795, observer_unhealthy=1, micro_not_ready=4, state_insufficient=4
+- none

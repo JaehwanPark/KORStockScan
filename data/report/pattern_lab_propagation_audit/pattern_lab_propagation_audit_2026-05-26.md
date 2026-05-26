@@ -2,12 +2,12 @@
 
 ## Summary
 
-- status: `warning`
+- status: `pass`
 - runtime_effect: `False`
 - decision_authority: `source_quality_only`
 - check_count: `13`
 - fail_count: `0`
-- warning_count: `2`
+- warning_count: `0`
 
 ## Checks
 
@@ -62,15 +62,15 @@
 
 ### `threshold_cycle_ev_propagation_source_link`
 
-- status: `warning`
-- severity: `post_propagation_ev_refresh_pending`
+- status: `pass`
+- severity: `info`
 - finding: threshold_cycle_ev must expose pattern_lab_propagation_audit after the post-propagation EV refresh.
 - sources: `['/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-26.json', '/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-26.json']`
 
 ### `runtime_summary_propagation_source_link`
 
-- status: `warning`
-- severity: `runtime_summary_pending`
+- status: `pass`
+- severity: `info`
 - finding: runtime_approval_summary must expose pattern_lab_propagation_audit source link when generated after this audit.
 - sources: `['/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-05-26.json', '/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-26.json']`
 

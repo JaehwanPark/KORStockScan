@@ -2027,6 +2027,21 @@ def test_send_buy_order_market_blocked_when_paused(tmp_path, monkeypatch):
     assert result["return_msg"] == trade_pause_control.get_pause_state_label()
 
 
+def test_send_buy_order_market_blocked_before_buy_time_cutoff(monkeypatch):
+    monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: True)
+
+    def _should_not_call_api(*args, **kwargs):
+        raise AssertionError("buy time block must stop broker submission")
+
+    monkeypatch.setattr(kiwoom_orders.requests, "post", _should_not_call_api)
+
+    result = kiwoom_orders.send_buy_order_market("123456", 1, "token")
+
+    assert result["return_code"] == "BUY_TIME_BLOCKED"
+    assert "10:00" in result["return_msg"]
+
+
 def test_send_buy_order_market_allows_order_after_resume(monkeypatch):
     class DummyResponse:
         status_code = 200
@@ -2035,6 +2050,7 @@ def test_send_buy_order_market_allows_order_after_resume(monkeypatch):
             return {"rt_cd": "0", "ord_no": "B123"}
 
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: False)
     monkeypatch.setattr(kiwoom_orders.requests, "post", lambda *args, **kwargs: DummyResponse())
     monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
 
@@ -2058,6 +2074,7 @@ def test_send_buy_order_market_maps_ioc_limit_to_best_ioc(monkeypatch):
         return DummyResponse()
 
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: False)
     monkeypatch.setattr(kiwoom_orders.requests, "post", fake_post)
     monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}")
 

@@ -153,22 +153,27 @@ def test_bucket_discovery_surfaces_ai_review_augmentation_workorders(tmp_path, m
 
     report = mod.build_swing_lifecycle_bucket_discovery(target)
 
-    assert report["ai_review_policy"]["status"] == "not_configured"
+    assert report["ai_review_policy"]["status"] == "configured_deterministic_two_pass"
+    assert report["ai_review_policy"]["required_flow_status"] == {
+        "interpretation": "implemented",
+        "audit": "implemented",
+        "final_conclusions": "implemented",
+    }
     assert report["summary"]["ai_review_augmentation_point_count"] >= 3
     assert report["summary"]["ai_audit_point_count"] >= 3
+    assert report["summary"]["ai_audit_explicit_gap_count"] == 0
     assert report["ai_audit"]["sim_auto_policy_preserved"] is True
+    assert report["ai_audit"]["status"] == "configured_deterministic_two_pass"
     assert all(item["runtime_effect"] is False for item in report["ai_audit"]["audit_points"])
     assert all(item["allowed_runtime_apply"] is False for item in report["ai_audit"]["audit_points"])
-    assert "swing_ldm_ai_review_not_configured" in report["warnings"]
+    assert all(item["explicit_gap_type"] is None for item in report["ai_audit"]["audit_points"])
+    assert "swing_ldm_ai_review_not_configured" not in report["warnings"]
     ai_workorders = [
         item
         for item in report["code_improvement_workorders"]
         if item["target_subsystem"] == "swing_lifecycle_bucket_discovery_ai_review"
     ]
-    assert ai_workorders
-    assert all(item["runtime_effect"] is False for item in ai_workorders)
-    assert all(item["allowed_runtime_apply"] is False for item in ai_workorders)
-    assert all(item["required_flow"] == ["interpretation", "audit", "final_conclusions"] for item in ai_workorders)
+    assert ai_workorders == []
 
 
 def test_bucket_discovery_surfaces_swing_entry_bottleneck_handoff(tmp_path, monkeypatch):

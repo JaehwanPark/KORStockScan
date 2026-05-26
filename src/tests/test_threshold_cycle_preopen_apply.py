@@ -4,6 +4,7 @@ from src.engine import runtime_apply_bridge as bridge_mod
 from src.engine import scalp_sim_scale_in_window_approval as scale_in_approval_mod
 from src.engine import threshold_cycle_preopen_apply as mod
 from src.engine import lifecycle_bucket_discovery as discovery_mod
+from src.engine.scalping import scalp_sim_auto_approval_control_tower as scalp_sim_auto_mod
 from src.engine.swing import sim_auto_approval_control_tower as swing_sim_mod
 
 
@@ -382,9 +383,8 @@ def test_preopen_apply_consumes_lifecycle_bucket_auto_apply_without_human_artifa
     )
 
     assert manifest["status"] == "auto_bounded_live_ready"
-    assert manifest["runtime_apply_bridge"]["approved"] == 0
-    assert manifest["runtime_apply_bridge"]["selected"] == []
-    assert f"runtime_apply_bridge_archived_family:{bridge_mod.ENTRY_BRIDGE_FAMILY}" in manifest["runtime_apply_bridge"]["blocked"]
+    assert manifest["runtime_apply_bridge"]["approved"] == 1
+    assert manifest["runtime_apply_bridge"]["selected"][0]["family"] == bridge_mod.ENTRY_BRIDGE_FAMILY
     assert manifest["lifecycle_bucket_discovery"]["approved"] == 1
     assert manifest["lifecycle_bucket_discovery"]["selected"][0]["recommended_values"]["live_auto_apply_enabled"] is False
     assert manifest["swing_sim_auto_approval"]["approved"] == 1
@@ -2159,6 +2159,273 @@ def test_scalp_sim_scale_in_window_preopen_rejects_source_quality_blocked_artifa
     assert "sim_auto_approval_not_approved" in manifest["scalp_sim_scale_in_window_approval"]["blocked"]
 
 
+def _install_scalp_sim_auto_test_dirs(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    approval_dir = tmp_path / "sim_auto_approvals"
+    policy_dir = tmp_path / "scalp_sim_policies"
+    legacy_approval_dir = tmp_path / "approvals"
+    for directory in (report_dir, approval_dir, policy_dir, legacy_approval_dir):
+        directory.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_ARTIFACT_DIR", legacy_approval_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", tmp_path / "latency")
+    monkeypatch.setattr(scalp_sim_auto_mod, "SIM_AUTO_APPROVAL_DIR", approval_dir)
+    monkeypatch.setattr(scalp_sim_auto_mod, "SCALP_SIM_POLICY_DIR", policy_dir)
+    (report_dir / "threshold_cycle_2026-05-26.json").write_text(
+        json.dumps({"date": "2026-05-26", "calibration_candidates": []}),
+        encoding="utf-8",
+    )
+    return runtime_dir, approval_dir, policy_dir, legacy_approval_dir
+
+
+def test_scalp_sim_auto_approval_writes_sim_policy_env(tmp_path, monkeypatch):
+    runtime_dir, approval_dir, policy_dir, _ = _install_scalp_sim_auto_test_dirs(tmp_path, monkeypatch)
+    catalog_path = policy_dir / "scalp_sim_policy_catalog_2026-05-26.json"
+    catalog_path.write_text(json.dumps({"schema_version": "scalp_sim_policy_catalog_v1"}), encoding="utf-8")
+    (approval_dir / "scalp_sim_auto_approval_2026-05-26.json").write_text(
+        json.dumps(
+            {
+                "report_type": "scalp_sim_auto_approval",
+                "approved": True,
+                "human_approval_required": False,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "decision_authority": "scalp_sim_auto_approval_control_tower",
+                "approved_source_ids": ["lifecycle_bucket_discovery", "scalp_sim_scale_in_window_approval"],
+                "approved_policy_count": 2,
+                "approved_policies": [
+                    {
+                        "policy_id": "scalp_sim_scale_in_window_expansion",
+                        "target_env_keys": ["SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED"],
+                        "recommended_values": {"enabled": True},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-27",
+        source_date="2026-05-26",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED"] == "true"
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_FILE"] == str(catalog_path)
+    assert (
+        manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_VERSION"]
+        == "scalp_sim_auto_approval:2026-05-26"
+    )
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_ENABLED"] == "true"
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED"] == "true"
+    assert manifest["scalp_sim_auto_approval"]["selected"][0]["family"] == "scalp_sim_auto_approval"
+    assert manifest["scalp_sim_scale_in_window_approval"]["selected"] == []
+    assert manifest["lifecycle_bucket_discovery"]["selected"] == []
+    env_text = (runtime_dir / "threshold_runtime_env_2026-05-27.env").read_text(encoding="utf-8")
+    assert "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED=true" in env_text
+
+
+def test_scalp_sim_auto_approval_missing_keeps_legacy_scale_in_fallback(tmp_path, monkeypatch):
+    _, _, _, legacy_approval_dir = _install_scalp_sim_auto_test_dirs(tmp_path, monkeypatch)
+    (legacy_approval_dir / "scalp_sim_scale_in_window_expansion_2026-05-26.json").write_text(
+        json.dumps(
+            {
+                "policy_id": "scalp_sim_scale_in_window_expansion",
+                "family": "scalp_sim_scale_in_window_expansion",
+                "approved": True,
+                "approval_state": "sim_auto_approved",
+                "human_approval_required": False,
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "source_quality_status": "pass",
+                "target_env_keys": ["SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED"],
+                "recommended_values": {"enabled": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-27",
+        source_date="2026-05-26",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    assert manifest["scalp_sim_auto_approval"]["selected"] == []
+    assert manifest["scalp_sim_scale_in_window_approval"]["selected"][0]["family"] == (
+        "scalp_sim_scale_in_window_expansion"
+    )
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED"] == "true"
+
+
+def test_scalp_sim_auto_approval_blocked_does_not_write_env(tmp_path, monkeypatch):
+    _, approval_dir, policy_dir, _ = _install_scalp_sim_auto_test_dirs(tmp_path, monkeypatch)
+    (policy_dir / "scalp_sim_policy_catalog_2026-05-26.json").write_text("{}", encoding="utf-8")
+    (approval_dir / "scalp_sim_auto_approval_2026-05-26.json").write_text(
+        json.dumps(
+            {
+                "report_type": "scalp_sim_auto_approval",
+                "approved": False,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-27",
+        source_date="2026-05-26",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    assert manifest["scalp_sim_auto_approval"]["selected"] == []
+    assert "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED" not in manifest["runtime_env_overrides"]
+
+
+def test_scalp_sim_auto_approval_rejects_empty_policy_artifact(tmp_path, monkeypatch):
+    _, approval_dir, policy_dir, _ = _install_scalp_sim_auto_test_dirs(tmp_path, monkeypatch)
+    (policy_dir / "scalp_sim_policy_catalog_2026-05-26.json").write_text(
+        json.dumps({"schema_version": "scalp_sim_policy_catalog_v1"}),
+        encoding="utf-8",
+    )
+    (approval_dir / "scalp_sim_auto_approval_2026-05-26.json").write_text(
+        json.dumps(
+            {
+                "report_type": "scalp_sim_auto_approval",
+                "approved": True,
+                "human_approval_required": False,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "decision_authority": "scalp_sim_auto_approval_control_tower",
+                "approved_source_ids": [],
+                "approved_policy_count": 0,
+                "approved_policies": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-27",
+        source_date="2026-05-26",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    assert manifest["scalp_sim_auto_approval"]["selected"] == []
+    assert "scalp_sim_auto_approval_empty" in manifest["scalp_sim_auto_approval"]["blocked"]
+    assert "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED" not in manifest["runtime_env_overrides"]
+
+
+def test_scalp_sim_auto_approval_rejects_malformed_policy_count(tmp_path, monkeypatch):
+    _, approval_dir, policy_dir, _ = _install_scalp_sim_auto_test_dirs(tmp_path, monkeypatch)
+    (policy_dir / "scalp_sim_policy_catalog_2026-05-26.json").write_text(
+        json.dumps({"schema_version": "scalp_sim_policy_catalog_v1"}),
+        encoding="utf-8",
+    )
+    (approval_dir / "scalp_sim_auto_approval_2026-05-26.json").write_text(
+        json.dumps(
+            {
+                "report_type": "scalp_sim_auto_approval",
+                "approved": True,
+                "human_approval_required": False,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "decision_authority": "scalp_sim_auto_approval_control_tower",
+                "approved_source_ids": ["scalp_sim_scale_in_window_approval"],
+                "approved_policy_count": "not-a-number",
+                "approved_policies": [
+                    {
+                        "policy_id": "scalp_sim_scale_in_window_expansion",
+                        "target_env_keys": ["SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED"],
+                        "recommended_values": {"enabled": True},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-27",
+        source_date="2026-05-26",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    assert manifest["scalp_sim_auto_approval"]["selected"] == []
+    assert "scalp_sim_auto_approval_empty" in manifest["scalp_sim_auto_approval"]["blocked"]
+
+
+def test_scalp_sim_auto_approval_ignores_non_scalp_nested_env_keys(tmp_path, monkeypatch):
+    _, approval_dir, policy_dir, _ = _install_scalp_sim_auto_test_dirs(tmp_path, monkeypatch)
+    (policy_dir / "scalp_sim_policy_catalog_2026-05-26.json").write_text(
+        json.dumps({"schema_version": "scalp_sim_policy_catalog_v1"}),
+        encoding="utf-8",
+    )
+    (approval_dir / "scalp_sim_auto_approval_2026-05-26.json").write_text(
+        json.dumps(
+            {
+                "report_type": "scalp_sim_auto_approval",
+                "approved": True,
+                "human_approval_required": False,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "decision_authority": "scalp_sim_auto_approval_control_tower",
+                "approved_source_ids": ["scalp_sim_scale_in_window_approval"],
+                "approved_policy_count": 1,
+                "approved_policies": [
+                    {
+                        "policy_id": "scalp_sim_scale_in_window_expansion",
+                        "target_env_keys": [
+                            "SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED",
+                            "SWING_ONE_SHARE_REAL_CANARY_ENABLED",
+                        ],
+                        "recommended_values": {"enabled": True},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-27",
+        source_date="2026-05-26",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED"] == "true"
+    assert "KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_ENABLED" not in manifest["runtime_env_overrides"]
+
+
 def _install_runtime_bridge_test_dirs(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"
@@ -2224,15 +2491,12 @@ def test_runtime_apply_bridge_entry_requires_ready_state_and_artifact(tmp_path, 
     )
 
     assert manifest["runtime_change"] is False
-    assert (
-        f"runtime_apply_bridge_archived_family:{family}"
-        in manifest["runtime_apply_bridge"]["blocked"]
-    )
+    assert f"runtime_apply_blocked_bridge_not_ready:bootstrap_pending:{family}" in manifest["runtime_apply_bridge"]["blocked"]
     env_text = (runtime_dir / "threshold_runtime_env_2026-06-01.env").read_text(encoding="utf-8")
     assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED" not in env_text
 
 
-def test_runtime_apply_bridge_entry_wait6579_stale_live_auto_is_archived_and_blocked(tmp_path, monkeypatch):
+def test_runtime_apply_bridge_entry_wait6579_live_auto_writes_probe_env(tmp_path, monkeypatch):
     runtime_dir, bridge_dir, approval_dir = _install_runtime_bridge_test_dirs(tmp_path, monkeypatch)
     family = bridge_mod.ENTRY_BRIDGE_FAMILY
     candidate_id = f"{family}:2026-05-30"
@@ -2294,14 +2558,13 @@ def test_runtime_apply_bridge_entry_wait6579_stale_live_auto_is_archived_and_blo
     )
 
     env = manifest["runtime_env_overrides"]
-    assert manifest["runtime_change"] is False
-    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED" not in env
-    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_SCORE" not in env
-    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MAX_SCORE" not in env
-    assert f"runtime_apply_bridge_archived_family:{family}" in manifest["runtime_apply_bridge"]["blocked"]
-    assert manifest["runtime_apply_bridge"]["selected"] == []
+    assert manifest["runtime_change"] is True
+    assert env["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED"] == "true"
+    assert env["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_SCORE"] == "66"
+    assert env["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MAX_SCORE"] == "69"
+    assert manifest["runtime_apply_bridge"]["selected"][0]["family"] == family
     env_manifest = json.loads((runtime_dir / "threshold_runtime_env_2026-06-01.json").read_text(encoding="utf-8"))
-    assert family not in env_manifest["selected_families"]
+    assert family in env_manifest["selected_families"]
 
 
 def test_runtime_apply_bridge_legacy_ready_for_approval_is_blocked(tmp_path, monkeypatch):
@@ -2343,10 +2606,7 @@ def test_runtime_apply_bridge_legacy_ready_for_approval_is_blocked(tmp_path, mon
     )
 
     assert manifest["runtime_change"] is False
-    assert (
-        f"runtime_apply_bridge_archived_family:{family}"
-        in manifest["runtime_apply_bridge"]["blocked"]
-    )
+    assert f"runtime_apply_blocked_bridge_not_ready:ready_for_approval:{family}" in manifest["runtime_apply_bridge"]["blocked"]
     env_text = (runtime_dir / "threshold_runtime_env_2026-06-01.env").read_text(encoding="utf-8")
     assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED" not in env_text
 

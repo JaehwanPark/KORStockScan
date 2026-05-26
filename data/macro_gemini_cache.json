@@ -1,84 +1,85 @@
 {
-  "bundle_as_of": "2026-05-25T22:20:17Z",
+  "bundle_as_of": "2026-05-26T22:20:16Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 7473.47,
-    "prev_value": 7445.72,
-    "change": 27.75,
-    "change_pct": 0.37,
-    "as_of": "2026-05-22T20:00:00Z",
-    "source": "S&P Global"
+    "value": 7519.12,
+    "prev_value": 7473.47,
+    "change": 45.65,
+    "change_pct": 0.61,
+    "as_of": "2026-05-26T20:30:00Z",
+    "source": "Morningstar / Dow Jones Market Data"
   },
   "nasdaq": {
     "name": "NASDAQ Composite",
-    "value": 26343.97,
-    "prev_value": 26293.1,
-    "change": 50.87,
-    "change_pct": 0.19,
-    "as_of": "2026-05-22T20:00:00Z",
-    "source": "Nasdaq"
+    "value": 26656.18,
+    "prev_value": 26343.97,
+    "change": 312.21,
+    "change_pct": 1.19,
+    "as_of": "2026-05-26T20:31:00Z",
+    "source": "Morningstar / Dow Jones Market Data"
   },
   "vix": {
     "name": "VIX",
-    "value": 16.7,
-    "prev_value": 16.76,
-    "change": -0.06,
-    "change_pct": -0.36,
-    "as_of": "2026-05-22T20:00:00Z",
-    "source": "CBOE"
+    "value": 16.85,
+    "prev_value": 16.59,
+    "change": 0.26,
+    "change_pct": 1.57,
+    "as_of": "2026-05-26T21:00:00Z",
+    "source": "Investing.com / CBOE"
   },
   "us10y": {
     "name": "US 10-Year Treasury Yield",
-    "value": 4.56,
-    "prev_value": 4.57,
-    "change": -0.01,
-    "change_pct": -0.22,
-    "as_of": "2026-05-22T20:00:00Z",
-    "source": "US Department of the Treasury"
+    "value": 4.49,
+    "prev_value": 4.56,
+    "change": -0.07,
+    "change_pct": -1.54,
+    "as_of": "2026-05-26T19:59:00Z",
+    "source": "Trading Economics"
   },
   "brent": {
     "name": "Brent Crude",
-    "value": 96.3,
-    "prev_value": 103.54,
-    "change": -7.24,
-    "change_pct": -6.99,
-    "as_of": "2026-05-25T18:43:00Z",
-    "source": "Reuters"
+    "value": 100.1,
+    "prev_value": 96.15,
+    "change": 3.95,
+    "change_pct": 4.1,
+    "as_of": "2026-05-26T22:20:16Z",
+    "source": "Associated Press"
   },
   "headlines": [
     {
-      "title": "Oil tumbles nearly 7% as U.S. and Iran seen moving closer to deal",
-      "source": "Reuters",
-      "published_at": "2026-05-25T11:54:00Z",
-      "url": "https://www.reuters.com"
+      "title": "Global Oil Prices Rise as Fresh U.S. Strikes on Iran Cast Shadow Over Trump's Promised Peace Deal",
+      "source": "TIME",
+      "published_at": "2026-05-26T14:02:00Z",
+      "url": "https://time.com"
     },
     {
-      "title": "Trump says Iran deal should include additional countries joining Abraham Accords",
-      "source": "AP News",
-      "published_at": "2026-05-25T15:50:00Z",
-      "url": "https://apnews.com"
+      "title": "Another surge for Micron, Wall Street's latest US$1 trillion company, sends U.S. stocks to records",
+      "source": "BNN Bloomberg",
+      "published_at": "2026-05-26T09:34:00Z",
+      "url": "https://www.bnnbloomberg.ca"
     },
     {
-      "title": "Israeli opposition leader Lapid says Trump's emerging deal with Iran is 'bad for the region'",
-      "source": "AP News",
-      "published_at": "2026-05-25T18:16:00Z",
-      "url": "https://apnews.com"
+      "title": "US-Israel Strike Iran Vessels at Hormuz, Commodities Whip",
+      "source": "Gotrade",
+      "published_at": "2026-05-26T10:00:00Z",
+      "url": "https://heygotrade.com"
     },
     {
-      "title": "Republicans who have drawn a hard line on Iran pan Trump's emerging proposal to end the war",
-      "source": "AP News",
-      "published_at": "2026-05-24T18:56:00Z",
-      "url": "https://apnews.com"
+      "title": "Treasury Yields Fall to Kick Off the Week",
+      "source": "TradingView",
+      "published_at": "2026-05-26T11:43:00Z",
+      "url": "https://www.tradingview.com"
     },
     {
-      "title": "Deadliest coal mine explosion in China in years kills at least 82 people",
-      "source": "AP News",
-      "published_at": "2026-05-24T09:43:00Z",
-      "url": "https://apnews.com"
+      "title": "Prospects fade for imminent end to Iran war as attacks restart",
+      "source": "NPR",
+      "published_at": "2026-05-26T14:00:00Z",
+      "url": "https://www.npr.org"
     }
   ],
   "notes": [
-    "US equity and bond markets were closed on Monday, May 25, 2026, in observance of Memorial Day; metrics reflect Friday, May 22 closes.",
-    "Brent crude experienced a significant selloff amid progressing US-Iran negotiations."
+    "US equity markets hit record closing highs today following the Memorial Day holiday weekend, heavily driven by continued tech and AI rallies, pushing the S&P 500 and Nasdaq higher.",
+    "Brent crude oil rallied significantly following new US-Israel military strikes on Iranian targets near the Strait of Hormuz, throwing cold water on earlier diplomatic optimism.",
+    "Treasury yields eased marginally over the session despite resurfacing inflation fears tied to the oil shock."
   ]
 }

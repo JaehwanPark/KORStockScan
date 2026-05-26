@@ -12,7 +12,8 @@ def _patch_dirs(monkeypatch, tmp_path):
     swing = tmp_path / "data" / "report" / "swing_runtime_approval"
     code = tmp_path / "data" / "report" / "code_improvement_workorder"
     runtime_gap = tmp_path / "data" / "report" / "runtime_apply_gap_audit"
-    for path in (docs, ev, openai, swing, code, runtime_gap):
+    tuning_performance = tmp_path / "data" / "report" / "tuning_performance_control_tower"
+    for path in (docs, ev, openai, swing, code, runtime_gap, tuning_performance):
         path.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(mod, "DOCS_DIR", docs)
     monkeypatch.setattr(mod, "CHECKLIST_DIR", docs / "checklists")
@@ -21,6 +22,7 @@ def _patch_dirs(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_DIR", swing)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_REPORT_DIR", code)
     monkeypatch.setattr(mod, "RUNTIME_APPLY_GAP_REPORT_DIR", runtime_gap)
+    monkeypatch.setattr(mod, "TUNING_PERFORMANCE_REPORT_DIR", tuning_performance)
     return docs, ev, openai, swing, code
 
 
@@ -67,6 +69,7 @@ def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(monkey
     assert "[OpenAIWSIntradaySample0511]" in text
     assert "[SimProbeIntradayCoverage0511]" in text
     assert "[CodeImprovementWorkorderReview0511]" in text
+    assert "tuning_performance_control_tower_2026-05-08.json" in text
     assert "codex_daily_workorder_*.md" in text
 
 
@@ -182,6 +185,42 @@ def test_runtime_apply_gap_pending_is_surfaced_in_preopen_task(monkeypatch, tmp_
     assert "post_apply_attribution_pending" in text
     assert "entry_wait6579_score66_69_recovery_gate_v1:2026-05-22" in text
     assert "runtime_gap_pending_not_consumed" in text
+
+
+def test_runtime_apply_gap_codex_directives_are_surfaced_as_postclose_task(monkeypatch, tmp_path):
+    docs, ev_dir, openai_dir, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
+    runtime_gap_dir = mod.RUNTIME_APPLY_GAP_REPORT_DIR
+    _write_json(ev_dir / "threshold_cycle_ev_2026-05-22.json", {"runtime_apply": {"runtime_change": False}})
+    _write_json(
+        openai_dir / "openai_ws_stability_2026-05-22.json",
+        {"decision": "keep_ws", "entry_price_canary_summary": {"canary_event_count": 0}},
+    )
+    _write_json(swing_dir / "swing_runtime_approval_2026-05-22.json", {"approval_requests": []})
+    _write_json(code_dir / "code_improvement_workorder_2026-05-22.json", {"summary": {"selected_order_count": 0}})
+    _write_json(
+        runtime_gap_dir / "runtime_apply_gap_audit_2026-05-22.json",
+        {
+            "summary": {"codex_directive_count": 1},
+            "candidate_route_ledger": [],
+            "retry_queue": [],
+            "codex_workorder_directives": [
+                {
+                    "directive_type": "IMPLEMENT_RUNTIME_BRIDGE_FOR_ENTRY_BUCKET",
+                    "candidate_id": "entry_wait6579_score66_69_recovery_gate_v1:2026-05-22",
+                    "blocking_contract": "env_mapping_contract",
+                }
+            ],
+        },
+    )
+
+    mod.build_next_stage2_checklist("2026-05-22")
+
+    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(encoding="utf-8")
+    assert "[RuntimeApplyGapDirectiveReview0526]" in text
+    assert "runtime apply gap Codex 작업지시" in text
+    assert "IMPLEMENT_RUNTIME_BRIDGE_FOR_ENTRY_BUCKET" in text
+    assert "entry_wait6579_score66_69_recovery_gate_v1:2026-05-22" in text
+    assert "approval artifact나 즉시 runtime env 수정" in text
 
 
 def test_build_next_stage2_checklist_preserves_unknown_tasks_inside_auto_block(monkeypatch, tmp_path):

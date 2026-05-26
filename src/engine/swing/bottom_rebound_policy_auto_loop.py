@@ -132,6 +132,17 @@ def _bottom_bucket_ev(ev_report: dict[str, Any]) -> dict[str, Any]:
     return max(candidates, key=lambda item: (_safe_float(item.get("source_quality_adjusted_ev_pct")), _safe_int(item.get("sample_count"))))
 
 
+def _research_sample_count(research: dict[str, Any]) -> int:
+    summary = research.get("summary") if isinstance(research.get("summary"), dict) else {}
+    portfolio = research.get("portfolio_backtest") if isinstance(research.get("portfolio_backtest"), dict) else {}
+    portfolio_summary = portfolio.get("summary") if isinstance(portfolio.get("summary"), dict) else {}
+    return max(
+        _safe_int(summary.get("backtest_trade_count")),
+        _safe_int(portfolio_summary.get("trade_count")),
+        _safe_int(summary.get("signal_rows")),
+    )
+
+
 def _build_context(
     *,
     config: PolicyAutoLoopConfig,
@@ -141,8 +152,11 @@ def _build_context(
     source_paths: dict[str, Path],
 ) -> dict[str, Any]:
     bucket = _bottom_bucket_ev(ev_report)
-    baseline_ev = _research_ev(research)
-    candidate_ev = _safe_float(bucket.get("source_quality_adjusted_ev_pct"))
+    research_ev = _research_ev(research)
+    bucket_ev = _safe_float(bucket.get("source_quality_adjusted_ev_pct"))
+    has_sim_bucket = bool(bucket)
+    baseline_ev = 0.0
+    candidate_ev = bucket_ev if has_sim_bucket else research_ev
     absolute_improvement = candidate_ev - baseline_ev
     relative_improvement = (
         absolute_improvement / abs(baseline_ev)
@@ -163,16 +177,25 @@ def _build_context(
         },
         "source_contracts": {
             "bottom_rebound_research": _contract_ok(research, "research_only"),
-            "candidate_source": _contract_ok(candidate_source, "swing_sim_candidate_source_only"),
             "swing_strategy_discovery_ev": _contract_ok(ev_report, "swing_sim_exploration_only"),
+        },
+        "downstream_contracts": {
+            "candidate_source": _contract_ok(candidate_source, "swing_sim_candidate_source_only"),
+            "candidate_source_selected_count": _safe_int(
+                (candidate_source.get("source_quality") or {}).get("selected_candidate_count")
+                if isinstance(candidate_source.get("source_quality"), dict)
+                else 0
+            ),
         },
         "source_paths": {label: str(path) if path.exists() else None for label, path in source_paths.items()},
         "metrics": {
-            "baseline_research_ev_pct": round(baseline_ev, 6),
+            "baseline_research_ev_pct": round(research_ev, 6),
+            "baseline_policy_ev_pct": round(baseline_ev, 6),
             "candidate_sim_bucket_ev_pct": round(candidate_ev, 6),
+            "candidate_ev_evidence_source": "swing_strategy_discovery_ev_bucket" if has_sim_bucket else "bottom_rebound_research_backtest_bootstrap",
             "absolute_improvement_pct": round(absolute_improvement, 6),
             "relative_improvement": round(relative_improvement, 6),
-            "sample_count": _safe_int(bucket.get("sample_count")),
+            "sample_count": _safe_int(bucket.get("sample_count")) if has_sim_bucket else _research_sample_count(research),
             "ev_bucket": bucket,
         },
         "proposed_policy": {
@@ -235,13 +258,17 @@ def _ai_instructions() -> str:
         "recommendation_history replacement, or live entry relaxation.\n"
         "If there is no explicit source-quality or forbidden-use gap, small/ambiguous concerns must not block "
         "sim-only auto approval when the numeric 1 percent improvement rule passes.\n"
-        "Return strict JSON with schema_version, interpretation, audit, and final_conclusion."
+        "Return strict JSON for swing_bottom_rebound_policy_ai_review_v1 with these exact top-level keys: "
+        "schema_version, interpretation, audit, final_conclusion.\n"
+        "Use audit.status in pass, correction_required, insufficient_context. "
+        "Use final_conclusion.classification_state in sim_auto_approved, source_only_keep_collecting, code_patch_required."
     )
 
 
 def _call_openai_review(context: dict[str, Any], *, model: str) -> tuple[Any | None, dict[str, Any]]:
     try:
         from openai import OpenAI, RateLimitError
+        from src.engine.ai_response_contracts import build_openai_response_text_format
         from src.engine.daily_threshold_cycle_report import _extract_openai_response_text, _load_threshold_ai_openai_keys
     except Exception as exc:
         return None, {"provider": "openai", "status": "unavailable", "reason": f"openai import failed: {exc}"}
@@ -256,7 +283,7 @@ def _call_openai_review(context: dict[str, Any], *, model: str) -> tuple[Any | N
                 model=model,
                 instructions=_ai_instructions(),
                 input=prompt,
-                text={"format": {"type": "json_object"}, "verbosity": "low"},
+                text={"format": build_openai_response_text_format(AI_REVIEW_SCHEMA_NAME), "verbosity": "low"},
                 reasoning={"effort": "medium"},
                 store=False,
                 timeout=120,
@@ -286,6 +313,34 @@ def _call_openai_review(context: dict[str, Any], *, model: str) -> tuple[Any | N
     return None, {"provider": "openai", "status": "unavailable", "reason": "all OpenAI attempts failed", "model": model, "errors": errors[-3:]}
 
 
+def _normalize_ai_payload_shape(payload: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    normalized = dict(payload)
+    notes: list[str] = []
+    if normalized.get("schema_version") == "1":
+        normalized["schema_version"] = 1
+        notes.append("normalized_schema_version_string")
+    if not isinstance(normalized.get("final_conclusion"), dict):
+        conclusions = normalized.get("final_conclusions")
+        if isinstance(conclusions, list) and conclusions and isinstance(conclusions[0], dict):
+            first = conclusions[0]
+            state = first.get("classification_state") or first.get("final_classification_state") or first.get("final_state")
+            decision = str(first.get("final_decision") or first.get("decision") or "").lower()
+            normalized["final_conclusion"] = {
+                "classification_state": state,
+                "promote_policy": bool(first.get("promote_policy"))
+                or state == "sim_auto_approved"
+                or decision in {"approve", "promote"},
+                "reason": first.get("reason") or first.get("correction_reason") or "",
+            }
+            notes.append("normalized_final_conclusions_array")
+    audit = normalized.get("audit") if isinstance(normalized.get("audit"), dict) else {}
+    if audit and str(audit.get("status") or "") == "passed":
+        audit = {**audit, "status": "pass"}
+        normalized["audit"] = audit
+        notes.append("normalized_audit_status_passed")
+    return normalized, notes
+
+
 def _parse_ai_payload(raw: Any | None) -> tuple[str, dict[str, Any], list[str]]:
     if raw in (None, ""):
         return "missing", {}, ["ai_review_response_missing"]
@@ -296,6 +351,7 @@ def _parse_ai_payload(raw: Any | None) -> tuple[str, dict[str, Any], list[str]]:
             payload = json.loads(str(raw))
         except Exception as exc:
             return "parse_rejected", {}, [f"ai_review_json_parse_failed:{exc}"]
+    payload, normalization_notes = _normalize_ai_payload_shape(payload)
     warnings: list[str] = []
     if payload.get("schema_version") != 1:
         warnings.append("ai_review_schema_version_invalid")
@@ -307,7 +363,7 @@ def _parse_ai_payload(raw: Any | None) -> tuple[str, dict[str, Any], list[str]]:
     conclusion = payload.get("final_conclusion") if isinstance(payload.get("final_conclusion"), dict) else {}
     if str(conclusion.get("classification_state") or "") not in {"sim_auto_approved", "source_only_keep_collecting", "code_patch_required"}:
         warnings.append("ai_review_final_classification_invalid")
-    return ("parse_rejected", payload, warnings) if warnings else ("parsed", payload, [])
+    return ("parse_rejected", payload, warnings + normalization_notes) if warnings else ("parsed", payload, normalization_notes)
 
 
 def _normalize_conclusion(payload: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:

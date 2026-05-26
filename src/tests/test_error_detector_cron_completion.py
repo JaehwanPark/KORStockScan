@@ -189,6 +189,144 @@ class TestCronCompletionDetector:
         assert result.severity == "pass"
         assert result.details["threshold_cycle_postclose_status"] == "pass"
 
+    def test_threshold_postclose_status_artifact_can_complete_pending_done_marker(self, monkeypatch, tmp_path):
+        import json
+        import src.engine.error_detectors.cron_completion as cc
+
+        logs_dir = tmp_path / "logs"
+        status_dir = tmp_path / "data" / "report" / "threshold_cycle_postclose_status"
+        logs_dir.mkdir(parents=True)
+        status_dir.mkdir(parents=True)
+        (logs_dir / "threshold_cycle_postclose_cron.log").write_text(
+            "[START] threshold-cycle postclose target_date=2026-05-26 started_at=2026-05-26T16:10:01+0900\n",
+            encoding="utf-8",
+        )
+        (status_dir / "threshold_cycle_postclose_2026-05-26.status.json").write_text(
+            json.dumps(
+                {
+                    "target_date": "2026-05-26",
+                    "status": "succeeded",
+                    "exit_code": 0,
+                    "manual_recovery": {
+                        "verification_status": "pass_with_pending_done_marker",
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
+        monkeypatch.setattr(cc, "_today_kst", lambda: "2026-05-26")
+        monkeypatch.setattr(
+            cc,
+            "CRON_JOB_REGISTRY",
+            [
+                {
+                    "id": "threshold_cycle_postclose",
+                    "log": "logs/threshold_cycle_postclose_cron.log",
+                    "status_artifact": "data/report/threshold_cycle_postclose_status/threshold_cycle_postclose_{date}.status.json",
+                    "window_start": (16, 10),
+                    "window_end": (17, 0),
+                    "mode": "once",
+                    "critical": True,
+                }
+            ],
+        )
+
+        with _mock_time(21, 30):
+            result = CronCompletionDetector().check()
+
+        assert result.severity == "pass"
+        assert result.details["threshold_cycle_postclose_status"] == "pass"
+        assert result.details["threshold_cycle_postclose_status_artifact_terminal"] == "done"
+
+    def test_once_job_status_artifact_success_overrides_older_failed_log(self, monkeypatch, tmp_path):
+        import json
+        import src.engine.error_detectors.cron_completion as cc
+
+        logs_dir = tmp_path / "logs"
+        status_dir = tmp_path / "data" / "report" / "tuning_monitoring" / "status"
+        logs_dir.mkdir(parents=True)
+        status_dir.mkdir(parents=True)
+        (logs_dir / "tuning_monitoring_postclose_cron.log").write_text(
+            "\n".join(
+                [
+                    "[START] tuning_monitoring_postclose target_date=2026-05-26 started_at=2026-05-26T20:05:01+0900",
+                    "[FAIL] tuning_monitoring_postclose target_date=2026-05-26 reason=threshold_cycle_postclose_not_done",
+                    "[ERROR] tuning monitoring postclose failed status=1",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (status_dir / "tuning_monitoring_postclose_2026-05-26.json").write_text(
+            json.dumps({"target_date": "2026-05-26", "status": "success", "exit_code": 0}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
+        monkeypatch.setattr(cc, "_today_kst", lambda: "2026-05-26")
+        monkeypatch.setattr(
+            cc,
+            "CRON_JOB_REGISTRY",
+            [
+                {
+                    "id": "tuning_monitoring_postclose",
+                    "log": "logs/tuning_monitoring_postclose_cron.log",
+                    "status_artifact": "data/report/tuning_monitoring/status/tuning_monitoring_postclose_{date}.json",
+                    "window_start": (20, 5),
+                    "window_end": (20, 45),
+                    "mode": "once",
+                    "critical": False,
+                }
+            ],
+        )
+
+        with _mock_time(21, 30):
+            result = CronCompletionDetector().check()
+
+        assert result.severity == "pass"
+        assert result.details["tuning_monitoring_postclose_status"] == "pass"
+        assert result.details["tuning_monitoring_postclose_status_artifact_terminal"] == "done"
+
+    def test_once_job_failed_status_artifact_overrides_older_done_log(self, monkeypatch, tmp_path):
+        import json
+        import src.engine.error_detectors.cron_completion as cc
+
+        logs_dir = tmp_path / "logs"
+        status_dir = tmp_path / "data" / "report" / "tuning_monitoring" / "status"
+        logs_dir.mkdir(parents=True)
+        status_dir.mkdir(parents=True)
+        (logs_dir / "tuning_monitoring_postclose_cron.log").write_text(
+            "[DONE] tuning_monitoring_postclose target_date=2026-05-26 finished_at=2026-05-26T20:45:00+0900\n",
+            encoding="utf-8",
+        )
+        (status_dir / "tuning_monitoring_postclose_2026-05-26.json").write_text(
+            json.dumps({"target_date": "2026-05-26", "status": "failed", "exit_code": 1}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
+        monkeypatch.setattr(cc, "_today_kst", lambda: "2026-05-26")
+        monkeypatch.setattr(
+            cc,
+            "CRON_JOB_REGISTRY",
+            [
+                {
+                    "id": "tuning_monitoring_postclose",
+                    "log": "logs/tuning_monitoring_postclose_cron.log",
+                    "status_artifact": "data/report/tuning_monitoring/status/tuning_monitoring_postclose_{date}.json",
+                    "window_start": (20, 5),
+                    "window_end": (20, 45),
+                    "mode": "once",
+                    "critical": False,
+                }
+            ],
+        )
+
+        with _mock_time(21, 30):
+            result = CronCompletionDetector().check()
+
+        assert result.severity == "fail"
+        assert result.details["tuning_monitoring_postclose_status"] == "fail"
+        assert result.details["tuning_monitoring_postclose_status_artifact_terminal"] == "failed"
+
     def test_trading_day_only_jobs_skip_on_non_trading_day(self, monkeypatch, tmp_path):
         import src.engine.error_detectors.cron_completion as cc
 

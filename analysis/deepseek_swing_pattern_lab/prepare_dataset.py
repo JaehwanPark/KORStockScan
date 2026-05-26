@@ -683,8 +683,17 @@ def build_swing_ofi_qi_fact(target_dates: list[str]) -> pd.DataFrame:
             state = str(fields.get("orderbook_micro_state") or "").lower()
             ready = _safe_bool(fields.get("orderbook_micro_ready"))
             healthy = _safe_bool(fields.get("orderbook_micro_observer_healthy"))
+            has_micro_values = any(
+                fields.get(key) not in (None, "", "-")
+                for key in (
+                    "orderbook_micro_qi",
+                    "orderbook_micro_qi_ewma",
+                    "orderbook_micro_ofi_norm",
+                    "orderbook_micro_ofi_z",
+                )
+            )
             flags = {
-                "micro_missing_flag": advice in {"MISSING", ""} or state in {"", "missing"},
+                "micro_missing_flag": advice == "MISSING" or state in {"", "missing"} or (not ready and not has_micro_values),
                 "micro_stale_flag": stale in {"1", "true", "yes", "y"},
                 "observer_unhealthy_flag": not healthy,
                 "micro_not_ready_flag": not ready,
@@ -822,7 +831,8 @@ def build_data_quality_report(
         warning = f"OFI/QI stale/missing ratio: {stale_ratio} ({stale_missing}/{ofi_qi_rows})"
         if active_reasons:
             warning = f"{warning}; reasons: {active_reasons}"
-        warnings.append(warning)
+        if stale_ratio > 0.3:
+            warnings.append(warning)
 
     def _false_count(df: pd.DataFrame, column: str) -> int:
         if df.empty or column not in df:

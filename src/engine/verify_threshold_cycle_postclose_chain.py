@@ -32,6 +32,7 @@ _AI_RUNTIME_STATES = {
 _OPTIONAL_ARTIFACT_LABELS = {
     "buy_funnel_sentinel",
     "lifecycle_bucket_discovery",
+    "threshold_preopen_apply_next",
 }
 _AI_EXEMPT_RUNTIME_FAMILIES = {
     "latency_classifier_runtime_profile",
@@ -152,6 +153,14 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "runtime_apply_gap_audit": REPORT_DIR
         / "runtime_apply_gap_audit"
         / f"runtime_apply_gap_audit_{target_date}.json",
+        "runtime_apply_bridge": REPORT_DIR
+        / "runtime_apply_bridge"
+        / f"runtime_apply_bridge_{target_date}.json",
+        "threshold_preopen_apply_next": PROJECT_ROOT
+        / "data"
+        / "threshold_cycle"
+        / "apply_plans"
+        / f"threshold_apply_{next_day}.json",
         "pattern_lab_currentness_audit": REPORT_DIR
         / "pattern_lab_currentness_audit"
         / f"pattern_lab_currentness_audit_{target_date}.json",
@@ -1316,6 +1325,8 @@ def build_threshold_cycle_postclose_verification(
     workorder = _load_json(paths["code_improvement_workorder"])
     runtime_summary = _load_json(paths["runtime_approval_summary"])
     runtime_apply_gap_audit = _load_json(paths["runtime_apply_gap_audit"])
+    bridge_report = _load_json(paths["runtime_apply_bridge"])
+    preopen_apply_next = _load_json(paths["threshold_preopen_apply_next"])
     buy_funnel_report = _load_json(paths["buy_funnel_sentinel"])
     currentness_audit = _load_json(paths["pattern_lab_currentness_audit"])
     pattern_lab_ai_review = _load_json(paths["pattern_lab_ai_review"])
@@ -1327,7 +1338,6 @@ def build_threshold_cycle_postclose_verification(
     discovery_report = _load_json(paths["lifecycle_bucket_discovery"])
     swing_ldm_report = _load_json(paths["swing_lifecycle_decision_matrix"])
     swing_bucket_discovery_report = _load_json(paths["swing_lifecycle_bucket_discovery"])
-    bridge_report = _load_json(REPORT_DIR / "runtime_apply_bridge" / f"runtime_apply_bridge_{target_date}.json")
     scalp_sim_overnight_path = _scalp_sim_overnight_path(target_date)
     scalp_sim_overnight = _load_json(scalp_sim_overnight_path)
     scalp_sim_overnight_quality = _scalp_sim_overnight_source_quality(
@@ -1572,9 +1582,12 @@ def build_threshold_cycle_postclose_verification(
         "code_improvement_workorder" if "code_improvement_workorder" in disabled_stage_flags else "",
         "threshold_cycle_ev" if "daily_ev" in disabled_stage_flags else "",
         "runtime_approval_summary" if "runtime_approval_summary" in disabled_stage_flags else "",
+        "runtime_apply_bridge" if "runtime_apply_bridge" in disabled_stage_flags else "",
         "runtime_apply_gap_audit" if "runtime_apply_gap_audit" in disabled_stage_flags else "",
         "next_stage2_checklist" if "next_stage2_checklist" in disabled_stage_flags else "",
     }
+    if "runtime_apply_bridge" not in execution_flags:
+        disabled_artifact_labels.add("runtime_apply_bridge")
     if "runtime_apply_gap_audit" not in execution_flags:
         disabled_artifact_labels.add("runtime_apply_gap_audit")
     if "swing_strategy_discovery" not in execution_flags:
@@ -1669,7 +1682,11 @@ def build_threshold_cycle_postclose_verification(
         runtime_apply_gap_audit.get("summary") if isinstance(runtime_apply_gap_audit.get("summary"), dict) else {}
     )
     runtime_apply_gap_audit_issues: list[str] = []
-    if "runtime_apply_gap_audit" in execution_flags and "runtime_apply_gap_audit" not in disabled_stage_flags:
+    runtime_gap_check_enabled = (
+        "runtime_apply_gap_audit" not in disabled_stage_flags
+        and ("runtime_apply_gap_audit" in execution_flags or bool(runtime_apply_gap_audit))
+    )
+    if runtime_gap_check_enabled:
         if not runtime_apply_gap_audit:
             runtime_apply_gap_audit_issues.append("runtime_apply_gap_audit_missing")
         if runtime_apply_gap_audit_status == "fail":
@@ -1681,6 +1698,10 @@ def build_threshold_cycle_postclose_verification(
             and not runtime_apply_gap_audit.get("retry_queue")
         ):
             runtime_apply_gap_audit_issues.append("runtime_apply_gap_fail_without_retry_queue")
+        if bridge_report and _consumer_stale(runtime_apply_gap_audit, bridge_report):
+            runtime_apply_gap_audit_issues.append("runtime_apply_gap_audit_stale_before_runtime_apply_bridge")
+        if preopen_apply_next and _consumer_stale(runtime_apply_gap_audit, preopen_apply_next):
+            runtime_apply_gap_audit_issues.append("runtime_apply_gap_audit_stale_before_threshold_preopen_apply")
     stale_downstream_links: list[str] = []
     if "daily_ev" not in disabled_stage_flags:
         if downstream_links.get("threshold_cycle_ev_sources_workorder") and _consumer_stale(ev_report, workorder):
@@ -1842,6 +1863,8 @@ def build_threshold_cycle_postclose_verification(
             "summary": runtime_apply_gap_audit_summary,
             "retry_queue_count": len(runtime_apply_gap_audit.get("retry_queue") or []),
             "codex_directive_count": len(runtime_apply_gap_audit.get("codex_workorder_directives") or []),
+            "runtime_apply_bridge_generated_at": bridge_report.get("generated_at"),
+            "threshold_preopen_apply_next_generated_at": preopen_apply_next.get("generated_at"),
         },
         "ai_correction": ai_correction,
         "scalp_sim_overnight_source_quality": scalp_sim_overnight_quality,

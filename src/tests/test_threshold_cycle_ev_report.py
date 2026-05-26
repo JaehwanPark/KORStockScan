@@ -466,6 +466,36 @@ def test_threshold_cycle_ev_lifecycle_summary_surfaces_submit_contract(tmp_path,
     assert summary["post_submit_contract_gaps"] == [{"gap_type": "broker_receipt_contract_gap"}]
 
 
+def test_audit_summary_resolves_source_only_candidate_warning(tmp_path):
+    report_dir = tmp_path / "producer_gap_discovery"
+    report_dir.mkdir()
+    path = report_dir / "producer_gap_discovery_2026-05-26.json"
+    path.write_text(
+        json.dumps(
+            {
+                "status": "warning",
+                "runtime_effect": False,
+                "decision_authority": "source_quality_only",
+                "summary": {
+                    "fail_count": 0,
+                    "workorder_count": 8,
+                    "audit_status": "pass",
+                    "ai_fail_closed": False,
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    summary, artifact, warnings = mod._audit_summary("2026-05-26", "producer_gap_discovery", report_dir)
+
+    assert artifact == str(path)
+    assert warnings == []
+    assert summary["source_only_candidate_warning_resolved"] is True
+    assert summary["code_improvement_order_count"] == 8
+
+
 def test_build_threshold_cycle_ev_report_warns_when_pattern_lab_artifact_missing(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     monitor_dir = report_dir / "monitor_snapshots"

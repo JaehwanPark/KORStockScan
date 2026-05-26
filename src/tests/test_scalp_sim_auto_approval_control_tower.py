@@ -1,0 +1,119 @@
+from __future__ import annotations
+
+import json
+
+from src.engine.scalping import scalp_sim_auto_approval_control_tower as mod
+
+
+def _lifecycle_approval() -> dict:
+    return {
+        "schema_version": "lifecycle_bucket_sim_auto_approval_v1",
+        "date": "2026-05-26",
+        "policy_id": "lifecycle_bucket_discovery_sim_auto_approval",
+        "approved": True,
+        "human_approval_required": False,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "approved_bucket_ids": ["entry_bucket_a", "scale_bucket_b"],
+        "approved_bucket_count": 2,
+    }
+
+
+def _scale_in_approval() -> dict:
+    return {
+        "policy_id": "scalp_sim_scale_in_window_expansion",
+        "family": "scalp_sim_scale_in_window_expansion",
+        "approved": True,
+        "approval_state": "sim_auto_approved",
+        "human_approval_required": False,
+        "runtime_effect": False,
+        "allowed_runtime_apply": True,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "source_quality_status": "pass",
+        "target_env_keys": ["SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED"],
+        "recommended_values": {"enabled": True},
+    }
+
+
+def _runtime_bridge() -> dict:
+    return {
+        "candidates": [
+            {
+                "family": "scale_in_bucket_runtime_policy_v1",
+                "bridge_candidate_state": "live_auto_apply_ready",
+                "allowed_runtime_apply": True,
+                "live_auto_apply": True,
+            }
+        ]
+    }
+
+
+def test_scalp_control_tower_merges_lifecycle_and_scale_in_sources(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "SIM_AUTO_APPROVAL_DIR", tmp_path / "approvals")
+    monkeypatch.setattr(mod, "SCALP_SIM_POLICY_DIR", tmp_path / "policies")
+    catalog = tmp_path / "lifecycle_bucket_catalog_2026-05-26.json"
+    catalog.write_text(json.dumps({"buckets": []}), encoding="utf-8")
+
+    approval = mod.build_scalp_sim_auto_approval(
+        "2026-05-26",
+        lifecycle_sim_approval=_lifecycle_approval(),
+        lifecycle_bucket_catalog_path=catalog,
+        scale_in_approval=_scale_in_approval(),
+        runtime_apply_bridge=_runtime_bridge(),
+    )
+
+    assert approval["approved"] is True
+    assert approval["approved_policy_count"] == 2
+    assert approval["approved_source_ids"] == [
+        "lifecycle_bucket_discovery",
+        "scalp_sim_scale_in_window_approval",
+    ]
+    assert approval["runtime_effect"] is False
+    assert approval["allowed_runtime_apply"] is False
+    assert approval["actual_order_submitted"] is False
+    assert approval["broker_order_forbidden"] is True
+    assert approval["source_status"]["runtime_apply_bridge"]["live_auto_apply_ready_count"] == 1
+    assert all(item["allowed_runtime_apply"] is False for item in approval["approved_policies"])
+
+
+def test_scalp_control_tower_blocks_when_source_contract_invalid(tmp_path):
+    bad_lifecycle = _lifecycle_approval()
+    bad_lifecycle["runtime_effect"] = True
+
+    approval = mod.build_scalp_sim_auto_approval(
+        "2026-05-26",
+        lifecycle_sim_approval=bad_lifecycle,
+        lifecycle_bucket_catalog_path=tmp_path / "catalog.json",
+        scale_in_approval={},
+        runtime_apply_bridge={},
+    )
+
+    assert approval["approved"] is False
+    assert "lifecycle_sim_auto_approval_contract_invalid" in approval["blocked_reasons"]
+    assert "sim_policy_candidate_missing" in approval["blocked_reasons"]
+
+
+def test_scalp_control_tower_writes_approval_and_catalog(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "SIM_AUTO_APPROVAL_DIR", tmp_path / "approvals")
+    monkeypatch.setattr(mod, "SCALP_SIM_POLICY_DIR", tmp_path / "policies")
+    lifecycle_catalog = tmp_path / "catalog.json"
+    lifecycle_catalog.write_text(json.dumps({"buckets": []}), encoding="utf-8")
+
+    approval = mod.build_scalp_sim_auto_approval(
+        "2026-05-26",
+        lifecycle_sim_approval=_lifecycle_approval(),
+        lifecycle_bucket_catalog_path=lifecycle_catalog,
+        scale_in_approval=_scale_in_approval(),
+        runtime_apply_bridge={},
+    )
+    paths = mod.write_scalp_sim_auto_approval(approval)
+
+    written = json.loads(paths["approval"].read_text(encoding="utf-8"))
+    catalog = json.loads(paths["catalog"].read_text(encoding="utf-8"))
+    assert written["report_type"] == "scalp_sim_auto_approval"
+    assert catalog["schema_version"] == "scalp_sim_policy_catalog_v1"
+    assert catalog["broker_order_forbidden"] is True
+    assert len(catalog["policies"]) == 2

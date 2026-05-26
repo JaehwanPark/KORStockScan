@@ -286,6 +286,59 @@ def test_build_code_improvement_workorder_consumes_pattern_lab_currentness_audit
     )
 
 
+def test_build_code_improvement_workorder_preserves_observability_order_source(tmp_path, monkeypatch):
+    automation_dir = tmp_path / "automation"
+    currentness_dir = tmp_path / "currentness"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    automation_dir.mkdir()
+    currentness_dir.mkdir()
+    (automation_dir / "scalping_pattern_lab_automation_2026-05-15.json").write_text(
+        json.dumps({"date": "2026-05-15", "code_improvement_orders": []}),
+        encoding="utf-8",
+    )
+    (currentness_dir / "pattern_lab_currentness_audit_2026-05-15.json").write_text(
+        json.dumps(
+            {
+                "status": "warning",
+                "summary": {"fail_count": 1},
+                "code_improvement_orders": [
+                    {
+                        "order_id": "order_tuning_observability_performance_tuning_missing_contract_gap",
+                        "title": "observability source contract gap",
+                        "source_report_type": "tuning_observability_summary",
+                        "target_subsystem": "pattern_lab",
+                        "priority": 1,
+                        "route": "source_contract_gap",
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
+    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-observation-audit")
+    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", currentness_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-15", max_orders=1)
+
+    order = report["orders"][0]
+    assert order["source_report_type"] == "tuning_observability_summary"
+    assert order["route"] == "source_contract_gap"
+    assert order["decision"] == "implement_now"
+    assert order["runtime_effect"] is False
+    assert order["allowed_runtime_apply"] is False
+
+
 def test_build_code_improvement_workorder_consumes_pattern_lab_ai_review(tmp_path, monkeypatch):
     automation_dir = tmp_path / "automation"
     ai_review_dir = tmp_path / "ai-review"

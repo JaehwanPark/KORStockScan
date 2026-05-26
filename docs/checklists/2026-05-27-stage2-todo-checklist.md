@@ -57,14 +57,14 @@
 ## 장후 체크리스트 (16:30~18:55)
 
 - [ ] `[ThresholdDailyEVReport0527] daily EV real/sim/combined split 및 자동 반영 결과 확인` (`Due: 2026-05-27`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:45`, `Track: RuntimeStability`)
-  - Source: [threshold_cycle_ev_2026-05-26.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-26.json)
-  - 판정 기준: real/sim/combined split, selected/blocked family, runtime_change, warning을 분리해 확인한다.
+  - Source: [tuning_performance_control_tower_2026-05-26.json](/home/ubuntu/KORStockScan/data/report/tuning_performance_control_tower/tuning_performance_control_tower_2026-05-26.json), [threshold_cycle_ev_2026-05-26.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-26.json)
+  - 판정 기준: tuning performance control tower를 먼저 보고 `live_auto_apply_ready`, `sim_auto_approved`, post-apply attribution, EV authority를 분리해 확인한다.
   - 금지: sim/combined EV만으로 broker execution 품질이나 live 전환을 확정하지 않는다.
   - 다음 액션: 다음 장전 apply 입력으로 쓸 수 있는 항목과 hold_sample/freeze 항목을 분리한다.
 
 - [ ] `[CodeImprovementWorkorderReview0527] code improvement workorder 구현 필요 여부 및 Codex 지시 대상 확인` (`Due: 2026-05-27`, `Slot: POSTCLOSE`, `TimeWindow: 16:45~17:00`, `Track: ScalpingLogic`)
   - Source: [code_improvement_workorder_2026-05-26.md](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-26.md), [code_improvement_workorder_2026-05-26.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-26.json)
-  - 판정 기준: selected_order_count=56와 `implement_now`, `attach_existing_family`, `design_family_candidate`, `reject` 분류를 확인한다.
+  - 판정 기준: selected_order_count=64와 `implement_now`, `attach_existing_family`, `design_family_candidate`, `reject` 분류를 확인한다.
   - 금지: code-improvement workorder를 자동 repo 수정으로 취급하지 않는다. 사용자가 Codex 구현을 지시한 경우에만 실행한다.
   - 다음 액션: 구현 필요, 설계 보류, reject, already_implemented 중 하나로 닫는다.
 
@@ -74,13 +74,26 @@
   - 금지: approval request만 보고 env 파일을 직접 수정하지 않고, 자동화 산출물에 있는 요청을 답변에만 남기고 checklist/Project 대상에서 누락하지 않는다.
   - 다음 액션: approval request가 있으면 `approval_id`, 후보/대상, artifact path, 승인 여부, 다음 PREOPEN 적용 확인 항목을 남긴다. 누락된 항목이 있으면 다음 영업일 checklist에 parser-friendly checkbox로 추가한다.
 
+- [ ] `[RuntimeApplyGapDirectiveReview0527] runtime apply gap Codex 작업지시 표면화 및 구현 여부 확인` (`Due: 2026-05-27`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:30`, `Track: ScalpingLogic`)
+  - Source: [runtime_apply_gap_audit_2026-05-26.json](/home/ubuntu/KORStockScan/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_2026-05-26.json), [runtime_apply_gap_audit_2026-05-26.md](/home/ubuntu/KORStockScan/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_2026-05-26.md), [runtime-apply-gap-audit-user-guide.md](/home/ubuntu/KORStockScan/docs/runtime-apply-gap-audit-user-guide.md)
+  - 판정 기준: runtime apply gap audit의 Codex 작업지시 `IMPLEMENT_RUNTIME_BRIDGE_FOR_ENTRY_BUCKET`:entry_wait6579_score66_69_recovery_gate_v1:2026-05-26(block=env_mapping_contract), `IMPLEMENT_SCALE_IN_POLICY_CONTRACT`:scale_in_bucket_runtime_policy_v1:2026-05-26(block=runtime_bridge_contract)를 구현 필요, 이미 해결, 설계 보류, reject로 분류한다.
+  - 금지: 작업지시를 approval artifact나 즉시 runtime env 수정으로 해석하지 않는다. broker/order/provider/cap guard 우회와 장중 threshold mutation은 금지한다.
+  - 다음 액션: `implement_now`, `already_implemented`, `defer_design`, `reject`, `needs_new_workorder` 중 하나로 닫고, 구현 시 테스트와 postclose verifier handoff를 같이 확인한다.
+
 - [ ] `[ShadowCanaryCohortReview0527] shadow/canary/cohort 런타임 분류 및 정리 판정` (`Due: 2026-05-27`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)
   - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)
   - 판정 기준: 당일 변경/관찰 결과를 기준으로 `remove`, `observe-only`, `baseline-promote`, `active-canary` 상태 변동 여부를 닫는다.
   - 금지: shadow 금지, canary-only, baseline 승격 원칙을 코드/문서 상태와 분리하지 않는다.
   - 다음 액션: 변경이 있으면 기준문서와 checklist를 함께 갱신하고 cohort 잠금 필드를 남긴다.
 
+- [ ] `[EngineRefactorMonitoringSamplerSlice0527] src.engine Phase 2 Slice 2 monitoring sampler safe slice 구현 여부 확인` (`Due: 2026-05-27`, `Slot: POSTCLOSE`, `TimeWindow: 18:55~19:10`, `Track: Plan`)
+  - Source: [src-engine-refactor-inventory.md](/home/ubuntu/KORStockScan/docs/proposals/src-engine-refactor-inventory.md), [system_metric_sampler.py](/home/ubuntu/KORStockScan/src/engine/system_metric_sampler.py)
+  - 판정 기준: 05-26 POSTCLOSE에서 선정한 `monitoring_sampler_slice_selected`를 기준으로 `src.engine.system_metric_sampler -> src.engine.monitoring.system_metric_sampler` safe slice를 진행할지 결정한다. 구현 시 new canonical path, old root wrapper, old/new import smoke, old/new CLI smoke, targeted monitoring tests, parser, `git diff --check`를 한 slice에서 닫는다.
+  - 금지: runtime/order/provider/threshold/bot restart 경로 이동, cron/job id 의미 변경, output path/JSON schema/metric semantics 변경, wrapper 제거, `src/trading` 또는 `src/utils` 전체 이동, direct import bulk rewrite를 금지한다.
+  - 다음 액션: `implement_monitoring_sampler_slice`, `defer_after_consumer_inventory`, `blocked_by_runtime_path`, `wrapper_keep_required`, `tests_or_smoke_failed` 중 하나로 닫는다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
+
 
 
 

@@ -105,14 +105,14 @@
 ## Swing Pattern Lab Automation
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_2026-05-26.json`
 - deepseek_lab_available: `True`
-- findings/orders: `5` / `4`
-- data_quality_warnings: `1`
-- top_level_data_quality_warnings: `1`
+- findings/orders: `5` / `3`
+- data_quality_warnings: `0`
+- top_level_data_quality_warnings: `0`
 - resolved_data_quality_warnings: `0`
-- ofi_qi_stale_missing_unique_records: `7`
-- ofi_qi_stale_missing_reasons: `{'micro_missing': 795, 'micro_stale': 0, 'observer_unhealthy': 1, 'micro_not_ready': 4, 'state_insufficient': 4}`
-- ofi_qi_stale_missing_reason_combinations: `{'micro_missing': 791, 'micro_missing+micro_not_ready+state_insufficient': 3, 'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 1}`
-- ofi_qi_stale_missing_reason_combination_unique_records: `{'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 1, 'micro_missing': 6}`
+- ofi_qi_stale_missing_unique_records: `1`
+- ofi_qi_stale_missing_reasons: `{'micro_missing': 1, 'micro_stale': 0, 'observer_unhealthy': 1, 'micro_not_ready': 4, 'state_insufficient': 4}`
+- ofi_qi_stale_missing_reason_combinations: `{'micro_not_ready+state_insufficient': 3, 'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 1}`
+- ofi_qi_stale_missing_reason_combination_unique_records: `{'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 1}`
 - ofi_qi_observer_unhealthy_overlap: `{'observer_unhealthy_total': 1, 'observer_unhealthy_with_other_reason': 1, 'observer_unhealthy_only': 0}`
 - source_quality_blocked_families: `[]`
 - carryover_warnings: `0`
@@ -147,12 +147,12 @@
 - tuning_axis_effect: `False`
 
 ## Pattern Lab Audits
-- currentness: status=`warning` fail=`2` orders=`2` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-26.json`
-- ai_review: status=`warning` orders=`4` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-05-26.json`
+- currentness: status=`pass` fail=`0` orders=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-26.json`
+- ai_review: status=`pass` orders=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-05-26.json`
 - time_window_regime_counterfactual: status=`pass` artifact=`/home/ubuntu/KORStockScan/data/report/time_window_regime_counterfactual/time_window_regime_counterfactual_2026-05-26.json`
 - producer_gap_discovery: status=`warning` orders=`8` artifact=`/home/ubuntu/KORStockScan/data/report/producer_gap_discovery/producer_gap_discovery_2026-05-26.json`
 - stage_hook_workorder_discovery: status=`warning` orders=`2` artifact=`/home/ubuntu/KORStockScan/data/report/stage_hook_workorder_discovery/stage_hook_workorder_discovery_2026-05-26.json`
-- propagation: status=`warning` fail=`0` warnings=`2` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-26.json`
+- propagation: status=`pass` fail=`0` warnings=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-26.json`
 
 ## Swing Runtime Approval
 - request_report: `/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-05-22.json`
@@ -172,8 +172,8 @@
 ## Code Improvement Workorder
 - artifact: `/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-26.json`
 - markdown: `/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-26.md`
-- selected_order_count: `58`
-- decision_counts: `{'implement_now': 28, 'attach_existing_family': 49, 'design_family_candidate': 6, 'defer_evidence': 10, 'reject': 3}`
+- selected_order_count: `64`
+- decision_counts: `{'implement_now': 38, 'attach_existing_family': 44, 'design_family_candidate': 6, 'defer_evidence': 10, 'reject': 3}`
 
 ## Approval Requests
 - none
@@ -212,13 +212,5 @@
 - `position_sizing_dynamic_formula`: `hold_sample` sample=`10/30`
 
 ## Warnings
-- `swing_lab_dq:OFI/QI stale/missing ratio: 0.9117 (795/872); reasons: micro_missing=795, observer_unhealthy=1, micro_not_ready=4, state_insufficient=4`
 - `swing_strategy_discovery:pending_future_quotes`
-- `swing_lifecycle_decision_matrix:swing_intraday_live_equiv_probe_missing`
 - `swing_lifecycle_decision_matrix:pending_future_quotes`
-- `swing_lifecycle_bucket_discovery:swing_ldm_ai_review_not_configured`
-- `pattern_lab_currentness_audit_warning`
-- `pattern_lab_ai_review_warning`
-- `producer_gap_discovery_warning`
-- `stage_hook_workorder_discovery_warning`
-- `pattern_lab_propagation_audit_warning`

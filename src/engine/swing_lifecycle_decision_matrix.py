@@ -141,13 +141,26 @@ def _load_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _event_view(record: dict[str, Any]) -> dict[str, Any]:
+    fields = record.get("fields") if isinstance(record.get("fields"), dict) else {}
+    merged = dict(fields)
+    for key, value in record.items():
+        if key == "fields" or value in (None, ""):
+            continue
+        merged[key] = value
+    if "event" not in merged and record.get("stage"):
+        merged["event"] = record.get("stage")
+    return merged
+
+
 def _is_probe_event(record: dict[str, Any]) -> bool:
-    event = str(record.get("event") or record.get("event_type") or "")
+    row = _event_view(record)
+    event = str(row.get("event") or row.get("stage") or "")
     if event not in PROBE_STAGE_BY_EVENT:
         return False
-    if str(record.get("simulation_book") or "") == PROBE_BOOK:
+    if str(row.get("simulation_book") or "") == PROBE_BOOK:
         return True
-    return _as_bool(record.get("swing_intraday_probe")) or str(record.get("probe_book") or "") == PROBE_BOOK
+    return _as_bool(row.get("swing_intraday_probe")) or str(row.get("probe_book") or "") == PROBE_BOOK
 
 
 def _source_quality_status(row: dict[str, Any]) -> str:
@@ -166,7 +179,8 @@ def _source_quality_status(row: dict[str, Any]) -> str:
 
 
 def _probe_row(record: dict[str, Any]) -> dict[str, Any]:
-    event = str(record.get("event") or record.get("event_type") or "")
+    record = _event_view(record)
+    event = str(record.get("event") or record.get("stage") or "")
     stage = PROBE_STAGE_BY_EVENT.get(event, "carry")
     score = _first(record, "score", "ai_score", "runtime_score_proxy", "model_score")
     vpw = _first(record, "v_pw", "vpw", "vpw_score")

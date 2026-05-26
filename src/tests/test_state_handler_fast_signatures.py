@@ -1,6 +1,7 @@
 from dataclasses import replace
 
 from src.engine.sniper_state_handlers import (
+    SCALPING_ENTRY_BLOCKER_ROLE_REGISTRY,
     _apply_initial_entry_qty_cap,
     _apply_wait6579_probe_canary,
     _build_soft_stop_whipsaw_confirmation_decision,
@@ -55,6 +56,21 @@ def test_gatekeeper_fast_signature_absorbs_small_noise():
     sig_b = _build_gatekeeper_fast_signature(stock, ws_b, "KOSPI_ML", 81.4)
 
     assert sig_a == sig_b
+
+
+def test_scalping_entry_blocker_role_registry_keeps_micro_and_gap_non_hard():
+    assert SCALPING_ENTRY_BLOCKER_ROLE_REGISTRY["blocked_gap_from_scan"]["role"] == "baseline_prior_feature"
+    assert SCALPING_ENTRY_BLOCKER_ROLE_REGISTRY["blocked_gap_from_scan"]["hard_block_allowed"] is False
+    assert (
+        SCALPING_ENTRY_BLOCKER_ROLE_REGISTRY["score65_74_recovery_probe_micro_context"]["gate_action"]
+        == "feature_snapshot_only"
+    )
+    assert (
+        SCALPING_ENTRY_BLOCKER_ROLE_REGISTRY["main_buy_recovery_canary_micro_context"]["hard_block_allowed"]
+        is False
+    )
+    assert SCALPING_ENTRY_BLOCKER_ROLE_REGISTRY["latency_danger"]["hard_block_allowed"] is True
+    assert SCALPING_ENTRY_BLOCKER_ROLE_REGISTRY["stale_quote_or_context"]["hard_block_allowed"] is True
 
 
 def test_gatekeeper_fast_signature_absorbs_small_price_and_orderbook_noise():
@@ -395,7 +411,7 @@ def test_should_run_main_buy_recovery_canary_with_feature_allowlist(monkeypatch)
     assert _should_run_main_buy_recovery_canary({"action": "WAIT"}, 72, {}, [], [], _Engine()) is True
 
 
-def test_should_run_main_buy_recovery_canary_rejects_large_sell_or_danger(monkeypatch):
+def test_should_run_main_buy_recovery_canary_keeps_micro_context_feature_only(monkeypatch):
     rules = replace(
         TRADING_RULES,
         AI_MAIN_BUY_RECOVERY_CANARY_ENABLED=True,
@@ -417,7 +433,7 @@ def test_should_run_main_buy_recovery_canary_rejects_large_sell_or_danger(monkey
                 "large_sell_print_detected": True,
             }
 
-    assert _should_run_main_buy_recovery_canary({"action": "WAIT"}, 72, {}, [], [], _BadEngine()) is False
+    assert _should_run_main_buy_recovery_canary({"action": "WAIT"}, 72, {}, [], [], _BadEngine()) is True
     assert (
         _should_run_main_buy_recovery_canary(
             {"action": "WAIT"},
@@ -468,6 +484,44 @@ def test_should_run_score65_74_recovery_probe_uses_dedicated_default_off_flag(mo
         None,
         feature_probe=feature_probe,
     ) is False
+
+
+def test_score65_74_recovery_probe_keeps_micro_context_feature_only(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE=60,
+        AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE=74,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE=65.0,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL=1.2,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP=0.0,
+    )
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+    weak_micro_feature_probe = {
+        "buy_pressure": 10.0,
+        "tick_accel": 0.1,
+        "micro_vwap_bp": -25.0,
+        "large_sell_print": True,
+    }
+
+    assert _should_run_score65_74_recovery_probe(
+        {"action": "WAIT"},
+        62,
+        {"latency_state": "OK"},
+        [],
+        [],
+        None,
+        feature_probe=weak_micro_feature_probe,
+    ) is True
+    assert _should_run_score65_74_recovery_probe(
+        {"action": "WAIT"},
+        62,
+        {"latency_state": "OK"},
+        [],
+        [],
+        None,
+        feature_probe={**weak_micro_feature_probe, "quote_stale": True},
+    ) is False
     assert _should_run_score65_74_recovery_probe(
         {"action": "WAIT"},
         72,
@@ -475,7 +529,7 @@ def test_should_run_score65_74_recovery_probe_uses_dedicated_default_off_flag(mo
         [],
         [],
         None,
-        feature_probe=feature_probe,
+        feature_probe=weak_micro_feature_probe,
     ) is False
 
 

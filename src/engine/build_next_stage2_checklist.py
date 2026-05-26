@@ -23,6 +23,7 @@ OPENAI_WS_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "openai_ws"
 SWING_RUNTIME_APPROVAL_DIR = PROJECT_ROOT / "data" / "report" / "swing_runtime_approval"
 CODE_IMPROVEMENT_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "code_improvement_workorder"
 RUNTIME_APPLY_GAP_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "runtime_apply_gap_audit"
+TUNING_PERFORMANCE_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "tuning_performance_control_tower"
 
 AUTO_START = "<!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->"
 AUTO_END = "<!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->"
@@ -210,6 +211,24 @@ def _runtime_gap_preopen_pending_summary(runtime_gap_report: dict[str, Any]) -> 
     return ", ".join(rendered) + suffix
 
 
+def _runtime_gap_codex_directive_summary(runtime_gap_report: dict[str, Any]) -> str:
+    directives = runtime_gap_report.get("codex_workorder_directives")
+    if not isinstance(directives, list):
+        return ""
+    rendered: list[str] = []
+    for item in directives[:5]:
+        if not isinstance(item, dict):
+            continue
+        directive_type = str(item.get("directive_type") or "-")
+        candidate_id = str(item.get("candidate_id") or "-")
+        blocking_contract = str(item.get("blocking_contract") or item.get("ai_reasoning_summary") or "-")
+        rendered.append(f"`{directive_type}`:{candidate_id}(block={blocking_contract})")
+    if not rendered:
+        return ""
+    suffix = f" 외 {len(directives) - 5}건" if len(directives) > 5 else ""
+    return ", ".join(rendered) + suffix
+
+
 def _task_line(task: GeneratedTask, target_date: str) -> str:
     return (
         f"- [ ] `[{task.task_id}] {task.title}` "
@@ -236,10 +255,12 @@ def _build_tasks(
 ) -> list[GeneratedTask]:
     mmdd = _compact_mmdd(target_date)
     ev_path = EV_REPORT_DIR / f"threshold_cycle_ev_{source_date}.json"
+    tuning_performance_path = TUNING_PERFORMANCE_REPORT_DIR / f"tuning_performance_control_tower_{source_date}.json"
     openai_path = OPENAI_WS_REPORT_DIR / f"openai_ws_stability_{source_date}.md"
     code_md_path = DOCS_DIR / "code-improvement-workorders" / f"code_improvement_workorder_{source_date}.md"
     runtime_gap_path = RUNTIME_APPLY_GAP_REPORT_DIR / f"runtime_apply_gap_audit_{source_date}.json"
     runtime_gap_pending = _runtime_gap_preopen_pending_summary(runtime_gap_report)
+    runtime_gap_directives = _runtime_gap_codex_directive_summary(runtime_gap_report)
     threshold_source = (
         f"[threshold_cycle_ev_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(ev_path)}), "
         "[threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), "
@@ -367,9 +388,12 @@ def _build_tasks(
                 slot="POSTCLOSE",
                 time_window="16:30~16:45",
                 track="RuntimeStability",
-                source=f"[threshold_cycle_ev_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(ev_path)})",
+                source=(
+                    f"[tuning_performance_control_tower_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(tuning_performance_path)}), "
+                    f"[threshold_cycle_ev_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(ev_path)})"
+                ),
                 lines=(
-                    "판정 기준: real/sim/combined split, selected/blocked family, runtime_change, warning을 분리해 확인한다.",
+                    "판정 기준: tuning performance control tower를 먼저 보고 `live_auto_apply_ready`, `sim_auto_approved`, post-apply attribution, EV authority를 분리해 확인한다.",
                     "금지: sim/combined EV만으로 broker execution 품질이나 live 전환을 확정하지 않는다.",
                     "다음 액션: 다음 장전 apply 입력으로 쓸 수 있는 항목과 hold_sample/freeze 항목을 분리한다.",
                 ),
@@ -405,6 +429,29 @@ def _build_tasks(
                     "금지: approval request만 보고 env 파일을 직접 수정하지 않고, 자동화 산출물에 있는 요청을 답변에만 남기고 checklist/Project 대상에서 누락하지 않는다.",
                     "다음 액션: approval request가 있으면 `approval_id`, 후보/대상, artifact path, 승인 여부, 다음 PREOPEN 적용 확인 항목을 남긴다. 누락된 항목이 있으면 다음 영업일 checklist에 parser-friendly checkbox로 추가한다.",
                 ),
+            ),
+            *(
+                [
+                    GeneratedTask(
+                        task_id=f"RuntimeApplyGapDirectiveReview{mmdd}",
+                        title="runtime apply gap Codex 작업지시 표면화 및 구현 여부 확인",
+                        slot="POSTCLOSE",
+                        time_window="17:15~17:30",
+                        track="ScalpingLogic",
+                        source=(
+                            f"[runtime_apply_gap_audit_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(runtime_gap_path)}), "
+                            f"[runtime_apply_gap_audit_{source_date}.md](/home/ubuntu/KORStockScan/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_{source_date}.md), "
+                            "[runtime-apply-gap-audit-user-guide.md](/home/ubuntu/KORStockScan/docs/runtime-apply-gap-audit-user-guide.md)"
+                        ),
+                        lines=(
+                            f"판정 기준: runtime apply gap audit의 Codex 작업지시 {runtime_gap_directives}를 구현 필요, 이미 해결, 설계 보류, reject로 분류한다.",
+                            "금지: 작업지시를 approval artifact나 즉시 runtime env 수정으로 해석하지 않는다. broker/order/provider/cap guard 우회와 장중 threshold mutation은 금지한다.",
+                            "다음 액션: `implement_now`, `already_implemented`, `defer_design`, `reject`, `needs_new_workorder` 중 하나로 닫고, 구현 시 테스트와 postclose verifier handoff를 같이 확인한다.",
+                        ),
+                    )
+                ]
+                if runtime_gap_directives
+                else []
             ),
             GeneratedTask(
                 task_id=f"ShadowCanaryCohortReview{mmdd}",

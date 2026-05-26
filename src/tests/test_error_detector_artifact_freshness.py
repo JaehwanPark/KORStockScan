@@ -478,7 +478,9 @@ class TestArtifactFreshnessDetector:
         assert registry["swing_lifecycle_audit_report"]["window_start"] == (16, 10)
         assert registry["swing_runtime_approval_report"]["window_start"] == (16, 10)
         assert registry["swing_daily_simulation_status"]["json_status_field"] == "status"
+        assert registry["swing_daily_simulation_status"]["one_shot"] is True
         assert "swing_daily_simulation_{date}.json" in registry["swing_daily_simulation_report"]["path_template"]
+        assert registry["swing_daily_simulation_report"]["one_shot"] is True
         assert "swing_pattern_lab_automation_{date}.json" in registry["swing_pattern_lab_automation_report"]["path_template"]
         assert "current.json" in registry["swing_model_registry_current"]["path_template"]
         assert registry["pipeline_events"]["window_grace_sec"] == 300

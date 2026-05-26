@@ -17,6 +17,17 @@ def _metric_contract() -> dict:
     }
 
 
+def _observability_payload(*, source_contract_status: str = "pass", orders: list[dict] | None = None) -> dict:
+    return {
+        "schema_version": 3,
+        "metric_contract": _metric_contract(),
+        "source_quality": {"status": source_contract_status, "findings": []},
+        "source_contract_status": source_contract_status,
+        "source_contract_findings": [],
+        "code_improvement_orders": orders or [],
+    }
+
+
 def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -39,7 +50,7 @@ def _seed_labs(project_root: Path, target_date: str) -> None:
         outputs = lab_dir / "outputs"
         outputs.mkdir(parents=True, exist_ok=True)
         _write_json(outputs / "ev_analysis_result.json", {"schema_version": 2, "metric_contract": _metric_contract()})
-        _write_json(outputs / "tuning_observability_summary.json", {"schema_version": 2, "metric_contract": _metric_contract()})
+        _write_json(outputs / "tuning_observability_summary.json", _observability_payload())
         _write_json(outputs / "run_manifest.json", {"run_at": target_date, "history_coverage_end": target_date})
         (lab_dir / "README.md").write_text(
             "report_only_observation\nthreshold_cycle_ev\nlifecycle_decision_matrix\n"
@@ -164,3 +175,47 @@ def test_currentness_audit_surfaces_pattern_lab_feedback_and_ai_review_gaps(tmp_
     assert "order_pattern_lab_currentness_audit_swing_ldm_threshold_reentry_sources" in order_ids
     assert "order_pattern_lab_currentness_audit_pattern_lab_ai_review_contract" in order_ids
     assert all(order["runtime_effect"] is False for order in report["code_improvement_orders"])
+
+
+def test_currentness_audit_surfaces_observability_source_contract_orders(tmp_path, monkeypatch):
+    project_root = tmp_path
+    report_dir = project_root / "data" / "report"
+    target_date = "2026-05-15"
+    _seed_labs(project_root, target_date)
+
+    embedded_order = {
+        "order_id": "order_tuning_observability_performance_tuning_missing_contract_gap",
+        "title": "Tuning observability performance_tuning missing contract gap",
+        "source_report_type": "producer_gap_discovery",
+        "target_subsystem": "pattern_lab",
+        "priority": 1,
+        "route": "implement_now",
+        "runtime_effect": True,
+        "allowed_runtime_apply": True,
+        "strategy_effect": True,
+        "data_quality_effect": False,
+    }
+    _write_json(
+        project_root / "analysis" / "gemini_scalping_pattern_lab" / "outputs" / "tuning_observability_summary.json",
+        _observability_payload(source_contract_status="fail", orders=[embedded_order]),
+    )
+
+    monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+
+    report = mod.build_pattern_lab_currentness_audit(target_date)
+
+    order_ids = {order["order_id"] for order in report["code_improvement_orders"]}
+    assert "order_pattern_lab_currentness_audit_gemini_scalping_observability_source_contract" in order_ids
+    assert "order_tuning_observability_performance_tuning_missing_contract_gap" in order_ids
+    embedded = next(
+        order
+        for order in report["code_improvement_orders"]
+        if order["order_id"] == "order_tuning_observability_performance_tuning_missing_contract_gap"
+    )
+    assert embedded["source_report_type"] == "tuning_observability_summary"
+    assert embedded["route"] == "source_contract_gap"
+    assert embedded["runtime_effect"] is False
+    assert embedded["allowed_runtime_apply"] is False
+    assert embedded["strategy_effect"] is False
+    assert embedded["data_quality_effect"] is True

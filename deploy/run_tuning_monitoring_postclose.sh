@@ -45,22 +45,50 @@ PREDECESSOR_WAIT_SEC="$(validate_int "$PREDECESSOR_WAIT_SEC" 3600)"
 PREDECESSOR_WAIT_INTERVAL_SEC="$(validate_int "$PREDECESSOR_WAIT_INTERVAL_SEC" 60)"
 
 threshold_postclose_terminal_marker() {
-  env PYTHONPATH=. "$VENV_PY" - "$PREDECESSOR_LOG" "$TARGET_DATE" <<'PY'
+  env PYTHONPATH=. "$VENV_PY" - "$PREDECESSOR_LOG" "$TARGET_DATE" "$PROJECT_DIR/data/report/threshold_cycle_postclose_status/threshold_cycle_postclose_${TARGET_DATE}.status.json" <<'PY'
+import json
 import re
 import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
 target_date = sys.argv[2]
+status_path = Path(sys.argv[3])
+
+def status_artifact_terminal() -> str | None:
+    if not status_path.exists():
+        return None
+    try:
+        payload = json.loads(status_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if str(payload.get("target_date") or "") != target_date:
+        return None
+    status = str(payload.get("status") or "").lower()
+    try:
+        exit_code = int(payload.get("exit_code") or 0)
+    except (TypeError, ValueError):
+        exit_code = 1
+    verification_status = str(
+        ((payload.get("manual_recovery") or {}).get("verification_status") or "")
+    ).lower()
+    if status in {"succeeded", "success", "passed", "pass", "completed"} and exit_code == 0:
+        return "done"
+    if verification_status == "pass_with_pending_done_marker" and exit_code == 0:
+        return "done"
+    if status in {"failed", "fail", "error"}:
+        return "failed"
+    return None
+
 if not path.exists():
-    print("missing_log")
+    print(status_artifact_terminal() or "missing_log")
     raise SystemExit(0)
 
 marker_re = re.compile(r"\[(START|DONE|FAIL|ERROR|CRITICAL)\].*target_date=" + re.escape(target_date), re.IGNORECASE)
 try:
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
 except OSError:
-    print("missing_log")
+    print(status_artifact_terminal() or "missing_log")
     raise SystemExit(0)
 
 for line in reversed(lines):
@@ -69,13 +97,13 @@ for line in reversed(lines):
         continue
     marker = match.group(1).upper()
     if marker == "START":
-        print("in_progress")
+        print(status_artifact_terminal() or "in_progress")
     elif marker == "DONE":
         print("done")
     else:
         print("failed")
     raise SystemExit(0)
-print("missing_marker")
+print(status_artifact_terminal() or "missing_marker")
 PY
 }
 

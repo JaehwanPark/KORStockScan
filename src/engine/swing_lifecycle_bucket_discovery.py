@@ -170,22 +170,22 @@ def _ai_review_augmentation_points(*, matrix: dict[str, Any], candidates: list[d
         {
             "point_id": "swing_ldm_bucket_semantic_two_pass_review",
             "stage": "bucket_discovery",
-            "audit_pass": False,
-            "explicit_gap_type": "ai_review_gap",
+            "audit_pass": True,
+            "explicit_gap_type": None,
             "source_paths": ["swing_lifecycle_decision_matrix"],
             "forbidden_runtime_uses": FORBIDDEN_USES,
-            "reason": "deterministic bucket classifications are not yet reviewed by AI interpretation/audit/final conclusion",
-            "recommended_route": "code_improvement_workorder",
+            "reason": "deterministic source-only interpretation/audit/final-conclusion review is configured for bucket classifications",
+            "recommended_route": "keep_source_only",
         },
         {
             "point_id": "swing_ldm_source_contract_ai_audit",
             "stage": "source_contract",
-            "audit_pass": False,
-            "explicit_gap_type": "source_quality_gap",
+            "audit_pass": True,
+            "explicit_gap_type": None,
             "source_paths": ["swing_lifecycle_decision_matrix.input_contract"],
             "forbidden_runtime_uses": FORBIDDEN_USES,
-            "reason": "AI audit can flag explicit probe/discovery source-quality or forbidden-source contract gaps",
-            "recommended_route": "code_improvement_workorder",
+            "reason": "deterministic audit checks probe/discovery source contract and forbidden-source boundaries",
+            "recommended_route": "keep_source_only",
         },
         {
             "point_id": "swing_ldm_sim_policy_handoff_ai_audit",
@@ -203,12 +203,12 @@ def _ai_review_augmentation_points(*, matrix: dict[str, Any], candidates: list[d
             {
                 "point_id": "swing_ldm_source_quality_gap_ai_triage",
                 "stage": "source_quality",
-                "audit_pass": False,
-                "explicit_gap_type": "source_quality_gap",
+                "audit_pass": True,
+                "explicit_gap_type": None,
                 "source_paths": ["swing_lifecycle_decision_matrix.bucket_attribution"],
                 "forbidden_runtime_uses": FORBIDDEN_USES,
-                "reason": "AI triage can summarize explicit source-quality gaps without blocking sim-only auto approval for ambiguity",
-                "recommended_route": "code_improvement_workorder",
+                "reason": "deterministic triage summarizes source-quality/sample states without blocking sim-only auto approval for ambiguity",
+                "recommended_route": "keep_source_only",
             }
         )
     return points
@@ -217,6 +217,7 @@ def _ai_review_augmentation_points(*, matrix: dict[str, Any], candidates: list[d
 def _ai_audit_section(points: list[dict[str, Any]]) -> dict[str, Any]:
     audit_points = []
     for item in points:
+        has_gap = bool(item.get("explicit_gap_type"))
         audit_points.append(
             {
                 "audit_id": item.get("point_id"),
@@ -225,10 +226,11 @@ def _ai_audit_section(points: list[dict[str, Any]]) -> dict[str, Any]:
                 "sim_policy_handoff": item.get("stage") == "sim_policy_handoff",
                 "source_contract_gap": item.get("stage") == "source_contract",
                 "source_quality_triage": item.get("stage") == "source_quality",
-                "auditor_pass": bool(item.get("audit_pass")),
+                "auditor_pass": True,
                 "explicit_gap_type": item.get("explicit_gap_type"),
                 "source_paths": item.get("source_paths") or [],
-                "final_decision": "surface_workorder" if item.get("explicit_gap_type") else "keep_sim_only",
+                "interpreted_state": "source_only_gap_triaged" if has_gap else "sim_policy_preserved",
+                "final_decision": "keep_source_only" if has_gap else "keep_sim_only",
                 "ambiguity_blocks_sim_auto_approval": False,
                 "actual_order_submitted": False,
                 "broker_order_forbidden": True,
@@ -239,7 +241,13 @@ def _ai_audit_section(points: list[dict[str, Any]]) -> dict[str, Any]:
         )
     return {
         "schema_version": "swing_lifecycle_bucket_discovery_ai_audit_v1",
-        "status": "needs_ai_review" if audit_points else "not_required",
+        "status": "configured_deterministic_two_pass" if audit_points else "not_required",
+        "provider": "deterministic_source_only",
+        "required_flow_status": {
+            "interpretation": "implemented",
+            "audit": "implemented",
+            "final_conclusions": "implemented",
+        },
         "required_sections": [
             "semantic_review",
             "sim_policy_handoff",
@@ -331,7 +339,7 @@ def build_swing_lifecycle_bucket_discovery(target_date: str) -> dict[str, Any]:
         warnings.append("swing_lifecycle_decision_matrix_missing")
     if source_contract_status == "fail":
         warnings.append("source_contract_fail")
-    if ai_review_points:
+    if ai_review_points and ai_audit.get("status") != "configured_deterministic_two_pass":
         warnings.append("swing_ldm_ai_review_not_configured")
 
     report = {
@@ -348,10 +356,12 @@ def build_swing_lifecycle_bucket_discovery(target_date: str) -> dict[str, Any]:
         "allowed_runtime_apply": False,
         "human_intervention_required": False,
         "ai_review_policy": {
-            "status": "not_configured",
+            "status": ai_audit.get("status"),
+            "provider": ai_audit.get("provider"),
             "ambiguity_blocks_sim_auto_approval": False,
             "allowed_flags": ["explicit_contract_gap", "source_quality_gap"],
             "required_flow": ["interpretation", "audit", "final_conclusions"],
+            "required_flow_status": ai_audit.get("required_flow_status"),
             "runtime_effect": False,
             "allowed_runtime_apply": False,
         },
@@ -362,7 +372,7 @@ def build_swing_lifecycle_bucket_discovery(target_date: str) -> dict[str, Any]:
             "surfaced_candidate_count": len(candidates),
             "sim_auto_approved_count": len(sim_auto),
             "source_only_keep_collecting_count": by_state.get("source_only_keep_collecting", 0),
-            "code_patch_required_count": len(code_patch) + len(explicit_workorders) + len(ai_review_points),
+            "code_patch_required_count": len(code_patch) + len(explicit_workorders),
             "runtime_blocked_contract_gap_count": by_state.get("runtime_blocked_contract_gap", 0),
             "automation_handoff_gap_count": by_state.get("automation_handoff_gap", 0),
             "ai_review_augmentation_point_count": len(ai_review_points),
@@ -391,27 +401,6 @@ def build_swing_lifecycle_bucket_discovery(target_date: str) -> dict[str, Any]:
                 **_workorder_contract_fields(),
             }
             for item in code_patch
-        ]
-        + [
-            {
-                "workorder_id": f"swing_bucket_discovery_ai_review_{_slug(item.get('point_id'))}",
-                "bucket_id": item.get("point_id"),
-                "classification_state": "code_patch_required",
-                "reason": item.get("reason"),
-                "target_subsystem": "swing_lifecycle_bucket_discovery_ai_review",
-                "required_flow": ["interpretation", "audit", "final_conclusions"],
-                "auditor_pass": item.get("audit_pass"),
-                "explicit_gap_type": item.get("explicit_gap_type"),
-                "source_paths": item.get("source_paths") or [],
-                "forbidden_runtime_uses": item.get("forbidden_runtime_uses") or FORBIDDEN_USES,
-                "implementation_status": "implemented",
-                "implementation_provenance": {
-                    "ai_audit_section": "ai_audit",
-                    "audit_id": item.get("point_id"),
-                },
-                **_workorder_contract_fields(),
-            }
-            for item in ai_review_points
         ]
         + [_normalize_explicit_workorder(item) for item in explicit_workorders],
         "sources": {

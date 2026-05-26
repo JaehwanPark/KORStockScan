@@ -27,9 +27,9 @@
 - stage_hook_workorder_discovery: `/home/ubuntu/KORStockScan/data/report/stage_hook_workorder_discovery/stage_hook_workorder_discovery_2026-05-26.json`
 - stage_hook_runtime_scaffold: `/home/ubuntu/KORStockScan/data/report/stage_hook_runtime_scaffold/stage_hook_runtime_scaffold_2026-05-26.json`
 - buy_funnel_sentinel: `/home/ubuntu/KORStockScan/data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-05-26.json`
-- generated_at: `2026-05-26T19:15:38+09:00`
-- generation_id: `2026-05-26-68b2d715123d`
-- source_hash: `68b2d715123de9941b2a299a4ce1a01c4a1649e445e5ec18882c41f7bc6e0f20`
+- generated_at: `2026-05-26T19:47:41+09:00`
+- generation_id: `2026-05-26-c291c35c76db`
+- source_hash: `c291c35c76db5e3cf675dc5c82e47497098510a0d54059fe479e3d7cca339ca8`
 
 ## 운영 원칙
 
@@ -51,25 +51,25 @@
 ## Snapshot Lineage
 
 - previous_exists: `True`
-- previous_generation_id: `2026-05-26-645b10a14417`
-- previous_source_hash: `645b10a14417a7e5a3bf776aa1e29096c09cc44e131fa8affdf5c2f94277f506`
+- previous_generation_id: `2026-05-26-d244f8f5ba4c`
+- previous_source_hash: `d244f8f5ba4ce97b3225a3d213b83687d10abb7f1eb6da71e341c0998796afc8`
 - new_order_ids: `[]`
 - removed_order_ids: `[]`
 - decision_changed_order_ids: `[]`
 
 ## Summary
 
-- source_order_count: `96`
+- source_order_count: `101`
 - scalping_source_order_count: `12`
 - swing_source_order_count: `8`
 - swing_entry_bottleneck_primary: `SWING_ENTRY_DROUGHT_CRITICAL`
 - swing_entry_bottleneck_selected: `True`
-- swing_lab_source_order_count: `4`
+- swing_lab_source_order_count: `3`
 - swing_strategy_discovery_source_order_count: `1`
-- swing_lifecycle_matrix_source_order_count: `4`
-- swing_lifecycle_bucket_discovery_source_order_count: `12`
-- pattern_lab_currentness_source_order_count: `2`
-- pattern_lab_ai_review_source_order_count: `4`
+- swing_lifecycle_matrix_source_order_count: `9`
+- swing_lifecycle_bucket_discovery_source_order_count: `19`
+- pattern_lab_currentness_source_order_count: `0`
+- pattern_lab_ai_review_source_order_count: `0`
 - threshold_ev_source_order_count: `21`
 - lifecycle_submit_bucket_source_order_count: `0`
 - pipeline_event_verbosity_source_order_count: `0`
@@ -79,25 +79,25 @@
 - entry_submit_drought_selected: `True`
 - entry_submit_drought_handoff_missing: `False`
 - panic_lifecycle_source_order_count: `2`
-- selected_order_count: `58`
-- non_selected_order_count: `38`
-- source_decision_counts: `{'implement_now': 28, 'attach_existing_family': 49, 'design_family_candidate': 6, 'defer_evidence': 10, 'reject': 3}`
-- selected_decision_counts: `{'implement_now': 28, 'attach_existing_family': 30}`
-- selected_route_counts: `{'instrumentation_order': 14, 'block_source_quality': 1, 'implement_now': 13, 'existing_family': 30}`
-- selected_implement_now_route_count: `13`
-- selected_runtime_effect_false_count: `58`
-- selected_unimplemented_runtime_effect_false_count: `28`
-- selected_unimplemented_route_counts: `{'instrumentation_order': 14, 'block_source_quality': 1, 'implement_now': 13}`
-- non_selected_decision_counts: `{'attach_existing_family': 19, 'design_family_candidate': 6, 'defer_evidence': 10, 'reject': 3}`
+- selected_order_count: `64`
+- non_selected_order_count: `37`
+- source_decision_counts: `{'implement_now': 38, 'attach_existing_family': 44, 'design_family_candidate': 6, 'defer_evidence': 10, 'reject': 3}`
+- selected_decision_counts: `{'implement_now': 38, 'attach_existing_family': 26}`
+- selected_route_counts: `{'instrumentation_order': 30, 'block_source_quality': 1, 'implement_now': 7, 'existing_family': 26}`
+- selected_implement_now_route_count: `7`
+- selected_runtime_effect_false_count: `64`
+- selected_unimplemented_runtime_effect_false_count: `38`
+- selected_unimplemented_route_counts: `{'instrumentation_order': 30, 'block_source_quality': 1, 'implement_now': 7}`
+- non_selected_decision_counts: `{'attach_existing_family': 18, 'design_family_candidate': 6, 'defer_evidence': 10, 'reject': 3}`
 - gemini_fresh: `True`
 - claude_fresh: `True`
 - swing_lifecycle_audit_available: `True`
 - swing_pattern_lab_automation_available: `True`
 - swing_pattern_lab_fresh: `True`
-- pattern_lab_currentness_status: `warning`
-- pattern_lab_currentness_fail_count: `2`
-- pattern_lab_ai_review_status: `warning`
-- pattern_lab_ai_review_workorder_count: `4`
+- pattern_lab_currentness_status: `pass`
+- pattern_lab_currentness_fail_count: `0`
+- pattern_lab_ai_review_status: `pass`
+- pattern_lab_ai_review_workorder_count: `0`
 - swing_threshold_ai_status: `unavailable`
 - daily_ev_available: `True`
 
@@ -674,7 +674,177 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - runtime 판단값을 직접 바꾸지 않는다.
 - 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
 
-### 17. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_activities_auxilia`
+### 17. `order_swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_low_missing_30m_2h_kospi_regime_stop_loss`
+
+- title: Swing LDM source field follow-up: mfe_low|missing|30m_2h|kospi_regime_stop_loss|-|-|-
+- decision: `implement_now`
+- decision_reason: instrumentation/provenance work can improve attribution without direct runtime mutation
+- source_report_type: `swing_lifecycle_decision_matrix`
+- lifecycle_stage: `holding_exit`
+- target_subsystem: `swing_lifecycle_decision_matrix`
+- route: `instrumentation_order`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `swing_ldm_bucket_instrumentation_gap`
+- confidence: `postclose_ldm_source`
+- priority: `2`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close Swing LDM bucket source-quality gaps while preserving sim-only authority.
+- evidence: `section=holding_exit_bucket_attribution`, `bucket_type=holding_exit_bucket_attribution`, `bucket_key=mfe_low|missing|30m_2h|kospi_regime_stop_loss|-|-|-`, `reason=source_quality_or_instrumentation_gap`, `decision_authority=swing_ldm_source_only`, `actual_order_submitted=false`
+- parity_contract: -
+- next_postclose_metric: Swing LDM bucket should move from code_patch_required to source_only_keep_collecting or sim_auto_approved.
+- files_likely_touched: `src/engine/swing_lifecycle_decision_matrix.py`, `src/engine/swing_lifecycle_bucket_discovery.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_decision_matrix.py src/tests/test_swing_lifecycle_bucket_discovery.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, next postclose report must show source freshness or warning reduction.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 18. `order_swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_low_missing_held_missing_kospi_regime_stop_loss`
+
+- title: Swing LDM source field follow-up: mfe_low|missing|held_missing|kospi_regime_stop_loss|-|-|-
+- decision: `implement_now`
+- decision_reason: instrumentation/provenance work can improve attribution without direct runtime mutation
+- source_report_type: `swing_lifecycle_decision_matrix`
+- lifecycle_stage: `holding_exit`
+- target_subsystem: `swing_lifecycle_decision_matrix`
+- route: `instrumentation_order`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `swing_ldm_bucket_instrumentation_gap`
+- confidence: `postclose_ldm_source`
+- priority: `2`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close Swing LDM bucket source-quality gaps while preserving sim-only authority.
+- evidence: `section=holding_exit_bucket_attribution`, `bucket_type=holding_exit_bucket_attribution`, `bucket_key=mfe_low|missing|held_missing|kospi_regime_stop_loss|-|-|-`, `reason=source_quality_or_instrumentation_gap`, `decision_authority=swing_ldm_source_only`, `actual_order_submitted=false`
+- parity_contract: -
+- next_postclose_metric: Swing LDM bucket should move from code_patch_required to source_only_keep_collecting or sim_auto_approved.
+- files_likely_touched: `src/engine/swing_lifecycle_decision_matrix.py`, `src/engine/swing_lifecycle_bucket_discovery.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_decision_matrix.py src/tests/test_swing_lifecycle_bucket_discovery.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, next postclose report must show source freshness or warning reduction.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 19. `order_swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_neg_missing_30m_2h_kospi_regime_stop_loss`
+
+- title: Swing LDM source field follow-up: mfe_neg|missing|30m_2h|kospi_regime_stop_loss|-|-|-
+- decision: `implement_now`
+- decision_reason: instrumentation/provenance work can improve attribution without direct runtime mutation
+- source_report_type: `swing_lifecycle_decision_matrix`
+- lifecycle_stage: `holding_exit`
+- target_subsystem: `swing_lifecycle_decision_matrix`
+- route: `instrumentation_order`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `swing_ldm_bucket_instrumentation_gap`
+- confidence: `postclose_ldm_source`
+- priority: `2`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close Swing LDM bucket source-quality gaps while preserving sim-only authority.
+- evidence: `section=holding_exit_bucket_attribution`, `bucket_type=holding_exit_bucket_attribution`, `bucket_key=mfe_neg|missing|30m_2h|kospi_regime_stop_loss|-|-|-`, `reason=source_quality_or_instrumentation_gap`, `decision_authority=swing_ldm_source_only`, `actual_order_submitted=false`
+- parity_contract: -
+- next_postclose_metric: Swing LDM bucket should move from code_patch_required to source_only_keep_collecting or sim_auto_approved.
+- files_likely_touched: `src/engine/swing_lifecycle_decision_matrix.py`, `src/engine/swing_lifecycle_bucket_discovery.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_decision_matrix.py src/tests/test_swing_lifecycle_bucket_discovery.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, next postclose report must show source freshness or warning reduction.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 20. `order_swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_neg_missing_held_missing_kospi_regime_stop_loss`
+
+- title: Swing LDM source field follow-up: mfe_neg|missing|held_missing|kospi_regime_stop_loss|-|-|-
+- decision: `implement_now`
+- decision_reason: instrumentation/provenance work can improve attribution without direct runtime mutation
+- source_report_type: `swing_lifecycle_decision_matrix`
+- lifecycle_stage: `holding_exit`
+- target_subsystem: `swing_lifecycle_decision_matrix`
+- route: `instrumentation_order`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `swing_ldm_bucket_instrumentation_gap`
+- confidence: `postclose_ldm_source`
+- priority: `2`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close Swing LDM bucket source-quality gaps while preserving sim-only authority.
+- evidence: `section=holding_exit_bucket_attribution`, `bucket_type=holding_exit_bucket_attribution`, `bucket_key=mfe_neg|missing|held_missing|kospi_regime_stop_loss|-|-|-`, `reason=source_quality_or_instrumentation_gap`, `decision_authority=swing_ldm_source_only`, `actual_order_submitted=false`
+- parity_contract: -
+- next_postclose_metric: Swing LDM bucket should move from code_patch_required to source_only_keep_collecting or sim_auto_approved.
+- files_likely_touched: `src/engine/swing_lifecycle_decision_matrix.py`, `src/engine/swing_lifecycle_bucket_discovery.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_decision_matrix.py src/tests/test_swing_lifecycle_bucket_discovery.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, next postclose report must show source freshness or warning reduction.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 21. `order_swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_neg_missing_lt_30m_kospi_regime_stop_loss`
+
+- title: Swing LDM source field follow-up: mfe_neg|missing|lt_30m|kospi_regime_stop_loss|-|-|-
+- decision: `implement_now`
+- decision_reason: instrumentation/provenance work can improve attribution without direct runtime mutation
+- source_report_type: `swing_lifecycle_decision_matrix`
+- lifecycle_stage: `holding_exit`
+- target_subsystem: `swing_lifecycle_decision_matrix`
+- route: `instrumentation_order`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `swing_ldm_bucket_instrumentation_gap`
+- confidence: `postclose_ldm_source`
+- priority: `2`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close Swing LDM bucket source-quality gaps while preserving sim-only authority.
+- evidence: `section=holding_exit_bucket_attribution`, `bucket_type=holding_exit_bucket_attribution`, `bucket_key=mfe_neg|missing|lt_30m|kospi_regime_stop_loss|-|-|-`, `reason=source_quality_or_instrumentation_gap`, `decision_authority=swing_ldm_source_only`, `actual_order_submitted=false`
+- parity_contract: -
+- next_postclose_metric: Swing LDM bucket should move from code_patch_required to source_only_keep_collecting or sim_auto_approved.
+- files_likely_touched: `src/engine/swing_lifecycle_decision_matrix.py`, `src/engine/swing_lifecycle_bucket_discovery.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_decision_matrix.py src/tests/test_swing_lifecycle_bucket_discovery.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, next postclose report must show source freshness or warning reduction.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 22. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_activities_auxilia`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Activities Auxiliary to Financial Service Activities|증권|DIAGNOSTIC
 - decision: `implement_now`
@@ -708,7 +878,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - runtime 판단값을 직접 바꾸지 않는다.
 - 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
 
-### 18. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_insurance_보험_생명보험_`
+### 23. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_insurance_보험_생명보험_`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Insurance|보험_생명보험|DIAGNOSTIC
 - decision: `implement_now`
@@ -742,7 +912,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - runtime 판단값을 직접 바꾸지 않는다.
 - 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
 
-### 19. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_ele`
+### 24. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_ele`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Manufacture of Electronic Components|-|DIAGNOSTIC
 - decision: `implement_now`
@@ -776,7 +946,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - runtime 판단값을 직접 바꾸지 않는다.
 - 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
 
-### 20. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_other_financial_in`
+### 25. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_other_financial_in`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Other Financial Intermediation|-|DIAGNOSTIC
 - decision: `implement_now`
@@ -810,7 +980,177 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - runtime 판단값을 직접 바꾸지 않는다.
 - 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
 
-### 21. `order_swing_lifecycle_bucket_discovery_swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confiden`
+### 26. `order_swing_lifecycle_bucket_discovery_swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_low_missing_30m_2h`
+
+- title: Swing lifecycle bucket discovery handoff follow-up: swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_low_missing_30m_2h_kospi_regime_stop_loss
+- decision: `implement_now`
+- decision_reason: instrumentation/provenance work can improve attribution without direct runtime mutation
+- source_report_type: `swing_lifecycle_bucket_discovery`
+- lifecycle_stage: `source_quality`
+- target_subsystem: `swing_lifecycle_bucket_discovery`
+- route: `instrumentation_order`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `swing_bucket_handoff_or_contract_gap`
+- confidence: `postclose_bucket_discovery_source`
+- priority: `2`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Keep Swing bucket discovery handoff explicit without allowing sim-only output to mutate real runtime.
+- evidence: `bucket_id=swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_low_missing_30m_2h_kospi_regime_stop_loss`, `classification_state=code_patch_required`, `reason=swing_ldm_bucket_contract_or_source_quality_gap`, `decision_authority=swing_ldm_bucket_discovery_sim_auto`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: Swing bucket discovery candidates and workorders should be visible in EV, runtime summary, workorder, and verifier.
+- files_likely_touched: `src/engine/swing_lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_ev_report.py`, `src/engine/runtime_approval_summary.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_bucket_discovery.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, next postclose report must show source freshness or warning reduction.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 27. `order_swing_lifecycle_bucket_discovery_swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_low_missing_held_m`
+
+- title: Swing lifecycle bucket discovery handoff follow-up: swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_low_missing_held_missing_kospi_regime_stop_loss
+- decision: `implement_now`
+- decision_reason: instrumentation/provenance work can improve attribution without direct runtime mutation
+- source_report_type: `swing_lifecycle_bucket_discovery`
+- lifecycle_stage: `source_quality`
+- target_subsystem: `swing_lifecycle_bucket_discovery`
+- route: `instrumentation_order`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `swing_bucket_handoff_or_contract_gap`
+- confidence: `postclose_bucket_discovery_source`
+- priority: `2`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Keep Swing bucket discovery handoff explicit without allowing sim-only output to mutate real runtime.
+- evidence: `bucket_id=swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_low_missing_held_missing_kospi_regime_stop_loss`, `classification_state=code_patch_required`, `reason=swing_ldm_bucket_contract_or_source_quality_gap`, `decision_authority=swing_ldm_bucket_discovery_sim_auto`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: Swing bucket discovery candidates and workorders should be visible in EV, runtime summary, workorder, and verifier.
+- files_likely_touched: `src/engine/swing_lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_ev_report.py`, `src/engine/runtime_approval_summary.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_bucket_discovery.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, next postclose report must show source freshness or warning reduction.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 28. `order_swing_lifecycle_bucket_discovery_swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_neg_missing_30m_2h`
+
+- title: Swing lifecycle bucket discovery handoff follow-up: swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_neg_missing_30m_2h_kospi_regime_stop_loss
+- decision: `implement_now`
+- decision_reason: instrumentation/provenance work can improve attribution without direct runtime mutation
+- source_report_type: `swing_lifecycle_bucket_discovery`
+- lifecycle_stage: `source_quality`
+- target_subsystem: `swing_lifecycle_bucket_discovery`
+- route: `instrumentation_order`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `swing_bucket_handoff_or_contract_gap`
+- confidence: `postclose_bucket_discovery_source`
+- priority: `2`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Keep Swing bucket discovery handoff explicit without allowing sim-only output to mutate real runtime.
+- evidence: `bucket_id=swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_neg_missing_30m_2h_kospi_regime_stop_loss`, `classification_state=code_patch_required`, `reason=swing_ldm_bucket_contract_or_source_quality_gap`, `decision_authority=swing_ldm_bucket_discovery_sim_auto`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: Swing bucket discovery candidates and workorders should be visible in EV, runtime summary, workorder, and verifier.
+- files_likely_touched: `src/engine/swing_lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_ev_report.py`, `src/engine/runtime_approval_summary.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_bucket_discovery.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, next postclose report must show source freshness or warning reduction.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 29. `order_swing_lifecycle_bucket_discovery_swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_neg_missing_held_m`
+
+- title: Swing lifecycle bucket discovery handoff follow-up: swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_neg_missing_held_missing_kospi_regime_stop_loss
+- decision: `implement_now`
+- decision_reason: instrumentation/provenance work can improve attribution without direct runtime mutation
+- source_report_type: `swing_lifecycle_bucket_discovery`
+- lifecycle_stage: `source_quality`
+- target_subsystem: `swing_lifecycle_bucket_discovery`
+- route: `instrumentation_order`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `swing_bucket_handoff_or_contract_gap`
+- confidence: `postclose_bucket_discovery_source`
+- priority: `2`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Keep Swing bucket discovery handoff explicit without allowing sim-only output to mutate real runtime.
+- evidence: `bucket_id=swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_neg_missing_held_missing_kospi_regime_stop_loss`, `classification_state=code_patch_required`, `reason=swing_ldm_bucket_contract_or_source_quality_gap`, `decision_authority=swing_ldm_bucket_discovery_sim_auto`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: Swing bucket discovery candidates and workorders should be visible in EV, runtime summary, workorder, and verifier.
+- files_likely_touched: `src/engine/swing_lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_ev_report.py`, `src/engine/runtime_approval_summary.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_bucket_discovery.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, next postclose report must show source freshness or warning reduction.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 30. `order_swing_lifecycle_bucket_discovery_swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_neg_missing_lt_30m`
+
+- title: Swing lifecycle bucket discovery handoff follow-up: swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_neg_missing_lt_30m_kospi_regime_stop_loss
+- decision: `implement_now`
+- decision_reason: instrumentation/provenance work can improve attribution without direct runtime mutation
+- source_report_type: `swing_lifecycle_bucket_discovery`
+- lifecycle_stage: `source_quality`
+- target_subsystem: `swing_lifecycle_bucket_discovery`
+- route: `instrumentation_order`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `swing_bucket_handoff_or_contract_gap`
+- confidence: `postclose_bucket_discovery_source`
+- priority: `2`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Keep Swing bucket discovery handoff explicit without allowing sim-only output to mutate real runtime.
+- evidence: `bucket_id=swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_neg_missing_lt_30m_kospi_regime_stop_loss`, `classification_state=code_patch_required`, `reason=swing_ldm_bucket_contract_or_source_quality_gap`, `decision_authority=swing_ldm_bucket_discovery_sim_auto`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: Swing bucket discovery candidates and workorders should be visible in EV, runtime summary, workorder, and verifier.
+- files_likely_touched: `src/engine/swing_lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_ev_report.py`, `src/engine/runtime_approval_summary.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_bucket_discovery.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, next postclose report must show source freshness or warning reduction.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 31. `order_swing_lifecycle_bucket_discovery_swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confiden`
 
 - title: Swing lifecycle bucket discovery handoff follow-up: swing_bucket_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_ele
 - decision: `implement_now`
@@ -844,7 +1184,211 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - runtime 판단값을 직접 바꾸지 않는다.
 - 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
 
-### 22. `order_swing_lifecycle_bucket_discovery_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_`
+### 32. `order_swing_lifecycle_bucket_discovery_swing_entry_bottleneck_swing_entry_drought_critical`
+
+- title: Swing lifecycle bucket discovery handoff follow-up: swing_entry_bottleneck_swing_entry_drought_critical
+- decision: `implement_now`
+- decision_reason: instrumentation/provenance work can improve attribution without direct runtime mutation
+- source_report_type: `swing_lifecycle_bucket_discovery`
+- lifecycle_stage: `source_quality`
+- target_subsystem: `swing_lifecycle_bucket_discovery`
+- route: `instrumentation_order`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `swing_bucket_handoff_or_contract_gap`
+- confidence: `postclose_bucket_discovery_source`
+- priority: `2`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Keep Swing bucket discovery handoff explicit without allowing sim-only output to mutate real runtime.
+- evidence: `bucket_id=swing_entry_bottleneck_swing_entry_drought_critical`, `classification_state=code_patch_required`, `reason=swing_ldm_bucket_contract_or_source_quality_gap`, `decision_authority=swing_ldm_bucket_discovery_sim_auto`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: Swing bucket discovery candidates and workorders should be visible in EV, runtime summary, workorder, and verifier.
+- files_likely_touched: `src/engine/swing_lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_ev_report.py`, `src/engine/runtime_approval_summary.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_bucket_discovery.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, next postclose report must show source freshness or warning reduction.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 33. `order_swing_lifecycle_bucket_discovery_swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_low_missing_30m_2h_ko`
+
+- title: Swing lifecycle bucket discovery handoff follow-up: swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_low_missing_30m_2h_kospi_regime_stop_loss
+- decision: `implement_now`
+- decision_reason: instrumentation/provenance work can improve attribution without direct runtime mutation
+- source_report_type: `swing_lifecycle_bucket_discovery`
+- lifecycle_stage: `holding_exit`
+- target_subsystem: `swing_lifecycle_decision_matrix`
+- route: `instrumentation_order`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `swing_bucket_handoff_or_contract_gap`
+- confidence: `postclose_bucket_discovery_source`
+- priority: `2`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Keep Swing bucket discovery handoff explicit without allowing sim-only output to mutate real runtime.
+- evidence: `bucket_id=swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_low_missing_30m_2h_kospi_regime_stop_loss`, `classification_state=None`, `reason=source_quality_or_instrumentation_gap`, `decision_authority=swing_ldm_bucket_discovery_sim_auto`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: Swing bucket discovery candidates and workorders should be visible in EV, runtime summary, workorder, and verifier.
+- files_likely_touched: `src/engine/swing_lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_ev_report.py`, `src/engine/runtime_approval_summary.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_bucket_discovery.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, next postclose report must show source freshness or warning reduction.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 34. `order_swing_lifecycle_bucket_discovery_swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_low_missing_held_miss`
+
+- title: Swing lifecycle bucket discovery handoff follow-up: swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_low_missing_held_missing_kospi_regime_stop_loss
+- decision: `implement_now`
+- decision_reason: instrumentation/provenance work can improve attribution without direct runtime mutation
+- source_report_type: `swing_lifecycle_bucket_discovery`
+- lifecycle_stage: `holding_exit`
+- target_subsystem: `swing_lifecycle_decision_matrix`
+- route: `instrumentation_order`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `swing_bucket_handoff_or_contract_gap`
+- confidence: `postclose_bucket_discovery_source`
+- priority: `2`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Keep Swing bucket discovery handoff explicit without allowing sim-only output to mutate real runtime.
+- evidence: `bucket_id=swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_low_missing_held_missing_kospi_regime_stop_loss`, `classification_state=None`, `reason=source_quality_or_instrumentation_gap`, `decision_authority=swing_ldm_bucket_discovery_sim_auto`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: Swing bucket discovery candidates and workorders should be visible in EV, runtime summary, workorder, and verifier.
+- files_likely_touched: `src/engine/swing_lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_ev_report.py`, `src/engine/runtime_approval_summary.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_bucket_discovery.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, next postclose report must show source freshness or warning reduction.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 35. `order_swing_lifecycle_bucket_discovery_swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_neg_missing_30m_2h_ko`
+
+- title: Swing lifecycle bucket discovery handoff follow-up: swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_neg_missing_30m_2h_kospi_regime_stop_loss
+- decision: `implement_now`
+- decision_reason: instrumentation/provenance work can improve attribution without direct runtime mutation
+- source_report_type: `swing_lifecycle_bucket_discovery`
+- lifecycle_stage: `holding_exit`
+- target_subsystem: `swing_lifecycle_decision_matrix`
+- route: `instrumentation_order`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `swing_bucket_handoff_or_contract_gap`
+- confidence: `postclose_bucket_discovery_source`
+- priority: `2`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Keep Swing bucket discovery handoff explicit without allowing sim-only output to mutate real runtime.
+- evidence: `bucket_id=swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_neg_missing_30m_2h_kospi_regime_stop_loss`, `classification_state=None`, `reason=source_quality_or_instrumentation_gap`, `decision_authority=swing_ldm_bucket_discovery_sim_auto`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: Swing bucket discovery candidates and workorders should be visible in EV, runtime summary, workorder, and verifier.
+- files_likely_touched: `src/engine/swing_lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_ev_report.py`, `src/engine/runtime_approval_summary.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_bucket_discovery.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, next postclose report must show source freshness or warning reduction.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 36. `order_swing_lifecycle_bucket_discovery_swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_neg_missing_held_miss`
+
+- title: Swing lifecycle bucket discovery handoff follow-up: swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_neg_missing_held_missing_kospi_regime_stop_loss
+- decision: `implement_now`
+- decision_reason: instrumentation/provenance work can improve attribution without direct runtime mutation
+- source_report_type: `swing_lifecycle_bucket_discovery`
+- lifecycle_stage: `holding_exit`
+- target_subsystem: `swing_lifecycle_decision_matrix`
+- route: `instrumentation_order`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `swing_bucket_handoff_or_contract_gap`
+- confidence: `postclose_bucket_discovery_source`
+- priority: `2`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Keep Swing bucket discovery handoff explicit without allowing sim-only output to mutate real runtime.
+- evidence: `bucket_id=swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_neg_missing_held_missing_kospi_regime_stop_loss`, `classification_state=None`, `reason=source_quality_or_instrumentation_gap`, `decision_authority=swing_ldm_bucket_discovery_sim_auto`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: Swing bucket discovery candidates and workorders should be visible in EV, runtime summary, workorder, and verifier.
+- files_likely_touched: `src/engine/swing_lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_ev_report.py`, `src/engine/runtime_approval_summary.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_bucket_discovery.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, next postclose report must show source freshness or warning reduction.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 37. `order_swing_lifecycle_bucket_discovery_swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_neg_missing_lt_30m_ko`
+
+- title: Swing lifecycle bucket discovery handoff follow-up: swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_neg_missing_lt_30m_kospi_regime_stop_loss
+- decision: `implement_now`
+- decision_reason: instrumentation/provenance work can improve attribution without direct runtime mutation
+- source_report_type: `swing_lifecycle_bucket_discovery`
+- lifecycle_stage: `holding_exit`
+- target_subsystem: `swing_lifecycle_decision_matrix`
+- route: `instrumentation_order`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `swing_bucket_handoff_or_contract_gap`
+- confidence: `postclose_bucket_discovery_source`
+- priority: `2`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Keep Swing bucket discovery handoff explicit without allowing sim-only output to mutate real runtime.
+- evidence: `bucket_id=swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_neg_missing_lt_30m_kospi_regime_stop_loss`, `classification_state=None`, `reason=source_quality_or_instrumentation_gap`, `decision_authority=swing_ldm_bucket_discovery_sim_auto`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: Swing bucket discovery candidates and workorders should be visible in EV, runtime summary, workorder, and verifier.
+- files_likely_touched: `src/engine/swing_lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_ev_report.py`, `src/engine/runtime_approval_summary.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_bucket_discovery.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, next postclose report must show source freshness or warning reduction.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 38. `order_swing_lifecycle_bucket_discovery_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_`
 
 - title: Swing lifecycle bucket discovery handoff follow-up: swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_ele
 - decision: `implement_now`
@@ -878,211 +1422,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - runtime 판단값을 직접 바꾸지 않는다.
 - 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
 
-### 23. `order_pattern_lab_ai_review_scalping_reentry_feedback_missing`
-
-- title: Pattern Lab AI review follow-up: scalping_reentry_feedback_missing
-- decision: `implement_now`
-- decision_reason: pattern lab audit/review order is report/source-quality instrumentation only and must remain runtime_effect=false
-- source_report_type: `pattern_lab_ai_review`
-- lifecycle_stage: `pattern_lab_ai_review`
-- target_subsystem: `pattern_lab`
-- route: `implement_now`
-- mapped_family: `-`
-- threshold_family: `-`
-- improvement_type: `automation_handoff_gap`
-- confidence: `ai_two_pass_review`
-- priority: `10`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `True`
-- tuning_axis_effect: `False`
-- expected_ev_effect: Improve pattern lab feedback quality without runtime mutation.
-- evidence: `review_id=scalping_reentry_feedback_missing`, `domain=scalping`, `final_state=automation_handoff_gap`, `final_decision=surface_workorder`, `auditor_pass=True`, `explicit_gap_type=automation_handoff_gap`, `source_paths=['/home/ubuntu/KORStockScan/data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_2026-05-26.json', '/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-26.json', '/home/ubuntu/KORStockScan/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_2026-05-26.json', '/home/ubuntu/KORStockScan/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_2026-05-26.json']`
-- parity_contract: -
-- next_postclose_metric: pattern_lab_ai_review.scalping_reentry_feedback_missing
-- files_likely_touched: `src/engine/pattern_lab_ai_review.py`, `src/engine/pattern_lab_currentness_audit.py`, `analysis/gemini_scalping_pattern_lab`, `analysis/claude_scalping_pattern_lab`, `analysis/deepseek_swing_pattern_lab`
-- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_ai_review.py src/tests/test_pattern_lab_currentness_audit.py`
-- implementation_status: `-`
-- implementation_provenance: `-`
-- automation_reentry: After implementation, rerun pattern labs, currentness audit, workorder, EV, and propagation audit.
-
-실행 기준:
-
-- instrumentation/provenance/report source 보강을 우선 구현한다.
-- runtime 판단값을 직접 바꾸지 않는다.
-- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
-
-### 24. `order_pattern_lab_ai_review_swing_ai_review_config_gap`
-
-- title: Pattern Lab AI review follow-up: swing_ai_review_config_gap
-- decision: `implement_now`
-- decision_reason: pattern lab audit/review order is report/source-quality instrumentation only and must remain runtime_effect=false
-- source_report_type: `pattern_lab_ai_review`
-- lifecycle_stage: `pattern_lab_ai_review`
-- target_subsystem: `pattern_lab`
-- route: `implement_now`
-- mapped_family: `-`
-- threshold_family: `-`
-- improvement_type: `ai_review_gap`
-- confidence: `ai_two_pass_review`
-- priority: `10`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `True`
-- tuning_axis_effect: `False`
-- expected_ev_effect: Improve pattern lab feedback quality without runtime mutation.
-- evidence: `review_id=swing_ai_review_config_gap`, `domain=swing`, `final_state=ai_review_gap`, `final_decision=surface_workorder`, `auditor_pass=False`, `explicit_gap_type=ai_review_gap`, `source_paths=['/home/ubuntu/KORStockScan/data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_2026-05-26.json', '/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-26.json', '/home/ubuntu/KORStockScan/data/report/swing_lifecycle_decision_matrix/swing_lifecycle_decision_matrix_2026-05-26.json', '/home/ubuntu/KORStockScan/data/report/swing_lifecycle_bucket_discovery/swing_lifecycle_bucket_discovery_2026-05-26.json', '/home/ubuntu/KORStockScan/data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_2026-05-26.json']`
-- parity_contract: -
-- next_postclose_metric: pattern_lab_ai_review.swing_ai_review_config_gap
-- files_likely_touched: `src/engine/pattern_lab_ai_review.py`, `src/engine/pattern_lab_currentness_audit.py`, `analysis/gemini_scalping_pattern_lab`, `analysis/claude_scalping_pattern_lab`, `analysis/deepseek_swing_pattern_lab`
-- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_ai_review.py src/tests/test_pattern_lab_currentness_audit.py`
-- implementation_status: `-`
-- implementation_provenance: `-`
-- automation_reentry: After implementation, rerun pattern labs, currentness audit, workorder, EV, and propagation audit.
-
-실행 기준:
-
-- instrumentation/provenance/report source 보강을 우선 구현한다.
-- runtime 판단값을 직접 바꾸지 않는다.
-- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
-
-### 25. `order_pattern_lab_ai_review_swing_ofi_qi_source_quality_gap`
-
-- title: Pattern Lab AI review follow-up: swing_ofi_qi_source_quality_gap
-- decision: `implement_now`
-- decision_reason: pattern lab audit/review order is report/source-quality instrumentation only and must remain runtime_effect=false
-- source_report_type: `pattern_lab_ai_review`
-- lifecycle_stage: `pattern_lab_ai_review`
-- target_subsystem: `pattern_lab`
-- route: `implement_now`
-- mapped_family: `-`
-- threshold_family: `-`
-- improvement_type: `source_quality_gap`
-- confidence: `ai_two_pass_review`
-- priority: `10`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `True`
-- tuning_axis_effect: `False`
-- expected_ev_effect: Improve pattern lab feedback quality without runtime mutation.
-- evidence: `review_id=swing_ofi_qi_source_quality_gap`, `domain=swing`, `final_state=source_quality_gap`, `final_decision=surface_workorder`, `auditor_pass=True`, `explicit_gap_type=source_quality_gap`, `source_paths=['/home/ubuntu/KORStockScan/data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_2026-05-26.json', '/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-26.json', '/home/ubuntu/KORStockScan/data/report/swing_lifecycle_decision_matrix/swing_lifecycle_decision_matrix_2026-05-26.json', '/home/ubuntu/KORStockScan/data/report/swing_lifecycle_bucket_discovery/swing_lifecycle_bucket_discovery_2026-05-26.json', '/home/ubuntu/KORStockScan/data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_2026-05-26.json']`
-- parity_contract: -
-- next_postclose_metric: pattern_lab_ai_review.swing_ofi_qi_source_quality_gap
-- files_likely_touched: `src/engine/pattern_lab_ai_review.py`, `src/engine/pattern_lab_currentness_audit.py`, `analysis/gemini_scalping_pattern_lab`, `analysis/claude_scalping_pattern_lab`, `analysis/deepseek_swing_pattern_lab`
-- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_ai_review.py src/tests/test_pattern_lab_currentness_audit.py`
-- implementation_status: `-`
-- implementation_provenance: `-`
-- automation_reentry: After implementation, rerun pattern labs, currentness audit, workorder, EV, and propagation audit.
-
-실행 기준:
-
-- instrumentation/provenance/report source 보강을 우선 구현한다.
-- runtime 판단값을 직접 바꾸지 않는다.
-- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
-
-### 26. `order_pattern_lab_ai_review_swing_reentry_feedback_missing`
-
-- title: Pattern Lab AI review follow-up: swing_reentry_feedback_missing
-- decision: `implement_now`
-- decision_reason: pattern lab audit/review order is report/source-quality instrumentation only and must remain runtime_effect=false
-- source_report_type: `pattern_lab_ai_review`
-- lifecycle_stage: `pattern_lab_ai_review`
-- target_subsystem: `pattern_lab`
-- route: `implement_now`
-- mapped_family: `-`
-- threshold_family: `-`
-- improvement_type: `automation_handoff_gap`
-- confidence: `ai_two_pass_review`
-- priority: `10`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `True`
-- tuning_axis_effect: `False`
-- expected_ev_effect: Improve pattern lab feedback quality without runtime mutation.
-- evidence: `review_id=swing_reentry_feedback_missing`, `domain=swing`, `final_state=automation_handoff_gap`, `final_decision=surface_workorder`, `auditor_pass=True`, `explicit_gap_type=automation_handoff_gap`, `source_paths=['/home/ubuntu/KORStockScan/data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_2026-05-26.json', '/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-26.json', '/home/ubuntu/KORStockScan/data/report/swing_lifecycle_decision_matrix/swing_lifecycle_decision_matrix_2026-05-26.json', '/home/ubuntu/KORStockScan/data/report/swing_lifecycle_bucket_discovery/swing_lifecycle_bucket_discovery_2026-05-26.json', '/home/ubuntu/KORStockScan/data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_2026-05-26.json']`
-- parity_contract: -
-- next_postclose_metric: pattern_lab_ai_review.swing_reentry_feedback_missing
-- files_likely_touched: `src/engine/pattern_lab_ai_review.py`, `src/engine/pattern_lab_currentness_audit.py`, `analysis/gemini_scalping_pattern_lab`, `analysis/claude_scalping_pattern_lab`, `analysis/deepseek_swing_pattern_lab`
-- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_ai_review.py src/tests/test_pattern_lab_currentness_audit.py`
-- implementation_status: `-`
-- implementation_provenance: `-`
-- automation_reentry: After implementation, rerun pattern labs, currentness audit, workorder, EV, and propagation audit.
-
-실행 기준:
-
-- instrumentation/provenance/report source 보강을 우선 구현한다.
-- runtime 판단값을 직접 바꾸지 않는다.
-- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
-
-### 27. `order_pattern_lab_currentness_audit_scalping_ldm_threshold_reentry_sources`
-
-- title: Feed LDM/threshold feedback into scalping pattern labs
-- decision: `implement_now`
-- decision_reason: pattern lab audit/review order is report/source-quality instrumentation only and must remain runtime_effect=false
-- source_report_type: `pattern_lab_currentness_audit`
-- lifecycle_stage: `pattern_lab_currentness`
-- target_subsystem: `pattern_lab`
-- route: `implement_now`
-- mapped_family: `-`
-- threshold_family: `-`
-- improvement_type: `automation_handoff_gap`
-- confidence: `consensus`
-- priority: `10`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `True`
-- tuning_axis_effect: `False`
-- expected_ev_effect: Improve report/source-quality attribution without runtime mutation.
-- evidence: `analysis/gemini_scalping_pattern_lab`, `analysis/claude_scalping_pattern_lab`
-- parity_contract: -
-- next_postclose_metric: pattern_lab_currentness_audit.scalping_ldm_threshold_reentry_sources
-- files_likely_touched: `analysis/gemini_scalping_pattern_lab/build_dataset.py`, `analysis/gemini_scalping_pattern_lab/build_llm_payload.py`, `analysis/claude_scalping_pattern_lab/prepare_dataset.py`, `analysis/claude_scalping_pattern_lab/build_claude_payload.py`, `src/engine/pattern_lab_currentness_audit.py`
-- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_currentness_audit.py`, `pattern lab payloads include LDM bucket/discovery and threshold EV feedback context with runtime_effect=false`
-- implementation_status: `-`
-- implementation_provenance: `-`
-- automation_reentry: After implementation, rerun pattern labs, currentness audit, workorder, EV, and propagation audit.
-
-실행 기준:
-
-- instrumentation/provenance/report source 보강을 우선 구현한다.
-- runtime 판단값을 직접 바꾸지 않는다.
-- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
-
-### 28. `order_pattern_lab_currentness_audit_swing_ldm_threshold_reentry_sources`
-
-- title: Feed Swing LDM/discovery feedback into DeepSeek swing pattern lab
-- decision: `implement_now`
-- decision_reason: pattern lab audit/review order is report/source-quality instrumentation only and must remain runtime_effect=false
-- source_report_type: `pattern_lab_currentness_audit`
-- lifecycle_stage: `pattern_lab_currentness`
-- target_subsystem: `pattern_lab`
-- route: `implement_now`
-- mapped_family: `-`
-- threshold_family: `-`
-- improvement_type: `automation_handoff_gap`
-- confidence: `consensus`
-- priority: `10`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `True`
-- tuning_axis_effect: `False`
-- expected_ev_effect: Improve report/source-quality attribution without runtime mutation.
-- evidence: `analysis/deepseek_swing_pattern_lab`
-- parity_contract: -
-- next_postclose_metric: pattern_lab_currentness_audit.swing_ldm_threshold_reentry_sources
-- files_likely_touched: `analysis/deepseek_swing_pattern_lab/prepare_dataset.py`, `analysis/deepseek_swing_pattern_lab/build_deepseek_payload.py`, `analysis/deepseek_swing_pattern_lab/prompts/prompt_swing_lifecycle_patterns.md`, `src/engine/pattern_lab_currentness_audit.py`
-- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_deepseek_swing_pattern_lab.py src/tests/test_pattern_lab_currentness_audit.py`, `DeepSeek payload summary/cases expose Swing LDM bucket/discovery and threshold EV feedback context with runtime_effect=false`
-- implementation_status: `-`
-- implementation_provenance: `-`
-- automation_reentry: After implementation, rerun pattern labs, currentness audit, workorder, EV, and propagation audit.
-
-실행 기준:
-
-- instrumentation/provenance/report source 보강을 우선 구현한다.
-- runtime 판단값을 직접 바꾸지 않는다.
-- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
-
-### 29. `order_stage_hook_workorder_discovery_stage_hook_holding_flow_runner_debounce_guard`
+### 39. `order_stage_hook_workorder_discovery_stage_hook_holding_flow_runner_debounce_guard`
 
 - title: Implement stage hook: holding_flow_runner_debounce_guard
 - decision: `attach_existing_family`
@@ -1131,7 +1471,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 30. `order_stage_hook_workorder_discovery_stage_hook_plateau_breakdown_exit_arbitration_probe`
+### 40. `order_stage_hook_workorder_discovery_stage_hook_plateau_breakdown_exit_arbitration_probe`
 
 - title: Implement stage hook: plateau_breakdown_exit_arbitration_probe
 - decision: `attach_existing_family`
@@ -1180,7 +1520,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 31. `order_lifecycle_entry_bucket_chosen_action_action_unknown`
+### 41. `order_lifecycle_entry_bucket_chosen_action_action_unknown`
 
 - title: LDM entry bucket attribution follow-up: chosen_action=action_unknown
 - decision: `attach_existing_family`
@@ -1214,7 +1554,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 32. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_l`
+### 42. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_l`
 
 - title: LDM entry bucket attribution follow-up: combo_entry_spot=score=score_66_69|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_unknown|overbought=overbought_unknown|time=time_unknown
 - decision: `attach_existing_family`
@@ -1248,7 +1588,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 33. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_70p_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liq`
+### 43. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_70p_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liq`
 
 - title: LDM entry bucket attribution follow-up: combo_entry_spot=score=score_70p|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_unknown|overbought=overbought_unknown|time=time_unknown
 - decision: `attach_existing_family`
@@ -1282,7 +1622,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 34. `order_lifecycle_entry_bucket_exit_rule_exit_unknown`
+### 44. `order_lifecycle_entry_bucket_exit_rule_exit_unknown`
 
 - title: LDM entry bucket attribution follow-up: exit_rule=exit_unknown
 - decision: `attach_existing_family`
@@ -1316,7 +1656,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 35. `order_lifecycle_entry_bucket_liquidity_bucket_liquidity_unknown`
+### 45. `order_lifecycle_entry_bucket_liquidity_bucket_liquidity_unknown`
 
 - title: LDM entry bucket attribution follow-up: liquidity_bucket=liquidity_unknown
 - decision: `attach_existing_family`
@@ -1350,7 +1690,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 36. `order_lifecycle_entry_bucket_overbought_bucket_overbought_unknown`
+### 46. `order_lifecycle_entry_bucket_overbought_bucket_overbought_unknown`
 
 - title: LDM entry bucket attribution follow-up: overbought_bucket=overbought_unknown
 - decision: `attach_existing_family`
@@ -1384,143 +1724,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 37. `order_swing_lifecycle_bucket_discovery_swing_ldm_bucket_semantic_two_pass_review`
-
-- title: Swing lifecycle bucket discovery handoff follow-up: swing_ldm_bucket_semantic_two_pass_review
-- decision: `attach_existing_family`
-- decision_reason: instrumentation/report/provenance implementation is already present; keep the order as existing-family source evidence instead of re-implementing
-- source_report_type: `swing_lifecycle_bucket_discovery`
-- lifecycle_stage: `source_quality`
-- target_subsystem: `swing_lifecycle_bucket_discovery_ai_review`
-- route: `existing_family`
-- mapped_family: `-`
-- threshold_family: `-`
-- improvement_type: `swing_bucket_handoff_or_contract_gap`
-- confidence: `postclose_bucket_discovery_source`
-- priority: `2`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: Keep Swing bucket discovery handoff explicit without allowing sim-only output to mutate real runtime.
-- evidence: `bucket_id=swing_ldm_bucket_semantic_two_pass_review`, `classification_state=code_patch_required`, `reason=deterministic bucket classifications are not yet reviewed by AI interpretation/audit/final conclusion`, `decision_authority=swing_ldm_bucket_discovery_sim_auto`, `allowed_runtime_apply=false`
-- parity_contract: -
-- next_postclose_metric: Swing bucket discovery candidates and workorders should be visible in EV, runtime summary, workorder, and verifier.
-- files_likely_touched: `src/engine/swing_lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_ev_report.py`, `src/engine/runtime_approval_summary.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
-- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_bucket_discovery.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
-- implementation_status: `implemented`
-- implementation_provenance: `{"ai_audit_section": "ai_audit", "audit_id": "swing_ldm_bucket_semantic_two_pass_review"}`
-- automation_reentry: Next postclose workorder should preserve implementation_status=implemented and use the source metrics as provenance only.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 38. `order_swing_lifecycle_bucket_discovery_swing_ldm_sim_policy_handoff_ai_audit`
-
-- title: Swing lifecycle bucket discovery handoff follow-up: swing_ldm_sim_policy_handoff_ai_audit
-- decision: `attach_existing_family`
-- decision_reason: instrumentation/report/provenance implementation is already present; keep the order as existing-family source evidence instead of re-implementing
-- source_report_type: `swing_lifecycle_bucket_discovery`
-- lifecycle_stage: `source_quality`
-- target_subsystem: `swing_lifecycle_bucket_discovery_ai_review`
-- route: `existing_family`
-- mapped_family: `-`
-- threshold_family: `-`
-- improvement_type: `swing_bucket_handoff_or_contract_gap`
-- confidence: `postclose_bucket_discovery_source`
-- priority: `2`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: Keep Swing bucket discovery handoff explicit without allowing sim-only output to mutate real runtime.
-- evidence: `bucket_id=swing_ldm_sim_policy_handoff_ai_audit`, `classification_state=code_patch_required`, `reason=AI audit can verify sim_auto_approved remains sim-only and does not imply real/canary/provider/bot changes`, `decision_authority=swing_ldm_bucket_discovery_sim_auto`, `allowed_runtime_apply=false`
-- parity_contract: -
-- next_postclose_metric: Swing bucket discovery candidates and workorders should be visible in EV, runtime summary, workorder, and verifier.
-- files_likely_touched: `src/engine/swing_lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_ev_report.py`, `src/engine/runtime_approval_summary.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
-- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_bucket_discovery.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
-- implementation_status: `implemented`
-- implementation_provenance: `{"ai_audit_section": "ai_audit", "audit_id": "swing_ldm_sim_policy_handoff_ai_audit"}`
-- automation_reentry: Next postclose workorder should preserve implementation_status=implemented and use the source metrics as provenance only.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 39. `order_swing_lifecycle_bucket_discovery_swing_ldm_source_contract_ai_audit`
-
-- title: Swing lifecycle bucket discovery handoff follow-up: swing_ldm_source_contract_ai_audit
-- decision: `attach_existing_family`
-- decision_reason: instrumentation/report/provenance implementation is already present; keep the order as existing-family source evidence instead of re-implementing
-- source_report_type: `swing_lifecycle_bucket_discovery`
-- lifecycle_stage: `source_quality`
-- target_subsystem: `swing_lifecycle_bucket_discovery_ai_review`
-- route: `existing_family`
-- mapped_family: `-`
-- threshold_family: `-`
-- improvement_type: `swing_bucket_handoff_or_contract_gap`
-- confidence: `postclose_bucket_discovery_source`
-- priority: `2`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: Keep Swing bucket discovery handoff explicit without allowing sim-only output to mutate real runtime.
-- evidence: `bucket_id=swing_ldm_source_contract_ai_audit`, `classification_state=code_patch_required`, `reason=AI audit can flag explicit probe/discovery source-quality or forbidden-source contract gaps`, `decision_authority=swing_ldm_bucket_discovery_sim_auto`, `allowed_runtime_apply=false`
-- parity_contract: -
-- next_postclose_metric: Swing bucket discovery candidates and workorders should be visible in EV, runtime summary, workorder, and verifier.
-- files_likely_touched: `src/engine/swing_lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_ev_report.py`, `src/engine/runtime_approval_summary.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
-- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_bucket_discovery.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
-- implementation_status: `implemented`
-- implementation_provenance: `{"ai_audit_section": "ai_audit", "audit_id": "swing_ldm_source_contract_ai_audit"}`
-- automation_reentry: Next postclose workorder should preserve implementation_status=implemented and use the source metrics as provenance only.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 40. `order_swing_lifecycle_bucket_discovery_swing_ldm_source_quality_gap_ai_triage`
-
-- title: Swing lifecycle bucket discovery handoff follow-up: swing_ldm_source_quality_gap_ai_triage
-- decision: `attach_existing_family`
-- decision_reason: instrumentation/report/provenance implementation is already present; keep the order as existing-family source evidence instead of re-implementing
-- source_report_type: `swing_lifecycle_bucket_discovery`
-- lifecycle_stage: `source_quality`
-- target_subsystem: `swing_lifecycle_bucket_discovery_ai_review`
-- route: `existing_family`
-- mapped_family: `-`
-- threshold_family: `-`
-- improvement_type: `swing_bucket_handoff_or_contract_gap`
-- confidence: `postclose_bucket_discovery_source`
-- priority: `2`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: Keep Swing bucket discovery handoff explicit without allowing sim-only output to mutate real runtime.
-- evidence: `bucket_id=swing_ldm_source_quality_gap_ai_triage`, `classification_state=code_patch_required`, `reason=AI triage can summarize explicit source-quality gaps without blocking sim-only auto approval for ambiguity`, `decision_authority=swing_ldm_bucket_discovery_sim_auto`, `allowed_runtime_apply=false`
-- parity_contract: -
-- next_postclose_metric: Swing bucket discovery candidates and workorders should be visible in EV, runtime summary, workorder, and verifier.
-- files_likely_touched: `src/engine/swing_lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_ev_report.py`, `src/engine/runtime_approval_summary.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
-- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_bucket_discovery.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
-- implementation_status: `implemented`
-- implementation_provenance: `{"ai_audit_section": "ai_audit", "audit_id": "swing_ldm_source_quality_gap_ai_triage"}`
-- automation_reentry: Next postclose workorder should preserve implementation_status=implemented and use the source metrics as provenance only.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 41. `order_lifecycle_overnight_bucket_combo_overnight_decision_action_action_unknown_status_sell_today_confidence_confidence_unknown_profit_pro`
+### 47. `order_lifecycle_overnight_bucket_combo_overnight_decision_action_action_unknown_status_sell_today_confidence_confidence_unknown_profit_pro`
 
 - title: LDM overnight bucket attribution follow-up: combo_overnight_decision=action=action_unknown|status=SELL_TODAY|confidence=confidence_unknown|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1554,7 +1758,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 42. `order_lifecycle_overnight_bucket_combo_overnight_decision_action_sell_today_status_sell_today_confidence_confidence_070p_profit_profit_lt_`
+### 48. `order_lifecycle_overnight_bucket_combo_overnight_decision_action_sell_today_status_sell_today_confidence_confidence_070p_profit_profit_lt_`
 
 - title: LDM overnight bucket attribution follow-up: combo_overnight_decision=action=SELL_TODAY|status=SELL_TODAY|confidence=confidence_070p|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1588,7 +1792,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 43. `order_lifecycle_overnight_bucket_peak_profit_band_peak_lt_zero`
+### 49. `order_lifecycle_overnight_bucket_peak_profit_band_peak_lt_zero`
 
 - title: LDM overnight bucket attribution follow-up: peak_profit_band=peak_lt_zero
 - decision: `attach_existing_family`
@@ -1622,7 +1826,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 44. `order_lifecycle_overnight_bucket_profit_band_profit_lt_neg070`
+### 50. `order_lifecycle_overnight_bucket_profit_band_profit_lt_neg070`
 
 - title: LDM overnight bucket attribution follow-up: profit_band=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1656,7 +1860,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 45. `order_lifecycle_scale_in_bucket_ai_score_band_score_63_65`
+### 51. `order_lifecycle_scale_in_bucket_ai_score_band_score_63_65`
 
 - title: LDM scale-in bucket attribution follow-up: ai_score_band=score_63_65
 - decision: `attach_existing_family`
@@ -1690,7 +1894,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 46. `order_lifecycle_scale_in_bucket_ai_score_band_score_66_69`
+### 52. `order_lifecycle_scale_in_bucket_ai_score_band_score_66_69`
 
 - title: LDM scale-in bucket attribution follow-up: ai_score_band=score_66_69
 - decision: `attach_existing_family`
@@ -1724,7 +1928,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 47. `order_lifecycle_scale_in_bucket_ai_score_band_score_lt60`
+### 53. `order_lifecycle_scale_in_bucket_ai_score_band_score_lt60`
 
 - title: LDM scale-in bucket attribution follow-up: ai_score_band=score_lt60
 - decision: `attach_existing_family`
@@ -1758,7 +1962,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 48. `order_lifecycle_scale_in_bucket_ai_score_source_ai_source_unknown`
+### 54. `order_lifecycle_scale_in_bucket_ai_score_source_ai_source_unknown`
 
 - title: LDM scale-in bucket attribution follow-up: ai_score_source=ai_source_unknown
 - decision: `attach_existing_family`
@@ -1792,7 +1996,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 49. `order_lifecycle_scale_in_bucket_arm_avg_down`
+### 55. `order_lifecycle_scale_in_bucket_arm_avg_down`
 
 - title: LDM scale-in bucket attribution follow-up: arm=AVG_DOWN
 - decision: `attach_existing_family`
@@ -1826,7 +2030,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 50. `order_lifecycle_scale_in_bucket_arm_pyramid`
+### 56. `order_lifecycle_scale_in_bucket_arm_pyramid`
 
 - title: LDM scale-in bucket attribution follow-up: arm=PYRAMID
 - decision: `attach_existing_family`
@@ -1860,7 +2064,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 51. `order_lifecycle_scale_in_bucket_blocker_namespace_avg_down`
+### 57. `order_lifecycle_scale_in_bucket_blocker_namespace_avg_down`
 
 - title: LDM scale-in bucket attribution follow-up: blocker_namespace=AVG_DOWN
 - decision: `attach_existing_family`
@@ -1894,7 +2098,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 52. `order_lifecycle_scale_in_bucket_blocker_namespace_avg_down_only`
+### 58. `order_lifecycle_scale_in_bucket_blocker_namespace_avg_down_only`
 
 - title: LDM scale-in bucket attribution follow-up: blocker_namespace=AVG_DOWN_ONLY
 - decision: `attach_existing_family`
@@ -1928,7 +2132,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 53. `order_lifecycle_scale_in_bucket_blocker_namespace_pyramid`
+### 59. `order_lifecycle_scale_in_bucket_blocker_namespace_pyramid`
 
 - title: LDM scale-in bucket attribution follow-up: blocker_namespace=PYRAMID
 - decision: `attach_existing_family`
@@ -1962,7 +2166,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 54. `order_lifecycle_scale_in_bucket_blocker_reason_profit_not_enough`
+### 60. `order_lifecycle_scale_in_bucket_blocker_reason_profit_not_enough`
 
 - title: LDM scale-in bucket attribution follow-up: blocker_reason=profit_not_enough
 - decision: `attach_existing_family`
@@ -1996,7 +2200,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 55. `order_lifecycle_entry_bucket_chosen_action_buy_now`
+### 61. `order_lifecycle_entry_bucket_chosen_action_buy_now`
 
 - title: LDM entry bucket attribution follow-up: chosen_action=BUY_NOW
 - decision: `attach_existing_family`
@@ -2030,7 +2234,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 56. `order_lifecycle_entry_bucket_chosen_action_no_buy_ai`
+### 62. `order_lifecycle_entry_bucket_chosen_action_no_buy_ai`
 
 - title: LDM entry bucket attribution follow-up: chosen_action=NO_BUY_AI
 - decision: `attach_existing_family`
@@ -2064,7 +2268,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 57. `order_lifecycle_entry_bucket_exit_rule_scalp_soft_stop_pct`
+### 63. `order_lifecycle_entry_bucket_exit_rule_scalp_soft_stop_pct`
 
 - title: LDM entry bucket attribution follow-up: exit_rule=scalp_soft_stop_pct
 - decision: `attach_existing_family`
@@ -2098,7 +2302,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 58. `order_lifecycle_entry_bucket_exit_rule_scalp_trailing_take_profit`
+### 64. `order_lifecycle_entry_bucket_exit_rule_scalp_trailing_take_profit`
 
 - title: LDM entry bucket attribution follow-up: exit_rule=scalp_trailing_take_profit
 - decision: `attach_existing_family`
@@ -2290,21 +2494,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/orderbook_stability.py`, `src/engine/swing_lifecycle_audit.py`
 - acceptance_tests: `pytest orderbook stability tests`, `pytest swing lifecycle audit tests`
 
-### N12. `order_swing_pattern_lab_deepseek_ofi_qi_stale_missing`
-
-- title: OFI/QI stale/missing quality review
-- decision: `attach_existing_family`
-- decision_reason: instrumentation/report/provenance implementation is already present; keep the order as existing-family source evidence instead of re-implementing
-- source_report_type: `swing_pattern_lab_automation`
-- lifecycle_stage: `ofi_qi`
-- target_subsystem: `swing_micro_context`
-- runtime_effect: `False`
-- allowed_runtime_apply: `False`
-- implementation_status: `implemented`
-- files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/swing_selection_funnel_report.py`, `src/model/common_v2.py`
-- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_model_selection_funnel_repair.py`, `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_deepseek_swing_pattern_lab.py`
-
-### N13. `order_swing_scale_in_contract_gap_review`
+### N12. `order_swing_scale_in_contract_gap_review`
 
 - title: swing scale-in contract gap review
 - decision: `attach_existing_family`
@@ -2318,7 +2508,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/sniper_scale_in.py`
 - acceptance_tests: `pytest swing lifecycle audit tests`
 
-### N14. `order_perf_swing_simulation_iteration`
+### N13. `order_perf_swing_simulation_iteration`
 
 - title: Swing simulation iteration and quote grouping
 - decision: `attach_existing_family`
@@ -2332,7 +2522,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_daily_simulation_report.py`
 - acceptance_tests: `pytest src/tests/test_swing_model_selection_funnel_repair.py`, `swing simulation JSON parity on injected sources`
 
-### N15. `order_swing_discovery_label_contract_gap_review`
+### N14. `order_swing_discovery_label_contract_gap_review`
 
 - title: swing discovery label contract gap review
 - decision: `attach_existing_family`
@@ -2346,7 +2536,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_strategy_discovery_label_builder.py`, `src/engine/swing_strategy_discovery_ev_report.py`
 - acceptance_tests: `pytest swing lifecycle audit tests`
 
-### N16. `order_perf_monitor_snapshot_stream_tail`
+### N15. `order_perf_monitor_snapshot_stream_tail`
 
 - title: Monitor snapshot runtime streaming tail read
 - decision: `attach_existing_family`
@@ -2360,7 +2550,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/monitor_snapshot_runtime.py`
 - acceptance_tests: `pytest src/tests/test_log_archive_service.py`, `last valid JSON line parity`
 
-### N17. `order_swing_exit_ofi_qi_smoothing_distribution`
+### N16. `order_swing_exit_ofi_qi_smoothing_distribution`
 
 - title: swing exit OFI/QI smoothing distribution
 - decision: `attach_existing_family`
@@ -2374,7 +2564,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/swing_lifecycle_audit.py`
 - acceptance_tests: `pytest OFI smoothing tests`, `pytest swing lifecycle audit tests`
 
-### N18. `order_swing_strategy_discovery_source_quality_followup`
+### N17. `order_swing_strategy_discovery_source_quality_followup`
 
 - title: swing strategy discovery label/source quality follow-up
 - decision: `attach_existing_family`
@@ -2388,7 +2578,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_strategy_discovery_label_builder.py`, `src/engine/swing_strategy_discovery_ev_report.py`, `src/engine/swing_sector_theme_source.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_strategy_discovery_label_builder.py src/tests/test_swing_strategy_discovery_ev_report.py src/tests/test_swing_sector_theme_source.py`
 
-### N19. `order_perf_final_ensemble_records`
+### N18. `order_perf_final_ensemble_records`
 
 - title: Final ensemble scanner records conversion without iterrows
 - decision: `attach_existing_family`
@@ -2402,7 +2592,7 @@ Stage hook candidate:
 - files_likely_touched: `src/scanners/final_ensemble_scanner.py`
 - acceptance_tests: `pytest src/tests/test_swing_model_selection_funnel_repair.py`, `V2 CSV pick list parity`
 
-### N20. `order_swing_pattern_lab_deepseek_entry_no_submissions`
+### N19. `order_swing_pattern_lab_deepseek_entry_no_submissions`
 
 - title: All selected candidates failed to reach order submission
 - decision: `design_family_candidate`
@@ -2416,7 +2606,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/swing_selection_funnel_report.py`, `src/model/common_v2.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_model_selection_funnel_repair.py`, `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_deepseek_swing_pattern_lab.py`
 
-### N21. `order_liquidity_gate_miss_ev_recovery`
+### N20. `order_liquidity_gate_miss_ev_recovery`
 
 - title: liquidity gate miss EV recovery
 - decision: `design_family_candidate`
@@ -2430,7 +2620,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N22. `order_overbought_gate_miss_ev_recovery`
+### N21. `order_overbought_gate_miss_ev_recovery`
 
 - title: overbought gate miss EV recovery
 - decision: `design_family_candidate`
@@ -2444,7 +2634,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N23. `order_swing_ai_contract_structured_output_eval`
+### N22. `order_swing_ai_contract_structured_output_eval`
 
 - title: swing AI contract structured output eval
 - decision: `design_family_candidate`
@@ -2458,7 +2648,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/ai_prompt_contracts.py`, `src/engine/ai_engine_openai.py`, `src/engine/ai_response_contracts.py`
 - acceptance_tests: `pytest OpenAI transport/schema tests`, `pytest swing lifecycle audit tests`
 
-### N24. `order_panic_sell_defense_lifecycle_transition_pack`
+### N23. `order_panic_sell_defense_lifecycle_transition_pack`
 
 - title: panic sell defense lifecycle transition pack
 - decision: `design_family_candidate`
@@ -2472,7 +2662,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/panic_sell_defense_report.py`, `src/engine/daily_threshold_cycle_report.py`, `src/engine/runtime_approval_summary.py`, `docs/plan-korStockScanPerformanceOptimization.rebase.md`
 - acceptance_tests: `pytest panic sell defense/report lifecycle tests`, `pytest src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_approval_summary.py`
 
-### N25. `order_overbought_gate_miss_ev_회수_조건_점검`
+### N24. `order_overbought_gate_miss_ev_회수_조건_점검`
 
 - title: overbought gate miss EV 회수 조건 점검
 - decision: `design_family_candidate`
@@ -2486,7 +2676,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N26. `order_swing_pattern_lab_deepseek_ofi_qi_smoothing_review`
+### N25. `order_swing_pattern_lab_deepseek_ofi_qi_smoothing_review`
 
 - title: OFI/QI exit smoothing action distribution
 - decision: `defer_evidence`
@@ -2500,7 +2690,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/swing_selection_funnel_report.py`, `src/model/common_v2.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_model_selection_funnel_repair.py`, `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_deepseek_swing_pattern_lab.py`
 
-### N27. `order_latency_canary_tag_완화_1축_canary_승인`
+### N26. `order_latency_canary_tag_완화_1축_canary_승인`
 
 - title: latency canary tag 완화 1축 canary 승인
 - decision: `defer_evidence`
@@ -2514,7 +2704,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/sniper_performance_tuning_report.py`, `src/engine/daily_threshold_cycle_report.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N28. `order_ai_threshold_miss_ev_회수_조건_점검`
+### N27. `order_ai_threshold_miss_ev_회수_조건_점검`
 
 - title: AI threshold miss EV 회수 조건 점검
 - decision: `defer_evidence`
@@ -2528,7 +2718,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_missed_entry_counterfactual.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N29. `order_panic_buying_source_quality_market_breadth_micro_coverage`
+### N28. `order_panic_buying_source_quality_market_breadth_micro_coverage`
 
 - title: panic buying source-quality market breadth and micro coverage
 - decision: `defer_evidence`
@@ -2542,7 +2732,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/panic_buying_report.py`, `src/engine/daily_threshold_cycle_report.py`, `src/engine/runtime_approval_summary.py`, `docs/plan-korStockScanPerformanceOptimization.rebase.md`, `docs/code-improvement-workorders/panic_buying_regime_mode_v2_2026-05-14.md`
 - acceptance_tests: `pytest src/tests/test_panic_buying_report.py`, `pytest src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_approval_summary.py`
 
-### N30. `order_partial_only_표류_전용_timeout_report_only`
+### N29. `order_partial_only_표류_전용_timeout_report_only`
 
 - title: partial-only 표류 전용 timeout report-only
 - decision: `defer_evidence`
@@ -2556,7 +2746,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N31. `order_split_entry_rebase_수량_정합성_report_only_감사`
+### N30. `order_split_entry_rebase_수량_정합성_report_only_감사`
 
 - title: split-entry rebase 수량 정합성 report-only 감사
 - decision: `defer_evidence`
@@ -2570,7 +2760,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N32. `order_동일_종목_split_entry_soft_stop_재진입_cooldown_report_only`
+### N31. `order_동일_종목_split_entry_soft_stop_재진입_cooldown_report_only`
 
 - title: 동일 종목 split-entry soft-stop 재진입 cooldown report-only
 - decision: `defer_evidence`
@@ -2584,7 +2774,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N33. `order_perf_kiwoom_orders_http_session_review`
+### N32. `order_perf_kiwoom_orders_http_session_review`
 
 - title: Kiwoom orders HTTP session reuse manual review
 - decision: `defer_evidence`
@@ -2598,7 +2788,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/kiwoom_orders.py`
 - acceptance_tests: `pytest src/tests/test_kiwoom_orders.py src/tests/test_sniper_scale_in.py`
 
-### N34. `order_perf_config_cache_scope_review`
+### N33. `order_perf_config_cache_scope_review`
 
 - title: Config cache scope review
 - decision: `defer_evidence`
@@ -2612,7 +2802,7 @@ Stage hook candidate:
 - files_likely_touched: `src/utils/constants.py`, `src/utils/kiwoom_utils.py`
 - acceptance_tests: `pytest config/import smoke tests`
 
-### N35. `order_perf_dashboard_db_pool_review`
+### N34. `order_perf_dashboard_db_pool_review`
 
 - title: Legacy dashboard DB connection pool review
 - decision: `defer_evidence`
@@ -2626,7 +2816,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/dashboard_data_repository.py`
 - acceptance_tests: `pytest src/tests/test_dashboard_data_repository.py`
 
-### N36. `order_partial_fallback_확대_직후_즉시_재평가_report_only`
+### N35. `order_partial_fallback_확대_직후_즉시_재평가_report_only`
 
 - title: partial → fallback 확대 직후 즉시 재평가 report-only
 - decision: `reject`
@@ -2640,7 +2830,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N37. `order_perf_kiwoom_ws_tick_parse_fastpath`
+### N36. `order_perf_kiwoom_ws_tick_parse_fastpath`
 
 - title: Kiwoom websocket tick parsing fast path
 - decision: `reject`
@@ -2654,7 +2844,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/kiwoom_websocket.py`
 - acceptance_tests: `pytest websocket parsing/data-quality tests`
 
-### N38. `order_perf_raw_event_suppression_out_of_scope`
+### N37. `order_perf_raw_event_suppression_out_of_scope`
 
 - title: Raw pipeline event suppression out of scope
 - decision: `reject`

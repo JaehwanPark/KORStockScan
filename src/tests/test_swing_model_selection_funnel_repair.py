@@ -1,6 +1,7 @@
 import json
 import sys
 from dataclasses import replace
+from datetime import datetime, time
 from pathlib import Path
 
 import pandas as pd
@@ -45,6 +46,30 @@ class FakeEventBus:
 
     def publish(self, topic, payload):
         self.published.append((topic, payload))
+
+
+class _NoopDB:
+    class _Session:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def query(self, *args, **kwargs):
+            return self
+
+        def filter_by(self, *args, **kwargs):
+            return self
+
+        def update(self, *args, **kwargs):
+            return 0
+
+        def first(self):
+            return None
+
+    def get_session(self):
+        return self._Session()
 
 
 def _score_rows():
@@ -1025,6 +1050,336 @@ def test_swing_same_symbol_loss_guard_blocks_dry_run_before_latency_submit(monke
     assert "000001" not in alerted
 
 
+def _allowing_latency_gate(qty=2, price=10_000):
+    return {
+        "allowed": True,
+        "mode": "normal",
+        "decision": "ALLOW_NORMAL",
+        "latency_state": "SAFE",
+        "reason": "unit",
+        "signal_price": price,
+        "latest_price": price,
+        "order_price": price,
+        "orders": [{"tag": "normal", "qty": qty, "price": price, "tif": "DAY"}],
+        "ws_age_ms": 10,
+        "ws_jitter_ms": 0,
+        "spread_ratio": 0.0001,
+        "quote_stale": False,
+        "computed_allowed_slippage": 10,
+        "latency_canary_applied": False,
+        "latency_danger_reasons": [],
+    }
+
+
+def test_swing_dry_run_submit_path_assumes_fill_after_legacy_prior(monkeypatch):
+    rules = replace(
+        CONFIG,
+        SWING_LIVE_ORDER_DRY_RUN_ENABLED=True,
+        SWING_ONE_SHARE_REAL_CANARY_ENABLED=False,
+        SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED=False,
+        SWING_SAME_SYMBOL_LOSS_REENTRY_GUARD_ENABLED=False,
+    )
+    logs = []
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(state_handlers, "ACTIVE_TARGETS", [])
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "describe_buy_capacity", lambda *args, **kwargs: (100_000, 100_000, 2, 1.0))
+    monkeypatch.setattr(state_handlers, "evaluate_live_buy_entry", lambda *args, **kwargs: _allowing_latency_gate())
+    monkeypatch.setattr(state_handlers, "resolve_lifecycle_decision", lambda *args, **kwargs: {})
+    monkeypatch.setattr(state_handlers, "_build_entry_submit_revalidation_fields", lambda *args, **kwargs: {})
+    monkeypatch.setattr(state_handlers, "_apply_entry_ai_price_canary", lambda **kwargs: (kwargs["planned_orders"], False))
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("dry-run must not call real buy order")),
+    )
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
+
+    result = state_handlers._submit_watching_triggered_entry(
+        {"id": 706, "name": "DRY", "code": "000001", "strategy": "KOSPI_ML"},
+        "000001",
+        {"curr": 10_000, "orderbook": {"asks": [{"price": 10_010}], "bids": [{"price": 9_990}]}},
+        admin_id=1,
+        runtime={
+            "strategy": "KOSPI_ML",
+            "ratio": 0.10,
+            "curr_price": 10_000,
+            "liquidity_value": 0,
+            "msg": "",
+            "now_ts": 1_768_090_000.0,
+            "cooldowns": {},
+            "alerted_stocks": set(),
+            "swing_entry_policy_source_stage": "blocked_swing_score_vpw",
+        },
+    )
+
+    assert result is False
+    stages = [stage for stage, _ in logs]
+    assert "swing_sim_buy_order_assumed_filled" in stages
+    assert "swing_sim_order_bundle_assumed_filled" in stages
+    sim_fill = next(fields for stage, fields in logs if stage == "swing_sim_buy_order_assumed_filled")
+    assert sim_fill["actual_order_submitted"] is False
+    assert sim_fill["would_submit_stage"] == "order_leg_sent"
+
+
+def test_swing_one_share_real_canary_submits_only_when_allowlisted(monkeypatch):
+    rules = replace(
+        CONFIG,
+        SWING_LIVE_ORDER_DRY_RUN_ENABLED=True,
+        SWING_ONE_SHARE_REAL_CANARY_ENABLED=True,
+        SWING_ONE_SHARE_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT=True,
+        SWING_ONE_SHARE_REAL_CANARY_ALLOWED_CODES="000001",
+        SWING_ONE_SHARE_REAL_CANARY_MAX_QTY=1,
+        SWING_ONE_SHARE_REAL_CANARY_MAX_NEW_ENTRIES_PER_DAY=1,
+        SWING_ONE_SHARE_REAL_CANARY_MAX_OPEN_POSITIONS=3,
+        SWING_ONE_SHARE_REAL_CANARY_MAX_TOTAL_NOTIONAL_KRW=300_000,
+        SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED=False,
+        SWING_SAME_SYMBOL_LOSS_REENTRY_GUARD_ENABLED=False,
+    )
+    logs = []
+    orders = []
+    stock = {"id": 707, "name": "CANARY", "code": "000001", "strategy": "KOSPI_ML"}
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(state_handlers, "DB", _NoopDB())
+    monkeypatch.setattr(state_handlers, "ACTIVE_TARGETS", [])
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "describe_buy_capacity", lambda *args, **kwargs: (100_000, 100_000, 2, 1.0))
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "send_buy_order", lambda code, qty, price, *args, **kwargs: orders.append((code, qty, price)) or {"rt_cd": "0", "ord_no": "123"})
+    monkeypatch.setattr(state_handlers, "evaluate_live_buy_entry", lambda *args, **kwargs: _allowing_latency_gate(qty=2))
+    monkeypatch.setattr(state_handlers, "resolve_lifecycle_decision", lambda *args, **kwargs: {})
+    monkeypatch.setattr(state_handlers, "_build_entry_submit_revalidation_fields", lambda *args, **kwargs: {})
+    monkeypatch.setattr(state_handlers, "_apply_entry_ai_price_canary", lambda **kwargs: (kwargs["planned_orders"], False))
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(state_handlers, "_publish_buy_signal_submission_notice", lambda *args, **kwargs: None)
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
+
+    result = state_handlers._submit_watching_triggered_entry(
+        stock,
+        "000001",
+        {"curr": 10_000, "orderbook": {"asks": [{"price": 10_010}], "bids": [{"price": 9_990}]}},
+        admin_id=1,
+        runtime={
+            "strategy": "KOSPI_ML",
+            "ratio": 0.10,
+            "curr_price": 10_000,
+            "liquidity_value": 0,
+            "msg": "",
+            "now_ts": 1_768_090_000.0,
+            "cooldowns": {},
+            "alerted_stocks": set(),
+        },
+    )
+
+    assert result is False
+    assert orders == [("000001", 1, 0)]
+    assert stock["actual_order_submitted"] is True
+    assert stock["broker_order_forbidden"] is False
+    canary = next(fields for stage, fields in logs if stage == "swing_one_share_real_canary_order_submitted")
+    assert canary["actual_order_submitted"] is True
+    assert canary["broker_order_forbidden"] is False
+    assert canary["real_canary_actual_qty"] == 1
+    request = next(fields for stage, fields in logs if stage == "order_leg_request")
+    assert request["actual_order_submitted"] is False
+    assert request["broker_order_forbidden"] is False
+
+
+def test_swing_one_share_real_canary_blocked_code_does_not_submit(monkeypatch):
+    rules = replace(
+        CONFIG,
+        SWING_LIVE_ORDER_DRY_RUN_ENABLED=True,
+        SWING_ONE_SHARE_REAL_CANARY_ENABLED=True,
+        SWING_ONE_SHARE_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT=True,
+        SWING_ONE_SHARE_REAL_CANARY_ALLOWED_CODES="000002",
+        SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED=False,
+        SWING_SAME_SYMBOL_LOSS_REENTRY_GUARD_ENABLED=False,
+    )
+    logs = []
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(state_handlers, "DB", _NoopDB())
+    monkeypatch.setattr(state_handlers, "ACTIVE_TARGETS", [])
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "describe_buy_capacity", lambda *args, **kwargs: (100_000, 100_000, 2, 1.0))
+    monkeypatch.setattr(state_handlers, "evaluate_live_buy_entry", lambda *args, **kwargs: _allowing_latency_gate(qty=2))
+    monkeypatch.setattr(state_handlers, "resolve_lifecycle_decision", lambda *args, **kwargs: {})
+    monkeypatch.setattr(state_handlers, "_build_entry_submit_revalidation_fields", lambda *args, **kwargs: {})
+    monkeypatch.setattr(state_handlers, "_apply_entry_ai_price_canary", lambda **kwargs: (kwargs["planned_orders"], False))
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("blocked canary must not call real buy order")),
+    )
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
+
+    result = state_handlers._submit_watching_triggered_entry(
+        {"id": 708, "name": "BLOCKED", "code": "000001", "strategy": "KOSPI_ML"},
+        "000001",
+        {"curr": 10_000, "orderbook": {"asks": [{"price": 10_010}], "bids": [{"price": 9_990}]}},
+        admin_id=1,
+        runtime={
+            "strategy": "KOSPI_ML",
+            "ratio": 0.10,
+            "curr_price": 10_000,
+            "liquidity_value": 0,
+            "msg": "",
+            "now_ts": 1_768_090_000.0,
+            "cooldowns": {},
+            "alerted_stocks": set(),
+        },
+    )
+
+    assert result is False
+    stages = [stage for stage, _ in logs]
+    assert "swing_one_share_real_canary_blocked" in stages
+    assert "swing_sim_order_bundle_assumed_filled" in stages
+
+
+def test_swing_watching_legacy_priors_flow_to_same_submit_policy(monkeypatch):
+    rules = replace(
+        CONFIG,
+        SWING_LIVE_ORDER_DRY_RUN_ENABLED=True,
+        SWING_ONE_SHARE_REAL_CANARY_ENABLED=False,
+        SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED=False,
+        SWING_INTRADAY_PROBE_COUNTERFACTUAL_GATEKEEPER_ENABLED=False,
+    )
+    logs = []
+    submit_sources = []
+
+    class Radar:
+        def __init__(self, score):
+            self.score = score
+
+        def analyze_signal_integrated(self, ws_data, ai_prob):
+            return self.score, {}, "unit", {}, {}
+
+    class Gatekeeper:
+        def __init__(self, allow):
+            self.allow = allow
+
+        def evaluate_realtime_gatekeeper(self, **kwargs):
+            return {
+                "allow_entry": self.allow,
+                "action_label": "WAIT" if not self.allow else "BUY",
+                "action_key": "pullback_wait" if not self.allow else "buy",
+                "report": "unit",
+            }
+
+    def fake_submit(stock, code, ws_data, admin_id, runtime):
+        submit_sources.append(runtime.get("swing_entry_policy_source_stage"))
+
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(state_handlers, "COOLDOWNS", {})
+    monkeypatch.setattr(state_handlers, "ALERTED_STOCKS", set())
+    monkeypatch.setattr(state_handlers, "EVENT_BUS", FakeEventBus())
+    monkeypatch.setattr(state_handlers, "LAST_AI_CALL_TIMES", {})
+    monkeypatch.setattr(state_handlers, "_resolve_stock_marcap", lambda *args, **kwargs: 100_000_000_000)
+    monkeypatch.setattr(
+        state_handlers,
+        "get_dynamic_swing_gap_threshold",
+        lambda *args, **kwargs: {"threshold": 3.5, "bucket_label": "unit"},
+    )
+    monkeypatch.setattr(state_handlers, "_should_block_swing_entry", lambda strategy: (False, None))
+    monkeypatch.setattr(state_handlers, "kiwoom_utils", type("KU", (), {"build_realtime_analysis_context": staticmethod(lambda **kwargs: {})}))
+    monkeypatch.setattr(state_handlers, "_submit_watching_triggered_entry", fake_submit)
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
+
+    cases = [
+        ({"fluctuation": 4.2, "v_pw": 130.0}, Radar(85), Gatekeeper(True), "blocked_swing_gap"),
+        ({"fluctuation": 1.0, "v_pw": 80.0}, Radar(45), None, "blocked_swing_score_vpw"),
+        ({"fluctuation": 1.0, "v_pw": 130.0}, Radar(85), Gatekeeper(False), "blocked_gatekeeper_reject"),
+    ]
+    for idx, (ws_overrides, radar, ai_engine, expected_source) in enumerate(cases):
+        state_handlers.COOLDOWNS = {}
+        state_handlers.ALERTED_STOCKS = set()
+        stock = {
+            "id": 800 + idx,
+            "name": f"SWING{idx}",
+            "code": f"00000{idx}",
+            "strategy": "KOSPI_ML",
+            "prob": 0.8,
+        }
+        state_handlers.handle_watching_state(
+            stock,
+            stock["code"],
+            {"curr": 10_000, "volume": 1000, **ws_overrides},
+            admin_id=1,
+            now_ts=1_768_090_000.0 + idx,
+            now_dt=datetime.combine(datetime(2026, 5, 26), time(10, 0)),
+            radar=radar,
+            ai_engine=ai_engine,
+        )
+        assert submit_sources[-1] == expected_source
+
+    policy_sources = [
+        fields["feature_snapshot"]["source_stage"]
+        for stage, fields in logs
+        if stage == "swing_entry_policy_evaluated"
+    ]
+    assert policy_sources[-3:] == ["blocked_swing_gap", "blocked_swing_score_vpw", "blocked_gatekeeper_reject"]
+
+
+def test_swing_watching_market_regime_block_flows_to_submit_policy(monkeypatch):
+    rules = replace(
+        CONFIG,
+        SWING_LIVE_ORDER_DRY_RUN_ENABLED=True,
+        SWING_ONE_SHARE_REAL_CANARY_ENABLED=False,
+        SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED=False,
+        SWING_INTRADAY_PROBE_COUNTERFACTUAL_GATEKEEPER_ENABLED=False,
+    )
+    logs = []
+    submit_sources = []
+
+    class Radar:
+        def analyze_signal_integrated(self, ws_data, ai_prob):
+            return 85, {}, "unit", {}, {}
+
+    class Gatekeeper:
+        def evaluate_realtime_gatekeeper(self, **kwargs):
+            return {
+                "allow_entry": True,
+                "action_label": "BUY",
+                "action_key": "buy",
+                "report": "unit",
+            }
+
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(state_handlers, "COOLDOWNS", {})
+    monkeypatch.setattr(state_handlers, "ALERTED_STOCKS", set())
+    monkeypatch.setattr(state_handlers, "EVENT_BUS", FakeEventBus())
+    monkeypatch.setattr(state_handlers, "LAST_AI_CALL_TIMES", {})
+    monkeypatch.setattr(state_handlers, "_resolve_stock_marcap", lambda *args, **kwargs: 100_000_000_000)
+    monkeypatch.setattr(
+        state_handlers,
+        "get_dynamic_swing_gap_threshold",
+        lambda *args, **kwargs: {"threshold": 3.5, "bucket_label": "unit"},
+    )
+    monkeypatch.setattr(state_handlers, "_should_block_swing_entry", lambda strategy: (True, "unit_regime_prior"))
+    monkeypatch.setattr(state_handlers, "kiwoom_utils", type("KU", (), {"build_realtime_analysis_context": staticmethod(lambda **kwargs: {})}))
+    monkeypatch.setattr(
+        state_handlers,
+        "_submit_watching_triggered_entry",
+        lambda stock, code, ws_data, admin_id, runtime: submit_sources.append(runtime.get("swing_entry_policy_source_stage")),
+    )
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
+
+    state_handlers.handle_watching_state(
+        {"id": 809, "name": "SWING_REGIME", "code": "000009", "strategy": "KOSPI_ML", "prob": 0.8},
+        "000009",
+        {"curr": 10_000, "volume": 1000, "fluctuation": 1.0, "v_pw": 130.0},
+        admin_id=1,
+        now_ts=1_768_090_010.0,
+        now_dt=datetime.combine(datetime(2026, 5, 26), time(10, 0)),
+        radar=Radar(),
+        ai_engine=Gatekeeper(),
+    )
+
+    assert submit_sources == ["market_regime_block"]
+    policy = next(fields for stage, fields in logs if stage == "swing_entry_policy_evaluated")
+    assert policy["submit_allowed_by_policy"] is True
+    assert policy["baseline_prior_features"]["market_regime"]["blocked"] is True
+
+
 def test_swing_probe_holding_exit_logs_probe_only_sell(monkeypatch, tmp_path):
     rules = replace(
         CONFIG,
@@ -1034,7 +1389,7 @@ def test_swing_probe_holding_exit_logs_probe_only_sell(monkeypatch, tmp_path):
     )
     logs = []
     monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
-    monkeypatch.setattr(state_handlers, "DB", None)
+    monkeypatch.setattr(state_handlers, "DB", _NoopDB())
     monkeypatch.setattr(state_handlers, "HIGHEST_PRICES", {"swing_probe:PROBE1": 10_300})
     monkeypatch.setattr(state_handlers, "COOLDOWNS", {})
     monkeypatch.setattr(state_handlers, "ALERTED_STOCKS", set())

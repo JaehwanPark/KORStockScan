@@ -90,6 +90,29 @@
 - old CLI와 new CLI가 모두 동작해야 한다.
 - deploy 문서는 즉시 migration하지 않고 old wrapper path를 유지한다.
 
+## Phase 2 Slice 2 Candidate: monitoring sampler
+
+2026-05-26 POSTCLOSE 판정은 `monitoring_sampler_slice_selected`다. 다음 safe slice 후보는 `src.engine.system_metric_sampler`를 `src.engine.monitoring.system_metric_sampler`로 옮기는 monitoring/infra 성격 slice다.
+
+범위:
+
+- new canonical path: `src.engine.monitoring.system_metric_sampler`
+- old path compatibility: `src.engine.system_metric_sampler` wrapper 유지
+- old CLI compatibility: `python -m src.engine.system_metric_sampler` 유지
+- new CLI smoke: `python -m src.engine.monitoring.system_metric_sampler` 확인
+
+구현 전 gate:
+
+1. consumer inventory로 deploy/cron/error detector/test import 경로를 수집한다.
+2. cron/job id, output path, JSON schema, sampler interval, resource metrics 의미를 바꾸지 않는다.
+3. runtime/order/provider/threshold/bot restart 경로와 연결하지 않는다.
+4. old/new import smoke, old/new CLI smoke, targeted monitoring tests, parser, `git diff --check`를 실행한다.
+
+보류:
+
+- `src.utils.threshold_cycle_registry -> src.engine.automation.threshold_cycle_registry`는 `UtilsBoundaryAudit` 이후 검토한다.
+- `src/trading -> src.engine.scalping`은 runtime entry/order hot path이므로 별도 `TradingToScalping` inventory와 pure type/util slice 검증 전 이동하지 않는다.
+
 ## Long-Running Track: src/trading -> src.engine.scalping
 
 `src/trading`은 이름상 generic trading package지만 현재 코드 기준으로는 스캘핑 진입 latency/orderbook/order helper를 담고 있다. 장기 hierarchy는 `src.engine.scalping` 아래가 맞지만, 이 경로는 live entry/order path와 연결되어 있어 Phase 2 초기 report-only slice와 분리한다.

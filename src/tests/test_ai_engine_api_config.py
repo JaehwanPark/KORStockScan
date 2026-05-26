@@ -18,4 +18,5 @@ def test_ai_response_schema_registry_covers_required_endpoints():
         "producer_gap_discovery_ai_review_v1",
         "stage_hook_workorder_discovery_ai_review_v1",
         "runtime_apply_gap_ai_review_v1",
+        "swing_bottom_rebound_policy_ai_review_v1",
     }

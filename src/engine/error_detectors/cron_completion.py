@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
@@ -140,6 +141,7 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
     {
         "id": "threshold_cycle_postclose",
         "log": "logs/threshold_cycle_postclose_cron.log",
+        "status_artifact": "data/report/threshold_cycle_postclose_status/threshold_cycle_postclose_{date}.status.json",
         "window_start": (16, 10),
         "window_end": (17, 0),
         "mode": "once",
@@ -158,6 +160,7 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
     {
         "id": "tuning_monitoring_postclose",
         "log": "logs/tuning_monitoring_postclose_cron.log",
+        "status_artifact": "data/report/tuning_monitoring/status/tuning_monitoring_postclose_{date}.json",
         "window_start": (20, 5),
         "window_end": (20, 45),
         "mode": "once",
@@ -273,10 +276,19 @@ class CronCompletionDetector(BaseDetector):
             has_done = bool(_DONE_MARKER.search(today_lines)) if has_matching_date else False
             has_start = bool(_START_MARKER.search(today_lines)) if has_matching_date else False
             has_error = bool(_ERROR_MARKER.search(today_lines)) if has_matching_date else bool(_ERROR_MARKER.search(recent_lines))
+            artifact_status = self._status_artifact_terminal(job, today_str)
+            if artifact_status:
+                details[f"{jid}_status_artifact_terminal"] = artifact_status
 
             job["mode"] = job.get("mode", "once")
             if job["mode"] == "once":
-                if not has_matching_date:
+                if artifact_status == "done":
+                    details[f"{jid}_status"] = "pass"
+                    details[f"{jid}_pass_note"] = "status artifact terminal success"
+                elif artifact_status == "failed":
+                    issues.append(f"{jid}: status artifact failed")
+                    details[f"{jid}_status"] = "fail"
+                elif not has_matching_date:
                     if past_window_end:
                         issues.append(f"{jid}: no today marker found after window end")
                         details[f"{jid}_status"] = "fail"
@@ -363,6 +375,35 @@ class CronCompletionDetector(BaseDetector):
     @staticmethod
     def _count_errors(text: str) -> int:
         return len(_ERROR_MARKER.findall(text))
+
+    @staticmethod
+    def _status_artifact_terminal(job: dict[str, Any], today_str: str) -> str | None:
+        artifact_template = job.get("status_artifact")
+        if not artifact_template:
+            return None
+        artifact_path = PROJECT_ROOT / str(artifact_template).format(date=today_str)
+        if not artifact_path.exists():
+            return None
+        try:
+            payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return None
+        if str(payload.get("target_date") or "") != today_str:
+            return None
+        try:
+            exit_code = int(payload.get("exit_code") or 0)
+        except (TypeError, ValueError):
+            exit_code = 1
+        status = str(payload.get("status") or "").lower()
+        manual_recovery = payload.get("manual_recovery") if isinstance(payload.get("manual_recovery"), dict) else {}
+        verification_status = str(manual_recovery.get("verification_status") or "").lower()
+        if exit_code == 0 and status in {"succeeded", "success", "passed", "pass", "completed"}:
+            return "done"
+        if exit_code == 0 and verification_status == "pass_with_pending_done_marker":
+            return "done"
+        if status in {"failed", "fail", "error"}:
+            return "failed"
+        return None
 
     @staticmethod
     def _filter_today_lines(text: str, today_str: str) -> str:

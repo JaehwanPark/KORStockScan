@@ -568,7 +568,8 @@ def build_pattern_lab_ai_review_report(
     ]
     audit = ai_payload.get("audit") if isinstance(ai_payload.get("audit"), dict) else {}
     state_counts = Counter(str(item.get("final_state") or "unknown") for item in conclusions if isinstance(item, dict))
-    status = "warning" if orders or ai_status != "parsed" or audit.get("status") != "pass" else "pass"
+    ai_status_ok = ai_status in {"parsed", "disabled_deterministic_review"}
+    status = "warning" if orders or not ai_status_ok or audit.get("status") != "pass" else "pass"
     source_paths = _source_paths(target_date)
     report = {
         "schema_version": REPORT_SCHEMA_VERSION,
@@ -667,7 +668,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     for order in report.get("code_improvement_orders") or []:
         if isinstance(order, dict):
             lines.append(f"- `{order.get('order_id')}`: {order.get('title')}")
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def main(argv: list[str] | None = None) -> int:

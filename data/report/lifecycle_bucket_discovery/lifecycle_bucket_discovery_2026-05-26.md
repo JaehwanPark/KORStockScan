@@ -5,10 +5,10 @@
 - source_contract_status: `pass` / changes: `0`
 - ai_two_pass_review: `parsed` / model: `gpt-5.4` / tier: `tier2`
 - surfaced_candidate_count: `184`
-- sim_auto_approved_count: `184`
-- live_auto_apply_ready_count: `0`
+- sim_auto_approved_count: `183`
+- live_auto_apply_ready_count: `1`
 - human_intervention_required: `False`
-- warnings: `[]`
+- warnings: `['ai_review_ambiguous_live_candidate_kept_for_post_apply']`
 
 ## 근거
 
@@ -18,12 +18,12 @@
 - audit_issues: `['Summary says 184 surfaced candidates, but 60 records were provided; conclusions apply to provided records only.', 'entry:time_bucket:time_unknown was labeled new_bucket_candidate, but time_bucket is already in the contract.', 'entry:combo_entry_spot:score_score_70p_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liquidity_unknown_o was labeled new_bucket_candidate, but combo_entry_spot is already in the contract.', 'entry:combo_entry_spot:score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liquidity_unknown was labeled new_bucket_candidate, but combo_entry_spot is already in the contract.']`
 - audit_reason: `Three input relation labels need correction; no contract failure was found.`
 
+- `entry:combo_entry_spot:score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liquidity_unknown` stage=`entry` state=`live_auto_apply_ready` action=`relax_or_recover` relation=`existing_bucket_refinement` joined=`49` ev=`2.3066` ai_final=`correct`
 - `entry:source_stage:wait6579_ev_cohort` stage=`entry` state=`sim_auto_approved` action=`relax_or_recover` relation=`existing_bucket_refinement` joined=`163` ev=`3.3661` ai_final=`keep`
 - `entry:stale_bucket:fresh_or_unflagged` stage=`entry` state=`sim_auto_approved` action=`relax_or_recover` relation=`existing_bucket_refinement` joined=`163` ev=`3.3661` ai_final=`keep`
 - `entry:time_bucket:time_unknown` stage=`entry` state=`sim_auto_approved` action=`relax_or_recover` relation=`existing_bucket_refinement` joined=`163` ev=`3.3661` ai_final=`correct`
 - `entry:score_band:score_70p` stage=`entry` state=`sim_auto_approved` action=`relax_or_recover` relation=`existing_bucket_refinement` joined=`135` ev=`2.7821` ai_final=`keep`
 - `entry:combo_entry_spot:score_score_70p_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liquidity_unknown_o` stage=`entry` state=`sim_auto_approved` action=`relax_or_recover` relation=`existing_bucket_refinement` joined=`107` ev=`3.9731` ai_final=`correct`
-- `entry:combo_entry_spot:score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liquidity_unknown` stage=`entry` state=`sim_auto_approved` action=`relax_or_recover` relation=`existing_bucket_refinement` joined=`49` ev=`2.3066` ai_final=`correct`
 - `entry:score_band:score_66_69` stage=`entry` state=`sim_auto_approved` action=`relax_or_recover` relation=`existing_bucket_refinement` joined=`49` ev=`2.3066` ai_final=`keep`
 - `entry:source_stage:scalp_entry_action_decision_snapshot` stage=`entry` state=`sim_auto_approved` action=`tighten_or_exclude` relation=`existing_bucket_refinement` joined=`46` ev=`-1.5688` ai_final=`keep`
 - `entry:chosen_action:buy_now` stage=`entry` state=`sim_auto_approved` action=`tighten_or_exclude` relation=`existing_bucket_refinement` joined=`26` ev=`-1.7658` ai_final=`keep`

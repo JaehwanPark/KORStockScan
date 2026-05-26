@@ -7,8 +7,10 @@ from src.engine import runtime_apply_gap_audit as mod
 
 def _patch_dirs(tmp_path, monkeypatch):
     report_dir = tmp_path / "data" / "report"
+    apply_dir = tmp_path / "data" / "threshold_cycle" / "apply_plans"
     monkeypatch.setattr(mod, "BASE_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir / "runtime_apply_gap_audit")
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
     return report_dir
 
 
@@ -199,6 +201,48 @@ def test_ready_but_not_applied_remains_retry_target(tmp_path, monkeypatch):
     assert row["retryable"] is True
 
 
+def test_ready_bridge_consumed_by_next_preopen_apply_is_not_retry_target(tmp_path, monkeypatch):
+    report_dir = _patch_dirs(tmp_path, monkeypatch)
+    _write_core_artifacts(report_dir)
+    candidate_id = "entry_ready:2026-05-22"
+    _write_json(
+        report_dir / "runtime_apply_bridge" / "runtime_apply_bridge_2026-05-22.json",
+        {
+            "candidates": [
+                {
+                    "candidate_id": candidate_id,
+                    "family": "entry_ready",
+                    "stage": "entry",
+                    "bridge_candidate_state": "live_auto_apply_ready",
+                    "source_quality_gate": "pass",
+                    "source_quality_adjusted_ev_pct": 1.2,
+                    "target_env_keys": ["AI_SCORE65_74_RECOVERY_PROBE_ENABLED"],
+                }
+            ]
+        },
+    )
+    _write_json(
+        mod.APPLY_PLAN_DIR / "threshold_apply_2026-05-23.json",
+        {
+            "runtime_apply_bridge": {
+                "approved_requests": [
+                    {
+                        "candidate_id": candidate_id,
+                        "family": "entry_ready",
+                    }
+                ]
+            }
+        },
+    )
+
+    report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+
+    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == candidate_id)
+    assert row["preopen_apply_state"] == "consumed_by_next_preopen"
+    assert row["failure_state"] == "pass"
+    assert not any(item["failure_code"] == "ready_but_not_applied" for item in report["retry_queue"])
+
+
 def test_runtime_hook_gap_closes_with_codex_directive(tmp_path, monkeypatch):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir)
@@ -223,6 +267,42 @@ def test_runtime_hook_gap_closes_with_codex_directive(tmp_path, monkeypatch):
 
     assert any(
         item["directive_type"] == "IMPLEMENT_SCALE_IN_POLICY_CONTRACT"
+        for item in report["codex_workorder_directives"]
+    )
+
+
+def test_bridge_bootstrap_pending_with_env_mapping_is_not_code_directive(tmp_path, monkeypatch):
+    report_dir = _patch_dirs(tmp_path, monkeypatch)
+    _write_core_artifacts(report_dir)
+    _write_json(
+        report_dir / "runtime_apply_bridge" / "runtime_apply_bridge_2026-05-22.json",
+        {
+            "candidates": [
+                {
+                    "candidate_id": "scale_hold:2026-05-22",
+                    "family": "scale_hold",
+                    "stage": "scale_in",
+                    "bridge_candidate_state": "bootstrap_pending",
+                    "source_quality_gate": "pass",
+                    "target_env_keys": ["SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP"],
+                    "rolling_confirmation": {
+                        "avg_down": {
+                            "runtime_bridge_exclusion_reason": "primary_ev_uplift_below_live_floor"
+                        }
+                    },
+                }
+            ]
+        },
+    )
+
+    report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+
+    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == "scale_hold:2026-05-22")
+    assert row["final_disposition"] == "source_only_keep_collecting"
+    assert row["runtime_hook_state"] == "mapped"
+    assert not any(
+        item["candidate_id"] == "scale_hold:2026-05-22"
+        and item["directive_type"] == "IMPLEMENT_SCALE_IN_POLICY_CONTRACT"
         for item in report["codex_workorder_directives"]
     )
 

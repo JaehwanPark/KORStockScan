@@ -1205,15 +1205,25 @@ def _audit_summary(target_date: str, report_type: str, report_dir: Path) -> tupl
         )
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     status = str(payload.get("status") or "unknown")
+    audit_status = str(summary.get("audit_status") or "")
+    ai_fail_closed = bool(summary.get("ai_fail_closed"))
+    fail_count = _safe_int(summary.get("fail_count"), 0)
+    source_only_candidate_warning_resolved = (
+        report_type in {"producer_gap_discovery", "stage_hook_workorder_discovery"}
+        and status == "warning"
+        and fail_count == 0
+        and audit_status == "pass"
+        and not ai_fail_closed
+    )
     warnings: list[str] = []
-    if status in {"warning", "fail"}:
+    if status in {"warning", "fail"} and not source_only_candidate_warning_resolved:
         warnings.append(f"{report_type}_{status}")
     return (
         {
             "available": True,
             "artifact": str(json_path),
             "status": status,
-            "fail_count": _safe_int(summary.get("fail_count"), 0),
+            "fail_count": fail_count,
             "warning_count": _safe_int(summary.get("warning_count"), 0),
             "code_improvement_order_count": _safe_int(
                 summary.get("code_improvement_order_count"),
@@ -1221,6 +1231,8 @@ def _audit_summary(target_date: str, report_type: str, report_dir: Path) -> tupl
             ),
             "runtime_effect": bool(payload.get("runtime_effect")),
             "decision_authority": payload.get("decision_authority"),
+            "source_only_candidate_warning_resolved": source_only_candidate_warning_resolved,
+            "audit_status": audit_status or None,
         },
         str(json_path),
         warnings,

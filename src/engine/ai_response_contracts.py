@@ -661,6 +661,58 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
         },
         "required": ["schema_version", "reviewer", "candidate_reviews", "audit", "codex_directives"],
     },
+    "swing_bottom_rebound_policy_ai_review_v1": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "schema_version": {"type": "integer", "enum": [1]},
+            "interpretation": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "policy_edge_state": {
+                        "type": "string",
+                        "enum": ["candidate_policy_better", "keep_current_policy", "insufficient_context"],
+                    },
+                    "evidence": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["policy_edge_state", "evidence"],
+            },
+            "audit": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "enum": ["pass", "correction_required", "insufficient_context"],
+                    },
+                    "explicit_gaps": {"type": "array", "items": {"type": "string"}},
+                    "forbidden_use_violations": {"type": "array", "items": {"type": "string"}},
+                    "runtime_authority_preserved": {"type": "boolean"},
+                },
+                "required": [
+                    "status",
+                    "explicit_gaps",
+                    "forbidden_use_violations",
+                    "runtime_authority_preserved",
+                ],
+            },
+            "final_conclusion": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "classification_state": {
+                        "type": "string",
+                        "enum": ["sim_auto_approved", "source_only_keep_collecting", "code_patch_required"],
+                    },
+                    "promote_policy": {"type": "boolean"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["classification_state", "promote_policy", "reason"],
+            },
+        },
+        "required": ["schema_version", "interpretation", "audit", "final_conclusion"],
+    },
     "producer_gap_discovery_ai_review_v1": {
         "type": "object",
         "additionalProperties": False,

@@ -2,6 +2,8 @@ import requests
 import json
 import re
 import time
+from datetime import datetime, time as datetime_time
+from zoneinfo import ZoneInfo
 
 # 💡 Level 1 & 2 공통 모듈
 from src.engine import sniper_config
@@ -19,6 +21,7 @@ _LAST_DEPOSIT_OVERRIDE = None
 _LAST_SUCCESSFUL_DEPOSIT = 0
 _LAST_SUCCESSFUL_DEPOSIT_AT = 0.0
 _LAST_DEPOSIT_ERRORS = []
+KST = ZoneInfo("Asia/Seoul")
 
 def get_last_inventory_errors():
     """최근 잔고 조회 실패 원인을 반환합니다."""
@@ -315,6 +318,33 @@ def _resolve_buy_order_type(order_type, price=0, tif=None):
     return str(order_type), requested_price
 
 
+def _buy_time_block_cutoff():
+    raw_cutoff = str(getattr(TRADING_RULES, "BUY_SIDE_TIME_BLOCK_UNTIL_HHMM", "10:00") or "").strip()
+    try:
+        hour_text, minute_text = raw_cutoff.split(":", 1)
+        return datetime_time(hour=int(hour_text), minute=int(minute_text))
+    except Exception:
+        return datetime_time(hour=10, minute=0)
+
+
+def is_buy_side_time_blocked(now=None) -> bool:
+    if not bool(getattr(TRADING_RULES, "BUY_SIDE_TIME_BLOCK_ENABLED", True)):
+        return False
+    current = now or datetime.now(KST)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=KST)
+    current_kst = current.astimezone(KST)
+    return current_kst.time() < _buy_time_block_cutoff()
+
+
+def get_buy_side_time_block_label() -> str:
+    cutoff = _buy_time_block_cutoff()
+    return (
+        "신규 매수 및 추가매수 시간 차단 "
+        f"(KST {cutoff.strftime('%H:%M')} 전)"
+    )
+
+
 def send_buy_order_market(code, qty, token, order_type="6", price=0, tif=None):
     """
     [kt10000] 매수 주문 - return_code 대응 수정 및 지정가(00) 기능 추가
@@ -334,6 +364,19 @@ def send_buy_order_market(code, qty, token, order_type="6", price=0, tif=None):
             "rt_cd": "PAUSED",
             "return_code": "PAUSED",
             "return_msg": get_pause_state_label(),
+            "ord_no": "",
+        }
+
+    if is_buy_side_time_blocked():
+        clean_code = str(code)[:6]
+        label = get_buy_side_time_block_label()
+        msg = f"[BUY_TIME_BLOCK] buy order blocked 종목:{clean_code}, 상태:{label}"
+        log_info(msg)
+        EventBus().publish("TELEGRAM_ADMIN_NOTIFY", {"text": msg})
+        return {
+            "rt_cd": "BUY_TIME_BLOCKED",
+            "return_code": "BUY_TIME_BLOCKED",
+            "return_msg": label,
             "ord_no": "",
         }
 

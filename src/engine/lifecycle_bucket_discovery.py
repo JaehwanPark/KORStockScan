@@ -52,9 +52,6 @@ MIXED_BUCKET_TYPES = {
     "time_bucket",
     "stale_bucket",
 }
-WAIT6579_LIVE_EXCEPTION_ARCHIVED_REASON = (
-    "wait6579 counterfactual source is sim handoff only; bounded live exception archived"
-)
 AUTO_SURFACE_STATES = {
     "new_bucket_candidate",
     "sim_auto_approved",
@@ -301,6 +298,8 @@ def _recommended_action(route: str, *, stage: str = "", bucket_type: str = "", e
 
 
 def _live_family_for(stage: str, bucket_type: str, bucket_key: str) -> str | None:
+    if stage == "entry" and bucket_type == "combo_entry_spot" and bucket_key == ENTRY_LIVE_AUTO_BUCKET_KEY:
+        return ENTRY_LIVE_AUTO_FAMILY
     if stage == "scale_in" and bucket_type in {"arm", "blocker_namespace"} and bucket_key in {"PYRAMID", "AVG_DOWN_ONLY"}:
         return SCALE_IN_LIVE_AUTO_FAMILY
     return None
@@ -384,6 +383,8 @@ def _classify_bucket(stage: str, bucket: dict[str, Any]) -> tuple[str, str | Non
         and bucket_type == "combo_entry_spot"
         and bucket_key == ENTRY_LIVE_AUTO_BUCKET_KEY
     ):
+        if route == "candidate_recovery_or_relax" and _sim_handoff_allowed(bucket, grade) and primary_ev_uplift_passes(ev, positive_edge=True):
+            return "live_auto_apply_ready", live_family, grade
         if _sim_handoff_allowed(bucket, grade):
             return "sim_auto_approved", None, grade
         return "source_only_keep_collecting", None, grade
@@ -434,13 +435,27 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
         "sim_lifecycle_handoff_allowed": state == "sim_auto_approved",
         "bounded_live_canary_allowed": state == "live_auto_apply_ready",
         "source_stage_split_required": bool(grade.get("source_stage_split_required")),
-        "archived_live_exception_reason": WAIT6579_LIVE_EXCEPTION_ARCHIVED_REASON
-        if (
-            stage == "entry"
+        "archived_live_exception_reason": None,
+        "legacy_contract_known_unknown": (
+            state == "live_auto_apply_ready"
+            and stage == "entry"
             and bucket_type == "combo_entry_spot"
             and bucket_key == ENTRY_LIVE_AUTO_BUCKET_KEY
-        )
-        else None,
+            and "unknown" in bucket_key
+        ),
+        "source_dimension_gap": (
+            "legacy_contract_known_unknown"
+            if (
+                state == "live_auto_apply_ready"
+                and stage == "entry"
+                and bucket_type == "combo_entry_spot"
+                and bucket_key == ENTRY_LIVE_AUTO_BUCKET_KEY
+                and "unknown" in bucket_key
+            )
+            else "unknown_source_dimensions"
+            if "unknown" in bucket_key
+            else ""
+        ),
         "source_dimensions": _source_dimensions(bucket_type, bucket_key),
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "sample": sample,
@@ -492,6 +507,17 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
             "tier2_required": state == "live_auto_apply_ready",
             "tier2_policy": "fail_closed",
             "primary_ev_uplift_threshold_pct": 1.0,
+            "deterministic_contract_required": state == "live_auto_apply_ready",
+            "deterministic_contract_components": [
+                "source_quality_pass",
+                "sample_floor",
+                "primary_ev_uplift",
+                "env_mapping",
+                "runtime_hook",
+                "post_apply_attribution",
+            ]
+            if state == "live_auto_apply_ready"
+            else [],
             "final_user_approval_boundary": "full_live_only",
         },
         "forbidden_uses": [
@@ -692,8 +718,9 @@ def _build_ai_review_context(report: dict[str, Any]) -> dict[str, Any]:
             "language": "English only. Keep explanations concise to reduce tokens.",
             "no_promotion_authority": "You cannot promote a non-live deterministic candidate to live_auto_apply_ready.",
             "grade_policy": (
-                "Grade 2 counterfactual and mixed_source candidates cannot become bounded live candidates. "
-                "They can only be source-only or sim lifecycle handoff candidates until completed joined lifecycle outcomes exist."
+                "Grade 2 counterfactual and mixed_source candidates cannot become bounded live candidates by AI promotion. "
+                "A deterministic entry bridge candidate that is already live_auto_apply_ready is an explicit contract exception "
+                "and must stay live unless an explicit contract or safety gap is found."
             ),
             "non_conservative_live_policy": (
                 "For Grade 1 completed-sim deterministic live_auto_apply_ready candidates, do not block solely for small effect size, "
@@ -728,7 +755,8 @@ def _build_ai_review_instructions() -> str:
         "Do not approve broker orders, provider route changes, bot restarts, cap release, or intraday threshold mutation.\n"
         "Classify existing_bucket_refinement when a bucket is a child/refinement of a known stage taxonomy.\n"
         "Classify new_bucket_candidate when existing taxonomy cannot explain the source dimensions or source contract drift.\n"
-        "Grade 2 counterfactual and mixed_source candidates cannot become bounded live candidates; keep them source-only or sim lifecycle handoff until completed joined lifecycle outcomes exist.\n"
+        "Grade 2 counterfactual and mixed_source candidates cannot become bounded live candidates by AI promotion. "
+        "However, if a deterministic entry bridge candidate is already live_auto_apply_ready, keep it live unless an explicit contract or safety gap is found.\n"
         "Do not be conservative by default for Grade 1 completed-sim deterministic live candidates. A Grade 1 deterministic live candidate with even a 1% plausible positive effect should not be blocked solely for small effect size, novelty, low confidence, or ambiguity.\n"
         "When the decision is ambiguous, keep Grade 1 deterministic live candidates live and rely on post-apply verification.\n"
         "Use runtime_blocked_contract_gap or code_patch_required only for explicit source-quality, source schema, env mapping, runtime hook, post-apply attribution, safety, broker, stale quote, qty/cooldown, provider, cap, forbidden-use, leakage, or missing-contract gaps.\n"

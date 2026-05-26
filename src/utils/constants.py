@@ -181,6 +181,8 @@ class TradingConfig:
     SCALPING_MAX_BUY_BUDGET_KRW: int = 1_200_000  # 2026-04-20 risk cut: 스캘핑 신규 진입 1회 절대 투자금 상한 (1,600,000 -> 1,200,000)
     SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED: bool = True  # 신규 BUY 접수 1주 cap 기본 ON
     SCALPING_INITIAL_ENTRY_MAX_QTY: int = 1  # 0 이하는 신규 BUY 수량 cap 없음
+    BUY_SIDE_TIME_BLOCK_ENABLED: bool = True  # 신규 매수/추가매수 브로커 제출 시간 차단
+    BUY_SIDE_TIME_BLOCK_UNTIL_HHMM: str = "10:00"  # KST 기준, 이 시각 전 BUY 제출 차단
 
     # 💡 [신규 추가] 스윙 AI 동적 비중 조절용 (Min~Max)
     INVEST_RATIO_KOSDAQ_MIN: float = 0.05  # 코스닥 AI 점수 60점일 때 (5%)
@@ -1657,6 +1659,8 @@ def _build_trading_rules() -> TradingConfig:
     env_scalping_initial_entry_max_qty = _env_int(
         "KORSTOCKSCAN_SCALPING_INITIAL_ENTRY_MAX_QTY"
     )
+    env_buy_side_time_block_enabled = _env_bool("KORSTOCKSCAN_BUY_SIDE_TIME_BLOCK_ENABLED")
+    env_buy_side_time_block_until = _env_str("KORSTOCKSCAN_BUY_SIDE_TIME_BLOCK_UNTIL_HHMM")
     env_scale_in_price_resolver_enabled = _env_bool(
         "KORSTOCKSCAN_SCALPING_SCALE_IN_PRICE_RESOLVER_ENABLED"
     )
@@ -1749,6 +1753,8 @@ def _build_trading_rules() -> TradingConfig:
         or env_stat_action_snapshot_min_interval is not None
         or env_scalping_initial_entry_qty_cap_enabled is not None
         or env_scalping_initial_entry_max_qty is not None
+        or env_buy_side_time_block_enabled is not None
+        or env_buy_side_time_block_until is not None
         or env_scale_in_price_resolver_enabled is not None
         or env_scale_in_dynamic_qty_enabled is not None
         or env_scale_in_effective_qty_cap is not None
@@ -2044,6 +2050,12 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_INITIAL_ENTRY_MAX_QTY=env_scalping_initial_entry_max_qty
             if env_scalping_initial_entry_max_qty is not None
             else config.SCALPING_INITIAL_ENTRY_MAX_QTY,
+            BUY_SIDE_TIME_BLOCK_ENABLED=env_buy_side_time_block_enabled
+            if env_buy_side_time_block_enabled is not None
+            else config.BUY_SIDE_TIME_BLOCK_ENABLED,
+            BUY_SIDE_TIME_BLOCK_UNTIL_HHMM=env_buy_side_time_block_until
+            if env_buy_side_time_block_until is not None
+            else config.BUY_SIDE_TIME_BLOCK_UNTIL_HHMM,
             SCALPING_SCALE_IN_PRICE_RESOLVER_ENABLED=env_scale_in_price_resolver_enabled
             if env_scale_in_price_resolver_enabled is not None
             else config.SCALPING_SCALE_IN_PRICE_RESOLVER_ENABLED,
