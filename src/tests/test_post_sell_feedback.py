@@ -144,6 +144,9 @@ def test_record_and_evaluate_sim_post_sell_feedback_isolated(monkeypatch, tmp_pa
     assert candidate["broker_order_forbidden"] is True
     assert candidate["decision_authority"] == "sim_equal_weight_observation_only"
     assert "broker order submit" in candidate["forbidden_uses"]
+    assert candidate["entry_time_source"] == "not_recorded_at_source"
+    assert candidate["entry_join_status"] == "raw_append_only_unjoined"
+    assert candidate["entry_record_id"] == "PARENT-1"
     assert feedback_mod._candidate_path("2026-05-18").exists() is False
     assert feedback_mod._sim_candidate_path("2026-05-18").exists() is True
 

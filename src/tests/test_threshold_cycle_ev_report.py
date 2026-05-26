@@ -10,8 +10,8 @@ def test_runtime_apply_bridge_summary_preserves_post_apply_provenance():
         "runtime_apply_bridge": {
             "request_report": "data/report/runtime_apply_bridge/runtime_apply_bridge_2026-05-21.json",
             "artifacts": {
-                "entry_wait6579_score66_69_recovery_gate_v1": (
-                    "data/threshold_cycle/approvals/ldm_entry_runtime_bridge_2026-05-21.json"
+                "scale_in_bucket_runtime_policy_v1": (
+                    "data/threshold_cycle/approvals/ldm_scale_in_runtime_bridge_2026-05-21.json"
                 )
             },
             "candidate_count": 2,
@@ -19,35 +19,35 @@ def test_runtime_apply_bridge_summary_preserves_post_apply_provenance():
             "blocked": [],
             "selected": [
                 {
-                    "family": "entry_wait6579_score66_69_recovery_gate_v1",
-                    "stage": "entry",
-                    "approval_id": "entry-approval",
-                    "runtime_apply_bridge_family": "entry_wait6579_score66_69_recovery_gate_v1",
-                    "bridge_candidate_id": "entry_wait6579_score66_69_recovery_gate_v1:2026-05-21",
-                    "source_bucket_key": "score=score_66_69|source=wait6579_ev_cohort",
-                    "actual_runtime_effect": "bounded_entry_probe_recovery",
+                    "family": "scale_in_bucket_runtime_policy_v1",
+                    "stage": "scale_in",
+                    "approval_id": "scale-approval",
+                    "runtime_apply_bridge_family": "scale_in_bucket_runtime_policy_v1",
+                    "bridge_candidate_id": "scale_in_bucket_runtime_policy_v1:2026-05-21",
+                    "source_bucket_key": "PYRAMID,AVG_DOWN_ONLY",
+                    "actual_runtime_effect": "bounded_scale_in_policy_tighten_live_auto",
                 }
             ],
             "decisions": [
                 {
-                    "family": "entry_wait6579_score66_69_recovery_gate_v1",
-                    "stage": "entry",
+                    "family": "scale_in_bucket_runtime_policy_v1",
+                    "stage": "scale_in",
                     "selected": True,
-                    "decision_reason": "user_approval_artifact_accepted_bridge_ready",
-                    "approval_id": "entry-approval",
-                    "bridge_candidate_id": "entry_wait6579_score66_69_recovery_gate_v1:2026-05-21",
-                    "actual_runtime_effect": "bounded_entry_probe_recovery",
+                    "decision_reason": "lifecycle_bucket_discovery_live_auto_apply",
+                    "approval_id": "scale-approval",
+                    "bridge_candidate_id": "scale_in_bucket_runtime_policy_v1:2026-05-21",
+                    "actual_runtime_effect": "bounded_scale_in_policy_tighten_live_auto",
                 }
             ],
         }
     }
 
-    assert mod._selected_families(manifest) == ["entry_wait6579_score66_69_recovery_gate_v1"]
+    assert mod._selected_families(manifest) == ["scale_in_bucket_runtime_policy_v1"]
     summary = mod._runtime_apply_bridge_summary(manifest)
     assert summary["selected_count"] == 1
-    assert summary["selected"][0]["approval_id"] == "entry-approval"
-    assert summary["selected"][0]["source_bucket_key"] == "score=score_66_69|source=wait6579_ev_cohort"
-    assert summary["selected"][0]["actual_runtime_effect"] == "bounded_entry_probe_recovery"
+    assert summary["selected"][0]["approval_id"] == "scale-approval"
+    assert summary["selected"][0]["source_bucket_key"] == "PYRAMID,AVG_DOWN_ONLY"
+    assert summary["selected"][0]["actual_runtime_effect"] == "bounded_scale_in_policy_tighten_live_auto"
 
 
 def test_calibration_path_does_not_fallback_to_intraday_artifact(tmp_path, monkeypatch):

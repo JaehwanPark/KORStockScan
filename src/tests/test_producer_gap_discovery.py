@@ -9,6 +9,14 @@ def test_project_root_resolves_repo_root_after_package_move():
     assert mod.POST_SELL_DIR == mod.PROJECT_ROOT / "data" / "post_sell"
 
 
+def test_real_anchor_detectors_have_sim_equivalent_contracts():
+    contracts = {item.pattern_type: item for item in mod.DETECTOR_REGISTRY}
+    for contract in mod.DETECTOR_REGISTRY:
+        if contract.source_scope == "real_anchor" and contract.sim_equivalent_required:
+            assert contract.sim_equivalent_pattern
+            assert contract.sim_equivalent_pattern in contracts
+
+
 def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -25,6 +33,18 @@ def _ai_response(candidate_ids: list[str]) -> dict:
         "producer_gap_missed_fill_recovery_counterfactual_missing": "missed_fill_recovery_counterfactual_missing",
         "producer_gap_swing_sim_probe_label_gap_missing": "swing_sim_probe_label_gap_missing",
         "producer_gap_scale_in_counterfactual_gap_missing": "scale_in_counterfactual_gap_missing",
+        "producer_gap_time_window_policy_exception_missing": "time_window_policy_exception_missing",
+        "producer_gap_volatile_runner_exit_counterfactual_missing": "volatile_runner_exit_counterfactual_missing",
+        "producer_gap_limit_up_plateau_breakdown_exit_missing": "limit_up_plateau_breakdown_exit_missing",
+        "producer_gap_sim_entry_selection_gap_missing": "sim_entry_selection_gap_missing",
+        "producer_gap_sim_submit_fill_quality_gap_missing": "sim_submit_fill_quality_gap_missing",
+        "producer_gap_sim_holding_runner_gap_missing": "sim_holding_runner_gap_missing",
+        "producer_gap_sim_exit_plateau_breakdown_gap_missing": "sim_exit_plateau_breakdown_gap_missing",
+        "producer_gap_sim_stop_recovery_gap_missing": "sim_stop_recovery_gap_missing",
+        "producer_gap_sim_scale_in_counterfactual_gap_missing": "sim_scale_in_counterfactual_gap_missing",
+        "producer_gap_sim_time_window_exception_gap_missing": "sim_time_window_exception_gap_missing",
+        "producer_gap_sim_source_quality_join_gap_missing": "sim_source_quality_join_gap_missing",
+        "producer_gap_sim_first_coverage_gap": "sim_first_coverage_gap",
     }
     return {
         "schema_version": 1,
@@ -32,7 +52,7 @@ def _ai_response(candidate_ids: list[str]) -> dict:
         "candidate_reviews": [
             {
                 "candidate_id": candidate_id,
-                "pattern_type": pattern_by_id[candidate_id],
+                "pattern_type": pattern_by_id.get(candidate_id, candidate_id.replace("producer_gap_", "")),
                 "priority": "high",
                 "recommended_route": "implement_now",
                 "confidence": "high",
@@ -53,7 +73,31 @@ def _ai_response(candidate_ids: list[str]) -> dict:
     }
 
 
-def test_producer_gap_discovery_detects_four_patterns_and_ai_orders(tmp_path, monkeypatch):
+def _minimal_runner_fixture(post_sell_dir: Path) -> None:
+    _write_jsonl(
+        post_sell_dir / "sim_post_sell_candidates_2026-05-26.jsonl",
+        [
+            {
+                "stock_code": "003720",
+                "stock_name": "Samyoung",
+                "sim_parent_record_id": "p1",
+                "sell_time": "09:20:00",
+                "profit_rate": -2.4,
+                "exit_reason": "hard_stop",
+            },
+            {
+                "stock_code": "003720",
+                "stock_name": "Samyoung",
+                "sim_parent_record_id": "p1",
+                "sell_time": "10:10:00",
+                "profit_rate": 2.8,
+                "exit_reason": "runner_exit",
+            },
+        ],
+    )
+
+
+def test_producer_gap_discovery_detects_seven_patterns_and_ai_orders(tmp_path, monkeypatch):
     report_dir = tmp_path / "data" / "report"
     post_sell_dir = tmp_path / "data" / "post_sell"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
@@ -62,6 +106,74 @@ def test_producer_gap_discovery_detects_four_patterns_and_ai_orders(tmp_path, mo
     _write_jsonl(
         post_sell_dir / "sim_post_sell_evaluations_2026-05-26.jsonl",
         [{"code": "036010", "exit_reason": "hard_stop", "profit_rate": -2.5, "mfe_pct": 1.1}],
+    )
+    _write_jsonl(
+        post_sell_dir / "sim_post_sell_candidates_2026-05-26.jsonl",
+        [
+            {"code": "031330", "entry_time": "09:08:00", "profit_rate": -2.2, "exit_reason": "hard_stop"},
+            {"code": "036010", "entry_time": "09:18:00", "profit_rate": -1.1, "exit_reason": "soft_stop"},
+            {"code": "000100", "entry_time": "10:40:00", "profit_rate": 0.4, "exit_reason": "take_profit"},
+            {
+                "stock_code": "003720",
+                "stock_name": "Samyoung",
+                "sim_parent_record_id": "8198",
+                "sell_time": "14:20:47",
+                "profit_rate": -2.33,
+                "exit_reason": "hard_stop",
+            },
+            {
+                "stock_code": "003720",
+                "stock_name": "Samyoung",
+                "sim_parent_record_id": "8198",
+                "sell_time": "14:33:47",
+                "profit_rate": 6.33,
+                "exit_reason": "trailing_take_profit",
+            },
+            {
+                "stock_code": "036010",
+                "stock_name": "Avaco",
+                "sim_parent_record_id": "8077",
+                "sell_time": "10:56:21",
+                "profit_rate": 0.76,
+                "exit_reason": "trailing_take_profit",
+            },
+            {
+                "stock_code": "036010",
+                "stock_name": "Avaco",
+                "sim_parent_record_id": "8077",
+                "sell_time": "14:41:25",
+                "profit_rate": -2.68,
+                "exit_reason": "hard_stop",
+            },
+        ],
+    )
+    _write_jsonl(
+        post_sell_dir / "post_sell_candidates_2026-05-26.jsonl",
+        [
+            {
+                "stock_code": "003720",
+                "stock_name": "Samyoung",
+                "recommendation_id": 8198,
+                "sell_time": "14:21:29",
+                "profit_rate": 0.73,
+                "peak_profit": 2.72,
+                "exit_rule": "scalp_trailing_take_profit",
+            },
+            {
+                "stock_code": "036010",
+                "stock_name": "Avaco",
+                "recommendation_id": 8077,
+                "sell_time": "14:42:19",
+                "profit_rate": -2.69,
+                "peak_profit": 0.96,
+                "held_sec": 12674,
+                "exit_rule": "scalp_hard_stop_pct",
+            }
+        ],
+    )
+    _write_json(
+        report_dir / "monitor_snapshots" / "wait6579_ev_cohort_2026-05-26.json",
+        {"metrics": {"avg_expected_ev_pct": 0.82, "expected_ev_krw_sum": 12850}},
     )
     _write_json(
         report_dir / "lifecycle_decision_matrix" / "lifecycle_decision_matrix_2026-05-26.json",
@@ -80,6 +192,13 @@ def test_producer_gap_discovery_detects_four_patterns_and_ai_orders(tmp_path, mo
         "producer_gap_missed_fill_recovery_counterfactual_missing",
         "producer_gap_swing_sim_probe_label_gap_missing",
         "producer_gap_scale_in_counterfactual_gap_missing",
+        "producer_gap_time_window_policy_exception_missing",
+        "producer_gap_volatile_runner_exit_counterfactual_missing",
+        "producer_gap_limit_up_plateau_breakdown_exit_missing",
+        "producer_gap_sim_holding_runner_gap_missing",
+        "producer_gap_sim_exit_plateau_breakdown_gap_missing",
+        "producer_gap_sim_stop_recovery_gap_missing",
+        "producer_gap_sim_time_window_exception_gap_missing",
     ]
     report = mod.build_producer_gap_discovery_report(
         "2026-05-26",
@@ -93,15 +212,269 @@ def test_producer_gap_discovery_detects_four_patterns_and_ai_orders(tmp_path, mo
     assert report["broker_order_forbidden"] is True
     assert report["status"] == "warning"
     assert report["summary"]["ai_two_pass_review_status"] == "parsed"
-    assert {item["pattern_type"] for item in report["producer_gap_candidates"]} == {
+    pattern_types = {item["pattern_type"] for item in report["producer_gap_candidates"]}
+    assert {
         "stop_recovery_counterfactual_missing",
         "missed_fill_recovery_counterfactual_missing",
         "swing_sim_probe_label_gap_missing",
         "scale_in_counterfactual_gap_missing",
-    }
-    assert len(report["code_improvement_orders"]) == 4
+        "time_window_policy_exception_missing",
+        "volatile_runner_exit_counterfactual_missing",
+        "limit_up_plateau_breakdown_exit_missing",
+    }.issubset(pattern_types)
+    assert "sim_holding_runner_gap_missing" in pattern_types
+    assert "sim_exit_plateau_breakdown_gap_missing" in pattern_types
+    time_window_candidate = next(
+        item
+        for item in report["producer_gap_candidates"]
+        if item["pattern_type"] == "time_window_policy_exception_missing"
+    )
+    assert "operator_seed_cutoff=09:30" in time_window_candidate["evidence"]
+    assert (
+        "metric_scope=completed_sim_exit_pnl_vs_missed_entry_counterfactual_ev_not_directly_nettable"
+        in time_window_candidate["evidence"]
+    )
+    assert any(item.startswith("time_window_measurement_keys=") for item in time_window_candidate["evidence"])
+    assert (
+        "required_policy_comparison=allow_all_vs_block_all_vs_block_general_allow_recovery"
+        in time_window_candidate["evidence"]
+    )
+    assert time_window_candidate["recommended_producer_contract"]["preferred_producer_name"] == (
+        "time_window_regime_counterfactual"
+    )
+    assert time_window_candidate["recommended_producer_contract"]["candidate_producer_name"] == (
+        "time_window_regime_counterfactual"
+    )
+    assert time_window_candidate["recommended_producer_contract"]["compare_policies"] == [
+        "allow_all_in_window",
+        "block_all_in_window",
+        "block_general_allow_exception_in_window",
+    ]
+    runner_candidate = next(
+        item
+        for item in report["producer_gap_candidates"]
+        if item["pattern_type"] == "volatile_runner_exit_counterfactual_missing"
+    )
+    assert "required_comparison=real_exit_profit_vs_same_parent_sim_runner_profit" in runner_candidate["evidence"]
+    assert any("003720:Samyoung" in item for item in runner_candidate["evidence"])
+    plateau_candidate = next(
+        item
+        for item in report["producer_gap_candidates"]
+        if item["pattern_type"] == "limit_up_plateau_breakdown_exit_missing"
+    )
+    assert "required_comparison=current_stop_exit_vs_plateau_take_profit_vs_breakdown_exit" in plateau_candidate["evidence"]
+    assert any("036010:Avaco" in item for item in plateau_candidate["evidence"])
+    assert len(report["code_improvement_orders"]) >= len(candidate_ids)
+    assert report["summary"]["sim_first_pattern_count"] >= 2
     assert all(order["runtime_effect"] is False for order in report["code_improvement_orders"])
+    assert all(order["allowed_runtime_apply"] is False for order in report["code_improvement_orders"])
+    assert all(order["broker_order_forbidden"] is True for order in report["code_improvement_orders"])
     assert (report_dir / "producer_gap_discovery" / "producer_gap_discovery_2026-05-26.json").exists()
+
+
+def test_sim_first_rolling_detects_runner_plateau_and_ambiguous_chronology(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    post_sell_dir = tmp_path / "data" / "post_sell"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
+
+    _write_jsonl(
+        post_sell_dir / "sim_post_sell_candidates_2026-05-20.jsonl",
+        [
+            {
+                "stock_code": "001740",
+                "stock_name": "SK Networks",
+                "sim_parent_record_id": "p1",
+                "sell_time": "09:22:00",
+                "profit_rate": -3.25,
+                "exit_reason": "hard_stop",
+            },
+            {
+                "stock_code": "001740",
+                "stock_name": "SK Networks",
+                "sim_parent_record_id": "p1",
+                "sell_time": "09:37:00",
+                "profit_rate": 4.43,
+                "exit_reason": "runner_exit",
+            },
+            {
+                "stock_code": "036010",
+                "stock_name": "Avaco",
+                "sim_parent_record_id": "p2",
+                "sell_time": "10:56:00",
+                "profit_rate": 0.76,
+                "exit_reason": "take_profit",
+            },
+            {
+                "stock_code": "036010",
+                "stock_name": "Avaco",
+                "sim_parent_record_id": "p2",
+                "sell_time": "14:41:00",
+                "profit_rate": -2.68,
+                "exit_reason": "hard_stop",
+            },
+            {
+                "stock_code": "242040",
+                "stock_name": "No Time",
+                "sim_parent_record_id": "p3",
+                "profit_rate": -2.33,
+                "exit_reason": "hard_stop",
+            },
+            {
+                "stock_code": "242040",
+                "stock_name": "No Time",
+                "sim_parent_record_id": "p3",
+                "profit_rate": 2.54,
+                "exit_reason": "runner_exit",
+            },
+        ],
+    )
+    candidate_ids = [
+        "producer_gap_sim_holding_runner_gap_missing",
+        "producer_gap_sim_exit_plateau_breakdown_gap_missing",
+        "producer_gap_sim_stop_recovery_gap_missing",
+        "producer_gap_sim_source_quality_join_gap_missing",
+    ]
+
+    report = mod.build_producer_gap_discovery_report(
+        "2026-05-26",
+        provider="openai",
+        ai_raw_response=_ai_response(candidate_ids),
+        rolling_sim_scan=True,
+    )
+
+    runner = next(item for item in report["producer_gap_candidates"] if item["pattern_type"] == "sim_holding_runner_gap_missing")
+    plateau = next(item for item in report["producer_gap_candidates"] if item["pattern_type"] == "sim_exit_plateau_breakdown_gap_missing")
+    assert "strict_match_count=1" in runner["evidence"]
+    assert "ambiguous_match_count=1" in runner["evidence"]
+    assert "strict_match_count=1" in plateau["evidence"]
+    hook = runner["runtime_hook_candidate_contract"]
+    assert hook["hook_name"] == "holding_flow_runner_debounce_guard"
+    assert hook["initial_authority"] == "source_only_proposal"
+    assert hook["runtime_effect"] is False
+    assert hook["allowed_runtime_apply"] is False
+    assert hook["action_namespace"] == ["EXIT_CONFIRM", "HOLD_REVIEW", "TRIM"]
+    forbidden = " ".join(hook["forbidden_uses"])
+    assert "hard stop override" in forbidden
+    assert "broker guard bypass" in forbidden
+    runner_order = next(
+        item
+        for item in report["code_improvement_orders"]
+        if item["improvement_type"] == "sim_holding_runner_gap_missing"
+    )
+    assert runner_order["runtime_hook_candidate_contract"]["hook_name"] == "holding_flow_runner_debounce_guard"
+    assert runner_order["runtime_effect"] is False
+    assert report["summary"]["rolling_sim_scan_enabled"] is True
+    assert report["summary"]["sim_rows_scanned"] == 6
+    assert all(item["runtime_effect"] is False for item in report["producer_gap_candidates"])
+
+
+def test_runtime_hook_contract_is_deterministic_and_ai_cannot_escalate_authority(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    post_sell_dir = tmp_path / "data" / "post_sell"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
+    _minimal_runner_fixture(post_sell_dir)
+    response = _ai_response(["producer_gap_sim_holding_runner_gap_missing"])
+    response["candidate_reviews"][0]["runtime_hook_candidate_contract"] = {
+        "hook_name": "malicious_runtime_hook",
+        "runtime_effect": True,
+        "allowed_runtime_apply": True,
+    }
+
+    report = mod.build_producer_gap_discovery_report(
+        "2026-05-26",
+        provider="openai",
+        ai_raw_response=response,
+        rolling_sim_scan=True,
+    )
+
+    runner = next(
+        item
+        for item in report["producer_gap_candidates"]
+        if item["pattern_type"] == "sim_holding_runner_gap_missing"
+    )
+    hook = runner["runtime_hook_candidate_contract"]
+    assert hook["hook_name"] == "holding_flow_runner_debounce_guard"
+    assert hook["runtime_effect"] is False
+    assert hook["allowed_runtime_apply"] is False
+    order = next(
+        item
+        for item in report["code_improvement_orders"]
+        if item["improvement_type"] == "sim_holding_runner_gap_missing"
+    )
+    assert order["runtime_hook_candidate_contract"]["hook_name"] == "holding_flow_runner_debounce_guard"
+    assert order["runtime_hook_candidate_contract"]["allowed_runtime_apply"] is False
+
+
+def test_ai_forbidden_use_violation_fails_closed_without_orders(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    post_sell_dir = tmp_path / "data" / "post_sell"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
+    _minimal_runner_fixture(post_sell_dir)
+    response = _ai_response(["producer_gap_sim_holding_runner_gap_missing"])
+    response["audit"]["forbidden_use_violations"] = ["attempted_runtime_apply_authority"]
+
+    report = mod.build_producer_gap_discovery_report(
+        "2026-05-26",
+        provider="openai",
+        ai_raw_response=response,
+        rolling_sim_scan=True,
+    )
+
+    assert report["status"] == "fail"
+    assert report["summary"]["ai_fail_closed"] is True
+    assert report["code_improvement_orders"] == []
+
+
+def test_sim_submit_quality_gap_ignores_false_actual_order_submitted(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    post_sell_dir = tmp_path / "data" / "post_sell"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
+
+    _write_jsonl(
+        post_sell_dir / "sim_post_sell_candidates_2026-05-26.jsonl",
+        [
+            {
+                "stock_code": f"000{i:03d}",
+                "sim_parent_record_id": f"p{i}",
+                "profit_rate": 0.1,
+                "actual_order_submitted": False,
+            }
+            for i in range(12)
+        ],
+    )
+
+    report = mod.build_producer_gap_discovery_report(
+        "2026-05-26",
+        provider="openai",
+        ai_raw_response=_ai_response(["producer_gap_sim_entry_selection_gap_missing"]),
+        rolling_sim_scan=True,
+    )
+
+    pattern_types = {item["pattern_type"] for item in report["producer_gap_candidates"]}
+    assert "sim_entry_selection_gap_missing" in pattern_types
+    assert "sim_submit_fill_quality_gap_missing" not in pattern_types
+    assert "sim_first_coverage_gap" not in pattern_types
+
+
+def test_rolling_scan_dates_reflect_guarded_dates_only(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    post_sell_dir = tmp_path / "data" / "post_sell"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
+
+    _write_jsonl(post_sell_dir / "sim_post_sell_candidates_2026-05-25.jsonl", [{"stock_code": "000001"}])
+    _write_jsonl(post_sell_dir / "sim_post_sell_candidates_2026-05-26.jsonl", [{"stock_code": "000002"}])
+
+    sources = mod._rolling_sim_sources("2026-05-26", rolling_sim_scan=True, max_rows=1)
+
+    assert sources["guard_hit"] is True
+    assert sources["paused_reason"] == "max_rows"
+    assert sources["available_dates"] == ["2026-05-25", "2026-05-26"]
+    assert sources["dates"] == ["2026-05-25"]
 
 
 def test_producer_gap_discovery_ai_unavailable_fails_closed(tmp_path, monkeypatch):
@@ -122,3 +495,37 @@ def test_producer_gap_discovery_ai_unavailable_fails_closed(tmp_path, monkeypatc
     assert report["summary"]["ai_two_pass_review_status"] == "missing"
     assert report["producer_gap_candidates"]
     assert report["code_improvement_orders"] == []
+
+
+def test_producer_gap_discovery_uses_time_window_regime_artifact_instead_of_missing_candidate(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    post_sell_dir = tmp_path / "data" / "post_sell"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
+
+    _write_jsonl(
+        post_sell_dir / "sim_post_sell_candidates_2026-05-26.jsonl",
+        [
+            {"code": "031330", "entry_time": "09:08:00", "profit_rate": -2.2, "exit_reason": "hard_stop"},
+            {"code": "036010", "entry_time": "09:18:00", "profit_rate": -1.1, "exit_reason": "soft_stop"},
+        ],
+    )
+    _write_json(
+        report_dir / "monitor_snapshots" / "wait6579_ev_cohort_2026-05-26.json",
+        {"metrics": {"avg_expected_ev_pct": 0.82, "expected_ev_krw_sum": 12850}},
+    )
+    _write_json(
+        report_dir / "time_window_regime_counterfactual" / "time_window_regime_counterfactual_2026-05-26.json",
+        {
+            "report_type": "time_window_regime_counterfactual",
+            "status": "pass",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        },
+    )
+
+    candidates, _ = mod._deterministic_candidates("2026-05-26")
+
+    assert "time_window_policy_exception_missing" not in {item["pattern_type"] for item in candidates}

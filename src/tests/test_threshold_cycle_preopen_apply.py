@@ -347,9 +347,12 @@ def test_preopen_apply_consumes_lifecycle_bucket_auto_apply_without_human_artifa
         json.dumps(
             {
                 "approved": True,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
                 "actual_order_submitted": False,
                 "broker_order_forbidden": True,
                 "approved_bucket_ids": ["entry:combo:test"],
+                "approved_bucket_count": 1,
             }
         ),
         encoding="utf-8",
@@ -379,22 +382,73 @@ def test_preopen_apply_consumes_lifecycle_bucket_auto_apply_without_human_artifa
     )
 
     assert manifest["status"] == "auto_bounded_live_ready"
-    assert manifest["runtime_apply_bridge"]["approved"] == 1
-    assert manifest["runtime_apply_bridge"]["selected"][0]["approval_state"] == "auto_live"
-    assert manifest["runtime_apply_bridge"]["decisions"][0]["decision_reason"] == "lifecycle_bucket_discovery_live_auto_apply"
-    assert manifest["runtime_apply_bridge"]["selected"][0]["post_apply_verification_required"] is False
+    assert manifest["runtime_apply_bridge"]["approved"] == 0
+    assert manifest["runtime_apply_bridge"]["selected"] == []
+    assert f"runtime_apply_bridge_archived_family:{bridge_mod.ENTRY_BRIDGE_FAMILY}" in manifest["runtime_apply_bridge"]["blocked"]
     assert manifest["lifecycle_bucket_discovery"]["approved"] == 1
+    assert manifest["lifecycle_bucket_discovery"]["selected"][0]["recommended_values"]["live_auto_apply_enabled"] is False
     assert manifest["swing_sim_auto_approval"]["approved"] == 1
     assert manifest["swing_sim_auto_approval"]["selected"][0]["approved_source_ids"] == [
         "swing_lifecycle_bucket_discovery",
         "bottom_rebound_policy_auto_loop",
     ]
+
+
+def test_preopen_apply_blocks_empty_lifecycle_bucket_sim_auto_approval(tmp_path, monkeypatch):
+    report_dir = tmp_path / "reports"
+    runtime_dir = tmp_path / "runtime_env"
+    bridge_dir = report_dir / "runtime_apply_bridge"
+    catalog_dir = tmp_path / "catalog"
+    sim_dir = tmp_path / "sim_auto"
+    apply_dir = tmp_path / "apply"
+    for path in (report_dir, runtime_dir, bridge_dir, catalog_dir, sim_dir, apply_dir):
+        path.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(bridge_mod, "REPORT_DIR", bridge_dir)
+    monkeypatch.setattr(discovery_mod, "CATALOG_DIR", catalog_dir)
+    monkeypatch.setattr(discovery_mod, "SIM_AUTO_APPROVAL_DIR", sim_dir)
+    monkeypatch.setattr(discovery_mod, "REPORT_DIR", report_dir / "lifecycle_bucket_discovery")
+
+    (report_dir / "threshold_cycle_2026-05-22.json").write_text(
+        json.dumps({"date": "2026-05-22", "apply_candidate_list": [], "calibration_candidates": []}),
+        encoding="utf-8",
+    )
+    (bridge_dir / "runtime_apply_bridge_2026-05-22.json").write_text(
+        json.dumps({"date": "2026-05-22", "candidates": []}),
+        encoding="utf-8",
+    )
+    (catalog_dir / "lifecycle_bucket_catalog_2026-05-22.json").write_text("{}", encoding="utf-8")
+    (sim_dir / "lifecycle_bucket_sim_auto_approval_2026-05-22.json").write_text(
+        json.dumps(
+            {
+                "approved": True,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "approved_bucket_ids": [],
+                "approved_bucket_count": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-23",
+        source_date="2026-05-22",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+    )
+
+    assert manifest["lifecycle_bucket_discovery"]["approved"] == 0
+    assert manifest["lifecycle_bucket_discovery"]["selected"] == []
+    assert "sim_auto_approval_empty" in manifest["lifecycle_bucket_discovery"]["blocked"]
     env_text = (runtime_dir / "threshold_runtime_env_2026-05-23.env").read_text(encoding="utf-8")
-    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED=true" in env_text
-    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_SCORE=66" in env_text
-    assert "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_ENABLED=true" in env_text
-    assert "KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_ENABLED=true" in env_text
-    assert "KORSTOCKSCAN_SWING_SIM_AUTO_BOTTOM_REBOUND_SOURCE_ENABLED=true" in env_text
+    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED" not in env_text
+    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_SCORE" not in env_text
+    assert "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_ENABLED=true" not in env_text
 
 
 def test_auto_bounded_live_imports_latency_classifier_recommendation(tmp_path, monkeypatch):
@@ -2171,14 +2225,14 @@ def test_runtime_apply_bridge_entry_requires_ready_state_and_artifact(tmp_path, 
 
     assert manifest["runtime_change"] is False
     assert (
-        f"runtime_apply_blocked_bridge_not_ready:bootstrap_pending:{family}"
+        f"runtime_apply_bridge_archived_family:{family}"
         in manifest["runtime_apply_bridge"]["blocked"]
     )
     env_text = (runtime_dir / "threshold_runtime_env_2026-06-01.env").read_text(encoding="utf-8")
     assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED" not in env_text
 
 
-def test_runtime_apply_bridge_entry_live_auto_writes_targeted_probe_env_without_artifact(tmp_path, monkeypatch):
+def test_runtime_apply_bridge_entry_wait6579_stale_live_auto_is_archived_and_blocked(tmp_path, monkeypatch):
     runtime_dir, bridge_dir, approval_dir = _install_runtime_bridge_test_dirs(tmp_path, monkeypatch)
     family = bridge_mod.ENTRY_BRIDGE_FAMILY
     candidate_id = f"{family}:2026-05-30"
@@ -2240,18 +2294,14 @@ def test_runtime_apply_bridge_entry_live_auto_writes_targeted_probe_env_without_
     )
 
     env = manifest["runtime_env_overrides"]
-    assert manifest["runtime_change"] is True
-    assert env["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED"] == "true"
-    assert env["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_SCORE"] == "66"
-    assert env["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MAX_SCORE"] == "69"
-    assert env["KORSTOCKSCAN_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW"] == "50000"
-    assert env["KORSTOCKSCAN_WAIT6579_PROBE_CANARY_MAX_QTY"] == "1"
-    assert env["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION"] == candidate_id
-    assert manifest["runtime_apply_bridge"]["selected"][0]["runtime_apply_bridge_family"] == family
-    assert manifest["runtime_apply_bridge"]["selected"][0]["approval_state"] == "auto_live"
-    assert manifest["runtime_apply_bridge"]["selected"][0]["approval_artifact"] is None
+    assert manifest["runtime_change"] is False
+    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED" not in env
+    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_SCORE" not in env
+    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MAX_SCORE" not in env
+    assert f"runtime_apply_bridge_archived_family:{family}" in manifest["runtime_apply_bridge"]["blocked"]
+    assert manifest["runtime_apply_bridge"]["selected"] == []
     env_manifest = json.loads((runtime_dir / "threshold_runtime_env_2026-06-01.json").read_text(encoding="utf-8"))
-    assert family in env_manifest["selected_families"]
+    assert family not in env_manifest["selected_families"]
 
 
 def test_runtime_apply_bridge_legacy_ready_for_approval_is_blocked(tmp_path, monkeypatch):
@@ -2294,7 +2344,7 @@ def test_runtime_apply_bridge_legacy_ready_for_approval_is_blocked(tmp_path, mon
 
     assert manifest["runtime_change"] is False
     assert (
-        f"runtime_apply_blocked_bridge_not_ready:ready_for_approval:{family}"
+        f"runtime_apply_bridge_archived_family:{family}"
         in manifest["runtime_apply_bridge"]["blocked"]
     )
     env_text = (runtime_dir / "threshold_runtime_env_2026-06-01.env").read_text(encoding="utf-8")

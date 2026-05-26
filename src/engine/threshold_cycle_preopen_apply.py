@@ -14,6 +14,7 @@ from src.engine.auto_promotion_contracts import tier2_validation_passed
 from src.engine.approval_contracts import annotate_approval_request
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.engine.runtime_apply_bridge import (
+    ARCHIVED_RUNTIME_APPLY_BRIDGE_FAMILIES,
     ENTRY_BRIDGE_FAMILY,
     SCALE_IN_BRIDGE_FAMILY,
     ldm_entry_runtime_bridge_artifact_path,
@@ -962,6 +963,9 @@ def _load_runtime_apply_bridge_approval(source_date: str | None) -> dict[str, An
         family = str(item.get("family") or "")
         if family not in bridge_families:
             continue
+        if family in ARCHIVED_RUNTIME_APPLY_BRIDGE_FAMILIES:
+            blocked.append(f"runtime_apply_bridge_archived_family:{family}")
+            continue
         artifact_path = _bridge_artifact_path_for_family(family, source_date)
         artifact = _load_json(artifact_path) if artifact_path else {}
         artifacts[family] = str(artifact_path) if artifact_path and artifact_path.exists() else None
@@ -1123,6 +1127,14 @@ def _load_lifecycle_bucket_sim_auto_approval(source_date: str | None) -> dict[st
         blocked.append("sim_auto_approval_not_approved")
     elif bool(payload.get("actual_order_submitted")):
         blocked.append("actual_order_submitted_not_allowed")
+    elif payload.get("runtime_effect") is not False:
+        blocked.append("runtime_effect_not_allowed")
+    elif payload.get("allowed_runtime_apply") is not False:
+        blocked.append("artifact_allowed_runtime_apply_must_be_false")
+    elif payload.get("broker_order_forbidden") is not True:
+        blocked.append("broker_order_forbidden_contract_missing")
+    elif not payload.get("approved_bucket_ids"):
+        blocked.append("sim_auto_approval_empty")
     if not catalog_path.exists():
         blocked.append("bucket_catalog_missing")
     approved_request = None
@@ -1137,6 +1149,8 @@ def _load_lifecycle_bucket_sim_auto_approval(source_date: str | None) -> dict[st
             "allowed_runtime_apply": True,
             "safety_revert_required": False,
             "calibration_state": "sim_auto_approved",
+            "approved_bucket_ids": payload.get("approved_bucket_ids") or [],
+            "approved_bucket_count": payload.get("approved_bucket_count"),
             "target_env_keys": [
                 "LIFECYCLE_BUCKET_DISCOVERY_ENABLED",
                 "LIFECYCLE_BUCKET_DISCOVERY_POLICY_FILE",
@@ -1147,7 +1161,7 @@ def _load_lifecycle_bucket_sim_auto_approval(source_date: str | None) -> dict[st
                 "enabled": True,
                 "policy_file": str(catalog_path),
                 "policy_version": f"lifecycle_bucket_discovery:{source_date}",
-                "live_auto_apply_enabled": True,
+                "live_auto_apply_enabled": False,
             },
             "current_values": {
                 "enabled": False,

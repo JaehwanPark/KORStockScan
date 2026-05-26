@@ -143,15 +143,27 @@
   - 금지: code-improvement workorder를 자동 repo 수정으로 취급하지 않는다. 사용자가 Codex 구현을 지시한 경우에만 실행한다.
   - 다음 액션: 구현 필요, 설계 보류, reject, already_implemented 중 하나로 닫는다.
 
+- [ ] `[LDMGradeTransitionPolicyPostclose0526] LDM grade 기반 전환정책 및 wait6579 live 예외 제거 검증` (`Due: 2026-05-26`, `Slot: POSTCLOSE`, `TimeWindow: 17:05~17:15`, `Track: RuntimeStability`)
+  - Source: [lifecycle_bucket_discovery.py](/home/ubuntu/KORStockScan/src/engine/lifecycle_bucket_discovery.py), [runtime_apply_bridge.py](/home/ubuntu/KORStockScan/src/engine/runtime_apply_bridge.py), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 판정 기준: `wait6579_ev_cohort`/counterfactual-only bucket은 `grade_2_counterfactual + sim_auto_approved|source_only_keep_collecting`으로 남고 `entry_wait6579_score66_69_recovery_gate_v1`가 discovery/bridge/preopen 어느 경로에서도 live env 후보가 되지 않는지 확인한다. `grade_1_completed_sim` 후보만 bounded live bridge 후보가 되며, mixed source bucket은 child split 전 live 금지다.
+  - 금지: 이 검증을 현재 실행 중 runtime 즉시 rollback, threshold/order/provider/bot 변경, full real conversion 근거로 쓰지 않는다.
+  - 다음 액션: `grade_policy_pass`, `wait6579_archived_family_leak`, `mixed_source_live_leak`, `sim_handoff_gap`, `source_quality_blocked` 중 하나로 닫는다.
+
 - [ ] `[PatternLabAIReviewWarningDisposition0526] pattern_lab_ai_review_warning source-only 처리 및 workorder 표면화 여부 확인` (`Due: 2026-05-26`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:25`, `Track: RuntimeStability`)
   - Source: [pattern_lab_ai_review_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-05-22.json), [runtime_approval_summary_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-05-22.json), [code_improvement_workorder_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-22.json)
   - 판정 기준: `pattern_lab_ai_review_warning`은 `decision_authority=pattern_lab_ai_review_source_only`, `runtime_effect=false`로 유지한다. `fail_count`, `warning_count`, `code_improvement_order_count`, `explicit_gap_type`, `source_paths`, `forbidden_runtime_uses`를 확인하고, 명시적 source-quality/automation handoff gap이 있을 때만 code workorder로 표면화한다.
   - 금지: AI review ambiguity 또는 source-only warning을 runtime mutation, threshold/order/provider/bot 변경, 자동 approval artifact 생성으로 연결하지 않는다.
   - 다음 액션: `source_only_no_workorder`, `workorder_surface_required`, `fail_runtime_mutation_leak` 중 하나로 닫는다.
 
+- [ ] `[TimeWindowRegimeCounterfactualPostclose0526] time-window regime counterfactual rolling/backfill 및 IO guard 확인` (`Due: 2026-05-26`, `Slot: POSTCLOSE`, `TimeWindow: 17:20~17:25`, `Track: ScalpingLogic`)
+  - Source: [time_window_regime_counterfactual.py](/home/ubuntu/KORStockScan/src/engine/automation/time_window_regime_counterfactual.py), [sniper_post_sell_feedback.py](/home/ubuntu/KORStockScan/src/engine/sniper_post_sell_feedback.py), [run_threshold_cycle_postclose.sh](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_postclose.sh), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
+  - 판정 기준: `time_window_regime_counterfactual_2026-05-26.json`이 `runtime_effect=false`, `allowed_runtime_apply=false`, `actual_order_submitted=false`, `broker_order_forbidden=true`로 생성되고, 09:30은 `operator_seed_cutoff=true` 및 `hard_gate=false`로만 표시된다. completed sim PnL과 counterfactual EV는 직접 합산하지 않고, `partial + resume_required`는 checkpoint와 재실행 가능 상태로 남긴다.
+  - 금지: time-window 결과를 장중 hard gate, threshold/order/provider/bot/cap 변경, entry/exit override 근거로 사용하지 않는다.
+  - 다음 액션: `pass_full_rolling`, `warning_partial_resume_required`, `fail_source_contract`, `fail_io_guard_no_checkpoint` 중 하나로 닫는다.
+
 - [ ] `[ProducerGapDiscoveryPostclose0526] missing producer 자동 발굴 및 workorder handoff 확인` (`Due: 2026-05-26`, `Slot: POSTCLOSE`, `TimeWindow: 17:25~17:35`, `Track: RuntimeStability`)
   - Source: [producer_gap_discovery.py](/home/ubuntu/KORStockScan/src/engine/automation/producer_gap_discovery.py), [build_code_improvement_workorder.py](/home/ubuntu/KORStockScan/src/engine/build_code_improvement_workorder.py), [verify_threshold_cycle_postclose_chain.py](/home/ubuntu/KORStockScan/src/engine/verify_threshold_cycle_postclose_chain.py), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
-  - 판정 기준: `producer_gap_discovery_2026-05-26.json`이 `runtime_effect=false`, `allowed_runtime_apply=false`, `actual_order_submitted=false`, `broker_order_forbidden=true`로 생성되고, AI two-pass review가 `parsed` 및 audit `pass`로 닫힌다. high-priority `code_improvement_orders`가 있으면 `code_improvement_workorder_2026-05-26.json` selected order에 포함되고 verifier가 `producer_gap_discovery_handoff.status=pass`로 닫는다.
+  - 판정 기준: `producer_gap_discovery_2026-05-26.json`이 `runtime_effect=false`, `allowed_runtime_apply=false`, `actual_order_submitted=false`, `broker_order_forbidden=true`로 생성되고, AI two-pass review가 `parsed` 및 audit `pass`로 닫힌다. rolling sim scan이 `sim_first_coverage_status`, `rolling_dates_scanned`, `sim_rows_scanned`, strict/ambiguous match count를 남기며, entry/submit/holding/exit/scale-in/time-window/source-quality sim-first gap 또는 `sim_first_coverage_gap` high-priority order가 있으면 `code_improvement_workorder_2026-05-26.json` selected order에 포함되어야 한다. `time_window_policy_exception_missing`, `volatile_runner_exit_counterfactual_missing`, `limit_up_plateau_breakdown_exit_missing`은 각각 hard gate/exit override/hard-stop override가 아니라 source-only missing producer 후보로만 기록되어야 한다. verifier가 `producer_gap_discovery_handoff.status=pass`로 닫는다.
   - 금지: missing producer 후보를 실주문 enable, threshold mutation, provider change, bot restart, cap release, entry/exit override 근거로 사용하지 않는다. AI unavailable/parse reject/audit fail은 경고 지속이 아니라 fail-closed로 처리한다.
   - 다음 액션: `pass_workorder_handoff`, `fail_ai_review`, `fail_workorder_handoff`, `source_only_no_candidate` 중 하나로 닫는다.
 
@@ -206,3 +218,18 @@
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
+
+<!-- AUTO_SERVER_COMPARISON_START -->
+### 본서버 vs songstockscan 자동 비교 (`2026-05-26 15:47:05`)
+
+- 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
+- 상세 리포트: `data/report/server_comparison/server_comparison_2026-05-26.md`
+- `Trade Review`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Performance Tuning`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Post Sell Feedback`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Entry Pipeline Flow`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+<!-- AUTO_SERVER_COMPARISON_END -->

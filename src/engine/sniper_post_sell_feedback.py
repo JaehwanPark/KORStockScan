@@ -273,6 +273,12 @@ def record_sim_post_sell_candidate(
     trigger_profit_rate=None,
     strategy: str | None = "SCALPING",
     source_event_stage: str = "scalp_sim_sell_order_assumed_filled",
+    entry_event_emitted_at: str | None = None,
+    entry_signal_time: str | None = None,
+    entry_time_source: str | None = None,
+    entry_record_id: str | None = None,
+    entry_join_key: str | None = None,
+    entry_join_status: str | None = None,
 ) -> dict | None:
     if not bool(getattr(TRADING_RULES, "POST_SELL_FEEDBACK_ENABLED", True)):
         return None
@@ -342,6 +348,23 @@ def record_sim_post_sell_candidate(
             "simulation_book": "scalp_ai_buy_all",
             "candidate_id": entry_candidate_id,
             "entry_adm_candidate_id": entry_candidate_id,
+            "entry_event_emitted_at": str(
+                entry_event_emitted_at
+                or stock.get("entry_event_emitted_at")
+                or stock.get("entry_adm_event_emitted_at")
+                or ""
+            ),
+            "entry_signal_time": str(
+                entry_signal_time
+                or stock.get("entry_signal_time")
+                or stock.get("signal_time")
+                or stock.get("tick_latest_time")
+                or ""
+            ),
+            "entry_time_source": str(entry_time_source or stock.get("entry_time_source") or "not_recorded_at_source"),
+            "entry_record_id": str(entry_record_id or stock.get("entry_record_id") or sim_parent_id or ""),
+            "entry_join_key": str(entry_join_key or stock.get("entry_join_key") or entry_candidate_id or sim_parent_id or ""),
+            "entry_join_status": str(entry_join_status or stock.get("entry_join_status") or "raw_append_only_unjoined"),
             "sim_record_id": sim_id,
             "sim_parent_record_id": sim_parent_id,
             "source_event_stage": str(source_event_stage or "scalp_sim_sell_order_assumed_filled"),
@@ -683,6 +706,12 @@ def evaluate_sim_post_sell_candidates(target_date: str, token: str | None = None
             "simulation_book": "scalp_ai_buy_all",
             "candidate_id": candidate.get("candidate_id", ""),
             "entry_adm_candidate_id": candidate.get("entry_adm_candidate_id", ""),
+            "entry_event_emitted_at": candidate.get("entry_event_emitted_at", ""),
+            "entry_signal_time": candidate.get("entry_signal_time", ""),
+            "entry_time_source": candidate.get("entry_time_source", ""),
+            "entry_record_id": candidate.get("entry_record_id", ""),
+            "entry_join_key": candidate.get("entry_join_key", ""),
+            "entry_join_status": candidate.get("entry_join_status", ""),
             "sim_record_id": candidate.get("sim_record_id", ""),
             "sim_parent_record_id": candidate.get("sim_parent_record_id", ""),
             "source_event_stage": candidate.get("source_event_stage", ""),

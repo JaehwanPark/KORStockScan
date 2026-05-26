@@ -17,6 +17,8 @@ from src.utils.constants import DATA_DIR
 from src.engine.lifecycle_bucket_discovery import (
     ENTRY_LIVE_AUTO_FAMILY,
     ENTRY_LIVE_AUTO_BUCKET_KEY,
+    EVIDENCE_GRADE_2_COUNTERFACTUAL,
+    WAIT6579_LIVE_EXCEPTION_ARCHIVED_REASON,
     SCALE_IN_LIVE_AUTO_FAMILY,
     discovery_report_path,
 )
@@ -30,6 +32,7 @@ ENTRY_BRIDGE_FAMILY = ENTRY_LIVE_AUTO_FAMILY
 SCALE_IN_BRIDGE_FAMILY = SCALE_IN_LIVE_AUTO_FAMILY
 
 ENTRY_TARGET_BUCKET_KEY = ENTRY_LIVE_AUTO_BUCKET_KEY
+ARCHIVED_RUNTIME_APPLY_BRIDGE_FAMILIES = {ENTRY_BRIDGE_FAMILY}
 
 
 def runtime_apply_bridge_report_path(target_date: str) -> Path:
@@ -161,6 +164,7 @@ def _discovery_live_families(discovery: dict[str, Any]) -> set[str]:
         if (
             isinstance(item, dict)
             and item.get("live_auto_apply_family")
+            and str(item.get("live_auto_apply_family")) not in ARCHIVED_RUNTIME_APPLY_BRIDGE_FAMILIES
             and _discovery_candidate_tier2_passed(item)
         )
     }
@@ -187,6 +191,8 @@ def _discovery_live_candidate_by_family(discovery: dict[str, Any]) -> dict[str, 
         if not isinstance(item, dict):
             continue
         family = str(item.get("live_auto_apply_family") or "")
+        if family in ARCHIVED_RUNTIME_APPLY_BRIDGE_FAMILIES:
+            continue
         if family and _discovery_candidate_tier2_passed(item) and family not in by_family:
             by_family[family] = item
     return by_family
@@ -268,6 +274,13 @@ def _entry_candidate(
         discovery_live_families=discovery_live_families,
         discovery_available=discovery_available,
     )
+    observed_state = state
+    state = "legacy_counterfactual_live_exception_removed"
+    rolling = {
+        **rolling,
+        "observed_bridge_state_before_archive": observed_state,
+        "archived_live_exception_reason": WAIT6579_LIVE_EXCEPTION_ARCHIVED_REASON,
+    }
     discovery_meta = _discovery_candidate_meta(
         family=ENTRY_BRIDGE_FAMILY,
         discovery=discovery,
@@ -281,31 +294,12 @@ def _entry_candidate(
         "bridge_candidate_state": state,
         "approval_required": False,
         "human_approval_required": False,
-        "live_auto_apply": state == "live_auto_apply_ready",
-        "allowed_runtime_apply": state == "live_auto_apply_ready",
+        "live_auto_apply": False,
+        "allowed_runtime_apply": False,
         "runtime_effect": False,
-        "runtime_effect_after_approval": "bounded_entry_probe_recovery_live_auto",
-        "target_env_keys": [
-            "AI_SCORE65_74_RECOVERY_PROBE_ENABLED",
-            "AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE",
-            "AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE",
-            "AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE",
-            "AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL",
-            "AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP",
-            "AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW",
-            "AI_WAIT6579_PROBE_CANARY_MAX_QTY",
-            "AI_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION",
-            "AI_SCORE65_74_RECOVERY_PROBE_CALIBRATION_STATE",
-        ],
+        "runtime_effect_after_approval": "none_archived_counterfactual_live_exception",
+        "target_env_keys": [],
         "recommended_values": {
-            "enabled": True,
-            "min_score": 66,
-            "max_score": 69,
-            "min_buy_pressure": 65.0,
-            "min_tick_accel": 1.2,
-            "min_micro_vwap_bp": 0.0,
-            "max_budget_krw": 50000,
-            "max_qty": 1,
             "threshold_version": f"{ENTRY_BRIDGE_FAMILY}:{target_date}",
             "calibration_state": f"runtime_apply_bridge:{state}",
         },
@@ -322,9 +316,16 @@ def _entry_candidate(
         "source_bucket": bucket,
         "rolling_confirmation": rolling,
         **discovery_meta,
+        "evidence_grade": EVIDENCE_GRADE_2_COUNTERFACTUAL,
+        "transition_target": "sim_lifecycle_handoff",
+        "grade_reason": "wait6579_ev_cohort_is_counterfactual_source_not_completed_lifecycle_evidence",
+        "full_real_conversion_allowed": False,
+        "legacy_family_archived": True,
+        "archived_live_exception_reason": WAIT6579_LIVE_EXCEPTION_ARCHIVED_REASON,
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
-        "decision_authority": "lifecycle_bucket_discovery_live_auto_apply",
+        "decision_authority": "runtime_apply_bridge_archived_counterfactual_exception",
         "forbidden_uses": [
+            "bounded_live_apply",
             "intraday_threshold_mutation",
             "broker_guard_bypass",
             "provider_route_change",

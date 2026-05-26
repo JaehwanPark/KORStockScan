@@ -106,12 +106,15 @@ def test_runtime_apply_bridge_marks_daily_only_bucket_live_auto_ready(tmp_path, 
     report = mod.write_runtime_apply_bridge_report("2026-05-21")
 
     states = {item["family"]: item["bridge_candidate_state"] for item in report["candidates"]}
-    assert states[mod.ENTRY_BRIDGE_FAMILY] == "live_auto_apply_ready"
+    assert states[mod.ENTRY_BRIDGE_FAMILY] == "legacy_counterfactual_live_exception_removed"
     assert states[mod.SCALE_IN_BRIDGE_FAMILY] == "live_auto_apply_ready"
-    assert report["summary"]["live_auto_apply_ready_count"] == 2
+    assert report["summary"]["live_auto_apply_ready_count"] == 1
     assert report["summary"]["lifecycle_bucket_discovery_live_followup_count"] == 0
     entry = {item["family"]: item for item in report["candidates"]}[mod.ENTRY_BRIDGE_FAMILY]
-    assert entry["lifecycle_bucket_discovery_ai_review_status"] == "parsed"
+    assert entry["allowed_runtime_apply"] is False
+    assert entry["target_env_keys"] == []
+    assert entry["evidence_grade"] == "grade_2_counterfactual"
+    assert entry["legacy_family_archived"] is True
     assert report["summary"]["approval_required_count"] == 0
     assert report["summary"]["runtime_mutation_performed"] is False
     assert (report_dir / "runtime_apply_bridge_2026-05-21.json").exists()
@@ -133,11 +136,10 @@ def test_runtime_apply_bridge_keeps_rolling_confirmed_entry_and_scale_candidates
     entry = by_family[mod.ENTRY_BRIDGE_FAMILY]
     scale = by_family[mod.SCALE_IN_BRIDGE_FAMILY]
 
-    assert entry["bridge_candidate_state"] == "live_auto_apply_ready"
+    assert entry["bridge_candidate_state"] == "legacy_counterfactual_live_exception_removed"
     assert entry["approval_required"] is False
-    assert entry["allowed_runtime_apply"] is True
-    assert entry["recommended_values"]["min_score"] == 66
-    assert entry["recommended_values"]["max_score"] == 69
+    assert entry["allowed_runtime_apply"] is False
+    assert entry["transition_target"] == "sim_lifecycle_handoff"
     assert scale["bridge_candidate_state"] == "live_auto_apply_ready"
     assert scale["approval_required"] is False
     assert scale["allowed_runtime_apply"] is True
@@ -158,7 +160,7 @@ def test_runtime_apply_bridge_blocks_live_when_discovery_does_not_confirm(tmp_pa
     report = mod.build_runtime_apply_bridge_report("2026-05-21")
     states = {item["family"]: item["bridge_candidate_state"] for item in report["candidates"]}
 
-    assert states[mod.ENTRY_BRIDGE_FAMILY] == "runtime_blocked_contract_gap"
+    assert states[mod.ENTRY_BRIDGE_FAMILY] == "legacy_counterfactual_live_exception_removed"
     assert states[mod.SCALE_IN_BRIDGE_FAMILY] == "runtime_blocked_contract_gap"
     assert report["summary"]["live_auto_apply_ready_count"] == 0
 
@@ -175,5 +177,23 @@ def test_runtime_apply_bridge_blocks_live_when_discovery_tier2_not_parsed(tmp_pa
     report = mod.build_runtime_apply_bridge_report("2026-05-21")
     states = {item["family"]: item["bridge_candidate_state"] for item in report["candidates"]}
 
-    assert states[mod.ENTRY_BRIDGE_FAMILY] == "runtime_blocked_contract_gap"
+    assert states[mod.ENTRY_BRIDGE_FAMILY] == "legacy_counterfactual_live_exception_removed"
     assert states[mod.SCALE_IN_BRIDGE_FAMILY] == "runtime_blocked_contract_gap"
+
+
+def test_runtime_apply_bridge_ignores_stale_wait6579_live_discovery_candidate(tmp_path, monkeypatch):
+    ldm_dir = tmp_path / "ldm"
+    ldm_dir.mkdir()
+    discovery_path = tmp_path / "discovery" / "lifecycle_bucket_discovery_2026-05-21.json"
+    monkeypatch.setattr(mod, "LDM_REPORT_DIR", ldm_dir)
+    monkeypatch.setattr(mod, "discovery_report_path", lambda target_date: discovery_path)
+    _write_ldm(ldm_dir / "lifecycle_decision_matrix_2026-05-21.json")
+    _write_discovery(discovery_path, live=True, tier2_status="parsed")
+
+    report = mod.build_runtime_apply_bridge_report("2026-05-21")
+    entry = {item["family"]: item for item in report["candidates"]}[mod.ENTRY_BRIDGE_FAMILY]
+
+    assert entry["bridge_candidate_state"] == "legacy_counterfactual_live_exception_removed"
+    assert entry["live_auto_apply"] is False
+    assert entry["allowed_runtime_apply"] is False
+    assert entry["runtime_effect_after_approval"] == "none_archived_counterfactual_live_exception"

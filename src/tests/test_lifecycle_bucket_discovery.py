@@ -16,7 +16,10 @@ def _ai_keep_response():
     }
 
 
-def _ai_block_response(reason):
+def _ai_block_response(reason, *, bucket_id=None):
+    target_bucket_id = bucket_id or (
+        "entry:combo_entry_spot:score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liquidity_unknown"
+    )
     return {
         "schema_version": 1,
         "interpretation": {
@@ -26,7 +29,7 @@ def _ai_block_response(reason):
         "audit": {"status": "correction_required", "issues": [reason], "reason": reason},
         "final_conclusions": [
             {
-                "bucket_id": "entry:combo_entry_spot:score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liquidity_unknown",
+                "bucket_id": target_bucket_id,
                 "final_bucket_relation": "existing_bucket_refinement",
                 "final_classification_state": "runtime_blocked_contract_gap",
                 "final_decision": "block",
@@ -64,6 +67,16 @@ def _write_ldm(path):
                             "join_rate": 1.0,
                             "source_quality_gate": "pass",
                             "source_quality_adjusted_ev_pct": 2.2,
+                            "recommended_route": "candidate_recovery_or_relax",
+                        },
+                        {
+                            "bucket_type": "score_band",
+                            "bucket_key": "score_70_74",
+                            "sample": 15,
+                            "joined_sample": 6,
+                            "join_rate": 0.4,
+                            "source_quality_gate": "pass",
+                            "source_quality_adjusted_ev_pct": 1.4,
                             "recommended_route": "candidate_recovery_or_relax",
                         },
                     ]
@@ -133,9 +146,20 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     sim = [item for item in states.values() if item["classification_state"] == "sim_auto_approved"]
     taxonomy = [item for item in report["candidates"] if item.get("source_bucket_kind") == "taxonomy_provenance_gap"]
     assert {item["live_auto_apply_family"] for item in live} == {
-        mod.ENTRY_LIVE_AUTO_FAMILY,
         mod.SCALE_IN_LIVE_AUTO_FAMILY,
     }
+    wait6579 = states["entry:combo_entry_spot:score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liquidity_unknown"]
+    assert wait6579["classification_state"] == "sim_auto_approved"
+    assert wait6579["evidence_grade"] == mod.EVIDENCE_GRADE_2_COUNTERFACTUAL
+    assert wait6579["transition_target"] == "sim_lifecycle_handoff"
+    assert wait6579["full_real_conversion_allowed"] is False
+    assert wait6579["live_auto_apply_family"] is None
+    mixed = states["entry:score_band:score_70_74"]
+    assert mixed["evidence_grade"] == mod.EVIDENCE_GRADE_MIXED_SOURCE
+    assert mixed["classification_state"] == "sim_auto_approved"
+    assert mixed["bounded_live_canary_allowed"] is False
+    scale_blocker = states["scale_in:blocker_reason:pnl_out_of_range_0_32"]
+    assert scale_blocker["recommended_action"] == "keep_or_tighten_blocker_candidate"
     assert sim
     assert taxonomy
     assert taxonomy[0]["bucket_relation"] == "new_bucket_candidate"
@@ -150,6 +174,11 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     assert auto["approved"] is True
     assert auto["broker_order_forbidden"] is True
     assert auto["actual_order_submitted"] is False
+    assert auto["runtime_effect"] is False
+    assert auto["allowed_runtime_apply"] is False
+    assert auto["approved_bucket_count"] == len(auto["approved_bucket_ids"])
+    assert auto["approved_evidence_grade_counts"][mod.EVIDENCE_GRADE_2_COUNTERFACTUAL] >= 1
+    assert auto["source_quality_status"] == "pass"
 
 
 def test_lifecycle_bucket_discovery_blocks_deterministic_live_when_ai_review_disabled(tmp_path, monkeypatch):
@@ -168,7 +197,6 @@ def test_lifecycle_bucket_discovery_blocks_deterministic_live_when_ai_review_dis
 
     blocked = [item for item in report["surfaced_candidates"] if item["classification_state"] == "runtime_blocked_contract_gap"]
     assert {item["live_auto_apply_family"] for item in blocked if item.get("live_auto_apply_family")} == {
-        mod.ENTRY_LIVE_AUTO_FAMILY,
         mod.SCALE_IN_LIVE_AUTO_FAMILY,
     }
     assert all(item.get("ai_tier2_blocked_reason") == "ai_tier2_validation_not_parsed:disabled" for item in blocked)
@@ -195,10 +223,10 @@ def test_lifecycle_bucket_discovery_ignores_ambiguous_ai_block_for_live_candidat
 
     live = [item for item in report["surfaced_candidates"] if item["classification_state"] == "live_auto_apply_ready"]
     ignored = [item for item in live if item.get("ai_review_block_ignored_reason")]
-    assert ignored
     assert all((item.get("auto_promotion_contract") or {}).get("tier2_status") == "parsed" for item in live)
-    assert report["summary"]["live_auto_apply_ready_count"] == 2
-    assert "ai_review_ambiguous_live_candidate_kept_for_post_apply" in report["warnings"]
+    assert report["summary"]["live_auto_apply_ready_count"] == 1
+    assert not ignored
+    assert "ai_review_ambiguous_live_candidate_kept_for_post_apply" not in report["warnings"]
 
 
 def test_lifecycle_bucket_discovery_applies_explicit_contract_ai_block_for_live_candidate(tmp_path, monkeypatch):
@@ -215,17 +243,20 @@ def test_lifecycle_bucket_discovery_applies_explicit_contract_ai_block_for_live_
 
     report = mod.write_lifecycle_bucket_discovery_report(
         "2026-05-22",
-        ai_raw_response=_ai_block_response("env mapping and post-apply attribution contract are missing"),
+        ai_raw_response=_ai_block_response(
+            "env mapping and post-apply attribution contract are missing",
+            bucket_id="scale_in:arm:pyramid",
+        ),
     )
 
     blocked = [
         item
         for item in report["surfaced_candidates"]
-        if item.get("bucket_id", "").startswith("entry:combo_entry_spot")
+        if item.get("bucket_id") == "scale_in:arm:pyramid"
         and item["classification_state"] == "runtime_blocked_contract_gap"
     ]
     assert blocked
-    assert report["summary"]["live_auto_apply_ready_count"] == 1
+    assert report["summary"]["live_auto_apply_ready_count"] == 0
 
 
 def test_lifecycle_bucket_discovery_surfaces_source_contract_drift(tmp_path, monkeypatch):

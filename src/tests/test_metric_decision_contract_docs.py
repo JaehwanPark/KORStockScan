@@ -12,7 +12,7 @@ def test_report_traceability_declares_metric_decision_contract():
     text = _read_doc("docs/report-based-automation-traceability.md")
 
     required_terms = (
-        "## 2.3 Metric Decision Contract",
+        "## 2.6 Metric Decision Contract",
         "metric_role",
         "metric_definition",
         "decision_authority",

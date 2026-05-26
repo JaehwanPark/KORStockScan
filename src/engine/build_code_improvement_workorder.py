@@ -2608,6 +2608,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
                 "implementation_provenance": item.order.get("implementation_provenance"),
                 "parity_contract": item.order.get("parity_contract"),
                 "source_bucket_id": item.order.get("source_bucket_id"),
+                "runtime_hook_candidate_contract": item.order.get("runtime_hook_candidate_contract"),
             }
             for item in selected
         ],
@@ -2797,10 +2798,29 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
                 f"- implementation_provenance: `{json.dumps(item.get('implementation_provenance'), ensure_ascii=False, sort_keys=True) if item.get('implementation_provenance') else '-'}`",
                 f"- automation_reentry: {item.get('automation_reentry')}",
                 "",
-                "실행 기준:",
-                "",
             ]
         )
+        hook_contract = item.get("runtime_hook_candidate_contract")
+        if isinstance(hook_contract, dict) and hook_contract:
+            lines.extend(
+                [
+                    "Runtime hook candidate:",
+                    "",
+                    f"- hook_name: `{hook_contract.get('hook_name') or '-'}`",
+                    f"- stage: `{hook_contract.get('stage') or '-'}`",
+                    f"- initial_authority: `{hook_contract.get('initial_authority') or '-'}`",
+                    f"- apply_boundary: `{hook_contract.get('apply_boundary') or '-'}`",
+                    f"- action_namespace: {_format_list(hook_contract.get('action_namespace'))}",
+                    f"- eligible_after: {_format_list(hook_contract.get('eligible_after'))}",
+                    f"- safety_vetoes: {_format_list(hook_contract.get('safety_vetoes'))}",
+                    f"- rollback_guards: {_format_list(hook_contract.get('rollback_guards'))}",
+                    f"- required_source_artifacts: {_format_list(hook_contract.get('required_source_artifacts'))}",
+                    f"- required_ev_evidence: {_format_list(hook_contract.get('required_ev_evidence'))}",
+                    f"- forbidden_uses: {_format_list(hook_contract.get('forbidden_uses'))}",
+                    "",
+                ]
+            )
+        lines.extend(["실행 기준:", ""])
         decision = item.get("decision")
         if decision == "implement_now":
             lines.extend(

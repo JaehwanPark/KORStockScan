@@ -365,8 +365,8 @@ def test_build_code_improvement_workorder_force_selects_producer_gap_orders(tmp_
                 "summary": {"workorder_count": 1},
                 "code_improvement_orders": [
                     {
-                        "order_id": "order_producer_gap_discovery_stop_recovery",
-                        "title": "Implement missing producer: stop recovery",
+                        "order_id": "order_producer_gap_discovery_time_window_policy_exception",
+                        "title": "Implement missing producer: time_window_policy_exception_missing",
                         "target_subsystem": "postclose_source_producer",
                         "priority": 10,
                         "producer_gap_priority": "high",
@@ -395,12 +395,84 @@ def test_build_code_improvement_workorder_force_selects_producer_gap_orders(tmp_
     report = mod.build_code_improvement_workorder("2026-05-26", max_orders=1)
 
     decisions = {item["order_id"]: item["decision"] for item in report["orders"]}
-    assert decisions["order_producer_gap_discovery_stop_recovery"] == "implement_now"
+    assert decisions["order_producer_gap_discovery_time_window_policy_exception"] == "implement_now"
     assert report["summary"]["producer_gap_discovery_source_order_count"] == 1
     assert report["summary"]["producer_gap_discovery_high_priority_selected"] is True
     assert report["source"]["producer_gap_discovery"] == str(
         producer_gap_dir / "producer_gap_discovery_2026-05-26.json"
     )
+    assert "Runtime hook candidate:" not in mod.render_code_improvement_workorder_markdown(report)
+
+
+def test_build_code_improvement_workorder_preserves_runtime_hook_candidate_contract(tmp_path, monkeypatch):
+    automation_dir = tmp_path / "automation"
+    producer_gap_dir = tmp_path / "producer-gap"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    automation_dir.mkdir()
+    producer_gap_dir.mkdir()
+    (automation_dir / "scalping_pattern_lab_automation_2026-05-26.json").write_text(
+        json.dumps({"date": "2026-05-26", "code_improvement_orders": []}),
+        encoding="utf-8",
+    )
+    hook_contract = {
+        "hook_name": "holding_flow_runner_debounce_guard",
+        "stage": "holding_exit",
+        "initial_authority": "source_only_proposal",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "apply_boundary": "postclose_artifact_to_next_preopen_candidate_only",
+        "action_namespace": ["EXIT_CONFIRM", "HOLD_REVIEW", "TRIM"],
+        "eligible_after": ["dedicated_source_only_producer_implemented"],
+        "safety_vetoes": ["hard_stop", "protect_stop", "emergency_stop"],
+        "rollback_guards": ["max_defer_seconds_exceeded"],
+        "required_source_artifacts": ["runner_regime_counterfactual_producer"],
+        "required_ev_evidence": ["completed_sim_equal_weight_avg_profit_pct_positive"],
+        "forbidden_uses": ["hard stop override", "broker guard bypass"],
+    }
+    (producer_gap_dir / "producer_gap_discovery_2026-05-26.json").write_text(
+        json.dumps(
+            {
+                "status": "warning",
+                "summary": {"workorder_count": 1},
+                "code_improvement_orders": [
+                    {
+                        "order_id": "order_producer_gap_discovery_runner",
+                        "title": "Implement missing producer: sim_holding_runner_gap_missing",
+                        "target_subsystem": "runner_regime_counterfactual_producer",
+                        "priority": 10,
+                        "producer_gap_priority": "high",
+                        "route": "implement_now",
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "runtime_hook_candidate_contract": hook_contract,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
+    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-observation-audit")
+    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness")
+    monkeypatch.setattr(mod, "PATTERN_LAB_AI_REVIEW_DIR", tmp_path / "missing-ai-review")
+    monkeypatch.setattr(mod, "PRODUCER_GAP_DISCOVERY_DIR", producer_gap_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-26", max_orders=1)
+
+    order = next(item for item in report["orders"] if item["order_id"] == "order_producer_gap_discovery_runner")
+    assert order["runtime_hook_candidate_contract"]["hook_name"] == "holding_flow_runner_debounce_guard"
+    markdown = mod.render_code_improvement_workorder_markdown(report)
+    assert "Runtime hook candidate:" in markdown
+    assert "holding_flow_runner_debounce_guard" in markdown
+    assert "hard stop override" in markdown
 
 
 def test_build_code_improvement_workorder_auto_selects_buy_funnel_submit_drought(

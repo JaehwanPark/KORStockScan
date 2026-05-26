@@ -159,6 +159,9 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "producer_gap_discovery": REPORT_DIR
         / "producer_gap_discovery"
         / f"producer_gap_discovery_{target_date}.json",
+        "time_window_regime_counterfactual": REPORT_DIR
+        / "time_window_regime_counterfactual"
+        / f"time_window_regime_counterfactual_{target_date}.json",
         "pattern_lab_propagation_audit": REPORT_DIR
         / "pattern_lab_propagation_audit"
         / f"pattern_lab_propagation_audit_{target_date}.json",
@@ -812,6 +815,14 @@ def _producer_gap_discovery_handoff_status(
         and item.get("order_id")
         and str(item.get("producer_gap_priority") or "high") in {"critical", "high"}
     }
+    high_priority_candidate_ids = {
+        f"order_producer_gap_discovery_{_slug(str(item.get('candidate_id') or 'unknown'))}"
+        for item in (producer_gap.get("producer_gap_candidates") if isinstance(producer_gap.get("producer_gap_candidates"), list) else [])
+        if isinstance(item, dict)
+        and str(item.get("pattern_type") or "") == "sim_first_coverage_gap"
+        and str(item.get("ai_priority") or item.get("priority") or "high") in {"critical", "high"}
+    }
+    expected_order_ids.update(high_priority_candidate_ids)
     actual_order_ids = {
         str(item.get("order_id"))
         for item in (workorder.get("orders") if isinstance(workorder.get("orders"), list) else [])
@@ -827,6 +838,8 @@ def _producer_gap_discovery_handoff_status(
         missing.append("producer_gap_discovery_ai_audit_not_pass")
     if missing_order_ids:
         missing.append("code_improvement_workorder_producer_gap_orders_missing")
+    if high_priority_candidate_ids and missing_order_ids:
+        missing.append("producer_gap_discovery_sim_first_coverage_handoff_missing")
     return {
         "status": "fail" if missing else "pass",
         "missing": missing,
@@ -1371,6 +1384,12 @@ def build_threshold_cycle_postclose_verification(
         required_execution_flags = (*required_execution_flags, "pattern_lab_ai_review")
     if done_line and "producer_gap_discovery" in execution_flags and "producer_gap_discovery" not in missing_execution_flags:
         required_execution_flags = (*required_execution_flags, "producer_gap_discovery")
+    if (
+        done_line
+        and "time_window_regime_counterfactual" in execution_flags
+        and "time_window_regime_counterfactual" not in missing_execution_flags
+    ):
+        required_execution_flags = (*required_execution_flags, "time_window_regime_counterfactual")
     if done_line and "runtime_apply_gap_audit" in execution_flags and "runtime_apply_gap_audit" not in missing_execution_flags:
         required_execution_flags = (*required_execution_flags, "runtime_apply_gap_audit")
     disabled_stage_flags = [
@@ -1384,6 +1403,7 @@ def build_threshold_cycle_postclose_verification(
             "deepseek_swing_lab",
             "pattern_lab_currentness_audit",
             "pattern_lab_ai_review",
+            "time_window_regime_counterfactual",
             "producer_gap_discovery",
             "pattern_lab_propagation_audit",
             "scalp_entry_adm",
@@ -1399,6 +1419,7 @@ def build_threshold_cycle_postclose_verification(
     disabled_artifact_labels = {
         "pattern_lab_currentness_audit" if "pattern_lab_currentness_audit" in disabled_stage_flags else "",
         "pattern_lab_ai_review" if "pattern_lab_ai_review" in disabled_stage_flags else "",
+        "time_window_regime_counterfactual" if "time_window_regime_counterfactual" in disabled_stage_flags else "",
         "producer_gap_discovery" if "producer_gap_discovery" in disabled_stage_flags else "",
         "pattern_lab_propagation_audit" if "pattern_lab_propagation_audit" in disabled_stage_flags else "",
         "scalp_entry_action_decision_matrix" if "scalp_entry_adm" in disabled_stage_flags else "",
@@ -1422,6 +1443,8 @@ def build_threshold_cycle_postclose_verification(
         disabled_artifact_labels.add("swing_lifecycle_bucket_discovery")
     if "pattern_lab_ai_review" not in execution_flags:
         disabled_artifact_labels.add("pattern_lab_ai_review")
+    if "time_window_regime_counterfactual" not in execution_flags:
+        disabled_artifact_labels.add("time_window_regime_counterfactual")
     if "producer_gap_discovery" not in execution_flags:
         disabled_artifact_labels.add("producer_gap_discovery")
     disabled_artifact_labels.discard("")

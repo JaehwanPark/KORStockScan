@@ -102,6 +102,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     verbosity_idx = script.index("src.engine.pipeline_event_verbosity_report")
     observation_audit_idx = script.index("src.engine.observation_source_quality_audit")
     perf_source_idx = script.index("src.engine.codebase_performance_workorder_report")
+    time_window_idx = script.index("src.engine.automation.time_window_regime_counterfactual")
     producer_gap_idx = script.index("src.engine.automation.producer_gap_discovery")
     pre_ev_idx = script.index('run_threshold_cycle_ev_and_wait "pre_workorder"')
     workorder_idx = script.index("src.engine.build_code_improvement_workorder")
@@ -123,6 +124,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         < verbosity_idx
         < observation_audit_idx
         < perf_source_idx
+        < time_window_idx
         < producer_gap_idx
         < pre_ev_idx
         < workorder_idx
@@ -134,6 +136,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         < next_checklist_idx
     )
     assert 'RUN_PATTERN_LAB_PROPAGATION_AUDIT="${THRESHOLD_CYCLE_RUN_PATTERN_LAB_PROPAGATION_AUDIT:-true}"' in script
+    assert 'RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL="${THRESHOLD_CYCLE_RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL:-true}"' in script
     assert 'RUN_PRODUCER_GAP_DISCOVERY="${THRESHOLD_CYCLE_RUN_PRODUCER_GAP_DISCOVERY:-true}"' in script
     assert 'RUN_SCALP_ENTRY_ADM="${THRESHOLD_CYCLE_RUN_SCALP_ENTRY_ADM:-true}"' in script
     assert 'RUN_LIFECYCLE_DECISION_MATRIX="${THRESHOLD_CYCLE_RUN_LIFECYCLE_DECISION_MATRIX:-true}"' in script
@@ -143,6 +146,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     assert "lifecycle_ai_context=$RUN_LIFECYCLE_AI_CONTEXT" in script
     assert "lifecycle_bucket_discovery=$RUN_LIFECYCLE_BUCKET_DISCOVERY" in script
     assert "runtime_apply_bridge=$RUN_RUNTIME_APPLY_BRIDGE" in script
+    assert "time_window_regime_counterfactual=$RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL" in script
     assert "producer_gap_discovery=$RUN_PRODUCER_GAP_DISCOVERY" in script
     assert "swing_lifecycle_matrix=$RUN_SWING_LIFECYCLE_MATRIX" in script
     assert "swing_lifecycle_bucket_discovery=$RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY" in script
@@ -187,6 +191,7 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert '"$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.json"' in script
+    assert '"$PROJECT_DIR/data/report/time_window_regime_counterfactual/time_window_regime_counterfactual_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/producer_gap_discovery/producer_gap_discovery_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_${TARGET_DATE}.json"' in script
@@ -205,8 +210,10 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert "pattern_lab_currentness_audit=$RUN_PATTERN_LAB_CURRENTNESS_AUDIT" in script
     assert "pattern_lab_ai_review=$RUN_PATTERN_LAB_AI_REVIEW" in script
     assert "pattern_lab_ai_review_provider=$PATTERN_LAB_AI_REVIEW_PROVIDER" in script
+    assert "time_window_regime_counterfactual=$RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL" in script
     assert "producer_gap_discovery=$RUN_PRODUCER_GAP_DISCOVERY" in script
     assert "producer_gap_discovery_ai_provider=$PRODUCER_GAP_DISCOVERY_AI_PROVIDER" in script
+    assert "--rolling-sim-scan" in script
     assert "pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT" in script
     assert "scalp_entry_adm=$RUN_SCALP_ENTRY_ADM" in script
     assert "lifecycle_decision_matrix=$RUN_LIFECYCLE_DECISION_MATRIX" in script

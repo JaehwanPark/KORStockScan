@@ -38,6 +38,23 @@ AI_REVIEW_SCHEMA_NAME = "lifecycle_bucket_discovery_review_v1"
 AI_REVIEW_DEFAULT_PROVIDER = "openai"
 AI_REVIEW_MODEL = str(getattr(TRADING_RULES, "GPT_DEEP_MODEL", "gpt-5.4") or "gpt-5.4")
 LIVE_AUTO_STATES = {"live_auto_apply_ready"}
+EVIDENCE_GRADE_1_COMPLETED_SIM = "grade_1_completed_sim"
+EVIDENCE_GRADE_2_COUNTERFACTUAL = "grade_2_counterfactual"
+EVIDENCE_GRADE_MIXED_SOURCE = "mixed_source"
+EVIDENCE_GRADE_SOURCE_ONLY = "source_only"
+COUNTERFACTUAL_SOURCE_TOKENS = (
+    "wait6579_ev_cohort",
+    "missed_entry",
+    "counterfactual",
+)
+MIXED_BUCKET_TYPES = {
+    "score_band",
+    "time_bucket",
+    "stale_bucket",
+}
+WAIT6579_LIVE_EXCEPTION_ARCHIVED_REASON = (
+    "wait6579 counterfactual source is sim handoff only; bounded live exception archived"
+)
 AUTO_SURFACE_STATES = {
     "new_bucket_candidate",
     "sim_auto_approved",
@@ -263,7 +280,15 @@ def _relation_for(bucket_type: str, bucket_key: str) -> str:
     return "existing_bucket_refinement"
 
 
-def _recommended_action(route: str) -> str:
+def _recommended_action(route: str, *, stage: str = "", bucket_type: str = "", ev: float | None = None) -> str:
+    if (
+        stage == "scale_in"
+        and bucket_type == "blocker_reason"
+        and route == "candidate_recovery_or_relax"
+        and ev is not None
+        and ev > 0
+    ):
+        return "keep_or_tighten_blocker_candidate"
     if route == "candidate_recovery_or_relax":
         return "relax_or_recover"
     if route == "candidate_tighten_or_exclude":
@@ -276,45 +301,114 @@ def _recommended_action(route: str) -> str:
 
 
 def _live_family_for(stage: str, bucket_type: str, bucket_key: str) -> str | None:
-    if stage == "entry" and bucket_type == "combo_entry_spot" and bucket_key == ENTRY_LIVE_AUTO_BUCKET_KEY:
-        return ENTRY_LIVE_AUTO_FAMILY
     if stage == "scale_in" and bucket_type in {"arm", "blocker_namespace"} and bucket_key in {"PYRAMID", "AVG_DOWN_ONLY"}:
         return SCALE_IN_LIVE_AUTO_FAMILY
     return None
 
 
-def _classify_bucket(stage: str, bucket: dict[str, Any]) -> tuple[str, str | None]:
+def _is_counterfactual_bucket(bucket_type: str, bucket_key: str, dimensions: dict[str, str]) -> bool:
+    haystack = " ".join([bucket_type, bucket_key, *dimensions.values()]).lower()
+    return any(token in haystack for token in COUNTERFACTUAL_SOURCE_TOKENS)
+
+
+def _evidence_grade_for_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]:
+    bucket_type = str(bucket.get("bucket_type") or "")
+    bucket_key = str(bucket.get("bucket_key") or "")
+    dimensions = _source_dimensions(bucket_type, bucket_key)
+    joined_sample = _safe_int(bucket.get("joined_sample"))
+    sample = _safe_int(bucket.get("sample"), joined_sample)
+    join_rate = _safe_float(bucket.get("join_rate"), None)
+    quality = str(bucket.get("source_quality_gate") or "")
+
+    if _is_counterfactual_bucket(bucket_type, bucket_key, dimensions):
+        return {
+            "evidence_grade": EVIDENCE_GRADE_2_COUNTERFACTUAL,
+            "transition_target": "sim_lifecycle_handoff",
+            "grade_reason": "counterfactual_or_missed_entry_source_not_completed_lifecycle_outcome",
+            "source_stage_split_required": False,
+        }
+    if bucket_type in MIXED_BUCKET_TYPES or (
+        stage == "entry"
+        and bucket_type.startswith("combo_")
+        and not dimensions.get("source")
+    ):
+        return {
+            "evidence_grade": EVIDENCE_GRADE_MIXED_SOURCE,
+            "transition_target": "sim_lifecycle_handoff" if (join_rate or 0.0) >= 0.2 else "source_only_keep_collecting",
+            "grade_reason": "source_mix_requires_child_source_stage_split_before_live",
+            "source_stage_split_required": True,
+        }
+    if quality == "pass" and joined_sample > 0 and sample >= joined_sample:
+        return {
+            "evidence_grade": EVIDENCE_GRADE_1_COMPLETED_SIM,
+            "transition_target": "bounded_live_canary_candidate",
+            "grade_reason": "completed_or_joined_lifecycle_outcome_available",
+            "source_stage_split_required": False,
+        }
+    return {
+        "evidence_grade": EVIDENCE_GRADE_SOURCE_ONLY,
+        "transition_target": "source_only_keep_collecting",
+        "grade_reason": "completed_lifecycle_or_source_quality_evidence_insufficient",
+        "source_stage_split_required": False,
+    }
+
+
+def _sim_handoff_allowed(bucket: dict[str, Any], grade: dict[str, Any]) -> bool:
+    quality = str(bucket.get("source_quality_gate") or "")
+    if quality != "pass":
+        return False
+    evidence_grade = str(grade.get("evidence_grade") or "")
+    sample = _safe_int(bucket.get("sample"), _safe_int(bucket.get("joined_sample")))
+    joined_sample = _safe_int(bucket.get("joined_sample"))
+    ev = _safe_float(bucket.get("source_quality_adjusted_ev_pct"), None)
+    if evidence_grade == EVIDENCE_GRADE_2_COUNTERFACTUAL:
+        return sample >= 10 and ev is not None and ev > 1.0
+    if evidence_grade == EVIDENCE_GRADE_MIXED_SOURCE:
+        join_rate = _safe_float(bucket.get("join_rate"), None) or 0.0
+        return joined_sample > 0 and join_rate >= 0.2
+    return False
+
+
+def _classify_bucket(stage: str, bucket: dict[str, Any]) -> tuple[str, str | None, dict[str, Any]]:
     bucket_type = str(bucket.get("bucket_type") or "")
     bucket_key = str(bucket.get("bucket_key") or "")
     route = str(bucket.get("recommended_route") or "")
     quality = str(bucket.get("source_quality_gate") or "")
+    grade = _evidence_grade_for_bucket(stage, bucket)
     if quality != "pass":
-        return "source_only_keep_collecting", None
+        return "source_only_keep_collecting", None, grade
     live_family = _live_family_for(stage, bucket_type, bucket_key)
     ev = _safe_float(bucket.get("source_quality_adjusted_ev_pct"), None)
     if (
-        live_family
-        and stage == "entry"
-        and route == "candidate_recovery_or_relax"
-        and primary_ev_uplift_passes(ev, positive_edge=True)
-    ) or (
+        stage == "entry"
+        and bucket_type == "combo_entry_spot"
+        and bucket_key == ENTRY_LIVE_AUTO_BUCKET_KEY
+    ):
+        if _sim_handoff_allowed(bucket, grade):
+            return "sim_auto_approved", None, grade
+        return "source_only_keep_collecting", None, grade
+    if str(grade.get("evidence_grade") or "") in {EVIDENCE_GRADE_2_COUNTERFACTUAL, EVIDENCE_GRADE_MIXED_SOURCE}:
+        if route in {"candidate_recovery_or_relax", "candidate_tighten_or_exclude"} and _sim_handoff_allowed(bucket, grade):
+            return "sim_auto_approved", None, grade
+        return "source_only_keep_collecting", None, grade
+    if (
         live_family
         and stage == "scale_in"
         and route == "candidate_tighten_or_exclude"
         and primary_ev_uplift_passes(ev, positive_edge=False)
     ):
-        return "live_auto_apply_ready", live_family
+        return "live_auto_apply_ready", live_family, grade
     if "unknown" in bucket_key:
-        return "source_only_keep_collecting", None
+        return "source_only_keep_collecting", None, grade
     if route in {"candidate_recovery_or_relax", "candidate_tighten_or_exclude"}:
-        return "sim_auto_approved", None
-    return "source_only_keep_collecting", None
+        return "sim_auto_approved", None, grade
+    return "source_only_keep_collecting", None, grade
 
 
 def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]:
     bucket_type = str(bucket.get("bucket_type") or "bucket")
     bucket_key = str(bucket.get("bucket_key") or "unknown")
-    state, live_family = _classify_bucket(stage, bucket)
+    state, live_family, grade = _classify_bucket(stage, bucket)
     relation = _relation_for(bucket_type, bucket_key)
     bucket_id = f"{stage}:{bucket_type}:{_slug(bucket_key)}"
     source_bucket_id = _stable_source_bucket_id(stage, bucket_type, bucket_key)
@@ -331,6 +425,22 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
         "bucket_relation": relation,
         "classification_state": state,
         "live_auto_apply_family": live_family,
+        "evidence_grade": grade.get("evidence_grade"),
+        "transition_target": "bounded_live_canary"
+        if state == "live_auto_apply_ready"
+        else grade.get("transition_target"),
+        "grade_reason": grade.get("grade_reason"),
+        "full_real_conversion_allowed": False,
+        "sim_lifecycle_handoff_allowed": state == "sim_auto_approved",
+        "bounded_live_canary_allowed": state == "live_auto_apply_ready",
+        "source_stage_split_required": bool(grade.get("source_stage_split_required")),
+        "archived_live_exception_reason": WAIT6579_LIVE_EXCEPTION_ARCHIVED_REASON
+        if (
+            stage == "entry"
+            and bucket_type == "combo_entry_spot"
+            and bucket_key == ENTRY_LIVE_AUTO_BUCKET_KEY
+        )
+        else None,
         "source_dimensions": _source_dimensions(bucket_type, bucket_key),
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "sample": sample,
@@ -349,13 +459,19 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
         "next_day_mae_pct": _safe_float(bucket.get("next_day_mae_pct"), None),
         "source_quality_gate": bucket.get("source_quality_gate"),
         "recommended_route": bucket.get("recommended_route"),
-        "recommended_action": _recommended_action(str(bucket.get("recommended_route") or "")),
+        "recommended_action": _recommended_action(
+            str(bucket.get("recommended_route") or ""),
+            stage=stage,
+            bucket_type=bucket_type,
+            ev=_safe_float(bucket.get("source_quality_adjusted_ev_pct"), None),
+        ),
         "recommended_resolution": _recommended_resolution(state, bucket),
         "unknown_dimension_counts": bucket.get("unknown_dimension_counts") or {},
         "unknown_reason_counts": bucket.get("unknown_reason_counts") or {},
         "source_field_coverage": bucket.get("source_field_coverage") or {},
         "actual_order_submitted": False,
         "broker_order_forbidden": state != "live_auto_apply_ready",
+        "allowed_runtime_apply": state == "live_auto_apply_ready",
         "decision_authority": (
             "lifecycle_bucket_discovery_live_auto_apply"
             if state == "live_auto_apply_ready"
@@ -414,6 +530,15 @@ def _source_drift_candidates(changes: list[dict[str, Any]]) -> list[dict[str, An
                 "bucket_relation": "new_bucket_candidate",
                 "classification_state": state,
                 "live_auto_apply_family": None,
+                "evidence_grade": EVIDENCE_GRADE_SOURCE_ONLY,
+                "transition_target": "code_improvement_workorder"
+                if state == "code_patch_required"
+                else "source_only_keep_collecting",
+                "grade_reason": "source_contract_drift_not_strategy_outcome_evidence",
+                "full_real_conversion_allowed": False,
+                "sim_lifecycle_handoff_allowed": False,
+                "bounded_live_canary_allowed": False,
+                "source_stage_split_required": False,
                 "source_dimensions": {"change_type": change_type, "subject": subject},
                 "primary_decision_metric": "source_contract_change",
                 "sample": 0,
@@ -429,6 +554,7 @@ def _source_drift_candidates(changes: list[dict[str, Any]]) -> list[dict[str, An
                 "source_field_coverage": {},
                 "actual_order_submitted": False,
                 "broker_order_forbidden": True,
+                "allowed_runtime_apply": False,
                 "decision_authority": "source_contract_drift_detection",
                 "runtime_effect": False,
                 "runtime_effect_after_approval": "none_source_contract_patch_required",
@@ -486,6 +612,17 @@ def _policy_stage_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "bucket_relation": "existing_bucket_refinement",
                 "classification_state": state,
                 "live_auto_apply_family": None,
+                "evidence_grade": EVIDENCE_GRADE_1_COMPLETED_SIM
+                if state == "sim_auto_approved"
+                else EVIDENCE_GRADE_SOURCE_ONLY,
+                "transition_target": "sim_lifecycle_handoff"
+                if state == "sim_auto_approved"
+                else "source_only_keep_collecting",
+                "grade_reason": "stage_policy_source_quality_pass_without_live_bridge",
+                "full_real_conversion_allowed": False,
+                "sim_lifecycle_handoff_allowed": state == "sim_auto_approved",
+                "bounded_live_canary_allowed": False,
+                "source_stage_split_required": False,
                 "source_dimensions": {"policy_key": str(entry.get("policy_key") or stage)},
                 "primary_decision_metric": "stage_ev_composite_pct",
                 "sample": _safe_int(entry.get("sample")),
@@ -502,6 +639,7 @@ def _policy_stage_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "source_field_coverage": {},
                 "actual_order_submitted": False,
                 "broker_order_forbidden": True,
+                "allowed_runtime_apply": False,
                 "decision_authority": "lifecycle_bucket_discovery_stage_policy_sim_auto",
                 "runtime_effect": False,
                 "runtime_effect_after_approval": "sim_only_stage_policy",
@@ -529,6 +667,10 @@ def _build_ai_review_context(report: dict[str, Any]) -> dict[str, Any]:
             "bucket_relation": item.get("bucket_relation"),
             "classification_state": item.get("classification_state"),
             "live_auto_apply_family": item.get("live_auto_apply_family"),
+            "evidence_grade": item.get("evidence_grade"),
+            "transition_target": item.get("transition_target"),
+            "grade_reason": item.get("grade_reason"),
+            "full_real_conversion_allowed": item.get("full_real_conversion_allowed"),
             "source_dimensions": item.get("source_dimensions"),
             "primary_decision_metric": item.get("primary_decision_metric"),
             "joined_sample": item.get("joined_sample"),
@@ -549,9 +691,13 @@ def _build_ai_review_context(report: dict[str, Any]) -> dict[str, Any]:
         "review_policy": {
             "language": "English only. Keep explanations concise to reduce tokens.",
             "no_promotion_authority": "You cannot promote a non-live deterministic candidate to live_auto_apply_ready.",
+            "grade_policy": (
+                "Grade 2 counterfactual and mixed_source candidates cannot become bounded live candidates. "
+                "They can only be source-only or sim lifecycle handoff candidates until completed joined lifecycle outcomes exist."
+            ),
             "non_conservative_live_policy": (
-                "If a deterministic live_auto_apply_ready candidate has any plausible positive effect, including only 1%, "
-                "do not block it solely for low effect size, low confidence, novelty, or ambiguity. Keep live and rely on post-apply verification."
+                "For Grade 1 completed-sim deterministic live_auto_apply_ready candidates, do not block solely for small effect size, "
+                "low confidence, novelty, or ambiguity. Keep live and rely on post-apply verification."
             ),
             "block_only_for_explicit_gaps": (
                 "Block or downgrade a deterministic live candidate only for explicit source-quality, schema, env mapping, runtime hook, "
@@ -582,8 +728,9 @@ def _build_ai_review_instructions() -> str:
         "Do not approve broker orders, provider route changes, bot restarts, cap release, or intraday threshold mutation.\n"
         "Classify existing_bucket_refinement when a bucket is a child/refinement of a known stage taxonomy.\n"
         "Classify new_bucket_candidate when existing taxonomy cannot explain the source dimensions or source contract drift.\n"
-        "Do not be conservative by default. A deterministic live candidate with even a 1% plausible positive effect should not be blocked solely for small effect size, novelty, low confidence, or ambiguity.\n"
-        "When the decision is ambiguous, keep deterministic live candidates live and rely on post-apply verification.\n"
+        "Grade 2 counterfactual and mixed_source candidates cannot become bounded live candidates; keep them source-only or sim lifecycle handoff until completed joined lifecycle outcomes exist.\n"
+        "Do not be conservative by default for Grade 1 completed-sim deterministic live candidates. A Grade 1 deterministic live candidate with even a 1% plausible positive effect should not be blocked solely for small effect size, novelty, low confidence, or ambiguity.\n"
+        "When the decision is ambiguous, keep Grade 1 deterministic live candidates live and rely on post-apply verification.\n"
         "Use runtime_blocked_contract_gap or code_patch_required only for explicit source-quality, source schema, env mapping, runtime hook, post-apply attribution, safety, broker, stale quote, qty/cooldown, provider, cap, forbidden-use, leakage, or missing-contract gaps.\n"
         "live_auto_apply_ready is allowed only if the input bucket already has live_auto_apply_family and deterministic live_auto_apply_ready.\n"
     )
@@ -716,6 +863,7 @@ def _apply_ai_review(
                 item["classification_state"] = "runtime_blocked_contract_gap"
                 item["runtime_effect"] = False
                 item["broker_order_forbidden"] = True
+                item["allowed_runtime_apply"] = False
                 item["ai_review_status"] = ai_status
                 item["ai_tier2_blocked_reason"] = tier2_fail_closed_reason(ai_status)
                 item["recommended_resolution"] = "retry_tier2_review_before_pre_final_auto_apply"
@@ -755,6 +903,7 @@ def _apply_ai_review(
             item["classification_state"] = "runtime_blocked_contract_gap"
             item["runtime_effect"] = False
             item["broker_order_forbidden"] = True
+            item["allowed_runtime_apply"] = False
             item["ai_review_blocked_reason"] = "ai_live_auto_without_deterministic_contract"
             continue
         if final_state in {
@@ -780,6 +929,7 @@ def _apply_ai_review(
             item["classification_state"] = final_state
             item["runtime_effect"] = False if final_state != "live_auto_apply_ready" else item.get("runtime_effect")
             item["broker_order_forbidden"] = final_state != "live_auto_apply_ready"
+            item["allowed_runtime_apply"] = final_state == "live_auto_apply_ready"
             if final_state == "live_auto_apply_ready":
                 contract = item.get("auto_promotion_contract") if isinstance(item.get("auto_promotion_contract"), dict) else {}
                 item["auto_promotion_contract"] = {
@@ -1049,23 +1199,31 @@ def _write_catalog(report: dict[str, Any]) -> None:
 def _write_sim_auto_approval(report: dict[str, Any]) -> None:
     target_date = str(report.get("date") or "")
     SIM_AUTO_APPROVAL_DIR.mkdir(parents=True, exist_ok=True)
+    approved_candidates = [
+        item
+        for item in (report.get("sim_auto_approved_candidates") or [])
+        if isinstance(item, dict) and item.get("bucket_id")
+    ]
+    approved_bucket_ids = [str(item.get("bucket_id")) for item in approved_candidates]
+    grade_counts = Counter(str(item.get("evidence_grade") or "unknown") for item in approved_candidates)
     payload = {
         "schema_version": "lifecycle_bucket_sim_auto_approval_v1",
         "date": target_date,
         "generated_at": report.get("generated_at"),
         "policy_id": "lifecycle_bucket_discovery_sim_auto_approval",
-        "approved": True,
+        "approved": bool(approved_bucket_ids),
         "human_approval_required": False,
         "runtime_effect": False,
+        "allowed_runtime_apply": False,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "decision_authority": "postclose_lifecycle_bucket_discovery_sim_auto",
         "policy_file": str(bucket_catalog_path(target_date)),
-        "approved_bucket_ids": [
-            str(item.get("bucket_id"))
-            for item in (report.get("sim_auto_approved_candidates") or [])
-            if item.get("bucket_id")
-        ],
+        "approved_bucket_ids": approved_bucket_ids,
+        "approved_bucket_count": len(approved_bucket_ids),
+        "approved_evidence_grade_counts": dict(sorted(grade_counts.items())),
+        "source_quality_status": "pass" if approved_bucket_ids else "empty",
+        "blocked_reasons": [] if approved_bucket_ids else ["sim_auto_approved_bucket_missing"],
         "forbidden_uses": [
             "broker_submit",
             "runtime_threshold_apply",

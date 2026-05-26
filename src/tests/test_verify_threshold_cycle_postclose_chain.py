@@ -256,7 +256,7 @@ def test_producer_gap_discovery_handoff_fails_ai_review_or_missing_workorder():
         },
         "code_improvement_orders": [
             {
-                "order_id": "order_producer_gap_discovery_stop_recovery",
+                "order_id": "order_producer_gap_discovery_time_window_policy_exception",
                 "producer_gap_priority": "high",
             }
         ],
@@ -269,7 +269,9 @@ def test_producer_gap_discovery_handoff_fails_ai_review_or_missing_workorder():
     assert "producer_gap_discovery_ai_review_not_parsed" in report["missing"]
     assert "producer_gap_discovery_ai_audit_not_pass" in report["missing"]
     assert "code_improvement_workorder_producer_gap_orders_missing" in report["missing"]
-    assert report["missing_workorder_order_ids"] == ["order_producer_gap_discovery_stop_recovery"]
+    assert report["missing_workorder_order_ids"] == [
+        "order_producer_gap_discovery_time_window_policy_exception"
+    ]
 
 
 def test_producer_gap_discovery_handoff_passes_when_ai_and_workorder_close():
@@ -294,6 +296,35 @@ def test_producer_gap_discovery_handoff_passes_when_ai_and_workorder_close():
 
     assert report["status"] == "pass"
     assert report["missing"] == []
+
+
+def test_producer_gap_discovery_handoff_fails_sim_first_coverage_gap_without_workorder():
+    producer_gap = {
+        "status": "warning",
+        "summary": {
+            "ai_two_pass_review_status": "parsed",
+            "audit_status": "pass",
+            "candidate_count": 1,
+            "workorder_count": 0,
+            "sim_first_coverage_status": "warning",
+        },
+        "producer_gap_candidates": [
+            {
+                "candidate_id": "producer_gap_sim_first_coverage_gap",
+                "pattern_type": "sim_first_coverage_gap",
+                "ai_priority": "high",
+            }
+        ],
+        "code_improvement_orders": [],
+    }
+
+    report = mod._producer_gap_discovery_handoff_status(producer_gap, {"orders": []})
+
+    assert report["status"] == "fail"
+    assert "producer_gap_discovery_sim_first_coverage_handoff_missing" in report["missing"]
+    assert report["missing_workorder_order_ids"] == [
+        "order_producer_gap_discovery_producer_gap_sim_first_coverage_gap"
+    ]
 
 
 def test_bottom_rebound_sim_handoff_passes_when_persisted():

@@ -31,6 +31,7 @@ EV_REPORT_DIR = REPORT_DIR / "threshold_cycle_ev"
 LATENCY_CLASSIFIER_RECOMMENDATION_DIR = REPORT_DIR / "latency_classifier_recommendation"
 PATTERN_LAB_CURRENTNESS_AUDIT_DIR = REPORT_DIR / "pattern_lab_currentness_audit"
 PATTERN_LAB_AI_REVIEW_DIR = REPORT_DIR / "pattern_lab_ai_review"
+TIME_WINDOW_REGIME_COUNTERFACTUAL_DIR = REPORT_DIR / "time_window_regime_counterfactual"
 PRODUCER_GAP_DISCOVERY_DIR = REPORT_DIR / "producer_gap_discovery"
 PATTERN_LAB_PROPAGATION_AUDIT_DIR = REPORT_DIR / "pattern_lab_propagation_audit"
 BUY_FUNNEL_SENTINEL_DIR = REPORT_DIR / "buy_funnel_sentinel"
@@ -1339,6 +1340,11 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
         "pattern_lab_ai_review",
         PATTERN_LAB_AI_REVIEW_DIR,
     )
+    time_window_regime_summary, time_window_regime_path, time_window_regime_warnings = _audit_summary(
+        target_date,
+        "time_window_regime_counterfactual",
+        TIME_WINDOW_REGIME_COUNTERFACTUAL_DIR,
+    )
     producer_gap_discovery_summary, producer_gap_discovery_path, producer_gap_discovery_warnings = _audit_summary(
         target_date,
         "producer_gap_discovery",
@@ -1491,6 +1497,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
         "codebase_performance_workorder": codebase_perf_summary,
         "pattern_lab_currentness_audit": currentness_audit_summary,
         "pattern_lab_ai_review": pattern_lab_ai_review_summary,
+        "time_window_regime_counterfactual": time_window_regime_summary,
         "producer_gap_discovery": producer_gap_discovery_summary,
         "pattern_lab_propagation_audit": propagation_audit_summary,
         "code_improvement_workorder": code_workorder_summary,
@@ -1515,6 +1522,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "codebase_performance_workorder": codebase_perf_path,
             "pattern_lab_currentness_audit": currentness_audit_path,
             "pattern_lab_ai_review": pattern_lab_ai_review_path,
+            "time_window_regime_counterfactual": time_window_regime_path,
             "producer_gap_discovery": producer_gap_discovery_path,
             "pattern_lab_propagation_audit": propagation_audit_path,
             "code_improvement_workorder": code_workorder_path,
@@ -1544,6 +1552,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
                 *codebase_perf_warnings,
                 *currentness_audit_warnings,
                 *pattern_lab_ai_review_warnings,
+                *time_window_regime_warnings,
                 *producer_gap_discovery_warnings,
                 *propagation_audit_warnings,
                 *code_workorder_warnings,
@@ -1749,6 +1758,7 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         "## Pattern Lab Audits",
         f"- currentness: status=`{currentness_audit.get('status')}` fail=`{currentness_audit.get('fail_count')}` orders=`{currentness_audit.get('code_improvement_order_count')}` artifact=`{currentness_audit.get('artifact') or '-'}`",
         f"- ai_review: status=`{pattern_lab_ai_review.get('status')}` orders=`{pattern_lab_ai_review.get('code_improvement_order_count')}` artifact=`{pattern_lab_ai_review.get('artifact') or '-'}`",
+        f"- time_window_regime_counterfactual: status=`{(report.get('time_window_regime_counterfactual') or {}).get('status')}` artifact=`{(report.get('time_window_regime_counterfactual') or {}).get('artifact') or '-'}`",
         f"- producer_gap_discovery: status=`{producer_gap_discovery.get('status')}` orders=`{producer_gap_discovery.get('code_improvement_order_count')}` artifact=`{producer_gap_discovery.get('artifact') or '-'}`",
         f"- propagation: status=`{propagation_audit.get('status')}` fail=`{propagation_audit.get('fail_count')}` warnings=`{propagation_audit.get('warning_count')}` artifact=`{propagation_audit.get('artifact') or '-'}`",
         "",
