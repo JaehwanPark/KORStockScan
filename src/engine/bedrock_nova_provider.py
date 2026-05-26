@@ -466,7 +466,9 @@ def lite_v2_profile_from_env() -> BedrockNovaModelProfile:
 def route_mode_for_model(model_name: str) -> tuple[str, BedrockNovaModelProfile | None]:
     model = str(model_name or "")
     if model == "gpt-5.4-mini":
-        return str(os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "shadow")).strip().lower(), lite_profile_from_env()
+        primary_family = str(os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_PRIMARY_FAMILY", "lite")).strip().lower()
+        profile = lite_v2_profile_from_env() if primary_family in {"lite_v2", "v2", "nova_lite_v2"} else lite_profile_from_env()
+        return str(os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "shadow")).strip().lower(), profile
     return "off", None
 
 

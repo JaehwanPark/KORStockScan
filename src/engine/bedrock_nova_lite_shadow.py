@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from src.engine.bedrock_nova_provider import (
+    LITE_V2_INPUT_USD_PER_1M,
+    LITE_V2_OUTPUT_USD_PER_1M,
     OPENAI_GPT54_MINI_INPUT_USD_PER_1M,
     OPENAI_GPT54_MINI_OUTPUT_USD_PER_1M,
     lite_profile_from_env,
@@ -22,12 +25,15 @@ _RUNTIME_SIGNATURE: tuple[Any, ...] | None = None
 def runtime_manager() -> BedrockNovaShadowManager:
     global _RUNTIME_MANAGER, _RUNTIME_SIGNATURE
     profile = lite_profile_from_env()
+    primary_family = str(os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_PRIMARY_FAMILY", "lite")).strip().lower()
+    v2_primary = primary_family in {"lite_v2", "v2", "nova_lite_v2"}
     signature = (
         env_bool("KORSTOCKSCAN_BEDROCK_NOVA_LITE_SHADOW_ENABLED", False),
         profile,
         env_int("KORSTOCKSCAN_BEDROCK_NOVA_LITE_WORKERS", 1),
         env_int("KORSTOCKSCAN_BEDROCK_NOVA_LITE_QUEUE_MAX", 200),
         env_float("KORSTOCKSCAN_BEDROCK_NOVA_LITE_SAMPLE_RATE", 1.0),
+        primary_family,
     )
     if _RUNTIME_MANAGER is None or _RUNTIME_SIGNATURE != signature:
         _RUNTIME_MANAGER = BedrockNovaShadowManager(
@@ -36,11 +42,13 @@ def runtime_manager() -> BedrockNovaShadowManager:
             event_type=EVENT_TYPE,
             target_model_name=TARGET_MODEL_NAME,
             profile=profile,
-            openai_input_usd_per_1m=OPENAI_GPT54_MINI_INPUT_USD_PER_1M,
-            openai_output_usd_per_1m=OPENAI_GPT54_MINI_OUTPUT_USD_PER_1M,
+            openai_input_usd_per_1m=LITE_V2_INPUT_USD_PER_1M if v2_primary else OPENAI_GPT54_MINI_INPUT_USD_PER_1M,
+            openai_output_usd_per_1m=LITE_V2_OUTPUT_USD_PER_1M if v2_primary else OPENAI_GPT54_MINI_OUTPUT_USD_PER_1M,
             workers=signature[2],
             queue_max=signature[3],
             sample_rate=signature[4],
+            baseline_provider_label="bedrock_nova_lite_v2_primary" if v2_primary else "openai",
+            candidate_provider_label="bedrock_nova_lite_v1_shadow" if v2_primary else "nova",
         )
         _RUNTIME_SIGNATURE = signature
     return _RUNTIME_MANAGER

@@ -77,3 +77,16 @@ def test_lite_v2_profile_defaults_to_inference_profile(monkeypatch):
     profile = mod.lite_v2_profile_from_env()
 
     assert profile.model_id == "global.amazon.nova-2-lite-v1:0"
+
+
+def test_route_mode_for_gpt54_mini_can_select_lite_v2_primary(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "primary")
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_PRIMARY_FAMILY", "lite_v2")
+    monkeypatch.delenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_V2_MODEL_ID", raising=False)
+
+    route_mode, profile = mod.route_mode_for_model("gpt-5.4-mini")
+
+    assert route_mode == "primary"
+    assert profile is not None
+    assert profile.family == "lite_v2"
+    assert profile.model_id == "global.amazon.nova-2-lite-v1:0"

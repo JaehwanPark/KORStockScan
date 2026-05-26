@@ -403,6 +403,59 @@ def test_bedrock_lite_primary_enqueues_lite_v2_shadow(monkeypatch):
     assert captured["request_meta"]["baseline_bedrock_model_id"] == "apac.amazon.nova-lite-v1:0"
 
 
+def test_bedrock_lite_v2_primary_enqueues_lite_v1_shadow(monkeypatch):
+    engine = _build_engine()
+    captured = {}
+
+    class Provider:
+        def converse(self, *, prompt, user_input, profile):
+            return bedrock_nova_provider.BedrockNovaResult(
+                payload={"action": "HOLD", "score": 73, "reason": "lite-v2"},
+                raw_text='{"action":"HOLD","score":73,"reason":"lite-v2"}',
+                parse_ok=True,
+                parse_error="",
+                model_id=profile.model_id,
+                region_name=profile.region_name,
+                key_index=0,
+                latency_ms=100,
+                input_tokens=20,
+                output_tokens=8,
+                cache_read_input_tokens=0,
+                cache_write_input_tokens=0,
+                total_input_tokens=20,
+                estimated_cost_usd=0.2,
+                attempted_key_count=1,
+            )
+
+    def _capture_shadow(**kwargs):
+        captured.update(kwargs)
+        return True
+
+    from src.engine import bedrock_nova_lite_shadow
+
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "primary")
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_PRIMARY_FAMILY", "lite_v2")
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_PRIMARY_ENDPOINTS", "holding_flow")
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_SHADOW_ENABLED", "true")
+    monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
+    monkeypatch.setattr(bedrock_nova_provider, "write_provider_audit_row", lambda row: None)
+    monkeypatch.setattr(bedrock_nova_lite_shadow, "enqueue_runtime_shadow", _capture_shadow)
+
+    result = GPTSniperEngine._call_openai_safe(
+        engine,
+        "PROMPT",
+        "payload",
+        require_json=True,
+        context_name="test",
+        model_override="gpt-5.4-mini",
+        endpoint_name="holding_flow",
+    )
+
+    assert result["reason"] == "lite-v2"
+    assert captured["openai_payload"]["reason"] == "lite-v2"
+    assert captured["request_meta"]["baseline_bedrock_model_id"] == "global.amazon.nova-2-lite-v1:0"
+
+
 def test_bedrock_primary_does_not_route_other_models(monkeypatch):
     engine = _build_engine()
     captured = {}
