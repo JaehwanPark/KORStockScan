@@ -147,6 +147,9 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         / "pattern_lab_currentness_audit"
         / f"pattern_lab_currentness_audit_{target_date}.json",
         "pattern_lab_ai_review": REPORT_DIR / "pattern_lab_ai_review" / f"pattern_lab_ai_review_{target_date}.json",
+        "producer_gap_discovery": REPORT_DIR
+        / "producer_gap_discovery"
+        / f"producer_gap_discovery_{target_date}.json",
         "pattern_lab_propagation_audit": REPORT_DIR
         / "pattern_lab_propagation_audit"
         / f"pattern_lab_propagation_audit_{target_date}.json",
@@ -774,6 +777,60 @@ def _buy_funnel_submit_drought_handoff_status(
     }
 
 
+def _producer_gap_discovery_handoff_status(
+    producer_gap: dict[str, Any],
+    workorder: dict[str, Any],
+) -> dict[str, Any]:
+    if not producer_gap:
+        return {
+            "status": "missing",
+            "expected_workorder_order_ids": [],
+            "actual_workorder_order_ids": [],
+            "missing_workorder_order_ids": [],
+            "ai_two_pass_review_status": "missing",
+            "interpretation": "producer_gap_discovery artifact missing",
+        }
+    summary = producer_gap.get("summary") if isinstance(producer_gap.get("summary"), dict) else {}
+    ai_status = str(summary.get("ai_two_pass_review_status") or "").strip()
+    audit_status = str(summary.get("audit_status") or "").strip()
+    expected_order_ids = {
+        str(item.get("order_id"))
+        for item in (producer_gap.get("code_improvement_orders") if isinstance(producer_gap.get("code_improvement_orders"), list) else [])
+        if isinstance(item, dict)
+        and item.get("order_id")
+        and str(item.get("producer_gap_priority") or "high") in {"critical", "high"}
+    }
+    actual_order_ids = {
+        str(item.get("order_id"))
+        for item in (workorder.get("orders") if isinstance(workorder.get("orders"), list) else [])
+        if isinstance(item, dict) and item.get("order_id")
+    }
+    missing_order_ids = sorted(expected_order_ids - actual_order_ids)
+    missing: list[str] = []
+    if producer_gap.get("status") == "fail":
+        missing.append("producer_gap_discovery_ai_review_failed")
+    if ai_status != "parsed":
+        missing.append("producer_gap_discovery_ai_review_not_parsed")
+    if audit_status != "pass":
+        missing.append("producer_gap_discovery_ai_audit_not_pass")
+    if missing_order_ids:
+        missing.append("code_improvement_workorder_producer_gap_orders_missing")
+    return {
+        "status": "fail" if missing else "pass",
+        "missing": missing,
+        "expected_workorder_order_ids": sorted(expected_order_ids),
+        "actual_workorder_order_ids": sorted(actual_order_ids),
+        "missing_workorder_order_ids": missing_order_ids,
+        "ai_two_pass_review_status": ai_status or "missing",
+        "audit_status": audit_status or "missing",
+        "candidate_count": summary.get("candidate_count"),
+        "workorder_count": summary.get("workorder_count"),
+        "interpretation": (
+            "producer gap high-priority orders propagated to code improvement workorder with parsed AI review"
+            if not missing
+            else "producer gap discovery failed closed or workorder handoff is missing"
+        ),
+    }
 def _scale_in_bucket_handoff_status(
     ldm_report: dict[str, Any],
     ev_report: dict[str, Any],
@@ -1068,6 +1125,7 @@ def build_threshold_cycle_postclose_verification(
     buy_funnel_report = _load_json(paths["buy_funnel_sentinel"])
     currentness_audit = _load_json(paths["pattern_lab_currentness_audit"])
     pattern_lab_ai_review = _load_json(paths["pattern_lab_ai_review"])
+    producer_gap_discovery = _load_json(paths["producer_gap_discovery"])
     propagation_audit = _load_json(paths["pattern_lab_propagation_audit"])
     ldm_report = _load_json(paths["lifecycle_decision_matrix"])
     discovery_report = _load_json(paths["lifecycle_bucket_discovery"])
@@ -1132,6 +1190,9 @@ def build_threshold_cycle_postclose_verification(
     )
     if swing_lifecycle_handoff.get("status") == "fail":
         log_issues.append("swing_lifecycle_handoff_missing")
+    producer_gap_handoff = _producer_gap_discovery_handoff_status(producer_gap_discovery, workorder)
+    if producer_gap_handoff.get("status") == "fail":
+        log_issues.append("producer_gap_discovery_handoff_missing")
 
     lineage = workorder.get("lineage") if isinstance(workorder.get("lineage"), dict) else {}
     workorder_snapshot = {
@@ -1170,6 +1231,9 @@ def build_threshold_cycle_postclose_verification(
         ),
         "threshold_cycle_ev_sources_pattern_lab_ai_review": (
             ((ev_report.get("sources") or {}).get("pattern_lab_ai_review")) or None
+        ),
+        "threshold_cycle_ev_sources_producer_gap_discovery": (
+            ((ev_report.get("sources") or {}).get("producer_gap_discovery")) or None
         ),
         "threshold_cycle_ev_sources_pattern_lab_propagation_audit": (
             ((ev_report.get("sources") or {}).get("pattern_lab_propagation_audit")) or None
@@ -1228,6 +1292,8 @@ def build_threshold_cycle_postclose_verification(
             required_execution_flags = (*required_execution_flags, key)
     if done_line and "pattern_lab_ai_review" in execution_flags and "pattern_lab_ai_review" not in missing_execution_flags:
         required_execution_flags = (*required_execution_flags, "pattern_lab_ai_review")
+    if done_line and "producer_gap_discovery" in execution_flags and "producer_gap_discovery" not in missing_execution_flags:
+        required_execution_flags = (*required_execution_flags, "producer_gap_discovery")
     if done_line and "runtime_apply_gap_audit" in execution_flags and "runtime_apply_gap_audit" not in missing_execution_flags:
         required_execution_flags = (*required_execution_flags, "runtime_apply_gap_audit")
     disabled_stage_flags = [
@@ -1240,6 +1306,7 @@ def build_threshold_cycle_postclose_verification(
             "deepseek_swing_lab",
             "pattern_lab_currentness_audit",
             "pattern_lab_ai_review",
+            "producer_gap_discovery",
             "pattern_lab_propagation_audit",
             "scalp_entry_adm",
             "lifecycle_decision_matrix",
@@ -1254,6 +1321,7 @@ def build_threshold_cycle_postclose_verification(
     disabled_artifact_labels = {
         "pattern_lab_currentness_audit" if "pattern_lab_currentness_audit" in disabled_stage_flags else "",
         "pattern_lab_ai_review" if "pattern_lab_ai_review" in disabled_stage_flags else "",
+        "producer_gap_discovery" if "producer_gap_discovery" in disabled_stage_flags else "",
         "pattern_lab_propagation_audit" if "pattern_lab_propagation_audit" in disabled_stage_flags else "",
         "scalp_entry_action_decision_matrix" if "scalp_entry_adm" in disabled_stage_flags else "",
         "lifecycle_decision_matrix" if "lifecycle_decision_matrix" in disabled_stage_flags else "",
@@ -1273,6 +1341,8 @@ def build_threshold_cycle_postclose_verification(
         disabled_artifact_labels.add("swing_lifecycle_bucket_discovery")
     if "pattern_lab_ai_review" not in execution_flags:
         disabled_artifact_labels.add("pattern_lab_ai_review")
+    if "producer_gap_discovery" not in execution_flags:
+        disabled_artifact_labels.add("producer_gap_discovery")
     disabled_artifact_labels.discard("")
     missing_required_artifacts = [
         item["label"]
@@ -1297,6 +1367,10 @@ def build_threshold_cycle_postclose_verification(
     if "pattern_lab_ai_review" not in execution_flags or "pattern_lab_ai_review" in disabled_stage_flags:
         missing_downstream_links = [
             key for key in missing_downstream_links if "pattern_lab_ai_review" not in key
+        ]
+    if "producer_gap_discovery" not in execution_flags or "producer_gap_discovery" in disabled_stage_flags:
+        missing_downstream_links = [
+            key for key in missing_downstream_links if "producer_gap_discovery" not in key
         ]
     if "pattern_lab_propagation_audit" in disabled_stage_flags:
         missing_downstream_links = [
@@ -1367,6 +1441,13 @@ def build_threshold_cycle_postclose_verification(
         ):
             stale_downstream_links.append("threshold_cycle_ev_stale_before_pattern_lab_ai_review")
         if (
+            "producer_gap_discovery" in execution_flags
+            and "producer_gap_discovery" not in disabled_stage_flags
+            and downstream_links.get("threshold_cycle_ev_sources_producer_gap_discovery")
+            and _consumer_stale(ev_report, producer_gap_discovery)
+        ):
+            stale_downstream_links.append("threshold_cycle_ev_stale_before_producer_gap_discovery")
+        if (
             "pattern_lab_propagation_audit" not in disabled_stage_flags
             and downstream_links.get("threshold_cycle_ev_sources_pattern_lab_propagation_audit")
             and _consumer_stale(ev_report, propagation_audit)
@@ -1394,6 +1475,8 @@ def build_threshold_cycle_postclose_verification(
         stale_downstream_links = [key for key in stale_downstream_links if "pattern_lab_currentness_audit" not in key]
     if "pattern_lab_ai_review" not in execution_flags or "pattern_lab_ai_review" in disabled_stage_flags:
         stale_downstream_links = [key for key in stale_downstream_links if "pattern_lab_ai_review" not in key]
+    if "producer_gap_discovery" not in execution_flags or "producer_gap_discovery" in disabled_stage_flags:
+        stale_downstream_links = [key for key in stale_downstream_links if "producer_gap_discovery" not in key]
     if "pattern_lab_propagation_audit" in disabled_stage_flags:
         stale_downstream_links = [key for key in stale_downstream_links if "pattern_lab_propagation_audit" not in key]
     if "daily_ev" in disabled_stage_flags or "runtime_approval_summary" in disabled_stage_flags:
@@ -1512,6 +1595,7 @@ def build_threshold_cycle_postclose_verification(
         "overnight_source_present": overnight_source_present,
         "lifecycle_bucket_discovery_handoff": lifecycle_bucket_discovery_handoff,
         "swing_lifecycle_handoff": swing_lifecycle_handoff,
+        "producer_gap_discovery_handoff": producer_gap_handoff,
     }
 
 
@@ -1542,6 +1626,11 @@ def _render_markdown(report: dict[str, Any]) -> str:
     swing_lifecycle = (
         report.get("swing_lifecycle_handoff")
         if isinstance(report.get("swing_lifecycle_handoff"), dict)
+        else {}
+    )
+    producer_gap = (
+        report.get("producer_gap_discovery_handoff")
+        if isinstance(report.get("producer_gap_discovery_handoff"), dict)
         else {}
     )
     lines = [
@@ -1647,6 +1736,15 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- missing_workorder_order_ids: `{swing_lifecycle.get('missing_workorder_order_ids') or []}`",
         f"- daily_simulation_consumed: `{swing_lifecycle.get('daily_simulation_consumed')}`",
         f"- interpretation: `{swing_lifecycle.get('interpretation') or '-'}`",
+        "",
+        "## Producer Gap Discovery Handoff",
+        f"- status: `{producer_gap.get('status') or '-'}`",
+        f"- ai_two_pass_review_status: `{producer_gap.get('ai_two_pass_review_status') or '-'}`",
+        f"- audit_status: `{producer_gap.get('audit_status') or '-'}`",
+        f"- expected_workorder_order_ids: `{producer_gap.get('expected_workorder_order_ids') or []}`",
+        f"- missing_workorder_order_ids: `{producer_gap.get('missing_workorder_order_ids') or []}`",
+        f"- missing: `{producer_gap.get('missing') or []}`",
+        f"- interpretation: `{producer_gap.get('interpretation') or '-'}`",
         "",
         "## Workorder Snapshot",
         f"- generation_id: `{workorder.get('generation_id') or '-'}`",

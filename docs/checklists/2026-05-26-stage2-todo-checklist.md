@@ -149,6 +149,12 @@
   - 금지: AI review ambiguity 또는 source-only warning을 runtime mutation, threshold/order/provider/bot 변경, 자동 approval artifact 생성으로 연결하지 않는다.
   - 다음 액션: `source_only_no_workorder`, `workorder_surface_required`, `fail_runtime_mutation_leak` 중 하나로 닫는다.
 
+- [ ] `[ProducerGapDiscoveryPostclose0526] missing producer 자동 발굴 및 workorder handoff 확인` (`Due: 2026-05-26`, `Slot: POSTCLOSE`, `TimeWindow: 17:25~17:35`, `Track: RuntimeStability`)
+  - Source: [producer_gap_discovery.py](/home/ubuntu/KORStockScan/src/engine/producer_gap_discovery.py), [build_code_improvement_workorder.py](/home/ubuntu/KORStockScan/src/engine/build_code_improvement_workorder.py), [verify_threshold_cycle_postclose_chain.py](/home/ubuntu/KORStockScan/src/engine/verify_threshold_cycle_postclose_chain.py), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
+  - 판정 기준: `producer_gap_discovery_2026-05-26.json`이 `runtime_effect=false`, `allowed_runtime_apply=false`, `actual_order_submitted=false`, `broker_order_forbidden=true`로 생성되고, AI two-pass review가 `parsed` 및 audit `pass`로 닫힌다. high-priority `code_improvement_orders`가 있으면 `code_improvement_workorder_2026-05-26.json` selected order에 포함되고 verifier가 `producer_gap_discovery_handoff.status=pass`로 닫는다.
+  - 금지: missing producer 후보를 실주문 enable, threshold mutation, provider change, bot restart, cap release, entry/exit override 근거로 사용하지 않는다. AI unavailable/parse reject/audit fail은 경고 지속이 아니라 fail-closed로 처리한다.
+  - 다음 액션: `pass_workorder_handoff`, `fail_ai_review`, `fail_workorder_handoff`, `source_only_no_candidate` 중 하나로 닫는다.
+
 - [ ] `[HumanInterventionSummary0526] 자동화체인 사용자 개입 요구사항 분류 및 누락 확인` (`Due: 2026-05-26`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:15`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-22.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-22.json), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
   - 판정 기준: 개입사항을 `approval_artifact_required|created|missing|blocked_by_policy|observe_only`, `Codex 구현 필요`, `수동 동기화 필요`, `관찰만`으로 분류한다.

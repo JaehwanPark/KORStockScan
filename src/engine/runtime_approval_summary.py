@@ -19,6 +19,7 @@ SUMMARY_DIR = REPORT_DIR / "runtime_approval_summary"
 SWING_RUNTIME_APPROVAL_DIR = REPORT_DIR / "swing_runtime_approval"
 PATTERN_LAB_CURRENTNESS_AUDIT_DIR = REPORT_DIR / "pattern_lab_currentness_audit"
 PATTERN_LAB_AI_REVIEW_DIR = REPORT_DIR / "pattern_lab_ai_review"
+PRODUCER_GAP_DISCOVERY_DIR = REPORT_DIR / "producer_gap_discovery"
 PATTERN_LAB_PROPAGATION_AUDIT_DIR = REPORT_DIR / "pattern_lab_propagation_audit"
 SWING_RUNTIME_APPROVAL_ARTIFACT_DIR = Path(__file__).resolve().parents[2] / "data" / "threshold_cycle" / "approvals"
 BOT_HISTORY_LOG = Path(__file__).resolve().parents[2] / "logs" / "bot_history.log"
@@ -1558,9 +1559,11 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     calibration_report = _load_json(Path(str(calibration_source))) if calibration_source else {}
     currentness_path = Path(str(sources.get("pattern_lab_currentness_audit"))) if sources.get("pattern_lab_currentness_audit") else PATTERN_LAB_CURRENTNESS_AUDIT_DIR / f"pattern_lab_currentness_audit_{target_date}.json"
     pattern_lab_ai_review_path = Path(str(sources.get("pattern_lab_ai_review"))) if sources.get("pattern_lab_ai_review") else PATTERN_LAB_AI_REVIEW_DIR / f"pattern_lab_ai_review_{target_date}.json"
+    producer_gap_discovery_path = Path(str(sources.get("producer_gap_discovery"))) if sources.get("producer_gap_discovery") else PRODUCER_GAP_DISCOVERY_DIR / f"producer_gap_discovery_{target_date}.json"
     propagation_path = Path(str(sources.get("pattern_lab_propagation_audit"))) if sources.get("pattern_lab_propagation_audit") else PATTERN_LAB_PROPAGATION_AUDIT_DIR / f"pattern_lab_propagation_audit_{target_date}.json"
     currentness_audit = _audit_summary(currentness_path)
     pattern_lab_ai_review = _audit_summary(pattern_lab_ai_review_path)
+    producer_gap_discovery = _audit_summary(producer_gap_discovery_path)
     propagation_audit = _audit_summary(propagation_path)
     scalping_rows = _scalping_rows(ev_report, calibration_report)
     swing_rows = _swing_rows(swing_report)
@@ -1596,6 +1599,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             "institutional_flow_context": institutional_flow_path,
             "pattern_lab_currentness_audit": str(currentness_path) if currentness_path.exists() else None,
             "pattern_lab_ai_review": str(pattern_lab_ai_review_path) if pattern_lab_ai_review_path.exists() else None,
+            "producer_gap_discovery": str(producer_gap_discovery_path) if producer_gap_discovery_path.exists() else None,
             "pattern_lab_propagation_audit": str(propagation_path) if propagation_path.exists() else None,
         },
         "source_load_diagnostics": _JSON_LOAD_DIAGNOSTICS.copy(),
@@ -1616,6 +1620,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             ),
             "pattern_lab_currentness_status": currentness_audit.get("status"),
             "pattern_lab_ai_review_status": pattern_lab_ai_review.get("status"),
+            "producer_gap_discovery_status": producer_gap_discovery.get("status"),
             "pattern_lab_propagation_status": propagation_audit.get("status"),
             "scalp_entry_adm_status": (
                 (ev_report.get("scalp_entry_action_decision_matrix") or {}).get("status")
@@ -1693,6 +1698,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
         "institutional_flow_context": institutional_flow_summary,
         "pattern_lab_currentness_audit": currentness_audit,
         "pattern_lab_ai_review": pattern_lab_ai_review,
+        "producer_gap_discovery": producer_gap_discovery,
         "pattern_lab_propagation_audit": propagation_audit,
         "scalping": scalping_rows,
         "swing": swing_rows,
@@ -1710,6 +1716,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
                 "institutional_flow_context_missing" if not institutional_flow_path else "",
                 "pattern_lab_currentness_audit_missing" if not currentness_path.exists() else "",
                 "pattern_lab_ai_review_missing" if not pattern_lab_ai_review_path.exists() else "",
+                "producer_gap_discovery_missing" if not producer_gap_discovery_path.exists() else "",
                 "pattern_lab_propagation_audit_missing" if not propagation_path.exists() else "",
                 *source_load_warnings,
             ]
@@ -1789,6 +1796,7 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
     )
     currentness = report.get("pattern_lab_currentness_audit") if isinstance(report.get("pattern_lab_currentness_audit"), dict) else {}
     pattern_lab_ai_review = report.get("pattern_lab_ai_review") if isinstance(report.get("pattern_lab_ai_review"), dict) else {}
+    producer_gap_discovery = report.get("producer_gap_discovery") if isinstance(report.get("producer_gap_discovery"), dict) else {}
     propagation = report.get("pattern_lab_propagation_audit") if isinstance(report.get("pattern_lab_propagation_audit"), dict) else {}
     source_load_diagnostics = (
         report.get("source_load_diagnostics") if isinstance(report.get("source_load_diagnostics"), list) else []
@@ -1812,6 +1820,7 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         f"- institutional_flow_available/join_rate: `{summary.get('institutional_flow_available')}` / `{summary.get('institutional_flow_join_rate_pct')}`",
         f"- pattern_lab_currentness_status: `{summary.get('pattern_lab_currentness_status')}`",
         f"- pattern_lab_ai_review_status: `{summary.get('pattern_lab_ai_review_status')}`",
+        f"- producer_gap_discovery_status: `{summary.get('producer_gap_discovery_status')}`",
         f"- pattern_lab_propagation_status: `{summary.get('pattern_lab_propagation_status')}`",
         f"- env_generated_at: `{timing.get('env_generated_at') or '-'}`",
         f"- first_bot_start_at: `{timing.get('first_bot_start_at') or '-'}`",
@@ -1897,6 +1906,7 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         "## Pattern Lab Audits",
         f"- currentness: status=`{currentness.get('status')}` fail=`{currentness.get('fail_count')}` artifact=`{currentness.get('artifact') or '-'}`",
         f"- ai_review: status=`{pattern_lab_ai_review.get('status')}` artifact=`{pattern_lab_ai_review.get('artifact') or '-'}`",
+        f"- producer_gap_discovery: status=`{producer_gap_discovery.get('status')}` artifact=`{producer_gap_discovery.get('artifact') or '-'}`",
         f"- propagation: status=`{propagation.get('status')}` fail=`{propagation.get('fail_count')}` warnings=`{propagation.get('warning_count')}` artifact=`{propagation.get('artifact') or '-'}`",
     ]
     warnings = report.get("warnings") if isinstance(report.get("warnings"), list) else []

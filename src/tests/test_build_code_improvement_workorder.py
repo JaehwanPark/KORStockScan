@@ -335,6 +335,74 @@ def test_build_code_improvement_workorder_consumes_pattern_lab_ai_review(tmp_pat
     )
 
 
+def test_build_code_improvement_workorder_force_selects_producer_gap_orders(tmp_path, monkeypatch):
+    automation_dir = tmp_path / "automation"
+    producer_gap_dir = tmp_path / "producer-gap"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    automation_dir.mkdir()
+    producer_gap_dir.mkdir()
+    (automation_dir / "scalping_pattern_lab_automation_2026-05-26.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-26",
+                "code_improvement_orders": [
+                    {
+                        "order_id": "order_low_priority_normal",
+                        "title": "low priority normal",
+                        "priority": 1,
+                        "runtime_effect": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (producer_gap_dir / "producer_gap_discovery_2026-05-26.json").write_text(
+        json.dumps(
+            {
+                "status": "warning",
+                "summary": {"workorder_count": 1},
+                "code_improvement_orders": [
+                    {
+                        "order_id": "order_producer_gap_discovery_stop_recovery",
+                        "title": "Implement missing producer: stop recovery",
+                        "target_subsystem": "postclose_source_producer",
+                        "priority": 10,
+                        "producer_gap_priority": "high",
+                        "route": "implement_now",
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
+    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-observation-audit")
+    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness")
+    monkeypatch.setattr(mod, "PATTERN_LAB_AI_REVIEW_DIR", tmp_path / "missing-ai-review")
+    monkeypatch.setattr(mod, "PRODUCER_GAP_DISCOVERY_DIR", producer_gap_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-26", max_orders=1)
+
+    decisions = {item["order_id"]: item["decision"] for item in report["orders"]}
+    assert decisions["order_producer_gap_discovery_stop_recovery"] == "implement_now"
+    assert report["summary"]["producer_gap_discovery_source_order_count"] == 1
+    assert report["summary"]["producer_gap_discovery_high_priority_selected"] is True
+    assert report["source"]["producer_gap_discovery"] == str(
+        producer_gap_dir / "producer_gap_discovery_2026-05-26.json"
+    )
+
+
 def test_build_code_improvement_workorder_auto_selects_buy_funnel_submit_drought(
     tmp_path, monkeypatch
 ):

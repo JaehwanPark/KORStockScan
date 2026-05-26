@@ -28,6 +28,7 @@ OBSERVATION_SOURCE_QUALITY_AUDIT_DIR = REPORT_DIR / "observation_source_quality_
 CODEBASE_PERFORMANCE_WORKORDER_DIR = REPORT_DIR / "codebase_performance_workorder"
 PATTERN_LAB_CURRENTNESS_AUDIT_DIR = REPORT_DIR / "pattern_lab_currentness_audit"
 BUY_FUNNEL_SENTINEL_DIR = REPORT_DIR / "buy_funnel_sentinel"
+PRODUCER_GAP_DISCOVERY_DIR = REPORT_DIR / "producer_gap_discovery"
 CODE_IMPROVEMENT_WORKORDER_DIR = PROJECT_ROOT / "docs" / "code-improvement-workorders"
 CODE_IMPROVEMENT_WORKORDER_REPORT_DIR = REPORT_DIR / "code_improvement_workorder"
 WORKORDER_SCHEMA_VERSION = 1
@@ -200,6 +201,10 @@ def pattern_lab_ai_review_report_path(target_date: str) -> Path:
 
 def buy_funnel_sentinel_report_path(target_date: str) -> Path:
     return BUY_FUNNEL_SENTINEL_DIR / f"buy_funnel_sentinel_{target_date}.json"
+
+
+def producer_gap_discovery_report_path(target_date: str) -> Path:
+    return PRODUCER_GAP_DISCOVERY_DIR / f"producer_gap_discovery_{target_date}.json"
 
 
 def _finding_maps(report: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
@@ -381,6 +386,23 @@ def _classify_order(
             route=route or "instrumentation_order",
             confidence=confidence or "consensus",
             automation_reentry="After implementation, rerun pattern labs, currentness audit, workorder, EV, and propagation audit.",
+        )
+
+    if order.get("source_report_type") == "producer_gap_discovery":
+        return ClassifiedOrder(
+            order=order,
+            decision="implement_now",
+            reason=(
+                "producer gap discovery high-priority order is source-only missing producer work; "
+                "implementation still requires Codex implement_now and cannot mutate runtime/order/provider/bot state"
+            ),
+            mapped_family=mapped_family,
+            route=route or "implement_now",
+            confidence=confidence or "ai_two_pass_review",
+            automation_reentry=(
+                "After implementation, rerun producer_gap_discovery, code improvement workorder, "
+                "threshold EV, runtime summary, and postclose verifier."
+            ),
         )
 
     if (
@@ -2190,6 +2212,8 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     pattern_lab_currentness = _load_json(pattern_lab_currentness_path)
     pattern_lab_ai_review_path = pattern_lab_ai_review_report_path(target_date)
     pattern_lab_ai_review = _load_json(pattern_lab_ai_review_path)
+    producer_gap_discovery_path = producer_gap_discovery_report_path(target_date)
+    producer_gap_discovery = _load_json(producer_gap_discovery_path)
     buy_funnel_sentinel_path = buy_funnel_sentinel_report_path(target_date)
     buy_funnel_sentinel = _load_json(buy_funnel_sentinel_path)
     calibration_source_path = _calibration_report_path_from_ev(ev_report)
@@ -2209,6 +2233,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "codebase_performance_workorder": codebase_performance_path,
             "pattern_lab_currentness_audit": pattern_lab_currentness_path,
             "pattern_lab_ai_review": pattern_lab_ai_review_path,
+            "producer_gap_discovery": producer_gap_discovery_path,
             "buy_funnel_sentinel": buy_funnel_sentinel_path,
     }
     ev_sources = ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
@@ -2281,6 +2306,11 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         for item in (pattern_lab_ai_review.get("code_improvement_orders") or [])
         if isinstance(item, dict)
     ]
+    producer_gap_discovery_orders = [
+        {**item, "source_report_type": "producer_gap_discovery"}
+        for item in (producer_gap_discovery.get("code_improvement_orders") or [])
+        if isinstance(item, dict)
+    ]
     buy_funnel_sentinel_orders = _buy_funnel_sentinel_followup_orders(buy_funnel_sentinel)
     buy_funnel_sentinel_order_ids = {
         str(order.get("order_id"))
@@ -2317,6 +2347,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         *swing_lifecycle_bucket_discovery_orders,
         *pattern_lab_currentness_orders,
         *pattern_lab_ai_review_orders,
+        *producer_gap_discovery_orders,
         *lifecycle_entry_bucket_orders,
         *lifecycle_submit_bucket_orders,
         *lifecycle_scale_in_bucket_orders,
@@ -2362,6 +2393,12 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         str(order.get("order_id"))
         for order in pattern_lab_ai_review_orders
         if order.get("order_id")
+    )
+    required_handoff_order_ids.update(
+        str(order.get("order_id"))
+        for order in producer_gap_discovery_orders
+        if order.get("order_id")
+        and str(order.get("producer_gap_priority") or "high") in {"critical", "high"}
     )
     required_handoff_order_ids.update(
         str(order.get("order_id"))
@@ -2436,6 +2473,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             if pattern_lab_currentness_path.exists()
             else None,
             "pattern_lab_ai_review": str(pattern_lab_ai_review_path) if pattern_lab_ai_review_path.exists() else None,
+            "producer_gap_discovery": str(producer_gap_discovery_path) if producer_gap_discovery_path.exists() else None,
             "buy_funnel_sentinel": str(buy_funnel_sentinel_path) if buy_funnel_sentinel_path.exists() else None,
             "threshold_cycle_calibration": str(calibration_source_path)
             if calibration_source_path and calibration_source_path.exists()
@@ -2468,6 +2506,16 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "swing_lifecycle_bucket_discovery_source_order_count": len(swing_lifecycle_bucket_discovery_orders),
             "pattern_lab_currentness_source_order_count": len(pattern_lab_currentness_orders),
             "pattern_lab_ai_review_source_order_count": len(pattern_lab_ai_review_orders),
+            "producer_gap_discovery_source_order_count": len(producer_gap_discovery_orders),
+            "producer_gap_discovery_status": producer_gap_discovery.get("status"),
+            "producer_gap_discovery_high_priority_selected": bool(
+                {
+                    str(order.get("order_id"))
+                    for order in producer_gap_discovery_orders
+                    if order.get("order_id")
+                    and str(order.get("producer_gap_priority") or "high") in {"critical", "high"}
+                }.issubset(selected_order_ids)
+            ),
             "threshold_ev_source_order_count": len(threshold_ev_orders),
             "lifecycle_entry_bucket_source_order_count": len(lifecycle_entry_bucket_orders),
             "lifecycle_submit_bucket_source_order_count": len(lifecycle_submit_bucket_orders),
@@ -2618,6 +2666,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- codebase_performance_workorder: `{source.get('codebase_performance_workorder') or '-'}`",
         f"- pattern_lab_currentness_audit: `{source.get('pattern_lab_currentness_audit') or '-'}`",
         f"- pattern_lab_ai_review: `{source.get('pattern_lab_ai_review') or '-'}`",
+        f"- producer_gap_discovery: `{source.get('producer_gap_discovery') or '-'}`",
         f"- buy_funnel_sentinel: `{source.get('buy_funnel_sentinel') or '-'}`",
         f"- generated_at: `{report.get('generated_at')}`",
         f"- generation_id: `{report.get('generation_id')}`",

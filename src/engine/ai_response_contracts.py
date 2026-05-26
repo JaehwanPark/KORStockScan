@@ -661,6 +661,68 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
         },
         "required": ["schema_version", "reviewer", "candidate_reviews", "audit", "codex_directives"],
     },
+    "producer_gap_discovery_ai_review_v1": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "schema_version": {"type": "integer", "enum": [1]},
+            "reviewer": {"type": "string", "enum": ["producer_gap_discovery_ai_review"]},
+            "candidate_reviews": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "candidate_id": {"type": "string"},
+                        "pattern_type": {
+                            "type": "string",
+                            "enum": [
+                                "stop_recovery_counterfactual_missing",
+                                "missed_fill_recovery_counterfactual_missing",
+                                "swing_sim_probe_label_gap_missing",
+                                "scale_in_counterfactual_gap_missing",
+                            ],
+                        },
+                        "priority": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+                        "recommended_route": {
+                            "type": "string",
+                            "enum": ["implement_now", "defer_evidence", "block_source_quality"],
+                        },
+                        "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+                        "target_subsystem": {"type": "string"},
+                        "reason": {"type": "string"},
+                        "implementation_requirements": {"type": "array", "items": {"type": "string"}},
+                        "acceptance_tests": {"type": "array", "items": {"type": "string"}},
+                        "files_likely_touched": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": [
+                        "candidate_id",
+                        "pattern_type",
+                        "priority",
+                        "recommended_route",
+                        "confidence",
+                        "target_subsystem",
+                        "reason",
+                        "implementation_requirements",
+                        "acceptance_tests",
+                        "files_likely_touched",
+                    ],
+                },
+            },
+            "audit": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "status": {"type": "string", "enum": ["pass", "correction_required", "insufficient_context"]},
+                    "issues": {"type": "array", "items": {"type": "string"}},
+                    "forbidden_use_violations": {"type": "array", "items": {"type": "string"}},
+                    "reason": {"type": "string"},
+                },
+                "required": ["status", "issues", "forbidden_use_violations", "reason"],
+            },
+        },
+        "required": ["schema_version", "reviewer", "candidate_reviews", "audit"],
+    },
     "lifecycle_ai_context_v1": {
         "type": "object",
         "additionalProperties": False,

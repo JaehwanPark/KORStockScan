@@ -245,6 +245,57 @@ def test_buy_funnel_submit_drought_handoff_passes_when_surfaced():
     assert report["missing"] == []
 
 
+def test_producer_gap_discovery_handoff_fails_ai_review_or_missing_workorder():
+    producer_gap = {
+        "status": "fail",
+        "summary": {
+            "ai_two_pass_review_status": "parse_rejected",
+            "audit_status": "correction_required",
+            "candidate_count": 1,
+            "workorder_count": 1,
+        },
+        "code_improvement_orders": [
+            {
+                "order_id": "order_producer_gap_discovery_stop_recovery",
+                "producer_gap_priority": "high",
+            }
+        ],
+    }
+
+    report = mod._producer_gap_discovery_handoff_status(producer_gap, {"orders": []})
+
+    assert report["status"] == "fail"
+    assert "producer_gap_discovery_ai_review_failed" in report["missing"]
+    assert "producer_gap_discovery_ai_review_not_parsed" in report["missing"]
+    assert "producer_gap_discovery_ai_audit_not_pass" in report["missing"]
+    assert "code_improvement_workorder_producer_gap_orders_missing" in report["missing"]
+    assert report["missing_workorder_order_ids"] == ["order_producer_gap_discovery_stop_recovery"]
+
+
+def test_producer_gap_discovery_handoff_passes_when_ai_and_workorder_close():
+    producer_gap = {
+        "status": "warning",
+        "summary": {
+            "ai_two_pass_review_status": "parsed",
+            "audit_status": "pass",
+            "candidate_count": 1,
+            "workorder_count": 1,
+        },
+        "code_improvement_orders": [
+            {
+                "order_id": "order_producer_gap_discovery_scale_in",
+                "producer_gap_priority": "high",
+            }
+        ],
+    }
+    workorder = {"orders": [{"order_id": "order_producer_gap_discovery_scale_in"}]}
+
+    report = mod._producer_gap_discovery_handoff_status(producer_gap, workorder)
+
+    assert report["status"] == "pass"
+    assert report["missing"] == []
+
+
 def test_swing_entry_bottleneck_handoff_fails_when_downstream_missing():
     matrix = {
         "input_contract": {"swing_daily_simulation_consumed": False},
