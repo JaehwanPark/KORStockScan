@@ -1,16 +1,16 @@
 {
-  "timestamp": "2026-05-26T10:12:07.507980",
-  "vix_close": 16.59000015258789,
-  "vix_ma3": 16.68333371480306,
+  "timestamp": "2026-05-26T16:46:07.638553",
+  "vix_close": 16.889999389648438,
+  "vix_ma3": 16.726666768391926,
   "vix_peak_passed": false,
-  "vix_two_day_down": true,
+  "vix_two_day_down": false,
   "vix_extreme": false,
-  "wti_close": 91.66999816894531,
-  "wti_rsi": 41.846790368065335,
-  "wti_macd": 0.3184512256422778,
-  "wti_macd_signal": 1.4964449105501245,
+  "wti_close": 92.80000305175781,
+  "wti_rsi": 43.273551761948,
+  "wti_macd": 0.41036544848405754,
+  "wti_macd_signal": 1.5170642599112176,
   "wti_dead_cross": false,
-  "wti_from_recent_high_pct": -15.635933112975419,
+  "wti_from_recent_high_pct": -14.595987553681699,
   "oil_reversal": true,
   "oil_pullback_relief": true,
   "fng_value": 58.5714285714286,
@@ -21,10 +21,10 @@
   "allow_swing_entry": false,
   "swing_score": 35,
   "swing_entry_recovery_gate_score": 35,
-  "market_regime_continuous_score": 69.1957,
+  "market_regime_continuous_score": 68.8957,
   "market_regime_continuous_label": "RISK_ON",
   "market_regime_component_scores": {
-    "vix_level": 23.41,
+    "vix_level": 23.11,
     "fear_greed_level": 14.2857,
     "domestic_breadth": 20.9,
     "oil_relief": 10.0,
@@ -58,7 +58,7 @@
         "neutral_min_score": 45.0
       },
       "component_scores": {
-        "vix_level": 23.41,
+        "vix_level": 23.11,
         "fear_greed_level": 14.2857,
         "domestic_breadth": 20.9,
         "oil_relief": 10.0,
@@ -85,5 +85,5 @@
     "local_breadth_signal": "none"
   },
   "cached_session_date": "2026-05-26",
-  "cached_at": "2026-05-26T10:12:07.520078+09:00"
+  "cached_at": "2026-05-26T16:46:07.644817+09:00"
 }

@@ -159,6 +159,12 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "producer_gap_discovery": REPORT_DIR
         / "producer_gap_discovery"
         / f"producer_gap_discovery_{target_date}.json",
+        "stage_hook_workorder_discovery": REPORT_DIR
+        / "stage_hook_workorder_discovery"
+        / f"stage_hook_workorder_discovery_{target_date}.json",
+        "stage_hook_runtime_scaffold": REPORT_DIR
+        / "stage_hook_runtime_scaffold"
+        / f"stage_hook_runtime_scaffold_{target_date}.json",
         "time_window_regime_counterfactual": REPORT_DIR
         / "time_window_regime_counterfactual"
         / f"time_window_regime_counterfactual_{target_date}.json",
@@ -868,6 +874,98 @@ def _producer_gap_discovery_handoff_status(
     }
 
 
+def _stage_hook_workorder_handoff_status(
+    stage_hook: dict[str, Any],
+    producer_gap: dict[str, Any],
+    workorder: dict[str, Any],
+) -> dict[str, Any]:
+    if not stage_hook:
+        return {
+            "status": "missing",
+            "expected_workorder_order_ids": [],
+            "actual_workorder_order_ids": [],
+            "missing_workorder_order_ids": [],
+            "ai_two_pass_review_status": "missing",
+            "interpretation": "stage_hook_workorder_discovery artifact missing",
+        }
+    summary = stage_hook.get("summary") if isinstance(stage_hook.get("summary"), dict) else {}
+    ai_review = stage_hook.get("ai_two_pass_review") if isinstance(stage_hook.get("ai_two_pass_review"), dict) else {}
+    provider_status = ai_review.get("provider_status") if isinstance(ai_review.get("provider_status"), dict) else {}
+    ai_status = str(summary.get("ai_two_pass_review_status") or "").strip()
+    audit_status = str(summary.get("audit_status") or "").strip()
+    ai_provider = str(ai_review.get("provider") or summary.get("provider") or provider_status.get("provider") or "").strip()
+    ai_provider_status = str(provider_status.get("status") or "").strip()
+    expected_order_ids = {
+        str(item.get("order_id"))
+        for item in (stage_hook.get("code_improvement_orders") if isinstance(stage_hook.get("code_improvement_orders"), list) else [])
+        if isinstance(item, dict)
+        and item.get("order_id")
+        and (
+            str(item.get("stage_hook_priority") or "high") in {"critical", "high"}
+            or (item.get("stage_hook_candidate_contract") or {}).get("readiness_tier")
+            == "implementation_workorder_ready"
+        )
+    }
+    actual_order_ids = {
+        str(item.get("order_id"))
+        for item in (workorder.get("orders") if isinstance(workorder.get("orders"), list) else [])
+        if isinstance(item, dict) and item.get("order_id")
+    }
+    missing_order_ids = sorted(expected_order_ids - actual_order_ids)
+    consumed_ids = set((stage_hook.get("context") or {}).get("consumed_candidate_ids") or [])
+    producer_hook_ids = {
+        str(item.get("candidate_id") or "")
+        for item in (producer_gap.get("producer_gap_candidates") if isinstance(producer_gap.get("producer_gap_candidates"), list) else [])
+        if isinstance(item, dict)
+        and (
+            isinstance(item.get("runtime_hook_candidate_contract"), dict)
+            or str(item.get("pattern_type") or "") in {
+                "sim_entry_selection_gap_missing",
+                "sim_submit_fill_quality_gap_missing",
+                "sim_holding_runner_gap_missing",
+                "sim_exit_plateau_breakdown_gap_missing",
+                "sim_stop_recovery_gap_missing",
+                "sim_scale_in_counterfactual_gap_missing",
+                "sim_time_window_exception_gap_missing",
+                "sim_source_quality_join_gap_missing",
+            }
+        )
+    }
+    unconsumed_hook_candidate_ids = sorted(item for item in producer_hook_ids - consumed_ids if item)
+    missing: list[str] = []
+    if stage_hook.get("status") == "fail":
+        missing.append("stage_hook_workorder_discovery_ai_review_failed")
+    if ai_status != "parsed":
+        missing.append("stage_hook_workorder_discovery_ai_review_not_parsed")
+    if audit_status != "pass":
+        missing.append("stage_hook_workorder_discovery_ai_audit_not_pass")
+    if ai_provider != "openai" or ai_provider_status != "success":
+        missing.append("stage_hook_workorder_discovery_tier2_provider_review_missing")
+    if missing_order_ids:
+        missing.append("stage_hook_workorder_handoff_missing")
+    if unconsumed_hook_candidate_ids:
+        missing.append("stage_hook_candidate_contract_unconsumed")
+    return {
+        "status": "fail" if missing else "pass",
+        "missing": missing,
+        "expected_workorder_order_ids": sorted(expected_order_ids),
+        "actual_workorder_order_ids": sorted(actual_order_ids),
+        "missing_workorder_order_ids": missing_order_ids,
+        "unconsumed_hook_candidate_ids": unconsumed_hook_candidate_ids,
+        "ai_two_pass_review_status": ai_status or "missing",
+        "audit_status": audit_status or "missing",
+        "provider": ai_provider or "missing",
+        "provider_status": ai_provider_status or "missing",
+        "candidate_count": summary.get("candidate_count"),
+        "workorder_count": summary.get("workorder_count"),
+        "interpretation": (
+            "stage hook implementation-ready orders propagated to code improvement workorder"
+            if not missing
+            else "stage hook discovery failed closed or workorder handoff is missing"
+        ),
+    }
+
+
 def _bottom_rebound_sim_handoff_status(sim_report: dict[str, Any]) -> dict[str, Any]:
     if not sim_report:
         return {
@@ -1222,6 +1320,7 @@ def build_threshold_cycle_postclose_verification(
     currentness_audit = _load_json(paths["pattern_lab_currentness_audit"])
     pattern_lab_ai_review = _load_json(paths["pattern_lab_ai_review"])
     producer_gap_discovery = _load_json(paths["producer_gap_discovery"])
+    stage_hook_workorder_discovery = _load_json(paths["stage_hook_workorder_discovery"])
     propagation_audit = _load_json(paths["pattern_lab_propagation_audit"])
     swing_strategy_discovery_sim = _load_json(paths["swing_strategy_discovery_sim"])
     ldm_report = _load_json(paths["lifecycle_decision_matrix"])
@@ -1290,6 +1389,17 @@ def build_threshold_cycle_postclose_verification(
     producer_gap_handoff = _producer_gap_discovery_handoff_status(producer_gap_discovery, workorder)
     if producer_gap_handoff.get("status") == "fail":
         log_issues.append("producer_gap_discovery_handoff_missing")
+    stage_hook_handoff = _stage_hook_workorder_handoff_status(
+        stage_hook_workorder_discovery,
+        producer_gap_discovery,
+        workorder,
+    )
+    preliminary_execution_flags = _parse_bool_flags(done_line or "")
+    if (
+        preliminary_execution_flags.get("stage_hook_workorder_discovery") is True
+        and stage_hook_handoff.get("status") == "fail"
+    ):
+        log_issues.append("stage_hook_workorder_handoff_missing")
     bottom_rebound_sim_handoff = _bottom_rebound_sim_handoff_status(swing_strategy_discovery_sim)
     if bottom_rebound_sim_handoff.get("status") == "fail":
         log_issues.append("bottom_rebound_sim_handoff_missing")
@@ -1334,6 +1444,12 @@ def build_threshold_cycle_postclose_verification(
         ),
         "threshold_cycle_ev_sources_producer_gap_discovery": (
             ((ev_report.get("sources") or {}).get("producer_gap_discovery")) or None
+        ),
+        "threshold_cycle_ev_sources_stage_hook_workorder_discovery": (
+            ((ev_report.get("sources") or {}).get("stage_hook_workorder_discovery")) or None
+        ),
+        "threshold_cycle_ev_sources_stage_hook_runtime_scaffold": (
+            ((ev_report.get("sources") or {}).get("stage_hook_runtime_scaffold")) or None
         ),
         "threshold_cycle_ev_sources_pattern_lab_propagation_audit": (
             ((ev_report.get("sources") or {}).get("pattern_lab_propagation_audit")) or None
@@ -1396,6 +1512,18 @@ def build_threshold_cycle_postclose_verification(
         required_execution_flags = (*required_execution_flags, "producer_gap_discovery")
     if (
         done_line
+        and "stage_hook_workorder_discovery" in execution_flags
+        and "stage_hook_workorder_discovery" not in missing_execution_flags
+    ):
+        required_execution_flags = (*required_execution_flags, "stage_hook_workorder_discovery")
+    if (
+        done_line
+        and "stage_hook_runtime_scaffold" in execution_flags
+        and "stage_hook_runtime_scaffold" not in missing_execution_flags
+    ):
+        required_execution_flags = (*required_execution_flags, "stage_hook_runtime_scaffold")
+    if (
+        done_line
         and "time_window_regime_counterfactual" in execution_flags
         and "time_window_regime_counterfactual" not in missing_execution_flags
     ):
@@ -1415,6 +1543,8 @@ def build_threshold_cycle_postclose_verification(
             "pattern_lab_ai_review",
             "time_window_regime_counterfactual",
             "producer_gap_discovery",
+            "stage_hook_workorder_discovery",
+            "stage_hook_runtime_scaffold",
             "pattern_lab_propagation_audit",
             "scalp_entry_adm",
             "lifecycle_decision_matrix",
@@ -1431,6 +1561,8 @@ def build_threshold_cycle_postclose_verification(
         "pattern_lab_ai_review" if "pattern_lab_ai_review" in disabled_stage_flags else "",
         "time_window_regime_counterfactual" if "time_window_regime_counterfactual" in disabled_stage_flags else "",
         "producer_gap_discovery" if "producer_gap_discovery" in disabled_stage_flags else "",
+        "stage_hook_workorder_discovery" if "stage_hook_workorder_discovery" in disabled_stage_flags else "",
+        "stage_hook_runtime_scaffold" if "stage_hook_runtime_scaffold" in disabled_stage_flags else "",
         "pattern_lab_propagation_audit" if "pattern_lab_propagation_audit" in disabled_stage_flags else "",
         "scalp_entry_action_decision_matrix" if "scalp_entry_adm" in disabled_stage_flags else "",
         "lifecycle_decision_matrix" if "lifecycle_decision_matrix" in disabled_stage_flags else "",
@@ -1457,6 +1589,10 @@ def build_threshold_cycle_postclose_verification(
         disabled_artifact_labels.add("time_window_regime_counterfactual")
     if "producer_gap_discovery" not in execution_flags:
         disabled_artifact_labels.add("producer_gap_discovery")
+    if "stage_hook_workorder_discovery" not in execution_flags:
+        disabled_artifact_labels.add("stage_hook_workorder_discovery")
+    if "stage_hook_runtime_scaffold" not in execution_flags:
+        disabled_artifact_labels.add("stage_hook_runtime_scaffold")
     disabled_artifact_labels.discard("")
     missing_required_artifacts = [
         item["label"]
@@ -1485,6 +1621,14 @@ def build_threshold_cycle_postclose_verification(
     if "producer_gap_discovery" not in execution_flags or "producer_gap_discovery" in disabled_stage_flags:
         missing_downstream_links = [
             key for key in missing_downstream_links if "producer_gap_discovery" not in key
+        ]
+    if "stage_hook_workorder_discovery" not in execution_flags or "stage_hook_workorder_discovery" in disabled_stage_flags:
+        missing_downstream_links = [
+            key for key in missing_downstream_links if "stage_hook_workorder_discovery" not in key
+        ]
+    if "stage_hook_runtime_scaffold" not in execution_flags or "stage_hook_runtime_scaffold" in disabled_stage_flags:
+        missing_downstream_links = [
+            key for key in missing_downstream_links if "stage_hook_runtime_scaffold" not in key
         ]
     if "pattern_lab_propagation_audit" in disabled_stage_flags:
         missing_downstream_links = [
@@ -1591,6 +1735,10 @@ def build_threshold_cycle_postclose_verification(
         stale_downstream_links = [key for key in stale_downstream_links if "pattern_lab_ai_review" not in key]
     if "producer_gap_discovery" not in execution_flags or "producer_gap_discovery" in disabled_stage_flags:
         stale_downstream_links = [key for key in stale_downstream_links if "producer_gap_discovery" not in key]
+    if "stage_hook_workorder_discovery" not in execution_flags or "stage_hook_workorder_discovery" in disabled_stage_flags:
+        stale_downstream_links = [key for key in stale_downstream_links if "stage_hook_workorder_discovery" not in key]
+    if "stage_hook_runtime_scaffold" not in execution_flags or "stage_hook_runtime_scaffold" in disabled_stage_flags:
+        stale_downstream_links = [key for key in stale_downstream_links if "stage_hook_runtime_scaffold" not in key]
     if "pattern_lab_propagation_audit" in disabled_stage_flags:
         stale_downstream_links = [key for key in stale_downstream_links if "pattern_lab_propagation_audit" not in key]
     if "daily_ev" in disabled_stage_flags or "runtime_approval_summary" in disabled_stage_flags:
@@ -1710,6 +1858,7 @@ def build_threshold_cycle_postclose_verification(
         "lifecycle_bucket_discovery_handoff": lifecycle_bucket_discovery_handoff,
         "swing_lifecycle_handoff": swing_lifecycle_handoff,
         "producer_gap_discovery_handoff": producer_gap_handoff,
+        "stage_hook_workorder_handoff": stage_hook_handoff,
         "bottom_rebound_sim_handoff": bottom_rebound_sim_handoff,
     }
 
@@ -1746,6 +1895,11 @@ def _render_markdown(report: dict[str, Any]) -> str:
     producer_gap = (
         report.get("producer_gap_discovery_handoff")
         if isinstance(report.get("producer_gap_discovery_handoff"), dict)
+        else {}
+    )
+    stage_hook = (
+        report.get("stage_hook_workorder_handoff")
+        if isinstance(report.get("stage_hook_workorder_handoff"), dict)
         else {}
     )
     bottom_rebound = (
@@ -1865,6 +2019,16 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- missing_workorder_order_ids: `{producer_gap.get('missing_workorder_order_ids') or []}`",
         f"- missing: `{producer_gap.get('missing') or []}`",
         f"- interpretation: `{producer_gap.get('interpretation') or '-'}`",
+        "",
+        "## Stage Hook Workorder Handoff",
+        f"- status: `{stage_hook.get('status') or '-'}`",
+        f"- ai_two_pass_review_status: `{stage_hook.get('ai_two_pass_review_status') or '-'}`",
+        f"- audit_status: `{stage_hook.get('audit_status') or '-'}`",
+        f"- expected_workorder_order_ids: `{stage_hook.get('expected_workorder_order_ids') or []}`",
+        f"- missing_workorder_order_ids: `{stage_hook.get('missing_workorder_order_ids') or []}`",
+        f"- unconsumed_hook_candidate_ids: `{stage_hook.get('unconsumed_hook_candidate_ids') or []}`",
+        f"- missing: `{stage_hook.get('missing') or []}`",
+        f"- interpretation: `{stage_hook.get('interpretation') or '-'}`",
         "",
         "## Bottom Rebound Sim Handoff",
         f"- status: `{bottom_rebound.get('status') or '-'}`",

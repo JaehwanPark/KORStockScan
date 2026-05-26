@@ -104,6 +104,8 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     perf_source_idx = script.index("src.engine.codebase_performance_workorder_report")
     time_window_idx = script.index("src.engine.automation.time_window_regime_counterfactual")
     producer_gap_idx = script.index("src.engine.automation.producer_gap_discovery")
+    stage_hook_idx = script.index("src.engine.automation.stage_hook_workorder_discovery")
+    stage_hook_scaffold_idx = script.index("src.engine.automation.stage_hook_runtime_scaffold")
     pre_ev_idx = script.index('run_threshold_cycle_ev_and_wait "pre_workorder"')
     workorder_idx = script.index("src.engine.build_code_improvement_workorder")
     post_ev_idx = script.index('run_threshold_cycle_ev_and_wait "post_workorder_refresh"')
@@ -126,6 +128,8 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         < perf_source_idx
         < time_window_idx
         < producer_gap_idx
+        < stage_hook_idx
+        < stage_hook_scaffold_idx
         < pre_ev_idx
         < workorder_idx
         < post_ev_idx
@@ -138,6 +142,8 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     assert 'RUN_PATTERN_LAB_PROPAGATION_AUDIT="${THRESHOLD_CYCLE_RUN_PATTERN_LAB_PROPAGATION_AUDIT:-true}"' in script
     assert 'RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL="${THRESHOLD_CYCLE_RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL:-true}"' in script
     assert 'RUN_PRODUCER_GAP_DISCOVERY="${THRESHOLD_CYCLE_RUN_PRODUCER_GAP_DISCOVERY:-true}"' in script
+    assert 'RUN_STAGE_HOOK_WORKORDER_DISCOVERY="${THRESHOLD_CYCLE_RUN_STAGE_HOOK_WORKORDER_DISCOVERY:-true}"' in script
+    assert 'RUN_STAGE_HOOK_RUNTIME_SCAFFOLD="${THRESHOLD_CYCLE_RUN_STAGE_HOOK_RUNTIME_SCAFFOLD:-true}"' in script
     assert 'RUN_SCALP_ENTRY_ADM="${THRESHOLD_CYCLE_RUN_SCALP_ENTRY_ADM:-true}"' in script
     assert 'RUN_LIFECYCLE_DECISION_MATRIX="${THRESHOLD_CYCLE_RUN_LIFECYCLE_DECISION_MATRIX:-true}"' in script
     assert 'RUN_LIFECYCLE_AI_CONTEXT="${THRESHOLD_CYCLE_RUN_LIFECYCLE_AI_CONTEXT:-true}"' in script
@@ -148,6 +154,8 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     assert "runtime_apply_bridge=$RUN_RUNTIME_APPLY_BRIDGE" in script
     assert "time_window_regime_counterfactual=$RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL" in script
     assert "producer_gap_discovery=$RUN_PRODUCER_GAP_DISCOVERY" in script
+    assert "stage_hook_workorder_discovery=$RUN_STAGE_HOOK_WORKORDER_DISCOVERY" in script
+    assert "stage_hook_runtime_scaffold=$RUN_STAGE_HOOK_RUNTIME_SCAFFOLD" in script
     assert "swing_lifecycle_matrix=$RUN_SWING_LIFECYCLE_MATRIX" in script
     assert "swing_lifecycle_bucket_discovery=$RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY" in script
 
@@ -162,6 +170,31 @@ def test_postclose_wrapper_treats_producer_gap_fail_closed_as_report_artifact():
 
     assert producer_gap_idx < nonfatal_idx < artifact_idx < ev_idx
     assert "downstream verification will consume artifact" in script
+
+
+def test_postclose_wrapper_treats_stage_hook_fail_closed_as_report_artifact():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+
+    producer_gap_idx = script.index("src.engine.automation.producer_gap_discovery")
+    stage_hook_idx = script.index("src.engine.automation.stage_hook_workorder_discovery")
+    nonfatal_idx = script.index("stage hook workorder discovery returned fail-closed report (non-fatal)")
+    artifact_idx = script.index('"$PROJECT_DIR/data/report/stage_hook_workorder_discovery/stage_hook_workorder_discovery_${TARGET_DATE}.json"')
+    ev_idx = script.index('run_threshold_cycle_ev_and_wait "pre_workorder"')
+
+    assert producer_gap_idx < stage_hook_idx < nonfatal_idx < artifact_idx < ev_idx
+    assert "downstream verification will consume artifact" in script
+
+
+def test_postclose_wrapper_runs_stage_hook_scaffold_before_workorder_ev():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+
+    stage_hook_idx = script.index("src.engine.automation.stage_hook_workorder_discovery")
+    scaffold_idx = script.index("src.engine.automation.stage_hook_runtime_scaffold")
+    nonfatal_idx = script.index("stage hook runtime scaffold returned fail-closed report (non-fatal)")
+    artifact_idx = script.index('"$PROJECT_DIR/data/report/stage_hook_runtime_scaffold/stage_hook_runtime_scaffold_${TARGET_DATE}.json"')
+    ev_idx = script.index('run_threshold_cycle_ev_and_wait "pre_workorder"')
+
+    assert stage_hook_idx < scaffold_idx < nonfatal_idx < artifact_idx < ev_idx
 
 
 def test_postclose_wrapper_refreshes_market_breadth_before_panic_reports():
@@ -205,6 +238,8 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert '"$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/time_window_regime_counterfactual/time_window_regime_counterfactual_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/producer_gap_discovery/producer_gap_discovery_${TARGET_DATE}.json"' in script
+    assert '"$PROJECT_DIR/data/report/stage_hook_workorder_discovery/stage_hook_workorder_discovery_${TARGET_DATE}.json"' in script
+    assert '"$PROJECT_DIR/data/report/stage_hook_runtime_scaffold/stage_hook_runtime_scaffold_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_${TARGET_DATE}.json"' in script

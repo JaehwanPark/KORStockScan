@@ -111,6 +111,65 @@ def test_lifecycle_bucket_discovery_handoff_detects_missing_downstream():
     assert "code_improvement_workorder_lifecycle_bucket_discovery_orders_missing" in report["missing"]
 
 
+def test_stage_hook_workorder_handoff_detects_missing_selected_order():
+    stage_hook = {
+        "status": "warning",
+        "summary": {"ai_two_pass_review_status": "parsed", "audit_status": "pass"},
+        "ai_two_pass_review": {
+            "provider": "openai",
+            "provider_status": {"provider": "openai", "status": "success"},
+        },
+        "context": {"consumed_candidate_ids": ["producer_gap_sim_holding_runner_gap_missing"]},
+        "code_improvement_orders": [
+            {
+                "order_id": "order_stage_hook_runner",
+                "stage_hook_priority": "high",
+                "stage_hook_candidate_contract": {"readiness_tier": "implementation_workorder_ready"},
+            }
+        ],
+    }
+    producer_gap = {
+        "producer_gap_candidates": [
+            {
+                "candidate_id": "producer_gap_sim_holding_runner_gap_missing",
+                "pattern_type": "sim_holding_runner_gap_missing",
+            }
+        ]
+    }
+
+    report = mod._stage_hook_workorder_handoff_status(stage_hook, producer_gap, {"orders": []})
+
+    assert report["status"] == "fail"
+    assert report["missing_workorder_order_ids"] == ["order_stage_hook_runner"]
+    assert "stage_hook_workorder_handoff_missing" in report["missing"]
+
+
+def test_stage_hook_workorder_handoff_allows_blocked_source_quality_without_order():
+    stage_hook = {
+        "status": "pass",
+        "summary": {"ai_two_pass_review_status": "parsed", "audit_status": "pass"},
+        "ai_two_pass_review": {
+            "provider": "openai",
+            "provider_status": {"provider": "openai", "status": "success"},
+        },
+        "context": {"consumed_candidate_ids": ["producer_gap_sim_source_quality_join_gap_missing"]},
+        "code_improvement_orders": [],
+    }
+    producer_gap = {
+        "producer_gap_candidates": [
+            {
+                "candidate_id": "producer_gap_sim_source_quality_join_gap_missing",
+                "pattern_type": "sim_source_quality_join_gap_missing",
+            }
+        ]
+    }
+
+    report = mod._stage_hook_workorder_handoff_status(stage_hook, producer_gap, {"orders": []})
+
+    assert report["status"] == "pass"
+    assert report["missing_workorder_order_ids"] == []
+
+
 def test_lifecycle_bucket_discovery_handoff_surfaces_ai_followup_without_fail():
     discovery = {
         "summary": {

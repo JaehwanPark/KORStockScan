@@ -1,0 +1,14 @@
+artifact_uri: file:///home/ubuntu/KORStockScan/data/model_registry/swing_v2/mlruns/542730445547806220/88d0cdfab13244799aabe7796625a853/artifacts
+end_time: 1779784398509
+entry_point_name: ''
+experiment_id: '542730445547806220'
+lifecycle_stage: active
+run_id: 88d0cdfab13244799aabe7796625a853
+run_name: optuna_lgbm_ranker_v1:2026-05-26
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1779784398484
+status: 3
+tags: []
+user_id: ubuntu

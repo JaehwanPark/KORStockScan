@@ -33,6 +33,8 @@ PATTERN_LAB_CURRENTNESS_AUDIT_DIR = REPORT_DIR / "pattern_lab_currentness_audit"
 PATTERN_LAB_AI_REVIEW_DIR = REPORT_DIR / "pattern_lab_ai_review"
 TIME_WINDOW_REGIME_COUNTERFACTUAL_DIR = REPORT_DIR / "time_window_regime_counterfactual"
 PRODUCER_GAP_DISCOVERY_DIR = REPORT_DIR / "producer_gap_discovery"
+STAGE_HOOK_WORKORDER_DISCOVERY_DIR = REPORT_DIR / "stage_hook_workorder_discovery"
+STAGE_HOOK_RUNTIME_SCAFFOLD_DIR = REPORT_DIR / "stage_hook_runtime_scaffold"
 PATTERN_LAB_PROPAGATION_AUDIT_DIR = REPORT_DIR / "pattern_lab_propagation_audit"
 BUY_FUNNEL_SENTINEL_DIR = REPORT_DIR / "buy_funnel_sentinel"
 
@@ -1350,6 +1352,16 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
         "producer_gap_discovery",
         PRODUCER_GAP_DISCOVERY_DIR,
     )
+    stage_hook_workorder_summary, stage_hook_workorder_path, stage_hook_workorder_warnings = _audit_summary(
+        target_date,
+        "stage_hook_workorder_discovery",
+        STAGE_HOOK_WORKORDER_DISCOVERY_DIR,
+    )
+    stage_hook_scaffold_summary, stage_hook_scaffold_path, stage_hook_scaffold_warnings = _audit_summary(
+        target_date,
+        "stage_hook_runtime_scaffold",
+        STAGE_HOOK_RUNTIME_SCAFFOLD_DIR,
+    )
     propagation_audit_summary, propagation_audit_path, propagation_audit_warnings = _audit_summary(
         target_date,
         "pattern_lab_propagation_audit",
@@ -1499,6 +1511,8 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
         "pattern_lab_ai_review": pattern_lab_ai_review_summary,
         "time_window_regime_counterfactual": time_window_regime_summary,
         "producer_gap_discovery": producer_gap_discovery_summary,
+        "stage_hook_workorder_discovery": stage_hook_workorder_summary,
+        "stage_hook_runtime_scaffold": stage_hook_scaffold_summary,
         "pattern_lab_propagation_audit": propagation_audit_summary,
         "code_improvement_workorder": code_workorder_summary,
         "sources": {
@@ -1524,6 +1538,8 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "pattern_lab_ai_review": pattern_lab_ai_review_path,
             "time_window_regime_counterfactual": time_window_regime_path,
             "producer_gap_discovery": producer_gap_discovery_path,
+            "stage_hook_workorder_discovery": stage_hook_workorder_path,
+            "stage_hook_runtime_scaffold": stage_hook_scaffold_path,
             "pattern_lab_propagation_audit": propagation_audit_path,
             "code_improvement_workorder": code_workorder_path,
             "missed_probe_counterfactual": wait6579_counterfactual_path,
@@ -1554,7 +1570,9 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
                 *pattern_lab_ai_review_warnings,
                 *time_window_regime_warnings,
                 *producer_gap_discovery_warnings,
-                *propagation_audit_warnings,
+            *stage_hook_workorder_warnings,
+            *stage_hook_scaffold_warnings,
+            *propagation_audit_warnings,
                 *code_workorder_warnings,
                 *source_load_warnings,
             ]
@@ -1760,6 +1778,7 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- ai_review: status=`{pattern_lab_ai_review.get('status')}` orders=`{pattern_lab_ai_review.get('code_improvement_order_count')}` artifact=`{pattern_lab_ai_review.get('artifact') or '-'}`",
         f"- time_window_regime_counterfactual: status=`{(report.get('time_window_regime_counterfactual') or {}).get('status')}` artifact=`{(report.get('time_window_regime_counterfactual') or {}).get('artifact') or '-'}`",
         f"- producer_gap_discovery: status=`{producer_gap_discovery.get('status')}` orders=`{producer_gap_discovery.get('code_improvement_order_count')}` artifact=`{producer_gap_discovery.get('artifact') or '-'}`",
+        f"- stage_hook_workorder_discovery: status=`{(report.get('stage_hook_workorder_discovery') or {}).get('status')}` orders=`{(report.get('stage_hook_workorder_discovery') or {}).get('code_improvement_order_count')}` artifact=`{(report.get('stage_hook_workorder_discovery') or {}).get('artifact') or '-'}`",
         f"- propagation: status=`{propagation_audit.get('status')}` fail=`{propagation_audit.get('fail_count')}` warnings=`{propagation_audit.get('warning_count')}` artifact=`{propagation_audit.get('artifact') or '-'}`",
         "",
         "## Swing Runtime Approval",

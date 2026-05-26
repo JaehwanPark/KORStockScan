@@ -29,6 +29,8 @@ CODEBASE_PERFORMANCE_WORKORDER_DIR = REPORT_DIR / "codebase_performance_workorde
 PATTERN_LAB_CURRENTNESS_AUDIT_DIR = REPORT_DIR / "pattern_lab_currentness_audit"
 BUY_FUNNEL_SENTINEL_DIR = REPORT_DIR / "buy_funnel_sentinel"
 PRODUCER_GAP_DISCOVERY_DIR = REPORT_DIR / "producer_gap_discovery"
+STAGE_HOOK_WORKORDER_DISCOVERY_DIR = REPORT_DIR / "stage_hook_workorder_discovery"
+STAGE_HOOK_RUNTIME_SCAFFOLD_DIR = REPORT_DIR / "stage_hook_runtime_scaffold"
 CODE_IMPROVEMENT_WORKORDER_DIR = PROJECT_ROOT / "docs" / "code-improvement-workorders"
 CODE_IMPROVEMENT_WORKORDER_REPORT_DIR = REPORT_DIR / "code_improvement_workorder"
 WORKORDER_SCHEMA_VERSION = 1
@@ -207,6 +209,14 @@ def producer_gap_discovery_report_path(target_date: str) -> Path:
     return PRODUCER_GAP_DISCOVERY_DIR / f"producer_gap_discovery_{target_date}.json"
 
 
+def stage_hook_workorder_discovery_report_path(target_date: str) -> Path:
+    return STAGE_HOOK_WORKORDER_DISCOVERY_DIR / f"stage_hook_workorder_discovery_{target_date}.json"
+
+
+def stage_hook_runtime_scaffold_report_path(target_date: str) -> Path:
+    return STAGE_HOOK_RUNTIME_SCAFFOLD_DIR / f"stage_hook_runtime_scaffold_{target_date}.json"
+
+
 def _implementation_marker_from_attribution(attribution: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
     implementation_status = "implemented" if attribution.get("implementation_status") == "implemented" else None
     implementation_provenance = (
@@ -247,6 +257,37 @@ def _sanitize_producer_gap_order(order: dict[str, Any]) -> dict[str, Any]:
     return sanitized
 
 
+def _stage_hook_scaffold_by_name(report: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        str(item.get("hook_name")): item
+        for item in (report.get("implemented_hooks") if isinstance(report.get("implemented_hooks"), list) else [])
+        if isinstance(item, dict)
+        and item.get("hook_name")
+        and item.get("implementation_status") == "implemented"
+        and item.get("runtime_effect") is False
+        and item.get("allowed_runtime_apply") is False
+    }
+
+
+def _sanitize_stage_hook_order(order: dict[str, Any], scaffold_by_name: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    sanitized = {**order, "source_report_type": "stage_hook_workorder_discovery"}
+    contract = sanitized.get("stage_hook_candidate_contract") if isinstance(sanitized.get("stage_hook_candidate_contract"), dict) else {}
+    hook_name = str(contract.get("hook_name") or "")
+    scaffold = scaffold_by_name.get(hook_name)
+    if scaffold:
+        sanitized["implementation_status"] = "implemented"
+        sanitized["implementation_provenance"] = {
+            "source_report_type": "stage_hook_runtime_scaffold",
+            "hook_name": hook_name,
+            "initial_runtime_state": scaffold.get("initial_runtime_state"),
+            "runtime_effect": scaffold.get("runtime_effect"),
+            "allowed_runtime_apply": scaffold.get("allowed_runtime_apply"),
+            "requires_separate_runtime_apply_candidate": scaffold.get("requires_separate_runtime_apply_candidate"),
+            "implementation_files": scaffold.get("implementation_files") or [],
+        }
+    return sanitized
+
+
 def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
     return {
         "order_id": item.order.get("order_id"),
@@ -284,6 +325,9 @@ def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
         "parity_contract": item.order.get("parity_contract"),
         "source_bucket_id": item.order.get("source_bucket_id"),
         "runtime_hook_candidate_contract": item.order.get("runtime_hook_candidate_contract"),
+        "stage_hook_candidate_contract": item.order.get("stage_hook_candidate_contract"),
+        "initial_runtime_state": item.order.get("initial_runtime_state"),
+        "requires_separate_runtime_apply_candidate": item.order.get("requires_separate_runtime_apply_candidate"),
     }
 
 
@@ -482,6 +526,23 @@ def _classify_order(
             automation_reentry=(
                 "After implementation, rerun producer_gap_discovery, code improvement workorder, "
                 "threshold EV, runtime summary, and postclose verifier."
+            ),
+        )
+
+    if order.get("source_report_type") == "stage_hook_workorder_discovery":
+        return ClassifiedOrder(
+            order=order,
+            decision="implement_now",
+            reason=(
+                "stage hook workorder discovery surfaced an implementation-ready hook scaffold; "
+                "implementation starts disabled/source-only and requires a separate runtime apply candidate"
+            ),
+            mapped_family=mapped_family,
+            route=route or "implement_now",
+            confidence=confidence or "ai_tier2_review",
+            automation_reentry=(
+                "After implementation, rerun stage_hook_workorder_discovery, code improvement workorder, "
+                "threshold EV, and postclose verifier; runtime/live order guards remain unchanged."
             ),
         )
 
@@ -2308,6 +2369,11 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     pattern_lab_ai_review = _load_json(pattern_lab_ai_review_path)
     producer_gap_discovery_path = producer_gap_discovery_report_path(target_date)
     producer_gap_discovery = _load_json(producer_gap_discovery_path)
+    stage_hook_workorder_discovery_path = stage_hook_workorder_discovery_report_path(target_date)
+    stage_hook_workorder_discovery = _load_json(stage_hook_workorder_discovery_path)
+    stage_hook_runtime_scaffold_path = stage_hook_runtime_scaffold_report_path(target_date)
+    stage_hook_runtime_scaffold = _load_json(stage_hook_runtime_scaffold_path)
+    stage_hook_scaffold_by_name = _stage_hook_scaffold_by_name(stage_hook_runtime_scaffold)
     buy_funnel_sentinel_path = buy_funnel_sentinel_report_path(target_date)
     buy_funnel_sentinel = _load_json(buy_funnel_sentinel_path)
     calibration_source_path = _calibration_report_path_from_ev(ev_report)
@@ -2328,6 +2394,8 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "pattern_lab_currentness_audit": pattern_lab_currentness_path,
             "pattern_lab_ai_review": pattern_lab_ai_review_path,
             "producer_gap_discovery": producer_gap_discovery_path,
+            "stage_hook_workorder_discovery": stage_hook_workorder_discovery_path,
+            "stage_hook_runtime_scaffold": stage_hook_runtime_scaffold_path,
             "buy_funnel_sentinel": buy_funnel_sentinel_path,
     }
     ev_sources = ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
@@ -2405,6 +2473,11 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         for item in (producer_gap_discovery.get("code_improvement_orders") or [])
         if isinstance(item, dict)
     ]
+    stage_hook_workorder_discovery_orders = [
+        _sanitize_stage_hook_order(item, stage_hook_scaffold_by_name)
+        for item in (stage_hook_workorder_discovery.get("code_improvement_orders") or [])
+        if isinstance(item, dict)
+    ]
     buy_funnel_sentinel_orders = _buy_funnel_sentinel_followup_orders(buy_funnel_sentinel)
     buy_funnel_sentinel_order_ids = {
         str(order.get("order_id"))
@@ -2442,6 +2515,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         *pattern_lab_currentness_orders,
         *pattern_lab_ai_review_orders,
         *producer_gap_discovery_orders,
+        *stage_hook_workorder_discovery_orders,
         *lifecycle_entry_bucket_orders,
         *lifecycle_submit_bucket_orders,
         *lifecycle_scale_in_bucket_orders,
@@ -2493,6 +2567,16 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         for order in producer_gap_discovery_orders
         if order.get("order_id")
         and str(order.get("producer_gap_priority") or "high") in {"critical", "high"}
+    )
+    required_handoff_order_ids.update(
+        str(order.get("order_id"))
+        for order in stage_hook_workorder_discovery_orders
+        if order.get("order_id")
+        and (
+            str(order.get("stage_hook_priority") or "high") in {"critical", "high"}
+            or (order.get("stage_hook_candidate_contract") or {}).get("readiness_tier")
+            == "implementation_workorder_ready"
+        )
     )
     required_handoff_order_ids.update(
         str(order.get("order_id"))
@@ -2577,6 +2661,12 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             else None,
             "pattern_lab_ai_review": str(pattern_lab_ai_review_path) if pattern_lab_ai_review_path.exists() else None,
             "producer_gap_discovery": str(producer_gap_discovery_path) if producer_gap_discovery_path.exists() else None,
+            "stage_hook_workorder_discovery": str(stage_hook_workorder_discovery_path)
+            if stage_hook_workorder_discovery_path.exists()
+            else None,
+            "stage_hook_runtime_scaffold": str(stage_hook_runtime_scaffold_path)
+            if stage_hook_runtime_scaffold_path.exists()
+            else None,
             "buy_funnel_sentinel": str(buy_funnel_sentinel_path) if buy_funnel_sentinel_path.exists() else None,
             "threshold_cycle_calibration": str(calibration_source_path)
             if calibration_source_path and calibration_source_path.exists()
@@ -2611,6 +2701,10 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "pattern_lab_ai_review_source_order_count": len(pattern_lab_ai_review_orders),
             "producer_gap_discovery_source_order_count": len(producer_gap_discovery_orders),
             "producer_gap_discovery_status": producer_gap_discovery.get("status"),
+            "stage_hook_workorder_discovery_source_order_count": len(stage_hook_workorder_discovery_orders),
+            "stage_hook_workorder_discovery_status": stage_hook_workorder_discovery.get("status"),
+            "stage_hook_runtime_scaffold_status": stage_hook_runtime_scaffold.get("status"),
+            "stage_hook_runtime_scaffold_implemented_hook_count": len(stage_hook_scaffold_by_name),
             "producer_gap_discovery_high_priority_selected": bool(
                 {
                     str(order.get("order_id"))
@@ -2737,6 +2831,8 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- pattern_lab_currentness_audit: `{source.get('pattern_lab_currentness_audit') or '-'}`",
         f"- pattern_lab_ai_review: `{source.get('pattern_lab_ai_review') or '-'}`",
         f"- producer_gap_discovery: `{source.get('producer_gap_discovery') or '-'}`",
+        f"- stage_hook_workorder_discovery: `{source.get('stage_hook_workorder_discovery') or '-'}`",
+        f"- stage_hook_runtime_scaffold: `{source.get('stage_hook_runtime_scaffold') or '-'}`",
         f"- buy_funnel_sentinel: `{source.get('buy_funnel_sentinel') or '-'}`",
         f"- generated_at: `{report.get('generated_at')}`",
         f"- generation_id: `{report.get('generation_id')}`",
@@ -2888,6 +2984,27 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
                     f"- required_source_artifacts: {_format_list(hook_contract.get('required_source_artifacts'))}",
                     f"- required_ev_evidence: {_format_list(hook_contract.get('required_ev_evidence'))}",
                     f"- forbidden_uses: {_format_list(hook_contract.get('forbidden_uses'))}",
+                    "",
+                ]
+            )
+        stage_hook_contract = item.get("stage_hook_candidate_contract")
+        if isinstance(stage_hook_contract, dict) and stage_hook_contract:
+            lines.extend(
+                [
+                    "Stage hook candidate:",
+                    "",
+                    f"- hook_name: `{stage_hook_contract.get('hook_name') or '-'}`",
+                    f"- hook_class: `{stage_hook_contract.get('hook_class') or '-'}`",
+                    f"- stage: `{stage_hook_contract.get('stage') or '-'}`",
+                    f"- initial_authority: `{stage_hook_contract.get('initial_authority') or '-'}`",
+                    f"- readiness_tier: `{stage_hook_contract.get('readiness_tier') or '-'}`",
+                    f"- evidence_score: `{stage_hook_contract.get('evidence_score')}`",
+                    f"- action_namespace: {_format_list(stage_hook_contract.get('action_namespace'))}",
+                    f"- action_namespace_scope: `{stage_hook_contract.get('action_namespace_scope') or '-'}`",
+                    f"- required_source_artifacts: {_format_list(stage_hook_contract.get('required_source_artifacts'))}",
+                    f"- required_mapping_tests: {_format_list(stage_hook_contract.get('required_mapping_tests'))}",
+                    f"- rollback_guard_requirements: {_format_list(stage_hook_contract.get('rollback_guard_requirements'))}",
+                    f"- forbidden_uses: {_format_list(stage_hook_contract.get('forbidden_uses'))}",
                     "",
                 ]
             )

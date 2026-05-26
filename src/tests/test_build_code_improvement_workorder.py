@@ -542,8 +542,108 @@ def test_build_code_improvement_workorder_strips_producer_gap_runtime_hook_candi
     assert order["runtime_hook_candidate_contract"] is None
     markdown = mod.render_code_improvement_workorder_markdown(report)
     assert "Runtime hook candidate:" not in markdown
-    assert "holding_flow_runner_debounce_guard" not in markdown
-    assert "hard stop override" not in markdown
+
+
+def test_build_code_improvement_workorder_consumes_stage_hook_workorders(tmp_path, monkeypatch):
+    automation_dir = tmp_path / "automation"
+    stage_hook_dir = tmp_path / "stage-hook"
+    scaffold_dir = tmp_path / "stage-hook-scaffold"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    automation_dir.mkdir()
+    stage_hook_dir.mkdir()
+    scaffold_dir.mkdir()
+    (automation_dir / "scalping_pattern_lab_automation_2026-05-26.json").write_text(
+        json.dumps({"date": "2026-05-26", "code_improvement_orders": []}),
+        encoding="utf-8",
+    )
+    contract = {
+        "hook_name": "holding_flow_runner_debounce_guard",
+        "hook_class": "runtime_arbitration_hook",
+        "stage": "holding",
+        "initial_authority": "source_only_proposal",
+        "readiness_tier": "implementation_workorder_ready",
+        "evidence_score": 80.0,
+        "action_namespace": ["EXIT_CONFIRM", "HOLD_REVIEW"],
+        "required_source_artifacts": ["runner_regime_counterfactual_producer"],
+        "required_mapping_tests": ["disabled_initial_runtime_state_test"],
+        "rollback_guard_requirements": ["hard_safety_veto_preserved"],
+        "forbidden_uses": ["hard stop override", "broker guard bypass"],
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+    (stage_hook_dir / "stage_hook_workorder_discovery_2026-05-26.json").write_text(
+        json.dumps(
+            {
+                "status": "warning",
+                "summary": {"workorder_count": 1},
+                "code_improvement_orders": [
+                    {
+                        "order_id": "order_stage_hook_workorder_discovery_runner",
+                        "title": "Implement stage hook: holding_flow_runner_debounce_guard",
+                        "target_subsystem": "stage_hook.holding_flow_runner_debounce_guard",
+                        "priority": 10,
+                        "stage_hook_priority": "high",
+                        "route": "implement_now",
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                        "initial_runtime_state": "disabled",
+                        "requires_separate_runtime_apply_candidate": True,
+                        "stage_hook_candidate_contract": contract,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (scaffold_dir / "stage_hook_runtime_scaffold_2026-05-26.json").write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "implemented_hooks": [
+                    {
+                        "hook_name": "holding_flow_runner_debounce_guard",
+                        "implementation_status": "implemented",
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "initial_runtime_state": "disabled",
+                        "requires_separate_runtime_apply_candidate": True,
+                        "implementation_files": ["src/engine/automation/stage_hook_runtime_scaffold.py"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
+    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", tmp_path / "missing-observation-audit")
+    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(mod, "PATTERN_LAB_CURRENTNESS_AUDIT_DIR", tmp_path / "missing-currentness")
+    monkeypatch.setattr(mod, "PATTERN_LAB_AI_REVIEW_DIR", tmp_path / "missing-ai-review")
+    monkeypatch.setattr(mod, "PRODUCER_GAP_DISCOVERY_DIR", tmp_path / "missing-producer-gap")
+    monkeypatch.setattr(mod, "STAGE_HOOK_WORKORDER_DISCOVERY_DIR", stage_hook_dir)
+    monkeypatch.setattr(mod, "STAGE_HOOK_RUNTIME_SCAFFOLD_DIR", scaffold_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-26", max_orders=1)
+
+    order = next(item for item in report["orders"] if item["order_id"] == "order_stage_hook_workorder_discovery_runner")
+    assert order["source_report_type"] == "stage_hook_workorder_discovery"
+    assert order["stage_hook_candidate_contract"]["hook_name"] == "holding_flow_runner_debounce_guard"
+    assert order["initial_runtime_state"] == "disabled"
+    assert order["requires_separate_runtime_apply_candidate"] is True
+    assert order["implementation_status"] == "implemented"
+    assert order["decision"] == "attach_existing_family"
+    markdown = mod.render_code_improvement_workorder_markdown(report)
+    assert "Stage hook candidate:" in markdown
+    assert "holding_flow_runner_debounce_guard" in markdown
 
 
 def test_build_code_improvement_workorder_auto_selects_buy_funnel_submit_drought(
