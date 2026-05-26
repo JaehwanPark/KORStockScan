@@ -626,9 +626,10 @@ def _pick_first(item, keys):
 
 def _normalize_side(value):
     raw = str(value or "").strip().upper()
-    if raw in {"매수", "BUY", "B", "2"}:
+    compact = raw.replace("+", "").replace("-", "").replace(" ", "")
+    if raw in {"매수", "BUY", "B", "2"} or "매수" in compact:
         return "매수"
-    if raw in {"매도", "SELL", "S", "1"}:
+    if raw in {"매도", "SELL", "S", "1"} or "매도" in compact:
         return "매도"
     return str(value or "").strip()
 
@@ -659,13 +660,48 @@ def _normalize_order_history_rows(*, results, source_api):
                 continue
             ord_no = str(_pick_first(item, ("ord_no", "odno", "order_no", "org_ord_no"))).strip()
             orig_ord_no = str(
-                _pick_first(item, ("orig_ord_no", "orgn_ord_no", "org_ord_no", "orgord_no"))
+                _pick_first(
+                    item,
+                    (
+                        "orig_ord_no",
+                        "orgn_ord_no",
+                        "org_ord_no",
+                        "orgord_no",
+                        "ori_ord",
+                    ),
+                )
             ).strip()
-            qty = _to_int_safe(_pick_first(item, ("qty", "ord_qty", "cntr_qty", "exct_qty")))
-            unit_price = _to_int_safe(
-                _pick_first(item, ("unp", "cntr_prc", "exec_pric", "ord_prc", "prc"))
+            qty = _to_int_safe(
+                _pick_first(item, ("qty", "ord_qty", "cntr_qty", "exct_qty", "cnfm_qty", "oso_qty"))
             )
-            side = _normalize_side(_pick_first(item, ("sell_tp", "bnst_tp", "trde_tp", "side")))
+            unit_price = _to_int_safe(
+                _pick_first(
+                    item,
+                    (
+                        "unp",
+                        "cntr_prc",
+                        "cntr_uv",
+                        "cntr_pric",
+                        "exec_pric",
+                        "ord_prc",
+                        "ord_uv",
+                        "ord_pric",
+                        "prc",
+                    ),
+                )
+            )
+            side = _normalize_side(
+                _pick_first(
+                    item,
+                    (
+                        "sell_tp",
+                        "bnst_tp",
+                        "io_tp_nm",
+                        "trde_tp",
+                        "side",
+                    ),
+                )
+            )
             normalized.append(
                 {
                     "source_api": source_api,
@@ -684,14 +720,36 @@ def _normalize_order_history_rows(*, results, source_api):
     return normalized
 
 
-def get_order_reference_snapshot_kt00007(token, *, qry_tp="0", stk_bond_tp="0", extra_payload=None):
+def get_order_reference_snapshot_kt00007(
+    token,
+    *,
+    ord_dt="",
+    qry_tp="1",
+    stk_bond_tp="0",
+    sell_tp="0",
+    stk_cd="",
+    fr_ord_no="",
+    dmst_stex_tp="%",
+    extra_payload=None,
+):
     """
     [kt00007] 계좌 주문/체결 이력 스냅샷을 정규화해서 반환합니다.
-    - 파라미터 기본값: qry_tp=0, stk_bond_tp=0
+    - Kiwoom guide: /api/dostk/acnt, required body fields qry_tp/stk_bond_tp/sell_tp/dmst_stex_tp
     - 목적: ord_no / orig_ord_no 확보용
     """
     url = get_api_url("/api/dostk/acnt")
-    payload = {"qry_tp": str(qry_tp), "stk_bond_tp": str(stk_bond_tp)}
+    qry_tp_value = str(qry_tp or "1")
+    if qry_tp_value not in {"1", "2", "3", "4"}:
+        qry_tp_value = "1"
+    payload = {
+        "ord_dt": str(ord_dt or ""),
+        "qry_tp": qry_tp_value,
+        "stk_bond_tp": str(stk_bond_tp or "0"),
+        "sell_tp": str(sell_tp or "0"),
+        "stk_cd": str(stk_cd or ""),
+        "fr_ord_no": str(fr_ord_no or ""),
+        "dmst_stex_tp": str(dmst_stex_tp or "%"),
+    }
     if extra_payload:
         payload.update({k: v for k, v in dict(extra_payload).items() if v is not None})
     results = fetch_kiwoom_api_continuous(
@@ -704,14 +762,29 @@ def get_order_reference_snapshot_kt00007(token, *, qry_tp="0", stk_bond_tp="0", 
     return _normalize_order_history_rows(results=results, source_api="kt00007")
 
 
-def get_order_reference_snapshot_ka10076(token, *, qry_tp="0", stk_bond_tp="0", extra_payload=None):
+def get_order_reference_snapshot_ka10076(
+    token,
+    *,
+    stk_cd="",
+    qry_tp="0",
+    sell_tp="0",
+    ord_no="",
+    stex_tp="0",
+    extra_payload=None,
+):
     """
     [ka10076] 주문/체결 조회 응답을 정규화해서 반환합니다.
-    - 파라미터 기본값: qry_tp=0, stk_bond_tp=0
+    - Kiwoom guide: /api/dostk/acnt, required body fields qry_tp/sell_tp/stex_tp
     - 목적: ord_no / orig_ord_no 보강용
     """
-    url = get_api_url("/api/dostk/stkinfo")
-    payload = {"qry_tp": str(qry_tp), "stk_bond_tp": str(stk_bond_tp)}
+    url = get_api_url("/api/dostk/acnt")
+    payload = {
+        "stk_cd": str(stk_cd or ""),
+        "qry_tp": str(qry_tp or "0"),
+        "sell_tp": str(sell_tp or "0"),
+        "ord_no": str(ord_no or ""),
+        "stex_tp": str(stex_tp or "0"),
+    }
     if extra_payload:
         payload.update({k: v for k, v in dict(extra_payload).items() if v is not None})
     results = fetch_kiwoom_api_continuous(
@@ -724,7 +797,7 @@ def get_order_reference_snapshot_ka10076(token, *, qry_tp="0", stk_bond_tp="0", 
     return _normalize_order_history_rows(results=results, source_api="ka10076")
 
 
-def get_order_reference_snapshot_2nd_pass(token, *, qry_tp="0", stk_bond_tp="0"):
+def get_order_reference_snapshot_2nd_pass(token, *, qry_tp="0", stk_bond_tp="0", sell_tp="0"):
     """
     `kt00007 + ka10076`를 함께 조회해 원주문번호 대조용 스냅샷을 생성합니다.
     """
@@ -735,6 +808,7 @@ def get_order_reference_snapshot_2nd_pass(token, *, qry_tp="0", stk_bond_tp="0")
                 token,
                 qry_tp=qry_tp,
                 stk_bond_tp=stk_bond_tp,
+                sell_tp=sell_tp,
             )
         )
     except Exception as exc:
@@ -745,7 +819,7 @@ def get_order_reference_snapshot_2nd_pass(token, *, qry_tp="0", stk_bond_tp="0")
             get_order_reference_snapshot_ka10076(
                 token,
                 qry_tp=qry_tp,
-                stk_bond_tp=stk_bond_tp,
+                sell_tp=sell_tp,
             )
         )
     except Exception as exc:

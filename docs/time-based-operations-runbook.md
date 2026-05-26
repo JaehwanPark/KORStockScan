@@ -391,6 +391,14 @@ POSTCLOSE 최상위 감리는 `Tuning Chain Control State`(튜닝 체인 관제 
 
 ### Runbook 운영 확인 완료 기록
 
+- `[PreopenAutomationHealthCheck20260526] 장전 자동화체인 상태 확인` (`Due: 2026-05-26`, `Slot: PREOPEN`, `TimeWindow: 08:00~09:00`)
+  - 판정: `pass`
+  - Tuning Chain Control State: `GREEN`
+  - blocked_stage: `-`
+  - impact: 2026-05-26 장전 preopen apply, runtime env 생성, 사용자 승인 artifact 3건 소비, OpenAI WS 유지, Bedrock Nova Lite v1 primary scope, Nova Lite v2 shadow-only gap, RunbookOps health를 확인했다. 장전 확인은 runtime env 소비 여부와 운영 상태 판정이며 threshold/order/provider/bot 변경 권한으로 확장하지 않는다.
+  - 근거: [threshold_cycle_preopen_2026-05-26.status.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_preopen_status/threshold_cycle_preopen_2026-05-26.status.json)은 `status=succeeded`, `exit_code=0`이고 [threshold_apply_2026-05-26.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-05-26.json)은 `status=auto_bounded_live_ready`, `runtime_change=true`, `warnings=[]`다. [threshold_runtime_env_2026-05-26.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-05-26.env)은 `KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION=entry_wait6579_score66_69_recovery_gate_v1:2026-05-22`, `KORSTOCKSCAN_ML_GATEKEEPER_REJECT_COOLDOWN=6600`, `KORSTOCKSCAN_SWING_LIVE_ORDER_DRY_RUN_ENABLED=true`, `KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_ENABLED=true`, `KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_ALLOWED_CODES=000100,028050,092200`를 포함한다. [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)은 OpenAI Responses WS와 Bedrock Nova Lite v1 `entry_price,holding_flow` primary, OpenAI failback, v2 shadow-only env를 고정한다. 07:41 KST 재확인에서 tmux `bot` 세션, `run_bot.sh`, `bot_main.py` PID가 살아 있고 `error_detector --mode full --dry-run`은 `summary_severity=pass`, `process_health=pass`, `threshold_cycle_preopen_status=pass`, `threshold_runtime_env_status=pass`, `threshold_apply_plan_status=pass`다. [bedrock_nova_lite_v2_shadow_report_2026-05-26.json](/home/ubuntu/KORStockScan/data/report/bedrock_nova_lite_v2_shadow/bedrock_nova_lite_v2_shadow_report_2026-05-26.json)은 `runtime_effect=false`, `row_count=0`이라 v2 표본은 장중 재확인 대상이다.
+  - 다음 액션: 장중 `RuntimeEnvIntradayObserve0526`, `OpenAIAndLiteTransport` 표본 재확인, `SwingProbeSourceBookHandoff0526`에서 실제 provenance와 source handoff를 확인한다. Nova Lite v2 row gap은 source-quality 관찰로만 남기고 provider route, threshold/order guard, bot restart 변경 근거로 쓰지 않는다.
+
 - `[PreopenAutomationHealthCheck20260522] 장전 자동화체인 상태 확인` (`Due: 2026-05-22`, `Slot: PREOPEN`, `TimeWindow: 08:00~09:00`)
   - 판정: `pass`
   - Tuning Chain Control State: `GREEN`

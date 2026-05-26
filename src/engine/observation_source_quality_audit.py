@@ -91,6 +91,25 @@ SCALP_SIM_PROVENANCE_FIELDS = (
     "sim_record_id",
 )
 
+SCALP_SIM_SUBMIT_LIQUIDITY_GUARD_FIELDS = (
+    *SCALP_SIM_PROVENANCE_FIELDS,
+    "threshold_family",
+    "sim_pre_submit_liquidity_guard_action",
+    "sim_pre_submit_liquidity_reason",
+    "sim_liquidity_value",
+    "sim_min_liquidity",
+    "sim_parent_record_id",
+)
+
+SCALP_SIM_SUBMIT_OVERBOUGHT_GUARD_FIELDS = (
+    *SCALP_SIM_PROVENANCE_FIELDS,
+    "threshold_family",
+    "sim_pre_submit_overbought_guard_action",
+    "sim_pre_submit_overbought_reason",
+    "sim_overbought_risk_state",
+    "sim_parent_record_id",
+)
+
 SCALP_SIM_AI_BUDGET_FIELDS = (
     "simulation_book",
     "simulated_order",
@@ -177,6 +196,29 @@ REAL_EXECUTION_DIAGNOSTIC_FIELDS = (
     "broker_order_forbidden",
 )
 
+SIM_SUBMIT_GUARD_STAGE_ACTIONS = {
+    "scalp_sim_pre_submit_liquidity_guard_would_block": (
+        "sim_pre_submit_liquidity_guard_action",
+        "WOULD_BLOCK",
+    ),
+    "scalp_sim_pre_submit_liquidity_guard_would_pass": (
+        "sim_pre_submit_liquidity_guard_action",
+        "WOULD_PASS",
+    ),
+    "scalp_sim_pre_submit_liquidity_guard_unknown": (
+        "sim_pre_submit_liquidity_guard_action",
+        "WOULD_UNKNOWN",
+    ),
+    "scalp_sim_pre_submit_overbought_guard_would_block": (
+        "sim_pre_submit_overbought_guard_action",
+        "WOULD_BLOCK",
+    ),
+    "scalp_sim_pre_submit_overbought_guard_would_pass": (
+        "sim_pre_submit_overbought_guard_action",
+        "WOULD_PASS",
+    ),
+}
+
 
 STAGE_CONTRACTS: dict[str, StageContract] = {
     "ai_confirmed": StageContract(
@@ -232,6 +274,22 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         decision_authority="source_quality_only_known_pre_fix_gap",
     ),
     "scalp_sim_entry_armed": StageContract(required_fields=SCALP_SIM_PROVENANCE_FIELDS),
+    "scalp_sim_pre_submit_liquidity_guard_would_block": StageContract(
+        required_fields=SCALP_SIM_SUBMIT_LIQUIDITY_GUARD_FIELDS
+    ),
+    "scalp_sim_pre_submit_liquidity_guard_would_pass": StageContract(
+        required_fields=SCALP_SIM_SUBMIT_LIQUIDITY_GUARD_FIELDS
+    ),
+    "scalp_sim_pre_submit_liquidity_guard_unknown": StageContract(
+        required_fields=SCALP_SIM_SUBMIT_LIQUIDITY_GUARD_FIELDS,
+        decision_authority="source_quality_only_known_pre_fix_gap",
+    ),
+    "scalp_sim_pre_submit_overbought_guard_would_block": StageContract(
+        required_fields=SCALP_SIM_SUBMIT_OVERBOUGHT_GUARD_FIELDS
+    ),
+    "scalp_sim_pre_submit_overbought_guard_would_pass": StageContract(
+        required_fields=SCALP_SIM_SUBMIT_OVERBOUGHT_GUARD_FIELDS
+    ),
     "scalp_sim_buy_order_virtual_pending": StageContract(required_fields=SCALP_SIM_PROVENANCE_FIELDS),
     "scalp_sim_buy_order_assumed_filled": StageContract(required_fields=SCALP_SIM_PROVENANCE_FIELDS),
     "scalp_sim_entry_ai_price_skip_order": StageContract(required_fields=SCALP_SIM_PROVENANCE_FIELDS),
@@ -491,6 +549,35 @@ def _stage_counts(rows: list[dict[str, Any]]) -> Counter[str]:
     return Counter(_stage_name(row) for row in rows)
 
 
+def _contract_bool(value: Any, expected: bool) -> bool:
+    normalized = str(value).strip().lower()
+    if expected:
+        return normalized in {"1", "true", "yes"}
+    return normalized in {"", "0", "false", "none", "no"}
+
+
+def _sim_submit_guard_contract_violations(stage: str, fields: dict[str, Any]) -> dict[str, bool]:
+    action_contract = SIM_SUBMIT_GUARD_STAGE_ACTIONS.get(stage)
+    if not action_contract:
+        return {}
+    action_field, expected_action = action_contract
+    action_value = str(fields.get(action_field) or "").strip().upper()
+    return {
+        "sim_submit_guard_action_contract": action_value != expected_action,
+        "sim_submit_guard_authority_contract": str(fields.get("decision_authority") or "").strip()
+        != "sim_submit_path_observation_only",
+        "sim_submit_guard_actual_order_contract": not _contract_bool(
+            fields.get("actual_order_submitted"),
+            False,
+        ),
+        "sim_submit_guard_broker_forbidden_contract": not _contract_bool(
+            fields.get("broker_order_forbidden"),
+            True,
+        ),
+        "sim_submit_guard_runtime_effect_contract": not _contract_bool(fields.get("runtime_effect"), False),
+    }
+
+
 def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) -> dict[str, Any]:
     by_stage: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -538,6 +625,22 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
                     _normalized_fields_for_contract(stage, row["fields"]).get("invalid_gatekeeper_action_label")
                 )
             )
+        if stage in SIM_SUBMIT_GUARD_STAGE_ACTIONS:
+            for violation_key in (
+                "sim_submit_guard_action_contract",
+                "sim_submit_guard_authority_contract",
+                "sim_submit_guard_actual_order_contract",
+                "sim_submit_guard_broker_forbidden_contract",
+                "sim_submit_guard_runtime_effect_contract",
+            ):
+                invalid_label_counts[violation_key] = sum(
+                    1
+                    for row in stage_rows
+                    if _sim_submit_guard_contract_violations(
+                        stage,
+                        _normalized_fields_for_contract(stage, row["fields"]),
+                    ).get(violation_key)
+                )
         for field in contract.zero_sensitive_fields:
             zero_counts[field] = sum(
                 1

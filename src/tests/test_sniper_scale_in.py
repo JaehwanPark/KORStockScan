@@ -2272,6 +2272,12 @@ def test_watching_state_logs_latency_entry_price_guard(monkeypatch):
     assert by_stage["order_leg_request"]["best_ask_at_submit"] == 10_020
     assert by_stage["order_leg_request"]["price_below_bid_bps"] == 10
     assert by_stage["order_leg_request"]["resolution_reason"] == "defensive_order_price"
+    assert by_stage["latency_pass"]["liquidity_guard_action"] == "WOULD_PASS"
+    assert by_stage["latency_pass"]["liquidity_guard_reason"] == "liquidity_ok"
+    assert by_stage["order_leg_request"]["liquidity_guard_action"] == "WOULD_PASS"
+    assert by_stage["order_leg_sent"]["liquidity_guard_action"] == "WOULD_PASS"
+    assert by_stage["order_bundle_submitted"]["liquidity_guard_action"] == "WOULD_PASS"
+    assert by_stage["order_bundle_submitted"]["overbought_guard_action"] == "WOULD_PASS"
     assert by_stage["order_bundle_submitted"]["order_price"] == 9_990
     assert by_stage["order_bundle_submitted"]["submitted_order_price"] == 9_990
 
@@ -2409,7 +2415,8 @@ def test_watching_state_blocks_deep_below_bid_pre_submit_price(monkeypatch):
     assert by_stage["pre_submit_price_guard_block"]["price_below_bid_bps"] == 337
     assert by_stage["pre_submit_price_guard_block"]["max_below_bid_bps"] == 80
     assert by_stage["pre_submit_price_guard_block"]["resolution_reason"] == "reference_target_cap"
-    assert by_stage["order_bundle_failed"] == {}
+    assert by_stage["order_bundle_failed"]["liquidity_guard_action"] == "WOULD_PASS"
+    assert by_stage["order_bundle_failed"]["overbought_guard_action"] == "WOULD_PASS"
 
 
 def test_scalping_pre_ai_soft_gate_allows_ai_and_blocks_low_liquidity_at_submit(monkeypatch):
@@ -2544,6 +2551,9 @@ def test_scalping_pre_ai_soft_gate_allows_ai_and_blocks_low_liquidity_at_submit(
     assert by_stage["blocked_liquidity"]["gate_action"] == "risk_context_only"
     assert "pre_submit_liquidity_guard_block" in by_stage
     assert by_stage["pre_submit_liquidity_guard_block"]["broker_order_forbidden"] is True
+    assert by_stage["pre_submit_liquidity_guard_block"]["liquidity_guard_action"] == "WOULD_BLOCK"
+    assert by_stage["pre_submit_liquidity_guard_block"]["liquidity_guard_reason"] == "below_min_liquidity"
+    assert by_stage["pre_submit_liquidity_guard_block"]["pre_submit_liquidity_guard_action"] == "BLOCK"
     assert sent_orders == []
     assert ai.seen_context["liquidity"]["threshold_family"] == "liquidity_pre_submit_guard_p1"
 
@@ -2648,6 +2658,12 @@ def test_scalping_overbought_reaches_ai_but_submit_requires_pullback_or_rebreak(
     assert by_stage["blocked_overbought"]["risk_bucket"] == "chase_risk"
     assert "pre_submit_overbought_pullback_guard_block" in by_stage
     assert by_stage["pre_submit_overbought_pullback_guard_block"]["broker_order_forbidden"] is True
+    assert by_stage["pre_submit_overbought_pullback_guard_block"]["overbought_guard_action"] == "WOULD_BLOCK"
+    assert (
+        by_stage["pre_submit_overbought_pullback_guard_block"]["overbought_guard_reason"]
+        == "pullback_or_rebreak_not_confirmed"
+    )
+    assert by_stage["pre_submit_overbought_pullback_guard_block"]["pre_submit_overbought_guard_action"] == "BLOCK"
     assert sent_orders == []
 
 

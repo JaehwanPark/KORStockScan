@@ -561,11 +561,59 @@ def test_observation_source_quality_audit_accepts_scalp_sim_stage_contracts(monk
         "runtime_effect": False,
         "sim_record_id": "SIM-1",
     }
+    liquidity_guard_fields = {
+        **fields,
+        "decision_authority": "sim_submit_path_observation_only",
+        "threshold_family": "liquidity_pre_submit_guard_p1",
+        "sim_pre_submit_liquidity_guard_action": "WOULD_BLOCK",
+        "sim_pre_submit_liquidity_reason": "below_min_liquidity",
+        "sim_liquidity_value": 100_000_000,
+        "sim_min_liquidity": 500_000_000,
+        "sim_parent_record_id": 1,
+    }
+    overbought_guard_fields = {
+        **fields,
+        "decision_authority": "sim_submit_path_observation_only",
+        "threshold_family": "overbought_pullback_guard_p1",
+        "sim_pre_submit_overbought_guard_action": "WOULD_PASS",
+        "sim_pre_submit_overbought_reason": "overbought_ok",
+        "sim_overbought_risk_state": "pullback_observed",
+        "sim_parent_record_id": 1,
+    }
+    overbought_block_fields = {
+        **overbought_guard_fields,
+        "sim_pre_submit_overbought_guard_action": "WOULD_BLOCK",
+        "sim_pre_submit_overbought_reason": "pullback_or_rebreak_not_confirmed",
+        "sim_overbought_risk_state": "pullback_required",
+    }
     _write_events(
         tmp_path,
         "2026-05-20",
         [
             _event("scalp_sim_entry_armed", fields, record_id=1),
+            _event("scalp_sim_pre_submit_liquidity_guard_would_block", liquidity_guard_fields, record_id=11),
+            _event(
+                "scalp_sim_pre_submit_liquidity_guard_would_pass",
+                {
+                    **liquidity_guard_fields,
+                    "sim_pre_submit_liquidity_guard_action": "WOULD_PASS",
+                    "sim_pre_submit_liquidity_reason": "liquidity_ok",
+                    "sim_liquidity_value": 800_000_000,
+                },
+                record_id=12,
+            ),
+            _event(
+                "scalp_sim_pre_submit_liquidity_guard_unknown",
+                {
+                    **liquidity_guard_fields,
+                    "sim_pre_submit_liquidity_guard_action": "WOULD_UNKNOWN",
+                    "sim_pre_submit_liquidity_reason": "liquidity_unknown",
+                    "sim_liquidity_value": "UNKNOWN",
+                },
+                record_id=15,
+            ),
+            _event("scalp_sim_pre_submit_overbought_guard_would_block", overbought_block_fields, record_id=13),
+            _event("scalp_sim_pre_submit_overbought_guard_would_pass", overbought_guard_fields, record_id=14),
             _event("scalp_sim_buy_order_virtual_pending", fields, record_id=2),
             _event("scalp_sim_buy_order_assumed_filled", fields, record_id=3),
             _event("scalp_sim_entry_ai_price_skip_order", fields, record_id=4),
@@ -578,6 +626,11 @@ def test_observation_source_quality_audit_accepts_scalp_sim_stage_contracts(monk
 
     for stage in (
         "scalp_sim_entry_armed",
+        "scalp_sim_pre_submit_liquidity_guard_would_block",
+        "scalp_sim_pre_submit_liquidity_guard_would_pass",
+        "scalp_sim_pre_submit_liquidity_guard_unknown",
+        "scalp_sim_pre_submit_overbought_guard_would_block",
+        "scalp_sim_pre_submit_overbought_guard_would_pass",
         "scalp_sim_buy_order_virtual_pending",
         "scalp_sim_buy_order_assumed_filled",
         "scalp_sim_entry_ai_price_skip_order",
@@ -585,6 +638,44 @@ def test_observation_source_quality_audit_accepts_scalp_sim_stage_contracts(monk
         "scalp_sim_sell_order_assumed_filled",
     ):
         assert report["stage_contracts"][stage]["status"] == "pass"
+
+
+def test_observation_source_quality_audit_fails_mismatched_sim_submit_guard_stage_action(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-20",
+        [
+            _event(
+                "scalp_sim_pre_submit_liquidity_guard_would_pass",
+                {
+                    "simulation_book": "scalp_ai_buy_all",
+                    "simulated_order": True,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "decision_authority": "sim_submit_path_observation_only",
+                    "runtime_effect": False,
+                    "sim_record_id": "SIM-1",
+                    "threshold_family": "liquidity_pre_submit_guard_p1",
+                    "sim_pre_submit_liquidity_guard_action": "WOULD_BLOCK",
+                    "sim_pre_submit_liquidity_reason": "below_min_liquidity",
+                    "sim_liquidity_value": 100_000_000,
+                    "sim_min_liquidity": 500_000_000,
+                    "sim_parent_record_id": 1,
+                },
+                record_id=1,
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-05-20")
+    contract = report["stage_contracts"]["scalp_sim_pre_submit_liquidity_guard_would_pass"]
+
+    assert contract["status"] == "fail"
+    assert contract["invalid_label_counts"]["sim_submit_guard_action_contract"] == 1
 
 
 def test_observation_source_quality_audit_contracts_sim_budget_and_risk_context(monkeypatch, tmp_path):

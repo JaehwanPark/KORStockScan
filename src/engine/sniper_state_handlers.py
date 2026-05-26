@@ -155,6 +155,7 @@ SCALP_SIM_STATE_PATH = DATA_DIR / "runtime" / "scalp_live_simulator_state.json"
 _SCALP_SIM_STATE_LAST_SEEN_MTIME_NS: int | None = None
 SWING_INTRADAY_PROBE_BOOK = "swing_intraday_live_equiv_probe"
 SWING_INTRADAY_PROBE_STATE_PATH = DATA_DIR / "runtime" / "swing_intraday_probe_state.json"
+_SWING_PROBE_STATE_LAST_SEEN_MTIME_NS: int | None = None
 _SCALP_SIM_CANDIDATE_WINDOW_DAILY_CREATED: dict[str, int] = {}
 _SCALP_SIM_CANDIDATE_WINDOW_DAILY_BUCKET_CREATED: dict[tuple[str, str], int] = {}
 _SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED: dict[tuple[str, str], int] = {}
@@ -931,6 +932,32 @@ def _scalp_sim_state_mtime_ns() -> int | None:
         return None
 
 
+def _swing_probe_state_mtime_ns() -> int | None:
+    try:
+        return SWING_INTRADAY_PROBE_STATE_PATH.stat().st_mtime_ns if SWING_INTRADAY_PROBE_STATE_PATH.exists() else None
+    except Exception:
+        return None
+
+
+def _swing_probe_identity(row: dict | None) -> str:
+    row = row if isinstance(row, dict) else {}
+    probe_id = str(row.get("probe_id") or "").strip()
+    if probe_id:
+        return f"probe_id:{probe_id}"
+    sim_record_id = str(row.get("sim_record_id") or "").strip()
+    if sim_record_id:
+        return f"sim_record_id:{sim_record_id}"
+    record_id = str(row.get("id") or row.get("record_id") or "").strip()
+    if record_id:
+        return f"record_id:{record_id}"
+    code = str(row.get("code") or "").strip()[:6]
+    entry_ts = str(row.get("buy_time") or row.get("entry_time") or row.get("added_time") or "").strip()
+    buy_price = str(row.get("buy_price") or "").strip()
+    if code and (entry_ts or buy_price):
+        return f"code_entry:{code}:{entry_ts}:{buy_price}"
+    return f"code:{code}" if code else ""
+
+
 def persist_scalp_simulator_state(targets=None) -> None:
     global _SCALP_SIM_STATE_LAST_SEEN_MTIME_NS
     try:
@@ -1162,6 +1189,7 @@ def _log_swing_probe_state_event(stage: str, **fields) -> None:
 
 
 def persist_swing_intraday_probe_state(targets=None, *, allow_empty_overwrite: bool = False, reason: str = "snapshot") -> None:
+    global _SWING_PROBE_STATE_LAST_SEEN_MTIME_NS
     if not _rule_bool("SWING_INTRADAY_PROBE_PERSIST_ENABLED", True):
         return
     try:
@@ -1195,6 +1223,7 @@ def persist_swing_intraday_probe_state(targets=None, *, allow_empty_overwrite: b
         tmp_path = SWING_INTRADAY_PROBE_STATE_PATH.with_suffix(".tmp")
         tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp_path.replace(SWING_INTRADAY_PROBE_STATE_PATH)
+        _SWING_PROBE_STATE_LAST_SEEN_MTIME_NS = _swing_probe_state_mtime_ns()
         if reason != "snapshot":
             _log_swing_probe_state_event(
                 "swing_probe_state_persisted",
@@ -1255,16 +1284,17 @@ def restore_swing_intraday_probe_targets(targets=None) -> int:
         return 0
     stored_count = sum(1 for row in rows if isinstance(row, dict) and _active_runtime_status(row))
     restored = 0
-    existing_ids = {
-        str((t or {}).get("probe_id") or "").strip()
+    existing_keys = {
+        _swing_probe_identity(t)
         for t in target_list
         if _is_swing_intraday_probe_target(t)
     }
+    existing_keys.discard("")
     for row in rows:
         if not isinstance(row, dict) or not _active_runtime_status(row):
             continue
-        probe_id = str(row.get("probe_id") or "").strip()
-        if probe_id and probe_id in existing_ids:
+        probe_key = _swing_probe_identity(row)
+        if probe_key and probe_key in existing_keys:
             continue
         code = str(row.get("code") or "").strip()[:6]
         if not code:
@@ -1288,8 +1318,8 @@ def restore_swing_intraday_probe_targets(targets=None) -> int:
         row["msg_audience"] = "ADMIN_ONLY"
         row["added_time"] = _safe_float(row.get("added_time"), time.time())
         target_list.append(row)
-        if probe_id:
-            existing_ids.add(probe_id)
+        if probe_key:
+            existing_keys.add(probe_key)
         restored += 1
     if restored or stored_count:
         log_info(f"[SWING_PROBE_STATE] restored active probe targets={restored}")
@@ -1300,6 +1330,87 @@ def restore_swing_intraday_probe_targets(targets=None) -> int:
             target_count_after=len(_swing_probe_active_targets(target_list)),
         )
     return restored
+
+
+def sync_swing_intraday_probe_targets_from_state(targets=None) -> dict:
+    global _SWING_PROBE_STATE_LAST_SEEN_MTIME_NS
+    target_list = targets if targets is not None else ACTIVE_TARGETS
+    if target_list is None:
+        return {"removed": 0, "restored": 0, "state_exists": False}
+    if not _is_swing_intraday_probe_enabled() or not _rule_bool("SWING_INTRADAY_PROBE_PERSIST_ENABLED", True):
+        return {"removed": 0, "restored": 0, "state_exists": False}
+
+    state_exists = SWING_INTRADAY_PROBE_STATE_PATH.exists()
+    if not state_exists:
+        return {"removed": 0, "restored": 0, "state_exists": False}
+
+    active_keys: set[str] = set()
+    try:
+        payload = json.loads(SWING_INTRADAY_PROBE_STATE_PATH.read_text(encoding="utf-8"))
+        rows = payload.get("active_positions") if isinstance(payload, dict) else []
+        if isinstance(rows, list):
+            active_keys = {
+                _swing_probe_identity(row)
+                for row in rows
+                if isinstance(row, dict) and _active_runtime_status(row)
+            }
+            active_keys.discard("")
+    except Exception as exc:
+        log_error(f"[SWING_PROBE_STATE] sync read failed: {exc}")
+        return {"removed": 0, "restored": 0, "state_exists": state_exists, "error": str(exc)}
+
+    before = len(target_list)
+    target_list[:] = [
+        target
+        for target in target_list
+        if not _is_swing_intraday_probe_target(target)
+        or _swing_probe_identity(target) in active_keys
+    ]
+    removed = before - len(target_list)
+    restored = restore_swing_intraday_probe_targets(target_list)
+    _SWING_PROBE_STATE_LAST_SEEN_MTIME_NS = _swing_probe_state_mtime_ns()
+    if removed or restored:
+        log_info(f"[SWING_PROBE_STATE] synced probe targets removed={removed} restored={restored}")
+    return {"removed": removed, "restored": restored, "state_exists": state_exists}
+
+
+def sync_swing_intraday_probe_targets_if_state_changed(targets=None, *, last_mtime: int | float | None = None) -> dict:
+    global _SWING_PROBE_STATE_LAST_SEEN_MTIME_NS
+    try:
+        current_mtime = _swing_probe_state_mtime_ns()
+    except Exception as exc:
+        log_error(f"[SWING_PROBE_STATE] mtime check failed: {exc}")
+        return {
+            "synced": False,
+            "removed": 0,
+            "restored": 0,
+            "state_exists": False,
+            "state_mtime": last_mtime,
+            "error": str(exc),
+        }
+    if current_mtime is None:
+        return {
+            "synced": False,
+            "removed": 0,
+            "restored": 0,
+            "state_exists": False,
+            "state_mtime": None,
+        }
+    if last_mtime is not None and current_mtime == last_mtime:
+        return {
+            "synced": False,
+            "removed": 0,
+            "restored": 0,
+            "state_exists": True,
+            "state_mtime": current_mtime,
+        }
+    result = sync_swing_intraday_probe_targets_from_state(targets)
+    _SWING_PROBE_STATE_LAST_SEEN_MTIME_NS = current_mtime
+    return {
+        **result,
+        "synced": True,
+        "state_mtime": current_mtime,
+    }
 
 
 def _simulated_order_no(prefix: str, code: str) -> str:
@@ -1987,6 +2098,27 @@ def _scalp_sim_event_fields(**extra) -> dict:
     }
     fields.update(extra)
     return fields
+
+
+def _scalp_sim_submit_guard_context_fields(source: dict | None) -> dict:
+    if not isinstance(source, dict):
+        return {}
+    keys = (
+        "sim_pre_submit_liquidity_guard_action",
+        "sim_pre_submit_liquidity_reason",
+        "sim_liquidity_value",
+        "sim_min_liquidity",
+        "sim_pre_submit_overbought_guard_action",
+        "sim_pre_submit_overbought_reason",
+        "sim_overbought_risk_state",
+        "sim_overbought_risk_bucket",
+        "sim_latency_state",
+        "sim_latency_danger_reasons",
+        "sim_order_price",
+        "sim_best_bid_at_submit",
+        "sim_price_below_bid_bps",
+    )
+    return {key: source.get(key) for key in keys if source.get(key) not in (None, "")}
 
 
 def _sim_lifecycle_source_contract_fields(
@@ -2744,6 +2876,7 @@ def _mark_scalp_simulated_holding(
             limit_fill_price=limit_fill_price,
             would_submit_stage="order_leg_sent",
             runtime_effect="simulated_holding_only",
+            **_scalp_sim_submit_guard_context_fields(stock),
             **_scalp_sim_candidate_window_context_fields(stock),
         ),
     )
@@ -2763,6 +2896,7 @@ def _mark_scalp_simulated_holding(
             would_limit_fill=bool(would_limit_fill),
             preset_tp_price=stock.get("preset_tp_price", 0),
             runtime_effect="simulated_holding_only",
+            **_scalp_sim_submit_guard_context_fields(stock),
             **_scalp_sim_candidate_window_context_fields(stock),
         ),
     )
@@ -3504,6 +3638,75 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
         best_bid=best_bid,
         best_ask=best_ask,
     )
+    sim_pre_submit_guard_fields = _build_sim_pre_submit_guard_observation_fields(
+        ws_data=ws_data or {},
+        runtime=runtime or {},
+        latency_gate=latency_gate,
+        price_snapshot=sim_price_snapshot,
+        pre_ai_context_fields=pre_ai_context_fields,
+    )
+    sim_target.update(sim_pre_submit_guard_fields)
+    sim_submit_candidate_window_fields = {
+        key: value
+        for key, value in _scalp_sim_candidate_window_context_fields(sim_target).items()
+        if key != "decision_authority"
+    }
+    liquidity_action = str(sim_pre_submit_guard_fields.get("sim_pre_submit_liquidity_guard_action") or "")
+    if liquidity_action == "WOULD_BLOCK":
+        liquidity_stage = "scalp_sim_pre_submit_liquidity_guard_would_block"
+    elif liquidity_action == "WOULD_PASS":
+        liquidity_stage = "scalp_sim_pre_submit_liquidity_guard_would_pass"
+    else:
+        liquidity_stage = "scalp_sim_pre_submit_liquidity_guard_unknown"
+    _log_entry_pipeline(
+        sim_target,
+        code,
+        liquidity_stage,
+        **_scalp_sim_event_fields(
+            **_sim_submit_path_contract_fields("liquidity_pre_submit_guard_p1"),
+            entry_adm_candidate_id=entry_adm_candidate_id,
+            sim_record_id=sim_record_id,
+            sim_parent_record_id=stock.get("id"),
+            source_stage="entry_pre_submit",
+            block_reason=(
+                sim_pre_submit_guard_fields.get("sim_pre_submit_liquidity_reason")
+                if sim_pre_submit_guard_fields.get("sim_pre_submit_liquidity_guard_action") == "WOULD_BLOCK"
+                else ""
+            ),
+            **sim_pre_submit_guard_fields,
+            **sim_submit_revalidation_fields,
+            **sim_price_snapshot,
+            **pre_ai_context_fields,
+            **sim_submit_candidate_window_fields,
+        ),
+    )
+    overbought_stage = (
+        "scalp_sim_pre_submit_overbought_guard_would_block"
+        if sim_pre_submit_guard_fields.get("sim_pre_submit_overbought_guard_action") == "WOULD_BLOCK"
+        else "scalp_sim_pre_submit_overbought_guard_would_pass"
+    )
+    _log_entry_pipeline(
+        sim_target,
+        code,
+        overbought_stage,
+        **_scalp_sim_event_fields(
+            **_sim_submit_path_contract_fields("overbought_pullback_guard_p1"),
+            entry_adm_candidate_id=entry_adm_candidate_id,
+            sim_record_id=sim_record_id,
+            sim_parent_record_id=stock.get("id"),
+            source_stage="entry_pre_submit",
+            block_reason=(
+                sim_pre_submit_guard_fields.get("sim_pre_submit_overbought_reason")
+                if sim_pre_submit_guard_fields.get("sim_pre_submit_overbought_guard_action") == "WOULD_BLOCK"
+                else ""
+            ),
+            **sim_pre_submit_guard_fields,
+            **sim_submit_revalidation_fields,
+            **sim_price_snapshot,
+            **pre_ai_context_fields,
+            **sim_submit_candidate_window_fields,
+        ),
+    )
     if sim_submit_revalidation_fields.get("entry_submit_revalidation_warning"):
         _log_entry_pipeline(
             sim_target,
@@ -3514,6 +3717,7 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
                 entry_adm_candidate_id=entry_adm_candidate_id,
                 sim_record_id=sim_record_id,
                 sim_parent_record_id=stock.get("id"),
+                **sim_pre_submit_guard_fields,
                 **sim_submit_revalidation_fields,
                 **sim_price_snapshot,
                 **_scalp_sim_candidate_window_context_fields(sim_target),
@@ -3531,6 +3735,7 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
                 sim_parent_record_id=stock.get("id"),
                 block_reason="stale_context_or_quote",
                 runtime_effect="simulated_order_skipped",
+                **sim_pre_submit_guard_fields,
                 **sim_submit_revalidation_fields,
                 **sim_price_snapshot,
                 **_scalp_sim_candidate_window_context_fields(sim_target),
@@ -3547,7 +3752,11 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
             price_snapshot=sim_price_snapshot,
             actual_order_submitted=False,
             broker_order_forbidden=True,
-            extra_fields={"sim_record_id": sim_record_id, "sim_parent_record_id": stock.get("id")},
+            extra_fields={
+                "sim_record_id": sim_record_id,
+                "sim_parent_record_id": stock.get("id"),
+                **sim_pre_submit_guard_fields,
+            },
         )
         persist_scalp_simulator_state()
         return True
@@ -3573,6 +3782,7 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
             runtime_effect="simulated_entry_armed_only",
             **qty_log_fields,
             **pre_ai_context_fields,
+            **sim_pre_submit_guard_fields,
             **_scalp_sim_candidate_window_context_fields(sim_target),
         ),
     )
@@ -3586,7 +3796,11 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
         price_snapshot=sim_price_snapshot,
         actual_order_submitted=False,
         broker_order_forbidden=True,
-        extra_fields={"sim_record_id": sim_record_id, "sim_parent_record_id": stock.get("id")},
+        extra_fields={
+            "sim_record_id": sim_record_id,
+            "sim_parent_record_id": stock.get("id"),
+            **sim_pre_submit_guard_fields,
+        },
     )
     _log_entry_pipeline(
         stock,
@@ -3601,6 +3815,7 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
             limit_price=limit_price,
             qty=qty,
             **qty_log_fields,
+            **sim_pre_submit_guard_fields,
             **sim_submit_revalidation_fields,
             **sim_price_snapshot,
             **pre_ai_context_fields,
@@ -3706,6 +3921,7 @@ def _complete_scalp_simulated_sell(
             would_submit_stage="sell_order_sent",
             runtime_effect="simulated_completed_only",
             decision_authority="sim_observation_only",
+            **_scalp_sim_submit_guard_context_fields(stock),
             panic_epoch_id=stock.get("panic_epoch_id"),
             last_panic_action_level=stock.get("last_panic_action_level"),
             last_panic_action_type=stock.get("last_panic_action_type"),
@@ -7903,6 +8119,204 @@ def _overbought_pre_submit_allowed(context: dict | None) -> bool:
     return str(overbought.get("risk_state") or "").strip() in {"pullback_observed", "rebreak_candidate"}
 
 
+def _evaluate_scalp_pre_submit_guard_verdicts(
+    *,
+    strategy: str | None,
+    liquidity_value,
+    min_liquidity,
+    pre_ai_context_fields: dict | None,
+    liquidity_guard_enabled: bool | None = None,
+    overbought_guard_enabled: bool | None = None,
+) -> dict:
+    is_scalping = str(strategy or "").strip().upper() in {"SCALPING", "SCALP"}
+    liquidity_enabled = (
+        bool(liquidity_guard_enabled)
+        if liquidity_guard_enabled is not None
+        else _rule_bool("SCALP_LIQUIDITY_PRE_SUBMIT_GUARD_ENABLED", True)
+    )
+    overbought_enabled = (
+        bool(overbought_guard_enabled)
+        if overbought_guard_enabled is not None
+        else _rule_bool("SCALP_OVERBOUGHT_PULLBACK_GUARD_ENABLED", True)
+    )
+    min_liquidity = _safe_int(min_liquidity, _rule_int("MIN_SCALP_LIQUIDITY", 500_000_000))
+    if liquidity_value in (None, "", "-", "None", "none", "null"):
+        resolved_liquidity = None
+    else:
+        resolved_liquidity = _safe_int(liquidity_value, 0)
+
+    if not is_scalping or not liquidity_enabled:
+        liquidity_action = "PASS"
+        liquidity_reason = "liquidity_guard_disabled" if is_scalping else "non_scalping_strategy"
+    elif resolved_liquidity is None:
+        liquidity_action = "UNKNOWN"
+        liquidity_reason = "liquidity_unknown"
+    elif resolved_liquidity < min_liquidity:
+        liquidity_action = "BLOCK"
+        liquidity_reason = "below_min_liquidity"
+    else:
+        liquidity_action = "PASS"
+        liquidity_reason = "liquidity_ok"
+
+    context_fields = pre_ai_context_fields if isinstance(pre_ai_context_fields, dict) else {}
+    overbought_state = str(
+        context_fields.get("overbought_risk_state")
+        or context_fields.get("overbought_state")
+        or ""
+    ).strip()
+    overbought_bucket = str(context_fields.get("overbought_risk_bucket") or "").strip()
+    if not is_scalping or not overbought_enabled:
+        overbought_action = "PASS"
+        overbought_reason = "overbought_guard_disabled" if is_scalping else "non_scalping_strategy"
+    elif not overbought_state:
+        overbought_action = "PASS"
+        overbought_reason = "overbought_unknown"
+    elif overbought_state in {"pullback_observed", "rebreak_candidate"}:
+        overbought_action = "PASS"
+        overbought_reason = "overbought_ok"
+    else:
+        overbought_action = "BLOCK"
+        overbought_reason = "pullback_or_rebreak_not_confirmed"
+
+    return {
+        "liquidity_guard_action": liquidity_action,
+        "liquidity_guard_reason": liquidity_reason,
+        "liquidity_value": resolved_liquidity,
+        "min_liquidity": min_liquidity,
+        "liquidity_guard_enabled": bool(liquidity_enabled),
+        "overbought_guard_action": overbought_action,
+        "overbought_guard_reason": overbought_reason,
+        "overbought_risk_state": overbought_state or "-",
+        "overbought_risk_bucket": overbought_bucket or "-",
+        "overbought_guard_enabled": bool(overbought_enabled),
+    }
+
+
+def _would_guard_action(action: str | None) -> str:
+    normalized = str(action or "").strip().upper()
+    if normalized == "BLOCK":
+        return "WOULD_BLOCK"
+    if normalized == "UNKNOWN":
+        return "WOULD_UNKNOWN"
+    return "WOULD_PASS"
+
+
+def _pre_submit_guard_verdict_log_fields(verdicts: dict | None) -> dict:
+    verdicts = verdicts if isinstance(verdicts, dict) else {}
+    liquidity_action = _would_guard_action(verdicts.get("liquidity_guard_action"))
+    overbought_action = _would_guard_action(verdicts.get("overbought_guard_action"))
+    return {
+        "liquidity_guard_action": liquidity_action,
+        "liquidity_guard_reason": verdicts.get("liquidity_guard_reason") or "-",
+        "pre_submit_liquidity_guard_action": verdicts.get("liquidity_guard_action") or "UNKNOWN",
+        "pre_submit_liquidity_reason": verdicts.get("liquidity_guard_reason") or "-",
+        "pre_submit_liquidity_value": (
+            "UNKNOWN" if verdicts.get("liquidity_value") is None else int(verdicts.get("liquidity_value") or 0)
+        ),
+        "pre_submit_min_liquidity": int(verdicts.get("min_liquidity") or 0),
+        "overbought_guard_action": overbought_action,
+        "overbought_guard_reason": verdicts.get("overbought_guard_reason") or "-",
+        "pre_submit_overbought_guard_action": verdicts.get("overbought_guard_action") or "UNKNOWN",
+        "pre_submit_overbought_reason": verdicts.get("overbought_guard_reason") or "-",
+        "pre_submit_overbought_risk_state": verdicts.get("overbought_risk_state") or "-",
+        "pre_submit_overbought_risk_bucket": verdicts.get("overbought_risk_bucket") or "-",
+    }
+
+
+def _sim_submit_path_contract_fields(threshold_family: str) -> dict:
+    return {
+        "metric_role": "submit_funnel_source_quality_gate",
+        "decision_authority": "sim_submit_path_observation_only",
+        "runtime_effect": False,
+        "threshold_family": threshold_family,
+        "runtime_family_candidate": threshold_family,
+        "gate_layer": "entry_pre_submit_guard",
+        "gate_action": "sim_counterfactual_observation",
+        "allowed_runtime_apply": False,
+        "human_approval_required": False,
+        "window_policy": "daily_lifecycle_submit_rows_plus_threshold_cycle_rolling_consumer",
+        "sample_floor": 3,
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": "sim submit-path guard verdict fields present before broker behavior tuning",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": [
+            "broker_order_submit",
+            "intraday_threshold_mutation",
+            "provider_route_change",
+            "bot_restart_trigger",
+            "hard_safety_override",
+        ],
+    }
+
+
+def _sim_submit_liquidity_value(ws_data: dict | None, runtime: dict | None) -> int | None:
+    runtime = runtime if isinstance(runtime, dict) else {}
+    for key in ("liquidity_value", "scalp_liquidity_value"):
+        if key in runtime and runtime.get(key) not in (None, "", "-", "None", "none", "null"):
+            return _safe_int(runtime.get(key), 0)
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    if "ask_tot" not in ws_data and "bid_tot" not in ws_data:
+        return None
+    curr_price = _safe_int(ws_data.get("curr") or runtime.get("curr_price"), 0)
+    if curr_price <= 0:
+        return None
+    return (_safe_int(ws_data.get("ask_tot"), 0) + _safe_int(ws_data.get("bid_tot"), 0)) * curr_price
+
+
+def _build_sim_pre_submit_guard_observation_fields(
+    *,
+    ws_data: dict | None,
+    runtime: dict | None,
+    latency_gate: dict | None,
+    price_snapshot: dict | None,
+    pre_ai_context_fields: dict | None,
+) -> dict:
+    runtime = runtime if isinstance(runtime, dict) else {}
+    latency_gate = latency_gate if isinstance(latency_gate, dict) else {}
+    price_snapshot = price_snapshot if isinstance(price_snapshot, dict) else {}
+    context_fields = pre_ai_context_fields if isinstance(pre_ai_context_fields, dict) else {}
+    min_liquidity = _safe_int(
+        runtime.get("scalp_min_liquidity"),
+        _rule_int("MIN_SCALP_LIQUIDITY", 500_000_000),
+    )
+    liquidity_value = _sim_submit_liquidity_value(ws_data, runtime)
+    verdicts = _evaluate_scalp_pre_submit_guard_verdicts(
+        strategy=runtime.get("strategy", "SCALPING"),
+        liquidity_value=liquidity_value,
+        min_liquidity=min_liquidity,
+        pre_ai_context_fields=context_fields,
+    )
+    liquidity_action = _would_guard_action(verdicts.get("liquidity_guard_action"))
+    liquidity_reason = verdicts.get("liquidity_guard_reason")
+    liquidity_log_value: int | str = (
+        "UNKNOWN" if verdicts.get("liquidity_value") is None else int(verdicts.get("liquidity_value") or 0)
+    )
+    overbought_action = _would_guard_action(verdicts.get("overbought_guard_action"))
+    overbought_reason = verdicts.get("overbought_guard_reason")
+
+    return {
+        "sim_pre_submit_liquidity_guard_action": liquidity_action,
+        "sim_pre_submit_liquidity_reason": liquidity_reason,
+        "sim_liquidity_value": liquidity_log_value,
+        "sim_min_liquidity": verdicts.get("min_liquidity"),
+        "sim_pre_submit_overbought_guard_action": overbought_action,
+        "sim_pre_submit_overbought_reason": overbought_reason,
+        "sim_overbought_risk_state": verdicts.get("overbought_risk_state") or "-",
+        "sim_overbought_risk_bucket": verdicts.get("overbought_risk_bucket") or "-",
+        "sim_latency_state": str(latency_gate.get("latency_state") or "-"),
+        "sim_latency_danger_reasons": str(
+            latency_gate.get("latency_danger_reasons")
+            or latency_gate.get("danger_reasons")
+            or latency_gate.get("reason")
+            or "-"
+        ),
+        "sim_order_price": price_snapshot.get("submitted_order_price") or price_snapshot.get("resolved_order_price") or "-",
+        "sim_best_bid_at_submit": price_snapshot.get("best_bid_at_submit") or "-",
+        "sim_price_below_bid_bps": price_snapshot.get("price_below_bid_bps") or 0,
+    }
+
+
 def _append_holding_flow_history(stock: dict, *, now_ts: float, exit_rule: str, profit_rate: float, flow_result: dict) -> None:
     flow_state = normalize_flow_state_label(flow_result.get("flow_state", "-"))
     history = list(stock.get("holding_flow_review_history") or [])
@@ -10487,12 +10901,21 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             best_bid=best_bid_at_submit, best_ask=best_ask_at_submit,
         )
     submit_revalidation_fields = _build_entry_submit_revalidation_fields(ws_data, latency_gate, now_ts=time.time())
+    scalp_pre_ai_gate_context = runtime.get("scalp_pre_ai_gate_context") if isinstance(runtime.get("scalp_pre_ai_gate_context"), dict) else {}
+    real_pre_submit_guard_verdicts = _evaluate_scalp_pre_submit_guard_verdicts(
+        strategy=strategy,
+        liquidity_value=liquidity_value,
+        min_liquidity=runtime.get("scalp_min_liquidity"),
+        pre_ai_context_fields=_scalp_pre_ai_gate_context_log_fields(scalp_pre_ai_gate_context),
+    )
+    real_pre_submit_guard_fields = _pre_submit_guard_verdict_log_fields(real_pre_submit_guard_verdicts)
     if submit_revalidation_fields.get("entry_submit_revalidation_warning"):
         _log_entry_pipeline(
             stock,
             code,
             "entry_submit_revalidation_warning",
             **submit_revalidation_fields,
+            **real_pre_submit_guard_fields,
         )
         _emit_scalp_entry_adm_snapshot(
             stock,
@@ -10534,6 +10957,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         order_price=int(latency_gate.get('order_price', 0) or 0),
         ai_entry_price_canary_eval_ms=int(latency_gate.get('ai_entry_price_canary_eval_ms', 0) or 0),
         **_scalp_pre_ai_gate_context_log_fields(runtime.get("scalp_pre_ai_gate_context")),
+        **real_pre_submit_guard_fields,
         **submit_revalidation_fields,
         **latency_price_snapshot,
         **entry_orderbook_micro_fields,
@@ -10569,6 +10993,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             block_reason="stale_context_or_quote",
             actual_order_submitted=False,
             threshold_family="pre_submit_price_guard",
+            **real_pre_submit_guard_fields,
             **submit_revalidation_fields,
             **latency_price_snapshot,
             **entry_orderbook_micro_fields,
@@ -10608,45 +11033,51 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             )
         return False
 
-    scalp_pre_ai_gate_context = runtime.get("scalp_pre_ai_gate_context") if isinstance(runtime.get("scalp_pre_ai_gate_context"), dict) else {}
-    if strategy == "SCALPING" and _rule_bool("SCALP_LIQUIDITY_PRE_SUBMIT_GUARD_ENABLED", True):
-        min_liquidity = _safe_int(runtime.get("scalp_min_liquidity"), _rule_int("MIN_SCALP_LIQUIDITY", 500_000_000))
-        if liquidity_value < min_liquidity:
-            log_info(
-                f"[PRE_SUBMIT_LIQUIDITY_GUARD_BLOCK] {stock.get('name')}({code}) "
-                f"liquidity={int(liquidity_value)} min={min_liquidity}"
-            )
-            clear_signal_reference(stock)
-            _log_entry_pipeline(
-                stock,
-                code,
-                "pre_submit_liquidity_guard_block",
-                **_build_pre_submit_gate_contract_fields("liquidity_pre_submit_guard_p1"),
-                liquidity_value=int(liquidity_value),
-                min_liquidity=min_liquidity,
-                block_reason="below_min_liquidity",
-                **submit_revalidation_fields,
-                **latency_price_snapshot,
-                **entry_orderbook_micro_fields,
-                **_scalp_pre_ai_gate_context_log_fields(scalp_pre_ai_gate_context),
-            )
-            _emit_scalp_entry_adm_snapshot(
-                stock,
-                code,
-                "pre_submit_liquidity_guard_block",
-                ai_score=latency_signal_score,
-                chosen_action="SKIP_PRE_SUBMIT_SAFETY",
-                latency_gate=latency_gate,
-                submit_fields=submit_revalidation_fields,
-                price_snapshot=latency_price_snapshot,
-                orderbook_fields=entry_orderbook_micro_fields,
-                actual_order_submitted=False,
-                broker_order_forbidden=True,
-                extra_fields={"liquidity_value": int(liquidity_value), "min_liquidity": min_liquidity},
-            )
-            return False
+    if strategy == "SCALPING" and real_pre_submit_guard_verdicts.get("liquidity_guard_action") == "BLOCK":
+        min_liquidity = _safe_int(
+            real_pre_submit_guard_verdicts.get("min_liquidity"),
+            _rule_int("MIN_SCALP_LIQUIDITY", 500_000_000),
+        )
+        log_info(
+            f"[PRE_SUBMIT_LIQUIDITY_GUARD_BLOCK] {stock.get('name')}({code}) "
+            f"liquidity={int(liquidity_value)} min={min_liquidity}"
+        )
+        clear_signal_reference(stock)
+        _log_entry_pipeline(
+            stock,
+            code,
+            "pre_submit_liquidity_guard_block",
+            **_build_pre_submit_gate_contract_fields("liquidity_pre_submit_guard_p1"),
+            liquidity_value=int(liquidity_value),
+            min_liquidity=min_liquidity,
+            block_reason="below_min_liquidity",
+            **real_pre_submit_guard_fields,
+            **submit_revalidation_fields,
+            **latency_price_snapshot,
+            **entry_orderbook_micro_fields,
+            **_scalp_pre_ai_gate_context_log_fields(scalp_pre_ai_gate_context),
+        )
+        _emit_scalp_entry_adm_snapshot(
+            stock,
+            code,
+            "pre_submit_liquidity_guard_block",
+            ai_score=latency_signal_score,
+            chosen_action="SKIP_PRE_SUBMIT_SAFETY",
+            latency_gate=latency_gate,
+            submit_fields=submit_revalidation_fields,
+            price_snapshot=latency_price_snapshot,
+            orderbook_fields=entry_orderbook_micro_fields,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            extra_fields={
+                "liquidity_value": int(liquidity_value),
+                "min_liquidity": min_liquidity,
+                **real_pre_submit_guard_fields,
+            },
+        )
+        return False
 
-    if strategy == "SCALPING" and not _overbought_pre_submit_allowed(scalp_pre_ai_gate_context):
+    if strategy == "SCALPING" and real_pre_submit_guard_verdicts.get("overbought_guard_action") == "BLOCK":
         overbought_context = scalp_pre_ai_gate_context.get("overbought") if isinstance(scalp_pre_ai_gate_context.get("overbought"), dict) else {}
         log_info(
             f"[PRE_SUBMIT_OVERBOUGHT_PULLBACK_GUARD_BLOCK] {stock.get('name')}({code}) "
@@ -10661,6 +11092,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             block_reason="pullback_or_rebreak_not_confirmed",
             risk_state=overbought_context.get("risk_state") or "-",
             risk_bucket=overbought_context.get("risk_bucket") or "-",
+            **real_pre_submit_guard_fields,
             **submit_revalidation_fields,
             **latency_price_snapshot,
             **entry_orderbook_micro_fields,
@@ -10682,6 +11114,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 "block_reason": "pullback_or_rebreak_not_confirmed",
                 "risk_state": overbought_context.get("risk_state") or "-",
                 "risk_bucket": overbought_context.get("risk_bucket") or "-",
+                **real_pre_submit_guard_fields,
             },
         )
         return False
@@ -10695,6 +11128,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             **entry_orderbook_micro_fields,
             "ai_score": latency_signal_score,
             "liquidity_value": int(liquidity_value),
+            **real_pre_submit_guard_fields,
             "stale_quote_submit_block": False,
             "broker_submit_blocked": False,
         },
@@ -10792,7 +11226,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             _log_entry_pipeline(
                 stock, code, "pre_submit_price_guard_block", tag=request['tag'], qty=qty, price=price,
                 order_type=request['order_type_code'], tif=request['tif'],
-                max_below_bid_bps=max_below_bid_bps, **price_snapshot,
+                max_below_bid_bps=max_below_bid_bps,
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                **real_pre_submit_guard_fields,
+                **price_snapshot,
             )
             log_info(
                 f"[PRE_SUBMIT_PRICE_GUARD_BLOCK] {stock.get('name')}({code}) "
@@ -10808,6 +11246,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             normal_defensive_order_price=int(latency_gate.get('normal_defensive_order_price', 0) or 0),
             latency_guarded_order_price=int(latency_gate.get('latency_guarded_order_price', 0) or 0),
             counterfactual_order_price_1tick=int(latency_gate.get('counterfactual_order_price_1tick', 0) or 0),
+            **real_pre_submit_guard_fields,
             **submit_revalidation_fields,
             **price_snapshot,
             **swing_entry_micro_fields,
@@ -10849,7 +11288,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             order_type_desc="매수" if strategy == 'SCALPING' else "최유리지정가", tif=request['tif'],
         )
         if not isinstance(res, dict):
-            _log_entry_pipeline(stock, code, "order_leg_no_response", tag=request['tag'])
+            _log_entry_pipeline(stock, code, "order_leg_no_response", tag=request['tag'], **real_pre_submit_guard_fields)
             continue
         rt_cd = str(res.get('return_code', res.get('rt_cd', '')))
         if rt_cd != '0':
@@ -10857,6 +11296,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             _log_entry_pipeline(
                 stock, code, "order_leg_fail", tag=request['tag'], return_code=rt_cd,
                 message=res.get('return_msg') or res.get('err_msg'),
+                **real_pre_submit_guard_fields,
             )
             continue
         ord_no = str(res.get('ord_no', '') or res.get('odno', ''))
@@ -10905,6 +11345,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             "order_leg_sent",
             tag=request['tag'],
             ord_no=ord_no,
+            **real_pre_submit_guard_fields,
             **(swing_one_share_real_canary_fields or {}),
         )
         if swing_one_share_real_canary_fields is not None:
@@ -10922,7 +11363,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     if not successful_orders:
         log_info(f"❌ [{stock['name']}] 매수 주문 전송 실패 (성공 주문 없음)")
         clear_signal_reference(stock)
-        _log_entry_pipeline(stock, code, "order_bundle_failed")
+        _log_entry_pipeline(stock, code, "order_bundle_failed", **real_pre_submit_guard_fields)
         if _is_swing_strategy(strategy):
             maybe_start_swing_intraday_probe(
                 stock=stock,
@@ -11020,6 +11461,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         actual_order_submitted=True,
         broker_order_forbidden=False,
         **_scalp_pre_ai_gate_context_log_fields(runtime.get("scalp_pre_ai_gate_context")),
+        **real_pre_submit_guard_fields,
         **submit_revalidation_fields,
         **bundle_price_snapshot,
         **swing_entry_micro_fields,
@@ -11041,6 +11483,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             "requested_qty": requested_qty,
             "legs": len(successful_orders),
             "order_price": int(latency_gate.get('order_price', 0) or 0),
+            **real_pre_submit_guard_fields,
         },
     )
 

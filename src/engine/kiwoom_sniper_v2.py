@@ -1217,6 +1217,14 @@ def run_sniper(is_test_mode=False):
     except Exception:
         run_sniper.last_scalp_sim_state_mtime = None
     sniper_state_handlers.restore_swing_intraday_probe_targets(ACTIVE_TARGETS)
+    try:
+        run_sniper.last_swing_probe_state_mtime = (
+            sniper_state_handlers.SWING_INTRADAY_PROBE_STATE_PATH.stat().st_mtime_ns
+            if sniper_state_handlers.SWING_INTRADAY_PROBE_STATE_PATH.exists()
+            else None
+        )
+    except Exception:
+        run_sniper.last_swing_probe_state_mtime = None
 
     targets = ACTIVE_TARGETS
     last_db_poll_time = time.time()
@@ -1261,6 +1269,11 @@ def run_sniper(is_test_mode=False):
                 last_mtime=getattr(run_sniper, 'last_scalp_sim_state_mtime', None),
             )
             run_sniper.last_scalp_sim_state_mtime = scalp_sim_sync.get("state_mtime")
+            swing_probe_sync = sniper_state_handlers.sync_swing_intraday_probe_targets_if_state_changed(
+                targets,
+                last_mtime=getattr(run_sniper, 'last_swing_probe_state_mtime', None),
+            )
+            run_sniper.last_swing_probe_state_mtime = swing_probe_sync.get("state_mtime")
 
             if not is_test_mode and now_t >= TIME_20_00:
                 print("🌙 장 마감 시간이 다가와 감시를 종료합니다.")

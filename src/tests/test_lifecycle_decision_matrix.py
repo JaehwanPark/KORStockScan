@@ -109,7 +109,90 @@ def test_lifecycle_submit_bucket_attribution_creates_contract_gap_workorders():
         "order_entry_broker_receipt_contract_gap_review",
         "order_entry_fill_quality_contract_gap_review",
         "order_entry_telegram_post_submit_contract_gap_review",
+        "order_entry_sim_submit_path_bucket_instrumentation",
     }
+
+
+def test_lifecycle_submit_bucket_attribution_buckets_sim_pre_submit_guards():
+    rows = [
+        {
+            "stage": "submit",
+            "source_stage": "scalp_sim_pre_submit_liquidity_guard_would_block",
+            "runtime_features": {
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "decision_authority": "sim_submit_path_observation_only",
+                "sim_pre_submit_liquidity_guard_action": "WOULD_BLOCK",
+                "sim_pre_submit_liquidity_reason": "below_min_liquidity",
+                "sim_liquidity_value": 100_000_000,
+                "sim_min_liquidity": 500_000_000,
+                "sim_pre_submit_overbought_guard_action": "WOULD_PASS",
+                "sim_pre_submit_overbought_reason": "overbought_ok",
+                "latency_state": "DANGER",
+                "latency_reason": "scalp_live_simulator",
+                "quote_age_ms": 200,
+                "would_limit_fill": True,
+                "limit_price": 10_000,
+                "price_below_bid_bps": 4,
+                "sim_record_id": "SIM-1",
+            },
+            "labels": {"profit_rate": 0.2},
+            "stage_ev_composite_pct": 0.2,
+        },
+        {
+            "stage": "submit",
+            "source_stage": "scalp_sim_pre_submit_liquidity_guard_would_pass",
+            "runtime_features": {
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "sim_pre_submit_liquidity_guard_action": "WOULD_PASS",
+                "sim_pre_submit_liquidity_reason": "liquidity_ok",
+                "sim_liquidity_value": 800_000_000,
+                "sim_min_liquidity": 500_000_000,
+                "sim_pre_submit_overbought_guard_action": "WOULD_PASS",
+                "sim_pre_submit_overbought_reason": "overbought_ok",
+                "latency_state": "SAFE",
+                "latency_reason": "scalp_live_simulator",
+                "quote_age_ms": 200,
+                "would_limit_fill": True,
+                "limit_price": 10_000,
+                "price_below_bid_bps": 0,
+                "sim_record_id": "SIM-2",
+            },
+            "labels": {"profit_rate": 0.1},
+            "stage_ev_composite_pct": 0.1,
+        },
+        {
+            "stage": "submit",
+            "source_stage": "pre_submit_liquidity_guard_block",
+            "runtime_features": {
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "liquidity_guard_action": "BLOCK",
+                "liquidity_guard_reason": "below_min_liquidity",
+                "liquidity_value": 100_000_000,
+                "min_liquidity": 500_000_000,
+                "overbought_guard_action": "PASS",
+                "overbought_guard_reason": "overbought_ok",
+                "latency_state": "SAFE",
+            },
+            "labels": {"profit_rate": 0.0},
+            "stage_ev_composite_pct": 0.0,
+        },
+    ]
+
+    attribution = mod._submit_bucket_attribution(rows)
+    bucket_keys = {(item["bucket_type"], item["bucket_key"]) for item in attribution["buckets"]}
+
+    assert ("liquidity_guard_action", "would_block") in bucket_keys
+    assert ("overbought_guard_action", "would_pass") in bucket_keys
+    assert ("liquidity_bucket", "below_min_liquidity") in bucket_keys
+    assert ("liquidity_bucket", "liquidity_ok") in bucket_keys
+    assert ("latency_state", "danger") in bucket_keys
+    assert (
+        "order_entry_sim_submit_path_bucket_instrumentation"
+        not in {item["workorder_id"] for item in attribution["code_improvement_workorders"]}
+    )
 
 
 def test_lifecycle_matrix_builder_separates_runtime_features_and_labels(tmp_path, monkeypatch):

@@ -1113,12 +1113,14 @@ def test_openai_overnight_uses_batch_timeout_profile(monkeypatch):
         replace(
             ai_engine_openai_module.TRADING_RULES,
             OPENAI_RESPONSES_WS_TIMEOUT_MS=700,
+            OPENAI_SCANNER_REPORT_TIMEOUT_MS=15000,
             OPENAI_OVERNIGHT_TIMEOUT_MS=12000,
         ),
     )
     engine = _build_provider_engine(GPTSniperEngine)
 
     assert engine._get_openai_timeout_ms(endpoint_name="overnight", require_json=True) == 12000
+    assert engine._get_openai_timeout_ms(endpoint_name="scanner_report", require_json=False) == 15000
     assert engine._get_openai_timeout_ms(endpoint_name="analyze_target", require_json=True) == 700
 
 

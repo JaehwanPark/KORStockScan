@@ -627,6 +627,8 @@ class GPTSniperEngine:
         return meta
 
     def _get_openai_timeout_ms(self, *, endpoint_name, require_json):
+        if str(endpoint_name or "").strip() == "scanner_report":
+            return max(1, int(getattr(TRADING_RULES, "OPENAI_SCANNER_REPORT_TIMEOUT_MS", 15000) or 15000))
         if str(endpoint_name or "").strip() == "overnight":
             return max(1, int(getattr(TRADING_RULES, "OPENAI_OVERNIGHT_TIMEOUT_MS", 12000) or 12000))
         if not require_json:

@@ -54,7 +54,14 @@ RUNTIME_FEATURE_KEYS = {
     "stale_bucket",
     "price_resolution_bucket",
     "liquidity_bucket",
+    "liquidity_guard_action",
+    "liquidity_guard_reason",
     "overbought_bucket",
+    "overbought_guard_action",
+    "overbought_guard_reason",
+    "latency_state",
+    "latency_reason",
+    "price_below_bid_bps",
     "time_bucket",
     "actual_order_submitted",
     "broker_order_forbidden",
@@ -232,6 +239,11 @@ SCALP_SIM_SUBMIT_STAGES = {
     "scalp_sim_buy_order_assumed_filled",
     "scalp_sim_entry_submit_revalidation_warning",
     "scalp_sim_entry_submit_revalidation_block",
+    "scalp_sim_pre_submit_liquidity_guard_would_block",
+    "scalp_sim_pre_submit_liquidity_guard_would_pass",
+    "scalp_sim_pre_submit_liquidity_guard_unknown",
+    "scalp_sim_pre_submit_overbought_guard_would_block",
+    "scalp_sim_pre_submit_overbought_guard_would_pass",
 }
 
 SCALP_SIM_HOLDING_STAGE = "scalp_sim_holding_started"
@@ -589,10 +601,15 @@ def _load_scalp_sim_submit_rows(target_date: str) -> tuple[list[dict[str, Any]],
     path = PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"
     labels_by_key = _load_sim_post_sell_label_map(target_date)
     submit_priority = {
-        "scalp_sim_buy_order_assumed_filled": 0,
-        "scalp_sim_buy_order_virtual_pending": 1,
-        "scalp_sim_entry_submit_revalidation_block": 2,
-        "scalp_sim_entry_submit_revalidation_warning": 3,
+        "scalp_sim_entry_submit_revalidation_block": 0,
+        "scalp_sim_pre_submit_liquidity_guard_would_block": 1,
+        "scalp_sim_pre_submit_overbought_guard_would_block": 2,
+        "scalp_sim_pre_submit_liquidity_guard_unknown": 3,
+        "scalp_sim_entry_submit_revalidation_warning": 4,
+        "scalp_sim_buy_order_assumed_filled": 5,
+        "scalp_sim_buy_order_virtual_pending": 6,
+        "scalp_sim_pre_submit_liquidity_guard_would_pass": 7,
+        "scalp_sim_pre_submit_overbought_guard_would_pass": 8,
     }
     submit_events: dict[str, dict[str, Any]] = {}
     completed_events: dict[str, dict[str, Any]] = {}
@@ -650,6 +667,29 @@ def _load_scalp_sim_submit_rows(target_date: str) -> tuple[list[dict[str, Any]],
                     "limit_price": fields.get("limit_price"),
                     "curr_price": fields.get("curr_price") or fields.get("mark_price_at_submit"),
                     "price_resolution_bucket": fields.get("resolution_reason"),
+                    "liquidity_guard_action": fields.get("sim_pre_submit_liquidity_guard_action"),
+                    "liquidity_guard_reason": fields.get("sim_pre_submit_liquidity_reason"),
+                    "sim_pre_submit_liquidity_guard_action": fields.get("sim_pre_submit_liquidity_guard_action"),
+                    "sim_pre_submit_liquidity_reason": fields.get("sim_pre_submit_liquidity_reason"),
+                    "sim_liquidity_value": fields.get("sim_liquidity_value"),
+                    "sim_min_liquidity": fields.get("sim_min_liquidity"),
+                    "liquidity_bucket": fields.get("liquidity_bucket"),
+                    "liquidity_risk_state": fields.get("liquidity_risk_state"),
+                    "liquidity_reason": fields.get("liquidity_reason"),
+                    "liquidity_gate_action": fields.get("liquidity_gate_action"),
+                    "overbought_guard_action": fields.get("sim_pre_submit_overbought_guard_action"),
+                    "overbought_guard_reason": fields.get("sim_pre_submit_overbought_reason"),
+                    "sim_pre_submit_overbought_guard_action": fields.get("sim_pre_submit_overbought_guard_action"),
+                    "sim_pre_submit_overbought_reason": fields.get("sim_pre_submit_overbought_reason"),
+                    "sim_overbought_risk_state": fields.get("sim_overbought_risk_state"),
+                    "sim_overbought_risk_bucket": fields.get("sim_overbought_risk_bucket"),
+                    "overbought_bucket": fields.get("overbought_bucket"),
+                    "overbought_risk_state": fields.get("overbought_risk_state"),
+                    "overbought_risk_bucket": fields.get("overbought_risk_bucket"),
+                    "overbought_gate_action": fields.get("overbought_gate_action"),
+                    "latency_state": fields.get("sim_latency_state") or fields.get("latency_state"),
+                    "latency_reason": fields.get("sim_latency_danger_reasons") or fields.get("reason"),
+                    "price_below_bid_bps": fields.get("sim_price_below_bid_bps") or fields.get("price_below_bid_bps"),
                     "fixed_threshold_contract_role": "bounded_tunable",
                     "sim_record_id": sim_record_id,
                 },
@@ -1303,7 +1343,14 @@ SUBMIT_BUCKET_FIELD_MAP = {
     "would_limit_fill": "runtime_features.would_limit_fill",
     "actual_order_submitted": "runtime_features.actual_order_submitted|actual_order_submitted",
     "broker_order_forbidden": "runtime_features.broker_order_forbidden",
-    "combo_submit_quality": "source_stage|runtime_features.entry_submit_revalidation_warning|runtime_features.entry_submit_revalidation_block|runtime_features.quote_age_ms|runtime_features.would_limit_fill|runtime_features.actual_order_submitted",
+    "liquidity_guard_action": "runtime_features.liquidity_guard_action|runtime_features.sim_pre_submit_liquidity_guard_action",
+    "liquidity_bucket": "runtime_features.liquidity_guard_reason|runtime_features.sim_pre_submit_liquidity_reason|runtime_features.sim_liquidity_value|runtime_features.sim_min_liquidity|runtime_features.liquidity_bucket",
+    "overbought_guard_action": "runtime_features.overbought_guard_action|runtime_features.sim_pre_submit_overbought_guard_action",
+    "overbought_bucket": "runtime_features.overbought_guard_reason|runtime_features.sim_pre_submit_overbought_reason|runtime_features.sim_overbought_risk_state|runtime_features.sim_overbought_risk_bucket|runtime_features.overbought_bucket",
+    "latency_state": "runtime_features.latency_state",
+    "latency_reason": "runtime_features.latency_reason",
+    "price_below_bid_bucket": "runtime_features.price_below_bid_bps",
+    "combo_submit_quality": "source_stage|runtime_features.entry_submit_revalidation_warning|runtime_features.entry_submit_revalidation_block|runtime_features.quote_age_ms|runtime_features.would_limit_fill|runtime_features.actual_order_submitted|runtime_features.sim_pre_submit_liquidity_guard_action|runtime_features.sim_pre_submit_liquidity_reason|runtime_features.sim_pre_submit_overbought_guard_action|runtime_features.sim_pre_submit_overbought_reason|runtime_features.latency_state",
 }
 
 
@@ -1624,6 +1671,106 @@ def _submit_revalidation_state(features: dict[str, Any]) -> str:
     return "ok_or_unflagged"
 
 
+def _submit_liquidity_guard_action(features: dict[str, Any]) -> str:
+    action = _bucket_value(
+        features.get("liquidity_guard_action") or features.get("sim_pre_submit_liquidity_guard_action"),
+        "",
+    ).lower()
+    if action in {"block", "blocked"}:
+        return "would_block"
+    if action in {"pass", "passed"}:
+        return "would_pass"
+    if action in {"unknown", "source_unknown"}:
+        return "would_unknown"
+    if action in {"would_block", "would_pass", "would_unknown"}:
+        return action
+    return "liquidity_guard_unknown"
+
+
+def _submit_liquidity_bucket(features: dict[str, Any]) -> str:
+    action = _submit_liquidity_guard_action(features)
+    reason = _bucket_value(
+        features.get("liquidity_guard_reason") or features.get("sim_pre_submit_liquidity_reason"),
+        "",
+    )
+    if action == "would_block":
+        return reason or "below_min_liquidity"
+    if action == "would_pass" and reason == "liquidity_ok":
+        return "liquidity_ok"
+    if action == "would_pass" and reason == "liquidity_unknown":
+        return "liquidity_unknown"
+    if action == "would_unknown":
+        return reason or "liquidity_unknown"
+    explicit = _bucket_value(features.get("liquidity_bucket"), "")
+    if explicit:
+        return explicit
+    value = _safe_float(features.get("sim_liquidity_value") or features.get("liquidity_value"), None)
+    min_liquidity = _safe_float(features.get("sim_min_liquidity") or features.get("min_liquidity"), None)
+    if value is None:
+        return "liquidity_unknown"
+    if min_liquidity is not None and value < min_liquidity:
+        return "below_min_liquidity"
+    return "liquidity_ok"
+
+
+def _submit_overbought_guard_action(features: dict[str, Any]) -> str:
+    action = _bucket_value(
+        features.get("overbought_guard_action") or features.get("sim_pre_submit_overbought_guard_action"),
+        "",
+    ).lower()
+    if action in {"block", "blocked"}:
+        return "would_block"
+    if action in {"pass", "passed"}:
+        return "would_pass"
+    if action in {"would_block", "would_pass"}:
+        return action
+    return "overbought_guard_unknown"
+
+
+def _submit_overbought_bucket(features: dict[str, Any]) -> str:
+    action = _submit_overbought_guard_action(features)
+    reason = _bucket_value(
+        features.get("overbought_guard_reason") or features.get("sim_pre_submit_overbought_reason"),
+        "",
+    )
+    if action == "would_block":
+        return reason or "pullback_or_rebreak_not_confirmed"
+    if action == "would_pass" and reason == "overbought_ok":
+        return "overbought_ok"
+    if action == "would_pass" and reason == "overbought_unknown":
+        return "overbought_unknown"
+    explicit = _bucket_value(features.get("overbought_bucket") or features.get("sim_overbought_risk_bucket"), "")
+    if explicit:
+        return explicit
+    state = _bucket_value(features.get("overbought_risk_state") or features.get("sim_overbought_risk_state"), "")
+    if state in {"pullback_observed", "rebreak_candidate"}:
+        return "overbought_ok"
+    if state:
+        return state
+    return "overbought_unknown"
+
+
+def _submit_latency_state(features: dict[str, Any]) -> str:
+    return _bucket_value(features.get("latency_state"), "latency_unknown").lower()
+
+
+def _submit_latency_reason(features: dict[str, Any]) -> str:
+    return _bucket_value(features.get("latency_reason"), "latency_reason_unknown")
+
+
+def _submit_price_below_bid_bucket(value: Any) -> str:
+    bps = _safe_float(value, None)
+    if bps is None:
+        return "price_below_bid_unknown"
+    if bps <= 0:
+        return "not_below_bid"
+    if bps <= 5:
+        return "below_bid_0_5bps"
+    if bps <= 20:
+        return "below_bid_5_20bps"
+    return "below_bid_20bps_plus"
+
+
 def _submit_bucket_features(row: dict[str, Any]) -> dict[str, str]:
     features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
     return {
@@ -1643,6 +1790,13 @@ def _submit_bucket_features(row: dict[str, Any]) -> dict[str, str]:
             features.get("broker_order_forbidden"),
             unknown="broker_order_forbidden_unknown",
         ),
+        "liquidity_guard_action": _submit_liquidity_guard_action(features),
+        "liquidity_bucket": _submit_liquidity_bucket(features),
+        "overbought_guard_action": _submit_overbought_guard_action(features),
+        "overbought_bucket": _submit_overbought_bucket(features),
+        "latency_state": _submit_latency_state(features),
+        "latency_reason": _submit_latency_reason(features),
+        "price_below_bid_bucket": _submit_price_below_bid_bucket(features.get("price_below_bid_bps")),
     }
 
 
@@ -1727,6 +1881,32 @@ def _submit_contract_gaps(submit_rows: list[dict[str, Any]]) -> list[dict[str, A
                     "allowed_runtime_apply": False,
                 }
             )
+    sim_submit_rows = []
+    for row in submit_rows:
+        runtime_features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
+        if str(row.get("source_stage") or "") in SCALP_SIM_SUBMIT_STAGES or _bucket_value(
+            runtime_features.get("sim_record_id"),
+            "",
+        ):
+            sim_submit_rows.append(row)
+    if sim_submit_rows:
+        coverage = _field_coverage(
+            sim_submit_rows,
+            "runtime_features.sim_pre_submit_liquidity_guard_action|runtime_features.sim_pre_submit_liquidity_reason|runtime_features.sim_liquidity_value|runtime_features.sim_min_liquidity",
+        )
+        if coverage["present_count"] <= 0:
+            gaps.append(
+                {
+                    "gap_type": "sim_pre_submit_guard_contract_gap",
+                    "workorder_id": "order_entry_sim_submit_path_bucket_instrumentation",
+                    "bucket_type": "sim_pre_submit_guard_contract_gap",
+                    "bucket_key": "sim_pre_submit_guard_bucket_fields_missing",
+                    "reason": "sim_pre_submit_guard_bucket_fields_missing",
+                    "source_field_coverage": coverage,
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                }
+            )
     return gaps
 
 
@@ -1743,6 +1923,13 @@ def _submit_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "would_limit_fill",
             "actual_order_submitted",
             "broker_order_forbidden",
+            "liquidity_guard_action",
+            "liquidity_bucket",
+            "overbought_guard_action",
+            "overbought_bucket",
+            "latency_state",
+            "latency_reason",
+            "price_below_bid_bucket",
         ):
             bucket_groups[(bucket_type, buckets[bucket_type])].append(row)
         combo_key = "|".join(
@@ -1750,6 +1937,10 @@ def _submit_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 f"source={buckets['submit_source_stage']}",
                 f"revalidation={buckets['revalidation_state']}",
                 f"quote_age={buckets['quote_age_bucket']}",
+                f"liquidity={buckets['liquidity_bucket']}",
+                f"liquidity_guard={buckets['liquidity_guard_action']}",
+                f"overbought={buckets['overbought_bucket']}",
+                f"latency={buckets['latency_state']}",
                 f"fill={buckets['would_limit_fill']}",
                 f"submitted={buckets['actual_order_submitted']}",
             ]

@@ -552,6 +552,7 @@ class TradingConfig:
     OPENAI_RESPONSES_WS_ENABLED: bool = False  # Responses WebSocket shadow-first 토글
     OPENAI_RESPONSES_WS_POOL_SIZE: int = 2  # persistent Responses WebSocket worker 수
     OPENAI_RESPONSES_WS_TIMEOUT_MS: int = 700  # hot path 판단 timeout
+    OPENAI_SCANNER_REPORT_TIMEOUT_MS: int = 15000  # source-only morning scanner report timeout
     OPENAI_OVERNIGHT_TIMEOUT_MS: int = 12000  # source-only overnight_v1 batch 판단 timeout
     OPENAI_RESPONSES_MAX_OUTPUT_TOKENS: int = 512  # OpenAI live JSON 응답 토큰 상한
     OPENAI_REASONING_EFFORT: str = "auto"  # hot path 추론 effort
@@ -2090,6 +2091,7 @@ def _build_trading_rules() -> TradingConfig:
     env_openai_ws_enabled = _env_bool("KORSTOCKSCAN_OPENAI_RESPONSES_WS_ENABLED")
     env_openai_ws_pool_size = _env_int("KORSTOCKSCAN_OPENAI_RESPONSES_WS_POOL_SIZE")
     env_openai_ws_timeout_ms = _env_int("KORSTOCKSCAN_OPENAI_RESPONSES_WS_TIMEOUT_MS")
+    env_openai_scanner_report_timeout_ms = _env_int("KORSTOCKSCAN_OPENAI_SCANNER_REPORT_TIMEOUT_MS")
     env_openai_overnight_timeout_ms = _env_int("KORSTOCKSCAN_OPENAI_OVERNIGHT_TIMEOUT_MS")
     env_openai_max_output_tokens = _env_int("KORSTOCKSCAN_OPENAI_RESPONSES_MAX_OUTPUT_TOKENS")
     env_openai_reasoning_effort = _env_str("KORSTOCKSCAN_OPENAI_REASONING_EFFORT")
@@ -2107,6 +2109,7 @@ def _build_trading_rules() -> TradingConfig:
         or env_openai_ws_enabled is not None
         or env_openai_ws_pool_size is not None
         or env_openai_ws_timeout_ms is not None
+        or env_openai_scanner_report_timeout_ms is not None
         or env_openai_overnight_timeout_ms is not None
         or env_openai_max_output_tokens is not None
         or env_openai_reasoning_effort is not None
@@ -2134,6 +2137,9 @@ def _build_trading_rules() -> TradingConfig:
             OPENAI_RESPONSES_WS_TIMEOUT_MS=env_openai_ws_timeout_ms
             if env_openai_ws_timeout_ms is not None
             else config.OPENAI_RESPONSES_WS_TIMEOUT_MS,
+            OPENAI_SCANNER_REPORT_TIMEOUT_MS=env_openai_scanner_report_timeout_ms
+            if env_openai_scanner_report_timeout_ms is not None
+            else config.OPENAI_SCANNER_REPORT_TIMEOUT_MS,
             OPENAI_OVERNIGHT_TIMEOUT_MS=env_openai_overnight_timeout_ms
             if env_openai_overnight_timeout_ms is not None
             else config.OPENAI_OVERNIGHT_TIMEOUT_MS,

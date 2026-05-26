@@ -18,15 +18,17 @@ def test_order_reference_snapshot_2nd_pass_uses_finalized_params(monkeypatch):
             return [
                 {
                     "trde_dt": "20260415",
-                    "ord_cntr_list": [
+                    "acnt_ord_cntr_prps_dtl": [
                         {
                             "stk_cd": "A189300",
                             "stk_nm": "인텔리안테크",
-                            "sell_tp": "매수",
-                            "qty": "7",
-                            "unp": "133610",
+                            "io_tp_nm": "현금매수",
+                            "ord_qty": "7",
+                            "cntr_qty": "7",
+                            "ord_uv": "133600",
+                            "cntr_uv": "133610",
                             "ord_no": "0412345",
-                            "orig_ord_no": "0000000",
+                            "ori_ord": "0000000",
                         }
                     ],
                 }
@@ -38,11 +40,13 @@ def test_order_reference_snapshot_2nd_pass_uses_finalized_params(monkeypatch):
                     {
                         "stk_cd": "189300",
                         "stk_nm": "인텔리안테크",
-                        "sell_tp": "매수",
-                        "qty": "7",
-                        "cntr_prc": "133610",
+                        "io_tp_nm": "+매수",
+                        "ord_qty": "7",
+                        "cntr_qty": "7",
+                        "ord_pric": "133600",
+                        "cntr_pric": "133610",
                         "ord_no": "0412345",
-                        "orgn_ord_no": "0000000",
+                        "orig_ord_no": "0000000",
                     }
                 ],
             }
@@ -59,12 +63,33 @@ def test_order_reference_snapshot_2nd_pass_uses_finalized_params(monkeypatch):
 
     assert len(calls) == 2
     assert {item["api_id"] for item in calls} == {"kt00007", "ka10076"}
-    assert all(item["payload"]["qry_tp"] == "0" for item in calls)
-    assert all(item["payload"]["stk_bond_tp"] == "0" for item in calls)
+    kt_call = next(item for item in calls if item["api_id"] == "kt00007")
+    ka_call = next(item for item in calls if item["api_id"] == "ka10076")
+    assert kt_call["url"] == "https://example.test/api/dostk/acnt"
+    assert kt_call["payload"] == {
+        "ord_dt": "",
+        "qry_tp": "1",
+        "stk_bond_tp": "0",
+        "sell_tp": "0",
+        "stk_cd": "",
+        "fr_ord_no": "",
+        "dmst_stex_tp": "%",
+    }
+    assert ka_call["url"] == "https://example.test/api/dostk/acnt"
+    assert ka_call["payload"] == {
+        "stk_cd": "",
+        "qry_tp": "0",
+        "sell_tp": "0",
+        "ord_no": "",
+        "stex_tp": "0",
+    }
     assert len(rows) == 1
     assert rows[0]["code"] == "189300"
     assert rows[0]["side"] == "매수"
+    assert rows[0]["qty"] == 7
+    assert rows[0]["unit_price"] == 133610
     assert rows[0]["ord_no"] == "0412345"
+    assert rows[0]["orig_ord_no"] == "0000000"
 
 
 def test_find_order_reference_match_by_code_side_qty_price():

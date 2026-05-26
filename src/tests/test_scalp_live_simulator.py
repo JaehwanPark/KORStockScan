@@ -40,6 +40,8 @@ def _reset_state(monkeypatch, tmp_path):
     monkeypatch.setattr(state_handlers, "LAST_LOG_TIMES", {})
     monkeypatch.setattr(state_handlers, "SCALP_SIM_STATE_PATH", tmp_path / "scalp_live_sim_state.json")
     monkeypatch.setattr(state_handlers, "_SCALP_SIM_STATE_LAST_SEEN_MTIME_NS", None)
+    monkeypatch.setattr(state_handlers, "SWING_INTRADAY_PROBE_STATE_PATH", tmp_path / "swing_probe_state.json")
+    monkeypatch.setattr(state_handlers, "_SWING_PROBE_STATE_LAST_SEEN_MTIME_NS", None)
     monkeypatch.setattr(state_handlers, "record_sim_post_sell_candidate", lambda **kwargs: None)
     state_handlers._SCALP_SIM_AI_CALL_TIMES.clear()
     captured_pipeline_events = []
@@ -87,6 +89,8 @@ def test_scalp_simulator_arms_and_fills_without_real_buy_order(monkeypatch):
         "now_ts": 1_000.0,
         "current_ai_score": 82.0,
         "latency_state": "DANGER",
+        "liquidity_value": 800_000_000,
+        "scalp_min_liquidity": 500_000_000,
     }
     ws_data = {
         "curr": 9_990,
@@ -114,6 +118,8 @@ def test_scalp_simulator_arms_and_fills_without_real_buy_order(monkeypatch):
     assert sim_target["buy_price"] == 9_990
     sim_stages = [stage for stage, _ in logs if stage.startswith("scalp_sim_")]
     assert sim_stages == [
+        "scalp_sim_pre_submit_liquidity_guard_would_pass",
+        "scalp_sim_pre_submit_overbought_guard_would_pass",
         "scalp_sim_entry_armed",
         "scalp_sim_buy_order_virtual_pending",
         "scalp_sim_buy_order_assumed_filled",
@@ -127,6 +133,103 @@ def test_scalp_simulator_arms_and_fills_without_real_buy_order(monkeypatch):
     assert fill_event["would_limit_fill"] is True
     armed_event = next(fields for stage, fields in logs if stage == "scalp_sim_entry_armed")
     assert armed_event["runtime_effect"] == "simulated_entry_armed_only"
+
+
+def test_scalp_simulator_logs_pre_submit_liquidity_would_block_but_keeps_virtual_fill(monkeypatch):
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: pytest.fail("real buy order must not be called"),
+    )
+
+    stock = {
+        "id": 101,
+        "name": "TEST",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "position_tag": "SCALP_BASE",
+        "target_buy_price": 10_000,
+    }
+    runtime = {
+        "strategy": "SCALPING",
+        "is_trigger": True,
+        "now_ts": 1_000.0,
+        "current_ai_score": 82.0,
+        "latency_state": "DANGER",
+        "liquidity_value": 100_000_000,
+        "scalp_min_liquidity": 500_000_000,
+    }
+
+    assert state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
+        stock,
+        "123456",
+        {"curr": 9_990, "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]}},
+        runtime,
+    )
+
+    stages = [stage for stage, _ in logs]
+    assert "scalp_sim_pre_submit_liquidity_guard_would_block" in stages
+    assert "scalp_sim_buy_order_virtual_pending" in stages
+    assert "scalp_sim_buy_order_assumed_filled" in stages
+    guard = next(fields for stage, fields in logs if stage == "scalp_sim_pre_submit_liquidity_guard_would_block")
+    assert guard["decision_authority"] == "sim_submit_path_observation_only"
+    assert guard["runtime_effect"] is False
+    assert guard["actual_order_submitted"] is False
+    assert guard["broker_order_forbidden"] is True
+    assert guard["sim_pre_submit_liquidity_guard_action"] == "WOULD_BLOCK"
+    assert guard["sim_pre_submit_liquidity_reason"] == "below_min_liquidity"
+    assert guard["sim_liquidity_value"] == 100_000_000
+    pending = next(fields for stage, fields in logs if stage == "scalp_sim_buy_order_virtual_pending")
+    assert pending["sim_pre_submit_liquidity_guard_action"] == "WOULD_BLOCK"
+    filled = next(fields for stage, fields in logs if stage == "scalp_sim_buy_order_assumed_filled")
+    assert filled["sim_pre_submit_liquidity_guard_action"] == "WOULD_BLOCK"
+    holding = next(fields for stage, fields in logs if stage == "scalp_sim_holding_started")
+    assert holding["sim_pre_submit_liquidity_guard_action"] == "WOULD_BLOCK"
+    assert holding["sim_pre_submit_liquidity_reason"] == "below_min_liquidity"
+
+
+def test_scalp_simulator_logs_liquidity_unknown_when_source_missing(monkeypatch):
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 101,
+        "name": "TEST",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "position_tag": "SCALP_BASE",
+        "target_buy_price": 10_000,
+    }
+    runtime = {
+        "strategy": "SCALPING",
+        "is_trigger": True,
+        "now_ts": 1_000.0,
+        "current_ai_score": 82.0,
+    }
+
+    assert state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
+        stock,
+        "123456",
+        {"curr": 9_990, "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]}},
+        runtime,
+    )
+
+    stages = [stage for stage, _ in logs]
+    assert "scalp_sim_pre_submit_liquidity_guard_unknown" in stages
+    assert "scalp_sim_pre_submit_liquidity_guard_would_pass" not in stages
+    guard = next(fields for stage, fields in logs if stage == "scalp_sim_pre_submit_liquidity_guard_unknown")
+    assert guard["sim_pre_submit_liquidity_guard_action"] == "WOULD_UNKNOWN"
+    assert guard["sim_pre_submit_liquidity_reason"] == "liquidity_unknown"
 
 
 def test_scalp_simulator_applies_entry_ai_price_canary_without_real_order(monkeypatch):
@@ -734,6 +837,10 @@ def test_scalp_simulator_preset_tp_sell_does_not_call_real_sell(monkeypatch):
         "scalp_live_simulator": True,
         "sim_record_id": "SIM-1",
         "actual_order_submitted": False,
+        "sim_pre_submit_liquidity_guard_action": "WOULD_BLOCK",
+        "sim_pre_submit_liquidity_reason": "below_min_liquidity",
+        "sim_pre_submit_overbought_guard_action": "WOULD_PASS",
+        "sim_pre_submit_overbought_reason": "overbought_ok",
     }
 
     state_handlers.handle_holding_state(
@@ -782,6 +889,10 @@ def test_scalp_simulator_sell_profit_uses_assumed_fill_price(monkeypatch):
         "scalp_live_simulator": True,
         "sim_record_id": "SIM-1",
         "actual_order_submitted": False,
+        "sim_pre_submit_liquidity_guard_action": "WOULD_BLOCK",
+        "sim_pre_submit_liquidity_reason": "below_min_liquidity",
+        "sim_pre_submit_overbought_guard_action": "WOULD_PASS",
+        "sim_pre_submit_overbought_reason": "overbought_ok",
     }
 
     assert state_handlers._complete_scalp_simulated_sell(
@@ -808,6 +919,8 @@ def test_scalp_simulator_sell_profit_uses_assumed_fill_price(monkeypatch):
     assert event["profit_rate"] == f"{expected_profit:+.2f}"
     assert event["trigger_profit_rate"] == f"{state_handlers.calculate_net_profit_rate(10_000, 10_150):+.2f}"
     assert event["decision_authority"] == "sim_observation_only"
+    assert event["sim_pre_submit_liquidity_guard_action"] == "WOULD_BLOCK"
+    assert event["sim_pre_submit_liquidity_reason"] == "below_min_liquidity"
     assert len(sim_post_sell_candidates) == 1
     assert sim_post_sell_candidates[0]["sim_record_id"] == "SIM-1"
     assert sim_post_sell_candidates[0]["sell_price"] == 10_130
@@ -1049,6 +1162,56 @@ def test_swing_probe_scale_in_uses_virtual_budget_not_real_deposit(monkeypatch):
     assert filled["budget_authority"] == "sim_virtual_not_real_orderable_amount"
 
 
+def test_swing_probe_state_sync_removes_exited_and_restores_active(tmp_path):
+    state_handlers.SWING_INTRADAY_PROBE_STATE_PATH.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "simulation_book": "swing_intraday_live_equiv_probe",
+                "active_positions": [
+                    {
+                        "id": 8002,
+                        "probe_id": "ACTIVE1",
+                        "code": "326030",
+                        "name": "SK바이오팜",
+                        "strategy": "KOSPI_ML",
+                        "status": "HOLDING",
+                        "buy_price": 98000,
+                        "buy_qty": 1,
+                        "swing_intraday_probe": True,
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    targets = [
+        {
+            "probe_id": "EXITED1",
+            "code": "000000",
+            "name": "OLD",
+            "strategy": "KOSPI_ML",
+            "status": "HOLDING",
+            "simulation_book": "swing_intraday_live_equiv_probe",
+            "swing_intraday_probe": True,
+        },
+        {"code": "005930", "name": "삼성전자", "strategy": "SCALPING", "status": "WATCHING"},
+    ]
+
+    result = state_handlers.sync_swing_intraday_probe_targets_from_state(targets)
+
+    assert result["removed"] == 1
+    assert result["restored"] == 1
+    assert [target.get("code") for target in targets] == ["005930", "326030"]
+    restored = targets[-1]
+    assert restored["simulation_book"] == "swing_intraday_live_equiv_probe"
+    assert restored["actual_order_submitted"] is False
+    assert restored["broker_order_forbidden"] is True
+
+
 def test_scalp_simulator_threshold_stages_are_included():
     assert threshold_family_for_stage("pre_submit_liquidity_guard_block") == "liquidity_pre_submit_guard_p1"
     assert (
@@ -1060,6 +1223,26 @@ def test_scalp_simulator_threshold_stages_are_included():
     assert threshold_family_for_stage("scalp_sim_entry_ai_price_skip_order") == "pre_submit_price_guard"
     assert threshold_family_for_stage("scalp_sim_entry_submit_revalidation_warning") == "pre_submit_price_guard"
     assert threshold_family_for_stage("scalp_sim_entry_submit_revalidation_block") == "pre_submit_price_guard"
+    assert (
+        threshold_family_for_stage("scalp_sim_pre_submit_liquidity_guard_would_block")
+        == "liquidity_pre_submit_guard_p1"
+    )
+    assert (
+        threshold_family_for_stage("scalp_sim_pre_submit_liquidity_guard_would_pass")
+        == "liquidity_pre_submit_guard_p1"
+    )
+    assert (
+        threshold_family_for_stage("scalp_sim_pre_submit_liquidity_guard_unknown")
+        == "liquidity_pre_submit_guard_p1"
+    )
+    assert (
+        threshold_family_for_stage("scalp_sim_pre_submit_overbought_guard_would_block")
+        == "overbought_pullback_guard_p1"
+    )
+    assert (
+        threshold_family_for_stage("scalp_sim_pre_submit_overbought_guard_would_pass")
+        == "overbought_pullback_guard_p1"
+    )
     assert threshold_family_for_stage("scalp_sim_buy_order_assumed_filled") == "pre_submit_price_guard"
     assert threshold_family_for_stage("scalp_sim_sell_order_assumed_filled") == "statistical_action_weight"
     assert threshold_family_for_stage("scalp_sim_ai_holding_live_call") == "scalp_sim_ai_budget_manager"

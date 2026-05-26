@@ -48,6 +48,11 @@ RELEVANT_STAGES = {
     "scalp_sim_entry_armed",
     "scalp_sim_entry_ai_price_applied",
     "scalp_sim_entry_ai_price_skip_order",
+    "scalp_sim_pre_submit_liquidity_guard_would_block",
+    "scalp_sim_pre_submit_liquidity_guard_would_pass",
+    "scalp_sim_pre_submit_liquidity_guard_unknown",
+    "scalp_sim_pre_submit_overbought_guard_would_block",
+    "scalp_sim_pre_submit_overbought_guard_would_pass",
     "scalp_sim_buy_order_virtual_pending",
     "scalp_sim_entry_submit_revalidation_warning",
     "scalp_sim_entry_submit_revalidation_block",
@@ -234,11 +239,30 @@ def _stale_bucket(fields: dict[str, Any]) -> str:
 
 
 def _liquidity_bucket(fields: dict[str, Any]) -> str:
+    sim_action = _nonempty(fields.get("sim_pre_submit_liquidity_guard_action")).upper()
+    sim_reason = _nonempty(fields.get("sim_pre_submit_liquidity_reason"))
+    if sim_action == "WOULD_BLOCK":
+        return sim_reason or "liquidity_blocked"
+    if sim_action == "WOULD_PASS" and sim_reason == "liquidity_ok":
+        return "liquidity_ok"
+    if sim_action == "WOULD_PASS" and sim_reason == "liquidity_unknown":
+        return "liquidity_unknown"
+    if sim_action == "WOULD_UNKNOWN":
+        return sim_reason or "liquidity_unknown"
     if _safe_bool(fields.get("liquidity_blocked")) or "liquidity" in str(fields.get("blocked_reason") or ""):
         return "liquidity_blocked"
-    value = _safe_float(fields.get("trade_value_krw") or fields.get("liquidity_score"), None)
+    value = _safe_float(
+        fields.get("sim_liquidity_value")
+        or fields.get("liquidity_value")
+        or fields.get("trade_value_krw")
+        or fields.get("liquidity_score"),
+        None,
+    )
+    min_liquidity = _safe_float(fields.get("sim_min_liquidity") or fields.get("min_liquidity"), None)
     if value is None:
         return "liquidity_unknown"
+    if min_liquidity is not None and value < min_liquidity:
+        return "below_min_liquidity"
     if value < 100_000_000:
         return "liquidity_low"
     if value < 500_000_000:
@@ -247,8 +271,21 @@ def _liquidity_bucket(fields: dict[str, Any]) -> str:
 
 
 def _overbought_bucket(fields: dict[str, Any]) -> str:
+    sim_action = _nonempty(fields.get("sim_pre_submit_overbought_guard_action")).upper()
+    sim_reason = _nonempty(fields.get("sim_pre_submit_overbought_reason"))
+    if sim_action == "WOULD_BLOCK":
+        return sim_reason or "overbought_blocked"
+    if sim_action == "WOULD_PASS" and sim_reason == "overbought_ok":
+        return "overbought_ok"
+    if sim_action == "WOULD_PASS" and sim_reason == "overbought_unknown":
+        return "overbought_unknown"
     if _safe_bool(fields.get("overbought_blocked")) or "overbought" in str(fields.get("blocked_reason") or ""):
         return "overbought_blocked"
+    risk_state = _nonempty(fields.get("sim_overbought_risk_state") or fields.get("overbought_risk_state"))
+    if risk_state in {"pullback_observed", "rebreak_candidate"}:
+        return "overbought_ok"
+    if risk_state:
+        return risk_state
     intraday_range = _safe_float(fields.get("intraday_range_pct"), None)
     distance_high = _safe_float(fields.get("distance_from_day_high_pct"), None)
     if intraday_range is None:
@@ -309,8 +346,12 @@ def _chosen_action(stage: str, fields: dict[str, Any]) -> str:
         "pre_submit_liquidity_guard_block",
         "pre_submit_overbought_pullback_guard_block",
         "scalp_sim_entry_ai_price_skip_order",
+        "scalp_sim_pre_submit_liquidity_guard_would_block",
+        "scalp_sim_pre_submit_overbought_guard_would_block",
     }:
         return "SKIP_PRE_SUBMIT_SAFETY"
+    if stage == "scalp_sim_pre_submit_liquidity_guard_unknown":
+        return "SKIP_SOURCE_QUALITY"
     if stage in {"entry_submit_revalidation_block", "scalp_sim_entry_submit_revalidation_block"}:
         return "SKIP_STALE"
     if stage in {"entry_submit_revalidation_warning", "scalp_sim_entry_submit_revalidation_warning", "latency_block"}:
@@ -322,7 +363,13 @@ def _chosen_action(stage: str, fields: dict[str, Any]) -> str:
         action = str(fields.get("action") or "").upper()
         score = _safe_float(fields.get("ai_score") or fields.get("ai_score_after_bonus"), 0.0) or 0.0
         return "BUY_NOW" if action == "BUY" and score >= 75 else "NO_BUY_AI"
-    if stage in {"order_bundle_submitted", "scalp_sim_entry_ai_price_applied", "scalp_sim_buy_order_assumed_filled"}:
+    if stage in {
+        "order_bundle_submitted",
+        "scalp_sim_entry_ai_price_applied",
+        "scalp_sim_buy_order_assumed_filled",
+        "scalp_sim_pre_submit_liquidity_guard_would_pass",
+        "scalp_sim_pre_submit_overbought_guard_would_pass",
+    }:
         return "BUY_DEFENSIVE" if _price_resolution_bucket(fields) == "defensive_limit" else "BUY_NOW"
     if stage in {"scalp_sim_entry_armed", "latency_pass"}:
         return "BUY_DEFENSIVE" if _price_resolution_bucket(fields) == "defensive_limit" else "BUY_NOW"
@@ -464,9 +511,14 @@ def _apply_outcome(row: dict[str, Any], evaluations: dict[str, dict[str, Any]]) 
 def _dedupe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     priority = {
         "scalp_sim_entry_ai_price_skip_order": -1,
+        "scalp_sim_pre_submit_liquidity_guard_would_block": -1,
+        "scalp_sim_pre_submit_overbought_guard_would_block": -1,
+        "scalp_sim_pre_submit_liquidity_guard_unknown": -1,
         "scalp_entry_action_decision_snapshot": 0,
         "order_bundle_submitted": 1,
         "scalp_sim_buy_order_assumed_filled": 2,
+        "scalp_sim_pre_submit_liquidity_guard_would_pass": 3,
+        "scalp_sim_pre_submit_overbought_guard_would_pass": 3,
         "scalp_sim_buy_order_virtual_pending": 3,
         "pre_submit_liquidity_guard_block": 3,
         "pre_submit_overbought_pullback_guard_block": 3,
