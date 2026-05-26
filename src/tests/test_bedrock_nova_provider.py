@@ -69,3 +69,11 @@ def test_route_mode_for_gpt5_nano_is_off_after_micro_removal():
 
     assert route_mode == "off"
     assert profile is None
+
+
+def test_lite_v2_profile_defaults_to_inference_profile(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_V2_MODEL_ID", raising=False)
+
+    profile = mod.lite_v2_profile_from_env()
+
+    assert profile.model_id == "global.amazon.nova-2-lite-v1:0"

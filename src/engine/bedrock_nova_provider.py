@@ -13,7 +13,7 @@ from src.utils.constants import CONFIG_PATH, DATA_DIR, DEV_PATH
 
 DEFAULT_REGION = "ap-northeast-2"
 DEFAULT_LITE_MODEL_ID = "apac.amazon.nova-lite-v1:0"
-DEFAULT_LITE_V2_MODEL_ID = "amazon.nova-2-lite-v1:0"
+DEFAULT_LITE_V2_MODEL_ID = "global.amazon.nova-2-lite-v1:0"
 PRIMARY_AUDIT_DIR = DATA_DIR / "report" / "bedrock_nova_primary_provider"
 
 LITE_INPUT_USD_PER_1M = 0.06

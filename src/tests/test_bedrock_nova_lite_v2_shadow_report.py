@@ -19,7 +19,7 @@ def test_lite_v2_shadow_report_summarizes_v1_v2_rows(tmp_path, monkeypatch):
                         "v2_parse_ok": True,
                         "v2_latency_ms": 123,
                         "baseline_bedrock_model_id": "apac.amazon.nova-lite-v1:0",
-                        "candidate_bedrock_model_id": "amazon.nova-2-lite-v1:0",
+                        "candidate_bedrock_model_id": "global.amazon.nova-2-lite-v1:0",
                     }
                 ),
                 json.dumps(
@@ -31,7 +31,7 @@ def test_lite_v2_shadow_report_summarizes_v1_v2_rows(tmp_path, monkeypatch):
                         "v2_parse_ok": True,
                         "v2_latency_ms": 200,
                         "baseline_bedrock_model_id": "apac.amazon.nova-lite-v1:0",
-                        "candidate_bedrock_model_id": "amazon.nova-2-lite-v1:0",
+                        "candidate_bedrock_model_id": "global.amazon.nova-2-lite-v1:0",
                     }
                 ),
             ]
