@@ -10552,23 +10552,54 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                 },
             )
 
-        blocked, block_reason = _should_block_swing_entry(stock.get('strategy', ''))
+        regime_decision = _should_block_swing_entry(stock.get('strategy', ''))
+        if isinstance(regime_decision, tuple) and len(regime_decision) >= 3:
+            blocked, block_reason, market_regime_meta = regime_decision[:3]
+        else:
+            blocked, block_reason = regime_decision
+            market_regime_meta = {}
+        market_regime_meta = market_regime_meta if isinstance(market_regime_meta, dict) else {}
+        market_regime_prior_observed = bool(market_regime_meta.get("market_regime_prior_observed"))
         swing_regime_micro_fields = {}
         if _is_swing_orderbook_micro_context_enabled(strategy):
             swing_regime_micro_fields = _build_swing_micro_log_fields(
                 _build_live_orderbook_micro_context(code, curr_price=curr_price),
                 phase="entry",
             )
+        market_regime_log_fields = {
+            "market_regime": market_regime_meta.get("market_regime", "-"),
+            "allow_swing_entry": market_regime_meta.get("allow_swing_entry", "-"),
+            "swing_score": market_regime_meta.get("swing_score", "-"),
+            "risk_off_advisory": bool(market_regime_meta.get("risk_off_advisory", False)),
+            "single_market_risk_off_advisory": bool(market_regime_meta.get("single_market_risk_off_advisory", False)),
+            "confirmed_risk_off_advisory": bool(market_regime_meta.get("confirmed_risk_off_advisory", False)),
+            "confirmed_risk_block": bool(market_regime_meta.get("confirmed_risk_block", False)),
+            "panic_state": market_regime_meta.get("panic_state", "NORMAL"),
+            "legacy_recovery_gate_score": market_regime_meta.get("legacy_recovery_gate_score", "-"),
+            "legacy_recovery_gate_threshold": market_regime_meta.get("legacy_recovery_gate_threshold", "-"),
+            "recovery_gate_state": market_regime_meta.get("recovery_gate_state", "-"),
+            "swing_recovery_gate_label": market_regime_meta.get("swing_recovery_gate_label", "-"),
+            "recovery_gate_reason": market_regime_meta.get("recovery_gate_reason", "-"),
+            "oil_only_recovery_prior": bool(market_regime_meta.get("oil_only_recovery_prior", False)),
+            "market_regime_continuous_score": market_regime_meta.get("market_regime_continuous_score", "-"),
+            "market_regime_continuous_label": market_regime_meta.get("market_regime_continuous_label", "-"),
+            "market_regime_source_quality": market_regime_meta.get("market_regime_source_quality", "-"),
+            "risk_context": market_regime_meta.get("risk_context", "-"),
+        }
         if blocked:
-            log_info(f"⛔ [시장환경필터] {stock['name']}({code}) 스윙 진입 prior 관측 - {block_reason}")
+            log_info(f"⛔ [시장환경필터] {stock['name']}({code}) 스윙 진입 confirmed risk block - {block_reason}")
             _log_entry_pipeline(
                 stock,
                 code,
                 "market_regime_block",
                 strategy=strategy,
                 market_regime_block_reason=block_reason,
-                metric_role="baseline_prior_feature",
+                metric_role="risk_regime_state",
                 decision_authority="swing_entry_lifecycle_policy",
+                runtime_effect=False,
+                hard_gate=True,
+                allowed_runtime_apply=False,
+                **market_regime_log_fields,
                 **swing_regime_micro_fields,
             )
             maybe_start_swing_intraday_probe(
@@ -10585,6 +10616,44 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                     "gatekeeper_allow_entry": gatekeeper_allow,
                     "gatekeeper_eval_ms": gatekeeper_eval_ms,
                     "market_regime_block_reason": block_reason,
+                    **market_regime_log_fields,
+                    **swing_regime_micro_fields,
+                },
+            )
+        elif market_regime_prior_observed:
+            prior_reason = market_regime_meta.get("market_regime_prior_reason") or block_reason or "market_regime_prior"
+            log_info(f"📌 [시장환경 prior] {stock['name']}({code}) 스윙 진입 prior 관측 - {prior_reason}")
+            _log_entry_pipeline(
+                stock,
+                code,
+                "market_regime_prior_observed",
+                strategy=strategy,
+                market_regime_prior_reason=prior_reason,
+                market_regime_block_reason=block_reason,
+                metric_role="risk_regime_state",
+                decision_authority="swing_entry_lifecycle_policy_baseline_prior_features",
+                runtime_effect=False,
+                hard_gate=False,
+                allowed_runtime_apply=False,
+                **market_regime_log_fields,
+                **swing_regime_micro_fields,
+            )
+            maybe_start_swing_intraday_probe(
+                stock=stock,
+                code=code,
+                ws_data=ws_data,
+                origin_stage="market_regime_prior_observed",
+                runtime=runtime,
+                evidence_quality="risk_off_prior_intraday_probe",
+                extra_fields={
+                    "score": round(float(score), 2),
+                    "runtime_score_proxy": round(float(score), 2),
+                    "gatekeeper_action": action_label,
+                    "gatekeeper_allow_entry": gatekeeper_allow,
+                    "gatekeeper_eval_ms": gatekeeper_eval_ms,
+                    "market_regime_prior_reason": prior_reason,
+                    "market_regime_block_reason": block_reason,
+                    **market_regime_log_fields,
                     **swing_regime_micro_fields,
                 },
             )
@@ -10597,6 +10666,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                 gatekeeper_packet_build_ms=stock.get('last_gatekeeper_packet_build_ms', 0),
                 gatekeeper_model_call_ms=stock.get('last_gatekeeper_model_call_ms', 0),
                 gatekeeper_total_internal_ms=stock.get('last_gatekeeper_total_internal_ms', 0),
+                **market_regime_log_fields,
                 **swing_regime_micro_fields,
             )
 
@@ -10609,6 +10679,8 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
             source_stage = "blocked_gatekeeper_reject"
         elif blocked:
             source_stage = "market_regime_block"
+        elif market_regime_prior_observed:
+            source_stage = "market_regime_prior_observed"
         policy = _log_swing_entry_policy_evaluated(
             stock,
             code,
@@ -10626,10 +10698,15 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
             gatekeeper_allow_entry=gatekeeper_allow,
             market_regime_blocked=bool(blocked),
             market_regime_reason=block_reason,
+            market_regime_prior_observed=market_regime_prior_observed,
+            confirmed_risk_block=bool(market_regime_meta.get("confirmed_risk_block", False)),
             extra_features={
                 "score_vpw_pass": bool(score_vpw_pass),
                 "gap_prior_triggered": bool(gap_prior_triggered),
                 "cap_bucket": swing_gap.get('bucket_label'),
+                "market_regime_prior_observed": market_regime_prior_observed,
+                "market_regime_prior_reason": market_regime_meta.get("market_regime_prior_reason", "-"),
+                **market_regime_log_fields,
                 **swing_regime_micro_fields,
             },
         )

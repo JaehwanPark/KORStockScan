@@ -40,3 +40,19 @@ def test_hard_safety_block_remains_submit_veto():
     assert result.hard_safety_block is True
     assert result.hard_safety_reason == "stale_quote_submit_block"
     assert result.policy_action == "BLOCK_HARD_SAFETY"
+
+
+def test_market_regime_prior_observed_is_not_submit_veto():
+    result = evaluate_swing_entry_lifecycle_policy(
+        strategy="KOSPI_ML",
+        market_regime_blocked=False,
+        market_regime_prior_observed=True,
+        confirmed_risk_block=False,
+        market_regime_reason="market_regime_risk_off_prior",
+        source_stage="market_regime_prior_observed",
+    )
+
+    assert result.submit_allowed_by_policy is True
+    assert result.hard_safety_block is False
+    assert result.baseline_prior_features["market_regime"]["prior_observed"] is True
+    assert result.baseline_prior_features["market_regime"]["confirmed_risk_block"] is False

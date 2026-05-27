@@ -41,6 +41,8 @@ def test_local_breadth_overlay_can_open_swing_gate(monkeypatch, tmp_path):
     assert snap.swing_score == 70
     assert snap.allow_swing_entry is True
     assert snap.risk_state == "RISK_ON"
+    assert snap.recovery_gate_state == "READY"
+    assert snap.oil_only_recovery_prior is False
     assert snap.debug["component_scores"]["local_breadth"] == 35
     assert any("국내 breadth 상승장" in reason for reason in snap.reasons)
 
@@ -64,6 +66,9 @@ def test_local_breadth_overlay_does_not_override_unresolved_extreme_vix(monkeypa
     assert snap.swing_score == 35
     assert snap.allow_swing_entry is False
     assert snap.risk_state == "RISK_OFF"
+    assert snap.recovery_gate_state == "INSUFFICIENT"
+    assert snap.recovery_gate_reason == "oil_only_recovery_signal_insufficient"
+    assert snap.oil_only_recovery_prior is True
     assert snap.debug["component_scores"]["local_breadth"] == 0
 
 
@@ -142,3 +147,4 @@ def test_continuous_score_counts_partial_breadth_even_when_gate_score_is_zero(mo
     assert snap.market_regime_continuous_score > 0.0
     assert snap.market_regime_continuous_label in {"RISK_OFF", "NEUTRAL", "RISK_ON"}
     assert snap.market_regime_source_quality == "valid"
+    assert snap.recovery_gate_reason == "recovery_signal_insufficient"

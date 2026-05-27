@@ -35,6 +35,10 @@ class MarketRegimeSnapshot:
     allow_swing_entry: bool = False
     swing_score: int = 0
     swing_entry_recovery_gate_score: int = 0
+    recovery_gate_state: str = "UNKNOWN"
+    swing_recovery_gate_label: str = "UNKNOWN"
+    recovery_gate_reason: str = "unknown"
+    oil_only_recovery_prior: bool = False
     market_regime_continuous_score: float = 0.0
     market_regime_continuous_label: str = "NEUTRAL"
     market_regime_component_scores: Dict[str, float] = field(default_factory=dict)

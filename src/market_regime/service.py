@@ -12,7 +12,7 @@ except ImportError:  # optional dependency
 
 from src.utils.constants import DATA_DIR, TRADING_RULES
 from .data_provider import YahooMarketDataProvider
-from .rules import apply_continuous_market_regime_score, evaluate_market_regime
+from .rules import apply_continuous_market_regime_score, apply_legacy_recovery_gate_metadata, evaluate_market_regime
 from .schemas import MarketRegimeSnapshot
 
 
@@ -206,7 +206,7 @@ class MarketRegimeService:
         snapshot.debug["component_scores"] = component_scores
         snapshot.debug["local_market_context"] = context
         snapshot.debug["local_breadth_signal"] = "bullish" if local_score > 0 else "none"
-        snapshot.swing_entry_recovery_gate_score = int(snapshot.swing_score or 0)
+        apply_legacy_recovery_gate_metadata(snapshot)
         apply_continuous_market_regime_score(snapshot, context)
         return snapshot
 

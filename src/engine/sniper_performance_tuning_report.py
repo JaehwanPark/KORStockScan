@@ -79,6 +79,7 @@ _REUSE_REASON_LABELS = {
 }
 _SWING_DAILY_BLOCKER_LABELS = {
     "market_regime_block": "시장 국면 제한",
+    "market_regime_prior_observed": "시장 국면 prior 관측",
     "blocked_gatekeeper_reject": "Gatekeeper 거부",
     "blocked_swing_gap": "스윙 갭상승",
     "blocked_zero_qty": "주문 가능 수량",
@@ -897,6 +898,7 @@ def _build_swing_daily_summary(
     blocker_stock_sets: dict[str, set[str]] = defaultdict(set)
     gatekeeper_actions: Counter[str] = Counter()
     gatekeeper_action_keys: Counter[str] = Counter()
+    market_regime_prior_reasons: Counter[str] = Counter()
 
     for event in swing_events:
         label = _SWING_DAILY_BLOCKER_LABELS.get(event.stage)
@@ -904,6 +906,8 @@ def _build_swing_daily_summary(
             continue
         blocker_counts[label] += 1
         blocker_stock_sets[label].add(str(event.code or "").strip()[:6] or str(event.name or "").strip())
+        if event.stage == "market_regime_prior_observed":
+            market_regime_prior_reasons[str(event.fields.get("market_regime_prior_reason") or "unknown")] += 1
         if event.stage == "blocked_gatekeeper_reject":
             action = _extract_gatekeeper_action(event) or "UNKNOWN"
             gatekeeper_actions[action] += 1
@@ -919,6 +923,7 @@ def _build_swing_daily_summary(
     total_blocker_events = sum(blocker_counts.values())
     total_blocker_stocks = len({code for codes in blocker_stock_sets.values() for code in codes})
     market_regime_block_count = blocker_counts.get("시장 국면 제한", 0)
+    market_regime_prior_count = blocker_counts.get("시장 국면 prior 관측", 0)
     gatekeeper_reject_count = blocker_counts.get("Gatekeeper 거부", 0)
 
     if entered_rows > 0:
@@ -930,22 +935,31 @@ def _build_swing_daily_summary(
                 "차단 사유보다 진입 후 성과와 missed case 비교가 더 중요해진 구간입니다."
             ),
         }
-    elif not market_regime.get("allow_swing_entry", False) and market_regime_block_count > 0 and gatekeeper_reject_count > 0:
+    elif market_regime_block_count > 0 and gatekeeper_reject_count > 0:
         day_type = {
-            "label": "Gatekeeper 거부 중심 (시장 제한 동반)",
+            "label": "Gatekeeper 거부 중심 (confirmed 시장 제한 동반)",
             "tone": "warn",
             "comment": (
-                f"시장 국면은 {market_regime.get('status_text', '데이터 부족')}이어서 스윙 비허용 상태였고, "
-                f"실제 blocker 이벤트는 Gatekeeper 거부가 {gatekeeper_reject_count}건으로 가장 많았습니다."
+                f"confirmed 시장 리스크 제한이 {market_regime_block_count}건 동반됐고, "
+                f"Gatekeeper 거부가 {gatekeeper_reject_count}건으로 관측됐습니다."
             ),
         }
-    elif not market_regime.get("allow_swing_entry", False) and market_regime_block_count > 0:
+    elif market_regime_block_count > 0:
         day_type = {
-            "label": "시장 국면 제한 중심",
+            "label": "confirmed 시장 국면 제한 중심",
             "tone": "warn",
             "comment": (
-                f"시장 국면이 {market_regime.get('status_text', '데이터 부족')}으로 스윙 비허용 상태였습니다. "
-                "이런 날은 threshold 완화보다 시장 국면 차단이 맞았는지부터 보는 편이 안전합니다."
+                "confirmed risk context가 있어 스윙 시장 국면 제한이 발생했습니다. "
+                "단독 RISK_OFF prior와 분리해 차단 적정성을 봅니다."
+            ),
+        }
+    elif market_regime_prior_count > 0:
+        day_type = {
+            "label": "시장 국면 prior 관측일",
+            "tone": "muted",
+            "comment": (
+                f"시장 국면 prior가 {market_regime_prior_count}건 관측됐지만 hard block으로 보지 않습니다. "
+                "스윙 sim/probe EV로 RISK_OFF prior의 진입/미진입 차이를 비교합니다."
             ),
         }
     elif dominant_label == "Gatekeeper 거부":
@@ -1003,6 +1017,7 @@ def _build_swing_daily_summary(
         "latest_blockers": list(swing_pipeline.get("latest_blockers") or []),
         "gatekeeper_actions": _summarize_top_counts(gatekeeper_actions, limit=5),
         "gatekeeper_action_keys": _summarize_top_counts(gatekeeper_action_keys, limit=5),
+        "market_regime_prior_reasons": _summarize_top_counts(market_regime_prior_reasons, limit=8),
     }
 
 

@@ -7,6 +7,7 @@ from .indicators import sma, rsi, macd, cross_under
 
 
 MARKET_REGIME_SCORE_VERSION = "market_regime_continuous_v1"
+LEGACY_RECOVERY_GATE_THRESHOLD = 70
 
 
 def _clamp(value: float, low: float, high: float) -> float:
@@ -88,6 +89,42 @@ def market_regime_continuous_label(score: float, risk_on_min: float = 65.0, neut
     return "RISK_OFF"
 
 
+def apply_legacy_recovery_gate_metadata(snapshot: MarketRegimeSnapshot) -> MarketRegimeSnapshot:
+    threshold = int(snapshot.debug.get("score_threshold", LEGACY_RECOVERY_GATE_THRESHOLD) or LEGACY_RECOVERY_GATE_THRESHOLD)
+    score = int(snapshot.swing_score or 0)
+    component_scores = dict(snapshot.debug.get("component_scores", {}) or {})
+    oil_score = int(component_scores.get("oil", 0) or 0)
+    vix_score = int(component_scores.get("vix", 0) or 0)
+    fng_score = int(component_scores.get("fng", 0) or 0)
+    local_breadth_score = int(component_scores.get("local_breadth", 0) or 0)
+    oil_only = oil_score > 0 and vix_score == 0 and fng_score == 0 and local_breadth_score == 0
+
+    if score >= threshold:
+        label = "READY"
+        reason = "recovery_signal_ready"
+    elif score >= 45:
+        label = "PARTIAL"
+        reason = "recovery_signal_partial"
+    else:
+        label = "INSUFFICIENT"
+        reason = "oil_only_recovery_signal_insufficient" if oil_only else "recovery_signal_insufficient"
+
+    snapshot.swing_entry_recovery_gate_score = score
+    snapshot.recovery_gate_state = label
+    snapshot.swing_recovery_gate_label = label
+    snapshot.recovery_gate_reason = reason
+    snapshot.oil_only_recovery_prior = bool(oil_only)
+    snapshot.debug["legacy_recovery_gate_score"] = score
+    snapshot.debug["legacy_recovery_gate_threshold"] = threshold
+    snapshot.debug["legacy_recovery_gate_label"] = label
+    snapshot.debug["legacy_recovery_gate_reason"] = reason
+    snapshot.debug["oil_only_recovery_prior"] = bool(oil_only)
+    snapshot.debug["risk_state_contract"] = (
+        "legacy recovery readiness label; swing hard block authority requires confirmed panic/breadth risk"
+    )
+    return snapshot
+
+
 def apply_continuous_market_regime_score(
     snapshot: MarketRegimeSnapshot,
     local_context: dict | None = None,
@@ -108,7 +145,7 @@ def apply_continuous_market_regime_score(
     }
     total = sum(components.values())
 
-    snapshot.swing_entry_recovery_gate_score = int(snapshot.swing_score or 0)
+    apply_legacy_recovery_gate_metadata(snapshot)
     snapshot.market_regime_component_scores = {
         key: round(float(value), 4)
         for key, value in components.items()
@@ -136,6 +173,7 @@ def apply_continuous_market_regime_score(
         "label_thresholds": {"risk_on_min_score": 65.0, "neutral_min_score": 45.0},
         "component_scores": snapshot.market_regime_component_scores,
         "source_quality": snapshot.market_regime_source_quality,
+        "primary_market_condition_label": snapshot.market_regime_continuous_label,
         "decision_authority": "risk_context_only",
         "runtime_effect": False,
     }
@@ -286,6 +324,7 @@ def evaluate_market_regime(vix_df: pd.DataFrame, oil_df: pd.DataFrame, fng_data:
     }
 
     snapshot.fng_description = str(fng_data.get("description", "") or "")
+    apply_legacy_recovery_gate_metadata(snapshot)
     apply_continuous_market_regime_score(snapshot)
 
     return snapshot

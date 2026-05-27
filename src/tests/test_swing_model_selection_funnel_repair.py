@@ -1442,6 +1442,98 @@ def test_swing_watching_market_regime_block_flows_to_submit_policy(monkeypatch):
     assert policy["baseline_prior_features"]["market_regime"]["blocked"] is True
 
 
+def test_swing_watching_market_regime_prior_observed_flows_to_probe_and_submit_policy(monkeypatch):
+    rules = replace(
+        CONFIG,
+        SWING_LIVE_ORDER_DRY_RUN_ENABLED=True,
+        SWING_ONE_SHARE_REAL_CANARY_ENABLED=False,
+        SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED=False,
+        SWING_INTRADAY_PROBE_COUNTERFACTUAL_GATEKEEPER_ENABLED=True,
+        SWING_INTRADAY_LIVE_EQUIV_PROBE_ENABLED=True,
+    )
+    logs = []
+    submit_sources = []
+
+    class Radar:
+        def analyze_signal_integrated(self, ws_data, ai_prob):
+            return 85, {}, "unit", {}, {}
+
+    class Gatekeeper:
+        def evaluate_realtime_gatekeeper(self, **kwargs):
+            return {
+                "allow_entry": True,
+                "action_label": "BUY",
+                "action_key": "buy",
+                "report": "unit",
+            }
+
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(state_handlers, "COOLDOWNS", {})
+    monkeypatch.setattr(state_handlers, "ALERTED_STOCKS", set())
+    monkeypatch.setattr(state_handlers, "EVENT_BUS", FakeEventBus())
+    monkeypatch.setattr(state_handlers, "LAST_AI_CALL_TIMES", {})
+    monkeypatch.setattr(state_handlers, "ACTIVE_TARGETS", [])
+    monkeypatch.setattr(state_handlers, "HIGHEST_PRICES", {})
+    monkeypatch.setattr(state_handlers, "_SWING_PROBE_DAILY_CREATED", {})
+    monkeypatch.setattr(state_handlers, "_resolve_stock_marcap", lambda *args, **kwargs: 100_000_000_000)
+    monkeypatch.setattr(
+        state_handlers,
+        "get_dynamic_swing_gap_threshold",
+        lambda *args, **kwargs: {"threshold": 3.5, "bucket_label": "unit"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_should_block_swing_entry",
+        lambda strategy: (
+            False,
+            "risk=RISK_OFF",
+            {
+                "market_regime_prior_observed": True,
+                "market_regime_prior_reason": "market_regime_risk_off_prior",
+                "market_regime": "RISK_OFF",
+                "allow_swing_entry": False,
+                "swing_score": 25,
+                "risk_off_advisory": False,
+                "single_market_risk_off_advisory": True,
+                "confirmed_risk_off_advisory": False,
+                "confirmed_risk_block": False,
+                "panic_state": "NORMAL",
+            },
+        ),
+    )
+    monkeypatch.setattr(state_handlers, "kiwoom_utils", type("KU", (), {"build_realtime_analysis_context": staticmethod(lambda **kwargs: {})}))
+    monkeypatch.setattr(
+        state_handlers,
+        "_submit_watching_triggered_entry",
+        lambda stock, code, ws_data, admin_id, runtime: submit_sources.append(runtime.get("swing_entry_policy_source_stage")),
+    )
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
+    monkeypatch.setattr(state_handlers, "persist_swing_intraday_probe_state", lambda reason="-": None)
+
+    state_handlers.handle_watching_state(
+        {"id": 810, "name": "SWING_PRIOR", "code": "000010", "strategy": "KOSPI_ML", "prob": 0.8},
+        "000010",
+        {"curr": 10_000, "volume": 1000, "fluctuation": 1.0, "v_pw": 130.0},
+        admin_id=1,
+        now_ts=1_768_090_010.0,
+        now_dt=datetime.combine(datetime(2026, 5, 26), time(10, 0)),
+        radar=Radar(),
+        ai_engine=Gatekeeper(),
+    )
+
+    assert submit_sources == ["market_regime_prior_observed"]
+    prior = next(fields for stage, fields in logs if stage == "market_regime_prior_observed")
+    assert prior["hard_gate"] is False
+    assert prior["single_market_risk_off_advisory"] is True
+    policy = next(fields for stage, fields in logs if stage == "swing_entry_policy_evaluated")
+    assert policy["submit_allowed_by_policy"] is True
+    assert policy["baseline_prior_features"]["market_regime"]["prior_observed"] is True
+    probe = next(fields for stage, fields in logs if stage == "swing_probe_entry_candidate")
+    assert probe["actual_order_submitted"] is False
+    assert probe["broker_order_forbidden"] is True
+    assert probe["probe_origin_stage"] == "market_regime_prior_observed"
+
+
 def test_swing_probe_holding_exit_logs_probe_only_sell(monkeypatch, tmp_path):
     rules = replace(
         CONFIG,

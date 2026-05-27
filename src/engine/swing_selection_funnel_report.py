@@ -31,6 +31,7 @@ SWING_EVENT_STAGES = {
     "blocked_gatekeeper_missing",
     "blocked_gatekeeper_error",
     "market_regime_block",
+    "market_regime_prior_observed",
     "market_regime_pass",
     "swing_entry_micro_context_observed",
     "swing_sim_buy_order_assumed_filled",

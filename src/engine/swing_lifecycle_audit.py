@@ -143,6 +143,7 @@ ENTRY_STAGES = {
     "blocked_gatekeeper_missing",
     "blocked_gatekeeper_error",
     "market_regime_block",
+    "market_regime_prior_observed",
     "market_regime_pass",
     "swing_entry_micro_context_observed",
     "swing_probe_entry_candidate",
@@ -867,6 +868,7 @@ def summarize_lifecycle_events(events: Iterable[dict[str, Any]]) -> dict[str, An
     exit_sources = Counter()
     actual_order_flags = Counter()
     evidence_quality_counts = Counter()
+    market_regime_prior_reasons = Counter()
     scale_in_actions = Counter()
     scale_in_triggers = Counter()
     scale_in_price_policies = Counter()
@@ -1014,6 +1016,12 @@ def summarize_lifecycle_events(events: Iterable[dict[str, Any]]) -> dict[str, An
         evidence_quality = fields.get("evidence_quality")
         if evidence_quality not in (None, ""):
             evidence_quality_counts[str(evidence_quality)] += 1
+        if stage == "market_regime_prior_observed":
+            prior_reason = _first_present(
+                fields,
+                ("market_regime_prior_reason", "prior_reason", "recovery_gate_reason"),
+            )
+            market_regime_prior_reasons[str(prior_reason or "unknown")] += 1
 
         schema_valid = _first_present(fields, ("ai_schema_valid", "schema_valid", "structured_output_valid"))
         if schema_valid not in (None, ""):
@@ -1071,6 +1079,7 @@ def summarize_lifecycle_events(events: Iterable[dict[str, Any]]) -> dict[str, An
         "exit_sources": dict(exit_sources),
         "actual_order_submitted_flags": dict(actual_order_flags),
         "evidence_quality_counts": dict(evidence_quality_counts),
+        "market_regime_prior_reason_counts": dict(market_regime_prior_reasons),
         "scale_in_observation": {
             "action_groups": _counter_dict(scale_in_actions),
             "add_triggers": _counter_dict(scale_in_triggers),
@@ -1168,6 +1177,7 @@ def build_swing_entry_bottleneck(events: dict[str, Any]) -> dict[str, Any]:
     score_vpw_unique = _safe_int(unique.get("blocked_swing_score_vpw"), 0)
     gap_unique = _safe_int(unique.get("blocked_swing_gap"), 0)
     market_block_unique = _safe_int(unique.get("market_regime_block"), 0)
+    market_prior_unique = _safe_int(unique.get("market_regime_prior_observed"), 0)
     policy_evaluated_unique = _safe_int(unique.get("swing_entry_policy_evaluated"), 0)
     probe_entry_unique = _safe_int(unique.get("swing_probe_entry_candidate"), 0)
     submitted_unique = _safe_int(events.get("submitted_unique_records"), 0)
@@ -1177,7 +1187,7 @@ def build_swing_entry_bottleneck(events: dict[str, Any]) -> dict[str, Any]:
         _safe_int(unique.get("swing_sim_order_bundle_assumed_filled"), 0),
     )
     blocker_unique_total = gatekeeper_reject_unique + score_vpw_unique + gap_unique + market_block_unique
-    legacy_prior_unique_total = gatekeeper_reject_unique + score_vpw_unique + gap_unique
+    legacy_prior_unique_total = gatekeeper_reject_unique + score_vpw_unique + gap_unique + market_prior_unique
     entry_unique = max(
         _safe_int(group_unique.get("entry"), 0),
         blocker_unique_total,
@@ -1285,6 +1295,7 @@ def build_swing_entry_bottleneck(events: dict[str, Any]) -> dict[str, Any]:
                 "blocked_swing_score_vpw_unique": score_vpw_unique,
                 "blocked_swing_gap_unique": gap_unique,
                 "market_regime_block_unique": market_block_unique,
+                "market_regime_prior_observed_unique": market_prior_unique,
                 "legacy_prior_floor_hit": bool(legacy_prior_floor_hit),
                 "metric_role": "baseline_prior_feature",
             },
@@ -1461,6 +1472,7 @@ def build_observation_axes(
                 + unique_counts.get("blocked_swing_score_vpw", 0)
                 + unique_counts.get("swing_probe_entry_candidate", 0)
                 + unique_counts.get("market_regime_block", 0)
+                + unique_counts.get("market_regime_prior_observed", 0)
                 + unique_counts.get("market_regime_pass", 0)
                 + lifecycle_events.get("submitted_unique_records", 0)
                 + lifecycle_events.get("simulated_order_unique_records", 0)
@@ -1840,11 +1852,13 @@ def _family_metric_snapshot(audit_report: dict[str, Any], family: str) -> dict[s
         return {
             "sample_count": int(
                 unique.get("market_regime_block", 0)
+                + unique.get("market_regime_prior_observed", 0)
                 + unique.get("market_regime_pass", 0)
                 + unique.get("swing_probe_entry_candidate", 0)
                 + int(sim_family.get("closed_count") or 0)
             ),
             "market_regime_block": raw.get("market_regime_block", 0),
+            "market_regime_prior_observed": raw.get("market_regime_prior_observed", 0),
             "market_regime_pass": raw.get("market_regime_pass", 0),
             "evidence_quality_counts": events.get("evidence_quality_counts"),
             "simulation_opportunity": sim_family,
@@ -3434,7 +3448,10 @@ def build_swing_improvement_automation_report(
             )
         )
 
-    if int(raw.get("market_regime_block", 0) or 0) > 0:
+    market_regime_prior_raw = int(raw.get("market_regime_block", 0) or 0) + int(
+        raw.get("market_regime_prior_observed", 0) or 0
+    )
+    if market_regime_prior_raw > 0:
         findings.append(
             {
                 "finding_id": "swing_market_regime_sensitivity_review",
@@ -3456,10 +3473,13 @@ def build_swing_improvement_automation_report(
                 route="existing_family",
                 mapped_family="swing_market_regime_sensitivity",
                 intent="Attribute market-regime baseline-prior features before proposing sensitivity changes.",
-                expected_ev_effect="market_regime_block/pass and missed-entry outcome are visible in the next audit.",
+                expected_ev_effect="market_regime confirmed-block/prior/pass and missed-entry outcome are visible in the next audit.",
                 files_likely_touched=["src/engine/sniper_state_handlers.py", "src/engine/swing_lifecycle_audit.py"],
                 acceptance_tests=["pytest swing lifecycle audit tests"],
-                evidence=[f"market_regime_block_raw={raw.get('market_regime_block')}"],
+                evidence=[
+                    f"market_regime_block_raw={raw.get('market_regime_block')}",
+                    f"market_regime_prior_observed_raw={raw.get('market_regime_prior_observed')}",
+                ],
                 improvement_type="threshold_family_input",
             )
         )

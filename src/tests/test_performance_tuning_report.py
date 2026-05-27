@@ -821,13 +821,58 @@ def test_swing_daily_summary_includes_market_regime_and_blockers(monkeypatch, tm
 
     assert swing_summary["market_regime"]["risk_state"] == "RISK_OFF"
     assert swing_summary["market_regime"]["allow_swing_entry"] is False
-    assert swing_summary["day_type"]["label"] == "Gatekeeper 거부 중심 (시장 제한 동반)"
+    assert swing_summary["day_type"]["label"] == "Gatekeeper 거부 중심 (confirmed 시장 제한 동반)"
     assert blocker_rows["Gatekeeper 거부"]["count"] == 2
     assert blocker_rows["Gatekeeper 거부"]["stock_count"] == 2
     assert blocker_rows["시장 국면 제한"]["count"] == 1
     assert blocker_rows["스윙 갭상승"]["count"] == 1
     assert gatekeeper_actions["눌림 대기"] == 2
     assert gatekeeper_action_keys["pullback_wait"] == 2
+
+
+def test_swing_daily_summary_treats_market_regime_prior_as_observation(monkeypatch, tmp_path):
+    entry_lines = [
+        "[2026-04-03 10:00:00] [ENTRY_PIPELINE] 테스트A(000001) stage=market_regime_prior_observed strategy=KOSPI_ML market_regime=RISK_OFF market_regime_prior_reason=oil_only_recovery_signal_insufficient single_market_risk_off_advisory=False",
+        "[2026-04-03 10:00:05] [ENTRY_PIPELINE] 테스트B(000002) stage=blocked_gatekeeper_reject strategy=KOSPI_ML action=눌림|대기 gatekeeper_eval_ms=8200 gatekeeper_cache=miss cooldown_sec=0 cooldown_policy=baseline_prior_feature",
+    ]
+
+    def _fake_iter(log_path, *, target_date, marker):
+        return entry_lines if marker == "[ENTRY_PIPELINE]" else []
+
+    monkeypatch.setattr(report_mod, "_iter_target_lines", _fake_iter)
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    with open(cache_dir / "market_regime_snapshot.json", "w", encoding="utf-8") as handle:
+        json.dump(
+            {
+                "cached_session_date": "2026-04-03",
+                "risk_state": "RISK_OFF",
+                "allow_swing_entry": False,
+                "swing_score": 20,
+            },
+            handle,
+            ensure_ascii=False,
+        )
+    monkeypatch.setattr(
+        report_mod,
+        "build_trade_review_report",
+        lambda target_date, since_time=None, top_n=10000, scope="all": {
+            "meta": {"warnings": []},
+            "sections": {"recent_trades": []},
+        },
+    )
+    monkeypatch.setattr(report_mod, "_fetch_trade_history_rows", lambda target_date: ([], [], []))
+
+    report = report_mod.build_performance_tuning_report(target_date="2026-04-03", since_time=None)
+
+    swing_summary = report["sections"]["swing_daily_summary"]
+    blocker_rows = {item["label"]: item for item in swing_summary["blocker_families"]}
+    assert swing_summary["day_type"]["label"] == "시장 국면 prior 관측일"
+    assert "시장 국면 제한" not in blocker_rows
+    assert blocker_rows["시장 국면 prior 관측"]["count"] == 1
+    prior_reasons = {item["label"]: item["count"] for item in swing_summary["market_regime_prior_reasons"]}
+    assert prior_reasons["oil_only_recovery_signal_insufficient"] == 1
 
 
 def test_performance_tuning_report_accepts_dynamic_trend_window(monkeypatch):

@@ -113,6 +113,34 @@ def test_market_regime_prior_alone_does_not_create_entry_drought_critical():
     assert bottleneck["counts"]["legacy_prior_event_counts"]["market_regime_block_unique"] == 15
 
 
+def test_lifecycle_summary_counts_market_regime_prior_reasons():
+    summary = mod.summarize_lifecycle_events(
+        [
+            {
+                "stage": "market_regime_prior_observed",
+                "record_id": "r1",
+                "stock_code": "000001",
+                "fields": {
+                    "strategy": "KOSPI_ML",
+                    "market_regime_prior_reason": "oil_only_recovery_signal_insufficient",
+                },
+            },
+            {
+                "stage": "market_regime_block",
+                "record_id": "r2",
+                "stock_code": "000002",
+                "fields": {"strategy": "KOSPI_ML", "market_regime_block_reason": "confirmed_risk_context"},
+            },
+        ]
+    )
+
+    assert summary["raw_counts"]["market_regime_prior_observed"] == 1
+    assert summary["raw_counts"]["market_regime_block"] == 1
+    assert summary["market_regime_prior_reason_counts"] == {
+        "oil_only_recovery_signal_insufficient": 1
+    }
+
+
 def test_swing_improvement_automation_adds_entry_bottleneck_order():
     audit = {
         "date": "2026-05-22",

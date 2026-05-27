@@ -53,6 +53,8 @@ def evaluate_swing_entry_lifecycle_policy(
     gatekeeper_allow_entry: bool | None = None,
     market_regime_blocked: bool = False,
     market_regime_reason: str | None = None,
+    market_regime_prior_observed: bool = False,
+    confirmed_risk_block: bool = False,
     hard_safety_block: bool = False,
     hard_safety_reason: str | None = None,
     source_stage: str | None = None,
@@ -78,6 +80,8 @@ def evaluate_swing_entry_lifecycle_policy(
         "market_regime": {
             "blocked": bool(market_regime_blocked),
             "reason": market_regime_reason or "-",
+            "prior_observed": bool(market_regime_prior_observed),
+            "confirmed_risk_block": bool(confirmed_risk_block),
         },
     }
     feature_snapshot = {
