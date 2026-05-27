@@ -1,7 +1,7 @@
 # Observation Source Quality Audit - 2026-05-27
 
-- status: `fail`
-- event_count: `453117`
+- status: `warning`
+- event_count: `453121`
 - decision_authority: `source_quality_only`
 - runtime_effect: `False`
 - forbidden_uses: `runtime_threshold_apply, order_submit, provider_route_change, bot_restart, real_execution_quality_approval`
@@ -12,9 +12,7 @@
 - `swing_same_symbol_loss_reentry_cooldown` sample=`6` missing=`{'source_probe_id': 0.3333}` zero=`{}`
 
 ## Invalid Label Findings
-- `swing_reentry_counterfactual_after_loss` field=`gatekeeper_action` count=`9` routing=`source_quality_blocker` examples=`['NOT_EVALUATED_SCORE_VPW_PRIOR', 'NOT_EVALUATED_SCORE_VPW_PRIOR', 'NOT_EVALUATED_SCORE_VPW_PRIOR', 'NOT_EVALUATED_SCORE_VPW_PRIOR', 'NOT_EVALUATED_SCORE_VPW_PRIOR']`
-- `swing_probe_entry_candidate` field=`gatekeeper_action` count=`46` routing=`source_quality_blocker` examples=`['NOT_EVALUATED_SCORE_VPW_PRIOR', 'NOT_EVALUATED_SCORE_VPW_PRIOR', 'NOT_EVALUATED_SCORE_VPW_PRIOR', 'NOT_EVALUATED_SCORE_VPW_PRIOR', 'NOT_EVALUATED_SCORE_VPW_PRIOR']`
-- `swing_probe_holding_started` field=`gatekeeper_action` count=`46` routing=`source_quality_blocker` examples=`['NOT_EVALUATED_SCORE_VPW_PRIOR', 'NOT_EVALUATED_SCORE_VPW_PRIOR', 'NOT_EVALUATED_SCORE_VPW_PRIOR', 'NOT_EVALUATED_SCORE_VPW_PRIOR', 'NOT_EVALUATED_SCORE_VPW_PRIOR']`
+- none
 
 ## High Volume Stages Without Source-Like Fields
 - none

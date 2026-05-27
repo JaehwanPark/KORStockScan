@@ -1096,3 +1096,11 @@ def test_swing_pattern_lab_automation_marks_ofi_qi_instrumentation_implemented(t
     assert order["implementation_provenance"]["decision_authority"] == "swing_pattern_lab_analysis_workorder_source_only"
     assert order["implementation_provenance"]["runtime_effect"] is False
     assert order["implementation_checks"][0]["status"] == "pass"
+    contract = report["ev_report_summary"]["source_quality_contracts"]["swing_micro_context"]
+    assert contract["source_contract_status"] == "implemented"
+    assert contract["metric_role"] == "source_quality_gate"
+    assert contract["runtime_effect"] is False
+    assert contract["allowed_runtime_apply"] is False
+    blocked = report["data_quality"]["source_quality_blocked_families"][0]
+    assert blocked["source_contract_version"] == "swing_micro_context_source_quality_v1"
+    assert blocked["decision_authority"] == "swing_pattern_lab_analysis_workorder_source_only"

@@ -10,12 +10,12 @@
 - scalp_entry_adm_status: `pass`
 - lifecycle_matrix_status: `pass`
 - lifecycle_ai_context prompt/applied: `3` / `2596`
-- swing_strategy_discovery_labeled/pending: `84` / `2056`
+- swing_strategy_discovery_labeled/pending: `84` / `2238`
 - swing_lifecycle_matrix_auto: `8`
-- swing_lifecycle_bucket_auto: `0`
+- swing_lifecycle_bucket_auto: `8`
 - institutional_flow_available/join_rate: `True` / `100.0`
 - pattern_lab_currentness_status: `pass`
-- pattern_lab_ai_review_status: `warning`
+- pattern_lab_ai_review_status: `pass`
 - producer_gap_discovery_status: `warning`
 - pattern_lab_propagation_status: `pass`
 - env_generated_at: `2026-05-27T07:35:02`
@@ -105,8 +105,8 @@
 ## Swing Strategy Discovery Sim
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_2026-05-27.json`
 - available: `True`
-- candidate/arm/labeled: `284` / `2272` / `84`
-- pending_future_quote_count: `2056`
+- candidate/arm/labeled: `325` / `2454` / `84`
+- pending_future_quote_count: `2238`
 - top_surviving_arm: `arm05_breakout_conf_trailing`
 - avoid_bucket_count: `2`
 - runtime_effect: `False`
@@ -116,7 +116,7 @@
 ## Swing Lifecycle Matrix
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_lifecycle_decision_matrix/swing_lifecycle_decision_matrix_2026-05-27.json`
 - available: `True`
-- total/probe/discovery: `2593` / `321` / `2272`
+- total/probe/discovery: `2775` / `321` / `2454`
 - sim_auto_candidate_count: `8`
 - workorder_count: `7`
 - daily_simulation_consumed: `False`
@@ -127,7 +127,7 @@
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_lifecycle_bucket_discovery/swing_lifecycle_bucket_discovery_2026-05-27.json`
 - available: `True`
 - source_contract_status: `pass`
-- surfaced/sim_auto/code_patch: `448` / `0` / `14`
+- surfaced/sim_auto/code_patch: `448` / `8` / `14`
 - runtime_effect: `False`
 - warnings: `[]`
 
@@ -139,6 +139,6 @@
 
 ## Pattern Lab Audits
 - currentness: status=`pass` fail=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-27.json`
-- ai_review: status=`warning` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-05-27.json`
+- ai_review: status=`pass` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-05-27.json`
 - producer_gap_discovery: status=`warning` artifact=`/home/ubuntu/KORStockScan/data/report/producer_gap_discovery/producer_gap_discovery_2026-05-27.json`
 - propagation: status=`pass` fail=`0` warnings=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-27.json`

@@ -13,6 +13,12 @@
 - `actual_order_submitted=false`인 sim/probe 표본은 EV/source-quality 입력이며 실주문 전환 근거가 아니다.
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
 
+## Runbook 운영 확인 완료 기록
+
+- `[PreopenAutomationHealthCheck20260528] 장전 자동화체인 상태 확인`
+  - 판정: `pass`
+  - 근거: [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)의 `PreopenAutomationHealthCheck20260528` 완료 기록과 동일하다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-05-27` postclose -> `2026-05-28`)
 
@@ -22,18 +28,20 @@
 
 ## 장전 체크리스트 (08:45~09:00)
 
-- [ ] `[ThresholdEnvAutoApplyPreopen0528] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-05-28`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
+- [x] `[ThresholdEnvAutoApplyPreopen0528] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-05-28`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-27.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-27.json), [runtime_apply_gap_audit_2026-05-27.json](/home/ubuntu/KORStockScan/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_2026-05-27.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
   - 판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.
   - 판정 기준: runtime apply gap audit의 `post_apply_attribution_pending`/`retry_pending` 후보가 다음 PREOPEN apply plan과 runtime env에서 소비되는지 사용자에게 표면화한다. 확인 대상: `entry_wait6579_score66_69_recovery_gate_v1:2026-05-27`(retry_pending, reason=ready_but_not_applied), `greenfield_real_environment_authority:2026-05-27`(retry_pending, reason=ready_but_not_applied).
   - 금지: blocked family, approval artifact missing, same-stage owner conflict를 수동 env override로 우회하지 않는다.
   - 다음 액션: `runtime_gap_pending_consumed`, `runtime_gap_pending_not_consumed`, `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.
+  - 완료 기록 (`2026-05-28 07:34 KST`): 판정=`pass`, 다음 액션=`runtime_gap_pending_consumed_and_applied_guard_passed_env`. 시간이 지났거나 임박한 반복 PREOPEN 확인 대상이라 `THRESHOLD_CYCLE_APPLY_MODE=auto_bounded_live THRESHOLD_CYCLE_AUTO_APPLY=true THRESHOLD_CYCLE_AUTO_APPLY_REQUIRE_AI=true deploy/run_threshold_cycle_preopen.sh 2026-05-28`로 preopen wrapper를 재확인 실행했고 `[DONE] threshold-cycle preopen target_date=2026-05-28`로 종료됐다. [threshold_cycle_preopen_2026-05-28.status.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_preopen_status/threshold_cycle_preopen_2026-05-28.status.json)은 `status=succeeded`, `apply_mode=auto_bounded_live`, `exit_code=0`, `runtime_effect=preopen_runtime_env_apply_only`다. [threshold_apply_2026-05-28.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-05-28.json)은 `status=auto_bounded_live_ready`, `runtime_change=true`, `warnings=[]`이며 runtime apply bridge 후보 `3`건 중 `2`건이 approved다. retry 대상 `entry_wait6579_score66_69_recovery_gate_v1:2026-05-27`와 `greenfield_real_environment_authority:2026-05-27`는 runtime env selected family에 포함됐고, `scale_in_bucket_runtime_policy_v1`은 `bootstrap_pending`/`runtime_apply_not_allowed`/contract missing으로 정상 차단됐다. [threshold_runtime_env_2026-05-28.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-05-28.json)의 selected families는 `soft_stop_whipsaw_confirmation`, `score65_74_recovery_probe`, `scalp_sim_candidate_window_expansion`, `scalp_sim_ai_budget_manager`, `lifecycle_decision_matrix_runtime`, `scalp_sim_auto_approval`, `greenfield_real_environment_authority`, `entry_wait6579_score66_69_recovery_gate_v1`, `swing_sim_auto_approval`다. 수동 env override, provider 변경, 주문 guard 변경, cap release는 수행하지 않았다.
 
-- [ ] `[OpenAIWSPreopenConfirm0528] OpenAI WS 유지 설정 및 entry_price/analyze_target provenance 확인` (`Due: 2026-05-28`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: RuntimeStability`)
+- [x] `[OpenAIWSPreopenConfirm0528] OpenAI WS 유지 설정 및 entry_price/analyze_target provenance 확인` (`Due: 2026-05-28`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: RuntimeStability`)
   - Source: [openai_ws_stability_2026-05-27.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-27.md), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py)
   - 판정 기준: startup env의 OpenAI route/Responses WS 설정과 `analyze_target`, `entry_price` transport provenance를 분리 확인한다.
   - 금지: provider transport 확인을 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경으로 해석하지 않는다.
   - 다음 액션: entry_price transport 표본이 부족하면 장중 표본 재확인 항목과 연결한다.
+  - 완료 기록 (`2026-05-28 07:34 KST`): 판정=`pass`, 다음 액션=`keep_ws_and_intraday_entry_price_provenance_recheck`. [openai_ws_stability_2026-05-27.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-27.md)은 `decision=keep_ws`, `analyze_target` unique WS calls `5769`, WS fallback `0/5769`, WS success rate `1.0`, p95 `1745.2ms`, `entry_price WS sample count=0`, entry_price canary `transport_observable_count=523`, `applied_count=205`, `instrumentation_gap=False`다. [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)은 OpenAI `responses_ws`와 `KORSTOCKSCAN_OPENAI_RESPONSES_WS_ENABLED=true`를 유지하고, `gpt-5.4-mini`의 `entry_price,holding_flow`는 Bedrock Nova Lite v2 primary, OpenAI failback, Lite v1 shadow-only 비교 경로로 분리되어 있다. 따라서 `analyze_target` WS 유지와 `entry_price` Bedrock primary provenance는 분리 확인됐고, entry_price WS 표본 0건은 현재 route와 일치한다. threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경은 수행하지 않았다.
 
 ## 장중 체크리스트 (09:05~15:20)
 

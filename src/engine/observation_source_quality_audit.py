@@ -404,6 +404,7 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "forbidden_uses",
         ),
     ),
+    "swing_entry_micro_context_observed": StageContract(required_fields=ORDERBOOK_MICRO_FIELDS),
     "swing_scale_in_micro_context_observed": StageContract(required_fields=ORDERBOOK_MICRO_FIELDS),
     "scale_in_price_resolved": StageContract(
         required_fields=("price_source", "virtual_budget_override", "budget_authority", *ORDERBOOK_MICRO_FIELDS),

@@ -3,7 +3,7 @@
 ## 판정
 
 - 판정: `live_bucket_ready`
-- 근거: LDM `sim_auto_approved=185` (`+2`), `live_auto_apply_ready=1` (`+0`), swing sim-auto `0` (`-6`).
+- 근거: LDM `sim_auto_approved=185` (`+2`), `live_auto_apply_ready=1` (`+0`), swing sim-auto `8` (`+2`).
 - 실현손익 해석: `real_pnl_is_tuning_performance=false` (post_apply_attribution_not_ready:pending_applied_cohort).
 - 다음 액션: 내일은 `live_auto_apply_ready`, `post_apply_attribution`, `pending_future_quote_count`, selected workorder backlog만 먼저 본다.
 
@@ -11,8 +11,8 @@
 
 - Lifecycle bucket: candidates `379` (`-35`), surfaced `186` (`+2`), sim-auto `185` (`+2`), live-ready `1` (`+0`).
 - Lifecycle matrix: rows `41172` (`-7609`), joined `39464` (`-7704`), promote-ready `1` (`+0`).
-- Swing matrix: rows `2593` (`+872`), probe `321` (`+200`), pending future quotes `2056` (`+622`).
-- Swing bucket: sim-auto `0` (`-6`), code-patch `14` (`-5`).
+- Swing matrix: rows `2775` (`+1054`), probe `321` (`+200`), pending future quotes `2238` (`+804`).
+- Swing bucket: sim-auto `8` (`+2`), code-patch `14` (`-5`).
 - Scalp sim control tower: approved `true`, policies `2`, sources `["lifecycle_bucket_discovery", "scalp_sim_scale_in_window_approval"]`, bridge live-ready summary `2`.
 
 ## EV 해석
@@ -20,18 +20,18 @@
 - Daily completed trades `5`, win-rate `40.0`, avg profit pct `-0.34`, realized PnL KRW `408`.
 - Real split sample `13`, avg `-0.0231`, win-rate `0.5385`.
 - Sim split sample `659`, avg `-0.7163`, win-rate `0.3536`.
-- EV warnings: `swing_strategy_discovery:pending_future_quotes, swing_lifecycle_decision_matrix:pending_future_quotes, pattern_lab_ai_review_warning`.
+- EV warnings: `swing_strategy_discovery:pending_future_quotes, swing_lifecycle_decision_matrix:pending_future_quotes`.
 
 ## Workorder
 
-- selected orders `56`, selected decisions `{"attach_existing_family": 22, "implement_now": 34}`, routes `{"defer_evidence": 1, "existing_family": 22, "implement_now": 8, "instrumentation_order": 25}`.
-- pattern lab AI review source orders `1`, pattern lab currentness source orders `0`.
+- selected orders `56`, selected decisions `{"attach_existing_family": 56}`, routes `{"existing_family": 55, "performance_optimization_order": 1}`.
+- pattern lab AI review source orders `0`, pattern lab currentness source orders `0`.
 - 해석: `implement_now`는 자동 repo 수정이 아니라 `runtime_effect=false` intake다. 사용자가 Codex 구현을 지시한 경우에만 코드 작업이다.
 
 ## Runtime Summary
 
 - runtime mutation allowed `false`; scalping selected auto-bounded-live `3`.
-- pattern lab currentness `pass`, AI review `warning`, propagation `pass`, producer gap `warning`.
+- pattern lab currentness `pass`, AI review `pass`, propagation `pass`, producer gap `warning`.
 
 ## Source
 

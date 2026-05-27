@@ -1,16 +1,16 @@
 # Swing Strategy Discovery EV - 2026-05-27
 
-- generated_at: `2026-05-27T19:06:31`
+- generated_at: `2026-05-27T22:15:53`
 - runtime_effect: `False`
 - decision_authority: `swing_sim_exploration_only`
-- candidate/arm/policy_exit_rows: `284` / `2272` / `2272`
+- candidate/arm/policy_exit_rows: `325` / `2454` / `2454`
 - labeled_sample_count: `84`
-- pending_future_quote_count: `2056`
-- bottom_rebound_policy_exit_row_count: `0`
-- bottom_rebound_label_status_counts: `{}`
+- pending_future_quote_count: `2238`
+- bottom_rebound_policy_exit_row_count: `126`
+- bottom_rebound_label_status_counts: `{'pending_future_quotes': 126}`
 - top_surviving_arm: `arm05_breakout_conf_trailing`
 - avoid_bucket_count: `2`
-- source_quality_summary: `{'implementation_status': 'implemented', 'implementation_provenance': {'order_id': 'order_swing_strategy_discovery_source_quality_followup', 'scope': 'source_quality_instrumentation_only', 'runtime_effect': False, 'allowed_runtime_apply': False, 'decision_authority': 'swing_sim_exploration_only'}, 'implementation_checks': [{'name': 'label_maturity_provenance', 'status': 'pass', 'fields': ['label_maturity_status', 'entry_reason', 'policy_exit_reason', 'future_quote_count', 'quotes_from_entry_count']}, {'name': 'source_only_contract', 'status': 'pass', 'runtime_effect': False, 'actual_order_submitted': False, 'broker_order_forbidden': True}], 'runtime_effect': False, 'decision_authority': 'swing_sim_exploration_only', 'arm_status_counts': {'PENDING_ENTRY': 1649, 'ENTERED': 407, 'EXITED': 84, 'EXPIRED': 132}, 'label_status_counts': {'pending_future_quotes': 2056, 'labeled': 84, 'expired_entry_no_trigger': 132}, 'bottom_rebound_label_status_counts': {}, 'bottom_rebound_maturity_status_counts': {}, 'bottom_rebound_pending_future_quote_count': 0, 'bottom_rebound_labeled_sample_count': 0, 'bottom_rebound_expired_entry_count': 0, 'maturity_status_counts': {'pending_future_quotes': 2056, 'matured_labeled': 84, 'matured_no_entry': 132}, 'entry_reason_counts': {'next_open': 300, 'pullback_not_touched': 441, 'breakout_trigger_touched': 164, 'gap_fade_condition_not_met': 132, 'breakout_not_touched': 136, 'gap_fade_limit_touched': 18, 'pullback_limit_touched': 9, 'missing_next_quote': 1072}, 'policy_exit_reason_counts': {'need_5_quotes': 168, 'need_10_quotes': 239, 'pullback_not_touched': 441, 'trailing_after_mfe_stop': 46, 'gap_fade_condition_not_met': 132, 'breakout_not_touched': 136, 'mae_stop_touched': 38, 'missing_next_quote': 1072}, 'source_quality_status_counts': {'pending_future_quotes': 2056, 'ok': 216}}`
+- source_quality_summary: `{'implementation_status': 'implemented', 'implementation_provenance': {'order_id': 'order_swing_strategy_discovery_source_quality_followup', 'scope': 'source_quality_instrumentation_only', 'runtime_effect': False, 'allowed_runtime_apply': False, 'decision_authority': 'swing_sim_exploration_only'}, 'implementation_checks': [{'name': 'label_maturity_provenance', 'status': 'pass', 'fields': ['label_maturity_status', 'entry_reason', 'policy_exit_reason', 'future_quote_count', 'quotes_from_entry_count']}, {'name': 'source_only_contract', 'status': 'pass', 'runtime_effect': False, 'actual_order_submitted': False, 'broker_order_forbidden': True}], 'runtime_effect': False, 'decision_authority': 'swing_sim_exploration_only', 'arm_status_counts': {'PENDING_ENTRY': 1831, 'ENTERED': 407, 'EXITED': 84, 'EXPIRED': 132}, 'label_status_counts': {'pending_future_quotes': 2238, 'labeled': 84, 'expired_entry_no_trigger': 132}, 'bottom_rebound_label_status_counts': {'pending_future_quotes': 126}, 'bottom_rebound_maturity_status_counts': {'pending_future_quotes': 126}, 'bottom_rebound_pending_future_quote_count': 126, 'bottom_rebound_labeled_sample_count': 0, 'bottom_rebound_expired_entry_count': 0, 'maturity_status_counts': {'pending_future_quotes': 2238, 'matured_labeled': 84, 'matured_no_entry': 132}, 'entry_reason_counts': {'next_open': 300, 'pullback_not_touched': 441, 'breakout_trigger_touched': 164, 'gap_fade_condition_not_met': 132, 'breakout_not_touched': 136, 'missing_next_quote': 1254, 'gap_fade_limit_touched': 18, 'pullback_limit_touched': 9}, 'policy_exit_reason_counts': {'need_5_quotes': 168, 'need_10_quotes': 239, 'pullback_not_touched': 441, 'trailing_after_mfe_stop': 46, 'gap_fade_condition_not_met': 132, 'breakout_not_touched': 136, 'mae_stop_touched': 38, 'missing_next_quote': 1254}, 'source_quality_status_counts': {'pending_future_quotes': 2238, 'ok': 216}}`
 - warnings: `['pending_future_quotes']`
 
 ## Surviving Arms

@@ -159,6 +159,50 @@ def test_schema_report_and_persistence_are_idempotent(tmp_path, monkeypatch):
         assert session.query(SwingStrategyDiscoveryArm).count() == 6 * len(mod.ARM_SET)
 
 
+def test_partial_sector_theme_missing_stays_source_quality_summary(monkeypatch):
+    monkeypatch.setattr(mod, "load_safe_pool_rows", lambda target_date: _source_rows(3))
+    monkeypatch.setattr(mod, "load_block_reason_map", lambda target_date: {})
+    monkeypatch.setattr(mod, "fetch_quote_features", lambda codes, db_url=mod.POSTGRES_URL: _quote_features(3))
+    monkeypatch.setattr(
+        mod,
+        "build_sector_theme_map",
+        lambda codes, target_date, allow_external=True: {
+            "mapped_code_count": 2,
+            "missing_count": 1,
+            "sector_mapped_count": 2,
+            "sector_missing_count": 1,
+            "theme_mapped_count": 1,
+            "theme_missing_count": 2,
+            "rows_by_code": {
+                "000001": {
+                    "sector": "sector-1",
+                    "industry": "industry-1",
+                    "theme_tags": ["theme-1"],
+                    "theme_source": "test",
+                    "theme_source_quality": "ok",
+                },
+                "000002": {
+                    "sector": "sector-2",
+                    "industry": "industry-2",
+                    "theme_tags": [],
+                    "theme_source": "missing",
+                    "theme_source_quality": "missing",
+                },
+            },
+            "warnings": [],
+        },
+    )
+
+    report = mod.build_swing_strategy_discovery_report("2026-05-22", db_url="sqlite://", max_candidates=3, persist=False)
+
+    assert report["warnings"] == []
+    assert report["source_quality"]["sector_theme_mapped_rows"] == 2
+    assert report["source_quality"]["sector_theme_missing_rows"] == 1
+    assert report["source_quality"]["sector_theme_coverage"] == 0.666667
+    assert report["source_quality"]["sector_missing_rows"] == 1
+    assert report["source_quality"]["theme_missing_rows"] == 2
+
+
 def test_discovery_can_include_bottom_rebound_source_without_runtime_authority(tmp_path, monkeypatch):
     source_path = tmp_path / "swing_bottom_rebound_candidate_source_2026-05-22.json"
     source_path.write_text(

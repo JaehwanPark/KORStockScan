@@ -623,6 +623,30 @@ def test_swing_entry_bottleneck_handoff_passes_when_surfaced():
     assert report["missing"] == []
 
 
+def test_swing_lifecycle_handoff_warns_on_ai_two_pass_missing():
+    matrix = {
+        "input_contract": {"swing_daily_simulation_consumed": False},
+        "entry_bucket_attribution": {"buckets": []},
+    }
+    discovery = {
+        "summary": {
+            "ai_two_pass_review_status": "missing",
+            "ai_fail_closed": True,
+            "deterministic_proposal_count": 1,
+            "ai_tier2_proposal_count": 0,
+        },
+        "surfaced_candidate_ids": [],
+        "warnings": ["ai_two_pass_review_missing_fail_closed"],
+    }
+
+    report = mod._swing_lifecycle_handoff_status(matrix, discovery, {}, {}, {"orders": []})
+
+    assert report["status"] == "warning"
+    assert report["missing"] == []
+    assert report["ai_two_pass_review_status"] == "missing"
+    assert "swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked" in report["warnings"]
+
+
 def test_consumer_stale_detects_generated_at_ordering():
     consumer = {"generated_at": "2026-05-12T21:20:00+09:00"}
     source = {"generated_at": "2026-05-12T21:21:00+09:00"}

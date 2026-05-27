@@ -20,6 +20,11 @@
 - `scale_in:blocker_reason:profit_not_enough`: stage=scale_in, EV=0.5044, 방향=runtime_bridge, 현재=sim_auto_approved
 - `scale_in:blocker_reason:trend_not_strong`: stage=scale_in, EV=2.6781, 방향=runtime_bridge, 현재=sim_auto_approved
 - `entry:stage_policy:entry_weighted_adm_v1`: stage=entry, EV=1.8842, 방향=runtime_bridge, 현재=sim_auto_approved
+- `swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_high_mae_green_held_missing_trailing_after_mfe_stop`: stage=unknown, EV=21.906569, 방향=sim_policy_or_approval_ready, 현재=sim_auto_approved
+- `swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_high_mae_deep_held_missing_trailing_after_mfe_stop`: stage=unknown, EV=13.06599, 방향=sim_policy_or_approval_ready, 현재=sim_auto_approved
+- `swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_high_mae_flat_held_missing_trailing_after_mfe_stop`: stage=unknown, EV=8.815385, 방향=sim_policy_or_approval_ready, 현재=sim_auto_approved
+- `swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_mid_mae_low_held_missing_trailing_after_mfe_stop`: stage=unknown, EV=3.402716, 방향=sim_policy_or_approval_ready, 현재=sim_auto_approved
+- `swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_mid_mae_mid_held_missing_trailing_after_mfe_stop`: stage=unknown, EV=3.02975, 방향=sim_policy_or_approval_ready, 현재=sim_auto_approved
 
 ## 재시도 큐
 - `ready_but_not_applied`: owner=preopen_apply_candidate, stage=preopen_apply_candidate, deadline=2026-05-28

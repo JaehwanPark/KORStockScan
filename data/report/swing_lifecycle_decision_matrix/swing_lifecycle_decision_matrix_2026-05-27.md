@@ -3,9 +3,9 @@
 ## Summary
 - runtime_effect: `False`
 - decision_authority: `swing_ldm_source_only`
-- total_rows: `2593`
+- total_rows: `2775`
 - probe_rows: `321`
-- discovery_rows: `2272`
+- discovery_rows: `2454`
 - sim_auto_candidate_count: `8`
 - workorder_count: `7`
 - swing_entry_bottleneck_primary: `SWING_ENTRY_BOTTLENECK_OBSERVE`
@@ -15,8 +15,8 @@
 
 ## Bucket Attribution
 ### entry_bucket_attribution
-- source_row_count: `2464`
-- bucket_count: `207`
+- source_row_count: `2646`
+- bucket_count: `237`
 - sim_auto_candidate_count: `0`
 - workorder_count: `0`
 - `blocked_swing_score_vpw|-|KOSPI_BASE|gap_down|lt55|vpw_extreme|KOSPI_ML|-|sim_virtual_budget_dynamic_formula` route=`source_only_keep_collecting` joined=`0` ev=`0.0`
@@ -25,7 +25,7 @@
 - `blocked_gatekeeper_reject|-|BOTTOM|gap_down|lt55|vpw_extreme|KOSPI_ML|-|sim_virtual_budget_dynamic_formula` route=`source_only_keep_collecting` joined=`0` ev=`0.0`
 - `blocked_gatekeeper_reject|-|KOSPI_BASE|flat_up|lt55|vpw_extreme|KOSPI_ML|-|sim_virtual_budget_dynamic_formula` route=`source_only_keep_collecting` joined=`0` ev=`0.0`
 ### holding_exit_bucket_attribution
-- source_row_count: `2430`
+- source_row_count: `2612`
 - bucket_count: `47`
 - sim_auto_candidate_count: `8`
 - workorder_count: `4`
@@ -41,8 +41,8 @@
 - workorder_count: `0`
 - `AVG_DOWN|instrumentation_gap|swing_dynamic_allowed|market` route=`source_only_keep_collecting` joined=`0` ev=`0.0`
 ### discovery_arm_attribution
-- source_row_count: `2272`
-- bucket_count: `840`
+- source_row_count: `2454`
+- bucket_count: `1039`
 - sim_auto_candidate_count: `0`
 - workorder_count: `3`
 - `breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Manufacture of Electronic Components|그린카_하이브리드카/전기차,스마트 그리드,휴대폰_수동부품|DIAGNOSTIC` route=`source_only_keep_collecting` joined=`1` ev=`17.82255`

@@ -114,15 +114,15 @@
 - ofi_qi_stale_missing_reason_combinations: `{'micro_not_ready+state_insufficient': 3, 'micro_missing+micro_not_ready+state_insufficient': 3793, 'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 39}`
 - ofi_qi_stale_missing_reason_combination_unique_records: `{'micro_missing+micro_not_ready+state_insufficient': 20, 'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 11}`
 - ofi_qi_observer_unhealthy_overlap: `{'observer_unhealthy_total': 39, 'observer_unhealthy_with_other_reason': 39, 'observer_unhealthy_only': 0}`
-- source_quality_blocked_families: `[{'family': 'swing_entry_ofi_qi_execution_quality', 'stage': 'entry', 'source_quality_blockers': ['entry_ofi_qi_invalid_micro_context'], 'invalid_micro_context_unique_record_count': 19, 'invalid_reason_combination_unique_record_counts': {'micro_missing+micro_not_ready+state_insufficient': 20, 'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 11}, 'automation_input': True, 'runtime_effect': False}, {'family': 'swing_scale_in_ofi_qi_confirmation', 'stage': 'scale_in', 'source_quality_blockers': ['scale_in_ofi_qi_invalid_micro_context'], 'invalid_micro_context_unique_record_count': 2, 'invalid_reason_combination_unique_record_counts': {'micro_missing+micro_not_ready+state_insufficient': 20, 'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 11}, 'automation_input': True, 'runtime_effect': False}]`
+- source_quality_blocked_families: `[{'family': 'swing_entry_ofi_qi_execution_quality', 'stage': 'entry', 'metric_role': 'source_quality_gate', 'decision_authority': 'swing_pattern_lab_analysis_workorder_source_only', 'window_policy': 'same_day_pattern_lab_source_quality', 'sample_floor': 1, 'primary_decision_metric': 'source_quality_gate', 'source_quality_gate': 'swing_orderbook_micro_context_ready_or_blocker_provenance_recorded', 'source_contract_version': 'swing_micro_context_source_quality_v1', 'source_contract_status': 'implemented', 'source_quality_blockers': ['entry_ofi_qi_invalid_micro_context'], 'invalid_micro_context_unique_record_count': 19, 'invalid_reason_combination_unique_record_counts': {'micro_missing+micro_not_ready+state_insufficient': 20, 'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 11}, 'reason_counts': {'micro_missing': 3832, 'micro_stale': 0, 'observer_unhealthy': 39, 'micro_not_ready': 3835, 'state_insufficient': 3835}, 'reason_combination_counts': {'micro_not_ready+state_insufficient': 3, 'micro_missing+micro_not_ready+state_insufficient': 3793, 'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 39}, 'observer_unhealthy_overlap': {'observer_unhealthy_total': 39, 'observer_unhealthy_with_other_reason': 39, 'observer_unhealthy_only': 0}, 'automation_input': True, 'runtime_effect': False, 'allowed_runtime_apply': False, 'forbidden_uses': ['swing_real_order_enable', 'one_share_real_canary', 'scale_in_real_canary', 'runtime_threshold_mutation', 'provider_route_change', 'bot_restart', 'recommendation_history_replace']}, {'family': 'swing_scale_in_ofi_qi_confirmation', 'stage': 'scale_in', 'metric_role': 'source_quality_gate', 'decision_authority': 'swing_pattern_lab_analysis_workorder_source_only', 'window_policy': 'same_day_pattern_lab_source_quality', 'sample_floor': 1, 'primary_decision_metric': 'source_quality_gate', 'source_quality_gate': 'swing_orderbook_micro_context_ready_or_blocker_provenance_recorded', 'source_contract_version': 'swing_micro_context_source_quality_v1', 'source_contract_status': 'implemented', 'source_quality_blockers': ['scale_in_ofi_qi_invalid_micro_context'], 'invalid_micro_context_unique_record_count': 2, 'invalid_reason_combination_unique_record_counts': {'micro_missing+micro_not_ready+state_insufficient': 20, 'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 11}, 'reason_counts': {'micro_missing': 3832, 'micro_stale': 0, 'observer_unhealthy': 39, 'micro_not_ready': 3835, 'state_insufficient': 3835}, 'reason_combination_counts': {'micro_not_ready+state_insufficient': 3, 'micro_missing+micro_not_ready+state_insufficient': 3793, 'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 39}, 'observer_unhealthy_overlap': {'observer_unhealthy_total': 39, 'observer_unhealthy_with_other_reason': 39, 'observer_unhealthy_only': 0}, 'automation_input': True, 'runtime_effect': False, 'allowed_runtime_apply': False, 'forbidden_uses': ['swing_real_order_enable', 'one_share_real_canary', 'scale_in_real_canary', 'runtime_threshold_mutation', 'provider_route_change', 'bot_restart', 'recommendation_history_replace']}]`
 - carryover_warnings: `0`
 - population_split_available: `True`
 
 ## Swing Strategy Discovery Sim
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_2026-05-27.json`
 - authority: `swing_sim_exploration_only` / source_only: `True`
-- candidate/arm/policy_exit_rows: `284` / `2272` / `2272`
-- labeled/pending_future_quotes: `84` / `2056`
+- candidate/arm/policy_exit_rows: `325` / `2454` / `2454`
+- labeled/pending_future_quotes: `84` / `2238`
 - implementation_status: `implemented`
 - top_surviving_arm: `arm05_breakout_conf_trailing`
 - surviving/avoid_bucket_count: `1` / `2`
@@ -148,7 +148,7 @@
 
 ## Pattern Lab Audits
 - currentness: status=`pass` fail=`0` orders=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-27.json`
-- ai_review: status=`warning` orders=`1` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-05-27.json`
+- ai_review: status=`pass` orders=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-05-27.json`
 - time_window_regime_counterfactual: status=`pass` artifact=`/home/ubuntu/KORStockScan/data/report/time_window_regime_counterfactual/time_window_regime_counterfactual_2026-05-27.json`
 - producer_gap_discovery: status=`warning` orders=`8` artifact=`/home/ubuntu/KORStockScan/data/report/producer_gap_discovery/producer_gap_discovery_2026-05-27.json`
 - stage_hook_workorder_discovery: status=`warning` orders=`2` artifact=`/home/ubuntu/KORStockScan/data/report/stage_hook_workorder_discovery/stage_hook_workorder_discovery_2026-05-27.json`
@@ -172,8 +172,8 @@
 ## Code Improvement Workorder
 - artifact: `/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-27.json`
 - markdown: `/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-27.md`
-- selected_order_count: `57`
-- decision_counts: `{'attach_existing_family': 75, 'design_family_candidate': 7, 'defer_evidence': 10, 'reject': 3}`
+- selected_order_count: `56`
+- decision_counts: `{'attach_existing_family': 74, 'design_family_candidate': 7, 'defer_evidence': 10, 'reject': 3}`
 
 ## Approval Requests
 - none
@@ -212,4 +212,3 @@
 ## Warnings
 - `swing_strategy_discovery:pending_future_quotes`
 - `swing_lifecycle_decision_matrix:pending_future_quotes`
-- `pattern_lab_ai_review_warning`

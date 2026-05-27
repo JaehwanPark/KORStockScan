@@ -496,6 +496,45 @@ def test_audit_summary_resolves_source_only_candidate_warning(tmp_path):
     assert summary["code_improvement_order_count"] == 8
 
 
+def test_swing_lifecycle_bucket_discovery_summary_surfaces_ai_fail_closed(tmp_path, monkeypatch):
+    report_dir = tmp_path / "swing_lifecycle_bucket_discovery"
+    report_dir.mkdir()
+    path = report_dir / "swing_lifecycle_bucket_discovery_2026-05-27.json"
+    path.write_text(
+        json.dumps(
+            {
+                "runtime_effect": False,
+                "source_only": True,
+                "decision_authority": "swing_ldm_bucket_discovery_sim_auto",
+                "summary": {
+                    "source_contract_status": "pass",
+                    "ai_two_pass_review_status": "missing",
+                    "ai_fail_closed": True,
+                    "candidate_count": 1,
+                    "surfaced_candidate_count": 1,
+                },
+                "warnings": [],
+                "surfaced_candidate_ids": ["swing_bucket_entry_test"],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        mod,
+        "swing_lifecycle_bucket_discovery_paths",
+        lambda target_date: (path, path.with_suffix(".md")),
+    )
+
+    summary, artifact, warnings = mod._swing_lifecycle_bucket_discovery_summary("2026-05-27")
+
+    assert artifact == str(path)
+    assert summary["ai_two_pass_review_status"] == "missing"
+    assert summary["ai_fail_closed"] is True
+    assert "swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_fail_closed" in warnings
+    assert "swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked" in summary["warnings"]
+
+
 def test_build_threshold_cycle_ev_report_warns_when_pattern_lab_artifact_missing(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     monitor_dir = report_dir / "monitor_snapshots"

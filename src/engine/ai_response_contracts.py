@@ -78,6 +78,7 @@ GATEKEEPER_ACTION_KEYS = {
     "둘 다 아님": "neither",
     "둘|다|아님": "neither",
     "neither": "neither",
+    "not_evaluated_score_vpw_prior": "not_evaluated_score_vpw_prior",
     "unknown": "unknown",
 }
 
@@ -90,6 +91,7 @@ CANONICAL_GATEKEEPER_ACTION_KEYS = {
     "scalping_preferred",
     "swing_preferred",
     "neither",
+    "not_evaluated_score_vpw_prior",
     "unknown",
 }
 
@@ -102,6 +104,7 @@ GATEKEEPER_ACTION_DISPLAY = {
     "scalping_preferred": "스캘핑 우선",
     "swing_preferred": "스윙 우선",
     "neither": "둘 다 아님",
+    "not_evaluated_score_vpw_prior": "NOT_EVALUATED_SCORE_VPW_PRIOR",
     "unknown": "UNKNOWN",
 }
 

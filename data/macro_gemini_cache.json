@@ -1,85 +1,85 @@
 {
-  "bundle_as_of": "2026-05-26T22:20:16Z",
+  "bundle_as_of": "2026-05-27T22:20:17Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 7519.12,
-    "prev_value": 7473.47,
-    "change": 45.65,
-    "change_pct": 0.61,
-    "as_of": "2026-05-26T20:30:00Z",
-    "source": "Morningstar / Dow Jones Market Data"
+    "value": 7520.36,
+    "prev_value": 7519.12,
+    "change": 1.24,
+    "change_pct": 0.02,
+    "as_of": "2026-05-27T20:29:00Z",
+    "source": "Dow Jones Market Data / Morningstar"
   },
   "nasdaq": {
-    "name": "NASDAQ Composite",
-    "value": 26656.18,
-    "prev_value": 26343.97,
-    "change": 312.21,
-    "change_pct": 1.19,
-    "as_of": "2026-05-26T20:31:00Z",
-    "source": "Morningstar / Dow Jones Market Data"
+    "name": "NASDAQ",
+    "value": 26674.73,
+    "prev_value": 26656.18,
+    "change": 18.55,
+    "change_pct": 0.07,
+    "as_of": "2026-05-27T20:29:00Z",
+    "source": "Dow Jones Market Data / Morningstar"
   },
   "vix": {
     "name": "VIX",
-    "value": 16.85,
-    "prev_value": 16.59,
-    "change": 0.26,
-    "change_pct": 1.57,
-    "as_of": "2026-05-26T21:00:00Z",
-    "source": "Investing.com / CBOE"
+    "value": 16.32,
+    "prev_value": 17.01,
+    "change": -0.69,
+    "change_pct": -4.06,
+    "as_of": "2026-05-27T20:00:00Z",
+    "source": "CBOE"
   },
   "us10y": {
     "name": "US 10-Year Treasury Yield",
-    "value": 4.49,
-    "prev_value": 4.56,
-    "change": -0.07,
-    "change_pct": -1.54,
-    "as_of": "2026-05-26T19:59:00Z",
+    "value": 4.47,
+    "prev_value": 4.49,
+    "change": -0.02,
+    "change_pct": -0.45,
+    "as_of": "2026-05-27T22:20:17Z",
     "source": "Trading Economics"
   },
   "brent": {
     "name": "Brent Crude",
-    "value": 100.1,
-    "prev_value": 96.15,
-    "change": 3.95,
-    "change_pct": 4.1,
-    "as_of": "2026-05-26T22:20:16Z",
+    "value": 92.25,
+    "prev_value": 96.7,
+    "change": -4.45,
+    "change_pct": -4.6,
+    "as_of": "2026-05-27T22:20:17Z",
     "source": "Associated Press"
   },
   "headlines": [
     {
-      "title": "Global Oil Prices Rise as Fresh U.S. Strikes on Iran Cast Shadow Over Trump's Promised Peace Deal",
-      "source": "TIME",
-      "published_at": "2026-05-26T14:02:00Z",
-      "url": "https://time.com"
+      "title": "Trump says US 'not satisfied' in talks with Iran, days after claiming deal imminent",
+      "source": "The Times of Israel",
+      "published_at": "2026-05-27T20:23:00Z",
+      "url": "https://www.timesofisrael.com"
     },
     {
-      "title": "Another surge for Micron, Wall Street's latest US$1 trillion company, sends U.S. stocks to records",
-      "source": "BNN Bloomberg",
-      "published_at": "2026-05-26T09:34:00Z",
-      "url": "https://www.bnnbloomberg.ca"
+      "title": "Trump tells PBS News that Iran would not get sanctions relief in exchange for giving up highly enriched uranium",
+      "source": "PBS News",
+      "published_at": "2026-05-27T15:40:00Z",
+      "url": "https://www.pbs.org/newshour/politics/trump-tells-pbs-news-that-iran-would-not-get-sanctions-relief-in-exchange-for-giving-up-highly-enriched-uranium"
     },
     {
-      "title": "US-Israel Strike Iran Vessels at Hormuz, Commodities Whip",
-      "source": "Gotrade",
-      "published_at": "2026-05-26T10:00:00Z",
-      "url": "https://heygotrade.com"
+      "title": "Trump insistent on elusive 'great deal' in Iran",
+      "source": "Semafor",
+      "published_at": "2026-05-27T20:29:00Z",
+      "url": "https://www.semafor.com"
     },
     {
-      "title": "Treasury Yields Fall to Kick Off the Week",
-      "source": "TradingView",
-      "published_at": "2026-05-26T11:43:00Z",
-      "url": "https://www.tradingview.com"
+      "title": "U.S. stocks inch to more records after oil prices drop",
+      "source": "Associated Press",
+      "published_at": "2026-05-27T17:18:00Z",
+      "url": "https://apnews.com"
     },
     {
-      "title": "Prospects fade for imminent end to Iran war as attacks restart",
-      "source": "NPR",
-      "published_at": "2026-05-26T14:00:00Z",
-      "url": "https://www.npr.org"
+      "title": "Trump says Hormuz will open under Iran deal, rules out sanctions relief",
+      "source": "AL-MONITOR",
+      "published_at": "2026-05-27T22:20:17Z",
+      "url": "https://www.al-monitor.com"
     }
   ],
   "notes": [
-    "US equity markets hit record closing highs today following the Memorial Day holiday weekend, heavily driven by continued tech and AI rallies, pushing the S&P 500 and Nasdaq higher.",
-    "Brent crude oil rallied significantly following new US-Israel military strikes on Iranian targets near the Strait of Hormuz, throwing cold water on earlier diplomatic optimism.",
-    "Treasury yields eased marginally over the session despite resurfacing inflation fears tied to the oil shock."
+    "S&P 500 and NASDAQ reached new record closes.",
+    "Oil prices dropped significantly as investors assess diplomatic developments regarding Iran.",
+    "US 10-Year yield fell to 4.47% due to lower energy prices easing inflation concerns."
   ]
 }

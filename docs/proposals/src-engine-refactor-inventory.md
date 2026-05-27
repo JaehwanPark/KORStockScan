@@ -111,11 +111,60 @@
 4. runtime/order/provider/threshold/bot restart 경로 및 Greenfield Real Environment authority/env/policy/Telegram 경로와 연결하지 않는다.
 5. 구현 재개 시 old/new import smoke, old/new CLI smoke, targeted monitoring tests, parser, `git diff --check`를 실행한다.
 
+개선된 실행 단계:
+
+1. `greenfield_uptake_verified`
+   - 2026-05-28 PREOPEN 이후 `runtime_apply_gap_audit` retry queue에서 `greenfield_real_environment_authority`와 `entry_wait6579_score66_69_recovery_gate_v1`가 해소됐는지 먼저 확인한다.
+   - 둘 중 하나라도 `ready_but_not_applied`, `retry_pending`, `post_apply_attribution_pending`으로 남아 있으면 `defer_after_greenfield_verification`으로 닫고 파일 이동을 하지 않는다.
+2. `consumer_inventory_refreshed`
+   - `system_metric_sampler` consumer를 `deploy/cron`, `error_detector`, `backfill`, `tests`, `runbook`으로 분류한다.
+   - 각 consumer는 `wrapper로 유지`, `canonical import 전환 후보`, `문서 reference only` 중 하나로 태깅한다.
+   - 이 단계는 계획/문서 보강이며 source file 이동, deploy rewrite, cron 재설치는 하지 않는다.
+3. `implement_monitoring_sampler_slice`
+   - `src.engine.monitoring.system_metric_sampler`를 canonical path로 만들고 기존 `src.engine.system_metric_sampler`는 compatibility wrapper로 유지한다.
+   - old import smoke, new import smoke, old CLI smoke, new CLI smoke를 같은 slice에서 닫는다.
+   - root wrapper 제거와 consumer canonical import 전환은 이 slice의 필수 범위가 아니라 후속 migration 후보로 남긴다.
+
+불변 계약:
+
+- cron id `system_metric_sampler`, cron comment `SYSTEM_METRIC_SAMPLER_1MIN`, wrapper log marker `[START] system_metric_sampler` / `[DONE] system_metric_sampler`를 유지한다.
+- output path `logs/system_metric_samples.jsonl`, state path `tmp/system_metric_sampler_state.json`, lock path `tmp/system_metric_samples.lock`를 유지한다.
+- CPU affinity env `SYSTEM_METRIC_SAMPLER_CPU_AFFINITY`, sampler interval, JSONL schema, resource metric semantics를 변경하지 않는다.
+- `sample_once()`와 `main()` public surface는 old root wrapper와 new canonical module 양쪽에서 import 가능해야 한다.
+
+consumer inventory 기준표:
+
+| Consumer | 처리방식 | 보강 기준 |
+| --- | --- | --- |
+| `deploy/run_system_metric_sampler_cron.sh` | `wrapper로 유지` | old CLI `python -m src.engine.system_metric_sampler`를 계속 실행한다. cron schedule, marker, log path 변경 금지 |
+| `deploy/install_stage2_ops_cron.sh` | `문서/reference only` | cron comment `SYSTEM_METRIC_SAMPLER_1MIN`와 1분 주기 설치 계약 유지 |
+| `src/engine/backfill_threshold_cycle_events.py` | `canonical import 전환 후보` | 초기 slice에서는 wrapper import로 동작 유지. canonical import 전환은 별도 consumer migration에서 수행 |
+| `src/engine/error_detectors/cron_completion.py` | `wrapper로 유지` | job id/log contract 유지. detector registry 의미 변경 금지 |
+| `src/tests/test_engine_location_gate.py` | `wrapper로 유지` | root wrapper가 남는 동안 allowlist 제거 금지. wrapper 제거는 Phase Final에서만 검토 |
+| `src/tests/test_error_detector_coverage.py` | `문서/reference only` | required cron job id `system_metric_sampler` 유지 확인 |
+| `docs/time-based-operations-runbook.md` | `문서 reference only` | 경로보다 산출물, marker, resource_usage 입력 계약 중심으로 유지 |
+
+재개/보류 판정값:
+
+| 판정값 | 의미 | 다음 액션 |
+| --- | --- | --- |
+| `greenfield_retry_pending` | Greenfield/preopen uptake retry가 남아 monitoring sampler 이동 원인 분리가 어려움 | 파일 이동 금지, 다음 PREOPEN/POSTCLOSE 산출물로 재확인 |
+| `consumer_inventory_refreshed` | 이동 전 consumer 목록과 처리방식이 확정됨 | 구현 slice 여부를 다음 checklist에서 결정 |
+| `monitoring_sampler_slice_ready` | Greenfield uptake와 consumer inventory gate가 모두 닫힘 | canonical module + wrapper 구현 가능 |
+| `implemented_with_wrapper` | canonical 이동 완료, old wrapper 유지, old/new smoke 통과 | 최소 1회 preopen/postclose 안정 검증 후 consumer migration 검토 |
+| `blocked_by_runtime_path` | runtime/order/provider/bot/threshold 경로와 충돌 | refactor slice 보류, 별도 workorder로 분리 |
+
 2026-05-27 문서 보강 체크:
 
 - `greenfield_real_environment_authority`는 `src.engine.lifecycle`, `runtime_apply_bridge`, `threshold_cycle_preopen_apply`, `sniper_state_handlers` runtime hot path를 건드린다. 같은 날 `src.engine` 파일 이동을 겹치지 않는다.
 - monitoring sampler 이동은 report/monitoring infra slice지만, detector/resource warning 산출물이 장중 운영 판단과 연결되므로 Greenfield post-apply verification과 같은 검증 창에서 섞지 않는다.
 - 다음 재개 시 checklist 항목은 `implement_monitoring_sampler_slice`가 아니라 먼저 `consumer_inventory_refreshed` 또는 `defer_after_greenfield_verification`으로 닫는다.
+
+2026-05-27 POSTCLOSE 보강 판정:
+
+- 판정: `document_plan_updated_defer_after_greenfield_verification`.
+- 근거: 당일 postclose verifier는 `pass`지만 `runtime_apply_gap_audit`에 `greenfield_real_environment_authority:2026-05-27`와 `entry_wait6579_score66_69_recovery_gate_v1:2026-05-27`의 다음 PREOPEN uptake retry가 남았다. 이 상태에서 `system_metric_sampler` 파일 이동을 같은 날짜에 겹치면 monitoring warning과 Greenfield uptake 경고의 원인 분리가 흐려진다.
+- 다음 액션: 2026-05-28 이후 먼저 deploy/cron/error detector/test import consumer inventory를 refresh하고, old/new import smoke와 old/new CLI smoke plan을 만든 뒤 실제 이동 여부를 다시 판단한다. 그 전에는 wrapper 제거, cron/job id 변경, output path/JSON schema/metric semantics 변경, runtime/order/provider/bot 경로 이동을 하지 않는다.
 
 보류:
 

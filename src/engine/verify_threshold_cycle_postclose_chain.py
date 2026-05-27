@@ -572,8 +572,21 @@ def _swing_lifecycle_handoff_status(
     contract = matrix.get("input_contract") if isinstance(matrix.get("input_contract"), dict) else {}
     if matrix and contract.get("swing_daily_simulation_consumed") is not False:
         missing.append("swing_lifecycle_forbidden_daily_simulation_consumed")
+    discovery_summary = discovery.get("summary") if isinstance(discovery.get("summary"), dict) else {}
+    ai_review_status = str(discovery_summary.get("ai_two_pass_review_status") or "").strip()
+    warnings = [
+        item
+        if item.startswith("swing_lifecycle_bucket_discovery:")
+        else f"swing_lifecycle_bucket_discovery:{item}"
+        for item in (str(raw_item) for raw_item in (discovery.get("warnings") or []) if str(raw_item))
+    ]
+    if ai_review_status and ai_review_status != "parsed":
+        warnings.append(f"swing_lifecycle_bucket_discovery:ai_two_pass_review_{ai_review_status}_fail_closed")
+    if bool(discovery_summary.get("ai_fail_closed")):
+        warnings.append("swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked")
+    warnings = list(dict.fromkeys(warnings))
     return {
-        "status": "fail" if missing else ("missing" if not matrix else "pass"),
+        "status": "fail" if missing else ("missing" if not matrix else "warning" if warnings else "pass"),
         "expected_candidate_ids": sorted(expected_candidate_ids),
         "threshold_cycle_ev_candidate_ids": sorted(ev_candidate_ids),
         "runtime_approval_summary_candidate_ids": sorted(runtime_candidate_ids),
@@ -584,25 +597,20 @@ def _swing_lifecycle_handoff_status(
         "actual_workorder_order_ids": sorted(actual_order_ids),
         "missing_workorder_order_ids": missing_order_ids,
         "daily_simulation_consumed": bool(contract.get("swing_daily_simulation_consumed")),
-        "deterministic_proposal_count": (discovery.get("summary") or {}).get("deterministic_proposal_count")
-        if isinstance(discovery.get("summary"), dict)
-        else None,
-        "ai_tier2_proposal_count": (discovery.get("summary") or {}).get("ai_tier2_proposal_count")
-        if isinstance(discovery.get("summary"), dict)
-        else None,
-        "comparative_review_count": (discovery.get("summary") or {}).get("comparative_review_count")
-        if isinstance(discovery.get("summary"), dict)
-        else None,
-        "selected_decision_counts": (discovery.get("summary") or {}).get("selected_decision_counts")
-        if isinstance(discovery.get("summary"), dict)
-        else None,
-        "selected_source_counts": (discovery.get("summary") or {}).get("selected_source_counts")
-        if isinstance(discovery.get("summary"), dict)
-        else None,
+        "deterministic_proposal_count": discovery_summary.get("deterministic_proposal_count"),
+        "ai_two_pass_review_status": ai_review_status or None,
+        "ai_fail_closed": bool(discovery_summary.get("ai_fail_closed")),
+        "ai_tier2_proposal_count": discovery_summary.get("ai_tier2_proposal_count"),
+        "comparative_review_count": discovery_summary.get("comparative_review_count"),
+        "selected_decision_counts": discovery_summary.get("selected_decision_counts"),
+        "selected_source_counts": discovery_summary.get("selected_source_counts"),
         "missing": missing,
+        "warnings": warnings,
         "interpretation": (
             "Swing LDM candidates/workorders propagated through EV, runtime summary, workorder, and verifier."
-            if matrix and not missing
+            if matrix and not missing and not warnings
+            else "Swing LDM AI two-pass review is fail-closed; sim-auto promotion is blocked and must be surfaced."
+            if matrix and warnings and not missing
             else "Swing LDM generated output but one or more downstream consumers dropped it."
             if matrix
             else "Swing LDM report missing"
@@ -1307,6 +1315,7 @@ def build_threshold_cycle_postclose_verification(
     predecessor_waits: list[dict[str, Any]] = []
     predecessor_timeouts: list[dict[str, Any]] = []
     log_issues: list[str] = []
+    handoff_warnings: list[str] = []
     done_line: str | None = None
 
     for line in run_lines:
@@ -1426,6 +1435,8 @@ def build_threshold_cycle_postclose_verification(
     )
     if swing_lifecycle_handoff.get("status") == "fail":
         log_issues.append("swing_lifecycle_handoff_missing")
+    elif swing_lifecycle_handoff.get("status") == "warning":
+        handoff_warnings.extend(str(item) for item in (swing_lifecycle_handoff.get("warnings") or []) if str(item))
     producer_gap_handoff = _producer_gap_discovery_handoff_status(producer_gap_discovery, workorder)
     if producer_gap_handoff.get("status") == "fail":
         log_issues.append("producer_gap_discovery_handoff_missing")
@@ -1824,6 +1835,8 @@ def build_threshold_cycle_postclose_verification(
         status = "fail"
     elif stale_downstream_links:
         status = "fail"
+    elif handoff_warnings:
+        status = "warning"
     elif predecessor_waits:
         status = "warning"
     elif disabled_stage_flags:
@@ -1896,6 +1909,7 @@ def build_threshold_cycle_postclose_verification(
             "runtime_apply_bridge_generated_at": bridge_report.get("generated_at"),
             "threshold_preopen_apply_next_generated_at": preopen_apply_next.get("generated_at"),
         },
+        "handoff_warnings": sorted(set(handoff_warnings)),
         "ai_correction": ai_correction,
         "scalp_sim_overnight_source_quality": scalp_sim_overnight_quality,
         "entry_bucket_handoff": entry_bucket_handoff,
@@ -2062,6 +2076,8 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- missing_runtime_summary_candidate_ids: `{swing_lifecycle.get('missing_runtime_summary_candidate_ids') or []}`",
         f"- missing_workorder_order_ids: `{swing_lifecycle.get('missing_workorder_order_ids') or []}`",
         f"- daily_simulation_consumed: `{swing_lifecycle.get('daily_simulation_consumed')}`",
+        f"- ai_two_pass_review_status: `{swing_lifecycle.get('ai_two_pass_review_status') or '-'}`",
+        f"- warnings: `{swing_lifecycle.get('warnings') or []}`",
         f"- interpretation: `{swing_lifecycle.get('interpretation') or '-'}`",
         "",
         "## Producer Gap Discovery Handoff",

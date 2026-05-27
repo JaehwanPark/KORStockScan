@@ -1,16 +1,16 @@
 # Swing Strategy Discovery Labels - 2026-05-27
 
-- generated_at: `2026-05-27T19:06:30`
+- generated_at: `2026-05-27T22:15:45`
 - label_version: `swing_strategy_discovery_label_v1`
 - runtime_effect: `False`
 - decision_authority: `swing_sim_exploration_only`
-- processed_arm_count: `2272`
-- arm_status_counts: `{'ENTERED': 407, 'PENDING_ENTRY': 1649, 'EXITED': 84, 'EXPIRED': 132}`
-- label_status_counts: `{'labeled': 575, 'pending_future_quotes': 7985, 'expired_entry_no_trigger': 528}`
-- maturity_status_counts: `{'pending_future_quotes': 2056, 'matured_labeled': 84, 'matured_no_entry': 132}`
-- pending_future_quote_count: `7985`
-- bottom_rebound_processed_arm_count: `0`
-- bottom_rebound_label_status_counts: `{}`
+- processed_arm_count: `582`
+- arm_status_counts: `{'PENDING_ENTRY': 582}`
+- label_status_counts: `{'pending_future_quotes': 2328}`
+- maturity_status_counts: `{'pending_future_quotes': 582}`
+- pending_future_quote_count: `2328`
+- bottom_rebound_processed_arm_count: `102`
+- bottom_rebound_label_status_counts: `{'pending_future_quotes': 408}`
 - implementation_status: `implemented`
 
 ## Contract

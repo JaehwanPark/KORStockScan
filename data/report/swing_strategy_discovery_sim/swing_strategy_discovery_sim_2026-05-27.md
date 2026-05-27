@@ -1,21 +1,21 @@
 # Swing Strategy Discovery Sim - 2026-05-27
 
-- generated_at: `2026-05-27T19:06:23`
+- generated_at: `2026-05-27T22:15:34`
 - policy_version: `swing_strategy_discovery_sim_v1`
 - mode: `sim_only_aggressive_exploration`
 - runtime_effect: `False`
 - decision_authority: `swing_sim_exploration_only`
 - candidate_count: `50`
-- arm_count: `400`
-- bottom_rebound_selected_candidate_count: `0`
-- bottom_rebound_arm_count: `0`
-- bottom_rebound_persisted_candidate_count: `0`
-- bottom_rebound_persisted_arm_count: `0`
+- arm_count: `230`
+- bottom_rebound_selected_candidate_count: `34`
+- bottom_rebound_arm_count: `102`
+- bottom_rebound_persisted_candidate_count: `34`
+- bottom_rebound_persisted_arm_count: `102`
 - selection_arm_counts: `{'diversity_exploration': 15, 'lifecycle_rank': 35}`
-- block_reason_counts: `{'no_block_observed': 45, 'blocked_gatekeeper_reject': 4, 'blocked_swing_score_vpw': 1}`
-- source_family_bucket_counts: `{'safe_pool': 50}`
+- block_reason_counts: `{'no_block_observed': 47, 'blocked_swing_score_vpw': 1, 'blocked_gatekeeper_reject': 2}`
+- source_family_bucket_counts: `{'bottom_rebound': 34, 'safe_pool': 16}`
 - quote_feature_coverage: `1.0`
-- warnings: `['sector_theme:manual_sector_missing', 'sector_theme:sector_theme_missing']`
+- warnings: `[]`
 
 ## Arm Set
 

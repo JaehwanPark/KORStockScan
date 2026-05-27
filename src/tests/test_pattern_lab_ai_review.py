@@ -105,3 +105,57 @@ def test_pattern_lab_ai_review_accepts_strict_ai_response_with_audit(tmp_path, m
     assert conclusion["explicit_gap_type"] is None
     assert conclusion["forbidden_runtime_uses"] == mod.FORBIDDEN_USES
     assert report["code_improvement_orders"] == []
+
+
+def test_pattern_lab_ai_review_resolves_implemented_swing_micro_context_contract(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+
+    _write_json(
+        report_dir / "swing_pattern_lab_automation" / "swing_pattern_lab_automation_2026-05-15.json",
+        {
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "decision_authority": "swing_pattern_lab_analysis_workorder_source_only",
+            "ev_report_summary": {
+                "source_quality_contracts": {
+                    "swing_micro_context": {
+                        "source_contract_status": "implemented",
+                        "decision_authority": "swing_pattern_lab_analysis_workorder_source_only",
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                    }
+                }
+            },
+        },
+    )
+    raw_response = {
+        "schema_version": 1,
+        "interpretation": {"review_items": [], "source_feedback_status": "warning"},
+        "audit": {
+            "status": "correction_required",
+            "issues": ["source_quality_gap:1"],
+            "forbidden_use_violations": [],
+            "reason": "AI surfaced swing micro context source gap.",
+        },
+        "final_conclusions": [
+            {
+                "review_id": "order_pattern_lab_ai_review_swing_micro_context_source_quality",
+                "domain": "swing",
+                "final_state": "source_quality_gap",
+                "final_decision": "surface_workorder",
+                "reason": "Repair swing micro-context source contract for OFI/QI inputs.",
+                "required_followup": ["repair_source_contract"],
+            }
+        ],
+    }
+
+    report = mod.build_pattern_lab_ai_review_report("2026-05-15", provider="openai", ai_raw_response=raw_response)
+
+    assert report["status"] == "pass"
+    assert report["summary"]["audit_status"] == "pass"
+    assert report["code_improvement_orders"] == []
+    conclusion = report["ai_two_pass_review"]["final_conclusions"][0]
+    assert conclusion["final_state"] == "source_only_keep_collecting"
+    assert conclusion["final_decision"] == "keep"
+    assert conclusion["source_contract_resolution"]["status"] == "resolved_by_implemented_source_contract"

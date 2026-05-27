@@ -18,6 +18,9 @@ def test_sector_theme_uses_ka90001_stock_theme_membership(tmp_path, monkeypatch)
     )
 
     assert payload["mapped_code_count"] == 2
+    assert payload["missing_count"] == 1
+    assert payload["coverage"] == 0.666667
+    assert payload["warnings"] == []
     assert payload["rows_by_code"]["005930"]["theme_tags"] == ["반도체"]
     assert payload["rows_by_code"]["000001"]["theme_source_quality"] == "missing"
     assert (tmp_path / "sector_theme_map_2026-05-20.json").exists()
@@ -83,6 +86,8 @@ def test_sector_theme_catalog_fallback_does_not_map_membership(tmp_path, monkeyp
     assert calls == {"groups": 1}
     assert payload["diagnostics"]["kiwoom"]["lookup_mode"] == "theme_group_catalog_only_ka90001"
     assert payload["mapped_code_count"] == 0
+    assert payload["coverage"] == 0.0
+    assert payload["warnings"] == ["manual_sector_missing", "sector_theme_missing"]
     assert payload["rows_by_code"]["005930"]["theme_source_quality"] == "missing"
 
 
@@ -101,6 +106,8 @@ def test_sector_theme_treats_kiwoom_error_as_source_gap(tmp_path, monkeypatch):
 
     assert payload["diagnostics"]["kiwoom"]["status"] == "kiwoom_fetch_failed"
     assert payload["mapped_code_count"] == 0
+    assert payload["coverage"] == 0.0
+    assert payload["warnings"] == ["manual_sector_missing", "sector_theme_missing"]
     assert payload["rows_by_code"]["005930"]["theme_source_quality"] == "missing"
 
 
@@ -148,6 +155,8 @@ def test_sector_theme_loads_manual_sector_reference_csv(tmp_path, monkeypatch):
     row = payload["rows_by_code"]["005930"]
     assert payload["sector_mapped_count"] == 2
     assert payload["theme_mapped_count"] == 0
+    assert payload["coverage"] == 1.0
+    assert payload["warnings"] == []
     assert row["sector"] == "Manufacture of Semiconductor"
     assert row["industry"] == "Manufacture of Semiconductor"
     assert row["sector_code"] == "32601"

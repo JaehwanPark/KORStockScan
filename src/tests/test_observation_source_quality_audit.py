@@ -84,6 +84,35 @@ def test_observation_source_quality_audit_detects_high_volume_contract_gap(monke
     assert report["policy"]["decision_authority"] == "source_quality_only"
 
 
+def test_observation_source_quality_audit_has_entry_micro_context_contract(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-15",
+        [
+            _event(
+                "swing_entry_micro_context_observed",
+                {
+                    "orderbook_micro_ready": False,
+                    "orderbook_micro_state": "insufficient",
+                    "orderbook_micro_reason": "missing_snapshot",
+                    "orderbook_micro_snapshot_age_ms": 0,
+                    "orderbook_micro_observer_healthy": False,
+                    "swing_micro_runtime_effect": False,
+                    "swing_micro_observe_only": True,
+                },
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-05-15")
+
+    contract = report["stage_contracts"]["swing_entry_micro_context_observed"]
+    assert contract["status"] == "pass"
+    assert contract["decision_authority"] == "source_quality_only"
+    assert contract["runtime_effect"] is False
+
+
 def test_observation_source_quality_audit_accepts_high_volume_contract_labels(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(
@@ -320,6 +349,24 @@ def test_observation_source_quality_audit_normalizes_legacy_flow_state_label():
     assert normalized["flow_state"] == "absorption"
     assert normalized["raw_flow_state"] == "흡수"
     assert normalized["flow_state_source"] == "audit_normalized_legacy_runtime_flow_state"
+
+
+def test_observation_source_quality_audit_accepts_score_vpw_prior_sentinel():
+    normalized = audit._normalized_fields_for_contract(
+        "swing_probe_entry_candidate",
+        {
+            "gatekeeper_action": "NOT_EVALUATED_SCORE_VPW_PRIOR",
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "runtime_effect": False,
+        },
+    )
+
+    assert normalized["action_key"] == "not_evaluated_score_vpw_prior"
+    assert "invalid_gatekeeper_action_label" not in normalized
+    assert normalized["actual_order_submitted"] is False
+    assert normalized["broker_order_forbidden"] is True
+    assert normalized["runtime_effect"] is False
 
 
 def test_observation_source_quality_audit_fails_unknown_flow_state_label(monkeypatch, tmp_path):

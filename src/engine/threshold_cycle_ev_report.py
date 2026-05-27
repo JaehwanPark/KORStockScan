@@ -1047,6 +1047,12 @@ def _swing_lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[st
         )
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     warnings = [f"swing_lifecycle_bucket_discovery:{item}" for item in (payload.get("warnings") or []) if str(item)]
+    ai_review_status = str(summary.get("ai_two_pass_review_status") or "").strip()
+    if ai_review_status and ai_review_status != "parsed":
+        warnings.append(f"swing_lifecycle_bucket_discovery:ai_two_pass_review_{ai_review_status}_fail_closed")
+    if bool(summary.get("ai_fail_closed")):
+        warnings.append("swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked")
+    warnings = list(dict.fromkeys(warnings))
     return (
         {
             "available": True,
@@ -1055,6 +1061,8 @@ def _swing_lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[st
             "source_only": bool(payload.get("source_only", True)),
             "decision_authority": payload.get("decision_authority"),
             "source_contract_status": summary.get("source_contract_status"),
+            "ai_two_pass_review_status": ai_review_status or None,
+            "ai_fail_closed": bool(summary.get("ai_fail_closed")),
             "candidate_count": _safe_int(summary.get("candidate_count"), 0),
             "surfaced_candidate_count": _safe_int(summary.get("surfaced_candidate_count"), 0),
             "sim_auto_approved_count": _safe_int(summary.get("sim_auto_approved_count"), 0),
@@ -1082,6 +1090,7 @@ def _swing_lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[st
             "surfaced_candidate_ids": [
                 str(item) for item in (payload.get("surfaced_candidate_ids") or []) if str(item)
             ],
+            "warnings": warnings,
         },
         str(json_path),
         warnings,

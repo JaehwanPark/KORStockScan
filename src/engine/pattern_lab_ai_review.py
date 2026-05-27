@@ -120,6 +120,7 @@ def _top_list(value: Any, limit: int = 5) -> list[Any]:
 def _summary_for(payload: dict[str, Any]) -> dict[str, Any]:
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     ev_summary = payload.get("ev_report_summary") if isinstance(payload.get("ev_report_summary"), dict) else {}
+    data_quality = payload.get("data_quality") if isinstance(payload.get("data_quality"), dict) else {}
     return {
         "status": payload.get("status") or summary.get("status"),
         "runtime_effect": payload.get("runtime_effect"),
@@ -127,8 +128,90 @@ def _summary_for(payload: dict[str, Any]) -> dict[str, Any]:
         "decision_authority": payload.get("decision_authority"),
         "summary": summary,
         "ev_report_summary": ev_summary,
+        "source_quality_contracts": (
+            ev_summary.get("source_quality_contracts")
+            if isinstance(ev_summary.get("source_quality_contracts"), dict)
+            else data_quality.get("source_quality_contracts")
+            if isinstance(data_quality.get("source_quality_contracts"), dict)
+            else {}
+        ),
         "warnings": _top_list(payload.get("warnings"), 10),
     }
+
+
+def _swing_micro_context_source_contract(context: dict[str, Any]) -> dict[str, Any]:
+    sources = context.get("sources") if isinstance(context.get("sources"), dict) else {}
+    swing = sources.get("swing_pattern_lab_automation") if isinstance(sources.get("swing_pattern_lab_automation"), dict) else {}
+    summary = swing.get("summary") if isinstance(swing.get("summary"), dict) else {}
+    contracts = summary.get("source_quality_contracts") if isinstance(summary.get("source_quality_contracts"), dict) else {}
+    contract = contracts.get("swing_micro_context") if isinstance(contracts.get("swing_micro_context"), dict) else {}
+    return contract
+
+
+def _is_resolved_swing_micro_context_gap(item: dict[str, Any], context: dict[str, Any]) -> bool:
+    if str(item.get("final_state") or "") != "source_quality_gap":
+        return False
+    review_id = str(item.get("review_id") or "").lower()
+    reason = str(item.get("reason") or "").lower()
+    if not any(token in f"{review_id} {reason}" for token in ("micro_context", "micro context", "ofi_qi")):
+        return False
+    contract = _swing_micro_context_source_contract(context)
+    return (
+        contract.get("source_contract_status") == "implemented"
+        and contract.get("runtime_effect") is False
+        and contract.get("allowed_runtime_apply") is False
+        and contract.get("decision_authority") == "swing_pattern_lab_analysis_workorder_source_only"
+    )
+
+
+def _apply_source_contract_resolutions(payload: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    conclusions = payload.get("final_conclusions") if isinstance(payload.get("final_conclusions"), list) else []
+    resolved_ids: list[str] = []
+    resolved_conclusions: list[dict[str, Any]] = []
+    for item in conclusions:
+        if not isinstance(item, dict):
+            continue
+        if _is_resolved_swing_micro_context_gap(item, context):
+            resolved_ids.append(str(item.get("review_id") or "unknown"))
+            resolved_conclusions.append(
+                {
+                    **item,
+                    "final_state": "source_only_keep_collecting",
+                    "final_decision": "keep",
+                    "explicit_gap_type": None,
+                    "auditor_pass": True,
+                    "source_contract_resolution": {
+                        "status": "resolved_by_implemented_source_contract",
+                        "contract_id": "swing_micro_context_source_quality",
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                    },
+                }
+            )
+        else:
+            resolved_conclusions.append(item)
+    if not resolved_ids:
+        return payload
+    audit = payload.get("audit") if isinstance(payload.get("audit"), dict) else {}
+    remaining_gap = any(
+        isinstance(item, dict)
+        and str(item.get("final_state") or "") in GAP_STATES
+        and str(item.get("final_decision") or "") != "keep"
+        for item in resolved_conclusions
+    )
+    payload = {**payload, "final_conclusions": resolved_conclusions}
+    payload["audit"] = {
+        **audit,
+        "status": "correction_required" if remaining_gap else "pass",
+        "source_contract_resolutions": resolved_ids,
+        "issues": audit.get("issues") if remaining_gap else [],
+        "reason": (
+            audit.get("reason")
+            if remaining_gap
+            else "Source-only review gaps were resolved by implemented source contracts; runtime authority remains false."
+        ),
+    }
+    return payload
 
 
 def _build_input_context(target_date: str) -> dict[str, Any]:
@@ -548,6 +631,7 @@ def build_pattern_lab_ai_review_report(
             ai_status = "disabled_deterministic_review"
         else:
             ai_status = "unavailable_deterministic_review"
+    ai_payload = _apply_source_contract_resolutions(ai_payload, context)
     conclusions = (
         ai_payload.get("final_conclusions")
         if isinstance(ai_payload.get("final_conclusions"), list)

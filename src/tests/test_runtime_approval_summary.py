@@ -116,6 +116,25 @@ def test_runtime_approval_summary_combines_scalping_and_swing(tmp_path, monkeypa
     assert "swing_model_floor" in markdown
 
 
+def test_runtime_approval_summary_surfaces_swing_bucket_ai_fail_closed():
+    ev_report = {
+        "swing_lifecycle_bucket_discovery": {
+            "available": True,
+            "source_contract_status": "pass",
+            "ai_two_pass_review_status": "missing",
+            "ai_fail_closed": True,
+            "warnings": ["ai_two_pass_review_missing_fail_closed"],
+        }
+    }
+
+    summary = mod._swing_lifecycle_bucket_discovery_summary(ev_report)
+
+    assert summary["ai_two_pass_review_status"] == "missing"
+    assert summary["ai_fail_closed"] is True
+    assert "ai_two_pass_review_missing_fail_closed" in summary["warnings"]
+    assert "ai_two_pass_review_fail_closed_sim_auto_blocked" in summary["warnings"]
+
+
 def test_runtime_approval_summary_surfaces_entry_adm_runtime_bias_summary(tmp_path, monkeypatch):
     ev_dir = tmp_path / "threshold_cycle_ev"
     adm_dir = tmp_path / "scalp_entry_action_decision_matrix"

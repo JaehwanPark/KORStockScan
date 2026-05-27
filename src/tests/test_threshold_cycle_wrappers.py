@@ -277,6 +277,12 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert "runtime_apply_gap_audit=true" in script
     assert "swing_lifecycle_matrix=$RUN_SWING_LIFECYCLE_MATRIX" in script
     assert "swing_lifecycle_bucket_discovery=$RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY" in script
+    assert (
+        'SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PROVIDER="${KORSTOCKSCAN_SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PROVIDER:-$SWING_THRESHOLD_AI_REVIEW_PROVIDER}"'
+        in script
+    )
+    assert '--ai-provider "$SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PROVIDER"' in script
+    assert "swing_lifecycle_bucket_discovery_ai_provider=$SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PROVIDER" in script
     assert "ai correction retry target_date=$TARGET_DATE" in script
     assert "ai correction final unavailable" in script
 

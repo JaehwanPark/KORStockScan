@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -39,6 +40,7 @@ DECISION_AUTHORITY = "swing_ldm_bucket_discovery_sim_auto"
 AI_REVIEW_SCHEMA_NAME = "swing_lifecycle_bucket_discovery_review_v1"
 AI_REVIEWER_NAME = "swing_lifecycle_bucket_discovery_ai_review"
 AI_REVIEW_MODEL = "gpt-5.4"
+AI_REVIEW_REASONING_EFFORT = "low"
 AI_REVIEW_DEFAULT_PROVIDER = "none"
 FORBIDDEN_USES = [
     "real_order_submit",
@@ -88,13 +90,23 @@ def _slug(value: Any) -> str:
     return text[:80] or "unknown"
 
 
+def _bucket_key_slug(value: Any) -> str:
+    text = re.sub(r"[^a-zA-Z0-9가-힣]+", "_", str(value or "").strip().lower()).strip("_")
+    if not text:
+        return "unknown"
+    if len(text) <= 80:
+        return text
+    digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
+    return f"{text[:67].rstrip('_')}_{digest}"
+
+
 def report_paths(target_date: str) -> tuple[Path, Path]:
     base = REPORT_DIR / f"swing_lifecycle_bucket_discovery_{target_date}"
     return base.with_suffix(".json"), base.with_suffix(".md")
 
 
 def _bucket_id(stage: str, bucket_type: str, bucket_key: str) -> str:
-    return f"swing_bucket_{_slug(stage)}_{_slug(bucket_type)}_{_slug(bucket_key)}"
+    return f"swing_bucket_{_slug(stage)}_{_slug(bucket_type)}_{_bucket_key_slug(bucket_key)}"
 
 
 def _classification_from_bucket(bucket: dict[str, Any]) -> str:
@@ -113,6 +125,26 @@ def _classification_from_bucket(bucket: dict[str, Any]) -> str:
     return "source_only_keep_collecting"
 
 
+def _source_remediation_proposal(
+    proposal: dict[str, Any],
+    *,
+    source_quality_gate: Any,
+) -> dict[str, Any]:
+    return {
+        **proposal,
+        "proposal_decision": (
+            "source_quality_blocker"
+            if str(source_quality_gate or "") == "source_quality_blocker"
+            else "instrumentation_gap"
+        ),
+        "candidate_type": "source_quality_or_code_patch_required",
+        "reasoning_summary": (
+            "candidate classification requires source-only remediation before taxonomy authority; "
+            "runtime/order/provider/bot authority remains forbidden"
+        ),
+    }
+
+
 def _candidate_from_bucket(section_name: str, bucket: dict[str, Any]) -> dict[str, Any]:
     stage = str(bucket.get("lifecycle_stage") or "swing")
     bucket_type = str(bucket.get("bucket_type") or section_name)
@@ -128,6 +160,12 @@ def _candidate_from_bucket(section_name: str, bucket: dict[str, Any]) -> dict[st
             "recommended_route": bucket.get("recommended_route"),
         },
     )
+    deterministic_proposal = taxonomy["deterministic_proposal"]
+    if state == "code_patch_required":
+        deterministic_proposal = _source_remediation_proposal(
+            deterministic_proposal,
+            source_quality_gate=bucket.get("source_quality_gate"),
+        )
     return {
         "bucket_id": _bucket_id(stage, bucket_type, bucket_key),
         "canonical_bucket": taxonomy["canonical_bucket"],
@@ -136,7 +174,7 @@ def _candidate_from_bucket(section_name: str, bucket: dict[str, Any]) -> dict[st
         "dimension_set_version": DIMENSION_SET_VERSION,
         "normalized_dimensions": taxonomy["normalized_dimensions"],
         "normalized_metrics": taxonomy["normalized_metrics"],
-        "deterministic_proposal": taxonomy["deterministic_proposal"],
+        "deterministic_proposal": deterministic_proposal,
         "source_section": section_name,
         "lifecycle_stage": stage,
         "bucket_type": bucket_type,
@@ -232,6 +270,13 @@ def _ensure_candidate_taxonomy(candidate: dict[str, Any]) -> dict[str, Any]:
         bucket_key=bucket_key,
         source_dimensions={"source_section": candidate.get("source_section"), "classification_state": candidate.get("classification_state")},
     )
+    if candidate.get("classification_state") == "code_patch_required":
+        deterministic_proposal = _source_remediation_proposal(
+            taxonomy["deterministic_proposal"],
+            source_quality_gate=candidate.get("source_quality_gate"),
+        )
+    else:
+        deterministic_proposal = taxonomy["deterministic_proposal"]
     return {
         **candidate,
         "canonical_bucket": taxonomy["canonical_bucket"],
@@ -240,14 +285,64 @@ def _ensure_candidate_taxonomy(candidate: dict[str, Any]) -> dict[str, Any]:
         "dimension_set_version": DIMENSION_SET_VERSION,
         "normalized_dimensions": taxonomy["normalized_dimensions"],
         "normalized_metrics": taxonomy["normalized_metrics"],
-        "deterministic_proposal": taxonomy["deterministic_proposal"],
+        "deterministic_proposal": deterministic_proposal,
     }
 
 
-def _build_ai_review_context(target_date: str, candidates: list[dict[str, Any]]) -> dict[str, Any]:
+def _ai_review_candidate_shards(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    sim_auto = [item for item in candidates if item.get("classification_state") == "sim_auto_approved"]
+    gap = [
+        item
+        for item in candidates
+        if item.get("classification_state") in {"runtime_blocked_contract_gap", "automation_handoff_gap", "code_patch_required"}
+    ]
+    reviewed_ids = {str(item.get("bucket_id")) for item in [*sim_auto, *gap] if item.get("bucket_id")}
+    taxonomy = [
+        item
+        for item in candidates
+        if item.get("classification_state") == "source_only_keep_collecting"
+        and str(item.get("bucket_id") or "") not in reviewed_ids
+    ][:10]
+    return [
+        {
+            "shard_id": "sim_policy_review",
+            "review_scope": "sim_auto_candidate_review",
+            "candidate_selection_policy": "all deterministic sim_auto_approved candidates",
+            "review_authority": "fail-closed source-only sim policy reviewer",
+            "candidates": sim_auto[:20],
+            "omitted_candidate_count": max(len(sim_auto) - 20, 0),
+        },
+        {
+            "shard_id": "gap_workorder_review",
+            "review_scope": "contract_gap_and_workorder_review",
+            "candidate_selection_policy": "runtime-blocked, automation handoff, and code-patch candidates",
+            "review_authority": "source-quality and workorder reviewer",
+            "candidates": gap[:40],
+            "omitted_candidate_count": max(len(gap) - 40, 0),
+        },
+        {
+            "shard_id": "taxonomy_discovery_review",
+            "review_scope": "taxonomy_discovery_sample_review",
+            "candidate_selection_policy": "top source-only keep-collecting candidates after actionable shards",
+            "review_authority": "taxonomy reviewer for source-only tail sample",
+            "candidates": taxonomy,
+            "omitted_candidate_count": max(len(candidates) - len(sim_auto[:20]) - len(gap[:40]) - len(taxonomy), 0),
+        },
+    ]
+
+
+def _build_ai_review_context(target_date: str, shard: dict[str, Any]) -> dict[str, Any]:
+    review_candidates = shard.get("candidates") if isinstance(shard.get("candidates"), list) else []
+    review_candidate_ids = [str(item.get("bucket_id")) for item in review_candidates if item.get("bucket_id")]
     return {
         "date": target_date,
         "report_type": REPORT_TYPE,
+        "shard_id": shard.get("shard_id"),
+        "review_scope": shard.get("review_scope"),
+        "candidate_selection_policy": shard.get("candidate_selection_policy"),
+        "review_authority": shard.get("review_authority"),
+        "candidate_ids": review_candidate_ids,
+        "omitted_candidate_count": shard.get("omitted_candidate_count", 0),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "broker_order_forbidden": True,
@@ -263,7 +358,7 @@ def _build_ai_review_context(target_date: str, candidates: list[dict[str, Any]])
                 "deterministic_proposal": item.get("deterministic_proposal"),
                 "classification_state": item.get("classification_state"),
             }
-            for item in candidates[:80]
+            for item in review_candidates
         ],
     }
 
@@ -305,6 +400,12 @@ def _call_openai_ai_review(context: dict[str, Any]) -> tuple[Any | None, dict[st
     if not api_keys:
         return None, {"provider": "openai", "status": "unavailable", "reason": "OPENAI_API_KEY not configured"}
     prompt = json.dumps(context, ensure_ascii=True, indent=2, default=str)
+    reasoning_effort = str(
+        os.getenv("KORSTOCKSCAN_SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_REASONING_EFFORT", AI_REVIEW_REASONING_EFFORT)
+        or AI_REVIEW_REASONING_EFFORT
+    ).strip().lower()
+    if reasoning_effort not in {"minimal", "low", "medium", "high"}:
+        reasoning_effort = AI_REVIEW_REASONING_EFFORT
     errors: list[dict[str, str]] = []
     for attempt_index, (key_name, api_key) in enumerate(api_keys, start=1):
         try:
@@ -314,7 +415,7 @@ def _call_openai_ai_review(context: dict[str, Any]) -> tuple[Any | None, dict[st
                 instructions=_build_ai_review_instructions(),
                 input=prompt,
                 text={"format": build_openai_response_text_format(AI_REVIEW_SCHEMA_NAME), "verbosity": "low"},
-                reasoning={"effort": "high"},
+                reasoning={"effort": reasoning_effort},
                 store=False,
                 metadata={"endpoint_name": AI_REVIEWER_NAME, "schema_name": AI_REVIEW_SCHEMA_NAME, "report_type": REPORT_TYPE},
                 timeout=180,
@@ -328,6 +429,7 @@ def _call_openai_ai_review(context: dict[str, Any]) -> tuple[Any | None, dict[st
                 "attempt_index": attempt_index,
                 "attempted_key_count": len(api_keys),
                 "model": AI_REVIEW_MODEL,
+                "reasoning_effort": reasoning_effort,
                 "schema_name": AI_REVIEW_SCHEMA_NAME,
                 "input_context_chars": len(prompt),
                 "output_chars": len(raw_text),
@@ -383,6 +485,104 @@ def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, 
     if warnings:
         return "parse_rejected", payload, warnings
     return "parsed", payload, []
+
+
+def _run_ai_review_shards(
+    target_date: str,
+    candidates: list[dict[str, Any]],
+    *,
+    provider: str,
+    ai_raw_response: Any | None,
+) -> dict[str, Any]:
+    shards = _ai_review_candidate_shards(candidates)
+    combined_payload: dict[str, Any] = {
+        "ai_tier2_proposals": [],
+        "comparative_reviews": [],
+        "audit": {"status": "pass", "issues": [], "forbidden_use_violations": [], "reason": "all parsed shards passed"},
+    }
+    records: list[dict[str, Any]] = []
+    reviewed_candidate_ids: list[str] = []
+    statuses: list[str] = []
+    warnings: list[str] = []
+    disabled = provider in {"none", "off", "false", "0"}
+    for index, shard in enumerate(shards):
+        shard_candidates = shard.get("candidates") if isinstance(shard.get("candidates"), list) else []
+        if not shard_candidates:
+            continue
+        context = _build_ai_review_context(target_date, shard)
+        candidate_ids = [str(item) for item in (context.get("candidate_ids") or []) if str(item)]
+        reviewed_candidate_ids.extend(candidate_ids)
+        provider_status: dict[str, Any] = {
+            "provider": provider,
+            "status": "disabled" if disabled else "not_called",
+            "model": AI_REVIEW_MODEL if not disabled else None,
+            "schema_name": AI_REVIEW_SCHEMA_NAME,
+            "shard_id": shard.get("shard_id"),
+            "input_context_chars": len(json.dumps(context, ensure_ascii=True, default=str)),
+        }
+        raw_response = ai_raw_response if index == 0 and ai_raw_response is not None else None
+        if raw_response is not None:
+            provider_status["status"] = "provided_response"
+        if raw_response is None and provider == "openai":
+            raw_response, provider_status = _call_openai_ai_review(context)
+            provider_status["shard_id"] = shard.get("shard_id")
+        status, payload, shard_warnings = _parse_ai_review_response(raw_response)
+        statuses.append(status)
+        warnings.extend(f"{shard.get('shard_id')}:{item}" for item in shard_warnings)
+        if status == "parsed":
+            combined_payload["ai_tier2_proposals"].extend(payload.get("ai_tier2_proposals") or [])
+            combined_payload["comparative_reviews"].extend(payload.get("comparative_reviews") or [])
+            audit = payload.get("audit") if isinstance(payload.get("audit"), dict) else {}
+            if audit.get("status") != "pass":
+                combined_payload["audit"]["status"] = audit.get("status") or "correction_required"
+            combined_payload["audit"]["issues"].extend(audit.get("issues") if isinstance(audit.get("issues"), list) else [])
+            combined_payload["audit"]["forbidden_use_violations"].extend(
+                audit.get("forbidden_use_violations") if isinstance(audit.get("forbidden_use_violations"), list) else []
+            )
+        records.append(
+            {
+                "shard_id": shard.get("shard_id"),
+                "status": status,
+                "audit_status": (payload.get("audit") or {}).get("status") if isinstance(payload, dict) and isinstance(payload.get("audit"), dict) else None,
+                "forbidden_use_violation_count": len(
+                    (payload.get("audit") or {}).get("forbidden_use_violations") or []
+                )
+                if isinstance(payload, dict) and isinstance(payload.get("audit"), dict)
+                else 0,
+                "candidate_ids": candidate_ids,
+                "candidate_count": len(candidate_ids),
+                "omitted_candidate_count": shard.get("omitted_candidate_count", 0),
+                "provider_status": provider_status,
+                "warnings": shard_warnings,
+            }
+        )
+    if not records:
+        return {
+            "status": "missing",
+            "payload": combined_payload,
+            "provider_status": {"provider": provider, "status": "disabled" if disabled else "not_called"},
+            "shards": [],
+            "reviewed_candidate_ids": [],
+            "warnings": ["ai_review_response_missing"],
+        }
+    if all(status == "parsed" for status in statuses):
+        status = "parsed"
+    elif any(status == "parsed" for status in statuses):
+        status = "partial"
+    elif disabled:
+        status = "missing"
+    elif any(status == "parse_rejected" for status in statuses):
+        status = "parse_rejected"
+    else:
+        status = statuses[-1] if statuses else "missing"
+    return {
+        "status": status,
+        "payload": combined_payload,
+        "provider_status": {"provider": provider, "status": status, "shard_count": len(records)},
+        "shards": records,
+        "reviewed_candidate_ids": sorted(set(reviewed_candidate_ids)),
+        "warnings": warnings,
+    }
 
 
 def _map_by_id(items: Any, key: str) -> dict[str, dict[str, Any]]:
@@ -533,19 +733,19 @@ def build_swing_lifecycle_bucket_discovery(
         if provider is not None
         else os.getenv("KORSTOCKSCAN_SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PROVIDER", AI_REVIEW_DEFAULT_PROVIDER)
     ).strip().lower() or "none"
-    ai_context = _build_ai_review_context(date_key, candidates)
-    provider_status: dict[str, Any] = {
-        "provider": resolved_provider,
-        "status": "disabled" if resolved_provider in {"none", "off", "false", "0"} else "not_called",
-        "model": AI_REVIEW_MODEL if resolved_provider not in {"none", "off", "false", "0"} else None,
-        "schema_name": AI_REVIEW_SCHEMA_NAME,
+    ai_review = _run_ai_review_shards(
+        date_key,
+        candidates,
+        provider=resolved_provider,
+        ai_raw_response=ai_raw_response,
+    )
+    ai_status = str(ai_review.get("status") or "missing")
+    ai_payload = ai_review.get("payload") if isinstance(ai_review.get("payload"), dict) else {}
+    ai_warnings = ai_review.get("warnings") if isinstance(ai_review.get("warnings"), list) else []
+    ai_reviewed_candidate_ids = {
+        str(item) for item in (ai_review.get("reviewed_candidate_ids") or []) if str(item)
     }
-    raw_response = ai_raw_response
-    if raw_response is not None:
-        provider_status["status"] = "provided_response"
-    if raw_response is None and resolved_provider == "openai":
-        raw_response, provider_status = _call_openai_ai_review(ai_context)
-    ai_status, ai_payload, ai_warnings = _parse_ai_review_response(raw_response)
+    provider_status = ai_review.get("provider_status") if isinstance(ai_review.get("provider_status"), dict) else {}
     ai_proposals = _map_by_id(
         [
             {**item, "proposal_source": "ai_tier2", "proposal_status": "provided"}
@@ -561,6 +761,7 @@ def build_swing_lifecycle_bucket_discovery(
     enriched_candidates = []
     for candidate in candidates:
         bucket_id = str(candidate.get("bucket_id") or "")
+        ai_review_coverage = "reviewed" if bucket_id in ai_reviewed_candidate_ids else "unreviewed"
         deterministic = candidate.get("deterministic_proposal") if isinstance(candidate.get("deterministic_proposal"), dict) else {}
         ai_proposal = ai_proposals.get(bucket_id) or default_ai_tier2_proposal(bucket_id, deterministic)
         comparative = compare_taxonomy_proposals(
@@ -569,18 +770,21 @@ def build_swing_lifecycle_bucket_discovery(
             ai_tier2_proposal=ai_proposal,
             comparative_review=ai_comparatives.get(bucket_id),
         )
-        if ai_status != "parsed":
+        if bucket_id in ai_reviewed_candidate_ids and (
+            bucket_id not in ai_proposals or bucket_id not in ai_comparatives
+        ):
             comparative = {
                 **comparative,
                 "selected_decision": "source_quality_blocker",
                 "selected_source": "reject",
-                "comparison_summary": "AI Tier2 comparative review missing or rejected; source-only fail-closed review recorded.",
+                "comparison_summary": "AI Tier2 comparative review missing for this reviewed candidate; source-only fail-closed review recorded.",
             }
         enriched_candidates.append(
             {
                 **candidate,
                 "ai_tier2_proposal": ai_proposal,
                 "comparative_review": comparative,
+                "ai_review_coverage": ai_review_coverage,
                 "ai_review_status": ai_status,
             }
         )
@@ -616,18 +820,54 @@ def build_swing_lifecycle_bucket_discovery(
     ai_forbidden = ai_payload_audit.get("forbidden_use_violations")
     if not isinstance(ai_forbidden, list):
         ai_forbidden = []
+    reviewed_candidates = [
+        item for item in candidates if str(item.get("bucket_id") or "") in ai_reviewed_candidate_ids
+    ]
+    unreviewed_sim_auto_candidate_count = sum(
+        1 for item in candidates if item.get("classification_state") == "sim_auto_approved" and item.get("ai_review_coverage") != "reviewed"
+    )
     missing_ai_proposal_count = sum(
-        1 for item in candidates if item.get("ai_tier2_proposal", {}).get("proposal_status") != "provided"
+        1 for item in reviewed_candidates if item.get("ai_tier2_proposal", {}).get("proposal_status") != "provided"
     )
     missing_comparative_review_count = sum(
-        1 for item in candidates if item.get("comparative_review", {}).get("selected_source") == "reject"
+        1 for item in reviewed_candidates if item.get("comparative_review", {}).get("selected_source") == "reject"
+    )
+    sim_shard = next(
+        (
+            item
+            for item in (ai_review.get("shards") if isinstance(ai_review.get("shards"), list) else [])
+            if item.get("shard_id") == "sim_policy_review"
+        ),
+        {},
+    )
+    sim_reviewed_candidate_ids = {
+        str(item) for item in (sim_shard.get("candidate_ids") or []) if str(item)
+    }
+    sim_reviewed_candidates = [
+        item for item in candidates if str(item.get("bucket_id") or "") in sim_reviewed_candidate_ids
+    ]
+    sim_missing_ai_proposal_count = sum(
+        1 for item in sim_reviewed_candidates if item.get("ai_tier2_proposal", {}).get("proposal_status") != "provided"
+    )
+    sim_missing_comparative_review_count = sum(
+        1 for item in sim_reviewed_candidates if item.get("comparative_review", {}).get("selected_source") == "reject"
+    )
+    sim_review_required = any(item.get("classification_state") == "sim_auto_approved" for item in candidates)
+    sim_review_fail_closed = bool(
+        sim_review_required
+        and (
+            sim_shard.get("status") != "parsed"
+            or sim_shard.get("audit_status") != "pass"
+            or int(sim_shard.get("forbidden_use_violation_count") or 0) > 0
+            or sim_missing_ai_proposal_count > 0
+            or sim_missing_comparative_review_count > 0
+        )
     )
     ai_fail_closed = (
-        ai_status != "parsed"
-        or ai_payload_audit.get("status") != "pass"
+        ai_status == "missing"
         or bool(ai_forbidden)
-        or missing_ai_proposal_count > 0
-        or missing_comparative_review_count > 0
+        or sim_review_fail_closed
+        or unreviewed_sim_auto_candidate_count > 0
     )
     if ai_fail_closed:
         downgraded_candidates: list[dict[str, Any]] = []
@@ -663,8 +903,17 @@ def build_swing_lifecycle_bucket_discovery(
         warnings.append("swing_lifecycle_decision_matrix_missing")
     if source_contract_status == "fail":
         warnings.append("source_contract_fail")
+    if ai_status != "parsed" and ai_fail_closed:
+        warnings.append(f"ai_two_pass_review_{ai_status}_fail_closed")
+    elif ai_status != "parsed":
+        warnings.append(f"ai_two_pass_review_{ai_status}_source_only")
+    if ai_payload_audit.get("status") == "correction_required" and not ai_fail_closed:
+        warnings.append("ai_two_pass_review_correction_required_source_only")
+    if ai_fail_closed:
+        warnings.append("ai_two_pass_review_fail_closed_sim_auto_blocked")
     if ai_review_points and ai_audit.get("status") != "configured_deterministic_two_pass":
         warnings.append("swing_ldm_ai_review_not_configured")
+    warnings = list(dict.fromkeys(warnings))
 
     report = {
         "schema_version": 1,
@@ -709,8 +958,13 @@ def build_swing_lifecycle_bucket_discovery(
                 1 for item in candidates if item.get("ai_tier2_proposal", {}).get("proposal_status") == "provided"
             ),
             "comparative_review_count": len(candidates),
+            "ai_reviewed_candidate_count": len(reviewed_candidates),
+            "ai_unreviewed_candidate_count": max(len(candidates) - len(reviewed_candidates), 0),
+            "unreviewed_sim_auto_candidate_count": unreviewed_sim_auto_candidate_count,
             "missing_ai_tier2_proposal_count": missing_ai_proposal_count,
             "missing_comparative_review_count": missing_comparative_review_count,
+            "sim_missing_ai_tier2_proposal_count": sim_missing_ai_proposal_count,
+            "sim_missing_comparative_review_count": sim_missing_comparative_review_count,
             "selected_decision_counts": proposal_counts(
                 [item.get("comparative_review") or {} for item in candidates],
                 key="selected_decision",
@@ -737,6 +991,11 @@ def build_swing_lifecycle_bucket_discovery(
             "model": provider_status.get("model") or (AI_REVIEW_MODEL if resolved_provider == "openai" else None),
             "schema_name": AI_REVIEW_SCHEMA_NAME,
             "provider_status": provider_status,
+            "review_scope": "sharded_priority_limited_source_only_review",
+            "candidate_selection_policy": "sim-auto shard, gap/workorder shard, taxonomy source-only sample shard",
+            "reviewed_candidate_ids": sorted(ai_reviewed_candidate_ids),
+            "omitted_candidate_count": max(len(candidates) - len(ai_reviewed_candidate_ids), 0),
+            "shards": ai_review.get("shards") if isinstance(ai_review.get("shards"), list) else [],
             "audit": ai_payload_audit,
             "deterministic_proposals": [
                 item.get("deterministic_proposal") for item in candidates if item.get("deterministic_proposal")
@@ -751,6 +1010,9 @@ def build_swing_lifecycle_bucket_discovery(
             "fail_closed": ai_fail_closed,
             "missing_ai_tier2_proposal_count": missing_ai_proposal_count,
             "missing_comparative_review_count": missing_comparative_review_count,
+            "sim_missing_ai_tier2_proposal_count": sim_missing_ai_proposal_count,
+            "sim_missing_comparative_review_count": sim_missing_comparative_review_count,
+            "unreviewed_sim_auto_candidate_count": unreviewed_sim_auto_candidate_count,
         },
         "deterministic_proposals": [
             item.get("deterministic_proposal") for item in candidates if item.get("deterministic_proposal")
@@ -841,8 +1103,14 @@ def write_report(report: dict[str, Any]) -> tuple[Path, Path]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build Swing lifecycle bucket discovery.")
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
+    parser.add_argument(
+        "--ai-provider",
+        dest="ai_provider",
+        default=None,
+        help="AI provider for source-only Tier2 review. Defaults to env KORSTOCKSCAN_SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PROVIDER.",
+    )
     args = parser.parse_args()
-    report = build_swing_lifecycle_bucket_discovery(args.target_date)
+    report = build_swing_lifecycle_bucket_discovery(args.target_date, provider=args.ai_provider)
     json_path, md_path = write_report(report)
     print(f"[swing-lifecycle-bucket-discovery] wrote {json_path} {md_path}")
 

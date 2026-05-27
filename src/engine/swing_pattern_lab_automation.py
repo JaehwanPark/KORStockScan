@@ -25,6 +25,7 @@ FORBIDDEN_USES = [
     "bot_restart",
     "recommendation_history_replace",
 ]
+MICRO_CONTEXT_SOURCE_CONTRACT_VERSION = "swing_micro_context_source_quality_v1"
 
 SWING_TARGET_SUBSYSTEM_MAP = {
     "selection": "swing_model_selection",
@@ -227,16 +228,90 @@ def _source_quality_blocked_families(ofi_qi_quality: dict[str, Any]) -> list[dic
             {
                 "family": family,
                 "stage": group,
+                "metric_role": "source_quality_gate",
+                "decision_authority": DECISION_AUTHORITY,
+                "window_policy": "same_day_pattern_lab_source_quality",
+                "sample_floor": 1,
+                "primary_decision_metric": "source_quality_gate",
+                "source_quality_gate": "swing_orderbook_micro_context_ready_or_blocker_provenance_recorded",
+                "source_contract_version": MICRO_CONTEXT_SOURCE_CONTRACT_VERSION,
+                "source_contract_status": "implemented",
                 "source_quality_blockers": [f"{group}_ofi_qi_invalid_micro_context"],
                 "invalid_micro_context_unique_record_count": invalid_unique_count,
                 "invalid_reason_combination_unique_record_counts": (
                     ofi_qi_quality.get("reason_combination_unique_record_counts") or {}
                 ),
+                "reason_counts": ofi_qi_quality.get("reason_counts") or {},
+                "reason_combination_counts": ofi_qi_quality.get("reason_combination_counts") or {},
+                "observer_unhealthy_overlap": ofi_qi_quality.get("observer_unhealthy_overlap") or {},
                 "automation_input": True,
                 "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "forbidden_uses": FORBIDDEN_USES,
             }
         )
     return blocked
+
+
+def _micro_context_source_contract(
+    ofi_qi_quality: dict[str, Any],
+    source_quality_blocked_families: list[dict[str, Any]],
+) -> dict[str, Any]:
+    required_metric_keys = (
+        "sample_count",
+        "stale_missing_count",
+        "stale_missing_ratio",
+        "reason_counts",
+        "reason_combination_counts",
+        "reason_combination_unique_record_counts",
+        "stale_missing_group_counts",
+        "stale_missing_group_unique_record_counts",
+        "observer_unhealthy_overlap",
+    )
+    present = {key: key in ofi_qi_quality for key in required_metric_keys}
+    return {
+        "contract_id": "swing_micro_context_source_quality",
+        "source_contract_version": MICRO_CONTEXT_SOURCE_CONTRACT_VERSION,
+        "source_contract_status": "implemented" if all(present.values()) else "instrumentation_gap",
+        "metric_role": "source_quality_gate",
+        "decision_authority": DECISION_AUTHORITY,
+        "window_policy": "same_day_pattern_lab_source_quality",
+        "sample_floor": 1,
+        "primary_decision_metric": "source_quality_gate",
+        "source_quality_gate": "swing_orderbook_micro_context_ready_or_blocker_provenance_recorded",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": FORBIDDEN_USES,
+        "required_metric_keys": list(required_metric_keys),
+        "missing_metric_keys": [key for key, exists in present.items() if not exists],
+        "sample_count": _safe_int(ofi_qi_quality.get("sample_count"), 0),
+        "stale_missing_count": _safe_int(ofi_qi_quality.get("stale_missing_count"), 0),
+        "stale_missing_ratio": _safe_float(ofi_qi_quality.get("stale_missing_ratio"), 0.0),
+        "reason_counts": ofi_qi_quality.get("reason_counts") or {},
+        "reason_combination_counts": ofi_qi_quality.get("reason_combination_counts") or {},
+        "reason_combination_unique_record_counts": (
+            ofi_qi_quality.get("reason_combination_unique_record_counts") or {}
+        ),
+        "stale_missing_group_counts": ofi_qi_quality.get("stale_missing_group_counts") or {},
+        "stale_missing_group_unique_record_counts": (
+            ofi_qi_quality.get("stale_missing_group_unique_record_counts") or {}
+        ),
+        "observer_unhealthy_overlap": ofi_qi_quality.get("observer_unhealthy_overlap") or {},
+        "source_quality_blocked_family_count": len(source_quality_blocked_families),
+        "source_quality_blocked_families": [
+            {
+                "family": item.get("family"),
+                "stage": item.get("stage"),
+                "source_quality_blockers": item.get("source_quality_blockers") or [],
+                "invalid_micro_context_unique_record_count": item.get(
+                    "invalid_micro_context_unique_record_count"
+                ),
+                "source_contract_status": item.get("source_contract_status"),
+            }
+            for item in source_quality_blocked_families
+            if isinstance(item, dict)
+        ],
+    }
 
 
 def _ofi_qi_instrumentation_provenance(
@@ -310,6 +385,7 @@ def build_swing_pattern_lab_automation_report(target_date: str) -> dict[str, Any
     dq_warnings = data_quality.get("warnings", []) if isinstance(data_quality.get("warnings"), list) else []
     ofi_qi_quality = data_quality.get("ofi_qi_quality") if isinstance(data_quality.get("ofi_qi_quality"), dict) else {}
     source_quality_blocked_families = _source_quality_blocked_families(ofi_qi_quality)
+    micro_context_contract = _micro_context_source_contract(ofi_qi_quality, source_quality_blocked_families)
     carryover_warnings = _extract_carryover_warnings(analysis_result)
 
     if freshness["fresh"]:
@@ -367,6 +443,9 @@ def build_swing_pattern_lab_automation_report(target_date: str) -> dict[str, Any
             "population_split_available": freshness["fresh"],
             "source_quality_blocked_family_count": len(source_quality_blocked_families),
             "source_quality_blocked_families": source_quality_blocked_families,
+            "source_quality_contracts": {
+                "swing_micro_context": micro_context_contract,
+            },
             "decision_authority": DECISION_AUTHORITY,
             "runtime_mutation_allowed": False,
         },
@@ -436,6 +515,9 @@ def build_swing_pattern_lab_automation_report(target_date: str) -> dict[str, Any
         "data_quality": {
             "warnings": dq_warnings,
             "ofi_qi_quality": ofi_qi_quality,
+            "source_quality_contracts": {
+                "swing_micro_context": micro_context_contract,
+            },
             "source_quality_blocked_families": source_quality_blocked_families,
             "carryover_warnings": carryover_warnings,
             "carryover_warnings_raw": data_quality_carryover_raw,

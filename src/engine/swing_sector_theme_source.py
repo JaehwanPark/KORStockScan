@@ -452,6 +452,20 @@ def build_sector_theme_map(
         }
     sector_missing_count = sum(1 for row in merged.values() if row.get("sector_source_quality") == "missing")
     theme_missing_count = sum(1 for row in merged.values() if row.get("theme_source_quality") == "missing")
+    mapped_count = sum(
+        1
+        for row in merged.values()
+        if row.get("sector_source_quality") != "missing" or row.get("theme_source_quality") != "missing"
+    )
+    missing_count = sum(
+        1
+        for row in merged.values()
+        if row.get("sector_source_quality") == "missing" and row.get("theme_source_quality") == "missing"
+    )
+    coverage = round(mapped_count / len(requested), 6) if requested else 0.0
+    sector_coverage = round((len(merged) - sector_missing_count) / len(requested), 6) if requested else 0.0
+    theme_coverage = round((len(merged) - theme_missing_count) / len(requested), 6) if requested else 0.0
+    warnings = ["manual_sector_missing", "sector_theme_missing"] if requested and coverage <= 0 else []
     payload = {
         "schema_version": 1,
         "date": date_key,
@@ -460,34 +474,22 @@ def build_sector_theme_map(
         "runtime_effect": False,
         "decision_authority": DECISION_AUTHORITY,
         "requested_code_count": len(requested),
-        "mapped_code_count": sum(
-            1
-            for row in merged.values()
-            if row.get("sector_source_quality") != "missing" or row.get("theme_source_quality") != "missing"
-        ),
-        "missing_count": sum(
-            1
-            for row in merged.values()
-            if row.get("sector_source_quality") == "missing" and row.get("theme_source_quality") == "missing"
-        ),
+        "mapped_code_count": mapped_count,
+        "missing_count": missing_count,
+        "coverage": coverage,
         "sector_mapped_count": len(merged) - sector_missing_count,
         "sector_missing_count": sector_missing_count,
+        "sector_coverage": sector_coverage,
         "theme_mapped_count": len(merged) - theme_missing_count,
         "theme_missing_count": theme_missing_count,
+        "theme_coverage": theme_coverage,
         "rows_by_code": merged,
         "diagnostics": {
             "manual_sector": manual_diag,
             "kiwoom": kiwoom_diag,
             "external": external_diag,
         },
-        "warnings": [
-            warning
-            for warning, count in (
-                ("manual_sector_missing", sector_missing_count),
-                ("sector_theme_missing", theme_missing_count),
-            )
-            if count
-        ],
+        "warnings": warnings,
     }
     if write_cache:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)

@@ -142,6 +142,21 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
 
 5/26 결론은 신규 `baseline-promote`, 신규 `remove`, 실주문 전환 없음이다. Nova Lite v2 primary는 사용자 명시 provider override지만 endpoint-scoped transport 변경이며, lifecycle/swing/model 산출물의 sim/source/model-only 권한과 섞지 않는다.
 
+### 2026-05-27 POSTCLOSE Snapshot Addendum
+
+이 addendum은 `threshold_cycle_ev_2026-05-27`, `runtime_approval_summary_2026-05-27`, `lifecycle_bucket_discovery_2026-05-27`, `runtime_apply_gap_audit_2026-05-27`, `bedrock_nova_primary_provider_2026-05-27`, `bedrock_nova_lite_shadow_2026-05-27`, `threshold_cycle_postclose_verification_2026-05-27` 기준의 당일 분류 보정이다. 결론은 `no_baseline_promote_with_greenfield_and_provider_shadow_locked`이다.
+
+| 축 | 2026-05-27 판정 | 근거 | 다음 액션 |
+| --- | --- | --- | --- |
+| `greenfield_real_environment_authority` | PREOPEN-only promoted-bucket authority candidate / baseline 아님 | runtime apply gap audit retry queue에 `greenfield_real_environment_authority:2026-05-27`가 남았고 다음 PREOPEN 소비 확인 대상이다. legacy live fallback이나 runtime direct mutation이 아니다 | 2026-05-28 PREOPEN apply에서 소비 여부와 post-apply attribution을 확인한다 |
+| `entry_wait6579_score66_69_recovery_gate_v1` | live-auto entry bucket candidate / post-apply attribution pending | lifecycle discovery는 `live_auto_apply_ready=1`, AI review parsed, source contract pass다. runtime apply gap audit은 `ready_but_not_applied` retry로 닫았다 | 다음 PREOPEN bounded apply에서 env uptake를 확인한다. broker/stale/quantity/cooldown guard 우회 금지 |
+| `Bedrock Nova Lite v2 entry_price/holding_flow` | operator provider override 유지 / endpoint-scoped primary | v2 primary artifact `1169`행 중 parse ok `1168`, entry_price p50/p90 `1390/2209ms`, holding_flow p50/p90 `1167/1391ms`다 | provider route 확대, threshold/order price/quantity 변경, bot restart 근거로 쓰지 않는다 |
+| `Bedrock Nova Lite v1 shadow` | transport shadow observation only | v1 shadow artifact `1165`행은 parse ok `1165`, `runtime_effect=false`, `actual_order_submitted=false`다. entry_price action match는 `374/521`, holding_flow는 `581/644`다 | entry_price mismatch는 fill quality/missed upside/stale guard source-quality로만 누적한다 |
+| `lifecycle_bucket_discovery` | active automation discovery / 4-shard review with empty shards skipped | AI review는 `parsed`, live shard `1`개와 sim shard `6`개를 reviewed했고 gap/taxonomy shard는 후보가 없어 `skipped_empty`다. `sim_auto_approved=185`, `new_bucket_candidate=0`, `code_patch_required=0`이다 | skipped_empty shard를 실패로 보지 않고, 후보가 생기는 날 shard coverage를 다시 확인한다 |
+| `code_improvement_workorder` | already implemented / no new implement_now | selected order `57`, selected decision `attach_existing_family=57`, selected unimplemented runtime_effect=false `0`이다 | sample/source-quality waiting status만 다음 postclose에서 재표면화 여부를 본다 |
+
+5/27 결론은 신규 `baseline-promote`, 신규 `remove`, 신규 alpha shadow 없음이다. Greenfield authority와 live bucket은 다음 PREOPEN apply 후보로만 보고, Bedrock Lite v1 shadow는 v2 primary transport 비교 source-only로만 유지한다.
+
 ## 0.1 Runtime ON/OFF 스냅샷 (`2026-05-12` 기준)
 
 이 표는 `src/utils/constants.py` 기본값과 현재 운영문서 기준의 runtime 상태를 한곳에 잠그기 위한 스냅샷이다. env override가 있으면 장전 로드 확인에서 반드시 이 표와 비교한다.

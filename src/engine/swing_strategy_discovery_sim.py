@@ -827,6 +827,11 @@ def build_swing_strategy_discovery_report(
     bottom_rebound_count = int(len(bottom_rebound_rows))
     quote_feature_count = int(len(quote_features))
     sector_theme_mapped = int(sector_theme_payload.get("mapped_code_count") or 0)
+    sector_theme_missing = int(sector_theme_payload.get("missing_count") or 0)
+    sector_mapped = int(sector_theme_payload.get("sector_mapped_count") or 0)
+    sector_missing = int(sector_theme_payload.get("sector_missing_count") or 0)
+    theme_mapped = int(sector_theme_payload.get("theme_mapped_count") or 0)
+    theme_missing = int(sector_theme_payload.get("theme_missing_count") or 0)
     candidates = build_candidate_rows(
         source_rows,
         target_date=date_key,
@@ -917,7 +922,14 @@ def build_swing_strategy_discovery_report(
             "quote_feature_rows": quote_feature_count,
             "quote_feature_coverage": round(quote_feature_count / source_count, 6) if source_count else 0.0,
             "sector_theme_mapped_rows": sector_theme_mapped,
+            "sector_theme_missing_rows": sector_theme_missing,
             "sector_theme_coverage": round(sector_theme_mapped / source_count, 6) if source_count else 0.0,
+            "sector_mapped_rows": sector_mapped,
+            "sector_missing_rows": sector_missing,
+            "sector_coverage": round(sector_mapped / source_count, 6) if source_count else 0.0,
+            "theme_mapped_rows": theme_mapped,
+            "theme_missing_rows": theme_missing,
+            "theme_coverage": round(theme_mapped / source_count, 6) if source_count else 0.0,
             "sector_theme_cache": str((Path(DATA_DIR) / "runtime" / "swing_strategy_discovery" / f"sector_theme_map_{date_key}.json")),
             "warnings": warnings,
         },

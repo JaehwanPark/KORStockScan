@@ -27,9 +27,9 @@
 - stage_hook_workorder_discovery: `/home/ubuntu/KORStockScan/data/report/stage_hook_workorder_discovery/stage_hook_workorder_discovery_2026-05-27.json`
 - stage_hook_runtime_scaffold: `/home/ubuntu/KORStockScan/data/report/stage_hook_runtime_scaffold/stage_hook_runtime_scaffold_2026-05-27.json`
 - buy_funnel_sentinel: `/home/ubuntu/KORStockScan/data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-05-27.json`
-- generated_at: `2026-05-27T20:16:40+09:00`
-- generation_id: `2026-05-27-9406b97cf6ce`
-- source_hash: `9406b97cf6ce953dd05aafb1cf4c3568ac3a16272fc8619243c87d21f4cf6498`
+- generated_at: `2026-05-27T22:31:01+09:00`
+- generation_id: `2026-05-27-f46a1e1f7f22`
+- source_hash: `f46a1e1f7f22eabe046783c873234b0c5fc636778e45efc7a87cf0ba99c2c125`
 
 ## 운영 원칙
 
@@ -51,15 +51,15 @@
 ## Snapshot Lineage
 
 - previous_exists: `True`
-- previous_generation_id: `2026-05-27-eb017e57de70`
-- previous_source_hash: `eb017e57de70f799a5ef34ceb21077b4df94a562c74bb3f4b45ed0e3c126ec08`
+- previous_generation_id: `2026-05-27-f31d12700354`
+- previous_source_hash: `f31d127003547f13a719aa8f8628e2197ed7b5fcf4dcb9938aef50b13aaa54e4`
 - new_order_ids: `[]`
-- removed_order_ids: `[]`
+- removed_order_ids: `['order_pattern_lab_ai_review_order_pattern_lab_ai_review_swing_micro_context_source_quality']`
 - decision_changed_order_ids: `[]`
 
 ## Summary
 
-- source_order_count: `95`
+- source_order_count: `94`
 - scalping_source_order_count: `12`
 - swing_source_order_count: `9`
 - swing_entry_bottleneck_primary: `SWING_ENTRY_BOTTLENECK_OBSERVE`
@@ -69,7 +69,7 @@
 - swing_lifecycle_matrix_source_order_count: `7`
 - swing_lifecycle_bucket_discovery_source_order_count: `14`
 - pattern_lab_currentness_source_order_count: `0`
-- pattern_lab_ai_review_source_order_count: `1`
+- pattern_lab_ai_review_source_order_count: `0`
 - threshold_ev_source_order_count: `20`
 - lifecycle_submit_bucket_source_order_count: `0`
 - pipeline_event_verbosity_source_order_count: `0`
@@ -79,13 +79,13 @@
 - entry_submit_drought_selected: `True`
 - entry_submit_drought_handoff_missing: `False`
 - panic_lifecycle_source_order_count: `2`
-- selected_order_count: `57`
+- selected_order_count: `56`
 - non_selected_order_count: `38`
-- source_decision_counts: `{'attach_existing_family': 75, 'design_family_candidate': 7, 'defer_evidence': 10, 'reject': 3}`
-- selected_decision_counts: `{'attach_existing_family': 57}`
-- selected_route_counts: `{'existing_family': 56, 'performance_optimization_order': 1}`
+- source_decision_counts: `{'attach_existing_family': 74, 'design_family_candidate': 7, 'defer_evidence': 10, 'reject': 3}`
+- selected_decision_counts: `{'attach_existing_family': 56}`
+- selected_route_counts: `{'existing_family': 55, 'performance_optimization_order': 1}`
 - selected_implement_now_route_count: `0`
-- selected_runtime_effect_false_count: `57`
+- selected_runtime_effect_false_count: `56`
 - selected_unimplemented_runtime_effect_false_count: `0`
 - selected_unimplemented_route_counts: `{}`
 - non_selected_decision_counts: `{'attach_existing_family': 18, 'design_family_candidate': 7, 'defer_evidence': 10, 'reject': 3}`
@@ -96,8 +96,8 @@
 - swing_pattern_lab_fresh: `True`
 - pattern_lab_currentness_status: `pass`
 - pattern_lab_currentness_fail_count: `0`
-- pattern_lab_ai_review_status: `warning`
-- pattern_lab_ai_review_workorder_count: `1`
+- pattern_lab_ai_review_status: `pass`
+- pattern_lab_ai_review_workorder_count: `0`
 - swing_threshold_ai_status: `unavailable`
 - daily_ev_available: `True`
 
@@ -2053,40 +2053,6 @@ Stage hook candidate:
 - acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_decision_matrix.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier fails if LDM entry bucket candidates/workorders are not propagated`
 - implementation_status: `implemented`
 - implementation_provenance: `{"recommended_resolution": "none", "source_field_coverage": {}, "unknown_reason_counts": {}}`
-- automation_reentry: Next postclose workorder should preserve implementation_status=implemented and use the source metrics as provenance only.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 57. `order_pattern_lab_ai_review_order_pattern_lab_ai_review_swing_micro_context_source_quality`
-
-- title: Pattern Lab AI review follow-up: order_pattern_lab_ai_review_swing_micro_context_source_quality
-- decision: `attach_existing_family`
-- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
-- source_report_type: `pattern_lab_ai_review`
-- lifecycle_stage: `pattern_lab_ai_review`
-- target_subsystem: `pattern_lab`
-- route: `existing_family`
-- mapped_family: `-`
-- threshold_family: `-`
-- improvement_type: `source_quality_gap`
-- confidence: `ai_two_pass_review`
-- priority: `10`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `True`
-- tuning_axis_effect: `False`
-- expected_ev_effect: Improve pattern lab feedback quality without runtime mutation.
-- evidence: `review_id=order_pattern_lab_ai_review_swing_micro_context_source_quality`, `domain=swing`, `final_state=source_quality_gap`, `final_decision=surface_workorder`, `auditor_pass=True`, `explicit_gap_type=source_quality_gap`, `source_paths=['/home/ubuntu/KORStockScan/data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_2026-05-27.json', '/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-27.json', '/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-27.json', '/home/ubuntu/KORStockScan/data/report/swing_lifecycle_decision_matrix/swing_lifecycle_decision_matrix_2026-05-27.json', '/home/ubuntu/KORStockScan/data/report/swing_lifecycle_bucket_discovery/swing_lifecycle_bucket_discovery_2026-05-27.json', '/home/ubuntu/KORStockScan/data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_2026-05-27.json']`
-- parity_contract: -
-- next_postclose_metric: pattern_lab_ai_review.order_pattern_lab_ai_review_swing_micro_context_source_quality
-- files_likely_touched: `src/engine/pattern_lab_ai_review.py`, `src/engine/pattern_lab_currentness_audit.py`, `analysis/gemini_scalping_pattern_lab`, `analysis/claude_scalping_pattern_lab`, `analysis/deepseek_swing_pattern_lab`
-- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_ai_review.py src/tests/test_pattern_lab_currentness_audit.py`
-- implementation_status: `implemented`
-- implementation_provenance: `{"allowed_runtime_apply": false, "blocked_families": [{"family": "swing_entry_ofi_qi_execution_quality", "invalid_micro_context_unique_record_count": 19, "runtime_effect": false, "source_quality_blockers": ["entry_ofi_qi_invalid_micro_context"], "stage": "entry"}, {"family": "swing_scale_in_ofi_qi_confirmation", "invalid_micro_context_unique_record_count": 2, "runtime_effect": false, "source_quality_blockers": ["scale_in_ofi_qi_invalid_micro_context"], "stage": "scale_in"}], "blocked_family_count": 2, "decision_authority": "swing_pattern_lab_analysis_workorder_source_only", "implementation_type": "source_quality_report_provenance", "ofi_qi_reason_counts": {"micro_missing": 3832, "micro_not_ready": 3835, "micro_stale": 0, "observer_unhealthy": 39, "state_insufficient": 3835}, "runtime_effect": false, "source_report_type": "swing_pattern_lab_automation"}`
 - automation_reentry: Next postclose workorder should preserve implementation_status=implemented and use the source metrics as provenance only.
 
 실행 기준:

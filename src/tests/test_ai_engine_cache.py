@@ -138,9 +138,11 @@ def test_gatekeeper_action_normalizer_accepts_korean_and_english_labels():
     assert normalize_gatekeeper_action_key("전량 회피") == "full_avoid"
     assert normalize_gatekeeper_action_key("full avoid") == "full_avoid"
     assert normalize_gatekeeper_action_key("즉시 매수") == "immediate_buy"
+    assert normalize_gatekeeper_action_key("NOT_EVALUATED_SCORE_VPW_PRIOR") == "not_evaluated_score_vpw_prior"
     assert normalize_gatekeeper_action_key("None") == "unknown"
     assert normalize_gatekeeper_action_key("ambiguous_chase") == "unknown"
     assert display_gatekeeper_action_label("pullback_wait") == "눌림 대기"
+    assert display_gatekeeper_action_label("not_evaluated_score_vpw_prior") == "NOT_EVALUATED_SCORE_VPW_PRIOR"
 
 
 PROVIDER_ENGINES = [
