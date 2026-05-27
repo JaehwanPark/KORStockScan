@@ -562,6 +562,10 @@ def test_swing_probe_discard_classifies_symbol_cap_before_global_open_cap(monkey
                 "evidence_quality_weight": None,
                 "source_record_id": None,
                 "discard_reason": "max_per_symbol_reached",
+                "blocker_authority": "probe_capacity_only",
+                "quota_observation_scope": "symbol_probe_quota",
+                "hard_gate": False,
+                "allowed_runtime_apply": False,
                 "strategy": "KOSPI_ML",
                 "active_symbol_probes": 1,
             },
@@ -616,6 +620,57 @@ def test_swing_probe_discard_rate_limits_repeated_global_cap_logs(monkeypatch, t
 
     assert [fields["discard_reason"] for _, fields in logs] == ["max_open_reached", "max_open_reached"]
     assert [fields["open_count"] for _, fields in logs] == [1, 1]
+    assert {fields["quota_observation_scope"] for _, fields in logs} == {"global_probe_quota"}
+    assert {fields["blocker_authority"] for _, fields in logs} == {"probe_capacity_only"}
+
+
+def test_swing_probe_global_cap_discard_dedupes_across_symbols(monkeypatch, tmp_path):
+    rules = replace(
+        CONFIG,
+        SWING_LIVE_ORDER_DRY_RUN_ENABLED=True,
+        SWING_INTRADAY_LIVE_EQUIV_PROBE_ENABLED=True,
+        SWING_INTRADAY_PROBE_MAX_OPEN=1,
+        SWING_INTRADAY_PROBE_MAX_PER_SYMBOL=1,
+        SWING_INTRADAY_PROBE_DISCARD_LOG_MIN_INTERVAL_SEC=60,
+    )
+    logs = []
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(state_handlers, "_SWING_PROBE_DISCARD_LOG_TS", {})
+    monkeypatch.setattr(state_handlers, "EVENT_BUS", FakeEventBus())
+    monkeypatch.setattr(state_handlers, "SWING_INTRADAY_PROBE_STATE_PATH", tmp_path / "swing_probe_state.json")
+    monkeypatch.setattr(
+        state_handlers,
+        "ACTIVE_TARGETS",
+        [
+            {
+                "code": "999999",
+                "name": "OTHER",
+                "strategy": "KOSPI_ML",
+                "status": "HOLDING",
+                "swing_intraday_probe": True,
+                "simulation_book": "swing_intraday_live_equiv_probe",
+                "probe_origin_stage": "blocked_swing_gap",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((code, stage, fields)),
+    )
+
+    for stock_code in ("000002", "000003"):
+        assert not state_handlers.maybe_start_swing_intraday_probe(
+            stock={"id": stock_code, "name": "NEXT", "code": stock_code, "strategy": "KOSPI_ML"},
+            code=stock_code,
+            ws_data={"curr": 10_000},
+            origin_stage="blocked_swing_gap",
+            runtime={"strategy": "KOSPI_ML", "now_ts": 1_768_090_000.0},
+        )
+
+    assert len(logs) == 1
+    assert logs[0][2]["discard_reason"] == "max_open_reached"
+    assert logs[0][2]["quota_observation_scope"] == "global_probe_quota"
 
 
 def test_swing_probe_score_vpw_origin_quota_preserves_other_origin_slots(monkeypatch, tmp_path):
@@ -1118,9 +1173,16 @@ def test_swing_dry_run_submit_path_assumes_fill_after_legacy_prior(monkeypatch):
     stages = [stage for stage, _ in logs]
     assert "swing_sim_buy_order_assumed_filled" in stages
     assert "swing_sim_order_bundle_assumed_filled" in stages
+    request = next(fields for stage, fields in logs if stage == "order_leg_request")
+    assert request["actual_order_submitted"] is False
+    assert request["broker_order_forbidden"] is True
     sim_fill = next(fields for stage, fields in logs if stage == "swing_sim_buy_order_assumed_filled")
     assert sim_fill["actual_order_submitted"] is False
+    assert sim_fill["broker_order_forbidden"] is True
     assert sim_fill["would_submit_stage"] == "order_leg_sent"
+    bundle = next(fields for stage, fields in logs if stage == "swing_sim_order_bundle_assumed_filled")
+    assert bundle["actual_order_submitted"] is False
+    assert bundle["broker_order_forbidden"] is True
 
 
 def test_swing_one_share_real_canary_submits_only_when_allowlisted(monkeypatch):

@@ -13,6 +13,7 @@ from src.engine.error_detectors.base import (
     register_detector,
 )
 from src.utils.constants import LOGS_DIR, PROJECT_ROOT, TRADING_RULES
+from src.utils import kiwoom_utils
 
 
 SCAN_STATE_PATH = PROJECT_ROOT / "tmp" / "error_detector_kiwoom_auth_8005_state.json"
@@ -93,6 +94,7 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
         state = self._load_state()
         log_files = _get_target_log_files()
         files_state = state.setdefault("files", {})
+        state_load_error = bool(state.pop("_state_load_error", False))
         details: dict = {
             "target_logs": [path.name for path in log_files],
             "restart_flag_path": str(RESTART_FLAG_PATH),
@@ -104,8 +106,19 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
             for log_path in log_files:
                 self._baseline_file(log_path, files_state)
             details["baseline_initialized"] = True
+            if state_load_error:
+                details["state_load_error"] = True
             if not self.dry_run:
                 self._save_state(state)
+            if state_load_error:
+                return DetectionResult(
+                    detector_id=self.id,
+                    category=self.category,
+                    severity="warning",
+                    summary="Kiwoom auth 8005 detector state could not be loaded; baseline reset without scanning historical logs.",
+                    details=details,
+                    recommended_action="Verify the detector state file and run the next auth health check.",
+                )
             return DetectionResult(
                 detector_id=self.id,
                 category=self.category,
@@ -158,9 +171,19 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
         last_restart_ts = float(state.get("last_restart_ts", 0) or 0)
         cooldown_remaining = max(0, int(_cooldown_sec() - (now - last_restart_ts)))
         restart_count = int(state.get("restart_count", 0) or 0)
-        suppressed = cooldown_remaining > 0
+        daily_restart_cap = _daily_fail_threshold()
+        restart_cap_reached = restart_count >= daily_restart_cap
+        cooldown_active = cooldown_remaining > 0
+        suppressed = cooldown_active or restart_cap_reached
         would_restart = not suppressed
         restart_requested = False
+        cache_invalidated = False
+
+        if not self.dry_run:
+            try:
+                cache_invalidated = kiwoom_utils.invalidate_kiwoom_token_cache(reason="error_detector_auth_8005")
+            except Exception as exc:
+                details["token_cache_invalidation_error"] = str(exc)
 
         if not suppressed and not self.dry_run:
             RESTART_FLAG_PATH.touch()
@@ -178,7 +201,10 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
                 "fresh_auth_8005_samples": matches[:5],
                 "would_restart": would_restart,
                 "restart_requested": restart_requested,
-                "restart_suppressed_by_cooldown": suppressed,
+                "restart_suppressed_by_cooldown": cooldown_active,
+                "restart_suppressed_by_daily_cap": restart_cap_reached,
+                "daily_restart_cap": daily_restart_cap,
+                "token_cache_invalidated": cache_invalidated,
                 "cooldown_remaining_sec": cooldown_remaining,
                 "restart_count_date": today,
                 "restart_count": restart_count,
@@ -190,7 +216,13 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
             self._save_state(state)
 
         severity = "fail" if restart_count >= _daily_fail_threshold() else "warning"
-        if suppressed:
+        if restart_cap_reached:
+            summary = (
+                "Fresh Kiwoom auth 8005 detected, but restart.flag creation was suppressed "
+                "because the daily auth restart cap was reached."
+            )
+            action = "Stop the restart loop. Verify Kiwoom token issuance, account API auth, and WS/REST recovery manually."
+        elif suppressed:
             summary = (
                 "Fresh Kiwoom auth 8005 detected, but restart.flag creation was suppressed by cooldown."
             )
@@ -267,7 +299,7 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
         try:
             return json.loads(SCAN_STATE_PATH.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
-            return {}
+            return {"_state_load_error": True}
 
     @staticmethod
     def _save_state(state: dict) -> None:

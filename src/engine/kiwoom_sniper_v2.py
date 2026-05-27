@@ -204,6 +204,9 @@ _MARCAP_CACHE_TTL: int = 300  # 5분
 _ACCOUNT_SYNC_EXECUTOR: ThreadPoolExecutor | None = None
 _ACCOUNT_SYNC_IN_FLIGHT: bool = False
 _LOOP_METRICS_LAST_LOG_TS: float = 0.0
+_GATEKEEPER_REPORT_NOTIFY_TTL_SEC = 600.0
+_GATEKEEPER_REPORT_NOTIFY_RECENT: dict[str, float] = {}
+_GATEKEEPER_REPORT_NOTIFY_LOCK = threading.Lock()
 
 
 def _run_account_sync_with_cleanup():
@@ -293,26 +296,79 @@ def _publish_gatekeeper_report(stock, code, gatekeeper, allowed):
     """
     Gatekeeper 성공일때만 결과를 텔레그램으로 발행합니다.
     """
-    action_label = gatekeeper.get('action_label', 'UNKNOWN')
-    report = gatekeeper.get('report', '')
+    stock = stock or {}
+    gatekeeper = gatekeeper or {}
+    code = str(code or "").strip()[:6]
+    stock_name = str(stock.get('name') or code or 'UNKNOWN')
+    action_label = str(gatekeeper.get('action_label') or 'UNKNOWN')
+    action_key = str(gatekeeper.get('action_key') or '').strip()
+    cache_mode = str(gatekeeper.get('cache_mode') or '').strip()
+    report = str(gatekeeper.get('report') or '')
     # 리포트가 길면 첫 200자만 사용
     preview = report[:200] + ('...' if len(report) > 200 else '')
     status = '승인' if allowed else '거부'
-    strategy = str((stock or {}).get('strategy') or '').strip().upper()
+    if not allowed:
+        log_info(
+            f"[Gatekeeper 알림 생략] non_approval source_only "
+            f"{stock_name}({code}) action={action_label}"
+        )
+        return
+    if (
+        action_key == 'not_evaluated_score_vpw_prior'
+        or action_label == 'NOT_EVALUATED_SCORE_VPW_PRIOR'
+        or cache_mode == 'not_evaluated'
+    ):
+        return
+    strategy = str(stock.get('strategy') or '').strip().upper()
     simulation_context = (
-        bool((stock or {}).get('swing_live_order_dry_run'))
-        or bool((stock or {}).get('scalp_live_simulator'))
-        or bool((stock or {}).get('simulation_owner'))
-        or bool((stock or {}).get('simulation_book'))
+        bool(stock.get('swing_live_order_dry_run'))
+        or bool(stock.get('scalp_live_simulator'))
+        or bool(stock.get('simulation_owner'))
+        or bool(stock.get('simulation_book'))
+        or bool(stock.get('simulated_order'))
+        or stock.get('actual_order_submitted') is False
         or (
             strategy in {'KOSPI_ML', 'KOSDAQ_ML', 'MAIN'}
             and bool(getattr(TRADING_RULES, 'SWING_LIVE_ORDER_DRY_RUN_ENABLED', True))
         )
     )
-    audience = 'ADMIN_ONLY' if simulation_context else 'VIP_ALL'
+    if simulation_context:
+        log_info(
+            f"[Gatekeeper 알림 생략] simulation_context source_only "
+            f"{stock_name}({code}) action={action_label}"
+        )
+        return
+    if allowed:
+        now_ts = time.time()
+        dedup_key = "|".join(
+            [
+                code,
+                strategy,
+                action_label,
+                action_key,
+                str(preview or ""),
+            ]
+        )
+        with _GATEKEEPER_REPORT_NOTIFY_LOCK:
+            last_sent_at = _GATEKEEPER_REPORT_NOTIFY_RECENT.get(dedup_key, 0.0)
+            if now_ts - last_sent_at < _GATEKEEPER_REPORT_NOTIFY_TTL_SEC:
+                log_info(
+                    f"[Gatekeeper 알림 중복 생략] {stock_name}({code}) "
+                    f"action={action_label} ttl_sec={int(_GATEKEEPER_REPORT_NOTIFY_TTL_SEC)}"
+                )
+                return
+            _GATEKEEPER_REPORT_NOTIFY_RECENT[dedup_key] = now_ts
+            stale_keys = [
+                key
+                for key, sent_at in list(_GATEKEEPER_REPORT_NOTIFY_RECENT.items())
+                if now_ts - sent_at > (_GATEKEEPER_REPORT_NOTIFY_TTL_SEC * 6)
+            ]
+            for key in stale_keys:
+                _GATEKEEPER_REPORT_NOTIFY_RECENT.pop(key, None)
+    audience = 'VIP_ALL'
     msg = (
         f"🤖 <b>[Gatekeeper {status}]</b>\n"
-        f"🎯 종목: {stock['name']} ({code})\n"
+        f"🎯 종목: {stock_name} ({code})\n"
         f"⚡ 판정: <b>{action_label}</b>\n"
         f"📄 리포트: {preview}"
     )

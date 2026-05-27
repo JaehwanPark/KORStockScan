@@ -28,6 +28,7 @@ _IGNORED_LINE_PATTERNS: list[re.Pattern] = [
     re.compile(r"\b123456\b"),
     re.compile(r"_DummySession"),
     re.compile(r"\bbus fail\b"),
+    re.compile(r"/tmp/pytest-of-[^/\s]+/"),
 ]
 _ERROR_CANDIDATE_PATTERN = re.compile(
     r"(?:\berror\b|\bcritical\b|\bfatal\b|traceback|exception|🚨|❌|에러|오류|실패)",

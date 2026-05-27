@@ -247,7 +247,10 @@ def handle_system_health_alert(event_data):
         return
     import html as _html
     safe_message = _html.escape(str(message))
-    formatted = f"🚨 <b>[ERROR DETECTION]</b>\n<code>{safe_message}</code>\n\n<i>report-only, no runtime mutation performed</i>"
+    formatted = (
+        f"🚨 <b>[ERROR DETECTION]</b>\n<code>{safe_message}</code>\n\n"
+        "<i>Telegram alert only; detector recovery actions are reported in the health artifact.</i>"
+    )
     _send_to_admin(formatted, parse_mode="HTML")
 
 

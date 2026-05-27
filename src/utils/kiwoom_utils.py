@@ -189,6 +189,63 @@ def _write_cached_kiwoom_token(config: dict, token: str, response_payload: dict,
         log_error(f"❌ [TOKEN CACHE] 캐시 저장 실패: {path} ({exc})")
 
 
+def invalidate_kiwoom_token_cache(reason: str = "") -> bool:
+    path = _kiwoom_token_cache_path()
+    reason_text = f" reason={reason}" if reason else ""
+    try:
+        with _kiwoom_token_file_lock():
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                log_info(f"🔐 [TOKEN CACHE] invalidate skipped; cache missing.{reason_text}")
+                return False
+            log_info(f"🔐 [TOKEN CACHE] invalidated stale Kiwoom token cache.{reason_text}")
+            return True
+    except Exception as exc:
+        log_error(f"❌ [TOKEN CACHE] invalidate failed: {path} ({exc}){reason_text}")
+        return False
+
+
+def _is_kiwoom_auth_8005_response(payload: dict | None) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    code = str(
+        payload.get("return_code")
+        or payload.get("rt_cd")
+        or payload.get("error_code")
+        or payload.get("code")
+        or ""
+    )
+    msg = str(
+        payload.get("return_msg")
+        or payload.get("msg1")
+        or payload.get("error_message")
+        or payload.get("message")
+        or ""
+    )
+    combined = f"{code} {msg}"
+    return (
+        "8005" in combined
+        or "Token이 유효하지" in combined
+        or ("토큰" in combined and "유효" in combined)
+    )
+
+
+def _refresh_kiwoom_token_after_8005(api_id: str) -> str | None:
+    reason = f"api_8005_retry:{api_id}"
+    try:
+        invalidate_kiwoom_token_cache(reason=reason)
+        refreshed = get_kiwoom_token(force_refresh=True)
+    except Exception as exc:
+        log_error(f"❌ [{api_id}] 8005 감지 후 Kiwoom token force refresh 예외: {exc}")
+        return None
+    if refreshed:
+        log_info(f"🔐 [{api_id}] 8005 감지 후 Kiwoom token force refresh 성공 (1회 retry 예정)")
+    else:
+        log_error(f"❌ [{api_id}] 8005 감지 후 Kiwoom token force refresh 실패")
+    return refreshed
+
+
 @contextmanager
 def _kiwoom_token_file_lock():
     lock_path = _kiwoom_token_lock_path()
@@ -2144,21 +2201,22 @@ def fetch_kiwoom_api_continuous(url: str, token: str, api_id: str, payload: dict
     all_results = []
     cont_yn = 'N'
     next_key = ''
+    active_token = token
+    auth_retry_used = False
     
     while True:
-        headers = {
-            'Content-Type': 'application/json;charset=UTF-8',
-            'authorization': f'Bearer {token}',
-            'cont-yn': cont_yn,
-            'next-key': next_key,
-            'api-id': api_id,
-        }
-
         retry_count = 0
         response = None
         
         # 💡 [핵심 방어] 429 에러 발생 시 백오프(Back-off) 후 재시도
         while retry_count < max_retries:
+            headers = {
+                'Content-Type': 'application/json;charset=UTF-8',
+                'authorization': f'Bearer {active_token}',
+                'cont-yn': cont_yn,
+                'next-key': next_key,
+                'api-id': api_id,
+            }
             try:
                 response = requests.post(
                     url,
@@ -2212,8 +2270,22 @@ def fetch_kiwoom_api_continuous(url: str, token: str, api_id: str, payload: dict
         res_json = response.json()
         
         # return_code 체크 (정상이 아니면 경고 후 응답값 저장)
-        if str(res_json.get('return_code', '0')) != '0':
+        response_code = str(res_json.get('return_code', res_json.get('rt_cd', '0')))
+        if response_code != '0':
             log_info(f"⚠️ [{api_id}] API 거절 사유: {res_json.get('return_msg', '알 수 없는 에러')}")
+            if _is_kiwoom_auth_8005_response(res_json):
+                if auth_retry_used:
+                    log_error(f"🚨 [{api_id}] 8005 token refresh retry 후에도 인증 실패. 조회를 중단합니다.")
+                    all_results.append(res_json)
+                    break
+                auth_retry_used = True
+                refreshed_token = _refresh_kiwoom_token_after_8005(api_id)
+                if refreshed_token:
+                    active_token = refreshed_token
+                    response = None
+                    continue
+                all_results.append(res_json)
+                break
             
         all_results.append(res_json)
         

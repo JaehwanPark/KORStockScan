@@ -58,23 +58,38 @@ def _write_state(path: Path, state: dict) -> None:
     path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _fail_results(report: dict) -> list[dict]:
+def _is_alert_result(item: dict) -> bool:
+    severity = str(item.get("severity") or "").lower()
+    if severity == "fail":
+        return True
+    return (
+        severity == "warning"
+        and str(item.get("detector_id") or "") == "kiwoom_auth_8005_restart"
+    )
+
+
+def _alert_results(report: dict) -> list[dict]:
     results = report.get("results")
     if not isinstance(results, list):
         return []
     return [
         item
         for item in results
-        if isinstance(item, dict) and str(item.get("severity") or "").lower() == "fail"
+        if isinstance(item, dict) and _is_alert_result(item)
     ]
+
+
+def _fail_results(report: dict) -> list[dict]:
+    return _alert_results(report)
 
 
 def _signature(report: dict, fail_results: list[dict]) -> str:
     payload = {
         "summary_severity": report.get("summary_severity"),
-        "failures": [
+        "alerts": [
             {
                 "detector_id": item.get("detector_id"),
+                "severity": item.get("severity"),
                 "summary": item.get("summary"),
             }
             for item in fail_results
@@ -87,18 +102,19 @@ def _signature(report: dict, fail_results: list[dict]) -> str:
 def _build_message(report: dict, fail_results: list[dict], *, mode: str, log_file: str) -> str:
     timestamp = report.get("timestamp") or "-"
     lines = [
-        "[KORStockScan] ERROR DETECTION FAIL",
+        "[KORStockScan] ERROR DETECTION ALERT",
         f"- mode: {mode}",
         f"- timestamp: {timestamp}",
-        f"- fail_count: {len(fail_results)}",
+        f"- alert_count: {len(fail_results)}",
         f"- log: {log_file}",
         "- runtime mutation: none",
     ]
     for item in fail_results[:5]:
         detector_id = item.get("detector_id") or "-"
+        severity = item.get("severity") or "-"
         summary = item.get("summary") or "-"
         action = item.get("recommended_action") or "-"
-        lines.append(f"- {detector_id}: {summary}")
+        lines.append(f"- {detector_id} [{severity}]: {summary}")
         if action != "-":
             lines.append(f"  action: {action}")
     return "\n".join(lines)
@@ -122,9 +138,9 @@ def notify_from_report(
         return "disabled"
 
     report = _load_report(report_file)
-    fail_results = _fail_results(report)
+    fail_results = _alert_results(report)
     if not fail_results:
-        return "no_fail"
+        return "no_alert"
 
     now = time.time() if now_ts is None else now_ts
     sig = _signature(report, fail_results)

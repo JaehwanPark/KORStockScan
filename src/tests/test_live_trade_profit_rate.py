@@ -422,6 +422,7 @@ def test_periodic_account_sync_recovers_order_ref_when_kt00008_empty(monkeypatch
 
 def test_sync_balance_with_db_requests_restart_on_auth_failure(tmp_path, monkeypatch):
     restart_flag = tmp_path / "restart.flag"
+    invalidations = []
     sniper_sync.KIWOOM_TOKEN = "token"
     sniper_sync.DB = _SyncDB([], [])
     sniper_sync.ACTIVE_TARGETS = []
@@ -440,11 +441,36 @@ def test_sync_balance_with_db_requests_restart_on_auth_failure(tmp_path, monkeyp
         "get_last_inventory_errors",
         lambda: [{"return_code": "8005", "return_msg": "Token이 유효하지 않습니다"}],
     )
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "invalidate_kiwoom_token_cache",
+        lambda reason="": invalidations.append(reason) or True,
+    )
     monkeypatch.setattr(sniper_sync.time, "sleep", lambda _: None)
 
     sniper_sync.sync_balance_with_db()
 
     assert restart_flag.exists() is True
+    assert invalidations == ["auth_restart:인증 실패(8005)"]
+
+
+def test_auth_restart_cooldown_still_invalidates_token_cache(tmp_path, monkeypatch):
+    restart_flag = tmp_path / "restart.flag"
+    invalidations = []
+    sniper_sync._LAST_AUTH_RESTART_TS = 1_000.0
+
+    monkeypatch.setattr(sniper_sync, "RESTART_FLAG_PATH", restart_flag)
+    monkeypatch.setattr(sniper_sync.time, "time", lambda: 1_030.0)
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "invalidate_kiwoom_token_cache",
+        lambda reason="": invalidations.append(reason) or True,
+    )
+
+    assert sniper_sync._request_auth_restart("인증 실패(8005)") is False
+
+    assert not restart_flag.exists()
+    assert invalidations == ["auth_restart:인증 실패(8005)"]
 
 
 def test_ensure_runtime_target_recovers_order_refs_from_logs(monkeypatch):
@@ -540,10 +566,11 @@ def test_s15_candidate_does_not_store_expiry_in_profit_rate():
 def test_holding_state_uses_net_profit_rate_for_sell_decision(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
-        STOP_LOSS_BULL=0.0,
-        STOP_LOSS_BEAR=0.0,
+        STOP_LOSS_BULL=0.001,
+        STOP_LOSS_BEAR=0.001,
         HOLDING_DAYS=99,
         SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SWING_LIVE_ORDER_DRY_RUN_ENABLED=False,
     )
     state_handlers.KIWOOM_TOKEN = "token"
     state_handlers.COOLDOWNS = {}

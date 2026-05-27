@@ -172,6 +172,27 @@ class TestLogScanner:
             assert errors == 1
             assert counter == {"TIMEOUT_ERROR": 1}
 
+    def test_scan_file_ignores_pytest_tmp_fixture_leakage(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_file = Path(tmpdir) / "kiwoom_utils_error.log"
+            log_file.write_text(
+                "\n".join([
+                    "[2026-05-27 10:49:41] 🚨 ERROR in kiwoom_utils: "
+                    "❌ [TOKEN CACHE] 캐시 로드 실패: "
+                    "/tmp/pytest-of-ubuntu/pytest-34/test_token/kiwoom_token_cache.json",
+                    "[2026-05-27 10:49:41] 🚨 ERROR in kiwoom_utils: "
+                    "🚨 [kt00008] 8005 token refresh retry 후에도 인증 실패. 조회를 중단합니다.",
+                ]),
+                encoding="utf-8",
+            )
+
+            scanner = LogScanner()
+            counter = __import__("collections").Counter()
+            errors, _, _ = scanner._scan_file(log_file, 0, counter)
+
+            assert errors == 1
+            assert counter == {"UNKNOWN": 1}
+
     def test_scan_file_ignores_info_db_success_lines_in_error_log(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             log_file = Path(tmpdir) / "update_kospi_error.log"

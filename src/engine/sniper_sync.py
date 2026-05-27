@@ -85,18 +85,26 @@ def _request_auth_restart(reason, error_detail=None):
     cooldown_sec = int(getattr(TRADING_RULES, "KIWOOM_AUTH_RESTART_COOLDOWN_SEC", 120) or 120)
     now_ts = time.time()
     detail_str = f" | detail={error_detail}" if error_detail else ""
+    try:
+        cache_invalidated = kiwoom_utils.invalidate_kiwoom_token_cache(reason=f"auth_restart:{reason}")
+    except Exception as exc:
+        cache_invalidated = False
+        log_error(f"❌ [AUTH TOKEN CACHE INVALIDATE FAILED] reason={reason} error={exc}{detail_str}")
     if cooldown_sec > 0 and (now_ts - _LAST_AUTH_RESTART_TS) < cooldown_sec:
         wait_left = max(0.0, float(cooldown_sec) - (now_ts - _LAST_AUTH_RESTART_TS))
         log_info(
             f"⏸️ [AUTH RESTART SKIP] cooldown={cooldown_sec}s wait_left={wait_left:.1f}s "
-            f"reason={reason}{detail_str}"
+            f"token_cache_invalidated={cache_invalidated} reason={reason}{detail_str}"
         )
         return False
 
     try:
         RESTART_FLAG_PATH.touch()
         _LAST_AUTH_RESTART_TS = now_ts
-        log_error(f"🚨 [AUTH RESTART REQUESTED] restart.flag set | reason={reason}{detail_str}")
+        log_error(
+            f"🚨 [AUTH RESTART REQUESTED] restart.flag set | "
+            f"token_cache_invalidated={cache_invalidated} reason={reason}{detail_str}"
+        )
         return True
     except Exception as exc:
         log_error(f"❌ [AUTH RESTART REQUEST FAILED] reason={reason} error={exc}{detail_str}")

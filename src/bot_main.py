@@ -203,10 +203,13 @@ def error_detection_loop(interval: int, event_bus):
                 prev_summary_hash = prev.get("summary_hash", "")
                 prev_ts = prev.get("ts", 0)
                 curr_summary_hash = str(hash(r.summary))
+                is_alert_severity = r.severity == "fail" or (
+                    r.detector_id == "kiwoom_auth_8005_restart" and r.severity == "warning"
+                )
 
-                if r.severity == "fail":
+                if is_alert_severity:
                     ed_log_error(f"[ERROR_DETECTION] {r.detector_id}: {r.summary}")
-                    is_transition = prev_severity != "fail"
+                    is_transition = prev_severity != r.severity
                     is_new_summary = curr_summary_hash != prev_summary_hash
                     cooldown_ok = (now_ts - prev_ts) >= ALERT_COOLDOWN_SEC
                     if is_transition or (is_new_summary and cooldown_ok):
@@ -218,8 +221,8 @@ def error_detection_loop(interval: int, event_bus):
                                 "parse_mode": "HTML",
                             },
                         )
-                        alert_state[did] = {"severity": "fail", "summary_hash": curr_summary_hash, "ts": now_ts}
-                elif r.severity == "pass" and prev_severity == "fail":
+                        alert_state[did] = {"severity": r.severity, "summary_hash": curr_summary_hash, "ts": now_ts}
+                elif r.severity == "pass" and prev_severity in {"fail", "warning"}:
                     ed_log_info(f"[ERROR_DETECTION] {r.detector_id}: recovered to pass")
                     alert_state[did] = {"severity": "pass", "summary_hash": "", "ts": now_ts}
         except Exception as e:

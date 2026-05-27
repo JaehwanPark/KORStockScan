@@ -5,7 +5,7 @@ import json
 import re
 import time
 import math
-from datetime import datetime, timedelta
+from datetime import date as date_cls, datetime, timedelta
 from uuid import uuid4
 
 import numpy as np
@@ -1754,17 +1754,22 @@ def _has_duplicate_swing_probe(code: str, strategy: str, origin_stage: str) -> b
 def _log_swing_probe_discard(stock, code, origin_stage: str, reason: str, **fields) -> bool:
     now_ts = _safe_float(fields.pop("_now_ts", None), time.time())
     min_interval = max(0, _rule_int("SWING_INTRADAY_PROBE_DISCARD_LOG_MIN_INTERVAL_SEC", 60))
+    normalized_reason = str(reason or "")
+    global_quota_reasons = {"max_open_reached", "origin_quota_reached"}
     record_id = str(
         (stock or {}).get("id")
         or (stock or {}).get("source_record_id")
         or fields.get("source_record_id")
         or ""
     )
-    key = (str(code or "").strip()[:6], record_id, str(origin_stage or ""), str(reason or ""))
+    dedup_code = "*" if normalized_reason in global_quota_reasons else str(code or "").strip()[:6]
+    dedup_record_id = "*" if normalized_reason in global_quota_reasons else record_id
+    key = (dedup_code, dedup_record_id, str(origin_stage or ""), normalized_reason)
     last_ts = _SWING_PROBE_DISCARD_LOG_TS.get(key)
     if min_interval > 0 and last_ts is not None and (now_ts - last_ts) < min_interval:
         return False
     _SWING_PROBE_DISCARD_LOG_TS[key] = now_ts
+    quota_scope = "global_probe_quota" if normalized_reason in global_quota_reasons else "symbol_probe_quota"
     _log_entry_pipeline(
         stock,
         code,
@@ -1772,7 +1777,11 @@ def _log_swing_probe_discard(stock, code, origin_stage: str, reason: str, **fiel
         **_swing_probe_event_fields(
             stock,
             probe_origin_stage=origin_stage,
-            discard_reason=reason,
+            discard_reason=normalized_reason,
+            blocker_authority="probe_capacity_only",
+            quota_observation_scope=quota_scope,
+            hard_gate=False,
+            allowed_runtime_apply=False,
             **fields,
         ),
     )
@@ -5724,6 +5733,21 @@ def _soft_stop_expert_time_gate_active(now_ts: float) -> bool:
         except ValueError:
             continue
     return True
+
+
+def _parse_holding_entry_date(value, *, fallback_now: datetime | None = None) -> date_cls:
+    fallback = fallback_now or datetime.now()
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date_cls):
+        return value
+    text = str(value or "").strip()
+    if not text:
+        return fallback.date()
+    try:
+        return datetime.fromisoformat(text).date()
+    except ValueError:
+        return datetime.strptime(text[:10], "%Y-%m-%d").date()
 
 
 def _normalize_soft_stop_expert_features(stock: dict) -> tuple[dict, bool]:
@@ -10328,94 +10352,134 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                             missing_allow_flag=has_last_allow_flag,
                         ),
                     )
-                    try:
-                        realtime_ctx = kiwoom_utils.build_realtime_analysis_context(
-                            token=KIWOOM_TOKEN,
-                            code=code,
-                            ws_data=ws_data,
-                            market_cap=_resolve_stock_marcap(stock, code),
-                            strat_label=strategy,
-                            position_status='NONE',
-                            avg_price=0,
-                            pnl_pct=0.0,
-                            trailing_pct=0.0,
-                            stop_pct=0.0,
-                            target_price=curr_price,
-                            target_reason='WATCHING 최종 진입 Gatekeeper 검증',
-                            score=float(score),
-                            conclusion=conclusion,
-                            quant_metrics=metrics,
-                        )
-                        gatekeeper_started_at = time.perf_counter()
-                        gatekeeper = ai_engine.evaluate_realtime_gatekeeper(
-                            stock_name=stock['name'],
-                            stock_code=code,
-                            realtime_ctx=realtime_ctx,
-                            analysis_mode='SWING',
-                        )
-                        gatekeeper_eval_ms = int((time.perf_counter() - gatekeeper_started_at) * 1000)
-                        gatekeeper['eval_ms'] = gatekeeper_eval_ms
-                        record_gatekeeper_snapshot(stock=stock, code=code, strategy=strategy, realtime_ctx=realtime_ctx, gatekeeper=gatekeeper)
-                        is_new_evaluation = True
-                        _mutate_stock_state(
-                            stock,
-                            set_fields={
-                                'last_gatekeeper_action_at': now_ts,
-                                'last_gatekeeper_allow_entry_at': now_ts,
-                                'last_gatekeeper_fast_snapshot': gatekeeper_fast_snapshot,
-                                'last_gatekeeper_fast_at': now_ts,
-                            },
-                        )
-                        with ENTRY_LOCK:
-                            LAST_AI_CALL_TIMES[code] = now_ts
-                        action_label = gatekeeper.get('action_label', 'UNKNOWN')
-                        action_key = normalize_gatekeeper_action_key(gatekeeper.get('action_key') or action_label)
-                        gatekeeper_allow = bool(gatekeeper.get('allow_entry', False))
-                        gatekeeper_cache_mode = str(gatekeeper.get('cache_mode', 'hit' if gatekeeper.get('cache_hit') else 'miss'))
-                        _mutate_stock_state(
-                            stock,
-                            set_fields={
-                                'last_gatekeeper_action': action_label,
-                                'last_gatekeeper_action_key': action_key,
-                                'last_gatekeeper_report': gatekeeper.get('report', ''),
-                                'last_gatekeeper_eval_ms': gatekeeper_eval_ms,
-                                'last_gatekeeper_allow_entry': gatekeeper_allow,
-                                'last_gatekeeper_cache_mode': gatekeeper_cache_mode,
-                                'last_gatekeeper_lock_wait_ms': int(gatekeeper.get('lock_wait_ms', 0) or 0),
-                                'last_gatekeeper_packet_build_ms': int(gatekeeper.get('packet_build_ms', 0) or 0),
-                                'last_gatekeeper_model_call_ms': int(gatekeeper.get('model_call_ms', 0) or 0),
-                                'last_gatekeeper_total_internal_ms': int(gatekeeper.get('total_internal_ms', 0) or 0),
-                                'last_gatekeeper_fast_signature': gatekeeper_fast_sig,
-                            },
-                        )
-                        if is_new_evaluation and realtime_ctx is not None:
-                            _submit_gatekeeper_dual_persona_shadow(
-                                stock_name=stock['name'],
-                                code=code,
-                                strategy=strategy,
-                                realtime_ctx=realtime_ctx,
-                                gatekeeper=gatekeeper,
-                                record_id=stock.get('id'),
-                            )
-                    except Exception as e:
-                        log_error(f"🚨 [{strategy} Gatekeeper 오류] {stock['name']}({code}): {e}")
+                    reject_cache_gatekeeper = _build_gatekeeper_reject_cache_result(
+                        stock,
+                        score=score,
+                        curr_price=curr_price,
+                        gap_pct=fluctuation,
+                        now_ts=now_ts,
+                    )
+                    if reject_cache_gatekeeper is not None:
+                        gatekeeper = reject_cache_gatekeeper
+                        gatekeeper_eval_ms = 0
+                        gatekeeper_cache_age_str = f"{float(gatekeeper.get('cache_age_sec', 0.0) or 0.0):.2f}"
                         _log_entry_pipeline(
-                            stock, code, "blocked_gatekeeper_error", strategy=strategy, cooldown_sec=0,
-                            gatekeeper_eval_ms=gatekeeper_eval_ms,
-                            gatekeeper_lock_wait_ms=stock.get('last_gatekeeper_lock_wait_ms', 0),
-                            gatekeeper_packet_build_ms=stock.get('last_gatekeeper_packet_build_ms', 0),
-                            gatekeeper_model_call_ms=stock.get('last_gatekeeper_model_call_ms', 0),
-                            gatekeeper_total_internal_ms=stock.get('last_gatekeeper_total_internal_ms', 0),
+                            stock,
+                            code,
+                            "gatekeeper_reject_cache_reuse",
+                            strategy=strategy,
+                            action=gatekeeper.get('action_label', 'UNKNOWN'),
+                            action_key=gatekeeper.get('action_key', 'unknown'),
+                            age_sec=gatekeeper_cache_age_str,
+                            ttl_sec=int(float(gatekeeper.get('cache_sec', 0.0) or 0.0)),
+                            score=round(float(score), 2),
+                            cache_authority="baseline_prior_feature_only",
+                            runtime_effect=False,
                         )
-                        gatekeeper = {
-                            'allow_entry': None,
-                            'action_label': 'GATEKEEPER_ERROR',
-                            'action_key': 'gatekeeper_error',
-                            'report': '',
-                            'eval_ms': gatekeeper_eval_ms,
-                            'cache_hit': False,
-                            'cache_mode': 'error',
-                        }
+                        _mutate_stock_state(
+                            stock,
+                            set_fields={
+                                'last_gatekeeper_cache_mode': 'reject_cache',
+                                'last_gatekeeper_eval_ms': 0,
+                                'last_gatekeeper_lock_wait_ms': 0,
+                                'last_gatekeeper_packet_build_ms': 0,
+                                'last_gatekeeper_model_call_ms': 0,
+                                'last_gatekeeper_total_internal_ms': 0,
+                            },
+                        )
+                        is_new_evaluation = False
+                    else:
+                        try:
+                            realtime_ctx = kiwoom_utils.build_realtime_analysis_context(
+                                token=KIWOOM_TOKEN,
+                                code=code,
+                                ws_data=ws_data,
+                                market_cap=_resolve_stock_marcap(stock, code),
+                                strat_label=strategy,
+                                position_status='NONE',
+                                avg_price=0,
+                                pnl_pct=0.0,
+                                trailing_pct=0.0,
+                                stop_pct=0.0,
+                                target_price=curr_price,
+                                target_reason='WATCHING 최종 진입 Gatekeeper 검증',
+                                score=float(score),
+                                conclusion=conclusion,
+                                quant_metrics=metrics,
+                            )
+                            gatekeeper_started_at = time.perf_counter()
+                            gatekeeper = ai_engine.evaluate_realtime_gatekeeper(
+                                stock_name=stock['name'],
+                                stock_code=code,
+                                realtime_ctx=realtime_ctx,
+                                analysis_mode='SWING',
+                            )
+                            gatekeeper_eval_ms = int((time.perf_counter() - gatekeeper_started_at) * 1000)
+                            gatekeeper['eval_ms'] = gatekeeper_eval_ms
+                            record_gatekeeper_snapshot(stock=stock, code=code, strategy=strategy, realtime_ctx=realtime_ctx, gatekeeper=gatekeeper)
+                            is_new_evaluation = True
+                            _mutate_stock_state(
+                                stock,
+                                set_fields={
+                                    'last_gatekeeper_action_at': now_ts,
+                                    'last_gatekeeper_allow_entry_at': now_ts,
+                                    'last_gatekeeper_fast_snapshot': gatekeeper_fast_snapshot,
+                                    'last_gatekeeper_fast_at': now_ts,
+                                },
+                            )
+                            with ENTRY_LOCK:
+                                LAST_AI_CALL_TIMES[code] = now_ts
+                            action_label = gatekeeper.get('action_label', 'UNKNOWN')
+                            action_key = normalize_gatekeeper_action_key(gatekeeper.get('action_key') or action_label)
+                            gatekeeper_allow = bool(gatekeeper.get('allow_entry', False))
+                            gatekeeper_cache_mode = str(gatekeeper.get('cache_mode', 'hit' if gatekeeper.get('cache_hit') else 'miss'))
+                            _mutate_stock_state(
+                                stock,
+                                set_fields={
+                                    'last_gatekeeper_action': action_label,
+                                    'last_gatekeeper_action_key': action_key,
+                                    'last_gatekeeper_report': gatekeeper.get('report', ''),
+                                    'last_gatekeeper_eval_ms': gatekeeper_eval_ms,
+                                    'last_gatekeeper_allow_entry': gatekeeper_allow,
+                                    'last_gatekeeper_cache_mode': gatekeeper_cache_mode,
+                                    'last_gatekeeper_lock_wait_ms': int(gatekeeper.get('lock_wait_ms', 0) or 0),
+                                    'last_gatekeeper_packet_build_ms': int(gatekeeper.get('packet_build_ms', 0) or 0),
+                                    'last_gatekeeper_model_call_ms': int(gatekeeper.get('model_call_ms', 0) or 0),
+                                    'last_gatekeeper_total_internal_ms': int(gatekeeper.get('total_internal_ms', 0) or 0),
+                                    'last_gatekeeper_fast_signature': gatekeeper_fast_sig,
+                                    'last_gatekeeper_score': float(score),
+                                    'last_gatekeeper_curr_price': curr_price,
+                                    'last_gatekeeper_gap_pct': float(fluctuation),
+                                },
+                            )
+                            if is_new_evaluation and realtime_ctx is not None:
+                                _submit_gatekeeper_dual_persona_shadow(
+                                    stock_name=stock['name'],
+                                    code=code,
+                                    strategy=strategy,
+                                    realtime_ctx=realtime_ctx,
+                                    gatekeeper=gatekeeper,
+                                    record_id=stock.get('id'),
+                                )
+                        except Exception as e:
+                            log_error(f"🚨 [{strategy} Gatekeeper 오류] {stock['name']}({code}): {e}")
+                            _log_entry_pipeline(
+                                stock, code, "blocked_gatekeeper_error", strategy=strategy, cooldown_sec=0,
+                                gatekeeper_eval_ms=gatekeeper_eval_ms,
+                                gatekeeper_lock_wait_ms=stock.get('last_gatekeeper_lock_wait_ms', 0),
+                                gatekeeper_packet_build_ms=stock.get('last_gatekeeper_packet_build_ms', 0),
+                                gatekeeper_model_call_ms=stock.get('last_gatekeeper_model_call_ms', 0),
+                                gatekeeper_total_internal_ms=stock.get('last_gatekeeper_total_internal_ms', 0),
+                            )
+                            gatekeeper = {
+                                'allow_entry': None,
+                                'action_label': 'GATEKEEPER_ERROR',
+                                'action_key': 'gatekeeper_error',
+                                'report': '',
+                                'eval_ms': gatekeeper_eval_ms,
+                                'cache_hit': False,
+                                'cache_mode': 'error',
+                            }
 
             action_label = gatekeeper.get('action_label', 'UNKNOWN')
             action_key = normalize_gatekeeper_action_key(gatekeeper.get('action_key') or action_label)
@@ -11253,6 +11317,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
 
     successful_orders = []
     swing_order_dry_run = _is_swing_live_order_dry_run(strategy) and swing_one_share_real_canary_fields is None
+    broker_order_forbidden_for_request = bool(swing_order_dry_run)
     swing_one_share_real_canary_non_verdict_fields = {
         k: v
         for k, v in (swing_one_share_real_canary_fields or {}).items()
@@ -11316,7 +11381,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             **price_snapshot,
             **swing_entry_micro_fields,
             actual_order_submitted=False,
-            broker_order_forbidden=False,
+            broker_order_forbidden=broker_order_forbidden_for_request,
             **swing_one_share_real_canary_non_verdict_fields,
         )
         if swing_order_dry_run:
@@ -11344,6 +11409,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 order_type=request['order_type_code'], tif=request['tif'],
                 simulation_owner=_swing_live_order_dry_run_owner(),
                 actual_order_submitted=False,
+                broker_order_forbidden=True,
                 would_submit_stage="order_leg_sent",
                 **submit_revalidation_fields,
                 **price_snapshot,
@@ -11476,6 +11542,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             order_price=int(latency_gate.get('order_price', 0) or 0),
             simulation_owner=_swing_live_order_dry_run_owner(),
             actual_order_submitted=False,
+            broker_order_forbidden=True,
             would_submit_stage="order_bundle_submitted",
             runtime_effect="in_memory_holding_only",
             **submit_revalidation_fields,
@@ -11627,6 +11694,66 @@ def _resolve_holding_ai_fast_reuse_sec(is_critical_zone, dynamic_max_cd):
 def _resolve_gatekeeper_fast_reuse_sec():
     configured_sec = float(_rule('AI_GATEKEEPER_FAST_REUSE_SEC', 12.0) or 12.0)
     return max(configured_sec, 20.0)
+
+
+def _resolve_gatekeeper_reject_cache_sec():
+    configured_sec = _rule_float("AI_GATEKEEPER_REJECT_CACHE_SEC", 90.0)
+    return max(configured_sec, 30.0)
+
+
+def _build_gatekeeper_reject_cache_result(stock, *, score, curr_price, gap_pct, now_ts):
+    """Reuse only recent reject priors; never use this path to create a fresh allow."""
+    if bool(stock.get('last_gatekeeper_allow_entry', True)):
+        return None
+    action_label = str(stock.get('last_gatekeeper_action') or '').strip()
+    if not action_label:
+        return None
+    action_key = normalize_gatekeeper_action_key(stock.get('last_gatekeeper_action_key') or action_label)
+    cache_mode = str(stock.get('last_gatekeeper_cache_mode') or '').strip()
+    if (
+        action_key == 'unknown'
+        or action_key in {'gatekeeper_missing', 'gatekeeper_error', 'not_evaluated_score_vpw_prior'}
+        or cache_mode in {'missing', 'error', 'not_evaluated'}
+        or action_label in {'GATEKEEPER_MISSING', 'GATEKEEPER_ERROR', 'NOT_EVALUATED_SCORE_VPW_PRIOR'}
+    ):
+        return None
+    cache_sec = _resolve_gatekeeper_reject_cache_sec()
+    action_age_sec = _resolve_reference_age_sec(stock.get('last_gatekeeper_action_at'), now_ts=now_ts)
+    if action_age_sec is None or action_age_sec >= cache_sec:
+        return None
+
+    previous_score = _safe_float(stock.get('last_gatekeeper_score'), None)
+    score_delta = None if previous_score is None else float(score or 0.0) - previous_score
+    if score_delta is not None and score_delta >= _rule_float("AI_GATEKEEPER_REJECT_CACHE_SCORE_IMPROVE_DELTA", 5.0):
+        return None
+
+    previous_price = _safe_float(stock.get('last_gatekeeper_curr_price'), None)
+    price_change_pct = 0.0
+    if previous_price and curr_price:
+        price_change_pct = abs((float(curr_price) - previous_price) / previous_price) * 100.0
+    if price_change_pct >= _rule_float("AI_GATEKEEPER_REJECT_CACHE_PRICE_CHANGE_PCT", 0.8):
+        return None
+
+    previous_gap = _safe_float(stock.get('last_gatekeeper_gap_pct'), None)
+    gap_delta = 0.0 if previous_gap is None else abs(float(gap_pct or 0.0) - previous_gap)
+    if gap_delta >= _rule_float("AI_GATEKEEPER_REJECT_CACHE_GAP_DELTA_PCT", 0.6):
+        return None
+
+    return {
+        'allow_entry': False,
+        'action_label': action_label,
+        'action_key': action_key,
+        'report': stock.get('last_gatekeeper_report', ''),
+        'eval_ms': 0,
+        'lock_wait_ms': 0,
+        'packet_build_ms': 0,
+        'model_call_ms': 0,
+        'total_internal_ms': 0,
+        'cache_hit': True,
+        'cache_mode': 'reject_cache',
+        'cache_age_sec': action_age_sec,
+        'cache_sec': cache_sec,
+    }
 
 
 def _build_gatekeeper_fast_signature(stock, ws_data, strategy, score):
@@ -13825,8 +13952,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
 
     elif strategy == 'KOSDAQ_ML':
         try:
-            buy_date_str = stock.get('date', datetime.now().strftime('%Y-%m-%d'))
-            buy_date = datetime.strptime(buy_date_str, '%Y-%m-%d').date()
+            buy_date = _parse_holding_entry_date(stock.get('date'))
             kosdaq_holding_days = _rule_int('KOSDAQ_HOLDING_DAYS', 2)
             if np.busday_count(buy_date, datetime.now().date()) >= kosdaq_holding_days:
                 is_sell_signal = True
@@ -13873,8 +13999,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             regime_name = "상승장" if market_regime == 'BULL' else "조정장"
 
         try:
-            buy_date_str = stock.get('date', datetime.now().strftime('%Y-%m-%d'))
-            buy_date = datetime.strptime(buy_date_str, '%Y-%m-%d').date()
+            buy_date = _parse_holding_entry_date(stock.get('date'))
             holding_days = _rule_int('HOLDING_DAYS', 3)
             if np.busday_count(buy_date, datetime.now().date()) >= holding_days:
                 is_sell_signal = True

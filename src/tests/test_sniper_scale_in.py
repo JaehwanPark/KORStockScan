@@ -1,5 +1,5 @@
 from dataclasses import replace
-from datetime import datetime, timedelta, time as dt_time
+from datetime import date, datetime, timedelta, time as dt_time
 import time
 
 import src.engine.sniper_scale_in as scale_in
@@ -37,6 +37,13 @@ class _DummySession:
 class _DummyDB:
     def get_session(self):
         return _DummySession()
+
+
+def test_state_handler_parse_holding_entry_date_accepts_date_types():
+    assert state_handlers._parse_holding_entry_date(date(2026, 5, 27)) == date(2026, 5, 27)
+    assert state_handlers._parse_holding_entry_date(datetime(2026, 5, 27, 9, 0)) == date(2026, 5, 27)
+    assert state_handlers._parse_holding_entry_date("2026-05-27") == date(2026, 5, 27)
+    assert state_handlers._parse_holding_entry_date("2026-05-27 09:00:00") == date(2026, 5, 27)
 
 
 def test_scalping_pyramid_signal():
@@ -2030,6 +2037,13 @@ def test_send_buy_order_market_blocked_when_paused(tmp_path, monkeypatch):
 def test_send_buy_order_market_blocked_before_buy_time_cutoff(monkeypatch):
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: True)
+    published = []
+
+    class FakeEventBus:
+        def publish(self, event_name, payload):
+            published.append((event_name, payload))
+
+    monkeypatch.setattr(kiwoom_orders, "EventBus", FakeEventBus)
 
     def _should_not_call_api(*args, **kwargs):
         raise AssertionError("buy time block must stop broker submission")
@@ -2040,6 +2054,7 @@ def test_send_buy_order_market_blocked_before_buy_time_cutoff(monkeypatch):
 
     assert result["return_code"] == "BUY_TIME_BLOCKED"
     assert "10:00" in result["return_msg"]
+    assert published == []
 
 
 def test_send_buy_order_market_allows_order_after_resume(monkeypatch):

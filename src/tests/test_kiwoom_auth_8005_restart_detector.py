@@ -49,7 +49,15 @@ class TestKiwoomAuth8005RestartDetector:
         state = json.loads(self._scan_state_path.read_text(encoding="utf-8"))
         assert state["files"]["bot_history.log"]["position"] == initial_size
 
-    def test_fresh_8005_touches_restart_flag(self):
+    def test_fresh_8005_touches_restart_flag(self, monkeypatch):
+        import src.engine.error_detectors.kiwoom_auth_8005_restart as detector_module
+
+        invalidations = []
+        monkeypatch.setattr(
+            detector_module.kiwoom_utils,
+            "invalidate_kiwoom_token_cache",
+            lambda reason="": invalidations.append(reason) or True,
+        )
         with tempfile.TemporaryDirectory() as tmpdir:
             log_dir = Path(tmpdir)
             log_file = log_dir / "kiwoom_utils_info.log"
@@ -65,6 +73,8 @@ class TestKiwoomAuth8005RestartDetector:
         assert result.details["restart_requested"] is True
         assert result.details["would_restart"] is True
         assert result.details["fresh_auth_8005_count"] == 1
+        assert result.details["token_cache_invalidated"] is True
+        assert invalidations == ["error_detector_auth_8005"]
 
     def test_dry_run_would_restart_without_touching_flag(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -99,7 +109,15 @@ class TestKiwoomAuth8005RestartDetector:
         assert result.severity == "pass"
         assert not self._restart_flag_path.exists()
 
-    def test_cooldown_suppresses_duplicate_restart(self):
+    def test_cooldown_suppresses_duplicate_restart_but_invalidates_token_cache(self, monkeypatch):
+        import src.engine.error_detectors.kiwoom_auth_8005_restart as detector_module
+
+        invalidations = []
+        monkeypatch.setattr(
+            detector_module.kiwoom_utils,
+            "invalidate_kiwoom_token_cache",
+            lambda reason="": invalidations.append(reason) or True,
+        )
         with tempfile.TemporaryDirectory() as tmpdir:
             log_dir = Path(tmpdir)
             log_file = log_dir / "bot_history.log"
@@ -114,8 +132,17 @@ class TestKiwoomAuth8005RestartDetector:
         assert not self._restart_flag_path.exists()
         assert result.details["restart_suppressed_by_cooldown"] is True
         assert result.details["would_restart"] is False
+        assert result.details["token_cache_invalidated"] is True
+        assert invalidations == ["error_detector_auth_8005"]
 
-    def test_daily_restart_count_threshold_is_fail(self):
+    def test_daily_restart_count_threshold_is_fail(self, monkeypatch):
+        import src.engine.error_detectors.kiwoom_auth_8005_restart as detector_module
+
+        monkeypatch.setattr(
+            detector_module.kiwoom_utils,
+            "invalidate_kiwoom_token_cache",
+            lambda reason="": True,
+        )
         with tempfile.TemporaryDirectory() as tmpdir:
             log_dir = Path(tmpdir)
             log_file = log_dir / "bot_history.log"
@@ -129,6 +156,73 @@ class TestKiwoomAuth8005RestartDetector:
         assert result.severity == "fail"
         assert self._restart_flag_path.exists()
         assert result.details["restart_count"] == 3
+        assert result.details["restart_suppressed_by_daily_cap"] is False
+
+    def test_daily_restart_cap_suppresses_additional_restart_but_invalidates_cache(self, monkeypatch):
+        import src.engine.error_detectors.kiwoom_auth_8005_restart as detector_module
+
+        invalidations = []
+        monkeypatch.setattr(
+            detector_module.kiwoom_utils,
+            "invalidate_kiwoom_token_cache",
+            lambda reason="": invalidations.append(reason) or True,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_dir = Path(tmpdir)
+            log_file = log_dir / "bot_history.log"
+            log_file.write_text("old ok\n", encoding="utf-8")
+            self._write_state(log_file, restart_count=3, last_restart_ts=0)
+            _append(log_file, "8005 Token이 유효하지 않습니다\n")
+
+            with _mock_logs_dir(log_dir):
+                result = KiwoomAuth8005RestartDetector().check()
+
+        assert result.severity == "fail"
+        assert not self._restart_flag_path.exists()
+        assert result.details["restart_requested"] is False
+        assert result.details["would_restart"] is False
+        assert result.details["restart_suppressed_by_daily_cap"] is True
+        assert result.details["restart_count"] == 3
+        assert result.details["token_cache_invalidated"] is True
+        assert invalidations == ["error_detector_auth_8005"]
+
+    def test_cache_invalidation_exception_does_not_silence_restart(self, monkeypatch):
+        import src.engine.error_detectors.kiwoom_auth_8005_restart as detector_module
+
+        def _raise(reason=""):
+            raise RuntimeError("cache failure")
+
+        monkeypatch.setattr(detector_module.kiwoom_utils, "invalidate_kiwoom_token_cache", _raise)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_dir = Path(tmpdir)
+            log_file = log_dir / "bot_history.log"
+            log_file.write_text("old ok\n", encoding="utf-8")
+            self._write_state(log_file, restart_count=0, last_restart_ts=0)
+            _append(log_file, "8005 Token이 유효하지 않습니다\n")
+
+            with _mock_logs_dir(log_dir):
+                result = KiwoomAuth8005RestartDetector().check()
+
+        assert result.severity == "warning"
+        assert self._restart_flag_path.exists()
+        assert result.details["restart_requested"] is True
+        assert result.details["token_cache_invalidated"] is False
+        assert result.details["token_cache_invalidation_error"] == "cache failure"
+
+    def test_corrupt_state_warns_instead_of_quiet_pass(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_dir = Path(tmpdir)
+            log_file = log_dir / "bot_history.log"
+            log_file.write_text("old ok\n", encoding="utf-8")
+            self._scan_state_path.write_text("{", encoding="utf-8")
+
+            with _mock_logs_dir(log_dir):
+                result = KiwoomAuth8005RestartDetector().check()
+
+        assert result.severity == "warning"
+        assert result.details["baseline_initialized"] is True
+        assert result.details["state_load_error"] is True
+        assert "state could not be loaded" in result.summary
 
     def _write_state(self, log_file: Path, restart_count: int, last_restart_ts: float):
         today = __import__("datetime").datetime.now().astimezone().strftime("%Y-%m-%d")

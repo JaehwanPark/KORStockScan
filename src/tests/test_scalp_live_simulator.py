@@ -521,7 +521,7 @@ def test_scalp_simulator_signal_inclusive_fill_does_not_wait_for_limit_touch(mon
     assert fill_event["limit_price"] == 10_000
 
 
-def test_swing_dry_run_gatekeeper_report_is_admin_only(monkeypatch):
+def test_swing_dry_run_gatekeeper_report_is_source_only_without_telegram(monkeypatch):
     event_bus = FakeEventBus()
     monkeypatch.setattr(sniper_runtime, "event_bus", event_bus)
 
@@ -532,8 +532,95 @@ def test_swing_dry_run_gatekeeper_report_is_admin_only(monkeypatch):
         True,
     )
 
+    assert event_bus.published == []
+
+
+def test_actual_order_false_gatekeeper_report_is_source_only_without_telegram(monkeypatch):
+    event_bus = FakeEventBus()
+    monkeypatch.setattr(sniper_runtime, "event_bus", event_bus)
+
+    sniper_runtime._publish_gatekeeper_report(
+        {"name": "PROBE", "strategy": "SCALPING", "actual_order_submitted": False},
+        "123456",
+        {"action_label": "BUY", "action_key": "buy", "report": "probe"},
+        True,
+    )
+
+    assert event_bus.published == []
+
+
+def test_not_evaluated_gatekeeper_prior_is_not_telegram_report(monkeypatch):
+    event_bus = FakeEventBus()
+    monkeypatch.setattr(sniper_runtime, "event_bus", event_bus)
+
+    sniper_runtime._publish_gatekeeper_report(
+        {"name": "LIVE", "strategy": "SCALPING"},
+        "123456",
+        {
+            "action_label": "NOT_EVALUATED_SCORE_VPW_PRIOR",
+            "action_key": "not_evaluated_score_vpw_prior",
+            "cache_mode": "not_evaluated",
+            "report": "",
+        },
+        True,
+    )
+
+    assert event_bus.published == []
+
+
+def test_live_gatekeeper_reject_report_is_source_only_without_telegram(monkeypatch):
+    event_bus = FakeEventBus()
+    monkeypatch.setattr(sniper_runtime, "event_bus", event_bus)
+
+    sniper_runtime._publish_gatekeeper_report(
+        {"name": "LIVE", "strategy": "SCALPING"},
+        "123456",
+        {"action_label": "PULLBACK_WAIT", "action_key": "pullback_wait", "report": "wait"},
+        False,
+    )
+
+    assert event_bus.published == []
+
+
+def test_live_gatekeeper_report_deduplicates_repeated_approval(monkeypatch):
+    event_bus = FakeEventBus()
+    monkeypatch.setattr(sniper_runtime, "event_bus", event_bus)
+    monkeypatch.setattr(sniper_runtime, "_GATEKEEPER_REPORT_NOTIFY_TTL_SEC", 600.0)
+    sniper_runtime._GATEKEEPER_REPORT_NOTIFY_RECENT.clear()
+
+    now = {"value": 1_000.0}
+    monkeypatch.setattr(sniper_runtime.time, "time", lambda: now["value"])
+    stock = {"name": "LIVE", "strategy": "SCALPING"}
+    gatekeeper = {"action_label": "BUY", "action_key": "buy", "report": "ok"}
+
+    sniper_runtime._publish_gatekeeper_report(stock, "123456", gatekeeper, True)
+    sniper_runtime._publish_gatekeeper_report(stock, "123456", gatekeeper, True)
+    now["value"] += 601.0
+    sniper_runtime._publish_gatekeeper_report(stock, "123456", gatekeeper, True)
+
+    assert [event for event, _ in event_bus.published] == [
+        "TELEGRAM_BROADCAST",
+        "TELEGRAM_BROADCAST",
+    ]
+    assert event_bus.published[0][1]["audience"] == "VIP_ALL"
+
+
+def test_live_gatekeeper_report_handles_missing_name_and_report(monkeypatch):
+    event_bus = FakeEventBus()
+    monkeypatch.setattr(sniper_runtime, "event_bus", event_bus)
+    sniper_runtime._GATEKEEPER_REPORT_NOTIFY_RECENT.clear()
+
+    sniper_runtime._publish_gatekeeper_report(
+        {"strategy": "SCALPING"},
+        "123456",
+        {"action_label": "BUY", "action_key": "buy", "report": None},
+        True,
+    )
+
     assert event_bus.published[0][0] == "TELEGRAM_BROADCAST"
-    assert event_bus.published[0][1]["audience"] == "ADMIN_ONLY"
+    payload = event_bus.published[0][1]
+    assert payload["audience"] == "VIP_ALL"
+    assert "123456" in payload["message"]
 
 
 def test_scalp_simulator_duplicate_buy_signal_does_not_create_second_position(monkeypatch):

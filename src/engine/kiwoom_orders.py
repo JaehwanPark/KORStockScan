@@ -47,6 +47,44 @@ def is_auth_failure_error(error) -> bool:
         or '인증' in msg
     )
 
+
+def _post_kiwoom_with_auth_retry(url, headers, payload, api_id, *, timeout=5):
+    """POST once, then refresh token and retry once only for Kiwoom auth/token failures."""
+    active_headers = dict(headers or {})
+    response = requests.post(url, headers=active_headers, json=payload, timeout=timeout)
+    try:
+        data = response.json()
+    except Exception:
+        return response, {}
+
+    is_success = str(data.get('rt_cd', data.get('return_code', ''))) == '0'
+    if response.status_code == 200 and is_success:
+        return response, data
+    if not is_auth_failure_error(data):
+        return response, data
+
+    api_label = str(api_id or active_headers.get('api-id') or 'unknown')
+    try:
+        kiwoom_utils.invalidate_kiwoom_token_cache(reason=f"order_api_8005_retry:{api_label}")
+        refreshed_token = kiwoom_utils.get_kiwoom_token(force_refresh=True)
+    except Exception as exc:
+        log_error(f"❌ [{api_label}] 8005 감지 후 Kiwoom token force refresh 예외: {exc}")
+        return response, data
+    if not refreshed_token:
+        log_error(f"❌ [{api_label}] 8005 감지 후 Kiwoom token force refresh 실패")
+        return response, data
+
+    retry_headers = dict(active_headers)
+    retry_headers['authorization'] = f'Bearer {refreshed_token}'
+    log_info(f"🔐 [{api_label}] 8005 감지 후 Kiwoom token force refresh 성공 (주문/계좌 API 1회 retry)")
+    retry_response = requests.post(url, headers=retry_headers, json=payload, timeout=timeout)
+    try:
+        retry_data = retry_response.json()
+    except Exception:
+        return retry_response, {}
+    return retry_response, retry_data
+
+
 def calc_buy_qty(current_price, total_deposit, ratio=0.1, max_budget=None):
     """
     [v12.1] 예수금 대비 비중을 계산하여 정수 수량 산출
@@ -168,9 +206,8 @@ def get_deposit(token):
 
     for attempt in range(1, retries + 1):
         try:
-            res = requests.post(url, headers=headers, json=payload, timeout=5)
-            data = res.json()
-            is_success = data.get('rt_cd') == '0' or data.get('return_code') == 0
+            res, data = _post_kiwoom_with_auth_retry(url, headers, payload, 'kt00001', timeout=5)
+            is_success = str(data.get('rt_cd', data.get('return_code', ''))) == '0'
             if res.status_code == 200 and is_success:
                 amount = int(float(data.get('ord_alow_amt', 0) or 0))
                 if amount > 0:
@@ -238,8 +275,7 @@ def get_my_inventory(token):
         params = {'qry_tp': '2', 'dmst_stex_tp': exchange}
 
         try:
-            response = requests.post(url, headers=headers, json=params, timeout=5)
-            data = response.json()
+            response, data = _post_kiwoom_with_auth_retry(url, headers, params, 'kt00018', timeout=5)
             
             if str(data.get('return_code', data.get('rt_cd', ''))) == '0':
                 successful_exchanges.add(exchange)
@@ -372,7 +408,6 @@ def send_buy_order_market(code, qty, token, order_type="6", price=0, tif=None):
         label = get_buy_side_time_block_label()
         msg = f"[BUY_TIME_BLOCK] buy order blocked 종목:{clean_code}, 상태:{label}"
         log_info(msg)
-        EventBus().publish("TELEGRAM_ADMIN_NOTIFY", {"text": msg})
         return {
             "rt_cd": "BUY_TIME_BLOCKED",
             "return_code": "BUY_TIME_BLOCKED",
@@ -403,8 +438,7 @@ def send_buy_order_market(code, qty, token, order_type="6", price=0, tif=None):
     }
 
     try:
-        res = requests.post(url, headers=headers, json=payload, timeout=5)
-        data = res.json()
+        res, data = _post_kiwoom_with_auth_retry(url, headers, payload, 'kt10000', timeout=5)
 
         is_success = str(data.get('rt_cd', '')) == '0' or str(data.get('return_code', '')) == '0'
 
@@ -487,8 +521,7 @@ def send_sell_order_market(code, qty, token, order_type="3", price=0):
     }
 
     try:
-        res = requests.post(url, headers=headers, json=payload, timeout=5)
-        data = res.json()
+        res, data = _post_kiwoom_with_auth_retry(url, headers, payload, 'kt10001', timeout=5)
 
         is_success = str(data.get('rt_cd', '')) == '0' or str(data.get('return_code', '')) == '0'
 
@@ -538,8 +571,7 @@ def send_cancel_order(code, orig_ord_no, token, qty=0):
     }
 
     try:
-        res = requests.post(url, headers=headers, json=payload, timeout=5)
-        data = res.json()
+        res, data = _post_kiwoom_with_auth_retry(url, headers, payload, 'kt10003', timeout=5)
 
         if res.status_code == 200 and str(data.get('return_code', '')) == '0':
             cncl_qty_result = data.get('cncl_qty', '전량')
