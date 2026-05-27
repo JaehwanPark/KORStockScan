@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from src.utils.constants import DATA_DIR, TRADING_RULES
+from src.utils.jsonl_io import existing_or_gzip_path
 
 
 REPORT_DIR = DATA_DIR / "report"
@@ -118,6 +119,7 @@ def _open_text(path: Path):
 
 
 def _iter_jsonl(path: Path) -> Iterable[dict[str, Any]]:
+    path = existing_or_gzip_path(path)
     if not path.exists():
         return
     try:

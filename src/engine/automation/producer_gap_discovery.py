@@ -7,14 +7,22 @@ import hashlib
 import json
 import os
 import re
-from collections import Counter
+from collections import Counter, deque
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from src.engine.automation.dual_candidate_review import (
+    REQUIRED_METRIC_CONTRACT_FIELDS,
+    default_comparative_review,
+    has_forbidden_runtime_leak,
+    missing_metric_contract_fields,
+    proposal_counts,
+)
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.utils.constants import TRADING_RULES
+from src.utils.jsonl_io import iter_jsonl
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -59,6 +67,13 @@ PRIORITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 ROLLING_WINDOWS = ("daily", "3d", "5d", "10d", "all_available")
 SIM_ROLLING_MAX_ROWS = int(os.getenv("KORSTOCKSCAN_PRODUCER_GAP_SIM_ROLLING_MAX_ROWS", "200000") or "200000")
 SIM_ROLLING_MAX_SECONDS = int(os.getenv("KORSTOCKSCAN_PRODUCER_GAP_SIM_ROLLING_MAX_SECONDS", "240") or "240")
+PRODUCER_DUAL_DECISIONS = {
+    "new_producer",
+    "extend_existing_producer",
+    "absorb_as_metric_dimension",
+    "source_quality_blocker",
+    "reject",
+}
 
 
 @dataclass(frozen=True)
@@ -108,50 +123,26 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 
 def _load_jsonl(path: Path, *, limit: int = 20000) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except Exception:
-        return rows
-    for line in lines[-limit:]:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            payload = json.loads(line)
-        except Exception:
-            continue
-        if isinstance(payload, dict):
-            rows.append(payload)
-    return rows
+    return list(deque(iter_jsonl(path), maxlen=max(0, int(limit))))
 
 
 def _iter_jsonl(path: Path, *, limit: int | None = None) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    if not path.exists():
-        return rows
-    try:
-        with path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                if limit is not None and len(rows) >= limit:
-                    break
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    payload = json.loads(line)
-                except Exception:
-                    continue
-                if isinstance(payload, dict):
-                    rows.append(payload)
-    except Exception:
-        return rows
+    for payload in iter_jsonl(path):
+        if limit is not None and len(rows) >= limit:
+            break
+        rows.append(payload)
     return rows
 
 
 def _available_sim_dates(target_date: str) -> list[str]:
     dates = set()
-    for pattern in ("sim_post_sell_candidates_*.jsonl", "sim_post_sell_evaluations_*.jsonl"):
+    for pattern in (
+        "sim_post_sell_candidates_*.jsonl",
+        "sim_post_sell_candidates_*.jsonl.gz",
+        "sim_post_sell_evaluations_*.jsonl",
+        "sim_post_sell_evaluations_*.jsonl.gz",
+    ):
         for path in POST_SELL_DIR.glob(pattern):
             match = re.search(r"(\d{4}-\d{2}-\d{2})", path.name)
             if match and match.group(1) <= target_date:
@@ -1231,6 +1222,62 @@ def _coverage_audit_candidates(
     }
 
 
+def _deterministic_proposal(candidate: dict[str, Any]) -> dict[str, Any]:
+    candidate_id = str(candidate.get("candidate_id") or "unknown")
+    pattern_type = str(candidate.get("pattern_type") or "producer_gap")
+    contract = candidate.get("recommended_producer_contract")
+    preferred = contract.get("preferred_producer_name") if isinstance(contract, dict) else None
+    if pattern_type == "sim_source_quality_join_gap_missing":
+        decision = "source_quality_blocker"
+    elif preferred:
+        decision = "extend_existing_producer"
+    elif pattern_type in {"sim_submit_fill_quality_gap_missing", "sim_holding_runner_gap_missing", "sim_exit_plateau_breakdown_gap_missing"}:
+        decision = "absorb_as_metric_dimension"
+    else:
+        decision = "new_producer"
+    return {
+        "candidate_id": candidate_id,
+        "proposal_source": "deterministic",
+        "proposal_decision": decision,
+        "recommended_canonical_bucket": f"producer_gap:{pattern_type}",
+        "recommended_metric_or_dimension": [
+            "source_quality_adjusted_ev_pct",
+            "diagnostic_win_rate",
+            f"{pattern_type}_source_dimension",
+        ],
+        "reasoning_summary": "Deterministic missing-producer detector found a source-only lifecycle observation gap.",
+        "confidence": "high" if candidate.get("priority") in {"critical", "high"} else "medium",
+        "required_source_fields": list(REQUIRED_METRIC_CONTRACT_FIELDS),
+        "forbidden_uses": list(FORBIDDEN_USES),
+        "workorder_title": f"Review producer gap: {pattern_type}",
+        "workorder_priority": str(candidate.get("priority") or "medium"),
+    }
+
+
+def _default_ai_proposal(candidate: dict[str, Any]) -> dict[str, Any]:
+    deterministic = candidate.get("deterministic_proposal") if isinstance(candidate.get("deterministic_proposal"), dict) else {}
+    return {
+        "candidate_id": str(candidate.get("candidate_id") or "unknown"),
+        "proposal_source": "ai_tier2",
+        "proposal_status": "not_provided",
+        "proposal_decision": "reject",
+        "recommended_canonical_bucket": deterministic.get("recommended_canonical_bucket") or "",
+        "recommended_metric_or_dimension": deterministic.get("recommended_metric_or_dimension") or [],
+        "reasoning_summary": "AI Tier2 proposal unavailable; fail-closed comparative review prevents automatic promotion.",
+        "confidence": "low",
+        "required_source_fields": list(REQUIRED_METRIC_CONTRACT_FIELDS),
+        "forbidden_uses": list(FORBIDDEN_USES),
+    }
+
+
+def _attach_deterministic_proposals(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    enriched = []
+    for candidate in candidates:
+        proposal = _deterministic_proposal(candidate)
+        enriched.append({**candidate, "deterministic_proposal": proposal})
+    return enriched
+
+
 def _deterministic_candidates(target_date: str, *, rolling_sim_scan: bool = False) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     paths = _source_paths(target_date)
     jsonl_sources = {"sim_post_sell_evaluations", "post_sell_candidates", "sim_post_sell_candidates"}
@@ -1272,6 +1319,7 @@ def _deterministic_candidates(target_date: str, *, rolling_sim_scan: bool = Fals
         detectable_families=set(sim_first_summary.get("detectable_coverage_families") or []),
     )
     candidates.extend(coverage_candidates)
+    candidates = _attach_deterministic_proposals(candidates)
     source_scope_counts = Counter(str(item.get("source_scope") or "unknown") for item in candidates)
     context = {
         "date": target_date,
@@ -1324,6 +1372,16 @@ def _build_ai_review_instructions() -> str:
         "You are producer_gap_discovery_ai_review, a source-only missing producer reviewer.\n"
         "Use a mandatory two-pass process: first interpretation, then audit, then final conclusions.\n"
         "Review deterministic missing producer candidates for scalping and swing sim/probe/real-flow results.\n"
+        "Create an independent ai_tier2_proposal for each deterministic candidate, then create a comparative_review "
+        "that compares deterministic_proposal and ai_tier2_proposal side by side.\n"
+        "AI proposal decisions are limited to new_producer, extend_existing_producer, "
+        "absorb_as_metric_dimension, source_quality_blocker, or reject.\n"
+        "The comparative selected_source must be deterministic, ai_tier2, hybrid, or reject.\n"
+        "Metric/dimension absorption requires metric_role, decision_authority, window_policy, sample_floor, "
+        "primary_decision_metric, source_quality_gate, and forbidden_uses in required_source_fields.\n"
+        "For every ai_tier2_proposal and comparative_review, required_source_fields must contain all seven exact "
+        "strings: metric_role, decision_authority, window_policy, sample_floor, primary_decision_metric, "
+        "source_quality_gate, forbidden_uses. Do not substitute field examples for this contract list.\n"
         "You may adjust priority, recommended route, implementation requirements, and acceptance tests.\n"
         "You must not delete deterministic candidates and must not grant runtime, threshold, provider, bot, cap, "
         "entry, exit, or broker order authority. Any forbidden-use leak must be surfaced in the audit.\n"
@@ -1431,6 +1489,46 @@ def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, 
         warnings.append("ai_review_reviewer_invalid")
     if not isinstance(payload.get("candidate_reviews"), list):
         warnings.append("ai_review_candidate_reviews_missing")
+    if not isinstance(payload.get("ai_tier2_proposals"), list):
+        warnings.append("ai_review_ai_tier2_proposals_missing")
+    if not isinstance(payload.get("comparative_reviews"), list):
+        warnings.append("ai_review_comparative_reviews_missing")
+    for item in payload.get("ai_tier2_proposals") or []:
+        if not isinstance(item, dict):
+            warnings.append("ai_review_ai_tier2_proposal_invalid")
+            continue
+        if str(item.get("proposal_decision") or "") not in PRODUCER_DUAL_DECISIONS:
+            warnings.append(f"ai_review_ai_proposal_decision_invalid:{item.get('candidate_id')}")
+        missing_contract = missing_metric_contract_fields(item.get("required_source_fields"))
+        if missing_contract:
+            warnings.append(f"ai_review_ai_proposal_contract_missing:{item.get('candidate_id')}:{','.join(missing_contract)}")
+        if has_forbidden_runtime_leak(item):
+            warnings.append(f"ai_review_ai_proposal_forbidden_use_leak:{item.get('candidate_id')}")
+    proposal_ids = {
+        str(item.get("candidate_id"))
+        for item in payload.get("ai_tier2_proposals") or []
+        if isinstance(item, dict) and item.get("candidate_id")
+    }
+    review_ids = {
+        str(item.get("candidate_id"))
+        for item in payload.get("comparative_reviews") or []
+        if isinstance(item, dict) and item.get("candidate_id")
+    }
+    if proposal_ids and proposal_ids - review_ids:
+        warnings.append("ai_review_comparative_review_missing_for_ai_proposal")
+    for item in payload.get("comparative_reviews") or []:
+        if not isinstance(item, dict):
+            warnings.append("ai_review_comparative_review_invalid")
+            continue
+        if str(item.get("selected_decision") or "") not in PRODUCER_DUAL_DECISIONS:
+            warnings.append(f"ai_review_comparative_decision_invalid:{item.get('candidate_id')}")
+        if str(item.get("selected_source") or "") not in {"deterministic", "ai_tier2", "hybrid", "reject"}:
+            warnings.append(f"ai_review_comparative_source_invalid:{item.get('candidate_id')}")
+        missing_contract = missing_metric_contract_fields(item.get("required_source_fields"))
+        if missing_contract:
+            warnings.append(f"ai_review_comparative_contract_missing:{item.get('candidate_id')}:{','.join(missing_contract)}")
+        if has_forbidden_runtime_leak(item):
+            warnings.append(f"ai_review_comparative_forbidden_use_leak:{item.get('candidate_id')}")
     audit = payload.get("audit") if isinstance(payload.get("audit"), dict) else {}
     if str(audit.get("status") or "") not in {"pass", "correction_required", "insufficient_context"}:
         warnings.append("ai_review_audit_status_invalid")
@@ -1460,7 +1558,29 @@ def _review_by_candidate(ai_payload: dict[str, Any]) -> dict[str, dict[str, Any]
     return result
 
 
-def _order_from_candidate(candidate: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
+def _proposal_by_candidate(ai_payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        str(item.get("candidate_id")): {**item, "proposal_source": "ai_tier2", "proposal_status": "provided"}
+        for item in ai_payload.get("ai_tier2_proposals") or []
+        if isinstance(item, dict) and item.get("candidate_id")
+    }
+
+
+def _comparative_by_candidate(ai_payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        str(item.get("candidate_id")): item
+        for item in ai_payload.get("comparative_reviews") or []
+        if isinstance(item, dict) and item.get("candidate_id")
+    }
+
+
+def _order_from_candidate(
+    candidate: dict[str, Any],
+    review: dict[str, Any],
+    *,
+    ai_tier2_proposal: dict[str, Any] | None = None,
+    comparative_review: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     candidate_id = str(candidate.get("candidate_id") or "unknown")
     pattern_type = str(candidate.get("pattern_type") or "producer_gap")
     priority = str(review.get("priority") or candidate.get("priority") or "high")
@@ -1498,6 +1618,11 @@ def _order_from_candidate(candidate: dict[str, Any], review: dict[str, Any]) -> 
         "next_postclose_metric": f"{REPORT_TYPE}.{candidate_id}",
         "forbidden_uses": FORBIDDEN_USES,
         "implementation_requirements": review.get("implementation_requirements") or [],
+        "canonical_bucket": comparative_review.get("recommended_canonical_bucket") if isinstance(comparative_review, dict) else None,
+        "legacy_raw_bucket_key": candidate.get("pattern_type"),
+        "deterministic_proposal": candidate.get("deterministic_proposal"),
+        "ai_tier2_proposal": ai_tier2_proposal or {},
+        "comparative_review": comparative_review or {},
     }
 
 
@@ -1532,27 +1657,56 @@ def build_producer_gap_discovery_report(
     audit_forbidden_use_violations = audit.get("forbidden_use_violations")
     if not isinstance(audit_forbidden_use_violations, list):
         audit_forbidden_use_violations = []
+    review_map = _review_by_candidate(ai_payload) if ai_status == "parsed" else {}
+    ai_proposal_map = _proposal_by_candidate(ai_payload) if ai_status == "parsed" else {}
+    comparative_map = _comparative_by_candidate(ai_payload) if ai_status == "parsed" else {}
+    candidate_ids = {str(item.get("candidate_id") or "") for item in candidates}
+    missing_ai_proposal_count = len([candidate_id for candidate_id in candidate_ids if candidate_id not in ai_proposal_map])
+    missing_comparative_review_count = len([candidate_id for candidate_id in candidate_ids if candidate_id not in comparative_map])
     fail_closed = (
         ai_status != "parsed"
         or audit.get("status") != "pass"
         or bool(audit_forbidden_use_violations)
+        or missing_ai_proposal_count > 0
+        or missing_comparative_review_count > 0
     )
-    review_map = _review_by_candidate(ai_payload) if ai_status == "parsed" else {}
     reviewed_candidates = []
     orders = []
     for candidate in candidates:
-        review = review_map.get(str(candidate.get("candidate_id"))) or {}
+        candidate_id = str(candidate.get("candidate_id") or "")
+        review = review_map.get(candidate_id) or {}
+        deterministic_proposal = (
+            candidate.get("deterministic_proposal") if isinstance(candidate.get("deterministic_proposal"), dict) else {}
+        )
+        ai_tier2_proposal = ai_proposal_map.get(candidate_id) or _default_ai_proposal(candidate)
+        comparative_review = comparative_map.get(candidate_id) or default_comparative_review(
+            candidate_id=candidate_id,
+            deterministic_proposal=deterministic_proposal,
+            ai_tier2_proposal=ai_tier2_proposal,
+            allowed_decisions=PRODUCER_DUAL_DECISIONS,
+            default_decision="new_producer",
+            workorder_title=f"Review producer gap: {candidate.get('pattern_type')}",
+        )
+        if ai_status != "parsed":
+            comparative_review = {**comparative_review, "selected_decision": "source_quality_blocker", "selected_source": "reject"}
         merged = {
             **candidate,
             "ai_review": review,
+            "ai_tier2_proposal": ai_tier2_proposal,
+            "comparative_review": comparative_review,
             "ai_review_status": ai_status,
             "ai_priority": review.get("priority") or candidate.get("priority"),
             "ai_recommended_route": review.get("recommended_route") or "implement_now",
         }
         reviewed_candidates.append(merged)
         priority = str(merged.get("ai_priority") or "high")
-        if not fail_closed and PRIORITY_RANK.get(priority, 99) <= PRIORITY_RANK["high"]:
-            orders.append(_order_from_candidate(candidate, review))
+        selected_decision = str(comparative_review.get("selected_decision") or "")
+        if (
+            not fail_closed
+            and selected_decision not in {"reject", "source_quality_blocker"}
+            and PRIORITY_RANK.get(priority, 99) <= PRIORITY_RANK["high"]
+        ):
+            orders.append(_order_from_candidate(candidate, review, ai_tier2_proposal=ai_tier2_proposal, comparative_review=comparative_review))
     state_counts = Counter(str(item.get("pattern_type") or "unknown") for item in candidates)
     source_scope_counts = Counter(str(item.get("source_scope") or "unknown") for item in candidates)
     rolling_summary = context.get("rolling_sim_discovery") if isinstance(context.get("rolling_sim_discovery"), dict) else {}
@@ -1588,6 +1742,21 @@ def build_producer_gap_discovery_report(
                 1 for item in reviewed_candidates if PRIORITY_RANK.get(str(item.get("ai_priority")), 99) <= 1
             ),
             "workorder_count": len(orders),
+            "deterministic_proposal_count": len(candidates),
+            "ai_tier2_proposal_count": sum(
+                1 for item in reviewed_candidates if item.get("ai_tier2_proposal", {}).get("proposal_status") == "provided"
+            ),
+            "comparative_review_count": len(reviewed_candidates),
+            "missing_ai_tier2_proposal_count": missing_ai_proposal_count,
+            "missing_comparative_review_count": missing_comparative_review_count,
+            "selected_decision_counts": proposal_counts(
+                [item.get("comparative_review") or {} for item in reviewed_candidates],
+                key="selected_decision",
+            ),
+            "selected_source_counts": proposal_counts(
+                [item.get("comparative_review") or {} for item in reviewed_candidates],
+                key="selected_source",
+            ),
             "ai_two_pass_review_status": ai_status,
             "ai_fail_closed": fail_closed,
             "provider": resolved_provider,
@@ -1621,9 +1790,37 @@ def build_producer_gap_discovery_report(
             "input_context_hash": _text_hash(context),
             "audit": audit,
             "candidate_reviews": ai_payload.get("candidate_reviews") if isinstance(ai_payload.get("candidate_reviews"), list) else [],
+            "deterministic_proposals": [
+                item.get("deterministic_proposal") for item in reviewed_candidates if item.get("deterministic_proposal")
+            ],
+            "ai_tier2_proposals": [
+                item.get("ai_tier2_proposal") for item in reviewed_candidates if item.get("ai_tier2_proposal")
+            ],
+            "comparative_reviews": [
+                item.get("comparative_review") for item in reviewed_candidates if item.get("comparative_review")
+            ],
             "warnings": ai_warnings,
             "fail_closed": fail_closed,
+            "missing_ai_tier2_proposal_count": missing_ai_proposal_count,
+            "missing_comparative_review_count": missing_comparative_review_count,
         },
+        "deterministic_proposals": [
+            item.get("deterministic_proposal") for item in reviewed_candidates if item.get("deterministic_proposal")
+        ],
+        "ai_tier2_proposals": [
+            item.get("ai_tier2_proposal") for item in reviewed_candidates if item.get("ai_tier2_proposal")
+        ],
+        "comparative_reviews": [
+            item.get("comparative_review") for item in reviewed_candidates if item.get("comparative_review")
+        ],
+        "selected_decision_counts": proposal_counts(
+            [item.get("comparative_review") or {} for item in reviewed_candidates],
+            key="selected_decision",
+        ),
+        "selected_source_counts": proposal_counts(
+            [item.get("comparative_review") or {} for item in reviewed_candidates],
+            key="selected_source",
+        ),
         "producer_gap_candidates": reviewed_candidates,
         "code_improvement_orders": orders,
     }

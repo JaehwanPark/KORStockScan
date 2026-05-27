@@ -1,3 +1,4 @@
+import gzip
 import json
 
 from src.engine import holding_exit_observation_report as report_mod
@@ -14,6 +15,13 @@ def _write_jsonl(path, rows):
         "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
         encoding="utf-8",
     )
+
+
+def _write_gzip_jsonl(path, rows):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(path, "wt", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 def _trade(
@@ -284,3 +292,25 @@ def test_holding_exit_observation_report_splits_required_cohorts(monkeypatch, tm
     assert report["same_symbol_reentry"]["after_soft_stop_next_loss_count"] == 1
     assert report["opportunity_cost"]["outcome_counts"]["MISSED_WINNER"] == 3
     assert report["opportunity_cost"]["terminal_stage_top"][0] == {"label": "latency_block", "count": 2}
+
+
+def test_holding_exit_observation_reads_gzip_post_sell_rows(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    candidate, evaluation = _post_sell_row(
+        "soft-0",
+        301,
+        exit_rule="scalp_soft_stop_pct",
+        outcome="MISSED_UPSIDE",
+        profit_rate=-1.6,
+        rebound_buy=True,
+    )
+    _write_gzip_jsonl(tmp_path / "post_sell" / "post_sell_candidates_2026-04-24.jsonl.gz", [candidate])
+    _write_gzip_jsonl(tmp_path / "post_sell" / "post_sell_evaluations_2026-04-24.jsonl.gz", [evaluation])
+
+    rows, paths = report_mod._load_post_sell_rows(["2026-04-24"])
+
+    assert len(rows) == 1
+    assert paths == [
+        str(tmp_path / "post_sell" / "post_sell_candidates_2026-04-24.jsonl.gz"),
+        str(tmp_path / "post_sell" / "post_sell_evaluations_2026-04-24.jsonl.gz"),
+    ]

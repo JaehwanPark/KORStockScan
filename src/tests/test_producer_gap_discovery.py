@@ -1,3 +1,4 @@
+import gzip
 import json
 from pathlib import Path
 
@@ -27,6 +28,13 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
     path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
 
 
+def _write_gzip_jsonl(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(path, "wt", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
 def _ai_response(candidate_ids: list[str]) -> dict:
     pattern_by_id = {
         "producer_gap_stop_recovery_counterfactual_missing": "stop_recovery_counterfactual_missing",
@@ -46,6 +54,15 @@ def _ai_response(candidate_ids: list[str]) -> dict:
         "producer_gap_sim_source_quality_join_gap_missing": "sim_source_quality_join_gap_missing",
         "producer_gap_sim_first_coverage_gap": "sim_first_coverage_gap",
     }
+    contract_fields = [
+        "metric_role",
+        "decision_authority",
+        "window_policy",
+        "sample_floor",
+        "primary_decision_metric",
+        "source_quality_gate",
+        "forbidden_uses",
+    ]
     return {
         "schema_version": 1,
         "reviewer": "producer_gap_discovery_ai_review",
@@ -61,6 +78,40 @@ def _ai_response(candidate_ids: list[str]) -> dict:
                 "implementation_requirements": ["preserve runtime_effect=false"],
                 "acceptance_tests": ["pytest producer gap tests"],
                 "files_likely_touched": ["src/engine/automation/producer_gap_discovery.py"],
+            }
+            for candidate_id in candidate_ids
+        ],
+        "ai_tier2_proposals": [
+            {
+                "candidate_id": candidate_id,
+                "proposal_decision": "absorb_as_metric_dimension"
+                if "submit_fill_quality" in candidate_id
+                else "new_producer",
+                "recommended_canonical_bucket": f"producer_gap:{pattern_by_id.get(candidate_id, candidate_id)}",
+                "recommended_metric_or_dimension": ["source_quality_adjusted_ev_pct", "diagnostic_win_rate"],
+                "reasoning_summary": "AI proposal remains source-only",
+                "confidence": "high",
+                "required_source_fields": contract_fields,
+                "forbidden_uses": mod.FORBIDDEN_USES,
+            }
+            for candidate_id in candidate_ids
+        ],
+        "comparative_reviews": [
+            {
+                "candidate_id": candidate_id,
+                "selected_decision": "absorb_as_metric_dimension"
+                if "submit_fill_quality" in candidate_id
+                else "new_producer",
+                "selected_source": "hybrid",
+                "recommended_canonical_bucket": f"producer_gap:{pattern_by_id.get(candidate_id, candidate_id)}",
+                "recommended_metric_or_dimension": ["source_quality_adjusted_ev_pct", "diagnostic_win_rate"],
+                "comparison_summary": "deterministic and AI proposals agree",
+                "rejected_alternative_reason": "",
+                "confidence": "high",
+                "required_source_fields": contract_fields,
+                "forbidden_uses": mod.FORBIDDEN_USES,
+                "workorder_title": "Review producer gap",
+                "workorder_priority": "high",
             }
             for candidate_id in candidate_ids
         ],
@@ -188,17 +239,8 @@ def test_producer_gap_discovery_detects_seven_patterns_and_ai_orders(tmp_path, m
     )
 
     candidate_ids = [
-        "producer_gap_stop_recovery_counterfactual_missing",
-        "producer_gap_missed_fill_recovery_counterfactual_missing",
-        "producer_gap_swing_sim_probe_label_gap_missing",
-        "producer_gap_scale_in_counterfactual_gap_missing",
-        "producer_gap_time_window_policy_exception_missing",
-        "producer_gap_volatile_runner_exit_counterfactual_missing",
-        "producer_gap_limit_up_plateau_breakdown_exit_missing",
-        "producer_gap_sim_holding_runner_gap_missing",
-        "producer_gap_sim_exit_plateau_breakdown_gap_missing",
-        "producer_gap_sim_stop_recovery_gap_missing",
-        "producer_gap_sim_time_window_exception_gap_missing",
+        str(item["candidate_id"])
+        for item in mod._deterministic_candidates("2026-05-26")[0]
     ]
     report = mod.build_producer_gap_discovery_report(
         "2026-05-26",
@@ -358,6 +400,47 @@ def test_sim_first_rolling_detects_runner_plateau_and_ambiguous_chronology(tmp_p
     assert "runtime_hook_candidate_contract" not in runner_order
     assert report["summary"]["rolling_sim_scan_enabled"] is True
     assert report["summary"]["sim_rows_scanned"] == 6
+
+
+def test_producer_gap_discovery_reads_gzip_post_sell_sources(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    post_sell_dir = tmp_path / "data" / "post_sell"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
+    _write_gzip_jsonl(
+        post_sell_dir / "sim_post_sell_candidates_2026-05-26.jsonl.gz",
+        [
+            {
+                "stock_code": "001740",
+                "stock_name": "SK Networks",
+                "sim_parent_record_id": "p1",
+                "sell_time": "09:22:00",
+                "profit_rate": -3.25,
+                "exit_reason": "hard_stop",
+            },
+            {
+                "stock_code": "001740",
+                "stock_name": "SK Networks",
+                "sim_parent_record_id": "p1",
+                "sell_time": "09:37:00",
+                "profit_rate": 4.43,
+                "exit_reason": "runner_exit",
+            },
+        ],
+    )
+
+    report = mod.build_producer_gap_discovery_report(
+        "2026-05-26",
+        provider="openai",
+        ai_raw_response=_ai_response(["producer_gap_sim_holding_runner_gap_missing"]),
+        rolling_sim_scan=True,
+    )
+
+    assert report["summary"]["sim_rows_scanned"] == 2
+    assert any(
+        item["pattern_type"] == "sim_holding_runner_gap_missing"
+        for item in report["producer_gap_candidates"]
+    )
     assert all(item["runtime_effect"] is False for item in report["producer_gap_candidates"])
 
 
@@ -442,22 +525,7 @@ def test_main_accepts_ai_review_response_json(tmp_path, monkeypatch):
     )
     response_path = tmp_path / "review.json"
     response_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "reviewer": "producer_gap_discovery_ai_review",
-                "audit": {"status": "pass", "forbidden_use_violations": []},
-                "candidate_reviews": [
-                    {
-                        "candidate_id": "producer_gap_stop_recovery_counterfactual_missing",
-                        "priority": "high",
-                        "recommended_route": "implement_now",
-                        "confidence": "fixture_review",
-                        "reason": "source-only producer gap is valid",
-                    }
-                ],
-            }
-        ),
+        json.dumps(_ai_response(["producer_gap_stop_recovery_counterfactual_missing"])),
         encoding="utf-8",
     )
 

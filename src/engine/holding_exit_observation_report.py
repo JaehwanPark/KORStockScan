@@ -12,6 +12,7 @@ from typing import Any
 
 from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build
 from src.utils.constants import DATA_DIR, TRADING_RULES
+from src.utils.jsonl_io import existing_or_gzip_path
 
 
 SCHEMA_VERSION = 1
@@ -88,6 +89,7 @@ def _read_json(path: Path) -> dict:
 
 
 def _read_jsonl(path: Path) -> list[dict]:
+    path = existing_or_gzip_path(path)
     if not path.exists():
         return []
     opener = gzip.open if path.suffix == ".gz" else open
@@ -269,10 +271,12 @@ def _load_post_sell_rows(dates: list[str]) -> tuple[list[dict], list[str]]:
     for target_date in dates:
         candidate_path = _post_sell_candidate_path(target_date)
         evaluation_path = _post_sell_evaluation_path(target_date)
-        if candidate_path.exists():
-            paths.append(str(candidate_path))
-        if evaluation_path.exists():
-            paths.append(str(evaluation_path))
+        candidate_actual_path = existing_or_gzip_path(candidate_path)
+        evaluation_actual_path = existing_or_gzip_path(evaluation_path)
+        if candidate_actual_path.exists():
+            paths.append(str(candidate_actual_path))
+        if evaluation_actual_path.exists():
+            paths.append(str(evaluation_actual_path))
         for candidate in _read_jsonl(candidate_path):
             post_sell_id = str(candidate.get("post_sell_id") or "")
             if post_sell_id:

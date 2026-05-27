@@ -10,6 +10,15 @@ def _write_json(path: Path, payload: dict) -> None:
 
 
 def _ai_response(candidate_ids: list[str]) -> dict:
+    contract_fields = [
+        "metric_role",
+        "decision_authority",
+        "window_policy",
+        "sample_floor",
+        "primary_decision_metric",
+        "source_quality_gate",
+        "forbidden_uses",
+    ]
     return {
         "schema_version": 1,
         "reviewer": "stage_hook_workorder_discovery_ai_review",
@@ -29,8 +38,42 @@ def _ai_response(candidate_ids: list[str]) -> dict:
             }
             for candidate_id in candidate_ids
         ],
+        "ai_tier2_proposals": [
+            {
+                "candidate_id": candidate_id,
+                "proposal_decision": "new_hook",
+                "recommended_canonical_bucket": f"stage_hook:{candidate_id}",
+                "recommended_metric_or_dimension": ["source_quality_adjusted_ev_pct", "diagnostic_win_rate"],
+                "reasoning_summary": "source-only hook proposal",
+                "confidence": "high",
+                "required_source_fields": contract_fields,
+                "forbidden_uses": mod.FORBIDDEN_USES,
+            }
+            for candidate_id in candidate_ids
+        ],
+        "comparative_reviews": [
+            {
+                "candidate_id": candidate_id,
+                "selected_decision": "new_hook",
+                "selected_source": "hybrid",
+                "recommended_canonical_bucket": f"stage_hook:{candidate_id}",
+                "recommended_metric_or_dimension": ["source_quality_adjusted_ev_pct", "diagnostic_win_rate"],
+                "comparison_summary": "deterministic and AI hook proposals agree",
+                "rejected_alternative_reason": "",
+                "confidence": "high",
+                "required_source_fields": contract_fields,
+                "forbidden_uses": mod.FORBIDDEN_USES,
+                "workorder_title": "Review stage hook",
+                "workorder_priority": "high",
+            }
+            for candidate_id in candidate_ids
+        ],
         "audit": {"status": "pass", "issues": [], "forbidden_use_violations": [], "reason": "ok"},
     }
+
+
+def _deterministic_candidate_ids(target: str = "2026-05-26") -> list[str]:
+    return [str(item["candidate_id"]) for item in mod._deterministic_candidates(target)[0]]
 
 
 def test_stage_hook_discovery_normalizes_all_stage_hook_classes(tmp_path, monkeypatch):
@@ -64,7 +107,7 @@ def test_stage_hook_discovery_normalizes_all_stage_hook_classes(tmp_path, monkey
     report = mod.build_stage_hook_workorder_discovery_report(
         "2026-05-26",
         provider="openai",
-        ai_raw_response=_ai_response([]),
+        ai_raw_response=_ai_response(_deterministic_candidate_ids()),
     )
 
     hook_classes = {item["stage_hook_candidate_contract"]["hook_class"] for item in report["stage_hook_candidates"]}
@@ -106,7 +149,7 @@ def test_stage_hook_discovery_scores_are_not_hard_gates(tmp_path, monkeypatch):
     report = mod.build_stage_hook_workorder_discovery_report(
         "2026-05-26",
         provider="openai",
-        ai_raw_response=_ai_response(["stage_hook_holding_flow_runner_debounce_guard_producer_gap_sim_holding_runner_gap_missing"]),
+        ai_raw_response=_ai_response(_deterministic_candidate_ids()),
     )
 
     candidate = report["stage_hook_candidates"][0]
@@ -142,7 +185,7 @@ def test_stage_hook_discovery_merges_duplicate_hook_names(tmp_path, monkeypatch)
     report = mod.build_stage_hook_workorder_discovery_report(
         "2026-05-26",
         provider="openai",
-        ai_raw_response=_ai_response([]),
+        ai_raw_response=_ai_response(_deterministic_candidate_ids()),
     )
 
     scale_candidates = [
@@ -187,7 +230,7 @@ def test_stage_hook_discovery_entry_time_gap_blocks_by_source_quality(tmp_path, 
     report = mod.build_stage_hook_workorder_discovery_report(
         "2026-05-26",
         provider="openai",
-        ai_raw_response=_ai_response([]),
+        ai_raw_response=_ai_response(_deterministic_candidate_ids()),
     )
 
     contract = report["stage_hook_candidates"][0]["stage_hook_candidate_contract"]

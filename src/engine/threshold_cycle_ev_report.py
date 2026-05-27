@@ -1052,6 +1052,15 @@ def _swing_lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[st
             "code_patch_required_count": _safe_int(summary.get("code_patch_required_count"), 0),
             "runtime_blocked_contract_gap_count": _safe_int(summary.get("runtime_blocked_contract_gap_count"), 0),
             "automation_handoff_gap_count": _safe_int(summary.get("automation_handoff_gap_count"), 0),
+            "deterministic_proposal_count": _safe_int(summary.get("deterministic_proposal_count"), 0),
+            "ai_tier2_proposal_count": _safe_int(summary.get("ai_tier2_proposal_count"), 0),
+            "comparative_review_count": _safe_int(summary.get("comparative_review_count"), 0),
+            "selected_decision_counts": summary.get("selected_decision_counts")
+            if isinstance(summary.get("selected_decision_counts"), dict)
+            else {},
+            "selected_source_counts": summary.get("selected_source_counts")
+            if isinstance(summary.get("selected_source_counts"), dict)
+            else {},
             "swing_entry_bottleneck_primary": summary.get("swing_entry_bottleneck_primary"),
             "swing_entry_bottleneck_candidate_present": any(
                 str(item.get("bucket_id") or "") == "swing_entry_bottleneck_swing_entry_drought_critical"
@@ -1233,6 +1242,15 @@ def _audit_summary(target_date: str, report_type: str, report_dir: Path) -> tupl
             "decision_authority": payload.get("decision_authority"),
             "source_only_candidate_warning_resolved": source_only_candidate_warning_resolved,
             "audit_status": audit_status or None,
+            "deterministic_proposal_count": _safe_int(summary.get("deterministic_proposal_count"), 0),
+            "ai_tier2_proposal_count": _safe_int(summary.get("ai_tier2_proposal_count"), 0),
+            "comparative_review_count": _safe_int(summary.get("comparative_review_count"), 0),
+            "selected_decision_counts": summary.get("selected_decision_counts")
+            if isinstance(summary.get("selected_decision_counts"), dict)
+            else {},
+            "selected_source_counts": summary.get("selected_source_counts")
+            if isinstance(summary.get("selected_source_counts"), dict)
+            else {},
         },
         str(json_path),
         warnings,
@@ -1272,6 +1290,15 @@ def _lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[str, Any
             "new_bucket_candidate_count": _safe_int(summary.get("new_bucket_candidate_count"), 0),
             "code_patch_required_count": _safe_int(summary.get("code_patch_required_count"), 0),
             "automation_handoff_gap_count": _safe_int(summary.get("automation_handoff_gap_count"), 0),
+            "deterministic_proposal_count": _safe_int(summary.get("deterministic_proposal_count"), 0),
+            "ai_tier2_proposal_count": _safe_int(summary.get("ai_tier2_proposal_count"), 0),
+            "comparative_review_count": _safe_int(summary.get("comparative_review_count"), 0),
+            "selected_decision_counts": summary.get("selected_decision_counts")
+            if isinstance(summary.get("selected_decision_counts"), dict)
+            else {},
+            "selected_source_counts": summary.get("selected_source_counts")
+            if isinstance(summary.get("selected_source_counts"), dict)
+            else {},
             "human_intervention_required": bool(summary.get("human_intervention_required")),
             "state_counts": summary.get("state_counts") if isinstance(summary.get("state_counts"), dict) else {},
             "stage_counts": summary.get("stage_counts") if isinstance(summary.get("stage_counts"), dict) else {},

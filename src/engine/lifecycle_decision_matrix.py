@@ -18,6 +18,7 @@ from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.engine.institutional_flow_context import RUNTIME_FEATURE_KEYS as INSTITUTIONAL_FLOW_FEATURE_KEYS
 from src.engine.institutional_flow_context import report_paths as institutional_flow_report_paths
 from src.engine.scalp_entry_action_decision_matrix import report_paths as entry_adm_report_paths
+from src.utils.jsonl_io import existing_or_gzip_path
 
 
 MATRIX_DIR = REPORT_DIR / "lifecycle_decision_matrix"
@@ -295,6 +296,7 @@ def _open_text(path: Path):
 
 
 def _iter_jsonl(path: Path) -> Iterable[dict[str, Any]]:
+    path = existing_or_gzip_path(path)
     if not path.exists():
         return
     try:

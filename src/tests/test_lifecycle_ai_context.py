@@ -1,3 +1,4 @@
+import gzip
 import json
 from dataclasses import replace
 from datetime import datetime
@@ -108,6 +109,33 @@ def test_lifecycle_ai_context_attribution_counts_runtime_provenance(tmp_path, mo
     assert entry["ai_action_delta_rate"] == 1.0
     assert entry["actual_order_submitted"] is False
     assert entry["broker_order_forbidden"] is True
+
+
+def test_lifecycle_ai_context_attribution_reads_gzip_pipeline_events(tmp_path, monkeypatch):
+    pipeline_dir = tmp_path / "pipeline_events"
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
+    monkeypatch.setattr(mod, "ATTRIBUTION_DIR", tmp_path / "report" / "lifecycle_ai_context_attribution")
+    pipeline_dir.mkdir(parents=True)
+    with gzip.open(pipeline_dir / "pipeline_events_2026-05-20.jsonl.gz", "wt", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "stage": "ai_result",
+                    "fields": {
+                        "lifecycle_ai_context_enabled": True,
+                        "lifecycle_ai_context_applied": True,
+                        "lifecycle_ai_context_stage": "entry",
+                        "lifecycle_ai_context_alignment_hint": "WAIT_REQUOTE",
+                        "action": "WAIT",
+                    },
+                }
+            )
+            + "\n"
+        )
+
+    report = mod.build_lifecycle_ai_context_attribution_report("2026-05-20", replay_budget=30)
+
+    assert report["stage_attribution"]["entry"]["context_eligible_count"] == 1
     assert report["implementation_status"] == "implemented"
     assert report["implementation_provenance"]["runtime_effect"] is False
     assert report["implementation_checks"][0]["status"] == "pass"

@@ -18,6 +18,11 @@ from src.engine.auto_promotion_contracts import (
     primary_ev_uplift_passes,
     tier2_fail_closed_reason,
 )
+from src.engine.lifecycle.bucket_taxonomy import (
+    compare_taxonomy_proposals,
+    default_ai_tier2_proposal,
+    normalize_lifecycle_bucket,
+)
 from src.utils.constants import DATA_DIR, TRADING_RULES
 
 
@@ -72,6 +77,26 @@ FINAL_CLASSIFICATION_STATES = {
     "new_bucket_candidate",
 }
 FINAL_RELATIONS = {"existing_bucket_refinement", "new_bucket_candidate", "unclear"}
+AI_TAXONOMY_DECISIONS = {
+    "merge",
+    "absorb_as_dimension",
+    "create_new_metric",
+    "create_new_dimension",
+    "keep_bucket",
+    "reject",
+    "source_quality_blocker",
+    "instrumentation_gap",
+}
+AI_TAXONOMY_SOURCES = {"deterministic", "ai_tier2", "hybrid", "reject"}
+REQUIRED_TAXONOMY_CONTRACT_FIELDS = {
+    "metric_role",
+    "decision_authority",
+    "window_policy",
+    "sample_floor",
+    "primary_decision_metric",
+    "source_quality_gate",
+    "forbidden_uses",
+}
 
 def discovery_report_path(target_date: str) -> Path:
     return REPORT_DIR / f"lifecycle_bucket_discovery_{target_date}.json"
@@ -415,6 +440,14 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
     source_bucket_id = _stable_source_bucket_id(stage, bucket_type, bucket_key)
     joined_sample = _safe_int(bucket.get("joined_sample"))
     sample = _safe_int(bucket.get("sample"), joined_sample)
+    source_dimensions = _source_dimensions(bucket_type, bucket_key)
+    taxonomy = normalize_lifecycle_bucket(
+        stage=stage,
+        bucket_type=bucket_type,
+        bucket_key=bucket_key,
+        source_dimensions=source_dimensions,
+    )
+    deterministic_proposal = taxonomy["deterministic_proposal"]
     return {
         "bucket_id": bucket_id,
         "source_bucket_id": source_bucket_id,
@@ -456,7 +489,23 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
             if "unknown" in bucket_key
             else ""
         ),
-        "source_dimensions": _source_dimensions(bucket_type, bucket_key),
+        "source_dimensions": source_dimensions,
+        "canonical_bucket": taxonomy["canonical_bucket"],
+        "legacy_raw_bucket_key": taxonomy["legacy_raw_bucket_key"],
+        "bucket_alias_version": taxonomy["bucket_alias_version"],
+        "dimension_set_version": taxonomy["dimension_set_version"],
+        "bucket_absorption_reason": taxonomy["bucket_absorption_reason"],
+        "taxonomy_candidate_type": taxonomy["taxonomy_candidate_type"],
+        "normalized_dimensions": taxonomy["normalized_dimensions"],
+        "normalized_metrics": taxonomy["normalized_metrics"],
+        "missing_dimension_keys": taxonomy["missing_dimension_keys"],
+        "deterministic_proposal": deterministic_proposal,
+        "ai_tier2_proposal": default_ai_tier2_proposal(bucket_id, deterministic_proposal),
+        "ai_tier2_comparative_review": compare_taxonomy_proposals(
+            bucket_id=bucket_id,
+            deterministic_proposal=deterministic_proposal,
+            ai_tier2_proposal=None,
+        ),
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "sample": sample,
         "joined_sample": joined_sample,
@@ -544,6 +593,14 @@ def _source_drift_candidates(changes: list[dict[str, Any]]) -> list[dict[str, An
         if change_type in {"source_removed", "bucket_field_removed"}:
             state = "code_patch_required"
         bucket_id = f"source_contract:{change_type}:{_slug(subject)}:{_slug(json.dumps(detail, ensure_ascii=False, sort_keys=True), max_len=48)}"
+        source_dimensions = {"change_type": change_type, "subject": subject}
+        taxonomy = normalize_lifecycle_bucket(
+            stage="source_contract",
+            bucket_type=change_type,
+            bucket_key=subject,
+            source_dimensions=source_dimensions,
+        )
+        deterministic_proposal = taxonomy["deterministic_proposal"]
         candidates.append(
             {
                 "bucket_id": bucket_id,
@@ -565,7 +622,23 @@ def _source_drift_candidates(changes: list[dict[str, Any]]) -> list[dict[str, An
                 "sim_lifecycle_handoff_allowed": False,
                 "bounded_live_canary_allowed": False,
                 "source_stage_split_required": False,
-                "source_dimensions": {"change_type": change_type, "subject": subject},
+                "source_dimensions": source_dimensions,
+                "canonical_bucket": taxonomy["canonical_bucket"],
+                "legacy_raw_bucket_key": taxonomy["legacy_raw_bucket_key"],
+                "bucket_alias_version": taxonomy["bucket_alias_version"],
+                "dimension_set_version": taxonomy["dimension_set_version"],
+                "bucket_absorption_reason": taxonomy["bucket_absorption_reason"],
+                "taxonomy_candidate_type": taxonomy["taxonomy_candidate_type"],
+                "normalized_dimensions": taxonomy["normalized_dimensions"],
+                "normalized_metrics": taxonomy["normalized_metrics"],
+                "missing_dimension_keys": taxonomy["missing_dimension_keys"],
+                "deterministic_proposal": deterministic_proposal,
+                "ai_tier2_proposal": default_ai_tier2_proposal(bucket_id, deterministic_proposal),
+                "ai_tier2_comparative_review": compare_taxonomy_proposals(
+                    bucket_id=bucket_id,
+                    deterministic_proposal=deterministic_proposal,
+                    ai_tier2_proposal=None,
+                ),
                 "primary_decision_metric": "source_contract_change",
                 "sample": 0,
                 "joined_sample": 0,
@@ -626,6 +699,14 @@ def _policy_stage_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
             if str(entry.get("source_quality_gate") or "") == "pass"
             else "source_only_keep_collecting"
         )
+        source_dimensions = {"policy_key": policy_key}
+        taxonomy = normalize_lifecycle_bucket(
+            stage=stage,
+            bucket_type="stage_policy",
+            bucket_key=policy_key,
+            source_dimensions=source_dimensions,
+        )
+        deterministic_proposal = taxonomy["deterministic_proposal"]
         candidates.append(
             {
                 "bucket_id": bucket_id,
@@ -649,7 +730,23 @@ def _policy_stage_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "sim_lifecycle_handoff_allowed": state == "sim_auto_approved",
                 "bounded_live_canary_allowed": False,
                 "source_stage_split_required": False,
-                "source_dimensions": {"policy_key": str(entry.get("policy_key") or stage)},
+                "source_dimensions": source_dimensions,
+                "canonical_bucket": taxonomy["canonical_bucket"],
+                "legacy_raw_bucket_key": taxonomy["legacy_raw_bucket_key"],
+                "bucket_alias_version": taxonomy["bucket_alias_version"],
+                "dimension_set_version": taxonomy["dimension_set_version"],
+                "bucket_absorption_reason": taxonomy["bucket_absorption_reason"],
+                "taxonomy_candidate_type": taxonomy["taxonomy_candidate_type"],
+                "normalized_dimensions": taxonomy["normalized_dimensions"],
+                "normalized_metrics": taxonomy["normalized_metrics"],
+                "missing_dimension_keys": taxonomy["missing_dimension_keys"],
+                "deterministic_proposal": deterministic_proposal,
+                "ai_tier2_proposal": default_ai_tier2_proposal(bucket_id, deterministic_proposal),
+                "ai_tier2_comparative_review": compare_taxonomy_proposals(
+                    bucket_id=bucket_id,
+                    deterministic_proposal=deterministic_proposal,
+                    ai_tier2_proposal=None,
+                ),
                 "primary_decision_metric": "stage_ev_composite_pct",
                 "sample": _safe_int(entry.get("sample")),
                 "joined_sample": _safe_int(entry.get("joined_sample")),
@@ -698,6 +795,15 @@ def _build_ai_review_context(report: dict[str, Any]) -> dict[str, Any]:
             "grade_reason": item.get("grade_reason"),
             "full_real_conversion_allowed": item.get("full_real_conversion_allowed"),
             "source_dimensions": item.get("source_dimensions"),
+            "canonical_bucket": item.get("canonical_bucket"),
+            "legacy_raw_bucket_key": item.get("legacy_raw_bucket_key"),
+            "bucket_alias_version": item.get("bucket_alias_version"),
+            "dimension_set_version": item.get("dimension_set_version"),
+            "bucket_absorption_reason": item.get("bucket_absorption_reason"),
+            "normalized_dimensions": item.get("normalized_dimensions"),
+            "normalized_metrics": item.get("normalized_metrics"),
+            "deterministic_proposal": item.get("deterministic_proposal"),
+            "current_ai_tier2_proposal": item.get("ai_tier2_proposal"),
             "primary_decision_metric": item.get("primary_decision_metric"),
             "joined_sample": item.get("joined_sample"),
             "join_rate": item.get("join_rate"),
@@ -712,7 +818,14 @@ def _build_ai_review_context(report: dict[str, Any]) -> dict[str, Any]:
     return {
         "review_task": "two_pass_lifecycle_bucket_discovery_review",
         "pass_1": "Interpret whether each surfaced bucket is a refinement of an existing taxonomy bucket or a genuinely new bucket candidate.",
-        "pass_2": "Audit the pass_1 interpretation and produce final_conclusions. Do not block deterministic live candidates just because the edge is small, new, or ambiguous.",
+        "parallel_proposer_task": (
+            "For each surfaced candidate, independently propose whether to merge, absorb_as_dimension, "
+            "create_new_metric, create_new_dimension, keep_bucket, reject, source_quality_blocker, or instrumentation_gap."
+        ),
+        "pass_2": (
+            "Compare deterministic_proposal and your ai_tier2_proposal side by side. Produce comparative_reviews and "
+            "final_conclusions. Do not block deterministic live candidates just because the edge is small, new, or ambiguous."
+        ),
         "authority": "review_only_no_broker_order_no_provider_route_no_bot_restart_no_cap_release",
         "review_policy": {
             "language": "English only. Keep explanations concise to reduce tokens.",
@@ -738,6 +851,16 @@ def _build_ai_review_context(report: dict[str, Any]) -> dict[str, Any]:
         "surfaced_candidates": compact_candidates,
         "allowed_final_states": sorted(FINAL_CLASSIFICATION_STATES),
         "allowed_relations": sorted(FINAL_RELATIONS),
+        "allowed_taxonomy_decisions": sorted(AI_TAXONOMY_DECISIONS),
+        "required_metric_contract_fields": [
+            "metric_role",
+            "decision_authority",
+            "window_policy",
+            "sample_floor",
+            "primary_decision_metric",
+            "source_quality_gate",
+            "forbidden_uses",
+        ],
         "safety_rule": (
             "AI may block or downgrade a deterministic live bucket only for explicit contract/source-quality/safety gaps, "
             "and may not create live_auto_apply_ready unless the input candidate is already live_auto_apply_ready "
@@ -750,11 +873,18 @@ def _build_ai_review_instructions() -> str:
     return (
         "You are the AI Tier2 lifecycle bucket discovery reviewer.\n"
         "Use English only and keep wording concise to reduce tokens.\n"
-        "Your job is a two-pass review: first interpret bucket taxonomy, then audit that interpretation.\n"
+        "Your job is a two-pass review with a parallel AI proposal: first interpret bucket taxonomy, independently "
+        "propose AI Tier2 taxonomy candidates, then compare deterministic_proposal versus ai_tier2_proposal and audit that comparison.\n"
         "Return only strict JSON using lifecycle_bucket_discovery_review_v1.\n"
         "Do not approve broker orders, provider route changes, bot restarts, cap release, or intraday threshold mutation.\n"
         "Classify existing_bucket_refinement when a bucket is a child/refinement of a known stage taxonomy.\n"
         "Classify new_bucket_candidate when existing taxonomy cannot explain the source dimensions or source contract drift.\n"
+        "Prefer absorb_as_dimension over new bucket creation when the case is numeric, price-quality, fill-quality, rebound, "
+        "prior-soft-stop, or deferred-exit context that can be represented as a shared metric or dimension.\n"
+        "Every new metric or dimension proposal must include metric_role, decision_authority, window_policy, sample_floor, "
+        "primary_decision_metric, source_quality_gate, and forbidden_uses in required_source_fields or forbidden_uses.\n"
+        "In comparative_reviews choose selected_source as deterministic, ai_tier2, hybrid, or reject and selected_decision as "
+        "merge, absorb_as_dimension, create_new_metric, create_new_dimension, keep_bucket, reject, source_quality_blocker, or instrumentation_gap.\n"
         "Grade 2 counterfactual and mixed_source candidates cannot become bounded live candidates by AI promotion. "
         "However, if a deterministic entry bridge candidate is already live_auto_apply_ready, keep it live unless an explicit contract or safety gap is found.\n"
         "Do not be conservative by default for Grade 1 completed-sim deterministic live candidates. A Grade 1 deterministic live candidate with even a 1% plausible positive effect should not be blocked solely for small effect size, novelty, low confidence, or ambiguity.\n"
@@ -780,13 +910,56 @@ def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, 
         warnings.append("ai_review_schema_version_invalid")
     interpretation = payload.get("interpretation") if isinstance(payload.get("interpretation"), dict) else {}
     audit = payload.get("audit") if isinstance(payload.get("audit"), dict) else {}
-    conclusions = payload.get("final_conclusions") if isinstance(payload.get("final_conclusions"), list) else []
+    raw_conclusions = payload.get("final_conclusions")
+    raw_ai_proposals = payload.get("ai_tier2_proposals")
+    raw_comparative_reviews = payload.get("comparative_reviews")
+    conclusions = raw_conclusions if isinstance(raw_conclusions, list) else []
+    ai_proposals = payload.get("ai_tier2_proposals") if isinstance(payload.get("ai_tier2_proposals"), list) else []
+    comparative_reviews = payload.get("comparative_reviews") if isinstance(payload.get("comparative_reviews"), list) else []
     if not interpretation:
         warnings.append("ai_review_interpretation_missing")
     if not audit:
         warnings.append("ai_review_audit_missing")
-    if not isinstance(conclusions, list):
+    if not isinstance(raw_conclusions, list):
         warnings.append("ai_review_final_conclusions_invalid")
+    if not isinstance(raw_ai_proposals, list):
+        warnings.append("ai_review_ai_tier2_proposals_invalid")
+    if not isinstance(raw_comparative_reviews, list):
+        warnings.append("ai_review_comparative_reviews_invalid")
+    for proposal in ai_proposals:
+        if not isinstance(proposal, dict):
+            warnings.append("ai_review_ai_tier2_proposal_non_dict")
+            continue
+        if str(proposal.get("proposal_decision") or "") not in AI_TAXONOMY_DECISIONS:
+            warnings.append(f"ai_review_invalid_proposal_decision:{proposal.get('bucket_id')}")
+        if str(proposal.get("proposal_decision") or "") in {"create_new_metric", "create_new_dimension"}:
+            fields = {str(value) for value in (proposal.get("required_source_fields") or [])}
+            if not REQUIRED_TAXONOMY_CONTRACT_FIELDS.issubset(fields):
+                warnings.append(f"ai_review_metric_contract_missing:{proposal.get('bucket_id')}")
+    proposal_ids = {
+        str(proposal.get("bucket_id"))
+        for proposal in ai_proposals
+        if isinstance(proposal, dict) and proposal.get("bucket_id")
+    }
+    comparative_ids = {
+        str(review.get("bucket_id"))
+        for review in comparative_reviews
+        if isinstance(review, dict) and review.get("bucket_id")
+    }
+    for missing_id in sorted(proposal_ids - comparative_ids):
+        warnings.append(f"ai_review_comparative_review_missing:{missing_id}")
+    for review in comparative_reviews:
+        if not isinstance(review, dict):
+            warnings.append("ai_review_comparative_review_non_dict")
+            continue
+        if str(review.get("selected_decision") or "") not in AI_TAXONOMY_DECISIONS:
+            warnings.append(f"ai_review_invalid_selected_decision:{review.get('bucket_id')}")
+        if str(review.get("selected_source") or "") not in AI_TAXONOMY_SOURCES:
+            warnings.append(f"ai_review_invalid_selected_source:{review.get('bucket_id')}")
+        if str(review.get("selected_decision") or "") in {"create_new_metric", "create_new_dimension"}:
+            fields = {str(value) for value in (review.get("required_source_fields") or [])}
+            if not REQUIRED_TAXONOMY_CONTRACT_FIELDS.issubset(fields):
+                warnings.append(f"ai_review_selected_metric_contract_missing:{review.get('bucket_id')}")
     for item in conclusions:
         if not isinstance(item, dict):
             warnings.append("ai_review_final_conclusion_non_dict")
@@ -876,6 +1049,28 @@ def _candidate_index(candidates: list[dict[str, Any]]) -> dict[str, dict[str, An
     }
 
 
+def _ai_proposal_by_candidate(ai_payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    proposals = ai_payload.get("ai_tier2_proposals") if isinstance(ai_payload.get("ai_tier2_proposals"), list) else []
+    result: dict[str, dict[str, Any]] = {}
+    for proposal in proposals:
+        if isinstance(proposal, dict) and proposal.get("bucket_id"):
+            result[str(proposal["bucket_id"])] = {
+                **proposal,
+                "proposal_source": "ai_tier2",
+                "proposal_status": "provided",
+            }
+    return result
+
+
+def _comparative_review_by_candidate(ai_payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    reviews = ai_payload.get("comparative_reviews") if isinstance(ai_payload.get("comparative_reviews"), list) else []
+    result: dict[str, dict[str, Any]] = {}
+    for review in reviews:
+        if isinstance(review, dict) and review.get("bucket_id"):
+            result[str(review["bucket_id"])] = review
+    return result
+
+
 def _apply_ai_review(
     candidates: list[dict[str, Any]],
     *,
@@ -887,6 +1082,13 @@ def _apply_ai_review(
     by_id = _candidate_index(updated)
     if ai_status != "parsed":
         for item in updated:
+            deterministic = item.get("deterministic_proposal") if isinstance(item.get("deterministic_proposal"), dict) else {}
+            item["ai_tier2_proposal"] = default_ai_tier2_proposal(str(item.get("bucket_id") or ""), deterministic)
+            item["ai_tier2_comparative_review"] = compare_taxonomy_proposals(
+                bucket_id=str(item.get("bucket_id") or ""),
+                deterministic_proposal=deterministic,
+                ai_tier2_proposal=item["ai_tier2_proposal"],
+            )
             if item.get("classification_state") == "live_auto_apply_ready":
                 item["classification_state"] = "runtime_blocked_contract_gap"
                 item["runtime_effect"] = False
@@ -906,6 +1108,40 @@ def _apply_ai_review(
             warnings.append(f"ai_two_pass_review_{ai_status}_fail_closed_live_auto_blocked")
         return updated
 
+    ai_proposals = _ai_proposal_by_candidate(ai_payload)
+    comparative_reviews = _comparative_review_by_candidate(ai_payload)
+    for item in updated:
+        bucket_id = str(item.get("bucket_id") or "")
+        deterministic = item.get("deterministic_proposal") if isinstance(item.get("deterministic_proposal"), dict) else {}
+        ai_proposal = ai_proposals.get(bucket_id) or default_ai_tier2_proposal(bucket_id, deterministic)
+        provided_comparative = comparative_reviews.get(bucket_id)
+        comparative = compare_taxonomy_proposals(
+            bucket_id=bucket_id,
+            deterministic_proposal=deterministic,
+            ai_tier2_proposal=ai_proposal,
+            comparative_review=provided_comparative,
+        )
+        item["ai_tier2_proposal"] = ai_proposal
+        item["ai_tier2_comparative_review"] = comparative
+        item["ai_tier2_taxonomy_decision"] = comparative.get("selected_decision")
+        item["ai_tier2_selected_source"] = comparative.get("selected_source")
+        item["ai_tier2_confidence"] = comparative.get("confidence")
+        item["ai_tier2_rejection_reason"] = comparative.get("rejected_alternative_reason")
+        if provided_comparative and comparative.get("selected_decision") in {"source_quality_blocker", "instrumentation_gap"}:
+            selected_decision = str(comparative.get("selected_decision") or "")
+            item["recommended_resolution"] = selected_decision
+            item["source_quality_gate"] = selected_decision
+            if item.get("classification_state") == "live_auto_apply_ready":
+                item["classification_state"] = "runtime_blocked_contract_gap"
+                item["runtime_effect"] = False
+                item["broker_order_forbidden"] = True
+                item["allowed_runtime_apply"] = False
+                item["ai_review_blocked_reason"] = selected_decision
+            elif selected_decision == "source_quality_blocker":
+                item["classification_state"] = "code_patch_required"
+            else:
+                item["classification_state"] = "new_bucket_candidate"
+
     conclusions = ai_payload.get("final_conclusions") if isinstance(ai_payload.get("final_conclusions"), list) else []
     for conclusion in conclusions:
         if not isinstance(conclusion, dict):
@@ -923,6 +1159,14 @@ def _apply_ai_review(
         item["ai_final_classification_state"] = final_state
         item["ai_final_decision"] = final_decision
         item["ai_final_reason"] = final_reason
+        if conclusion.get("selected_decision"):
+            item["ai_tier2_taxonomy_decision"] = conclusion.get("selected_decision")
+        if conclusion.get("selected_source"):
+            item["ai_tier2_selected_source"] = conclusion.get("selected_source")
+        if conclusion.get("confidence"):
+            item["ai_tier2_confidence"] = conclusion.get("confidence")
+        if conclusion.get("rejected_alternative_reason"):
+            item["ai_tier2_rejection_reason"] = conclusion.get("rejected_alternative_reason")
         if final_state not in FINAL_CLASSIFICATION_STATES or final_decision == "keep":
             continue
         if final_state == "live_auto_apply_ready":
@@ -988,6 +1232,37 @@ def _finalize_report(
     state_counts = Counter(str(item.get("classification_state") or "unknown") for item in candidates)
     stage_counts = Counter(str(item.get("stage") or "unknown") for item in candidates)
     source_bucket_kind_counts = Counter(str(item.get("source_bucket_kind") or "unknown") for item in candidates)
+    canonical_bucket_count = len({str(item.get("canonical_bucket") or item.get("bucket_id")) for item in candidates})
+    legacy_bucket_count = len({str(item.get("legacy_raw_bucket_key") or item.get("bucket_key")) for item in candidates})
+    deterministic_proposal_count = sum(1 for item in candidates if isinstance(item.get("deterministic_proposal"), dict))
+    ai_tier2_proposal_count = sum(
+        1
+        for item in candidates
+        if isinstance(item.get("ai_tier2_proposal"), dict)
+        and item.get("ai_tier2_proposal", {}).get("proposal_status") == "provided"
+    )
+    selected_source_counts = Counter(
+        str(
+            (
+                item.get("ai_tier2_comparative_review")
+                if isinstance(item.get("ai_tier2_comparative_review"), dict)
+                else {}
+            ).get("selected_source")
+            or "deterministic"
+        )
+        for item in candidates
+    )
+    selected_decision_counts = Counter(
+        str(
+            (
+                item.get("ai_tier2_comparative_review")
+                if isinstance(item.get("ai_tier2_comparative_review"), dict)
+                else {}
+            ).get("selected_decision")
+            or "keep_bucket"
+        )
+        for item in candidates
+    )
     unknown_reason_counts: Counter[str] = Counter()
     for item in candidates:
         counts = item.get("unknown_reason_counts") if isinstance(item.get("unknown_reason_counts"), dict) else {}
@@ -1012,6 +1287,19 @@ def _finalize_report(
             "stage_counts": dict(stage_counts),
             "source_bucket_kind_counts": dict(source_bucket_kind_counts),
             "unknown_reason_counts": dict(unknown_reason_counts),
+            "canonical_bucket_count": canonical_bucket_count,
+            "legacy_bucket_count": legacy_bucket_count,
+            "absorbed_bucket_count": selected_decision_counts.get("absorb_as_dimension", 0),
+            "deterministic_proposal_count": deterministic_proposal_count,
+            "ai_tier2_proposal_count": ai_tier2_proposal_count,
+            "reviewer_selected_deterministic_count": selected_source_counts.get("deterministic", 0),
+            "reviewer_selected_ai_count": selected_source_counts.get("ai_tier2", 0),
+            "reviewer_selected_hybrid_count": selected_source_counts.get("hybrid", 0),
+            "reviewer_rejected_count": selected_source_counts.get("reject", 0)
+            + selected_decision_counts.get("reject", 0),
+            "source_quality_blocker_count": selected_decision_counts.get("source_quality_blocker", 0),
+            "taxonomy_selected_decision_counts": dict(selected_decision_counts),
+            "taxonomy_selected_source_counts": dict(selected_source_counts),
             "human_intervention_required": False,
             "warnings": warnings,
         }
@@ -1136,6 +1424,8 @@ def build_lifecycle_bucket_discovery_report(
         "input_context_hash": _text_hash(ai_context),
         "interpretation": ai_payload.get("interpretation") if isinstance(ai_payload.get("interpretation"), dict) else {},
         "audit": ai_payload.get("audit") if isinstance(ai_payload.get("audit"), dict) else {},
+        "ai_tier2_proposals": ai_payload.get("ai_tier2_proposals") if isinstance(ai_payload.get("ai_tier2_proposals"), list) else [],
+        "comparative_reviews": ai_payload.get("comparative_reviews") if isinstance(ai_payload.get("comparative_reviews"), list) else [],
         "final_conclusions": ai_payload.get("final_conclusions") if isinstance(ai_payload.get("final_conclusions"), list) else [],
         "warnings": ai_warnings,
     }
@@ -1162,6 +1452,9 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- source_contract_status: `{summary.get('source_contract_status')}` / changes: `{summary.get('source_contract_change_count')}`",
         f"- ai_two_pass_review: `{summary.get('ai_two_pass_review_status')}` / model: `{ai_review.get('model') or '-'}` / tier: `{ai_review.get('model_tier') or '-'}`",
         f"- surfaced_candidate_count: `{summary.get('surfaced_candidate_count')}`",
+        f"- canonical/legacy buckets: `{summary.get('canonical_bucket_count')}` / `{summary.get('legacy_bucket_count')}`",
+        f"- dual_proposals: deterministic=`{summary.get('deterministic_proposal_count')}` ai=`{summary.get('ai_tier2_proposal_count')}` hybrid_selected=`{summary.get('reviewer_selected_hybrid_count')}`",
+        f"- absorbed/source_quality_blocker: `{summary.get('absorbed_bucket_count')}` / `{summary.get('source_quality_blocker_count')}`",
         f"- sim_auto_approved_count: `{summary.get('sim_auto_approved_count')}`",
         f"- live_auto_apply_ready_count: `{summary.get('live_auto_apply_ready_count')}`",
         f"- human_intervention_required: `{summary.get('human_intervention_required')}`",
@@ -1185,6 +1478,8 @@ def _render_markdown(report: dict[str, Any]) -> str:
             [
                 "### AI Two-Pass Review",
                 f"- interpretation_count: `{len(((ai_review.get('interpretation') or {}).get('bucket_reviews') or []) if isinstance(ai_review.get('interpretation'), dict) else [])}`",
+                f"- ai_tier2_proposal_count: `{len(ai_review.get('ai_tier2_proposals') or [])}`",
+                f"- comparative_review_count: `{len(ai_review.get('comparative_reviews') or [])}`",
                 f"- audit_status: `{audit.get('status') or '-'}`",
                 f"- audit_issues: `{audit.get('issues') or []}`",
                 f"- audit_reason: `{audit.get('reason') or '-'}`",
@@ -1195,8 +1490,9 @@ def _render_markdown(report: dict[str, Any]) -> str:
         lines.append(
             f"- `{item.get('bucket_id')}` stage=`{item.get('stage')}` "
             f"state=`{item.get('classification_state')}` action=`{item.get('recommended_action')}` "
-            f"relation=`{item.get('bucket_relation')}` joined=`{item.get('joined_sample')}` "
+            f"relation=`{item.get('bucket_relation')}` canonical=`{item.get('canonical_bucket')}` joined=`{item.get('joined_sample')}` "
             f"ev=`{item.get('source_quality_adjusted_ev_pct')}` ai_final=`{item.get('ai_final_decision') or '-'}`"
+            f" taxonomy=`{item.get('ai_tier2_taxonomy_decision') or ((item.get('ai_tier2_comparative_review') or {}).get('selected_decision') if isinstance(item.get('ai_tier2_comparative_review'), dict) else '-')}`"
         )
     lines.extend(
         [

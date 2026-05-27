@@ -1,3 +1,4 @@
+import gzip
 import json
 from dataclasses import replace
 from datetime import datetime
@@ -9,6 +10,13 @@ from src.engine import scalp_entry_adm_runtime as runtime_mod
 def _write_jsonl(path, rows):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n", encoding="utf-8")
+
+
+def _write_gzip_jsonl(path, rows):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(path, "wt", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 def test_scalp_entry_adm_report_aggregates_actions_and_joins_outcomes(tmp_path, monkeypatch):
@@ -157,6 +165,34 @@ def test_scalp_entry_adm_report_aggregates_actions_and_joins_outcomes(tmp_path, 
     price_skip_row = next(item for item in report["rows"] if item["sim_record_id"] == "SIM2")
     assert price_skip_row["chosen_action"] == "SKIP_PRE_SUBMIT_SAFETY"
     assert (report_dir / "scalp_entry_action_decision_matrix_2026-05-18.json").exists()
+
+
+def test_scalp_entry_adm_loads_gzip_sim_evaluations(tmp_path, monkeypatch):
+    post_sell_dir = tmp_path / "post_sell"
+    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
+    _write_gzip_jsonl(
+        post_sell_dir / "sim_post_sell_evaluations_2026-05-18.jsonl.gz",
+        [{"sim_record_id": "SIM1", "candidate_id": "ADM1", "profit_rate": 1.25}],
+    )
+
+    rows, meta = mod._load_sim_evaluations("2026-05-18")
+
+    assert meta["artifact"].endswith(".jsonl.gz")
+    assert meta["rows"] == 1
+    assert rows["SIM1"]["profit_rate"] == 1.25
+
+
+def test_scalp_entry_adm_event_paths_include_gzip_threshold_events(tmp_path, monkeypatch):
+    threshold_dir = tmp_path / "threshold_cycle"
+    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", threshold_dir)
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", tmp_path / "pipeline_events")
+    monkeypatch.setattr(mod, "THRESHOLD_SNAPSHOT_DIR", threshold_dir / "snapshots")
+    _write_gzip_jsonl(
+        threshold_dir / "threshold_events_2026-05-18.jsonl.gz",
+        [{"stage": "scalp_entry_action_decision_snapshot", "fields": {}}],
+    )
+
+    assert mod._event_paths("2026-05-18") == [threshold_dir / "threshold_events_2026-05-18.jsonl.gz"]
 
 
 def test_scalp_entry_adm_runtime_context_adds_prompt_and_cache_token(tmp_path, monkeypatch):

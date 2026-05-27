@@ -1,3 +1,4 @@
+import gzip
 import json
 
 from src.engine import lifecycle_decision_matrix as mod
@@ -30,6 +31,34 @@ def test_lifecycle_entry_score_bands_keep_score60_floor_granular():
     assert mod._entry_score_band(64) == "score_63_65"
     assert mod._entry_score_band(67) == "score_66_69"
     assert mod._entry_score_band(70) == "score_70p"
+
+
+def test_lifecycle_decision_matrix_reads_gzip_pipeline_events(tmp_path, monkeypatch):
+    pipeline_dir = tmp_path / "pipeline_events"
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
+    pipeline_dir.mkdir(parents=True)
+    with gzip.open(pipeline_dir / "pipeline_events_2026-05-20.jsonl.gz", "wt", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "stage": "scalp_sim_holding_started",
+                    "fields": {
+                        "simulation_book": "scalp_ai_buy_all",
+                        "sim_record_id": "SIM-1",
+                        "actual_order_submitted": "False",
+                        "broker_order_forbidden": "True",
+                        "ai_action": "HOLD",
+                        "ai_score": "72",
+                    },
+                }
+            )
+            + "\n"
+        )
+
+    rows, meta = mod._load_scalp_sim_holding_rows("2026-05-20")
+
+    assert len(rows) == 1
+    assert meta["stage_counts"]["scalp_sim_holding_started"] == 1
 
 
 def test_lifecycle_submit_bucket_attribution_is_source_only_and_surfaces_gaps():

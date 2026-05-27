@@ -14,6 +14,7 @@ def test_ai_response_schema_registry_covers_required_endpoints():
         "threshold_ai_correction_v1",
         "lifecycle_ai_context_v1",
         "lifecycle_bucket_discovery_review_v1",
+        "swing_lifecycle_bucket_discovery_review_v1",
         "pattern_lab_ai_review_v1",
         "producer_gap_discovery_ai_review_v1",
         "stage_hook_workorder_discovery_ai_review_v1",

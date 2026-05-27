@@ -1381,7 +1381,7 @@ def test_swing_watching_legacy_priors_flow_to_same_submit_policy(monkeypatch):
     assert policy_sources[-3:] == ["blocked_swing_gap", "blocked_swing_score_vpw", "blocked_gatekeeper_reject"]
 
 
-def test_swing_watching_market_regime_block_flows_to_submit_policy(monkeypatch):
+def test_swing_watching_unconfirmed_market_regime_block_is_prior_observation(monkeypatch):
     rules = replace(
         CONFIG,
         SWING_LIVE_ORDER_DRY_RUN_ENABLED=True,
@@ -1436,7 +1436,88 @@ def test_swing_watching_market_regime_block_flows_to_submit_policy(monkeypatch):
         ai_engine=Gatekeeper(),
     )
 
+    assert submit_sources == ["market_regime_prior_observed"]
+    prior = next(fields for stage, fields in logs if stage == "market_regime_prior_observed")
+    assert prior["hard_gate"] is False
+    assert prior["market_regime_block_downgraded_to_prior"] is True
+    policy = next(fields for stage, fields in logs if stage == "swing_entry_policy_evaluated")
+    assert policy["submit_allowed_by_policy"] is True
+    assert policy["baseline_prior_features"]["market_regime"]["blocked"] is False
+    assert policy["baseline_prior_features"]["market_regime"]["prior_observed"] is True
+
+
+def test_swing_watching_confirmed_market_regime_block_keeps_block_observation(monkeypatch):
+    rules = replace(
+        CONFIG,
+        SWING_LIVE_ORDER_DRY_RUN_ENABLED=True,
+        SWING_ONE_SHARE_REAL_CANARY_ENABLED=False,
+        SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED=False,
+        SWING_INTRADAY_PROBE_COUNTERFACTUAL_GATEKEEPER_ENABLED=False,
+    )
+    logs = []
+    submit_sources = []
+
+    class Radar:
+        def analyze_signal_integrated(self, ws_data, ai_prob):
+            return 85, {}, "unit", {}, {}
+
+    class Gatekeeper:
+        def evaluate_realtime_gatekeeper(self, **kwargs):
+            return {
+                "allow_entry": True,
+                "action_label": "BUY",
+                "action_key": "buy",
+                "report": "unit",
+            }
+
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(state_handlers, "COOLDOWNS", {})
+    monkeypatch.setattr(state_handlers, "ALERTED_STOCKS", set())
+    monkeypatch.setattr(state_handlers, "EVENT_BUS", FakeEventBus())
+    monkeypatch.setattr(state_handlers, "LAST_AI_CALL_TIMES", {})
+    monkeypatch.setattr(state_handlers, "_resolve_stock_marcap", lambda *args, **kwargs: 100_000_000_000)
+    monkeypatch.setattr(
+        state_handlers,
+        "get_dynamic_swing_gap_threshold",
+        lambda *args, **kwargs: {"threshold": 3.5, "bucket_label": "unit"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_should_block_swing_entry",
+        lambda strategy: (
+            True,
+            "confirmed_risk_context",
+            {
+                "confirmed_risk_block": True,
+                "market_regime": "PANIC",
+                "allow_swing_entry": False,
+            },
+        ),
+    )
+    monkeypatch.setattr(state_handlers, "kiwoom_utils", type("KU", (), {"build_realtime_analysis_context": staticmethod(lambda **kwargs: {})}))
+    monkeypatch.setattr(
+        state_handlers,
+        "_submit_watching_triggered_entry",
+        lambda stock, code, ws_data, admin_id, runtime: submit_sources.append(runtime.get("swing_entry_policy_source_stage")),
+    )
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
+
+    state_handlers.handle_watching_state(
+        {"id": 809, "name": "SWING_CONFIRMED_REGIME", "code": "000009", "strategy": "KOSPI_ML", "prob": 0.8},
+        "000009",
+        {"curr": 10_000, "volume": 1000, "fluctuation": 1.0, "v_pw": 130.0},
+        admin_id=1,
+        now_ts=1_768_090_010.0,
+        now_dt=datetime.combine(datetime(2026, 5, 26), time(10, 0)),
+        radar=Radar(),
+        ai_engine=Gatekeeper(),
+    )
+
     assert submit_sources == ["market_regime_block"]
+    block = next(fields for stage, fields in logs if stage == "market_regime_block")
+    assert block["hard_gate"] is True
+    assert block["confirmed_risk_block"] is True
+    assert block["market_regime_block_downgraded_to_prior"] is False
     policy = next(fields for stage, fields in logs if stage == "swing_entry_policy_evaluated")
     assert policy["submit_allowed_by_policy"] is True
     assert policy["baseline_prior_features"]["market_regime"]["blocked"] is True

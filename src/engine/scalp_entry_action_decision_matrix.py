@@ -10,6 +10,8 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable
 
+from src.utils.jsonl_io import existing_or_gzip_path
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
@@ -109,7 +111,7 @@ def _open_text(path: Path):
 def _event_paths(target_date: str) -> list[Path]:
     paths: list[Path] = []
     for path in [
-        THRESHOLD_EVENT_DIR / f"threshold_events_{target_date}.jsonl",
+        existing_or_gzip_path(THRESHOLD_EVENT_DIR / f"threshold_events_{target_date}.jsonl"),
         PIPELINE_EVENT_DIR / f"pipeline_events_{target_date}.jsonl",
         PIPELINE_EVENT_DIR / f"pipeline_events_{target_date}.jsonl.gz",
     ]:
@@ -463,7 +465,7 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def _load_sim_evaluations(target_date: str) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
-    path = POST_SELL_DIR / f"sim_post_sell_evaluations_{target_date}.jsonl"
+    path = existing_or_gzip_path(POST_SELL_DIR / f"sim_post_sell_evaluations_{target_date}.jsonl")
     by_key: dict[str, dict[str, Any]] = {}
     total = 0
     joined_keys: set[str] = set()

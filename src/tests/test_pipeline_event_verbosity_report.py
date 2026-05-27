@@ -1,3 +1,4 @@
+import gzip
 import json
 
 from src.engine import pipeline_event_verbosity_report as report_mod
@@ -37,6 +38,13 @@ def _write_producer_summary(tmp_path, target_date: str, rows: list[dict]) -> Non
     for row in rows:
         compactor.submit(row)
     compactor.flush(target_date=target_date)
+
+
+def _gzip_replace(path) -> None:
+    gz_path = path.with_name(path.name + ".gz")
+    with path.open("rb") as source, gzip.open(gz_path, "wb") as target:
+        target.write(source.read())
+    path.unlink()
 
 
 def test_pipeline_event_verbosity_report_detects_missing_shadow(monkeypatch, tmp_path):
@@ -91,6 +99,66 @@ def test_pipeline_event_verbosity_report_parity_pass(monkeypatch, tmp_path):
     assert report["parity"]["stage_diff"] == {}
     assert report["parity"]["blocker_diff"] == {}
     assert report["producer_summary"]["manifest_mode"] == "shadow"
+
+
+def test_pipeline_event_verbosity_report_parity_pass_with_gzip_sources(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    rows = [
+        _event(
+            "2026-05-06",
+            "10:00:00",
+            "blocked_strength_momentum",
+            record_id=1,
+            fields={"reason": "below_strength_base"},
+        )
+    ]
+    _write_raw(tmp_path, "2026-05-06", rows)
+    _write_producer_summary(tmp_path, "2026-05-06", rows)
+    _gzip_replace(tmp_path / "pipeline_events" / "pipeline_events_2026-05-06.jsonl")
+    _gzip_replace(tmp_path / "pipeline_event_summaries" / "pipeline_event_producer_summary_2026-05-06.jsonl")
+
+    report = report_mod.build_pipeline_event_verbosity_report("2026-05-06")
+
+    assert report["state"] == "v2_shadow_parity_pass"
+    assert report["producer_summary"]["exists"] is True
+    assert report["producer_summary"]["path"].endswith(".jsonl.gz")
+    assert report["raw_stream"]["raw_storage_size_bytes"] == (
+        tmp_path / "pipeline_events" / "pipeline_events_2026-05-06.jsonl.gz"
+    ).stat().st_size
+    assert report["raw_stream"]["raw_size_bytes"] > 0
+    assert report["raw_stream"]["high_volume_byte_share_pct"] <= 100.0
+
+
+def test_pipeline_event_verbosity_raw_size_includes_non_json_lines(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    raw_dir = tmp_path / "pipeline_events"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    raw_path = raw_dir / "pipeline_events_2026-05-06.jsonl"
+    event = _event(
+        "2026-05-06",
+        "10:00:00",
+        "blocked_strength_momentum",
+        record_id=1,
+        fields={"reason": "below_strength_base"},
+    )
+    raw_path.write_text(
+        "\n".join(
+            [
+                json.dumps(event, ensure_ascii=False),
+                "",
+                "not-json",
+                "",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = report_mod.build_pipeline_event_verbosity_report("2026-05-06")
+
+    assert report["raw_stream"]["raw_size_bytes"] == raw_path.stat().st_size
+    assert report["raw_stream"]["raw_line_count"] == 2
+    assert report["raw_stream"]["high_volume_line_count"] == 1
 
 
 def test_pipeline_event_verbosity_report_parity_fail(monkeypatch, tmp_path):

@@ -1318,6 +1318,13 @@ def _lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) -> list[
             {
                 "order_id": _lifecycle_bucket_discovery_order_id(item),
                 "source_bucket_id": source_bucket_id,
+                "canonical_bucket": item.get("canonical_bucket"),
+                "legacy_raw_bucket_key": item.get("legacy_raw_bucket_key"),
+                "bucket_alias_version": item.get("bucket_alias_version"),
+                "dimension_set_version": item.get("dimension_set_version"),
+                "ai_tier2_comparative_review": item.get("ai_tier2_comparative_review")
+                if isinstance(item.get("ai_tier2_comparative_review"), dict)
+                else {},
                 "title": f"Lifecycle bucket discovery follow-up: {bucket_id}",
                 "source_report_type": "lifecycle_bucket_discovery",
                 "lifecycle_stage": stage,
@@ -1337,6 +1344,13 @@ def _lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) -> list[
                 "evidence": [
                     f"bucket_id={bucket_id}",
                     f"source_bucket_id={source_bucket_id}",
+                    f"canonical_bucket={item.get('canonical_bucket')}",
+                    f"legacy_raw_bucket_key={item.get('legacy_raw_bucket_key')}",
+                    f"bucket_alias_version={item.get('bucket_alias_version')}",
+                    f"dimension_set_version={item.get('dimension_set_version')}",
+                    f"bucket_absorption_reason={item.get('bucket_absorption_reason')}",
+                    f"ai_tier2_taxonomy_decision={item.get('ai_tier2_taxonomy_decision') or ((item.get('ai_tier2_comparative_review') or {}).get('selected_decision') if isinstance(item.get('ai_tier2_comparative_review'), dict) else None)}",
+                    f"ai_tier2_selected_source={item.get('ai_tier2_selected_source') or ((item.get('ai_tier2_comparative_review') or {}).get('selected_source') if isinstance(item.get('ai_tier2_comparative_review'), dict) else None)}",
                     f"source_bucket_kind={item.get('source_bucket_kind')}",
                     f"stage={stage}",
                     f"classification_state={state}",
@@ -2315,6 +2329,10 @@ def _swing_lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) ->
                 "expected_ev_effect": "Keep Swing bucket discovery handoff explicit without allowing sim-only output to mutate real runtime.",
                 "evidence": [
                     f"bucket_id={bucket_id}",
+                    f"canonical_bucket={item.get('canonical_bucket') or '-'}",
+                    f"legacy_raw_bucket_key={item.get('legacy_raw_bucket_key') or '-'}",
+                    f"ai_tier2_taxonomy_decision={(item.get('comparative_review') or {}).get('selected_decision') if isinstance(item.get('comparative_review'), dict) else '-'}",
+                    f"ai_tier2_selected_source={(item.get('comparative_review') or {}).get('selected_source') if isinstance(item.get('comparative_review'), dict) else '-'}",
                     f"classification_state={item.get('classification_state')}",
                     f"reason={item.get('reason')}",
                     "decision_authority=swing_ldm_bucket_discovery_sim_auto",
@@ -2330,6 +2348,11 @@ def _swing_lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) ->
                 "acceptance_tests": [
                     "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_bucket_discovery.py src/tests/test_verify_threshold_cycle_postclose_chain.py",
                 ],
+                "canonical_bucket": item.get("canonical_bucket"),
+                "legacy_raw_bucket_key": item.get("legacy_raw_bucket_key"),
+                "deterministic_proposal": item.get("deterministic_proposal"),
+                "ai_tier2_proposal": item.get("ai_tier2_proposal"),
+                "comparative_review": item.get("comparative_review"),
             }
         )
     return orders

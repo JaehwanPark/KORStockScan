@@ -18,6 +18,7 @@ from typing import Any
 
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.utils import kiwoom_utils
+from src.utils.jsonl_io import iter_jsonl
 
 
 REPORT_DIR_PATH = REPORT_DIR / "institutional_flow_context"
@@ -77,15 +78,7 @@ def _load_pipeline_event_codes(target_date: str, limit: int = 120) -> list[str]:
     path = PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"
     codes: list[str] = []
     seen: set[str] = set()
-    if not path.exists():
-        return codes
-    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-        if not line.strip():
-            continue
-        try:
-            item = json.loads(line)
-        except Exception:
-            continue
+    for item in iter_jsonl(path, errors="ignore"):
         fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
         code = _normalize_code(item.get("stock_code") or fields.get("stock_code"))
         if not code or code in seen:

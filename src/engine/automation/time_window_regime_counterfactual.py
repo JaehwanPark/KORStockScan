@@ -14,6 +14,7 @@ from typing import Any, Iterable
 
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.utils.constants import DATA_DIR
+from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -86,20 +87,7 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 
 def _iter_jsonl(path: Path) -> Iterable[dict[str, Any]]:
-    try:
-        with path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    payload = json.loads(line)
-                except Exception:
-                    continue
-                if isinstance(payload, dict):
-                    yield payload
-    except FileNotFoundError:
-        return
+    yield from iter_jsonl(path)
 
 
 def _write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> int:
@@ -140,7 +128,9 @@ def _available_sim_dates(end_date: str, start_date: str | None = None) -> list[s
     dates = []
     start_d = _parse_date(start_date) if start_date else None
     end_d = _parse_date(end_date)
-    for path in sorted(POST_SELL_DIR.glob("sim_post_sell_candidates_*.jsonl")):
+    paths = list(POST_SELL_DIR.glob("sim_post_sell_candidates_*.jsonl"))
+    paths.extend(POST_SELL_DIR.glob("sim_post_sell_candidates_*.jsonl.gz"))
+    for path in sorted(paths):
         match = re.search(r"(\d{4}-\d{2}-\d{2})", path.name)
         if not match:
             continue
@@ -194,6 +184,7 @@ def _index_entry_events(target_date: str) -> dict[str, dict[str, dict[str, Any]]
     by_record: dict[str, dict[str, Any]] = {}
     paths = list((THRESHOLD_CYCLE_DIR / f"date={target_date}" / "family=scalp_entry_action_decision_matrix").glob("part-*.jsonl"))
     legacy = THRESHOLD_CYCLE_DIR / f"threshold_events_{target_date}.jsonl"
+    legacy = existing_or_gzip_path(legacy)
     if legacy.exists():
         paths.append(legacy)
     for path in paths:

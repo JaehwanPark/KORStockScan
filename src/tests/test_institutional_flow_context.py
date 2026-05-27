@@ -1,6 +1,14 @@
+import gzip
 import json
 
 from src.engine import institutional_flow_context as mod
+
+
+def _write_gzip_jsonl(path, rows):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(path, "wt", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 def test_normalize_institutional_flow_context_builds_source_only_features():
@@ -81,3 +89,17 @@ def test_build_report_writes_artifact(tmp_path, monkeypatch):
     assert (tmp_path / "institutional_flow_context_2026-05-20.json").exists()
     payload = json.loads((tmp_path / "institutional_flow_context_2026-05-20.json").read_text(encoding="utf-8"))
     assert payload["rows"][0]["decision_authority"] == "source_only_lifecycle_feature"
+
+
+def test_load_pipeline_event_codes_reads_gzip_sibling(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", tmp_path / "pipeline_events")
+    _write_gzip_jsonl(
+        tmp_path / "pipeline_events" / "pipeline_events_2026-05-20.jsonl.gz",
+        [
+            {"stock_code": "A005930", "fields": {}},
+            {"fields": {"stock_code": "000660"}},
+            {"stock_code": "005930", "fields": {}},
+        ],
+    )
+
+    assert mod._load_pipeline_event_codes("2026-05-20") == ["005930", "000660"]

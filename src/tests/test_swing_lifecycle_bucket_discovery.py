@@ -3,6 +3,53 @@ import json
 from src.engine import swing_lifecycle_bucket_discovery as mod
 
 
+def _ai_response(bucket_ids: list[str]) -> dict:
+    contract_fields = [
+        "metric_role",
+        "decision_authority",
+        "window_policy",
+        "sample_floor",
+        "primary_decision_metric",
+        "source_quality_gate",
+        "forbidden_uses",
+    ]
+    return {
+        "schema_version": 1,
+        "reviewer": "swing_lifecycle_bucket_discovery_ai_review",
+        "ai_tier2_proposals": [
+            {
+                "bucket_id": bucket_id,
+                "proposal_decision": "keep_bucket",
+                "recommended_canonical_bucket": f"swing:{bucket_id}",
+                "recommended_metric_or_dimension": ["source_quality_adjusted_ev_pct"],
+                "reasoning_summary": "source-only swing bucket proposal",
+                "confidence": "high",
+                "required_source_fields": contract_fields,
+                "forbidden_uses": mod.FORBIDDEN_USES,
+            }
+            for bucket_id in bucket_ids
+        ],
+        "comparative_reviews": [
+            {
+                "bucket_id": bucket_id,
+                "selected_decision": "keep_bucket",
+                "selected_source": "hybrid",
+                "recommended_canonical_bucket": f"swing:{bucket_id}",
+                "recommended_metric_or_dimension": ["source_quality_adjusted_ev_pct"],
+                "comparison_summary": "deterministic and AI proposals agree",
+                "rejected_alternative_reason": "",
+                "confidence": "high",
+                "required_source_fields": contract_fields,
+                "forbidden_uses": mod.FORBIDDEN_USES,
+                "workorder_title": "Review swing bucket",
+                "workorder_priority": "medium",
+            }
+            for bucket_id in bucket_ids
+        ],
+        "audit": {"status": "pass", "issues": [], "forbidden_use_violations": [], "reason": "ok"},
+    }
+
+
 def test_bucket_discovery_auto_approves_sim_only_candidates(tmp_path, monkeypatch):
     target = "2026-05-22"
     matrix_dir = tmp_path / "matrix"
@@ -40,7 +87,12 @@ def test_bucket_discovery_auto_approves_sim_only_candidates(tmp_path, monkeypatc
     )
     monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
 
-    report = mod.build_swing_lifecycle_bucket_discovery(target)
+    bucket_id = "swing_bucket_entry_entry_bucket_attribution_safe_pool_probe"
+    report = mod.build_swing_lifecycle_bucket_discovery(
+        target,
+        provider="openai",
+        ai_raw_response=_ai_response([bucket_id]),
+    )
 
     assert report["summary"]["sim_auto_approved_count"] == 1
     candidate = report["sim_auto_approved_candidates"][0]
@@ -59,6 +111,47 @@ def test_bucket_discovery_auto_approves_sim_only_candidates(tmp_path, monkeypatc
     assert approval["approved"] is True
     assert approval["approved_source_ids"] == ["swing_lifecycle_bucket_discovery"]
     assert catalog["policies"][0]["bucket_id"] == candidate["bucket_id"]
+
+
+def test_bucket_discovery_provider_disabled_downgrades_sim_auto(tmp_path, monkeypatch):
+    target = "2026-05-22"
+    matrix_dir = tmp_path / "matrix"
+    matrix_dir.mkdir()
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "discovery")
+
+    matrix_path = matrix_dir / f"swing_lifecycle_decision_matrix_{target}.json"
+    matrix_path.write_text(
+        json.dumps(
+            {
+                "input_contract": {"swing_daily_simulation_consumed": False},
+                "entry_bucket_attribution": {
+                    "buckets": [
+                        {
+                            "bucket_type": "entry_bucket_attribution",
+                            "bucket_key": "safe_pool|probe",
+                            "lifecycle_stage": "entry",
+                            "recommended_route": "sim_auto_approved",
+                            "source_quality_gate": "pass",
+                            "joined_sample": 3,
+                            "sample_count": 3,
+                        }
+                    ],
+                    "code_improvement_workorders": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+
+    report = mod.build_swing_lifecycle_bucket_discovery(target, provider="none")
+
+    assert report["summary"]["ai_fail_closed"] is True
+    assert report["summary"]["sim_auto_approved_count"] == 0
+    candidate = report["surfaced_candidates"][0]
+    assert candidate["classification_state"] == "source_only_keep_collecting"
+    assert candidate["sim_auto_downgraded_by_ai_fail_closed"] is True
+    assert candidate["allowed_runtime_apply"] is False
 
 
 def test_bucket_discovery_flags_daily_simulation_contract_gap(tmp_path, monkeypatch):

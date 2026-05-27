@@ -12,6 +12,8 @@ def _ai_keep_response():
             "source_contract_review": {"status": "pass", "changes": [], "reason": "contract stable"},
         },
         "audit": {"status": "pass", "issues": [], "reason": "two-pass review accepted"},
+        "ai_tier2_proposals": [],
+        "comparative_reviews": [],
         "final_conclusions": [],
     }
 
@@ -27,6 +29,8 @@ def _ai_block_response(reason, *, bucket_id=None):
             "source_contract_review": {"status": "pass", "changes": [], "reason": "contract stable"},
         },
         "audit": {"status": "correction_required", "issues": [reason], "reason": reason},
+        "ai_tier2_proposals": [],
+        "comparative_reviews": [],
         "final_conclusions": [
             {
                 "bucket_id": target_bucket_id,
@@ -36,6 +40,80 @@ def _ai_block_response(reason, *, bucket_id=None):
                 "reason": reason,
             }
         ],
+    }
+
+
+def _ai_hybrid_taxonomy_response(bucket_id):
+    return {
+        "schema_version": 1,
+        "interpretation": {
+            "bucket_reviews": [],
+            "source_contract_review": {"status": "pass", "changes": [], "reason": "contract stable"},
+        },
+        "audit": {"status": "pass", "issues": [], "reason": "dual proposal comparison accepted"},
+        "ai_tier2_proposals": [
+            {
+                "bucket_id": bucket_id,
+                "proposal_decision": "create_new_dimension",
+                "recommended_canonical_bucket": "scale_in:blocker_reason:pnl_out_of_range",
+                "recommended_metric_or_dimension": ["pnl_delta_pct", "pnl_delta_pct_bucket"],
+                "reasoning_summary": "Use a shared PnL dimension rather than a separate bucket per numeric value.",
+                "confidence": "high",
+                "required_source_fields": [
+                    "metric_role",
+                    "decision_authority",
+                    "window_policy",
+                    "sample_floor",
+                    "primary_decision_metric",
+                    "source_quality_gate",
+                    "forbidden_uses",
+                ],
+                "forbidden_uses": ["runtime_threshold_apply", "broker_submit"],
+            }
+        ],
+        "comparative_reviews": [
+            {
+                "bucket_id": bucket_id,
+                "selected_decision": "absorb_as_dimension",
+                "selected_source": "hybrid",
+                "recommended_canonical_bucket": "scale_in:blocker_reason:pnl_out_of_range",
+                "recommended_metric_or_dimension": ["pnl_delta_pct", "pnl_delta_pct_bucket"],
+                "comparison_summary": "Deterministic numeric extraction and AI dimension proposal agree.",
+                "rejected_alternative_reason": "Creating a distinct numeric bucket would overfit.",
+                "confidence": "high",
+                "required_source_fields": [
+                    "metric_role",
+                    "decision_authority",
+                    "window_policy",
+                    "sample_floor",
+                    "primary_decision_metric",
+                    "source_quality_gate",
+                    "forbidden_uses",
+                ],
+                "forbidden_uses": ["runtime_threshold_apply", "broker_submit"],
+                "workorder_title": "Absorb numeric PnL blocker buckets into dimensions",
+                "workorder_priority": "medium",
+            }
+        ],
+        "final_conclusions": [],
+    }
+
+
+def _ai_proposal_without_comparison_response(bucket_id):
+    payload = _ai_hybrid_taxonomy_response(bucket_id)
+    payload["comparative_reviews"] = []
+    return payload
+
+
+def _legacy_ai_response_without_dual_taxonomy_fields():
+    return {
+        "schema_version": 1,
+        "interpretation": {
+            "bucket_reviews": [],
+            "source_contract_review": {"status": "pass", "changes": [], "reason": "legacy schema"},
+        },
+        "audit": {"status": "pass", "issues": [], "reason": "legacy response"},
+        "final_conclusions": [],
     }
 
 
@@ -165,6 +243,14 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     assert mixed["bounded_live_canary_allowed"] is False
     scale_blocker = states["scale_in:blocker_reason:pnl_out_of_range_0_32"]
     assert scale_blocker["recommended_action"] == "keep_or_tighten_blocker_candidate"
+    assert scale_blocker["legacy_raw_bucket_key"] == "pnl_out_of_range(0.32)"
+    assert scale_blocker["canonical_bucket"] == "scale_in:blocker_reason:pnl_out_of_range"
+    assert scale_blocker["normalized_metrics"]["pnl_delta_pct"] == 0.32
+    assert scale_blocker["deterministic_proposal"]["proposal_decision"] == "absorb_as_dimension"
+    assert scale_blocker["ai_tier2_comparative_review"]["selected_decision"] == "absorb_as_dimension"
+    assert report["summary"]["deterministic_proposal_count"] == len(report["candidates"])
+    assert report["summary"]["absorbed_bucket_count"] >= 1
+    assert "canonical_bucket_count" in report["summary"]
     assert sim
     assert taxonomy
     assert taxonomy[0]["bucket_relation"] == "new_bucket_candidate"
@@ -233,6 +319,82 @@ def test_lifecycle_bucket_discovery_ignores_ambiguous_ai_block_for_live_candidat
     assert report["summary"]["live_auto_apply_ready_count"] == 2
     assert len(ignored) == 1
     assert "ai_review_ambiguous_live_candidate_kept_for_post_apply" in report["warnings"]
+
+
+def test_lifecycle_bucket_discovery_compares_deterministic_and_ai_taxonomy_proposals(tmp_path, monkeypatch):
+    ldm_dir = tmp_path / "ldm"
+    report_dir = tmp_path / "report"
+    catalog_dir = tmp_path / "catalog"
+    sim_dir = tmp_path / "sim"
+    ldm_dir.mkdir()
+    monkeypatch.setattr(mod, "LDM_REPORT_DIR", ldm_dir)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CATALOG_DIR", catalog_dir)
+    monkeypatch.setattr(mod, "SIM_AUTO_APPROVAL_DIR", sim_dir)
+    _write_ldm(ldm_dir / "lifecycle_decision_matrix_2026-05-22.json")
+
+    bucket_id = "scale_in:blocker_reason:pnl_out_of_range_0_32"
+    report = mod.write_lifecycle_bucket_discovery_report(
+        "2026-05-22",
+        ai_raw_response=_ai_hybrid_taxonomy_response(bucket_id),
+    )
+
+    item = next(candidate for candidate in report["candidates"] if candidate["bucket_id"] == bucket_id)
+    assert item["ai_tier2_proposal"]["proposal_status"] == "provided"
+    assert item["ai_tier2_proposal"]["proposal_decision"] == "create_new_dimension"
+    assert item["ai_tier2_comparative_review"]["selected_source"] == "hybrid"
+    assert item["ai_tier2_comparative_review"]["selected_decision"] == "absorb_as_dimension"
+    assert item["ai_tier2_taxonomy_decision"] == "absorb_as_dimension"
+    assert item["ai_tier2_confidence"] == "high"
+    assert report["summary"]["ai_tier2_proposal_count"] == 1
+    assert report["summary"]["reviewer_selected_hybrid_count"] == 1
+    assert report["summary"]["taxonomy_selected_decision_counts"]["absorb_as_dimension"] >= 1
+
+
+def test_lifecycle_bucket_discovery_fails_closed_when_ai_proposal_lacks_comparison(tmp_path, monkeypatch):
+    ldm_dir = tmp_path / "ldm"
+    report_dir = tmp_path / "report"
+    catalog_dir = tmp_path / "catalog"
+    sim_dir = tmp_path / "sim"
+    ldm_dir.mkdir()
+    monkeypatch.setattr(mod, "LDM_REPORT_DIR", ldm_dir)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CATALOG_DIR", catalog_dir)
+    monkeypatch.setattr(mod, "SIM_AUTO_APPROVAL_DIR", sim_dir)
+    _write_ldm(ldm_dir / "lifecycle_decision_matrix_2026-05-22.json")
+
+    report = mod.write_lifecycle_bucket_discovery_report(
+        "2026-05-22",
+        ai_raw_response=_ai_proposal_without_comparison_response("scale_in:blocker_reason:pnl_out_of_range_0_32"),
+    )
+
+    assert report["summary"]["ai_two_pass_review_status"] == "parse_rejected"
+    assert "ai_review_comparative_review_missing:scale_in:blocker_reason:pnl_out_of_range_0_32" in report["warnings"]
+    blocked = [item for item in report["surfaced_candidates"] if item["classification_state"] == "runtime_blocked_contract_gap"]
+    assert blocked
+
+
+def test_lifecycle_bucket_discovery_rejects_legacy_ai_response_without_dual_taxonomy_fields(tmp_path, monkeypatch):
+    ldm_dir = tmp_path / "ldm"
+    report_dir = tmp_path / "report"
+    catalog_dir = tmp_path / "catalog"
+    sim_dir = tmp_path / "sim"
+    ldm_dir.mkdir()
+    monkeypatch.setattr(mod, "LDM_REPORT_DIR", ldm_dir)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CATALOG_DIR", catalog_dir)
+    monkeypatch.setattr(mod, "SIM_AUTO_APPROVAL_DIR", sim_dir)
+    _write_ldm(ldm_dir / "lifecycle_decision_matrix_2026-05-22.json")
+
+    report = mod.write_lifecycle_bucket_discovery_report(
+        "2026-05-22",
+        ai_raw_response=_legacy_ai_response_without_dual_taxonomy_fields(),
+    )
+
+    assert report["summary"]["ai_two_pass_review_status"] == "parse_rejected"
+    assert "ai_review_ai_tier2_proposals_invalid" in report["warnings"]
+    assert "ai_review_comparative_reviews_invalid" in report["warnings"]
+    assert report["summary"]["live_auto_apply_ready_count"] == 0
 
 
 def test_lifecycle_bucket_discovery_applies_explicit_contract_ai_block_for_live_candidate(tmp_path, monkeypatch):

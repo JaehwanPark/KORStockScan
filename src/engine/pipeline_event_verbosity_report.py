@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from src.utils.constants import DATA_DIR
-from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
+from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 from src.engine.pipeline_event_summary import (
     SUMMARY_STAGES,
     default_reason_label,
@@ -54,6 +54,7 @@ def _line_count_and_stage_bytes(raw_path: Path) -> dict[str, Any]:
         return {
             "exists": False,
             "raw_size_bytes": 0,
+            "raw_storage_size_bytes": 0,
             "raw_line_count": 0,
             "high_volume_line_count": 0,
             "high_volume_bytes": 0,
@@ -61,28 +62,40 @@ def _line_count_and_stage_bytes(raw_path: Path) -> dict[str, Any]:
             "high_volume_stage_bytes": {},
         }
     raw_line_count = 0
+    raw_stream_bytes = 0
     high_volume_line_count = 0
     high_volume_bytes = 0
     stage_counts: Counter[str] = Counter()
     stage_bytes: Counter[str] = Counter()
     latest_emitted_at = ""
-    for payload in iter_jsonl(raw_path):
-        raw_line_count += 1
-        if not isinstance(payload, dict) or payload.get("event_type") != "pipeline_event":
-            continue
-        latest_emitted_at = max(latest_emitted_at, _safe_str(payload.get("emitted_at")))
-        stage = _safe_str(payload.get("stage"))
-        if stage not in SUMMARY_STAGES:
-            continue
-        line_bytes = len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
-        high_volume_line_count += 1
-        high_volume_bytes += line_bytes
-        stage_counts[stage] += 1
-        stage_bytes[stage] += line_bytes
-    raw_size = int(raw_path.stat().st_size)
+    with open_text_auto(raw_path, errors="replace") as handle:
+        for raw_line in handle:
+            raw_stream_bytes += len(raw_line.encode("utf-8"))
+            line = raw_line.strip()
+            if not line:
+                continue
+            raw_line_count += 1
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict) or payload.get("event_type") != "pipeline_event":
+                continue
+            latest_emitted_at = max(latest_emitted_at, _safe_str(payload.get("emitted_at")))
+            stage = _safe_str(payload.get("stage"))
+            if stage not in SUMMARY_STAGES:
+                continue
+            line_bytes = len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+            high_volume_line_count += 1
+            high_volume_bytes += line_bytes
+            stage_counts[stage] += 1
+            stage_bytes[stage] += line_bytes
+    raw_storage_size = int(raw_path.stat().st_size)
+    raw_size = raw_stream_bytes
     return {
         "exists": True,
         "raw_size_bytes": raw_size,
+        "raw_storage_size_bytes": raw_storage_size,
         "raw_line_count": raw_line_count,
         "high_volume_line_count": high_volume_line_count,
         "high_volume_bytes": high_volume_bytes,
@@ -153,13 +166,14 @@ def build_pipeline_event_verbosity_report(target_date: str) -> dict[str, Any]:
         include_samples=False,
     )
     producer_path, producer_manifest_path = producer_summary_paths(_summary_dir(), target_date)
+    producer_actual_path = existing_or_gzip_path(producer_path)
     producer_manifest = _read_json(producer_manifest_path)
     producer_rows = load_summary_rows(producer_path, include_samples=False)
     raw_stage, raw_blocker, raw_total = _summary_counts(raw_summary_rows)
     producer_stage, producer_blocker, producer_total = _summary_counts(producer_rows)
     stage_diff = _diff_counter(raw_stage, producer_stage)
     blocker_diff = _diff_counter(raw_blocker, producer_blocker)
-    producer_exists = producer_path.exists() and bool(producer_rows)
+    producer_exists = producer_actual_path.exists() and bool(producer_rows)
     manifest_exists = producer_manifest_path.exists()
     producer_updated_at = _safe_str(producer_manifest.get("updated_at"))
     latest_pipeline_event_at = _safe_str(raw_stats.get("latest_pipeline_event_at"))
@@ -223,7 +237,7 @@ def build_pipeline_event_verbosity_report(target_date: str) -> dict[str, Any]:
             "blocker_top": dict(raw_blocker.most_common(10)),
         },
         "producer_summary": {
-            "path": str(producer_path),
+            "path": str(producer_actual_path),
             "manifest_path": str(producer_manifest_path),
             "exists": producer_exists,
             "manifest_exists": manifest_exists,
@@ -272,6 +286,7 @@ def render_markdown(report: dict[str, Any]) -> str:
             "## 근거",
             "",
             f"- raw_size_bytes: `{raw.get('raw_size_bytes')}`",
+            f"- raw_storage_size_bytes: `{raw.get('raw_storage_size_bytes')}`",
             f"- raw_line_count: `{raw.get('raw_line_count')}`",
             f"- high_volume_line_count: `{raw.get('high_volume_line_count')}`",
             f"- high_volume_byte_share_pct: `{raw.get('high_volume_byte_share_pct')}`",

@@ -10,6 +10,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from src.engine.automation.dual_candidate_review import (
+    REQUIRED_METRIC_CONTRACT_FIELDS,
+    default_comparative_review,
+    has_forbidden_runtime_leak,
+    missing_metric_contract_fields,
+    proposal_counts,
+)
 from src.utils.constants import TRADING_RULES
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -21,6 +28,12 @@ AI_REVIEW_SCHEMA_NAME = "stage_hook_workorder_discovery_ai_review_v1"
 AI_REVIEWER_NAME = "stage_hook_workorder_discovery_ai_review"
 AI_REVIEW_MODEL = str(getattr(TRADING_RULES, "GPT_DEEP_MODEL", "gpt-5.4") or "gpt-5.4")
 AI_REVIEW_DEFAULT_PROVIDER = "openai"
+STAGE_HOOK_DUAL_DECISIONS = {
+    "new_hook",
+    "extend_existing_report_dimension",
+    "source_quality_gap",
+    "reject",
+}
 
 FORBIDDEN_USES = sorted(
     {
@@ -254,6 +267,55 @@ def _contract_from_candidate(candidate: dict[str, Any]) -> dict[str, Any] | None
     }
 
 
+def _deterministic_proposal(candidate: dict[str, Any]) -> dict[str, Any]:
+    candidate_id = str(candidate.get("candidate_id") or "unknown")
+    contract = candidate.get("stage_hook_candidate_contract") if isinstance(candidate.get("stage_hook_candidate_contract"), dict) else {}
+    readiness = str(contract.get("readiness_tier") or candidate.get("readiness_tier") or "")
+    if readiness == "blocked_by_source_quality":
+        decision = "source_quality_gap"
+    elif readiness == "implementation_workorder_ready":
+        decision = "new_hook"
+    else:
+        decision = "extend_existing_report_dimension"
+    return {
+        "candidate_id": candidate_id,
+        "proposal_source": "deterministic",
+        "proposal_decision": decision,
+        "recommended_canonical_bucket": f"stage_hook:{contract.get('stage')}:{contract.get('hook_name')}",
+        "recommended_metric_or_dimension": [
+            "source_quality_adjusted_ev_pct",
+            "diagnostic_win_rate",
+            f"{contract.get('hook_name')}_source_dimension",
+        ],
+        "reasoning_summary": "Deterministic stage-hook detector mapped producer gaps to source-only hook workorder readiness.",
+        "confidence": "high" if readiness == "implementation_workorder_ready" else "medium",
+        "required_source_fields": list(REQUIRED_METRIC_CONTRACT_FIELDS),
+        "forbidden_uses": list(FORBIDDEN_USES),
+        "workorder_title": f"Review stage hook: {contract.get('hook_name')}",
+        "workorder_priority": str(candidate.get("priority") or "medium"),
+    }
+
+
+def _default_ai_proposal(candidate: dict[str, Any]) -> dict[str, Any]:
+    deterministic = candidate.get("deterministic_proposal") if isinstance(candidate.get("deterministic_proposal"), dict) else {}
+    return {
+        "candidate_id": str(candidate.get("candidate_id") or "unknown"),
+        "proposal_source": "ai_tier2",
+        "proposal_status": "not_provided",
+        "proposal_decision": "reject",
+        "recommended_canonical_bucket": deterministic.get("recommended_canonical_bucket") or "",
+        "recommended_metric_or_dimension": deterministic.get("recommended_metric_or_dimension") or [],
+        "reasoning_summary": "AI Tier2 hook proposal unavailable; fail-closed comparative review remains source-only.",
+        "confidence": "low",
+        "required_source_fields": list(REQUIRED_METRIC_CONTRACT_FIELDS),
+        "forbidden_uses": list(FORBIDDEN_USES),
+    }
+
+
+def _attach_deterministic_proposals(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [{**candidate, "deterministic_proposal": _deterministic_proposal(candidate)} for candidate in candidates]
+
+
 def _deterministic_candidates(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     producer_gap = _load_json(producer_gap_report_path(target_date))
     candidates_by_hook: dict[str, dict[str, Any]] = {}
@@ -308,7 +370,7 @@ def _deterministic_candidates(target_date: str) -> tuple[list[dict[str, Any]], d
             "evidence": list(item.get("evidence") or [])[:16],
             "source_paths": [str(producer_gap_report_path(target_date))],
         }
-    candidates = list(candidates_by_hook.values())
+    candidates = _attach_deterministic_proposals(list(candidates_by_hook.values()))
     return candidates, {
         "producer_gap_artifact": str(producer_gap_report_path(target_date)),
         "producer_gap_status": producer_gap.get("status"),
@@ -322,6 +384,15 @@ def _build_ai_review_instructions() -> str:
         "You are stage_hook_workorder_discovery_ai_review, a Tier2 source-only stage hook reviewer.\n"
         "Use a two-pass process: first interpretation, second review, final conclusion.\n"
         "Review deterministic stage hook candidates and strengthen implementation requirements and acceptance tests.\n"
+        "Create an independent ai_tier2_proposal for each deterministic candidate, then create a comparative_review "
+        "that compares deterministic_proposal and ai_tier2_proposal side by side.\n"
+        "AI proposal decisions are limited to new_hook, extend_existing_report_dimension, source_quality_gap, or reject. "
+        "The comparative selected_source must be deterministic, ai_tier2, hybrid, or reject.\n"
+        "Metric/dimension absorption requires metric_role, decision_authority, window_policy, sample_floor, "
+        "primary_decision_metric, source_quality_gate, and forbidden_uses in required_source_fields.\n"
+        "For every ai_tier2_proposal and comparative_review, required_source_fields must contain all seven exact "
+        "strings: metric_role, decision_authority, window_policy, sample_floor, primary_decision_metric, "
+        "source_quality_gate, forbidden_uses. Do not substitute field examples for this contract list.\n"
         "Do not delete deterministic candidates. Do not grant runtime, threshold, provider, bot, cap, broker order, "
         "entry override, exit override, or safety-bypass authority.\n"
         "Action namespace values are review-only labels when action_namespace_scope is "
@@ -397,6 +468,46 @@ def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, 
         warnings.append("ai_review_reviewer_invalid")
     if not isinstance(payload.get("candidate_reviews"), list):
         warnings.append("ai_review_candidate_reviews_missing")
+    if not isinstance(payload.get("ai_tier2_proposals"), list):
+        warnings.append("ai_review_ai_tier2_proposals_missing")
+    if not isinstance(payload.get("comparative_reviews"), list):
+        warnings.append("ai_review_comparative_reviews_missing")
+    for item in payload.get("ai_tier2_proposals") or []:
+        if not isinstance(item, dict):
+            warnings.append("ai_review_ai_tier2_proposal_invalid")
+            continue
+        if str(item.get("proposal_decision") or "") not in STAGE_HOOK_DUAL_DECISIONS:
+            warnings.append(f"ai_review_ai_proposal_decision_invalid:{item.get('candidate_id')}")
+        missing_contract = missing_metric_contract_fields(item.get("required_source_fields"))
+        if missing_contract:
+            warnings.append(f"ai_review_ai_proposal_contract_missing:{item.get('candidate_id')}:{','.join(missing_contract)}")
+        if has_forbidden_runtime_leak(item):
+            warnings.append(f"ai_review_ai_proposal_forbidden_use_leak:{item.get('candidate_id')}")
+    proposal_ids = {
+        str(item.get("candidate_id"))
+        for item in payload.get("ai_tier2_proposals") or []
+        if isinstance(item, dict) and item.get("candidate_id")
+    }
+    review_ids = {
+        str(item.get("candidate_id"))
+        for item in payload.get("comparative_reviews") or []
+        if isinstance(item, dict) and item.get("candidate_id")
+    }
+    if proposal_ids and proposal_ids - review_ids:
+        warnings.append("ai_review_comparative_review_missing_for_ai_proposal")
+    for item in payload.get("comparative_reviews") or []:
+        if not isinstance(item, dict):
+            warnings.append("ai_review_comparative_review_invalid")
+            continue
+        if str(item.get("selected_decision") or "") not in STAGE_HOOK_DUAL_DECISIONS:
+            warnings.append(f"ai_review_comparative_decision_invalid:{item.get('candidate_id')}")
+        if str(item.get("selected_source") or "") not in {"deterministic", "ai_tier2", "hybrid", "reject"}:
+            warnings.append(f"ai_review_comparative_source_invalid:{item.get('candidate_id')}")
+        missing_contract = missing_metric_contract_fields(item.get("required_source_fields"))
+        if missing_contract:
+            warnings.append(f"ai_review_comparative_contract_missing:{item.get('candidate_id')}:{','.join(missing_contract)}")
+        if has_forbidden_runtime_leak(item):
+            warnings.append(f"ai_review_comparative_forbidden_use_leak:{item.get('candidate_id')}")
     audit = payload.get("audit") if isinstance(payload.get("audit"), dict) else {}
     if str(audit.get("status") or "") not in {"pass", "correction_required", "insufficient_context"}:
         warnings.append("ai_review_audit_status_invalid")
@@ -415,7 +526,29 @@ def _review_map(ai_payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
-def _order_from_candidate(candidate: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
+def _proposal_map(ai_payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        str(item.get("candidate_id")): {**item, "proposal_source": "ai_tier2", "proposal_status": "provided"}
+        for item in ai_payload.get("ai_tier2_proposals") or []
+        if isinstance(item, dict) and item.get("candidate_id")
+    }
+
+
+def _comparative_map(ai_payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        str(item.get("candidate_id")): item
+        for item in ai_payload.get("comparative_reviews") or []
+        if isinstance(item, dict) and item.get("candidate_id")
+    }
+
+
+def _order_from_candidate(
+    candidate: dict[str, Any],
+    review: dict[str, Any],
+    *,
+    ai_tier2_proposal: dict[str, Any] | None = None,
+    comparative_review: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     contract = candidate["stage_hook_candidate_contract"]
     priority = str(review.get("priority") or candidate.get("priority") or "high")
     return {
@@ -445,6 +578,11 @@ def _order_from_candidate(candidate: dict[str, Any], review: dict[str, Any]) -> 
         or ["stage hook starts disabled/source-only", "forbidden uses remain blocked"],
         "implementation_requirements": review.get("implementation_requirements") or [],
         "stage_hook_candidate_contract": contract,
+        "canonical_bucket": comparative_review.get("recommended_canonical_bucket") if isinstance(comparative_review, dict) else None,
+        "legacy_raw_bucket_key": contract.get("hook_name"),
+        "deterministic_proposal": candidate.get("deterministic_proposal"),
+        "ai_tier2_proposal": ai_tier2_proposal or {},
+        "comparative_review": comparative_review or {},
     }
 
 
@@ -466,15 +604,43 @@ def build_stage_hook_workorder_discovery_report(
     forbidden = audit.get("forbidden_use_violations")
     if not isinstance(forbidden, list):
         forbidden = []
-    fail_closed = ai_status != "parsed" or audit.get("status") != "pass" or bool(forbidden)
     reviews = _review_map(ai_payload) if ai_status == "parsed" else {}
+    proposals = _proposal_map(ai_payload) if ai_status == "parsed" else {}
+    comparatives = _comparative_map(ai_payload) if ai_status == "parsed" else {}
+    candidate_ids = {str(item.get("candidate_id") or "") for item in candidates}
+    missing_ai_proposal_count = len([candidate_id for candidate_id in candidate_ids if candidate_id not in proposals])
+    missing_comparative_review_count = len([candidate_id for candidate_id in candidate_ids if candidate_id not in comparatives])
+    fail_closed = (
+        ai_status != "parsed"
+        or audit.get("status") != "pass"
+        or bool(forbidden)
+        or missing_ai_proposal_count > 0
+        or missing_comparative_review_count > 0
+    )
     reviewed = []
     orders = []
     for candidate in candidates:
-        review = reviews.get(str(candidate.get("candidate_id"))) or {}
+        candidate_id = str(candidate.get("candidate_id") or "")
+        review = reviews.get(candidate_id) or {}
+        deterministic_proposal = (
+            candidate.get("deterministic_proposal") if isinstance(candidate.get("deterministic_proposal"), dict) else {}
+        )
+        ai_tier2_proposal = proposals.get(candidate_id) or _default_ai_proposal(candidate)
+        comparative_review = comparatives.get(candidate_id) or default_comparative_review(
+            candidate_id=candidate_id,
+            deterministic_proposal=deterministic_proposal,
+            ai_tier2_proposal=ai_tier2_proposal,
+            allowed_decisions=STAGE_HOOK_DUAL_DECISIONS,
+            default_decision="extend_existing_report_dimension",
+            workorder_title=f"Review stage hook: {candidate.get('hook_name')}",
+        )
+        if ai_status != "parsed":
+            comparative_review = {**comparative_review, "selected_decision": "source_quality_gap", "selected_source": "reject"}
         merged = {
             **candidate,
             "ai_review": review,
+            "ai_tier2_proposal": ai_tier2_proposal,
+            "comparative_review": comparative_review,
             "ai_review_status": ai_status,
             "ai_priority": review.get("priority") or candidate.get("priority"),
             "ai_recommended_tier": review.get("recommended_readiness_tier")
@@ -486,9 +652,10 @@ def build_stage_hook_workorder_discovery_report(
         if (
             not fail_closed
             and contract.get("readiness_tier") == "implementation_workorder_ready"
+            and comparative_review.get("selected_decision") not in {"reject", "source_quality_gap"}
             and priority in {"critical", "high", "medium"}
         ):
-            orders.append(_order_from_candidate(candidate, review))
+            orders.append(_order_from_candidate(candidate, review, ai_tier2_proposal=ai_tier2_proposal, comparative_review=comparative_review))
     status = "fail" if fail_closed else ("warning" if orders else "pass")
     tier_counts = Counter(str(item.get("stage_hook_candidate_contract", {}).get("readiness_tier") or "unknown") for item in candidates)
     class_counts = Counter(str(item.get("hook_class") or "unknown") for item in candidates)
@@ -515,6 +682,21 @@ def build_stage_hook_workorder_discovery_report(
             "status": status,
             "candidate_count": len(candidates),
             "workorder_count": len(orders),
+            "deterministic_proposal_count": len(candidates),
+            "ai_tier2_proposal_count": sum(
+                1 for item in reviewed if item.get("ai_tier2_proposal", {}).get("proposal_status") == "provided"
+            ),
+            "comparative_review_count": len(reviewed),
+            "missing_ai_tier2_proposal_count": missing_ai_proposal_count,
+            "missing_comparative_review_count": missing_comparative_review_count,
+            "selected_decision_counts": proposal_counts(
+                [item.get("comparative_review") or {} for item in reviewed],
+                key="selected_decision",
+            ),
+            "selected_source_counts": proposal_counts(
+                [item.get("comparative_review") or {} for item in reviewed],
+                key="selected_source",
+            ),
             "readiness_tier_counts": dict(tier_counts),
             "hook_class_counts": dict(class_counts),
             "ai_two_pass_review_status": ai_status,
@@ -533,9 +715,37 @@ def build_stage_hook_workorder_discovery_report(
             "provider_status": provider_status,
             "audit": audit,
             "candidate_reviews": ai_payload.get("candidate_reviews") if isinstance(ai_payload.get("candidate_reviews"), list) else [],
+            "deterministic_proposals": [
+                item.get("deterministic_proposal") for item in reviewed if item.get("deterministic_proposal")
+            ],
+            "ai_tier2_proposals": [
+                item.get("ai_tier2_proposal") for item in reviewed if item.get("ai_tier2_proposal")
+            ],
+            "comparative_reviews": [
+                item.get("comparative_review") for item in reviewed if item.get("comparative_review")
+            ],
             "warnings": ai_warnings,
             "fail_closed": fail_closed,
+            "missing_ai_tier2_proposal_count": missing_ai_proposal_count,
+            "missing_comparative_review_count": missing_comparative_review_count,
         },
+        "deterministic_proposals": [
+            item.get("deterministic_proposal") for item in reviewed if item.get("deterministic_proposal")
+        ],
+        "ai_tier2_proposals": [
+            item.get("ai_tier2_proposal") for item in reviewed if item.get("ai_tier2_proposal")
+        ],
+        "comparative_reviews": [
+            item.get("comparative_review") for item in reviewed if item.get("comparative_review")
+        ],
+        "selected_decision_counts": proposal_counts(
+            [item.get("comparative_review") or {} for item in reviewed],
+            key="selected_decision",
+        ),
+        "selected_source_counts": proposal_counts(
+            [item.get("comparative_review") or {} for item in reviewed],
+            key="selected_source",
+        ),
         "stage_hook_candidates": reviewed,
         "code_improvement_orders": orders,
     }

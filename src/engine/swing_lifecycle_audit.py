@@ -12,6 +12,10 @@ from typing import Any, Iterable
 import pandas as pd
 from sqlalchemy import create_engine, text
 
+from src.engine.automation.dual_candidate_review import (
+    REQUIRED_METRIC_CONTRACT_FIELDS,
+    proposal_counts,
+)
 from src.engine.auto_promotion_contracts import (
     pre_final_promotion_contract,
     tier2_fail_closed_reason,
@@ -2979,6 +2983,126 @@ def _build_ai_review_input_context(audit_report: dict[str, Any], candidates: lis
     }
 
 
+def _swing_threshold_deterministic_proposal(candidate: dict[str, Any]) -> dict[str, Any]:
+    family = str(candidate.get("family") or "unknown")
+    return {
+        "candidate_id": family,
+        "family": family,
+        "proposal_source": "deterministic",
+        "proposal_decision": "threshold_candidate",
+        "recommended_canonical_bucket": f"swing_threshold:{family}",
+        "recommended_metric_or_dimension": [
+            "source_quality_adjusted_ev_pct",
+            "equal_weight_avg_profit_pct",
+            "diagnostic_win_rate",
+        ],
+        "reasoning_summary": "Deterministic swing threshold candidate generated from lifecycle audit metrics.",
+        "confidence": "medium",
+        "required_source_fields": list(REQUIRED_METRIC_CONTRACT_FIELDS),
+        "forbidden_uses": [
+            "intraday threshold mutation",
+            "provider route change",
+            "broker order submission",
+            "bot restart",
+            "position cap release",
+        ],
+        "workorder_title": f"Review swing threshold candidate: {family}",
+        "workorder_priority": "medium",
+    }
+
+
+def _swing_threshold_ai_tier2_proposal(family: str, proposal_item: dict[str, Any] | None) -> dict[str, Any]:
+    correction = proposal_item.get("correction_proposal") if isinstance(proposal_item, dict) else {}
+    route = str((correction or {}).get("anomaly_route") or "")
+    state = str(proposal_item.get("ai_review_state") or "") if isinstance(proposal_item, dict) else ""
+    if not proposal_item:
+        decision = "keep_deterministic"
+        status = "not_provided"
+        reason = "AI Tier2 correction proposal unavailable."
+        confidence = "low"
+    elif route == "instrumentation_gap":
+        decision = "instrumentation_gap"
+        status = "provided"
+        reason = str(proposal_item.get("correction_reason") or "Instrumentation gap surfaced by AI Tier2.")
+        confidence = "medium"
+    elif state in {"safety_concern", "insufficient_context", "unavailable"}:
+        decision = "source_quality_blocker"
+        status = "provided"
+        reason = str(proposal_item.get("correction_reason") or "AI Tier2 found insufficient or unsafe evidence.")
+        confidence = "medium"
+    elif route == "threshold_candidate":
+        decision = "threshold_candidate"
+        status = "provided"
+        reason = str(proposal_item.get("correction_reason") or "AI Tier2 proposed guarded threshold review.")
+        confidence = "medium"
+    else:
+        decision = "keep_deterministic"
+        status = "provided"
+        reason = str(proposal_item.get("correction_reason") or "AI Tier2 did not override deterministic proposal.")
+        confidence = "medium"
+    return {
+        "candidate_id": family,
+        "family": family,
+        "proposal_source": "ai_tier2",
+        "proposal_status": status,
+        "proposal_decision": decision,
+        "recommended_canonical_bucket": f"swing_threshold:{family}",
+        "recommended_metric_or_dimension": list(REQUIRED_METRIC_CONTRACT_FIELDS),
+        "reasoning_summary": reason,
+        "confidence": confidence,
+        "required_source_fields": list(REQUIRED_METRIC_CONTRACT_FIELDS),
+        "forbidden_uses": [
+            "intraday threshold mutation",
+            "provider route change",
+            "broker order submission",
+            "bot restart",
+            "position cap release",
+        ],
+    }
+
+
+def _swing_threshold_comparative_review(
+    deterministic: dict[str, Any],
+    ai_proposal: dict[str, Any],
+    guard_decision: dict[str, Any],
+) -> dict[str, Any]:
+    family = str(deterministic.get("family") or "unknown")
+    ai_decision = str(ai_proposal.get("proposal_decision") or "keep_deterministic")
+    if guard_decision.get("guard_accepted"):
+        selected_decision = ai_decision
+        selected_source = "ai_tier2"
+        summary = "AI Tier2 proposal passed deterministic guard and remains proposal-only."
+    elif ai_decision in {"instrumentation_gap", "source_quality_blocker"}:
+        selected_decision = ai_decision
+        selected_source = "ai_tier2"
+        summary = "AI Tier2 source-quality decision selected; no runtime authority granted."
+    elif ai_proposal.get("proposal_status") == "provided" and ai_decision == "keep_deterministic":
+        selected_decision = "keep_deterministic"
+        selected_source = "hybrid"
+        summary = "AI Tier2 reviewed the candidate and kept deterministic proposal-only handling."
+    else:
+        selected_decision = "keep_deterministic"
+        selected_source = "deterministic"
+        summary = "Deterministic proposal retained because AI proposal was absent or guard-rejected."
+    return {
+        "candidate_id": family,
+        "family": family,
+        "selected_decision": selected_decision,
+        "selected_source": selected_source,
+        "recommended_canonical_bucket": deterministic.get("recommended_canonical_bucket"),
+        "recommended_metric_or_dimension": ai_proposal.get("recommended_metric_or_dimension")
+        or deterministic.get("recommended_metric_or_dimension")
+        or [],
+        "comparison_summary": summary,
+        "rejected_alternative_reason": str(guard_decision.get("guard_reject_reason") or ""),
+        "confidence": ai_proposal.get("confidence") or deterministic.get("confidence") or "medium",
+        "required_source_fields": list(REQUIRED_METRIC_CONTRACT_FIELDS),
+        "forbidden_uses": deterministic.get("forbidden_uses") or [],
+        "workorder_title": deterministic.get("workorder_title") or f"Review swing threshold candidate: {family}",
+        "workorder_priority": deterministic.get("workorder_priority") or "medium",
+    }
+
+
 def _build_openai_review_instructions() -> str:
     return (
         "You are the swing-trading lifecycle threshold reviewer and improvement proposer.\n"
@@ -3073,6 +3197,7 @@ def build_swing_threshold_ai_review_report(
     items: list[dict[str, Any]] = []
     for candidate in candidates:
         family = str(candidate.get("family") or "")
+        deterministic_proposal = _swing_threshold_deterministic_proposal(candidate)
         proposal_item = proposals_by_family.get(family)
         if proposal_item:
             proposal = proposal_item.get("correction_proposal") or {}
@@ -3098,6 +3223,12 @@ def build_swing_threshold_ai_review_report(
             required_evidence = []
             risk_flags = []
             anomaly_type = "-"
+        ai_tier2_proposal = _swing_threshold_ai_tier2_proposal(family, proposal_item)
+        comparative_review = _swing_threshold_comparative_review(
+            deterministic_proposal,
+            ai_tier2_proposal,
+            guard_decision,
+        )
         items.append(
             {
                 "family": family,
@@ -3122,6 +3253,9 @@ def build_swing_threshold_ai_review_report(
                 "required_evidence": required_evidence,
                 "risk_flags": risk_flags,
                 "guard_decision": guard_decision,
+                "deterministic_proposal": deterministic_proposal,
+                "ai_tier2_proposal": ai_tier2_proposal,
+                "comparative_review": comparative_review,
                 "guard_accepted": bool(guard_decision.get("guard_accepted")),
                 "guard_reject_reason": guard_decision.get("guard_reject_reason"),
                 "deterministic_state": candidate.get("calibration_state"),
@@ -3131,6 +3265,10 @@ def build_swing_threshold_ai_review_report(
                 "runtime_change": False,
             }
         )
+
+    deterministic_proposals = [item["deterministic_proposal"] for item in items]
+    ai_tier2_proposals = [item["ai_tier2_proposal"] for item in items]
+    comparative_reviews = [item["comparative_review"] for item in items]
 
     return {
         "schema_version": THRESHOLD_REVIEW_SCHEMA_VERSION,
@@ -3156,6 +3294,11 @@ def build_swing_threshold_ai_review_report(
         },
         "ai_input_context": _build_ai_review_input_context(audit_report, candidates),
         "candidate_count": len(candidates),
+        "deterministic_proposals": deterministic_proposals,
+        "ai_tier2_proposals": ai_tier2_proposals,
+        "comparative_reviews": comparative_reviews,
+        "selected_decision_counts": proposal_counts(comparative_reviews, key="selected_decision"),
+        "selected_source_counts": proposal_counts(comparative_reviews, key="selected_source"),
         "items": items,
     }
 

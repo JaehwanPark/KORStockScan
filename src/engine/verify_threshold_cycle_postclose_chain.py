@@ -584,6 +584,21 @@ def _swing_lifecycle_handoff_status(
         "actual_workorder_order_ids": sorted(actual_order_ids),
         "missing_workorder_order_ids": missing_order_ids,
         "daily_simulation_consumed": bool(contract.get("swing_daily_simulation_consumed")),
+        "deterministic_proposal_count": (discovery.get("summary") or {}).get("deterministic_proposal_count")
+        if isinstance(discovery.get("summary"), dict)
+        else None,
+        "ai_tier2_proposal_count": (discovery.get("summary") or {}).get("ai_tier2_proposal_count")
+        if isinstance(discovery.get("summary"), dict)
+        else None,
+        "comparative_review_count": (discovery.get("summary") or {}).get("comparative_review_count")
+        if isinstance(discovery.get("summary"), dict)
+        else None,
+        "selected_decision_counts": (discovery.get("summary") or {}).get("selected_decision_counts")
+        if isinstance(discovery.get("summary"), dict)
+        else None,
+        "selected_source_counts": (discovery.get("summary") or {}).get("selected_source_counts")
+        if isinstance(discovery.get("summary"), dict)
+        else None,
         "missing": missing,
         "interpretation": (
             "Swing LDM candidates/workorders propagated through EV, runtime summary, workorder, and verifier."
@@ -875,6 +890,11 @@ def _producer_gap_discovery_handoff_status(
         "model": ai_model,
         "candidate_count": summary.get("candidate_count"),
         "workorder_count": summary.get("workorder_count"),
+        "deterministic_proposal_count": summary.get("deterministic_proposal_count"),
+        "ai_tier2_proposal_count": summary.get("ai_tier2_proposal_count"),
+        "comparative_review_count": summary.get("comparative_review_count"),
+        "selected_decision_counts": summary.get("selected_decision_counts"),
+        "selected_source_counts": summary.get("selected_source_counts"),
         "interpretation": (
             "producer gap high-priority orders propagated to code improvement workorder with parsed AI review"
             if not missing
@@ -967,6 +987,11 @@ def _stage_hook_workorder_handoff_status(
         "provider_status": ai_provider_status or "missing",
         "candidate_count": summary.get("candidate_count"),
         "workorder_count": summary.get("workorder_count"),
+        "deterministic_proposal_count": summary.get("deterministic_proposal_count"),
+        "ai_tier2_proposal_count": summary.get("ai_tier2_proposal_count"),
+        "comparative_review_count": summary.get("comparative_review_count"),
+        "selected_decision_counts": summary.get("selected_decision_counts"),
+        "selected_source_counts": summary.get("selected_source_counts"),
         "interpretation": (
             "stage hook implementation-ready orders propagated to code improvement workorder"
             if not missing

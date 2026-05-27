@@ -10559,6 +10559,17 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
             blocked, block_reason = regime_decision
             market_regime_meta = {}
         market_regime_meta = market_regime_meta if isinstance(market_regime_meta, dict) else {}
+        confirmed_risk_block = bool(market_regime_meta.get("confirmed_risk_block", False))
+        if blocked and not confirmed_risk_block:
+            market_regime_meta = {
+                **market_regime_meta,
+                "market_regime_prior_observed": True,
+                "market_regime_prior_reason": market_regime_meta.get("market_regime_prior_reason")
+                or "unconfirmed_market_regime_block_downgraded_to_prior",
+                "market_regime_block_downgraded_to_prior": True,
+                "confirmed_risk_block": False,
+            }
+            blocked = False
         market_regime_prior_observed = bool(market_regime_meta.get("market_regime_prior_observed"))
         swing_regime_micro_fields = {}
         if _is_swing_orderbook_micro_context_enabled(strategy):
@@ -10573,7 +10584,10 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
             "risk_off_advisory": bool(market_regime_meta.get("risk_off_advisory", False)),
             "single_market_risk_off_advisory": bool(market_regime_meta.get("single_market_risk_off_advisory", False)),
             "confirmed_risk_off_advisory": bool(market_regime_meta.get("confirmed_risk_off_advisory", False)),
-            "confirmed_risk_block": bool(market_regime_meta.get("confirmed_risk_block", False)),
+            "confirmed_risk_block": confirmed_risk_block,
+            "market_regime_block_downgraded_to_prior": bool(
+                market_regime_meta.get("market_regime_block_downgraded_to_prior", False)
+            ),
             "panic_state": market_regime_meta.get("panic_state", "NORMAL"),
             "legacy_recovery_gate_score": market_regime_meta.get("legacy_recovery_gate_score", "-"),
             "legacy_recovery_gate_threshold": market_regime_meta.get("legacy_recovery_gate_threshold", "-"),
@@ -10699,7 +10713,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
             market_regime_blocked=bool(blocked),
             market_regime_reason=block_reason,
             market_regime_prior_observed=market_regime_prior_observed,
-            confirmed_risk_block=bool(market_regime_meta.get("confirmed_risk_block", False)),
+            confirmed_risk_block=confirmed_risk_block,
             extra_features={
                 "score_vpw_pass": bool(score_vpw_pass),
                 "gap_prior_triggered": bool(gap_prior_triggered),
