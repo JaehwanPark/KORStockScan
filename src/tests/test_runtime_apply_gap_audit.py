@@ -201,6 +201,45 @@ def test_ready_but_not_applied_remains_retry_target(tmp_path, monkeypatch):
     assert row["retryable"] is True
 
 
+def test_greenfield_ready_missing_policy_is_fail_before_preopen(tmp_path, monkeypatch):
+    report_dir = _patch_dirs(tmp_path, monkeypatch)
+    _write_core_artifacts(report_dir)
+    family = mod.GREENFIELD_REAL_ENV_FAMILY
+    candidate_id = f"{family}:2026-05-22"
+    _write_json(
+        report_dir / "runtime_apply_bridge" / "runtime_apply_bridge_2026-05-22.json",
+        {
+            "candidates": [
+                {
+                    "candidate_id": candidate_id,
+                    "family": family,
+                    "stage": "greenfield_real_env",
+                    "bridge_candidate_state": "live_auto_apply_ready",
+                    "source_quality_gate": "pass",
+                    "source_quality_adjusted_ev_pct": 1.2,
+                    "target_env_keys": [
+                        "GREENFIELD_REAL_ENV_AUTHORITY_ENABLED",
+                        "GREENFIELD_REAL_ENV_AUTHORITY_POLICY_FILE",
+                    ],
+                    "recommended_values": {
+                        "policy_file": str(tmp_path / "missing_greenfield_real_env_policy.json"),
+                        "policy_version": candidate_id,
+                    },
+                }
+            ]
+        },
+    )
+
+    report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+
+    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == candidate_id)
+    assert report["status"] == "fail"
+    assert row["failure_state"] == "fail"
+    assert row["failure_reason"] == "greenfield_policy_file_missing"
+    assert row["greenfield_policy_state"] == "greenfield_policy_file_missing"
+    assert any(item["failure_code"] == "greenfield_policy_file_missing" for item in report["retry_queue"])
+
+
 def test_ready_bridge_consumed_by_next_preopen_apply_is_not_retry_target(tmp_path, monkeypatch):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir)

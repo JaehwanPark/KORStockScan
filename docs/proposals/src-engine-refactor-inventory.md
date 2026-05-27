@@ -94,6 +94,8 @@
 
 2026-05-26 POSTCLOSE 판정은 `monitoring_sampler_slice_selected`다. 다음 safe slice 후보는 `src.engine.system_metric_sampler`를 `src.engine.monitoring.system_metric_sampler`로 옮기는 monitoring/infra 성격 slice다.
 
+2026-05-27 intraday 보정: 같은 날 `greenfield_real_environment_authority`가 real `entry/submit/holding/scale_in/exit` authority와 PREOPEN env bridge를 추가했으므로, 2026-05-27에는 실제 파일 이동을 진행하지 않는다. 오늘 작업 범위는 Greenfield Real Environment 이후 refactor blast-radius와 consumer inventory를 문서로 보정하는 데 한정한다. `system_metric_sampler` 이동은 다음 영업일 이후 `greenfield_real_environment_authority` postclose/preopen 산출물과 runtime event provenance가 안정적으로 확인된 뒤 다시 safe slice로 연다.
+
 범위:
 
 - new canonical path: `src.engine.monitoring.system_metric_sampler`
@@ -103,10 +105,17 @@
 
 구현 전 gate:
 
-1. consumer inventory로 deploy/cron/error detector/test import 경로를 수집한다.
-2. cron/job id, output path, JSON schema, sampler interval, resource metrics 의미를 바꾸지 않는다.
-3. runtime/order/provider/threshold/bot restart 경로와 연결하지 않는다.
-4. old/new import smoke, old/new CLI smoke, targeted monitoring tests, parser, `git diff --check`를 실행한다.
+1. 2026-05-27에는 구현하지 않고, consumer inventory와 risk note만 보강한다.
+2. 실제 이동을 재개하기 전 deploy/cron/error detector/test import 경로를 다시 수집한다.
+3. cron/job id, output path, JSON schema, sampler interval, resource metrics 의미를 바꾸지 않는다.
+4. runtime/order/provider/threshold/bot restart 경로 및 Greenfield Real Environment authority/env/policy/Telegram 경로와 연결하지 않는다.
+5. 구현 재개 시 old/new import smoke, old/new CLI smoke, targeted monitoring tests, parser, `git diff --check`를 실행한다.
+
+2026-05-27 문서 보강 체크:
+
+- `greenfield_real_environment_authority`는 `src.engine.lifecycle`, `runtime_apply_bridge`, `threshold_cycle_preopen_apply`, `sniper_state_handlers` runtime hot path를 건드린다. 같은 날 `src.engine` 파일 이동을 겹치지 않는다.
+- monitoring sampler 이동은 report/monitoring infra slice지만, detector/resource warning 산출물이 장중 운영 판단과 연결되므로 Greenfield post-apply verification과 같은 검증 창에서 섞지 않는다.
+- 다음 재개 시 checklist 항목은 `implement_monitoring_sampler_slice`가 아니라 먼저 `consumer_inventory_refreshed` 또는 `defer_after_greenfield_verification`으로 닫는다.
 
 보류:
 

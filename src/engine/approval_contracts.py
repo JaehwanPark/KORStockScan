@@ -91,6 +91,17 @@ _CONTRACTS: dict[str, dict[str, Any]] = {
         "runtime_guard_ready": True,
         "runtime_scope": "live_auto_scalp_scale_in_policy_env_only",
     },
+    "greenfield_real_environment_authority": {
+        "approval_contract_status": "ready",
+        "approval_mode": "live_auto_apply_ready",
+        "approval_artifact_required": False,
+        "approval_artifact_template": "greenfield_real_env_policy_{date}.json",
+        "approval_artifact_consumer": "threshold_cycle_preopen_apply.runtime_apply_bridge_live_auto",
+        "preopen_env_ready": True,
+        "runtime_guard_ready": True,
+        "runtime_scope": "full_lifecycle_promoted_bucket_real_environment_only",
+        "missing_components": [],
+    },
     "position_sizing_cap_release": {
         "approval_contract_status": "final_user_approval_required",
         "approval_mode": "final_user_approval_required",

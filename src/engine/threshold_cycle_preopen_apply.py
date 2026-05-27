@@ -16,10 +16,12 @@ from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.engine.runtime_apply_bridge import (
     ARCHIVED_RUNTIME_APPLY_BRIDGE_FAMILIES,
     ENTRY_BRIDGE_FAMILY,
+    GREENFIELD_REAL_ENV_FAMILY,
     SCALE_IN_BRIDGE_FAMILY,
     ldm_entry_runtime_bridge_artifact_path,
     ldm_scale_in_runtime_bridge_artifact_path,
     runtime_apply_bridge_report_path,
+    validate_greenfield_policy_file,
 )
 from src.engine.scalping.scalp_sim_auto_approval_control_tower import (
     scalp_sim_auto_approval_path,
@@ -164,6 +166,11 @@ TARGET_ENV_VALUE_KEYS = {
     "SWING_SIM_AUTO_POLICY_FILE": "policy_file",
     "SWING_SIM_AUTO_POLICY_VERSION": "policy_version",
     "SWING_SIM_AUTO_BOTTOM_REBOUND_SOURCE_ENABLED": "bottom_rebound_source_enabled",
+    "GREENFIELD_REAL_ENV_AUTHORITY_ENABLED": "enabled",
+    "GREENFIELD_REAL_ENV_AUTHORITY_SCOPE": "scope",
+    "GREENFIELD_REAL_ENV_AUTHORITY_POLICY_FILE": "policy_file",
+    "GREENFIELD_REAL_ENV_AUTHORITY_POLICY_VERSION": "policy_version",
+    "GREENFIELD_REAL_ENV_TELEGRAM_ENABLED": "telegram_enabled",
 }
 
 
@@ -264,6 +271,13 @@ def _bridge_artifact_path_for_family(family: str, source_date: str) -> Path | No
     if family == SCALE_IN_BRIDGE_FAMILY:
         return ldm_scale_in_runtime_bridge_artifact_path(source_date)
     return None
+
+
+def _greenfield_policy_block_reason(item: dict[str, Any]) -> str:
+    recommended = item.get("recommended_values") if isinstance(item.get("recommended_values"), dict) else {}
+    policy_file = str(recommended.get("policy_file") or item.get("greenfield_policy_file") or "").strip()
+    recommended_version = str(recommended.get("policy_version") or item.get("candidate_id") or "")
+    return validate_greenfield_policy_file(policy_file, expected_version=recommended_version or None)
 
 
 def _report_path_for_date(target_date: str, *, source_phase: str | None = None) -> Path:
@@ -961,7 +975,7 @@ def _load_runtime_apply_bridge_approval(source_date: str | None) -> dict[str, An
     artifact_payloads: dict[str, dict[str, Any]] = {}
     approved_requests: list[dict[str, Any]] = []
     blocked: list[str] = []
-    bridge_families = {ENTRY_BRIDGE_FAMILY, SCALE_IN_BRIDGE_FAMILY}
+    bridge_families = {ENTRY_BRIDGE_FAMILY, SCALE_IN_BRIDGE_FAMILY, GREENFIELD_REAL_ENV_FAMILY}
     if not report:
         blocked.append("runtime_apply_bridge_report_missing")
 
@@ -1006,6 +1020,10 @@ def _load_runtime_apply_bridge_approval(source_date: str | None) -> dict[str, An
             item_blocked.append("runtime_apply_not_allowed")
         if not auto_live:
             item_blocked.append("runtime_apply_bridge_auto_live_contract_missing")
+        if family == GREENFIELD_REAL_ENV_FAMILY:
+            policy_block_reason = _greenfield_policy_block_reason(item)
+            if policy_block_reason:
+                item_blocked.append(policy_block_reason)
         if item_blocked:
             blocked.extend(f"{reason}:{family}" for reason in item_blocked)
             continue

@@ -132,7 +132,9 @@ def test_get_deposit_records_auth_failure(monkeypatch):
     assert errors[0]["return_code"] == "8005"
 
 
-def test_get_deposit_refreshes_token_and_retries_once_on_8005(monkeypatch):
+def test_get_deposit_refreshes_token_and_retries_once_on_8005(monkeypatch, tmp_path):
+    monkeypatch.setenv("KIWOOM_TOKEN_CACHE_PATH", str(tmp_path / "kiwoom_token_cache.json"))
+    monkeypatch.setenv("KIWOOM_TOKEN_LOCK_PATH", str(tmp_path / "kiwoom_token_cache.lock"))
     class DummyResponse:
         def __init__(self, payload, status_code=200):
             self._payload = payload
@@ -175,10 +177,12 @@ def test_get_deposit_refreshes_token_and_retries_once_on_8005(monkeypatch):
     assert len(posts) == 2
     assert posts[0]["authorization"] == "Bearer STALE_TOKEN"
     assert posts[1]["authorization"] == "Bearer FRESH_TOKEN"
-    assert invalidations == ["order_api_8005_retry:kt00001"]
+    assert invalidations == []
 
 
-def test_get_deposit_returns_auth_failure_when_token_refresh_raises(monkeypatch):
+def test_get_deposit_returns_auth_failure_when_token_refresh_raises(monkeypatch, tmp_path):
+    monkeypatch.setenv("KIWOOM_TOKEN_CACHE_PATH", str(tmp_path / "kiwoom_token_cache.json"))
+    monkeypatch.setenv("KIWOOM_TOKEN_LOCK_PATH", str(tmp_path / "kiwoom_token_cache.lock"))
     class DummyResponse:
         status_code = 200
 

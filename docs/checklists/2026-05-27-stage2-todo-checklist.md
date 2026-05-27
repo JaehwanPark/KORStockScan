@@ -13,6 +13,20 @@
 - `actual_order_submitted=false`인 sim/probe 표본은 EV/source-quality 입력이며 실주문 전환 근거가 아니다.
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
 
+## 당일 운영 보완 기록
+
+- [x] `[ScalpingOvernightDecisionTimeAdvance0527] 오버나이트 판정 시각 15:10 조정` (`Due: 2026-05-27`, `Slot: INTRADAY`, `TimeWindow: 15:45~16:05`, `Track: RuntimeStability`)
+  - Source: [bot_history.log](/home/ubuntu/KORStockScan/logs/bot_history.log), [sniper_overnight_gatekeeper.py](/home/ubuntu/KORStockScan/src/engine/sniper_overnight_gatekeeper.py), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 근거: `2026-05-27 15:20:06` `TIME K바이오액티브(463050)` SELL_TODAY 주문은 접수됐지만 40초 미체결 후 `15:20:47` 취소 및 HOLDING 롤백됐다. 15:20 판정은 청산 주문 체결/복구 여유가 부족하므로 기본 오버나이트 판정 시각을 `15:10:00`으로 당긴다.
+  - 처리 결과: `SCALPING_OVERNIGHT_DECISION_TIME` 기본값과 sim overnight preclose cron을 `15:10`으로 맞췄고, runbook final window를 `15:10~15:30`으로 보정했다. `deploy/install_threshold_cycle_cron.sh`를 실행해 실제 crontab의 `SCALP_SIM_OVERNIGHT_PRECLOSE`도 `10 15 * * 1-5`로 반영했다. threshold/provider/order guard, cap, broker safety는 변경하지 않는다.
+  - 다음 액션: 다음 장전에는 bot 시작 후 runtime 기준 `SCALPING_OVERNIGHT_DECISION_TIME=15:10:00`이 반영됐는지 확인한다.
+
+- [x] `[PostcloseCronAdvance1600_0527] 장후 자동화체인 cron 16:00 조정` (`Due: 2026-05-27`, `Slot: INTRADAY`, `TimeWindow: 16:00~16:10`, `Track: RunbookOps`)
+  - Source: [install_threshold_cycle_cron.sh](/home/ubuntu/KORStockScan/deploy/install_threshold_cycle_cron.sh), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 근거: 15:10 오버나이트 판정과 15:10~15:30 미체결 청산 복구 window 이후 15:45 lightweight swing report를 유지하면 postclose chain은 16:00부터 시작해도 artifact wait/resource guard로 선행 지연을 흡수할 수 있다.
+  - 처리 결과: postclose cron, runbook, daily workorder/backlog 기본 window를 `16:00~20:45`로 보정했고 actual crontab의 `THRESHOLD_CYCLE_POSTCLOSE`도 `0 16 * * 1-5`로 반영했다. threshold/provider/order guard, cap, broker safety는 변경하지 않는다.
+  - 다음 액션: 다음 postclose에서 `[START]/[DONE] threshold-cycle postclose` marker, artifact wait, postclose isolation marker, verifier status를 확인한다.
+
 ## Runbook 운영 확인 완료 기록
 
 - `PreopenAutomationHealthCheck20260527` (`Slot: PREOPEN`, `TimeWindow: 08:00~09:00`, `Track: RunbookOps`) 판정: `pass`
@@ -77,6 +91,8 @@
   - 8005 restart loop cap 보완 (`2026-05-27 09:56~10:01 KST`): 판정=`fail_repeated_auth_8005_restart_loop_capped_runtime_loaded`. 근거: 09:56:08 fresh `kt00008` 8005 이후 detector가 count=`8`까지 `restart.flag`를 만들며 graceful restart는 동작했으나, 반복 auth 실패가 계속되어 restart loop로 전이될 위험이 확인됐다. [kiwoom_auth_8005_restart.py](/home/ubuntu/KORStockScan/src/engine/error_detectors/kiwoom_auth_8005_restart.py)는 하루 3회까지 restart 복구를 허용하고, 이후 fresh 8005는 token cache invalidation과 fail artifact/Telegram만 남기며 추가 `restart.flag`를 만들지 않도록 보완했다. [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)에도 동일 운영 계약을 반영했다. `restart.flag` 기반 우아한 재기동 후 bot PID는 `52283`, `restart.flag`는 없고, `2026-05-27 10:01 KST` `error_detector --mode full --dry-run`은 `summary_severity=pass`, `kiwoom_auth_8005_restart=pass`, `process_health=pass`, `main_loop_pid=52283`이다. 다음 액션: threshold/provider/order guard는 변경하지 않고, 추가 8005 발생 시 `restart_suppressed_by_daily_cap=true`, `restart_requested=false` 계약과 Kiwoom token 발급/REST auth 회복 여부를 확인한다.
   - 8005 조용한 fail 방지 코드리뷰 보완 (`2026-05-27 10:02~10:06 KST`): 판정=`notification_surface_supplemented_runtime_loaded`. 근거: [bot_main.py](/home/ubuntu/KORStockScan/src/bot_main.py)의 daemon alert loop와 [notify_error_detection_admin.py](/home/ubuntu/KORStockScan/src/engine/notify_error_detection_admin.py)의 standalone notifier가 `fail`만 Telegram 대상으로 삼아, daily cap 전 `kiwoom_auth_8005_restart` warning은 artifact에는 남지만 조용히 넘어갈 수 있었다. 8005 detector warning만 alert 대상으로 추가하고, detector state 손상 시 quiet pass 대신 warning으로 닫으며, token cache invalidation 예외가 restart.flag 생성 자체를 막지 않도록 [kiwoom_auth_8005_restart.py](/home/ubuntu/KORStockScan/src/engine/error_detectors/kiwoom_auth_8005_restart.py)를 보완했다. 우아한 재기동 후 bot PID는 `54149`, `restart.flag`는 없고, `10:04:33` 신규 8005는 daily cap으로 `restart_requested=false`/추가 flag 없음 상태에서 `ERROR_DETECTION` fail log로 표면화됐다. `10:06 KST` 재확인에서는 `summary_severity=pass`, `kiwoom_auth_8005_restart=pass`, `process_health=pass`이며 `10:05` 이후 신규 8005는 없다. 다음 액션: threshold/provider/order guard는 변경하지 않고, 이후 8005가 재발하면 warning/fail Telegram alert와 artifact 필드가 같이 남는지 관찰한다.
   - 8005 호출 지점별 refresh/retry 보완 (`2026-05-27 intraday`): 판정=`auth_retry_supplemented_guard_kept`. 근거: [kiwoom_utils.py](/home/ubuntu/KORStockScan/src/utils/kiwoom_utils.py)의 공통 Kiwoom REST wrapper는 `return_code/return_msg` 8005 응답을 받으면 token cache invalidation, `force_refresh=True`, same-request 1회 retry를 수행하도록 보완했다. [kiwoom_orders.py](/home/ubuntu/KORStockScan/src/engine/kiwoom_orders.py)의 예수금/잔고/매수/매도/취소 직접 POST 경로도 동일하게 8005 한정 1회 retry를 수행한다. 반복 8005는 retry loop로 확장하지 않고 auth incident/source-quality로 남긴다. 다음 액션: threshold/provider/order guard 자체는 변경하지 않고, 운영 반영 후 `api_8005_retry:*` 또는 `order_api_8005_retry:*` token cache invalidation 로그와 실제 REST 회복 여부를 확인한다.
+  - 8005 refresh storm 보완 (`2026-05-27 14:18~14:22 KST`): 판정=`auth_refresh_singleflight_patch_ready`. 근거: daily restart cap 도달 후 health artifact는 `fresh_auth_8005_count=23`, `restart_suppressed_by_daily_cap=true`, `token_cache_invalidated=true`, `restart_requested=false`로 닫혔고 bot process health는 pass였다. 로그상 `kt00001`/`ka10003`/`ka10080` 호출 지점이 각자 8005를 맞고 새 token cache를 반복 invalidation하는 refresh storm이 확인됐다. [kiwoom_utils.py](/home/ubuntu/KORStockScan/src/utils/kiwoom_utils.py)는 실패한 token과 현재 cache token을 비교해, 이미 다른 thread가 새 token을 발급한 경우 cache를 재사용하고 추가 invalidation/force refresh를 생략하도록 보완했다. [kiwoom_orders.py](/home/ubuntu/KORStockScan/src/engine/kiwoom_orders.py)는 주문/계좌 API retry 경로에 실패 token provenance를 전달한다. 검증: `test_kiwoom_token_cache.py`, `test_kiwoom_orders.py` 16 passed, py_compile pass, diff check pass. 다음 액션: threshold/provider/order guard는 변경하지 않고, 운영 반영은 별도 우아한 재기동으로만 수행하며 반영 후 `이미 갱신된 Kiwoom token 캐시 재사용` 로그와 신규 8005 count 감소를 관찰한다.
+  - 8005 refresh storm 운영 반영 (`2026-05-27 14:23~14:25 KST`): 판정=`runtime_loaded_auth_health_pass`. 근거: 코드리뷰 보강 후 관련 테스트 54 passed, py_compile pass, diff check pass다. `restart.flag` 기반 우아한 재기동으로 bot PID가 `111558 -> 149845`로 교체됐고 flag는 소비됐다. 새 PID는 threshold runtime env, Bedrock Lite v2 primary, OpenAI WS 설정을 로드했다. 재검증에서 `error_detector --mode full --dry-run`은 `summary_severity=pass`, `kiwoom_auth_8005_restart=pass`, `process_health=pass`이며 14:25 KST 구간 신규 8005/token refresh storm 로그는 0건이다. 다음 액션: threshold/provider/order guard는 변경하지 않고, `이미 갱신된 Kiwoom token 캐시 재사용` 또는 신규 8005 count만 관찰한다.
   - BUY time-block Telegram noise 보완 (`2026-05-27 intraday`): 판정=`notification_suppressed_guard_kept`. 근거: `BUY_TIME_BLOCK buy order blocked ... KST 10:00 전`은 1주 cap처럼 주문/수량 안전 guard provenance에 가깝고, 반복 Telegram이 필요하지 않다. [kiwoom_orders.py](/home/ubuntu/KORStockScan/src/engine/kiwoom_orders.py)는 `BUY_TIME_BLOCKED` broker submit 차단과 log 기록은 유지하되 `TELEGRAM_ADMIN_NOTIFY` 발송만 제거했다. 수동 `TRADING_PAUSED_BLOCK` 운영 알림은 유지한다. 운영 반영 후 bot PID는 `49117`, `restart.flag`는 없고 09:55 `error_detector --mode full --dry-run`은 `summary_severity=pass`, auth/log/process 모두 pass다. 다음 액션: threshold/provider/order guard 자체는 변경하지 않고, time-block은 pipeline/log source로만 확인한다.
   - pytest 로그 오염 보완 (`2026-05-27 intraday`): 판정=`source_quality_false_positive_fixed`. 근거: 10:46~10:47 `log_scanner UNKNOWN(8)` burst는 [kiwoom_orders_error.log](/home/ubuntu/KORStockScan/logs/kiwoom_orders_error.log)의 `temporary deposit failure`/`network down` fixture성 예수금 테스트 로그와 8005 retry 테스트 로그가 runtime `logs/`에 섞인 source-quality 오염이었다. [conftest.py](/home/ubuntu/KORStockScan/src/tests/conftest.py)는 pytest 실행 중 module logger를 per-test temp logs로 격리하고, [log_scanner.py](/home/ubuntu/KORStockScan/src/engine/error_detectors/log_scanner.py)는 `/tmp/pytest-of-*` fixture 경로가 runtime log에 누출된 경우만 무시한다. 실제 8005 인증 실패는 계속 `kiwoom_auth_8005_restart`가 판정한다. 검증: targeted pytest 28 passed, py_compile, `git diff --check`, `error_detector --mode full --dry-run`에서 `log_scanner=pass`, `kiwoom_auth_8005_restart=pass`. 다음 액션: threshold/provider/order guard와 bot restart 정책은 변경하지 않고, test fixture 로그가 runtime detector에 재유입되는지만 관찰한다.
   - 오전 변경 코드리뷰 보완 (`2026-05-27 intraday`): 판정=`supplemented_no_runtime_policy_change`. 근거: 8005 호출지점 retry는 token cache invalidation/force-refresh 예외가 나면 원래 8005 응답을 안전하게 반환하지 못할 수 있었고, 공통 Kiwoom API wrapper는 `rt_cd=8005`만 온 응답을 놓칠 수 있었다. [kiwoom_orders.py](/home/ubuntu/KORStockScan/src/engine/kiwoom_orders.py)와 [kiwoom_utils.py](/home/ubuntu/KORStockScan/src/utils/kiwoom_utils.py)는 refresh 예외를 fail-closed auth incident로 반환하고 `return_code`/`rt_cd` 모두 8005 retry 대상으로 본다. [kiwoom_sniper_v2.py](/home/ubuntu/KORStockScan/src/engine/kiwoom_sniper_v2.py)는 live Gatekeeper reject report가 future caller를 통해 VIP Telegram으로 나가지 않도록 approval-only 경계를 함수 내부에서도 보강했다. 검증: targeted pytest 44 passed + 252 passed, py_compile, `git diff --check`, checklist parser, `error_detector --mode full --dry-run`에서 `log_scanner=pass`, `kiwoom_auth_8005_restart=pass`. 다음 액션: threshold/provider/order guard, bot restart 정책, swing dry-run guard는 변경하지 않는다.
@@ -98,6 +114,12 @@
   - 금지: sim/probe EV를 broker execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
   - 다음 액션: source-quality split, active state 복원, open/closed count를 같이 기록한다.
   - 처리 결과 (`2026-05-27 11:42 KST`): 판정=`pass_source_split_kept`. 근거: [pipeline_events_2026-05-27.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-05-27.jsonl) sim/probe 관련 stage `25,464`건 중 fields 기준 `actual_order_submitted=False` `25,037`건, `actual_order_submitted=True` `0`건, `broker_order_forbidden=True` `24,940`건, `broker_order_forbidden=False` `0`건이다. 주요 coverage는 `scalp_sim_buy_order_assumed_filled=251`, `scalp_sim_buy_order_virtual_pending=251`, `swing_probe_entry_candidate=120`, `swing_probe_holding_started=120`, `swing_sim_buy_order_assumed_filled=69`, `swing_sim_holding_started=69`, `swing_probe_state_restored=88`, `swing_probe_state_persisted=244`다. Bedrock primary provider artifact는 `605` rows 모두 `global.amazon.nova-2-lite-v1:0`, failback `0`이고, Lite v1 shadow artifact는 `602` rows 모두 `actual_order_submitted=false`, `runtime_effect=false`다. 다음 액션: missing provenance가 있는 lower-level observation rows는 source-quality 관찰로 남기고, sim/probe EV는 broker execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
+
+- [x] `[GreenfieldRealEnvironmentAuthority0527] promoted lifecycle bucket real authority 구현` (`Due: 2026-05-27`, `Slot: INTRADAY`, `TimeWindow: 14:30~15:20`, `Track: ScalpingLogic`)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md), [runtime_apply_bridge.py](/home/ubuntu/KORStockScan/src/engine/runtime_apply_bridge.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py)
+  - 판정 기준: `greenfield_real_environment_authority`가 다음 PREOPEN env 후보로만 생성되고, 활성화 시 real `entry/submit/holding/scale_in/exit`는 promoted bucket allowlist만 authority로 삼는다.
+  - 금지: 장중 env mutation, hard/protect/emergency/broker/order/qty/stale/price freshness guard 우회, provider route/bot restart/cap release 변경.
+  - 처리 결과 (`2026-05-27 intraday`): 판정=`implementation_ready_preopen_only`. 근거: `runtime_apply_bridge`는 parsed Tier2 + source-quality pass `live_auto_apply_ready` lifecycle rows에서 `greenfield_real_env_policy_YYYY-MM-DD.json`을 만들고, `threshold_cycle_preopen_apply`는 `KORSTOCKSCAN_GREENFIELD_REAL_ENV_AUTHORITY_*` env만 다음 PREOPEN으로 쓴다. Runtime은 활성화 시 unpromoted entry/submit/scale-in/exit real action과 policy 누락 상태를 fail-closed로 차단하고 hard safety exit는 passthrough한다. Liquidity/overbought submit block은 greenfield active 상태에서 `greenfield_tunable_prior`로 관측되며 submit allowlist가 최종 권한을 가진다. Stage Telegram은 sim/probe/source-only를 제외하고 `entry`, `submit`, `holding`, `scale_in`, `exit` 발생 시 `VIP_ALL`로 1회 발송하도록 연결했다. 다음 액션: postclose discovery/bridge 산출물이 실제 promoted stage row를 생성하는지 확인하고, 다음 PREOPEN apply manifest에서 env 선택 여부를 검토한다.
 
 ## 장후 체크리스트 (16:30~18:55)
 
@@ -137,11 +159,11 @@
   - 금지: 비교검증 결과만으로 threshold/order price/quantity guard, provider route, bot restart, 스윙 dry-run guard, real canary approval을 변경하지 않는다.
   - 다음 액션: `provider_split_pass`, `entry_price_mismatch_observe`, `holding_flow_match_pass`, `source_quality_gap`, `failback_or_parse_issue` 중 하나 이상으로 닫고, 필요 시 다음 영업일 장중 provenance 재확인 항목으로 연결한다.
 
-- [ ] `[EngineRefactorMonitoringSamplerSlice0527] src.engine Phase 2 Slice 2 monitoring sampler safe slice 구현 여부 확인` (`Due: 2026-05-27`, `Slot: POSTCLOSE`, `TimeWindow: 18:55~19:10`, `Track: Plan`)
-  - Source: [src-engine-refactor-inventory.md](/home/ubuntu/KORStockScan/docs/proposals/src-engine-refactor-inventory.md), [system_metric_sampler.py](/home/ubuntu/KORStockScan/src/engine/system_metric_sampler.py)
-  - 판정 기준: 05-26 POSTCLOSE에서 선정한 `monitoring_sampler_slice_selected`를 기준으로 `src.engine.system_metric_sampler -> src.engine.monitoring.system_metric_sampler` safe slice를 진행할지 결정한다. 구현 시 new canonical path, old root wrapper, old/new import smoke, old/new CLI smoke, targeted monitoring tests, parser, `git diff --check`를 한 slice에서 닫는다.
-  - 금지: runtime/order/provider/threshold/bot restart 경로 이동, cron/job id 의미 변경, output path/JSON schema/metric semantics 변경, wrapper 제거, `src/trading` 또는 `src/utils` 전체 이동, direct import bulk rewrite를 금지한다.
-  - 다음 액션: `implement_monitoring_sampler_slice`, `defer_after_consumer_inventory`, `blocked_by_runtime_path`, `wrapper_keep_required`, `tests_or_smoke_failed` 중 하나로 닫는다.
+- [ ] `[EngineRefactorMonitoringSamplerPlan0527] Greenfield 이후 src.engine Phase 2 Slice 2 계획 보정` (`Due: 2026-05-27`, `Slot: POSTCLOSE`, `TimeWindow: 18:55~19:10`, `Track: Plan`)
+  - Source: [src-engine-refactor-inventory.md](/home/ubuntu/KORStockScan/docs/proposals/src-engine-refactor-inventory.md), [GreenfieldRealEnvironmentAuthority0527](#장중-체크리스트-09051520)
+  - 판정 기준: `greenfield_real_environment_authority` 구현으로 오늘은 `src.engine.system_metric_sampler -> src.engine.monitoring.system_metric_sampler` 실제 이동을 하지 않고, refactor inventory의 consumer/risk/재개 조건을 문서로 보정한다.
+  - 금지: runtime/order/provider/threshold/bot restart 경로 이동, cron/job id 의미 변경, output path/JSON schema/metric semantics 변경, wrapper 제거, `src/trading` 또는 `src/utils` 전체 이동, direct import bulk rewrite, Greenfield authority/env/policy/Telegram 경로와 리팩터링 변경을 같은 구현 slice로 묶는 것을 금지한다.
+  - 다음 액션: `document_plan_updated`, `defer_after_greenfield_verification`, `consumer_inventory_refresh_needed`, `blocked_by_runtime_path` 중 하나로 닫는다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
@@ -156,3 +178,18 @@
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
+
+<!-- AUTO_SERVER_COMPARISON_START -->
+### 본서버 vs songstockscan 자동 비교 (`2026-05-27 15:48:10`)
+
+- 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
+- 상세 리포트: `data/report/server_comparison/server_comparison_2026-05-27.md`
+- `Trade Review`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Performance Tuning`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Post Sell Feedback`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Entry Pipeline Flow`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+<!-- AUTO_SERVER_COMPARISON_END -->

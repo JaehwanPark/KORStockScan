@@ -111,8 +111,8 @@ def _safe_int(value, default=0):
 
 
 def _eod_label() -> str:
-    raw = str(getattr(TRADING_RULES, "SCALPING_OVERNIGHT_DECISION_TIME", "15:20:00") or "15:20:00")
-    return raw[:5] if len(raw) >= 5 else "15:20"
+    raw = str(getattr(TRADING_RULES, "SCALPING_OVERNIGHT_DECISION_TIME", "15:10:00") or "15:10:00")
+    return raw[:5] if len(raw) >= 5 else "15:10"
 
 
 def _find_active_target_by_code(code):
@@ -565,7 +565,7 @@ def _apply_overnight_flow_override(record, mem_stock, ws_data, ctx, decision, ai
 
 
 def run_scalping_overnight_gatekeeper(ai_engine=None):
-    """15:20 스캘핑 포지션 오버나이트/당일청산 판정 및 실행."""
+    """Run the preclose scalping overnight / sell-today gatekeeper once."""
     global KIWOOM_TOKEN, DB, WS_MANAGER, event_bus, ACTIVE_TARGETS
 
     if ai_engine is None:

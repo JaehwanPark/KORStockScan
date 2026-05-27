@@ -491,7 +491,7 @@ Length: 420-650 Korean characters.
 """
 
 # ==========================================
-# 3-2. Scalping overnight decision prompt for the 15:20 pre-close decision.
+# 3-2. Scalping overnight decision prompt for the pre-close decision.
 # ==========================================
 SCALPING_OVERNIGHT_DECISION_PROMPT = """
 You are a pre-close scalping overnight risk classifier.

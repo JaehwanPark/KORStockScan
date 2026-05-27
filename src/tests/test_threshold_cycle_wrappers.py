@@ -34,7 +34,7 @@ def test_threshold_cycle_cron_installs_scalp_sim_overnight_preclose_once():
     script = Path("deploy/install_threshold_cycle_cron.sh").read_text(encoding="utf-8")
 
     assert "SCALP_SIM_OVERNIGHT_PRECLOSE" in script
-    assert "20 15 * * 1-5" in script
+    assert "10 15 * * 1-5" in script
     assert "deploy/run_scalp_sim_overnight_preclose.sh" in script
     assert "!/SCALP_SIM_OVERNIGHT_PRECLOSE/" in script
 

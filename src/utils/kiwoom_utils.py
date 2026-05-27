@@ -194,16 +194,20 @@ def invalidate_kiwoom_token_cache(reason: str = "") -> bool:
     reason_text = f" reason={reason}" if reason else ""
     try:
         with _kiwoom_token_file_lock():
-            try:
-                path.unlink()
-            except FileNotFoundError:
-                log_info(f"🔐 [TOKEN CACHE] invalidate skipped; cache missing.{reason_text}")
-                return False
-            log_info(f"🔐 [TOKEN CACHE] invalidated stale Kiwoom token cache.{reason_text}")
-            return True
+            return _invalidate_kiwoom_token_cache_unlocked(path, reason_text)
     except Exception as exc:
         log_error(f"❌ [TOKEN CACHE] invalidate failed: {path} ({exc}){reason_text}")
         return False
+
+
+def _invalidate_kiwoom_token_cache_unlocked(path: Path, reason_text: str = "") -> bool:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        log_info(f"🔐 [TOKEN CACHE] invalidate skipped; cache missing.{reason_text}")
+        return False
+    log_info(f"🔐 [TOKEN CACHE] invalidated stale Kiwoom token cache.{reason_text}")
+    return True
 
 
 def _is_kiwoom_auth_8005_response(payload: dict | None) -> bool:
@@ -232,10 +236,44 @@ def _is_kiwoom_auth_8005_response(payload: dict | None) -> bool:
 
 
 def _refresh_kiwoom_token_after_8005(api_id: str) -> str | None:
+    return get_kiwoom_token_after_auth_failure(api_id=api_id, failed_token=None, reason_prefix="api_8005_retry")
+
+
+def get_kiwoom_token_after_auth_failure(
+    *,
+    api_id: str,
+    failed_token: str | None = None,
+    reason_prefix: str = "api_8005_retry",
+) -> str | None:
+    """Refresh after 8005 without deleting a newer token another thread already issued."""
     reason = f"api_8005_retry:{api_id}"
     try:
-        invalidate_kiwoom_token_cache(reason=reason)
-        refreshed = get_kiwoom_token(force_refresh=True)
+        config = None
+        target_path = CONFIG_PATH if CONFIG_PATH.exists() else DEV_PATH
+        try:
+            with open(target_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+        except Exception:
+            config = None
+
+        failed = str(failed_token or "").replace("Bearer ", "").strip()
+        if config:
+            with _kiwoom_token_file_lock():
+                cached = _read_cached_kiwoom_token(config)
+                if cached and failed and cached != failed:
+                    log_info(
+                        f"🔐 [{api_id}] 8005 감지 후 이미 갱신된 Kiwoom token 캐시 재사용 "
+                        f"(failed={_token_preview(failed)}, cached={_token_preview(cached)})"
+                    )
+                    return cached
+                _invalidate_kiwoom_token_cache_unlocked(
+                    _kiwoom_token_cache_path(),
+                    f" reason={reason_prefix}:{api_id}",
+                )
+            refreshed = get_kiwoom_token(config, force_refresh=True)
+        else:
+            invalidate_kiwoom_token_cache(reason=f"{reason_prefix}:{api_id}")
+            refreshed = get_kiwoom_token(force_refresh=True)
     except Exception as exc:
         log_error(f"❌ [{api_id}] 8005 감지 후 Kiwoom token force refresh 예외: {exc}")
         return None
@@ -2279,7 +2317,11 @@ def fetch_kiwoom_api_continuous(url: str, token: str, api_id: str, payload: dict
                     all_results.append(res_json)
                     break
                 auth_retry_used = True
-                refreshed_token = _refresh_kiwoom_token_after_8005(api_id)
+                refreshed_token = get_kiwoom_token_after_auth_failure(
+                    api_id=api_id,
+                    failed_token=active_token,
+                    reason_prefix="api_8005_retry",
+                )
                 if refreshed_token:
                     active_token = refreshed_token
                     response = None
