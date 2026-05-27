@@ -163,6 +163,94 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+AI_REVIEW_TIMEOUT_SEC = max(
+    30,
+    _safe_int(os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_REVIEW_TIMEOUT_SEC"), 180),
+)
+AI_REVIEW_MAX_CANDIDATES = max(
+    1,
+    _safe_int(os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_REVIEW_MAX_CANDIDATES"), 20),
+)
+AI_REVIEW_MAX_FIELD_CHARS = max(
+    200,
+    _safe_int(os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_REVIEW_MAX_FIELD_CHARS"), 500),
+)
+AI_REVIEW_SHARD_CONTEXT_BUDGET_CHARS = max(
+    8_000,
+    _safe_int(os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_SHARD_CONTEXT_BUDGET_CHARS"), 30_000),
+)
+AI_REVIEW_SHARD_MAX_CANDIDATES = max(
+    1,
+    _safe_int(os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_SHARD_MAX_CANDIDATES"), 12),
+)
+AI_REVIEW_SHARD_ORDER = (
+    "live_contract_review",
+    "sim_policy_review",
+    "gap_workorder_review",
+    "taxonomy_discovery_review",
+)
+AI_REVIEW_SHARD_PRIORITIES = {
+    shard_id: index for index, shard_id in enumerate(AI_REVIEW_SHARD_ORDER)
+}
+AI_REVIEW_SHARD_AUTHORITIES = {
+    "live_contract_review": "explicit_contract_safety_gap_review_for_deterministic_live_candidates",
+    "sim_policy_review": "sim_policy_handoff_source_quality_review_only",
+    "gap_workorder_review": "source_contract_and_workorder_gap_review_only",
+    "taxonomy_discovery_review": "new_bucket_taxonomy_review_only",
+}
+AI_REVIEW_REASONING_EFFORT = str(
+    os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_REVIEW_REASONING_EFFORT", "low")
+).strip().lower() or "low"
+
+
+def _ai_review_compact_value(value: Any, *, max_chars: int = AI_REVIEW_MAX_FIELD_CHARS) -> Any:
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        text = str(value) if isinstance(value, str) else value
+        if isinstance(text, str) and len(text) > max_chars:
+            return f"{text[:max_chars]}...[truncated]"
+        return text
+    encoded = json.dumps(value, ensure_ascii=True, sort_keys=True, default=str)
+    if len(encoded) <= max_chars:
+        return value
+    return {"truncated_json": f"{encoded[:max_chars]}...[truncated]", "original_chars": len(encoded)}
+
+
+def _ai_review_compact_candidate(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "bucket_id": item.get("bucket_id"),
+        "stage": item.get("stage"),
+        "bucket_type": item.get("bucket_type"),
+        "bucket_key": item.get("bucket_key"),
+        "bucket_relation": item.get("bucket_relation"),
+        "classification_state": item.get("classification_state"),
+        "live_auto_apply_family": item.get("live_auto_apply_family"),
+        "evidence_grade": item.get("evidence_grade"),
+        "transition_target": item.get("transition_target"),
+        "grade_reason": item.get("grade_reason"),
+        "full_real_conversion_allowed": item.get("full_real_conversion_allowed"),
+        "source_dimensions": _ai_review_compact_value(item.get("source_dimensions")),
+        "canonical_bucket": item.get("canonical_bucket"),
+        "legacy_raw_bucket_key": item.get("legacy_raw_bucket_key"),
+        "bucket_alias_version": item.get("bucket_alias_version"),
+        "dimension_set_version": item.get("dimension_set_version"),
+        "bucket_absorption_reason": item.get("bucket_absorption_reason"),
+        "normalized_dimensions": _ai_review_compact_value(item.get("normalized_dimensions")),
+        "normalized_metrics": _ai_review_compact_value(item.get("normalized_metrics")),
+        "deterministic_proposal": _ai_review_compact_value(item.get("deterministic_proposal")),
+        "current_ai_tier2_proposal": _ai_review_compact_value(item.get("ai_tier2_proposal")),
+        "evidence_authority_contract": _ai_review_compact_value(item.get("evidence_authority_contract")),
+        "primary_decision_metric": item.get("primary_decision_metric"),
+        "sample": item.get("sample"),
+        "joined_sample": item.get("joined_sample"),
+        "join_rate": item.get("join_rate"),
+        "source_quality_adjusted_ev_pct": item.get("source_quality_adjusted_ev_pct"),
+        "recommended_route": item.get("recommended_route"),
+        "recommended_action": item.get("recommended_action"),
+        "source_quality_gate": item.get("source_quality_gate"),
+        "forbidden_uses": item.get("forbidden_uses"),
+    }
+
+
 def _safe_float(value: Any, default: float | None = None) -> float | None:
     try:
         if value in (None, "", "-", "None"):
@@ -779,45 +867,23 @@ def _policy_stage_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return candidates
 
 
-def _build_ai_review_context(report: dict[str, Any]) -> dict[str, Any]:
+def _build_ai_review_context(
+    report: dict[str, Any],
+    *,
+    shard_id: str = "legacy_bounded_review",
+    candidate_items: list[dict[str, Any]] | None = None,
+    omitted_candidate_count: int = 0,
+    candidate_selection_policy: str = "first_bounded_surfaced_candidates",
+    review_authority: str = "contract_gap_review_only",
+) -> dict[str, Any]:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
     surfaced = report.get("surfaced_candidates") if isinstance(report.get("surfaced_candidates"), list) else []
-    compact_candidates = [
-        {
-            "bucket_id": item.get("bucket_id"),
-            "stage": item.get("stage"),
-            "bucket_type": item.get("bucket_type"),
-            "bucket_key": item.get("bucket_key"),
-            "bucket_relation": item.get("bucket_relation"),
-            "classification_state": item.get("classification_state"),
-            "live_auto_apply_family": item.get("live_auto_apply_family"),
-            "evidence_grade": item.get("evidence_grade"),
-            "transition_target": item.get("transition_target"),
-            "grade_reason": item.get("grade_reason"),
-            "full_real_conversion_allowed": item.get("full_real_conversion_allowed"),
-            "source_dimensions": item.get("source_dimensions"),
-            "canonical_bucket": item.get("canonical_bucket"),
-            "legacy_raw_bucket_key": item.get("legacy_raw_bucket_key"),
-            "bucket_alias_version": item.get("bucket_alias_version"),
-            "dimension_set_version": item.get("dimension_set_version"),
-            "bucket_absorption_reason": item.get("bucket_absorption_reason"),
-            "normalized_dimensions": item.get("normalized_dimensions"),
-            "normalized_metrics": item.get("normalized_metrics"),
-            "deterministic_proposal": item.get("deterministic_proposal"),
-            "current_ai_tier2_proposal": item.get("ai_tier2_proposal"),
-            "evidence_authority_contract": item.get("evidence_authority_contract"),
-            "primary_decision_metric": item.get("primary_decision_metric"),
-            "joined_sample": item.get("joined_sample"),
-            "join_rate": item.get("join_rate"),
-            "source_quality_adjusted_ev_pct": item.get("source_quality_adjusted_ev_pct"),
-            "recommended_route": item.get("recommended_route"),
-            "recommended_action": item.get("recommended_action"),
-            "source_quality_gate": item.get("source_quality_gate"),
-            "forbidden_uses": item.get("forbidden_uses"),
-        }
-        for item in surfaced[:60]
-        if isinstance(item, dict)
-    ]
+    selected_items = candidate_items if candidate_items is not None else surfaced[:AI_REVIEW_MAX_CANDIDATES]
+    compact_candidates: list[dict[str, Any]] = []
+    for item in selected_items:
+        if not isinstance(item, dict):
+            continue
+        compact_candidates.append(_ai_review_compact_candidate(item))
     return {
         "review_task": "two_pass_lifecycle_bucket_discovery_review",
         "pass_1": "Interpret whether each surfaced bucket is a refinement of an existing taxonomy bucket or a genuinely new bucket candidate.",
@@ -855,6 +921,19 @@ def _build_ai_review_context(report: dict[str, Any]) -> dict[str, Any]:
                 "real one-share outcomes."
             ),
         },
+        "review_scope": {
+            "shard_id": shard_id,
+            "candidate_selection_policy": candidate_selection_policy,
+            "review_authority": review_authority,
+            "candidate_ids": [
+                str(item.get("bucket_id"))
+                for item in compact_candidates
+                if isinstance(item, dict) and item.get("bucket_id")
+            ],
+            "reviewed_candidate_count": len(compact_candidates),
+            "omitted_candidate_count": max(0, int(omitted_candidate_count or 0)),
+            "context_char_budget": AI_REVIEW_SHARD_CONTEXT_BUDGET_CHARS,
+        },
         "date": report.get("date"),
         "summary": summary,
         "source_contract": report.get("source_contract"),
@@ -879,6 +958,112 @@ def _build_ai_review_context(report: dict[str, Any]) -> dict[str, Any]:
             "and has a live_auto_apply_family."
         ),
     }
+
+
+def _candidate_review_priority(item: dict[str, Any]) -> tuple[int, int, float]:
+    state = str(item.get("classification_state") or "")
+    state_priority = {
+        "live_auto_apply_ready": 0,
+        "runtime_blocked_contract_gap": 1,
+        "sim_auto_approved": 2,
+        "code_patch_required": 3,
+        "automation_handoff_gap": 4,
+        "new_bucket_candidate": 5,
+    }.get(state, 9)
+    sample = _safe_int(item.get("joined_sample"), _safe_int(item.get("sample"), 0))
+    ev = _safe_float(item.get("source_quality_adjusted_ev_pct"), 0.0) or 0.0
+    return (state_priority, -sample, -abs(ev))
+
+
+def _candidate_matches_ai_shard(item: dict[str, Any], shard_id: str) -> bool:
+    state = str(item.get("classification_state") or "")
+    stage = str(item.get("stage") or "")
+    source_kind = str(item.get("source_bucket_kind") or "")
+    if shard_id == "live_contract_review":
+        return state in {"live_auto_apply_ready", "runtime_blocked_contract_gap"}
+    if shard_id == "sim_policy_review":
+        return state == "sim_auto_approved"
+    if shard_id == "gap_workorder_review":
+        return state in {"code_patch_required", "automation_handoff_gap"} or stage == "source_contract" or source_kind in {
+            "source_contract_gap",
+            "source_quality_gap",
+        }
+    if shard_id == "taxonomy_discovery_review":
+        return state == "new_bucket_candidate"
+    return False
+
+
+def _fit_candidates_to_ai_budget(
+    report: dict[str, Any],
+    *,
+    shard_id: str,
+    candidates: list[dict[str, Any]],
+    candidate_selection_policy: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    for item in candidates[:AI_REVIEW_SHARD_MAX_CANDIDATES]:
+        selected.append(item)
+        context = _build_ai_review_context(
+            report,
+            shard_id=shard_id,
+            candidate_items=selected,
+            omitted_candidate_count=max(0, len(candidates) - len(selected)),
+            candidate_selection_policy=candidate_selection_policy,
+            review_authority=AI_REVIEW_SHARD_AUTHORITIES.get(shard_id, "contract_gap_review_only"),
+        )
+        context_chars = len(json.dumps(context, ensure_ascii=True, default=str))
+        if context_chars > AI_REVIEW_SHARD_CONTEXT_BUDGET_CHARS and len(selected) > 1:
+            selected.pop()
+            break
+    context = _build_ai_review_context(
+        report,
+        shard_id=shard_id,
+        candidate_items=selected,
+        omitted_candidate_count=max(0, len(candidates) - len(selected)),
+        candidate_selection_policy=candidate_selection_policy,
+        review_authority=AI_REVIEW_SHARD_AUTHORITIES.get(shard_id, "contract_gap_review_only"),
+    )
+    return selected, context
+
+
+def _build_ai_review_shards(report: dict[str, Any]) -> list[dict[str, Any]]:
+    surfaced = [
+        item
+        for item in (report.get("surfaced_candidates") or [])
+        if isinstance(item, dict) and item.get("bucket_id")
+    ]
+    assigned: set[str] = set()
+    shards: list[dict[str, Any]] = []
+    for shard_id in AI_REVIEW_SHARD_ORDER:
+        candidates = [
+            item
+            for item in surfaced
+            if str(item.get("bucket_id")) not in assigned and _candidate_matches_ai_shard(item, shard_id)
+        ]
+        candidates.sort(key=_candidate_review_priority)
+        selected, context = _fit_candidates_to_ai_budget(
+            report,
+            shard_id=shard_id,
+            candidates=candidates,
+            candidate_selection_policy=f"{shard_id}_priority_then_sample_ev",
+        )
+        reviewed_ids = [str(item.get("bucket_id")) for item in selected if item.get("bucket_id")]
+        assigned.update(reviewed_ids)
+        context_chars = len(json.dumps(context, ensure_ascii=True, default=str))
+        shards.append(
+            {
+                "shard_id": shard_id,
+                "priority": AI_REVIEW_SHARD_PRIORITIES[shard_id],
+                "candidate_selection_policy": f"{shard_id}_priority_then_sample_ev",
+                "review_authority": AI_REVIEW_SHARD_AUTHORITIES[shard_id],
+                "candidate_ids": reviewed_ids,
+                "candidate_count": len(reviewed_ids),
+                "omitted_candidate_count": max(0, len(candidates) - len(selected)),
+                "context": context,
+                "context_chars": context_chars,
+            }
+        )
+    return shards
 
 
 def _build_ai_review_instructions() -> str:
@@ -992,7 +1177,7 @@ def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, 
     return "parsed", payload, []
 
 
-def _call_openai_ai_review(input_context: dict[str, Any]) -> tuple[Any | None, dict[str, Any]]:
+def _call_openai_ai_review(input_context: dict[str, Any], *, shard_id: str | None = None) -> tuple[Any | None, dict[str, Any]]:
     try:
         from openai import OpenAI, RateLimitError
         from src.engine.ai_response_contracts import build_openai_response_text_format
@@ -1011,7 +1196,7 @@ def _call_openai_ai_review(input_context: dict[str, Any]) -> tuple[Any | None, d
     errors: list[dict[str, str]] = []
     for attempt_index, (key_name, api_key) in enumerate(api_keys, start=1):
         try:
-            client = OpenAI(api_key=api_key)
+            client = OpenAI(api_key=api_key, timeout=AI_REVIEW_TIMEOUT_SEC)
             response = client.responses.create(
                 model=AI_REVIEW_MODEL,
                 instructions=_build_ai_review_instructions(),
@@ -1020,14 +1205,15 @@ def _call_openai_ai_review(input_context: dict[str, Any]) -> tuple[Any | None, d
                     "format": build_openai_response_text_format(AI_REVIEW_SCHEMA_NAME),
                     "verbosity": "low",
                 },
-                reasoning={"effort": "high"},
+                reasoning={"effort": AI_REVIEW_REASONING_EFFORT},
                 store=False,
                 metadata={
                     "endpoint_name": "lifecycle_bucket_discovery_review",
                     "schema_name": AI_REVIEW_SCHEMA_NAME,
                     "report_type": "lifecycle_bucket_discovery",
+                    "shard_id": shard_id or str((input_context.get("review_scope") or {}).get("shard_id") or "unknown"),
                 },
-                timeout=180,
+                timeout=AI_REVIEW_TIMEOUT_SEC,
             )
             raw_text = _extract_openai_response_text(response)
             usage = getattr(response, "usage", None)
@@ -1039,7 +1225,9 @@ def _call_openai_ai_review(input_context: dict[str, Any]) -> tuple[Any | None, d
                 "attempted_key_count": len(api_keys),
                 "model": AI_REVIEW_MODEL,
                 "schema_name": AI_REVIEW_SCHEMA_NAME,
-                "reasoning_effort": "high",
+                "shard_id": shard_id or str((input_context.get("review_scope") or {}).get("shard_id") or "unknown"),
+                "reasoning_effort": AI_REVIEW_REASONING_EFFORT,
+                "timeout_sec": AI_REVIEW_TIMEOUT_SEC,
                 "input_context_hash": _text_hash(input_context),
                 "input_context_chars": len(prompt),
                 "output_chars": len(raw_text),
@@ -1056,6 +1244,7 @@ def _call_openai_ai_review(input_context: dict[str, Any]) -> tuple[Any | None, d
         "status": "unavailable",
         "reason": "all OpenAI attempts failed",
         "model": AI_REVIEW_MODEL,
+        "shard_id": shard_id or str((input_context.get("review_scope") or {}).get("shard_id") or "unknown"),
         "errors": errors[-3:],
     }
 
@@ -1096,11 +1285,20 @@ def _apply_ai_review(
     ai_status: str,
     ai_payload: dict[str, Any],
     warnings: list[str],
+    reviewed_bucket_ids: set[str] | None = None,
+    fail_closed_live: bool = True,
 ) -> list[dict[str, Any]]:
     updated = [dict(item) for item in candidates]
     by_id = _candidate_index(updated)
+    target_ids = reviewed_bucket_ids
+    if target_ids is None:
+        target_ids = {str(item.get("bucket_id")) for item in updated if item.get("bucket_id")}
     if ai_status != "parsed":
         for item in updated:
+            bucket_id = str(item.get("bucket_id") or "")
+            if bucket_id not in target_ids:
+                item.setdefault("ai_review_coverage", "unreviewed")
+                continue
             deterministic = item.get("deterministic_proposal") if isinstance(item.get("deterministic_proposal"), dict) else {}
             item["ai_tier2_proposal"] = default_ai_tier2_proposal(str(item.get("bucket_id") or ""), deterministic)
             item["ai_tier2_comparative_review"] = compare_taxonomy_proposals(
@@ -1108,12 +1306,13 @@ def _apply_ai_review(
                 deterministic_proposal=deterministic,
                 ai_tier2_proposal=item["ai_tier2_proposal"],
             )
-            if item.get("classification_state") == "live_auto_apply_ready":
+            item["ai_review_coverage"] = "reviewed"
+            item["ai_review_status"] = ai_status
+            if fail_closed_live and item.get("classification_state") == "live_auto_apply_ready":
                 item["classification_state"] = "runtime_blocked_contract_gap"
                 item["runtime_effect"] = False
                 item["broker_order_forbidden"] = True
                 item["allowed_runtime_apply"] = False
-                item["ai_review_status"] = ai_status
                 item["ai_tier2_blocked_reason"] = tier2_fail_closed_reason(ai_status)
                 item["recommended_resolution"] = "retry_tier2_review_before_pre_final_auto_apply"
                 contract = item.get("auto_promotion_contract") if isinstance(item.get("auto_promotion_contract"), dict) else {}
@@ -1131,6 +1330,9 @@ def _apply_ai_review(
     comparative_reviews = _comparative_review_by_candidate(ai_payload)
     for item in updated:
         bucket_id = str(item.get("bucket_id") or "")
+        if bucket_id not in target_ids:
+            item.setdefault("ai_review_coverage", "unreviewed")
+            continue
         deterministic = item.get("deterministic_proposal") if isinstance(item.get("deterministic_proposal"), dict) else {}
         ai_proposal = ai_proposals.get(bucket_id) or default_ai_tier2_proposal(bucket_id, deterministic)
         provided_comparative = comparative_reviews.get(bucket_id)
@@ -1146,6 +1348,8 @@ def _apply_ai_review(
         item["ai_tier2_selected_source"] = comparative.get("selected_source")
         item["ai_tier2_confidence"] = comparative.get("confidence")
         item["ai_tier2_rejection_reason"] = comparative.get("rejected_alternative_reason")
+        item["ai_review_coverage"] = "reviewed"
+        item["ai_review_status"] = ai_status
         if provided_comparative and comparative.get("selected_decision") in {"source_quality_blocker", "instrumentation_gap"}:
             selected_decision = str(comparative.get("selected_decision") or "")
             item["recommended_resolution"] = selected_decision
@@ -1165,7 +1369,10 @@ def _apply_ai_review(
     for conclusion in conclusions:
         if not isinstance(conclusion, dict):
             continue
-        item = by_id.get(str(conclusion.get("bucket_id") or ""))
+        bucket_id = str(conclusion.get("bucket_id") or "")
+        if bucket_id not in target_ids:
+            continue
+        item = by_id.get(bucket_id)
         if not item:
             continue
         final_relation = str(conclusion.get("final_bucket_relation") or "")
@@ -1230,6 +1437,10 @@ def _apply_ai_review(
                     "tier2_fail_closed": False,
                 }
     for item in updated:
+        bucket_id = str(item.get("bucket_id") or "")
+        if bucket_id not in target_ids:
+            item.setdefault("ai_review_coverage", "unreviewed")
+            continue
         if item.get("classification_state") != "live_auto_apply_ready":
             continue
         contract = item.get("auto_promotion_contract") if isinstance(item.get("auto_promotion_contract"), dict) else {}
@@ -1241,6 +1452,192 @@ def _apply_ai_review(
             "tier2_fail_closed": False,
         }
     return updated
+
+
+def _raw_response_for_shard(raw_response: Any | None, shard_id: str) -> Any | None:
+    if not isinstance(raw_response, dict):
+        return raw_response
+    shards = raw_response.get("shards")
+    if isinstance(shards, dict):
+        return shards.get(shard_id)
+    if isinstance(shards, list):
+        for item in shards:
+            if isinstance(item, dict) and item.get("shard_id") == shard_id:
+                return item.get("raw_response") if "raw_response" in item else item.get("response")
+    if raw_response.get("schema_version") == 1:
+        return raw_response
+    return raw_response.get(shard_id)
+
+
+def _provider_status_looks_timeout(provider_status: dict[str, Any]) -> bool:
+    text = json.dumps(provider_status, ensure_ascii=True, default=str).lower()
+    return "timeout" in text or "timed out" in text or "deadline" in text
+
+
+def _aggregate_ai_review_status(shard_records: list[dict[str, Any]]) -> str:
+    statuses = [str(item.get("status") or "") for item in shard_records if item.get("candidate_count")]
+    if not statuses:
+        return "disabled"
+    if all(status == "disabled" for status in statuses):
+        return "disabled"
+    if all(status == "parsed" for status in statuses):
+        return "parsed"
+    if any(status == "parsed" for status in statuses):
+        return "partial"
+    if all(status == "timeout" for status in statuses):
+        return "timeout"
+    if any(status == "timeout" for status in statuses):
+        return "partial"
+    if any(status == "parse_rejected" for status in statuses):
+        return "parse_rejected"
+    return statuses[0] if statuses else "unavailable"
+
+
+def _run_ai_review_shards(
+    report: dict[str, Any],
+    *,
+    provider: str,
+    ai_raw_response: Any | None,
+    warnings: list[str],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    candidates = report.get("candidates") if isinstance(report.get("candidates"), list) else []
+    updated_candidates = [dict(item) for item in candidates]
+    shard_specs = _build_ai_review_shards(report)
+    shard_records: list[dict[str, Any]] = []
+    combined_payload: dict[str, Any] = {
+        "interpretation": {"bucket_reviews": []},
+        "audit": {"status": "pass", "issues": [], "reason": "sharded review aggregate"},
+        "ai_tier2_proposals": [],
+        "comparative_reviews": [],
+        "final_conclusions": [],
+    }
+    disabled = provider in {"none", "off", "false", "0"}
+    for shard in shard_specs:
+        shard_id = str(shard.get("shard_id") or "")
+        candidate_ids = {str(value) for value in (shard.get("candidate_ids") or []) if str(value)}
+        provider_status: dict[str, Any] = {
+            "provider": provider,
+            "status": "disabled" if disabled else "not_called",
+            "model": AI_REVIEW_MODEL if not disabled else None,
+            "schema_name": AI_REVIEW_SCHEMA_NAME,
+            "shard_id": shard_id,
+            "input_context_hash": _text_hash(shard.get("context")),
+            "input_context_chars": shard.get("context_chars"),
+        }
+        if not candidate_ids:
+            shard_records.append(
+                {
+                    "shard_id": shard_id,
+                    "priority": shard.get("priority"),
+                    "candidate_ids": [],
+                    "candidate_count": 0,
+                    "omitted_candidate_count": shard.get("omitted_candidate_count", 0),
+                    "context_chars": shard.get("context_chars"),
+                    "context_budget_chars": AI_REVIEW_SHARD_CONTEXT_BUDGET_CHARS,
+                    "candidate_selection_policy": shard.get("candidate_selection_policy"),
+                    "review_authority": shard.get("review_authority"),
+                    "provider_status": {**provider_status, "status": "skipped_empty"},
+                    "status": "skipped_empty",
+                    "warnings": [],
+                }
+            )
+            continue
+        raw_response = _raw_response_for_shard(ai_raw_response, shard_id)
+        if raw_response is None and disabled:
+            ai_status = "disabled"
+            ai_payload: dict[str, Any] = {}
+            ai_warnings = ["ai_review_provider_disabled"]
+        else:
+            if raw_response is None and provider == "openai":
+                raw_response, provider_status = _call_openai_ai_review(
+                    shard.get("context") if isinstance(shard.get("context"), dict) else {},
+                    shard_id=shard_id,
+                )
+            elif raw_response is not None:
+                provider_status = {
+                    **provider_status,
+                    "status": "provided_response",
+                    "model": AI_REVIEW_MODEL if not disabled else None,
+                }
+            ai_status, ai_payload, ai_warnings = _parse_ai_review_response(raw_response)
+            if ai_status == "unavailable" and _provider_status_looks_timeout(provider_status):
+                ai_status = "timeout"
+                ai_warnings = ["ai_review_timeout"]
+        fail_closed_live = shard_id == "live_contract_review"
+        updated_candidates = _apply_ai_review(
+            updated_candidates,
+            ai_status=ai_status,
+            ai_payload=ai_payload,
+            warnings=warnings,
+            reviewed_bucket_ids=candidate_ids,
+            fail_closed_live=fail_closed_live,
+        )
+        warnings.extend(ai_warnings)
+        warnings.extend(f"{shard_id}:{warning}" for warning in ai_warnings)
+        if ai_status == "parsed":
+            interpretation = ai_payload.get("interpretation") if isinstance(ai_payload.get("interpretation"), dict) else {}
+            bucket_reviews = interpretation.get("bucket_reviews") if isinstance(interpretation.get("bucket_reviews"), list) else []
+            combined_payload["interpretation"]["bucket_reviews"].extend(bucket_reviews)
+            audit = ai_payload.get("audit") if isinstance(ai_payload.get("audit"), dict) else {}
+            audit_issues = audit.get("issues") if isinstance(audit.get("issues"), list) else []
+            combined_payload["audit"]["issues"].extend(audit_issues)
+            for key in ("ai_tier2_proposals", "comparative_reviews", "final_conclusions"):
+                values = ai_payload.get(key) if isinstance(ai_payload.get(key), list) else []
+                combined_payload[key].extend(values)
+        shard_records.append(
+            {
+                "shard_id": shard_id,
+                "priority": shard.get("priority"),
+                "candidate_ids": sorted(candidate_ids),
+                "candidate_count": len(candidate_ids),
+                "omitted_candidate_count": shard.get("omitted_candidate_count", 0),
+                "context_chars": shard.get("context_chars"),
+                "context_budget_chars": AI_REVIEW_SHARD_CONTEXT_BUDGET_CHARS,
+                "candidate_selection_policy": shard.get("candidate_selection_policy"),
+                "review_authority": shard.get("review_authority"),
+                "provider_status": provider_status,
+                "status": ai_status,
+                "warnings": ai_warnings,
+            }
+        )
+    aggregate_status = _aggregate_ai_review_status(shard_records)
+    reviewed_ids = {
+        bucket_id
+        for record in shard_records
+        for bucket_id in (record.get("candidate_ids") or [])
+        if record.get("status") == "parsed"
+    }
+    for item in updated_candidates:
+        bucket_id = str(item.get("bucket_id") or "")
+        if bucket_id not in reviewed_ids and item.get("ai_review_coverage") != "reviewed":
+            item["ai_review_coverage"] = "unreviewed"
+    review = {
+        "provider": provider,
+        "status": aggregate_status,
+        "model": AI_REVIEW_MODEL if not disabled else None,
+        "model_tier": "tier2",
+        "schema_name": AI_REVIEW_SCHEMA_NAME,
+        "sharded": True,
+        "shard_count": len(shard_records),
+        "parsed_shard_count": sum(1 for item in shard_records if item.get("status") == "parsed"),
+        "reviewed_candidate_count": len(
+            {
+                bucket_id
+                for record in shard_records
+                if record.get("status") == "parsed"
+                for bucket_id in (record.get("candidate_ids") or [])
+            }
+        ),
+        "input_context_hash": _text_hash([record.get("provider_status", {}).get("input_context_hash") for record in shard_records]),
+        "interpretation": combined_payload["interpretation"],
+        "audit": combined_payload["audit"],
+        "ai_tier2_proposals": combined_payload["ai_tier2_proposals"],
+        "comparative_reviews": combined_payload["comparative_reviews"],
+        "final_conclusions": combined_payload["final_conclusions"],
+        "shards": shard_records,
+        "warnings": [warning for record in shard_records for warning in (record.get("warnings") or [])],
+    }
+    return updated_candidates, review
 
 
 def _finalize_report(
@@ -1410,47 +1807,19 @@ def build_lifecycle_bucket_discovery_report(
         if ai_review_provider is not None
         else os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_REVIEW_PROVIDER", AI_REVIEW_DEFAULT_PROVIDER)
     ).strip().lower() or "none"
-    ai_context = _build_ai_review_context(report)
-    raw_response = ai_raw_response
-    provider_status: dict[str, Any] = {
-        "provider": provider,
-        "status": "disabled" if provider in {"none", "off", "false", "0"} else "not_called",
-        "model": AI_REVIEW_MODEL if provider not in {"none", "off", "false", "0"} else None,
-        "schema_name": AI_REVIEW_SCHEMA_NAME,
-        "input_context_hash": _text_hash(ai_context),
-    }
-    if raw_response is None and provider == "openai":
-        raw_response, provider_status = _call_openai_ai_review(ai_context)
-    ai_status, ai_payload, ai_warnings = _parse_ai_review_response(raw_response)
-    if provider in {"none", "off", "false", "0"} and raw_response is None:
-        ai_status = "disabled"
-        ai_payload = {}
-        ai_warnings = ["ai_review_provider_disabled"]
-    warnings.extend(ai_warnings)
-    report["ai_two_pass_review"] = {
-        "provider": provider,
-        "status": ai_status,
-        "model": provider_status.get("model") or (AI_REVIEW_MODEL if provider == "openai" else None),
-        "model_tier": "tier2",
-        "schema_name": AI_REVIEW_SCHEMA_NAME,
-        "provider_status": provider_status,
-        "input_context_hash": _text_hash(ai_context),
-        "interpretation": ai_payload.get("interpretation") if isinstance(ai_payload.get("interpretation"), dict) else {},
-        "audit": ai_payload.get("audit") if isinstance(ai_payload.get("audit"), dict) else {},
-        "ai_tier2_proposals": ai_payload.get("ai_tier2_proposals") if isinstance(ai_payload.get("ai_tier2_proposals"), list) else [],
-        "comparative_reviews": ai_payload.get("comparative_reviews") if isinstance(ai_payload.get("comparative_reviews"), list) else [],
-        "final_conclusions": ai_payload.get("final_conclusions") if isinstance(ai_payload.get("final_conclusions"), list) else [],
-        "warnings": ai_warnings,
-    }
-    candidates_after_ai = _apply_ai_review(
-        report.get("candidates") if isinstance(report.get("candidates"), list) else [],
-        ai_status=ai_status,
-        ai_payload=ai_payload,
+    candidates_after_ai, ai_review = _run_ai_review_shards(
+        report,
+        provider=provider,
+        ai_raw_response=ai_raw_response,
         warnings=warnings,
     )
+    report["ai_two_pass_review"] = ai_review
     report = _finalize_report(report, candidates_after_ai, warnings)
-    report["summary"]["ai_two_pass_review_status"] = ai_status
+    report["summary"]["ai_two_pass_review_status"] = ai_review.get("status")
     report["summary"]["ai_two_pass_review_required"] = True
+    report["summary"]["ai_two_pass_review_shard_count"] = ai_review.get("shard_count")
+    report["summary"]["ai_two_pass_review_parsed_shard_count"] = ai_review.get("parsed_shard_count")
+    report["summary"]["ai_two_pass_review_reviewed_candidate_count"] = ai_review.get("reviewed_candidate_count")
     return report
 
 
@@ -1464,6 +1833,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- status: `{summary.get('status')}`",
         f"- source_contract_status: `{summary.get('source_contract_status')}` / changes: `{summary.get('source_contract_change_count')}`",
         f"- ai_two_pass_review: `{summary.get('ai_two_pass_review_status')}` / model: `{ai_review.get('model') or '-'}` / tier: `{ai_review.get('model_tier') or '-'}`",
+        f"- ai_review_shards: `{summary.get('ai_two_pass_review_parsed_shard_count')}` / `{summary.get('ai_two_pass_review_shard_count')}` parsed, reviewed_candidates=`{summary.get('ai_two_pass_review_reviewed_candidate_count')}`",
         f"- surfaced_candidate_count: `{summary.get('surfaced_candidate_count')}`",
         f"- canonical/legacy buckets: `{summary.get('canonical_bucket_count')}` / `{summary.get('legacy_bucket_count')}`",
         f"- dual_proposals: deterministic=`{summary.get('deterministic_proposal_count')}` ai=`{summary.get('ai_tier2_proposal_count')}` hybrid_selected=`{summary.get('reviewer_selected_hybrid_count')}`",
@@ -1499,6 +1869,17 @@ def _render_markdown(report: dict[str, Any]) -> str:
                 "",
             ]
         )
+        shards = ai_review.get("shards") if isinstance(ai_review.get("shards"), list) else []
+        if shards:
+            lines.append("### AI Review Shards")
+            for shard in shards:
+                if isinstance(shard, dict):
+                    lines.append(
+                        f"- `{shard.get('shard_id')}` status=`{shard.get('status')}` "
+                        f"candidates=`{shard.get('candidate_count')}` omitted=`{shard.get('omitted_candidate_count')}` "
+                        f"context_chars=`{shard.get('context_chars')}`"
+                    )
+            lines.append("")
     for item in (report.get("surfaced_candidates") or [])[:20]:
         lines.append(
             f"- `{item.get('bucket_id')}` stage=`{item.get('stage')}` "

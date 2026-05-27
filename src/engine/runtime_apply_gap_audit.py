@@ -23,6 +23,8 @@ AI_REVIEW_SCHEMA_NAME = "runtime_apply_gap_ai_review_v1"
 AI_REVIEWER_NAME = "runtime_apply_gap_ai_review"
 AI_REVIEW_MODEL = str(getattr(TRADING_RULES, "GPT_DEEP_MODEL", "gpt-5.4") or "gpt-5.4")
 MIN_AI_REVIEW_MODEL = "gpt-5.4"
+AI_REVIEW_REASONING_EFFORT = os.getenv("RUNTIME_APPLY_GAP_AI_REVIEW_REASONING_EFFORT", "low")
+AI_REVIEW_TIMEOUT_SEC = int(os.getenv("RUNTIME_APPLY_GAP_AI_REVIEW_TIMEOUT_SEC", "90") or "90")
 
 FINAL_DISPOSITIONS = {
     "live_auto_apply_ready",
@@ -269,6 +271,15 @@ def _source_state_to_disposition(state: str, gate: str) -> str:
     return "code_patch_required"
 
 
+def _comparative_selected_decision(item: dict[str, Any]) -> str:
+    review = item.get("comparative_review")
+    if not isinstance(review, dict):
+        review = item.get("ai_tier2_comparative_review")
+    if not isinstance(review, dict):
+        return ""
+    return str(review.get("selected_decision") or "").strip()
+
+
 def _greenfield_policy_issue(item: dict[str, Any]) -> str:
     if _candidate_family(item) != GREENFIELD_REAL_ENV_FAMILY:
         return ""
@@ -301,7 +312,12 @@ def _ledger_from_discovery(
         failure_state = "pass"
         failure_reason = ""
         recommended_route = str(item.get("recommended_route") or "").strip()
-        if state == "source_only_keep_collecting" and gate == "pass" and ev is not None and ev > 0:
+        selected_decision = _comparative_selected_decision(item)
+        if selected_decision == "source_quality_blocker":
+            failure_state = "blocked_source_quality"
+            failure_reason = "ai_tier2_source_quality_blocker"
+            disposition = "source_quality_blocker"
+        elif state == "source_only_keep_collecting" and gate == "pass" and ev is not None and ev > 0:
             failure_state = "fail"
             failure_reason = "positive_edge_stuck_source_only"
             disposition = "code_patch_required"
@@ -337,6 +353,7 @@ def _ledger_from_discovery(
                 "retry_deadline": "",
                 "surface_channel": "runtime_apply_gap_audit",
                 "source_bucket_kind": item.get("source_bucket_kind"),
+                "ai_selected_decision": selected_decision,
             }
         )
     return ledger
@@ -791,14 +808,14 @@ def _call_openai_ai_review(input_context: dict[str, Any], *, model: str) -> tupl
                 instructions="Return only strict JSON for runtime_apply_gap_ai_review_v1.",
                 input=prompt,
                 text={"format": build_openai_response_text_format(AI_REVIEW_SCHEMA_NAME), "verbosity": "low"},
-                reasoning={"effort": "high"},
+                reasoning={"effort": AI_REVIEW_REASONING_EFFORT},
                 store=False,
                 metadata={
                     "endpoint_name": "runtime_apply_gap_ai_review",
                     "schema_name": AI_REVIEW_SCHEMA_NAME,
                     "report_type": "runtime_apply_gap_audit",
                 },
-                timeout=180,
+                timeout=AI_REVIEW_TIMEOUT_SEC,
             )
             raw_text = _extract_openai_response_text(response)
             usage = getattr(response, "usage", None)
@@ -810,6 +827,8 @@ def _call_openai_ai_review(input_context: dict[str, Any], *, model: str) -> tupl
                 "attempted_key_count": len(api_keys),
                 "model": model,
                 "schema_name": AI_REVIEW_SCHEMA_NAME,
+                "reasoning_effort": AI_REVIEW_REASONING_EFFORT,
+                "timeout_sec": AI_REVIEW_TIMEOUT_SEC,
                 "input_context_hash": _text_hash(input_context),
                 "input_context_chars": len(prompt),
                 "output_chars": len(raw_text),
@@ -826,6 +845,8 @@ def _call_openai_ai_review(input_context: dict[str, Any], *, model: str) -> tupl
         "status": "unavailable",
         "reason": "all OpenAI attempts failed",
         "model": model,
+        "reasoning_effort": AI_REVIEW_REASONING_EFFORT,
+        "timeout_sec": AI_REVIEW_TIMEOUT_SEC,
         "errors": errors[-3:],
     }
 

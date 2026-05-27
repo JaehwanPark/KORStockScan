@@ -61,6 +61,34 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _safe_timestamp(value: Any) -> float | None:
+    numeric = _safe_float(value, None)
+    if numeric is not None and numeric > 0:
+        return numeric
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        return None
+
+
+def _position_entry_ts(row: dict[str, Any]) -> float | None:
+    for key in (
+        "holding_started_at",
+        "buy_time",
+        "order_time",
+        "scalp_sim_entry_armed_at",
+        "entry_armed_at",
+        "last_watching_ai_confirmed_at",
+    ):
+        ts = _safe_timestamp(row.get(key))
+        if ts is not None:
+            return ts
+    return None
+
+
 def _boolish_true(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
@@ -716,6 +744,14 @@ def build_report(target_date: str, state_path: Path = STATE_PATH) -> dict[str, A
         if str(event.get("stage") or "") == "scalp_sim_overnight_decision"
         and str(_event_fields(event).get("sim_record_id") or "").strip()
     }
+    decision_event_timestamps = [
+        ts
+        for event in overnight_events
+        if str(event.get("stage") or "") == "scalp_sim_overnight_decision"
+        for ts in [_safe_timestamp(event.get("emitted_at"))]
+        if ts is not None
+    ]
+    latest_decision_ts = max(decision_event_timestamps) if decision_event_timestamps else None
     state = _load_state(state_path)
     active = state.get("active_positions") if isinstance(state.get("active_positions"), list) else []
     carry_open = [
@@ -725,11 +761,24 @@ def build_report(target_date: str, state_path: Path = STATE_PATH) -> dict[str, A
         and str(row.get("scalp_sim_overnight_decision_date") or "") == target_date
     ]
     active_eligible = [row for row in active if isinstance(row, dict) and _is_active_sim_position(row)]
+    active_after_decision_window = [
+        row
+        for row in active_eligible
+        if latest_decision_ts is not None
+        and (entry_ts := _position_entry_ts(row)) is not None
+        and entry_ts > latest_decision_ts
+    ]
+    active_after_decision_window_ids = {
+        str(row.get("sim_record_id") or "").strip()
+        for row in active_after_decision_window
+        if str(row.get("sim_record_id") or "").strip()
+    }
     active_undecided = [
         row
         for row in active_eligible
         if str(row.get("scalp_sim_overnight_decision_date") or "") != target_date
         and str(row.get("sim_record_id") or "").strip() not in decided_sim_record_ids
+        and str(row.get("sim_record_id") or "").strip() not in active_after_decision_window_ids
     ]
     decision_target = int(stage_counts.get("scalp_sim_overnight_decision", 0))
     coverage_denominator = decision_target + len(active_undecided)
@@ -806,9 +855,15 @@ def build_report(target_date: str, state_path: Path = STATE_PATH) -> dict[str, A
             "action_counts": dict(sorted(action_counts.items())),
             "active_eligible_before_report": len(active_eligible),
             "active_undecided_count": len(active_undecided),
+            "active_after_decision_window_count": len(active_after_decision_window),
             "active_undecided_sim_record_ids": [
                 str(row.get("sim_record_id") or "")
                 for row in active_undecided
+                if str(row.get("sim_record_id") or "")
+            ],
+            "active_after_decision_window_sim_record_ids": [
+                str(row.get("sim_record_id") or "")
+                for row in active_after_decision_window
                 if str(row.get("sim_record_id") or "")
             ],
             "decision_coverage_rate": decision_coverage_rate,

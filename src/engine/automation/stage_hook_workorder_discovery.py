@@ -31,6 +31,8 @@ AI_REVIEW_SCHEMA_NAME = "stage_hook_workorder_discovery_ai_review_v1"
 AI_REVIEWER_NAME = "stage_hook_workorder_discovery_ai_review"
 AI_REVIEW_MODEL = str(getattr(TRADING_RULES, "GPT_DEEP_MODEL", "gpt-5.4") or "gpt-5.4")
 AI_REVIEW_DEFAULT_PROVIDER = "openai"
+AI_REVIEW_REASONING_EFFORT = os.getenv("KORSTOCKSCAN_STAGE_HOOK_WORKORDER_DISCOVERY_AI_REASONING_EFFORT", "low")
+AI_REVIEW_TIMEOUT_SEC = int(os.getenv("KORSTOCKSCAN_STAGE_HOOK_WORKORDER_DISCOVERY_AI_TIMEOUT_SEC", "90") or "90")
 STAGE_HOOK_DUAL_DECISIONS = {
     "new_hook",
     "extend_existing_report_dimension",
@@ -438,10 +440,10 @@ def _call_openai_ai_review(context: dict[str, Any]) -> tuple[Any | None, dict[st
                 instructions=_build_ai_review_instructions(),
                 input=prompt,
                 text={"format": build_openai_response_text_format(AI_REVIEW_SCHEMA_NAME), "verbosity": "low"},
-                reasoning={"effort": "high"},
+                reasoning={"effort": AI_REVIEW_REASONING_EFFORT},
                 store=False,
                 metadata={"endpoint_name": AI_REVIEWER_NAME, "schema_name": AI_REVIEW_SCHEMA_NAME, "report_type": REPORT_TYPE},
-                timeout=180,
+                timeout=AI_REVIEW_TIMEOUT_SEC,
             )
             raw_text = _extract_openai_response_text(response)
             usage = getattr(response, "usage", None)
@@ -453,6 +455,8 @@ def _call_openai_ai_review(context: dict[str, Any]) -> tuple[Any | None, dict[st
                 "attempted_key_count": len(api_keys),
                 "model": AI_REVIEW_MODEL,
                 "schema_name": AI_REVIEW_SCHEMA_NAME,
+                "reasoning_effort": AI_REVIEW_REASONING_EFFORT,
+                "timeout_sec": AI_REVIEW_TIMEOUT_SEC,
                 "input_context_chars": len(prompt),
                 "output_chars": len(raw_text),
                 "input_tokens": int(getattr(usage, "input_tokens", 0) or 0) if usage else 0,
@@ -462,7 +466,15 @@ def _call_openai_ai_review(context: dict[str, Any]) -> tuple[Any | None, dict[st
             errors.append({"key_name": key_name, "error": f"rate_limit:{exc}"})
         except Exception as exc:
             errors.append({"key_name": key_name, "error": str(exc)})
-    return None, {"provider": "openai", "status": "unavailable", "reason": "all OpenAI attempts failed", "errors": errors[-3:]}
+    return None, {
+        "provider": "openai",
+        "status": "unavailable",
+        "reason": "all OpenAI attempts failed",
+        "model": AI_REVIEW_MODEL,
+        "reasoning_effort": AI_REVIEW_REASONING_EFFORT,
+        "timeout_sec": AI_REVIEW_TIMEOUT_SEC,
+        "errors": errors[-3:],
+    }
 
 
 def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, Any], list[str]]:

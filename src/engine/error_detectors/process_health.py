@@ -75,7 +75,7 @@ class ProcessHealthDetector(BaseDetector):
 
     @property
     def postclose_isolation_max_age_sec(self) -> int:
-        return int(getattr(TRADING_RULES, "ERROR_DETECTOR_POSTCLOSE_BOT_ISOLATION_MAX_AGE_SEC", 21600))
+        return int(getattr(TRADING_RULES, "ERROR_DETECTOR_POSTCLOSE_BOT_ISOLATION_MAX_AGE_SEC", 28800))
 
     def check(self) -> DetectionResult:
         now_ts = time.time()
@@ -346,7 +346,7 @@ class ProcessHealthDetector(BaseDetector):
             summary=summary,
             details=details,
             recommended_action=(
-                "No immediate restart. The postclose wrapper owns bot restart after resource isolation."
+                "No immediate restart. The postclose wrapper owns bot stop/isolation after market close."
             ),
         )
 

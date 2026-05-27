@@ -69,6 +69,56 @@ def test_positive_edge_source_only_is_fail_visible(tmp_path, monkeypatch):
     )
 
 
+def test_ai_source_quality_blocker_positive_edge_is_not_runtime_gap_fail(tmp_path, monkeypatch):
+    report_dir = _patch_dirs(tmp_path, monkeypatch)
+    _write_core_artifacts(report_dir)
+    _write_json(
+        report_dir / "swing_lifecycle_bucket_discovery" / "swing_lifecycle_bucket_discovery_2026-05-22.json",
+        {
+            "surfaced_candidates": [
+                {
+                    "bucket_id": "swing:blocked-positive",
+                    "lifecycle_stage": "holding_exit",
+                    "classification_state": "source_only_keep_collecting",
+                    "sample_count": 20,
+                    "source_quality_gate": "pass",
+                    "source_quality_adjusted_ev_pct": 8.2,
+                    "comparative_review": {"selected_decision": "source_quality_blocker"},
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        mod,
+        "_call_openai_ai_review",
+        lambda context, model: (
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "reviewer": "runtime_apply_gap_ai_review",
+                    "candidate_reviews": [],
+                    "audit": {"status": "pass", "issues": [], "reason": "source quality blocker already explicit"},
+                    "codex_directives": [],
+                }
+            ),
+            {"provider": "openai", "status": "success", "model": model},
+        ),
+    )
+
+    report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="openai")
+
+    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == "swing:blocked-positive")
+    assert row["failure_state"] == "blocked_source_quality"
+    assert row["failure_reason"] == "ai_tier2_source_quality_blocker"
+    assert row["final_disposition"] == "source_quality_blocker"
+    assert report["summary"]["critical_failure_count"] == 0
+    assert not any(
+        item["candidate_id"] == "swing:blocked-positive"
+        and item["directive_type"] == "RESOLVE_SOURCE_ONLY_STUCK_POSITIVE_EDGE"
+        for item in report["codex_workorder_directives"]
+    )
+
+
 def test_missing_artifact_enters_retry_queue(tmp_path, monkeypatch):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_json(
@@ -273,8 +323,24 @@ def test_ready_bridge_consumed_by_next_preopen_apply_is_not_retry_target(tmp_pat
             }
         },
     )
+    monkeypatch.setattr(
+        mod,
+        "_call_openai_ai_review",
+        lambda context, model: (
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "reviewer": "runtime_apply_gap_ai_review",
+                    "candidate_reviews": [],
+                    "audit": {"status": "pass", "issues": [], "reason": "source quality blocker already explicit"},
+                    "codex_directives": [],
+                }
+            ),
+            {"provider": "openai", "status": "success", "model": model},
+        ),
+    )
 
-    report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+    report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="openai")
 
     row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == candidate_id)
     assert row["preopen_apply_state"] == "consumed_by_next_preopen"

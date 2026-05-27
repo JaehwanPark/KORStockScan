@@ -695,6 +695,7 @@ class TradingConfig:
     ERROR_DETECTOR_BOT_EXPECTED_START_HHMM: str = "07:40"
     ERROR_DETECTOR_BOT_EXPECTED_END_HHMM: str = "22:55"
     ERROR_DETECTOR_BOT_STARTUP_GRACE_SEC: int = 180
+    ERROR_DETECTOR_POSTCLOSE_BOT_ISOLATION_MAX_AGE_SEC: int = 28800
     ERROR_DETECTOR_LOG_BURST_THRESHOLD: int = 4
     ERROR_DETECTOR_LOG_SCAN_MAX_LINES: int = 2000
     ERROR_DETECTOR_CPU_BUSY_MAX_PCT: float = 95.0
@@ -2504,6 +2505,9 @@ def _build_trading_rules() -> TradingConfig:
     env_ed_bot_window_start = _env_str("KORSTOCKSCAN_ERROR_DETECTOR_BOT_EXPECTED_START_HHMM")
     env_ed_bot_window_end = _env_str("KORSTOCKSCAN_ERROR_DETECTOR_BOT_EXPECTED_END_HHMM")
     env_ed_bot_startup_grace = _env_int("KORSTOCKSCAN_ERROR_DETECTOR_BOT_STARTUP_GRACE_SEC")
+    env_ed_postclose_isolation_max_age = _env_int(
+        "KORSTOCKSCAN_ERROR_DETECTOR_POSTCLOSE_BOT_ISOLATION_MAX_AGE_SEC"
+    )
     env_ed_cpu_busy_max_pct = _env_float("KORSTOCKSCAN_ERROR_DETECTOR_CPU_BUSY_MAX_PCT")
     env_ed_resource_max_sample_age = _env_int("KORSTOCKSCAN_ERROR_DETECTOR_RESOURCE_MAX_SAMPLE_AGE_SEC")
     env_ed_stale_lock_cleanup = _env_bool("KORSTOCKSCAN_ERROR_DETECTOR_STALE_LOCK_CLEANUP_ENABLED")
@@ -2517,6 +2521,7 @@ def _build_trading_rules() -> TradingConfig:
         or env_ed_bot_window_start is not None
         or env_ed_bot_window_end is not None
         or env_ed_bot_startup_grace is not None
+        or env_ed_postclose_isolation_max_age is not None
         or env_ed_cpu_busy_max_pct is not None
         or env_ed_resource_max_sample_age is not None
         or env_ed_stale_lock_cleanup is not None
@@ -2546,6 +2551,9 @@ def _build_trading_rules() -> TradingConfig:
             ERROR_DETECTOR_BOT_STARTUP_GRACE_SEC=env_ed_bot_startup_grace
             if env_ed_bot_startup_grace is not None
             else config.ERROR_DETECTOR_BOT_STARTUP_GRACE_SEC,
+            ERROR_DETECTOR_POSTCLOSE_BOT_ISOLATION_MAX_AGE_SEC=env_ed_postclose_isolation_max_age
+            if env_ed_postclose_isolation_max_age is not None
+            else config.ERROR_DETECTOR_POSTCLOSE_BOT_ISOLATION_MAX_AGE_SEC,
             ERROR_DETECTOR_CPU_BUSY_MAX_PCT=env_ed_cpu_busy_max_pct
             if env_ed_cpu_busy_max_pct is not None
             else config.ERROR_DETECTOR_CPU_BUSY_MAX_PCT,

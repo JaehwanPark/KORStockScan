@@ -57,7 +57,7 @@ def test_backfill_threshold_cycle_events_streams_only_target_stages(tmp_path, mo
     assert [row["stage"] for row in rows] == ["budget_pass", "sell_completed", "bad_entry_block_observed"]
 
 
-def test_backfill_threshold_cycle_events_resumes_after_partition_line_cap(tmp_path, monkeypatch):
+def test_backfill_threshold_cycle_events_rolls_partition_without_pause(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "DATA_DIR", tmp_path)
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_DIR", tmp_path / "threshold_cycle")
     monkeypatch.setattr(
@@ -80,23 +80,15 @@ def test_backfill_threshold_cycle_events_resumes_after_partition_line_cap(tmp_pa
         encoding="utf-8",
     )
 
-    first = mod.backfill_threshold_cycle_events(
+    summary = mod.backfill_threshold_cycle_events(
         "2026-04-30",
         overwrite=True,
         max_output_lines_per_partition=2,
         max_input_lines_per_chunk=10,
     )
-    assert first["status"] == "paused_by_availability_guard"
-    assert first["paused_reason"] == "output_partition_line_cap"
-    assert first["written"] == 2
-
-    second = mod.backfill_threshold_cycle_events(
-        "2026-04-30",
-        max_output_lines_per_partition=2,
-        max_input_lines_per_chunk=10,
-    )
-    assert second["completed"] is True
-    assert second["written"] == 1
+    assert summary["completed"] is True
+    assert summary["paused_reason"] is None
+    assert summary["written"] == 3
 
     parts = sorted((tmp_path / "threshold_cycle" / "date=2026-04-30" / "family=entry_mechanical_momentum").glob("*.jsonl"))
     assert [path.name for path in parts] == ["part-000001.jsonl", "part-000002.jsonl"]

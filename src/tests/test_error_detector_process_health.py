@@ -183,6 +183,7 @@ class TestProcessHealthDetector:
             "threshold_cycle_postclose_resource_isolation"
         )
         assert "No immediate restart" in result.recommended_action
+        assert "stop/isolation" in result.recommended_action
 
     def test_detector_fail_when_postclose_bot_isolation_marker_is_stale(self, monkeypatch):
         monkeypatch.setattr(process_health_module, "_is_bot_expected_running", lambda: True)

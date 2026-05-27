@@ -203,7 +203,6 @@ def _write_compact_payload(
     if state["line_count"] >= max_output_lines_per_partition:
         state["part"] += 1
         state["line_count"] = 0
-        return False, "output_partition_line_cap"
 
     target = _partition_path(target_date, family, state["part"])
     target.parent.mkdir(parents=True, exist_ok=True)

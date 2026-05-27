@@ -259,6 +259,14 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     assert "recommended_resolution" in taxonomy[0]
     assert "source_bucket_kind_counts" in report["summary"]
     assert report["summary"]["human_intervention_required"] is False
+    assert report["ai_two_pass_review"]["sharded"] is True
+    assert {item["shard_id"] for item in report["ai_two_pass_review"]["shards"]} >= {
+        "live_contract_review",
+        "sim_policy_review",
+        "gap_workorder_review",
+        "taxonomy_discovery_review",
+    }
+    assert report["summary"]["ai_two_pass_review_shard_count"] == 4
     assert (report_dir / "lifecycle_bucket_discovery_2026-05-22.json").exists()
     assert (catalog_dir / "lifecycle_bucket_catalog_2026-05-22.json").exists()
     auto = json.loads((sim_dir / "lifecycle_bucket_sim_auto_approval_2026-05-22.json").read_text())
@@ -497,8 +505,10 @@ def test_lifecycle_bucket_discovery_openai_review_uses_tier2_schema_and_english_
             return SimpleNamespace(output_text=json.dumps(_ai_keep_response()), usage=SimpleNamespace())
 
     class _FakeOpenAI:
-        def __init__(self, api_key):
+        def __init__(self, api_key, timeout=None):
+            captured["client_timeout"] = timeout
             self.api_key = api_key
+            self.timeout = timeout
             self.responses = _FakeResponses()
 
     monkeypatch.setattr("src.engine.daily_threshold_cycle_report._load_threshold_ai_openai_keys", lambda: [("OPENAI_API_KEY", "key")])
@@ -508,11 +518,130 @@ def test_lifecycle_bucket_discovery_openai_review_uses_tier2_schema_and_english_
 
     assert json.loads(raw)["schema_version"] == 1
     assert status["model"] == mod.AI_REVIEW_MODEL
-    assert status["reasoning_effort"] == "high"
+    assert status["reasoning_effort"] == mod.AI_REVIEW_REASONING_EFFORT
     assert captured["model"] == mod.AI_REVIEW_MODEL
+    assert captured["reasoning"]["effort"] == mod.AI_REVIEW_REASONING_EFFORT
+    assert captured["client_timeout"] == mod.AI_REVIEW_TIMEOUT_SEC
+    assert captured["timeout"] == mod.AI_REVIEW_TIMEOUT_SEC
     assert captured["text"]["format"]["name"] == mod.AI_REVIEW_SCHEMA_NAME
     assert captured["text"]["format"]["strict"] is True
     assert "AI Tier2" in captured["instructions"]
     assert "\\uc218\\uae09" in captured["input"]
     assert not any("\uac00" <= char <= "\ud7a3" for char in captured["instructions"])
     assert not any("\uac00" <= char <= "\ud7a3" for char in captured["input"])
+
+
+def test_lifecycle_bucket_discovery_ai_context_is_bounded():
+    report = {
+        "date": "2026-05-27",
+        "summary": {},
+        "surfaced_candidates": [
+            {
+                "bucket_id": f"bucket-{index}",
+                "stage": "entry",
+                "bucket_type": "combo",
+                "bucket_key": "score=score_66_69",
+                "normalized_metrics": {"huge": "x" * 5000},
+                "deterministic_proposal": {"huge": "y" * 5000},
+                "evidence_authority_contract": {"huge": "z" * 5000},
+            }
+            for index in range(mod.AI_REVIEW_MAX_CANDIDATES + 5)
+        ],
+    }
+
+    context = mod._build_ai_review_context(report)
+    raw = json.dumps(context, ensure_ascii=True, default=str)
+
+    assert len(context["surfaced_candidates"]) == mod.AI_REVIEW_MAX_CANDIDATES
+    assert "truncated" in raw
+    assert len(raw) < 80_000
+
+
+def test_lifecycle_bucket_discovery_ai_shards_prioritize_and_dedupe():
+    report = {
+        "date": "2026-05-27",
+        "summary": {},
+        "surfaced_candidates": [
+            {
+                "bucket_id": "live-1",
+                "classification_state": "live_auto_apply_ready",
+                "joined_sample": 1,
+                "source_quality_adjusted_ev_pct": 1.1,
+            },
+            {
+                "bucket_id": "sim-1",
+                "classification_state": "sim_auto_approved",
+                "joined_sample": 50,
+                "source_quality_adjusted_ev_pct": 2.0,
+            },
+            {
+                "bucket_id": "gap-1",
+                "classification_state": "code_patch_required",
+                "stage": "source_contract",
+            },
+            {
+                "bucket_id": "new-1",
+                "classification_state": "new_bucket_candidate",
+                "joined_sample": 100,
+                "source_quality_adjusted_ev_pct": -3.0,
+            },
+        ],
+    }
+
+    shards = mod._build_ai_review_shards(report)
+    by_id = {item["shard_id"]: item for item in shards}
+
+    assert by_id["live_contract_review"]["candidate_ids"] == ["live-1"]
+    assert by_id["sim_policy_review"]["candidate_ids"] == ["sim-1"]
+    assert by_id["gap_workorder_review"]["candidate_ids"] == ["gap-1"]
+    assert by_id["taxonomy_discovery_review"]["candidate_ids"] == ["new-1"]
+    assert all(item["context_chars"] <= mod.AI_REVIEW_SHARD_CONTEXT_BUDGET_CHARS for item in shards)
+
+
+def test_lifecycle_bucket_discovery_shard_failures_only_block_live_targets():
+    candidates = [
+        {
+            "bucket_id": "live-1",
+            "classification_state": "live_auto_apply_ready",
+            "live_auto_apply_family": mod.ENTRY_LIVE_AUTO_FAMILY,
+            "deterministic_proposal": {},
+        },
+        {
+            "bucket_id": "sim-1",
+            "classification_state": "sim_auto_approved",
+            "deterministic_proposal": {},
+        },
+        {
+            "bucket_id": "new-1",
+            "classification_state": "new_bucket_candidate",
+            "deterministic_proposal": {},
+        },
+    ]
+    warnings = []
+
+    after_sim_timeout = mod._apply_ai_review(
+        candidates,
+        ai_status="timeout",
+        ai_payload={},
+        warnings=warnings,
+        reviewed_bucket_ids={"sim-1"},
+        fail_closed_live=False,
+    )
+    by_id = {item["bucket_id"]: item for item in after_sim_timeout}
+    assert by_id["live-1"]["classification_state"] == "live_auto_apply_ready"
+    assert by_id["sim-1"]["classification_state"] == "sim_auto_approved"
+    assert by_id["sim-1"]["ai_review_coverage"] == "reviewed"
+    assert by_id["new-1"]["ai_review_coverage"] == "unreviewed"
+
+    after_live_timeout = mod._apply_ai_review(
+        after_sim_timeout,
+        ai_status="timeout",
+        ai_payload={},
+        warnings=warnings,
+        reviewed_bucket_ids={"live-1"},
+        fail_closed_live=True,
+    )
+    by_id = {item["bucket_id"]: item for item in after_live_timeout}
+    assert by_id["live-1"]["classification_state"] == "runtime_blocked_contract_gap"
+    assert by_id["live-1"]["ai_tier2_blocked_reason"] == "ai_tier2_validation_not_parsed:timeout"
+    assert by_id["sim-1"]["classification_state"] == "sim_auto_approved"
