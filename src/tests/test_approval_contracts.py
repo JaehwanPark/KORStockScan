@@ -15,6 +15,7 @@ def test_approval_contract_registry_marks_ready_swing_contract():
 def test_approval_contract_registry_marks_runtime_apply_bridge_contract_states():
     entry = approval_contract_for("entry_wait6579_score66_69_recovery_gate_v1", "2026-05-21")
     scale = approval_contract_for("scale_in_bucket_runtime_policy_v1", "2026-05-21")
+    greenfield = approval_contract_for("greenfield_real_environment_authority", "2026-05-21")
 
     assert entry["approval_contract_status"] == "ready"
     assert entry["approval_mode"] == "live_auto_apply_ready"
@@ -25,6 +26,10 @@ def test_approval_contract_registry_marks_runtime_apply_bridge_contract_states()
     assert scale["approval_live_ready"] is True
     assert scale["approval_artifact_path"].endswith("ldm_scale_in_runtime_bridge_2026-05-21.json")
     assert scale["missing_components"] == []
+    assert greenfield["approval_contract_status"] == "ready"
+    assert greenfield["approval_live_ready"] is True
+    assert greenfield["approval_artifact_path"].endswith("greenfield_real_env_policy_2026-05-21.json")
+    assert greenfield["missing_components"] == []
 
 
 def test_approval_contract_registry_marks_missing_scalping_manual_contract():

@@ -65,8 +65,12 @@ def _post_kiwoom_with_auth_retry(url, headers, payload, api_id, *, timeout=5):
 
     api_label = str(api_id or active_headers.get('api-id') or 'unknown')
     try:
-        kiwoom_utils.invalidate_kiwoom_token_cache(reason=f"order_api_8005_retry:{api_label}")
-        refreshed_token = kiwoom_utils.get_kiwoom_token(force_refresh=True)
+        failed_token = str(active_headers.get('authorization') or '').replace('Bearer ', '').strip()
+        refreshed_token = kiwoom_utils.get_kiwoom_token_after_auth_failure(
+            api_id=api_label,
+            failed_token=failed_token,
+            reason_prefix="order_api_8005_retry",
+        )
     except Exception as exc:
         log_error(f"❌ [{api_label}] 8005 감지 후 Kiwoom token force refresh 예외: {exc}")
         return response, data

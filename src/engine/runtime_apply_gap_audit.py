@@ -13,6 +13,7 @@ from typing import Any
 
 from src.engine.daily_threshold_cycle_report import REPORT_DIR as BASE_REPORT_DIR
 from src.engine.daily_threshold_cycle_report import _extract_openai_response_text, _load_threshold_ai_openai_keys
+from src.engine.runtime_apply_bridge import GREENFIELD_REAL_ENV_FAMILY, validate_greenfield_policy_file
 from src.utils.constants import DATA_DIR, TRADING_RULES
 
 REPORT_SCHEMA_VERSION = 1
@@ -268,6 +269,15 @@ def _source_state_to_disposition(state: str, gate: str) -> str:
     return "code_patch_required"
 
 
+def _greenfield_policy_issue(item: dict[str, Any]) -> str:
+    if _candidate_family(item) != GREENFIELD_REAL_ENV_FAMILY:
+        return ""
+    recommended = item.get("recommended_values") if isinstance(item.get("recommended_values"), dict) else {}
+    policy_file = str(recommended.get("policy_file") or item.get("greenfield_policy_file") or "").strip()
+    recommended_version = str(recommended.get("policy_version") or item.get("candidate_id") or "")
+    return validate_greenfield_policy_file(policy_file, expected_version=recommended_version or None)
+
+
 def _ledger_from_discovery(
     discovery: dict[str, Any],
     *,
@@ -377,6 +387,19 @@ def _ledger_from_bridge(
             failure_state = "blocked_source_quality"
             failure_reason = "source_quality_gate_not_pass"
             disposition = "source_quality_blocker"
+        greenfield_policy_issue = _greenfield_policy_issue(item)
+        greenfield_policy_state = "not_applicable"
+        if family == GREENFIELD_REAL_ENV_FAMILY:
+            greenfield_policy_state = greenfield_policy_issue or "pass"
+        if state == "live_auto_apply_ready" and greenfield_policy_issue:
+            failure_state = "fail"
+            failure_reason = greenfield_policy_issue
+            disposition = "code_patch_required"
+            retryable = True
+            retry_reason = "greenfield live authority candidate must publish a valid policy artifact before PREOPEN apply"
+            retry_owner = "runtime_apply_bridge"
+            next_retry_stage = "runtime_apply_bridge"
+            retry_deadline = "immediate_same_date_postclose_rerun"
         ledger.append(
             {
                 "candidate_id": candidate_id,
@@ -401,6 +424,7 @@ def _ledger_from_bridge(
                 ),
                 "runtime_hook_state": "mapped" if item.get("target_env_keys") else "env_mapping_missing",
                 "post_apply_attribution_state": "pending" if state == "live_auto_apply_ready" else "not_applicable",
+                "greenfield_policy_state": greenfield_policy_state,
                 "final_disposition": disposition,
                 "failure_state": failure_state,
                 "failure_reason": failure_reason,

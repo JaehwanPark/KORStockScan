@@ -2567,6 +2567,155 @@ def test_runtime_apply_bridge_entry_wait6579_live_auto_writes_probe_env(tmp_path
     assert family in env_manifest["selected_families"]
 
 
+def test_runtime_apply_bridge_greenfield_live_auto_writes_full_lifecycle_env(tmp_path, monkeypatch):
+    runtime_dir, bridge_dir, _approval_dir = _install_runtime_bridge_test_dirs(tmp_path, monkeypatch)
+    family = bridge_mod.GREENFIELD_REAL_ENV_FAMILY
+    policy_file = tmp_path / "greenfield_real_env_policy_2026-05-30.json"
+    candidate_id = f"{family}:2026-05-30"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "policy_id": family,
+                "policy_version": candidate_id,
+                "scope": "full_lifecycle",
+                "allowlist": [
+                    {
+                        "bucket_id": "entry:score_66_69",
+                        "family": bridge_mod.ENTRY_BRIDGE_FAMILY,
+                        "stage": "entry",
+                        "action": "BUY",
+                        "source_quality_gate": "pass",
+                        "ai_tier2_status": "parsed",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (bridge_dir / "runtime_apply_bridge_2026-05-30.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-30",
+                "candidates": [
+                    {
+                        "candidate_id": candidate_id,
+                        "family": family,
+                        "stage": "greenfield_real_env",
+                        "priority": 7,
+                        "bridge_candidate_state": "live_auto_apply_ready",
+                        "approval_required": False,
+                        "live_auto_apply": True,
+                        "allowed_runtime_apply": True,
+                        "runtime_effect_after_approval": "full_lifecycle_greenfield_real_env_authority",
+                        "lifecycle_bucket_discovery_ai_review_status": "parsed",
+                        "target_env_keys": [
+                            "GREENFIELD_REAL_ENV_AUTHORITY_ENABLED",
+                            "GREENFIELD_REAL_ENV_AUTHORITY_SCOPE",
+                            "GREENFIELD_REAL_ENV_AUTHORITY_POLICY_FILE",
+                            "GREENFIELD_REAL_ENV_AUTHORITY_POLICY_VERSION",
+                            "GREENFIELD_REAL_ENV_TELEGRAM_ENABLED",
+                        ],
+                        "recommended_values": {
+                            "enabled": True,
+                            "scope": "full_lifecycle",
+                            "policy_file": str(policy_file),
+                            "policy_version": candidate_id,
+                            "telegram_enabled": True,
+                        },
+                        "current_values": {
+                            "enabled": False,
+                            "scope": "inactive",
+                            "policy_file": "",
+                            "policy_version": "runtime_default",
+                            "telegram_enabled": False,
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-06-01",
+        source_date="2026-05-30",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    env = manifest["runtime_env_overrides"]
+    assert manifest["runtime_change"] is True
+    assert env["KORSTOCKSCAN_GREENFIELD_REAL_ENV_AUTHORITY_ENABLED"] == "true"
+    assert env["KORSTOCKSCAN_GREENFIELD_REAL_ENV_AUTHORITY_SCOPE"] == "full_lifecycle"
+    assert env["KORSTOCKSCAN_GREENFIELD_REAL_ENV_AUTHORITY_POLICY_FILE"] == str(policy_file)
+    assert env["KORSTOCKSCAN_GREENFIELD_REAL_ENV_AUTHORITY_POLICY_VERSION"] == candidate_id
+    assert env["KORSTOCKSCAN_GREENFIELD_REAL_ENV_TELEGRAM_ENABLED"] == "true"
+    env_manifest = json.loads((runtime_dir / "threshold_runtime_env_2026-06-01.json").read_text(encoding="utf-8"))
+    assert family in env_manifest["selected_families"]
+
+
+def test_runtime_apply_bridge_greenfield_blocks_missing_policy_file(tmp_path, monkeypatch):
+    _runtime_dir, bridge_dir, _approval_dir = _install_runtime_bridge_test_dirs(tmp_path, monkeypatch)
+    family = bridge_mod.GREENFIELD_REAL_ENV_FAMILY
+    policy_file = tmp_path / "missing_greenfield_real_env_policy_2026-05-30.json"
+    candidate_id = f"{family}:2026-05-30"
+    (bridge_dir / "runtime_apply_bridge_2026-05-30.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-30",
+                "candidates": [
+                    {
+                        "candidate_id": candidate_id,
+                        "family": family,
+                        "stage": "greenfield_real_env",
+                        "priority": 7,
+                        "bridge_candidate_state": "live_auto_apply_ready",
+                        "approval_required": False,
+                        "live_auto_apply": True,
+                        "allowed_runtime_apply": True,
+                        "runtime_effect_after_approval": "full_lifecycle_greenfield_real_env_authority",
+                        "lifecycle_bucket_discovery_ai_review_status": "parsed",
+                        "target_env_keys": [
+                            "GREENFIELD_REAL_ENV_AUTHORITY_ENABLED",
+                            "GREENFIELD_REAL_ENV_AUTHORITY_SCOPE",
+                            "GREENFIELD_REAL_ENV_AUTHORITY_POLICY_FILE",
+                            "GREENFIELD_REAL_ENV_AUTHORITY_POLICY_VERSION",
+                            "GREENFIELD_REAL_ENV_TELEGRAM_ENABLED",
+                        ],
+                        "recommended_values": {
+                            "enabled": True,
+                            "scope": "full_lifecycle",
+                            "policy_file": str(policy_file),
+                            "policy_version": candidate_id,
+                            "telegram_enabled": True,
+                        },
+                        "current_values": {
+                            "enabled": False,
+                            "scope": "inactive",
+                            "policy_file": "",
+                            "policy_version": "runtime_default",
+                            "telegram_enabled": False,
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-06-01",
+        source_date="2026-05-30",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    assert "KORSTOCKSCAN_GREENFIELD_REAL_ENV_AUTHORITY_ENABLED" not in manifest["runtime_env_overrides"]
+    assert f"greenfield_policy_file_missing:{family}" in manifest["runtime_apply_bridge"]["blocked"]
+
+
 def test_runtime_apply_bridge_legacy_ready_for_approval_is_blocked(tmp_path, monkeypatch):
     runtime_dir, bridge_dir, approval_dir = _install_runtime_bridge_test_dirs(tmp_path, monkeypatch)
     family = bridge_mod.ENTRY_BRIDGE_FAMILY

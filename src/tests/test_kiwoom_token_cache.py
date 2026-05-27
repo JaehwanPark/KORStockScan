@@ -161,10 +161,11 @@ def test_fetch_kiwoom_api_continuous_refreshes_and_retries_once_on_8005(monkeypa
     assert len(posts) == 2
     assert posts[0]["headers"]["authorization"] == "Bearer STALE_TOKEN"
     assert posts[1]["headers"]["authorization"] == "Bearer FRESH_TOKEN"
-    assert invalidations == ["api_8005_retry:kt00008"]
+    assert invalidations == []
 
 
-def test_fetch_kiwoom_api_continuous_stops_after_single_8005_refresh_retry(monkeypatch):
+def test_fetch_kiwoom_api_continuous_stops_after_single_8005_refresh_retry(monkeypatch, tmp_path):
+    _patch_cache_paths(monkeypatch, tmp_path)
     posts = []
 
     def fake_post(url, headers=None, json=None, timeout=None):
@@ -201,7 +202,8 @@ def test_fetch_kiwoom_api_continuous_stops_after_single_8005_refresh_retry(monke
     ]
 
 
-def test_fetch_kiwoom_api_continuous_recognizes_rt_cd_8005(monkeypatch):
+def test_fetch_kiwoom_api_continuous_recognizes_rt_cd_8005(monkeypatch, tmp_path):
+    _patch_cache_paths(monkeypatch, tmp_path)
     posts = []
     responses = [
         _FakeApiResponse(
@@ -236,7 +238,8 @@ def test_fetch_kiwoom_api_continuous_recognizes_rt_cd_8005(monkeypatch):
     assert posts[1]["authorization"] == "Bearer FRESH_TOKEN"
 
 
-def test_fetch_kiwoom_api_continuous_returns_8005_when_refresh_raises(monkeypatch):
+def test_fetch_kiwoom_api_continuous_returns_8005_when_refresh_raises(monkeypatch, tmp_path):
+    _patch_cache_paths(monkeypatch, tmp_path)
     posts = []
 
     def fake_post(url, headers=None, json=None, timeout=None):
@@ -272,3 +275,42 @@ def test_fetch_kiwoom_api_continuous_returns_8005_when_refresh_raises(monkeypatc
             "return_msg": "인증에 실패했습니다[8005:Token이 유효하지 않습니다]",
         }
     ]
+
+
+def test_8005_refresh_reuses_newer_cached_token_without_invalidating(monkeypatch, tmp_path):
+    _patch_cache_paths(monkeypatch, tmp_path)
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(_config()), encoding="utf-8")
+    monkeypatch.setattr(kiwoom_utils, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(kiwoom_utils, "DEV_PATH", tmp_path / "missing_dev_config.json")
+    cache_path = tmp_path / "kiwoom_token_cache.json"
+    cache_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "cache_key": kiwoom_utils._token_cache_key(_config()),
+                "access_token": "NEWER_TOKEN",
+                "issued_at": time.time(),
+                "expires_at": time.time() + 3600,
+            }
+        ),
+        encoding="utf-8",
+    )
+    invalidations = []
+
+    monkeypatch.setattr(kiwoom_utils, "invalidate_kiwoom_token_cache", lambda reason="": invalidations.append(reason) or True)
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "get_kiwoom_token",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("refresh should not be called")),
+    )
+    monkeypatch.setattr(kiwoom_utils, "log_info", lambda *args, **kwargs: None)
+
+    token = kiwoom_utils.get_kiwoom_token_after_auth_failure(
+        api_id="kt00001",
+        failed_token="STALE_TOKEN",
+        reason_prefix="order_api_8005_retry",
+    )
+
+    assert token == "NEWER_TOKEN"
+    assert invalidations == []

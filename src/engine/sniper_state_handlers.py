@@ -57,6 +57,12 @@ from src.engine.lifecycle_decision_matrix_runtime import (
     resolve_lifecycle_decision,
     resolve_panic_risk_regime_context,
 )
+from src.engine.lifecycle.greenfield_authority import (
+    GreenfieldDecision,
+    evaluate_greenfield_authority,
+    greenfield_authority_active,
+    greenfield_stage_telegram_enabled,
+)
 from src.engine.sniper_dynamic_thresholds import (
     estimate_turnover_hint,
     get_dynamic_scalp_thresholds,
@@ -88,6 +94,7 @@ KIWOOM_TOKEN = None
 DB = None
 EVENT_BUS = None
 ACTIVE_TARGETS = None
+_GREENFIELD_TELEGRAM_KEYS: set[str] = set()
 
 SCALPING_ENTRY_BLOCKER_ROLE_REGISTRY = {
     "blocked_gap_from_scan": {
@@ -1502,6 +1509,24 @@ def _is_swing_loss_reentry_stop_rule(exit_rule: str | None) -> bool:
         return False
     return any(
         marker in value
+        for marker in (
+            "stop_loss",
+            "stop-loss",
+            "hard_stop",
+            "protect_stop",
+            "protect_hard",
+            "emergency_stop",
+            "loss_cut",
+        )
+    )
+
+
+def _is_greenfield_hard_safety_exit(exit_rule: str | None, sell_reason_type: str | None = None) -> bool:
+    combined = " ".join(str(value or "") for value in (exit_rule, sell_reason_type)).strip().lower()
+    if not combined:
+        return False
+    return any(
+        marker in combined
         for marker in (
             "stop_loss",
             "stop-loss",
@@ -4972,7 +4997,11 @@ def _publish_buy_signal_submission_notice(
     if bundle_id and stock.get('last_buy_signal_telegram_bundle_id') == bundle_id:
         return
 
-    audience = _resolve_telegram_audience_for_stock(stock, strategy, default="VIP_ALL")
+    audience = (
+        "VIP_ALL"
+        if greenfield_stage_telegram_enabled() and not _is_any_simulated_position(stock, strategy)
+        else _resolve_telegram_audience_for_stock(stock, strategy, default="VIP_ALL")
+    )
     dynamic_reason = (
         stock.get('entry_dynamic_reason')
         or stock.get('entry_armed_dynamic_reason')
@@ -5007,7 +5036,19 @@ def _publish_buy_signal_submission_notice(
             dynamic_reason=dynamic_reason,
             actual_order_submitted=True,
             broker_order_forbidden=False,
+            greenfield_stage_notice=bool(greenfield_stage_telegram_enabled()),
         )
+        if greenfield_stage_telegram_enabled() and not _is_any_simulated_position(stock, strategy):
+            decision = _greenfield_decision_for_stock(stock, stage="submit", action="ALLOW_SUBMIT", strategy=strategy)
+            _log_entry_pipeline(
+                stock,
+                code,
+                "greenfield_stage_telegram_enqueued",
+                greenfield_stage_notice=True,
+                greenfield_stage_notice_audience="VIP_ALL",
+                greenfield_stage_notice_template="buy_signal_submission_notice",
+                **decision.as_fields(),
+            )
     except Exception as exc:
         log_error(f"🚨 [BUY 신호 알림 실패] {stock.get('name')}({code}): {exc}")
         _log_entry_pipeline(
@@ -5018,6 +5059,85 @@ def _publish_buy_signal_submission_notice(
             entry_mode=entry_mode,
             error=str(exc),
         )
+
+
+def _greenfield_decision_for_stock(stock, *, stage, action, strategy=None, hard_safety=False) -> GreenfieldDecision:
+    resolved_strategy = strategy or normalize_strategy((stock or {}).get("strategy"))
+    return evaluate_greenfield_authority(
+        stage=stage,
+        action=action,
+        strategy=resolved_strategy,
+        hard_safety=hard_safety,
+    )
+
+
+def _greenfield_block_fields(decision: GreenfieldDecision) -> dict:
+    return {
+        **decision.as_fields(),
+        "metric_role": "execution_quality_real_only",
+        "window_policy": "runtime_greenfield_policy_version_window",
+        "source_quality_gate": "greenfield_policy_loaded_and_stage_authority_checked",
+        "forbidden_uses": "hard_safety_bypass|provider_route_change|bot_restart|intraday_threshold_mutation",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "legacy_policy_role": "baseline_prior",
+    }
+
+
+def _publish_greenfield_stage_notice(
+    stock,
+    code,
+    *,
+    stage,
+    action,
+    title,
+    body,
+    strategy=None,
+    event_id="-",
+    parse_mode="Markdown",
+    log_fn=None,
+    extra_fields=None,
+    decision_override=None,
+):
+    if EVENT_BUS is None or not greenfield_stage_telegram_enabled():
+        return
+    if _is_any_simulated_position(stock, strategy or (stock or {}).get("strategy")):
+        return
+    decision = decision_override or _greenfield_decision_for_stock(stock, stage=stage, action=action, strategy=strategy)
+    key = "|".join(
+        [
+            str(stock.get("id") if isinstance(stock, dict) else "-"),
+            str(code or "-"),
+            str(decision.policy_version or "-"),
+            str(stage or "-"),
+            str(action or "-"),
+            str(event_id or "-"),
+        ]
+    )
+    logger = log_fn or (_log_holding_pipeline if str(stage) in {"holding", "scale_in", "exit"} else _log_entry_pipeline)
+    fields = {
+        "greenfield_stage_notice": True,
+        "greenfield_stage_notice_key": key,
+        "greenfield_stage_notice_audience": "VIP_ALL",
+        **decision.as_fields(),
+        **(extra_fields or {}),
+    }
+    if key in _GREENFIELD_TELEGRAM_KEYS:
+        logger(stock, code, "greenfield_stage_telegram_deduped", **fields)
+        return
+    try:
+        EVENT_BUS.publish(
+            "TELEGRAM_BROADCAST",
+            {
+                "message": f"{title}\n{body}",
+                "audience": "VIP_ALL",
+                "parse_mode": parse_mode,
+            },
+        )
+        _GREENFIELD_TELEGRAM_KEYS.add(key)
+        logger(stock, code, "greenfield_stage_telegram_enqueued", **fields)
+    except Exception as exc:
+        logger(stock, code, "greenfield_stage_telegram_failed", error=str(exc), **fields)
 
 
 def _log_entry_pipeline(stock, code, stage, **fields):
@@ -11278,91 +11398,103 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             )
         return False
 
+    greenfield_active = greenfield_authority_active()
+
     if strategy == "SCALPING" and real_pre_submit_guard_verdicts.get("liquidity_guard_action") == "BLOCK":
         min_liquidity = _safe_int(
             real_pre_submit_guard_verdicts.get("min_liquidity"),
             _rule_int("MIN_SCALP_LIQUIDITY", 500_000_000),
         )
-        log_info(
-            f"[PRE_SUBMIT_LIQUIDITY_GUARD_BLOCK] {stock.get('name')}({code}) "
-            f"liquidity={int(liquidity_value)} min={min_liquidity}"
-        )
-        clear_signal_reference(stock)
+        if not greenfield_active:
+            log_info(
+                f"[PRE_SUBMIT_LIQUIDITY_GUARD_BLOCK] {stock.get('name')}({code}) "
+                f"liquidity={int(liquidity_value)} min={min_liquidity}"
+            )
+            clear_signal_reference(stock)
         _log_entry_pipeline(
             stock,
             code,
-            "pre_submit_liquidity_guard_block",
+            "pre_submit_liquidity_guard_observed_greenfield_prior"
+            if greenfield_active
+            else "pre_submit_liquidity_guard_block",
             **_build_pre_submit_gate_contract_fields("liquidity_pre_submit_guard_p1"),
             liquidity_value=int(liquidity_value),
             min_liquidity=min_liquidity,
             block_reason="below_min_liquidity",
+            greenfield_tunable_prior=bool(greenfield_active),
             **real_pre_submit_guard_fields,
             **submit_revalidation_fields,
             **latency_price_snapshot,
             **entry_orderbook_micro_fields,
             **_scalp_pre_ai_gate_context_log_fields(scalp_pre_ai_gate_context),
         )
-        _emit_scalp_entry_adm_snapshot(
-            stock,
-            code,
-            "pre_submit_liquidity_guard_block",
-            ai_score=latency_signal_score,
-            chosen_action="SKIP_PRE_SUBMIT_SAFETY",
-            latency_gate=latency_gate,
-            submit_fields=submit_revalidation_fields,
-            price_snapshot=latency_price_snapshot,
-            orderbook_fields=entry_orderbook_micro_fields,
-            actual_order_submitted=False,
-            broker_order_forbidden=True,
-            extra_fields={
-                "liquidity_value": int(liquidity_value),
-                "min_liquidity": min_liquidity,
-                **real_pre_submit_guard_fields,
-            },
-        )
-        return False
+        if not greenfield_active:
+            _emit_scalp_entry_adm_snapshot(
+                stock,
+                code,
+                "pre_submit_liquidity_guard_block",
+                ai_score=latency_signal_score,
+                chosen_action="SKIP_PRE_SUBMIT_SAFETY",
+                latency_gate=latency_gate,
+                submit_fields=submit_revalidation_fields,
+                price_snapshot=latency_price_snapshot,
+                orderbook_fields=entry_orderbook_micro_fields,
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                extra_fields={
+                    "liquidity_value": int(liquidity_value),
+                    "min_liquidity": min_liquidity,
+                    **real_pre_submit_guard_fields,
+                },
+            )
+            return False
 
     if strategy == "SCALPING" and real_pre_submit_guard_verdicts.get("overbought_guard_action") == "BLOCK":
         overbought_context = scalp_pre_ai_gate_context.get("overbought") if isinstance(scalp_pre_ai_gate_context.get("overbought"), dict) else {}
-        log_info(
-            f"[PRE_SUBMIT_OVERBOUGHT_PULLBACK_GUARD_BLOCK] {stock.get('name')}({code}) "
-            f"state={overbought_context.get('risk_state')} bucket={overbought_context.get('risk_bucket')}"
-        )
-        clear_signal_reference(stock)
+        if not greenfield_active:
+            log_info(
+                f"[PRE_SUBMIT_OVERBOUGHT_PULLBACK_GUARD_BLOCK] {stock.get('name')}({code}) "
+                f"state={overbought_context.get('risk_state')} bucket={overbought_context.get('risk_bucket')}"
+            )
+            clear_signal_reference(stock)
         _log_entry_pipeline(
             stock,
             code,
-            "pre_submit_overbought_pullback_guard_block",
+            "pre_submit_overbought_pullback_guard_observed_greenfield_prior"
+            if greenfield_active
+            else "pre_submit_overbought_pullback_guard_block",
             **_build_pre_submit_gate_contract_fields("overbought_pullback_guard_p1"),
             block_reason="pullback_or_rebreak_not_confirmed",
             risk_state=overbought_context.get("risk_state") or "-",
             risk_bucket=overbought_context.get("risk_bucket") or "-",
+            greenfield_tunable_prior=bool(greenfield_active),
             **real_pre_submit_guard_fields,
             **submit_revalidation_fields,
             **latency_price_snapshot,
             **entry_orderbook_micro_fields,
             **_scalp_pre_ai_gate_context_log_fields(scalp_pre_ai_gate_context),
         )
-        _emit_scalp_entry_adm_snapshot(
-            stock,
-            code,
-            "pre_submit_overbought_pullback_guard_block",
-            ai_score=latency_signal_score,
-            chosen_action="SKIP_PRE_SUBMIT_SAFETY",
-            latency_gate=latency_gate,
-            submit_fields=submit_revalidation_fields,
-            price_snapshot=latency_price_snapshot,
-            orderbook_fields=entry_orderbook_micro_fields,
-            actual_order_submitted=False,
-            broker_order_forbidden=True,
-            extra_fields={
-                "block_reason": "pullback_or_rebreak_not_confirmed",
-                "risk_state": overbought_context.get("risk_state") or "-",
-                "risk_bucket": overbought_context.get("risk_bucket") or "-",
-                **real_pre_submit_guard_fields,
-            },
-        )
-        return False
+        if not greenfield_active:
+            _emit_scalp_entry_adm_snapshot(
+                stock,
+                code,
+                "pre_submit_overbought_pullback_guard_block",
+                ai_score=latency_signal_score,
+                chosen_action="SKIP_PRE_SUBMIT_SAFETY",
+                latency_gate=latency_gate,
+                submit_fields=submit_revalidation_fields,
+                price_snapshot=latency_price_snapshot,
+                orderbook_fields=entry_orderbook_micro_fields,
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                extra_fields={
+                    "block_reason": "pullback_or_rebreak_not_confirmed",
+                    "risk_state": overbought_context.get("risk_state") or "-",
+                    "risk_bucket": overbought_context.get("risk_bucket") or "-",
+                    **real_pre_submit_guard_fields,
+                },
+            )
+            return False
 
     lifecycle_submit_decision = resolve_lifecycle_decision(
         stage="submit",
@@ -11430,6 +11562,79 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 broker_order_forbidden=True,
                 **(one_share_eval.get("fields") or {}),
             )
+
+    greenfield_real_order_subject = not (
+        _is_any_simulated_position(stock, strategy)
+        or (_is_swing_live_order_dry_run(strategy) and swing_one_share_real_canary_fields is None)
+    )
+    if greenfield_real_order_subject:
+        entry_greenfield_decision = _greenfield_decision_for_stock(
+            stock,
+            stage="entry",
+            action="BUY",
+            strategy=strategy,
+        )
+        if entry_greenfield_decision.active and not entry_greenfield_decision.allowed:
+            clear_signal_reference(stock)
+            _log_entry_pipeline(
+                stock,
+                code,
+                "greenfield_unpromoted_entry_block",
+                strategy=strategy,
+                entry_mode=entry_mode,
+                requested_qty=requested_qty,
+                order_price=int(final_price or latency_gate.get("order_price", 0) or 0),
+                **_greenfield_block_fields(entry_greenfield_decision),
+                **real_pre_submit_guard_fields,
+                **submit_revalidation_fields,
+                **latency_price_snapshot,
+                **entry_orderbook_micro_fields,
+            )
+            return False
+        if entry_greenfield_decision.active:
+            _publish_greenfield_stage_notice(
+                stock,
+                code,
+                stage="entry",
+                action="BUY",
+                strategy=strategy,
+                title=f"🟢 **[ENTRY 승인] {stock.get('name')} ({code})**",
+                body=(
+                    f"전략: `{strategy}` | 진입모드: `{entry_mode}`\n"
+                    f"요청수량: `{int(requested_qty or 0)}주` | 기준가: `{int(final_price or curr_price or 0):,}원`\n"
+                    f"Bucket: `{entry_greenfield_decision.matched_bucket_id}`"
+                ),
+                event_id=stock.get("entry_bundle_id") or latency_gate.get("threshold_version") or "entry",
+                extra_fields={
+                    "entry_mode": entry_mode,
+                    "requested_qty": requested_qty,
+                    "order_price": int(final_price or latency_gate.get("order_price", 0) or 0),
+                },
+            )
+
+        submit_greenfield_decision = _greenfield_decision_for_stock(
+            stock,
+            stage="submit",
+            action="ALLOW_SUBMIT",
+            strategy=strategy,
+        )
+        if submit_greenfield_decision.active and not submit_greenfield_decision.allowed:
+            clear_signal_reference(stock)
+            _log_entry_pipeline(
+                stock,
+                code,
+                "greenfield_unpromoted_submit_block",
+                strategy=strategy,
+                entry_mode=entry_mode,
+                requested_qty=requested_qty,
+                order_price=int(final_price or latency_gate.get("order_price", 0) or 0),
+                **_greenfield_block_fields(submit_greenfield_decision),
+                **real_pre_submit_guard_fields,
+                **submit_revalidation_fields,
+                **latency_price_snapshot,
+                **entry_orderbook_micro_fields,
+            )
+            return False
 
     msg = msg or (
         f"✅ **{stock['name']} ({code}) 진입 주문 전송!**\n전략: `{strategy}`\n현재가: `{curr_price:,}원`\n주문 수량: `{requested_qty}주`"
@@ -12290,6 +12495,7 @@ def _cancel_pending_entry_orders(stock, code, *, force=False):
 
 
 def _stage_buy_order_submission(stock, code, curr_price, requested_qty, msg, entry_orders):
+    holding_notice = None
     with ENTRY_LOCK:
         entry_dynamic_reason = str(stock.get('entry_armed_dynamic_reason', '') or '')
         _clear_entry_arm(stock)
@@ -12317,6 +12523,40 @@ def _stage_buy_order_submission(stock, code, curr_price, requested_qty, msg, ent
         if primary_ord_no:
             stock['odno'] = primary_ord_no
         stock['pending_buy_msg'] = msg
+        if stock.get("status") == "HOLDING":
+            holding_notice = {
+                "strategy": stock.get("strategy"),
+                "entry_bundle_id": stock.get("entry_bundle_id"),
+                "primary_ord_no": primary_ord_no,
+                "filled_qty": existing_filled_qty,
+            }
+    if holding_notice:
+        holding_decision = _greenfield_decision_for_stock(
+            stock,
+            stage="holding",
+            action="HOLD",
+            strategy=holding_notice.get("strategy"),
+        )
+        _publish_greenfield_stage_notice(
+            stock,
+            code,
+            stage="holding",
+            action="HOLD",
+            strategy=holding_notice.get("strategy"),
+            title=f"📌 **[HOLDING 시작] {stock.get('name')} ({code})**",
+            body=(
+                f"보유수량: `{int(holding_notice.get('filled_qty') or requested_qty or 0)}주` | "
+                f"기준가: `{int(curr_price or 0):,}원`\n"
+                f"Bucket: `{holding_decision.matched_bucket_id}`"
+            ),
+            event_id=holding_notice.get("entry_bundle_id") or holding_notice.get("primary_ord_no") or "holding_start",
+            decision_override=holding_decision,
+            extra_fields={
+                "requested_qty": requested_qty,
+                "filled_qty": holding_notice.get("filled_qty"),
+                "curr_price": curr_price,
+            },
+        )
 
 
 def _finalize_buy_order_submission(stock, code, curr_price, requested_qty, msg, entry_orders):
@@ -12438,6 +12678,34 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
                     fill_ratio=f"{fill_ratio:.3f}",
                     min_fill_ratio=f"{min_fill_ratio:.3f}",
                 )
+                partial_exit_decision = _greenfield_decision_for_stock(
+                    stock,
+                    stage="exit",
+                    action="SELL",
+                    strategy=strategy,
+                    hard_safety=True,
+                )
+                _publish_greenfield_stage_notice(
+                    stock,
+                    code,
+                    stage="exit",
+                    action="SELL",
+                    strategy=strategy,
+                    title=f"🔴 **[EXIT 주문 제출] {stock.get('name')} ({code})**",
+                    body=(
+                        "부분체결 비율 미달 정리\n"
+                        f"체결수량: `{int(buy_qty or 0)}주` | 체결비율: `{fill_ratio:.3f}`\n"
+                        f"Bucket: `{partial_exit_decision.matched_bucket_id}`"
+                    ),
+                    event_id=stock.get("entry_bundle_id") or "partial_fill_exit",
+                    decision_override=partial_exit_decision,
+                    extra_fields={
+                        "requested_qty": requested_qty,
+                        "filled_qty": buy_qty,
+                        "fill_ratio": f"{fill_ratio:.3f}",
+                        "min_fill_ratio": f"{min_fill_ratio:.3f}",
+                    },
+                )
                 log_info(
                     f"[ENTRY_RECONCILED] {stock.get('name')}({code}) "
                     f"partial fill ratio {fill_ratio:.3f} < min {min_fill_ratio:.3f}; "
@@ -12465,6 +12733,25 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
             stock,
             set_fields={'status': 'HOLDING'},
             pop_fields=['odno'],
+        )
+        _publish_greenfield_stage_notice(
+            stock,
+            code,
+            stage="holding",
+            action="HOLD",
+            strategy=strategy,
+            title=f"📌 **[HOLDING 시작] {stock.get('name')} ({code})**",
+            body=(
+                f"부분체결 보유 전환 | 보유수량: `{int(buy_qty or 0)}주`\n"
+                f"체결비율: `{fill_ratio:.3f}` | Bucket: "
+                f"`{_greenfield_decision_for_stock(stock, stage='holding', action='HOLD', strategy=strategy).matched_bucket_id}`"
+            ),
+            event_id=stock.get("entry_bundle_id") or "partial_fill_holding",
+            extra_fields={
+                "requested_qty": requested_qty,
+                "filled_qty": buy_qty,
+                "fill_ratio": f"{fill_ratio:.3f}",
+            },
         )
         log_info(f"[ENTRY_RECONCILED] {stock.get('name')}({code}) partial fill kept, remaining entry orders cancelled")
     else:
@@ -14648,6 +14935,27 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 HIGHEST_PRICES.pop(code, None)
             return
 
+        exit_greenfield_decision = _greenfield_decision_for_stock(
+            stock,
+            stage="exit",
+            action="SELL",
+            strategy=strategy,
+            hard_safety=_is_greenfield_hard_safety_exit(exit_rule, sell_reason_type),
+        )
+        if exit_greenfield_decision.active and not exit_greenfield_decision.allowed:
+            _log_holding_pipeline(
+                stock,
+                code,
+                "greenfield_unpromoted_exit_block",
+                sell_reason_type=sell_reason_type,
+                exit_rule=exit_rule or stock.get("last_exit_rule") or "-",
+                exit_decision_source=stock.get("last_exit_decision_source") or "MANUAL",
+                qty=buy_qty,
+                profit_rate=f"{profit_rate:+.2f}",
+                **_greenfield_block_fields(exit_greenfield_decision),
+            )
+            return
+
         try:
             with DB.get_session() as session:
                 session.query(RecommendationHistory).filter_by(id=target_id).update({"status": "SELL_ORDERED"})
@@ -14702,6 +15010,28 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 ord_no=ord_no or "-",
                 order_type=stock.get("exit_order_type") or "-",
                 profit_rate=f"{profit_rate:+.2f}",
+            )
+            _publish_greenfield_stage_notice(
+                stock,
+                code,
+                stage="exit",
+                action="SELL",
+                strategy=strategy,
+                title=f"🔴 **[EXIT 주문 제출] {stock.get('name')} ({code})**",
+                body=(
+                    f"사유: `{sell_reason_type}` | 규칙: `{exit_rule or stock.get('last_exit_rule') or '-'}`\n"
+                    f"수량: `{int(buy_qty or 0)}주` | 수익률: `{profit_rate:+.2f}%`\n"
+                    f"Bucket: `{exit_greenfield_decision.matched_bucket_id}`"
+                ),
+                event_id=ord_no or exit_rule or sell_reason_type or "exit",
+                decision_override=exit_greenfield_decision,
+                extra_fields={
+                    "sell_reason_type": sell_reason_type,
+                    "exit_rule": exit_rule or stock.get("last_exit_rule") or "-",
+                    "qty": buy_qty,
+                    "profit_rate": f"{profit_rate:+.2f}",
+                    "ord_no": ord_no or "-",
+                },
             )
 
             if strategy == 'SCALPING' and now_t < TIME_15_30:
@@ -16096,6 +16426,27 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             "actual_order_submitted": False,
         }
 
+    scale_in_greenfield_decision = _greenfield_decision_for_stock(
+        stock,
+        stage="scale_in",
+        action=add_type,
+        strategy=strategy,
+    )
+    if scale_in_greenfield_decision.active and not scale_in_greenfield_decision.allowed:
+        _log_holding_pipeline(
+            stock,
+            code,
+            "greenfield_unpromoted_scale_in_block",
+            add_type=add_type,
+            scale_in_type=add_type,
+            qty=qty,
+            final_price=final_price,
+            resolved_price=resolved_price,
+            add_trigger=action.get("reason"),
+            **_greenfield_block_fields(scale_in_greenfield_decision),
+        )
+        return None
+
     res = kiwoom_orders.send_buy_order(
         code,
         qty,
@@ -16169,6 +16520,30 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                     order_type=order_type_code,
                     **swing_real_canary_fields,
                 )
+            _publish_greenfield_stage_notice(
+                stock,
+                code,
+                stage="scale_in",
+                action=add_type,
+                strategy=strategy,
+                title=f"➕ **[SCALE-IN 주문 제출] {stock.get('name')} ({code})**",
+                body=(
+                    f"유형: `{add_type}` | 수량: `{int(qty or 0)}주`\n"
+                    f"주문가: `{int(final_price or resolved_price or curr_price or 0):,}원` | "
+                    f"사유: `{action.get('reason') or '-'}`\n"
+                    f"Bucket: `{scale_in_greenfield_decision.matched_bucket_id}`"
+                ),
+                event_id=ord_no or f"{add_type}:{action.get('reason') or '-'}",
+                decision_override=scale_in_greenfield_decision,
+                extra_fields={
+                    "add_type": add_type,
+                    "qty": qty,
+                    "ord_no": ord_no or "-",
+                    "final_price": final_price,
+                    "resolved_price": resolved_price,
+                    "add_trigger": action.get("reason"),
+                },
+            )
             record_add_history_event(
                 DB,
                 recommendation_id=stock.get('id'),

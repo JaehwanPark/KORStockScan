@@ -5,11 +5,26 @@ from sqlalchemy.orm.exc import DetachedInstanceError
 from src.database.models import RecommendationHistory
 from src.engine.sniper_overnight_gatekeeper import (
     _clean_telegram_text,
+    _eod_label,
     _format_order_error,
     _humanize_eod_action,
     _snapshot_record,
     _submit_overnight_dual_persona_shadow,
 )
+from src.engine.sniper_time import TIME_SCALPING_OVERNIGHT_DECISION
+
+
+def test_scalping_overnight_decision_default_time_is_1510():
+    assert TIME_SCALPING_OVERNIGHT_DECISION.isoformat() == "15:10:00"
+
+
+def test_eod_label_defaults_to_1510(monkeypatch):
+    monkeypatch.setattr(
+        "src.engine.sniper_overnight_gatekeeper.TRADING_RULES",
+        SimpleNamespace(),
+    )
+
+    assert _eod_label() == "15:10"
 
 
 def test_snapshot_record_survives_detached_instance():
