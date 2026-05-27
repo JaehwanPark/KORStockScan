@@ -14,7 +14,7 @@ cat >> "$TMP_CRON" <<EOF
 # threshold cycle daily automation
 35 7 * * 1-5 THRESHOLD_CYCLE_APPLY_MODE=auto_bounded_live THRESHOLD_CYCLE_AUTO_APPLY=true THRESHOLD_CYCLE_AUTO_APPLY_REQUIRE_AI=true $PROJECT_DIR/deploy/run_threshold_cycle_preopen.sh \$(TZ=Asia/Seoul date +\\%F) >> $PROJECT_DIR/logs/threshold_cycle_preopen_cron.log 2>&1 # THRESHOLD_CYCLE_PREOPEN
 10 15 * * 1-5 $PROJECT_DIR/deploy/run_scalp_sim_overnight_preclose.sh \$(TZ=Asia/Seoul date +\\%F) >> $PROJECT_DIR/logs/scalp_sim_overnight_preclose_cron.log 2>&1 # SCALP_SIM_OVERNIGHT_PRECLOSE
-10 16 * * 1-5 THRESHOLD_CYCLE_AI_CORRECTION_PROVIDER=openai THRESHOLD_CYCLE_POSTCLOSE_BOT_ACTION=restart $PROJECT_DIR/deploy/run_threshold_cycle_postclose.sh \$(TZ=Asia/Seoul date +\\%F) >> $PROJECT_DIR/logs/threshold_cycle_postclose_cron.log 2>&1 # THRESHOLD_CYCLE_POSTCLOSE
+0 16 * * 1-5 THRESHOLD_CYCLE_AI_CORRECTION_PROVIDER=openai THRESHOLD_CYCLE_POSTCLOSE_BOT_ACTION=restart $PROJECT_DIR/deploy/run_threshold_cycle_postclose.sh \$(TZ=Asia/Seoul date +\\%F) >> $PROJECT_DIR/logs/threshold_cycle_postclose_cron.log 2>&1 # THRESHOLD_CYCLE_POSTCLOSE
 EOF
 
 crontab "$TMP_CRON"

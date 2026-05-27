@@ -21,6 +21,12 @@
   - 처리 결과: `SCALPING_OVERNIGHT_DECISION_TIME` 기본값과 sim overnight preclose cron을 `15:10`으로 맞췄고, runbook final window를 `15:10~15:30`으로 보정했다. `deploy/install_threshold_cycle_cron.sh`를 실행해 실제 crontab의 `SCALP_SIM_OVERNIGHT_PRECLOSE`도 `10 15 * * 1-5`로 반영했다. threshold/provider/order guard, cap, broker safety는 변경하지 않는다.
   - 다음 액션: 다음 장전에는 bot 시작 후 runtime 기준 `SCALPING_OVERNIGHT_DECISION_TIME=15:10:00`이 반영됐는지 확인한다.
 
+- [x] `[PostcloseCronAdvance1600_0527] 장후 자동화체인 cron 16:00 조정` (`Due: 2026-05-27`, `Slot: INTRADAY`, `TimeWindow: 16:00~16:10`, `Track: RunbookOps`)
+  - Source: [install_threshold_cycle_cron.sh](/home/ubuntu/KORStockScan/deploy/install_threshold_cycle_cron.sh), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 근거: 15:10 오버나이트 판정과 15:10~15:30 미체결 청산 복구 window 이후 15:45 lightweight swing report를 유지하면 postclose chain은 16:00부터 시작해도 artifact wait/resource guard로 선행 지연을 흡수할 수 있다.
+  - 처리 결과: postclose cron, runbook, daily workorder/backlog 기본 window를 `16:00~20:45`로 보정했고 actual crontab의 `THRESHOLD_CYCLE_POSTCLOSE`도 `0 16 * * 1-5`로 반영했다. threshold/provider/order guard, cap, broker safety는 변경하지 않는다.
+  - 다음 액션: 다음 postclose에서 `[START]/[DONE] threshold-cycle postclose` marker, artifact wait, postclose isolation marker, verifier status를 확인한다.
+
 ## Runbook 운영 확인 완료 기록
 
 - `PreopenAutomationHealthCheck20260527` (`Slot: PREOPEN`, `TimeWindow: 08:00~09:00`, `Track: RunbookOps`) 판정: `pass`

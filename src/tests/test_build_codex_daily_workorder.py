@@ -140,7 +140,7 @@ def test_build_runbook_operational_checks_for_slot(monkeypatch):
     assert "swing_lifecycle_audit_2026-05-11.md" in "\n".join(postclose.artifact_checks)
     assert "swing_improvement_automation_2026-05-11.json" in "\n".join(postclose.artifact_checks)
     assert "swing_runtime_approval_2026-05-11.json" in "\n".join(postclose.artifact_checks)
-    assert postclose.time_window == "16:10~20:45"
+    assert postclose.time_window == "16:00~20:45"
     assert "swing_model_retrain_2026-05-11.status.json" in "\n".join(postclose.artifact_checks)
     assert "swing_model_retrain_2026-05-11.json" in "\n".join(postclose.artifact_checks)
     assert "logs/tuning_monitoring_postclose_cron.log" in postclose.artifact_checks
