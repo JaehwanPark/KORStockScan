@@ -143,12 +143,17 @@ def should_block_swing_entry_by_market_regime(strategy: str):
     global MARKET_REGIME
 
     try:
-        snap = MARKET_REGIME.refresh_if_needed()
         normalized = str(strategy or "").upper()
 
         # 스윙 전략만 적용
         if normalized not in ["KOSPI_ML", "KOSDAQ_ML", "MAIN"]:
-            return False, ""
+            return False, "", {
+                "market_regime_prior_observed": False,
+                "confirmed_risk_block": False,
+                "strategy_scope": "non_swing",
+            }
+
+        snap = MARKET_REGIME.refresh_if_needed()
 
         sensitivity = str(os.getenv("KORSTOCKSCAN_SWING_MARKET_REGIME_SENSITIVITY", "") or "").strip().lower()
         dry_run_enabled = bool(getattr(TRADING_RULES, "SWING_LIVE_ORDER_DRY_RUN_ENABLED", True))

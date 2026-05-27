@@ -102,6 +102,21 @@ def test_risk_off_without_confirmed_context_is_prior_not_block(monkeypatch):
     assert meta["market_regime_prior_reason"] == "recovery_gate_signal_insufficient"
 
 
+def test_non_swing_strategy_does_not_refresh_market_regime(monkeypatch):
+    class BrokenMarketRegime:
+        def refresh_if_needed(self):
+            raise AssertionError("non-swing strategy should not refresh market regime")
+
+    monkeypatch.setattr(sniper_market_regime, "MARKET_REGIME", BrokenMarketRegime())
+
+    blocked, reason, meta = sniper_market_regime.should_block_swing_entry_by_market_regime("SCALPING")
+
+    assert blocked is False
+    assert reason == ""
+    assert meta["strategy_scope"] == "non_swing"
+    assert meta["confirmed_risk_block"] is False
+
+
 def test_single_market_risk_off_is_prior_not_block(monkeypatch):
     class FakeMarketRegime:
         def refresh_if_needed(self):
