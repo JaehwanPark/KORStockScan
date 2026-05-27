@@ -23,6 +23,7 @@ from src.engine.automation.dual_candidate_review import (
     proposal_counts,
     with_evidence_authority_forbidden_uses,
 )
+from src.engine.automation.producer_gap_source_bundle import report_paths as producer_gap_source_bundle_paths
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.utils.constants import TRADING_RULES
 from src.utils.jsonl_io import iter_jsonl
@@ -36,6 +37,8 @@ AI_REVIEW_SCHEMA_NAME = "producer_gap_discovery_ai_review_v1"
 AI_REVIEWER_NAME = "producer_gap_discovery_ai_review"
 AI_REVIEW_MODEL = str(getattr(TRADING_RULES, "GPT_DEEP_MODEL", "gpt-5.4") or "gpt-5.4")
 AI_REVIEW_DEFAULT_PROVIDER = "openai"
+AI_REVIEW_REASONING_EFFORT = os.getenv("KORSTOCKSCAN_PRODUCER_GAP_DISCOVERY_AI_REASONING_EFFORT", "low")
+AI_REVIEW_TIMEOUT_SEC = int(os.getenv("KORSTOCKSCAN_PRODUCER_GAP_DISCOVERY_AI_TIMEOUT_SEC", "90") or "90")
 POST_SELL_DIR = PROJECT_ROOT / "data" / "post_sell"
 
 FORBIDDEN_USES = [
@@ -209,6 +212,7 @@ def _source_paths(target_date: str) -> dict[str, Path]:
         / "swing_lifecycle_bucket_discovery"
         / f"swing_lifecycle_bucket_discovery_{target_date}.json",
         "swing_lifecycle_audit": REPORT_DIR / "swing_lifecycle_audit" / f"swing_lifecycle_audit_{target_date}.json",
+        "producer_gap_source_bundle": producer_gap_source_bundle_paths(target_date)[0],
     }
 
 
@@ -1447,14 +1451,14 @@ def _call_openai_ai_review(context: dict[str, Any]) -> tuple[Any | None, dict[st
                 instructions=_build_ai_review_instructions(),
                 input=prompt,
                 text={"format": build_openai_response_text_format(AI_REVIEW_SCHEMA_NAME), "verbosity": "low"},
-                reasoning={"effort": "high"},
+                reasoning={"effort": AI_REVIEW_REASONING_EFFORT},
                 store=False,
                 metadata={
                     "endpoint_name": AI_REVIEWER_NAME,
                     "schema_name": AI_REVIEW_SCHEMA_NAME,
                     "report_type": REPORT_TYPE,
                 },
-                timeout=180,
+                timeout=AI_REVIEW_TIMEOUT_SEC,
             )
             raw_text = _extract_openai_response_text(response)
             usage = getattr(response, "usage", None)
@@ -1466,6 +1470,8 @@ def _call_openai_ai_review(context: dict[str, Any]) -> tuple[Any | None, dict[st
                 "attempted_key_count": len(api_keys),
                 "model": AI_REVIEW_MODEL,
                 "schema_name": AI_REVIEW_SCHEMA_NAME,
+                "reasoning_effort": AI_REVIEW_REASONING_EFFORT,
+                "timeout_sec": AI_REVIEW_TIMEOUT_SEC,
                 "input_context_hash": _text_hash(context),
                 "input_context_chars": len(prompt),
                 "output_chars": len(raw_text),
@@ -1482,6 +1488,8 @@ def _call_openai_ai_review(context: dict[str, Any]) -> tuple[Any | None, dict[st
         "status": "unavailable",
         "reason": "all OpenAI attempts failed",
         "model": AI_REVIEW_MODEL,
+        "reasoning_effort": AI_REVIEW_REASONING_EFFORT,
+        "timeout_sec": AI_REVIEW_TIMEOUT_SEC,
         "errors": errors[-3:],
     }
 
@@ -1602,6 +1610,12 @@ def _order_from_candidate(
     candidate_id = str(candidate.get("candidate_id") or "unknown")
     pattern_type = str(candidate.get("pattern_type") or "producer_gap")
     priority = str(review.get("priority") or candidate.get("priority") or "high")
+    implementation_status = candidate.get("implementation_status")
+    implementation_provenance = (
+        candidate.get("implementation_provenance")
+        if isinstance(candidate.get("implementation_provenance"), dict)
+        else {}
+    )
     return {
         "order_id": f"order_{REPORT_TYPE}_{_slug(candidate_id)}",
         "title": f"Implement missing producer: {pattern_type}",
@@ -1642,6 +1656,75 @@ def _order_from_candidate(
         "deterministic_proposal": candidate.get("deterministic_proposal"),
         "ai_tier2_proposal": ai_tier2_proposal or {},
         "comparative_review": comparative_review or {},
+        "implementation_status": implementation_status,
+        "implementation_provenance": implementation_provenance,
+        "implementation_checks": candidate.get("implementation_checks") or [],
+    }
+
+
+def _source_bundle_by_pattern(bundle: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    sections = bundle.get("sections") if isinstance(bundle.get("sections"), list) else []
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        pattern_type = str(section.get("pattern_type") or section.get("section_id") or "").strip()
+        if pattern_type:
+            out[pattern_type] = section
+    return out
+
+
+def _apply_source_bundle_implementation(
+    candidate: dict[str, Any],
+    source_bundle_sections: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    pattern_type = str(candidate.get("pattern_type") or "").strip()
+    normalized_pattern = pattern_type.removesuffix("_missing")
+    aliases = {
+        "sim_scale_in_counterfactual_gap": "sim_scale_in_would_add_counterfactual",
+        "limit_up_plateau_breakdown_exit": "limit_up_plateau_breakdown_exit_counterfactual",
+        "sim_exit_plateau_breakdown_gap": "sim_exit_plateau_breakdown_counterfactual",
+        "sim_holding_runner_gap": "sim_holding_runner_counterfactual",
+        "sim_stop_recovery_gap": "sim_stop_recovery_counterfactual",
+    }
+    section = (
+        source_bundle_sections.get(pattern_type)
+        or source_bundle_sections.get(normalized_pattern)
+        or source_bundle_sections.get(aliases.get(normalized_pattern, ""))
+    )
+    if not section:
+        return candidate
+    status = str(section.get("source_quality_status") or "").strip()
+    if status == "source_field_missing":
+        return {
+            **candidate,
+            "producer_source_bundle_status": status,
+            "producer_source_bundle_missing_fields": section.get("missing_fields") or [],
+        }
+    implementation_status = "implemented" if status == "implemented" else "implemented_but_hold_sample"
+    return {
+        **candidate,
+        "implementation_status": implementation_status,
+        "implementation_checks": [
+            "producer_gap_source_bundle section exists",
+            "section has source_paths and join_keys contract",
+            "runtime_effect=false",
+            "allowed_runtime_apply=false",
+        ],
+        "implementation_provenance": {
+            "implementation_type": "source_only_producer_gap_source_bundle",
+            "source_report_type": "producer_gap_source_bundle",
+            "section_id": section.get("section_id"),
+            "pattern_type": section.get("pattern_type"),
+            "source_quality_status": status,
+            "sample_count": section.get("sample_count"),
+            "source_paths": section.get("source_paths") or [],
+            "join_keys": section.get("join_keys") or [],
+            "missing_fields": section.get("missing_fields") or [],
+            "runtime_effect": section.get("runtime_effect"),
+            "allowed_runtime_apply": section.get("allowed_runtime_apply"),
+        },
+        "producer_source_bundle_status": status,
     }
 
 
@@ -1659,6 +1742,10 @@ def build_producer_gap_discovery_report(
         else os.getenv("KORSTOCKSCAN_PRODUCER_GAP_DISCOVERY_AI_PROVIDER", AI_REVIEW_DEFAULT_PROVIDER)
     ).strip().lower() or "none"
     candidates, context = _deterministic_candidates(target_date, rolling_sim_scan=rolling_sim_scan)
+    source_bundle_path, _ = producer_gap_source_bundle_paths(target_date)
+    source_bundle = _load_json(source_bundle_path)
+    source_bundle_sections = _source_bundle_by_pattern(source_bundle) if source_bundle else {}
+    candidates = [_apply_source_bundle_implementation(candidate, source_bundle_sections) for candidate in candidates]
     provider_status: dict[str, Any] = {
         "provider": resolved_provider,
         "status": "disabled" if resolved_provider in {"none", "off", "false", "0"} else "not_called",

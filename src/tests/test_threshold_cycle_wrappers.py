@@ -103,6 +103,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     observation_audit_idx = script.index("src.engine.observation_source_quality_audit")
     perf_source_idx = script.index("src.engine.codebase_performance_workorder_report")
     time_window_idx = script.index("src.engine.automation.time_window_regime_counterfactual")
+    producer_gap_source_idx = script.index("src.engine.automation.producer_gap_source_bundle")
     producer_gap_idx = script.index("src.engine.automation.producer_gap_discovery")
     stage_hook_idx = script.index("src.engine.automation.stage_hook_workorder_discovery")
     stage_hook_scaffold_idx = script.index("src.engine.automation.stage_hook_runtime_scaffold")
@@ -128,6 +129,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         < observation_audit_idx
         < perf_source_idx
         < time_window_idx
+        < producer_gap_source_idx
         < producer_gap_idx
         < stage_hook_idx
         < stage_hook_scaffold_idx
@@ -351,10 +353,11 @@ def test_manual_calibration_wrapper_limits_resource_pressure():
     assert "threshold_cycle_calibration_intraday_cron.log" not in installer
 
 
-def test_threshold_cycle_cron_restarts_bot_around_postclose():
+def test_threshold_cycle_cron_stops_bot_for_postclose_without_restart():
     script = Path("deploy/install_threshold_cycle_cron.sh").read_text(encoding="utf-8")
 
-    assert "THRESHOLD_CYCLE_POSTCLOSE_BOT_ACTION=restart" in script
+    assert "THRESHOLD_CYCLE_POSTCLOSE_BOT_ACTION=stop" in script
+    assert "THRESHOLD_CYCLE_POSTCLOSE_BOT_ACTION=restart" not in script
     assert "THRESHOLD_CYCLE_POSTCLOSE" in script
 
 

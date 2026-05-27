@@ -145,6 +145,10 @@ def _candidate_from_bucket(section_name: str, bucket: dict[str, Any]) -> dict[st
         "source_quality_gate": bucket.get("source_quality_gate"),
         "joined_sample": bucket.get("joined_sample"),
         "sample_count": bucket.get("sample_count"),
+        "source_workorder_id": bucket.get("workorder_id"),
+        "parent_bucket_id": _bucket_id(stage, bucket_type, bucket_key),
+        "implementation_status": bucket.get("implementation_status"),
+        "implementation_provenance": bucket.get("implementation_provenance") if isinstance(bucket.get("implementation_provenance"), dict) else {},
         "source_quality_adjusted_ev_pct": bucket.get("source_quality_adjusted_ev_pct"),
         "decision_authority": DECISION_AUTHORITY,
         "runtime_effect": False,
@@ -211,6 +215,8 @@ def _normalize_explicit_workorder(item: dict[str, Any]) -> dict[str, Any]:
     return {
         **item,
         **_workorder_contract_fields(),
+        "source_workorder_id": item.get("source_workorder_id") or item.get("workorder_id"),
+        "parent_bucket_id": item.get("parent_bucket_id") or item.get("bucket_id"),
     }
 
 
@@ -770,9 +776,13 @@ def build_swing_lifecycle_bucket_discovery(
             {
                 "workorder_id": f"swing_bucket_discovery_{_slug(item.get('bucket_id'))}",
                 "bucket_id": item.get("bucket_id"),
+                "source_workorder_id": item.get("source_workorder_id") or item.get("workorder_id"),
+                "parent_bucket_id": item.get("parent_bucket_id") or item.get("bucket_id"),
                 "classification_state": item.get("classification_state"),
                 "reason": "swing_ldm_bucket_contract_or_source_quality_gap",
                 "target_subsystem": "swing_lifecycle_bucket_discovery",
+                "implementation_status": item.get("implementation_status"),
+                "implementation_provenance": item.get("implementation_provenance") or {},
                 **_workorder_contract_fields(),
             }
             for item in code_patch

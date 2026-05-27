@@ -992,6 +992,13 @@ PY
     "time_window_regime_counterfactual"
 fi
 if [ "$RUN_PRODUCER_GAP_DISCOVERY" = "true" ] || [ "$RUN_PRODUCER_GAP_DISCOVERY" = "1" ]; then
+  wait_for_postclose_resources "producer_gap_source_bundle"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.producer_gap_source_bundle \
+    --date "$TARGET_DATE"
+  wait_for_report_artifact \
+    "$PROJECT_DIR/data/report/producer_gap_source_bundle/producer_gap_source_bundle_${TARGET_DATE}.json" \
+    "$PROJECT_DIR/data/report/producer_gap_source_bundle/producer_gap_source_bundle_${TARGET_DATE}.md" \
+    "producer_gap_source_bundle"
   wait_for_postclose_resources "producer_gap_discovery"
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.producer_gap_discovery \
     --date "$TARGET_DATE" \

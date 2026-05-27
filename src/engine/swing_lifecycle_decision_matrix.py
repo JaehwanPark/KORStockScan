@@ -6,7 +6,7 @@ import argparse
 import json
 import math
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable
@@ -52,6 +52,28 @@ PRIMARY_METRICS = [
     "source_quality_adjusted_ev_pct",
 ]
 
+SOURCE_DIMENSION_FIELD_MAP = {
+    "holding_exit_bucket_attribution": {
+        "mfe_bucket": "label_fields.mfe_pct",
+        "mae_bucket": "label_fields.mae_pct",
+        "held_bucket": "label_fields.held_sec",
+        "exit_rule": "label_fields.exit_reason",
+        "market_regime": "runtime_features.panic_context|runtime_features.market_regime",
+        "selection_arm": "runtime_features.entry_policy",
+        "sizing_arm": "runtime_features.sizing_policy",
+        "exit_arm": "runtime_features.exit_policy",
+        "sector": "runtime_features.sector",
+        "theme": "runtime_features.theme_tags",
+    },
+    "discovery_arm_attribution": {
+        "selection_arm": "runtime_features.entry_policy",
+        "sizing_arm": "runtime_features.sizing_policy",
+        "exit_arm": "runtime_features.exit_policy",
+        "sector": "runtime_features.sector",
+        "theme": "runtime_features.theme_tags",
+    },
+}
+
 
 def _date_text(value: str | date | datetime | None) -> str:
     if value is None:
@@ -82,6 +104,49 @@ def _as_bool(value: Any, default: bool = False) -> bool:
     if value is None:
         return default
     return str(value).strip().lower() in {"1", "true", "yes", "y"}
+
+
+def _nested_present(row: dict[str, Any], path: str) -> bool:
+    current: Any = row
+    for part in path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return False
+        current = current.get(part)
+    return current not in (None, "", [], {})
+
+
+def _field_coverage(rows: list[dict[str, Any]], paths: str) -> dict[str, Any]:
+    options = [part.strip() for part in str(paths or "").split("|") if part.strip()]
+    present = 0
+    for row in rows:
+        if any(_nested_present(row, option) for option in options):
+            present += 1
+    total = len(rows)
+    return {
+        "paths": options,
+        "present_count": present,
+        "total_count": total,
+        "coverage_ratio": round(present / total, 6) if total else 0.0,
+    }
+
+
+def _source_field_coverage(bucket_type: str, rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {
+        dimension: _field_coverage(rows, paths)
+        for dimension, paths in SOURCE_DIMENSION_FIELD_MAP.get(bucket_type, {}).items()
+    }
+
+
+def _unknown_reason_counts(bucket_key: str, coverage: dict[str, dict[str, Any]]) -> dict[str, int]:
+    counts: Counter[str] = Counter()
+    parts = [part.strip().lower() for part in str(bucket_key or "").split("|")]
+    for part in parts:
+        if part in {"", "-", "missing", "held_missing", "unknown", "source_unknown"} or "missing" in part:
+            counts[f"bucket_value_{part or 'blank'}"] += 1
+    for dimension, info in coverage.items():
+        if int(info.get("present_count") or 0) <= 0:
+            counts[f"source_field_missing:{dimension}"] += 1
+    return dict(counts)
 
 
 def _first(record: dict[str, Any], *keys: str, default: Any = None) -> Any:
@@ -364,6 +429,28 @@ def _bucket_summary(bucket_type: str, bucket_key: str, rows: list[dict[str, Any]
         route = "source_only_keep_collecting"
     else:
         route = "sim_auto_approved"
+    field_coverage = _source_field_coverage(bucket_type, rows)
+    unknown_counts = _unknown_reason_counts(bucket_key, field_coverage)
+    missing_dimensions = [
+        dimension
+        for dimension, info in field_coverage.items()
+        if isinstance(info, dict) and int(info.get("present_count") or 0) <= 0
+    ]
+    implementation_status = (
+        "implemented_source_quality_contract_waiting_sample"
+        if field_coverage and (source_gate == "source_quality_blocker" or missing_dimensions)
+        else None
+    )
+    implementation_provenance = {
+        "implementation_type": "swing_ldm_source_field_coverage_contract",
+        "source_report_type": REPORT_TYPE,
+        "source_field_coverage": field_coverage,
+        "unknown_reason_counts": unknown_counts,
+        "missing_dimensions": missing_dimensions,
+        "sample_status": "waiting_source_field_sample" if missing_dimensions else "source_fields_available",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    } if implementation_status else {}
     return {
         "bucket_type": bucket_type,
         "bucket_key": bucket_key,
@@ -372,6 +459,8 @@ def _bucket_summary(bucket_type: str, bucket_key: str, rows: list[dict[str, Any]
         "joined_sample": joined,
         "source_quality_gate": source_gate,
         "source_quality_counts": dict(source_quality_counts),
+        "source_field_coverage": field_coverage,
+        "unknown_reason_counts": unknown_counts,
         "equal_weight_avg_profit_pct": round(avg, 6),
         "notional_weighted_ev_pct": round(weighted, 6),
         "source_quality_adjusted_ev_pct": round(adjusted, 6),
@@ -382,6 +471,8 @@ def _bucket_summary(bucket_type: str, bucket_key: str, rows: list[dict[str, Any]
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "runtime_effect": False,
+        "implementation_status": implementation_status,
+        "implementation_provenance": implementation_provenance,
     }
 
 
@@ -434,6 +525,7 @@ def _code_workorders(stage: str, buckets: list[dict[str, Any]], *, limit: int = 
     for item in buckets:
         if item.get("recommended_route") not in {"code_patch_required"}:
             continue
+        implementation_status = item.get("implementation_status")
         out.append(
             {
                 "bucket_type": item.get("bucket_type"),
@@ -448,6 +540,8 @@ def _code_workorders(stage: str, buckets: list[dict[str, Any]], *, limit: int = 
                 "actual_order_submitted": False,
                 "broker_order_forbidden": True,
                 "forbidden_uses": FORBIDDEN_USES,
+                "implementation_status": implementation_status,
+                "implementation_provenance": item.get("implementation_provenance") or {},
             }
         )
     return out[:limit]

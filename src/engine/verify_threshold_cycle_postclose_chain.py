@@ -871,7 +871,12 @@ def _producer_gap_discovery_handoff_status(
         missing.append("producer_gap_discovery_ai_review_not_parsed")
     if audit_status != "pass":
         missing.append("producer_gap_discovery_ai_audit_not_pass")
-    if ai_provider != "openai" or ai_provider_status != "success" or not ai_model:
+    provider_review_present = (
+        ai_provider == "openai"
+        and ai_provider_status in {"success", "provided_response"}
+        and bool(ai_model)
+    )
+    if not provider_review_present:
         missing.append("producer_gap_discovery_tier2_provider_review_missing")
     if missing_order_ids:
         missing.append("code_improvement_workorder_producer_gap_orders_missing")

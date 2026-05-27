@@ -186,6 +186,10 @@ LATENCY_SUBMIT_FIELDS = (
 DIAGNOSTIC_CONTRACT_FIELDS = (
     "metric_role",
     "decision_authority",
+    "window_policy",
+    "sample_floor",
+    "primary_decision_metric",
+    "source_quality_gate",
     "runtime_effect",
     "forbidden_uses",
 )
@@ -195,6 +199,35 @@ REAL_EXECUTION_DIAGNOSTIC_FIELDS = (
     "actual_order_submitted",
     "broker_order_forbidden",
 )
+
+ENTRY_SUBMIT_SOURCE_CONTRACT_FIELDS = (
+    "broker_order_submitted",
+    "broker_order_no",
+    "broker_receipt_status",
+    "broker_receipt_reason",
+    "requested_qty",
+    "filled_qty",
+    "remaining_qty",
+    "fill_quality",
+    "post_submit_state",
+    "cancel_requested",
+    "cancel_result",
+    "position_rebased_after_fill",
+    "telegram_audience",
+    "telegram_event_type",
+    "telegram_sent_after_broker_submit",
+    "strategy_domain",
+    "source_namespace",
+    "blocker_namespace",
+)
+
+HIGH_VOLUME_DIAGNOSTIC_STAGE_ROLES = {
+    "blocked_zero_qty": "funnel_count",
+    "initial_entry_qty_cap_applied": "funnel_count",
+    "swing_probe_state_restored": "ops_volume_diagnostic",
+    "preset_exit_setup": "ops_volume_diagnostic",
+    "swing_same_symbol_loss_reentry_cooldowns_restored": "ops_volume_diagnostic",
+}
 
 SIM_SUBMIT_GUARD_STAGE_ACTIONS = {
     "scalp_sim_pre_submit_liquidity_guard_would_block": (
@@ -270,7 +303,7 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         decision_authority="source_quality_only_known_pre_fix_gap",
     ),
     "order_bundle_submitted": StageContract(
-        required_fields=LATENCY_SUBMIT_FIELDS,
+        required_fields=(*LATENCY_SUBMIT_FIELDS, *ENTRY_SUBMIT_SOURCE_CONTRACT_FIELDS),
         decision_authority="source_quality_only_known_pre_fix_gap",
     ),
     "scalp_sim_entry_armed": StageContract(required_fields=SCALP_SIM_PROVENANCE_FIELDS),
@@ -422,6 +455,13 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         ),
         decision_authority="same_symbol_loss_reentry_guard_observation_only",
     ),
+    **{
+        stage: StageContract(
+            required_fields=DIAGNOSTIC_CONTRACT_FIELDS,
+            decision_authority="source_quality_only",
+        )
+        for stage in HIGH_VOLUME_DIAGNOSTIC_STAGE_ROLES
+    },
 }
 
 
@@ -477,6 +517,12 @@ def _stage_name(row: dict[str, Any]) -> str:
 
 def _normalized_fields_for_contract(stage: str, fields: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(fields or {})
+    contract = STAGE_CONTRACTS.get(stage)
+    if contract and "metric_role" in contract.required_fields and stage != "swing_probe_state_persisted":
+        normalized.setdefault("window_policy", "same_day_source_quality_audit")
+        normalized.setdefault("sample_floor", contract.min_sample)
+        normalized.setdefault("primary_decision_metric", "source_quality_gate")
+        normalized.setdefault("source_quality_gate", "contract_fields_present")
     if stage == "ai_confirmed":
         for field in AI_SOURCE_FIELDS:
             if not _is_present(normalized.get(field)):
@@ -493,9 +539,57 @@ def _normalized_fields_for_contract(stage: str, fields: dict[str, Any]) -> dict[
                 normalized[field] = "unknown_pre_contract"
         if not _is_present(normalized.get("latency_canary_reason")):
             normalized["latency_canary_reason"] = "not_applicable_or_pre_contract"
+    if stage == "order_bundle_submitted":
+        submitted = str(
+            normalized.get("actual_order_submitted")
+            if _is_present(normalized.get("actual_order_submitted"))
+            else normalized.get("order_submitted")
+            if _is_present(normalized.get("order_submitted"))
+            else normalized.get("broker_order_submitted")
+        ).strip().lower()
+        submitted_bool = submitted not in {"", "0", "false", "none", "no", "unknown_pre_contract"}
+        normalized.setdefault("broker_order_submitted", submitted_bool)
+        normalized.setdefault(
+            "broker_order_no",
+            normalized.get("order_no")
+            or normalized.get("ord_no")
+            or normalized.get("broker_order_id")
+            or normalized.get("broker_order_no")
+            or "unknown_pre_contract",
+        )
+        if not _is_present(normalized.get("broker_receipt_status")):
+            normalized["broker_receipt_status"] = (
+                "submitted_receipt_observed"
+                if submitted_bool and normalized.get("broker_order_no") != "unknown_pre_contract"
+                else "submitted_receipt_unknown"
+                if submitted_bool
+                else "not_submitted"
+            )
+        normalized.setdefault(
+            "broker_receipt_reason",
+            normalized.get("reason") or normalized.get("latency_canary_reason") or "source_contract_backfill",
+        )
+        normalized.setdefault("requested_qty", normalized.get("qty") or normalized.get("order_qty") or "unknown_pre_contract")
+        normalized.setdefault("filled_qty", normalized.get("filled_qty") or "unknown_pre_contract")
+        normalized.setdefault("remaining_qty", normalized.get("remaining_qty") or "unknown_pre_contract")
+        normalized.setdefault("fill_quality", normalized.get("fill_status") or "UNKNOWN")
+        normalized.setdefault("post_submit_state", normalized.get("order_state") or "submitted_or_pending")
+        normalized.setdefault("cancel_requested", False)
+        normalized.setdefault("cancel_result", "not_requested")
+        normalized.setdefault("position_rebased_after_fill", False)
+        normalized.setdefault("telegram_audience", normalized.get("telegram_audience") or "all")
+        normalized.setdefault("telegram_event_type", normalized.get("telegram_event_type") or "buy_post_submit")
+        normalized.setdefault("telegram_sent_after_broker_submit", submitted_bool)
+        normalized.setdefault("strategy_domain", normalized.get("strategy_domain") or normalized.get("strategy") or "scalping")
+        normalized.setdefault("source_namespace", normalized.get("source_namespace") or "scalping_entry_submit")
+        normalized.setdefault("blocker_namespace", normalized.get("blocker_namespace") or "entry_submit")
     if stage in {"holding_started", "scale_in_executed"}:
         normalized.setdefault("metric_role", "execution_quality_real_only")
         normalized.setdefault("decision_authority", "broker_receipt_observation_only")
+        normalized.setdefault("window_policy", "real_execution_event")
+        normalized.setdefault("sample_floor", 1)
+        normalized.setdefault("primary_decision_metric", "source_quality_gate")
+        normalized.setdefault("source_quality_gate", "broker_receipt_observation_only")
         normalized.setdefault("runtime_effect", False)
         normalized.setdefault(
             "forbidden_uses",
@@ -506,6 +600,10 @@ def _normalized_fields_for_contract(stage: str, fields: dict[str, Any]) -> dict[
     if stage == "same_symbol_loss_reentry_cooldown":
         normalized.setdefault("metric_role", "safety_veto")
         normalized.setdefault("decision_authority", "same_symbol_loss_reentry_guard_observation_only")
+        normalized.setdefault("window_policy", "same_symbol_guard_event")
+        normalized.setdefault("sample_floor", 1)
+        normalized.setdefault("primary_decision_metric", "source_quality_gate")
+        normalized.setdefault("source_quality_gate", "same_symbol_loss_reentry_guard_observation_only")
         normalized.setdefault("runtime_effect", False)
         normalized.setdefault(
             "forbidden_uses",
@@ -515,6 +613,18 @@ def _normalized_fields_for_contract(stage: str, fields: dict[str, Any]) -> dict[
         normalized.setdefault("broker_order_forbidden", False)
         normalized.setdefault("source_stage", "sell_order_sent")
         normalized.setdefault("guard_family", "same_symbol_loss_reentry_guard")
+    if stage in HIGH_VOLUME_DIAGNOSTIC_STAGE_ROLES:
+        normalized.setdefault("metric_role", HIGH_VOLUME_DIAGNOSTIC_STAGE_ROLES[stage])
+        normalized.setdefault("decision_authority", "source_quality_only")
+        normalized.setdefault("window_policy", "same_day_high_volume_diagnostic")
+        normalized.setdefault("sample_floor", 1)
+        normalized.setdefault("primary_decision_metric", "funnel_count")
+        normalized.setdefault("source_quality_gate", "diagnostic_contract_label_present")
+        normalized.setdefault("runtime_effect", False)
+        normalized.setdefault(
+            "forbidden_uses",
+            "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
+        )
     if stage == "loss_fallback_probe" and not _is_present(normalized.get("fallback_reason")):
         fallback_candidate = str(normalized.get("fallback_candidate") or "").strip().lower() in {"true", "1", "yes"}
         if not fallback_candidate:

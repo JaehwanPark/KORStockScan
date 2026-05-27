@@ -34,6 +34,12 @@ STAGE_HOOK_RUNTIME_SCAFFOLD_DIR = REPORT_DIR / "stage_hook_runtime_scaffold"
 CODE_IMPROVEMENT_WORKORDER_DIR = PROJECT_ROOT / "docs" / "code-improvement-workorders"
 CODE_IMPROVEMENT_WORKORDER_REPORT_DIR = REPORT_DIR / "code_improvement_workorder"
 WORKORDER_SCHEMA_VERSION = 1
+IMPLEMENTED_STATUSES = {
+    "implemented",
+    "implemented_but_hold_sample",
+    "implemented_but_waiting_sample",
+    "implemented_source_quality_contract_waiting_sample",
+}
 
 
 DECISION_RANK = {
@@ -257,6 +263,142 @@ def _sanitize_producer_gap_order(order: dict[str, Any]) -> dict[str, Any]:
     return sanitized
 
 
+def _is_implemented_status(value: Any) -> bool:
+    return str(value or "").strip() in IMPLEMENTED_STATUSES
+
+
+def _entry_submit_drought_implementation_marker(contract: dict[str, Any]) -> dict[str, Any]:
+    required = contract.get("required_downstream") if isinstance(contract.get("required_downstream"), list) else []
+    if not {
+        "code_improvement_workorder",
+        "lifecycle_decision_matrix.submit_bucket_attribution",
+        "threshold_cycle_ev_report",
+        "runtime_approval_summary",
+        "postclose_verifier",
+    }.issubset({str(item) for item in required}):
+        return {}
+    return {
+        "implementation_status": "implemented",
+        "implementation_checks": [
+            "buy_funnel_sentinel emits entry_submit_drought_contract",
+            "code_improvement_workorder selects drought and weak-contract follow-ups",
+            "required_downstream includes LDM, EV, runtime summary, and verifier consumers",
+            "runtime_effect=false",
+            "allowed_runtime_apply=false",
+        ],
+        "implementation_provenance": {
+            "implementation_type": "source_only_report_provenance_handoff",
+            "source_report_type": "buy_funnel_sentinel",
+            "required_downstream": required,
+            "weak_contract_matches": contract.get("weak_contract_matches") or [],
+            "runtime_effect": contract.get("runtime_effect"),
+            "allowed_runtime_apply": contract.get("allowed_runtime_apply"),
+            "broker_order_submit_allowed": contract.get("broker_order_submit_allowed"),
+            "forbidden_uses": contract.get("forbidden_uses") or [],
+        },
+    }
+
+
+def _entry_submit_weak_contract_implementation_marker(
+    *,
+    gap_type: str,
+    contract: dict[str, Any],
+) -> dict[str, Any]:
+    required = contract.get("required_downstream") if isinstance(contract.get("required_downstream"), list) else []
+    if "lifecycle_decision_matrix.submit_bucket_attribution" not in {str(item) for item in required}:
+        return {}
+    return {
+        "implementation_status": "implemented_but_waiting_sample",
+        "implementation_checks": [
+            "buy_funnel_sentinel weak contract workorder is source-only",
+            "lifecycle_decision_matrix submit_bucket_attribution is the downstream consumer",
+            f"weak contract gap={gap_type}",
+            "runtime_effect=false",
+            "allowed_runtime_apply=false",
+        ],
+        "implementation_provenance": {
+            "implementation_type": "entry_submit_source_contract_waiting_real_sample",
+            "source_report_type": "buy_funnel_sentinel",
+            "downstream_consumer": "lifecycle_decision_matrix.submit_bucket_attribution",
+            "gap_type": gap_type,
+            "weak_contract_matches": contract.get("weak_contract_matches") or [],
+            "sample_status": "waiting_real_broker_or_fill_sample",
+            "runtime_effect": contract.get("runtime_effect"),
+            "allowed_runtime_apply": contract.get("allowed_runtime_apply"),
+        },
+    }
+
+
+def _sanitize_pattern_lab_ai_review_order(
+    order: dict[str, Any],
+    *,
+    swing_lab_automation: dict[str, Any],
+) -> dict[str, Any]:
+    sanitized = {**order, "source_report_type": "pattern_lab_ai_review"}
+    if sanitized.get("implementation_status") == "implemented":
+        return sanitized
+    if str(sanitized.get("improvement_type") or "") != "source_quality_gap":
+        return sanitized
+    ev_summary = (
+        swing_lab_automation.get("ev_report_summary")
+        if isinstance(swing_lab_automation.get("ev_report_summary"), dict)
+        else {}
+    )
+    data_quality = (
+        swing_lab_automation.get("data_quality")
+        if isinstance(swing_lab_automation.get("data_quality"), dict)
+        else {}
+    )
+    ofi_qi_quality = (
+        data_quality.get("ofi_qi_quality")
+        if isinstance(data_quality.get("ofi_qi_quality"), dict)
+        else {}
+    )
+    blocked = (
+        ev_summary.get("source_quality_blocked_families")
+        if isinstance(ev_summary.get("source_quality_blocked_families"), list)
+        else []
+    )
+    reason_counts = (
+        ofi_qi_quality.get("reason_counts")
+        if isinstance(ofi_qi_quality.get("reason_counts"), dict)
+        else {}
+    )
+    if not blocked or not reason_counts:
+        return sanitized
+    sanitized["implementation_status"] = "implemented"
+    sanitized["implementation_checks"] = [
+        "swing_pattern_lab_automation exposes source_quality_blocked_families",
+        "swing_pattern_lab_automation exposes ofi_qi_quality.reason_counts",
+        "pattern_lab_ai_review routes invalid micro context as source_quality_gap",
+        "runtime_effect=false",
+        "allowed_runtime_apply=false",
+    ]
+    sanitized["implementation_provenance"] = {
+        "implementation_type": "source_quality_report_provenance",
+        "source_report_type": "swing_pattern_lab_automation",
+        "blocked_family_count": len(blocked),
+        "blocked_families": [
+            {
+                "family": item.get("family"),
+                "stage": item.get("stage"),
+                "source_quality_blockers": item.get("source_quality_blockers") or [],
+                "invalid_micro_context_unique_record_count": item.get(
+                    "invalid_micro_context_unique_record_count"
+                ),
+                "runtime_effect": item.get("runtime_effect"),
+            }
+            for item in blocked[:8]
+            if isinstance(item, dict)
+        ],
+        "ofi_qi_reason_counts": reason_counts,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "decision_authority": ev_summary.get("decision_authority"),
+    }
+    return sanitized
+
+
 def _stage_hook_scaffold_by_name(report: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {
         str(item.get("hook_name")): item
@@ -425,22 +567,20 @@ def _classify_order(
             ),
         )
 
-    if (
-        str(order.get("implementation_status") or "").strip() == "implemented"
-        and order.get("source_report_type") != "codebase_performance_workorder"
-    ):
+    if _is_implemented_status(order.get("implementation_status")) and order.get("source_report_type") != "codebase_performance_workorder":
+        status = str(order.get("implementation_status") or "").strip()
         return ClassifiedOrder(
             order=order,
             decision="attach_existing_family",
             reason=(
-                "instrumentation/report/provenance implementation is already present; keep the order as "
+                f"instrumentation/report/provenance implementation status is {status}; keep the order as "
                 "existing-family source evidence instead of re-implementing"
             ),
             mapped_family=mapped_family or str(order.get("threshold_family") or "").strip() or None,
             route="existing_family",
             confidence=confidence,
             automation_reentry=(
-                "Next postclose workorder should preserve implementation_status=implemented and use the "
+                f"Next postclose workorder should preserve implementation_status={status} and use the "
                 "source metrics as provenance only."
             ),
         )
@@ -457,7 +597,7 @@ def _classify_order(
         )
 
     if order.get("source_report_type") == "codebase_performance_workorder":
-        if str(order.get("implementation_status") or "").strip() == "implemented":
+        if _is_implemented_status(order.get("implementation_status")):
             return ClassifiedOrder(
                 order=order,
                 decision="attach_existing_family",
@@ -1166,6 +1306,7 @@ def _entry_post_submit_weak_contract_orders(
                 "priority": 1,
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
+                **_entry_submit_weak_contract_implementation_marker(gap_type=gap_type, contract=contract),
                 "strategy_effect": gap_type,
                 "data_quality_effect": "post_entry_contract_gap",
                 "tuning_axis_effect": "source_quality_only",
@@ -1782,6 +1923,7 @@ def _buy_funnel_sentinel_followup_orders(report: dict[str, Any]) -> list[dict[st
         if isinstance(report.get("entry_submit_drought_contract"), dict)
         else {}
     )
+    implementation_marker = _entry_submit_drought_implementation_marker(contract)
     weak_contract_matches = (
         contract.get("weak_contract_matches") if isinstance(contract.get("weak_contract_matches"), list) else []
     )
@@ -1810,6 +1952,7 @@ def _buy_funnel_sentinel_followup_orders(report: dict[str, Any]) -> list[dict[st
             "priority": 0,
             "runtime_effect": False,
             "allowed_runtime_apply": False,
+            **implementation_marker,
             "strategy_effect": "entry_submit_drought_handoff",
             "data_quality_effect": "funnel_root_cause_split_required",
             "tuning_axis_effect": "auto_surface_to_ldm_and_workorder",
@@ -2279,12 +2422,15 @@ def _swing_lifecycle_matrix_followup_orders(report: dict[str, Any]) -> list[dict
                     "priority": 2,
                     "runtime_effect": False,
                     "allowed_runtime_apply": False,
+                    "implementation_status": item.get("implementation_status"),
+                    "implementation_provenance": item.get("implementation_provenance") or {},
                     "expected_ev_effect": "Close Swing LDM bucket source-quality gaps while preserving sim-only authority.",
                     "evidence": [
                         f"section={section_name}",
                         f"bucket_type={item.get('bucket_type')}",
                         f"bucket_key={item.get('bucket_key')}",
                         f"reason={item.get('reason')}",
+                        f"implementation_status={item.get('implementation_status') or '-'}",
                         "decision_authority=swing_ldm_source_only",
                         "actual_order_submitted=false",
                     ],
@@ -2335,6 +2481,8 @@ def _swing_lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) ->
                     f"ai_tier2_selected_source={(item.get('comparative_review') or {}).get('selected_source') if isinstance(item.get('comparative_review'), dict) else '-'}",
                     f"classification_state={item.get('classification_state')}",
                     f"reason={item.get('reason')}",
+                    f"source_workorder_id={item.get('source_workorder_id') or '-'}",
+                    f"parent_bucket_id={item.get('parent_bucket_id') or '-'}",
                     "decision_authority=swing_ldm_bucket_discovery_sim_auto",
                     "allowed_runtime_apply=false",
                 ],
@@ -2487,7 +2635,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         if isinstance(item, dict)
     ]
     pattern_lab_ai_review_orders = [
-        {**item, "source_report_type": "pattern_lab_ai_review"}
+        _sanitize_pattern_lab_ai_review_order(item, swing_lab_automation=swing_lab_automation)
         for item in (pattern_lab_ai_review.get("code_improvement_orders") or [])
         if isinstance(item, dict)
     ]
@@ -2644,7 +2792,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         selected_route_counts[route] = selected_route_counts.get(route, 0) + 1
         if item.order.get("runtime_effect") is False:
             selected_runtime_effect_false_count += 1
-            if item.order.get("implementation_status") != "implemented":
+            if item.decision != "attach_existing_family" and not _is_implemented_status(item.order.get("implementation_status")):
                 selected_unimplemented_runtime_effect_false_count += 1
                 selected_unimplemented_route_counts[route] = selected_unimplemented_route_counts.get(route, 0) + 1
     non_selected_counts: dict[str, int] = {}
