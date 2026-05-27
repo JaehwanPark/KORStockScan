@@ -341,9 +341,17 @@ def _price_resolution_bucket(fields: dict[str, Any]) -> str:
 
 
 def _chosen_action(stage: str, fields: dict[str, Any]) -> str:
+    source_stage = _nonempty(fields.get("source_stage"))
+    effective_stage = source_stage if stage == "scalp_entry_action_decision_snapshot" and source_stage else stage
     explicit = _nonempty(fields.get("chosen_action") or fields.get("entry_adm_chosen_action"))
     if explicit in ACTION_ORDER:
+        if (
+            effective_stage in {"latency_pass", "order_bundle_submitted"}
+            and explicit not in {"BUY_NOW", "BUY_DEFENSIVE"}
+        ):
+            return "BUY_DEFENSIVE" if _price_resolution_bucket(fields) == "defensive_limit" else "BUY_NOW"
         return explicit
+    stage = effective_stage
     if stage in {
         "pre_submit_liquidity_guard_block",
         "pre_submit_overbought_pullback_guard_block",
@@ -378,6 +386,24 @@ def _chosen_action(stage: str, fields: dict[str, Any]) -> str:
     return "NO_BUY_AI"
 
 
+def _raw_chosen_action(fields: dict[str, Any]) -> str:
+    return _nonempty(fields.get("chosen_action") or fields.get("entry_adm_chosen_action"))
+
+
+def _action_normalization_reason(stage: str, fields: dict[str, Any], action: str) -> str:
+    raw_action = _raw_chosen_action(fields)
+    source_stage = _nonempty(fields.get("source_stage"))
+    effective_stage = source_stage if stage == "scalp_entry_action_decision_snapshot" and source_stage else stage
+    if (
+        raw_action
+        and raw_action != action
+        and effective_stage in {"latency_pass", "order_bundle_submitted"}
+        and action in {"BUY_NOW", "BUY_DEFENSIVE"}
+    ):
+        return "submitted_or_latency_pass_non_buy_action_normalized"
+    return ""
+
+
 def _eligible_actions(action: str, fields: dict[str, Any]) -> list[str]:
     explicit = _nonempty(fields.get("eligible_actions"))
     if explicit:
@@ -395,6 +421,9 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
     fields = _event_fields(event)
     stage = str(event.get("stage") or "")
     action = _chosen_action(stage, fields)
+    raw_action = _raw_chosen_action(fields)
+    source_stage = _nonempty(fields.get("source_stage")) or stage
+    normalization_reason = _action_normalization_reason(stage, fields, action)
     candidate_id = (
         _nonempty(fields.get("entry_adm_candidate_id"))
         or _nonempty(fields.get("candidate_id"))
@@ -410,11 +439,15 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
         "stock_code": _nonempty(event.get("stock_code") or fields.get("stock_code")),
         "stock_name": _nonempty(event.get("stock_name") or fields.get("stock_name")),
         "stage": stage,
+        "source_stage": source_stage,
         "event_time": _nonempty(event.get("emitted_at")),
         "source_path": event.get("_source_path"),
         "ai_score": _safe_float(fields.get("ai_score") or fields.get("ai_score_after_bonus"), None),
         "ai_action": _nonempty(fields.get("action") or fields.get("ai_action")),
         "chosen_action": action,
+        "raw_chosen_action": raw_action,
+        "action_normalized": bool(normalization_reason),
+        "action_normalization_reason": normalization_reason,
         "eligible_actions": _eligible_actions(action, fields),
         "rejected_actions": [item for item in ACTION_ORDER if item not in _eligible_actions(action, fields)],
         "score_bucket": _score_bucket(fields.get("ai_score") or fields.get("ai_score_after_bonus")),
@@ -615,6 +648,12 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
     raw_rows = [_base_row(event) for event in _iter_relevant_events(target_date)]
     rows = [_apply_outcome(row, evaluations) for row in _dedupe_rows(raw_rows)]
     action_counts = Counter(str(row.get("chosen_action")) for row in rows)
+    raw_action_counts = Counter(str(row.get("raw_chosen_action") or "-") for row in rows)
+    action_normalization_counts = Counter(
+        str(row.get("action_normalization_reason") or "-")
+        for row in rows
+        if row.get("action_normalized")
+    )
     zero_sample_actions = [action for action in ACTION_ORDER if action_counts.get(action, 0) == 0]
     missing_actions: list[str] = []
     joined_sample = sum(1 for row in rows if row.get("outcome_joined"))
@@ -676,6 +715,9 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
             "runtime_effect_counts": dict(runtime_effect_counts),
             "forced_action_counts": dict(forced_action_counts),
             "action_counts": dict(action_counts),
+            "raw_action_counts": dict(raw_action_counts),
+            "action_normalized_count": sum(action_normalization_counts.values()),
+            "action_normalization_counts": dict(action_normalization_counts),
             "missing_actions": missing_actions,
             "zero_sample_actions": zero_sample_actions,
             "missing_action_summary_rows": missing_action_summary_rows,

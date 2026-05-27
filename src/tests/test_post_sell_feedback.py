@@ -134,8 +134,15 @@ def test_record_and_evaluate_sim_post_sell_feedback_isolated(monkeypatch, tmp_pa
         sell_price=9746,
         profit_rate=-2.54,
         buy_qty=1,
-        exit_rule="scalp_soft_stop_pct",
+        exit_rule="scalp_hard_stop_pct",
         sell_reason_type="STOP_LOSS",
+        current_ai_score=76,
+        ai_score_raw=78,
+        ai_action="HOLD",
+        ai_result_source="bedrock",
+        ai_model="bedrock-nova-lite-v2",
+        ai_model_tier="tier2",
+        ai_transport_mode="bedrock",
     )
 
     assert candidate is not None
@@ -147,6 +154,13 @@ def test_record_and_evaluate_sim_post_sell_feedback_isolated(monkeypatch, tmp_pa
     assert candidate["entry_time_source"] == "not_recorded_at_source"
     assert candidate["entry_join_status"] == "raw_append_only_unjoined"
     assert candidate["entry_record_id"] == "PARENT-1"
+    assert candidate["high_ai_hard_stop_conflict"] is True
+    assert candidate["hard_stop_conflict_dimension"] == "high_ai_hard_stop_conflict"
+    assert candidate["hard_stop_conflict_allowed_runtime_apply"] is False
+    assert candidate["hard_stop_conflict_hard_gate"] is False
+    assert candidate["ai_model_at_exit"] == "bedrock-nova-lite-v2"
+    assert candidate["hard_stop_conflict_contract"]["metric_role"] == "exit_post_sell_dimension"
+    assert "hard stop relaxation" in candidate["hard_stop_conflict_contract"]["forbidden_uses"]
     assert feedback_mod._candidate_path("2026-05-18").exists() is False
     assert feedback_mod._sim_candidate_path("2026-05-18").exists() is True
 
@@ -178,6 +192,9 @@ def test_record_and_evaluate_sim_post_sell_feedback_isolated(monkeypatch, tmp_pa
     evaluations = feedback_mod._load_jsonl(feedback_mod._sim_evaluation_path("2026-05-18"))
     assert evaluations[0]["sim_record_id"] == "SIM-005950-1"
     assert evaluations[0]["runtime_effect"] is False
+    assert evaluations[0]["high_ai_hard_stop_conflict"] is True
+    assert evaluations[0]["hard_stop_conflict_dimension"] == "high_ai_hard_stop_conflict"
+    assert evaluations[0]["ai_score_at_exit"] == 76
     assert evaluations[0]["metrics_10m"]["mfe_pct"] > 4.0
 
 
@@ -210,6 +227,13 @@ def test_backfill_sim_post_sell_candidates_is_idempotent(monkeypatch, tmp_path):
                     "qty": "264",
                     "exit_rule": "scalp_hard_stop_pct",
                     "sell_reason_type": "LOSS",
+                    "current_ai_score": "74",
+                    "ai_score_raw": "77",
+                    "ai_action": "HOLD",
+                    "ai_result_source": "bedrock",
+                    "ai_model": "bedrock-nova-lite-v2",
+                    "ai_model_tier": "tier2",
+                    "ai_transport_mode": "bedrock",
                 },
             },
             ensure_ascii=False,
@@ -227,6 +251,41 @@ def test_backfill_sim_post_sell_candidates_is_idempotent(monkeypatch, tmp_path):
     assert second["candidates_created"] == 0
     candidates = feedback_mod._load_jsonl(feedback_mod._sim_candidate_path("2026-05-18"))
     assert len(candidates) == 1
+    assert candidates[0]["high_ai_hard_stop_conflict"] is True
+    assert candidates[0]["ai_score_at_exit"] == 74
+    assert candidates[0]["ai_model_at_exit"] == "bedrock-nova-lite-v2"
+
+
+def test_sim_post_sell_high_ai_conflict_falls_back_to_runtime_ai_prob(monkeypatch, tmp_path):
+    monkeypatch.setattr(feedback_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        feedback_mod,
+        "TRADING_RULES",
+        SimpleNamespace(
+            POST_SELL_FEEDBACK_ENABLED=True,
+            POST_SELL_FEEDBACK_EVAL_ENABLED=True,
+        ),
+    )
+    feedback_mod._SIM_RECORDED_KEYS.clear()
+
+    candidate = feedback_mod.record_sim_post_sell_candidate(
+        sim_record_id="SIM-RT-PROB",
+        stock={"name": "런타임확률", "rt_ai_prob": 0.76},
+        code="005930",
+        sell_time="2026-05-18 10:03:00",
+        buy_price=10000,
+        sell_price=9740,
+        profit_rate=-2.6,
+        buy_qty=1,
+        exit_rule="scalp_hard_stop_pct",
+        sell_reason_type="STOP_LOSS",
+    )
+
+    assert candidate is not None
+    assert candidate["current_ai_score"] == 76.0
+    assert candidate["high_ai_hard_stop_conflict"] is True
+    assert candidate["hard_stop_conflict_dimension"] == "high_ai_hard_stop_conflict"
+    assert candidate["ai_result_source_at_exit"] == "-"
 
 
 def test_soft_stop_forensics_report(monkeypatch, tmp_path):

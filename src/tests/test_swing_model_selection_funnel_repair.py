@@ -2338,6 +2338,43 @@ def test_swing_threshold_ai_review_is_proposal_only_and_guarded():
     assert item["guard_decision"]["runtime_change"] is False
 
 
+def test_swing_threshold_ai_review_drops_real_preapply_primary_ev_claim():
+    audit = build_swing_lifecycle_audit_report(
+        "2026-05-08",
+        recommendation_rows=[],
+        diagnostic_summary={"selected_count": 0},
+        db_rows=[],
+        event_rows=[],
+    )
+    raw_response = {
+        "schema_version": 1,
+        "corrections": [
+            {
+                "family": "swing_model_floor",
+                "anomaly_type": "entry_drought",
+                "ai_review_state": "correction_proposed",
+                "correction_proposal": {
+                    "proposed_state": "adjust_down",
+                    "proposed_value": 0.1,
+                    "anomaly_route": "threshold_candidate",
+                    "sample_window": "rolling_5d",
+                    "reason": "preapply_real primary_ev from one-share sample",
+                },
+                "correction_reason": "merge_real_pnl_with_sim_probe_ev",
+                "required_evidence": ["safe_pool_count"],
+                "risk_flags": ["sample_shortage"],
+            }
+        ],
+    }
+
+    review = build_swing_threshold_ai_review_report(audit, ai_raw_response=raw_response)
+
+    assert review["ai_status"] == "parsed_empty"
+    assert "corrections[0] evidence_authority_violation" in review["parse_warnings"]
+    item = next(row for row in review["items"] if row["family"] == "swing_model_floor")
+    assert item["ai_tier2_proposal"]["proposal_status"] == "not_provided"
+
+
 def test_swing_threshold_ai_review_prompt_contract_is_english_ascii():
     instructions = lifecycle_audit_mod._build_openai_review_instructions()
 

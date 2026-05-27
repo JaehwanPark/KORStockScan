@@ -406,8 +406,18 @@ def test_lifecycle_matrix_ingests_scalp_sim_submit_and_holding_rows(tmp_path, mo
                         "sim_record_id": "SIM-1",
                         "entry_adm_candidate_id": "ADM-1",
                         "profit_rate": 0.8,
-                        "exit_rule": "tp",
+                        "exit_rule": "scalp_hard_stop_pct",
                         "outcome": "GOOD_ENTRY",
+                        "current_ai_score": 76,
+                        "ai_score_raw": 79,
+                        "ai_model": "bedrock-nova-lite-v2",
+                        "ai_result_source": "bedrock",
+                        "high_ai_hard_stop_conflict": True,
+                        "hard_stop_conflict_dimension": "high_ai_hard_stop_conflict",
+                        "hard_stop_conflict_ai_score_band": "ai_score_75_79",
+                        "hard_stop_conflict_runtime_effect": False,
+                        "hard_stop_conflict_allowed_runtime_apply": False,
+                        "hard_stop_conflict_hard_gate": False,
                         "metrics_10m": {"mfe_pct": 1.2, "mae_pct": -0.2, "close_ret_pct": 0.8},
                     },
                     ensure_ascii=False,
@@ -434,6 +444,12 @@ def test_lifecycle_matrix_ingests_scalp_sim_submit_and_holding_rows(tmp_path, mo
     assert submit_row["runtime_features"]["actual_order_submitted"] is False
     assert submit_row["runtime_features"]["broker_order_forbidden"] is True
     assert submit_row["runtime_features"]["decision_authority"] == "sim_observation_only"
+    post_sell_row = next(row for row in report["examples"] if row["source"] == "sim_post_sell_evaluations")
+    assert post_sell_row["runtime_features"]["high_ai_hard_stop_conflict"] is True
+    assert post_sell_row["runtime_features"]["hard_stop_conflict_dimension"] == "high_ai_hard_stop_conflict"
+    assert post_sell_row["runtime_features"]["ai_model"] == "bedrock-nova-lite-v2"
+    assert post_sell_row["labels"]["hard_stop_conflict_dimension"] == "high_ai_hard_stop_conflict"
+    assert "hard_stop_conflict_dimension" not in mod._entry_bucket_features(post_sell_row)
 
 
 def test_lifecycle_matrix_ingests_scalp_sim_scale_in_rows(tmp_path, monkeypatch):

@@ -50,6 +50,19 @@ def _ai_response(bucket_ids: list[str]) -> dict:
     }
 
 
+def test_swing_lifecycle_bucket_ai_review_rejects_real_preapply_primary_ev_claim():
+    bucket_id = "swing_bucket_entry_entry_bucket_attribution_safe_pool_probe"
+    payload = _ai_response([bucket_id])
+    payload["comparative_reviews"][0][
+        "comparison_summary"
+    ] = "Use pre_apply_real primary_ev and merge real pnl with sim/probe EV before mapped policy is enabled."
+
+    status, _, warnings = mod._parse_ai_review_response(payload)
+
+    assert status == "parse_rejected"
+    assert f"ai_review_comparative_reviews_evidence_authority_violation:{bucket_id}" in warnings
+
+
 def test_bucket_discovery_auto_approves_sim_only_candidates(tmp_path, monkeypatch):
     target = "2026-05-22"
     matrix_dir = tmp_path / "matrix"

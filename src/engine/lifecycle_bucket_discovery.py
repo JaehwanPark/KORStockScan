@@ -12,6 +12,11 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from src.engine.automation.dual_candidate_review import (
+    evidence_authority_contract,
+    has_evidence_authority_violation,
+    with_evidence_authority_forbidden_uses,
+)
 from src.engine.auto_promotion_contracts import (
     explicit_tier2_block_allowed,
     pre_final_promotion_contract,
@@ -97,6 +102,18 @@ REQUIRED_TAXONOMY_CONTRACT_FIELDS = {
     "source_quality_gate",
     "forbidden_uses",
 }
+BASE_FORBIDDEN_USES = with_evidence_authority_forbidden_uses(
+    [
+        "hard_safety_bypass",
+        "broker_submit",
+        "broker_account_order_guard_bypass",
+        "runtime_threshold_apply",
+        "stale_quote_submit",
+        "provider_route_change",
+        "bot_restart_trigger",
+        "position_cap_release",
+    ]
+)
 
 def discovery_report_path(target_date: str) -> Path:
     return REPORT_DIR / f"lifecycle_bucket_discovery_{target_date}.json"
@@ -569,14 +586,8 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
             else [],
             "final_user_approval_boundary": "full_live_only",
         },
-        "forbidden_uses": [
-            "hard_safety_bypass",
-            "broker_account_order_guard_bypass",
-            "stale_quote_submit",
-            "provider_route_change",
-            "bot_restart_trigger",
-            "position_cap_release",
-        ],
+        "forbidden_uses": list(BASE_FORBIDDEN_USES),
+        "evidence_authority_contract": evidence_authority_contract(),
     }
 
 
@@ -658,13 +669,8 @@ def _source_drift_candidates(changes: list[dict[str, Any]]) -> list[dict[str, An
                 "runtime_effect": False,
                 "runtime_effect_after_approval": "none_source_contract_patch_required",
                 "source_contract_change": change,
-                "forbidden_uses": [
-                    "broker_submit",
-                    "runtime_threshold_apply",
-                    "provider_route_change",
-                    "bot_restart_trigger",
-                    "position_cap_release",
-                ],
+                "forbidden_uses": list(BASE_FORBIDDEN_USES),
+                "evidence_authority_contract": evidence_authority_contract(),
             }
         )
     return candidates
@@ -766,13 +772,8 @@ def _policy_stage_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "decision_authority": "lifecycle_bucket_discovery_stage_policy_sim_auto",
                 "runtime_effect": False,
                 "runtime_effect_after_approval": "sim_only_stage_policy",
-                "forbidden_uses": [
-                    "hard_safety_bypass",
-                    "broker_submit",
-                    "provider_route_change",
-                    "bot_restart_trigger",
-                    "position_cap_release",
-                ],
+                "forbidden_uses": list(BASE_FORBIDDEN_USES),
+                "evidence_authority_contract": evidence_authority_contract(),
             }
         )
     return candidates
@@ -804,6 +805,7 @@ def _build_ai_review_context(report: dict[str, Any]) -> dict[str, Any]:
             "normalized_metrics": item.get("normalized_metrics"),
             "deterministic_proposal": item.get("deterministic_proposal"),
             "current_ai_tier2_proposal": item.get("ai_tier2_proposal"),
+            "evidence_authority_contract": item.get("evidence_authority_contract"),
             "primary_decision_metric": item.get("primary_decision_metric"),
             "joined_sample": item.get("joined_sample"),
             "join_rate": item.get("join_rate"),
@@ -811,6 +813,7 @@ def _build_ai_review_context(report: dict[str, Any]) -> dict[str, Any]:
             "recommended_route": item.get("recommended_route"),
             "recommended_action": item.get("recommended_action"),
             "source_quality_gate": item.get("source_quality_gate"),
+            "forbidden_uses": item.get("forbidden_uses"),
         }
         for item in surfaced[:60]
         if isinstance(item, dict)
@@ -843,6 +846,14 @@ def _build_ai_review_context(report: dict[str, Any]) -> dict[str, Any]:
                 "Block or downgrade a deterministic live candidate only for explicit source-quality, schema, env mapping, runtime hook, "
                 "post-apply attribution, safety, broker, stale quote, qty/cooldown, provider, cap, forbidden-use, leakage, or missing-contract gaps."
             ),
+            "evidence_authority_contract": (
+                "Bucket/dimension tuning primary evidence is sim/probe lifecycle EV. Real one-share samples are not "
+                "primary EV evidence unless the mapped bucket policy was already enabled for the evaluated post-apply "
+                "cohort. Pre-apply real samples may be used only for execution-quality calibration, safety veto, "
+                "provenance validation, and broker/fill/slippage source-quality checks. Do not merge real PnL with "
+                "sim/probe EV and do not promote runtime threshold/order/provider/cap/bot changes from pre-apply "
+                "real one-share outcomes."
+            ),
         },
         "date": report.get("date"),
         "summary": summary,
@@ -861,6 +872,7 @@ def _build_ai_review_context(report: dict[str, Any]) -> dict[str, Any]:
             "source_quality_gate",
             "forbidden_uses",
         ],
+        "evidence_authority_contract": evidence_authority_contract(),
         "safety_rule": (
             "AI may block or downgrade a deterministic live bucket only for explicit contract/source-quality/safety gaps, "
             "and may not create live_auto_apply_ready unless the input candidate is already live_auto_apply_ready "
@@ -890,6 +902,7 @@ def _build_ai_review_instructions() -> str:
         "Do not be conservative by default for Grade 1 completed-sim deterministic live candidates. A Grade 1 deterministic live candidate with even a 1% plausible positive effect should not be blocked solely for small effect size, novelty, low confidence, or ambiguity.\n"
         "When the decision is ambiguous, keep Grade 1 deterministic live candidates live and rely on post-apply verification.\n"
         "Use runtime_blocked_contract_gap or code_patch_required only for explicit source-quality, source schema, env mapping, runtime hook, post-apply attribution, safety, broker, stale quote, qty/cooldown, provider, cap, forbidden-use, leakage, or missing-contract gaps.\n"
+        "Evidence authority contract: bucket/dimension tuning primary evidence is sim/probe lifecycle EV. Real one-share samples are not primary EV evidence unless the mapped bucket policy was already enabled for the evaluated post-apply cohort. Pre-apply real samples may be used only for execution-quality calibration, safety veto, provenance validation, and broker/fill/slippage source-quality checks. Do not merge real PnL with sim/probe EV and do not promote runtime threshold/order/provider/cap/bot changes from pre-apply real one-share outcomes. If a proposal violates this contract, choose reject, source_quality_blocker, or instrumentation_gap.\n"
         "live_auto_apply_ready is allowed only if the input bucket already has live_auto_apply_family and deterministic live_auto_apply_ready.\n"
     )
 
@@ -936,6 +949,8 @@ def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, 
             fields = {str(value) for value in (proposal.get("required_source_fields") or [])}
             if not REQUIRED_TAXONOMY_CONTRACT_FIELDS.issubset(fields):
                 warnings.append(f"ai_review_metric_contract_missing:{proposal.get('bucket_id')}")
+        if has_evidence_authority_violation(proposal):
+            warnings.append(f"ai_review_evidence_authority_violation:{proposal.get('bucket_id')}")
     proposal_ids = {
         str(proposal.get("bucket_id"))
         for proposal in ai_proposals
@@ -960,6 +975,8 @@ def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, 
             fields = {str(value) for value in (review.get("required_source_fields") or [])}
             if not REQUIRED_TAXONOMY_CONTRACT_FIELDS.issubset(fields):
                 warnings.append(f"ai_review_selected_metric_contract_missing:{review.get('bucket_id')}")
+        if has_evidence_authority_violation(review):
+            warnings.append(f"ai_review_selected_evidence_authority_violation:{review.get('bucket_id')}")
     for item in conclusions:
         if not isinstance(item, dict):
             warnings.append("ai_review_final_conclusion_non_dict")
@@ -968,6 +985,8 @@ def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, 
             warnings.append(f"ai_review_invalid_relation:{item.get('bucket_id')}")
         if str(item.get("final_classification_state") or "") not in FINAL_CLASSIFICATION_STATES:
             warnings.append(f"ai_review_invalid_state:{item.get('bucket_id')}")
+        if has_evidence_authority_violation(item):
+            warnings.append(f"ai_review_final_evidence_authority_violation:{item.get('bucket_id')}")
     if warnings:
         return "parse_rejected", payload, warnings
     return "parsed", payload, []
@@ -1365,14 +1384,8 @@ def build_lifecycle_bucket_discovery_report(
         "sample_floor": "source_bucket_sample_floor",
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "source_quality_gate": "exact_joined_lifecycle_rows_or_source_bucket_quality",
-        "forbidden_uses": [
-            "hard_safety_bypass",
-            "broker_account_order_guard_bypass",
-            "stale_quote_submit",
-            "provider_route_change",
-            "bot_restart_trigger",
-            "position_cap_release",
-        ],
+        "forbidden_uses": list(BASE_FORBIDDEN_USES),
+        "evidence_authority_contract": evidence_authority_contract(),
         "sources": {
             "lifecycle_decision_matrix": str(ldm_path) if ldm_path.exists() else None,
         },
@@ -1548,13 +1561,8 @@ def _write_sim_auto_approval(report: dict[str, Any]) -> None:
         "approved_evidence_grade_counts": dict(sorted(grade_counts.items())),
         "source_quality_status": "pass" if approved_bucket_ids else "empty",
         "blocked_reasons": [] if approved_bucket_ids else ["sim_auto_approved_bucket_missing"],
-        "forbidden_uses": [
-            "broker_submit",
-            "runtime_threshold_apply",
-            "provider_route_change",
-            "bot_restart_trigger",
-            "position_cap_release",
-        ],
+        "forbidden_uses": list(BASE_FORBIDDEN_USES),
+        "evidence_authority_contract": evidence_authority_contract(),
     }
     sim_auto_approval_path(target_date).write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),

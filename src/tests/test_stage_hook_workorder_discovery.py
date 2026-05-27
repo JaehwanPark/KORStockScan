@@ -76,6 +76,19 @@ def _deterministic_candidate_ids(target: str = "2026-05-26") -> list[str]:
     return [str(item["candidate_id"]) for item in mod._deterministic_candidates(target)[0]]
 
 
+def test_stage_hook_ai_review_rejects_real_preapply_primary_ev_claim():
+    candidate_id = "stage_hook_holding_flow_runner_debounce_guard_producer_gap_sim_holding_runner_gap_missing"
+    payload = _ai_response([candidate_id])
+    payload["ai_tier2_proposals"][0][
+        "reasoning_summary"
+    ] = "Use real_1share_primary_ev as the hook evidence and allow runtime_change_from_preapply_real."
+
+    status, _, warnings = mod._parse_ai_review_response(payload)
+
+    assert status == "parse_rejected"
+    assert f"ai_review_ai_proposal_evidence_authority_violation:{candidate_id}" in warnings
+
+
 def test_stage_hook_discovery_normalizes_all_stage_hook_classes(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)

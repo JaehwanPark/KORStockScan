@@ -3931,6 +3931,13 @@ def _complete_scalp_simulated_sell(
             HIGHEST_PRICES.pop(_price_tracking_key(stock, code), None)
     source_fields = {}
     resolved_exit_rule = exit_rule or stock.get("last_exit_rule") or "-"
+    sim_exit_ai_score = _safe_float(
+        stock.get(
+            "scalp_sim_ai_last_smoothed_score",
+            stock.get("scalp_sim_ai_last_score", _safe_float(stock.get("rt_ai_prob"), 0.0) * 100.0),
+        ),
+        0.0,
+    )
     if str(resolved_exit_rule).startswith("scalp_sim_panic_lifecycle"):
         source_fields.update(_scalp_sim_panic_stock_context_fields(stock))
     elif str(resolved_exit_rule).startswith("scalp_sim_euphoria"):
@@ -3971,6 +3978,13 @@ def _complete_scalp_simulated_sell(
             buy_price=stock.get("buy_price"),
             profit_rate=f"{simulated_profit_rate:+.2f}",
             trigger_profit_rate=f"{profit_rate:+.2f}",
+            current_ai_score=sim_exit_ai_score,
+            ai_score_raw=stock.get("scalp_sim_ai_last_raw_score", stock.get("scalp_sim_ai_last_score")),
+            ai_action=stock.get("scalp_sim_ai_last_action"),
+            ai_result_source=stock.get("scalp_sim_ai_last_result_source"),
+            ai_model=stock.get("scalp_sim_ai_last_model"),
+            ai_model_tier=stock.get("scalp_sim_ai_last_model_tier"),
+            ai_transport_mode=stock.get("scalp_sim_ai_last_transport_mode"),
             would_submit_stage="sell_order_sent",
             runtime_effect="simulated_completed_only",
             decision_authority="sim_observation_only",
@@ -4008,6 +4022,13 @@ def _complete_scalp_simulated_sell(
             exit_rule=exit_rule or stock.get("last_exit_rule") or "-",
             sell_reason_type=sell_reason_type,
             trigger_profit_rate=profit_rate,
+            current_ai_score=sim_exit_ai_score,
+            ai_score_raw=stock.get("scalp_sim_ai_last_raw_score", stock.get("scalp_sim_ai_last_score")),
+            ai_action=stock.get("scalp_sim_ai_last_action"),
+            ai_result_source=stock.get("scalp_sim_ai_last_result_source"),
+            ai_model=stock.get("scalp_sim_ai_last_model"),
+            ai_model_tier=stock.get("scalp_sim_ai_last_model_tier"),
+            ai_transport_mode=stock.get("scalp_sim_ai_last_transport_mode"),
         )
     except Exception as exc:
         log_error(f"[SCALP_SIM_POST_SELL] candidate record failed: {exc}")
@@ -5036,17 +5057,26 @@ def _entry_adm_candidate_id(stock, code) -> str:
 def _entry_adm_action_from_context(stage: str, *, ai_decision=None, ai_score=None, latency_gate=None, submit_fields=None) -> str:
     stage = str(stage or "")
     submit_fields = submit_fields or {}
+    latency_gate = latency_gate or {}
     if stage in {"pre_submit_liquidity_guard_block", "pre_submit_overbought_pullback_guard_block"}:
         return "SKIP_PRE_SUBMIT_SAFETY"
     if stage == "entry_submit_revalidation_block" or bool(submit_fields.get("entry_submit_revalidation_block")):
         return "SKIP_STALE"
-    if stage in {"entry_submit_revalidation_warning", "latency_block"} or bool(submit_fields.get("entry_submit_revalidation_warning")):
+    if stage in {"entry_submit_revalidation_warning", "latency_block"}:
+        return "WAIT_REQUOTE"
+    if stage in {"latency_pass", "order_bundle_submitted"}:
+        guard = str(latency_gate.get("entry_price_guard") or "").lower()
+        canary_action = str(latency_gate.get("ai_entry_price_canary_action") or "").upper()
+        if "defensive" in guard or canary_action == "USE_DEFENSIVE":
+            return "BUY_DEFENSIVE"
+        return "BUY_NOW"
+    if bool(submit_fields.get("entry_submit_revalidation_warning")):
         return "WAIT_REQUOTE"
     action = str((ai_decision or {}).get("action") or "").upper()
     score_value = _safe_float(ai_score if ai_score is not None else (ai_decision or {}).get("score"), 0.0)
     if action == "BUY" and score_value >= 75:
-        guard = str((latency_gate or {}).get("entry_price_guard") or "").lower()
-        canary_action = str((latency_gate or {}).get("ai_entry_price_canary_action") or "").upper()
+        guard = str(latency_gate.get("entry_price_guard") or "").lower()
+        canary_action = str(latency_gate.get("ai_entry_price_canary_action") or "").upper()
         if "defensive" in guard or canary_action == "USE_DEFENSIVE":
             return "BUY_DEFENSIVE"
         return "BUY_NOW"
@@ -13250,6 +13280,23 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                                     "scalp_sim_ai_last_action": ai_decision.get("action_v2")
                                     or ai_decision.get("action"),
                                     "scalp_sim_ai_last_score": raw_ai_score,
+                                    "scalp_sim_ai_last_raw_score": raw_ai_score,
+                                    "scalp_sim_ai_last_smoothed_score": current_ai_score,
+                                    "scalp_sim_ai_last_result_source": ai_decision.get("ai_result_source")
+                                    or ai_decision.get("result_source")
+                                    or ai_decision.get("provider")
+                                    or "-",
+                                    "scalp_sim_ai_last_model": ai_decision.get("ai_model")
+                                    or ai_decision.get("model")
+                                    or ai_decision.get("model_name")
+                                    or "-",
+                                    "scalp_sim_ai_last_model_tier": ai_decision.get("ai_model_tier")
+                                    or ai_decision.get("model_tier")
+                                    or "-",
+                                    "scalp_sim_ai_last_transport_mode": ai_decision.get("openai_transport_mode")
+                                    or ai_decision.get("transport_mode")
+                                    or ai_decision.get("provider_route")
+                                    or "-",
                                     "scalp_sim_ai_last_live_call_at": now_ts,
                                     "scalp_sim_ai_live_call_count": _safe_int(
                                         stock.get("scalp_sim_ai_live_call_count"), 0
@@ -13283,6 +13330,22 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                                     ai_action=ai_decision.get("action_v2") or ai_decision.get("action"),
                                     ai_score_raw=raw_ai_score,
                                     ai_score_smoothed=current_ai_score,
+                                    current_ai_score=current_ai_score,
+                                    ai_result_source=ai_decision.get("ai_result_source")
+                                    or ai_decision.get("result_source")
+                                    or ai_decision.get("provider")
+                                    or "-",
+                                    ai_model=ai_decision.get("ai_model")
+                                    or ai_decision.get("model")
+                                    or ai_decision.get("model_name")
+                                    or "-",
+                                    ai_model_tier=ai_decision.get("ai_model_tier")
+                                    or ai_decision.get("model_tier")
+                                    or "-",
+                                    ai_transport_mode=ai_decision.get("openai_transport_mode")
+                                    or ai_decision.get("transport_mode")
+                                    or ai_decision.get("provider_route")
+                                    or "-",
                                     ai_cache="hit" if ai_cache_hit else "miss",
                                 ),
                             )

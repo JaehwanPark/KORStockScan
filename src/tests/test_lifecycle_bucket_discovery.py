@@ -374,6 +374,19 @@ def test_lifecycle_bucket_discovery_fails_closed_when_ai_proposal_lacks_comparis
     assert blocked
 
 
+def test_lifecycle_bucket_discovery_rejects_real_preapply_primary_ev_claim():
+    bucket_id = "scale_in:blocker_reason:pnl_out_of_range_0_32"
+    payload = _ai_hybrid_taxonomy_response(bucket_id)
+    payload["comparative_reviews"][0][
+        "comparison_summary"
+    ] = "Use preapply_real primary_ev and merge_real_pnl_with_sim because one-share was profitable."
+
+    status, _, warnings = mod._parse_ai_review_response(payload)
+
+    assert status == "parse_rejected"
+    assert f"ai_review_selected_evidence_authority_violation:{bucket_id}" in warnings
+
+
 def test_lifecycle_bucket_discovery_rejects_legacy_ai_response_without_dual_taxonomy_fields(tmp_path, monkeypatch):
     ldm_dir = tmp_path / "ldm"
     report_dir = tmp_path / "report"

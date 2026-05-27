@@ -980,6 +980,13 @@ def test_scalp_simulator_sell_profit_uses_assumed_fill_price(monkeypatch):
         "sim_pre_submit_liquidity_reason": "below_min_liquidity",
         "sim_pre_submit_overbought_guard_action": "WOULD_PASS",
         "sim_pre_submit_overbought_reason": "overbought_ok",
+        "scalp_sim_ai_last_smoothed_score": 76,
+        "scalp_sim_ai_last_raw_score": 79,
+        "scalp_sim_ai_last_action": "HOLD",
+        "scalp_sim_ai_last_result_source": "bedrock",
+        "scalp_sim_ai_last_model": "bedrock-nova-lite-v2",
+        "scalp_sim_ai_last_model_tier": "tier2",
+        "scalp_sim_ai_last_transport_mode": "bedrock",
     }
 
     assert state_handlers._complete_scalp_simulated_sell(
@@ -995,7 +1002,7 @@ def test_scalp_simulator_sell_profit_uses_assumed_fill_price(monkeypatch):
         curr_price=10_150,
         now_ts=1_060.0,
         sell_reason_type="PROFIT",
-        exit_rule="test_exit",
+        exit_rule="scalp_hard_stop_pct",
         profit_rate=state_handlers.calculate_net_profit_rate(10_000, 10_150),
     )
 
@@ -1006,12 +1013,18 @@ def test_scalp_simulator_sell_profit_uses_assumed_fill_price(monkeypatch):
     assert event["profit_rate"] == f"{expected_profit:+.2f}"
     assert event["trigger_profit_rate"] == f"{state_handlers.calculate_net_profit_rate(10_000, 10_150):+.2f}"
     assert event["decision_authority"] == "sim_observation_only"
+    assert event["current_ai_score"] == 76
+    assert event["ai_score_raw"] == 79
+    assert event["ai_model"] == "bedrock-nova-lite-v2"
     assert event["sim_pre_submit_liquidity_guard_action"] == "WOULD_BLOCK"
     assert event["sim_pre_submit_liquidity_reason"] == "below_min_liquidity"
     assert len(sim_post_sell_candidates) == 1
     assert sim_post_sell_candidates[0]["sim_record_id"] == "SIM-1"
     assert sim_post_sell_candidates[0]["sell_price"] == 10_130
     assert sim_post_sell_candidates[0]["profit_rate"] == expected_profit
+    assert sim_post_sell_candidates[0]["exit_rule"] == "scalp_hard_stop_pct"
+    assert sim_post_sell_candidates[0]["current_ai_score"] == 76
+    assert sim_post_sell_candidates[0]["ai_model"] == "bedrock-nova-lite-v2"
 
 
 def test_scalp_simulator_scale_in_does_not_call_real_buy(monkeypatch):

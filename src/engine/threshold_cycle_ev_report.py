@@ -635,6 +635,9 @@ def _scalp_entry_adm_summary(target_date: str) -> tuple[dict[str, Any], str | No
                 "runtime_bias_applied_count": 0,
                 "runtime_effect_counts": {},
                 "forced_action_counts": {},
+                "raw_action_counts": {},
+                "action_normalized_count": 0,
+                "action_normalization_counts": {},
                 "top_actions": [],
                 "runtime_effect": False,
                 "decision_authority": "entry_advisory_prompt_context_only",
@@ -668,6 +671,13 @@ def _scalp_entry_adm_summary(target_date: str) -> tuple[dict[str, Any], str | No
             else {},
             "forced_action_counts": summary.get("forced_action_counts")
             if isinstance(summary.get("forced_action_counts"), dict)
+            else {},
+            "raw_action_counts": summary.get("raw_action_counts")
+            if isinstance(summary.get("raw_action_counts"), dict)
+            else {},
+            "action_normalized_count": _safe_int(summary.get("action_normalized_count"), 0),
+            "action_normalization_counts": summary.get("action_normalization_counts")
+            if isinstance(summary.get("action_normalization_counts"), dict)
             else {},
             "top_actions": [
                 {

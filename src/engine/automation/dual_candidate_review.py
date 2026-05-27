@@ -16,6 +16,37 @@ REQUIRED_METRIC_CONTRACT_FIELDS = (
     "forbidden_uses",
 )
 
+EVIDENCE_AUTHORITY_FORBIDDEN_USES = (
+    "real_1share_as_preapply_primary_ev",
+    "real_one_share_as_preapply_primary_ev",
+    "merge_real_pnl_with_sim_probe_ev",
+    "runtime_change_from_preapply_real_sample",
+)
+
+
+def evidence_authority_contract() -> dict[str, Any]:
+    return {
+        "primary_evidence_source": "sim_probe_lifecycle_ev",
+        "real_sample_primary_ev_allowed_before_mapped_policy_enabled": False,
+        "real_sample_allowed_roles_before_mapped_policy_enabled": [
+            "execution_quality_calibration",
+            "safety_veto",
+            "provenance_validation",
+        ],
+        "real_sample_allowed_role_after_mapped_policy_enabled": "post_apply_attribution",
+        "mapped_runtime_policy_enabled_field": "mapped_runtime_policy_enabled",
+        "forbidden_uses": list(EVIDENCE_AUTHORITY_FORBIDDEN_USES),
+    }
+
+
+def with_evidence_authority_forbidden_uses(values: Any) -> list[str]:
+    merged: list[str] = []
+    for value in list(values or []) + list(EVIDENCE_AUTHORITY_FORBIDDEN_USES):
+        text = str(value).strip()
+        if text and text not in merged:
+            merged.append(text)
+    return merged
+
 
 def proposal_counts(items: list[dict[str, Any]], *, key: str) -> dict[str, int]:
     return dict(Counter(str(item.get(key) or "unknown") for item in items))
@@ -84,3 +115,31 @@ def has_forbidden_runtime_leak(payload: dict[str, Any]) -> bool:
             "cap_release_allowed",
         )
     )
+
+
+def has_evidence_authority_violation(payload: dict[str, Any]) -> bool:
+    searchable = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"evidence_authority_contract", "forbidden_uses", "required_source_fields"}
+    }
+    text = str(searchable).lower().replace("-", "_")
+    if "real_sample_primary_ev_allowed" in text and "true" in text:
+        return True
+    if "mapped_runtime_policy_enabled" in text and "false" in text and "primary_ev" in text and "real" in text:
+        return True
+    if "preapply_real" in text and "primary_ev" in text:
+        return True
+    if "pre_apply_real" in text and "primary_ev" in text:
+        return True
+    if "pre apply real" in text and "primary ev" in text:
+        return True
+    if "real_1share_primary_ev" in text or "real_one_share_primary_ev" in text:
+        return True
+    if "real 1_share primary ev" in text or "real one_share primary ev" in text:
+        return True
+    if "merge_real_pnl_with_sim" in text or "merge real pnl with sim" in text:
+        return True
+    if "runtime_change_from_preapply_real" in text or "runtime change from preapply real" in text:
+        return True
+    return False

@@ -2,6 +2,10 @@ import gzip
 import json
 from pathlib import Path
 
+from src.engine.automation.dual_candidate_review import (
+    evidence_authority_contract,
+    has_evidence_authority_violation,
+)
 from src.engine.automation import producer_gap_discovery as mod
 
 
@@ -16,6 +20,12 @@ def test_real_anchor_detectors_have_sim_equivalent_contracts():
         if contract.source_scope == "real_anchor" and contract.sim_equivalent_required:
             assert contract.sim_equivalent_pattern
             assert contract.sim_equivalent_pattern in contracts
+
+
+def test_evidence_authority_contract_is_not_itself_a_violation():
+    payload = {"evidence_authority_contract": evidence_authority_contract()}
+
+    assert has_evidence_authority_violation(payload) is False
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -122,6 +132,19 @@ def _ai_response(candidate_ids: list[str]) -> dict:
             "reason": "source-only authority preserved",
         },
     }
+
+
+def test_producer_gap_ai_review_rejects_real_preapply_primary_ev_claim():
+    candidate_id = "producer_gap_sim_submit_fill_quality_gap_missing"
+    payload = _ai_response([candidate_id])
+    payload["comparative_reviews"][0][
+        "comparison_summary"
+    ] = "Treat preapply_real primary_ev as decisive and merge_real_pnl_with_sim before policy enablement."
+
+    status, _, warnings = mod._parse_ai_review_response(payload)
+
+    assert status == "parse_rejected"
+    assert f"ai_review_comparative_evidence_authority_violation:{candidate_id}" in warnings
 
 
 def _minimal_runner_fixture(post_sell_dir: Path) -> None:

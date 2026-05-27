@@ -48,7 +48,12 @@ SUBMIT_BUCKET_SAMPLE_FLOOR = 3
 
 RUNTIME_FEATURE_KEYS = {
     "ai_score",
+    "ai_score_raw",
     "ai_action",
+    "ai_model",
+    "ai_model_tier",
+    "ai_result_source",
+    "ai_transport_mode",
     "chosen_action",
     "score_bucket",
     "risk_context_bucket",
@@ -164,6 +169,13 @@ RUNTIME_FEATURE_KEYS = {
     "lifecycle_ai_context_hash",
     "lifecycle_ai_context_alignment_hint",
     "lifecycle_ai_context_decision_authority",
+    "high_ai_hard_stop_conflict",
+    "hard_stop_conflict_dimension",
+    "hard_stop_conflict_ai_score_band",
+    "hard_stop_conflict_runtime_effect",
+    "hard_stop_conflict_allowed_runtime_apply",
+    "hard_stop_conflict_hard_gate",
+    "hard_stop_conflict_contract",
     "context_eligible_count",
     "context_applied_count",
     "context_skipped_count",
@@ -181,6 +193,12 @@ LABEL_KEYS = {
     "profit_rate",
     "exit_rule",
     "sim_post_sell_outcome",
+    "high_ai_hard_stop_conflict",
+    "hard_stop_conflict_dimension",
+    "hard_stop_conflict_ai_score_band",
+    "ai_score_at_exit",
+    "ai_model_at_exit",
+    "ai_result_source_at_exit",
     "mfe_10m_pct",
     "mae_10m_pct",
     "close_10m_pct",
@@ -279,6 +297,19 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(float(value))
     except (TypeError, ValueError):
         return default
+
+
+def _safe_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value in (None, ""):
+        return default
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off", "none", "null"}:
+        return False
+    return default
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -472,6 +503,12 @@ def _sim_label_from_evaluation(item: dict[str, Any]) -> dict[str, Any]:
         "profit_rate": item.get("profit_rate"),
         "exit_rule": item.get("exit_rule"),
         "sim_post_sell_outcome": item.get("outcome"),
+        "high_ai_hard_stop_conflict": _safe_bool(item.get("high_ai_hard_stop_conflict", False)),
+        "hard_stop_conflict_dimension": item.get("hard_stop_conflict_dimension"),
+        "hard_stop_conflict_ai_score_band": item.get("hard_stop_conflict_ai_score_band"),
+        "ai_score_at_exit": item.get("ai_score_at_exit") or item.get("current_ai_score"),
+        "ai_model_at_exit": item.get("ai_model_at_exit") or item.get("ai_model"),
+        "ai_result_source_at_exit": item.get("ai_result_source_at_exit") or item.get("ai_result_source"),
         "mfe_10m_pct": metrics.get("mfe_pct"),
         "mae_10m_pct": metrics.get("mae_pct"),
         "close_10m_pct": metrics.get("close_ret_pct"),
@@ -527,6 +564,12 @@ def _load_sim_post_sell_rows(target_date: str) -> tuple[list[dict[str, Any]], di
             "profit_rate": item.get("profit_rate"),
             "exit_rule": item.get("exit_rule"),
             "sim_post_sell_outcome": item.get("outcome"),
+            "high_ai_hard_stop_conflict": _safe_bool(item.get("high_ai_hard_stop_conflict", False)),
+            "hard_stop_conflict_dimension": item.get("hard_stop_conflict_dimension"),
+            "hard_stop_conflict_ai_score_band": item.get("hard_stop_conflict_ai_score_band"),
+            "ai_score_at_exit": item.get("ai_score_at_exit") or item.get("current_ai_score"),
+            "ai_model_at_exit": item.get("ai_model_at_exit") or item.get("ai_model"),
+            "ai_result_source_at_exit": item.get("ai_result_source_at_exit") or item.get("ai_result_source"),
             "mfe_10m_pct": metrics.get("mfe_pct"),
             "mae_10m_pct": metrics.get("mae_pct"),
             "close_10m_pct": metrics.get("close_ret_pct"),
@@ -540,7 +583,20 @@ def _load_sim_post_sell_rows(target_date: str) -> tuple[list[dict[str, Any]], di
                 "stage": stage,
                 "source_stage": "sim_post_sell_evaluation",
                 "runtime_features": {
-                    "ai_score": item.get("ai_score"),
+                    "ai_score": item.get("ai_score") or item.get("current_ai_score") or item.get("ai_score_at_exit"),
+                    "ai_score_raw": item.get("ai_score_raw") or item.get("ai_score_raw_at_exit"),
+                    "ai_action": item.get("ai_action") or item.get("ai_action_at_exit"),
+                    "ai_model": item.get("ai_model") or item.get("ai_model_at_exit"),
+                    "ai_model_tier": item.get("ai_model_tier") or item.get("ai_model_tier_at_exit"),
+                    "ai_result_source": item.get("ai_result_source") or item.get("ai_result_source_at_exit"),
+                    "ai_transport_mode": item.get("ai_transport_mode") or item.get("ai_transport_mode_at_exit"),
+                    "high_ai_hard_stop_conflict": _safe_bool(item.get("high_ai_hard_stop_conflict", False)),
+                    "hard_stop_conflict_dimension": item.get("hard_stop_conflict_dimension"),
+                    "hard_stop_conflict_ai_score_band": item.get("hard_stop_conflict_ai_score_band"),
+                    "hard_stop_conflict_runtime_effect": False,
+                    "hard_stop_conflict_allowed_runtime_apply": False,
+                    "hard_stop_conflict_hard_gate": False,
+                    "hard_stop_conflict_contract": item.get("hard_stop_conflict_contract"),
                     "chosen_action": item.get("exit_rule"),
                     "fixed_threshold_contract_role": "bounded_tunable",
                 },

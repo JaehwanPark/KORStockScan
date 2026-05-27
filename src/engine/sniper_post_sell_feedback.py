@@ -23,9 +23,14 @@ _WRITE_LOCK = threading.RLock()
 _RECORDED_KEYS: dict[tuple[str, str, str, str], float] = {}
 _SIM_RECORDED_KEYS: dict[tuple[str, str, str, str], float] = {}
 _WS_RETAIN_UNTIL: dict[str, float] = {}
-POST_SELL_REPORT_SCHEMA_VERSION = 3
+POST_SELL_REPORT_SCHEMA_VERSION = 4
 POST_SELL_FEEDBACK_HORIZONS_MIN = (1, 3, 5, 10, 20, 30, 60)
 POST_SELL_LONG_HORIZONS_MIN = (20, 30, 60)
+HIGH_AI_HARD_STOP_SCORE_FLOOR = 70.0
+HIGH_AI_HARD_STOP_EXIT_RULES = {
+    "scalp_hard_stop_pct",
+    "scalp_preset_hard_stop_pct",
+}
 SIM_POST_SELL_FORBIDDEN_USES = [
     "threshold mutation",
     "order guard mutation",
@@ -33,6 +38,21 @@ SIM_POST_SELL_FORBIDDEN_USES = [
     "bot restart",
     "broker order submit",
 ]
+HIGH_AI_HARD_STOP_CONFLICT_FORBIDDEN_USES = [
+    *SIM_POST_SELL_FORBIDDEN_USES,
+    "hard stop relaxation",
+    "automatic exit deferral",
+    "runtime approval candidate",
+]
+HIGH_AI_HARD_STOP_CONFLICT_CONTRACT = {
+    "metric_role": "exit_post_sell_dimension",
+    "decision_authority": "source_only_exit_attribution_dimension",
+    "window_policy": "same_day_post_sell_forward_window",
+    "sample_floor": "rolling_window_required_before_any_workorder",
+    "primary_decision_metric": "sim_post_decision_mfe_10m_pct",
+    "source_quality_gate": "hard_stop exit_rule + numeric current_ai_score + post_sell_forward_metrics",
+    "forbidden_uses": list(HIGH_AI_HARD_STOP_CONFLICT_FORBIDDEN_USES),
+}
 
 
 def _post_sell_dir() -> Path:
@@ -106,6 +126,19 @@ def _safe_float(value, default: float = 0.0) -> float:
         return default
 
 
+def _safe_bool(value, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value in (None, "", "None"):
+        return default
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off", "none", "null"}:
+        return False
+    return default
+
+
 def _ratio(numerator: int, denominator: int) -> float:
     if denominator <= 0:
         return 0.0
@@ -143,6 +176,84 @@ def _percentile(values: list[float], pct: float) -> float:
 
 def _clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
+
+
+def _ai_score_band(score: float) -> str:
+    value = _safe_float(score, 0.0)
+    if value <= 0.0:
+        return "ai_score_missing"
+    if value >= 80.0:
+        return "ai_score_80_plus"
+    if value >= 75.0:
+        return "ai_score_75_79"
+    if value >= HIGH_AI_HARD_STOP_SCORE_FLOOR:
+        return "ai_score_70_74"
+    if value >= 65.0:
+        return "ai_score_65_69"
+    return "ai_score_below_65"
+
+
+def _ai_provenance_field(stock: dict, explicit_value, *keys: str) -> str:
+    if explicit_value not in (None, "", "None"):
+        return str(explicit_value)
+    for key in keys:
+        value = stock.get(key)
+        if value not in (None, "", "None"):
+            return str(value)
+    return "-"
+
+
+def _stock_ai_score_fallback(stock: dict) -> float:
+    for key in ("scalp_sim_ai_last_smoothed_score", "scalp_sim_ai_last_score", "last_exit_current_ai_score"):
+        value = stock.get(key)
+        if value not in (None, "", "None"):
+            return _safe_float(value, 0.0)
+    rt_prob = _safe_float(stock.get("rt_ai_prob"), 0.0)
+    if 0.0 < rt_prob <= 1.0:
+        return rt_prob * 100.0
+    return _safe_float(stock.get("rt_ai_prob"), 0.0)
+
+
+def _build_high_ai_hard_stop_conflict_fields(
+    *,
+    exit_rule,
+    current_ai_score,
+    ai_score_raw=None,
+    ai_action=None,
+    ai_result_source=None,
+    ai_model=None,
+    ai_model_tier=None,
+    ai_transport_mode=None,
+) -> dict:
+    resolved_exit_rule = str(exit_rule or "-")
+    score = _safe_float(current_ai_score, 0.0)
+    is_hard_stop = resolved_exit_rule in HIGH_AI_HARD_STOP_EXIT_RULES
+    is_conflict = bool(is_hard_stop and score >= HIGH_AI_HARD_STOP_SCORE_FLOOR)
+    if is_conflict:
+        dimension_value = "high_ai_hard_stop_conflict"
+    elif is_hard_stop and score <= 0.0:
+        dimension_value = "hard_stop_ai_score_missing"
+    elif is_hard_stop:
+        dimension_value = "hard_stop_ai_not_high"
+    else:
+        dimension_value = "not_hard_stop"
+    return {
+        "high_ai_hard_stop_conflict": is_conflict,
+        "hard_stop_conflict_dimension": dimension_value,
+        "hard_stop_conflict_score_floor": HIGH_AI_HARD_STOP_SCORE_FLOOR,
+        "hard_stop_conflict_ai_score_band": _ai_score_band(score),
+        "hard_stop_conflict_runtime_effect": False,
+        "hard_stop_conflict_allowed_runtime_apply": False,
+        "hard_stop_conflict_hard_gate": False,
+        "hard_stop_conflict_contract": dict(HIGH_AI_HARD_STOP_CONFLICT_CONTRACT),
+        "ai_score_at_exit": round(score, 1),
+        "ai_score_raw_at_exit": round(_safe_float(ai_score_raw, score), 1),
+        "ai_action_at_exit": str(ai_action or "-"),
+        "ai_result_source_at_exit": str(ai_result_source or "-"),
+        "ai_model_at_exit": str(ai_model or "-"),
+        "ai_model_tier_at_exit": str(ai_model_tier or "-"),
+        "ai_transport_mode_at_exit": str(ai_transport_mode or "-"),
+    }
 
 
 def should_retain_ws_subscription(code: str, now_ts: float | None = None) -> bool:
@@ -207,6 +318,8 @@ def record_post_sell_candidate(
         if dedupe_key in _RECORDED_KEYS:
             return None
 
+        resolved_exit_rule = str(exit_rule or stock.get("last_exit_rule") or "-")
+        resolved_ai_score = round(_safe_float(current_ai_score, stock.get("last_exit_current_ai_score", 0.0)), 1)
         payload = {
             "post_sell_id": uuid.uuid4().hex[:16],
             "recorded_at": now.isoformat(),
@@ -222,12 +335,12 @@ def record_post_sell_candidate(
             "sell_price": safe_sell_price,
             "profit_rate": round(_safe_float(profit_rate, 0.0), 3),
             "buy_qty": _safe_int(buy_qty, 0),
-            "exit_rule": str(exit_rule or stock.get("last_exit_rule") or "-"),
+            "exit_rule": resolved_exit_rule,
             "exit_decision_source": str(stock.get("last_exit_decision_source") or "-"),
             "revive": bool(revive),
             "peak_profit": round(_safe_float(peak_profit, stock.get("last_exit_peak_profit", 0.0)), 3),
             "held_sec": _safe_int(held_sec, stock.get("last_exit_held_sec", 0)),
-            "current_ai_score": round(_safe_float(current_ai_score, stock.get("last_exit_current_ai_score", 0.0)), 1),
+            "current_ai_score": resolved_ai_score,
             "soft_stop_threshold_pct": round(
                 _safe_float(soft_stop_threshold_pct, stock.get("last_exit_soft_stop_threshold_pct", 0.0)),
                 3,
@@ -239,6 +352,18 @@ def record_post_sell_candidate(
             ),
             "evaluation_mode": "post_sell_minute_forward",
         }
+        payload.update(
+            _build_high_ai_hard_stop_conflict_fields(
+                exit_rule=resolved_exit_rule,
+                current_ai_score=resolved_ai_score,
+                ai_score_raw=stock.get("last_exit_ai_score_raw"),
+                ai_action=stock.get("last_exit_ai_action"),
+                ai_result_source=stock.get("last_exit_ai_result_source"),
+                ai_model=stock.get("last_exit_ai_model"),
+                ai_model_tier=stock.get("last_exit_ai_model_tier"),
+                ai_transport_mode=stock.get("last_exit_ai_transport_mode"),
+            )
+        )
 
         _append_jsonl(_candidate_path(target_date), payload)
         _RECORDED_KEYS[dedupe_key] = now.timestamp()
@@ -279,6 +404,13 @@ def record_sim_post_sell_candidate(
     entry_record_id: str | None = None,
     entry_join_key: str | None = None,
     entry_join_status: str | None = None,
+    current_ai_score=None,
+    ai_score_raw=None,
+    ai_action=None,
+    ai_result_source=None,
+    ai_model=None,
+    ai_model_tier=None,
+    ai_transport_mode=None,
 ) -> dict | None:
     if not bool(getattr(TRADING_RULES, "POST_SELL_FEEDBACK_ENABLED", True)):
         return None
@@ -311,6 +443,14 @@ def record_sim_post_sell_candidate(
         if dedupe_key in _SIM_RECORDED_KEYS:
             return None
 
+        resolved_exit_rule = str(exit_rule or stock.get("last_exit_rule") or "-")
+        resolved_ai_score = round(
+            _safe_float(
+                current_ai_score,
+                _stock_ai_score_fallback(stock),
+            ),
+            1,
+        )
         payload = {
             "schema_version": POST_SELL_REPORT_SCHEMA_VERSION,
             "report_type": "sim_post_sell_candidate",
@@ -337,7 +477,7 @@ def record_sim_post_sell_candidate(
             "sell_price": safe_sell_price,
             "profit_rate": round(_safe_float(profit_rate, 0.0), 3),
             "buy_qty": _safe_int(buy_qty, stock.get("buy_qty", 0)),
-            "exit_rule": str(exit_rule or stock.get("last_exit_rule") or "-"),
+            "exit_rule": resolved_exit_rule,
             "sell_reason_type": str(sell_reason_type or "-"),
             "trigger_profit_rate": round(
                 _safe_float(trigger_profit_rate, _safe_float(profit_rate, 0.0)),
@@ -368,7 +508,47 @@ def record_sim_post_sell_candidate(
             "sim_record_id": sim_id,
             "sim_parent_record_id": sim_parent_id,
             "source_event_stage": str(source_event_stage or "scalp_sim_sell_order_assumed_filled"),
+            "current_ai_score": resolved_ai_score,
+            "ai_score_raw": round(
+                _safe_float(
+                    ai_score_raw,
+                    stock.get("scalp_sim_ai_last_raw_score", stock.get("scalp_sim_ai_last_score", resolved_ai_score)),
+                ),
+                1,
+            ),
+            "ai_action": _ai_provenance_field(stock, ai_action, "scalp_sim_ai_last_action", "last_exit_ai_action"),
+            "ai_result_source": _ai_provenance_field(
+                stock,
+                ai_result_source,
+                "scalp_sim_ai_last_result_source",
+                "last_exit_ai_result_source",
+            ),
+            "ai_model": _ai_provenance_field(stock, ai_model, "scalp_sim_ai_last_model", "last_exit_ai_model"),
+            "ai_model_tier": _ai_provenance_field(
+                stock,
+                ai_model_tier,
+                "scalp_sim_ai_last_model_tier",
+                "last_exit_ai_model_tier",
+            ),
+            "ai_transport_mode": _ai_provenance_field(
+                stock,
+                ai_transport_mode,
+                "scalp_sim_ai_last_transport_mode",
+                "last_exit_ai_transport_mode",
+            ),
         }
+        payload.update(
+            _build_high_ai_hard_stop_conflict_fields(
+                exit_rule=resolved_exit_rule,
+                current_ai_score=payload["current_ai_score"],
+                ai_score_raw=payload["ai_score_raw"],
+                ai_action=payload["ai_action"],
+                ai_result_source=payload["ai_result_source"],
+                ai_model=payload["ai_model"],
+                ai_model_tier=payload["ai_model_tier"],
+                ai_transport_mode=payload["ai_transport_mode"],
+            )
+        )
 
         _append_jsonl(_sim_candidate_path(target_date), payload)
         _SIM_RECORDED_KEYS[dedupe_key] = now.timestamp()
@@ -579,6 +759,36 @@ def evaluate_post_sell_candidates(target_date: str, token: str | None = None) ->
             "peak_profit": candidate.get("peak_profit", 0.0),
             "held_sec": candidate.get("held_sec", 0),
             "current_ai_score": candidate.get("current_ai_score", 0.0),
+            "high_ai_hard_stop_conflict": _safe_bool(candidate.get("high_ai_hard_stop_conflict", False)),
+            "hard_stop_conflict_dimension": candidate.get("hard_stop_conflict_dimension", "not_hard_stop"),
+            "hard_stop_conflict_score_floor": candidate.get(
+                "hard_stop_conflict_score_floor",
+                HIGH_AI_HARD_STOP_SCORE_FLOOR,
+            ),
+            "hard_stop_conflict_ai_score_band": candidate.get(
+                "hard_stop_conflict_ai_score_band",
+                "ai_score_missing",
+            ),
+            "hard_stop_conflict_runtime_effect": False,
+            "hard_stop_conflict_allowed_runtime_apply": False,
+            "hard_stop_conflict_hard_gate": False,
+            "hard_stop_conflict_contract": candidate.get(
+                "hard_stop_conflict_contract",
+                dict(HIGH_AI_HARD_STOP_CONFLICT_CONTRACT),
+            ),
+            "ai_score_at_exit": candidate.get("ai_score_at_exit", candidate.get("current_ai_score", 0.0)),
+            "ai_score_raw_at_exit": candidate.get("ai_score_raw_at_exit", candidate.get("ai_score_raw", 0.0)),
+            "ai_action_at_exit": candidate.get("ai_action_at_exit", candidate.get("ai_action", "-")),
+            "ai_result_source_at_exit": candidate.get(
+                "ai_result_source_at_exit",
+                candidate.get("ai_result_source", "-"),
+            ),
+            "ai_model_at_exit": candidate.get("ai_model_at_exit", candidate.get("ai_model", "-")),
+            "ai_model_tier_at_exit": candidate.get("ai_model_tier_at_exit", candidate.get("ai_model_tier", "-")),
+            "ai_transport_mode_at_exit": candidate.get(
+                "ai_transport_mode_at_exit",
+                candidate.get("ai_transport_mode", "-"),
+            ),
             "soft_stop_threshold_pct": candidate.get("soft_stop_threshold_pct", 0.0),
             "same_symbol_soft_stop_cooldown_would_block": bool(
                 candidate.get("same_symbol_soft_stop_cooldown_would_block", False)
@@ -701,6 +911,43 @@ def evaluate_sim_post_sell_candidates(target_date: str, token: str | None = None
             "exit_rule": candidate.get("exit_rule", "-"),
             "sell_reason_type": candidate.get("sell_reason_type", "-"),
             "trigger_profit_rate": candidate.get("trigger_profit_rate", 0.0),
+            "current_ai_score": candidate.get("current_ai_score", 0.0),
+            "ai_score_raw": candidate.get("ai_score_raw", 0.0),
+            "ai_action": candidate.get("ai_action", "-"),
+            "ai_result_source": candidate.get("ai_result_source", "-"),
+            "ai_model": candidate.get("ai_model", "-"),
+            "ai_model_tier": candidate.get("ai_model_tier", "-"),
+            "ai_transport_mode": candidate.get("ai_transport_mode", "-"),
+            "high_ai_hard_stop_conflict": _safe_bool(candidate.get("high_ai_hard_stop_conflict", False)),
+            "hard_stop_conflict_dimension": candidate.get("hard_stop_conflict_dimension", "not_hard_stop"),
+            "hard_stop_conflict_score_floor": candidate.get(
+                "hard_stop_conflict_score_floor",
+                HIGH_AI_HARD_STOP_SCORE_FLOOR,
+            ),
+            "hard_stop_conflict_ai_score_band": candidate.get(
+                "hard_stop_conflict_ai_score_band",
+                "ai_score_missing",
+            ),
+            "hard_stop_conflict_runtime_effect": False,
+            "hard_stop_conflict_allowed_runtime_apply": False,
+            "hard_stop_conflict_hard_gate": False,
+            "hard_stop_conflict_contract": candidate.get(
+                "hard_stop_conflict_contract",
+                dict(HIGH_AI_HARD_STOP_CONFLICT_CONTRACT),
+            ),
+            "ai_score_at_exit": candidate.get("ai_score_at_exit", candidate.get("current_ai_score", 0.0)),
+            "ai_score_raw_at_exit": candidate.get("ai_score_raw_at_exit", candidate.get("ai_score_raw", 0.0)),
+            "ai_action_at_exit": candidate.get("ai_action_at_exit", candidate.get("ai_action", "-")),
+            "ai_result_source_at_exit": candidate.get(
+                "ai_result_source_at_exit",
+                candidate.get("ai_result_source", "-"),
+            ),
+            "ai_model_at_exit": candidate.get("ai_model_at_exit", candidate.get("ai_model", "-")),
+            "ai_model_tier_at_exit": candidate.get("ai_model_tier_at_exit", candidate.get("ai_model_tier", "-")),
+            "ai_transport_mode_at_exit": candidate.get(
+                "ai_transport_mode_at_exit",
+                candidate.get("ai_transport_mode", "-"),
+            ),
             "outcome": outcome,
             "candidate_source": "scalp_simulator",
             "simulation_book": "scalp_ai_buy_all",
@@ -792,6 +1039,13 @@ def backfill_sim_post_sell_candidates_from_threshold_events(target_date: str) ->
             exit_rule=fields.get("exit_rule"),
             sell_reason_type=fields.get("sell_reason_type"),
             trigger_profit_rate=fields.get("trigger_profit_rate"),
+            current_ai_score=fields.get("current_ai_score") or fields.get("ai_score_smoothed"),
+            ai_score_raw=fields.get("ai_score_raw"),
+            ai_action=fields.get("ai_action"),
+            ai_result_source=fields.get("ai_result_source"),
+            ai_model=fields.get("ai_model"),
+            ai_model_tier=fields.get("ai_model_tier"),
+            ai_transport_mode=fields.get("ai_transport_mode") or fields.get("openai_transport_mode"),
         )
         if candidate:
             created += 1
@@ -901,6 +1155,22 @@ def _enrich_post_sell_rows(
         peak_profit = _safe_float(item.get("peak_profit", candidate.get("peak_profit")), 0.0)
         held_sec = _safe_int(item.get("held_sec", candidate.get("held_sec")), 0)
         current_ai_score = _safe_float(item.get("current_ai_score", candidate.get("current_ai_score")), 0.0)
+        conflict_fields = _build_high_ai_hard_stop_conflict_fields(
+            exit_rule=item.get("exit_rule", candidate.get("exit_rule", "-")),
+            current_ai_score=current_ai_score,
+            ai_score_raw=item.get("ai_score_raw_at_exit", item.get("ai_score_raw", candidate.get("ai_score_raw"))),
+            ai_action=item.get("ai_action_at_exit", item.get("ai_action", candidate.get("ai_action"))),
+            ai_result_source=item.get(
+                "ai_result_source_at_exit",
+                item.get("ai_result_source", candidate.get("ai_result_source")),
+            ),
+            ai_model=item.get("ai_model_at_exit", item.get("ai_model", candidate.get("ai_model"))),
+            ai_model_tier=item.get("ai_model_tier_at_exit", item.get("ai_model_tier", candidate.get("ai_model_tier"))),
+            ai_transport_mode=item.get(
+                "ai_transport_mode_at_exit",
+                item.get("ai_transport_mode", candidate.get("ai_transport_mode")),
+            ),
+        )
         soft_stop_threshold_pct = _safe_float(
             item.get("soft_stop_threshold_pct", candidate.get("soft_stop_threshold_pct")),
             0.0,
@@ -938,6 +1208,7 @@ def _enrich_post_sell_rows(
             "peak_profit": round(peak_profit, 3),
             "held_sec": int(held_sec),
             "current_ai_score": round(current_ai_score, 1),
+            **conflict_fields,
             "exit_rule": str(item.get("exit_rule") or candidate.get("exit_rule") or "-"),
             "revive": bool(item.get("revive", candidate.get("revive", False))),
             "outcome": str(item.get("outcome") or "NEUTRAL").upper(),
@@ -1236,6 +1507,41 @@ def _build_tag_tuning_rows(rows: list[dict]) -> list[dict]:
     )
 
 
+def _build_high_ai_hard_stop_forensics(rows: list[dict]) -> dict:
+    hard_stop_rows = [
+        row
+        for row in rows
+        if str(row.get("exit_rule") or "") in HIGH_AI_HARD_STOP_EXIT_RULES
+    ]
+    conflict_rows = [row for row in hard_stop_rows if _safe_bool(row.get("high_ai_hard_stop_conflict"))]
+    outcome_counter = Counter(str(row.get("outcome") or "NEUTRAL").upper() for row in conflict_rows)
+    source_counter = Counter(str(row.get("ai_result_source_at_exit") or "-") for row in conflict_rows)
+    model_counter = Counter(str(row.get("ai_model_at_exit") or "-") for row in conflict_rows)
+    return {
+        "dimension_name": "high_ai_hard_stop_conflict",
+        "metric_role": HIGH_AI_HARD_STOP_CONFLICT_CONTRACT["metric_role"],
+        "decision_authority": HIGH_AI_HARD_STOP_CONFLICT_CONTRACT["decision_authority"],
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "hard_gate": False,
+        "score_floor": HIGH_AI_HARD_STOP_SCORE_FLOOR,
+        "hard_stop_total": len(hard_stop_rows),
+        "conflict_count": len(conflict_rows),
+        "conflict_rate_in_hard_stop": _ratio(len(conflict_rows), len(hard_stop_rows)),
+        "missed_upside_count": outcome_counter.get("MISSED_UPSIDE", 0),
+        "good_exit_count": outcome_counter.get("GOOD_EXIT", 0),
+        "neutral_count": outcome_counter.get("NEUTRAL", 0),
+        "missed_upside_rate": _ratio(outcome_counter.get("MISSED_UPSIDE", 0), len(conflict_rows)),
+        "good_exit_rate": _ratio(outcome_counter.get("GOOD_EXIT", 0), len(conflict_rows)),
+        "avg_mfe_10m_pct": _avg([_safe_float(row.get("mfe_10m_pct"), 0.0) for row in conflict_rows]),
+        "avg_close_10m_pct": _avg([_safe_float(row.get("close_10m_pct"), 0.0) for row in conflict_rows]),
+        "avg_mae_10m_pct": _avg([_safe_float(row.get("mae_10m_pct"), 0.0) for row in conflict_rows]),
+        "source_counts": dict(source_counter),
+        "model_counts": dict(model_counter),
+        "contract": dict(HIGH_AI_HARD_STOP_CONFLICT_CONTRACT),
+    }
+
+
 def _build_priority_actions(exit_rule_rows: list[dict], limit: int = 3) -> list[dict]:
     actions: list[dict] = []
     for row in exit_rule_rows:
@@ -1286,6 +1592,12 @@ def _case_view(row: dict) -> dict:
         "extra_upside_10m_pct": round(_safe_float(row.get("extra_upside_10m_pct"), 0.0), 3),
         "extra_upside_10m_krw_est": int(_safe_int(row.get("extra_upside_10m_krw_est"), 0)),
         "capture_efficiency_pct": round(_safe_float(row.get("capture_efficiency_pct"), 0.0), 1),
+        "high_ai_hard_stop_conflict": _safe_bool(row.get("high_ai_hard_stop_conflict", False)),
+        "hard_stop_conflict_dimension": str(row.get("hard_stop_conflict_dimension") or "not_hard_stop"),
+        "hard_stop_conflict_ai_score_band": str(row.get("hard_stop_conflict_ai_score_band") or "ai_score_missing"),
+        "ai_score_at_exit": round(_safe_float(row.get("ai_score_at_exit", row.get("current_ai_score")), 0.0), 1),
+        "ai_model_at_exit": str(row.get("ai_model_at_exit") or "-"),
+        "ai_result_source_at_exit": str(row.get("ai_result_source_at_exit") or "-"),
     }
     for horizon in POST_SELL_LONG_HORIZONS_MIN:
         result[f"mfe_{horizon}m_pct"] = round(_safe_float(row.get(f"mfe_{horizon}m_pct"), 0.0), 3)
@@ -1379,6 +1691,7 @@ def build_post_sell_feedback_report(
             "tag_tuning": [],
             "priority_actions": _build_priority_actions([], limit=3),
             "soft_stop_forensics": _build_soft_stop_forensics([]),
+            "high_ai_hard_stop_forensics": _build_high_ai_hard_stop_forensics([]),
             "top_missed_upside": [],
             "top_good_exit": [],
             "meta": {
@@ -1449,6 +1762,7 @@ def build_post_sell_feedback_report(
     tag_rows = _build_tag_tuning_rows(rows)
     priority_actions = _build_priority_actions(exit_rule_rows, limit=3)
     soft_stop_forensics = _build_soft_stop_forensics(rows)
+    high_ai_hard_stop_forensics = _build_high_ai_hard_stop_forensics(rows)
 
     top_missed = [
         _case_view(item)
@@ -1498,6 +1812,7 @@ def build_post_sell_feedback_report(
         "tag_tuning": tag_rows,
         "priority_actions": priority_actions,
         "soft_stop_forensics": soft_stop_forensics,
+        "high_ai_hard_stop_forensics": high_ai_hard_stop_forensics,
         "top_missed_upside": top_missed,
         "top_good_exit": top_good,
         "meta": {

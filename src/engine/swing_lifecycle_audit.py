@@ -13,8 +13,11 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 
 from src.engine.automation.dual_candidate_review import (
+    evidence_authority_contract,
     REQUIRED_METRIC_CONTRACT_FIELDS,
+    has_evidence_authority_violation,
     proposal_counts,
+    with_evidence_authority_forbidden_uses,
 )
 from src.engine.auto_promotion_contracts import (
     pre_final_promotion_contract,
@@ -62,6 +65,15 @@ SWING_ENTRY_BOTTLENECK_ENTRY_FLOOR = 10
 SWING_ENTRY_BOTTLENECK_BLOCKER_FLOOR = 5
 SWING_ENTRY_BOTTLENECK_CONVERSION_PCT = 20.0
 SWING_ENTRY_BOTTLENECK_PROBE_ENTRY_PCT = 50.0
+SWING_THRESHOLD_FORBIDDEN_USES = with_evidence_authority_forbidden_uses(
+    [
+        "intraday threshold mutation",
+        "provider route change",
+        "broker order submission",
+        "bot restart",
+        "position cap release",
+    ]
+)
 
 
 def swing_one_share_real_canary_phase0_policy() -> dict[str, Any]:
@@ -2914,6 +2926,9 @@ def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, list[dict[
         if sample_window not in ALLOWED_SAMPLE_WINDOWS:
             warnings.append(f"corrections[{index}] invalid sample_window={sample_window}")
             continue
+        if has_evidence_authority_violation(item) or has_evidence_authority_violation(proposal):
+            warnings.append(f"corrections[{index}] evidence_authority_violation")
+            continue
         parsed.append(item)
     return ("parsed" if parsed or not warnings else "parsed_empty"), parsed, warnings
 
@@ -2969,6 +2984,7 @@ def _build_ai_review_input_context(audit_report: dict[str, Any], candidates: lis
         "date": audit_report.get("date"),
         "authority": "proposal_only",
         "runtime_change": False,
+        "evidence_authority_contract": evidence_authority_contract(),
         "policy": audit_report.get("policy"),
         "lifecycle_summary": {
             "model_selection": audit_report.get("model_selection"),
@@ -2999,13 +3015,8 @@ def _swing_threshold_deterministic_proposal(candidate: dict[str, Any]) -> dict[s
         "reasoning_summary": "Deterministic swing threshold candidate generated from lifecycle audit metrics.",
         "confidence": "medium",
         "required_source_fields": list(REQUIRED_METRIC_CONTRACT_FIELDS),
-        "forbidden_uses": [
-            "intraday threshold mutation",
-            "provider route change",
-            "broker order submission",
-            "bot restart",
-            "position cap release",
-        ],
+        "forbidden_uses": list(SWING_THRESHOLD_FORBIDDEN_USES),
+        "evidence_authority_contract": evidence_authority_contract(),
         "workorder_title": f"Review swing threshold candidate: {family}",
         "workorder_priority": "medium",
     }
@@ -3051,13 +3062,8 @@ def _swing_threshold_ai_tier2_proposal(family: str, proposal_item: dict[str, Any
         "reasoning_summary": reason,
         "confidence": confidence,
         "required_source_fields": list(REQUIRED_METRIC_CONTRACT_FIELDS),
-        "forbidden_uses": [
-            "intraday threshold mutation",
-            "provider route change",
-            "broker order submission",
-            "bot restart",
-            "position cap release",
-        ],
+        "forbidden_uses": list(SWING_THRESHOLD_FORBIDDEN_USES),
+        "evidence_authority_contract": evidence_authority_contract(),
     }
 
 
@@ -3098,6 +3104,7 @@ def _swing_threshold_comparative_review(
         "confidence": ai_proposal.get("confidence") or deterministic.get("confidence") or "medium",
         "required_source_fields": list(REQUIRED_METRIC_CONTRACT_FIELDS),
         "forbidden_uses": deterministic.get("forbidden_uses") or [],
+        "evidence_authority_contract": evidence_authority_contract(),
         "workorder_title": deterministic.get("workorder_title") or f"Review swing threshold candidate: {family}",
         "workorder_priority": deterministic.get("workorder_priority") or "medium",
     }
@@ -3112,6 +3119,12 @@ def _build_openai_review_instructions() -> str:
         "Return only strict JSON using threshold_ai_correction_v1.\n"
         "Use proposed_state values only from adjust_up, adjust_down, hold, hold_sample, or freeze.\n"
         "Use anomaly_route values only from threshold_candidate, incident, instrumentation_gap, or normal_drift.\n"
+        "Evidence authority contract: bucket/dimension tuning primary evidence is sim/probe lifecycle EV. "
+        "Real one-share samples are not primary EV evidence unless the mapped bucket policy was already enabled "
+        "for the evaluated post-apply cohort. Pre-apply real samples may be used only for execution-quality "
+        "calibration, safety veto, provenance validation, and broker/fill/slippage source-quality checks. "
+        "Do not merge real PnL with sim/probe EV and do not promote runtime threshold/order/provider/cap/bot "
+        "changes from pre-apply real one-share outcomes.\n"
         "Preserve family ids, enum labels, ticker names, and raw evidence exactly.\n"
         "Domain glossary for interpretation only: selection=stock selection, entry=entry, holding=holding, "
         "exit=exit, AVG_DOWN=averaging down, PYRAMID=pyramiding, order_flow=order-flow pressure, "
@@ -3284,6 +3297,7 @@ def build_swing_threshold_ai_review_report(
             "authority": "proposal_only",
             "final_source_of_truth": "deterministic_guard_and_manual_workorder",
             "runtime_change": False,
+            "evidence_authority_contract": evidence_authority_contract(),
             "forbidden": [
                 "env/code/runtime direct change",
                 "intraday threshold mutation",

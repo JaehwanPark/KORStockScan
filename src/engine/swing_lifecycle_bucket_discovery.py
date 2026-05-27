@@ -12,10 +12,13 @@ from pathlib import Path
 from typing import Any
 
 from src.engine.automation.dual_candidate_review import (
+    evidence_authority_contract,
     REQUIRED_METRIC_CONTRACT_FIELDS,
+    has_evidence_authority_violation,
     has_forbidden_runtime_leak,
     missing_metric_contract_fields,
     proposal_counts,
+    with_evidence_authority_forbidden_uses,
 )
 from src.engine.lifecycle.bucket_taxonomy import (
     BUCKET_ALIAS_VERSION,
@@ -45,6 +48,7 @@ FORBIDDEN_USES = [
     "bot_restart",
     "runtime_threshold_mutation",
 ]
+FORBIDDEN_USES = with_evidence_authority_forbidden_uses(FORBIDDEN_USES)
 
 CLASSIFICATION_STATES = {
     "sim_auto_approved",
@@ -152,6 +156,7 @@ def _candidate_from_bucket(section_name: str, bucket: dict[str, Any]) -> dict[st
         if state == "sim_auto_approved"
         else "postclose_source_quality_or_sample_collection",
         "forbidden_uses": FORBIDDEN_USES,
+        "evidence_authority_contract": evidence_authority_contract(),
     }
 
 
@@ -181,6 +186,7 @@ def _swing_entry_bottleneck_candidate(matrix: dict[str, Any]) -> dict[str, Any] 
         "human_approval_required": False,
         "next_route": "code_improvement_workorder",
         "forbidden_uses": FORBIDDEN_USES,
+        "evidence_authority_contract": evidence_authority_contract(),
         "classification_primary": bottleneck.get("primary"),
         "classification_matches": matches,
         "counts": counts,
@@ -197,6 +203,7 @@ def _workorder_contract_fields() -> dict[str, Any]:
         "broker_order_forbidden": True,
         "human_approval_required": False,
         "forbidden_uses": FORBIDDEN_USES,
+        "evidence_authority_contract": evidence_authority_contract(),
     }
 
 
@@ -239,6 +246,7 @@ def _build_ai_review_context(target_date: str, candidates: list[dict[str, Any]])
         "allowed_runtime_apply": False,
         "broker_order_forbidden": True,
         "forbidden_uses": FORBIDDEN_USES,
+        "evidence_authority_contract": evidence_authority_contract(),
         "deterministic_proposals": [
             {
                 "bucket_id": item.get("bucket_id"),
@@ -264,6 +272,13 @@ def _build_ai_review_instructions() -> str:
         "for numeric or value-specific bucket keys.\n"
         "You must not grant runtime, threshold, provider, bot, cap, real-order, one-share canary, or broker-order "
         "authority. All output is workorder/source-only.\n"
+        "Evidence authority contract: bucket/dimension tuning primary evidence is sim/probe lifecycle EV. "
+        "Real one-share samples are not primary EV evidence unless the mapped bucket policy was already enabled "
+        "for the evaluated post-apply cohort. Pre-apply real samples may be used only for execution-quality "
+        "calibration, safety veto, provenance validation, and broker/fill/slippage source-quality checks. "
+        "Do not merge real PnL with sim/probe EV and do not promote runtime threshold/order/provider/cap/bot "
+        "changes from pre-apply real one-share outcomes. If a proposal violates this contract, select reject, "
+        "source_quality_blocker, or instrumentation_gap.\n"
         "Metric or dimension proposals must include metric_role, decision_authority, window_policy, sample_floor, "
         "primary_decision_metric, source_quality_gate, and forbidden_uses in required_source_fields.\n"
         "For every ai_tier2_proposal and comparative_review, required_source_fields must contain all seven exact "
@@ -352,6 +367,8 @@ def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, 
                 warnings.append(f"ai_review_{key}_contract_missing:{item.get('bucket_id')}:{','.join(missing_contract)}")
             if has_forbidden_runtime_leak(item):
                 warnings.append(f"ai_review_{key}_forbidden_use_leak:{item.get('bucket_id')}")
+            if has_evidence_authority_violation(item):
+                warnings.append(f"ai_review_{key}_evidence_authority_violation:{item.get('bucket_id')}")
     audit = payload.get("audit") if isinstance(payload.get("audit"), dict) else {}
     if str(audit.get("status") or "") not in {"pass", "correction_required", "insufficient_context"}:
         warnings.append("ai_review_audit_status_invalid")
@@ -656,6 +673,8 @@ def build_swing_lifecycle_bucket_discovery(
         "broker_order_forbidden": True,
         "allowed_runtime_apply": False,
         "human_intervention_required": False,
+        "forbidden_uses": FORBIDDEN_USES,
+        "evidence_authority_contract": evidence_authority_contract(),
         "ai_review_policy": {
             "status": ai_audit.get("status"),
             "provider": ai_audit.get("provider"),

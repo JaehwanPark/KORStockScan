@@ -46,6 +46,23 @@ def test_state_handler_parse_holding_entry_date_accepts_date_types():
     assert state_handlers._parse_holding_entry_date("2026-05-27 09:00:00") == date(2026, 5, 27)
 
 
+def test_entry_adm_submitted_stage_uses_buy_action_despite_warning_dimension():
+    action = state_handlers._entry_adm_action_from_context(
+        "order_bundle_submitted",
+        latency_gate={"entry_price_guard": "latency_danger_override_defensive"},
+        submit_fields={"entry_submit_revalidation_warning": "stale_context_or_quote"},
+    )
+
+    assert action == "BUY_DEFENSIVE"
+    assert (
+        state_handlers._entry_adm_action_from_context(
+            "entry_submit_revalidation_warning",
+            submit_fields={"entry_submit_revalidation_warning": "stale_context_or_quote"},
+        )
+        == "WAIT_REQUOTE"
+    )
+
+
 def test_scalping_pyramid_signal():
     stock = {"pyramid_count": 0}
     result = scale_in.evaluate_scalping_pyramid(
@@ -2312,6 +2329,19 @@ def test_watching_state_logs_latency_entry_price_guard(monkeypatch):
     assert by_stage["order_bundle_submitted"]["overbought_guard_action"] == "WOULD_PASS"
     assert by_stage["order_bundle_submitted"]["order_price"] == 9_990
     assert by_stage["order_bundle_submitted"]["submitted_order_price"] == 9_990
+    adm_snapshots = [
+        fields for stage, fields in logs if stage == "scalp_entry_action_decision_snapshot"
+    ]
+    latency_snapshot = next(
+        fields for fields in adm_snapshots if fields.get("source_stage") == "latency_pass"
+    )
+    submitted_snapshot = next(
+        fields for fields in adm_snapshots if fields.get("source_stage") == "order_bundle_submitted"
+    )
+    assert latency_snapshot["chosen_action"] == "BUY_DEFENSIVE"
+    assert latency_snapshot["actual_order_submitted"] is False
+    assert submitted_snapshot["chosen_action"] == "BUY_DEFENSIVE"
+    assert submitted_snapshot["actual_order_submitted"] is True
 
 
 def test_watching_state_blocks_deep_below_bid_pre_submit_price(monkeypatch):

@@ -114,6 +114,20 @@ def test_scalp_entry_adm_report_aggregates_actions_and_joins_outcomes(tmp_path, 
                     "entry_adm_runtime_reason": "matrix_buy_defensive",
                 },
             },
+            {
+                "stage": "scalp_entry_action_decision_snapshot",
+                "stock_code": "888888",
+                "record_id": "R8",
+                "emitted_at": "2026-05-18T09:16:00",
+                "emitted_date": "2026-05-18",
+                "fields": {
+                    "candidate_id": "ADM3",
+                    "source_stage": "order_bundle_submitted",
+                    "chosen_action": "NO_BUY_AI",
+                    "actual_order_submitted": True,
+                    "price_resolution_reason": "defensive_order_price",
+                },
+            },
         ],
     )
     _write_jsonl(
@@ -148,7 +162,12 @@ def test_scalp_entry_adm_report_aggregates_actions_and_joins_outcomes(tmp_path, 
     assert counts["SKIP_STALE"] == 1
     assert counts["SKIP_PRE_SUBMIT_SAFETY"] == 2
     assert counts["BUY_NOW"] == 1
-    assert counts["BUY_DEFENSIVE"] == 1
+    assert counts["BUY_DEFENSIVE"] == 2
+    assert report["summary"]["raw_action_counts"]["NO_BUY_AI"] == 1
+    assert report["summary"]["action_normalized_count"] == 1
+    assert report["summary"]["action_normalization_counts"] == {
+        "submitted_or_latency_pass_non_buy_action_normalized": 1
+    }
     assert report["summary"]["joined_sample"] == 2
     buy_now = next(item for item in report["action_summary"] if item["action"] == "BUY_NOW")
     defensive = next(item for item in report["action_summary"] if item["action"] == "BUY_DEFENSIVE")
@@ -193,6 +212,40 @@ def test_scalp_entry_adm_event_paths_include_gzip_threshold_events(tmp_path, mon
     )
 
     assert mod._event_paths("2026-05-18") == [threshold_dir / "threshold_events_2026-05-18.jsonl.gz"]
+
+
+def test_scalp_entry_adm_normalizes_submitted_snapshot_action():
+    fields = {
+        "source_stage": "order_bundle_submitted",
+        "chosen_action": "NO_BUY_AI",
+        "actual_order_submitted": True,
+        "price_resolution_reason": "defensive_order_price",
+    }
+
+    assert mod._chosen_action("scalp_entry_action_decision_snapshot", fields) == "BUY_DEFENSIVE"
+    row = mod._base_row(
+        {
+            "stage": "scalp_entry_action_decision_snapshot",
+            "stock_code": "005930",
+            "stock_name": "TEST",
+            "fields": fields,
+        }
+    )
+    assert row["source_stage"] == "order_bundle_submitted"
+    assert row["raw_chosen_action"] == "NO_BUY_AI"
+    assert row["chosen_action"] == "BUY_DEFENSIVE"
+    assert row["action_normalized"] is True
+    assert row["action_normalization_reason"] == "submitted_or_latency_pass_non_buy_action_normalized"
+    assert (
+        mod._chosen_action(
+            "scalp_entry_action_decision_snapshot",
+            {
+                "source_stage": "entry_submit_revalidation_warning",
+                "chosen_action": "WAIT_REQUOTE",
+            },
+        )
+        == "WAIT_REQUOTE"
+    )
 
 
 def test_scalp_entry_adm_runtime_context_adds_prompt_and_cache_token(tmp_path, monkeypatch):

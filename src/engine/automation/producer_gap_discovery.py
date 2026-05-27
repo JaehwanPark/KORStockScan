@@ -14,11 +14,14 @@ from pathlib import Path
 from typing import Any
 
 from src.engine.automation.dual_candidate_review import (
+    evidence_authority_contract,
     REQUIRED_METRIC_CONTRACT_FIELDS,
     default_comparative_review,
+    has_evidence_authority_violation,
     has_forbidden_runtime_leak,
     missing_metric_contract_fields,
     proposal_counts,
+    with_evidence_authority_forbidden_uses,
 )
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.utils.constants import TRADING_RULES
@@ -45,6 +48,7 @@ FORBIDDEN_USES = [
     "exit decision override",
     "broker order submit",
 ]
+FORBIDDEN_USES = with_evidence_authority_forbidden_uses(FORBIDDEN_USES)
 PATTERN_TYPES = {
     "stop_recovery_counterfactual_missing",
     "missed_fill_recovery_counterfactual_missing",
@@ -1249,6 +1253,7 @@ def _deterministic_proposal(candidate: dict[str, Any]) -> dict[str, Any]:
         "confidence": "high" if candidate.get("priority") in {"critical", "high"} else "medium",
         "required_source_fields": list(REQUIRED_METRIC_CONTRACT_FIELDS),
         "forbidden_uses": list(FORBIDDEN_USES),
+        "evidence_authority_contract": evidence_authority_contract(),
         "workorder_title": f"Review producer gap: {pattern_type}",
         "workorder_priority": str(candidate.get("priority") or "medium"),
     }
@@ -1267,6 +1272,7 @@ def _default_ai_proposal(candidate: dict[str, Any]) -> dict[str, Any]:
         "confidence": "low",
         "required_source_fields": list(REQUIRED_METRIC_CONTRACT_FIELDS),
         "forbidden_uses": list(FORBIDDEN_USES),
+        "evidence_authority_contract": evidence_authority_contract(),
     }
 
 
@@ -1328,6 +1334,7 @@ def _deterministic_candidates(target_date: str, *, rolling_sim_scan: bool = Fals
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "forbidden_uses": FORBIDDEN_USES,
+        "evidence_authority_contract": evidence_authority_contract(),
         "sources": {
             label: {
                 "path": str(path) if path.exists() else None,
@@ -1402,6 +1409,13 @@ def _build_ai_review_instructions() -> str:
         "basis. For sim_* patterns, require dedicated source-only producers and preserve strict versus ambiguous "
         "chronology/source-quality separation. Do not describe current-scope work as hooks, probes, exit actions, "
         "trim actions, stop review actions, or broker/order behavior.\n"
+        "Evidence authority contract: bucket/dimension tuning primary evidence is sim/probe lifecycle EV. "
+        "Real one-share samples are not primary EV evidence unless the mapped bucket policy was already enabled "
+        "for the evaluated post-apply cohort. Pre-apply real samples may be used only for execution-quality "
+        "calibration, safety veto, provenance validation, and broker/fill/slippage source-quality checks. "
+        "Do not merge real PnL with sim/probe EV and do not promote runtime threshold/order/provider/cap/bot "
+        "changes from pre-apply real one-share outcomes. If a proposal violates this contract, select reject or "
+        "source_quality_blocker.\n"
         "Do not mark absent swing artifacts as correction_required unless a deterministic swing candidate is present. "
         "If an existing producer artifact already handles a family, recommend extension or audit only when the "
         "deterministic candidate explicitly requests it.\n"
@@ -1504,6 +1518,8 @@ def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, 
             warnings.append(f"ai_review_ai_proposal_contract_missing:{item.get('candidate_id')}:{','.join(missing_contract)}")
         if has_forbidden_runtime_leak(item):
             warnings.append(f"ai_review_ai_proposal_forbidden_use_leak:{item.get('candidate_id')}")
+        if has_evidence_authority_violation(item):
+            warnings.append(f"ai_review_ai_proposal_evidence_authority_violation:{item.get('candidate_id')}")
     proposal_ids = {
         str(item.get("candidate_id"))
         for item in payload.get("ai_tier2_proposals") or []
@@ -1529,6 +1545,8 @@ def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, 
             warnings.append(f"ai_review_comparative_contract_missing:{item.get('candidate_id')}:{','.join(missing_contract)}")
         if has_forbidden_runtime_leak(item):
             warnings.append(f"ai_review_comparative_forbidden_use_leak:{item.get('candidate_id')}")
+        if has_evidence_authority_violation(item):
+            warnings.append(f"ai_review_comparative_evidence_authority_violation:{item.get('candidate_id')}")
     audit = payload.get("audit") if isinstance(payload.get("audit"), dict) else {}
     if str(audit.get("status") or "") not in {"pass", "correction_required", "insufficient_context"}:
         warnings.append("ai_review_audit_status_invalid")
@@ -1617,6 +1635,7 @@ def _order_from_candidate(
         ],
         "next_postclose_metric": f"{REPORT_TYPE}.{candidate_id}",
         "forbidden_uses": FORBIDDEN_USES,
+        "evidence_authority_contract": evidence_authority_contract(),
         "implementation_requirements": review.get("implementation_requirements") or [],
         "canonical_bucket": comparative_review.get("recommended_canonical_bucket") if isinstance(comparative_review, dict) else None,
         "legacy_raw_bucket_key": candidate.get("pattern_type"),
@@ -1730,6 +1749,7 @@ def build_producer_gap_discovery_report(
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "source_quality_gate": "source artifact exists and parsed AI review passed",
         "forbidden_uses": FORBIDDEN_USES,
+        "evidence_authority_contract": evidence_authority_contract(),
         "status": status,
         "sources": {
             label: str(path) if path.exists() else None
