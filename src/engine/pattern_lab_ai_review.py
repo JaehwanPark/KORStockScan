@@ -12,15 +12,22 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from src.engine.ai.postclose_review_config import (
+    PostcloseAIReviewConfig,
+    first_wave_retry_reason,
+    parsed_review_followup_reasons,
+    resolve_postclose_ai_review_config,
+)
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
-from src.utils.constants import TRADING_RULES
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 REPORT_TYPE = "pattern_lab_ai_review"
 REPORT_SCHEMA_VERSION = 1
 AI_REVIEW_SCHEMA_NAME = "pattern_lab_ai_review_v1"
-AI_REVIEW_MODEL = str(getattr(TRADING_RULES, "GPT_DEEP_MODEL", "gpt-5.4") or "gpt-5.4")
+AI_REVIEW_MODEL = "gpt-5.4-mini"
+AI_REVIEW_REASONING_EFFORT = "medium"
+AI_REVIEW_TIMEOUT_SEC = 180
 AI_REVIEW_DEFAULT_PROVIDER = "openai"
 REPORT_DIRNAME = REPORT_TYPE
 FORBIDDEN_USES = [
@@ -454,7 +461,27 @@ def _build_ai_review_instructions() -> str:
     )
 
 
-def _call_openai_ai_review(context: dict[str, Any]) -> tuple[Any | None, dict[str, Any]]:
+def _ai_review_config(
+    *,
+    attempt_role: str = "primary",
+    retry_reason: str | None = None,
+) -> PostcloseAIReviewConfig:
+    return resolve_postclose_ai_review_config(
+        "PATTERN_LAB_AI_REVIEW",
+        default_model=AI_REVIEW_MODEL,
+        default_reasoning_effort="low" if attempt_role == "retry" else AI_REVIEW_REASONING_EFFORT,
+        default_timeout_sec=AI_REVIEW_TIMEOUT_SEC,
+        attempt_role=attempt_role,
+        retry_reason=retry_reason,
+    )
+
+
+def _call_openai_ai_review(
+    context: dict[str, Any],
+    *,
+    config: PostcloseAIReviewConfig | None = None,
+) -> tuple[Any | None, dict[str, Any]]:
+    config = config or _ai_review_config()
     try:
         from openai import OpenAI, RateLimitError
         from src.engine.ai_response_contracts import build_openai_response_text_format
@@ -463,11 +490,11 @@ def _call_openai_ai_review(context: dict[str, Any]) -> tuple[Any | None, dict[st
             _load_threshold_ai_openai_keys,
         )
     except Exception as exc:
-        return None, {"provider": "openai", "status": "unavailable", "reason": f"openai import failed: {exc}"}
+        return None, {"provider": "openai", "status": "unavailable", "reason": f"openai import failed: {exc}", **config.provider_status_fields()}
 
     api_keys = _load_threshold_ai_openai_keys()
     if not api_keys:
-        return None, {"provider": "openai", "status": "unavailable", "reason": "OPENAI_API_KEY not configured"}
+        return None, {"provider": "openai", "status": "unavailable", "reason": "OPENAI_API_KEY not configured", **config.provider_status_fields()}
 
     prompt = json.dumps(context, ensure_ascii=False, indent=2, default=str)
     errors: list[dict[str, str]] = []
@@ -475,21 +502,21 @@ def _call_openai_ai_review(context: dict[str, Any]) -> tuple[Any | None, dict[st
         try:
             client = OpenAI(api_key=api_key)
             response = client.responses.create(
-                model=AI_REVIEW_MODEL,
+                model=config.model,
                 instructions=_build_ai_review_instructions(),
                 input=prompt,
                 text={
                     "format": build_openai_response_text_format(AI_REVIEW_SCHEMA_NAME),
                     "verbosity": "low",
                 },
-                reasoning={"effort": "high"},
+                reasoning={"effort": config.reasoning_effort},
                 store=False,
                 metadata={
                     "endpoint_name": "pattern_lab_ai_review",
                     "schema_name": AI_REVIEW_SCHEMA_NAME,
                     "report_type": REPORT_TYPE,
                 },
-                timeout=180,
+                timeout=config.timeout_sec,
             )
             raw_text = _extract_openai_response_text(response)
             usage = getattr(response, "usage", None)
@@ -499,9 +526,13 @@ def _call_openai_ai_review(context: dict[str, Any]) -> tuple[Any | None, dict[st
                 "key_name": key_name,
                 "attempt_index": attempt_index,
                 "attempted_key_count": len(api_keys),
-                "model": AI_REVIEW_MODEL,
+                "model": config.model,
                 "schema_name": AI_REVIEW_SCHEMA_NAME,
-                "reasoning_effort": "high",
+                "reasoning_effort": config.reasoning_effort,
+                "timeout_sec": config.timeout_sec,
+                "attempt_role": config.attempt_role,
+                "retry_reason": config.retry_reason,
+                "config_env_prefix": config.env_prefix_name,
                 "input_context_hash": _text_hash(context),
                 "input_context_chars": len(prompt),
                 "output_chars": len(raw_text),
@@ -517,7 +548,7 @@ def _call_openai_ai_review(context: dict[str, Any]) -> tuple[Any | None, dict[st
         "provider": "openai",
         "status": "unavailable",
         "reason": "all OpenAI attempts failed",
-        "model": AI_REVIEW_MODEL,
+        **config.provider_status_fields(),
         "errors": errors[-3:],
     }
 
@@ -601,6 +632,48 @@ def _order_from_conclusion(conclusion: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _ai_review_followup_order(*, target_date: str, reasons: list[str], audit: dict[str, Any]) -> dict[str, Any]:
+    reason_text = ", ".join(reasons) if reasons else "parsed_review_followup_required"
+    return {
+        "order_id": f"order_{REPORT_TYPE}_ai_review_followup_{_slug(target_date)}",
+        "title": "Resolve Pattern Lab AI review follow-up",
+        "source_report_type": REPORT_TYPE,
+        "review_id": "ai_review_followup",
+        "target_subsystem": "pattern_lab_ai_review",
+        "route": "review_ai_output",
+        "priority": 2,
+        "confidence": "parsed_ai_review_followup",
+        "intent": (
+            "The AI call parsed, but the reviewer output requires follow-up. "
+            "Treat this as source-only workorder input, not an AI transport failure."
+        ),
+        "expected_ev_effect": "Improve Pattern Lab feedback/source-quality handling without runtime mutation.",
+        "evidence": [
+            f"ai_review_followup_reason={reason_text}",
+            f"audit_status={audit.get('status')}",
+            f"audit_issues={audit.get('issues') or []}",
+            f"forbidden_use_violations={audit.get('forbidden_use_violations') or []}",
+        ],
+        "files_likely_touched": [
+            "src/engine/pattern_lab_ai_review.py",
+            "src/engine/build_code_improvement_workorder.py",
+        ],
+        "acceptance_tests": [
+            "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_ai_review.py src/tests/test_build_code_improvement_workorder.py",
+        ],
+        "improvement_type": "ai_review_followup",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "strategy_effect": False,
+        "data_quality_effect": True,
+        "tuning_axis_effect": False,
+        "next_postclose_metric": f"{REPORT_TYPE}.ai_review_followup",
+        "forbidden_uses": FORBIDDEN_USES,
+        "ai_review_followup_reasons": reasons,
+        "ai_review_audit": audit,
+    }
+
+
 def build_pattern_lab_ai_review_report(
     target_date: str,
     *,
@@ -612,17 +685,46 @@ def build_pattern_lab_ai_review_report(
         provider if provider is not None else os.getenv("KORSTOCKSCAN_PATTERN_LAB_AI_REVIEW_PROVIDER", AI_REVIEW_DEFAULT_PROVIDER)
     ).strip().lower() or "none"
     context = _build_input_context(target_date)
+    primary_config = _ai_review_config()
     provider_status: dict[str, Any] = {
         "provider": resolved_provider,
         "status": "disabled" if resolved_provider in {"none", "off", "false", "0"} else "not_called",
-        "model": AI_REVIEW_MODEL if resolved_provider not in {"none", "off", "false", "0"} else None,
         "schema_name": AI_REVIEW_SCHEMA_NAME,
         "input_context_hash": _text_hash(context),
+        **(primary_config.provider_status_fields() if resolved_provider not in {"none", "off", "false", "0"} else {"model": None}),
+        "retry_attempted": False,
     }
+    if resolved_provider in {"none", "off", "false", "0"}:
+        provider_status.update({"reasoning_effort": None, "timeout_sec": None, "attempt_role": None, "retry_reason": None})
     raw_response = ai_raw_response
+    provided_ai_response = raw_response is not None
+    if raw_response is not None:
+        provider_status["status"] = "provided_response"
     if raw_response is None and resolved_provider == "openai":
-        raw_response, provider_status = _call_openai_ai_review(context)
+        raw_response, provider_status = _call_openai_ai_review(context, config=primary_config)
+        provider_status["retry_attempted"] = False
     ai_status, ai_payload, ai_warnings = _parse_ai_review_response(raw_response)
+    retry_audit = ai_payload.get("audit") if isinstance(ai_payload.get("audit"), dict) else {}
+    retry_forbidden = retry_audit.get("forbidden_use_violations")
+    if not isinstance(retry_forbidden, list):
+        retry_forbidden = []
+    retry_conclusions = ai_payload.get("final_conclusions") if isinstance(ai_payload.get("final_conclusions"), list) else []
+    retry_reason = first_wave_retry_reason(
+        ai_status=ai_status,
+        audit_status=retry_audit.get("status"),
+        forbidden_use_violations=retry_forbidden,
+        missing_final_conclusion_count=1 if ai_status == "parsed" and not retry_conclusions else 0,
+    )
+    if retry_reason and resolved_provider == "openai" and not provided_ai_response:
+        primary_provider_status = dict(provider_status)
+        retry_config = _ai_review_config(attempt_role="retry", retry_reason=retry_reason)
+        raw_response, retry_provider_status = _call_openai_ai_review(context, config=retry_config)
+        ai_status, ai_payload, ai_warnings = _parse_ai_review_response(raw_response)
+        provider_status = {
+            **retry_provider_status,
+            "retry_attempted": True,
+            "primary_attempt": primary_provider_status,
+        }
     fallback_used = False
     if ai_status != "parsed":
         fallback_used = True
@@ -651,6 +753,17 @@ def build_pattern_lab_ai_review_report(
         and str(item.get("final_decision") or "") != "keep"
     ]
     audit = ai_payload.get("audit") if isinstance(ai_payload.get("audit"), dict) else {}
+    forbidden = audit.get("forbidden_use_violations")
+    if not isinstance(forbidden, list):
+        forbidden = []
+    followup_reasons = parsed_review_followup_reasons(
+        ai_status=ai_status,
+        audit_status=audit.get("status"),
+        forbidden_use_violations=forbidden,
+        missing_final_conclusion_count=1 if ai_status == "parsed" and not conclusions else 0,
+    )
+    if followup_reasons and not any(str(order.get("improvement_type") or "") == "ai_review_followup" for order in orders):
+        orders.append(_ai_review_followup_order(target_date=target_date, reasons=followup_reasons, audit=audit))
     state_counts = Counter(str(item.get("final_state") or "unknown") for item in conclusions if isinstance(item, dict))
     ai_status_ok = ai_status in {"parsed", "disabled_deterministic_review"}
     status = "warning" if orders or not ai_status_ok or audit.get("status") != "pass" else "pass"
@@ -683,6 +796,8 @@ def build_pattern_lab_ai_review_report(
             "model": provider_status.get("model") or (AI_REVIEW_MODEL if resolved_provider == "openai" else None),
             "fallback_used": fallback_used,
             "audit_status": audit.get("status"),
+            "ai_review_followup_required": bool(followup_reasons),
+            "ai_review_followup_reasons": followup_reasons,
             "final_conclusion_count": len(conclusions),
             "workorder_count": len(orders),
             "state_counts": dict(state_counts),
@@ -700,6 +815,8 @@ def build_pattern_lab_ai_review_report(
             "audit": audit,
             "final_conclusions": conclusions,
             "warnings": ai_warnings,
+            "followup_required": bool(followup_reasons),
+            "followup_reasons": followup_reasons,
         },
         "code_improvement_orders": orders,
     }

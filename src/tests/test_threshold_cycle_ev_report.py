@@ -496,6 +496,39 @@ def test_audit_summary_resolves_source_only_candidate_warning(tmp_path):
     assert summary["code_improvement_order_count"] == 8
 
 
+def test_audit_summary_surfaces_parsed_ai_review_followup_without_fail_closed(tmp_path):
+    report_dir = tmp_path / "producer_gap_discovery"
+    report_dir.mkdir()
+    path = report_dir / "producer_gap_discovery_2026-05-26.json"
+    path.write_text(
+        json.dumps(
+            {
+                "status": "warning",
+                "runtime_effect": False,
+                "decision_authority": "source_quality_only",
+                "summary": {
+                    "fail_count": 0,
+                    "workorder_count": 1,
+                    "audit_status": "correction_required",
+                    "ai_fail_closed": False,
+                    "ai_review_followup_required": True,
+                    "ai_review_followup_reasons": ["audit_status=correction_required"],
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    summary, artifact, warnings = mod._audit_summary("2026-05-26", "producer_gap_discovery", report_dir)
+
+    assert artifact == str(path)
+    assert summary["ai_review_followup_required"] is True
+    assert summary["ai_review_followup_reasons"] == ["audit_status=correction_required"]
+    assert summary["ai_fail_closed"] is False
+    assert "producer_gap_discovery_ai_review_followup_required" in warnings
+
+
 def test_swing_lifecycle_bucket_discovery_summary_surfaces_ai_fail_closed(tmp_path, monkeypatch):
     report_dir = tmp_path / "swing_lifecycle_bucket_discovery"
     report_dir.mkdir()
@@ -533,6 +566,51 @@ def test_swing_lifecycle_bucket_discovery_summary_surfaces_ai_fail_closed(tmp_pa
     assert summary["ai_fail_closed"] is True
     assert "swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_fail_closed" in warnings
     assert "swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked" in summary["warnings"]
+
+
+def test_swing_lifecycle_bucket_discovery_summary_surfaces_parsed_followup(tmp_path, monkeypatch):
+    report_dir = tmp_path / "swing_lifecycle_bucket_discovery"
+    report_dir.mkdir()
+    path = report_dir / "swing_lifecycle_bucket_discovery_2026-05-27.json"
+    path.write_text(
+        json.dumps(
+            {
+                "runtime_effect": False,
+                "source_only": True,
+                "decision_authority": "swing_ldm_bucket_discovery_sim_auto",
+                "summary": {
+                    "source_contract_status": "pass",
+                    "ai_two_pass_review_status": "parsed",
+                    "ai_fail_closed": False,
+                    "ai_review_followup_required": True,
+                    "ai_review_followup_reasons": ["audit_status=correction_required"],
+                    "sim_auto_blocked_by_ai_review_followup": True,
+                    "candidate_count": 1,
+                    "surfaced_candidate_count": 1,
+                },
+                "warnings": [],
+                "surfaced_candidate_ids": ["swing_bucket_entry_test"],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        mod,
+        "swing_lifecycle_bucket_discovery_paths",
+        lambda target_date: (path, path.with_suffix(".md")),
+    )
+
+    summary, artifact, warnings = mod._swing_lifecycle_bucket_discovery_summary("2026-05-27")
+
+    assert artifact == str(path)
+    assert summary["ai_two_pass_review_status"] == "parsed"
+    assert summary["ai_fail_closed"] is False
+    assert summary["ai_review_followup_required"] is True
+    assert summary["sim_auto_blocked_by_ai_review_followup"] is True
+    assert "swing_lifecycle_bucket_discovery:ai_review_followup_required" in warnings
+    assert "swing_lifecycle_bucket_discovery:ai_review_followup_sim_auto_blocked" in warnings
+    assert not any("fail_closed" in warning for warning in warnings)
 
 
 def test_build_threshold_cycle_ev_report_warns_when_pattern_lab_artifact_missing(tmp_path, monkeypatch):

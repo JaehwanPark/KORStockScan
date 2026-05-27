@@ -505,7 +505,7 @@ def test_ai_runtime_hook_contract_is_ignored_and_cannot_escalate_authority(tmp_p
     assert order["allowed_runtime_apply"] is False
 
 
-def test_ai_forbidden_use_violation_fails_closed_without_orders(tmp_path, monkeypatch):
+def test_ai_forbidden_use_violation_surfaces_followup_workorder_without_retry(tmp_path, monkeypatch):
     report_dir = tmp_path / "data" / "report"
     post_sell_dir = tmp_path / "data" / "post_sell"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
@@ -521,9 +521,110 @@ def test_ai_forbidden_use_violation_fails_closed_without_orders(tmp_path, monkey
         rolling_sim_scan=True,
     )
 
-    assert report["status"] == "fail"
-    assert report["summary"]["ai_fail_closed"] is True
-    assert report["code_improvement_orders"] == []
+    assert report["status"] == "warning"
+    assert report["summary"]["ai_fail_closed"] is False
+    assert report["summary"]["ai_review_followup_required"] is True
+    assert report["ai_two_pass_review"]["provider_status"]["retry_attempted"] is False
+    assert report["code_improvement_orders"][0]["improvement_type"] == "ai_review_followup"
+    assert "forbidden_use_violation" in report["code_improvement_orders"][0]["ai_review_followup_reasons"]
+
+
+def test_openai_review_retries_with_low_reasoning_after_parse_reject(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "report")
+    monkeypatch.setattr(
+        mod,
+        "producer_gap_source_bundle_paths",
+        lambda target_date: (
+            tmp_path / "report" / "producer_gap_source_bundle" / f"producer_gap_source_bundle_{target_date}.json",
+            tmp_path / "report" / "producer_gap_source_bundle" / f"producer_gap_source_bundle_{target_date}.md",
+        ),
+    )
+    candidate = {
+        "candidate_id": "producer_gap_sim_entry_selection_gap_missing",
+        "pattern_type": "sim_entry_selection_gap_missing",
+        "lifecycle_stage": "entry",
+        "priority": "high",
+        "source_scope": "sim_first",
+        "evidence": ["strict_match_count=2", "estimated_uplift_pct_sum=1.2"],
+        "source_paths": [],
+        "deterministic_proposal": {
+            "proposal_decision": "new_producer",
+            "required_source_fields": list(mod.REQUIRED_METRIC_CONTRACT_FIELDS),
+        },
+    }
+    monkeypatch.setattr(
+        mod,
+        "_deterministic_candidates",
+        lambda target_date, rolling_sim_scan=False: ([candidate], {"date": target_date}),
+    )
+    calls = []
+
+    def fake_call(context, *, config=None):
+        calls.append(config)
+        status = {"provider": "openai", "status": "success", **config.provider_status_fields()}
+        if len(calls) == 1:
+            return "{not-json", status
+        return _ai_response([candidate["candidate_id"]]), status
+
+    monkeypatch.setattr(mod, "_call_openai_ai_review", fake_call)
+
+    report = mod.build_producer_gap_discovery_report("2026-05-26", provider="openai")
+
+    provider_status = report["ai_two_pass_review"]["provider_status"]
+    assert [call.reasoning_effort for call in calls] == ["medium", "low"]
+    assert provider_status["retry_attempted"] is True
+    assert provider_status["attempt_role"] == "retry"
+    assert provider_status["retry_reason"] == "ai_status_parse_rejected"
+    assert provider_status["primary_attempt"]["reasoning_effort"] == "medium"
+    assert report["summary"]["ai_fail_closed"] is False
+
+
+def test_openai_review_does_not_retry_parsed_audit_correction_and_surfaces_workorder(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "report")
+    monkeypatch.setattr(
+        mod,
+        "producer_gap_source_bundle_paths",
+        lambda target_date: (
+            tmp_path / "report" / "producer_gap_source_bundle" / f"producer_gap_source_bundle_{target_date}.json",
+            tmp_path / "report" / "producer_gap_source_bundle" / f"producer_gap_source_bundle_{target_date}.md",
+        ),
+    )
+    candidate = {
+        "candidate_id": "producer_gap_sim_entry_selection_gap_missing",
+        "pattern_type": "sim_entry_selection_gap_missing",
+        "lifecycle_stage": "entry",
+        "priority": "high",
+        "source_scope": "sim_first",
+        "evidence": ["strict_match_count=2", "estimated_uplift_pct_sum=1.2"],
+        "source_paths": [],
+        "deterministic_proposal": {
+            "proposal_decision": "new_producer",
+            "required_source_fields": list(mod.REQUIRED_METRIC_CONTRACT_FIELDS),
+        },
+    }
+    monkeypatch.setattr(
+        mod,
+        "_deterministic_candidates",
+        lambda target_date, rolling_sim_scan=False: ([candidate], {"date": target_date}),
+    )
+    calls = []
+
+    def fake_call(context, *, config=None):
+        calls.append(config)
+        payload = _ai_response([candidate["candidate_id"]])
+        payload["audit"]["status"] = "correction_required"
+        payload["audit"]["issues"] = ["surface source-quality follow-up"]
+        return payload, {"provider": "openai", "status": "success", **config.provider_status_fields()}
+
+    monkeypatch.setattr(mod, "_call_openai_ai_review", fake_call)
+
+    report = mod.build_producer_gap_discovery_report("2026-05-26", provider="openai")
+
+    assert [call.reasoning_effort for call in calls] == ["medium"]
+    assert report["summary"]["ai_fail_closed"] is False
+    assert report["summary"]["ai_review_followup_required"] is True
+    assert report["ai_two_pass_review"]["provider_status"]["retry_attempted"] is False
+    assert any(order["improvement_type"] == "ai_review_followup" for order in report["code_improvement_orders"])
 
 
 def test_main_accepts_ai_review_response_json(tmp_path, monkeypatch):

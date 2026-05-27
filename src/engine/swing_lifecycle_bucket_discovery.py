@@ -12,6 +12,11 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from src.engine.ai.postclose_review_config import (
+    PostcloseAIReviewConfig,
+    parsed_review_followup_reasons,
+    resolve_postclose_ai_review_config,
+)
 from src.engine.automation.dual_candidate_review import (
     evidence_authority_contract,
     REQUIRED_METRIC_CONTRACT_FIELDS,
@@ -39,8 +44,9 @@ DISCOVERY_VERSION = "swing_lifecycle_bucket_discovery_v1"
 DECISION_AUTHORITY = "swing_ldm_bucket_discovery_sim_auto"
 AI_REVIEW_SCHEMA_NAME = "swing_lifecycle_bucket_discovery_review_v1"
 AI_REVIEWER_NAME = "swing_lifecycle_bucket_discovery_ai_review"
-AI_REVIEW_MODEL = "gpt-5.4"
-AI_REVIEW_REASONING_EFFORT = "low"
+AI_REVIEW_MODEL = "gpt-5.4-mini"
+AI_REVIEW_REASONING_EFFORT = "medium"
+AI_REVIEW_TIMEOUT_SEC = 180
 AI_REVIEW_DEFAULT_PROVIDER = "none"
 FORBIDDEN_USES = [
     "real_order_submit",
@@ -258,6 +264,34 @@ def _normalize_explicit_workorder(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _ai_review_followup_workorder(reasons: list[str], audit: dict[str, Any]) -> dict[str, Any]:
+    reason_text = ", ".join(reasons) if reasons else "parsed_review_followup_required"
+    return {
+        "workorder_id": "swing_lifecycle_bucket_discovery_ai_review_followup",
+        "bucket_id": "swing_lifecycle_bucket_discovery_ai_review_followup",
+        "source_workorder_id": "ai_review_followup",
+        "parent_bucket_id": "swing_lifecycle_bucket_discovery_ai_review",
+        "classification_state": "code_patch_required",
+        "reason": "parsed_ai_review_followup_required",
+        "target_subsystem": "swing_lifecycle_bucket_discovery_ai_review",
+        "implementation_status": "pending",
+        "implementation_provenance": {},
+        "ai_review_followup_reasons": reasons,
+        "ai_review_audit": audit,
+        "intent": (
+            "The AI call parsed, but the reviewer output requires follow-up. "
+            "Treat this as source-only workorder input, not an AI transport failure."
+        ),
+        "evidence": [
+            f"ai_review_followup_reason={reason_text}",
+            f"audit_status={audit.get('status')}",
+            f"audit_issues={audit.get('issues') or []}",
+            f"forbidden_use_violations={audit.get('forbidden_use_violations') or []}",
+        ],
+        **_workorder_contract_fields(),
+    }
+
+
 def _ensure_candidate_taxonomy(candidate: dict[str, Any]) -> dict[str, Any]:
     if candidate.get("deterministic_proposal"):
         return candidate
@@ -389,36 +423,44 @@ def _build_ai_review_instructions() -> str:
     )
 
 
-def _call_openai_ai_review(context: dict[str, Any]) -> tuple[Any | None, dict[str, Any]]:
+def _ai_review_config() -> PostcloseAIReviewConfig:
+    return resolve_postclose_ai_review_config(
+        "SWING_LIFECYCLE_BUCKET_DISCOVERY",
+        default_model=AI_REVIEW_MODEL,
+        default_reasoning_effort=AI_REVIEW_REASONING_EFFORT,
+        default_timeout_sec=AI_REVIEW_TIMEOUT_SEC,
+    )
+
+
+def _call_openai_ai_review(
+    context: dict[str, Any],
+    *,
+    config: PostcloseAIReviewConfig | None = None,
+) -> tuple[Any | None, dict[str, Any]]:
+    config = config or _ai_review_config()
     try:
         from openai import OpenAI, RateLimitError
         from src.engine.ai_response_contracts import build_openai_response_text_format
         from src.engine.daily_threshold_cycle_report import _extract_openai_response_text, _load_threshold_ai_openai_keys
     except Exception as exc:
-        return None, {"provider": "openai", "status": "unavailable", "reason": f"openai import failed: {exc}"}
+        return None, {"provider": "openai", "status": "unavailable", "reason": f"openai import failed: {exc}", **config.provider_status_fields()}
     api_keys = _load_threshold_ai_openai_keys()
     if not api_keys:
-        return None, {"provider": "openai", "status": "unavailable", "reason": "OPENAI_API_KEY not configured"}
+        return None, {"provider": "openai", "status": "unavailable", "reason": "OPENAI_API_KEY not configured", **config.provider_status_fields()}
     prompt = json.dumps(context, ensure_ascii=True, indent=2, default=str)
-    reasoning_effort = str(
-        os.getenv("KORSTOCKSCAN_SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_REASONING_EFFORT", AI_REVIEW_REASONING_EFFORT)
-        or AI_REVIEW_REASONING_EFFORT
-    ).strip().lower()
-    if reasoning_effort not in {"minimal", "low", "medium", "high"}:
-        reasoning_effort = AI_REVIEW_REASONING_EFFORT
     errors: list[dict[str, str]] = []
     for attempt_index, (key_name, api_key) in enumerate(api_keys, start=1):
         try:
             client = OpenAI(api_key=api_key)
             response = client.responses.create(
-                model=AI_REVIEW_MODEL,
+                model=config.model,
                 instructions=_build_ai_review_instructions(),
                 input=prompt,
                 text={"format": build_openai_response_text_format(AI_REVIEW_SCHEMA_NAME), "verbosity": "low"},
-                reasoning={"effort": reasoning_effort},
+                reasoning={"effort": config.reasoning_effort},
                 store=False,
                 metadata={"endpoint_name": AI_REVIEWER_NAME, "schema_name": AI_REVIEW_SCHEMA_NAME, "report_type": REPORT_TYPE},
-                timeout=180,
+                timeout=config.timeout_sec,
             )
             raw_text = _extract_openai_response_text(response)
             usage = getattr(response, "usage", None)
@@ -428,8 +470,12 @@ def _call_openai_ai_review(context: dict[str, Any]) -> tuple[Any | None, dict[st
                 "key_name": key_name,
                 "attempt_index": attempt_index,
                 "attempted_key_count": len(api_keys),
-                "model": AI_REVIEW_MODEL,
-                "reasoning_effort": reasoning_effort,
+                "model": config.model,
+                "reasoning_effort": config.reasoning_effort,
+                "timeout_sec": config.timeout_sec,
+                "attempt_role": config.attempt_role,
+                "retry_reason": config.retry_reason,
+                "config_env_prefix": config.env_prefix_name,
                 "schema_name": AI_REVIEW_SCHEMA_NAME,
                 "input_context_chars": len(prompt),
                 "output_chars": len(raw_text),
@@ -440,7 +486,7 @@ def _call_openai_ai_review(context: dict[str, Any]) -> tuple[Any | None, dict[st
             errors.append({"key_name": key_name, "error": f"rate_limit:{exc}"})
         except Exception as exc:
             errors.append({"key_name": key_name, "error": str(exc)})
-    return None, {"provider": "openai", "status": "unavailable", "reason": "all OpenAI attempts failed", "errors": errors[-3:]}
+    return None, {"provider": "openai", "status": "unavailable", "reason": "all OpenAI attempts failed", **config.provider_status_fields(), "errors": errors[-3:]}
 
 
 def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, Any], list[str]]:
@@ -510,21 +556,24 @@ def _run_ai_review_shards(
         if not shard_candidates:
             continue
         context = _build_ai_review_context(target_date, shard)
+        shard_config = _ai_review_config()
         candidate_ids = [str(item) for item in (context.get("candidate_ids") or []) if str(item)]
         reviewed_candidate_ids.extend(candidate_ids)
         provider_status: dict[str, Any] = {
             "provider": provider,
             "status": "disabled" if disabled else "not_called",
-            "model": AI_REVIEW_MODEL if not disabled else None,
             "schema_name": AI_REVIEW_SCHEMA_NAME,
             "shard_id": shard.get("shard_id"),
             "input_context_chars": len(json.dumps(context, ensure_ascii=True, default=str)),
+            **(shard_config.provider_status_fields() if not disabled else {"model": None}),
         }
+        if disabled:
+            provider_status.update({"reasoning_effort": None, "timeout_sec": None, "attempt_role": None, "retry_reason": None})
         raw_response = ai_raw_response if index == 0 and ai_raw_response is not None else None
         if raw_response is not None:
             provider_status["status"] = "provided_response"
         if raw_response is None and provider == "openai":
-            raw_response, provider_status = _call_openai_ai_review(context)
+            raw_response, provider_status = _call_openai_ai_review(context, config=shard_config)
             provider_status["shard_id"] = shard.get("shard_id")
         status, payload, shard_warnings = _parse_ai_review_response(raw_response)
         statuses.append(status)
@@ -853,32 +902,46 @@ def build_swing_lifecycle_bucket_discovery(
         1 for item in sim_reviewed_candidates if item.get("comparative_review", {}).get("selected_source") == "reject"
     )
     sim_review_required = any(item.get("classification_state") == "sim_auto_approved" for item in candidates)
-    sim_review_fail_closed = bool(
+    sim_review_call_fail_closed = bool(
         sim_review_required
-        and (
-            sim_shard.get("status") != "parsed"
-            or sim_shard.get("audit_status") != "pass"
-            or int(sim_shard.get("forbidden_use_violation_count") or 0) > 0
-            or sim_missing_ai_proposal_count > 0
-            or sim_missing_comparative_review_count > 0
-        )
+        and sim_shard.get("status") != "parsed"
     )
+    sim_review_followup_reasons = parsed_review_followup_reasons(
+        ai_status=str(sim_shard.get("status") or "missing"),
+        audit_status=sim_shard.get("audit_status"),
+        forbidden_use_violations=(["forbidden_use_violation"] if int(sim_shard.get("forbidden_use_violation_count") or 0) > 0 else []),
+        missing_ai_proposal_count=sim_missing_ai_proposal_count,
+        missing_comparative_review_count=sim_missing_comparative_review_count,
+    )
+    followup_reasons = parsed_review_followup_reasons(
+        ai_status=ai_status,
+        audit_status=ai_payload_audit.get("status"),
+        forbidden_use_violations=ai_forbidden,
+        missing_ai_proposal_count=missing_ai_proposal_count,
+        missing_comparative_review_count=missing_comparative_review_count,
+    )
+    followup_reasons = list(dict.fromkeys([*followup_reasons, *sim_review_followup_reasons]))
     ai_fail_closed = (
         ai_status == "missing"
-        or bool(ai_forbidden)
-        or sim_review_fail_closed
+        or sim_review_call_fail_closed
         or unreviewed_sim_auto_candidate_count > 0
     )
-    if ai_fail_closed:
+    sim_auto_blocked_by_review_followup = bool(sim_review_followup_reasons)
+    if ai_fail_closed or sim_auto_blocked_by_review_followup:
         downgraded_candidates: list[dict[str, Any]] = []
         for candidate in candidates:
             if candidate.get("classification_state") == "sim_auto_approved":
+                reason_key = (
+                    "sim_auto_blocked_by_ai_review_followup"
+                    if sim_auto_blocked_by_review_followup and not ai_fail_closed
+                    else "sim_auto_downgraded_by_ai_fail_closed"
+                )
                 downgraded_candidates.append(
                     {
                         **candidate,
                         "classification_state": "source_only_keep_collecting",
                         "next_route": "postclose_source_quality_or_sample_collection",
-                        "sim_auto_downgraded_by_ai_fail_closed": True,
+                        reason_key: True,
                     }
                 )
             else:
@@ -911,6 +974,10 @@ def build_swing_lifecycle_bucket_discovery(
         warnings.append("ai_two_pass_review_correction_required_source_only")
     if ai_fail_closed:
         warnings.append("ai_two_pass_review_fail_closed_sim_auto_blocked")
+    if followup_reasons:
+        warnings.append("ai_two_pass_review_followup_required_source_only")
+    if sim_auto_blocked_by_review_followup:
+        warnings.append("ai_two_pass_review_followup_sim_auto_blocked")
     if ai_review_points and ai_audit.get("status") != "configured_deterministic_two_pass":
         warnings.append("swing_ldm_ai_review_not_configured")
     warnings = list(dict.fromkeys(warnings))
@@ -947,12 +1014,15 @@ def build_swing_lifecycle_bucket_discovery(
             "surfaced_candidate_count": len(candidates),
             "sim_auto_approved_count": len(sim_auto),
             "source_only_keep_collecting_count": by_state.get("source_only_keep_collecting", 0),
-            "code_patch_required_count": len(code_patch) + len(explicit_workorders),
+            "code_patch_required_count": len(code_patch) + len(explicit_workorders) + (1 if followup_reasons else 0),
             "runtime_blocked_contract_gap_count": by_state.get("runtime_blocked_contract_gap", 0),
             "automation_handoff_gap_count": by_state.get("automation_handoff_gap", 0),
             "ai_review_augmentation_point_count": len(ai_review_points),
             "ai_two_pass_review_status": ai_status,
             "ai_fail_closed": ai_fail_closed,
+            "ai_review_followup_required": bool(followup_reasons),
+            "ai_review_followup_reasons": followup_reasons,
+            "sim_auto_blocked_by_ai_review_followup": sim_auto_blocked_by_review_followup,
             "deterministic_proposal_count": len(candidates),
             "ai_tier2_proposal_count": sum(
                 1 for item in candidates if item.get("ai_tier2_proposal", {}).get("proposal_status") == "provided"
@@ -1008,6 +1078,9 @@ def build_swing_lifecycle_bucket_discovery(
             ],
             "warnings": ai_warnings,
             "fail_closed": ai_fail_closed,
+            "followup_required": bool(followup_reasons),
+            "followup_reasons": followup_reasons,
+            "sim_auto_blocked_by_review_followup": sim_auto_blocked_by_review_followup,
             "missing_ai_tier2_proposal_count": missing_ai_proposal_count,
             "missing_comparative_review_count": missing_comparative_review_count,
             "sim_missing_ai_tier2_proposal_count": sim_missing_ai_proposal_count,
@@ -1049,6 +1122,7 @@ def build_swing_lifecycle_bucket_discovery(
             }
             for item in code_patch
         ]
+        + ([_ai_review_followup_workorder(followup_reasons, ai_payload_audit)] if followup_reasons else [])
         + [_normalize_explicit_workorder(item) for item in explicit_workorders],
         "sources": {
             "swing_lifecycle_decision_matrix": str(matrix_json) if matrix_json.exists() else None,

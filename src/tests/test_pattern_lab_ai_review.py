@@ -107,6 +107,44 @@ def test_pattern_lab_ai_review_accepts_strict_ai_response_with_audit(tmp_path, m
     assert report["code_improvement_orders"] == []
 
 
+def test_pattern_lab_ai_review_does_not_retry_parsed_audit_correction(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    calls = []
+
+    def fake_call(context, *, config=None):
+        calls.append(config)
+        return {
+            "schema_version": 1,
+            "interpretation": {"review_items": [], "source_feedback_status": "warning"},
+            "audit": {
+                "status": "correction_required",
+                "issues": ["source follow-up required"],
+                "forbidden_use_violations": [],
+                "reason": "parsed review requires source-only follow-up",
+            },
+            "final_conclusions": [
+                {
+                    "review_id": "manual:followup",
+                    "domain": "cross_domain",
+                    "final_state": "source_quality_gap",
+                    "final_decision": "surface_workorder",
+                    "reason": "surface source-only follow-up",
+                    "required_followup": ["review_source_quality"],
+                }
+            ],
+        }, {"provider": "openai", "status": "success", **config.provider_status_fields()}
+
+    monkeypatch.setattr(mod, "_call_openai_ai_review", fake_call)
+
+    report = mod.build_pattern_lab_ai_review_report("2026-05-15", provider="openai")
+
+    assert [call.reasoning_effort for call in calls] == ["medium"]
+    assert report["summary"]["ai_review_followup_required"] is True
+    assert report["ai_two_pass_review"]["provider_status"]["retry_attempted"] is False
+    assert any(order["improvement_type"] == "source_quality_gap" for order in report["code_improvement_orders"])
+
+
 def test_pattern_lab_ai_review_resolves_implemented_swing_micro_context_contract(tmp_path, monkeypatch):
     report_dir = tmp_path / "data" / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)

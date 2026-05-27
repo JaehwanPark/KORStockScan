@@ -169,13 +169,14 @@ def test_bucket_discovery_reviews_sim_auto_candidates_before_large_source_only_t
 
     calls = []
 
-    def fake_call(context):
+    def fake_call(context, **kwargs):
         calls.append(context)
+        config = kwargs.get("config")
         return _ai_response(context["candidate_ids"]), {
             "provider": "openai",
             "status": "success",
-            "model": mod.AI_REVIEW_MODEL,
-            "reasoning_effort": "low",
+            "model": config.model if config else mod.AI_REVIEW_MODEL,
+            "reasoning_effort": config.reasoning_effort if config else mod.AI_REVIEW_REASONING_EFFORT,
             "input_context_chars": 1000,
         }
 
@@ -191,6 +192,8 @@ def test_bucket_discovery_reviews_sim_auto_candidates_before_large_source_only_t
     assert report["summary"]["ai_fail_closed"] is False
     assert [call["shard_id"] for call in calls] == ["sim_policy_review", "taxonomy_discovery_review"]
     assert calls[0]["candidate_ids"] == [sim_bucket_id]
+    assert report["ai_two_pass_review"]["shards"][0]["provider_status"]["model"] == "gpt-5.4-mini"
+    assert report["ai_two_pass_review"]["shards"][0]["provider_status"]["reasoning_effort"] == "medium"
     assert report["summary"]["ai_reviewed_candidate_count"] == 11
     assert report["summary"]["ai_unreviewed_candidate_count"] == 110
     assert report["summary"]["unreviewed_sim_auto_candidate_count"] == 0
@@ -242,7 +245,7 @@ def test_bucket_discovery_taxonomy_correction_does_not_block_parsed_sim_policy(t
     )
     monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
 
-    def fake_call(context):
+    def fake_call(context, **_kwargs):
         payload = _ai_response(context["candidate_ids"])
         if context["shard_id"] == "taxonomy_discovery_review":
             payload["audit"]["status"] = "correction_required"
@@ -258,6 +261,57 @@ def test_bucket_discovery_taxonomy_correction_does_not_block_parsed_sim_policy(t
     assert report["summary"]["sim_auto_approved_count"] == 1
     assert "ai_two_pass_review_correction_required_source_only" in report["warnings"]
     assert "ai_two_pass_review_fail_closed_sim_auto_blocked" not in report["warnings"]
+
+
+def test_bucket_discovery_sim_policy_audit_correction_blocks_sim_as_followup_not_call_fail(tmp_path, monkeypatch):
+    target = "2026-05-22"
+    matrix_dir = tmp_path / "matrix"
+    matrix_dir.mkdir()
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "discovery")
+
+    matrix_path = matrix_dir / f"swing_lifecycle_decision_matrix_{target}.json"
+    matrix_path.write_text(
+        json.dumps(
+            {
+                "input_contract": {"swing_daily_simulation_consumed": False},
+                "holding_exit_bucket_attribution": {
+                    "buckets": [
+                        {
+                            "bucket_type": "holding_exit_bucket_attribution",
+                            "bucket_key": "mfe_high|trailing",
+                            "lifecycle_stage": "holding_exit",
+                            "recommended_route": "sim_auto_approved",
+                            "source_quality_gate": "pass",
+                            "joined_sample": 12,
+                            "sample_count": 12,
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+
+    def fake_call(context, **_kwargs):
+        payload = _ai_response(context["candidate_ids"])
+        payload["audit"]["status"] = "correction_required"
+        payload["audit"]["issues"] = ["sim policy requires source-only follow-up"]
+        return payload, {"provider": "openai", "status": "success", "model": mod.AI_REVIEW_MODEL}
+
+    monkeypatch.setattr(mod, "_call_openai_ai_review", fake_call)
+
+    report = mod.build_swing_lifecycle_bucket_discovery(target, provider="openai")
+
+    assert report["summary"]["ai_fail_closed"] is False
+    assert report["summary"]["ai_review_followup_required"] is True
+    assert report["summary"]["sim_auto_blocked_by_ai_review_followup"] is True
+    assert report["summary"]["sim_auto_approved_count"] == 0
+    assert "ai_two_pass_review_followup_sim_auto_blocked" in report["warnings"]
+    assert any(
+        item["workorder_id"] == "swing_lifecycle_bucket_discovery_ai_review_followup"
+        for item in report["code_improvement_workorders"]
+    )
 
 
 def test_bucket_discovery_non_sim_shard_missing_does_not_block_parsed_sim_policy(tmp_path, monkeypatch):
@@ -303,7 +357,7 @@ def test_bucket_discovery_non_sim_shard_missing_does_not_block_parsed_sim_policy
     )
     monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
 
-    def fake_call(context):
+    def fake_call(context, **_kwargs):
         if context["shard_id"] == "taxonomy_discovery_review":
             return None, {"provider": "openai", "status": "timeout", "model": mod.AI_REVIEW_MODEL}
         return _ai_response(context["candidate_ids"]), {"provider": "openai", "status": "success", "model": mod.AI_REVIEW_MODEL}

@@ -12,6 +12,10 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from src.engine.ai.postclose_review_config import (
+    PostcloseAIReviewConfig,
+    resolve_postclose_ai_review_config,
+)
 from src.engine.automation.dual_candidate_review import (
     evidence_authority_contract,
     has_evidence_authority_violation,
@@ -28,7 +32,7 @@ from src.engine.lifecycle.bucket_taxonomy import (
     default_ai_tier2_proposal,
     normalize_lifecycle_bucket,
 )
-from src.utils.constants import DATA_DIR, TRADING_RULES
+from src.utils.constants import DATA_DIR
 
 
 REPORT_DIR = DATA_DIR / "report" / "lifecycle_bucket_discovery"
@@ -46,7 +50,9 @@ ENTRY_LIVE_AUTO_BUCKET_KEY = (
 DISCOVERY_SCHEMA_VERSION = "lifecycle_bucket_discovery_v1"
 AI_REVIEW_SCHEMA_NAME = "lifecycle_bucket_discovery_review_v1"
 AI_REVIEW_DEFAULT_PROVIDER = "openai"
-AI_REVIEW_MODEL = str(getattr(TRADING_RULES, "GPT_DEEP_MODEL", "gpt-5.4") or "gpt-5.4")
+AI_REVIEW_MODEL = "gpt-5.4"
+AI_REVIEW_SOURCE_ONLY_MODEL = "gpt-5.4-mini"
+AI_REVIEW_SOURCE_ONLY_REASONING_EFFORT = "medium"
 LIVE_AUTO_STATES = {"live_auto_apply_ready"}
 EVIDENCE_GRADE_1_COMPLETED_SIM = "grade_1_completed_sim"
 EVIDENCE_GRADE_2_COUNTERFACTUAL = "grade_2_counterfactual"
@@ -201,6 +207,31 @@ AI_REVIEW_SHARD_AUTHORITIES = {
 AI_REVIEW_REASONING_EFFORT = str(
     os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_REVIEW_REASONING_EFFORT", "low")
 ).strip().lower() or "low"
+
+
+def _ai_review_config_for_shard(shard_id: str | None) -> PostcloseAIReviewConfig:
+    shard = str(shard_id or "unknown")
+    generic_model = os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_MODEL")
+    generic_reasoning = os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_REASONING_EFFORT")
+    generic_timeout_sec = _safe_int(
+        os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_TIMEOUT_SEC"),
+        AI_REVIEW_TIMEOUT_SEC,
+    )
+    if shard == "live_contract_review":
+        return resolve_postclose_ai_review_config(
+            "LIFECYCLE_BUCKET_DISCOVERY",
+            default_model=str(generic_model or AI_REVIEW_MODEL),
+            default_reasoning_effort=str(generic_reasoning or AI_REVIEW_REASONING_EFFORT),
+            default_timeout_sec=generic_timeout_sec,
+            env_prefix="KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_LIVE_CONTRACT_AI",
+        )
+    return resolve_postclose_ai_review_config(
+        "LIFECYCLE_BUCKET_DISCOVERY",
+        default_model=str(generic_model or AI_REVIEW_SOURCE_ONLY_MODEL),
+        default_reasoning_effort=str(generic_reasoning or AI_REVIEW_SOURCE_ONLY_REASONING_EFFORT),
+        default_timeout_sec=generic_timeout_sec,
+        env_prefix="KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_SOURCE_ONLY_AI",
+    )
 
 
 def _ai_review_compact_value(value: Any, *, max_chars: int = AI_REVIEW_MAX_FIELD_CHARS) -> Any:
@@ -1177,7 +1208,14 @@ def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, 
     return "parsed", payload, []
 
 
-def _call_openai_ai_review(input_context: dict[str, Any], *, shard_id: str | None = None) -> tuple[Any | None, dict[str, Any]]:
+def _call_openai_ai_review(
+    input_context: dict[str, Any],
+    *,
+    shard_id: str | None = None,
+    config: PostcloseAIReviewConfig | None = None,
+) -> tuple[Any | None, dict[str, Any]]:
+    resolved_shard_id = shard_id or str((input_context.get("review_scope") or {}).get("shard_id") or "unknown")
+    config = config or _ai_review_config_for_shard(resolved_shard_id)
     try:
         from openai import OpenAI, RateLimitError
         from src.engine.ai_response_contracts import build_openai_response_text_format
@@ -1186,34 +1224,34 @@ def _call_openai_ai_review(input_context: dict[str, Any], *, shard_id: str | Non
             _load_threshold_ai_openai_keys,
         )
     except Exception as exc:
-        return None, {"provider": "openai", "status": "unavailable", "reason": f"openai import failed: {exc}"}
+        return None, {"provider": "openai", "status": "unavailable", "reason": f"openai import failed: {exc}", "shard_id": resolved_shard_id, **config.provider_status_fields()}
 
     api_keys = _load_threshold_ai_openai_keys()
     if not api_keys:
-        return None, {"provider": "openai", "status": "unavailable", "reason": "OPENAI_API_KEY not configured"}
+        return None, {"provider": "openai", "status": "unavailable", "reason": "OPENAI_API_KEY not configured", "shard_id": resolved_shard_id, **config.provider_status_fields()}
 
     prompt = json.dumps(input_context, ensure_ascii=True, indent=2, default=str)
     errors: list[dict[str, str]] = []
     for attempt_index, (key_name, api_key) in enumerate(api_keys, start=1):
         try:
-            client = OpenAI(api_key=api_key, timeout=AI_REVIEW_TIMEOUT_SEC)
+            client = OpenAI(api_key=api_key, timeout=config.timeout_sec)
             response = client.responses.create(
-                model=AI_REVIEW_MODEL,
+                model=config.model,
                 instructions=_build_ai_review_instructions(),
                 input=prompt,
                 text={
                     "format": build_openai_response_text_format(AI_REVIEW_SCHEMA_NAME),
                     "verbosity": "low",
                 },
-                reasoning={"effort": AI_REVIEW_REASONING_EFFORT},
+                reasoning={"effort": config.reasoning_effort},
                 store=False,
                 metadata={
                     "endpoint_name": "lifecycle_bucket_discovery_review",
                     "schema_name": AI_REVIEW_SCHEMA_NAME,
                     "report_type": "lifecycle_bucket_discovery",
-                    "shard_id": shard_id or str((input_context.get("review_scope") or {}).get("shard_id") or "unknown"),
+                    "shard_id": resolved_shard_id,
                 },
-                timeout=AI_REVIEW_TIMEOUT_SEC,
+                timeout=config.timeout_sec,
             )
             raw_text = _extract_openai_response_text(response)
             usage = getattr(response, "usage", None)
@@ -1223,11 +1261,14 @@ def _call_openai_ai_review(input_context: dict[str, Any], *, shard_id: str | Non
                 "key_name": key_name,
                 "attempt_index": attempt_index,
                 "attempted_key_count": len(api_keys),
-                "model": AI_REVIEW_MODEL,
+                "model": config.model,
                 "schema_name": AI_REVIEW_SCHEMA_NAME,
-                "shard_id": shard_id or str((input_context.get("review_scope") or {}).get("shard_id") or "unknown"),
-                "reasoning_effort": AI_REVIEW_REASONING_EFFORT,
-                "timeout_sec": AI_REVIEW_TIMEOUT_SEC,
+                "shard_id": resolved_shard_id,
+                "reasoning_effort": config.reasoning_effort,
+                "timeout_sec": config.timeout_sec,
+                "attempt_role": config.attempt_role,
+                "retry_reason": config.retry_reason,
+                "config_env_prefix": config.env_prefix_name,
                 "input_context_hash": _text_hash(input_context),
                 "input_context_chars": len(prompt),
                 "output_chars": len(raw_text),
@@ -1243,8 +1284,8 @@ def _call_openai_ai_review(input_context: dict[str, Any], *, shard_id: str | Non
         "provider": "openai",
         "status": "unavailable",
         "reason": "all OpenAI attempts failed",
-        "model": AI_REVIEW_MODEL,
-        "shard_id": shard_id or str((input_context.get("review_scope") or {}).get("shard_id") or "unknown"),
+        "shard_id": resolved_shard_id,
+        **config.provider_status_fields(),
         "errors": errors[-3:],
     }
 
@@ -1514,16 +1555,19 @@ def _run_ai_review_shards(
     disabled = provider in {"none", "off", "false", "0"}
     for shard in shard_specs:
         shard_id = str(shard.get("shard_id") or "")
+        shard_config = _ai_review_config_for_shard(shard_id)
         candidate_ids = {str(value) for value in (shard.get("candidate_ids") or []) if str(value)}
         provider_status: dict[str, Any] = {
             "provider": provider,
             "status": "disabled" if disabled else "not_called",
-            "model": AI_REVIEW_MODEL if not disabled else None,
             "schema_name": AI_REVIEW_SCHEMA_NAME,
             "shard_id": shard_id,
             "input_context_hash": _text_hash(shard.get("context")),
             "input_context_chars": shard.get("context_chars"),
+            **(shard_config.provider_status_fields() if not disabled else {"model": None}),
         }
+        if disabled:
+            provider_status.update({"reasoning_effort": None, "timeout_sec": None, "attempt_role": None, "retry_reason": None})
         if not candidate_ids:
             shard_records.append(
                 {
@@ -1552,12 +1596,12 @@ def _run_ai_review_shards(
                 raw_response, provider_status = _call_openai_ai_review(
                     shard.get("context") if isinstance(shard.get("context"), dict) else {},
                     shard_id=shard_id,
+                    config=shard_config,
                 )
             elif raw_response is not None:
                 provider_status = {
                     **provider_status,
                     "status": "provided_response",
-                    "model": AI_REVIEW_MODEL if not disabled else None,
                 }
             ai_status, ai_payload, ai_warnings = _parse_ai_review_response(raw_response)
             if ai_status == "unavailable" and _provider_status_looks_timeout(provider_status):
@@ -1614,7 +1658,12 @@ def _run_ai_review_shards(
     review = {
         "provider": provider,
         "status": aggregate_status,
-        "model": AI_REVIEW_MODEL if not disabled else None,
+        "model": "sharded" if not disabled else None,
+        "models_by_shard": {
+            str(record.get("shard_id")): (record.get("provider_status") or {}).get("model")
+            for record in shard_records
+            if record.get("shard_id")
+        },
         "model_tier": "tier2",
         "schema_name": AI_REVIEW_SCHEMA_NAME,
         "sharded": True,

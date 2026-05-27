@@ -1052,6 +1052,10 @@ def _swing_lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[st
         warnings.append(f"swing_lifecycle_bucket_discovery:ai_two_pass_review_{ai_review_status}_fail_closed")
     if bool(summary.get("ai_fail_closed")):
         warnings.append("swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked")
+    if bool(summary.get("ai_review_followup_required")):
+        warnings.append("swing_lifecycle_bucket_discovery:ai_review_followup_required")
+    if bool(summary.get("sim_auto_blocked_by_ai_review_followup")):
+        warnings.append("swing_lifecycle_bucket_discovery:ai_review_followup_sim_auto_blocked")
     warnings = list(dict.fromkeys(warnings))
     return (
         {
@@ -1063,6 +1067,11 @@ def _swing_lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[st
             "source_contract_status": summary.get("source_contract_status"),
             "ai_two_pass_review_status": ai_review_status or None,
             "ai_fail_closed": bool(summary.get("ai_fail_closed")),
+            "ai_review_followup_required": bool(summary.get("ai_review_followup_required")),
+            "ai_review_followup_reasons": summary.get("ai_review_followup_reasons")
+            if isinstance(summary.get("ai_review_followup_reasons"), list)
+            else [],
+            "sim_auto_blocked_by_ai_review_followup": bool(summary.get("sim_auto_blocked_by_ai_review_followup")),
             "candidate_count": _safe_int(summary.get("candidate_count"), 0),
             "surfaced_candidate_count": _safe_int(summary.get("surfaced_candidate_count"), 0),
             "sim_auto_approved_count": _safe_int(summary.get("sim_auto_approved_count"), 0),
@@ -1235,6 +1244,12 @@ def _audit_summary(target_date: str, report_type: str, report_dir: Path) -> tupl
     status = str(payload.get("status") or "unknown")
     audit_status = str(summary.get("audit_status") or "")
     ai_fail_closed = bool(summary.get("ai_fail_closed"))
+    ai_review_followup_required = bool(summary.get("ai_review_followup_required"))
+    ai_review_followup_reasons = (
+        summary.get("ai_review_followup_reasons")
+        if isinstance(summary.get("ai_review_followup_reasons"), list)
+        else []
+    )
     fail_count = _safe_int(summary.get("fail_count"), 0)
     source_only_candidate_warning_resolved = (
         report_type in {"producer_gap_discovery", "stage_hook_workorder_discovery"}
@@ -1246,6 +1261,8 @@ def _audit_summary(target_date: str, report_type: str, report_dir: Path) -> tupl
     warnings: list[str] = []
     if status in {"warning", "fail"} and not source_only_candidate_warning_resolved:
         warnings.append(f"{report_type}_{status}")
+    if ai_review_followup_required:
+        warnings.append(f"{report_type}_ai_review_followup_required")
     return (
         {
             "available": True,
@@ -1261,6 +1278,9 @@ def _audit_summary(target_date: str, report_type: str, report_dir: Path) -> tupl
             "decision_authority": payload.get("decision_authority"),
             "source_only_candidate_warning_resolved": source_only_candidate_warning_resolved,
             "audit_status": audit_status or None,
+            "ai_fail_closed": ai_fail_closed,
+            "ai_review_followup_required": ai_review_followup_required,
+            "ai_review_followup_reasons": ai_review_followup_reasons,
             "deterministic_proposal_count": _safe_int(summary.get("deterministic_proposal_count"), 0),
             "ai_tier2_proposal_count": _safe_int(summary.get("ai_tier2_proposal_count"), 0),
             "comparative_review_count": _safe_int(summary.get("comparative_review_count"), 0),

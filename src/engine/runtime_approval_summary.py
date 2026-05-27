@@ -1492,6 +1492,10 @@ def _swing_lifecycle_bucket_discovery_summary(ev_report: dict[str, Any]) -> dict
         warnings.append(f"ai_two_pass_review_{ai_review_status}_fail_closed")
     if bool(payload.get("ai_fail_closed")):
         warnings.append("ai_two_pass_review_fail_closed_sim_auto_blocked")
+    if bool(payload.get("ai_review_followup_required")):
+        warnings.append("ai_review_followup_required")
+    if bool(payload.get("sim_auto_blocked_by_ai_review_followup")):
+        warnings.append("ai_review_followup_sim_auto_blocked")
     warning_prefix = "swing_lifecycle_bucket_discovery:"
     for item in payload.get("warnings") or []:
         warning_text = str(item)
@@ -1513,6 +1517,11 @@ def _swing_lifecycle_bucket_discovery_summary(ev_report: dict[str, Any]) -> dict
         "source_contract_status": payload.get("source_contract_status"),
         "ai_two_pass_review_status": ai_review_status or None,
         "ai_fail_closed": bool(payload.get("ai_fail_closed")),
+        "ai_review_followup_required": bool(payload.get("ai_review_followup_required")),
+        "ai_review_followup_reasons": payload.get("ai_review_followup_reasons")
+        if isinstance(payload.get("ai_review_followup_reasons"), list)
+        else [],
+        "sim_auto_blocked_by_ai_review_followup": bool(payload.get("sim_auto_blocked_by_ai_review_followup")),
         "candidate_count": int(payload.get("candidate_count") or 0),
         "surfaced_candidate_count": int(payload.get("surfaced_candidate_count") or 0),
         "sim_auto_approved_count": int(payload.get("sim_auto_approved_count") or 0),

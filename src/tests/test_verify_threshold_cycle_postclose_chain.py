@@ -421,6 +421,43 @@ def test_producer_gap_discovery_handoff_passes_when_ai_and_workorder_close():
     assert report["missing"] == []
 
 
+def test_producer_gap_discovery_handoff_treats_parsed_followup_as_workorder_not_ai_failure():
+    followup_order_id = "order_producer_gap_discovery_ai_review_followup_20260526"
+    producer_gap = {
+        "status": "warning",
+        "summary": {
+            "ai_two_pass_review_status": "parsed",
+            "audit_status": "correction_required",
+            "ai_review_followup_required": True,
+            "ai_review_followup_reasons": ["audit_status=correction_required"],
+            "candidate_count": 1,
+            "workorder_count": 1,
+            "provider": "openai",
+            "model": "gpt-5.4-mini",
+        },
+        "ai_two_pass_review": {
+            "provider": "openai",
+            "model": "gpt-5.4-mini",
+            "provider_status": {"provider": "openai", "status": "success", "model": "gpt-5.4-mini"},
+        },
+        "code_improvement_orders": [
+            {
+                "order_id": followup_order_id,
+                "producer_gap_priority": "high",
+                "improvement_type": "ai_review_followup",
+            }
+        ],
+    }
+    workorder = {"orders": [{"order_id": followup_order_id}]}
+
+    report = mod._producer_gap_discovery_handoff_status(producer_gap, workorder)
+
+    assert report["status"] == "pass"
+    assert "producer_gap_discovery_ai_audit_not_pass" not in report["missing"]
+    assert report["ai_review_followup_required"] is True
+    assert report["missing_ai_review_followup_workorder_order_ids"] == []
+
+
 def test_producer_gap_discovery_handoff_fails_without_openai_tier2_review():
     producer_gap = {
         "status": "warning",
@@ -450,6 +487,42 @@ def test_producer_gap_discovery_handoff_fails_without_openai_tier2_review():
 
     assert report["status"] == "fail"
     assert "producer_gap_discovery_tier2_provider_review_missing" in report["missing"]
+
+
+def test_stage_hook_handoff_treats_parsed_followup_as_workorder_not_ai_failure():
+    followup_order_id = "order_stage_hook_workorder_discovery_ai_review_followup_20260526"
+    stage_hook = {
+        "status": "warning",
+        "summary": {
+            "ai_two_pass_review_status": "parsed",
+            "audit_status": "correction_required",
+            "ai_review_followup_required": True,
+            "ai_review_followup_reasons": ["forbidden_use_violation"],
+            "candidate_count": 1,
+            "workorder_count": 1,
+            "provider": "openai",
+        },
+        "ai_two_pass_review": {
+            "provider": "openai",
+            "provider_status": {"provider": "openai", "status": "success", "model": "gpt-5.4-mini"},
+        },
+        "code_improvement_orders": [
+            {
+                "order_id": followup_order_id,
+                "stage_hook_priority": "high",
+                "improvement_type": "ai_review_followup",
+            }
+        ],
+        "context": {"consumed_candidate_ids": []},
+    }
+    workorder = {"orders": [{"order_id": followup_order_id}]}
+
+    report = mod._stage_hook_workorder_handoff_status(stage_hook, {}, workorder)
+
+    assert report["status"] == "pass"
+    assert "stage_hook_workorder_discovery_ai_audit_not_pass" not in report["missing"]
+    assert report["ai_review_followup_required"] is True
+    assert report["missing_ai_review_followup_workorder_order_ids"] == []
 
 
 def test_ai_correction_status_reads_current_provider_status_key(tmp_path, monkeypatch):

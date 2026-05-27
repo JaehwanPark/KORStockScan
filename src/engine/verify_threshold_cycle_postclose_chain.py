@@ -848,15 +848,33 @@ def _producer_gap_discovery_handoff_status(
     provider_status = ai_review.get("provider_status") if isinstance(ai_review.get("provider_status"), dict) else {}
     ai_status = str(summary.get("ai_two_pass_review_status") or "").strip()
     audit_status = str(summary.get("audit_status") or "").strip()
+    ai_review_followup_required = bool(summary.get("ai_review_followup_required"))
+    ai_review_followup_reasons = (
+        summary.get("ai_review_followup_reasons")
+        if isinstance(summary.get("ai_review_followup_reasons"), list)
+        else []
+    )
     ai_provider = str(ai_review.get("provider") or summary.get("provider") or provider_status.get("provider") or "").strip()
     ai_provider_status = str(provider_status.get("status") or "").strip()
     ai_model = ai_review.get("model") or summary.get("model") or provider_status.get("model")
+    source_orders = (
+        producer_gap.get("code_improvement_orders")
+        if isinstance(producer_gap.get("code_improvement_orders"), list)
+        else []
+    )
     expected_order_ids = {
         str(item.get("order_id"))
-        for item in (producer_gap.get("code_improvement_orders") if isinstance(producer_gap.get("code_improvement_orders"), list) else [])
+        for item in source_orders
         if isinstance(item, dict)
         and item.get("order_id")
         and str(item.get("producer_gap_priority") or "high") in {"critical", "high"}
+    }
+    followup_order_ids = {
+        str(item.get("order_id"))
+        for item in source_orders
+        if isinstance(item, dict)
+        and item.get("order_id")
+        and str(item.get("improvement_type") or item.get("source_workorder_id") or "") == "ai_review_followup"
     }
     high_priority_candidate_ids = {
         f"order_producer_gap_discovery_{_slug(str(item.get('candidate_id') or 'unknown'))}"
@@ -872,12 +890,19 @@ def _producer_gap_discovery_handoff_status(
         if isinstance(item, dict) and item.get("order_id")
     }
     missing_order_ids = sorted(expected_order_ids - actual_order_ids)
+    missing_followup_order_ids = sorted(followup_order_ids - actual_order_ids)
+    parsed_followup_handoff_closed = (
+        ai_status == "parsed"
+        and ai_review_followup_required
+        and bool(followup_order_ids)
+        and not missing_followup_order_ids
+    )
     missing: list[str] = []
     if producer_gap.get("status") == "fail":
         missing.append("producer_gap_discovery_ai_review_failed")
     if ai_status != "parsed":
         missing.append("producer_gap_discovery_ai_review_not_parsed")
-    if audit_status != "pass":
+    if audit_status != "pass" and not parsed_followup_handoff_closed:
         missing.append("producer_gap_discovery_ai_audit_not_pass")
     provider_review_present = (
         ai_provider == "openai"
@@ -896,6 +921,10 @@ def _producer_gap_discovery_handoff_status(
         "expected_workorder_order_ids": sorted(expected_order_ids),
         "actual_workorder_order_ids": sorted(actual_order_ids),
         "missing_workorder_order_ids": missing_order_ids,
+        "ai_review_followup_required": ai_review_followup_required,
+        "ai_review_followup_reasons": ai_review_followup_reasons,
+        "ai_review_followup_workorder_order_ids": sorted(followup_order_ids),
+        "missing_ai_review_followup_workorder_order_ids": missing_followup_order_ids,
         "ai_two_pass_review_status": ai_status or "missing",
         "audit_status": audit_status or "missing",
         "provider": ai_provider or "missing",
@@ -911,6 +940,10 @@ def _producer_gap_discovery_handoff_status(
         "interpretation": (
             "producer gap high-priority orders propagated to code improvement workorder with parsed AI review"
             if not missing
+            and not parsed_followup_handoff_closed
+            else "producer gap parsed AI review requested follow-up and the follow-up workorder propagated"
+            if not missing
+            and parsed_followup_handoff_closed
             else "producer gap discovery failed closed or workorder handoff is missing"
         ),
     }
@@ -935,11 +968,22 @@ def _stage_hook_workorder_handoff_status(
     provider_status = ai_review.get("provider_status") if isinstance(ai_review.get("provider_status"), dict) else {}
     ai_status = str(summary.get("ai_two_pass_review_status") or "").strip()
     audit_status = str(summary.get("audit_status") or "").strip()
+    ai_review_followup_required = bool(summary.get("ai_review_followup_required"))
+    ai_review_followup_reasons = (
+        summary.get("ai_review_followup_reasons")
+        if isinstance(summary.get("ai_review_followup_reasons"), list)
+        else []
+    )
     ai_provider = str(ai_review.get("provider") or summary.get("provider") or provider_status.get("provider") or "").strip()
     ai_provider_status = str(provider_status.get("status") or "").strip()
+    source_orders = (
+        stage_hook.get("code_improvement_orders")
+        if isinstance(stage_hook.get("code_improvement_orders"), list)
+        else []
+    )
     expected_order_ids = {
         str(item.get("order_id"))
-        for item in (stage_hook.get("code_improvement_orders") if isinstance(stage_hook.get("code_improvement_orders"), list) else [])
+        for item in source_orders
         if isinstance(item, dict)
         and item.get("order_id")
         and (
@@ -948,12 +992,26 @@ def _stage_hook_workorder_handoff_status(
             == "implementation_workorder_ready"
         )
     }
+    followup_order_ids = {
+        str(item.get("order_id"))
+        for item in source_orders
+        if isinstance(item, dict)
+        and item.get("order_id")
+        and str(item.get("improvement_type") or item.get("source_workorder_id") or "") == "ai_review_followup"
+    }
     actual_order_ids = {
         str(item.get("order_id"))
         for item in (workorder.get("orders") if isinstance(workorder.get("orders"), list) else [])
         if isinstance(item, dict) and item.get("order_id")
     }
     missing_order_ids = sorted(expected_order_ids - actual_order_ids)
+    missing_followup_order_ids = sorted(followup_order_ids - actual_order_ids)
+    parsed_followup_handoff_closed = (
+        ai_status == "parsed"
+        and ai_review_followup_required
+        and bool(followup_order_ids)
+        and not missing_followup_order_ids
+    )
     consumed_ids = set((stage_hook.get("context") or {}).get("consumed_candidate_ids") or [])
     producer_hook_ids = {
         str(item.get("candidate_id") or "")
@@ -979,7 +1037,7 @@ def _stage_hook_workorder_handoff_status(
         missing.append("stage_hook_workorder_discovery_ai_review_failed")
     if ai_status != "parsed":
         missing.append("stage_hook_workorder_discovery_ai_review_not_parsed")
-    if audit_status != "pass":
+    if audit_status != "pass" and not parsed_followup_handoff_closed:
         missing.append("stage_hook_workorder_discovery_ai_audit_not_pass")
     if ai_provider != "openai" or ai_provider_status != "success":
         missing.append("stage_hook_workorder_discovery_tier2_provider_review_missing")
@@ -993,6 +1051,10 @@ def _stage_hook_workorder_handoff_status(
         "expected_workorder_order_ids": sorted(expected_order_ids),
         "actual_workorder_order_ids": sorted(actual_order_ids),
         "missing_workorder_order_ids": missing_order_ids,
+        "ai_review_followup_required": ai_review_followup_required,
+        "ai_review_followup_reasons": ai_review_followup_reasons,
+        "ai_review_followup_workorder_order_ids": sorted(followup_order_ids),
+        "missing_ai_review_followup_workorder_order_ids": missing_followup_order_ids,
         "unconsumed_hook_candidate_ids": unconsumed_hook_candidate_ids,
         "ai_two_pass_review_status": ai_status or "missing",
         "audit_status": audit_status or "missing",
@@ -1008,6 +1070,10 @@ def _stage_hook_workorder_handoff_status(
         "interpretation": (
             "stage hook implementation-ready orders propagated to code improvement workorder"
             if not missing
+            and not parsed_followup_handoff_closed
+            else "stage hook parsed AI review requested follow-up and the follow-up workorder propagated"
+            if not missing
+            and parsed_followup_handoff_closed
             else "stage hook discovery failed closed or workorder handoff is missing"
         ),
     }

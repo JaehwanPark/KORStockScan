@@ -514,13 +514,16 @@ def test_lifecycle_bucket_discovery_openai_review_uses_tier2_schema_and_english_
     monkeypatch.setattr("src.engine.daily_threshold_cycle_report._load_threshold_ai_openai_keys", lambda: [("OPENAI_API_KEY", "key")])
     monkeypatch.setattr("openai.OpenAI", _FakeOpenAI)
 
-    raw, status = mod._call_openai_ai_review({"surfaced_candidates": [{"label": "수급"}]})
+    raw, status = mod._call_openai_ai_review(
+        {"surfaced_candidates": [{"label": "수급"}]},
+        shard_id="sim_policy_review",
+    )
 
     assert json.loads(raw)["schema_version"] == 1
-    assert status["model"] == mod.AI_REVIEW_MODEL
-    assert status["reasoning_effort"] == mod.AI_REVIEW_REASONING_EFFORT
-    assert captured["model"] == mod.AI_REVIEW_MODEL
-    assert captured["reasoning"]["effort"] == mod.AI_REVIEW_REASONING_EFFORT
+    assert status["model"] == mod.AI_REVIEW_SOURCE_ONLY_MODEL
+    assert status["reasoning_effort"] == mod.AI_REVIEW_SOURCE_ONLY_REASONING_EFFORT
+    assert captured["model"] == mod.AI_REVIEW_SOURCE_ONLY_MODEL
+    assert captured["reasoning"]["effort"] == mod.AI_REVIEW_SOURCE_ONLY_REASONING_EFFORT
     assert captured["client_timeout"] == mod.AI_REVIEW_TIMEOUT_SEC
     assert captured["timeout"] == mod.AI_REVIEW_TIMEOUT_SEC
     assert captured["text"]["format"]["name"] == mod.AI_REVIEW_SCHEMA_NAME

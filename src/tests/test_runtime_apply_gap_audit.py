@@ -91,7 +91,7 @@ def test_ai_source_quality_blocker_positive_edge_is_not_runtime_gap_fail(tmp_pat
     monkeypatch.setattr(
         mod,
         "_call_openai_ai_review",
-        lambda context, model: (
+        lambda context, config: (
             json.dumps(
                 {
                     "schema_version": 1,
@@ -101,7 +101,7 @@ def test_ai_source_quality_blocker_positive_edge_is_not_runtime_gap_fail(tmp_pat
                     "codex_directives": [],
                 }
             ),
-            {"provider": "openai", "status": "success", "model": model},
+            {"provider": "openai", "status": "success", "model": config.model},
         ),
     )
 
@@ -160,7 +160,7 @@ def test_ai_review_parse_fail_is_retryable(tmp_path, monkeypatch):
     monkeypatch.setattr(
         mod,
         "_call_openai_ai_review",
-        lambda context, model: ("not-json", {"provider": "openai", "status": "success", "model": model}),
+        lambda context, config: ("not-json", {"provider": "openai", "status": "success", "model": config.model}),
     )
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="openai")
@@ -192,7 +192,7 @@ def test_ai_reason_is_stored_as_raw_en_and_user_reason_is_ko(tmp_path, monkeypat
     monkeypatch.setattr(
         mod,
         "_call_openai_ai_review",
-        lambda context, model: (
+        lambda context, config: (
             json.dumps(
                 {
                     "schema_version": 1,
@@ -211,7 +211,7 @@ def test_ai_reason_is_stored_as_raw_en_and_user_reason_is_ko(tmp_path, monkeypat
                     "codex_directives": [],
                 }
             ),
-            {"provider": "openai", "status": "success", "model": model},
+            {"provider": "openai", "status": "success", "model": config.model},
         ),
     )
 
@@ -326,7 +326,7 @@ def test_ready_bridge_consumed_by_next_preopen_apply_is_not_retry_target(tmp_pat
     monkeypatch.setattr(
         mod,
         "_call_openai_ai_review",
-        lambda context, model: (
+        lambda context, config: (
             json.dumps(
                 {
                     "schema_version": 1,
@@ -336,7 +336,7 @@ def test_ready_bridge_consumed_by_next_preopen_apply_is_not_retry_target(tmp_pat
                     "codex_directives": [],
                 }
             ),
-            {"provider": "openai", "status": "success", "model": model},
+            {"provider": "openai", "status": "success", "model": config.model},
         ),
     )
 

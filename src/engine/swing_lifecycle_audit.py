@@ -12,6 +12,10 @@ from typing import Any, Iterable
 import pandas as pd
 from sqlalchemy import create_engine, text
 
+from src.engine.ai.postclose_review_config import (
+    PostcloseAIReviewConfig,
+    resolve_postclose_ai_review_config,
+)
 from src.engine.automation.dual_candidate_review import (
     evidence_authority_contract,
     REQUIRED_METRIC_CONTRACT_FIELDS,
@@ -49,6 +53,9 @@ SWING_LIFECYCLE_OWNER = "SwingFullLifecycleSelfImprovementChain"
 SWING_RUNTIME_APPROVAL_OWNER = "SwingRuntimeApprovalDryRunChain0511"
 SWING_LIFECYCLE_AUDIT_DIR = Path(DATA_DIR) / "report" / "swing_lifecycle_audit"
 SWING_THRESHOLD_AI_REVIEW_DIR = Path(DATA_DIR) / "report" / "swing_threshold_ai_review"
+SWING_THRESHOLD_AI_REVIEW_MODEL = "gpt-5.4-mini"
+SWING_THRESHOLD_AI_REVIEW_REASONING_EFFORT = "medium"
+SWING_THRESHOLD_AI_REVIEW_TIMEOUT_SEC = 180
 SWING_IMPROVEMENT_AUTOMATION_DIR = Path(DATA_DIR) / "report" / "swing_improvement_automation"
 SWING_RUNTIME_APPROVAL_DIR = Path(DATA_DIR) / "report" / "swing_runtime_approval"
 SWING_DAILY_SIMULATION_DIR = Path(DATA_DIR) / "report" / "swing_daily_simulation"
@@ -3132,67 +3139,82 @@ def _build_openai_review_instructions() -> str:
     )
 
 
+def _swing_threshold_ai_review_config() -> PostcloseAIReviewConfig:
+    return resolve_postclose_ai_review_config(
+        "SWING_THRESHOLD_AI_REVIEW",
+        default_model=SWING_THRESHOLD_AI_REVIEW_MODEL,
+        default_reasoning_effort=SWING_THRESHOLD_AI_REVIEW_REASONING_EFFORT,
+        default_timeout_sec=SWING_THRESHOLD_AI_REVIEW_TIMEOUT_SEC,
+    )
+
+
 def _call_openai_swing_threshold_review(input_context: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
+    config = _swing_threshold_ai_review_config()
     try:
         from openai import OpenAI, RateLimitError
         from src.engine.daily_threshold_cycle_report import (
             _extract_openai_response_text,
             _load_threshold_ai_openai_keys,
-            _threshold_ai_openai_model_sequence,
         )
     except Exception as exc:
-        return None, {"provider": "openai", "status": "unavailable", "reason": f"openai import failed: {exc}"}
+        return None, {"provider": "openai", "status": "unavailable", "reason": f"openai import failed: {exc}", **config.provider_status_fields()}
 
     api_keys = _load_threshold_ai_openai_keys()
     if not api_keys:
-        return None, {"provider": "openai", "status": "unavailable", "reason": "OPENAI_API_KEY not configured"}
+        return None, {"provider": "openai", "status": "unavailable", "reason": "OPENAI_API_KEY not configured", **config.provider_status_fields()}
 
     errors: list[dict[str, str]] = []
-    model_sequence = _threshold_ai_openai_model_sequence()
-    for model_index, model_name in enumerate(model_sequence, start=1):
-        for attempt_index, (key_name, api_key) in enumerate(api_keys, start=1):
-            try:
-                client = OpenAI(api_key=api_key)
-                response = client.responses.create(
-                    model=model_name,
-                    instructions=_build_openai_review_instructions(),
-                    input=json.dumps(input_context, ensure_ascii=True, indent=2, default=str),
-                    text={
-                        "format": build_openai_response_text_format("threshold_ai_correction_v1"),
-                        "verbosity": "low",
-                    },
-                    reasoning={"effort": "medium"},
-                    store=False,
-                    metadata={
-                        "endpoint_name": "swing_threshold_ai_review",
-                        "schema_name": "threshold_ai_correction_v1",
-                        "report_type": "swing_threshold_ai_review",
-                    },
-                    timeout=180,
-                )
-                return _extract_openai_response_text(response), {
-                    "provider": "openai",
-                    "status": "success",
-                    "key_name": key_name,
-                    "attempt_index": attempt_index,
-                    "model_index": model_index,
-                    "attempted_keys": len(api_keys),
-                    "attempted_models": model_sequence,
-                    "model": model_name,
+    for attempt_index, (key_name, api_key) in enumerate(api_keys, start=1):
+        try:
+            client = OpenAI(api_key=api_key)
+            response = client.responses.create(
+                model=config.model,
+                instructions=_build_openai_review_instructions(),
+                input=json.dumps(input_context, ensure_ascii=True, indent=2, default=str),
+                text={
+                    "format": build_openai_response_text_format("threshold_ai_correction_v1"),
+                    "verbosity": "low",
+                },
+                reasoning={"effort": config.reasoning_effort},
+                store=False,
+                metadata={
+                    "endpoint_name": "swing_threshold_ai_review",
                     "schema_name": "threshold_ai_correction_v1",
-                    "reasoning_effort": "medium",
-                }
-            except RateLimitError as exc:
-                errors.append({"key_name": key_name, "model": model_name, "error": str(exc)})
-            except Exception as exc:
-                errors.append({"key_name": key_name, "model": model_name, "error": str(exc)})
+                    "report_type": "swing_threshold_ai_review",
+                },
+                timeout=config.timeout_sec,
+            )
+            return _extract_openai_response_text(response), {
+                "provider": "openai",
+                "status": "success",
+                "key_name": key_name,
+                "attempt_index": attempt_index,
+                "attempted_keys": len(api_keys),
+                "attempted_models": [config.model],
+                "model": config.model,
+                "schema_name": "threshold_ai_correction_v1",
+                "reasoning_effort": config.reasoning_effort,
+                "timeout_sec": config.timeout_sec,
+                "attempt_role": config.attempt_role,
+                "retry_reason": config.retry_reason,
+                "config_env_prefix": config.env_prefix_name,
+            }
+        except RateLimitError as exc:
+            errors.append({"key_name": key_name, "model": config.model, "error": str(exc)})
+        except Exception as exc:
+            errors.append({"key_name": key_name, "model": config.model, "error": str(exc)})
     return None, {
         "provider": "openai",
         "status": "failed",
         "attempted_keys": len(api_keys),
-        "attempted_models": model_sequence,
+        "attempted_models": [config.model],
         "schema_name": "threshold_ai_correction_v1",
-        "reasoning_effort": "medium",
+        "reasoning_effort": config.reasoning_effort,
+        "timeout_sec": config.timeout_sec,
+        "model": config.model,
+        "attempt_role": config.attempt_role,
+        "retry_reason": config.retry_reason,
+        "config_env_prefix": config.env_prefix_name,
         "errors": errors,
     }
 

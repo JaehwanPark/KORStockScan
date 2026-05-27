@@ -7,24 +7,26 @@ import hashlib
 import json
 import os
 import re
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from src.engine.ai.postclose_review_config import PostcloseAIReviewConfig, resolve_postclose_ai_review_config
 from src.engine.daily_threshold_cycle_report import REPORT_DIR as BASE_REPORT_DIR
 from src.engine.daily_threshold_cycle_report import _extract_openai_response_text, _load_threshold_ai_openai_keys
 from src.engine.runtime_apply_bridge import GREENFIELD_REAL_ENV_FAMILY, validate_greenfield_policy_file
-from src.utils.constants import DATA_DIR, TRADING_RULES
+from src.utils.constants import DATA_DIR
 
 REPORT_SCHEMA_VERSION = 1
 REPORT_DIR = DATA_DIR / "report" / "runtime_apply_gap_audit"
 APPLY_PLAN_DIR = DATA_DIR / "threshold_cycle" / "apply_plans"
 AI_REVIEW_SCHEMA_NAME = "runtime_apply_gap_ai_review_v1"
 AI_REVIEWER_NAME = "runtime_apply_gap_ai_review"
-AI_REVIEW_MODEL = str(getattr(TRADING_RULES, "GPT_DEEP_MODEL", "gpt-5.4") or "gpt-5.4")
+AI_REVIEW_MODEL = "gpt-5.4"
 MIN_AI_REVIEW_MODEL = "gpt-5.4"
-AI_REVIEW_REASONING_EFFORT = os.getenv("RUNTIME_APPLY_GAP_AI_REVIEW_REASONING_EFFORT", "low")
-AI_REVIEW_TIMEOUT_SEC = int(os.getenv("RUNTIME_APPLY_GAP_AI_REVIEW_TIMEOUT_SEC", "90") or "90")
+AI_REVIEW_REASONING_EFFORT = "low"
+AI_REVIEW_TIMEOUT_SEC = 180
 
 FINAL_DISPOSITIONS = {
     "live_auto_apply_ready",
@@ -789,33 +791,64 @@ def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, 
     return "parsed", payload, []
 
 
-def _call_openai_ai_review(input_context: dict[str, Any], *, model: str) -> tuple[Any | None, dict[str, Any]]:
+def _legacy_runtime_apply_gap_timeout_default() -> int:
+    raw = os.getenv("RUNTIME_APPLY_GAP_AI_REVIEW_TIMEOUT_SEC")
+    if raw in (None, ""):
+        return AI_REVIEW_TIMEOUT_SEC
+    try:
+        return int(float(str(raw).strip()))
+    except Exception:
+        return AI_REVIEW_TIMEOUT_SEC
+
+
+def _ai_review_config(*, model_override: str | None = None) -> PostcloseAIReviewConfig:
+    legacy_model = str(os.getenv("RUNTIME_APPLY_GAP_AI_REVIEW_MODEL") or AI_REVIEW_MODEL).strip() or AI_REVIEW_MODEL
+    legacy_reasoning = (
+        str(os.getenv("RUNTIME_APPLY_GAP_AI_REVIEW_REASONING_EFFORT") or AI_REVIEW_REASONING_EFFORT).strip()
+        or AI_REVIEW_REASONING_EFFORT
+    )
+    config = resolve_postclose_ai_review_config(
+        "RUNTIME_APPLY_GAP_AUDIT",
+        default_model=legacy_model,
+        default_reasoning_effort=legacy_reasoning,
+        default_timeout_sec=_legacy_runtime_apply_gap_timeout_default(),
+    )
+    if model_override:
+        return replace(config, model=str(model_override).strip() or config.model)
+    return config
+
+
+def _call_openai_ai_review(
+    input_context: dict[str, Any],
+    *,
+    config: PostcloseAIReviewConfig,
+) -> tuple[Any | None, dict[str, Any]]:
     try:
         from openai import OpenAI, RateLimitError
         from src.engine.ai_response_contracts import build_openai_response_text_format
     except Exception as exc:
-        return None, {"provider": "openai", "status": "unavailable", "reason": f"openai import failed: {exc}"}
+        return None, {"provider": "openai", "status": "unavailable", "reason": f"openai import failed: {exc}", **config.provider_status_fields()}
     api_keys = _load_threshold_ai_openai_keys()
     if not api_keys:
-        return None, {"provider": "openai", "status": "unavailable", "reason": "OPENAI_API_KEY not configured"}
+        return None, {"provider": "openai", "status": "unavailable", "reason": "OPENAI_API_KEY not configured", **config.provider_status_fields()}
     prompt = _build_ai_review_prompt_en(input_context)
     errors: list[dict[str, str]] = []
     for attempt_index, (key_name, api_key) in enumerate(api_keys, start=1):
         try:
             client = OpenAI(api_key=api_key)
             response = client.responses.create(
-                model=model,
+                model=config.model,
                 instructions="Return only strict JSON for runtime_apply_gap_ai_review_v1.",
                 input=prompt,
                 text={"format": build_openai_response_text_format(AI_REVIEW_SCHEMA_NAME), "verbosity": "low"},
-                reasoning={"effort": AI_REVIEW_REASONING_EFFORT},
+                reasoning={"effort": config.reasoning_effort},
                 store=False,
                 metadata={
                     "endpoint_name": "runtime_apply_gap_ai_review",
                     "schema_name": AI_REVIEW_SCHEMA_NAME,
                     "report_type": "runtime_apply_gap_audit",
                 },
-                timeout=AI_REVIEW_TIMEOUT_SEC,
+                timeout=config.timeout_sec,
             )
             raw_text = _extract_openai_response_text(response)
             usage = getattr(response, "usage", None)
@@ -825,10 +858,8 @@ def _call_openai_ai_review(input_context: dict[str, Any], *, model: str) -> tupl
                 "key_name": key_name,
                 "attempt_index": attempt_index,
                 "attempted_key_count": len(api_keys),
-                "model": model,
                 "schema_name": AI_REVIEW_SCHEMA_NAME,
-                "reasoning_effort": AI_REVIEW_REASONING_EFFORT,
-                "timeout_sec": AI_REVIEW_TIMEOUT_SEC,
+                **config.provider_status_fields(),
                 "input_context_hash": _text_hash(input_context),
                 "input_context_chars": len(prompt),
                 "output_chars": len(raw_text),
@@ -844,9 +875,7 @@ def _call_openai_ai_review(input_context: dict[str, Any], *, model: str) -> tupl
         "provider": "openai",
         "status": "unavailable",
         "reason": "all OpenAI attempts failed",
-        "model": model,
-        "reasoning_effort": AI_REVIEW_REASONING_EFFORT,
-        "timeout_sec": AI_REVIEW_TIMEOUT_SEC,
+        **config.provider_status_fields(),
         "errors": errors[-3:],
     }
 
@@ -856,16 +885,19 @@ def _run_ai_review(
     drift: list[dict[str, Any]],
     *,
     provider: str,
-    model: str,
+    config: PostcloseAIReviewConfig,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     context = _render_ai_input_context_en(ledger, drift)
     prompt = _build_ai_review_prompt_en(context)
     base = {
         "reviewer": AI_REVIEWER_NAME,
         "provider": provider,
-        "model": model,
+        "model": config.model,
         "minimum_model": MIN_AI_REVIEW_MODEL,
-        "model_minimum_pass": _model_at_least_gpt54(model),
+        "model_minimum_pass": _model_at_least_gpt54(config.model),
+        "reasoning_effort": config.reasoning_effort,
+        "timeout_sec": config.timeout_sec,
+        "config_env_prefix": config.env_prefix_name,
         "ai_prompt_language": "en",
         "input_context_hash": _text_hash(context),
         "input_context_candidate_count": len(context.get("review_candidates") or []),
@@ -930,7 +962,7 @@ def _run_ai_review(
             )
         )
         return review, retry_items, directives
-    raw_response, provider_status = _call_openai_ai_review(context, model=model)
+    raw_response, provider_status = _call_openai_ai_review(context, config=config)
     parse_status, payload, warnings = _parse_ai_review_response(raw_response)
     if parse_status != "parsed":
         failure_code = "ai_parse_fail" if raw_response is not None else "ai_review_unavailable"
@@ -1068,7 +1100,7 @@ def build_runtime_apply_gap_audit(
     ai_review_model: str | None = None,
 ) -> dict[str, Any]:
     provider = str(ai_review_provider or os.environ.get("RUNTIME_APPLY_GAP_AI_REVIEW_PROVIDER") or "openai").strip()
-    model = str(ai_review_model or os.environ.get("RUNTIME_APPLY_GAP_AI_REVIEW_MODEL") or AI_REVIEW_MODEL).strip()
+    config = _ai_review_config(model_override=ai_review_model)
     artifact_status, payloads = _artifact_status(target_date)
     ledger_rows: list[dict[str, Any]] = []
     discovery = payloads.get("lifecycle_bucket_discovery") or {}
@@ -1103,7 +1135,7 @@ def build_runtime_apply_gap_audit(
     ledger = _merge_ledger_rows(ledger_rows)
     drift = _producer_consumer_contract_drift(ledger, payloads)
     retry_queue = _retry_queue_from_failures(ledger, artifact_status)
-    ai_review, ai_retry, ai_directives = _run_ai_review(ledger, drift, provider=provider, model=model)
+    ai_review, ai_retry, ai_directives = _run_ai_review(ledger, drift, provider=provider, config=config)
     _apply_ai_review_to_ledger(ledger, ai_review)
     retry_queue.extend(ai_retry)
     codex_directives = _build_codex_directives(ledger, retry_queue)

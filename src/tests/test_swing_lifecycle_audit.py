@@ -1,3 +1,6 @@
+import json
+from types import SimpleNamespace
+
 from src.engine import swing_lifecycle_audit as mod
 
 
@@ -34,6 +37,32 @@ def test_swing_entry_bottleneck_classifies_submit_zero_with_blockers():
     assert "GATEKEEPER_PULLBACK_WAIT" in bottleneck["matches"]
     assert "SUBMIT_ZERO" in bottleneck["matches"]
     assert bottleneck["next_route"] == "code_improvement_workorder"
+
+
+def test_swing_threshold_openai_review_uses_individual_mini_model(monkeypatch):
+    captured = {}
+
+    class _FakeResponses:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(output_text=json.dumps({"items": []}), usage=SimpleNamespace())
+
+    class _FakeOpenAI:
+        def __init__(self, api_key):
+            self.responses = _FakeResponses()
+
+    monkeypatch.setattr("src.engine.daily_threshold_cycle_report._load_threshold_ai_openai_keys", lambda: [("OPENAI_API_KEY", "key")])
+    monkeypatch.setattr("openai.OpenAI", _FakeOpenAI)
+
+    _, status = mod._call_openai_swing_threshold_review({"date": "2026-05-27", "candidates": []})
+
+    assert status["model"] == "gpt-5.4-mini"
+    assert status["attempted_models"] == ["gpt-5.4-mini"]
+    assert status["reasoning_effort"] == "medium"
+    assert status["timeout_sec"] == 180
+    assert captured["model"] == "gpt-5.4-mini"
+    assert captured["reasoning"]["effort"] == "medium"
+    assert captured["timeout"] == 180
 
 
 def test_swing_entry_bottleneck_dry_run_submit_zero_is_not_critical():

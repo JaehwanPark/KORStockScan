@@ -252,7 +252,7 @@ def test_stage_hook_discovery_entry_time_gap_blocks_by_source_quality(tmp_path, 
     assert report["code_improvement_orders"] == []
 
 
-def test_stage_hook_discovery_ai_forbidden_use_fails_closed(tmp_path, monkeypatch):
+def test_stage_hook_discovery_ai_forbidden_use_surfaces_followup_workorder(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     _write_json(
@@ -273,6 +273,8 @@ def test_stage_hook_discovery_ai_forbidden_use_fails_closed(tmp_path, monkeypatc
 
     report = mod.build_stage_hook_workorder_discovery_report("2026-05-26", provider="openai", ai_raw_response=response)
 
-    assert report["status"] == "fail"
-    assert report["summary"]["ai_fail_closed"] is True
-    assert report["code_improvement_orders"] == []
+    assert report["status"] == "warning"
+    assert report["summary"]["ai_fail_closed"] is False
+    assert report["summary"]["ai_review_followup_required"] is True
+    assert report["code_improvement_orders"][0]["improvement_type"] == "ai_review_followup"
+    assert "forbidden_use_violation" in report["code_improvement_orders"][0]["ai_review_followup_reasons"]

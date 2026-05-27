@@ -23,9 +23,14 @@ from src.engine.automation.dual_candidate_review import (
     proposal_counts,
     with_evidence_authority_forbidden_uses,
 )
+from src.engine.ai.postclose_review_config import (
+    PostcloseAIReviewConfig,
+    first_wave_retry_reason,
+    parsed_review_followup_reasons,
+    resolve_postclose_ai_review_config,
+)
 from src.engine.automation.producer_gap_source_bundle import report_paths as producer_gap_source_bundle_paths
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
-from src.utils.constants import TRADING_RULES
 from src.utils.jsonl_io import iter_jsonl
 
 
@@ -35,10 +40,10 @@ REPORT_SCHEMA_VERSION = 1
 DISCOVERY_VERSION = "producer_gap_discovery_v1"
 AI_REVIEW_SCHEMA_NAME = "producer_gap_discovery_ai_review_v1"
 AI_REVIEWER_NAME = "producer_gap_discovery_ai_review"
-AI_REVIEW_MODEL = str(getattr(TRADING_RULES, "GPT_DEEP_MODEL", "gpt-5.4") or "gpt-5.4")
+AI_REVIEW_MODEL = "gpt-5.4-mini"
 AI_REVIEW_DEFAULT_PROVIDER = "openai"
-AI_REVIEW_REASONING_EFFORT = os.getenv("KORSTOCKSCAN_PRODUCER_GAP_DISCOVERY_AI_REASONING_EFFORT", "low")
-AI_REVIEW_TIMEOUT_SEC = int(os.getenv("KORSTOCKSCAN_PRODUCER_GAP_DISCOVERY_AI_TIMEOUT_SEC", "90") or "90")
+AI_REVIEW_REASONING_EFFORT = "medium"
+AI_REVIEW_TIMEOUT_SEC = 180
 POST_SELL_DIR = PROJECT_ROOT / "data" / "post_sell"
 
 FORBIDDEN_USES = [
@@ -1428,7 +1433,27 @@ def _build_ai_review_instructions() -> str:
     )
 
 
-def _call_openai_ai_review(context: dict[str, Any]) -> tuple[Any | None, dict[str, Any]]:
+def _ai_review_config(
+    *,
+    attempt_role: str = "primary",
+    retry_reason: str | None = None,
+) -> PostcloseAIReviewConfig:
+    return resolve_postclose_ai_review_config(
+        "PRODUCER_GAP_DISCOVERY",
+        default_model=AI_REVIEW_MODEL,
+        default_reasoning_effort="low" if attempt_role == "retry" else AI_REVIEW_REASONING_EFFORT,
+        default_timeout_sec=AI_REVIEW_TIMEOUT_SEC,
+        attempt_role=attempt_role,
+        retry_reason=retry_reason,
+    )
+
+
+def _call_openai_ai_review(
+    context: dict[str, Any],
+    *,
+    config: PostcloseAIReviewConfig | None = None,
+) -> tuple[Any | None, dict[str, Any]]:
+    config = config or _ai_review_config()
     try:
         from openai import OpenAI, RateLimitError
         from src.engine.ai_response_contracts import build_openai_response_text_format
@@ -1437,28 +1462,28 @@ def _call_openai_ai_review(context: dict[str, Any]) -> tuple[Any | None, dict[st
             _load_threshold_ai_openai_keys,
         )
     except Exception as exc:
-        return None, {"provider": "openai", "status": "unavailable", "reason": f"openai import failed: {exc}"}
+        return None, {"provider": "openai", "status": "unavailable", "reason": f"openai import failed: {exc}", **config.provider_status_fields()}
     api_keys = _load_threshold_ai_openai_keys()
     if not api_keys:
-        return None, {"provider": "openai", "status": "unavailable", "reason": "OPENAI_API_KEY not configured"}
+        return None, {"provider": "openai", "status": "unavailable", "reason": "OPENAI_API_KEY not configured", **config.provider_status_fields()}
     prompt = json.dumps(context, ensure_ascii=False, indent=2, default=str)
     errors: list[dict[str, str]] = []
     for attempt_index, (key_name, api_key) in enumerate(api_keys, start=1):
         try:
             client = OpenAI(api_key=api_key)
             response = client.responses.create(
-                model=AI_REVIEW_MODEL,
+                model=config.model,
                 instructions=_build_ai_review_instructions(),
                 input=prompt,
                 text={"format": build_openai_response_text_format(AI_REVIEW_SCHEMA_NAME), "verbosity": "low"},
-                reasoning={"effort": AI_REVIEW_REASONING_EFFORT},
+                reasoning={"effort": config.reasoning_effort},
                 store=False,
                 metadata={
                     "endpoint_name": AI_REVIEWER_NAME,
                     "schema_name": AI_REVIEW_SCHEMA_NAME,
                     "report_type": REPORT_TYPE,
                 },
-                timeout=AI_REVIEW_TIMEOUT_SEC,
+                timeout=config.timeout_sec,
             )
             raw_text = _extract_openai_response_text(response)
             usage = getattr(response, "usage", None)
@@ -1468,10 +1493,13 @@ def _call_openai_ai_review(context: dict[str, Any]) -> tuple[Any | None, dict[st
                 "key_name": key_name,
                 "attempt_index": attempt_index,
                 "attempted_key_count": len(api_keys),
-                "model": AI_REVIEW_MODEL,
+                "model": config.model,
                 "schema_name": AI_REVIEW_SCHEMA_NAME,
-                "reasoning_effort": AI_REVIEW_REASONING_EFFORT,
-                "timeout_sec": AI_REVIEW_TIMEOUT_SEC,
+                "reasoning_effort": config.reasoning_effort,
+                "timeout_sec": config.timeout_sec,
+                "attempt_role": config.attempt_role,
+                "retry_reason": config.retry_reason,
+                "config_env_prefix": config.env_prefix_name,
                 "input_context_hash": _text_hash(context),
                 "input_context_chars": len(prompt),
                 "output_chars": len(raw_text),
@@ -1487,9 +1515,7 @@ def _call_openai_ai_review(context: dict[str, Any]) -> tuple[Any | None, dict[st
         "provider": "openai",
         "status": "unavailable",
         "reason": "all OpenAI attempts failed",
-        "model": AI_REVIEW_MODEL,
-        "reasoning_effort": AI_REVIEW_REASONING_EFFORT,
-        "timeout_sec": AI_REVIEW_TIMEOUT_SEC,
+        **config.provider_status_fields(),
         "errors": errors[-3:],
     }
 
@@ -1662,6 +1688,61 @@ def _order_from_candidate(
     }
 
 
+def _ai_review_followup_order(
+    *,
+    target_date: str,
+    reasons: list[str],
+    audit: dict[str, Any],
+) -> dict[str, Any]:
+    reason_text = ", ".join(reasons) if reasons else "parsed_review_followup_required"
+    return {
+        "order_id": f"order_{REPORT_TYPE}_ai_review_followup_{_slug(target_date)}",
+        "title": "Resolve producer gap AI review follow-up",
+        "source_report_type": REPORT_TYPE,
+        "lifecycle_stage": "source_quality",
+        "target_subsystem": "producer_gap_discovery_ai_review",
+        "route": "review_ai_output",
+        "priority": 2,
+        "producer_gap_priority": "high",
+        "confidence": "parsed_ai_review_followup",
+        "improvement_type": "ai_review_followup",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "decision_authority": "producer_gap_discovery_workorder_source_only",
+        "intent": (
+            "The AI call parsed, but the reviewer output requires follow-up. "
+            "Treat this as source-only workorder input, not an AI transport failure."
+        ),
+        "expected_ev_effect": "Improve AI reviewer contract/source-quality handling without runtime mutation.",
+        "evidence": [
+            f"ai_review_followup_reason={reason_text}",
+            f"audit_status={audit.get('status')}",
+            f"audit_issues={audit.get('issues') or []}",
+            f"forbidden_use_violations={audit.get('forbidden_use_violations') or []}",
+        ],
+        "source_paths": [],
+        "files_likely_touched": [
+            "src/engine/automation/producer_gap_discovery.py",
+            "src/engine/build_code_improvement_workorder.py",
+        ],
+        "acceptance_tests": [
+            "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_producer_gap_discovery.py src/tests/test_build_code_improvement_workorder.py",
+            "AI transport failure retry remains separate from parsed reviewer follow-up workorders",
+        ],
+        "next_postclose_metric": f"{REPORT_TYPE}.ai_review_followup",
+        "forbidden_uses": FORBIDDEN_USES,
+        "evidence_authority_contract": evidence_authority_contract(),
+        "implementation_requirements": [
+            "Do not lower model reasoning just because parsed audit status is correction_required.",
+            "Surface parsed audit/contract follow-up as a source-only workorder.",
+        ],
+        "ai_review_followup_reasons": reasons,
+        "ai_review_audit": audit,
+    }
+
+
 def _source_bundle_by_pattern(bundle: dict[str, Any]) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     sections = bundle.get("sections") if isinstance(bundle.get("sections"), list) else []
@@ -1746,18 +1827,29 @@ def build_producer_gap_discovery_report(
     source_bundle = _load_json(source_bundle_path)
     source_bundle_sections = _source_bundle_by_pattern(source_bundle) if source_bundle else {}
     candidates = [_apply_source_bundle_implementation(candidate, source_bundle_sections) for candidate in candidates]
+    primary_config = _ai_review_config()
     provider_status: dict[str, Any] = {
         "provider": resolved_provider,
         "status": "disabled" if resolved_provider in {"none", "off", "false", "0"} else "not_called",
-        "model": AI_REVIEW_MODEL if resolved_provider not in {"none", "off", "false", "0"} else None,
         "schema_name": AI_REVIEW_SCHEMA_NAME,
         "input_context_hash": _text_hash(context),
+        **(primary_config.provider_status_fields() if resolved_provider not in {"none", "off", "false", "0"} else {"model": None}),
+        "retry_attempted": False,
     }
+    if resolved_provider in {"none", "off", "false", "0"}:
+        provider_status.update({
+            "reasoning_effort": None,
+            "timeout_sec": None,
+            "attempt_role": None,
+            "retry_reason": None,
+        })
     raw_response = ai_raw_response
+    provided_ai_response = raw_response is not None
     if raw_response is not None:
         provider_status["status"] = "provided_response"
     if raw_response is None and resolved_provider == "openai":
-        raw_response, provider_status = _call_openai_ai_review(context)
+        raw_response, provider_status = _call_openai_ai_review(context, config=primary_config)
+        provider_status["retry_attempted"] = False
     ai_status, ai_payload, ai_warnings = _parse_ai_review_response(raw_response)
     audit = ai_payload.get("audit") if isinstance(ai_payload.get("audit"), dict) else {}
     audit_forbidden_use_violations = audit.get("forbidden_use_violations")
@@ -1769,12 +1861,40 @@ def build_producer_gap_discovery_report(
     candidate_ids = {str(item.get("candidate_id") or "") for item in candidates}
     missing_ai_proposal_count = len([candidate_id for candidate_id in candidate_ids if candidate_id not in ai_proposal_map])
     missing_comparative_review_count = len([candidate_id for candidate_id in candidate_ids if candidate_id not in comparative_map])
-    fail_closed = (
-        ai_status != "parsed"
-        or audit.get("status") != "pass"
-        or bool(audit_forbidden_use_violations)
-        or missing_ai_proposal_count > 0
-        or missing_comparative_review_count > 0
+    fail_closed = ai_status != "parsed"
+    retry_reason = first_wave_retry_reason(
+        ai_status=ai_status,
+        audit_status=audit.get("status"),
+        forbidden_use_violations=audit_forbidden_use_violations,
+        missing_ai_proposal_count=missing_ai_proposal_count,
+        missing_comparative_review_count=missing_comparative_review_count,
+    )
+    if retry_reason and resolved_provider == "openai" and not provided_ai_response:
+        primary_provider_status = dict(provider_status)
+        retry_config = _ai_review_config(attempt_role="retry", retry_reason=retry_reason)
+        raw_response, retry_provider_status = _call_openai_ai_review(context, config=retry_config)
+        ai_status, ai_payload, ai_warnings = _parse_ai_review_response(raw_response)
+        audit = ai_payload.get("audit") if isinstance(ai_payload.get("audit"), dict) else {}
+        audit_forbidden_use_violations = audit.get("forbidden_use_violations")
+        if not isinstance(audit_forbidden_use_violations, list):
+            audit_forbidden_use_violations = []
+        review_map = _review_by_candidate(ai_payload) if ai_status == "parsed" else {}
+        ai_proposal_map = _proposal_by_candidate(ai_payload) if ai_status == "parsed" else {}
+        comparative_map = _comparative_by_candidate(ai_payload) if ai_status == "parsed" else {}
+        missing_ai_proposal_count = len([candidate_id for candidate_id in candidate_ids if candidate_id not in ai_proposal_map])
+        missing_comparative_review_count = len([candidate_id for candidate_id in candidate_ids if candidate_id not in comparative_map])
+        fail_closed = ai_status != "parsed"
+        provider_status = {
+            **retry_provider_status,
+            "retry_attempted": True,
+            "primary_attempt": primary_provider_status,
+        }
+    followup_reasons = parsed_review_followup_reasons(
+        ai_status=ai_status,
+        audit_status=audit.get("status"),
+        forbidden_use_violations=audit_forbidden_use_violations,
+        missing_ai_proposal_count=missing_ai_proposal_count,
+        missing_comparative_review_count=missing_comparative_review_count,
     )
     reviewed_candidates = []
     orders = []
@@ -1809,10 +1929,13 @@ def build_producer_gap_discovery_report(
         selected_decision = str(comparative_review.get("selected_decision") or "")
         if (
             not fail_closed
+            and not audit_forbidden_use_violations
             and selected_decision not in {"reject", "source_quality_blocker"}
             and PRIORITY_RANK.get(priority, 99) <= PRIORITY_RANK["high"]
         ):
             orders.append(_order_from_candidate(candidate, review, ai_tier2_proposal=ai_tier2_proposal, comparative_review=comparative_review))
+    if followup_reasons:
+        orders.append(_ai_review_followup_order(target_date=target_date, reasons=followup_reasons, audit=audit))
     state_counts = Counter(str(item.get("pattern_type") or "unknown") for item in candidates)
     source_scope_counts = Counter(str(item.get("source_scope") or "unknown") for item in candidates)
     rolling_summary = context.get("rolling_sim_discovery") if isinstance(context.get("rolling_sim_discovery"), dict) else {}
@@ -1866,6 +1989,8 @@ def build_producer_gap_discovery_report(
             ),
             "ai_two_pass_review_status": ai_status,
             "ai_fail_closed": fail_closed,
+            "ai_review_followup_required": bool(followup_reasons),
+            "ai_review_followup_reasons": followup_reasons,
             "provider": resolved_provider,
             "model": provider_status.get("model") or (AI_REVIEW_MODEL if resolved_provider == "openai" else None),
             "audit_status": audit.get("status"),
@@ -1908,6 +2033,8 @@ def build_producer_gap_discovery_report(
             ],
             "warnings": ai_warnings,
             "fail_closed": fail_closed,
+            "followup_required": bool(followup_reasons),
+            "followup_reasons": followup_reasons,
             "missing_ai_tier2_proposal_count": missing_ai_proposal_count,
             "missing_comparative_review_count": missing_comparative_review_count,
         },
