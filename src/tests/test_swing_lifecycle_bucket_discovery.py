@@ -65,8 +65,45 @@ def _patch_empty_parsed_ai_review(monkeypatch) -> None:
     )
 
 
+def _flow_bucket(
+    *,
+    bucket_key: str = "entry=entry_good|holding=hold_good|scale_in=scale_in:none|exit=exit_good",
+    joined_sample: int = 3,
+    ev: float = 1.2,
+    route: str = "sim_auto_approved",
+    gate: str = "pass",
+) -> dict:
+    return {
+        "swing_lifecycle_flow_bucket_id": "swing_lifecycle_flow:combo_swing_lifecycle_flow:complete_good",
+        "bucket_type": "combo_swing_lifecycle_flow",
+        "bucket_key": bucket_key,
+        "lifecycle_stage": "lifecycle_flow",
+        "recommended_route": route,
+        "source_quality_gate": gate,
+        "joined_sample": joined_sample,
+        "sample_count": joined_sample,
+        "source_quality_adjusted_ev_pct": ev,
+        "metric_scope": "swing_lifecycle_bundle_ev",
+        "metric_role": "primary_ev",
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "child_bucket_ids": {
+            "entry": "entry_good",
+            "holding": "hold_good",
+            "scale_in": [],
+            "exit": "exit_good",
+        },
+        "stage_contract": {
+            "entry": {"contract_state": "present"},
+            "holding": {"contract_state": "present"},
+            "exit": {"contract_state": "present"},
+        },
+        "attribution_key": "lifecycle_flow_bridge_key:FLOW-1",
+        "rollback_guard": "hard_safety_priority_plus_source_quality_and_post_apply_attribution",
+    }
+
+
 def test_swing_lifecycle_bucket_ai_review_rejects_real_preapply_primary_ev_claim():
-    bucket_id = "swing_bucket_entry_entry_bucket_attribution_safe_pool_probe"
+    bucket_id = "swing_bucket_lifecycle_flow_combo_swing_lifecycle_flow_entry_entry_good_holding_hold_good_scale_in_scale_in_none_exit_exit_good"
     payload = _ai_response([bucket_id])
     payload["comparative_reviews"][0][
         "comparison_summary"
@@ -94,28 +131,15 @@ def test_bucket_discovery_auto_approves_sim_only_candidates(tmp_path, monkeypatc
         json.dumps(
             {
                 "input_contract": {"swing_daily_simulation_consumed": False},
-                "entry_bucket_attribution": {
-                    "buckets": [
-                        {
-                            "bucket_type": "entry_bucket_attribution",
-                            "bucket_key": "safe_pool|probe",
-                            "lifecycle_stage": "entry",
-                            "recommended_route": "sim_auto_approved",
-                            "source_quality_gate": "pass",
-                            "joined_sample": 3,
-                            "sample_count": 3,
-                            "source_quality_adjusted_ev_pct": 1.2,
-                        }
-                    ],
-                    "code_improvement_workorders": [],
-                },
+                "swing_lifecycle_flow_bucket_attribution": {"buckets": [_flow_bucket()]},
+                "entry_bucket_attribution": {"buckets": [], "code_improvement_workorders": []},
             }
         ),
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
 
-    bucket_id = "swing_bucket_entry_entry_bucket_attribution_safe_pool_probe"
+    bucket_id = "swing_bucket_lifecycle_flow_combo_swing_lifecycle_flow_entry_entry_good_holding_hold_good_scale_in_scale_in_none_exit_exit_good"
     report = mod.build_swing_lifecycle_bucket_discovery(
         target,
         provider="openai",
@@ -123,6 +147,7 @@ def test_bucket_discovery_auto_approves_sim_only_candidates(tmp_path, monkeypatc
     )
 
     assert report["summary"]["sim_auto_approved_count"] == 1
+    assert report["summary"]["flow_sim_auto_approved_count"] == 1
     candidate = report["sim_auto_approved_candidates"][0]
     assert candidate["classification_state"] == "sim_auto_approved"
     assert candidate["next_route"] == "next_preopen_swing_sim_policy_input"
@@ -139,6 +164,46 @@ def test_bucket_discovery_auto_approves_sim_only_candidates(tmp_path, monkeypatc
     assert approval["approved"] is True
     assert approval["approved_source_ids"] == ["swing_lifecycle_bucket_discovery"]
     assert catalog["policies"][0]["bucket_id"] == candidate["bucket_id"]
+
+
+def test_bucket_discovery_keeps_stage_only_buckets_source_only(tmp_path, monkeypatch):
+    target = "2026-05-22"
+    matrix_dir = tmp_path / "matrix"
+    matrix_dir.mkdir()
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "discovery")
+    _patch_empty_parsed_ai_review(monkeypatch)
+
+    matrix_path = matrix_dir / f"swing_lifecycle_decision_matrix_{target}.json"
+    matrix_path.write_text(
+        json.dumps(
+            {
+                "input_contract": {"swing_daily_simulation_consumed": False},
+                "entry_bucket_attribution": {
+                    "buckets": [
+                        {
+                            "bucket_type": "entry_bucket_attribution",
+                            "bucket_key": "safe_pool|probe",
+                            "lifecycle_stage": "entry",
+                            "recommended_route": "sim_auto_approved",
+                            "source_quality_gate": "pass",
+                            "joined_sample": 12,
+                            "sample_count": 12,
+                            "source_quality_adjusted_ev_pct": 2.0,
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+
+    report = mod.build_swing_lifecycle_bucket_discovery(target)
+
+    assert report["summary"]["sim_auto_approved_count"] == 0
+    assert report["summary"]["stage_only_source_only_count"] == 1
+    assert report["surfaced_candidates"][0]["classification_state"] == "source_only_keep_collecting"
+    assert report["surfaced_candidates"][0]["source_section"] == "entry_bucket_attribution"
 
 
 def test_bucket_discovery_reviews_sim_auto_candidates_before_large_source_only_tail(tmp_path, monkeypatch):
@@ -159,23 +224,14 @@ def test_bucket_discovery_reviews_sim_auto_candidates_before_large_source_only_t
         }
         for idx in range(120)
     ]
-    sim_bucket = {
-        "bucket_type": "holding_exit_bucket_attribution",
-        "bucket_key": "mfe_high|trailing",
-        "lifecycle_stage": "holding_exit",
-        "recommended_route": "sim_auto_approved",
-        "source_quality_gate": "pass",
-        "joined_sample": 12,
-        "sample_count": 12,
-        "source_quality_adjusted_ev_pct": 2.4,
-    }
+    sim_bucket = _flow_bucket(joined_sample=12, ev=2.4)
     matrix_path = matrix_dir / f"swing_lifecycle_decision_matrix_{target}.json"
     matrix_path.write_text(
         json.dumps(
             {
                 "input_contract": {"swing_daily_simulation_consumed": False},
+                "swing_lifecycle_flow_bucket_attribution": {"buckets": [sim_bucket]},
                 "entry_bucket_attribution": {"buckets": source_only_buckets},
-                "holding_exit_bucket_attribution": {"buckets": [sim_bucket]},
             }
         ),
         encoding="utf-8",
@@ -197,7 +253,7 @@ def test_bucket_discovery_reviews_sim_auto_candidates_before_large_source_only_t
 
     monkeypatch.setattr(mod, "_call_openai_ai_review", fake_call)
 
-    sim_bucket_id = "swing_bucket_holding_exit_holding_exit_bucket_attribution_mfe_high_trailing"
+    sim_bucket_id = "swing_bucket_lifecycle_flow_combo_swing_lifecycle_flow_entry_entry_good_holding_hold_good_scale_in_scale_in_none_exit_exit_good"
     report = mod.build_swing_lifecycle_bucket_discovery(
         target,
         provider="openai",
@@ -228,19 +284,7 @@ def test_bucket_discovery_taxonomy_correction_does_not_block_parsed_sim_policy(t
         json.dumps(
             {
                 "input_contract": {"swing_daily_simulation_consumed": False},
-                "holding_exit_bucket_attribution": {
-                    "buckets": [
-                        {
-                            "bucket_type": "holding_exit_bucket_attribution",
-                            "bucket_key": "mfe_high|trailing",
-                            "lifecycle_stage": "holding_exit",
-                            "recommended_route": "sim_auto_approved",
-                            "source_quality_gate": "pass",
-                            "joined_sample": 12,
-                            "sample_count": 12,
-                        }
-                    ]
-                },
+                "swing_lifecycle_flow_bucket_attribution": {"buckets": [_flow_bucket(joined_sample=12)]},
                 "entry_bucket_attribution": {
                     "buckets": [
                         {
@@ -289,19 +333,7 @@ def test_bucket_discovery_sim_policy_audit_correction_blocks_sim_as_followup_not
         json.dumps(
             {
                 "input_contract": {"swing_daily_simulation_consumed": False},
-                "holding_exit_bucket_attribution": {
-                    "buckets": [
-                        {
-                            "bucket_type": "holding_exit_bucket_attribution",
-                            "bucket_key": "mfe_high|trailing",
-                            "lifecycle_stage": "holding_exit",
-                            "recommended_route": "sim_auto_approved",
-                            "source_quality_gate": "pass",
-                            "joined_sample": 12,
-                            "sample_count": 12,
-                        }
-                    ]
-                },
+                "swing_lifecycle_flow_bucket_attribution": {"buckets": [_flow_bucket(joined_sample=12)]},
             }
         ),
         encoding="utf-8",
@@ -340,19 +372,7 @@ def test_bucket_discovery_non_sim_shard_missing_does_not_block_parsed_sim_policy
         json.dumps(
             {
                 "input_contract": {"swing_daily_simulation_consumed": False},
-                "holding_exit_bucket_attribution": {
-                    "buckets": [
-                        {
-                            "bucket_type": "holding_exit_bucket_attribution",
-                            "bucket_key": "mfe_high|trailing",
-                            "lifecycle_stage": "holding_exit",
-                            "recommended_route": "sim_auto_approved",
-                            "source_quality_gate": "pass",
-                            "joined_sample": 12,
-                            "sample_count": 12,
-                        }
-                    ]
-                },
+                "swing_lifecycle_flow_bucket_attribution": {"buckets": [_flow_bucket(joined_sample=12)]},
                 "entry_bucket_attribution": {
                     "buckets": [
                         {
@@ -401,20 +421,8 @@ def test_bucket_discovery_provider_disabled_downgrades_sim_auto(tmp_path, monkey
         json.dumps(
             {
                 "input_contract": {"swing_daily_simulation_consumed": False},
-                "entry_bucket_attribution": {
-                    "buckets": [
-                        {
-                            "bucket_type": "entry_bucket_attribution",
-                            "bucket_key": "safe_pool|probe",
-                            "lifecycle_stage": "entry",
-                            "recommended_route": "sim_auto_approved",
-                            "source_quality_gate": "pass",
-                            "joined_sample": 3,
-                            "sample_count": 3,
-                        }
-                    ],
-                    "code_improvement_workorders": [],
-                },
+                "swing_lifecycle_flow_bucket_attribution": {"buckets": [_flow_bucket()]},
+                "entry_bucket_attribution": {"buckets": [], "code_improvement_workorders": []},
             }
         ),
         encoding="utf-8",

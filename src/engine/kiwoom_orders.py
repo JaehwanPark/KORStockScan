@@ -21,6 +21,8 @@ _LAST_DEPOSIT_OVERRIDE = None
 _LAST_SUCCESSFUL_DEPOSIT = 0
 _LAST_SUCCESSFUL_DEPOSIT_AT = 0.0
 _LAST_DEPOSIT_ERRORS = []
+_DEPOSIT_API_COOLDOWN_UNTIL = 0.0
+_DEPOSIT_API_COOLDOWN_REASON = ""
 KST = ZoneInfo("Asia/Seoul")
 
 def get_last_inventory_errors():
@@ -45,6 +47,21 @@ def is_auth_failure_error(error) -> bool:
         or 'token' in lowered
         or '토큰' in msg
         or '인증' in msg
+    )
+
+
+def is_request_limit_error(error) -> bool:
+    """키움 API 요청 제한 초과 계열 실패인지 판정합니다."""
+    if not isinstance(error, dict):
+        return False
+    msg = str(error.get('return_msg') or error.get('err_msg') or '')
+    code = str(error.get('return_code') or error.get('rt_cd') or '')
+    return (
+        '1700' in code
+        or '1700' in msg
+        or '허용된 요청 개수' in msg
+        or '요청 개수' in msg
+        or 'request count' in msg.lower()
     )
 
 
@@ -163,6 +180,7 @@ def _log_virtual_orderable_amount_once(amount, key):
 
 def _remember_successful_deposit(amount):
     global _LAST_SUCCESSFUL_DEPOSIT, _LAST_SUCCESSFUL_DEPOSIT_AT
+    global _DEPOSIT_API_COOLDOWN_UNTIL, _DEPOSIT_API_COOLDOWN_REASON
     try:
         normalized = int(float(amount or 0))
     except (TypeError, ValueError):
@@ -171,6 +189,8 @@ def _remember_successful_deposit(amount):
         return
     _LAST_SUCCESSFUL_DEPOSIT = normalized
     _LAST_SUCCESSFUL_DEPOSIT_AT = time.time()
+    _DEPOSIT_API_COOLDOWN_UNTIL = 0.0
+    _DEPOSIT_API_COOLDOWN_REASON = ""
 
 
 def get_cached_deposit(max_age_sec=None):
@@ -189,12 +209,40 @@ def get_deposit(token):
     """
     [kt00001] 예수금 조회 - return_code 대응 수정
     """
+    global _DEPOSIT_API_COOLDOWN_UNTIL, _DEPOSIT_API_COOLDOWN_REASON
     _LAST_DEPOSIT_ERRORS.clear()
     virtual_amount, config_key = _get_virtual_orderable_amount()
     if virtual_amount > 0:
         _log_virtual_orderable_amount_once(virtual_amount, config_key)
         _remember_successful_deposit(virtual_amount)
         return virtual_amount
+
+    now_ts = time.time()
+    if _DEPOSIT_API_COOLDOWN_UNTIL > now_ts:
+        cooldown_remaining = _DEPOSIT_API_COOLDOWN_UNTIL - now_ts
+        cached_amount = get_cached_deposit()
+        _LAST_DEPOSIT_ERRORS.append(
+            {
+                'http_status': None,
+                'return_code': '1700',
+                'return_msg': _DEPOSIT_API_COOLDOWN_REASON or 'kt00001 request-limit cooldown active',
+                'attempt': 0,
+                'classification': 'request_count_exceeded_cooldown',
+                'cooldown_remaining_sec': round(cooldown_remaining, 1),
+                'cache_fallback_used': bool(cached_amount > 0),
+            }
+        )
+        if cached_amount > 0:
+            log_info(
+                f"⚠️ [예수금조회 cooldown fallback] 최근 정상 주문가능금액 사용 "
+                f"({cached_amount:,}원, cooldown_remaining={cooldown_remaining:.1f}s)"
+            )
+            return cached_amount
+        log_error(
+            f"❌ [예수금조회 cooldown] kt00001 요청 제한 쿨다운 중 "
+            f"(remaining={cooldown_remaining:.1f}s) - 주문가능금액 0 fail-closed"
+        )
+        return 0
 
     url = kiwoom_utils.get_api_url("/api/dostk/acnt")
     headers = {
@@ -227,6 +275,16 @@ def get_deposit(token):
                     'attempt': attempt,
                 }
             )
+            if is_request_limit_error(_LAST_DEPOSIT_ERRORS[-1]):
+                cooldown_sec = max(
+                    float(getattr(TRADING_RULES, "DEPOSIT_API_REQUEST_LIMIT_COOLDOWN_SEC", 10.0) or 10.0),
+                    0.0,
+                )
+                if cooldown_sec > 0:
+                    _DEPOSIT_API_COOLDOWN_UNTIL = max(_DEPOSIT_API_COOLDOWN_UNTIL, time.time() + cooldown_sec)
+                    _DEPOSIT_API_COOLDOWN_REASON = str(err_msg or "kt00001 request count exceeded")
+                _LAST_DEPOSIT_ERRORS[-1]['classification'] = 'request_count_exceeded'
+                _LAST_DEPOSIT_ERRORS[-1]['cooldown_sec'] = cooldown_sec
             log_error(f"❌ [예수금조회 실패] attempt={attempt}/{retries} 사유: {err_msg}")
         except Exception as exc:
             _LAST_DEPOSIT_ERRORS.append(

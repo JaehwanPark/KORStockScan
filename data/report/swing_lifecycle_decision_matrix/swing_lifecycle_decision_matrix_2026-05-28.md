@@ -6,14 +6,30 @@
 - total_rows: `2922`
 - probe_rows: `68`
 - discovery_rows: `2854`
-- sim_auto_candidate_count: `13`
+- sim_auto_candidate_count: `0`
 - workorder_count: `8`
+- swing_lifecycle_flow_bucket_count: `55`
+- complete_flow_count: `10`
+- incomplete_flow_count: `2866`
+- identity_join_rate: `1.0`
+- complete_flow_rate: `0.003477`
+- join_contract_blocked: `False`
 - swing_entry_bottleneck_primary: `SWING_ENTRY_BOTTLENECK_OBSERVE`
 - swing_lifecycle_contract_gap_count: `4`
 - daily_simulation_consumed: `False`
 - warnings: `['pending_future_quotes']`
 
 ## Bucket Attribution
+### swing_lifecycle_flow_bucket_attribution
+- source_row_count: `2922`
+- bucket_count: `55`
+- sim_auto_candidate_count: `0`
+- workorder_count: `0`
+- `entry=entry:missing|holding=holding:missing|scale_in=scale_in:none|exit=swing_exit:holding_exit_bucket_attribution:mfe_low_mae_mid_held_missing_mae_stop_touched` route=`source_only_keep_collecting` joined=`16` ev=`-3.0`
+- `entry=entry:missing|holding=holding:missing|scale_in=scale_in:none|exit=swing_exit:holding_exit_bucket_attribution:mfe_mid_mae_mid_held_missing_mae_stop_touched` route=`source_only_keep_collecting` joined=`8` ev=`-3.0`
+- `entry=entry:missing|holding=holding:missing|scale_in=scale_in:none|exit=swing_exit:holding_exit_bucket_attribution:mfe_high_mae_deep_held_missing_mae_stop_touched` route=`source_only_keep_collecting` joined=`7` ev=`-3.0`
+- `entry=entry:missing|holding=holding:missing|scale_in=scale_in:none|exit=swing_exit:holding_exit_bucket_attribution:mfe_high_mae_flat_held_missing_trailing_after_mfe_stop` route=`source_only_keep_collecting` joined=`6` ev=`10.359659`
+- `entry=entry:missing|holding=holding:missing|scale_in=scale_in:none|exit=swing_exit:holding_exit_bucket_attribution:mfe_high_mae_deep_held_missing_trailing_after_mfe_stop` route=`source_only_keep_collecting` joined=`5` ev=`8.725511`
 ### entry_bucket_attribution
 - source_row_count: `2814`
 - bucket_count: `231`
@@ -27,7 +43,7 @@
 ### holding_exit_bucket_attribution
 - source_row_count: `2899`
 - bucket_count: `51`
-- sim_auto_candidate_count: `11`
+- sim_auto_candidate_count: `0`
 - workorder_count: `5`
 - `mfe_high|mae_green|held_missing|trailing_after_mfe_stop|-|-|-` route=`sim_auto_approved` joined=`4` ev=`19.000977`
 - `mfe_high|mae_mid|held_missing|trailing_after_mfe_stop|-|-|-` route=`sim_auto_approved` joined=`5` ev=`15.206261`
@@ -43,7 +59,7 @@
 ### discovery_arm_attribution
 - source_row_count: `2854`
 - bucket_count: `1103`
-- sim_auto_candidate_count: `2`
+- sim_auto_candidate_count: `0`
 - workorder_count: `3`
 - `breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Manufacture of Semiconductor|반도체_생산|DIAGNOSTIC` route=`sim_auto_approved` joined=`3` ev=`11.888882`
 - `breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Manufacture of Electronic Components|PCB(인쇄회로기판),반도체_후공정소재,스마트폰_삼성전자관련주|DIAGNOSTIC` route=`sim_auto_approved` joined=`4` ev=`10.435387`

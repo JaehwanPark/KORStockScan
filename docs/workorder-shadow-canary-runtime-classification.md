@@ -157,6 +157,23 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
 
 5/27 결론은 신규 `baseline-promote`, 신규 `remove`, 신규 alpha shadow 없음이다. Greenfield authority와 live bucket은 다음 PREOPEN apply 후보로만 보고, Bedrock Lite v1 shadow는 v2 primary transport 비교 source-only로만 유지한다.
 
+### 2026-05-28 POSTCLOSE Snapshot Addendum
+
+이 addendum은 `threshold_cycle_ev_2026-05-28`, `runtime_approval_summary_2026-05-28`, `tuning_performance_control_tower_2026-05-28`, `runtime_apply_gap_audit_2026-05-28`, `lifecycle_bucket_discovery_2026-05-28`, `threshold_cycle_postclose_verification_2026-05-28` 기준의 당일 분류 보정이다. 결론은 `no_baseline_promote_with_greenfield_quarantine_and_no_new_shadow`이다.
+
+| 축 | 2026-05-28 판정 | 근거 | 다음 액션 |
+| --- | --- | --- | --- |
+| `soft_stop_whipsaw_confirmation` | active-canary / selected auto-bounded-live 유지 | runtime approval summary에서 selected auto-bounded-live이고 postclose EV calibration은 `adjust_up`이다 | post-apply attribution과 hard/protect/emergency safety guard를 계속 분리 확인 |
+| `score65_74_recovery_probe` | active entry cohort 유지 | selected auto-bounded-live이며 당일 EV는 score60-74 recovery source를 계속 관찰한다 | score bucket 단독 BUY 정책으로 승격하지 않고 entry wait/recovery cohort로만 본다 |
+| `lifecycle_decision_matrix_runtime` | selected umbrella runtime owner / live-auto 신규 없음 | LDM은 selected family지만 lifecycle bucket discovery live-auto `0`, runtime apply gap `pass`, Codex directive `0`이다 | 다음 PREOPEN env 후보는 artifact guard 통과분만 소비한다 |
+| `greenfield_real_environment_authority` | quarantined/off, baseline 아님 | 5/28 partial lifecycle contamination 이후 Greenfield policy는 complete lifecycle flow가 없으면 미생성되고 live-auto `0`이다 | complete `greenfield_lifecycle_bundle_policy_v1` 전까지 real authority/Telegram 재개 금지 |
+| `scalp_sim_candidate_window_expansion` / `scalp_sim_ai_budget_manager` | sim-only selected cohort | control tower는 lifecycle sim-auto `172`, swing sim-auto `13`, live-auto `0`으로 닫았다 | sim/source-quality 입력으로만 유지하고 broker execution 전환 근거로 쓰지 않는다 |
+| `Bedrock Nova Lite v1 shadow` | transport shadow observation only | 5/26 operator override 이후 v1은 v2 primary 비교 source-only 역할이다 | provider route 확대나 threshold/order guard 변경 근거로 쓰지 않는다 |
+| `kt00001 deposit request-limit cooldown` | runtime stability patch, strategy cohort 아님 | 예수금 조회 `1700` 반복을 API cooldown/cache fallback/source-quality provenance로 보강했다 | 주문 guard 완화나 예수금 실패 기반 실주문 허용으로 해석하지 않는다 |
+| `Greenfield ENTRY Telegram formatter` | readability/provenance patch, strategy cohort 아님 | Telegram body가 readable bucket label과 raw Bucket ID provenance를 분리한다 | canonical bucket id/report provenance는 유지하고 runtime authority는 변경하지 않는다 |
+
+5/28 결론은 신규 `remove`, 신규 `baseline-promote`, 신규 alpha shadow 전환 없음이다. 당일 코드 보강 2건은 runtime stability/readability 보강이며 threshold, broker submit guard, provider route, bot restart, cap release 권한을 갖지 않는다.
+
 ## 0.1 Runtime ON/OFF 스냅샷 (`2026-05-12` 기준)
 
 이 표는 `src/utils/constants.py` 기본값과 현재 운영문서 기준의 runtime 상태를 한곳에 잠그기 위한 스냅샷이다. env override가 있으면 장전 로드 확인에서 반드시 이 표와 비교한다.

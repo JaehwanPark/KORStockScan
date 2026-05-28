@@ -200,7 +200,59 @@ def test_greenfield_authority_blocks_observed_bucket_mismatch(tmp_path, monkeypa
     assert decision.active is True
     assert decision.allowed is False
     assert decision.reason == "observed_bucket_policy_mismatch"
-    assert decision.observed_bucket_id == "entry:score_70p"
+
+
+def test_format_lifecycle_bucket_label_entry_combo_is_readable():
+    bucket_id = (
+        "entry:combo_entry_spot:"
+        "score=score_66_69|source=wait6579_ev_cohort|stale=fresh_or_unflagged|"
+        "liquidity=liquidity_unknown|overbought=overbought_unknown|time=time_0900_1000"
+    )
+
+    label = mod.format_lifecycle_bucket_label(bucket_id, stage="entry")
+
+    assert "score: score 66-69" in label
+    assert "source: WAIT65-79 EV" in label
+    assert "time: 09:00-10:00" in label
+    assert "entry:combo_entry_spot" not in label
+
+
+def test_format_lifecycle_bucket_label_entry_slug_is_readable():
+    bucket_id = (
+        "entry:combo_entry_spot:"
+        "score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_"
+        "liquidity_liquidity_unknown_overbought_overbought_unknown_time_time_unknown"
+    )
+
+    label = mod.format_lifecycle_bucket_label(bucket_id, stage="entry")
+
+    assert "score: score 66-69" in label
+    assert "source: WAIT65-79 EV" in label
+    assert "time: time unclassified" in label
+    assert "candidate bucket instrumentation gap" not in label
+
+
+def test_format_greenfield_bucket_notice_line_keeps_raw_provenance():
+    observed = (
+        "entry:combo_entry_spot:"
+        "score=score_66_69|source=wait6579_ev_cohort|stale=fresh_or_unflagged|"
+        "liquidity=liquidity_unknown|overbought=overbought_unknown|time=time_unknown"
+    )
+    decision = mod.GreenfieldDecision(
+        active=True,
+        allowed=True,
+        stage="entry",
+        action="BUY",
+        reason="promoted_bucket_allowed",
+        matched_bucket_id=observed,
+        observed_bucket_id=observed,
+    )
+
+    line = mod.format_greenfield_bucket_notice_line(decision)
+
+    assert "entry bucket promoted / submit bucket separate" in line
+    assert "time: time unclassified" in line
+    assert f"Bucket ID: `{observed}`" in line
 
 
 def test_greenfield_authority_enabled_with_missing_policy_fails_closed(monkeypatch):

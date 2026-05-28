@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -25,6 +26,7 @@ MATRIX_VERSION = "swing_lifecycle_decision_matrix_v1"
 DECISION_AUTHORITY = "swing_ldm_source_only"
 SAMPLE_FLOOR = 3
 MAX_ROWS_IN_REPORT = 500
+SWING_LIFECYCLE_FLOW_REQUIRED_STAGES = ("entry", "holding", "exit")
 FORBIDDEN_USES = [
     "real_order_submit",
     "one_share_real_canary",
@@ -162,6 +164,16 @@ def _slug(value: Any) -> str:
     return text[:80] or "unknown"
 
 
+def _slug_digest(value: Any, *, max_len: int = 80) -> str:
+    text = re.sub(r"[^a-zA-Z0-9가-힣]+", "_", str(value or "").strip().lower()).strip("_")
+    if not text:
+        return "unknown"
+    if len(text) <= max_len:
+        return text
+    digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:10]
+    return f"{text[: max_len - 11].rstrip('_')}_{digest}"
+
+
 def _bucket_numeric(value: Any, cuts: list[float], labels: list[str], *, missing: str = "missing") -> str:
     numeric = _safe_float(value)
     if numeric is None:
@@ -254,6 +266,10 @@ def _probe_row(record: dict[str, Any]) -> dict[str, Any]:
     mfe = _first(record, "mfe_pct", "mfe")
     mae = _first(record, "mae_pct", "mae")
     runtime_features = {
+        "lifecycle_flow_bridge_key": str(_first(record, "lifecycle_flow_bridge_key", default="")),
+        "lifecycle_join_bridge_key": str(_first(record, "lifecycle_join_bridge_key", default="")),
+        "join_bridge_key": str(_first(record, "join_bridge_key", default="")),
+        "swing_strategy_discovery_arm_id": str(_first(record, "swing_strategy_discovery_arm_id", "arm_id", default="")),
         "origin": str(_first(record, "probe_origin_stage", "origin_stage", "origin", default="-")),
         "block_reason": str(_first(record, "block_reason", "gate_block_reason", "reason", default="-")),
         "strategy": str(_first(record, "strategy", "strategy_name", "probe_arm", default="-")),
@@ -308,6 +324,10 @@ def _discovery_row(row: dict[str, Any]) -> dict[str, Any]:
     status = str(row.get("label_status") or "")
     stage = "exit" if status == "labeled" else "carry"
     features = {
+        "lifecycle_flow_bridge_key": str(row.get("lifecycle_flow_bridge_key") or ""),
+        "lifecycle_join_bridge_key": str(row.get("lifecycle_join_bridge_key") or ""),
+        "join_bridge_key": str(row.get("join_bridge_key") or ""),
+        "swing_strategy_discovery_arm_id": str(row.get("arm_row_id") or row.get("arm_id") or ""),
         "origin": "swing_strategy_discovery_sim_v1",
         "block_reason": str(row.get("block_reason") or "-"),
         "strategy": str(row.get("entry_policy") or row.get("arm_id") or "-"),
@@ -476,6 +496,337 @@ def _bucket_summary(bucket_type: str, bucket_key: str, rows: list[dict[str, Any]
     }
 
 
+def _stable_swing_flow_bucket_id(bucket_key: str) -> str:
+    digest = hashlib.sha1(str(bucket_key or "").encode("utf-8")).hexdigest()[:10]
+    return f"swing_lifecycle_flow:combo_swing_lifecycle_flow:{_slug_digest(bucket_key, max_len=56)}:{digest}"
+
+
+def _row_flow_identity(row: dict[str, Any]) -> tuple[str, str]:
+    features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
+    for key, quality in (
+        ("lifecycle_flow_bridge_key", "lifecycle_flow_bridge_key"),
+        ("lifecycle_join_bridge_key", "lifecycle_join_bridge_key"),
+        ("join_bridge_key", "join_bridge_key"),
+    ):
+        value = str(features.get(key) or row.get(key) or "").strip()
+        if value and value != "-":
+            return f"{key}:{value}", quality
+    arm_id = str(features.get("swing_strategy_discovery_arm_id") or row.get("swing_strategy_discovery_arm_id") or "").strip()
+    if arm_id and arm_id != "-":
+        code = str(row.get("stock_code") or "").strip()
+        return f"swing_strategy_discovery_arm_id:{code}:{arm_id}", "swing_strategy_discovery_arm_id"
+    candidate_id = str(row.get("candidate_id") or row.get("row_id") or "").strip()
+    if candidate_id and candidate_id != "-":
+        return f"candidate_id:{candidate_id}", "candidate_id"
+    code = str(row.get("stock_code") or "").strip()
+    event_time = str(row.get("event_time") or "").strip()
+    return f"fallback:{code}:{event_time}", "fallback_incomplete"
+
+
+def _flow_stage(row: dict[str, Any]) -> str:
+    stage = str(row.get("lifecycle_stage") or "")
+    return "holding" if stage == "carry" else stage
+
+
+def _entry_bucket_key(row: dict[str, Any]) -> str:
+    f = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
+    return "|".join(
+        [
+            str(f.get("origin") or "-"),
+            str(f.get("block_reason") or "-"),
+            str(f.get("position_tag") or "-"),
+            str(f.get("gap_bucket") or "-"),
+            str(f.get("score_bucket") or "-"),
+            str(f.get("vpw_bucket") or "-"),
+            str(f.get("strategy") or "-"),
+            str(f.get("entry_price_provenance") or "-"),
+            str(f.get("qty_source") or "-"),
+        ]
+    )
+
+
+def _holding_exit_bucket_key(row: dict[str, Any]) -> str:
+    f = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
+    labels = row.get("label_fields") if isinstance(row.get("label_fields"), dict) else {}
+    return "|".join(
+        [
+            _bucket_numeric(labels.get("mfe_pct"), [-3, 0, 3, 7], ["mfe_deep_neg", "mfe_neg", "mfe_low", "mfe_mid", "mfe_high"]),
+            _bucket_numeric(labels.get("mae_pct"), [-7, -3, 0, 3], ["mae_deep", "mae_mid", "mae_low", "mae_flat", "mae_green"]),
+            _held_bucket(labels.get("held_sec")),
+            str(labels.get("exit_reason") or "-"),
+            str(f.get("panic_context") or "-"),
+            str(f.get("ofi_state") or "-"),
+            str(f.get("qi_state") or "-"),
+        ]
+    )
+
+
+def _scale_in_bucket_key(row: dict[str, Any]) -> str:
+    f = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
+    return "|".join(
+        [
+            str(f.get("add_type") or "-"),
+            _source_quality_status(row),
+            str(f.get("qty_source") or "-"),
+            str(f.get("price_policy") or "-"),
+        ]
+    )
+
+
+def _child_bucket_id(stage: str, bucket_type: str, bucket_key: str) -> str:
+    return f"swing_{stage}:{bucket_type}:{_slug_digest(bucket_key)}"
+
+
+def _first_flow_stage_row(by_stage: dict[str, list[dict[str, Any]]], stage: str) -> dict[str, Any] | None:
+    rows = by_stage.get(stage) or []
+    if not rows:
+        return None
+    return sorted(rows, key=lambda item: str(item.get("event_time") or ""))[0]
+
+
+def _flow_ev(by_stage: dict[str, list[dict[str, Any]]]) -> float | None:
+    exit_row = _first_flow_stage_row(by_stage, "exit")
+    if exit_row is not None:
+        value = _valid_label(exit_row)
+        if value is not None:
+            return round(float(value), 6)
+    values = [
+        float(value)
+        for rows in by_stage.values()
+        for row in rows
+        for value in [_valid_label(row)]
+        if value is not None
+    ]
+    return round(sum(values) / len(values), 6) if values else None
+
+
+def _flow_incomplete_reasons(identity_quality: str, stage_presence: dict[str, bool]) -> list[str]:
+    reasons: list[str] = []
+    if identity_quality == "fallback_incomplete":
+        reasons.append("fallback_identity_incomplete")
+    for stage in SWING_LIFECYCLE_FLOW_REQUIRED_STAGES:
+        if not stage_presence.get(stage):
+            reasons.append(f"missing_{stage}")
+    if stage_presence.get("exit") and not stage_presence.get("entry"):
+        reasons.append("exit_without_entry")
+    return list(dict.fromkeys(reasons))
+
+
+def _swing_flow_record(attribution_key: str, identity_quality: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    by_stage: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        stage = _flow_stage(row)
+        if stage in {"entry", "holding", "scale_in", "exit"}:
+            by_stage[stage].append(row)
+    entry_row = _first_flow_stage_row(by_stage, "entry")
+    holding_row = _first_flow_stage_row(by_stage, "holding")
+    exit_row = _first_flow_stage_row(by_stage, "exit")
+    scale_in_rows = by_stage.get("scale_in") or []
+    child_bucket_ids = {
+        "entry": _child_bucket_id("entry", "entry_bucket_attribution", _entry_bucket_key(entry_row)) if entry_row else None,
+        "holding": _child_bucket_id("holding", "holding_exit_bucket_attribution", _holding_exit_bucket_key(holding_row)) if holding_row else None,
+        "scale_in": [
+            _child_bucket_id("scale_in", "scale_in_bucket_attribution", _scale_in_bucket_key(row))
+            for row in scale_in_rows
+        ],
+        "exit": _child_bucket_id("exit", "holding_exit_bucket_attribution", _holding_exit_bucket_key(exit_row)) if exit_row else None,
+    }
+    child_bucket_ids["scale_in"] = list(dict.fromkeys(child_bucket_ids["scale_in"]))
+    stage_presence = {stage: bool(by_stage.get(stage)) for stage in SWING_LIFECYCLE_FLOW_REQUIRED_STAGES}
+    complete = all(stage_presence.values())
+    ev = _flow_ev(by_stage)
+    if identity_quality == "fallback_incomplete":
+        source_quality = "fallback_identity_incomplete"
+    elif not complete:
+        source_quality = "incomplete_lifecycle_flow"
+    elif ev is None:
+        source_quality = "outcome_join_missing"
+    else:
+        source_quality = "pass"
+    scale_bucket = child_bucket_ids["scale_in"][0] if child_bucket_ids["scale_in"] else "scale_in:none"
+    bucket_key = "|".join(
+        [
+            f"entry={child_bucket_ids['entry'] or 'entry:missing'}",
+            f"holding={child_bucket_ids['holding'] or 'holding:missing'}",
+            f"scale_in={scale_bucket}",
+            f"exit={child_bucket_ids['exit'] or 'exit:missing'}",
+        ]
+    )
+    return {
+        "flow_instance_id": attribution_key,
+        "identity_quality": identity_quality,
+        "swing_lifecycle_flow_bucket_id": _stable_swing_flow_bucket_id(bucket_key),
+        "bucket_type": "combo_swing_lifecycle_flow",
+        "bucket_key": bucket_key,
+        "attribution_key": attribution_key,
+        "lifecycle_stage": "lifecycle_flow",
+        "stage_presence": stage_presence,
+        "stage_completion_state": "complete" if complete else "incomplete",
+        "incomplete_reasons": _flow_incomplete_reasons(identity_quality, stage_presence),
+        "entry_bucket_id": child_bucket_ids["entry"],
+        "holding_bucket_id": child_bucket_ids["holding"],
+        "scale_in_bucket_ids": child_bucket_ids["scale_in"],
+        "exit_bucket_id": child_bucket_ids["exit"],
+        "child_bucket_ids": child_bucket_ids,
+        "stage_contract": {
+            stage: {
+                "stage": stage,
+                "row_count": len(by_stage.get(stage) or []),
+                "bucket_id": child_bucket_ids.get(stage),
+                "contract_state": "present" if by_stage.get(stage) else "missing_policy",
+            }
+            for stage in SWING_LIFECYCLE_FLOW_REQUIRED_STAGES
+        },
+        "sample_count": 1,
+        "joined_sample": 1 if ev is not None and complete else 0,
+        "source_quality_gate": source_quality,
+        "source_quality_adjusted_ev_pct": ev,
+        "equal_weight_avg_profit_pct": ev,
+        "notional_weighted_ev_pct": ev,
+        "diagnostic_win_rate": 1.0 if ev is not None and ev > 0 else 0.0 if ev is not None else None,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "metric_scope": "swing_lifecycle_bundle_ev",
+        "rollback_guard": "hard_safety_priority_plus_source_quality_and_post_apply_attribution",
+        "decision_authority": "swing_ldm_lifecycle_flow_bucket_attribution_source_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": FORBIDDEN_USES,
+    }
+
+
+def _swing_lifecycle_flow_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if _flow_stage(row) not in {"entry", "holding", "scale_in", "exit"}:
+            continue
+        identity, quality = _row_flow_identity(row)
+        grouped[(identity, quality)].append(row)
+    flows = [_swing_flow_record(identity, quality, subset) for (identity, quality), subset in grouped.items()]
+    bucket_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for flow in flows:
+        bucket_groups[str(flow.get("bucket_key") or "")].append(flow)
+    buckets: list[dict[str, Any]] = []
+    for bucket_key, subset in bucket_groups.items():
+        joined = [item for item in subset if item.get("source_quality_adjusted_ev_pct") is not None]
+        ev_values = [float(item["source_quality_adjusted_ev_pct"]) for item in joined]
+        avg_ev = round(sum(ev_values) / len(ev_values), 6) if ev_values else None
+        fallback_count = sum(1 for item in subset if item.get("identity_quality") == "fallback_incomplete")
+        incomplete_count = sum(1 for item in subset if item.get("stage_completion_state") != "complete")
+        if incomplete_count:
+            source_quality = "join_contract_blocked"
+        elif fallback_count:
+            source_quality = "fallback_identity_incomplete"
+        elif len(joined) < SAMPLE_FLOOR:
+            source_quality = "hold_sample"
+        else:
+            source_quality = "pass"
+        recommended_route = (
+            "sim_auto_approved"
+            if source_quality == "pass" and avg_ev is not None and avg_ev > 0
+            else "source_only_keep_collecting"
+        )
+        first = subset[0]
+        buckets.append(
+            {
+                "swing_lifecycle_flow_bucket_id": first.get("swing_lifecycle_flow_bucket_id"),
+                "bucket_type": "combo_swing_lifecycle_flow",
+                "bucket_key": bucket_key,
+                "lifecycle_stage": "lifecycle_flow",
+                "sample_count": len(subset),
+                "joined_sample": len(joined),
+                "join_rate": round(len(joined) / len(subset), 6) if subset else 0.0,
+                "complete_flow_count": len(subset) - incomplete_count,
+                "incomplete_flow_count": incomplete_count,
+                "fallback_identity_count": fallback_count,
+                "source_quality_gate": source_quality,
+                "source_quality_adjusted_ev_pct": avg_ev,
+                "equal_weight_avg_profit_pct": avg_ev,
+                "notional_weighted_ev_pct": avg_ev,
+                "diagnostic_win_rate": (
+                    round(sum(1 for value in ev_values if value > 0) / len(ev_values), 6)
+                    if ev_values
+                    else None
+                ),
+                "recommended_route": recommended_route,
+                "metric_scope": "swing_lifecycle_bundle_ev",
+                "metric_role": "primary_ev",
+                "primary_decision_metric": "source_quality_adjusted_ev_pct",
+                "entry_bucket_id": first.get("entry_bucket_id"),
+                "holding_bucket_id": first.get("holding_bucket_id"),
+                "scale_in_bucket_ids": first.get("scale_in_bucket_ids") or [],
+                "exit_bucket_id": first.get("exit_bucket_id"),
+                "child_bucket_ids": first.get("child_bucket_ids") or {},
+                "stage_contract": first.get("stage_contract") or {},
+                "attribution_key": first.get("attribution_key"),
+                "rollback_guard": first.get("rollback_guard"),
+                "decision_authority": "swing_ldm_lifecycle_flow_bucket_attribution_source_only",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "forbidden_uses": FORBIDDEN_USES,
+            }
+        )
+    buckets.sort(
+        key=lambda item: (
+            item.get("recommended_route") != "sim_auto_approved",
+            -int(item.get("joined_sample") or 0),
+            str(item.get("bucket_key") or ""),
+        )
+    )
+    sim_candidates = _sim_candidates("lifecycle_flow", buckets)
+    incomplete_reasons: Counter[str] = Counter()
+    for flow in flows:
+        incomplete_reasons.update(flow.get("incomplete_reasons") or [])
+    source_rows_by_stage = Counter(_flow_stage(row) for row in rows if _flow_stage(row) in {"entry", "holding", "scale_in", "exit"})
+    complete_flow_count = sum(1 for item in flows if item.get("stage_completion_state") == "complete")
+    identity_present = sum(1 for item in flows if item.get("identity_quality") != "fallback_incomplete")
+    return {
+        "metric_contract": {
+            "metric_role": "primary_ev",
+            "decision_authority": "swing_ldm_lifecycle_flow_bucket_attribution_source_only",
+            "runtime_effect": False,
+            "window_policy": "postclose_rolling_source_only",
+            "sample_floor": SAMPLE_FLOOR,
+            "primary_decision_metric": "source_quality_adjusted_ev_pct",
+            "bucket_type": "combo_swing_lifecycle_flow",
+            "lifecycle_stage": "lifecycle_flow",
+            "forbidden_uses": FORBIDDEN_USES,
+            "source_quality_gate": "entry+holding_or_carry+exit complete flow + stable identity + joined outcome",
+        },
+        "metric_role": "primary_ev",
+        "metric_scope": "swing_lifecycle_bundle_ev",
+        "decision_authority": "swing_ldm_lifecycle_flow_bucket_attribution_source_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "window_policy": "postclose_rolling_source_only",
+        "sample_floor": SAMPLE_FLOOR,
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": "entry+holding_or_carry+exit complete flow + stable identity + joined outcome",
+        "forbidden_uses": FORBIDDEN_USES,
+        "summary": {
+            "source_row_count": sum(source_rows_by_stage.values()),
+            "bucket_count": len(buckets),
+            "flow_count": len(flows),
+            "complete_flow_count": complete_flow_count,
+            "incomplete_flow_count": len(flows) - complete_flow_count,
+            "identity_join_rate": round(identity_present / len(flows), 6) if flows else 0.0,
+            "complete_flow_rate": round(complete_flow_count / len(flows), 6) if flows else 0.0,
+            "join_contract_blocked": bool(incomplete_reasons and complete_flow_count == 0),
+            "incomplete_flow_reason_counts": dict(incomplete_reasons),
+            "stage_source_counts": dict(source_rows_by_stage),
+            "sim_auto_candidate_count": len(sim_candidates),
+            "workorder_count": 0,
+        },
+        "flows": flows[:200],
+        "buckets": buckets[:200],
+        "sim_auto_approval_candidates": sim_candidates,
+        "runtime_approval_candidates": sim_candidates,
+        "code_improvement_workorders": [],
+    }
+
+
 def _group(rows: Iterable[dict[str, Any]], bucket_type: str, stage: str, key_fn) -> list[dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -496,7 +847,7 @@ def _sim_candidates(stage: str, buckets: list[dict[str, Any]], *, limit: int = 2
     for item in buckets:
         if item.get("recommended_route") != "sim_auto_approved":
             continue
-        bucket_id = f"swing_ldm_{stage}_{_slug(item.get('bucket_type'))}_{_slug(item.get('bucket_key'))}"
+        bucket_id = f"swing_ldm_{stage}_{_slug(item.get('bucket_type'))}_{_slug_digest(item.get('bucket_key'))}"
         candidates.append(
             {
                 "candidate_id": bucket_id,
@@ -627,7 +978,7 @@ def _discovery_arm_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _attribution(name: str, stage: str, buckets: list[dict[str, Any]], source_rows: int) -> dict[str, Any]:
-    candidates = _sim_candidates(stage, buckets)
+    candidates: list[dict[str, Any]] = []
     workorders = _code_workorders(stage, buckets)
     return {
         "metric_contract": _metric_contract(name, stage),
@@ -684,7 +1035,8 @@ def build_swing_lifecycle_decision_matrix(
     holding_exit = _holding_exit_attribution(rows)
     scale_in = _scale_in_attribution(rows)
     discovery = _discovery_arm_attribution(rows)
-    attributions = [entry, holding_exit, scale_in, discovery]
+    lifecycle_flow = _swing_lifecycle_flow_bucket_attribution(rows)
+    attributions = [lifecycle_flow, entry, holding_exit, scale_in, discovery]
     sim_count = sum(len(item.get("sim_auto_approval_candidates") or []) for item in attributions)
     workorder_count = sum(len(item.get("code_improvement_workorders") or []) for item in attributions)
     labeled_rows = sum(1 for row in rows if _valid_label(row) is not None)
@@ -736,6 +1088,12 @@ def build_swing_lifecycle_decision_matrix(
             "source_book_counts": _counts(rows, "source_book"),
             "sim_auto_candidate_count": sim_count,
             "workorder_count": workorder_count,
+            "swing_lifecycle_flow_bucket_count": lifecycle_flow.get("summary", {}).get("bucket_count"),
+            "complete_flow_count": lifecycle_flow.get("summary", {}).get("complete_flow_count"),
+            "incomplete_flow_count": lifecycle_flow.get("summary", {}).get("incomplete_flow_count"),
+            "identity_join_rate": lifecycle_flow.get("summary", {}).get("identity_join_rate"),
+            "complete_flow_rate": lifecycle_flow.get("summary", {}).get("complete_flow_rate"),
+            "join_contract_blocked": lifecycle_flow.get("summary", {}).get("join_contract_blocked"),
             "daily_simulation_consumed": False,
             "swing_entry_bottleneck_primary": swing_entry_bottleneck.get("primary"),
             "swing_lifecycle_contract_gap_count": swing_lifecycle_contract_gaps.get("gap_count"),
@@ -743,6 +1101,7 @@ def build_swing_lifecycle_decision_matrix(
         },
         "swing_entry_bottleneck": swing_entry_bottleneck,
         "swing_lifecycle_contract_gaps": swing_lifecycle_contract_gaps,
+        "swing_lifecycle_flow_bucket_attribution": lifecycle_flow,
         "entry_bucket_attribution": entry,
         "holding_exit_bucket_attribution": holding_exit,
         "scale_in_bucket_attribution": scale_in,
@@ -773,6 +1132,12 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- discovery_rows: `{summary.get('discovery_rows')}`",
         f"- sim_auto_candidate_count: `{summary.get('sim_auto_candidate_count')}`",
         f"- workorder_count: `{summary.get('workorder_count')}`",
+        f"- swing_lifecycle_flow_bucket_count: `{summary.get('swing_lifecycle_flow_bucket_count')}`",
+        f"- complete_flow_count: `{summary.get('complete_flow_count')}`",
+        f"- incomplete_flow_count: `{summary.get('incomplete_flow_count')}`",
+        f"- identity_join_rate: `{summary.get('identity_join_rate')}`",
+        f"- complete_flow_rate: `{summary.get('complete_flow_rate')}`",
+        f"- join_contract_blocked: `{summary.get('join_contract_blocked')}`",
         f"- swing_entry_bottleneck_primary: `{summary.get('swing_entry_bottleneck_primary')}`",
         f"- swing_lifecycle_contract_gap_count: `{summary.get('swing_lifecycle_contract_gap_count')}`",
         f"- daily_simulation_consumed: `{summary.get('daily_simulation_consumed')}`",
@@ -781,6 +1146,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         "## Bucket Attribution",
     ]
     for key in (
+        "swing_lifecycle_flow_bucket_attribution",
         "entry_bucket_attribution",
         "holding_exit_bucket_attribution",
         "scale_in_bucket_attribution",

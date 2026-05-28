@@ -60,6 +60,7 @@ from src.engine.lifecycle_decision_matrix_runtime import (
 from src.engine.lifecycle.greenfield_authority import (
     GreenfieldDecision,
     evaluate_greenfield_authority,
+    format_greenfield_bucket_notice_line,
     greenfield_authority_active,
     greenfield_stage_telegram_enabled,
 )
@@ -5180,8 +5181,7 @@ def _greenfield_block_fields(decision: GreenfieldDecision) -> dict:
 
 
 def _greenfield_bucket_notice_line(decision: GreenfieldDecision) -> str:
-    observed = decision.observed_bucket_id if decision.observed_bucket_id not in {"", "-"} else "-"
-    return f"Observed bucket: `{observed}` | Policy bucket: `{decision.matched_bucket_id}`"
+    return format_greenfield_bucket_notice_line(decision)
 
 
 def _publish_greenfield_stage_notice(

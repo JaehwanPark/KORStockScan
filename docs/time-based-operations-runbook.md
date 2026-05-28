@@ -407,6 +407,14 @@ POSTCLOSE 최상위 감리는 `Tuning Chain Control State`(튜닝 체인 관제 
 
 ### Runbook 운영 확인 완료 기록
 
+- `[PostcloseAutomationHealthCheck20260528] 장후 자동화체인 상태 확인` (`Due: 2026-05-28`, `Slot: POSTCLOSE`, `TimeWindow: 16:00~20:45`)
+  - 판정: `warning`
+  - Tuning Chain Control State: `YELLOW`
+  - blocked_stage: `decision_integrity`
+  - impact: 2026-05-28 postclose wrapper는 최종 `[DONE]` marker와 status `succeeded`로 닫혔고 required artifact, downstream handoff, runtime apply gap audit은 pass다. 다만 postclose verifier status는 `warning`이며 daily EV/control tower는 live-auto 후보 없이 sim/source progress만 남겼다. Greenfield partial lifecycle contamination은 live-auto block/quarantine 상태로 유지했고, 새 threshold/order/provider/cap/bot 변경 권한은 열지 않았다. `kt00001` 요청 제한과 Greenfield Telegram 가독성은 runtime effect 없는 코드 보강으로 닫았다.
+  - 근거: [threshold_cycle_postclose_2026-05-28.status.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_status/threshold_cycle_postclose_2026-05-28.status.json)은 `status=succeeded`, `exit_code=0`, `started_at=2026-05-28T12:38:04+09:00`, `finished_at=2026-05-28T19:34:29+09:00`다. [threshold_cycle_postclose_verification_2026-05-28.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_2026-05-28.json)은 `status=warning`, `missing_required_artifacts=[]`, `missing_downstream_links=[]`, `stale_downstream_links=[]`, predecessor integrity `pass`다. [tuning_performance_control_tower_2026-05-28.json](/home/ubuntu/KORStockScan/data/report/tuning_performance_control_tower/tuning_performance_control_tower_2026-05-28.json)은 `primary_verdict=sim_progress_no_live_bucket`, lifecycle sim-auto `172`, swing sim-auto `13`, live-auto `0`, EV warning `5`다. [runtime_apply_gap_audit_2026-05-28.json](/home/ubuntu/KORStockScan/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_2026-05-28.json)은 `status=pass`, `critical_failure_count=0`, `codex_directive_count=0`, retry queue `0`이다. `PYTHONPATH=. .venv/bin/python -m src.engine.error_detector --mode full --dry-run`은 `summary_severity=warning`으로 process health warning은 postclose bot isolation, resource warning은 disk free `2964MB`; cron completion, log scanner, Kiwoom auth, artifact freshness, stale lock은 pass다.
+  - 다음 액션: 다음 PREOPEN은 [threshold_cycle_ev_2026-05-28.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-28.json)와 runtime apply artifacts 기준으로만 판단한다. source-quality/decision warning은 2026-05-29 checklist의 ThresholdDailyEV/RuntimeApplyGap/ShadowCanary 항목에서 재확인하고, Project/Calendar 반영은 문서 parser 검증 후 사용자 표준 sync 명령으로만 수행한다.
+
 - `[IntradayAutomationHealthCheck20260528] 장중 자동화체인 상태 확인` (`Due: 2026-05-28`, `Slot: INTRADAY`, `TimeWindow: 09:05~15:30`)
   - 판정: `warning`
   - Tuning Chain Control State: `GREEN`

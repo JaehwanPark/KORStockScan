@@ -98,6 +98,56 @@ def test_get_deposit_uses_recent_cached_amount_after_api_failure(monkeypatch):
     assert kiwoom_orders.get_deposit("TOKEN") == 9_876_543
 
 
+def test_get_deposit_enters_short_cooldown_after_request_limit(monkeypatch):
+    class LimitResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "return_code": "1700",
+                "return_msg": "허용된 요청 개수를 초과하였습니다[1700:허용된 요청 개수를 초과하였습니다. API ID=kt00001]",
+            }
+
+    times = iter([1_000.0, 1_000.0, 1_000.0, 1_000.0, 1_001.0, 1_001.0, 1_001.0])
+    post_count = {"value": 0}
+
+    def _post(*args, **kwargs):
+        post_count["value"] += 1
+        return LimitResponse()
+
+    monkeypatch.setattr(sniper_config, "CONF", {"VIRTUAL_ORDERABLE_AMOUNT": 0})
+    monkeypatch.setattr(kiwoom_orders, "_LAST_DEPOSIT_OVERRIDE", None)
+    monkeypatch.setattr(kiwoom_orders, "_LAST_SUCCESSFUL_DEPOSIT", 9_876_543)
+    monkeypatch.setattr(kiwoom_orders, "_LAST_SUCCESSFUL_DEPOSIT_AT", 995.0)
+    monkeypatch.setattr(kiwoom_orders, "_DEPOSIT_API_COOLDOWN_UNTIL", 0.0)
+    monkeypatch.setattr(kiwoom_orders, "_DEPOSIT_API_COOLDOWN_REASON", "")
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "get_api_url",
+        lambda path: f"https://example.test{path}",
+    )
+    monkeypatch.setattr(kiwoom_orders.requests, "post", _post)
+    monkeypatch.setattr(kiwoom_orders, "log_info", lambda *args, **kwargs: None)
+    monkeypatch.setattr(kiwoom_orders, "log_error", lambda *args, **kwargs: None)
+    monkeypatch.setattr(kiwoom_orders.time, "sleep", lambda _: None)
+    monkeypatch.setattr(kiwoom_orders.time, "time", lambda: next(times))
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "TRADING_RULES",
+        types.SimpleNamespace(
+            DEPOSIT_API_RETRY_COUNT=1,
+            DEPOSIT_API_RETRY_DELAY_SEC=0.0,
+            DEPOSIT_API_REQUEST_LIMIT_COOLDOWN_SEC=10.0,
+            DEPOSIT_CACHE_FALLBACK_TTL_SEC=30,
+        ),
+    )
+
+    assert kiwoom_orders.get_deposit("TOKEN") == 9_876_543
+    assert kiwoom_orders.get_deposit("TOKEN") == 9_876_543
+    assert post_count["value"] == 1
+    assert kiwoom_orders.get_last_deposit_errors()[0]["classification"] == "request_count_exceeded_cooldown"
+
+
 def test_get_deposit_records_auth_failure(monkeypatch):
     class DummyResponse:
         status_code = 401

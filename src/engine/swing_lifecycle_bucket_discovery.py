@@ -130,15 +130,28 @@ def _would_require_source_quality_patch(bucket: dict[str, Any]) -> bool:
     return route == "code_patch_required" or gate == "source_quality_blocker"
 
 
-def _classification_from_bucket(bucket: dict[str, Any]) -> str:
+def _classification_from_bucket(section_name: str, bucket: dict[str, Any]) -> str:
     route = str(bucket.get("recommended_route") or "")
     gate = str(bucket.get("source_quality_gate") or "")
     try:
         joined = int(float(bucket.get("joined_sample") or 0))
     except (TypeError, ValueError):
         joined = 0
+    ev = None
+    try:
+        ev = float(bucket.get("source_quality_adjusted_ev_pct"))
+    except (TypeError, ValueError):
+        ev = None
+    if section_name == "swing_lifecycle_flow_bucket_attribution":
+        if route == "sim_auto_approved" and gate == "pass" and joined >= 3 and ev is not None and ev > 0:
+            return "sim_auto_approved"
+        if _would_require_source_quality_patch(bucket):
+            if _is_implemented_source_quality_waiting(bucket):
+                return "source_only_keep_collecting"
+            return "code_patch_required"
+        return "source_only_keep_collecting"
     if route == "sim_auto_approved":
-        return "sim_auto_approved"
+        return "source_only_keep_collecting"
     if _would_require_source_quality_patch(bucket):
         if _is_implemented_source_quality_waiting(bucket):
             return "source_only_keep_collecting"
@@ -172,7 +185,7 @@ def _candidate_from_bucket(section_name: str, bucket: dict[str, Any]) -> dict[st
     stage = str(bucket.get("lifecycle_stage") or "swing")
     bucket_type = str(bucket.get("bucket_type") or section_name)
     bucket_key = str(bucket.get("bucket_key") or "-")
-    state = _classification_from_bucket(bucket)
+    state = _classification_from_bucket(section_name, bucket)
     taxonomy = normalize_lifecycle_bucket(
         stage=stage,
         bucket_type=bucket_type,
@@ -221,6 +234,18 @@ def _candidate_from_bucket(section_name: str, bucket: dict[str, Any]) -> dict[st
         "joined_sample": bucket.get("joined_sample"),
         "sample_count": bucket.get("sample_count"),
         "source_workorder_id": bucket.get("workorder_id"),
+        "swing_lifecycle_flow_bucket_id": bucket.get("swing_lifecycle_flow_bucket_id"),
+        "metric_scope": bucket.get("metric_scope"),
+        "metric_role": bucket.get("metric_role"),
+        "primary_decision_metric": bucket.get("primary_decision_metric"),
+        "entry_bucket_id": bucket.get("entry_bucket_id"),
+        "holding_bucket_id": bucket.get("holding_bucket_id"),
+        "scale_in_bucket_ids": bucket.get("scale_in_bucket_ids") or [],
+        "exit_bucket_id": bucket.get("exit_bucket_id"),
+        "child_bucket_ids": bucket.get("child_bucket_ids") or {},
+        "stage_contract": bucket.get("stage_contract") or {},
+        "attribution_key": bucket.get("attribution_key"),
+        "rollback_guard": bucket.get("rollback_guard"),
         "parent_bucket_id": _bucket_id(stage, bucket_type, bucket_key),
         "implementation_status": bucket.get("implementation_status"),
         "implementation_provenance": bucket.get("implementation_provenance") if isinstance(bucket.get("implementation_provenance"), dict) else {},
@@ -774,6 +799,7 @@ def _ai_audit_section(points: list[dict[str, Any]]) -> dict[str, Any]:
 def _iter_attribution_sections(matrix: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
     sections = []
     for name in (
+        "swing_lifecycle_flow_bucket_attribution",
         "entry_bucket_attribution",
         "holding_exit_bucket_attribution",
         "scale_in_bucket_attribution",
@@ -880,6 +906,12 @@ def build_swing_lifecycle_bucket_discovery(
     source_contract_status = "missing" if not matrix else "pass"
     contract = matrix.get("input_contract") if isinstance(matrix.get("input_contract"), dict) else {}
     entry_bottleneck = matrix.get("swing_entry_bottleneck") if isinstance(matrix.get("swing_entry_bottleneck"), dict) else {}
+    flow_section = (
+        matrix.get("swing_lifecycle_flow_bucket_attribution")
+        if isinstance(matrix.get("swing_lifecycle_flow_bucket_attribution"), dict)
+        else {}
+    )
+    flow_summary = flow_section.get("summary") if isinstance(flow_section.get("summary"), dict) else {}
     if contract and contract.get("swing_daily_simulation_consumed") is not False:
         source_contract_status = "fail"
         candidates.append(
@@ -992,6 +1024,23 @@ def build_swing_lifecycle_bucket_discovery(
         by_stage[str(candidate.get("lifecycle_stage") or "-")] += 1
 
     sim_auto = [item for item in candidates if item.get("classification_state") == "sim_auto_approved"]
+    flow_sim_auto = [
+        item
+        for item in sim_auto
+        if item.get("source_section") == "swing_lifecycle_flow_bucket_attribution"
+    ]
+    stage_only_source_only = [
+        item
+        for item in candidates
+        if item.get("classification_state") == "source_only_keep_collecting"
+        and item.get("source_section")
+        in {
+            "entry_bucket_attribution",
+            "holding_exit_bucket_attribution",
+            "scale_in_bucket_attribution",
+            "discovery_arm_attribution",
+        }
+    ]
     code_patch = [
         item
         for item in candidates
@@ -1057,6 +1106,14 @@ def build_swing_lifecycle_bucket_discovery(
             "candidate_count": len(candidates),
             "surfaced_candidate_count": len(candidates),
             "sim_auto_approved_count": len(sim_auto),
+            "swing_lifecycle_flow_bucket_count": flow_summary.get("bucket_count", 0),
+            "complete_flow_count": flow_summary.get("complete_flow_count", 0),
+            "incomplete_flow_count": flow_summary.get("incomplete_flow_count", 0),
+            "identity_join_rate": flow_summary.get("identity_join_rate", 0.0),
+            "complete_flow_rate": flow_summary.get("complete_flow_rate", 0.0),
+            "join_contract_blocked": bool(flow_summary.get("join_contract_blocked")),
+            "flow_sim_auto_approved_count": len(flow_sim_auto),
+            "stage_only_source_only_count": len(stage_only_source_only),
             "source_only_keep_collecting_count": by_state.get("source_only_keep_collecting", 0),
             "code_patch_required_count": len(code_patch) + len(active_explicit_workorders) + (1 if followup_reasons else 0),
             "implemented_source_quality_waiting_sample_count": len(resolved_source_quality_candidates)
@@ -1198,6 +1255,14 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- source_contract_status: `{summary.get('source_contract_status')}`",
         f"- surfaced_candidate_count: `{summary.get('surfaced_candidate_count')}`",
         f"- sim_auto_approved_count: `{summary.get('sim_auto_approved_count')}`",
+        f"- swing_lifecycle_flow_bucket_count: `{summary.get('swing_lifecycle_flow_bucket_count')}`",
+        f"- complete_flow_count: `{summary.get('complete_flow_count')}`",
+        f"- incomplete_flow_count: `{summary.get('incomplete_flow_count')}`",
+        f"- identity_join_rate: `{summary.get('identity_join_rate')}`",
+        f"- complete_flow_rate: `{summary.get('complete_flow_rate')}`",
+        f"- join_contract_blocked: `{summary.get('join_contract_blocked')}`",
+        f"- flow_sim_auto_approved_count: `{summary.get('flow_sim_auto_approved_count')}`",
+        f"- stage_only_source_only_count: `{summary.get('stage_only_source_only_count')}`",
         f"- code_patch_required_count: `{summary.get('code_patch_required_count')}`",
         f"- implemented_source_quality_waiting_sample_count: `{summary.get('implemented_source_quality_waiting_sample_count')}`",
         f"- ai_review_augmentation_point_count: `{summary.get('ai_review_augmentation_point_count')}`",
@@ -1252,7 +1317,11 @@ def main() -> None:
         "--ai-provider",
         dest="ai_provider",
         default=None,
-        help="AI provider for source-only Tier2 review. Defaults to env KORSTOCKSCAN_SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PROVIDER.",
+        help=(
+            "AI provider for source-only Tier2 review. Defaults to env "
+            "KORSTOCKSCAN_SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PROVIDER, then module default none. "
+            "The postclose wrapper passes openai explicitly."
+        ),
     )
     args = parser.parse_args()
     report = build_swing_lifecycle_bucket_discovery(args.target_date, provider=args.ai_provider)

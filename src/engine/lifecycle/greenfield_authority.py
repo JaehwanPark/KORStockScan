@@ -59,6 +59,127 @@ class GreenfieldDecision:
         }
 
 
+_ENTRY_BUCKET_LABELS = {
+    "score": "score",
+    "source": "source",
+    "stale": "stale",
+    "liquidity": "liquidity",
+    "overbought": "overbought",
+    "time": "time",
+}
+
+_ENTRY_BUCKET_VALUE_LABELS = {
+    "score_66_69": "score 66-69",
+    "score_60_62": "score 60-62",
+    "score_63_65": "score 63-65",
+    "score_70p": "score 70+",
+    "score_lt60": "score <60",
+    "score_unknown": "score unknown",
+    "wait6579_ev_cohort": "WAIT65-79 EV",
+    "score65_74_recovery_probe": "score65-74 recovery probe",
+    "fresh_or_unflagged": "fresh or unflagged",
+    "stale_context_or_quote": "stale context or quote",
+    "liquidity_unknown": "liquidity unclassified",
+    "overbought_unknown": "overbought unclassified",
+    "time_0900_1000": "09:00-10:00",
+    "time_1000_1200": "10:00-12:00",
+    "time_1200_1400": "12:00-14:00",
+    "time_1400_close": "14:00-close",
+    "time_unknown": "time unclassified",
+}
+
+
+def _extract_entry_bucket_key(bucket_id: str) -> str:
+    text = str(bucket_id or "").strip()
+    if text.startswith("entry:combo_entry_spot:"):
+        return text.split("entry:combo_entry_spot:", 1)[1]
+    return text
+
+
+def _decode_bucket_slug(bucket_key: str) -> str:
+    text = str(bucket_key or "").strip()
+    if "=" in text or "|" in text:
+        return text
+    return text.replace("_", "|")
+
+
+def _entry_bucket_parts(bucket_id: str) -> dict[str, str]:
+    bucket_key = _extract_entry_bucket_key(bucket_id)
+    if "=" not in bucket_key and "|" not in bucket_key:
+        return _entry_bucket_parts_from_slug(bucket_key)
+    decoded = _decode_bucket_slug(bucket_key)
+    parts: dict[str, str] = {}
+    for token in decoded.split("|"):
+        if "=" not in token:
+            continue
+        key, value = token.split("=", 1)
+        parts[str(key or "").strip()] = str(value or "").strip()
+    return parts
+
+
+def _entry_bucket_parts_from_slug(bucket_key: str) -> dict[str, str]:
+    text = str(bucket_key or "").strip()
+    markers = [
+        ("score", "score_"),
+        ("source", "_source_"),
+        ("stale", "_stale_"),
+        ("liquidity", "_liquidity_"),
+        ("overbought", "_overbought_"),
+        ("time", "_time_"),
+    ]
+    positions: list[tuple[int, str, str]] = []
+    for key, marker in markers:
+        idx = text.find(marker) if marker.startswith("_") else (0 if text.startswith(marker) else -1)
+        if idx >= 0:
+            positions.append((idx, key, marker))
+    positions.sort()
+    parts: dict[str, str] = {}
+    for idx, (start, key, marker) in enumerate(positions):
+        value_start = start + len(marker)
+        value_end = positions[idx + 1][0] if idx + 1 < len(positions) else len(text)
+        value = text[value_start:value_end].strip("_")
+        if value:
+            parts[key] = value
+    return parts
+
+
+def format_lifecycle_bucket_label(bucket_id: str | None, *, stage: str | None = None) -> str:
+    """Return a readable label while preserving raw bucket IDs elsewhere."""
+    if not bucket_id or str(bucket_id).strip() in {"", "-"}:
+        return "candidate bucket instrumentation gap"
+    stage_name = str(stage or "").strip().lower()
+    if stage_name in {"", "entry"} and str(bucket_id).startswith("entry:combo_entry_spot:"):
+        parts = _entry_bucket_parts(str(bucket_id))
+        if not parts:
+            return "candidate bucket instrumentation gap"
+        labels = []
+        for key in ("score", "source", "stale", "liquidity", "overbought", "time"):
+            value = parts.get(key) or f"{key}_unknown"
+            key_label = _ENTRY_BUCKET_LABELS.get(key, key)
+            value_label = _ENTRY_BUCKET_VALUE_LABELS.get(value, value.replace("_", " "))
+            labels.append(f"{key_label}: {value_label}")
+        return " / ".join(labels)
+    return str(bucket_id)
+
+
+def format_greenfield_bucket_notice_line(decision: GreenfieldDecision) -> str:
+    observed = decision.observed_bucket_id if decision.observed_bucket_id not in {"", "-"} else "-"
+    policy = decision.matched_bucket_id if decision.matched_bucket_id not in {"", "-"} else "-"
+    observed_label = format_lifecycle_bucket_label(observed, stage=decision.stage)
+    policy_label = format_lifecycle_bucket_label(policy, stage=decision.stage)
+    status = (
+        "entry bucket promoted / submit bucket separate"
+        if str(decision.stage or "") == "entry" and decision.allowed
+        else str(decision.reason or "-")
+    )
+    return (
+        f"상태: `{status}`\n"
+        f"Bucket: `{observed_label}`\n"
+        f"Policy: `{policy_label}`\n"
+        f"Bucket ID: `{observed}` | Policy bucket ID: `{policy}`"
+    )
+
+
 def _bool_env(name: str, default: bool = False) -> bool:
     raw = str(os.getenv(name, "") or "").strip().lower()
     if not raw:
