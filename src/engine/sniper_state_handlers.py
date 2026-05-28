@@ -63,6 +63,7 @@ from src.engine.lifecycle.greenfield_authority import (
     greenfield_authority_active,
     greenfield_stage_telegram_enabled,
 )
+from src.engine.lifecycle_bucket_discovery import ENTRY_LIVE_AUTO_BUCKET_KEY
 from src.engine.sniper_dynamic_thresholds import (
     estimate_turnover_hint,
     get_dynamic_scalp_thresholds,
@@ -5061,13 +5062,57 @@ def _publish_buy_signal_submission_notice(
         )
 
 
+def _greenfield_bucket_slug(value, *, max_len=96) -> str:
+    text = re.sub(r"[^a-zA-Z0-9가-힣]+", "_", str(value or "").strip().lower()).strip("_")
+    return text[:max_len] or "unknown"
+
+
+def _entry_score_band_for_greenfield(value) -> str:
+    score = _safe_float(value, None)
+    if score is None:
+        return "score_unknown"
+    if score < 60:
+        return "score_lt60"
+    if score < 63:
+        return "score_60_62"
+    if score < 66:
+        return "score_63_65"
+    if score < 70:
+        return "score_66_69"
+    return "score_70p"
+
+
+def _observed_greenfield_entry_bucket_id(stock) -> str | None:
+    if not isinstance(stock, dict):
+        return None
+    source = str(stock.get("wait6579_probe_canary_source") or "").strip()
+    if source not in {"score65_74_recovery_probe", "buy_recovery_canary_promoted", "wait6579_ev_cohort"}:
+        return None
+    score_value = (
+        stock.get("wait6579_probe_canary_score")
+        or stock.get("ai_score")
+        or stock.get("current_ai_score")
+        or stock.get("score")
+    )
+    if _entry_score_band_for_greenfield(score_value) != "score_66_69":
+        bucket_key = ENTRY_LIVE_AUTO_BUCKET_KEY.replace(
+            "score=score_66_69",
+            f"score={_entry_score_band_for_greenfield(score_value)}",
+        )
+    else:
+        bucket_key = ENTRY_LIVE_AUTO_BUCKET_KEY
+    return f"entry:combo_entry_spot:{_greenfield_bucket_slug(bucket_key)}"
+
+
 def _greenfield_decision_for_stock(stock, *, stage, action, strategy=None, hard_safety=False) -> GreenfieldDecision:
     resolved_strategy = strategy or normalize_strategy((stock or {}).get("strategy"))
+    observed_bucket_id = _observed_greenfield_entry_bucket_id(stock) if str(stage) == "entry" else None
     return evaluate_greenfield_authority(
         stage=stage,
         action=action,
         strategy=resolved_strategy,
         hard_safety=hard_safety,
+        observed_bucket_id=observed_bucket_id,
     )
 
 
@@ -5082,6 +5127,11 @@ def _greenfield_block_fields(decision: GreenfieldDecision) -> dict:
         "broker_order_forbidden": True,
         "legacy_policy_role": "baseline_prior",
     }
+
+
+def _greenfield_bucket_notice_line(decision: GreenfieldDecision) -> str:
+    observed = decision.observed_bucket_id if decision.observed_bucket_id not in {"", "-"} else "-"
+    return f"Observed bucket: `{observed}` | Policy bucket: `{decision.matched_bucket_id}`"
 
 
 def _publish_greenfield_stage_notice(
@@ -11602,7 +11652,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 body=(
                     f"전략: `{strategy}` | 진입모드: `{entry_mode}`\n"
                     f"요청수량: `{int(requested_qty or 0)}주` | 기준가: `{int(final_price or curr_price or 0):,}원`\n"
-                    f"Bucket: `{entry_greenfield_decision.matched_bucket_id}`"
+                    f"{_greenfield_bucket_notice_line(entry_greenfield_decision)}"
                 ),
                 event_id=stock.get("entry_bundle_id") or latency_gate.get("threshold_version") or "entry",
                 extra_fields={
@@ -12547,7 +12597,7 @@ def _stage_buy_order_submission(stock, code, curr_price, requested_qty, msg, ent
             body=(
                 f"보유수량: `{int(holding_notice.get('filled_qty') or requested_qty or 0)}주` | "
                 f"기준가: `{int(curr_price or 0):,}원`\n"
-                f"Bucket: `{holding_decision.matched_bucket_id}`"
+                f"{_greenfield_bucket_notice_line(holding_decision)}"
             ),
             event_id=holding_notice.get("entry_bundle_id") or holding_notice.get("primary_ord_no") or "holding_start",
             decision_override=holding_decision,
@@ -12695,7 +12745,7 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
                     body=(
                         "부분체결 비율 미달 정리\n"
                         f"체결수량: `{int(buy_qty or 0)}주` | 체결비율: `{fill_ratio:.3f}`\n"
-                        f"Bucket: `{partial_exit_decision.matched_bucket_id}`"
+                        f"{_greenfield_bucket_notice_line(partial_exit_decision)}"
                     ),
                     event_id=stock.get("entry_bundle_id") or "partial_fill_exit",
                     decision_override=partial_exit_decision,
@@ -12734,6 +12784,12 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
             set_fields={'status': 'HOLDING'},
             pop_fields=['odno'],
         )
+        partial_holding_decision = _greenfield_decision_for_stock(
+            stock,
+            stage='holding',
+            action='HOLD',
+            strategy=strategy,
+        )
         _publish_greenfield_stage_notice(
             stock,
             code,
@@ -12743,10 +12799,10 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
             title=f"📌 **[HOLDING 시작] {stock.get('name')} ({code})**",
             body=(
                 f"부분체결 보유 전환 | 보유수량: `{int(buy_qty or 0)}주`\n"
-                f"체결비율: `{fill_ratio:.3f}` | Bucket: "
-                f"`{_greenfield_decision_for_stock(stock, stage='holding', action='HOLD', strategy=strategy).matched_bucket_id}`"
+                f"체결비율: `{fill_ratio:.3f}` | {_greenfield_bucket_notice_line(partial_holding_decision)}"
             ),
             event_id=stock.get("entry_bundle_id") or "partial_fill_holding",
+            decision_override=partial_holding_decision,
             extra_fields={
                 "requested_qty": requested_qty,
                 "filled_qty": buy_qty,
@@ -15021,7 +15077,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 body=(
                     f"사유: `{sell_reason_type}` | 규칙: `{exit_rule or stock.get('last_exit_rule') or '-'}`\n"
                     f"수량: `{int(buy_qty or 0)}주` | 수익률: `{profit_rate:+.2f}%`\n"
-                    f"Bucket: `{exit_greenfield_decision.matched_bucket_id}`"
+                    f"{_greenfield_bucket_notice_line(exit_greenfield_decision)}"
                 ),
                 event_id=ord_no or exit_rule or sell_reason_type or "exit",
                 decision_override=exit_greenfield_decision,
@@ -16531,7 +16587,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                     f"유형: `{add_type}` | 수량: `{int(qty or 0)}주`\n"
                     f"주문가: `{int(final_price or resolved_price or curr_price or 0):,}원` | "
                     f"사유: `{action.get('reason') or '-'}`\n"
-                    f"Bucket: `{scale_in_greenfield_decision.matched_bucket_id}`"
+                    f"{_greenfield_bucket_notice_line(scale_in_greenfield_decision)}"
                 ),
                 event_id=ord_no or f"{add_type}:{action.get('reason') or '-'}",
                 decision_override=scale_in_greenfield_decision,

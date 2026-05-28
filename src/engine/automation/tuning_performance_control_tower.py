@@ -53,6 +53,10 @@ PROGRESS_KEYS: dict[str, tuple[str, ...]] = {
         "joined_rows",
         "policy_pass_count",
         "promote_ready_count",
+        "lifecycle_flow_bucket_count",
+        "lifecycle_flow_complete_count",
+        "lifecycle_flow_runtime_candidate_count",
+        "lifecycle_flow_workorder_count",
         "entry_bucket_runtime_candidate_count",
         "scale_in_bucket_runtime_candidate_count",
         "overnight_bucket_runtime_candidate_count",
@@ -451,6 +455,14 @@ def _markdown(report: dict[str, Any]) -> str:
         f"(`{delta(ldm_matrix, 'joined_rows')}`), promote-ready "
         f"`{current(ldm_matrix, 'promote_ready_count')}` "
         f"(`{delta(ldm_matrix, 'promote_ready_count')}`).",
+        f"- Lifecycle flow: buckets `{current(ldm_matrix, 'lifecycle_flow_bucket_count')}` "
+        f"(`{delta(ldm_matrix, 'lifecycle_flow_bucket_count')}`), complete "
+        f"`{current(ldm_matrix, 'lifecycle_flow_complete_count')}` "
+        f"(`{delta(ldm_matrix, 'lifecycle_flow_complete_count')}`), runtime "
+        f"`{current(ldm_matrix, 'lifecycle_flow_runtime_candidate_count')}` "
+        f"(`{delta(ldm_matrix, 'lifecycle_flow_runtime_candidate_count')}`), workorders "
+        f"`{current(ldm_matrix, 'lifecycle_flow_workorder_count')}` "
+        f"(`{delta(ldm_matrix, 'lifecycle_flow_workorder_count')}`).",
         f"- Swing matrix: rows `{current(swing_matrix, 'total_rows')}` "
         f"(`{delta(swing_matrix, 'total_rows')}`), probe `{current(swing_matrix, 'probe_rows')}` "
         f"(`{delta(swing_matrix, 'probe_rows')}`), pending future quotes "

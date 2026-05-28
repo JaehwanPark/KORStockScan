@@ -21,6 +21,7 @@ from src.engine.lifecycle_bucket_discovery import (
     SCALE_IN_LIVE_AUTO_FAMILY,
     discovery_report_path,
 )
+from src.engine.lifecycle.greenfield_authority import validate_greenfield_policy_contract
 
 
 REPORT_DIR = DATA_DIR / "report" / "runtime_apply_bridge"
@@ -70,27 +71,7 @@ def validate_greenfield_policy_payload(policy: dict[str, Any], *, expected_versi
         return "greenfield_policy_file_invalid"
     if str(policy.get("policy_id") or "") != GREENFIELD_REAL_ENV_FAMILY:
         return "greenfield_policy_id_mismatch"
-    if str(policy.get("scope") or "") != "full_lifecycle":
-        return "greenfield_policy_scope_invalid"
-    policy_version = str(policy.get("policy_version") or "")
-    if expected_version and policy_version and expected_version != policy_version:
-        return "greenfield_policy_version_mismatch"
-    allowlist = policy.get("allowlist") if isinstance(policy.get("allowlist"), list) else []
-    if not allowlist:
-        return "greenfield_policy_allowlist_empty"
-    valid_stages = {"entry", "submit", "holding", "scale_in", "exit"}
-    for row in allowlist:
-        if not isinstance(row, dict):
-            return "greenfield_policy_allowlist_invalid"
-        if str(row.get("stage") or "").strip().lower() not in valid_stages:
-            return "greenfield_policy_allowlist_invalid_stage"
-        if not str(row.get("action") or "").strip():
-            return "greenfield_policy_allowlist_missing_action"
-        if str(row.get("source_quality_gate") or "pass") != "pass":
-            return "greenfield_policy_source_quality_not_pass"
-        if str(row.get("ai_tier2_status") or "parsed") != "parsed":
-            return "greenfield_policy_ai_tier2_not_parsed"
-    return ""
+    return validate_greenfield_policy_contract(policy, expected_version=expected_version)
 
 
 def validate_greenfield_policy_file(policy_file: str, *, expected_version: str | None = None) -> str:
@@ -324,17 +305,21 @@ def _build_greenfield_policy(target_date: str, discovery: dict[str, Any]) -> dic
         if isinstance(discovery.get("live_auto_apply_candidates"), list)
         else []
     )
+    flow_candidates = [
+        item
+        for item in live_candidates
+        if _discovery_live_candidate_contract_passed(item)
+        and str(item.get("live_auto_apply_family") or "") == GREENFIELD_REAL_ENV_FAMILY
+        and str(item.get("stage") or "") == "lifecycle_flow"
+        and str(item.get("bucket_type") or "") == "combo_lifecycle_flow"
+    ]
     rows: list[dict[str, Any]] = []
-    for item in live_candidates:
-        if not _discovery_live_candidate_contract_passed(item):
-            continue
-        stage = str(item.get("stage") or "").strip().lower()
-        if stage not in {"entry", "submit", "holding", "scale_in", "exit"}:
-            continue
-        auto_contract = item.get("auto_promotion_contract")
+    selected_flow = flow_candidates[0] if flow_candidates else {}
+    if selected_flow:
+        auto_contract = selected_flow.get("auto_promotion_contract")
         tier2_status = (
-            item.get("ai_review_status")
-            or item.get("lifecycle_bucket_discovery_ai_review_status")
+            selected_flow.get("ai_review_status")
+            or selected_flow.get("lifecycle_bucket_discovery_ai_review_status")
             or (
                 auto_contract.get("tier2_status")
                 if isinstance(auto_contract, dict)
@@ -342,33 +327,87 @@ def _build_greenfield_policy(target_date: str, discovery: dict[str, Any]) -> dic
             )
             or "parsed"
         )
-        rows.append(
-            {
-                "bucket_id": item.get("bucket_id"),
-                "family": item.get("live_auto_apply_family"),
-                "stage": stage,
-                "action": _action_for_greenfield_row(item),
-                "strategy_scope": "all",
-                "authority_source": "lifecycle_bucket_discovery_live_auto_apply",
-                "source_quality_gate": item.get("source_quality_gate") or "pass",
-                "ai_tier2_status": tier2_status,
-                "runtime_apply_version": f"{GREENFIELD_REAL_ENV_FAMILY}:{target_date}",
-                "post_apply_attribution_key": item.get("bucket_id"),
-            }
+        child_ids = (
+            selected_flow.get("child_bucket_ids")
+            if isinstance(selected_flow.get("child_bucket_ids"), dict)
+            else {}
         )
+        stage_actions = {
+            "entry": "BUY",
+            "submit": "ALLOW_SUBMIT",
+            "holding": "HOLD",
+            "exit": "SELL",
+        }
+        for stage, action in stage_actions.items():
+            bucket_id = selected_flow.get(f"{stage}_bucket_id") or child_ids.get(stage)
+            rows.append(
+                {
+                    "bucket_id": bucket_id,
+                    "family": GREENFIELD_REAL_ENV_FAMILY,
+                    "stage": stage,
+                    "action": action,
+                    "strategy_scope": "all",
+                    "authority_source": "lifecycle_bucket_discovery_lifecycle_flow_live_auto_apply",
+                    "source_quality_gate": selected_flow.get("source_quality_gate") or "pass",
+                    "ai_tier2_status": tier2_status,
+                    "runtime_apply_version": f"{GREENFIELD_REAL_ENV_FAMILY}:{target_date}",
+                    "post_apply_attribution_key": selected_flow.get("attribution_key")
+                    or selected_flow.get("bucket_id"),
+                    "lifecycle_flow_bucket_id": selected_flow.get("lifecycle_flow_bucket_id")
+                    or selected_flow.get("bucket_id"),
+                    "greenfield_policy_bucket_id": selected_flow.get("bucket_id"),
+                }
+            )
+        scale_bucket_id = selected_flow.get("scale_in_bucket_id")
+        if scale_bucket_id:
+            rows.append(
+                {
+                    "bucket_id": scale_bucket_id,
+                    "family": GREENFIELD_REAL_ENV_FAMILY,
+                    "stage": "scale_in",
+                    "action": "*",
+                    "strategy_scope": "all",
+                    "authority_source": "lifecycle_bucket_discovery_lifecycle_flow_live_auto_apply",
+                    "source_quality_gate": selected_flow.get("source_quality_gate") or "pass",
+                    "ai_tier2_status": tier2_status,
+                    "runtime_apply_version": f"{GREENFIELD_REAL_ENV_FAMILY}:{target_date}",
+                    "post_apply_attribution_key": selected_flow.get("attribution_key")
+                    or selected_flow.get("bucket_id"),
+                    "lifecycle_flow_bucket_id": selected_flow.get("lifecycle_flow_bucket_id")
+                    or selected_flow.get("bucket_id"),
+                    "greenfield_policy_bucket_id": selected_flow.get("bucket_id"),
+                }
+            )
     stages: dict[str, list[dict[str, Any]]] = {
         stage: [] for stage in ("entry", "submit", "holding", "scale_in", "exit")
     }
     for row in rows:
         stages[str(row["stage"])].append(row)
+    stage_contract = {
+        stage: {
+            "stage": stage,
+            "row_count": len(stages[stage]),
+            "baseline_passthrough_allowed": False,
+            "contract_state": "promoted_policy_present" if stages[stage] else "missing_policy",
+        }
+        for stage in ("entry", "submit", "holding", "scale_in", "exit")
+    }
     return {
-        "schema_version": "greenfield_real_env_policy_v1",
+        "schema_version": "greenfield_lifecycle_bundle_policy_v1",
         "policy_id": GREENFIELD_REAL_ENV_FAMILY,
         "policy_version": f"{GREENFIELD_REAL_ENV_FAMILY}:{target_date}",
         "source_date": target_date,
         "scope": "full_lifecycle",
+        "bundle_id": selected_flow.get("lifecycle_flow_bucket_id")
+        or selected_flow.get("bucket_id")
+        or f"greenfield_lifecycle_bundle_policy_v1:{target_date}",
+        "source_lifecycle_flow_candidate": selected_flow.get("bucket_id") if selected_flow else None,
+        "attribution_key": selected_flow.get("attribution_key") if selected_flow else None,
+        "child_bucket_ids": selected_flow.get("child_bucket_ids") if selected_flow else {},
+        "rollback_guard": selected_flow.get("rollback_guard") if selected_flow else None,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "stages": stages,
+        "stage_contract": stage_contract,
         "allowlist": rows,
         "hard_safety_priority": [
             "broker_guard",
@@ -389,6 +428,53 @@ def _greenfield_candidate(target_date: str, discovery: dict[str, Any]) -> dict[s
     policy = _build_greenfield_policy(target_date, discovery)
     if not policy.get("allowlist"):
         return None
+    bundle_issue = validate_greenfield_policy_payload(policy, expected_version=str(policy.get("policy_version") or ""))
+    if bundle_issue:
+        return {
+            "candidate_id": f"{GREENFIELD_REAL_ENV_FAMILY}:{target_date}",
+            "family": GREENFIELD_REAL_ENV_FAMILY,
+            "stage": "greenfield_real_env",
+            "priority": 7,
+            "bridge_candidate_state": "runtime_blocked_contract_gap",
+            "approval_required": False,
+            "human_approval_required": False,
+            "live_auto_apply": False,
+            "allowed_runtime_apply": False,
+            "runtime_effect": False,
+            "runtime_effect_after_approval": "none",
+            "lifecycle_bucket_discovery_ai_review_status": "parsed",
+            "ai_review_status": "parsed",
+            "target_env_keys": [],
+            "recommended_values": {
+                "enabled": False,
+                "scope": "full_lifecycle",
+                "policy_file": "",
+                "policy_version": policy.get("policy_version"),
+                "telegram_enabled": False,
+                "threshold_version": policy.get("policy_version"),
+                "calibration_state": f"runtime_apply_bridge:{bundle_issue}",
+            },
+            "current_values": {
+                "enabled": False,
+                "scope": "inactive",
+                "policy_file": "",
+                "policy_version": "runtime_default",
+                "telegram_enabled": False,
+            },
+            "greenfield_policy_contract_state": bundle_issue,
+            "greenfield_policy_stage_contract": policy.get("stage_contract"),
+            "source_bucket_keys": [str(row.get("bucket_id") or "") for row in policy.get("allowlist") or []],
+            "primary_decision_metric": "lifecycle_bundle_ev",
+            "decision_authority": "runtime_apply_bridge_lifecycle_bundle_contract",
+            "forbidden_uses": [
+                "entry_only_full_lifecycle_promotion",
+                "hard_safety_bypass",
+                "intraday_threshold_mutation",
+                "provider_route_change",
+                "bot_restart_trigger",
+                "position_cap_release",
+            ],
+        }
     policy_path = greenfield_real_env_policy_path(target_date)
     recommended = {
         "enabled": True,
@@ -431,8 +517,9 @@ def _greenfield_candidate(target_date: str, discovery: dict[str, Any]) -> dict[s
         "greenfield_policy": policy,
         "greenfield_policy_file": str(policy_path),
         "source_bucket_keys": [str(row.get("bucket_id") or "") for row in policy.get("allowlist") or []],
-        "primary_decision_metric": "source_quality_adjusted_ev_pct",
-        "decision_authority": "greenfield_real_environment_authority",
+        "primary_decision_metric": "lifecycle_bundle_ev",
+        "entry_bucket_ev_metric_role": "diagnostic_entry_bucket_ev",
+        "decision_authority": "greenfield_lifecycle_bundle_policy_v1",
         "forbidden_uses": [
             "hard_safety_bypass",
             "intraday_threshold_mutation",
@@ -440,6 +527,29 @@ def _greenfield_candidate(target_date: str, discovery: dict[str, Any]) -> dict[s
             "bot_restart_trigger",
             "position_cap_release",
         ],
+    }
+
+
+def _greenfield_flow_discovery_counts(discovery: dict[str, Any]) -> dict[str, int]:
+    candidates = discovery.get("candidates") if isinstance(discovery.get("candidates"), list) else []
+    surfaced = discovery.get("surfaced_candidates") if isinstance(discovery.get("surfaced_candidates"), list) else []
+    live_candidates = (
+        discovery.get("live_auto_apply_candidates")
+        if isinstance(discovery.get("live_auto_apply_candidates"), list)
+        else []
+    )
+
+    def is_flow(item: Any) -> bool:
+        return (
+            isinstance(item, dict)
+            and str(item.get("stage") or "") == "lifecycle_flow"
+            and str(item.get("bucket_type") or "") == "combo_lifecycle_flow"
+        )
+
+    return {
+        "candidate_count": sum(1 for item in candidates if is_flow(item)),
+        "surfaced_candidate_count": sum(1 for item in surfaced if is_flow(item)),
+        "live_auto_apply_candidate_count": sum(1 for item in live_candidates if is_flow(item)),
     }
 
 
@@ -722,6 +832,11 @@ def build_runtime_apply_bridge_report(target_date: str) -> dict[str, Any]:
     discovery_warnings = [str(item) for item in (discovery.get("warnings") or []) if str(item)]
     discovery_source_contract_status = str(discovery_summary.get("source_contract_status") or "")
     discovery_ai_review_status = str(discovery_summary.get("ai_two_pass_review_status") or "")
+    greenfield_flow_counts = _greenfield_flow_discovery_counts(discovery) if discovery else {
+        "candidate_count": 0,
+        "surfaced_candidate_count": 0,
+        "live_auto_apply_candidate_count": 0,
+    }
     warnings: list[str] = []
     candidates: list[dict[str, Any]] = []
     if not payload:
@@ -754,7 +869,11 @@ def build_runtime_apply_bridge_report(target_date: str) -> dict[str, Any]:
         )
         greenfield = _greenfield_candidate(target_date, discovery)
         if greenfield:
+            if greenfield.get("greenfield_policy_contract_state"):
+                warnings.append(str(greenfield.get("greenfield_policy_contract_state")))
             candidates.append(greenfield)
+        elif discovery and greenfield_flow_counts["live_auto_apply_candidate_count"] <= 0:
+            warnings.append("greenfield_policy_not_emitted_no_complete_lifecycle_flow")
     if discovery and discovery_source_contract_status and discovery_source_contract_status != "pass":
         warnings.append(f"lifecycle_bucket_discovery_source_contract_{discovery_source_contract_status}")
     if discovery and any(item.get("lifecycle_bucket_discovery_ai_followup_required") for item in candidates):
@@ -796,6 +915,18 @@ def build_runtime_apply_bridge_report(target_date: str) -> dict[str, Any]:
             "ready_for_approval_count": 0,
             "live_auto_apply_ready_count": live_ready_count,
             "greenfield_real_env_ready_count": greenfield_ready_count,
+            "greenfield_lifecycle_flow_candidate_count": greenfield_flow_counts["candidate_count"],
+            "greenfield_lifecycle_flow_surfaced_candidate_count": greenfield_flow_counts["surfaced_candidate_count"],
+            "greenfield_lifecycle_flow_live_auto_apply_candidate_count": greenfield_flow_counts[
+                "live_auto_apply_candidate_count"
+            ],
+            "greenfield_policy_emit_state": (
+                "ready"
+                if greenfield_ready_count > 0
+                else "not_emitted_no_complete_lifecycle_flow"
+                if discovery
+                else "not_emitted_discovery_missing"
+            ),
             "stage_local_live_auto_apply_ready_count": max(live_ready_count - greenfield_ready_count, 0),
             "lifecycle_bucket_discovery_status": "present" if discovery else "missing",
             "lifecycle_bucket_discovery_source_contract_status": discovery_source_contract_status or None,
@@ -820,6 +951,11 @@ def _write_markdown(report: dict[str, Any]) -> None:
         "",
         f"- status: `{report.get('status')}`",
         f"- live_auto_apply_ready_count: `{report.get('summary', {}).get('live_auto_apply_ready_count')}`",
+        f"- greenfield_policy_emit_state: `{report.get('summary', {}).get('greenfield_policy_emit_state')}`",
+        f"- greenfield_lifecycle_flow live/surfaced/total: "
+        f"`{report.get('summary', {}).get('greenfield_lifecycle_flow_live_auto_apply_candidate_count')}` / "
+        f"`{report.get('summary', {}).get('greenfield_lifecycle_flow_surfaced_candidate_count')}` / "
+        f"`{report.get('summary', {}).get('greenfield_lifecycle_flow_candidate_count')}`",
         f"- lifecycle_bucket_discovery_source_contract_status: `{report.get('summary', {}).get('lifecycle_bucket_discovery_source_contract_status') or '-'}`",
         f"- lifecycle_bucket_discovery_ai_review_status: `{report.get('summary', {}).get('lifecycle_bucket_discovery_ai_review_status') or '-'}`",
         f"- lifecycle_bucket_discovery_live_followup_count: `{report.get('summary', {}).get('lifecycle_bucket_discovery_live_followup_count')}`",

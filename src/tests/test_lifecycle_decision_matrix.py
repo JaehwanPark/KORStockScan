@@ -426,6 +426,30 @@ def test_lifecycle_matrix_ingests_scalp_sim_submit_and_holding_rows(tmp_path, mo
         ),
         encoding="utf-8",
     )
+    (entry_dir / "scalp_entry_action_decision_matrix_2026-05-20.json").write_text(
+        json.dumps(
+            {
+                "rows": [
+                    {
+                        "candidate_id": "ADM-1",
+                        "sim_record_id": "SIM-1",
+                        "stock_code": "000001",
+                        "event_time": "2026-05-20T09:09:59+09:00",
+                        "stage": "scalp_entry_action_decision_snapshot",
+                        "chosen_action": "BUY_NOW",
+                        "ai_score": 76,
+                        "profit_rate": 0.8,
+                        "mfe_10m_pct": 1.2,
+                        "mae_10m_pct": -0.2,
+                        "close_10m_pct": 0.8,
+                        "outcome_joined": True,
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
 
     report = mod.build_lifecycle_decision_matrix_report("2026-05-20")
 
@@ -450,6 +474,37 @@ def test_lifecycle_matrix_ingests_scalp_sim_submit_and_holding_rows(tmp_path, mo
     assert post_sell_row["runtime_features"]["ai_model"] == "bedrock-nova-lite-v2"
     assert post_sell_row["labels"]["hard_stop_conflict_dimension"] == "high_ai_hard_stop_conflict"
     assert "hard_stop_conflict_dimension" not in mod._entry_bucket_features(post_sell_row)
+    flow_attr = report["lifecycle_flow_bucket_attribution"]
+    assert flow_attr["metric_scope"] == "lifecycle_bundle_ev"
+    assert flow_attr["summary"]["complete_flow_count"] == 1
+    flow = flow_attr["flows"][0]
+    assert flow["identity_quality"] == "exact_sim_record_id"
+    assert flow["source_quality_gate"] == "pass"
+    assert flow["entry_bucket_id"].startswith("entry:combo_entry_spot:")
+    assert flow["submit_bucket_id"].startswith("submit:combo_submit_quality:")
+    assert flow["holding_bucket_id"].startswith("holding:combo_holding_flow:")
+    assert flow["exit_bucket_id"].startswith("exit:combo_exit_result:")
+
+
+def test_lifecycle_flow_bucket_fallback_identity_is_not_live_quality():
+    rows = [
+        {
+            "stock_code": "000001",
+            "event_time": f"2026-05-20T09:10:0{idx}+09:00",
+            "stage": stage,
+            "source_stage": stage,
+            "runtime_features": {"ai_score": 70},
+            "labels": {"profit_rate": 0.5, "mfe_10m_pct": 0.7, "mae_10m_pct": -0.1, "close_10m_pct": 0.5},
+            "stage_ev_composite_pct": 0.5,
+        }
+        for idx, stage in enumerate(("entry", "submit", "holding", "exit"))
+    ]
+
+    attribution = mod._lifecycle_flow_bucket_attribution(rows)
+
+    assert attribution["summary"]["fallback_identity_count"] == 4
+    assert all(flow["source_quality_gate"] == "fallback_identity_incomplete" for flow in attribution["flows"])
+    assert attribution["runtime_approval_candidates"] == []
 
 
 def test_lifecycle_matrix_ingests_scalp_sim_scale_in_rows(tmp_path, monkeypatch):

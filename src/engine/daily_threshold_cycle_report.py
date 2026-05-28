@@ -34,6 +34,88 @@ THRESHOLD_AI_CORRECTION_SCHEMA_VERSION = 1
 THRESHOLD_CYCLE_DIR = DATA_DIR / "threshold_cycle"
 RAW_PIPELINE_FALLBACK_MAX_BYTES = 64 * 1024 * 1024
 CUMULATIVE_BASELINE_START_DATE = "2026-04-21"
+THRESHOLD_EVENT_TOP_LEVEL_KEEP_KEYS = {
+    "schema_version",
+    "event_type",
+    "family",
+    "pipeline",
+    "stage",
+    "stock_name",
+    "stock_code",
+    "record_id",
+    "emitted_at",
+    "emitted_date",
+}
+THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
+    "action",
+    "actual_order_submitted",
+    "add_count",
+    "add_type",
+    "additional_worsen",
+    "ai_recover_ok",
+    "ai_recovery_delta",
+    "ai_score",
+    "applied",
+    "assumed_fill_price",
+    "avg_down_count",
+    "blocked_reason",
+    "budget_authority",
+    "buffer_pct",
+    "buy_pressure_10t",
+    "buy_price",
+    "chosen_action",
+    "confirmation_elapsed_sec",
+    "current_ai_score",
+    "drawdown_from_peak",
+    "effective_qty",
+    "eligible_actions",
+    "emergency_pct",
+    "entry_ai_price_ofi_regime",
+    "entry_order_lifecycle",
+    "entry_passive_probe_applied",
+    "entry_price_guard",
+    "exclusion_reason",
+    "exit_decision_source",
+    "exit_rule",
+    "force_reason",
+    "held_sec",
+    "hold_ok",
+    "last_add_type",
+    "latest_strength",
+    "mae_bps",
+    "mfe_bps",
+    "micro_vwap_bps",
+    "orderbook_micro_snapshot_age_ms",
+    "orderbook_micro_state",
+    "peak_profit",
+    "price_below_bid_bps",
+    "profit_rate",
+    "pyramid_count",
+    "qty",
+    "qty_reason",
+    "qty_source",
+    "reason",
+    "rejected_actions",
+    "resolved_price_vs_curr_bps",
+    "resolved_vs_curr_bps",
+    "sample_count",
+    "sample_span_sec",
+    "scalp_sim_entry_qty_source",
+    "scale_in_action_type",
+    "sell_reason_type",
+    "should_exit",
+    "sim_parent_record_id",
+    "sim_record_id",
+    "simulation_book",
+    "smoothing_action",
+    "spread_bps",
+    "spread_ratio",
+    "worsen_from_candidate",
+    "would_exit",
+    "ws_age_ms",
+    "ws_jitter_ms",
+}
+THRESHOLD_EVENT_MAX_FIELD_JSON_CHARS = 2_000
 
 CALIBRATION_SAFETY_GUARDS = [
     "hard/protect/emergency stop delay >= 1",
@@ -797,8 +879,48 @@ def _read_threshold_jsonl(path: Path) -> list[dict]:
                 payload.get("fields") if isinstance(payload.get("fields"), dict) else None,
             ):
                 continue
-            rows.append(payload)
+            rows.append(_compact_threshold_cycle_event(payload))
     return rows
+
+
+def _compact_threshold_cycle_field_value(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (list, tuple)):
+        compact: list[Any] = []
+        for item in value[:20]:
+            if item is None or isinstance(item, (str, int, float, bool)):
+                compact.append(item)
+            else:
+                compact.append(str(item)[:200])
+        return compact
+    if isinstance(value, dict):
+        try:
+            encoded = json.dumps(value, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return str(value)[:200]
+        if len(encoded) <= THRESHOLD_EVENT_MAX_FIELD_JSON_CHARS:
+            return value
+        return str(value)[:200]
+    return str(value)[:200]
+
+
+def _compact_threshold_cycle_event(payload: dict) -> dict:
+    compact = {
+        key: payload.get(key)
+        for key in THRESHOLD_EVENT_TOP_LEVEL_KEEP_KEYS
+        if key in payload
+    }
+    fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+    if fields:
+        compact["fields"] = {
+            key: _compact_threshold_cycle_field_value(value)
+            for key, value in fields.items()
+            if key in THRESHOLD_EVENT_FIELD_KEEP_KEYS
+        }
+    else:
+        compact["fields"] = {}
+    return compact
 
 
 def _read_jsonl_dicts(path: Path) -> list[dict]:

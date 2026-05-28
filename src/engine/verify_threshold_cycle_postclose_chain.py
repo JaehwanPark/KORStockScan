@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 from datetime import date, datetime, time as dtime
@@ -254,6 +255,14 @@ def _slug(value: str) -> str:
     return text[:80] or "unknown"
 
 
+def _slug_with_hash(value: str, *, limit: int = 80) -> str:
+    raw = str(value or "unknown")
+    base = _slug(raw)
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
+    keep = max(1, int(limit) - len(digest) - 1)
+    return f"{base[:keep].rstrip('_')}_{digest}"
+
+
 def _entry_bucket_order_id(item: dict[str, Any]) -> str:
     bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
     bucket_key = _slug(str(item.get("bucket_key") or item.get("workorder_id") or "unknown"))
@@ -279,6 +288,12 @@ def _overnight_bucket_order_id(item: dict[str, Any]) -> str:
     bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
     bucket_key = _slug(str(item.get("bucket_key") or item.get("workorder_id") or "unknown"))
     return f"order_lifecycle_overnight_bucket_{bucket_type}_{bucket_key}"
+
+
+def _lifecycle_flow_bucket_order_id(item: dict[str, Any]) -> str:
+    workorder_id = _slug(str(item.get("workorder_id") or "unknown"))
+    bucket_id = _slug_with_hash(str(item.get("lifecycle_flow_bucket_id") or item.get("bucket_key") or "unknown"))
+    return f"order_lifecycle_flow_bucket_{workorder_id}_{bucket_id}"
 
 
 def _swing_ldm_order_id(item: dict[str, Any]) -> str:
@@ -349,6 +364,22 @@ def _collect_overnight_bucket_candidate_ids(payload: Any) -> set[str]:
     elif isinstance(payload, list):
         for item in payload:
             found.update(_collect_overnight_bucket_candidate_ids(item))
+    return found
+
+
+def _collect_lifecycle_flow_bucket_candidate_ids(payload: Any) -> set[str]:
+    found: set[str] = set()
+    if isinstance(payload, dict):
+        candidates = payload.get("lifecycle_flow_runtime_approval_candidates")
+        if isinstance(candidates, list):
+            for item in candidates:
+                if isinstance(item, dict) and item.get("candidate_id"):
+                    found.add(str(item.get("candidate_id")))
+        for value in payload.values():
+            found.update(_collect_lifecycle_flow_bucket_candidate_ids(value))
+    elif isinstance(payload, list):
+        for item in payload:
+            found.update(_collect_lifecycle_flow_bucket_candidate_ids(item))
     return found
 
 
@@ -1272,6 +1303,73 @@ def _overnight_bucket_handoff_status(
     }
 
 
+def _lifecycle_flow_bucket_handoff_status(
+    ldm_report: dict[str, Any],
+    ev_report: dict[str, Any],
+    runtime_summary: dict[str, Any],
+    workorder: dict[str, Any],
+) -> dict[str, Any]:
+    attribution = (
+        ldm_report.get("lifecycle_flow_bucket_attribution")
+        if isinstance(ldm_report.get("lifecycle_flow_bucket_attribution"), dict)
+        else {}
+    )
+    candidates = (
+        attribution.get("runtime_approval_candidates")
+        if isinstance(attribution.get("runtime_approval_candidates"), list)
+        else []
+    )
+    source_workorders = (
+        attribution.get("code_improvement_workorders")
+        if isinstance(attribution.get("code_improvement_workorders"), list)
+        else []
+    )
+    expected_candidate_ids = sorted(
+        str(item.get("candidate_id"))
+        for item in candidates
+        if isinstance(item, dict) and item.get("candidate_id")
+    )
+    expected_order_ids = sorted(
+        _lifecycle_flow_bucket_order_id(item)
+        for item in source_workorders
+        if isinstance(item, dict) and item.get("lifecycle_flow_bucket_id")
+    )
+    ev_candidate_ids = _collect_lifecycle_flow_bucket_candidate_ids(ev_report)
+    runtime_candidate_ids = _collect_lifecycle_flow_bucket_candidate_ids(runtime_summary)
+    actual_order_ids = {
+        str(item.get("order_id"))
+        for item in (workorder.get("orders") if isinstance(workorder.get("orders"), list) else [])
+        if isinstance(item, dict) and item.get("order_id")
+    }
+    missing_ev_candidates = sorted(set(expected_candidate_ids) - ev_candidate_ids)
+    missing_runtime_summary_candidates = sorted(set(expected_candidate_ids) - runtime_candidate_ids)
+    missing_workorder_order_ids = sorted(set(expected_order_ids) - actual_order_ids)
+    missing: list[str] = []
+    if missing_ev_candidates:
+        missing.append("threshold_cycle_ev_lifecycle_flow_bucket_candidates_missing")
+    if missing_runtime_summary_candidates:
+        missing.append("runtime_approval_summary_lifecycle_flow_bucket_candidates_missing")
+    if missing_workorder_order_ids:
+        missing.append("code_improvement_workorder_lifecycle_flow_bucket_orders_missing")
+    return {
+        "status": "fail" if missing else "pass",
+        "expected_candidate_ids": expected_candidate_ids,
+        "threshold_cycle_ev_candidate_ids": sorted(ev_candidate_ids),
+        "runtime_approval_summary_candidate_ids": sorted(runtime_candidate_ids),
+        "missing_ev_candidate_ids": missing_ev_candidates,
+        "missing_runtime_summary_candidate_ids": missing_runtime_summary_candidates,
+        "expected_workorder_order_ids": expected_order_ids,
+        "actual_workorder_order_ids": sorted(actual_order_ids),
+        "missing_workorder_order_ids": missing_workorder_order_ids,
+        "missing": missing,
+        "interpretation": (
+            "LDM lifecycle-flow parent bucket candidates and workorders propagated to threshold EV, runtime summary, and code workorder."
+            if not missing
+            else "LDM lifecycle-flow parent bucket output was generated but one or more downstream consumers dropped it."
+        ),
+    }
+
+
 def _has_scale_in_source(ldm_report: dict[str, Any]) -> bool:
     sources = ldm_report.get("sources") if isinstance(ldm_report.get("sources"), dict) else {}
     summary = sources.get("scale_in_attribution") if isinstance(sources.get("scale_in_attribution"), dict) else {}
@@ -1484,6 +1582,15 @@ def build_threshold_cycle_postclose_verification(
     overnight_bucket_handoff = _overnight_bucket_handoff_status(ldm_report, ev_report, runtime_summary, workorder)
     if isinstance(overnight_attribution, dict) and overnight_bucket_handoff.get("status") == "fail":
         log_issues.append("ldm_overnight_bucket_handoff_missing")
+    lifecycle_flow_attribution = ldm_report.get("lifecycle_flow_bucket_attribution")
+    lifecycle_flow_bucket_handoff = _lifecycle_flow_bucket_handoff_status(
+        ldm_report,
+        ev_report,
+        runtime_summary,
+        workorder,
+    )
+    if isinstance(lifecycle_flow_attribution, dict) and lifecycle_flow_bucket_handoff.get("status") == "fail":
+        log_issues.append("ldm_lifecycle_flow_bucket_handoff_missing")
     lifecycle_bucket_discovery_handoff = _lifecycle_bucket_discovery_handoff_status(
         discovery_report,
         bridge_report,
@@ -1988,6 +2095,8 @@ def build_threshold_cycle_postclose_verification(
         "overnight_bucket_handoff": overnight_bucket_handoff,
         "overnight_bucket_attribution_present": isinstance(overnight_attribution, dict),
         "overnight_source_present": overnight_source_present,
+        "lifecycle_flow_bucket_handoff": lifecycle_flow_bucket_handoff,
+        "lifecycle_flow_bucket_attribution_present": isinstance(lifecycle_flow_attribution, dict),
         "lifecycle_bucket_discovery_handoff": lifecycle_bucket_discovery_handoff,
         "swing_lifecycle_handoff": swing_lifecycle_handoff,
         "producer_gap_discovery_handoff": producer_gap_handoff,
@@ -2015,6 +2124,11 @@ def _render_markdown(report: dict[str, Any]) -> str:
     )
     scale_in_bucket = report.get("scale_in_bucket_handoff") if isinstance(report.get("scale_in_bucket_handoff"), dict) else {}
     overnight_bucket = report.get("overnight_bucket_handoff") if isinstance(report.get("overnight_bucket_handoff"), dict) else {}
+    lifecycle_flow_bucket = (
+        report.get("lifecycle_flow_bucket_handoff")
+        if isinstance(report.get("lifecycle_flow_bucket_handoff"), dict)
+        else {}
+    )
     lifecycle_bucket = (
         report.get("lifecycle_bucket_discovery_handoff")
         if isinstance(report.get("lifecycle_bucket_discovery_handoff"), dict)
@@ -2076,6 +2190,11 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- status: `{submit_bucket.get('status')}`",
         f"- attribution_present: `{report.get('submit_bucket_attribution_present')}`",
         f"- missing: `{submit_bucket.get('missing') or []}`",
+        "",
+        "## Lifecycle Flow Bucket Handoff",
+        f"- status: `{lifecycle_flow_bucket.get('status')}`",
+        f"- attribution_present: `{report.get('lifecycle_flow_bucket_attribution_present')}`",
+        f"- missing: `{lifecycle_flow_bucket.get('missing') or []}`",
         "",
         "## AI Correction",
         f"- status: `{ai_correction.get('status') or '-'}`",

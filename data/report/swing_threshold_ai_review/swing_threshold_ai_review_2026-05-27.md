@@ -1,20 +1,20 @@
 # Swing Threshold AI Review - 2026-05-27
 
-- AI status: `unavailable`
+- AI status: `parsed`
 - Authority: proposal-only; deterministic guard and manual workorder remain the source of truth.
 - Runtime change: `false`
 
 | family | stage | deterministic | ai_state | proposal | guard |
 | --- | --- | --- | --- | --- | --- |
-| `swing_model_floor` | `selection` | `freeze` | `unavailable` | state=-, value=None | accepted=False, reason=ai_unavailable |
-| `swing_selection_top_k` | `selection` | `freeze` | `unavailable` | state=-, value=None | accepted=False, reason=ai_unavailable |
-| `swing_gatekeeper_accept_reject` | `entry` | `freeze` | `unavailable` | state=-, value=None | accepted=False, reason=ai_unavailable |
-| `swing_gatekeeper_reject_cooldown` | `entry` | `freeze` | `unavailable` | state=-, value=None | accepted=False, reason=ai_unavailable |
-| `swing_market_regime_sensitivity` | `entry` | `freeze` | `unavailable` | state=-, value=None | accepted=False, reason=ai_unavailable |
-| `swing_pyramid_trigger` | `scale_in` | `freeze` | `unavailable` | state=-, value=None | accepted=False, reason=ai_unavailable |
-| `swing_avg_down_eligibility` | `scale_in` | `freeze` | `unavailable` | state=-, value=None | accepted=False, reason=ai_unavailable |
-| `swing_trailing_stop_time_stop` | `exit` | `freeze` | `unavailable` | state=-, value=None | accepted=False, reason=ai_unavailable |
-| `swing_holding_flow_defer` | `holding_exit` | `freeze` | `unavailable` | state=-, value=None | accepted=False, reason=ai_unavailable |
-| `swing_entry_ofi_qi_execution_quality` | `entry` | `freeze` | `unavailable` | state=-, value=None | accepted=False, reason=ai_unavailable |
-| `swing_scale_in_ofi_qi_confirmation` | `scale_in` | `freeze` | `unavailable` | state=-, value=None | accepted=False, reason=ai_unavailable |
-| `swing_exit_ofi_qi_smoothing` | `holding_exit` | `freeze` | `unavailable` | state=-, value=None | accepted=False, reason=ai_unavailable |
+| `swing_model_floor` | `selection` | `freeze` | `insufficient_context` | state=hold_sample, value=None | accepted=True, reason=- |
+| `swing_selection_top_k` | `selection` | `freeze` | `insufficient_context` | state=hold_sample, value=None | accepted=True, reason=- |
+| `swing_gatekeeper_accept_reject` | `entry` | `freeze` | `safety_concern` | state=freeze, value=None | accepted=True, reason=- |
+| `swing_gatekeeper_reject_cooldown` | `entry` | `freeze` | `agree` | state=hold, value=None | accepted=True, reason=- |
+| `swing_market_regime_sensitivity` | `entry` | `freeze` | `safety_concern` | state=freeze, value=None | accepted=True, reason=- |
+| `swing_pyramid_trigger` | `scale_in` | `freeze` | `safety_concern` | state=freeze, value=None | accepted=True, reason=- |
+| `swing_avg_down_eligibility` | `scale_in` | `freeze` | `safety_concern` | state=freeze, value=None | accepted=True, reason=- |
+| `swing_trailing_stop_time_stop` | `exit` | `freeze` | `insufficient_context` | state=freeze, value=None | accepted=True, reason=- |
+| `swing_holding_flow_defer` | `holding_exit` | `freeze` | `insufficient_context` | state=hold_sample, value=None | accepted=True, reason=- |
+| `swing_entry_ofi_qi_execution_quality` | `entry` | `freeze` | `safety_concern` | state=freeze, value=None | accepted=True, reason=- |
+| `swing_scale_in_ofi_qi_confirmation` | `scale_in` | `freeze` | `safety_concern` | state=freeze, value=None | accepted=True, reason=- |
+| `swing_exit_ofi_qi_smoothing` | `holding_exit` | `freeze` | `insufficient_context` | state=hold_sample, value=None | accepted=True, reason=- |

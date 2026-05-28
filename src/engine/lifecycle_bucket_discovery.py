@@ -39,9 +39,11 @@ REPORT_DIR = DATA_DIR / "report" / "lifecycle_bucket_discovery"
 LDM_REPORT_DIR = DATA_DIR / "report" / "lifecycle_decision_matrix"
 CATALOG_DIR = DATA_DIR / "threshold_cycle" / "lifecycle_bucket_catalog"
 SIM_AUTO_APPROVAL_DIR = DATA_DIR / "threshold_cycle" / "sim_auto_approvals"
+CONTAMINATION_WINDOW_DIR = DATA_DIR / "threshold_cycle" / "contamination_windows"
 
 ENTRY_LIVE_AUTO_FAMILY = "entry_wait6579_score66_69_recovery_gate_v1"
 SCALE_IN_LIVE_AUTO_FAMILY = "scale_in_bucket_runtime_policy_v1"
+GREENFIELD_REAL_ENV_FAMILY = "greenfield_real_environment_authority"
 ENTRY_LIVE_AUTO_BUCKET_KEY = (
     "score=score_66_69|source=wait6579_ev_cohort|stale=fresh_or_unflagged|"
     "liquidity=liquidity_unknown|overbought=overbought_unknown|time=time_unknown"
@@ -71,6 +73,8 @@ MIXED_BUCKET_TYPES = {
 AUTO_SURFACE_STATES = {
     "new_bucket_candidate",
     "sim_auto_approved",
+    "entry_only_sim_auto_approved",
+    "entry_only_source_candidate",
     "live_auto_apply_ready",
     "runtime_blocked_contract_gap",
     "code_patch_required",
@@ -80,6 +84,8 @@ AUTO_SURFACE_STATES = {
 FINAL_CLASSIFICATION_STATES = {
     "source_only_keep_collecting",
     "sim_auto_approved",
+    "entry_only_sim_auto_approved",
+    "entry_only_source_candidate",
     "live_auto_apply_ready",
     "runtime_blocked_contract_gap",
     "code_patch_required",
@@ -120,6 +126,239 @@ BASE_FORBIDDEN_USES = with_evidence_authority_forbidden_uses(
         "position_cap_release",
     ]
 )
+SOURCE_CONTRACT_SCHEMA_VERSION = "lifecycle_source_contract_snapshot_v2"
+SOURCE_CONTRACT_SECTION_SCHEMAS: dict[str, dict[str, tuple[str, ...]]] = {
+    "lifecycle_flow_bucket_attribution": {
+        "bucket_types": ("combo_lifecycle_flow",),
+        "bucket_fields": (
+            "attribution_key",
+            "bucket_key",
+            "bucket_type",
+            "child_bucket_ids",
+            "complete_flow_count",
+            "decision_authority",
+            "diagnostic_win_rate",
+            "entry_bucket_id",
+            "equal_weight_avg_profit_pct",
+            "exit_bucket_id",
+            "fallback_identity_count",
+            "forbidden_uses",
+            "holding_bucket_id",
+            "join_rate",
+            "joined_sample",
+            "lifecycle_flow_bucket_id",
+            "metric_scope",
+            "recommended_route",
+            "rollback_guard",
+            "runtime_effect",
+            "sample",
+            "scale_in_bucket_id",
+            "scale_in_bucket_ids",
+            "source_quality_adjusted_ev_pct",
+            "source_quality_gate",
+            "stage_contract",
+            "submit_bucket_id",
+        ),
+        "dimension_keys": ("entry", "exit", "holding", "scale_in", "submit"),
+    },
+    "entry_bucket_attribution": {
+        "bucket_types": (
+            "chosen_action",
+            "combo_entry_spot",
+            "exit_rule",
+            "liquidity_bucket",
+            "overbought_bucket",
+            "score_band",
+            "source_stage",
+            "stale_bucket",
+            "strength_bucket",
+            "time_bucket",
+        ),
+        "bucket_fields": (
+            "bucket_key",
+            "bucket_type",
+            "close_10m_pct",
+            "close_30m_pct",
+            "close_60m_pct",
+            "decision_authority",
+            "diagnostic_win_rate",
+            "equal_weight_avg_profit_pct",
+            "forbidden_uses",
+            "join_rate",
+            "joined_sample",
+            "mae_10m_pct",
+            "mae_30m_pct",
+            "mae_60m_pct",
+            "mfe_10m_pct",
+            "mfe_30m_pct",
+            "mfe_60m_pct",
+            "recommended_resolution",
+            "recommended_route",
+            "runtime_effect",
+            "sample",
+            "source_field_coverage",
+            "source_quality_adjusted_ev_pct",
+            "source_quality_gate",
+            "unknown_dimension_counts",
+            "unknown_reason_counts",
+        ),
+        "dimension_keys": (
+            "chosen_action",
+            "exit_rule",
+            "liquidity",
+            "liquidity_bucket",
+            "overbought",
+            "overbought_bucket",
+            "score",
+            "score_band",
+            "source",
+            "source_stage",
+            "stale",
+            "stale_bucket",
+            "strength_bucket",
+            "time",
+            "time_bucket",
+        ),
+    },
+    "submit_bucket_attribution": {
+        "bucket_types": (
+            "actual_order_submitted",
+            "broker_order_forbidden",
+            "combo_submit_quality",
+            "latency_reason",
+            "latency_state",
+            "liquidity_bucket",
+            "liquidity_guard_action",
+            "overbought_bucket",
+            "overbought_guard_action",
+            "price_below_bid_bucket",
+            "price_resolution_bucket",
+            "quote_age_bucket",
+            "revalidation_state",
+            "submit_source_stage",
+            "would_limit_fill",
+        ),
+        "bucket_fields": (
+            "allowed_runtime_apply",
+            "bucket_key",
+            "bucket_type",
+            "decision_authority",
+            "forbidden_uses",
+            "join_rate",
+            "joined_sample",
+            "recommended_resolution",
+            "recommended_route",
+            "runtime_effect",
+            "sample",
+            "source_field_coverage",
+            "source_quality_adjusted_ev_pct",
+            "source_quality_gate",
+            "unknown_dimension_counts",
+            "unknown_reason_counts",
+        ),
+        "dimension_keys": (
+            "actual_order_submitted",
+            "broker_order_forbidden",
+            "fill",
+            "latency",
+            "latency_reason",
+            "latency_state",
+            "liquidity",
+            "liquidity_bucket",
+            "liquidity_guard",
+            "liquidity_guard_action",
+            "overbought",
+            "overbought_bucket",
+            "overbought_guard_action",
+            "price_below_bid_bucket",
+            "price_resolution",
+            "price_resolution_bucket",
+            "quote_age",
+            "quote_age_bucket",
+            "revalidation",
+            "revalidation_state",
+            "source",
+            "submit_source_stage",
+            "submitted",
+            "would_limit_fill",
+        ),
+    },
+    "scale_in_bucket_attribution": {
+        "bucket_types": ("ai_score_band", "ai_score_source", "arm", "blocker_namespace", "blocker_reason"),
+        "bucket_fields": (
+            "bucket_key",
+            "bucket_type",
+            "close_10m_pct",
+            "decision_authority",
+            "diagnostic_win_rate",
+            "equal_weight_avg_profit_pct",
+            "fixed_threshold_contract_role",
+            "join_rate",
+            "joined_sample",
+            "mae_10m_pct",
+            "mfe_10m_pct",
+            "recommended_resolution",
+            "recommended_route",
+            "runtime_effect",
+            "sample",
+            "source_field_coverage",
+            "source_quality_adjusted_ev_pct",
+            "source_quality_gate",
+            "unknown_dimension_counts",
+            "unknown_reason_counts",
+        ),
+        "dimension_keys": ("ai_score_band", "ai_score_source", "arm", "blocker_namespace", "blocker_reason"),
+    },
+    "overnight_bucket_attribution": {
+        "bucket_types": (
+            "combo_overnight_decision",
+            "confidence_band",
+            "held_bucket",
+            "overnight_action",
+            "overnight_status",
+            "peak_profit_band",
+            "price_source",
+            "profit_band",
+            "source_quality_gate",
+            "source_stage",
+            "stage",
+        ),
+        "bucket_fields": (
+            "bucket_key",
+            "bucket_type",
+            "decision_authority",
+            "diagnostic_win_rate",
+            "equal_weight_avg_profit_pct",
+            "fixed_threshold_contract_role",
+            "join_rate",
+            "joined_sample",
+            "next_day_close_pct",
+            "next_day_mae_pct",
+            "next_day_mfe_pct",
+            "recommended_route",
+            "runtime_effect",
+            "sample",
+            "source_quality_adjusted_ev_pct",
+            "source_quality_gate",
+        ),
+        "dimension_keys": (
+            "action",
+            "confidence",
+            "confidence_band",
+            "held_bucket",
+            "overnight_action",
+            "overnight_status",
+            "peak_profit_band",
+            "price_source",
+            "profit",
+            "profit_band",
+            "source_quality_gate",
+            "source_stage",
+            "stage",
+            "status",
+        ),
+    },
+}
 
 def discovery_report_path(target_date: str) -> Path:
     return REPORT_DIR / f"lifecycle_bucket_discovery_{target_date}.json"
@@ -131,6 +370,10 @@ def discovery_markdown_path(target_date: str) -> Path:
 
 def bucket_catalog_path(target_date: str) -> Path:
     return CATALOG_DIR / f"lifecycle_bucket_catalog_{target_date}.json"
+
+
+def contamination_window_path(target_date: str) -> Path:
+    return CONTAMINATION_WINDOW_DIR / f"lifecycle_bucket_quarantine_{target_date}.json"
 
 
 def sim_auto_approval_path(target_date: str) -> Path:
@@ -191,6 +434,7 @@ AI_REVIEW_SHARD_MAX_CANDIDATES = max(
 )
 AI_REVIEW_SHARD_ORDER = (
     "live_contract_review",
+    "lifecycle_flow_review",
     "sim_policy_review",
     "gap_workorder_review",
     "taxonomy_discovery_review",
@@ -200,6 +444,7 @@ AI_REVIEW_SHARD_PRIORITIES = {
 }
 AI_REVIEW_SHARD_AUTHORITIES = {
     "live_contract_review": "explicit_contract_safety_gap_review_for_deterministic_live_candidates",
+    "lifecycle_flow_review": "parent_lifecycle_flow_bucket_taxonomy_and_contract_review_only",
     "sim_policy_review": "sim_policy_handoff_source_quality_review_only",
     "gap_workorder_review": "source_contract_and_workorder_gap_review_only",
     "taxonomy_discovery_review": "new_bucket_taxonomy_review_only",
@@ -321,6 +566,10 @@ def _source_bucket_kind(candidate_state: str, bucket: dict[str, Any]) -> str:
         return "live_auto_candidate"
     if candidate_state == "sim_auto_approved":
         return "sim_auto_policy"
+    if candidate_state == "entry_only_sim_auto_approved":
+        return "entry_only_sim_policy"
+    if candidate_state == "entry_only_source_candidate":
+        return "entry_only_source_candidate"
     if bucket.get("unknown_dimension_counts") or "unknown" in str(bucket.get("bucket_key") or ""):
         return "taxonomy_provenance_gap"
     if candidate_state in {"code_patch_required", "automation_handoff_gap", "runtime_blocked_contract_gap"}:
@@ -338,6 +587,10 @@ def _recommended_resolution(candidate_state: str, bucket: dict[str, Any]) -> str
         return "preopen_live_auto_bridge"
     if candidate_state == "sim_auto_approved":
         return "next_preopen_sim_policy_input"
+    if candidate_state == "entry_only_sim_auto_approved":
+        return "entry_only_sim_policy_no_greenfield_live"
+    if candidate_state == "entry_only_source_candidate":
+        return "entry_only_keep_collecting_no_greenfield_live"
     if str(bucket.get("source_quality_gate") or "") != "pass":
         return "keep_collecting_until_sample_floor"
     return "keep_collecting"
@@ -346,28 +599,41 @@ def _recommended_resolution(candidate_state: str, bucket: dict[str, Any]) -> str
 def _source_contract_snapshot(ldm: dict[str, Any]) -> dict[str, Any]:
     source_map = ldm.get("sources") if isinstance(ldm.get("sources"), dict) else {}
     sections: dict[str, Any] = {}
-    for section_name in (
-        "entry_bucket_attribution",
-        "scale_in_bucket_attribution",
-        "overnight_bucket_attribution",
-    ):
+    for section_name in SOURCE_CONTRACT_SECTION_SCHEMAS:
         section = ldm.get(section_name) if isinstance(ldm.get(section_name), dict) else {}
         buckets = section.get("buckets") if isinstance(section.get("buckets"), list) else []
-        field_names: set[str] = set()
-        bucket_types: set[str] = set()
-        dimension_keys: set[str] = set()
+        declared = SOURCE_CONTRACT_SECTION_SCHEMAS[section_name]
+        field_names: set[str] = set(str(item) for item in declared.get("bucket_fields", ()))
+        bucket_types: set[str] = set(str(item) for item in declared.get("bucket_types", ()))
+        dimension_keys: set[str] = set(str(item) for item in declared.get("dimension_keys", ()))
+        observed_field_names: set[str] = set()
+        observed_bucket_types: set[str] = set()
+        observed_dimension_keys: set[str] = set()
         for item in buckets:
             if not isinstance(item, dict):
                 continue
-            field_names.update(str(key) for key in item)
-            bucket_types.add(str(item.get("bucket_type") or ""))
-            dimension_keys.update(_source_dimensions(str(item.get("bucket_type") or ""), str(item.get("bucket_key") or "")).keys())
+            item_fields = {str(key) for key in item}
+            item_type = str(item.get("bucket_type") or "")
+            item_dimensions = set(_source_dimensions(item_type, str(item.get("bucket_key") or "")).keys())
+            observed_field_names.update(item_fields)
+            observed_bucket_types.add(item_type)
+            observed_dimension_keys.update(item_dimensions)
+            field_names.update(item_fields)
+            bucket_types.add(item_type)
+            dimension_keys.update(item_dimensions)
         sections[section_name] = {
             "present": bool(section),
             "bucket_count": len([item for item in buckets if isinstance(item, dict)]),
+            "declared_contract": True,
+            "declared_bucket_types": sorted(declared.get("bucket_types", ())),
+            "declared_bucket_fields": sorted(declared.get("bucket_fields", ())),
+            "declared_dimension_keys": sorted(declared.get("dimension_keys", ())),
             "bucket_types": sorted(value for value in bucket_types if value),
+            "observed_bucket_types": sorted(value for value in observed_bucket_types if value),
             "bucket_fields": sorted(field_names),
+            "observed_bucket_fields": sorted(observed_field_names),
             "dimension_keys": sorted(dimension_keys),
+            "observed_dimension_keys": sorted(observed_dimension_keys),
         }
     policy_entries = ldm.get("policy_entries") if isinstance(ldm.get("policy_entries"), list) else []
     policy_fields = sorted(
@@ -379,7 +645,8 @@ def _source_contract_snapshot(ldm: dict[str, Any]) -> dict[str, Any]:
         }
     )
     return {
-        "schema_version": "lifecycle_source_contract_snapshot_v1",
+        "schema_version": SOURCE_CONTRACT_SCHEMA_VERSION,
+        "compare_policy": "declared_schema_plus_observed_samples",
         "source_keys": sorted(str(key) for key, value in source_map.items() if value),
         "sections": sections,
         "policy_entry_count": len([item for item in policy_entries if isinstance(item, dict)]),
@@ -387,9 +654,44 @@ def _source_contract_snapshot(ldm: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _normalize_source_contract_for_compare(contract: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(contract, dict) or not contract:
+        return {}
+    normalized = json.loads(json.dumps(contract, ensure_ascii=False, default=str))
+    normalized["schema_version"] = SOURCE_CONTRACT_SCHEMA_VERSION
+    normalized["compare_policy"] = "declared_schema_plus_observed_samples"
+    sections = normalized.get("sections") if isinstance(normalized.get("sections"), dict) else {}
+    normalized["sections"] = sections
+    for section_name, declared in SOURCE_CONTRACT_SECTION_SCHEMAS.items():
+        section = sections.get(section_name) if isinstance(sections.get(section_name), dict) else {}
+        current_fields = set(str(item) for item in (section.get("bucket_fields") or []))
+        current_types = set(str(item) for item in (section.get("bucket_types") or []))
+        current_dimensions = set(str(item) for item in (section.get("dimension_keys") or []))
+        section.update(
+            {
+                "present": bool(section.get("present", True)),
+                "declared_contract": True,
+                "declared_bucket_types": sorted(declared.get("bucket_types", ())),
+                "declared_bucket_fields": sorted(declared.get("bucket_fields", ())),
+                "declared_dimension_keys": sorted(declared.get("dimension_keys", ())),
+                "bucket_types": sorted(current_types | set(declared.get("bucket_types", ()))),
+                "bucket_fields": sorted(current_fields | set(declared.get("bucket_fields", ()))),
+                "dimension_keys": sorted(current_dimensions | set(declared.get("dimension_keys", ()))),
+            }
+        )
+        section.setdefault("bucket_count", 0)
+        section.setdefault("observed_bucket_types", [])
+        section.setdefault("observed_bucket_fields", [])
+        section.setdefault("observed_dimension_keys", [])
+        sections[section_name] = section
+    return normalized
+
+
 def _compare_source_contracts(current: dict[str, Any], previous: dict[str, Any]) -> list[dict[str, Any]]:
     if not previous:
         return []
+    current = _normalize_source_contract_for_compare(current)
+    previous = _normalize_source_contract_for_compare(previous)
     changes: list[dict[str, Any]] = []
 
     def _add(change_type: str, severity: str, subject: str, detail: dict[str, Any]) -> None:
@@ -459,8 +761,8 @@ def _recommended_action(route: str, *, stage: str = "", bucket_type: str = "", e
 
 
 def _live_family_for(stage: str, bucket_type: str, bucket_key: str) -> str | None:
-    if stage == "entry" and bucket_type == "combo_entry_spot" and bucket_key == ENTRY_LIVE_AUTO_BUCKET_KEY:
-        return ENTRY_LIVE_AUTO_FAMILY
+    if stage == "lifecycle_flow" and bucket_type == "combo_lifecycle_flow":
+        return GREENFIELD_REAL_ENV_FAMILY
     if stage == "scale_in" and bucket_type in {"arm", "blocker_namespace"} and bucket_key in {"PYRAMID", "AVG_DOWN_ONLY"}:
         return SCALE_IN_LIVE_AUTO_FAMILY
     return None
@@ -539,16 +841,24 @@ def _classify_bucket(stage: str, bucket: dict[str, Any]) -> tuple[str, str | Non
         return "source_only_keep_collecting", None, grade
     live_family = _live_family_for(stage, bucket_type, bucket_key)
     ev = _safe_float(bucket.get("source_quality_adjusted_ev_pct"), None)
+    if stage == "lifecycle_flow" and bucket_type == "combo_lifecycle_flow":
+        if (
+            route == "candidate_recovery_or_relax"
+            and str(grade.get("evidence_grade") or "") == EVIDENCE_GRADE_1_COMPLETED_SIM
+            and primary_ev_uplift_passes(ev, positive_edge=True)
+        ):
+            return "live_auto_apply_ready", live_family, grade
+        if _sim_handoff_allowed(bucket, grade):
+            return "sim_auto_approved", None, grade
+        return "source_only_keep_collecting", None, grade
     if (
         stage == "entry"
         and bucket_type == "combo_entry_spot"
         and bucket_key == ENTRY_LIVE_AUTO_BUCKET_KEY
     ):
-        if route == "candidate_recovery_or_relax" and _sim_handoff_allowed(bucket, grade) and primary_ev_uplift_passes(ev, positive_edge=True):
-            return "live_auto_apply_ready", live_family, grade
         if _sim_handoff_allowed(bucket, grade):
-            return "sim_auto_approved", None, grade
-        return "source_only_keep_collecting", None, grade
+            return "entry_only_sim_auto_approved", None, grade
+        return "entry_only_source_candidate", None, grade
     if str(grade.get("evidence_grade") or "") in {EVIDENCE_GRADE_2_COUNTERFACTUAL, EVIDENCE_GRADE_MIXED_SOURCE}:
         if route in {"candidate_recovery_or_relax", "candidate_tighten_or_exclude"} and _sim_handoff_allowed(bucket, grade):
             return "sim_auto_approved", None, grade
@@ -561,8 +871,12 @@ def _classify_bucket(stage: str, bucket: dict[str, Any]) -> tuple[str, str | Non
     ):
         return "live_auto_apply_ready", live_family, grade
     if "unknown" in bucket_key:
-        return "source_only_keep_collecting", None, grade
+        return (
+            "entry_only_source_candidate" if stage == "entry" else "source_only_keep_collecting"
+        ), None, grade
     if route in {"candidate_recovery_or_relax", "candidate_tighten_or_exclude"}:
+        if stage == "entry":
+            return "entry_only_sim_auto_approved", None, grade
         return "sim_auto_approved", None, grade
     return "source_only_keep_collecting", None, grade
 
@@ -601,7 +915,7 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
         else grade.get("transition_target"),
         "grade_reason": grade.get("grade_reason"),
         "full_real_conversion_allowed": False,
-        "sim_lifecycle_handoff_allowed": state == "sim_auto_approved",
+        "sim_lifecycle_handoff_allowed": state in {"sim_auto_approved", "entry_only_sim_auto_approved"},
         "bounded_live_canary_allowed": state == "live_auto_apply_ready",
         "source_stage_split_required": bool(grade.get("source_stage_split_required")),
         "archived_live_exception_reason": None,
@@ -626,6 +940,18 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
             else ""
         ),
         "source_dimensions": source_dimensions,
+        "lifecycle_flow_bucket_id": bucket.get("lifecycle_flow_bucket_id"),
+        "metric_scope": bucket.get("metric_scope"),
+        "entry_bucket_id": bucket.get("entry_bucket_id"),
+        "submit_bucket_id": bucket.get("submit_bucket_id"),
+        "holding_bucket_id": bucket.get("holding_bucket_id"),
+        "scale_in_bucket_id": bucket.get("scale_in_bucket_id"),
+        "scale_in_bucket_ids": bucket.get("scale_in_bucket_ids") or [],
+        "exit_bucket_id": bucket.get("exit_bucket_id"),
+        "child_bucket_ids": bucket.get("child_bucket_ids") or {},
+        "stage_contract": bucket.get("stage_contract") or {},
+        "attribution_key": bucket.get("attribution_key"),
+        "rollback_guard": bucket.get("rollback_guard"),
         "canonical_bucket": taxonomy["canonical_bucket"],
         "legacy_raw_bucket_key": taxonomy["legacy_raw_bucket_key"],
         "bucket_alias_version": taxonomy["bucket_alias_version"],
@@ -675,6 +1001,10 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
         "decision_authority": (
             "lifecycle_bucket_discovery_live_auto_apply"
             if state == "live_auto_apply_ready"
+            else "lifecycle_bucket_discovery_entry_only_sim_auto"
+            if state == "entry_only_sim_auto_approved"
+            else "lifecycle_bucket_discovery_entry_only_source_quality"
+            if state == "entry_only_source_candidate"
             else "lifecycle_bucket_discovery_sim_auto"
             if state == "sim_auto_approved"
             else "lifecycle_bucket_discovery_source_quality"
@@ -682,10 +1012,18 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
         "runtime_effect": state == "live_auto_apply_ready",
         "runtime_effect_after_approval": "live_auto_apply_without_human_approval"
         if state == "live_auto_apply_ready"
+        else "entry_only_sim_bucket_policy"
+        if state == "entry_only_sim_auto_approved"
+        else "none_entry_only_source_candidate"
+        if state == "entry_only_source_candidate"
         else "sim_only_bucket_policy",
         "auto_promotion_contract": {
             "state": "bounded_live_auto_apply_ready"
             if state == "live_auto_apply_ready"
+            else "entry_only_sim_auto_approved"
+            if state == "entry_only_sim_auto_approved"
+            else "entry_only_source_candidate"
+            if state == "entry_only_source_candidate"
             else "sim_auto_approved"
             if state == "sim_auto_approved"
             else "source_only",
@@ -1012,6 +1350,16 @@ def _candidate_matches_ai_shard(item: dict[str, Any], shard_id: str) -> bool:
     source_kind = str(item.get("source_bucket_kind") or "")
     if shard_id == "live_contract_review":
         return state in {"live_auto_apply_ready", "runtime_blocked_contract_gap"}
+    if shard_id == "lifecycle_flow_review":
+        return stage == "lifecycle_flow" and state in {
+            "live_auto_apply_ready",
+            "sim_auto_approved",
+            "source_only_keep_collecting",
+            "new_bucket_candidate",
+            "runtime_blocked_contract_gap",
+            "code_patch_required",
+            "automation_handoff_gap",
+        }
     if shard_id == "sim_policy_review":
         return state == "sim_auto_approved"
     if shard_id == "gap_workorder_review":
@@ -1510,6 +1858,52 @@ def _raw_response_for_shard(raw_response: Any | None, shard_id: str) -> Any | No
     return raw_response.get(shard_id)
 
 
+def _apply_contamination_quarantine(
+    candidates: list[dict[str, Any]],
+    *,
+    target_date: str,
+    warnings: list[str],
+) -> list[dict[str, Any]]:
+    payload = _load_json(contamination_window_path(target_date))
+    if not payload or not bool(payload.get("exclude_live_auto_apply", True)):
+        return candidates
+    affected_stages = {str(value) for value in payload.get("affected_stages") or [] if str(value)}
+    affected_families = {str(value) for value in payload.get("affected_families") or [] if str(value)}
+    affected_bucket_ids = {str(value) for value in payload.get("affected_bucket_ids") or [] if str(value)}
+    updated: list[dict[str, Any]] = []
+    blocked_count = 0
+    for item in candidates:
+        row = dict(item)
+        if row.get("classification_state") != "live_auto_apply_ready":
+            updated.append(row)
+            continue
+        match_all = not affected_stages and not affected_families and not affected_bucket_ids
+        stage_hit = str(row.get("stage") or "") in affected_stages if affected_stages else False
+        family_hit = str(row.get("live_auto_apply_family") or "") in affected_families if affected_families else False
+        bucket_hit = str(row.get("bucket_id") or "") in affected_bucket_ids if affected_bucket_ids else False
+        if not (match_all or stage_hit or family_hit or bucket_hit):
+            updated.append(row)
+            continue
+        row["classification_state"] = "runtime_blocked_contract_gap"
+        row["runtime_effect"] = False
+        row["broker_order_forbidden"] = True
+        row["allowed_runtime_apply"] = False
+        row["contamination_quarantine_id"] = payload.get("quarantine_id") or f"lifecycle_bucket_quarantine:{target_date}"
+        row["promotion_ev_excluded_reason"] = payload.get("reason") or "contaminated_greenfield_partial_lifecycle_policy"
+        row["recommended_resolution"] = "exclude_contaminated_window_from_live_promotion"
+        contract = row.get("auto_promotion_contract") if isinstance(row.get("auto_promotion_contract"), dict) else {}
+        row["auto_promotion_contract"] = {
+            **contract,
+            "state": "source_only",
+            "contamination_quarantine": True,
+        }
+        blocked_count += 1
+        updated.append(row)
+    if blocked_count:
+        warnings.append(f"contamination_quarantine_live_auto_blocked:{blocked_count}")
+    return updated
+
+
 def _provider_status_looks_timeout(provider_status: dict[str, Any]) -> bool:
     text = json.dumps(provider_status, ensure_ascii=True, default=str).lower()
     return "timeout" in text or "timed out" in text or "deadline" in text
@@ -1664,6 +2058,11 @@ def _run_ai_review_shards(
             for record in shard_records
             if record.get("shard_id")
         },
+        "reasoning_effort_by_shard": {
+            str(record.get("shard_id")): (record.get("provider_status") or {}).get("reasoning_effort")
+            for record in shard_records
+            if record.get("shard_id")
+        },
         "model_tier": "tier2",
         "schema_name": AI_REVIEW_SCHEMA_NAME,
         "sharded": True,
@@ -1737,6 +2136,10 @@ def _finalize_report(
         item
         for item in candidates
         if str(item.get("classification_state") or "") in AUTO_SURFACE_STATES
+        or (
+            str(item.get("stage") or "") == "lifecycle_flow"
+            and str(item.get("classification_state") or "") == "source_only_keep_collecting"
+        )
     ]
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
     summary.update(
@@ -1802,8 +2205,12 @@ def build_lifecycle_bucket_discovery_report(
         if isinstance(previous.get("source_contract"), dict)
         else {}
     )
+    normalized_previous_contract = _normalize_source_contract_for_compare(previous_contract) if previous_contract else {}
     source_contract_changes = _compare_source_contracts(source_contract, previous_contract)
     if ldm:
+        candidates.extend(
+            _candidates_from_attribution(ldm, "lifecycle_flow", "lifecycle_flow_bucket_attribution")
+        )
         candidates.extend(_candidates_from_attribution(ldm, "entry", "entry_bucket_attribution"))
         candidates.extend(_candidates_from_attribution(ldm, "scale_in", "scale_in_bucket_attribution"))
         candidates.extend(_candidates_from_attribution(ldm, "overnight", "overnight_bucket_attribution"))
@@ -1836,7 +2243,7 @@ def build_lifecycle_bucket_discovery_report(
             "lifecycle_decision_matrix": str(ldm_path) if ldm_path.exists() else None,
         },
         "source_contract": source_contract,
-        "source_contract_previous_hash": _text_hash(previous_contract) if previous_contract else None,
+        "source_contract_previous_hash": _text_hash(normalized_previous_contract) if normalized_previous_contract else None,
         "source_contract_hash": _text_hash(source_contract) if source_contract else None,
         "source_contract_changes": source_contract_changes,
         "pre_final_auto_promotion_contract": pre_final_promotion_contract(),
@@ -1863,6 +2270,11 @@ def build_lifecycle_bucket_discovery_report(
         warnings=warnings,
     )
     report["ai_two_pass_review"] = ai_review
+    candidates_after_ai = _apply_contamination_quarantine(
+        candidates_after_ai,
+        target_date=target_date,
+        warnings=warnings,
+    )
     report = _finalize_report(report, candidates_after_ai, warnings)
     report["summary"]["ai_two_pass_review_status"] = ai_review.get("status")
     report["summary"]["ai_two_pass_review_required"] = True

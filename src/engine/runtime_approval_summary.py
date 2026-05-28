@@ -1224,6 +1224,24 @@ def _lifecycle_matrix_summary(ev_report: dict[str, Any], source_path: str | None
             "runtime_approval_candidates",
         )
     )
+    lifecycle_flow_bucket_candidates = (
+        matrix.get("lifecycle_flow_runtime_approval_candidates")
+        if isinstance(matrix.get("lifecycle_flow_runtime_approval_candidates"), list)
+        else _bucket_list_from_lifecycle_source(
+            source_payload,
+            "lifecycle_flow_bucket_attribution",
+            "runtime_approval_candidates",
+        )
+    )
+    lifecycle_flow_bucket_workorders = (
+        matrix.get("lifecycle_flow_code_improvement_workorders")
+        if isinstance(matrix.get("lifecycle_flow_code_improvement_workorders"), list)
+        else _bucket_list_from_lifecycle_source(
+            source_payload,
+            "lifecycle_flow_bucket_attribution",
+            "code_improvement_workorders",
+        )
+    )
     entry_bucket_workorders = (
         matrix.get("entry_bucket_code_improvement_workorders")
         if isinstance(matrix.get("entry_bucket_code_improvement_workorders"), list)
@@ -1311,6 +1329,28 @@ def _lifecycle_matrix_summary(ev_report: dict[str, Any], source_path: str | None
         "entry_bucket_attribution",
         "runtime_candidate_count",
     )
+    lifecycle_flow_bucket_count = _as_int(matrix.get("lifecycle_flow_bucket_count")) or _bucket_count_from_lifecycle_source(
+        source_payload,
+        "lifecycle_flow_bucket_attribution",
+        "bucket_count",
+    )
+    lifecycle_flow_complete_count = _as_int(matrix.get("lifecycle_flow_complete_count")) or _bucket_count_from_lifecycle_source(
+        source_payload,
+        "lifecycle_flow_bucket_attribution",
+        "complete_flow_count",
+    )
+    lifecycle_flow_runtime_candidate_count = _as_int(
+        matrix.get("lifecycle_flow_runtime_candidate_count")
+    ) or _bucket_count_from_lifecycle_source(
+        source_payload,
+        "lifecycle_flow_bucket_attribution",
+        "runtime_candidate_count",
+    )
+    lifecycle_flow_workorder_count = _as_int(matrix.get("lifecycle_flow_workorder_count")) or _bucket_count_from_lifecycle_source(
+        source_payload,
+        "lifecycle_flow_bucket_attribution",
+        "workorder_count",
+    )
     entry_bucket_workorder_count = _as_int(matrix.get("entry_bucket_workorder_count")) or _bucket_count_from_lifecycle_source(
         source_payload,
         "entry_bucket_attribution",
@@ -1360,6 +1400,12 @@ def _lifecycle_matrix_summary(ev_report: dict[str, Any], source_path: str | None
         "policy_pass_count": policy_pass_count,
         "promote_ready_count": promote_ready_count,
         "entry_bucket_actionable_count": _as_int(matrix.get("entry_bucket_actionable_count")),
+        "lifecycle_flow_bucket_count": lifecycle_flow_bucket_count,
+        "lifecycle_flow_complete_count": lifecycle_flow_complete_count,
+        "lifecycle_flow_runtime_candidate_count": lifecycle_flow_runtime_candidate_count,
+        "lifecycle_flow_workorder_count": lifecycle_flow_workorder_count,
+        "lifecycle_flow_runtime_approval_candidates": lifecycle_flow_bucket_candidates,
+        "lifecycle_flow_code_improvement_workorders": lifecycle_flow_bucket_workorders,
         "entry_bucket_runtime_candidate_count": entry_bucket_runtime_candidate_count,
         "entry_bucket_workorder_count": entry_bucket_workorder_count,
         "scale_in_bucket_actionable_count": _as_int(matrix.get("scale_in_bucket_actionable_count")),
@@ -1886,6 +1932,11 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         f"- runtime_bias_scope: `{lifecycle_matrix.get('runtime_bias_scope')}`",
         f"- total/joined/floor: `{lifecycle_matrix.get('total_rows')}` / `{lifecycle_matrix.get('joined_rows')}` / `{lifecycle_matrix.get('sample_floor')}`",
         f"- policy_pass/promote_ready: `{lifecycle_matrix.get('policy_pass_count')}` / `{lifecycle_matrix.get('promote_ready_count')}`",
+        f"- lifecycle_flow buckets/complete/runtime/workorders: "
+        f"`{lifecycle_matrix.get('lifecycle_flow_bucket_count')}` / "
+        f"`{lifecycle_matrix.get('lifecycle_flow_complete_count')}` / "
+        f"`{lifecycle_matrix.get('lifecycle_flow_runtime_candidate_count')}` / "
+        f"`{lifecycle_matrix.get('lifecycle_flow_workorder_count')}`",
         f"- fixed_threshold_roles: `{lifecycle_matrix.get('fixed_threshold_roles') or {}}`",
         f"- ready_for_bounded_apply: `{lifecycle_matrix.get('ready_for_bounded_apply')}`",
         f"- warnings: `{lifecycle_matrix.get('warnings') or []}`",

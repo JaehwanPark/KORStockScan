@@ -239,15 +239,30 @@ def test_runtime_apply_bridge_writes_greenfield_real_env_policy(tmp_path, monkey
                         "ai_review_status": "parsed",
                     },
                     {
-                        "bucket_id": "submit:allow_submit:thin_ok",
-                        "stage": "submit",
-                        "recommended_action": "ALLOW_SUBMIT",
+                        "bucket_id": "lifecycle_flow:combo_lifecycle_flow:complete_good",
+                        "stage": "lifecycle_flow",
+                        "bucket_type": "combo_lifecycle_flow",
+                        "recommended_action": "relax_or_recover",
                         "classification_state": "live_auto_apply_ready",
-                        "live_auto_apply_family": "submit_bucket_runtime_policy_v1",
+                        "live_auto_apply_family": mod.GREENFIELD_REAL_ENV_FAMILY,
                         "allowed_runtime_apply": True,
                         "broker_order_forbidden": False,
                         "source_quality_gate": "pass",
                         "ai_review_status": "parsed",
+                        "lifecycle_flow_bucket_id": "lifecycle_flow:combo_lifecycle_flow:complete_good",
+                        "attribution_key": "sim_record_id:SIM-1",
+                        "entry_bucket_id": "entry:combo_entry_spot:score_66_69",
+                        "submit_bucket_id": "submit:allow_submit:thin_ok",
+                        "holding_bucket_id": "holding:flow:baseline_hold",
+                        "exit_bucket_id": "exit:rule:baseline_exit",
+                        "child_bucket_ids": {
+                            "entry": "entry:combo_entry_spot:score_66_69",
+                            "submit": "submit:allow_submit:thin_ok",
+                            "holding": "holding:flow:baseline_hold",
+                            "scale_in": [],
+                            "exit": "exit:rule:baseline_exit",
+                        },
+                        "rollback_guard": "hard_safety_priority_plus_source_quality_and_post_apply_attribution",
                     },
                 ],
                 "warnings": [],
@@ -275,9 +290,59 @@ def test_runtime_apply_bridge_writes_greenfield_real_env_policy(tmp_path, monkey
     assert report["summary"]["greenfield_real_env_ready_count"] == 1
     assert report["summary"]["stage_local_live_auto_apply_ready_count"] == 1
     assert policy["scope"] == "full_lifecycle"
-    assert [row["stage"] for row in policy["allowlist"]] == ["entry", "submit"]
+    assert policy["schema_version"] == "greenfield_lifecycle_bundle_policy_v1"
+    assert policy["bundle_id"] == "lifecycle_flow:combo_lifecycle_flow:complete_good"
+    assert policy["attribution_key"] == "sim_record_id:SIM-1"
+    assert [row["stage"] for row in policy["allowlist"]] == ["entry", "submit", "holding", "exit"]
     assert policy["stages"]["entry"][0]["action"] == "BUY"
     assert policy["stages"]["submit"][0]["action"] == "ALLOW_SUBMIT"
+
+
+def test_runtime_apply_bridge_blocks_entry_only_greenfield_bundle(tmp_path, monkeypatch):
+    ldm_dir = tmp_path / "ldm"
+    report_dir = tmp_path / "bridge"
+    policy_dir = tmp_path / "policies"
+    ldm_dir.mkdir()
+    discovery_path = tmp_path / "discovery" / "lifecycle_bucket_discovery_2026-05-21.json"
+    monkeypatch.setattr(mod, "LDM_REPORT_DIR", ldm_dir)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "GREENFIELD_POLICY_DIR", policy_dir)
+    monkeypatch.setattr(mod, "discovery_report_path", lambda target_date: discovery_path)
+    _write_ldm(ldm_dir / "lifecycle_decision_matrix_2026-05-21.json")
+    discovery_path.parent.mkdir(parents=True, exist_ok=True)
+    discovery_path.write_text(
+        json.dumps(
+            {
+                "date": "2026-05-21",
+                "summary": {
+                    "live_auto_apply_ready_count": 1,
+                    "source_contract_status": "pass",
+                    "ai_two_pass_review_status": "parsed",
+                },
+                "live_auto_apply_candidates": [
+                    {
+                        "bucket_id": "entry:combo_entry_spot:score_66_69",
+                        "stage": "entry",
+                        "recommended_action": "relax_or_recover",
+                        "classification_state": "live_auto_apply_ready",
+                        "live_auto_apply_family": mod.ENTRY_BRIDGE_FAMILY,
+                        "allowed_runtime_apply": True,
+                        "broker_order_forbidden": False,
+                        "source_quality_gate": "pass",
+                        "ai_review_status": "parsed",
+                    }
+                ],
+                "warnings": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.write_runtime_apply_bridge_report("2026-05-21")
+
+    assert mod.GREENFIELD_REAL_ENV_FAMILY not in {item["family"] for item in report["candidates"]}
+    assert not (policy_dir / "greenfield_real_env_policy_2026-05-21.json").exists()
+    assert report["summary"]["greenfield_real_env_ready_count"] == 0
 
 
 def test_runtime_apply_bridge_scale_ev_floor_miss_is_explicit_hold_not_contract_gap(tmp_path, monkeypatch):

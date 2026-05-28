@@ -2586,7 +2586,31 @@ def test_runtime_apply_bridge_greenfield_live_auto_writes_full_lifecycle_env(tmp
                         "action": "BUY",
                         "source_quality_gate": "pass",
                         "ai_tier2_status": "parsed",
-                    }
+                    },
+                    {
+                        "bucket_id": "submit:allow_submit:thin_ok",
+                        "family": "submit_bucket_runtime_policy_v1",
+                        "stage": "submit",
+                        "action": "ALLOW_SUBMIT",
+                        "source_quality_gate": "pass",
+                        "ai_tier2_status": "parsed",
+                    },
+                    {
+                        "bucket_id": "holding:flow:baseline_hold",
+                        "family": "holding_bucket_runtime_policy_v1",
+                        "stage": "holding",
+                        "action": "HOLD",
+                        "source_quality_gate": "pass",
+                        "ai_tier2_status": "parsed",
+                    },
+                    {
+                        "bucket_id": "exit:rule:baseline_exit",
+                        "family": "exit_bucket_runtime_policy_v1",
+                        "stage": "exit",
+                        "action": "SELL",
+                        "source_quality_gate": "pass",
+                        "ai_tier2_status": "parsed",
+                    },
                 ],
             }
         ),

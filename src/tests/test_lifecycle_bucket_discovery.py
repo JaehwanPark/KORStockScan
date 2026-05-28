@@ -122,6 +122,49 @@ def _write_ldm(path):
         json.dumps(
             {
                 "date": path.stem.removeprefix("lifecycle_decision_matrix_"),
+                "lifecycle_flow_bucket_attribution": {
+                    "buckets": [
+                        {
+                            "lifecycle_flow_bucket_id": "lifecycle_flow:combo_lifecycle_flow:complete_good",
+                            "bucket_type": "combo_lifecycle_flow",
+                            "bucket_key": (
+                                "entry=entry:combo_entry_spot:score_66_69|"
+                                "submit=submit:combo_submit_quality:thin_ok|"
+                                "holding=holding:combo_holding_flow:baseline_hold|"
+                                "scale_in=scale_in:none|"
+                                "exit=exit:combo_exit_result:tp"
+                            ),
+                            "sample": 22,
+                            "joined_sample": 22,
+                            "join_rate": 1.0,
+                            "source_quality_gate": "pass",
+                            "source_quality_adjusted_ev_pct": 1.7,
+                            "equal_weight_avg_profit_pct": 1.2,
+                            "diagnostic_win_rate": 0.64,
+                            "recommended_route": "candidate_recovery_or_relax",
+                            "metric_scope": "lifecycle_bundle_ev",
+                            "entry_bucket_id": "entry:combo_entry_spot:score_66_69",
+                            "submit_bucket_id": "submit:combo_submit_quality:thin_ok",
+                            "holding_bucket_id": "holding:combo_holding_flow:baseline_hold",
+                            "exit_bucket_id": "exit:combo_exit_result:tp",
+                            "child_bucket_ids": {
+                                "entry": "entry:combo_entry_spot:score_66_69",
+                                "submit": "submit:combo_submit_quality:thin_ok",
+                                "holding": "holding:combo_holding_flow:baseline_hold",
+                                "scale_in": [],
+                                "exit": "exit:combo_exit_result:tp",
+                            },
+                            "stage_contract": {
+                                "entry": {"contract_state": "present"},
+                                "submit": {"contract_state": "present"},
+                                "holding": {"contract_state": "present"},
+                                "exit": {"contract_state": "present"},
+                            },
+                            "attribution_key": "sim_record_id:SIM-1",
+                            "rollback_guard": "hard_safety_priority_plus_source_quality_and_post_apply_attribution",
+                        }
+                    ]
+                },
                 "entry_bucket_attribution": {
                     "buckets": [
                         {
@@ -222,21 +265,26 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     states = {item["bucket_id"]: item for item in report["surfaced_candidates"]}
     live = [item for item in states.values() if item["classification_state"] == "live_auto_apply_ready"]
     sim = [item for item in states.values() if item["classification_state"] == "sim_auto_approved"]
-    taxonomy = [item for item in report["candidates"] if item.get("source_bucket_kind") == "taxonomy_provenance_gap"]
+    entry_only_sources = [
+        item for item in report["candidates"] if item.get("source_bucket_kind") == "entry_only_source_candidate"
+    ]
     assert {item["live_auto_apply_family"] for item in live} == {
-        mod.ENTRY_LIVE_AUTO_FAMILY,
+        mod.GREENFIELD_REAL_ENV_FAMILY,
         mod.SCALE_IN_LIVE_AUTO_FAMILY,
     }
     wait6579 = states["entry:combo_entry_spot:score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liquidity_unknown"]
-    assert wait6579["classification_state"] == "live_auto_apply_ready"
+    assert wait6579["classification_state"] == "entry_only_sim_auto_approved"
     assert wait6579["evidence_grade"] == mod.EVIDENCE_GRADE_2_COUNTERFACTUAL
-    assert wait6579["transition_target"] == "bounded_live_canary"
+    assert wait6579["transition_target"] == "sim_lifecycle_handoff"
     assert wait6579["full_real_conversion_allowed"] is False
-    assert wait6579["live_auto_apply_family"] == mod.ENTRY_LIVE_AUTO_FAMILY
-    assert wait6579["legacy_contract_known_unknown"] is True
-    assert wait6579["source_dimension_gap"] == "legacy_contract_known_unknown"
-    assert (wait6579["auto_promotion_contract"] or {})["deterministic_contract_required"] is True
-    assert "env_mapping" in (wait6579["auto_promotion_contract"] or {})["deterministic_contract_components"]
+    assert wait6579["live_auto_apply_family"] is None
+    assert wait6579["legacy_contract_known_unknown"] is False
+    assert wait6579["source_dimension_gap"] == "unknown_source_dimensions"
+    assert (wait6579["auto_promotion_contract"] or {})["deterministic_contract_required"] is False
+    flow_live = next(item for item in live if item["live_auto_apply_family"] == mod.GREENFIELD_REAL_ENV_FAMILY)
+    assert flow_live["stage"] == "lifecycle_flow"
+    assert flow_live["metric_scope"] == "lifecycle_bundle_ev"
+    assert flow_live["entry_bucket_id"] == "entry:combo_entry_spot:score_66_69"
     mixed = states["entry:score_band:score_70_74"]
     assert mixed["evidence_grade"] == mod.EVIDENCE_GRADE_MIXED_SOURCE
     assert mixed["classification_state"] == "sim_auto_approved"
@@ -252,21 +300,22 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     assert report["summary"]["absorbed_bucket_count"] >= 1
     assert "canonical_bucket_count" in report["summary"]
     assert sim
-    assert taxonomy
-    assert taxonomy[0]["bucket_relation"] == "new_bucket_candidate"
-    assert taxonomy[0]["classification_state"] == "source_only_keep_collecting"
-    assert taxonomy[0]["source_bucket_id"]
-    assert "recommended_resolution" in taxonomy[0]
+    assert entry_only_sources
+    assert entry_only_sources[0]["bucket_relation"] == "new_bucket_candidate"
+    assert entry_only_sources[0]["classification_state"] == "entry_only_source_candidate"
+    assert entry_only_sources[0]["source_bucket_id"]
+    assert "recommended_resolution" in entry_only_sources[0]
     assert "source_bucket_kind_counts" in report["summary"]
     assert report["summary"]["human_intervention_required"] is False
     assert report["ai_two_pass_review"]["sharded"] is True
     assert {item["shard_id"] for item in report["ai_two_pass_review"]["shards"]} >= {
         "live_contract_review",
+        "lifecycle_flow_review",
         "sim_policy_review",
         "gap_workorder_review",
         "taxonomy_discovery_review",
     }
-    assert report["summary"]["ai_two_pass_review_shard_count"] == 4
+    assert report["summary"]["ai_two_pass_review_shard_count"] == 5
     assert (report_dir / "lifecycle_bucket_discovery_2026-05-22.json").exists()
     assert (catalog_dir / "lifecycle_bucket_catalog_2026-05-22.json").exists()
     auto = json.loads((sim_dir / "lifecycle_bucket_sim_auto_approval_2026-05-22.json").read_text())
@@ -278,6 +327,50 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     assert auto["approved_bucket_count"] == len(auto["approved_bucket_ids"])
     assert auto["approved_evidence_grade_counts"].get(mod.EVIDENCE_GRADE_2_COUNTERFACTUAL, 0) == 0
     assert auto["source_quality_status"] == "pass"
+
+
+def test_lifecycle_bucket_discovery_quarantines_contaminated_live_candidates(tmp_path, monkeypatch):
+    ldm_dir = tmp_path / "ldm"
+    report_dir = tmp_path / "report"
+    catalog_dir = tmp_path / "catalog"
+    sim_dir = tmp_path / "sim"
+    quarantine_dir = tmp_path / "quarantine"
+    ldm_dir.mkdir()
+    quarantine_dir.mkdir()
+    monkeypatch.setattr(mod, "LDM_REPORT_DIR", ldm_dir)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CATALOG_DIR", catalog_dir)
+    monkeypatch.setattr(mod, "SIM_AUTO_APPROVAL_DIR", sim_dir)
+    monkeypatch.setattr(mod, "CONTAMINATION_WINDOW_DIR", quarantine_dir)
+    _write_ldm(ldm_dir / "lifecycle_decision_matrix_2026-05-28.json")
+    (quarantine_dir / "lifecycle_bucket_quarantine_2026-05-28.json").write_text(
+        json.dumps(
+            {
+                "quarantine_id": "greenfield_partial_lifecycle_2026-05-28",
+                "reason": "contaminated_greenfield_partial_lifecycle_policy",
+                "exclude_live_auto_apply": True,
+                "affected_families": [mod.GREENFIELD_REAL_ENV_FAMILY],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_lifecycle_bucket_discovery_report(
+        "2026-05-28",
+        ai_raw_response=_ai_keep_response(),
+    )
+
+    by_id = {item["bucket_id"]: item for item in report["candidates"]}
+    flow = next(item for item in by_id.values() if item.get("live_auto_apply_family") == mod.GREENFIELD_REAL_ENV_FAMILY)
+    assert flow["classification_state"] == "runtime_blocked_contract_gap"
+    assert flow["allowed_runtime_apply"] is False
+    assert flow["promotion_ev_excluded_reason"] == "contaminated_greenfield_partial_lifecycle_policy"
+    wait6579 = by_id[
+        "entry:combo_entry_spot:score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liquidity_unknown"
+    ]
+    assert wait6579["classification_state"] == "entry_only_sim_auto_approved"
+    assert report["summary"]["live_auto_apply_ready_count"] == 1
+    assert "contamination_quarantine_live_auto_blocked:1" in report["warnings"]
 
 
 def test_lifecycle_bucket_discovery_blocks_deterministic_live_when_ai_review_disabled(tmp_path, monkeypatch):
@@ -296,7 +389,7 @@ def test_lifecycle_bucket_discovery_blocks_deterministic_live_when_ai_review_dis
 
     blocked = [item for item in report["surfaced_candidates"] if item["classification_state"] == "runtime_blocked_contract_gap"]
     assert {item["live_auto_apply_family"] for item in blocked if item.get("live_auto_apply_family")} == {
-        mod.ENTRY_LIVE_AUTO_FAMILY,
+        mod.GREENFIELD_REAL_ENV_FAMILY,
         mod.SCALE_IN_LIVE_AUTO_FAMILY,
     }
     assert all(item.get("ai_tier2_blocked_reason") == "ai_tier2_validation_not_parsed:disabled" for item in blocked)
@@ -318,7 +411,10 @@ def test_lifecycle_bucket_discovery_ignores_ambiguous_ai_block_for_live_candidat
 
     report = mod.write_lifecycle_bucket_discovery_report(
         "2026-05-22",
-        ai_raw_response=_ai_block_response("effect is only about 1 percent and confidence is low"),
+        ai_raw_response=_ai_block_response(
+            "effect is only about 1 percent and confidence is low",
+            bucket_id="scale_in:arm:pyramid",
+        ),
     )
 
     live = [item for item in report["surfaced_candidates"] if item["classification_state"] == "live_auto_apply_ready"]
@@ -494,6 +590,50 @@ def test_lifecycle_bucket_discovery_surfaces_source_contract_drift(tmp_path, mon
         if item["stage"] == "source_contract" and item["classification_state"] == "code_patch_required"
     ]
     assert drift
+
+
+def test_lifecycle_bucket_discovery_does_not_treat_empty_declared_section_as_contract_removal(tmp_path, monkeypatch):
+    ldm_dir = tmp_path / "ldm"
+    report_dir = tmp_path / "report"
+    catalog_dir = tmp_path / "catalog"
+    sim_dir = tmp_path / "sim"
+    ldm_dir.mkdir()
+    report_dir.mkdir()
+    monkeypatch.setattr(mod, "LDM_REPORT_DIR", ldm_dir)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CATALOG_DIR", catalog_dir)
+    monkeypatch.setattr(mod, "SIM_AUTO_APPROVAL_DIR", sim_dir)
+    (report_dir / "lifecycle_bucket_discovery_2026-05-21.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-21",
+                "source_contract": {
+                    "schema_version": "lifecycle_source_contract_snapshot_v1",
+                    "source_keys": [],
+                    "sections": {
+                        "overnight_bucket_attribution": {
+                            "present": True,
+                            "bucket_count": 21,
+                            "bucket_fields": ["bucket_type", "bucket_key", "next_day_mfe_pct"],
+                            "bucket_types": ["combo_overnight_decision"],
+                            "dimension_keys": ["action"],
+                        }
+                    },
+                    "policy_fields": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_ldm(ldm_dir / "lifecycle_decision_matrix_2026-05-22.json")
+
+    report = mod.write_lifecycle_bucket_discovery_report(
+        "2026-05-22",
+        ai_raw_response=_ai_keep_response(),
+    )
+
+    assert report["summary"]["source_contract_status"] == "pass"
+    assert report["source_contract_changes"] == []
 
 
 def test_lifecycle_bucket_discovery_openai_review_uses_tier2_schema_and_english_prompt(monkeypatch):

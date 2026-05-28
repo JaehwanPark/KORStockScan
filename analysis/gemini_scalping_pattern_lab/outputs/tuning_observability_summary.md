@@ -1,28 +1,29 @@
 # Tuning Observability Summary
 
-- target_date: `2026-05-27`
-- analysis_period: `2026-04-21 ~ 2026-05-27`
+- target_date: `2026-05-28`
+- analysis_period: `2026-04-21 ~ 2026-05-28`
 
 ## Entry Funnel
 
-- gatekeeper_decisions: `1091`
-- gatekeeper_eval_ms_p95: `4007ms`
+- gatekeeper_decisions: `3035`
+- gatekeeper_eval_ms_p95: `3769ms`
 - gatekeeper_lock_wait_ms_p95: `0ms`
-- gatekeeper_model_call_ms_p95: `4084ms`
-- budget_pass_events: `37059`
-- submitted_events: `13`
+- gatekeeper_model_call_ms_p95: `4077ms`
+- budget_pass_events: `11641`
+- submitted_events: `0`
 - budget_pass_to_submitted_rate: `0.0%`
-- latency_block_events: `36812`
-- quote_fresh_latency_blocks: `19254`
+- latency_block_events: `11536`
+- quote_fresh_latency_blocks: `6465`
 
 ## Buy Recovery Canary
 
-- total_candidates: `130`
+- total_candidates: `77`
 - recovery_check: `0`
 - promoted: `0`
 - submitted: `0`
-- blocked_ai_score_share: `61.5%`
+- blocked_ai_score_share: `81.8%`
 
 ## Priority Findings
 
-- `No acute observability alert`: 중립 — 주요 관찰축에서 즉시 경고할 단일 병목이 두드러지지 않는다.
+- `AI threshold dominance`: 경고 — `blocked_ai_score_share=81.8%`로 WAIT/BLOCK 비중이 높아 BUY drought 해석을 지지한다.
+- `Budget pass without submit`: 경고 — `budget_pass=11641`인데 `submitted=0`라 제출 전 병목이 기대값 회복을 끊고 있다.

@@ -3,19 +3,19 @@
 ## 판정
 
 - status: `pass`
-- live_auto_apply_ready_count: `2`
+- live_auto_apply_ready_count: `1`
 - lifecycle_bucket_discovery_source_contract_status: `pass`
 - lifecycle_bucket_discovery_ai_review_status: `parsed`
 - lifecycle_bucket_discovery_live_followup_count: `0`
 - human_approval_required: `False`
 - runtime mutation: `none`
-- warnings: `[]`
+- warnings: `['incomplete_lifecycle_bundle']`
 
 ## 근거
 
 - `entry_wait6579_score66_69_recovery_gate_v1`: state=`live_auto_apply_ready`, allowed_runtime_apply=`True`, approval_required=`False`, live_auto_apply=`True`, ai_followup=`-`
 - `scale_in_bucket_runtime_policy_v1`: state=`bootstrap_pending`, allowed_runtime_apply=`False`, approval_required=`False`, live_auto_apply=`False`, ai_followup=`-`
-- `greenfield_real_environment_authority`: state=`live_auto_apply_ready`, allowed_runtime_apply=`True`, approval_required=`False`, live_auto_apply=`True`, ai_followup=`-`
+- `greenfield_real_environment_authority`: state=`runtime_blocked_contract_gap`, allowed_runtime_apply=`False`, approval_required=`False`, live_auto_apply=`False`, ai_followup=`-`
 
 ## 다음 액션
 

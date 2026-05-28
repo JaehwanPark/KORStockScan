@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import json
+import re
 from collections import Counter, defaultdict
 from datetime import date, datetime
 from pathlib import Path
@@ -45,6 +47,11 @@ OVERNIGHT_BUCKET_PROMOTE_SAMPLE_FLOOR = 10
 OVERNIGHT_BUCKET_NEGATIVE_EV_PCT = -0.30
 OVERNIGHT_BUCKET_POSITIVE_EV_PCT = 0.30
 SUBMIT_BUCKET_SAMPLE_FLOOR = 3
+LIFECYCLE_FLOW_BUCKET_SAMPLE_FLOOR = 1
+LIFECYCLE_FLOW_BUCKET_PROMOTE_SAMPLE_FLOOR = 10
+LIFECYCLE_FLOW_BUCKET_NEGATIVE_EV_PCT = -0.30
+LIFECYCLE_FLOW_BUCKET_POSITIVE_EV_PCT = 0.30
+LIFECYCLE_FLOW_REQUIRED_STAGES = ("entry", "submit", "holding", "exit")
 
 RUNTIME_FEATURE_KEYS = {
     "ai_score",
@@ -55,6 +62,9 @@ RUNTIME_FEATURE_KEYS = {
     "ai_result_source",
     "ai_transport_mode",
     "chosen_action",
+    "sim_record_id",
+    "entry_adm_candidate_id",
+    "lifecycle_flow_bucket_id",
     "score_bucket",
     "risk_context_bucket",
     "stale_bucket",
@@ -583,6 +593,8 @@ def _load_sim_post_sell_rows(target_date: str) -> tuple[list[dict[str, Any]], di
                 "stage": stage,
                 "source_stage": "sim_post_sell_evaluation",
                 "runtime_features": {
+                    "sim_record_id": item.get("sim_record_id"),
+                    "entry_adm_candidate_id": item.get("entry_adm_candidate_id"),
                     "ai_score": item.get("ai_score") or item.get("current_ai_score") or item.get("ai_score_at_exit"),
                     "ai_score_raw": item.get("ai_score_raw") or item.get("ai_score_raw_at_exit"),
                     "ai_action": item.get("ai_action") or item.get("ai_action_at_exit"),
@@ -768,6 +780,7 @@ def _load_scalp_sim_submit_rows(target_date: str) -> tuple[list[dict[str, Any]],
                     "blocker_namespace": fields.get("blocker_namespace"),
                     "fixed_threshold_contract_role": "bounded_tunable",
                     "sim_record_id": sim_record_id,
+                    "entry_adm_candidate_id": fields.get("entry_adm_candidate_id"),
                 },
                 "labels": labels,
                 "stage_ev_composite_pct": _stage_ev("submit", labels),
@@ -837,6 +850,7 @@ def _load_scalp_sim_holding_rows(target_date: str) -> tuple[list[dict[str, Any]]
                     "source_quality_block_reason": fields.get("scalp_sim_candidate_window_blocked_reason"),
                     "fixed_threshold_contract_role": "bounded_tunable",
                     "sim_record_id": sim_record_id,
+                    "entry_adm_candidate_id": fields.get("entry_adm_candidate_id"),
                 },
                 "labels": labels,
                 "stage_ev_composite_pct": _stage_ev("holding", labels),
@@ -922,6 +936,7 @@ def _load_scalp_sim_scale_in_rows(target_date: str) -> tuple[list[dict[str, Any]
                         "broker_order_forbidden": fields.get("broker_order_forbidden"),
                         "fixed_threshold_contract_role": "bounded_tunable",
                         "scale_in_fill_observed": is_filled,
+                        "sim_record_id": sim_record_id,
                     },
                     "labels": labels,
                     "stage_ev_composite_pct": _stage_ev("scale_in", labels),
@@ -1138,6 +1153,7 @@ def _load_scalp_sim_overnight_rows(target_date: str) -> tuple[list[dict[str, Any
                     "bedrock_shadow_route_mode": fields.get("bedrock_shadow_route_mode"),
                     "actual_order_submitted": fields.get("actual_order_submitted"),
                     "broker_order_forbidden": fields.get("broker_order_forbidden"),
+                    "sim_record_id": fields.get("sim_record_id"),
                     "fixed_threshold_contract_role": "bounded_tunable",
                 },
                 "labels": labels,
@@ -1217,6 +1233,7 @@ def _load_scalp_sim_panic_rows(target_date: str) -> tuple[list[dict[str, Any]], 
             "ai_score": fields.get("ai_score") or fields.get("current_ai_score"),
             "actual_order_submitted": fields.get("actual_order_submitted"),
             "broker_order_forbidden": fields.get("broker_order_forbidden"),
+            "sim_record_id": fields.get("sim_record_id"),
             "source_family": fields.get("source_family"),
             "decision_family": fields.get("decision_family"),
             "family_type": fields.get("family_type"),
@@ -2508,6 +2525,367 @@ def _overnight_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _slug(value: Any, *, max_len: int = 96) -> str:
+    text = re.sub(r"[^a-zA-Z0-9가-힣]+", "_", str(value or "").strip().lower()).strip("_")
+    return text[:max_len] or "unknown"
+
+
+def _stable_flow_bucket_id(bucket_key: str) -> str:
+    digest = hashlib.sha1(str(bucket_key or "").encode("utf-8")).hexdigest()[:10]
+    return f"lifecycle_flow:combo_lifecycle_flow:{_slug(bucket_key, max_len=56)}:{digest}"
+
+
+def _row_flow_identity(row: dict[str, Any]) -> tuple[str, str]:
+    features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
+    sim_record_id = str(features.get("sim_record_id") or "").strip()
+    if sim_record_id:
+        return f"sim_record_id:{sim_record_id}", "exact_sim_record_id"
+    candidate_id = str(row.get("candidate_id") or "").strip()
+    if candidate_id:
+        return f"candidate_id:{candidate_id}", "candidate_id"
+    code = str(row.get("stock_code") or "").strip()
+    event_time = str(row.get("event_time") or "").strip()
+    return f"fallback:{code}:{event_time}", "fallback_incomplete"
+
+
+def _bucket_id(stage: str, bucket_type: str, bucket_key: str) -> str:
+    return f"{stage}:{bucket_type}:{_slug(bucket_key)}"
+
+
+def _entry_combo_bucket_id(row: dict[str, Any]) -> str:
+    buckets = _entry_bucket_features(row)
+    bucket_key = "|".join(
+        [
+            f"score={buckets['score_band']}",
+            f"source={buckets['source_stage']}",
+            f"stale={buckets['stale_bucket']}",
+            f"liquidity={buckets['liquidity_bucket']}",
+            f"overbought={buckets['overbought_bucket']}",
+            f"time={buckets['time_bucket']}",
+        ]
+    )
+    return _bucket_id("entry", "combo_entry_spot", bucket_key)
+
+
+def _submit_combo_bucket_id(row: dict[str, Any]) -> str:
+    buckets = _submit_bucket_features(row)
+    bucket_key = "|".join(
+        [
+            f"source={buckets['submit_source_stage']}",
+            f"revalidation={buckets['revalidation_state']}",
+            f"quote_age={buckets['quote_age_bucket']}",
+            f"liquidity={buckets['liquidity_bucket']}",
+            f"liquidity_guard={buckets['liquidity_guard_action']}",
+            f"overbought={buckets['overbought_bucket']}",
+            f"latency={buckets['latency_state']}",
+            f"fill={buckets['would_limit_fill']}",
+            f"submitted={buckets['actual_order_submitted']}",
+        ]
+    )
+    return _bucket_id("submit", "combo_submit_quality", bucket_key)
+
+
+def _holding_combo_bucket_id(row: dict[str, Any]) -> str:
+    features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
+    bucket_key = "|".join(
+        [
+            f"source={_bucket_value(row.get('source_stage'), 'holding_source_unknown')}",
+            f"action={_bucket_value(features.get('chosen_action') or features.get('ai_action'), 'holding_action_unknown')}",
+            f"profit={_numeric_band(features.get('profit_rate_live'), prefix='profit', cuts=[(-0.7, 'lt_neg070'), (-0.1, 'neg070_neg010'), (0.8, 'neg010_pos080'), (1.5, 'pos080_pos150'), (3.0, 'pos150_pos300')], unknown='profit_unknown')}",
+            f"held={_numeric_band(features.get('held_sec'), prefix='held', cuts=[(20, 'lt020s'), (180, '020_180s'), (600, '180_600s'), (1800, '600_1800s')], unknown='held_unknown')}",
+        ]
+    )
+    return _bucket_id("holding", "combo_holding_flow", bucket_key)
+
+
+def _scale_in_child_bucket_ids(rows: list[dict[str, Any]]) -> list[str]:
+    bucket_ids: list[str] = []
+    for row in rows:
+        buckets = _scale_in_bucket_features(row)
+        arm = buckets.get("arm") or "arm_unknown"
+        bucket_ids.append(_bucket_id("scale_in", "arm", arm))
+    return list(dict.fromkeys(bucket_ids))
+
+
+def _exit_combo_bucket_id(row: dict[str, Any]) -> str:
+    labels = row.get("labels") if isinstance(row.get("labels"), dict) else {}
+    features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
+    bucket_key = "|".join(
+        [
+            f"source={_bucket_value(row.get('source_stage'), 'exit_source_unknown')}",
+            f"rule={_bucket_value(labels.get('exit_rule') or features.get('chosen_action'), 'exit_rule_unknown')}",
+            f"outcome={_bucket_value(labels.get('sim_post_sell_outcome'), 'outcome_unknown')}",
+            f"profit={_numeric_band(labels.get('profit_rate'), prefix='profit', cuts=[(-0.7, 'lt_neg070'), (-0.1, 'neg070_neg010'), (0.8, 'neg010_pos080'), (1.5, 'pos080_pos150'), (3.0, 'pos150_pos300')], unknown='profit_unknown')}",
+        ]
+    )
+    return _bucket_id("exit", "combo_exit_result", bucket_key)
+
+
+def _first_stage_row(by_stage: dict[str, list[dict[str, Any]]], stage: str) -> dict[str, Any] | None:
+    rows = by_stage.get(stage) or []
+    if not rows:
+        return None
+    return sorted(rows, key=lambda item: str(item.get("event_time") or ""))[0]
+
+
+def _flow_ev(by_stage: dict[str, list[dict[str, Any]]]) -> float | None:
+    exit_row = _first_stage_row(by_stage, "exit")
+    if exit_row is not None:
+        ev = _safe_float(exit_row.get("stage_ev_composite_pct"), None)
+        if ev is not None:
+            return round(float(ev), 4)
+    values = [
+        float(value)
+        for rows in by_stage.values()
+        for row in rows
+        for value in [_safe_float(row.get("stage_ev_composite_pct"), None)]
+        if value is not None
+    ]
+    return round(sum(values) / len(values), 4) if values else None
+
+
+def _flow_record(attribution_key: str, identity_quality: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    by_stage: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        by_stage[str(row.get("stage") or "unknown")].append(row)
+    entry_row = _first_stage_row(by_stage, "entry")
+    submit_row = _first_stage_row(by_stage, "submit")
+    holding_row = _first_stage_row(by_stage, "holding")
+    exit_row = _first_stage_row(by_stage, "exit")
+    scale_in_rows = by_stage.get("scale_in") or []
+    child_bucket_ids = {
+        "entry": _entry_combo_bucket_id(entry_row) if entry_row else None,
+        "submit": _submit_combo_bucket_id(submit_row) if submit_row else None,
+        "holding": _holding_combo_bucket_id(holding_row) if holding_row else None,
+        "scale_in": _scale_in_child_bucket_ids(scale_in_rows),
+        "exit": _exit_combo_bucket_id(exit_row) if exit_row else None,
+    }
+    stage_presence = {stage: bool(by_stage.get(stage)) for stage in LIFECYCLE_FLOW_REQUIRED_STAGES}
+    complete = all(stage_presence.values())
+    ev = _flow_ev(by_stage)
+    if identity_quality == "fallback_incomplete":
+        source_quality = "fallback_identity_incomplete"
+    elif not complete:
+        source_quality = "incomplete_lifecycle_flow"
+    elif ev is None:
+        source_quality = "outcome_join_missing"
+    else:
+        source_quality = "pass"
+    scale_bucket = child_bucket_ids["scale_in"][0] if child_bucket_ids["scale_in"] else "scale_in:none"
+    bucket_key = "|".join(
+        [
+            f"entry={child_bucket_ids['entry'] or 'entry:missing'}",
+            f"submit={child_bucket_ids['submit'] or 'submit:missing'}",
+            f"holding={child_bucket_ids['holding'] or 'holding:missing'}",
+            f"scale_in={scale_bucket}",
+            f"exit={child_bucket_ids['exit'] or 'exit:missing'}",
+        ]
+    )
+    bucket_id = _stable_flow_bucket_id(bucket_key)
+    labels = exit_row.get("labels") if exit_row and isinstance(exit_row.get("labels"), dict) else {}
+    return {
+        "flow_instance_id": attribution_key,
+        "identity_quality": identity_quality,
+        "lifecycle_flow_bucket_id": bucket_id,
+        "bucket_type": "combo_lifecycle_flow",
+        "bucket_key": bucket_key,
+        "attribution_key": attribution_key,
+        "stage_presence": stage_presence,
+        "stage_completion_state": "complete" if complete else "incomplete",
+        "entry_bucket_id": child_bucket_ids["entry"],
+        "submit_bucket_id": child_bucket_ids["submit"],
+        "holding_bucket_id": child_bucket_ids["holding"],
+        "scale_in_bucket_id": scale_bucket if scale_bucket != "scale_in:none" else None,
+        "scale_in_bucket_ids": child_bucket_ids["scale_in"],
+        "exit_bucket_id": child_bucket_ids["exit"],
+        "child_bucket_ids": child_bucket_ids,
+        "stage_contract": {
+            stage: {
+                "stage": stage,
+                "row_count": len(by_stage.get(stage) or []),
+                "bucket_id": child_bucket_ids.get(stage),
+                "contract_state": "present" if by_stage.get(stage) else "missing_policy",
+            }
+            for stage in LIFECYCLE_FLOW_REQUIRED_STAGES
+        },
+        "sample": 1,
+        "joined_sample": 1 if ev is not None and complete else 0,
+        "source_quality_gate": source_quality,
+        "source_quality_adjusted_ev_pct": ev,
+        "equal_weight_avg_profit_pct": _safe_float(labels.get("profit_rate"), None),
+        "diagnostic_win_rate": 1.0 if _safe_float(labels.get("profit_rate"), None) and _safe_float(labels.get("profit_rate"), 0.0) > 0 else 0.0 if labels.get("profit_rate") is not None else None,
+        "outcome_state": "completed" if exit_row and ev is not None else "open_or_unjoined",
+        "actual_order_submitted": any(bool(row.get("actual_order_submitted")) for row in rows),
+        "broker_order_forbidden": all(
+            bool((row.get("runtime_features") or {}).get("broker_order_forbidden"))
+            for row in rows
+            if isinstance(row.get("runtime_features"), dict)
+        ),
+        "metric_scope": "lifecycle_bundle_ev",
+        "rollback_guard": "hard_safety_priority_plus_source_quality_and_post_apply_attribution",
+        "decision_authority": "adm_ldm_lifecycle_flow_bucket_attribution_source_only",
+        "runtime_effect": False,
+    }
+
+
+def _lifecycle_flow_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if str(row.get("stage") or "") not in {"entry", "submit", "holding", "scale_in", "exit"}:
+            continue
+        identity, quality = _row_flow_identity(row)
+        grouped[(identity, quality)].append(row)
+    flows = [
+        _flow_record(identity, quality, subset)
+        for (identity, quality), subset in grouped.items()
+    ]
+    bucket_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for flow in flows:
+        bucket_groups[str(flow.get("bucket_key") or "")].append(flow)
+    buckets: list[dict[str, Any]] = []
+    for bucket_key, subset in bucket_groups.items():
+        joined = [item for item in subset if item.get("source_quality_adjusted_ev_pct") is not None]
+        ev_values = [float(item["source_quality_adjusted_ev_pct"]) for item in joined]
+        profit_values = [
+            _safe_float(item.get("equal_weight_avg_profit_pct"), None)
+            for item in joined
+            if item.get("equal_weight_avg_profit_pct") is not None
+        ]
+        valid_profit = [float(value) for value in profit_values if value is not None]
+        avg_ev = round(sum(ev_values) / len(ev_values), 4) if ev_values else None
+        fallback_count = sum(1 for item in subset if item.get("identity_quality") == "fallback_incomplete")
+        incomplete_count = sum(1 for item in subset if item.get("stage_completion_state") != "complete")
+        source_quality = (
+            "pass"
+            if len(subset) >= LIFECYCLE_FLOW_BUCKET_SAMPLE_FLOOR
+            and len(joined) >= LIFECYCLE_FLOW_BUCKET_SAMPLE_FLOOR
+            and fallback_count == 0
+            and incomplete_count == 0
+            else "hold_sample_or_incomplete_flow"
+        )
+        if avg_ev is None or source_quality != "pass":
+            recommended_route = "hold_sample"
+        elif avg_ev <= LIFECYCLE_FLOW_BUCKET_NEGATIVE_EV_PCT:
+            recommended_route = "candidate_tighten_or_exclude"
+        elif avg_ev >= LIFECYCLE_FLOW_BUCKET_POSITIVE_EV_PCT:
+            recommended_route = "candidate_recovery_or_relax"
+        else:
+            recommended_route = "hold_no_edge"
+        first = subset[0]
+        buckets.append(
+            {
+                "lifecycle_flow_bucket_id": first.get("lifecycle_flow_bucket_id"),
+                "bucket_type": "combo_lifecycle_flow",
+                "bucket_key": bucket_key,
+                "sample": len(subset),
+                "joined_sample": len(joined),
+                "join_rate": round(len(joined) / len(subset), 4) if subset else 0.0,
+                "complete_flow_count": len(subset) - incomplete_count,
+                "fallback_identity_count": fallback_count,
+                "source_quality_gate": source_quality,
+                "source_quality_adjusted_ev_pct": avg_ev,
+                "equal_weight_avg_profit_pct": round(sum(valid_profit) / len(valid_profit), 4) if valid_profit else None,
+                "diagnostic_win_rate": (
+                    round(sum(1 for value in valid_profit if value > 0) / len(valid_profit), 4)
+                    if valid_profit
+                    else None
+                ),
+                "recommended_route": recommended_route,
+                "metric_scope": "lifecycle_bundle_ev",
+                "entry_bucket_id": first.get("entry_bucket_id"),
+                "submit_bucket_id": first.get("submit_bucket_id"),
+                "holding_bucket_id": first.get("holding_bucket_id"),
+                "scale_in_bucket_id": first.get("scale_in_bucket_id"),
+                "scale_in_bucket_ids": first.get("scale_in_bucket_ids") or [],
+                "exit_bucket_id": first.get("exit_bucket_id"),
+                "child_bucket_ids": first.get("child_bucket_ids") or {},
+                "stage_contract": first.get("stage_contract") or {},
+                "attribution_key": first.get("attribution_key"),
+                "rollback_guard": first.get("rollback_guard"),
+                "decision_authority": "adm_ldm_lifecycle_flow_bucket_attribution_source_only",
+                "runtime_effect": False,
+                "forbidden_uses": [
+                    "entry_only_full_lifecycle_promotion",
+                    "hard_safety_bypass",
+                    "intraday_threshold_mutation",
+                    "broker_order_submit",
+                    "provider_route_change",
+                    "bot_restart_trigger",
+                ],
+            }
+        )
+    buckets.sort(
+        key=lambda item: (
+            0 if item.get("source_quality_gate") == "pass" else 1,
+            -int(item.get("joined_sample") or 0),
+            str(item.get("bucket_key") or ""),
+        )
+    )
+    runtime_candidates = [
+        {
+            "candidate_id": f"lifecycle_flow_bucket_{idx+1}",
+            "lifecycle_flow_bucket_id": item.get("lifecycle_flow_bucket_id"),
+            "bucket_type": item.get("bucket_type"),
+            "bucket_key": item.get("bucket_key"),
+            "recommended_route": item.get("recommended_route"),
+            "source_quality_adjusted_ev_pct": item.get("source_quality_adjusted_ev_pct"),
+            "joined_sample": item.get("joined_sample"),
+            "approval_required": False,
+            "allowed_runtime_apply": False,
+            "next_route": "lifecycle_bucket_discovery_greenfield_bundle_contract",
+        }
+        for idx, item in enumerate(buckets)
+        if item.get("source_quality_gate") == "pass"
+        and item.get("recommended_route") == "candidate_recovery_or_relax"
+        and int(item.get("joined_sample") or 0) >= LIFECYCLE_FLOW_BUCKET_PROMOTE_SAMPLE_FLOOR
+    ][:10]
+    workorders = [
+        {
+            "workorder_id": f"lifecycle_flow_bucket_incomplete_{idx+1}",
+            "reason": item.get("source_quality_gate"),
+            "metric_role": "source_quality_gate",
+            "implementation_status": "implemented",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "lifecycle_flow_bucket_id": item.get("lifecycle_flow_bucket_id"),
+        }
+        for idx, item in enumerate(flows[:20])
+        if item.get("source_quality_gate") != "pass"
+    ]
+    return {
+        "metric_role": "primary_ev",
+        "metric_scope": "lifecycle_bundle_ev",
+        "decision_authority": "adm_ldm_lifecycle_flow_bucket_attribution_source_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "window_policy": "daily_lifecycle_flow_rows_plus_threshold_cycle_rolling_consumer",
+        "sample_floor": LIFECYCLE_FLOW_BUCKET_SAMPLE_FLOOR,
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": "entry+submit+holding+exit complete flow + stable identity + joined outcome",
+        "rollback_guard": "hard_safety_priority_plus_source_quality_and_post_apply_attribution",
+        "forbidden_uses": [
+            "entry_only_full_lifecycle_promotion",
+            "hard_safety_bypass",
+            "intraday_threshold_mutation",
+            "broker_order_submit",
+            "provider_route_change",
+            "bot_restart_trigger",
+        ],
+        "summary": {
+            "flow_count": len(flows),
+            "complete_flow_count": sum(1 for item in flows if item.get("stage_completion_state") == "complete"),
+            "fallback_identity_count": sum(1 for item in flows if item.get("identity_quality") == "fallback_incomplete"),
+            "bucket_count": len(buckets),
+            "runtime_candidate_count": len(runtime_candidates),
+            "workorder_count": len(workorders),
+        },
+        "flows": flows[:200],
+        "buckets": buckets[:200],
+        "runtime_approval_candidates": runtime_candidates,
+        "code_improvement_workorders": workorders,
+    }
+
+
 def _policy_entries(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -2667,6 +3045,7 @@ def build_lifecycle_decision_matrix_report(target_date: str) -> dict[str, Any]:
     submit_bucket_attribution = _submit_bucket_attribution(rows)
     scale_in_bucket_attribution = _scale_in_bucket_attribution(rows)
     overnight_bucket_attribution = _overnight_bucket_attribution(rows)
+    lifecycle_flow_bucket_attribution = _lifecycle_flow_bucket_attribution(rows)
     report = {
         "schema_version": REPORT_SCHEMA_VERSION,
         "date": target_date,
@@ -2749,11 +3128,32 @@ def build_lifecycle_decision_matrix_report(target_date: str) -> dict[str, Any]:
                 if isinstance(overnight_bucket_attribution.get("summary"), dict)
                 else 0
             ),
+            "lifecycle_flow_bucket_count": (
+                lifecycle_flow_bucket_attribution.get("summary", {}).get("bucket_count")
+                if isinstance(lifecycle_flow_bucket_attribution.get("summary"), dict)
+                else 0
+            ),
+            "lifecycle_flow_complete_count": (
+                lifecycle_flow_bucket_attribution.get("summary", {}).get("complete_flow_count")
+                if isinstance(lifecycle_flow_bucket_attribution.get("summary"), dict)
+                else 0
+            ),
+            "lifecycle_flow_runtime_candidate_count": (
+                lifecycle_flow_bucket_attribution.get("summary", {}).get("runtime_candidate_count")
+                if isinstance(lifecycle_flow_bucket_attribution.get("summary"), dict)
+                else 0
+            ),
+            "lifecycle_flow_workorder_count": (
+                lifecycle_flow_bucket_attribution.get("summary", {}).get("workorder_count")
+                if isinstance(lifecycle_flow_bucket_attribution.get("summary"), dict)
+                else 0
+            ),
             "lifecycle_ai_context_feedback": _lifecycle_ai_context_feedback_summary(policy_entries),
             "status": "pass" if not warnings else "warning",
             "warnings": warnings,
         },
         "policy_entries": policy_entries,
+        "lifecycle_flow_bucket_attribution": lifecycle_flow_bucket_attribution,
         "entry_bucket_attribution": entry_bucket_attribution,
         "submit_bucket_attribution": submit_bucket_attribution,
         "scale_in_bucket_attribution": scale_in_bucket_attribution,
@@ -2794,6 +3194,9 @@ def render_lifecycle_decision_matrix_markdown(report: dict[str, Any]) -> str:
         f"- scale_in_bucket_runtime_candidate_count: `{summary.get('scale_in_bucket_runtime_candidate_count')}`",
         f"- overnight_bucket_actionable_count: `{summary.get('overnight_bucket_actionable_count')}`",
         f"- overnight_bucket_runtime_candidate_count: `{summary.get('overnight_bucket_runtime_candidate_count')}`",
+        f"- lifecycle_flow_bucket_count: `{summary.get('lifecycle_flow_bucket_count')}`",
+        f"- lifecycle_flow_complete_count: `{summary.get('lifecycle_flow_complete_count')}`",
+        f"- lifecycle_flow_runtime_candidate_count: `{summary.get('lifecycle_flow_runtime_candidate_count')}`",
         f"- lifecycle_ai_context_feedback: `{summary.get('lifecycle_ai_context_feedback') or {}}`",
         f"- warnings: `{summary.get('warnings')}`",
         "",
@@ -2808,6 +3211,38 @@ def render_lifecycle_decision_matrix_markdown(report: dict[str, Any]) -> str:
             f"| `{item.get('stage')}` | {item.get('sample')} | {item.get('joined_sample')} | "
             f"{item.get('stage_ev_composite_pct')} | {item.get('confidence')} | "
             f"`{item.get('source_quality_gate')}` | `{item.get('selected_action')}` | {item.get('promote_ready')} |"
+        )
+    lifecycle_flow_buckets = (
+        report.get("lifecycle_flow_bucket_attribution")
+        if isinstance(report.get("lifecycle_flow_bucket_attribution"), dict)
+        else {}
+    )
+    lifecycle_flow_summary = (
+        lifecycle_flow_buckets.get("summary")
+        if isinstance(lifecycle_flow_buckets.get("summary"), dict)
+        else {}
+    )
+    lines.extend(
+        [
+            "",
+            "## Lifecycle Flow Bucket Attribution",
+            "",
+            f"- decision_authority: `{lifecycle_flow_buckets.get('decision_authority')}`",
+            f"- metric_scope: `{lifecycle_flow_buckets.get('metric_scope')}`",
+            f"- primary_decision_metric: `{lifecycle_flow_buckets.get('primary_decision_metric')}`",
+            f"- summary: `{lifecycle_flow_summary}`",
+            "",
+            "| lifecycle_flow_bucket_id | sample | joined | ev | route | source_quality |",
+            "| --- | ---: | ---: | ---: | --- | --- |",
+        ]
+    )
+    for item in (lifecycle_flow_buckets.get("buckets") or [])[:20]:
+        if not isinstance(item, dict):
+            continue
+        lines.append(
+            f"| `{item.get('lifecycle_flow_bucket_id')}` | {item.get('sample')} | "
+            f"{item.get('joined_sample')} | {item.get('source_quality_adjusted_ev_pct')} | "
+            f"`{item.get('recommended_route')}` | `{item.get('source_quality_gate')}` |"
         )
     entry_buckets = (
         report.get("entry_bucket_attribution")

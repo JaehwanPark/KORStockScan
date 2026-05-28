@@ -7,8 +7,8 @@
 - allowed_runtime_apply: `False`
 - decision_authority: `producer_gap_discovery_source_only`
 - candidate_count: `10`
-- high_priority_candidate_count: `9`
-- workorder_count: `8`
+- high_priority_candidate_count: `10`
+- workorder_count: `10`
 - sim_first_coverage_status: `pass`
 - rolling_dates_scanned: `['2026-05-18', '2026-05-19', '2026-05-20', '2026-05-21', '2026-05-22', '2026-05-26', '2026-05-27']`
 - sim_rows_scanned: `955`
@@ -21,28 +21,30 @@
 ## AI Review
 
 - provider: `openai`
-- model: `gpt-5.4`
+- model: `gpt-5.4-mini`
 - warnings: `[]`
 
 ## Candidates
 
 - `producer_gap_stop_recovery_counterfactual_missing` type=`stop_recovery_counterfactual_missing` priority=`high` samples=`125`
-- `producer_gap_missed_fill_recovery_counterfactual_missing` type=`missed_fill_recovery_counterfactual_missing` priority=`medium` samples=`3`
-- `producer_gap_swing_sim_probe_label_gap_missing` type=`swing_sim_probe_label_gap_missing` priority=`critical` samples=`6132`
-- `producer_gap_scale_in_counterfactual_gap_missing` type=`scale_in_counterfactual_gap_missing` priority=`high` samples=`874`
+- `producer_gap_missed_fill_recovery_counterfactual_missing` type=`missed_fill_recovery_counterfactual_missing` priority=`high` samples=`3`
+- `producer_gap_swing_sim_probe_label_gap_missing` type=`swing_sim_probe_label_gap_missing` priority=`high` samples=`6205`
+- `producer_gap_scale_in_counterfactual_gap_missing` type=`scale_in_counterfactual_gap_missing` priority=`high` samples=`820`
 - `producer_gap_limit_up_plateau_breakdown_exit_missing` type=`limit_up_plateau_breakdown_exit_missing` priority=`high` samples=`2`
-- `producer_gap_sim_entry_selection_gap_missing` type=`sim_entry_selection_gap_missing` priority=`critical` samples=`955`
+- `producer_gap_sim_entry_selection_gap_missing` type=`sim_entry_selection_gap_missing` priority=`high` samples=`955`
 - `producer_gap_sim_holding_runner_gap_missing` type=`sim_holding_runner_gap_missing` priority=`high` samples=`79`
 - `producer_gap_sim_exit_plateau_breakdown_gap_missing` type=`sim_exit_plateau_breakdown_gap_missing` priority=`high` samples=`86`
 - `producer_gap_sim_stop_recovery_gap_missing` type=`sim_stop_recovery_gap_missing` priority=`high` samples=`954`
-- `producer_gap_sim_scale_in_counterfactual_gap_missing` type=`sim_scale_in_counterfactual_gap_missing` priority=`high` samples=`7899`
+- `producer_gap_sim_scale_in_counterfactual_gap_missing` type=`sim_scale_in_counterfactual_gap_missing` priority=`high` samples=`8048`
 
 ## Code Improvement Orders
 
 - `order_producer_gap_discovery_producer_gap_stop_recovery_counterfactual_missing`: Implement missing producer: stop_recovery_counterfactual_missing
+- `order_producer_gap_discovery_producer_gap_missed_fill_recovery_counterfactual_missing`: Implement missing producer: missed_fill_recovery_counterfactual_missing
 - `order_producer_gap_discovery_producer_gap_swing_sim_probe_label_gap_missing`: Implement missing producer: swing_sim_probe_label_gap_missing
 - `order_producer_gap_discovery_producer_gap_scale_in_counterfactual_gap_missing`: Implement missing producer: scale_in_counterfactual_gap_missing
 - `order_producer_gap_discovery_producer_gap_limit_up_plateau_breakdown_exit_missing`: Implement missing producer: limit_up_plateau_breakdown_exit_missing
+- `order_producer_gap_discovery_producer_gap_sim_entry_selection_gap_missing`: Implement missing producer: sim_entry_selection_gap_missing
 - `order_producer_gap_discovery_producer_gap_sim_holding_runner_gap_missing`: Implement missing producer: sim_holding_runner_gap_missing
 - `order_producer_gap_discovery_producer_gap_sim_exit_plateau_breakdown_gap_missing`: Implement missing producer: sim_exit_plateau_breakdown_gap_missing
 - `order_producer_gap_discovery_producer_gap_sim_stop_recovery_gap_missing`: Implement missing producer: sim_stop_recovery_gap_missing

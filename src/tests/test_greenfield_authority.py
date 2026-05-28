@@ -4,6 +4,13 @@ from src.engine.lifecycle import greenfield_authority as mod
 
 
 def _write_policy(path, rows):
+    stage_contract = {
+        "entry": {"baseline_passthrough_allowed": False},
+        "submit": {"baseline_passthrough_allowed": True},
+        "holding": {"baseline_passthrough_allowed": True},
+        "scale_in": {"baseline_passthrough_allowed": True},
+        "exit": {"baseline_passthrough_allowed": True},
+    }
     path.write_text(
         json.dumps(
             {
@@ -16,6 +23,8 @@ def _write_policy(path, rows):
                     "scale_in": [row for row in rows if row["stage"] == "scale_in"],
                     "exit": [row for row in rows if row["stage"] == "exit"],
                 },
+                "stage_contract": stage_contract,
+                "allowlist": rows,
             }
         ),
         encoding="utf-8",
@@ -25,7 +34,12 @@ def _write_policy(path, rows):
 def test_greenfield_authority_inactive_allows_without_policy(monkeypatch):
     monkeypatch.delenv(mod.ENABLED_ENV, raising=False)
 
-    decision = mod.evaluate_greenfield_authority(stage="entry", action="BUY", strategy="SCALPING")
+    decision = mod.evaluate_greenfield_authority(
+        stage="entry",
+        action="BUY",
+        strategy="SCALPING",
+        observed_bucket_id="entry:score_66_69",
+    )
 
     assert decision.active is False
     assert decision.allowed is True
@@ -52,12 +66,94 @@ def test_greenfield_authority_allows_promoted_bucket(tmp_path, monkeypatch):
     monkeypatch.setenv(mod.SCOPE_ENV, mod.FULL_LIFECYCLE_SCOPE)
     monkeypatch.setenv(mod.POLICY_FILE_ENV, str(policy))
 
-    decision = mod.evaluate_greenfield_authority(stage="entry", action="BUY", strategy="SCALPING")
+    decision = mod.evaluate_greenfield_authority(
+        stage="entry",
+        action="BUY",
+        strategy="SCALPING",
+        observed_bucket_id="entry:score_66_69",
+    )
 
     assert decision.active is True
     assert decision.allowed is True
     assert decision.reason == "promoted_bucket_allowed"
     assert decision.matched_bucket_id == "entry:score_66_69"
+
+
+def test_greenfield_authority_blocks_entry_when_observed_bucket_missing(tmp_path, monkeypatch):
+    policy = tmp_path / "policy.json"
+    _write_policy(
+        policy,
+        [
+            {
+                "stage": "entry",
+                "action": "BUY",
+                "strategy_scope": "scalping",
+                "bucket_id": "entry:score_66_69",
+                "family": "entry_wait6579_score66_69_recovery_gate_v1",
+                "source_quality_gate": "pass",
+                "ai_tier2_status": "parsed",
+            }
+        ],
+    )
+    monkeypatch.setenv(mod.ENABLED_ENV, "true")
+    monkeypatch.setenv(mod.SCOPE_ENV, mod.FULL_LIFECYCLE_SCOPE)
+    monkeypatch.setenv(mod.POLICY_FILE_ENV, str(policy))
+
+    decision = mod.evaluate_greenfield_authority(stage="entry", action="BUY", strategy="SCALPING")
+
+    assert decision.active is True
+    assert decision.allowed is False
+    assert decision.reason == "observed_bucket_missing"
+
+
+def test_greenfield_authority_blocks_incomplete_full_lifecycle_bundle(tmp_path, monkeypatch):
+    policy = tmp_path / "policy.json"
+    policy.write_text(
+        json.dumps(
+            {
+                "policy_version": "greenfield_real_environment_authority:2026-05-27",
+                "scope": "full_lifecycle",
+                "stages": {
+                    "entry": [
+                        {
+                            "stage": "entry",
+                            "action": "BUY",
+                            "strategy_scope": "scalping",
+                            "bucket_id": "entry:score_66_69",
+                            "family": "entry_wait6579_score66_69_recovery_gate_v1",
+                            "source_quality_gate": "pass",
+                            "ai_tier2_status": "parsed",
+                        }
+                    ],
+                    "submit": [],
+                    "holding": [],
+                    "scale_in": [],
+                    "exit": [],
+                },
+                "allowlist": [
+                    {
+                        "stage": "entry",
+                        "action": "BUY",
+                        "strategy_scope": "scalping",
+                        "bucket_id": "entry:score_66_69",
+                        "family": "entry_wait6579_score66_69_recovery_gate_v1",
+                        "source_quality_gate": "pass",
+                        "ai_tier2_status": "parsed",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(mod.ENABLED_ENV, "true")
+    monkeypatch.setenv(mod.SCOPE_ENV, mod.FULL_LIFECYCLE_SCOPE)
+    monkeypatch.setenv(mod.POLICY_FILE_ENV, str(policy))
+
+    decision = mod.evaluate_greenfield_authority(stage="entry", action="BUY", strategy="SCALPING")
+
+    assert decision.active is True
+    assert decision.allowed is False
+    assert decision.reason == "incomplete_lifecycle_bundle"
 
 
 def test_greenfield_authority_blocks_unpromoted_bucket(tmp_path, monkeypatch):
@@ -71,7 +167,40 @@ def test_greenfield_authority_blocks_unpromoted_bucket(tmp_path, monkeypatch):
 
     assert decision.active is True
     assert decision.allowed is False
-    assert decision.reason == "unpromoted_bucket_blocked"
+    assert decision.reason == "greenfield_policy_allowlist_empty"
+
+
+def test_greenfield_authority_blocks_observed_bucket_mismatch(tmp_path, monkeypatch):
+    policy = tmp_path / "policy.json"
+    _write_policy(
+        policy,
+        [
+            {
+                "stage": "entry",
+                "action": "BUY",
+                "strategy_scope": "scalping",
+                "bucket_id": "entry:score_66_69",
+                "family": "entry_wait6579_score66_69_recovery_gate_v1",
+                "source_quality_gate": "pass",
+                "ai_tier2_status": "parsed",
+            }
+        ],
+    )
+    monkeypatch.setenv(mod.ENABLED_ENV, "true")
+    monkeypatch.setenv(mod.SCOPE_ENV, mod.FULL_LIFECYCLE_SCOPE)
+    monkeypatch.setenv(mod.POLICY_FILE_ENV, str(policy))
+
+    decision = mod.evaluate_greenfield_authority(
+        stage="entry",
+        action="BUY",
+        strategy="SCALPING",
+        observed_bucket_id="entry:score_70p",
+    )
+
+    assert decision.active is True
+    assert decision.allowed is False
+    assert decision.reason == "observed_bucket_policy_mismatch"
+    assert decision.observed_bucket_id == "entry:score_70p"
 
 
 def test_greenfield_authority_enabled_with_missing_policy_fails_closed(monkeypatch):

@@ -721,7 +721,17 @@ def _lifecycle_decision_matrix_summary(target_date: str) -> tuple[dict[str, Any]
         if isinstance(payload.get("submit_bucket_attribution"), dict)
         else {}
     )
+    lifecycle_flow_bucket = (
+        payload.get("lifecycle_flow_bucket_attribution")
+        if isinstance(payload.get("lifecycle_flow_bucket_attribution"), dict)
+        else {}
+    )
     submit_summary = submit_bucket.get("summary") if isinstance(submit_bucket.get("summary"), dict) else {}
+    lifecycle_flow_summary = (
+        lifecycle_flow_bucket.get("summary")
+        if isinstance(lifecycle_flow_bucket.get("summary"), dict)
+        else {}
+    )
     warnings = [f"lifecycle_decision_matrix:{item}" for item in (payload.get("warnings") or []) if str(item)]
     return (
         {
@@ -736,6 +746,32 @@ def _lifecycle_decision_matrix_summary(target_date: str) -> tuple[dict[str, Any]
             "joined_rows": _safe_int(summary.get("joined_rows"), 0),
             "policy_pass_count": _safe_int(summary.get("policy_pass_count"), 0),
             "promote_ready_count": _safe_int(summary.get("promote_ready_count"), 0),
+            "lifecycle_flow_bucket_count": _safe_int(
+                summary.get("lifecycle_flow_bucket_count"),
+                _safe_int(lifecycle_flow_summary.get("bucket_count"), 0),
+            ),
+            "lifecycle_flow_complete_count": _safe_int(
+                summary.get("lifecycle_flow_complete_count"),
+                _safe_int(lifecycle_flow_summary.get("complete_flow_count"), 0),
+            ),
+            "lifecycle_flow_runtime_candidate_count": _safe_int(
+                summary.get("lifecycle_flow_runtime_candidate_count"),
+                _safe_int(lifecycle_flow_summary.get("runtime_candidate_count"), 0),
+            ),
+            "lifecycle_flow_workorder_count": _safe_int(
+                summary.get("lifecycle_flow_workorder_count"),
+                _safe_int(lifecycle_flow_summary.get("workorder_count"), 0),
+            ),
+            "lifecycle_flow_runtime_approval_candidates": (
+                lifecycle_flow_bucket.get("runtime_approval_candidates")
+                if isinstance(lifecycle_flow_bucket.get("runtime_approval_candidates"), list)
+                else []
+            ),
+            "lifecycle_flow_code_improvement_workorders": (
+                lifecycle_flow_bucket.get("code_improvement_workorders")
+                if isinstance(lifecycle_flow_bucket.get("code_improvement_workorders"), list)
+                else []
+            ),
             "submit_bucket_attribution_summary": submit_summary,
             "submit_bucket_runtime_approval_candidates": (
                 submit_bucket.get("runtime_approval_candidates")
@@ -1770,6 +1806,11 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- status: `{lifecycle_matrix.get('status')}` / version: `{lifecycle_matrix.get('matrix_version') or '-'}`",
         f"- total/joined: `{lifecycle_matrix.get('total_rows')}` / `{lifecycle_matrix.get('joined_rows')}`",
         f"- policy_pass/promote_ready: `{lifecycle_matrix.get('policy_pass_count')}` / `{lifecycle_matrix.get('promote_ready_count')}`",
+        f"- lifecycle_flow buckets/complete/runtime/workorders: "
+        f"`{lifecycle_matrix.get('lifecycle_flow_bucket_count')}` / "
+        f"`{lifecycle_matrix.get('lifecycle_flow_complete_count')}` / "
+        f"`{lifecycle_matrix.get('lifecycle_flow_runtime_candidate_count')}` / "
+        f"`{lifecycle_matrix.get('lifecycle_flow_workorder_count')}`",
         f"- fixed_threshold_roles: `{lifecycle_matrix.get('fixed_threshold_roles') or {}}`",
         f"- policy_entries: `{lifecycle_matrix.get('policy_entries') or []}`",
         "",

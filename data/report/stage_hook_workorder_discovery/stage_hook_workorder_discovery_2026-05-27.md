@@ -20,7 +20,6 @@
 - readiness_tier: `observe_only`
 - evidence_score: `23.5`
 - forbidden_uses: `account guard bypass, bot restart, broker guard bypass, broker order submit, cooldown guard bypass, emergency stop override, entry decision override, exit decision override, hard stop override, order guard bypass, position cap release, protect stop override, provider change, quantity guard bypass, real order enablement, threshold mutation, real_1share_as_preapply_primary_ev, real_one_share_as_preapply_primary_ev, merge_real_pnl_with_sim_probe_ev, runtime_change_from_preapply_real_sample`
-
 ### `stage_hook_scale_in_would_add_policy_probe`
 - hook_name: `scale_in_would_add_policy_probe`
 - hook_class: `scale_in_policy_hook_candidate`

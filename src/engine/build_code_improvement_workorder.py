@@ -723,6 +723,25 @@ def _classify_order(
             ),
         )
 
+    if order.get("source_report_type") == "lifecycle_decision_matrix_lifecycle_flow_bucket_attribution":
+        return ClassifiedOrder(
+            order=order,
+            decision="implement_now",
+            reason=(
+                "LDM lifecycle-flow parent bucket workorder is source-only bundle attribution/handoff "
+                "instrumentation; Greenfield real-env stays blocked until complete entry-submit-holding-exit "
+                "flows pass the regenerated chain."
+            ),
+            mapped_family=mapped_family or "lifecycle_decision_matrix_runtime",
+            route=route or "instrumentation_order",
+            confidence=confidence,
+            automation_reentry=(
+                "Next postclose LDM, lifecycle bucket discovery, threshold EV, runtime approval summary, "
+                "runtime apply bridge, and verifier must preserve lifecycle-flow parent bucket state."
+            ),
+        )
+
+
     if order.get("source_report_type") == "lifecycle_bucket_discovery":
         return ClassifiedOrder(
             order=order,
@@ -1426,6 +1445,94 @@ def _lifecycle_overnight_bucket_order_id(item: dict[str, Any]) -> str:
     bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
     bucket_key = _slug(str(item.get("bucket_key") or item.get("workorder_id") or "unknown"))
     return f"order_lifecycle_overnight_bucket_{bucket_type}_{bucket_key}"
+
+
+def _lifecycle_flow_bucket_order_id(item: dict[str, Any]) -> str:
+    workorder_id = _slug(str(item.get("workorder_id") or "unknown"))
+    bucket_id = _slug_with_hash(str(item.get("lifecycle_flow_bucket_id") or item.get("bucket_key") or "unknown"))
+    return f"order_lifecycle_flow_bucket_{workorder_id}_{bucket_id}"
+
+
+def _lifecycle_flow_bucket_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+    attribution = (
+        report.get("lifecycle_flow_bucket_attribution")
+        if isinstance(report.get("lifecycle_flow_bucket_attribution"), dict)
+        else {}
+    )
+    workorders = attribution.get("code_improvement_workorders")
+    if not isinstance(workorders, list) or not workorders:
+        return []
+    contract = {
+        "metric_role": attribution.get("metric_role"),
+        "decision_authority": attribution.get("decision_authority"),
+        "window_policy": attribution.get("window_policy"),
+        "sample_floor": attribution.get("sample_floor"),
+        "primary_decision_metric": attribution.get("primary_decision_metric"),
+        "source_quality_gate": attribution.get("source_quality_gate"),
+        "forbidden_uses": attribution.get("forbidden_uses") or [],
+    }
+    implementation_status, implementation_provenance = _implementation_marker_from_attribution(attribution)
+    orders: list[dict[str, Any]] = []
+    for item in workorders:
+        if not isinstance(item, dict):
+            continue
+        flow_bucket_id = str(item.get("lifecycle_flow_bucket_id") or "").strip()
+        if not flow_bucket_id:
+            continue
+        orders.append(
+            {
+                "order_id": _lifecycle_flow_bucket_order_id(item),
+                "title": f"LDM lifecycle flow bucket follow-up: {flow_bucket_id}",
+                "source_report_type": "lifecycle_decision_matrix_lifecycle_flow_bucket_attribution",
+                "lifecycle_stage": "lifecycle_flow",
+                "target_subsystem": "lifecycle_decision_matrix",
+                "route": "instrumentation_order",
+                "mapped_family": "lifecycle_decision_matrix_runtime",
+                "threshold_family": "lifecycle_decision_matrix_runtime",
+                "improvement_type": "lifecycle_flow_parent_bucket_source_quality_attribution",
+                "confidence": "daily_ldm_source",
+                "priority": 1,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "implementation_status": _implementation_status_for_bucket(item, implementation_status),
+                "implementation_provenance": _implementation_provenance_for_bucket(item, implementation_provenance),
+                "expected_ev_effect": (
+                    "Prevent entry-only EV from being interpreted as full lifecycle EV by keeping incomplete "
+                    "parent flow bundles visible as source-quality evidence."
+                ),
+                "evidence": [
+                    f"workorder_id={item.get('workorder_id')}",
+                    f"lifecycle_flow_bucket_id={flow_bucket_id}",
+                    f"reason={item.get('reason')}",
+                    f"metric_role={item.get('metric_role') or contract.get('metric_role')}",
+                    f"decision_authority={contract.get('decision_authority')}",
+                    f"primary_decision_metric={contract.get('primary_decision_metric')}",
+                    "runtime_effect=false",
+                    "allowed_runtime_apply=false",
+                ],
+                "intent": (
+                    "Close parent lifecycle-flow attribution gaps without changing runtime thresholds, broker "
+                    "submit behavior, provider routing, or Greenfield real-env authority."
+                ),
+                "next_postclose_metric": (
+                    "lifecycle_flow bucket counts, complete-flow counts, runtime candidates, and workorders "
+                    "must be visible in threshold EV, runtime summary, control tower, and verifier."
+                ),
+                "files_likely_touched": [
+                    "src/engine/lifecycle_decision_matrix.py",
+                    "src/engine/lifecycle_bucket_discovery.py",
+                    "src/engine/runtime_approval_summary.py",
+                    "src/engine/runtime_apply_bridge.py",
+                    "src/engine/verify_threshold_cycle_postclose_chain.py",
+                ],
+                "acceptance_tests": [
+                    "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_decision_matrix.py src/tests/test_lifecycle_bucket_discovery.py src/tests/test_runtime_apply_bridge.py src/tests/test_verify_threshold_cycle_postclose_chain.py",
+                    "postclose verifier fails if lifecycle-flow parent bucket output is dropped",
+                ],
+                "metric_contract": contract,
+            }
+        )
+    return orders
 
 
 def _lifecycle_bucket_discovery_report_path(target_date: str) -> Path:
@@ -2661,6 +2768,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         for order in _lifecycle_submit_bucket_followup_orders(lifecycle_report)
         if str(order.get("order_id") or "") not in buy_funnel_sentinel_order_ids
     ]
+    lifecycle_flow_bucket_orders = _lifecycle_flow_bucket_followup_orders(lifecycle_report)
     lifecycle_scale_in_bucket_orders = _lifecycle_scale_in_bucket_followup_orders(lifecycle_report)
     lifecycle_overnight_bucket_orders = _lifecycle_overnight_bucket_followup_orders(lifecycle_report)
     lifecycle_bucket_discovery_orders = _lifecycle_bucket_discovery_followup_orders(lifecycle_bucket_discovery)
@@ -2689,6 +2797,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         *stage_hook_workorder_discovery_orders,
         *lifecycle_entry_bucket_orders,
         *lifecycle_submit_bucket_orders,
+        *lifecycle_flow_bucket_orders,
         *lifecycle_scale_in_bucket_orders,
         *lifecycle_overnight_bucket_orders,
         *lifecycle_bucket_discovery_orders,
@@ -2723,6 +2832,11 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         for order in [*lifecycle_entry_bucket_orders, *lifecycle_submit_bucket_orders, *lifecycle_scale_in_bucket_orders]
         if order.get("order_id")
     }
+    required_handoff_order_ids.update(
+        str(order.get("order_id"))
+        for order in lifecycle_flow_bucket_orders
+        if order.get("order_id")
+    )
     required_handoff_order_ids.update(
         str(order.get("order_id"))
         for order in pattern_lab_currentness_orders
@@ -2901,6 +3015,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "threshold_ev_source_order_count": len(threshold_ev_orders),
             "lifecycle_entry_bucket_source_order_count": len(lifecycle_entry_bucket_orders),
             "lifecycle_submit_bucket_source_order_count": len(lifecycle_submit_bucket_orders),
+            "lifecycle_flow_bucket_source_order_count": len(lifecycle_flow_bucket_orders),
             "lifecycle_scale_in_bucket_source_order_count": len(lifecycle_scale_in_bucket_orders),
             "lifecycle_overnight_bucket_source_order_count": len(lifecycle_overnight_bucket_orders),
             "lifecycle_bucket_discovery_source_order_count": len(lifecycle_bucket_discovery_orders),
