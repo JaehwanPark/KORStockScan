@@ -48,6 +48,28 @@ def test_lifecycle_holding_started_marks_action_and_held_not_applicable():
     )
 
 
+def test_lifecycle_holding_started_missing_profit_is_not_applicable_not_workorder():
+    row = {
+        "stage": "holding",
+        "source_stage": "scalp_sim_holding_started",
+        "runtime_features": {},
+        "labels": {},
+        "stage_ev_composite_pct": None,
+    }
+
+    features = mod._holding_bucket_features(row)
+    attribution = mod._holding_bucket_attribution([row])
+
+    assert features["holding_action"] == "holding_action_not_applicable_at_start"
+    assert features["profit_band"] == "profit_not_applicable_at_start"
+    assert features["held_bucket"] == "held_not_applicable_at_start"
+    assert "profit_unknown" not in mod._holding_combo_bucket_id(row)
+    assert all(
+        item["recommended_route"] != "source_quality_workorder"
+        for item in attribution["code_improvement_workorders"]
+    )
+
+
 def test_lifecycle_partial_exit_marks_outcome_not_applicable():
     row = {
         "stage": "exit",

@@ -178,8 +178,8 @@
 ## Code Improvement Workorder
 - artifact: `/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-28.json`
 - markdown: `/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-28.md`
-- selected_order_count: `113`
-- decision_counts: `{'implement_now': 18, 'attach_existing_family': 115, 'design_family_candidate': 7, 'defer_evidence': 10, 'reject': 3}`
+- selected_order_count: `97`
+- decision_counts: `{'attach_existing_family': 116, 'design_family_candidate': 7, 'defer_evidence': 10, 'reject': 3}`
 
 ## Approval Requests
 - none
@@ -189,9 +189,9 @@
 
 ## Calibration Decisions
 ## Code Improvement Top Orders
-- `order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_042c8ce0` decision=`implement_now` subsystem=`lifecycle_bucket_discovery_taxonomy_provenance`
-- `order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_5036a371` decision=`implement_now` subsystem=`lifecycle_bucket_discovery_taxonomy_provenance`
-- `order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_620ee5ab` decision=`implement_now` subsystem=`lifecycle_bucket_discovery_taxonomy_provenance`
+- `order_entry_submit_drought_auto_resolution` decision=`attach_existing_family` subsystem=`runtime_instrumentation`
+- `order_ai_threshold_dominance` decision=`attach_existing_family` subsystem=`entry_funnel`
+- `order_entry_broker_receipt_contract_gap_review` decision=`attach_existing_family` subsystem=`runtime_instrumentation`
 
 ## Pattern Lab Top Findings
 - `AI threshold dominance` route=`existing_family` family=`score65_74_recovery_probe`

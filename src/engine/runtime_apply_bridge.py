@@ -101,6 +101,19 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _missing_source_fields(bucket: dict[str, Any]) -> list[str]:
+    coverage = bucket.get("source_field_coverage") if isinstance(bucket.get("source_field_coverage"), dict) else {}
+    missing: list[str] = []
+    for field, meta in coverage.items():
+        if not isinstance(meta, dict):
+            continue
+        sample_count = _safe_int(meta.get("sample_count"), 0)
+        present_count = _safe_int(meta.get("present_count"), 0)
+        if sample_count > 0 and present_count <= 0:
+            missing.append(str(field))
+    return sorted(missing)
+
+
 def _ldm_report_path(target_date: str) -> Path:
     return LDM_REPORT_DIR / f"lifecycle_decision_matrix_{target_date}.json"
 
@@ -617,6 +630,17 @@ def _entry_candidate(
             "AI_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION",
             "AI_SCORE65_74_RECOVERY_PROBE_CALIBRATION_STATE",
         ]
+    missing_fields = _missing_source_fields(bucket)
+    explicit_exclusion = state != "live_auto_apply_ready" and (
+        bool(missing_fields) or rolling.get("lifecycle_bucket_discovery_gate") == "blocked"
+    )
+    exclusion_reason = (
+        "counterfactual_source_field_gap"
+        if missing_fields
+        else "counterfactual_sim_lifecycle_handoff"
+        if explicit_exclusion
+        else ""
+    )
     return {
         "candidate_id": f"{ENTRY_BRIDGE_FAMILY}:{target_date}",
         "family": ENTRY_BRIDGE_FAMILY,
@@ -659,6 +683,15 @@ def _entry_candidate(
         **discovery_meta,
         "evidence_grade": EVIDENCE_GRADE_2_COUNTERFACTUAL,
         "transition_target": "bounded_live_canary" if state == "live_auto_apply_ready" else "sim_lifecycle_handoff",
+        "explicit_runtime_exclusion": explicit_exclusion,
+        "bridge_exclusion_reason": exclusion_reason,
+        "runtime_exclusion_reason": exclusion_reason,
+        "missing_runtime_source_fields": missing_fields,
+        "counterfactual_contract": {
+            "evidence_grade": EVIDENCE_GRADE_2_COUNTERFACTUAL,
+            "transition_target": "sim_lifecycle_handoff",
+            "source_field_gap_fields": missing_fields,
+        },
         "grade_reason": "wait6579_ev_cohort_is_counterfactual_source_not_completed_lifecycle_evidence",
         "full_real_conversion_allowed": False,
         "legacy_family_archived": False,

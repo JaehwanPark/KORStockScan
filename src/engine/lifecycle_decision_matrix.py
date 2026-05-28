@@ -2208,18 +2208,26 @@ def _holding_held_bucket(row: dict[str, Any]) -> str:
     )
 
 
-def _holding_bucket_features(row: dict[str, Any]) -> dict[str, str]:
+def _holding_profit_bucket(row: dict[str, Any]) -> str:
     features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
     labels = row.get("labels") if isinstance(row.get("labels"), dict) else {}
+    source_stage = str(row.get("source_stage") or "").strip()
+    value = features.get("profit_rate_live") if features.get("profit_rate_live") is not None else labels.get("profit_rate")
+    if value in (None, "") and source_stage == "scalp_sim_holding_started":
+        return "profit_not_applicable_at_start"
+    return _numeric_band(
+        value,
+        prefix="profit",
+        cuts=[(-0.7, "lt_neg070"), (-0.1, "neg070_neg010"), (0.8, "neg010_pos080"), (1.5, "pos080_pos150"), (3.0, "pos150_pos300")],
+        unknown="profit_unknown",
+    )
+
+
+def _holding_bucket_features(row: dict[str, Any]) -> dict[str, str]:
     return {
         "holding_source_stage": _bucket_value(row.get("source_stage"), "holding_source_unknown"),
         "holding_action": _holding_action_bucket(row),
-        "profit_band": _numeric_band(
-            features.get("profit_rate_live") if features.get("profit_rate_live") is not None else labels.get("profit_rate"),
-            prefix="profit",
-            cuts=[(-0.7, "lt_neg070"), (-0.1, "neg070_neg010"), (0.8, "neg010_pos080"), (1.5, "pos080_pos150"), (3.0, "pos150_pos300")],
-            unknown="profit_unknown",
-        ),
+        "profit_band": _holding_profit_bucket(row),
         "held_bucket": _holding_held_bucket(row),
     }
 

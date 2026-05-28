@@ -190,7 +190,7 @@
 - decision_authority: `adm_ldm_holding_bucket_attribution_source_only`
 - primary_decision_metric: `source_quality_adjusted_ev_pct`
 - allowed_runtime_apply: `False`
-- summary: `{'holding_rows': 216, 'source_row_count': 216, 'bucket_count': 34, 'joined_sample': 995, 'source_quality_adjusted_ev_pct': -0.7334, 'source_quality_gate': 'pass', 'unknown_reason_counts': {'join_gap': 2}, 'workorder_count': 10, 'runtime_candidate_count': 0}`
+- summary: `{'holding_rows': 216, 'source_row_count': 216, 'bucket_count': 34, 'joined_sample': 995, 'source_quality_adjusted_ev_pct': -0.7334, 'source_quality_gate': 'pass', 'unknown_reason_counts': {}, 'workorder_count': 10, 'runtime_candidate_count': 0}`
 
 | bucket_type | bucket_key | sample | joined | ev | route |
 | --- | --- | ---: | ---: | ---: | --- |
@@ -206,7 +206,7 @@
 | `combo_holding_flow` | `source=scalp_sim_holding_started|action=holding_action_not_applicable_at_start|profit=profit_pos150_pos300_plus|held=held_not_applicable_at_start` | 4 | 4 | 1.276 | `candidate_recovery_or_relax` |
 | `combo_holding_flow` | `source=scalp_sim_holding_started|action=BUY|profit=profit_lt_neg070|held=held_not_applicable_at_start` | 2 | 2 | 0.1671 | `hold_sample` |
 | `combo_holding_flow` | `source=scalp_sim_holding_started|action=WAIT|profit=profit_neg070_neg010|held=held_not_applicable_at_start` | 1 | 1 | -2.3877 | `hold_sample` |
-| `combo_holding_flow` | `source=scalp_sim_holding_started|action=holding_action_not_applicable_at_start|profit=profit_unknown|held=held_not_applicable_at_start` | 1 | 0 | None | `source_quality_workorder` |
+| `combo_holding_flow` | `source=scalp_sim_holding_started|action=holding_action_not_applicable_at_start|profit=profit_not_applicable_at_start|held=held_not_applicable_at_start` | 1 | 0 | None | `hold_sample` |
 | `combo_holding_flow` | `source=scalp_sim_overnight_decision|action=SELL_TODAY|profit=profit_lt_neg070|held=held_600_1800s_plus` | 1 | 0 | None | `hold_sample` |
 | `combo_holding_flow` | `source=scalp_sim_overnight_decision|action=SELL_TODAY|profit=profit_neg010_pos080|held=held_600_1800s_plus` | 1 | 0 | None | `hold_sample` |
 | `combo_holding_flow` | `source=scalp_sim_overnight_decision|action=SELL_TODAY|profit=profit_neg070_neg010|held=held_600_1800s_plus` | 2 | 0 | None | `hold_sample` |
@@ -227,7 +227,7 @@
 | `profit_band` | `profit_neg010_pos080` | 15 | 14 | -0.1029 | `hold_no_edge` |
 | `profit_band` | `profit_pos150_pos300_plus` | 14 | 11 | 1.8857 | `candidate_recovery_or_relax` |
 | `profit_band` | `profit_neg070_neg010` | 3 | 1 | -2.3877 | `hold_sample` |
-| `profit_band` | `profit_unknown` | 1 | 0 | None | `source_quality_workorder` |
+| `profit_band` | `profit_not_applicable_at_start` | 1 | 0 | None | `hold_sample` |
 
 ### Holding Bucket Attribution Workorders
 
@@ -240,7 +240,7 @@
 - `holding_bucket_source_quality_7`: `combo_holding_flow` / `source=scalp_sim_holding_started|action=WAIT|profit=profit_pos150_pos300_plus|held=held_not_applicable_at_start` -> `holding_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`
 - `holding_bucket_source_quality_8`: `combo_holding_flow` / `source=scalp_sim_holding_started|action=holding_action_not_applicable_at_start|profit=profit_neg010_pos080|held=held_not_applicable_at_start` -> `holding_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`
 - `holding_bucket_source_quality_9`: `combo_holding_flow` / `source=scalp_sim_holding_started|action=holding_action_not_applicable_at_start|profit=profit_pos150_pos300_plus|held=held_not_applicable_at_start` -> `holding_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`
-- `holding_bucket_source_quality_10`: `combo_holding_flow` / `source=scalp_sim_holding_started|action=holding_action_not_applicable_at_start|profit=profit_unknown|held=held_not_applicable_at_start` -> `holding_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`
+- `holding_bucket_source_quality_10`: `held_bucket` / `held_not_applicable_at_start` -> `holding_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`
 
 ## Exit Bucket Attribution
 

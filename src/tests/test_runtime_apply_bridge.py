@@ -165,9 +165,13 @@ def test_runtime_apply_bridge_blocks_live_when_discovery_does_not_confirm(tmp_pa
 
     report = mod.build_runtime_apply_bridge_report("2026-05-21")
     states = {item["family"]: item["bridge_candidate_state"] for item in report["candidates"]}
+    entry = {item["family"]: item for item in report["candidates"]}[mod.ENTRY_BRIDGE_FAMILY]
 
     assert states[mod.ENTRY_BRIDGE_FAMILY] == "runtime_blocked_contract_gap"
     assert states[mod.SCALE_IN_BRIDGE_FAMILY] == "runtime_blocked_contract_gap"
+    assert entry["explicit_runtime_exclusion"] is True
+    assert entry["bridge_exclusion_reason"] == "counterfactual_sim_lifecycle_handoff"
+    assert entry["transition_target"] == "sim_lifecycle_handoff"
     assert report["summary"]["live_auto_apply_ready_count"] == 0
 
 

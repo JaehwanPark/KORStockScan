@@ -28,7 +28,7 @@
 
 ## Workorder
 
-- selected orders `113`, selected decisions `{"attach_existing_family": 95, "implement_now": 18}`, routes `{"auto_patch_required": 17, "existing_family": 95, "instrumentation_order": 1}`.
+- selected orders `97`, selected decisions `{"attach_existing_family": 97}`, routes `{"existing_family": 97}`.
 - pattern lab AI review source orders `1`, pattern lab currentness source orders `0`.
 - 해석: `implement_now`는 자동 repo 수정이 아니라 `runtime_effect=false` intake다. 사용자가 Codex 구현을 지시한 경우에만 코드 작업이다.
 

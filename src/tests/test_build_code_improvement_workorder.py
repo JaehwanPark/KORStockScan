@@ -232,6 +232,43 @@ def test_build_code_improvement_workorder_preserves_lifecycle_discovery_handoff_
     assert report["summary"]["lifecycle_bucket_discovery_source_order_count"] == 1
 
 
+def test_lifecycle_bucket_discovery_greenfield_source_only_exclusion_is_not_active_workorder():
+    report = {
+        "summary": {"greenfield_policy_emit_state": "not_emitted_no_complete_lifecycle_flow"},
+        "surfaced_candidates": [
+            {
+                "bucket_id": "lifecycle_flow:combo_lifecycle_flow:blocked",
+                "source_bucket_id": "lifecycle_flow:blocked",
+                "stage": "lifecycle_flow",
+                "classification_state": "runtime_blocked_contract_gap",
+                "live_auto_apply_family": "greenfield_real_environment_authority",
+                "source_bucket_kind": "live_auto_candidate",
+                "source_quality_gate": "pass",
+                "source_quality_adjusted_ev_pct": 2.5,
+            }
+        ],
+    }
+
+    assert mod._lifecycle_bucket_discovery_followup_orders(report) == []
+
+
+def test_lifecycle_bucket_discovery_source_only_new_bucket_is_not_active_workorder():
+    report = {
+        "surfaced_candidates": [
+            {
+                "bucket_id": "lifecycle_flow:combo_lifecycle_flow:source-only-new",
+                "source_bucket_id": "lifecycle_flow:source-only-new",
+                "stage": "lifecycle_flow",
+                "classification_state": "new_bucket_candidate",
+                "source_bucket_kind": "source_only_observation",
+                "recommended_resolution": "instrumentation_gap",
+            }
+        ],
+    }
+
+    assert mod._lifecycle_bucket_discovery_followup_orders(report) == []
+
+
 def test_build_code_improvement_workorder_consumes_pattern_lab_currentness_audit(tmp_path, monkeypatch):
     automation_dir = tmp_path / "automation"
     currentness_dir = tmp_path / "currentness"

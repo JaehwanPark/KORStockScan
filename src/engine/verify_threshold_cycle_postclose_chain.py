@@ -466,11 +466,30 @@ def _lifecycle_bucket_discovery_handoff_status(
         if isinstance(item, dict) and item.get("order_id")
     }
     expected_workorder_prefix = "order_lifecycle_bucket_discovery_"
+
+    def source_only_excluded(item: dict[str, Any]) -> bool:
+        if item.get("explicit_runtime_exclusion") is True or item.get("source_only_explicit_exclusion") is True:
+            return True
+        stage = str(item.get("stage") or "").strip()
+        state = str(item.get("classification_state") or "").strip()
+        family = str(item.get("live_auto_apply_family") or "").strip()
+        if stage != "lifecycle_flow" or state not in {"new_bucket_candidate", "runtime_blocked_contract_gap"}:
+            return False
+        source_kind = str(item.get("source_bucket_kind") or "").strip()
+        if source_kind in {"taxonomy_provenance_gap", "source_only_observation"}:
+            return True
+        if family == "greenfield_real_environment_authority" and (
+            item.get("allowed_runtime_apply") is False or item.get("broker_order_forbidden") is True
+        ):
+            return True
+        return False
+
     workorder_needed = [
         str(item.get("bucket_id"))
         for item in candidates
         if isinstance(item, dict)
         and str(item.get("classification_state") or "") in {"new_bucket_candidate", "runtime_blocked_contract_gap", "code_patch_required", "code_review_failed"}
+        and not source_only_excluded(item)
     ]
     ai_followup_ids = sorted(
         str(item.get("bucket_id"))

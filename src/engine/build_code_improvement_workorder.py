@@ -1658,6 +1658,28 @@ def _lifecycle_bucket_discovery_order_id(item: dict[str, Any]) -> str:
     return f"order_lifecycle_bucket_discovery_{stage}_{bucket_id}"
 
 
+def _is_explicit_source_only_lifecycle_flow_exclusion(report: dict[str, Any], item: dict[str, Any]) -> bool:
+    if item.get("explicit_runtime_exclusion") is True or item.get("source_only_explicit_exclusion") is True:
+        return True
+    stage = str(item.get("stage") or "").strip()
+    state = str(item.get("classification_state") or "").strip()
+    family = str(item.get("live_auto_apply_family") or item.get("mapped_family") or "").strip()
+    if stage != "lifecycle_flow" or state not in {"new_bucket_candidate", "runtime_blocked_contract_gap"}:
+        return False
+    source_kind = str(item.get("source_bucket_kind") or "").strip()
+    if source_kind in {"taxonomy_provenance_gap", "source_only_observation"}:
+        return True
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    greenfield_state = str(summary.get("greenfield_policy_emit_state") or "").strip()
+    if family == "greenfield_real_environment_authority" and (
+        greenfield_state == "not_emitted_no_complete_lifecycle_flow"
+        or item.get("allowed_runtime_apply") is False
+        or item.get("broker_order_forbidden") is True
+    ):
+        return True
+    return False
+
+
 def _lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
     candidates = report.get("surfaced_candidates") if isinstance(report.get("surfaced_candidates"), list) else []
     orders: list[dict[str, Any]] = []
@@ -1667,6 +1689,8 @@ def _lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) -> list[
             continue
         state = str(item.get("classification_state") or "")
         if state not in {"new_bucket_candidate", "runtime_blocked_contract_gap", "code_patch_required", "code_review_failed"}:
+            continue
+        if _is_explicit_source_only_lifecycle_flow_exclusion(report, item):
             continue
         stage = str(item.get("stage") or "unknown")
         bucket_id = str(item.get("bucket_id") or "")

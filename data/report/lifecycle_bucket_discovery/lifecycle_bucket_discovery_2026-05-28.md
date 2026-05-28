@@ -6,7 +6,7 @@
 - ai_two_pass_review: `parsed` / model: `sharded` / tier: `tier2`
 - ai_review_shards: `3` / `5` parsed, reviewed_candidates=`3`
 - surfaced_candidate_count: `277`
-- canonical/legacy buckets: `345` / `482`
+- canonical/legacy buckets: `345` / `483`
 - dual_proposals: deterministic=`500` ai=`15` hybrid_selected=`15`
 - absorbed/source_quality_blocker: `157` / `0`
 - sim_auto_approved_count: `172`
@@ -25,7 +25,7 @@
 - ai_tier2_proposal_count: `3`
 - comparative_review_count: `3`
 - audit_status: `pass`
-- audit_issues: `[]`
+- audit_issues: `['Candidate is marked new_bucket_candidate but source dimensions fit existing declared taxonomy.', 'Candidate is marked live_auto_apply_ready while deterministic proposal is instrumentation_gap for missing_dimension.', 'Deterministic summary selection may preserve a live state despite explicit contract gap; this candidate needs corrected blocked state until dimension mapping is fixed.']`
 - audit_reason: `sharded review aggregate`
 
 ### AI Review Shards

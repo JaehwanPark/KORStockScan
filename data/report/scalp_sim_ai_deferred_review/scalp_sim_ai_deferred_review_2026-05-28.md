@@ -1,6 +1,6 @@
 # Scalp Sim AI Deferred Review 2026-05-28
 
-- generated_at: `2026-05-28T18:02:28`
+- generated_at: `2026-05-28T19:30:38`
 - source: `/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-05-28.jsonl`
 - artifact_role: `postclose_source_packet_for_sim_ai_quality_review`
 - runtime_effect: `false`

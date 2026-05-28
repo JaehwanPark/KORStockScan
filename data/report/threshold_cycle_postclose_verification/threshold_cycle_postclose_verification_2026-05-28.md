@@ -1,28 +1,28 @@
 # Threshold Cycle Postclose Verification - 2026-05-28
 
-- status: `fail`
-- latest_start_marker: `[START] threshold-cycle postclose target_date=2026-05-28 max_iterations=80 started_at=2026-05-28T17:57:56+0900`
-- latest_done_marker: `-`
+- status: `warning`
+- latest_start_marker: `[START] threshold-cycle postclose target_date=2026-05-28 max_iterations=80 started_at=2026-05-28T19:30:30+0900`
+- latest_done_marker: `[DONE] threshold-cycle postclose target_date=2026-05-28 ai_correction_provider=openai panic_sell_defense=false panic_buying=false market_panic_breadth=false openai_ws_stability=false pipeline_event_verbosity=false observation_source_quality_audit=false codebase_performance_workorder=false pattern_lab_currentness_audit=false pattern_lab_ai_review=false time_window_regime_counterfactual=false producer_gap_discovery=false stage_hook_workorder_discovery=false stage_hook_runtime_scaffold=false pattern_lab_propagation_audit=false scalp_sim_overnight=false scalp_entry_adm=false institutional_flow_context=false lifecycle_decision_matrix=false lifecycle_ai_context=false lifecycle_bucket_discovery=false runtime_apply_bridge=false scalp_sim_auto_approval_control_tower=false latency_classifier_recommendation=false tuning_performance_control_tower=true swing_lifecycle=false swing_strategy_discovery=false swing_lifecycle_matrix=false swing_lifecycle_bucket_discovery=false swing_ai_review_provider=openai swing_lifecycle_bucket_discovery_ai_provider=openai pattern_lab_ai_review_provider=openai producer_gap_discovery_ai_provider=openai stage_hook_workorder_discovery_ai_provider=openai pattern_labs=false deepseek_swing_lab=false code_improvement_workorder=false daily_ev=true runtime_approval_summary=true runtime_apply_gap_audit=true next_stage2_checklist=true finished_at=2026-05-28T19:34:29+0900`
 - predecessor_status: `pass`
 - predecessor_wait_count: `0`
 - predecessor_timeout_count: `0`
 - log_issues: `[]`
 
 ## Execution Profile
-- profile_status: `pending_done_marker`
-- disabled_stage_flags: `[]`
+- profile_status: `recovered_partial_profile`
+- disabled_stage_flags: `['swing_lifecycle', 'swing_strategy_discovery', 'swing_lifecycle_matrix', 'swing_lifecycle_bucket_discovery', 'pattern_labs', 'deepseek_swing_lab', 'pattern_lab_currentness_audit', 'pattern_lab_ai_review', 'time_window_regime_counterfactual', 'producer_gap_discovery', 'stage_hook_workorder_discovery', 'stage_hook_runtime_scaffold', 'pattern_lab_propagation_audit', 'scalp_entry_adm', 'lifecycle_decision_matrix', 'code_improvement_workorder']`
 - missing_required_flags: `[]`
-- interpretation: `wrapper-internal verification passed required artifacts; final DONE marker is checked by a later health check`
+- interpretation: `latest DONE marker was produced by a recovery run with selected heavy stages disabled; same-date artifacts are still validated separately`
 - missing_required_artifacts: `[]`
 - missing_downstream_links: `[]`
 - stale_downstream_links: `[]`
-- runtime_apply_gap_issues: `['runtime_apply_gap_audit_failed', 'runtime_apply_gap_fail_without_retry_queue']`
+- runtime_apply_gap_issues: `[]`
 
 ## Runtime Apply Gap Audit
-- status: `fail`
+- status: `pass`
 - retry_queue_count: `0`
-- codex_directive_count: `8`
-- summary: `{'ai_review_retry_pending': False, 'ai_review_status': 'parsed', 'candidate_count': 593, 'codex_directive_count': 8, 'critical_failure_count': 7, 'positive_edge_source_quality_pass_count': 32, 'retry_queue_count': 0, 'runtime_uptake_rate_pct': 0.0, 'status': 'fail'}`
+- codex_directive_count: `0`
+- summary: `{'ai_review_retry_pending': False, 'ai_review_status': 'parsed', 'candidate_count': 593, 'codex_directive_count': 0, 'critical_failure_count': 0, 'positive_edge_source_quality_pass_count': 27, 'retry_queue_count': 0, 'runtime_uptake_rate_pct': 0.0, 'status': 'pass'}`
 
 ## BUY Funnel Submit Drought Handoff
 - status: `pass`
@@ -67,7 +67,7 @@
 ## AI Correction
 - status: `pass`
 - ai_status: `parsed`
-- provider_status: `{'provider': 'openai', 'status': 'success', 'new_provider_call': True, 'key_name': 'OPENAI_API_KEY', 'attempt_index': 1, 'model_index': 1, 'configured_key_count': 2, 'attempted_key_count': 1, 'attempted_keys': 1, 'attempted_key_names': ['OPENAI_API_KEY'], 'configured_model_count': 3, 'attempted_model_count': 1, 'attempted_models': ['gpt-5.5'], 'configured_models': ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'], 'model': 'gpt-5.5', 'schema_name': 'threshold_ai_correction_v1', 'reasoning_effort': 'high', 'prompt_chars': 114349, 'input_context_chars': 113029, 'input_context_hash': '21f4dc9e6d14e2ae1cf9f36751d70cc2e72a5831a61de8de4eb3c543fdab9b2e', 'elapsed_ms': 108388, 'output_chars': 11250, 'input_tokens': 32044, 'output_tokens': 6199, 'total_tokens': 38243, 'estimated_cost': None, 'estimated_cost_usd': None, 'cost_estimate_status': 'missing_price_contract'}`
+- provider_status: `{'provider': 'openai', 'status': 'reused_valid_artifact', 'new_provider_call': False, 'key_name': 'OPENAI_API_KEY', 'attempt_index': 1, 'model_index': 1, 'configured_key_count': 2, 'attempted_key_count': 1, 'attempted_keys': 1, 'attempted_key_names': ['OPENAI_API_KEY'], 'configured_model_count': 3, 'attempted_model_count': 1, 'attempted_models': ['gpt-5.5'], 'configured_models': ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'], 'model': 'gpt-5.5', 'schema_name': 'threshold_ai_correction_v1', 'reasoning_effort': 'high', 'prompt_chars': 114349, 'input_context_chars': 113029, 'input_context_hash': '21f4dc9e6d14e2ae1cf9f36751d70cc2e72a5831a61de8de4eb3c543fdab9b2e', 'elapsed_ms': 108388, 'output_chars': 11250, 'input_tokens': 32044, 'output_tokens': 6199, 'total_tokens': 38243, 'estimated_cost': None, 'estimated_cost_usd': None, 'cost_estimate_status': 'missing_price_contract', 'reuse_source_path': '/home/ubuntu/KORStockScan/data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_2026-05-28_postclose.json', 'reused_at': '2026-05-28 19:33:20', 'estimated_incremental_cost': 0.0, 'estimated_incremental_cost_usd': 0.0, 'incremental_cost_status': 'reused_no_new_provider_call'}`
 - blocking_runtime_candidate_families: `['bad_entry_refined_canary', 'holding_exit_decision_matrix_advisory', 'holding_flow_ofi_smoothing', 'lifecycle_decision_matrix_runtime', 'protect_trailing_smoothing', 'score65_74_recovery_probe', 'soft_stop_whipsaw_confirmation']`
 - parse_warnings: `[]`
 - interpretation: `AI correction parsed successfully`
@@ -117,7 +117,7 @@
 - live_auto_apply_families: `[]`
 - missing_bridge_families: `[]`
 - missing_runtime_summary_candidate_ids: `[]`
-- workorder_needed_bucket_ids: `['lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_stale_watch_liquidi', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_blocked_ai_score_stale_fresh_liquidity_liq', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_scalp_entry_action_decision_snapshot_stale_f', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_fresh_liquidity_liqu', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_stale_watch_liquidi', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale']`
+- workorder_needed_bucket_ids: `[]`
 - ai_post_apply_followup_bucket_ids: `[]`
 - warnings: `['lifecycle_bucket_discovery_source_contract_warning', 'source_contract_drift_warning']`
 - interpretation: `lifecycle bucket discovery candidates propagated to bridge/runtime summary/workorder`
@@ -164,11 +164,11 @@
 - interpretation: `bottom_rebound source was absent or blocked; safe-pool-only swing sim path applies`
 
 ## Workorder Snapshot
-- generation_id: `2026-05-28-30593c4eac54`
-- source_hash: `30593c4eac5433af6e3b6924a3d941165cd83b81d767e9d312a605460ea42f19`
-- snapshot_status: `source_changed_with_lineage`
-- previous_generation_id: `2026-05-28-13a725acefed`
-- previous_source_hash: `13a725acefedbb5632603821a46043215259ea1dfa68bfe0be964505e68bff9f`
-- new_order_ids: `['order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_042c8ce0', 'order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_10c6d980', 'order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_14415b78', 'order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_164a6a94', 'order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_41cbfde5', 'order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_45544ef4', 'order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_5036a371', 'order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_5ced5753', 'order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_5f6350a5', 'order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_620ee5ab', 'order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_941bac09', 'order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_95c90437', 'order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_cffbb333', 'order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_d8438430', 'order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_f0f4b72c', 'order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_f6cddc94', 'order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_fb7f17d6', 'order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_holding_action_not_applicable_a_66f602cb', 'order_pattern_lab_ai_review_order_pattern_lab_ai_review_order_pattern_lab_ai_review_threshold_cycle_ev_sourc', 'order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_other_chemi']`
-- removed_order_ids: `['order_ai_threshold_dominance', 'order_lifecycle_holding_bucket_held_bucket_held_not_applicable_at_start_508784a3', 'order_pattern_lab_ai_review_order_pattern_lab_ai_review_threshold_cycle_ev_source_contract_drift_warning', 'order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_electronic_', 'order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_electronic_co']`
+- generation_id: `2026-05-28-60fa4752a31d`
+- source_hash: `60fa4752a31d62c494f94103d6b6f7a1f957c82327166cefc6f8da9b02e1df8e`
+- snapshot_status: `same_snapshot_replay`
+- previous_generation_id: `2026-05-28-60fa4752a31d`
+- previous_source_hash: `60fa4752a31d62c494f94103d6b6f7a1f957c82327166cefc6f8da9b02e1df8e`
+- new_order_ids: `[]`
+- removed_order_ids: `['order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_10c6d980', 'order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_14415b78', 'order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_164a6a94', 'order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_41cbfde5', 'order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_45544ef4', 'order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_5ced5753', 'order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_5f6350a5', 'order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_95c90437', 'order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_d8438430', 'order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_f0f4b72c']`
 - decision_changed_order_ids: `[]`

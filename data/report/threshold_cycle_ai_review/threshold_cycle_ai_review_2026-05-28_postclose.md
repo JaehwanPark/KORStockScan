@@ -5,7 +5,7 @@
 - Runtime change: `false`
 - Input context chars: `83539`
 - Input context hash: `21f4dc9e6d14e2ae1cf9f36751d70cc2e72a5831a61de8de4eb3c543fdab9b2e`
-- Provider status: `openai / success`
+- Provider status: `openai / reused_valid_artifact`
 - Usage: input_tokens=`32044`, output_tokens=`6199`, total_tokens=`38243`, elapsed_ms=`108388`
 - Cost: estimated_cost_usd=`None`, status=`missing_price_contract`
 

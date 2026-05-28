@@ -38,6 +38,7 @@ FINAL_DISPOSITIONS = {
     "safety_veto",
     "post_apply_attribution_pending",
     "source_only_keep_collecting",
+    "source_only_explicit_exclusion",
 }
 FAILURE_STATES = {
     "pass",
@@ -273,6 +274,31 @@ def _source_state_to_disposition(state: str, gate: str) -> str:
     return "code_patch_required"
 
 
+def _explicit_runtime_exclusion_reason(item: dict[str, Any]) -> str:
+    for key in (
+        "runtime_exclusion_reason",
+        "runtime_apply_exclusion_reason",
+        "bridge_exclusion_reason",
+        "source_only_exclusion_reason",
+        "explicit_runtime_exclusion_reason",
+    ):
+        value = str(item.get(key) or "").strip()
+        if value:
+            return value
+    if item.get("explicit_runtime_exclusion") is True or item.get("source_only_explicit_exclusion") is True:
+        return "source_only_explicit_exclusion"
+    stage = str(item.get("stage") or item.get("lifecycle_stage") or "").strip()
+    state = str(item.get("classification_state") or item.get("final_disposition") or "").strip()
+    source_kind = str(item.get("source_bucket_kind") or "").strip()
+    if (
+        stage == "lifecycle_flow"
+        and state == "source_only_keep_collecting"
+        and source_kind in {"taxonomy_provenance_gap", "source_only_observation"}
+    ):
+        return "greenfield_policy_not_emitted_no_complete_lifecycle_flow"
+    return ""
+
+
 def _comparative_selected_decision(item: dict[str, Any]) -> str:
     review = item.get("comparative_review")
     if not isinstance(review, dict):
@@ -313,6 +339,7 @@ def _ledger_from_discovery(
         disposition = _source_state_to_disposition(state, gate)
         failure_state = "pass"
         failure_reason = ""
+        exclusion_reason = _explicit_runtime_exclusion_reason(item)
         recommended_route = str(item.get("recommended_route") or "").strip()
         selected_decision = _comparative_selected_decision(item)
         if selected_decision == "source_quality_blocker":
@@ -320,9 +347,14 @@ def _ledger_from_discovery(
             failure_reason = "ai_tier2_source_quality_blocker"
             disposition = "source_quality_blocker"
         elif state == "source_only_keep_collecting" and gate == "pass" and ev is not None and ev > 0:
-            failure_state = "fail"
-            failure_reason = "positive_edge_stuck_source_only"
-            disposition = "code_patch_required"
+            if exclusion_reason:
+                failure_state = "pass"
+                failure_reason = ""
+                disposition = "source_only_explicit_exclusion"
+            else:
+                failure_state = "fail"
+                failure_reason = "positive_edge_stuck_source_only"
+                disposition = "code_patch_required"
         elif gate not in {"pass", ""}:
             failure_state = "blocked_source_quality"
             failure_reason = "source_quality_gate_not_pass"
@@ -356,6 +388,8 @@ def _ledger_from_discovery(
                 "surface_channel": "runtime_apply_gap_audit",
                 "source_bucket_kind": item.get("source_bucket_kind"),
                 "ai_selected_decision": selected_decision,
+                "explicit_runtime_exclusion": bool(exclusion_reason),
+                "runtime_exclusion_reason": exclusion_reason,
             }
         )
     return ledger
@@ -380,6 +414,7 @@ def _ledger_from_bridge(
         disposition = _source_state_to_disposition(state, gate)
         failure_state = "pass"
         failure_reason = ""
+        exclusion_reason = _explicit_runtime_exclusion_reason(item)
         retryable = False
         retry_reason = ""
         retry_owner = ""
@@ -402,6 +437,8 @@ def _ledger_from_bridge(
             failure_state = "blocked_contract"
             failure_reason = state
             disposition = "runtime_blocked_contract_gap"
+            if exclusion_reason:
+                disposition = "source_only_explicit_exclusion"
         elif state == "blocked_source_quality":
             failure_state = "blocked_source_quality"
             failure_reason = "source_quality_gate_not_pass"
@@ -454,6 +491,13 @@ def _ledger_from_bridge(
                 "retry_deadline": retry_deadline,
                 "surface_channel": "runtime_apply_gap_audit + postclose_verifier",
                 "target_env_keys": item.get("target_env_keys") if isinstance(item.get("target_env_keys"), list) else [],
+                "explicit_runtime_exclusion": bool(exclusion_reason),
+                "runtime_exclusion_reason": exclusion_reason,
+                "evidence_grade": item.get("evidence_grade"),
+                "transition_target": item.get("transition_target"),
+                "missing_runtime_source_fields": item.get("missing_runtime_source_fields")
+                if isinstance(item.get("missing_runtime_source_fields"), list)
+                else [],
             }
         )
     return ledger
@@ -655,6 +699,8 @@ def _directive_body_ko(directive_type: str, candidate: dict[str, Any], reason: s
 def _build_codex_directives(ledger: list[dict[str, Any]], retry_queue: list[dict[str, Any]]) -> list[dict[str, Any]]:
     directives: list[dict[str, Any]] = []
     for row in ledger:
+        if row.get("explicit_runtime_exclusion") is True:
+            continue
         reason = str(row.get("failure_reason") or "")
         if reason == "positive_edge_stuck_source_only":
             directives.append(
@@ -741,11 +787,14 @@ def _render_ai_input_context_en(ledger: list[dict[str, Any]], drift: list[dict[s
             "failure_reason": row.get("failure_reason"),
         }
         for row in ledger
-        if row.get("failure_state") != "pass"
+        if row.get("explicit_runtime_exclusion") is not True
+        and (
+            row.get("failure_state") != "pass"
         or (
             row.get("primary_ev") is not None
             and float(row.get("primary_ev") or 0.0) > 0
             and row.get("final_disposition") != "live_auto_apply_ready"
+        )
         )
     ][:40]
     return {
@@ -1075,6 +1124,8 @@ def _aggressive_push_targets(ledger: list[dict[str, Any]]) -> list[dict[str, Any
         if ev is None or float(ev or 0.0) <= 0 or row.get("source_quality_gate") != "pass":
             continue
         if row.get("final_disposition") in {"source_quality_blocker", "safety_veto"}:
+            continue
+        if row.get("explicit_runtime_exclusion") is True:
             continue
         targets.append(
             {
