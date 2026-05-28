@@ -70,6 +70,9 @@ RUNTIME_FEATURE_KEYS = {
     "chosen_action",
     "sim_record_id",
     "entry_adm_candidate_id",
+    "lifecycle_flow_bridge_key",
+    "lifecycle_join_bridge_key",
+    "join_bridge_key",
     "lifecycle_flow_bucket_id",
     "score_bucket",
     "risk_context_bucket",
@@ -2163,28 +2166,78 @@ def _ai_inference_proposal(
     }
 
 
+def _source_missing_value(value: Any) -> bool:
+    if value in (None, ""):
+        return True
+    return str(value).strip().lower() in {"none", "null", "nan", "n/a", "unknown"}
+
+
+def _holding_action_bucket(row: dict[str, Any]) -> str:
+    features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
+    source_stage = str(row.get("source_stage") or "").strip()
+    action = next(
+        (
+            value
+            for value in (
+                features.get("chosen_action"),
+                features.get("ai_action"),
+                features.get("overnight_action"),
+            )
+            if not _source_missing_value(value)
+        ),
+        None,
+    )
+    action_missing = _source_missing_value(action) or str(action) == "holding_action_unknown"
+    if action_missing and source_stage == "scalp_sim_holding_started":
+        return "holding_action_not_applicable_at_start"
+    if action_missing and source_stage == "scalp_sim_overnight_decision":
+        return "holding_action_not_applicable_overnight_decision"
+    return _bucket_value(action, "holding_action_unknown")
+
+
+def _holding_held_bucket(row: dict[str, Any]) -> str:
+    features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
+    source_stage = str(row.get("source_stage") or "").strip()
+    if features.get("held_sec") in (None, "") and source_stage == "scalp_sim_holding_started":
+        return "held_not_applicable_at_start"
+    return _numeric_band(
+        features.get("held_sec"),
+        prefix="held",
+        cuts=[(20, "lt020s"), (180, "020_180s"), (600, "180_600s"), (1800, "600_1800s")],
+        unknown="held_unknown",
+    )
+
+
 def _holding_bucket_features(row: dict[str, Any]) -> dict[str, str]:
     features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
     labels = row.get("labels") if isinstance(row.get("labels"), dict) else {}
     return {
         "holding_source_stage": _bucket_value(row.get("source_stage"), "holding_source_unknown"),
-        "holding_action": _bucket_value(
-            features.get("chosen_action") or features.get("ai_action"),
-            "holding_action_unknown",
-        ),
+        "holding_action": _holding_action_bucket(row),
         "profit_band": _numeric_band(
             features.get("profit_rate_live") if features.get("profit_rate_live") is not None else labels.get("profit_rate"),
             prefix="profit",
             cuts=[(-0.7, "lt_neg070"), (-0.1, "neg070_neg010"), (0.8, "neg010_pos080"), (1.5, "pos080_pos150"), (3.0, "pos150_pos300")],
             unknown="profit_unknown",
         ),
-        "held_bucket": _numeric_band(
-            features.get("held_sec"),
-            prefix="held",
-            cuts=[(20, "lt020s"), (180, "020_180s"), (600, "180_600s"), (1800, "600_1800s")],
-            unknown="held_unknown",
-        ),
+        "held_bucket": _holding_held_bucket(row),
     }
+
+
+def _exit_outcome_bucket(row: dict[str, Any]) -> str:
+    labels = row.get("labels") if isinstance(row.get("labels"), dict) else {}
+    features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
+    outcome = labels.get("sim_post_sell_outcome") or labels.get("outcome")
+    if not _source_missing_value(outcome):
+        return _bucket_value(outcome, "outcome_unknown")
+    source_stage = str(row.get("source_stage") or "").strip()
+    exit_rule = str(labels.get("exit_rule") or features.get("chosen_action") or "").strip()
+    if (
+        source_stage == "scalp_sim_partial_sell_order_assumed_filled"
+        and exit_rule == "scalp_sim_panic_lifecycle_partial_exit"
+    ):
+        return "outcome_not_applicable_partial_exit"
+    return "outcome_unknown"
 
 
 def _exit_bucket_features(row: dict[str, Any]) -> dict[str, str]:
@@ -2193,7 +2246,7 @@ def _exit_bucket_features(row: dict[str, Any]) -> dict[str, str]:
     return {
         "exit_source_stage": _bucket_value(row.get("source_stage"), "exit_source_unknown"),
         "exit_rule": _bucket_value(labels.get("exit_rule") or features.get("chosen_action"), "exit_rule_unknown"),
-        "exit_outcome": _bucket_value(labels.get("sim_post_sell_outcome") or labels.get("outcome"), "outcome_unknown"),
+        "exit_outcome": _exit_outcome_bucket(row),
         "profit_band": _numeric_band(
             labels.get("profit_rate") if labels.get("profit_rate") is not None else features.get("profit_rate_live"),
             prefix="profit",
@@ -2881,6 +2934,20 @@ def _stable_flow_bucket_id(bucket_key: str) -> str:
     return f"lifecycle_flow:combo_lifecycle_flow:{_slug(bucket_key, max_len=56)}:{digest}"
 
 
+def _entry_adm_bridge_key(stock_code: Any, *candidate_values: Any) -> str:
+    code = str(stock_code or "").strip().lstrip("A")
+    for value in candidate_values:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        match = re.match(r"^ADM-([A-Za-z0-9]+)-([A-Za-z0-9]+)-", text)
+        if match:
+            return f"entry_adm_source:{match.group(1).lstrip('A')}:{match.group(2)}"
+        if code and re.fullmatch(r"[0-9]+", text):
+            return f"entry_adm_source:{code}:{text}"
+    return ""
+
+
 def _row_flow_identity(row: dict[str, Any]) -> tuple[str, str]:
     features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
     bridge_key = str(
@@ -2891,6 +2958,19 @@ def _row_flow_identity(row: dict[str, Any]) -> tuple[str, str]:
     ).strip()
     if bridge_key:
         return f"lifecycle_flow_bridge_key:{bridge_key}", "lifecycle_flow_bridge_key"
+    row_candidate_id = str(row.get("candidate_id") or "").strip()
+    bridge_candidate_id = (
+        row_candidate_id
+        if row.get("source") == "scalp_entry_action_decision_matrix" or row_candidate_id.startswith("ADM-")
+        else ""
+    )
+    adm_bridge_key = _entry_adm_bridge_key(
+        row.get("stock_code"),
+        features.get("entry_adm_candidate_id"),
+        bridge_candidate_id,
+    )
+    if adm_bridge_key:
+        return adm_bridge_key, "entry_adm_bridge_key"
     sim_record_id = str(features.get("sim_record_id") or "").strip()
     if sim_record_id:
         return f"sim_record_id:{sim_record_id}", "exact_sim_record_id"
@@ -2968,7 +3048,7 @@ def _flow_identity_stage_summary(rows: list[dict[str, Any]], flows: list[dict[st
             downstream_qualities.update(stage_summary.get(stage, {}).get("identity_quality_counts", {}).keys())
         if "candidate_id" in entry_qualities and "exact_sim_record_id" in downstream_qualities:
             incomplete_reasons["entry_candidate_id_to_sim_record_id_bridge_missing"] += 1
-        if "entry_adm_candidate_id" not in entry_qualities:
+        if not {"entry_adm_candidate_id", "entry_adm_bridge_key"} & entry_qualities:
             incomplete_reasons["entry_adm_candidate_id_missing"] += 1
     return {
         "stage": stage_summary,
@@ -3027,9 +3107,9 @@ def _holding_combo_bucket_id(row: dict[str, Any]) -> str:
     bucket_key = "|".join(
         [
             f"source={_bucket_value(row.get('source_stage'), 'holding_source_unknown')}",
-            f"action={_bucket_value(features.get('chosen_action') or features.get('ai_action'), 'holding_action_unknown')}",
+            f"action={_holding_action_bucket(row)}",
             f"profit={_numeric_band(features.get('profit_rate_live'), prefix='profit', cuts=[(-0.7, 'lt_neg070'), (-0.1, 'neg070_neg010'), (0.8, 'neg010_pos080'), (1.5, 'pos080_pos150'), (3.0, 'pos150_pos300')], unknown='profit_unknown')}",
-            f"held={_numeric_band(features.get('held_sec'), prefix='held', cuts=[(20, 'lt020s'), (180, '020_180s'), (600, '180_600s'), (1800, '600_1800s')], unknown='held_unknown')}",
+            f"held={_holding_held_bucket(row)}",
         ]
     )
     return _bucket_id("holding", "combo_holding_flow", bucket_key)
@@ -3051,7 +3131,7 @@ def _exit_combo_bucket_id(row: dict[str, Any]) -> str:
         [
             f"source={_bucket_value(row.get('source_stage'), 'exit_source_unknown')}",
             f"rule={_bucket_value(labels.get('exit_rule') or features.get('chosen_action'), 'exit_rule_unknown')}",
-            f"outcome={_bucket_value(labels.get('sim_post_sell_outcome'), 'outcome_unknown')}",
+            f"outcome={_exit_outcome_bucket(row)}",
             f"profit={_numeric_band(labels.get('profit_rate'), prefix='profit', cuts=[(-0.7, 'lt_neg070'), (-0.1, 'neg070_neg010'), (0.8, 'neg010_pos080'), (1.5, 'pos080_pos150'), (3.0, 'pos150_pos300')], unknown='profit_unknown')}",
         ]
     )
@@ -3302,6 +3382,7 @@ def _lifecycle_flow_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, 
         and item.get("recommended_route") == "candidate_recovery_or_relax"
         and int(item.get("joined_sample") or 0) >= LIFECYCLE_FLOW_BUCKET_PROMOTE_SAMPLE_FLOOR
     ][:10]
+    incomplete_flows = [item for item in flows if item.get("source_quality_gate") != "pass"]
     workorders = [
         {
             "workorder_id": f"lifecycle_flow_bucket_incomplete_{idx+1}",
@@ -3329,8 +3410,7 @@ def _lifecycle_flow_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, 
             "allowed_runtime_apply": False,
             "lifecycle_flow_bucket_id": item.get("lifecycle_flow_bucket_id"),
         }
-        for idx, item in enumerate(flows[:20])
-        if item.get("source_quality_gate") != "pass"
+        for idx, item in enumerate(incomplete_flows[:20])
     ]
     identity_summary = _flow_identity_stage_summary(rows, flows)
     complete_flow_count = sum(1 for item in flows if item.get("stage_completion_state") == "complete")

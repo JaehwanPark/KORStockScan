@@ -6,7 +6,7 @@
 
 - swing_trade_fact: `0`
 - swing_lifecycle_funnel_fact: `1`
-- swing_sequence_fact: `112`
+- swing_sequence_fact: `115`
 - swing_ofi_qi_fact: `39982`
 - completed_trades: `0`
 - valid_profit_trades: `0`
@@ -32,7 +32,7 @@
 - ofi_qi_fact_actual_order_submitted_false: `39982`
 - ofi_qi_fact_broker_order_forbidden_true: `39982`
 - trade_fact_decision_authority_counts: `{}`
-- sequence_fact_decision_authority_counts: `{'source_quality_only': 88, 'probe_observe_only': 23, 'sim_equal_weight': 1}`
+- sequence_fact_decision_authority_counts: `{'source_quality_only': 89, 'probe_observe_only': 23, 'real_order_event': 2, 'sim_equal_weight': 1}`
 - ofi_qi_fact_decision_authority_counts: `{'source_quality_only': 20212, 'swing_entry_lifecycle_policy': 14954, 'swing_entry_lifecycle_policy_baseline_prior_features': 4721, 'sim_equal_weight': 72, 'probe_observe_only': 23}`
 
 ## Warnings

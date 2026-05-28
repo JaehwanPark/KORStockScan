@@ -1,6 +1,6 @@
 # OpenAI WS Stability Report - 2026-05-28
 
-- generated_at: `2026-05-28T16:26:32+09:00`
+- generated_at: `2026-05-28T18:02:19+09:00`
 - decision: `keep_ws`
 - unique WS calls: `4106`
 - endpoint counts: `{'analyze_target': 4101, 'entry_price': 5}`

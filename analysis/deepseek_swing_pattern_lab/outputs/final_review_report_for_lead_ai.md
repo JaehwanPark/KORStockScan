@@ -4,7 +4,7 @@
 
 - 분석 기간: `2026-05-28` ~ `2026-05-28`
 - trade_rows: `0`
-- lifecycle_event_rows: `112`
+- lifecycle_event_rows: `115`
 - completed_valid_profit_rows: `0`
 - ofi_qi_rows: `39982`
 - total_findings: `5`

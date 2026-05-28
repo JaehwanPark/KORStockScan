@@ -13,18 +13,18 @@
 - simulated_order_unique_records: `21`
 - observation_axis_status: `{'ready': 10}`
 - panic_state: `RECOVERY_WATCH`
-- panic_active_sim_probe: `{'active_positions': 10, 'profit_sample': 7, 'avg_unrealized_profit_rate_pct': 0.387, 'win_rate_pct': 57.1, 'wins': 4, 'losses': 1, 'flat': 2}`
-- panic_origin_outcome: `{'blocked_gatekeeper_reject': {'count': 2, 'avg_profit_rate_pct': 1.6465}, 'blocked_swing_score_vpw': {'count': 4, 'avg_profit_rate_pct': 0.1595}, 'market_regime_block': {'count': 1, 'avg_profit_rate_pct': 1.5123}, 'market_regime_prior_observed': {'count': 3, 'avg_profit_rate_pct': -0.464}}`
+- panic_active_sim_probe: `{'active_positions': 4, 'profit_sample': 0, 'avg_unrealized_profit_rate_pct': None, 'win_rate_pct': None, 'wins': 0, 'losses': 0, 'flat': 0}`
+- panic_origin_outcome: `{'blocked_gatekeeper_reject': {'count': 1, 'avg_profit_rate_pct': None}, 'blocked_swing_score_vpw': {'count': 1, 'avg_profit_rate_pct': None}, 'market_regime_prior_observed': {'count': 1, 'avg_profit_rate_pct': None}, 'unknown': {'count': 1, 'avg_profit_rate_pct': None}}`
 
 ## Lifecycle Funnel
 
 | group | raw | unique_records |
 | --- | ---: | ---: |
 | `entry` | 73569 | 18 |
-| `holding` | 634 | 97 |
+| `holding` | 635 | 98 |
 | `scale_in` | 40 | 11 |
-| `exit` | 36 | 16 |
-| `other` | 19842 | 21 |
+| `exit` | 42 | 18 |
+| `other` | 19851 | 21 |
 
 ## Key Stages
 
@@ -37,9 +37,12 @@
 | `gatekeeper_fast_reuse_bypass` | 4677 | 10 |
 | `gatekeeper_reject_cache_reuse` | 4295 | 9 |
 | `holding_flow_ofi_smoothing_applied` | 607 | 84 |
+| `holding_started` | 1 | 1 |
 | `market_regime_block` | 14954 | 18 |
 | `market_regime_prior_observed` | 4721 | 18 |
+| `sell_order_blocked_market_closed` | 1 | 1 |
 | `sell_order_failed` | 4 | 4 |
+| `sell_order_sent` | 5 | 2 |
 | `swing_entry_micro_context_observed` | 19580 | 13 |
 | `swing_entry_policy_evaluated` | 19675 | 18 |
 | `swing_probe_discarded` | 3458 | 15 |
@@ -48,8 +51,8 @@
 | `swing_probe_holding_started` | 15 | 8 |
 | `swing_probe_scale_in_order_assumed_filled` | 8 | 8 |
 | `swing_probe_sell_order_assumed_filled` | 15 | 11 |
-| `swing_probe_state_persisted` | 52 | 1 |
-| `swing_probe_state_restored` | 42 | 1 |
+| `swing_probe_state_persisted` | 60 | 1 |
+| `swing_probe_state_restored` | 43 | 1 |
 | `swing_reentry_counterfactual_after_loss` | 27 | 5 |
 | `swing_same_symbol_loss_reentry_blocked` | 7 | 4 |
 | `swing_same_symbol_loss_reentry_cooldown` | 7 | 6 |
@@ -111,9 +114,9 @@
 | `swing_recommendation_db_load` | `db_load` | `swing_selection_top_k` | 3 | `ready` |
 | `swing_gatekeeper_accept_reject` | `entry` | `swing_gatekeeper_accept_reject` | 44 | `ready` |
 | `swing_gap_market_budget_price_qty` | `entry` | `swing_market_regime_sensitivity` | 87 | `ready` |
-| `swing_holding_mfe_mae_defer` | `holding` | `swing_holding_flow_defer` | 97 | `ready` |
+| `swing_holding_mfe_mae_defer` | `holding` | `swing_holding_flow_defer` | 98 | `ready` |
 | `swing_scale_in_avg_down_pyramid` | `scale_in` | `swing_pyramid_trigger` | 11 | `ready` |
-| `swing_exit_post_sell_attribution` | `exit` | `swing_trailing_stop_time_stop` | 16 | `ready` |
+| `swing_exit_post_sell_attribution` | `exit` | `swing_trailing_stop_time_stop` | 18 | `ready` |
 | `swing_entry_ofi_qi_execution_quality` | `entry` | `swing_entry_ofi_qi_execution_quality` | 39318 | `ready` |
 | `swing_scale_in_ofi_qi_confirmation` | `scale_in` | `swing_scale_in_ofi_qi_confirmation` | 40 | `ready` |
 | `swing_exit_ofi_qi_smoothing` | `holding_exit` | `swing_exit_ofi_qi_smoothing` | 607 | `ready` |

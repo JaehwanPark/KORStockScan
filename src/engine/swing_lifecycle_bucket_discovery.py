@@ -65,6 +65,11 @@ CLASSIFICATION_STATES = {
     "runtime_blocked_contract_gap",
     "automation_handoff_gap",
 }
+IMPLEMENTED_SOURCE_QUALITY_STATUSES = {
+    "implemented",
+    "implemented_but_hold_sample",
+    "implemented_source_quality_contract_waiting_sample",
+}
 TAXONOMY_DECISIONS = {
     "merge",
     "absorb_as_dimension",
@@ -115,6 +120,16 @@ def _bucket_id(stage: str, bucket_type: str, bucket_key: str) -> str:
     return f"swing_bucket_{_slug(stage)}_{_slug(bucket_type)}_{_bucket_key_slug(bucket_key)}"
 
 
+def _is_implemented_source_quality_waiting(item: dict[str, Any]) -> bool:
+    return str(item.get("implementation_status") or "").strip() in IMPLEMENTED_SOURCE_QUALITY_STATUSES
+
+
+def _would_require_source_quality_patch(bucket: dict[str, Any]) -> bool:
+    route = str(bucket.get("recommended_route") or "")
+    gate = str(bucket.get("source_quality_gate") or "")
+    return route == "code_patch_required" or gate == "source_quality_blocker"
+
+
 def _classification_from_bucket(bucket: dict[str, Any]) -> str:
     route = str(bucket.get("recommended_route") or "")
     gate = str(bucket.get("source_quality_gate") or "")
@@ -124,7 +139,9 @@ def _classification_from_bucket(bucket: dict[str, Any]) -> str:
         joined = 0
     if route == "sim_auto_approved":
         return "sim_auto_approved"
-    if route == "code_patch_required" or gate == "source_quality_blocker":
+    if _would_require_source_quality_patch(bucket):
+        if _is_implemented_source_quality_waiting(bucket):
+            return "source_only_keep_collecting"
         return "code_patch_required"
     if joined <= 0 or gate == "hold_sample":
         return "source_only_keep_collecting"
@@ -172,6 +189,20 @@ def _candidate_from_bucket(section_name: str, bucket: dict[str, Any]) -> dict[st
             deterministic_proposal,
             source_quality_gate=bucket.get("source_quality_gate"),
         )
+    source_quality_resolution = {}
+    if (
+        state == "source_only_keep_collecting"
+        and _would_require_source_quality_patch(bucket)
+        and _is_implemented_source_quality_waiting(bucket)
+    ):
+        source_quality_resolution = {
+            "status": "implemented_source_quality_contract_waiting_sample",
+            "original_recommended_route": bucket.get("recommended_route"),
+            "original_source_quality_gate": bucket.get("source_quality_gate"),
+            "implementation_status": bucket.get("implementation_status"),
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
     return {
         "bucket_id": _bucket_id(stage, bucket_type, bucket_key),
         "canonical_bucket": taxonomy["canonical_bucket"],
@@ -193,6 +224,7 @@ def _candidate_from_bucket(section_name: str, bucket: dict[str, Any]) -> dict[st
         "parent_bucket_id": _bucket_id(stage, bucket_type, bucket_key),
         "implementation_status": bucket.get("implementation_status"),
         "implementation_provenance": bucket.get("implementation_provenance") if isinstance(bucket.get("implementation_provenance"), dict) else {},
+        "source_quality_resolution": source_quality_resolution,
         "source_quality_adjusted_ev_pct": bucket.get("source_quality_adjusted_ev_pct"),
         "decision_authority": DECISION_AUTHORITY,
         "runtime_effect": False,
@@ -776,6 +808,12 @@ def build_swing_lifecycle_bucket_discovery(
     if entry_bottleneck_candidate:
         candidates.append(entry_bottleneck_candidate)
     candidates = [_ensure_candidate_taxonomy(item) for item in candidates]
+    active_explicit_workorders = [
+        item for item in explicit_workorders if not _is_implemented_source_quality_waiting(item)
+    ]
+    resolved_explicit_workorders = [
+        item for item in explicit_workorders if _is_implemented_source_quality_waiting(item)
+    ]
 
     resolved_provider = str(
         provider
@@ -959,6 +997,12 @@ def build_swing_lifecycle_bucket_discovery(
         for item in candidates
         if item.get("classification_state") in {"code_patch_required", "runtime_blocked_contract_gap", "automation_handoff_gap"}
     ]
+    resolved_source_quality_candidates = [
+        item
+        for item in candidates
+        if isinstance(item.get("source_quality_resolution"), dict)
+        and item.get("source_quality_resolution", {}).get("status") == "implemented_source_quality_contract_waiting_sample"
+    ]
     ai_review_points = _ai_review_augmentation_points(matrix=matrix, candidates=candidates)
     ai_audit = _ai_audit_section(ai_review_points)
     warnings: list[str] = []
@@ -1014,7 +1058,9 @@ def build_swing_lifecycle_bucket_discovery(
             "surfaced_candidate_count": len(candidates),
             "sim_auto_approved_count": len(sim_auto),
             "source_only_keep_collecting_count": by_state.get("source_only_keep_collecting", 0),
-            "code_patch_required_count": len(code_patch) + len(explicit_workorders) + (1 if followup_reasons else 0),
+            "code_patch_required_count": len(code_patch) + len(active_explicit_workorders) + (1 if followup_reasons else 0),
+            "implemented_source_quality_waiting_sample_count": len(resolved_source_quality_candidates)
+            + len(resolved_explicit_workorders),
             "runtime_blocked_contract_gap_count": by_state.get("runtime_blocked_contract_gap", 0),
             "automation_handoff_gap_count": by_state.get("automation_handoff_gap", 0),
             "ai_review_augmentation_point_count": len(ai_review_points),
@@ -1123,7 +1169,15 @@ def build_swing_lifecycle_bucket_discovery(
             for item in code_patch
         ]
         + ([_ai_review_followup_workorder(followup_reasons, ai_payload_audit)] if followup_reasons else [])
-        + [_normalize_explicit_workorder(item) for item in explicit_workorders],
+        + [_normalize_explicit_workorder(item) for item in active_explicit_workorders],
+        "resolved_source_quality_candidates": resolved_source_quality_candidates,
+        "resolved_source_quality_workorders": [
+            {
+                **_normalize_explicit_workorder(item),
+                "resolution_state": "implemented_source_quality_contract_waiting_sample",
+            }
+            for item in resolved_explicit_workorders
+        ],
         "sources": {
             "swing_lifecycle_decision_matrix": str(matrix_json) if matrix_json.exists() else None,
             "swing_daily_simulation": None,
@@ -1145,6 +1199,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- surfaced_candidate_count: `{summary.get('surfaced_candidate_count')}`",
         f"- sim_auto_approved_count: `{summary.get('sim_auto_approved_count')}`",
         f"- code_patch_required_count: `{summary.get('code_patch_required_count')}`",
+        f"- implemented_source_quality_waiting_sample_count: `{summary.get('implemented_source_quality_waiting_sample_count')}`",
         f"- ai_review_augmentation_point_count: `{summary.get('ai_review_augmentation_point_count')}`",
         f"- human_intervention_required: `{summary.get('human_intervention_required')}`",
         f"- warnings: `{report.get('warnings') or []}`",
@@ -1161,6 +1216,22 @@ def render_markdown(report: dict[str, Any]) -> str:
         lines.append(
             f"- `{item.get('point_id')}` stage=`{item.get('stage')}` route=`{item.get('recommended_route')}`"
         )
+    resolved_candidates = report.get("resolved_source_quality_candidates") or []
+    resolved_workorders = report.get("resolved_source_quality_workorders") or []
+    if resolved_candidates or resolved_workorders:
+        lines.extend(["", "## Resolved Source Quality Sample Wait"])
+        for item in resolved_candidates[:10]:
+            if isinstance(item, dict):
+                lines.append(
+                    f"- candidate `{item.get('bucket_id')}` "
+                    f"status=`{(item.get('source_quality_resolution') or {}).get('status')}`"
+                )
+        for item in resolved_workorders[:10]:
+            if isinstance(item, dict):
+                lines.append(
+                    f"- workorder `{item.get('workorder_id')}` "
+                    f"status=`{item.get('resolution_state')}`"
+                )
     return "\n".join(lines).rstrip() + "\n"
 
 

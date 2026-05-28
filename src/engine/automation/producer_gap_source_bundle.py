@@ -74,6 +74,18 @@ SECTION_SPECS: dict[str, dict[str, Any]] = {
         "required_fields": ("source_paths", "join_keys"),
         "join_keys": ("code", "sell_time", "exit_reason"),
     },
+    "missed_fill_recovery_counterfactual": {
+        "pattern_type": "missed_fill_recovery_counterfactual",
+        "tokens": ("missed_fill", "fill_quality", "unfilled", "cancel"),
+        "required_fields": ("source_paths", "join_keys"),
+        "join_keys": ("sim_record_id", "code", "submit_time", "fill_quality"),
+    },
+    "sim_entry_selection_bucket_producer": {
+        "pattern_type": "sim_entry_selection_gap",
+        "tokens": ("sim_record_id", "candidate_id", "profit_rate", "score"),
+        "required_fields": ("source_paths", "join_keys"),
+        "join_keys": ("sim_record_id", "candidate_id", "code", "source_stage"),
+    },
     "limit_up_plateau_breakdown_exit_counterfactual": {
         "pattern_type": "limit_up_plateau_breakdown_exit_counterfactual",
         "tokens": ("limit_up", "plateau", "breakdown"),

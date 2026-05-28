@@ -145,6 +145,71 @@ def test_pattern_lab_ai_review_does_not_retry_parsed_audit_correction(tmp_path, 
     assert any(order["improvement_type"] == "source_quality_gap" for order in report["code_improvement_orders"])
 
 
+def test_pattern_lab_ai_review_normalizes_empty_correction_audit(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    raw_response = {
+        "schema_version": 1,
+        "interpretation": {"review_items": [], "source_feedback_status": "pass"},
+        "audit": {
+            "status": "correction_required",
+            "issues": [],
+            "forbidden_use_violations": [],
+            "reason": "empty correction marker",
+        },
+        "final_conclusions": [
+            {
+                "review_id": "manual:keep",
+                "domain": "cross_domain",
+                "final_state": "source_only_keep_collecting",
+                "final_decision": "keep",
+                "reason": "keep collecting",
+                "required_followup": ["keep_collecting"],
+            }
+        ],
+    }
+
+    report = mod.build_pattern_lab_ai_review_report("2026-05-15", provider="openai", ai_raw_response=raw_response)
+
+    assert report["status"] == "pass"
+    assert report["summary"]["audit_status"] == "pass"
+    assert report["summary"]["ai_review_followup_required"] is False
+    assert report["code_improvement_orders"] == []
+
+
+def test_pattern_lab_ai_review_keeps_empty_correction_audit_when_gap_remains(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    raw_response = {
+        "schema_version": 1,
+        "interpretation": {"review_items": [], "source_feedback_status": "warning"},
+        "audit": {
+            "status": "correction_required",
+            "issues": [],
+            "forbidden_use_violations": [],
+            "reason": "empty correction marker with unresolved gap",
+        },
+        "final_conclusions": [
+            {
+                "review_id": "threshold_cycle_ev_source_contract_drift_warning",
+                "domain": "cross_domain",
+                "final_state": "source_quality_gap",
+                "final_decision": "surface_workorder",
+                "reason": "source contract drift warning remains unresolved",
+                "required_followup": ["review_source_contract_drift"],
+            }
+        ],
+    }
+
+    report = mod.build_pattern_lab_ai_review_report("2026-05-15", provider="openai", ai_raw_response=raw_response)
+
+    assert report["summary"]["audit_status"] == "correction_required"
+    assert any(
+        order["order_id"] == "order_pattern_lab_ai_review_threshold_cycle_ev_source_contract_drift_warning"
+        for order in report["code_improvement_orders"]
+    )
+
+
 def test_pattern_lab_ai_review_resolves_implemented_swing_micro_context_contract(tmp_path, monkeypatch):
     report_dir = tmp_path / "data" / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
@@ -197,3 +262,102 @@ def test_pattern_lab_ai_review_resolves_implemented_swing_micro_context_contract
     assert conclusion["final_state"] == "source_only_keep_collecting"
     assert conclusion["final_decision"] == "keep"
     assert conclusion["source_contract_resolution"]["status"] == "resolved_by_implemented_source_contract"
+
+
+def test_pattern_lab_ai_review_resolves_closed_swing_lifecycle_bucket_discovery_gap(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+
+    _write_json(
+        report_dir / "swing_lifecycle_bucket_discovery" / "swing_lifecycle_bucket_discovery_2026-05-15.json",
+        {
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "summary": {
+                "source_contract_status": "pass",
+                "code_patch_required_count": 0,
+                "implemented_source_quality_waiting_sample_count": 18,
+                "ai_review_followup_required": False,
+            },
+            "warnings": [],
+        },
+    )
+    raw_response = {
+        "schema_version": 1,
+        "interpretation": {"review_items": [], "source_feedback_status": "warning"},
+        "audit": {
+            "status": "correction_required",
+            "issues": ["code_patch_required:1"],
+            "forbidden_use_violations": [],
+            "reason": "AI surfaced stale swing bucket discovery code patch signal.",
+        },
+        "final_conclusions": [
+            {
+                "review_id": "order_pattern_lab_ai_review_swing_lifecycle_bucket_discovery",
+                "domain": "swing",
+                "final_state": "code_patch_required",
+                "final_decision": "surface_workorder",
+                "reason": "swing_lifecycle_bucket_discovery still lists code_patch_required items",
+                "required_followup": ["review_source_workorders"],
+            }
+        ],
+    }
+
+    report = mod.build_pattern_lab_ai_review_report("2026-05-15", provider="openai", ai_raw_response=raw_response)
+
+    assert report["status"] == "pass"
+    assert report["summary"]["audit_status"] == "pass"
+    assert report["code_improvement_orders"] == []
+    conclusion = report["ai_two_pass_review"]["final_conclusions"][0]
+    assert conclusion["final_state"] == "source_only_keep_collecting"
+    assert conclusion["final_decision"] == "keep"
+    assert conclusion["source_contract_resolution"]["contract_id"] == "swing_lifecycle_bucket_discovery_code_patch_triage"
+
+
+def test_pattern_lab_ai_review_keeps_unresolved_swing_lifecycle_bucket_discovery_gap(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+
+    _write_json(
+        report_dir / "swing_lifecycle_bucket_discovery" / "swing_lifecycle_bucket_discovery_2026-05-15.json",
+        {
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "summary": {
+                "source_contract_status": "pass",
+                "code_patch_required_count": 1,
+                "implemented_source_quality_waiting_sample_count": 17,
+                "ai_review_followup_required": False,
+            },
+            "warnings": [],
+        },
+    )
+    raw_response = {
+        "schema_version": 1,
+        "interpretation": {"review_items": [], "source_feedback_status": "warning"},
+        "audit": {
+            "status": "correction_required",
+            "issues": ["code_patch_required:1"],
+            "forbidden_use_violations": [],
+            "reason": "AI surfaced unresolved swing bucket discovery code patch signal.",
+        },
+        "final_conclusions": [
+            {
+                "review_id": "order_pattern_lab_ai_review_swing_lifecycle_bucket_discovery",
+                "domain": "swing",
+                "final_state": "code_patch_required",
+                "final_decision": "surface_workorder",
+                "reason": "swing_lifecycle_bucket_discovery still has unresolved code patch",
+                "required_followup": ["review_source_workorders"],
+            }
+        ],
+    }
+
+    report = mod.build_pattern_lab_ai_review_report("2026-05-15", provider="openai", ai_raw_response=raw_response)
+
+    assert report["summary"]["audit_status"] == "correction_required"
+    assert any(
+        order["order_id"] == "order_pattern_lab_ai_review_order_pattern_lab_ai_review_swing_lifecycle_bucket_discovery"
+        and order["improvement_type"] == "code_patch_required"
+        for order in report["code_improvement_orders"]
+    )

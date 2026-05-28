@@ -8,13 +8,13 @@
 - primary_decision_metric: `source_quality_adjusted_ev_pct`
 
 ## Summary
-- total_candidates: `482`
+- total_candidates: `484`
 - joined_sample/sample_floor: `184` / `20`
 - prompt_applied_count: `193`
 - runtime_bias_applied_count: `0`
-- runtime_effect_counts: `{'-': 482}`
-- forced_action_counts: `{'-': 482}`
-- action_counts: `{'WAIT_REQUOTE': 11, 'NO_BUY_AI': 304, 'SKIP_PRE_SUBMIT_SAFETY': 153, 'SKIP_SOURCE_QUALITY': 4, 'BUY_NOW': 8, 'BUY_DEFENSIVE': 2}`
+- runtime_effect_counts: `{'-': 484}`
+- forced_action_counts: `{'-': 484}`
+- action_counts: `{'WAIT_REQUOTE': 12, 'NO_BUY_AI': 304, 'SKIP_PRE_SUBMIT_SAFETY': 154, 'SKIP_SOURCE_QUALITY': 4, 'BUY_NOW': 8, 'BUY_DEFENSIVE': 2}`
 - missing_actions: `[]`
 - zero_sample_actions: `['SKIP_STALE']`
 
@@ -22,12 +22,12 @@
 | action | sample | joined | sq_adjusted_ev_pct | equal_weight_avg_profit_pct | missed_winner | avoided_loser |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | `BUY_NOW` | 8 | 5 | -0.4437 | -0.71 | 0 | 0 |
-| `WAIT_REQUOTE` | 11 | 0 | 0.0 | None | 0 | 0 |
+| `WAIT_REQUOTE` | 12 | 0 | 0.0 | None | 0 | 0 |
 | `SKIP_STALE` | 0 | 0 | None | None | 0 | 0 |
 | `BUY_DEFENSIVE` | 2 | 0 | 0.0 | None | 0 | 0 |
 | `NO_BUY_AI` | 304 | 27 | 0.0589 | 0.6637 | 5 | 11 |
 | `SKIP_SOURCE_QUALITY` | 4 | 0 | 0.0 | None | 0 | 0 |
-| `SKIP_PRE_SUBMIT_SAFETY` | 153 | 152 | -0.6905 | -0.695 | 54 | 89 |
+| `SKIP_PRE_SUBMIT_SAFETY` | 154 | 152 | -0.686 | -0.695 | 54 | 89 |
 
 ## Top Buckets
 - `score_unknown|risk_unknown|-|stale_unknown|resolved_price|below_min_liquidity|overbought_unknown|time_0900_1000` sample=`55` joined=`55` action=`SKIP_PRE_SUBMIT_SAFETY` sq_ev=`-0.8833`

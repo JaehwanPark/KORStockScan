@@ -22,6 +22,7 @@
 | `gatekeeper_fast_reuse_bypass` | 4677 | 10 |
 | `gatekeeper_reject_cache_reuse` | 4295 | 9 |
 | `holding_flow_ofi_smoothing_applied` | 607 | 84 |
+| `holding_started` | 1 | 1 |
 | `market_regime_block` | 14954 | 18 |
 | `market_regime_prior_observed` | 4721 | 18 |
 | `swing_entry_micro_context_observed` | 19580 | 13 |

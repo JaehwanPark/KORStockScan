@@ -1,6 +1,6 @@
 # 스캘핑 패턴 분석 최종 리뷰 보고서 (for Lead AI)
 
-생성일: 2026-05-28 16:38:44
+생성일: 2026-05-28 18:14:12
 분석 기간: 2026-04-21 ~ 2026-05-28
 
 ---
@@ -87,10 +87,10 @@
 
 ### 2-1. split-entry 코호트 핵심 위험
 
-- rebase_integrity_flag: 47건
-- partial_then_expand_flag: 29건
+- rebase_integrity_flag: 49건
+- partial_then_expand_flag: 30건
 - same_symbol_repeat_flag: 228건
-- same_ts_multi_rebase_flag: 27건
+- same_ts_multi_rebase_flag: 28건
 
 ### 2-2. 전역 손절 강화 비권고 이유
 

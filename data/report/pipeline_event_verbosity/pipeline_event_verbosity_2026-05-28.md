@@ -9,9 +9,9 @@
 
 ## 근거
 
-- raw_size_bytes: `1301832910`
-- raw_storage_size_bytes: `1301832910`
-- raw_line_count: `265387`
+- raw_size_bytes: `1301980410`
+- raw_storage_size_bytes: `1301980410`
+- raw_line_count: `265485`
 - high_volume_line_count: `32250`
 - high_volume_byte_share_pct: `3.97`
 - producer_summary_exists: `True`

@@ -50,6 +50,21 @@ def _ai_response(bucket_ids: list[str]) -> dict:
     }
 
 
+def _patch_empty_parsed_ai_review(monkeypatch) -> None:
+    monkeypatch.setattr(
+        mod,
+        "_run_ai_review_shards",
+        lambda *args, **kwargs: {
+            "status": "parsed",
+            "payload": _ai_response([]),
+            "provider_status": {"provider": "test", "status": "success", "model": None},
+            "shards": [],
+            "reviewed_candidate_ids": [],
+            "warnings": [],
+        },
+    )
+
+
 def test_swing_lifecycle_bucket_ai_review_rejects_real_preapply_primary_ev_claim():
     bucket_id = "swing_bucket_entry_entry_bucket_attribution_safe_pool_probe"
     payload = _ai_response([bucket_id])
@@ -529,6 +544,53 @@ def test_bucket_discovery_code_patch_candidate_proposal_tracks_source_remediatio
     assert candidate["allowed_runtime_apply"] is False
 
 
+def test_bucket_discovery_downgrades_implemented_source_quality_waiting_sample(tmp_path, monkeypatch):
+    target = "2026-05-22"
+    matrix_dir = tmp_path / "matrix"
+    matrix_dir.mkdir()
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "discovery")
+    _patch_empty_parsed_ai_review(monkeypatch)
+
+    matrix_path = matrix_dir / f"swing_lifecycle_decision_matrix_{target}.json"
+    matrix_path.write_text(
+        json.dumps(
+            {
+                "input_contract": {"swing_daily_simulation_consumed": False},
+                "scale_in_bucket_attribution": {
+                    "buckets": [
+                        {
+                            "bucket_type": "scale_in_bucket_attribution",
+                            "bucket_key": "ofi_qi_missing",
+                            "lifecycle_stage": "scale_in",
+                            "recommended_route": "code_patch_required",
+                            "source_quality_gate": "source_quality_blocker",
+                            "joined_sample": 3,
+                            "sample_count": 3,
+                            "implementation_status": "implemented_source_quality_contract_waiting_sample",
+                            "implementation_provenance": {"test": "implemented"},
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+
+    report = mod.build_swing_lifecycle_bucket_discovery(target)
+
+    candidate = report["surfaced_candidates"][0]
+    assert candidate["classification_state"] == "source_only_keep_collecting"
+    assert candidate["source_quality_resolution"]["status"] == "implemented_source_quality_contract_waiting_sample"
+    assert report["summary"]["code_patch_required_count"] == 0
+    assert report["summary"]["implemented_source_quality_waiting_sample_count"] == 1
+    assert report["code_improvement_workorders"] == []
+    assert report["resolved_source_quality_candidates"][0]["bucket_id"] == candidate["bucket_id"]
+    markdown = mod.render_markdown(report)
+    assert "implemented_source_quality_waiting_sample_count: `1`" in markdown
+    assert "Resolved Source Quality Sample Wait" in markdown
+
+
 def test_bucket_discovery_normalizes_explicit_workorder_contract(tmp_path, monkeypatch):
     target = "2026-05-22"
     matrix_dir = tmp_path / "matrix"
@@ -564,6 +626,47 @@ def test_bucket_discovery_normalizes_explicit_workorder_contract(tmp_path, monke
     assert workorder["actual_order_submitted"] is False
     assert workorder["broker_order_forbidden"] is True
     assert "real_order_submit" in workorder["forbidden_uses"]
+
+
+def test_bucket_discovery_excludes_implemented_explicit_workorder_from_active_workorders(tmp_path, monkeypatch):
+    target = "2026-05-22"
+    matrix_dir = tmp_path / "matrix"
+    matrix_dir.mkdir()
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "discovery")
+    _patch_empty_parsed_ai_review(monkeypatch)
+
+    matrix_path = matrix_dir / f"swing_lifecycle_decision_matrix_{target}.json"
+    matrix_path.write_text(
+        json.dumps(
+            {
+                "input_contract": {"swing_daily_simulation_consumed": False},
+                "entry_bucket_attribution": {
+                    "buckets": [],
+                    "code_improvement_workorders": [
+                        {
+                            "workorder_id": "source_gap_waiting_sample",
+                            "implementation_status": "implemented_source_quality_contract_waiting_sample",
+                            "runtime_effect": True,
+                            "allowed_runtime_apply": True,
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+
+    report = mod.build_swing_lifecycle_bucket_discovery(target)
+
+    assert report["summary"]["code_patch_required_count"] == 0
+    assert report["summary"]["implemented_source_quality_waiting_sample_count"] == 1
+    assert report["code_improvement_workorders"] == []
+    resolved = report["resolved_source_quality_workorders"][0]
+    assert resolved["workorder_id"] == "source_gap_waiting_sample"
+    assert resolved["runtime_effect"] is False
+    assert resolved["resolution_state"] == "implemented_source_quality_contract_waiting_sample"
+    assert "workorder `source_gap_waiting_sample`" in mod.render_markdown(report)
 
 
 def test_bucket_discovery_surfaces_ai_review_augmentation_workorders(tmp_path, monkeypatch):

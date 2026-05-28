@@ -64,7 +64,7 @@
 
 - [ ] `[CodeImprovementWorkorderReview0529] code improvement workorder 구현 필요 여부 및 Codex 지시 대상 확인` (`Due: 2026-05-29`, `Slot: POSTCLOSE`, `TimeWindow: 16:45~17:00`, `Track: ScalpingLogic`)
   - Source: [code_improvement_workorder_2026-05-28.md](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-28.md), [code_improvement_workorder_2026-05-28.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-28.json)
-  - 판정 기준: selected_order_count=112와 `implement_now`, `attach_existing_family`, `design_family_candidate`, `reject` 분류를 확인한다.
+  - 판정 기준: selected_order_count=113와 `implement_now`, `attach_existing_family`, `design_family_candidate`, `reject` 분류를 확인한다.
   - 금지: code-improvement workorder를 자동 repo 수정으로 취급하지 않는다. 사용자가 Codex 구현을 지시한 경우에만 실행한다.
   - 다음 액션: 구현 필요, 설계 보류, reject, already_implemented 중 하나로 닫는다.
 
@@ -76,7 +76,7 @@
 
 - [ ] `[RuntimeApplyGapDirectiveReview0529] runtime apply gap Codex 작업지시 표면화 및 구현 여부 확인` (`Due: 2026-05-29`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:30`, `Track: ScalpingLogic`)
   - Source: [runtime_apply_gap_audit_2026-05-28.json](/home/ubuntu/KORStockScan/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_2026-05-28.json), [runtime_apply_gap_audit_2026-05-28.md](/home/ubuntu/KORStockScan/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_2026-05-28.md), [runtime-apply-gap-audit-user-guide.md](/home/ubuntu/KORStockScan/docs/runtime-apply-gap-audit-user-guide.md)
-  - 판정 기준: runtime apply gap audit의 Codex 작업지시 `IMPLEMENT_RUNTIME_BRIDGE_FOR_ENTRY_BUCKET`:entry_wait6579_score66_69_recovery_gate_v1:2026-05-28(block=runtime_bridge_contract)를 구현 필요, 이미 해결, 설계 보류, reject로 분류한다.
+  - 판정 기준: runtime apply gap audit의 Codex 작업지시 `RESOLVE_SOURCE_ONLY_STUCK_POSITIVE_EDGE`:lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq(block=positive_edge_must_not_default_to_source_only_keep_collecting), `RESOLVE_SOURCE_ONLY_STUCK_POSITIVE_EDGE`:lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquid(block=positive_edge_must_not_default_to_source_only_keep_collecting), `RESOLVE_SOURCE_ONLY_STUCK_POSITIVE_EDGE`:lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_blocked_ai_score_stale_fresh_liquidity_liqui(block=positive_edge_must_not_default_to_source_only_keep_collecting), `RESOLVE_SOURCE_ONLY_STUCK_POSITIVE_EDGE`:lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_stale_block_liquidi(block=positive_edge_must_not_default_to_source_only_keep_collecting), `RESOLVE_SOURCE_ONLY_STUCK_POSITIVE_EDGE`:lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_blocked_ai_score_stale_fresh_liquidity_liq(block=positive_edge_must_not_default_to_source_only_keep_collecting) 외 3건를 구현 필요, 이미 해결, 설계 보류, reject로 분류한다.
   - 금지: 작업지시를 approval artifact나 즉시 runtime env 수정으로 해석하지 않는다. broker/order/provider/cap guard 우회와 장중 threshold mutation은 금지한다.
   - 다음 액션: `implement_now`, `already_implemented`, `defer_design`, `reject`, `needs_new_workorder` 중 하나로 닫고, 구현 시 테스트와 postclose verifier handoff를 같이 확인한다.
 
@@ -86,7 +86,15 @@
   - 금지: shadow 금지, canary-only, baseline 승격 원칙을 코드/문서 상태와 분리하지 않는다.
   - 다음 액션: 변경이 있으면 기준문서와 checklist를 함께 갱신하고 cohort 잠금 필드를 남긴다.
 
+- [ ] `[CodebaseImprovementPlanSupplement0529] 오늘 코드베이스 개선 사항을 반영한 리팩터링 작업계획서 보완` (`Due: 2026-05-29`, `Slot: POSTCLOSE`, `TimeWindow: 16:45~17:00`, `Track: ScalpingLogic`)
+  - Source: [codebase_performance_workorder_2026-05-28.json](/home/ubuntu/KORStockScan/data/report/codebase_performance_workorder/codebase_performance_workorder_2026-05-28.json), [src-engine-refactor-inventory.md](/home/ubuntu/KORStockScan/docs/proposals/src-engine-refactor-inventory.md), [lifecycle_decision_matrix.py](/home/ubuntu/KORStockScan/src/engine/lifecycle_decision_matrix.py), [test_lifecycle_decision_matrix.py](/home/ubuntu/KORStockScan/src/tests/test_lifecycle_decision_matrix.py)
+  - 판정 기준: 오늘 구현된 lifecycle join gap 해소, bundle EV attribution 보강, 관련 테스트/검증 결과를 `src-engine-refactor-inventory.md`의 safe-slice 계획과 consumer/risk/재개 조건에 반영할지 검토한다.
+  - 판정 기준: codebase performance workorder와 code improvement workorder는 입력 근거로만 사용하고, 장후 항목의 목적은 즉시 파일 이동/대규모 리팩터링이 아니라 작업계획서 보완으로 한정한다.
+  - 금지: runtime/order/provider/threshold/bot restart 경로 이동, cron/job id 변경, output path/JSON schema/metric semantics 변경, wrapper 제거, direct import bulk rewrite를 수행하지 않는다.
+  - 다음 액션: `plan_supplemented`, `already_reflected`, `defer_after_postapply_verification`, `needs_new_workorder` 중 하나로 닫고, 문서 수정 시 parser 검증과 표준 수동 sync 명령 안내를 남긴다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
+
 
 
 

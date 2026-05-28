@@ -10,7 +10,7 @@
 - scalp_entry_adm_status: `pass`
 - lifecycle_matrix_status: `pass`
 - lifecycle_ai_context prompt/applied: `3` / `2125`
-- swing_strategy_discovery_labeled/pending: `82` / `2557`
+- swing_strategy_discovery_labeled/pending: `70` / `2566`
 - swing_lifecycle_matrix_auto: `13`
 - swing_lifecycle_bucket_auto: `13`
 - institutional_flow_available/join_rate: `True` / `100.0`
@@ -53,7 +53,7 @@
 - joined_sample/sample_floor: `184` / `20`
 - prompt_applied_count: `193`
 - missing_actions: `[]`
-- top_actions: `[{'action': 'BUY_NOW', 'sample_count': 8, 'joined_sample': 5, 'source_quality_adjusted_ev_pct': -0.4437}, {'action': 'WAIT_REQUOTE', 'sample_count': 11, 'joined_sample': 0, 'source_quality_adjusted_ev_pct': 0.0}, {'action': 'BUY_DEFENSIVE', 'sample_count': 2, 'joined_sample': 0, 'source_quality_adjusted_ev_pct': 0.0}, {'action': 'NO_BUY_AI', 'sample_count': 304, 'joined_sample': 27, 'source_quality_adjusted_ev_pct': 0.0589}, {'action': 'SKIP_SOURCE_QUALITY', 'sample_count': 4, 'joined_sample': 0, 'source_quality_adjusted_ev_pct': 0.0}]`
+- top_actions: `[{'action': 'BUY_NOW', 'sample_count': 8, 'joined_sample': 5, 'source_quality_adjusted_ev_pct': -0.4437}, {'action': 'WAIT_REQUOTE', 'sample_count': 12, 'joined_sample': 0, 'source_quality_adjusted_ev_pct': 0.0}, {'action': 'BUY_DEFENSIVE', 'sample_count': 2, 'joined_sample': 0, 'source_quality_adjusted_ev_pct': 0.0}, {'action': 'NO_BUY_AI', 'sample_count': 304, 'joined_sample': 27, 'source_quality_adjusted_ev_pct': 0.0589}, {'action': 'SKIP_SOURCE_QUALITY', 'sample_count': 4, 'joined_sample': 0, 'source_quality_adjusted_ev_pct': 0.0}]`
 - ready_for_daily_policy_tuning: `True`
 - warnings: `[]`
 
@@ -70,14 +70,14 @@
 - status: `pass`
 - matrix_version: `lifecycle_decision_matrix_v1_2026-05-28`
 - runtime_bias_scope: `stage_action_proposal_micro_canary`
-- total/joined/floor: `24454` / `23739` / `20`
+- total/joined/floor: `24465` / `23742` / `20`
 - policy_pass/promote_ready: `5` / `1`
-- lifecycle_flow buckets/complete/runtime/workorders: `69` / `0` / `0` / `20`
-- holding/exit buckets: `31` / `67`
+- lifecycle_flow buckets/complete/runtime/workorders: `97` / `84` / `0` / `20`
+- holding/exit buckets: `34` / `68`
 - holding/exit workorders: `10` / `10`
 - lifecycle identity missing/join_rate: `0` / `1.0`
-- lifecycle complete_flow_rate: `0.0`
-- incomplete_flow_reason_counts: `{'missing_entry': 12412, 'missing_holding': 12762, 'missing_exit': 12570, 'candidate_id_only': 12762, 'missing_submit': 12747, 'sim_record_id_only': 200, 'postclose_exit_without_entry': 392, 'identity_namespace_mismatch': 1, 'join_contract_blocked': 1, 'entry_candidate_id_to_sim_record_id_bridge_missing': 1, 'entry_adm_candidate_id_missing': 1}`
+- lifecycle complete_flow_rate: `0.0066`
+- incomplete_flow_reason_counts: `{'missing_entry': 12410, 'missing_holding': 12675, 'missing_exit': 12330, 'missing_submit': 12678, 'sim_record_id_only': 195, 'postclose_exit_without_entry': 364, 'candidate_id_only': 12453}`
 - fixed_threshold_roles: `{'hard_safety': ['broker_submit_guard', 'stale_quote_submit_block', 'price_freshness_guard', 'hard_stop', 'protect_stop', 'emergency_stop', 'account_order_cooldown_qty_guard'], 'baseline_prior': ['BUY_SCORE_THRESHOLD', 'VPW_MIN_SCORE', 'strength_momentum_cutoff', 'entry_score_cutoff'], 'bounded_tunable': ['SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION', 'SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION', 'SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION', 'score65_74_recovery_probe', 'soft_stop_whipsaw_confirmation', 'holding_flow_override', 'scale_in_price_guard'], 'legacy_archive': ['fallback_scout_main', 'fallback_single', 'latency_fallback_split_entry', 'legacy_latency_composite', 'closed_shadow_axes']}`
 - ready_for_bounded_apply: `True`
 - warnings: `[]`
@@ -111,10 +111,10 @@
 ## Swing Strategy Discovery Sim
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_2026-05-28.json`
 - available: `True`
-- candidate/arm/labeled: `375` / `2854` / `82`
-- pending_future_quote_count: `2557`
+- candidate/arm/labeled: `375` / `2854` / `70`
+- pending_future_quote_count: `2566`
 - top_surviving_arm: `arm05_breakout_conf_trailing`
-- avoid_bucket_count: `1`
+- avoid_bucket_count: `2`
 - runtime_effect: `False`
 - interpretation: source-only exploration. Surviving arms can create future source-quality/workorder inputs but cannot apply runtime env.
 - warnings: `['pending_future_quotes']`
@@ -124,7 +124,7 @@
 - available: `True`
 - total/probe/discovery: `2922` / `68` / `2854`
 - sim_auto_candidate_count: `13`
-- workorder_count: `9`
+- workorder_count: `8`
 - daily_simulation_consumed: `False`
 - runtime_effect: `False`
 - warnings: `[]`
@@ -133,7 +133,7 @@
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_lifecycle_bucket_discovery/swing_lifecycle_bucket_discovery_2026-05-28.json`
 - available: `True`
 - source_contract_status: `pass`
-- surfaced/sim_auto/code_patch: `455` / `13` / `18`
+- surfaced/sim_auto/code_patch: `452` / `13` / `0`
 - runtime_effect: `False`
 - warnings: `[]`
 

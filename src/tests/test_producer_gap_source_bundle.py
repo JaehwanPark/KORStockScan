@@ -34,6 +34,51 @@ def test_producer_gap_source_bundle_emits_source_only_sections(monkeypatch, tmp_
     assert sections["swing_sim_probe_label_gap"]["source_quality_status"] == "implemented_but_hold_sample"
 
 
+def test_producer_gap_source_bundle_covers_entry_selection_and_missed_fill(monkeypatch, tmp_path):
+    monkeypatch.setattr(bundle, "REPORT_DIR", tmp_path / "report")
+    monkeypatch.setattr(bundle, "OUT_DIR", tmp_path / "report" / "producer_gap_source_bundle")
+    monkeypatch.setattr(bundle, "POST_SELL_DIR", tmp_path / "post_sell")
+    (tmp_path / "post_sell").mkdir(parents=True)
+    (tmp_path / "post_sell" / "sim_post_sell_candidates_2026-05-27.jsonl").write_text(
+        json.dumps(
+            {
+                "sim_record_id": "sim-entry-1",
+                "candidate_id": "cand-1",
+                "code": "005930",
+                "score": 71,
+                "profit_rate": 0.4,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    ldm_dir = tmp_path / "report" / "lifecycle_decision_matrix"
+    ldm_dir.mkdir(parents=True)
+    (ldm_dir / "lifecycle_decision_matrix_2026-05-27.json").write_text(
+        json.dumps(
+            {
+                "rows": [
+                    {
+                        "sim_record_id": "sim-fill-1",
+                        "code": "005930",
+                        "submit_time": "09:05:00",
+                        "fill_quality": "missed_fill",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = bundle.build_producer_gap_source_bundle("2026-05-27")
+
+    sections = {item["section_id"]: item for item in report["sections"]}
+    assert sections["sim_entry_selection_bucket_producer"]["source_quality_status"] == "implemented"
+    assert sections["missed_fill_recovery_counterfactual"]["source_quality_status"] == "implemented"
+    assert sections["sim_entry_selection_bucket_producer"]["runtime_effect"] is False
+    assert sections["missed_fill_recovery_counterfactual"]["allowed_runtime_apply"] is False
+
+
 def test_producer_gap_source_bundle_reads_jsonl_gzip_sibling(monkeypatch, tmp_path):
     monkeypatch.setattr(bundle, "REPORT_DIR", tmp_path / "report")
     monkeypatch.setattr(bundle, "OUT_DIR", tmp_path / "report" / "producer_gap_source_bundle")

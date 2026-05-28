@@ -25,6 +25,106 @@ def test_lifecycle_bucket_rows_explain_unknown_source_field_causes():
     assert scale["recommended_resolution"] == "emit_or_backfill_source_field"
 
 
+def test_lifecycle_holding_started_marks_action_and_held_not_applicable():
+    row = {
+        "stage": "holding",
+        "source_stage": "scalp_sim_holding_started",
+        "runtime_features": {"profit_rate_live": 0.4},
+        "labels": {"profit_rate": 0.4},
+        "stage_ev_composite_pct": 0.4,
+    }
+
+    features = mod._holding_bucket_features(row)
+    bucket_id = mod._holding_combo_bucket_id(row)
+    attribution = mod._holding_bucket_attribution([row for _ in range(5)])
+
+    assert features["holding_action"] == "holding_action_not_applicable_at_start"
+    assert features["held_bucket"] == "held_not_applicable_at_start"
+    assert "holding_action_unknown" not in bucket_id
+    assert "held_unknown" not in bucket_id
+    assert all(
+        item["recommended_route"] != "source_quality_workorder"
+        for item in attribution["code_improvement_workorders"]
+    )
+
+
+def test_lifecycle_partial_exit_marks_outcome_not_applicable():
+    row = {
+        "stage": "exit",
+        "source_stage": "scalp_sim_partial_sell_order_assumed_filled",
+        "runtime_features": {},
+        "labels": {
+            "exit_rule": "scalp_sim_panic_lifecycle_partial_exit",
+            "profit_rate": -0.4,
+        },
+        "stage_ev_composite_pct": -0.4,
+    }
+
+    features = mod._exit_bucket_features(row)
+    bucket_id = mod._exit_combo_bucket_id(row)
+    attribution = mod._exit_bucket_attribution([row for _ in range(5)])
+
+    assert features["exit_outcome"] == "outcome_not_applicable_partial_exit"
+    assert "outcome_unknown" not in bucket_id
+    assert all(
+        item["recommended_route"] != "source_quality_workorder"
+        for item in attribution["code_improvement_workorders"]
+    )
+
+
+def test_lifecycle_overnight_decision_marks_missing_action_not_applicable():
+    row = {
+        "stage": "holding",
+        "source_stage": "scalp_sim_overnight_decision",
+        "runtime_features": {
+            "chosen_action": "holding_action_unknown",
+            "profit_rate_live": -1.0,
+            "held_sec": 2400,
+        },
+        "labels": {"profit_rate": -1.0},
+        "stage_ev_composite_pct": -1.0,
+    }
+
+    features = mod._holding_bucket_features(row)
+    bucket_id = mod._holding_combo_bucket_id(row)
+
+    assert features["holding_action"] == "holding_action_not_applicable_overnight_decision"
+    assert "holding_action_unknown" not in bucket_id
+
+
+def test_lifecycle_overnight_decision_uses_overnight_action_when_ai_action_none():
+    row = {
+        "stage": "holding",
+        "source_stage": "scalp_sim_overnight_decision",
+        "runtime_features": {
+            "ai_action": "None",
+            "overnight_action": "SELL_TODAY",
+            "profit_rate_live": -1.0,
+            "held_sec": 2400,
+        },
+        "labels": {"profit_rate": -1.0},
+        "stage_ev_composite_pct": -1.0,
+    }
+
+    assert mod._holding_bucket_features(row)["holding_action"] == "SELL_TODAY"
+
+
+def test_lifecycle_partial_exit_treats_string_none_outcome_as_missing():
+    row = {
+        "stage": "exit",
+        "source_stage": "scalp_sim_partial_sell_order_assumed_filled",
+        "runtime_features": {},
+        "labels": {
+            "exit_rule": "scalp_sim_panic_lifecycle_partial_exit",
+            "sim_post_sell_outcome": "None",
+            "profit_rate": 0.4,
+        },
+        "stage_ev_composite_pct": 0.4,
+    }
+
+    assert mod._exit_bucket_features(row)["exit_outcome"] == "outcome_not_applicable_partial_exit"
+
+
 def test_lifecycle_entry_score_bands_keep_score60_floor_granular():
     assert mod._entry_score_band(59) == "score_lt60"
     assert mod._entry_score_band(61) == "score_60_62"
@@ -531,6 +631,126 @@ def test_lifecycle_flow_identity_prefers_entry_adm_candidate_id_before_row_candi
     }
 
     assert mod._row_flow_identity(row) == ("entry_adm_candidate_id:ADM-1", "entry_adm_candidate_id")
+
+
+def test_lifecycle_flow_adm_bridge_joins_entry_candidate_to_downstream_sim_rows():
+    rows = [
+        {
+            "candidate_id": "8403",
+            "stock_code": "011500",
+            "event_time": "2026-05-28T09:05:54+09:00",
+            "stage": "entry",
+            "source_stage": "entry",
+            "runtime_features": {"ai_score": 70},
+            "labels": {"profit_rate": 0.4},
+            "stage_ev_composite_pct": 0.4,
+            "source": "scalp_entry_action_decision_matrix",
+        },
+        *[
+            {
+                "candidate_id": "ADM-011500-8403-1779926754334-bea5a3",
+                "stock_code": "011500",
+                "event_time": f"2026-05-28T09:0{idx}:55+09:00",
+                "stage": stage,
+                "source_stage": stage,
+                "runtime_features": {
+                    "sim_record_id": "SCALPSIM-011500-1779926754335-f7e730",
+                    "entry_adm_candidate_id": "ADM-011500-8403-1779926754334-bea5a3",
+                    "broker_order_forbidden": True,
+                },
+                "labels": {"profit_rate": 0.4},
+                "stage_ev_composite_pct": 0.4,
+            }
+            for idx, stage in enumerate(("submit", "holding", "exit"), start=6)
+        ],
+    ]
+
+    attribution = mod._lifecycle_flow_bucket_attribution(rows)
+
+    assert attribution["summary"]["complete_flow_count"] == 1
+    assert attribution["summary"]["join_contract_blocked"] is False
+    assert attribution["summary"]["stage_identity"]["entry"]["identity_quality_counts"] == {"entry_adm_bridge_key": 1}
+    assert attribution["flows"][0]["identity_quality"] == "entry_adm_bridge_key"
+    assert attribution["flows"][0]["stage_completion_state"] == "complete"
+
+
+def test_lifecycle_flow_adm_bridge_does_not_rekey_non_adm_numeric_entry_sources():
+    rows = [
+        {
+            "candidate_id": "8403",
+            "stock_code": "011500",
+            "event_time": "2026-05-28T09:05:54+09:00",
+            "stage": "entry",
+            "source_stage": "wait6579_ev_cohort",
+            "runtime_features": {"ai_score": 70},
+            "labels": {"profit_rate": 0.4},
+            "stage_ev_composite_pct": 0.4,
+            "source": "wait6579_ev_cohort",
+        },
+        {
+            "candidate_id": "ADM-011500-8403-1779926754334-bea5a3",
+            "stock_code": "011500",
+            "event_time": "2026-05-28T09:06:55+09:00",
+            "stage": "submit",
+            "source_stage": "submit",
+            "runtime_features": {
+                "entry_adm_candidate_id": "ADM-011500-8403-1779926754334-bea5a3",
+                "broker_order_forbidden": True,
+            },
+            "labels": {"profit_rate": 0.4},
+            "stage_ev_composite_pct": 0.4,
+        },
+    ]
+
+    attribution = mod._lifecycle_flow_bucket_attribution(rows)
+
+    assert attribution["summary"]["complete_flow_count"] == 0
+    assert attribution["summary"]["stage_identity"]["entry"]["identity_quality_counts"] == {"candidate_id": 1}
+    assert attribution["summary"]["stage_identity"]["submit"]["identity_quality_counts"] == {"entry_adm_bridge_key": 1}
+
+
+def test_lifecycle_flow_workorders_sample_incomplete_flows_after_complete_flows():
+    rows = []
+    for flow_idx in range(3):
+        for stage_idx, stage in enumerate(("entry", "submit", "holding", "exit")):
+            rows.append(
+                {
+                    "candidate_id": f"ADM-00000{flow_idx}-{flow_idx}-x",
+                    "stock_code": f"00000{flow_idx}",
+                    "event_time": f"2026-05-28T09:0{flow_idx}:0{stage_idx}+09:00",
+                    "stage": stage,
+                    "source_stage": stage,
+                    "runtime_features": {
+                        "entry_adm_candidate_id": f"ADM-00000{flow_idx}-{flow_idx}-x",
+                        "broker_order_forbidden": True,
+                    },
+                    "labels": {"profit_rate": 0.4},
+                    "stage_ev_composite_pct": 0.4,
+                }
+            )
+    for flow_idx in range(25):
+        rows.append(
+            {
+                "candidate_id": f"ENTRY-{flow_idx}",
+                "stock_code": f"100{flow_idx:03d}",
+                "event_time": f"2026-05-28T10:{flow_idx:02d}:00+09:00",
+                "stage": "entry",
+                "source_stage": "entry",
+                "runtime_features": {"ai_score": 70},
+                "labels": {"profit_rate": 0.1},
+                "stage_ev_composite_pct": 0.1,
+            }
+        )
+
+    attribution = mod._lifecycle_flow_bucket_attribution(rows)
+
+    assert attribution["summary"]["complete_flow_count"] == 3
+    assert attribution["summary"]["workorder_count"] == 20
+    assert len(attribution["code_improvement_workorders"]) == 20
+    assert all(
+        item["reason"] != "pass"
+        for item in attribution["code_improvement_workorders"]
+    )
 
 
 def test_lifecycle_flow_surfaces_identity_namespace_mismatch_when_required_stages_exist():

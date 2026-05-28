@@ -171,6 +171,40 @@ def _is_resolved_swing_micro_context_gap(item: dict[str, Any], context: dict[str
     )
 
 
+def _swing_lifecycle_bucket_discovery_summary(context: dict[str, Any]) -> dict[str, Any]:
+    sources = context.get("sources") if isinstance(context.get("sources"), dict) else {}
+    source = (
+        sources.get("swing_lifecycle_bucket_discovery")
+        if isinstance(sources.get("swing_lifecycle_bucket_discovery"), dict)
+        else {}
+    )
+    summary = source.get("summary") if isinstance(source.get("summary"), dict) else {}
+    return summary
+
+
+def _is_resolved_swing_lifecycle_bucket_discovery_gap(item: dict[str, Any], context: dict[str, Any]) -> bool:
+    if str(item.get("final_state") or "") != "code_patch_required":
+        return False
+    review_id = str(item.get("review_id") or "").lower()
+    reason = str(item.get("reason") or "").lower()
+    if not any(
+        token in f"{review_id} {reason}"
+        for token in ("swing_lifecycle_bucket_discovery", "swing lifecycle bucket discovery")
+    ):
+        return False
+    summary = _swing_lifecycle_bucket_discovery_summary(context)
+    source_summary = summary.get("summary") if isinstance(summary.get("summary"), dict) else {}
+    warnings = summary.get("warnings") if isinstance(summary.get("warnings"), list) else []
+    return (
+        source_summary.get("source_contract_status") == "pass"
+        and _safe_int(source_summary.get("code_patch_required_count")) == 0
+        and source_summary.get("ai_review_followup_required") is False
+        and not any("source_contract_drift" in str(item) for item in warnings)
+        and summary.get("runtime_effect") is False
+        and summary.get("allowed_runtime_apply") is False
+    )
+
+
 def _apply_source_contract_resolutions(payload: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     conclusions = payload.get("final_conclusions") if isinstance(payload.get("final_conclusions"), list) else []
     resolved_ids: list[str] = []
@@ -190,6 +224,23 @@ def _apply_source_contract_resolutions(payload: dict[str, Any], context: dict[st
                     "source_contract_resolution": {
                         "status": "resolved_by_implemented_source_contract",
                         "contract_id": "swing_micro_context_source_quality",
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                    },
+                }
+            )
+        elif _is_resolved_swing_lifecycle_bucket_discovery_gap(item, context):
+            resolved_ids.append(str(item.get("review_id") or "unknown"))
+            resolved_conclusions.append(
+                {
+                    **item,
+                    "final_state": "source_only_keep_collecting",
+                    "final_decision": "keep",
+                    "explicit_gap_type": None,
+                    "auditor_pass": True,
+                    "source_contract_resolution": {
+                        "status": "resolved_by_implemented_source_contract",
+                        "contract_id": "swing_lifecycle_bucket_discovery_code_patch_triage",
                         "runtime_effect": False,
                         "allowed_runtime_apply": False,
                     },
@@ -219,6 +270,40 @@ def _apply_source_contract_resolutions(payload: dict[str, Any], context: dict[st
         ),
     }
     return payload
+
+
+def _normalize_empty_audit_correction(payload: dict[str, Any]) -> dict[str, Any]:
+    audit = payload.get("audit") if isinstance(payload.get("audit"), dict) else {}
+    if str(audit.get("status") or "") != "correction_required":
+        return payload
+    issues = audit.get("issues") if isinstance(audit.get("issues"), list) else []
+    forbidden = (
+        audit.get("forbidden_use_violations")
+        if isinstance(audit.get("forbidden_use_violations"), list)
+        else []
+    )
+    if issues or forbidden:
+        return payload
+    conclusions = payload.get("final_conclusions") if isinstance(payload.get("final_conclusions"), list) else []
+    unresolved_gap = any(
+        isinstance(item, dict)
+        and str(item.get("final_state") or "") in GAP_STATES
+        and str(item.get("final_decision") or "") != "keep"
+        for item in conclusions
+    )
+    if unresolved_gap:
+        return payload
+    return {
+        **payload,
+        "audit": {
+            **audit,
+            "status": "pass",
+            "reason": (
+                "Empty correction_required audit normalized to pass; explicit final conclusions, "
+                "if any, remain source-only workorder inputs."
+            ),
+        },
+    }
 
 
 def _build_input_context(target_date: str) -> dict[str, Any]:
@@ -733,7 +818,9 @@ def build_pattern_lab_ai_review_report(
             ai_status = "disabled_deterministic_review"
         else:
             ai_status = "unavailable_deterministic_review"
-    ai_payload = _apply_source_contract_resolutions(ai_payload, context)
+    ai_payload = _normalize_empty_audit_correction(
+        _apply_source_contract_resolutions(ai_payload, context)
+    )
     conclusions = (
         ai_payload.get("final_conclusions")
         if isinstance(ai_payload.get("final_conclusions"), list)

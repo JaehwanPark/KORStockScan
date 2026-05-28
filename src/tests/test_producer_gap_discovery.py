@@ -529,6 +529,88 @@ def test_ai_forbidden_use_violation_surfaces_followup_workorder_without_retry(tm
     assert "forbidden_use_violation" in report["code_improvement_orders"][0]["ai_review_followup_reasons"]
 
 
+def test_source_bundle_marks_entry_selection_and_missed_fill_candidates_implemented(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "report")
+    bundle_path = tmp_path / "report" / "producer_gap_source_bundle" / "producer_gap_source_bundle_2026-05-26.json"
+    bundle_path.parent.mkdir(parents=True)
+    bundle_path.write_text(
+        json.dumps(
+            {
+                "sections": [
+                    {
+                        "section_id": "missed_fill_recovery_counterfactual",
+                        "pattern_type": "missed_fill_recovery_counterfactual",
+                        "source_quality_status": "implemented",
+                        "sample_count": 2,
+                        "source_paths": ["lifecycle_decision_matrix.json"],
+                        "join_keys": ["sim_record_id", "code", "submit_time", "fill_quality"],
+                        "missing_fields": [],
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                    },
+                    {
+                        "section_id": "sim_entry_selection_bucket_producer",
+                        "pattern_type": "sim_entry_selection_gap",
+                        "source_quality_status": "implemented",
+                        "sample_count": 2,
+                        "source_paths": ["sim_post_sell_candidates.jsonl"],
+                        "join_keys": ["sim_record_id", "candidate_id", "code", "source_stage"],
+                        "missing_fields": [],
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        mod,
+        "producer_gap_source_bundle_paths",
+        lambda target_date: (
+            bundle_path,
+            bundle_path.with_suffix(".md"),
+        ),
+    )
+    candidates = [
+        {
+            "candidate_id": "producer_gap_missed_fill_recovery_counterfactual_missing",
+            "pattern_type": "missed_fill_recovery_counterfactual_missing",
+            "priority": "high",
+            "source_paths": [],
+        },
+        {
+            "candidate_id": "producer_gap_sim_entry_selection_gap_missing",
+            "pattern_type": "sim_entry_selection_gap_missing",
+            "priority": "high",
+            "source_paths": [],
+        },
+    ]
+    monkeypatch.setattr(
+        mod,
+        "_deterministic_candidates",
+        lambda target_date, rolling_sim_scan=False: (candidates, {"date": target_date}),
+    )
+
+    report = mod.build_producer_gap_discovery_report(
+        "2026-05-26",
+        provider="openai",
+        ai_raw_response=_ai_response([item["candidate_id"] for item in candidates]),
+    )
+
+    assert {
+        item["candidate_id"]: item["implementation_status"]
+        for item in report["producer_gap_candidates"]
+    } == {
+        "producer_gap_missed_fill_recovery_counterfactual_missing": "implemented",
+        "producer_gap_sim_entry_selection_gap_missing": "implemented",
+    }
+    assert all(
+        order["implementation_provenance"]["source_report_type"] == "producer_gap_source_bundle"
+        for order in report["code_improvement_orders"]
+    )
+
+
 def test_openai_review_retries_with_low_reasoning_after_parse_reject(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "report")
     monkeypatch.setattr(

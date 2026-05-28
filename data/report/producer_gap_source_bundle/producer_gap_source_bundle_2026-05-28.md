@@ -4,7 +4,7 @@
 
 - runtime_effect: `False`
 - allowed_runtime_apply: `False`
-- status_counts: `{'implemented': 6, 'implemented_but_hold_sample': 2}`
+- status_counts: `{'implemented': 8, 'implemented_but_hold_sample': 2}`
 
 ## Sections
 
@@ -31,7 +31,7 @@
 
 ### sim_holding_runner_counterfactual
 
-- sample_count: `2182`
+- sample_count: `3682`
 - source_quality_status: `implemented`
 - missing_fields: `[]`
 - source_paths: `6`
@@ -45,17 +45,31 @@
 
 ### sim_stop_recovery_counterfactual
 
-- sample_count: `2773`
+- sample_count: `3857`
 - source_quality_status: `implemented`
 - missing_fields: `[]`
 - source_paths: `10`
 
 ### stop_recovery_counterfactual
 
-- sample_count: `571`
+- sample_count: `583`
 - source_quality_status: `implemented`
 - missing_fields: `[]`
 - source_paths: `7`
+
+### missed_fill_recovery_counterfactual
+
+- sample_count: `1`
+- source_quality_status: `implemented`
+- missing_fields: `[]`
+- source_paths: `1`
+
+### sim_entry_selection_bucket_producer
+
+- sample_count: `625`
+- source_quality_status: `implemented`
+- missing_fields: `[]`
+- source_paths: `8`
 
 ### limit_up_plateau_breakdown_exit_counterfactual
 
