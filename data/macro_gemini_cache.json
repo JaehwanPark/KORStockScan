@@ -1,85 +1,85 @@
 {
-  "bundle_as_of": "2026-05-27T22:20:17Z",
+  "bundle_as_of": "2026-05-28T22:20:17Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 7520.36,
-    "prev_value": 7519.12,
-    "change": 1.24,
-    "change_pct": 0.02,
-    "as_of": "2026-05-27T20:29:00Z",
+    "value": 7563.63,
+    "prev_value": 7520.36,
+    "change": 43.27,
+    "change_pct": 0.58,
+    "as_of": "2026-05-28T20:28:00Z",
     "source": "Dow Jones Market Data / Morningstar"
   },
   "nasdaq": {
-    "name": "NASDAQ",
-    "value": 26674.73,
-    "prev_value": 26656.18,
-    "change": 18.55,
-    "change_pct": 0.07,
-    "as_of": "2026-05-27T20:29:00Z",
+    "name": "NASDAQ Composite",
+    "value": 26917.47,
+    "prev_value": 26674.73,
+    "change": 242.74,
+    "change_pct": 0.91,
+    "as_of": "2026-05-28T20:28:00Z",
     "source": "Dow Jones Market Data / Morningstar"
   },
   "vix": {
     "name": "VIX",
-    "value": 16.32,
-    "prev_value": 17.01,
-    "change": -0.69,
-    "change_pct": -4.06,
-    "as_of": "2026-05-27T20:00:00Z",
-    "source": "CBOE"
+    "value": 15.9,
+    "prev_value": 16.29,
+    "change": -0.39,
+    "change_pct": -2.39,
+    "as_of": "2026-05-28T20:19:00Z",
+    "source": "Cboe Global Markets"
   },
   "us10y": {
     "name": "US 10-Year Treasury Yield",
-    "value": 4.47,
-    "prev_value": 4.49,
-    "change": -0.02,
-    "change_pct": -0.45,
-    "as_of": "2026-05-27T22:20:17Z",
-    "source": "Trading Economics"
+    "value": 4.45,
+    "prev_value": 4.48,
+    "change": -0.03,
+    "change_pct": -0.67,
+    "as_of": "2026-05-28T20:03:00Z",
+    "source": "Seeking Alpha"
   },
   "brent": {
-    "name": "Brent Crude",
-    "value": 92.25,
-    "prev_value": 96.7,
-    "change": -4.45,
-    "change_pct": -4.6,
-    "as_of": "2026-05-27T22:20:17Z",
-    "source": "Associated Press"
+    "name": "Front Month ICE Brent Crude",
+    "value": 93.71,
+    "prev_value": 94.29,
+    "change": -0.58,
+    "change_pct": -0.62,
+    "as_of": "2026-05-28T19:08:00Z",
+    "source": "Dow Jones Market Data / Morningstar"
   },
   "headlines": [
     {
-      "title": "Trump says US 'not satisfied' in talks with Iran, days after claiming deal imminent",
-      "source": "The Times of Israel",
-      "published_at": "2026-05-27T20:23:00Z",
-      "url": "https://www.timesofisrael.com"
+      "title": "U.S., Iran nearing deal to end war and reopen Strait of Hormuz",
+      "source": "The Washington Post",
+      "published_at": "2026-05-28T21:49:00Z",
+      "url": "https://www.washingtonpost.com"
     },
     {
-      "title": "Trump tells PBS News that Iran would not get sanctions relief in exchange for giving up highly enriched uranium",
-      "source": "PBS News",
-      "published_at": "2026-05-27T15:40:00Z",
-      "url": "https://www.pbs.org/newshour/politics/trump-tells-pbs-news-that-iran-would-not-get-sanctions-relief-in-exchange-for-giving-up-highly-enriched-uranium"
+      "title": "U.S. And Iran Negotiators Agree On Deal, But Trump Must Approve",
+      "source": "Forbes",
+      "published_at": "2026-05-28T18:12:00Z",
+      "url": "https://www.forbes.com"
     },
     {
-      "title": "Trump insistent on elusive 'great deal' in Iran",
+      "title": "Live Updates: Tentative 60-day agreement reached on Iran, pending Trump's approval",
+      "source": "CBS News",
+      "published_at": "2026-05-28T19:12:00Z",
+      "url": "https://www.cbsnews.com"
+    },
+    {
+      "title": "US vows to keep some Canada, Mexico tariffs as trade pact deadline looms",
       "source": "Semafor",
-      "published_at": "2026-05-27T20:29:00Z",
+      "published_at": "2026-05-28T10:49:00Z",
       "url": "https://www.semafor.com"
     },
     {
-      "title": "U.S. stocks inch to more records after oil prices drop",
-      "source": "Associated Press",
-      "published_at": "2026-05-27T17:18:00Z",
-      "url": "https://apnews.com"
-    },
-    {
-      "title": "Trump says Hormuz will open under Iran deal, rules out sanctions relief",
-      "source": "AL-MONITOR",
-      "published_at": "2026-05-27T22:20:17Z",
-      "url": "https://www.al-monitor.com"
+      "title": "Trump Threatens to 'Blow Up' Oman Over Strait of Hormuz",
+      "source": "TIME",
+      "published_at": "2026-05-28T09:30:00Z",
+      "url": "https://time.com"
     }
   ],
   "notes": [
-    "S&P 500 and NASDAQ reached new record closes.",
-    "Oil prices dropped significantly as investors assess diplomatic developments regarding Iran.",
-    "US 10-Year yield fell to 4.47% due to lower energy prices easing inflation concerns."
+    "U.S. equity markets hit record closing highs fueled by strong corporate earnings and news of a tentative U.S.-Iran peace deal.",
+    "The 60-day ceasefire agreement is currently awaiting final approval from President Trump and Iranian leadership.",
+    "Oil prices cooled off as the Middle East geopolitical risk premium eased due to the progressing negotiations."
   ]
 }

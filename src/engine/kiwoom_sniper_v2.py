@@ -1285,13 +1285,6 @@ def run_sniper(is_test_mode=False):
     targets = ACTIVE_TARGETS
     last_db_poll_time = time.time()
 
-    market_snapshot = MARKET_REGIME.refresh_if_needed()
-    regime_summary = summarize_market_regime_snapshot(market_snapshot)
-    regime_kor = f"{regime_summary['status_text']} {regime_summary['emoji']}"
-    print(
-        f"📊 [시장 판독] 현재 KOSPI는 '{regime_kor}' 상태입니다. "
-        f"(risk={regime_summary['risk_state']}, score={regime_summary['swing_score']})"
-    )
     if is_buy_side_paused():
         log_info("[TRADING_PAUSED] engine booted with 신규 매수 및 추가매수 중단 상태 active")
 

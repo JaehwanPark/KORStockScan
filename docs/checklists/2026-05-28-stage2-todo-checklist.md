@@ -27,6 +27,7 @@
   - 판정: `warning`
   - 근거: [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)의 `PostcloseAutomationHealthCheck20260528` 완료 기록과 동일하다.
   - 요약: postclose wrapper status는 `succeeded`이고 `[DONE]` marker가 닫혔지만 verifier는 `warning`, control tower는 `sim_progress_no_live_bucket`, live-auto `0`으로 닫혔다. 런타임/주문/provider/cap 변경 없이 source-quality/decision warning만 다음 checklist로 넘겼다.
+  - 추가 operator 지시: `2026-05-28` Bedrock Nova Lite v1 shadow 호출을 중단했다. [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)와 [run_scalp_sim_overnight_preclose.sh](/home/ubuntu/KORStockScan/deploy/run_scalp_sim_overnight_preclose.sh)의 `KORSTOCKSCAN_BEDROCK_NOVA_LITE_SHADOW_ENABLED` 기본값은 `false`이고, 비교 코드/리포트 경로는 향후 다른 모델 비교를 위해 보존한다. Lite v2 primary, OpenAI failback, threshold/order/provider/cap guard는 변경하지 않았다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-05-27` postclose -> `2026-05-28`)

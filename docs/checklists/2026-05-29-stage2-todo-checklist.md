@@ -57,6 +57,8 @@
   - 근거: 시간창 이후 확인 시 당일 preopen apply 산출물이 누락되어 표준 wrapper를 같은 날짜로 재실행했고, `threshold_cycle_preopen_2026-05-29.status.json`이 `status=succeeded`로 생성됐다. runtime env는 `threshold_runtime_env_2026-05-29.env`로 생성됐으며 approval request/contract gap은 없다.
   - 다음 액션: Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
 
+운영 보완 기록(2026-05-29 07:40 KST 이후 확인): `시장 판독` 부팅 로그는 `risk=RISK_OFF`를 `하락장`으로 렌더링해 KOSPI 실시간 추세 판정처럼 오해될 수 있어 [kiwoom_sniper_v2.py](/home/ubuntu/KORStockScan/src/engine/kiwoom_sniper_v2.py)에서 제거했다. `시장환경 초기화` 로그는 원본 MarketRegime snapshot 진단으로 유지한다. KOSPI_ML 보유/청산의 `kospi_regime_stop_loss` 경로는 구조적으로 `market_regime == BULL`이면 `STOP_LOSS_BULL`, 그 외는 `STOP_LOSS_BEAR`를 선택하는 exit hard threshold 경로다. 현재 기본값은 둘 다 `-3.0`이라 값 차이는 없지만, 향후 두 값이 달라지면 regime이 손절 발동 임계값에 직접 영향을 준다.
+
 ## 장중 체크리스트 (09:05~15:20)
 
 - [ ] `[RuntimeEnvIntradayObserve0529] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-05-29`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
@@ -90,6 +92,12 @@
   - 판정 기준: 개입사항을 `approval_artifact_required|created|missing|blocked_by_policy|observe_only`, `Codex 구현 필요`, `수동 동기화 필요`, `관찰만`으로 분류한다.
   - 금지: approval request만 보고 env 파일을 직접 수정하지 않고, 자동화 산출물에 있는 요청을 답변에만 남기고 checklist/Project 대상에서 누락하지 않는다.
   - 다음 액션: approval request가 있으면 `approval_id`, 후보/대상, artifact path, 승인 여부, 다음 PREOPEN 적용 확인 항목을 남긴다. 누락된 항목이 있으면 다음 영업일 checklist에 parser-friendly checkbox로 추가한다.
+
+- [ ] `[MarketRegimeUsageReview0529] market regime 사용 권한과 runtime 영향 정리` (`Due: 2026-05-29`, `Slot: POSTCLOSE`, `TimeWindow: 17:30~17:45`, `Track: RuntimeStability`)
+  - Source: [sniper_market_regime.py](/home/ubuntu/KORStockScan/src/engine/sniper_market_regime.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 판정 기준: market regime 사용처를 `scalping entry no-hard-gate`, `swing entry baseline_prior`, `confirmed_risk_context block`, `KOSPI_ML exit stop-loss threshold selector`, `ADM/LDM runtime feature`, `panic breadth report-only context`로 분리해 현재 runtime/order 영향과 금지 권한을 정리한다.
+  - 금지: `risk=RISK_OFF` 또는 `allow_swing=false` 단독으로 신규 threshold, stop, provider, bot restart, 실주문 전환, 스윙 full-live 전환을 열지 않는다.
+  - 다음 액션: `documented_current_contract`, `needs_code_workorder`, `needs_doc_contract_patch`, `blocked_by_policy` 중 하나로 닫고, KOSPI_ML `STOP_LOSS_BULL/BEAR`가 같은 값인지와 향후 값 차이 발생 시 승인 경로를 명시한다.
 
 - [ ] `[ShadowCanaryCohortReview0529] shadow/canary/cohort 런타임 분류 및 정리 판정` (`Due: 2026-05-29`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)
   - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)
