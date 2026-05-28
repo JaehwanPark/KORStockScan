@@ -1,6 +1,6 @@
 # Swing Strategy Discovery Sim - 2026-05-28
 
-- generated_at: `2026-05-28T18:08:39`
+- generated_at: `2026-05-28T21:28:51`
 - policy_version: `swing_strategy_discovery_sim_v1`
 - mode: `sim_only_aggressive_exploration`
 - runtime_effect: `False`
@@ -12,7 +12,7 @@
 - bottom_rebound_persisted_candidate_count: `0`
 - bottom_rebound_persisted_arm_count: `0`
 - selection_arm_counts: `{'diversity_exploration': 15, 'lifecycle_rank': 35}`
-- block_reason_counts: `{'no_block_observed': 42, 'blocked_gatekeeper_reject': 3, 'blocked_swing_score_vpw': 5}`
+- block_reason_counts: `{'no_block_observed': 42, 'blocked_gatekeeper_reject': 4, 'blocked_swing_score_vpw': 4}`
 - source_family_bucket_counts: `{'safe_pool': 50}`
 - quote_feature_coverage: `1.0`
 - warnings: `[]`

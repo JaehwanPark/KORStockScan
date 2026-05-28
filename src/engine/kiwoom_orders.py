@@ -285,6 +285,8 @@ def get_deposit(token):
                     _DEPOSIT_API_COOLDOWN_REASON = str(err_msg or "kt00001 request count exceeded")
                 _LAST_DEPOSIT_ERRORS[-1]['classification'] = 'request_count_exceeded'
                 _LAST_DEPOSIT_ERRORS[-1]['cooldown_sec'] = cooldown_sec
+                log_error(f"❌ [예수금조회 요청제한] attempt={attempt}/{retries} 사유: {err_msg}")
+                break
             log_error(f"❌ [예수금조회 실패] attempt={attempt}/{retries} 사유: {err_msg}")
         except Exception as exc:
             _LAST_DEPOSIT_ERRORS.append(

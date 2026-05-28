@@ -135,6 +135,47 @@ def test_runtime_approval_summary_surfaces_swing_bucket_ai_fail_closed():
     assert "ai_two_pass_review_fail_closed_sim_auto_blocked" in summary["warnings"]
 
 
+def test_runtime_approval_summary_preserves_swing_flow_metrics():
+    ev_report = {
+        "swing_lifecycle_decision_matrix": {
+            "available": True,
+            "total_rows": 9,
+            "swing_lifecycle_flow_bucket_count": 1,
+            "complete_flow_count": 3,
+            "incomplete_flow_count": 0,
+            "identity_join_rate": 1.0,
+            "complete_flow_rate": 1.0,
+            "join_contract_blocked": False,
+            "sim_auto_candidate_count": 1,
+            "sim_auto_candidate_ids": ["swing_ldm_lifecycle_flow_combo_parent"],
+        },
+        "swing_lifecycle_bucket_discovery": {
+            "available": True,
+            "source_contract_status": "pass",
+            "candidate_count": 2,
+            "surfaced_candidate_count": 2,
+            "sim_auto_approved_count": 1,
+            "swing_lifecycle_flow_bucket_count": 1,
+            "complete_flow_count": 3,
+            "incomplete_flow_count": 0,
+            "identity_join_rate": 1.0,
+            "complete_flow_rate": 1.0,
+            "join_contract_blocked": False,
+            "flow_sim_auto_approved_count": 1,
+            "stage_only_source_only_count": 1,
+        },
+    }
+
+    matrix_summary = mod._swing_lifecycle_matrix_summary(ev_report)
+    discovery_summary = mod._swing_lifecycle_bucket_discovery_summary(ev_report)
+
+    assert matrix_summary["swing_lifecycle_flow_bucket_count"] == 1
+    assert matrix_summary["sim_auto_candidate_ids"] == ["swing_ldm_lifecycle_flow_combo_parent"]
+    assert discovery_summary["swing_lifecycle_flow_bucket_count"] == 1
+    assert discovery_summary["flow_sim_auto_approved_count"] == 1
+    assert discovery_summary["stage_only_source_only_count"] == 1
+
+
 def test_runtime_approval_summary_surfaces_swing_bucket_ai_followup_separately():
     ev_report = {
         "swing_lifecycle_bucket_discovery": {

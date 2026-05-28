@@ -11,8 +11,8 @@
 - lifecycle_matrix_status: `pass`
 - lifecycle_ai_context prompt/applied: `3` / `2125`
 - swing_strategy_discovery_labeled/pending: `70` / `2566`
-- swing_lifecycle_matrix_auto: `13`
-- swing_lifecycle_bucket_auto: `13`
+- swing_lifecycle_matrix_auto: `0`
+- swing_lifecycle_bucket_auto: `0`
 - institutional_flow_available/join_rate: `True` / `100.0`
 - pattern_lab_currentness_status: `pass`
 - pattern_lab_ai_review_status: `warning`
@@ -123,7 +123,7 @@
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_lifecycle_decision_matrix/swing_lifecycle_decision_matrix_2026-05-28.json`
 - available: `True`
 - total/probe/discovery: `2922` / `68` / `2854`
-- sim_auto_candidate_count: `13`
+- sim_auto_candidate_count: `0`
 - workorder_count: `8`
 - daily_simulation_consumed: `False`
 - runtime_effect: `False`
@@ -133,9 +133,9 @@
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_lifecycle_bucket_discovery/swing_lifecycle_bucket_discovery_2026-05-28.json`
 - available: `True`
 - source_contract_status: `pass`
-- surfaced/sim_auto/code_patch: `452` / `13` / `0`
+- surfaced/sim_auto/code_patch: `507` / `0` / `0`
 - runtime_effect: `False`
-- warnings: `[]`
+- warnings: `['ai_two_pass_review_missing_fail_closed', 'ai_two_pass_review_fail_closed_sim_auto_blocked']`
 
 ## Panic
 | 항목 | 설명 | 현재 적용 | 상태 | Gate 분류 | 튜닝 경로 | 판정 해석 | 점수 | 계약 | 차단/판정 사유 |
@@ -148,3 +148,7 @@
 - ai_review: status=`warning` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-05-28.json`
 - producer_gap_discovery: status=`warning` artifact=`/home/ubuntu/KORStockScan/data/report/producer_gap_discovery/producer_gap_discovery_2026-05-28.json`
 - propagation: status=`pass` fail=`0` warnings=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-28.json`
+
+## Warnings
+- `swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_fail_closed`
+- `swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked`

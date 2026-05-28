@@ -789,6 +789,41 @@ def test_swing_entry_bottleneck_handoff_passes_when_surfaced():
     assert report["missing"] == []
 
 
+def test_swing_parent_flow_handoff_passes_when_ev_and_runtime_include_candidate():
+    candidate = {
+        "candidate_id": "swing_ldm_lifecycle_flow_combo_parent",
+        "bucket_id": "swing_ldm_lifecycle_flow_combo_parent",
+    }
+    matrix = {
+        "input_contract": {"swing_daily_simulation_consumed": False},
+        "swing_lifecycle_flow_bucket_attribution": {
+            "runtime_approval_candidates": [candidate],
+            "sim_auto_approval_candidates": [candidate],
+        },
+    }
+    discovery = {
+        "summary": {"ai_two_pass_review_status": "parsed", "ai_fail_closed": False},
+        "surfaced_candidate_ids": ["swing_ldm_lifecycle_flow_combo_parent"],
+    }
+    ev_report = {
+        "swing_lifecycle_decision_matrix": {
+            "sim_auto_candidate_ids": ["swing_ldm_lifecycle_flow_combo_parent"],
+        },
+        "swing_lifecycle_bucket_discovery": discovery,
+    }
+    runtime_summary = {
+        "swing_lifecycle_decision_matrix": {
+            "sim_auto_candidate_ids": ["swing_ldm_lifecycle_flow_combo_parent"],
+        },
+        "swing_lifecycle_bucket_discovery": discovery,
+    }
+
+    report = mod._swing_lifecycle_handoff_status(matrix, discovery, ev_report, runtime_summary, {"orders": []})
+
+    assert report["status"] == "pass"
+    assert report["missing"] == []
+
+
 def test_swing_lifecycle_handoff_warns_on_ai_two_pass_missing():
     matrix = {
         "input_contract": {"swing_daily_simulation_consumed": False},

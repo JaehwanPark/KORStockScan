@@ -580,6 +580,112 @@ def test_swing_lifecycle_bucket_discovery_summary_surfaces_ai_fail_closed(tmp_pa
     assert "swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked" in summary["warnings"]
 
 
+def test_swing_lifecycle_matrix_summary_includes_parent_flow_candidates(tmp_path, monkeypatch):
+    report_dir = tmp_path / "swing_lifecycle_decision_matrix"
+    report_dir.mkdir()
+    path = report_dir / "swing_lifecycle_decision_matrix_2026-05-27.json"
+    path.write_text(
+        json.dumps(
+            {
+                "runtime_effect": False,
+                "source_only": True,
+                "decision_authority": "swing_ldm_source_only",
+                "summary": {
+                    "total_rows": 9,
+                    "probe_rows": 0,
+                    "discovery_rows": 9,
+                    "swing_lifecycle_flow_bucket_count": 1,
+                    "complete_flow_count": 3,
+                    "incomplete_flow_count": 0,
+                    "identity_join_rate": 1.0,
+                    "complete_flow_rate": 1.0,
+                    "join_contract_blocked": False,
+                    "sim_auto_candidate_count": 1,
+                    "workorder_count": 0,
+                    "daily_simulation_consumed": False,
+                },
+                "swing_lifecycle_flow_bucket_attribution": {
+                    "runtime_approval_candidates": [
+                        {
+                            "candidate_id": "swing_ldm_lifecycle_flow_combo_parent",
+                            "bucket_id": "swing_ldm_lifecycle_flow_combo_parent",
+                        }
+                    ],
+                    "sim_auto_approval_candidates": [
+                        {
+                            "candidate_id": "swing_ldm_lifecycle_flow_combo_parent",
+                            "bucket_id": "swing_ldm_lifecycle_flow_combo_parent",
+                        }
+                    ],
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        mod,
+        "swing_lifecycle_matrix_paths",
+        lambda target_date: (path, path.with_suffix(".md")),
+    )
+
+    summary, artifact, warnings = mod._swing_lifecycle_matrix_summary("2026-05-27")
+
+    assert artifact == str(path)
+    assert warnings == []
+    assert summary["swing_lifecycle_flow_bucket_count"] == 1
+    assert summary["complete_flow_count"] == 3
+    assert summary["sim_auto_candidate_ids"] == ["swing_ldm_lifecycle_flow_combo_parent"]
+
+
+def test_swing_lifecycle_bucket_discovery_summary_includes_flow_metrics(tmp_path, monkeypatch):
+    report_dir = tmp_path / "swing_lifecycle_bucket_discovery"
+    report_dir.mkdir()
+    path = report_dir / "swing_lifecycle_bucket_discovery_2026-05-27.json"
+    path.write_text(
+        json.dumps(
+            {
+                "runtime_effect": False,
+                "source_only": True,
+                "decision_authority": "swing_ldm_bucket_discovery_sim_auto",
+                "summary": {
+                    "source_contract_status": "pass",
+                    "ai_two_pass_review_status": "parsed",
+                    "ai_fail_closed": False,
+                    "candidate_count": 2,
+                    "surfaced_candidate_count": 2,
+                    "sim_auto_approved_count": 1,
+                    "swing_lifecycle_flow_bucket_count": 1,
+                    "complete_flow_count": 3,
+                    "incomplete_flow_count": 0,
+                    "identity_join_rate": 1.0,
+                    "complete_flow_rate": 1.0,
+                    "join_contract_blocked": False,
+                    "flow_sim_auto_approved_count": 1,
+                    "stage_only_source_only_count": 1,
+                },
+                "warnings": [],
+                "surfaced_candidate_ids": ["swing_bucket_lifecycle_flow_parent"],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        mod,
+        "swing_lifecycle_bucket_discovery_paths",
+        lambda target_date: (path, path.with_suffix(".md")),
+    )
+
+    summary, _, warnings = mod._swing_lifecycle_bucket_discovery_summary("2026-05-27")
+
+    assert warnings == []
+    assert summary["swing_lifecycle_flow_bucket_count"] == 1
+    assert summary["complete_flow_count"] == 3
+    assert summary["flow_sim_auto_approved_count"] == 1
+    assert summary["stage_only_source_only_count"] == 1
+
+
 def test_swing_lifecycle_bucket_discovery_summary_surfaces_parsed_followup(tmp_path, monkeypatch):
     report_dir = tmp_path / "swing_lifecycle_bucket_discovery"
     report_dir.mkdir()

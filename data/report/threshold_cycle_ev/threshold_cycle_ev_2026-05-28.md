@@ -220,4 +220,6 @@
 - `lifecycle_bucket_discovery:contamination_quarantine_live_auto_blocked:3`
 - `swing_strategy_discovery:pending_future_quotes`
 - `swing_lifecycle_decision_matrix:pending_future_quotes`
+- `swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_fail_closed`
+- `swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked`
 - `pattern_lab_ai_review_warning`
