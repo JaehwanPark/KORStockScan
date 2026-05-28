@@ -394,6 +394,14 @@ POSTCLOSE 최상위 감리는 `Tuning Chain Control State`(튜닝 체인 관제 
 
 ### Runbook 운영 확인 완료 기록
 
+- `[IntradayAutomationHealthCheck20260528] 장중 자동화체인 상태 확인` (`Due: 2026-05-28`, `Slot: INTRADAY`, `TimeWindow: 09:05~15:30`)
+  - 판정: `pass`
+  - Tuning Chain Control State: `GREEN`
+  - blocked_stage: `-`
+  - impact: 2026-05-28 장중 반복 확인은 시간창이 지난 항목도 재확인 원칙에 따라 실행했다. bot process/thread, cron completion, artifact freshness, Kiwoom auth, log scanner, resource, lock, pipeline/threshold event append는 pass다. BUY Funnel Sentinel은 `SUBMIT_DROUGHT_CRITICAL`, HOLD/EXIT Sentinel은 `HOLD_DEFER_DANGER`를 남겼지만 report-only/source-quality 입력이며 장중 threshold/order/provider/bot 변경 권한으로 확장하지 않는다. panic sell은 `RECOVERY_WATCH`, panic buying은 `NORMAL`이고 둘 다 `report_only_no_mutation`이다.
+  - 근거: `bash deploy/run_error_detection.sh full`은 `summary_severity=pass`, `cron_completion=pass`, `log_scanner=pass`, `kiwoom_auth_8005_restart=pass`, `process_health=pass`, `artifact_freshness=pass`, `resource_usage=pass`, `stale_lock=pass`로 종료됐다. bot main loop PID는 `8051`, `pipeline_events_age_sec=0.1`, `threshold_events_age_sec=4.0`, `disk_free_mb=5939.8`이다. [threshold_runtime_env_2026-05-28.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-05-28.json)은 `soft_stop_whipsaw_confirmation`, `score65_74_recovery_probe`, `scalp_sim_candidate_window_expansion`, `scalp_sim_ai_budget_manager`, `lifecycle_decision_matrix_runtime`, `entry_wait6579_score66_69_recovery_gate_v1`를 selected family로 포함한다. 당일 event 집계에서 runtime family provenance hit는 `lifecycle_decision_matrix_runtime=3116`, `scalp_sim_ai_budget_manager=766`, `scalp_sim_candidate_window_expansion=621`, `soft_stop_whipsaw_confirmation=22`, `entry_wait6579_score66_69_recovery_gate_v1=22`이고 rollback mention은 `0`건이다. sim/probe provenance는 `actual_order_submitted=false` `12557`건, `broker_order_forbidden=true` `10057`건, `decision_authority=sim_observation_only` `5782`건이며 sim/probe stage의 `actual_order_submitted=false` 누락은 `0`건이다.
+  - 다음 액션: `score65_74_recovery_probe`는 runtime env selected/provenance는 확인됐지만 09:34 KST 현재 당일 event hit가 없어 postclose attribution에서 표본 여부를 재확인한다. `SUBMIT_DROUGHT_CRITICAL`과 `HOLD_DEFER_DANGER`는 postclose workorder/LDM/source-quality 입력으로만 넘기고, 장중 threshold mutation, provider 변경, broker/order guard 변경, bot restart는 하지 않는다. Project/Calendar 반영은 문서 parser 검증 후 사용자 표준 sync 명령으로만 수행한다.
+
 - `[PreopenAutomationHealthCheck20260528] 장전 자동화체인 상태 확인` (`Due: 2026-05-28`, `Slot: PREOPEN`, `TimeWindow: 08:00~09:00`)
   - 판정: `pass`
   - Tuning Chain Control State: `GREEN`

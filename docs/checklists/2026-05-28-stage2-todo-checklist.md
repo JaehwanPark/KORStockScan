@@ -18,6 +18,9 @@
 - `[PreopenAutomationHealthCheck20260528] 장전 자동화체인 상태 확인`
   - 판정: `pass`
   - 근거: [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)의 `PreopenAutomationHealthCheck20260528` 완료 기록과 동일하다.
+- `[IntradayAutomationHealthCheck20260528] 장중 자동화체인 상태 확인`
+  - 판정: `pass`
+  - 근거: [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)의 `IntradayAutomationHealthCheck20260528` 완료 기록과 동일하다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-05-27` postclose -> `2026-05-28`)
@@ -45,17 +48,19 @@
 
 ## 장중 체크리스트 (09:05~15:20)
 
-- [ ] `[RuntimeEnvIntradayObserve0528] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-05-28`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
+- [x] `[RuntimeEnvIntradayObserve0528] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-05-28`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-27.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-27.json)
   - 판정 기준: selected_families=soft_stop_whipsaw_confirmation, score65_74_recovery_probe, scalp_sim_candidate_window_expansion, scalp_sim_ai_budget_manager, lifecycle_decision_matrix_runtime, entry_wait6579_score66_69_recovery_gate_v1가 runtime event provenance에 찍히는지 확인한다.
   - 금지: 장중 관찰 결과로 runtime threshold mutation을 수행하지 않는다.
   - 다음 액션: provenance present/missing, rollback guard breach 여부를 분리 기록한다.
+  - 완료 기록 (`2026-05-28 09:34 KST`): 판정=`pass`, 다음 액션=`provenance_present_no_rollback_guard_breach`. 시간이 지났지만 반복 확인 원칙에 따라 당일 artifact를 재확인했다. [threshold_runtime_env_2026-05-28.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-05-28.json)은 대상 family 6개(`soft_stop_whipsaw_confirmation`, `score65_74_recovery_probe`, `scalp_sim_candidate_window_expansion`, `scalp_sim_ai_budget_manager`, `lifecycle_decision_matrix_runtime`, `entry_wait6579_score66_69_recovery_gate_v1`)를 모두 selected family로 포함한다. [threshold_apply_2026-05-28.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-05-28.json)은 `status=auto_bounded_live_ready`, `apply_mode=auto_bounded_live`, `runtime_change=true`, `warnings=[]`다. 당일 [pipeline_events_2026-05-28.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-05-28.jsonl)와 [threshold_events_2026-05-28.jsonl](/home/ubuntu/KORStockScan/data/threshold_cycle/threshold_events_2026-05-28.jsonl) 집계에서 family provenance hit는 `lifecycle_decision_matrix_runtime=3116`, `scalp_sim_ai_budget_manager=766`, `scalp_sim_candidate_window_expansion=621`, `soft_stop_whipsaw_confirmation=22`, `entry_wait6579_score66_69_recovery_gate_v1=22`이고 rollback mention은 `0`건이다. `score65_74_recovery_probe`는 runtime env selected/provenance는 확인됐지만 09:34 KST 현재 당일 이벤트 hit는 아직 없어 postclose attribution에서 표본 여부를 재확인한다. 장중 threshold mutation, provider 변경, order guard 변경, bot restart는 수행하지 않았다.
 
-- [ ] `[SimProbeIntradayCoverage0528] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-05-28`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
+- [x] `[SimProbeIntradayCoverage0528] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-05-28`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
   - Source: [threshold_cycle_ev_2026-05-27.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-27.json)
   - 판정 기준: sim/probe 표본이 real execution과 분리되고 `actual_order_submitted=false` provenance가 유지되는지 확인한다.
   - 금지: sim/probe EV를 broker execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
   - 다음 액션: source-quality split, active state 복원, open/closed count를 같이 기록한다.
+  - 완료 기록 (`2026-05-28 09:34 KST`): 판정=`pass`, 다음 액션=`source_quality_split_preserved_active_state_observed`. 당일 이벤트 집계에서 `actual_order_submitted=false` provenance는 `12557`건, `broker_order_forbidden=true`는 `10057`건, `decision_authority=sim_observation_only`는 `5782`건이다. sim/probe stage 중 `actual_order_submitted=false` 누락은 `0`건이며, 주요 stage는 `scalp_sim_panic_scale_in_blocked=1500`, `swing_probe_discarded=626`, `scalp_sim_ai_holding_live_call=606`, `scalp_sim_panic_action_deduped=604`, `scalp_sim_candidate_window_discarded=342`다. open cap 증적은 `scalp_sim_candidate_window_discarded open_count=21/max_open=20`, `swing_probe_discarded open_count=10`로 남아 active state/cap 분리가 확인됐다. [panic_sell_defense_2026-05-28.json](/home/ubuntu/KORStockScan/data/report/panic_sell_defense/panic_sell_defense_2026-05-28.json)은 `panic_state=RECOVERY_WATCH`, [panic_buying_2026-05-28.json](/home/ubuntu/KORStockScan/data/report/panic_buying/panic_buying_2026-05-28.json)은 `panic_buy_state=NORMAL`이고 둘 다 `runtime_effect=report_only_no_mutation`이다. sim/probe EV를 broker execution 품질이나 실주문 전환 근거로 사용하지 않았고, 장중 runtime/order/provider 변경은 수행하지 않았다.
 
 ## 장후 체크리스트 (16:30~18:55)
 
