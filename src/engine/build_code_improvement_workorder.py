@@ -159,6 +159,49 @@ def _next_calendar_day(target_date: str) -> str:
         return target_date
 
 
+def _is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _workorder_isolated_source_mode() -> bool:
+    source_roots = [
+        PATTERN_LAB_AUTOMATION_DIR,
+        SWING_IMPROVEMENT_AUTOMATION_DIR,
+        SWING_PATTERN_LAB_AUTOMATION_DIR,
+        SWING_STRATEGY_DISCOVERY_EV_DIR,
+        SWING_LIFECYCLE_DECISION_MATRIX_DIR,
+        SWING_LIFECYCLE_BUCKET_DISCOVERY_DIR,
+        PATTERN_LAB_AI_REVIEW_DIR,
+        THRESHOLD_CYCLE_EV_DIR,
+        LIFECYCLE_DECISION_MATRIX_DIR,
+        PIPELINE_EVENT_VERBOSITY_DIR,
+        OBSERVATION_SOURCE_QUALITY_AUDIT_DIR,
+        CODEBASE_PERFORMANCE_WORKORDER_DIR,
+        PATTERN_LAB_CURRENTNESS_AUDIT_DIR,
+        BUY_FUNNEL_SENTINEL_DIR,
+        PRODUCER_GAP_DISCOVERY_DIR,
+        STAGE_HOOK_WORKORDER_DISCOVERY_DIR,
+        STAGE_HOOK_RUNTIME_SCAFFOLD_DIR,
+    ]
+    return any(not _is_relative_to(Path(root), REPORT_DIR) for root in source_roots)
+
+
+def _source_path_enabled(path: Path, *, isolated_source_mode: bool) -> bool:
+    if not isolated_source_mode:
+        return True
+    return not _is_relative_to(path, REPORT_DIR)
+
+
+def _load_source_json(path: Path, *, isolated_source_mode: bool) -> dict[str, Any]:
+    if not _source_path_enabled(path, isolated_source_mode=isolated_source_mode):
+        return {}
+    return _load_json(path)
+
+
 def automation_report_path(target_date: str) -> Path:
     return PATTERN_LAB_AUTOMATION_DIR / f"scalping_pattern_lab_automation_{target_date}.json"
 
@@ -1453,6 +1496,12 @@ def _lifecycle_flow_bucket_order_id(item: dict[str, Any]) -> str:
     return f"order_lifecycle_flow_bucket_{workorder_id}_{bucket_id}"
 
 
+def _lifecycle_stage_bucket_order_id(stage: str, item: dict[str, Any]) -> str:
+    bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
+    bucket_key = _slug_with_hash(str(item.get("bucket_key") or item.get("workorder_id") or "unknown"))
+    return f"order_lifecycle_{stage}_bucket_{bucket_type}_{bucket_key}"
+
+
 def _lifecycle_flow_bucket_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
     attribution = (
         report.get("lifecycle_flow_bucket_attribution")
@@ -1489,7 +1538,7 @@ def _lifecycle_flow_bucket_followup_orders(report: dict[str, Any]) -> list[dict[
                 "route": "instrumentation_order",
                 "mapped_family": "lifecycle_decision_matrix_runtime",
                 "threshold_family": "lifecycle_decision_matrix_runtime",
-                "improvement_type": "lifecycle_flow_parent_bucket_source_quality_attribution",
+                "improvement_type": item.get("improvement_type") or "join_gap_resolution",
                 "confidence": "daily_ldm_source",
                 "priority": 1,
                 "runtime_effect": False,
@@ -1504,6 +1553,8 @@ def _lifecycle_flow_bucket_followup_orders(report: dict[str, Any]) -> list[dict[
                     f"workorder_id={item.get('workorder_id')}",
                     f"lifecycle_flow_bucket_id={flow_bucket_id}",
                     f"reason={item.get('reason')}",
+                    f"join_gap_reasons={item.get('join_gap_reasons') or []}",
+                    f"required_producer_consumer_candidates={item.get('required_producer_consumer_candidates') or []}",
                     f"metric_role={item.get('metric_role') or contract.get('metric_role')}",
                     f"decision_authority={contract.get('decision_authority')}",
                     f"primary_decision_metric={contract.get('primary_decision_metric')}",
@@ -1532,6 +1583,68 @@ def _lifecycle_flow_bucket_followup_orders(report: dict[str, Any]) -> list[dict[
                 "metric_contract": contract,
             }
         )
+    return orders
+
+
+def _lifecycle_holding_exit_bucket_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+    orders: list[dict[str, Any]] = []
+    for stage, attribution_key in (
+        ("holding", "holding_bucket_attribution"),
+        ("exit", "exit_bucket_attribution"),
+    ):
+        attribution = (
+            report.get(attribution_key)
+            if isinstance(report.get(attribution_key), dict)
+            else {}
+        )
+        workorders = attribution.get("code_improvement_workorders")
+        if not isinstance(workorders, list) or not workorders:
+            continue
+        implementation_status, implementation_provenance = _implementation_marker_from_attribution(attribution)
+        for item in workorders:
+            if not isinstance(item, dict) or not item.get("bucket_type") or not item.get("bucket_key"):
+                continue
+            orders.append(
+                {
+                    "order_id": _lifecycle_stage_bucket_order_id(stage, item),
+                    "title": f"LDM {stage} bucket source-quality follow-up: {item.get('bucket_type')}={item.get('bucket_key')}",
+                    "source_report_type": f"lifecycle_decision_matrix_{stage}_bucket_attribution",
+                    "lifecycle_stage": stage,
+                    "target_subsystem": "lifecycle_decision_matrix",
+                    "route": "instrumentation_order",
+                    "mapped_family": "lifecycle_decision_matrix_runtime",
+                    "threshold_family": "lifecycle_decision_matrix_runtime",
+                    "improvement_type": f"{stage}_bucket_source_quality_child_evidence",
+                    "confidence": "daily_ldm_source",
+                    "priority": 2,
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "implementation_status": _implementation_status_for_bucket(item, implementation_status),
+                    "implementation_provenance": _implementation_provenance_for_bucket(item, implementation_provenance),
+                    "expected_ev_effect": (
+                        f"Keep {stage} stage buckets visible as child evidence while parent lifecycle flow owns "
+                        "promotion EV."
+                    ),
+                    "evidence": [
+                        f"workorder_id={item.get('workorder_id')}",
+                        f"bucket_type={item.get('bucket_type')}",
+                        f"bucket_key={item.get('bucket_key')}",
+                        f"reason={item.get('reason')}",
+                        f"recommended_route={item.get('recommended_route')}",
+                        "runtime_effect=false",
+                        "allowed_runtime_apply=false",
+                        "stage_only_live_promotion_forbidden=true",
+                    ],
+                    "intent": (
+                        f"Close {stage} bucket source-quality or lifecycle-flow child-evidence gaps without "
+                        "changing runtime thresholds, broker behavior, provider routing, or bot state."
+                    ),
+                    "next_postclose_metric": (
+                        f"{stage}_bucket_attribution bucket/workorder counts, identity join rate, and complete "
+                        "lifecycle flow count remain visible in downstream reports."
+                    ),
+                }
+            )
     return orders
 
 
@@ -2615,83 +2728,124 @@ def _swing_lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) ->
 
 def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) -> dict[str, Any]:
     target_date = str(target_date).strip()
+    isolated_source_mode = _workorder_isolated_source_mode()
     json_path, md_path = code_improvement_workorder_paths(target_date)
     previous_report = _load_json(json_path)
     source_path = automation_report_path(target_date)
-    automation = _load_json(source_path)
+    automation = _load_source_json(source_path, isolated_source_mode=isolated_source_mode)
     swing_source_path = swing_automation_report_path(target_date)
-    swing_automation = _load_json(swing_source_path)
+    swing_automation = _load_source_json(swing_source_path, isolated_source_mode=isolated_source_mode)
     swing_lab_source_path = swing_pattern_lab_automation_report_path(target_date)
-    swing_lab_automation = _load_json(swing_lab_source_path)
+    swing_lab_automation = _load_source_json(swing_lab_source_path, isolated_source_mode=isolated_source_mode)
     swing_discovery_source_path = swing_strategy_discovery_ev_report_path(target_date)
-    swing_discovery_ev = _load_json(swing_discovery_source_path)
+    swing_discovery_ev = _load_source_json(swing_discovery_source_path, isolated_source_mode=isolated_source_mode)
     swing_lifecycle_matrix_path = swing_lifecycle_decision_matrix_report_path(target_date)
-    swing_lifecycle_matrix = _load_json(swing_lifecycle_matrix_path)
+    swing_lifecycle_matrix = _load_source_json(swing_lifecycle_matrix_path, isolated_source_mode=isolated_source_mode)
     swing_lifecycle_bucket_discovery_path = swing_lifecycle_bucket_discovery_report_path(target_date)
-    swing_lifecycle_bucket_discovery = _load_json(swing_lifecycle_bucket_discovery_path)
+    swing_lifecycle_bucket_discovery = _load_source_json(
+        swing_lifecycle_bucket_discovery_path,
+        isolated_source_mode=isolated_source_mode,
+    )
     ev_path = threshold_ev_report_path(target_date)
-    ev_report = _load_json(ev_path)
+    ev_report = _load_source_json(ev_path, isolated_source_mode=isolated_source_mode)
     lifecycle_source_path = lifecycle_decision_matrix_report_path(target_date)
-    lifecycle_report = _load_json(lifecycle_source_path)
+    lifecycle_report = _load_source_json(lifecycle_source_path, isolated_source_mode=isolated_source_mode)
     lifecycle_bucket_discovery_path = _lifecycle_bucket_discovery_report_path(target_date)
-    lifecycle_bucket_discovery = _load_json(lifecycle_bucket_discovery_path)
+    lifecycle_bucket_discovery = _load_source_json(
+        lifecycle_bucket_discovery_path,
+        isolated_source_mode=isolated_source_mode,
+    )
     pipeline_event_verbosity_path = _pipeline_event_verbosity_report_path(target_date)
-    pipeline_event_verbosity = _load_json(pipeline_event_verbosity_path)
+    pipeline_event_verbosity = _load_source_json(pipeline_event_verbosity_path, isolated_source_mode=isolated_source_mode)
     observation_source_quality_path = _observation_source_quality_audit_path(target_date)
-    observation_source_quality = _load_json(observation_source_quality_path)
+    observation_source_quality = _load_source_json(
+        observation_source_quality_path,
+        isolated_source_mode=isolated_source_mode,
+    )
     codebase_performance_path = _codebase_performance_report_path(target_date)
-    codebase_performance = _load_json(codebase_performance_path)
+    codebase_performance = _load_source_json(codebase_performance_path, isolated_source_mode=isolated_source_mode)
     pattern_lab_currentness_path = pattern_lab_currentness_audit_report_path(target_date)
-    pattern_lab_currentness = _load_json(pattern_lab_currentness_path)
+    pattern_lab_currentness = _load_source_json(
+        pattern_lab_currentness_path,
+        isolated_source_mode=isolated_source_mode,
+    )
     pattern_lab_ai_review_path = pattern_lab_ai_review_report_path(target_date)
-    pattern_lab_ai_review = _load_json(pattern_lab_ai_review_path)
+    pattern_lab_ai_review = _load_source_json(pattern_lab_ai_review_path, isolated_source_mode=isolated_source_mode)
     producer_gap_discovery_path = producer_gap_discovery_report_path(target_date)
-    producer_gap_discovery = _load_json(producer_gap_discovery_path)
+    producer_gap_discovery = _load_source_json(producer_gap_discovery_path, isolated_source_mode=isolated_source_mode)
     stage_hook_workorder_discovery_path = stage_hook_workorder_discovery_report_path(target_date)
-    stage_hook_workorder_discovery = _load_json(stage_hook_workorder_discovery_path)
+    stage_hook_workorder_discovery = _load_source_json(
+        stage_hook_workorder_discovery_path,
+        isolated_source_mode=isolated_source_mode,
+    )
     stage_hook_runtime_scaffold_path = stage_hook_runtime_scaffold_report_path(target_date)
-    stage_hook_runtime_scaffold = _load_json(stage_hook_runtime_scaffold_path)
+    stage_hook_runtime_scaffold = _load_source_json(
+        stage_hook_runtime_scaffold_path,
+        isolated_source_mode=isolated_source_mode,
+    )
     stage_hook_scaffold_by_name = _stage_hook_scaffold_by_name(stage_hook_runtime_scaffold)
     buy_funnel_sentinel_path = buy_funnel_sentinel_report_path(target_date)
-    buy_funnel_sentinel = _load_json(buy_funnel_sentinel_path)
+    buy_funnel_sentinel = _load_source_json(buy_funnel_sentinel_path, isolated_source_mode=isolated_source_mode)
     calibration_source_path = _calibration_report_path_from_ev(ev_report)
     calibration_report = _calibration_report_from_ev(ev_report)
+    candidate_source_paths = {
+        "pattern_lab_automation": source_path,
+        "swing_improvement_automation": swing_source_path,
+        "swing_pattern_lab_automation": swing_lab_source_path,
+        "swing_strategy_discovery_ev": swing_discovery_source_path,
+        "swing_lifecycle_decision_matrix": swing_lifecycle_matrix_path,
+        "swing_lifecycle_bucket_discovery": swing_lifecycle_bucket_discovery_path,
+        "threshold_cycle_ev": ev_path,
+        "lifecycle_decision_matrix": lifecycle_source_path,
+        "lifecycle_bucket_discovery": lifecycle_bucket_discovery_path,
+        "pipeline_event_verbosity": pipeline_event_verbosity_path,
+        "observation_source_quality_audit": observation_source_quality_path,
+        "codebase_performance_workorder": codebase_performance_path,
+        "pattern_lab_currentness_audit": pattern_lab_currentness_path,
+        "pattern_lab_ai_review": pattern_lab_ai_review_path,
+        "producer_gap_discovery": producer_gap_discovery_path,
+        "stage_hook_workorder_discovery": stage_hook_workorder_discovery_path,
+        "stage_hook_runtime_scaffold": stage_hook_runtime_scaffold_path,
+        "buy_funnel_sentinel": buy_funnel_sentinel_path,
+    }
     source_paths = {
-            "pattern_lab_automation": source_path,
-            "swing_improvement_automation": swing_source_path,
-            "swing_pattern_lab_automation": swing_lab_source_path,
-            "swing_strategy_discovery_ev": swing_discovery_source_path,
-            "swing_lifecycle_decision_matrix": swing_lifecycle_matrix_path,
-            "swing_lifecycle_bucket_discovery": swing_lifecycle_bucket_discovery_path,
-            "threshold_cycle_ev": ev_path,
-            "lifecycle_decision_matrix": lifecycle_source_path,
-            "lifecycle_bucket_discovery": lifecycle_bucket_discovery_path,
-            "pipeline_event_verbosity": pipeline_event_verbosity_path,
-            "observation_source_quality_audit": observation_source_quality_path,
-            "codebase_performance_workorder": codebase_performance_path,
-            "pattern_lab_currentness_audit": pattern_lab_currentness_path,
-            "pattern_lab_ai_review": pattern_lab_ai_review_path,
-            "producer_gap_discovery": producer_gap_discovery_path,
-            "stage_hook_workorder_discovery": stage_hook_workorder_discovery_path,
-            "stage_hook_runtime_scaffold": stage_hook_runtime_scaffold_path,
-            "buy_funnel_sentinel": buy_funnel_sentinel_path,
+        label: path
+        for label, path in candidate_source_paths.items()
+        if _source_path_enabled(path, isolated_source_mode=isolated_source_mode)
     }
     ev_sources = ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
     if ev_sources.get("scalp_entry_action_decision_matrix"):
-        source_paths["scalp_entry_action_decision_matrix"] = Path(str(ev_sources.get("scalp_entry_action_decision_matrix")))
+        scalp_entry_source_path = Path(str(ev_sources.get("scalp_entry_action_decision_matrix")))
+        if _source_path_enabled(scalp_entry_source_path, isolated_source_mode=isolated_source_mode):
+            source_paths["scalp_entry_action_decision_matrix"] = scalp_entry_source_path
     if ev_sources.get("lifecycle_decision_matrix"):
         lifecycle_source_path = Path(str(ev_sources.get("lifecycle_decision_matrix")))
+        if not _source_path_enabled(lifecycle_source_path, isolated_source_mode=isolated_source_mode):
+            lifecycle_source_path = lifecycle_decision_matrix_report_path(target_date)
+        else:
+            lifecycle_report = _load_json(lifecycle_source_path)
+    if _source_path_enabled(lifecycle_source_path, isolated_source_mode=isolated_source_mode):
         source_paths["lifecycle_decision_matrix"] = lifecycle_source_path
-        lifecycle_report = _load_json(lifecycle_source_path)
     if ev_sources.get("swing_lifecycle_decision_matrix"):
         swing_lifecycle_matrix_path = Path(str(ev_sources.get("swing_lifecycle_decision_matrix")))
+        if not _source_path_enabled(swing_lifecycle_matrix_path, isolated_source_mode=isolated_source_mode):
+            swing_lifecycle_matrix_path = swing_lifecycle_decision_matrix_report_path(target_date)
+        else:
+            swing_lifecycle_matrix = _load_json(swing_lifecycle_matrix_path)
+    if _source_path_enabled(swing_lifecycle_matrix_path, isolated_source_mode=isolated_source_mode):
         source_paths["swing_lifecycle_decision_matrix"] = swing_lifecycle_matrix_path
-        swing_lifecycle_matrix = _load_json(swing_lifecycle_matrix_path)
     if ev_sources.get("swing_lifecycle_bucket_discovery"):
         swing_lifecycle_bucket_discovery_path = Path(str(ev_sources.get("swing_lifecycle_bucket_discovery")))
+        if not _source_path_enabled(swing_lifecycle_bucket_discovery_path, isolated_source_mode=isolated_source_mode):
+            swing_lifecycle_bucket_discovery_path = swing_lifecycle_bucket_discovery_report_path(target_date)
+        else:
+            swing_lifecycle_bucket_discovery = _load_json(swing_lifecycle_bucket_discovery_path)
+    if _source_path_enabled(swing_lifecycle_bucket_discovery_path, isolated_source_mode=isolated_source_mode):
         source_paths["swing_lifecycle_bucket_discovery"] = swing_lifecycle_bucket_discovery_path
-        swing_lifecycle_bucket_discovery = _load_json(swing_lifecycle_bucket_discovery_path)
-    if calibration_source_path is not None:
+    if calibration_source_path is not None and _source_path_enabled(
+        calibration_source_path,
+        isolated_source_mode=isolated_source_mode,
+    ):
         source_paths["threshold_cycle_calibration"] = calibration_source_path
     source_fingerprint = _source_fingerprint(source_paths)
     finding_by_order_id, finding_by_title_slug = _finding_maps(automation)
@@ -2769,6 +2923,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         if str(order.get("order_id") or "") not in buy_funnel_sentinel_order_ids
     ]
     lifecycle_flow_bucket_orders = _lifecycle_flow_bucket_followup_orders(lifecycle_report)
+    lifecycle_holding_exit_bucket_orders = _lifecycle_holding_exit_bucket_followup_orders(lifecycle_report)
     lifecycle_scale_in_bucket_orders = _lifecycle_scale_in_bucket_followup_orders(lifecycle_report)
     lifecycle_overnight_bucket_orders = _lifecycle_overnight_bucket_followup_orders(lifecycle_report)
     lifecycle_bucket_discovery_orders = _lifecycle_bucket_discovery_followup_orders(lifecycle_bucket_discovery)
@@ -2798,6 +2953,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         *lifecycle_entry_bucket_orders,
         *lifecycle_submit_bucket_orders,
         *lifecycle_flow_bucket_orders,
+        *lifecycle_holding_exit_bucket_orders,
         *lifecycle_scale_in_bucket_orders,
         *lifecycle_overnight_bucket_orders,
         *lifecycle_bucket_discovery_orders,
@@ -2829,7 +2985,12 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     selected = classified[: max(1, int(max_orders))]
     required_handoff_order_ids = {
         str(order.get("order_id"))
-        for order in [*lifecycle_entry_bucket_orders, *lifecycle_submit_bucket_orders, *lifecycle_scale_in_bucket_orders]
+        for order in [
+            *lifecycle_entry_bucket_orders,
+            *lifecycle_submit_bucket_orders,
+            *lifecycle_holding_exit_bucket_orders,
+            *lifecycle_scale_in_bucket_orders,
+        ]
         if order.get("order_id")
     }
     required_handoff_order_ids.update(
@@ -2916,6 +3077,13 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         non_selected_counts.get(decision, 0)
         for decision in ("design_family_candidate", "defer_evidence", "reject")
     )
+
+    def source_ref(label: str) -> str | None:
+        path = source_paths.get(label)
+        if path is None:
+            return None
+        return str(path) if Path(path).exists() else None
+
     report = {
         "schema_version": WORKORDER_SCHEMA_VERSION,
         "date": target_date,
@@ -2924,52 +3092,26 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         "source_hash": source_fingerprint["source_hash"],
         "purpose": "codex_code_improvement_workorder_from_postclose_automation",
         "source": {
-            "pattern_lab_automation": str(source_path),
-            "swing_improvement_automation": str(swing_source_path) if swing_source_path.exists() else None,
-            "swing_pattern_lab_automation": str(swing_lab_source_path) if swing_lab_source_path.exists() else None,
-            "swing_strategy_discovery_ev": str(swing_discovery_source_path) if swing_discovery_source_path.exists() else None,
-            "swing_lifecycle_decision_matrix": str(swing_lifecycle_matrix_path)
-            if swing_lifecycle_matrix_path.exists()
-            else None,
-            "swing_lifecycle_bucket_discovery": str(swing_lifecycle_bucket_discovery_path)
-            if swing_lifecycle_bucket_discovery_path.exists()
-            else None,
-            "threshold_cycle_ev": str(ev_path) if ev_path.exists() else None,
-            "lifecycle_decision_matrix": str(source_paths["lifecycle_decision_matrix"])
-            if "lifecycle_decision_matrix" in source_paths
-            and Path(source_paths["lifecycle_decision_matrix"]).exists()
-            else None,
-            "lifecycle_bucket_discovery": str(lifecycle_bucket_discovery_path)
-            if lifecycle_bucket_discovery_path.exists()
-            else None,
-            "scalp_entry_action_decision_matrix": str(source_paths["scalp_entry_action_decision_matrix"])
-            if "scalp_entry_action_decision_matrix" in source_paths
-            and Path(source_paths["scalp_entry_action_decision_matrix"]).exists()
-            else None,
-            "pipeline_event_verbosity": str(pipeline_event_verbosity_path)
-            if pipeline_event_verbosity_path.exists()
-            else None,
-            "observation_source_quality_audit": str(observation_source_quality_path)
-            if observation_source_quality_path.exists()
-            else None,
-            "codebase_performance_workorder": str(codebase_performance_path)
-            if codebase_performance_path.exists()
-            else None,
-            "pattern_lab_currentness_audit": str(pattern_lab_currentness_path)
-            if pattern_lab_currentness_path.exists()
-            else None,
-            "pattern_lab_ai_review": str(pattern_lab_ai_review_path) if pattern_lab_ai_review_path.exists() else None,
-            "producer_gap_discovery": str(producer_gap_discovery_path) if producer_gap_discovery_path.exists() else None,
-            "stage_hook_workorder_discovery": str(stage_hook_workorder_discovery_path)
-            if stage_hook_workorder_discovery_path.exists()
-            else None,
-            "stage_hook_runtime_scaffold": str(stage_hook_runtime_scaffold_path)
-            if stage_hook_runtime_scaffold_path.exists()
-            else None,
-            "buy_funnel_sentinel": str(buy_funnel_sentinel_path) if buy_funnel_sentinel_path.exists() else None,
-            "threshold_cycle_calibration": str(calibration_source_path)
-            if calibration_source_path and calibration_source_path.exists()
-            else None,
+            "pattern_lab_automation": source_ref("pattern_lab_automation"),
+            "swing_improvement_automation": source_ref("swing_improvement_automation"),
+            "swing_pattern_lab_automation": source_ref("swing_pattern_lab_automation"),
+            "swing_strategy_discovery_ev": source_ref("swing_strategy_discovery_ev"),
+            "swing_lifecycle_decision_matrix": source_ref("swing_lifecycle_decision_matrix"),
+            "swing_lifecycle_bucket_discovery": source_ref("swing_lifecycle_bucket_discovery"),
+            "threshold_cycle_ev": source_ref("threshold_cycle_ev"),
+            "lifecycle_decision_matrix": source_ref("lifecycle_decision_matrix"),
+            "lifecycle_bucket_discovery": source_ref("lifecycle_bucket_discovery"),
+            "scalp_entry_action_decision_matrix": source_ref("scalp_entry_action_decision_matrix"),
+            "pipeline_event_verbosity": source_ref("pipeline_event_verbosity"),
+            "observation_source_quality_audit": source_ref("observation_source_quality_audit"),
+            "codebase_performance_workorder": source_ref("codebase_performance_workorder"),
+            "pattern_lab_currentness_audit": source_ref("pattern_lab_currentness_audit"),
+            "pattern_lab_ai_review": source_ref("pattern_lab_ai_review"),
+            "producer_gap_discovery": source_ref("producer_gap_discovery"),
+            "stage_hook_workorder_discovery": source_ref("stage_hook_workorder_discovery"),
+            "stage_hook_runtime_scaffold": source_ref("stage_hook_runtime_scaffold"),
+            "buy_funnel_sentinel": source_ref("buy_funnel_sentinel"),
+            "threshold_cycle_calibration": source_ref("threshold_cycle_calibration"),
         },
         "source_fingerprint": source_fingerprint["files"],
         "policy": {
@@ -3016,6 +3158,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "lifecycle_entry_bucket_source_order_count": len(lifecycle_entry_bucket_orders),
             "lifecycle_submit_bucket_source_order_count": len(lifecycle_submit_bucket_orders),
             "lifecycle_flow_bucket_source_order_count": len(lifecycle_flow_bucket_orders),
+            "lifecycle_holding_exit_bucket_source_order_count": len(lifecycle_holding_exit_bucket_orders),
             "lifecycle_scale_in_bucket_source_order_count": len(lifecycle_scale_in_bucket_orders),
             "lifecycle_overnight_bucket_source_order_count": len(lifecycle_overnight_bucket_orders),
             "lifecycle_bucket_discovery_source_order_count": len(lifecycle_bucket_discovery_orders),
@@ -3186,6 +3329,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- pattern_lab_ai_review_source_order_count: `{summary.get('pattern_lab_ai_review_source_order_count')}`",
         f"- threshold_ev_source_order_count: `{summary.get('threshold_ev_source_order_count')}`",
         f"- lifecycle_submit_bucket_source_order_count: `{summary.get('lifecycle_submit_bucket_source_order_count')}`",
+        f"- lifecycle_holding_exit_bucket_source_order_count: `{summary.get('lifecycle_holding_exit_bucket_source_order_count')}`",
         f"- pipeline_event_verbosity_source_order_count: `{summary.get('pipeline_event_verbosity_source_order_count')}`",
         f"- observation_source_quality_source_order_count: `{summary.get('observation_source_quality_source_order_count')}`",
         f"- codebase_performance_source_order_count: `{summary.get('codebase_performance_source_order_count')}`",

@@ -10,8 +10,8 @@
 
 | metric | value |
 | --- | ---: |
-| completed_valid | 14 |
-| exit_only | 14 |
+| completed_valid | 17 |
+| exit_only | 17 |
 | avg_down_wait | 0 |
 | pyramid_wait | 0 |
 | compact_exit_signal | 488 |
@@ -23,33 +23,33 @@
 
 | field | known |
 | --- | ---: |
-| price_known | 14 |
-| volume_known | 11 |
-| time_known | 14 |
+| price_known | 17 |
+| volume_known | 12 |
+| time_known | 17 |
 
 ## Policy Counts
 
 | policy | count |
 | --- | ---: |
-| candidate_weight_source | 4 |
-| insufficient_sample | 7 |
+| candidate_weight_source | 5 |
+| insufficient_sample | 6 |
 
 ## Price Bucket
 
 | bucket | best_action | score | edge | sample | avg_profit | loss_rate | policy |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| price_10k_30k | exit_only | -1.108 | - | 6 | -0.635 | 0.3333 | candidate_weight_source |
-| price_gte_70k | exit_only | -1.2074 | - | 8 | -0.14 | 0.5 | candidate_weight_source |
+| price_10k_30k | exit_only | -0.7782 | - | 8 | -0.4762 | 0.25 | candidate_weight_source |
+| price_gte_70k | exit_only | -0.871 | - | 9 | 0.1811 | 0.4444 | candidate_weight_source |
 
 ## Volume Bucket
 
 | bucket | best_action | score | edge | sample | avg_profit | loss_rate | policy |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
 | volume_2m_10m | insufficient_sample | - | - | - | - | - | insufficient_sample |
-| volume_500k_2m | exit_only | -0.8329 | - | 5 | 0.472 | 0.2 | candidate_weight_source |
+| volume_500k_2m | exit_only | -0.4622 | - | 6 | 0.8517 | 0.1667 | candidate_weight_source |
 | volume_gte_10m | insufficient_sample | - | - | - | - | - | insufficient_sample |
 | volume_lt_500k | insufficient_sample | - | - | - | - | - | insufficient_sample |
-| volume_unknown | insufficient_sample | - | - | - | - | - | insufficient_sample |
+| volume_unknown | exit_only | -0.5691 | - | 5 | -0.354 | 0.2 | candidate_weight_source |
 
 ## Time Bucket
 
@@ -57,7 +57,7 @@
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
 | time_0900_0930 | insufficient_sample | - | - | - | - | - | insufficient_sample |
 | time_0930_1030 | insufficient_sample | - | - | - | - | - | insufficient_sample |
-| time_1030_1400 | exit_only | -1.2575 | - | 7 | -0.27 | 0.4286 | candidate_weight_source |
+| time_1030_1400 | exit_only | -0.8934 | - | 9 | -0.21 | 0.3333 | candidate_weight_source |
 | time_1400_1530 | insufficient_sample | - | - | - | - | - | insufficient_sample |
 
 ## Eligible But Not Chosen

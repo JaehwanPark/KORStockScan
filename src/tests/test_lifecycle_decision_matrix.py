@@ -480,10 +480,21 @@ def test_lifecycle_matrix_ingests_scalp_sim_submit_and_holding_rows(tmp_path, mo
     flow = flow_attr["flows"][0]
     assert flow["identity_quality"] == "exact_sim_record_id"
     assert flow["source_quality_gate"] == "pass"
+    assert flow["ai_inference_proposal"]["model"] == "gpt-5.4-mini"
     assert flow["entry_bucket_id"].startswith("entry:combo_entry_spot:")
     assert flow["submit_bucket_id"].startswith("submit:combo_submit_quality:")
     assert flow["holding_bucket_id"].startswith("holding:combo_holding_flow:")
     assert flow["exit_bucket_id"].startswith("exit:combo_exit_result:")
+    assert report["summary"]["identity_join_rate"] == 1.0
+    assert report["summary"]["complete_flow_rate"] == 1.0
+    holding_attr = report["holding_bucket_attribution"]
+    exit_attr = report["exit_bucket_attribution"]
+    assert holding_attr["summary"]["bucket_count"] > 0
+    assert exit_attr["summary"]["bucket_count"] > 0
+    assert holding_attr["runtime_approval_candidates"] == []
+    assert exit_attr["runtime_approval_candidates"] == []
+    assert holding_attr["buckets"][0]["ai_inference_proposal"]["reasoning_effort"] == "medium"
+    assert exit_attr["buckets"][0]["allowed_runtime_apply"] is False
 
 
 def test_lifecycle_flow_bucket_fallback_identity_is_not_live_quality():
@@ -503,8 +514,98 @@ def test_lifecycle_flow_bucket_fallback_identity_is_not_live_quality():
     attribution = mod._lifecycle_flow_bucket_attribution(rows)
 
     assert attribution["summary"]["fallback_identity_count"] == 4
+    assert attribution["summary"]["identity_missing_count"] == 4
+    assert attribution["summary"]["identity_join_rate"] == 0.0
+    assert attribution["summary"]["complete_flow_rate"] == 0.0
+    assert attribution["summary"]["incomplete_flow_reason_counts"]["fallback_identity_incomplete"] == 4
     assert all(flow["source_quality_gate"] == "fallback_identity_incomplete" for flow in attribution["flows"])
     assert attribution["runtime_approval_candidates"] == []
+
+
+def test_lifecycle_flow_identity_prefers_entry_adm_candidate_id_before_row_candidate_id():
+    row = {
+        "candidate_id": "ROW-1",
+        "runtime_features": {"entry_adm_candidate_id": "ADM-1"},
+        "stock_code": "000001",
+        "event_time": "2026-05-20T09:10:00+09:00",
+    }
+
+    assert mod._row_flow_identity(row) == ("entry_adm_candidate_id:ADM-1", "entry_adm_candidate_id")
+
+
+def test_lifecycle_flow_surfaces_identity_namespace_mismatch_when_required_stages_exist():
+    rows = [
+        {
+            "candidate_id": "ENTRY-1",
+            "stock_code": "000001",
+            "event_time": "2026-05-20T09:10:00+09:00",
+            "stage": "entry",
+            "source_stage": "entry",
+            "runtime_features": {"ai_score": 70},
+            "labels": {},
+            "stage_ev_composite_pct": 0.1,
+        },
+        *[
+            {
+                "stock_code": "000001",
+                "event_time": f"2026-05-20T09:1{idx}:00+09:00",
+                "stage": stage,
+                "source_stage": stage,
+                "runtime_features": {"sim_record_id": "SIM-1", "broker_order_forbidden": True},
+                "labels": {"profit_rate": 0.4},
+                "stage_ev_composite_pct": 0.4,
+            }
+            for idx, stage in enumerate(("submit", "holding", "exit"), start=1)
+        ],
+    ]
+
+    attribution = mod._lifecycle_flow_bucket_attribution(rows)
+
+    summary = attribution["summary"]
+    assert summary["complete_flow_count"] == 0
+    assert summary["join_contract_blocked"] is True
+    assert summary["bundle_ev_tuning_state"] == "blocked_join_gap"
+    assert summary["incomplete_flow_reason_counts"]["identity_namespace_mismatch"] == 1
+    assert summary["incomplete_flow_reason_counts"]["entry_candidate_id_to_sim_record_id_bridge_missing"] == 1
+    assert attribution["runtime_approval_candidates"] == []
+
+
+def test_lifecycle_flow_bridge_key_can_complete_cross_namespace_flow():
+    rows = [
+        {
+            "candidate_id": "ENTRY-1",
+            "stock_code": "000001",
+            "event_time": "2026-05-20T09:10:00+09:00",
+            "stage": "entry",
+            "source_stage": "entry",
+            "runtime_features": {"lifecycle_flow_bridge_key": "FLOW-1", "ai_score": 70},
+            "labels": {},
+            "stage_ev_composite_pct": 0.1,
+        },
+        *[
+            {
+                "stock_code": "000001",
+                "event_time": f"2026-05-20T09:1{idx}:00+09:00",
+                "stage": stage,
+                "source_stage": stage,
+                "runtime_features": {
+                    "lifecycle_flow_bridge_key": "FLOW-1",
+                    "sim_record_id": "SIM-1",
+                    "broker_order_forbidden": True,
+                },
+                "labels": {"profit_rate": 0.4},
+                "stage_ev_composite_pct": 0.4,
+            }
+            for idx, stage in enumerate(("submit", "holding", "exit"), start=1)
+        ],
+    ]
+
+    attribution = mod._lifecycle_flow_bucket_attribution(rows)
+
+    assert attribution["summary"]["complete_flow_count"] == 1
+    assert attribution["summary"]["join_contract_blocked"] is False
+    assert attribution["flows"][0]["identity_quality"] == "lifecycle_flow_bridge_key"
+    assert attribution["flows"][0]["stage_completion_state"] == "complete"
 
 
 def test_lifecycle_matrix_ingests_scalp_sim_scale_in_rows(tmp_path, monkeypatch):

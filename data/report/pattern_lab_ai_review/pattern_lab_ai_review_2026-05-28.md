@@ -10,26 +10,22 @@
 - provider: `openai`
 - model: `gpt-5.4-mini`
 - fallback_used: `False`
-- audit_status: `pass`
-- final_conclusion_count: `4`
-- workorder_count: `4`
+- audit_status: `correction_required`
+- final_conclusion_count: `2`
+- workorder_count: `2`
 
 ## Two-Pass Review
 
-- interpretation_count: `4`
+- interpretation_count: `2`
 - audit_issues: `[]`
 - forbidden_use_violations: `[]`
 
 ## Final Conclusions
 
-- `scalping_pattern_lab_automation` domain=`scalping` state=`automation_handoff_gap` decision=`surface_workorder` reason=`Missing threshold_cycle_ev prevents re-entry feedback consumption.`
-- `scalping_lifecycle_bucket_discovery` domain=`scalping` state=`code_patch_required` decision=`surface_workorder` reason=`Reported source contract drift plus explicit instrumentation gaps require source-side patching.`
-- `swing_pattern_lab_automation` domain=`swing` state=`automation_handoff_gap` decision=`surface_workorder` reason=`Missing threshold_cycle_ev blocks the swing re-entry feedback loop.`
-- `swing_lifecycle_bucket_discovery` domain=`swing` state=`code_patch_required` decision=`surface_workorder` reason=`Explicit patch-required and source-quality-blocker outcomes indicate source fixes are needed.`
+- `order_pattern_lab_ai_review_swing_lifecycle_bucket_discovery` domain=`swing` state=`code_patch_required` decision=`surface_workorder` reason=`Explicit code-patch-required findings are present in the source report, so this should be surfaced as a source workorder.`
+- `order_pattern_lab_ai_review_swing_pattern_lab_automation` domain=`swing` state=`source_only_keep_collecting` decision=`keep` reason=`The report shows blocked families caused by invalid micro context and recorded source-quality blockers, which should be surfaced for source remediation.`
 
 ## Code Improvement Orders
 
-- `order_pattern_lab_ai_review_scalping_pattern_lab_automation`: Pattern Lab AI review follow-up: scalping_pattern_lab_automation
-- `order_pattern_lab_ai_review_scalping_lifecycle_bucket_discovery`: Pattern Lab AI review follow-up: scalping_lifecycle_bucket_discovery
-- `order_pattern_lab_ai_review_swing_pattern_lab_automation`: Pattern Lab AI review follow-up: swing_pattern_lab_automation
-- `order_pattern_lab_ai_review_swing_lifecycle_bucket_discovery`: Pattern Lab AI review follow-up: swing_lifecycle_bucket_discovery
+- `order_pattern_lab_ai_review_order_pattern_lab_ai_review_swing_lifecycle_bucket_discovery`: Pattern Lab AI review follow-up: order_pattern_lab_ai_review_swing_lifecycle_bucket_discovery
+- `order_pattern_lab_ai_review_ai_review_followup_2026_05_28`: Resolve Pattern Lab AI review follow-up

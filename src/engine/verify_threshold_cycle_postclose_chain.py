@@ -290,6 +290,12 @@ def _overnight_bucket_order_id(item: dict[str, Any]) -> str:
     return f"order_lifecycle_overnight_bucket_{bucket_type}_{bucket_key}"
 
 
+def _stage_bucket_order_id(stage: str, item: dict[str, Any]) -> str:
+    bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
+    bucket_key = _slug_with_hash(str(item.get("bucket_key") or item.get("workorder_id") or "unknown"))
+    return f"order_lifecycle_{stage}_bucket_{bucket_type}_{bucket_key}"
+
+
 def _lifecycle_flow_bucket_order_id(item: dict[str, Any]) -> str:
     workorder_id = _slug(str(item.get("workorder_id") or "unknown"))
     bucket_id = _slug_with_hash(str(item.get("lifecycle_flow_bucket_id") or item.get("bucket_key") or "unknown"))
@@ -1334,6 +1340,10 @@ def _lifecycle_flow_bucket_handoff_status(
         for item in source_workorders
         if isinstance(item, dict) and item.get("lifecycle_flow_bucket_id")
     )
+    summary = attribution.get("summary") if isinstance(attribution.get("summary"), dict) else {}
+    flow_count = _safe_int(summary.get("flow_count"), 0)
+    complete_flow_count = _safe_int(summary.get("complete_flow_count"), 0)
+    join_contract_blocked = bool(summary.get("join_contract_blocked"))
     ev_candidate_ids = _collect_lifecycle_flow_bucket_candidate_ids(ev_report)
     runtime_candidate_ids = _collect_lifecycle_flow_bucket_candidate_ids(runtime_summary)
     actual_order_ids = {
@@ -1351,8 +1361,20 @@ def _lifecycle_flow_bucket_handoff_status(
         missing.append("runtime_approval_summary_lifecycle_flow_bucket_candidates_missing")
     if missing_workorder_order_ids:
         missing.append("code_improvement_workorder_lifecycle_flow_bucket_orders_missing")
+    if flow_count > 0 and complete_flow_count <= 0:
+        missing.append("lifecycle_complete_flow_absent")
+    if join_contract_blocked:
+        missing.append("lifecycle_join_contract_blocked")
     return {
         "status": "fail" if missing else "pass",
+        "flow_count": flow_count,
+        "complete_flow_count": complete_flow_count,
+        "complete_flow_rate": summary.get("complete_flow_rate"),
+        "incomplete_flow_count": _safe_int(summary.get("incomplete_flow_count"), 0),
+        "join_contract_blocked": join_contract_blocked,
+        "bundle_ev_tuning_state": summary.get("bundle_ev_tuning_state"),
+        "top_incomplete_reason": summary.get("top_incomplete_reason"),
+        "incomplete_flow_reason_counts": summary.get("incomplete_flow_reason_counts") or {},
         "expected_candidate_ids": expected_candidate_ids,
         "threshold_cycle_ev_candidate_ids": sorted(ev_candidate_ids),
         "runtime_approval_summary_candidate_ids": sorted(runtime_candidate_ids),
@@ -1365,7 +1387,127 @@ def _lifecycle_flow_bucket_handoff_status(
         "interpretation": (
             "LDM lifecycle-flow parent bucket candidates and workorders propagated to threshold EV, runtime summary, and code workorder."
             if not missing
+            else "LDM lifecycle-flow parent bucket is fail-closed because complete entry-submit-holding-exit flow is absent."
+            if "lifecycle_complete_flow_absent" in missing
             else "LDM lifecycle-flow parent bucket output was generated but one or more downstream consumers dropped it."
+        ),
+    }
+
+
+def _stage_only_bucket_handoff_status(
+    ldm_report: dict[str, Any],
+    ev_report: dict[str, Any],
+    runtime_summary: dict[str, Any],
+    workorder: dict[str, Any],
+    *,
+    stage: str,
+) -> dict[str, Any]:
+    attribution_key = f"{stage}_bucket_attribution"
+    attribution = (
+        ldm_report.get(attribution_key)
+        if isinstance(ldm_report.get(attribution_key), dict)
+        else {}
+    )
+    source_workorders = (
+        attribution.get("code_improvement_workorders")
+        if isinstance(attribution.get("code_improvement_workorders"), list)
+        else []
+    )
+    runtime_candidates = (
+        attribution.get("runtime_approval_candidates")
+        if isinstance(attribution.get("runtime_approval_candidates"), list)
+        else []
+    )
+    attribution_summary = attribution.get("summary") if isinstance(attribution.get("summary"), dict) else {}
+    expected_bucket_count = _safe_int(attribution_summary.get("bucket_count"), 0)
+    expected_workorder_count = _safe_int(attribution_summary.get("workorder_count"), len(source_workorders))
+    expected_order_ids = sorted(
+        _stage_bucket_order_id(stage, item)
+        for item in source_workorders
+        if isinstance(item, dict) and item.get("bucket_type") and item.get("bucket_key")
+    )
+    expected_workorder_ids = sorted(
+        str(item.get("workorder_id"))
+        for item in source_workorders
+        if isinstance(item, dict) and item.get("workorder_id")
+    )
+    ev_matrix = ev_report.get("lifecycle_decision_matrix") if isinstance(ev_report.get("lifecycle_decision_matrix"), dict) else {}
+    runtime_matrix = (
+        runtime_summary.get("lifecycle_decision_matrix")
+        if isinstance(runtime_summary.get("lifecycle_decision_matrix"), dict)
+        else {}
+    )
+    ev_workorder_ids = {
+        str(item.get("workorder_id"))
+        for item in (
+            ev_matrix.get(f"{stage}_bucket_code_improvement_workorders")
+            if isinstance(ev_matrix.get(f"{stage}_bucket_code_improvement_workorders"), list)
+            else []
+        )
+        if isinstance(item, dict) and item.get("workorder_id")
+    }
+    runtime_workorder_ids = {
+        str(item.get("workorder_id"))
+        for item in (
+            runtime_matrix.get(f"{stage}_bucket_code_improvement_workorders")
+            if isinstance(runtime_matrix.get(f"{stage}_bucket_code_improvement_workorders"), list)
+            else []
+        )
+        if isinstance(item, dict) and item.get("workorder_id")
+    }
+    actual_order_ids = {
+        str(item.get("order_id"))
+        for item in (workorder.get("orders") if isinstance(workorder.get("orders"), list) else [])
+        if isinstance(item, dict) and item.get("order_id")
+    }
+    missing_order_ids = sorted(set(expected_order_ids) - actual_order_ids)
+    missing_ev_workorder_ids = sorted(set(expected_workorder_ids) - ev_workorder_ids)
+    missing_runtime_workorder_ids = sorted(set(expected_workorder_ids) - runtime_workorder_ids)
+    ev_bucket_count = _safe_int(ev_matrix.get(f"{stage}_bucket_count"), -1)
+    runtime_bucket_count = _safe_int(runtime_matrix.get(f"{stage}_bucket_count"), -1)
+    ev_workorder_count = _safe_int(ev_matrix.get(f"{stage}_bucket_workorder_count"), -1)
+    runtime_workorder_count = _safe_int(runtime_matrix.get(f"{stage}_bucket_workorder_count"), -1)
+    missing: list[str] = []
+    if runtime_candidates:
+        missing.append(f"{stage}_stage_only_runtime_candidates_forbidden")
+    if expected_bucket_count > 0 and ev_bucket_count < expected_bucket_count:
+        missing.append(f"threshold_cycle_ev_{stage}_bucket_count_missing")
+    if expected_bucket_count > 0 and runtime_bucket_count < expected_bucket_count:
+        missing.append(f"runtime_approval_summary_{stage}_bucket_count_missing")
+    if expected_workorder_count > 0 and ev_workorder_count < expected_workorder_count:
+        missing.append(f"threshold_cycle_ev_{stage}_bucket_workorder_count_missing")
+    if expected_workorder_count > 0 and runtime_workorder_count < expected_workorder_count:
+        missing.append(f"runtime_approval_summary_{stage}_bucket_workorder_count_missing")
+    if missing_ev_workorder_ids:
+        missing.append(f"threshold_cycle_ev_{stage}_bucket_workorders_missing")
+    if missing_runtime_workorder_ids:
+        missing.append(f"runtime_approval_summary_{stage}_bucket_workorders_missing")
+    if missing_order_ids:
+        missing.append(f"code_improvement_workorder_{stage}_bucket_orders_missing")
+    return {
+        "status": "fail" if missing else ("missing" if not attribution else "pass"),
+        "expected_workorder_order_ids": expected_order_ids,
+        "expected_workorder_ids": expected_workorder_ids,
+        "threshold_cycle_ev_workorder_ids": sorted(ev_workorder_ids),
+        "runtime_approval_summary_workorder_ids": sorted(runtime_workorder_ids),
+        "missing_ev_workorder_ids": missing_ev_workorder_ids,
+        "missing_runtime_summary_workorder_ids": missing_runtime_workorder_ids,
+        "expected_bucket_count": expected_bucket_count,
+        "threshold_cycle_ev_bucket_count": ev_bucket_count,
+        "runtime_approval_summary_bucket_count": runtime_bucket_count,
+        "expected_workorder_count": expected_workorder_count,
+        "threshold_cycle_ev_workorder_count": ev_workorder_count,
+        "runtime_approval_summary_workorder_count": runtime_workorder_count,
+        "actual_workorder_order_ids": sorted(actual_order_ids),
+        "missing_workorder_order_ids": missing_order_ids,
+        "runtime_candidate_count": len(runtime_candidates),
+        "missing": missing,
+        "interpretation": (
+            f"LDM {stage} bucket attribution propagated as source-only child evidence."
+            if attribution and not missing
+            else f"LDM {stage} bucket output was generated but one or more downstream consumers dropped it."
+            if attribution
+            else f"LDM {stage} bucket attribution missing"
         ),
     }
 
@@ -1378,6 +1520,12 @@ def _has_scale_in_source(ldm_report: dict[str, Any]) -> bool:
     report_summary = ldm_report.get("summary") if isinstance(ldm_report.get("summary"), dict) else {}
     stage_counts = report_summary.get("stage_counts") if isinstance(report_summary.get("stage_counts"), dict) else {}
     return int(stage_counts.get("scale_in") or 0) > 0
+
+
+def _has_lifecycle_stage_source(ldm_report: dict[str, Any], stage: str) -> bool:
+    report_summary = ldm_report.get("summary") if isinstance(ldm_report.get("summary"), dict) else {}
+    stage_counts = report_summary.get("stage_counts") if isinstance(report_summary.get("stage_counts"), dict) else {}
+    return int(stage_counts.get(stage) or 0) > 0
 
 
 def _has_overnight_source(ldm_report: dict[str, Any]) -> bool:
@@ -1559,6 +1707,60 @@ def build_threshold_cycle_postclose_verification(
     submit_bucket_handoff = _submit_bucket_handoff_status(ldm_report, ev_report, runtime_summary, workorder)
     if isinstance(submit_attribution, dict) and submit_bucket_handoff.get("status") == "fail":
         log_issues.append("ldm_submit_bucket_handoff_missing")
+    holding_attribution = ldm_report.get("holding_bucket_attribution")
+    holding_source_present = _has_lifecycle_stage_source(ldm_report, "holding")
+    if holding_source_present and not isinstance(holding_attribution, dict):
+        log_issues.append("ldm_holding_bucket_attribution_missing")
+    if (
+        holding_source_present
+        and isinstance(holding_attribution, dict)
+        and _safe_int(
+            (
+                holding_attribution.get("summary")
+                if isinstance(holding_attribution.get("summary"), dict)
+                else {}
+            ).get("bucket_count"),
+            0,
+        )
+        <= 0
+    ):
+        log_issues.append("ldm_holding_bucket_attribution_empty")
+    holding_bucket_handoff = _stage_only_bucket_handoff_status(
+        ldm_report,
+        ev_report,
+        runtime_summary,
+        workorder,
+        stage="holding",
+    )
+    if isinstance(holding_attribution, dict) and holding_bucket_handoff.get("status") == "fail":
+        log_issues.append("ldm_holding_bucket_handoff_missing")
+    exit_attribution = ldm_report.get("exit_bucket_attribution")
+    exit_source_present = _has_lifecycle_stage_source(ldm_report, "exit")
+    if exit_source_present and not isinstance(exit_attribution, dict):
+        log_issues.append("ldm_exit_bucket_attribution_missing")
+    if (
+        exit_source_present
+        and isinstance(exit_attribution, dict)
+        and _safe_int(
+            (
+                exit_attribution.get("summary")
+                if isinstance(exit_attribution.get("summary"), dict)
+                else {}
+            ).get("bucket_count"),
+            0,
+        )
+        <= 0
+    ):
+        log_issues.append("ldm_exit_bucket_attribution_empty")
+    exit_bucket_handoff = _stage_only_bucket_handoff_status(
+        ldm_report,
+        ev_report,
+        runtime_summary,
+        workorder,
+        stage="exit",
+    )
+    if isinstance(exit_attribution, dict) and exit_bucket_handoff.get("status") == "fail":
+        log_issues.append("ldm_exit_bucket_handoff_missing")
     buy_funnel_submit_drought_handoff = _buy_funnel_submit_drought_handoff_status(
         buy_funnel_report,
         ldm_report,
@@ -1591,6 +1793,8 @@ def build_threshold_cycle_postclose_verification(
     )
     if isinstance(lifecycle_flow_attribution, dict) and lifecycle_flow_bucket_handoff.get("status") == "fail":
         log_issues.append("ldm_lifecycle_flow_bucket_handoff_missing")
+    if "lifecycle_complete_flow_absent" in (lifecycle_flow_bucket_handoff.get("missing") or []):
+        log_issues.append("lifecycle_complete_flow_absent")
     lifecycle_bucket_discovery_handoff = _lifecycle_bucket_discovery_handoff_status(
         discovery_report,
         bridge_report,
@@ -2088,6 +2292,12 @@ def build_threshold_cycle_postclose_verification(
         "entry_bucket_handoff": entry_bucket_handoff,
         "submit_bucket_handoff": submit_bucket_handoff,
         "submit_bucket_attribution_present": isinstance(submit_attribution, dict),
+        "holding_bucket_handoff": holding_bucket_handoff,
+        "holding_bucket_attribution_present": isinstance(holding_attribution, dict),
+        "holding_source_present": holding_source_present,
+        "exit_bucket_handoff": exit_bucket_handoff,
+        "exit_bucket_attribution_present": isinstance(exit_attribution, dict),
+        "exit_source_present": exit_source_present,
         "buy_funnel_submit_drought_handoff": buy_funnel_submit_drought_handoff,
         "scale_in_bucket_handoff": scale_in_bucket_handoff,
         "scale_in_bucket_attribution_present": isinstance(scale_in_attribution, dict),
@@ -2117,6 +2327,8 @@ def _render_markdown(report: dict[str, Any]) -> str:
     )
     entry_bucket = report.get("entry_bucket_handoff") if isinstance(report.get("entry_bucket_handoff"), dict) else {}
     submit_bucket = report.get("submit_bucket_handoff") if isinstance(report.get("submit_bucket_handoff"), dict) else {}
+    holding_bucket = report.get("holding_bucket_handoff") if isinstance(report.get("holding_bucket_handoff"), dict) else {}
+    exit_bucket = report.get("exit_bucket_handoff") if isinstance(report.get("exit_bucket_handoff"), dict) else {}
     buy_funnel_handoff = (
         report.get("buy_funnel_submit_drought_handoff")
         if isinstance(report.get("buy_funnel_submit_drought_handoff"), dict)
@@ -2191,9 +2403,34 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- attribution_present: `{report.get('submit_bucket_attribution_present')}`",
         f"- missing: `{submit_bucket.get('missing') or []}`",
         "",
+        "## Holding Bucket Handoff",
+        f"- status: `{holding_bucket.get('status')}`",
+        f"- attribution_present: `{report.get('holding_bucket_attribution_present')}`",
+        f"- source_present: `{report.get('holding_source_present')}`",
+        f"- runtime_candidate_count: `{holding_bucket.get('runtime_candidate_count')}`",
+        f"- bucket_count ev/runtime/expected: `{holding_bucket.get('threshold_cycle_ev_bucket_count')}` / `{holding_bucket.get('runtime_approval_summary_bucket_count')}` / `{holding_bucket.get('expected_bucket_count')}`",
+        f"- workorder_count ev/runtime/expected: `{holding_bucket.get('threshold_cycle_ev_workorder_count')}` / `{holding_bucket.get('runtime_approval_summary_workorder_count')}` / `{holding_bucket.get('expected_workorder_count')}`",
+        f"- missing: `{holding_bucket.get('missing') or []}`",
+        "",
+        "## Exit Bucket Handoff",
+        f"- status: `{exit_bucket.get('status')}`",
+        f"- attribution_present: `{report.get('exit_bucket_attribution_present')}`",
+        f"- source_present: `{report.get('exit_source_present')}`",
+        f"- runtime_candidate_count: `{exit_bucket.get('runtime_candidate_count')}`",
+        f"- bucket_count ev/runtime/expected: `{exit_bucket.get('threshold_cycle_ev_bucket_count')}` / `{exit_bucket.get('runtime_approval_summary_bucket_count')}` / `{exit_bucket.get('expected_bucket_count')}`",
+        f"- workorder_count ev/runtime/expected: `{exit_bucket.get('threshold_cycle_ev_workorder_count')}` / `{exit_bucket.get('runtime_approval_summary_workorder_count')}` / `{exit_bucket.get('expected_workorder_count')}`",
+        f"- missing: `{exit_bucket.get('missing') or []}`",
+        "",
         "## Lifecycle Flow Bucket Handoff",
         f"- status: `{lifecycle_flow_bucket.get('status')}`",
         f"- attribution_present: `{report.get('lifecycle_flow_bucket_attribution_present')}`",
+        f"- flow_count: `{lifecycle_flow_bucket.get('flow_count')}`",
+        f"- complete_flow_count: `{lifecycle_flow_bucket.get('complete_flow_count')}`",
+        f"- incomplete_flow_count: `{lifecycle_flow_bucket.get('incomplete_flow_count')}`",
+        f"- complete_flow_rate: `{lifecycle_flow_bucket.get('complete_flow_rate')}`",
+        f"- join_contract_blocked: `{lifecycle_flow_bucket.get('join_contract_blocked')}`",
+        f"- bundle_ev_tuning_state: `{lifecycle_flow_bucket.get('bundle_ev_tuning_state')}`",
+        f"- top_incomplete_reason: `{lifecycle_flow_bucket.get('top_incomplete_reason')}`",
         f"- missing: `{lifecycle_flow_bucket.get('missing') or []}`",
         "",
         "## AI Correction",

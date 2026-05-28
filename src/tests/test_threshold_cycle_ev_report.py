@@ -434,6 +434,13 @@ def test_threshold_cycle_ev_lifecycle_summary_surfaces_submit_contract(tmp_path,
                     "status": "pass",
                     "total_rows": 10,
                     "joined_rows": 5,
+                    "complete_flow_count": 0,
+                    "incomplete_flow_count": 3,
+                    "complete_flow_rate": 0.0,
+                    "join_contract_blocked": True,
+                    "bundle_ev_tuning_state": "blocked_join_gap",
+                    "top_incomplete_reason": "identity_namespace_mismatch",
+                    "incomplete_flow_reason_counts": {"identity_namespace_mismatch": 1},
                     "submit_bucket_workorder_count": 1,
                     "submit_bucket_contract_gap_count": 1,
                 },
@@ -461,6 +468,11 @@ def test_threshold_cycle_ev_lifecycle_summary_surfaces_submit_contract(tmp_path,
 
     assert path == str(matrix_path)
     assert warnings == []
+    assert summary["complete_flow_count"] == 0
+    assert summary["incomplete_flow_count"] == 3
+    assert summary["join_contract_blocked"] is True
+    assert summary["bundle_ev_tuning_state"] == "blocked_join_gap"
+    assert summary["top_incomplete_reason"] == "identity_namespace_mismatch"
     assert summary["submit_bucket_contract_gap_count"] == 1
     assert summary["submit_bucket_code_improvement_workorders"] == [{"workorder_id": "submit_order"}]
     assert summary["post_submit_contract_gaps"] == [{"gap_type": "broker_receipt_contract_gap"}]

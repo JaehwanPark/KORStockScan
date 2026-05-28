@@ -55,8 +55,19 @@ PROGRESS_KEYS: dict[str, tuple[str, ...]] = {
         "promote_ready_count",
         "lifecycle_flow_bucket_count",
         "lifecycle_flow_complete_count",
+        "complete_flow_count",
+        "incomplete_flow_count",
         "lifecycle_flow_runtime_candidate_count",
         "lifecycle_flow_workorder_count",
+        "join_contract_blocked",
+        "top_incomplete_reason",
+        "holding_bucket_count",
+        "holding_bucket_workorder_count",
+        "exit_bucket_count",
+        "exit_bucket_workorder_count",
+        "identity_missing_count",
+        "identity_join_rate",
+        "complete_flow_rate",
         "entry_bucket_runtime_candidate_count",
         "scale_in_bucket_runtime_candidate_count",
         "overnight_bucket_runtime_candidate_count",
@@ -463,6 +474,17 @@ def _markdown(report: dict[str, Any]) -> str:
         f"(`{delta(ldm_matrix, 'lifecycle_flow_runtime_candidate_count')}`), workorders "
         f"`{current(ldm_matrix, 'lifecycle_flow_workorder_count')}` "
         f"(`{delta(ldm_matrix, 'lifecycle_flow_workorder_count')}`).",
+        f"- Holding/exit buckets: holding `{current(ldm_matrix, 'holding_bucket_count')}` "
+        f"(`{delta(ldm_matrix, 'holding_bucket_count')}`), exit `{current(ldm_matrix, 'exit_bucket_count')}` "
+        f"(`{delta(ldm_matrix, 'exit_bucket_count')}`), workorders "
+        f"`{current(ldm_matrix, 'holding_bucket_workorder_count')}`/`{current(ldm_matrix, 'exit_bucket_workorder_count')}`.",
+        f"- Lifecycle identity: missing `{current(ldm_matrix, 'identity_missing_count')}` "
+        f"(`{delta(ldm_matrix, 'identity_missing_count')}`), join_rate "
+        f"`{current(ldm_matrix, 'identity_join_rate')}`, complete_flow_rate "
+        f"`{current(ldm_matrix, 'complete_flow_rate')}`.",
+        f"- Lifecycle join contract: blocked `{str(current(ldm_matrix, 'join_contract_blocked')).lower()}`, "
+        f"incomplete `{current(ldm_matrix, 'incomplete_flow_count')}`, top reason "
+        f"`{current(ldm_matrix, 'top_incomplete_reason')}`.",
         f"- Swing matrix: rows `{current(swing_matrix, 'total_rows')}` "
         f"(`{delta(swing_matrix, 'total_rows')}`), probe `{current(swing_matrix, 'probe_rows')}` "
         f"(`{delta(swing_matrix, 'probe_rows')}`), pending future quotes "

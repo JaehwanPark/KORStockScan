@@ -21,7 +21,7 @@
 - ready_count: `0` / `11`
 - ready_rate: `0`
 - per_action_edge_buckets: `{'prefer_exit': 0, 'prefer_avg_down_wait': 0, 'prefer_pyramid_wait': 0}`
-- per_action_samples: `{'exit_only': 42, 'avg_down_wait': 0, 'pyramid_wait': 0}`
+- per_action_samples: `{'exit_only': 51, 'avg_down_wait': 0, 'pyramid_wait': 0}`
 - proxy_sample_snapshots: `7352`
 - proxy_joined_candidates: `0`
 - proxy_actions_present: `['hold_defer', 'exit_only', 'avg_down_wait', 'pyramid_wait']`
@@ -33,16 +33,16 @@
 
 | axis | bucket | bias | score | edge | sample | loss_rate | cf_ready | missing_actions | policy |
 | --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- | --- |
-| price_bucket | price_10k_30k | no_clear_edge | -1.108 | - | 6 | 0.3333 | False | avg_down_wait,pyramid_wait | candidate_weight_source |
-| price_bucket | price_gte_70k | no_clear_edge | -1.2074 | - | 8 | 0.5 | False | avg_down_wait,pyramid_wait | candidate_weight_source |
+| price_bucket | price_10k_30k | no_clear_edge | -0.7782 | - | 8 | 0.25 | False | avg_down_wait,pyramid_wait | candidate_weight_source |
+| price_bucket | price_gte_70k | no_clear_edge | -0.871 | - | 9 | 0.4444 | False | avg_down_wait,pyramid_wait | candidate_weight_source |
 | volume_bucket | volume_2m_10m | no_clear_edge | - | - | - | - | False | avg_down_wait,pyramid_wait | insufficient_sample |
-| volume_bucket | volume_500k_2m | no_clear_edge | -0.8329 | - | 5 | 0.2 | False | avg_down_wait,pyramid_wait | candidate_weight_source |
+| volume_bucket | volume_500k_2m | no_clear_edge | -0.4622 | - | 6 | 0.1667 | False | avg_down_wait,pyramid_wait | candidate_weight_source |
 | volume_bucket | volume_gte_10m | no_clear_edge | - | - | - | - | False | avg_down_wait,pyramid_wait | insufficient_sample |
 | volume_bucket | volume_lt_500k | no_clear_edge | - | - | - | - | False | avg_down_wait,pyramid_wait | insufficient_sample |
-| volume_bucket | volume_unknown | no_clear_edge | - | - | - | - | False | avg_down_wait,pyramid_wait | insufficient_sample |
+| volume_bucket | volume_unknown | no_clear_edge | -0.5691 | - | 5 | 0.2 | False | avg_down_wait,pyramid_wait | candidate_weight_source |
 | time_bucket | time_0900_0930 | no_clear_edge | - | - | - | - | False | avg_down_wait,pyramid_wait | insufficient_sample |
 | time_bucket | time_0930_1030 | no_clear_edge | - | - | - | - | False | avg_down_wait,pyramid_wait | insufficient_sample |
-| time_bucket | time_1030_1400 | no_clear_edge | -1.2575 | - | 7 | 0.4286 | False | avg_down_wait,pyramid_wait | candidate_weight_source |
+| time_bucket | time_1030_1400 | no_clear_edge | -0.8934 | - | 9 | 0.3333 | False | avg_down_wait,pyramid_wait | candidate_weight_source |
 | time_bucket | time_1400_1530 | no_clear_edge | - | - | - | - | False | avg_down_wait,pyramid_wait | insufficient_sample |
 
 ## Prompt Hints

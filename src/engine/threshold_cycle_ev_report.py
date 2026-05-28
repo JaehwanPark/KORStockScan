@@ -721,12 +721,24 @@ def _lifecycle_decision_matrix_summary(target_date: str) -> tuple[dict[str, Any]
         if isinstance(payload.get("submit_bucket_attribution"), dict)
         else {}
     )
+    holding_bucket = (
+        payload.get("holding_bucket_attribution")
+        if isinstance(payload.get("holding_bucket_attribution"), dict)
+        else {}
+    )
+    exit_bucket = (
+        payload.get("exit_bucket_attribution")
+        if isinstance(payload.get("exit_bucket_attribution"), dict)
+        else {}
+    )
     lifecycle_flow_bucket = (
         payload.get("lifecycle_flow_bucket_attribution")
         if isinstance(payload.get("lifecycle_flow_bucket_attribution"), dict)
         else {}
     )
     submit_summary = submit_bucket.get("summary") if isinstance(submit_bucket.get("summary"), dict) else {}
+    holding_summary = holding_bucket.get("summary") if isinstance(holding_bucket.get("summary"), dict) else {}
+    exit_summary = exit_bucket.get("summary") if isinstance(exit_bucket.get("summary"), dict) else {}
     lifecycle_flow_summary = (
         lifecycle_flow_bucket.get("summary")
         if isinstance(lifecycle_flow_bucket.get("summary"), dict)
@@ -753,6 +765,14 @@ def _lifecycle_decision_matrix_summary(target_date: str) -> tuple[dict[str, Any]
             "lifecycle_flow_complete_count": _safe_int(
                 summary.get("lifecycle_flow_complete_count"),
                 _safe_int(lifecycle_flow_summary.get("complete_flow_count"), 0),
+            ),
+            "complete_flow_count": _safe_int(
+                summary.get("complete_flow_count"),
+                _safe_int(lifecycle_flow_summary.get("complete_flow_count"), 0),
+            ),
+            "incomplete_flow_count": _safe_int(
+                summary.get("incomplete_flow_count"),
+                _safe_int(lifecycle_flow_summary.get("incomplete_flow_count"), 0),
             ),
             "lifecycle_flow_runtime_candidate_count": _safe_int(
                 summary.get("lifecycle_flow_runtime_candidate_count"),
@@ -790,6 +810,45 @@ def _lifecycle_decision_matrix_summary(target_date: str) -> tuple[dict[str, Any]
             ),
             "submit_bucket_workorder_count": _safe_int(summary.get("submit_bucket_workorder_count"), 0),
             "submit_bucket_contract_gap_count": _safe_int(summary.get("submit_bucket_contract_gap_count"), 0),
+            "holding_bucket_attribution_summary": holding_summary,
+            "holding_bucket_code_improvement_workorders": (
+                holding_bucket.get("code_improvement_workorders")
+                if isinstance(holding_bucket.get("code_improvement_workorders"), list)
+                else []
+            ),
+            "holding_bucket_count": _safe_int(
+                summary.get("holding_bucket_count"),
+                _safe_int(holding_summary.get("bucket_count"), 0),
+            ),
+            "holding_bucket_workorder_count": _safe_int(
+                summary.get("holding_bucket_workorder_count"),
+                _safe_int(holding_summary.get("workorder_count"), 0),
+            ),
+            "exit_bucket_attribution_summary": exit_summary,
+            "exit_bucket_code_improvement_workorders": (
+                exit_bucket.get("code_improvement_workorders")
+                if isinstance(exit_bucket.get("code_improvement_workorders"), list)
+                else []
+            ),
+            "exit_bucket_count": _safe_int(
+                summary.get("exit_bucket_count"),
+                _safe_int(exit_summary.get("bucket_count"), 0),
+            ),
+            "exit_bucket_workorder_count": _safe_int(
+                summary.get("exit_bucket_workorder_count"),
+                _safe_int(exit_summary.get("workorder_count"), 0),
+            ),
+            "identity_missing_count": _safe_int(summary.get("identity_missing_count"), 0),
+            "identity_join_rate": summary.get("identity_join_rate"),
+            "complete_flow_rate": summary.get("complete_flow_rate"),
+            "join_contract_blocked": bool(summary.get("join_contract_blocked") or lifecycle_flow_summary.get("join_contract_blocked")),
+            "bundle_ev_tuning_state": (
+                summary.get("bundle_ev_tuning_state")
+                or lifecycle_flow_summary.get("bundle_ev_tuning_state")
+                or "ready_for_bundle_ev_tuning"
+            ),
+            "top_incomplete_reason": summary.get("top_incomplete_reason") or lifecycle_flow_summary.get("top_incomplete_reason"),
+            "incomplete_flow_reason_counts": summary.get("incomplete_flow_reason_counts") or {},
             "policy_entries": [
                 {
                     "stage": item.get("stage"),
@@ -1811,6 +1870,11 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"`{lifecycle_matrix.get('lifecycle_flow_complete_count')}` / "
         f"`{lifecycle_matrix.get('lifecycle_flow_runtime_candidate_count')}` / "
         f"`{lifecycle_matrix.get('lifecycle_flow_workorder_count')}`",
+        f"- holding/exit buckets: `{lifecycle_matrix.get('holding_bucket_count')}` / `{lifecycle_matrix.get('exit_bucket_count')}`",
+        f"- holding/exit workorders: `{lifecycle_matrix.get('holding_bucket_workorder_count')}` / `{lifecycle_matrix.get('exit_bucket_workorder_count')}`",
+        f"- lifecycle identity missing/join_rate: `{lifecycle_matrix.get('identity_missing_count')}` / `{lifecycle_matrix.get('identity_join_rate')}`",
+        f"- lifecycle complete_flow_rate: `{lifecycle_matrix.get('complete_flow_rate')}`",
+        f"- incomplete_flow_reason_counts: `{lifecycle_matrix.get('incomplete_flow_reason_counts') or {}}`",
         f"- fixed_threshold_roles: `{lifecycle_matrix.get('fixed_threshold_roles') or {}}`",
         f"- policy_entries: `{lifecycle_matrix.get('policy_entries') or []}`",
         "",

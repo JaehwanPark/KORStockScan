@@ -1,6 +1,6 @@
 # 데이터 품질 보고서
 
-생성일: 2026-05-28 13:14:41
+생성일: 2026-05-28 16:38:43
 분석 기간: 2026-04-21 ~ 2026-05-28
 
 ---
@@ -40,12 +40,12 @@
 
 | 플래그 | 건수 |
 |---|---|
-| 총 record 수 | 1241 |
+| 총 record 수 | 1247 |
 | multi_rebase (split-entry) | 46 |
 | partial_then_expand | 29 |
 | rebase_integrity 이상 | 47 |
 | same_ts_multi_rebase | 27 |
-| same_symbol_repeat_soft_stop | 226 |
+| same_symbol_repeat_soft_stop | 228 |
 
 **정합성 플래그 분포:**
 

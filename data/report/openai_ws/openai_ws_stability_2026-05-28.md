@@ -1,22 +1,22 @@
 # OpenAI WS Stability Report - 2026-05-28
 
-- generated_at: `2026-05-28T13:02:06+09:00`
+- generated_at: `2026-05-28T16:26:32+09:00`
 - decision: `keep_ws`
-- unique WS calls: `3660`
-- endpoint counts: `{'analyze_target': 3655, 'entry_price': 5}`
-- WS fallback: `0` / `3660` (`0.0`)
+- unique WS calls: `4106`
+- endpoint counts: `{'analyze_target': 4101, 'entry_price': 5}`
+- WS fallback: `0` / `4106` (`0.0`)
 - WS success rate: `1.0`
 - WS errors: `{}`
 - WS transport warning: `{'ws_error_count': 0, 'ws_error_rate': 0.0, 'warning_only': False, 'rollback_threshold_error_count': 3, 'rollback_threshold_error_rate': 0.01}`
-- AI response ms: `{'n': 3655, 'avg': 1235.8, 'median': 1159.0, 'p75': 1366.0, 'p90': 1612.0, 'p95': 1810.9, 'max': 6922.0}`
-- WS roundtrip ms: `{'n': 3660, 'avg': 1076.4, 'median': 946.0, 'p75': 1226.0, 'p90': 1388.3, 'p95': 1608.2, 'max': 6623.0}`
-- WS queue wait ms: `{'n': 3660, 'avg': 8.9, 'median': 0.0, 'p75': 0.0, 'p90': 0.0, 'p95': 1.0, 'max': 8908.0}`
-- <=3s rate: `0.9863`
+- AI response ms: `{'n': 4101, 'avg': 1228.7, 'median': 1150.0, 'p75': 1360.0, 'p90': 1609.0, 'p95': 1795.0, 'max': 6922.0}`
+- WS roundtrip ms: `{'n': 4106, 'avg': 1071.2, 'median': 939.0, 'p75': 1227.8, 'p90': 1375.5, 'p95': 1601.8, 'max': 6623.0}`
+- WS queue wait ms: `{'n': 4106, 'avg': 8.0, 'median': 0.0, 'p75': 0.0, 'p90': 0.0, 'p95': 1.0, 'max': 8908.0}`
+- <=3s rate: `0.9873`
 - HTTP late baseline AI response ms: `{'n': 9, 'avg': 5607.7, 'median': 5328.0, 'p75': 7724.0, 'p90': 9036.6, 'p95': 10683.8, 'max': 12331.0}`
-- baseline median improvement: `0.7825`
-- baseline p75 improvement: `0.8231`
+- baseline median improvement: `0.7842`
+- baseline p75 improvement: `0.8239`
 - entry_price WS sample count: `5`
-- entry_price canary summary: `{'canary_event_count': 284, 'applied_count': 153, 'transport_observable_count': 284, 'applied_transport_observable_count': 153, 'ws_observable_unique_count': 5, 'applied_ai_eval_ms': {'n': 153, 'avg': 1709.7, 'median': 1525.0, 'p75': 1841.0, 'p90': 2340.4, 'p95': 2565.8, 'max': 10797.0}, 'instrumentation_gap': False}`
+- entry_price canary summary: `{'canary_event_count': 302, 'applied_count': 156, 'transport_observable_count': 302, 'applied_transport_observable_count': 156, 'ws_observable_unique_count': 5, 'applied_ai_eval_ms': {'n': 156, 'avg': 1712.0, 'median': 1527.0, 'p75': 1876.8, 'p90': 2352.0, 'p95': 2553.5, 'max': 10797.0}, 'instrumentation_gap': False}`
 
 ## 판정
 

@@ -1490,6 +1490,37 @@ def _swing_probe_event_fields(stock: dict | None = None, **extra) -> dict:
     return fields
 
 
+def _sanitize_swing_probe_extra_fields(
+    extra_fields: dict | None,
+    protected_keys,
+    *,
+    context: str,
+) -> dict:
+    if not isinstance(extra_fields, dict) or not extra_fields:
+        return {}
+    protected = {str(key) for key in protected_keys or []}
+    sanitized = {}
+    conflicts = []
+    for key, value in extra_fields.items():
+        key_label = str(key)
+        if not isinstance(key, str):
+            conflicts.append(f"non_string:{key_label}")
+            continue
+        if key_label in protected:
+            conflicts.append(key_label)
+            continue
+        sanitized[key] = value
+    if conflicts:
+        conflict_label = ",".join(sorted(conflicts))
+        log_error(
+            f"[SWING_PROBE_EVENT_FIELD_CONFLICT] context={context} "
+            f"conflict_keys={conflict_label} policy=protected_field_preserved"
+        )
+        sanitized["event_field_conflict_keys"] = conflict_label
+        sanitized["event_field_conflict_policy"] = "protected_field_preserved"
+    return sanitized
+
+
 def _swing_probe_daily_key(now_ts: float | None = None) -> str:
     try:
         return datetime.fromtimestamp(float(now_ts or time.time())).date().isoformat()
@@ -1642,22 +1673,30 @@ def _emit_swing_reentry_counterfactual_after_loss(
     ws_data = ws_data or {}
     extra_fields = extra_fields or {}
     curr_price = _safe_int(ws_data.get("curr") or runtime.get("curr_price"), 0)
+    base_fields = {
+        "runtime_effect": "counterfactual_only",
+        "probe_origin_stage": origin_stage,
+        "discard_reason": "same_symbol_loss_reentry_cooldown",
+        "strategy": decision.get("strategy") or normalize_strategy((runtime or {}).get("strategy") or (stock or {}).get("strategy")),
+        "curr_price": curr_price,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "counterfactual_in_real_like_ev": False,
+        **_swing_loss_reentry_guard_log_fields(decision),
+    }
+    safe_extra_fields = _sanitize_swing_probe_extra_fields(
+        extra_fields,
+        base_fields.keys(),
+        context="swing_reentry_counterfactual_after_loss",
+    )
     _log_entry_pipeline(
         stock,
         code,
         "swing_reentry_counterfactual_after_loss",
         **_swing_probe_event_fields(
             stock,
-            runtime_effect="counterfactual_only",
-            probe_origin_stage=origin_stage,
-            discard_reason="same_symbol_loss_reentry_cooldown",
-            strategy=decision.get("strategy") or normalize_strategy((runtime or {}).get("strategy") or (stock or {}).get("strategy")),
-            curr_price=curr_price,
-            actual_order_submitted=False,
-            broker_order_forbidden=True,
-            counterfactual_in_real_like_ev=False,
-            **_swing_loss_reentry_guard_log_fields(decision),
-            **extra_fields,
+            **base_fields,
+            **safe_extra_fields,
         ),
     )
 
@@ -1796,19 +1835,30 @@ def _log_swing_probe_discard(stock, code, origin_stage: str, reason: str, **fiel
         return False
     _SWING_PROBE_DISCARD_LOG_TS[key] = now_ts
     quota_scope = "global_probe_quota" if normalized_reason in global_quota_reasons else "symbol_probe_quota"
+    base_fields = {
+        "probe_origin_stage": origin_stage,
+        "discard_reason": normalized_reason,
+        "blocker_authority": "probe_capacity_only",
+        "quota_observation_scope": quota_scope,
+        "hard_gate": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "runtime_effect": "in_memory_probe_only",
+    }
+    safe_fields = _sanitize_swing_probe_extra_fields(
+        fields,
+        base_fields.keys(),
+        context="swing_probe_discarded",
+    )
     _log_entry_pipeline(
         stock,
         code,
         "swing_probe_discarded",
         **_swing_probe_event_fields(
             stock,
-            probe_origin_stage=origin_stage,
-            discard_reason=normalized_reason,
-            blocker_authority="probe_capacity_only",
-            quota_observation_scope=quota_scope,
-            hard_gate=False,
-            allowed_runtime_apply=False,
-            **fields,
+            **base_fields,
+            **safe_fields,
         ),
     )
     return True

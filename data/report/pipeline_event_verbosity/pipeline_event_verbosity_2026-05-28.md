@@ -9,16 +9,16 @@
 
 ## 근거
 
-- raw_size_bytes: `1011393920`
-- raw_storage_size_bytes: `1011393920`
-- raw_line_count: `210661`
-- high_volume_line_count: `25312`
-- high_volume_byte_share_pct: `4.08`
+- raw_size_bytes: `1301832910`
+- raw_storage_size_bytes: `1301832910`
+- raw_line_count: `265387`
+- high_volume_line_count: `32250`
+- high_volume_byte_share_pct: `3.97`
 - producer_summary_exists: `True`
 - producer_manifest_mode: `shadow`
 - parity_ok: `False`
-- raw_derived_event_count: `25312`
-- producer_event_count: `25284`
+- raw_derived_event_count: `32250`
+- producer_event_count: `32188`
 - previous_parity_pass_count: `0`
 
 ## 금지선

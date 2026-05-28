@@ -40,11 +40,11 @@
 
 | stage | raw | unique_records | examples |
 | --- | ---: | ---: | --- |
-| `blocked_gatekeeper_reject` | 3964 | 10 | iM금융지주(139130), 삼성생명(032830), LG(003550), KT&G(033780), 현대위아(011210) |
-| `blocked_swing_gap` | 1105 | 4 | HL만도(204320), 현대위아(011210), LG디스플레이(034220), 현대위아(011210), LG디스플레이(034220) |
-| `swing_sim_buy_order_assumed_filled` | 10 | 5 | 한화오션(042660), KT&G(033780), LG디스플레이(034220), LG(003550), iM금융지주(139130) |
-| `swing_sim_holding_started` | 10 | 5 | 한화오션(042660), KT&G(033780), LG디스플레이(034220), LG(003550), iM금융지주(139130) |
-| `swing_sim_order_bundle_assumed_filled` | 10 | 5 | 한화오션(042660), KT&G(033780), LG디스플레이(034220), LG(003550), iM금융지주(139130) |
+| `blocked_gatekeeper_reject` | 5311 | 10 | iM금융지주(139130), 삼성생명(032830), LG(003550), KT&G(033780), 현대위아(011210) |
+| `blocked_swing_gap` | 1491 | 4 | HL만도(204320), 현대위아(011210), LG디스플레이(034220), 현대위아(011210), LG디스플레이(034220) |
+| `swing_sim_buy_order_assumed_filled` | 27 | 13 | 한화오션(042660), KT&G(033780), LG디스플레이(034220), LG(003550), iM금융지주(139130) |
+| `swing_sim_holding_started` | 27 | 13 | 한화오션(042660), KT&G(033780), LG디스플레이(034220), LG(003550), iM금융지주(139130) |
+| `swing_sim_order_bundle_assumed_filled` | 27 | 13 | 한화오션(042660), KT&G(033780), LG디스플레이(034220), LG(003550), iM금융지주(139130) |
 
 ## Simulated Trades
 

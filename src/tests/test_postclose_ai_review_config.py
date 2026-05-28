@@ -30,7 +30,7 @@ def test_artifact_env_overrides_global_default(monkeypatch):
     assert config.provider_status_fields()["config_env_prefix"] == "KORSTOCKSCAN_PRODUCER_GAP_DISCOVERY_AI"
 
 
-def test_lifecycle_bucket_shard_defaults_split_live_and_source_only(monkeypatch):
+def test_lifecycle_bucket_shard_defaults_use_deep_low_review(monkeypatch):
     for key in tuple(os.environ):
         if key.startswith("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY"):
             monkeypatch.delenv(key, raising=False)
@@ -40,8 +40,8 @@ def test_lifecycle_bucket_shard_defaults_split_live_and_source_only(monkeypatch)
 
     assert live.model == "gpt-5.4"
     assert live.reasoning_effort == "low"
-    assert source.model == "gpt-5.4-mini"
-    assert source.reasoning_effort == "medium"
+    assert source.model == "gpt-5.4"
+    assert source.reasoning_effort == "low"
 
 
 def test_lifecycle_bucket_source_only_env_overrides_do_not_affect_live(monkeypatch):

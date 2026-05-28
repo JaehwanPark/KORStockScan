@@ -5,13 +5,13 @@
 - status: `pass`
 - live_auto_apply_ready_count: `0`
 - greenfield_policy_emit_state: `not_emitted_no_complete_lifecycle_flow`
-- greenfield_lifecycle_flow live/surfaced/total: `0` / `66` / `66`
-- lifecycle_bucket_discovery_source_contract_status: `pass`
+- greenfield_lifecycle_flow live/surfaced/total: `0` / `69` / `69`
+- lifecycle_bucket_discovery_source_contract_status: `warning`
 - lifecycle_bucket_discovery_ai_review_status: `parsed`
 - lifecycle_bucket_discovery_live_followup_count: `0`
 - human_approval_required: `False`
 - runtime mutation: `none`
-- warnings: `['greenfield_policy_not_emitted_no_complete_lifecycle_flow']`
+- warnings: `['greenfield_policy_not_emitted_no_complete_lifecycle_flow', 'lifecycle_bucket_discovery_source_contract_warning', 'source_contract_drift_warning']`
 
 ## 근거
 

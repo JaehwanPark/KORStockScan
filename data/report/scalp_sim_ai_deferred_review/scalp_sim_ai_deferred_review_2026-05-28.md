@@ -1,26 +1,26 @@
 # Scalp Sim AI Deferred Review 2026-05-28
 
-- generated_at: `2026-05-28T13:02:12`
+- generated_at: `2026-05-28T16:26:41`
 - source: `/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-05-28.jsonl`
 - artifact_role: `postclose_source_packet_for_sim_ai_quality_review`
 - runtime_effect: `false`
 - decision_authority: `sim_observation_only`
-- deferred_count: `867`
+- deferred_count: `1077`
 
 ## Defer Reasons
 
-- `sim_ai_budget_exhausted`: `867`
+- `sim_ai_budget_exhausted`: `1077`
 
 ## Critical Classes
 
-- `soft_critical`: `867`
+- `soft_critical`: `1077`
 
 ## Critical Reasons
 
-- `feature_signature_changed`: `794`
-- `legacy_critical_zone`: `850`
-- `near_safe_profit_band`: `255`
-- `soft_loss`: `297`
+- `feature_signature_changed`: `984`
+- `legacy_critical_zone`: `1057`
+- `near_safe_profit_band`: `299`
+- `soft_loss`: `353`
 
 ## Deferred Rows
 
@@ -893,3 +893,213 @@
 | 2026-05-28T12:36:23.471268 | 큐로셀(372320) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed` | +0.25 | +0.25 | 0.0 | 563 |
 | 2026-05-28T12:37:10.376953 | 큐로셀(372320) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.07 | +0.25 | 0.32 | 610 |
 | 2026-05-28T12:37:30.626149 | 코칩(126730) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.23 | -0.23 | 0.0 | 2215 |
+| 2026-05-28T13:54:07.640963 | 신성에스티(416180) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.55 | +2.55 | 0.0 | 4675 |
+| 2026-05-28T13:57:18.351383 | 삼화콘덴서(001820) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.30 | -0.23 | 0.07 | 186 |
+| 2026-05-28T13:57:18.366494 | 삼성전기(009150) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.35 | -0.06 | 0.29 | 186 |
+| 2026-05-28T13:57:58.559731 | 삼성SDI(006400) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.46 | -0.08 | 0.38 | 5152 |
+| 2026-05-28T13:59:24.946525 | 더블유씨피(393890) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.11 | +0.30 | 0.41 | 191 |
+| 2026-05-28T13:59:31.768314 | 코칩(126730) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,legacy_critical_zone` | -0.23 | -0.23 | 0.0 | 7136 |
+| 2026-05-28T13:59:31.784192 | NHN(181710) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.35 | -0.35 | 0.0 | 6649 |
+| 2026-05-28T13:59:51.656341 | LG에너지솔루션(373220) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.46 | -0.46 | 0.0 | 5594 |
+| 2026-05-28T14:00:11.070039 | 테스(095610) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.23 | -0.23 | 0.0 | 359 |
+| 2026-05-28T14:01:06.820730 | 한켐(457370) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.47 | +0.47 | 0.0 | 113 |
+| 2026-05-28T14:01:15.190984 | 테스(095610) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.40 | -0.23 | 0.17 | 423 |
+| 2026-05-28T14:01:38.056740 | 한켐(457370) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.47 | +0.47 | 0.0 | 144 |
+| 2026-05-28T14:02:31.255343 | 코칩(126730) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,legacy_critical_zone` | -0.23 | -0.23 | 0.0 | 7316 |
+| 2026-05-28T14:02:35.342913 | 한켐(457370) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.47 | +0.47 | 0.0 | 201 |
+| 2026-05-28T14:02:57.826343 | LG에너지솔루션(373220) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.46 | -0.35 | 0.11 | 5780 |
+| 2026-05-28T14:03:02.167984 | 한국석유(004090) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.35 | +0.35 | 0.0 | 470 |
+| 2026-05-28T14:03:21.160762 | 넥스틴(348210) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.37 | -0.23 | 0.14 | 427 |
+| 2026-05-28T14:04:06.580976 | 테스(095610) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.06 | -0.06 | 0.0 | 594 |
+| 2026-05-28T14:04:37.654806 | 한켐(457370) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.14 | +0.47 | 0.61 | 323 |
+| 2026-05-28T14:04:42.956321 | 테스(095610) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.44 | +0.44 | 0.0 | 631 |
+| 2026-05-28T14:04:42.974518 | 나무기술(242040) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.37 | -0.09 | 0.28 | 631 |
+| 2026-05-28T14:04:53.234099 | 큐로셀(372320) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.39 | -0.23 | 0.16 | 339 |
+| 2026-05-28T14:04:57.449399 | 넥스틴(348210) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.37 | -0.23 | 0.14 | 524 |
+| 2026-05-28T14:05:15.945942 | 한켐(457370) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.23 | +0.47 | 0.7 | 362 |
+| 2026-05-28T14:05:42.273267 | 테스(095610) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.06 | +0.44 | 0.5 | 690 |
+| 2026-05-28T14:05:43.379418 | 한켐(457370) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.49 | +0.47 | 0.96 | 389 |
+| 2026-05-28T14:06:07.498567 | 우주일렉트로(065680) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.44 | -0.23 | 0.21 | 398 |
+| 2026-05-28T14:06:39.972457 | 우주일렉트로(065680) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,legacy_critical_zone` | -0.44 | -0.23 | 0.21 | 430 |
+| 2026-05-28T14:07:14.072319 | 우주일렉트로(065680) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.44 | -0.12 | 0.32 | 464 |
+| 2026-05-28T14:07:21.083960 | 테스(095610) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.61 | +0.61 | 0.0 | 789 |
+| 2026-05-28T14:07:21.154180 | 삼성전기(009150) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.35 | +0.00 | 0.35 | 789 |
+| 2026-05-28T14:07:26.690377 | 라이콤(388790) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.23 | -0.23 | 0.0 | 794 |
+| 2026-05-28T14:07:26.741992 | 넥스틴(348210) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.37 | -0.23 | 0.14 | 673 |
+| 2026-05-28T14:07:36.059273 | LG에너지솔루션(373220) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.35 | -0.35 | 0.0 | 6059 |
+| 2026-05-28T14:07:42.399940 | 더블유씨피(393890) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.23 | +0.30 | 0.53 | 689 |
+| 2026-05-28T14:07:42.443315 | 한켐(457370) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.30 | +0.47 | 0.17 | 508 |
+| 2026-05-28T14:07:42.458907 | 우주일렉트로(065680) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.34 | -0.12 | 0.22 | 493 |
+| 2026-05-28T14:07:44.546515 | 나무기술(242040) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.09 | +0.05 | 0.14 | 812 |
+| 2026-05-28T14:07:46.683198 | 테스(095610) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.69 | +0.69 | 0.0 | 814 |
+| 2026-05-28T14:07:46.750311 | 삼성전기(009150) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,legacy_critical_zone` | -0.35 | +0.00 | 0.35 | 814 |
+| 2026-05-28T14:07:58.701804 | 라이콤(388790) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.33 | -0.23 | 0.1 | 826 |
+| 2026-05-28T14:08:02.900647 | 삼성SDI(006400) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.23 | -0.08 | 0.15 | 5757 |
+| 2026-05-28T14:08:07.251684 | LG에너지솔루션(373220) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.29 | -0.29 | 0.0 | 6090 |
+| 2026-05-28T14:08:08.361924 | SK스퀘어(402340) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.36 | +0.36 | 0.0 | 157 |
+| 2026-05-28T14:08:25.439777 | 삼성전기(009150) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.11 | +0.00 | 0.11 | 853 |
+| 2026-05-28T14:08:27.654563 | 아바텍(149950) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.43 | -0.10 | 0.33 | 855 |
+| 2026-05-28T14:08:30.985810 | NHN(181710) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.23 | -0.11 | 0.12 | 7189 |
+| 2026-05-28T14:08:31.055874 | 라이콤(388790) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.59 | +0.59 | 0.0 | 859 |
+| 2026-05-28T14:08:33.215620 | 코칩(126730) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,legacy_critical_zone` | -0.23 | -0.23 | 0.0 | 7678 |
+| 2026-05-28T14:08:33.254482 | 삼성SDI(006400) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.08 | -0.08 | 0.0 | 5787 |
+| 2026-05-28T14:08:33.294465 | 나무기술(242040) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.34 | +0.34 | 0.0 | 861 |
+| 2026-05-28T14:08:40.159485 | LG에너지솔루션(373220) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.17 | -0.11 | 0.06 | 6123 |
+| 2026-05-28T14:08:40.264190 | 넥스틴(348210) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.23 | -0.23 | 0.0 | 746 |
+| 2026-05-28T14:08:40.355111 | SK스퀘어(402340) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.53 | +0.53 | 0.0 | 189 |
+| 2026-05-28T14:08:48.487225 | 더블유씨피(393890) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.05 | +0.30 | 0.35 | 755 |
+| 2026-05-28T14:09:09.888638 | NHN(181710) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.11 | -0.11 | 0.0 | 7228 |
+| 2026-05-28T14:09:09.982297 | 삼성SDI(006400) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,legacy_critical_zone` | -0.08 | -0.08 | 0.0 | 5824 |
+| 2026-05-28T14:09:10.036986 | 아바텍(149950) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.37 | +0.37 | 0.0 | 898 |
+| 2026-05-28T14:09:10.062032 | 나무기술(242040) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.48 | +0.48 | 0.0 | 898 |
+| 2026-05-28T14:09:10.084346 | 라이콤(388790) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.39 | +0.59 | 0.2 | 898 |
+| 2026-05-28T14:09:11.231701 | 큐로셀(372320) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.42 | +0.42 | 0.0 | 597 |
+| 2026-05-28T14:09:14.738758 | SK스퀘어(402340) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.70 | +0.70 | 0.0 | 223 |
+| 2026-05-28T14:09:23.890283 | 넥스틴(348210) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.37 | -0.23 | 0.14 | 790 |
+| 2026-05-28T14:09:38.585870 | 나무기술(242040) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +0.90 | +1.04 | 0.14 | 926 |
+| 2026-05-28T14:09:43.958282 | 삼성SDI(006400) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.08 | +0.08 | 0.16 | 5858 |
+| 2026-05-28T14:09:45.162417 | SK스퀘어(402340) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.61 | +0.78 | 0.17 | 254 |
+| 2026-05-28T14:09:48.775504 | NHN(181710) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.11 | +0.02 | 0.13 | 7266 |
+| 2026-05-28T14:09:48.894938 | 삼성전기(009150) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.35 | +0.35 | 0.0 | 937 |
+| 2026-05-28T14:10:14.159545 | 아바텍(149950) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,legacy_critical_zone` | +0.50 | +0.64 | 0.14 | 962 |
+| 2026-05-28T14:10:14.184095 | 나무기술(242040) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +0.76 | +1.04 | 0.28 | 962 |
+| 2026-05-28T14:10:14.195181 | 티로보틱스(117730) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.46 | +0.93 | 0.47 | 962 |
+| 2026-05-28T14:10:14.332832 | 우주일렉트로(065680) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.41 | +0.41 | 0.0 | 645 |
+| 2026-05-28T14:10:22.571422 | 한켐(457370) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +0.73 | +0.91 | 0.18 | 668 |
+| 2026-05-28T14:10:22.660993 | SK스퀘어(402340) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.53 | +0.78 | 0.25 | 291 |
+| 2026-05-28T14:10:38.469197 | 큐로셀(372320) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.42 | +0.58 | 0.16 | 684 |
+| 2026-05-28T14:10:50.560077 | 티로보틱스(117730) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +0.83 | +0.93 | 0.1 | 998 |
+| 2026-05-28T14:10:50.567728 | 라이콤(388790) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.49 | +0.59 | 0.1 | 998 |
+| 2026-05-28T14:10:50.649717 | NAVER(035420) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.68 | +0.68 | 0.0 | 371 |
+| 2026-05-28T14:10:56.074847 | 한켐(457370) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +1.35 | +1.43 | 0.08 | 702 |
+| 2026-05-28T14:11:06.631542 | 큐로셀(372320) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.58 | +0.58 | 0.0 | 712 |
+| 2026-05-28T14:11:12.231643 | 아바텍(149950) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,legacy_critical_zone` | +0.57 | +0.64 | 0.07 | 1020 |
+| 2026-05-28T14:11:13.400915 | 티로보틱스(117730) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +0.78 | +0.93 | 0.15 | 1021 |
+| 2026-05-28T14:11:13.435547 | 라이콤(388790) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.39 | +0.59 | 0.2 | 1021 |
+| 2026-05-28T14:11:13.568614 | NAVER(035420) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,legacy_critical_zone` | +0.68 | +0.73 | 0.05 | 394 |
+| 2026-05-28T14:11:15.622973 | 삼성SDI(006400) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed` | +0.08 | +0.23 | 0.15 | 5949 |
+| 2026-05-28T14:11:17.798898 | NHN(181710) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed` | +0.02 | +0.02 | 0.0 | 7355 |
+| 2026-05-28T14:11:17.958113 | 우주일렉트로(065680) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.31 | +0.41 | 0.1 | 708 |
+| 2026-05-28T14:11:23.819376 | 삼성전기(009150) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,legacy_critical_zone` | +0.64 | +0.70 | 0.06 | 1031 |
+| 2026-05-28T14:11:23.846758 | 한켐(457370) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +1.26 | +1.61 | 0.35 | 730 |
+| 2026-05-28T14:11:38.484820 | RISE 메타버스(401170) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.46 | -0.35 | 0.11 | 5660 |
+| 2026-05-28T14:11:38.567567 | 더블유씨피(393890) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.48 | +0.48 | 0.0 | 925 |
+| 2026-05-28T14:11:38.593553 | 큐로셀(372320) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +0.74 | +0.74 | 0.0 | 744 |
+| 2026-05-28T14:11:51.285985 | 티로보틱스(117730) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +0.88 | +0.93 | 0.05 | 1059 |
+| 2026-05-28T14:11:51.396920 | SK스퀘어(402340) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +0.95 | +0.95 | 0.0 | 380 |
+| 2026-05-28T14:11:56.333301 | 우주일렉트로(065680) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.63 | +0.63 | 0.0 | 747 |
+| 2026-05-28T14:12:16.162901 | 삼성전기(009150) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +0.87 | +0.87 | 0.0 | 1084 |
+| 2026-05-28T14:12:22.587730 | 삼성SDI(006400) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.38 | +0.38 | 0.0 | 6016 |
+| 2026-05-28T14:12:22.599056 | 아바텍(149950) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +1.57 | +1.57 | 0.0 | 1090 |
+| 2026-05-28T14:12:22.625589 | 티로보틱스(117730) | `sim_ai_budget_exhausted` | `soft_critical` | `legacy_critical_zone` | +0.93 | +0.93 | 0.0 | 1090 |
+| 2026-05-28T14:12:22.633196 | 라이콤(388790) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.39 | +0.59 | 0.2 | 1090 |
+| 2026-05-28T14:12:22.678925 | SK스퀘어(402340) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +1.04 | +1.04 | 0.0 | 411 |
+| 2026-05-28T14:12:24.598791 | 테스(095610) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +1.78 | +1.78 | 0.0 | 1092 |
+| 2026-05-28T14:12:24.653347 | 우주일렉트로(065680) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.52 | +0.63 | 0.11 | 775 |
+| 2026-05-28T14:12:30.834500 | 넥스틴(348210) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.09 | -0.09 | 0.0 | 977 |
+| 2026-05-28T14:12:30.857031 | 한켐(457370) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +3.53 | +3.88 | 0.35 | 797 |
+| 2026-05-28T14:12:42.553545 | 더블유씨피(393890) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +0.83 | +0.89 | 0.06 | 989 |
+| 2026-05-28T14:12:42.580480 | 큐로셀(372320) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +0.90 | +1.07 | 0.17 | 808 |
+| 2026-05-28T14:12:47.081250 | 삼성전기(009150) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +0.99 | +0.99 | 0.0 | 1115 |
+| 2026-05-28T14:12:53.949432 | 라이콤(388790) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,legacy_critical_zone` | +0.39 | +0.59 | 0.2 | 1122 |
+| 2026-05-28T14:12:54.070837 | SK스퀘어(402340) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +1.04 | +1.04 | 0.0 | 443 |
+| 2026-05-28T14:13:19.850890 | 더블유씨피(393890) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.65 | +0.89 | 0.24 | 1026 |
+| 2026-05-28T14:13:21.491537 | 큐로셀(372320) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +0.74 | +1.07 | 0.33 | 847 |
+| 2026-05-28T14:13:26.070882 | 라이콤(388790) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.49 | +0.59 | 0.1 | 1154 |
+| 2026-05-28T14:13:26.171468 | SK스퀘어(402340) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +1.20 | +1.20 | 0.0 | 475 |
+| 2026-05-28T14:59:28.162013 | 티로보틱스(117730) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.02 | -0.02 | 0.0 | 3916 |
+| 2026-05-28T14:59:28.178135 | 라이콤(388790) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed` | +0.08 | +0.08 | 0.0 | 3916 |
+| 2026-05-28T14:59:28.188101 | 삼성전기(009150) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +6.26 | +6.26 | 0.0 | 3916 |
+| 2026-05-28T14:59:28.197229 | 더블유씨피(393890) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +1.01 | +1.01 | 0.0 | 3794 |
+| 2026-05-28T14:59:28.204389 | 넥스틴(348210) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.37 | -0.37 | 0.0 | 3794 |
+| 2026-05-28T14:59:28.213305 | 한켐(457370) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.48 | +2.48 | 0.0 | 3614 |
+| 2026-05-28T14:59:28.221971 | 큐로셀(372320) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +1.55 | +1.55 | 0.0 | 3614 |
+| 2026-05-28T14:59:28.232180 | 우주일렉트로(065680) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.99 | +2.99 | 0.0 | 3599 |
+| 2026-05-28T14:59:28.247014 | NAVER(035420) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.59 | +2.59 | 0.0 | 3289 |
+| 2026-05-28T14:59:28.261281 | SK스퀘어(402340) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.89 | +2.89 | 0.0 | 3237 |
+| 2026-05-28T14:59:48.664951 | LG에너지솔루션(373220) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.21 | +2.21 | 0.0 | 9191 |
+| 2026-05-28T14:59:48.715827 | 아바텍(149950) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.17 | +2.17 | 0.0 | 3936 |
+| 2026-05-28T14:59:48.722367 | 테스(095610) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +1.36 | +1.36 | 0.0 | 3936 |
+| 2026-05-28T14:59:48.729334 | 나무기술(242040) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +3.02 | +3.02 | 0.0 | 3936 |
+| 2026-05-28T14:59:48.737671 | 티로보틱스(117730) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,legacy_critical_zone` | -0.02 | -0.02 | 0.0 | 3936 |
+| 2026-05-28T14:59:48.744710 | 라이콤(388790) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.69 | +0.69 | 0.0 | 3936 |
+| 2026-05-28T14:59:48.754677 | 삼성전기(009150) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +6.26 | +6.26 | 0.0 | 3936 |
+| 2026-05-28T14:59:48.761883 | 더블유씨피(393890) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +0.89 | +1.01 | 0.12 | 3815 |
+| 2026-05-28T14:59:49.841406 | 한켐(457370) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +3.10 | +3.10 | 0.0 | 3636 |
+| 2026-05-28T14:59:49.897014 | 큐로셀(372320) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +1.71 | +1.71 | 0.0 | 3636 |
+| 2026-05-28T14:59:49.938033 | 우주일렉트로(065680) | `sim_ai_budget_exhausted` | `soft_critical` | `legacy_critical_zone` | +2.99 | +2.99 | 0.0 | 3620 |
+| 2026-05-28T14:59:49.997519 | SK스퀘어(402340) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.81 | +2.89 | 0.08 | 3259 |
+| 2026-05-28T14:59:54.502783 | 더블유게임즈(192080) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.09 | -0.09 | 0.0 | 13398 |
+| 2026-05-28T15:00:30.642767 | SK하이닉스(000660) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +1.71 | +1.71 | 0.0 | 8904 |
+| 2026-05-28T15:00:30.659350 | 삼성SDI(006400) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.06 | +2.36 | 0.3 | 8904 |
+| 2026-05-28T15:00:30.691100 | RISE 메타버스(401170) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +3.44 | +3.44 | 0.0 | 8592 |
+| 2026-05-28T15:00:30.726972 | 티로보틱스(117730) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.41 | +0.41 | 0.0 | 3978 |
+| 2026-05-28T15:00:41.463119 | 라이콤(388790) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +1.31 | +1.41 | 0.1 | 3989 |
+| 2026-05-28T15:00:41.485028 | 삼성전기(009150) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +6.61 | +6.61 | 0.0 | 3989 |
+| 2026-05-28T15:00:41.506654 | 한켐(457370) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +3.53 | +3.53 | 0.0 | 3687 |
+| 2026-05-28T15:00:41.518533 | 큐로셀(372320) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.36 | +2.36 | 0.0 | 3687 |
+| 2026-05-28T15:00:47.056299 | 나무기술(242040) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +3.44 | +3.44 | 0.0 | 3995 |
+| 2026-05-28T15:00:47.101071 | 넥스틴(348210) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.37 | -0.37 | 0.0 | 3873 |
+| 2026-05-28T15:00:49.126948 | SK스퀘어(402340) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.97 | +3.23 | 0.26 | 3318 |
+| 2026-05-28T15:00:52.735684 | SK하이닉스(000660) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +1.85 | +1.85 | 0.0 | 8926 |
+| 2026-05-28T15:00:52.746526 | 삼성SDI(006400) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.06 | +2.36 | 0.3 | 8926 |
+| 2026-05-28T15:00:52.751795 | RISE 메타버스(401170) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +3.56 | +3.56 | 0.0 | 8614 |
+| 2026-05-28T15:00:52.764793 | 티로보틱스(117730) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,legacy_critical_zone` | +0.41 | +0.41 | 0.0 | 4000 |
+| 2026-05-28T15:01:03.212270 | 아바텍(149950) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.44 | +2.44 | 0.0 | 4011 |
+| 2026-05-28T15:01:33.129979 | RISE 메타버스(401170) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +3.40 | +3.56 | 0.16 | 8654 |
+| 2026-05-28T15:01:33.147285 | 나무기술(242040) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +3.59 | +3.59 | 0.0 | 4041 |
+| 2026-05-28T15:01:33.164768 | 티로보틱스(117730) | `sim_ai_budget_exhausted` | `soft_critical` | `near_safe_profit_band,feature_signature_changed,legacy_critical_zone` | +0.51 | +0.51 | 0.0 | 4041 |
+| 2026-05-28T15:01:51.646768 | 아바텍(149950) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.11 | +2.44 | 0.33 | 4059 |
+| 2026-05-28T15:01:51.692550 | 우주일렉트로(065680) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +5.46 | +5.56 | 0.1 | 3742 |
+| 2026-05-28T15:02:01.733767 | 코칩(126730) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,legacy_critical_zone` | -0.23 | -0.23 | 0.0 | 10886 |
+| 2026-05-28T15:02:01.809007 | RISE 메타버스(401170) | `sim_ai_budget_exhausted` | `soft_critical` | `legacy_critical_zone` | +3.40 | +3.56 | 0.16 | 8683 |
+| 2026-05-28T15:02:01.828682 | 나무기술(242040) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +3.44 | +3.59 | 0.15 | 4069 |
+| 2026-05-28T15:02:01.866114 | 큐로셀(372320) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.85 | +2.85 | 0.0 | 3768 |
+| 2026-05-28T15:02:09.609787 | NHN(181710) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.63 | +2.88 | 0.25 | 10407 |
+| 2026-05-28T15:02:09.658271 | SK스퀘어(402340) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +3.48 | +3.48 | 0.0 | 3398 |
+| 2026-05-28T15:02:11.527056 | LG에너지솔루션(373220) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +1.74 | +2.21 | 0.47 | 9334 |
+| 2026-05-28T15:02:23.426094 | 삼성SDI(006400) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.36 | +2.36 | 0.0 | 9017 |
+| 2026-05-28T15:02:23.465463 | 우주일렉트로(065680) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +6.42 | +6.42 | 0.0 | 3774 |
+| 2026-05-28T15:02:39.254146 | 큐로셀(372320) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.52 | +2.85 | 0.33 | 3805 |
+| 2026-05-28T15:02:53.797320 | 삼성SDI(006400) | `sim_ai_budget_exhausted` | `soft_critical` | `legacy_critical_zone` | +2.36 | +2.36 | 0.0 | 9047 |
+| 2026-05-28T15:03:00.561708 | 아바텍(149950) | `sim_ai_budget_exhausted` | `soft_critical` | `legacy_critical_zone` | +2.11 | +2.44 | 0.33 | 4128 |
+| 2026-05-28T15:03:06.419009 | 티로보틱스(117730) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +1.20 | +1.20 | 0.0 | 4134 |
+| 2026-05-28T15:03:06.447662 | 큐로셀(372320) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.52 | +2.85 | 0.33 | 3832 |
+| 2026-05-28T15:03:25.566542 | 삼성SDI(006400) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.36 | +2.36 | 0.0 | 9079 |
+| 2026-05-28T15:03:25.639039 | 우주일렉트로(065680) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +6.10 | +6.42 | 0.32 | 3836 |
+| 2026-05-28T15:03:49.544907 | 라이콤(388790) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +1.93 | +1.93 | 0.0 | 4177 |
+| 2026-05-28T15:03:56.068222 | 티로보틱스(117730) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +1.46 | +1.46 | 0.0 | 4184 |
+| 2026-05-28T15:03:56.139130 | 큐로셀(372320) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.52 | +2.85 | 0.33 | 3882 |
+| 2026-05-28T15:04:24.064689 | NHN(181710) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +3.62 | +3.62 | 0.0 | 10542 |
+| 2026-05-28T15:04:24.128408 | 나무기술(242040) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +3.73 | +3.73 | 0.0 | 4212 |
+| 2026-05-28T15:04:24.139351 | 티로보틱스(117730) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +1.52 | +1.52 | 0.0 | 4212 |
+| 2026-05-28T15:04:24.209438 | SK스퀘어(402340) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +3.48 | +3.48 | 0.0 | 3533 |
+| 2026-05-28T15:04:29.100309 | SK하이닉스(000660) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.12 | +2.12 | 0.0 | 9143 |
+| 2026-05-28T15:04:30.622310 | 큐로셀(372320) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.52 | +2.85 | 0.33 | 3916 |
+| 2026-05-28T15:05:01.233841 | 라이콤(388790) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +1.72 | +1.93 | 0.21 | 4249 |
+| 2026-05-28T15:05:01.254401 | SK스퀘어(402340) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +3.48 | +3.57 | 0.09 | 3570 |
+| 2026-05-28T15:05:06.947356 | 더블유씨피(393890) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +1.07 | +1.36 | 0.29 | 4133 |
+| 2026-05-28T15:05:06.956951 | 큐로셀(372320) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.52 | +2.85 | 0.33 | 3953 |
+| 2026-05-28T15:05:20.888196 | 더블유게임즈(192080) | `sim_ai_budget_exhausted` | `soft_critical` | `soft_loss,feature_signature_changed,legacy_critical_zone` | -0.37 | +0.06 | 0.43 | 13724 |
+| 2026-05-28T15:05:26.708472 | NHN(181710) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +3.62 | +3.99 | 0.37 | 10604 |
+| 2026-05-28T15:05:26.743207 | 아바텍(149950) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.24 | +2.44 | 0.2 | 4274 |
+| 2026-05-28T15:05:26.802668 | 라이콤(388790) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +1.72 | +1.93 | 0.21 | 4274 |
+| 2026-05-28T15:05:38.454440 | 큐로셀(372320) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.52 | +2.85 | 0.33 | 3984 |
+| 2026-05-28T15:05:41.687582 | 티로보틱스(117730) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +1.78 | +1.78 | 0.0 | 4289 |
+| 2026-05-28T15:06:02.048457 | 아바텍(149950) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.24 | +2.44 | 0.2 | 4310 |
+| 2026-05-28T15:06:03.395559 | 라이콤(388790) | `sim_ai_budget_exhausted` | `soft_critical` | `legacy_critical_zone` | +1.72 | +1.93 | 0.21 | 4311 |
+| 2026-05-28T15:06:19.238024 | 큐로셀(372320) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.52 | +2.85 | 0.33 | 4025 |
+| 2026-05-28T15:06:29.821452 | 나무기술(242040) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +3.66 | +3.73 | 0.07 | 4337 |
+| 2026-05-28T15:06:35.366698 | 라이콤(388790) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +1.72 | +1.93 | 0.21 | 4343 |
+| 2026-05-28T15:07:00.984038 | 나무기술(242040) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +4.15 | +4.15 | 0.0 | 4369 |
+| 2026-05-28T15:07:08.248135 | 아바텍(149950) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.31 | +2.44 | 0.13 | 4376 |
+| 2026-05-28T15:07:08.260094 | 라이콤(388790) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +1.72 | +1.93 | 0.21 | 4376 |
+| 2026-05-28T15:07:11.584131 | RISE 메타버스(401170) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +3.21 | +3.56 | 0.35 | 8993 |
+| 2026-05-28T15:07:41.207182 | 라이콤(388790) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +1.52 | +1.93 | 0.41 | 4409 |
+| 2026-05-28T15:07:43.102039 | 삼성SDI(006400) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +2.36 | +2.36 | 0.0 | 9337 |
+| 2026-05-28T15:07:43.109829 | RISE 메타버스(401170) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +3.28 | +3.56 | 0.28 | 9024 |
+| 2026-05-28T15:08:22.916098 | 티로보틱스(117730) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +1.83 | +1.83 | 0.0 | 4451 |
+| 2026-05-28T15:08:33.341878 | 나무기술(242040) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +4.72 | +4.72 | 0.0 | 4461 |
+| 2026-05-28T15:09:03.295008 | 나무기술(242040) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +5.28 | +5.42 | 0.14 | 4491 |
+| 2026-05-28T15:09:03.302388 | 라이콤(388790) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +1.82 | +1.93 | 0.11 | 4491 |
+| 2026-05-28T15:09:03.318195 | SK스퀘어(402340) | `sim_ai_budget_exhausted` | `soft_critical` | `feature_signature_changed,legacy_critical_zone` | +3.48 | +3.73 | 0.25 | 3812 |

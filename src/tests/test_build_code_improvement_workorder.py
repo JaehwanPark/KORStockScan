@@ -934,7 +934,26 @@ def test_build_code_improvement_workorder_consumes_ldm_submit_bucket_workorders(
                             "allowed_runtime_apply": False,
                         }
                     ],
-                }
+                },
+                "holding_bucket_attribution": {
+                    "metric_role": "sim_probe_ev",
+                    "decision_authority": "adm_ldm_holding_bucket_attribution_source_only",
+                    "window_policy": "daily_lifecycle_holding_rows_plus_threshold_cycle_rolling_consumer",
+                    "sample_floor": 3,
+                    "primary_decision_metric": "source_quality_adjusted_ev_pct",
+                    "source_quality_gate": "holding rows + joined labels",
+                    "forbidden_uses": ["stage_only_live_promotion"],
+                    "code_improvement_workorders": [
+                        {
+                            "workorder_id": "holding_bucket_source_quality_1",
+                            "bucket_type": "combo_holding_flow",
+                            "bucket_key": "source=sim|action=HOLD|profit=profit_unknown|held=held_unknown",
+                            "reason": "holding_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation",
+                            "runtime_effect": False,
+                            "allowed_runtime_apply": False,
+                        }
+                    ],
+                },
             },
             ensure_ascii=False,
         ),
@@ -968,7 +987,22 @@ def test_build_code_improvement_workorder_consumes_ldm_submit_bucket_workorders(
     assert order["source_report_type"] == "lifecycle_decision_matrix_submit_bucket_attribution"
     assert order["runtime_effect"] is False
     assert order["allowed_runtime_apply"] is False
+    expected_holding_order_id = mod._lifecycle_stage_bucket_order_id(
+        "holding",
+        {
+            "bucket_type": "combo_holding_flow",
+            "bucket_key": "source=sim|action=HOLD|profit=profit_unknown|held=held_unknown",
+        },
+    )
+    holding_order = next(
+        item
+        for item in report["orders"]
+        if item["order_id"] == expected_holding_order_id
+    )
+    assert holding_order["source_report_type"] == "lifecycle_decision_matrix_holding_bucket_attribution"
+    assert holding_order["allowed_runtime_apply"] is False
     assert report["summary"]["lifecycle_submit_bucket_source_order_count"] == 1
+    assert report["summary"]["lifecycle_holding_exit_bucket_source_order_count"] == 1
 
 
 def test_build_code_improvement_workorder_adds_entry_adm_gap_order(tmp_path, monkeypatch):

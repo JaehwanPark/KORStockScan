@@ -53,8 +53,8 @@ DISCOVERY_SCHEMA_VERSION = "lifecycle_bucket_discovery_v1"
 AI_REVIEW_SCHEMA_NAME = "lifecycle_bucket_discovery_review_v1"
 AI_REVIEW_DEFAULT_PROVIDER = "openai"
 AI_REVIEW_MODEL = "gpt-5.4"
-AI_REVIEW_SOURCE_ONLY_MODEL = "gpt-5.4-mini"
-AI_REVIEW_SOURCE_ONLY_REASONING_EFFORT = "medium"
+AI_REVIEW_SOURCE_ONLY_MODEL = "gpt-5.4"
+AI_REVIEW_SOURCE_ONLY_REASONING_EFFORT = "low"
 LIVE_AUTO_STATES = {"live_auto_apply_ready"}
 EVIDENCE_GRADE_1_COMPLETED_SIM = "grade_1_completed_sim"
 EVIDENCE_GRADE_2_COUNTERFACTUAL = "grade_2_counterfactual"
@@ -282,6 +282,56 @@ SOURCE_CONTRACT_SECTION_SCHEMAS: dict[str, dict[str, tuple[str, ...]]] = {
             "submitted",
             "would_limit_fill",
         ),
+    },
+    "holding_bucket_attribution": {
+        "bucket_types": ("combo_holding_flow", "held_bucket", "holding_action", "holding_source_stage", "profit_band"),
+        "bucket_fields": (
+            "ai_inference_proposal",
+            "allowed_runtime_apply",
+            "bucket_key",
+            "bucket_type",
+            "decision_authority",
+            "diagnostic_win_rate",
+            "equal_weight_avg_profit_pct",
+            "forbidden_uses",
+            "join_rate",
+            "joined_sample",
+            "recommended_resolution",
+            "recommended_route",
+            "runtime_effect",
+            "sample",
+            "source_field_coverage",
+            "source_quality_adjusted_ev_pct",
+            "source_quality_gate",
+            "unknown_dimension_counts",
+            "unknown_reason_counts",
+        ),
+        "dimension_keys": ("action", "held", "held_bucket", "holding_action", "holding_source_stage", "profit", "profit_band", "source"),
+    },
+    "exit_bucket_attribution": {
+        "bucket_types": ("combo_exit_result", "exit_outcome", "exit_rule", "exit_source_stage", "profit_band"),
+        "bucket_fields": (
+            "ai_inference_proposal",
+            "allowed_runtime_apply",
+            "bucket_key",
+            "bucket_type",
+            "decision_authority",
+            "diagnostic_win_rate",
+            "equal_weight_avg_profit_pct",
+            "forbidden_uses",
+            "join_rate",
+            "joined_sample",
+            "recommended_resolution",
+            "recommended_route",
+            "runtime_effect",
+            "sample",
+            "source_field_coverage",
+            "source_quality_adjusted_ev_pct",
+            "source_quality_gate",
+            "unknown_dimension_counts",
+            "unknown_reason_counts",
+        ),
+        "dimension_keys": ("exit_outcome", "exit_rule", "exit_source_stage", "outcome", "profit", "profit_band", "rule", "source"),
     },
     "scale_in_bucket_attribution": {
         "bucket_types": ("ai_score_band", "ai_score_source", "arm", "blocker_namespace", "blocker_reason"),
@@ -513,6 +563,7 @@ def _ai_review_compact_candidate(item: dict[str, Any]) -> dict[str, Any]:
         "normalized_dimensions": _ai_review_compact_value(item.get("normalized_dimensions")),
         "normalized_metrics": _ai_review_compact_value(item.get("normalized_metrics")),
         "deterministic_proposal": _ai_review_compact_value(item.get("deterministic_proposal")),
+        "ai_inference_proposal": _ai_review_compact_value(item.get("ai_inference_proposal")),
         "current_ai_tier2_proposal": _ai_review_compact_value(item.get("ai_tier2_proposal")),
         "evidence_authority_contract": _ai_review_compact_value(item.get("evidence_authority_contract")),
         "primary_decision_metric": item.get("primary_decision_metric"),
@@ -841,6 +892,12 @@ def _classify_bucket(stage: str, bucket: dict[str, Any]) -> tuple[str, str | Non
         return "source_only_keep_collecting", None, grade
     live_family = _live_family_for(stage, bucket_type, bucket_key)
     ev = _safe_float(bucket.get("source_quality_adjusted_ev_pct"), None)
+    if stage in {"holding", "exit"}:
+        return "source_only_keep_collecting", None, {
+            **grade,
+            "transition_target": "child_evidence_for_lifecycle_flow_only",
+            "grade_reason": "stage_only_holding_exit_bucket_cannot_promote_without_parent_lifecycle_flow",
+        }
     if stage == "lifecycle_flow" and bucket_type == "combo_lifecycle_flow":
         if (
             route == "candidate_recovery_or_relax"
@@ -962,6 +1019,7 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
         "normalized_metrics": taxonomy["normalized_metrics"],
         "missing_dimension_keys": taxonomy["missing_dimension_keys"],
         "deterministic_proposal": deterministic_proposal,
+        "ai_inference_proposal": bucket.get("ai_inference_proposal") or {},
         "ai_tier2_proposal": default_ai_tier2_proposal(bucket_id, deterministic_proposal),
         "ai_tier2_comparative_review": compare_taxonomy_proposals(
             bucket_id=bucket_id,
@@ -2212,6 +2270,8 @@ def build_lifecycle_bucket_discovery_report(
             _candidates_from_attribution(ldm, "lifecycle_flow", "lifecycle_flow_bucket_attribution")
         )
         candidates.extend(_candidates_from_attribution(ldm, "entry", "entry_bucket_attribution"))
+        candidates.extend(_candidates_from_attribution(ldm, "holding", "holding_bucket_attribution"))
+        candidates.extend(_candidates_from_attribution(ldm, "exit", "exit_bucket_attribution"))
         candidates.extend(_candidates_from_attribution(ldm, "scale_in", "scale_in_bucket_attribution"))
         candidates.extend(_candidates_from_attribution(ldm, "overnight", "overnight_bucket_attribution"))
         candidates.extend(_policy_stage_candidates(ldm))

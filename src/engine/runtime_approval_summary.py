@@ -1305,6 +1305,24 @@ def _lifecycle_matrix_summary(ev_report: dict[str, Any], source_path: str | None
             "code_improvement_workorders",
         )
     )
+    holding_bucket_workorders = (
+        matrix.get("holding_bucket_code_improvement_workorders")
+        if isinstance(matrix.get("holding_bucket_code_improvement_workorders"), list)
+        else _bucket_list_from_lifecycle_source(
+            source_payload,
+            "holding_bucket_attribution",
+            "code_improvement_workorders",
+        )
+    )
+    exit_bucket_workorders = (
+        matrix.get("exit_bucket_code_improvement_workorders")
+        if isinstance(matrix.get("exit_bucket_code_improvement_workorders"), list)
+        else _bucket_list_from_lifecycle_source(
+            source_payload,
+            "exit_bucket_attribution",
+            "code_improvement_workorders",
+        )
+    )
     submit_attribution = (
         source_payload.get("submit_bucket_attribution")
         if isinstance(source_payload.get("submit_bucket_attribution"), dict)
@@ -1315,6 +1333,30 @@ def _lifecycle_matrix_summary(ev_report: dict[str, Any], source_path: str | None
         if isinstance(matrix.get("submit_bucket_attribution_summary"), dict)
         else submit_attribution.get("summary")
         if isinstance(submit_attribution.get("summary"), dict)
+        else {}
+    )
+    holding_attribution = (
+        source_payload.get("holding_bucket_attribution")
+        if isinstance(source_payload.get("holding_bucket_attribution"), dict)
+        else {}
+    )
+    holding_attribution_summary = (
+        matrix.get("holding_bucket_attribution_summary")
+        if isinstance(matrix.get("holding_bucket_attribution_summary"), dict)
+        else holding_attribution.get("summary")
+        if isinstance(holding_attribution.get("summary"), dict)
+        else {}
+    )
+    exit_attribution = (
+        source_payload.get("exit_bucket_attribution")
+        if isinstance(source_payload.get("exit_bucket_attribution"), dict)
+        else {}
+    )
+    exit_attribution_summary = (
+        matrix.get("exit_bucket_attribution_summary")
+        if isinstance(matrix.get("exit_bucket_attribution_summary"), dict)
+        else exit_attribution.get("summary")
+        if isinstance(exit_attribution.get("summary"), dict)
         else {}
     )
     post_submit_contract_gaps = (
@@ -1339,6 +1381,16 @@ def _lifecycle_matrix_summary(ev_report: dict[str, Any], source_path: str | None
         "lifecycle_flow_bucket_attribution",
         "complete_flow_count",
     )
+    complete_flow_count = _as_int(matrix.get("complete_flow_count"))
+    if complete_flow_count is None:
+        complete_flow_count = lifecycle_flow_complete_count
+    incomplete_flow_count = _as_int(matrix.get("incomplete_flow_count"))
+    if incomplete_flow_count is None:
+        incomplete_flow_count = _bucket_count_from_lifecycle_source(
+            source_payload,
+            "lifecycle_flow_bucket_attribution",
+            "incomplete_flow_count",
+        )
     lifecycle_flow_runtime_candidate_count = _as_int(
         matrix.get("lifecycle_flow_runtime_candidate_count")
     ) or _bucket_count_from_lifecycle_source(
@@ -1376,6 +1428,26 @@ def _lifecycle_matrix_summary(ev_report: dict[str, Any], source_path: str | None
         "overnight_bucket_attribution",
         "workorder_count",
     )
+    holding_bucket_count = _as_int(matrix.get("holding_bucket_count")) or _bucket_count_from_lifecycle_source(
+        source_payload,
+        "holding_bucket_attribution",
+        "bucket_count",
+    )
+    holding_bucket_workorder_count = _as_int(matrix.get("holding_bucket_workorder_count")) or _bucket_count_from_lifecycle_source(
+        source_payload,
+        "holding_bucket_attribution",
+        "workorder_count",
+    )
+    exit_bucket_count = _as_int(matrix.get("exit_bucket_count")) or _bucket_count_from_lifecycle_source(
+        source_payload,
+        "exit_bucket_attribution",
+        "bucket_count",
+    )
+    exit_bucket_workorder_count = _as_int(matrix.get("exit_bucket_workorder_count")) or _bucket_count_from_lifecycle_source(
+        source_payload,
+        "exit_bucket_attribution",
+        "workorder_count",
+    )
     warnings: list[str] = []
     if not matrix.get("available", True):
         warnings.append("source_quality_blocker")
@@ -1402,8 +1474,17 @@ def _lifecycle_matrix_summary(ev_report: dict[str, Any], source_path: str | None
         "entry_bucket_actionable_count": _as_int(matrix.get("entry_bucket_actionable_count")),
         "lifecycle_flow_bucket_count": lifecycle_flow_bucket_count,
         "lifecycle_flow_complete_count": lifecycle_flow_complete_count,
+        "complete_flow_count": complete_flow_count,
+        "incomplete_flow_count": incomplete_flow_count,
         "lifecycle_flow_runtime_candidate_count": lifecycle_flow_runtime_candidate_count,
         "lifecycle_flow_workorder_count": lifecycle_flow_workorder_count,
+        "identity_missing_count": _as_int(matrix.get("identity_missing_count")),
+        "identity_join_rate": matrix.get("identity_join_rate"),
+        "complete_flow_rate": matrix.get("complete_flow_rate"),
+        "join_contract_blocked": bool(matrix.get("join_contract_blocked")),
+        "bundle_ev_tuning_state": matrix.get("bundle_ev_tuning_state") or "ready_for_bundle_ev_tuning",
+        "top_incomplete_reason": matrix.get("top_incomplete_reason"),
+        "incomplete_flow_reason_counts": matrix.get("incomplete_flow_reason_counts") or {},
         "lifecycle_flow_runtime_approval_candidates": lifecycle_flow_bucket_candidates,
         "lifecycle_flow_code_improvement_workorders": lifecycle_flow_bucket_workorders,
         "entry_bucket_runtime_candidate_count": entry_bucket_runtime_candidate_count,
@@ -1420,6 +1501,14 @@ def _lifecycle_matrix_summary(ev_report: dict[str, Any], source_path: str | None
         "submit_bucket_runtime_approval_candidates": submit_bucket_candidates,
         "submit_bucket_code_improvement_workorders": submit_bucket_workorders,
         "post_submit_contract_gaps": post_submit_contract_gaps,
+        "holding_bucket_attribution_summary": holding_attribution_summary,
+        "holding_bucket_count": holding_bucket_count,
+        "holding_bucket_workorder_count": holding_bucket_workorder_count,
+        "holding_bucket_code_improvement_workorders": holding_bucket_workorders,
+        "exit_bucket_attribution_summary": exit_attribution_summary,
+        "exit_bucket_count": exit_bucket_count,
+        "exit_bucket_workorder_count": exit_bucket_workorder_count,
+        "exit_bucket_code_improvement_workorders": exit_bucket_workorders,
         "scale_in_bucket_runtime_approval_candidates": scale_in_bucket_candidates,
         "scale_in_bucket_code_improvement_workorders": scale_in_bucket_workorders,
         "overnight_bucket_runtime_approval_candidates": overnight_bucket_candidates,
@@ -1937,6 +2026,11 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         f"`{lifecycle_matrix.get('lifecycle_flow_complete_count')}` / "
         f"`{lifecycle_matrix.get('lifecycle_flow_runtime_candidate_count')}` / "
         f"`{lifecycle_matrix.get('lifecycle_flow_workorder_count')}`",
+        f"- holding/exit buckets: `{lifecycle_matrix.get('holding_bucket_count')}` / `{lifecycle_matrix.get('exit_bucket_count')}`",
+        f"- holding/exit workorders: `{lifecycle_matrix.get('holding_bucket_workorder_count')}` / `{lifecycle_matrix.get('exit_bucket_workorder_count')}`",
+        f"- lifecycle identity missing/join_rate: `{lifecycle_matrix.get('identity_missing_count')}` / `{lifecycle_matrix.get('identity_join_rate')}`",
+        f"- lifecycle complete_flow_rate: `{lifecycle_matrix.get('complete_flow_rate')}`",
+        f"- incomplete_flow_reason_counts: `{lifecycle_matrix.get('incomplete_flow_reason_counts') or {}}`",
         f"- fixed_threshold_roles: `{lifecycle_matrix.get('fixed_threshold_roles') or {}}`",
         f"- ready_for_bounded_apply: `{lifecycle_matrix.get('ready_for_bounded_apply')}`",
         f"- warnings: `{lifecycle_matrix.get('warnings') or []}`",

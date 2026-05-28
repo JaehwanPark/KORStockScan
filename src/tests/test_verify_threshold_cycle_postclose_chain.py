@@ -308,6 +308,99 @@ def test_submit_bucket_handoff_preserves_named_entry_contract_order_ids():
     assert report["missing_workorder_order_ids"] == ["order_entry_broker_receipt_contract_gap_review"]
 
 
+def test_stage_only_holding_bucket_handoff_detects_runtime_candidates_and_drops():
+    workorder = {
+        "workorder_id": "holding_bucket_source_quality_1",
+        "bucket_type": "combo_holding_flow",
+        "bucket_key": "source=sim|action=HOLD|profit=profit_unknown|held=held_unknown",
+    }
+    ldm = {
+        "holding_bucket_attribution": {
+            "summary": {"bucket_count": 1, "workorder_count": 1},
+            "runtime_approval_candidates": [{"candidate_id": "forbidden"}],
+            "code_improvement_workorders": [workorder],
+        }
+    }
+    ev = {"lifecycle_decision_matrix": {"holding_bucket_code_improvement_workorders": []}}
+    runtime = {"lifecycle_decision_matrix": {"holding_bucket_code_improvement_workorders": []}}
+
+    report = mod._stage_only_bucket_handoff_status(ldm, ev, runtime, {"orders": []}, stage="holding")
+
+    assert report["status"] == "fail"
+    assert "holding_stage_only_runtime_candidates_forbidden" in report["missing"]
+    assert "threshold_cycle_ev_holding_bucket_count_missing" in report["missing"]
+    assert "runtime_approval_summary_holding_bucket_count_missing" in report["missing"]
+    assert "threshold_cycle_ev_holding_bucket_workorders_missing" in report["missing"]
+    assert "runtime_approval_summary_holding_bucket_workorders_missing" in report["missing"]
+    assert report["missing_workorder_order_ids"] == [mod._stage_bucket_order_id("holding", workorder)]
+
+
+def test_stage_only_holding_bucket_handoff_passes_when_counts_and_orders_propagate():
+    workorder = {
+        "workorder_id": "holding_bucket_source_quality_1",
+        "bucket_type": "combo_holding_flow",
+        "bucket_key": "source=sim|action=HOLD|profit=profit_unknown|held=held_unknown",
+    }
+    order_id = mod._stage_bucket_order_id("holding", workorder)
+    ldm = {
+        "holding_bucket_attribution": {
+            "summary": {"bucket_count": 1, "workorder_count": 1},
+            "runtime_approval_candidates": [],
+            "code_improvement_workorders": [workorder],
+        }
+    }
+    ev = {
+        "lifecycle_decision_matrix": {
+            "holding_bucket_count": 1,
+            "holding_bucket_workorder_count": 1,
+            "holding_bucket_code_improvement_workorders": [workorder],
+        }
+    }
+    runtime = {
+        "lifecycle_decision_matrix": {
+            "holding_bucket_count": 1,
+            "holding_bucket_workorder_count": 1,
+            "holding_bucket_code_improvement_workorders": [workorder],
+        }
+    }
+
+    report = mod._stage_only_bucket_handoff_status(
+        ldm,
+        ev,
+        runtime,
+        {"orders": [{"order_id": order_id}]},
+        stage="holding",
+    )
+
+    assert report["status"] == "pass"
+    assert report["missing"] == []
+
+
+def test_lifecycle_flow_handoff_fails_when_complete_flow_absent():
+    ldm = {
+        "lifecycle_flow_bucket_attribution": {
+            "summary": {
+                "flow_count": 4,
+                "complete_flow_count": 0,
+                "incomplete_flow_count": 4,
+                "complete_flow_rate": 0.0,
+                "join_contract_blocked": True,
+                "bundle_ev_tuning_state": "blocked_join_gap",
+                "top_incomplete_reason": "identity_namespace_mismatch",
+            },
+            "runtime_approval_candidates": [],
+            "code_improvement_workorders": [],
+        }
+    }
+
+    report = mod._lifecycle_flow_bucket_handoff_status(ldm, {}, {}, {"orders": []})
+
+    assert report["status"] == "fail"
+    assert "lifecycle_complete_flow_absent" in report["missing"]
+    assert "lifecycle_join_contract_blocked" in report["missing"]
+    assert report["bundle_ev_tuning_state"] == "blocked_join_gap"
+
+
 def test_buy_funnel_submit_drought_handoff_fails_when_downstream_missing():
     buy = {
         "classification": {

@@ -16,10 +16,18 @@
 - promote_ready_count: `1`
 - entry_bucket_actionable_count: `17`
 - entry_bucket_runtime_candidate_count: `4`
+- holding_bucket_count/workorders: `30` / `10`
+- exit_bucket_count/workorders: `54` / `10`
 - scale_in_bucket_actionable_count: `381`
 - scale_in_bucket_runtime_candidate_count: `10`
 - overnight_bucket_actionable_count: `0`
 - overnight_bucket_runtime_candidate_count: `0`
+- lifecycle_flow_bucket_count: `82`
+- lifecycle_flow_complete_count: `0`
+- lifecycle_flow_runtime_candidate_count: `0`
+- identity_missing_count/join_rate: `0` / `1.0`
+- complete_flow_rate: `0.0`
+- incomplete_flow_reason_counts: `{'missing_entry': 20976, 'missing_holding': 21539, 'missing_exit': 21248, 'missing_submit': 21505}`
 - lifecycle_ai_context_feedback: `{'implementation_status': 'implemented', 'runtime_effect': False, 'decision_authority': 'lifecycle_ai_context_feedback_source_only', 'policy_entry_count': 5, 'bounded_auxiliary_weight_nonzero_count': 1, 'route_counts': {'bounded_auxiliary_weight': 1, 'hold_sample': 4}, 'quality_counts': {'observational_only_pending_outcome': 1, 'hold_sample': 4}}`
 - warnings: `[]`
 
@@ -31,6 +39,36 @@
 | `holding` | 390 | 183 | -1.1027 | 1.0 | `pass` | `EXIT` | False |
 | `scale_in` | 38083 | 38041 | -0.4229 | 1.0 | `pass` | `NO_CHANGE` | False |
 | `exit` | 1290 | 909 | -0.7019 | 1.0 | `pass` | `EXIT` | False |
+
+## Lifecycle Flow Bucket Attribution
+
+- decision_authority: `adm_ldm_lifecycle_flow_bucket_attribution_source_only`
+- metric_scope: `lifecycle_bundle_ev`
+- primary_decision_metric: `source_quality_adjusted_ev_pct`
+- summary: `{'flow_count': 21929, 'complete_flow_count': 0, 'fallback_identity_count': 0, 'identity_missing_count': 0, 'identity_present_count': 41172, 'identity_join_rate': 1.0, 'complete_flow_rate': 0.0, 'stage_identity': {'entry': {'source_row_count': 985, 'identity_missing_count': 0, 'identity_quality_counts': {'candidate_id': 984, 'exact_sim_record_id': 1}, 'identity_join_rate': 1.0}, 'submit': {'source_row_count': 424, 'identity_missing_count': 0, 'identity_quality_counts': {'candidate_id': 35, 'exact_sim_record_id': 389}, 'identity_join_rate': 1.0}, 'holding': {'source_row_count': 390, 'identity_missing_count': 0, 'identity_quality_counts': {'exact_sim_record_id': 390}, 'identity_join_rate': 1.0}, 'scale_in': {'source_row_count': 38083, 'identity_missing_count': 0, 'identity_quality_counts': {'candidate_id': 21754, 'exact_sim_record_id': 16329}, 'identity_join_rate': 1.0}, 'exit': {'source_row_count': 1290, 'identity_missing_count': 0, 'identity_quality_counts': {'exact_sim_record_id': 909, 'candidate_id': 381}, 'identity_join_rate': 1.0}}, 'incomplete_flow_reason_counts': {'missing_entry': 20976, 'missing_holding': 21539, 'missing_exit': 21248, 'missing_submit': 21505}, 'bucket_count': 82, 'runtime_candidate_count': 0, 'workorder_count': 20}`
+
+| lifecycle_flow_bucket_id | sample | joined | ev | route | source_quality |
+| --- | ---: | ---: | ---: | --- | --- |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holdin:8cd4f96ab3` | 16352 | 16339 | -0.6081 | `hold_sample` | `hold_sample_or_incomplete_flow` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holdin:7d607fe77a` | 3818 | 3818 | 0.5364 | `hold_sample` | `hold_sample_or_incomplete_flow` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:5f8bb8e981` | 168 | 168 | -0.4147 | `hold_sample` | `hold_sample_or_incomplete_flow` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_wait:9f284741cf` | 76 | 76 | 2.6587 | `hold_sample` | `hold_sample_or_incomplete_flow` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_66_69_source_wa:0dbddcc72e` | 49 | 49 | 1.5253 | `hold_sample` | `hold_sample_or_incomplete_flow` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:63acce4470` | 41 | 41 | -0.1394 | `hold_sample` | `hold_sample_or_incomplete_flow` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:bf81e4fab9` | 33 | 33 | -0.5406 | `hold_sample` | `hold_sample_or_incomplete_flow` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:e81b5f597d` | 30 | 30 | -0.5137 | `hold_sample` | `hold_sample_or_incomplete_flow` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:b3f591e69a` | 12 | 12 | -0.765 | `hold_sample` | `hold_sample_or_incomplete_flow` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:b75dcb4fef` | 12 | 12 | -0.4425 | `hold_sample` | `hold_sample_or_incomplete_flow` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_sc:bfc859574f` | 201 | 9 | -0.6757 | `hold_sample` | `hold_sample_or_incomplete_flow` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:f87fa0c80c` | 7 | 7 | -0.6829 | `hold_sample` | `hold_sample_or_incomplete_flow` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:34cc4a9d10` | 6 | 6 | -0.046 | `hold_sample` | `hold_sample_or_incomplete_flow` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_wa:f8ff028ae0` | 5 | 5 | 3.3856 | `hold_sample` | `hold_sample_or_incomplete_flow` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_scal:ab1924a1fc` | 35 | 5 | -0.6351 | `hold_sample` | `hold_sample_or_incomplete_flow` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:22134ec0b0` | 4 | 4 | -2.0392 | `hold_sample` | `hold_sample_or_incomplete_flow` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:70e9d883f8` | 4 | 4 | -0.4887 | `hold_sample` | `hold_sample_or_incomplete_flow` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:a1371ed802` | 4 | 4 | -0.9049 | `hold_sample` | `hold_sample_or_incomplete_flow` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:f865a9a3b6` | 4 | 4 | -0.56 | `hold_sample` | `hold_sample_or_incomplete_flow` |
+| `lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:7ed5a2f0f0` | 3 | 3 | -0.2272 | `hold_sample` | `hold_sample_or_incomplete_flow` |
 
 ## Entry Bucket Attribution
 
@@ -146,6 +184,122 @@
 ### Submit Bucket Workorders
 
 - none
+
+## Holding Bucket Attribution
+
+- decision_authority: `adm_ldm_holding_bucket_attribution_source_only`
+- primary_decision_metric: `source_quality_adjusted_ev_pct`
+- allowed_runtime_apply: `False`
+- summary: `{'holding_rows': 390, 'source_row_count': 390, 'bucket_count': 30, 'joined_sample': 915, 'source_quality_adjusted_ev_pct': -1.1027, 'source_quality_gate': 'pass', 'unknown_reason_counts': {'not_applicable': 17, 'join_gap': 9, 'missing_source_field': 2}, 'workorder_count': 10, 'runtime_candidate_count': 0}`
+
+| bucket_type | bucket_key | sample | joined | ev | route |
+| --- | --- | ---: | ---: | ---: | --- |
+| `combo_holding_flow` | `source=scalp_sim_holding_started|action=WAIT|profit=profit_lt_neg070|held=held_unknown` | 87 | 87 | -1.6093 | `source_quality_workorder` |
+| `combo_holding_flow` | `source=scalp_sim_holding_started|action=holding_action_unknown|profit=profit_lt_neg070|held=held_unknown` | 39 | 39 | -1.5133 | `source_quality_workorder` |
+| `combo_holding_flow` | `source=scalp_sim_holding_started|action=WAIT|profit=profit_pos080_pos150|held=held_unknown` | 13 | 13 | -0.0104 | `source_quality_workorder` |
+| `combo_holding_flow` | `source=scalp_sim_holding_started|action=WAIT|profit=profit_neg010_pos080|held=held_unknown` | 11 | 11 | -0.0846 | `source_quality_workorder` |
+| `combo_holding_flow` | `source=scalp_sim_holding_started|action=BUY|profit=profit_lt_neg070|held=held_unknown` | 7 | 7 | -1.9558 | `source_quality_workorder` |
+| `combo_holding_flow` | `source=scalp_sim_holding_started|action=WAIT|profit=profit_pos150_pos300|held=held_unknown` | 7 | 7 | -0.0537 | `source_quality_workorder` |
+| `combo_holding_flow` | `source=scalp_sim_holding_started|action=holding_action_unknown|profit=profit_neg010_pos080|held=held_unknown` | 5 | 5 | -0.4945 | `source_quality_workorder` |
+| `combo_holding_flow` | `source=scalp_sim_holding_started|action=holding_action_unknown|profit=profit_pos080_pos150|held=held_unknown` | 5 | 5 | 0.6145 | `source_quality_workorder` |
+| `combo_holding_flow` | `source=scalp_sim_holding_started|action=WAIT|profit=profit_pos150_pos300_plus|held=held_unknown` | 4 | 4 | 2.4172 | `source_quality_workorder` |
+| `combo_holding_flow` | `source=scalp_sim_holding_started|action=BUY|profit=profit_pos150_pos300_plus|held=held_unknown` | 2 | 2 | 0.9238 | `source_quality_workorder` |
+| `combo_holding_flow` | `source=scalp_sim_holding_started|action=holding_action_unknown|profit=profit_pos150_pos300|held=held_unknown` | 2 | 2 | -0.087 | `source_quality_workorder` |
+| `combo_holding_flow` | `source=scalp_sim_holding_started|action=holding_action_unknown|profit=profit_pos150_pos300_plus|held=held_unknown` | 1 | 1 | 0.4144 | `source_quality_workorder` |
+| `combo_holding_flow` | `source=scalp_sim_holding_started|action=BUY|profit=profit_unknown|held=held_unknown` | 11 | 0 | None | `source_quality_workorder` |
+| `combo_holding_flow` | `source=scalp_sim_holding_started|action=WAIT|profit=profit_unknown|held=held_unknown` | 163 | 0 | None | `source_quality_workorder` |
+| `combo_holding_flow` | `source=scalp_sim_holding_started|action=holding_action_unknown|profit=profit_unknown|held=held_unknown` | 32 | 0 | None | `source_quality_workorder` |
+| `combo_holding_flow` | `source=scalp_sim_overnight_decision|action=holding_action_unknown|profit=profit_neg070_neg010|held=held_020_180s` | 1 | 0 | None | `source_quality_workorder` |
+| `held_bucket` | `held_unknown` | 389 | 183 | -1.1027 | `source_quality_workorder` |
+| `held_bucket` | `held_020_180s` | 1 | 0 | None | `hold_sample` |
+| `holding_action` | `WAIT` | 285 | 122 | -1.0802 | `candidate_tighten_or_exclude` |
+| `holding_action` | `holding_action_unknown` | 85 | 52 | -1.1188 | `source_quality_workorder` |
+| `holding_action` | `BUY` | 20 | 9 | -1.3159 | `candidate_tighten_or_exclude` |
+| `holding_source_stage` | `scalp_sim_holding_started` | 389 | 183 | -1.1027 | `candidate_tighten_or_exclude` |
+| `holding_source_stage` | `scalp_sim_overnight_decision` | 1 | 0 | None | `hold_sample` |
+| `profit_band` | `profit_lt_neg070` | 133 | 133 | -1.5994 | `candidate_tighten_or_exclude` |
+| `profit_band` | `profit_pos080_pos150` | 18 | 18 | 0.1631 | `hold_no_edge` |
+| `profit_band` | `profit_neg010_pos080` | 16 | 16 | -0.2127 | `hold_no_edge` |
+| `profit_band` | `profit_pos150_pos300` | 9 | 9 | -0.0611 | `hold_no_edge` |
+| `profit_band` | `profit_pos150_pos300_plus` | 7 | 7 | 1.7044 | `candidate_recovery_or_relax` |
+| `profit_band` | `profit_neg070_neg010` | 1 | 0 | None | `hold_sample` |
+| `profit_band` | `profit_unknown` | 206 | 0 | None | `source_quality_workorder` |
+
+### Holding Bucket Attribution Workorders
+
+- `holding_bucket_source_quality_1`: `combo_holding_flow` / `source=scalp_sim_holding_started|action=WAIT|profit=profit_lt_neg070|held=held_unknown` -> `holding_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`
+- `holding_bucket_source_quality_2`: `combo_holding_flow` / `source=scalp_sim_holding_started|action=holding_action_unknown|profit=profit_lt_neg070|held=held_unknown` -> `holding_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`
+- `holding_bucket_source_quality_3`: `combo_holding_flow` / `source=scalp_sim_holding_started|action=WAIT|profit=profit_pos080_pos150|held=held_unknown` -> `holding_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`
+- `holding_bucket_source_quality_4`: `combo_holding_flow` / `source=scalp_sim_holding_started|action=WAIT|profit=profit_neg010_pos080|held=held_unknown` -> `holding_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`
+- `holding_bucket_source_quality_5`: `combo_holding_flow` / `source=scalp_sim_holding_started|action=BUY|profit=profit_lt_neg070|held=held_unknown` -> `holding_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`
+- `holding_bucket_source_quality_6`: `combo_holding_flow` / `source=scalp_sim_holding_started|action=WAIT|profit=profit_pos150_pos300|held=held_unknown` -> `holding_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`
+- `holding_bucket_source_quality_7`: `combo_holding_flow` / `source=scalp_sim_holding_started|action=holding_action_unknown|profit=profit_neg010_pos080|held=held_unknown` -> `holding_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`
+- `holding_bucket_source_quality_8`: `combo_holding_flow` / `source=scalp_sim_holding_started|action=holding_action_unknown|profit=profit_pos080_pos150|held=held_unknown` -> `holding_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`
+- `holding_bucket_source_quality_9`: `combo_holding_flow` / `source=scalp_sim_holding_started|action=WAIT|profit=profit_pos150_pos300_plus|held=held_unknown` -> `holding_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`
+- `holding_bucket_source_quality_10`: `combo_holding_flow` / `source=scalp_sim_holding_started|action=BUY|profit=profit_pos150_pos300_plus|held=held_unknown` -> `holding_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`
+
+## Exit Bucket Attribution
+
+- decision_authority: `adm_ldm_exit_bucket_attribution_source_only`
+- primary_decision_metric: `source_quality_adjusted_ev_pct`
+- allowed_runtime_apply: `False`
+- summary: `{'exit_rows': 1290, 'source_row_count': 1290, 'bucket_count': 54, 'joined_sample': 4545, 'source_quality_adjusted_ev_pct': -0.7019, 'source_quality_gate': 'pass', 'unknown_reason_counts': {'not_applicable': 8, 'join_gap': 8, 'missing_source_field': 1}, 'workorder_count': 10, 'runtime_candidate_count': 0}`
+
+| bucket_type | bucket_key | sample | joined | ev | route |
+| --- | --- | ---: | ---: | ---: | --- |
+| `combo_exit_result` | `source=scalp_sim_partial_sell_order_assumed_filled|rule=scalp_sim_panic_lifecycle_partial_exit|outcome=outcome_unknown|profit=profit_neg070_neg010` | 344 | 344 | -0.4828 | `source_quality_workorder` |
+| `combo_exit_result` | `source=scalp_sim_partial_sell_order_assumed_filled|rule=scalp_sim_panic_lifecycle_partial_exit|outcome=outcome_unknown|profit=profit_lt_neg070` | 303 | 303 | -1.1974 | `source_quality_workorder` |
+| `combo_exit_result` | `source=scalp_sim_partial_sell_order_assumed_filled|rule=scalp_sim_panic_lifecycle_partial_exit|outcome=outcome_unknown|profit=profit_neg010_pos080` | 60 | 60 | 0.2383 | `source_quality_workorder` |
+| `combo_exit_result` | `source=sim_post_sell_evaluation|rule=scalp_hard_stop_pct|outcome=GOOD_EXIT|profit=profit_lt_neg070` | 37 | 37 | -2.4919 | `candidate_tighten_or_exclude` |
+| `combo_exit_result` | `source=sim_post_sell_evaluation|rule=scalp_hard_stop_pct|outcome=MISSED_UPSIDE|profit=profit_lt_neg070` | 22 | 22 | -1.0219 | `candidate_tighten_or_exclude` |
+| `combo_exit_result` | `source=sim_post_sell_evaluation|rule=scalp_soft_stop_pct|outcome=MISSED_UPSIDE|profit=profit_lt_neg070` | 19 | 19 | -0.8657 | `candidate_tighten_or_exclude` |
+| `combo_exit_result` | `source=sim_post_sell_evaluation|rule=scalp_soft_stop_pct|outcome=NEUTRAL|profit=profit_lt_neg070` | 19 | 19 | -1.0117 | `candidate_tighten_or_exclude` |
+| `combo_exit_result` | `source=sim_post_sell_evaluation|rule=scalp_soft_stop_pct|outcome=GOOD_EXIT|profit=profit_lt_neg070` | 17 | 17 | -1.9229 | `candidate_tighten_or_exclude` |
+| `combo_exit_result` | `source=scalp_sim_partial_sell_order_assumed_filled|rule=scalp_sim_panic_lifecycle_partial_exit|outcome=outcome_unknown|profit=profit_pos150_pos300` | 16 | 16 | 2.0663 | `source_quality_workorder` |
+| `combo_exit_result` | `source=scalp_sim_partial_sell_order_assumed_filled|rule=scalp_sim_panic_lifecycle_partial_exit|outcome=outcome_unknown|profit=profit_pos080_pos150` | 14 | 14 | 1.1271 | `source_quality_workorder` |
+| `combo_exit_result` | `source=sim_post_sell_evaluation|rule=scalp_hard_stop_pct|outcome=NEUTRAL|profit=profit_lt_neg070` | 9 | 9 | -1.3594 | `candidate_tighten_or_exclude` |
+| `combo_exit_result` | `source=sim_post_sell_evaluation|rule=scalp_trailing_take_profit|outcome=GOOD_EXIT|profit=profit_pos080_pos150` | 9 | 9 | -0.3416 | `candidate_tighten_or_exclude` |
+| `combo_exit_result` | `source=sim_post_sell_evaluation|rule=scalp_trailing_take_profit|outcome=GOOD_EXIT|profit=profit_pos150_pos300` | 6 | 6 | -0.3173 | `candidate_tighten_or_exclude` |
+| `combo_exit_result` | `source=sim_post_sell_evaluation|rule=scalp_trailing_take_profit|outcome=GOOD_EXIT|profit=profit_neg010_pos080` | 5 | 5 | -0.822 | `candidate_tighten_or_exclude` |
+| `combo_exit_result` | `source=sim_post_sell_evaluation|rule=scalp_trailing_take_profit|outcome=MISSED_UPSIDE|profit=profit_pos080_pos150` | 5 | 5 | 1.3017 | `candidate_recovery_or_relax` |
+| `combo_exit_result` | `source=sim_post_sell_evaluation|rule=scalp_trailing_take_profit|outcome=NEUTRAL|profit=profit_neg010_pos080` | 5 | 5 | -0.0011 | `hold_no_edge` |
+| `combo_exit_result` | `source=scalp_sim_partial_sell_order_assumed_filled|rule=scalp_sim_panic_lifecycle_partial_exit|outcome=outcome_unknown|profit=profit_pos150_pos300_plus` | 4 | 4 | 3.9307 | `source_quality_workorder` |
+| `combo_exit_result` | `source=sim_post_sell_evaluation|rule=scalp_trailing_take_profit|outcome=MISSED_UPSIDE|profit=profit_pos150_pos300_plus` | 3 | 3 | 2.3963 | `candidate_recovery_or_relax` |
+| `combo_exit_result` | `source=sim_post_sell_evaluation|rule=scalp_preset_hard_stop_pct|outcome=GOOD_EXIT|profit=profit_lt_neg070` | 2 | 2 | -1.2625 | `hold_sample` |
+| `combo_exit_result` | `source=sim_post_sell_evaluation|rule=scalp_trailing_take_profit|outcome=GOOD_EXIT|profit=profit_pos150_pos300_plus` | 2 | 2 | 0.2763 | `hold_sample` |
+| `combo_exit_result` | `source=sim_post_sell_evaluation|rule=scalp_trailing_take_profit|outcome=MISSED_UPSIDE|profit=profit_neg010_pos080` | 2 | 2 | 0.584 | `hold_sample` |
+| `combo_exit_result` | `source=sim_post_sell_evaluation|rule=scalp_trailing_take_profit|outcome=NEUTRAL|profit=profit_pos150_pos300` | 2 | 2 | 1.1319 | `hold_sample` |
+| `combo_exit_result` | `source=scalp_sim_overnight_sell_today|rule=scalp_sim_overnight_sell_today|outcome=outcome_unknown|profit=profit_neg070_neg010` | 1 | 1 | -0.1725 | `source_quality_workorder` |
+| `combo_exit_result` | `source=scalp_sim_sell_order_assumed_filled|rule=scalp_sim_overnight_sell_today|outcome=outcome_unknown|profit=profit_neg070_neg010` | 1 | 1 | -0.1725 | `source_quality_workorder` |
+| `combo_exit_result` | `source=sim_post_sell_evaluation|rule=scalp_ai_momentum_decay|outcome=NEUTRAL|profit=profit_neg010_pos080` | 1 | 1 | 0.2395 | `hold_sample` |
+| `combo_exit_result` | `source=sim_post_sell_evaluation|rule=scalp_sim_preset_tp_touch|outcome=MISSED_UPSIDE|profit=profit_pos080_pos150` | 1 | 1 | 1.3174 | `hold_sample` |
+| `combo_exit_result` | `source=scalp_sim_euphoria_context_noop|rule=exit_rule_unknown|outcome=outcome_unknown|profit=profit_unknown` | 380 | 0 | None | `source_quality_workorder` |
+| `combo_exit_result` | `source=scalp_sim_panic_context_warning|rule=exit_rule_unknown|outcome=outcome_unknown|profit=profit_unknown` | 1 | 0 | None | `source_quality_workorder` |
+| `exit_outcome` | `outcome_unknown` | 1124 | 743 | -0.6062 | `source_quality_workorder` |
+| `exit_outcome` | `GOOD_EXIT` | 78 | 78 | -1.743 | `candidate_tighten_or_exclude` |
+| `exit_outcome` | `MISSED_UPSIDE` | 52 | 52 | -0.4374 | `candidate_tighten_or_exclude` |
+| `exit_outcome` | `NEUTRAL` | 36 | 36 | -0.8044 | `candidate_tighten_or_exclude` |
+| `exit_rule` | `scalp_sim_panic_lifecycle_partial_exit` | 741 | 741 | -0.6074 | `candidate_tighten_or_exclude` |
+| `exit_rule` | `scalp_hard_stop_pct` | 68 | 68 | -1.8664 | `candidate_tighten_or_exclude` |
+| `exit_rule` | `scalp_soft_stop_pct` | 55 | 55 | -1.2429 | `candidate_tighten_or_exclude` |
+| `exit_rule` | `scalp_trailing_take_profit` | 39 | 39 | 0.2202 | `hold_no_edge` |
+| `exit_rule` | `scalp_preset_hard_stop_pct` | 2 | 2 | -1.2625 | `hold_sample` |
+| `exit_rule` | `scalp_sim_overnight_sell_today` | 2 | 2 | -0.1725 | `hold_sample` |
+| `exit_rule` | `scalp_ai_momentum_decay` | 1 | 1 | 0.2395 | `hold_sample` |
+| `exit_rule` | `scalp_sim_preset_tp_touch` | 1 | 1 | 1.3174 | `hold_sample` |
+
+### Exit Bucket Attribution Workorders
+
+- `exit_bucket_source_quality_1`: `combo_exit_result` / `source=scalp_sim_partial_sell_order_assumed_filled|rule=scalp_sim_panic_lifecycle_partial_exit|outcome=outcome_unknown|profit=profit_neg070_neg010` -> `exit_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`
+- `exit_bucket_source_quality_2`: `combo_exit_result` / `source=scalp_sim_partial_sell_order_assumed_filled|rule=scalp_sim_panic_lifecycle_partial_exit|outcome=outcome_unknown|profit=profit_lt_neg070` -> `exit_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`
+- `exit_bucket_source_quality_3`: `combo_exit_result` / `source=scalp_sim_partial_sell_order_assumed_filled|rule=scalp_sim_panic_lifecycle_partial_exit|outcome=outcome_unknown|profit=profit_neg010_pos080` -> `exit_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`
+- `exit_bucket_source_quality_4`: `combo_exit_result` / `source=sim_post_sell_evaluation|rule=scalp_hard_stop_pct|outcome=GOOD_EXIT|profit=profit_lt_neg070` -> `exit_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`
+- `exit_bucket_source_quality_5`: `combo_exit_result` / `source=sim_post_sell_evaluation|rule=scalp_hard_stop_pct|outcome=MISSED_UPSIDE|profit=profit_lt_neg070` -> `exit_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`
+- `exit_bucket_source_quality_6`: `combo_exit_result` / `source=sim_post_sell_evaluation|rule=scalp_soft_stop_pct|outcome=MISSED_UPSIDE|profit=profit_lt_neg070` -> `exit_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`
+- `exit_bucket_source_quality_7`: `combo_exit_result` / `source=sim_post_sell_evaluation|rule=scalp_soft_stop_pct|outcome=NEUTRAL|profit=profit_lt_neg070` -> `exit_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`
+- `exit_bucket_source_quality_8`: `combo_exit_result` / `source=sim_post_sell_evaluation|rule=scalp_soft_stop_pct|outcome=GOOD_EXIT|profit=profit_lt_neg070` -> `exit_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`
+- `exit_bucket_source_quality_9`: `combo_exit_result` / `source=scalp_sim_partial_sell_order_assumed_filled|rule=scalp_sim_panic_lifecycle_partial_exit|outcome=outcome_unknown|profit=profit_pos150_pos300` -> `exit_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`
+- `exit_bucket_source_quality_10`: `combo_exit_result` / `source=scalp_sim_partial_sell_order_assumed_filled|rule=scalp_sim_panic_lifecycle_partial_exit|outcome=outcome_unknown|profit=profit_pos080_pos150` -> `exit_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation`
 
 ## Scale-In Bucket Attribution
 

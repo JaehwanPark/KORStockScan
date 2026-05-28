@@ -10,14 +10,14 @@
 
 ### swing_sim_probe_label_gap
 
-- sample_count: `113`
+- sample_count: `137`
 - source_quality_status: `implemented`
 - missing_fields: `[]`
 - source_paths: `2`
 
 ### scale_in_counterfactual_gap
 
-- sample_count: `27`
+- sample_count: `30`
 - source_quality_status: `implemented`
 - missing_fields: `[]`
 - source_paths: `3`
@@ -31,7 +31,7 @@
 
 ### sim_holding_runner_counterfactual
 
-- sample_count: `1443`
+- sample_count: `2182`
 - source_quality_status: `implemented`
 - missing_fields: `[]`
 - source_paths: `6`
@@ -45,14 +45,14 @@
 
 ### sim_stop_recovery_counterfactual
 
-- sample_count: `2448`
+- sample_count: `2773`
 - source_quality_status: `implemented`
 - missing_fields: `[]`
-- source_paths: `9`
+- source_paths: `10`
 
 ### stop_recovery_counterfactual
 
-- sample_count: `570`
+- sample_count: `571`
 - source_quality_status: `implemented`
 - missing_fields: `[]`
 - source_paths: `7`

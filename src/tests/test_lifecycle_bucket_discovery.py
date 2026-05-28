@@ -202,6 +202,41 @@ def _write_ldm(path):
                         },
                     ]
                 },
+                "holding_bucket_attribution": {
+                    "buckets": [
+                        {
+                            "bucket_type": "combo_holding_flow",
+                            "bucket_key": "source=scalp_sim_holding_snapshot|action=HOLD|profit=profit_pos080_pos150|held=held_180_600s",
+                            "sample": 15,
+                            "joined_sample": 15,
+                            "join_rate": 1.0,
+                            "source_quality_gate": "pass",
+                            "source_quality_adjusted_ev_pct": 0.6,
+                            "recommended_route": "candidate_recovery_or_relax",
+                            "ai_inference_proposal": {
+                                "model": "gpt-5.4-mini",
+                                "reasoning_effort": "medium",
+                                "runtime_effect": False,
+                            },
+                        }
+                    ],
+                    "runtime_approval_candidates": [],
+                },
+                "exit_bucket_attribution": {
+                    "buckets": [
+                        {
+                            "bucket_type": "combo_exit_result",
+                            "bucket_key": "source=sim_post_sell_evaluations|rule=tp|outcome=GOOD_ENTRY|profit=profit_pos080_pos150",
+                            "sample": 15,
+                            "joined_sample": 15,
+                            "join_rate": 1.0,
+                            "source_quality_gate": "pass",
+                            "source_quality_adjusted_ev_pct": 0.6,
+                            "recommended_route": "candidate_recovery_or_relax",
+                        }
+                    ],
+                    "runtime_approval_candidates": [],
+                },
                 "scale_in_bucket_attribution": {
                     "buckets": [
                         {
@@ -285,6 +320,14 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     assert flow_live["stage"] == "lifecycle_flow"
     assert flow_live["metric_scope"] == "lifecycle_bundle_ev"
     assert flow_live["entry_bucket_id"] == "entry:combo_entry_spot:score_66_69"
+    candidates_by_id = {item["bucket_id"]: item for item in report["candidates"]}
+    holding = candidates_by_id[
+        "holding:combo_holding_flow:source_scalp_sim_holding_snapshot_action_hold_profit_profit_pos080_pos150_held_held_180_600s"
+    ]
+    assert holding["classification_state"] == "source_only_keep_collecting"
+    assert holding["bounded_live_canary_allowed"] is False
+    assert holding["sim_lifecycle_handoff_allowed"] is False
+    assert holding["ai_inference_proposal"]["model"] == "gpt-5.4-mini"
     mixed = states["entry:score_band:score_70_74"]
     assert mixed["evidence_grade"] == mod.EVIDENCE_GRADE_MIXED_SOURCE
     assert mixed["classification_state"] == "sim_auto_approved"

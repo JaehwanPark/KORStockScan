@@ -6,7 +6,7 @@
 - consensus_count: `6`
 - auto_family_candidate_count: `3`
 - code_improvement_order_count: `13`
-- scalp_entry_adm_status/joined: `pass` / `139`
+- scalp_entry_adm_status/joined: `pass` / `184`
 - runtime_effect: `False`
 - decision_authority: `pattern_lab_analysis_workorder_source_only`
 - runtime_mutation_allowed: `False`

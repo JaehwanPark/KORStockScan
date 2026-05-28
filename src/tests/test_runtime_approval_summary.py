@@ -365,6 +365,12 @@ def test_runtime_approval_summary_falls_back_to_lifecycle_bucket_source(tmp_path
                     "joined_rows": 1900,
                     "policy_pass_count": 3,
                     "promote_ready_count": 0,
+                    "complete_flow_count": 0,
+                    "incomplete_flow_count": 4,
+                    "complete_flow_rate": 0.0,
+                    "join_contract_blocked": True,
+                    "bundle_ev_tuning_state": "blocked_join_gap",
+                    "top_incomplete_reason": "identity_namespace_mismatch",
                 },
             },
             ensure_ascii=False,
@@ -389,6 +395,11 @@ def test_runtime_approval_summary_falls_back_to_lifecycle_bucket_source(tmp_path
     assert matrix["scale_in_bucket_runtime_approval_candidates"] == [{"candidate_id": "scale_in_bucket_1"}]
     assert matrix["overnight_bucket_runtime_candidate_count"] == 1
     assert matrix["overnight_bucket_runtime_approval_candidates"] == [{"candidate_id": "overnight_bucket_1"}]
+    assert matrix["complete_flow_count"] == 0
+    assert matrix["incomplete_flow_count"] == 4
+    assert matrix["join_contract_blocked"] is True
+    assert matrix["bundle_ev_tuning_state"] == "blocked_join_gap"
+    assert matrix["top_incomplete_reason"] == "identity_namespace_mismatch"
 
 
 def test_runtime_approval_summary_holds_latency_when_recommendation_not_allowed(tmp_path, monkeypatch):

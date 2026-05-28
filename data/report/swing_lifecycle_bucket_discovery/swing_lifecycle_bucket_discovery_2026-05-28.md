@@ -4,9 +4,9 @@
 - runtime_effect: `False`
 - decision_authority: `swing_ldm_bucket_discovery_sim_auto`
 - source_contract_status: `pass`
-- surfaced_candidate_count: `458`
-- sim_auto_approved_count: `16`
-- code_patch_required_count: `32`
+- surfaced_candidate_count: `455`
+- sim_auto_approved_count: `13`
+- code_patch_required_count: `18`
 - ai_review_augmentation_point_count: `4`
 - human_intervention_required: `False`
 - warnings: `[]`
@@ -19,6 +19,9 @@
 - `swing_bucket_entry_entry_bucket_attribution_blocked_swing_gap_kospi_base_gap_up_missing_vpw_extreme_kospi_ml_si_2cf7f9b12daf` state=`source_only_keep_collecting` stage=`entry` route=`postclose_source_quality_or_sample_collection`
 - `swing_bucket_entry_entry_bucket_attribution_blocked_gatekeeper_reject_kospi_base_flat_up_lt55_vpw_extreme_kospi_f0dd798d0126` state=`source_only_keep_collecting` stage=`entry` route=`postclose_source_quality_or_sample_collection`
 - `swing_bucket_entry_entry_bucket_attribution_blocked_swing_score_vpw_kospi_base_gap_down_large_lt55_vpw_extreme_ae569b16b6dd` state=`source_only_keep_collecting` stage=`entry` route=`postclose_source_quality_or_sample_collection`
+- `swing_bucket_entry_entry_bucket_attribution_market_regime_block_breakout_gap_down_lt55_vpw_extreme_kospi_ml_sim_0b18c34f3ad2` state=`source_only_keep_collecting` stage=`entry` route=`postclose_source_quality_or_sample_collection`
+- `swing_bucket_entry_entry_bucket_attribution_blocked_swing_score_vpw_kospi_base_gap_down_lt55_vpw_extreme_kospi_d6025d325a36` state=`source_only_keep_collecting` stage=`entry` route=`postclose_source_quality_or_sample_collection`
+- `swing_bucket_entry_entry_bucket_attribution_blocked_swing_score_vpw_breakout_gap_down_lt55_vpw_extreme_kospi_ml_6503e6f51b87` state=`source_only_keep_collecting` stage=`entry` route=`postclose_source_quality_or_sample_collection`
 - `swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_e3b3f2a9fc1d` state=`source_only_keep_collecting` stage=`entry` route=`postclose_source_quality_or_sample_collection`
 - `swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_6125282e8239` state=`source_only_keep_collecting` stage=`entry` route=`postclose_source_quality_or_sample_collection`
 - `swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_b1819d5a452c` state=`source_only_keep_collecting` stage=`entry` route=`postclose_source_quality_or_sample_collection`
@@ -28,10 +31,7 @@
 - `swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_blocked_swing_gap_middle_discovery_a98f847c3a96` state=`source_only_keep_collecting` stage=`entry` route=`postclose_source_quality_or_sample_collection`
 - `swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_1054c79628a6` state=`source_only_keep_collecting` stage=`entry` route=`postclose_source_quality_or_sample_collection`
 - `swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_cad499b6cdd6` state=`source_only_keep_collecting` stage=`entry` route=`postclose_source_quality_or_sample_collection`
-- `swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_f1ea7142185d` state=`source_only_keep_collecting` stage=`entry` route=`postclose_source_quality_or_sample_collection`
-- `swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_3692b81ae86b` state=`source_only_keep_collecting` stage=`entry` route=`postclose_source_quality_or_sample_collection`
-- `swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_bc0d83742050` state=`source_only_keep_collecting` stage=`entry` route=`postclose_source_quality_or_sample_collection`
-- `swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_fbaa3fae2cef` state=`source_only_keep_collecting` stage=`entry` route=`postclose_source_quality_or_sample_collection`
+- `swing_bucket_entry_entry_bucket_attribution_swing_strategy_discovery_sim_v1_no_block_observed_bottom_discovery_abe37a4f778a` state=`source_only_keep_collecting` stage=`entry` route=`postclose_source_quality_or_sample_collection`
 
 ## AI Review Augmentation Points
 - `swing_ldm_bucket_semantic_two_pass_review` stage=`bucket_discovery` route=`keep_source_only`

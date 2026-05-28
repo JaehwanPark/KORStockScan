@@ -848,6 +848,7 @@ def test_swing_same_symbol_loss_guard_blocks_probe_after_stop_loss(monkeypatch, 
         SWING_INTRADAY_PROBE_DISCARD_LOG_MIN_INTERVAL_SEC=0,
     )
     logs = []
+    errors = []
     now_ts = 1_768_090_000.0
     monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
     monkeypatch.setattr(state_handlers, "ACTIVE_TARGETS", [])
@@ -861,6 +862,7 @@ def test_swing_same_symbol_loss_guard_blocks_probe_after_stop_loss(monkeypatch, 
         "_log_entry_pipeline",
         lambda stock, code, stage, **fields: logs.append((stage, fields)),
     )
+    monkeypatch.setattr(state_handlers, "log_error", lambda msg: errors.append(msg))
 
     stock = {"id": 701, "name": "HS", "code": "000001", "strategy": "KOSPI_ML"}
     state_handlers._record_swing_same_symbol_loss_reentry_cooldown(
@@ -881,6 +883,7 @@ def test_swing_same_symbol_loss_guard_blocks_probe_after_stop_loss(monkeypatch, 
         ws_data={"curr": 10_000},
         origin_stage="blocked_gatekeeper_reject",
         runtime={"strategy": "KOSPI_ML", "now_ts": now_ts + 60, "ratio": 0.10},
+        extra_fields={"curr_price": 9_999},
     )
 
     stages = [stage for stage, _ in logs]
@@ -890,9 +893,13 @@ def test_swing_same_symbol_loss_guard_blocks_probe_after_stop_loss(monkeypatch, 
     assert discard["discard_reason"] == "same_symbol_loss_reentry_cooldown"
     assert discard["actual_order_submitted"] is False
     assert counterfactual["runtime_effect"] == "counterfactual_only"
+    assert counterfactual["curr_price"] == 10_000
+    assert counterfactual["event_field_conflict_keys"] == "curr_price"
+    assert counterfactual["event_field_conflict_policy"] == "protected_field_preserved"
     assert counterfactual["actual_order_submitted"] is False
     assert counterfactual["broker_order_forbidden"] is True
     assert counterfactual["counterfactual_in_real_like_ev"] is False
+    assert any("[SWING_PROBE_EVENT_FIELD_CONFLICT]" in msg for msg in errors)
     assert state_handlers.ACTIVE_TARGETS == []
 
 
