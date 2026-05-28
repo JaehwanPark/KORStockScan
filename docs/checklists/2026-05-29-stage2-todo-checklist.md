@@ -22,23 +22,40 @@
 
 ## 장전 체크리스트 (08:45~09:00)
 
-- [ ] `[ThresholdEnvAutoApplyPreopen0529] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-05-29`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
+- [x] `[ThresholdEnvAutoApplyPreopen0529] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-05-29`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-28.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-28.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
   - 판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.
   - 금지: blocked family, approval artifact missing, same-stage owner conflict를 수동 env override로 우회하지 않는다.
   - 다음 액션: `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.
+  - 처리 결과(2026-05-29 07:26 KST): `applied_guard_passed_env`.
+  - 근거: [threshold_apply_2026-05-29.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-05-29.json)은 `status=auto_bounded_live_ready`, `apply_mode=auto_bounded_live`, `runtime_change=true`, `approval_requests=[]`, `approval_contract_gaps=[]`로 닫혔다. [threshold_cycle_preopen_2026-05-29.status.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_preopen_status/threshold_cycle_preopen_2026-05-29.status.json)은 `status=succeeded`다.
+  - 다음 액션: 생성된 [threshold_runtime_env_2026-05-29.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-05-29.env)만 장중 runtime source로 인정하고, 장중 threshold mutation 및 blocked family 수동 override는 하지 않는다.
 
-- [ ] `[OpenAIWSPreopenConfirm0529] OpenAI WS 유지 설정 및 entry_price/analyze_target provenance 확인` (`Due: 2026-05-29`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: RuntimeStability`)
+- [x] `[OpenAIWSPreopenConfirm0529] OpenAI WS 유지 설정 및 entry_price/analyze_target provenance 확인` (`Due: 2026-05-29`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: RuntimeStability`)
   - Source: [openai_ws_stability_2026-05-28.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-28.md), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py)
   - 판정 기준: startup env의 OpenAI route/Responses WS 설정과 `analyze_target`, `entry_price` transport provenance를 분리 확인한다.
   - 금지: provider transport 확인을 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경으로 해석하지 않는다.
   - 다음 액션: entry_price transport 표본이 부족하면 장중 표본 재확인 항목과 연결한다.
+  - 처리 결과(2026-05-29 07:26 KST): `pass_keep_ws_with_entry_price_sample_observed`.
+  - 근거: [openai_ws_stability_2026-05-28.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-28.md)는 `decision=keep_ws`, `unique WS calls=4106`, `analyze_target=4101`, `entry_price=5`, `WS fallback=0`, `WS success rate=1.0`, `entry_price canary instrumentation_gap=False`로 닫혔다.
+  - 다음 액션: provider transport/provenance는 계속 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경과 분리한다.
 
-- [ ] `[SwingPreFinalAutoAndFinalApprovalPreopen0529] 스윙 pre-final auto state 및 final approval artifact 확인` (`Due: 2026-05-29`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
+- [x] `[SwingPreFinalAutoAndFinalApprovalPreopen0529] 스윙 pre-final auto state 및 final approval artifact 확인` (`Due: 2026-05-29`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
   - Source: [swing_runtime_approval_2026-05-28.json](/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-05-28.json), [threshold_cycle_ev_2026-05-28.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-28.json)
   - 판정 기준: pre-final은 parsed AI Tier2 auto state가 있어야 하고, final-stage는 사용자 승인 artifact가 있어야 한다.
   - 금지: 스윙 full-live 전환, cap release, provider/bot 변경, hard-safety 완화를 pre-final auto state로 처리하지 않는다.
   - 다음 액션: `pre_final_auto_selected`, `final_approval_artifact_present`, `blocked_by_policy` 중 하나로 닫는다.
+  - 처리 결과(2026-05-29 07:26 KST): `blocked_by_policy`.
+  - 근거: [swing_runtime_approval_2026-05-28.json](/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-05-28.json)은 `summary.requested=0`, `summary.approved=0`, `summary.blocked=14`, `runtime_change=false`, `approval_requests=[]`이며 주요 block reason은 `severe_downside_guard`다.
+  - 다음 액션: 스윙 full-live 전환, cap release, provider/bot 변경, hard-safety 완화는 열지 않고 장후 source report 재판정까지 dry-run/sim-only 경계를 유지한다.
+
+## Runbook 운영 확인
+
+- [x] `[PreopenAutomationHealthCheck20260529] 장전 자동화체인 상태 확인` (`Due: 2026-05-29`, `Slot: PREOPEN`, `TimeWindow: 08:00~09:00`, `Track: RunbookOps`)
+  - Source: [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md), [threshold_cycle_preopen_2026-05-29.status.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_preopen_status/threshold_cycle_preopen_2026-05-29.status.json), [threshold_apply_2026-05-29.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-05-29.json)
+  - 판정: `pass`.
+  - 근거: 시간창 이후 확인 시 당일 preopen apply 산출물이 누락되어 표준 wrapper를 같은 날짜로 재실행했고, `threshold_cycle_preopen_2026-05-29.status.json`이 `status=succeeded`로 생성됐다. runtime env는 `threshold_runtime_env_2026-05-29.env`로 생성됐으며 approval request/contract gap은 없다.
+  - 다음 액션: Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
 
 ## 장중 체크리스트 (09:05~15:20)
 
