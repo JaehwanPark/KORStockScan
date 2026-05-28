@@ -1,7 +1,7 @@
 # 2026-04-19 AIPrompt 작업 8/10 휴일 재점검
 
 > 작성시각: `2026-04-19 09:26 KST`
-> 기준 Source/Section: `docs/2026-04-19-stage2-todo-checklist.md` / `체크박스 미완료`
+> 기준 Source/Section: `docs/checklists/2026-04-19-stage2-todo-checklist.md` / `체크박스 미완료`
 > 대상 Project 항목:
 > - `[Checklist0413] AIPrompt 작업 10 HOLDING hybrid 적용` 1차 결과 평가 / 확대 여부 판정
 > - `[Checklist0413] AIPrompt 작업 8 감사용 핵심값 3종 투입` 미완료 시 사유 + 다음 실행시각 기록
@@ -88,7 +88,7 @@ PYTHONPATH=. .venv/bin/python -m py_compile src/engine/scalping_feature_packet.p
 
 ## 참고 문서
 
-- [2026-04-19-stage2-todo-checklist.md](./2026-04-19-stage2-todo-checklist.md)
-- [2026-04-20-stage2-todo-checklist.md](./2026-04-20-stage2-todo-checklist.md)
-- [2026-04-22-stage2-todo-checklist.md](./2026-04-22-stage2-todo-checklist.md)
+- [2026-04-19-stage2-todo-checklist.md](./checklists/2026-04-19-stage2-todo-checklist.md)
+- [2026-04-20-stage2-todo-checklist.md](./checklists/2026-04-20-stage2-todo-checklist.md)
+- [2026-04-22-stage2-todo-checklist.md](./checklists/2026-04-22-stage2-todo-checklist.md)
 - [2026-04-18-nextweek-validation-axis-table-audited.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-18-nextweek-validation-axis-table-audited.md)

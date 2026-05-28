@@ -342,7 +342,7 @@ def test_filter_stale_same_day_managed_tasks_uses_docs_as_source_of_truth(monkey
         time_window="13:00~13:20",
         assignees="",
         state="OPEN",
-        source="docs/2026-04-27-stage2-todo-checklist.md",
+        source="docs/checklists/2026-04-27-stage2-todo-checklist.md",
         section="체크박스 미완료",
     )
     stale_task = ProjectTask(
@@ -357,7 +357,7 @@ def test_filter_stale_same_day_managed_tasks_uses_docs_as_source_of_truth(monkey
         time_window="08:20~08:35",
         assignees="",
         state="OPEN",
-        source="docs/2026-04-27-stage2-todo-checklist.md",
+        source="docs/checklists/2026-04-27-stage2-todo-checklist.md",
         section="체크박스 미완료",
     )
     foreign_task = ProjectTask(

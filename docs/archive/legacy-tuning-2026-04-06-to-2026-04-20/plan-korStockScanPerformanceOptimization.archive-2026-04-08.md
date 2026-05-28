@@ -831,7 +831,7 @@ else:
 5. 공통 hard time stop은 shadow 평가만 수행
    - 실전 반영은 보류하고 `fallback`/`OPEN_RECLAIM` 트랙 결과를 먼저 축적한다.
 6. `2026-04-09` 실행은 별도 체크리스트 문서로 운영한다.
-   - [2026-04-09-stage2-todo-checklist.md](./2026-04-09-stage2-todo-checklist.md)
+   - [2026-04-09-stage2-todo-checklist.md](./checklists/2026-04-09-stage2-todo-checklist.md)
    - 장전/장중/장후/종일 유지 점검 4블록으로 세분화해 기록한다.
 
 #### 2026-04-09 계획수정 반영: 미수행 이월 + 실행 블록 세분화

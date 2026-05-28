@@ -27,7 +27,7 @@
 ## 장전 체크리스트 (08:20~)
 
 - [x] `[LatencyOps0427] gatekeeper_fast_reuse signature/window 독립축 PREOPEN 승인 판정` (`Due: 2026-04-27`, `Slot: PREOPEN`, `TimeWindow: 08:20~08:35`, `Track: ScalpingLogic`)
-  - Source: [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-24-stage2-todo-checklist.md)
+  - Source: [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-24-stage2-todo-checklist.md)
   - 판정 기준: `reuse window expired`와 `signature changed`를 분리하는 단일 조작점 1개와 rollback guard를 먼저 고정하고, `fallback 비결합`, `단일 live 1축`, `restart.flag` 반영 순서가 준비됐을 때만 live 승인/보류를 닫는다.
   - why: `2026-04-24 14:00 KST` 기준 `quote_fresh family`는 `submitted=0`, `quote_fresh_latency_pass_rate=0.0%`로 잠겼고, 당시 후보는 `gatekeeper_fast_reuse signature/window`로 넘어갔다. 단, 04-27 최종 판정에서는 이 후보를 직접 제출 blocker가 아닌 보조 진단축으로 격하했다.
   - 판정: 보류. `gatekeeper_fast_reuse`의 `signature-only deadband` 형상 자체는 `fallback` 비결합 경로로 유지되지만, 오늘 PREOPEN 기준으로는 `단일 live 1축 + 명시적 ON/OFF rollback` 요건을 아직 충족하지 못한다.
@@ -76,7 +76,7 @@
 ## 장중 체크리스트 (10:00~)
 
 - [x] `[OfflineBundle0427] gatekeeper_fast_reuse 10시 smoke offline bundle export` (`Due: 2026-04-27`, `Slot: INTRADAY`, `TimeWindow: 10:00~10:05`, `Track: ScalpingLogic`)
-  - Source: [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md)
+  - Source: [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-27-stage2-todo-checklist.md)
   - 판정 기준: server-side heavy snapshot 재생성 없이 raw `pipeline_events`를 `evidence_cutoff=10:00:00 KST`로 잘라 `tmp/offline_gatekeeper_fast_reuse_exports/2026-04-27/smoke_1000/`에 export한다. same-day smoke 판단은 이 trimmed raw bundle 기준으로만 닫는다.
   - why: `10:00`은 live 승인 판정이 아니라 경로 활성/로그 스모크 확인 창이다. raw bundle로 고정하면 장중 `intraday_light/full` snapshot 생성 부하 없이 로컬 PC에서 같은 기준으로 재집계할 수 있다.
   - 판정: 완료. `10:00` cutoff raw bundle export와 로컬 analyzer 재집계까지 닫혔다. smoke 창 기준 경로 활성 확인은 되었지만 `fast_reuse` 효과는 아직 관측되지 않았다.
@@ -90,7 +90,7 @@
   - 다음 액션: `11:00` 오전 방향성 bundle에서 `gatekeeper_fast_reuse_ratio`, `sig_changed share`, `budget_pass_to_submitted_rate`, `full/partial` 변화를 다시 보되, `submitted/full/partial` 또는 `latency_state_danger` 개선 없이 live 승인/보류를 뒤집지 않는다.
 
 - [x] `[HoldingExitCanary0427] soft_stop 1차 live canary 10시 중간점검` (`Due: 2026-04-27`, `Slot: INTRADAY`, `TimeWindow: 10:00~10:10`, `Track: Plan`)
-  - Source: [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md)
+  - Source: [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-27-stage2-todo-checklist.md)
   - 판정 기준: PREOPEN에 soft_stop 보유/청산 live canary가 stage-disjoint 예외로 켜졌다면, `soft_stop qualifying cohort`, `submitted_orders/full_fill/partial_fill/completed_valid`, `soft_stop exit count`, `same_symbol_reentry_loss_count`, `fallback_regression=0`, entry latency cohort 분리 여부, `rebound_above_sell_1m/3m`, `mfe_ge_0_5`, `held_sec`, `ai_score`, `hard_stop_whipsaw_aux` 표본수를 잠근다.
   - why: 10시 중간점검은 pass/fail이 아니라 조기 오염 탐지다. 진입병목 canary가 유입 cohort를 바꾸더라도 보유/청산 canary cohort tag가 분리되면 병렬 관찰을 유지할 수 있다.
   - 판정: 완료. `soft_stop` 1차 live canary 10시 중간점검은 `실행 대상 없음`으로 닫는다. today 10시 시점에는 보유/청산 live canary가 실제로 켜지지 않았고, `provisional-stage-disjoint` 후보 관찰 상태만 유지된다.
@@ -99,7 +99,7 @@
     - 따라서 10시 창에서 잠글 대상은 `live canary 중간점검`이 아니라 `관찰 전용 cohort 유지` 여부다. `soft_stop qualifying cohort`는 계속 후보 상태이고, `holding_exit_observation` readiness도 `directional_only=True`, `hard_pass_fail_allowed=False`다.
     - 같은 시점 entry 축에서도 `gatekeeper_fast_reuse` smoke는 `gatekeeper_fast_reuse_ratio=0.0%`, `submitted=2`, `full_fill=0`, `partial_fill=0`라 entry/holding 병렬 live 예외를 다시 열 근거가 부족하다.
   - 검증:
-    - checklist PREOPEN lock: [docs/2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md)
+    - checklist PREOPEN lock: [docs/checklists/2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-27-stage2-todo-checklist.md)
     - 10시 smoke result: [gatekeeper_fast_reuse_summary_smoke_1000.json](/home/ubuntu/KORStockScan/tmp/2026-04-27/gatekeeper_fast_reuse_summary_smoke_1000.json)
   - 다음 액션: `11:00~11:15`에는 `HoldingExitObs0427`로 넘어가 `submitted_orders/full_fill/partial_fill/completed_valid`가 관찰 개시 문턱을 넘는지 다시 본다. live canary 점검은 entry 축이 `latency_state_danger` 기준으로 잠기기 전까지 재개하지 않는다.
 
@@ -118,7 +118,7 @@
   - 다음 액션: `soft_stop`는 여전히 관찰 후보로 유지하되, 11시 시점 same-day next axis는 live canary가 아니라 `soft_stop_rebound_split` 증거 누적과 14:20 재분해 준비로 돌린다. `partial/full`, `initial/pyramid` 합산 결론은 계속 금지한다.
 
 - [x] `[OfflineBundle0427] gatekeeper_fast_reuse 오전 방향성 offline bundle export` (`Due: 2026-04-27`, `Slot: INTRADAY`, `TimeWindow: 11:00~11:05`, `Track: ScalpingLogic`)
-  - Source: [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md)
+  - Source: [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-27-stage2-todo-checklist.md)
   - 판정 기준: 오전 반나절 방향성용 raw bundle을 `evidence_cutoff=11:00:00 KST` 기준으로 `tmp/offline_gatekeeper_fast_reuse_exports/2026-04-27/morning_1100/`에 export한다. same-day 방향성 판정은 이 trimmed raw bundle 기준으로만 닫는다.
   - why: `signature-only deadband`의 방향성 평가는 `gatekeeper_fast_reuse_ratio`, `gatekeeper_reuse_blockers(sig_changed)`, `gatekeeper_eval_ms_p95`만으로 닫을 수 없고, `budget_pass_to_submitted_rate`, `full/partial`, `latency_state_danger`까지 함께 봐야 한다. 이를 server-side fresh snapshot 대신 trimmed raw bundle로 잠그면 운영 부하와 관측 오염을 줄일 수 있다.
   - 판정: 완료. `11:00` cutoff raw bundle export와 로컬 analyzer 재집계까지 닫혔다. 결과는 `10:00 smoke`와 동일하게 `fast_reuse` 효과 미관측이다.
@@ -132,7 +132,7 @@
   - 다음 액션: `LatencyPivot0427`에서 오후 추가 관찰 없이 same-day `parking` 또는 형상 재분해를 즉시 닫는다.
 
 - [x] `[LatencyPivot0427] gatekeeper_fast_reuse 오전 판정 후 same-day 재분해 또는 종료 + 다음 축 즉시 착수` (`Due: 2026-04-27`, `Slot: INTRADAY`, `TimeWindow: 11:05~11:25`, `Track: ScalpingLogic`)
-  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-27-stage2-todo-checklist.md)
   - 판정 기준: `11:00` 방향성 결과가 `gatekeeper_fast_reuse_ratio` 저조, `sig_changed/window expired` 상단 유지, `budget_pass_to_submitted_rate` 미개선, `full_fill/partial_fill` 미개선으로 남으면 `gatekeeper_fast_reuse`는 오후 추가 관찰 없이 즉시 `재분해` 또는 `same-day 종료` 중 하나로 닫는다. 반대로 ratio/submitted 연결성이 개선되면 같은 슬롯에서 `유지 + 다음 관찰창`으로 잠근다.
   - why: Plan Rebase 규칙은 관찰창 종료 후 `즉시 판정 -> 다음 축 즉시 착수`가 기본이며, 효과 미관측 축을 오후까지 유지하는 것은 무효다. 현재 `gatekeeper_fast_reuse`는 PREOPEN 승인 보류 carry-over 상태라 `same-day 종료`로 닫고 직접 blocker로 복귀해야 한다.
   - same-day 분기:
@@ -156,7 +156,7 @@
   - 다음 액션: 이 형상은 보조 진단/회귀 방지로만 남긴다. same-day next axis는 `latency_state_danger -> other_danger relief`로 전환하고, `gatekeeper_fast_reuse`는 `종료된 보조 진단축`으로 최종확정한다.
 
 - [x] `[LatencyReobserve0427] gatekeeper_fast_reuse buy_ratio deadband 반영 후 잔여장 재관찰` (`Due: 2026-04-27`, `Slot: INTRADAY`, `TimeWindow: 11:15~12:00`, `Track: ScalpingLogic`)
-  - Source: [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md), [workorder-sniper-codebase-performance-audit-followup.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-sniper-codebase-performance-audit-followup.md)
+  - Source: [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-27-stage2-todo-checklist.md), [workorder-sniper-codebase-performance-audit-followup.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-sniper-codebase-performance-audit-followup.md)
   - 판정 기준: `restart.flag` 재기동 후 남은 장 raw 또는 bundle 재집계에서 `gatekeeper_fast_reuse_ratio > 0`, 또는 `sig_changed`/`window expired` blocker 구조 완화, 또는 `budget_pass_to_submitted_rate` 개선이 보이면 `재분해 유지`로 잠근다. `12:00`까지도 `fast_reuse_ratio=0.0%`와 blocker 구조 고정이 유지되면 same-day `종료`로 확정한다.
   - why: 초기 same-day 재분해는 `buy_ratio_ws` 과민도를 1필드만 줄이는 최소 수정이었다. 다만 `11:31 KST` raw 재집계에서 `latency_block=3196`, `latency_state_danger=3000`, 세부 조합 `other_danger=1218`, `ws_jitter-only=869`가 다시 확인돼, 남은 오전 관찰은 `gatekeeper_fast_reuse` 단독이 아니라 `latency_other_danger relief` same-day pivot 결과까지 함께 본다.
   - same-day pivot:
@@ -180,7 +180,7 @@
   - 다음 액션: 재기동 후에는 `gatekeeper_fast_reuse_ratio`가 아니라 `submitted/full/partial`과 `latency_state_danger` 감소를 먼저 본다. `gatekeeper_fast_reuse` 전용 offline bundle/코호트는 same-day 종료와 함께 정리 대상으로 넘긴다.
 
 - [x] `[LatencyCanary0427-2] other_danger-only residual override 13:00 즉시 재점검` (`Due: 2026-04-27`, `Slot: INTRADAY`, `TimeWindow: 13:00~13:20`, `Track: ScalpingLogic`)
-  - Source: [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
+  - Source: [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-27-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
   - 판정 기준: `SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=True`인 상태에서 `other_danger-only normal override`가 반영된 채로 13:00 이후 `submitted/full/partial`과 `latency_state_danger`가 실제 완화되는지 즉시 확인한다. 플래그가 False면 해당 항목은 `보류`로 남기고 `LatencyCarry0427`에서 offload 대상 재점검으로 넘긴다.
   - why: 11:31 pivot에서는 `latency_state_danger=3000`가 지배적이었고, 이후 같은 날 실행된 `other_danger relief` 완화는 live 재점검으로만 판별해야 한다. 오탐 방지를 위해 재점검은 same-day 중간시간(13:00) 고정창으로 먼저 실행한다.
   - 강제 운영 규칙:
@@ -213,7 +213,7 @@
     - fresh 로그가 비어 있는 장중 판정은 앞으로도 동일하게 `offline bundle`과 로컬 analyzer 결과를 기준으로 닫는다.
 
 - [x] `[LatencyCanary0427-3] ws_jitter-only relief replacement 15:00 즉시 재점검` (`Due: 2026-04-27`, `Slot: INTRADAY`, `TimeWindow: 14:20~15:00`, `Track: ScalpingLogic`)
-  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-27-stage2-todo-checklist.md)
   - 판정 기준: `SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False`, `SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=True`로 교체한 뒤 `15:00` 전 raw 또는 offline bundle에서 `submitted/full/partial`, `quote_fresh_latency_pass_rate`, `latency_state_danger`, `ws_jitter_relief_canary_applied`, `fallback_regression=0`을 확인한다.
   - why: `13:00` bundle에서 `other_danger=2406` 다음 직접 잔여 원인이 `ws_jitter_too_high=1852`였고, `ws_jitter-only relief`는 이미 코드/테스트/enable flag가 있어 오늘 안에 가장 빠르게 교체 가능한 단일 조작점이다.
   - 강제 운영 규칙:
@@ -259,7 +259,7 @@
 ## 장후 체크리스트 (15:40~)
 
 - [x] `[LatencyCarry0427] gatekeeper_fast_reuse rollback owner/독립 ONOFF 경로 정리 후 재판정 슬롯 고정` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 15:40~15:55`, `Track: ScalpingLogic`)
-  - Source: [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md)
+  - Source: [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-27-stage2-todo-checklist.md)
   - 판정 기준: `gatekeeper_fast_reuse`를 `active-canary-decision`에서 내리고, `SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED`를 현재 entry owner로 잠글 수 있는지 확인한다. 동시에 rollback owner 충돌을 정리하고 `기존 축 OFF -> restart.flag -> 새 축 ON`으로 재현 가능한지 확인한다.
   - why: 오늘 PREOPEN 보류 사유는 기대값 자체가 아니라 `단일 live 1축 + 명시적 rollback owner` 미잠금이다. 이 상태를 그대로 두면 same-day entry axis와 holding/exit axis 병렬 판정도 오염된다.
   - 판정: 완료. `gatekeeper_fast_reuse`는 `active-canary-decision` 후보에서 내리고 `종료된 보조 진단축`으로 닫는다. entry live owner는 `latency_state_danger -> other_danger relief` 1축으로 정리한다.
@@ -303,7 +303,7 @@
 ## 장후 체크리스트 (18:05~18:20)
 
 - [x] `[OpsFollowup0427] pattern lab postclose 산출물/로그 보수 및 재실행 확인` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 18:05~18:20`, `Track: Plan`)
-  - Source: [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-24-stage2-todo-checklist.md)
+  - Source: [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-24-stage2-todo-checklist.md)
   - 판정 기준: `deploy/run_tuning_monitoring_postclose.sh` 기준 실제 로그 경로를 `logs/tuning_monitoring_postclose_cron.log`로 통일해 확인하고, Gemini pattern lab의 `trade_id` dtype merge 오류를 해소한 뒤 `analysis/gemini_scalping_pattern_lab/outputs/*`, `analysis/claude_scalping_pattern_lab/outputs/*` 최신 산출물이 `2026-04-27 POSTCLOSE` 시각으로 갱신되어야 한다.
   - why: `2026-04-24` 점검에서 전용 cron log 두 개는 더 이상 생성되지 않았고, 통합 로그에는 Gemini 분석이 `trade_id str/float64 merge` 예외로 실패한 흔적이 남았다.
   - 판정: 완료. Gemini/Claude pattern lab의 `trade_id` merge 키를 문자열로 정규화했고, postclose wrapper 재실행으로 두 output 디렉터리 산출물을 `2026-04-27 16:45 KST` 기준으로 갱신했다.

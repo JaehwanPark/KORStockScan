@@ -9,7 +9,7 @@
 > - `Phase 2`: `원격 선행` 전제와 충돌하므로 현재 Plan Rebase active owner로 채택하지 않음
 > - `Phase 3-1`: `missed_entry_counterfactual` 관찰축과 `counterfactual 손익 미합산` 원칙으로 부분 채택. 단, 원문의 `optimistic/realistic/conservative` 3모드는 아직 미구현
 > - `Phase 3-2`: `exit_decision_source` provenance는 현재 rebase/checklist owner가 비어 있어 follow-up이 필요함
-> - 후속 owner: [2026-05-08-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-08-stage2-todo-checklist.md) `Phase3Quality0508`
+> - 후속 owner: [2026-05-08-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-05-08-stage2-todo-checklist.md) `Phase3Quality0508`
 
 ## 목적
 

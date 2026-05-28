@@ -1,8 +1,8 @@
 # 2026-04-17 PREOPEN 판정 근거서 (감사인 제출용)
 
-작성일: 2026-04-17  
-제출 대상: 감사인  
-기준 문서: `docs/2026-04-17-stage2-todo-checklist.md`  
+작성일: 2026-04-17
+제출 대상: 감사인
+기준 문서: `docs/checklists/2026-04-17-stage2-todo-checklist.md`
 기준 로그/스냅샷: `trade_review_2026-04-16`, `performance_tuning_2026-04-16`, `entry_pipeline_flow_2026-04-16`, `add_blocked_lock_2026-04-16`
 
 휴일 보정: `2026-04-18~2026-04-19`는 휴일로, 후속 실행 슬롯은 `2026-04-20` 기준으로 재배치함.
@@ -146,8 +146,8 @@
 
 ## 6. 참고 문서
 
-- [2026-04-17-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-17-stage2-todo-checklist.md)
-- [2026-04-16-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-16-stage2-todo-checklist.md)
+- [2026-04-17-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-17-stage2-todo-checklist.md)
+- [2026-04-16-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-16-stage2-todo-checklist.md)
 - [2026-04-16-budget-pass-submitted-bottleneck-analysis.md](/home/ubuntu/KORStockScan/docs/2026-04-16-budget-pass-submitted-bottleneck-analysis.md)
 - [2026-04-16-holding-profit-conversion-plan.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-16-holding-profit-conversion-plan.md)
 - [2026-04-17-model-ab-test-scenario-draft.md](/home/ubuntu/KORStockScan/docs/2026-04-17-model-ab-test-scenario-draft.md)

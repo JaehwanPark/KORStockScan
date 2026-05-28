@@ -1,8 +1,8 @@
 # 감사인 검토 의견 (`2026-04-20`)
 
-> 작성시각: `2026-04-20 KST`  
-> 검토 대상: `docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-20-postclose-audit-result-report.md`  
-> 보조 참조: `docs/2026-04-20-stage2-todo-checklist.md`, `docs/plan-korStockScanPerformanceOptimization.execution-delta.md`  
+> 작성시각: `2026-04-20 KST`
+> 검토 대상: `docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-20-postclose-audit-result-report.md`
+> 보조 참조: `docs/checklists/2026-04-20-stage2-todo-checklist.md`, `docs/plan-korStockScanPerformanceOptimization.execution-delta.md`
 > 작성 원칙: 판정·근거·권고 분리, 추가 자료 요청 명시, 긍정/부정 모두 기록
 
 ---
@@ -171,6 +171,6 @@
 ## 7. 참고 문서
 
 - [2026-04-20-postclose-audit-result-report.md](/home/ubuntu/KORStockScan/docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-20-postclose-audit-result-report.md)
-- [2026-04-20-stage2-todo-checklist.md](./2026-04-20-stage2-todo-checklist.md)
+- [2026-04-20-stage2-todo-checklist.md](./checklists/2026-04-20-stage2-todo-checklist.md)
 - [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md)
 - [plan-korStockScanPerformanceOptimization.performance-report.md](./plan-korStockScanPerformanceOptimization.performance-report.md)

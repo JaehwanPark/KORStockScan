@@ -466,17 +466,17 @@ def resolve_buy_timeout(strategy: str, has_target: bool) -> int:
 
 - 1차 감리: `2026-04-29-daehan-cable-entry-price-audit-review.md`
 - 재보고/구현 현황: `2026-04-29-daehan-cable-entry-price-audit-rereport.md`
-- [2026-04-29-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-29-stage2-todo-checklist.md)
+- [2026-04-29-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-29-stage2-todo-checklist.md)
   - `[EntryPriceDaehanCable0429-Postclose] 대한전선(001440) submitted-but-unfilled 진입가 cap/timeout 적정성 판정`
   - `[DynamicEntryPriceP0Guard0430-Preopen] pre-submit price guard + price snapshot split 구현/검증`
   - `[DynamicEntryPriceP0Guard0430-Postclose] P0 guard KPI/rollback 1차 점검`
-- [2026-05-06-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-06-stage2-todo-checklist.md)
+- [2026-05-06-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-05-06-stage2-todo-checklist.md)
   - `[LatencyEntryPriceGuardV2] bps/가격대별 defensive table 설계`
   - `[PreSubmitGuardDist0506HolidayCarry]`
   - `[PreSubmitGuardObserve0506HolidayCarry]`
   - `[BuyPriceSchemaSplitP1]`
   - `[DynamicEntryResolverIngress0506HolidayCarry]`
-- [2026-05-06-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-06-stage2-todo-checklist.md)
+- [2026-05-06-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-05-06-stage2-todo-checklist.md)
   - `[StateHandlersContext0506]`
   - `[StateHandlersSplit0506]`
   - `[SwingTrailingPolicy0506]`

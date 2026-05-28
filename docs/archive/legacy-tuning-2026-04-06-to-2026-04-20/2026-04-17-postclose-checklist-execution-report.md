@@ -1,7 +1,7 @@
 # 2026-04-17 POSTCLOSE 체크리스트 실행 보고서
 
 작성일: 2026-04-17  
-대상 Source/Section: `docs/2026-04-17-stage2-todo-checklist.md` / `후속 체크리스트 (자동 동기화 대상)`, `휴일 재배치 체크리스트`
+대상 Source/Section: `docs/checklists/2026-04-17-stage2-todo-checklist.md` / `후속 체크리스트 (자동 동기화 대상)`, `휴일 재배치 체크리스트`
 
 ---
 
@@ -37,7 +37,7 @@
   - 결과 없음(code=1). `id=1664` 직접 재현은 현재 미확인.
 
 4. 체크리스트 반영
-- `docs/2026-04-17-stage2-todo-checklist.md`의 대상 7개 항목을 모두 `[x]`로 완료 처리하고 실행시각/다음 실행시각을 절대시각(KST)으로 기록했다.
+- `docs/checklists/2026-04-17-stage2-todo-checklist.md`의 대상 7개 항목을 모두 `[x]`로 완료 처리하고 실행시각/다음 실행시각을 절대시각(KST)으로 기록했다.
 
 ---
 

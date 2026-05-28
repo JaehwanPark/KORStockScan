@@ -23,7 +23,7 @@ ApplyTarget: `main` 코드베이스 문서/리포트/UI만. 실거래 주문 로
 1. Source: `docs/plan-korStockScanPerformanceOptimization.rebase.md`
    - Section: `§1~§6`
    - 사용 원칙: `main-only`, `normal_only`, `post_fallback_deprecation`, `COMPLETED + valid profit_rate`, `full/partial 분리`, `1축 canary`, `shadow 금지`
-2. Source: `docs/2026-04-24-stage2-todo-checklist.md`
+2. Source: `docs/checklists/2026-04-24-stage2-todo-checklist.md`
    - Section: `오늘 목적`, `오늘 강제 규칙`
    - 사용 원칙: `spread relief canary` 주병목 검증축, 신규 BUY `1주 cap`, `initial-only`와 `pyramid-activated` 분리
 3. Source: `docs/plan-korStockScanPerformanceOptimization.performance-report.md`

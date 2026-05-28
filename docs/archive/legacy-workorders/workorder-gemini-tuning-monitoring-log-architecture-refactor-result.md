@@ -146,7 +146,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.decommission_legacy_dashboard_tables
 12. `src/engine/log_archive_service.py`
 13. `src/tests/test_build_tuning_monitoring_parquet.py`
 14. `src/tests/test_dashboard_data_repository.py`
-15. `docs/2026-04-22-stage2-todo-checklist.md`
+15. `docs/checklists/2026-04-22-stage2-todo-checklist.md`
 
 ---
 

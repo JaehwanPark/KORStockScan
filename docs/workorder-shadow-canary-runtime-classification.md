@@ -244,7 +244,7 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
 
 1. [plan-korStockScanPerformanceOptimization.rebase.md](./plan-korStockScanPerformanceOptimization.rebase.md)
 2. [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md)
-3. [2026-04-24-stage2-todo-checklist.md](./2026-04-24-stage2-todo-checklist.md)
+3. [2026-04-24-stage2-todo-checklist.md](./checklists/2026-04-24-stage2-todo-checklist.md)
 
 현재 기준은 아래로 고정한다.
 

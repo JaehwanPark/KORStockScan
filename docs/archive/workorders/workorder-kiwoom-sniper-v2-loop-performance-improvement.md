@@ -6,7 +6,7 @@
 기준 문서:
 
 1. [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
-2. [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md)
+2. [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-27-stage2-todo-checklist.md)
 3. [kiwoom_sniper_v2_performance_review.md](/home/ubuntu/KORStockScan/docs/code-reviews/kiwoom_sniper_v2_performance_review.md)
 
 ---

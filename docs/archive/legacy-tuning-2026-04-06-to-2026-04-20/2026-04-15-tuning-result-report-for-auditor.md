@@ -1,7 +1,7 @@
 # 2026-04-15 튜닝 작업 결과보고서 (감사용)
 
-> 작성시각: 2026-04-15 22:10 KST (메인 로그 재집계 반영)  
-> 기준 Source/Section: `docs/2026-04-15-stage2-todo-checklist.md` (`장중 체크리스트`, `장후 체크리스트`, `익일 이월 작업`)  
+> 작성시각: 2026-04-15 22:10 KST (메인 로그 재집계 반영)
+> 기준 Source/Section: `docs/checklists/2026-04-15-stage2-todo-checklist.md` (`장중 체크리스트`, `장후 체크리스트`, `익일 이월 작업`)
 > 운영모드: `No-Decision Day` 유지 (당일 실전 파라미터/승격 변경 보류)
 
 ---
@@ -21,7 +21,7 @@
 | `budget_pass -> submitted` 전환율 | 0.0% | 0.0% | 공통 병목 존재 |
 | `expired_armed_total` | 374 | 394 | 원격 만료 이벤트 더 많음 |
 
-검증: `build_trade_review_report('2026-04-15')`, `build_entry_pipeline_flow_report('2026-04-15')`  
+검증: `build_trade_review_report('2026-04-15')`, `build_entry_pipeline_flow_report('2026-04-15')`
 재집계 메인 핵심값: `holding_events=5,403`, `full_fill=27`, `partial_fill=53`, `preset_exit_sync_ok/mismatch=40/13`
 
 ---
@@ -77,17 +77,17 @@
 
 ## 5) 2026-04-16 진행방향 예측 (간략)
 
-1. **단기(장전)**  
-   `budget_pass -> submitted` 절단 지점 계측을 보강하면, `expired_armed_after_wait` 비율이 먼저 하락할 가능성이 높다.  
+1. **단기(장전)**
+   `budget_pass -> submitted` 절단 지점 계측을 보강하면, `expired_armed_after_wait` 비율이 먼저 하락할 가능성이 높다.
    단, aggregation gate 미보정 상태에서는 실전 승격/파라미터 변경은 계속 보류가 타당하다.
 
-2. **중기(장중~장후)**  
-   원격은 shadow 표본이 충분히 쌓이기 시작했으므로(`22건`), `action_diverged` 패턴 기반 selective override 후보를 좁힐 수 있다.  
-   메인은 partial/full 표본이 복구되어(`53/27`) 결함축(`sync mismatch=13`)까지 추적 가능해졌다.  
+2. **중기(장중~장후)**
+   원격은 shadow 표본이 충분히 쌓이기 시작했으므로(`22건`), `action_diverged` 패턴 기반 selective override 후보를 좁힐 수 있다.
+   메인은 partial/full 표본이 복구되어(`53/27`) 결함축(`sync mismatch=13`)까지 추적 가능해졌다.
    원격 partial fill 효익 추정은 기존처럼 보수적으로 유지한다.
 
-3. **리스크**  
-   현재 핵심 리스크는 손익 자체보다 `집계 품질(대시보드 노출 불완전)`과 `entry 전환율 0% 병목`이다.  
+3. **리스크**
+   현재 핵심 리스크는 손익 자체보다 `집계 품질(대시보드 노출 불완전)`과 `entry 전환율 0% 병목`이다.
    두 항목이 먼저 해소되지 않으면 튜닝 효과의 원인귀속이 왜곡될 확률이 높다.
 
 ---

@@ -404,7 +404,7 @@
 | 실패 판정 | 제출 증가 대비 `soft_stop` 급증, `full_fill` 악화, `COMPLETED + valid profit_rate` 악화 동반 |
 | 다음 액션 | `soft_stop_micro_grace`는 현 baseline live로 유지한다. 다음 신규 보유/청산 조작점은 v2 재가동이 아니라 `bad_entry_refined_canary`이며, 5/4 장전에는 로드/override/cohort 확인만 남긴다. |
 | 현재 상태 | 선결조건 충족 후 active 단계다. 현재 holding/exit live owner는 `soft_stop_micro_grace`이며, `soft_stop_expert_defense v2`는 2026-04-30 수집 종료 후 기본 OFF다. 다음 신규 후보는 refined `bad_entry` canary다. |
-| Source | [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-24-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md) |
+| Source | [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-24-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md) |
 
 ### DF-HOLDING-002 `soft_stop 1차 live canary` 판정 흐름
 
@@ -430,7 +430,7 @@
 | 2026-04-29 표본 보정 | `올릭스(226950)`은 `GOOD_EXIT`, `덕산하이메탈(077360)`은 `NEUTRAL`, `지앤비에스 에코(382800)`는 `MISSED_UPSIDE`이며 soft stop 후 고가 재진입 체결과 익절이 확인됐다. `코오롱(002020)`은 `GOOD_EXIT`지만 soft stop 후 고가 재진입 제출이 있었다. 따라서 지금 결론은 `micro grace 유지 + recovery recapture 라벨/로그 필요성 관찰`이지, 즉시 `soft_stop_micro_grace_extend` ON이 아니다. |
 | 현재 상태 | `soft_stop_micro_grace` 자체는 유지다. `soft_stop_expert_defense v2`는 `2026-04-30 12:00~15:30 KST` 수집 축으로만 운용했고, 다음 재승인 전에는 v1 micro grace 단독 기준으로 돌아간다. |
 | trailing과의 관계 | `trailing_continuation_micro_canary`는 2순위다. `MISSED_UPSIDE rate >= 60%`, `GOOD_EXIT rate <= 30%`를 충족하고 soft stop 축이 오염되지 않을 때만 다음 후보로 다시 연다. |
-| Source | [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md) |
+| Source | [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-27-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md) |
 
 ### DF-HOLDING-003 `REVERSAL_ADD + bad_entry_block` 전략 분리
 
@@ -444,7 +444,7 @@
 | 승격 조건 | `bad_entry_block_observed`가 최소 10건 이상 누적되고 후속 손실 전환이 높으며 `GOOD_EXIT/MISSED_UPSIDE` 놓침 위험이 낮을 때만 별도 live block canary로 연다. 현재 표본은 이 조건 중 손실 전환은 충족했지만 winner 제거 위험이 남아 refined rule로만 승격한다. |
 | 현재 상태 | `REVERSAL_ADD`는 threshold widen 후에도 `reversal_add_used=0` 상태다. 다만 이는 parking 근거가 아니라 `실행조건 탐색이 아직 덜 끝난 상태`로 해석한다. raw 로그 기준 blocker는 `pnl_out_of_range`와 `hold_sec_out_of_range`가 대부분이고, 기존 `candidate_ready`에는 `hold_sec`가 빠져 있어 실행 불가능 후보가 섞여 있었다. `bad_entry_block`은 observed unique `32`, 후행 sell completed `30`, 후보 평균 `-0.961%`, 손실 `22/30`, soft stop `20/30`으로 신호성은 충분하다. 단 `GOOD_EXIT=13`이 있어 naive block은 EV를 훼손할 수 있다. `2026-04-30` 장후에는 `held_sec>=180`, `profit_rate<=-1.16`, `peak_profit<=+0.05`, `AI<=45`, `recovery_prob_shadow<=0.30` 또는 thesis/adverse 확인 조건으로 `scalp_bad_entry_refined_canary` 구현과 테스트를 완료했다. |
 | 다음 액션 | 5/4 장전에는 신규 설계가 아니라 `SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED=True`, `soft_stop_expert_defense=False`, `bad_entry_refined_candidate/exit` stage 적재와 env override 오염 여부만 확인한다. `REVERSAL_ADD`는 parking하지 않고 `pnl/hold/gate` 실행 blocker를 계속 좁힌다. 후보 전이에 `hold_sec`를 포함해 false candidate를 제거하고, `reversal_add_gate_blocked`를 같이 적재해 실제 체결이 나오도록 다음 완화 owner를 정한다. |
-| Source | [2026-04-30-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-30-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md) |
+| Source | [2026-04-30-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-30-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md) |
 
 ### DF-HOLDING-004 `soft_stop_expert_defense` 계층화 적용 결정
 
@@ -461,7 +461,7 @@
 | rollback guard | guarded cohort 평균손익 `<= -0.30%`, guarded 후 hard/protect stop 전이, `sell_order_failed`, 또는 REVERSAL_ADD 체결 포지션 적용 1건 이상이면 v2를 OFF한다. |
 | 현재 상태 | 최종 집계 기준 `2026-04-30 12:00~15:30 KST`에서 `soft_stop_expert_shadow=58 / unique 11`, `adverse_fill_observed=58 / unique 11`, `soft_stop_absorption_probe=7 / unique 6`, `extend=1`, `recovered=1`, `exit=6`이었다. v2 touched `11`개 중 profit 확인 `10`개 평균은 `-1.567%`이고 exit rule은 `scalp_soft_stop_pct=9`, `scalp_trailing_take_profit=1`이다. `sell_order_failed`, `protect_hard_stop`, `protect_trailing_stop`, `reversal_add_used` 혼입은 없었다. |
 | 후속 액션 | 다음 운영일에는 새 live 축을 v2로 이어가지 않는다. v2 로그는 손실 flow taxonomy(`bad_entry/never-green`, 동일종목 반복손실, positive peak 후 soft stop, v2 guarded, preset hard`)와 refined `bad_entry` canary 설계 근거로만 사용한다. |
-| Source | [2026-04-30-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-30-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md) |
+| Source | [2026-04-30-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-30-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md) |
 
 ### DF-HOLDING-005 `stop arbitration layer`
 

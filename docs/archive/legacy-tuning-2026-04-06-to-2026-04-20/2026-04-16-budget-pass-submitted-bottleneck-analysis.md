@@ -145,4 +145,4 @@
 - `src/engine/sniper_entry_pipeline_report.py`
 - `src/engine/sniper_state_handlers.py`
 - `src/utils/constants.py`
-- [2026-04-17-stage2-todo-checklist.md](./2026-04-17-stage2-todo-checklist.md)
+- [2026-04-17-stage2-todo-checklist.md](./checklists/2026-04-17-stage2-todo-checklist.md)

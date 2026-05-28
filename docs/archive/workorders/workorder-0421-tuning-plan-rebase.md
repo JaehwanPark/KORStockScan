@@ -4,7 +4,7 @@
 실행 시점: `2026-04-21 INTRADAY 10:40~11:50 KST (정렬)` + `POSTCLOSE 15:20~16:35 KST (확정)` + `2026-04-22 PREOPEN 08:00~08:10 KST (canary 적용)`  
 대상: 운영 트레이더 / Codex / 감사인 검토  
 현재 중심 문서: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)  
-기준 보조 문서: [plan-korStockScanPerformanceOptimization.performance-report.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.performance-report.md), [2026-04-21-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-21-stage2-todo-checklist.md)
+기준 보조 문서: [plan-korStockScanPerformanceOptimization.performance-report.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.performance-report.md), [2026-04-21-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-21-stage2-todo-checklist.md)
 
 > 역할 고정: 이 문서는 Plan Rebase의 실행 로그, 상세 근거, 과거 체크리스트를 보존하는 부속문서다. 현재 튜닝 원칙, 판정축, pain point별 실행과제, 일정, 기대효과/실제효과의 중심 기준은 `plan-korStockScanPerformanceOptimization.rebase.md`를 우선한다.
 

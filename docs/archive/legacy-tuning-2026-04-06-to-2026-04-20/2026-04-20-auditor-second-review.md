@@ -192,7 +192,7 @@ cron 설치 자체는 확인됐다. 단, 4/21 체크리스트의 `[OpsVerify0421
 
 - [2026-04-20-auditor-review.md](./2026-04-20-auditor-review.md)
 - [2026-04-20-postclose-audit-result-report.md](/home/ubuntu/KORStockScan/docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-20-postclose-audit-result-report.md)
-- [2026-04-21-stage2-todo-checklist.md](./2026-04-21-stage2-todo-checklist.md)
+- [2026-04-21-stage2-todo-checklist.md](./checklists/2026-04-21-stage2-todo-checklist.md)
 - [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md)
 - `data/report/monitor_snapshots/performance_tuning_2026-04-20.json`
 - `src/utils/constants.py`

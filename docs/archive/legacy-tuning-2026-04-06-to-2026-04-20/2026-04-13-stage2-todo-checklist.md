@@ -470,7 +470,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.watching_prompt_75_shadow_report \
   - 다음 액션:
     - `2026-04-14`에는 해당 exit_rule 표본이 생기면 `entry_mode/position_tag`와 함께 바로 묶어 기록한다.
 - 다음 세션 승격:
-  - `docs/2026-04-14-stage2-todo-checklist.md`를 신규 생성해 오늘 결론을 `2026-04-14` 장전/장중/장후 체크리스트로 승격했다.
+  - `docs/checklists/2026-04-14-stage2-todo-checklist.md`를 신규 생성해 오늘 결론을 `2026-04-14` 장전/장중/장후 체크리스트로 승격했다.
 - `AIPrompt 작업 3 HOLDING hybrid override 조건 명세`:
   - 판정: `오늘 명세 작업 완료`
   - 근거:

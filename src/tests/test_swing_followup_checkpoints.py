@@ -1,25 +1,39 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from src.engine.sync_docs_backlog_to_project import parse_checklist_tasks
 
 
 def test_swing_followup_decision_checkpoints_are_parser_friendly():
-    checklist = Path("docs/2026-05-11-stage2-todo-checklist.md").read_text(encoding="utf-8")
-
     expected = {
-        "SwingRealOrderTransitionDecision0511": ("2026-05-11", "POSTCLOSE", "18:30~18:45", "ScalpingLogic"),
-        "SwingNumericFloorAutoChangeDecision0511": ("2026-05-11", "POSTCLOSE", "18:45~19:00", "ScalpingLogic"),
-        "ThresholdEnvAutoApplyPreopen0512": ("2026-05-12", "PREOPEN", "08:50~09:00", "RuntimeStability"),
+        "SwingRealOrderTransitionDecision0511": (
+            "docs/checklists/2026-05-11-stage2-todo-checklist.md",
+            "2026-05-11",
+            "POSTCLOSE",
+            "18:30~18:45",
+            "ScalpingLogic",
+        ),
+        "SwingNumericFloorAutoChangeDecision0511": (
+            "docs/checklists/2026-05-11-stage2-todo-checklist.md",
+            "2026-05-11",
+            "POSTCLOSE",
+            "18:45~19:00",
+            "ScalpingLogic",
+        ),
+        "ThresholdEnvAutoApplyPreopen0512": (
+            "docs/checklists/2026-05-12-stage2-todo-checklist.md",
+            "2026-05-12",
+            "PREOPEN",
+            "08:50~09:00",
+            "RuntimeStability",
+        ),
     }
 
-    for task_id, (due, slot, time_window, track) in expected.items():
-        marker = (
-            f"- [ ] `[{task_id}]"
-            f""
-        )
-        assert marker in checklist
+    for task_id, (source, due, slot, time_window, track) in expected.items():
+        checklist = Path(source).read_text(encoding="utf-8")
+        assert re.search(rf"^\s*-\s*\[[ x]\]\s+`\[{re.escape(task_id)}\]", checklist, re.MULTILINE)
         assert f"`Due: {due}`" in checklist
         assert f"`Slot: {slot}`" in checklist
         assert f"`TimeWindow: {time_window}`" in checklist

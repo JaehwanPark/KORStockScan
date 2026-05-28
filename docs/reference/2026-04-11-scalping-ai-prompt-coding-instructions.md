@@ -8,9 +8,9 @@
 > - `SCALP_PRESET_TP SELL`, `WATCHING/HOLDING 분리`, `hybrid override`, `감사값 주입`, `정량형 피처`, `critical prompt`, `raw 축소`의 4월 일정표는 역사 문맥으로만 본다
 > - 현재 살아 있는 후속은 `prompt_profile cleanup / legacy prompt 재분류`, `holding/exit decision matrix ladder`, `entry_price_v1 prompt contract`, `Tier1 prompt 경량화`다
 > - 현재 owner:
->   - [2026-05-06-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-06-stage2-todo-checklist.md) `AIEngineFlagOffBacklog0506`, `AIDecisionMatrix0506`
->   - [2026-05-07-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-07-stage2-todo-checklist.md) `AIDecisionMatrixShadow0507`
->   - [2026-05-08-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-08-stage2-todo-checklist.md) `OFIQExpansionLadder0508`
+>   - [2026-05-06-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-05-06-stage2-todo-checklist.md) `AIEngineFlagOffBacklog0506`, `AIDecisionMatrix0506`
+>   - [2026-05-07-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-05-07-stage2-todo-checklist.md) `AIDecisionMatrixShadow0507`
+>   - [2026-05-08-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-05-08-stage2-todo-checklist.md) `OFIQExpansionLadder0508`
 
 ## 목적
 
@@ -78,11 +78,11 @@
   - 코드 경로는 `watching`, `holding`, `exit`, `shared`를 모두 라우팅한다.
   - 실전 호출부는 `watching`과 `holding` 중심이다.
   - `2026-04-22`에 `shared`는 주문/보유/청산 의사결정 연결이 없어 코드정리 후보로 닫혔지만, 5월 체크리스트에 정리 항목이 다시 올라오지 않아 추적이 끊겼다.
-  - 정리 후보(`shared`, `75 canary`, `buy_recovery_canary`, 미사용 `exit`, 비JSON EOD`)는 [2026-05-06-stage2-todo-checklist.md](./2026-05-06-stage2-todo-checklist.md)의 `AIEngineFlagOffBacklog0506`에서 code cleanup/backlog로 재분류한다.
+  - 정리 후보(`shared`, `75 canary`, `buy_recovery_canary`, 미사용 `exit`, 비JSON EOD`)는 [2026-05-06-stage2-todo-checklist.md](./checklists/2026-05-06-stage2-todo-checklist.md)의 `AIEngineFlagOffBacklog0506`에서 code cleanup/backlog로 재분류한다.
 - Tier1 prompt 문자열 경량화:
   - `flash-lite`/`nano` hot path에는 `상위 1%`, `프랍 트레이더`, `극강 공격적`, `전설적인` 같은 역할극 문구를 남기지 않는다.
   - Tier1 프롬프트는 짧은 enum contract, 핵심 피처 해석 기준, `reason` 1줄만 남기고 장황한 discretionary 해석은 Tier2/3 또는 장후 리포트로 격리한다.
-  - 이 누락은 [2026-05-06-stage2-todo-checklist.md](./2026-05-06-stage2-todo-checklist.md)의 `AIEngineFlagOffBacklog0506`에서 prompt cleanup 판정 기준으로 닫는다.
+  - 이 누락은 [2026-05-06-stage2-todo-checklist.md](./checklists/2026-05-06-stage2-todo-checklist.md)의 `AIEngineFlagOffBacklog0506`에서 prompt cleanup 판정 기준으로 닫는다.
 
 ## 예정 일정 (2026-04-14 공격 재고정)
 

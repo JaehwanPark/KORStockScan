@@ -198,6 +198,6 @@ net_aggressive_delta_10t, ask_depth_ratio, net_ask_depth
 
 ## 6) 참고 문서
 
-- [2026-04-18-stage2-todo-checklist.md](./2026-04-18-stage2-todo-checklist.md)
-- [2026-04-20-stage2-todo-checklist.md](./2026-04-20-stage2-todo-checklist.md)
+- [2026-04-18-stage2-todo-checklist.md](./checklists/2026-04-18-stage2-todo-checklist.md)
+- [2026-04-20-stage2-todo-checklist.md](./checklists/2026-04-20-stage2-todo-checklist.md)
 - [2026-04-17-midterm-tuning-performance-report.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-midterm-tuning-performance-report.md)

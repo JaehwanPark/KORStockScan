@@ -11,14 +11,14 @@
 - `docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-20-auditor-third-review.md`
 - `docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-20-operator-response.md`
 - `docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-20-postclose-audit-result-report.md`
-- `docs/2026-04-20-stage2-todo-checklist.md`
+- `docs/checklists/2026-04-20-stage2-todo-checklist.md`
 - `docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-21-auditor-performance-result-report.md`
 - `docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-21-plan-rebase-auditor-report.md`
-- `docs/2026-04-21-stage2-todo-checklist.md`
+- `docs/checklists/2026-04-21-stage2-todo-checklist.md`
 - `docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-22-ai-generated-code-governance.md`
-- `docs/2026-04-22-stage2-todo-checklist.md`
-- `docs/2026-04-23-stage2-todo-checklist.md`
-- `docs/2026-04-24-stage2-todo-checklist.md`
+- `docs/checklists/2026-04-22-stage2-todo-checklist.md`
+- `docs/checklists/2026-04-23-stage2-todo-checklist.md`
+- `docs/checklists/2026-04-24-stage2-todo-checklist.md`
 - `docs/plan-korStockScanPerformanceOptimization.execution-delta.md`
 - `docs/plan-korStockScanPerformanceOptimization.performance-report.md`
 - `docs/plan-korStockScanPerformanceOptimization.prompt.md`
@@ -51,10 +51,10 @@
 - `docs/2026-04-07-stage2-task1-execution-report.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-07-stage2-task1-execution-report.md`
 - `docs/2026-04-07-swing-results` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-07-swing-results`
 - `docs/2026-04-08-develop_branch_only_korstockscan_patch_design_single_doc.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-08-develop_branch_only_korstockscan_patch_design_single_doc.md`
-- `docs/2026-04-08-stage2-todo-checklist.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-08-stage2-todo-checklist.md`
+- `docs/checklists/2026-04-08-stage2-todo-checklist.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-08-stage2-todo-checklist.md`
 - `docs/2026-04-09-codex-remote-server-scalping-instruction.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-09-codex-remote-server-scalping-instruction.md`
 - `docs/2026-04-09-scalping-remaining-plan.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-09-scalping-remaining-plan.md`
-- `docs/2026-04-09-stage2-todo-checklist.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-09-stage2-todo-checklist.md`
+- `docs/checklists/2026-04-09-stage2-todo-checklist.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-09-stage2-todo-checklist.md`
 - `docs/2026-04-10-operator-message-validation.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-10-operator-message-validation.md`
 - `docs/2026-04-10-phase0-phase1-implementation-review.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-10-phase0-phase1-implementation-review.md`
 - `docs/2026-04-10-post-tuning-data-platform-plan.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-10-post-tuning-data-platform-plan.md`
@@ -64,7 +64,7 @@
 - `docs/2026-04-10-scalping-expert-review-result01.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-10-scalping-expert-review-result01.md`
 - `docs/2026-04-10-scalping-expert-review-result02.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-10-scalping-expert-review-result02.md`
 - `docs/2026-04-10-scalping-review-validation.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-10-scalping-review-validation.md`
-- `docs/2026-04-10-stage2-todo-checklist.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-10-stage2-todo-checklist.md`
+- `docs/checklists/2026-04-10-stage2-todo-checklist.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-10-stage2-todo-checklist.md`
 - `docs/2026-04-11-ai-operator-message-validation.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-11-ai-operator-message-validation.md`
 - `docs/2026-04-11-codex-cloud-setup.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-11-codex-cloud-setup.md`
 - `docs/2026-04-11-remote-profiling-fetch-ai-coding-instructions.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-11-remote-profiling-fetch-ai-coding-instructions.md`
@@ -81,11 +81,11 @@
 - `docs/2026-04-13-observation-axis-code-reflection-audit.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-13-observation-axis-code-reflection-audit.md`
 - `docs/2026-04-13-observation-canary-effect-report.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-13-observation-canary-effect-report.md`
 - `docs/2026-04-13-scalping-holding-prompt-final-design.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-13-scalping-holding-prompt-final-design.md`
-- `docs/2026-04-13-stage2-todo-checklist.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-13-stage2-todo-checklist.md`
+- `docs/checklists/2026-04-13-stage2-todo-checklist.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-13-stage2-todo-checklist.md`
 - `docs/2026-04-14-ai-prompt-track-audit.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-14-ai-prompt-track-audit.md`
 - `docs/2026-04-14-ai-prompt-track-strong-review.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-14-ai-prompt-track-strong-review.md`
 - `docs/2026-04-14-audit-reflection-strong-directive.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-14-audit-reflection-strong-directive.md`
-- `docs/2026-04-14-stage2-todo-checklist.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-14-stage2-todo-checklist.md`
+- `docs/checklists/2026-04-14-stage2-todo-checklist.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-14-stage2-todo-checklist.md`
 - `docs/2026-04-15-expired-armed-design.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-15-expired-armed-design.md`
 - `docs/2026-04-15-final-audit-opinion-for-operator.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-15-final-audit-opinion-for-operator.md`
 - `docs/2026-04-15-main-scalping-performance-pros-cons-audit-report.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-15-main-scalping-performance-pros-cons-audit-report.md`
@@ -93,14 +93,14 @@
 - `docs/2026-04-15-scalp-ai-exit-avgdown-implementation-result.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-15-scalp-ai-exit-avgdown-implementation-result.md`
 - `docs/2026-04-15-scalp-reversal-add-implementation-result.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-15-scalp-reversal-add-implementation-result.md`
 - `docs/2026-04-15-scalping-prompt-audit-status-table.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-15-scalping-prompt-audit-status-table.md`
-- `docs/2026-04-15-stage2-todo-checklist.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-15-stage2-todo-checklist.md`
+- `docs/checklists/2026-04-15-stage2-todo-checklist.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-15-stage2-todo-checklist.md`
 - `docs/2026-04-15-tuning-result-report-for-auditor.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-15-tuning-result-report-for-auditor.md`
 - `docs/2026-04-16-0800-operations-apply-result.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-16-0800-operations-apply-result.md`
 - `docs/2026-04-16-avgdown-analysis.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-16-avgdown-analysis.md`
 - `docs/2026-04-16-budget-pass-submitted-bottleneck-analysis.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-16-budget-pass-submitted-bottleneck-analysis.md`
 - `docs/2026-04-16-profit-conversion-gap-analysis.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-16-profit-conversion-gap-analysis.md`
 - `docs/2026-04-16-scalping-ai-routing-senior-architect-review-result.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-16-scalping-ai-routing-senior-architect-review-result.md`
-- `docs/2026-04-16-stage2-todo-checklist.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-16-stage2-todo-checklist.md`
+- `docs/checklists/2026-04-16-stage2-todo-checklist.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-16-stage2-todo-checklist.md`
 - `docs/2026-04-17-ajouib-protect-trailing-mislabel-audit.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-ajouib-protect-trailing-mislabel-audit.md`
 - `docs/2026-04-17-audit-report-noon-vs-trading-results.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-audit-report-noon-vs-trading-results.md`
 - `docs/2026-04-17-final-review-report-for-lead-ai.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-final-review-report-for-lead-ai.md`
@@ -111,17 +111,17 @@
 - `docs/2026-04-17-preopen-audit-unreflected-items.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-preopen-audit-unreflected-items.md`
 - `docs/2026-04-17-preopen-judgment-basis-for-auditor.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-preopen-judgment-basis-for-auditor.md`
 - `docs/2026-04-17-softstop-after-partial-fill-analysis.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-softstop-after-partial-fill-analysis.md`
-- `docs/2026-04-17-stage2-todo-checklist.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-stage2-todo-checklist.md`
+- `docs/checklists/2026-04-17-stage2-todo-checklist.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-stage2-todo-checklist.md`
 - `docs/2026-04-18-aiprompt-task9-main-openai-audit-report.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-18-aiprompt-task9-main-openai-audit-report.md`
 - `docs/2026-04-18-nextweek-validation-axis-table.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-18-nextweek-validation-axis-table.md`
-- `docs/2026-04-18-stage2-todo-checklist.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-18-stage2-todo-checklist.md`
+- `docs/checklists/2026-04-18-stage2-todo-checklist.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-18-stage2-todo-checklist.md`
 - `docs/2026-04-19-aiprompt-task8-task10-holiday-recheck.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-19-aiprompt-task8-task10-holiday-recheck.md`
 - `docs/2026-04-19-audit-report-integrated-dashboard-db-migration.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-19-audit-report-integrated-dashboard-db-migration.md`
 - `docs/2026-04-19-audit-report-pattern-lab-db-ops.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-19-audit-report-pattern-lab-db-ops.md`
 - `docs/2026-04-19-rereview-report-integrated-dashboard-db-migration.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-19-rereview-report-integrated-dashboard-db-migration.md`
 - `docs/2026-04-19-rereview2-report-integrated-dashboard-db-migration.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-19-rereview2-report-integrated-dashboard-db-migration.md`
 - `docs/2026-04-19-review-report-integrated-dashboard-db-migration.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-19-review-report-integrated-dashboard-db-migration.md`
-- `docs/2026-04-19-stage2-todo-checklist.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-19-stage2-todo-checklist.md`
+- `docs/checklists/2026-04-19-stage2-todo-checklist.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-19-stage2-todo-checklist.md`
 - `docs/2026-04-20-add-position-axis-trader-review.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-20-add-position-axis-trader-review.md`
 - `docs/2026-04-20-auditor-review.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-20-auditor-review.md`
 - `docs/2026-04-20-auditor-second-review.md` -> `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-20-auditor-second-review.md`

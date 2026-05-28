@@ -63,7 +63,7 @@
   - 근거: 오전 `09:00~12:00` pipeline 로그 집계에서 `PROMPT_COUNTS={"scalping_shared":39,"scalping_buy_recovery_canary":19,"scalping_entry":357,"-":47}`였고, `SHARED_STAGE_COUNTS={"ai_cooldown_blocked":39}`로 고정됐다. `trade_review`/`performance_tuning` 기준 holding/exit 실표본도 `0`이다.
   - 다음 액션: `shared 제거`는 live 행동 canary가 아니라 호출부 코드정리로 이관하고, 이후 noon/paper 지표 해석에는 `scalping_shared`를 실주문 영향 후보로 섞지 않는다.
 - [x] `[AIPrompt0422] Gemini BUY recovery canary 1일차 판정` (`Due: 2026-04-22`, `Slot: INTRADAY`, `TimeWindow: 12:00~12:20`, `Track: AIPrompt`) (`실행: 2026-04-22 12:19 KST`)
-  - Source: [2026-04-21-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-21-stage2-todo-checklist.md)
+  - Source: [2026-04-21-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-21-stage2-todo-checklist.md)
   - 판정 기준: 04-22 오전 구간까지만 수집하고 `12:00` 이후 생성된 스냅샷을 고정 시점으로 사용한다. `ai_confirmed_buy_count/share`, `WAIT 65/70/75~79`, `blocked_ai_score`, `ai_confirmed->submitted`, `missed_winner_rate`, full/partial fill을 main-only로 판정한다.
   - 스냅샷 기준: `profile=full`, `max_date_basis=2026-04-22`, `trend_max_dates=12`, `evidence_cutoff=12:00 이후 생성된 첫 full snapshot saved_snapshot_at`, `server_comparison=policy_disabled`.
   - 판정: `방향성만: buy_drought_persist 지속`이다. noon 고정 스냅샷 기준 `WAIT65~79` cohort는 `total_candidates=121`, `recovery_check=21`, `promoted=0`, `submitted=0`, `blocked_ai_score=97건(80.2%)`으로 회복 BUY가 실제 제출로 이어지지 못했다. `N_min` 미달이라 hard pass/fail은 금지하지만, 1일차 noon 기준 승격/유지 근거는 없다.
@@ -197,7 +197,7 @@
 
 ## 참고 문서
 
-- [2026-04-21-stage2-todo-checklist.md](./2026-04-21-stage2-todo-checklist.md)
+- [2026-04-21-stage2-todo-checklist.md](./checklists/2026-04-21-stage2-todo-checklist.md)
 - [2026-04-19-aiprompt-task8-task10-holiday-recheck.md](./archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-19-aiprompt-task8-task10-holiday-recheck.md)
 - [2026-04-11-scalping-ai-prompt-coding-instructions.md](./reference/2026-04-11-scalping-ai-prompt-coding-instructions.md)
 - [plan-korStockScanPerformanceOptimization.prompt.md](./plan-korStockScanPerformanceOptimization.prompt.md)

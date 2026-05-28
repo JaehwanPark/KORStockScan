@@ -25,7 +25,7 @@
 
 정정 반영:
 
-- [2026-04-21-stage2-todo-checklist.md](./2026-04-21-stage2-todo-checklist.md): `[QuantVerify0421]` 기준선과 목표값 수정.
+- [2026-04-21-stage2-todo-checklist.md](./checklists/2026-04-21-stage2-todo-checklist.md): `[QuantVerify0421]` 기준선과 목표값 수정.
 - [plan-korStockScanPerformanceOptimization.performance-report.md](./plan-korStockScanPerformanceOptimization.performance-report.md): `2026-04-20` 운영 업데이트의 `gatekeeper_eval_ms_p95` 값을 `19,917ms`로 수정.
 
 오류 원인:
@@ -87,7 +87,7 @@ PYTHONPATH=. .venv/bin/pytest -q \
 
 1. 이 변경은 `TRADING_RULES`의 실전 canary 스위치 변경이므로 1차 감사에서 정한 "운영 상수 변경 시 명시적 사용자 확인" 대상이다.
 2. 사용자 명시 승인 기록을 확보했으므로 "미승인 live 변경" 분류를 해제한다.
-3. [2026-04-21-stage2-todo-checklist.md](./2026-04-21-stage2-todo-checklist.md)의 관련 항목은 승인 확인에서 "승인 로그 고정 + 유지/롤백 조건 확인"으로 전환한다.
+3. [2026-04-21-stage2-todo-checklist.md](./checklists/2026-04-21-stage2-todo-checklist.md)의 관련 항목은 승인 확인에서 "승인 로그 고정 + 유지/롤백 조건 확인"으로 전환한다.
 
 ---
 
@@ -145,5 +145,5 @@ PYTHONPATH=. .venv/bin/pytest -q \
 사용자 실행 명령:
 
 ```bash
-GH_PROJECT_TOKEN=... GH_PROJECT_OWNER=... GH_PROJECT_NUMBER=... GOOGLE_CALENDAR_ID=... GOOGLE_SERVICE_ACCOUNT_JSON='...' DOC_CHECKLIST_PATH=docs/2026-04-21-stage2-todo-checklist.md PYTHONPATH=. bash -lc '.venv/bin/python -m src.engine.sync_docs_backlog_to_project --limit 80 && .venv/bin/python -m src.engine.sync_github_project_calendar'
+GH_PROJECT_TOKEN=... GH_PROJECT_OWNER=... GH_PROJECT_NUMBER=... GOOGLE_CALENDAR_ID=... GOOGLE_SERVICE_ACCOUNT_JSON='...' DOC_CHECKLIST_PATH=docs/checklists/2026-04-21-stage2-todo-checklist.md PYTHONPATH=. bash -lc '.venv/bin/python -m src.engine.sync_docs_backlog_to_project --limit 80 && .venv/bin/python -m src.engine.sync_github_project_calendar'
 ```

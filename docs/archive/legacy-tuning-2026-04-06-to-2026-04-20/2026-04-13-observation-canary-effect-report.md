@@ -153,4 +153,4 @@
 - [server_comparison_2026-04-13.md](../data/report/server_comparison/server_comparison_2026-04-13.md)
 - [watching_prompt_75_shadow_2026-04-10.md](../tmp/watching_prompt_75_shadow_2026-04-10.md)
 - [watching_prompt_75_shadow_2026-04-13.md](../tmp/watching_prompt_75_shadow_2026-04-13.md)
-- [2026-04-08-stage2-todo-checklist.md](./2026-04-08-stage2-todo-checklist.md)
+- [2026-04-08-stage2-todo-checklist.md](./checklists/2026-04-08-stage2-todo-checklist.md)

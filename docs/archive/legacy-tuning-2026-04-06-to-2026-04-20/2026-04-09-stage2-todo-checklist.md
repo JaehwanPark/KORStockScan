@@ -392,6 +392,6 @@
 
 ## 참고 문서
 
-- [2026-04-08-stage2-todo-checklist.md](./2026-04-08-stage2-todo-checklist.md)
-- [2026-04-10-stage2-todo-checklist.md](./2026-04-10-stage2-todo-checklist.md)
+- [2026-04-08-stage2-todo-checklist.md](./checklists/2026-04-08-stage2-todo-checklist.md)
+- [2026-04-10-stage2-todo-checklist.md](./checklists/2026-04-10-stage2-todo-checklist.md)
 - [plan-korStockScanPerformanceOptimization.prompt.md](./plan-korStockScanPerformanceOptimization.prompt.md)

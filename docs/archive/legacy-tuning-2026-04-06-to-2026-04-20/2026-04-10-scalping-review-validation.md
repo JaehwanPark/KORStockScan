@@ -171,8 +171,8 @@
 
 ## 참고 문서
 
-- [2026-04-10-stage2-todo-checklist.md](./2026-04-10-stage2-todo-checklist.md)
-- [2026-04-13-stage2-todo-checklist.md](./2026-04-13-stage2-todo-checklist.md)
+- [2026-04-10-stage2-todo-checklist.md](./checklists/2026-04-10-stage2-todo-checklist.md)
+- [2026-04-13-stage2-todo-checklist.md](./checklists/2026-04-13-stage2-todo-checklist.md)
 - [2026-04-10-scalping-ai-coding-instructions.md](./2026-04-10-scalping-ai-coding-instructions.md)
 - [2026-04-10-scalping-expert-proposals-not-fit.md](./2026-04-10-scalping-expert-proposals-not-fit.md)
 - [2026-04-10-operator-message-validation.md](./2026-04-10-operator-message-validation.md)

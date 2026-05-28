@@ -168,21 +168,21 @@
   - Source: [audit-reports/2026-04-22-plan-rebase-central-audit-review.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-22-plan-rebase-central-audit-review.md)
   - 판정: `미착수 유지`. 다음 live 축 후보로 올리지 않는다.
   - 근거: `trade_review` 기준 `COMPLETED=2`, `avg_profit_rate=-0.47`, `full_fill=2`, `partial_fill=0`이고, `performance_tuning` 기준 `budget_pass=4373 -> submitted=3(0.1%)`, `latency_block=4370`, `quote_fresh_latency_blocks=4029`, `gatekeeper_model_call_ms_p95=22653`다. BUY 후보는 통과하지만 실제 제출로 이어지지 못하는 비중이 압도적이라 지금 `entry_filter_quality`를 열면 기대값 개선보다 표본 고갈 위험이 더 크다.
-  - 다음 액션: 오늘 결론은 `entry_filter_quality` 코드/상수 변경 금지로 즉시 잠그고, [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-24-stage2-todo-checklist.md)의 `[PlanRebase0424] entry_filter_quality 착수 재판정`에서 `budget_pass`, `submitted`, `quote_fresh_latency_blocks` 3지표가 동시에 완화됐는지 먼저 확인한 뒤에만 후보 복귀를 검토한다.
+  - 다음 액션: 오늘 결론은 `entry_filter_quality` 코드/상수 변경 금지로 즉시 잠그고, [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-24-stage2-todo-checklist.md)의 `[PlanRebase0424] entry_filter_quality 착수 재판정`에서 `budget_pass`, `submitted`, `quote_fresh_latency_blocks` 3지표가 동시에 완화됐는지 먼저 확인한 뒤에만 후보 복귀를 검토한다.
 - [x] `[PlanSync0423] AI 엔진 A/B preflight 범위 확정` (`Due: 2026-04-23`, `Slot: POSTCLOSE`, `TimeWindow: 15:35~15:50`, `Track: AIPrompt`) (`실행: 2026-04-23 16:37 KST`)
   - 판정: `범위 확정, 재개 보류`.
   - 근거: `Plan Rebase` 기준상 오늘 live는 `1축 canary`만 허용이고, 현재 upstream보다 downstream 제출 병목이 커서 A/B는 운영판정 축과 분리해야 한다. preflight 범위는 `main-only`, `normal_only`, `COMPLETED+valid profit_rate`, `full/partial 분리`, `ai_confirmed_buy_count/share`, `WAIT65/70/75~79`, `blocked_ai_score`, `ai_confirmed->submitted`, rollback guard는 `submitted 감소`, `fill quality 악화`, `fallback_regression=0`으로 고정한다.
-  - 다음 액션: [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-24-stage2-todo-checklist.md)의 `[AIPrompt0424] AI 엔진 A/B 재개 여부 판정`에서 오늘 확정한 preflight 범위를 그대로 사용한다.
+  - 다음 액션: [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-24-stage2-todo-checklist.md)의 `[AIPrompt0424] AI 엔진 A/B 재개 여부 판정`에서 오늘 확정한 preflight 범위를 그대로 사용한다.
 - [x] `[PlanRebase0423] AI threshold 완화축(score/promote) 승격 조건 재판정` (`Due: 2026-04-23`, `Slot: POSTCLOSE`, `TimeWindow: 17:05~17:15`, `Track: ScalpingLogic`) (`실행: 2026-04-23 16:37 KST`)
-  - Source: [2026-04-23-stage2-todo-checklist.md](./2026-04-23-stage2-todo-checklist.md)
+  - Source: [2026-04-23-stage2-todo-checklist.md](./checklists/2026-04-23-stage2-todo-checklist.md)
   - 판정: `보류`.
   - 근거: `wait6579_ev_cohort` 기준 `approval_gate.min_sample_gate_passed=false`, `full_samples=305`, `partial_samples=1`, `threshold_relaxation_approved=false`이고, `performance_tuning` 기준 `gatekeeper_decisions=33`, `gatekeeper_eval_ms_p95=22653ms`인데 같은 시점에 `budget_pass_to_submitted_rate=0.1%`라서 threshold보다 제출 병목이 훨씬 크다. 시간대 감소 역시 기존 intraday decay 범위 설명이 가능해 `score/promote`를 주원인으로 승격할 근거가 없다.
-  - 다음 액션: 오늘 결론은 [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-24-stage2-todo-checklist.md)의 `VisibleResult0424`/`AIPrompt0424` 항목 입력으로만 사용하고, 전역 threshold 하향은 계속 금지한다.
+  - 다음 액션: 오늘 결론은 [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-24-stage2-todo-checklist.md)의 `VisibleResult0424`/`AIPrompt0424` 항목 입력으로만 사용하고, 전역 threshold 하향은 계속 금지한다.
 - [x] `[LatencyOps0423] gatekeeper latency 경로 분해(lock/cache/quote_fresh)` (`Due: 2026-04-23`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:30`, `Track: Plan`) (`실행: 2026-04-23 16:37 KST`)
   - Source: [ai_engine.py](/home/ubuntu/KORStockScan/src/engine/ai_engine.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py)
   - 판정: `engine lock 원인 아님`, `quote_fresh + 모델응답 지배`.
   - 근거: `gatekeeper_lock_wait_ms_p95=0ms`, `gatekeeper_ai_cache_hit_ratio=0.0`, `gatekeeper_fast_reuse_ratio=0.0`, `gatekeeper_model_call_ms_p95=22653ms`, `quote_fresh_latency_blocks=4029`, `budget_pass=4373 -> submitted=3`라서 lock 직렬화보다 `quote_fresh/spread`와 느린 모델응답이 먼저 병목이다.
-  - 다음 액션: 신규 live 축은 열지 않고, [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-24-stage2-todo-checklist.md)의 `VisibleResult0424` 판정에서 `spread-only downstream 완화`만 다음 후보로 유지한다.
+  - 다음 액션: 신규 live 축은 열지 않고, [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-24-stage2-todo-checklist.md)의 `VisibleResult0424` 판정에서 `spread-only downstream 완화`만 다음 후보로 유지한다.
 
 ### 후순위 축 Parking
 
@@ -196,22 +196,22 @@
   - 판정 기준: `post_sell_feedback_2026-04-23`의 `evaluated_candidates`, `missed_upside_rate`, `capture_efficiency_avg_pct`, `GOOD_EXIT`와 `trade_review`의 `COMPLETED + valid profit_rate`를 함께 대조해 방향성/승격 여부를 확정한다.
   - 판정: `방향성만 확보`, `승격/완화는 보류`.
   - 근거: `post_sell_feedback` 기준 `evaluated_candidates=2`, `missed_upside_rate=0.0`, `good_exit_rate=50.0`, `capture_efficiency_avg_pct=58.3`이고 `trade_review` 기준 `COMPLETED=2`, `avg_profit_rate=-0.47`다. 표본 2건으로 HOLDING 축 확대나 threshold 조정 결론을 내릴 수 없고, soft stop 1건의 rebound miss는 별도 forensic으로 다뤄야 한다.
-  - 다음 액션: [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-24-stage2-todo-checklist.md)의 `[HoldingSoftStop0424] soft stop cooldown/threshold 재판정`에서 동일종목 재진입/cooldown까지 묶어 다시 본다.
+  - 다음 액션: [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-24-stage2-todo-checklist.md)의 `[HoldingSoftStop0424] soft stop cooldown/threshold 재판정`에서 동일종목 재진입/cooldown까지 묶어 다시 본다.
 - [x] `[HoldingSoftStop0423] soft stop rebound/threshold forensic baseline 정리` (`Due: 2026-04-23`, `Slot: POSTCLOSE`, `TimeWindow: 17:30~17:45`, `Track: AIPrompt`) (`실행: 2026-04-23 16:37 KST`)
   - Source: [sniper_post_sell_feedback.py](/home/ubuntu/KORStockScan/src/engine/sniper_post_sell_feedback.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [trade_review_2026-04-23.json](/home/ubuntu/KORStockScan/data/report/monitor_snapshots/trade_review_2026-04-23.json), [post_sell_feedback_2026-04-23.json](/home/ubuntu/KORStockScan/data/report/monitor_snapshots/post_sell_feedback_2026-04-23.json)
   - 판정: `baseline 정리 완료, 전역 완화 보류`.
   - 근거: `soft_stop_forensics.total_soft_stop=1`, `rebound_above_sell_rate 1/3/5/10m=100%`, `rebound_above_buy_rate 1/3/5/10m=0%`, `median/p95 overshoot=0.0`, `same_symbol_soft_stop_cooldown_would_block=false`다. 손절선 자체보다 동일종목 재진입과 rebound miss의 해석 문제가 먼저다.
-  - 다음 액션: [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-24-stage2-todo-checklist.md)의 `[HoldingSoftStop0424] soft stop cooldown/threshold 재판정`에서 `same_symbol cooldown` 후보를 추가 검토한다.
+  - 다음 액션: [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-24-stage2-todo-checklist.md)의 `[HoldingSoftStop0424] soft stop cooldown/threshold 재판정`에서 `same_symbol cooldown` 후보를 추가 검토한다.
 - [x] `[HolidayCarry0423] AIPrompt 작업 10 HOLDING hybrid 확대 여부 재판정` (`Due: 2026-04-23`, `Slot: POSTCLOSE`, `TimeWindow: 16:00~16:10`, `Track: AIPrompt`) (`실행: 2026-04-23 16:37 KST`)
   - 판정 기준: `holding_action_applied`, `holding_force_exit_triggered`, `holding_override_rule_version_count`, `force_exit_shadow_samples` 관찰축 확보 시에만 확대 여부를 닫고, 미확보면 보류 사유를 고정한다.
   - 판정: `확대 보류 유지`.
   - 근거: `performance_tuning.sections.holding_axis` 기준 `holding_action_applied=0`, `holding_force_exit_triggered=0`, `holding_override_rule_version_count=0`, `force_exit_shadow_samples=0`로 관찰축이 여전히 비어 있다. `post_sell_feedback`도 `evaluated_candidates=2`, `capture_efficiency_avg_pct=58.3`, `good_exit_rate=50.0` 수준이라 표본 2건으로는 hybrid 확대가 기대값 개선인지, 단순 hold 연장인지 분리할 수 없다.
-  - 다음 액션: 오늘 결론은 `HOLDING hybrid` live 확대 금지로 즉시 잠그고, [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-24-stage2-todo-checklist.md)의 `[HolidayCarry0424] HOLDING hybrid 확대 재판정`에서 `holding_action_applied>0` 또는 `holding_override_rule_version_count>0`가 확인되지 않으면 확대 논의를 닫는다.
+  - 다음 액션: 오늘 결론은 `HOLDING hybrid` live 확대 금지로 즉시 잠그고, [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-24-stage2-todo-checklist.md)의 `[HolidayCarry0424] HOLDING hybrid 확대 재판정`에서 `holding_action_applied>0` 또는 `holding_override_rule_version_count>0`가 확인되지 않으면 확대 논의를 닫는다.
 - [x] `[AuditFix0423] 2026-04-21 미확정 시 AIPrompt 작업 12 Raw 입력 축소 A/B 점검 범위 최종확정` (`Due: 2026-04-23`, `Slot: POSTCLOSE`, `TimeWindow: 15:50~16:00`, `Track: AIPrompt`) (`실행: 2026-04-23 16:37 KST`)
   - 실행 메모: `2026-04-21`에 확정됐다면 상태 확인만 하고 재작성하지 않는다.
   - 판정: `2026-04-21 확정본 유지`.
-  - 근거: [2026-04-21-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-21-stage2-todo-checklist.md)에서 이미 `2026-04-21 15:24 KST`에 `ai_confirmed_buy_count/share`, `WAIT65/70/75~79`, `blocked_ai_score`, `ai_confirmed->submitted`, `full/partial 분리`, `COMPLETED+valid profit_rate` 범위가 확정돼 있다. 오늘 다시 쓸 항목이 아니라 `2026-04-24` A/B preflight와 재판정이 이 확정본을 그대로 재사용해야 한다는 의미다.
-  - 다음 액션: [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-24-stage2-todo-checklist.md)의 `[AIPrompt0424] AI 엔진 A/B 재개 여부 판정`은 오늘 재작성 없이 `2026-04-21` 확정 범위를 그대로 입력으로 사용한다.
+  - 근거: [2026-04-21-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-21-stage2-todo-checklist.md)에서 이미 `2026-04-21 15:24 KST`에 `ai_confirmed_buy_count/share`, `WAIT65/70/75~79`, `blocked_ai_score`, `ai_confirmed->submitted`, `full/partial 분리`, `COMPLETED+valid profit_rate` 범위가 확정돼 있다. 오늘 다시 쓸 항목이 아니라 `2026-04-24` A/B preflight와 재판정이 이 확정본을 그대로 재사용해야 한다는 의미다.
+  - 다음 액션: [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-24-stage2-todo-checklist.md)의 `[AIPrompt0424] AI 엔진 A/B 재개 여부 판정`은 오늘 재작성 없이 `2026-04-21` 확정 범위를 그대로 입력으로 사용한다.
 - [x] `[AuditFix0423] 작업12 범위 미확정 시 사유 + 다음 실행시각 + escalation 경로 기록` (`Due: 2026-04-23`, `Slot: POSTCLOSE`, `TimeWindow: 16:00~16:10`, `Track: Plan`) (`실행: 2026-04-23 16:37 KST`)
   - 판정: `해당 없음`.
   - 근거: 바로 위 항목이 이미 `확정` 상태라서 미확정 사유/escalation 분기 자체가 열리지 않는다.
@@ -220,27 +220,27 @@
   - 판정 기준: `SCALPING/PYRAMID only`, `main-only`, `flag OFF code-load tonight`, `zero_qty/cap_qty/floor_applied` 관찰 로그 필수
   - 판정: `오늘 밤 코드 적재까지 진행, live ON은 내일 단일축 판정`.
   - 근거: `Plan Rebase` 기준은 `main-only`, `1축 canary`, `shadow 금지`다. 그래서 기존 `remote canary 후보` 해석은 폐기하고, 오늘은 `SCALPING/PYRAMID`에서만 `buy_qty=1`일 때 `floor_applied` 관찰이 가능한 Stage 1 코드를 `flag OFF`로 적재한다. `auth_zero_qty`는 인증장애 분리 코호트이고, Stage 1은 예산이 남았는데 `template_qty=0`인 케이스만 다룬다.
-  - 다음 액션: 오늘 코드 적재 후 [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-24-stage2-todo-checklist.md)의 `ScaleIn0424` 항목에서 `flag OFF 유지 증적 -> PREOPEN env/restart 확인 -> POSTCLOSE live ON 승인/보류` 순서로 닫는다.
+  - 다음 액션: 오늘 코드 적재 후 [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-24-stage2-todo-checklist.md)의 `ScaleIn0424` 항목에서 `flag OFF 유지 증적 -> PREOPEN env/restart 확인 -> POSTCLOSE live ON 승인/보류` 순서로 닫는다.
 - [x] `[ScaleIn0423] PYRAMID zero_qty Stage 1은 split-entry/HOLDING 관찰축과 분리 유지 확인` (`Due: 2026-04-23`, `Slot: POSTCLOSE`, `TimeWindow: 16:20~16:30`, `Track: Plan`) (`실행: 2026-04-23 16:37 KST`)
   - 판정 기준: 같은 서버/같은 관찰창에 실주문 변경 2축 이상 금지
   - 판정: `분리 유지`.
   - 근거: `Plan Rebase` 기준상 same-day 다축 변경이 금지되고, 오늘도 `entry_filter_quality/HOLDING/EOD`와 섞지 않기로 고정했다.
-  - 다음 액션: [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-24-stage2-todo-checklist.md)의 `ScaleIn0424` 항목에서 Stage 1을 독립 판단축으로 유지한다.
+  - 다음 액션: [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-24-stage2-todo-checklist.md)의 `ScaleIn0424` 항목에서 Stage 1을 독립 판단축으로 유지한다.
 - [x] `[ScaleIn0423] 물타기축(AVG_DOWN/REVERSAL_ADD) 재오픈 일정 및 shadow 전제조건 확정` (`Due: 2026-04-23`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:40`, `Track: ScalpingLogic`) (`실행: 2026-04-23 16:37 KST`)
   - 판정 기준: `buy_qty 분포`, `reversal_add_candidate 표본`, `add_judgment_locked 교차`, `next-week remote shadow-only 여부`를 함께 기록하고, 이번 주 실주문 변경 금지를 명시
   - 판정: `재오픈 일정만 유지, shadow 전제는 폐기`.
   - 근거: `Plan Rebase` 기준상 신규/보완축 `shadow 금지`라서 기존 문구의 `next-week remote shadow-only`는 더 이상 유효하지 않다. `AVG_DOWN/REVERSAL_ADD`는 이번 주 실주문 변경 금지를 유지하고, 다음주에도 canary 후보성만 재판정한다.
-  - 다음 액션: [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-24-stage2-todo-checklist.md)의 `[ScaleIn0424] 물타기축(AVG_DOWN/REVERSAL_ADD) 다음주 착수 재판정`에서 `canary-only 가능/보류`만 남긴다.
+  - 다음 액션: [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-24-stage2-todo-checklist.md)의 `[ScaleIn0424] 물타기축(AVG_DOWN/REVERSAL_ADD) 다음주 착수 재판정`에서 `canary-only 가능/보류`만 남긴다.
 - [x] `[PlanRebase0423] position_addition_policy 후순위 설계 초안` (`Due: 2026-04-23`, `Slot: POSTCLOSE`, `TimeWindow: 16:40~16:50`, `Track: ScalpingLogic`) (`실행: 2026-04-23 16:37 KST`)
   - Source: [audit-reports/2026-04-22-plan-rebase-central-audit-review.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-22-plan-rebase-central-audit-review.md)
   - 판정: `후순위 설계만 유지`.
   - 근거: 오늘 기준 주병목이 여전히 `submitted 단절`이라 `position_addition_policy` live 논의를 열 단계가 아니다. 따라서 상태머신 초안/문서 레벨 후순위 설계로만 남긴다.
-  - 다음 액션: [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-24-stage2-todo-checklist.md)의 `VisibleResult0424` 판정에서 승격축이 없을 때만 후순위 설계 문맥으로 재사용한다.
+  - 다음 액션: [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-24-stage2-todo-checklist.md)의 `VisibleResult0424` 판정에서 승격축이 없을 때만 후순위 설계 문맥으로 재사용한다.
 - [x] `[OpsEODSplit0423] 관찰축 정리 완료 시 KRX/NXT 분리 EOD 청산 시간/실행경로 확정` (`Due: 2026-04-23`, `Slot: POSTCLOSE`, `TimeWindow: 16:50~17:00`, `Track: ScalpingLogic`) (`실행: 2026-04-23 16:37 KST`)
   - 판정 기준: `partial/rebase/soft-stop` 관찰축이 당일 기준으로 잠겼을 때만 착수한다. `KRX`는 정규장 종료 전 청산 재시도 버퍼를 확보하고, `NXT 가능` 종목은 별도 시간창/경로로 분리해 `sell_order_failed -> HOLDING 롤백 반복` 감소 목표를 수치로 기록한다.
   - 판정: `보류, 내일 재판정`.
   - 근거: today 표본은 `COMPLETED=2`, `partial_fill=0`, soft-stop forensic도 1건뿐이라 KRX/NXT 분리 시간을 지금 확정하면 원인귀속보다 출구축을 앞세우게 된다.
-  - 다음 액션: [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-24-stage2-todo-checklist.md)의 `[OpsEODSplit0424] EOD/NXT 착수 여부 재판정`에서만 다시 연다.
+  - 다음 액션: [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-24-stage2-todo-checklist.md)의 `[OpsEODSplit0424] EOD/NXT 착수 여부 재판정`에서만 다시 연다.
 - [x] `[DataArch0423] monitor snapshot raw 압축 검증축 보강(parquet/manifest)` (`Due: 2026-04-23`, `Slot: POSTCLOSE`, `TimeWindow: 18:30~18:40`, `Track: Plan`) (`실행: 2026-04-23 16:37 KST`)
   - 판정 기준: `compress_db_backfilled_files` snapshot 검증을 DB snapshot 테이블 의존에서 parquet/manifest(또는 동등 검증) 기준으로 보강하고, `skipped_unverified` 감소 여부를 기록한다.
   - 판정: `완료`.
@@ -253,7 +253,7 @@
 
 ## 참고 문서
 
-- [2026-04-22-stage2-todo-checklist.md](./2026-04-22-stage2-todo-checklist.md)
+- [2026-04-22-stage2-todo-checklist.md](./checklists/2026-04-22-stage2-todo-checklist.md)
 - [2026-04-11-scalping-ai-prompt-coding-instructions.md](./reference/2026-04-11-scalping-ai-prompt-coding-instructions.md)
 - [plan-korStockScanPerformanceOptimization.prompt.md](./plan-korStockScanPerformanceOptimization.prompt.md)
 - [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md)

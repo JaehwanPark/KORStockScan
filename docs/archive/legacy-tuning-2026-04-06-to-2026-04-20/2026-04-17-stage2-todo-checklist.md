@@ -201,7 +201,7 @@
 
 ## 참고 문서
 
-- [2026-04-16-stage2-todo-checklist.md](./2026-04-16-stage2-todo-checklist.md)
+- [2026-04-16-stage2-todo-checklist.md](./checklists/2026-04-16-stage2-todo-checklist.md)
 - [2026-04-17-preopen-judgment-basis-for-auditor.md](./2026-04-17-preopen-judgment-basis-for-auditor.md)
 - [2026-04-11-scalping-ai-prompt-coding-instructions.md](./2026-04-11-scalping-ai-prompt-coding-instructions.md)
 - [plan-korStockScanPerformanceOptimization.prompt.md](./plan-korStockScanPerformanceOptimization.prompt.md)

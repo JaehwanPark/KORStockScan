@@ -27,5 +27,5 @@
 
 ## 참고
 
-- Source: `docs/2026-04-16-stage2-todo-checklist.md`
+- Source: `docs/checklists/2026-04-16-stage2-todo-checklist.md`
 - Related: `docs/scalping_ai_routing_instruction_integrated.md`

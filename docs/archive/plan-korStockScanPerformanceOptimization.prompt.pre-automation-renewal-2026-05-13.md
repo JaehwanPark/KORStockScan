@@ -11,7 +11,7 @@
 
 1. 현재 활성 기준은 [plan-korStockScanPerformanceOptimization.rebase.md](./plan-korStockScanPerformanceOptimization.rebase.md)다.
 2. 운영 실행표는 날짜별 `stage2 todo checklist`를 우선한다.
-3. 현재 실행표는 [2026-05-04-stage2-todo-checklist.md](./2026-05-04-stage2-todo-checklist.md), [2026-05-06-stage2-todo-checklist.md](./2026-05-06-stage2-todo-checklist.md), [2026-05-07-stage2-todo-checklist.md](./2026-05-07-stage2-todo-checklist.md), [2026-05-08-stage2-todo-checklist.md](./2026-05-08-stage2-todo-checklist.md)를 본다.
+3. 현재 실행표는 [2026-05-04-stage2-todo-checklist.md](./checklists/2026-05-04-stage2-todo-checklist.md), [2026-05-06-stage2-todo-checklist.md](./checklists/2026-05-06-stage2-todo-checklist.md), [2026-05-07-stage2-todo-checklist.md](./checklists/2026-05-07-stage2-todo-checklist.md), [2026-05-08-stage2-todo-checklist.md](./checklists/2026-05-08-stage2-todo-checklist.md)를 본다.
 4. 정기 report inventory와 Markdown 누락 후보는 [data/report/README.md](../data/report/README.md)를 본다.
 5. threshold collector/report/apply plan 운영방법은 [data/threshold_cycle/README.md](../data/threshold_cycle/README.md)를 본다.
 6. 원안 대비 실행 변경과 종료 이력은 [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md)를 본다.
@@ -27,10 +27,10 @@
 | [plan-korStockScanPerformanceOptimization.qna.md](./plan-korStockScanPerformanceOptimization.qna.md) | 운영 판단 기준/자주 묻는 질문 | 왜 이렇게 운영하는지 확인할 때 |
 | [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md) | 기본계획 대비 실행 변경사항 | 원안과 실제 실행이 달라졌을 때 |
 | [plan-korStockScanPerformanceOptimization.performance-report.md](./plan-korStockScanPerformanceOptimization.performance-report.md) | 정기 성과측정 기준과 최신 baseline | 장후/주간 성과판정 때 |
-| [2026-05-04-stage2-todo-checklist.md](./2026-05-04-stage2-todo-checklist.md) | 다음 KRX 운영일 장전/장중/장후 실행표 | 5/4 운영 작업 수행 시 |
-| [2026-05-06-stage2-todo-checklist.md](./2026-05-06-stage2-todo-checklist.md) | 휴장 이월 후속, threshold/AI/scanner/보유청산 잔여작업 | 5/6 후속 작업 수행 시 |
-| [2026-05-07-stage2-todo-checklist.md](./2026-05-07-stage2-todo-checklist.md) | SAW-3, ADM-2 후속 설계 | 5/7 후속 작업 수행 시 |
-| [2026-05-08-stage2-todo-checklist.md](./2026-05-08-stage2-todo-checklist.md) | SAW-4~SAW-6, 체결품질/시장맥락/orderbook readiness, OFI/QI expansion ladder | 5/8 후속 작업 수행 시 |
+| [2026-05-04-stage2-todo-checklist.md](./checklists/2026-05-04-stage2-todo-checklist.md) | 다음 KRX 운영일 장전/장중/장후 실행표 | 5/4 운영 작업 수행 시 |
+| [2026-05-06-stage2-todo-checklist.md](./checklists/2026-05-06-stage2-todo-checklist.md) | 휴장 이월 후속, threshold/AI/scanner/보유청산 잔여작업 | 5/6 후속 작업 수행 시 |
+| [2026-05-07-stage2-todo-checklist.md](./checklists/2026-05-07-stage2-todo-checklist.md) | SAW-3, ADM-2 후속 설계 | 5/7 후속 작업 수행 시 |
+| [2026-05-08-stage2-todo-checklist.md](./checklists/2026-05-08-stage2-todo-checklist.md) | SAW-4~SAW-6, 체결품질/시장맥락/orderbook readiness, OFI/QI expansion ladder | 5/8 후속 작업 수행 시 |
 | [data/report/README.md](../data/report/README.md) | 정기 report inventory와 Markdown 누락 후보 | JSON/JSONL 대비 Markdown 필요성을 판단할 때 |
 | [data/threshold_cycle/README.md](../data/threshold_cycle/README.md) | threshold collector/report/apply plan 운영방법 | threshold 자동화나 apply plan을 다룰 때 |
 | [workorder-shadow-canary-runtime-classification.md](./workorder-shadow-canary-runtime-classification.md) | shadow/canary/historical 분류와 런타임 ON/OFF 기준 | OFF축 재개나 canary 성격이 애매할 때 |

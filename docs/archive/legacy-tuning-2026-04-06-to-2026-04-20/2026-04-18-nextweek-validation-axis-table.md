@@ -18,7 +18,7 @@
 
 ## 참고 문서
 
-- [2026-04-20-stage2-todo-checklist.md](./2026-04-20-stage2-todo-checklist.md)
-- [2026-04-21-stage2-todo-checklist.md](./2026-04-21-stage2-todo-checklist.md)
-- [2026-04-22-stage2-todo-checklist.md](./2026-04-22-stage2-todo-checklist.md)
-- [2026-04-23-stage2-todo-checklist.md](./2026-04-23-stage2-todo-checklist.md)
+- [2026-04-20-stage2-todo-checklist.md](./checklists/2026-04-20-stage2-todo-checklist.md)
+- [2026-04-21-stage2-todo-checklist.md](./checklists/2026-04-21-stage2-todo-checklist.md)
+- [2026-04-22-stage2-todo-checklist.md](./checklists/2026-04-22-stage2-todo-checklist.md)
+- [2026-04-23-stage2-todo-checklist.md](./checklists/2026-04-23-stage2-todo-checklist.md)

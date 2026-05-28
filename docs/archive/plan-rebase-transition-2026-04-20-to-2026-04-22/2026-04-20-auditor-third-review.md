@@ -147,7 +147,7 @@
 
 - [2026-04-20-operator-response.md](/home/ubuntu/KORStockScan/docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-20-operator-response.md)
 - [2026-04-20-auditor-second-review.md](./archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-20-auditor-second-review.md)
-- [2026-04-21-stage2-todo-checklist.md](./2026-04-21-stage2-todo-checklist.md)
+- [2026-04-21-stage2-todo-checklist.md](./checklists/2026-04-21-stage2-todo-checklist.md)
 - [plan-korStockScanPerformanceOptimization.performance-report.md](./plan-korStockScanPerformanceOptimization.performance-report.md)
 - `src/engine/sniper_state_handlers.py:991~1024`
 - `data/report/monitor_snapshots/performance_tuning_2026-04-20.json`

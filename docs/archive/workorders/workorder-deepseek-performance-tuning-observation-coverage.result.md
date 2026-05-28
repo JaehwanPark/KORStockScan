@@ -300,4 +300,4 @@ src/tests/test_performance_tuning_report.py::test_observation_axis_coverage_exte
 - [Performance Tuning Report 엔진](src/engine/sniper_performance_tuning_report.py)
 - [Web App 템플릿](src/web/app.py)
 - [테스트 파일](src/tests/test_performance_tuning_report.py)
-- [전체 작업 목록](docs/2026-04-24-stage2-todo-checklist.md)
+- [전체 작업 목록](docs/checklists/2026-04-24-stage2-todo-checklist.md)

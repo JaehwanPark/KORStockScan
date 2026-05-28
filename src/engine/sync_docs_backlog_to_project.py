@@ -24,7 +24,7 @@ from src.utils.market_day import get_krx_trading_day_status
 GITHUB_GRAPHQL_URL = "https://api.github.com/graphql"
 
 DOC_PLAN = Path("docs/plan-korStockScanPerformanceOptimization.prompt.md")
-DOC_CHECKLIST = Path("docs/2026-04-13-stage2-todo-checklist.md")
+DOC_CHECKLIST = Path("docs/checklists/2026-04-13-stage2-todo-checklist.md")
 DOC_SCALPING = Path("docs/reference/2026-04-10-scalping-ai-coding-instructions.md")
 DOC_PROMPT = Path("docs/reference/2026-04-11-scalping-ai-prompt-coding-instructions.md")
 
@@ -461,7 +461,7 @@ def parse_scalping_logic_tasks() -> list[BacklogTask]:
 
     # Remaining implementation phases only
     for line in text.splitlines():
-        m = re.match(r"^\s*####\s+(0-1b|2-1|2-2|3-1|3-2)\.\s+(.+?)\s*$", line)
+        m = re.match(r"^\s*####\s+(?:Legacy\s+)?(0-1b|2-1|2-2|3-1|3-2)\.\s+(.+?)\s*$", line)
         if not m:
             continue
         tasks.append(
@@ -513,7 +513,7 @@ def parse_prompt_tasks() -> list[BacklogTask]:
             _flush_current_task()
             current_phase = phase.group(1).strip()
             continue
-        m = re.match(r"^\s*##\s+작업\s+(\d+)\.\s+(.+?)\s*$", line)
+        m = re.match(r"^\s*##\s+(?:Legacy\s+)?작업\s+(\d+)\.\s+(.+?)\s*$", line)
         if m:
             _flush_current_task()
             task_name = re.sub(r"`([^`]+)`", r"\1", m.group(2).strip())

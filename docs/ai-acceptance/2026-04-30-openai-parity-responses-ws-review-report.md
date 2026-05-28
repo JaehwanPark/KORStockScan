@@ -65,7 +65,7 @@
 
 ### 2.6 Shadow 운영 문서 반영
 
-- `docs/2026-05-04-stage2-todo-checklist.md`
+- `docs/checklists/2026-05-04-stage2-todo-checklist.md`
 - `docs/workorder-shadow-canary-runtime-classification.md`
 - `openai_responses_ws_shadow_flag_off` observe-only cohort 추가
 
@@ -141,7 +141,7 @@
 
 1. `src/tests/test_ai_engine_openai_transport.py` 기준으로 schema/transport 계약 검토
 2. `src/engine/ai_engine_openai.py`의 `_call_openai_safe()`, `OpenAIResponseRequest`, `OpenAIResponsesWSPool` 구현 검토
-3. `docs/2026-05-04-stage2-todo-checklist.md`의 shadow pass/fail 기준 검토
+3. `docs/checklists/2026-05-04-stage2-todo-checklist.md`의 shadow pass/fail 기준 검토
 4. 서버 환경에서 shadow 관측값 확인 후 live flag 전환 여부 결정
 
 ## 8. 다음 액션

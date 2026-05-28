@@ -106,7 +106,7 @@
 ## 2026-04-14 장후 실행 메모
 
 - [x] 워크오더 `POSTCLOSE Todo` 재노출 항목 정리 (`2026-04-14 20:22 KST`)
-  - 판정: 재노출된 8개 항목은 `Source=docs/2026-04-14-stage2-todo-checklist.md` 기준 이미 완료(`- [x]`) 상태다.
+  - 판정: 재노출된 8개 항목은 `Source=docs/checklists/2026-04-14-stage2-todo-checklist.md` 기준 이미 완료(`- [x]`) 상태다.
   - 근거: `parse_checklist_tasks()` 기준 `due=2026-04-14` 미완료 항목 수가 `0`으로 확인됐다.
   - 다음 액션: 동일 유형 재발 시 문서를 기준 소스로 유지하고, Project 상태는 문서와 다시 정렬한다. (`체크리스트 생성 시 반영대상 표기` 규칙은 유지)
 
@@ -119,7 +119,7 @@
   - 원격 `develop` 선행 반영 축과 본서버 `main`은 여전히 분리돼 있고, `partial fill min_fill_ratio`처럼 아직 구현되지 않은 축이 의도치 않게 실전 설정으로 번진 흔적은 확인되지 않았다.
   - 따라서 이 항목은 장전 1회 점검 성격으로 보고, 늦게라도 확인 완료한 시점에서 닫는 것이 맞다.
 - [x] `RELAX-DYNSTR` `2026-04-15 08:30` 원격 canary에 쓸 `momentum_tag` 선정 경로와 환경 설정 경로 확인
-  - 선정 근거는 `docs/2026-04-13-stage2-todo-checklist.md`의 `momentum_tag / threshold_profile / missed_winner` 관찰 메모를 사용한다.
+  - 선정 근거는 `docs/checklists/2026-04-13-stage2-todo-checklist.md`의 `momentum_tag / threshold_profile / missed_winner` 관찰 메모를 사용한다.
   - 실행 경로는 [src/engine/sniper_strength_momentum.py](/home/ubuntu/KORStockScan/src/engine/sniper_strength_momentum.py:28)와 [src/utils/constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py:162)다.
   - 오늘 보강으로 `KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_CANARY_ENABLED`, `..._TAGS`, `..._ALLOWED_REASONS`, `..._MIN_BUY_VALUE_RATIO`, `..._BUY_RATIO_TOL`, `..._EXEC_BUY_RATIO_TOL` env 경로를 확보했다.
 - [x] `RELAX-DYNSTR` `momentum_tag` 1축 원격 canary 설정값 확정 (`2026-04-15 08:30` 실행용)
@@ -178,7 +178,7 @@
   - `SELL` 로그 우선 유지, `SCALP_PRESET_TP` 실집행 확장 제외를 오늘 가드로 고정했다.
   - rollback은 `holding_override_rule_version` 기준 on/off와 `holding_action_applied=False` fallback 경로를 기준으로 둔다.
 - [x] `2026-04-15` 장전 반영/착수 항목과 `2026-04-16` 후속 설계 착수 항목을 별도 체크리스트로 승격
-  - [docs/2026-04-15-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-15-stage2-todo-checklist.md:1)와 [docs/2026-04-16-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-16-stage2-todo-checklist.md:1)에 후속 항목을 유지한다.
+  - [docs/checklists/2026-04-15-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-15-stage2-todo-checklist.md:1)와 [docs/checklists/2026-04-16-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-16-stage2-todo-checklist.md:1)에 후속 항목을 유지한다.
 - [x] 장후 결론을 `날짜 + 액션 + 실행시각` 형식으로 기록
   - `2026-04-15 08:30`: `RELAX-DYNSTR momentum_tag=SCANNER` 1축 canary 시작
   - `2026-04-15 POSTCLOSE`: `expired_armed` 설계 문서 완료
@@ -233,7 +233,7 @@
 
 ## 참고 문서
 
-- [2026-04-13-stage2-todo-checklist.md](./2026-04-13-stage2-todo-checklist.md)
+- [2026-04-13-stage2-todo-checklist.md](./checklists/2026-04-13-stage2-todo-checklist.md)
 - [2026-04-11-scalping-ai-prompt-coding-instructions.md](./2026-04-11-scalping-ai-prompt-coding-instructions.md)
 - [2026-04-10-scalping-ai-coding-instructions.md](./2026-04-10-scalping-ai-coding-instructions.md)
 - [plan-korStockScanPerformanceOptimization.prompt.md](./plan-korStockScanPerformanceOptimization.prompt.md)

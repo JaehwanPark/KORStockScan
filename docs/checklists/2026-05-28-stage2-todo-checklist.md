@@ -94,6 +94,22 @@
   - 금지: 작업지시를 approval artifact나 즉시 runtime env 수정으로 해석하지 않는다. broker/order/provider/cap guard 우회와 장중 threshold mutation은 금지한다.
   - 다음 액션: `implement_now`, `already_implemented`, `defer_design`, `reject`, `needs_new_workorder` 중 하나로 닫고, 구현 시 테스트와 postclose verifier handoff를 같이 확인한다.
 
+- [ ] `[GreenfieldEntryTelegramReadability0528] ENTRY 승인 Telegram bucket 문구 가독성 개선 계획 및 구현 여부 확인` (`Due: 2026-05-28`, `Slot: POSTCLOSE`, `TimeWindow: 17:30~17:45`, `Track: RuntimeStability`)
+  - Source: [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 판정 기준: `entry:combo_entry_spot:score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liquidity_unknown` 같은 raw bucket id를 Telegram 본문에 그대로 노출하지 않고, `진입 bucket: 점수 66-69 / 출처 WAIT65-79 EV / stale 정상-or-미표시 / 유동성 미분류 / 과열 미분류 / 시간대 미분류`처럼 사람이 읽는 요약으로 변환하는 formatter 계획을 검토한다.
+  - 판정 기준: LDM `combo_entry_spot`의 `time_bucket` 축(`time_0900_1000`, `time_1000_1200`, `time_1200_1400`, `time_1400_close`, `time_unknown`)을 Telegram 요약에 포함하고, source field가 비어 있으면 `시간대 미분류`로 표기한다.
+  - 판정 기준: Greenfield full-lifecycle authority에서는 `entry`와 `submit`이 별도 stage이므로 Telegram 제목/본문에서 `ENTRY bucket 승인`과 `submit 미승인/실주문 차단`을 분리 표기한다. 예: `상태: entry bucket promoted / submit bucket unpromoted, 실주문 차단`.
+  - 판정 기준: Telegram에 표시하는 bucket은 `greenfield_policy_bucket_id`와 실제 후보의 `observed_entry_bucket_id`를 분리한다. policy allowlist bucket(`score_66_69` 등)을 모든 후보의 실제 score bucket처럼 표시하지 않고, 실제 score/source/stale/liquidity/overbought/time 산출값이 없으면 `candidate_bucket_instrumentation_gap`으로 분류한다.
+  - 금지: 문구 개선을 runtime threshold, broker submit guard, provider route, bot restart, approval/cap 변경으로 해석하지 않는다. canonical bucket id는 event provenance와 report에는 보존한다.
+  - 다음 액션: 장후 구현 시 `format_lifecycle_bucket_label` 계열 helper와 단위 테스트를 추가하고, ENTRY/HOLDING/SCALE-IN Telegram body에는 요약 label plus raw bucket id provenance를 접거나 별도 `Bucket ID` 줄로 분리한다. 구현하지 않으면 `defer_design`으로 닫고 다음 영업일 checklist에 parser-friendly follow-up을 남긴다.
+
+- [ ] `[EntryMarketContextAttributionWorkorder0528] ENTRY bucket 시장약세 context attribution workorder 강제 표면화 여부 확인` (`Due: 2026-05-28`, `Slot: POSTCLOSE`, `TimeWindow: 17:45~18:00`, `Track: ScalpingLogic`)
+  - Source: [lifecycle_decision_matrix_2026-05-27.json](/home/ubuntu/KORStockScan/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_2026-05-27.json), [threshold_cycle_ev_2026-05-27.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-27.json), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
+  - 판정 기준: `market_regime_continuous_label`, `panic_level`, `risk_context_owner`, `risk_regime_level` 필드는 LDM runtime feature로 존재하지만 `entry_bucket_attribution` 표준 bucket type에는 없으므로, `entry_bucket x market_regime/panic_level/risk_context` source-only attribution workorder를 `implement_now`/`defer_design`/`needs_new_workorder`로 분류한다.
+  - 판정 기준: 이 항목은 16:00 postclose report와 기본 `code_improvement_workorder` 생성을 막는 선행조건이 아니라, 해당 체인이 종료된 뒤 누락 attribution을 보완 표면화할지 결정하는 supplemental review로 처리한다.
+  - 금지: 시장약세 context를 장중 hard gate, threshold mutation, broker submit guard, provider route, bot restart, cap 변경 근거로 쓰지 않는다. canonical `combo_entry_spot` bucket id는 즉시 변경하지 않는다.
+  - 다음 액션: 구현 시 `runtime_effect=false`, `allowed_runtime_apply=false`, `decision_authority=adm_ldm_entry_market_context_attribution_source_only` 계약으로 별도 attribution을 추가하고, 기존 greenfield/live-auto bucket id와 분리한다. 당일 기본 workorder artifact에 반영하려면 보완 구현 후 관련 리포트와 workorder를 재생성하고 lineage/diff를 확인한다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
 

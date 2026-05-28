@@ -103,7 +103,7 @@
 
 1. 운영 반영은 `restart.flag` 기준 우아한 재시작으로 적용한다.
 2. 장후 체크리스트에 `NaNCastGuard0428` 재발 점검 항목을 추가했다.
-   - Source: [2026-04-28-stage2-todo-checklist.md](/home/windy80xyt/KORStockScan/docs/2026-04-28-stage2-todo-checklist.md)
+   - Source: [2026-04-28-stage2-todo-checklist.md](/home/windy80xyt/KORStockScan/docs/checklists/2026-04-28-stage2-todo-checklist.md)
 3. 재발이 0건이면 패치를 유지한다.
 4. 재발이 1건 이상이면 `buy_qty/buy_price/target_buy_price/marcap/preset_tp_*`, websocket `curr/ask_tot/bid_tot`, 체결 payload `price/qty` 중 어느 source가 `NaN`을 만들었는지 `2026-04-29 PREOPEN` 후속 항목으로 승격한다.
 

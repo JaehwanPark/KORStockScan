@@ -6,8 +6,8 @@
 
 ## 정합성 메모
 
-- `2026-04-18 10:21 KST` 기준 GitHub Project에 남아 있던 `[Checklist0413] AIPrompt 작업 9 정량형 수급 피처 이식 1차 착수`의 `Source=docs/2026-04-19-stage2-todo-checklist.md` 표기는 문서 정합성과 불일치한다.
-- 실제 후속 체크리스트는 `docs/2026-04-20-stage2-todo-checklist.md`의 `[HolidayCarry0418] AIPrompt 작업 9 정량형 수급 피처 이식 1차` 항목이며, `2026-04-18` 선행 착수 결과를 그 문서 기준으로 이어서 판정한다.
+- `2026-04-18 10:21 KST` 기준 GitHub Project에 남아 있던 `[Checklist0413] AIPrompt 작업 9 정량형 수급 피처 이식 1차 착수`의 `Source=docs/checklists/2026-04-19-stage2-todo-checklist.md` 표기는 문서 정합성과 불일치한다.
+- 실제 후속 체크리스트는 `docs/checklists/2026-04-20-stage2-todo-checklist.md`의 `[HolidayCarry0418] AIPrompt 작업 9 정량형 수급 피처 이식 1차` 항목이며, `2026-04-18` 선행 착수 결과를 그 문서 기준으로 이어서 판정한다.
 
 ## 휴일 이관 처리
 
@@ -42,8 +42,8 @@
 
 ## 참고 문서
 
-- [2026-04-18-stage2-todo-checklist.md](./2026-04-18-stage2-todo-checklist.md)
-- [2026-04-20-stage2-todo-checklist.md](./2026-04-20-stage2-todo-checklist.md)
+- [2026-04-18-stage2-todo-checklist.md](./checklists/2026-04-18-stage2-todo-checklist.md)
+- [2026-04-20-stage2-todo-checklist.md](./checklists/2026-04-20-stage2-todo-checklist.md)
 - [2026-04-11-scalping-ai-prompt-coding-instructions.md](./2026-04-11-scalping-ai-prompt-coding-instructions.md)
 - [plan-korStockScanPerformanceOptimization.prompt.md](./plan-korStockScanPerformanceOptimization.prompt.md)
 - [2026-04-19-rereview2-report-integrated-dashboard-db-migration.md](./2026-04-19-rereview2-report-integrated-dashboard-db-migration.md)

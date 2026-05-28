@@ -1,14 +1,14 @@
 # 2026-04-20 장후 판정 결과보고서 (감사용)
 
-> 작성시각: `2026-04-20 15:58 KST`  
-> 기준 Source/Section: `docs/2026-04-20-stage2-todo-checklist.md` / `장후 체크리스트 (15:30~)`  
+> 작성시각: `2026-04-20 15:58 KST`
+> 기준 Source/Section: `docs/checklists/2026-04-20-stage2-todo-checklist.md` / `장후 체크리스트 (15:30~)`
 > 작성 원칙: `거짓/과장 금지`, `판정-근거-다음 액션 분리`, `오판/수정 이력 명시`
 
 ---
 
 ## 1. 총평
 
-오늘 장후 작업은 `완료된 구현`, `오늘 기준 판정만 완료된 항목`, `근거 부족으로 보류된 항목`이 섞여 있다.  
+오늘 장후 작업은 `완료된 구현`, `오늘 기준 판정만 완료된 항목`, `근거 부족으로 보류된 항목`이 섞여 있다.
 따라서 이 보고서는 "많이 처리했다"는 식으로 서술하지 않고, **무엇이 실제로 닫혔고 무엇은 닫히지 않았는지**를 분리해서 기록한다.
 
 핵심 결론은 아래 4가지다.
@@ -97,7 +97,7 @@
 
 #### 감사상 판단
 
-이 항목은 **"문제 발견 후 수정 완료"**가 아니라, 더 정확히는  
+이 항목은 **"문제 발견 후 수정 완료"**가 아니라, 더 정확히는
 **"작업 중 오판 1회 발생, 사용자 지적으로 즉시 시정, 현재 상태 정상화"**로 기록하는 것이 맞다.
 
 ---
@@ -119,10 +119,10 @@
 
 #### 감사상 판단
 
-이 보정은 단순 문서 정리가 아니라,  
+이 보정은 단순 문서 정리가 아니라,
 **"지금까지 잘못된 기준으로 판정했을 위험을 줄이는 정합성 통제"**로 봐야 한다.
 
-다만 오늘 하루에 모든 과거 판정의 무효/유효를 완전히 확정한 것은 아니다.  
+다만 오늘 하루에 모든 과거 판정의 무효/유효를 완전히 확정한 것은 아니다.
 오늘 한 일은 **기준을 다시 세운 것**이지, **모든 과거 결론을 전면 재판정 완료한 것**은 아니다.
 
 ---
@@ -307,7 +307,7 @@ PYTHONPATH=. .venv/bin/pytest -q \
 
 ## 9. 참고 문서
 
-- [2026-04-20-stage2-todo-checklist.md](./2026-04-20-stage2-todo-checklist.md)
+- [2026-04-20-stage2-todo-checklist.md](./checklists/2026-04-20-stage2-todo-checklist.md)
 - [2026-04-18-aiprompt-task9-main-openai-audit-report.md](./archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-18-aiprompt-task9-main-openai-audit-report.md)
 - [2026-04-19-aiprompt-task8-task10-holiday-recheck.md](./archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-19-aiprompt-task8-task10-holiday-recheck.md)
 - [2026-04-17-midterm-tuning-performance-report.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-midterm-tuning-performance-report.md)

@@ -35,7 +35,7 @@
 | 코드 | `partial fill min_fill_ratio` canary 경로 | [src/engine/sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py:1235), [src/utils/constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py:146) |
 | 테스트 | 프롬프트 라우팅/운영 로그 메타 검증 | [src/tests/test_ai_engine_cache.py](/home/ubuntu/KORStockScan/src/tests/test_ai_engine_cache.py:318), [src/tests/test_state_handler_fast_signatures.py](/home/ubuntu/KORStockScan/src/tests/test_state_handler_fast_signatures.py:94) |
 | 문서 | 프롬프트 작업지시/착수 메모 | [docs/2026-04-11-scalping-ai-prompt-coding-instructions.md](/home/ubuntu/KORStockScan/docs/2026-04-11-scalping-ai-prompt-coding-instructions.md:516) |
-| 문서 | 오늘 장전 실행/장중·장후 계획 | [docs/2026-04-15-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-15-stage2-todo-checklist.md:27) |
+| 문서 | 오늘 장전 실행/장중·장후 계획 | [docs/checklists/2026-04-15-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-15-stage2-todo-checklist.md:27) |
 
 ## 4. 검증 현황 표
 

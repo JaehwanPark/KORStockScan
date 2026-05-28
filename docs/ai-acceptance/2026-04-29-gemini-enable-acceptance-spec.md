@@ -1,7 +1,7 @@
 # 2026-04-29 Gemini Enable Acceptance / Schema Matrix
 
 작성일: `2026-04-29 KST`
-Source: [workorder_gemini_engine_review.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder_gemini_engine_review.md), [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md), [2026-04-28-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-28-stage2-todo-checklist.md)
+Source: [workorder_gemini_engine_review.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder_gemini_engine_review.md), [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-27-stage2-todo-checklist.md), [2026-04-28-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-28-stage2-todo-checklist.md)
 대상 코드: [ai_engine.py](/home/ubuntu/KORStockScan/src/engine/ai_engine.py), [test_ai_engine_cache.py](/home/ubuntu/KORStockScan/src/tests/test_ai_engine_cache.py), [test_gemini_live_prompt_smoke.py](/home/ubuntu/KORStockScan/src/tests/test_gemini_live_prompt_smoke.py)
 
 ## 1. 판정

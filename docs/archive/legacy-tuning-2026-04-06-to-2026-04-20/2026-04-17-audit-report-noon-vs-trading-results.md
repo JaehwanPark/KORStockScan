@@ -184,7 +184,7 @@ noon 이후 shadow stage 2종이 실제로 수집을 시작한 시각을 다음 
 ## 8. 참고 문서
 
 - [2026-04-17-noon-followup-auditor-report.md](./2026-04-17-noon-followup-auditor-report.md)
-- [2026-04-17-stage2-todo-checklist.md](./2026-04-17-stage2-todo-checklist.md)
+- [2026-04-17-stage2-todo-checklist.md](./checklists/2026-04-17-stage2-todo-checklist.md)
 - [2026-04-17-softstop-after-partial-fill-analysis.md](./2026-04-17-softstop-after-partial-fill-analysis.md)
 - [2026-04-17-ajouib-protect-trailing-mislabel-audit.md](./2026-04-17-ajouib-protect-trailing-mislabel-audit.md)
 - [2026-04-17-komipharm-holding-monitoring-check.md](./2026-04-17-komipharm-holding-monitoring-check.md)

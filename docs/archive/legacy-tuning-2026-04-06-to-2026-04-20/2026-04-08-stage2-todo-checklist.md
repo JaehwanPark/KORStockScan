@@ -227,7 +227,7 @@
 
 ## 2026-04-09 장전 작업계획
 
-상세 체크리스트는 [2026-04-09-stage2-todo-checklist.md](./2026-04-09-stage2-todo-checklist.md)로 분리해 운영한다.
+상세 체크리스트는 [2026-04-09-stage2-todo-checklist.md](./checklists/2026-04-09-stage2-todo-checklist.md)로 분리해 운영한다.
 
 1. `fallback` 진입 실패 억제
   - `fallback` 전용 진입 강도 하향(비중/트리거 중 1개만) canary 적용
@@ -280,7 +280,7 @@
 ## 참고 문서
 
 - [plan-korStockScanPerformanceOptimization.prompt.md](./plan-korStockScanPerformanceOptimization.prompt.md)
-- [2026-04-09-stage2-todo-checklist.md](./2026-04-09-stage2-todo-checklist.md)
+- [2026-04-09-stage2-todo-checklist.md](./checklists/2026-04-09-stage2-todo-checklist.md)
 - [2026-04-07-performance-tuning-checklist.md](./2026-04-07-performance-tuning-checklist.md)
 - [2026-04-07-stage2-task1-execution-report.md](./2026-04-07-stage2-task1-execution-report.md)
 - [2026-04-07-swing-results](./2026-04-07-swing-results)

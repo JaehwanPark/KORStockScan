@@ -9,7 +9,7 @@
 | 구분 | 소스 | 기준 시각/범위 | 비고 |
 |---|---|---|---|
 | 당일 종합 스냅샷 | `docs/2026-04-15-tuning-result-report-for-auditor.md` | 당일 장후 집계 + 22:07 재집계 | `build_trade_review_report`, `build_entry_pipeline_flow_report` 결과 인용 |
-| 품질게이트/운영판정 | `docs/2026-04-15-stage2-todo-checklist.md` | 15:55~15:57 KST 검증 | integrity/restoration/aggregation 판정 근거 |
+| 품질게이트/운영판정 | `docs/checklists/2026-04-15-stage2-todo-checklist.md` | 15:55~15:57 KST 검증 | integrity/restoration/aggregation 판정 근거 |
 | 장중 비교 관측치 | `data/report/server_comparison/server_comparison_2026-04-15.md` | since `09:00:00` | 안전지표 중심(손익 파생 제외) |
 
 ---

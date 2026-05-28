@@ -143,7 +143,7 @@
   - 근거: `gatekeeper_fast_reuse`는 당시 후보성은 있었다. `13:23:52` 이후 재집계 기준 `gatekeeper_decisions=23`, `gatekeeper_fast_reuse_ratio=0.0%`, `gatekeeper_eval_ms_p95=19871ms`, blocker 상위가 `재사용 창 만료 25`, `시그니처 변경 22`, `WS stale 13`이었다. 단, 이 값들은 이후 재판정 기준으로 `latency_block` 직접 사유보다 우선하지 않으며, 제출 회복 또는 `latency_state_danger` 감소가 동반될 때만 보조 근거로 쓴다.
   - why: 현재 작업은 `아닌 축을 장중에 빨리 잠그고 다음 축을 하나씩 켜서 검증`하는 단계다. 기존 축을 완전히 끄고 새 축만 켜면 변인통제가 유지되므로 same-day 교체가 원칙 위반이 아니다.
   - why: 지금 same-day에 추가로 축을 켜려면 `기존 축 OFF -> restart.flag -> 새 축 ON`만으로 끝나는 독립축이어야 한다. `gatekeeper_fast_reuse`는 단순 sec 조정만으로는 `signature_changed` 축을 분리하지 못해 원인귀속이 다시 흐려진다.
-  - 다음 액션: [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md)의 `[LatencyOps0427] gatekeeper_fast_reuse signature/window 독립축 PREOPEN 승인 판정`으로 `2026-04-27 PREOPEN` 실행시각을 고정하되, 04-27 재판정에서는 `submitted/full/partial`과 `latency_state_danger` 직접 blocker를 우선 기준으로 삼는다.
+  - 다음 액션: [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-27-stage2-todo-checklist.md)의 `[LatencyOps0427] gatekeeper_fast_reuse signature/window 독립축 PREOPEN 승인 판정`으로 `2026-04-27 PREOPEN` 실행시각을 고정하되, 04-27 재판정에서는 `submitted/full/partial`과 `latency_state_danger` 직접 blocker를 우선 기준으로 삼는다.
 
 - [x] `[LatencyOps0424] gatekeeper_fast_reuse signature/window 장중 재분해 + signature-only 형상 반영` (`Due: 2026-04-24`, `Slot: INTRADAY`, `TimeWindow: 14:10~14:30`, `Track: ScalpingLogic`) (`실행: 2026-04-24 14:25 KST`)
   - 판정 기준: `quote_fresh family`를 잠근 뒤 `gatekeeper_fast_reuse_bypass` raw 표본을 `window`와 `signature`로 재분해해 단일 조작점 1개를 같은 장중에 고정한다. `window`만으로 설명되는 표본이 소수면 `signature-only` 형상 변경을 우선 적용하고, `restart.flag` 이후 새 코호트를 장후 판정 입력으로 연다.
@@ -167,8 +167,8 @@
   - 판정 기준: same-day에 닫지 못하고 장후/익일/PREOPEN으로 남긴 항목마다 `1) same-day 불가 이유`, `2) 추가 데이터 vs 코드수정`, `3) 단일 조작점/rollback guard/restart 가능 여부`, `4) 막힌 조건과 다음 절대시각`이 모두 남아 있어야 한다. 하나라도 없으면 해당 이관 판정은 무효로 되돌리고 same-day 미이행으로 재개한다.
   - 실행 규칙: 이 항목은 단순 메모가 아니라 `장후/익일 이관 무효화` 규칙 준수 확인이다. PREOPEN carry-over 항목도 전일 준비완료 증적이 없으면 이 슬롯에서 다시 무효 처리한다.
   - 판정: 완료. today carry-over는 `gatekeeper_fast_reuse signature/window` 1건과 `pattern lab postclose 산출물/로그 보수` 1건만 유효로 남기고, 나머지 장후 항목은 same-day 판정으로 닫았다.
-  - 근거: `gatekeeper_fast_reuse`는 `2026-04-24 14:25:15 KST` signature-only deadband 반영까지는 끝났지만 `same-day live replacement 승인` 요건 중 `PREOPEN 승인 슬롯`이 필요해 [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md)의 `[LatencyOps0427]`로 절대시각을 고정했다. pattern lab은 `logs/tuning_monitoring_postclose_cron.log`에서 Gemini 분석이 `trade_id str/float64 merge` 예외로 실패했고 Claude/Gemini 전용 cron log 파일은 더 이상 생성되지 않아 후속 보수가 필요하다.
-  - 다음 액션: carry-over 2건은 [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md)에 절대시각으로 반영한다.
+  - 근거: `gatekeeper_fast_reuse`는 `2026-04-24 14:25:15 KST` signature-only deadband 반영까지는 끝났지만 `same-day live replacement 승인` 요건 중 `PREOPEN 승인 슬롯`이 필요해 [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-27-stage2-todo-checklist.md)의 `[LatencyOps0427]`로 절대시각을 고정했다. pattern lab은 `logs/tuning_monitoring_postclose_cron.log`에서 Gemini 분석이 `trade_id str/float64 merge` 예외로 실패했고 Claude/Gemini 전용 cron log 파일은 더 이상 생성되지 않아 후속 보수가 필요하다.
+  - 다음 액션: carry-over 2건은 [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-27-stage2-todo-checklist.md)에 절대시각으로 반영한다.
 
 - [x] `[LatencyOps0424] 오전 제출축 결과 잠금` (`Due: 2026-04-24`, `Slot: POSTCLOSE`, `TimeWindow: 15:10~15:20`, `Track: ScalpingLogic`) (`실행: 2026-04-24 17:42 KST`)
 - 판정 기준: 오전 `10:00 KST` checkpoint를 기준으로 `spread relief canary`의 `유지/확대/보류/롤백` 중 하나를 확정한다.
@@ -183,7 +183,7 @@
   - 판정 기준: `승격 실행`이면 축 1개만 선택하고 롤백 가드 포함, `보류`이면 원인 1개와 재실행 시각 1개를 동시에 기록
   - 판정: 완료. `승격 실행`은 보류하고, 재실행 시각은 `2026-04-27 08:20~08:35 KST PREOPEN`으로 확정한다.
   - 근거: same-day post-change 코호트는 heavy report builder IO 과부하로 장중 중간점검이 끊겼고, 최종 snapshot 기준도 `submitted=11`, `full_fill=8`, `partial_fill=0`이지만 pre-submit latency 병목 자체는 `3789/3800` 수준으로 유지됐다. 따라서 오늘은 `승격 승인`보다 `단일 후보와 다음 절대시각`을 고정하는 편이 맞다.
-  - 다음 액션: [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md)의 `[LatencyOps0427] gatekeeper_fast_reuse signature/window 독립축 PREOPEN 승인 판정`에서 live 승인/보류를 최종 닫는다.
+  - 다음 액션: [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-27-stage2-todo-checklist.md)의 `[LatencyOps0427] gatekeeper_fast_reuse signature/window 독립축 PREOPEN 승인 판정`에서 live 승인/보류를 최종 닫는다.
 
 ## 장후 체크리스트 (15:40~17:00) - 후순위 축 Parking
 
@@ -205,7 +205,7 @@
   - 근거: `pre_submit_latency`가 still bottleneck이고 `completed_trades=9` 수준에서 출구축만 분리 승격하면 기대값보다 원인귀속이 먼저 흐려진다. `trade_review`상 `full_fill=8`, `partial_fill=0`, `avg_profit_rate=-0.2`는 방향성 참고 수준이지만, 지금은 `exit_rule` 분기보다 `submitted` 회복이 우선이다.
   - 다음 액션: EOD/NXT는 다음주 후보성만 유지하고 same-day 승격 후보에서는 제외한다.
 - [x] `[AIPrompt0424] AI 엔진 A/B 재개 여부 판정` (`Due: 2026-04-24`, `Slot: POSTCLOSE`, `TimeWindow: 15:50~16:00`, `Track: AIPrompt`) (`실행: 2026-04-24 17:42 KST`)
-  - Source: [2026-04-21-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-21-stage2-todo-checklist.md)
+  - Source: [2026-04-21-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-21-stage2-todo-checklist.md)
 - 판정 기준: `2026-04-21 15:24 KST` 확정 범위(`main-only`, `normal_only`, `COMPLETED+valid profit_rate`, `full/partial 분리`, `ai_confirmed_buy_count/share`, `WAIT65/70/75~79`, `blocked_ai_score`, `ai_confirmed->submitted`)를 그대로 사용한다. 제출병목이 잠긴 뒤에만 A/B 재개를 검토한다.
   - 판정: 완료. `A/B 재개 보류`다.
   - 근거: `2026-04-21 15:24 KST` preflight 범위는 그대로 유효하지만, 오늘 `ai_confirmed` upstream보다 `budget_pass -> submitted` downstream 병목이 지배적이다. `performance_tuning_2026-04-24.json` 기준 `budget_pass_events=3800`, `order_bundle_submitted_events=11`, `latency_block_events=3789`이어서 A/B를 재개해도 제출축 병목과 섞인다.
@@ -250,7 +250,7 @@
 - 다음 액션: 승격/보류 판정은 계속 `퍼널 -> blocker -> 체결품질 -> missed_upside -> 손익` 순서로 본다.
 - [x] `[VisibleResult0424] 다음주 PREOPEN 실행지시서에 승격축 1개 반영` (`Due: 2026-04-24`, `Slot: POSTCLOSE`, `TimeWindow: 16:45~16:55`, `Track: AIPrompt`) (`실행: 2026-04-24 17:42 KST`)
 - 판정: 완료. 다음주 PREOPEN 실행지시서에는 `gatekeeper_fast_reuse signature/window 독립축 PREOPEN 승인 판정` 1건을 반영했다.
-- 근거: [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md)에 이미 `[LatencyOps0427] gatekeeper_fast_reuse signature/window 독립축 PREOPEN 승인 판정`이 고정돼 있고, 오늘 장후 승격 후보 최종선정과 재시각 확정이 그 항목과 일치한다.
+- 근거: [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-27-stage2-todo-checklist.md)에 이미 `[LatencyOps0427] gatekeeper_fast_reuse signature/window 독립축 PREOPEN 승인 판정`이 고정돼 있고, 오늘 장후 승격 후보 최종선정과 재시각 확정이 그 항목과 일치한다.
 - 다음 액션: 없음.
 - [x] `[DashboardCoverage0424] 성능튜닝 관찰축 커버리지/진입-청산 병목 Flow DeepSeek 작업지시서 전달/착수 여부 기록` (`Due: 2026-04-24`, `Slot: POSTCLOSE`, `TimeWindow: 16:55~17:00`, `Track: Plan`) (`실행: 2026-04-24 17:42 KST`)
   - Source: [workorder-deepseek-performance-tuning-observation-coverage.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-deepseek-performance-tuning-observation-coverage.md)
@@ -262,7 +262,7 @@
   - 판정 기준: `logs/claude_scalping_pattern_lab_cron.log`, `logs/gemini_scalping_pattern_lab_cron.log` 에러 없음 + 각 `outputs/` 최신 산출물 갱신 확인
   - 판정: 완료. `전용 cron log 기준 정상`은 아니고, 운영 경로가 `tuning_monitoring_postclose_cron.log`로 합쳐진 뒤 Gemini pattern lab 실패가 남아 있는 상태로 점검을 닫는다.
   - 근거: `logs/claude_scalping_pattern_lab_cron.log`, `logs/gemini_scalping_pattern_lab_cron.log`는 현재 생성되지 않았고, 실운영 래퍼는 `deploy/run_tuning_monitoring_postclose.sh`로 합쳐져 있다. `logs/tuning_monitoring_postclose_cron.log` 최신 구간에는 Gemini 분석이 `trade_id str/float64 merge` 예외로 실패한 흔적이 있으며, output 갱신시각도 Gemini는 `2026-04-23 18:01`, Claude는 `2026-04-22 19:14`로 오늘 주간 산출물 갱신 기준을 충족하지 못했다.
-  - 다음 액션: [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md)에 `pattern lab postclose 산출물/로그 보수` 후속 작업을 추가한다.
+  - 다음 액션: [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-27-stage2-todo-checklist.md)에 `pattern lab postclose 산출물/로그 보수` 후속 작업을 추가한다.
 - [x] 미확정 시 `사유 + 다음 실행시각` 기록 (`Due: 2026-04-24`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:10`, `Track: Plan`) (`실행: 2026-04-24 17:42 KST`)
   - 판정: 완료. today 미확정/이관 잔량은 `gatekeeper_fast_reuse PREOPEN 승인`과 `pattern lab postclose 보수` 2건뿐이다.
   - 근거: 나머지 POSTCLOSE 항목은 same-day 판정으로 닫았고, 위 2건은 각각 `2026-04-27 08:20~08:35 KST`, `2026-04-27 18:05~18:20 KST` 절대시각을 문서에 고정했다.
@@ -271,9 +271,9 @@
 ## 참고 문서
 
 - [2026-04-18-nextweek-validation-axis-table.md](./archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-18-nextweek-validation-axis-table.md)
-- [2026-04-23-stage2-todo-checklist.md](./2026-04-23-stage2-todo-checklist.md)
-- [2026-04-20-stage2-todo-checklist.md](./2026-04-20-stage2-todo-checklist.md)
-- [2026-04-21-stage2-todo-checklist.md](./2026-04-21-stage2-todo-checklist.md)
+- [2026-04-23-stage2-todo-checklist.md](./checklists/2026-04-23-stage2-todo-checklist.md)
+- [2026-04-20-stage2-todo-checklist.md](./checklists/2026-04-20-stage2-todo-checklist.md)
+- [2026-04-21-stage2-todo-checklist.md](./checklists/2026-04-21-stage2-todo-checklist.md)
 - [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md)
 - [plan-korStockScanPerformanceOptimization.performance-report.md](./plan-korStockScanPerformanceOptimization.performance-report.md)
 - [2026-04-20-scale-in-qty-logic-final-review-v1.1.md](./archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-20-scale-in-qty-logic-final-review-v1.1.md)

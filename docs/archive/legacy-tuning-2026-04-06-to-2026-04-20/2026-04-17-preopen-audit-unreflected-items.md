@@ -10,7 +10,7 @@
 
 ## 0. 반영 결과 (2026-04-17 07:31 KST)
 
-아래 지적사항은 `docs/2026-04-17-stage2-todo-checklist.md` 및 관련 문서에 반영 완료.
+아래 지적사항은 `docs/checklists/2026-04-17-stage2-todo-checklist.md` 및 관련 문서에 반영 완료.
 
 1. `SCALP lock 분리 vs 롤백 선택`:
    - `롤백 우선`으로 고정했고, 코드에서 `loss_fallback_probe`의 `skip_add_judgment_lock` 우회 제거 적용.

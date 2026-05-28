@@ -13,7 +13,7 @@
 - `time-based-operations-runbook.md`: 장전, 장중, 장후, 21:00 EOD 데이터 갱신 cron 확인 절차.
 - `report-based-automation-traceability.md`: report 산출물, downstream consumer, runtime mutation 금지선, postclose chain contract.
 - `stage2-todo-checklist-template.md`: 날짜별 checklist 작성 형식.
-- `checklists/YYYY-MM-DD-stage2-todo-checklist.md`: 날짜별 checklist의 신규 생성 위치. 실제 실행 작업항목의 소유 문서이며, root의 기존 checklist는 legacy 경로로 점진 이동한다.
+- `checklists/YYYY-MM-DD-stage2-todo-checklist.md`: 날짜별 checklist의 표준 위치. 실제 실행 작업항목의 소유 문서이며, legacy root checklist도 이 위치로 정리한다.
 
 작업 시작 시에는 `plan-korStockScanPerformanceOptimization.rebase.md` §1~§8과 당일 checklist의 `오늘 목적`, `오늘 강제 규칙`을 먼저 확인한다. 당일 checklist가 없으면 Plan Rebase §7~§8과 최신 실행표의 상단 요약을 같이 확인한다.
 
@@ -23,17 +23,15 @@ README, 런북(runbook), Plan Rebase, prompt, AGENTS 같은 기준 문서는 사
 
 루트 `docs/`에는 아래 성격의 문서만 유지한다.
 
-- 현재 또는 미래 작업을 소유하는 날짜별 checklist. 신규 생성분은 `docs/checklists/`에 둔다.
 - Plan Rebase, prompt, execution delta, performance report처럼 반복 참조되는 기준 문서.
 - 현재 checklist 또는 Plan Rebase가 직접 참조하는 workorder, 운영 runbook, report traceability 문서.
-- 날짜별 checklist parser가 읽어야 하는 작업항목 소유 문서.
 
 과거 판단 근거이지만 현재 작업항목을 직접 소유하지 않는 문서는 성격별 하위 디렉터리 또는 `archive/`로 이동한다. 이동 시 기존 링크는 새 위치로 보정하고 parser 검증을 수행한다.
 
 ## 날짜별 Checklist
 
 - `checklists/YYYY-MM-DD-stage2-todo-checklist.md`: `build_next_stage2_checklist.py`가 생성하는 신규 checklist 위치.
-- `2026-04-20-stage2-todo-checklist.md`부터 `2026-05-15-stage2-todo-checklist.md`: legacy root checklist. 현재일 또는 직접 참조가 남은 파일은 우선 유지하고, 참조 링크 보정과 parser 검증을 같은 변경 세트에서 완료할 수 있을 때 `checklists/`로 이동한다.
+- `2026-04-20-stage2-todo-checklist.md`부터 `2026-05-15-stage2-todo-checklist.md`까지의 legacy root checklist는 `checklists/`로 이동 완료했다. 루트 `docs/`에는 날짜별 stage2 checklist를 새로 두지 않는다.
 - 완료된 checklist의 `[x]` 항목은 증적이며 현재 OPEN owner로 보지 않는다. 현재 owner는 Plan Rebase와 최신 checklist에서 확인한다.
 
 ## 하위 디렉터리

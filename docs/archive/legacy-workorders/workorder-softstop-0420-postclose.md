@@ -3,12 +3,12 @@
 작성일: `2026-04-20`  
 실행 시점: `2026-04-20 POSTCLOSE 18:20~18:45 KST`  
 대상: 운영 트레이더 / Codex  
-기준 문서: [2026-04-20-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-20-stage2-todo-checklist.md), [2026-04-17-midterm-tuning-performance-report.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-midterm-tuning-performance-report.md)
+기준 문서: [2026-04-20-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-20-stage2-todo-checklist.md), [2026-04-17-midterm-tuning-performance-report.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-midterm-tuning-performance-report.md)
 
 참조 우선순위:
 1. [plan-korStockScanPerformanceOptimization.performance-report.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.performance-report.md)
 2. [plan-korStockScanPerformanceOptimization.execution-delta.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.execution-delta.md)
-3. [2026-04-20-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-20-stage2-todo-checklist.md)
+3. [2026-04-20-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-20-stage2-todo-checklist.md)
 4. [2026-04-17-midterm-tuning-performance-report.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-midterm-tuning-performance-report.md)
 
 ---

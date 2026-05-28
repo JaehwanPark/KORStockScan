@@ -68,7 +68,7 @@
 - `docs/plan-korStockScanPerformanceOptimization.rebase.md`
   - `holding_flow_override`를 기존 튜닝 관찰축과 별개인 운영 override로 명시
 
-- `docs/2026-05-04-stage2-todo-checklist.md`
+- `docs/checklists/2026-05-04-stage2-todo-checklist.md`
   - `[HoldingFlowOverride0504-Preopen]`
   - `[HoldingFlowOverride0504-Intraday]`
   - `[HoldingFlowOverride0504-Overnight]`

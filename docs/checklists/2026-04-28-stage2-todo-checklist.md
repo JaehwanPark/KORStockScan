@@ -420,7 +420,7 @@
   - 다음 액션: `remove / guarded-off / historical-only` 표현으로 같은 change set에서 문서 정합을 잠근다.
 
 - [x] `[FallbackSplit0428] latency fallback split-entry code path hard-off 제거` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 09:10~09:30`, `Track: ScalpingLogic`)
-  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-27-stage2-todo-checklist.md)
   - 판정 기준: `CAUTION -> ALLOW_FALLBACK` 또는 scout/main fallback bundle이 실시간 주문 경로를 만들지 않아야 한다. `split_entry` follow-up runtime shadow도 기본 OFF여야 한다.
   - why: same-day 판정으로 entry 제출 회복과 무관한 축으로 닫혔고, partial/rebase 오염만 남긴다.
   - 다음 액션: deprecated reason/log는 historical trace로만 남기고 실전 경로는 reject로 닫는다.
@@ -461,7 +461,7 @@
   - fresh 로그 없음 대응: 같은 시각 `offline_live_canary_bundle`을 생성하고 사용자 로컬 산출물의 `entry_quote_fresh_composite_summary_<label>`로 `submitted/full/partial`, `latency_state_danger`, `fallback_regression_count`, `shadow_diff_status`, `direction_only_reason`을 확인한다.
 
 - [x] `[ShadowDiff0428] postclose submitted/full/partial mismatch 재분해` (`Due: 2026-04-28`, `Slot: POSTCLOSE`, `TimeWindow: 18:15~18:30`, `Track: ScalpingLogic`)
-  - Source: [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md)
+  - Source: [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-27-stage2-todo-checklist.md)
   - 판정 기준: `deploy/run_tuning_monitoring_postclose.sh 2026-04-27` 재실행에서 나온 `data/analytics/shadow_diff_summary.json`의 `submitted_events jsonl=19 vs duckdb=17`, `full_fill_count jsonl=37 vs duckdb=31`, `partial_fill_count jsonl=30 vs duckdb=24` 차이를 이벤트 복원/집계 품질 관점에서 재분해하고, 누락 source가 `pipeline_events`, `post_sell`, 집계 SQL 중 어디인지 닫아야 한다.
   - why: pattern lab 재실행은 복구됐지만 funnel/fill count mismatch를 그대로 두면 다음 진입병목 판정의 baseline 품질이 흔들린다.
   - 실행 메모 (`2026-04-28 16:32 KST`): `src/engine/compare_tuning_shadow_diff.py --start 2026-04-27 --end 2026-04-28` 재실행 결과 `all_match=false`였다. `2026-04-27` 기존 mismatch(`submitted 19 vs 17`, `full_fill 37 vs 31`, `partial_fill 30 vs 24`)는 그대로 남아 있고, `2026-04-28`분은 `data/analytics/parquet/pipeline_events/date=2026-04-28` 및 `post_sell/date=2026-04-28` partition 자체가 없어 DuckDB가 당일 raw를 통째로 못 읽는 상태였다.

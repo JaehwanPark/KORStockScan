@@ -1,7 +1,7 @@
 # 2026-04-15 expired_armed 처리 로직 설계
 
-> 작성시각: 2026-04-15 16:06 KST  
-> Source: `docs/2026-04-15-stage2-todo-checklist.md`  
+> 작성시각: 2026-04-15 16:06 KST
+> Source: `docs/checklists/2026-04-15-stage2-todo-checklist.md`
 > Section: `장후 체크리스트 (15:30~) > expired_armed 처리 로직 설계 문서 작성 완료`
 
 ## 1) 판정

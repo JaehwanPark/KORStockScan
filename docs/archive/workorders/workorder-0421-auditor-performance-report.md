@@ -3,7 +3,7 @@
 작성일: `2026-04-20`  
 실행 시점: `2026-04-21 INTRADAY 13:00 이전(예비본)` + `POSTCLOSE 17:30~18:00 KST(확정본)`  
 대상: 운영 트레이더 / Codex  
-기준 문서: [2026-04-21-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-21-stage2-todo-checklist.md), [workorder-0421-validate-0420-applies.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-0421-validate-0420-applies.md)
+기준 문서: [2026-04-21-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-21-stage2-todo-checklist.md), [workorder-0421-validate-0420-applies.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-0421-validate-0420-applies.md)
 Plan Rebase 감사보고서: [2026-04-21-plan-rebase-auditor-report.md](/home/ubuntu/KORStockScan/docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-21-plan-rebase-auditor-report.md)
 
 참조 우선순위:

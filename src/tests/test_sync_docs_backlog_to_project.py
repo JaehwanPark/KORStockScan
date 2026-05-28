@@ -218,7 +218,7 @@ def test_infer_apply_target_text_requires_explicit_remote_or_main():
 def test_ensure_apply_target_does_not_infer_remote_from_section_only():
     task = BacklogTask(
         title="[Checklist0423] 일반 문서 작업",
-        source="docs/2026-04-23-stage2-todo-checklist.md",
+        source="docs/checklists/2026-04-23-stage2-todo-checklist.md",
         section="원격 canary 후보 검토",
         due_date="2026-04-23",
         track="Checklist0423",
@@ -359,7 +359,7 @@ def test_infer_slot_label_uses_keyword_then_track_default():
 def test_infer_slot_label_prefers_explicit_slot_over_section_keyword():
     task = BacklogTask(
         title="[AIPrompt0422] Gemini BUY recovery canary 1일차 판정 (Due: 2026-04-22, Slot: INTRADAY, TimeWindow: 12:00~12:20, Track: AIPrompt)",
-        source="docs/2026-04-22-stage2-todo-checklist.md",
+        source="docs/checklists/2026-04-22-stage2-todo-checklist.md",
         section="장전/장중 체크리스트 (08:00~12:20) / 체크박스 미완료",
         track="Checklist0422",
     )
@@ -530,7 +530,7 @@ def test_collect_backlog_tasks_includes_runbook_ops(monkeypatch, tmp_path):
 def test_ensure_apply_target_fills_missing_target():
     task = BacklogTask(
         title="원격 canary 설정값 확정",
-        source="docs/2026-04-15-stage2-todo-checklist.md",
+        source="docs/checklists/2026-04-15-stage2-todo-checklist.md",
         section="장전 체크리스트",
         track="Checklist0415",
     )
@@ -660,7 +660,7 @@ def test_sync_backlog_skips_status_update_when_already_current(monkeypatch):
 def test_sync_backlog_deletes_duplicate_managed_project_items(monkeypatch):
     task = BacklogTask(
         title="[OpsEODSplit0423] 관찰축 정리 완료 시 KRX/NXT 분리 EOD 청산 시간/실행경로 확정 (Due: 2026-04-23, Slot: POSTCLOSE, TimeWindow: 16:50~17:00, Track: ScalpingLogic)",
-        source="docs/2026-04-23-stage2-todo-checklist.md",
+        source="docs/checklists/2026-04-23-stage2-todo-checklist.md",
         section="장후 체크리스트 (15:20~) / 체크박스 미완료",
         track="Checklist0423",
         due_date="2026-04-23",

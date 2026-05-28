@@ -159,7 +159,7 @@ integrity_flags
 
 ### 3-2. 문서 반영
 
-- [2026-04-17-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-17-stage2-todo-checklist.md)
+- [2026-04-17-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-17-stage2-todo-checklist.md)
 - [2026-04-17-softstop-after-partial-fill-analysis.md](/home/ubuntu/KORStockScan/docs/2026-04-17-softstop-after-partial-fill-analysis.md)
 - 본 보고서:
   - [2026-04-17-noon-followup-auditor-report.md](/home/ubuntu/KORStockScan/docs/2026-04-17-noon-followup-auditor-report.md)

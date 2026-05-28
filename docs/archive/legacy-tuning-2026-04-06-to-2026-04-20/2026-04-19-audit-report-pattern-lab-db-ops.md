@@ -40,9 +40,9 @@
 
 1. `docs/plan-korStockScanPerformanceOptimization.performance-report.md`
    - `9. 패턴랩 정기 실행 및 DB 연계 운영` 섹션 추가.
-2. `docs/2026-04-19-stage2-todo-checklist.md`
+2. `docs/checklists/2026-04-19-stage2-todo-checklist.md`
    - `[OpsFix0419] 스캘핑 패턴랩 DB 우선 수집 + 주간 cron 고정` 완료 항목 추가.
-3. `docs/2026-04-24-stage2-todo-checklist.md`
+3. `docs/checklists/2026-04-24-stage2-todo-checklist.md`
    - `[OpsFollowup0424] 패턴랩 주간 cron 산출물/로그 정합성 점검` 후속 항목 추가.
 4. README 정합성 반영
    - `analysis/claude_scalping_pattern_lab/README.md`

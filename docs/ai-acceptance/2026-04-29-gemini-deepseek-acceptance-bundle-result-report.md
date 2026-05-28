@@ -1,7 +1,7 @@
 # 2026-04-29 Gemini/DeepSeek Acceptance Bundle 작업결과서
 
-작성시각: `2026-04-29 14:20 KST`  
-기준 Source/Section: [2026-04-29-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-29-stage2-todo-checklist.md) / `장중 설계/후속 체크리스트 (12:20~14:20)`  
+작성시각: `2026-04-29 14:20 KST`
+기준 Source/Section: [2026-04-29-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-29-stage2-todo-checklist.md) / `장중 설계/후속 체크리스트 (12:20~14:20)`
 관련 문서: [2026-04-29-gemini-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/ai-acceptance/2026-04-29-gemini-enable-acceptance-spec.md), [2026-04-29-deepseek-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/ai-acceptance/2026-04-29-deepseek-enable-acceptance-spec.md)
 
 ---
@@ -62,7 +62,7 @@
 1. Gemini는 `flag-off schema registry`까지만 반영됐고 live enable acceptance는 아직 없다.
 2. DeepSeek는 retry acceptance 관찰성만 보강됐고 `context-aware backoff` live enable은 아직 아니다.
 3. 따라서 내일 확인할 것은 `효과`가 아니라 `flag-off load/contract/log visibility`다.
-4. 후속 슬롯은 이미 [2026-04-30-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-30-stage2-todo-checklist.md:63)에 고정했다.
+4. 후속 슬롯은 이미 [2026-04-30-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-04-30-stage2-todo-checklist.md:63)에 고정했다.
    - `GeminiSchemaIngress0430`
    - `DeepSeekRemoteAcceptance0430`
    - `GeminiSchemaContractCarry0430` (필수)
