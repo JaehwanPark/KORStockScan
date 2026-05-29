@@ -49,11 +49,15 @@ def _reset_state(monkeypatch, tmp_path):
             "mtime_ns": None,
             "version": None,
             "status": "not_loaded",
+            "approved_rows": [],
             "rows_by_source_bucket_id": {},
             "rows_by_bucket_id": {},
             "approved_row_count": 0,
         }
     )
+    state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_CREATED.clear()
+    state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_BUCKET_CREATED.clear()
+    state_handlers._SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED.clear()
     state_handlers._SCALP_SIM_AI_CALL_TIMES.clear()
     captured_pipeline_events = []
     monkeypatch.setattr(
@@ -266,6 +270,170 @@ def test_scalp_simulator_attaches_matched_lifecycle_bucket_provenance(monkeypatc
     assert sell_event["bucket_directed_sim_probe"] is True
     assert sell_event["actual_order_submitted"] is False
     assert sell_event["broker_order_forbidden"] is True
+
+
+def test_candidate_window_resolves_approved_lifecycle_flow_from_entry_identity(monkeypatch, tmp_path):
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: pytest.fail("real buy order must not be called"),
+    )
+
+    entry_bucket_key = (
+        "score=score_60_62|source=blocked_ai_score|stale=fresh_or_unflagged|"
+        "liquidity=liquidity_unknown|overbought=overbought_unknown|time=time_0900_1000"
+    )
+    entry_bucket_id = state_handlers._scalp_sim_ldm_bucket_id("entry", "combo_entry_spot", entry_bucket_key)
+    flow_bucket_id = (
+        "lifecycle_flow:combo_lifecycle_flow:"
+        f"{state_handlers._greenfield_bucket_slug(f'entry={entry_bucket_id}', max_len=96)}"
+    )
+    source_bucket_id = f"{flow_bucket_id}:source"
+    catalog_path = tmp_path / "scalp_sim_policy_catalog_2026-05-28.json"
+    catalog_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "scalp_sim_policy_catalog_v1",
+                "policies": [
+                    {
+                        "source_id": "lifecycle_bucket_discovery",
+                        "approved_bucket_rows": [
+                            {
+                                "bucket_id": flow_bucket_id,
+                                "source_bucket_id": source_bucket_id,
+                                "classification_state": "lifecycle_flow_sim_probe_candidate",
+                                "source_bucket_kind": "lifecycle_flow_sim_probe_policy",
+                                "stage": "lifecycle_flow",
+                                "bucket_type": "combo_lifecycle_flow",
+                                "sample": 3,
+                                "joined_sample": 3,
+                                "complete_flow_count": 3,
+                                "incomplete_flow_count": 0,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(
+            state_handlers.TRADING_RULES,
+            SCALP_SIM_AUTO_POLICY_ENABLED=True,
+            SCALP_SIM_AUTO_POLICY_FILE=str(catalog_path),
+            SCALP_SIM_AUTO_POLICY_VERSION="scalp_sim_auto_approval:2026-05-28",
+            SCALP_SIM_CANDIDATE_WINDOW_EXPANSION_ENABLED=True,
+            SCALP_SIM_CANDIDATE_WINDOW_MAX_OPEN=20,
+            SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY=20,
+        ),
+    )
+
+    stock = {
+        "id": 101,
+        "name": "WAIT_TEST",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "position_tag": "SCALP_BASE",
+        "target_buy_price": 10_000,
+        "last_watching_ai_action": "WAIT",
+    }
+
+    assert state_handlers._maybe_arm_scalp_sim_candidate_window(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 9_990, "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]}},
+        runtime={"strategy": "SCALPING", "is_trigger": False, "now_ts": 1_000.0, "current_ai_score": 61.0},
+        ai_decision={"action": "WAIT", "score": 61, "reason": "below entry threshold"},
+        ai_score=61,
+        source_stage="blocked_ai_score",
+        blocked_reason="below_buy_score_threshold",
+    )
+
+    sim_target = state_handlers.ACTIVE_TARGETS[0]
+    assert sim_target["lifecycle_bucket_match_status"] == "matched"
+    assert sim_target["bucket_directed_sim_probe"] is True
+    assert sim_target["lifecycle_bucket_source_bucket_id"] == source_bucket_id
+    assert sim_target["lifecycle_bucket_bucket_id"] == flow_bucket_id
+    assert sim_target["lifecycle_bucket_entry_bucket_id"] == entry_bucket_id
+    armed = next(fields for stage, fields in logs if stage == "scalp_sim_entry_armed")
+    assert armed["lifecycle_bucket_match_status"] == "matched"
+    assert armed["lifecycle_bucket_source_bucket_id"] == source_bucket_id
+    assert armed["bucket_directed_sim_probe"] is True
+    assert armed["actual_order_submitted"] is False
+    assert armed["broker_order_forbidden"] is True
+
+
+def test_candidate_window_with_entry_identity_but_no_approved_row_is_background(monkeypatch, tmp_path):
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: pytest.fail("real buy order must not be called"),
+    )
+    catalog_path = tmp_path / "scalp_sim_policy_catalog_2026-05-28.json"
+    catalog_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "scalp_sim_policy_catalog_v1",
+                "policies": [
+                    {
+                        "source_id": "lifecycle_bucket_discovery",
+                        "approved_bucket_rows": [
+                            {
+                                "bucket_id": "lifecycle_flow:combo_lifecycle_flow:entry_unrelated",
+                                "source_bucket_id": "lifecycle_flow:combo_lifecycle_flow:entry_unrelated:source",
+                                "stage": "lifecycle_flow",
+                                "bucket_type": "combo_lifecycle_flow",
+                            }
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(
+            state_handlers.TRADING_RULES,
+            SCALP_SIM_AUTO_POLICY_ENABLED=True,
+            SCALP_SIM_AUTO_POLICY_FILE=str(catalog_path),
+            SCALP_SIM_AUTO_POLICY_VERSION="scalp_sim_auto_approval:2026-05-28",
+            SCALP_SIM_CANDIDATE_WINDOW_EXPANSION_ENABLED=True,
+        ),
+    )
+
+    assert state_handlers._maybe_arm_scalp_sim_candidate_window(
+        stock={"id": 101, "name": "WAIT_TEST", "strategy": "SCALPING", "target_buy_price": 10_000},
+        code="123456",
+        ws_data={"curr": 9_990, "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]}},
+        runtime={"strategy": "SCALPING", "is_trigger": False, "now_ts": 1_000.0, "current_ai_score": 61.0},
+        ai_decision={"action": "WAIT", "score": 61},
+        ai_score=61,
+        source_stage="blocked_ai_score",
+        blocked_reason="below_buy_score_threshold",
+    )
+    armed = next(fields for stage, fields in logs if stage == "scalp_sim_entry_armed")
+    assert armed["lifecycle_bucket_match_status"] == "no_match"
+    assert armed["bucket_directed_sim_probe"] is False
+    assert armed["lifecycle_bucket_entry_bucket_id"].startswith("entry:combo_entry_spot:")
+    assert armed["actual_order_submitted"] is False
+    assert armed["broker_order_forbidden"] is True
 
 
 def test_scalp_simulator_keeps_background_sim_when_policy_missing(monkeypatch):

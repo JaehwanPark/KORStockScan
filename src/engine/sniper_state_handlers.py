@@ -221,6 +221,7 @@ _SCALP_SIM_AUTO_POLICY_CACHE: dict[str, object] = {
     "mtime_ns": None,
     "version": None,
     "status": "not_loaded",
+    "approved_rows": [],
     "rows_by_source_bucket_id": {},
     "rows_by_bucket_id": {},
     "approved_row_count": 0,
@@ -290,6 +291,7 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 "mtime_ns": None,
                 "version": policy_version or None,
                 "status": "policy_disabled",
+                "approved_rows": [],
                 "rows_by_source_bucket_id": {},
                 "rows_by_bucket_id": {},
                 "approved_row_count": 0,
@@ -303,6 +305,7 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 "mtime_ns": None,
                 "version": policy_version or None,
                 "status": "policy_missing",
+                "approved_rows": [],
                 "rows_by_source_bucket_id": {},
                 "rows_by_bucket_id": {},
                 "approved_row_count": 0,
@@ -319,6 +322,7 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 "mtime_ns": None,
                 "version": policy_version or None,
                 "status": "policy_missing",
+                "approved_rows": [],
                 "rows_by_source_bucket_id": {},
                 "rows_by_bucket_id": {},
                 "approved_row_count": 0,
@@ -341,6 +345,7 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 "mtime_ns": stat.st_mtime_ns,
                 "version": policy_version or None,
                 "status": "policy_invalid",
+                "approved_rows": [],
                 "rows_by_source_bucket_id": {},
                 "rows_by_bucket_id": {},
                 "approved_row_count": 0,
@@ -355,12 +360,14 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
         policies = payload.get("policies") if isinstance(payload.get("policies"), list) else []
     rows_by_source_bucket_id: dict[str, dict] = {}
     rows_by_bucket_id: dict[str, dict] = {}
+    approved_rows: list[dict] = []
     for policy in policies:
         if not isinstance(policy, dict) or policy.get("source_id") != "lifecycle_bucket_discovery":
             continue
         for row in policy.get("approved_bucket_rows") or []:
             if not isinstance(row, dict):
                 continue
+            approved_rows.append(row)
             source_bucket_id = str(row.get("source_bucket_id") or "").strip()
             bucket_id = str(row.get("bucket_id") or "").strip()
             if source_bucket_id:
@@ -375,6 +382,7 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
             "mtime_ns": stat.st_mtime_ns,
             "version": policy_version or None,
             "status": status,
+            "approved_rows": approved_rows,
             "rows_by_source_bucket_id": rows_by_source_bucket_id,
             "rows_by_bucket_id": rows_by_bucket_id,
             "approved_row_count": len(rows_by_source_bucket_id) or len(rows_by_bucket_id),
@@ -406,6 +414,13 @@ def _scalp_sim_bucket_policy_fields(source: dict | None) -> dict:
     if status != "loaded":
         return base
     source = source if isinstance(source, dict) else {}
+    for key in (
+        "lifecycle_bucket_entry_bucket_id",
+        "lifecycle_bucket_entry_bucket_key",
+        "lifecycle_bucket_entry_identity_source",
+    ):
+        if source.get(key) not in (None, ""):
+            base[key] = source.get(key)
     source_bucket_id = str(
         source.get("lifecycle_bucket_source_bucket_id")
         or source.get("source_bucket_id")
@@ -451,6 +466,195 @@ def _scalp_sim_bucket_policy_fields(source: dict | None) -> dict:
         }
     )
     return {key: value for key, value in base.items() if value not in (None, "")}
+
+
+def _scalp_sim_ldm_score_band(value) -> str:
+    return _entry_score_band_for_greenfield(value)
+
+
+def _scalp_sim_ldm_time_bucket(now_ts: float | None) -> str:
+    try:
+        hour = datetime.fromtimestamp(float(now_ts or time.time())).hour
+    except Exception:
+        hour = datetime.now().hour
+    if hour < 10:
+        return "time_0900_1000"
+    if hour < 12:
+        return "time_1000_1200"
+    if hour < 14:
+        return "time_1200_1400"
+    return "time_1400_close"
+
+
+def _scalp_sim_ldm_bucket_id(stage: str, bucket_type: str, bucket_key: str) -> str:
+    return f"{stage}:{bucket_type}:{_greenfield_bucket_slug(bucket_key)}"
+
+
+def _scalp_sim_entry_source_stage(stock: dict, runtime: dict | None) -> str:
+    runtime = runtime if isinstance(runtime, dict) else {}
+    return str(
+        stock.get("scalp_sim_candidate_window_source_stage")
+        or runtime.get("scalp_sim_candidate_window_source_stage")
+        or runtime.get("source_stage")
+        or stock.get("source_stage")
+        or "scalp_entry_action_decision_snapshot"
+    ).strip() or "source_unknown"
+
+
+def _scalp_sim_entry_stale_bucket(fields: dict | None = None) -> str:
+    fields = fields if isinstance(fields, dict) else {}
+    if fields.get("entry_submit_revalidation_block") or fields.get("entry_submit_revalidation_warning"):
+        return "stale_context_or_quote"
+    stale = str(fields.get("stale_bucket") or "").strip()
+    if stale and stale.lower() not in {"-", "none", "null"}:
+        return stale
+    return "fresh_or_unflagged"
+
+
+def _scalp_sim_entry_liquidity_bucket(runtime: dict | None, fields: dict | None = None) -> str:
+    runtime = runtime if isinstance(runtime, dict) else {}
+    fields = fields if isinstance(fields, dict) else {}
+    explicit = str(
+        fields.get("liquidity_bucket")
+        or runtime.get("liquidity_bucket")
+        or runtime.get("entry_adm_liquidity_bucket")
+        or ""
+    ).strip()
+    if explicit and explicit.lower() not in {"-", "none", "null"}:
+        return explicit
+    return "liquidity_unknown"
+
+
+def _scalp_sim_entry_overbought_bucket(runtime: dict | None, fields: dict | None = None) -> str:
+    runtime = runtime if isinstance(runtime, dict) else {}
+    fields = fields if isinstance(fields, dict) else {}
+    explicit = str(
+        fields.get("overbought_bucket")
+        or runtime.get("overbought_bucket")
+        or runtime.get("entry_adm_overbought_bucket")
+        or fields.get("sim_overbought_risk_bucket")
+        or runtime.get("overbought_risk_bucket")
+        or ""
+    ).strip()
+    if explicit and explicit.lower() not in {"-", "none", "null"}:
+        return explicit
+    return "overbought_unknown"
+
+
+def _scalp_sim_entry_time_bucket(runtime: dict | None, now_ts: float | None) -> str:
+    runtime = runtime if isinstance(runtime, dict) else {}
+    explicit = str(runtime.get("time_bucket") or runtime.get("entry_adm_time_bucket") or "").strip()
+    if explicit and explicit.lower() not in {"-", "none", "null"}:
+        return explicit
+    return _scalp_sim_ldm_time_bucket(now_ts)
+
+
+def _scalp_sim_entry_bucket_identity(
+    *,
+    stock: dict,
+    runtime: dict | None,
+    current_ai_score,
+    now_ts: float | None,
+    source_stage: str | None = None,
+    fields: dict | None = None,
+) -> dict:
+    if not isinstance(stock, dict):
+        return {}
+    score_source = current_ai_score
+    if score_source in (None, "", "-"):
+        runtime = runtime if isinstance(runtime, dict) else {}
+        score_source = runtime.get("current_ai_score") or stock.get("current_ai_score") or stock.get("ai_score")
+    score_band = _scalp_sim_ldm_score_band(score_source)
+    resolved_source_stage = str(source_stage or "").strip() or _scalp_sim_entry_source_stage(stock, runtime)
+    if score_band == "score_unknown" or not resolved_source_stage or resolved_source_stage == "source_unknown":
+        return {}
+    bucket_key = "|".join(
+        [
+            f"score={score_band}",
+            f"source={resolved_source_stage}",
+            f"stale={_scalp_sim_entry_stale_bucket(fields)}",
+            f"liquidity={_scalp_sim_entry_liquidity_bucket(runtime, fields)}",
+            f"overbought={_scalp_sim_entry_overbought_bucket(runtime, fields)}",
+            f"time={_scalp_sim_entry_time_bucket(runtime, now_ts)}",
+        ]
+    )
+    bucket_id = _scalp_sim_ldm_bucket_id("entry", "combo_entry_spot", bucket_key)
+    return {
+        "lifecycle_bucket_entry_bucket_id": bucket_id,
+        "lifecycle_bucket_entry_bucket_key": bucket_key,
+        "lifecycle_bucket_entry_identity_source": "runtime_deterministic_entry_combo_v1",
+    }
+
+
+def _scalp_sim_policy_row_for_entry_bucket(entry_bucket_id: str) -> dict | None:
+    entry_bucket_id = str(entry_bucket_id or "").strip()
+    if not entry_bucket_id:
+        return None
+    cache = _load_scalp_sim_auto_policy_cache()
+    if str(cache.get("status") or "") != "loaded":
+        return None
+    flow_entry_prefix = _greenfield_bucket_slug(f"entry={entry_bucket_id}", max_len=96)
+    entry_slug = _greenfield_bucket_slug(entry_bucket_id, max_len=96)
+    best: dict | None = None
+    best_sample = -1
+    for row in cache.get("approved_rows") or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("stage") or "") != "lifecycle_flow":
+            continue
+        row_bucket_id = str(row.get("bucket_id") or "").strip()
+        tail = row_bucket_id.split("lifecycle_flow:combo_lifecycle_flow:", 1)[-1]
+        matched = False
+        for prefix in (flow_entry_prefix, f"entry_{entry_slug}"):
+            probe = prefix[: min(len(prefix), len(tail), 80)]
+            if len(probe) >= 40 and (tail.startswith(probe) or prefix.startswith(tail)):
+                matched = True
+                break
+        if not matched:
+            continue
+        sample = _safe_int(row.get("complete_flow_count") or row.get("joined_sample") or row.get("sample"), 0)
+        if best is None or sample > best_sample:
+            best = row
+            best_sample = sample
+    return best
+
+
+def _attach_scalp_sim_bucket_identity(
+    stock: dict,
+    *,
+    runtime: dict | None,
+    current_ai_score,
+    now_ts: float | None,
+    source_stage: str | None = None,
+    fields: dict | None = None,
+) -> dict:
+    if not isinstance(stock, dict):
+        return {}
+    if stock.get("lifecycle_bucket_source_bucket_id") or stock.get("lifecycle_bucket_bucket_id"):
+        return _scalp_sim_bucket_policy_fields(stock)
+    identity = _scalp_sim_entry_bucket_identity(
+        stock=stock,
+        runtime=runtime,
+        current_ai_score=current_ai_score,
+        now_ts=now_ts,
+        source_stage=source_stage,
+        fields=fields,
+    )
+    if not identity:
+        return _scalp_sim_bucket_policy_fields(stock)
+    row = _scalp_sim_policy_row_for_entry_bucket(str(identity.get("lifecycle_bucket_entry_bucket_id") or ""))
+    set_fields = dict(identity)
+    if isinstance(row, dict):
+        set_fields.update(
+            {
+                "lifecycle_bucket_source_bucket_id": str(row.get("source_bucket_id") or ""),
+                "lifecycle_bucket_bucket_id": str(row.get("bucket_id") or ""),
+            }
+        )
+    else:
+        set_fields["lifecycle_bucket_bucket_id"] = str(identity.get("lifecycle_bucket_entry_bucket_id") or "")
+    _mutate_stock_state(stock, set_fields=set_fields)
+    return _scalp_sim_bucket_policy_fields(stock)
 
 
 def _safe_float(value, default=0.0):
@@ -3523,6 +3727,13 @@ def _maybe_arm_scalp_sim_candidate_window(
             "scalp_sim_candidate_window_quota_policy": "ldm_sample_v1",
         },
     )
+    _attach_scalp_sim_bucket_identity(
+        stock,
+        runtime=runtime or {},
+        current_ai_score=score_value,
+        now_ts=now_ts,
+        source_stage=source_stage_key,
+    )
     sim_runtime = dict(runtime or {})
     sim_runtime.update(
         {
@@ -3786,6 +3997,12 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
         return False
     current_ai_score = _safe_float(runtime.get("current_ai_score"), 0.0)
     now_ts = _safe_float(runtime.get("now_ts"), time.time())
+    _attach_scalp_sim_bucket_identity(
+        stock,
+        runtime=runtime or {},
+        current_ai_score=current_ai_score,
+        now_ts=now_ts,
+    )
     if _has_active_scalp_simulator_position(code):
         _log_entry_pipeline(
             stock,
