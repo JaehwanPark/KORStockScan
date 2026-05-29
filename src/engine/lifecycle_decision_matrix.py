@@ -79,15 +79,18 @@ RUNTIME_FEATURE_KEYS = {
     "stale_bucket",
     "price_resolution_bucket",
     "liquidity_bucket",
+    "liquidity_bucket_provenance",
     "liquidity_guard_action",
     "liquidity_guard_reason",
     "overbought_bucket",
+    "overbought_bucket_provenance",
     "overbought_guard_action",
     "overbought_guard_reason",
     "latency_state",
     "latency_reason",
     "price_below_bid_bps",
     "time_bucket",
+    "time_bucket_provenance",
     "actual_order_submitted",
     "broker_order_forbidden",
     "context_age_ms",
@@ -101,6 +104,7 @@ RUNTIME_FEATURE_KEYS = {
     "scale_in_arm",
     "scale_in_blocker_namespace",
     "scale_in_blocker_reason",
+    "scale_in_field_provenance",
     "qty",
     "limit_price",
     "curr_price",
@@ -409,6 +413,43 @@ def _runtime_features(row: dict[str, Any]) -> dict[str, Any]:
     return {key: row.get(key) for key in sorted(RUNTIME_FEATURE_KEYS) if key in row}
 
 
+def _time_bucket_from_value(value: Any) -> str:
+    raw = str(value or "").strip()
+    hour = -1
+    try:
+        hour = datetime.fromisoformat(raw).hour
+    except Exception:
+        if len(raw) >= 2 and raw[:2].isdigit() and not raw.startswith("20"):
+            try:
+                hour = int(raw[:2])
+            except Exception:
+                hour = -1
+    if hour < 0:
+        return "time_unknown"
+    if hour < 10:
+        return "time_0900_1000"
+    if hour < 12:
+        return "time_1000_1200"
+    if hour < 14:
+        return "time_1200_1400"
+    return "time_1400_close"
+
+
+def _entry_strength_bucket_from_features(features: dict[str, Any]) -> str:
+    explicit = _bucket_value(features.get("risk_context_bucket"), "")
+    if explicit:
+        return explicit
+    buy_pressure = _safe_float(features.get("buy_pressure"), None)
+    tick_accel = _safe_float(features.get("tick_accel"), None)
+    if buy_pressure is None and tick_accel is None:
+        return "strength_proxy_unobserved"
+    if (buy_pressure is not None and buy_pressure >= 70.0) or (tick_accel is not None and tick_accel >= 1.25):
+        return "strong_strength_momentum"
+    if (buy_pressure is not None and buy_pressure < 45.0) or (tick_accel is not None and tick_accel < 0.5):
+        return "weak_strength_momentum"
+    return "neutral_strength_momentum"
+
+
 def _labels(row: dict[str, Any]) -> dict[str, Any]:
     return {key: row.get(key) for key in sorted(LABEL_KEYS) if key in row}
 
@@ -656,9 +697,17 @@ def _load_wait6579_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[st
                 "source_stage": "wait6579_ev_cohort",
                 "runtime_features": {
                     "ai_score": item.get("ai_score"),
+                    "chosen_action": "WAIT_REQUOTE" if str(item.get("action") or "").upper() == "WAIT" else item.get("action"),
                     "buy_pressure": item.get("buy_pressure"),
                     "tick_accel": item.get("tick_accel"),
                     "micro_vwap_bp": item.get("micro_vwap_bp"),
+                    "liquidity_bucket": item.get("liquidity_bucket"),
+                    "liquidity_bucket_provenance": item.get("liquidity_bucket_provenance"),
+                    "overbought_bucket": item.get("overbought_bucket"),
+                    "overbought_bucket_provenance": item.get("overbought_bucket_provenance"),
+                    "time_bucket": item.get("time_bucket") or _time_bucket_from_value(item.get("signal_time") or item.get("event_time")),
+                    "time_bucket_provenance": item.get("time_bucket_provenance") or "signal_time_backfill",
+                    "risk_context_bucket": _entry_strength_bucket_from_features(item),
                     "latency_state": item.get("latency_state"),
                     "fixed_threshold_contract_role": "baseline_prior",
                 },
@@ -910,6 +959,9 @@ def _load_scalp_sim_scale_in_rows(target_date: str) -> tuple[list[dict[str, Any]
             is_filled = stage == "scalp_sim_scale_in_order_assumed_filled"
             filled_count += int(is_filled)
             unfilled_count += int(not is_filled)
+            scale_in_arm = _scale_in_arm_from_fields(stage, fields)
+            blocker_namespace = _scale_in_blocker_namespace(stage, fields, scale_in_arm)
+            ai_score_source = _scale_in_ai_score_source(fields, stage)
             first_add_at = str(scale_event.get("emitted_at") or "")
             post_add_values: list[float] = []
             for event in position.get("events") or []:
@@ -935,17 +987,30 @@ def _load_scalp_sim_scale_in_rows(target_date: str) -> tuple[list[dict[str, Any]
                     "stage": "scale_in",
                     "source_stage": stage,
                     "runtime_features": {
-                        "add_type": fields.get("add_type"),
+                        "add_type": scale_in_arm,
+                        "scale_in_arm": scale_in_arm,
+                        "scale_in_blocker_namespace": blocker_namespace,
+                        "scale_in_blocker_reason": fields.get("scale_in_blocker_reason")
+                        or fields.get("reason")
+                        or fields.get("blocked_reason")
+                        or "sim_scale_in_event",
                         "qty": fields.get("qty"),
                         "limit_price": fields.get("limit_price"),
                         "curr_price": fields.get("curr_price"),
                         "best_bid": fields.get("best_bid"),
                         "best_ask": fields.get("best_ask"),
+                        "ai_score": fields.get("current_ai_score") or fields.get("ai_score"),
+                        "ai_score_source": ai_score_source,
                         "actual_order_submitted": fields.get("actual_order_submitted"),
                         "broker_order_forbidden": fields.get("broker_order_forbidden"),
                         "fixed_threshold_contract_role": "bounded_tunable",
                         "scale_in_fill_observed": is_filled,
                         "sim_record_id": sim_record_id,
+                        "scale_in_field_provenance": {
+                            "arm": "source_field" if fields.get("scale_in_arm") or fields.get("add_type") else "backfilled_from_stage_or_action",
+                            "blocker_namespace": "source_field" if fields.get("scale_in_blocker_namespace") else "backfilled_from_stage_or_action",
+                            "ai_score_source": "source_field" if fields.get("ai_score_source") else "backfilled_from_stage_or_action",
+                        },
                     },
                     "labels": labels,
                     "stage_ev_composite_pct": _stage_ev("scale_in", labels),
@@ -990,6 +1055,61 @@ def _scale_in_blocker_namespace(stage: str, fields: dict[str, Any], arm: str) ->
     if "hold_sec_out_of_range" in str(fields.get("blocked_reason") or fields.get("reason") or ""):
         return "AVG_DOWN_ONLY"
     return arm or "NONE"
+
+
+def _scale_in_ai_score_source(fields: dict[str, Any], source_stage: str) -> str:
+    explicit = _bucket_value(fields.get("ai_score_source"), "")
+    if explicit:
+        return explicit
+    if _bucket_value(fields.get("current_ai_score") or fields.get("ai_score"), ""):
+        return "score_field_backfilled"
+    if source_stage.startswith("scalp_sim_"):
+        return "sim_scale_in_source_not_scored"
+    return "stage_rule_backfilled"
+
+
+def _panic_entry_action_from_stage(source_stage: str, fields: dict[str, Any]) -> str:
+    explicit = _bucket_value(
+        fields.get("chosen_action")
+        or fields.get("panic_lifecycle_action_type")
+        or fields.get("euphoria_action_type"),
+        "",
+    )
+    if explicit:
+        return explicit
+    if source_stage.endswith("_entry_blocked") or "entry_blocked" in source_stage:
+        return "BLOCK_ENTRY"
+    if "bottoming_entry_allowed" in source_stage:
+        return "ALLOW_BOTTOMING_ENTRY"
+    if "level1_entry_observed" in source_stage:
+        return "ALLOW_LEVEL1_RISK_OFF_ENTRY"
+    if "retest_starter_allowed" in source_stage:
+        return "ALLOW_RETEST_STARTER"
+    if "level1_starter_observed" in source_stage:
+        return "ALLOW_LEVEL1_EUPHORIA_STARTER"
+    return source_stage
+
+
+def _panic_entry_liquidity_bucket(fields: dict[str, Any]) -> str:
+    explicit = _bucket_value(fields.get("liquidity_bucket"), "")
+    if explicit:
+        return explicit
+    state = _bucket_value(fields.get("liquidity_state"), "")
+    return f"liquidity_state_{state.lower()}" if state else "liquidity_context_unobserved"
+
+
+def _panic_entry_overbought_bucket(fields: dict[str, Any], source_stage: str) -> str:
+    explicit = _bucket_value(fields.get("overbought_bucket") or fields.get("overbought_risk_bucket"), "")
+    if explicit:
+        return explicit
+    if _bucket_value(fields.get("chase_risk"), "").lower() in {"true", "1", "yes"}:
+        return "overbought_chase_risk"
+    level = _bucket_value(fields.get("euphoria_risk_level"), "")
+    if level:
+        return f"euphoria_risk_level_{level.lower()}"
+    if "euphoria" in source_stage:
+        return "euphoria_overbought_context_unobserved"
+    return "panic_entry_overbought_not_applicable"
 
 
 def _load_scale_in_attribution_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -1051,7 +1171,7 @@ def _load_scale_in_attribution_rows(target_date: str) -> tuple[list[dict[str, An
             "peak_profit": peak,
             "held_sec": fields.get("held_sec"),
             "ai_score": fields.get("current_ai_score") or fields.get("ai_score"),
-            "ai_score_source": fields.get("ai_score_source") or "-",
+            "ai_score_source": _scale_in_ai_score_source(fields, source_stage),
             "supply_pass_count": fields.get("supply_pass_count"),
             "price_guard_reason": fields.get("reason") if source_stage == "scale_in_price_guard_block" else None,
             "qty_reason": fields.get("reason") if source_stage == "scale_in_qty_block" else None,
@@ -1062,6 +1182,11 @@ def _load_scale_in_attribution_rows(target_date: str) -> tuple[list[dict[str, An
             "time_bucket": fields.get("time_bucket"),
             "runtime_effect": False,
             "decision_authority": fields.get("decision_authority") or "scale_in_attribution_source_only",
+            "scale_in_field_provenance": {
+                "arm": "source_field" if fields.get("scale_in_arm") or fields.get("add_type") or fields.get("scale_in_action_type") else "backfilled_from_stage_or_action",
+                "blocker_namespace": "source_field" if fields.get("scale_in_blocker_namespace") else "backfilled_from_stage_or_action",
+                "ai_score_source": "source_field" if fields.get("ai_score_source") else "backfilled_from_stage_or_action",
+            },
         }
         candidate_id = (
             fields.get("candidate_id")
@@ -1238,6 +1363,11 @@ def _load_scalp_sim_panic_rows(target_date: str) -> tuple[list[dict[str, Any]], 
             "mae_10m_pct": profit,
             "close_10m_pct": profit,
         } if not exclude_from_ev else {"exit_rule": fields.get("exit_rule")}
+        scale_in_arm = _scale_in_arm_from_fields(source_stage, fields) if matrix_stage == "scale_in" else ""
+        scale_in_blocker_namespace = (
+            _scale_in_blocker_namespace(source_stage, fields, scale_in_arm) if matrix_stage == "scale_in" else ""
+        )
+        ai_score_source = _scale_in_ai_score_source(fields, source_stage) if matrix_stage == "scale_in" else ""
         runtime_features = {
             "ai_score": fields.get("ai_score") or fields.get("current_ai_score"),
             "actual_order_submitted": fields.get("actual_order_submitted"),
@@ -1309,6 +1439,37 @@ def _load_scalp_sim_panic_rows(target_date: str) -> tuple[list[dict[str, Any]], 
             "exclude_from_live_approval": fields.get("exclude_from_live_approval"),
             "fixed_threshold_contract_role": "bounded_tunable",
         }
+        if matrix_stage == "scale_in":
+            runtime_features.update(
+                {
+                    "add_type": scale_in_arm,
+                    "scale_in_arm": scale_in_arm,
+                    "scale_in_blocker_namespace": scale_in_blocker_namespace,
+                    "scale_in_blocker_reason": fields.get("scale_in_blocker_reason")
+                    or fields.get("reason")
+                    or fields.get("blocked_reason")
+                    or source_stage,
+                    "ai_score_source": ai_score_source,
+                    "scale_in_field_provenance": {
+                        "arm": "source_field" if fields.get("scale_in_arm") or fields.get("add_type") else "backfilled_from_stage_or_action",
+                        "blocker_namespace": "source_field" if fields.get("scale_in_blocker_namespace") else "backfilled_from_stage_or_action",
+                        "ai_score_source": "source_field" if fields.get("ai_score_source") else "backfilled_from_stage_or_action",
+                    },
+                }
+            )
+        elif matrix_stage == "entry":
+            runtime_features.update(
+                {
+                    "chosen_action": _panic_entry_action_from_stage(source_stage, fields),
+                    "time_bucket": fields.get("time_bucket") or _time_bucket_from_value(item.get("emitted_at")),
+                    "liquidity_bucket": _panic_entry_liquidity_bucket(fields),
+                    "overbought_bucket": _panic_entry_overbought_bucket(fields, source_stage),
+                    "risk_context_bucket": fields.get("risk_context_bucket")
+                    or fields.get("symbol_regime")
+                    or fields.get("market_regime")
+                    or fields.get("risk_direction"),
+                }
+            )
         runtime_features = {key: value for key, value in runtime_features.items() if value is not None}
         rows.append(
             {
@@ -1517,6 +1678,15 @@ def _unknown_taxonomy_context(
             "unknown_reason_counts": {},
             "source_field_coverage": {},
             "recommended_resolution": "none",
+        }
+    if bucket_type == "exit_rule" and all(str(row.get("stage") or "") == "entry" for row in rows):
+        return {
+            "unknown_dimension_counts": {"exit_rule": 1},
+            "unknown_reason_counts": {"entry_label_not_applicable": 1},
+            "source_field_coverage": {
+                "exit_rule": _field_coverage(rows, field_map.get("exit_rule") or "labels.exit_rule")
+            },
+            "recommended_resolution": "entry_label_not_applicable",
         }
     source_dimensions: list[str] = []
     if bucket_type.startswith("combo_") and "=" in bucket_key:

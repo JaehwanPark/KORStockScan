@@ -197,12 +197,21 @@ def test_build_wait6579_ev_cohort_report(monkeypatch, tmp_path):
         "counterfactual_book",
         "actual_order_submitted",
         "broker_order_forbidden",
+        "liquidity_bucket",
+        "liquidity_bucket_provenance",
+        "overbought_bucket",
+        "overbought_bucket_provenance",
+        "time_bucket",
+        "time_bucket_provenance",
     }.issubset(row_keys)
     score_probe_row = next(row for row in report["rows"] if row["stock_code"] == "111111")
     assert score_probe_row["has_score65_74_probe"] is True
     assert score_probe_row["counterfactual_book"] == "scalp_score65_74_probe_counterfactual"
     assert score_probe_row["actual_order_submitted"] is False
     assert score_probe_row["broker_order_forbidden"] is True
+    assert score_probe_row["liquidity_bucket"] == "liquidity_proxy_strong"
+    assert score_probe_row["overbought_bucket"] == "overbought_proxy_normal"
+    assert score_probe_row["time_bucket"] == "time_1000_1200"
 
     split_map = {row["fill_type"]: row["samples"] for row in report["fill_split"]}
     assert split_map.get("FULL", 0) == 1

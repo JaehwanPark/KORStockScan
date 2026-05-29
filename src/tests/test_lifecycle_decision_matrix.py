@@ -25,6 +25,23 @@ def test_lifecycle_bucket_rows_explain_unknown_source_field_causes():
     assert scale["recommended_resolution"] == "emit_or_backfill_source_field"
 
 
+def test_lifecycle_entry_exit_rule_unknown_is_label_not_applicable():
+    rows = [
+        {
+            "stage": "entry",
+            "runtime_features": {"ai_score": 67, "chosen_action": "WAIT_REQUOTE"},
+            "labels": {"profit_rate": 0.4},
+            "stage_ev_composite_pct": 0.4,
+        }
+        for _ in range(12)
+    ]
+
+    entry = mod._entry_bucket_row("exit_rule", "exit_unknown", rows)
+
+    assert entry["unknown_reason_counts"] == {"entry_label_not_applicable": 1}
+    assert entry["recommended_resolution"] == "entry_label_not_applicable"
+
+
 def test_lifecycle_holding_started_marks_action_and_held_not_applicable():
     row = {
         "stage": "holding",
@@ -1266,6 +1283,124 @@ def test_lifecycle_matrix_emits_scale_in_bucket_attribution_workorders(tmp_path,
     assert arm_bucket["bucket_key"] == "PYRAMID"
     assert arm_bucket["recommended_route"] == "candidate_recovery_or_relax"
     assert report["summary"]["scale_in_bucket_runtime_candidate_count"] >= 1
+
+
+def test_lifecycle_matrix_wait6579_rows_carry_runtime_bucket_fields(tmp_path, monkeypatch):
+    matrix_dir = tmp_path / "matrix"
+    entry_dir = tmp_path / "entry_adm"
+    post_sell_dir = tmp_path / "post_sell"
+    monitor_dir = tmp_path / "monitor"
+    pipeline_dir = tmp_path / "pipeline_events"
+    for directory in (entry_dir, post_sell_dir, monitor_dir, pipeline_dir):
+        directory.mkdir(parents=True)
+    monkeypatch.setattr(mod, "MATRIX_DIR", matrix_dir)
+    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
+    monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", monitor_dir)
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
+    monkeypatch.setattr(
+        mod,
+        "entry_adm_report_paths",
+        lambda target_date: (
+            entry_dir / f"scalp_entry_action_decision_matrix_{target_date}.json",
+            entry_dir / f"scalp_entry_action_decision_matrix_{target_date}.md",
+        ),
+    )
+    (monitor_dir / "wait6579_ev_cohort_2026-05-21.json").write_text(
+        json.dumps(
+            {
+                "rows": [
+                    {
+                        "candidate_id": f"wait-{idx}",
+                        "stock_code": f"3{idx:05d}",
+                        "signal_time": "10:15:00",
+                        "ai_score": 67,
+                        "action": "WAIT",
+                        "buy_pressure": 72.0,
+                        "tick_accel": 1.3,
+                        "micro_vwap_bp": 10.0,
+                        "liquidity_bucket": "liquidity_proxy_strong",
+                        "liquidity_bucket_provenance": "deterministic_proxy",
+                        "overbought_bucket": "overbought_proxy_normal",
+                        "overbought_bucket_provenance": "deterministic_proxy",
+                        "time_bucket": "time_1000_1200",
+                        "expected_ev_pct": 1.2,
+                        "mfe_10m_pct": 2.0,
+                        "mae_10m_pct": -0.3,
+                        "close_10m_pct": 1.0,
+                    }
+                    for idx in range(12)
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_lifecycle_decision_matrix_report("2026-05-21")
+
+    combo = next(
+        item
+        for item in report["entry_bucket_attribution"]["buckets"]
+        if item["bucket_type"] == "combo_entry_spot"
+        and "source=wait6579_ev_cohort" in item["bucket_key"]
+    )
+    assert "liquidity=liquidity_proxy_strong" in combo["bucket_key"]
+    assert "overbought=overbought_proxy_normal" in combo["bucket_key"]
+    assert "time=time_1000_1200" in combo["bucket_key"]
+    assert combo["recommended_resolution"] == "none"
+
+
+def test_lifecycle_matrix_backfills_scale_in_observation_fields(tmp_path, monkeypatch):
+    matrix_dir = tmp_path / "matrix"
+    entry_dir = tmp_path / "entry_adm"
+    post_sell_dir = tmp_path / "post_sell"
+    monitor_dir = tmp_path / "monitor"
+    pipeline_dir = tmp_path / "pipeline_events"
+    for directory in (entry_dir, post_sell_dir, monitor_dir, pipeline_dir):
+        directory.mkdir(parents=True)
+    monkeypatch.setattr(mod, "MATRIX_DIR", matrix_dir)
+    monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
+    monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", monitor_dir)
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
+    monkeypatch.setattr(
+        mod,
+        "entry_adm_report_paths",
+        lambda target_date: (
+            entry_dir / f"scalp_entry_action_decision_matrix_{target_date}.json",
+            entry_dir / f"scalp_entry_action_decision_matrix_{target_date}.md",
+        ),
+    )
+    events = [
+        {
+            "stage": "scale_in_arm_blocked",
+            "stock_code": f"4{idx:05d}",
+            "record_id": idx,
+            "emitted_at": f"2026-05-21T13:{idx:02d}:00+09:00",
+            "fields": {
+                "chosen_action": "pyramid_wait",
+                "reason": "profit_not_enough",
+                "profit_rate": "0.7",
+                "peak_profit": "1.1",
+                "current_ai_score": "74",
+            },
+        }
+        for idx in range(6)
+    ]
+    (pipeline_dir / "pipeline_events_2026-05-21.jsonl").write_text(
+        "\n".join(json.dumps(event, ensure_ascii=False) for event in events),
+        encoding="utf-8",
+    )
+
+    report = mod.build_lifecycle_decision_matrix_report("2026-05-21")
+
+    scale_rows = [row for row in report["examples"] if row["stage"] == "scale_in"]
+    assert scale_rows
+    for row in scale_rows:
+        features = row["runtime_features"]
+        assert features["scale_in_arm"] == "PYRAMID"
+        assert features["scale_in_blocker_namespace"] == "PYRAMID"
+        assert features["ai_score_source"] == "score_field_backfilled"
+        assert features["scale_in_field_provenance"]["arm"] == "backfilled_from_stage_or_action"
 
 
 def test_lifecycle_matrix_emits_overnight_bucket_attribution_workorders(tmp_path, monkeypatch):

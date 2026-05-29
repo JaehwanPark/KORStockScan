@@ -183,6 +183,92 @@ def _classify_stage(stage: str) -> str:
     return "progress"
 
 
+def _nonempty(value) -> str:
+    raw = str(value or "").strip()
+    return "" if raw in {"", "-", "None", "none", "null"} else raw
+
+
+def _known_bucket_value(value) -> str:
+    raw = _nonempty(value)
+    return "" if "unknown" in raw.lower() else raw
+
+
+def _time_bucket(value: str, signal_date: str) -> str:
+    parsed = _parse_event_dt(value) or _parse_minute_time(str(value or ""), signal_date)
+    if parsed is None:
+        raw = _nonempty(value)
+        if len(raw) >= 2 and raw[:2].isdigit():
+            try:
+                hour = int(raw[:2])
+            except Exception:
+                hour = -1
+        else:
+            hour = -1
+    else:
+        hour = parsed.hour
+    if hour < 0:
+        return "time_unknown"
+    if hour < 10:
+        return "time_0900_1000"
+    if hour < 12:
+        return "time_1000_1200"
+    if hour < 14:
+        return "time_1200_1400"
+    return "time_1400_close"
+
+
+def _liquidity_bucket_from_fields(fields: dict[str, str]) -> tuple[str, str]:
+    explicit = _known_bucket_value(
+        fields.get("liquidity_bucket")
+        or fields.get("entry_adm_liquidity_bucket")
+        or fields.get("sim_pre_submit_liquidity_reason")
+    )
+    if explicit:
+        return explicit, "source_field"
+    action = _nonempty(fields.get("sim_pre_submit_liquidity_guard_action")).upper()
+    if action == "WOULD_BLOCK":
+        return "liquidity_would_block", "guard_action"
+    if action == "WOULD_PASS":
+        return "liquidity_ok", "guard_action"
+    terminal = _nonempty(fields.get("terminal_blocker") or fields.get("blocked_reason") or fields.get("reason")).lower()
+    if "liquidity" in terminal:
+        return "liquidity_blocked", "terminal_blocker"
+    buy_pressure = _safe_float(fields.get("buy_pressure") or fields.get("buy_pressure_10t"), 0.0)
+    tick_accel = _safe_float(fields.get("tick_accel"), 0.0)
+    if buy_pressure >= 70.0 or tick_accel >= 1.25:
+        return "liquidity_proxy_strong", "deterministic_proxy"
+    if buy_pressure > 0.0 or tick_accel > 0.0:
+        return "liquidity_proxy_normal", "deterministic_proxy"
+    return "liquidity_proxy_unobserved", "deterministic_proxy_missing_source"
+
+
+def _overbought_bucket_from_fields(fields: dict[str, str]) -> tuple[str, str]:
+    explicit = _known_bucket_value(
+        fields.get("overbought_bucket")
+        or fields.get("entry_adm_overbought_bucket")
+        or fields.get("overbought_risk_bucket")
+        or fields.get("sim_overbought_risk_bucket")
+        or fields.get("sim_pre_submit_overbought_reason")
+    )
+    if explicit:
+        return explicit, "source_field"
+    action = _nonempty(fields.get("sim_pre_submit_overbought_guard_action")).upper()
+    if action == "WOULD_BLOCK":
+        return "overbought_would_block", "guard_action"
+    if action == "WOULD_PASS":
+        return "overbought_normal", "guard_action"
+    terminal = _nonempty(fields.get("terminal_blocker") or fields.get("blocked_reason") or fields.get("reason")).lower()
+    if "overbought" in terminal:
+        return "overbought_blocked", "terminal_blocker"
+    micro_vwap = _safe_float(fields.get("micro_vwap_bp"), 0.0)
+    buy_pressure = _safe_float(fields.get("buy_pressure") or fields.get("buy_pressure_10t"), 0.0)
+    if micro_vwap >= 80.0 and buy_pressure >= 75.0:
+        return "overbought_proxy_chase_risk", "deterministic_proxy"
+    if micro_vwap >= 30.0:
+        return "overbought_proxy_watch", "deterministic_proxy"
+    return "overbought_proxy_normal", "deterministic_proxy"
+
+
 def _is_attempt_terminal(stage: str) -> bool:
     return _classify_stage(stage) in {"blocked", "submitted"}
 
@@ -297,6 +383,15 @@ def _build_wait6579_candidates(target_date: str) -> list[dict]:
             has_latency_block = any(event.stage == "latency_block" for event in attempt_events)
             has_order_fail = any(event.stage in _ORDER_FAIL_STAGES for event in attempt_events)
             latency_block_event = next((event for event in reversed(attempt_events) if event.stage == "latency_block"), None)
+            merged_fields: dict[str, str] = {}
+            for event in attempt_events:
+                merged_fields.update(event.fields)
+                merged_fields.setdefault("source_stage", event.stage)
+            merged_fields.update(candidate_event.fields)
+            merged_fields["terminal_blocker"] = terminal_event.stage
+            liquidity_bucket, liquidity_provenance = _liquidity_bucket_from_fields(merged_fields)
+            overbought_bucket, overbought_provenance = _overbought_bucket_from_fields(merged_fields)
+            time_bucket = _time_bucket(candidate_event.emitted_at or candidate_event.fields.get("tick_latest_time"), target_date)
 
             if has_submitted:
                 submission_blocker = "submitted"
@@ -339,6 +434,12 @@ def _build_wait6579_candidates(target_date: str) -> list[dict]:
                     ),
                     "tick_accel": round(_safe_float(candidate_event.fields.get("tick_accel"), 0.0), 4),
                     "micro_vwap_bp": round(_safe_float(candidate_event.fields.get("micro_vwap_bp"), 0.0), 3),
+                    "liquidity_bucket": liquidity_bucket,
+                    "liquidity_bucket_provenance": liquidity_provenance,
+                    "overbought_bucket": overbought_bucket,
+                    "overbought_bucket_provenance": overbought_provenance,
+                    "time_bucket": time_bucket,
+                    "time_bucket_provenance": "emitted_at" if _parse_event_dt(candidate_event.emitted_at) else "tick_latest_time",
                     "latency_state": str(candidate_event.fields.get("latency_state") or "-").upper(),
                     "parse_ok": str(candidate_event.fields.get("parse_ok") or "false").strip().lower() == "true",
                     "ai_response_ms": _safe_int(candidate_event.fields.get("ai_response_ms"), 0),
@@ -785,6 +886,12 @@ def build_wait6579_preflight_report(target_date: str) -> dict:
                 "has_order_fail": has_order_fail,
                 "submission_blocker": submission_blocker,
                 "latency_block_reason": str((latency_block_event.fields if latency_block_event else {}).get("reason") or "-"),
+                "liquidity_bucket": candidate.fields.get("liquidity_bucket"),
+                "liquidity_bucket_provenance": candidate.fields.get("liquidity_bucket_provenance"),
+                "overbought_bucket": candidate.fields.get("overbought_bucket"),
+                "overbought_bucket_provenance": candidate.fields.get("overbought_bucket_provenance"),
+                "time_bucket": candidate.fields.get("time_bucket"),
+                "time_bucket_provenance": candidate.fields.get("time_bucket_provenance"),
                 "stage_flow": [event.stage for event in item_events],
             }
         )
@@ -918,6 +1025,12 @@ def build_wait6579_ev_cohort_report(
                 "has_order_fail": bool(candidate.get("has_order_fail")),
                 "submission_blocker": str(candidate.get("submission_blocker") or "-"),
                 "latency_block_reason": str(candidate.get("latency_block_reason") or "-"),
+                "liquidity_bucket": str(candidate.get("liquidity_bucket") or "liquidity_unknown"),
+                "liquidity_bucket_provenance": str(candidate.get("liquidity_bucket_provenance") or "unavailable"),
+                "overbought_bucket": str(candidate.get("overbought_bucket") or "overbought_unknown"),
+                "overbought_bucket_provenance": str(candidate.get("overbought_bucket_provenance") or "unavailable"),
+                "time_bucket": str(candidate.get("time_bucket") or "time_unknown"),
+                "time_bucket_provenance": str(candidate.get("time_bucket_provenance") or "unavailable"),
                 "target_qty": _safe_int(candidate.get("target_qty"), 0),
                 "safe_budget": _safe_int(candidate.get("safe_budget"), 0),
                 "signal_price": _safe_int(candidate.get("signal_price"), 0),
