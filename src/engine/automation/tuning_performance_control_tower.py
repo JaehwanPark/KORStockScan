@@ -23,6 +23,7 @@ SCALP_SIM_POLICY_DIR = DATA_DIR / "threshold_cycle" / "scalp_sim_policies"
 SOURCE_SPECS: dict[str, tuple[Path, str]] = {
     "threshold_cycle_ev": (REPORT_ROOT_DIR / "threshold_cycle_ev", "threshold_cycle_ev"),
     "runtime_approval_summary": (REPORT_ROOT_DIR / "runtime_approval_summary", "runtime_approval_summary"),
+    "runtime_apply_bridge": (REPORT_ROOT_DIR / "runtime_apply_bridge", "runtime_apply_bridge"),
     "lifecycle_decision_matrix": (REPORT_ROOT_DIR / "lifecycle_decision_matrix", "lifecycle_decision_matrix"),
     "lifecycle_bucket_discovery": (REPORT_ROOT_DIR / "lifecycle_bucket_discovery", "lifecycle_bucket_discovery"),
     "swing_lifecycle_decision_matrix": (
@@ -45,8 +46,14 @@ PROGRESS_KEYS: dict[str, tuple[str, ...]] = {
         "surfaced_candidate_count",
         "sim_auto_approved_count",
         "live_auto_apply_ready_count",
+        "new_bucket_candidate_count",
         "code_patch_required_count",
         "automation_handoff_gap_count",
+        "parent_bucket_count",
+        "selected_parent_level",
+        "parent_granularity_status",
+        "absorbed_sample_count",
+        "child_conflict_warning_count",
     ),
     "lifecycle_decision_matrix": (
         "total_rows",
@@ -116,6 +123,10 @@ def _scalp_sim_policy_catalog_path(target_date: str) -> Path:
     return SCALP_SIM_POLICY_DIR / f"scalp_sim_policy_catalog_{target_date}.json"
 
 
+def _postclose_verifier_path(target_date: str) -> Path:
+    return REPORT_ROOT_DIR / "threshold_cycle_postclose_verification" / f"threshold_cycle_postclose_verification_{target_date}.json"
+
+
 def _load_json(path: Path) -> dict[str, Any]:
     try:
         if not path.exists():
@@ -170,7 +181,7 @@ def _previous_report(label: str, target_date: str) -> tuple[str | None, Path | N
     directory, prefix = SOURCE_SPECS[label]
     candidates: list[tuple[str, Path]] = []
     for path in directory.glob(f"{prefix}_*.json"):
-        match = re.search(r"(\d{4}-\d{2}-\d{2})", path.name)
+        match = re.fullmatch(rf"{re.escape(prefix)}_(\d{{4}}-\d{{2}}-\d{{2}})\.json", path.name)
         if not match:
             continue
         current_date = match.group(1)
@@ -346,6 +357,174 @@ def _runtime_summary(runtime_summary: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _window_discovery_path(target_date: str, suffix: str | None = None) -> Path:
+    base_dir = REPORT_ROOT_DIR / "lifecycle_bucket_discovery"
+    if suffix:
+        return base_dir / f"lifecycle_bucket_discovery_{target_date}_{suffix}.json"
+    return base_dir / f"lifecycle_bucket_discovery_{target_date}.json"
+
+
+def _lifecycle_windows_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    windows = payload.get("lifecycle_bucket_windows") if isinstance(payload.get("lifecycle_bucket_windows"), dict) else {}
+    return windows
+
+
+def _window_item_from_payload(windows: dict[str, Any], suffix: str) -> dict[str, Any]:
+    if suffix == "daily":
+        item = windows.get("daily")
+        return item if isinstance(item, dict) else {}
+    window_items = windows.get("windows") if isinstance(windows.get("windows"), dict) else {}
+    item = window_items.get(suffix)
+    return item if isinstance(item, dict) else {}
+
+
+def _window_role(suffix: str) -> str:
+    if suffix == "daily":
+        return "new_pattern_detection"
+    if suffix == "mtd":
+        return "promotion_confirmation"
+    return "rolling_confirmation"
+
+
+def _summary_window_item(
+    *,
+    suffix: str,
+    source_item: dict[str, Any],
+    fallback_payload: dict[str, Any],
+    fallback_path: Path,
+) -> dict[str, Any]:
+    summary = _summary(fallback_payload)
+    available = _safe_bool(source_item.get("available")) or bool(fallback_payload)
+    artifact = source_item.get("artifact") or (str(fallback_path) if fallback_path.exists() else None)
+    return {
+        "artifact": artifact,
+        "available": available,
+        "window_role": source_item.get("window_role") or _window_role(suffix),
+        "window_policy": source_item.get("window_policy") or fallback_payload.get("window_policy") or summary.get("source_window_policy") or ("daily_only" if suffix == "daily" else suffix),
+        "status": source_item.get("status") or summary.get("status") or ("missing" if not available else "unknown"),
+        "source_contract_status": source_item.get("source_contract_status") or summary.get("source_contract_status"),
+        "ai_two_pass_review_status": source_item.get("ai_two_pass_review_status") or summary.get("ai_two_pass_review_status"),
+        "parent_bucket_count": _safe_int(source_item.get("parent_bucket_count") or summary.get("parent_bucket_count")),
+        "selected_parent_level": source_item.get("selected_parent_level") or summary.get("selected_parent_level"),
+        "parent_granularity_status": source_item.get("parent_granularity_status") or summary.get("parent_granularity_status"),
+        "absorbed_sample_count": _safe_int(source_item.get("absorbed_sample_count") or summary.get("absorbed_sample_count")),
+        "child_conflict_warning_count": _safe_int(
+            source_item.get("child_conflict_warning_count") or summary.get("child_conflict_warning_count")
+        ),
+        "live_auto_apply_ready_count": _safe_int(
+            source_item.get("live_auto_apply_ready_count") or summary.get("live_auto_apply_ready_count")
+        ),
+    }
+
+
+def _lifecycle_bucket_window_summary(
+    target_date: str,
+    *,
+    threshold_ev: dict[str, Any],
+    runtime_summary: dict[str, Any],
+    daily_lifecycle_bucket: dict[str, Any],
+) -> dict[str, Any]:
+    ev_windows = _lifecycle_windows_payload(threshold_ev)
+    runtime_windows = _lifecycle_windows_payload(runtime_summary)
+    promotion_window = ev_windows.get("promotion_window") or runtime_windows.get("promotion_window") or "mtd"
+    confirmation_windows = (
+        ev_windows.get("confirmation_windows")
+        if isinstance(ev_windows.get("confirmation_windows"), list)
+        else runtime_windows.get("confirmation_windows")
+        if isinstance(runtime_windows.get("confirmation_windows"), list)
+        else ["rolling5d", "rolling10d"]
+    )
+    daily_path = _window_discovery_path(target_date)
+    daily_item = _window_item_from_payload(ev_windows, "daily") or _window_item_from_payload(runtime_windows, "daily")
+    windows: dict[str, Any] = {
+        "daily": _summary_window_item(
+            suffix="daily",
+            source_item=daily_item,
+            fallback_payload=daily_lifecycle_bucket,
+            fallback_path=daily_path,
+        ),
+    }
+    for suffix in ("rolling5d", "rolling10d", "mtd"):
+        path = _window_discovery_path(target_date, suffix)
+        source_item = _window_item_from_payload(ev_windows, suffix) or _window_item_from_payload(runtime_windows, suffix)
+        windows[suffix] = _summary_window_item(
+            suffix=suffix,
+            source_item=source_item,
+            fallback_payload=_load_json(path),
+            fallback_path=path,
+        )
+    return {
+        "promotion_window": promotion_window,
+        "confirmation_windows": confirmation_windows,
+        "daily": windows["daily"],
+        "windows": {key: value for key, value in windows.items() if key != "daily"},
+        "warnings": [
+            str(item)
+            for source in (ev_windows, runtime_windows)
+            for item in (source.get("warnings") if isinstance(source.get("warnings"), list) else [])
+            if str(item)
+        ],
+    }
+
+
+def _bridge_summary(bridge_report: dict[str, Any]) -> dict[str, Any]:
+    summary = _summary(bridge_report)
+    promotion_contract_passed = summary.get("lifecycle_bucket_promotion_contract_passed")
+    return {
+        "status": bridge_report.get("status"),
+        "candidate_count": _safe_int(summary.get("candidate_count")),
+        "live_auto_apply_ready_count": _safe_int(summary.get("live_auto_apply_ready_count")),
+        "greenfield_real_env_ready_count": _safe_int(summary.get("greenfield_real_env_ready_count")),
+        "greenfield_policy_emit_state": summary.get("greenfield_policy_emit_state"),
+        "lifecycle_bucket_promotion_window": summary.get("lifecycle_bucket_promotion_window"),
+        "lifecycle_bucket_promotion_contract_passed": (
+            promotion_contract_passed
+            if isinstance(promotion_contract_passed, bool)
+            else _safe_bool(promotion_contract_passed)
+        ),
+        "warnings": bridge_report.get("warnings") if isinstance(bridge_report.get("warnings"), list) else [],
+    }
+
+
+def _postclose_verifier_summary(
+    verifier_report: dict[str, Any],
+    artifact_status: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    artifact_status = artifact_status or {}
+    if not verifier_report:
+        if artifact_status.get("exists"):
+            status = "parse_failed"
+            window_status = "parse_failed"
+            warnings = ["threshold_cycle_postclose_verification_parse_failed"]
+        else:
+            status = "pending_not_generated_yet"
+            window_status = "pending_not_generated_yet"
+            warnings = ["threshold_cycle_postclose_verification_pending"]
+        return {
+            "status": status,
+            "lifecycle_bucket_windows": {
+                "status": window_status,
+                "checked": False,
+                "missing": [],
+                "warnings": warnings,
+            },
+        }
+    windows = (
+        verifier_report.get("lifecycle_bucket_windows")
+        if isinstance(verifier_report.get("lifecycle_bucket_windows"), dict)
+        else {}
+    )
+    return {
+        "status": verifier_report.get("status"),
+        "lifecycle_bucket_windows": {
+            "status": windows.get("status"),
+            "checked": bool(windows.get("checked")),
+            "missing": windows.get("missing") if isinstance(windows.get("missing"), list) else [],
+            "warnings": windows.get("warnings") if isinstance(windows.get("warnings"), list) else [],
+        },
+    }
+
+
 def _scalp_sim_control_tower_summary(approval: dict[str, Any], catalog_path: Path) -> dict[str, Any]:
     source_status = approval.get("source_status") if isinstance(approval.get("source_status"), dict) else {}
     runtime_bridge = source_status.get("runtime_apply_bridge") if isinstance(source_status.get("runtime_apply_bridge"), dict) else {}
@@ -393,18 +572,47 @@ def _primary_verdict(
     swing_bucket_progress: dict[str, Any],
     ev_authority: dict[str, Any],
     warnings: list[str],
+    lifecycle_bucket_windows: dict[str, Any],
+    bridge_summary: dict[str, Any],
+    verifier_summary: dict[str, Any],
 ) -> str:
     current_lifecycle = lifecycle_bucket_progress.get("current")
     current_swing = swing_bucket_progress.get("current")
-    lifecycle_live = _safe_int(current_lifecycle.get("live_auto_apply_ready_count") if isinstance(current_lifecycle, dict) else 0)
+    lifecycle_live = _safe_int(
+        current_lifecycle.get("live_auto_apply_ready_count") if isinstance(current_lifecycle, dict) else 0
+    )
+    lifecycle_new_bucket = _safe_int(
+        current_lifecycle.get("new_bucket_candidate_count") if isinstance(current_lifecycle, dict) else 0
+    )
     lifecycle_sim = _safe_int(current_lifecycle.get("sim_auto_approved_count") if isinstance(current_lifecycle, dict) else 0)
     swing_sim = _safe_int(current_swing.get("sim_auto_approved_count") if isinstance(current_swing, dict) else 0)
-    if lifecycle_live > 0:
-        return "live_bucket_ready"
-    if lifecycle_sim + swing_sim > 0:
-        return "sim_progress_no_live_bucket"
     if warnings:
         return "source_gap_review_required"
+    verifier_windows = (
+        verifier_summary.get("lifecycle_bucket_windows")
+        if isinstance(verifier_summary.get("lifecycle_bucket_windows"), dict)
+        else {}
+    )
+    if verifier_summary.get("status") == "fail" or verifier_windows.get("status") == "fail":
+        return "postclose_verifier_blocked"
+    bridge_live = _safe_int(bridge_summary.get("live_auto_apply_ready_count"))
+    if bridge_live > 0 and bridge_summary.get("lifecycle_bucket_promotion_contract_passed") is True:
+        return "bridge_live_bucket_ready"
+    promotion_window = str(lifecycle_bucket_windows.get("promotion_window") or "mtd")
+    promotion = (lifecycle_bucket_windows.get("windows") or {}).get(promotion_window)
+    if isinstance(promotion, dict):
+        promotion_live = _safe_int(promotion.get("live_auto_apply_ready_count"))
+        promotion_confirmed = (
+            promotion.get("source_contract_status") == "pass"
+            and promotion.get("parent_granularity_status") == "target_pass"
+            and promotion_live > 0
+        )
+        if promotion_confirmed:
+            return "promotion_confirmed_waiting_bridge"
+    if lifecycle_live > 0 or lifecycle_new_bucket > 0:
+        return "daily_detected_cumulative_missing"
+    if lifecycle_sim + swing_sim > 0:
+        return "sim_progress_no_live_bucket"
     if ev_authority.get("real_pnl_is_tuning_performance"):
         return "post_apply_performance_attributed"
     return "observe_only_no_new_tuning_progress"
@@ -420,6 +628,25 @@ def _markdown(report: dict[str, Any]) -> str:
     workorder = report["workorder"]
     runtime = report["runtime_approval"]
     scalp_sim_auto = report.get("scalp_sim_auto_approval") if isinstance(report.get("scalp_sim_auto_approval"), dict) else {}
+    bucket_windows = (
+        report.get("lifecycle_bucket_window_summary")
+        if isinstance(report.get("lifecycle_bucket_window_summary"), dict)
+        else {}
+    )
+    bridge = report.get("bridge_summary") if isinstance(report.get("bridge_summary"), dict) else {}
+    verifier = report.get("postclose_verifier_summary") if isinstance(report.get("postclose_verifier_summary"), dict) else {}
+    daily_window = bucket_windows.get("daily") if isinstance(bucket_windows.get("daily"), dict) else {}
+    promotion_window = str(bucket_windows.get("promotion_window") or "mtd")
+    promotion_summary = (
+        (bucket_windows.get("windows") or {}).get(promotion_window)
+        if isinstance(bucket_windows.get("windows"), dict)
+        else {}
+    )
+    verifier_windows = (
+        verifier.get("lifecycle_bucket_windows")
+        if isinstance(verifier.get("lifecycle_bucket_windows"), dict)
+        else {}
+    )
 
     def current(section: dict[str, Any], key: str) -> Any:
         payload = section.get("current") if isinstance(section.get("current"), dict) else {}
@@ -441,6 +668,10 @@ def _markdown(report: dict[str, Any]) -> str:
         "## 판정",
         "",
         f"- 판정: `{summary['primary_verdict']}`",
+        f"- bridge_policy_emit_state: `{summary.get('bridge_policy_emit_state') or '-'}`, "
+        f"promotion_window: `{summary.get('promotion_window') or '-'}`, "
+        f"verifier_status: `{summary.get('verifier_status') or '-'}`, "
+        f"lifecycle_bucket_windows_status: `{summary.get('lifecycle_bucket_windows_status') or '-'}`.",
         f"- 근거: LDM `sim_auto_approved={summary['lifecycle_sim_auto_approved_count']}` "
         f"(`{delta(ldm_bucket, 'sim_auto_approved_count')}`), "
         f"`live_auto_apply_ready={summary['lifecycle_live_auto_apply_ready_count']}` "
@@ -454,6 +685,19 @@ def _markdown(report: dict[str, Any]) -> str:
         "",
         "## LDM 승격/후보",
         "",
+        f"- Live-ready split: daily_discovery `{summary.get('daily_discovery_live_auto_apply_ready_count')}`, "
+        f"promotion_window `{summary.get('promotion_window_live_auto_apply_ready_count')}`, "
+        f"bridge_ready `{summary.get('bridge_live_auto_apply_ready_count')}`.",
+        f"- Parent bucket: daily parent_granularity_status `{daily_window.get('parent_bucket_count')}`/"
+        f"`{daily_window.get('parent_granularity_status')}`, "
+        f"{promotion_window} `{promotion_summary.get('parent_bucket_count') if isinstance(promotion_summary, dict) else None}`/"
+        f"`{promotion_summary.get('parent_granularity_status') if isinstance(promotion_summary, dict) else None}`, "
+        f"absorbed_sample `{promotion_summary.get('absorbed_sample_count') if isinstance(promotion_summary, dict) else None}`, "
+        f"conflict_children `{promotion_summary.get('child_conflict_warning_count') if isinstance(promotion_summary, dict) else None}`.",
+        f"- Bridge/verifier: greenfield_policy_emit_state `{bridge.get('greenfield_policy_emit_state') or '-'}`, "
+        f"promotion_contract_passed `{bridge.get('lifecycle_bucket_promotion_contract_passed')}`, "
+        f"verifier_status `{verifier.get('status') or '-'}`, "
+        f"verifier_missing `{inline_json(verifier_windows.get('missing') or [])}`.",
         f"- Lifecycle bucket: candidates `{current(ldm_bucket, 'candidate_count')}` "
         f"(`{delta(ldm_bucket, 'candidate_count')}`), surfaced `{current(ldm_bucket, 'surfaced_candidate_count')}` "
         f"(`{delta(ldm_bucket, 'surfaced_candidate_count')}`), sim-auto "
@@ -557,6 +801,13 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
     elif not apply_plan:
         warnings.append("threshold_apply_parse_failed")
 
+    verifier_path = _postclose_verifier_path(target_date)
+    verifier_payload = _load_json(verifier_path)
+    payloads["threshold_cycle_postclose_verification"] = verifier_payload
+    sources["threshold_cycle_postclose_verification"] = _artifact_status(verifier_path, verifier_payload)
+    if verifier_path.exists() and not verifier_payload:
+        warnings.append("threshold_cycle_postclose_verification_parse_failed")
+
     scalp_sim_auto_path = _scalp_sim_auto_approval_path(target_date)
     scalp_sim_auto = _load_json(scalp_sim_auto_path)
     sources["scalp_sim_auto_approval"] = _artifact_status(scalp_sim_auto_path, scalp_sim_auto)
@@ -590,9 +841,27 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
     )
     ev = _ev_authority(threshold_ev, apply_plan)
     runtime = _runtime_summary(payloads["runtime_approval_summary"])
+    lifecycle_bucket_windows = _lifecycle_bucket_window_summary(
+        target_date,
+        threshold_ev=threshold_ev,
+        runtime_summary=payloads["runtime_approval_summary"],
+        daily_lifecycle_bucket=payloads["lifecycle_bucket_discovery"],
+    )
+    bridge = _bridge_summary(payloads["runtime_apply_bridge"])
+    verifier = _postclose_verifier_summary(
+        payloads["threshold_cycle_postclose_verification"],
+        sources["threshold_cycle_postclose_verification"],
+    )
     workorder = _workorder_summary(payloads["code_improvement_workorder"])
     current_ldm_bucket = ldm_bucket.get("current") if isinstance(ldm_bucket.get("current"), dict) else {}
     current_swing_bucket = swing_bucket.get("current") if isinstance(swing_bucket.get("current"), dict) else {}
+    daily_bucket_summary = lifecycle_bucket_windows.get("daily") if isinstance(lifecycle_bucket_windows.get("daily"), dict) else {}
+    promotion_window = str(lifecycle_bucket_windows.get("promotion_window") or "mtd")
+    promotion_summary = (
+        (lifecycle_bucket_windows.get("windows") or {}).get(promotion_window)
+        if isinstance(lifecycle_bucket_windows.get("windows"), dict)
+        else {}
+    )
     report: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "report_type": REPORT_TYPE,
@@ -618,9 +887,35 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
                 swing_bucket_progress=swing_bucket,
                 ev_authority=ev,
                 warnings=warnings,
+                lifecycle_bucket_windows=lifecycle_bucket_windows,
+                bridge_summary=bridge,
+                verifier_summary=verifier,
+            ),
+            "legacy_daily_discovery_verdict": (
+                "live_bucket_ready"
+                if _safe_int(current_ldm_bucket.get("live_auto_apply_ready_count")) > 0
+                else None
+            ),
+            "legacy_primary_verdict_alias": (
+                "live_bucket_ready"
+                if _safe_int(current_ldm_bucket.get("live_auto_apply_ready_count")) > 0
+                else None
             ),
             "lifecycle_sim_auto_approved_count": _safe_int(current_ldm_bucket.get("sim_auto_approved_count")),
             "lifecycle_live_auto_apply_ready_count": _safe_int(current_ldm_bucket.get("live_auto_apply_ready_count")),
+            "daily_discovery_live_auto_apply_ready_count": _safe_int(daily_bucket_summary.get("live_auto_apply_ready_count")),
+            "promotion_window_live_auto_apply_ready_count": _safe_int(
+                promotion_summary.get("live_auto_apply_ready_count") if isinstance(promotion_summary, dict) else 0
+            ),
+            "bridge_live_auto_apply_ready_count": _safe_int(bridge.get("live_auto_apply_ready_count")),
+            "bridge_policy_emit_state": bridge.get("greenfield_policy_emit_state"),
+            "promotion_window": promotion_window,
+            "verifier_status": verifier.get("status"),
+            "lifecycle_bucket_windows_status": (
+                (verifier.get("lifecycle_bucket_windows") or {}).get("status")
+                if isinstance(verifier.get("lifecycle_bucket_windows"), dict)
+                else None
+            ),
             "swing_sim_auto_approved_count": _safe_int(current_swing_bucket.get("sim_auto_approved_count")),
             "real_pnl_is_tuning_performance": ev["real_pnl_is_tuning_performance"],
             "source_artifact_warnings": warnings,
@@ -641,6 +936,9 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
         "ev_authority": ev,
         "selected_runtime": _selected_runtime(apply_plan, threshold_ev),
         "runtime_approval": runtime,
+        "lifecycle_bucket_window_summary": lifecycle_bucket_windows,
+        "bridge_summary": bridge,
+        "postclose_verifier_summary": verifier,
         "scalp_sim_auto_approval": _scalp_sim_control_tower_summary(scalp_sim_auto, scalp_sim_catalog_path),
         "workorder": workorder,
         "sources": sources,
