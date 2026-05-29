@@ -139,6 +139,28 @@ def test_observation_source_quality_audit_accepts_high_volume_contract_labels(mo
     assert report["high_volume_no_source_fields"] == []
 
 
+def test_observation_source_quality_audit_accepts_order_failure_diagnostic_contract(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-15",
+        [
+            _event("order_bundle_failed", {"reason": "broker_receipt_missing"}, record_id=idx)
+            for idx in range(60)
+        ]
+        + [
+            _event("order_leg_fail", {"reason": "leg_rejected"}, record_id=idx + 100)
+            for idx in range(60)
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-05-15")
+
+    assert report["high_volume_no_source_fields"] == []
+    assert report["field_presence_top"]["order_bundle_failed"]["metric_role"] == 60
+    assert report["field_presence_top"]["order_leg_fail"]["metric_role"] == 60
+
+
 def test_observation_source_quality_audit_normalizes_pre_contract_ai_and_latency(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(

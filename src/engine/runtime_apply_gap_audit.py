@@ -583,14 +583,37 @@ def _producer_consumer_contract_drift(
     ledger: list[dict[str, Any]],
     payloads: dict[str, dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    bridge = payloads.get("runtime_apply_bridge", {})
+    bridge_summary = bridge.get("summary") if isinstance(bridge.get("summary"), dict) else {}
     bridge_families = {
         str(item.get("family") or "")
-        for item in payloads.get("runtime_apply_bridge", {}).get("candidates", [])
+        for item in bridge.get("candidates", [])
         if isinstance(item, dict)
     }
+    greenfield_policy_emit_state = str(bridge_summary.get("greenfield_policy_emit_state") or "").strip()
     drift: list[dict[str, Any]] = []
     for row in ledger:
         family = str(row.get("family") or "")
+        if (
+            row.get("producer_state") == "live_auto_apply_ready"
+            and row.get("source_artifact") == "lifecycle_bucket_discovery"
+            and family == GREENFIELD_REAL_ENV_FAMILY
+            and greenfield_policy_emit_state.startswith("not_emitted_")
+        ):
+            row["failure_state"] = "pass"
+            row["failure_reason"] = ""
+            row["final_disposition"] = "source_only_explicit_exclusion"
+            row["consumer_state"] = "explicit_bridge_exclusion"
+            row["bridge_state"] = greenfield_policy_emit_state
+            row["runtime_exclusion_reason"] = greenfield_policy_emit_state
+            row["explicit_runtime_exclusion"] = True
+            row["retryable"] = False
+            row["retry_reason"] = ""
+            row["retry_owner"] = ""
+            row["next_retry_stage"] = ""
+            row["retry_deadline"] = ""
+            row["surface_channel"] = "runtime_apply_gap_audit"
+            continue
         if (
             row.get("producer_state") == "live_auto_apply_ready"
             and row.get("source_artifact") in {"lifecycle_bucket_discovery", "swing_lifecycle_bucket_discovery"}

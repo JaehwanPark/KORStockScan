@@ -15,7 +15,7 @@
 
 ## 근거
 
-- as_of: `2026-05-29T15:05:06`
+- as_of: `2026-05-29T15:20:05`
 - baseline_date: `2026-05-28`
 - ai_confirmed unique: `104`
 - budget_pass unique: `58`
@@ -25,9 +25,9 @@
 - budget/ai unique: `55.8%` (baseline `51.9`)
 - submitted/ai unique: `5.8%` (baseline `1.9`)
 - critical submit thresholds: `submitted/ai < 20.0%` or `submitted/budget <= 10.0%` (floors: ai>=20, budget>=3)
-- top blockers: `blocked_strength_momentum:insufficient_history=15635, latency_block:latency_state_danger=14066, blocked_overbought:-=11867, blocked_swing_score_vpw:-=10288, blocked_strength_momentum:below_window_buy_value=5714`
+- top blockers: `latency_block:latency_state_danger=15951, blocked_strength_momentum:insufficient_history=15635, blocked_overbought:-=11867, blocked_swing_score_vpw:-=11806, blocked_strength_momentum:below_window_buy_value=5714`
 - upstream blockers: `blocked_ai_score:score_62.0=549, blocked_ai_score:ai_score_50_buy_hold_override=444, first_ai_wait:-=269, blocked_ai_score:score_60.0=169, blocked_ai_score:score_58.0=97`
-- latency blockers: `latency_block:latency_state_danger=14066`
+- latency blockers: `latency_block:latency_state_danger=15951`
 - price guards: `entry_ai_price_canary_fallback:low_confidence=115, entry_ai_price_canary_fallback:pre_submit_price_guard=19, entry_ai_price_canary_fallback:invalid_price=12, entry_ai_price_canary_fallback:above_best_ask=5, scale_in_price_guard_block:micro_vwap_bp>60.0=4`
 
 ## 금지된 자동변경
@@ -46,6 +46,6 @@
 
 ## Window Summary
 
-- `5m`: ai=0, budget=2, latency=0, submitted=0, top=`latency_block:latency_state_danger=276, blocked_swing_gap:-=274, blocked_gatekeeper_reject:눌림 대기=203`, upstream=`-`
-- `10m`: ai=10, budget=3, latency=1, submitted=0, top=`blocked_strength_momentum:insufficient_history=1518, blocked_overbought:-=727, latency_block:latency_state_danger=485`, upstream=`blocked_ai_score:score_62.0=7, blocked_ai_score:score_63.0=2, wait65_79_ev_candidate:score_65.0=1`
-- `30m`: ai=15, budget=4, latency=2, submitted=1, top=`blocked_strength_momentum:insufficient_history=9245, blocked_overbought:-=4347, latency_block:latency_state_danger=1530`, upstream=`blocked_ai_score:score_62.0=26, first_ai_wait:-=10, blocked_ai_score:score_58.0=9`
+- `5m`: ai=0, budget=4, latency=0, submitted=0, top=`latency_block:latency_state_danger=737, blocked_swing_score_vpw:-=578, blocked_swing_gap:-=184`, upstream=`-`
+- `10m`: ai=0, budget=4, latency=0, submitted=0, top=`latency_block:latency_state_danger=1448, blocked_swing_score_vpw:-=1162, blocked_swing_gap:-=362`, upstream=`-`
+- `30m`: ai=13, budget=11, latency=6, submitted=0, top=`blocked_strength_momentum:insufficient_history=3101, latency_block:latency_state_danger=2668, blocked_swing_score_vpw:-=1591`, upstream=`blocked_ai_score:score_62.0=11, blocked_ai_score:score_58.0=4, blocked_ai_score:score_60.0=3`

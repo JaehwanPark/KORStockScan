@@ -407,6 +407,14 @@ POSTCLOSE 최상위 감리는 `Tuning Chain Control State`(튜닝 체인 관제 
 
 ### Runbook 운영 확인 완료 기록
 
+- `[PostcloseAutomationHealthCheck20260529] 장후 자동화체인 상태 확인` (`Due: 2026-05-29`, `Slot: POSTCLOSE`, `TimeWindow: 16:00~20:45`)
+  - 판정: `warning`
+  - Tuning Chain Control State: `GREEN`
+  - blocked_stage: `-`
+  - impact: 2026-05-29 postclose chain은 초기 16:22 fail 이후 재실행으로 최종 `[DONE]` marker를 남겼고, postclose verifier는 pass로 닫혔다. 남은 warning은 runtime apply gap retry queue `1`과 postclose bot isolation process warning이며, 둘 다 threshold/order/provider/bot/env 변경 권한을 열지 않는다.
+  - 근거: `logs/threshold_cycle_postclose_cron.log`는 16:35 재시작 후 16:55:57 `[DONE]`으로 종료됐다. [threshold_cycle_postclose_verification_2026-05-29.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_2026-05-29.json)은 `status=pass`, missing/stale downstream link `0`이다. [runtime_apply_gap_audit_2026-05-29.json](/home/ubuntu/KORStockScan/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_2026-05-29.json)은 `status=warning`, `codex_directive_count=0`, `critical_failure_count=0`, retry queue `1`이다. `PYTHONPATH=. .venv/bin/python -m src.engine.error_detector --mode health_only --dry-run`은 `summary_severity=warning`이며 process warning은 `threshold_cycle_postclose_resource_isolation`에 따른 의도적 bot stop이다.
+  - 다음 액션: 다음 PREOPEN 전까지 bot restart, runtime env 직접 수정, provider/threshold/order guard 변경을 하지 않는다. retry queue와 source-quality warning은 다음 PREOPEN/postclose artifact로 재확인하고, Project/Calendar 반영은 문서 parser 검증 후 사용자 표준 sync 명령으로만 수행한다.
+
 - `[IntradayAutomationHealthCheck20260529] 장중 자동화체인 상태 확인` (`Due: 2026-05-29`, `Slot: INTRADAY`, `TimeWindow: 09:05~15:30`)
   - 판정: `pass`
   - Tuning Chain Control State: `GREEN`

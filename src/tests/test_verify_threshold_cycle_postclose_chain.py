@@ -185,6 +185,28 @@ def test_lifecycle_bucket_discovery_handoff_detects_missing_downstream():
     assert "code_improvement_workorder_lifecycle_bucket_discovery_orders_missing" in report["missing"]
 
 
+def test_lifecycle_bucket_discovery_greenfield_bridge_exclusion_is_not_missing_family():
+    discovery = {
+        "summary": {"source_contract_status": "pass", "ai_two_pass_review_status": "parsed"},
+        "surfaced_candidates": [
+            {
+                "bucket_id": "lifecycle_flow:combo:greenfield",
+                "stage": "lifecycle_flow",
+                "classification_state": "live_auto_apply_ready",
+                "live_auto_apply_family": "greenfield_real_environment_authority",
+            }
+        ],
+    }
+    bridge = {"summary": {"greenfield_policy_emit_state": "not_emitted_no_complete_lifecycle_flow"}}
+    runtime_summary = {"surfaced_candidate_ids": ["lifecycle_flow:combo:greenfield"]}
+
+    report = mod._lifecycle_bucket_discovery_handoff_status(discovery, bridge, runtime_summary, {"orders": []})
+
+    assert report["status"] == "pass"
+    assert report["missing_bridge_families"] == []
+    assert report["explicit_bridge_exclusion_families"] == ["greenfield_real_environment_authority"]
+
+
 def test_stage_hook_workorder_handoff_detects_missing_selected_order():
     stage_hook = {
         "status": "warning",

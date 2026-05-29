@@ -623,6 +623,8 @@ def _stable_source_bucket_id(stage: str, bucket_type: str, bucket_key: str) -> s
 
 
 def _source_bucket_kind(candidate_state: str, bucket: dict[str, Any]) -> str:
+    if _lifecycle_flow_source_only_blocker(bucket):
+        return "taxonomy_provenance_gap"
     if candidate_state == "live_auto_apply_ready":
         return "live_auto_candidate"
     if candidate_state == "sim_auto_approved":
@@ -640,7 +642,35 @@ def _source_bucket_kind(candidate_state: str, bucket: dict[str, Any]) -> str:
     return "source_only_observation"
 
 
+def _lifecycle_flow_missing_stage_keys(bucket: dict[str, Any]) -> list[str]:
+    if str(bucket.get("stage") or "") != "lifecycle_flow" and str(bucket.get("bucket_type") or "") != "combo_lifecycle_flow":
+        return []
+    dimensions = _source_dimensions(str(bucket.get("bucket_type") or ""), str(bucket.get("bucket_key") or ""))
+    missing: list[str] = []
+    for stage_key, field in (
+        ("entry", "entry_bucket_id"),
+        ("submit", "submit_bucket_id"),
+        ("holding", "holding_bucket_id"),
+        ("exit", "exit_bucket_id"),
+    ):
+        value = bucket.get(field) or dimensions.get(stage_key)
+        if not value or str(value).endswith(":missing") or str(value).strip().lower() in {"missing", "none", "null"}:
+            missing.append(stage_key)
+    return missing
+
+
+def _lifecycle_flow_source_only_blocker(bucket: dict[str, Any]) -> bool:
+    if str(bucket.get("stage") or "") != "lifecycle_flow" and str(bucket.get("bucket_type") or "") != "combo_lifecycle_flow":
+        return False
+    if _lifecycle_flow_missing_stage_keys(bucket):
+        return True
+    stage_contract = bucket.get("stage_contract") if isinstance(bucket.get("stage_contract"), dict) else {}
+    return any(str(stage_contract.get(key) or "").strip().lower() == "missing" for key in ("entry", "submit", "holding", "exit"))
+
+
 def _recommended_resolution(candidate_state: str, bucket: dict[str, Any]) -> str:
+    if _lifecycle_flow_source_only_blocker(bucket):
+        return "explicit_lifecycle_flow_source_only_blocker"
     existing = str(bucket.get("recommended_resolution") or "").strip()
     if existing and existing != "none":
         return existing
@@ -705,22 +735,32 @@ def _auto_promotion_contract_state_for_state(state: str) -> str:
 
 def _normalize_candidate_runtime_metadata(item: dict[str, Any]) -> None:
     state = str(item.get("classification_state") or "")
+    lifecycle_flow_source_only_blocker = _lifecycle_flow_source_only_blocker(item)
+    runtime_apply_allowed = state == "live_auto_apply_ready" and not lifecycle_flow_source_only_blocker
     item["source_bucket_kind"] = _source_bucket_kind(state, item)
     item["decision_authority"] = _decision_authority_for_state(state)
-    item["runtime_effect_after_approval"] = _runtime_effect_after_approval_for_state(state)
-    item["broker_order_forbidden"] = state != "live_auto_apply_ready"
-    item["allowed_runtime_apply"] = state == "live_auto_apply_ready"
-    item["runtime_effect"] = state == "live_auto_apply_ready"
-    item["sim_lifecycle_handoff_allowed"] = state in SIM_APPROVAL_STATES
-    item["bounded_live_canary_allowed"] = state == "live_auto_apply_ready"
-    if state != "live_auto_apply_ready":
+    item["runtime_effect_after_approval"] = (
+        "none" if lifecycle_flow_source_only_blocker else _runtime_effect_after_approval_for_state(state)
+    )
+    item["broker_order_forbidden"] = not runtime_apply_allowed
+    item["allowed_runtime_apply"] = runtime_apply_allowed
+    item["runtime_effect"] = runtime_apply_allowed
+    item["sim_lifecycle_handoff_allowed"] = state in SIM_APPROVAL_STATES and not lifecycle_flow_source_only_blocker
+    item["bounded_live_canary_allowed"] = runtime_apply_allowed
+    if not runtime_apply_allowed:
         item["live_auto_apply_family"] = None
+    if lifecycle_flow_source_only_blocker:
+        item["explicit_runtime_exclusion"] = True
+        item["source_only_explicit_exclusion"] = True
+        item["runtime_exclusion_reason"] = "lifecycle_flow_incomplete_stage_contract"
+        item["lifecycle_flow_contract_status"] = "source_only_blocked_incomplete_stage_contract"
+        item["missing_lifecycle_flow_stage_keys"] = _lifecycle_flow_missing_stage_keys(item)
     contract = item.get("auto_promotion_contract") if isinstance(item.get("auto_promotion_contract"), dict) else {}
     item["auto_promotion_contract"] = {
         **contract,
-        "state": _auto_promotion_contract_state_for_state(state),
-        "tier2_required": state == "live_auto_apply_ready",
-        "deterministic_contract_required": state == "live_auto_apply_ready",
+        "state": "source_only" if lifecycle_flow_source_only_blocker else _auto_promotion_contract_state_for_state(state),
+        "tier2_required": runtime_apply_allowed,
+        "deterministic_contract_required": runtime_apply_allowed,
         "deterministic_contract_components": [
             "source_quality_pass",
             "sample_floor",
@@ -729,7 +769,7 @@ def _normalize_candidate_runtime_metadata(item: dict[str, Any]) -> None:
             "runtime_hook",
             "post_apply_attribution",
         ]
-        if state == "live_auto_apply_ready"
+        if runtime_apply_allowed
         else [],
     }
 
@@ -1054,6 +1094,35 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
         source_dimensions=source_dimensions,
     )
     deterministic_proposal = taxonomy["deterministic_proposal"]
+    lifecycle_flow_source_only_blocker = _lifecycle_flow_source_only_blocker(
+        {
+            **bucket,
+            "stage": stage,
+            "bucket_type": bucket_type,
+        }
+    )
+    missing_lifecycle_flow_stage_keys = _lifecycle_flow_missing_stage_keys(
+        {
+            **bucket,
+            "stage": stage,
+            "bucket_type": bucket_type,
+        }
+    )
+    source_dimension_gap = ""
+    if lifecycle_flow_source_only_blocker:
+        source_dimension_gap = "lifecycle_flow_incomplete_stage_contract"
+    elif (
+        state == "live_auto_apply_ready"
+        and stage == "entry"
+        and bucket_type == "combo_entry_spot"
+        and bucket_key == ENTRY_LIVE_AUTO_BUCKET_KEY
+        and "unknown" in bucket_key
+    ):
+        source_dimension_gap = "legacy_contract_known_unknown"
+    elif "unknown" in bucket_key:
+        source_dimension_gap = "unknown_source_dimensions"
+    runtime_apply_allowed = state == "live_auto_apply_ready" and not lifecycle_flow_source_only_blocker
+    runtime_metadata_state = state if not lifecycle_flow_source_only_blocker else "source_only_keep_collecting"
     return {
         "bucket_id": bucket_id,
         "source_bucket_id": source_bucket_id,
@@ -1064,15 +1133,13 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
         "source_bucket_kind": _source_bucket_kind(state, bucket),
         "bucket_relation": relation,
         "classification_state": state,
-        "live_auto_apply_family": live_family,
+        "live_auto_apply_family": live_family if runtime_apply_allowed else None,
         "evidence_grade": grade.get("evidence_grade"),
-        "transition_target": "bounded_live_canary"
-        if state == "live_auto_apply_ready"
-        else grade.get("transition_target"),
+        "transition_target": "bounded_live_canary" if runtime_apply_allowed else grade.get("transition_target"),
         "grade_reason": grade.get("grade_reason"),
         "full_real_conversion_allowed": False,
-        "sim_lifecycle_handoff_allowed": state in SIM_APPROVAL_STATES,
-        "bounded_live_canary_allowed": state == "live_auto_apply_ready",
+        "sim_lifecycle_handoff_allowed": state in SIM_APPROVAL_STATES and not lifecycle_flow_source_only_blocker,
+        "bounded_live_canary_allowed": runtime_apply_allowed,
         "source_stage_split_required": bool(grade.get("source_stage_split_required")),
         "archived_live_exception_reason": None,
         "legacy_contract_known_unknown": (
@@ -1082,19 +1149,16 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
             and bucket_key == ENTRY_LIVE_AUTO_BUCKET_KEY
             and "unknown" in bucket_key
         ),
-        "source_dimension_gap": (
-            "legacy_contract_known_unknown"
-            if (
-                state == "live_auto_apply_ready"
-                and stage == "entry"
-                and bucket_type == "combo_entry_spot"
-                and bucket_key == ENTRY_LIVE_AUTO_BUCKET_KEY
-                and "unknown" in bucket_key
-            )
-            else "unknown_source_dimensions"
-            if "unknown" in bucket_key
-            else ""
-        ),
+        "source_dimension_gap": source_dimension_gap,
+        "explicit_runtime_exclusion": lifecycle_flow_source_only_blocker,
+        "source_only_explicit_exclusion": lifecycle_flow_source_only_blocker,
+        "runtime_exclusion_reason": "lifecycle_flow_incomplete_stage_contract"
+        if lifecycle_flow_source_only_blocker
+        else "",
+        "lifecycle_flow_contract_status": "source_only_blocked_incomplete_stage_contract"
+        if lifecycle_flow_source_only_blocker
+        else "",
+        "missing_lifecycle_flow_stage_keys": missing_lifecycle_flow_stage_keys,
         "source_dimensions": source_dimensions,
         "lifecycle_flow_bucket_id": bucket.get("lifecycle_flow_bucket_id"),
         "metric_scope": bucket.get("metric_scope"),
@@ -1155,17 +1219,17 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
         "unknown_reason_counts": bucket.get("unknown_reason_counts") or {},
         "source_field_coverage": bucket.get("source_field_coverage") or {},
         "actual_order_submitted": False,
-        "broker_order_forbidden": state != "live_auto_apply_ready",
-        "allowed_runtime_apply": state == "live_auto_apply_ready",
+        "broker_order_forbidden": not runtime_apply_allowed,
+        "allowed_runtime_apply": runtime_apply_allowed,
         "decision_authority": _decision_authority_for_state(state),
-        "runtime_effect": state == "live_auto_apply_ready",
-        "runtime_effect_after_approval": _runtime_effect_after_approval_for_state(state),
+        "runtime_effect": runtime_apply_allowed,
+        "runtime_effect_after_approval": _runtime_effect_after_approval_for_state(runtime_metadata_state),
         "auto_promotion_contract": {
-            "state": _auto_promotion_contract_state_for_state(state),
-            "tier2_required": state == "live_auto_apply_ready",
+            "state": _auto_promotion_contract_state_for_state(runtime_metadata_state),
+            "tier2_required": runtime_apply_allowed,
             "tier2_policy": "fail_closed",
             "primary_ev_uplift_threshold_pct": 1.0,
-            "deterministic_contract_required": state == "live_auto_apply_ready",
+            "deterministic_contract_required": runtime_apply_allowed,
             "deterministic_contract_components": [
                 "source_quality_pass",
                 "sample_floor",
@@ -1174,7 +1238,7 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
                 "runtime_hook",
                 "post_apply_attribution",
             ]
-            if state == "live_auto_apply_ready"
+            if runtime_apply_allowed
             else [],
             "final_user_approval_boundary": "full_live_only",
         },

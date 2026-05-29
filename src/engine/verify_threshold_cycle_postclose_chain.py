@@ -464,18 +464,26 @@ def _lifecycle_bucket_discovery_handoff_status(
     source_contract_status = str(discovery_summary.get("source_contract_status") or "")
     ai_review_status = str(discovery_summary.get("ai_two_pass_review_status") or "")
     candidates = discovery.get("surfaced_candidates") if isinstance(discovery.get("surfaced_candidates"), list) else []
+    bridge_summary = bridge_report.get("summary") if isinstance(bridge_report.get("summary"), dict) else {}
+    greenfield_policy_emit_state = str(bridge_summary.get("greenfield_policy_emit_state") or "").strip()
     expected_ids = sorted(
         str(item.get("bucket_id"))
         for item in candidates
         if isinstance(item, dict) and item.get("bucket_id")
     )
-    live_families = sorted(
-        {
-            str(item.get("live_auto_apply_family"))
-            for item in candidates
-            if isinstance(item, dict) and item.get("classification_state") == "live_auto_apply_ready" and item.get("live_auto_apply_family")
-        }
-    )
+    live_families_set: set[str] = set()
+    explicit_bridge_exclusion_families: set[str] = set()
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        family = str(item.get("live_auto_apply_family") or "")
+        if item.get("classification_state") != "live_auto_apply_ready" or not family:
+            continue
+        if family == "greenfield_real_environment_authority" and greenfield_policy_emit_state.startswith("not_emitted_"):
+            explicit_bridge_exclusion_families.add(family)
+            continue
+        live_families_set.add(family)
+    live_families = sorted(live_families_set)
     bridge_families = {
         str(item.get("family"))
         for item in (bridge_report.get("candidates") if isinstance(bridge_report.get("candidates"), list) else [])
@@ -548,6 +556,7 @@ def _lifecycle_bucket_discovery_handoff_status(
         "expected_candidate_ids": expected_ids,
         "live_auto_apply_families": live_families,
         "runtime_apply_bridge_families": sorted(bridge_families),
+        "explicit_bridge_exclusion_families": sorted(explicit_bridge_exclusion_families),
         "runtime_approval_summary_candidate_ids": sorted(runtime_ids),
         "missing_bridge_families": missing_bridge_families,
         "missing_runtime_summary_candidate_ids": missing_runtime_summary_ids,

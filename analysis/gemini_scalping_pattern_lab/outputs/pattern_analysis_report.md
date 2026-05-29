@@ -7,9 +7,9 @@
 
 ## 2. Plan Rebase 관찰축 요약
 
-- `WAIT65~79 total_candidates=96`
+- `WAIT65~79 total_candidates=81`
 - `recovery_check=0`, `promoted=0`, `submitted=0`
-- `blocked_ai_score_share=79.2%`, `gatekeeper_eval_ms_p95=3612ms`
+- `blocked_ai_score_share=72.8%`, `gatekeeper_eval_ms_p95=3582ms`
 
 ## 3. 손실 패턴 (Top 5)
 
@@ -21,20 +21,20 @@
 
 ### 1. AI threshold miss
 - 판정: EV 회수 우선 후보
-- 근거: 차단건수 4688603건, 차단비율 100.0%, 관찰일수 33일
+- 근거: 차단건수 4715643건, 차단비율 100.0%, 관찰일수 34일
 - 다음 액션: blocker 성격을 관찰축과 연결해 원인 귀속
 
 ### 2. overbought gate miss
 - 판정: EV 회수 우선 후보
-- 근거: 차단건수 1527342건, 차단비율 100.0%, 관찰일수 33일
+- 근거: 차단건수 1539209건, 차단비율 100.0%, 관찰일수 34일
 - 다음 액션: blocker 성격을 관찰축과 연결해 원인 귀속
 
 ### 3. latency guard miss
 - 판정: EV 회수 우선 후보
-- 근거: 차단건수 122243건, 차단비율 99.7%, 관찰일수 33일
+- 근거: 차단건수 138246건, 차단비율 99.7%, 관찰일수 34일
 - 다음 액션: blocker 성격을 관찰축과 연결해 원인 귀속
 
 ### 4. liquidity gate miss
 - 판정: EV 회수 우선 후보
-- 근거: 차단건수 91655건, 차단비율 99.6%, 관찰일수 33일
+- 근거: 차단건수 92545건, 차단비율 99.6%, 관찰일수 34일
 - 다음 액션: blocker 성격을 관찰축과 연결해 원인 귀속

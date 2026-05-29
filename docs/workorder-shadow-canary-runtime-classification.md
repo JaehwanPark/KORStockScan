@@ -1,7 +1,7 @@
 # 작업지시서: Shadow/Canary 런타임 경로와 Live Cohort 분류 기준
 
 작성일: `2026-04-25 KST`  
-마지막 갱신: `2026-05-21 KST`
+마지막 갱신: `2026-05-29 KST`
 대상: KORStockScan 메인 코드베이스 운영/튜닝 문서 소유자  
 ApplyTarget: `main` 문서/후속 코드정리 기준  
 
@@ -173,6 +173,22 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
 | `Greenfield ENTRY Telegram formatter` | readability/provenance patch, strategy cohort 아님 | Telegram body가 readable bucket label과 raw Bucket ID provenance를 분리한다 | canonical bucket id/report provenance는 유지하고 runtime authority는 변경하지 않는다 |
 
 5/28 결론은 신규 `remove`, 신규 `baseline-promote`, 신규 alpha shadow 전환 없음이다. 당일 코드 보강 2건은 runtime stability/readability 보강이며 threshold, broker submit guard, provider route, bot restart, cap release 권한을 갖지 않는다.
+
+### 2026-05-29 POSTCLOSE Snapshot Addendum
+
+이 addendum은 `threshold_cycle_ev_2026-05-29`, `runtime_approval_summary_2026-05-29`, `tuning_performance_control_tower_2026-05-29`, `runtime_apply_gap_audit_2026-05-29`, `code_improvement_workorder_2026-05-29`, `threshold_cycle_postclose_verification_2026-05-29` 기준의 당일 분류 보정이다. 결론은 `no_runtime_classification_change_with_live_bucket_ready_artifact_only`이다.
+
+| 축 | 2026-05-29 판정 | 근거 | 다음 액션 |
+| --- | --- | --- | --- |
+| `soft_stop_whipsaw_confirmation` | active-canary 유지 | Plan Rebase selected runtime family이며 threshold/order hard safety를 우회하지 않는다 | post-apply attribution과 hard/protect/emergency guard를 계속 분리 확인 |
+| `score65_74_recovery_probe` | bounded entry cohort 유지 | score bucket은 baseline prior/feature이고 단독 BUY 결정 권한이 없다 | wait/recovery cohort로만 유지하고 broad BUY threshold relaxation으로 승격하지 않는다 |
+| `lifecycle_decision_matrix_runtime` | selected umbrella runtime owner 유지 | runtime approval summary는 lifecycle matrix `pass`와 ready-for-bounded-apply `true`를 남겼지만 `runtime_mutation_allowed=false`다 | 다음 PREOPEN artifact guard 통과분만 소비한다 |
+| `lifecycle bucket live-auto ready` | PREOPEN artifact candidate / baseline 아님 | control tower는 `primary_verdict=live_bucket_ready`, lifecycle live-auto ready `7`을 남겼고 postclose verifier는 `pass`다 | same-stage owner, rollback guard, bridge/apply artifact 없이는 직접 env 수정하지 않는다 |
+| `scalp_sim_candidate_window_expansion` / `scalp_sim_ai_budget_manager` | sim-only selected cohort 유지 | sim/probe authority는 `actual_order_submitted=false`, `broker_order_forbidden=true`이며 runtime effect와 분리된다 | source-quality/EV 해석 입력으로만 유지한다 |
+| `code_improvement_workorder` | source-only implementation completed / 신규 runtime cohort 아님 | selected `implement_now=2`는 instrumentation/report/provenance 보강으로 처리됐고 non-implement 재판정의 신규 implement_now 승격은 `0`이다 | 다음 workorder 재생성 diff만 확인하고 자동 runtime 변경으로 해석하지 않는다 |
+| `runtime_apply_gap_audit` | warning, Codex directive 없음 | `codex_directive_count=0`, `critical_failure_count=0`, retry queue `1`이다 | retry queue는 다음 PREOPEN/postclose source-quality 확인으로 넘긴다 |
+
+5/29 결론은 신규 `remove`, 신규 `baseline-promote`, 신규 alpha shadow 전환 없음이다. live bucket ready는 PREOPEN artifact candidate일 뿐이며, threshold, broker submit guard, provider route, bot restart, cap release 권한을 갖지 않는다.
 
 ## 0.1 Runtime ON/OFF 스냅샷 (`2026-05-12` 기준)
 

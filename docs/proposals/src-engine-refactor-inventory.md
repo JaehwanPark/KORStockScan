@@ -166,6 +166,12 @@ consumer inventory 기준표:
 - 근거: 당일 postclose verifier는 `pass`지만 `runtime_apply_gap_audit`에 `greenfield_real_environment_authority:2026-05-27`와 `entry_wait6579_score66_69_recovery_gate_v1:2026-05-27`의 다음 PREOPEN uptake retry가 남았다. 이 상태에서 `system_metric_sampler` 파일 이동을 같은 날짜에 겹치면 monitoring warning과 Greenfield uptake 경고의 원인 분리가 흐려진다.
 - 다음 액션: 2026-05-28 이후 먼저 deploy/cron/error detector/test import consumer inventory를 refresh하고, old/new import smoke와 old/new CLI smoke plan을 만든 뒤 실제 이동 여부를 다시 판단한다. 그 전에는 wrapper 제거, cron/job id 변경, output path/JSON schema/metric semantics 변경, runtime/order/provider/bot 경로 이동을 하지 않는다.
 
+2026-05-29 POSTCLOSE 보강 판정:
+
+- 판정: `plan_supplemented_no_new_safe_slice`.
+- 근거: [codebase_performance_workorder_2026-05-29.json](/home/ubuntu/KORStockScan/data/report/codebase_performance_workorder/codebase_performance_workorder_2026-05-29.json)은 accepted `7`, implemented `7`, pending accepted `0`, deferred `3`, rejected `2`로 닫혔다. 당일 코드 보강은 lifecycle bucket discovery, observation/source-quality, runtime apply gap audit, postclose verifier의 instrumentation/report/provenance 계약 보강이며 runtime/order/provider/threshold/bot path 이동이 아니다. [runtime_apply_gap_audit_2026-05-29.json](/home/ubuntu/KORStockScan/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_2026-05-29.json)은 `codex_directive_count=0`, `critical_failure_count=0`이지만 retry queue `1`과 `status=warning`을 남겼고, error detector health-only warning은 의도적 postclose bot isolation이다.
+- 다음 액션: `system_metric_sampler`와 관련 report-only safe-slice 이동은 계속 보류한다. 다음 재개 전에는 deploy/cron/error detector/test import consumer inventory, old/new import smoke, old/new CLI smoke plan을 먼저 작성한다. 그 전에는 wrapper 제거, cron/job id 변경, output path/JSON schema/metric semantics 변경, runtime/order/provider/bot 경로 이동을 하지 않는다.
+
 보류:
 
 - `src.utils.threshold_cycle_registry -> src.engine.automation.threshold_cycle_registry`는 `UtilsBoundaryAudit` 이후 검토한다.

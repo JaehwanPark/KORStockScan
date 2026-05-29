@@ -492,6 +492,69 @@ def test_lifecycle_bucket_discovery_ai_final_state_recomputes_runtime_metadata()
     assert row["auto_promotion_contract"]["state"] == "source_only"
 
 
+def test_lifecycle_flow_incomplete_stage_contract_is_explicit_source_only_blocker():
+    candidate = mod._candidate_from_bucket(
+        "lifecycle_flow",
+        {
+            "bucket_type": "combo_lifecycle_flow",
+            "bucket_key": (
+                "entry=entry:combo_entry_spot:score_score_60_62|"
+                "submit=submit:missing|holding=holding:missing|scale_in=scale_in:none|exit=exit:missing"
+            ),
+            "source_quality_gate": "pass",
+            "recommended_route": "candidate_recovery_or_relax",
+            "sample": 12,
+            "joined_sample": 6,
+            "entry_bucket_id": "entry:combo_entry_spot:score_score_60_62",
+            "submit_bucket_id": "submit:missing",
+            "holding_bucket_id": "holding:missing",
+            "exit_bucket_id": "exit:missing",
+            "stage_contract": {"entry": "present", "submit": "missing", "holding": "missing", "exit": "missing"},
+        },
+    )
+
+    assert candidate["source_bucket_kind"] == "taxonomy_provenance_gap"
+    assert candidate["explicit_runtime_exclusion"] is True
+    assert candidate["source_only_explicit_exclusion"] is True
+    assert candidate["runtime_exclusion_reason"] == "lifecycle_flow_incomplete_stage_contract"
+    assert candidate["lifecycle_flow_contract_status"] == "source_only_blocked_incomplete_stage_contract"
+    assert candidate["missing_lifecycle_flow_stage_keys"] == ["submit", "holding", "exit"]
+    assert candidate["allowed_runtime_apply"] is False
+    assert candidate["runtime_effect"] is False
+
+
+def test_lifecycle_flow_source_only_blocker_overrides_live_runtime_metadata():
+    item = {
+        "stage": "lifecycle_flow",
+        "bucket_type": "combo_lifecycle_flow",
+        "bucket_key": (
+            "entry=entry:combo_entry_spot:score_score_70p|"
+            "submit=submit:missing|holding=holding:missing|exit=exit:missing"
+        ),
+        "classification_state": "live_auto_apply_ready",
+        "live_auto_apply_family": "greenfield_real_environment_authority",
+        "entry_bucket_id": "entry:combo_entry_spot:score_score_70p",
+        "submit_bucket_id": "submit:missing",
+        "holding_bucket_id": "holding:missing",
+        "exit_bucket_id": "exit:missing",
+        "auto_promotion_contract": {"state": "bounded_live_auto_apply_ready"},
+    }
+
+    mod._normalize_candidate_runtime_metadata(item)
+
+    assert item["source_bucket_kind"] == "taxonomy_provenance_gap"
+    assert item["explicit_runtime_exclusion"] is True
+    assert item["live_auto_apply_family"] is None
+    assert item["allowed_runtime_apply"] is False
+    assert item["runtime_effect"] is False
+    assert item["runtime_effect_after_approval"] == "none"
+    assert item["sim_lifecycle_handoff_allowed"] is False
+    assert item["bounded_live_canary_allowed"] is False
+    assert item["broker_order_forbidden"] is True
+    assert item["auto_promotion_contract"]["state"] == "source_only"
+    assert item["auto_promotion_contract"]["deterministic_contract_components"] == []
+
+
 def test_lifecycle_bucket_discovery_quarantines_contaminated_live_candidates(tmp_path, monkeypatch):
     ldm_dir = tmp_path / "ldm"
     report_dir = tmp_path / "report"

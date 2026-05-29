@@ -371,6 +371,52 @@ def test_greenfield_ready_missing_policy_is_fail_before_preopen(tmp_path, monkey
     assert any(item["failure_code"] == "greenfield_policy_file_missing" for item in report["retry_queue"])
 
 
+def test_greenfield_discovery_live_candidate_uses_bridge_exclusion_not_handoff_fail(tmp_path, monkeypatch):
+    report_dir = _patch_dirs(tmp_path, monkeypatch)
+    _write_core_artifacts(report_dir)
+    family = mod.GREENFIELD_REAL_ENV_FAMILY
+    candidate_id = "lifecycle_flow:positive-greenfield"
+    _write_json(
+        report_dir / "lifecycle_bucket_discovery" / "lifecycle_bucket_discovery_2026-05-22.json",
+        {
+            "surfaced_candidates": [
+                {
+                    "bucket_id": candidate_id,
+                    "family": family,
+                    "stage": "lifecycle_flow",
+                    "classification_state": "live_auto_apply_ready",
+                    "source_bucket_kind": "live_auto_candidate",
+                    "sample": 1,
+                    "source_quality_gate": "pass",
+                    "source_quality_adjusted_ev_pct": 1.2,
+                    "recommended_route": "candidate_recovery_or_relax",
+                }
+            ]
+        },
+    )
+    _write_json(
+        report_dir / "runtime_apply_bridge" / "runtime_apply_bridge_2026-05-22.json",
+        {
+            "summary": {
+                "greenfield_policy_emit_state": "not_emitted_no_complete_lifecycle_flow",
+                "greenfield_lifecycle_flow_live_auto_apply_candidate_count": 1,
+            },
+            "candidates": [],
+        },
+    )
+
+    report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+
+    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == candidate_id)
+    assert row["failure_state"] == "pass"
+    assert row["final_disposition"] == "source_only_explicit_exclusion"
+    assert row["consumer_state"] == "explicit_bridge_exclusion"
+    assert row["runtime_exclusion_reason"] == "not_emitted_no_complete_lifecycle_flow"
+    assert not any(item["failure_code"] == "producer_consumer_handoff_missing" for item in report["retry_queue"])
+    assert not report["producer_consumer_contract_drift"]
+    assert report["summary"]["critical_failure_count"] == 0
+
+
 def test_ready_bridge_consumed_by_next_preopen_apply_is_not_retry_target(tmp_path, monkeypatch):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir)

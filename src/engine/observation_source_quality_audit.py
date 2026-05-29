@@ -224,6 +224,8 @@ ENTRY_SUBMIT_SOURCE_CONTRACT_FIELDS = (
 HIGH_VOLUME_DIAGNOSTIC_STAGE_ROLES = {
     "blocked_zero_qty": "funnel_count",
     "initial_entry_qty_cap_applied": "funnel_count",
+    "order_bundle_failed": "execution_quality_real_only",
+    "order_leg_fail": "execution_quality_real_only",
     "swing_probe_state_restored": "ops_volume_diagnostic",
     "preset_exit_setup": "ops_volume_diagnostic",
     "swing_same_symbol_loss_reentry_cooldowns_restored": "ops_volume_diagnostic",
@@ -837,7 +839,7 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
             if len(finding["examples"]) < 5:
                 finding["examples"].append(str(normalized.get("invalid_gatekeeper_action_label")))
         example_keys.setdefault(stage, list(fields.keys())[:30])
-        for key, value in fields.items():
+        for key, value in normalized.items():
             if _source_like_field(key) and _is_present(value):
                 field_presence[stage][key] += 1
     for stage, count in stage_counts.most_common():
