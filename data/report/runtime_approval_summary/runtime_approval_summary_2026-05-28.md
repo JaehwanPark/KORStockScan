@@ -10,14 +10,14 @@
 - scalp_entry_adm_status: `pass`
 - lifecycle_matrix_status: `pass`
 - lifecycle_ai_context prompt/applied: `3` / `2125`
-- swing_strategy_discovery_labeled/pending: `261` / `2457`
+- swing_strategy_discovery_labeled/pending: `96` / `2624`
 - swing_lifecycle_matrix_auto: `0`
 - swing_lifecycle_bucket_auto: `0`
 - institutional_flow_available/join_rate: `True` / `100.0`
 - pattern_lab_currentness_status: `pass`
-- pattern_lab_ai_review_status: `warning`
+- pattern_lab_ai_review_status: `pass`
 - producer_gap_discovery_status: `warning`
-- pattern_lab_propagation_status: `pass`
+- pattern_lab_propagation_status: `warning`
 - env_generated_at: `2026-05-28T12:13:25`
 - first_bot_start_at: `-`
 - first_bot_start_after_env_at: `-`
@@ -32,17 +32,17 @@
 | `trailing_continuation` | trailing 이후 추가 상승 여지가 큰 표본을 계속 보유할 수 있는지 보는 축 | 관찰/리포트 only: trailing 연장 live 미적용 | `freeze` | `holding_exit_safety_freeze` | source-quality and GOOD_EXIT risk review | 계측/DB/safety 문제로 runtime 변경을 금지한다 | 1 | `-` | 동결 |
 | `market_regime_continuous_thresholds` | 설명 미등록 | 관찰/리포트 only: runtime 변경 없음 | `hold_sample` | `not_classified` | manual runtime approval review | 축은 유지/관찰하지만 표본 부족으로 runtime 변경은 하지 않는다 | 0.5 | `-` | 표본 부족 |
 | `pre_submit_price_guard` | 주문 제출 직전 quote stale, spread, passive probe 가격품질 문제를 막는 진입 안전축 | 기존 적용/검증 유지: 제출 직전 가격품질 guard 계열 | `hold_sample` | `intentional_pre_submit_safety_guard` | pre_submit_price_guard EV/source-quality only | 축은 유지/관찰하지만 표본 부족으로 runtime 변경은 하지 않는다 | 1 | `-` | 표본 부족 |
-| `score65_74_recovery_probe` | family id는 score65_74로 유지하지만 현 runtime floor 기준 AI 점수 60~74 WAIT 구간 중 수급/가속 조건이 좋은 후보를 1주/소액 canary로 회수하는 축 | PREOPEN env 적용: 당일 runtime 변경 대상 | `adjust_up` | `entry_unlock_probe` | runtime env/operator lock plus post-apply attribution | threshold-cycle guard 통과로 당일 PREOPEN env에 반영됨 | 1 | `-` | auto_bounded_live 선택 |
+| `score65_74_recovery_probe` | family id는 score65_74로 유지하지만 현 runtime floor 기준 AI 점수 60~74 WAIT 구간 중 수급/가속 조건이 좋은 후보를 1주/소액 canary로 회수하는 축 | PREOPEN env 적용: 당일 runtime 변경 대상 | `hold` | `entry_unlock_probe` | runtime env/operator lock plus post-apply attribution | threshold-cycle guard 통과로 당일 PREOPEN env에 반영됨 | 1 | `-` | auto_bounded_live 선택 |
 | `strength_momentum_soft_gate_p1` | 설명 미등록 | 기존 상태 유지: runtime 변경 없음 | `hold` | `softened_pre_ai_gate` | AI/counterfactual risk context, source-quality exception only | 현재 적용 상태와 값을 유지하고 추가 env 변경은 하지 않는다 | 1 | `-` | 유지 |
 | `overbought_pullback_guard_p1` | 설명 미등록 | 기존 상태 유지: runtime 변경 없음 | `hold` | `softened_pre_ai_plus_pre_submit_guard` | overbought risk bucket EV and pre-submit guard attribution | 현재 적용 상태와 값을 유지하고 추가 env 변경은 하지 않는다 | 1 | `-` | 유지 |
 | `liquidity_pre_submit_guard_p1` | 설명 미등록 | 기존 상태 유지: runtime 변경 없음 | `hold` | `softened_pre_ai_plus_pre_submit_guard` | liquidity risk bucket EV and real submit guard attribution | 현재 적용 상태와 값을 유지하고 추가 env 변경은 하지 않는다 | 1 | `-` | 유지 |
 | `bad_entry_refined_canary` | 진입 직후 never-green/AI fade 위험이 큰 표본을 조기 정리할 수 있는지 보는 축 | OFF/관찰 only: refined canary live 미적용 | `adjust_up` | `entry_quality_canary` | bad-entry cohort EV and rollback guard | 자동 반영 후보로 선택되면 PREOPEN env에 적용된다 | 1 | `-` | - |
 | `holding_exit_decision_matrix_advisory` | 보유 중 가능한 행동(EXIT/HOLD/AVG_DOWN/PYRAMID)을 matrix 점수로 보조 판단하는 축 | 관찰/리포트 only: advisory live 적용 아님 | `hold_no_edge` | `advisory_report_only` | report-only decision support contract | 명확한 edge가 없어 runtime 변경은 하지 않는다 | 1 | `-` | edge 부족 |
 | `scale_in_price_guard` | 추가매수 직전 best bid/defensive limit, spread, stale quote로 가격품질을 보장하는 축 | 기존 적용 유지: 추가매수 가격품질 guard ON | `hold` | `intentional_pre_submit_safety_guard` | scale-in price quality EV/source-quality only | 현재 적용 상태와 값을 유지하고 추가 env 변경은 하지 않는다 | 1 | `-` | 유지 |
-| `position_sizing_cap_release` | 신규/추가매수 1주 cap을 풀 수 있는지 EV와 downside 기준으로 보는 축 | 미적용: 1주 cap 유지 | `hold_sample` | `policy_approval_or_contract_gap` | separate approval artifact/workorder before runtime size change | 축은 유지/관찰하지만 표본 부족으로 runtime 변경은 하지 않는다 | 0.5667 | `-` | 표본 부족 |
-| `position_sizing_dynamic_formula` | 설명 미등록 | 관찰/리포트 only: runtime 변경 없음 | `hold_sample` | `policy_contract_gap` | notional/source-quality adjusted EV plus approval contract | 축은 유지/관찰하지만 표본 부족으로 runtime 변경은 하지 않는다 | 0.5667 | `-` | 표본 부족 |
+| `position_sizing_cap_release` | 신규/추가매수 1주 cap을 풀 수 있는지 EV와 downside 기준으로 보는 축 | 미적용: 1주 cap 유지 | `hold_sample` | `policy_approval_or_contract_gap` | separate approval artifact/workorder before runtime size change | 축은 유지/관찰하지만 표본 부족으로 runtime 변경은 하지 않는다 | 0.6 | `-` | 표본 부족 |
+| `position_sizing_dynamic_formula` | 설명 미등록 | 관찰/리포트 only: runtime 변경 없음 | `hold_sample` | `policy_contract_gap` | notional/source-quality adjusted EV plus approval contract | 축은 유지/관찰하지만 표본 부족으로 runtime 변경은 하지 않는다 | 0.6 | `-` | 표본 부족 |
 | `scalp_entry_action_decision_matrix_advisory` | 스캘핑 entry action(BUY_NOW/WAIT_REQUOTE/SKIP_STALE/BUY_DEFENSIVE 등)을 matrix EV로 비교해 AI action을 보정하는 운영 override 축 | 운영 override runtime bias: AI BUY를 WAIT/DROP 또는 defensive bias로 보정, submit safety guard 우선 | `hold` | `entry_adm_runtime_bias_operator_override` | daily scalp_entry_action_decision_matrix -> threshold EV/runtime summary/workorder/pattern lab -> next runtime env | 운영 override runtime bias는 AI BUY를 WAIT/DROP 또는 defensive bias로 보정한다. daily action bucket EV와 runtime forced_action provenance가 충분해야 다음 env 튜닝 판단으로 넘어간다. | 없음 | `-` | 유지 |
-| `lifecycle_decision_matrix_runtime` | 개별 후보 lifecycle row를 entry/submit/holding/scale-in/exit stage별 weighted ADM policy로 해석하는 umbrella runtime 축 | PREOPEN env 적용: 당일 runtime 변경 대상 | `adjust_up` | `umbrella_weighted_adm_runtime_policy` | postclose lifecycle_decision_matrix -> threshold EV/runtime summary -> next preopen bounded env | 선택 시 policy file/version만 다음 PREOPEN env로 연결한다. hard safety와 broker/account/order guard는 항상 matrix proposal보다 우선한다. | 0.0026 | `-` | auto_bounded_live 선택 |
+| `lifecycle_decision_matrix_runtime` | 개별 후보 lifecycle row를 entry/submit/holding/scale-in/exit stage별 weighted ADM policy로 해석하는 umbrella runtime 축 | PREOPEN env 적용: 당일 runtime 변경 대상 | `adjust_up` | `umbrella_weighted_adm_runtime_policy` | postclose lifecycle_decision_matrix -> threshold EV/runtime summary -> next preopen bounded env | 선택 시 policy file/version만 다음 PREOPEN env로 연결한다. hard safety와 broker/account/order guard는 항상 matrix proposal보다 우선한다. | -0.8361 | `-` | auto_bounded_live 선택 |
 | `latency_classifier_runtime_profile` | latency SAFE/CAUTION/DANGER classifier와 bounded submit recovery canary를 분리 적용하는 진입 실행품질 축 | 보류: 최신 recommendation 기준 다음 PREOPEN latency env 변경 없음 | `hold_sample` | `entry_execution_quality_bounded_tunable` | threshold-cycle latency audit plus post-apply latency_pass/order_bundle attribution | SAFE/CAUTION은 slippage check 후 normal submit으로 보내고, DANGER/stale/broker safety만 submit 차단으로 유지한다. | 0 | `-` | latency_classifier_runtime_semantics_gap |
 | `scalp_sim_overnight_ai_carry` | 장마감 후 open 스캘핑 sim 포지션을 overnight_v1로 SELL_TODAY/HOLD_OVERNIGHT 분리해 다음날 lifecycle/EV label로 연결하는 source-only 축 | source-only: sim 가상 청산/carry 기록만 수행, runtime threshold apply 권한 없음 | `observe_only` | `not_classified` | manual runtime approval review | runtime_effect=false source다. SELL_TODAY는 sim 가상 청산, HOLD_OVERNIGHT는 active_unrealized carry로만 남긴다. | - | `-` | 관찰 전용 |
 
@@ -63,7 +63,7 @@
 - rows ok/partial/missing/token_error: `120` / `0` / `0` / `0`
 - join_rate_pct: `100.0`
 - source_mix: `{'ka10059+ka10061': 120}`
-- top_net_buy: `[{'stock_code': '347850', 'smart_money_net': 886745, 'foreign_net_roll5': 23744, 'inst_net_roll5': 1329741, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '001440', 'smart_money_net': 837573, 'foreign_net_roll5': 0, 'inst_net_roll5': 151924, 'regime': 'INSTITUTION_ACCUMULATION'}, {'stock_code': '242040', 'smart_money_net': 651255, 'foreign_net_roll5': 963314, 'inst_net_roll5': 0, 'regime': 'FOREIGN_ACCUMULATION'}, {'stock_code': '393890', 'smart_money_net': 648550, 'foreign_net_roll5': 357659, 'inst_net_roll5': 284055, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '279570', 'smart_money_net': 567615, 'foreign_net_roll5': 82115, 'inst_net_roll5': 1654635, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '003490', 'smart_money_net': 564636, 'foreign_net_roll5': 2000149, 'inst_net_roll5': 923779, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '463050', 'smart_money_net': 366710, 'foreign_net_roll5': 0, 'inst_net_roll5': 68783, 'regime': 'INSTITUTION_ACCUMULATION'}, {'stock_code': '417010', 'smart_money_net': 364307, 'foreign_net_roll5': 332683, 'inst_net_roll5': 1192, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '006400', 'smart_money_net': 346843, 'foreign_net_roll5': 100929, 'inst_net_roll5': 175377, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '064400', 'smart_money_net': 317695, 'foreign_net_roll5': 0, 'inst_net_roll5': 619533, 'regime': 'INSTITUTION_ACCUMULATION'}]`
+- top_net_buy: `[{'stock_code': '347850', 'smart_money_net': 989122, 'foreign_net_roll5': 0, 'inst_net_roll5': 1508620, 'regime': 'INSTITUTION_ACCUMULATION'}, {'stock_code': '001440', 'smart_money_net': 838329, 'foreign_net_roll5': 0, 'inst_net_roll5': 152680, 'regime': 'INSTITUTION_ACCUMULATION'}, {'stock_code': '242040', 'smart_money_net': 651255, 'foreign_net_roll5': 963314, 'inst_net_roll5': 0, 'regime': 'FOREIGN_ACCUMULATION'}, {'stock_code': '393890', 'smart_money_net': 648550, 'foreign_net_roll5': 357659, 'inst_net_roll5': 284055, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '003490', 'smart_money_net': 581052, 'foreign_net_roll5': 2048995, 'inst_net_roll5': 891349, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '279570', 'smart_money_net': 567615, 'foreign_net_roll5': 82115, 'inst_net_roll5': 1654635, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '006400', 'smart_money_net': 436116, 'foreign_net_roll5': 181967, 'inst_net_roll5': 183612, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '463050', 'smart_money_net': 366710, 'foreign_net_roll5': 0, 'inst_net_roll5': 68783, 'regime': 'INSTITUTION_ACCUMULATION'}, {'stock_code': '417010', 'smart_money_net': 364307, 'foreign_net_roll5': 332683, 'inst_net_roll5': 1192, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '204270', 'smart_money_net': 351119, 'foreign_net_roll5': 411430, 'inst_net_roll5': 0, 'regime': 'FOREIGN_ACCUMULATION'}]`
 - warnings: `[]`
 
 ## Lifecycle Decision Matrix
@@ -111,10 +111,10 @@
 ## Swing Strategy Discovery Sim
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_2026-05-28.json`
 - available: `True`
-- candidate/arm/labeled: `406` / `3102` / `261`
-- pending_future_quote_count: `2457`
+- candidate/arm/labeled: `432` / `3204` / `96`
+- pending_future_quote_count: `2624`
 - top_surviving_arm: `arm05_breakout_conf_trailing`
-- avoid_bucket_count: `20`
+- avoid_bucket_count: `3`
 - runtime_effect: `False`
 - interpretation: source-only exploration. Surviving arms can create future source-quality/workorder inputs but cannot apply runtime env.
 - warnings: `['pending_future_quotes']`
@@ -122,9 +122,9 @@
 ## Swing Lifecycle Matrix
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_lifecycle_decision_matrix/swing_lifecycle_decision_matrix_2026-05-28.json`
 - available: `True`
-- total/probe/discovery: `3170` / `68` / `3102`
+- total/probe/discovery: `3272` / `68` / `3204`
 - sim_auto_candidate_count: `0`
-- workorder_count: `29`
+- workorder_count: `13`
 - daily_simulation_consumed: `False`
 - runtime_effect: `False`
 - warnings: `[]`
@@ -133,18 +133,18 @@
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_lifecycle_bucket_discovery/swing_lifecycle_bucket_discovery_2026-05-28.json`
 - available: `True`
 - source_contract_status: `pass`
-- surfaced/sim_auto/code_patch: `529` / `0` / `0`
+- surfaced/sim_auto/code_patch: `527` / `0` / `0`
 - runtime_effect: `False`
 - warnings: `[]`
 
 ## Panic
 | 항목 | 설명 | 현재 적용 | 상태 | Gate 분류 | 튜닝 경로 | 판정 해석 | 점수 | 계약 | 차단/판정 사유 |
 | --- | --- | --- | --- | --- | --- | --- | ---: | --- | --- |
-| `panic_entry_freeze_guard` | 패닉셀 구간에서 scalping 신규 BUY pre-submit freeze canary를 열 수 있는지 보는 축 | 계약 미준비: approval artifact를 만들어도 pre-submit freeze runtime 반영 불가 | `hold_sample` | `-` | - | 축은 유지/관찰하지만 표본 부족으로 runtime 변경은 하지 않는다 | 0.3723 | `contract_missing` | 표본 부족 |
+| `panic_entry_freeze_guard` | 패닉셀 구간에서 scalping 신규 BUY pre-submit freeze canary를 열 수 있는지 보는 축 | 계약 미준비: approval artifact를 만들어도 pre-submit freeze runtime 반영 불가 | `hold` | `-` | - | 현재 적용 상태와 값을 유지하고 추가 env 변경은 하지 않는다 | 0.3723 | `contract_missing` | 유지 |
 | `panic_buy_runner_tp_canary` | 패닉바잉 구간에서 fixed TP 전량청산 대비 runner 유지가 missed upside를 줄이는지 보는 축 | report-only: TP/trailing/live exit 변경 없음 | `freeze` | `-` | - | 계측/DB/safety 문제로 runtime 변경을 금지한다 | 0.45 | `contract_missing` | 소스 품질 차단, panic_buy_orderbook_collector_coverage_gap |
 
 ## Pattern Lab Audits
 - currentness: status=`pass` fail=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-28.json`
-- ai_review: status=`warning` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-05-28.json`
+- ai_review: status=`pass` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-05-28.json`
 - producer_gap_discovery: status=`warning` artifact=`/home/ubuntu/KORStockScan/data/report/producer_gap_discovery/producer_gap_discovery_2026-05-28.json`
-- propagation: status=`pass` fail=`0` warnings=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-28.json`
+- propagation: status=`warning` fail=`0` warnings=`2` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-28.json`

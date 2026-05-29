@@ -1,18 +1,18 @@
 # Swing Bottom Rebound Policy Auto Loop - 2026-05-28
 
-- generated_at: `2026-05-28T21:27:00+09:00`
+- generated_at: `2026-05-29T13:33:47+09:00`
 - decision_authority: `swing_bottom_rebound_sim_policy_auto_approval`
 - runtime_effect: `False`
 - broker_order_forbidden: `True`
 - allowed_runtime_apply: `False`
 - ai_tier2_status: `parsed`
-- classification_state: `source_only_keep_collecting`
-- promote_policy: `False`
+- classification_state: `sim_auto_approved`
+- promote_policy: `True`
 - baseline_research_ev_pct: `1.423559`
 - candidate_sim_bucket_ev_pct: `1.423559`
 - relative_improvement: `1.0`
 - sample_count: `56719`
-- warnings: `['explicit_gap:No explicit candidate_source payload was provided while the promotion scope requires candidate_source_only.', 'explicit_gap:source_quality_adjusted_ev_pct is not explicitly provided; only baseline/candidate EV metrics are available.', 'explicit_gap:candidate_source=false and candidate_source_selected_count=0 leave the source-selection contract unproven.']`
+- warnings: `[]`
 
 ## Contract
 

@@ -56,6 +56,12 @@ AI_REVIEW_MODEL = "gpt-5.4"
 AI_REVIEW_SOURCE_ONLY_MODEL = "gpt-5.4"
 AI_REVIEW_SOURCE_ONLY_REASONING_EFFORT = "low"
 LIVE_AUTO_STATES = {"live_auto_apply_ready"}
+LIFECYCLE_FLOW_SIM_PROBE_STATE = "lifecycle_flow_sim_probe_candidate"
+SIM_APPROVAL_STATES = {
+    "sim_auto_approved",
+    "entry_only_sim_auto_approved",
+    LIFECYCLE_FLOW_SIM_PROBE_STATE,
+}
 EVIDENCE_GRADE_1_COMPLETED_SIM = "grade_1_completed_sim"
 EVIDENCE_GRADE_2_COUNTERFACTUAL = "grade_2_counterfactual"
 EVIDENCE_GRADE_MIXED_SOURCE = "mixed_source"
@@ -74,6 +80,7 @@ AUTO_SURFACE_STATES = {
     "new_bucket_candidate",
     "sim_auto_approved",
     "entry_only_sim_auto_approved",
+    LIFECYCLE_FLOW_SIM_PROBE_STATE,
     "entry_only_source_candidate",
     "live_auto_apply_ready",
     "runtime_blocked_contract_gap",
@@ -85,6 +92,7 @@ FINAL_CLASSIFICATION_STATES = {
     "source_only_keep_collecting",
     "sim_auto_approved",
     "entry_only_sim_auto_approved",
+    LIFECYCLE_FLOW_SIM_PROBE_STATE,
     "entry_only_source_candidate",
     "live_auto_apply_ready",
     "runtime_blocked_contract_gap",
@@ -131,6 +139,7 @@ SOURCE_CONTRACT_SECTION_SCHEMAS: dict[str, dict[str, tuple[str, ...]]] = {
     "lifecycle_flow_bucket_attribution": {
         "bucket_types": ("combo_lifecycle_flow",),
         "bucket_fields": (
+            "ai_inference_proposal",
             "attribution_key",
             "bucket_key",
             "bucket_type",
@@ -144,6 +153,7 @@ SOURCE_CONTRACT_SECTION_SCHEMAS: dict[str, dict[str, tuple[str, ...]]] = {
             "fallback_identity_count",
             "forbidden_uses",
             "holding_bucket_id",
+            "incomplete_flow_count",
             "join_rate",
             "joined_sample",
             "lifecycle_flow_bucket_id",
@@ -619,6 +629,8 @@ def _source_bucket_kind(candidate_state: str, bucket: dict[str, Any]) -> str:
         return "sim_auto_policy"
     if candidate_state == "entry_only_sim_auto_approved":
         return "entry_only_sim_policy"
+    if candidate_state == LIFECYCLE_FLOW_SIM_PROBE_STATE:
+        return "lifecycle_flow_sim_probe_policy"
     if candidate_state == "entry_only_source_candidate":
         return "entry_only_source_candidate"
     if bucket.get("unknown_dimension_counts") or "unknown" in str(bucket.get("bucket_key") or ""):
@@ -640,11 +652,86 @@ def _recommended_resolution(candidate_state: str, bucket: dict[str, Any]) -> str
         return "next_preopen_sim_policy_input"
     if candidate_state == "entry_only_sim_auto_approved":
         return "entry_only_sim_policy_no_greenfield_live"
+    if candidate_state == LIFECYCLE_FLOW_SIM_PROBE_STATE:
+        return "next_preopen_lifecycle_flow_sim_probe_policy_input"
     if candidate_state == "entry_only_source_candidate":
         return "entry_only_keep_collecting_no_greenfield_live"
     if str(bucket.get("source_quality_gate") or "") != "pass":
         return "keep_collecting_until_sample_floor"
     return "keep_collecting"
+
+
+def _decision_authority_for_state(state: str) -> str:
+    if state == "live_auto_apply_ready":
+        return "lifecycle_bucket_discovery_live_auto_apply"
+    if state == "entry_only_sim_auto_approved":
+        return "lifecycle_bucket_discovery_entry_only_sim_auto"
+    if state == "entry_only_source_candidate":
+        return "lifecycle_bucket_discovery_entry_only_source_quality"
+    if state == LIFECYCLE_FLOW_SIM_PROBE_STATE:
+        return "lifecycle_bucket_discovery_lifecycle_flow_sim_probe"
+    if state == "sim_auto_approved":
+        return "lifecycle_bucket_discovery_sim_auto"
+    return "lifecycle_bucket_discovery_source_quality"
+
+
+def _runtime_effect_after_approval_for_state(state: str) -> str:
+    if state == "live_auto_apply_ready":
+        return "live_auto_apply_without_human_approval"
+    if state == "entry_only_sim_auto_approved":
+        return "entry_only_sim_bucket_policy"
+    if state == LIFECYCLE_FLOW_SIM_PROBE_STATE:
+        return "lifecycle_flow_sim_probe_policy"
+    if state == "entry_only_source_candidate":
+        return "none_entry_only_source_candidate"
+    if state == "sim_auto_approved":
+        return "sim_only_bucket_policy"
+    return "none"
+
+
+def _auto_promotion_contract_state_for_state(state: str) -> str:
+    if state == "live_auto_apply_ready":
+        return "bounded_live_auto_apply_ready"
+    if state == "entry_only_sim_auto_approved":
+        return "entry_only_sim_auto_approved"
+    if state == "entry_only_source_candidate":
+        return "entry_only_source_candidate"
+    if state == LIFECYCLE_FLOW_SIM_PROBE_STATE:
+        return "lifecycle_flow_sim_probe_candidate"
+    if state == "sim_auto_approved":
+        return "sim_auto_approved"
+    return "source_only"
+
+
+def _normalize_candidate_runtime_metadata(item: dict[str, Any]) -> None:
+    state = str(item.get("classification_state") or "")
+    item["source_bucket_kind"] = _source_bucket_kind(state, item)
+    item["decision_authority"] = _decision_authority_for_state(state)
+    item["runtime_effect_after_approval"] = _runtime_effect_after_approval_for_state(state)
+    item["broker_order_forbidden"] = state != "live_auto_apply_ready"
+    item["allowed_runtime_apply"] = state == "live_auto_apply_ready"
+    item["runtime_effect"] = state == "live_auto_apply_ready"
+    item["sim_lifecycle_handoff_allowed"] = state in SIM_APPROVAL_STATES
+    item["bounded_live_canary_allowed"] = state == "live_auto_apply_ready"
+    if state != "live_auto_apply_ready":
+        item["live_auto_apply_family"] = None
+    contract = item.get("auto_promotion_contract") if isinstance(item.get("auto_promotion_contract"), dict) else {}
+    item["auto_promotion_contract"] = {
+        **contract,
+        "state": _auto_promotion_contract_state_for_state(state),
+        "tier2_required": state == "live_auto_apply_ready",
+        "deterministic_contract_required": state == "live_auto_apply_ready",
+        "deterministic_contract_components": [
+            "source_quality_pass",
+            "sample_floor",
+            "primary_ev_uplift",
+            "env_mapping",
+            "runtime_hook",
+            "post_apply_attribution",
+        ]
+        if state == "live_auto_apply_ready"
+        else [],
+    }
 
 
 def _source_contract_snapshot(ldm: dict[str, Any]) -> dict[str, Any]:
@@ -905,6 +992,18 @@ def _classify_bucket(stage: str, bucket: dict[str, Any]) -> tuple[str, str | Non
             and primary_ev_uplift_passes(ev, positive_edge=True)
         ):
             return "live_auto_apply_ready", live_family, grade
+        if (
+            str(grade.get("evidence_grade") or "") == EVIDENCE_GRADE_1_COMPLETED_SIM
+            and _safe_int(bucket.get("complete_flow_count")) > 0
+            and _safe_int(bucket.get("incomplete_flow_count")) == 0
+            and ev is not None
+            and ev > 0
+        ):
+            return LIFECYCLE_FLOW_SIM_PROBE_STATE, None, {
+                **grade,
+                "transition_target": "lifecycle_flow_sim_probe_handoff",
+                "grade_reason": "complete_positive_lifecycle_flow_sim_probe_without_live_auto_contract",
+            }
         if _sim_handoff_allowed(bucket, grade):
             return "sim_auto_approved", None, grade
         return "source_only_keep_collecting", None, grade
@@ -972,7 +1071,7 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
         else grade.get("transition_target"),
         "grade_reason": grade.get("grade_reason"),
         "full_real_conversion_allowed": False,
-        "sim_lifecycle_handoff_allowed": state in {"sim_auto_approved", "entry_only_sim_auto_approved"},
+        "sim_lifecycle_handoff_allowed": state in SIM_APPROVAL_STATES,
         "bounded_live_canary_allowed": state == "live_auto_apply_ready",
         "source_stage_split_required": bool(grade.get("source_stage_split_required")),
         "archived_live_exception_reason": None,
@@ -1006,6 +1105,8 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
         "scale_in_bucket_ids": bucket.get("scale_in_bucket_ids") or [],
         "exit_bucket_id": bucket.get("exit_bucket_id"),
         "child_bucket_ids": bucket.get("child_bucket_ids") or {},
+        "complete_flow_count": _safe_int(bucket.get("complete_flow_count")),
+        "incomplete_flow_count": _safe_int(bucket.get("incomplete_flow_count")),
         "stage_contract": bucket.get("stage_contract") or {},
         "attribution_key": bucket.get("attribution_key"),
         "rollback_guard": bucket.get("rollback_guard"),
@@ -1056,35 +1157,11 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
         "actual_order_submitted": False,
         "broker_order_forbidden": state != "live_auto_apply_ready",
         "allowed_runtime_apply": state == "live_auto_apply_ready",
-        "decision_authority": (
-            "lifecycle_bucket_discovery_live_auto_apply"
-            if state == "live_auto_apply_ready"
-            else "lifecycle_bucket_discovery_entry_only_sim_auto"
-            if state == "entry_only_sim_auto_approved"
-            else "lifecycle_bucket_discovery_entry_only_source_quality"
-            if state == "entry_only_source_candidate"
-            else "lifecycle_bucket_discovery_sim_auto"
-            if state == "sim_auto_approved"
-            else "lifecycle_bucket_discovery_source_quality"
-        ),
+        "decision_authority": _decision_authority_for_state(state),
         "runtime_effect": state == "live_auto_apply_ready",
-        "runtime_effect_after_approval": "live_auto_apply_without_human_approval"
-        if state == "live_auto_apply_ready"
-        else "entry_only_sim_bucket_policy"
-        if state == "entry_only_sim_auto_approved"
-        else "none_entry_only_source_candidate"
-        if state == "entry_only_source_candidate"
-        else "sim_only_bucket_policy",
+        "runtime_effect_after_approval": _runtime_effect_after_approval_for_state(state),
         "auto_promotion_contract": {
-            "state": "bounded_live_auto_apply_ready"
-            if state == "live_auto_apply_ready"
-            else "entry_only_sim_auto_approved"
-            if state == "entry_only_sim_auto_approved"
-            else "entry_only_source_candidate"
-            if state == "entry_only_source_candidate"
-            else "sim_auto_approved"
-            if state == "sim_auto_approved"
-            else "source_only",
+            "state": _auto_promotion_contract_state_for_state(state),
             "tier2_required": state == "live_auto_apply_ready",
             "tier2_policy": "fail_closed",
             "primary_ev_uplift_threshold_pct": 1.0,
@@ -1392,6 +1469,7 @@ def _candidate_review_priority(item: dict[str, Any]) -> tuple[int, int, float]:
     state_priority = {
         "live_auto_apply_ready": 0,
         "runtime_blocked_contract_gap": 1,
+        LIFECYCLE_FLOW_SIM_PROBE_STATE: 2,
         "sim_auto_approved": 2,
         "code_patch_required": 3,
         "automation_handoff_gap": 4,
@@ -1411,6 +1489,7 @@ def _candidate_matches_ai_shard(item: dict[str, Any], shard_id: str) -> bool:
     if shard_id == "lifecycle_flow_review":
         return stage == "lifecycle_flow" and state in {
             "live_auto_apply_ready",
+            LIFECYCLE_FLOW_SIM_PROBE_STATE,
             "sim_auto_approved",
             "source_only_keep_collecting",
             "new_bucket_candidate",
@@ -1419,7 +1498,7 @@ def _candidate_matches_ai_shard(item: dict[str, Any], shard_id: str) -> bool:
             "automation_handoff_gap",
         }
     if shard_id == "sim_policy_review":
-        return state == "sim_auto_approved"
+        return state in {"sim_auto_approved", "entry_only_sim_auto_approved", LIFECYCLE_FLOW_SIM_PROBE_STATE}
     if shard_id == "gap_workorder_review":
         return state in {"code_patch_required", "automation_handoff_gap"} or stage == "source_contract" or source_kind in {
             "source_contract_gap",
@@ -1854,6 +1933,7 @@ def _apply_ai_review(
         if final_state in {
             "source_only_keep_collecting",
             "sim_auto_approved",
+            LIFECYCLE_FLOW_SIM_PROBE_STATE,
             "runtime_blocked_contract_gap",
             "code_patch_required",
             "code_review_failed",
@@ -1872,9 +1952,7 @@ def _apply_ai_review(
                 warnings.append("ai_review_ambiguous_live_candidate_kept_for_post_apply")
                 continue
             item["classification_state"] = final_state
-            item["runtime_effect"] = False if final_state != "live_auto_apply_ready" else item.get("runtime_effect")
-            item["broker_order_forbidden"] = final_state != "live_auto_apply_ready"
-            item["allowed_runtime_apply"] = final_state == "live_auto_apply_ready"
+            _normalize_candidate_runtime_metadata(item)
             if final_state == "live_auto_apply_ready":
                 contract = item.get("auto_promotion_contract") if isinstance(item.get("auto_promotion_contract"), dict) else {}
                 item["auto_promotion_contract"] = {
@@ -1883,6 +1961,8 @@ def _apply_ai_review(
                     "tier2_status": ai_status,
                     "tier2_fail_closed": False,
                 }
+    for item in updated:
+        _normalize_candidate_runtime_metadata(item)
     for item in updated:
         bucket_id = str(item.get("bucket_id") or "")
         if bucket_id not in target_ids:
@@ -2205,6 +2285,8 @@ def _finalize_report(
             "candidate_count": len(candidates),
             "surfaced_candidate_count": len(surfaced),
             "sim_auto_approved_count": state_counts.get("sim_auto_approved", 0),
+            "entry_only_sim_auto_approved_count": state_counts.get("entry_only_sim_auto_approved", 0),
+            "lifecycle_flow_sim_probe_candidate_count": state_counts.get(LIFECYCLE_FLOW_SIM_PROBE_STATE, 0),
             "live_auto_apply_ready_count": state_counts.get("live_auto_apply_ready", 0),
             "new_bucket_candidate_count": state_counts.get("new_bucket_candidate", 0),
             "code_patch_required_count": state_counts.get("code_patch_required", 0),
@@ -2237,7 +2319,7 @@ def _finalize_report(
         item for item in candidates if item.get("classification_state") == "live_auto_apply_ready"
     ]
     report["sim_auto_approved_candidates"] = [
-        item for item in candidates if item.get("classification_state") == "sim_auto_approved"
+        item for item in candidates if str(item.get("classification_state") or "") in SIM_APPROVAL_STATES
     ][:200]
     report["warnings"] = warnings
     return report
@@ -2360,6 +2442,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- dual_proposals: deterministic=`{summary.get('deterministic_proposal_count')}` ai=`{summary.get('ai_tier2_proposal_count')}` hybrid_selected=`{summary.get('reviewer_selected_hybrid_count')}`",
         f"- absorbed/source_quality_blocker: `{summary.get('absorbed_bucket_count')}` / `{summary.get('source_quality_blocker_count')}`",
         f"- sim_auto_approved_count: `{summary.get('sim_auto_approved_count')}`",
+        f"- lifecycle_flow_sim_probe_candidate_count: `{summary.get('lifecycle_flow_sim_probe_candidate_count')}`",
         f"- live_auto_apply_ready_count: `{summary.get('live_auto_apply_ready_count')}`",
         f"- human_intervention_required: `{summary.get('human_intervention_required')}`",
         f"- warnings: `{summary.get('warnings') or []}`",
@@ -2444,7 +2527,29 @@ def _write_sim_auto_approval(report: dict[str, Any]) -> None:
         if isinstance(item, dict) and item.get("bucket_id")
     ]
     approved_bucket_ids = [str(item.get("bucket_id")) for item in approved_candidates]
+    approved_bucket_rows = [
+        {
+            "bucket_id": str(item.get("bucket_id") or ""),
+            "source_bucket_id": str(item.get("source_bucket_id") or ""),
+            "classification_state": item.get("classification_state"),
+            "source_bucket_kind": item.get("source_bucket_kind"),
+            "stage": item.get("stage"),
+            "bucket_type": item.get("bucket_type"),
+            "source_quality_adjusted_ev_pct": item.get("source_quality_adjusted_ev_pct"),
+            "sample": item.get("sample"),
+            "joined_sample": item.get("joined_sample"),
+            "complete_flow_count": item.get("complete_flow_count"),
+            "incomplete_flow_count": item.get("incomplete_flow_count"),
+        }
+        for item in approved_candidates
+    ]
+    approved_source_bucket_ids = [
+        str(row.get("source_bucket_id") or row.get("bucket_id") or "")
+        for row in approved_bucket_rows
+        if str(row.get("source_bucket_id") or row.get("bucket_id") or "").strip()
+    ]
     grade_counts = Counter(str(item.get("evidence_grade") or "unknown") for item in approved_candidates)
+    state_counts = Counter(str(item.get("classification_state") or "unknown") for item in approved_candidates)
     payload = {
         "schema_version": "lifecycle_bucket_sim_auto_approval_v1",
         "date": target_date,
@@ -2459,7 +2564,11 @@ def _write_sim_auto_approval(report: dict[str, Any]) -> None:
         "decision_authority": "postclose_lifecycle_bucket_discovery_sim_auto",
         "policy_file": str(bucket_catalog_path(target_date)),
         "approved_bucket_ids": approved_bucket_ids,
+        "approved_bucket_rows": approved_bucket_rows,
         "approved_bucket_count": len(approved_bucket_ids),
+        "approved_unique_source_bucket_count": len(set(approved_source_bucket_ids)),
+        "approved_state_counts": dict(sorted(state_counts.items())),
+        "approved_lifecycle_flow_sim_probe_count": state_counts.get(LIFECYCLE_FLOW_SIM_PROBE_STATE, 0),
         "approved_evidence_grade_counts": dict(sorted(grade_counts.items())),
         "source_quality_status": "pass" if approved_bucket_ids else "empty",
         "blocked_reasons": [] if approved_bucket_ids else ["sim_auto_approved_bucket_missing"],

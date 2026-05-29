@@ -20,6 +20,20 @@ def _research() -> dict:
     }
 
 
+def _research_with_candidates() -> dict:
+    payload = _research()
+    payload["latest_as_of_research_only_candidates"] = [
+        {
+            "stock_code": "005930",
+            "stock_name": "Samsung",
+            "backtest_rank_score": 4.2,
+            "vwap_distance_pct": -1.1,
+            "dist_low60_pct": 0.8,
+        }
+    ]
+    return payload
+
+
 def _ev_report_without_bottom_bucket() -> dict:
     return {
         "report_type": "swing_strategy_discovery_ev",
@@ -124,6 +138,53 @@ def test_policy_auto_loop_promotes_research_bootstrap_when_source_contracts_pass
     assert report["sim_auto_approved_policy"]["policy_version"] == "bottom_rebound_swing_source_v2"
     assert report["runtime_effect"] is False
     assert report["broker_order_forbidden"] is True
+
+
+def test_policy_auto_loop_generates_source_only_candidate_packet_before_review(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source_payloads = {
+        "bottom_rebound_research": _research_with_candidates(),
+        "candidate_source": _candidate_source_blocked(),
+        "swing_strategy_discovery_ev": _ev_report_without_bottom_bucket(),
+    }
+
+    def fake_load(path: Path) -> dict:
+        return source_payloads[path.name]
+
+    paths = {name: tmp_path / name for name in source_payloads}
+    monkeypatch.setattr(mod, "_load_json", fake_load)
+
+    report = mod.build_policy_auto_loop_report(
+        "2026-05-26",
+        provider="openai",
+        source_paths=paths,
+        ai_raw_response={
+            "schema_version": 1,
+            "interpretation": {
+                "policy_edge_state": "candidate_policy_better",
+                "evidence": ["source packet generated"],
+            },
+            "audit": {
+                "status": "pass",
+                "explicit_gaps": [],
+                "forbidden_use_violations": [],
+                "runtime_authority_preserved": True,
+            },
+            "final_conclusion": {
+                "classification_state": "sim_auto_approved",
+                "promote_policy": True,
+                "reason": "Generated source-only candidate packet is valid.",
+            },
+        },
+    )
+
+    assert report["candidate_source_generation"]["status"] == "generated_candidate_source_packet"
+    assert report["source_context"]["downstream_contracts"]["candidate_source"] is True
+    assert report["source_context"]["downstream_contracts"]["candidate_source_selected_count"] == 1
+    assert report["source_context"]["metrics"]["candidate_ev_evidence_source"] == "bottom_rebound_candidate_source_packet"
+    assert report["source_context"]["metrics"]["source_quality_adjusted_ev_pct"] == 1.43
+    assert report["final_conclusion"]["classification_state"] == "sim_auto_approved"
 
 
 def test_policy_auto_loop_normalizes_near_miss_ai_shape(tmp_path: Path, monkeypatch) -> None:

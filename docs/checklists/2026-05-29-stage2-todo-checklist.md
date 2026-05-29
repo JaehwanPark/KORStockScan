@@ -22,23 +22,17 @@
 
 ## 장전 체크리스트 (08:45~09:00)
 
-- [x] `[ThresholdEnvAutoApplyPreopen0529] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-05-29`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
+- [ ] `[ThresholdEnvAutoApplyPreopen0529] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-05-29`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-28.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-28.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
   - 판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.
   - 금지: blocked family, approval artifact missing, same-stage owner conflict를 수동 env override로 우회하지 않는다.
   - 다음 액션: `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.
-  - 처리 결과(2026-05-29 07:26 KST): `applied_guard_passed_env`.
-  - 근거: [threshold_apply_2026-05-29.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-05-29.json)은 `status=auto_bounded_live_ready`, `apply_mode=auto_bounded_live`, `runtime_change=true`, `approval_requests=[]`, `approval_contract_gaps=[]`로 닫혔다. [threshold_cycle_preopen_2026-05-29.status.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_preopen_status/threshold_cycle_preopen_2026-05-29.status.json)은 `status=succeeded`다.
-  - 다음 액션: 생성된 [threshold_runtime_env_2026-05-29.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-05-29.env)만 장중 runtime source로 인정하고, 장중 threshold mutation 및 blocked family 수동 override는 하지 않는다.
 
-- [x] `[OpenAIWSPreopenConfirm0529] OpenAI WS 유지 설정 및 entry_price/analyze_target provenance 확인` (`Due: 2026-05-29`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: RuntimeStability`)
+- [ ] `[OpenAIWSPreopenConfirm0529] OpenAI WS 유지 설정 및 entry_price/analyze_target provenance 확인` (`Due: 2026-05-29`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: RuntimeStability`)
   - Source: [openai_ws_stability_2026-05-28.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-28.md), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py)
   - 판정 기준: startup env의 OpenAI route/Responses WS 설정과 `analyze_target`, `entry_price` transport provenance를 분리 확인한다.
   - 금지: provider transport 확인을 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경으로 해석하지 않는다.
   - 다음 액션: entry_price transport 표본이 부족하면 장중 표본 재확인 항목과 연결한다.
-  - 처리 결과(2026-05-29 07:26 KST): `pass_keep_ws_with_entry_price_sample_observed`.
-  - 근거: [openai_ws_stability_2026-05-28.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-28.md)는 `decision=keep_ws`, `unique WS calls=4106`, `analyze_target=4101`, `entry_price=5`, `WS fallback=0`, `WS success rate=1.0`, `entry_price canary instrumentation_gap=False`로 닫혔다.
-  - 다음 액션: provider transport/provenance는 계속 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경과 분리한다.
 
 - [x] `[SwingPreFinalAutoAndFinalApprovalPreopen0529] 스윙 pre-final auto state 및 final approval artifact 확인` (`Due: 2026-05-29`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
   - Source: [swing_runtime_approval_2026-05-28.json](/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-05-28.json), [threshold_cycle_ev_2026-05-28.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-28.json)
@@ -49,15 +43,11 @@
   - 근거: [swing_runtime_approval_2026-05-28.json](/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-05-28.json)은 `summary.requested=0`, `summary.approved=0`, `summary.blocked=14`, `runtime_change=false`, `approval_requests=[]`이며 주요 block reason은 `severe_downside_guard`다.
   - 다음 액션: 스윙 full-live 전환, cap release, provider/bot 변경, hard-safety 완화는 열지 않고 장후 source report 재판정까지 dry-run/sim-only 경계를 유지한다.
 
-## Runbook 운영 확인
-
 - [x] `[PreopenAutomationHealthCheck20260529] 장전 자동화체인 상태 확인` (`Due: 2026-05-29`, `Slot: PREOPEN`, `TimeWindow: 08:00~09:00`, `Track: RunbookOps`)
   - Source: [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md), [threshold_cycle_preopen_2026-05-29.status.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_preopen_status/threshold_cycle_preopen_2026-05-29.status.json), [threshold_apply_2026-05-29.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-05-29.json)
   - 판정: `pass`.
   - 근거: 시간창 이후 확인 시 당일 preopen apply 산출물이 누락되어 표준 wrapper를 같은 날짜로 재실행했고, `threshold_cycle_preopen_2026-05-29.status.json`이 `status=succeeded`로 생성됐다. runtime env는 `threshold_runtime_env_2026-05-29.env`로 생성됐으며 approval request/contract gap은 없다.
   - 다음 액션: Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
-
-운영 보완 기록(2026-05-29 07:40 KST 이후 확인): `시장 판독` 부팅 로그는 `risk=RISK_OFF`를 `하락장`으로 렌더링해 KOSPI 실시간 추세 판정처럼 오해될 수 있어 [kiwoom_sniper_v2.py](/home/ubuntu/KORStockScan/src/engine/kiwoom_sniper_v2.py)에서 제거했다. `시장환경 초기화` 로그는 원본 MarketRegime snapshot 진단으로 유지한다. KOSPI_ML 보유/청산의 `kospi_regime_stop_loss` 경로는 구조적으로 `market_regime == BULL`이면 `STOP_LOSS_BULL`, 그 외는 `STOP_LOSS_BEAR`를 선택하는 exit hard threshold 경로다. 현재 기본값은 둘 다 `-3.0`이라 값 차이는 없지만, 향후 두 값이 달라지면 regime이 손절 발동 임계값에 직접 영향을 준다.
 
 ## 장중 체크리스트 (09:05~15:20)
 
@@ -73,6 +63,16 @@
   - 금지: sim/probe EV를 broker execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
   - 다음 액션: source-quality split, active state 복원, open/closed count를 같이 기록한다.
 
+- [x] `[IntradayAutomationHealthCheck20260529] 장중 자동화체인 상태 확인` (`Due: 2026-05-29`, `Slot: INTRADAY`, `TimeWindow: 09:05~15:30`, `Track: RunbookOps`)
+  - Source: [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md), [pipeline_events_2026-05-29.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-05-29.jsonl), [threshold_events_2026-05-29.jsonl](/home/ubuntu/KORStockScan/data/threshold_cycle/threshold_events_2026-05-29.jsonl)
+  - 판정: `pass`.
+  - 근거: `bash deploy/run_error_detection.sh full`은 `summary_severity=pass`, cron completion/log scanner/Kiwoom auth/process health/artifact freshness/resource/stale lock 모두 pass로 종료됐다. bot main loop PID는 `8061`, `pipeline_events_age_sec=0.5`, `threshold_events_age_sec=0.5`이며 BUY Funnel Sentinel은 `SUBMIT_DROUGHT_CRITICAL`, HOLD/EXIT Sentinel은 `HOLD_DEFER_DANGER`, panic sell/buying은 모두 `NORMAL` 및 `report_only_no_mutation`이다.
+  - 다음 액션: sentinel 이상치는 postclose source-quality/workorder 입력으로만 넘기고, 장중 threshold/order/provider/bot/env 변경은 하지 않는다. Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
+
+운영 보완 기록(2026-05-29 07:40 KST 이후 확인): `시장 판독` 부팅 로그는 `risk=RISK_OFF`를 `하락장`으로 렌더링해 KOSPI 실시간 추세 판정처럼 오해될 수 있어 [kiwoom_sniper_v2.py](/home/ubuntu/KORStockScan/src/engine/kiwoom_sniper_v2.py)에서 제거했다. `시장환경 초기화` 로그는 원본 MarketRegime snapshot 진단으로 유지한다. KOSPI_ML 보유/청산의 `kospi_regime_stop_loss` 경로는 구조적으로 `market_regime == BULL`이면 `STOP_LOSS_BULL`, 그 외는 `STOP_LOSS_BEAR`를 선택하는 exit hard threshold 경로다. 현재 기본값은 둘 다 `-3.0`이라 값 차이는 없지만, 향후 두 값이 달라지면 regime이 손절 발동 임계값에 직접 영향을 준다.
+
+운영 보완 기록(2026-05-29 13:40 KST): Bucket Identity / Swing Source-Only Handoff 보완을 반영했다. `lifecycle_bucket_sim_auto_approval_2026-05-28`은 `approved_bucket_count=160`, `approved_bucket_rows=160`, `approved_unique_source_bucket_count=160`으로 catalog 대조 기준을 `source_bucket_id` 중심으로 보존한다. `swing_lifecycle_bucket_discovery_2026-05-28`은 implemented source-quality waiting sample을 raw `69`, candidate `13`, workorder `13`, total `26`으로 분리한다. Bottom rebound source는 selected candidate `40`, policy auto-loop `sim_auto_approved/promote_policy=true`, postclose verifier bottom rebound handoff `pass`로 닫혔다. 코드 검증은 관련 pytest `64+41+73 passed`, `py_compile`, `git diff --check` 통과이며, 봇 중단 후 산출물 재생성 및 검증 완료 뒤 기존 runtime env 기준으로 bot PID `99944`를 재기동했고 `error_detector --mode health_only --dry-run`은 `summary_severity=pass`다. threshold/order/provider/cap/broker guard 값은 변경하지 않았다.
+
 ## 장후 체크리스트 (16:30~18:55)
 
 - [ ] `[ThresholdDailyEVReport0529] daily EV real/sim/combined split 및 자동 반영 결과 확인` (`Due: 2026-05-29`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:45`, `Track: RuntimeStability`)
@@ -83,7 +83,7 @@
 
 - [ ] `[CodeImprovementWorkorderReview0529] code improvement workorder 구현 필요 여부 및 Codex 지시 대상 확인` (`Due: 2026-05-29`, `Slot: POSTCLOSE`, `TimeWindow: 16:45~17:00`, `Track: ScalpingLogic`)
   - Source: [code_improvement_workorder_2026-05-28.md](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-28.md), [code_improvement_workorder_2026-05-28.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-28.json)
-  - 판정 기준: selected_order_count=97와 `implement_now`, `attach_existing_family`, `design_family_candidate`, `reject` 분류를 확인한다.
+  - 판정 기준: selected_order_count=100와 `implement_now`, `attach_existing_family`, `design_family_candidate`, `reject` 분류를 확인한다.
   - 금지: code-improvement workorder를 자동 repo 수정으로 취급하지 않는다. 사용자가 Codex 구현을 지시한 경우에만 실행한다.
   - 다음 액션: 구현 필요, 설계 보류, reject, already_implemented 중 하나로 닫는다.
 
@@ -93,17 +93,17 @@
   - 금지: approval request만 보고 env 파일을 직접 수정하지 않고, 자동화 산출물에 있는 요청을 답변에만 남기고 checklist/Project 대상에서 누락하지 않는다.
   - 다음 액션: approval request가 있으면 `approval_id`, 후보/대상, artifact path, 승인 여부, 다음 PREOPEN 적용 확인 항목을 남긴다. 누락된 항목이 있으면 다음 영업일 checklist에 parser-friendly checkbox로 추가한다.
 
-- [ ] `[MarketRegimeUsageReview0529] market regime 사용 권한과 runtime 영향 정리` (`Due: 2026-05-29`, `Slot: POSTCLOSE`, `TimeWindow: 17:30~17:45`, `Track: RuntimeStability`)
-  - Source: [sniper_market_regime.py](/home/ubuntu/KORStockScan/src/engine/sniper_market_regime.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
-  - 판정 기준: market regime 사용처를 `scalping entry no-hard-gate`, `swing entry baseline_prior`, `confirmed_risk_context block`, `KOSPI_ML exit stop-loss threshold selector`, `ADM/LDM runtime feature`, `panic breadth report-only context`로 분리해 현재 runtime/order 영향과 금지 권한을 정리한다.
-  - 금지: `risk=RISK_OFF` 또는 `allow_swing=false` 단독으로 신규 threshold, stop, provider, bot restart, 실주문 전환, 스윙 full-live 전환을 열지 않는다.
-  - 다음 액션: `documented_current_contract`, `needs_code_workorder`, `needs_doc_contract_patch`, `blocked_by_policy` 중 하나로 닫고, KOSPI_ML `STOP_LOSS_BULL/BEAR`가 같은 값인지와 향후 값 차이 발생 시 승인 경로를 명시한다.
-
 - [ ] `[ShadowCanaryCohortReview0529] shadow/canary/cohort 런타임 분류 및 정리 판정` (`Due: 2026-05-29`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)
   - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)
   - 판정 기준: 당일 변경/관찰 결과를 기준으로 `remove`, `observe-only`, `baseline-promote`, `active-canary` 상태 변동 여부를 닫는다.
   - 금지: shadow 금지, canary-only, baseline 승격 원칙을 코드/문서 상태와 분리하지 않는다.
   - 다음 액션: 변경이 있으면 기준문서와 checklist를 함께 갱신하고 cohort 잠금 필드를 남긴다.
+
+- [ ] `[MarketRegimeUsageReview0529] market regime 사용 권한과 runtime 영향 정리` (`Due: 2026-05-29`, `Slot: POSTCLOSE`, `TimeWindow: 17:30~17:45`, `Track: RuntimeStability`)
+  - Source: [sniper_market_regime.py](/home/ubuntu/KORStockScan/src/engine/sniper_market_regime.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 판정 기준: market regime 사용처를 `scalping entry no-hard-gate`, `swing entry baseline_prior`, `confirmed_risk_context block`, `KOSPI_ML exit stop-loss threshold selector`, `ADM/LDM runtime feature`, `panic breadth report-only context`로 분리해 현재 runtime/order 영향과 금지 권한을 정리한다.
+  - 금지: `risk=RISK_OFF` 또는 `allow_swing=false` 단독으로 신규 threshold, stop, provider, bot restart, 실주문 전환, 스윙 full-live 전환을 열지 않는다.
+  - 다음 액션: `documented_current_contract`, `needs_code_workorder`, `needs_doc_contract_patch`, `blocked_by_policy` 중 하나로 닫고, KOSPI_ML `STOP_LOSS_BULL/BEAR`가 같은 값인지와 향후 값 차이 발생 시 승인 경로를 명시한다.
 
 - [ ] `[RuntimeApplyGapDirectiveReview0529] runtime apply gap Codex 작업지시 표면화 및 구현 여부 확인` (`Due: 2026-05-29`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:30`, `Track: ScalpingLogic`)
   - Source: [runtime_apply_gap_audit_2026-05-28.json](/home/ubuntu/KORStockScan/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_2026-05-28.json), [runtime_apply_gap_audit_2026-05-28.md](/home/ubuntu/KORStockScan/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_2026-05-28.md), [runtime-apply-gap-audit-user-guide.md](/home/ubuntu/KORStockScan/docs/runtime-apply-gap-audit-user-guide.md)
@@ -119,6 +119,8 @@
   - 다음 액션: `plan_supplemented`, `already_reflected`, `defer_after_postapply_verification`, `needs_new_workorder` 중 하나로 닫고, 문서 수정 시 parser 검증과 표준 수동 sync 명령 안내를 남긴다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
+
+
 
 
 

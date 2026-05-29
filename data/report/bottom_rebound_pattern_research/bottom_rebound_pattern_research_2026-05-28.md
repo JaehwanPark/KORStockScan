@@ -1,6 +1,6 @@
 # Bottom Rebound Pattern Research - 2026-05-28
 
-- generated_at: `2026-05-28T21:26:50`
+- generated_at: `2026-05-29T13:33:40`
 - decision_authority: `research_only`
 - runtime_effect: `False`
 - broker_order_forbidden: `True`

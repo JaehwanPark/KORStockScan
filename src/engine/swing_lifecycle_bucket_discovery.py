@@ -1071,6 +1071,15 @@ def build_swing_lifecycle_bucket_discovery(
         if isinstance(item.get("source_quality_resolution"), dict)
         and item.get("source_quality_resolution", {}).get("status") == "implemented_source_quality_contract_waiting_sample"
     ]
+    raw_implemented_source_quality_waiting = [
+        item for item in candidates if _is_implemented_source_quality_waiting(item)
+    ]
+    implemented_source_quality_waiting_sample_candidate_count = len(resolved_source_quality_candidates)
+    implemented_source_quality_waiting_sample_workorder_count = len(resolved_explicit_workorders)
+    implemented_source_quality_waiting_sample_total_count = (
+        implemented_source_quality_waiting_sample_candidate_count
+        + implemented_source_quality_waiting_sample_workorder_count
+    )
     ai_review_points = _ai_review_augmentation_points(matrix=matrix, candidates=candidates)
     ai_audit = _ai_audit_section(ai_review_points)
     warnings: list[str] = []
@@ -1135,8 +1144,19 @@ def build_swing_lifecycle_bucket_discovery(
             "stage_only_source_only_count": len(stage_only_source_only),
             "source_only_keep_collecting_count": by_state.get("source_only_keep_collecting", 0),
             "code_patch_required_count": len(code_patch) + len(active_explicit_workorders) + (1 if followup_reasons else 0),
-            "implemented_source_quality_waiting_sample_count": len(resolved_source_quality_candidates)
-            + len(resolved_explicit_workorders),
+            "raw_implemented_source_quality_waiting_sample_count": len(raw_implemented_source_quality_waiting),
+            "implemented_source_quality_waiting_sample_candidate_count": (
+                implemented_source_quality_waiting_sample_candidate_count
+            ),
+            "implemented_source_quality_waiting_sample_workorder_count": (
+                implemented_source_quality_waiting_sample_workorder_count
+            ),
+            "implemented_source_quality_waiting_sample_total_count": (
+                implemented_source_quality_waiting_sample_total_count
+            ),
+            "implemented_source_quality_waiting_sample_count": (
+                implemented_source_quality_waiting_sample_total_count
+            ),
             "runtime_blocked_contract_gap_count": by_state.get("runtime_blocked_contract_gap", 0),
             "automation_handoff_gap_count": by_state.get("automation_handoff_gap", 0),
             "ai_review_augmentation_point_count": len(ai_review_points),
@@ -1288,6 +1308,10 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- stage_only_source_only_count: `{summary.get('stage_only_source_only_count')}`",
         f"- code_patch_required_count: `{summary.get('code_patch_required_count')}`",
         f"- implemented_source_quality_waiting_sample_count: `{summary.get('implemented_source_quality_waiting_sample_count')}`",
+        f"- implemented_source_quality_waiting_sample_candidate_count: `{summary.get('implemented_source_quality_waiting_sample_candidate_count')}`",
+        f"- implemented_source_quality_waiting_sample_workorder_count: `{summary.get('implemented_source_quality_waiting_sample_workorder_count')}`",
+        f"- implemented_source_quality_waiting_sample_total_count: `{summary.get('implemented_source_quality_waiting_sample_total_count')}`",
+        f"- raw_implemented_source_quality_waiting_sample_count: `{summary.get('raw_implemented_source_quality_waiting_sample_count')}`",
         f"- ai_review_augmentation_point_count: `{summary.get('ai_review_augmentation_point_count')}`",
         f"- human_intervention_required: `{summary.get('human_intervention_required')}`",
         f"- warnings: `{report.get('warnings') or []}`",

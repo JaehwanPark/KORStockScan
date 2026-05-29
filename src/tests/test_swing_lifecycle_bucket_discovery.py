@@ -661,10 +661,18 @@ def test_bucket_discovery_downgrades_implemented_source_quality_waiting_sample(t
     assert candidate["source_quality_resolution"]["status"] == "implemented_source_quality_contract_waiting_sample"
     assert report["summary"]["code_patch_required_count"] == 0
     assert report["summary"]["implemented_source_quality_waiting_sample_count"] == 1
+    assert report["summary"]["implemented_source_quality_waiting_sample_candidate_count"] == 1
+    assert report["summary"]["implemented_source_quality_waiting_sample_workorder_count"] == 0
+    assert report["summary"]["implemented_source_quality_waiting_sample_total_count"] == 1
+    assert report["summary"]["raw_implemented_source_quality_waiting_sample_count"] == 1
     assert report["code_improvement_workorders"] == []
     assert report["resolved_source_quality_candidates"][0]["bucket_id"] == candidate["bucket_id"]
     markdown = mod.render_markdown(report)
     assert "implemented_source_quality_waiting_sample_count: `1`" in markdown
+    assert "implemented_source_quality_waiting_sample_candidate_count: `1`" in markdown
+    assert "implemented_source_quality_waiting_sample_workorder_count: `0`" in markdown
+    assert "implemented_source_quality_waiting_sample_total_count: `1`" in markdown
+    assert "raw_implemented_source_quality_waiting_sample_count: `1`" in markdown
     assert "Resolved Source Quality Sample Wait" in markdown
 
 
@@ -738,6 +746,10 @@ def test_bucket_discovery_excludes_implemented_explicit_workorder_from_active_wo
 
     assert report["summary"]["code_patch_required_count"] == 0
     assert report["summary"]["implemented_source_quality_waiting_sample_count"] == 1
+    assert report["summary"]["implemented_source_quality_waiting_sample_candidate_count"] == 0
+    assert report["summary"]["implemented_source_quality_waiting_sample_workorder_count"] == 1
+    assert report["summary"]["implemented_source_quality_waiting_sample_total_count"] == 1
+    assert report["summary"]["raw_implemented_source_quality_waiting_sample_count"] == 0
     assert report["code_improvement_workorders"] == []
     resolved = report["resolved_source_quality_workorders"][0]
     assert resolved["workorder_id"] == "source_gap_waiting_sample"

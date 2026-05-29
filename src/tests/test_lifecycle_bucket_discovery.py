@@ -162,6 +162,47 @@ def _write_ldm(path):
                             },
                             "attribution_key": "sim_record_id:SIM-1",
                             "rollback_guard": "hard_safety_priority_plus_source_quality_and_post_apply_attribution",
+                        },
+                        {
+                            "lifecycle_flow_bucket_id": "lifecycle_flow:combo_lifecycle_flow:complete_probe",
+                            "bucket_type": "combo_lifecycle_flow",
+                            "bucket_key": (
+                                "entry=entry:combo_entry_spot:score_60_62|"
+                                "submit=submit:combo_submit_quality:thin_ok|"
+                                "holding=holding:combo_holding_flow:baseline_hold|"
+                                "scale_in=scale_in:none|"
+                                "exit=exit:combo_exit_result:tp"
+                            ),
+                            "sample": 1,
+                            "joined_sample": 1,
+                            "join_rate": 1.0,
+                            "complete_flow_count": 1,
+                            "incomplete_flow_count": 0,
+                            "source_quality_gate": "pass",
+                            "source_quality_adjusted_ev_pct": 0.4,
+                            "equal_weight_avg_profit_pct": 0.4,
+                            "diagnostic_win_rate": 1.0,
+                            "recommended_route": "hold_sample",
+                            "metric_scope": "lifecycle_bundle_ev",
+                            "entry_bucket_id": "entry:combo_entry_spot:score_60_62",
+                            "submit_bucket_id": "submit:combo_submit_quality:thin_ok",
+                            "holding_bucket_id": "holding:combo_holding_flow:baseline_hold",
+                            "exit_bucket_id": "exit:combo_exit_result:tp",
+                            "child_bucket_ids": {
+                                "entry": "entry:combo_entry_spot:score_60_62",
+                                "submit": "submit:combo_submit_quality:thin_ok",
+                                "holding": "holding:combo_holding_flow:baseline_hold",
+                                "scale_in": [],
+                                "exit": "exit:combo_exit_result:tp",
+                            },
+                            "stage_contract": {
+                                "entry": {"contract_state": "present"},
+                                "submit": {"contract_state": "present"},
+                                "holding": {"contract_state": "present"},
+                                "exit": {"contract_state": "present"},
+                            },
+                            "attribution_key": "sim_record_id:SIM-PROBE",
+                            "rollback_guard": "hard_safety_priority_plus_source_quality_and_post_apply_attribution",
                         }
                     ]
                 },
@@ -320,6 +361,20 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     assert flow_live["stage"] == "lifecycle_flow"
     assert flow_live["metric_scope"] == "lifecycle_bundle_ev"
     assert flow_live["entry_bucket_id"] == "entry:combo_entry_spot:score_66_69"
+    flow_probe = next(
+        item
+        for item in states.values()
+        if item["stage"] == "lifecycle_flow" and item["classification_state"] == mod.LIFECYCLE_FLOW_SIM_PROBE_STATE
+    )
+    assert flow_probe["classification_state"] == mod.LIFECYCLE_FLOW_SIM_PROBE_STATE
+    assert flow_probe["source_bucket_kind"] == "lifecycle_flow_sim_probe_policy"
+    assert flow_probe["live_auto_apply_family"] is None
+    assert flow_probe["allowed_runtime_apply"] is False
+    assert flow_probe["runtime_effect"] is False
+    assert flow_probe["broker_order_forbidden"] is True
+    assert flow_probe["decision_authority"] == "lifecycle_bucket_discovery_lifecycle_flow_sim_probe"
+    assert flow_probe["complete_flow_count"] == 1
+    assert flow_probe["incomplete_flow_count"] == 0
     candidates_by_id = {item["bucket_id"]: item for item in report["candidates"]}
     holding = candidates_by_id[
         "holding:combo_holding_flow:source_scalp_sim_holding_snapshot_action_hold_profit_profit_pos080_pos150_held_held_180_600s"
@@ -350,6 +405,7 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     assert "recommended_resolution" in entry_only_sources[0]
     assert "source_bucket_kind_counts" in report["summary"]
     assert report["summary"]["human_intervention_required"] is False
+    assert report["summary"]["lifecycle_flow_sim_probe_candidate_count"] == 1
     assert report["ai_two_pass_review"]["sharded"] is True
     assert {item["shard_id"] for item in report["ai_two_pass_review"]["shards"]} >= {
         "live_contract_review",
@@ -368,8 +424,72 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     assert auto["runtime_effect"] is False
     assert auto["allowed_runtime_apply"] is False
     assert auto["approved_bucket_count"] == len(auto["approved_bucket_ids"])
-    assert auto["approved_evidence_grade_counts"].get(mod.EVIDENCE_GRADE_2_COUNTERFACTUAL, 0) == 0
+    assert auto["approved_bucket_count"] == len(auto["approved_bucket_rows"])
+    assert auto["approved_unique_source_bucket_count"] <= auto["approved_bucket_count"]
+    assert auto["approved_lifecycle_flow_sim_probe_count"] == 1
+    assert auto["approved_state_counts"][mod.LIFECYCLE_FLOW_SIM_PROBE_STATE] == 1
+    assert flow_probe["bucket_id"] in auto["approved_bucket_ids"]
+    flow_probe_row = next(row for row in auto["approved_bucket_rows"] if row["bucket_id"] == flow_probe["bucket_id"])
+    assert flow_probe_row["source_bucket_id"] == flow_probe["source_bucket_id"]
+    assert flow_probe_row["complete_flow_count"] == 1
+    assert flow_probe_row["incomplete_flow_count"] == 0
+    assert auto["approved_evidence_grade_counts"].get(mod.EVIDENCE_GRADE_2_COUNTERFACTUAL, 0) == 1
     assert auto["source_quality_status"] == "pass"
+
+
+def test_lifecycle_bucket_discovery_ai_final_state_recomputes_runtime_metadata():
+    candidates = [
+        {
+            "bucket_id": "flow-probe-1",
+            "stage": "lifecycle_flow",
+            "bucket_type": "combo_lifecycle_flow",
+            "bucket_key": "entry=entry_a|submit=submit_a|holding=holding_a|exit=exit_a",
+            "classification_state": mod.LIFECYCLE_FLOW_SIM_PROBE_STATE,
+            "source_bucket_kind": "lifecycle_flow_sim_probe_policy",
+            "decision_authority": "lifecycle_bucket_discovery_lifecycle_flow_sim_probe",
+            "runtime_effect_after_approval": "lifecycle_flow_sim_probe_policy",
+            "live_auto_apply_family": None,
+            "allowed_runtime_apply": False,
+            "runtime_effect": False,
+            "broker_order_forbidden": True,
+            "sim_lifecycle_handoff_allowed": True,
+            "bounded_live_canary_allowed": False,
+            "auto_promotion_contract": {"state": "lifecycle_flow_sim_probe_candidate"},
+        }
+    ]
+    payload = {
+        "final_conclusions": [
+            {
+                "bucket_id": "flow-probe-1",
+                "final_bucket_relation": "new_bucket_candidate",
+                "final_classification_state": "new_bucket_candidate",
+                "final_decision": "revise",
+                "reason": "taxonomy needs separate tracking",
+            }
+        ]
+    }
+
+    updated = mod._apply_ai_review(
+        candidates,
+        ai_status="parsed",
+        ai_payload=payload,
+        warnings=[],
+        reviewed_bucket_ids={"flow-probe-1"},
+        fail_closed_live=False,
+    )
+
+    row = updated[0]
+    assert row["classification_state"] == "new_bucket_candidate"
+    assert row["source_bucket_kind"] == "source_only_observation"
+    assert row["decision_authority"] == "lifecycle_bucket_discovery_source_quality"
+    assert row["runtime_effect_after_approval"] == "none"
+    assert row["live_auto_apply_family"] is None
+    assert row["allowed_runtime_apply"] is False
+    assert row["runtime_effect"] is False
+    assert row["broker_order_forbidden"] is True
+    assert row["sim_lifecycle_handoff_allowed"] is False
+    assert row["bounded_live_canary_allowed"] is False
+    assert row["auto_promotion_contract"]["state"] == "source_only"
 
 
 def test_lifecycle_bucket_discovery_quarantines_contaminated_live_candidates(tmp_path, monkeypatch):

@@ -18,8 +18,11 @@ from typing import Any
 
 from src.engine.swing.sim_auto_approval_control_tower import refresh_swing_sim_auto_approval
 from src.engine.swing.bottom_rebound_candidate_source import (
+    CandidateSourceConfig,
     POLICY_VERSION as CURRENT_SOURCE_POLICY_VERSION,
     REPORT_DIR as CANDIDATE_SOURCE_DIR,
+    build_candidate_source_report,
+    write_report as write_candidate_source_report,
 )
 from src.engine.swing.bottom_rebound_pattern_research import REPORT_DIR as RESEARCH_REPORT_DIR
 from src.utils.constants import DATA_DIR, TRADING_RULES
@@ -112,6 +115,65 @@ def _contract_ok(payload: dict[str, Any], expected_authority: str) -> bool:
     )
 
 
+def _candidate_source_selected_count(payload: dict[str, Any]) -> int:
+    source_quality = payload.get("source_quality") if isinstance(payload.get("source_quality"), dict) else {}
+    return _safe_int(source_quality.get("selected_candidate_count"))
+
+
+def _candidate_source_config(config: PolicyAutoLoopConfig) -> CandidateSourceConfig:
+    return CandidateSourceConfig(
+        target_date=config.target_date,
+        max_candidates=config.max_candidates,
+        min_backtest_rank_score=config.min_backtest_rank_score,
+        min_primary_adjusted_ev_pct=config.min_primary_adjusted_ev_pct,
+        policy_version=config.proposed_policy_version,
+    )
+
+
+def _ensure_candidate_source_packet(
+    *,
+    config: PolicyAutoLoopConfig,
+    research: dict[str, Any],
+    candidate_source: dict[str, Any],
+    candidate_source_path: Path,
+    research_path: Path,
+    materialize: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if _contract_ok(candidate_source, "swing_sim_candidate_source_only") and _candidate_source_selected_count(candidate_source) > 0:
+        return candidate_source, {
+            "status": "existing_candidate_source_used",
+            "candidate_source_selected_count": _candidate_source_selected_count(candidate_source),
+            "path": str(candidate_source_path) if candidate_source_path.exists() else None,
+        }
+    generated = build_candidate_source_report(
+        bottom_report=research,
+        source_path=research_path,
+        config=_candidate_source_config(config),
+        policy_auto_loop_diagnostics={
+            "status": "deterministic_pre_policy_auto_loop_source_only_packet",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "broker_order_forbidden": True,
+        },
+    )
+    selected_count = _candidate_source_selected_count(generated)
+    diagnostics = {
+        "status": "generated_candidate_source_packet" if selected_count > 0 else "candidate_source_generation_empty",
+        "previous_candidate_source_selected_count": _candidate_source_selected_count(candidate_source),
+        "candidate_source_selected_count": selected_count,
+        "path": str(candidate_source_path),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "broker_order_forbidden": True,
+    }
+    if selected_count > 0 and materialize:
+        write_candidate_source_report(generated, output_dir=candidate_source_path.parent)
+        diagnostics["materialized"] = True
+    else:
+        diagnostics["materialized"] = False
+    return generated, diagnostics
+
+
 def _research_ev(research: dict[str, Any]) -> float:
     summary = research.get("summary") if isinstance(research.get("summary"), dict) else {}
     return _safe_float(summary.get("top_primary_source_quality_adjusted_ev_pct"))
@@ -130,6 +192,19 @@ def _bottom_bucket_ev(ev_report: dict[str, Any]) -> dict[str, Any]:
     if not candidates:
         return {}
     return max(candidates, key=lambda item: (_safe_float(item.get("source_quality_adjusted_ev_pct")), _safe_int(item.get("sample_count"))))
+
+
+def _candidate_source_ev(candidate_source: dict[str, Any]) -> float | None:
+    if _candidate_source_selected_count(candidate_source) <= 0:
+        return None
+    rows = candidate_source.get("candidate_rows") if isinstance(candidate_source.get("candidate_rows"), list) else []
+    values = [_safe_float(row.get("source_quality_adjusted_ev_pct")) for row in rows if isinstance(row, dict)]
+    if values:
+        return max(values)
+    source_report = candidate_source.get("source_report") if isinstance(candidate_source.get("source_report"), dict) else {}
+    if source_report.get("primary_adjusted_ev_pct") is not None:
+        return _safe_float(source_report.get("primary_adjusted_ev_pct"))
+    return None
 
 
 def _research_sample_count(research: dict[str, Any]) -> int:
@@ -154,9 +229,10 @@ def _build_context(
     bucket = _bottom_bucket_ev(ev_report)
     research_ev = _research_ev(research)
     bucket_ev = _safe_float(bucket.get("source_quality_adjusted_ev_pct"))
+    candidate_source_ev = _candidate_source_ev(candidate_source)
     has_sim_bucket = bool(bucket)
-    baseline_ev = 0.0
-    candidate_ev = bucket_ev if has_sim_bucket else research_ev
+    baseline_ev = research_ev if has_sim_bucket else 0.0
+    candidate_ev = bucket_ev if has_sim_bucket else candidate_source_ev if candidate_source_ev is not None else research_ev
     absolute_improvement = candidate_ev - baseline_ev
     relative_improvement = (
         absolute_improvement / abs(baseline_ev)
@@ -192,7 +268,14 @@ def _build_context(
             "baseline_research_ev_pct": round(research_ev, 6),
             "baseline_policy_ev_pct": round(baseline_ev, 6),
             "candidate_sim_bucket_ev_pct": round(candidate_ev, 6),
-            "candidate_ev_evidence_source": "swing_strategy_discovery_ev_bucket" if has_sim_bucket else "bottom_rebound_research_backtest_bootstrap",
+            "source_quality_adjusted_ev_pct": round(candidate_ev, 6),
+            "candidate_ev_evidence_source": (
+                "swing_strategy_discovery_ev_bucket"
+                if has_sim_bucket
+                else "bottom_rebound_candidate_source_packet"
+                if candidate_source_ev is not None
+                else "bottom_rebound_research_backtest_bootstrap"
+            ),
             "absolute_improvement_pct": round(absolute_improvement, 6),
             "relative_improvement": round(relative_improvement, 6),
             "sample_count": _safe_int(bucket.get("sample_count")) if has_sim_bucket else _research_sample_count(research),
@@ -408,6 +491,7 @@ def build_policy_auto_loop_report(
     provider: str | None = None,
     ai_raw_response: Any | None = None,
     source_paths: dict[str, Path] | None = None,
+    materialize_generated_candidate_source: bool = False,
 ) -> dict[str, Any]:
     config = config or PolicyAutoLoopConfig(target_date=target_date)
     date_key = _date_text(target_date)
@@ -415,6 +499,14 @@ def build_policy_auto_loop_report(
     research = _load_json(paths["bottom_rebound_research"])
     candidate_source = _load_json(paths["candidate_source"])
     ev_report = _load_json(paths["swing_strategy_discovery_ev"])
+    candidate_source, candidate_source_generation = _ensure_candidate_source_packet(
+        config=config,
+        research=research,
+        candidate_source=candidate_source,
+        candidate_source_path=paths["candidate_source"],
+        research_path=paths["bottom_rebound_research"],
+        materialize=materialize_generated_candidate_source,
+    )
     context = _build_context(
         config=config,
         research=research,
@@ -477,6 +569,7 @@ def build_policy_auto_loop_report(
         "config": asdict(config),
         "source_context_hash": _text_hash(context),
         "source_context": context,
+        "candidate_source_generation": candidate_source_generation,
         "ai_tier2_review": {
             "provider": resolved_provider,
             "status": ai_status,
@@ -553,7 +646,11 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--output-dir", type=Path, default=REPORT_DIR)
     parser.add_argument("--no-write", action="store_true")
     args = parser.parse_args(argv)
-    report = build_policy_auto_loop_report(args.date, provider=args.provider)
+    report = build_policy_auto_loop_report(
+        args.date,
+        provider=args.provider,
+        materialize_generated_candidate_source=not args.no_write,
+    )
     if args.no_write:
         print(json.dumps({"date": report["date"], "final_conclusion": report["final_conclusion"], "warnings": report["warnings"]}, ensure_ascii=False))
         return

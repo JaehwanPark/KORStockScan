@@ -83,15 +83,31 @@ def _lifecycle_policy_item(payload: dict[str, Any], catalog_path: Path) -> dict[
     if not catalog_path.exists():
         return None
     bucket_ids = [str(item) for item in (payload.get("approved_bucket_ids") or []) if str(item or "").strip()]
-    if not bool(payload.get("approved")) or not bucket_ids:
+    bucket_rows = [
+        item
+        for item in (payload.get("approved_bucket_rows") or [])
+        if isinstance(item, dict) and str(item.get("bucket_id") or "").strip()
+    ]
+    if not bool(payload.get("approved")) or not (bucket_rows or bucket_ids):
         return None
+    unique_source_bucket_ids = {
+        str(item.get("source_bucket_id") or item.get("bucket_id") or "")
+        for item in bucket_rows
+        if str(item.get("source_bucket_id") or item.get("bucket_id") or "").strip()
+    }
     return {
         "source_id": "lifecycle_bucket_discovery",
         "policy_kind": "lifecycle_bucket_sim_policy",
         "policy_id": "lifecycle_bucket_discovery_sim_auto_approval",
         "policy_file": str(catalog_path),
         "approved_bucket_ids": bucket_ids,
-        "approved_bucket_count": len(bucket_ids),
+        "approved_bucket_rows": bucket_rows,
+        "approved_bucket_count": len(bucket_rows) if bucket_rows else len(bucket_ids),
+        "approved_unique_source_bucket_count": (
+            len(unique_source_bucket_ids)
+            if bucket_rows
+            else payload.get("approved_unique_source_bucket_count")
+        ),
         "approved_evidence_grade_counts": payload.get("approved_evidence_grade_counts") or {},
         "classification_state": "sim_auto_approved",
         "runtime_effect": False,
@@ -191,6 +207,12 @@ def build_scalp_sim_auto_approval(
             "present": bool(lifecycle_payload),
             "contract_ok": _lifecycle_contract_ok(lifecycle_payload),
             "approved_bucket_count": len((lifecycle_payload.get("approved_bucket_ids") or []) if lifecycle_payload else []),
+            "approved_bucket_row_count": len((lifecycle_payload.get("approved_bucket_rows") or []) if lifecycle_payload else []),
+            "approved_unique_source_bucket_count": (
+                lifecycle_payload.get("approved_unique_source_bucket_count")
+                if lifecycle_payload
+                else None
+            ),
         },
         "lifecycle_bucket_catalog": {
             "path": str(catalog_path),

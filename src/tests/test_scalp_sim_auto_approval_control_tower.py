@@ -17,7 +17,36 @@ def _lifecycle_approval() -> dict:
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "approved_bucket_ids": ["entry_bucket_a", "scale_bucket_b"],
+        "approved_bucket_rows": [
+            {
+                "bucket_id": "entry_bucket_a",
+                "source_bucket_id": "entry:combo:full:entry_bucket_a",
+                "classification_state": "entry_only_sim_auto_approved",
+                "source_bucket_kind": "entry_bucket_sim_policy",
+                "stage": "entry",
+                "bucket_type": "entry_bucket_attribution",
+                "source_quality_adjusted_ev_pct": 1.2,
+                "sample": 8,
+                "joined_sample": 8,
+                "complete_flow_count": None,
+                "incomplete_flow_count": None,
+            },
+            {
+                "bucket_id": "scale_bucket_b",
+                "source_bucket_id": "scale_in:combo:full:scale_bucket_b",
+                "classification_state": "sim_auto_approved",
+                "source_bucket_kind": "scale_in_bucket_sim_policy",
+                "stage": "scale_in",
+                "bucket_type": "scale_in_bucket_attribution",
+                "source_quality_adjusted_ev_pct": 0.7,
+                "sample": 6,
+                "joined_sample": 6,
+                "complete_flow_count": None,
+                "incomplete_flow_count": None,
+            },
+        ],
         "approved_bucket_count": 2,
+        "approved_unique_source_bucket_count": 2,
     }
 
 
@@ -76,6 +105,13 @@ def test_scalp_control_tower_merges_lifecycle_and_scale_in_sources(tmp_path, mon
     assert approval["actual_order_submitted"] is False
     assert approval["broker_order_forbidden"] is True
     assert approval["source_status"]["runtime_apply_bridge"]["live_auto_apply_ready_count"] == 1
+    lifecycle_policy = next(item for item in approval["approved_policies"] if item["source_id"] == "lifecycle_bucket_discovery")
+    assert lifecycle_policy["approved_bucket_count"] == 2
+    assert lifecycle_policy["approved_unique_source_bucket_count"] == 2
+    assert [row["source_bucket_id"] for row in lifecycle_policy["approved_bucket_rows"]] == [
+        "entry:combo:full:entry_bucket_a",
+        "scale_in:combo:full:scale_bucket_b",
+    ]
     assert all(item["allowed_runtime_apply"] is False for item in approval["approved_policies"])
 
 
