@@ -39,6 +39,8 @@ FINAL_DISPOSITIONS = {
     "post_apply_attribution_pending",
     "source_only_keep_collecting",
     "source_only_explicit_exclusion",
+    "sim_auto_or_approval_handoff",
+    "tier2_fail_closed",
 }
 FAILURE_STATES = {
     "pass",
@@ -299,6 +301,31 @@ def _explicit_runtime_exclusion_reason(item: dict[str, Any]) -> str:
     return ""
 
 
+def _swing_source_only_handoff(item: dict[str, Any]) -> tuple[str, str]:
+    if item.get("allowed_runtime_apply") is not False:
+        return "", ""
+    if item.get("broker_order_forbidden") is not True:
+        return "", ""
+    forbidden = item.get("forbidden_uses") if isinstance(item.get("forbidden_uses"), list) else []
+    forbidden_values = {str(value) for value in forbidden}
+    if not forbidden_values.intersection(
+        {"broker_submit", "runtime_threshold_apply", "provider_route_change", "bot_restart_trigger", "position_cap_release"}
+    ):
+        return "", ""
+    ai_status = str(item.get("ai_review_status") or "").strip().lower()
+    proposal = item.get("ai_tier2_proposal") if isinstance(item.get("ai_tier2_proposal"), dict) else {}
+    proposal_status = str(proposal.get("proposal_status") or "").strip().lower()
+    proposal_decision = str(proposal.get("proposal_decision") or "").strip().lower()
+    if ai_status in {"missing", "unavailable", "parse_rejected", "fail_closed"} or proposal_status in {
+        "not_provided",
+        "missing",
+    }:
+        return "tier2_fail_closed", "swing_tier2_missing_fail_closed_source_only"
+    if proposal_decision in {"reject", "source_only", "keep_collecting"}:
+        return "source_only_explicit_exclusion", "swing_source_only_no_full_live_authority"
+    return "sim_auto_or_approval_handoff", "swing_source_only_handoff_no_full_live_authority"
+
+
 def _comparative_selected_decision(item: dict[str, Any]) -> str:
     review = item.get("comparative_review")
     if not isinstance(review, dict):
@@ -340,6 +367,11 @@ def _ledger_from_discovery(
         failure_state = "pass"
         failure_reason = ""
         exclusion_reason = _explicit_runtime_exclusion_reason(item)
+        explicit_disposition = ""
+        if domain == "swing" and state == "source_only_keep_collecting" and gate == "pass" and ev is not None and ev > 0:
+            explicit_disposition, swing_exclusion_reason = _swing_source_only_handoff(item)
+            if swing_exclusion_reason and not exclusion_reason:
+                exclusion_reason = swing_exclusion_reason
         recommended_route = str(item.get("recommended_route") or "").strip()
         selected_decision = _comparative_selected_decision(item)
         if selected_decision == "source_quality_blocker":
@@ -350,7 +382,7 @@ def _ledger_from_discovery(
             if exclusion_reason:
                 failure_state = "pass"
                 failure_reason = ""
-                disposition = "source_only_explicit_exclusion"
+                disposition = explicit_disposition or "source_only_explicit_exclusion"
             else:
                 failure_state = "fail"
                 failure_reason = "positive_edge_stuck_source_only"
@@ -478,7 +510,13 @@ def _ledger_from_bridge(
                     if state == "live_auto_apply_ready"
                     else "not_ready"
                 ),
-                "runtime_hook_state": "mapped" if item.get("target_env_keys") else "env_mapping_missing",
+                "runtime_hook_state": (
+                    "mapped"
+                    if item.get("target_env_keys")
+                    else "not_applicable_source_only"
+                    if exclusion_reason
+                    else "env_mapping_missing"
+                ),
                 "post_apply_attribution_state": "pending" if state == "live_auto_apply_ready" else "not_applicable",
                 "greenfield_policy_state": greenfield_policy_state,
                 "final_disposition": disposition,

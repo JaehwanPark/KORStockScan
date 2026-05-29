@@ -14,8 +14,8 @@
 - joined_rows: `23761`
 - policy_pass_count: `5`
 - promote_ready_count: `0`
-- entry_bucket_actionable_count: `10`
-- entry_bucket_runtime_candidate_count: `4`
+- entry_bucket_actionable_count: `12`
+- entry_bucket_runtime_candidate_count: `5`
 - holding_bucket_count/workorders: `34` / `10`
 - exit_bucket_count/workorders: `68` / `10`
 - scale_in_bucket_actionable_count: `206`
@@ -34,7 +34,7 @@
 ## Policy Entries
 | stage | sample | joined | ev | confidence | source_quality | action | promote_ready |
 | --- | ---: | ---: | ---: | ---: | --- | --- | --- |
-| `entry` | 569 | 112 | 0.1139 | 1.0 | `pass` | `NO_CHANGE` | False |
+| `entry` | 569 | 112 | -0.0567 | 1.0 | `pass` | `WAIT_REQUOTE` | False |
 | `submit` | 217 | 199 | -0.6071 | 1.0 | `pass` | `NO_CHANGE` | False |
 | `holding` | 216 | 199 | -0.7334 | 1.0 | `pass` | `EXIT` | False |
 | `scale_in` | 22529 | 22492 | -0.4456 | 1.0 | `pass` | `NO_CHANGE` | False |
@@ -74,57 +74,58 @@
 
 - decision_authority: `adm_ldm_entry_bucket_attribution_source_only`
 - primary_decision_metric: `source_quality_adjusted_ev_pct`
-- summary: `{'entry_rows': 569, 'bucket_count': 165, 'actionable_bucket_count': 10, 'runtime_candidate_count': 4, 'workorder_count': 10}`
+- summary: `{'entry_rows': 569, 'bucket_count': 165, 'actionable_bucket_count': 12, 'runtime_candidate_count': 5, 'workorder_count': 10}`
 
 | bucket_type | bucket_key | sample | joined | ev | avg_profit | win_rate | route |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| `chosen_action` | `WAIT_REQUOTE` | 96 | 96 | 0.173 | 0.7212 | 0.4167 | `hold_no_edge` |
+| `chosen_action` | `WAIT_REQUOTE` | 96 | 96 | -0.026 | 0.2808 | 0.4062 | `hold_no_edge` |
 | `chosen_action` | `NO_BUY_AI` | 288 | 11 | -0.4374 | -0.9345 | 0.3636 | `candidate_tighten_or_exclude` |
 | `chosen_action` | `BUY_NOW` | 6 | 5 | 0.1916 | -0.71 | 0.4 | `hold_sample` |
 | `chosen_action` | `ALLOW_BOTTOMING_ENTRY` | 22 | 0 | None | None | None | `hold_sample` |
 | `chosen_action` | `ALLOW_LEVEL1_RISK_OFF_ENTRY` | 153 | 0 | None | None | None | `hold_sample` |
 | `chosen_action` | `SKIP_SOURCE_QUALITY` | 4 | 0 | None | None | None | `hold_sample` |
-| `combo_entry_spot` | `score=score_66_69|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_proxy_normal|time=time_1000_1200` | 12 | 12 | -1.1694 | -1.1767 | 0.1667 | `candidate_tighten_or_exclude` |
+| `combo_entry_spot` | `score=score_66_69|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_proxy_normal|time=time_1000_1200` | 12 | 12 | -0.639 | -0.9728 | 0.25 | `candidate_tighten_or_exclude` |
 | `combo_entry_spot` | `score=score_70p|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_proxy_chase_risk|time=time_0900_1000` | 11 | 11 | -3.0814 | -4.0545 | 0.2727 | `candidate_tighten_or_exclude` |
-| `combo_entry_spot` | `score=score_70p|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_proxy_watch|time=time_1000_1200` | 10 | 10 | 0.5005 | 0.9377 | 0.2 | `candidate_recovery_or_relax` |
-| `combo_entry_spot` | `score=score_70p|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_proxy_watch|time=time_0900_1000` | 8 | 8 | -2.5671 | -3.3094 | 0.25 | `hold_sample` |
-| `combo_entry_spot` | `score=score_70p|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_proxy_chase_risk|time=time_1000_1200` | 7 | 7 | 2.2935 | 4.8954 | 0.5714 | `hold_sample` |
+| `combo_entry_spot` | `score=score_70p|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_proxy_watch|time=time_1000_1200` | 10 | 10 | -0.6702 | -0.6929 | 0.2 | `candidate_tighten_or_exclude` |
+| `combo_entry_spot` | `score=score_70p|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_proxy_watch|time=time_0900_1000` | 8 | 8 | -1.1315 | -1.3987 | 0.25 | `hold_sample` |
+| `combo_entry_spot` | `score=score_70p|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_proxy_chase_risk|time=time_1000_1200` | 7 | 7 | -0.4497 | 0.2175 | 0.5714 | `hold_sample` |
 | `combo_entry_spot` | `score=score_66_69|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_proxy_normal|time=time_1200_1400` | 6 | 6 | 1.488 | 2.299 | 0.5 | `hold_sample` |
-| `combo_entry_spot` | `score=score_70p|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_proxy_normal|time=time_1000_1200` | 6 | 6 | -0.4496 | -0.3774 | 0.5 | `hold_sample` |
+| `combo_entry_spot` | `score=score_70p|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_proxy_normal|time=time_1000_1200` | 6 | 6 | -0.3529 | -0.3774 | 0.5 | `hold_sample` |
 | `combo_entry_spot` | `score=score_60_62|source=scalp_entry_action_decision_snapshot|stale=fresh|liquidity=liquidity_unknown|overbought=overbought_unknown|time=time_1000_1200` | 35 | 5 | -0.0511 | -1.472 | 0.2 | `hold_sample` |
-| `combo_entry_spot` | `score=score_66_69|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_proxy_watch|time=time_1000_1200` | 5 | 5 | 0.1704 | 0.2256 | 0.6 | `hold_sample` |
-| `combo_entry_spot` | `score=score_63_65|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_proxy_normal|time=time_0900_1000` | 4 | 4 | 1.6898 | 2.7282 | 0.5 | `hold_sample` |
+| `combo_entry_spot` | `score=score_66_69|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_proxy_watch|time=time_1000_1200` | 5 | 5 | -0.5528 | -0.6995 | 0.2 | `hold_sample` |
+| `combo_entry_spot` | `score=score_63_65|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_proxy_normal|time=time_0900_1000` | 4 | 4 | 1.7915 | 2.8041 | 0.5 | `hold_sample` |
 | `combo_entry_spot` | `score=score_70p|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_proxy_normal|time=time_1200_1400` | 4 | 4 | -0.3401 | -0.012 | 0.25 | `hold_sample` |
 | `combo_entry_spot` | `score=score_60_62|source=scalp_entry_action_decision_snapshot|stale=fresh|liquidity=liquidity_unknown|overbought=overbought_unknown|time=time_0900_1000` | 26 | 3 | -0.4214 | 0.4933 | 0.6667 | `hold_sample` |
-| `combo_entry_spot` | `score=score_63_65|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_proxy_normal|time=time_1000_1200` | 3 | 3 | 6.8399 | 11.6821 | 1.0 | `hold_sample` |
+| `combo_entry_spot` | `score=score_63_65|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_proxy_normal|time=time_1000_1200` | 3 | 3 | 5.1399 | 9.4685 | 1.0 | `hold_sample` |
 | `combo_entry_spot` | `score=score_66_69|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_proxy_normal|time=time_0900_1000` | 3 | 3 | 1.0365 | 1.0995 | 1.0 | `hold_sample` |
-| `exit_rule` | `exit_unknown` | 553 | 96 | 0.173 | 0.7212 | 0.4167 | `hold_no_edge` |
-| `liquidity_bucket` | `liquidity_high` | 96 | 96 | 0.173 | 0.7212 | 0.4167 | `hold_no_edge` |
+| `exit_rule` | `exit_unknown` | 553 | 96 | -0.026 | 0.2808 | 0.4062 | `hold_no_edge` |
+| `liquidity_bucket` | `liquidity_high` | 96 | 96 | -0.026 | 0.2808 | 0.4062 | `hold_no_edge` |
 | `liquidity_bucket` | `liquidity_unknown` | 298 | 16 | -0.2409 | -0.8644 | 0.375 | `hold_no_edge` |
-| `overbought_bucket` | `overbought_proxy_normal` | 41 | 41 | 0.4583 | 1.0661 | 0.439 | `candidate_recovery_or_relax` |
-| `overbought_bucket` | `overbought_proxy_watch` | 29 | 29 | 0.2667 | 0.7072 | 0.4138 | `hold_no_edge` |
-| `overbought_bucket` | `overbought_proxy_chase_risk` | 20 | 20 | -0.9332 | -0.6519 | 0.35 | `candidate_tighten_or_exclude` |
+| `overbought_bucket` | `overbought_proxy_normal` | 41 | 41 | 0.5132 | 0.9712 | 0.4634 | `candidate_recovery_or_relax` |
+| `overbought_bucket` | `overbought_proxy_watch` | 29 | 29 | 0.1344 | 0.5125 | 0.3448 | `hold_no_edge` |
+| `overbought_bucket` | `overbought_proxy_chase_risk` | 20 | 20 | -1.8933 | -2.2892 | 0.35 | `candidate_tighten_or_exclude` |
 | `overbought_bucket` | `overbought_unknown` | 169 | 15 | -0.3546 | -0.9893 | 0.3333 | `candidate_tighten_or_exclude` |
-| `score_band` | `score_70p` | 170 | 64 | -0.2524 | 0.049 | 0.375 | `hold_no_edge` |
-| `score_band` | `score_66_69` | 37 | 30 | 0.2147 | 0.5532 | 0.4333 | `hold_no_edge` |
+| `score_band` | `score_70p` | 170 | 64 | -0.5206 | -0.4786 | 0.375 | `candidate_tighten_or_exclude` |
+| `score_band` | `score_66_69` | 37 | 30 | 0.3064 | 0.4805 | 0.4 | `candidate_recovery_or_relax` |
 | `score_band` | `score_60_62` | 267 | 10 | -0.107 | -0.759 | 0.4 | `hold_no_edge` |
-| `source_stage` | `wait6579_ev_cohort` | 96 | 96 | 0.173 | 0.7212 | 0.4167 | `hold_no_edge` |
+| `source_stage` | `wait6579_ev_cohort` | 96 | 96 | -0.026 | 0.2808 | 0.4062 | `hold_no_edge` |
 | `source_stage` | `scalp_entry_action_decision_snapshot` | 185 | 16 | -0.2409 | -0.8644 | 0.375 | `hold_no_edge` |
-| `stale_bucket` | `fresh_or_unflagged` | 271 | 96 | 0.173 | 0.7212 | 0.4167 | `hold_no_edge` |
+| `stale_bucket` | `fresh_or_unflagged` | 271 | 96 | -0.026 | 0.2808 | 0.4062 | `hold_no_edge` |
 | `stale_bucket` | `fresh` | 219 | 15 | -0.1893 | -0.7407 | 0.4 | `hold_no_edge` |
-| `strength_bucket` | `strong_strength_momentum` | 109 | 81 | -0.0188 | 0.5004 | 0.4074 | `hold_no_edge` |
+| `strength_bucket` | `strong_strength_momentum` | 109 | 81 | -0.099 | 0.1921 | 0.4074 | `hold_no_edge` |
 | `strength_bucket` | `risk_unknown` | 185 | 16 | -0.2409 | -0.8644 | 0.375 | `hold_no_edge` |
-| `strength_bucket` | `weak_strength_momentum` | 60 | 10 | 0.1818 | 0.4599 | 0.3 | `hold_no_edge` |
-| `time_bucket` | `time_1000_1200` | 212 | 54 | 0.4269 | 0.9005 | 0.3519 | `candidate_recovery_or_relax` |
-| `time_bucket` | `time_0900_1000` | 215 | 38 | -1.3718 | -1.6255 | 0.4211 | `candidate_tighten_or_exclude` |
+| `strength_bucket` | `weak_strength_momentum` | 60 | 10 | -0.7482 | -0.8675 | 0.3 | `candidate_tighten_or_exclude` |
+| `time_bucket` | `time_1000_1200` | 212 | 54 | -0.1471 | -0.1712 | 0.3333 | `hold_no_edge` |
+| `time_bucket` | `time_0900_1000` | 215 | 38 | -1.0589 | -1.2153 | 0.4211 | `candidate_tighten_or_exclude` |
 | `time_bucket` | `time_1200_1400` | 114 | 17 | 1.9691 | 3.2365 | 0.4706 | `candidate_recovery_or_relax` |
 
 ### Entry Bucket Runtime Approval Candidates
 
 - `entry_bucket_5`: `overbought_bucket` / `overbought_proxy_normal` -> `candidate_recovery_or_relax`
 - `entry_bucket_6`: `overbought_bucket` / `overbought_proxy_chase_risk` -> `candidate_tighten_or_exclude`
-- `entry_bucket_8`: `time_bucket` / `time_1000_1200` -> `candidate_recovery_or_relax`
-- `entry_bucket_9`: `time_bucket` / `time_0900_1000` -> `candidate_tighten_or_exclude`
+- `entry_bucket_8`: `score_band` / `score_70p` -> `candidate_tighten_or_exclude`
+- `entry_bucket_9`: `score_band` / `score_66_69` -> `candidate_recovery_or_relax`
+- `entry_bucket_11`: `time_bucket` / `time_0900_1000` -> `candidate_tighten_or_exclude`
 
 ### Entry Bucket Workorders
 
@@ -135,9 +136,9 @@
 - `entry_bucket_source_quality_5`: `overbought_bucket` / `overbought_proxy_normal` -> `bucket_has_edge_but_needs_rolling_or_feature_confirmation`
 - `entry_bucket_source_quality_6`: `overbought_bucket` / `overbought_proxy_chase_risk` -> `bucket_has_edge_but_needs_rolling_or_feature_confirmation`
 - `entry_bucket_source_quality_7`: `overbought_bucket` / `overbought_unknown` -> `bucket_has_edge_but_needs_rolling_or_feature_confirmation`
-- `entry_bucket_source_quality_8`: `time_bucket` / `time_1000_1200` -> `bucket_has_edge_but_needs_rolling_or_feature_confirmation`
-- `entry_bucket_source_quality_9`: `time_bucket` / `time_0900_1000` -> `bucket_has_edge_but_needs_rolling_or_feature_confirmation`
-- `entry_bucket_source_quality_10`: `time_bucket` / `time_1200_1400` -> `bucket_has_edge_but_needs_rolling_or_feature_confirmation`
+- `entry_bucket_source_quality_8`: `score_band` / `score_70p` -> `bucket_has_edge_but_needs_rolling_or_feature_confirmation`
+- `entry_bucket_source_quality_9`: `score_band` / `score_66_69` -> `bucket_has_edge_but_needs_rolling_or_feature_confirmation`
+- `entry_bucket_source_quality_10`: `strength_bucket` / `weak_strength_momentum` -> `bucket_has_edge_but_needs_rolling_or_feature_confirmation`
 
 ## Submit Bucket Attribution
 

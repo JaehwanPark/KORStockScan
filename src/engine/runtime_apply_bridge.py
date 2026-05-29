@@ -632,7 +632,7 @@ def _entry_candidate(
         ]
     missing_fields = _missing_source_fields(bucket)
     explicit_exclusion = state != "live_auto_apply_ready" and (
-        bool(missing_fields) or rolling.get("lifecycle_bucket_discovery_gate") == "blocked"
+        bool(missing_fields) or rolling.get("lifecycle_bucket_discovery_gate") == "blocked" or not bool(bucket)
     )
     exclusion_reason = (
         "counterfactual_source_field_gap"

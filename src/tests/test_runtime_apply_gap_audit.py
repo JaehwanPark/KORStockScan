@@ -154,6 +154,52 @@ def test_ai_source_quality_blocker_positive_edge_is_not_runtime_gap_fail(tmp_pat
     )
 
 
+def test_swing_positive_edge_source_only_tier2_missing_is_fail_closed_handoff(tmp_path, monkeypatch):
+    report_dir = _patch_dirs(tmp_path, monkeypatch)
+    _write_core_artifacts(report_dir)
+    _write_json(
+        report_dir / "swing_lifecycle_bucket_discovery" / "swing_lifecycle_bucket_discovery_2026-05-22.json",
+        {
+            "surfaced_candidates": [
+                {
+                    "bucket_id": "swing:positive-source-only",
+                    "lifecycle_stage": "holding_exit",
+                    "classification_state": "source_only_keep_collecting",
+                    "sample_count": 20,
+                    "source_quality_gate": "pass",
+                    "source_quality_adjusted_ev_pct": 8.2,
+                    "allowed_runtime_apply": False,
+                    "broker_order_forbidden": True,
+                    "forbidden_uses": [
+                        "broker_submit",
+                        "runtime_threshold_apply",
+                        "provider_route_change",
+                        "bot_restart_trigger",
+                        "position_cap_release",
+                    ],
+                    "ai_review_status": "missing",
+                    "ai_tier2_proposal": {"proposal_status": "not_provided", "proposal_decision": "reject"},
+                }
+            ]
+        },
+    )
+
+    report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+
+    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == "swing:positive-source-only")
+    assert row["failure_state"] == "pass"
+    assert row["failure_reason"] == ""
+    assert row["final_disposition"] == "tier2_fail_closed"
+    assert row["runtime_exclusion_reason"] == "swing_tier2_missing_fail_closed_source_only"
+    assert report["summary"]["critical_failure_count"] == 0
+    assert report["runtime_uptake_kpi"]["runtime_uptake_rate_pct"] == 0.0
+    assert not any(
+        item["candidate_id"] == "swing:positive-source-only"
+        and item["directive_type"] == "RESOLVE_SOURCE_ONLY_STUCK_POSITIVE_EDGE"
+        for item in report["codex_workorder_directives"]
+    )
+
+
 def test_missing_artifact_enters_retry_queue(tmp_path, monkeypatch):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_json(
@@ -443,6 +489,45 @@ def test_bridge_counterfactual_source_field_gap_does_not_emit_runtime_directive(
     assert row["failure_state"] == "blocked_contract"
     assert row["final_disposition"] == "source_only_explicit_exclusion"
     assert row["runtime_exclusion_reason"] == "counterfactual_source_field_gap"
+    assert not any(
+        item["candidate_id"] == candidate_id
+        and item["directive_type"] == "IMPLEMENT_RUNTIME_BRIDGE_FOR_ENTRY_BUCKET"
+        for item in report["codex_workorder_directives"]
+    )
+
+
+def test_wait6579_bridge_missing_split_bucket_is_sim_lifecycle_handoff(tmp_path, monkeypatch):
+    report_dir = _patch_dirs(tmp_path, monkeypatch)
+    _write_core_artifacts(report_dir)
+    candidate_id = "entry_wait6579_score66_69_recovery_gate_v1:2026-05-22"
+    _write_json(
+        report_dir / "runtime_apply_bridge" / "runtime_apply_bridge_2026-05-22.json",
+        {
+            "candidates": [
+                {
+                    "candidate_id": candidate_id,
+                    "family": "entry_wait6579_score66_69_recovery_gate_v1",
+                    "stage": "entry",
+                    "bridge_candidate_state": "blocked_source_quality",
+                    "source_quality_gate": "unknown",
+                    "target_env_keys": [],
+                    "evidence_grade": "grade_2_counterfactual",
+                    "transition_target": "sim_lifecycle_handoff",
+                    "explicit_runtime_exclusion": True,
+                    "bridge_exclusion_reason": "counterfactual_sim_lifecycle_handoff",
+                    "missing_runtime_source_fields": [],
+                }
+            ]
+        },
+    )
+
+    report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+
+    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == candidate_id)
+    assert row["failure_state"] == "blocked_source_quality"
+    assert row["final_disposition"] == "source_quality_blocker"
+    assert row["runtime_hook_state"] == "not_applicable_source_only"
+    assert row["runtime_exclusion_reason"] == "counterfactual_sim_lifecycle_handoff"
     assert not any(
         item["candidate_id"] == candidate_id
         and item["directive_type"] == "IMPLEMENT_RUNTIME_BRIDGE_FOR_ENTRY_BUCKET"
