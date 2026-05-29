@@ -22,17 +22,23 @@
 
 ## 장전 체크리스트 (08:45~09:00)
 
-- [ ] `[ThresholdEnvAutoApplyPreopen0529] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-05-29`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
+- [x] `[ThresholdEnvAutoApplyPreopen0529] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-05-29`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-28.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-28.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
   - 판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.
   - 금지: blocked family, approval artifact missing, same-stage owner conflict를 수동 env override로 우회하지 않는다.
   - 다음 액션: `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.
+  - 처리 결과(2026-05-29 KST 재확인): `partial_apply_with_blocked_families`.
+  - 근거: [threshold_cycle_preopen_2026-05-29.status.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_preopen_status/threshold_cycle_preopen_2026-05-29.status.json)은 `status=succeeded`, `apply_mode=auto_bounded_live`, `auto_apply=true`, `runtime_effect=preopen_runtime_env_apply_only`다. [threshold_apply_2026-05-29.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-05-29.json)은 `status=auto_bounded_live_ready`, `runtime_change=true`이며 runtime env 파일은 [threshold_runtime_env_2026-05-29.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-05-29.env)다. 현재 bot PID 환경에는 `KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED=true`, `KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED=true`, `KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED=true`, `KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_EXPANSION_ENABLED=true`, `KORSTOCKSCAN_SCALP_SIM_AI_BUDGET_ENABLED=true`, `KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_ENABLED=true`, `KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED=true`가 로딩되어 있다. 단, `entry_wait6579_score66_69_recovery_gate_v1`는 apply plan에 `runtime_apply_blocked_bridge_not_ready:runtime_blocked_contract_gap`, `runtime_apply_not_allowed`, `runtime_apply_bridge_auto_live_contract_missing`로 남아 있어 수동 env override 없이 blocked family로 분리한다.
+  - 다음 액션: 적용된 PREOPEN env 축만 장중 provenance/rollback guard로 관찰하고, blocked family는 장후 bridge/source-quality 산출물에서 재판정한다. 장중 threshold mutation과 수동 env override는 하지 않는다.
 
-- [ ] `[OpenAIWSPreopenConfirm0529] OpenAI WS 유지 설정 및 entry_price/analyze_target provenance 확인` (`Due: 2026-05-29`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: RuntimeStability`)
+- [x] `[OpenAIWSPreopenConfirm0529] OpenAI WS 유지 설정 및 entry_price/analyze_target provenance 확인` (`Due: 2026-05-29`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: RuntimeStability`)
   - Source: [openai_ws_stability_2026-05-28.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-28.md), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py)
   - 판정 기준: startup env의 OpenAI route/Responses WS 설정과 `analyze_target`, `entry_price` transport provenance를 분리 확인한다.
   - 금지: provider transport 확인을 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경으로 해석하지 않는다.
   - 다음 액션: entry_price transport 표본이 부족하면 장중 표본 재확인 항목과 연결한다.
+  - 처리 결과(2026-05-29 KST 재확인): `keep_ws_confirmed_with_entry_price_bedrock_override`.
+  - 근거: [openai_ws_stability_2026-05-28.json](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-28.json)은 `decision=keep_ws`, `ws_summary.n=4106`, `endpoint_counts.analyze_target=4101`, `endpoint_counts.entry_price=5`, `ws_success_rate=1.0`, `ws_http_fallback=0`이다. 현재 bot PID 환경은 `KORSTOCKSCAN_OPENAI_RESPONSES_WS_ENABLED=true`, `KORSTOCKSCAN_OPENAI_TRANSPORT_MODE=responses_ws`이며, `KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE=primary`, `KORSTOCKSCAN_BEDROCK_NOVA_LITE_PRIMARY_ENDPOINTS=entry_price,holding_flow`, `KORSTOCKSCAN_BEDROCK_PRIMARY_FAILBACK_TO_OPENAI=true`가 함께 로딩되어 있다. 당일 [pipeline_events_2026-05-29.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-05-29.jsonl)에서는 `analyze_target`이 `responses_ws`, `openai_ws_used=True`, `openai_ws_http_fallback=False`로 다수 기록됐고, `entry_price`는 의도된 `bedrock_primary` provenance로 기록됐다.
+  - 다음 액션: `analyze_target`은 OpenAI Responses WS 유지, `entry_price`는 2026-05-26 운영 override의 Bedrock primary/OpenAI failback으로 분리 관찰한다. provider transport 확인을 threshold/order guard 변경으로 연결하지 않는다.
 
 - [x] `[SwingPreFinalAutoAndFinalApprovalPreopen0529] 스윙 pre-final auto state 및 final approval artifact 확인` (`Due: 2026-05-29`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
   - Source: [swing_runtime_approval_2026-05-28.json](/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-05-28.json), [threshold_cycle_ev_2026-05-28.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-28.json)
@@ -135,3 +141,18 @@
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
+
+<!-- AUTO_SERVER_COMPARISON_START -->
+### 본서버 vs songstockscan 자동 비교 (`2026-05-29 15:46:45`)
+
+- 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
+- 상세 리포트: `data/report/server_comparison/server_comparison_2026-05-29.md`
+- `Trade Review`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Performance Tuning`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Post Sell Feedback`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Entry Pipeline Flow`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+<!-- AUTO_SERVER_COMPARISON_END -->
