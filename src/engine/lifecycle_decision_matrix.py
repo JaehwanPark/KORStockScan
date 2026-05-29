@@ -70,6 +70,16 @@ RUNTIME_FEATURE_KEYS = {
     "chosen_action",
     "sim_record_id",
     "entry_adm_candidate_id",
+    "scalp_sim_auto_policy_source_id",
+    "scalp_sim_auto_policy_version",
+    "scalp_sim_auto_policy_approved_row_count",
+    "bucket_directed_sim_probe",
+    "lifecycle_bucket_match_status",
+    "lifecycle_bucket_source_bucket_id",
+    "lifecycle_bucket_bucket_id",
+    "lifecycle_bucket_classification_state",
+    "lifecycle_bucket_source_bucket_kind",
+    "lifecycle_flow_child_bucket_ids",
     "lifecycle_flow_bridge_key",
     "lifecycle_join_bridge_key",
     "join_bridge_key",
@@ -613,6 +623,69 @@ def _is_scalp_sim_event(stage: str, fields: dict[str, Any]) -> bool:
     return stage.startswith("scalp_sim_") or fields.get("simulation_book") == "scalp_ai_buy_all"
 
 
+BUCKET_DIRECTED_SIM_PROBE_KEYS = (
+    "scalp_sim_auto_policy_source_id",
+    "scalp_sim_auto_policy_version",
+    "scalp_sim_auto_policy_approved_row_count",
+    "bucket_directed_sim_probe",
+    "lifecycle_bucket_match_status",
+    "lifecycle_bucket_source_bucket_id",
+    "lifecycle_bucket_bucket_id",
+    "lifecycle_bucket_classification_state",
+    "lifecycle_bucket_source_bucket_kind",
+    "lifecycle_bucket_stage",
+    "lifecycle_bucket_type",
+    "lifecycle_flow_child_bucket_ids",
+    "lifecycle_bucket_sample",
+    "lifecycle_bucket_joined_sample",
+    "lifecycle_bucket_complete_flow_count",
+    "lifecycle_bucket_incomplete_flow_count",
+)
+
+
+def _bucket_directed_runtime_features(fields: dict[str, Any]) -> dict[str, Any]:
+    return {key: fields.get(key) for key in BUCKET_DIRECTED_SIM_PROBE_KEYS if fields.get(key) not in (None, "")}
+
+
+def _bucket_directed_sim_probe_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    status_counts: Counter[str] = Counter()
+    state_counts: Counter[str] = Counter()
+    matched_source_bucket_ids: set[str] = set()
+    matched_rows = 0
+    background_rows = 0
+    observed_rows = 0
+    for row in rows:
+        source = str(row.get("source") or "")
+        source_stage = str(row.get("source_stage") or "")
+        if "scalp_sim" not in source and not source_stage.startswith("scalp_sim_"):
+            continue
+        observed_rows += 1
+        features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
+        status = str(features.get("lifecycle_bucket_match_status") or "not_instrumented")
+        status_counts[status] += 1
+        if str(features.get("bucket_directed_sim_probe")).lower() == "true" or features.get("bucket_directed_sim_probe") is True:
+            matched_rows += 1
+            source_bucket_id = str(features.get("lifecycle_bucket_source_bucket_id") or "").strip()
+            if source_bucket_id:
+                matched_source_bucket_ids.add(source_bucket_id)
+            state_counts[str(features.get("lifecycle_bucket_classification_state") or "unknown")] += 1
+        else:
+            background_rows += 1
+    return {
+        "observed_row_count": observed_rows,
+        "matched_row_count": matched_rows,
+        "background_row_count": background_rows,
+        "matched_unique_source_bucket_count": len(matched_source_bucket_ids),
+        "match_status_counts": dict(sorted(status_counts.items())),
+        "matched_classification_state_counts": dict(sorted(state_counts.items())),
+        "primary_source": "matched_bucket_directed_sim_probe_only",
+        "background_source": "unmatched_or_policy_missing_sim_observation",
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
 def _load_sim_post_sell_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     path = POST_SELL_DIR / f"sim_post_sell_evaluations_{target_date}.jsonl"
     rows: list[dict[str, Any]] = []
@@ -836,6 +909,7 @@ def _load_scalp_sim_submit_rows(target_date: str) -> tuple[list[dict[str, Any]],
                     "strategy_domain": fields.get("strategy_domain") or fields.get("strategy"),
                     "source_namespace": fields.get("source_namespace"),
                     "blocker_namespace": fields.get("blocker_namespace"),
+                    **_bucket_directed_runtime_features(fields),
                     "fixed_threshold_contract_role": "bounded_tunable",
                     "sim_record_id": sim_record_id,
                     "entry_adm_candidate_id": fields.get("entry_adm_candidate_id"),
@@ -906,6 +980,7 @@ def _load_scalp_sim_holding_rows(target_date: str) -> tuple[list[dict[str, Any]]
                     "curr_price": fields.get("assumed_fill_price"),
                     "would_limit_fill": fields.get("would_limit_fill"),
                     "source_quality_block_reason": fields.get("scalp_sim_candidate_window_blocked_reason"),
+                    **_bucket_directed_runtime_features(fields),
                     "fixed_threshold_contract_role": "bounded_tunable",
                     "sim_record_id": sim_record_id,
                     "entry_adm_candidate_id": fields.get("entry_adm_candidate_id"),
@@ -1003,6 +1078,7 @@ def _load_scalp_sim_scale_in_rows(target_date: str) -> tuple[list[dict[str, Any]
                         "ai_score_source": ai_score_source,
                         "actual_order_submitted": fields.get("actual_order_submitted"),
                         "broker_order_forbidden": fields.get("broker_order_forbidden"),
+                        **_bucket_directed_runtime_features(fields),
                         "fixed_threshold_contract_role": "bounded_tunable",
                         "scale_in_fill_observed": is_filled,
                         "sim_record_id": sim_record_id,
@@ -1288,6 +1364,7 @@ def _load_scalp_sim_overnight_rows(target_date: str) -> tuple[list[dict[str, Any
                     "actual_order_submitted": fields.get("actual_order_submitted"),
                     "broker_order_forbidden": fields.get("broker_order_forbidden"),
                     "sim_record_id": fields.get("sim_record_id"),
+                    **_bucket_directed_runtime_features(fields),
                     "fixed_threshold_contract_role": "bounded_tunable",
                 },
                 "labels": labels,
@@ -1437,6 +1514,7 @@ def _load_scalp_sim_panic_rows(target_date: str) -> tuple[list[dict[str, Any]], 
             "real_gate_allowed": fields.get("real_gate_allowed"),
             "pre_submit_gate_allowed": fields.get("pre_submit_gate_allowed"),
             "exclude_from_live_approval": fields.get("exclude_from_live_approval"),
+            **_bucket_directed_runtime_features(fields),
             "fixed_threshold_contract_role": "bounded_tunable",
         }
         if matrix_stage == "scale_in":
@@ -3807,6 +3885,7 @@ def build_lifecycle_decision_matrix_report(target_date: str) -> dict[str, Any]:
     scale_in_bucket_attribution = _scale_in_bucket_attribution(rows)
     overnight_bucket_attribution = _overnight_bucket_attribution(rows)
     lifecycle_flow_bucket_attribution = _lifecycle_flow_bucket_attribution(rows)
+    bucket_directed_sim_probe = _bucket_directed_sim_probe_summary(rows)
     report = {
         "schema_version": REPORT_SCHEMA_VERSION,
         "date": target_date,
@@ -3974,12 +4053,14 @@ def build_lifecycle_decision_matrix_report(target_date: str) -> dict[str, Any]:
                 if isinstance(lifecycle_flow_bucket_attribution.get("summary"), dict)
                 else {}
             ),
+            "bucket_directed_sim_probe": bucket_directed_sim_probe,
             "lifecycle_ai_context_feedback": _lifecycle_ai_context_feedback_summary(policy_entries),
             "status": "pass" if not warnings else "warning",
             "warnings": warnings,
         },
         "policy_entries": policy_entries,
         "lifecycle_flow_bucket_attribution": lifecycle_flow_bucket_attribution,
+        "bucket_directed_sim_probe": bucket_directed_sim_probe,
         "entry_bucket_attribution": entry_bucket_attribution,
         "submit_bucket_attribution": submit_bucket_attribution,
         "holding_bucket_attribution": holding_bucket_attribution,
@@ -4030,6 +4111,7 @@ def render_lifecycle_decision_matrix_markdown(report: dict[str, Any]) -> str:
         f"- identity_missing_count/join_rate: `{summary.get('identity_missing_count')}` / `{summary.get('identity_join_rate')}`",
         f"- complete_flow_rate: `{summary.get('complete_flow_rate')}`",
         f"- incomplete_flow_reason_counts: `{summary.get('incomplete_flow_reason_counts') or {}}`",
+        f"- bucket_directed_sim_probe: `{summary.get('bucket_directed_sim_probe') or {}}`",
         f"- lifecycle_ai_context_feedback: `{summary.get('lifecycle_ai_context_feedback') or {}}`",
         f"- warnings: `{summary.get('warnings')}`",
         "",

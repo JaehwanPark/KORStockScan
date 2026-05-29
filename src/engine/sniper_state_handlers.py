@@ -6,6 +6,7 @@ import re
 import time
 import math
 from datetime import date as date_cls, datetime, timedelta
+from pathlib import Path
 from uuid import uuid4
 
 import numpy as np
@@ -215,6 +216,15 @@ _SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED: dict[tuple[str, str], int] = {
 _SCALP_SIM_SCALE_IN_WINDOW_DAILY_CREATED: dict[str, int] = {}
 _SCALP_SIM_AI_CALL_TIMES: list[float] = []
 _SCALP_SIM_PANIC_DEDUP_LOG_TS: dict[tuple[str, str, int, str], float] = {}
+_SCALP_SIM_AUTO_POLICY_CACHE: dict[str, object] = {
+    "path": None,
+    "mtime_ns": None,
+    "version": None,
+    "status": "not_loaded",
+    "rows_by_source_bucket_id": {},
+    "rows_by_bucket_id": {},
+    "approved_row_count": 0,
+}
 _SWING_PROBE_DAILY_CREATED: dict[str, int] = {}
 _SWING_PROBE_DISCARD_LOG_TS: dict[tuple[str, str, str, str], float] = {}
 _SWING_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS: dict[str, dict] = {}
@@ -260,6 +270,187 @@ def _rule_float(name, default=0.0):
         return float(_rule(name, default) or default)
     except (TypeError, ValueError):
         return float(default)
+
+
+def _rule_str(name, default=""):
+    value = _rule(name, default)
+    if value is None:
+        return str(default or "")
+    return str(value)
+
+
+def _load_scalp_sim_auto_policy_cache() -> dict:
+    enabled = _rule_bool("SCALP_SIM_AUTO_POLICY_ENABLED", False)
+    policy_file = _rule_str("SCALP_SIM_AUTO_POLICY_FILE", "").strip()
+    policy_version = _rule_str("SCALP_SIM_AUTO_POLICY_VERSION", "").strip()
+    if not enabled:
+        _SCALP_SIM_AUTO_POLICY_CACHE.update(
+            {
+                "path": policy_file or None,
+                "mtime_ns": None,
+                "version": policy_version or None,
+                "status": "policy_disabled",
+                "rows_by_source_bucket_id": {},
+                "rows_by_bucket_id": {},
+                "approved_row_count": 0,
+            }
+        )
+        return _SCALP_SIM_AUTO_POLICY_CACHE
+    if not policy_file:
+        _SCALP_SIM_AUTO_POLICY_CACHE.update(
+            {
+                "path": None,
+                "mtime_ns": None,
+                "version": policy_version or None,
+                "status": "policy_missing",
+                "rows_by_source_bucket_id": {},
+                "rows_by_bucket_id": {},
+                "approved_row_count": 0,
+            }
+        )
+        return _SCALP_SIM_AUTO_POLICY_CACHE
+    path = Path(policy_file)
+    try:
+        stat = path.stat()
+    except OSError:
+        _SCALP_SIM_AUTO_POLICY_CACHE.update(
+            {
+                "path": str(path),
+                "mtime_ns": None,
+                "version": policy_version or None,
+                "status": "policy_missing",
+                "rows_by_source_bucket_id": {},
+                "rows_by_bucket_id": {},
+                "approved_row_count": 0,
+            }
+        )
+        return _SCALP_SIM_AUTO_POLICY_CACHE
+    if (
+        _SCALP_SIM_AUTO_POLICY_CACHE.get("path") == str(path)
+        and _SCALP_SIM_AUTO_POLICY_CACHE.get("mtime_ns") == stat.st_mtime_ns
+        and _SCALP_SIM_AUTO_POLICY_CACHE.get("version") == policy_version
+    ):
+        return _SCALP_SIM_AUTO_POLICY_CACHE
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        log_error(f"[SCALP_SIM_AUTO_POLICY] policy load failed path={path}: {exc}")
+        _SCALP_SIM_AUTO_POLICY_CACHE.update(
+            {
+                "path": str(path),
+                "mtime_ns": stat.st_mtime_ns,
+                "version": policy_version or None,
+                "status": "policy_invalid",
+                "rows_by_source_bucket_id": {},
+                "rows_by_bucket_id": {},
+                "approved_row_count": 0,
+            }
+        )
+        return _SCALP_SIM_AUTO_POLICY_CACHE
+    if not isinstance(payload, dict) or payload.get("schema_version") != "scalp_sim_policy_catalog_v1":
+        status = "policy_invalid"
+        policies = []
+    else:
+        status = "loaded"
+        policies = payload.get("policies") if isinstance(payload.get("policies"), list) else []
+    rows_by_source_bucket_id: dict[str, dict] = {}
+    rows_by_bucket_id: dict[str, dict] = {}
+    for policy in policies:
+        if not isinstance(policy, dict) or policy.get("source_id") != "lifecycle_bucket_discovery":
+            continue
+        for row in policy.get("approved_bucket_rows") or []:
+            if not isinstance(row, dict):
+                continue
+            source_bucket_id = str(row.get("source_bucket_id") or "").strip()
+            bucket_id = str(row.get("bucket_id") or "").strip()
+            if source_bucket_id:
+                rows_by_source_bucket_id[source_bucket_id] = row
+            if bucket_id:
+                rows_by_bucket_id[bucket_id] = row
+    if status == "loaded" and not (rows_by_source_bucket_id or rows_by_bucket_id):
+        status = "policy_invalid"
+    _SCALP_SIM_AUTO_POLICY_CACHE.update(
+        {
+            "path": str(path),
+            "mtime_ns": stat.st_mtime_ns,
+            "version": policy_version or None,
+            "status": status,
+            "rows_by_source_bucket_id": rows_by_source_bucket_id,
+            "rows_by_bucket_id": rows_by_bucket_id,
+            "approved_row_count": len(rows_by_source_bucket_id) or len(rows_by_bucket_id),
+        }
+    )
+    return _SCALP_SIM_AUTO_POLICY_CACHE
+
+
+def _stringify_child_bucket_ids(row: dict) -> str:
+    raw = row.get("lifecycle_flow_child_bucket_ids") or row.get("child_bucket_ids")
+    if isinstance(raw, dict):
+        return json.dumps(raw, ensure_ascii=True, sort_keys=True)
+    if isinstance(raw, (list, tuple)):
+        return ",".join(str(item) for item in raw if str(item or "").strip())
+    return str(raw or "")
+
+
+def _scalp_sim_bucket_policy_fields(source: dict | None) -> dict:
+    cache = _load_scalp_sim_auto_policy_cache()
+    status = str(cache.get("status") or "policy_invalid")
+    base = {
+        "scalp_sim_auto_policy_enabled": _rule_bool("SCALP_SIM_AUTO_POLICY_ENABLED", False),
+        "scalp_sim_auto_policy_file": cache.get("path") or _rule_str("SCALP_SIM_AUTO_POLICY_FILE", ""),
+        "scalp_sim_auto_policy_version": cache.get("version") or _rule_str("SCALP_SIM_AUTO_POLICY_VERSION", ""),
+        "scalp_sim_auto_policy_approved_row_count": cache.get("approved_row_count") or 0,
+        "bucket_directed_sim_probe": False,
+        "lifecycle_bucket_match_status": status,
+    }
+    if status != "loaded":
+        return base
+    source = source if isinstance(source, dict) else {}
+    source_bucket_id = str(
+        source.get("lifecycle_bucket_source_bucket_id")
+        or source.get("source_bucket_id")
+        or source.get("approved_source_bucket_id")
+        or ""
+    ).strip()
+    bucket_id = str(
+        source.get("lifecycle_bucket_bucket_id")
+        or source.get("lifecycle_flow_bucket_id")
+        or source.get("bucket_id")
+        or ""
+    ).strip()
+    rows_by_source = cache.get("rows_by_source_bucket_id") if isinstance(cache.get("rows_by_source_bucket_id"), dict) else {}
+    rows_by_bucket = cache.get("rows_by_bucket_id") if isinstance(cache.get("rows_by_bucket_id"), dict) else {}
+    row = rows_by_source.get(source_bucket_id) if source_bucket_id else None
+    if row is None and bucket_id:
+        row = rows_by_bucket.get(bucket_id)
+    if not isinstance(row, dict):
+        base["lifecycle_bucket_match_status"] = "no_match" if (source_bucket_id or bucket_id) else "candidate_context_only"
+        if source_bucket_id:
+            base["lifecycle_bucket_source_bucket_id"] = source_bucket_id
+        if bucket_id:
+            base["lifecycle_bucket_bucket_id"] = bucket_id
+        return base
+    matched_source_bucket_id = str(row.get("source_bucket_id") or source_bucket_id or "").strip()
+    matched_bucket_id = str(row.get("bucket_id") or bucket_id or "").strip()
+    base.update(
+        {
+            "scalp_sim_auto_policy_source_id": "lifecycle_bucket_discovery",
+            "bucket_directed_sim_probe": True,
+            "lifecycle_bucket_match_status": "matched",
+            "lifecycle_bucket_source_bucket_id": matched_source_bucket_id,
+            "lifecycle_bucket_bucket_id": matched_bucket_id,
+            "lifecycle_bucket_classification_state": row.get("classification_state"),
+            "lifecycle_bucket_source_bucket_kind": row.get("source_bucket_kind"),
+            "lifecycle_bucket_stage": row.get("stage"),
+            "lifecycle_bucket_type": row.get("bucket_type"),
+            "lifecycle_flow_child_bucket_ids": _stringify_child_bucket_ids(row),
+            "lifecycle_bucket_sample": row.get("sample"),
+            "lifecycle_bucket_joined_sample": row.get("joined_sample"),
+            "lifecycle_bucket_complete_flow_count": row.get("complete_flow_count"),
+            "lifecycle_bucket_incomplete_flow_count": row.get("incomplete_flow_count"),
+        }
+    )
+    return {key: value for key, value in base.items() if value not in (None, "")}
 
 
 def _safe_float(value, default=0.0):
@@ -2348,8 +2539,9 @@ def _is_scalp_sim_candidate_window_reserve_source(source_stage: str) -> bool:
 
 
 def _scalp_sim_candidate_window_context_fields(source: dict | None) -> dict:
+    bucket_policy_fields = _scalp_sim_bucket_policy_fields(source)
     if not isinstance(source, dict) or not bool(source.get("scalp_sim_candidate_window_expansion")):
-        return {}
+        return bucket_policy_fields
     keys = (
         "scalp_sim_candidate_window_expansion",
         "scalp_sim_candidate_window_source_stage",
@@ -2365,9 +2557,9 @@ def _scalp_sim_candidate_window_context_fields(source: dict | None) -> dict:
     fields.update(
         {
             "would_real_submit": False,
-            "decision_authority": "sim_observation_only",
         }
     )
+    fields.update(bucket_policy_fields)
     return fields
 
 
@@ -4082,6 +4274,7 @@ def _complete_scalp_simulated_sell(
                     "panic_lifecycle_action_id",
                 }
             },
+            **_scalp_sim_candidate_window_context_fields(stock),
         ),
     )
     try:
@@ -15927,6 +16120,7 @@ def _evaluate_scale_in_signal(
                             held_sec=int(held_sec or 0),
                             panic_lifecycle_action_id=action_id,
                             **_scalp_sim_panic_context_fields(panic_context),
+                            **_scalp_sim_candidate_window_context_fields(stock),
                         ),
                     )
                     return None
@@ -16356,6 +16550,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                     floor_applied=floor_applied,
                     qty_reason=qty_reason,
                     **sim_budget_fields,
+                    **_scalp_sim_candidate_window_context_fields(stock),
                 ),
             )
             persist_scalp_simulator_state()
@@ -16414,6 +16609,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                 qty_reason=qty_reason,
                 **sim_budget_fields,
                 runtime_effect="simulated_holding_only",
+                **_scalp_sim_candidate_window_context_fields(stock),
             ),
         )
         persist_scalp_simulator_state()

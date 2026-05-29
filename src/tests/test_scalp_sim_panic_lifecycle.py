@@ -481,6 +481,13 @@ def test_entry_and_scale_in_are_blocked_for_sim_only_panic(monkeypatch, _state):
     assert any(stage == "scalp_sim_panic_entry_blocked" for stage, _ in _state)
 
     sim_stock = _sim_position(qty=10)
+    sim_stock.update(
+        {
+            "scalp_sim_candidate_window_expansion": True,
+            "scalp_sim_candidate_window_source_stage": "blocked_ai_score",
+            "scalp_sim_candidate_window_blocked_reason": "regression_duplicate_authority",
+        }
+    )
     result = state_handlers._evaluate_scale_in_signal(
         sim_stock,
         "123456",
@@ -495,6 +502,10 @@ def test_entry_and_scale_in_are_blocked_for_sim_only_panic(monkeypatch, _state):
     )
     assert result is None
     assert any(stage == "scalp_sim_panic_scale_in_blocked" for stage, _ in _state)
+    scale_event = next(fields for stage, fields in _state if stage == "scalp_sim_panic_scale_in_blocked")
+    assert scale_event["decision_authority"] == "sim_observation_only"
+    assert scale_event["scalp_sim_candidate_window_expansion"] is True
+    assert scale_event["scalp_sim_candidate_window_blocked_reason"] == "regression_duplicate_authority"
     event = next(fields for stage, fields in _state if stage == "scalp_sim_panic_entry_blocked")
     assert event["source_family"] == "panic_lifecycle_actuator"
     assert event["family_type"] == "sim_lifecycle_source"

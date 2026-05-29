@@ -506,6 +506,12 @@ def test_lifecycle_matrix_ingests_scalp_sim_submit_and_holding_rows(tmp_path, mo
         "runtime_effect": False,
         "sim_record_id": "SIM-1",
         "entry_adm_candidate_id": "ADM-1",
+        "bucket_directed_sim_probe": True,
+        "lifecycle_bucket_match_status": "matched",
+        "lifecycle_bucket_source_bucket_id": "lifecycle_flow:combo_lifecycle_flow:test:abc123",
+        "lifecycle_bucket_bucket_id": "lifecycle_flow:combo_lifecycle_flow:test",
+        "lifecycle_bucket_classification_state": "lifecycle_flow_sim_probe_candidate",
+        "lifecycle_bucket_source_bucket_kind": "lifecycle_flow_sim_probe_policy",
     }
     events = [
         {
@@ -607,6 +613,13 @@ def test_lifecycle_matrix_ingests_scalp_sim_submit_and_holding_rows(tmp_path, mo
     assert submit_row["runtime_features"]["actual_order_submitted"] is False
     assert submit_row["runtime_features"]["broker_order_forbidden"] is True
     assert submit_row["runtime_features"]["decision_authority"] == "sim_observation_only"
+    assert submit_row["runtime_features"]["bucket_directed_sim_probe"] is True
+    assert submit_row["runtime_features"]["lifecycle_bucket_match_status"] == "matched"
+    assert report["summary"]["bucket_directed_sim_probe"]["matched_row_count"] >= 2
+    assert (
+        report["summary"]["bucket_directed_sim_probe"]["matched_unique_source_bucket_count"]
+        == 1
+    )
     post_sell_row = next(row for row in report["examples"] if row["source"] == "sim_post_sell_evaluations")
     assert post_sell_row["runtime_features"]["high_ai_hard_stop_conflict"] is True
     assert post_sell_row["runtime_features"]["hard_stop_conflict_dimension"] == "high_ai_hard_stop_conflict"

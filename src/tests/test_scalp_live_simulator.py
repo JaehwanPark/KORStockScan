@@ -43,6 +43,17 @@ def _reset_state(monkeypatch, tmp_path):
     monkeypatch.setattr(state_handlers, "SWING_INTRADAY_PROBE_STATE_PATH", tmp_path / "swing_probe_state.json")
     monkeypatch.setattr(state_handlers, "_SWING_PROBE_STATE_LAST_SEEN_MTIME_NS", None)
     monkeypatch.setattr(state_handlers, "record_sim_post_sell_candidate", lambda **kwargs: None)
+    state_handlers._SCALP_SIM_AUTO_POLICY_CACHE.update(
+        {
+            "path": None,
+            "mtime_ns": None,
+            "version": None,
+            "status": "not_loaded",
+            "rows_by_source_bucket_id": {},
+            "rows_by_bucket_id": {},
+            "approved_row_count": 0,
+        }
+    )
     state_handlers._SCALP_SIM_AI_CALL_TIMES.clear()
     captured_pipeline_events = []
     monkeypatch.setattr(
@@ -133,6 +144,183 @@ def test_scalp_simulator_arms_and_fills_without_real_buy_order(monkeypatch):
     assert fill_event["would_limit_fill"] is True
     armed_event = next(fields for stage, fields in logs if stage == "scalp_sim_entry_armed")
     assert armed_event["runtime_effect"] == "simulated_entry_armed_only"
+
+
+def test_scalp_simulator_attaches_matched_lifecycle_bucket_provenance(monkeypatch, tmp_path):
+    source_bucket_id = "lifecycle_flow:combo_lifecycle_flow:entry_score_70p:abc123"
+    bucket_id = "lifecycle_flow:combo_lifecycle_flow:entry_score_70p"
+    catalog_path = tmp_path / "scalp_sim_policy_catalog_2026-05-28.json"
+    catalog_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "scalp_sim_policy_catalog_v1",
+                "policies": [
+                    {
+                        "source_id": "lifecycle_bucket_discovery",
+                        "approved_bucket_rows": [
+                            {
+                                "bucket_id": bucket_id,
+                                "source_bucket_id": source_bucket_id,
+                                "classification_state": "lifecycle_flow_sim_probe_candidate",
+                                "source_bucket_kind": "lifecycle_flow_sim_probe_policy",
+                                "stage": "lifecycle_flow",
+                                "bucket_type": "combo_lifecycle_flow",
+                                "sample": 1,
+                                "joined_sample": 1,
+                                "complete_flow_count": 1,
+                                "incomplete_flow_count": 0,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(
+            state_handlers.TRADING_RULES,
+            SCALP_SIM_AUTO_POLICY_ENABLED=True,
+            SCALP_SIM_AUTO_POLICY_FILE=str(catalog_path),
+            SCALP_SIM_AUTO_POLICY_VERSION="scalp_sim_auto_approval:2026-05-28",
+        ),
+    )
+    entry_logs = []
+    holding_logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: holding_logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: pytest.fail("real buy order must not be called"),
+    )
+
+    stock = {
+        "id": 101,
+        "name": "TEST",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "position_tag": "SCALP_BASE",
+        "target_buy_price": 10_000,
+        "lifecycle_bucket_source_bucket_id": source_bucket_id,
+    }
+    runtime = {
+        "strategy": "SCALPING",
+        "is_trigger": True,
+        "now_ts": 1_000.0,
+        "current_ai_score": 82.0,
+        "latency_state": "DANGER",
+        "liquidity_value": 800_000_000,
+        "scalp_min_liquidity": 500_000_000,
+    }
+    ws_data = {
+        "curr": 9_990,
+        "orderbook": {
+            "asks": [{"price": 9_990}],
+            "bids": [{"price": 9_980}],
+        },
+    }
+
+    assert state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(stock, "123456", ws_data, runtime)
+    sim_target = state_handlers.ACTIVE_TARGETS[0]
+    assert sim_target["lifecycle_bucket_match_status"] == "matched"
+    assert sim_target["bucket_directed_sim_probe"] is True
+
+    for stage_name in (
+        "scalp_sim_entry_armed",
+        "scalp_sim_buy_order_assumed_filled",
+        "scalp_sim_holding_started",
+    ):
+        event = next(fields for stage, fields in entry_logs if stage == stage_name)
+        assert event["lifecycle_bucket_match_status"] == "matched"
+        assert event["bucket_directed_sim_probe"] is True
+        assert event["lifecycle_bucket_source_bucket_id"] == source_bucket_id
+        assert event["lifecycle_bucket_bucket_id"] == bucket_id
+        assert event["lifecycle_bucket_classification_state"] == "lifecycle_flow_sim_probe_candidate"
+        assert event["actual_order_submitted"] is False
+        assert event["broker_order_forbidden"] is True
+
+    assert state_handlers._complete_scalp_simulated_sell(
+        stock=sim_target,
+        code="123456",
+        ws_data={"curr": 10_100, "orderbook": {"asks": [{"price": 10_110}], "bids": [{"price": 10_090}]}},
+        curr_price=10_100,
+        now_ts=1_060.0,
+        sell_reason_type="PROFIT",
+        exit_rule="scalp_trailing_take_profit",
+        profit_rate=state_handlers.calculate_net_profit_rate(9_990, 10_100),
+    )
+    sell_event = next(fields for stage, fields in holding_logs if stage == "scalp_sim_sell_order_assumed_filled")
+    assert sell_event["lifecycle_bucket_match_status"] == "matched"
+    assert sell_event["lifecycle_bucket_source_bucket_id"] == source_bucket_id
+    assert sell_event["bucket_directed_sim_probe"] is True
+    assert sell_event["actual_order_submitted"] is False
+    assert sell_event["broker_order_forbidden"] is True
+
+
+def test_scalp_simulator_keeps_background_sim_when_policy_missing(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(
+            state_handlers.TRADING_RULES,
+            SCALP_SIM_AUTO_POLICY_ENABLED=True,
+            SCALP_SIM_AUTO_POLICY_FILE="/tmp/korstockscan-missing-scalp-sim-policy.json",
+            SCALP_SIM_AUTO_POLICY_VERSION="scalp_sim_auto_approval:missing",
+        ),
+    )
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: pytest.fail("real buy order must not be called"),
+    )
+
+    stock = {
+        "id": 101,
+        "name": "TEST",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "position_tag": "SCALP_BASE",
+        "target_buy_price": 10_000,
+    }
+    runtime = {
+        "strategy": "SCALPING",
+        "is_trigger": True,
+        "now_ts": 1_000.0,
+        "current_ai_score": 82.0,
+        "latency_state": "DANGER",
+        "liquidity_value": 800_000_000,
+        "scalp_min_liquidity": 500_000_000,
+    }
+
+    assert state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
+        stock,
+        "123456",
+        {"curr": 9_990, "orderbook": {"asks": [{"price": 9_990}], "bids": [{"price": 9_980}]}},
+        runtime,
+    )
+    armed_event = next(fields for stage, fields in logs if stage == "scalp_sim_entry_armed")
+    assert armed_event["lifecycle_bucket_match_status"] == "policy_missing"
+    assert armed_event["bucket_directed_sim_probe"] is False
+    assert armed_event["actual_order_submitted"] is False
+    assert armed_event["broker_order_forbidden"] is True
+    assert len(state_handlers.ACTIVE_TARGETS) == 1
 
 
 def test_scalp_simulator_logs_pre_submit_liquidity_would_block_but_keeps_virtual_fill(monkeypatch):

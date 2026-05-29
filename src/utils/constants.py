@@ -126,6 +126,9 @@ class TradingConfig:
     SCALP_LIVE_SIMULATOR_FILL_POLICY: str = "signal_inclusive_best_ask_v1"
     SCALP_LIVE_SIMULATOR_QTY: int = 0  # 0 이하는 SIM_VIRTUAL_BUDGET_KRW 기준 실주문 동적수량 산식 사용
     SCALP_LIVE_SIMULATOR_ENTRY_TIMEOUT_SEC: int = 90  # deprecated: BUY signal inclusion no longer expires on quote touch
+    SCALP_SIM_AUTO_POLICY_ENABLED: bool = False
+    SCALP_SIM_AUTO_POLICY_FILE: str = ""
+    SCALP_SIM_AUTO_POLICY_VERSION: str = ""
     SCALP_SIM_CANDIDATE_WINDOW_EXPANSION_ENABLED: bool = False
     SCALP_SIM_CANDIDATE_WINDOW_MIN_SCORE: int = 55
     SCALP_SIM_CANDIDATE_WINDOW_MAX_SCORE: int = 100
@@ -1517,6 +1520,9 @@ def _build_trading_rules() -> TradingConfig:
     env_scalp_live_simulator_owner = _env_str("KORSTOCKSCAN_SCALP_LIVE_SIMULATOR_OWNER")
     env_scalp_live_simulator_fill_policy = _env_str("KORSTOCKSCAN_SCALP_LIVE_SIMULATOR_FILL_POLICY")
     env_scalp_live_simulator_qty = _env_int("KORSTOCKSCAN_SCALP_LIVE_SIMULATOR_QTY")
+    env_scalp_sim_auto_policy_enabled = _env_bool("KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED")
+    env_scalp_sim_auto_policy_file = _env_str("KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_FILE")
+    env_scalp_sim_auto_policy_version = _env_str("KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_VERSION")
     env_scalp_sim_candidate_window_enabled = _env_bool(
         "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_EXPANSION_ENABLED"
     )
@@ -1905,6 +1911,15 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_LIVE_SIMULATOR_QTY=env_scalp_live_simulator_qty
             if env_scalp_live_simulator_qty is not None
             else config.SCALP_LIVE_SIMULATOR_QTY,
+            SCALP_SIM_AUTO_POLICY_ENABLED=env_scalp_sim_auto_policy_enabled
+            if env_scalp_sim_auto_policy_enabled is not None
+            else config.SCALP_SIM_AUTO_POLICY_ENABLED,
+            SCALP_SIM_AUTO_POLICY_FILE=env_scalp_sim_auto_policy_file
+            if env_scalp_sim_auto_policy_file is not None
+            else config.SCALP_SIM_AUTO_POLICY_FILE,
+            SCALP_SIM_AUTO_POLICY_VERSION=env_scalp_sim_auto_policy_version
+            if env_scalp_sim_auto_policy_version is not None
+            else config.SCALP_SIM_AUTO_POLICY_VERSION,
             SCALP_SIM_CANDIDATE_WINDOW_EXPANSION_ENABLED=env_scalp_sim_candidate_window_enabled
             if env_scalp_sim_candidate_window_enabled is not None
             else config.SCALP_SIM_CANDIDATE_WINDOW_EXPANSION_ENABLED,
