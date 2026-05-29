@@ -57,17 +57,23 @@
 
 ## 장중 체크리스트 (09:05~15:20)
 
-- [ ] `[RuntimeEnvIntradayObserve0529] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-05-29`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
+- [x] `[RuntimeEnvIntradayObserve0529] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-05-29`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-28.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-28.json)
   - 판정 기준: selected_families=soft_stop_whipsaw_confirmation, score65_74_recovery_probe, scalp_sim_candidate_window_expansion, scalp_sim_ai_budget_manager, lifecycle_decision_matrix_runtime, entry_wait6579_score66_69_recovery_gate_v1가 runtime event provenance에 찍히는지 확인한다.
   - 금지: 장중 관찰 결과로 runtime threshold mutation을 수행하지 않는다.
   - 다음 액션: provenance present/missing, rollback guard breach 여부를 분리 기록한다.
+  - 처리 결과(2026-05-29 KST 재확인): `partial_pass_with_blocked_wait6579_live_apply`.
+  - 근거: 당일 [pipeline_events_2026-05-29.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-05-29.jsonl) 기준 `soft_stop_whipsaw_confirmation` 82건, `score65_74_recovery_probe` 129건, `scalp_sim_candidate_window_expansion` 2,794건, `scalp_sim_ai_budget_manager` 5,470건, `lifecycle_decision_matrix_runtime` 관련 provenance 25,388건이 확인됐다. `entry_wait6579_score66_69_recovery_gate_v1` 자체 live apply event는 없고 `wait6579_probe_canary_applied` stage 8건만 확인되며, 장전 apply plan의 `runtime_apply_blocked_bridge_not_ready:runtime_blocked_contract_gap`, `runtime_apply_not_allowed`, `runtime_apply_bridge_auto_live_contract_missing` 판정과 일치한다. rollback 관련 이벤트는 `same_symbol_loss_reentry_cooldown` 2건으로 hard guard 동작이며 selected runtime family rollback breach는 확인되지 않았다.
+  - 다음 액션: 적용된 축은 장후 post-apply attribution으로 넘기고, `entry_wait6579_score66_69_recovery_gate_v1`는 live apply가 아니라 blocked/probe 상태로 유지해 bridge/source-quality 산출물에서 재판정한다. 장중 threshold mutation 또는 수동 env override는 하지 않는다.
 
-- [ ] `[SimProbeIntradayCoverage0529] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-05-29`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
+- [x] `[SimProbeIntradayCoverage0529] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-05-29`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
   - Source: [threshold_cycle_ev_2026-05-28.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-28.json)
   - 판정 기준: sim/probe 표본이 real execution과 분리되고 `actual_order_submitted=false` provenance가 유지되는지 확인한다.
   - 금지: sim/probe EV를 broker execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
   - 다음 액션: source-quality split, active state 복원, open/closed count를 같이 기록한다.
+  - 처리 결과(2026-05-29 KST 재확인): `pass_with_source_quality_followup`.
+  - 근거: 당일 [pipeline_events_2026-05-29.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-05-29.jsonl)의 strict sim/probe 집계는 34,325건이며 `actual_order_submitted=false`, `broker_order_forbidden=true` 계약 위반은 0건이다. 주요 stage는 `scalp_sim_panic_scale_in_blocked` 10,263건, `scalp_sim_panic_level1_partial_skipped_min_remaining` 7,536건, `scalp_sim_ai_holding_live_call` 2,442건, `scalp_sim_ai_holding_deferred` 1,514건, `scalp_sim_candidate_window_discarded` 1,129건, `scalp_sim_entry_armed/buy_order_virtual_pending/buy_order_assumed_filled/holding_started/sell_order_assumed_filled` 각 192건이다. source-quality provenance는 `sim submit-path guard verdict fields present before broker behavior tuning` 384건, `overnight_decision_coverage` 45건으로 확인됐다. bucket-directed sim match는 아직 `candidate_context_only` 678건으로만 남아 있어 matched 표본 생성은 장후/차기 장중 후속 관찰 대상이다.
+  - 다음 액션: sim/probe EV는 실주문 전환 근거로 단독 사용하지 않고, matched bucket-directed sim 표본 부족(`candidate_context_only` 지속)은 postclose LDM/source-quality 입력과 다음 bucket identity 보강 검증으로 넘긴다.
 
 - [x] `[IntradayAutomationHealthCheck20260529] 장중 자동화체인 상태 확인` (`Due: 2026-05-29`, `Slot: INTRADAY`, `TimeWindow: 09:05~15:30`, `Track: RunbookOps`)
   - Source: [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md), [pipeline_events_2026-05-29.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-05-29.jsonl), [threshold_events_2026-05-29.jsonl](/home/ubuntu/KORStockScan/data/threshold_cycle/threshold_events_2026-05-29.jsonl)
