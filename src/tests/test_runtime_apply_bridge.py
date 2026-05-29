@@ -127,6 +127,53 @@ def test_runtime_apply_bridge_marks_daily_only_bucket_live_auto_ready(tmp_path, 
     assert (report_dir / "runtime_apply_bridge_2026-05-21.md").exists()
 
 
+def test_runtime_apply_bridge_ignores_lifecycle_flow_sim_probe_candidate(tmp_path, monkeypatch):
+    ldm_dir = tmp_path / "ldm"
+    report_dir = tmp_path / "bridge"
+    ldm_dir.mkdir()
+    monkeypatch.setattr(mod, "LDM_REPORT_DIR", ldm_dir)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    discovery_path = tmp_path / "discovery" / "lifecycle_bucket_discovery_2026-05-21.json"
+    monkeypatch.setattr(mod, "discovery_report_path", lambda target_date: discovery_path)
+    _write_ldm(ldm_dir / "lifecycle_decision_matrix_2026-05-21.json")
+    discovery_path.parent.mkdir(parents=True, exist_ok=True)
+    discovery_path.write_text(
+        json.dumps(
+            {
+                "date": "2026-05-21",
+                "summary": {
+                    "live_auto_apply_ready_count": 0,
+                    "lifecycle_flow_sim_probe_candidate_count": 1,
+                    "source_contract_status": "pass",
+                    "ai_two_pass_review_status": "parsed",
+                },
+                "live_auto_apply_candidates": [],
+                "sim_auto_approved_candidates": [
+                    {
+                        "bucket_id": "lifecycle_flow:combo_lifecycle_flow:complete_probe",
+                        "stage": "lifecycle_flow",
+                        "classification_state": "lifecycle_flow_sim_probe_candidate",
+                        "source_bucket_kind": "lifecycle_flow_sim_probe_policy",
+                        "live_auto_apply_family": None,
+                        "allowed_runtime_apply": False,
+                        "broker_order_forbidden": True,
+                        "runtime_effect": False,
+                        "source_quality_gate": "pass",
+                    }
+                ],
+                "warnings": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.write_runtime_apply_bridge_report("2026-05-21")
+
+    assert all(item["family"] != mod.GREENFIELD_REAL_ENV_FAMILY for item in report["candidates"])
+    assert report["summary"]["live_auto_apply_ready_count"] == 0
+    assert report["summary"]["greenfield_real_env_ready_count"] == 0
+
+
 def test_runtime_apply_bridge_keeps_rolling_confirmed_entry_and_scale_candidates_live_auto(tmp_path, monkeypatch):
     ldm_dir = tmp_path / "ldm"
     ldm_dir.mkdir()

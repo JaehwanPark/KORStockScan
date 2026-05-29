@@ -1487,6 +1487,11 @@ def _lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[str, Any
             "candidate_count": _safe_int(summary.get("candidate_count"), 0),
             "surfaced_candidate_count": _safe_int(summary.get("surfaced_candidate_count"), 0),
             "sim_auto_approved_count": _safe_int(summary.get("sim_auto_approved_count"), 0),
+            "entry_only_sim_auto_approved_count": _safe_int(summary.get("entry_only_sim_auto_approved_count"), 0),
+            "lifecycle_flow_sim_probe_candidate_count": _safe_int(
+                summary.get("lifecycle_flow_sim_probe_candidate_count"),
+                0,
+            ),
             "live_auto_apply_ready_count": _safe_int(summary.get("live_auto_apply_ready_count"), 0),
             "new_bucket_candidate_count": _safe_int(summary.get("new_bucket_candidate_count"), 0),
             "code_patch_required_count": _safe_int(summary.get("code_patch_required_count"), 0),

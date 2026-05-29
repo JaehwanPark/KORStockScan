@@ -1,6 +1,6 @@
 # Gemini Scalping Pattern Lab Final Review
 
-- generated_at: `2026-05-28 18:13:56`
+- generated_at: `2026-05-29 14:22:20`
 - analysis_period: `2026-04-21 ~ 2026-05-28`
 
 ## 1. 판정
@@ -13,11 +13,10 @@
 
 ### 1-2. Plan Rebase 관찰축 요약
 
-- `WAIT65~79 total_candidates=77`, `recovery_check=0`, `promoted=0`, `submitted=0`
-- `blocked_ai_score_share=81.8%`, `budget_pass_to_submitted_rate=0.0%`, `gatekeeper_eval_ms_p95=3769ms`
+- `WAIT65~79 total_candidates=96`, `recovery_check=0`, `promoted=0`, `submitted=0`
+- `blocked_ai_score_share=79.2%`, `budget_pass_to_submitted_rate=0.0%`, `gatekeeper_eval_ms_p95=3612ms`
 
-- `AI threshold dominance`: 경고 — `blocked_ai_score_share=81.8%`로 WAIT/BLOCK 비중이 높아 BUY drought 해석을 지지한다.
-- `Budget pass without submit`: 경고 — `budget_pass=11641`인데 `submitted=0`라 제출 전 병목이 기대값 회복을 끊고 있다.
+- `AI threshold dominance`: 경고 — `blocked_ai_score_share=79.2%`로 WAIT/BLOCK 비중이 높아 BUY drought 해석을 지지한다.
 
 ### 1-3. 손실 패턴 Top 5
 

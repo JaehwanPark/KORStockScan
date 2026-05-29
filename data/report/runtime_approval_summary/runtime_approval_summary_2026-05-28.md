@@ -10,12 +10,12 @@
 - scalp_entry_adm_status: `pass`
 - lifecycle_matrix_status: `pass`
 - lifecycle_ai_context prompt/applied: `3` / `2125`
-- swing_strategy_discovery_labeled/pending: `96` / `2624`
+- swing_strategy_discovery_labeled/pending: `84` / `2617`
 - swing_lifecycle_matrix_auto: `0`
 - swing_lifecycle_bucket_auto: `0`
 - institutional_flow_available/join_rate: `True` / `100.0`
 - pattern_lab_currentness_status: `pass`
-- pattern_lab_ai_review_status: `pass`
+- pattern_lab_ai_review_status: `warning`
 - producer_gap_discovery_status: `warning`
 - pattern_lab_propagation_status: `warning`
 - env_generated_at: `2026-05-28T12:13:25`
@@ -111,10 +111,10 @@
 ## Swing Strategy Discovery Sim
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_2026-05-28.json`
 - available: `True`
-- candidate/arm/labeled: `432` / `3204` / `96`
-- pending_future_quote_count: `2624`
+- candidate/arm/labeled: `432` / `3204` / `84`
+- pending_future_quote_count: `2617`
 - top_surviving_arm: `arm05_breakout_conf_trailing`
-- avoid_bucket_count: `3`
+- avoid_bucket_count: `4`
 - runtime_effect: `False`
 - interpretation: source-only exploration. Surviving arms can create future source-quality/workorder inputs but cannot apply runtime env.
 - warnings: `['pending_future_quotes']`
@@ -124,7 +124,7 @@
 - available: `True`
 - total/probe/discovery: `3272` / `68` / `3204`
 - sim_auto_candidate_count: `0`
-- workorder_count: `13`
+- workorder_count: `12`
 - daily_simulation_consumed: `False`
 - runtime_effect: `False`
 - warnings: `[]`
@@ -145,6 +145,6 @@
 
 ## Pattern Lab Audits
 - currentness: status=`pass` fail=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-28.json`
-- ai_review: status=`pass` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-05-28.json`
+- ai_review: status=`warning` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-05-28.json`
 - producer_gap_discovery: status=`warning` artifact=`/home/ubuntu/KORStockScan/data/report/producer_gap_discovery/producer_gap_discovery_2026-05-28.json`
 - propagation: status=`warning` fail=`0` warnings=`2` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-28.json`

@@ -164,6 +164,39 @@ def test_fetch_kiwoom_api_continuous_refreshes_and_retries_once_on_8005(monkeypa
     assert invalidations == []
 
 
+def test_fetch_kiwoom_api_continuous_retries_transient_5xx(monkeypatch, tmp_path):
+    _patch_cache_paths(monkeypatch, tmp_path)
+    posts = []
+    sleeps = []
+    responses = [
+        _FakeApiResponse({}, status_code=502),
+        _FakeApiResponse({"return_code": "0", "rows": [{"ok": True}]}),
+    ]
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        posts.append({"url": url, "headers": dict(headers or {}), "payload": json, "timeout": timeout})
+        return responses.pop(0)
+
+    monkeypatch.setattr(kiwoom_utils.requests, "post", fake_post)
+    monkeypatch.setattr(kiwoom_utils.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(kiwoom_utils, "log_info", lambda *args, **kwargs: None)
+    monkeypatch.setattr(kiwoom_utils, "log_error", lambda *args, **kwargs: None)
+
+    result = kiwoom_utils.fetch_kiwoom_api_continuous(
+        url="https://example.test/api",
+        token="TOKEN",
+        api_id="ka10080",
+        payload={"stk_cd": "005930"},
+        use_continuous=False,
+    )
+
+    assert result == [{"return_code": "0", "rows": [{"ok": True}]}]
+    assert len(posts) == 2
+    assert posts[0]["headers"]["authorization"] == "Bearer TOKEN"
+    assert posts[1]["headers"]["authorization"] == "Bearer TOKEN"
+    assert sleeps == [2]
+
+
 def test_fetch_kiwoom_api_continuous_stops_after_single_8005_refresh_retry(monkeypatch, tmp_path):
     _patch_cache_paths(monkeypatch, tmp_path)
     posts = []

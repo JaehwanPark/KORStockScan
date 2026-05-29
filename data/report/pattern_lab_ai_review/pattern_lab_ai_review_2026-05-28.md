@@ -11,19 +11,20 @@
 - model: `gpt-5.4-mini`
 - fallback_used: `False`
 - audit_status: `pass`
-- final_conclusion_count: `1`
+- final_conclusion_count: `2`
 - workorder_count: `1`
 
 ## Two-Pass Review
 
-- interpretation_count: `1`
+- interpretation_count: `2`
 - audit_issues: `[]`
 - forbidden_use_violations: `[]`
 
 ## Final Conclusions
 
-- `order_pattern_lab_ai_review_order_pattern_lab_ai_review_threshold_cycle_ev_source_contract_drift_warning` domain=`cross_domain` state=`source_quality_gap` decision=`surface_workorder` reason=`Threshold-cycle EV feedback is present but flagged with source-contract drift; keep this as a source-quality workorder.`
+- `scalping_pattern_lab_automation` domain=`scalping` state=`source_only_keep_collecting` decision=`keep` reason=`No explicit source-quality, schema, handoff, or instrumentation gap is present.`
+- `swing_pattern_lab_automation` domain=`swing` state=`source_quality_gap` decision=`block_runtime_use` reason=`Implemented source-quality contracts still flag invalid micro-context at entry and scale_in; runtime use remains blocked until provenance is resolved.`
 
 ## Code Improvement Orders
 
-- `order_pattern_lab_ai_review_order_pattern_lab_ai_review_order_pattern_lab_ai_review_threshold_cycle_ev_sourc`: Pattern Lab AI review follow-up: order_pattern_lab_ai_review_order_pattern_lab_ai_review_threshold_cycle_ev_source_contract_drift_warning
+- `order_pattern_lab_ai_review_swing_pattern_lab_automation`: Pattern Lab AI review follow-up: swing_pattern_lab_automation

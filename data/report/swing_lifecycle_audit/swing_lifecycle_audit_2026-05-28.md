@@ -12,9 +12,9 @@
 - submitted_unique_records: `0`
 - simulated_order_unique_records: `21`
 - observation_axis_status: `{'ready': 10}`
-- panic_state: `RECOVERY_WATCH`
-- panic_active_sim_probe: `{'active_positions': 4, 'profit_sample': 0, 'avg_unrealized_profit_rate_pct': None, 'win_rate_pct': None, 'wins': 0, 'losses': 0, 'flat': 0}`
-- panic_origin_outcome: `{'blocked_gatekeeper_reject': {'count': 1, 'avg_profit_rate_pct': None}, 'blocked_swing_score_vpw': {'count': 1, 'avg_profit_rate_pct': None}, 'market_regime_prior_observed': {'count': 1, 'avg_profit_rate_pct': None}, 'unknown': {'count': 1, 'avg_profit_rate_pct': None}}`
+- panic_state: `NORMAL`
+- panic_active_sim_probe: `{'active_positions': 30, 'profit_sample': 27, 'avg_unrealized_profit_rate_pct': -0.0931, 'win_rate_pct': 29.6, 'wins': 8, 'losses': 19, 'flat': 0}`
+- panic_origin_outcome: `{'blocked_swing_score_vpw': {'count': 3, 'avg_profit_rate_pct': 0.4398}, 'market_regime_prior_observed': {'count': 1, 'avg_profit_rate_pct': -0.6757}, 'unknown': {'count': 16, 'avg_profit_rate_pct': 0.483}}`
 
 ## Lifecycle Funnel
 

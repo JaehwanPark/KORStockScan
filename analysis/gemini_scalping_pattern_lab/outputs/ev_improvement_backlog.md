@@ -21,5 +21,5 @@
 4. gatekeeper latency 경로 분해(lock/model/quote_fresh)
    - 적용단계: observability
    - 기대효과: latency가 EV 회수 병목인지 성능 문제인지 구간별로 분해한다.
-   - 검증지표: gatekeeper_eval_ms_p95=3769ms, quote_fresh_latency_blocks=6465
+   - 검증지표: gatekeeper_eval_ms_p95=3612ms, quote_fresh_latency_blocks=11687
    - 필요표본: 장전/장후 snapshot 누적

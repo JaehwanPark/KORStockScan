@@ -3,39 +3,39 @@
 ## 판정
 
 - 판정: `sim_progress_no_live_bucket`
-- 근거: LDM `sim_auto_approved=172` (`-13`), `live_auto_apply_ready=0` (`-1`), swing sim-auto `13` (`+5`).
+- 근거: LDM `sim_auto_approved=140` (`-45`), `live_auto_apply_ready=0` (`-1`), swing sim-auto `0` (`-8`).
 - 실현손익 해석: `real_pnl_is_tuning_performance=false` (post_apply_attribution_not_ready:pending_applied_cohort).
 - 다음 액션: 내일은 `live_auto_apply_ready`, `post_apply_attribution`, `pending_future_quote_count`, selected workorder backlog만 먼저 본다.
 
 ## LDM 승격/후보
 
-- Lifecycle bucket: candidates `500` (`+121`), surfaced `277` (`+91`), sim-auto `172` (`-13`), live-ready `0` (`-1`).
-- Lifecycle matrix: rows `24465` (`-16707`), joined `23742` (`-15722`), promote-ready `1` (`+0`).
+- Lifecycle bucket: candidates `500` (`+121`), surfaced `249` (`+63`), sim-auto `140` (`-45`), live-ready `0` (`-1`).
+- Lifecycle matrix: rows `24484` (`-16688`), joined `23761` (`-15703`), promote-ready `0` (`-1`).
 - Lifecycle flow: buckets `97` (`+15`), complete `84` (`+84`), runtime `0` (`+0`), workorders `20` (`+0`).
 - Holding/exit buckets: holding `34` (`+4`), exit `68` (`+14`), workorders `10`/`10`.
 - Lifecycle identity: missing `0` (`+0`), join_rate `1.0`, complete_flow_rate `0.0066`.
-- Lifecycle join contract: blocked `false`, incomplete `12694`, top reason `missing_submit`.
-- Swing matrix: rows `2922` (`+147`), probe `68` (`-253`), pending future quotes `2566` (`+328`).
-- Swing bucket: sim-auto `13` (`+5`), code-patch `0` (`-14`).
+- Lifecycle join contract: blocked `false`, incomplete `12713`, top reason `missing_submit`.
+- Swing matrix: rows `3272` (`+497`), probe `68` (`-253`), pending future quotes `2617` (`+379`).
+- Swing bucket: sim-auto `0` (`-8`), code-patch `0` (`-14`).
 - Scalp sim control tower: approved `true`, policies `2`, sources `["lifecycle_bucket_discovery", "scalp_sim_scale_in_window_approval"]`, bridge live-ready summary `0`.
 
 ## EV 해석
 
-- Daily completed trades `0`, win-rate `0.0`, avg profit pct `0.0`, realized PnL KRW `0`.
-- Real split sample `17`, avg `-0.1282`, win-rate `0.4118`.
+- Daily completed trades `5`, win-rate `20.0`, avg profit pct `0.07`, realized PnL KRW `5034`.
+- Real split sample `18`, avg `-0.2533`, win-rate `0.3889`.
 - Sim split sample `657`, avg `-0.9021`, win-rate `0.3409`.
-- EV warnings: `lifecycle_bucket_discovery:source_contract_drift_warning, lifecycle_bucket_discovery:contamination_quarantine_live_auto_blocked:3, swing_strategy_discovery:pending_future_quotes, swing_lifecycle_decision_matrix:pending_future_quotes, pattern_lab_ai_review_warning`.
+- EV warnings: `pattern_lab_gemini_stale, pattern_lab_claude_stale, swing_lab_carryover:3, lifecycle_bucket_discovery:contamination_quarantine_live_auto_blocked:3, swing_strategy_discovery:pending_future_quotes, swing_lifecycle_decision_matrix:pending_future_quotes, pattern_lab_ai_review_warning, pattern_lab_propagation_audit_warning`.
 
 ## Workorder
 
-- selected orders `97`, selected decisions `{"attach_existing_family": 97}`, routes `{"existing_family": 97}`.
+- selected orders `96`, selected decisions `{"attach_existing_family": 95, "implement_now": 1}`, routes `{"auto_patch_required": 1, "existing_family": 95}`.
 - pattern lab AI review source orders `1`, pattern lab currentness source orders `0`.
 - 해석: `implement_now`는 자동 repo 수정이 아니라 `runtime_effect=false` intake다. 사용자가 Codex 구현을 지시한 경우에만 코드 작업이다.
 
 ## Runtime Summary
 
 - runtime mutation allowed `false`; scalping selected auto-bounded-live `3`.
-- pattern lab currentness `pass`, AI review `warning`, propagation `pass`, producer gap `warning`.
+- pattern lab currentness `pass`, AI review `warning`, propagation `warning`, producer gap `warning`.
 
 ## Source
 

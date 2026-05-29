@@ -17,7 +17,7 @@
 
 ### scale_in_counterfactual_gap
 
-- sample_count: `30`
+- sample_count: `45`
 - source_quality_status: `implemented`
 - missing_fields: `[]`
 - source_paths: `3`
@@ -31,7 +31,7 @@
 
 ### sim_holding_runner_counterfactual
 
-- sample_count: `3682`
+- sample_count: `4335`
 - source_quality_status: `implemented`
 - missing_fields: `[]`
 - source_paths: `6`
@@ -45,7 +45,7 @@
 
 ### sim_stop_recovery_counterfactual
 
-- sample_count: `3857`
+- sample_count: `3798`
 - source_quality_status: `implemented`
 - missing_fields: `[]`
 - source_paths: `10`
@@ -66,7 +66,7 @@
 
 ### sim_entry_selection_bucket_producer
 
-- sample_count: `625`
+- sample_count: `653`
 - source_quality_status: `implemented`
 - missing_fields: `[]`
 - source_paths: `8`

@@ -2270,6 +2270,14 @@ def fetch_kiwoom_api_continuous(url: str, token: str, api_id: str, payload: dict
                     print(f"⚠️ [{api_id}] 429 요청 제한! {wait_sec}초 대기 후 재시도... ({retry_count+1}/{max_retries})")
                     time.sleep(wait_sec)
                     retry_count += 1
+                elif 500 <= response.status_code < 600:
+                    wait_sec = min(2 * (retry_count + 1), 6)
+                    log_info(
+                        f"⚠️ [{api_id}] Kiwoom gateway/server HTTP {response.status_code}. "
+                        f"{wait_sec}초 후 재시도... ({retry_count+1}/{max_retries})"
+                    )
+                    time.sleep(wait_sec)
+                    retry_count += 1
                 else:
                     log_error(f"❌ [{api_id}] HTTP 에러 {response.status_code}: {response.text}")
                     break  # 치명적 에러는 즉시 중단

@@ -7,9 +7,9 @@
 
 ## 2. Plan Rebase 관찰축 요약
 
-- `WAIT65~79 total_candidates=77`
+- `WAIT65~79 total_candidates=96`
 - `recovery_check=0`, `promoted=0`, `submitted=0`
-- `blocked_ai_score_share=81.8%`, `gatekeeper_eval_ms_p95=3769ms`
+- `blocked_ai_score_share=79.2%`, `gatekeeper_eval_ms_p95=3612ms`
 
 ## 3. 손실 패턴 (Top 5)
 

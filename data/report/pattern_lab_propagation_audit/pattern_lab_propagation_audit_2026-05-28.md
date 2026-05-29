@@ -2,27 +2,27 @@
 
 ## Summary
 
-- status: `pass`
+- status: `warning`
 - runtime_effect: `False`
 - decision_authority: `source_quality_only`
 - check_count: `13`
 - fail_count: `0`
-- warning_count: `0`
+- warning_count: `2`
 
 ## Checks
 
 ### `scalping_gemini_automation_fresh`
 
-- status: `pass`
-- severity: `info`
-- finding: fresh lab automation source is available
+- status: `warning`
+- severity: `warning`
+- finding: lab output unavailable; downstream must block it explicitly
 - sources: `['/home/ubuntu/KORStockScan/data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_2026-05-28.json']`
 
 ### `scalping_claude_automation_fresh`
 
-- status: `pass`
-- severity: `info`
-- finding: fresh lab automation source is available
+- status: `warning`
+- severity: `warning`
+- finding: lab output unavailable; downstream must block it explicitly
 - sources: `['/home/ubuntu/KORStockScan/data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_2026-05-28.json']`
 
 ### `deepseek_swing_automation_fresh`

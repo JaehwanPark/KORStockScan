@@ -19,6 +19,23 @@ def test_read_lines_includes_rotated_numeric_log(tmp_path):
     assert any("[DONE] threshold-cycle postclose target_date=2026-05-22" in line for line in lines)
 
 
+def test_latest_run_lines_prefers_repaired_full_done_marker_after_partial_marker():
+    log_lines = [
+        "[START] threshold-cycle postclose target_date=2026-05-28 started_at=2026-05-28T19:30:30+0900",
+        "[DONE] threshold-cycle postclose target_date=2026-05-28 swing_lifecycle=false lifecycle_decision_matrix=false lifecycle_bucket_discovery=false runtime_apply_bridge=false finished_at=2026-05-28T19:34:29+0900",
+        "[START] threshold-cycle postclose target_date=2026-05-28 started_at=2026-05-29T12:35:33+0900",
+        "[DONE] threshold-cycle postclose target_date=2026-05-28 swing_lifecycle=true lifecycle_decision_matrix=true lifecycle_bucket_discovery=true runtime_apply_bridge=true finished_at=2026-05-29T12:58:25+0900",
+    ]
+
+    run_lines, start_line = mod._latest_run_lines(log_lines, "2026-05-28")
+    done_line = next(line for line in run_lines if "[DONE] threshold-cycle postclose" in line)
+
+    assert "2026-05-29T12:35:33+0900" in (start_line or "")
+    assert "2026-05-29T12:58:25+0900" in done_line
+    assert mod._parse_bool_flags(done_line)["runtime_apply_bridge"] is True
+    assert mod._parse_bool_flags(done_line)["lifecycle_bucket_discovery"] is True
+
+
 def test_postclose_verifier_fails_runtime_apply_gap_audit_fail(tmp_path, monkeypatch):
     project_root = tmp_path
     report_dir = project_root / "data" / "report"

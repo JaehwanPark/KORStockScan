@@ -128,10 +128,10 @@
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_2026-05-28.json`
 - authority: `swing_sim_exploration_only` / source_only: `True`
 - candidate/arm/policy_exit_rows: `432` / `3204` / `3204`
-- labeled/pending_future_quotes: `96` / `2624`
+- labeled/pending_future_quotes: `84` / `2617`
 - implementation_status: `implemented`
 - top_surviving_arm: `arm05_breakout_conf_trailing`
-- surviving/avoid_bucket_count: `1` / `3`
+- surviving/avoid_bucket_count: `1` / `4`
 - runtime_effect: `False`
 
 ## Pipeline Event Verbosity
@@ -154,9 +154,9 @@
 
 ## Pattern Lab Audits
 - currentness: status=`pass` fail=`0` orders=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-28.json`
-- ai_review: status=`pass` orders=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-05-28.json`
+- ai_review: status=`warning` orders=`1` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-05-28.json`
 - time_window_regime_counterfactual: status=`pass` artifact=`/home/ubuntu/KORStockScan/data/report/time_window_regime_counterfactual/time_window_regime_counterfactual_2026-05-28.json`
-- producer_gap_discovery: status=`warning` orders=`9` artifact=`/home/ubuntu/KORStockScan/data/report/producer_gap_discovery/producer_gap_discovery_2026-05-28.json`
+- producer_gap_discovery: status=`warning` orders=`6` artifact=`/home/ubuntu/KORStockScan/data/report/producer_gap_discovery/producer_gap_discovery_2026-05-28.json`
 - stage_hook_workorder_discovery: status=`warning` orders=`2` artifact=`/home/ubuntu/KORStockScan/data/report/stage_hook_workorder_discovery/stage_hook_workorder_discovery_2026-05-28.json`
 - propagation: status=`warning` fail=`0` warnings=`2` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-28.json`
 
@@ -178,8 +178,8 @@
 ## Code Improvement Workorder
 - artifact: `/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-28.json`
 - markdown: `/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-28.md`
-- selected_order_count: `100`
-- decision_counts: `{'implement_now': 1, 'attach_existing_family': 116, 'design_family_candidate': 3, 'defer_evidence': 5, 'reject': 2}`
+- selected_order_count: `96`
+- decision_counts: `{'implement_now': 1, 'attach_existing_family': 112, 'design_family_candidate': 3, 'defer_evidence': 5, 'reject': 2}`
 
 ## Approval Requests
 - none
@@ -217,4 +217,5 @@
 - `lifecycle_bucket_discovery:contamination_quarantine_live_auto_blocked:3`
 - `swing_strategy_discovery:pending_future_quotes`
 - `swing_lifecycle_decision_matrix:pending_future_quotes`
+- `pattern_lab_ai_review_warning`
 - `pattern_lab_propagation_audit_warning`

@@ -2,7 +2,7 @@
 
 - 상태: `pass`
 - 런타임 적용률: `0.0%`
-- 양수 EV + source-quality pass 후보: `13`
+- 양수 EV + source-quality pass 후보: `12`
 - 실패 표면화: `0`
 - 재시도 큐: `0`
 - Codex 작업지시: `0`
