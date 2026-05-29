@@ -27,9 +27,9 @@
 - stage_hook_workorder_discovery: `/home/ubuntu/KORStockScan/data/report/stage_hook_workorder_discovery/stage_hook_workorder_discovery_2026-05-28.json`
 - stage_hook_runtime_scaffold: `/home/ubuntu/KORStockScan/data/report/stage_hook_runtime_scaffold/stage_hook_runtime_scaffold_2026-05-28.json`
 - buy_funnel_sentinel: `/home/ubuntu/KORStockScan/data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-05-28.json`
-- generated_at: `2026-05-29T10:51:25+09:00`
-- generation_id: `2026-05-28-bfd058dbae36`
-- source_hash: `bfd058dbae361c44bce3b03d0b936dcc0e7be472ec5e04701d3cd84d98f1fa1f`
+- generated_at: `2026-05-29T11:02:26+09:00`
+- generation_id: `2026-05-28-d3a7977eeb18`
+- source_hash: `d3a7977eeb183d47eb0ff634138bc7c24b8ccb88e3cda21561844f8324da5e14`
 
 ## 운영 원칙
 
@@ -51,10 +51,10 @@
 ## Snapshot Lineage
 
 - previous_exists: `True`
-- previous_generation_id: `2026-05-28-4038fe59ea51`
-- previous_source_hash: `4038fe59ea5149ebebfca4a95e2ea9e6ab2c11c2eda3db588cb7de02a2b8f291`
-- new_order_ids: `['order_lifecycle_entry_bucket_score_band_score_66_69', 'order_lifecycle_entry_bucket_score_band_score_70p', 'order_lifecycle_entry_bucket_strength_bucket_weak_strength_momentum']`
-- removed_order_ids: `['order_lifecycle_entry_bucket_time_bucket_time_0900_1000', 'order_lifecycle_entry_bucket_time_bucket_time_1000_1200', 'order_lifecycle_entry_bucket_time_bucket_time_1200_1400']`
+- previous_generation_id: `2026-05-28-bfd058dbae36`
+- previous_source_hash: `bfd058dbae361c44bce3b03d0b936dcc0e7be472ec5e04701d3cd84d98f1fa1f`
+- new_order_ids: `['order_lifecycle_entry_bucket_time_bucket_time_0900_1000']`
+- removed_order_ids: `['order_lifecycle_entry_bucket_score_band_score_66_69']`
 - decision_changed_order_ids: `[]`
 
 ## Summary
@@ -3284,41 +3284,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 93. `order_lifecycle_entry_bucket_score_band_score_66_69`
-
-- title: LDM entry bucket attribution follow-up: score_band=score_66_69
-- decision: `attach_existing_family`
-- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
-- source_report_type: `lifecycle_decision_matrix_entry_bucket_attribution`
-- lifecycle_stage: `entry`
-- target_subsystem: `lifecycle_decision_matrix`
-- route: `existing_family`
-- mapped_family: `lifecycle_decision_matrix_runtime`
-- threshold_family: `lifecycle_decision_matrix_runtime`
-- improvement_type: `entry_bucket_source_quality_attribution`
-- confidence: `daily_ldm_source`
-- priority: `5`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: Keep entry bucket EV attribution, source-quality gaps, and threshold-cycle approval candidates connected without mutating intraday thresholds or broker submission.
-- evidence: `workorder_id=entry_bucket_source_quality_9`, `bucket_type=score_band`, `bucket_key=score_66_69`, `reason=bucket_has_edge_but_needs_rolling_or_feature_confirmation`, `recommended_route=candidate_recovery_or_relax`, `metric_role=source_quality_gate`, `decision_authority=adm_ldm_entry_bucket_attribution_source_only`, `primary_decision_metric=source_quality_adjusted_ev_pct`, `runtime_effect=false`, `allowed_runtime_apply=false`
-- parity_contract: -
-- next_postclose_metric: lifecycle_decision_matrix.entry_bucket_attribution should reduce unknown buckets, keep runtime_approval_candidates visible in threshold EV/runtime summary, and regenerate this workorder when source-quality confirmation is still needed.
-- files_likely_touched: `src/engine/lifecycle_decision_matrix.py`, `src/engine/scalp_entry_action_decision_matrix.py`, `src/engine/daily_threshold_cycle_report.py`, `src/engine/runtime_approval_summary.py`, `docs/report-based-automation-traceability.md`
-- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_decision_matrix.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier fails if LDM entry bucket candidates/workorders are not propagated`
-- implementation_status: `implemented`
-- implementation_provenance: `{"recommended_resolution": "none", "source_field_coverage": {}, "unknown_reason_counts": {}}`
-- automation_reentry: Next postclose workorder should preserve implementation_status=implemented and use the source metrics as provenance only.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 94. `order_lifecycle_entry_bucket_score_band_score_70p`
+### 93. `order_lifecycle_entry_bucket_score_band_score_70p`
 
 - title: LDM entry bucket attribution follow-up: score_band=score_70p
 - decision: `attach_existing_family`
@@ -3352,7 +3318,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 95. `order_lifecycle_entry_bucket_strength_bucket_weak_strength_momentum`
+### 94. `order_lifecycle_entry_bucket_strength_bucket_weak_strength_momentum`
 
 - title: LDM entry bucket attribution follow-up: strength_bucket=weak_strength_momentum
 - decision: `attach_existing_family`
@@ -3371,7 +3337,41 @@ Stage hook candidate:
 - data_quality_effect: `False`
 - tuning_axis_effect: `False`
 - expected_ev_effect: Keep entry bucket EV attribution, source-quality gaps, and threshold-cycle approval candidates connected without mutating intraday thresholds or broker submission.
-- evidence: `workorder_id=entry_bucket_source_quality_10`, `bucket_type=strength_bucket`, `bucket_key=weak_strength_momentum`, `reason=bucket_has_edge_but_needs_rolling_or_feature_confirmation`, `recommended_route=candidate_tighten_or_exclude`, `metric_role=source_quality_gate`, `decision_authority=adm_ldm_entry_bucket_attribution_source_only`, `primary_decision_metric=source_quality_adjusted_ev_pct`, `runtime_effect=false`, `allowed_runtime_apply=false`
+- evidence: `workorder_id=entry_bucket_source_quality_9`, `bucket_type=strength_bucket`, `bucket_key=weak_strength_momentum`, `reason=bucket_has_edge_but_needs_rolling_or_feature_confirmation`, `recommended_route=candidate_tighten_or_exclude`, `metric_role=source_quality_gate`, `decision_authority=adm_ldm_entry_bucket_attribution_source_only`, `primary_decision_metric=source_quality_adjusted_ev_pct`, `runtime_effect=false`, `allowed_runtime_apply=false`
+- parity_contract: -
+- next_postclose_metric: lifecycle_decision_matrix.entry_bucket_attribution should reduce unknown buckets, keep runtime_approval_candidates visible in threshold EV/runtime summary, and regenerate this workorder when source-quality confirmation is still needed.
+- files_likely_touched: `src/engine/lifecycle_decision_matrix.py`, `src/engine/scalp_entry_action_decision_matrix.py`, `src/engine/daily_threshold_cycle_report.py`, `src/engine/runtime_approval_summary.py`, `docs/report-based-automation-traceability.md`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_decision_matrix.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier fails if LDM entry bucket candidates/workorders are not propagated`
+- implementation_status: `implemented`
+- implementation_provenance: `{"recommended_resolution": "none", "source_field_coverage": {}, "unknown_reason_counts": {}}`
+- automation_reentry: Next postclose workorder should preserve implementation_status=implemented and use the source metrics as provenance only.
+
+실행 기준:
+
+- 기존 threshold family의 source metric/provenance를 보강한다.
+- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
+- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
+
+### 95. `order_lifecycle_entry_bucket_time_bucket_time_0900_1000`
+
+- title: LDM entry bucket attribution follow-up: time_bucket=time_0900_1000
+- decision: `attach_existing_family`
+- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
+- source_report_type: `lifecycle_decision_matrix_entry_bucket_attribution`
+- lifecycle_stage: `entry`
+- target_subsystem: `lifecycle_decision_matrix`
+- route: `existing_family`
+- mapped_family: `lifecycle_decision_matrix_runtime`
+- threshold_family: `lifecycle_decision_matrix_runtime`
+- improvement_type: `entry_bucket_source_quality_attribution`
+- confidence: `daily_ldm_source`
+- priority: `5`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Keep entry bucket EV attribution, source-quality gaps, and threshold-cycle approval candidates connected without mutating intraday thresholds or broker submission.
+- evidence: `workorder_id=entry_bucket_source_quality_10`, `bucket_type=time_bucket`, `bucket_key=time_0900_1000`, `reason=bucket_has_edge_but_needs_rolling_or_feature_confirmation`, `recommended_route=candidate_tighten_or_exclude`, `metric_role=source_quality_gate`, `decision_authority=adm_ldm_entry_bucket_attribution_source_only`, `primary_decision_metric=source_quality_adjusted_ev_pct`, `runtime_effect=false`, `allowed_runtime_apply=false`
 - parity_contract: -
 - next_postclose_metric: lifecycle_decision_matrix.entry_bucket_attribution should reduce unknown buckets, keep runtime_approval_candidates visible in threshold EV/runtime summary, and regenerate this workorder when source-quality confirmation is still needed.
 - files_likely_touched: `src/engine/lifecycle_decision_matrix.py`, `src/engine/scalp_entry_action_decision_matrix.py`, `src/engine/daily_threshold_cycle_report.py`, `src/engine/runtime_approval_summary.py`, `docs/report-based-automation-traceability.md`

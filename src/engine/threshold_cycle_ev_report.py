@@ -716,6 +716,11 @@ def _lifecycle_decision_matrix_summary(target_date: str) -> tuple[dict[str, Any]
         )
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     contract = payload.get("fixed_threshold_contract") if isinstance(payload.get("fixed_threshold_contract"), dict) else {}
+    entry_bucket = (
+        payload.get("entry_bucket_attribution")
+        if isinstance(payload.get("entry_bucket_attribution"), dict)
+        else {}
+    )
     submit_bucket = (
         payload.get("submit_bucket_attribution")
         if isinstance(payload.get("submit_bucket_attribution"), dict)
@@ -736,6 +741,12 @@ def _lifecycle_decision_matrix_summary(target_date: str) -> tuple[dict[str, Any]
         if isinstance(payload.get("lifecycle_flow_bucket_attribution"), dict)
         else {}
     )
+    scale_in_bucket = (
+        payload.get("scale_in_bucket_attribution")
+        if isinstance(payload.get("scale_in_bucket_attribution"), dict)
+        else {}
+    )
+    entry_summary = entry_bucket.get("summary") if isinstance(entry_bucket.get("summary"), dict) else {}
     submit_summary = submit_bucket.get("summary") if isinstance(submit_bucket.get("summary"), dict) else {}
     holding_summary = holding_bucket.get("summary") if isinstance(holding_bucket.get("summary"), dict) else {}
     exit_summary = exit_bucket.get("summary") if isinstance(exit_bucket.get("summary"), dict) else {}
@@ -744,6 +755,7 @@ def _lifecycle_decision_matrix_summary(target_date: str) -> tuple[dict[str, Any]
         if isinstance(lifecycle_flow_bucket.get("summary"), dict)
         else {}
     )
+    scale_in_summary = scale_in_bucket.get("summary") if isinstance(scale_in_bucket.get("summary"), dict) else {}
     warnings = [f"lifecycle_decision_matrix:{item}" for item in (payload.get("warnings") or []) if str(item)]
     return (
         {
@@ -793,6 +805,25 @@ def _lifecycle_decision_matrix_summary(target_date: str) -> tuple[dict[str, Any]
                 else []
             ),
             "submit_bucket_attribution_summary": submit_summary,
+            "entry_bucket_attribution_summary": entry_summary,
+            "entry_bucket_runtime_approval_candidates": (
+                entry_bucket.get("runtime_approval_candidates")
+                if isinstance(entry_bucket.get("runtime_approval_candidates"), list)
+                else []
+            ),
+            "entry_bucket_code_improvement_workorders": (
+                entry_bucket.get("code_improvement_workorders")
+                if isinstance(entry_bucket.get("code_improvement_workorders"), list)
+                else []
+            ),
+            "entry_bucket_runtime_candidate_count": _safe_int(
+                summary.get("entry_bucket_runtime_candidate_count"),
+                _safe_int(entry_summary.get("runtime_candidate_count"), 0),
+            ),
+            "entry_bucket_workorder_count": _safe_int(
+                summary.get("entry_bucket_workorder_count"),
+                _safe_int(entry_summary.get("workorder_count"), 0),
+            ),
             "submit_bucket_runtime_approval_candidates": (
                 submit_bucket.get("runtime_approval_candidates")
                 if isinstance(submit_bucket.get("runtime_approval_candidates"), list)
@@ -837,6 +868,25 @@ def _lifecycle_decision_matrix_summary(target_date: str) -> tuple[dict[str, Any]
             "exit_bucket_workorder_count": _safe_int(
                 summary.get("exit_bucket_workorder_count"),
                 _safe_int(exit_summary.get("workorder_count"), 0),
+            ),
+            "scale_in_bucket_attribution_summary": scale_in_summary,
+            "scale_in_bucket_runtime_approval_candidates": (
+                scale_in_bucket.get("runtime_approval_candidates")
+                if isinstance(scale_in_bucket.get("runtime_approval_candidates"), list)
+                else []
+            ),
+            "scale_in_bucket_code_improvement_workorders": (
+                scale_in_bucket.get("code_improvement_workorders")
+                if isinstance(scale_in_bucket.get("code_improvement_workorders"), list)
+                else []
+            ),
+            "scale_in_bucket_runtime_candidate_count": _safe_int(
+                summary.get("scale_in_bucket_runtime_candidate_count"),
+                _safe_int(scale_in_summary.get("runtime_candidate_count"), 0),
+            ),
+            "scale_in_bucket_workorder_count": _safe_int(
+                summary.get("scale_in_bucket_workorder_count"),
+                _safe_int(scale_in_summary.get("workorder_count"), 0),
             ),
             "identity_missing_count": _safe_int(summary.get("identity_missing_count"), 0),
             "identity_join_rate": summary.get("identity_join_rate"),

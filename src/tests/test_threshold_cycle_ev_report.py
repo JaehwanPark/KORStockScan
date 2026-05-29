@@ -450,6 +450,23 @@ def test_threshold_cycle_ev_lifecycle_summary_surfaces_submit_contract(tmp_path,
                     "code_improvement_workorders": [{"workorder_id": "submit_order"}],
                     "post_submit_contract_gaps": [{"gap_type": "broker_receipt_contract_gap"}],
                 },
+                "entry_bucket_attribution": {
+                    "summary": {"bucket_count": 3, "runtime_candidate_count": 2, "workorder_count": 1},
+                    "runtime_approval_candidates": [
+                        {"candidate_id": "entry_bucket_5"},
+                        {"candidate_id": "entry_bucket_6"},
+                    ],
+                    "code_improvement_workorders": [{"workorder_id": "entry_order"}],
+                },
+                "scale_in_bucket_attribution": {
+                    "summary": {"bucket_count": 4, "runtime_candidate_count": 3, "workorder_count": 1},
+                    "runtime_approval_candidates": [
+                        {"candidate_id": "scale_in_bucket_5"},
+                        {"candidate_id": "scale_in_bucket_7"},
+                        {"candidate_id": "scale_in_bucket_9"},
+                    ],
+                    "code_improvement_workorders": [{"workorder_id": "scale_in_order"}],
+                },
             },
             ensure_ascii=False,
         ),
@@ -476,6 +493,21 @@ def test_threshold_cycle_ev_lifecycle_summary_surfaces_submit_contract(tmp_path,
     assert summary["submit_bucket_contract_gap_count"] == 1
     assert summary["submit_bucket_code_improvement_workorders"] == [{"workorder_id": "submit_order"}]
     assert summary["post_submit_contract_gaps"] == [{"gap_type": "broker_receipt_contract_gap"}]
+    assert summary["entry_bucket_runtime_candidate_count"] == 2
+    assert summary["entry_bucket_workorder_count"] == 1
+    assert summary["entry_bucket_runtime_approval_candidates"] == [
+        {"candidate_id": "entry_bucket_5"},
+        {"candidate_id": "entry_bucket_6"},
+    ]
+    assert summary["entry_bucket_code_improvement_workorders"] == [{"workorder_id": "entry_order"}]
+    assert summary["scale_in_bucket_runtime_candidate_count"] == 3
+    assert summary["scale_in_bucket_workorder_count"] == 1
+    assert summary["scale_in_bucket_runtime_approval_candidates"] == [
+        {"candidate_id": "scale_in_bucket_5"},
+        {"candidate_id": "scale_in_bucket_7"},
+        {"candidate_id": "scale_in_bucket_9"},
+    ]
+    assert summary["scale_in_bucket_code_improvement_workorders"] == [{"workorder_id": "scale_in_order"}]
 
 
 def test_audit_summary_resolves_source_only_candidate_warning(tmp_path):

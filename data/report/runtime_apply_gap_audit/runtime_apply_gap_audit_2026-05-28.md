@@ -8,8 +8,8 @@
 - Codex 작업지시: `0`
 
 ## 공격적 런타임 추진 대상
-- `entry:score_band:score_66_69`: stage=entry, EV=0.3064, 방향=runtime_bridge, 현재=sim_auto_approved
-- `entry:overbought_bucket:overbought_proxy_normal`: stage=entry, EV=0.5132, 방향=runtime_bridge, 현재=code_patch_required
+- `entry:exit_rule:exit_unknown`: stage=entry, EV=0.0432, 방향=runtime_bridge, 현재=code_patch_required
+- `entry:overbought_bucket:overbought_proxy_normal`: stage=entry, EV=0.5168, 방향=runtime_bridge, 현재=code_patch_required
 - `scale_in:arm:pyramid`: stage=scale_in, EV=0.7624, 방향=runtime_bridge, 현재=sim_auto_approved
 - `scale_in:blocker_namespace:pyramid`: stage=scale_in, EV=0.7624, 방향=runtime_bridge, 현재=sim_auto_approved
 - `scale_in:blocker_reason:profit_not_enough`: stage=scale_in, EV=0.5982, 방향=runtime_bridge, 현재=sim_auto_approved
