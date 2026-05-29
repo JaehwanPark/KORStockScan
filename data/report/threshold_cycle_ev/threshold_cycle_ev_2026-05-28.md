@@ -44,7 +44,7 @@
 ## Missed Probe Counterfactual
 - book: `scalp_score65_74_probe_counterfactual` / role: `missed_buy_probe_counterfactual`
 - total/score65_74: `96` / `0`
-- avg_expected_ev: `0.2907`% / score65_74_avg_expected_ev: `0.0`%
+- avg_expected_ev: `-0.2505`% / score65_74_avg_expected_ev: `0.0`%
 - actual_order_submitted: `False` / broker_order_forbidden: `True`
 - authority: `missed_probe_ev_only_not_broker_execution`
 
@@ -127,11 +127,11 @@
 ## Swing Strategy Discovery Sim
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_2026-05-28.json`
 - authority: `swing_sim_exploration_only` / source_only: `True`
-- candidate/arm/policy_exit_rows: `375` / `2854` / `2854`
-- labeled/pending_future_quotes: `70` / `2566`
+- candidate/arm/policy_exit_rows: `406` / `3102` / `3102`
+- labeled/pending_future_quotes: `261` / `2457`
 - implementation_status: `implemented`
 - top_surviving_arm: `arm05_breakout_conf_trailing`
-- surviving/avoid_bucket_count: `1` / `2`
+- surviving/avoid_bucket_count: `1` / `20`
 - runtime_effect: `False`
 
 ## Pipeline Event Verbosity
@@ -220,6 +220,4 @@
 - `lifecycle_bucket_discovery:contamination_quarantine_live_auto_blocked:3`
 - `swing_strategy_discovery:pending_future_quotes`
 - `swing_lifecycle_decision_matrix:pending_future_quotes`
-- `swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_fail_closed`
-- `swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked`
 - `pattern_lab_ai_review_warning`

@@ -833,6 +833,8 @@ def test_swing_lifecycle_handoff_warns_on_ai_two_pass_missing():
         "summary": {
             "ai_two_pass_review_status": "missing",
             "ai_fail_closed": True,
+            "ai_review_blocker_state": "provider_disabled",
+            "pre_review_sim_auto_candidate_count": 1,
             "deterministic_proposal_count": 1,
             "ai_tier2_proposal_count": 0,
         },
@@ -845,7 +847,54 @@ def test_swing_lifecycle_handoff_warns_on_ai_two_pass_missing():
     assert report["status"] == "warning"
     assert report["missing"] == []
     assert report["ai_two_pass_review_status"] == "missing"
+    assert report["ai_review_blocker_state"] == "provider_disabled"
+    assert report["pre_review_sim_auto_candidate_count"] == 1
     assert "swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked" in report["warnings"]
+
+
+def test_swing_lifecycle_handoff_passes_without_ai_warning_when_parsed():
+    matrix = {
+        "input_contract": {"swing_daily_simulation_consumed": False},
+        "entry_bucket_attribution": {"buckets": []},
+    }
+    discovery = {
+        "summary": {
+            "ai_two_pass_review_status": "parsed",
+            "ai_fail_closed": False,
+            "ai_review_blocker_state": "none",
+            "pre_review_sim_auto_candidate_count": 1,
+            "deterministic_proposal_count": 1,
+            "ai_tier2_proposal_count": 1,
+        },
+        "surfaced_candidate_ids": [],
+        "warnings": [],
+    }
+
+    report = mod._swing_lifecycle_handoff_status(matrix, discovery, {}, {}, {"orders": []})
+
+    assert report["status"] == "pass"
+    assert report["missing"] == []
+    assert report["warnings"] == []
+    assert report["ai_review_blocker_state"] == "none"
+
+
+def test_swing_lifecycle_provider_mismatch_warning_uses_done_marker_provider():
+    values = mod._parse_marker_values(
+        "[DONE] threshold-cycle postclose target_date=2026-05-12 "
+        "swing_lifecycle_bucket_discovery_ai_provider=responses"
+    )
+    assert values["swing_lifecycle_bucket_discovery_ai_provider"] == "responses"
+
+    warning = mod._swing_lifecycle_provider_mismatch_warning(
+        "[DONE] threshold-cycle postclose target_date=2026-05-12 "
+        "swing_lifecycle_bucket_discovery_ai_provider=openai",
+        {"ai_two_pass_review": {"provider": "none"}},
+    )
+
+    assert warning == (
+        "swing_lifecycle_bucket_discovery:ai_provider_mismatch:"
+        "done_marker=openai:artifact=none"
+    )
 
 
 def test_consumer_stale_detects_generated_at_ordering():

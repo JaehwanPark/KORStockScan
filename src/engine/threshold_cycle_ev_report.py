@@ -1219,6 +1219,8 @@ def _swing_lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[st
             "source_contract_status": summary.get("source_contract_status"),
             "ai_two_pass_review_status": ai_review_status or None,
             "ai_fail_closed": bool(summary.get("ai_fail_closed")),
+            "ai_review_blocker_state": summary.get("ai_review_blocker_state"),
+            "pre_review_sim_auto_candidate_count": _safe_int(summary.get("pre_review_sim_auto_candidate_count"), 0),
             "ai_review_followup_required": bool(summary.get("ai_review_followup_required")),
             "ai_review_followup_reasons": summary.get("ai_review_followup_reasons")
             if isinstance(summary.get("ai_review_followup_reasons"), list)

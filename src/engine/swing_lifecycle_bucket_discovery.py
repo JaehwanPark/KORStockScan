@@ -972,6 +972,9 @@ def build_swing_lifecycle_bucket_discovery(
         1 for item in sim_reviewed_candidates if item.get("comparative_review", {}).get("selected_source") == "reject"
     )
     sim_review_required = any(item.get("classification_state") == "sim_auto_approved" for item in candidates)
+    pre_review_sim_auto_candidate_count = sum(
+        1 for item in candidates if item.get("classification_state") == "sim_auto_approved"
+    )
     sim_review_call_fail_closed = bool(
         sim_review_required
         and sim_shard.get("status") != "parsed"
@@ -997,6 +1000,17 @@ def build_swing_lifecycle_bucket_discovery(
         or unreviewed_sim_auto_candidate_count > 0
     )
     sim_auto_blocked_by_review_followup = bool(sim_review_followup_reasons)
+    provider_disabled = resolved_provider in {"none", "off", "false", "0"}
+    if sim_auto_blocked_by_review_followup:
+        ai_review_blocker_state = "sim_policy_followup_required"
+    elif ai_status == "parse_rejected":
+        ai_review_blocker_state = "parse_rejected"
+    elif ai_fail_closed and provider_disabled and pre_review_sim_auto_candidate_count > 0:
+        ai_review_blocker_state = "provider_disabled"
+    elif ai_fail_closed:
+        ai_review_blocker_state = "provider_unavailable"
+    else:
+        ai_review_blocker_state = "none"
     if ai_fail_closed or sim_auto_blocked_by_review_followup:
         downgraded_candidates: list[dict[str, Any]] = []
         for candidate in candidates:
@@ -1012,6 +1026,11 @@ def build_swing_lifecycle_bucket_discovery(
                         "classification_state": "source_only_keep_collecting",
                         "next_route": "postclose_source_quality_or_sample_collection",
                         reason_key: True,
+                        "ai_review_blocker_state": ai_review_blocker_state,
+                        "pre_review_sim_auto_candidate_count": pre_review_sim_auto_candidate_count,
+                        "ai_review_required_but_provider_disabled": ai_review_blocker_state == "provider_disabled",
+                        "ai_review_provider_unavailable": ai_review_blocker_state == "provider_unavailable",
+                        "ai_review_parse_rejected": ai_review_blocker_state == "parse_rejected",
                     }
                 )
             else:
@@ -1126,6 +1145,8 @@ def build_swing_lifecycle_bucket_discovery(
             "ai_review_followup_required": bool(followup_reasons),
             "ai_review_followup_reasons": followup_reasons,
             "sim_auto_blocked_by_ai_review_followup": sim_auto_blocked_by_review_followup,
+            "ai_review_blocker_state": ai_review_blocker_state,
+            "pre_review_sim_auto_candidate_count": pre_review_sim_auto_candidate_count,
             "deterministic_proposal_count": len(candidates),
             "ai_tier2_proposal_count": sum(
                 1 for item in candidates if item.get("ai_tier2_proposal", {}).get("proposal_status") == "provided"
@@ -1184,6 +1205,8 @@ def build_swing_lifecycle_bucket_discovery(
             "followup_required": bool(followup_reasons),
             "followup_reasons": followup_reasons,
             "sim_auto_blocked_by_review_followup": sim_auto_blocked_by_review_followup,
+            "ai_review_blocker_state": ai_review_blocker_state,
+            "pre_review_sim_auto_candidate_count": pre_review_sim_auto_candidate_count,
             "missing_ai_tier2_proposal_count": missing_ai_proposal_count,
             "missing_comparative_review_count": missing_comparative_review_count,
             "sim_missing_ai_tier2_proposal_count": sim_missing_ai_proposal_count,

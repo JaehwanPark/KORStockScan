@@ -121,6 +121,28 @@ def _parse_bool_flags(line: str) -> dict[str, bool]:
     return flags
 
 
+def _parse_marker_values(line: str) -> dict[str, str]:
+    return {
+        key: value
+        for key, value in re.findall(r"([A-Za-z0-9_]+)=(\S+)", line or "")
+    }
+
+
+def _swing_lifecycle_provider_mismatch_warning(done_line: str | None, discovery: dict[str, Any]) -> str | None:
+    marker_values = _parse_marker_values(done_line or "")
+    expected_provider = str(marker_values.get("swing_lifecycle_bucket_discovery_ai_provider") or "").strip().lower()
+    if not expected_provider:
+        return None
+    ai_review = discovery.get("ai_two_pass_review") if isinstance(discovery.get("ai_two_pass_review"), dict) else {}
+    actual_provider = str(ai_review.get("provider") or "").strip().lower()
+    if not actual_provider or actual_provider == expected_provider:
+        return None
+    return (
+        "swing_lifecycle_bucket_discovery:ai_provider_mismatch:"
+        f"done_marker={expected_provider}:artifact={actual_provider}"
+    )
+
+
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
         if value in (None, ""):
@@ -656,6 +678,11 @@ def _swing_lifecycle_handoff_status(
         "deterministic_proposal_count": discovery_summary.get("deterministic_proposal_count"),
         "ai_two_pass_review_status": ai_review_status or None,
         "ai_fail_closed": bool(discovery_summary.get("ai_fail_closed")),
+        "ai_review_blocker_state": discovery_summary.get("ai_review_blocker_state"),
+        "pre_review_sim_auto_candidate_count": _safe_int(
+            discovery_summary.get("pre_review_sim_auto_candidate_count"),
+            0,
+        ),
         "ai_tier2_proposal_count": discovery_summary.get("ai_tier2_proposal_count"),
         "comparative_review_count": discovery_summary.get("comparative_review_count"),
         "selected_decision_counts": discovery_summary.get("selected_decision_counts"),
@@ -1829,6 +1856,13 @@ def build_threshold_cycle_postclose_verification(
         runtime_summary,
         workorder,
     )
+    provider_mismatch_warning = _swing_lifecycle_provider_mismatch_warning(done_line, swing_bucket_discovery_report)
+    if provider_mismatch_warning:
+        warnings = list(swing_lifecycle_handoff.get("warnings") or [])
+        warnings.append(provider_mismatch_warning)
+        swing_lifecycle_handoff["warnings"] = list(dict.fromkeys(str(item) for item in warnings if str(item)))
+        if swing_lifecycle_handoff.get("status") == "pass":
+            swing_lifecycle_handoff["status"] = "warning"
     if swing_lifecycle_handoff.get("status") == "fail":
         log_issues.append("swing_lifecycle_handoff_missing")
     elif swing_lifecycle_handoff.get("status") == "warning":

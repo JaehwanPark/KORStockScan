@@ -432,13 +432,82 @@ def test_bucket_discovery_provider_disabled_downgrades_sim_auto(tmp_path, monkey
     report = mod.build_swing_lifecycle_bucket_discovery(target, provider="none")
 
     assert report["summary"]["ai_fail_closed"] is True
+    assert report["summary"]["ai_review_blocker_state"] == "provider_disabled"
+    assert report["summary"]["pre_review_sim_auto_candidate_count"] == 1
     assert report["summary"]["sim_auto_approved_count"] == 0
     assert "ai_two_pass_review_missing_fail_closed" in report["warnings"]
     assert "ai_two_pass_review_fail_closed_sim_auto_blocked" in report["warnings"]
     candidate = report["surfaced_candidates"][0]
     assert candidate["classification_state"] == "source_only_keep_collecting"
     assert candidate["sim_auto_downgraded_by_ai_fail_closed"] is True
+    assert candidate["ai_review_blocker_state"] == "provider_disabled"
+    assert candidate["ai_review_required_but_provider_disabled"] is True
     assert candidate["allowed_runtime_apply"] is False
+
+
+def test_bucket_discovery_openai_unavailable_marks_provider_unavailable(tmp_path, monkeypatch):
+    target = "2026-05-22"
+    matrix_dir = tmp_path / "matrix"
+    matrix_dir.mkdir()
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "discovery")
+
+    matrix_path = matrix_dir / f"swing_lifecycle_decision_matrix_{target}.json"
+    matrix_path.write_text(
+        json.dumps(
+            {
+                "input_contract": {"swing_daily_simulation_consumed": False},
+                "swing_lifecycle_flow_bucket_attribution": {"buckets": [_flow_bucket()]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+    monkeypatch.setattr(
+        mod,
+        "_call_openai_ai_review",
+        lambda *args, **kwargs: (None, {"provider": "openai", "status": "timeout", "model": mod.AI_REVIEW_MODEL}),
+    )
+
+    report = mod.build_swing_lifecycle_bucket_discovery(target, provider="openai")
+
+    assert report["summary"]["ai_fail_closed"] is True
+    assert report["summary"]["ai_review_blocker_state"] == "provider_unavailable"
+    assert report["summary"]["pre_review_sim_auto_candidate_count"] == 1
+    candidate = report["surfaced_candidates"][0]
+    assert candidate["classification_state"] == "source_only_keep_collecting"
+    assert candidate["ai_review_provider_unavailable"] is True
+
+
+def test_bucket_discovery_parse_rejected_marks_parse_rejected(tmp_path, monkeypatch):
+    target = "2026-05-22"
+    matrix_dir = tmp_path / "matrix"
+    matrix_dir.mkdir()
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "discovery")
+
+    matrix_path = matrix_dir / f"swing_lifecycle_decision_matrix_{target}.json"
+    matrix_path.write_text(
+        json.dumps(
+            {
+                "input_contract": {"swing_daily_simulation_consumed": False},
+                "swing_lifecycle_flow_bucket_attribution": {"buckets": [_flow_bucket()]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+    monkeypatch.setattr(
+        mod,
+        "_call_openai_ai_review",
+        lambda *args, **kwargs: ("not-json", {"provider": "openai", "status": "success", "model": mod.AI_REVIEW_MODEL}),
+    )
+
+    report = mod.build_swing_lifecycle_bucket_discovery(target, provider="openai")
+
+    assert report["summary"]["ai_fail_closed"] is True
+    assert report["summary"]["ai_review_blocker_state"] == "parse_rejected"
+    candidate = report["surfaced_candidates"][0]
+    assert candidate["classification_state"] == "source_only_keep_collecting"
+    assert candidate["ai_review_parse_rejected"] is True
 
 
 def test_bucket_discovery_flags_daily_simulation_contract_gap(tmp_path, monkeypatch):

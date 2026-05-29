@@ -587,6 +587,8 @@ def test_swing_lifecycle_bucket_discovery_summary_surfaces_ai_fail_closed(tmp_pa
                     "source_contract_status": "pass",
                     "ai_two_pass_review_status": "missing",
                     "ai_fail_closed": True,
+                    "ai_review_blocker_state": "provider_disabled",
+                    "pre_review_sim_auto_candidate_count": 1,
                     "candidate_count": 1,
                     "surfaced_candidate_count": 1,
                 },
@@ -608,6 +610,8 @@ def test_swing_lifecycle_bucket_discovery_summary_surfaces_ai_fail_closed(tmp_pa
     assert artifact == str(path)
     assert summary["ai_two_pass_review_status"] == "missing"
     assert summary["ai_fail_closed"] is True
+    assert summary["ai_review_blocker_state"] == "provider_disabled"
+    assert summary["pre_review_sim_auto_candidate_count"] == 1
     assert "swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_fail_closed" in warnings
     assert "swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked" in summary["warnings"]
 
