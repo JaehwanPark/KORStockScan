@@ -24,7 +24,7 @@
 | `holding` | 665 | 91 |
 | `scale_in` | 61 | 12 |
 | `exit` | 40 | 15 |
-| `other` | 15061 | 19 |
+| `other` | 15067 | 19 |
 
 ## Key Stages
 
@@ -48,11 +48,11 @@
 | `swing_probe_scale_in_order_assumed_filled` | 11 | 8 |
 | `swing_probe_sell_order_assumed_filled` | 14 | 9 |
 | `swing_probe_state_persisted` | 60 | 1 |
-| `swing_probe_state_restored` | 63 | 1 |
+| `swing_probe_state_restored` | 66 | 1 |
 | `swing_reentry_counterfactual_after_loss` | 44 | 5 |
 | `swing_same_symbol_loss_reentry_blocked` | 12 | 5 |
 | `swing_same_symbol_loss_reentry_cooldown` | 6 | 5 |
-| `swing_same_symbol_loss_reentry_cooldowns_restored` | 54 | 1 |
+| `swing_same_symbol_loss_reentry_cooldowns_restored` | 57 | 1 |
 | `swing_scale_in_micro_context_observed` | 25 | 12 |
 | `swing_sim_buy_order_assumed_filled` | 44 | 10 |
 | `swing_sim_holding_started` | 44 | 10 |

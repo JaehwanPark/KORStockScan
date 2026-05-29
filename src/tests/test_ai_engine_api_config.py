@@ -21,3 +21,10 @@ def test_ai_response_schema_registry_covers_required_endpoints():
         "runtime_apply_gap_ai_review_v1",
         "swing_bottom_rebound_policy_ai_review_v1",
     }
+
+
+def test_lifecycle_bucket_discovery_schema_requires_parent_granularity_reviews():
+    schema = AI_RESPONSE_SCHEMA_REGISTRY["lifecycle_bucket_discovery_review_v1"]
+
+    assert "parent_granularity_reviews" in schema["properties"]
+    assert "parent_granularity_reviews" in schema["required"]

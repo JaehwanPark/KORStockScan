@@ -35,6 +35,10 @@ TAXONOMY_DECISIONS = {
 _NUMERIC_EMBEDDED_RE = re.compile(
     r"^(?P<name>[a-zA-Z_][a-zA-Z0-9_]*?)\((?P<value>[-+]?\d+(?:\.\d+)?)(?P<unit>%|pct|s|sec|seconds|bps)?\)$"
 )
+_SCORE_LT_RE = re.compile(r"\bscore[_=:]?lt[_-]?(?P<high>\d{1,3})\b")
+_SCORE_BUCKET_RE = re.compile(
+    r"\bscore(?:[_=:]score)?(?:[_=:])?(?P<low>\d{1,3})(?:[_-](?P<high>\d{1,3}|p))?(?=\D|$)"
+)
 
 
 def _safe_float(value: Any) -> float | None:
@@ -89,6 +93,82 @@ def _metric_name_for(base: str, unit: str) -> str:
     return f"{base}_value"
 
 
+def _score_parent(value: Any) -> str | None:
+    text = str(value or "").lower()
+    lt_match = _SCORE_LT_RE.search(text)
+    if lt_match:
+        high = _safe_float(lt_match.group("high"))
+        if high is None:
+            return None
+        return "score_low_observation" if high <= 60 else "score_watch_recovery"
+    match = _SCORE_BUCKET_RE.search(text)
+    if not match:
+        return None
+    low = _safe_float(match.group("low"))
+    high_raw = match.group("high")
+    high = _safe_float(match.group("low")) if high_raw == "p" else _safe_float(high_raw or match.group("low"))
+    if low is None or high is None:
+        return None
+    midpoint = (low + high) / 2.0
+    if midpoint < 55:
+        return "score_low_observation"
+    if midpoint < 65:
+        return "score_watch_recovery"
+    if midpoint < 75:
+        return "score_mid_recovery"
+    if midpoint < 85:
+        return "score_high_confirmation"
+    return "score_extreme_confirmation"
+
+
+def _stage_parent_from_child(stage: str, value: Any) -> str:
+    text = str(value or "").strip()
+    score_parent = _score_parent(text)
+    if score_parent:
+        return score_parent
+    if not text or text.lower() in {"none", "missing", "null"}:
+        return "none"
+    return f"{stage}_observed"
+
+
+def _coarsen_dimensions_for_parent(
+    *,
+    stage: str,
+    bucket_type: str,
+    bucket_key: str,
+    dimensions: dict[str, Any],
+) -> tuple[str, dict[str, Any], str | None]:
+    normalized = dict(dimensions)
+    score_parent = None
+    for key, value in list(dimensions.items()):
+        parent = _score_parent(value)
+        if parent:
+            normalized[f"{key}_detail"] = str(value)
+            normalized[f"{key}_parent"] = parent
+            score_parent = score_parent or parent
+    if not score_parent:
+        score_parent = _score_parent(bucket_key)
+        if score_parent:
+            normalized["score_detail"] = str(bucket_key)
+            normalized["score_parent"] = score_parent
+
+    if bucket_type.startswith("combo_") and dimensions:
+        parent_parts: list[str] = []
+        for key in ("entry", "submit", "holding", "scale_in", "exit"):
+            if key not in dimensions:
+                continue
+            value = dimensions.get(key)
+            normalized[f"{key}_detail"] = str(value)
+            parent_parts.append(f"{key}={_stage_parent_from_child(key, value)}")
+        if parent_parts:
+            return "|".join(parent_parts), normalized, "combo_bucket_rolled_up_to_broad_parent_dimensions"
+
+    if score_parent and bucket_key != score_parent:
+        normalized["bucket_detail"] = str(bucket_key)
+        return score_parent, normalized, "score_bucket_rolled_up_to_parent_score_group"
+    return bucket_key, normalized, None
+
+
 def normalize_lifecycle_bucket(
     *,
     stage: str,
@@ -132,6 +212,21 @@ def normalize_lifecycle_bucket(
                     if number <= 20
                     else "20bps_plus"
                 )
+
+    parent_key, parent_dimensions, parent_reason = _coarsen_dimensions_for_parent(
+        stage=stage,
+        bucket_type=bucket_type,
+        bucket_key=canonical_key,
+        dimensions=normalized_dimensions,
+    )
+    if parent_reason:
+        canonical_key = parent_key
+        normalized_dimensions = parent_dimensions
+        decision = "absorb_as_dimension" if decision == "keep_bucket" else decision
+        if decision == "merge":
+            decision = "absorb_as_dimension"
+        candidate_type = "parent_bucket_absorption"
+        reason = parent_reason
 
     if "unknown" in legacy_raw.lower() or any(str(value).lower() == "unknown" for value in dimensions.values()):
         missing_dimensions = sorted(

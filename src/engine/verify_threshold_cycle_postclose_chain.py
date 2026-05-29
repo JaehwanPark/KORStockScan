@@ -33,6 +33,12 @@ _AI_RUNTIME_STATES = {
 _OPTIONAL_ARTIFACT_LABELS = {
     "buy_funnel_sentinel",
     "lifecycle_bucket_discovery",
+    "lifecycle_decision_matrix_rolling5d",
+    "lifecycle_bucket_discovery_rolling5d",
+    "lifecycle_decision_matrix_rolling10d",
+    "lifecycle_bucket_discovery_rolling10d",
+    "lifecycle_decision_matrix_mtd",
+    "lifecycle_bucket_discovery_mtd",
     "threshold_preopen_apply_next",
 }
 _AI_EXEMPT_RUNTIME_FAMILIES = {
@@ -171,6 +177,24 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "lifecycle_bucket_discovery": REPORT_DIR
         / "lifecycle_bucket_discovery"
         / f"lifecycle_bucket_discovery_{target_date}.json",
+        "lifecycle_decision_matrix_rolling5d": REPORT_DIR
+        / "lifecycle_decision_matrix"
+        / f"lifecycle_decision_matrix_{target_date}_rolling5d.json",
+        "lifecycle_bucket_discovery_rolling5d": REPORT_DIR
+        / "lifecycle_bucket_discovery"
+        / f"lifecycle_bucket_discovery_{target_date}_rolling5d.json",
+        "lifecycle_decision_matrix_rolling10d": REPORT_DIR
+        / "lifecycle_decision_matrix"
+        / f"lifecycle_decision_matrix_{target_date}_rolling10d.json",
+        "lifecycle_bucket_discovery_rolling10d": REPORT_DIR
+        / "lifecycle_bucket_discovery"
+        / f"lifecycle_bucket_discovery_{target_date}_rolling10d.json",
+        "lifecycle_decision_matrix_mtd": REPORT_DIR
+        / "lifecycle_decision_matrix"
+        / f"lifecycle_decision_matrix_{target_date}_mtd.json",
+        "lifecycle_bucket_discovery_mtd": REPORT_DIR
+        / "lifecycle_bucket_discovery"
+        / f"lifecycle_bucket_discovery_{target_date}_mtd.json",
         "code_improvement_workorder": REPORT_DIR / "code_improvement_workorder" / f"code_improvement_workorder_{target_date}.json",
         "runtime_approval_summary": REPORT_DIR / "runtime_approval_summary" / f"runtime_approval_summary_{target_date}.json",
         "runtime_apply_gap_audit": REPORT_DIR
@@ -572,6 +596,85 @@ def _lifecycle_bucket_discovery_handoff_status(
             if discovery
             else "lifecycle bucket discovery report missing"
         ),
+    }
+
+
+def _lifecycle_bucket_windows_status(
+    *,
+    paths: dict[str, Path],
+    done_line: str | None,
+    bridge_report: dict[str, Any],
+    ev_report: dict[str, Any],
+    runtime_summary: dict[str, Any],
+) -> dict[str, Any]:
+    marker_values = _parse_marker_values(done_line or "")
+    marker_enabled = str(marker_values.get("lifecycle_bucket_windows") or "").lower() in {"true", "1"}
+    ev_windows = ev_report.get("lifecycle_bucket_windows") if isinstance(ev_report.get("lifecycle_bucket_windows"), dict) else {}
+    runtime_windows = (
+        runtime_summary.get("lifecycle_bucket_windows")
+        if isinstance(runtime_summary.get("lifecycle_bucket_windows"), dict)
+        else {}
+    )
+    artifact_present = any(paths[f"lifecycle_bucket_discovery_{suffix}"].exists() for suffix in ("rolling5d", "rolling10d", "mtd"))
+    should_check = marker_enabled or bool(ev_windows) or bool(runtime_windows) or artifact_present
+    if not should_check:
+        return {"status": "pass", "checked": False, "missing": [], "warnings": []}
+
+    missing: list[str] = []
+    warnings: list[str] = []
+    windows: dict[str, dict[str, Any]] = {}
+    for suffix in ("rolling5d", "rolling10d", "mtd"):
+        ldm_path = paths[f"lifecycle_decision_matrix_{suffix}"]
+        discovery_path = paths[f"lifecycle_bucket_discovery_{suffix}"]
+        if not ldm_path.exists():
+            missing.append(f"lifecycle_decision_matrix_{suffix}_missing")
+        if not discovery_path.exists():
+            missing.append(f"lifecycle_bucket_discovery_{suffix}_missing")
+            windows[suffix] = {"available": False}
+            continue
+        payload = _load_json(discovery_path)
+        summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+        source_contract_status = str(summary.get("source_contract_status") or "")
+        parent_granularity_status = str(summary.get("parent_granularity_status") or "")
+        windows[suffix] = {
+            "available": bool(payload),
+            "source_contract_status": source_contract_status or None,
+            "parent_granularity_status": parent_granularity_status or None,
+            "parent_bucket_count": _safe_int(summary.get("parent_bucket_count")),
+        }
+        if source_contract_status != "pass":
+            missing.append(f"lifecycle_bucket_discovery_{suffix}_source_contract_not_pass")
+        if parent_granularity_status != "target_pass":
+            missing.append(f"lifecycle_bucket_discovery_{suffix}_parent_granularity_not_target")
+
+    bridge_summary = bridge_report.get("summary") if isinstance(bridge_report.get("summary"), dict) else {}
+    live_ready_count = _safe_int(bridge_summary.get("live_auto_apply_ready_count"))
+    promotion_passed = bridge_summary.get("lifecycle_bucket_promotion_contract_passed")
+    if live_ready_count > 0 and promotion_passed is not True:
+        missing.append("runtime_apply_bridge_daily_only_live_authority")
+
+    for item in bridge_report.get("candidates") or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("family") != "greenfield_real_environment_authority":
+            continue
+        if item.get("bridge_candidate_state") != "live_auto_apply_ready":
+            continue
+        policy = item.get("greenfield_policy") if isinstance(item.get("greenfield_policy"), dict) else {}
+        policy_bucket_id = str(policy.get("policy_bucket_id") or item.get("policy_bucket_id") or "")
+        parent_status = str(policy.get("parent_granularity_status") or item.get("parent_granularity_status") or "")
+        absorbed = policy.get("absorbed_child_bucket_ids") if isinstance(policy.get("absorbed_child_bucket_ids"), list) else []
+        if not policy_bucket_id or parent_status != "target_pass" or not absorbed:
+            missing.append("runtime_apply_bridge_child_combo_policy_authority")
+
+    if marker_enabled and not artifact_present:
+        missing.append("lifecycle_bucket_windows_marker_true_but_artifacts_missing")
+    return {
+        "status": "fail" if missing else ("warning" if warnings else "pass"),
+        "checked": True,
+        "windows": windows,
+        "missing": sorted(set(missing)),
+        "warnings": sorted(set(warnings)),
     }
 
 
@@ -1858,6 +1961,17 @@ def build_threshold_cycle_postclose_verification(
     )
     if lifecycle_bucket_discovery_handoff.get("status") == "fail":
         log_issues.append("lifecycle_bucket_discovery_handoff_missing")
+    lifecycle_bucket_windows = _lifecycle_bucket_windows_status(
+        paths=paths,
+        done_line=done_line,
+        bridge_report=bridge_report,
+        ev_report=ev_report,
+        runtime_summary=runtime_summary,
+    )
+    if lifecycle_bucket_windows.get("status") == "fail":
+        log_issues.append("lifecycle_bucket_windows_fail")
+    elif lifecycle_bucket_windows.get("status") == "warning":
+        handoff_warnings.extend(str(item) for item in (lifecycle_bucket_windows.get("warnings") or []) if str(item))
     swing_lifecycle_handoff = _swing_lifecycle_handoff_status(
         swing_ldm_report,
         swing_bucket_discovery_report,
@@ -2370,6 +2484,7 @@ def build_threshold_cycle_postclose_verification(
         "lifecycle_flow_bucket_handoff": lifecycle_flow_bucket_handoff,
         "lifecycle_flow_bucket_attribution_present": isinstance(lifecycle_flow_attribution, dict),
         "lifecycle_bucket_discovery_handoff": lifecycle_bucket_discovery_handoff,
+        "lifecycle_bucket_windows": lifecycle_bucket_windows,
         "swing_lifecycle_handoff": swing_lifecycle_handoff,
         "producer_gap_discovery_handoff": producer_gap_handoff,
         "stage_hook_workorder_handoff": stage_hook_handoff,
@@ -2406,6 +2521,11 @@ def _render_markdown(report: dict[str, Any]) -> str:
     lifecycle_bucket = (
         report.get("lifecycle_bucket_discovery_handoff")
         if isinstance(report.get("lifecycle_bucket_discovery_handoff"), dict)
+        else {}
+    )
+    lifecycle_bucket_windows = (
+        report.get("lifecycle_bucket_windows")
+        if isinstance(report.get("lifecycle_bucket_windows"), dict)
         else {}
     )
     swing_lifecycle = (
@@ -2552,6 +2672,13 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- ai_post_apply_followup_bucket_ids: `{lifecycle_bucket.get('ai_post_apply_followup_bucket_ids') or []}`",
         f"- warnings: `{lifecycle_bucket.get('warnings') or []}`",
         f"- interpretation: `{lifecycle_bucket.get('interpretation') or '-'}`",
+        "",
+        "## Lifecycle Bucket Windows",
+        f"- status: `{lifecycle_bucket_windows.get('status') or '-'}`",
+        f"- checked: `{lifecycle_bucket_windows.get('checked')}`",
+        f"- windows: `{lifecycle_bucket_windows.get('windows') or {}}`",
+        f"- missing: `{lifecycle_bucket_windows.get('missing') or []}`",
+        f"- warnings: `{lifecycle_bucket_windows.get('warnings') or []}`",
         "",
         "## Swing Lifecycle Handoff",
         f"- status: `{swing_lifecycle.get('status') or '-'}`",

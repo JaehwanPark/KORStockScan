@@ -78,9 +78,9 @@
 - artifact: `/home/ubuntu/KORStockScan/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_2026-05-29.json`
 - status: `pass` / human_intervention_required: `False`
 - candidates/surfaced: `500` / `238`
-- sim_auto/live_auto/new_bucket: `123` / `9` / `9`
-- state_counts: `{'live_auto_apply_ready': 9, 'runtime_blocked_contract_gap': 4, 'source_only_keep_collecting': 330, 'new_bucket_candidate': 9, 'lifecycle_flow_sim_probe_candidate': 12, 'sim_auto_approved': 123, 'entry_only_sim_auto_approved': 9, 'entry_only_source_candidate': 4}`
-- top_surfaced: `[{'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq', 'stage': 'lifecycle_flow', 'classification_state': 'live_auto_apply_ready', 'live_auto_apply_family': 'greenfield_real_environment_authority', 'recommended_action': 'relax_or_recover', 'joined_sample': 4, 'source_quality_adjusted_ev_pct': 2.7842}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'stage': 'lifecycle_flow', 'classification_state': 'runtime_blocked_contract_gap', 'live_auto_apply_family': None, 'recommended_action': 'relax_or_recover', 'joined_sample': 2, 'source_quality_adjusted_ev_pct': 1.2894}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq', 'stage': 'lifecycle_flow', 'classification_state': 'live_auto_apply_ready', 'live_auto_apply_family': 'greenfield_real_environment_authority', 'recommended_action': 'relax_or_recover', 'joined_sample': 1, 'source_quality_adjusted_ev_pct': 2.4291}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_stale_block_liquidi', 'stage': 'lifecycle_flow', 'classification_state': 'live_auto_apply_ready', 'live_auto_apply_family': 'greenfield_real_environment_authority', 'recommended_action': 'relax_or_recover', 'joined_sample': 1, 'source_quality_adjusted_ev_pct': 1.1187}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'stage': 'lifecycle_flow', 'classification_state': 'runtime_blocked_contract_gap', 'live_auto_apply_family': None, 'recommended_action': 'relax_or_recover', 'joined_sample': 1, 'source_quality_adjusted_ev_pct': 1.0433}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'stage': 'lifecycle_flow', 'classification_state': 'runtime_blocked_contract_gap', 'live_auto_apply_family': None, 'recommended_action': 'relax_or_recover', 'joined_sample': 1, 'source_quality_adjusted_ev_pct': 1.5054}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_66_69_source_scalp_entry_action_decision_snapshot_stale', 'stage': 'lifecycle_flow', 'classification_state': 'live_auto_apply_ready', 'live_auto_apply_family': 'greenfield_real_environment_authority', 'recommended_action': 'relax_or_recover', 'joined_sample': 1, 'source_quality_adjusted_ev_pct': 1.0295}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_66_69_source_scalp_entry_action_decision_snapshot_stale', 'stage': 'lifecycle_flow', 'classification_state': 'live_auto_apply_ready', 'live_auto_apply_family': 'greenfield_real_environment_authority', 'recommended_action': 'relax_or_recover', 'joined_sample': 1, 'source_quality_adjusted_ev_pct': 1.7616}]`
+- sim_auto/live_auto/new_bucket: `123` / `0` / `0`
+- state_counts: `{'source_only_keep_collecting': 352, 'lifecycle_flow_sim_probe_candidate': 12, 'sim_auto_approved': 123, 'entry_only_sim_auto_approved': 9, 'entry_only_source_candidate': 4}`
+- top_surfaced: `[{'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq', 'stage': 'lifecycle_flow', 'classification_state': 'source_only_keep_collecting', 'live_auto_apply_family': None, 'recommended_action': 'relax_or_recover', 'joined_sample': 4, 'source_quality_adjusted_ev_pct': 2.7842}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'stage': 'lifecycle_flow', 'classification_state': 'source_only_keep_collecting', 'live_auto_apply_family': None, 'recommended_action': 'relax_or_recover', 'joined_sample': 2, 'source_quality_adjusted_ev_pct': 1.2894}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq', 'stage': 'lifecycle_flow', 'classification_state': 'source_only_keep_collecting', 'live_auto_apply_family': None, 'recommended_action': 'relax_or_recover', 'joined_sample': 1, 'source_quality_adjusted_ev_pct': 2.4291}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_stale_block_liquidi', 'stage': 'lifecycle_flow', 'classification_state': 'source_only_keep_collecting', 'live_auto_apply_family': None, 'recommended_action': 'relax_or_recover', 'joined_sample': 1, 'source_quality_adjusted_ev_pct': 1.1187}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'stage': 'lifecycle_flow', 'classification_state': 'source_only_keep_collecting', 'live_auto_apply_family': None, 'recommended_action': 'relax_or_recover', 'joined_sample': 1, 'source_quality_adjusted_ev_pct': 1.0433}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'stage': 'lifecycle_flow', 'classification_state': 'source_only_keep_collecting', 'live_auto_apply_family': None, 'recommended_action': 'relax_or_recover', 'joined_sample': 1, 'source_quality_adjusted_ev_pct': 1.5054}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_66_69_source_scalp_entry_action_decision_snapshot_stale', 'stage': 'lifecycle_flow', 'classification_state': 'source_only_keep_collecting', 'live_auto_apply_family': None, 'recommended_action': 'relax_or_recover', 'joined_sample': 1, 'source_quality_adjusted_ev_pct': 1.0295}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_66_69_source_scalp_entry_action_decision_snapshot_stale', 'stage': 'lifecycle_flow', 'classification_state': 'source_only_keep_collecting', 'live_auto_apply_family': None, 'recommended_action': 'relax_or_recover', 'joined_sample': 1, 'source_quality_adjusted_ev_pct': 1.7616}]`
 
 ## Lifecycle AI Context
 - artifact: `/home/ubuntu/KORStockScan/data/report/lifecycle_ai_context/lifecycle_ai_context_2026-05-29.json`
@@ -101,7 +101,7 @@
 - rows ok/partial/missing/token_error: `120` / `0` / `0` / `0`
 - join_rate_pct: `100.0`
 - source_mix: `{'ka10059+ka10061': 120}`
-- top_net_buy: `[{'stock_code': '018880', 'smart_money_net': 7284839, 'foreign_net_roll5': 11871883, 'inst_net_roll5': 0, 'regime': 'FOREIGN_ACCUMULATION'}, {'stock_code': '005930', 'smart_money_net': 4260411, 'foreign_net_roll5': 0, 'inst_net_roll5': 6773194, 'regime': 'INSTITUTION_ACCUMULATION'}, {'stock_code': '035420', 'smart_money_net': 1026952, 'foreign_net_roll5': 0, 'inst_net_roll5': 847064, 'regime': 'INSTITUTION_ACCUMULATION'}, {'stock_code': '064400', 'smart_money_net': 752457, 'foreign_net_roll5': 508497, 'inst_net_roll5': 702460, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '336370', 'smart_money_net': 579282, 'foreign_net_roll5': 0, 'inst_net_roll5': 934228, 'regime': 'INSTITUTION_ACCUMULATION'}, {'stock_code': '034220', 'smart_money_net': 492521, 'foreign_net_roll5': 3471423, 'inst_net_roll5': 43445, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '066570', 'smart_money_net': 379199, 'foreign_net_roll5': 0, 'inst_net_roll5': 944153, 'regime': 'INSTITUTION_ACCUMULATION'}, {'stock_code': '005380', 'smart_money_net': 367102, 'foreign_net_roll5': 0, 'inst_net_roll5': 493932, 'regime': 'INSTITUTION_ACCUMULATION'}, {'stock_code': '242040', 'smart_money_net': 283168, 'foreign_net_roll5': 1006759, 'inst_net_roll5': 0, 'regime': 'FOREIGN_ACCUMULATION'}, {'stock_code': '373220', 'smart_money_net': 245051, 'foreign_net_roll5': 95832, 'inst_net_roll5': 0, 'regime': 'FOREIGN_ACCUMULATION'}]`
+- top_net_buy: `[{'stock_code': '018880', 'smart_money_net': 7284839, 'foreign_net_roll5': 11871883, 'inst_net_roll5': 0, 'regime': 'FOREIGN_ACCUMULATION'}, {'stock_code': '005930', 'smart_money_net': 5248011, 'foreign_net_roll5': 0, 'inst_net_roll5': 7208336, 'regime': 'INSTITUTION_ACCUMULATION'}, {'stock_code': '035420', 'smart_money_net': 1395866, 'foreign_net_roll5': 254681, 'inst_net_roll5': 930294, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '064400', 'smart_money_net': 1047894, 'foreign_net_roll5': 813150, 'inst_net_roll5': 693244, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '066570', 'smart_money_net': 828984, 'foreign_net_roll5': 0, 'inst_net_roll5': 1013849, 'regime': 'INSTITUTION_ACCUMULATION'}, {'stock_code': '336370', 'smart_money_net': 814718, 'foreign_net_roll5': 1118, 'inst_net_roll5': 1052515, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '005380', 'smart_money_net': 583328, 'foreign_net_roll5': 0, 'inst_net_roll5': 528603, 'regime': 'INSTITUTION_ACCUMULATION'}, {'stock_code': '034220', 'smart_money_net': 503922, 'foreign_net_roll5': 3478058, 'inst_net_roll5': 48211, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '242040', 'smart_money_net': 283282, 'foreign_net_roll5': 1006873, 'inst_net_roll5': 0, 'regime': 'FOREIGN_ACCUMULATION'}, {'stock_code': '373220', 'smart_money_net': 262370, 'foreign_net_roll5': 111013, 'inst_net_roll5': 0, 'regime': 'FOREIGN_ACCUMULATION'}]`
 
 ## Pattern Lab Automation
 - artifact: `/home/ubuntu/KORStockScan/data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_2026-05-29.json`
@@ -111,9 +111,9 @@
 ## Swing Pattern Lab Automation
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_2026-05-29.json`
 - deepseek_lab_available: `True`
-- findings/orders: `5` / `3`
+- findings/orders: `7` / `3`
 - data_quality_warnings: `0`
-- top_level_data_quality_warnings: `0`
+- top_level_data_quality_warnings: `1`
 - resolved_data_quality_warnings: `0`
 - ofi_qi_stale_missing_unique_records: `17`
 - ofi_qi_stale_missing_reasons: `{'micro_missing': 2880, 'micro_stale': 0, 'observer_unhealthy': 8, 'micro_not_ready': 2890, 'state_insufficient': 2890}`
@@ -121,17 +121,17 @@
 - ofi_qi_stale_missing_reason_combination_unique_records: `{'micro_missing+micro_not_ready+state_insufficient': 17, 'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 2}`
 - ofi_qi_observer_unhealthy_overlap: `{'observer_unhealthy_total': 8, 'observer_unhealthy_with_other_reason': 8, 'observer_unhealthy_only': 0}`
 - source_quality_blocked_families: `[{'family': 'swing_entry_ofi_qi_execution_quality', 'stage': 'entry', 'metric_role': 'source_quality_gate', 'decision_authority': 'swing_pattern_lab_analysis_workorder_source_only', 'window_policy': 'same_day_pattern_lab_source_quality', 'sample_floor': 1, 'primary_decision_metric': 'source_quality_gate', 'source_quality_gate': 'swing_orderbook_micro_context_ready_or_blocker_provenance_recorded', 'source_contract_version': 'swing_micro_context_source_quality_v1', 'source_contract_status': 'implemented', 'source_quality_blockers': ['entry_ofi_qi_invalid_micro_context'], 'invalid_micro_context_unique_record_count': 17, 'invalid_reason_combination_unique_record_counts': {'micro_missing+micro_not_ready+state_insufficient': 17, 'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 2}, 'reason_counts': {'micro_missing': 2880, 'micro_stale': 0, 'observer_unhealthy': 8, 'micro_not_ready': 2890, 'state_insufficient': 2890}, 'reason_combination_counts': {'micro_not_ready+state_insufficient': 10, 'micro_missing+micro_not_ready+state_insufficient': 2872, 'micro_missing+observer_unhealthy+micro_not_ready+state_insufficient': 8}, 'observer_unhealthy_overlap': {'observer_unhealthy_total': 8, 'observer_unhealthy_with_other_reason': 8, 'observer_unhealthy_only': 0}, 'automation_input': True, 'runtime_effect': False, 'allowed_runtime_apply': False, 'forbidden_uses': ['swing_real_order_enable', 'one_share_real_canary', 'scale_in_real_canary', 'runtime_threshold_mutation', 'provider_route_change', 'bot_restart', 'recommendation_history_replace']}]`
-- carryover_warnings: `0`
+- carryover_warnings: `2`
 - population_split_available: `True`
 
 ## Swing Strategy Discovery Sim
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_2026-05-29.json`
 - authority: `swing_sim_exploration_only` / source_only: `True`
-- candidate/arm/policy_exit_rows: `482` / `3604` / `3604`
-- labeled/pending_future_quotes: `59` / `3033`
+- candidate/arm/policy_exit_rows: `486` / `3636` / `3636`
+- labeled/pending_future_quotes: `225` / `2729`
 - implementation_status: `implemented`
 - top_surviving_arm: `arm05_breakout_conf_trailing`
-- surviving/avoid_bucket_count: `1` / `6`
+- surviving/avoid_bucket_count: `1` / `15`
 - runtime_effect: `False`
 
 ## Pipeline Event Verbosity
@@ -178,8 +178,8 @@
 ## Code Improvement Workorder
 - artifact: `/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-29.json`
 - markdown: `/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-29.md`
-- selected_order_count: `99`
-- decision_counts: `{'implement_now': 2, 'attach_existing_family': 117, 'design_family_candidate': 6, 'defer_evidence': 10, 'reject': 3}`
+- selected_order_count: `108`
+- decision_counts: `{'implement_now': 2, 'attach_existing_family': 126, 'design_family_candidate': 6, 'defer_evidence': 10, 'reject': 3}`
 
 ## Approval Requests
 - none
@@ -189,8 +189,8 @@
 
 ## Calibration Decisions
 ## Code Improvement Top Orders
-- `order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_90c49526` decision=`implement_now` subsystem=`lifecycle_bucket_discovery_taxonomy_provenance`
-- `order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_97d8b767` decision=`implement_now` subsystem=`lifecycle_bucket_discovery_taxonomy_provenance`
+- `order_pattern_lab_ai_review_order_pattern_lab_ai_review_ai_review_followup_2026_05_29` decision=`implement_now` subsystem=`pattern_lab`
+- `order_pattern_lab_ai_review_order_pattern_lab_ai_review_order_latency_guard_miss_ev_recovery` decision=`implement_now` subsystem=`pattern_lab`
 - `order_entry_submit_drought_auto_resolution` decision=`attach_existing_family` subsystem=`runtime_instrumentation`
 
 ## Pattern Lab Top Findings
@@ -216,6 +216,7 @@
 - `position_sizing_dynamic_formula`: `hold_sample` sample=`21/30`
 
 ## Warnings
+- `swing_lab_carryover:2`
 - `swing_strategy_discovery:pending_future_quotes`
 - `swing_lifecycle_decision_matrix:pending_future_quotes`
 - `pattern_lab_ai_review_warning`

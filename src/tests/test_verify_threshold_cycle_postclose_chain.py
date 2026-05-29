@@ -207,6 +207,58 @@ def test_lifecycle_bucket_discovery_greenfield_bridge_exclusion_is_not_missing_f
     assert report["explicit_bridge_exclusion_families"] == ["greenfield_real_environment_authority"]
 
 
+def test_lifecycle_bucket_windows_status_fails_missing_enabled_windows(tmp_path):
+    paths = {}
+    for suffix in ("rolling5d", "rolling10d", "mtd"):
+        paths[f"lifecycle_decision_matrix_{suffix}"] = tmp_path / f"lifecycle_decision_matrix_2026-05-29_{suffix}.json"
+        paths[f"lifecycle_bucket_discovery_{suffix}"] = tmp_path / f"lifecycle_bucket_discovery_2026-05-29_{suffix}.json"
+
+    report = mod._lifecycle_bucket_windows_status(
+        paths=paths,
+        done_line="[DONE] threshold-cycle postclose target_date=2026-05-29 lifecycle_bucket_windows=true",
+        bridge_report={},
+        ev_report={},
+        runtime_summary={},
+    )
+
+    assert report["status"] == "fail"
+    assert "lifecycle_bucket_windows_marker_true_but_artifacts_missing" in report["missing"]
+    assert "lifecycle_bucket_discovery_mtd_missing" in report["missing"]
+
+
+def test_lifecycle_bucket_windows_status_blocks_daily_only_authority(tmp_path):
+    paths = {}
+    for suffix in ("rolling5d", "rolling10d", "mtd"):
+        ldm = tmp_path / f"lifecycle_decision_matrix_2026-05-29_{suffix}.json"
+        discovery = tmp_path / f"lifecycle_bucket_discovery_2026-05-29_{suffix}.json"
+        ldm.write_text("{}", encoding="utf-8")
+        discovery.write_text(
+            json.dumps(
+                {
+                    "summary": {
+                        "source_contract_status": "pass",
+                        "parent_granularity_status": "target_pass",
+                        "parent_bucket_count": 36,
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        paths[f"lifecycle_decision_matrix_{suffix}"] = ldm
+        paths[f"lifecycle_bucket_discovery_{suffix}"] = discovery
+
+    report = mod._lifecycle_bucket_windows_status(
+        paths=paths,
+        done_line="[DONE] threshold-cycle postclose target_date=2026-05-29 lifecycle_bucket_windows=true",
+        bridge_report={"summary": {"live_auto_apply_ready_count": 1, "lifecycle_bucket_promotion_contract_passed": False}},
+        ev_report={},
+        runtime_summary={},
+    )
+
+    assert report["status"] == "fail"
+    assert "runtime_apply_bridge_daily_only_live_authority" in report["missing"]
+
+
 def test_stage_hook_workorder_handoff_detects_missing_selected_order():
     stage_hook = {
         "status": "warning",

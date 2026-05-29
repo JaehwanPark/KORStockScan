@@ -12,7 +12,7 @@ import hashlib
 import json
 import re
 from collections import Counter, defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -301,9 +301,28 @@ SCALP_SIM_SUBMIT_STAGES = {
 SCALP_SIM_HOLDING_STAGE = "scalp_sim_holding_started"
 
 
-def report_paths(target_date: str) -> tuple[Path, Path]:
-    base = MATRIX_DIR / f"lifecycle_decision_matrix_{target_date}"
+def report_paths(target_date: str, *, output_suffix: str | None = None) -> tuple[Path, Path]:
+    suffix = f"_{_safe_slug(output_suffix)}" if output_suffix else ""
+    base = MATRIX_DIR / f"lifecycle_decision_matrix_{target_date}{suffix}"
     return base.with_suffix(".json"), base.with_suffix(".md")
+
+
+def _safe_slug(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    return re.sub(r"[^a-z0-9_-]+", "_", text).strip("_")
+
+
+def _date_range(start_date: str, end_date: str) -> list[str]:
+    start = date.fromisoformat(str(start_date).strip())
+    end = date.fromisoformat(str(end_date).strip())
+    if start > end:
+        start, end = end, start
+    days: list[str] = []
+    current = start
+    while current <= end:
+        days.append(current.isoformat())
+        current += timedelta(days=1)
+    return days
 
 
 def _read_json_dict(path: Path) -> dict[str, Any]:
@@ -3841,8 +3860,290 @@ def _allowed_actions(stage: str) -> list[str]:
     }.get(stage, ["NO_CHANGE"])
 
 
-def build_lifecycle_decision_matrix_report(target_date: str) -> dict[str, Any]:
+def _load_lifecycle_source_rows_for_date(
+    target_date: str,
+    source_loaders: list[Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    sources: dict[str, Any] = {}
+    for loader in source_loaders:
+        loaded_rows, summary = loader(target_date)
+        for row in loaded_rows:
+            if isinstance(row, dict):
+                row.setdefault("source_date", target_date)
+        rows.extend(loaded_rows)
+        sources[loader.__name__.removeprefix("_load_").removesuffix("_rows")] = summary
+    return rows, sources
+
+
+def _lifecycle_row_identity(row: dict[str, Any]) -> str:
+    runtime_features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
+    identity = (
+        runtime_features.get("sim_record_id")
+        or row.get("sim_record_id")
+        or row.get("candidate_id")
+        or runtime_features.get("entry_adm_candidate_id")
+        or row.get("attribution_key")
+    )
+    if identity:
+        return "|".join(
+            [
+                str(row.get("source_date") or ""),
+                str(row.get("stage") or ""),
+                str(row.get("source") or row.get("source_stage") or ""),
+                str(identity),
+            ]
+        )
+    raw = json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _dedupe_lifecycle_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    retained: dict[str, dict[str, Any]] = {}
+    duplicate_count = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        key = _lifecycle_row_identity(row)
+        current = retained.get(key)
+        if current is None:
+            retained[key] = row
+            continue
+        duplicate_count += 1
+        current_score = int(current.get("stage_ev_composite_pct") is not None) + int(current.get("outcome_joined") is True)
+        row_score = int(row.get("stage_ev_composite_pct") is not None) + int(row.get("outcome_joined") is True)
+        if row_score > current_score:
+            retained[key] = row
+    return list(retained.values()), {
+        "dedupe_input_rows": len(rows),
+        "dedupe_retained_rows": len(retained),
+        "dedupe_dropped_rows": duplicate_count,
+    }
+
+
+def _weighted_field_average(items: list[dict[str, Any]], field: str, weight_field: str = "joined_sample") -> float | None:
+    numerator = 0.0
+    denominator = 0
+    for item in items:
+        value = _safe_float(item.get(field), None)
+        weight = _safe_int(item.get(weight_field), _safe_int(item.get("sample"), 1))
+        if value is None or weight <= 0:
+            continue
+        numerator += float(value) * weight
+        denominator += weight
+    if denominator <= 0:
+        return None
+    return round(numerator / denominator, 4)
+
+
+def _aggregate_bucket_rows(rows: list[dict[str, Any]], *, lifecycle_flow: bool = False) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        key = str(row.get("bucket_key") or row.get("lifecycle_flow_bucket_id") or row.get("bucket_id") or "")
+        if not key:
+            continue
+        grouped[key].append(row)
+    merged: list[dict[str, Any]] = []
+    for _, subset in grouped.items():
+        first = dict(subset[0])
+        sample = sum(_safe_int(item.get("sample"), _safe_int(item.get("joined_sample"))) for item in subset)
+        joined = sum(_safe_int(item.get("joined_sample")) for item in subset)
+        first["sample"] = sample
+        first["joined_sample"] = joined
+        first["join_rate"] = round(joined / sample, 4) if sample else 0.0
+        for field in ("source_quality_adjusted_ev_pct", "equal_weight_avg_profit_pct", "diagnostic_win_rate"):
+            first[field] = _weighted_field_average(subset, field)
+        if lifecycle_flow:
+            complete = sum(_safe_int(item.get("complete_flow_count")) for item in subset)
+            incomplete = sum(_safe_int(item.get("incomplete_flow_count")) for item in subset)
+            first["complete_flow_count"] = complete
+            first["incomplete_flow_count"] = incomplete
+            first["source_quality_gate"] = "pass" if complete > 0 and joined > 0 and incomplete == 0 else "hold_sample_or_incomplete_flow"
+            ev = _safe_float(first.get("source_quality_adjusted_ev_pct"), None)
+            if ev is None:
+                first["recommended_route"] = "hold_sample"
+            elif ev <= LIFECYCLE_FLOW_BUCKET_NEGATIVE_EV_PCT:
+                first["recommended_route"] = "candidate_tighten_or_exclude"
+            elif ev >= LIFECYCLE_FLOW_BUCKET_POSITIVE_EV_PCT:
+                first["recommended_route"] = "candidate_recovery_or_relax"
+            else:
+                first["recommended_route"] = "hold_no_edge"
+        merged.append(first)
+    merged.sort(key=lambda item: (-_safe_int(item.get("joined_sample")), str(item.get("bucket_key") or "")))
+    return merged
+
+
+def _aggregate_existing_daily_lifecycle_reports(
+    target_date: str,
+    source_dates: list[str],
+    *,
+    window_policy: str,
+    output_suffix: str | None,
+) -> dict[str, Any] | None:
+    reports = []
+    for source_date in source_dates:
+        path = MATRIX_DIR / f"lifecycle_decision_matrix_{source_date}.json"
+        payload = _load_json(path)
+        if payload:
+            reports.append(payload)
+    if not reports:
+        return None
+    sections = (
+        "entry_bucket_attribution",
+        "submit_bucket_attribution",
+        "holding_bucket_attribution",
+        "exit_bucket_attribution",
+        "scale_in_bucket_attribution",
+        "overnight_bucket_attribution",
+        "lifecycle_flow_bucket_attribution",
+    )
+    merged_sections: dict[str, Any] = {}
+    for section in sections:
+        rows = [
+            bucket
+            for report in reports
+            for bucket in (((report.get(section) or {}).get("buckets") or []) if isinstance(report.get(section), dict) else [])
+            if isinstance(bucket, dict)
+        ]
+        buckets = _aggregate_bucket_rows(rows, lifecycle_flow=section == "lifecycle_flow_bucket_attribution")
+        merged_sections[section] = {
+            "metric_role": "primary_ev",
+            "decision_authority": f"aggregated_{section}_source_only",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "window_policy": window_policy,
+            "buckets": buckets,
+            "summary": {
+                "bucket_count": len(buckets),
+                "complete_flow_count": sum(_safe_int(item.get("complete_flow_count")) for item in buckets),
+                "incomplete_flow_count": sum(_safe_int(item.get("incomplete_flow_count")) for item in buckets),
+                "runtime_candidate_count": 0,
+                "workorder_count": 0,
+            },
+            "runtime_candidates": [],
+            "code_improvement_workorders": [],
+        }
+    lifecycle_flow = merged_sections["lifecycle_flow_bucket_attribution"]
+    lifecycle_summary = lifecycle_flow.get("summary") if isinstance(lifecycle_flow.get("summary"), dict) else {}
+    policy_entries = []
+    for stage in ("entry", "submit", "holding", "scale_in", "exit"):
+        stage_rows = [
+            entry
+            for report in reports
+            for entry in (report.get("policy_entries") or [])
+            if isinstance(entry, dict) and str(entry.get("stage") or "") == stage
+        ]
+        policy_entries.append(
+            {
+                "stage": stage,
+                "sample": sum(_safe_int(item.get("sample")) for item in stage_rows),
+                "joined_sample": sum(_safe_int(item.get("joined_sample")) for item in stage_rows),
+                "stage_ev_composite_pct": _weighted_field_average(stage_rows, "stage_ev_composite_pct"),
+                "confidence": _weighted_field_average(stage_rows, "confidence"),
+                "selected_action": stage_rows[-1].get("selected_action") if stage_rows else "NO_CHANGE",
+                "source_quality_gate": "pass" if stage_rows else "hold_sample",
+                "promote_ready": False,
+            }
+        )
+    summary = {
+        "total_rows": sum(_safe_int((report.get("summary") or {}).get("total_rows")) for report in reports),
+        "source_rows_total": sum(_safe_int((report.get("summary") or {}).get("source_rows_total")) for report in reports),
+        "retained_rows": sum(_safe_int((report.get("summary") or {}).get("retained_rows")) for report in reports),
+        "dropped_rows_by_source": {},
+        "joined_rows": sum(_safe_int((report.get("summary") or {}).get("joined_rows")) for report in reports),
+        "source_date_start": source_dates[0],
+        "source_date_end": source_dates[-1],
+        "source_date_count": len(source_dates),
+        "source_dates": source_dates,
+        "window_policy": window_policy,
+        "aggregation_source": "existing_daily_lifecycle_decision_matrix",
+        "daily_report_count": len(reports),
+        "policy_pass_count": sum(1 for entry in policy_entries if entry.get("source_quality_gate") == "pass"),
+        "promote_ready_count": 0,
+        "lifecycle_flow_bucket_count": lifecycle_summary.get("bucket_count", 0),
+        "lifecycle_flow_complete_count": lifecycle_summary.get("complete_flow_count", 0),
+        "complete_flow_count": lifecycle_summary.get("complete_flow_count", 0),
+        "incomplete_flow_count": lifecycle_summary.get("incomplete_flow_count", 0),
+        "lifecycle_flow_runtime_candidate_count": 0,
+        "lifecycle_flow_workorder_count": 0,
+        "identity_missing_count": 0,
+        "identity_join_rate": 1.0,
+        "complete_flow_rate": 0.0,
+        "join_contract_blocked": False,
+        "bundle_ev_tuning_state": "ready_for_bundle_ev_tuning",
+        "top_incomplete_reason": None,
+        "incomplete_flow_reason_counts": {},
+        "status": "pass",
+        "warnings": [],
+    }
+    flow_total = _safe_int(summary.get("complete_flow_count")) + _safe_int(summary.get("incomplete_flow_count"))
+    summary["complete_flow_rate"] = round(_safe_int(summary.get("complete_flow_count")) / flow_total, 4) if flow_total else 0.0
+    report = {
+        "schema_version": REPORT_SCHEMA_VERSION,
+        "date": target_date,
+        "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "report_type": "lifecycle_decision_matrix",
+        "matrix_version": f"{MATRIX_VERSION_PREFIX}_{target_date}{'_' + _safe_slug(output_suffix) if output_suffix else ''}",
+        "runtime_effect": False,
+        "decision_authority": "weighted_adm_source_bundle_for_auto_bounded_apply",
+        "metric_role": "primary_ev",
+        "window_policy": window_policy,
+        "sample_floor": SAMPLE_FLOOR,
+        "joined_sample_floor": JOINED_SAMPLE_FLOOR,
+        "primary_decision_metric": "stage_ev_composite_pct",
+        "source_quality_gate": "stage sample, joined outcome, fixed threshold contract, no future-label runtime inputs",
+        "forbidden_uses": [
+            "hard_safety_override",
+            "real_execution_quality_from_sim_only",
+            "intraday_threshold_mutation",
+            "runtime_feature_future_label_leakage",
+        ],
+        "fixed_threshold_contract": fixed_threshold_contract(),
+        "runtime_feature_keys": sorted(RUNTIME_FEATURE_KEYS),
+        "label_keys": sorted(LABEL_KEYS),
+        "summary": summary,
+        "policy_entries": policy_entries,
+        "bucket_directed_sim_probe": {},
+        "examples": [],
+        "sources": {
+            "daily_lifecycle_decision_matrix_reports": [
+                str(MATRIX_DIR / f"lifecycle_decision_matrix_{source_date}.json") for source_date in source_dates
+            ],
+        },
+        "warnings": [],
+        **merged_sections,
+    }
+    MATRIX_DIR.mkdir(parents=True, exist_ok=True)
+    json_path, md_path = report_paths(target_date, output_suffix=output_suffix)
+    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    md_path.write_text(render_lifecycle_decision_matrix_markdown(report), encoding="utf-8")
+    return report
+
+
+def build_lifecycle_decision_matrix_report(
+    target_date: str,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    window_policy: str | None = None,
+    output_suffix: str | None = None,
+) -> dict[str, Any]:
     target_date = str(target_date).strip()
+    source_start_date = str(start_date or target_date).strip()
+    source_end_date = str(end_date or target_date).strip()
+    source_dates = _date_range(source_start_date, source_end_date)
+    resolved_window_policy = str(window_policy or "same_day_source_bundle_plus_rolling_threshold_cycle_consumer")
+    if len(source_dates) > 1:
+        aggregated = _aggregate_existing_daily_lifecycle_reports(
+            target_date,
+            source_dates,
+            window_policy=resolved_window_policy,
+            output_suffix=output_suffix,
+        )
+        if aggregated is not None:
+            return aggregated
     source_loaders = [
         _load_entry_rows,
         _load_sim_post_sell_rows,
@@ -3856,13 +4157,27 @@ def build_lifecycle_decision_matrix_report(target_date: str) -> dict[str, Any]:
     ]
     rows: list[dict[str, Any]] = []
     sources: dict[str, Any] = {}
-    for loader in source_loaders:
-        loaded_rows, summary = loader(target_date)
+    per_date_sources: dict[str, Any] = {}
+    for source_date in source_dates:
+        loaded_rows, date_sources = _load_lifecycle_source_rows_for_date(source_date, source_loaders)
         rows.extend(loaded_rows)
-        sources[loader.__name__.removeprefix("_load_").removesuffix("_rows")] = summary
+        per_date_sources[source_date] = date_sources
+        if len(source_dates) == 1:
+            sources = date_sources
+            continue
+        for source_name, summary in date_sources.items():
+            aggregate = sources.setdefault(source_name, {"rows": 0, "source_dates": [], "artifacts": []})
+            if isinstance(summary, dict):
+                aggregate["rows"] += _safe_int(summary.get("rows"))
+                aggregate["source_dates"].append(source_date)
+                artifact = summary.get("artifact")
+                if artifact:
+                    aggregate["artifacts"].append(artifact)
     source_rows_total = len(rows)
+    rows, dedupe_summary = _dedupe_lifecycle_rows(rows)
     retained_rows = len(rows)
-    dropped_rows_by_source: dict[str, int] = {}
+    dedupe_dropped = _safe_int(dedupe_summary.get("dedupe_dropped_rows"))
+    dropped_rows_by_source: dict[str, int] = {"dedupe": dedupe_dropped} if dedupe_dropped else {}
     institutional_feature_map, institutional_summary = _load_institutional_flow_feature_map(target_date)
     institutional_joined_rows = _apply_institutional_flow_features(rows, institutional_feature_map)
     sources["institutional_flow_context"] = {
@@ -3891,11 +4206,11 @@ def build_lifecycle_decision_matrix_report(target_date: str) -> dict[str, Any]:
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "report_type": "lifecycle_decision_matrix",
-        "matrix_version": f"{MATRIX_VERSION_PREFIX}_{target_date}",
+        "matrix_version": f"{MATRIX_VERSION_PREFIX}_{target_date}{'_' + _safe_slug(output_suffix) if output_suffix else ''}",
         "runtime_effect": False,
         "decision_authority": "weighted_adm_source_bundle_for_auto_bounded_apply",
         "metric_role": "primary_ev",
-        "window_policy": "same_day_source_bundle_plus_rolling_threshold_cycle_consumer",
+        "window_policy": resolved_window_policy,
         "sample_floor": SAMPLE_FLOOR,
         "joined_sample_floor": JOINED_SAMPLE_FLOOR,
         "primary_decision_metric": "stage_ev_composite_pct",
@@ -3911,6 +4226,12 @@ def build_lifecycle_decision_matrix_report(target_date: str) -> dict[str, Any]:
         "label_keys": sorted(LABEL_KEYS),
         "summary": {
             "total_rows": len(rows),
+            "source_date_start": source_dates[0] if source_dates else target_date,
+            "source_date_end": source_dates[-1] if source_dates else target_date,
+            "source_date_count": len(source_dates),
+            "source_dates": source_dates,
+            "window_policy": resolved_window_policy,
+            **dedupe_summary,
             "source_rows_total": source_rows_total,
             "retained_rows": retained_rows,
             "dropped_rows_by_source": dropped_rows_by_source,
@@ -4068,11 +4389,15 @@ def build_lifecycle_decision_matrix_report(target_date: str) -> dict[str, Any]:
         "scale_in_bucket_attribution": scale_in_bucket_attribution,
         "overnight_bucket_attribution": overnight_bucket_attribution,
         "examples": rows[:50],
-        "sources": {**sources, "lifecycle_ai_context_attribution": attribution_summary},
+        "sources": {
+            **sources,
+            "per_date_sources": per_date_sources,
+            "lifecycle_ai_context_attribution": attribution_summary,
+        },
         "warnings": warnings,
     }
     MATRIX_DIR.mkdir(parents=True, exist_ok=True)
-    json_path, md_path = report_paths(target_date)
+    json_path, md_path = report_paths(target_date, output_suffix=output_suffix)
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     md_path.write_text(render_lifecycle_decision_matrix_markdown(report), encoding="utf-8")
     return report
@@ -4403,8 +4728,20 @@ def render_lifecycle_decision_matrix_markdown(report: dict[str, Any]) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build lifecycle decision matrix report.")
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
+    parser.add_argument("--target-date", dest="target_date_alias")
+    parser.add_argument("--start-date")
+    parser.add_argument("--end-date")
+    parser.add_argument("--window-policy")
+    parser.add_argument("--output-suffix")
     args = parser.parse_args(argv)
-    build_lifecycle_decision_matrix_report(args.target_date)
+    target_date = args.target_date_alias or args.target_date
+    build_lifecycle_decision_matrix_report(
+        target_date,
+        start_date=args.start_date,
+        end_date=args.end_date,
+        window_policy=args.window_policy,
+        output_suffix=args.output_suffix,
+    )
     return 0
 
 

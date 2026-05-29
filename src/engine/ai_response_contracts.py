@@ -574,6 +574,31 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
                     ],
                 },
             },
+            "parent_granularity_reviews": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "decision": {
+                            "type": "string",
+                            "enum": [
+                                "accept_selected_level",
+                                "prefer_level",
+                                "taxonomy_gap",
+                                "source_quality_blocker",
+                                "code_patch_required",
+                            ],
+                        },
+                        "preferred_level": {
+                            "type": "string",
+                            "enum": ["", "L1_broad", "L2_default", "L3_detailed"],
+                        },
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["decision", "preferred_level", "reason"],
+                },
+            },
         },
         "required": [
             "schema_version",
@@ -582,6 +607,7 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
             "ai_tier2_proposals",
             "comparative_reviews",
             "final_conclusions",
+            "parent_granularity_reviews",
         ],
     },
     "swing_lifecycle_bucket_discovery_review_v1": {

@@ -11,23 +11,21 @@
 - model: `gpt-5.4-mini`
 - fallback_used: `False`
 - audit_status: `pass`
-- final_conclusion_count: `4`
+- final_conclusion_count: `2`
 - workorder_count: `2`
 
 ## Two-Pass Review
 
-- interpretation_count: `4`
+- interpretation_count: `2`
 - audit_issues: `[]`
 - forbidden_use_violations: `[]`
 
 ## Final Conclusions
 
-- `order_pattern_lab_ai_review_scalping_ldm_threshold_reentry_sources` domain=`scalping` state=`source_only_keep_collecting` decision=`keep` reason=`No explicit gap is present in the scalping source feedback path; collection remains the correct source-only action.`
-- `order_pattern_lab_ai_review_swing_ldm_threshold_reentry_sources` domain=`swing` state=`source_quality_gap` decision=`surface_workorder` reason=`Swing has an explicit micro-context source-quality blocker tied to entry OFI/QI execution quality.`
-- `order_pattern_lab_currentness_audit_scalping_ldm_threshold_reentry_sources` domain=`scalping` state=`source_only_keep_collecting` decision=`keep` reason=`Currentness is passing and feedback ingestion is intact; no handoff gap is exposed.`
-- `order_pattern_lab_currentness_audit_swing_ldm_threshold_reentry_sources` domain=`swing` state=`source_quality_gap` decision=`surface_workorder` reason=`The swing bundle has a confirmed source-quality blocker even though currentness is passing.`
+- `order_pattern_lab_ai_review_ai_review_followup_2026_05_29` domain=`cross_domain` state=`automation_handoff_gap` decision=`surface_workorder` reason=`AI review follow-up is explicitly pending in threshold_cycle_ev warnings.`
+- `order_pattern_lab_ai_review_order_latency_guard_miss_ev_recovery` domain=`scalping` state=`automation_handoff_gap` decision=`surface_workorder` reason=`Latency-guard recovery is an explicit instrumentation-order gap from scalping consensus findings.`
 
 ## Code Improvement Orders
 
-- `order_pattern_lab_ai_review_order_pattern_lab_ai_review_swing_ldm_threshold_reentry_sources`: Pattern Lab AI review follow-up: order_pattern_lab_ai_review_swing_ldm_threshold_reentry_sources
-- `order_pattern_lab_ai_review_order_pattern_lab_currentness_audit_swing_ldm_threshold_reentry_sources`: Pattern Lab AI review follow-up: order_pattern_lab_currentness_audit_swing_ldm_threshold_reentry_sources
+- `order_pattern_lab_ai_review_order_pattern_lab_ai_review_ai_review_followup_2026_05_29`: Pattern Lab AI review follow-up: order_pattern_lab_ai_review_ai_review_followup_2026_05_29
+- `order_pattern_lab_ai_review_order_pattern_lab_ai_review_order_latency_guard_miss_ev_recovery`: Pattern Lab AI review follow-up: order_pattern_lab_ai_review_order_latency_guard_miss_ev_recovery

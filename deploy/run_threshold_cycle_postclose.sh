@@ -74,6 +74,9 @@ RUN_INSTITUTIONAL_FLOW_CONTEXT="${THRESHOLD_CYCLE_RUN_INSTITUTIONAL_FLOW_CONTEXT
 RUN_LIFECYCLE_DECISION_MATRIX="${THRESHOLD_CYCLE_RUN_LIFECYCLE_DECISION_MATRIX:-true}"
 RUN_LIFECYCLE_AI_CONTEXT="${THRESHOLD_CYCLE_RUN_LIFECYCLE_AI_CONTEXT:-true}"
 RUN_LIFECYCLE_BUCKET_DISCOVERY="${THRESHOLD_CYCLE_RUN_LIFECYCLE_BUCKET_DISCOVERY:-$RUN_LIFECYCLE_DECISION_MATRIX}"
+RUN_LIFECYCLE_BUCKET_WINDOWS="${THRESHOLD_CYCLE_RUN_LIFECYCLE_BUCKET_WINDOWS:-true}"
+LIFECYCLE_BUCKET_WINDOWS="${THRESHOLD_CYCLE_LIFECYCLE_BUCKET_WINDOWS:-rolling5d,rolling10d,mtd}"
+LIFECYCLE_BUCKET_PROMOTION_WINDOW="${THRESHOLD_CYCLE_LIFECYCLE_BUCKET_PROMOTION_WINDOW:-mtd}"
 RUN_RUNTIME_APPLY_BRIDGE="${THRESHOLD_CYCLE_RUN_RUNTIME_APPLY_BRIDGE:-$RUN_LIFECYCLE_BUCKET_DISCOVERY}"
 RUN_SCALP_SIM_AUTO_APPROVAL_CONTROL_TOWER="${THRESHOLD_CYCLE_RUN_SCALP_SIM_AUTO_APPROVAL_CONTROL_TOWER:-$RUN_LIFECYCLE_BUCKET_DISCOVERY}"
 RUN_LATENCY_CLASSIFIER_RECOMMENDATION="${THRESHOLD_CYCLE_RUN_LATENCY_CLASSIFIER_RECOMMENDATION:-true}"
@@ -713,6 +716,62 @@ if [ "$RUN_LIFECYCLE_BUCKET_DISCOVERY" = "true" ] || [ "$RUN_LIFECYCLE_BUCKET_DI
     "$PROJECT_DIR/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_${TARGET_DATE}.json" \
     "$PROJECT_DIR/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_${TARGET_DATE}.md" \
     "lifecycle_bucket_discovery"
+  if [ "$RUN_LIFECYCLE_BUCKET_WINDOWS" = "true" ] || [ "$RUN_LIFECYCLE_BUCKET_WINDOWS" = "1" ]; then
+    IFS=',' read -r -a lifecycle_bucket_window_items <<< "$LIFECYCLE_BUCKET_WINDOWS"
+    for lifecycle_bucket_window in "${lifecycle_bucket_window_items[@]}"; do
+      lifecycle_bucket_window="$(printf '%s' "$lifecycle_bucket_window" | tr -d '[:space:]')"
+      [ -n "$lifecycle_bucket_window" ] || continue
+      lifecycle_bucket_start_date="$("$VENV_PY" - "$TARGET_DATE" "$lifecycle_bucket_window" <<'PY'
+import sys
+from datetime import date, timedelta
+
+target = date.fromisoformat(sys.argv[1])
+window = sys.argv[2]
+if window == "rolling5d":
+    start = target - timedelta(days=4)
+elif window == "rolling10d":
+    start = target - timedelta(days=9)
+elif window == "mtd":
+    start = target.replace(day=1)
+else:
+    raise SystemExit(f"unsupported_lifecycle_bucket_window:{window}")
+print(start.isoformat())
+PY
+)"
+      wait_for_postclose_resources "lifecycle_decision_matrix_${lifecycle_bucket_window}"
+      if ! run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.lifecycle_decision_matrix \
+        --target-date "$TARGET_DATE" \
+        --start-date "$lifecycle_bucket_start_date" \
+        --end-date "$TARGET_DATE" \
+        --window-policy "$lifecycle_bucket_window" \
+        --output-suffix "$lifecycle_bucket_window"; then
+        echo "[threshold-cycle] lifecycle_decision_matrix_${lifecycle_bucket_window} failed; verifier will fail-closed if required" >&2
+        continue
+      fi
+      if ! wait_for_report_artifact \
+        "$PROJECT_DIR/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_${TARGET_DATE}_${lifecycle_bucket_window}.json" \
+        "$PROJECT_DIR/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_${TARGET_DATE}_${lifecycle_bucket_window}.md" \
+        "lifecycle_decision_matrix_${lifecycle_bucket_window}"; then
+        echo "[threshold-cycle] lifecycle_decision_matrix_${lifecycle_bucket_window} artifact missing; verifier will fail-closed if required" >&2
+        continue
+      fi
+      wait_for_postclose_resources "lifecycle_bucket_discovery_${lifecycle_bucket_window}"
+      if ! run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.lifecycle_bucket_discovery \
+        --target-date "$TARGET_DATE" \
+        --source-suffix "$lifecycle_bucket_window" \
+        --output-suffix "$lifecycle_bucket_window"; then
+        echo "[threshold-cycle] lifecycle_bucket_discovery_${lifecycle_bucket_window} failed; verifier will fail-closed if required" >&2
+        continue
+      fi
+      if ! wait_for_report_artifact \
+        "$PROJECT_DIR/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_${TARGET_DATE}_${lifecycle_bucket_window}.json" \
+        "$PROJECT_DIR/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_${TARGET_DATE}_${lifecycle_bucket_window}.md" \
+        "lifecycle_bucket_discovery_${lifecycle_bucket_window}"; then
+        echo "[threshold-cycle] lifecycle_bucket_discovery_${lifecycle_bucket_window} artifact missing; verifier will fail-closed if required" >&2
+        continue
+      fi
+    done
+  fi
 fi
 if [ "$RUN_RUNTIME_APPLY_BRIDGE" = "true" ] || [ "$RUN_RUNTIME_APPLY_BRIDGE" = "1" ]; then
   wait_for_postclose_resources "runtime_apply_bridge"
@@ -1112,7 +1171,7 @@ wait_for_report_artifact \
 PYTHONPATH=. "$VENV_PY" -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500 >/dev/null
 finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
 write_postclose_status succeeded completed 0 1
-emit_postclose_marker "[DONE] threshold-cycle postclose target_date=$TARGET_DATE ai_correction_provider=$AI_CORRECTION_PROVIDER panic_sell_defense=$RUN_PANIC_SELL_DEFENSE_REPORT panic_buying=$RUN_PANIC_BUYING_REPORT market_panic_breadth=$RUN_MARKET_PANIC_BREADTH_REPORT openai_ws_stability=$RUN_OPENAI_WS_STABILITY_REPORT pipeline_event_verbosity=$RUN_PIPELINE_EVENT_VERBOSITY_REPORT observation_source_quality_audit=$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT codebase_performance_workorder=$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT pattern_lab_currentness_audit=$RUN_PATTERN_LAB_CURRENTNESS_AUDIT pattern_lab_ai_review=$RUN_PATTERN_LAB_AI_REVIEW time_window_regime_counterfactual=$RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL producer_gap_discovery=$RUN_PRODUCER_GAP_DISCOVERY stage_hook_workorder_discovery=$RUN_STAGE_HOOK_WORKORDER_DISCOVERY stage_hook_runtime_scaffold=$RUN_STAGE_HOOK_RUNTIME_SCAFFOLD pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT scalp_sim_overnight=$RUN_SCALP_SIM_OVERNIGHT_REPORT scalp_entry_adm=$RUN_SCALP_ENTRY_ADM institutional_flow_context=$RUN_INSTITUTIONAL_FLOW_CONTEXT lifecycle_decision_matrix=$RUN_LIFECYCLE_DECISION_MATRIX lifecycle_ai_context=$RUN_LIFECYCLE_AI_CONTEXT lifecycle_bucket_discovery=$RUN_LIFECYCLE_BUCKET_DISCOVERY runtime_apply_bridge=$RUN_RUNTIME_APPLY_BRIDGE scalp_sim_auto_approval_control_tower=$RUN_SCALP_SIM_AUTO_APPROVAL_CONTROL_TOWER latency_classifier_recommendation=$RUN_LATENCY_CLASSIFIER_RECOMMENDATION tuning_performance_control_tower=$RUN_TUNING_PERFORMANCE_CONTROL_TOWER swing_lifecycle=$RUN_SWING_LIFECYCLE_AUDIT swing_strategy_discovery=$RUN_SWING_STRATEGY_DISCOVERY swing_lifecycle_matrix=$RUN_SWING_LIFECYCLE_MATRIX swing_lifecycle_bucket_discovery=$RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY swing_ai_review_provider=$SWING_THRESHOLD_AI_REVIEW_PROVIDER swing_lifecycle_bucket_discovery_ai_provider=$SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PROVIDER pattern_lab_ai_review_provider=$PATTERN_LAB_AI_REVIEW_PROVIDER producer_gap_discovery_ai_provider=$PRODUCER_GAP_DISCOVERY_AI_PROVIDER stage_hook_workorder_discovery_ai_provider=$STAGE_HOOK_WORKORDER_DISCOVERY_AI_PROVIDER pattern_labs=$RUN_PATTERN_LABS deepseek_swing_lab=$RUN_DEEPSEEK_SWING_LAB code_improvement_workorder=$BUILD_CODE_IMPROVEMENT_WORKORDER daily_ev=true runtime_approval_summary=true runtime_apply_gap_audit=true next_stage2_checklist=true finished_at=$finished_at"
+emit_postclose_marker "[DONE] threshold-cycle postclose target_date=$TARGET_DATE ai_correction_provider=$AI_CORRECTION_PROVIDER panic_sell_defense=$RUN_PANIC_SELL_DEFENSE_REPORT panic_buying=$RUN_PANIC_BUYING_REPORT market_panic_breadth=$RUN_MARKET_PANIC_BREADTH_REPORT openai_ws_stability=$RUN_OPENAI_WS_STABILITY_REPORT pipeline_event_verbosity=$RUN_PIPELINE_EVENT_VERBOSITY_REPORT observation_source_quality_audit=$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT codebase_performance_workorder=$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT pattern_lab_currentness_audit=$RUN_PATTERN_LAB_CURRENTNESS_AUDIT pattern_lab_ai_review=$RUN_PATTERN_LAB_AI_REVIEW time_window_regime_counterfactual=$RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL producer_gap_discovery=$RUN_PRODUCER_GAP_DISCOVERY stage_hook_workorder_discovery=$RUN_STAGE_HOOK_WORKORDER_DISCOVERY stage_hook_runtime_scaffold=$RUN_STAGE_HOOK_RUNTIME_SCAFFOLD pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT scalp_sim_overnight=$RUN_SCALP_SIM_OVERNIGHT_REPORT scalp_entry_adm=$RUN_SCALP_ENTRY_ADM institutional_flow_context=$RUN_INSTITUTIONAL_FLOW_CONTEXT lifecycle_decision_matrix=$RUN_LIFECYCLE_DECISION_MATRIX lifecycle_ai_context=$RUN_LIFECYCLE_AI_CONTEXT lifecycle_bucket_discovery=$RUN_LIFECYCLE_BUCKET_DISCOVERY lifecycle_bucket_windows=$RUN_LIFECYCLE_BUCKET_WINDOWS lifecycle_bucket_window_list=$LIFECYCLE_BUCKET_WINDOWS lifecycle_bucket_promotion_window=$LIFECYCLE_BUCKET_PROMOTION_WINDOW runtime_apply_bridge=$RUN_RUNTIME_APPLY_BRIDGE scalp_sim_auto_approval_control_tower=$RUN_SCALP_SIM_AUTO_APPROVAL_CONTROL_TOWER latency_classifier_recommendation=$RUN_LATENCY_CLASSIFIER_RECOMMENDATION tuning_performance_control_tower=$RUN_TUNING_PERFORMANCE_CONTROL_TOWER swing_lifecycle=$RUN_SWING_LIFECYCLE_AUDIT swing_strategy_discovery=$RUN_SWING_STRATEGY_DISCOVERY swing_lifecycle_matrix=$RUN_SWING_LIFECYCLE_MATRIX swing_lifecycle_bucket_discovery=$RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY swing_ai_review_provider=$SWING_THRESHOLD_AI_REVIEW_PROVIDER swing_lifecycle_bucket_discovery_ai_provider=$SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PROVIDER pattern_lab_ai_review_provider=$PATTERN_LAB_AI_REVIEW_PROVIDER producer_gap_discovery_ai_provider=$PRODUCER_GAP_DISCOVERY_AI_PROVIDER stage_hook_workorder_discovery_ai_provider=$STAGE_HOOK_WORKORDER_DISCOVERY_AI_PROVIDER pattern_labs=$RUN_PATTERN_LABS deepseek_swing_lab=$RUN_DEEPSEEK_SWING_LAB code_improvement_workorder=$BUILD_CODE_IMPROVEMENT_WORKORDER daily_ev=true runtime_approval_summary=true runtime_apply_gap_audit=true next_stage2_checklist=true finished_at=$finished_at"
 wait_for_postclose_resources "verify_threshold_cycle_postclose_chain_final"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain --date "$TARGET_DATE"
 wait_for_report_artifact \

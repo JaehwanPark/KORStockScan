@@ -453,19 +453,6 @@ def _build_tasks(
                 if runtime_gap_directives
                 else []
             ),
-            GeneratedTask(
-                task_id=f"ShadowCanaryCohortReview{mmdd}",
-                title="shadow/canary/cohort 런타임 분류 및 정리 판정",
-                slot="POSTCLOSE",
-                time_window="18:40~18:55",
-                track="Plan",
-                source="[workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)",
-                lines=(
-                    "판정 기준: 당일 변경/관찰 결과를 기준으로 `remove`, `observe-only`, `baseline-promote`, `active-canary` 상태 변동 여부를 닫는다.",
-                    "금지: shadow 금지, canary-only, baseline 승격 원칙을 코드/문서 상태와 분리하지 않는다.",
-                    "다음 액션: 변경이 있으면 기준문서와 checklist를 함께 갱신하고 cohort 잠금 필드를 남긴다.",
-                ),
-            ),
         ]
     )
     return tasks

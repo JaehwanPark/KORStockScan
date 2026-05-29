@@ -2,6 +2,7 @@ import json
 from types import SimpleNamespace
 
 from src.engine import lifecycle_bucket_discovery as mod
+from src.engine.lifecycle.bucket_taxonomy import normalize_lifecycle_bucket
 
 
 def _ai_keep_response():
@@ -344,10 +345,7 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     entry_only_sources = [
         item for item in report["candidates"] if item.get("source_bucket_kind") == "entry_only_source_candidate"
     ]
-    assert {item["live_auto_apply_family"] for item in live} == {
-        mod.GREENFIELD_REAL_ENV_FAMILY,
-        mod.SCALE_IN_LIVE_AUTO_FAMILY,
-    }
+    assert {item["live_auto_apply_family"] for item in live} == {mod.SCALE_IN_LIVE_AUTO_FAMILY}
     wait6579 = states["entry:combo_entry_spot:score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liquidity_unknown"]
     assert wait6579["classification_state"] == "entry_only_sim_auto_approved"
     assert wait6579["evidence_grade"] == mod.EVIDENCE_GRADE_2_COUNTERFACTUAL
@@ -357,10 +355,23 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     assert wait6579["legacy_contract_known_unknown"] is False
     assert wait6579["source_dimension_gap"] == "unknown_source_dimensions"
     assert (wait6579["auto_promotion_contract"] or {})["deterministic_contract_required"] is False
-    flow_live = next(item for item in live if item["live_auto_apply_family"] == mod.GREENFIELD_REAL_ENV_FAMILY)
-    assert flow_live["stage"] == "lifecycle_flow"
-    assert flow_live["metric_scope"] == "lifecycle_bundle_ev"
-    assert flow_live["entry_bucket_id"] == "entry:combo_entry_spot:score_66_69"
+    flow_parent = next(
+        item
+        for item in states.values()
+        if item["stage"] == "lifecycle_flow" and item.get("entry_bucket_id") == "entry:combo_entry_spot:score_66_69"
+    )
+    assert flow_parent["classification_state"] == "source_only_keep_collecting"
+    assert flow_parent["live_auto_apply_family"] is None
+    assert flow_parent["metric_scope"] == "lifecycle_bundle_ev"
+    assert flow_parent["policy_bucket_id"].startswith(
+        "lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_mid_recovery"
+    )
+    assert flow_parent["parent_granularity_status"] == "too_broad"
+    assert flow_parent["parent_granularity_floor_passed"] is False
+    assert flow_parent["parent_live_floor_passed"] is False
+    assert flow_parent["parent_joined_sample"] == 22
+    assert flow_parent["absorbed_child_count"] == 1
+    assert flow_parent["absorbed_child_bucket_ids"] == [flow_parent["bucket_id"]]
     flow_probe = next(
         item
         for item in states.values()
@@ -397,6 +408,8 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     assert report["summary"]["deterministic_proposal_count"] == len(report["candidates"])
     assert report["summary"]["absorbed_bucket_count"] >= 1
     assert "canonical_bucket_count" in report["summary"]
+    assert report["summary"]["parent_live_auto_apply_ready_count"] == 0
+    assert report["summary"]["absorbed_sample_count"] >= 22
     assert sim
     assert entry_only_sources
     assert entry_only_sources[0]["bucket_relation"] == "new_bucket_candidate"
@@ -435,6 +448,347 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     assert flow_probe_row["incomplete_flow_count"] == 0
     assert auto["approved_evidence_grade_counts"].get(mod.EVIDENCE_GRADE_2_COUNTERFACTUAL, 0) == 1
     assert auto["source_quality_status"] == "pass"
+
+
+def test_lifecycle_flow_parent_absorbs_thin_children_for_live_policy(tmp_path, monkeypatch):
+    ldm_dir = tmp_path / "ldm"
+    report_dir = tmp_path / "report"
+    catalog_dir = tmp_path / "catalog"
+    sim_dir = tmp_path / "sim"
+    ldm_dir.mkdir()
+    monkeypatch.setattr(mod, "LDM_REPORT_DIR", ldm_dir)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CATALOG_DIR", catalog_dir)
+    monkeypatch.setattr(mod, "SIM_AUTO_APPROVAL_DIR", sim_dir)
+    def _flow_bucket(score, submit, holding, exit_bucket, *, sample, ev, route, sim_id):
+        return {
+            "lifecycle_flow_bucket_id": f"lifecycle_flow:combo_lifecycle_flow:{sim_id}",
+            "bucket_type": "combo_lifecycle_flow",
+            "bucket_key": (
+                f"entry=entry:combo_entry_spot:{score}|"
+                f"submit={submit}|"
+                f"holding={holding}|"
+                "scale_in=scale_in:none|"
+                f"exit={exit_bucket}"
+            ),
+            "sample": sample,
+            "joined_sample": sample,
+            "join_rate": 1.0,
+            "complete_flow_count": sample,
+            "incomplete_flow_count": 0,
+            "source_quality_gate": "pass",
+            "source_quality_adjusted_ev_pct": ev,
+            "recommended_route": route,
+            "metric_scope": "lifecycle_bundle_ev",
+            "entry_bucket_id": f"entry:combo_entry_spot:{score}",
+            "submit_bucket_id": submit,
+            "holding_bucket_id": holding,
+            "exit_bucket_id": exit_bucket,
+            "child_bucket_ids": {
+                "entry": f"entry:combo_entry_spot:{score}",
+                "submit": submit,
+                "holding": holding,
+                "scale_in": [],
+                "exit": exit_bucket,
+            },
+            "stage_contract": {
+                "entry": {"contract_state": "present"},
+                "submit": {"contract_state": "present"},
+                "holding": {"contract_state": "present"},
+                "exit": {"contract_state": "present"},
+            },
+            "attribution_key": f"sim_record_id:{sim_id}",
+        }
+
+    flow_buckets = []
+    parent_submit = "submit:combo_submit_quality:revalidation_ok"
+    parent_holding = "holding:combo_holding_flow:baseline_hold"
+    parent_exit = "exit:combo_exit_result:take_profit"
+    for score, ev, sim_id in (("score_66_69", 1.4, "SIM-A"), ("score_70_74", 1.2, "SIM-B")):
+        flow_buckets.append(
+            _flow_bucket(
+                score,
+                parent_submit,
+                parent_holding,
+                parent_exit,
+                sample=5,
+                ev=ev,
+                route="candidate_recovery_or_relax",
+                sim_id=sim_id,
+            )
+        )
+    score_variants = ["score_lt60", "score_60_62", "score_76_80", "score_90p"]
+    submit_variants = [
+        "submit:combo_submit_quality:missing",
+        "submit:combo_submit_quality:stale_context_or_quote",
+        "submit:combo_submit_quality:price_guard_would_block",
+        "submit:combo_submit_quality:observed_other",
+    ]
+    exit_variants = [
+        "exit:combo_exit_result:missed_upside",
+        "exit:combo_exit_result:soft_stop_loss",
+        "exit:combo_exit_result:neutral",
+        "exit:combo_exit_result:missing",
+        "exit:combo_exit_result:observed_other",
+    ]
+    sibling_index = 0
+    for score in score_variants:
+        for submit in submit_variants:
+            for exit_bucket in exit_variants:
+                if len(flow_buckets) >= 31:
+                    break
+                sibling_index += 1
+                flow_buckets.append(
+                    _flow_bucket(
+                        score,
+                        submit,
+                        f"holding:combo_holding_flow:baseline_hold_variant_{sibling_index}",
+                        exit_bucket,
+                        sample=1,
+                        ev=0.2,
+                        route="hold_sample",
+                        sim_id=f"SIM-SIB-{sibling_index}",
+                    )
+                )
+            if len(flow_buckets) >= 31:
+                break
+        if len(flow_buckets) >= 31:
+            break
+    (ldm_dir / "lifecycle_decision_matrix_2026-05-22.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-22",
+                "lifecycle_flow_bucket_attribution": {"buckets": flow_buckets},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.write_lifecycle_bucket_discovery_report(
+        "2026-05-22",
+        ai_raw_response=_ai_keep_response(),
+    )
+
+    flow_candidates = [
+        item
+        for item in report["candidates"]
+        if item["stage"] == "lifecycle_flow" and item["bucket_type"] == "combo_lifecycle_flow"
+    ]
+    live = [item for item in flow_candidates if item["classification_state"] == "live_auto_apply_ready"]
+    absorbed = [item for item in flow_candidates if item["classification_state"] == "source_only_keep_collecting"]
+    assert len(live) == 1
+    assert len(absorbed) >= 1
+    assert live[0]["policy_bucket_id"].startswith(
+        "lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_mid_recovery"
+    )
+    assert live[0]["parent_granularity_status"] == "target_pass"
+    assert live[0]["parent_granularity_floor_passed"] is True
+    assert live[0]["parent_joined_sample"] == 10
+    assert live[0]["parent_source_quality_adjusted_ev_pct"] == 1.3
+    assert live[0]["parent_live_floor_passed"] is True
+    assert live[0]["child_live_authority_allowed"] is False
+    assert live[0]["absorbed_child_count"] == 2
+    assert set(live[0]["absorbed_child_bucket_ids"]) == {
+        item["bucket_id"]
+        for item in flow_candidates
+        if item.get("policy_bucket_id") == live[0]["policy_bucket_id"]
+    }
+    assert live[0]["absorbed_dimensions"]["entry_detail"] == [
+        "entry:combo_entry_spot:score_66_69",
+        "entry:combo_entry_spot:score_70_74",
+    ]
+    assert absorbed[0]["recommended_resolution"] == "absorbed_into_parent_live_policy"
+    assert report["summary"]["parent_live_auto_apply_ready_count"] == 1
+    assert report["summary"]["parent_granularity_status"] == "target_pass"
+    assert 30 <= report["summary"]["parent_bucket_count"] <= 60
+    assert report["summary"]["absorbed_child_count"] == len(flow_buckets)
+    assert report["summary"]["absorbed_sample_count"] == sum(item["sample"] for item in flow_buckets)
+
+
+def test_score_family_without_separator_rolls_up_to_parent_group():
+    normalized = normalize_lifecycle_bucket(
+        stage="entry",
+        bucket_type="score_band",
+        bucket_key="score65_74_recovery_probe",
+        source_dimensions={},
+    )
+
+    assert normalized["canonical_bucket"] == "entry:score_band:score_mid_recovery"
+    assert normalized["normalized_dimensions"]["score_parent"] == "score_mid_recovery"
+    assert normalized["normalized_dimensions"]["bucket_detail"] == "score65_74_recovery_probe"
+    assert normalized["deterministic_proposal"]["proposal_decision"] == "absorb_as_dimension"
+
+
+def test_score_variants_roll_up_to_expected_parent_groups():
+    cases = {
+        "score_score_66_69": "score_mid_recovery",
+        "score65_74": "score_mid_recovery",
+        "score_70p": "score_mid_recovery",
+        "score_lt60": "score_low_observation",
+    }
+    for bucket_key, expected_parent in cases.items():
+        normalized = normalize_lifecycle_bucket(
+            stage="entry",
+            bucket_type="score_band",
+            bucket_key=bucket_key,
+            source_dimensions={},
+        )
+        assert normalized["canonical_bucket"] == f"entry:score_band:{expected_parent}"
+        assert normalized["normalized_dimensions"]["score_parent"] == expected_parent
+
+
+def test_lifecycle_flow_parent_rebuild_keeps_synthetic_102_children_in_target_range():
+    scores = ["score_lt60", "score_60_62", "score_66_69", "score_76_80"]
+    submits = [
+        "submit:combo_submit_quality:revalidation_ok",
+        "submit:combo_submit_quality:stale_context_or_quote",
+        "submit:combo_submit_quality:price_guard_would_block",
+    ]
+    exits = [
+        "exit:combo_exit_result:take_profit",
+        "exit:combo_exit_result:missed_upside",
+        "exit:combo_exit_result:soft_stop_loss",
+    ]
+    candidates = []
+    for index in range(102):
+        score = scores[index % len(scores)]
+        submit = submits[(index // len(scores)) % len(submits)]
+        exit_bucket = exits[(index // (len(scores) * len(submits))) % len(exits)]
+        holding = f"holding:combo_holding_flow:baseline_hold_variant_{index}"
+        candidates.append(
+            mod._candidate_from_bucket(
+                "lifecycle_flow",
+                {
+                    "bucket_type": "combo_lifecycle_flow",
+                    "bucket_key": (
+                        f"entry=entry:combo_entry_spot:{score}|"
+                        f"submit={submit}|"
+                        f"holding={holding}|"
+                        "scale_in=scale_in:none|"
+                        f"exit={exit_bucket}"
+                    ),
+                    "sample": 1,
+                    "joined_sample": 1,
+                    "complete_flow_count": 1,
+                    "incomplete_flow_count": 0,
+                    "source_quality_gate": "pass",
+                    "source_quality_adjusted_ev_pct": 0.2,
+                    "recommended_route": "hold_sample",
+                    "stage_contract": {
+                        "entry": {"contract_state": "present"},
+                        "submit": {"contract_state": "present"},
+                        "holding": {"contract_state": "present"},
+                        "exit": {"contract_state": "present"},
+                    },
+                },
+            )
+        )
+
+    report = mod._finalize_report({"summary": {}}, candidates, [])
+
+    assert report["summary"]["parent_granularity_status"] == "target_pass"
+    assert 30 <= report["summary"]["parent_bucket_count"] <= 60
+    assert report["summary"]["selected_parent_level"] == "L1_broad"
+    assert report["summary"]["absorbed_child_count"] == 102
+    assert report["summary"]["absorbed_sample_count"] == 102
+    assert len(report["parent_bucket_summaries"]) == report["summary"]["parent_bucket_count"]
+    first_parent = report["parent_bucket_summaries"][0]
+    assert first_parent["parent_bucket_id"] == first_parent["policy_bucket_id"]
+    assert first_parent["parent_ev"] == first_parent["parent_source_quality_adjusted_ev_pct"]
+
+
+def test_ai_parent_granularity_review_accepts_only_deterministic_levels():
+    valid = {
+        **_ai_keep_response(),
+        "parent_granularity_reviews": [
+            {"decision": "prefer_level", "preferred_level": "L2_default", "reason": "Better parent spread."}
+        ],
+    }
+    status, payload, warnings = mod._parse_ai_review_response(valid)
+    assert status == "parsed"
+    assert warnings == []
+    assert payload["parent_granularity_reviews"][0]["preferred_level"] == "L2_default"
+
+    invalid = {
+        **_ai_keep_response(),
+        "parent_granularity_reviews": [
+            {"decision": "prefer_level", "preferred_level": "custom_ai_parent", "reason": "Invented."}
+        ],
+    }
+    status, _, warnings = mod._parse_ai_review_response(invalid)
+    assert status == "parse_rejected"
+    assert "ai_review_invalid_parent_granularity_level" in warnings
+
+    items = [
+        mod._candidate_from_bucket(
+            "lifecycle_flow",
+            {
+                "bucket_type": "combo_lifecycle_flow",
+                "bucket_key": (
+                    "entry=entry:combo_entry_spot:score_66_69|"
+                    "submit=submit:combo_submit_quality:revalidation_ok|"
+                    "holding=holding:combo_holding_flow:baseline_hold|"
+                    "scale_in=scale_in:none|"
+                    "exit=exit:combo_exit_result:take_profit"
+                ),
+                "sample": 1,
+                "joined_sample": 1,
+            },
+        )
+    ]
+    selected, _, metadata = mod._select_parent_level(
+        items,
+        {
+            "ai_two_pass_review": {
+                "parent_granularity_reviews": [
+                    {"decision": "prefer_level", "preferred_level": "L3_detailed", "reason": "Too narrow."}
+                ]
+            }
+        },
+    )
+    assert selected == "L1_broad"
+    assert metadata["ai_parent_granularity_choice"]["accepted"] is False
+
+
+def test_lifecycle_flow_parent_summary_counts_absorption_without_live_policy():
+    candidates = []
+    for score, ev in (("score_66_69", 0.2), ("score_70_74", -2.0)):
+        candidates.append(
+            mod._candidate_from_bucket(
+                "lifecycle_flow",
+                {
+                    "bucket_type": "combo_lifecycle_flow",
+                    "bucket_key": (
+                        f"entry=entry:combo_entry_spot:{score}|"
+                        "submit=submit:combo_submit_quality:thin_ok|"
+                        "holding=holding:combo_holding_flow:baseline_hold|"
+                        "scale_in=scale_in:none|"
+                        "exit=exit:combo_exit_result:tp"
+                    ),
+                    "sample": 5,
+                    "joined_sample": 5,
+                    "complete_flow_count": 5,
+                    "incomplete_flow_count": 0,
+                    "source_quality_gate": "pass",
+                    "source_quality_adjusted_ev_pct": ev,
+                    "recommended_route": "candidate_recovery_or_relax",
+                    "stage_contract": {
+                        "entry": {"contract_state": "present"},
+                        "submit": {"contract_state": "present"},
+                        "holding": {"contract_state": "present"},
+                        "exit": {"contract_state": "present"},
+                    },
+                },
+            )
+        )
+
+    report = mod._finalize_report({"summary": {}}, candidates, [])
+
+    assert report["summary"]["parent_bucket_count"] == 1
+    assert report["summary"]["parent_live_auto_apply_ready_count"] == 0
+    assert report["summary"]["absorbed_child_count"] == 2
+    assert report["summary"]["absorbed_sample_count"] == 10
+    assert report["summary"]["child_conflict_warning_count"] == 1
 
 
 def test_lifecycle_bucket_discovery_ai_final_state_recomputes_runtime_metadata():
@@ -572,10 +926,10 @@ def test_lifecycle_bucket_discovery_quarantines_contaminated_live_candidates(tmp
     (quarantine_dir / "lifecycle_bucket_quarantine_2026-05-28.json").write_text(
         json.dumps(
             {
-                "quarantine_id": "greenfield_partial_lifecycle_2026-05-28",
-                "reason": "contaminated_greenfield_partial_lifecycle_policy",
+                "quarantine_id": "scale_in_policy_2026-05-28",
+                "reason": "contaminated_scale_in_policy",
                 "exclude_live_auto_apply": True,
-                "affected_families": [mod.GREENFIELD_REAL_ENV_FAMILY],
+                "affected_families": [mod.SCALE_IN_LIVE_AUTO_FAMILY],
             }
         ),
         encoding="utf-8",
@@ -587,15 +941,15 @@ def test_lifecycle_bucket_discovery_quarantines_contaminated_live_candidates(tmp
     )
 
     by_id = {item["bucket_id"]: item for item in report["candidates"]}
-    flow = next(item for item in by_id.values() if item.get("live_auto_apply_family") == mod.GREENFIELD_REAL_ENV_FAMILY)
-    assert flow["classification_state"] == "runtime_blocked_contract_gap"
-    assert flow["allowed_runtime_apply"] is False
-    assert flow["promotion_ev_excluded_reason"] == "contaminated_greenfield_partial_lifecycle_policy"
+    scale_in = next(item for item in by_id.values() if item.get("live_auto_apply_family") == mod.SCALE_IN_LIVE_AUTO_FAMILY)
+    assert scale_in["classification_state"] == "runtime_blocked_contract_gap"
+    assert scale_in["allowed_runtime_apply"] is False
+    assert scale_in["promotion_ev_excluded_reason"] == "contaminated_scale_in_policy"
     wait6579 = by_id[
         "entry:combo_entry_spot:score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liquidity_unknown"
     ]
     assert wait6579["classification_state"] == "entry_only_sim_auto_approved"
-    assert report["summary"]["live_auto_apply_ready_count"] == 1
+    assert report["summary"]["live_auto_apply_ready_count"] == 0
     assert "contamination_quarantine_live_auto_blocked:1" in report["warnings"]
 
 
@@ -615,7 +969,6 @@ def test_lifecycle_bucket_discovery_blocks_deterministic_live_when_ai_review_dis
 
     blocked = [item for item in report["surfaced_candidates"] if item["classification_state"] == "runtime_blocked_contract_gap"]
     assert {item["live_auto_apply_family"] for item in blocked if item.get("live_auto_apply_family")} == {
-        mod.GREENFIELD_REAL_ENV_FAMILY,
         mod.SCALE_IN_LIVE_AUTO_FAMILY,
     }
     assert all(item.get("ai_tier2_blocked_reason") == "ai_tier2_validation_not_parsed:disabled" for item in blocked)
@@ -646,7 +999,7 @@ def test_lifecycle_bucket_discovery_ignores_ambiguous_ai_block_for_live_candidat
     live = [item for item in report["surfaced_candidates"] if item["classification_state"] == "live_auto_apply_ready"]
     ignored = [item for item in live if item.get("ai_review_block_ignored_reason")]
     assert all((item.get("auto_promotion_contract") or {}).get("tier2_status") == "parsed" for item in live)
-    assert report["summary"]["live_auto_apply_ready_count"] == 2
+    assert report["summary"]["live_auto_apply_ready_count"] == 1
     assert len(ignored) == 1
     assert "ai_review_ambiguous_live_candidate_kept_for_post_apply" in report["warnings"]
 
@@ -767,7 +1120,7 @@ def test_lifecycle_bucket_discovery_applies_explicit_contract_ai_block_for_live_
         and item["classification_state"] == "runtime_blocked_contract_gap"
     ]
     assert blocked
-    assert report["summary"]["live_auto_apply_ready_count"] == 1
+    assert report["summary"]["live_auto_apply_ready_count"] == 0
 
 
 def test_lifecycle_bucket_discovery_surfaces_source_contract_drift(tmp_path, monkeypatch):

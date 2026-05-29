@@ -10,7 +10,7 @@
 - scalp_entry_adm_status: `pass`
 - lifecycle_matrix_status: `pass`
 - lifecycle_ai_context prompt/applied: `3` / `1636`
-- swing_strategy_discovery_labeled/pending: `59` / `3033`
+- swing_strategy_discovery_labeled/pending: `225` / `2729`
 - swing_lifecycle_matrix_auto: `0`
 - swing_lifecycle_bucket_auto: `0`
 - institutional_flow_available/join_rate: `True` / `100.0`
@@ -63,7 +63,7 @@
 - rows ok/partial/missing/token_error: `120` / `0` / `0` / `0`
 - join_rate_pct: `100.0`
 - source_mix: `{'ka10059+ka10061': 120}`
-- top_net_buy: `[{'stock_code': '018880', 'smart_money_net': 7284839, 'foreign_net_roll5': 11871883, 'inst_net_roll5': 0, 'regime': 'FOREIGN_ACCUMULATION'}, {'stock_code': '005930', 'smart_money_net': 4260411, 'foreign_net_roll5': 0, 'inst_net_roll5': 6773194, 'regime': 'INSTITUTION_ACCUMULATION'}, {'stock_code': '035420', 'smart_money_net': 1026952, 'foreign_net_roll5': 0, 'inst_net_roll5': 847064, 'regime': 'INSTITUTION_ACCUMULATION'}, {'stock_code': '064400', 'smart_money_net': 752457, 'foreign_net_roll5': 508497, 'inst_net_roll5': 702460, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '336370', 'smart_money_net': 579282, 'foreign_net_roll5': 0, 'inst_net_roll5': 934228, 'regime': 'INSTITUTION_ACCUMULATION'}, {'stock_code': '034220', 'smart_money_net': 492521, 'foreign_net_roll5': 3471423, 'inst_net_roll5': 43445, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '066570', 'smart_money_net': 379199, 'foreign_net_roll5': 0, 'inst_net_roll5': 944153, 'regime': 'INSTITUTION_ACCUMULATION'}, {'stock_code': '005380', 'smart_money_net': 367102, 'foreign_net_roll5': 0, 'inst_net_roll5': 493932, 'regime': 'INSTITUTION_ACCUMULATION'}, {'stock_code': '242040', 'smart_money_net': 283168, 'foreign_net_roll5': 1006759, 'inst_net_roll5': 0, 'regime': 'FOREIGN_ACCUMULATION'}, {'stock_code': '373220', 'smart_money_net': 245051, 'foreign_net_roll5': 95832, 'inst_net_roll5': 0, 'regime': 'FOREIGN_ACCUMULATION'}]`
+- top_net_buy: `[{'stock_code': '018880', 'smart_money_net': 7284839, 'foreign_net_roll5': 11871883, 'inst_net_roll5': 0, 'regime': 'FOREIGN_ACCUMULATION'}, {'stock_code': '005930', 'smart_money_net': 5248011, 'foreign_net_roll5': 0, 'inst_net_roll5': 7208336, 'regime': 'INSTITUTION_ACCUMULATION'}, {'stock_code': '035420', 'smart_money_net': 1395866, 'foreign_net_roll5': 254681, 'inst_net_roll5': 930294, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '064400', 'smart_money_net': 1047894, 'foreign_net_roll5': 813150, 'inst_net_roll5': 693244, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '066570', 'smart_money_net': 828984, 'foreign_net_roll5': 0, 'inst_net_roll5': 1013849, 'regime': 'INSTITUTION_ACCUMULATION'}, {'stock_code': '336370', 'smart_money_net': 814718, 'foreign_net_roll5': 1118, 'inst_net_roll5': 1052515, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '005380', 'smart_money_net': 583328, 'foreign_net_roll5': 0, 'inst_net_roll5': 528603, 'regime': 'INSTITUTION_ACCUMULATION'}, {'stock_code': '034220', 'smart_money_net': 503922, 'foreign_net_roll5': 3478058, 'inst_net_roll5': 48211, 'regime': 'DUAL_ACCUMULATION'}, {'stock_code': '242040', 'smart_money_net': 283282, 'foreign_net_roll5': 1006873, 'inst_net_roll5': 0, 'regime': 'FOREIGN_ACCUMULATION'}, {'stock_code': '373220', 'smart_money_net': 262370, 'foreign_net_roll5': 111013, 'inst_net_roll5': 0, 'regime': 'FOREIGN_ACCUMULATION'}]`
 - warnings: `[]`
 
 ## Lifecycle Decision Matrix
@@ -111,10 +111,10 @@
 ## Swing Strategy Discovery Sim
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_2026-05-29.json`
 - available: `True`
-- candidate/arm/labeled: `482` / `3604` / `59`
-- pending_future_quote_count: `3033`
+- candidate/arm/labeled: `486` / `3636` / `225`
+- pending_future_quote_count: `2729`
 - top_surviving_arm: `arm05_breakout_conf_trailing`
-- avoid_bucket_count: `6`
+- avoid_bucket_count: `15`
 - runtime_effect: `False`
 - interpretation: source-only exploration. Surviving arms can create future source-quality/workorder inputs but cannot apply runtime env.
 - warnings: `['pending_future_quotes']`
@@ -122,9 +122,9 @@
 ## Swing Lifecycle Matrix
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_lifecycle_decision_matrix/swing_lifecycle_decision_matrix_2026-05-29.json`
 - available: `True`
-- total/probe/discovery: `3685` / `81` / `3604`
+- total/probe/discovery: `3717` / `81` / `3636`
 - sim_auto_candidate_count: `0`
-- workorder_count: `7`
+- workorder_count: `18`
 - daily_simulation_consumed: `False`
 - runtime_effect: `False`
 - warnings: `[]`
@@ -133,7 +133,7 @@
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_lifecycle_bucket_discovery/swing_lifecycle_bucket_discovery_2026-05-29.json`
 - available: `True`
 - source_contract_status: `pass`
-- surfaced/sim_auto/code_patch: `520` / `0` / `0`
+- surfaced/sim_auto/code_patch: `532` / `0` / `0`
 - runtime_effect: `False`
 - warnings: `[]`
 

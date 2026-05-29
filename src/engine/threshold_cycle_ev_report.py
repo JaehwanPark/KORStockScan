@@ -1473,6 +1473,8 @@ def _lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[str, Any
                 "live_auto_apply_ready_count": 0,
                 "new_bucket_candidate_count": 0,
                 "human_intervention_required": False,
+                "window_role": "new_pattern_detection",
+                "window_policy": "daily_only",
             },
             None,
             ["lifecycle_bucket_discovery_missing"],
@@ -1484,6 +1486,8 @@ def _lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[str, Any
             "available": True,
             "artifact": str(json_path),
             "status": summary.get("status"),
+            "window_role": "new_pattern_detection",
+            "window_policy": payload.get("window_policy") or summary.get("source_window_policy") or "daily_only",
             "candidate_count": _safe_int(summary.get("candidate_count"), 0),
             "surfaced_candidate_count": _safe_int(summary.get("surfaced_candidate_count"), 0),
             "sim_auto_approved_count": _safe_int(summary.get("sim_auto_approved_count"), 0),
@@ -1496,6 +1500,14 @@ def _lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[str, Any
             "new_bucket_candidate_count": _safe_int(summary.get("new_bucket_candidate_count"), 0),
             "code_patch_required_count": _safe_int(summary.get("code_patch_required_count"), 0),
             "automation_handoff_gap_count": _safe_int(summary.get("automation_handoff_gap_count"), 0),
+            "parent_bucket_count": _safe_int(summary.get("parent_bucket_count"), 0),
+            "selected_parent_level": summary.get("selected_parent_level"),
+            "parent_granularity_status": summary.get("parent_granularity_status"),
+            "absorbed_child_count": _safe_int(summary.get("absorbed_child_count"), 0),
+            "absorbed_sample_count": _safe_int(summary.get("absorbed_sample_count"), 0),
+            "child_conflict_warning_count": _safe_int(summary.get("child_conflict_warning_count"), 0),
+            "source_contract_status": summary.get("source_contract_status"),
+            "ai_two_pass_review_status": summary.get("ai_two_pass_review_status"),
             "deterministic_proposal_count": _safe_int(summary.get("deterministic_proposal_count"), 0),
             "ai_tier2_proposal_count": _safe_int(summary.get("ai_tier2_proposal_count"), 0),
             "comparative_review_count": _safe_int(summary.get("comparative_review_count"), 0),
@@ -1525,6 +1537,50 @@ def _lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[str, Any
         str(json_path),
         warnings,
     )
+
+
+def _lifecycle_bucket_window_report_path(target_date: str, suffix: str) -> Path:
+    base = lifecycle_bucket_discovery_report_path(target_date)
+    safe_suffix = str(suffix or "").strip().replace("/", "_")
+    return base.parent / f"lifecycle_bucket_discovery_{target_date}_{safe_suffix}.json"
+
+
+def _lifecycle_bucket_windows_summary(target_date: str) -> tuple[dict[str, Any], list[str]]:
+    windows = ("rolling5d", "rolling10d", "mtd")
+    daily, _, daily_warnings = _lifecycle_bucket_discovery_summary(target_date)
+    warnings = list(daily_warnings)
+    result: dict[str, Any] = {
+        "daily": daily,
+        "windows": {},
+        "promotion_window": "mtd",
+        "confirmation_windows": ["rolling5d", "rolling10d"],
+        "warnings": [],
+    }
+    for suffix in windows:
+        path = _lifecycle_bucket_window_report_path(target_date, suffix)
+        payload = _load_json(path)
+        summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+        item = {
+            "available": bool(payload),
+            "artifact": str(path) if path.exists() else None,
+            "window_role": "promotion_confirmation" if suffix == "mtd" else "rolling_confirmation",
+            "window_policy": payload.get("window_policy") or summary.get("source_window_policy") or suffix,
+            "status": summary.get("status") or ("missing" if not payload else "unknown"),
+            "parent_bucket_count": _safe_int(summary.get("parent_bucket_count"), 0),
+            "selected_parent_level": summary.get("selected_parent_level"),
+            "parent_granularity_status": summary.get("parent_granularity_status"),
+            "absorbed_child_count": _safe_int(summary.get("absorbed_child_count"), 0),
+            "absorbed_sample_count": _safe_int(summary.get("absorbed_sample_count"), 0),
+            "child_conflict_warning_count": _safe_int(summary.get("child_conflict_warning_count"), 0),
+            "live_auto_apply_ready_count": _safe_int(summary.get("live_auto_apply_ready_count"), 0),
+            "source_contract_status": summary.get("source_contract_status"),
+            "ai_two_pass_review_status": summary.get("ai_two_pass_review_status"),
+        }
+        if not payload:
+            warnings.append(f"lifecycle_bucket_windows:{suffix}_missing")
+        result["windows"][suffix] = item
+    result["warnings"] = warnings
+    return result, warnings
 
 
 def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
@@ -1558,6 +1614,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
         lifecycle_bucket_discovery_path,
         lifecycle_bucket_discovery_warnings,
     ) = _lifecycle_bucket_discovery_summary(target_date)
+    lifecycle_bucket_windows_summary, lifecycle_bucket_windows_warnings = _lifecycle_bucket_windows_summary(target_date)
     lifecycle_ai_context_summary, lifecycle_ai_context_path, lifecycle_ai_context_warnings = _lifecycle_ai_context_summary(target_date)
     (
         lifecycle_ai_context_attribution_summary,
@@ -1744,6 +1801,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
         "buy_funnel_sentinel": buy_funnel_sentinel_summary,
         "lifecycle_decision_matrix": lifecycle_matrix_summary,
         "lifecycle_bucket_discovery": lifecycle_bucket_discovery_summary,
+        "lifecycle_bucket_windows": lifecycle_bucket_windows_summary,
         "lifecycle_ai_context": lifecycle_ai_context_summary,
         "lifecycle_ai_context_attribution": lifecycle_ai_context_attribution_summary,
         "swing_strategy_discovery": swing_discovery_summary,
@@ -1771,6 +1829,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "buy_funnel_sentinel": buy_funnel_sentinel_path,
             "lifecycle_decision_matrix": lifecycle_matrix_path,
             "lifecycle_bucket_discovery": lifecycle_bucket_discovery_path,
+            "lifecycle_bucket_windows": lifecycle_bucket_windows_summary,
             "lifecycle_ai_context": lifecycle_ai_context_path,
             "lifecycle_ai_context_attribution": lifecycle_ai_context_attribution_path,
             "swing_strategy_discovery": swing_discovery_path,
@@ -1803,6 +1862,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
                 *buy_funnel_sentinel_warnings,
                 *lifecycle_matrix_warnings,
                 *lifecycle_bucket_discovery_warnings,
+                *lifecycle_bucket_windows_warnings,
                 *lifecycle_ai_context_warnings,
                 *lifecycle_ai_context_attribution_warnings,
                 *swing_discovery_warnings,
@@ -1955,8 +2015,15 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- status: `{lifecycle_bucket_discovery.get('status')}` / human_intervention_required: `{lifecycle_bucket_discovery.get('human_intervention_required')}`",
         f"- candidates/surfaced: `{lifecycle_bucket_discovery.get('candidate_count')}` / `{lifecycle_bucket_discovery.get('surfaced_candidate_count')}`",
         f"- sim_auto/live_auto/new_bucket: `{lifecycle_bucket_discovery.get('sim_auto_approved_count')}` / `{lifecycle_bucket_discovery.get('live_auto_apply_ready_count')}` / `{lifecycle_bucket_discovery.get('new_bucket_candidate_count')}`",
+        f"- role/window: `{lifecycle_bucket_discovery.get('window_role')}` / `{lifecycle_bucket_discovery.get('window_policy')}`",
+        f"- parent_count/granularity/conflict: `{lifecycle_bucket_discovery.get('parent_bucket_count')}` / `{lifecycle_bucket_discovery.get('parent_granularity_status')}` / `{lifecycle_bucket_discovery.get('child_conflict_warning_count')}`",
         f"- state_counts: `{lifecycle_bucket_discovery.get('state_counts') or {}}`",
         f"- top_surfaced: `{lifecycle_bucket_discovery.get('top_surfaced') or []}`",
+        "",
+        "## Lifecycle Bucket Windows",
+        f"- promotion_window: `{(report.get('lifecycle_bucket_windows') or {}).get('promotion_window') if isinstance(report.get('lifecycle_bucket_windows'), dict) else '-'}`",
+        f"- confirmation_windows: `{(report.get('lifecycle_bucket_windows') or {}).get('confirmation_windows') if isinstance(report.get('lifecycle_bucket_windows'), dict) else []}`",
+        f"- windows: `{(report.get('lifecycle_bucket_windows') or {}).get('windows') if isinstance(report.get('lifecycle_bucket_windows'), dict) else {}}`",
         "",
         "## Lifecycle AI Context",
         f"- artifact: `{lifecycle_ai_context.get('artifact') or '-'}`",

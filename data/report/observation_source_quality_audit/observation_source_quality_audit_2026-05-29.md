@@ -1,7 +1,7 @@
 # Observation Source Quality Audit - 2026-05-29
 
 - status: `warning`
-- event_count: `273229`
+- event_count: `273235`
 - decision_authority: `source_quality_only`
 - runtime_effect: `False`
 - forbidden_uses: `runtime_threshold_apply, order_submit, provider_route_change, bot_restart, real_execution_quality_approval`

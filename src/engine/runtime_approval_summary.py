@@ -1547,6 +1547,53 @@ def _lifecycle_bucket_discovery_summary(target_date: str) -> dict[str, Any]:
     }
 
 
+def _lifecycle_bucket_window_report_path(target_date: str, suffix: str) -> Path:
+    base = discovery_report_path(target_date)
+    safe_suffix = str(suffix or "").strip().replace("/", "_")
+    return base.parent / f"lifecycle_bucket_discovery_{target_date}_{safe_suffix}.json"
+
+
+def _lifecycle_bucket_windows_summary(target_date: str, ev_report: dict[str, Any]) -> dict[str, Any]:
+    ev_windows = ev_report.get("lifecycle_bucket_windows") if isinstance(ev_report.get("lifecycle_bucket_windows"), dict) else {}
+    windows: dict[str, Any] = {}
+    for suffix in ("rolling5d", "rolling10d", "mtd"):
+        path = _lifecycle_bucket_window_report_path(target_date, suffix)
+        payload = _load_json(path)
+        summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+        from_ev = (
+            (ev_windows.get("windows") or {}).get(suffix)
+            if isinstance(ev_windows.get("windows"), dict)
+            else {}
+        )
+        windows[suffix] = {
+            "available": bool(payload) or bool(from_ev.get("available")),
+            "artifact": str(path) if path.exists() else from_ev.get("artifact"),
+            "window_role": "promotion_confirmation" if suffix == "mtd" else "rolling_confirmation",
+            "window_policy": payload.get("window_policy") or summary.get("source_window_policy") or from_ev.get("window_policy") or suffix,
+            "status": summary.get("status") or from_ev.get("status") or ("missing" if not payload else "unknown"),
+            "parent_bucket_count": _as_int(summary.get("parent_bucket_count") or from_ev.get("parent_bucket_count")),
+            "selected_parent_level": summary.get("selected_parent_level") or from_ev.get("selected_parent_level"),
+            "parent_granularity_status": summary.get("parent_granularity_status") or from_ev.get("parent_granularity_status"),
+            "absorbed_child_count": _as_int(summary.get("absorbed_child_count") or from_ev.get("absorbed_child_count")),
+            "absorbed_sample_count": _as_int(summary.get("absorbed_sample_count") or from_ev.get("absorbed_sample_count")),
+            "child_conflict_warning_count": _as_int(
+                summary.get("child_conflict_warning_count") or from_ev.get("child_conflict_warning_count")
+            ),
+            "live_auto_apply_ready_count": _as_int(
+                summary.get("live_auto_apply_ready_count") or from_ev.get("live_auto_apply_ready_count")
+            ),
+            "source_contract_status": summary.get("source_contract_status") or from_ev.get("source_contract_status"),
+            "ai_two_pass_review_status": summary.get("ai_two_pass_review_status") or from_ev.get("ai_two_pass_review_status"),
+        }
+    return {
+        "daily": ev_windows.get("daily") if isinstance(ev_windows.get("daily"), dict) else {},
+        "windows": windows,
+        "promotion_window": ev_windows.get("promotion_window") or "mtd",
+        "confirmation_windows": ev_windows.get("confirmation_windows") or ["rolling5d", "rolling10d"],
+        "warnings": ev_windows.get("warnings") if isinstance(ev_windows.get("warnings"), list) else [],
+    }
+
+
 def _swing_strategy_discovery_summary(ev_report: dict[str, Any]) -> dict[str, Any]:
     payload = ev_report.get("swing_strategy_discovery") if isinstance(ev_report.get("swing_strategy_discovery"), dict) else {}
     available = bool(payload.get("available"))
@@ -1745,6 +1792,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     scalp_entry_adm_summary = _entry_adm_summary(ev_report, scalp_entry_adm_path)
     lifecycle_matrix_summary = _lifecycle_matrix_summary(ev_report, lifecycle_matrix_path)
     lifecycle_bucket_discovery_summary = _lifecycle_bucket_discovery_summary(target_date)
+    lifecycle_bucket_windows_summary = _lifecycle_bucket_windows_summary(target_date, ev_report)
     swing_discovery_summary = _swing_strategy_discovery_summary(ev_report)
     swing_lifecycle_matrix_summary = _swing_lifecycle_matrix_summary(ev_report)
     swing_lifecycle_bucket_discovery_summary = _swing_lifecycle_bucket_discovery_summary(ev_report)
@@ -1766,6 +1814,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             "buy_funnel_sentinel": buy_funnel_sentinel_path,
             "lifecycle_decision_matrix": lifecycle_matrix_path,
             "lifecycle_bucket_discovery": lifecycle_bucket_discovery_summary.get("artifact"),
+            "lifecycle_bucket_windows": lifecycle_bucket_windows_summary,
             "lifecycle_ai_context": lifecycle_ai_context_path,
             "lifecycle_ai_context_attribution": lifecycle_ai_context_attribution_path,
             "swing_lifecycle_decision_matrix": swing_lifecycle_matrix_summary.get("artifact"),
@@ -1829,6 +1878,20 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             "lifecycle_bucket_discovery_live_auto_apply_ready_count": lifecycle_bucket_discovery_summary.get(
                 "live_auto_apply_ready_count"
             ),
+            "lifecycle_bucket_windows_promotion_status": (
+                (lifecycle_bucket_windows_summary.get("windows") or {}).get(
+                    lifecycle_bucket_windows_summary.get("promotion_window") or "mtd",
+                    {},
+                )
+                or {}
+            ).get("status"),
+            "lifecycle_bucket_windows_promotion_granularity": (
+                (lifecycle_bucket_windows_summary.get("windows") or {}).get(
+                    lifecycle_bucket_windows_summary.get("promotion_window") or "mtd",
+                    {},
+                )
+                or {}
+            ).get("parent_granularity_status"),
             "lifecycle_ai_context_applied_count": (
                 (ev_report.get("lifecycle_ai_context_attribution") or {}).get("context_applied_count")
                 if isinstance(ev_report.get("lifecycle_ai_context_attribution"), dict)
@@ -1860,6 +1923,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
         else {},
         "lifecycle_decision_matrix": lifecycle_matrix_summary,
         "lifecycle_bucket_discovery": lifecycle_bucket_discovery_summary,
+        "lifecycle_bucket_windows": lifecycle_bucket_windows_summary,
         "lifecycle_ai_context": ev_report.get("lifecycle_ai_context")
         if isinstance(ev_report.get("lifecycle_ai_context"), dict)
         else {},
@@ -1943,6 +2007,11 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         if isinstance(report.get("lifecycle_decision_matrix"), dict)
         else {}
     )
+    lifecycle_bucket_windows = (
+        report.get("lifecycle_bucket_windows")
+        if isinstance(report.get("lifecycle_bucket_windows"), dict)
+        else {}
+    )
     lifecycle_ai_context = (
         report.get("lifecycle_ai_context")
         if isinstance(report.get("lifecycle_ai_context"), dict)
@@ -1992,6 +2061,7 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         f"- panic_approval_requested: `{summary.get('panic_approval_requested')}`",
         f"- scalp_entry_adm_status: `{summary.get('scalp_entry_adm_status')}`",
         f"- lifecycle_matrix_status: `{summary.get('lifecycle_matrix_status')}`",
+        f"- lifecycle_bucket_windows_promotion: `{summary.get('lifecycle_bucket_windows_promotion_status')}` / `{summary.get('lifecycle_bucket_windows_promotion_granularity')}`",
         f"- lifecycle_ai_context prompt/applied: `{summary.get('lifecycle_ai_context_prompt_stage_count')}` / `{summary.get('lifecycle_ai_context_applied_count')}`",
         f"- swing_strategy_discovery_labeled/pending: `{summary.get('swing_strategy_discovery_labeled_sample_count')}` / `{summary.get('swing_strategy_discovery_pending_future_quote_count')}`",
         f"- swing_lifecycle_matrix_auto: `{summary.get('swing_lifecycle_matrix_sim_auto_candidate_count')}`",
@@ -2048,6 +2118,12 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         f"- fixed_threshold_roles: `{lifecycle_matrix.get('fixed_threshold_roles') or {}}`",
         f"- ready_for_bounded_apply: `{lifecycle_matrix.get('ready_for_bounded_apply')}`",
         f"- warnings: `{lifecycle_matrix.get('warnings') or []}`",
+        "",
+        "## Lifecycle Bucket Windows",
+        f"- promotion_window: `{lifecycle_bucket_windows.get('promotion_window') or '-'}`",
+        f"- confirmation_windows: `{lifecycle_bucket_windows.get('confirmation_windows') or []}`",
+        f"- windows: `{lifecycle_bucket_windows.get('windows') or {}}`",
+        f"- warnings: `{lifecycle_bucket_windows.get('warnings') or []}`",
         "",
         "## Lifecycle AI Context",
         f"- context_artifact: `{lifecycle_ai_context.get('artifact') or '-'}`",

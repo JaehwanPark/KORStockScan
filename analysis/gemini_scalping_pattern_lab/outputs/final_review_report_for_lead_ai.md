@@ -1,6 +1,6 @@
 # Gemini Scalping Pattern Lab Final Review
 
-- generated_at: `2026-05-29 16:51:50`
+- generated_at: `2026-05-29 21:32:03`
 - analysis_period: `2026-04-21 ~ 2026-05-29`
 
 ## 1. 판정

@@ -9,8 +9,8 @@
 - panic_confirmation_policy: `portfolio stop-loss clusters are evidence; PANIC_DETECTED requires market or microstructure confirmation`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-05-29T16:39:14`
-- latest_event_at: `2026-05-29T15:46:46`
+- as_of: `2026-05-29T21:19:24`
+- latest_event_at: `2026-05-29T21:15:50`
 - reasons: `panic thresholds not breached`
 
 ## 패닉 지표
@@ -64,7 +64,7 @@
 ## Microstructure Market Context
 
 - market_risk_state: `RISK_OFF`
-- market_panic_breadth_as_of: `2026-05-29T16:39:06`
+- market_panic_breadth_as_of: `2026-05-29T21:19:16`
 - market_panic_breadth_source_quality_status: `ok`
 - market_panic_breadth_risk_off_advisory: `false`
 - market_panic_breadth_single_market_risk_off_advisory: `true`

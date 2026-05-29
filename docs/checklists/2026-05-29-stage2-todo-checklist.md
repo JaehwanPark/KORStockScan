@@ -115,13 +115,13 @@
   - 다음 액션: 누락 승인 요청은 없다. Project/Calendar 반영은 문서 parser 검증 후 사용자 표준 sync 명령으로만 수행하고, 다음 PREOPEN 적용 여부는 generated artifact와 verifier로 확인한다.
 
 - [x] `[ShadowCanaryCohortReview0529] shadow/canary/cohort 런타임 분류 및 정리 판정` (`Due: 2026-05-29`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)
-  - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [threshold_cycle_ev_2026-05-29.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-29.json), [runtime_approval_summary_2026-05-29.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-05-29.json)
   - 판정 기준: 당일 변경/관찰 결과를 기준으로 `remove`, `observe-only`, `baseline-promote`, `active-canary` 상태 변동 여부를 닫는다.
   - 금지: shadow 금지, canary-only, baseline 승격 원칙을 코드/문서 상태와 분리하지 않는다.
   - 다음 액션: 변경이 있으면 기준문서와 checklist를 함께 갱신하고 cohort 잠금 필드를 남긴다.
-  - 판정: `no_runtime_classification_change`.
-  - 근거: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)에 2026-05-29 addendum을 추가했다. 신규 `remove`, 신규 `baseline-promote`, 신규 alpha shadow는 없고, active-canary/source-only/sim-only cohort 구분은 유지된다. runtime apply gap은 `codex_directive_count=0`, `critical_failure_count=0`이며 retry queue `1`은 다음 PREOPEN/postclose 확인 대상이다.
-  - 다음 액션: live-auto ready bucket은 다음 PREOPEN artifact guard 통과분만 소비한다. cohort 분류 변경이나 baseline 승격은 별도 workorder/rollback guard 없이 수행하지 않는다.
+  - 판정: `retired_into_ldm_plan_rebase_contract`.
+  - 근거: LDM 전환 이후 active/open state와 cohort/canary 원칙은 Plan Rebase §1~§8, 실행 항목은 daily checklist, 산출물 계약은 report traceability와 runtime approval/EV artifacts가 소유한다. 별도 shadow/canary workorder는 중복 owner가 되어 active 기준문서에서 삭제했다. 신규 `remove`, 신규 `baseline-promote`, 신규 alpha shadow는 없고, runtime apply gap은 `codex_directive_count=0`, `critical_failure_count=0`, retry queue `1`이다.
+  - 다음 액션: live-auto ready bucket은 다음 PREOPEN artifact guard 통과분만 소비한다. cohort 분류 변경이나 baseline 승격은 Plan Rebase/checklist/report contract 업데이트와 rollback guard 없이 수행하지 않는다.
 
 - [x] `[MarketRegimeUsageReview0529] market regime 사용 권한과 runtime 영향 정리` (`Due: 2026-05-29`, `Slot: POSTCLOSE`, `TimeWindow: 17:30~17:45`, `Track: RuntimeStability`)
   - Source: [sniper_market_regime.py](/home/ubuntu/KORStockScan/src/engine/sniper_market_regime.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)

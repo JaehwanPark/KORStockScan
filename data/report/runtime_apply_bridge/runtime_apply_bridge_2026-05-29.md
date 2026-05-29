@@ -3,21 +3,20 @@
 ## 판정
 
 - status: `pass`
-- live_auto_apply_ready_count: `1`
-- greenfield_policy_emit_state: `ready`
-- greenfield_lifecycle_flow live/surfaced/total: `9` / `102` / `102`
+- live_auto_apply_ready_count: `0`
+- greenfield_policy_emit_state: `not_emitted_no_complete_lifecycle_flow`
+- greenfield_lifecycle_flow live/surfaced/total: `0` / `102` / `102`
 - lifecycle_bucket_discovery_source_contract_status: `pass`
 - lifecycle_bucket_discovery_ai_review_status: `parsed`
 - lifecycle_bucket_discovery_live_followup_count: `0`
 - human_approval_required: `False`
 - runtime mutation: `none`
-- warnings: `[]`
+- warnings: `['greenfield_policy_not_emitted_no_complete_lifecycle_flow']`
 
 ## 근거
 
 - `entry_wait6579_score66_69_recovery_gate_v1`: state=`blocked_source_quality`, allowed_runtime_apply=`False`, approval_required=`False`, live_auto_apply=`False`, ai_followup=`-`
 - `scale_in_bucket_runtime_policy_v1`: state=`bootstrap_pending`, allowed_runtime_apply=`False`, approval_required=`False`, live_auto_apply=`False`, ai_followup=`-`
-- `greenfield_real_environment_authority`: state=`live_auto_apply_ready`, allowed_runtime_apply=`True`, approval_required=`False`, live_auto_apply=`True`, ai_followup=`-`
 
 ## 다음 액션
 

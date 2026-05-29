@@ -66,6 +66,41 @@ EVIDENCE_GRADE_1_COMPLETED_SIM = "grade_1_completed_sim"
 EVIDENCE_GRADE_2_COUNTERFACTUAL = "grade_2_counterfactual"
 EVIDENCE_GRADE_MIXED_SOURCE = "mixed_source"
 EVIDENCE_GRADE_SOURCE_ONLY = "source_only"
+LIFECYCLE_FLOW_PARENT_MIN_JOINED_SAMPLE = 10
+LIFECYCLE_FLOW_CHILD_STANDALONE_MIN_JOINED_SAMPLE = 10
+LIFECYCLE_FLOW_PARENT_CONFLICT_EV_DELTA_PCT = 2.0
+LIFECYCLE_FLOW_PARENT_TARGET_MIN = 30
+LIFECYCLE_FLOW_PARENT_TARGET_MAX = 60
+LIFECYCLE_FLOW_PARENT_TARGET_MID = 45
+LIFECYCLE_FLOW_PARENT_LEVEL_FIELDS = {
+    "L1_broad": ("entry_score_parent", "submit_quality_parent", "exit_outcome_parent"),
+    "L2_default": (
+        "entry_score_parent",
+        "entry_source_parent",
+        "submit_quality_parent",
+        "exit_outcome_parent",
+        "major_holding_parent",
+        "scale_in_parent",
+    ),
+    "L3_detailed": (
+        "entry_score_parent",
+        "entry_source_parent",
+        "submit_quality_parent",
+        "exit_outcome_parent",
+        "major_holding_parent",
+        "scale_in_parent",
+        "holding_action_parent",
+        "exit_rule_parent",
+    ),
+}
+LIFECYCLE_FLOW_PARENT_LEVEL_ORDER = ("L1_broad", "L2_default", "L3_detailed")
+AI_PARENT_GRANULARITY_DECISIONS = {
+    "accept_selected_level",
+    "prefer_level",
+    "taxonomy_gap",
+    "source_quality_blocker",
+    "code_patch_required",
+}
 COUNTERFACTUAL_SOURCE_TOKENS = (
     "wait6579_ev_cohort",
     "missed_entry",
@@ -440,6 +475,13 @@ def sim_auto_approval_path(target_date: str) -> Path:
     return SIM_AUTO_APPROVAL_DIR / f"lifecycle_bucket_sim_auto_approval_{target_date}.json"
 
 
+def _artifact_key(target_date: str, suffix: str | None = None) -> str:
+    if not suffix:
+        return str(target_date)
+    safe_suffix = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(suffix).strip()).strip("_")
+    return f"{target_date}_{safe_suffix}" if safe_suffix else str(target_date)
+
+
 def _load_json(path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -772,6 +814,508 @@ def _normalize_candidate_runtime_metadata(item: dict[str, Any]) -> None:
         if runtime_apply_allowed
         else [],
     }
+
+
+def _weighted_average(items: list[dict[str, Any]], value_key: str, weight_key: str) -> float | None:
+    numerator = 0.0
+    denominator = 0
+    for item in items:
+        value = _safe_float(item.get(value_key), None)
+        weight = _safe_int(item.get(weight_key))
+        if value is None or weight <= 0:
+            continue
+        numerator += value * weight
+        denominator += weight
+    if denominator <= 0:
+        return None
+    return round(numerator / denominator, 6)
+
+
+_DISCOVERY_SCORE_LT_RE = re.compile(r"\bscore[_=:]?lt[_-]?(?P<high>\d{1,3})\b")
+_DISCOVERY_SCORE_BUCKET_RE = re.compile(
+    r"\bscore(?:[_=:]score)?(?:[_=:])?(?P<low>\d{1,3})(?:[_-](?P<high>\d{1,3}|p))?(?=\D|$)"
+)
+
+
+def _score_parent_from_text(value: Any) -> str:
+    text = str(value or "").lower()
+    lt_match = _DISCOVERY_SCORE_LT_RE.search(text)
+    if lt_match:
+        high = _safe_float(lt_match.group("high"), None)
+        if high is not None:
+            return "score_low_observation" if high <= 60 else "score_watch_recovery"
+    match = _DISCOVERY_SCORE_BUCKET_RE.search(text)
+    if not match:
+        return "score_unobserved"
+    low = _safe_float(match.group("low"), None)
+    high_raw = match.group("high")
+    high = low if high_raw == "p" else _safe_float(high_raw or match.group("low"), None)
+    if low is None or high is None:
+        return "score_unobserved"
+    midpoint = (low + high) / 2.0
+    if midpoint < 55:
+        return "score_low_observation"
+    if midpoint < 65:
+        return "score_watch_recovery"
+    if midpoint < 75:
+        return "score_mid_recovery"
+    if midpoint < 85:
+        return "score_high_confirmation"
+    return "score_extreme_confirmation"
+
+
+def _missing_or_none_text(text: str) -> bool:
+    compact = text.strip().lower()
+    return not compact or compact in {"none", "missing", "null"} or compact.endswith(":missing")
+
+
+def _entry_source_parent(value: Any) -> str:
+    text = str(value or "").lower()
+    if _missing_or_none_text(text):
+        return "entry_missing"
+    if "blocked_ai_score" in text:
+        return "entry_source_blocked_ai_score"
+    if "wait6579" in text:
+        return "entry_source_wait6579"
+    if "scalp_entry_action_decision" in text:
+        return "entry_source_action_decision"
+    if "scalp_sim" in text:
+        return "entry_source_scalp_sim"
+    if "panic" in text:
+        return "entry_source_panic"
+    return "entry_source_observed_other"
+
+
+def _submit_quality_parent(value: Any) -> str:
+    text = str(value or "").lower()
+    if _missing_or_none_text(text):
+        return "submit_missing"
+    if "stale_context" in text or "stale_quote" in text or "stale_block" in text:
+        return "submit_stale_context_or_quote"
+    if "price_guard" in text or "liquidity_guard" in text or "overbought_guard" in text or "would_block" in text:
+        return "submit_price_or_liquidity_guard_block"
+    if "revalidation_ok" in text or "ok_or_unflagged" in text or "assumed_filled" in text:
+        return "submit_revalidation_ok"
+    return "submit_observed_other"
+
+
+def _exit_outcome_parent(value: Any) -> str:
+    text = str(value or "").lower()
+    if _missing_or_none_text(text):
+        return "exit_missing"
+    if "missed_upside" in text:
+        return "exit_missed_upside"
+    if "good_exit" in text or "take_profit" in text or "_tp" in text or "rule_tp" in text:
+        return "exit_good_or_take_profit"
+    if "soft_stop" in text or "hard_stop" in text or "bad_exit" in text or "loss" in text or "lt_neg" in text:
+        return "exit_soft_stop_or_loss"
+    if "neutral" in text:
+        return "exit_neutral"
+    return "exit_observed_other"
+
+
+def _major_holding_parent(value: Any) -> str:
+    text = str(value or "").lower()
+    if _missing_or_none_text(text):
+        return "holding_missing"
+    if "block" in text or "forbidden" in text or "skipped" in text:
+        return "holding_block_or_skipped"
+    if "action_wait" in text or "action_hold" in text or "holding_action" in text:
+        return "holding_active_decision"
+    return "holding_observed_other"
+
+
+def _holding_action_parent(value: Any) -> str:
+    text = str(value or "").lower()
+    if _missing_or_none_text(text):
+        return "holding_action_missing"
+    if "action_wait" in text:
+        return "holding_action_wait"
+    if "action_hold" in text:
+        return "holding_action_hold"
+    if "action_sell" in text or "action_exit" in text:
+        return "holding_action_exit"
+    if "not_applicable" in text:
+        return "holding_action_not_applicable"
+    return "holding_action_observed_other"
+
+
+def _scale_in_parent(value: Any) -> str:
+    text = str(value or "").lower()
+    if _missing_or_none_text(text) or text.endswith(":none") or "scale_in:none" in text:
+        return "scale_in_none"
+    if "block" in text or "forbidden" in text or "skipped" in text:
+        return "scale_in_block_or_skipped"
+    if "avg" in text or "pyramid" in text or "scale_in_applied" in text or "active" in text:
+        return "scale_in_active"
+    return "scale_in_observed_other"
+
+
+def _exit_rule_parent(value: Any) -> str:
+    text = str(value or "").lower()
+    if _missing_or_none_text(text):
+        return "exit_rule_missing"
+    if "trailing_take_profit" in text or "take_profit" in text:
+        return "exit_rule_take_profit"
+    if "soft_stop" in text:
+        return "exit_rule_soft_stop"
+    if "hard_stop" in text:
+        return "exit_rule_hard_stop"
+    if "baseline" in text:
+        return "exit_rule_baseline"
+    return "exit_rule_observed_other"
+
+
+def _lifecycle_flow_parent_dimensions(item: dict[str, Any]) -> dict[str, str]:
+    source_dimensions = item.get("source_dimensions") if isinstance(item.get("source_dimensions"), dict) else {}
+    entry = item.get("entry_bucket_id") or source_dimensions.get("entry") or ""
+    submit = item.get("submit_bucket_id") or source_dimensions.get("submit") or ""
+    holding = item.get("holding_bucket_id") or source_dimensions.get("holding") or ""
+    scale_in = item.get("scale_in_bucket_id") or source_dimensions.get("scale_in") or ""
+    exit_value = item.get("exit_bucket_id") or source_dimensions.get("exit") or ""
+    return {
+        "entry_score_parent": _score_parent_from_text(entry),
+        "entry_source_parent": _entry_source_parent(entry),
+        "submit_quality_parent": _submit_quality_parent(submit),
+        "exit_outcome_parent": _exit_outcome_parent(exit_value),
+        "major_holding_parent": _major_holding_parent(holding),
+        "scale_in_parent": _scale_in_parent(scale_in),
+        "holding_action_parent": _holding_action_parent(holding),
+        "exit_rule_parent": _exit_rule_parent(exit_value),
+        "entry_detail": str(entry),
+        "submit_detail": str(submit),
+        "holding_detail": str(holding),
+        "scale_in_detail": str(scale_in),
+        "exit_detail": str(exit_value),
+    }
+
+
+def _lifecycle_flow_parent_key(item: dict[str, Any], level: str) -> str:
+    dimensions = _lifecycle_flow_parent_dimensions(item)
+    fields = LIFECYCLE_FLOW_PARENT_LEVEL_FIELDS.get(level) or LIFECYCLE_FLOW_PARENT_LEVEL_FIELDS["L2_default"]
+    parts = [f"{field}={dimensions.get(field) or 'unknown'}" for field in fields]
+    return "lifecycle_flow:combo_lifecycle_flow:" + "|".join(parts)
+
+
+def _parent_granularity_status(parent_count: int) -> str:
+    if parent_count < LIFECYCLE_FLOW_PARENT_TARGET_MIN:
+        return "too_broad"
+    if parent_count > LIFECYCLE_FLOW_PARENT_TARGET_MAX:
+        return "too_fragmented"
+    return "target_pass"
+
+
+def _parent_level_counts(items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    counts: dict[str, dict[str, Any]] = {}
+    for level in LIFECYCLE_FLOW_PARENT_LEVEL_ORDER:
+        keys = {_lifecycle_flow_parent_key(item, level) for item in items}
+        parent_count = len(keys)
+        counts[level] = {
+            "level": level,
+            "parent_count": parent_count,
+            "granularity_status": _parent_granularity_status(parent_count),
+        }
+    return counts
+
+
+def _select_parent_level(items: list[dict[str, Any]], report: dict[str, Any]) -> tuple[str, dict[str, dict[str, Any]], dict[str, Any]]:
+    level_counts = _parent_level_counts(items)
+    deterministic_level = ""
+    for level in LIFECYCLE_FLOW_PARENT_LEVEL_ORDER:
+        if level_counts[level]["granularity_status"] == "target_pass":
+            deterministic_level = level
+            break
+    if not deterministic_level:
+        deterministic_level = min(
+            LIFECYCLE_FLOW_PARENT_LEVEL_ORDER,
+            key=lambda level: (
+                abs(int(level_counts[level]["parent_count"]) - LIFECYCLE_FLOW_PARENT_TARGET_MID),
+                int(level_counts[level]["parent_count"]),
+            ),
+        )
+    selected_level = deterministic_level
+    ai_review = report.get("ai_two_pass_review") if isinstance(report.get("ai_two_pass_review"), dict) else {}
+    parent_reviews = ai_review.get("parent_granularity_reviews") if isinstance(ai_review.get("parent_granularity_reviews"), list) else []
+    ai_choice: dict[str, Any] = {}
+    for review in parent_reviews:
+        if not isinstance(review, dict):
+            continue
+        decision = str(review.get("decision") or "")
+        preferred = str(review.get("preferred_level") or "")
+        if decision == "prefer_level" and preferred in level_counts:
+            preferred_status = str(level_counts[preferred]["granularity_status"])
+            if preferred_status == "target_pass":
+                selected_level = preferred
+                ai_choice = {
+                    "decision": decision,
+                    "preferred_level": preferred,
+                    "accepted": True,
+                    "reason": review.get("reason"),
+                }
+            else:
+                ai_choice = {
+                    "decision": decision,
+                    "preferred_level": preferred,
+                    "accepted": False,
+                    "reason": "preferred_level_outside_target_range",
+                }
+            break
+        if decision in {"taxonomy_gap", "source_quality_blocker", "code_patch_required", "accept_selected_level"}:
+            ai_choice = {
+                "decision": decision,
+                "preferred_level": preferred if preferred in level_counts else None,
+                "accepted": decision == "accept_selected_level",
+                "reason": review.get("reason"),
+            }
+            break
+    metadata = {
+        "deterministic_selected_parent_level": deterministic_level,
+        "selected_parent_level": selected_level,
+        "ai_parent_granularity_choice": ai_choice,
+    }
+    return selected_level, level_counts, metadata
+
+
+def _ai_explicitly_blocks_live(item: dict[str, Any]) -> bool:
+    if (
+        item.get("ai_review_blocked_reason")
+        or item.get("ai_tier2_blocked_reason")
+        or item.get("promotion_ev_excluded_reason")
+        or item.get("contamination_quarantine_id")
+    ):
+        return True
+    final_state = str(item.get("ai_final_classification_state") or "")
+    if final_state and final_state not in {"live_auto_apply_ready", "keep"}:
+        final_reason = str(item.get("ai_final_reason") or "")
+        return explicit_tier2_block_allowed(final_reason, final_state)
+    return False
+
+
+def _dominant_child_patterns(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    ranked = sorted(
+        items,
+        key=lambda item: (
+            -_safe_int(item.get("joined_sample")),
+            -(_safe_float(item.get("source_quality_adjusted_ev_pct"), None) or -999.0),
+            str(item.get("bucket_id") or ""),
+        ),
+    )
+    patterns: list[dict[str, Any]] = []
+    for item in ranked[:5]:
+        patterns.append(
+            {
+                "bucket_id": item.get("bucket_id"),
+                "bucket_key": item.get("bucket_key"),
+                "joined_sample": _safe_int(item.get("joined_sample")),
+                "source_quality_adjusted_ev_pct": _safe_float(
+                    item.get("source_quality_adjusted_ev_pct"), None
+                ),
+            }
+        )
+    return patterns
+
+
+def _absorbed_dimensions(items: list[dict[str, Any]]) -> dict[str, list[str]]:
+    dimensions: dict[str, set[str]] = {}
+    for item in items:
+        for key, value in _lifecycle_flow_parent_dimensions(item).items():
+            if value:
+                dimensions.setdefault(key, set()).add(str(value))
+    return {key: sorted(values) for key, values in sorted(dimensions.items())}
+
+
+def _apply_lifecycle_flow_parent_absorption(report: dict[str, Any], candidates: list[dict[str, Any]]) -> None:
+    lifecycle_flow_items = [
+        item
+        for item in candidates
+        if (
+            str(item.get("stage") or "") == "lifecycle_flow"
+            and str(item.get("bucket_type") or "") == "combo_lifecycle_flow"
+        )
+    ]
+    selected_level = "L2_default"
+    level_counts: dict[str, dict[str, Any]] = {}
+    level_metadata: dict[str, Any] = {
+        "deterministic_selected_parent_level": selected_level,
+        "selected_parent_level": selected_level,
+        "ai_parent_granularity_choice": {},
+    }
+    if lifecycle_flow_items:
+        selected_level, level_counts, level_metadata = _select_parent_level(lifecycle_flow_items, report)
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for item in lifecycle_flow_items:
+        groups.setdefault(_lifecycle_flow_parent_key(item, selected_level), []).append(item)
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    summary["selected_parent_level"] = selected_level
+    summary["deterministic_selected_parent_level"] = level_metadata.get("deterministic_selected_parent_level")
+    summary["parent_level_candidate_counts"] = level_counts
+    summary["target_parent_min"] = LIFECYCLE_FLOW_PARENT_TARGET_MIN
+    summary["target_parent_max"] = LIFECYCLE_FLOW_PARENT_TARGET_MAX
+    parent_granularity_status = _parent_granularity_status(len(groups))
+    parent_granularity_pass = parent_granularity_status == "target_pass"
+    summary["parent_granularity_status"] = parent_granularity_status
+    if level_metadata.get("ai_parent_granularity_choice"):
+        summary["ai_parent_granularity_choice"] = level_metadata.get("ai_parent_granularity_choice")
+    report["summary"] = summary
+    report["parent_bucket_summaries"] = []
+
+    for parent_id, items in groups.items():
+        parent_joined_sample = sum(_safe_int(item.get("joined_sample")) for item in items)
+        absorbed_sample_count = sum(_safe_int(item.get("sample"), _safe_int(item.get("joined_sample"))) for item in items)
+        complete_flow_count = sum(_safe_int(item.get("complete_flow_count")) for item in items)
+        parent_ev = _weighted_average(items, "source_quality_adjusted_ev_pct", "joined_sample")
+        child_evs = [
+            value
+            for value in (_safe_float(item.get("source_quality_adjusted_ev_pct"), None) for item in items)
+            if value is not None
+        ]
+        child_ev_dispersion = round(max(child_evs) - min(child_evs), 6) if len(child_evs) >= 2 else 0.0
+        quality_pass = all(str(item.get("source_quality_gate") or "") == "pass" for item in items)
+        group_live_blocked = any(_ai_explicitly_blocks_live(item) for item in items)
+        ai_review = report.get("ai_two_pass_review") if isinstance(report.get("ai_two_pass_review"), dict) else {}
+        ai_review_status = str(ai_review.get("status") or "")
+        tier2_parent_pass = not ai_review_status or ai_review_status == "parsed"
+        route_pass = any(str(item.get("recommended_route") or "") == "candidate_recovery_or_relax" for item in items)
+        parent_deterministic_floor_passed = (
+            quality_pass
+            and parent_granularity_pass
+            and not group_live_blocked
+            and route_pass
+            and parent_joined_sample >= LIFECYCLE_FLOW_PARENT_MIN_JOINED_SAMPLE
+            and primary_ev_uplift_passes(parent_ev, positive_edge=True)
+        )
+        parent_live_floor_passed = parent_deterministic_floor_passed and tier2_parent_pass
+        representative = None
+        if parent_deterministic_floor_passed:
+            eligible = [
+                item
+                for item in items
+                if not _lifecycle_flow_source_only_blocker(item)
+                and not _ai_explicitly_blocks_live(item)
+                and str(item.get("source_quality_gate") or "") == "pass"
+            ]
+            if eligible:
+                representative = sorted(
+                    eligible,
+                    key=lambda item: (
+                        -_safe_int(item.get("joined_sample")),
+                        -(_safe_float(item.get("source_quality_adjusted_ev_pct"), None) or -999.0),
+                        str(item.get("bucket_id") or ""),
+                    ),
+                )[0]
+
+        child_bucket_ids = [str(item.get("bucket_id") or "") for item in items if item.get("bucket_id")]
+        dominant_patterns = _dominant_child_patterns(items)
+        absorbed_dimensions = _absorbed_dimensions(items)
+        conflict_warning = child_ev_dispersion >= LIFECYCLE_FLOW_PARENT_CONFLICT_EV_DELTA_PCT
+        conflicting_patterns = [
+            pattern
+            for pattern in dominant_patterns
+            if (
+                parent_ev is not None
+                and pattern.get("source_quality_adjusted_ev_pct") is not None
+                and (
+                    (parent_ev >= 0 and float(pattern.get("source_quality_adjusted_ev_pct") or 0.0) < 0)
+                    or (parent_ev < 0 and float(pattern.get("source_quality_adjusted_ev_pct") or 0.0) >= 0)
+                )
+            )
+        ]
+        parent_dimensions = _lifecycle_flow_parent_dimensions(items[0]) if items else {}
+        parent_summary = {
+            "parent_bucket_id": parent_id,
+            "policy_bucket_id": parent_id,
+            "selected_parent_level": selected_level,
+            "parent_granularity_status": parent_granularity_status,
+            "parent_granularity_floor_passed": parent_granularity_pass,
+            "parent_joined_sample": parent_joined_sample,
+            "parent_ev": parent_ev,
+            "parent_source_quality_adjusted_ev_pct": parent_ev,
+            "absorbed_child_bucket_ids": child_bucket_ids,
+            "absorbed_child_count": len(child_bucket_ids),
+            "absorbed_sample_count": absorbed_sample_count,
+            "absorbed_dimensions": absorbed_dimensions,
+            "complete_flow_count": complete_flow_count,
+            "child_ev_dispersion_pct": child_ev_dispersion,
+            "child_conflict_warning": conflict_warning,
+            "dominant_child_patterns": dominant_patterns,
+            "conflicting_child_patterns": conflicting_patterns,
+            "exclusion_dimension_candidates": conflicting_patterns,
+            "dimension_filters": parent_dimensions,
+        }
+        report["parent_bucket_summaries"].append(parent_summary)
+        for item in items:
+            previous_live_family = item.get("live_auto_apply_family")
+            child_joined_sample = _safe_int(item.get("joined_sample"))
+            child_ev = _safe_float(item.get("source_quality_adjusted_ev_pct"), None)
+            child_same_direction = (
+                parent_ev is not None
+                and child_ev is not None
+                and ((parent_ev >= 0 and child_ev >= 0) or (parent_ev < 0 and child_ev < 0))
+            )
+            item["policy_bucket_id"] = parent_id
+            item["canonical_parent_bucket"] = parent_id
+            item["selected_parent_level"] = selected_level
+            item["parent_granularity_status"] = parent_granularity_status
+            item["parent_granularity_floor_passed"] = parent_granularity_pass
+            item["parent_level_candidate_counts"] = level_counts
+            item["lifecycle_flow_parent_dimensions"] = _lifecycle_flow_parent_dimensions(item)
+            item["parent_joined_sample"] = parent_joined_sample
+            item["parent_source_quality_adjusted_ev_pct"] = parent_ev
+            item["parent_live_floor_passed"] = parent_live_floor_passed
+            item["parent_sample_floor"] = LIFECYCLE_FLOW_PARENT_MIN_JOINED_SAMPLE
+            item["absorbed_child_bucket_ids"] = child_bucket_ids
+            item["absorbed_child_count"] = len(child_bucket_ids)
+            item["absorbed_sample_count"] = absorbed_sample_count
+            item["absorbed_dimensions"] = absorbed_dimensions
+            item["dominant_child_patterns"] = dominant_patterns
+            item["conflicting_child_patterns"] = conflicting_patterns
+            item["child_ev_dispersion_pct"] = child_ev_dispersion
+            item["child_conflict_warning"] = conflict_warning
+            item["exclusion_dimension_candidate"] = conflict_warning and not child_same_direction
+            item["exclusion_dimension_candidates"] = conflicting_patterns
+            item["dimension_filters"] = _lifecycle_flow_parent_dimensions(item)
+            item["child_live_authority_allowed"] = (
+                child_joined_sample >= LIFECYCLE_FLOW_CHILD_STANDALONE_MIN_JOINED_SAMPLE
+                and child_same_direction
+                and parent_live_floor_passed
+            )
+            if not tier2_parent_pass and parent_deterministic_floor_passed and item is representative:
+                item["classification_state"] = "runtime_blocked_contract_gap"
+                item["live_auto_apply_family"] = GREENFIELD_REAL_ENV_FAMILY
+                item["transition_target"] = "source_only_keep_collecting"
+                item["grade_reason"] = "parent_lifecycle_flow_bucket_waiting_for_parsed_tier2_review"
+                item["recommended_resolution"] = "retry_tier2_review_before_pre_final_auto_apply"
+                item["runtime_effect"] = False
+                item["broker_order_forbidden"] = True
+                item["allowed_runtime_apply"] = False
+                item["ai_tier2_blocked_reason"] = tier2_fail_closed_reason(ai_review_status)
+            elif parent_live_floor_passed and item is representative:
+                item["classification_state"] = "live_auto_apply_ready"
+                item["live_auto_apply_family"] = GREENFIELD_REAL_ENV_FAMILY
+                item["transition_target"] = "bounded_live_canary"
+                item["grade_reason"] = "parent_lifecycle_flow_bucket_sample_and_ev_floor_passed"
+                item["recommended_resolution"] = "preopen_live_auto_bridge_parent_policy"
+            elif str(item.get("classification_state") or "") == "live_auto_apply_ready":
+                item["classification_state"] = "source_only_keep_collecting"
+                item["live_auto_apply_family"] = None
+                item["transition_target"] = "source_only_keep_collecting"
+                item["grade_reason"] = "child_combo_absorbed_into_parent_policy_not_standalone_live_authority"
+                item["recommended_resolution"] = "absorbed_into_parent_policy"
+            elif parent_live_floor_passed:
+                item["recommended_resolution"] = "absorbed_into_parent_live_policy"
+            _normalize_candidate_runtime_metadata(item)
+            if (
+                str(item.get("classification_state") or "") == "runtime_blocked_contract_gap"
+                and previous_live_family
+            ):
+                item["live_auto_apply_family"] = previous_live_family
+            item["source_bucket_kind"] = _source_bucket_kind(str(item.get("classification_state") or ""), item)
+    report["parent_bucket_summaries"].sort(
+        key=lambda item: (
+            -_safe_int(item.get("parent_joined_sample")),
+            str(item.get("policy_bucket_id") or ""),
+        )
+    )
 
 
 def _source_contract_snapshot(ldm: dict[str, Any]) -> dict[str, Any]:
@@ -1467,6 +2011,11 @@ def _build_ai_review_context(
         "review_policy": {
             "language": "English only. Keep explanations concise to reduce tokens.",
             "no_promotion_authority": "You cannot promote a non-live deterministic candidate to live_auto_apply_ready.",
+            "parent_granularity_policy": (
+                "You may review lifecycle_flow parent granularity only by accepting the selected deterministic level "
+                "or preferring one deterministic level from L1_broad, L2_default, L3_detailed. You may not invent "
+                "parent names and may not promote any live candidate."
+            ),
             "grade_policy": (
                 "Grade 2 counterfactual and mixed_source candidates cannot become bounded live candidates by AI promotion. "
                 "A deterministic entry bridge candidate that is already live_auto_apply_ready is an explicit contract exception "
@@ -1504,6 +2053,16 @@ def _build_ai_review_context(
         },
         "date": report.get("date"),
         "summary": summary,
+        "parent_granularity_candidates": {
+            "target_parent_min": summary.get("target_parent_min"),
+            "target_parent_max": summary.get("target_parent_max"),
+            "selected_parent_level": summary.get("selected_parent_level"),
+            "parent_granularity_status": summary.get("parent_granularity_status"),
+            "level_counts": summary.get("parent_level_candidate_counts") or {},
+            "allowed_ai_decisions": sorted(AI_PARENT_GRANULARITY_DECISIONS),
+            "allowed_preferred_levels": list(LIFECYCLE_FLOW_PARENT_LEVEL_ORDER),
+        },
+        "parent_bucket_summaries": _ai_review_compact_value((report.get("parent_bucket_summaries") or [])[:20]),
         "source_contract": report.get("source_contract"),
         "source_contract_changes": report.get("source_contract_changes") or [],
         "surfaced_candidates": compact_candidates,
@@ -1668,6 +2227,7 @@ def _build_ai_review_instructions() -> str:
         "When the decision is ambiguous, keep Grade 1 deterministic live candidates live and rely on post-apply verification.\n"
         "Use runtime_blocked_contract_gap or code_patch_required only for explicit source-quality, source schema, env mapping, runtime hook, post-apply attribution, safety, broker, stale quote, qty/cooldown, provider, cap, forbidden-use, leakage, or missing-contract gaps.\n"
         "Evidence authority contract: bucket/dimension tuning primary evidence is sim/probe lifecycle EV. Real one-share samples are not primary EV evidence unless the mapped bucket policy was already enabled for the evaluated post-apply cohort. Pre-apply real samples may be used only for execution-quality calibration, safety veto, provenance validation, and broker/fill/slippage source-quality checks. Do not merge real PnL with sim/probe EV and do not promote runtime threshold/order/provider/cap/bot changes from pre-apply real one-share outcomes. If a proposal violates this contract, choose reject, source_quality_blocker, or instrumentation_gap.\n"
+        "For parent_granularity_reviews, choose decision from accept_selected_level, prefer_level, taxonomy_gap, source_quality_blocker, or code_patch_required. preferred_level must be one of L1_broad, L2_default, L3_detailed. You may only choose among deterministic levels and must not invent parent bucket names. prefer_level is accepted only when the preferred deterministic level is inside the target parent-count range.\n"
         "live_auto_apply_ready is allowed only if the input bucket already has live_auto_apply_family and deterministic live_auto_apply_ready.\n"
     )
 
@@ -1691,9 +2251,15 @@ def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, 
     raw_conclusions = payload.get("final_conclusions")
     raw_ai_proposals = payload.get("ai_tier2_proposals")
     raw_comparative_reviews = payload.get("comparative_reviews")
+    raw_parent_granularity_reviews = payload.get("parent_granularity_reviews")
     conclusions = raw_conclusions if isinstance(raw_conclusions, list) else []
     ai_proposals = payload.get("ai_tier2_proposals") if isinstance(payload.get("ai_tier2_proposals"), list) else []
     comparative_reviews = payload.get("comparative_reviews") if isinstance(payload.get("comparative_reviews"), list) else []
+    parent_granularity_reviews = (
+        payload.get("parent_granularity_reviews")
+        if isinstance(payload.get("parent_granularity_reviews"), list)
+        else []
+    )
     if not interpretation:
         warnings.append("ai_review_interpretation_missing")
     if not audit:
@@ -1704,6 +2270,8 @@ def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, 
         warnings.append("ai_review_ai_tier2_proposals_invalid")
     if not isinstance(raw_comparative_reviews, list):
         warnings.append("ai_review_comparative_reviews_invalid")
+    if raw_parent_granularity_reviews is not None and not isinstance(raw_parent_granularity_reviews, list):
+        warnings.append("ai_review_parent_granularity_reviews_invalid")
     for proposal in ai_proposals:
         if not isinstance(proposal, dict):
             warnings.append("ai_review_ai_tier2_proposal_non_dict")
@@ -1752,6 +2320,16 @@ def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, 
             warnings.append(f"ai_review_invalid_state:{item.get('bucket_id')}")
         if has_evidence_authority_violation(item):
             warnings.append(f"ai_review_final_evidence_authority_violation:{item.get('bucket_id')}")
+    for review in parent_granularity_reviews:
+        if not isinstance(review, dict):
+            warnings.append("ai_review_parent_granularity_review_non_dict")
+            continue
+        decision = str(review.get("decision") or "")
+        preferred_level = str(review.get("preferred_level") or "")
+        if decision not in AI_PARENT_GRANULARITY_DECISIONS:
+            warnings.append("ai_review_invalid_parent_granularity_decision")
+        if preferred_level and preferred_level not in LIFECYCLE_FLOW_PARENT_LEVEL_ORDER:
+            warnings.append("ai_review_invalid_parent_granularity_level")
     if warnings:
         return "parse_rejected", payload, warnings
     return "parsed", payload, []
@@ -2147,6 +2725,7 @@ def _run_ai_review_shards(
         "ai_tier2_proposals": [],
         "comparative_reviews": [],
         "final_conclusions": [],
+        "parent_granularity_reviews": [],
     }
     disabled = provider in {"none", "off", "false", "0"}
     for shard in shard_specs:
@@ -2221,7 +2800,7 @@ def _run_ai_review_shards(
             audit = ai_payload.get("audit") if isinstance(ai_payload.get("audit"), dict) else {}
             audit_issues = audit.get("issues") if isinstance(audit.get("issues"), list) else []
             combined_payload["audit"]["issues"].extend(audit_issues)
-            for key in ("ai_tier2_proposals", "comparative_reviews", "final_conclusions"):
+            for key in ("ai_tier2_proposals", "comparative_reviews", "final_conclusions", "parent_granularity_reviews"):
                 values = ai_payload.get(key) if isinstance(ai_payload.get(key), list) else []
                 combined_payload[key].extend(values)
         shard_records.append(
@@ -2284,6 +2863,7 @@ def _run_ai_review_shards(
         "ai_tier2_proposals": combined_payload["ai_tier2_proposals"],
         "comparative_reviews": combined_payload["comparative_reviews"],
         "final_conclusions": combined_payload["final_conclusions"],
+        "parent_granularity_reviews": combined_payload["parent_granularity_reviews"],
         "shards": shard_records,
         "warnings": [warning for record in shard_records for warning in (record.get("warnings") or [])],
     }
@@ -2295,6 +2875,7 @@ def _finalize_report(
     candidates: list[dict[str, Any]],
     warnings: list[str],
 ) -> dict[str, Any]:
+    _apply_lifecycle_flow_parent_absorption(report, candidates)
     state_counts = Counter(str(item.get("classification_state") or "unknown") for item in candidates)
     stage_counts = Counter(str(item.get("stage") or "unknown") for item in candidates)
     source_bucket_kind_counts = Counter(str(item.get("source_bucket_kind") or "unknown") for item in candidates)
@@ -2330,10 +2911,36 @@ def _finalize_report(
         for item in candidates
     )
     unknown_reason_counts: Counter[str] = Counter()
+    parent_bucket_ids: set[str] = set()
+    parent_live_auto_apply_ready_count = 0
+    absorbed_child_count = 0
+    absorbed_sample_count = 0
+    child_conflict_warning_count = 0
+    parent_group_stats: dict[str, dict[str, Any]] = {}
     for item in candidates:
         counts = item.get("unknown_reason_counts") if isinstance(item.get("unknown_reason_counts"), dict) else {}
         for key, value in counts.items():
             unknown_reason_counts[str(key)] += _safe_int(value)
+        if (
+            str(item.get("stage") or "") == "lifecycle_flow"
+            and str(item.get("bucket_type") or "") == "combo_lifecycle_flow"
+        ):
+            parent_id = str(item.get("canonical_parent_bucket") or item.get("policy_bucket_id") or "")
+            if parent_id:
+                parent_bucket_ids.add(parent_id)
+                parent_group_stats.setdefault(
+                    parent_id,
+                    {
+                        "absorbed_child_count": _safe_int(item.get("absorbed_child_count")),
+                        "absorbed_sample_count": _safe_int(item.get("absorbed_sample_count")),
+                        "child_conflict_warning": bool(item.get("child_conflict_warning")),
+                    },
+                )
+            if item.get("classification_state") == "live_auto_apply_ready" and item.get("parent_live_floor_passed") is True:
+                parent_live_auto_apply_ready_count += 1
+    absorbed_child_count = sum(_safe_int(stats.get("absorbed_child_count")) for stats in parent_group_stats.values())
+    absorbed_sample_count = sum(_safe_int(stats.get("absorbed_sample_count")) for stats in parent_group_stats.values())
+    child_conflict_warning_count = sum(1 for stats in parent_group_stats.values() if stats.get("child_conflict_warning"))
     surfaced = [
         item
         for item in candidates
@@ -2362,6 +2969,11 @@ def _finalize_report(
             "canonical_bucket_count": canonical_bucket_count,
             "legacy_bucket_count": legacy_bucket_count,
             "absorbed_bucket_count": selected_decision_counts.get("absorb_as_dimension", 0),
+            "parent_bucket_count": len(parent_bucket_ids),
+            "parent_live_auto_apply_ready_count": parent_live_auto_apply_ready_count,
+            "absorbed_child_count": absorbed_child_count,
+            "absorbed_sample_count": absorbed_sample_count,
+            "child_conflict_warning_count": child_conflict_warning_count,
             "deterministic_proposal_count": deterministic_proposal_count,
             "ai_tier2_proposal_count": ai_tier2_proposal_count,
             "reviewer_selected_deterministic_count": selected_source_counts.get("deterministic", 0),
@@ -2394,16 +3006,21 @@ def build_lifecycle_bucket_discovery_report(
     *,
     ai_review_provider: str | None = None,
     ai_raw_response: Any | None = None,
+    source_suffix: str | None = None,
+    output_suffix: str | None = None,
 ) -> dict[str, Any]:
     target_date = str(target_date).strip()
-    ldm_path = LDM_REPORT_DIR / f"lifecycle_decision_matrix_{target_date}.json"
+    source_key = _artifact_key(target_date, source_suffix)
+    output_key = _artifact_key(target_date, output_suffix or source_suffix)
+    ldm_path = LDM_REPORT_DIR / f"lifecycle_decision_matrix_{source_key}.json"
     ldm = _load_json(ldm_path)
     warnings: list[str] = []
     if not ldm:
         warnings.append("lifecycle_decision_matrix_missing")
     candidates: list[dict[str, Any]] = []
     source_contract = _source_contract_snapshot(ldm) if ldm else {}
-    previous = _previous_report(target_date)
+    compare_previous_contract = not (source_suffix or output_suffix)
+    previous = _previous_report(target_date) if compare_previous_contract else {}
     previous_contract = (
         previous.get("source_contract")
         if isinstance(previous.get("source_contract"), dict)
@@ -2433,13 +3050,14 @@ def build_lifecycle_bucket_discovery_report(
         warnings.append(f"source_contract_drift_{source_contract_status}")
     report = {
         "schema_version": DISCOVERY_SCHEMA_VERSION,
-        "date": target_date,
+        "date": output_key,
+        "target_date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "report_type": "lifecycle_bucket_discovery",
         "runtime_effect": False,
         "decision_authority": "postclose_lifecycle_bucket_discovery_classifier",
         "metric_role": "primary_ev",
-        "window_policy": "daily_lifecycle_bucket_discovery_with_preopen_auto_apply",
+        "window_policy": str(ldm.get("window_policy") or "daily_lifecycle_bucket_discovery_with_preopen_auto_apply"),
         "sample_floor": "source_bucket_sample_floor",
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "source_quality_gate": "exact_joined_lifecycle_rows_or_source_bucket_quality",
@@ -2456,6 +3074,10 @@ def build_lifecycle_bucket_discovery_report(
         "summary": {
             "human_intervention_required": False,
             "status": "pass" if ldm else "fail",
+            "target_date": target_date,
+            "source_artifact_key": source_key,
+            "output_artifact_key": output_key,
+            "source_window_policy": ldm.get("window_policy") if isinstance(ldm, dict) else None,
             "source_contract_status": source_contract_status,
             "source_contract_change_count": len(source_contract_changes),
             "warnings": warnings,
@@ -2505,6 +3127,8 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- canonical/legacy buckets: `{summary.get('canonical_bucket_count')}` / `{summary.get('legacy_bucket_count')}`",
         f"- dual_proposals: deterministic=`{summary.get('deterministic_proposal_count')}` ai=`{summary.get('ai_tier2_proposal_count')}` hybrid_selected=`{summary.get('reviewer_selected_hybrid_count')}`",
         f"- absorbed/source_quality_blocker: `{summary.get('absorbed_bucket_count')}` / `{summary.get('source_quality_blocker_count')}`",
+        f"- lifecycle_flow_parent_granularity: `{summary.get('parent_granularity_status')}` level=`{summary.get('selected_parent_level')}` parents=`{summary.get('parent_bucket_count')}` target=`{summary.get('target_parent_min')}-{summary.get('target_parent_max')}`",
+        f"- lifecycle_flow_absorbed_children: child=`{summary.get('absorbed_child_count')}` sample=`{summary.get('absorbed_sample_count')}` conflict_parents=`{summary.get('child_conflict_warning_count')}`",
         f"- sim_auto_approved_count: `{summary.get('sim_auto_approved_count')}`",
         f"- lifecycle_flow_sim_probe_candidate_count: `{summary.get('lifecycle_flow_sim_probe_candidate_count')}`",
         f"- live_auto_apply_ready_count: `{summary.get('live_auto_apply_ready_count')}`",
@@ -2650,18 +3274,23 @@ def write_lifecycle_bucket_discovery_report(
     *,
     ai_review_provider: str | None = None,
     ai_raw_response: Any | None = None,
+    source_suffix: str | None = None,
+    output_suffix: str | None = None,
 ) -> dict[str, Any]:
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     report = build_lifecycle_bucket_discovery_report(
         target_date,
         ai_review_provider=ai_review_provider,
         ai_raw_response=ai_raw_response,
+        source_suffix=source_suffix,
+        output_suffix=output_suffix,
     )
-    discovery_report_path(target_date).write_text(
+    output_key = str(report.get("date") or _artifact_key(target_date, output_suffix or source_suffix))
+    discovery_report_path(output_key).write_text(
         json.dumps(report, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    discovery_markdown_path(target_date).write_text(_render_markdown(report), encoding="utf-8")
+    discovery_markdown_path(output_key).write_text(_render_markdown(report), encoding="utf-8")
     _write_catalog(report)
     _write_sim_auto_approval(report)
     return report
@@ -2670,6 +3299,9 @@ def write_lifecycle_bucket_discovery_report(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build lifecycle bucket discovery/classifier report.")
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
+    parser.add_argument("--target-date", dest="target_date_alias")
+    parser.add_argument("--source-suffix")
+    parser.add_argument("--output-suffix")
     parser.add_argument(
         "--ai-review-provider",
         default=os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_REVIEW_PROVIDER", AI_REVIEW_DEFAULT_PROVIDER),
@@ -2677,9 +3309,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Provider for AI Tier2 two-pass bucket interpretation/audit.",
     )
     args = parser.parse_args(argv)
+    target_date = args.target_date_alias or args.target_date
     report = write_lifecycle_bucket_discovery_report(
-        args.target_date,
+        target_date,
         ai_review_provider=args.ai_review_provider,
+        source_suffix=args.source_suffix,
+        output_suffix=args.output_suffix,
     )
     print(json.dumps(report, ensure_ascii=False))
     return 0 if report.get("summary", {}).get("status") == "pass" else 2

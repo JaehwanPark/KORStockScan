@@ -113,6 +113,46 @@ def _isolate_pattern_lab_audit_dirs(tmp_path, monkeypatch):
     )
 
 
+def test_lifecycle_bucket_windows_summary_separates_daily_and_promotion(tmp_path, monkeypatch):
+    discovery_dir = tmp_path / "lifecycle_bucket_discovery"
+    discovery_dir.mkdir()
+    daily_path = discovery_dir / "lifecycle_bucket_discovery_2026-05-29.json"
+    monkeypatch.setattr(mod, "lifecycle_bucket_discovery_report_path", lambda target_date: daily_path)
+    daily_path.write_text(
+        json.dumps({"summary": {"status": "pass", "live_auto_apply_ready_count": 1}}),
+        encoding="utf-8",
+    )
+    for suffix, count in {"rolling5d": 34, "rolling10d": 35, "mtd": 36}.items():
+        (discovery_dir / f"lifecycle_bucket_discovery_2026-05-29_{suffix}.json").write_text(
+            json.dumps(
+                {
+                    "window_policy": suffix,
+                    "summary": {
+                        "status": "pass",
+                        "source_contract_status": "pass",
+                        "ai_two_pass_review_status": "parsed",
+                        "parent_bucket_count": count,
+                        "selected_parent_level": "L1_broad",
+                        "parent_granularity_status": "target_pass",
+                        "absorbed_child_count": 100,
+                        "absorbed_sample_count": 1000,
+                        "child_conflict_warning_count": 2,
+                        "live_auto_apply_ready_count": 0,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    summary, warnings = mod._lifecycle_bucket_windows_summary("2026-05-29")
+
+    assert warnings == []
+    assert summary["daily"]["window_role"] == "new_pattern_detection"
+    assert summary["windows"]["mtd"]["window_role"] == "promotion_confirmation"
+    assert summary["windows"]["mtd"]["parent_bucket_count"] == 36
+    assert summary["windows"]["rolling5d"]["window_role"] == "rolling_confirmation"
+
+
 def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     monitor_dir = report_dir / "monitor_snapshots"
