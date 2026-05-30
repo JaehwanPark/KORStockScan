@@ -565,6 +565,7 @@ class TradingConfig:
     OPENAI_RESPONSES_WS_LATE_DISCARD_ENABLED: bool = True  # deadline 초과 응답 discard
     OPENAI_ENTRY_TIMEOUT_REJECT_ENABLED: bool = True  # buy-side hot path timeout/parse failure 시 reject fallback
     OPENAI_SCALPING_COMPACT_INPUT_ENABLED: bool = True  # OpenAI live route hot path 입력 compact JSON 사용
+    OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED: bool = True  # entry_price compact JSON enabled by operator risk acceptance
     OPENAI_PREVIOUS_RESPONSE_ID_ENABLED: bool = False  # phase1: stateless 유지
     OPENAI_DUAL_PERSONA_ENABLED: bool = False  # Plan Rebase: AI 엔진 A/B/shadow 비교는 기본 튜닝 로직 정렬 이후 재개
     OPENAI_DUAL_PERSONA_SHADOW_MODE: bool = False
@@ -2126,6 +2127,7 @@ def _build_trading_rules() -> TradingConfig:
     env_openai_reasoning_effort = _env_str("KORSTOCKSCAN_OPENAI_REASONING_EFFORT")
     env_openai_ws_late_discard = _env_bool("KORSTOCKSCAN_OPENAI_RESPONSES_WS_LATE_DISCARD_ENABLED")
     env_openai_entry_timeout_reject = _env_bool("KORSTOCKSCAN_OPENAI_ENTRY_TIMEOUT_REJECT_ENABLED")
+    env_openai_entry_price_compact_input = _env_bool("KORSTOCKSCAN_OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED")
     env_openai_previous_response_id = _env_bool("KORSTOCKSCAN_OPENAI_PREVIOUS_RESPONSE_ID_ENABLED")
     env_openai_threshold_correction_model = _env_str("KORSTOCKSCAN_GPT_THRESHOLD_CORRECTION_MODEL")
     env_openai_threshold_correction_fallback_models = _env_csv_tuple(
@@ -2144,6 +2146,7 @@ def _build_trading_rules() -> TradingConfig:
         or env_openai_reasoning_effort is not None
         or env_openai_ws_late_discard is not None
         or env_openai_entry_timeout_reject is not None
+        or env_openai_entry_price_compact_input is not None
         or env_openai_previous_response_id is not None
         or env_openai_threshold_correction_model is not None
         or env_openai_threshold_correction_fallback_models is not None
@@ -2184,6 +2187,9 @@ def _build_trading_rules() -> TradingConfig:
             OPENAI_ENTRY_TIMEOUT_REJECT_ENABLED=env_openai_entry_timeout_reject
             if env_openai_entry_timeout_reject is not None
             else config.OPENAI_ENTRY_TIMEOUT_REJECT_ENABLED,
+            OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED=env_openai_entry_price_compact_input
+            if env_openai_entry_price_compact_input is not None
+            else config.OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED,
             OPENAI_PREVIOUS_RESPONSE_ID_ENABLED=env_openai_previous_response_id
             if env_openai_previous_response_id is not None
             else config.OPENAI_PREVIOUS_RESPONSE_ID_ENABLED,

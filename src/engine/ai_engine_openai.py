@@ -2319,6 +2319,188 @@ class GPTSniperEngine:
     # 퍼블릭 메서드: analyze_target (핵심 실시간 분석)
     # ==========================================
 
+    def _build_scalping_entry_price_raw_input(
+        self,
+        *,
+        stock_name,
+        stock_code,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        price_ctx,
+    ):
+        return json.dumps(
+            {
+                "stock_name": stock_name,
+                "stock_code": stock_code,
+                "ws_data": ws_data or {},
+                "recent_ticks": (recent_ticks or [])[:20],
+                "recent_candles": (recent_candles or [])[:20],
+                "price_context": price_ctx or {},
+            },
+            ensure_ascii=True,
+            default=str,
+        )
+
+    def _compact_entry_price_orderbook(self, ws_data, *, limit=10):
+        orderbook = (ws_data or {}).get("orderbook") if isinstance(ws_data, dict) else {}
+        if not isinstance(orderbook, dict):
+            orderbook = {}
+        return {
+            "asks": [
+                {"price": item.get("price"), "volume": item.get("volume")}
+                for item in (orderbook.get("asks") or [])[:limit]
+                if isinstance(item, dict)
+            ],
+            "bids": [
+                {"price": item.get("price"), "volume": item.get("volume")}
+                for item in (orderbook.get("bids") or [])[:limit]
+                if isinstance(item, dict)
+            ],
+        }
+
+    def _compact_entry_price_ws_data(self, ws_data):
+        ws = ws_data if isinstance(ws_data, dict) else {}
+        return {
+            "curr": ws.get("curr"),
+            "current_price": ws.get("current_price"),
+            "v_pw": ws.get("v_pw"),
+            "buy_ratio": ws.get("buy_ratio"),
+            "fluctuation": ws.get("fluctuation"),
+            "ask_tot": ws.get("ask_tot"),
+            "bid_tot": ws.get("bid_tot"),
+            "net_ask_depth": ws.get("net_ask_depth"),
+            "ask_depth_ratio": ws.get("ask_depth_ratio"),
+            "orderbook": self._compact_entry_price_orderbook(ws, limit=10),
+        }
+
+    def _compact_entry_price_ticks(self, recent_ticks):
+        return [
+            {
+                "time": tick.get("time"),
+                "price": tick.get("price"),
+                "volume": tick.get("volume"),
+                "dir": tick.get("dir", tick.get("side", "NEUTRAL")),
+                "strength": tick.get("strength", 0),
+            }
+            for tick in (recent_ticks or [])[:20]
+            if isinstance(tick, dict)
+        ]
+
+    def _compact_entry_price_candles(self, recent_candles):
+        return [
+            {
+                "체결시간": candle.get("체결시간", candle.get("time")),
+                "시가": candle.get("시가", candle.get("open", candle.get("현재가", candle.get("close", 0)))),
+                "현재가": candle.get("현재가", candle.get("close")),
+                "고가": candle.get("고가", candle.get("high")),
+                "저가": candle.get("저가", candle.get("low")),
+                "거래량": candle.get("거래량", candle.get("volume")),
+            }
+            for candle in (recent_candles or [])[:20]
+            if isinstance(candle, dict)
+        ]
+
+    def _compact_entry_price_context(self, price_ctx):
+        ctx = price_ctx if isinstance(price_ctx, dict) else {}
+        micro = ctx.get("orderbook_micro") if isinstance(ctx.get("orderbook_micro"), dict) else {}
+        spread = 0
+        best_ask = int(self._safe_float(ctx.get("best_ask"), 0))
+        best_bid = int(self._safe_float(ctx.get("best_bid"), 0))
+        if best_ask > 0 and best_bid > 0:
+            spread = best_ask - best_bid
+        spread_bp = micro.get("spread_bp")
+        if spread_bp is None and spread > 0 and best_bid > 0:
+            spread_bp = round((spread / best_bid) * 10000.0, 3)
+        return {
+            "strategy": ctx.get("strategy"),
+            "position_tag": ctx.get("position_tag"),
+            "current_price": ctx.get("current_price"),
+            "best_bid": ctx.get("best_bid"),
+            "best_ask": ctx.get("best_ask"),
+            "spread": spread,
+            "reference_target_price": ctx.get("reference_target_price"),
+            "defensive_order_price": ctx.get("defensive_order_price"),
+            "normal_defensive_order_price": ctx.get("normal_defensive_order_price"),
+            "resolved_order_price": ctx.get("resolved_order_price"),
+            "latency_guard": {
+                "latency_state": ctx.get("latency_state"),
+                "ws_age_ms": ctx.get("ws_age_ms"),
+                "ws_jitter_ms": ctx.get("ws_jitter_ms"),
+                "spread_ratio": ctx.get("spread_ratio"),
+                "quote_stale": ctx.get("quote_stale"),
+            },
+            "entry_price_guard": {
+                "resolution_reason": ctx.get("resolution_reason"),
+                "price_below_bid_bps": ctx.get("price_below_bid_bps"),
+                "reference_target_below_bid_bps": ctx.get("reference_target_below_bid_bps"),
+                "signal_score": ctx.get("signal_score"),
+            },
+            "orderbook_micro": {
+                "ready": micro.get("ready"),
+                "reason": micro.get("reason"),
+                "micro_state": micro.get("micro_state"),
+                "qi": micro.get("qi"),
+                "ofi": micro.get("ofi_norm", micro.get("ofi")),
+                "ofi_z": micro.get("ofi_z"),
+                "top_depth_ratio": micro.get("top_depth_ratio", micro.get("depth_ewma")),
+                "spread_bp": spread_bp,
+                "spread_ticks": micro.get("spread_ticks"),
+                "sample_quote_count": micro.get("sample_quote_count"),
+                "ofi_threshold_source": micro.get("ofi_threshold_source"),
+                "ofi_threshold_bucket_key": micro.get("ofi_threshold_bucket_key", micro.get("ofi_bucket_key")),
+                "ofi_calibration_warning": micro.get("ofi_calibration_warning"),
+            },
+        }
+
+    def _build_scalping_entry_price_user_input(
+        self,
+        *,
+        stock_name,
+        stock_code,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        price_ctx,
+    ):
+        payload = {
+            "stock_name": stock_name,
+            "stock_code": stock_code,
+            "ws_data": self._compact_entry_price_ws_data(ws_data),
+            "recent_ticks": self._compact_entry_price_ticks(recent_ticks),
+            "recent_candles": self._compact_entry_price_candles(recent_candles),
+            "price_context": self._compact_entry_price_context(price_ctx),
+        }
+        return json.dumps(payload, ensure_ascii=True, separators=(",", ":"), default=str)
+
+    def _build_scalping_entry_price_runtime_input(
+        self,
+        *,
+        stock_name,
+        stock_code,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        price_ctx,
+    ):
+        if bool(getattr(TRADING_RULES, "OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED", True)):
+            return self._build_scalping_entry_price_user_input(
+                stock_name=stock_name,
+                stock_code=stock_code,
+                ws_data=ws_data,
+                recent_ticks=recent_ticks,
+                recent_candles=recent_candles,
+                price_ctx=price_ctx,
+            )
+        return self._build_scalping_entry_price_raw_input(
+            stock_name=stock_name,
+            stock_code=stock_code,
+            ws_data=ws_data,
+            recent_ticks=recent_ticks,
+            recent_candles=recent_candles,
+            price_ctx=price_ctx,
+        )
+
     def evaluate_scalping_entry_price(
         self,
         stock_name,
@@ -2378,17 +2560,13 @@ class GPTSniperEngine:
                     result_source="engine_disabled",
                 )
 
-            user_input = json.dumps(
-                {
-                    "stock_name": stock_name,
-                    "stock_code": stock_code,
-                    "ws_data": ws_data or {},
-                    "recent_ticks": (recent_ticks or [])[:20],
-                    "recent_candles": (recent_candles or [])[:20],
-                    "price_context": price_ctx or {},
-                },
-                ensure_ascii=True,
-                default=str,
+            user_input = self._build_scalping_entry_price_runtime_input(
+                stock_name=stock_name,
+                stock_code=stock_code,
+                ws_data=ws_data or {},
+                recent_ticks=recent_ticks or [],
+                recent_candles=recent_candles or [],
+                price_ctx=price_ctx or {},
             )
             result = self._call_openai_safe(
                 SCALPING_ENTRY_PRICE_PROMPT,

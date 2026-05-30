@@ -116,6 +116,155 @@ def _sample_candles():
     ]
 
 
+def _entry_price_compaction_sample(idx):
+    base = 10000 + (idx % 37) * 120
+    best_bid = base - (idx % 3) * 5
+    best_ask = best_bid + 5 + (idx % 4) * 5
+    ws_data = {
+        "curr": base,
+        "current_price": base,
+        "v_pw": 95.0 + (idx % 80),
+        "buy_ratio": 35.0 + (idx % 60),
+        "fluctuation": round(((idx % 21) - 10) / 10, 2),
+        "ask_tot": 100000 + idx * 73,
+        "bid_tot": 90000 + idx * 67,
+        "net_ask_depth": -5000 + idx,
+        "ask_depth_ratio": 80 + (idx % 40),
+        "memo": "수급 확인 " * 10,
+        "unused_snapshot": {f"extra_{n}": f"value-{idx}-{n}" for n in range(20)},
+        "orderbook": {
+            "asks": [
+                {"price": best_ask + level * 5, "volume": 1000 + idx + level, "unused": "ask-detail" * 4}
+                for level in range(10)
+            ],
+            "bids": [
+                {"price": best_bid - level * 5, "volume": 900 + idx + level, "unused": "bid-detail" * 4}
+                for level in range(10)
+            ],
+        },
+    }
+    ticks = [
+        {
+            "time": f"09:{(idx + n) % 60:02d}:{n % 60:02d}",
+            "price": base + ((n % 5) - 2) * 5,
+            "volume": 100 + idx + n,
+            "dir": "BUY" if (idx + n) % 3 else "SELL",
+            "strength": 100 + ((idx + n) % 70),
+            "unused_tick_blob": "tick-noise" * 8,
+        }
+        for n in range(20)
+    ]
+    candles = [
+        {
+            "체결시간": f"09:{n % 60:02d}:00",
+            "시가": base - 20 + n,
+            "현재가": base - 10 + n,
+            "고가": base + 30 + n,
+            "저가": base - 40 + n,
+            "거래량": 1000 + idx * 3 + n * 10,
+            "unused_candle_blob": "candle-noise" * 8,
+        }
+        for n in range(20)
+    ]
+    price_ctx = {
+        "strategy": "SCALPING",
+        "position_tag": "main",
+        "current_price": base,
+        "best_bid": best_bid,
+        "best_ask": best_ask,
+        "reference_target_price": best_bid,
+        "defensive_order_price": best_bid - 5,
+        "normal_defensive_order_price": best_bid - 10,
+        "resolved_order_price": best_bid - 5,
+        "resolution_reason": "latency_guarded_defensive",
+        "price_below_bid_bps": 4,
+        "reference_target_below_bid_bps": 0,
+        "latency_state": "SAFE" if idx % 5 else "CAUTION",
+        "ws_age_ms": 120 + idx,
+        "ws_jitter_ms": idx % 40,
+        "spread_ratio": round((best_ask - best_bid) / max(best_bid, 1), 6),
+        "quote_stale": False,
+        "signal_score": 65 + (idx % 30),
+        "irrelevant_price_context": {f"ctx_extra_{n}": "ctx-noise" * 5 for n in range(20)},
+        "orderbook_micro": {
+            "ready": True,
+            "reason": "ok",
+            "micro_state": ["bullish", "neutral", "bearish", "insufficient"][idx % 4],
+            "qi": round(((idx % 20) - 10) / 10, 3),
+            "ofi_norm": round(((idx % 30) - 15) / 10, 3),
+            "ofi_z": round(((idx % 25) - 12) / 10, 3),
+            "top_depth_ratio": round(0.8 + (idx % 20) / 20, 3),
+            "spread_bp": 5 + (idx % 15),
+            "spread_ticks": 1 + (idx % 3),
+            "sample_quote_count": 20 + idx,
+            "ofi_threshold_source": "bucket",
+            "ofi_threshold_bucket_key": f"spread={idx % 4}|price={idx % 5}",
+            "ofi_calibration_warning": "",
+            **{f"micro_extra_{n}": "micro-noise" * 5 for n in range(25)},
+        },
+    }
+    return ws_data, ticks, candles, price_ctx
+
+
+def _entry_price_fake_model_output(user_input):
+    payload = json.loads(user_input)
+    if "ws_data" in payload:
+        current = payload.get("ws_data") or {}
+        price_ctx = payload.get("price_context") or {}
+    else:
+        current = payload.get("current") or {}
+        price_ctx = payload.get("price_context") or {}
+
+    micro = price_ctx.get("orderbook_micro") or {}
+    latency_guard = price_ctx.get("latency_guard") or {}
+    entry_guard = price_ctx.get("entry_price_guard") or {}
+
+    buy_ratio = float(current.get("buy_ratio") or 0.0)
+    micro_state = str(micro.get("micro_state") or "insufficient")
+    quote_stale = bool(price_ctx.get("quote_stale") if "quote_stale" in price_ctx else latency_guard.get("quote_stale"))
+    latency_state = str(price_ctx.get("latency_state") or latency_guard.get("latency_state") or "")
+    defensive_price = int(float(price_ctx.get("defensive_order_price") or 0))
+    reference_price = int(float(price_ctx.get("reference_target_price") or 0))
+    resolved_price = int(float(price_ctx.get("resolved_order_price") or defensive_price or 0))
+    spread = int(float(price_ctx.get("spread") or 0))
+    if spread <= 0:
+        best_ask = int(float(price_ctx.get("best_ask") or 0))
+        best_bid = int(float(price_ctx.get("best_bid") or 0))
+        spread = max(0, best_ask - best_bid)
+
+    if quote_stale or (micro_state == "bearish" and latency_state == "CAUTION"):
+        return {
+            "action": "SKIP",
+            "order_price": 0,
+            "confidence": 88,
+            "reason": "stale or bearish micro context",
+            "max_wait_sec": 30,
+        }
+    if micro_state == "bullish" and buy_ratio >= 55 and reference_price > 0:
+        return {
+            "action": "USE_REFERENCE",
+            "order_price": reference_price,
+            "confidence": 82,
+            "reason": "bullish micro context supports reference",
+            "max_wait_sec": 45,
+        }
+    if spread >= 15 and resolved_price > 0:
+        return {
+            "action": "IMPROVE_LIMIT",
+            "order_price": resolved_price,
+            "confidence": 76,
+            "reason": "wide spread supports improved limit",
+            "max_wait_sec": 60,
+        }
+    return {
+        "action": "USE_DEFENSIVE",
+        "order_price": defensive_price or resolved_price,
+        "confidence": 90,
+        "reason": "defensive price is suitable",
+        "max_wait_sec": 30,
+    }
+
+
 def test_openai_engine_default_model_routing_uses_requested_tiers():
     engine = GPTSniperEngine(["test-key"], announce_startup=False)
 
@@ -604,6 +753,15 @@ def test_openai_entry_price_tier2_input_escapes_non_english_payload(monkeypatch)
     engine = _build_engine()
     captured = {}
 
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED=True,
+        ),
+    )
+
     def _fake_call(prompt, user_input, **kwargs):
         captured["prompt"] = prompt
         captured["user_input"] = user_input
@@ -634,7 +792,220 @@ def test_openai_entry_price_tier2_input_escapes_non_english_payload(monkeypatch)
     assert not _has_hangul(captured["prompt"])
     assert not _has_hangul(captured["user_input"])
     assert "\\ud14c\\uc2a4\\ud2b8" in captured["user_input"]
-    assert "\\uc218\\uae09" in captured["user_input"]
+    assert "note" not in json.loads(captured["user_input"])["ws_data"]
+
+
+def test_entry_price_compact_input_reduces_payload_across_large_sample(monkeypatch):
+    engine = _build_engine()
+    samples = [_entry_price_compaction_sample(idx) for idx in range(200)]
+    raw_lengths = []
+    compact_lengths = []
+
+    for idx, (ws_data, ticks, candles, price_ctx) in enumerate(samples):
+        raw_payload = engine._build_scalping_entry_price_raw_input(
+            stock_name=f"테스트{idx}",
+            stock_code=f"{idx:06d}",
+            ws_data=ws_data,
+            recent_ticks=ticks,
+            recent_candles=candles,
+            price_ctx=price_ctx,
+        )
+        compact_payload = engine._build_scalping_entry_price_user_input(
+            stock_name=f"테스트{idx}",
+            stock_code=f"{idx:06d}",
+            ws_data=ws_data,
+            recent_ticks=ticks,
+            recent_candles=candles,
+            price_ctx=price_ctx,
+        )
+        parsed = json.loads(compact_payload)
+        raw_lengths.append(len(raw_payload))
+        compact_lengths.append(len(compact_payload))
+
+        assert parsed["stock_name"] == f"테스트{idx}"
+        assert parsed["stock_code"] == f"{idx:06d}"
+        assert parsed["ws_data"]["curr"] == ws_data["curr"]
+        assert parsed["ws_data"]["v_pw"] == ws_data["v_pw"]
+        assert parsed["ws_data"]["buy_ratio"] == ws_data["buy_ratio"]
+        assert parsed["ws_data"]["ask_tot"] == ws_data["ask_tot"]
+        assert parsed["ws_data"]["bid_tot"] == ws_data["bid_tot"]
+        assert len(parsed["ws_data"]["orderbook"]["asks"]) <= 10
+        assert len(parsed["ws_data"]["orderbook"]["bids"]) <= 10
+        assert parsed["price_context"]["defensive_order_price"] == price_ctx["defensive_order_price"]
+        assert parsed["price_context"]["reference_target_price"] == price_ctx["reference_target_price"]
+        assert parsed["price_context"]["resolved_order_price"] == price_ctx["resolved_order_price"]
+        assert parsed["price_context"]["best_bid"] == price_ctx["best_bid"]
+        assert parsed["price_context"]["best_ask"] == price_ctx["best_ask"]
+        assert "spread" in parsed["price_context"]
+        assert "latency_guard" in parsed["price_context"]
+        assert "entry_price_guard" in parsed["price_context"]
+        assert parsed["price_context"]["orderbook_micro"]["micro_state"] == price_ctx["orderbook_micro"]["micro_state"]
+        assert parsed["price_context"]["orderbook_micro"]["ofi"] == price_ctx["orderbook_micro"]["ofi_norm"]
+        assert parsed["price_context"]["orderbook_micro"]["qi"] == price_ctx["orderbook_micro"]["qi"]
+        assert parsed["price_context"]["orderbook_micro"]["top_depth_ratio"] == price_ctx["orderbook_micro"]["top_depth_ratio"]
+        assert parsed["price_context"]["orderbook_micro"]["spread_bp"] == price_ctx["orderbook_micro"]["spread_bp"]
+        assert len(parsed["recent_ticks"]) <= 20
+        assert len(parsed["recent_candles"]) <= 20
+        assert "unused_snapshot" not in compact_payload
+        assert "unused_tick_blob" not in compact_payload
+        assert "unused_candle_blob" not in compact_payload
+
+    raw_avg = sum(raw_lengths) / len(raw_lengths)
+    compact_avg = sum(compact_lengths) / len(compact_lengths)
+    raw_p95 = sorted(raw_lengths)[int(len(raw_lengths) * 0.95) - 1]
+    compact_p95 = sorted(compact_lengths)[int(len(compact_lengths) * 0.95) - 1]
+
+    assert compact_avg <= raw_avg * 0.5
+    assert compact_p95 <= raw_p95 * 0.6
+
+    captured = {}
+
+    def _fake_call(prompt, user_input, **kwargs):
+        captured["prompt"] = prompt
+        captured["user_input"] = user_input
+        captured["kwargs"] = kwargs
+        return {
+            "action": "USE_DEFENSIVE",
+            "order_price": samples[0][3]["resolved_order_price"],
+            "confidence": 90,
+            "reason": "defensive price is suitable",
+            "max_wait_sec": 30,
+        }
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED=True,
+        ),
+    )
+    result = GPTSniperEngine.evaluate_scalping_entry_price(
+        engine,
+        "테스트0",
+        "000000",
+        samples[0][0],
+        samples[0][1],
+        samples[0][2],
+        samples[0][3],
+    )
+
+    captured_payload = json.loads(captured["user_input"])
+    assert result["action"] == "USE_DEFENSIVE"
+    assert captured["kwargs"]["schema_name"] == "entry_price_v1"
+    assert captured["kwargs"]["endpoint_name"] == "entry_price"
+    assert captured["kwargs"]["model_override"] == engine.model_tier2_balanced
+    assert captured_payload["price_context"]["resolved_order_price"] == samples[0][3]["resolved_order_price"]
+
+
+def test_entry_price_runtime_input_defaults_to_compact_and_can_be_disabled(monkeypatch):
+    engine = _build_engine()
+    ws_data, ticks, candles, price_ctx = _entry_price_compaction_sample(3)
+
+    compact_runtime_payload = engine._build_scalping_entry_price_runtime_input(
+        stock_name="테스트3",
+        stock_code="000003",
+        ws_data=ws_data,
+        recent_ticks=ticks,
+        recent_candles=candles,
+        price_ctx=price_ctx,
+    )
+    assert "unused_snapshot" not in compact_runtime_payload
+    assert json.loads(compact_runtime_payload)["price_context"]["resolved_order_price"] == price_ctx[
+        "resolved_order_price"
+    ]
+
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED=False,
+        ),
+    )
+    raw_runtime_payload = engine._build_scalping_entry_price_runtime_input(
+        stock_name="테스트3",
+        stock_code="000003",
+        ws_data=ws_data,
+        recent_ticks=ticks,
+        recent_candles=candles,
+        price_ctx=price_ctx,
+    )
+    assert "unused_snapshot" in raw_runtime_payload
+
+
+def test_entry_price_compact_input_preserves_before_after_output_across_large_sample(monkeypatch):
+    engine = _build_engine()
+    samples = [_entry_price_compaction_sample(idx) for idx in range(200)]
+    action_counts = {}
+
+    for idx, (ws_data, ticks, candles, price_ctx) in enumerate(samples):
+        raw_payload = engine._build_scalping_entry_price_raw_input(
+            stock_name=f"테스트{idx}",
+            stock_code=f"{idx:06d}",
+            ws_data=ws_data,
+            recent_ticks=ticks,
+            recent_candles=candles,
+            price_ctx=price_ctx,
+        )
+        compact_payload = engine._build_scalping_entry_price_user_input(
+            stock_name=f"테스트{idx}",
+            stock_code=f"{idx:06d}",
+            ws_data=ws_data,
+            recent_ticks=ticks,
+            recent_candles=candles,
+            price_ctx=price_ctx,
+        )
+        before_output = _entry_price_fake_model_output(raw_payload)
+        after_output = _entry_price_fake_model_output(compact_payload)
+
+        assert after_output == before_output
+        action_counts[after_output["action"]] = action_counts.get(after_output["action"], 0) + 1
+
+    assert set(action_counts) >= {"USE_DEFENSIVE", "USE_REFERENCE", "IMPROVE_LIMIT", "SKIP"}
+
+    captured_outputs = {}
+
+    def _fake_call(prompt, user_input, **kwargs):
+        output = _entry_price_fake_model_output(user_input)
+        captured_outputs["after"] = output
+        return output
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED=True,
+        ),
+    )
+    ws_data, ticks, candles, price_ctx = samples[17]
+    before_payload = engine._build_scalping_entry_price_raw_input(
+        stock_name="테스트17",
+        stock_code="000017",
+        ws_data=ws_data,
+        recent_ticks=ticks,
+        recent_candles=candles,
+        price_ctx=price_ctx,
+    )
+    before_output = _entry_price_fake_model_output(before_payload)
+    result = GPTSniperEngine.evaluate_scalping_entry_price(
+        engine,
+        "테스트17",
+        "000017",
+        ws_data,
+        ticks,
+        candles,
+        price_ctx,
+    )
+
+    assert captured_outputs["after"] == before_output
+    assert result["action"] == before_output["action"]
+    assert result["order_price"] == before_output["order_price"]
+    assert result["confidence"] == before_output["confidence"]
+    assert result["max_wait_sec"] == before_output["max_wait_sec"]
 
 
 def test_openai_deterministic_config_is_limited_to_json_path(monkeypatch):
