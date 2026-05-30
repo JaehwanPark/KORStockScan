@@ -1547,12 +1547,16 @@ class GPTSniperEngine:
         if not bool(request.require_json):
             return None
         model_name = str(request.model_name or "")
-        if model_name == "gpt-5.4-mini":
+        if str(request.endpoint_name or "") == "entry_price":
+            configured_route_mode = os.getenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_ROUTE_MODE", "off")
+        elif model_name == "gpt-5.4-mini":
             configured_route_mode = os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "shadow")
         else:
             return None
         if str(configured_route_mode or "").strip().lower() != "primary":
             return None
+        if str(request.endpoint_name or "") == "entry_price":
+            return self._try_entry_price_bedrock_primary_provider(request=request, transport_meta=transport_meta)
         try:
             from src.engine.bedrock_nova_provider import (
                 BedrockNovaProviderError,
@@ -1653,6 +1657,184 @@ class GPTSniperEngine:
                 raise
             log_error(f"⚠️ [Bedrock Nova primary failback] {request.context_name}: {type(exc).__name__}")
             return None
+
+    def _try_entry_price_bedrock_primary_provider(self, *, request: OpenAIResponseRequest, transport_meta: dict[str, Any]):
+        try:
+            from src.engine.bedrock_nova_provider import (
+                BedrockNovaProviderError,
+                entry_price_bedrock_route_mode,
+                entry_price_failback_enabled,
+                entry_price_failback_profile_from_env,
+                entry_price_primary_profile_from_env,
+                provider_audit_row,
+                runtime_provider,
+                write_provider_audit_row,
+            )
+        except Exception:
+            return None
+
+        primary_profile = entry_price_primary_profile_from_env()
+        if primary_profile is None:
+            return None
+        request_meta = self._build_bedrock_shadow_request_meta(request=request, transport_meta=transport_meta, roundtrip_ms=0)
+        request_meta["request_id"] = request.request_id
+        request_meta["bedrock_primary_family"] = primary_profile.family
+        request_meta["decision_authority"] = "runtime_primary_with_bedrock_failback_defensive_close"
+        request_meta["route_mode"] = entry_price_bedrock_route_mode()
+
+        try:
+            provider = runtime_provider()
+            result = provider.converse(prompt=request.prompt or "", user_input=request.user_input, profile=primary_profile)
+            if not result.parse_ok or not isinstance(result.payload, dict) or not result.payload:
+                request_meta["bedrock_model_family"] = primary_profile.family
+                write_provider_audit_row(
+                    provider_audit_row(
+                        request_meta=request_meta,
+                        result=result,
+                        payload=result.payload,
+                        error_type=result.parse_error or "parse_failed",
+                    )
+                )
+                raise BedrockNovaProviderError(
+                    result.parse_error or "Bedrock entry_price primary returned invalid JSON",
+                    error_type=result.parse_error or "parse_failed",
+                    attempts=result.attempted_key_count,
+                )
+            request_meta["bedrock_model_family"] = primary_profile.family
+            write_provider_audit_row(provider_audit_row(request_meta=request_meta, result=result, payload=result.payload))
+            transport_meta.update(result.transport_meta())
+            transport_meta.update(
+                {
+                    "openai_transport_mode": "bedrock_primary",
+                    "openai_ws_used": False,
+                    "openai_ws_http_fallback": False,
+                    "openai_ws_roundtrip_ms": int(result.latency_ms),
+                    "bedrock_primary_used": True,
+                    "bedrock_failback_used": False,
+                    "bedrock_model_family": primary_profile.family,
+                    "bedrock_primary_family": primary_profile.family,
+                }
+            )
+            self._set_last_transport_meta(transport_meta)
+            return result.payload
+        except Exception as primary_exc:
+            primary_error_type = type(primary_exc).__name__
+            request_meta["bedrock_model_family"] = primary_profile.family
+            request_meta["bedrock_primary_error_type"] = primary_error_type
+            try:
+                write_provider_audit_row(
+                    provider_audit_row(
+                        request_meta=request_meta,
+                        result=None,
+                        payload={},
+                        error_type=primary_error_type,
+                        error_message=str(primary_exc),
+                    )
+                )
+            except Exception:
+                pass
+
+            failback_profile = entry_price_failback_profile_from_env() if entry_price_failback_enabled() else None
+            if failback_profile is None:
+                transport_meta.update(
+                    {
+                        "bedrock_primary_used": False,
+                        "bedrock_failback_used": False,
+                        "bedrock_primary_error_type": primary_error_type,
+                        "bedrock_primary_family": primary_profile.family,
+                    }
+                )
+                self._set_last_transport_meta(transport_meta)
+                raise
+            try:
+                provider = runtime_provider()
+                failback_result = provider.converse(
+                    prompt=request.prompt or "",
+                    user_input=request.user_input,
+                    profile=failback_profile,
+                )
+                failback_meta = dict(request_meta)
+                failback_meta.update(
+                    {
+                        "bedrock_model_family": failback_profile.family,
+                        "bedrock_failback_family": failback_profile.family,
+                        "bedrock_failback_used": True,
+                        "bedrock_primary_error_type": primary_error_type,
+                    }
+                )
+                if (
+                    not failback_result.parse_ok
+                    or not isinstance(failback_result.payload, dict)
+                    or not failback_result.payload
+                ):
+                    write_provider_audit_row(
+                        provider_audit_row(
+                            request_meta=failback_meta,
+                            result=failback_result,
+                            payload=failback_result.payload,
+                            error_type=failback_result.parse_error or "parse_failed",
+                        )
+                    )
+                    raise BedrockNovaProviderError(
+                        failback_result.parse_error or "Bedrock entry_price failback returned invalid JSON",
+                        error_type=failback_result.parse_error or "parse_failed",
+                        attempts=failback_result.attempted_key_count,
+                    )
+                write_provider_audit_row(
+                    provider_audit_row(request_meta=failback_meta, result=failback_result, payload=failback_result.payload)
+                )
+                transport_meta.update(failback_result.transport_meta())
+                transport_meta.update(
+                    {
+                        "openai_transport_mode": "bedrock_primary",
+                        "openai_ws_used": False,
+                        "openai_ws_http_fallback": False,
+                        "openai_ws_roundtrip_ms": int(failback_result.latency_ms),
+                        "bedrock_primary_used": False,
+                        "bedrock_failback_used": True,
+                        "bedrock_primary_error_type": primary_error_type,
+                        "bedrock_model_family": failback_profile.family,
+                        "bedrock_primary_family": primary_profile.family,
+                        "bedrock_failback_family": failback_profile.family,
+                    }
+                )
+                self._set_last_transport_meta(transport_meta)
+                log_error(f"⚠️ [Bedrock entry_price primary failback] {request.context_name}: {primary_error_type}")
+                return failback_result.payload
+            except Exception as failback_exc:
+                failback_meta = dict(request_meta)
+                failback_meta.update(
+                    {
+                        "bedrock_model_family": failback_profile.family,
+                        "bedrock_failback_family": failback_profile.family,
+                        "bedrock_failback_used": True,
+                        "bedrock_primary_error_type": primary_error_type,
+                    }
+                )
+                try:
+                    write_provider_audit_row(
+                        provider_audit_row(
+                            request_meta=failback_meta,
+                            result=None,
+                            payload={},
+                            error_type=type(failback_exc).__name__,
+                            error_message=str(failback_exc),
+                        )
+                    )
+                except Exception:
+                    pass
+                transport_meta.update(
+                    {
+                        "bedrock_primary_used": False,
+                        "bedrock_failback_used": True,
+                        "bedrock_primary_error_type": primary_error_type,
+                        "bedrock_failback_error_type": type(failback_exc).__name__,
+                        "bedrock_primary_family": primary_profile.family,
+                        "bedrock_failback_family": failback_profile.family,
+                    }
+                )
+                self._set_last_transport_meta(transport_meta)
+                raise
 
     def _build_bedrock_shadow_request_meta(self, *, request, transport_meta, roundtrip_ms=0):
         return {

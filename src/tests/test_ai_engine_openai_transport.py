@@ -405,7 +405,7 @@ def test_bedrock_primary_routes_gpt54_mini_independently(monkeypatch):
     assert meta["bedrock_primary_used"] is True
 
 
-def test_lite_primary_entry_price_and_holding_flow_do_not_call_openai(monkeypatch):
+def test_lite_primary_holding_flow_does_not_call_openai(monkeypatch):
     engine = _build_engine()
     provider_endpoints = []
     openai_called = {"value": False}
@@ -443,24 +443,82 @@ def test_lite_primary_entry_price_and_holding_flow_do_not_call_openai(monkeypatc
     monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
     monkeypatch.setattr(bedrock_nova_provider, "write_provider_audit_row", lambda row: None)
 
-    for endpoint_name in ("entry_price", "holding_flow"):
-        result = GPTSniperEngine._call_openai_safe(
-            engine,
-            "PROMPT",
-            "payload",
-            require_json=True,
-            context_name="test",
-            model_override="gpt-5.4-mini",
-            endpoint_name=endpoint_name,
-        )
-        assert result["reason"] == "lite-primary"
-        meta = engine._consume_last_transport_meta()
-        assert meta["provider"] == "bedrock"
-        assert meta["openai_transport_mode"] == "bedrock_primary"
-        assert meta["bedrock_primary_used"] is True
-        assert meta["bedrock_failback_used"] is False
+    result = GPTSniperEngine._call_openai_safe(
+        engine,
+        "PROMPT",
+        "payload",
+        require_json=True,
+        context_name="test",
+        model_override="gpt-5.4-mini",
+        endpoint_name="holding_flow",
+    )
+    assert result["reason"] == "lite-primary"
+    meta = engine._consume_last_transport_meta()
+    assert meta["provider"] == "bedrock"
+    assert meta["openai_transport_mode"] == "bedrock_primary"
+    assert meta["bedrock_primary_used"] is True
+    assert meta["bedrock_failback_used"] is False
 
-    assert provider_endpoints == ["lite", "lite"]
+    assert provider_endpoints == ["lite"]
+    assert openai_called["value"] is False
+
+
+def test_entry_price_qwen_primary_does_not_call_openai(monkeypatch):
+    engine = _build_engine()
+    captured = {}
+    openai_called = {"value": False}
+
+    class Responses:
+        def create(self, **kwargs):
+            openai_called["value"] = True
+            raise AssertionError("OpenAI must not be called for entry_price Qwen primary")
+
+    class Provider:
+        def converse(self, *, prompt, user_input, profile):
+            captured["family"] = profile.family
+            captured["model_id"] = profile.model_id
+            return bedrock_nova_provider.BedrockNovaResult(
+                payload={"action": "USE_REFERENCE", "order_price": 10100, "confidence": 72, "reason": "qwen"},
+                raw_text='{"action":"USE_REFERENCE","order_price":10100,"confidence":72,"reason":"qwen"}',
+                parse_ok=True,
+                parse_error="",
+                model_id=profile.model_id,
+                region_name=profile.region_name,
+                key_index=0,
+                latency_ms=111,
+                input_tokens=20,
+                output_tokens=8,
+                cache_read_input_tokens=0,
+                cache_write_input_tokens=0,
+                total_input_tokens=20,
+                estimated_cost_usd=0.0,
+                attempted_key_count=1,
+            )
+
+    engine.client = SimpleNamespace(responses=Responses())
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_ROUTE_MODE", "primary")
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_PRIMARY_FAMILY", "qwen3_32b")
+    monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
+    monkeypatch.setattr(bedrock_nova_provider, "write_provider_audit_row", lambda row: None)
+
+    result = GPTSniperEngine._call_openai_safe(
+        engine,
+        "PROMPT",
+        "payload",
+        require_json=True,
+        context_name="test",
+        model_override="gpt-5.4-mini",
+        endpoint_name="entry_price",
+    )
+
+    assert result["reason"] == "qwen"
+    assert captured["family"] == "qwen3_32b"
+    meta = engine._consume_last_transport_meta()
+    assert meta["openai_transport_mode"] == "bedrock_primary"
+    assert meta["bedrock_model_family"] == "qwen3_32b"
+    assert meta["bedrock_primary_family"] == "qwen3_32b"
+    assert meta["bedrock_primary_used"] is True
+    assert meta["bedrock_failback_used"] is False
     assert openai_called["value"] is False
 
 
@@ -679,6 +737,211 @@ def test_bedrock_primary_failure_falls_back_to_openai(monkeypatch):
     meta = engine._consume_last_transport_meta()
     assert meta["bedrock_failback_used"] is True
     assert meta["openai_transport_mode"] == "http"
+
+
+def test_entry_price_qwen_parse_failure_falls_back_to_nova_lite_v2(monkeypatch):
+    engine = _build_engine()
+    families = []
+    audit_rows = []
+    openai_called = {"value": False}
+
+    class Responses:
+        def create(self, **kwargs):
+            openai_called["value"] = True
+            raise AssertionError("OpenAI must not be called for entry_price Qwen failback")
+
+    class Provider:
+        def converse(self, *, prompt, user_input, profile):
+            families.append(profile.family)
+            if profile.family == "qwen3_32b":
+                return bedrock_nova_provider.BedrockNovaResult(
+                    payload={},
+                    raw_text='{"action":"USE_REFERENCE",',
+                    parse_ok=False,
+                    parse_error="JSONDecodeError",
+                    model_id=profile.model_id,
+                    region_name=profile.region_name,
+                    key_index=1,
+                    latency_ms=100,
+                    input_tokens=20,
+                    output_tokens=8,
+                    cache_read_input_tokens=0,
+                    cache_write_input_tokens=0,
+                    total_input_tokens=20,
+                    estimated_cost_usd=0.0,
+                    attempted_key_count=2,
+                )
+            return bedrock_nova_provider.BedrockNovaResult(
+                payload={"action": "USE_DEFENSIVE", "order_price": 9900, "confidence": 80, "reason": "nova"},
+                raw_text='{"action":"USE_DEFENSIVE","order_price":9900,"confidence":80,"reason":"nova"}',
+                parse_ok=True,
+                parse_error="",
+                model_id=profile.model_id,
+                region_name=profile.region_name,
+                key_index=0,
+                latency_ms=120,
+                input_tokens=22,
+                output_tokens=8,
+                cache_read_input_tokens=0,
+                cache_write_input_tokens=0,
+                total_input_tokens=22,
+                estimated_cost_usd=0.0,
+                attempted_key_count=1,
+            )
+
+    engine.client = SimpleNamespace(responses=Responses())
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_ROUTE_MODE", "primary")
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_PRIMARY_FAMILY", "qwen3_32b")
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_FAILBACK_FAMILY", "lite_v2")
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_FAILBACK_ENABLED", "true")
+    monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
+    monkeypatch.setattr(bedrock_nova_provider, "write_provider_audit_row", audit_rows.append)
+
+    result = GPTSniperEngine._call_openai_safe(
+        engine,
+        "PROMPT",
+        "payload",
+        require_json=True,
+        context_name="test",
+        model_override="gpt-5.4-mini",
+        endpoint_name="entry_price",
+    )
+
+    assert result["reason"] == "nova"
+    assert families == ["qwen3_32b", "lite_v2"]
+    meta = engine._consume_last_transport_meta()
+    assert meta["bedrock_primary_used"] is False
+    assert meta["bedrock_failback_used"] is True
+    assert meta["bedrock_primary_family"] == "qwen3_32b"
+    assert meta["bedrock_failback_family"] == "lite_v2"
+    assert meta["bedrock_model_family"] == "lite_v2"
+    assert openai_called["value"] is False
+    assert any(row["bedrock_primary_error_type"] == "BedrockNovaProviderError" for row in audit_rows)
+    assert any(
+        row["decision_authority"] == "runtime_primary_with_bedrock_failback_defensive_close" for row in audit_rows
+    )
+    assert any(row["bedrock_attempted_key_count"] == 2 for row in audit_rows)
+
+
+def test_entry_price_qwen_and_nova_fail_does_not_fall_back_to_openai(monkeypatch):
+    engine = _build_engine()
+    families = []
+    openai_called = {"value": False}
+
+    class Responses:
+        def create(self, **kwargs):
+            openai_called["value"] = True
+            raise AssertionError("OpenAI must not be called when entry_price Bedrock chain fails")
+
+    class Provider:
+        def converse(self, *, prompt, user_input, profile):
+            families.append(profile.family)
+            raise RuntimeError(f"{profile.family} unavailable")
+
+    engine.client = SimpleNamespace(responses=Responses())
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_ROUTE_MODE", "primary")
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_PRIMARY_FAMILY", "qwen3_32b")
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_FAILBACK_FAMILY", "lite_v2")
+    monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
+    monkeypatch.setattr(bedrock_nova_provider, "write_provider_audit_row", lambda row: None)
+
+    try:
+        GPTSniperEngine._call_openai_safe(
+            engine,
+            "PROMPT",
+            "payload",
+            require_json=True,
+            context_name="test",
+            model_override="gpt-5.4-mini",
+            endpoint_name="entry_price",
+        )
+    except RuntimeError as exc:
+        assert "lite_v2 unavailable" in str(exc)
+    else:
+        raise AssertionError("entry_price Bedrock chain failure must raise to caller fallback")
+
+    assert families == ["qwen3_32b", "lite_v2"]
+    assert openai_called["value"] is False
+
+
+def test_entry_price_provider_init_failure_records_audit_and_does_not_call_openai(monkeypatch):
+    engine = _build_engine()
+    audit_rows = []
+    openai_called = {"value": False}
+
+    class Responses:
+        def create(self, **kwargs):
+            openai_called["value"] = True
+            raise AssertionError("OpenAI must not be called when entry_price Bedrock provider init fails")
+
+    def _raise_runtime_provider():
+        raise RuntimeError("missing bedrock api keys")
+
+    engine.client = SimpleNamespace(responses=Responses())
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_ROUTE_MODE", "primary")
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_PRIMARY_FAMILY", "qwen3_32b")
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_FAILBACK_FAMILY", "lite_v2")
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_FAILBACK_ENABLED", "true")
+    monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", _raise_runtime_provider)
+    monkeypatch.setattr(bedrock_nova_provider, "write_provider_audit_row", audit_rows.append)
+
+    try:
+        GPTSniperEngine._call_openai_safe(
+            engine,
+            "PROMPT",
+            "payload",
+            require_json=True,
+            context_name="test",
+            model_override="gpt-5.4-mini",
+            endpoint_name="entry_price",
+        )
+    except RuntimeError as exc:
+        assert "missing bedrock api keys" in str(exc)
+    else:
+        raise AssertionError("entry_price provider init failure must raise to caller fallback")
+
+    assert openai_called["value"] is False
+    assert any(row["bedrock_primary_family"] == "qwen3_32b" for row in audit_rows)
+    assert any(row["bedrock_failback_family"] == "lite_v2" for row in audit_rows)
+    assert all(row["decision_authority"] == "runtime_primary_with_bedrock_failback_defensive_close" for row in audit_rows)
+
+
+def test_entry_price_qwen_and_nova_fail_uses_defensive_engine_fallback(monkeypatch):
+    engine = _build_engine()
+    ws_data, ticks, candles, price_ctx = _entry_price_compaction_sample(1)
+    openai_called = {"value": False}
+
+    class Responses:
+        def create(self, **kwargs):
+            openai_called["value"] = True
+            raise AssertionError("OpenAI must not be called when entry_price Bedrock chain fails")
+
+    class Provider:
+        def converse(self, *, prompt, user_input, profile):
+            raise RuntimeError(f"{profile.family} unavailable")
+
+    engine.client = SimpleNamespace(responses=Responses())
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_ROUTE_MODE", "primary")
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_PRIMARY_FAMILY", "qwen3_32b")
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_FAILBACK_FAMILY", "lite_v2")
+    monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
+    monkeypatch.setattr(bedrock_nova_provider, "write_provider_audit_row", lambda row: None)
+
+    result = GPTSniperEngine.evaluate_scalping_entry_price(
+        engine,
+        "테스트",
+        "005930",
+        ws_data,
+        ticks,
+        candles,
+        price_ctx,
+    )
+
+    assert result["action"] == "USE_DEFENSIVE"
+    assert result["reason"] == "ai_failure_use_defensive_fallback"
+    assert result["order_price"] == price_ctx["resolved_order_price"]
+    assert result["ai_parse_fail"] is True
+    assert openai_called["value"] is False
 
 
 def test_openai_holding_flow_uses_flow_schema_and_normalizes_payload(monkeypatch):

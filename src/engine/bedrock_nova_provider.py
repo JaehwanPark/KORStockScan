@@ -12,8 +12,10 @@ from src.utils.constants import CONFIG_PATH, DATA_DIR, DEV_PATH
 
 
 DEFAULT_REGION = "ap-northeast-2"
+DEFAULT_QWEN3_32B_REGION = "us-west-2"
 DEFAULT_LITE_MODEL_ID = "apac.amazon.nova-lite-v1:0"
 DEFAULT_LITE_V2_MODEL_ID = "global.amazon.nova-2-lite-v1:0"
+DEFAULT_QWEN3_32B_MODEL_ID = "qwen.qwen3-32b-v1:0"
 PRIMARY_AUDIT_DIR = DATA_DIR / "report" / "bedrock_nova_primary_provider"
 
 LITE_INPUT_USD_PER_1M = 0.06
@@ -25,6 +27,9 @@ LITE_V2_INPUT_USD_PER_1M = LITE_INPUT_USD_PER_1M
 LITE_V2_OUTPUT_USD_PER_1M = LITE_OUTPUT_USD_PER_1M
 LITE_V2_CACHE_READ_INPUT_USD_PER_1M = LITE_CACHE_READ_INPUT_USD_PER_1M
 LITE_V2_CACHE_WRITE_INPUT_USD_PER_1M = LITE_CACHE_WRITE_INPUT_USD_PER_1M
+
+QWEN3_32B_INPUT_USD_PER_1M = 0.0
+QWEN3_32B_OUTPUT_USD_PER_1M = 0.0
 
 OPENAI_GPT5_NANO_INPUT_USD_PER_1M = 0.05
 OPENAI_GPT5_NANO_OUTPUT_USD_PER_1M = 0.40
@@ -133,6 +138,14 @@ def endpoint_allowed_for_lite_primary(endpoint_name: str) -> bool:
         return True
     endpoint = str(endpoint_name or "").strip().lower()
     return endpoint in allowed
+
+
+def entry_price_bedrock_route_mode() -> str:
+    return str(os.getenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_ROUTE_MODE", "off")).strip().lower()
+
+
+def entry_price_failback_enabled() -> bool:
+    return _env_bool("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_FAILBACK_ENABLED", True)
 
 
 def _extract_json_text(text: str) -> str:
@@ -463,6 +476,51 @@ def lite_v2_profile_from_env() -> BedrockNovaModelProfile:
     )
 
 
+def qwen3_32b_profile_from_env() -> BedrockNovaModelProfile:
+    return BedrockNovaModelProfile(
+        family="qwen3_32b",
+        model_id=os.getenv("KORSTOCKSCAN_BEDROCK_QWEN3_32B_MODEL_ID", DEFAULT_QWEN3_32B_MODEL_ID),
+        region_name=os.getenv("KORSTOCKSCAN_BEDROCK_QWEN3_32B_REGION", DEFAULT_QWEN3_32B_REGION),
+        max_output_tokens=_env_int("KORSTOCKSCAN_BEDROCK_QWEN3_32B_MAX_OUTPUT_TOKENS", 768),
+        timeout_ms=_env_int("KORSTOCKSCAN_BEDROCK_QWEN3_32B_TIMEOUT_MS", 7000),
+        prompt_cache_enabled=_env_bool("KORSTOCKSCAN_BEDROCK_QWEN3_32B_PROMPT_CACHE_ENABLED", False),
+        input_usd_per_1m=_safe_float(
+            os.getenv("KORSTOCKSCAN_BEDROCK_QWEN3_32B_INPUT_USD_PER_1M"),
+            QWEN3_32B_INPUT_USD_PER_1M,
+        ),
+        output_usd_per_1m=_safe_float(
+            os.getenv("KORSTOCKSCAN_BEDROCK_QWEN3_32B_OUTPUT_USD_PER_1M"),
+            QWEN3_32B_OUTPUT_USD_PER_1M,
+        ),
+        cache_read_input_usd_per_1m=0.0,
+        cache_write_input_usd_per_1m=0.0,
+    )
+
+
+def entry_price_primary_profile_from_env() -> BedrockNovaModelProfile | None:
+    primary_family = str(os.getenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_PRIMARY_FAMILY", "qwen3_32b")).strip().lower()
+    if primary_family in {"qwen3_32b", "qwen3-32b", "qwen"}:
+        return qwen3_32b_profile_from_env()
+    if primary_family in {"lite_v2", "v2", "nova_lite_v2"}:
+        return lite_v2_profile_from_env()
+    if primary_family in {"lite", "nova_lite"}:
+        return lite_profile_from_env()
+    return None
+
+
+def entry_price_failback_profile_from_env() -> BedrockNovaModelProfile | None:
+    failback_family = str(os.getenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_FAILBACK_FAMILY", "lite_v2")).strip().lower()
+    if failback_family in {"lite_v2", "v2", "nova_lite_v2"}:
+        return lite_v2_profile_from_env()
+    if failback_family in {"lite", "nova_lite"}:
+        return lite_profile_from_env()
+    if failback_family in {"off", "none", ""}:
+        return None
+    if failback_family in {"qwen3_32b", "qwen3-32b", "qwen"}:
+        return qwen3_32b_profile_from_env()
+    return None
+
+
 def route_mode_for_model(model_name: str) -> tuple[str, BedrockNovaModelProfile | None]:
     model = str(model_name or "")
     if model == "gpt-5.4-mini":
@@ -513,12 +571,18 @@ def provider_audit_row(
         "source_event_stage": str(request_meta.get("source_event_stage") or ""),
         "pipeline_event_emitted_at": str(request_meta.get("pipeline_event_emitted_at") or ""),
         "primary_provider": "bedrock",
+        "bedrock_model_family": str(request_meta.get("bedrock_model_family") or ""),
+        "bedrock_primary_family": str(request_meta.get("bedrock_primary_family") or ""),
+        "bedrock_failback_family": str(request_meta.get("bedrock_failback_family") or ""),
+        "bedrock_failback_used": bool(request_meta.get("bedrock_failback_used") or False),
+        "bedrock_attempted_key_count": int(result.attempted_key_count) if result else 0,
+        "bedrock_primary_error_type": str(request_meta.get("bedrock_primary_error_type") or ""),
         "bedrock_action": action,
         "bedrock_score": score,
         "parse_ok": bool(result.parse_ok) if result else False,
         "error_type": error_type or (result.parse_error if result else ""),
         "error_message": str(error_message or "")[:240],
-        "decision_authority": "runtime_primary_with_openai_failback",
+        "decision_authority": str(request_meta.get("decision_authority") or "runtime_primary_with_openai_failback"),
         "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
     }
     if result is not None:

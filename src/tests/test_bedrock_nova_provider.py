@@ -1,4 +1,6 @@
 import json
+import sys
+from types import SimpleNamespace
 
 from src.engine import bedrock_nova_provider as mod
 
@@ -64,6 +66,29 @@ def test_provider_result_records_parse_failure_without_raising():
     assert result.payload == {}
 
 
+def test_provider_client_cache_is_separated_by_region(monkeypatch):
+    created = []
+
+    class FakeBoto3:
+        def client(self, service_name, *, region_name, config):
+            client = object()
+            created.append((service_name, region_name, client))
+            return client
+
+    monkeypatch.setitem(sys.modules, "boto3", FakeBoto3())
+    monkeypatch.setitem(sys.modules, "botocore", SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "botocore.config", SimpleNamespace(Config=lambda **kwargs: kwargs))
+
+    provider = mod.BedrockNovaProvider(api_keys=["key-1"])
+    first = provider._client(key_index=0, key="key-1", region_name="us-west-2", timeout_ms=7000)
+    second = provider._client(key_index=0, key="key-1", region_name="ap-northeast-2", timeout_ms=7000)
+    first_again = provider._client(key_index=0, key="key-1", region_name="us-west-2", timeout_ms=7000)
+
+    assert first is first_again
+    assert first is not second
+    assert [item[1] for item in created] == ["us-west-2", "ap-northeast-2"]
+
+
 def test_route_mode_for_gpt5_nano_is_off_after_micro_removal():
     route_mode, profile = mod.route_mode_for_model("gpt-5-nano")
 
@@ -77,6 +102,26 @@ def test_lite_v2_profile_defaults_to_inference_profile(monkeypatch):
     profile = mod.lite_v2_profile_from_env()
 
     assert profile.model_id == "global.amazon.nova-2-lite-v1:0"
+
+
+def test_qwen3_32b_profile_defaults_to_bedrock_model(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_BEDROCK_QWEN3_32B_MODEL_ID", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_BEDROCK_QWEN3_32B_REGION", raising=False)
+
+    profile = mod.qwen3_32b_profile_from_env()
+
+    assert profile.family == "qwen3_32b"
+    assert profile.model_id == "qwen.qwen3-32b-v1:0"
+    assert profile.region_name == "us-west-2"
+
+
+def test_entry_price_primary_profile_can_select_qwen3_32b(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_ENTRY_PRICE_PRIMARY_FAMILY", "qwen3_32b")
+
+    profile = mod.entry_price_primary_profile_from_env()
+
+    assert profile is not None
+    assert profile.family == "qwen3_32b"
 
 
 def test_route_mode_for_gpt54_mini_can_select_lite_v2_primary(monkeypatch):
