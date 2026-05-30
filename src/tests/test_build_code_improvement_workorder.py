@@ -1278,6 +1278,7 @@ def test_build_code_improvement_workorder_treats_implemented_report_order_as_exi
     )
     assert order["decision"] == "attach_existing_family"
     assert order["route"] == "existing_family"
+    assert order["implementation_candidate"] is False
     assert order["implementation_status"] == "implemented"
     assert order["implementation_checks"] == [{"name": "contract", "status": "pass"}]
     assert order["implementation_provenance"]["decision_authority"] == "source_quality_only"
@@ -2408,6 +2409,8 @@ def test_build_code_improvement_workorder_consumes_lifecycle_entry_bucket_workor
         if item["order_id"] == "order_lifecycle_overnight_bucket_overnight_action_sell_today"
     )
     assert overnight_order["decision"] == "attach_existing_family"
+    assert overnight_order["derived_review_category"] == "already_implemented_source_handoff"
+    assert overnight_order["implementation_candidate"] is False
     assert overnight_order["runtime_effect"] is False
     assert overnight_order["allowed_runtime_apply"] is False
     assert overnight_order["implementation_status"] == "implemented"
@@ -2418,6 +2421,7 @@ def test_build_code_improvement_workorder_consumes_lifecycle_entry_bucket_workor
     )
     assert overnight_order["source_report_type"] == "lifecycle_decision_matrix_overnight_bucket_attribution"
     assert "bucket_key=SELL_TODAY" in overnight_order["evidence"]
+    assert report["summary"]["already_implemented_source_handoff_count"] == 1
     assert report["summary"]["lifecycle_entry_bucket_source_order_count"] == 1
     assert report["summary"]["lifecycle_scale_in_bucket_source_order_count"] == 1
     assert report["summary"]["lifecycle_overnight_bucket_source_order_count"] == 1

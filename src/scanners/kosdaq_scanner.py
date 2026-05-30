@@ -37,7 +37,7 @@ from src.database.db_manager import DBManager
 from src.database.models import RecommendationHistory
 from src.core.event_bus import EventBus
 from src.utils.constants import TRADING_RULES
-import src.engine.ml_predictor as ml_predictor
+import src.engine.swing.ml_predictor as ml_predictor
 
 
 def build_kosdaq_candidate_map(raw_targets, supernova_targets):

@@ -172,6 +172,14 @@ consumer inventory 기준표:
 - 근거: [codebase_performance_workorder_2026-05-29.json](/home/ubuntu/KORStockScan/data/report/codebase_performance_workorder/codebase_performance_workorder_2026-05-29.json)은 accepted `7`, implemented `7`, pending accepted `0`, deferred `3`, rejected `2`로 닫혔다. 당일 코드 보강은 lifecycle bucket discovery, observation/source-quality, runtime apply gap audit, postclose verifier의 instrumentation/report/provenance 계약 보강이며 runtime/order/provider/threshold/bot path 이동이 아니다. [runtime_apply_gap_audit_2026-05-29.json](/home/ubuntu/KORStockScan/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_2026-05-29.json)은 `codex_directive_count=0`, `critical_failure_count=0`이지만 retry queue `1`과 `status=warning`을 남겼고, error detector health-only warning은 의도적 postclose bot isolation이다.
 - 다음 액션: `system_metric_sampler`와 관련 report-only safe-slice 이동은 계속 보류한다. 다음 재개 전에는 deploy/cron/error detector/test import consumer inventory, old/new import smoke, old/new CLI smoke plan을 먼저 작성한다. 그 전에는 wrapper 제거, cron/job id 변경, output path/JSON schema/metric semantics 변경, runtime/order/provider/bot 경로 이동을 하지 않는다.
 
+## 2026-06-01 재확인 상태
+
+- `consumer_inventory_refreshed` 후보군은 문서/체크리스트 정리 관점에서 유지되었고, old/new CLI smoke는 계획대로 준비됨.
+- 최신 측정(2026-06-01): `src.engine.system_metric_sampler`와 `src.engine.monitoring.system_metric_sampler` 모두 Exit 0.
+- 판정: `src.engine.monitoring.system_metric_sampler`에 구현이 정착되고 `src.engine.system_metric_sampler`는 wrapper로 유지됨. `implemented_with_wrapper` 상태.
+- `consumer_inventory_refreshed`/greenfield 분리 기준이 충족된 상태에서 `implement_monitoring_sampler_slice` 완료 기록으로 전환.
+- 제약 유지: wrapper 제거/cron/job id/output path/behavior semantics 변경 없음.
+
 보류:
 
 - `src.utils.threshold_cycle_registry -> src.engine.automation.threshold_cycle_registry`는 `UtilsBoundaryAudit` 이후 검토한다.

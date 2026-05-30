@@ -348,6 +348,8 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     assert {item["live_auto_apply_family"] for item in live} == {mod.SCALE_IN_LIVE_AUTO_FAMILY}
     wait6579 = states["entry:combo_entry_spot:score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liquidity_unknown"]
     assert wait6579["classification_state"] == "entry_only_sim_auto_approved"
+    assert wait6579["review_category"] == "sim_auto_approved"
+    assert wait6579["review_sub_state"] == "entry_only_sim_auto_approved"
     assert wait6579["evidence_grade"] == mod.EVIDENCE_GRADE_2_COUNTERFACTUAL
     assert wait6579["transition_target"] == "sim_lifecycle_handoff"
     assert wait6579["full_real_conversion_allowed"] is False
@@ -378,6 +380,8 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
         if item["stage"] == "lifecycle_flow" and item["classification_state"] == mod.LIFECYCLE_FLOW_SIM_PROBE_STATE
     )
     assert flow_probe["classification_state"] == mod.LIFECYCLE_FLOW_SIM_PROBE_STATE
+    assert flow_probe["review_category"] == "sim_auto_approved"
+    assert flow_probe["review_sub_state"] == "lifecycle_flow_sim_probe_candidate"
     assert flow_probe["source_bucket_kind"] == "lifecycle_flow_sim_probe_policy"
     assert flow_probe["live_auto_apply_family"] is None
     assert flow_probe["allowed_runtime_apply"] is False
@@ -414,9 +418,13 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path
     assert entry_only_sources
     assert entry_only_sources[0]["bucket_relation"] == "new_bucket_candidate"
     assert entry_only_sources[0]["classification_state"] == "entry_only_source_candidate"
+    assert entry_only_sources[0]["review_category"] == "source_only_keep_collecting"
+    assert entry_only_sources[0]["review_sub_state"] == "entry_only_source_candidate"
     assert entry_only_sources[0]["source_bucket_id"]
     assert "recommended_resolution" in entry_only_sources[0]
     assert "source_bucket_kind_counts" in report["summary"]
+    assert report["summary"]["review_category_counts"]["sim_auto_approved"] >= len(sim)
+    assert report["summary"]["review_sub_state_counts"]["lifecycle_flow_sim_probe_candidate"] == 1
     assert report["summary"]["human_intervention_required"] is False
     assert report["summary"]["lifecycle_flow_sim_probe_candidate_count"] == 1
     assert report["ai_two_pass_review"]["sharded"] is True
@@ -897,6 +905,8 @@ def test_lifecycle_flow_source_only_blocker_overrides_live_runtime_metadata():
     mod._normalize_candidate_runtime_metadata(item)
 
     assert item["source_bucket_kind"] == "taxonomy_provenance_gap"
+    assert item["review_category"] == "source_only_keep_collecting"
+    assert item["review_sub_state"] is None
     assert item["explicit_runtime_exclusion"] is True
     assert item["live_auto_apply_family"] is None
     assert item["allowed_runtime_apply"] is False
@@ -1217,6 +1227,7 @@ def test_lifecycle_bucket_discovery_does_not_treat_empty_declared_section_as_con
 
 def test_lifecycle_bucket_discovery_openai_review_uses_tier2_schema_and_english_prompt(monkeypatch):
     captured = {}
+    monkeypatch.setenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_SOURCE_ONLY_AI_PRIMARY_PROVIDER", "openai")
 
     class _FakeResponses:
         def create(self, **kwargs):

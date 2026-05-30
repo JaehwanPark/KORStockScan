@@ -2,6 +2,7 @@ import json
 import re
 from pathlib import Path
 
+from src.engine.ai.postclose_review_config import PostcloseAIReviewConfig
 from src.engine import runtime_apply_gap_audit as mod
 
 
@@ -36,6 +37,103 @@ def _write_core_artifacts(report_dir: Path, target_date: str = "2026-05-22"):
         report_dir / "lifecycle_bucket_discovery" / f"lifecycle_bucket_discovery_{target_date}.json",
         {"report_type": "lifecycle_bucket_discovery", "surfaced_candidates": []},
     )
+
+
+def _runtime_gemini_config() -> PostcloseAIReviewConfig:
+    return PostcloseAIReviewConfig(
+        artifact="RUNTIME_APPLY_GAP_AUDIT",
+        model="gpt-5.4",
+        reasoning_effort="low",
+        timeout_sec=180,
+        primary_provider="gemini_3_5_flash",
+        failback_provider="openai",
+        gemini_model="gemini-3.5-flash",
+        gemini_shard_size=10,
+    )
+
+
+def test_runtime_apply_gap_gemini_review_splits_40_candidates_into_10_candidate_shards(monkeypatch):
+    calls = []
+
+    def fake_call(context, config):
+        calls.append([item["candidate_id"] for item in context["review_candidates"]])
+        return (
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "reviewer": "runtime_apply_gap_ai_review",
+                    "candidate_reviews": [
+                        {
+                            "candidate_id": item["candidate_id"],
+                            "recommended_disposition": "sim_auto_approved",
+                            "route_decision": "keep_sim_policy",
+                            "confidence": "medium",
+                            "reason": "Shard review passed.",
+                            "required_followup": [],
+                        }
+                        for item in context["review_candidates"]
+                    ],
+                    "audit": {"status": "pass", "issues": [], "reason": "ok"},
+                    "codex_directives": [],
+                }
+            ),
+            {"provider": "gemini", "status": "success", "gemini_key_rotation_attempts": 1},
+        )
+
+    monkeypatch.setattr(mod, "_call_openai_ai_review", fake_call)
+    context = {
+        "reviewer": "runtime_apply_gap_ai_review",
+        "review_candidates": [{"candidate_id": f"candidate-{index}"} for index in range(40)],
+    }
+
+    raw, status = mod._call_sharded_gemini_runtime_review(context, config=_runtime_gemini_config())
+    parse_status, payload, warnings = mod._parse_ai_review_response(raw)
+
+    assert parse_status == "parsed"
+    assert warnings == []
+    assert len(calls) == 4
+    assert all(len(call) == 10 for call in calls)
+    assert [item["candidate_id"] for item in payload["candidate_reviews"]] == [
+        f"candidate-{index}" for index in range(40)
+    ]
+    assert status["provider"] == "gemini"
+    assert status["shard_count"] == 4
+    assert status["parsed_shard_count"] == 4
+
+
+def test_runtime_apply_gap_gemini_shard_failure_uses_openai_full_context_failback(monkeypatch):
+    calls = []
+
+    def fake_call(context, config):
+        calls.append((config.primary_provider, len(context["review_candidates"])))
+        if config.primary_provider == "gemini_3_5_flash":
+            return "not-json", {"provider": "gemini", "status": "contract_failed"}
+        return (
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "reviewer": "runtime_apply_gap_ai_review",
+                    "candidate_reviews": [],
+                    "audit": {"status": "pass", "issues": [], "reason": "openai failback"},
+                    "codex_directives": [],
+                }
+            ),
+            {"provider": "openai", "status": "success"},
+        )
+
+    monkeypatch.setattr(mod, "_call_openai_ai_review", fake_call)
+    context = {
+        "reviewer": "runtime_apply_gap_ai_review",
+        "review_candidates": [{"candidate_id": f"candidate-{index}"} for index in range(12)],
+    }
+
+    raw, status = mod._call_sharded_gemini_runtime_review(context, config=_runtime_gemini_config())
+
+    assert json.loads(raw)["audit"]["reason"] == "openai failback"
+    assert calls == [("gemini_3_5_flash", 10), ("openai", 12)]
+    assert status["provider"] == "openai"
+    assert status["failback_used"] is True
+    assert status["gemini_key_rotation_exhausted"] is True
 
 
 def test_positive_edge_source_only_is_fail_visible(tmp_path, monkeypatch):
@@ -100,7 +198,10 @@ def test_positive_edge_source_only_explicit_exclusion_is_provenance_not_fail(tmp
     assert row["final_disposition"] == "source_only_explicit_exclusion"
     assert row["explicit_runtime_exclusion"] is True
     assert row["runtime_exclusion_reason"] == "greenfield_policy_not_emitted_no_complete_lifecycle_flow"
+    assert row["derived_review_category"] == "source_only_keep_collecting"
+    assert row["derived_review_sub_state"] == "greenfield_policy_not_emitted"
     assert report["summary"]["critical_failure_count"] == 0
+    assert report["summary"]["derived_review_category_counts"]["source_only_keep_collecting"] == 1
     assert not report["codex_workorder_directives"]
 
 
@@ -191,7 +292,9 @@ def test_swing_positive_edge_source_only_tier2_missing_is_fail_closed_handoff(tm
     assert row["failure_reason"] == ""
     assert row["final_disposition"] == "tier2_fail_closed"
     assert row["runtime_exclusion_reason"] == "swing_tier2_missing_fail_closed_source_only"
+    assert row["derived_review_category"] == "tier2_fail_closed_source_only"
     assert report["summary"]["critical_failure_count"] == 0
+    assert report["summary"]["derived_review_category_counts"]["tier2_fail_closed_source_only"] == 1
     assert report["runtime_uptake_kpi"]["runtime_uptake_rate_pct"] == 0.0
     assert not any(
         item["candidate_id"] == "swing:positive-source-only"
@@ -412,6 +515,8 @@ def test_greenfield_discovery_live_candidate_uses_bridge_exclusion_not_handoff_f
     assert row["final_disposition"] == "source_only_explicit_exclusion"
     assert row["consumer_state"] == "explicit_bridge_exclusion"
     assert row["runtime_exclusion_reason"] == "not_emitted_no_complete_lifecycle_flow"
+    assert row["derived_review_category"] == "source_only_keep_collecting"
+    assert row["derived_review_sub_state"] == "greenfield_policy_not_emitted"
     assert not any(item["failure_code"] == "producer_consumer_handoff_missing" for item in report["retry_queue"])
     assert not report["producer_consumer_contract_drift"]
     assert report["summary"]["critical_failure_count"] == 0

@@ -46,7 +46,7 @@ from src.utils.logger import log_error
 from src.engine.macro_briefing_complete import MacroBriefingBuilder
 
 # 💡 [수정] 순수 AI 추론 도구
-import src.engine.ml_predictor as ml_predictor
+import src.engine.swing.ml_predictor as ml_predictor
 
 # 💡 [신규] AI 브리핑 엔진 준비
 from src.engine.ai_engine_openai import GPTSniperEngine

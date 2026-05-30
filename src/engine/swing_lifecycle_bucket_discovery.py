@@ -495,55 +495,49 @@ def _call_openai_ai_review(
     config: PostcloseAIReviewConfig | None = None,
 ) -> tuple[Any | None, dict[str, Any]]:
     config = config or _ai_review_config()
-    try:
-        from openai import OpenAI, RateLimitError
-        from src.engine.ai_response_contracts import build_openai_response_text_format
-        from src.engine.daily_threshold_cycle_report import _extract_openai_response_text, _load_threshold_ai_openai_keys
-    except Exception as exc:
-        return None, {"provider": "openai", "status": "unavailable", "reason": f"openai import failed: {exc}", **config.provider_status_fields()}
-    api_keys = _load_threshold_ai_openai_keys()
-    if not api_keys:
-        return None, {"provider": "openai", "status": "unavailable", "reason": "OPENAI_API_KEY not configured", **config.provider_status_fields()}
-    prompt = json.dumps(context, ensure_ascii=True, indent=2, default=str)
-    errors: list[dict[str, str]] = []
-    for attempt_index, (key_name, api_key) in enumerate(api_keys, start=1):
-        try:
-            client = OpenAI(api_key=api_key)
-            response = client.responses.create(
-                model=config.model,
-                instructions=_build_ai_review_instructions(),
-                input=prompt,
-                text={"format": build_openai_response_text_format(AI_REVIEW_SCHEMA_NAME), "verbosity": "low"},
-                reasoning={"effort": config.reasoning_effort},
-                store=False,
-                metadata={"endpoint_name": AI_REVIEWER_NAME, "schema_name": AI_REVIEW_SCHEMA_NAME, "report_type": REPORT_TYPE},
-                timeout=config.timeout_sec,
-            )
-            raw_text = _extract_openai_response_text(response)
-            usage = getattr(response, "usage", None)
-            return raw_text, {
-                "provider": "openai",
-                "status": "success",
-                "key_name": key_name,
-                "attempt_index": attempt_index,
-                "attempted_key_count": len(api_keys),
-                "model": config.model,
-                "reasoning_effort": config.reasoning_effort,
-                "timeout_sec": config.timeout_sec,
-                "attempt_role": config.attempt_role,
-                "retry_reason": config.retry_reason,
-                "config_env_prefix": config.env_prefix_name,
-                "schema_name": AI_REVIEW_SCHEMA_NAME,
-                "input_context_chars": len(prompt),
-                "output_chars": len(raw_text),
-                "input_tokens": int(getattr(usage, "input_tokens", 0) or 0) if usage else 0,
-                "output_tokens": int(getattr(usage, "output_tokens", 0) or 0) if usage else 0,
-            }
-        except RateLimitError as exc:
-            errors.append({"key_name": key_name, "error": f"rate_limit:{exc}"})
-        except Exception as exc:
-            errors.append({"key_name": key_name, "error": str(exc)})
-    return None, {"provider": "openai", "status": "unavailable", "reason": "all OpenAI attempts failed", **config.provider_status_fields(), "errors": errors[-3:]}
+
+    def _contract_validator(raw_text: str) -> tuple[bool, str]:
+        status, payload, warnings = _parse_ai_review_response(raw_text)
+        if status != "parsed":
+            return False, status
+        audit = payload.get("audit") if isinstance(payload.get("audit"), dict) else {}
+        expected_ids = {str(item.get("candidate_id") or "") for item in context.get("candidates", []) if isinstance(item, dict)}
+        review_rows = payload.get("candidate_reviews")
+        proposal_rows = payload.get("ai_tier2_proposals")
+        comparative_rows = payload.get("comparative_reviews")
+        if not isinstance(review_rows, list):
+            return False, "missing_candidate_reviews"
+        if not isinstance(proposal_rows, list):
+            return False, "missing_ai_tier2_proposals"
+        if not isinstance(comparative_rows, list):
+            return False, "missing_comparative_reviews"
+        if expected_ids:
+            review_ids = {str(item.get("candidate_id") or "") for item in review_rows if isinstance(item, dict)}
+            proposal_ids = {str(item.get("candidate_id") or "") for item in proposal_rows if isinstance(item, dict)}
+            comparative_ids = {str(item.get("candidate_id") or "") for item in comparative_rows if isinstance(item, dict)}
+            if review_ids != expected_ids:
+                return False, "candidate_reviews_id_mismatch"
+            if proposal_ids != expected_ids:
+                return False, "ai_tier2_proposals_id_mismatch"
+            if comparative_ids != expected_ids:
+                return False, "comparative_reviews_id_mismatch"
+        if audit.get("status") not in {"pass", "correction_required", "insufficient_context"}:
+            return False, "missing_audit_status"
+        if warnings:
+            return False, "warnings:" + ",".join(warnings[:3])
+        return True, ""
+
+    from src.engine.ai.postclose_structured_review_provider import call_postclose_structured_review
+
+    return call_postclose_structured_review(
+        context,
+        schema_name=AI_REVIEW_SCHEMA_NAME,
+        instructions=_build_ai_review_instructions(),
+        config=config,
+        metadata={"endpoint_name": AI_REVIEWER_NAME, "report_type": REPORT_TYPE},
+        contract_validator=_contract_validator,
+        ensure_ascii=True,
+    )
 
 
 def _parse_ai_review_response(raw_response: Any | None) -> tuple[str, dict[str, Any], list[str]]:

@@ -74,6 +74,24 @@
   - 금지: code-improvement workorder를 자동 repo 수정으로 취급하지 않는다. 사용자가 Codex 구현을 지시한 경우에만 실행한다.
   - 다음 액션: 구현 필요, 설계 보류, reject, already_implemented 중 하나로 닫는다.
 
+- [x] `[MonitoringSamplerConsumerInventory0601] system_metric_sampler consumer_inventory_refreshed 및 2차 게이트 선행 정합성 기록` (`Due: 2026-06-01`, `Slot: POSTCLOSE`, `TimeWindow: 17:50~18:05`, `Track: ScalpingLogic`)
+  - Source: [docs/proposals/src-engine-refactor-inventory.md](/home/ubuntu/KORStockScan/docs/proposals/src-engine-refactor-inventory.md), [1779532927562-sunny-canyon.md](/home/ubuntu/KORStockScan/.kilo/plans/1779532927562-sunny-canyon.md), [deploy/run_system_metric_sampler_cron.sh](/home/ubuntu/KORStockScan/deploy/run_system_metric_sampler_cron.sh), [src/engine/backfill_threshold_cycle_events.py](/home/ubuntu/KORStockScan/src/engine/backfill_threshold_cycle_events.py), [src/engine/error_detectors/cron_completion.py](/home/ubuntu/KORStockScan/src/engine/error_detectors/cron_completion.py), [src/engine/monitoring/error_detector_coverage.py](/home/ubuntu/KORStockScan/src/engine/monitoring/error_detector_coverage.py), [src/tests/test_error_detector_coverage.py](/home/ubuntu/KORStockScan/src/tests/test_error_detector_coverage.py), [src/tests/test_engine_location_gate.py](/home/ubuntu/KORStockScan/src/tests/test_engine_location_gate.py)
+  - 판정 기준:
+    - `deploy/cron`, `error_detector`, `tests`, `backfill`, `runbook` 소비자 인벤토리 정리 완료.
+    - old/new CLI smoke plan(현재 문서 반영)이 실행 가능한 형태로 준비됨.
+    - `system_metric_sampler` canonical 정착 완료(`src.engine.monitoring.system_metric_sampler` 구현 + root wrapper 유지).
+  - 실행 기록(현재): `src.engine.system_metric_sampler` smoke pass, `src.engine.monitoring.system_metric_sampler` smoke pass.
+  - 판정: `implemented_with_wrapper`.
+  - 금지: wrapper 제거/cron/job id/path semantics 변경.
+
+- [x] `[MonitoringSamplerCanonicalMove0601] system_metric_sampler canonical 이동 구현` (`Due: 2026-06-01`, `Slot: POSTCLOSE`, `TimeWindow: 18:00~18:20`, `Track: ScalpingLogic`)
+  - Source: [docs/proposals/src-engine-refactor-inventory.md](/home/ubuntu/KORStockScan/docs/proposals/src-engine-refactor-inventory.md), [1779532927562-sunny-canyon.md](/home/ubuntu/KORStockScan/.kilo/plans/1779532927562-sunny-canyon.md), [src/engine/system_metric_sampler.py](/home/ubuntu/KORStockScan/src/engine/system_metric_sampler.py), [src/engine/monitoring/system_metric_sampler.py](/home/ubuntu/KORStockScan/src/engine/monitoring/system_metric_sampler.py)
+  - 판정 기준:
+    - `src.engine.monitoring.system_metric_sampler`가 구현체로 동작.
+    - `src.engine.system_metric_sampler`는 명시적 wrapper로 old import/CLI 호환 유지.
+    - old/new CLI 모두 종료 코드 0.
+  - 금지: cron/job id 출력 경로/runtime/path semantics 변경.
+
 - [ ] `[HumanInterventionSummary0601] 자동화체인 사용자 개입 요구사항 분류 및 누락 확인` (`Due: 2026-06-01`, `Slot: POSTCLOSE`, `TimeWindow: 17:30~17:45`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-29.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-29.json), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
   - 판정 기준: 개입사항을 `approval_artifact_required|created|missing|blocked_by_policy|observe_only`, `Codex 구현 필요`, `수동 동기화 필요`, `관찰만`으로 분류한다.

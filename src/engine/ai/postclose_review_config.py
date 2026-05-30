@@ -18,6 +18,15 @@ class PostcloseAIReviewConfig:
     attempt_role: str = "primary"
     retry_reason: str | None = None
     env_prefix: str | None = None
+    primary_provider: str = "openai"
+    failback_provider: str = "openai"
+    bedrock_model_id: str = "qwen.qwen3-235b-a22b-2507-v1:0"
+    bedrock_region: str = "us-west-2"
+    bedrock_max_output_tokens: int = 8192
+    gemini_model: str = "gemini-3.5-flash"
+    gemini_shard_size: int = 10
+    gemini_max_output_tokens: int = 8192
+    gemini_key_rotation_enabled: bool = True
 
     @property
     def env_prefix_name(self) -> str:
@@ -31,6 +40,15 @@ class PostcloseAIReviewConfig:
             "attempt_role": self.attempt_role,
             "retry_reason": self.retry_reason,
             "config_env_prefix": self.env_prefix_name,
+            "primary_provider": self.primary_provider,
+            "failback_provider": self.failback_provider,
+            "bedrock_model_id": self.bedrock_model_id,
+            "bedrock_region": self.bedrock_region,
+            "bedrock_max_output_tokens": self.bedrock_max_output_tokens,
+            "gemini_model": self.gemini_model,
+            "gemini_shard_size": self.gemini_shard_size,
+            "gemini_max_output_tokens": self.gemini_max_output_tokens,
+            "gemini_key_rotation_enabled": self.gemini_key_rotation_enabled,
         }
 
 
@@ -49,6 +67,18 @@ def _env_int(name: str, default: int) -> int:
         return int(float(str(value).strip()))
     except Exception:
         return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 def normalize_reasoning_effort(value: str, default: str) -> str:
@@ -77,6 +107,21 @@ def resolve_postclose_ai_review_config(
         model = _env_text(f"{prefix}_MODEL", default_model)
         reasoning = _env_text(f"{prefix}_REASONING_EFFORT", default_reasoning_effort)
     timeout_sec = max(1, _env_int(f"{prefix}_TIMEOUT_SEC", default_timeout_sec))
+    if model == "gpt-5.4-mini":
+        default_primary_provider = "bedrock_qwen3"
+    elif model == "gpt-5.4":
+        default_primary_provider = "gemini_3_5_flash"
+    else:
+        default_primary_provider = "openai"
+    primary_provider = _env_text(f"{prefix}_PRIMARY_PROVIDER", default_primary_provider).lower()
+    failback_provider = _env_text(f"{prefix}_FAILBACK_PROVIDER", "openai").lower()
+    bedrock_model_id = _env_text(f"{prefix}_BEDROCK_MODEL_ID", "qwen.qwen3-235b-a22b-2507-v1:0")
+    bedrock_region = _env_text(f"{prefix}_BEDROCK_REGION", "us-west-2")
+    bedrock_max_output_tokens = max(1, _env_int(f"{prefix}_BEDROCK_MAX_OUTPUT_TOKENS", 8192))
+    gemini_model = _env_text(f"{prefix}_GEMINI_MODEL", "gemini-3.5-flash")
+    gemini_shard_size = max(1, _env_int(f"{prefix}_GEMINI_SHARD_SIZE", 10))
+    gemini_max_output_tokens = max(1, _env_int(f"{prefix}_GEMINI_MAX_OUTPUT_TOKENS", 8192))
+    gemini_key_rotation_enabled = _env_bool(f"{prefix}_GEMINI_KEY_ROTATION_ENABLED", True)
     return PostcloseAIReviewConfig(
         artifact=artifact,
         model=model,
@@ -85,6 +130,15 @@ def resolve_postclose_ai_review_config(
         attempt_role=attempt_role,
         retry_reason=retry_reason,
         env_prefix=prefix,
+        primary_provider=primary_provider,
+        failback_provider=failback_provider,
+        bedrock_model_id=bedrock_model_id,
+        bedrock_region=bedrock_region,
+        bedrock_max_output_tokens=bedrock_max_output_tokens,
+        gemini_model=gemini_model,
+        gemini_shard_size=gemini_shard_size,
+        gemini_max_output_tokens=gemini_max_output_tokens,
+        gemini_key_rotation_enabled=gemini_key_rotation_enabled,
     )
 
 

@@ -474,6 +474,10 @@ def _sanitize_stage_hook_order(order: dict[str, Any], scaffold_by_name: dict[str
 
 
 def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
+    ldm_existing_source_handoff = (
+        item.decision == "attach_existing_family"
+        and str(item.order.get("target_subsystem") or "") == "lifecycle_decision_matrix"
+    )
     return {
         "order_id": item.order.get("order_id"),
         "title": item.order.get("title"),
@@ -485,6 +489,10 @@ def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
         "priority": item.order.get("priority"),
         "decision": item.decision,
         "decision_reason": item.reason,
+        "derived_review_category": (
+            "already_implemented_source_handoff" if ldm_existing_source_handoff else item.order.get("derived_review_category")
+        ),
+        "implementation_candidate": False if ldm_existing_source_handoff else item.decision == "implement_now",
         "route": item.route,
         "mapped_family": item.mapped_family,
         "confidence": item.confidence,
@@ -3097,6 +3105,12 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     non_selected_counts: dict[str, int] = {}
     for item in non_selected:
         non_selected_counts[item.decision] = non_selected_counts.get(item.decision, 0) + 1
+    already_implemented_source_handoff_count = sum(
+        1
+        for item in selected
+        if item.decision == "attach_existing_family"
+        and str(item.order.get("target_subsystem") or "") == "lifecycle_decision_matrix"
+    )
     deferred_or_rejected_count = sum(
         non_selected_counts.get(decision, 0)
         for decision in ("design_family_candidate", "defer_evidence", "reject")
@@ -3203,6 +3217,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "selected_decision_counts": selected_decision_counts,
             "selected_route_counts": selected_route_counts,
             "selected_implement_now_route_count": selected_route_counts.get("implement_now", 0),
+            "already_implemented_source_handoff_count": already_implemented_source_handoff_count,
             "selected_runtime_effect_false_count": selected_runtime_effect_false_count,
             "selected_unimplemented_runtime_effect_false_count": selected_unimplemented_runtime_effect_false_count,
             "selected_unimplemented_route_counts": selected_unimplemented_route_counts,

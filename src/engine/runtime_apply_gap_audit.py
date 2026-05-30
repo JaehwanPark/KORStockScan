@@ -7,12 +7,14 @@ import hashlib
 import json
 import os
 import re
+from collections import Counter
 from dataclasses import replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from src.engine.ai.postclose_review_config import PostcloseAIReviewConfig, resolve_postclose_ai_review_config
+from src.engine.ai.postclose_structured_review_provider import call_postclose_structured_review
 from src.engine.daily_threshold_cycle_report import REPORT_DIR as BASE_REPORT_DIR
 from src.engine.daily_threshold_cycle_report import _extract_openai_response_text, _load_threshold_ai_openai_keys
 from src.engine.runtime_apply_bridge import GREENFIELD_REAL_ENV_FAMILY, validate_greenfield_policy_file
@@ -324,6 +326,32 @@ def _swing_source_only_handoff(item: dict[str, Any]) -> tuple[str, str]:
     if proposal_decision in {"reject", "source_only", "keep_collecting"}:
         return "source_only_explicit_exclusion", "swing_source_only_no_full_live_authority"
     return "sim_auto_or_approval_handoff", "swing_source_only_handoff_no_full_live_authority"
+
+
+def _derived_review_labels(row: dict[str, Any]) -> tuple[str, str]:
+    disposition = str(row.get("final_disposition") or "").strip()
+    exclusion_reason = str(row.get("runtime_exclusion_reason") or "").strip()
+    if exclusion_reason == "lifecycle_flow_incomplete_stage_contract":
+        return "runtime_blocked_contract_gap", "lifecycle_flow_incomplete_stage_contract"
+    if exclusion_reason in {
+        "greenfield_policy_not_emitted_no_complete_lifecycle_flow",
+        "not_emitted_no_complete_lifecycle_flow",
+    }:
+        return "source_only_keep_collecting", "greenfield_policy_not_emitted"
+    if disposition == "tier2_fail_closed":
+        return "tier2_fail_closed_source_only", "swing_tier2_missing_fail_closed_source_only"
+    return disposition or "unknown", ""
+
+
+def _apply_derived_review_labels(ledger: list[dict[str, Any]]) -> dict[str, int]:
+    counts: Counter[str] = Counter()
+    for row in ledger:
+        category, sub_state = _derived_review_labels(row)
+        row["derived_review_category"] = category
+        if sub_state:
+            row["derived_review_sub_state"] = sub_state
+        counts[category] += 1
+    return dict(counts)
 
 
 def _comparative_selected_decision(item: dict[str, Any]) -> str:
@@ -933,6 +961,39 @@ def _call_openai_ai_review(
     *,
     config: PostcloseAIReviewConfig,
 ) -> tuple[Any | None, dict[str, Any]]:
+    if config.primary_provider == "gemini_3_5_flash":
+        expected_ids = [
+            str(item.get("candidate_id") or "")
+            for item in (input_context.get("review_candidates") or [])
+            if isinstance(item, dict) and item.get("candidate_id")
+        ]
+
+        def validator(raw_text: str) -> tuple[bool, str]:
+            parse_status, payload, warnings = _parse_ai_review_response(raw_text)
+            if parse_status != "parsed":
+                return False, ",".join(warnings) or parse_status
+            actual_ids = [
+                str(item.get("candidate_id") or "")
+                for item in (payload.get("candidate_reviews") or [])
+                if isinstance(item, dict)
+            ]
+            if actual_ids != expected_ids:
+                return False, "candidate_id_mismatch"
+            return True, ""
+
+        return call_postclose_structured_review(
+            input_context,
+            schema_name=AI_REVIEW_SCHEMA_NAME,
+            instructions=_build_ai_review_prompt_en({k: v for k, v in input_context.items() if k != "review_candidates"}),
+            config=config,
+            metadata={
+                "endpoint_name": "runtime_apply_gap_ai_review",
+                "schema_name": AI_REVIEW_SCHEMA_NAME,
+                "report_type": "runtime_apply_gap_audit",
+            },
+            contract_validator=validator,
+            ensure_ascii=True,
+        )
     try:
         from openai import OpenAI, RateLimitError
         from src.engine.ai_response_contracts import build_openai_response_text_format
@@ -987,6 +1048,114 @@ def _call_openai_ai_review(
         "reason": "all OpenAI attempts failed",
         **config.provider_status_fields(),
         "errors": errors[-3:],
+    }
+
+
+def _runtime_ai_review_shards(context: dict[str, Any], *, shard_size: int) -> list[dict[str, Any]]:
+    candidates = context.get("review_candidates") if isinstance(context.get("review_candidates"), list) else []
+    if not candidates:
+        return [context]
+    size = max(1, int(shard_size or 10))
+    shards: list[dict[str, Any]] = []
+    for index in range(0, len(candidates), size):
+        shard = dict(context)
+        shard["review_candidates"] = candidates[index : index + size]
+        shard["review_shard"] = {
+            "shard_index": len(shards) + 1,
+            "shard_size": size,
+            "candidate_offset": index,
+            "candidate_count": len(shard["review_candidates"]),
+        }
+        shards.append(shard)
+    return shards
+
+
+def _merge_runtime_ai_review_payloads(payloads: list[dict[str, Any]]) -> dict[str, Any]:
+    reviews: list[dict[str, Any]] = []
+    issues: list[str] = []
+    statuses: list[str] = []
+    directives: list[dict[str, Any]] = []
+    for payload in payloads:
+        reviews.extend(item for item in (payload.get("candidate_reviews") or []) if isinstance(item, dict))
+        audit = payload.get("audit") if isinstance(payload.get("audit"), dict) else {}
+        statuses.append(str(audit.get("status") or "pass"))
+        issues.extend(str(item) for item in (audit.get("issues") or []))
+        directives.extend(item for item in (payload.get("codex_directives") or []) if isinstance(item, dict))
+    audit_status = "pass"
+    if any(status == "correction_required" for status in statuses):
+        audit_status = "correction_required"
+    elif any(status == "retry_required" for status in statuses):
+        audit_status = "retry_required"
+    return {
+        "schema_version": 1,
+        "reviewer": AI_REVIEWER_NAME,
+        "candidate_reviews": reviews,
+        "audit": {
+            "status": audit_status,
+            "issues": issues,
+            "reason": "Merged Gemini shard reviews.",
+        },
+        "codex_directives": directives,
+    }
+
+
+def _call_sharded_gemini_runtime_review(
+    context: dict[str, Any],
+    *,
+    config: PostcloseAIReviewConfig,
+) -> tuple[Any | None, dict[str, Any]]:
+    shards = _runtime_ai_review_shards(context, shard_size=config.gemini_shard_size)
+    shard_records: list[dict[str, Any]] = []
+    payloads: list[dict[str, Any]] = []
+    gemini_only_config = replace(config, failback_provider="none")
+    for shard in shards:
+        raw_response, provider_status = _call_openai_ai_review(shard, config=gemini_only_config)
+        parse_status, payload, warnings = _parse_ai_review_response(raw_response)
+        shard_record = {
+            "shard_index": (shard.get("review_shard") or {}).get("shard_index"),
+            "candidate_count": len(shard.get("review_candidates") or []),
+            "candidate_ids": [
+                str(item.get("candidate_id") or "")
+                for item in (shard.get("review_candidates") or [])
+                if isinstance(item, dict)
+            ],
+            "status": parse_status,
+            "provider_status": provider_status,
+            "warnings": warnings,
+        }
+        shard_records.append(shard_record)
+        if parse_status != "parsed":
+            openai_config = replace(config, primary_provider="openai")
+            full_raw, full_status = _call_openai_ai_review(context, config=openai_config)
+            return full_raw, {
+                **full_status,
+                "failback_used": True,
+                "primary_provider": "gemini_3_5_flash",
+                "gemini_key_rotation_exhausted": True,
+                "failback_reason": "gemini_runtime_shard_failed",
+                "gemini_shards": shard_records,
+                "primary_error_type": parse_status,
+                "primary_error_message": ",".join(warnings)[:240],
+            }
+        payloads.append(payload)
+    merged = _merge_runtime_ai_review_payloads(payloads)
+    return json.dumps(merged, ensure_ascii=True), {
+        **config.provider_status_fields(),
+        "provider": "gemini",
+        "status": "success",
+        "model": config.gemini_model,
+        "schema_name": AI_REVIEW_SCHEMA_NAME,
+        "primary_provider": "gemini_3_5_flash",
+        "failback_provider": config.failback_provider,
+        "failback_used": False,
+        "shard_count": len(shard_records),
+        "parsed_shard_count": len(shard_records),
+        "gemini_shards": shard_records,
+        "gemini_contract_ok": True,
+        "gemini_key_rotation_attempts": sum(
+            int(((record.get("provider_status") or {}).get("gemini_key_rotation_attempts") or 0))
+            for record in shard_records
+        ),
     }
 
 
@@ -1072,7 +1241,10 @@ def _run_ai_review(
             )
         )
         return review, retry_items, directives
-    raw_response, provider_status = _call_openai_ai_review(context, config=config)
+    if config.model == "gpt-5.4" and config.primary_provider == "gemini_3_5_flash":
+        raw_response, provider_status = _call_sharded_gemini_runtime_review(context, config=config)
+    else:
+        raw_response, provider_status = _call_openai_ai_review(context, config=config)
     parse_status, payload, warnings = _parse_ai_review_response(raw_response)
     if parse_status != "parsed":
         failure_code = "ai_parse_fail" if raw_response is not None else "ai_review_unavailable"
@@ -1249,6 +1421,7 @@ def build_runtime_apply_gap_audit(
     retry_queue = _retry_queue_from_failures(ledger, artifact_status)
     ai_review, ai_retry, ai_directives = _run_ai_review(ledger, drift, provider=provider, config=config)
     _apply_ai_review_to_ledger(ledger, ai_review)
+    derived_review_category_counts = _apply_derived_review_labels(ledger)
     retry_queue.extend(ai_retry)
     codex_directives = _build_codex_directives(ledger, retry_queue)
     codex_directives.extend(ai_directives)
@@ -1293,6 +1466,7 @@ def build_runtime_apply_gap_audit(
             "codex_directive_count": len(codex_directives),
             "ai_review_status": ai_review.get("status"),
             "ai_review_retry_pending": ai_review.get("ai_review_retry_pending") is True,
+            "derived_review_category_counts": derived_review_category_counts,
         },
     }
 

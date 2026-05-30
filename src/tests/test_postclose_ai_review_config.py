@@ -85,6 +85,80 @@ def test_swing_threshold_review_uses_individual_mini_medium_default(monkeypatch)
     assert config.model == "gpt-5.4-mini"
     assert config.reasoning_effort == "medium"
     assert config.timeout_sec == 180
+    assert config.primary_provider == "bedrock_qwen3"
+    assert config.failback_provider == "openai"
+    assert config.bedrock_model_id == "qwen.qwen3-235b-a22b-2507-v1:0"
+    assert config.bedrock_region == "us-west-2"
+    assert config.bedrock_max_output_tokens == 8192
+
+
+def test_postclose_qwen3_primary_applies_only_to_mini(monkeypatch):
+    for key in tuple(os.environ):
+        if key.startswith("KORSTOCKSCAN_TEST_ARTIFACT_AI"):
+            monkeypatch.delenv(key, raising=False)
+
+    mini = resolve_postclose_ai_review_config(
+        "TEST_ARTIFACT",
+        default_model="gpt-5.4-mini",
+        default_reasoning_effort="medium",
+    )
+    deep = resolve_postclose_ai_review_config(
+        "TEST_ARTIFACT",
+        default_model="gpt-5.4",
+        default_reasoning_effort="medium",
+    )
+
+    assert mini.primary_provider == "bedrock_qwen3"
+    assert deep.primary_provider == "gemini_3_5_flash"
+    assert deep.gemini_model == "gemini-3.5-flash"
+    assert deep.gemini_shard_size == 10
+    assert deep.gemini_key_rotation_enabled is True
+
+
+def test_postclose_qwen3_env_overrides(monkeypatch):
+    for key in tuple(os.environ):
+        if key.startswith("KORSTOCKSCAN_TEST_ARTIFACT_AI"):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("KORSTOCKSCAN_TEST_ARTIFACT_AI_PRIMARY_PROVIDER", "openai")
+    monkeypatch.setenv("KORSTOCKSCAN_TEST_ARTIFACT_AI_FAILBACK_PROVIDER", "none")
+    monkeypatch.setenv("KORSTOCKSCAN_TEST_ARTIFACT_AI_BEDROCK_MODEL_ID", "qwen.custom")
+    monkeypatch.setenv("KORSTOCKSCAN_TEST_ARTIFACT_AI_BEDROCK_REGION", "ap-northeast-2")
+    monkeypatch.setenv("KORSTOCKSCAN_TEST_ARTIFACT_AI_BEDROCK_MAX_OUTPUT_TOKENS", "1234")
+
+    config = resolve_postclose_ai_review_config(
+        "TEST_ARTIFACT",
+        default_model="gpt-5.4-mini",
+        default_reasoning_effort="medium",
+    )
+
+    assert config.primary_provider == "openai"
+    assert config.failback_provider == "none"
+    assert config.bedrock_model_id == "qwen.custom"
+    assert config.bedrock_region == "ap-northeast-2"
+    assert config.bedrock_max_output_tokens == 1234
+
+
+def test_postclose_gpt54_gemini_env_overrides(monkeypatch):
+    for key in tuple(os.environ):
+        if key.startswith("KORSTOCKSCAN_TEST_ARTIFACT_AI"):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("KORSTOCKSCAN_TEST_ARTIFACT_AI_GEMINI_MODEL", "gemini-custom")
+    monkeypatch.setenv("KORSTOCKSCAN_TEST_ARTIFACT_AI_GEMINI_SHARD_SIZE", "7")
+    monkeypatch.setenv("KORSTOCKSCAN_TEST_ARTIFACT_AI_GEMINI_MAX_OUTPUT_TOKENS", "4096")
+    monkeypatch.setenv("KORSTOCKSCAN_TEST_ARTIFACT_AI_GEMINI_KEY_ROTATION_ENABLED", "false")
+
+    config = resolve_postclose_ai_review_config(
+        "TEST_ARTIFACT",
+        default_model="gpt-5.4",
+        default_reasoning_effort="low",
+    )
+
+    assert config.primary_provider == "gemini_3_5_flash"
+    assert config.failback_provider == "openai"
+    assert config.gemini_model == "gemini-custom"
+    assert config.gemini_shard_size == 7
+    assert config.gemini_max_output_tokens == 4096
+    assert config.gemini_key_rotation_enabled is False
 
 
 def test_runtime_apply_gap_audit_uses_individual_env_not_global_deep(monkeypatch):

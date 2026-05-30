@@ -79,7 +79,7 @@ from src.engine.sniper_position_tags import (
     normalize_strategy,
 )
 from src.engine.ai_prompt_contracts import SCALPING_BUY_RECOVERY_CANARY_PROMPT
-from src.engine.ofi_ai_smoothing import (
+from src.engine.lifecycle.ofi_ai_smoothing import (
     NEUTRAL as OFI_NEUTRAL,
     STABLE_BEARISH as OFI_STABLE_BEARISH,
     STABLE_BULLISH as OFI_STABLE_BULLISH,

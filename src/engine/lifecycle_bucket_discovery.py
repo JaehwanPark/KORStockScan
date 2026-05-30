@@ -16,6 +16,7 @@ from src.engine.ai.postclose_review_config import (
     PostcloseAIReviewConfig,
     resolve_postclose_ai_review_config,
 )
+from src.engine.ai.postclose_structured_review_provider import call_postclose_structured_review
 from src.engine.automation.dual_candidate_review import (
     evidence_authority_contract,
     has_evidence_authority_violation,
@@ -775,11 +776,35 @@ def _auto_promotion_contract_state_for_state(state: str) -> str:
     return "source_only"
 
 
+def _review_category_for_state(state: str) -> tuple[str, str]:
+    if state == "entry_only_sim_auto_approved":
+        return "sim_auto_approved", "entry_only_sim_auto_approved"
+    if state == LIFECYCLE_FLOW_SIM_PROBE_STATE:
+        return "sim_auto_approved", "lifecycle_flow_sim_probe_candidate"
+    if state == "entry_only_source_candidate":
+        return "source_only_keep_collecting", "entry_only_source_candidate"
+    if state in {
+        "live_auto_apply_ready",
+        "sim_auto_approved",
+        "source_only_keep_collecting",
+        "runtime_blocked_contract_gap",
+        "code_patch_required",
+        "new_bucket_candidate",
+        "automation_handoff_gap",
+    }:
+        return state, ""
+    return state or "unknown", ""
+
+
 def _normalize_candidate_runtime_metadata(item: dict[str, Any]) -> None:
     state = str(item.get("classification_state") or "")
     lifecycle_flow_source_only_blocker = _lifecycle_flow_source_only_blocker(item)
+    review_state = "source_only_keep_collecting" if lifecycle_flow_source_only_blocker else state
+    review_category, review_sub_state = _review_category_for_state(review_state)
     runtime_apply_allowed = state == "live_auto_apply_ready" and not lifecycle_flow_source_only_blocker
     item["source_bucket_kind"] = _source_bucket_kind(state, item)
+    item["review_category"] = review_category
+    item["review_sub_state"] = review_sub_state or None
     item["decision_authority"] = _decision_authority_for_state(state)
     item["runtime_effect_after_approval"] = (
         "none" if lifecycle_flow_source_only_blocker else _runtime_effect_after_approval_for_state(state)
@@ -1667,6 +1692,7 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
         source_dimension_gap = "unknown_source_dimensions"
     runtime_apply_allowed = state == "live_auto_apply_ready" and not lifecycle_flow_source_only_blocker
     runtime_metadata_state = state if not lifecycle_flow_source_only_blocker else "source_only_keep_collecting"
+    review_category, review_sub_state = _review_category_for_state(runtime_metadata_state)
     return {
         "bucket_id": bucket_id,
         "source_bucket_id": source_bucket_id,
@@ -1675,6 +1701,8 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
         "bucket_type": bucket_type,
         "bucket_key": bucket_key,
         "source_bucket_kind": _source_bucket_kind(state, bucket),
+        "review_category": review_category,
+        "review_sub_state": review_sub_state or None,
         "bucket_relation": relation,
         "classification_state": state,
         "live_auto_apply_family": live_family if runtime_apply_allowed else None,
@@ -2343,6 +2371,27 @@ def _call_openai_ai_review(
 ) -> tuple[Any | None, dict[str, Any]]:
     resolved_shard_id = shard_id or str((input_context.get("review_scope") or {}).get("shard_id") or "unknown")
     config = config or _ai_review_config_for_shard(resolved_shard_id)
+    if config.primary_provider == "gemini_3_5_flash":
+        def validator(raw_text: str) -> tuple[bool, str]:
+            parse_status, _payload, warnings = _parse_ai_review_response(raw_text)
+            if parse_status != "parsed":
+                return False, ",".join(warnings) or parse_status
+            return True, ""
+
+        return call_postclose_structured_review(
+            input_context,
+            schema_name=AI_REVIEW_SCHEMA_NAME,
+            instructions=_build_ai_review_instructions(),
+            config=config,
+            metadata={
+                "endpoint_name": "lifecycle_bucket_discovery_review",
+                "schema_name": AI_REVIEW_SCHEMA_NAME,
+                "report_type": "lifecycle_bucket_discovery",
+                "shard_id": resolved_shard_id,
+            },
+            contract_validator=validator,
+            ensure_ascii=True,
+        )
     try:
         from openai import OpenAI, RateLimitError
         from src.engine.ai_response_contracts import build_openai_response_text_format
@@ -2877,6 +2926,12 @@ def _finalize_report(
 ) -> dict[str, Any]:
     _apply_lifecycle_flow_parent_absorption(report, candidates)
     state_counts = Counter(str(item.get("classification_state") or "unknown") for item in candidates)
+    review_category_counts = Counter(str(item.get("review_category") or "unknown") for item in candidates)
+    review_sub_state_counts = Counter(
+        str(item.get("review_sub_state"))
+        for item in candidates
+        if item.get("review_sub_state")
+    )
     stage_counts = Counter(str(item.get("stage") or "unknown") for item in candidates)
     source_bucket_kind_counts = Counter(str(item.get("source_bucket_kind") or "unknown") for item in candidates)
     canonical_bucket_count = len({str(item.get("canonical_bucket") or item.get("bucket_id")) for item in candidates})
@@ -2963,6 +3018,8 @@ def _finalize_report(
             "code_patch_required_count": state_counts.get("code_patch_required", 0),
             "automation_handoff_gap_count": state_counts.get("automation_handoff_gap", 0),
             "state_counts": dict(state_counts),
+            "review_category_counts": dict(review_category_counts),
+            "review_sub_state_counts": dict(review_sub_state_counts),
             "stage_counts": dict(stage_counts),
             "source_bucket_kind_counts": dict(source_bucket_kind_counts),
             "unknown_reason_counts": dict(unknown_reason_counts),

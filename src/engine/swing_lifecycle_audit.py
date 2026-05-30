@@ -3150,73 +3150,28 @@ def _swing_threshold_ai_review_config() -> PostcloseAIReviewConfig:
 
 def _call_openai_swing_threshold_review(input_context: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
     config = _swing_threshold_ai_review_config()
-    try:
-        from openai import OpenAI, RateLimitError
-        from src.engine.daily_threshold_cycle_report import (
-            _extract_openai_response_text,
-            _load_threshold_ai_openai_keys,
-        )
-    except Exception as exc:
-        return None, {"provider": "openai", "status": "unavailable", "reason": f"openai import failed: {exc}", **config.provider_status_fields()}
 
-    api_keys = _load_threshold_ai_openai_keys()
-    if not api_keys:
-        return None, {"provider": "openai", "status": "unavailable", "reason": "OPENAI_API_KEY not configured", **config.provider_status_fields()}
+    def _contract_validator(raw_text: str) -> tuple[bool, str]:
+        status, proposals, warnings = _parse_ai_review_response(raw_text)
+        if status != "parsed":
+            return False, status
+        if not isinstance(proposals, list):
+            return False, "missing_proposals"
+        if warnings:
+            return False, "warnings:" + ",".join(warnings[:3])
+        return True, ""
 
-    errors: list[dict[str, str]] = []
-    for attempt_index, (key_name, api_key) in enumerate(api_keys, start=1):
-        try:
-            client = OpenAI(api_key=api_key)
-            response = client.responses.create(
-                model=config.model,
-                instructions=_build_openai_review_instructions(),
-                input=json.dumps(input_context, ensure_ascii=True, indent=2, default=str),
-                text={
-                    "format": build_openai_response_text_format("threshold_ai_correction_v1"),
-                    "verbosity": "low",
-                },
-                reasoning={"effort": config.reasoning_effort},
-                store=False,
-                metadata={
-                    "endpoint_name": "swing_threshold_ai_review",
-                    "schema_name": "threshold_ai_correction_v1",
-                    "report_type": "swing_threshold_ai_review",
-                },
-                timeout=config.timeout_sec,
-            )
-            return _extract_openai_response_text(response), {
-                "provider": "openai",
-                "status": "success",
-                "key_name": key_name,
-                "attempt_index": attempt_index,
-                "attempted_keys": len(api_keys),
-                "attempted_models": [config.model],
-                "model": config.model,
-                "schema_name": "threshold_ai_correction_v1",
-                "reasoning_effort": config.reasoning_effort,
-                "timeout_sec": config.timeout_sec,
-                "attempt_role": config.attempt_role,
-                "retry_reason": config.retry_reason,
-                "config_env_prefix": config.env_prefix_name,
-            }
-        except RateLimitError as exc:
-            errors.append({"key_name": key_name, "model": config.model, "error": str(exc)})
-        except Exception as exc:
-            errors.append({"key_name": key_name, "model": config.model, "error": str(exc)})
-    return None, {
-        "provider": "openai",
-        "status": "failed",
-        "attempted_keys": len(api_keys),
-        "attempted_models": [config.model],
-        "schema_name": "threshold_ai_correction_v1",
-        "reasoning_effort": config.reasoning_effort,
-        "timeout_sec": config.timeout_sec,
-        "model": config.model,
-        "attempt_role": config.attempt_role,
-        "retry_reason": config.retry_reason,
-        "config_env_prefix": config.env_prefix_name,
-        "errors": errors,
-    }
+    from src.engine.ai.postclose_structured_review_provider import call_postclose_structured_review
+
+    return call_postclose_structured_review(
+        input_context,
+        schema_name="threshold_ai_correction_v1",
+        instructions=_build_openai_review_instructions(),
+        config=config,
+        metadata={"endpoint_name": "swing_threshold_ai_review", "report_type": "swing_threshold_ai_review"},
+        contract_validator=_contract_validator,
+        ensure_ascii=True,
+    )
 
 
 def build_swing_threshold_ai_review_report(
