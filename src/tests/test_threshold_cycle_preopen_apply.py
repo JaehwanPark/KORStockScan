@@ -1323,6 +1323,66 @@ def test_operator_runtime_env_lock_supports_env_overrides_without_env_key(tmp_pa
     assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SIM_AI_MAX_CALLS_PER_MIN"] == "10"
 
 
+def test_scalp_sim_candidate_window_operator_lock_applies_240_daily_quota(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    report_dir.mkdir(parents=True)
+    lock_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    (report_dir / "threshold_cycle_2026-05-29.json").write_text(
+        json.dumps({"date": "2026-05-29", "calibration_candidates": []}),
+        encoding="utf-8",
+    )
+    (lock_dir / "scalp_sim_candidate_window_expansion_2026-05-19.json").write_text(
+        json.dumps(
+            {
+                "lock_id": "scalp_sim_candidate_window_expansion_continuous_2026-05-19",
+                "enabled": True,
+                "family": "scalp_sim_candidate_window_expansion",
+                "stage": "sim_entry_candidate_window",
+                "active_from_date": "2026-05-19",
+                "env_overrides": {
+                    "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_EXPANSION_ENABLED": "true",
+                    "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY": "240",
+                    "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_TIME_BUCKET_POLICY": (
+                        "09:00-10:00=84,10:00-12:00=48,12:00-14:00=60,14:00-15:30=48"
+                    ),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-06-01",
+        source_date="2026-05-29",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    decision = [
+        item
+        for item in manifest["auto_apply_decisions"]
+        if item["family"] == "scalp_sim_candidate_window_expansion"
+    ][0]
+    assert decision["selected"] is True
+    assert decision["operator_runtime_env_lock"]["applied"] is True
+    env = manifest["runtime_env_overrides"]
+    assert env["KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY"] == "240"
+    assert env["KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_TIME_BUCKET_POLICY"] == (
+        "09:00-10:00=84,10:00-12:00=48,12:00-14:00=60,14:00-15:30=48"
+    )
+
+
 def test_swing_approval_required_request_does_not_auto_apply_without_artifact(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"

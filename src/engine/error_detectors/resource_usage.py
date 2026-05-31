@@ -179,7 +179,7 @@ class ResourceUsageDetector(BaseDetector):
             return
         try:
             result = subprocess.run(
-                ["bash", str(rotate_script), "7"],
+                ["bash", str(rotate_script), "30"],
                 capture_output=True, text=True, timeout=30,
                 cwd=str(PROJECT_ROOT),
             )

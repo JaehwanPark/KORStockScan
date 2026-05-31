@@ -4,10 +4,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 LOG_DIR="$PROJECT_DIR/logs"
-RETENTION_DAYS="${1:-7}"
+RETENTION_DAYS="${1:-${LOG_ROTATION_ARCHIVE_RETENTION_DAYS:-30}}"
 TARGET_DATE="${TARGET_DATE:-$(TZ=Asia/Seoul date +%F)}"
 ACTIVE_LOG_MAX_BYTES="${LOG_ROTATION_ACTIVE_MAX_BYTES:-${KORSTOCKSCAN_LOG_ROTATE_MAX_BYTES:-20971520}}"
 ACTIVE_LOG_BACKUP_COUNT="${LOG_ROTATION_BACKUP_COUNT:-5}"
+ACTIVE_LOG_RETENTION_DAYS="${LOG_ROTATION_ACTIVE_RETENTION_DAYS:-14}"
 SYSTEM_METRIC_RETENTION_DAYS="${SYSTEM_METRIC_RETENTION_DAYS:-3}"
 PYTHON_BIN="${PYTHON_BIN:-$PROJECT_DIR/.venv/bin/python}"
 if [[ ! -x "$PYTHON_BIN" ]]; then
@@ -26,6 +27,10 @@ if [[ ! "$ACTIVE_LOG_BACKUP_COUNT" =~ ^[0-9]+$ || "$ACTIVE_LOG_BACKUP_COUNT" -lt
   echo "[LOG_CLEANUP_ERROR] active log backup count must be positive integer: $ACTIVE_LOG_BACKUP_COUNT"
   exit 2
 fi
+if [[ ! "$ACTIVE_LOG_RETENTION_DAYS" =~ ^[0-9]+$ ]]; then
+  echo "[LOG_CLEANUP_ERROR] active log retention days must be integer: $ACTIVE_LOG_RETENTION_DAYS"
+  exit 2
+fi
 if [[ ! "$SYSTEM_METRIC_RETENTION_DAYS" =~ ^[0-9]+$ ]]; then
   echo "[LOG_CLEANUP_ERROR] system metric retention days must be integer: $SYSTEM_METRIC_RETENTION_DAYS"
   exit 2
@@ -33,10 +38,14 @@ fi
 
 mkdir -p "$LOG_DIR"
 started_at="$(TZ=Asia/Seoul date +%FT%T%z)"
-echo "[START] log_rotation_cleanup target_date=${TARGET_DATE} retention_days=${RETENTION_DAYS} system_metric_retention_days=${SYSTEM_METRIC_RETENTION_DAYS} active_log_max_bytes=${ACTIVE_LOG_MAX_BYTES} active_log_backup_count=${ACTIVE_LOG_BACKUP_COUNT} started_at=${started_at}"
+echo "[START] log_rotation_cleanup target_date=${TARGET_DATE} archive_retention_days=${RETENTION_DAYS} active_log_retention_days=${ACTIVE_LOG_RETENTION_DAYS} system_metric_retention_days=${SYSTEM_METRIC_RETENTION_DAYS} active_log_max_bytes=${ACTIVE_LOG_MAX_BYTES} active_log_backup_count=${ACTIVE_LOG_BACKUP_COUNT} started_at=${started_at}"
 trap 'failed_at="$(TZ=Asia/Seoul date +%FT%T%z)"; echo "[FAIL] log_rotation_cleanup target_date=${TARGET_DATE} failed_at=${failed_at}"' ERR
 
-before_count="$(find "$LOG_DIR" -maxdepth 1 -type f -regex '.*\.log\.[0-9]+' | wc -l | tr -d ' ')"
+archive_log_find_args=(
+  "$LOG_DIR" -maxdepth 1 -type f
+  \( -name '*.log.[0-9]*' -o -name '*.log.before_*' \)
+)
+before_count="$(find "${archive_log_find_args[@]}" | wc -l | tr -d ' ')"
 before_size="$(du -sh "$LOG_DIR" | awk '{print $1}')"
 system_metric_before_size=0
 system_metric_after_size=0
@@ -163,10 +172,22 @@ if [[ -f "$LOG_DIR/system_metric_samples.jsonl" ]]; then
   system_metric_after_size="$(stat -c%s "$LOG_DIR/system_metric_samples.jsonl" 2>/dev/null || echo 0)"
 fi
 
-deleted_count="$(find "$LOG_DIR" -maxdepth 1 -type f -regex '.*\.log\.[0-9]+' -mtime "+$RETENTION_DAYS" -print -delete | wc -l | tr -d ' ')"
-after_count="$(find "$LOG_DIR" -maxdepth 1 -type f -regex '.*\.log\.[0-9]+' | wc -l | tr -d ' ')"
+active_deleted_count="$(
+  find "$LOG_DIR" -maxdepth 1 -type f \( \
+    -name '*_cron.log' -o \
+    -name 'run_*.log' -o \
+    -name 'threshold_cycle_*.log' -o \
+    -name 'tuning_monitoring_*.log' -o \
+    -name 'dashboard_db_archive_*.log' -o \
+    -name 'ensemble_scanner.log' -o \
+    -name 'update_kospi.log' -o \
+    -name 'buy_pause_guard.log' \
+  \) ! -name 'log_rotation_cleanup_cron.log' -mtime "+$ACTIVE_LOG_RETENTION_DAYS" -print -delete | wc -l | tr -d ' '
+)"
+deleted_count="$(find "${archive_log_find_args[@]}" -mtime "+$RETENTION_DAYS" -print -delete | wc -l | tr -d ' ')"
+after_count="$(find "${archive_log_find_args[@]}" | wc -l | tr -d ' ')"
 after_size="$(du -sh "$LOG_DIR" | awk '{print $1}')"
 
-echo "[LOG_CLEANUP] retention_days=$RETENTION_DAYS system_metric_retention_days=$SYSTEM_METRIC_RETENTION_DAYS active_rotated=$rotated_active_count deleted=$deleted_count rotated_before=$before_count rotated_after=$after_count size_before=$before_size size_after=$after_size system_metric_retained=$system_metric_retained system_metric_pruned=$system_metric_pruned system_metric_size_before=$system_metric_before_size system_metric_size_after=$system_metric_after_size"
+echo "[LOG_CLEANUP] archive_retention_days=$RETENTION_DAYS active_log_retention_days=$ACTIVE_LOG_RETENTION_DAYS system_metric_retention_days=$SYSTEM_METRIC_RETENTION_DAYS active_rotated=$rotated_active_count active_deleted=$active_deleted_count archive_deleted=$deleted_count archive_before=$before_count archive_after=$after_count size_before=$before_size size_after=$after_size system_metric_retained=$system_metric_retained system_metric_pruned=$system_metric_pruned system_metric_size_before=$system_metric_before_size system_metric_size_after=$system_metric_after_size"
 finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
-echo "[DONE] log_rotation_cleanup target_date=${TARGET_DATE} retention_days=${RETENTION_DAYS} system_metric_retention_days=${SYSTEM_METRIC_RETENTION_DAYS} active_rotated=${rotated_active_count} deleted=${deleted_count} system_metric_pruned=${system_metric_pruned} finished_at=${finished_at}"
+echo "[DONE] log_rotation_cleanup target_date=${TARGET_DATE} archive_retention_days=${RETENTION_DAYS} active_log_retention_days=${ACTIVE_LOG_RETENTION_DAYS} system_metric_retention_days=${SYSTEM_METRIC_RETENTION_DAYS} active_rotated=${rotated_active_count} active_deleted=${active_deleted_count} archive_deleted=${deleted_count} system_metric_pruned=${system_metric_pruned} finished_at=${finished_at}"

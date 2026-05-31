@@ -3592,7 +3592,7 @@ def _maybe_arm_scalp_sim_candidate_window(
         if str((target or {}).get("scalp_sim_candidate_window_date") or "") == day_key
     )
     created_today = max(int(_SCALP_SIM_CANDIDATE_WINDOW_DAILY_CREATED.get(day_key, 0) or 0), restored_today)
-    max_daily = max(0, _rule_int("SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY", 160))
+    max_daily = max(0, _rule_int("SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY", 240))
     if max_daily > 0 and created_today >= max_daily:
         _log_entry_pipeline(
             stock,
@@ -3616,7 +3616,7 @@ def _maybe_arm_scalp_sim_candidate_window(
     time_bucket_policy = str(
         _rule(
             "SCALP_SIM_CANDIDATE_WINDOW_TIME_BUCKET_POLICY",
-            "09:00-10:00=56,10:00-12:00=32,12:00-14:00=40,14:00-15:30=32",
+            "09:00-10:00=84,10:00-12:00=48,12:00-14:00=60,14:00-15:30=48",
         )
         or ""
     )

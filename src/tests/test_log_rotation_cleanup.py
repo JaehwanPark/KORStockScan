@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import json
 import subprocess
+import time
 from pathlib import Path
 
 
@@ -97,3 +98,49 @@ def test_log_rotation_cleanup_prunes_old_system_metric_samples(tmp_path):
     assert len(lines) == 1
     assert json.loads(lines[0])["epoch"] == 2
     assert "system_metric_pruned=1" in result.stdout
+
+
+def test_log_rotation_cleanup_prunes_archived_and_stale_active_logs(tmp_path):
+    project_root = tmp_path / "project"
+    log_dir = project_root / "logs"
+    log_dir.mkdir(parents=True)
+    stale_active = log_dir / "run_panic_buying.log"
+    fresh_active = log_dir / "run_error_detection.log"
+    old_archive = log_dir / "bot_history.log.2026-05-01"
+    old_archive_gz = log_dir / "threshold_cycle_postclose_cron.log.1.gz"
+    fresh_archive = log_dir / "bot_history.log.2026-05-31"
+    for path in (stale_active, fresh_active, old_archive, old_archive_gz, fresh_archive):
+        path.write_text("log", encoding="utf-8")
+
+    now = time.time()
+    old_active_ts = now - 15 * 86400
+    old_archive_ts = now - 31 * 86400
+    os.utime(stale_active, (old_active_ts, old_active_ts))
+    os.utime(old_archive, (old_archive_ts, old_archive_ts))
+    os.utime(old_archive_gz, (old_archive_ts, old_archive_ts))
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PROJECT_DIR": str(project_root),
+            "LOG_ROTATION_ACTIVE_RETENTION_DAYS": "14",
+            "TARGET_DATE": "2026-05-31",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", "deploy/run_logs_rotation_cleanup_cron.sh", "30"],
+        cwd=Path(__file__).resolve().parents[2],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert not stale_active.exists()
+    assert fresh_active.exists()
+    assert not old_archive.exists()
+    assert not old_archive_gz.exists()
+    assert fresh_archive.exists()
+    assert "active_deleted=1" in result.stdout
+    assert "archive_deleted=2" in result.stdout

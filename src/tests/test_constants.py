@@ -111,6 +111,33 @@ def test_trading_rules_ai_cadence_defaults_are_rate_limited(monkeypatch):
     assert reloaded.TRADING_RULES.AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED is True
 
 
+def test_trading_rules_scalp_sim_candidate_window_defaults_and_env_override(monkeypatch):
+    for key in (
+        "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY",
+        "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_TIME_BUCKET_POLICY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY == 240
+    assert reloaded.TRADING_RULES.SCALP_SIM_CANDIDATE_WINDOW_TIME_BUCKET_POLICY == (
+        "09:00-10:00=84,10:00-12:00=48,12:00-14:00=60,14:00-15:30=48"
+    )
+
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY", "320")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_TIME_BUCKET_POLICY",
+        "09:00-10:00=100,10:00-15:30=220",
+    )
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY == 320
+    assert reloaded.TRADING_RULES.SCALP_SIM_CANDIDATE_WINDOW_TIME_BUCKET_POLICY == (
+        "09:00-10:00=100,10:00-15:30=220"
+    )
+
+
 def test_trading_rules_runtime_shadow_defaults_are_off(monkeypatch):
     reloaded = importlib.reload(constants)
 
