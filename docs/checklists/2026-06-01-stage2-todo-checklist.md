@@ -115,6 +115,15 @@
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
+## 수동 롤아웃 체크리스트: 진입/보유/청산 AI input v2
+
+- [ ] `[AIInputV2RolloutMasterGate0601] entry/price/holding AI input v2 단계별 rollout 계획과 일자별 체크리스트 연결 확인` (`Due: 2026-06-01`, `Slot: POSTCLOSE`, `TimeWindow: 18:15~18:30`, `Track: AIPrompt`)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [2026-06-02-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-06-02-stage2-todo-checklist.md), [2026-06-03-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-06-03-stage2-todo-checklist.md), [2026-06-04-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-06-04-stage2-todo-checklist.md), [2026-06-05-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/checklists/2026-06-05-stage2-todo-checklist.md)
+  - 계획 요약: Stage 1 disabled runtime surface 확인, Stage 2 offline replay report, Stage 3 `entry_price_v2` report-only comparison audit, Stage 4 `entry_price` runtime input 전환 go/no-go, Stage 5 `holding_flow`/`analyze_target` 순차 후보화.
+  - 판정 기준: 각 stage가 날짜별 checklist에 `Due`, `Slot`, `TimeWindow`, `Track`, Source, IN/OUT scope, acceptance, go/no-go를 가진 parser-friendly checkbox로 존재한다.
+  - 금지: 이 항목은 문서/계획 owner만 닫는다. provider route, threshold, broker/order guard, order quantity, bot restart, hard/protect/emergency stop을 변경하지 않는다.
+  - 다음 액션: 누락된 stage가 있으면 해당 날짜 checklist에 추가하고 parser 검증을 다시 실행한다. 모든 stage가 존재하면 `rollout_schedule_registered`로 닫는다.
+
 
 
 
