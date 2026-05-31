@@ -34,6 +34,7 @@
   - 금지: provider transport 확인을 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경으로 해석하지 않는다.
   - 다음 액션: entry_price transport 표본이 부족하면 장중 표본 재확인 항목과 연결한다.
   - 2026-05-30 operator override: `entry_price`는 Bedrock Qwen3 32B primary + Nova Lite v2 failback으로 확인한다. Nova Lite v2도 실패하면 OpenAI 3차 failback 없이 기존 defensive entry-price fallback으로 닫는다. `holding_flow`는 Nova Lite v2 primary + OpenAI failback을 유지한다.
+  - 2026-05-31 operator shadow: `gpt-5-nano` Tier1은 OpenAI primary를 유지하고 Bedrock Nova Lite v1을 `shadow_observation_only`로 비교한다. `KORSTOCKSCAN_BEDROCK_NOVA_LITE_SHADOW_TARGET_MODELS=gpt-5-nano` 범위만 인정하며, threshold/order guard/provider primary/bot restart 변경 근거로 쓰지 않는다.
 
 ## 장중 체크리스트 (09:05~15:20)
 

@@ -94,6 +94,8 @@ def test_runtime_approval_summary_combines_scalping_and_swing(tmp_path, monkeypa
     assert report["summary"]["scalping_legacy_hard_gate_risk_counts"]["no_unreviewed_hard_gate"] == 1
     assert report["summary"]["swing_blocked"] == 1
     assert report["summary"]["swing_legacy_hard_gate_risk_counts"]["no_unreviewed_hard_gate"] == 1
+    assert report["summary"]["microstructure_reaction_available"] is False
+    assert report["microstructure_reaction_context"]["runtime_mutation_allowed"] is False
     assert report["application_timing"]["runtime_env_file"] == str(env_path)
     assert "WAIT 구간" in report["scalping"][0]["description"]
     assert report["scalping"][0]["current_application"] == "PREOPEN env 적용: 당일 runtime 변경 대상"
@@ -114,6 +116,96 @@ def test_runtime_approval_summary_combines_scalping_and_swing(tmp_path, monkeypa
     assert "판정 해석" in markdown
     assert "## Swing" in markdown
     assert "swing_model_floor" in markdown
+
+
+def test_runtime_approval_summary_surfaces_microstructure_source_only_context(tmp_path, monkeypatch):
+    ev_dir = tmp_path / "threshold_cycle_ev"
+    swing_dir = tmp_path / "swing_runtime_approval"
+    out_dir = tmp_path / "runtime_approval_summary"
+    ev_dir.mkdir(parents=True)
+    swing_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        mod,
+        "ev_report_paths",
+        lambda target_date: (
+            ev_dir / f"threshold_cycle_ev_{target_date}.json",
+            ev_dir / f"threshold_cycle_ev_{target_date}.md",
+        ),
+    )
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_DIR", swing_dir)
+    monkeypatch.setattr(mod, "SUMMARY_DIR", out_dir)
+    (ev_dir / "threshold_cycle_ev_2026-05-31.json").write_text(
+        json.dumps(
+            {
+                "sources": {"microstructure_reaction_context": "data/report/microstructure_reaction_context/x.json"},
+                "microstructure_reaction_context": {
+                    "available": True,
+                    "row_count": 3,
+                    "ok_count": 2,
+                    "missing_or_unusable_count": 1,
+                    "real_submitted_count": 1,
+                    "status_counts": {"ok": 2, "stale": 1},
+                    "entry_reaction_quality_counts": {"favorable_reaction": 1, "neutral_unusable": 1},
+                    "avg_ask_sweep_score": 61.5,
+                    "avg_post_sweep_hold_score": 58.5,
+                    "avg_bid_replenishment_score": 63.0,
+                    "max_vi_proximity_risk": 70,
+                    "runtime_effect": False,
+                    "decision_authority": "entry_confidence_modifier_source_only",
+                    "forbidden_uses": ["standalone_buy", "broker_guard_bypass"],
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (swing_dir / "swing_runtime_approval_2026-05-31.json").write_text(
+        json.dumps({"summary": {"requested": 0, "approved": 0}, "blocked_requests": []}),
+        encoding="utf-8",
+    )
+
+    report = mod.build_runtime_approval_summary("2026-05-31")
+
+    summary = report["microstructure_reaction_context"]
+    assert summary["available"] is True
+    assert summary["runtime_mutation_allowed"] is False
+    assert summary["decision_authority"] == "entry_confidence_modifier_source_only"
+    assert summary["row_count"] == 3
+    assert summary["ok_count"] == 2
+    assert "standalone_buy" in summary["forbidden_uses"]
+    markdown = (out_dir / "runtime_approval_summary_2026-05-31.md").read_text(encoding="utf-8")
+    assert "Microstructure Reaction Context" in markdown
+
+
+def test_runtime_approval_summary_microstructure_summary_tolerates_malformed_types():
+    payload = {
+        "microstructure_reaction_context": {
+            "available": True,
+            "row_count": "bad",
+            "ok_count": "2.9",
+            "missing_or_unusable_count": None,
+            "real_submitted_count": "x",
+            "status_counts": ["not-a-dict"],
+            "entry_reaction_quality_counts": "not-a-dict",
+            "source_quality_counts": 1,
+            "max_vi_proximity_risk": "not-numeric",
+            "forbidden_uses": "standalone_buy",
+            "runtime_effect": "true",
+        }
+    }
+
+    summary = mod._microstructure_reaction_context_summary(payload)
+
+    assert summary["row_count"] == 0
+    assert summary["ok_count"] == 2
+    assert summary["missing_or_unusable_count"] == 0
+    assert summary["real_submitted_count"] == 0
+    assert summary["status_counts"] == {}
+    assert summary["entry_reaction_quality_counts"] == {}
+    assert summary["source_quality_counts"] == {}
+    assert summary["max_vi_proximity_risk"] == 0
+    assert summary["forbidden_uses"] == []
+    assert "microstructure_reaction_runtime_effect_unexpected" in summary["warnings"]
 
 
 def test_runtime_approval_summary_surfaces_swing_bucket_ai_fail_closed():

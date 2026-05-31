@@ -1,6 +1,7 @@
 import json
 from datetime import datetime, timedelta
 
+from src.engine import ai_engine_openai as openai_module
 from src.engine.ai_engine_openai import GPTSniperEngine
 from src.engine.scalping_feature_packet import (
     SCALP_FEATURE_PACKET_VERSION,
@@ -81,6 +82,10 @@ def test_extract_scalping_feature_packet_exposes_stage1_supply_fields():
     assert packet["net_aggressive_delta_10t"] > 0
     assert packet["ask_depth_ratio"] == 93.5
     assert packet["net_ask_depth"] == -4200
+    assert packet["microstructure_reaction_context_version"] == "microstructure_reaction_context_v1"
+    assert packet["microstructure_reaction_context_status"] == "ok"
+    assert packet["microstructure_reaction_context_hash"]
+    assert packet["microstructure_reaction_vi_proximity_risk"] >= 0
 
 
 def test_build_scalping_feature_audit_fields_marks_sent_flags():
@@ -107,6 +112,24 @@ def test_build_scalping_feature_audit_fields_marks_sent_flags():
     assert fields["tick_accel_source"] == "computed_10ticks"
     assert fields["tick_context_stale"] is False
     assert fields["tick_context_quality"] == "fresh_computed"
+    assert fields["microstructure_reaction_context_sent"] is True
+    assert fields["microstructure_reaction_context_status"] == "ok"
+    assert fields["microstructure_reaction_ask_sweep_score"] >= 0
+
+
+def test_extract_scalping_feature_packet_missing_microstructure_context_is_neutral():
+    packet = extract_scalping_feature_packet(
+        {"curr": 10100},
+        _sample_ticks()[:3],
+        _sample_candles(),
+        now=datetime.strptime("09:00:12", "%H:%M:%S"),
+    )
+
+    assert packet["microstructure_reaction_context_status"] == "source_quality_missing"
+    assert packet["microstructure_reaction_ask_sweep_score"] == 50
+    assert packet["microstructure_reaction_post_sweep_hold_score"] == 50
+    assert packet["microstructure_reaction_bid_replenishment_score"] == 50
+    assert packet["microstructure_reaction_entry_reaction_quality"] == "neutral_unusable"
 
 
 def test_extract_scalping_feature_packet_uses_ws_update_timestamp_for_quote_age():
@@ -171,3 +194,37 @@ def test_openai_market_packet_includes_quant_feature_section():
     assert "same_price_buy_absorption" in payload["features"]
     assert payload["features"]["ask_depth_ratio"] == 93.5
     assert payload["features"]["net_ask_depth"] == -4200
+
+
+def test_openai_market_packet_reuses_precomputed_feature_packet(monkeypatch):
+    engine = GPTSniperEngine.__new__(GPTSniperEngine)
+    feature_packet = extract_scalping_feature_packet(
+        _sample_ws_data(),
+        _sample_ticks(),
+        _sample_candles(),
+        now=datetime.strptime("09:00:12", "%H:%M:%S"),
+    )
+
+    def fail_extract(*args, **kwargs):
+        raise AssertionError("feature packet should not be recomputed")
+
+    monkeypatch.setattr(openai_module, "extract_scalping_feature_packet", fail_extract)
+    payload = engine._format_market_data(
+        _sample_ws_data(),
+        _sample_ticks(),
+        _sample_candles(),
+        feature_packet=feature_packet,
+    )
+
+    assert json.loads(payload)["features"]["microstructure_reaction_context_status"] == "ok"
+
+
+def test_openai_market_packet_tolerates_missing_orderbook():
+    engine = GPTSniperEngine.__new__(GPTSniperEngine)
+    ws_data = {**_sample_ws_data(), "orderbook": None}
+
+    payload = engine._format_market_data(ws_data, _sample_ticks(), _sample_candles())
+    parsed = json.loads(payload)
+
+    assert parsed["orderbook_top3"] == {"asks": [], "bids": []}
+    assert parsed["features"]["microstructure_reaction_context_status"] == "source_quality_missing"

@@ -1032,6 +1032,9 @@ def _calibration_report_source_paths(target_date: str) -> dict[str, Path]:
         "latency_classifier_recommendation": (
             REPORT_DIR / "latency_classifier_recommendation" / f"latency_classifier_recommendation_{target_date}.json"
         ),
+        "microstructure_reaction_context": (
+            REPORT_DIR / "microstructure_reaction_context" / f"microstructure_reaction_context_{target_date}.json"
+        ),
         "market_regime_daily_report": REPORT_DIR / f"report_{target_date}.json",
     }
 
@@ -1352,6 +1355,7 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     decision_matrix = _read_json_dict(source_paths["holding_exit_decision_matrix"])
     stat_action = _read_json_dict(source_paths["statistical_action_weight"])
     latency_recommendation = _read_json_dict(source_paths["latency_classifier_recommendation"])
+    microstructure_reaction_context = _read_json_dict(source_paths["microstructure_reaction_context"])
     market_regime_continuous = _summarize_market_regime_continuous_sources(target_date)
 
     buy_current = buy_funnel_sentinel.get("current") if isinstance(buy_funnel_sentinel, dict) else {}
@@ -1391,6 +1395,11 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     latency_recommendation_metrics = (
         latency_recommendation_candidate.get("source_metrics")
         if isinstance(latency_recommendation_candidate.get("source_metrics"), dict)
+        else {}
+    )
+    microstructure_reaction_summary = (
+        microstructure_reaction_context.get("summary")
+        if isinstance(microstructure_reaction_context.get("summary"), dict)
         else {}
     )
     soft_stop = holding_exit_observation.get("soft_stop_rebound") if isinstance(holding_exit_observation, dict) else {}
@@ -2101,6 +2110,51 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             or 0,
             "sell_order_sent": _safe_int(stage_events.get("sell_order_sent"), 0) or 0,
             "sell_completed": _safe_int(stage_events.get("sell_completed"), 0) or 0,
+        },
+        "microstructure_reaction_context": {
+            "available": bool(microstructure_reaction_summary.get("available")),
+            "row_count": _safe_int(microstructure_reaction_summary.get("row_count"), 0) or 0,
+            "ok_count": _safe_int(microstructure_reaction_summary.get("ok_count"), 0) or 0,
+            "missing_or_unusable_count": _safe_int(
+                microstructure_reaction_summary.get("missing_or_unusable_count"), 0
+            )
+            or 0,
+            "real_submitted_count": _safe_int(microstructure_reaction_summary.get("real_submitted_count"), 0)
+            or 0,
+            "status_counts": (
+                microstructure_reaction_summary.get("status_counts")
+                if isinstance(microstructure_reaction_summary.get("status_counts"), dict)
+                else {}
+            ),
+            "entry_reaction_quality_counts": (
+                microstructure_reaction_summary.get("entry_reaction_quality_counts")
+                if isinstance(microstructure_reaction_summary.get("entry_reaction_quality_counts"), dict)
+                else {}
+            ),
+            "source_quality_counts": (
+                microstructure_reaction_summary.get("source_quality_counts")
+                if isinstance(microstructure_reaction_summary.get("source_quality_counts"), dict)
+                else {}
+            ),
+            "avg_ask_sweep_score": _safe_float(microstructure_reaction_summary.get("avg_ask_sweep_score"), None),
+            "avg_post_sweep_hold_score": _safe_float(
+                microstructure_reaction_summary.get("avg_post_sweep_hold_score"), None
+            ),
+            "avg_bid_replenishment_score": _safe_float(
+                microstructure_reaction_summary.get("avg_bid_replenishment_score"), None
+            ),
+            "max_vi_proximity_risk": _safe_int(microstructure_reaction_summary.get("max_vi_proximity_risk"), 0)
+            or 0,
+            "decision_authority": str(
+                microstructure_reaction_context.get("decision_authority")
+                or "entry_confidence_modifier_source_only"
+            ),
+            "runtime_effect": bool(microstructure_reaction_context.get("runtime_effect", False)),
+            "forbidden_uses": (
+                microstructure_reaction_context.get("forbidden_uses")
+                if isinstance(microstructure_reaction_context.get("forbidden_uses"), list)
+                else []
+            ),
         },
     }
     return {

@@ -94,6 +94,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
 
     sim_post_sell_idx = script.index("src.engine.sniper_post_sell_feedback")
     entry_adm_idx = script.index("src.engine.scalp_entry_action_decision_matrix")
+    microstructure_idx = script.index("src.engine.scalping.microstructure_reaction_context")
     lifecycle_matrix_idx = script.index("src.engine.lifecycle_decision_matrix")
     context_attribution_idx = script.index("src.engine.lifecycle_ai_context --date \"$TARGET_DATE\" --mode attribution")
     context_idx = script.index("src.engine.lifecycle_ai_context --date \"$TARGET_DATE\" --mode context")
@@ -120,6 +121,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     assert (
         sim_post_sell_idx
         < entry_adm_idx
+        < microstructure_idx
         < lifecycle_matrix_idx
         < context_attribution_idx
         < context_idx
@@ -149,6 +151,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     assert 'RUN_STAGE_HOOK_WORKORDER_DISCOVERY="${THRESHOLD_CYCLE_RUN_STAGE_HOOK_WORKORDER_DISCOVERY:-true}"' in script
     assert 'RUN_STAGE_HOOK_RUNTIME_SCAFFOLD="${THRESHOLD_CYCLE_RUN_STAGE_HOOK_RUNTIME_SCAFFOLD:-true}"' in script
     assert 'RUN_SCALP_ENTRY_ADM="${THRESHOLD_CYCLE_RUN_SCALP_ENTRY_ADM:-true}"' in script
+    assert 'RUN_MICROSTRUCTURE_REACTION_CONTEXT="${THRESHOLD_CYCLE_RUN_MICROSTRUCTURE_REACTION_CONTEXT:-true}"' in script
     assert 'RUN_LIFECYCLE_DECISION_MATRIX="${THRESHOLD_CYCLE_RUN_LIFECYCLE_DECISION_MATRIX:-true}"' in script
     assert 'RUN_LIFECYCLE_AI_CONTEXT="${THRESHOLD_CYCLE_RUN_LIFECYCLE_AI_CONTEXT:-true}"' in script
     assert 'RUN_LIFECYCLE_BUCKET_DISCOVERY="${THRESHOLD_CYCLE_RUN_LIFECYCLE_BUCKET_DISCOVERY:-$RUN_LIFECYCLE_DECISION_MATRIX}"' in script
@@ -164,6 +167,9 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     assert "stage_hook_runtime_scaffold=$RUN_STAGE_HOOK_RUNTIME_SCAFFOLD" in script
     assert "swing_lifecycle_matrix=$RUN_SWING_LIFECYCLE_MATRIX" in script
     assert "swing_lifecycle_bucket_discovery=$RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY" in script
+    assert "microstructure_reaction_context=$RUN_MICROSTRUCTURE_REACTION_CONTEXT" in script
+    assert "optional microstructure_reaction_context failed" in script
+    assert "optional microstructure_reaction_context artifact wait failed" in script
 
 
 def test_postclose_wrapper_treats_producer_gap_fail_closed_as_report_artifact():

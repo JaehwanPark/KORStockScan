@@ -16,6 +16,7 @@ from src.engine.lifecycle_ai_context import attribution_report_paths as lifecycl
 from src.engine.lifecycle_ai_context import context_report_paths as lifecycle_ai_context_report_paths
 from src.engine.lifecycle_bucket_discovery import discovery_report_path as lifecycle_bucket_discovery_report_path
 from src.engine.lifecycle_decision_matrix import report_paths as lifecycle_matrix_report_paths
+from src.engine.scalping.microstructure_reaction_context import report_paths as microstructure_reaction_report_paths
 from src.engine.scalping_pattern_lab_automation import automation_report_paths
 from src.engine.scalp_entry_action_decision_matrix import report_paths as scalp_entry_adm_report_paths
 from src.engine.swing_lifecycle_bucket_discovery import report_paths as swing_lifecycle_bucket_discovery_paths
@@ -1312,6 +1313,73 @@ def _institutional_flow_context_summary(target_date: str) -> tuple[dict[str, Any
     )
 
 
+def _microstructure_reaction_context_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
+    json_path, _ = microstructure_reaction_report_paths(target_date)
+    payload = _load_json(json_path)
+    if not payload:
+        return (
+            {
+                "available": False,
+                "artifact": None,
+                "status": "missing",
+                "row_count": 0,
+                "ok_count": 0,
+                "missing_or_unusable_count": 0,
+                "real_submitted_count": 0,
+                "status_counts": {},
+                "entry_reaction_quality_counts": {},
+                "source_quality_counts": {},
+                "runtime_effect": False,
+                "decision_authority": "entry_confidence_modifier_source_only",
+                "forbidden_uses": [
+                    "standalone_buy",
+                    "broker_guard_bypass",
+                    "threshold_mutation",
+                    "provider_route_change",
+                    "bot_restart",
+                    "cap_release",
+                ],
+            },
+            None,
+            [],
+        )
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    warnings = [f"microstructure_reaction_context:{item}" for item in (payload.get("warnings") or []) if str(item)]
+    return (
+        {
+            "available": True,
+            "artifact": str(json_path),
+            "status": "warning" if payload.get("warnings") else "pass",
+            "row_count": _safe_int(summary.get("row_count"), 0),
+            "ok_count": _safe_int(summary.get("ok_count"), 0),
+            "missing_or_unusable_count": _safe_int(summary.get("missing_or_unusable_count"), 0),
+            "real_submitted_count": _safe_int(summary.get("real_submitted_count"), 0),
+            "status_counts": summary.get("status_counts") if isinstance(summary.get("status_counts"), dict) else {},
+            "entry_reaction_quality_counts": (
+                summary.get("entry_reaction_quality_counts")
+                if isinstance(summary.get("entry_reaction_quality_counts"), dict)
+                else {}
+            ),
+            "source_quality_counts": (
+                summary.get("source_quality_counts")
+                if isinstance(summary.get("source_quality_counts"), dict)
+                else {}
+            ),
+            "avg_ask_sweep_score": summary.get("avg_ask_sweep_score"),
+            "avg_post_sweep_hold_score": summary.get("avg_post_sweep_hold_score"),
+            "avg_bid_replenishment_score": summary.get("avg_bid_replenishment_score"),
+            "max_vi_proximity_risk": _safe_int(summary.get("max_vi_proximity_risk"), 0),
+            "runtime_effect": bool(payload.get("runtime_effect")),
+            "decision_authority": payload.get("decision_authority") or "entry_confidence_modifier_source_only",
+            "metric_role": payload.get("metric_role") or "feature_context",
+            "primary_decision_metric": payload.get("primary_decision_metric") or "source_quality_adjusted_ev_pct",
+            "forbidden_uses": payload.get("forbidden_uses") if isinstance(payload.get("forbidden_uses"), list) else [],
+        },
+        str(json_path),
+        warnings,
+    )
+
+
 def _pipeline_event_verbosity_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
     json_path = REPORT_DIR / "pipeline_event_verbosity" / f"pipeline_event_verbosity_{target_date}.json"
     payload = _load_json(json_path)
@@ -1631,6 +1699,9 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
         swing_lifecycle_bucket_discovery_warnings,
     ) = _swing_lifecycle_bucket_discovery_summary(target_date)
     institutional_flow_summary, institutional_flow_path, institutional_flow_warnings = _institutional_flow_context_summary(target_date)
+    microstructure_reaction_summary, microstructure_reaction_path, microstructure_reaction_warnings = (
+        _microstructure_reaction_context_summary(target_date)
+    )
     code_workorder_summary, code_workorder_path, code_workorder_warnings = _code_improvement_workorder_summary(target_date)
     pipeline_verbosity_summary, pipeline_verbosity_path, pipeline_verbosity_warnings = _pipeline_event_verbosity_summary(target_date)
     codebase_perf_summary, codebase_perf_path, codebase_perf_warnings = _codebase_performance_workorder_summary(target_date)
@@ -1808,6 +1879,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
         "swing_lifecycle_decision_matrix": swing_lifecycle_matrix_summary,
         "swing_lifecycle_bucket_discovery": swing_lifecycle_bucket_discovery_summary,
         "institutional_flow_context": institutional_flow_summary,
+        "microstructure_reaction_context": microstructure_reaction_summary,
         "pipeline_event_verbosity": pipeline_verbosity_summary,
         "codebase_performance_workorder": codebase_perf_summary,
         "pattern_lab_currentness_audit": currentness_audit_summary,
@@ -1836,6 +1908,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "swing_lifecycle_decision_matrix": swing_lifecycle_matrix_path,
             "swing_lifecycle_bucket_discovery": swing_lifecycle_bucket_discovery_path,
             "institutional_flow_context": institutional_flow_path,
+            "microstructure_reaction_context": microstructure_reaction_path,
             "pipeline_event_verbosity": pipeline_verbosity_path,
             "codebase_performance_workorder": codebase_perf_path,
             "pattern_lab_currentness_audit": currentness_audit_path,
@@ -1869,6 +1942,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
                 *swing_lifecycle_matrix_warnings,
                 *swing_lifecycle_bucket_discovery_warnings,
                 *institutional_flow_warnings,
+                *microstructure_reaction_warnings,
                 *pipeline_verbosity_warnings,
                 *codebase_perf_warnings,
                 *currentness_audit_warnings,

@@ -357,6 +357,53 @@ def test_gpt5_nano_always_uses_openai_after_micro_removal(monkeypatch):
     assert "bedrock_primary_used" not in meta
 
 
+def test_gpt5_nano_openai_primary_can_enqueue_lite_shadow(monkeypatch):
+    engine = _build_engine()
+    captured = {}
+    provider_called = {"value": False}
+
+    def _fake_create(**kwargs):
+        return SimpleNamespace(output_text='{"action":"WAIT","score":61,"reason":"openai"}')
+
+    class Provider:
+        def converse(self, **kwargs):
+            provider_called["value"] = True
+            raise AssertionError("gpt-5-nano primary must stay OpenAI")
+
+    def _capture_shadow(**kwargs):
+        captured.update(kwargs)
+        return True
+
+    from src.engine import bedrock_nova_lite_shadow
+
+    engine.client = SimpleNamespace(responses=SimpleNamespace(create=_fake_create))
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_SHADOW_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_SHADOW_TARGET_MODELS", "gpt-5-nano")
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "primary")
+    monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
+    monkeypatch.setattr(bedrock_nova_lite_shadow, "enqueue_runtime_shadow", _capture_shadow)
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(openai_module.TRADING_RULES, OPENAI_TRANSPORT_MODE="http"),
+    )
+
+    result = GPTSniperEngine._call_openai_safe(
+        engine,
+        "PROMPT",
+        "payload",
+        require_json=True,
+        context_name="test",
+        model_override="gpt-5-nano",
+        endpoint_name="analyze_target",
+    )
+
+    assert result["reason"] == "openai"
+    assert provider_called["value"] is False
+    assert captured["model_name"] == "gpt-5-nano"
+    assert captured["openai_payload"]["reason"] == "openai"
+
+
 def test_bedrock_primary_routes_gpt54_mini_independently(monkeypatch):
     engine = _build_engine()
     captured = {}

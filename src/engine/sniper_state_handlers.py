@@ -40,6 +40,10 @@ from src.engine.sniper_scale_in import (
     resolve_scale_in_order_price,
     resolve_holding_elapsed_sec,
 )
+from src.engine.scalping.microstructure_reaction_context import (
+    CONTEXT_KEYS as MICROSTRUCTURE_REACTION_CONTEXT_KEYS,
+    neutral_microstructure_reaction_context,
+)
 from src.engine.sniper_scale_in_utils import record_add_history_event
 from src.engine.trade_pause_control import is_buy_side_paused, get_pause_state_label
 from src.engine.sniper_entry_latency import (
@@ -8556,6 +8560,7 @@ def _build_ai_ops_log_fields(
         "same_price_buy_absorption_sent",
         "large_sell_print_detected_sent",
         "ask_depth_ratio_sent",
+        "microstructure_reaction_context_sent",
         "tick_source_quality_fields_sent",
     ):
         if field_name in payload:
@@ -8568,6 +8573,11 @@ def _build_ai_ops_log_fields(
         "tick_accel_effective_recent_5tick_seconds",
         "tick_acceleration_ratio_raw",
         "quote_age_ms",
+        "microstructure_reaction_ask_sweep_score",
+        "microstructure_reaction_post_sweep_hold_score",
+        "microstructure_reaction_bid_replenishment_score",
+        "microstructure_reaction_wall_replenishment_risk_score",
+        "microstructure_reaction_vi_proximity_risk",
     ):
         if field_name in payload:
             raw_value = payload.get(field_name)
@@ -8582,6 +8592,11 @@ def _build_ai_ops_log_fields(
         "quote_age_source",
         "ai_input_source_quality_status",
         "ai_input_source_quality_reason",
+        "microstructure_reaction_context_version",
+        "microstructure_reaction_context_status",
+        "microstructure_reaction_entry_reaction_quality",
+        "microstructure_reaction_source_quality",
+        "microstructure_reaction_context_hash",
     ):
         if field_name in payload:
             out[field_name] = str(payload.get(field_name, "-") or "-")
@@ -8613,7 +8628,16 @@ def _build_ai_ops_log_fields(
     return out
 
 
+def _microstructure_reaction_log_fields_from_stock(stock: dict | None) -> dict:
+    if not isinstance(stock, dict):
+        return {}
+    fields = stock.get("last_watching_ai_source_quality_fields")
+    fields = fields if isinstance(fields, dict) else {}
+    return {key: fields.get(key) for key in MICROSTRUCTURE_REACTION_CONTEXT_KEYS if key in fields}
+
+
 def _build_ai_input_not_evaluated_fields(reason: str) -> dict:
+    microstructure_context = neutral_microstructure_reaction_context("not_evaluated", str(reason or "not_evaluated"))
     return {
         "ai_input_source_quality_status": "not_evaluated",
         "ai_input_source_quality_reason": str(reason or "not_evaluated"),
@@ -8621,6 +8645,7 @@ def _build_ai_input_not_evaluated_fields(reason: str) -> dict:
         "tick_accel_source": "not_evaluated",
         "tick_context_quality": "not_evaluated",
         "quote_age_source": "not_evaluated",
+        **microstructure_context,
     }
 
 
@@ -8645,6 +8670,11 @@ def _build_tick_source_quality_log_fields(feature_probe):
         "tick_latest_age_ms",
         "tick_window_span_sec",
         "quote_age_ms",
+        "microstructure_reaction_ask_sweep_score",
+        "microstructure_reaction_post_sweep_hold_score",
+        "microstructure_reaction_bid_replenishment_score",
+        "microstructure_reaction_wall_replenishment_risk_score",
+        "microstructure_reaction_vi_proximity_risk",
     ):
         if field_name in payload:
             raw_value = payload.get(field_name)
@@ -8657,6 +8687,11 @@ def _build_tick_source_quality_log_fields(feature_probe):
         "tick_accel_source",
         "tick_context_quality",
         "quote_age_source",
+        "microstructure_reaction_context_version",
+        "microstructure_reaction_context_status",
+        "microstructure_reaction_entry_reaction_quality",
+        "microstructure_reaction_source_quality",
+        "microstructure_reaction_context_hash",
     ):
         if field_name in payload:
             out[field_name] = str(payload.get(field_name, "-") or "-")
@@ -10037,6 +10072,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                     cap_bucket=scalp_limits.get('bucket_label'),
                     risk_state=overbought_context.get("risk_state"),
                     risk_bucket=overbought_context.get("risk_bucket"),
+                    **_build_ai_input_not_evaluated_fields("pre_ai_overbought_gate"),
                     **_build_ai_overlap_log_fields(
                         stock=stock,
                         ai_score=current_ai_score,
@@ -10298,6 +10334,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         marcap=marcap,
                         cap_bucket=scalp_limits.get('bucket_label'),
                         risk_state=liquidity_context.get("risk_state"),
+                        **_build_ai_input_not_evaluated_fields("pre_ai_liquidity_gate"),
                     )
                     if not _rule_bool("SCALP_PRE_AI_SOFT_GATE_ENABLED", True):
                         return False
@@ -11936,6 +11973,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             **submit_revalidation_fields,
             **latency_price_snapshot,
             **entry_orderbook_micro_fields,
+            **_microstructure_reaction_log_fields_from_stock(stock),
             **_scalp_pre_ai_gate_context_log_fields(scalp_pre_ai_gate_context),
         )
         if not greenfield_active:
@@ -11982,6 +12020,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             **submit_revalidation_fields,
             **latency_price_snapshot,
             **entry_orderbook_micro_fields,
+            **_microstructure_reaction_log_fields_from_stock(stock),
             **_scalp_pre_ai_gate_context_log_fields(scalp_pre_ai_gate_context),
         )
         if not greenfield_active:
@@ -12197,6 +12236,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 broker_order_forbidden=True,
                 **real_pre_submit_guard_fields,
                 **price_snapshot,
+                **_microstructure_reaction_log_fields_from_stock(stock),
             )
             log_info(
                 f"[PRE_SUBMIT_PRICE_GUARD_BLOCK] {stock.get('name')}({code}) "
@@ -12332,7 +12372,13 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     if not successful_orders:
         log_info(f"❌ [{stock['name']}] 매수 주문 전송 실패 (성공 주문 없음)")
         clear_signal_reference(stock)
-        _log_entry_pipeline(stock, code, "order_bundle_failed", **real_pre_submit_guard_fields)
+        _log_entry_pipeline(
+            stock,
+            code,
+            "order_bundle_failed",
+            **real_pre_submit_guard_fields,
+            **_microstructure_reaction_log_fields_from_stock(stock),
+        )
         if _is_swing_strategy(strategy):
             maybe_start_swing_intraday_probe(
                 stock=stock,
@@ -12431,6 +12477,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         actual_order_submitted=True,
         broker_order_forbidden=False,
         **_scalp_pre_ai_gate_context_log_fields(runtime.get("scalp_pre_ai_gate_context")),
+        **_microstructure_reaction_log_fields_from_stock(stock),
         **real_pre_submit_guard_fields,
         **submit_revalidation_fields,
         **bundle_price_snapshot,

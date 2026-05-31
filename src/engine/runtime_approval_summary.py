@@ -89,6 +89,7 @@ _FAMILY_DESCRIPTIONS = {
     "swing_lifecycle_decision_matrix": "스윙 probe와 discovery sim을 하나의 lifecycle bucket attribution으로 통합하는 source-only Swing LDM",
     "swing_lifecycle_bucket_discovery": "Swing LDM bucket을 sim-only 자동승인 후보와 source-quality workorder 후보로 분류하는 postclose handoff 축",
     "institutional_flow_context": "외인/기관 수급 REST/WS 원천을 lifecycle matrix 공통 feature로 붙이는 source-only provenance 축",
+    "microstructure_reaction_context": "초단기 호가/체결 반응을 scalping entry confidence provenance로 붙이는 source-only feature 축",
 }
 
 _BASELINE_APPLICATION = {
@@ -115,6 +116,7 @@ _BASELINE_APPLICATION = {
     "swing_lifecycle_decision_matrix": "source-only: sim 후보 자동승인 입력만 만들며 real order/approval/env apply 권한 없음",
     "swing_lifecycle_bucket_discovery": "source-only: 다음 PREOPEN swing sim policy 입력으로만 surfaced candidate를 전달",
     "institutional_flow_context": "source-only: lifecycle matrix feature/provenance 입력만 수행, 단독 BUY/scale-in/runtime apply 권한 없음",
+    "microstructure_reaction_context": "source-only: AI entry input/provenance 보강만 수행, 단독 BUY/runtime apply 권한 없음",
 }
 
 _STATE_INTERPRETATIONS = {
@@ -1762,6 +1764,51 @@ def _institutional_flow_context_summary(ev_report: dict[str, Any]) -> dict[str, 
     }
 
 
+def _microstructure_reaction_context_summary(ev_report: dict[str, Any]) -> dict[str, Any]:
+    payload = (
+        ev_report.get("microstructure_reaction_context")
+        if isinstance(ev_report.get("microstructure_reaction_context"), dict)
+        else {}
+    )
+    available = bool(payload.get("available"))
+    warnings = []
+    if not available:
+        warnings.append("microstructure_reaction_context_missing")
+    if bool(payload.get("runtime_effect")):
+        warnings.append("microstructure_reaction_runtime_effect_unexpected")
+    return {
+        "family": "microstructure_reaction_context",
+        "available": available,
+        "description": _FAMILY_DESCRIPTIONS["microstructure_reaction_context"],
+        "baseline_application": _BASELINE_APPLICATION["microstructure_reaction_context"],
+        "runtime_effect": False,
+        "runtime_mutation_allowed": False,
+        "decision_authority": payload.get("decision_authority") or "entry_confidence_modifier_source_only",
+        "row_count": _as_int(payload.get("row_count")),
+        "ok_count": _as_int(payload.get("ok_count")),
+        "missing_or_unusable_count": _as_int(payload.get("missing_or_unusable_count")),
+        "real_submitted_count": _as_int(payload.get("real_submitted_count")),
+        "status_counts": payload.get("status_counts") if isinstance(payload.get("status_counts"), dict) else {},
+        "entry_reaction_quality_counts": (
+            payload.get("entry_reaction_quality_counts")
+            if isinstance(payload.get("entry_reaction_quality_counts"), dict)
+            else {}
+        ),
+        "source_quality_counts": (
+            payload.get("source_quality_counts")
+            if isinstance(payload.get("source_quality_counts"), dict)
+            else {}
+        ),
+        "avg_ask_sweep_score": payload.get("avg_ask_sweep_score"),
+        "avg_post_sweep_hold_score": payload.get("avg_post_sweep_hold_score"),
+        "avg_bid_replenishment_score": payload.get("avg_bid_replenishment_score"),
+        "max_vi_proximity_risk": _as_int(payload.get("max_vi_proximity_risk")),
+        "forbidden_uses": payload.get("forbidden_uses") if isinstance(payload.get("forbidden_uses"), list) else [],
+        "state_interpretation": "source-only entry confidence context. It cannot create standalone BUY or bypass submit safety.",
+        "warnings": warnings,
+    }
+
+
 def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     _JSON_LOAD_DIAGNOSTICS.clear()
     target_date = str(target_date).strip()
@@ -1777,6 +1824,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     lifecycle_ai_context_path = sources.get("lifecycle_ai_context")
     lifecycle_ai_context_attribution_path = sources.get("lifecycle_ai_context_attribution")
     institutional_flow_path = sources.get("institutional_flow_context")
+    microstructure_reaction_path = sources.get("microstructure_reaction_context")
     calibration_report = _load_json(Path(str(calibration_source))) if calibration_source else {}
     currentness_path = Path(str(sources.get("pattern_lab_currentness_audit"))) if sources.get("pattern_lab_currentness_audit") else PATTERN_LAB_CURRENTNESS_AUDIT_DIR / f"pattern_lab_currentness_audit_{target_date}.json"
     pattern_lab_ai_review_path = Path(str(sources.get("pattern_lab_ai_review"))) if sources.get("pattern_lab_ai_review") else PATTERN_LAB_AI_REVIEW_DIR / f"pattern_lab_ai_review_{target_date}.json"
@@ -1797,6 +1845,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     swing_lifecycle_matrix_summary = _swing_lifecycle_matrix_summary(ev_report)
     swing_lifecycle_bucket_discovery_summary = _swing_lifecycle_bucket_discovery_summary(ev_report)
     institutional_flow_summary = _institutional_flow_context_summary(ev_report)
+    microstructure_reaction_summary = _microstructure_reaction_context_summary(ev_report)
     source_load_warnings = [
         f"source_load_{item.get('status')}:{Path(str(item.get('path') or '')).name}"
         for item in _JSON_LOAD_DIAGNOSTICS
@@ -1820,6 +1869,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             "swing_lifecycle_decision_matrix": swing_lifecycle_matrix_summary.get("artifact"),
             "swing_lifecycle_bucket_discovery": swing_lifecycle_bucket_discovery_summary.get("artifact"),
             "institutional_flow_context": institutional_flow_path,
+            "microstructure_reaction_context": microstructure_reaction_path,
             "pattern_lab_currentness_audit": str(currentness_path) if currentness_path.exists() else None,
             "pattern_lab_ai_review": str(pattern_lab_ai_review_path) if pattern_lab_ai_review_path.exists() else None,
             "producer_gap_discovery": str(producer_gap_discovery_path) if producer_gap_discovery_path.exists() else None,
@@ -1915,6 +1965,9 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             ),
             "institutional_flow_available": institutional_flow_summary.get("available"),
             "institutional_flow_join_rate_pct": institutional_flow_summary.get("join_rate_pct"),
+            "microstructure_reaction_available": microstructure_reaction_summary.get("available"),
+            "microstructure_reaction_row_count": microstructure_reaction_summary.get("row_count"),
+            "microstructure_reaction_ok_count": microstructure_reaction_summary.get("ok_count"),
         },
         "application_timing": _application_timing(target_date, ev_report),
         "scalp_entry_action_decision_matrix": scalp_entry_adm_summary,
@@ -1934,6 +1987,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
         "swing_lifecycle_decision_matrix": swing_lifecycle_matrix_summary,
         "swing_lifecycle_bucket_discovery": swing_lifecycle_bucket_discovery_summary,
         "institutional_flow_context": institutional_flow_summary,
+        "microstructure_reaction_context": microstructure_reaction_summary,
         "pattern_lab_currentness_audit": currentness_audit,
         "pattern_lab_ai_review": pattern_lab_ai_review,
         "producer_gap_discovery": producer_gap_discovery,
@@ -2042,6 +2096,11 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         if isinstance(report.get("institutional_flow_context"), dict)
         else {}
     )
+    microstructure_reaction = (
+        report.get("microstructure_reaction_context")
+        if isinstance(report.get("microstructure_reaction_context"), dict)
+        else {}
+    )
     currentness = report.get("pattern_lab_currentness_audit") if isinstance(report.get("pattern_lab_currentness_audit"), dict) else {}
     pattern_lab_ai_review = report.get("pattern_lab_ai_review") if isinstance(report.get("pattern_lab_ai_review"), dict) else {}
     producer_gap_discovery = report.get("producer_gap_discovery") if isinstance(report.get("producer_gap_discovery"), dict) else {}
@@ -2067,6 +2126,7 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         f"- swing_lifecycle_matrix_auto: `{summary.get('swing_lifecycle_matrix_sim_auto_candidate_count')}`",
         f"- swing_lifecycle_bucket_auto: `{summary.get('swing_lifecycle_bucket_discovery_sim_auto_approved_count')}`",
         f"- institutional_flow_available/join_rate: `{summary.get('institutional_flow_available')}` / `{summary.get('institutional_flow_join_rate_pct')}`",
+        f"- microstructure_reaction_available/ok: `{summary.get('microstructure_reaction_available')}` / `{summary.get('microstructure_reaction_ok_count')}`",
         f"- pattern_lab_currentness_status: `{summary.get('pattern_lab_currentness_status')}`",
         f"- pattern_lab_ai_review_status: `{summary.get('pattern_lab_ai_review_status')}`",
         f"- producer_gap_discovery_status: `{summary.get('producer_gap_discovery_status')}`",
@@ -2075,6 +2135,17 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         f"- first_bot_start_at: `{timing.get('first_bot_start_at') or '-'}`",
         f"- first_bot_start_after_env_at: `{timing.get('first_bot_start_after_env_at') or '-'}`",
         f"- pre_env_boot_gap: `{timing.get('pre_env_boot_gap')}`",
+        "",
+        "## Microstructure Reaction Context",
+        f"- available: `{microstructure_reaction.get('available')}`",
+        f"- authority: `{microstructure_reaction.get('decision_authority') or '-'}`",
+        f"- rows ok/missing: `{microstructure_reaction.get('ok_count')}` / `{microstructure_reaction.get('missing_or_unusable_count')}`",
+        f"- real_submitted_count: `{microstructure_reaction.get('real_submitted_count')}`",
+        f"- status_counts: `{microstructure_reaction.get('status_counts') or {}}`",
+        f"- entry_reaction_quality_counts: `{microstructure_reaction.get('entry_reaction_quality_counts') or {}}`",
+        f"- avg_scores ask/hold/bid: `{microstructure_reaction.get('avg_ask_sweep_score')}` / `{microstructure_reaction.get('avg_post_sweep_hold_score')}` / `{microstructure_reaction.get('avg_bid_replenishment_score')}`",
+        f"- max_vi_proximity_risk: `{microstructure_reaction.get('max_vi_proximity_risk')}`",
+        f"- warnings: `{microstructure_reaction.get('warnings') or []}`",
         "",
         "## Scalping",
         *_render_rows(scalping),

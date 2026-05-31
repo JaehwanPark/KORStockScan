@@ -111,6 +111,14 @@ def _isolate_pattern_lab_audit_dirs(tmp_path, monkeypatch):
             tmp_path / "missing_institutional_flow_context" / f"institutional_flow_context_{target_date}.md",
         ),
     )
+    monkeypatch.setattr(
+        mod,
+        "microstructure_reaction_report_paths",
+        lambda target_date: (
+            tmp_path / "missing_microstructure_reaction_context" / f"microstructure_reaction_context_{target_date}.json",
+            tmp_path / "missing_microstructure_reaction_context" / f"microstructure_reaction_context_{target_date}.md",
+        ),
+    )
 
 
 def test_lifecycle_bucket_windows_summary_separates_daily_and_promotion(tmp_path, monkeypatch):
@@ -378,6 +386,8 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
     assert report["missed_probe_counterfactual"]["real_execution_quality_source"] == "none"
     assert report["pattern_lab_automation"]["consensus_count"] == 1
     assert report["scalp_entry_action_decision_matrix"]["available"] is False
+    assert report["microstructure_reaction_context"]["available"] is False
+    assert "microstructure_reaction_context_missing" not in report["warnings"]
     assert report["swing_runtime_approval"]["requested"] == 1
     assert (
         report["swing_runtime_approval"]["real_canary_policy"]["policy_id"]

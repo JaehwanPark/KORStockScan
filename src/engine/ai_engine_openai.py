@@ -49,6 +49,7 @@ from src.engine.scalp_entry_adm_runtime import (
 )
 from src.engine.scalping_feature_packet import (
     build_scalping_feature_audit_fields,
+    calculate_scalping_micro_indicator_values,
     extract_scalping_feature_packet,
 )
 from src.utils.logger import log_error, log_info
@@ -1873,10 +1874,11 @@ class GPTSniperEngine:
                 "on",
             }:
                 return
-            if not (bool(request.require_json) and str(request.model_name) == "gpt-5.4-mini"):
+            if not bool(request.require_json):
                 return
             if (
                 str(os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "shadow")).strip().lower() == "primary"
+                and str(request.model_name) == "gpt-5.4-mini"
                 and not allow_during_primary
             ):
                 return
@@ -1942,16 +1944,67 @@ class GPTSniperEngine:
     # 데이터 포맷팅
     # ==========================================
 
-    def _format_market_data(self, ws_data, recent_ticks, recent_candles=None):
+    def _format_market_data(self, ws_data, recent_ticks, recent_candles=None, *, feature_packet=None):
         if recent_candles is None:
             recent_candles = []
 
         curr_price = ws_data.get('curr', 0)
         v_pw = ws_data.get('v_pw', 0)
         fluctuation = ws_data.get('fluctuation', 0.0)
-        orderbook = ws_data.get('orderbook', {'asks': [], 'bids': []})
+        raw_orderbook = ws_data.get('orderbook')
+        orderbook = raw_orderbook if isinstance(raw_orderbook, dict) else {'asks': [], 'bids': []}
+        asks = orderbook.get("asks") if isinstance(orderbook.get("asks"), list) else []
+        bids = orderbook.get("bids") if isinstance(orderbook.get("bids"), list) else []
         ask_tot = ws_data.get('ask_tot', 0)
         bid_tot = ws_data.get('bid_tot', 0)
+        if feature_packet is None:
+            feature_packet = extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles)
+
+        if bool(getattr(TRADING_RULES, "OPENAI_SCALPING_COMPACT_INPUT_ENABLED", True)):
+            compact_asks = [
+                {"price": a.get("price"), "volume": a.get("volume")}
+                for a in asks[:3]
+                if isinstance(a, dict)
+            ]
+            compact_bids = [
+                {"price": b.get("price"), "volume": b.get("volume")}
+                for b in bids[:3]
+                if isinstance(b, dict)
+            ]
+            compact_ticks = [
+                {
+                    "time": t.get("time"),
+                    "dir": t.get("dir", "NEUTRAL"),
+                    "price": t.get("price"),
+                    "volume": t.get("volume"),
+                    "strength": t.get("strength", 0),
+                }
+                for t in (recent_ticks or [])[:5]
+            ]
+            compact_candles = [
+                {
+                    "time": c.get("체결시간"),
+                    "open": c.get("시가", c.get("현재가", 0)),
+                    "high": c.get("고가"),
+                    "low": c.get("저가"),
+                    "close": c.get("현재가"),
+                    "volume": c.get("거래량"),
+                }
+                for c in (recent_candles or [])[-5:]
+            ]
+            compact_payload = {
+                "current": {
+                    "price": curr_price,
+                    "fluctuation_pct": fluctuation,
+                    "websocket_strength": v_pw,
+                    "distance_from_day_high_pct": feature_packet["distance_from_day_high_pct"],
+                },
+                "features": feature_packet,
+                "orderbook_top3": {"asks": compact_asks, "bids": compact_bids},
+                "recent_ticks_latest_first": compact_ticks,
+                "recent_candles_latest_window": compact_candles,
+            }
+            return json.dumps(compact_payload, ensure_ascii=False, separators=(",", ":"), default=str)
 
         imbalance_str = "데이터 없음"
         if ask_tot > 0 and bid_tot > 0:
@@ -1972,8 +2025,16 @@ class GPTSniperEngine:
             drawdown = ((curr_price - high_price) / high_price) * 100
             drawdown_str = f"{drawdown:.2f}% (당일 고가 {high_price:,}원)"
 
-        ask_str = "\n".join([f"매도 {5-i}호가: {a['price']:,}원 ({a['volume']:,}주)" for i, a in enumerate(orderbook['asks'])])
-        bid_str = "\n".join([f"매수 {i+1}호가: {b['price']:,}원 ({b['volume']:,}주)" for i, b in enumerate(orderbook['bids'])])
+        ask_str = "\n".join([
+            f"매도 {5-i}호가: {a['price']:,}원 ({a['volume']:,}주)"
+            for i, a in enumerate(asks)
+            if isinstance(a, dict) and "price" in a and "volume" in a
+        ])
+        bid_str = "\n".join([
+            f"매수 {i+1}호가: {b['price']:,}원 ({b['volume']:,}주)"
+            for i, b in enumerate(bids)
+            if isinstance(b, dict) and "price" in b and "volume" in b
+        ])
 
         tick_summary = "틱 데이터 부족"
         tick_str = ""
@@ -2040,9 +2101,7 @@ class GPTSniperEngine:
 
         indicators_str = "지표 계산 불가"
         if recent_candles and len(recent_candles) >= 5:
-            from src.engine.signal_radar import SniperRadar
-            temp_radar = SniperRadar(token=None)
-            ind = temp_radar.calculate_micro_indicators(recent_candles)
+            ind = calculate_scalping_micro_indicator_values(recent_candles)
 
             ma5_status = "상회" if curr_price > ind['MA5'] else "하회"
             vwap_status = "상회 (수급강세)" if curr_price > ind['Micro_VWAP'] else "하회 (수급약세)"
@@ -2054,7 +2113,6 @@ class GPTSniperEngine:
                 f"- 호가 불균형: {imbalance_str}"
             )
 
-        feature_packet = extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles)
         quant_features_str = (
             f"- packet_version: {feature_packet['packet_version']}\n"
             f"- curr_price: {feature_packet['curr_price']}\n"
@@ -2085,50 +2143,6 @@ class GPTSniperEngine:
             f"- ask_depth_ratio: {feature_packet['ask_depth_ratio']}\n"
             f"- net_ask_depth: {feature_packet['net_ask_depth']}"
         )
-
-        if bool(getattr(TRADING_RULES, "OPENAI_SCALPING_COMPACT_INPUT_ENABLED", True)):
-            compact_asks = [
-                {"price": a.get("price"), "volume": a.get("volume")}
-                for a in (orderbook.get("asks") or [])[:3]
-            ]
-            compact_bids = [
-                {"price": b.get("price"), "volume": b.get("volume")}
-                for b in (orderbook.get("bids") or [])[:3]
-            ]
-            compact_ticks = [
-                {
-                    "time": t.get("time"),
-                    "dir": t.get("dir", "NEUTRAL"),
-                    "price": t.get("price"),
-                    "volume": t.get("volume"),
-                    "strength": t.get("strength", 0),
-                }
-                for t in (recent_ticks or [])[:5]
-            ]
-            compact_candles = [
-                {
-                    "time": c.get("체결시간"),
-                    "open": c.get("시가", c.get("현재가", 0)),
-                    "high": c.get("고가"),
-                    "low": c.get("저가"),
-                    "close": c.get("현재가"),
-                    "volume": c.get("거래량"),
-                }
-                for c in (recent_candles or [])[-5:]
-            ]
-            compact_payload = {
-                "current": {
-                    "price": curr_price,
-                    "fluctuation_pct": fluctuation,
-                    "websocket_strength": v_pw,
-                    "distance_from_day_high_pct": feature_packet["distance_from_day_high_pct"],
-                },
-                "features": feature_packet,
-                "orderbook_top3": {"asks": compact_asks, "bids": compact_bids},
-                "recent_ticks_latest_first": compact_ticks,
-                "recent_candles_latest_window": compact_candles,
-            }
-            return json.dumps(compact_payload, ensure_ascii=False, separators=(",", ":"), default=str)
 
         user_input = f"""
 [현재 상태]
@@ -2941,7 +2955,13 @@ class GPTSniperEngine:
                 target_model = self._get_tier2_model()
                 feature_audit_fields = {}
             else:
-                formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
+                feature_packet = extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles)
+                formatted_data = self._format_market_data(
+                    ws_data,
+                    recent_ticks,
+                    recent_candles,
+                    feature_packet=feature_packet,
+                )
                 if matrix_runtime and matrix_runtime.get("prompt_context"):
                     formatted_data = f"{formatted_data}\n\n{matrix_runtime['prompt_context']}"
                 if entry_adm_runtime and entry_adm_runtime.get("prompt_context"):
@@ -2949,9 +2969,7 @@ class GPTSniperEngine:
                 if lifecycle_ai_runtime and lifecycle_ai_runtime.get("prompt_context"):
                     formatted_data = f"{formatted_data}\n\n{lifecycle_ai_runtime['prompt_context']}"
                 target_model = self._get_tier1_model()
-                feature_audit_fields = build_scalping_feature_audit_fields(
-                    extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles)
-                )
+                feature_audit_fields = build_scalping_feature_audit_fields(feature_packet)
 
             result = self._call_openai_safe(
                 prompt,

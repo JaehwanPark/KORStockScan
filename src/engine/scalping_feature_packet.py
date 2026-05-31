@@ -3,15 +3,35 @@ from __future__ import annotations
 from datetime import datetime
 from statistics import mean
 
+from src.engine.scalping.microstructure_reaction_context import build_microstructure_reaction_context
+
 
 SCALP_FEATURE_PACKET_VERSION = "scalp_feature_packet_v1"
 
 
+def _safe_number(value, default=0.0):
+    try:
+        if value in (None, "", "-"):
+            return default
+        return float(value)
+    except Exception:
+        return default
+
+
 def _safe_hhmmss_to_seconds(value):
     try:
-        text = str(value).replace(":", "").zfill(6)
-        parsed = datetime.strptime(text, "%H%M%S")
-        return parsed.hour * 3600 + parsed.minute * 60 + parsed.second
+        text = str(value or "").replace(":", "").strip()
+        if not text:
+            return None
+        if not text.isdigit():
+            return None
+        text = text.zfill(6)
+        hour = int(text[0:2])
+        minute = int(text[2:4])
+        second = int(text[4:6])
+        if hour > 23 or minute > 59 or second > 59:
+            return None
+        return (hour * 3600) + (minute * 60) + second
     except Exception:
         return None
 
@@ -74,6 +94,29 @@ def _quote_age_ms(ws_data, *, now=None):
             continue
         return max(0, now_ms - epoch_ms), key
     return None, "missing"
+
+
+def calculate_scalping_micro_indicator_values(recent_candles):
+    candles = recent_candles if isinstance(recent_candles, list) else []
+    if len(candles) < 5:
+        last_close = _safe_number(candles[-1].get("현재가") if candles and isinstance(candles[-1], dict) else 0, 0.0)
+        return {"MA5": int(last_close), "Micro_VWAP": int(last_close)}
+
+    window = [candle for candle in candles[-5:] if isinstance(candle, dict)]
+    closes = [_safe_number(candle.get("현재가"), 0.0) for candle in window]
+    ma5_value = int(sum(closes) / len(closes)) if closes else 0
+    price_vol_sum = 0.0
+    volume_sum = 0.0
+    for candle in window:
+        high = _safe_number(candle.get("고가"), 0.0)
+        low = _safe_number(candle.get("저가"), 0.0)
+        close = _safe_number(candle.get("현재가"), 0.0)
+        volume = _safe_number(candle.get("거래량"), 0.0)
+        typical_price = (high + low + close) / 3.0
+        price_vol_sum += typical_price * volume
+        volume_sum += volume
+    micro_vwap_value = int(price_vol_sum / volume_sum) if volume_sum > 0 else int(closes[-1] if closes else 0)
+    return {"MA5": ma5_value, "Micro_VWAP": micro_vwap_value}
 
 
 def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, *, now=None):
@@ -240,10 +283,7 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
 
     if recent_candles and len(recent_candles) >= 5:
         try:
-            from src.engine.signal_radar import SniperRadar
-
-            temp_radar = SniperRadar(token=None)
-            indicators = temp_radar.calculate_micro_indicators(recent_candles)
+            indicators = calculate_scalping_micro_indicator_values(recent_candles)
 
             ma5_value = indicators.get("MA5", 0) or 0
             micro_vwap_value = indicators.get("Micro_VWAP", 0) or 0
@@ -256,6 +296,12 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
             pass
 
     orderbook_total_ratio = round((ask_tot / bid_tot), 3) if bid_tot > 0 else 999.0
+    microstructure_reaction = build_microstructure_reaction_context(
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        now=now,
+    )
 
     return {
         "packet_version": SCALP_FEATURE_PACKET_VERSION,
@@ -301,6 +347,7 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
         "ma5_value": round(ma5_value, 2) if ma5_value else 0.0,
         "ask_depth_ratio": ask_depth_ratio,
         "net_ask_depth": net_ask_depth,
+        **microstructure_reaction,
     }
 
 
@@ -312,6 +359,7 @@ def build_scalping_feature_audit_fields(packet):
         "same_price_buy_absorption_sent": "same_price_buy_absorption" in payload,
         "large_sell_print_detected_sent": "large_sell_print_detected" in payload,
         "ask_depth_ratio_sent": "ask_depth_ratio" in payload,
+        "microstructure_reaction_context_sent": "microstructure_reaction_context_version" in payload,
         "tick_source_quality_fields_sent": all(
             field in payload
             for field in (
@@ -334,4 +382,14 @@ def build_scalping_feature_audit_fields(packet):
         "quote_age_ms": payload.get("quote_age_ms", "-"),
         "quote_age_source": payload.get("quote_age_source", "missing"),
         "quote_stale": payload.get("quote_stale", "unknown"),
+        "microstructure_reaction_context_version": payload.get("microstructure_reaction_context_version", "-"),
+        "microstructure_reaction_context_status": payload.get("microstructure_reaction_context_status", "-"),
+        "microstructure_reaction_ask_sweep_score": payload.get("microstructure_reaction_ask_sweep_score", 50),
+        "microstructure_reaction_post_sweep_hold_score": payload.get("microstructure_reaction_post_sweep_hold_score", 50),
+        "microstructure_reaction_bid_replenishment_score": payload.get("microstructure_reaction_bid_replenishment_score", 50),
+        "microstructure_reaction_wall_replenishment_risk_score": payload.get("microstructure_reaction_wall_replenishment_risk_score", 50),
+        "microstructure_reaction_vi_proximity_risk": payload.get("microstructure_reaction_vi_proximity_risk", 0),
+        "microstructure_reaction_entry_reaction_quality": payload.get("microstructure_reaction_entry_reaction_quality", "-"),
+        "microstructure_reaction_source_quality": payload.get("microstructure_reaction_source_quality", "-"),
+        "microstructure_reaction_context_hash": payload.get("microstructure_reaction_context_hash", "-"),
     }
