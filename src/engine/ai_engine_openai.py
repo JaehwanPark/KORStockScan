@@ -1076,6 +1076,7 @@ class GPTSniperEngine:
         cache_hit,
         cache_mode,
         result_source,
+        input_contract_fields=None,
     ):
         payload = dict(result or {})
         payload["ai_parse_ok"] = bool(parse_ok)
@@ -1087,7 +1088,32 @@ class GPTSniperEngine:
         payload["ai_result_source"] = str(result_source or "-")
         payload["cache_hit"] = bool(cache_hit)
         payload["cache_mode"] = str(cache_mode or "miss")
+        if isinstance(input_contract_fields, dict):
+            payload.update({k: v for k, v in input_contract_fields.items() if v not in (None, "")})
         return payload
+
+    def _resolve_ai_input_contract_fields(self, user_input, *, default_schema, default_mode):
+        fields = {
+            "ai_input_schema": str(default_schema or "-"),
+            "ai_input_contract_mode": str(default_mode or "plain_text"),
+        }
+        if not isinstance(user_input, str):
+            return fields
+        text = user_input.strip()
+        if not text.startswith("{"):
+            return fields
+        try:
+            payload = json.loads(text)
+        except Exception:
+            return fields
+        if not isinstance(payload, dict):
+            return fields
+        fields["ai_input_schema"] = str(payload.get("input_schema") or default_schema or "-").strip() or "-"
+        fields["ai_input_contract_mode"] = "structured_json"
+        fallback_reason = str(payload.get("input_build_fallback") or "").strip()
+        if fallback_reason:
+            fields["ai_input_build_fallback"] = fallback_reason
+        return fields
 
     def _mark_successful_ai_call(self, *, update_last_call_time=True):
         self.consecutive_failures = 0
@@ -1874,11 +1900,10 @@ class GPTSniperEngine:
                 "on",
             }:
                 return
-            if not bool(request.require_json):
+            if not (bool(request.require_json) and str(request.model_name) == "gpt-5.4-mini"):
                 return
             if (
                 str(os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "shadow")).strip().lower() == "primary"
-                and str(request.model_name) == "gpt-5.4-mini"
                 and not allow_during_primary
             ):
                 return
@@ -1944,6 +1969,190 @@ class GPTSniperEngine:
     # 데이터 포맷팅
     # ==========================================
 
+    def _extract_quote_snapshot(self, ws_data):
+        ws = ws_data if isinstance(ws_data, dict) else {}
+        orderbook = ws.get("orderbook") if isinstance(ws.get("orderbook"), dict) else {}
+        asks = orderbook.get("asks") if isinstance(orderbook.get("asks"), list) else []
+        bids = orderbook.get("bids") if isinstance(orderbook.get("bids"), list) else []
+        best_ask = 0
+        best_bid = 0
+        try:
+            best_ask = int(float((asks[0] or {}).get("price", 0))) if asks else 0
+        except Exception:
+            best_ask = 0
+        try:
+            best_bid = int(float((bids[0] or {}).get("price", 0))) if bids else 0
+        except Exception:
+            best_bid = 0
+        spread = best_ask - best_bid if best_ask > 0 and best_bid > 0 else 0
+        spread_bp = round((spread / best_bid) * 10000.0, 3) if spread > 0 and best_bid > 0 else 0.0
+        return {
+            "best_ask": best_ask,
+            "best_bid": best_bid,
+            "spread": spread,
+            "spread_bp": spread_bp,
+            "ask_total_depth": ws.get("ask_tot"),
+            "bid_total_depth": ws.get("bid_tot"),
+        }
+
+    def _compact_recent_ticks(self, recent_ticks, *, limit=5):
+        return [
+            {
+                "time": tick.get("time"),
+                "dir": tick.get("dir", tick.get("side", "NEUTRAL")),
+                "price": tick.get("price", tick.get("현재가", tick.get("체결가"))),
+                "volume": tick.get("volume", tick.get("qty", tick.get("체결량"))),
+                "strength": tick.get("strength", 0),
+            }
+            for tick in (recent_ticks or [])[:limit]
+            if isinstance(tick, dict)
+        ]
+
+    def _compact_recent_candles(self, recent_candles, *, limit=5):
+        return [
+            {
+                "time": candle.get("체결시간", candle.get("time")),
+                "open": candle.get("시가", candle.get("open", candle.get("현재가", candle.get("close", 0)))),
+                "high": candle.get("고가", candle.get("high")),
+                "low": candle.get("저가", candle.get("low")),
+                "close": candle.get("현재가", candle.get("close", candle.get("종가"))),
+                "volume": candle.get("거래량", candle.get("volume")),
+            }
+            for candle in (recent_candles or [])[-limit:]
+            if isinstance(candle, dict)
+        ]
+
+    def _summarize_tick_windows(self, recent_ticks, *, windows=(5, 10, 20)):
+        ticks = [tick for tick in (recent_ticks or []) if isinstance(tick, dict)]
+
+        def _price(tick):
+            return self._safe_float(tick.get("price", tick.get("현재가", tick.get("체결가", 0))), 0.0)
+
+        def _volume(tick):
+            return self._safe_float(tick.get("volume", tick.get("qty", tick.get("체결량", 0))), 0.0)
+
+        def _direction(tick):
+            return str(tick.get("dir", tick.get("side", tick.get("trade_type", ""))) or "").upper()
+
+        def _is_buy_tick(tick):
+            direction = _direction(tick)
+            return "BUY" in direction or "매수" in direction
+
+        def _is_sell_tick(tick):
+            direction = _direction(tick)
+            return "SELL" in direction or "매도" in direction
+
+        summary = {}
+        for window in windows:
+            sample = ticks[:window]
+            if not sample:
+                summary[str(window)] = {"count": 0}
+                continue
+            buy_vol = sum(_volume(tick) for tick in sample if _is_buy_tick(tick))
+            sell_vol = sum(_volume(tick) for tick in sample if _is_sell_tick(tick))
+            total = buy_vol + sell_vol
+            latest = _price(sample[0])
+            oldest = _price(sample[-1])
+            summary[str(window)] = {
+                "count": len(sample),
+                "price_delta_pct": round(((latest - oldest) / oldest * 100.0), 4) if oldest > 0 else 0.0,
+                "buy_pressure_pct": round((buy_vol / total * 100.0), 3) if total > 0 else 0.0,
+                "buy_volume": int(buy_vol),
+                "sell_volume": int(sell_vol),
+                "large_sell_print_count": sum(
+                    1
+                    for tick in sample
+                    if _is_sell_tick(tick)
+                    and _volume(tick) >= max(1.0, total * 0.15)
+                ),
+            }
+        return summary
+
+    def _summarize_candle_windows(self, recent_candles, *, windows=(3, 5, 10)):
+        candles = [candle for candle in (recent_candles or []) if isinstance(candle, dict)]
+
+        def _field(candle, *names):
+            for name in names:
+                if name in candle:
+                    return candle.get(name)
+            return 0
+
+        summary = {}
+        for window in windows:
+            sample = candles[-window:]
+            if len(sample) < 2:
+                summary[str(window)] = {"count": len(sample)}
+                continue
+            first_close = self._safe_float(_field(sample[0], "현재가", "close", "종가"), 0.0)
+            last_close = self._safe_float(_field(sample[-1], "현재가", "close", "종가"), 0.0)
+            highs = [self._safe_float(_field(item, "고가", "high"), 0.0) for item in sample]
+            lows = [self._safe_float(_field(item, "저가", "low"), 0.0) for item in sample]
+            vols = [self._safe_float(_field(item, "거래량", "volume"), 0.0) for item in sample]
+            avg_prev_vol = sum(vols[:-1]) / max(1, len(vols) - 1)
+            summary[str(window)] = {
+                "count": len(sample),
+                "close_slope_pct": round(((last_close - first_close) / first_close * 100.0), 4)
+                if first_close > 0
+                else 0.0,
+                "range_pct": round(((max(highs) - min(lows)) / min(lows) * 100.0), 4)
+                if lows and min(lows) > 0
+                else 0.0,
+                "latest_volume_ratio": round((vols[-1] / avg_prev_vol), 4) if avg_prev_vol > 0 else 0.0,
+            }
+        return summary
+
+    def _build_entry_screen_v2_payload(self, ws_data, recent_ticks, recent_candles, *, feature_packet=None):
+        ws = ws_data if isinstance(ws_data, dict) else {}
+        if feature_packet is None:
+            feature_packet = extract_scalping_feature_packet(ws, recent_ticks, recent_candles)
+        quote = self._extract_quote_snapshot(ws)
+        orderbook = ws.get("orderbook") if isinstance(ws.get("orderbook"), dict) else {}
+        asks = orderbook.get("asks") if isinstance(orderbook.get("asks"), list) else []
+        bids = orderbook.get("bids") if isinstance(orderbook.get("bids"), list) else []
+        ws_age_sec = None
+        try:
+            raw_ts = float(ws.get("last_ws_update_ts", 0) or 0)
+            ws_age_sec = round(max(0.0, time.time() - raw_ts), 3) if raw_ts > 0 else None
+        except Exception:
+            ws_age_sec = None
+        return {
+            "input_schema": "entry_screen_v2",
+            "current": {
+                "price": ws.get("curr"),
+                "fluctuation_pct": ws.get("fluctuation", 0.0),
+                "execution_strength": ws.get("v_pw", 0.0),
+                "buy_ratio": ws.get("buy_ratio", 0.0),
+            },
+            "features": feature_packet,
+            "quote_freshness": {
+                "latency_state": ws.get("latency_state"),
+                "ws_age_sec": ws_age_sec,
+                "quote_stale": bool(ws.get("quote_stale", False)),
+                **quote,
+            },
+            "orderbook_top3": {
+                "asks": [
+                    {"price": ask.get("price"), "volume": ask.get("volume")}
+                    for ask in asks[:3]
+                    if isinstance(ask, dict)
+                ],
+                "bids": [
+                    {"price": bid.get("price"), "volume": bid.get("volume")}
+                    for bid in bids[:3]
+                    if isinstance(bid, dict)
+                ],
+            },
+            "tick_summary": self._summarize_tick_windows(recent_ticks, windows=(5, 10)),
+            "candle_summary": self._summarize_candle_windows(recent_candles, windows=(3, 5, 10)),
+            "recent_ticks_latest_first": self._compact_recent_ticks(recent_ticks, limit=5),
+            "recent_candles_latest_window": self._compact_recent_candles(recent_candles, limit=5),
+            "source_quality": {
+                "tick_count": len([tick for tick in (recent_ticks or []) if isinstance(tick, dict)]),
+                "candle_count": len([candle for candle in (recent_candles or []) if isinstance(candle, dict)]),
+                "orderbook_present": bool(asks or bids),
+            },
+        }
+
     def _format_market_data(self, ws_data, recent_ticks, recent_candles=None, *, feature_packet=None):
         if recent_candles is None:
             recent_candles = []
@@ -1959,6 +2168,19 @@ class GPTSniperEngine:
         bid_tot = ws_data.get('bid_tot', 0)
         if feature_packet is None:
             feature_packet = extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles)
+
+        if bool(getattr(TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False)):
+            return json.dumps(
+                self._build_entry_screen_v2_payload(
+                    ws_data,
+                    recent_ticks,
+                    recent_candles,
+                    feature_packet=feature_packet,
+                ),
+                ensure_ascii=False,
+                separators=(",", ":"),
+                default=str,
+            )
 
         if bool(getattr(TRADING_RULES, "OPENAI_SCALPING_COMPACT_INPUT_ENABLED", True)):
             compact_asks = [
@@ -2649,6 +2871,91 @@ class GPTSniperEngine:
             },
         }
 
+    def _price_bps_from_bid(self, price, best_bid):
+        price_value = self._safe_float(price, 0.0)
+        bid_value = self._safe_float(best_bid, 0.0)
+        if price_value <= 0 or bid_value <= 0:
+            return 0.0
+        return round(((price_value - bid_value) / bid_value) * 10000.0, 3)
+
+    def _build_scalping_entry_price_v2_input(
+        self,
+        *,
+        stock_name,
+        stock_code,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        price_ctx,
+    ):
+        ctx = price_ctx if isinstance(price_ctx, dict) else {}
+        start_quote = {
+            "current_price": ctx.get("current_price"),
+            "best_bid": ctx.get("best_bid"),
+            "best_ask": ctx.get("best_ask"),
+        }
+        start_best_bid = int(self._safe_float(ctx.get("best_bid"), 0))
+        start_best_ask = int(self._safe_float(ctx.get("best_ask"), 0))
+        start_spread = start_best_ask - start_best_bid if start_best_ask > 0 and start_best_bid > 0 else 0
+        start_quote["spread"] = start_spread
+        current_quote = self._extract_quote_snapshot(ws_data)
+        micro = ctx.get("orderbook_micro") if isinstance(ctx.get("orderbook_micro"), dict) else {}
+        current_micro = (ws_data or {}).get("orderbook_micro") if isinstance((ws_data or {}).get("orderbook_micro"), dict) else {}
+        current_micro_state = current_micro.get("micro_state", micro.get("micro_state"))
+        tick_size = max(1, int(self._safe_float(ctx.get("tick_size"), 1) or 1))
+        best_bid_delta = int(current_quote.get("best_bid") or 0) - start_best_bid if start_best_bid > 0 else 0
+        best_ask_delta = int(current_quote.get("best_ask") or 0) - start_best_ask if start_best_ask > 0 else 0
+        spread_delta = int(current_quote.get("spread") or 0) - start_spread
+        defensive_price = ctx.get("defensive_order_price")
+        reference_price = ctx.get("reference_target_price")
+        resolved_price = ctx.get("resolved_order_price")
+        compact_ctx = self._compact_entry_price_context(ctx)
+        payload = {
+            "input_schema": "entry_price_v2",
+            "stock_name": stock_name,
+            "stock_code": stock_code,
+            "ws_data": self._compact_entry_price_ws_data(ws_data),
+            "quote_change": {
+                "decision_start_quote": start_quote,
+                "current_quote": current_quote,
+                "best_bid_delta_ticks": round(best_bid_delta / tick_size, 3),
+                "best_ask_delta_ticks": round(best_ask_delta / tick_size, 3),
+                "spread_delta_ticks": round(spread_delta / tick_size, 3),
+                "micro_state_start": micro.get("micro_state"),
+                "micro_state_current": current_micro_state,
+                "micro_state_changed": bool(current_micro_state and current_micro_state != micro.get("micro_state")),
+            },
+            "candidate_prices": {
+                "defensive_order_price": defensive_price,
+                "reference_target_price": reference_price,
+                "resolved_order_price": resolved_price,
+                "defensive_vs_bid_bps": self._price_bps_from_bid(defensive_price, start_best_bid),
+                "reference_vs_bid_bps": self._price_bps_from_bid(reference_price, start_best_bid),
+                "resolved_vs_bid_bps": self._price_bps_from_bid(resolved_price, start_best_bid),
+            },
+            "freshness": {
+                "latency_state": ctx.get("latency_state"),
+                "ws_age_ms": ctx.get("ws_age_ms"),
+                "ws_jitter_ms": ctx.get("ws_jitter_ms"),
+                "quote_stale": bool(ctx.get("quote_stale")),
+            },
+            "fill_probability_hints": {
+                "execution_strength": (ws_data or {}).get("v_pw"),
+                "buy_ratio": (ws_data or {}).get("buy_ratio"),
+                "spread_bp": compact_ctx["orderbook_micro"].get("spread_bp") or current_quote.get("spread_bp"),
+                "top_depth_ratio": compact_ctx["orderbook_micro"].get("top_depth_ratio"),
+                "micro_state": micro.get("micro_state"),
+                "ofi": compact_ctx["orderbook_micro"].get("ofi"),
+                "qi": compact_ctx["orderbook_micro"].get("qi"),
+            },
+            "price_context": compact_ctx,
+            "tick_summary": self._summarize_tick_windows(recent_ticks, windows=(5, 10, 20)),
+            "candle_summary": self._summarize_candle_windows(recent_candles, windows=(3, 5, 10)),
+            "recent_ticks_latest_first": self._compact_recent_ticks(recent_ticks, limit=5),
+            "recent_candles_latest_window": self._compact_recent_candles(recent_candles, limit=5),
+        }
+        return json.dumps(payload, ensure_ascii=True, separators=(",", ":"), default=str)
+
     def _build_scalping_entry_price_user_input(
         self,
         *,
@@ -2680,6 +2987,15 @@ class GPTSniperEngine:
         price_ctx,
     ):
         if bool(getattr(TRADING_RULES, "OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED", True)):
+            if bool(getattr(TRADING_RULES, "OPENAI_ENTRY_PRICE_V2_INPUT_ENABLED", False)):
+                return self._build_scalping_entry_price_v2_input(
+                    stock_name=stock_name,
+                    stock_code=stock_code,
+                    ws_data=ws_data,
+                    recent_ticks=recent_ticks,
+                    recent_candles=recent_candles,
+                    price_ctx=price_ctx,
+                )
             return self._build_scalping_entry_price_user_input(
                 stock_name=stock_name,
                 stock_code=stock_code,
@@ -2709,6 +3025,21 @@ class GPTSniperEngine:
     ):
         started = time.perf_counter()
         fallback_price = int((price_ctx or {}).get("resolved_order_price", 0) or 0)
+        input_contract_fields = {
+            "ai_input_schema": (
+                "entry_price_v2"
+                if bool(getattr(TRADING_RULES, "OPENAI_ENTRY_PRICE_V2_INPUT_ENABLED", False))
+                else "entry_price_compact_v1"
+                if bool(getattr(TRADING_RULES, "OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED", True))
+                else "entry_price_raw_v1"
+            ),
+            "ai_input_contract_mode": (
+                "structured_json"
+                if bool(getattr(TRADING_RULES, "OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED", True))
+                else "plain_text"
+            ),
+            "ai_input_build_fallback": "not_built",
+        }
         if not self.lock.acquire(blocking=False):
             return self._annotate_analysis_result(
                 normalize_scalping_entry_price_result(
@@ -2730,6 +3061,7 @@ class GPTSniperEngine:
                 cache_hit=False,
                 cache_mode="miss",
                 result_source="lock_contention",
+                input_contract_fields=input_contract_fields,
             )
 
         try:
@@ -2754,6 +3086,7 @@ class GPTSniperEngine:
                     cache_hit=False,
                     cache_mode="miss",
                     result_source="engine_disabled",
+                    input_contract_fields=input_contract_fields,
                 )
 
             user_input = self._build_scalping_entry_price_runtime_input(
@@ -2763,6 +3096,21 @@ class GPTSniperEngine:
                 recent_ticks=recent_ticks or [],
                 recent_candles=recent_candles or [],
                 price_ctx=price_ctx or {},
+            )
+            input_contract_fields = self._resolve_ai_input_contract_fields(
+                user_input,
+                default_schema=(
+                    "entry_price_v2"
+                    if bool(getattr(TRADING_RULES, "OPENAI_ENTRY_PRICE_V2_INPUT_ENABLED", False))
+                    else "entry_price_compact_v1"
+                    if bool(getattr(TRADING_RULES, "OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED", True))
+                    else "entry_price_raw_v1"
+                ),
+                default_mode=(
+                    "structured_json"
+                    if bool(getattr(TRADING_RULES, "OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED", True))
+                    else "plain_text"
+                ),
             )
             result = self._call_openai_safe(
                 SCALPING_ENTRY_PRICE_PROMPT,
@@ -2793,6 +3141,7 @@ class GPTSniperEngine:
                 cache_hit=False,
                 cache_mode="miss",
                 result_source="live",
+                input_contract_fields=input_contract_fields,
             )
         except Exception as e:
             failure_count = self._record_failure_and_maybe_disable(
@@ -2819,6 +3168,7 @@ class GPTSniperEngine:
                 cache_hit=False,
                 cache_mode="miss",
                 result_source="error",
+                input_contract_fields=input_contract_fields,
             )
         finally:
             self.lock.release()
@@ -2869,6 +3219,31 @@ class GPTSniperEngine:
             cache_strategy = f"{cache_strategy}:adm:{matrix_runtime.get('cache_token', 'disabled')}"
             cache_strategy = f"{cache_strategy}:{entry_adm_runtime.get('cache_token', 'disabled')}"
             cache_strategy = f"{cache_strategy}:{lifecycle_ai_runtime.get('cache_token', 'disabled')}"
+        if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
+            input_contract_fields = {
+                "ai_input_schema": "swing_market_text_v1",
+                "ai_input_contract_mode": "plain_text",
+                "ai_input_build_fallback": "not_built",
+            }
+        else:
+            input_contract_fields = {
+                "ai_input_schema": (
+                    "entry_screen_v2"
+                    if bool(getattr(TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False))
+                    else "entry_screen_compact_v1"
+                    if bool(getattr(TRADING_RULES, "OPENAI_SCALPING_COMPACT_INPUT_ENABLED", True))
+                    else "entry_screen_legacy_text_v1"
+                ),
+                "ai_input_contract_mode": (
+                    "structured_json"
+                    if bool(
+                        getattr(TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False)
+                        or getattr(TRADING_RULES, "OPENAI_SCALPING_COMPACT_INPUT_ENABLED", True)
+                    )
+                    else "plain_text"
+                ),
+                "ai_input_build_fallback": "not_built",
+            }
         def _merge_runtime_fields(payload: dict[str, Any] | None) -> dict[str, Any]:
             merged = merge_holding_exit_matrix_result_fields(payload, matrix_runtime)
             merged = merge_scalp_entry_adm_result_fields(merged, entry_adm_runtime)
@@ -2897,6 +3272,7 @@ class GPTSniperEngine:
                 cache_hit=True,
                 cache_mode="hit",
                 result_source="cache",
+                input_contract_fields=input_contract_fields,
             )
 
         if not self.lock.acquire(blocking=False):
@@ -2911,6 +3287,7 @@ class GPTSniperEngine:
                 cache_hit=False,
                 cache_mode="miss",
                 result_source="lock_contention",
+                input_contract_fields=input_contract_fields,
             )
 
         try:
@@ -2928,6 +3305,7 @@ class GPTSniperEngine:
                     cache_hit=True,
                     cache_mode="hit",
                     result_source="cache",
+                    input_contract_fields=input_contract_fields,
                 )
 
             if self.ai_disabled:
@@ -2942,6 +3320,7 @@ class GPTSniperEngine:
                     cache_hit=False,
                     cache_mode="miss",
                     result_source="engine_disabled",
+                    input_contract_fields=input_contract_fields,
                 )
 
             min_interval_wait_ms = 0
@@ -2954,22 +3333,69 @@ class GPTSniperEngine:
                 formatted_data = self._format_swing_market_data(ws_data, recent_candles, program_net_qty)
                 target_model = self._get_tier2_model()
                 feature_audit_fields = {}
+                input_contract_fields = self._resolve_ai_input_contract_fields(
+                    formatted_data,
+                    default_schema="swing_market_text_v1",
+                    default_mode="plain_text",
+                )
             else:
                 feature_packet = extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles)
-                formatted_data = self._format_market_data(
-                    ws_data,
-                    recent_ticks,
-                    recent_candles,
-                    feature_packet=feature_packet,
-                )
-                if matrix_runtime and matrix_runtime.get("prompt_context"):
-                    formatted_data = f"{formatted_data}\n\n{matrix_runtime['prompt_context']}"
-                if entry_adm_runtime and entry_adm_runtime.get("prompt_context"):
-                    formatted_data = f"{formatted_data}\n\n{entry_adm_runtime['prompt_context']}"
-                if lifecycle_ai_runtime and lifecycle_ai_runtime.get("prompt_context"):
-                    formatted_data = f"{formatted_data}\n\n{lifecycle_ai_runtime['prompt_context']}"
+                try:
+                    formatted_data = self._format_market_data(
+                        ws_data,
+                        recent_ticks,
+                        recent_candles,
+                        feature_packet=feature_packet,
+                    )
+                except TypeError:
+                    formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
+                if bool(getattr(TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False)):
+                    try:
+                        structured_input = json.loads(formatted_data)
+                    except Exception:
+                        structured_input = {
+                            "input_schema": "entry_screen_v2",
+                            "input_build_fallback": "legacy_text_payload",
+                            "legacy_context": formatted_data,
+                        }
+                    structured_input["runtime_advisory_context"] = {
+                        "holding_exit_matrix": (matrix_runtime or {}).get("prompt_context", ""),
+                        "entry_adm": (entry_adm_runtime or {}).get("prompt_context", ""),
+                        "lifecycle_ai": (lifecycle_ai_runtime or {}).get("prompt_context", ""),
+                    }
+                    formatted_data = json.dumps(
+                        structured_input,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        default=str,
+                    )
+                else:
+                    if matrix_runtime and matrix_runtime.get("prompt_context"):
+                        formatted_data = f"{formatted_data}\n\n{matrix_runtime['prompt_context']}"
+                    if entry_adm_runtime and entry_adm_runtime.get("prompt_context"):
+                        formatted_data = f"{formatted_data}\n\n{entry_adm_runtime['prompt_context']}"
+                    if lifecycle_ai_runtime and lifecycle_ai_runtime.get("prompt_context"):
+                        formatted_data = f"{formatted_data}\n\n{lifecycle_ai_runtime['prompt_context']}"
                 target_model = self._get_tier1_model()
                 feature_audit_fields = build_scalping_feature_audit_fields(feature_packet)
+                input_contract_fields = self._resolve_ai_input_contract_fields(
+                    formatted_data,
+                    default_schema=(
+                        "entry_screen_v2"
+                        if bool(getattr(TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False))
+                        else "entry_screen_compact_v1"
+                        if bool(getattr(TRADING_RULES, "OPENAI_SCALPING_COMPACT_INPUT_ENABLED", True))
+                        else "entry_screen_legacy_text_v1"
+                    ),
+                    default_mode=(
+                        "structured_json"
+                        if bool(
+                            getattr(TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False)
+                            or getattr(TRADING_RULES, "OPENAI_SCALPING_COMPACT_INPUT_ENABLED", True)
+                        )
+                        else "plain_text"
+                    ),
+                )
 
             result = self._call_openai_safe(
                 prompt,
@@ -3017,6 +3443,7 @@ class GPTSniperEngine:
                 cache_hit=False,
                 cache_mode="miss",
                 result_source="live",
+                input_contract_fields=input_contract_fields,
             )
 
         except Exception as e:
@@ -3047,6 +3474,7 @@ class GPTSniperEngine:
                 cache_hit=False,
                 cache_mode="miss",
                 result_source="exception",
+                input_contract_fields=input_contract_fields,
             )
         finally:
             self.lock.release()
@@ -3419,6 +3847,105 @@ class GPTSniperEngine:
     def _normalize_flow_state_label(value):
         return normalize_flow_state_label(value)
 
+    def _build_scalping_holding_flow_v2_context(
+        self,
+        stock_name,
+        stock_code,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        position_ctx,
+        *,
+        flow_history=None,
+        decision_kind="intraday_exit",
+        matrix_runtime=None,
+        lifecycle_ai_runtime=None,
+    ):
+        ctx = position_ctx or {}
+        ws = ws_data if isinstance(ws_data, dict) else {}
+        curr_price = int(self._safe_float(ws.get("curr", ctx.get("curr_price", 0)), 0))
+        buy_price = self._safe_float(ctx.get("buy_price", ctx.get("avg_price", 0)), 0.0)
+        peak_profit = self._safe_float(ctx.get("peak_profit", 0.0), 0.0)
+        pnl = self._safe_float(ctx.get("profit_rate", ctx.get("pnl_pct", 0.0)), 0.0)
+        day_high = self._safe_float(ctx.get("day_high", 0), 0.0)
+        distance_from_day_high = (
+            ((curr_price - day_high) / day_high * 100.0)
+            if curr_price > 0 and day_high > 0
+            else self._safe_float(ctx.get("distance_from_day_high_pct", 0), 0.0)
+        )
+        prior_reviews = []
+        for item in (flow_history or [])[-5:]:
+            if not isinstance(item, dict):
+                continue
+            prior_reviews.append(
+                {
+                    "time": item.get("time"),
+                    "action": item.get("action"),
+                    "flow_state": self._normalize_flow_state_label(item.get("flow_state", "-")),
+                    "profit_rate": item.get("profit_rate"),
+                    "exit_rule": item.get("exit_rule"),
+                    "reason": item.get("reason"),
+                }
+            )
+        orderbook_micro = ctx.get("orderbook_micro") if isinstance(ctx.get("orderbook_micro"), dict) else {}
+        payload = {
+            "input_schema": "holding_flow_v2",
+            "decision_type": {
+                "kind": decision_kind,
+                "stock_name": stock_name,
+                "stock_code": stock_code,
+                "candidate_exit_rule": ctx.get("exit_rule", "-"),
+            },
+            "position": {
+                "average_entry_price": buy_price,
+                "current_price": curr_price,
+                "current_pnl_pct": round(pnl, 4),
+                "peak_pnl_pct": round(peak_profit, 4),
+                "drawdown_from_peak_pct": round(self._safe_float(ctx.get("drawdown", peak_profit - pnl), 0.0), 4),
+                "held_sec": int(self._safe_float(ctx.get("held_sec", self._safe_float(ctx.get("held_minutes", 0.0)) * 60.0), 0.0)),
+                "current_ai_score": round(self._safe_float(ctx.get("current_ai_score", ctx.get("score", 0.0)), 0.0), 3),
+                "distance_from_day_high_pct": round(distance_from_day_high, 4),
+                "allowed_worsen_pct": self._safe_float(ctx.get("worsen_pct", 0.80), 0.80),
+            },
+            "prior_flow_reviews": prior_reviews,
+            "deterministic_guard_state": {
+                "candidate_exit_rule": ctx.get("exit_rule", "-"),
+                "sell_reason_type": ctx.get("sell_reason_type", "-"),
+                "guard_reason": ctx.get("reason", "-"),
+                "system_guards_remain_authoritative": True,
+            },
+            "ofi_smoothing_state": {
+                "regime": ctx.get("holding_flow_ofi_regime", ctx.get("ofi_regime")),
+                "micro_score_raw": ctx.get("holding_flow_ofi_micro_score_raw"),
+                "micro_score_smooth": ctx.get("holding_flow_ofi_micro_score_smooth"),
+                "snapshot_age_ms": ctx.get("holding_flow_ofi_snapshot_age_ms"),
+            },
+            "orderbook_micro": orderbook_micro,
+            "live_supply_demand_orderbook": {
+                "execution_strength": ws.get("v_pw", 0.0),
+                "buy_ratio": ws.get("buy_ratio", 0.0),
+                "buy_exec_volume": ws.get("buy_exec_volume", 0),
+                "sell_exec_volume": ws.get("sell_exec_volume", 0),
+                "ask_total_depth": ws.get("ask_tot", 0),
+                "bid_total_depth": ws.get("bid_tot", 0),
+                **self._extract_quote_snapshot(ws),
+            },
+            "tick_summary": self._summarize_tick_windows(recent_ticks, windows=(5, 10, 20, 30)),
+            "candle_summary": self._summarize_candle_windows(recent_candles, windows=(3, 5, 10)),
+            "recent_ticks_latest_first": self._compact_recent_ticks(recent_ticks, limit=5),
+            "recent_candles_latest_window": self._compact_recent_candles(recent_candles, limit=5),
+            "runtime_advisory_context": {
+                "holding_exit_matrix": (matrix_runtime or {}).get("prompt_context", ""),
+                "lifecycle_ai": (lifecycle_ai_runtime or {}).get("prompt_context", ""),
+            },
+            "decision_request": {
+                "flow_states": ["absorption", "recovery", "distribution", "breakdown", "quiet"],
+                "score_is_confidence_only": True,
+                "hard_guards_override_ai": True,
+            },
+        }
+        return json.dumps(payload, ensure_ascii=True, separators=(",", ":"), default=str)
+
     def _format_scalping_holding_flow_context(
         self,
         stock_name,
@@ -3521,6 +4048,19 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
         metadata_extra=None,
     ):
         started = time.perf_counter()
+        input_contract_fields = {
+            "ai_input_schema": (
+                "holding_flow_v2"
+                if bool(getattr(TRADING_RULES, "OPENAI_HOLDING_FLOW_V2_INPUT_ENABLED", False))
+                else "holding_flow_text_v1"
+            ),
+            "ai_input_contract_mode": (
+                "structured_json"
+                if bool(getattr(TRADING_RULES, "OPENAI_HOLDING_FLOW_V2_INPUT_ENABLED", False))
+                else "plain_text"
+            ),
+            "ai_input_build_fallback": "not_built",
+        }
         if not self.lock.acquire(blocking=False):
             return self._annotate_analysis_result(
                 {
@@ -3541,6 +4081,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                 cache_hit=False,
                 cache_mode="miss",
                 result_source="lock_contention",
+                input_contract_fields=input_contract_fields,
             )
 
         try:
@@ -3564,18 +4105,9 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                     cache_hit=False,
                     cache_mode="miss",
                     result_source="engine_disabled",
+                    input_contract_fields=input_contract_fields,
                 )
 
-            user_input = self._format_scalping_holding_flow_context(
-                stock_name,
-                stock_code,
-                ws_data or {},
-                recent_ticks or [],
-                recent_candles or [],
-                position_ctx or {},
-                flow_history=flow_history,
-                decision_kind=decision_kind,
-            )
             matrix_runtime = build_holding_exit_matrix_runtime_context(
                 prompt_profile="holding",
                 ws_data=ws_data if isinstance(ws_data, dict) else {},
@@ -3586,10 +4118,47 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                 ),
             )
             lifecycle_ai_runtime = build_lifecycle_ai_runtime_context(prompt_profile="holding", stage="holding")
-            if matrix_runtime.get("prompt_context"):
-                user_input = f"{user_input}\n\n{matrix_runtime['prompt_context']}"
-            if lifecycle_ai_runtime.get("prompt_context"):
-                user_input = f"{user_input}\n\n{lifecycle_ai_runtime['prompt_context']}"
+            if bool(getattr(TRADING_RULES, "OPENAI_HOLDING_FLOW_V2_INPUT_ENABLED", False)):
+                user_input = self._build_scalping_holding_flow_v2_context(
+                    stock_name,
+                    stock_code,
+                    ws_data or {},
+                    recent_ticks or [],
+                    recent_candles or [],
+                    position_ctx or {},
+                    flow_history=flow_history,
+                    decision_kind=decision_kind,
+                    matrix_runtime=matrix_runtime,
+                    lifecycle_ai_runtime=lifecycle_ai_runtime,
+                )
+            else:
+                user_input = self._format_scalping_holding_flow_context(
+                    stock_name,
+                    stock_code,
+                    ws_data or {},
+                    recent_ticks or [],
+                    recent_candles or [],
+                    position_ctx or {},
+                    flow_history=flow_history,
+                    decision_kind=decision_kind,
+                )
+                if matrix_runtime.get("prompt_context"):
+                    user_input = f"{user_input}\n\n{matrix_runtime['prompt_context']}"
+                if lifecycle_ai_runtime.get("prompt_context"):
+                    user_input = f"{user_input}\n\n{lifecycle_ai_runtime['prompt_context']}"
+            input_contract_fields = self._resolve_ai_input_contract_fields(
+                user_input,
+                default_schema=(
+                    "holding_flow_v2"
+                    if bool(getattr(TRADING_RULES, "OPENAI_HOLDING_FLOW_V2_INPUT_ENABLED", False))
+                    else "holding_flow_text_v1"
+                ),
+                default_mode=(
+                    "structured_json"
+                    if bool(getattr(TRADING_RULES, "OPENAI_HOLDING_FLOW_V2_INPUT_ENABLED", False))
+                    else "plain_text"
+                ),
+            )
             result = self._call_openai_safe(
                 SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
                 user_input,
@@ -3621,6 +4190,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                 cache_hit=False,
                 cache_mode="miss",
                 result_source="live",
+                input_contract_fields=input_contract_fields,
             )
         except Exception as e:
             failure_count = self._record_failure_and_maybe_disable(
@@ -3646,6 +4216,7 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                 cache_hit=False,
                 cache_mode="miss",
                 result_source="exception",
+                input_contract_fields=input_contract_fields,
             )
         finally:
             self.lock.release()

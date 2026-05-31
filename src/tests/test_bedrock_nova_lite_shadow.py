@@ -1,6 +1,5 @@
 import json
 
-from src.engine import bedrock_nova_lite_shadow as runtime_mod
 from src.tests import bedrock_nova_lite_shadow as mod
 
 
@@ -15,20 +14,6 @@ def test_shadow_filter_only_accepts_gpt54_mini_json():
     assert manager.should_shadow(model_name="gpt-5-nano", require_json=True) is False
     assert manager.should_shadow(model_name="gpt-5.4", require_json=True) is False
     assert manager.should_shadow(model_name="gpt-5.4-mini", require_json=False) is False
-
-
-def test_runtime_manager_can_target_gpt5_nano_only(monkeypatch):
-    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_SHADOW_ENABLED", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_SHADOW_TARGET_MODELS", "gpt-5-nano")
-    monkeypatch.setattr(runtime_mod, "_RUNTIME_MANAGER", None)
-    monkeypatch.setattr(runtime_mod, "_RUNTIME_SIGNATURE", None)
-
-    manager = runtime_mod.runtime_manager()
-
-    assert manager.should_shadow(model_name="gpt-5-nano", require_json=True) is True
-    assert manager.should_shadow(model_name="gpt-5.4-mini", require_json=True) is False
-    assert manager.openai_input_usd_per_1m == 0.05
-    assert manager.openai_output_usd_per_1m == 0.40
 
 
 def test_loads_bedrock_api_key_from_config(tmp_path, monkeypatch):

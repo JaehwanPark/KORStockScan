@@ -1,5 +1,6 @@
 from dataclasses import replace
 
+from src.engine import sniper_state_handlers as handlers
 from src.engine.sniper_state_handlers import (
     SCALPING_ENTRY_BLOCKER_ROLE_REGISTRY,
     _apply_initial_entry_qty_cap,
@@ -20,6 +21,7 @@ from src.engine.sniper_state_handlers import (
     _should_run_main_buy_recovery_canary,
     _resolve_gatekeeper_fast_reuse_sec,
     _resolve_holding_ai_fast_reuse_sec,
+    _resolve_watching_state_change_refresh,
 )
 from src.utils.constants import TRADING_RULES
 
@@ -56,6 +58,86 @@ def test_gatekeeper_fast_signature_absorbs_small_noise():
     sig_b = _build_gatekeeper_fast_signature(stock, ws_b, "KOSPI_ML", 81.4)
 
     assert sig_a == sig_b
+
+
+def test_watching_state_change_refresh_is_disabled_by_default(monkeypatch):
+    monkeypatch.setattr(handlers, "TRADING_RULES", TRADING_RULES)
+    stock = {
+        "last_watching_ai_state_signature": {
+            "buy_pressure_10t": 55.0,
+            "top3_depth_regime": "balanced",
+            "quote_freshness": "fresh",
+        }
+    }
+    result = _resolve_watching_state_change_refresh(
+        stock,
+        {"buy_ratio": 80.0},
+        now_ts=120.0,
+        last_ai_time=100.0,
+        cooldown_sec=90,
+    )
+    assert result["allowed"] is False
+    assert result["reason"] == "disabled"
+
+
+def test_watching_state_change_refresh_allows_one_call_per_cooldown(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED=True,
+        AI_WATCHING_STATE_CHANGE_BUY_PRESSURE_DELTA=10.0,
+    )
+    monkeypatch.setattr(handlers, "TRADING_RULES", rules)
+    stock = {
+        "last_watching_ai_state_signature": {
+            "micro_vwap_side": "positive",
+            "ma5_side": "positive",
+            "buy_pressure_10t": 55.0,
+            "tick_acceleration_regime": "steady",
+            "large_sell_print_detected": False,
+            "top3_depth_regime": "balanced",
+            "quote_freshness": "fresh",
+        }
+    }
+    ws_data = {
+        "buy_ratio": 70.2,
+        "orderbook": {
+            "asks": [{"volume": 300}, {"volume": 300}, {"volume": 300}],
+            "bids": [{"volume": 300}, {"volume": 300}, {"volume": 300}],
+        },
+    }
+
+    result = _resolve_watching_state_change_refresh(
+        stock,
+        ws_data,
+        now_ts=120.0,
+        last_ai_time=100.0,
+        cooldown_sec=90,
+    )
+    assert result["allowed"] is True
+    assert "buy_pressure_delta" in result["reason"]
+
+    stock["watching_state_change_refresh_last_ai_time"] = "100.000"
+    blocked = _resolve_watching_state_change_refresh(
+        stock,
+        ws_data,
+        now_ts=121.0,
+        last_ai_time=100.0,
+        cooldown_sec=90,
+    )
+    assert blocked["allowed"] is False
+    assert blocked["reason"] == "already_refreshed_this_cooldown"
+
+    stock["watching_state_change_refresh_last_ai_time"] = "100.000"
+    stock["watching_state_change_refresh_block_until"] = 210.0
+    blocked_after_refresh_call = _resolve_watching_state_change_refresh(
+        stock,
+        ws_data,
+        now_ts=130.0,
+        last_ai_time=120.0,
+        cooldown_sec=90,
+    )
+    assert blocked_after_refresh_call["allowed"] is False
+    assert blocked_after_refresh_call["reason"] == "already_refreshed_this_cooldown"
 
 
 def test_scalping_entry_blocker_role_registry_keeps_micro_and_gap_non_hard():

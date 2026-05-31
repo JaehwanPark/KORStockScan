@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime
 from statistics import mean
 
-from src.engine.scalping.microstructure_reaction_context import build_microstructure_reaction_context
+from src.engine.scalping.microstructure_reaction_context import (
+    build_microstructure_reaction_context,
+    precompute_microstructure_reaction_inputs,
+)
 
 
 SCALP_FEATURE_PACKET_VERSION = "scalp_feature_packet_v1"
@@ -16,84 +18,6 @@ def _safe_number(value, default=0.0):
         return float(value)
     except Exception:
         return default
-
-
-def _safe_hhmmss_to_seconds(value):
-    try:
-        text = str(value or "").replace(":", "").strip()
-        if not text:
-            return None
-        if not text.isdigit():
-            return None
-        text = text.zfill(6)
-        hour = int(text[0:2])
-        minute = int(text[2:4])
-        second = int(text[4:6])
-        if hour > 23 or minute > 59 or second > 59:
-            return None
-        return (hour * 3600) + (minute * 60) + second
-    except Exception:
-        return None
-
-
-def _age_ms_from_hhmmss(value, *, now=None):
-    tick_sec = _safe_hhmmss_to_seconds(value)
-    if tick_sec is None:
-        return None
-    now_dt = now or datetime.now()
-    now_sec = now_dt.hour * 3600 + now_dt.minute * 60 + now_dt.second
-    age_sec = now_sec - tick_sec
-    if age_sec < -43200:
-        age_sec += 86400
-    elif age_sec > 43200:
-        age_sec -= 86400
-    return max(0, int(age_sec * 1000))
-
-
-def _safe_epoch_ms(value):
-    if value in (None, "", "-"):
-        return None
-    try:
-        numeric = float(value)
-        if numeric <= 0:
-            return None
-        if numeric > 1_000_000_000_000:
-            return int(numeric)
-        if numeric > 1_000_000_000:
-            return int(numeric * 1000)
-    except Exception:
-        pass
-    try:
-        text = str(value).strip()
-        if text.endswith("Z"):
-            text = f"{text[:-1]}+00:00"
-        return int(datetime.fromisoformat(text).timestamp() * 1000)
-    except Exception:
-        return None
-
-
-def _quote_age_ms(ws_data, *, now=None):
-    quote_ts_keys = (
-        "ws_received_at_ms",
-        "quote_received_at_ms",
-        "received_at_ms",
-        "last_ws_update_ts",
-        "last_update_ms",
-        "updated_at_ms",
-        "captured_at_ms",
-        "timestamp_ms",
-        "ts_ms",
-        "updated_at",
-        "timestamp",
-    )
-    now_ms = int((now or datetime.now()).timestamp() * 1000)
-    for key in quote_ts_keys:
-        raw = (ws_data or {}).get(key)
-        epoch_ms = _safe_epoch_ms(raw)
-        if epoch_ms is None:
-            continue
-        return max(0, now_ms - epoch_ms), key
-    return None, "missing"
 
 
 def calculate_scalping_micro_indicator_values(recent_candles):
@@ -124,26 +48,31 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
         recent_candles = []
 
     ws_data = ws_data or {}
-    curr_price = ws_data.get("curr", 0) or 0
+    snapshot = precompute_microstructure_reaction_inputs(
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        now=now,
+    )
+    curr_price = snapshot.get("curr_price", 0) or 0
     v_pw = ws_data.get("v_pw", 0) or 0
     ask_tot = ws_data.get("ask_tot", 0) or 0
     bid_tot = ws_data.get("bid_tot", 0) or 0
     net_ask_depth = int(ws_data.get("net_ask_depth", 0) or 0)
     ask_depth_ratio = float(ws_data.get("ask_depth_ratio", 0.0) or 0.0)
-    orderbook = ws_data.get("orderbook", {"asks": [], "bids": []}) or {"asks": [], "bids": []}
-    asks = orderbook.get("asks", []) or []
-    bids = orderbook.get("bids", []) or []
+    asks = snapshot.get("asks") if isinstance(snapshot.get("asks"), list) else []
+    bids = snapshot.get("bids") if isinstance(snapshot.get("bids"), list) else []
 
-    best_ask = asks[0].get("price", curr_price) if asks else curr_price
-    best_bid = bids[0].get("price", curr_price) if bids else curr_price
-    best_ask_vol = asks[0].get("volume", 0) if asks else 0
-    best_bid_vol = bids[0].get("volume", 0) if bids else 0
+    best_ask = snapshot.get("best_ask", curr_price) if asks else curr_price
+    best_bid = snapshot.get("best_bid", curr_price) if bids else curr_price
+    best_ask_vol = snapshot.get("best_ask_vol", 0) if asks else 0
+    best_bid_vol = snapshot.get("best_bid_vol", 0) if bids else 0
 
     spread_krw = max(0, best_ask - best_bid)
     spread_bp = round((spread_krw / curr_price) * 10000, 2) if curr_price > 0 else 0.0
 
-    top3_ask_vol = sum(level.get("volume", 0) for level in asks[:3])
-    top3_bid_vol = sum(level.get("volume", 0) for level in bids[:3])
+    top3_ask_vol = snapshot.get("top3_ask_vol", 0)
+    top3_bid_vol = snapshot.get("top3_bid_vol", 0)
 
     top1_depth_ratio = round((best_ask_vol / best_bid_vol), 3) if best_bid_vol > 0 else 999.0
     top3_depth_ratio = round((top3_ask_vol / top3_bid_vol), 3) if top3_bid_vol > 0 else 999.0
@@ -155,11 +84,8 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
 
     microprice_edge_bp = round(((micro_price - curr_price) / curr_price) * 10000, 2) if curr_price > 0 else 0.0
 
-    high_price = curr_price
-    low_price = curr_price
-    if recent_candles:
-        high_price = max(candle.get("고가", curr_price) for candle in recent_candles)
-        low_price = min(candle.get("저가", curr_price) for candle in recent_candles)
+    high_price = snapshot.get("session_high", curr_price) if recent_candles else curr_price
+    low_price = snapshot.get("session_low", curr_price) if recent_candles else curr_price
 
     distance_from_day_high_pct = round(((curr_price - high_price) / high_price) * 100, 3) if high_price > 0 else 0.0
     intraday_range_pct = round(((high_price - low_price) / low_price) * 100, 3) if low_price > 0 else 0.0
@@ -178,27 +104,27 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
     large_sell_print_detected = False
     large_buy_print_detected = False
 
-    ticks = recent_ticks[:10] if recent_ticks else []
-    tick_sample_count = len(ticks)
-    tick_latest_time = str(ticks[0].get("time", "") or "") if ticks else ""
-    tick_latest_age_ms = _age_ms_from_hhmmss(tick_latest_time, now=now) if tick_latest_time else None
+    ticks = snapshot.get("ticks") if isinstance(snapshot.get("ticks"), list) else []
+    tick_sample_count = int(snapshot.get("tick_sample_count") or 0)
+    tick_latest_time = str(snapshot.get("tick_latest_time") or "") if ticks else ""
+    tick_latest_age_ms = snapshot.get("tick_age_ms")
     tick_window_span_sec = None
     tick_accel_source = "no_ticks"
 
     if ticks:
-        buy_vol_10 = sum(tick.get("volume", 0) for tick in ticks if tick.get("dir") == "BUY")
-        sell_vol_10 = sum(tick.get("volume", 0) for tick in ticks if tick.get("dir") == "SELL")
+        buy_vol_10 = snapshot.get("buy_vol", 0)
+        sell_vol_10 = snapshot.get("sell_vol", 0)
         total_vol_10 = buy_vol_10 + sell_vol_10
-        buy_pressure_10t = round((buy_vol_10 / total_vol_10) * 100, 2) if total_vol_10 > 0 else 50.0
+        buy_pressure_10t = round(snapshot.get("buy_pressure_pct", 50.0), 2) if total_vol_10 > 0 else 50.0
         net_aggressive_delta_10t = buy_vol_10 - sell_vol_10
 
         latest_strength = ticks[0].get("strength", v_pw)
 
-        latest_price = ticks[0].get("price", curr_price)
-        oldest_price = ticks[-1].get("price", curr_price)
+        latest_price = snapshot.get("latest_price", curr_price)
+        oldest_price = snapshot.get("oldest_price", curr_price)
         price_change_10t_pct = round(((latest_price - oldest_price) / oldest_price) * 100, 3) if oldest_price > 0 else 0.0
 
-        tick_secs = [_safe_hhmmss_to_seconds(tick.get("time")) for tick in ticks]
+        tick_secs = snapshot.get("tick_secs") if isinstance(snapshot.get("tick_secs"), list) else []
         if len(tick_secs) >= 2 and tick_secs[0] is not None and tick_secs[-1] is not None:
             tick_window_span_sec = tick_secs[0] - tick_secs[-1]
             if tick_window_span_sec < 0:
@@ -231,29 +157,14 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
         elif recent_5tick_seconds <= 0:
             tick_accel_source = "same_second_burst_insufficient_previous_window"
 
-        volumes = [tick.get("volume", 0) for tick in ticks if tick.get("volume", 0) > 0]
-        avg_tick_vol = mean(volumes) if volumes else 0
-
-        if avg_tick_vol > 0:
-            large_sell_print_detected = any(
-                tick.get("dir") == "SELL" and tick.get("volume", 0) >= avg_tick_vol * 2.2
-                for tick in ticks[:5]
-            )
-            large_buy_print_detected = any(
-                tick.get("dir") == "BUY" and tick.get("volume", 0) >= avg_tick_vol * 2.2
-                for tick in ticks[:5]
-            )
-
-        price_buy_count = {}
-        for tick in ticks[:6]:
-            if tick.get("dir") == "BUY":
-                price = tick.get("price")
-                price_buy_count[price] = price_buy_count.get(price, 0) + 1
-        same_price_buy_absorption = max(price_buy_count.values()) if price_buy_count else 0
+        large_sell_print_detected = bool(snapshot.get("large_sell_print_detected"))
+        large_buy_print_detected = bool(snapshot.get("large_buy_print_detected"))
+        same_price_buy_absorption = int(snapshot.get("same_price_buy_absorption") or 0)
     else:
         buy_pressure_10t = 50.0
 
-    quote_age_ms, quote_age_source = _quote_age_ms(ws_data, now=now)
+    quote_age_ms = snapshot.get("quote_age_ms")
+    quote_age_source = snapshot.get("quote_age_source", "missing")
     tick_stale = tick_latest_age_ms is not None and tick_latest_age_ms > 5000
     quote_stale = quote_age_ms is not None and quote_age_ms > 1200
     tick_context_quality = "unknown"
@@ -301,6 +212,7 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, 
         recent_ticks,
         recent_candles,
         now=now,
+        precomputed=snapshot,
     )
 
     return {

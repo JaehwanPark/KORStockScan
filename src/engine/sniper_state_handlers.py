@@ -7363,7 +7363,7 @@ def _get_best_levels_from_ws(ws_data):
     best_bid = 0
     try:
         if asks:
-            best_ask = _safe_int(asks[-1].get('price'), 0)
+            best_ask = _safe_int(asks[0].get('price'), 0)
     except Exception:
         best_ask = 0
     try:
@@ -8023,6 +8023,7 @@ def _apply_entry_ai_price_canary(
     curr_price,
     best_bid,
     best_ask,
+    refresh_attempt=False,
 ):
     if strategy not in ("SCALPING", "SCALP"):
         return planned_orders, False
@@ -8082,6 +8083,63 @@ def _apply_entry_ai_price_canary(
     ai_eval_ms = int(round((time.perf_counter() - ai_eval_started_at) * 1000.0))
     decision_ts = time.time()
     context_age_ms = int(round(max(0.0, decision_ts - price_context_started_at) * 1000.0))
+    if (
+        bool(_rule("SCALPING_ENTRY_PRICE_REFRESH_ENABLED", False))
+        and not refresh_attempt
+        and not bool(latency_gate.get("ai_entry_price_refresh_attempted"))
+    ):
+        refresh_age_ms = max(1, _rule_int("SCALPING_ENTRY_PRICE_REFRESH_DECISION_AGE_MS", 1500))
+        start_bid = _coerce_int_value(price_ctx.get("best_bid"))
+        start_ask = _coerce_int_value(price_ctx.get("best_ask"))
+        start_spread = start_ask - start_bid if start_ask > 0 and start_bid > 0 else 0
+        current_spread = _coerce_int_value(best_ask) - _coerce_int_value(best_bid) if best_ask > 0 and best_bid > 0 else 0
+        micro = price_ctx.get("orderbook_micro") if isinstance(price_ctx.get("orderbook_micro"), dict) else {}
+        micro_state = str(micro.get("micro_state") or "")
+        current_micro = _build_orderbook_micro_context(
+            latency_gate,
+            curr_price=curr_price,
+            best_bid=best_bid,
+            best_ask=best_ask,
+        )
+        current_micro_state = str((current_micro or {}).get("micro_state") or micro_state)
+        should_refresh = (
+            context_age_ms > refresh_age_ms
+            or (start_bid > 0 and abs(_coerce_int_value(best_bid) - start_bid) >= 1)
+            or (start_ask > 0 and abs(_coerce_int_value(best_ask) - start_ask) >= 1)
+            or (start_spread > 0 and current_spread > 0 and start_spread != current_spread)
+            or (micro_state and current_micro_state and micro_state != current_micro_state)
+        )
+        if should_refresh:
+            latency_gate["ai_entry_price_refresh_attempted"] = True
+            _log_entry_pipeline(
+                stock,
+                code,
+                "entry_ai_price_refresh_triggered",
+                reason="state_change_or_decision_age",
+                context_age_ms=context_age_ms,
+                refresh_age_ms=refresh_age_ms,
+                start_best_bid=start_bid,
+                current_best_bid=_coerce_int_value(best_bid),
+                start_best_ask=start_ask,
+                current_best_ask=_coerce_int_value(best_ask),
+                start_spread=start_spread,
+                current_spread=current_spread,
+                start_micro_state=micro_state,
+                current_micro_state=current_micro_state,
+            )
+            return _apply_entry_ai_price_canary(
+                stock=stock,
+                code=code,
+                strategy=strategy,
+                ws_data=ws_data,
+                ai_engine=ai_engine,
+                latency_gate=latency_gate,
+                planned_orders=planned_orders,
+                curr_price=curr_price,
+                best_bid=best_bid,
+                best_ask=best_ask,
+                refresh_attempt=True,
+            )
     action = str((result or {}).get("action") or "USE_DEFENSIVE").strip().upper()
     confidence = _coerce_int_value((result or {}).get("confidence"))
     min_confidence = int(_rule("SCALPING_ENTRY_AI_PRICE_MIN_CONFIDENCE", 60) or 60)
@@ -8406,6 +8464,122 @@ def _extract_ai_overlap_snapshot(
     return snapshot
 
 
+def _entry_top3_depth_ratio(ws_data) -> float:
+    orderbook = (ws_data or {}).get("orderbook") if isinstance(ws_data, dict) else {}
+    if not isinstance(orderbook, dict):
+        return 0.0
+    asks = orderbook.get("asks") if isinstance(orderbook.get("asks"), list) else []
+    bids = orderbook.get("bids") if isinstance(orderbook.get("bids"), list) else []
+    ask_vol = sum(_safe_float((item or {}).get("volume"), 0.0) for item in asks[:3] if isinstance(item, dict))
+    bid_vol = sum(_safe_float((item or {}).get("volume"), 0.0) for item in bids[:3] if isinstance(item, dict))
+    if bid_vol <= 0:
+        return 0.0
+    return round(ask_vol / bid_vol, 4)
+
+
+def _signed_regime(value, *, zero_band=0.0) -> str:
+    numeric = _safe_float(value, 0.0)
+    if numeric > zero_band:
+        return "positive"
+    if numeric < -zero_band:
+        return "negative"
+    return "neutral"
+
+
+def _bucket_tick_acceleration(value) -> str:
+    numeric = _safe_float(value, 0.0)
+    if numeric >= 1.2:
+        return "accelerating"
+    if numeric >= 0.9:
+        return "steady"
+    if numeric > 0:
+        return "slowing"
+    return "unknown"
+
+
+def _bucket_top_depth_ratio(value) -> str:
+    numeric = _safe_float(value, 0.0)
+    if numeric >= 1.35:
+        return "ask_heavy"
+    if numeric > 0 and numeric <= 0.75:
+        return "bid_heavy"
+    if numeric > 0:
+        return "balanced"
+    return "unknown"
+
+
+def _quote_freshness_bucket(ws_data) -> str:
+    if bool((ws_data or {}).get("quote_stale")):
+        return "stale"
+    age = _get_ws_snapshot_age_sec(ws_data)
+    if age is None:
+        return "unknown"
+    if age <= 1.5:
+        return "fresh"
+    if age <= 3.0:
+        return "aging"
+    return "stale"
+
+
+def _build_watching_state_change_signature(ws_data, feature_packet=None) -> dict:
+    packet = feature_packet if isinstance(feature_packet, dict) else {}
+    buy_pressure = packet.get("buy_pressure_10t", packet.get("buy_pressure", (ws_data or {}).get("buy_ratio", 0.0)))
+    top3_ratio = packet.get("top3_depth_ratio")
+    if top3_ratio in (None, "", 0):
+        top3_ratio = _entry_top3_depth_ratio(ws_data)
+    tick_accel = packet.get("tick_acceleration_ratio", packet.get("tick_accel", 0.0))
+    micro_vwap_bp = packet.get("curr_vs_micro_vwap_bp", packet.get("micro_vwap_bp", 0.0))
+    ma5_bp = packet.get("curr_vs_ma5_bp", 0.0)
+    large_sell = packet.get("large_sell_print_detected", packet.get("large_sell_print", False))
+    return {
+        "micro_vwap_side": _signed_regime(micro_vwap_bp),
+        "ma5_side": _signed_regime(ma5_bp),
+        "buy_pressure_10t": round(_safe_float(buy_pressure, 0.0), 3),
+        "tick_acceleration_regime": _bucket_tick_acceleration(tick_accel),
+        "large_sell_print_detected": bool(large_sell),
+        "top3_depth_regime": _bucket_top_depth_ratio(top3_ratio),
+        "quote_freshness": _quote_freshness_bucket(ws_data),
+    }
+
+
+def _resolve_watching_state_change_refresh(stock, ws_data, *, now_ts, last_ai_time, cooldown_sec) -> dict:
+    if not bool(_rule("AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED", False)):
+        return {"allowed": False, "reason": "disabled", "signature": {}}
+    if last_ai_time <= 0:
+        return {"allowed": False, "reason": "first_call_uses_normal_path", "signature": {}}
+    if now_ts - last_ai_time > max(1, cooldown_sec):
+        return {"allowed": False, "reason": "cooldown_elapsed", "signature": {}}
+    marker = str((stock or {}).get("watching_state_change_refresh_last_ai_time") or "")
+    if marker == f"{float(last_ai_time):.3f}":
+        return {"allowed": False, "reason": "already_refreshed_this_cooldown", "signature": {}}
+    block_until = _safe_float((stock or {}).get("watching_state_change_refresh_block_until"), 0.0)
+    if block_until > 0 and now_ts < block_until:
+        return {"allowed": False, "reason": "already_refreshed_this_cooldown", "signature": {}}
+
+    previous = (stock or {}).get("last_watching_ai_state_signature")
+    if not isinstance(previous, dict):
+        return {"allowed": False, "reason": "missing_previous_signature", "signature": {}}
+    current = _build_watching_state_change_signature(ws_data)
+    reasons = []
+    for key in ("micro_vwap_side", "ma5_side", "tick_acceleration_regime", "top3_depth_regime", "quote_freshness"):
+        if previous.get(key) and current.get(key) and previous.get(key) != current.get(key):
+            reasons.append(f"{key}_changed")
+    if bool(previous.get("large_sell_print_detected")) != bool(current.get("large_sell_print_detected")):
+        reasons.append("large_sell_print_changed")
+    pressure_delta = abs(
+        _safe_float(current.get("buy_pressure_10t"), 0.0)
+        - _safe_float(previous.get("buy_pressure_10t"), 0.0)
+    )
+    min_delta = max(0.0, _rule_float("AI_WATCHING_STATE_CHANGE_BUY_PRESSURE_DELTA", 10.0))
+    if pressure_delta >= min_delta:
+        reasons.append("buy_pressure_delta")
+    return {
+        "allowed": bool(reasons),
+        "reason": "|".join(reasons) if reasons else "state_unchanged",
+        "signature": current,
+    }
+
+
 def _build_ai_overlap_log_fields(
     *,
     stock,
@@ -8634,6 +8808,14 @@ def _microstructure_reaction_log_fields_from_stock(stock: dict | None) -> dict:
     fields = stock.get("last_watching_ai_source_quality_fields")
     fields = fields if isinstance(fields, dict) else {}
     return {key: fields.get(key) for key in MICROSTRUCTURE_REACTION_CONTEXT_KEYS if key in fields}
+
+
+def _merge_entry_pipeline_field_groups(*field_groups) -> dict:
+    fields = {}
+    for field_group in field_groups:
+        if isinstance(field_group, dict):
+            fields.update(field_group)
+    return fields
 
 
 def _build_ai_input_not_evaluated_fields(reason: str) -> dict:
@@ -9240,6 +9422,14 @@ def _evaluate_holding_flow_override(
     last_review_action = str(stock.get("holding_flow_override_last_action", "") or "").upper()
     review_elapsed_sec = max(0, int(now_ts - last_review_at)) if last_review_at > 0 else None
     profit_move_since_review = abs(float(profit_rate or 0.0) - float(last_review_profit or 0.0))
+    state_change_worsen_pct = max(0.0, _rule_float("HOLDING_FLOW_STATE_CHANGE_WORSEN_PCT", 0.20))
+    state_change_review_requested = (
+        bool(_rule("HOLDING_FLOW_STATE_CHANGE_REVIEW_ENABLED", False))
+        and last_review_at > 0
+        and last_review_action in {"HOLD", "TRIM"}
+        and float(profit_rate or 0.0) < float(last_review_profit or 0.0)
+        and profit_move_since_review >= state_change_worsen_pct
+    )
     if elapsed_sec >= max_defer_sec:
         _log_holding_pipeline(
             stock,
@@ -9273,6 +9463,7 @@ def _evaluate_holding_flow_override(
         and review_elapsed_sec is not None
         and review_elapsed_sec < max_review_sec
         and (review_elapsed_sec < min_review_sec or profit_move_since_review < price_trigger_pct)
+        and not state_change_review_requested
     ):
         if _rule_bool("HOLDING_FLOW_OFI_SMOOTHING_OVERRIDE_ENABLED", True):
             orderbook_micro, ofi_state = _evaluate_holding_flow_ofi_state(stock, code, curr_price=curr_price)
@@ -9367,6 +9558,20 @@ def _evaluate_holding_flow_override(
             force=True,
         )
         return False
+
+    if state_change_review_requested:
+        _log_holding_pipeline(
+            stock,
+            code,
+            "holding_flow_state_change_review_triggered",
+            exit_rule=exit_rule,
+            previous_flow_action=last_review_action,
+            previous_profit=f"{last_review_profit:+.2f}",
+            current_profit=f"{profit_rate:+.2f}",
+            profit_worsen_since_review=f"{profit_move_since_review:.2f}",
+            state_change_worsen_pct=f"{state_change_worsen_pct:.2f}",
+            review_elapsed_sec=review_elapsed_sec,
+        )
 
     ws_age_sec = _get_ws_snapshot_age_sec(ws_data)
     if ws_age_sec is not None and max_ws_age > 0 and ws_age_sec > max_ws_age:
@@ -10366,11 +10571,31 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                 last_ai_time = LAST_AI_CALL_TIMES.get(code, 0)
                 time_elapsed = now_ts - last_ai_time
                 is_vip_target = (target_buy_price > 0) and (curr_price <= target_buy_price * 1.015)
+                watching_state_refresh = _resolve_watching_state_change_refresh(
+                    stock,
+                    ws_data,
+                    now_ts=now_ts,
+                    last_ai_time=last_ai_time,
+                    cooldown_sec=config["AI_WATCHING_COOLDOWN"],
+                )
+                ai_call_trigger_reason = (
+                    "first_call"
+                    if last_ai_time == 0
+                    else "cooldown_elapsed"
+                    if time_elapsed > config["AI_WATCHING_COOLDOWN"]
+                    else f"state_change:{watching_state_refresh.get('reason')}"
+                    if watching_state_refresh.get("allowed")
+                    else "cooldown_active"
+                )
 
                 if is_vip_target and last_ai_time == 0:
                     log_info(f"⏳ [{stock['name']}] 첫 AI 분석을 시작합니다... (기계적 매수 일시 보류)")
 
-                if ai_engine and is_vip_target and (time_elapsed > config["AI_WATCHING_COOLDOWN"] or last_ai_time == 0):
+                if ai_engine and is_vip_target and (
+                    time_elapsed > config["AI_WATCHING_COOLDOWN"]
+                    or last_ai_time == 0
+                    or watching_state_refresh.get("allowed")
+                ):
                     ai_call_executed = False
                     try:
                         recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
@@ -10432,13 +10657,26 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 recent_candles=recent_candles,
                                 ai_engine=ai_engine,
                             )
-                            _mutate_stock_state(stock, set_fields={'last_ai_overlap_snapshot': overlap_snapshot})
+                            state_signature = _build_watching_state_change_signature(ws_data, feature_probe)
+                            state_fields = {
+                                'last_ai_overlap_snapshot': overlap_snapshot,
+                                'last_watching_ai_state_signature': state_signature,
+                                'last_watching_ai_call_trigger_reason': ai_call_trigger_reason,
+                            }
+                            if watching_state_refresh.get("allowed"):
+                                state_fields["watching_state_change_refresh_last_ai_time"] = f"{float(last_ai_time):.3f}"
+                                state_fields["watching_state_change_refresh_block_until"] = now_ts + max(
+                                    1,
+                                    int(config["AI_WATCHING_COOLDOWN"]),
+                                )
+                            _mutate_stock_state(stock, set_fields=state_fields)
                             _log_entry_pipeline(
                                 stock,
                                 code,
                                 "ai_confirmed",
                                 action=action,
                                 vip_target=is_vip_target,
+                                ai_call_trigger_reason=ai_call_trigger_reason,
                                 buy_pressure=f"{float(feature_probe.get('buy_pressure', 0.0) or 0.0):.2f}",
                                 tick_accel=f"{float(feature_probe.get('tick_accel', 0.0) or 0.0):.3f}",
                                 micro_vwap_bp=f"{float(feature_probe.get('micro_vwap_bp', 0.0) or 0.0):.2f}",
@@ -11814,20 +12052,25 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         )
     submit_revalidation_fields = _build_entry_submit_revalidation_fields(ws_data, latency_gate, now_ts=time.time())
     scalp_pre_ai_gate_context = runtime.get("scalp_pre_ai_gate_context") if isinstance(runtime.get("scalp_pre_ai_gate_context"), dict) else {}
+    pre_ai_gate_submit_log_fields = _scalp_pre_ai_gate_context_log_fields(scalp_pre_ai_gate_context)
     real_pre_submit_guard_verdicts = _evaluate_scalp_pre_submit_guard_verdicts(
         strategy=strategy,
         liquidity_value=liquidity_value,
         min_liquidity=runtime.get("scalp_min_liquidity"),
-        pre_ai_context_fields=_scalp_pre_ai_gate_context_log_fields(scalp_pre_ai_gate_context),
+        pre_ai_context_fields=pre_ai_gate_submit_log_fields,
     )
     real_pre_submit_guard_fields = _pre_submit_guard_verdict_log_fields(real_pre_submit_guard_verdicts)
+    microstructure_submit_log_fields = _microstructure_reaction_log_fields_from_stock(stock)
+
     if submit_revalidation_fields.get("entry_submit_revalidation_warning"):
         _log_entry_pipeline(
             stock,
             code,
             "entry_submit_revalidation_warning",
-            **submit_revalidation_fields,
-            **real_pre_submit_guard_fields,
+            **_merge_entry_pipeline_field_groups(
+                submit_revalidation_fields,
+                real_pre_submit_guard_fields,
+            ),
         )
         _emit_scalp_entry_adm_snapshot(
             stock,
@@ -11868,11 +12111,13 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         counterfactual_order_price_1tick=int(latency_gate.get('counterfactual_order_price_1tick', 0) or 0),
         order_price=int(latency_gate.get('order_price', 0) or 0),
         ai_entry_price_canary_eval_ms=int(latency_gate.get('ai_entry_price_canary_eval_ms', 0) or 0),
-        **_scalp_pre_ai_gate_context_log_fields(runtime.get("scalp_pre_ai_gate_context")),
-        **real_pre_submit_guard_fields,
-        **submit_revalidation_fields,
-        **latency_price_snapshot,
-        **entry_orderbook_micro_fields,
+        **_merge_entry_pipeline_field_groups(
+            pre_ai_gate_submit_log_fields,
+            real_pre_submit_guard_fields,
+            submit_revalidation_fields,
+            latency_price_snapshot,
+            entry_orderbook_micro_fields,
+        ),
         **_build_ai_overlap_log_fields(
             stock=stock, ai_score=latency_signal_score, momentum_tag=stock.get("entry_momentum_tag"),
             threshold_profile=stock.get("entry_threshold_profile"), overbought_blocked=False, blocked_stage="-",
@@ -11905,11 +12150,13 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             block_reason="stale_context_or_quote",
             actual_order_submitted=False,
             threshold_family="pre_submit_price_guard",
-            **real_pre_submit_guard_fields,
-            **submit_revalidation_fields,
-            **latency_price_snapshot,
-            **entry_orderbook_micro_fields,
-            **swing_entry_micro_fields,
+            **_merge_entry_pipeline_field_groups(
+                real_pre_submit_guard_fields,
+                submit_revalidation_fields,
+                latency_price_snapshot,
+                entry_orderbook_micro_fields,
+                swing_entry_micro_fields,
+            ),
         )
         _emit_scalp_entry_adm_snapshot(
             stock,
@@ -11969,12 +12216,14 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             min_liquidity=min_liquidity,
             block_reason="below_min_liquidity",
             greenfield_tunable_prior=bool(greenfield_active),
-            **real_pre_submit_guard_fields,
-            **submit_revalidation_fields,
-            **latency_price_snapshot,
-            **entry_orderbook_micro_fields,
-            **_microstructure_reaction_log_fields_from_stock(stock),
-            **_scalp_pre_ai_gate_context_log_fields(scalp_pre_ai_gate_context),
+            **_merge_entry_pipeline_field_groups(
+                real_pre_submit_guard_fields,
+                submit_revalidation_fields,
+                latency_price_snapshot,
+                entry_orderbook_micro_fields,
+                microstructure_submit_log_fields,
+                pre_ai_gate_submit_log_fields,
+            ),
         )
         if not greenfield_active:
             _emit_scalp_entry_adm_snapshot(
@@ -12016,12 +12265,14 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             risk_state=overbought_context.get("risk_state") or "-",
             risk_bucket=overbought_context.get("risk_bucket") or "-",
             greenfield_tunable_prior=bool(greenfield_active),
-            **real_pre_submit_guard_fields,
-            **submit_revalidation_fields,
-            **latency_price_snapshot,
-            **entry_orderbook_micro_fields,
-            **_microstructure_reaction_log_fields_from_stock(stock),
-            **_scalp_pre_ai_gate_context_log_fields(scalp_pre_ai_gate_context),
+            **_merge_entry_pipeline_field_groups(
+                real_pre_submit_guard_fields,
+                submit_revalidation_fields,
+                latency_price_snapshot,
+                entry_orderbook_micro_fields,
+                microstructure_submit_log_fields,
+                pre_ai_gate_submit_log_fields,
+            ),
         )
         if not greenfield_active:
             _emit_scalp_entry_adm_snapshot(
@@ -12061,11 +12312,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     )
     submit_revalidation_fields.update(lifecycle_submit_decision)
     if lifecycle_submit_decision.get("lifecycle_matrix_enabled"):
-        lifecycle_submit_log_fields = {
-            **submit_revalidation_fields,
-            **latency_price_snapshot,
-            **entry_orderbook_micro_fields,
-        }
+        lifecycle_submit_log_fields = _merge_entry_pipeline_field_groups(
+            submit_revalidation_fields,
+            latency_price_snapshot,
+            entry_orderbook_micro_fields,
+        )
         _log_entry_pipeline(
             stock,
             code,
@@ -12134,10 +12385,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 requested_qty=requested_qty,
                 order_price=int(final_price or latency_gate.get("order_price", 0) or 0),
                 **_greenfield_block_fields(entry_greenfield_decision),
-                **real_pre_submit_guard_fields,
-                **submit_revalidation_fields,
-                **latency_price_snapshot,
-                **entry_orderbook_micro_fields,
+                **_merge_entry_pipeline_field_groups(
+                    real_pre_submit_guard_fields,
+                    submit_revalidation_fields,
+                    latency_price_snapshot,
+                    entry_orderbook_micro_fields,
+                ),
             )
             return False
         if entry_greenfield_decision.active:
@@ -12178,10 +12431,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 requested_qty=requested_qty,
                 order_price=int(final_price or latency_gate.get("order_price", 0) or 0),
                 **_greenfield_block_fields(submit_greenfield_decision),
-                **real_pre_submit_guard_fields,
-                **submit_revalidation_fields,
-                **latency_price_snapshot,
-                **entry_orderbook_micro_fields,
+                **_merge_entry_pipeline_field_groups(
+                    real_pre_submit_guard_fields,
+                    submit_revalidation_fields,
+                    latency_price_snapshot,
+                    entry_orderbook_micro_fields,
+                ),
             )
             return False
 
@@ -12234,9 +12489,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 max_below_bid_bps=max_below_bid_bps,
                 actual_order_submitted=False,
                 broker_order_forbidden=True,
-                **real_pre_submit_guard_fields,
-                **price_snapshot,
-                **_microstructure_reaction_log_fields_from_stock(stock),
+                **_merge_entry_pipeline_field_groups(
+                    real_pre_submit_guard_fields,
+                    price_snapshot,
+                    microstructure_submit_log_fields,
+                ),
             )
             log_info(
                 f"[PRE_SUBMIT_PRICE_GUARD_BLOCK] {stock.get('name')}({code}) "
@@ -12252,10 +12509,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             normal_defensive_order_price=int(latency_gate.get('normal_defensive_order_price', 0) or 0),
             latency_guarded_order_price=int(latency_gate.get('latency_guarded_order_price', 0) or 0),
             counterfactual_order_price_1tick=int(latency_gate.get('counterfactual_order_price_1tick', 0) or 0),
-            **real_pre_submit_guard_fields,
-            **submit_revalidation_fields,
-            **price_snapshot,
-            **swing_entry_micro_fields,
+            **_merge_entry_pipeline_field_groups(
+                real_pre_submit_guard_fields,
+                submit_revalidation_fields,
+                price_snapshot,
+                swing_entry_micro_fields,
+            ),
             actual_order_submitted=False,
             broker_order_forbidden=broker_order_forbidden_for_request,
             **swing_one_share_real_canary_non_verdict_fields,
@@ -12287,9 +12546,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 actual_order_submitted=False,
                 broker_order_forbidden=True,
                 would_submit_stage="order_leg_sent",
-                **submit_revalidation_fields,
-                **price_snapshot,
-                **swing_entry_micro_fields,
+                **_merge_entry_pipeline_field_groups(
+                    submit_revalidation_fields,
+                    price_snapshot,
+                    swing_entry_micro_fields,
+                ),
             )
             continue
         res = kiwoom_orders.send_buy_order(
@@ -12354,8 +12615,10 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             "order_leg_sent",
             tag=request['tag'],
             ord_no=ord_no,
-            **real_pre_submit_guard_fields,
-            **(swing_one_share_real_canary_fields or {}),
+            **_merge_entry_pipeline_field_groups(
+                real_pre_submit_guard_fields,
+                swing_one_share_real_canary_fields,
+            ),
         )
         if swing_one_share_real_canary_fields is not None:
             _log_entry_pipeline(
@@ -12376,8 +12639,10 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             stock,
             code,
             "order_bundle_failed",
-            **real_pre_submit_guard_fields,
-            **_microstructure_reaction_log_fields_from_stock(stock),
+            **_merge_entry_pipeline_field_groups(
+                real_pre_submit_guard_fields,
+                microstructure_submit_log_fields,
+            ),
         )
         if _is_swing_strategy(strategy):
             maybe_start_swing_intraday_probe(
@@ -12427,9 +12692,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             broker_order_forbidden=True,
             would_submit_stage="order_bundle_submitted",
             runtime_effect="in_memory_holding_only",
-            **submit_revalidation_fields,
-            **bundle_price_snapshot,
-            **swing_entry_micro_fields,
+            **_merge_entry_pipeline_field_groups(
+                submit_revalidation_fields,
+                bundle_price_snapshot,
+                swing_entry_micro_fields,
+            ),
         )
         clear_signal_reference(stock)
         return False
@@ -12476,13 +12743,15 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         runtime_effect=bool(latency_gate.get('latency_canary_applied')),
         actual_order_submitted=True,
         broker_order_forbidden=False,
-        **_scalp_pre_ai_gate_context_log_fields(runtime.get("scalp_pre_ai_gate_context")),
-        **_microstructure_reaction_log_fields_from_stock(stock),
-        **real_pre_submit_guard_fields,
-        **submit_revalidation_fields,
-        **bundle_price_snapshot,
-        **swing_entry_micro_fields,
-        **swing_one_share_real_canary_non_verdict_fields,
+        **_merge_entry_pipeline_field_groups(
+            pre_ai_gate_submit_log_fields,
+            microstructure_submit_log_fields,
+            real_pre_submit_guard_fields,
+            submit_revalidation_fields,
+            bundle_price_snapshot,
+            swing_entry_micro_fields,
+            swing_one_share_real_canary_non_verdict_fields,
+        ),
     )
     _emit_scalp_entry_adm_snapshot(
         stock,

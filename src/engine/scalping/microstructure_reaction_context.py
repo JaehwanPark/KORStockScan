@@ -107,6 +107,171 @@ def _age_ms_from_hhmmss(value: Any, *, now: datetime | None = None) -> int | Non
     return max(0, int(age_sec * 1000))
 
 
+def _safe_epoch_ms(value: Any) -> int | None:
+    if value in (None, "", "-"):
+        return None
+    try:
+        numeric = float(value)
+        if numeric <= 0:
+            return None
+        if numeric > 1_000_000_000_000:
+            return int(numeric)
+        if numeric > 1_000_000_000:
+            return int(numeric * 1000)
+    except (TypeError, ValueError):
+        pass
+    try:
+        text = str(value).strip()
+        if text.endswith("Z"):
+            text = f"{text[:-1]}+00:00"
+        return int(datetime.fromisoformat(text).timestamp() * 1000)
+    except Exception:
+        return None
+
+
+def _quote_age_ms(ws_data: dict[str, Any], *, now: datetime | None = None) -> tuple[int | None, str]:
+    quote_ts_keys = (
+        "quote_age_ms",
+        "ws_age_ms",
+        "ws_received_at_ms",
+        "quote_received_at_ms",
+        "received_at_ms",
+        "last_ws_update_ts",
+        "last_update_ms",
+        "updated_at_ms",
+        "captured_at_ms",
+        "timestamp_ms",
+        "ts_ms",
+        "updated_at",
+        "timestamp",
+    )
+    now_ms = int((now or datetime.now()).timestamp() * 1000)
+    for key in quote_ts_keys:
+        raw = ws_data.get(key)
+        if key in {"quote_age_ms", "ws_age_ms"}:
+            age_value = _safe_float(raw, -1.0)
+            if age_value >= 0:
+                return int(age_value), key
+            continue
+        epoch_ms = _safe_epoch_ms(raw)
+        if epoch_ms is None:
+            continue
+        return max(0, now_ms - epoch_ms), key
+    return None, "missing"
+
+
+def precompute_microstructure_reaction_inputs(
+    ws_data: dict[str, Any] | None,
+    recent_ticks: list[dict[str, Any]] | None,
+    recent_candles: list[dict[str, Any]] | None = None,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    recent_ticks = recent_ticks if isinstance(recent_ticks, list) else []
+    recent_candles = recent_candles if isinstance(recent_candles, list) else []
+    orderbook = ws_data.get("orderbook") if isinstance(ws_data.get("orderbook"), dict) else {}
+    asks = [level for level in (orderbook.get("asks") if isinstance(orderbook.get("asks"), list) else []) if isinstance(level, dict)]
+    bids = [level for level in (orderbook.get("bids") if isinstance(orderbook.get("bids"), list) else []) if isinstance(level, dict)]
+    curr_price = _safe_float(ws_data.get("curr") or ws_data.get("curr_price"), 0.0)
+    best_ask = _safe_float(asks[0].get("price") if asks else 0, curr_price)
+    best_bid = _safe_float(bids[0].get("price") if bids else 0, curr_price)
+    best_ask_vol = _safe_float(asks[0].get("volume") if asks else 0, 0.0)
+    best_bid_vol = _safe_float(bids[0].get("volume") if bids else 0, 0.0)
+    top3_ask_vol = sum(_safe_float(level.get("volume"), 0.0) for level in asks[:3])
+    top3_bid_vol = sum(_safe_float(level.get("volume"), 0.0) for level in bids[:3])
+    ticks = [tick for tick in recent_ticks[:10] if isinstance(tick, dict)]
+    tick_latest_time = str(ticks[0].get("time") or "") if ticks else ""
+    tick_age_ms = _age_ms_from_hhmmss(tick_latest_time, now=now) if tick_latest_time else None
+    tick_secs = [_safe_hhmmss_to_seconds(tick.get("time")) for tick in ticks]
+    buy_vol = sum(_safe_float(tick.get("volume"), 0.0) for tick in ticks if str(tick.get("dir") or "").upper() == "BUY")
+    sell_vol = sum(_safe_float(tick.get("volume"), 0.0) for tick in ticks if str(tick.get("dir") or "").upper() == "SELL")
+    total_vol = buy_vol + sell_vol
+    buy_pressure_pct = (buy_vol / total_vol * 100.0) if total_vol > 0 else 50.0
+    prices: list[float] = []
+    volumes: list[float] = []
+    for tick in ticks:
+        price_value = _safe_float(tick.get("price"), 0.0)
+        if price_value > 0:
+            prices.append(price_value)
+        volume_value = _safe_float(tick.get("volume"), 0.0)
+        if volume_value > 0:
+            volumes.append(volume_value)
+    latest_price = prices[0] if prices else curr_price
+    oldest_price = prices[-1] if prices else curr_price
+    price_change_pct = ((latest_price - oldest_price) / oldest_price * 100.0) if oldest_price > 0 else 0.0
+    avg_tick_volume = mean(volumes) if volumes else 0.0
+    buy_at_or_above_ask_vol = sum(
+        _safe_float(tick.get("volume"), 0.0)
+        for tick in ticks
+        if str(tick.get("dir") or "").upper() == "BUY" and _safe_float(tick.get("price"), 0.0) >= best_ask
+    )
+    large_buy_print_detected = any(
+        str(tick.get("dir") or "").upper() == "BUY" and _safe_float(tick.get("volume"), 0.0) >= avg_tick_volume * 2.2
+        for tick in ticks[:5]
+    ) if avg_tick_volume > 0 else False
+    large_sell_print_detected = any(
+        str(tick.get("dir") or "").upper() == "SELL" and _safe_float(tick.get("volume"), 0.0) >= avg_tick_volume * 2.2
+        for tick in ticks[:5]
+    ) if avg_tick_volume > 0 else False
+    price_buy_count: dict[float, int] = {}
+    for tick in ticks[:6]:
+        if str(tick.get("dir") or "").upper() != "BUY":
+            continue
+        price_key = _safe_float(tick.get("price"), 0.0)
+        price_buy_count[price_key] = price_buy_count.get(price_key, 0) + 1
+    same_price_buy_absorption = max(price_buy_count.values()) if price_buy_count else 0
+    candle_highs: list[float] = []
+    candle_lows: list[float] = []
+    for candle in recent_candles:
+        if not isinstance(candle, dict):
+            continue
+        high_value = _safe_float(candle.get("고가"), 0.0)
+        if high_value > 0:
+            candle_highs.append(high_value)
+        low_value = _safe_float(candle.get("저가"), 0.0)
+        if low_value > 0:
+            candle_lows.append(low_value)
+    quote_age_ms, quote_age_source = _quote_age_ms(ws_data, now=now)
+    return {
+        "ws_data": ws_data,
+        "recent_ticks": recent_ticks,
+        "recent_candles": recent_candles,
+        "asks": asks,
+        "bids": bids,
+        "curr_price": curr_price,
+        "best_ask": best_ask,
+        "best_bid": best_bid,
+        "best_ask_vol": best_ask_vol,
+        "best_bid_vol": best_bid_vol,
+        "top3_ask_vol": top3_ask_vol,
+        "top3_bid_vol": top3_bid_vol,
+        "ticks": ticks,
+        "tick_sample_count": len(ticks),
+        "tick_latest_time": tick_latest_time,
+        "tick_age_ms": tick_age_ms,
+        "tick_secs": tick_secs,
+        "buy_vol": buy_vol,
+        "sell_vol": sell_vol,
+        "total_vol": total_vol,
+        "buy_pressure_pct": buy_pressure_pct,
+        "latest_price": latest_price,
+        "oldest_price": oldest_price,
+        "price_change_pct": price_change_pct,
+        "avg_tick_volume": avg_tick_volume,
+        "buy_at_or_above_ask_vol": buy_at_or_above_ask_vol,
+        "large_buy_print_detected": large_buy_print_detected,
+        "large_sell_print_detected": large_sell_print_detected,
+        "same_price_buy_absorption": same_price_buy_absorption,
+        "quote_age_ms": quote_age_ms,
+        "quote_age_source": quote_age_source,
+        "candle_highs": candle_highs,
+        "candle_lows": candle_lows,
+        "session_high": max(candle_highs or [curr_price]),
+        "session_low": min(candle_lows or [curr_price]),
+    }
+
+
 def _context_hash(payload: dict[str, Any]) -> str:
     compact = {
         key: payload.get(key)
@@ -139,65 +304,47 @@ def build_microstructure_reaction_context(
     recent_candles: list[dict[str, Any]] | None = None,
     *,
     now: datetime | None = None,
+    precomputed: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    ws_data = ws_data if isinstance(ws_data, dict) else {}
-    recent_ticks = recent_ticks if isinstance(recent_ticks, list) else []
-    recent_candles = recent_candles if isinstance(recent_candles, list) else []
-    orderbook = ws_data.get("orderbook") if isinstance(ws_data.get("orderbook"), dict) else {}
-    asks = orderbook.get("asks") if isinstance(orderbook.get("asks"), list) else []
-    bids = orderbook.get("bids") if isinstance(orderbook.get("bids"), list) else []
+    snapshot = precomputed if isinstance(precomputed, dict) else precompute_microstructure_reaction_inputs(
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        now=now,
+    )
+    ws_data = snapshot.get("ws_data") if isinstance(snapshot.get("ws_data"), dict) else {}
+    recent_candles = snapshot.get("recent_candles") if isinstance(snapshot.get("recent_candles"), list) else []
+    asks = snapshot.get("asks") if isinstance(snapshot.get("asks"), list) else []
+    bids = snapshot.get("bids") if isinstance(snapshot.get("bids"), list) else []
     if not asks or not bids:
         return neutral_microstructure_reaction_context("source_quality_missing", "missing_orderbook")
-    if len(recent_ticks) < 5:
+    if int(snapshot.get("tick_sample_count") or 0) < 5:
         return neutral_microstructure_reaction_context("insufficient_window", "tick_sample_lt5")
 
-    latest_time = recent_ticks[0].get("time") if isinstance(recent_ticks[0], dict) else None
-    tick_age_ms = _age_ms_from_hhmmss(latest_time, now=now)
-    quote_age_ms = _safe_float(ws_data.get("quote_age_ms"), -1.0)
-    if quote_age_ms < 0:
-        quote_age_ms = _safe_float(ws_data.get("ws_age_ms"), -1.0)
-    if (tick_age_ms is not None and tick_age_ms > 5000) or (quote_age_ms >= 0 and quote_age_ms > 1200):
+    tick_age_ms = snapshot.get("tick_age_ms")
+    quote_age_ms = snapshot.get("quote_age_ms")
+    if (tick_age_ms is not None and tick_age_ms > 5000) or (quote_age_ms is not None and quote_age_ms > 1200):
         return neutral_microstructure_reaction_context("stale", "stale_tick_or_quote")
 
-    curr_price = _safe_float(ws_data.get("curr") or ws_data.get("curr_price"), 0.0)
-    best_ask = _safe_float(asks[0].get("price") if asks else 0, curr_price)
-    best_bid = _safe_float(bids[0].get("price") if bids else 0, curr_price)
-    top3_ask_vol = sum(_safe_float(level.get("volume"), 0.0) for level in asks[:3] if isinstance(level, dict))
-    top3_bid_vol = sum(_safe_float(level.get("volume"), 0.0) for level in bids[:3] if isinstance(level, dict))
+    curr_price = _safe_float(snapshot.get("curr_price"), 0.0)
+    best_ask = _safe_float(snapshot.get("best_ask"), curr_price)
+    best_bid = _safe_float(snapshot.get("best_bid"), curr_price)
+    top3_ask_vol = _safe_float(snapshot.get("top3_ask_vol"), 0.0)
+    top3_bid_vol = _safe_float(snapshot.get("top3_bid_vol"), 0.0)
     top3_depth_ratio = top3_ask_vol / top3_bid_vol if top3_bid_vol > 0 else 9.99
 
-    ticks = [tick for tick in recent_ticks[:10] if isinstance(tick, dict)]
-    buy_vol = sum(_safe_float(t.get("volume"), 0.0) for t in ticks if str(t.get("dir") or "").upper() == "BUY")
-    sell_vol = sum(_safe_float(t.get("volume"), 0.0) for t in ticks if str(t.get("dir") or "").upper() == "SELL")
-    total_vol = buy_vol + sell_vol
-    buy_pressure = (buy_vol / total_vol * 100.0) if total_vol > 0 else 50.0
-    prices: list[float] = []
-    volumes: list[float] = []
-    for tick in ticks:
-        price_value = _safe_float(tick.get("price"), 0.0)
-        if price_value > 0:
-            prices.append(price_value)
-        volume_value = _safe_float(tick.get("volume"), 0.0)
-        if volume_value > 0:
-            volumes.append(volume_value)
-    latest_price = prices[0] if prices else curr_price
-    oldest_price = prices[-1] if prices else curr_price
-    price_change_pct = ((latest_price - oldest_price) / oldest_price * 100.0) if oldest_price > 0 else 0.0
-    buy_at_or_above_ask = sum(
-        _safe_float(t.get("volume"), 0.0)
-        for t in ticks
-        if str(t.get("dir") or "").upper() == "BUY" and _safe_float(t.get("price"), 0.0) >= best_ask
-    )
+    ticks = snapshot.get("ticks") if isinstance(snapshot.get("ticks"), list) else []
+    buy_vol = _safe_float(snapshot.get("buy_vol"), 0.0)
+    sell_vol = _safe_float(snapshot.get("sell_vol"), 0.0)
+    total_vol = _safe_float(snapshot.get("total_vol"), 0.0)
+    buy_pressure = _safe_float(snapshot.get("buy_pressure_pct"), 50.0)
+    latest_price = _safe_float(snapshot.get("latest_price"), curr_price)
+    price_change_pct = _safe_float(snapshot.get("price_change_pct"), 0.0)
+    buy_at_or_above_ask = _safe_float(snapshot.get("buy_at_or_above_ask_vol"), 0.0)
     ask_sweep_share = buy_at_or_above_ask / total_vol if total_vol > 0 else 0.0
-    avg_vol = mean(volumes) if volumes else 0.0
-    large_buy = any(
-        str(t.get("dir") or "").upper() == "BUY" and _safe_float(t.get("volume"), 0.0) >= avg_vol * 2.2
-        for t in ticks[:5]
-    ) if avg_vol > 0 else False
-    large_sell = any(
-        str(t.get("dir") or "").upper() == "SELL" and _safe_float(t.get("volume"), 0.0) >= avg_vol * 2.2
-        for t in ticks[:5]
-    ) if avg_vol > 0 else False
+    avg_vol = _safe_float(snapshot.get("avg_tick_volume"), 0.0)
+    large_buy = bool(snapshot.get("large_buy_print_detected")) if avg_vol > 0 else False
+    large_sell = bool(snapshot.get("large_sell_print_detected")) if avg_vol > 0 else False
 
     ask_sweep_score = _clamp_score(35 + (buy_pressure - 50) * 0.7 + ask_sweep_share * 35 + (12 if price_change_pct > 0 else 0) + (8 if large_buy else 0))
     post_sweep_hold_score = _clamp_score(50 + min(25, max(-25, price_change_pct * 45)) + (12 if latest_price >= best_ask else 0) - (15 if latest_price < best_bid else 0))
@@ -206,19 +353,8 @@ def build_microstructure_reaction_context(
     wall_replenishment_risk_score = _clamp_score(25 + max(0, top3_depth_ratio - 1.0) * 28 + (16 if large_sell else 0) + (10 if buy_pressure < 55 else 0))
 
     fluctuation = _safe_float(ws_data.get("fluctuation"), 0.0)
-    candle_highs: list[float] = []
-    candle_lows: list[float] = []
-    for candle in recent_candles:
-        if not isinstance(candle, dict):
-            continue
-        high_value = _safe_float(candle.get("고가"), 0.0)
-        if high_value > 0:
-            candle_highs.append(high_value)
-        low_value = _safe_float(candle.get("저가"), 0.0)
-        if low_value > 0:
-            candle_lows.append(low_value)
-    high = max(candle_highs or [curr_price])
-    low = min(candle_lows or [curr_price])
+    high = _safe_float(snapshot.get("session_high"), curr_price)
+    low = _safe_float(snapshot.get("session_low"), curr_price)
     distance_from_high = ((curr_price - high) / high * 100.0) if high > 0 and curr_price > 0 else -99.0
     intraday_range = ((high - low) / low * 100.0) if high >= low and low > 0 else 0.0
     vi_proximity_risk = _clamp_score(max(0, fluctuation - 20) * 6 + (20 if distance_from_high >= -0.25 and intraday_range >= 12 else 0))

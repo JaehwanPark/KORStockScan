@@ -292,6 +292,106 @@ def test_worsen_floor_stops_defer_and_allows_original_exit(monkeypatch):
     )
 
 
+def test_holding_flow_state_change_review_bypasses_interval_once_enabled(monkeypatch):
+    logs = []
+    _patch_holding_context(monkeypatch, logs)
+    monkeypatch.setattr(
+        handlers,
+        "TRADING_RULES",
+        SimpleNamespace(
+            HOLDING_FLOW_STATE_CHANGE_REVIEW_ENABLED=True,
+            HOLDING_FLOW_STATE_CHANGE_WORSEN_PCT=0.20,
+            HOLDING_FLOW_OFI_SMOOTHING_OVERRIDE_ENABLED=False,
+        ),
+    )
+    ai = DummyFlowAI("HOLD")
+    stock = {
+        **_stock(),
+        "holding_flow_override_candidate_key": "scalp_soft_stop_pct:LOSS",
+        "holding_flow_override_started_at": 1000.0,
+        "holding_flow_override_candidate_profit": 0.50,
+        "holding_flow_override_last_review_at": 1000.0,
+        "holding_flow_override_last_review_profit": 0.50,
+        "holding_flow_override_last_action": "HOLD",
+        "holding_flow_override_last_flow_state": "absorption",
+        "holding_flow_override_last_score": 74,
+    }
+
+    proceed = handlers._evaluate_holding_flow_override(
+        stock=stock,
+        code="005930",
+        strategy="SCALPING",
+        ws_data=_ws(),
+        ai_engine=ai,
+        exit_rule="scalp_soft_stop_pct",
+        sell_reason_type="LOSS",
+        reason="soft stop",
+        profit_rate=0.20,
+        peak_profit=0.70,
+        drawdown=0.50,
+        current_ai_score=55,
+        held_sec=80,
+        curr_price=10020,
+        buy_price=10000,
+        now_ts=1010.0,
+    )
+
+    assert proceed is False
+    assert len(ai.calls) == 1
+    assert any(stage == "holding_flow_state_change_review_triggered" for stage, _ in logs)
+    assert any(stage == "holding_flow_override_review" for stage, _ in logs)
+
+
+def test_holding_flow_state_change_review_is_disabled_by_default(monkeypatch):
+    logs = []
+    _patch_holding_context(monkeypatch, logs)
+    monkeypatch.setattr(
+        handlers,
+        "TRADING_RULES",
+        SimpleNamespace(
+            HOLDING_FLOW_STATE_CHANGE_REVIEW_ENABLED=False,
+            HOLDING_FLOW_OFI_SMOOTHING_OVERRIDE_ENABLED=False,
+        ),
+    )
+    ai = DummyFlowAI("HOLD")
+    stock = {
+        **_stock(),
+        "holding_flow_override_candidate_key": "scalp_soft_stop_pct:LOSS",
+        "holding_flow_override_started_at": 1000.0,
+        "holding_flow_override_candidate_profit": 0.50,
+        "holding_flow_override_last_review_at": 1000.0,
+        "holding_flow_override_last_review_profit": 0.50,
+        "holding_flow_override_last_action": "HOLD",
+        "holding_flow_override_last_flow_state": "absorption",
+        "holding_flow_override_last_score": 74,
+        "holding_flow_override_last_reason": "prior hold",
+    }
+
+    proceed = handlers._evaluate_holding_flow_override(
+        stock=stock,
+        code="005930",
+        strategy="SCALPING",
+        ws_data=_ws(),
+        ai_engine=ai,
+        exit_rule="scalp_soft_stop_pct",
+        sell_reason_type="LOSS",
+        reason="soft stop",
+        profit_rate=0.20,
+        peak_profit=0.70,
+        drawdown=0.50,
+        current_ai_score=55,
+        held_sec=80,
+        curr_price=10020,
+        buy_price=10000,
+        now_ts=1010.0,
+    )
+
+    assert proceed is False
+    assert ai.calls == []
+    assert any(stage == "holding_flow_override_defer_exit" for stage, _ in logs)
+    assert not any(stage == "holding_flow_state_change_review_triggered" for stage, _ in logs)
+
+
 def test_hard_stop_is_outside_holding_flow_override_scope():
     assert handlers._holding_flow_override_applicable("SCALPING", "scalp_hard_stop_pct") is False
 

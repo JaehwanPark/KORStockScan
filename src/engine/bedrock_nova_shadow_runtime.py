@@ -49,7 +49,6 @@ class BedrockNovaShadowManager:
         report_dir: Path,
         event_type: str,
         target_model_name: str,
-        target_model_names: set[str] | None = None,
         profile: BedrockNovaModelProfile,
         openai_input_usd_per_1m: float,
         openai_output_usd_per_1m: float,
@@ -64,8 +63,6 @@ class BedrockNovaShadowManager:
         self.report_dir = report_dir
         self.event_type = str(event_type)
         self.target_model_name = str(target_model_name)
-        configured_targets = {str(item or "").strip() for item in (target_model_names or set()) if str(item or "").strip()}
-        self.target_model_names = configured_targets or {self.target_model_name}
         self.profile = profile
         self.openai_input_usd_per_1m = float(openai_input_usd_per_1m)
         self.openai_output_usd_per_1m = float(openai_output_usd_per_1m)
@@ -80,7 +77,7 @@ class BedrockNovaShadowManager:
         self._lock = threading.Lock()
 
     def should_shadow(self, *, model_name: str, require_json: bool) -> bool:
-        return bool(self.is_enabled and require_json and str(model_name or "") in self.target_model_names)
+        return bool(self.is_enabled and require_json and str(model_name or "") == self.target_model_name)
 
     def enqueue(self, *, prompt: str, user_input: str, openai_payload: dict[str, Any], transport_meta: dict[str, Any], request_meta: dict[str, Any]) -> bool:
         if not self.is_enabled:

@@ -2946,6 +2946,71 @@ def test_entry_ai_price_canary_falls_back_on_guard_block(monkeypatch):
     assert any(fields.get("reason") == "pre_submit_price_guard" for stage, fields in logs if stage == "entry_ai_price_canary_fallback")
 
 
+def test_entry_ai_price_refresh_is_limited_to_one_retry(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALPING_ENTRY_AI_PRICE_CANARY_ENABLED=True,
+            SCALPING_ENTRY_AI_PRICE_MIN_CONFIDENCE=60,
+            SCALPING_ENTRY_PRICE_REFRESH_ENABLED=True,
+            SCALPING_ENTRY_PRICE_REFRESH_DECISION_AGE_MS=1,
+        ),
+    )
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [{"price": 10020}])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [{"close": 10020}])
+    logs = []
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
+
+    class DummyAI:
+        def __init__(self):
+            self.calls = 0
+
+        def evaluate_scalping_entry_price(self, *args, **kwargs):
+            self.calls += 1
+            time.sleep(0.003)
+            return {
+                "action": "USE_DEFENSIVE",
+                "order_price": 9990,
+                "confidence": 90,
+                "reason": "defensive price is suitable",
+                "max_wait_sec": 30,
+                "ai_parse_ok": True,
+                "ai_parse_fail": False,
+            }
+
+    ai = DummyAI()
+    latency_gate = {
+        "target_buy_price": 9980,
+        "latency_guarded_order_price": 9990,
+        "normal_defensive_order_price": 9990,
+        "order_price": 9990,
+        "price_resolution_reason": "defensive_order_price",
+        "latency_state": "SAFE",
+    }
+    planned_orders = [{"tag": "normal", "qty": 1, "price": 9990, "tif": "DAY", "order_type": "LIMIT"}]
+
+    adjusted, touched = state_handlers._apply_entry_ai_price_canary(
+        stock={"name": "TEST", "strategy": "SCALPING", "position_tag": "SCANNER", "prob": 0.8},
+        code="123456",
+        strategy="SCALPING",
+        ws_data={"curr": 10020},
+        ai_engine=ai,
+        latency_gate=latency_gate,
+        planned_orders=planned_orders,
+        curr_price=10020,
+        best_bid=10020,
+        best_ask=10030,
+    )
+
+    assert touched is True
+    assert adjusted[0]["price"] == 9990
+    assert ai.calls == 2
+    assert latency_gate["ai_entry_price_refresh_attempted"] is True
+    assert [stage for stage, _fields in logs].count("entry_ai_price_refresh_triggered") == 1
+
+
 def test_entry_ai_price_canary_clamps_wait_danger_passive_probe_to_one_tick(monkeypatch):
     monkeypatch.setattr(
         state_handlers,
@@ -3032,6 +3097,20 @@ def test_passive_probe_stale_submit_revalidation_blocks(monkeypatch):
     assert fields["entry_submit_revalidation_warning"] == "stale_context_or_quote"
     assert fields["quote_stale_at_submit"] is True
     assert state_handlers._is_passive_probe_stale_submit_block(fields) is True
+
+
+def test_get_best_levels_from_ws_uses_top_of_book_levels():
+    best_ask, best_bid = state_handlers._get_best_levels_from_ws(
+        {
+            "orderbook": {
+                "asks": [{"price": 10010}, {"price": 10020}, {"price": 10030}],
+                "bids": [{"price": 10000}, {"price": 9990}, {"price": 9980}],
+            }
+        }
+    )
+
+    assert best_ask == 10010
+    assert best_bid == 10000
 
 
 def test_pending_entry_cancel_logs_receipt_provenance(monkeypatch):

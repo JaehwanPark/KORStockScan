@@ -1,6 +1,9 @@
 from datetime import datetime
 
-from src.engine.scalping.microstructure_reaction_context import build_microstructure_reaction_context
+from src.engine.scalping.microstructure_reaction_context import (
+    build_microstructure_reaction_context,
+    precompute_microstructure_reaction_inputs,
+)
 
 
 def _ws_data(**overrides):
@@ -125,3 +128,29 @@ def test_vi_proximity_is_risk_provenance_not_buy_trigger():
 
     assert context["microstructure_reaction_vi_proximity_risk"] >= 70
     assert context["microstructure_reaction_entry_reaction_quality"] == "risk_context_only"
+
+
+def test_precomputed_snapshot_preserves_context_result():
+    now = datetime.strptime("09:00:12", "%H:%M:%S")
+    snapshot = precompute_microstructure_reaction_inputs(
+        _ws_data(),
+        _ticks(),
+        [{"고가": 10130, "저가": 10080}],
+        now=now,
+    )
+
+    direct = build_microstructure_reaction_context(
+        _ws_data(),
+        _ticks(),
+        [{"고가": 10130, "저가": 10080}],
+        now=now,
+    )
+    reused = build_microstructure_reaction_context(
+        _ws_data(),
+        _ticks(),
+        [{"고가": 10130, "저가": 10080}],
+        now=now,
+        precomputed=snapshot,
+    )
+
+    assert reused == direct

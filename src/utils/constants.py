@@ -510,6 +510,8 @@ class TradingConfig:
     AI_SCORE_THRESHOLD_KOSDAQ: int = 60    # KOSDAQ_ML AI 점수 매수 보류 임계값 (60점 미만 보류)
     AI_SCORE_THRESHOLD_KOSPI: int = 60     # KOSPI_ML AI 점수 매수 보류 임계값 (60점 미만 보류)
     AI_WATCHING_COOLDOWN: int = 90  # 신규 진입 감시(WATCHING) 재평가 간격 (초)
+    AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED: bool = False  # cooldown 내 상태변화 기반 1회 조기 재평가
+    AI_WATCHING_STATE_CHANGE_BUY_PRESSURE_DELTA: float = 10.0
     AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED: bool = True  # score=50 fallback/neutral 진입은 매수보류
     AI_MAIN_BUY_RECOVERY_CANARY_ENABLED: bool = False  # same-day 교체: BUY recovery canary 기본 OFF
     AI_MAIN_BUY_RECOVERY_CANARY_MIN_SCORE: int = 65  # 재평가 시작 점수
@@ -566,6 +568,9 @@ class TradingConfig:
     OPENAI_ENTRY_TIMEOUT_REJECT_ENABLED: bool = True  # buy-side hot path timeout/parse failure 시 reject fallback
     OPENAI_SCALPING_COMPACT_INPUT_ENABLED: bool = True  # OpenAI live route hot path 입력 compact JSON 사용
     OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED: bool = True  # entry_price compact JSON enabled by operator risk acceptance
+    OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED: bool = False  # entry/analyze_target structured v2 input canary
+    OPENAI_ENTRY_PRICE_V2_INPUT_ENABLED: bool = False  # entry_price structured v2 input canary
+    OPENAI_HOLDING_FLOW_V2_INPUT_ENABLED: bool = False  # holding_flow structured v2 input canary
     OPENAI_PREVIOUS_RESPONSE_ID_ENABLED: bool = False  # phase1: stateless 유지
     OPENAI_DUAL_PERSONA_ENABLED: bool = False  # Plan Rebase: AI 엔진 A/B/shadow 비교는 기본 튜닝 로직 정렬 이후 재개
     OPENAI_DUAL_PERSONA_SHADOW_MODE: bool = False
@@ -659,6 +664,10 @@ class TradingConfig:
     HOLDING_FLOW_REVIEW_TICK_LIMIT: int = 30
     HOLDING_FLOW_REVIEW_CANDLE_LIMIT: int = 60
     HOLDING_FLOW_REVIEW_MAX_WS_AGE_SEC: float = 3.0
+    HOLDING_FLOW_STATE_CHANGE_REVIEW_ENABLED: bool = False  # HOLD/TRIM 이후 의미있는 변화 시 조기 재검토
+    HOLDING_FLOW_STATE_CHANGE_WORSEN_PCT: float = 0.20
+    SCALPING_ENTRY_PRICE_REFRESH_ENABLED: bool = False  # 동일 후보 entry_price submit 전 1회 refresh
+    SCALPING_ENTRY_PRICE_REFRESH_DECISION_AGE_MS: int = 1500
 
     # ==========================================
     # 📝 로그 운영 설정
@@ -945,6 +954,10 @@ def _build_trading_rules() -> TradingConfig:
     env_score6574_probe_calibration_state = _env_str("KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_CALIBRATION_STATE")
     env_scalping_prompt_split_enabled = _env_bool("KORSTOCKSCAN_SCALPING_PROMPT_SPLIT_ENABLED")
     env_ai_watching_cooldown = _env_int("KORSTOCKSCAN_AI_WATCHING_COOLDOWN")
+    env_ai_watching_state_change_refresh = _env_bool("KORSTOCKSCAN_AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED")
+    env_ai_watching_state_change_buy_pressure_delta = _env_float(
+        "KORSTOCKSCAN_AI_WATCHING_STATE_CHANGE_BUY_PRESSURE_DELTA"
+    )
     env_ai_holding_min_cooldown = _env_int("KORSTOCKSCAN_AI_HOLDING_MIN_COOLDOWN")
     env_ai_holding_max_cooldown = _env_int("KORSTOCKSCAN_AI_HOLDING_MAX_COOLDOWN")
     env_ai_holding_critical_min_cooldown = _env_int("KORSTOCKSCAN_AI_HOLDING_CRITICAL_MIN_COOLDOWN")
@@ -972,6 +985,8 @@ def _build_trading_rules() -> TradingConfig:
         or env_score6574_probe_calibration_state is not None
         or env_scalping_prompt_split_enabled is not None
         or env_ai_watching_cooldown is not None
+        or env_ai_watching_state_change_refresh is not None
+        or env_ai_watching_state_change_buy_pressure_delta is not None
         or env_ai_holding_min_cooldown is not None
         or env_ai_holding_max_cooldown is not None
         or env_ai_holding_critical_min_cooldown is not None
@@ -1043,6 +1058,12 @@ def _build_trading_rules() -> TradingConfig:
             AI_WATCHING_COOLDOWN=env_ai_watching_cooldown
             if env_ai_watching_cooldown is not None
             else config.AI_WATCHING_COOLDOWN,
+            AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED=env_ai_watching_state_change_refresh
+            if env_ai_watching_state_change_refresh is not None
+            else config.AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED,
+            AI_WATCHING_STATE_CHANGE_BUY_PRESSURE_DELTA=env_ai_watching_state_change_buy_pressure_delta
+            if env_ai_watching_state_change_buy_pressure_delta is not None
+            else config.AI_WATCHING_STATE_CHANGE_BUY_PRESSURE_DELTA,
             AI_HOLDING_MIN_COOLDOWN=env_ai_holding_min_cooldown
             if env_ai_holding_min_cooldown is not None
             else config.AI_HOLDING_MIN_COOLDOWN,
@@ -2128,6 +2149,9 @@ def _build_trading_rules() -> TradingConfig:
     env_openai_ws_late_discard = _env_bool("KORSTOCKSCAN_OPENAI_RESPONSES_WS_LATE_DISCARD_ENABLED")
     env_openai_entry_timeout_reject = _env_bool("KORSTOCKSCAN_OPENAI_ENTRY_TIMEOUT_REJECT_ENABLED")
     env_openai_entry_price_compact_input = _env_bool("KORSTOCKSCAN_OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED")
+    env_openai_entry_screen_v2_input = _env_bool("KORSTOCKSCAN_OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED")
+    env_openai_entry_price_v2_input = _env_bool("KORSTOCKSCAN_OPENAI_ENTRY_PRICE_V2_INPUT_ENABLED")
+    env_openai_holding_flow_v2_input = _env_bool("KORSTOCKSCAN_OPENAI_HOLDING_FLOW_V2_INPUT_ENABLED")
     env_openai_previous_response_id = _env_bool("KORSTOCKSCAN_OPENAI_PREVIOUS_RESPONSE_ID_ENABLED")
     env_openai_threshold_correction_model = _env_str("KORSTOCKSCAN_GPT_THRESHOLD_CORRECTION_MODEL")
     env_openai_threshold_correction_fallback_models = _env_csv_tuple(
@@ -2147,6 +2171,9 @@ def _build_trading_rules() -> TradingConfig:
         or env_openai_ws_late_discard is not None
         or env_openai_entry_timeout_reject is not None
         or env_openai_entry_price_compact_input is not None
+        or env_openai_entry_screen_v2_input is not None
+        or env_openai_entry_price_v2_input is not None
+        or env_openai_holding_flow_v2_input is not None
         or env_openai_previous_response_id is not None
         or env_openai_threshold_correction_model is not None
         or env_openai_threshold_correction_fallback_models is not None
@@ -2190,6 +2217,15 @@ def _build_trading_rules() -> TradingConfig:
             OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED=env_openai_entry_price_compact_input
             if env_openai_entry_price_compact_input is not None
             else config.OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED,
+            OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED=env_openai_entry_screen_v2_input
+            if env_openai_entry_screen_v2_input is not None
+            else config.OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED,
+            OPENAI_ENTRY_PRICE_V2_INPUT_ENABLED=env_openai_entry_price_v2_input
+            if env_openai_entry_price_v2_input is not None
+            else config.OPENAI_ENTRY_PRICE_V2_INPUT_ENABLED,
+            OPENAI_HOLDING_FLOW_V2_INPUT_ENABLED=env_openai_holding_flow_v2_input
+            if env_openai_holding_flow_v2_input is not None
+            else config.OPENAI_HOLDING_FLOW_V2_INPUT_ENABLED,
             OPENAI_PREVIOUS_RESPONSE_ID_ENABLED=env_openai_previous_response_id
             if env_openai_previous_response_id is not None
             else config.OPENAI_PREVIOUS_RESPONSE_ID_ENABLED,
@@ -2300,6 +2336,10 @@ def _build_trading_rules() -> TradingConfig:
     env_holding_flow_tick_limit = _env_int("KORSTOCKSCAN_HOLDING_FLOW_REVIEW_TICK_LIMIT")
     env_holding_flow_candle_limit = _env_int("KORSTOCKSCAN_HOLDING_FLOW_REVIEW_CANDLE_LIMIT")
     env_holding_flow_max_ws_age = _env_float("KORSTOCKSCAN_HOLDING_FLOW_REVIEW_MAX_WS_AGE_SEC")
+    env_holding_flow_state_change_review = _env_bool("KORSTOCKSCAN_HOLDING_FLOW_STATE_CHANGE_REVIEW_ENABLED")
+    env_holding_flow_state_change_worsen = _env_float("KORSTOCKSCAN_HOLDING_FLOW_STATE_CHANGE_WORSEN_PCT")
+    env_entry_price_refresh_enabled = _env_bool("KORSTOCKSCAN_SCALPING_ENTRY_PRICE_REFRESH_ENABLED")
+    env_entry_price_refresh_decision_age = _env_int("KORSTOCKSCAN_SCALPING_ENTRY_PRICE_REFRESH_DECISION_AGE_MS")
     if (
         env_scalp_entry_adm_advisory_enabled is not None
         or env_scalp_entry_adm_runtime_bias_enabled is not None
@@ -2350,6 +2390,10 @@ def _build_trading_rules() -> TradingConfig:
         or env_holding_flow_tick_limit is not None
         or env_holding_flow_candle_limit is not None
         or env_holding_flow_max_ws_age is not None
+        or env_holding_flow_state_change_review is not None
+        or env_holding_flow_state_change_worsen is not None
+        or env_entry_price_refresh_enabled is not None
+        or env_entry_price_refresh_decision_age is not None
     ):
         config = replace(
             config,
@@ -2500,6 +2544,18 @@ def _build_trading_rules() -> TradingConfig:
             HOLDING_FLOW_REVIEW_MAX_WS_AGE_SEC=env_holding_flow_max_ws_age
             if env_holding_flow_max_ws_age is not None
             else config.HOLDING_FLOW_REVIEW_MAX_WS_AGE_SEC,
+            HOLDING_FLOW_STATE_CHANGE_REVIEW_ENABLED=env_holding_flow_state_change_review
+            if env_holding_flow_state_change_review is not None
+            else config.HOLDING_FLOW_STATE_CHANGE_REVIEW_ENABLED,
+            HOLDING_FLOW_STATE_CHANGE_WORSEN_PCT=env_holding_flow_state_change_worsen
+            if env_holding_flow_state_change_worsen is not None
+            else config.HOLDING_FLOW_STATE_CHANGE_WORSEN_PCT,
+            SCALPING_ENTRY_PRICE_REFRESH_ENABLED=env_entry_price_refresh_enabled
+            if env_entry_price_refresh_enabled is not None
+            else config.SCALPING_ENTRY_PRICE_REFRESH_ENABLED,
+            SCALPING_ENTRY_PRICE_REFRESH_DECISION_AGE_MS=env_entry_price_refresh_decision_age
+            if env_entry_price_refresh_decision_age is not None
+            else config.SCALPING_ENTRY_PRICE_REFRESH_DECISION_AGE_MS,
         )
 
     if (

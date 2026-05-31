@@ -58,10 +58,7 @@ def _build_engine():
     engine.max_consecutive_failures = 5
     engine.last_call_time = 0.0
     engine.min_interval = 0.0
-    engine._annotate_analysis_result = lambda result, **meta: {**dict(result), **{
-        "ai_parse_ok": bool(meta.get("parse_ok", False)),
-        "ai_parse_fail": bool(meta.get("parse_fail", False)),
-    }}
+    engine._annotate_analysis_result = GPTSniperEngine._annotate_analysis_result.__get__(engine, GPTSniperEngine)
     return engine
 
 
@@ -357,53 +354,6 @@ def test_gpt5_nano_always_uses_openai_after_micro_removal(monkeypatch):
     assert "bedrock_primary_used" not in meta
 
 
-def test_gpt5_nano_openai_primary_can_enqueue_lite_shadow(monkeypatch):
-    engine = _build_engine()
-    captured = {}
-    provider_called = {"value": False}
-
-    def _fake_create(**kwargs):
-        return SimpleNamespace(output_text='{"action":"WAIT","score":61,"reason":"openai"}')
-
-    class Provider:
-        def converse(self, **kwargs):
-            provider_called["value"] = True
-            raise AssertionError("gpt-5-nano primary must stay OpenAI")
-
-    def _capture_shadow(**kwargs):
-        captured.update(kwargs)
-        return True
-
-    from src.engine import bedrock_nova_lite_shadow
-
-    engine.client = SimpleNamespace(responses=SimpleNamespace(create=_fake_create))
-    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_SHADOW_ENABLED", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_SHADOW_TARGET_MODELS", "gpt-5-nano")
-    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "primary")
-    monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
-    monkeypatch.setattr(bedrock_nova_lite_shadow, "enqueue_runtime_shadow", _capture_shadow)
-    monkeypatch.setattr(
-        openai_module,
-        "TRADING_RULES",
-        replace(openai_module.TRADING_RULES, OPENAI_TRANSPORT_MODE="http"),
-    )
-
-    result = GPTSniperEngine._call_openai_safe(
-        engine,
-        "PROMPT",
-        "payload",
-        require_json=True,
-        context_name="test",
-        model_override="gpt-5-nano",
-        endpoint_name="analyze_target",
-    )
-
-    assert result["reason"] == "openai"
-    assert provider_called["value"] is False
-    assert captured["model_name"] == "gpt-5-nano"
-    assert captured["openai_payload"]["reason"] == "openai"
-
-
 def test_bedrock_primary_routes_gpt54_mini_independently(monkeypatch):
     engine = _build_engine()
     captured = {}
@@ -608,6 +558,7 @@ def test_bedrock_lite_primary_endpoint_allowlist_keeps_other_tier2_on_openai(mon
 def test_bedrock_lite_primary_enqueues_lite_v2_shadow(monkeypatch):
     engine = _build_engine()
     captured = {}
+    shadow_calls = []
 
     class Provider:
         def converse(self, *, prompt, user_input, profile):
@@ -630,6 +581,7 @@ def test_bedrock_lite_primary_enqueues_lite_v2_shadow(monkeypatch):
             )
 
     def _capture_shadow(**kwargs):
+        shadow_calls.append(kwargs)
         captured.update(kwargs)
         return True
 
@@ -655,11 +607,13 @@ def test_bedrock_lite_primary_enqueues_lite_v2_shadow(monkeypatch):
     assert result["action"] == "HOLD"
     assert captured["baseline_payload"]["action"] == "HOLD"
     assert captured["request_meta"]["baseline_bedrock_model_id"] == "apac.amazon.nova-lite-v1:0"
+    assert len(shadow_calls) == 1
 
 
 def test_bedrock_lite_v2_primary_enqueues_lite_v1_shadow(monkeypatch):
     engine = _build_engine()
     captured = {}
+    shadow_calls = []
 
     class Provider:
         def converse(self, *, prompt, user_input, profile):
@@ -682,6 +636,7 @@ def test_bedrock_lite_v2_primary_enqueues_lite_v1_shadow(monkeypatch):
             )
 
     def _capture_shadow(**kwargs):
+        shadow_calls.append(kwargs)
         captured.update(kwargs)
         return True
 
@@ -708,6 +663,7 @@ def test_bedrock_lite_v2_primary_enqueues_lite_v1_shadow(monkeypatch):
     assert result["reason"] == "lite-v2"
     assert captured["openai_payload"]["reason"] == "lite-v2"
     assert captured["request_meta"]["baseline_bedrock_model_id"] == "global.amazon.nova-2-lite-v1:0"
+    assert len(shadow_calls) == 1
 
 
 def test_bedrock_primary_does_not_route_other_models(monkeypatch):
@@ -1316,6 +1272,275 @@ def test_entry_price_compact_input_preserves_before_after_output_across_large_sa
     assert result["order_price"] == before_output["order_price"]
     assert result["confidence"] == before_output["confidence"]
     assert result["max_wait_sec"] == before_output["max_wait_sec"]
+
+
+def test_ai_hot_path_v2_inputs_are_structured_json_across_large_sample(monkeypatch):
+    engine = _build_engine()
+    samples = [_entry_price_compaction_sample(idx) for idx in range(500)]
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED=True,
+            OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED=True,
+            OPENAI_ENTRY_PRICE_V2_INPUT_ENABLED=True,
+            OPENAI_HOLDING_FLOW_V2_INPUT_ENABLED=True,
+        ),
+    )
+
+    for idx, (ws_data, ticks, candles, price_ctx) in enumerate(samples):
+        entry_screen = engine._build_entry_screen_v2_payload(ws_data, ticks, candles)
+        entry_price = json.loads(
+            engine._build_scalping_entry_price_v2_input(
+                stock_name=f"테스트{idx}",
+                stock_code=f"{idx:06d}",
+                ws_data=ws_data,
+                recent_ticks=ticks,
+                recent_candles=candles,
+                price_ctx=price_ctx,
+            )
+        )
+        holding_flow = json.loads(
+            engine._build_scalping_holding_flow_v2_context(
+                f"테스트{idx}",
+                f"{idx:06d}",
+                ws_data,
+                ticks,
+                candles,
+                {
+                    "exit_rule": "soft_stop",
+                    "sell_reason_type": "PROFIT",
+                    "buy_price": price_ctx["resolved_order_price"],
+                    "curr_price": ws_data["curr"],
+                    "profit_rate": ((idx % 11) - 5) / 10,
+                    "peak_profit": 1.2 + (idx % 5) / 10,
+                    "drawdown": 0.3 + (idx % 3) / 10,
+                    "held_sec": 30 + idx,
+                    "current_ai_score": 55 + (idx % 40),
+                    "worsen_pct": 0.8,
+                    "orderbook_micro": price_ctx["orderbook_micro"],
+                },
+                flow_history=[
+                    {
+                        "time": "10:00:00",
+                        "action": "HOLD",
+                        "flow_state": "absorption",
+                        "profit_rate": "+0.10",
+                        "exit_rule": "soft_stop",
+                        "reason": "prior absorption",
+                    }
+                ],
+                decision_kind="intraday_exit",
+                matrix_runtime={"prompt_context": "matrix_context"},
+                lifecycle_ai_runtime={"prompt_context": "lifecycle_context"},
+            )
+        )
+
+        assert entry_screen["input_schema"] == "entry_screen_v2"
+        assert entry_screen["features"]["packet_version"]
+        assert len(entry_screen["recent_ticks_latest_first"]) <= 5
+        assert len(entry_screen["recent_candles_latest_window"]) <= 5
+        assert "tick_summary" in entry_screen
+        assert "candle_summary" in entry_screen
+        assert "recent_ticks" not in entry_screen
+        assert "recent_candles" not in entry_screen
+
+        assert entry_price["input_schema"] == "entry_price_v2"
+        assert entry_price["price_context"]["resolved_order_price"] == price_ctx["resolved_order_price"]
+        assert entry_price["candidate_prices"]["defensive_order_price"] == price_ctx["defensive_order_price"]
+        assert "quote_change" in entry_price
+        assert "fill_probability_hints" in entry_price
+        assert len(entry_price["recent_ticks_latest_first"]) <= 5
+        assert len(entry_price["recent_candles_latest_window"]) <= 5
+        assert "recent_ticks" not in entry_price
+        assert "recent_candles" not in entry_price
+        assert "unused_snapshot" not in json.dumps(entry_price)
+        assert "unused_tick_blob" not in json.dumps(entry_price)
+        assert "unused_candle_blob" not in json.dumps(entry_price)
+
+        assert holding_flow["input_schema"] == "holding_flow_v2"
+        assert holding_flow["position"]["current_price"] == ws_data["curr"]
+        assert holding_flow["deterministic_guard_state"]["system_guards_remain_authoritative"] is True
+        assert holding_flow["runtime_advisory_context"]["holding_exit_matrix"] == "matrix_context"
+        assert holding_flow["runtime_advisory_context"]["lifecycle_ai"] == "lifecycle_context"
+        assert len(holding_flow["recent_ticks_latest_first"]) <= 5
+        assert len(holding_flow["recent_candles_latest_window"]) <= 5
+
+    captured = []
+
+    def _fake_call(prompt, user_input, **kwargs):
+        captured.append({"prompt": prompt, "user_input": user_input, "kwargs": kwargs})
+        if kwargs["schema_name"] == "entry_price_v1":
+            return {
+                "action": "USE_DEFENSIVE",
+                "order_price": samples[0][3]["resolved_order_price"],
+                "confidence": 90,
+                "reason": "defensive price is suitable",
+                "max_wait_sec": 30,
+            }
+        if kwargs["schema_name"] == "holding_exit_flow_v1":
+            return {
+                "action": "HOLD",
+                "score": 80,
+                "flow_state": "absorption",
+                "thesis": "absorption remains valid",
+                "evidence": ["buy pressure stable"],
+                "reason": "flow remains supportive",
+                "next_review_sec": 45,
+            }
+        return {"action": "WAIT", "score": 65, "reason": "mixed entry features"}
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
+    ws_data, ticks, candles, price_ctx = samples[0]
+    entry_result = engine.analyze_target("테스트0", ws_data, ticks, candles, prompt_profile="watching")
+    entry_price_result = engine.evaluate_scalping_entry_price("테스트0", "000000", ws_data, ticks, candles, price_ctx)
+    holding_result = engine.evaluate_scalping_holding_flow(
+        "테스트0",
+        "000000",
+        ws_data,
+        ticks,
+        candles,
+        {"profit_rate": 0.2, "peak_profit": 0.5, "held_sec": 60, "current_ai_score": 70},
+    )
+
+    assert [item["kwargs"]["endpoint_name"] for item in captured] == [
+        "analyze_target",
+        "entry_price",
+        "holding_flow",
+    ]
+    assert [item["kwargs"]["schema_name"] for item in captured] == [
+        "entry_v1",
+        "entry_price_v1",
+        "holding_exit_flow_v1",
+    ]
+    assert captured[0]["kwargs"]["model_override"] == engine.model_tier1_fast
+    assert captured[1]["kwargs"]["model_override"] == engine.model_tier2_balanced
+    assert captured[2]["kwargs"]["model_override"] == engine.model_tier2_balanced
+    assert json.loads(captured[0]["user_input"])["input_schema"] == "entry_screen_v2"
+    assert json.loads(captured[1]["user_input"])["input_schema"] == "entry_price_v2"
+    assert json.loads(captured[2]["user_input"])["input_schema"] == "holding_flow_v2"
+    assert entry_result["ai_input_schema"] == "entry_screen_v2"
+    assert entry_result["ai_input_contract_mode"] == "structured_json"
+    assert entry_price_result["ai_input_schema"] == "entry_price_v2"
+    assert entry_price_result["ai_input_contract_mode"] == "structured_json"
+    assert holding_result["ai_input_schema"] == "holding_flow_v2"
+    assert holding_result["ai_input_contract_mode"] == "structured_json"
+
+
+def test_analyze_target_v2_input_fallback_uses_legacy_context_contract(monkeypatch):
+    engine = _build_engine()
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(openai_module.TRADING_RULES, OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED=True),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_format_market_data",
+        lambda ws_data, recent_ticks, recent_candles, feature_packet=None: "legacy text payload",
+    )
+
+    captured = {}
+
+    def _fake_call(prompt, user_input, **kwargs):
+        captured["user_input"] = user_input
+        return {"action": "WAIT", "score": 60, "reason": "mixed entry features"}
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
+    result = engine.analyze_target(
+        "테스트",
+        {"curr": 10000, "orderbook": {"asks": [{"price": 10010, "volume": 100}], "bids": [{"price": 10000, "volume": 100}]}},
+        [{"price": 10000, "volume": 10, "side": "BUY"}],
+        [{"close": 10000, "high": 10010, "low": 9990, "volume": 100}],
+        prompt_profile="watching",
+    )
+
+    payload = json.loads(captured["user_input"])
+    assert payload["input_schema"] == "entry_screen_v2"
+    assert payload["input_build_fallback"] == "legacy_text_payload"
+    assert payload["legacy_context"] == "legacy text payload"
+    assert "legacy_payload" not in payload
+    assert result["ai_input_schema"] == "entry_screen_v2"
+    assert result["ai_input_contract_mode"] == "structured_json"
+    assert result["ai_input_build_fallback"] == "legacy_text_payload"
+
+
+def test_analyze_target_swing_input_contract_stays_plain_text_when_v2_enabled(monkeypatch):
+    engine = _build_engine()
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(openai_module.TRADING_RULES, OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED=True),
+    )
+
+    captured = {}
+
+    def _fake_call(prompt, user_input, **kwargs):
+        captured["user_input"] = user_input
+        return {"action": "WAIT", "score": 62, "reason": "swing setup incomplete"}
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
+    result = engine.analyze_target(
+        "스윙",
+        {"curr": 10000, "fluctuation": 0.4, "v_pw": 110},
+        [],
+        [{"체결시간": "10:00:00", "현재가": 10000, "거래량": 1000}],
+        strategy="KOSPI_ML",
+    )
+
+    assert not captured["user_input"].lstrip().startswith("{")
+    assert result["ai_input_schema"] == "swing_market_text_v1"
+    assert result["ai_input_contract_mode"] == "plain_text"
+
+
+def test_hot_path_exception_results_keep_input_contract_metadata(monkeypatch):
+    engine = _build_engine()
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED=True,
+            OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED=True,
+            OPENAI_ENTRY_PRICE_V2_INPUT_ENABLED=True,
+            OPENAI_HOLDING_FLOW_V2_INPUT_ENABLED=True,
+        ),
+    )
+    ws_data, ticks, candles, price_ctx = _entry_price_compaction_sample(0)
+
+    def _raise_call(*args, **kwargs):
+        raise RuntimeError("transport failed")
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _raise_call)
+
+    entry_result = engine.analyze_target("테스트", ws_data, ticks, candles, prompt_profile="watching")
+    entry_price_result = engine.evaluate_scalping_entry_price(
+        "테스트",
+        "000000",
+        ws_data,
+        ticks,
+        candles,
+        price_ctx,
+    )
+    holding_result = engine.evaluate_scalping_holding_flow(
+        "테스트",
+        "000000",
+        ws_data,
+        ticks,
+        candles,
+        {"profit_rate": 0.2, "peak_profit": 0.5, "held_sec": 60, "current_ai_score": 70},
+    )
+
+    assert entry_result["ai_parse_fail"] is True
+    assert entry_result["ai_input_schema"] == "entry_screen_v2"
+    assert entry_result["ai_input_contract_mode"] == "structured_json"
+    assert entry_price_result["ai_parse_fail"] is True
+    assert entry_price_result["ai_input_schema"] == "entry_price_v2"
+    assert entry_price_result["ai_input_contract_mode"] == "structured_json"
+    assert holding_result["ai_parse_fail"] is True
+    assert holding_result["ai_input_schema"] == "holding_flow_v2"
+    assert holding_result["ai_input_contract_mode"] == "structured_json"
 
 
 def test_openai_deterministic_config_is_limited_to_json_path(monkeypatch):

@@ -793,6 +793,15 @@ def test_internal_json_classifier_prompts_use_english_instruction_text():
     assert "absorption, recovery, distribution, breakdown, quiet" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
 
 
+def test_stage_prompts_keep_decision_scope_separated():
+    assert "Do not decide order price, quantity, holding, or exit." in SCALPING_SYSTEM_PROMPT
+    assert "Do not decide order price, quantity, holding, or exit." in SCALPING_WATCHING_SYSTEM_PROMPT
+    assert "Do not re-decide BUY vs WAIT." in SCALPING_ENTRY_PRICE_PROMPT
+    assert "Do not change entry, order price, provider route, quantity, or hard guard policy." in (
+        SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
+    )
+
+
 def test_swing_tier2_analyze_target_input_labels_are_english_ascii():
     engine = _build_engine()
     candles = [
