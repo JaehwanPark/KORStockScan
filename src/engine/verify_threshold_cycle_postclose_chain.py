@@ -488,6 +488,16 @@ def _lifecycle_bucket_discovery_handoff_status(
     source_contract_status = str(discovery_summary.get("source_contract_status") or "")
     ai_review_status = str(discovery_summary.get("ai_two_pass_review_status") or "")
     candidates = discovery.get("surfaced_candidates") if isinstance(discovery.get("surfaced_candidates"), list) else []
+    source_dimension_summary = (
+        discovery.get("source_dimension_gap_summary")
+        if isinstance(discovery.get("source_dimension_gap_summary"), dict)
+        else {}
+    )
+    quiet_gap_summary = (
+        discovery.get("quiet_gap_summary")
+        if isinstance(discovery.get("quiet_gap_summary"), dict)
+        else {}
+    )
     bridge_summary = bridge_report.get("summary") if isinstance(bridge_report.get("summary"), dict) else {}
     greenfield_policy_emit_state = str(bridge_summary.get("greenfield_policy_emit_state") or "").strip()
     expected_ids = sorted(
@@ -521,6 +531,23 @@ def _lifecycle_bucket_discovery_handoff_status(
     }
     expected_workorder_prefix = "order_lifecycle_bucket_discovery_"
 
+    def required_quiet_gap_order_ids(summary: dict[str, Any]) -> set[str]:
+        type_counts = summary.get("quiet_gap_type_counts") if isinstance(summary.get("quiet_gap_type_counts"), dict) else {}
+        required: set[str] = set()
+        if _safe_int(type_counts.get("parent_conflict_child")) + _safe_int(type_counts.get("exclusion_dimension_candidate")) > 0:
+            required.add("order_lifecycle_quiet_gap_parent_conflict_rollup")
+        if (
+            _safe_int(type_counts.get("positive_source_only_keep_collecting"))
+            + _safe_int(type_counts.get("absorbed_into_parent_policy"))
+            > 0
+        ):
+            required.add("order_lifecycle_quiet_gap_positive_source_only_rollup")
+        if _safe_int(type_counts.get("ai_review_parsed_low_coverage")) > 0:
+            required.add("order_lifecycle_quiet_gap_ai_review_coverage_rollup")
+        if not required and _safe_int(summary.get("quiet_gap_count")) > 0:
+            required.add("order_lifecycle_quiet_gap_rollup")
+        return required
+
     def source_only_excluded(item: dict[str, Any]) -> bool:
         if item.get("explicit_runtime_exclusion") is True or item.get("source_only_explicit_exclusion") is True:
             return True
@@ -545,6 +572,24 @@ def _lifecycle_bucket_discovery_handoff_status(
         and str(item.get("classification_state") or "") in {"new_bucket_candidate", "runtime_blocked_contract_gap", "code_patch_required", "code_review_failed"}
         and not source_only_excluded(item)
     ]
+    actionable_source_dimension_gap_ids = [
+        str(item.get("bucket_id"))
+        for item in candidates
+        if isinstance(item, dict)
+        and str(item.get("source_dimension_gap") or "") == "unknown_source_dimensions"
+        and str(item.get("recommended_resolution") or "") in {"emit_or_backfill_source_field", "resolve_unknown_source_dimensions"}
+        and item.get("bucket_id")
+    ]
+    if not actionable_source_dimension_gap_ids and int(source_dimension_summary.get("actionable_unknown_gap_count") or 0) > 0:
+        actionable_source_dimension_gap_ids = ["source_dimension_gap_summary"]
+    blocking_source_dimension_gap_ids = [
+        str(item.get("bucket_id"))
+        for item in candidates
+        if isinstance(item, dict)
+        and str(item.get("bucket_id") or "") in actionable_source_dimension_gap_ids
+        and str(item.get("classification_state") or "")
+        in {"live_auto_apply_ready", "sim_auto_approved", "entry_only_sim_auto_approved", "lifecycle_flow_sim_probe_candidate"}
+    ]
     ai_followup_ids = sorted(
         str(item.get("bucket_id"))
         for item in candidates
@@ -553,6 +598,25 @@ def _lifecycle_bucket_discovery_handoff_status(
     missing_bridge_families = sorted(set(live_families) - bridge_families)
     missing_runtime_summary_ids = sorted(set(expected_ids) - runtime_ids) if runtime_ids else expected_ids
     has_discovery_workorder = any(order_id.startswith(expected_workorder_prefix) for order_id in order_ids)
+    has_source_dimension_gap_workorder = any(
+        str(item.get("order_id") or "").startswith("order_lifecycle_source_dimension_gap_")
+        and str(item.get("order_id") or "") != "order_lifecycle_source_dimension_gap_rollup"
+        for item in (workorder.get("orders") if isinstance(workorder.get("orders"), list) else [])
+        if isinstance(item, dict)
+    )
+    required_quiet_order_ids = required_quiet_gap_order_ids(quiet_gap_summary)
+    missing_quiet_order_ids = sorted(
+        order_id
+        for order_id in required_quiet_order_ids
+        if (
+            order_id not in order_ids
+            if order_id != "order_lifecycle_quiet_gap_rollup"
+            else not any(existing.startswith("order_lifecycle_quiet_gap_") for existing in order_ids)
+        )
+    )
+    has_quiet_gap_rollup_workorder = not missing_quiet_order_ids if required_quiet_order_ids else False
+    quiet_gap_count = int(quiet_gap_summary.get("quiet_gap_count") or 0)
+    sim_live_connected_quiet_gap_count = int(quiet_gap_summary.get("sim_live_connected_quiet_gap_count") or 0)
     missing: list[str] = []
     warnings: list[str] = []
     if missing_bridge_families:
@@ -561,6 +625,16 @@ def _lifecycle_bucket_discovery_handoff_status(
         missing.append("runtime_approval_summary_lifecycle_bucket_discovery_missing")
     if workorder_needed and not has_discovery_workorder:
         missing.append("code_improvement_workorder_lifecycle_bucket_discovery_orders_missing")
+    if actionable_source_dimension_gap_ids and not has_source_dimension_gap_workorder:
+        if blocking_source_dimension_gap_ids:
+            missing.append("lifecycle_source_dimension_gap_handoff_missing")
+        else:
+            warnings.append("lifecycle_source_dimension_gap_handoff_missing")
+    if quiet_gap_count > 0 and missing_quiet_order_ids:
+        if sim_live_connected_quiet_gap_count > 0:
+            missing.append("lifecycle_quiet_gap_handoff_missing")
+        else:
+            warnings.append("lifecycle_quiet_gap_handoff_missing")
     if source_contract_status == "fail":
         missing.append("lifecycle_bucket_discovery_source_contract_fail")
     elif source_contract_status and source_contract_status != "pass":
@@ -573,8 +647,13 @@ def _lifecycle_bucket_discovery_handoff_status(
         if item.startswith("ai_") or item.startswith("source_contract_")
     )
     warnings = list(dict.fromkeys(warnings))
+    status_warning_reasons = {
+        "lifecycle_source_dimension_gap_handoff_missing",
+        "lifecycle_quiet_gap_handoff_missing",
+    }
+    handoff_warning = any(item in status_warning_reasons for item in warnings)
     return {
-        "status": "fail" if missing else ("missing" if not discovery else "pass"),
+        "status": "fail" if missing else ("missing" if not discovery else "warning" if handoff_warning else "pass"),
         "source_contract_status": source_contract_status or None,
         "ai_two_pass_review_status": ai_review_status or None,
         "expected_candidate_ids": expected_ids,
@@ -585,8 +664,17 @@ def _lifecycle_bucket_discovery_handoff_status(
         "missing_bridge_families": missing_bridge_families,
         "missing_runtime_summary_candidate_ids": missing_runtime_summary_ids,
         "workorder_needed_bucket_ids": workorder_needed,
+        "actionable_source_dimension_gap_bucket_ids": sorted(actionable_source_dimension_gap_ids),
+        "actionable_source_dimension_gap_count": int(source_dimension_summary.get("actionable_unknown_gap_count") or len(actionable_source_dimension_gap_ids)),
+        "blocking_source_dimension_gap_bucket_ids": sorted(blocking_source_dimension_gap_ids),
+        "quiet_gap_count": quiet_gap_count,
+        "sim_live_connected_quiet_gap_count": sim_live_connected_quiet_gap_count,
+        "expected_quiet_gap_workorder_order_ids": sorted(required_quiet_order_ids),
+        "missing_quiet_gap_workorder_order_ids": missing_quiet_order_ids,
+        "has_quiet_gap_rollup_workorder": has_quiet_gap_rollup_workorder,
         "ai_post_apply_followup_bucket_ids": ai_followup_ids,
         "has_discovery_workorder": has_discovery_workorder,
+        "has_source_dimension_gap_workorder": has_source_dimension_gap_workorder,
         "missing": missing,
         "warnings": warnings,
         "interpretation": (
@@ -1961,6 +2049,10 @@ def build_threshold_cycle_postclose_verification(
     )
     if lifecycle_bucket_discovery_handoff.get("status") == "fail":
         log_issues.append("lifecycle_bucket_discovery_handoff_missing")
+    elif lifecycle_bucket_discovery_handoff.get("status") == "warning":
+        handoff_warnings.extend(
+            str(item) for item in (lifecycle_bucket_discovery_handoff.get("warnings") or []) if str(item)
+        )
     lifecycle_bucket_windows = _lifecycle_bucket_windows_status(
         paths=paths,
         done_line=done_line,

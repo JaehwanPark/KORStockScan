@@ -269,6 +269,144 @@ def test_lifecycle_bucket_discovery_source_only_new_bucket_is_not_active_workord
     assert mod._lifecycle_bucket_discovery_followup_orders(report) == []
 
 
+def test_lifecycle_bucket_discovery_source_dimension_gap_creates_actionable_workorder():
+    report = {
+        "surfaced_candidates": [
+            {
+                "bucket_id": "entry:combo_entry_spot:unknown",
+                "source_bucket_id": "entry:combo_entry_spot:unknown",
+                "stage": "entry",
+                "bucket_type": "combo_entry_spot",
+                "classification_state": "source_only_keep_collecting",
+                "source_dimension_gap": "unknown_source_dimensions",
+                "recommended_resolution": "resolve_unknown_source_dimensions",
+                "missing_dimension_keys": ["liquidity_bucket"],
+                "unknown_reason_counts": {"missing_source_field": 1},
+            }
+        ],
+    }
+
+    orders = mod._lifecycle_bucket_discovery_followup_orders(report)
+
+    assert len(orders) == 1
+    assert orders[0]["order_id"].startswith("order_lifecycle_source_dimension_gap_entry_combo_entry_spot_")
+    assert orders[0]["improvement_type"] == "source_dimension_gap_resolution"
+    assert orders[0]["priority"] == 1
+    assert "source_dimension_gap=unknown_source_dimensions" in orders[0]["evidence"]
+
+
+def test_lifecycle_bucket_discovery_source_dimension_gap_summary_creates_workorder_when_candidate_truncated():
+    report = {
+        "surfaced_candidates": [],
+        "source_dimension_gap_summary": {
+            "actionable_unknown_gap_count": 1,
+            "source_dimension_gap_counts": {"unknown_source_dimensions": 1},
+            "actionable_candidates": [
+                {
+                    "bucket_id": "entry:combo_entry_spot:summary-only",
+                    "source_bucket_id": "entry:combo_entry_spot:summary-only",
+                    "stage": "entry",
+                    "bucket_type": "combo_entry_spot",
+                    "classification_state": "source_only_keep_collecting",
+                    "source_dimension_gap": "unknown_source_dimensions",
+                    "recommended_resolution": "resolve_unknown_source_dimensions",
+                    "missing_dimension_keys": ["liquidity_bucket"],
+                }
+            ],
+        },
+    }
+
+    orders = mod._lifecycle_bucket_discovery_followup_orders(report)
+
+    assert len(orders) == 1
+    assert orders[0]["source_bucket_id"] == "entry:combo_entry_spot:summary-only"
+    assert orders[0]["improvement_type"] == "source_dimension_gap_resolution"
+
+
+def test_lifecycle_bucket_discovery_rollup_gap_is_not_implement_now():
+    order = {
+        "order_id": "order_lifecycle_source_dimension_gap_rollup",
+        "source_report_type": "lifecycle_bucket_discovery_source_dimension_rollup",
+        "route": "source_dimension_rollup",
+        "runtime_effect": False,
+    }
+
+    classified = mod._classify_order(
+        order,
+        finding_by_order_id={},
+        finding_by_title_slug={},
+        auto_family_order_ids=set(),
+        closed_instrumentation_order_families={},
+    )
+
+    assert classified.decision == "attach_existing_family"
+    assert classified.route == "source_dimension_rollup"
+
+
+def test_lifecycle_bucket_discovery_quiet_gap_rollup_orders_are_attach_existing_family():
+    report = {
+        "quiet_gap_summary": {
+            "quiet_gap_count": 3,
+            "rollup_required_count": 3,
+            "sim_live_connected_quiet_gap_count": 0,
+            "quiet_gap_type_counts": {
+                "parent_conflict_child": 1,
+                "exclusion_dimension_candidate": 1,
+                "positive_source_only_keep_collecting": 1,
+                "ai_review_parsed_low_coverage": 1,
+            },
+            "ai_review_coverage": {"status": "parsed", "shard_count": 5, "parsed_shard_count": 2},
+        },
+        "surfaced_candidates": [],
+    }
+
+    orders = mod._lifecycle_bucket_discovery_followup_orders(report)
+    quiet_orders = [item for item in orders if item["source_report_type"] == "lifecycle_bucket_discovery_quiet_gap_rollup"]
+
+    assert {item["order_id"] for item in quiet_orders} == {
+        "order_lifecycle_quiet_gap_parent_conflict_rollup",
+        "order_lifecycle_quiet_gap_positive_source_only_rollup",
+        "order_lifecycle_quiet_gap_ai_review_coverage_rollup",
+    }
+    classified = mod._classify_order(
+        quiet_orders[0],
+        finding_by_order_id={},
+        finding_by_title_slug={},
+        auto_family_order_ids=set(),
+        closed_instrumentation_order_families={},
+    )
+    assert classified.decision == "attach_existing_family"
+    assert classified.route in {"parent_conflict_exclusion_review", "positive_source_only_review", "ai_review_coverage_review"}
+
+
+def test_observation_source_quality_unknown_warning_creates_rollup_order():
+    report = {
+        "status": "warning",
+        "summary": {"event_count": 10, "warning_stage_count": 1, "high_volume_no_source_field_stage_count": 0},
+        "stage_contracts": {
+            "unlisted_warning_stage": {
+                "status": "warning",
+                "sample_count": 10,
+                "missing_violations": {"metric_role": 10},
+            }
+        },
+    }
+
+    orders = mod._observation_source_quality_followup_orders(report)
+
+    assert len(orders) == 1
+    assert orders[0]["order_id"] == "order_observation_source_quality_warning_rollup"
+    assert orders[0]["improvement_type"] == "observation_source_quality_warning_rollup"
+    classified = mod._classify_order(
+        orders[0],
+        finding_by_order_id={},
+        finding_by_title_slug={},
+        auto_family_order_ids=set(),
+        closed_instrumentation_order_families={},
+    )
+    assert classified.decision == "attach_existing_family"
+
+
 def test_build_code_improvement_workorder_consumes_pattern_lab_currentness_audit(tmp_path, monkeypatch):
     automation_dir = tmp_path / "automation"
     currentness_dir = tmp_path / "currentness"

@@ -58,6 +58,7 @@ AI_REVIEW_SOURCE_ONLY_MODEL = "gpt-5.4"
 AI_REVIEW_SOURCE_ONLY_REASONING_EFFORT = "low"
 LIVE_AUTO_STATES = {"live_auto_apply_ready"}
 LIFECYCLE_FLOW_SIM_PROBE_STATE = "lifecycle_flow_sim_probe_candidate"
+SOURCE_DIMENSION_ACTIONABLE_RESOLUTIONS = {"emit_or_backfill_source_field", "resolve_unknown_source_dimensions"}
 SIM_APPROVAL_STATES = {
     "sim_auto_approved",
     "entry_only_sim_auto_approved",
@@ -838,6 +839,214 @@ def _normalize_candidate_runtime_metadata(item: dict[str, Any]) -> None:
         ]
         if runtime_apply_allowed
         else [],
+    }
+
+
+def _has_source_dimension_gap(item: dict[str, Any]) -> bool:
+    return bool(
+        item.get("source_dimension_gap")
+        or item.get("unknown_dimension_counts")
+        or item.get("missing_lifecycle_flow_stage_keys")
+        or "unknown" in str(item.get("bucket_key") or "")
+    )
+
+
+def _source_dimension_gap_summary(candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    gap_counts: Counter[str] = Counter()
+    stage_counts: Counter[str] = Counter()
+    bucket_type_counts: Counter[str] = Counter()
+    state_counts: Counter[str] = Counter()
+    resolution_counts: Counter[str] = Counter()
+    missing_dimension_counts: Counter[str] = Counter()
+    unknown_reason_counts: Counter[str] = Counter()
+    actionable: list[dict[str, Any]] = []
+    rollup: list[dict[str, Any]] = []
+    lifecycle_flow_incomplete = 0
+
+    for item in candidates:
+        if not isinstance(item, dict) or not _has_source_dimension_gap(item):
+            continue
+        gap = str(item.get("source_dimension_gap") or "unknown_source_dimensions")
+        stage = str(item.get("stage") or "unknown")
+        bucket_type = str(item.get("bucket_type") or "unknown")
+        state = str(item.get("classification_state") or "unknown")
+        resolution = str(item.get("recommended_resolution") or "none")
+        gap_counts[gap] += 1
+        stage_counts[stage] += 1
+        bucket_type_counts[bucket_type] += 1
+        state_counts[state] += 1
+        resolution_counts[resolution] += 1
+        if gap == "lifecycle_flow_incomplete_stage_contract":
+            lifecycle_flow_incomplete += 1
+        for key in item.get("missing_dimension_keys") or []:
+            missing_dimension_counts[str(key)] += 1
+        for key in item.get("missing_lifecycle_flow_stage_keys") or []:
+            missing_dimension_counts[str(key)] += 1
+        reason_counts = item.get("unknown_reason_counts") if isinstance(item.get("unknown_reason_counts"), dict) else {}
+        for key, value in reason_counts.items():
+            unknown_reason_counts[str(key)] += _safe_int(value)
+        compact = {
+            "bucket_id": item.get("bucket_id"),
+            "source_bucket_id": item.get("source_bucket_id"),
+            "stage": stage,
+            "bucket_type": bucket_type,
+            "classification_state": state,
+            "source_dimension_gap": gap,
+            "recommended_resolution": resolution,
+            "missing_dimension_keys": item.get("missing_dimension_keys") or [],
+            "missing_lifecycle_flow_stage_keys": item.get("missing_lifecycle_flow_stage_keys") or [],
+            "unknown_reason_counts": reason_counts,
+        }
+        if gap == "unknown_source_dimensions" and resolution in SOURCE_DIMENSION_ACTIONABLE_RESOLUTIONS:
+            actionable.append(compact)
+        else:
+            rollup.append(compact)
+
+    return {
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "decision_authority": "source_quality_gap_discovery",
+        "gap_count": sum(gap_counts.values()),
+        "actionable_unknown_gap_count": len(actionable),
+        "rollup_only_gap_count": len(rollup),
+        "lifecycle_flow_incomplete_stage_contract_count": lifecycle_flow_incomplete,
+        "source_dimension_gap_counts": dict(gap_counts),
+        "stage_counts": dict(stage_counts),
+        "bucket_type_counts": dict(bucket_type_counts),
+        "classification_state_counts": dict(state_counts),
+        "recommended_resolution_counts": dict(resolution_counts),
+        "missing_dimension_key_counts": dict(missing_dimension_counts),
+        "unknown_reason_counts": dict(unknown_reason_counts),
+        "actionable_candidates": actionable[:50],
+        "rollup_candidates": rollup[:50],
+    }
+
+
+QUIET_GAP_SIM_LIVE_STATES = {
+    "live_auto_apply_ready",
+    "sim_auto_approved",
+    "entry_only_sim_auto_approved",
+    LIFECYCLE_FLOW_SIM_PROBE_STATE,
+}
+
+
+def _is_positive_source_only_candidate(item: dict[str, Any]) -> bool:
+    state = str(item.get("classification_state") or "")
+    if state != "source_only_keep_collecting":
+        return False
+    if item.get("explicit_runtime_exclusion") is True or item.get("source_only_explicit_exclusion") is True:
+        return False
+    if str(item.get("recommended_resolution") or "") in {"mark_not_applicable_explicitly", "reject_not_applicable"}:
+        return False
+    if str(item.get("source_quality_status") or item.get("source_quality_gate") or "").lower() in {
+        "fail",
+        "blocked",
+        "source_quality_blocker",
+    }:
+        return False
+    ev = _safe_float(item.get("source_quality_adjusted_ev_pct"), None)
+    if ev is not None and ev > 0:
+        return True
+    decision = str(
+        (
+            item.get("ai_tier2_comparative_review")
+            if isinstance(item.get("ai_tier2_comparative_review"), dict)
+            else {}
+        ).get("selected_decision")
+        or item.get("ai_tier2_taxonomy_decision")
+        or ""
+    )
+    return decision in {"keep_bucket", "absorb_as_dimension", "hybrid"}
+
+
+def _quiet_gap_summary(report: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    type_counts: Counter[str] = Counter()
+    stage_counts: Counter[str] = Counter()
+    state_counts: Counter[str] = Counter()
+    resolution_counts: Counter[str] = Counter()
+    unique_candidates: dict[str, dict[str, Any]] = {}
+    sim_live_connected_ids: set[str] = set()
+
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        gap_types: list[str] = []
+        if item.get("child_conflict_warning") is True:
+            gap_types.append("parent_conflict_child")
+        if item.get("exclusion_dimension_candidate") is True:
+            gap_types.append("exclusion_dimension_candidate")
+        if _is_positive_source_only_candidate(item):
+            gap_types.append("positive_source_only_keep_collecting")
+        if str(item.get("recommended_resolution") or "") == "absorbed_into_parent_policy":
+            gap_types.append("absorbed_into_parent_policy")
+        if not gap_types:
+            continue
+        bucket_id = str(item.get("source_bucket_id") or item.get("bucket_id") or item.get("bucket_key") or "unknown")
+        stage = str(item.get("stage") or "unknown")
+        state = str(item.get("classification_state") or "unknown")
+        for gap_type in gap_types:
+            type_counts[gap_type] += 1
+        stage_counts[stage] += 1
+        state_counts[state] += 1
+        resolution_counts[str(item.get("recommended_resolution") or "none")] += 1
+        if state in QUIET_GAP_SIM_LIVE_STATES:
+            sim_live_connected_ids.add(bucket_id)
+        current = unique_candidates.setdefault(
+            bucket_id,
+            {
+                "bucket_id": item.get("bucket_id"),
+                "source_bucket_id": item.get("source_bucket_id"),
+                "stage": stage,
+                "bucket_type": item.get("bucket_type"),
+                "classification_state": state,
+                "quiet_gap_types": [],
+                "recommended_resolution": item.get("recommended_resolution") or "",
+                "source_quality_adjusted_ev_pct": item.get("source_quality_adjusted_ev_pct"),
+                "parent_bucket_id": item.get("canonical_parent_bucket") or item.get("policy_bucket_id"),
+                "policy_bucket_id": item.get("policy_bucket_id"),
+                "child_conflict_warning": bool(item.get("child_conflict_warning")),
+                "exclusion_dimension_candidate": bool(item.get("exclusion_dimension_candidate")),
+            },
+        )
+        for gap_type in gap_types:
+            if gap_type not in current["quiet_gap_types"]:
+                current["quiet_gap_types"].append(gap_type)
+
+    ai_review = report.get("ai_two_pass_review") if isinstance(report.get("ai_two_pass_review"), dict) else {}
+    ai_status = str(ai_review.get("status") or "")
+    shard_count = _safe_int(ai_review.get("shard_count"))
+    parsed_shard_count = _safe_int(ai_review.get("parsed_shard_count"))
+    reviewed_candidate_count = _safe_int(ai_review.get("reviewed_candidate_count"))
+    ai_review_low_coverage = ai_status == "parsed" and shard_count > 0 and parsed_shard_count < shard_count
+    if ai_review_low_coverage:
+        type_counts["ai_review_parsed_low_coverage"] += 1
+
+    quiet_gap_count = len(unique_candidates) + (1 if ai_review_low_coverage else 0)
+    return {
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "decision_authority": "source_quality_gap_discovery",
+        "quiet_gap_count": quiet_gap_count,
+        "rollup_required_count": quiet_gap_count,
+        "sim_live_connected_quiet_gap_count": len(sim_live_connected_ids),
+        "parent_conflict_child_count": type_counts.get("parent_conflict_child", 0),
+        "exclusion_dimension_candidate_count": type_counts.get("exclusion_dimension_candidate", 0),
+        "positive_source_only_keep_collecting_count": type_counts.get("positive_source_only_keep_collecting", 0),
+        "absorbed_into_parent_policy_count": type_counts.get("absorbed_into_parent_policy", 0),
+        "ai_review_parsed_low_coverage_count": type_counts.get("ai_review_parsed_low_coverage", 0),
+        "quiet_gap_type_counts": dict(type_counts),
+        "stage_counts": dict(stage_counts),
+        "classification_state_counts": dict(state_counts),
+        "recommended_resolution_counts": dict(resolution_counts),
+        "ai_review_coverage": {
+            "status": ai_status or None,
+            "shard_count": shard_count,
+            "parsed_shard_count": parsed_shard_count,
+            "reviewed_candidate_count": reviewed_candidate_count,
+            "low_coverage": ai_review_low_coverage,
+        },
+        "sim_live_connected_candidate_ids": sorted(sim_live_connected_ids)[:50],
+        "items": list(unique_candidates.values())[:100],
     }
 
 
@@ -3006,6 +3215,8 @@ def _finalize_report(
         )
     ]
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    source_dimension_summary = _source_dimension_gap_summary(candidates)
+    quiet_gap_summary = _quiet_gap_summary(report, candidates)
     summary.update(
         {
             "candidate_count": len(candidates),
@@ -3023,6 +3234,16 @@ def _finalize_report(
             "stage_counts": dict(stage_counts),
             "source_bucket_kind_counts": dict(source_bucket_kind_counts),
             "unknown_reason_counts": dict(unknown_reason_counts),
+            "source_dimension_gap_count": source_dimension_summary["gap_count"],
+            "actionable_unknown_gap_count": source_dimension_summary["actionable_unknown_gap_count"],
+            "rollup_only_source_dimension_gap_count": source_dimension_summary["rollup_only_gap_count"],
+            "lifecycle_flow_incomplete_stage_contract_count": source_dimension_summary[
+                "lifecycle_flow_incomplete_stage_contract_count"
+            ],
+            "quiet_gap_count": quiet_gap_summary["quiet_gap_count"],
+            "quiet_gap_rollup_required_count": quiet_gap_summary["rollup_required_count"],
+            "quiet_gap_sim_live_connected_count": quiet_gap_summary["sim_live_connected_quiet_gap_count"],
+            "quiet_gap_type_counts": quiet_gap_summary["quiet_gap_type_counts"],
             "canonical_bucket_count": canonical_bucket_count,
             "legacy_bucket_count": legacy_bucket_count,
             "absorbed_bucket_count": selected_decision_counts.get("absorb_as_dimension", 0),
@@ -3046,6 +3267,8 @@ def _finalize_report(
         }
     )
     report["summary"] = summary
+    report["source_dimension_gap_summary"] = source_dimension_summary
+    report["quiet_gap_summary"] = quiet_gap_summary
     report["candidates"] = candidates[:500]
     report["surfaced_candidates"] = surfaced[:200]
     report["live_auto_apply_candidates"] = [
@@ -3188,6 +3411,8 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- lifecycle_flow_absorbed_children: child=`{summary.get('absorbed_child_count')}` sample=`{summary.get('absorbed_sample_count')}` conflict_parents=`{summary.get('child_conflict_warning_count')}`",
         f"- sim_auto_approved_count: `{summary.get('sim_auto_approved_count')}`",
         f"- lifecycle_flow_sim_probe_candidate_count: `{summary.get('lifecycle_flow_sim_probe_candidate_count')}`",
+        f"- source_dimension_gap_count: `{summary.get('source_dimension_gap_count')}` / actionable_unknown_gap_count: `{summary.get('actionable_unknown_gap_count')}`",
+        f"- quiet_gap_count: `{summary.get('quiet_gap_count')}` / sim_live_connected: `{summary.get('quiet_gap_sim_live_connected_count')}`",
         f"- live_auto_apply_ready_count: `{summary.get('live_auto_apply_ready_count')}`",
         f"- human_intervention_required: `{summary.get('human_intervention_required')}`",
         f"- warnings: `{summary.get('warnings') or []}`",

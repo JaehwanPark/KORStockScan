@@ -19,7 +19,13 @@ def test_lifecycle_bucket_rows_explain_unknown_source_field_causes():
 
     assert entry["unknown_reason_counts"]["missing_source_field"] == 1
     assert entry["source_field_coverage"]["liquidity_bucket"]["source_fields"] == [
-        "runtime_features.liquidity_bucket"
+        "runtime_features.liquidity_bucket",
+        "runtime_features.liquidity_guard_action",
+        "runtime_features.liquidity_guard_reason",
+        "runtime_features.sim_pre_submit_liquidity_guard_action",
+        "runtime_features.sim_pre_submit_liquidity_reason",
+        "runtime_features.sim_liquidity_value",
+        "runtime_features.sim_min_liquidity",
     ]
     assert scale["unknown_reason_counts"]["missing_source_field"] == 1
     assert scale["recommended_resolution"] == "emit_or_backfill_source_field"
@@ -80,11 +86,98 @@ def test_lifecycle_holding_started_missing_profit_is_not_applicable_not_workorde
     assert features["holding_action"] == "holding_action_not_applicable_at_start"
     assert features["profit_band"] == "profit_not_applicable_at_start"
     assert features["held_bucket"] == "held_not_applicable_at_start"
-    assert "profit_unknown" not in mod._holding_combo_bucket_id(row)
+    assert "profit_profit_unk" not in mod._holding_combo_bucket_id(row)
     assert all(
         item["recommended_route"] != "source_quality_workorder"
         for item in attribution["code_improvement_workorders"]
     )
+
+
+def test_lifecycle_entry_bucket_uses_pre_submit_guard_fields_when_explicit_unknown():
+    row = {
+        "stage": "entry",
+        "source_stage": "scalp_entry_action_decision_snapshot",
+        "runtime_features": {
+            "ai_score": 67,
+            "chosen_action": "WAIT_REQUOTE",
+            "liquidity_bucket": "liquidity_unknown",
+            "sim_pre_submit_liquidity_guard_action": "WOULD_PASS",
+            "sim_pre_submit_liquidity_reason": "liquidity_ok",
+            "overbought_bucket": "overbought_unknown",
+            "sim_pre_submit_overbought_guard_action": "WOULD_PASS",
+            "sim_pre_submit_overbought_reason": "overbought_ok",
+        },
+        "labels": {"profit_rate": 0.4},
+        "stage_ev_composite_pct": 0.4,
+    }
+
+    features = mod._entry_bucket_features(row)
+
+    assert features["liquidity_bucket"] == "liquidity_ok"
+    assert features["overbought_bucket"] == "overbought_ok"
+
+
+def test_lifecycle_flow_entry_bucket_uses_submit_guard_dimensions_as_fallback():
+    rows = [
+        {
+            "candidate_id": "FLOW-1",
+            "stock_code": "000001",
+            "event_time": "2026-05-20T09:10:00+09:00",
+            "stage": "entry",
+            "source_stage": "entry",
+            "runtime_features": {
+                "ai_score": 67,
+                "chosen_action": "WAIT_REQUOTE",
+                "liquidity_bucket": "liquidity_unknown",
+                "overbought_bucket": "overbought_unknown",
+            },
+            "labels": {"profit_rate": 0.4},
+            "stage_ev_composite_pct": 0.4,
+        },
+        {
+            "candidate_id": "FLOW-1",
+            "stock_code": "000001",
+            "event_time": "2026-05-20T09:10:01+09:00",
+            "stage": "submit",
+            "source_stage": "scalp_sim_pre_submit_liquidity_guard_would_pass",
+            "runtime_features": {
+                "sim_pre_submit_liquidity_guard_action": "WOULD_PASS",
+                "sim_pre_submit_liquidity_reason": "liquidity_ok",
+                "sim_pre_submit_overbought_guard_action": "WOULD_PASS",
+                "sim_pre_submit_overbought_reason": "overbought_ok",
+            },
+            "labels": {"profit_rate": 0.4},
+            "stage_ev_composite_pct": 0.4,
+        },
+        {
+            "candidate_id": "FLOW-1",
+            "stock_code": "000001",
+            "event_time": "2026-05-20T09:10:02+09:00",
+            "stage": "holding",
+            "source_stage": "scalp_sim_holding_snapshot",
+            "runtime_features": {"chosen_action": "HOLD", "profit_rate_live": 0.4, "held_sec": 60},
+            "labels": {"profit_rate": 0.4},
+            "stage_ev_composite_pct": 0.4,
+        },
+        {
+            "candidate_id": "FLOW-1",
+            "stock_code": "000001",
+            "event_time": "2026-05-20T09:10:03+09:00",
+            "stage": "exit",
+            "source_stage": "scalp_sim_sell_order_assumed_filled",
+            "runtime_features": {"chosen_action": "SELL"},
+            "labels": {"profit_rate": 0.4, "exit_rule": "trailing_take_profit"},
+            "stage_ev_composite_pct": 0.4,
+        },
+    ]
+
+    attribution = mod._lifecycle_flow_bucket_attribution(rows)
+    flow = attribution["flows"][0]
+
+    assert "liquidity_liquidity_ok" in flow["entry_bucket_id"]
+    assert "overbought_overbo" in flow["entry_bucket_id"]
+    assert "liquidity_unknown" not in flow["entry_bucket_id"]
+    assert "overbought_unknown" not in flow["entry_bucket_id"]
 
 
 def test_lifecycle_partial_exit_marks_outcome_not_applicable():

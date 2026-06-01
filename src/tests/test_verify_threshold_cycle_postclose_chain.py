@@ -185,6 +185,135 @@ def test_lifecycle_bucket_discovery_handoff_detects_missing_downstream():
     assert "code_improvement_workorder_lifecycle_bucket_discovery_orders_missing" in report["missing"]
 
 
+def test_lifecycle_bucket_discovery_handoff_warns_when_source_dimension_gap_not_surfaced():
+    discovery = {
+        "surfaced_candidates": [
+            {
+                "bucket_id": "entry:combo:unknown",
+                "stage": "entry",
+                "classification_state": "source_only_keep_collecting",
+                "source_dimension_gap": "unknown_source_dimensions",
+                "recommended_resolution": "resolve_unknown_source_dimensions",
+            }
+        ]
+    }
+    runtime_summary = {"surfaced_candidate_ids": ["entry:combo:unknown"]}
+
+    report = mod._lifecycle_bucket_discovery_handoff_status(discovery, {}, runtime_summary, {"orders": []})
+
+    assert report["status"] == "warning"
+    assert "lifecycle_source_dimension_gap_handoff_missing" in report["warnings"]
+    assert report["actionable_source_dimension_gap_bucket_ids"] == ["entry:combo:unknown"]
+
+
+def test_lifecycle_bucket_discovery_handoff_warns_from_source_dimension_summary():
+    discovery = {
+        "source_dimension_gap_summary": {
+            "actionable_unknown_gap_count": 2,
+            "actionable_candidates": [],
+        },
+        "surfaced_candidates": [],
+    }
+
+    report = mod._lifecycle_bucket_discovery_handoff_status(discovery, {}, {}, {"orders": []})
+
+    assert report["status"] == "warning"
+    assert "lifecycle_source_dimension_gap_handoff_missing" in report["warnings"]
+    assert report["actionable_source_dimension_gap_bucket_ids"] == ["source_dimension_gap_summary"]
+    assert report["actionable_source_dimension_gap_count"] == 2
+
+
+def test_lifecycle_bucket_discovery_handoff_fails_when_sim_source_dimension_gap_not_surfaced():
+    discovery = {
+        "surfaced_candidates": [
+            {
+                "bucket_id": "lifecycle_flow:combo:unknown",
+                "stage": "lifecycle_flow",
+                "classification_state": "lifecycle_flow_sim_probe_candidate",
+                "source_dimension_gap": "unknown_source_dimensions",
+                "recommended_resolution": "resolve_unknown_source_dimensions",
+            }
+        ]
+    }
+    runtime_summary = {"surfaced_candidate_ids": ["lifecycle_flow:combo:unknown"]}
+
+    report = mod._lifecycle_bucket_discovery_handoff_status(discovery, {}, runtime_summary, {"orders": []})
+
+    assert report["status"] == "fail"
+    assert "lifecycle_source_dimension_gap_handoff_missing" in report["missing"]
+    assert report["blocking_source_dimension_gap_bucket_ids"] == ["lifecycle_flow:combo:unknown"]
+
+
+def test_lifecycle_bucket_discovery_handoff_warns_when_quiet_gap_rollup_missing():
+    discovery = {
+        "quiet_gap_summary": {
+            "quiet_gap_count": 2,
+            "rollup_required_count": 2,
+            "sim_live_connected_quiet_gap_count": 0,
+        },
+        "surfaced_candidates": [],
+    }
+
+    report = mod._lifecycle_bucket_discovery_handoff_status(discovery, {}, {}, {"orders": []})
+
+    assert report["status"] == "warning"
+    assert "lifecycle_quiet_gap_handoff_missing" in report["warnings"]
+    assert report["quiet_gap_count"] == 2
+    assert report["has_quiet_gap_rollup_workorder"] is False
+
+
+def test_lifecycle_bucket_discovery_handoff_fails_when_sim_quiet_gap_rollup_missing():
+    discovery = {
+        "quiet_gap_summary": {
+            "quiet_gap_count": 1,
+            "rollup_required_count": 1,
+            "sim_live_connected_quiet_gap_count": 1,
+            "sim_live_connected_candidate_ids": ["lifecycle_flow:sim-probe"],
+        },
+        "surfaced_candidates": [],
+    }
+
+    report = mod._lifecycle_bucket_discovery_handoff_status(discovery, {}, {}, {"orders": []})
+
+    assert report["status"] == "fail"
+    assert "lifecycle_quiet_gap_handoff_missing" in report["missing"]
+    assert report["sim_live_connected_quiet_gap_count"] == 1
+
+
+def test_lifecycle_bucket_discovery_handoff_passes_when_quiet_gap_rollup_exists():
+    discovery = {
+        "quiet_gap_summary": {"quiet_gap_count": 1, "rollup_required_count": 1},
+        "surfaced_candidates": [],
+    }
+    workorder = {"orders": [{"order_id": "order_lifecycle_quiet_gap_parent_conflict_rollup"}]}
+
+    report = mod._lifecycle_bucket_discovery_handoff_status(discovery, {}, {}, workorder)
+
+    assert report["status"] == "pass"
+    assert report["has_quiet_gap_rollup_workorder"] is True
+
+
+def test_lifecycle_bucket_discovery_handoff_warns_when_quiet_gap_rollup_is_partial():
+    discovery = {
+        "quiet_gap_summary": {
+            "quiet_gap_count": 2,
+            "rollup_required_count": 2,
+            "quiet_gap_type_counts": {
+                "parent_conflict_child": 1,
+                "ai_review_parsed_low_coverage": 1,
+            },
+        },
+        "surfaced_candidates": [],
+    }
+    workorder = {"orders": [{"order_id": "order_lifecycle_quiet_gap_parent_conflict_rollup"}]}
+
+    report = mod._lifecycle_bucket_discovery_handoff_status(discovery, {}, {}, workorder)
+
+    assert report["status"] == "warning"
+    assert report["missing_quiet_gap_workorder_order_ids"] == ["order_lifecycle_quiet_gap_ai_review_coverage_rollup"]
+    assert report["has_quiet_gap_rollup_workorder"] is False
+
+
 def test_lifecycle_bucket_discovery_greenfield_bridge_exclusion_is_not_missing_family():
     discovery = {
         "summary": {"source_contract_status": "pass", "ai_two_pass_review_status": "parsed"},

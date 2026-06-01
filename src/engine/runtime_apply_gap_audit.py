@@ -58,6 +58,7 @@ CORE_ARTIFACT_LABELS = (
     "runtime_approval_summary",
     "code_improvement_workorder",
 )
+SOURCE_DIMENSION_ACTIONABLE_RESOLUTIONS = {"emit_or_backfill_source_field", "resolve_unknown_source_dimensions"}
 
 
 def runtime_apply_gap_audit_report_path(target_date: str) -> Path:
@@ -127,6 +128,9 @@ def _artifact_path(label: str, target_date: str) -> Path:
         "code_improvement_workorder": BASE_REPORT_DIR
         / "code_improvement_workorder"
         / f"code_improvement_workorder_{target_date}.json",
+        "observation_source_quality_audit": BASE_REPORT_DIR
+        / "observation_source_quality_audit"
+        / f"observation_source_quality_audit_{target_date}.json",
         "threshold_cycle_ev": BASE_REPORT_DIR / "threshold_cycle_ev" / f"threshold_cycle_ev_{target_date}.json",
         "lifecycle_decision_matrix": BASE_REPORT_DIR
         / "lifecycle_decision_matrix"
@@ -146,6 +150,7 @@ def _artifact_status(target_date: str) -> tuple[dict[str, dict[str, Any]], dict[
         "runtime_apply_bridge",
         "runtime_approval_summary",
         "code_improvement_workorder",
+        "observation_source_quality_audit",
         "threshold_cycle_ev",
         "lifecycle_decision_matrix",
         "swing_lifecycle_decision_matrix",
@@ -447,12 +452,234 @@ def _ledger_from_discovery(
                 "retry_deadline": "",
                 "surface_channel": "runtime_apply_gap_audit",
                 "source_bucket_kind": item.get("source_bucket_kind"),
+                "source_dimension_gap": item.get("source_dimension_gap") or "",
+                "recommended_resolution": item.get("recommended_resolution") or "",
+                "missing_dimension_keys": item.get("missing_dimension_keys") or [],
+                "missing_lifecycle_flow_stage_keys": item.get("missing_lifecycle_flow_stage_keys") or [],
+                "unknown_reason_counts": item.get("unknown_reason_counts") or {},
                 "ai_selected_decision": selected_decision,
                 "explicit_runtime_exclusion": bool(exclusion_reason),
                 "runtime_exclusion_reason": exclusion_reason,
             }
         )
     return ledger
+
+
+def _source_dimension_gap_summary_from_payloads(payloads: dict[str, Any]) -> dict[str, Any]:
+    discovery = payloads.get("lifecycle_bucket_discovery") if isinstance(payloads.get("lifecycle_bucket_discovery"), dict) else {}
+    summary = (
+        discovery.get("source_dimension_gap_summary")
+        if isinstance(discovery.get("source_dimension_gap_summary"), dict)
+        else {}
+    )
+    if summary:
+        return summary
+    candidates = discovery.get("surfaced_candidates") if isinstance(discovery.get("surfaced_candidates"), list) else []
+    gap_counts: Counter[str] = Counter()
+    resolution_counts: Counter[str] = Counter()
+    actionable: list[dict[str, Any]] = []
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        gap = str(item.get("source_dimension_gap") or "")
+        resolution = str(item.get("recommended_resolution") or "")
+        if not gap and not item.get("unknown_dimension_counts") and "unknown" not in str(item.get("bucket_key") or ""):
+            continue
+        gap = gap or "unknown_source_dimensions"
+        gap_counts[gap] += 1
+        resolution_counts[resolution or "none"] += 1
+        if gap == "unknown_source_dimensions" and resolution in SOURCE_DIMENSION_ACTIONABLE_RESOLUTIONS:
+            actionable.append(
+                {
+                    "candidate_id": _candidate_id(item, "lifecycle_bucket_discovery"),
+                    "stage": item.get("stage"),
+                    "classification_state": item.get("classification_state"),
+                    "recommended_resolution": resolution,
+                    "source_dimension_gap": gap,
+                }
+            )
+    return {
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "decision_authority": "source_quality_gap_discovery",
+        "gap_count": sum(gap_counts.values()),
+        "actionable_unknown_gap_count": len(actionable),
+        "source_dimension_gap_counts": dict(gap_counts),
+        "recommended_resolution_counts": dict(resolution_counts),
+        "actionable_candidates": actionable[:50],
+    }
+
+
+def _source_dimension_gap_directives(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    actionable_count = int(summary.get("actionable_unknown_gap_count") or 0)
+    if actionable_count <= 0:
+        return []
+    candidates = summary.get("actionable_candidates") if isinstance(summary.get("actionable_candidates"), list) else []
+    if not candidates:
+        candidates = [
+            {
+                "candidate_id": "lifecycle_bucket_discovery:source_dimension_gap_summary",
+                "stage": "unknown",
+                "family": "lifecycle_bucket_discovery",
+                "source_artifact": "lifecycle_bucket_discovery",
+                "producer_state": "source_dimension_gap_summary",
+                "final_disposition": "code_patch_required",
+                "failure_state": "fail",
+                "failure_reason": "source_dimension_gap_summary_actionable",
+                "source_dimension_gap": "unknown_source_dimensions",
+                "recommended_resolution": "resolve_unknown_source_dimensions",
+            }
+        ]
+    directives: list[dict[str, Any]] = []
+    for item in candidates[:20]:
+        if not isinstance(item, dict):
+            continue
+        directives.append(
+            _directive(
+                "RESOLVE_SOURCE_DIMENSION_GAP",
+                {
+                    "candidate_id": item.get("candidate_id") or item.get("bucket_id") or item.get("source_bucket_id"),
+                    "family": "lifecycle_bucket_discovery",
+                    "stage": item.get("stage") or "unknown",
+                    "source_artifact": "lifecycle_bucket_discovery",
+                    "producer_state": item.get("classification_state") or "source_dimension_gap_summary",
+                    "final_disposition": "code_patch_required",
+                    "failure_state": "fail",
+                    "failure_reason": item.get("recommended_resolution") or "source_dimension_gap_summary_actionable",
+                },
+                reason=str(item.get("recommended_resolution") or "source_dimension_gap_summary_actionable"),
+                blocking_contract="source_dimension_gap_contract",
+            )
+        )
+    return directives
+
+
+def _workorder_order_ids(payloads: dict[str, Any]) -> set[str]:
+    workorder = (
+        payloads.get("code_improvement_workorder")
+        if isinstance(payloads.get("code_improvement_workorder"), dict)
+        else {}
+    )
+    orders = workorder.get("orders") if isinstance(workorder.get("orders"), list) else []
+    return {str(item.get("order_id") or "") for item in orders if isinstance(item, dict)}
+
+
+def _quiet_gap_summary_from_payloads(payloads: dict[str, Any]) -> dict[str, Any]:
+    discovery = payloads.get("lifecycle_bucket_discovery") if isinstance(payloads.get("lifecycle_bucket_discovery"), dict) else {}
+    discovery_summary = (
+        discovery.get("quiet_gap_summary")
+        if isinstance(discovery.get("quiet_gap_summary"), dict)
+        else {}
+    )
+    observation = (
+        payloads.get("observation_source_quality_audit")
+        if isinstance(payloads.get("observation_source_quality_audit"), dict)
+        else {}
+    )
+    observation_summary = observation.get("summary") if isinstance(observation.get("summary"), dict) else {}
+    observation_warning_count = (
+        _safe_int(observation_summary.get("warning_stage_count"))
+        if str(observation.get("status") or "") in {"warning", "fail"}
+        else 0
+    )
+    lifecycle_quiet_count = _safe_int(discovery_summary.get("quiet_gap_count"))
+    quiet_gap_count = lifecycle_quiet_count + observation_warning_count
+    return {
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "decision_authority": "source_quality_gap_discovery",
+        "quiet_gap_count": quiet_gap_count,
+        "lifecycle_quiet_gap_count": lifecycle_quiet_count,
+        "observation_source_quality_warning_count": observation_warning_count,
+        "rollup_required_count": _safe_int(discovery_summary.get("rollup_required_count")) + observation_warning_count,
+        "sim_live_connected_quiet_gap_count": _safe_int(
+            discovery_summary.get("sim_live_connected_quiet_gap_count")
+        ),
+        "quiet_gap_type_counts": discovery_summary.get("quiet_gap_type_counts") or {},
+        "ai_review_coverage": discovery_summary.get("ai_review_coverage") or {},
+        "items": discovery_summary.get("items") if isinstance(discovery_summary.get("items"), list) else [],
+    }
+
+
+def _required_lifecycle_quiet_gap_order_ids(summary: dict[str, Any]) -> set[str]:
+    type_counts = summary.get("quiet_gap_type_counts") if isinstance(summary.get("quiet_gap_type_counts"), dict) else {}
+    required: set[str] = set()
+    if _safe_int(type_counts.get("parent_conflict_child")) + _safe_int(type_counts.get("exclusion_dimension_candidate")) > 0:
+        required.add("order_lifecycle_quiet_gap_parent_conflict_rollup")
+    if (
+        _safe_int(type_counts.get("positive_source_only_keep_collecting"))
+        + _safe_int(type_counts.get("absorbed_into_parent_policy"))
+        > 0
+    ):
+        required.add("order_lifecycle_quiet_gap_positive_source_only_rollup")
+    if _safe_int(type_counts.get("ai_review_parsed_low_coverage")) > 0:
+        required.add("order_lifecycle_quiet_gap_ai_review_coverage_rollup")
+    if not required and _safe_int(summary.get("lifecycle_quiet_gap_count")) > 0:
+        required.add("order_lifecycle_quiet_gap_rollup")
+    return required
+
+
+def _quiet_gap_directives(summary: dict[str, Any], payloads: dict[str, Any]) -> list[dict[str, Any]]:
+    if _safe_int(summary.get("quiet_gap_count")) <= 0:
+        return []
+    order_ids = _workorder_order_ids(payloads)
+    directives: list[dict[str, Any]] = []
+    required_quiet_order_ids = _required_lifecycle_quiet_gap_order_ids(summary)
+    missing_quiet_order_ids = sorted(
+        order_id
+        for order_id in required_quiet_order_ids
+        if (
+            order_id not in order_ids
+            if order_id != "order_lifecycle_quiet_gap_rollup"
+            else not any(existing.startswith("order_lifecycle_quiet_gap_") for existing in order_ids)
+        )
+    )
+    if _safe_int(summary.get("lifecycle_quiet_gap_count")) > 0 and missing_quiet_order_ids:
+        directives.append(
+            _directive(
+                "REVIEW_LIFECYCLE_QUIET_GAP",
+                {
+                    "candidate_id": "lifecycle_bucket_discovery:quiet_gap_summary",
+                    "family": "lifecycle_bucket_discovery",
+                    "stage": "multi_stage",
+                    "source_artifact": "lifecycle_bucket_discovery",
+                    "producer_state": "quiet_gap_summary",
+                    "final_disposition": "source_quality_gap_review",
+                    "failure_state": "blocked_contract"
+                    if _safe_int(summary.get("sim_live_connected_quiet_gap_count")) > 0
+                    else "pass",
+                    "failure_reason": "quiet_gap_summary_not_handed_off",
+                    "missing_workorder_order_ids": missing_quiet_order_ids,
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                },
+                reason="quiet_gap_summary_not_handed_off",
+                blocking_contract="quiet_gap_visibility_contract",
+            )
+        )
+    if _safe_int(summary.get("observation_source_quality_warning_count")) > 0 and (
+        "order_observation_source_quality_warning_rollup" not in order_ids
+    ):
+        directives.append(
+            _directive(
+                "REVIEW_OBSERVATION_SOURCE_QUALITY_WARNING",
+                {
+                    "candidate_id": "observation_source_quality_audit:warning_summary",
+                    "family": "observation_source_quality_audit",
+                    "stage": "source_quality_gate",
+                    "source_artifact": "observation_source_quality_audit",
+                    "producer_state": "warning",
+                    "final_disposition": "source_quality_gap_review",
+                    "failure_state": "pass",
+                    "failure_reason": "observation_warning_not_handed_off",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                },
+                reason="observation_warning_not_handed_off",
+                blocking_contract="quiet_gap_visibility_contract",
+            )
+        )
+    return directives
 
 
 def _ledger_from_bridge(
@@ -746,7 +973,9 @@ def _directive(
             "primary_ev": candidate.get("primary_ev"),
             "source_quality_gate": candidate.get("source_quality_gate"),
             "failure_reason": candidate.get("failure_reason"),
+            "missing_workorder_order_ids": candidate.get("missing_workorder_order_ids") or [],
         },
+        "missing_workorder_order_ids": candidate.get("missing_workorder_order_ids") or [],
         "ai_reasoning_summary": candidate.get("ai_reason_en") or reason,
         "blocking_contract": blocking_contract,
         "required_code_changes": [
@@ -791,6 +1020,20 @@ def _build_codex_directives(ledger: list[dict[str, Any]], retry_queue: list[dict
         if row.get("explicit_runtime_exclusion") is True:
             continue
         reason = str(row.get("failure_reason") or "")
+        source_dimension_gap = str(row.get("source_dimension_gap") or "")
+        recommended_resolution = str(row.get("recommended_resolution") or "")
+        if (
+            source_dimension_gap == "unknown_source_dimensions"
+            and recommended_resolution in SOURCE_DIMENSION_ACTIONABLE_RESOLUTIONS
+        ):
+            directives.append(
+                _directive(
+                    "RESOLVE_SOURCE_DIMENSION_GAP",
+                    row,
+                    reason=recommended_resolution,
+                    blocking_contract="source_dimension_gap_contract",
+                )
+            )
         if reason == "positive_edge_stuck_source_only":
             directives.append(
                 _directive(
@@ -844,6 +1087,15 @@ def _build_codex_directives(ledger: list[dict[str, Any]], retry_queue: list[dict
             )
     unique: dict[tuple[str, str], dict[str, Any]] = {}
     for item in directives:
+        unique[(str(item.get("directive_type")), str(item.get("candidate_id")))] = item
+    return list(unique.values())
+
+
+def _dedupe_directives(directives: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    unique: dict[tuple[str, str], dict[str, Any]] = {}
+    for item in directives:
+        if not isinstance(item, dict):
+            continue
         unique[(str(item.get("directive_type")), str(item.get("candidate_id")))] = item
     return list(unique.values())
 
@@ -1386,6 +1638,8 @@ def build_runtime_apply_gap_audit(
     provider = str(ai_review_provider or os.environ.get("RUNTIME_APPLY_GAP_AI_REVIEW_PROVIDER") or "openai").strip()
     config = _ai_review_config(model_override=ai_review_model)
     artifact_status, payloads = _artifact_status(target_date)
+    source_dimension_gap_summary = _source_dimension_gap_summary_from_payloads(payloads)
+    quiet_gap_summary = _quiet_gap_summary_from_payloads(payloads)
     ledger_rows: list[dict[str, Any]] = []
     discovery = payloads.get("lifecycle_bucket_discovery") or {}
     if discovery:
@@ -1424,7 +1678,12 @@ def build_runtime_apply_gap_audit(
     derived_review_category_counts = _apply_derived_review_labels(ledger)
     retry_queue.extend(ai_retry)
     codex_directives = _build_codex_directives(ledger, retry_queue)
+    if not any(item.get("directive_type") == "RESOLVE_SOURCE_DIMENSION_GAP" for item in codex_directives):
+        codex_directives.extend(_source_dimension_gap_directives(source_dimension_gap_summary))
+    quiet_gap_directives = _quiet_gap_directives(quiet_gap_summary, payloads)
+    codex_directives.extend(quiet_gap_directives)
     codex_directives.extend(ai_directives)
+    codex_directives = _dedupe_directives(codex_directives)
     kpi = _runtime_uptake_kpi(ledger)
     critical_failures = [
         row for row in ledger if row.get("failure_state") == "fail"
@@ -1452,6 +1711,8 @@ def build_runtime_apply_gap_audit(
         "runtime_uptake_kpi": kpi,
         "candidate_route_ledger": ledger,
         "producer_consumer_contract_drift": drift,
+        "source_dimension_gap_summary": source_dimension_gap_summary,
+        "quiet_gap_summary": quiet_gap_summary,
         "aggressive_push_targets": _aggressive_push_targets(ledger),
         "ai_reasoning_review": ai_review,
         "codex_workorder_directives": codex_directives,
@@ -1464,6 +1725,11 @@ def build_runtime_apply_gap_audit(
             "critical_failure_count": len(critical_failures),
             "retry_queue_count": len(retry_queue),
             "codex_directive_count": len(codex_directives),
+            "source_dimension_gap_count": source_dimension_gap_summary.get("gap_count", 0),
+            "actionable_unknown_gap_count": source_dimension_gap_summary.get("actionable_unknown_gap_count", 0),
+            "quiet_gap_count": quiet_gap_summary.get("quiet_gap_count", 0),
+            "quiet_gap_rollup_count": quiet_gap_summary.get("rollup_required_count", 0),
+            "quiet_gap_codex_directive_count": len(quiet_gap_directives),
             "ai_review_status": ai_review.get("status"),
             "ai_review_retry_pending": ai_review.get("ai_review_retry_pending") is True,
             "derived_review_category_counts": derived_review_category_counts,
@@ -1486,6 +1752,8 @@ def _render_markdown_ko(report: dict[str, Any]) -> str:
         f"- 실패 표면화: `{summary.get('critical_failure_count', 0)}`",
         f"- 재시도 큐: `{len(retry_queue)}`",
         f"- Codex 작업지시: `{len(directives)}`",
+        f"- source dimension gap: `{summary.get('source_dimension_gap_count', 0)}` / actionable=`{summary.get('actionable_unknown_gap_count', 0)}`",
+        f"- quiet gap: `{summary.get('quiet_gap_count', 0)}` / rollup=`{summary.get('quiet_gap_rollup_count', 0)}` / directive=`{summary.get('quiet_gap_codex_directive_count', 0)}`",
         "",
         "## 공격적 런타임 추진 대상",
     ]

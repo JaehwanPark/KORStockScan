@@ -223,6 +223,77 @@ def test_runtime_apply_gap_codex_directives_are_surfaced_as_postclose_task(monke
     assert "approval artifact나 즉시 runtime env 수정" in text
 
 
+def test_source_dimension_gap_summary_is_surfaced_even_without_directives(monkeypatch, tmp_path):
+    docs, ev_dir, openai_dir, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
+    runtime_gap_dir = mod.RUNTIME_APPLY_GAP_REPORT_DIR
+    _write_json(ev_dir / "threshold_cycle_ev_2026-05-22.json", {"runtime_apply": {"runtime_change": False}})
+    _write_json(
+        openai_dir / "openai_ws_stability_2026-05-22.json",
+        {"decision": "keep_ws", "entry_price_canary_summary": {"canary_event_count": 0}},
+    )
+    _write_json(swing_dir / "swing_runtime_approval_2026-05-22.json", {"approval_requests": []})
+    _write_json(code_dir / "code_improvement_workorder_2026-05-22.json", {"summary": {"selected_order_count": 0}})
+    _write_json(
+        runtime_gap_dir / "runtime_apply_gap_audit_2026-05-22.json",
+        {
+            "summary": {"codex_directive_count": 0, "actionable_unknown_gap_count": 2},
+            "candidate_route_ledger": [],
+            "retry_queue": [],
+            "codex_workorder_directives": [],
+            "source_dimension_gap_summary": {
+                "gap_count": 3,
+                "actionable_unknown_gap_count": 2,
+                "recommended_resolution_counts": {"resolve_unknown_source_dimensions": 2},
+                "missing_dimension_key_counts": {"liquidity_bucket": 2},
+            },
+        },
+    )
+
+    mod.build_next_stage2_checklist("2026-05-22")
+
+    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(encoding="utf-8")
+    assert "[LifecycleSourceDimensionGapReview0526]" in text
+    assert "lifecycle source dimension gap 자동 표면화" in text
+    assert "actionable_unknown_gap_count=`2`" in text
+    assert "`already_covered_by_fallback`" in text
+
+
+def test_quiet_gap_summary_is_surfaced_even_without_directives(monkeypatch, tmp_path):
+    docs, ev_dir, openai_dir, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
+    runtime_gap_dir = mod.RUNTIME_APPLY_GAP_REPORT_DIR
+    _write_json(ev_dir / "threshold_cycle_ev_2026-05-22.json", {"runtime_apply": {"runtime_change": False}})
+    _write_json(
+        openai_dir / "openai_ws_stability_2026-05-22.json",
+        {"decision": "keep_ws", "entry_price_canary_summary": {"canary_event_count": 0}},
+    )
+    _write_json(swing_dir / "swing_runtime_approval_2026-05-22.json", {"approval_requests": []})
+    _write_json(code_dir / "code_improvement_workorder_2026-05-22.json", {"summary": {"selected_order_count": 0}})
+    _write_json(
+        runtime_gap_dir / "runtime_apply_gap_audit_2026-05-22.json",
+        {
+            "summary": {"codex_directive_count": 0, "quiet_gap_count": 2},
+            "candidate_route_ledger": [],
+            "retry_queue": [],
+            "codex_workorder_directives": [],
+            "quiet_gap_summary": {
+                "quiet_gap_count": 2,
+                "rollup_required_count": 2,
+                "sim_live_connected_quiet_gap_count": 0,
+                "observation_source_quality_warning_count": 1,
+                "quiet_gap_type_counts": {"parent_conflict_child": 1, "positive_source_only_keep_collecting": 1},
+            },
+        },
+    )
+
+    mod.build_next_stage2_checklist("2026-05-22")
+
+    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(encoding="utf-8")
+    assert "[LifecycleQuietGapReview0526]" in text
+    assert "lifecycle quiet gap rollup 자동 표면화" in text
+    assert "quiet_gap_count=`2`" in text
+    assert "`already_covered_by_parent_policy`" in text
+
+
 def test_build_next_stage2_checklist_preserves_unknown_tasks_inside_auto_block(monkeypatch, tmp_path):
     docs, ev_dir, openai_dir, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
     _write_json(ev_dir / "threshold_cycle_ev_2026-05-22.json", {"runtime_apply": {"runtime_change": False}})

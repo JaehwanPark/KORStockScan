@@ -52,6 +52,187 @@ def _runtime_gemini_config() -> PostcloseAIReviewConfig:
     )
 
 
+def test_runtime_apply_gap_audit_emits_source_dimension_gap_directive(tmp_path, monkeypatch):
+    report_dir = _patch_dirs(tmp_path, monkeypatch)
+    _write_core_artifacts(report_dir, "2026-05-22")
+    _write_json(
+        report_dir / "lifecycle_bucket_discovery" / "lifecycle_bucket_discovery_2026-05-22.json",
+        {
+            "report_type": "lifecycle_bucket_discovery",
+            "source_dimension_gap_summary": {
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "decision_authority": "source_quality_gap_discovery",
+                "gap_count": 1,
+                "actionable_unknown_gap_count": 1,
+            },
+            "surfaced_candidates": [
+                {
+                    "bucket_id": "entry:combo_entry_spot:unknown",
+                    "stage": "entry",
+                    "classification_state": "source_only_keep_collecting",
+                    "source_quality_gate": "pass",
+                    "source_dimension_gap": "unknown_source_dimensions",
+                    "recommended_resolution": "resolve_unknown_source_dimensions",
+                    "missing_dimension_keys": ["liquidity_bucket"],
+                }
+            ],
+        },
+    )
+
+    report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+
+    directives = report["codex_workorder_directives"]
+    assert report["summary"]["actionable_unknown_gap_count"] == 1
+    assert report["source_dimension_gap_summary"]["decision_authority"] == "source_quality_gap_discovery"
+    source_gap_directives = [item for item in directives if item["directive_type"] == "RESOLVE_SOURCE_DIMENSION_GAP"]
+    assert len(source_gap_directives) == 1
+
+
+def test_runtime_apply_gap_audit_uses_source_dimension_summary_when_candidates_are_truncated(tmp_path, monkeypatch):
+    report_dir = _patch_dirs(tmp_path, monkeypatch)
+    _write_core_artifacts(report_dir, "2026-05-22")
+    _write_json(
+        report_dir / "lifecycle_bucket_discovery" / "lifecycle_bucket_discovery_2026-05-22.json",
+        {
+            "report_type": "lifecycle_bucket_discovery",
+            "source_dimension_gap_summary": {
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "decision_authority": "source_quality_gap_discovery",
+                "gap_count": 2,
+                "actionable_unknown_gap_count": 1,
+                "actionable_candidates": [
+                    {
+                        "candidate_id": "entry:combo_entry_spot:summary-only",
+                        "stage": "entry",
+                        "classification_state": "source_only_keep_collecting",
+                        "source_dimension_gap": "unknown_source_dimensions",
+                        "recommended_resolution": "resolve_unknown_source_dimensions",
+                    }
+                ],
+            },
+            "surfaced_candidates": [],
+        },
+    )
+
+    report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+
+    assert any(
+        item["directive_type"] == "RESOLVE_SOURCE_DIMENSION_GAP"
+        and item["candidate_id"] == "entry:combo_entry_spot:summary-only"
+        for item in report["codex_workorder_directives"]
+    )
+
+
+def test_runtime_apply_gap_audit_emits_quiet_gap_directive_when_rollup_missing(tmp_path, monkeypatch):
+    report_dir = _patch_dirs(tmp_path, monkeypatch)
+    _write_core_artifacts(report_dir, "2026-05-22")
+    _write_json(
+        report_dir / "lifecycle_bucket_discovery" / "lifecycle_bucket_discovery_2026-05-22.json",
+        {
+            "report_type": "lifecycle_bucket_discovery",
+            "quiet_gap_summary": {
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "decision_authority": "source_quality_gap_discovery",
+                "quiet_gap_count": 2,
+                "rollup_required_count": 2,
+                "sim_live_connected_quiet_gap_count": 0,
+                "quiet_gap_type_counts": {"parent_conflict_child": 1, "positive_source_only_keep_collecting": 1},
+            },
+            "surfaced_candidates": [],
+        },
+    )
+
+    report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+
+    assert report["summary"]["quiet_gap_count"] == 2
+    assert report["summary"]["quiet_gap_rollup_count"] == 2
+    assert report["summary"]["quiet_gap_codex_directive_count"] == 1
+    assert any(item["directive_type"] == "REVIEW_LIFECYCLE_QUIET_GAP" for item in report["codex_workorder_directives"])
+
+
+def test_runtime_apply_gap_audit_does_not_duplicate_quiet_gap_directive_when_workorder_exists(tmp_path, monkeypatch):
+    report_dir = _patch_dirs(tmp_path, monkeypatch)
+    _write_core_artifacts(report_dir, "2026-05-22")
+    _write_json(
+        report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-05-22.json",
+        {
+            "report_type": "code_improvement_workorder",
+            "orders": [{"order_id": "order_lifecycle_quiet_gap_parent_conflict_rollup"}],
+        },
+    )
+    _write_json(
+        report_dir / "lifecycle_bucket_discovery" / "lifecycle_bucket_discovery_2026-05-22.json",
+        {
+            "report_type": "lifecycle_bucket_discovery",
+            "quiet_gap_summary": {
+                "quiet_gap_count": 1,
+                "rollup_required_count": 1,
+                "quiet_gap_type_counts": {"parent_conflict_child": 1},
+            },
+            "surfaced_candidates": [],
+        },
+    )
+
+    report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+
+    assert report["summary"]["quiet_gap_count"] == 1
+    assert report["summary"]["quiet_gap_codex_directive_count"] == 0
+    assert not any(item["directive_type"] == "REVIEW_LIFECYCLE_QUIET_GAP" for item in report["codex_workorder_directives"])
+
+
+def test_runtime_apply_gap_audit_emits_quiet_gap_directive_for_partial_rollup_handoff(tmp_path, monkeypatch):
+    report_dir = _patch_dirs(tmp_path, monkeypatch)
+    _write_core_artifacts(report_dir, "2026-05-22")
+    _write_json(
+        report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-05-22.json",
+        {
+            "report_type": "code_improvement_workorder",
+            "orders": [{"order_id": "order_lifecycle_quiet_gap_parent_conflict_rollup"}],
+        },
+    )
+    _write_json(
+        report_dir / "lifecycle_bucket_discovery" / "lifecycle_bucket_discovery_2026-05-22.json",
+        {
+            "report_type": "lifecycle_bucket_discovery",
+            "quiet_gap_summary": {
+                "quiet_gap_count": 2,
+                "rollup_required_count": 2,
+                "quiet_gap_type_counts": {
+                    "parent_conflict_child": 1,
+                    "ai_review_parsed_low_coverage": 1,
+                },
+            },
+            "surfaced_candidates": [],
+        },
+    )
+
+    report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+
+    directive = next(item for item in report["codex_workorder_directives"] if item["directive_type"] == "REVIEW_LIFECYCLE_QUIET_GAP")
+    assert report["summary"]["quiet_gap_codex_directive_count"] == 1
+    assert directive["missing_workorder_order_ids"] == ["order_lifecycle_quiet_gap_ai_review_coverage_rollup"]
+
+
+def test_runtime_apply_gap_audit_emits_observation_warning_rollup_directive(tmp_path, monkeypatch):
+    report_dir = _patch_dirs(tmp_path, monkeypatch)
+    _write_core_artifacts(report_dir, "2026-05-22")
+    _write_json(
+        report_dir / "observation_source_quality_audit" / "observation_source_quality_audit_2026-05-22.json",
+        {"status": "warning", "summary": {"warning_stage_count": 1}},
+    )
+
+    report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+
+    assert report["quiet_gap_summary"]["observation_source_quality_warning_count"] == 1
+    assert any(
+        item["directive_type"] == "REVIEW_OBSERVATION_SOURCE_QUALITY_WARNING"
+        for item in report["codex_workorder_directives"]
+    )
+
+
 def test_runtime_apply_gap_gemini_review_splits_40_candidates_into_10_candidate_shards(monkeypatch):
     calls = []
 
