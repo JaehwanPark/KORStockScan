@@ -1,0 +1,146 @@
+from collections import Counter
+
+from src.engine.automation import automation_chain_slimming_audit as mod
+
+
+def test_static_parser_detects_repeated_ev_verifier_and_lifecycle_windows():
+    report = mod.build_report("2026-06-02")
+
+    producers = Counter(item["producer"] for item in report["step_inventory"])
+    assert producers["src.engine.threshold_cycle_ev_report"] == 3
+    assert producers["src.engine.verify_threshold_cycle_postclose_chain"] == 2
+    lifecycle_context = next(
+        item for item in report["step_inventory"] if item["producer"] == "src.engine.lifecycle_ai_context"
+    )
+    assert "RUN_LIFECYCLE_AI_CONTEXT" in lifecycle_context["default_flags"]
+    assert lifecycle_context["default_enabled"] is True
+
+    candidates = report["slimming_candidates"]
+    assert any(
+        item["producer"] == "src.engine.threshold_cycle_ev_report"
+        and item["classification"] == "duplicate_refresh_candidate"
+        and item["classification_group"] == "change_triggered"
+        for item in candidates
+    )
+    assert any(
+        item["producer"] == "src.engine.verify_threshold_cycle_postclose_chain"
+        and item["classification"] == "duplicate_refresh_candidate"
+        for item in candidates
+    )
+    assert any(
+        item["producer"] == "src.engine.verify_threshold_cycle_postclose_chain"
+        and item["classification"] == "core_daily"
+        and item["classification_reason"] == "final_fail_closed_postclose_verifier"
+        for item in report["step_inventory"]
+    )
+    assert any(
+        item["producer"] == "src.engine.lifecycle_decision_matrix"
+        and item["classification"] == "change_triggered_candidate"
+        and item["classification_group"] == "change_triggered"
+        for item in candidates
+    )
+    assert any(
+        item["producer"] == "src.engine.pattern_lab_ai_review"
+        and item["classification"] == "triggered_deep_review_candidate"
+        for item in candidates
+    )
+
+
+def test_slimming_candidates_and_workorders_are_report_only():
+    report = mod.build_report("2026-06-02")
+
+    assert report["runtime_effect"] is False
+    assert report["allowed_runtime_apply"] is False
+    assert "runtime_threshold_apply" in report["forbidden_uses"]
+    assert report["summary"]["duplicate_refresh_candidates"] >= 3
+    assert "deprecated_candidate" in report["summary"]["classification_group_counts"]
+
+    assert report["slimming_candidates"]
+    for item in report["slimming_candidates"]:
+        assert item["runtime_effect"] is False
+        assert item["allowed_runtime_apply"] is False
+        assert item["classification_group"] in {
+            "change_triggered",
+            "manual_or_weekly",
+            "deprecated_candidate",
+        }
+        assert "broker_submit" in item["forbidden_uses"]
+        assert "runtime_threshold_apply" in item["forbidden_uses"]
+
+    assert report["implementation_workorders"]
+    for item in report["implementation_workorders"]:
+        assert item["runtime_effect"] is False
+        assert item["allowed_runtime_apply"] is False
+
+
+def test_aggressive_profile_deep_audit_candidates_move_to_manual_or_weekly():
+    report = mod.build_report("2026-06-02", profile="aggressive")
+
+    deep_candidates = [
+        item
+        for item in report["slimming_candidates"]
+        if item["classification"] == "triggered_deep_review_candidate"
+    ]
+    assert deep_candidates
+    assert all(item["recommended_mode"] == "manual_or_weekly" for item in deep_candidates)
+
+
+def test_dependency_defaults_can_create_deprecated_candidate_and_ev_function_calls_are_expanded():
+    script = '''
+RUN_PARENT="${THRESHOLD_CYCLE_RUN_PARENT:-false}"
+RUN_OPENAI_WS_STABILITY_REPORT="${THRESHOLD_CYCLE_RUN_OPENAI_WS_STABILITY_REPORT:-$RUN_PARENT}"
+RUN_LIFECYCLE_AI_CONTEXT="${THRESHOLD_CYCLE_RUN_LIFECYCLE_AI_CONTEXT:-$RUN_PARENT}"
+run_threshold_cycle_ev_and_wait() {
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.threshold_cycle_ev_report --date "$TARGET_DATE"
+  wait_for_artifacts "$PROJECT_DIR/data/report/threshold_cycle_ev/threshold_cycle_ev_${TARGET_DATE}.json"
+}
+if [ "$RUN_OPENAI_WS_STABILITY_REPORT" = "true" ]; then
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.openai_ws_stability_report --date "$TARGET_DATE"
+fi
+if [ "$RUN_LIFECYCLE_AI_CONTEXT" = "true" ]; then
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.lifecycle_ai_context --date "$TARGET_DATE" --mode context
+fi
+run_threshold_cycle_ev_and_wait "pre_workorder"
+run_threshold_cycle_ev_and_wait "post_workorder_refresh"
+'''
+    defaults = mod._resolve_run_defaults(mod._extract_run_defaults(script))
+    calls = mod._extract_module_calls(script, "postclose", "2026-06-02")
+    inventory, candidates = mod._build_inventory(calls, defaults, "standard")
+
+    producers = Counter(item["producer"] for item in inventory)
+    assert producers["src.engine.threshold_cycle_ev_report"] == 2
+
+    openai_step = next(item for item in inventory if item["producer"] == "src.engine.openai_ws_stability_report")
+    assert openai_step["default_enabled"] is False
+    assert openai_step["classification"] == "deprecated_candidate"
+    assert openai_step["classification_group"] == "deprecated_candidate"
+    lifecycle_context_step = next(item for item in inventory if item["producer"] == "src.engine.lifecycle_ai_context")
+    assert lifecycle_context_step["default_flag"] == "RUN_LIFECYCLE_AI_CONTEXT"
+    assert lifecycle_context_step["default_enabled"] is False
+    assert lifecycle_context_step["classification"] == "deprecated_candidate"
+
+    openai_candidate = next(
+        item for item in candidates if item["producer"] == "src.engine.openai_ws_stability_report"
+    )
+    assert openai_candidate["recommended_mode"] == "deprecated_candidate"
+
+
+def test_nested_guard_defaults_are_not_flattened_as_or_conditions():
+    script = '''
+RUN_PARENT="${THRESHOLD_CYCLE_RUN_PARENT:-true}"
+RUN_CHILD="${THRESHOLD_CYCLE_RUN_CHILD:-false}"
+if [ "$RUN_PARENT" = "true" ] || [ "$RUN_PARENT" = "1" ]; then
+  if [ "$RUN_CHILD" = "true" ] || [ "$RUN_CHILD" = "1" ]; then
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.lifecycle_ai_context --date "$TARGET_DATE"
+  fi
+fi
+'''
+    defaults = mod._resolve_run_defaults(mod._extract_run_defaults(script))
+    calls = mod._extract_module_calls(script, "postclose", "2026-06-02")
+    inventory, _ = mod._build_inventory(calls, defaults, "standard")
+
+    lifecycle_context_step = next(item for item in inventory if item["producer"] == "src.engine.lifecycle_ai_context")
+    assert lifecycle_context_step["default_flags"] == ["RUN_CHILD", "RUN_PARENT"]
+    assert lifecycle_context_step["default_enabled"] is False
+    assert lifecycle_context_step["default_enabled_resolution"] == "resolved_guard_nested_all"
+    assert lifecycle_context_step["classification"] == "deprecated_candidate"

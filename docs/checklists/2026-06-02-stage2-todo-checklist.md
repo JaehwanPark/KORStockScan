@@ -113,6 +113,12 @@
   - 금지: 작업지시를 approval artifact나 즉시 runtime env 수정으로 해석하지 않는다. broker/order/provider/cap guard 우회와 장중 threshold mutation은 금지한다.
   - 다음 액션: `implement_now`, `already_implemented`, `defer_design`, `reject`, `needs_new_workorder` 중 하나로 닫고, 구현 시 테스트와 postclose verifier handoff를 같이 확인한다.
 
+- [ ] `[AutomationChainSlimmingAudit0602] 자동화체인 경량화 audit 산출물 및 report-only 계약 확인` (`Due: 2026-06-02`, `Slot: POSTCLOSE`, `TimeWindow: 18:25~18:40`, `Track: RuntimeStability`)
+  - Source: [automation_chain_slimming_audit.py](/home/ubuntu/KORStockScan/src/engine/automation/automation_chain_slimming_audit.py), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
+  - 판정 기준: `automation_chain_slimming_audit_2026-06-02.{json,md}`가 wrapper 실행 단계를 `core_daily`, `change_triggered`, `manual_or_weekly`, `deprecated_candidate`와 축소 후보로 분류하고 모든 slimming candidate/workorder가 `runtime_effect=false`, `allowed_runtime_apply=false`를 유지하는지 확인한다.
+  - 금지: audit 결과를 즉시 wrapper 기본값 변경, runtime threshold apply, provider/bot/cap 변경으로 사용하지 않는다.
+  - 다음 액션: 중복 refresh, rolling/MTD full recompute, deep audit trigger 전환 후보가 있으면 별도 code-improvement workorder로 분리한다.
+
 - [ ] `[RarePositiveBucketArmWatch0602] rare-positive 스캘핑 parent bucket 및 스윙 top arm 재등장 여부 확인` (`Due: 2026-06-02`, `Slot: POSTCLOSE`, `TimeWindow: 18:10~18:25`, `Track: ScalpingLogic`)
   - Source: [lifecycle_bucket_discovery_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_2026-06-01.json), [lifecycle_decision_matrix_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_2026-06-01.json), [swing_strategy_discovery_ev_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_2026-06-01.json), [swing_lifecycle_decision_matrix_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/swing_lifecycle_decision_matrix/swing_lifecycle_decision_matrix_2026-06-01.json)
   - 판정 기준: 스캘핑 `entry_score_parent=score_watch_recovery|entry_source_parent=entry_source_action_decision|submit_quality_parent=submit_stale_context_or_quote|exit_outcome_parent=exit_missed_upside` parent와 스윙 `arm05_breakout_conf_trailing`이 2026-06-02 postclose 산출물에서 재등장하는지, 표본 증가/EV 유지/downside/pending quote 해소 여부를 기존 리포트 필드로만 확인한다.
