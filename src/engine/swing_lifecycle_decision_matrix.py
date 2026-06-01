@@ -46,7 +46,21 @@ PROBE_STAGE_BY_EVENT = {
     "swing_probe_exit_signal": "exit",
     "swing_probe_sell_order_assumed_filled": "exit",
     "swing_probe_scale_in_order_assumed_filled": "scale_in",
+    "swing_sim_buy_order_assumed_filled": "entry",
+    "swing_sim_holding_started": "holding",
+    "swing_sim_sell_order_assumed_filled": "exit",
+    "swing_sim_scale_in_order_assumed_filled": "scale_in",
 }
+SOURCE_ONLY_ENTRY_STAGE_BY_EVENT = {
+    "blocked_swing_score_vpw": "entry",
+    "blocked_swing_gap": "entry",
+    "blocked_gatekeeper_reject": "entry",
+    "market_regime_prior_observed": "entry",
+    "swing_entry_policy_evaluated": "entry",
+    "swing_entry_micro_context_observed": "entry",
+    "latency_block": "entry",
+}
+SWING_MARKER_TOKEN_RE = re.compile(r"(^|[^a-z0-9])swing([^a-z0-9]|$)")
 
 PRIMARY_METRICS = [
     "equal_weight_avg_profit_pct",
@@ -230,14 +244,46 @@ def _event_view(record: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
+def _has_swing_token(value: Any) -> bool:
+    return bool(SWING_MARKER_TOKEN_RE.search(str(value or "").lower()))
+
+
+def _has_swing_marker(row: dict[str, Any]) -> bool:
+    event = str(row.get("event") or row.get("stage") or "").lower()
+    if _has_swing_token(event):
+        return True
+    marker_keys = (
+        "simulation_book",
+        "probe_book",
+        "swing_intraday_probe",
+        "probe_id",
+        "probe_origin_stage",
+        "entry_mode",
+        "decision_authority",
+        "source_book",
+        "source_stage",
+        "block_reason",
+        "reason",
+    )
+    return any(_has_swing_token(row.get(key)) for key in marker_keys)
+
+
 def _is_probe_event(record: dict[str, Any]) -> bool:
     row = _event_view(record)
     event = str(row.get("event") or row.get("stage") or "")
     if event not in PROBE_STAGE_BY_EVENT:
-        return False
+        if event not in SOURCE_ONLY_ENTRY_STAGE_BY_EVENT:
+            return False
+        return _has_swing_marker(row)
+    if event.startswith("swing_sim_"):
+        return _has_swing_marker(row)
     if str(row.get("simulation_book") or "") == PROBE_BOOK:
         return True
     return _as_bool(row.get("swing_intraday_probe")) or str(row.get("probe_book") or "") == PROBE_BOOK
+
+
+def _is_swing_like_event(record: dict[str, Any]) -> bool:
+    return _has_swing_marker(_event_view(record))
 
 
 def _source_quality_status(row: dict[str, Any]) -> str:
@@ -258,17 +304,20 @@ def _source_quality_status(row: dict[str, Any]) -> str:
 def _probe_row(record: dict[str, Any]) -> dict[str, Any]:
     record = _event_view(record)
     event = str(record.get("event") or record.get("stage") or "")
-    stage = PROBE_STAGE_BY_EVENT.get(event, "carry")
+    stage = PROBE_STAGE_BY_EVENT.get(event) or SOURCE_ONLY_ENTRY_STAGE_BY_EVENT.get(event, "carry")
     score = _first(record, "score", "ai_score", "runtime_score_proxy", "model_score")
     vpw = _first(record, "v_pw", "vpw", "vpw_score")
     gap_pct = _first(record, "gap_pct", "gap_rate", "open_gap_pct")
     profit = _first(record, "profit_rate", "profit_pct", "final_return_pct", "realized_exit_return_pct")
     mfe = _first(record, "mfe_pct", "mfe")
     mae = _first(record, "mae_pct", "mae")
+    virtual_notional = _first(record, "virtual_notional_krw", "notional_krw", "assumed_notional_krw")
+    source_record_id = _first(record, "source_record_id", "record_id")
     runtime_features = {
         "lifecycle_flow_bridge_key": str(_first(record, "lifecycle_flow_bridge_key", default="")),
         "lifecycle_join_bridge_key": str(_first(record, "lifecycle_join_bridge_key", default="")),
         "join_bridge_key": str(_first(record, "join_bridge_key", default="")),
+        "source_record_id": str(source_record_id or ""),
         "swing_strategy_discovery_arm_id": str(_first(record, "swing_strategy_discovery_arm_id", "arm_id", default="")),
         "origin": str(_first(record, "probe_origin_stage", "origin_stage", "origin", default="-")),
         "block_reason": str(_first(record, "block_reason", "gate_block_reason", "reason", default="-")),
@@ -281,8 +330,11 @@ def _probe_row(record: dict[str, Any]) -> dict[str, Any]:
         "vpw": _safe_float(vpw),
         "vpw_bucket": _bucket_numeric(vpw, [0.0, 0.5, 1.0, 2.0], ["vpw_neg", "vpw_low", "vpw_mid", "vpw_high", "vpw_extreme"]),
         "qty": _safe_int(_first(record, "qty", "quantity", default=0)),
+        "virtual_notional_krw": _safe_float(virtual_notional),
         "qty_source": str(_first(record, "qty_source", "qty_reason", "budget_authority", default="-")),
         "entry_price_provenance": str(_first(record, "entry_price_provenance", "price_source", "assumed_fill_source", default="-")),
+        "sizing_policy": str(_first(record, "sizing_policy", "position_sizing_policy", "qty_policy", default="-")),
+        "exit_policy": str(_first(record, "exit_policy", "policy_exit_rule", "sell_policy", default="-")),
         "ofi_state": str(_first(record, "ofi_state", "ofi_bucket", "ofi", default="-")),
         "qi_state": str(_first(record, "qi_state", "qi_bucket", "qi", default="-")),
         "panic_context": str(_first(record, "panic_context", "panic_regime_mode", "panic_buy_regime_mode", default="-")),
@@ -312,17 +364,42 @@ def _probe_row(record: dict[str, Any]) -> dict[str, Any]:
         "actual_order_submitted": _as_bool(record.get("actual_order_submitted"), False),
         "broker_order_forbidden": _as_bool(record.get("broker_order_forbidden"), True),
         "runtime_effect": False,
+        "allowed_runtime_apply": False,
     }
 
 
 def _load_probe_rows(target_date: str) -> list[dict[str, Any]]:
+    rows, _ = _load_probe_rows_with_diagnostics(target_date)
+    return rows
+
+
+def _load_probe_rows_with_diagnostics(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     path = _pipeline_event_path(target_date)
-    return [_probe_row(record) for record in iter_jsonl(path) if _is_probe_event(record)]
+    rows: list[dict[str, Any]] = []
+    raw_swing_event_count = 0
+    unmapped_stage_counts: Counter[str] = Counter()
+    for record in iter_jsonl(path):
+        swing_like = _is_swing_like_event(record)
+        mapped = _is_probe_event(record)
+        if swing_like:
+            raw_swing_event_count += 1
+        if mapped:
+            rows.append(_probe_row(record))
+        elif swing_like:
+            view = _event_view(record)
+            unmapped_stage_counts[str(view.get("event") or view.get("stage") or "-")] += 1
+    diagnostics = {
+        "raw_swing_event_count": raw_swing_event_count,
+        "ldm_consumed_event_count": len(rows),
+        "ldm_event_coverage_rate": round(len(rows) / raw_swing_event_count, 6) if raw_swing_event_count else 0.0,
+        "unmapped_swing_stage_counts": dict(unmapped_stage_counts.most_common(20)),
+    }
+    return rows, diagnostics
 
 
-def _discovery_row(row: dict[str, Any]) -> dict[str, Any]:
+def _discovery_row(row: dict[str, Any], *, lifecycle_stage: str | None = None) -> dict[str, Any]:
     status = str(row.get("label_status") or "")
-    stage = "exit" if status == "labeled" else "carry"
+    stage = lifecycle_stage or ("exit" if status == "labeled" else "carry")
     features = {
         "lifecycle_flow_bridge_key": str(row.get("lifecycle_flow_bridge_key") or ""),
         "lifecycle_join_bridge_key": str(row.get("lifecycle_join_bridge_key") or ""),
@@ -339,6 +416,7 @@ def _discovery_row(row: dict[str, Any]) -> dict[str, Any]:
         "vpw": None,
         "vpw_bucket": "discovery_vpw_unobserved",
         "qty": None,
+        "virtual_notional_krw": _safe_float(row.get("virtual_notional_krw")),
         "qty_source": str(row.get("sizing_policy") or "-"),
         "entry_price_provenance": str(row.get("entry_reason") or "-"),
         "ofi_state": "-",
@@ -355,22 +433,29 @@ def _discovery_row(row: dict[str, Any]) -> dict[str, Any]:
         "theme_tags": str(row.get("theme_tags") or "-"),
         "legacy_ml_cohort": str(row.get("legacy_pick_type") or "-"),
     }
+    exit_labels = stage == "exit"
     labels = {
-        "realized_probe_profit_pct": _safe_float(row.get("realized_exit_return_pct")),
-        "final_return_pct": _safe_float(row.get("final_return_pct")),
-        "mfe_pct": _safe_float(row.get("mfe_pct")),
-        "mae_pct": _safe_float(row.get("mae_pct")),
-        "exit_reason": str(row.get("policy_exit_reason") or "-"),
-        "policy_exit_return_pct": _safe_float(row.get("final_return_pct")),
+        "realized_probe_profit_pct": _safe_float(row.get("realized_exit_return_pct")) if exit_labels else None,
+        "final_return_pct": _safe_float(row.get("final_return_pct")) if exit_labels else None,
+        "mfe_pct": _safe_float(row.get("mfe_pct")) if exit_labels else None,
+        "mae_pct": _safe_float(row.get("mae_pct")) if exit_labels else None,
+        "exit_reason": str(row.get("policy_exit_reason") or "-") if exit_labels else "-",
+        "policy_exit_return_pct": _safe_float(row.get("final_return_pct")) if exit_labels else None,
         "held_sec": None,
         "label_status": status,
         "label_maturity_status": row.get("label_maturity_status"),
         "future_quote_count": row.get("future_quote_count"),
     }
+    source_stage_by_lifecycle = {
+        "entry": "strategy_discovery_entry_policy",
+        "holding": "strategy_discovery_holding_policy",
+        "exit": "policy_exit_label",
+        "carry": "policy_exit_pending_carry",
+    }
     return {
         "domain": "swing",
         "source_book": DISCOVERY_BOOK,
-        "source_stage": "policy_exit_label",
+        "source_stage": source_stage_by_lifecycle.get(stage, "strategy_discovery_policy"),
         "lifecycle_stage": stage,
         "stock_code": str(row.get("stock_code") or "-"),
         "event_time": str(row.get("source_date") or ""),
@@ -381,7 +466,21 @@ def _discovery_row(row: dict[str, Any]) -> dict[str, Any]:
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "runtime_effect": False,
+        "allowed_runtime_apply": False,
     }
+
+
+def _discovery_lifecycle_rows(row: dict[str, Any]) -> list[dict[str, Any]]:
+    status = str(row.get("label_status") or "")
+    if status == "labeled":
+        # A discovery arm is a synthetic source-only strategy path: entry policy,
+        # sizing/holding policy, and policy-exit label share one arm identity.
+        return [
+            _discovery_row(row, lifecycle_stage="entry"),
+            _discovery_row(row, lifecycle_stage="holding"),
+            _discovery_row(row, lifecycle_stage="exit"),
+        ]
+    return [_discovery_row(row, lifecycle_stage="carry")]
 
 
 def _load_discovery_lifecycle_rows(
@@ -391,7 +490,10 @@ def _load_discovery_lifecycle_rows(
     lookback_days: int,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     rows, arm_status_counts = _load_discovery_rows(target_date, db_url=db_url, lookback_days=lookback_days)
-    return [_discovery_row(row) for row in rows], arm_status_counts
+    lifecycle_rows: list[dict[str, Any]] = []
+    for row in rows:
+        lifecycle_rows.extend(_discovery_lifecycle_rows(row))
+    return lifecycle_rows, arm_status_counts
 
 
 def _valid_label(row: dict[str, Any]) -> float | None:
@@ -419,14 +521,17 @@ def _metric_contract(bucket_type: str, stage: str, *, sample_floor: int = SAMPLE
 
 
 def _bucket_summary(bucket_type: str, bucket_key: str, rows: list[dict[str, Any]], stage: str) -> dict[str, Any]:
-    returns = [value for value in (_valid_label(row) for row in rows) if value is not None]
+    returns: list[float] = []
     source_quality_counts: dict[str, int] = defaultdict(int)
     mfe_values: list[float] = []
     mae_values: list[float] = []
-    notional_values: list[float] = []
+    notional_return_pairs: list[tuple[float, float]] = []
     for row in rows:
         source_quality_counts[_source_quality_status(row)] += 1
         labels = row.get("label_fields") if isinstance(row.get("label_fields"), dict) else {}
+        label = _valid_label(row)
+        if label is not None:
+            returns.append(float(label))
         mfe = _safe_float(labels.get("mfe_pct"))
         mae = _safe_float(labels.get("mae_pct"))
         if mfe is not None:
@@ -434,11 +539,17 @@ def _bucket_summary(bucket_type: str, bucket_key: str, rows: list[dict[str, Any]
         if mae is not None:
             mae_values.append(mae)
         features = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
-        notional_values.append(max(0.0, _safe_float(features.get("virtual_notional_krw"), 0.0) or 0.0))
+        notional = max(0.0, _safe_float(features.get("virtual_notional_krw"), 0.0) or 0.0)
+        if label is not None and notional > 0:
+            notional_return_pairs.append((float(label), notional))
     joined = len(returns)
     avg = sum(returns) / joined if joined else 0.0
-    notional_sum = sum(notional_values[:joined])
-    weighted = avg if notional_sum <= 0 else avg
+    notional_sum = sum(notional for _, notional in notional_return_pairs)
+    weighted = (
+        sum(value * notional for value, notional in notional_return_pairs) / notional_sum
+        if notional_sum > 0
+        else avg
+    )
     coverage = min(1.0, joined / SAMPLE_FLOOR) if SAMPLE_FLOOR else 1.0
     blocker = any(status not in {"pass", "-", "ok"} for status in source_quality_counts)
     source_gate = "hold_sample" if joined < SAMPLE_FLOOR else "source_quality_blocker" if blocker else "pass"
@@ -511,6 +622,10 @@ def _row_flow_identity(row: dict[str, Any]) -> tuple[str, str]:
         value = str(features.get(key) or row.get(key) or "").strip()
         if value and value != "-":
             return f"{key}:{value}", quality
+    source_record_id = str(features.get("source_record_id") or row.get("source_record_id") or "").strip()
+    if source_record_id and source_record_id != "-":
+        code = str(row.get("stock_code") or "").strip()
+        return f"source_record_id:{code}:{source_record_id}", "source_record_id"
     arm_id = str(features.get("swing_strategy_discovery_arm_id") or row.get("swing_strategy_discovery_arm_id") or "").strip()
     if arm_id and arm_id != "-":
         code = str(row.get("stock_code") or "").strip()
@@ -554,6 +669,8 @@ def _holding_exit_bucket_key(row: dict[str, Any]) -> str:
             _bucket_numeric(labels.get("mae_pct"), [-7, -3, 0, 3], ["mae_deep", "mae_mid", "mae_low", "mae_flat", "mae_green"]),
             _held_bucket(labels.get("held_sec")),
             str(labels.get("exit_reason") or "-"),
+            str(f.get("sizing_policy") or "-"),
+            str(f.get("exit_policy") or "-"),
             str(f.get("panic_context") or "-"),
             str(f.get("ofi_state") or "-"),
             str(f.get("qi_state") or "-"),
@@ -923,19 +1040,7 @@ def _entry_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
 def _holding_exit_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
     stage_rows = [row for row in rows if row.get("lifecycle_stage") in {"holding", "exit", "carry"}]
     def key(row: dict[str, Any]) -> str:
-        f = row.get("runtime_features") if isinstance(row.get("runtime_features"), dict) else {}
-        labels = row.get("label_fields") if isinstance(row.get("label_fields"), dict) else {}
-        return "|".join(
-            [
-                _bucket_numeric(labels.get("mfe_pct"), [-3, 0, 3, 7], ["mfe_deep_neg", "mfe_neg", "mfe_low", "mfe_mid", "mfe_high"]),
-                _bucket_numeric(labels.get("mae_pct"), [-7, -3, 0, 3], ["mae_deep", "mae_mid", "mae_low", "mae_flat", "mae_green"]),
-                _held_bucket(labels.get("held_sec")),
-                str(labels.get("exit_reason") or "-"),
-                str(f.get("panic_context") or "-"),
-                str(f.get("ofi_state") or "-"),
-                str(f.get("qi_state") or "-"),
-            ]
-        )
+        return _holding_exit_bucket_key(row)
 
     buckets = _group(stage_rows, "holding_exit_bucket_attribution", "holding_exit", key)
     return _attribution("holding_exit_bucket_attribution", "holding_exit", buckets, len(stage_rows))
@@ -1009,7 +1114,7 @@ def build_swing_lifecycle_decision_matrix(
     lookback_days: int = 90,
 ) -> dict[str, Any]:
     date_key = _date_text(target_date)
-    probe_rows = _load_probe_rows(date_key)
+    probe_rows, probe_diagnostics = _load_probe_rows_with_diagnostics(date_key)
     discovery_rows, arm_status_counts = _load_discovery_lifecycle_rows(
         date_key,
         db_url=db_url,
@@ -1084,6 +1189,10 @@ def build_swing_lifecycle_decision_matrix(
             "discovery_rows": len(discovery_rows),
             "labeled_rows": labeled_rows,
             "pending_future_quote_count": pending,
+            "raw_swing_event_count": probe_diagnostics.get("raw_swing_event_count", 0),
+            "ldm_consumed_event_count": probe_diagnostics.get("ldm_consumed_event_count", 0),
+            "ldm_event_coverage_rate": probe_diagnostics.get("ldm_event_coverage_rate", 0.0),
+            "unmapped_swing_stage_counts": probe_diagnostics.get("unmapped_swing_stage_counts", {}),
             "stage_counts": _counts(rows, "lifecycle_stage"),
             "source_book_counts": _counts(rows, "source_book"),
             "sim_auto_candidate_count": sim_count,
@@ -1130,6 +1239,10 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- total_rows: `{summary.get('total_rows')}`",
         f"- probe_rows: `{summary.get('probe_rows')}`",
         f"- discovery_rows: `{summary.get('discovery_rows')}`",
+        f"- raw_swing_event_count: `{summary.get('raw_swing_event_count')}`",
+        f"- ldm_consumed_event_count: `{summary.get('ldm_consumed_event_count')}`",
+        f"- ldm_event_coverage_rate: `{summary.get('ldm_event_coverage_rate')}`",
+        f"- unmapped_swing_stage_counts: `{summary.get('unmapped_swing_stage_counts') or {}}`",
         f"- sim_auto_candidate_count: `{summary.get('sim_auto_candidate_count')}`",
         f"- workorder_count: `{summary.get('workorder_count')}`",
         f"- swing_lifecycle_flow_bucket_count: `{summary.get('swing_lifecycle_flow_bucket_count')}`",

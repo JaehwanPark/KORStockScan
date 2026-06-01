@@ -1,7 +1,7 @@
 # Swing Runtime Approval - 2026-05-19
 
 - Runtime change: `false`
-- Approval state: `proposal -> approval_required -> approved_live_dry_run`
+- Approval state: `proposal -> approval_required -> approved_live_dry_run`; phase0 real canary: `auto_approved_real_canary -> preopen_bounded_real_canary`
 - Broker order submission: `false`
 - tradeoff_score_threshold: `0.68`
 - EV calibration source: `combined_real_plus_sim`

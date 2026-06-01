@@ -1044,6 +1044,42 @@ def test_swing_parent_flow_handoff_passes_when_ev_and_runtime_include_candidate(
     assert report["missing"] == []
 
 
+def test_swing_lifecycle_handoff_fails_when_matrix_candidate_missing_from_discovery():
+    matrix = {
+        "input_contract": {"swing_daily_simulation_consumed": False},
+        "swing_lifecycle_flow_bucket_attribution": {
+            "sim_auto_approval_candidates": [
+                {
+                    "candidate_id": "swing_ldm_lifecycle_flow_combo_parent",
+                    "bucket_id": "swing_ldm_lifecycle_flow_combo_parent",
+                }
+            ],
+        },
+    }
+    discovery = {
+        "summary": {"ai_two_pass_review_status": "parsed", "ai_fail_closed": False},
+        "surfaced_candidate_ids": ["swing_ldm_lifecycle_flow_renamed"],
+    }
+    ev_report = {
+        "swing_lifecycle_decision_matrix": {
+            "sim_auto_candidate_ids": ["swing_ldm_lifecycle_flow_combo_parent"],
+        },
+        "swing_lifecycle_bucket_discovery": discovery,
+    }
+    runtime_summary = {
+        "swing_lifecycle_decision_matrix": {
+            "sim_auto_candidate_ids": ["swing_ldm_lifecycle_flow_combo_parent"],
+        },
+        "swing_lifecycle_bucket_discovery": discovery,
+    }
+
+    report = mod._swing_lifecycle_handoff_status(matrix, discovery, ev_report, runtime_summary, {"orders": []})
+
+    assert report["status"] == "fail"
+    assert "swing_lifecycle_matrix_to_discovery_candidate_handoff_missing" in report["missing"]
+    assert report["missing_matrix_to_discovery_candidate_ids"] == ["swing_ldm_lifecycle_flow_combo_parent"]
+
+
 def test_swing_lifecycle_handoff_warns_on_ai_two_pass_missing():
     matrix = {
         "input_contract": {"swing_daily_simulation_consumed": False},
@@ -1070,6 +1106,78 @@ def test_swing_lifecycle_handoff_warns_on_ai_two_pass_missing():
     assert report["ai_review_blocker_state"] == "provider_disabled"
     assert report["pre_review_sim_auto_candidate_count"] == 1
     assert "swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked" in report["warnings"]
+
+
+def test_swing_lifecycle_handoff_warns_on_discovery_stage_unknown():
+    matrix = {
+        "input_contract": {"swing_daily_simulation_consumed": False},
+        "entry_bucket_attribution": {"buckets": []},
+    }
+    discovery = {
+        "summary": {"ai_two_pass_review_status": "parsed", "ai_fail_closed": False},
+        "surfaced_candidates": [{"candidate_id": "swing:unknown-stage", "bucket_id": "swing:unknown-stage"}],
+        "surfaced_candidate_ids": [],
+        "warnings": [],
+    }
+    ev_report = {"swing_lifecycle_bucket_discovery": discovery}
+    runtime_summary = {"swing_lifecycle_bucket_discovery": discovery}
+
+    report = mod._swing_lifecycle_handoff_status(matrix, discovery, ev_report, runtime_summary, {"orders": []})
+
+    assert report["status"] == "warning"
+    assert report["stage_unknown_candidate_ids"] == ["swing:unknown-stage"]
+    assert "swing_lifecycle_bucket_discovery:stage_unknown" in report["warnings"]
+
+
+def test_swing_lifecycle_handoff_warns_on_low_ldm_event_coverage():
+    matrix = {
+        "input_contract": {"swing_daily_simulation_consumed": False},
+        "summary": {
+            "raw_swing_event_count": 1200,
+            "ldm_consumed_event_count": 5,
+            "ldm_event_coverage_rate": 0.004167,
+            "unmapped_swing_stage_counts": {"swing_custom_event": 1195},
+        },
+        "entry_bucket_attribution": {"buckets": []},
+    }
+    discovery = {
+        "summary": {"ai_two_pass_review_status": "parsed", "ai_fail_closed": False},
+        "surfaced_candidate_ids": [],
+        "warnings": [],
+    }
+
+    report = mod._swing_lifecycle_handoff_status(matrix, discovery, {}, {}, {"orders": []})
+
+    assert report["status"] == "warning"
+    assert report["raw_swing_event_count"] == 1200
+    assert report["ldm_consumed_event_count"] == 5
+    assert report["ldm_event_coverage_rate"] == 0.004167
+    assert report["unmapped_swing_stage_counts"] == {"swing_custom_event": 1195}
+    assert "swing_lifecycle_decision_matrix:low_event_coverage" in report["warnings"]
+
+
+def test_swing_lifecycle_handoff_warns_on_nan_ldm_event_coverage():
+    matrix = {
+        "input_contract": {"swing_daily_simulation_consumed": False},
+        "summary": {
+            "raw_swing_event_count": 1200,
+            "ldm_consumed_event_count": 5,
+            "ldm_event_coverage_rate": "nan",
+            "unmapped_swing_stage_counts": {"swing_custom_event": 1195},
+        },
+        "entry_bucket_attribution": {"buckets": []},
+    }
+    discovery = {
+        "summary": {"ai_two_pass_review_status": "parsed", "ai_fail_closed": False},
+        "surfaced_candidate_ids": [],
+        "warnings": [],
+    }
+
+    report = mod._swing_lifecycle_handoff_status(matrix, discovery, {}, {}, {"orders": []})
+
+    assert report["status"] == "warning"
+    assert report["ldm_event_coverage_rate"] == 0.0
+    assert "swing_lifecycle_decision_matrix:low_event_coverage" in report["warnings"]
 
 
 def test_swing_lifecycle_handoff_passes_without_ai_warning_when_parsed():

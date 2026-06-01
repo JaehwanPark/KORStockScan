@@ -24,7 +24,7 @@
 | `holding` | 523 | 75 |
 | `scale_in` | 30 | 8 |
 | `exit` | 66 | 16 |
-| `other` | 116 | 2 |
+| `other` | 122 | 2 |
 
 ## Key Stages
 
@@ -45,10 +45,10 @@
 | `swing_probe_sell_order_assumed_filled` | 18 | 14 |
 | `swing_probe_state_empty_overwrite_blocked` | 6 | 1 |
 | `swing_probe_state_persisted` | 46 | 1 |
-| `swing_probe_state_restored` | 3 | 1 |
+| `swing_probe_state_restored` | 6 | 1 |
 | `swing_reentry_counterfactual_after_loss` | 59 | 1 |
 | `swing_same_symbol_loss_reentry_cooldown` | 1 | 1 |
-| `swing_same_symbol_loss_reentry_cooldowns_restored` | 1 | 1 |
+| `swing_same_symbol_loss_reentry_cooldowns_restored` | 4 | 1 |
 | `swing_scale_in_micro_context_observed` | 10 | 8 |
 | `swing_sim_scale_in_order_assumed_filled` | 10 | 8 |
 
@@ -82,17 +82,15 @@
 
 - available: `True`
 - sample_state: `hold_sample`
-- rows: `45`
+- rows: `36`
 - closed_count: `0`
 - winner_count: `0`
 - loser_count: `0`
 
 | family | rows | closed | winner | loser | avg_net_ret |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `swing_gatekeeper_reject_cooldown` | 15 | 0 | 0 | 0 | None |
-| `swing_market_regime_sensitivity` | 15 | 0 | 0 | 0 | None |
-| `swing_model_floor` | 3 | 0 | 0 | 0 | None |
-| `swing_selection_top_k` | 12 | 0 | 0 | 0 | None |
+| `swing_gatekeeper_reject_cooldown` | 32 | 0 | 0 | 0 | None |
+| `swing_market_regime_sensitivity` | 4 | 0 | 0 | 0 | None |
 
 ## Observation Axes
 

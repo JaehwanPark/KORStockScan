@@ -1,7 +1,7 @@
 # Swing Runtime Approval - 2026-05-18
 
 - Runtime change: `false`
-- Approval state: `proposal -> approval_required -> approved_live_dry_run`
+- Approval state: `proposal -> approval_required -> approved_live_dry_run`; phase0 real canary: `auto_approved_real_canary -> preopen_bounded_real_canary`
 - Broker order submission: `false`
 - tradeoff_score_threshold: `0.68`
 - EV calibration source: `combined_real_plus_sim`
@@ -32,7 +32,7 @@
 | `swing_pyramid_trigger` | `freeze` | 0.3501 | `runtime_family_guard_missing` |
 | `swing_avg_down_eligibility` | `freeze` | 0.3501 | `runtime_family_guard_missing` |
 | `swing_trailing_stop_time_stop` | `freeze` | 0.3501 | `runtime_family_guard_missing` |
-| `swing_holding_flow_defer` | `hold_sample` | 0.3201 | `family_sample_floor_not_met, runtime_family_guard_missing` |
+| `swing_holding_flow_defer` | `hold_sample` | 0.3301 | `family_sample_floor_not_met, runtime_family_guard_missing` |
 | `swing_entry_ofi_qi_execution_quality` | `hold_sample` | 0.3001 | `family_sample_floor_not_met, runtime_family_guard_missing` |
 | `swing_scale_in_ofi_qi_confirmation` | `freeze` | 0.3501 | `scale_in_ofi_qi_invalid_micro_context, runtime_family_guard_missing` |
 | `swing_exit_ofi_qi_smoothing` | `freeze` | 0.3501 | `runtime_family_guard_missing` |

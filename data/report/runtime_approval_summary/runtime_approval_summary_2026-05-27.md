@@ -9,19 +9,32 @@
 - panic_approval_requested: `0`
 - scalp_entry_adm_status: `pass`
 - lifecycle_matrix_status: `pass`
+- lifecycle_bucket_windows_promotion: `missing` / `None`
 - lifecycle_ai_context prompt/applied: `3` / `2596`
 - swing_strategy_discovery_labeled/pending: `84` / `2238`
-- swing_lifecycle_matrix_auto: `8`
-- swing_lifecycle_bucket_auto: `8`
+- swing_lifecycle_matrix_auto: `0`
+- swing_lifecycle_bucket_auto: `0`
 - institutional_flow_available/join_rate: `True` / `100.0`
+- microstructure_reaction_available/ok: `False` / `0`
 - pattern_lab_currentness_status: `pass`
-- pattern_lab_ai_review_status: `pass`
+- pattern_lab_ai_review_status: `warning`
 - producer_gap_discovery_status: `warning`
 - pattern_lab_propagation_status: `pass`
 - env_generated_at: `2026-05-27T07:35:02`
-- first_bot_start_at: `2026-05-27T07:40:02`
-- first_bot_start_after_env_at: `2026-05-27T07:40:02`
+- first_bot_start_at: `-`
+- first_bot_start_after_env_at: `-`
 - pre_env_boot_gap: `False`
+
+## Microstructure Reaction Context
+- available: `False`
+- authority: `entry_confidence_modifier_source_only`
+- rows ok/missing: `0` / `0`
+- real_submitted_count: `0`
+- status_counts: `{}`
+- entry_reaction_quality_counts: `{}`
+- avg_scores ask/hold/bid: `None` / `None` / `None`
+- max_vi_proximity_risk: `0`
+- warnings: `['microstructure_reaction_context_missing']`
 
 ## Scalping
 | 항목 | 설명 | 현재 적용 | 상태 | Gate 분류 | 튜닝 경로 | 판정 해석 | 점수 | 계약 | 차단/판정 사유 |
@@ -72,9 +85,21 @@
 - runtime_bias_scope: `stage_action_proposal_micro_canary`
 - total/joined/floor: `41172` / `39464` / `20`
 - policy_pass/promote_ready: `5` / `1`
+- lifecycle_flow buckets/complete/runtime/workorders: `82` / `0` / `0` / `20`
+- holding/exit buckets: `30` / `54`
+- holding/exit workorders: `10` / `10`
+- lifecycle identity missing/join_rate: `0` / `1.0`
+- lifecycle complete_flow_rate: `0.0`
+- incomplete_flow_reason_counts: `{'missing_entry': 20976, 'missing_holding': 21539, 'missing_exit': 21248, 'missing_submit': 21505}`
 - fixed_threshold_roles: `{'hard_safety': ['broker_submit_guard', 'stale_quote_submit_block', 'price_freshness_guard', 'hard_stop', 'protect_stop', 'emergency_stop', 'account_order_cooldown_qty_guard'], 'baseline_prior': ['BUY_SCORE_THRESHOLD', 'VPW_MIN_SCORE', 'strength_momentum_cutoff', 'entry_score_cutoff'], 'bounded_tunable': ['SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION', 'SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION', 'SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION', 'score65_74_recovery_probe', 'soft_stop_whipsaw_confirmation', 'holding_flow_override', 'scale_in_price_guard'], 'legacy_archive': ['fallback_scout_main', 'fallback_single', 'latency_fallback_split_entry', 'legacy_latency_composite', 'closed_shadow_axes']}`
 - ready_for_bounded_apply: `True`
 - warnings: `[]`
+
+## Lifecycle Bucket Windows
+- promotion_window: `mtd`
+- confirmation_windows: `['rolling5d', 'rolling10d']`
+- windows: `{'rolling5d': {'available': False, 'artifact': None, 'window_role': 'rolling_confirmation', 'window_policy': 'rolling5d', 'status': 'missing', 'parent_bucket_count': 0, 'selected_parent_level': None, 'parent_granularity_status': None, 'absorbed_child_count': 0, 'absorbed_sample_count': 0, 'child_conflict_warning_count': 0, 'live_auto_apply_ready_count': 0, 'source_contract_status': None, 'ai_two_pass_review_status': None}, 'rolling10d': {'available': False, 'artifact': None, 'window_role': 'rolling_confirmation', 'window_policy': 'rolling10d', 'status': 'missing', 'parent_bucket_count': 0, 'selected_parent_level': None, 'parent_granularity_status': None, 'absorbed_child_count': 0, 'absorbed_sample_count': 0, 'child_conflict_warning_count': 0, 'live_auto_apply_ready_count': 0, 'source_contract_status': None, 'ai_two_pass_review_status': None}, 'mtd': {'available': False, 'artifact': None, 'window_role': 'promotion_confirmation', 'window_policy': 'mtd', 'status': 'missing', 'parent_bucket_count': 0, 'selected_parent_level': None, 'parent_granularity_status': None, 'absorbed_child_count': 0, 'absorbed_sample_count': 0, 'child_conflict_warning_count': 0, 'live_auto_apply_ready_count': 0, 'source_contract_status': None, 'ai_two_pass_review_status': None}}`
+- warnings: `['lifecycle_bucket_windows:rolling5d_missing', 'lifecycle_bucket_windows:rolling10d_missing', 'lifecycle_bucket_windows:mtd_missing']`
 
 ## Lifecycle AI Context
 - context_artifact: `/home/ubuntu/KORStockScan/data/report/lifecycle_ai_context/lifecycle_ai_context_2026-05-27.json`
@@ -116,9 +141,9 @@
 ## Swing Lifecycle Matrix
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_lifecycle_decision_matrix/swing_lifecycle_decision_matrix_2026-05-27.json`
 - available: `True`
-- total/probe/discovery: `2775` / `321` / `2454`
-- sim_auto_candidate_count: `8`
-- workorder_count: `7`
+- total/probe/discovery: `135311` / `132857` / `2454`
+- sim_auto_candidate_count: `0`
+- workorder_count: `9`
 - daily_simulation_consumed: `False`
 - runtime_effect: `False`
 - warnings: `[]`
@@ -127,7 +152,7 @@
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_lifecycle_bucket_discovery/swing_lifecycle_bucket_discovery_2026-05-27.json`
 - available: `True`
 - source_contract_status: `pass`
-- surfaced/sim_auto/code_patch: `448` / `8` / `14`
+- surfaced/sim_auto/code_patch: `547` / `0` / `0`
 - runtime_effect: `False`
 - warnings: `[]`
 
@@ -139,6 +164,6 @@
 
 ## Pattern Lab Audits
 - currentness: status=`pass` fail=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-27.json`
-- ai_review: status=`pass` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-05-27.json`
+- ai_review: status=`warning` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-05-27.json`
 - producer_gap_discovery: status=`warning` artifact=`/home/ubuntu/KORStockScan/data/report/producer_gap_discovery/producer_gap_discovery_2026-05-27.json`
 - propagation: status=`pass` fail=`0` warnings=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-27.json`

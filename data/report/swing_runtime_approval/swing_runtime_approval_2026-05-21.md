@@ -1,7 +1,7 @@
 # Swing Runtime Approval - 2026-05-21
 
 - Runtime change: `false`
-- Approval state: `proposal -> approval_required -> approved_live_dry_run`
+- Approval state: `proposal -> approval_required -> approved_live_dry_run`; phase0 real canary: `auto_approved_real_canary -> preopen_bounded_real_canary`
 - Broker order submission: `false`
 - tradeoff_score_threshold: `0.68`
 - EV calibration source: `combined_real_plus_sim`
@@ -12,7 +12,7 @@
 - sim-only actions: `AVG_DOWN, PYRAMID, SCALE_IN`
 - scale-in real canary policy: `swing_scale_in_real_canary_phase0`
 - scale-in allowed actions: `PYRAMID, AVG_DOWN`
-- requested/blocked/approved: `3` / `11` / `0`
+- requested/blocked/approved: `3` / `13` / `0`
 
 ## Approval Requests
 
@@ -26,8 +26,10 @@
 
 | family | state | score | reasons |
 | --- | --- | ---: | --- |
+| `swing_model_floor` | `dry_run_auto_apply_ready` | 0.955 | `ai_tier2_validated_pre_final_dry_run_auto_apply` |
 | `swing_selection_top_k` | `freeze` | 0.955 | `same_stage_owner_conflict:swing_model_floor` |
 | `swing_gatekeeper_accept_reject` | `freeze` | 0.955 | `runtime_family_guard_missing` |
+| `swing_gatekeeper_reject_cooldown` | `dry_run_auto_apply_ready` | 0.955 | `ai_tier2_validated_pre_final_dry_run_auto_apply` |
 | `swing_market_regime_sensitivity` | `freeze` | 0.955 | `same_stage_owner_conflict:swing_gatekeeper_reject_cooldown` |
 | `swing_pyramid_trigger` | `freeze` | 0.955 | `runtime_family_guard_missing` |
 | `swing_avg_down_eligibility` | `freeze` | 0.955 | `runtime_family_guard_missing` |

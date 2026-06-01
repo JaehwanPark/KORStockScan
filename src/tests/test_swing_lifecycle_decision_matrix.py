@@ -89,6 +89,124 @@ def test_probe_and_discovery_rows_build_swing_ldm_contract(tmp_path, monkeypatch
     assert all(row["source_book"] != "swing_daily_simulation" for row in report["lifecycle_rows"])
 
 
+def test_labeled_discovery_arm_expands_to_source_only_complete_flow():
+    source = {
+        "source_date": "2026-05-22",
+        "stock_code": "000660",
+        "arm_row_id": 10,
+        "arm_id": "arm_a",
+        "entry_policy": "pullback",
+        "sizing_policy": "one_share",
+        "exit_policy": "policy_exit",
+        "selection_arm": "lifecycle_rank",
+        "label_status": "labeled",
+        "final_return_pct": 1.6,
+        "realized_exit_return_pct": 1.6,
+        "mfe_pct": 2.0,
+        "mae_pct": -0.5,
+        "source_quality_status": "pass",
+    }
+
+    rows = mod._discovery_lifecycle_rows(source)
+    attribution = mod._swing_lifecycle_flow_bucket_attribution(rows)
+
+    assert [row["lifecycle_stage"] for row in rows] == ["entry", "holding", "exit"]
+    assert {row["actual_order_submitted"] for row in rows} == {False}
+    assert {row["broker_order_forbidden"] for row in rows} == {True}
+    assert {row["allowed_runtime_apply"] for row in rows} == {False}
+    assert rows[0]["label_fields"]["final_return_pct"] is None
+    assert rows[1]["label_fields"]["final_return_pct"] is None
+    assert rows[2]["label_fields"]["final_return_pct"] == 1.6
+    assert attribution["summary"]["complete_flow_count"] == 1
+    assert attribution["flows"][0]["identity_quality"] == "swing_strategy_discovery_arm_id"
+    assert attribution["flows"][0]["source_quality_adjusted_ev_pct"] == 1.6
+    assert "one_share" in attribution["flows"][0]["bucket_key"]
+    assert "policy_exit" in attribution["flows"][0]["bucket_key"]
+
+
+def test_swing_sim_events_are_consumed_as_source_only_probe_rows(tmp_path, monkeypatch):
+    target = "2026-05-22"
+    event_dir = tmp_path / "pipeline_events"
+    event_dir.mkdir()
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", event_dir)
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "report" / "swing_lifecycle_decision_matrix")
+    with (event_dir / f"pipeline_events_{target}.jsonl").open("w", encoding="utf-8") as handle:
+        for event in (
+            "swing_sim_buy_order_assumed_filled",
+            "swing_sim_holding_started",
+            "swing_sim_scale_in_order_assumed_filled",
+            "swing_sim_sell_order_assumed_filled",
+        ):
+            handle.write(
+                json.dumps(
+                    {
+                        "event": event,
+                        "stock_code": "005930",
+                        "lifecycle_flow_bridge_key": "SIM-FLOW-1",
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                        "profit_rate": 1.2 if event.endswith("sell_order_assumed_filled") else None,
+                    }
+                )
+                + "\n"
+            )
+    monkeypatch.setattr(mod, "_load_discovery_lifecycle_rows", lambda target_date, db_url, lookback_days: ([], {}))
+
+    report = mod.build_swing_lifecycle_decision_matrix(target, db_url="sqlite://")
+
+    assert report["summary"]["raw_swing_event_count"] == 4
+    assert report["summary"]["ldm_consumed_event_count"] == 4
+    assert report["summary"]["ldm_event_coverage_rate"] == 1.0
+    assert report["summary"]["unmapped_swing_stage_counts"] == {}
+    assert report["summary"]["stage_counts"]["entry"] == 1
+    assert report["summary"]["stage_counts"]["holding"] == 1
+    assert report["summary"]["stage_counts"]["scale_in"] == 1
+    assert report["summary"]["stage_counts"]["exit"] == 1
+
+
+def test_holding_exit_attribution_key_matches_flow_child_bucket_key():
+    row = {
+        "lifecycle_stage": "holding",
+        "runtime_features": {
+            "sizing_policy": "one_share",
+            "exit_policy": "policy_exit",
+            "panic_context": "normal",
+            "ofi_state": "neutral",
+            "qi_state": "neutral",
+        },
+        "label_fields": {
+            "mfe_pct": 2.0,
+            "mae_pct": -0.5,
+            "held_sec": 3600,
+            "exit_reason": "time_stop",
+        },
+        "source_quality_status": "pass",
+    }
+
+    direct_key = mod._holding_exit_bucket_key(row)
+    attribution = mod._holding_exit_attribution([row])
+
+    assert attribution["buckets"][0]["bucket_key"] == direct_key
+    assert "one_share" in direct_key
+    assert "policy_exit" in direct_key
+
+
+def test_pending_discovery_arm_remains_carry_only():
+    source = {
+        "source_date": "2026-05-22",
+        "stock_code": "000660",
+        "arm_row_id": 10,
+        "arm_id": "arm_a",
+        "label_status": "pending_future_quotes",
+    }
+
+    rows = mod._discovery_lifecycle_rows(source)
+
+    assert len(rows) == 1
+    assert rows[0]["lifecycle_stage"] == "carry"
+    assert rows[0]["source_stage"] == "policy_exit_pending_carry"
+
+
 def test_swing_lifecycle_flow_bucket_complete_flow_and_carry_normalization():
     rows = []
     for stage, label in (("entry", None), ("carry", None), ("scale_in", None), ("exit", 1.4)):
@@ -152,6 +270,101 @@ def test_swing_lifecycle_flow_fallback_identity_does_not_promote():
     assert attribution["summary"]["incomplete_flow_reason_counts"]["fallback_identity_incomplete"] == 3
     assert all(flow["source_quality_gate"] == "fallback_identity_incomplete" for flow in attribution["flows"])
     assert attribution["runtime_approval_candidates"] == []
+
+
+def test_swing_lifecycle_flow_uses_source_record_id_bridge():
+    rows = [
+        {
+            "lifecycle_stage": "entry",
+            "source_book": "swing_intraday_live_equiv_probe",
+            "stock_code": "005930",
+            "row_id": "source-100",
+            "runtime_features": {"source_record_id": "100", "origin": "blocked_swing_gap"},
+            "label_fields": {},
+            "source_quality_status": "pass",
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "runtime_effect": False,
+        },
+        {
+            "lifecycle_stage": "holding",
+            "source_book": "swing_intraday_live_equiv_probe",
+            "stock_code": "005930",
+            "row_id": "probe-100",
+            "runtime_features": {"source_record_id": "100", "origin": "blocked_swing_gap"},
+            "label_fields": {},
+            "source_quality_status": "pass",
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "runtime_effect": False,
+        },
+        {
+            "lifecycle_stage": "exit",
+            "source_book": "swing_intraday_live_equiv_probe",
+            "stock_code": "005930",
+            "row_id": "probe-100",
+            "runtime_features": {"source_record_id": "100", "origin": "blocked_swing_gap"},
+            "label_fields": {"final_return_pct": 1.2, "mfe_pct": 2.0, "mae_pct": -0.5},
+            "source_quality_status": "pass",
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "runtime_effect": False,
+        },
+    ]
+
+    attribution = mod._swing_lifecycle_flow_bucket_attribution(rows)
+
+    assert attribution["summary"]["complete_flow_count"] == 1
+    assert attribution["flows"][0]["identity_quality"] == "source_record_id"
+    assert attribution["flows"][0]["stage_presence"] == {"entry": True, "holding": True, "exit": True}
+    assert attribution["flows"][0]["entry_bucket_id"]
+    assert attribution["flows"][0]["holding_bucket_id"]
+
+
+def test_swing_lifecycle_flow_source_record_id_is_stock_scoped():
+    rows = [
+        {
+            "lifecycle_stage": "entry",
+            "source_book": "swing_intraday_live_equiv_probe",
+            "stock_code": "005930",
+            "runtime_features": {"source_record_id": "100"},
+            "label_fields": {},
+            "source_quality_status": "pass",
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "runtime_effect": False,
+        },
+        {
+            "lifecycle_stage": "holding",
+            "source_book": "swing_intraday_live_equiv_probe",
+            "stock_code": "000660",
+            "runtime_features": {"source_record_id": "100"},
+            "label_fields": {},
+            "source_quality_status": "pass",
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "runtime_effect": False,
+        },
+        {
+            "lifecycle_stage": "exit",
+            "source_book": "swing_intraday_live_equiv_probe",
+            "stock_code": "000660",
+            "runtime_features": {"source_record_id": "100"},
+            "label_fields": {"final_return_pct": 1.0},
+            "source_quality_status": "pass",
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "runtime_effect": False,
+        },
+    ]
+
+    attribution = mod._swing_lifecycle_flow_bucket_attribution(rows)
+
+    assert attribution["summary"]["complete_flow_count"] == 0
+    assert {item["flow_instance_id"] for item in attribution["flows"]} == {
+        "source_record_id:005930:100",
+        "source_record_id:000660:100",
+    }
 
 
 def test_swing_lifecycle_flow_arm_identity_is_stock_scoped():
@@ -246,6 +459,81 @@ def test_pipeline_event_probe_fields_are_consumed(tmp_path, monkeypatch):
     assert "swing_intraday_live_equiv_probe_missing" not in report["warnings"]
     assert report["lifecycle_rows"][0]["source_stage"] == "swing_probe_sell_order_assumed_filled"
     assert report["lifecycle_rows"][0]["row_id"] == "field-record-10"
+
+
+def test_blocked_swing_observation_events_are_consumed_but_generic_latency_is_excluded(tmp_path, monkeypatch):
+    target = "2026-05-22"
+    event_dir = tmp_path / "pipeline_events"
+    event_dir.mkdir()
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", event_dir)
+
+    records = [
+        {
+            "event": "blocked_swing_score_vpw",
+            "stock_code": "005930",
+            "simulation_book": "swing_intraday_live_equiv_probe",
+            "block_reason": "blocked_swing_score_vpw",
+        },
+        {
+            "event": "swing_entry_policy_evaluated",
+            "stock_code": "000660",
+            "decision_authority": "swing_sim_observation_only",
+        },
+        {
+            "event": "latency_block",
+            "stock_code": "035420",
+            "block_reason": "swing_probe_latency_block",
+        },
+        {
+            "event": "latency_block",
+            "stock_code": "051910",
+            "block_reason": "generic_latency",
+        },
+        {
+            "event": "swing_custom_unmapped_observation",
+            "stock_code": "068270",
+            "simulation_book": "swing_intraday_live_equiv_probe",
+        },
+    ]
+    with (event_dir / f"pipeline_events_{target}.jsonl").open("w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    rows, diagnostics = mod._load_probe_rows_with_diagnostics(target)
+
+    assert diagnostics["raw_swing_event_count"] == 4
+    assert diagnostics["ldm_consumed_event_count"] == 3
+    assert diagnostics["ldm_event_coverage_rate"] == 0.75
+    assert diagnostics["unmapped_swing_stage_counts"]["swing_custom_unmapped_observation"] == 1
+    assert [row["stock_code"] for row in rows] == ["005930", "000660", "035420"]
+    assert all(row["lifecycle_stage"] == "entry" for row in rows)
+    assert all(row["allowed_runtime_apply"] is False for row in rows)
+
+
+def test_swing_marker_does_not_match_downswing_reason_text():
+    assert mod._has_swing_marker({"event": "latency_block", "reason": "downswing volatility"}) is False
+    assert mod._has_swing_marker({"event": "latency_block", "block_reason": "swing_probe_latency_block"}) is True
+
+
+def test_bucket_summary_uses_notional_weighted_ev_when_virtual_notional_exists():
+    rows = [
+        {
+            "runtime_features": {"virtual_notional_krw": 1000},
+            "label_fields": {"final_return_pct": 1.0},
+            "source_quality_status": "pass",
+        },
+        {
+            "runtime_features": {"virtual_notional_krw": 9000},
+            "label_fields": {"final_return_pct": 5.0},
+            "source_quality_status": "pass",
+        },
+    ]
+
+    summary = mod._bucket_summary("entry_bucket_attribution", "bucket=a", rows, "entry")
+
+    assert summary["equal_weight_avg_profit_pct"] == 3.0
+    assert summary["notional_weighted_ev_pct"] == 4.6
+    assert summary["source_quality_adjusted_ev_pct"] != summary["equal_weight_avg_profit_pct"]
 
 
 def test_swing_ldm_stage_only_candidates_remain_child_evidence(tmp_path, monkeypatch):

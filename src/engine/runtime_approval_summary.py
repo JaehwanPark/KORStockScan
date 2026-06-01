@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 from datetime import date, datetime
 from pathlib import Path
@@ -23,6 +24,25 @@ PRODUCER_GAP_DISCOVERY_DIR = REPORT_DIR / "producer_gap_discovery"
 PATTERN_LAB_PROPAGATION_AUDIT_DIR = REPORT_DIR / "pattern_lab_propagation_audit"
 SWING_RUNTIME_APPROVAL_ARTIFACT_DIR = Path(__file__).resolve().parents[2] / "data" / "threshold_cycle" / "approvals"
 BOT_HISTORY_LOG = Path(__file__).resolve().parents[2] / "logs" / "bot_history.log"
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        if value in (None, ""):
+            return default
+        return int(float(value))
+    except Exception:
+        return default
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value in (None, ""):
+            return default
+        numeric = float(value)
+        return numeric if math.isfinite(numeric) else default
+    except Exception:
+        return default
 
 
 _REASON_LABELS = {
@@ -1636,6 +1656,10 @@ def _swing_lifecycle_matrix_summary(ev_report: dict[str, Any]) -> dict[str, Any]
         warnings.append("swing_lifecycle_decision_matrix_missing")
     if bool(payload.get("daily_simulation_consumed")):
         warnings.append("forbidden_daily_simulation_consumed")
+    raw_event_count = _safe_int(payload.get("raw_swing_event_count"), 0)
+    ldm_coverage_rate = _safe_float(payload.get("ldm_event_coverage_rate"), 0.0)
+    if raw_event_count >= 1000 and ldm_coverage_rate < 0.01:
+        warnings.append("swing_lifecycle_decision_matrix_low_event_coverage")
     return {
         "family": "swing_lifecycle_decision_matrix",
         "available": available,
@@ -1645,20 +1669,26 @@ def _swing_lifecycle_matrix_summary(ev_report: dict[str, Any]) -> dict[str, Any]
         "runtime_effect": False,
         "runtime_mutation_allowed": False,
         "decision_authority": payload.get("decision_authority") or "swing_ldm_source_only",
-        "total_rows": int(payload.get("total_rows") or 0),
-        "probe_rows": int(payload.get("probe_rows") or 0),
-        "discovery_rows": int(payload.get("discovery_rows") or 0),
-        "swing_lifecycle_flow_bucket_count": int(payload.get("swing_lifecycle_flow_bucket_count") or 0),
-        "complete_flow_count": int(payload.get("complete_flow_count") or 0),
-        "incomplete_flow_count": int(payload.get("incomplete_flow_count") or 0),
+        "total_rows": _safe_int(payload.get("total_rows"), 0),
+        "probe_rows": _safe_int(payload.get("probe_rows"), 0),
+        "discovery_rows": _safe_int(payload.get("discovery_rows"), 0),
+        "swing_lifecycle_flow_bucket_count": _safe_int(payload.get("swing_lifecycle_flow_bucket_count"), 0),
+        "complete_flow_count": _safe_int(payload.get("complete_flow_count"), 0),
+        "incomplete_flow_count": _safe_int(payload.get("incomplete_flow_count"), 0),
         "identity_join_rate": payload.get("identity_join_rate"),
         "complete_flow_rate": payload.get("complete_flow_rate"),
         "join_contract_blocked": bool(payload.get("join_contract_blocked")),
-        "sim_auto_candidate_count": int(payload.get("sim_auto_candidate_count") or 0),
-        "workorder_count": int(payload.get("workorder_count") or 0),
+        "sim_auto_candidate_count": _safe_int(payload.get("sim_auto_candidate_count"), 0),
+        "workorder_count": _safe_int(payload.get("workorder_count"), 0),
+        "raw_swing_event_count": raw_event_count,
+        "ldm_consumed_event_count": _safe_int(payload.get("ldm_consumed_event_count"), 0),
+        "ldm_event_coverage_rate": ldm_coverage_rate,
+        "unmapped_swing_stage_counts": payload.get("unmapped_swing_stage_counts")
+        if isinstance(payload.get("unmapped_swing_stage_counts"), dict)
+        else {},
         "daily_simulation_consumed": bool(payload.get("daily_simulation_consumed")),
         "swing_entry_bottleneck_primary": payload.get("swing_entry_bottleneck_primary"),
-        "swing_lifecycle_contract_gap_count": int(payload.get("swing_lifecycle_contract_gap_count") or 0),
+        "swing_lifecycle_contract_gap_count": _safe_int(payload.get("swing_lifecycle_contract_gap_count"), 0),
         "sim_auto_candidate_ids": payload.get("sim_auto_candidate_ids") if isinstance(payload.get("sim_auto_candidate_ids"), list) else [],
         "state_interpretation": "source-only Swing LDM. sim-only candidates are auto-approved for simulation policy input only.",
         "warnings": warnings,
@@ -1707,25 +1737,31 @@ def _swing_lifecycle_bucket_discovery_summary(ev_report: dict[str, Any]) -> dict
         "source_contract_status": payload.get("source_contract_status"),
         "ai_two_pass_review_status": ai_review_status or None,
         "ai_fail_closed": bool(payload.get("ai_fail_closed")),
+        "ai_review_blocker_state": payload.get("ai_review_blocker_state"),
+        "pre_review_sim_auto_candidate_count": _safe_int(payload.get("pre_review_sim_auto_candidate_count"), 0),
+        "sim_auto_reviewed_candidate_count": _safe_int(payload.get("sim_auto_reviewed_candidate_count"), 0),
+        "sim_auto_unreviewed_candidate_count": _safe_int(payload.get("sim_auto_unreviewed_candidate_count"), 0),
+        "sim_auto_downgraded_by_review_count": _safe_int(payload.get("sim_auto_downgraded_by_review_count"), 0),
+        "sim_auto_review_shard_count": _safe_int(payload.get("sim_auto_review_shard_count"), 0),
         "ai_review_followup_required": bool(payload.get("ai_review_followup_required")),
         "ai_review_followup_reasons": payload.get("ai_review_followup_reasons")
         if isinstance(payload.get("ai_review_followup_reasons"), list)
         else [],
         "sim_auto_blocked_by_ai_review_followup": bool(payload.get("sim_auto_blocked_by_ai_review_followup")),
-        "candidate_count": int(payload.get("candidate_count") or 0),
-        "surfaced_candidate_count": int(payload.get("surfaced_candidate_count") or 0),
-        "sim_auto_approved_count": int(payload.get("sim_auto_approved_count") or 0),
-        "swing_lifecycle_flow_bucket_count": int(payload.get("swing_lifecycle_flow_bucket_count") or 0),
-        "complete_flow_count": int(payload.get("complete_flow_count") or 0),
-        "incomplete_flow_count": int(payload.get("incomplete_flow_count") or 0),
+        "candidate_count": _safe_int(payload.get("candidate_count"), 0),
+        "surfaced_candidate_count": _safe_int(payload.get("surfaced_candidate_count"), 0),
+        "sim_auto_approved_count": _safe_int(payload.get("sim_auto_approved_count"), 0),
+        "swing_lifecycle_flow_bucket_count": _safe_int(payload.get("swing_lifecycle_flow_bucket_count"), 0),
+        "complete_flow_count": _safe_int(payload.get("complete_flow_count"), 0),
+        "incomplete_flow_count": _safe_int(payload.get("incomplete_flow_count"), 0),
         "identity_join_rate": payload.get("identity_join_rate"),
         "complete_flow_rate": payload.get("complete_flow_rate"),
         "join_contract_blocked": bool(payload.get("join_contract_blocked")),
-        "flow_sim_auto_approved_count": int(payload.get("flow_sim_auto_approved_count") or 0),
-        "stage_only_source_only_count": int(payload.get("stage_only_source_only_count") or 0),
-        "code_patch_required_count": int(payload.get("code_patch_required_count") or 0),
-        "runtime_blocked_contract_gap_count": int(payload.get("runtime_blocked_contract_gap_count") or 0),
-        "automation_handoff_gap_count": int(payload.get("automation_handoff_gap_count") or 0),
+        "flow_sim_auto_approved_count": _safe_int(payload.get("flow_sim_auto_approved_count"), 0),
+        "stage_only_source_only_count": _safe_int(payload.get("stage_only_source_only_count"), 0),
+        "code_patch_required_count": _safe_int(payload.get("code_patch_required_count"), 0),
+        "runtime_blocked_contract_gap_count": _safe_int(payload.get("runtime_blocked_contract_gap_count"), 0),
+        "automation_handoff_gap_count": _safe_int(payload.get("automation_handoff_gap_count"), 0),
         "swing_entry_bottleneck_primary": payload.get("swing_entry_bottleneck_primary"),
         "swing_entry_bottleneck_candidate_present": bool(payload.get("swing_entry_bottleneck_candidate_present")),
         "surfaced_candidate_ids": payload.get("surfaced_candidate_ids") if isinstance(payload.get("surfaced_candidate_ids"), list) else [],

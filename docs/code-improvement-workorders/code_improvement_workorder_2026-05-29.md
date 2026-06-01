@@ -27,9 +27,9 @@
 - stage_hook_workorder_discovery: `/home/ubuntu/KORStockScan/data/report/stage_hook_workorder_discovery/stage_hook_workorder_discovery_2026-05-29.json`
 - stage_hook_runtime_scaffold: `/home/ubuntu/KORStockScan/data/report/stage_hook_runtime_scaffold/stage_hook_runtime_scaffold_2026-05-29.json`
 - buy_funnel_sentinel: `/home/ubuntu/KORStockScan/data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-05-29.json`
-- generated_at: `2026-05-29T21:35:23+09:00`
-- generation_id: `2026-05-29-e032e14ffd87`
-- source_hash: `e032e14ffd87e53370655a052f1448dfe91c44c9d2857f952cfdf22d8334962e`
+- generated_at: `2026-06-01T13:53:54+09:00`
+- generation_id: `2026-05-29-c532385eb66a`
+- source_hash: `c532385eb66ae131a07364c935b318c06c3c976139f13bc3267e1447841f850d`
 
 ## 운영 원칙
 
@@ -51,45 +51,45 @@
 ## Snapshot Lineage
 
 - previous_exists: `True`
-- previous_generation_id: `2026-05-29-885c53a49650`
-- previous_source_hash: `885c53a49650561944dd795a84163894601bb1e8d698e3281d51e8608b747b52`
-- new_order_ids: `['order_pattern_lab_ai_review_order_pattern_lab_ai_review_ai_review_followup_2026_05_29', 'order_pattern_lab_ai_review_order_pattern_lab_ai_review_order_latency_guard_miss_ev_recovery', 'order_producer_gap_discovery_producer_gap_scale_in_counterfactual_gap_missing', 'order_producer_gap_discovery_producer_gap_sim_holding_runner_gap_missing', 'order_producer_gap_discovery_producer_gap_sim_scale_in_counterfactual_gap_missing', 'order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_computer_programmi', 'order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_diagnostic', 'order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_insurance_보험_생명보험_', 'order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_tel', 'order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_computer_programming_syste', 'order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_insurance_보험_생명보험_diagnost', 'order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_electronic_', 'order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_other_chemi', 'order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_other_financial_intermedia', 'order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_basic_chemica', 'order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_electronic_co', 'order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_plastic_produ', 'order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_semiconductor', 'order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_sea_and_coastal_water_transp']`
-- removed_order_ids: `['order_pattern_lab_ai_review_ai_review_followup_2026_05_29', 'order_pattern_lab_ai_review_order_latency_guard_miss_ev_recovery']`
+- previous_generation_id: `2026-05-29-32e9fb82c89b`
+- previous_source_hash: `32e9fb82c89b8b2d2855c5a873d3b233798964aa276833290b5fd25f0a1f1bc4`
+- new_order_ids: `[]`
+- removed_order_ids: `[]`
 - decision_changed_order_ids: `[]`
 
 ## Summary
 
-- source_order_count: `147`
+- source_order_count: `195`
 - scalping_source_order_count: `12`
 - swing_source_order_count: `9`
 - swing_entry_bottleneck_primary: `SWING_ENTRY_BOTTLENECK_OBSERVE`
 - swing_entry_bottleneck_selected: `False`
 - swing_lab_source_order_count: `3`
 - swing_strategy_discovery_source_order_count: `2`
-- swing_lifecycle_matrix_source_order_count: `18`
+- swing_lifecycle_matrix_source_order_count: `17`
 - swing_lifecycle_bucket_discovery_source_order_count: `0`
 - pattern_lab_currentness_source_order_count: `0`
 - pattern_lab_ai_review_source_order_count: `2`
-- threshold_ev_source_order_count: `20`
+- threshold_ev_source_order_count: `21`
 - lifecycle_submit_bucket_source_order_count: `0`
 - lifecycle_holding_exit_bucket_source_order_count: `20`
 - pipeline_event_verbosity_source_order_count: `0`
-- observation_source_quality_source_order_count: `0`
+- observation_source_quality_source_order_count: `1`
 - codebase_performance_source_order_count: `12`
 - buy_funnel_sentinel_source_order_count: `6`
 - entry_submit_drought_selected: `True`
 - entry_submit_drought_handoff_missing: `False`
 - panic_lifecycle_source_order_count: `2`
-- selected_order_count: `108`
-- non_selected_order_count: `39`
-- source_decision_counts: `{'implement_now': 2, 'attach_existing_family': 126, 'design_family_candidate': 6, 'defer_evidence': 10, 'reject': 3}`
-- selected_decision_counts: `{'implement_now': 2, 'attach_existing_family': 106}`
-- selected_route_counts: `{'implement_now': 2, 'existing_family': 106}`
+- selected_order_count: `154`
+- non_selected_order_count: `41`
+- source_decision_counts: `{'implement_now': 50, 'attach_existing_family': 126, 'design_family_candidate': 6, 'defer_evidence': 10, 'reject': 3}`
+- selected_decision_counts: `{'implement_now': 50, 'attach_existing_family': 104}`
+- selected_route_counts: `{'auto_patch_required': 48, 'implement_now': 2, 'existing_family': 104}`
 - selected_implement_now_route_count: `2`
-- selected_runtime_effect_false_count: `108`
-- selected_unimplemented_runtime_effect_false_count: `2`
-- selected_unimplemented_route_counts: `{'implement_now': 2}`
-- non_selected_decision_counts: `{'attach_existing_family': 20, 'design_family_candidate': 6, 'defer_evidence': 10, 'reject': 3}`
+- selected_runtime_effect_false_count: `154`
+- selected_unimplemented_runtime_effect_false_count: `50`
+- selected_unimplemented_route_counts: `{'auto_patch_required': 48, 'implement_now': 2}`
+- non_selected_decision_counts: `{'attach_existing_family': 22, 'design_family_candidate': 6, 'defer_evidence': 10, 'reject': 3}`
 - gemini_fresh: `True`
 - claude_fresh: `True`
 - swing_lifecycle_audit_available: `True`
@@ -123,7 +123,1639 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 
 ## Implementation Orders
 
-### 1. `order_pattern_lab_ai_review_order_pattern_lab_ai_review_ai_review_followup_2026_05_29`
+### 1. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_0273b5e0`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_66_69_source_scalp_entry_action_decision_snapshot_stale
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_66_69_source_scalp_entry_action_decision_snapshot_stale`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_66_69_source_scalp_:f2b928942e`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=score_mid_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_66_69_source_scalp_entry_action_decision_snapshot_stale_fresh_liquidity_liquidity_un|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_trailing_take_profit_outcome_good_exit_profit_profit_`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=hybrid`, `source_bucket_kind=lifecycle_flow_sim_probe_policy`, `stage=lifecycle_flow`, `classification_state=lifecycle_flow_sim_probe_candidate`, `bucket_relation=existing_bucket_refinement`, `recommended_action=relax_or_recover`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=0.8633`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 2. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_0f872dff`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquid
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquid`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked:2509d49c55`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=entry_observed|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquidity_liquidity_unknown_overbou|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_neutral_profit_profit_lt_neg070`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-1.234`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 3. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_169b9812`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_:af9c72bc40`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_60_62_source_scalp_entry_action_decision_snapshot_stale_stale_block_liquidity_liquid|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_neutral_profit_profit_lt_neg070`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-1.0358`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 4. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_16a37be5`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_stale_block_liquidi
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_stale_block_liquidi`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocke:7d7179466a`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_60_62_source_blocked_ai_score_stale_stale_block_liquidity_liquidity_unknown_overboug|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_missed_upside_profit_profit_lt_`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-0.5915`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 5. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_17ac00a0`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_:44049c40d9`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_60_62_source_scalp_entry_action_decision_snapshot_stale_fresh_liquidity_liquidity_un|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_trailing_take_profit_outcome_neutral_profit_profit_po`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-0.4759`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 6. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_17f66426`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_:02147adcf1`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_60_62_source_scalp_entry_action_decision_snapshot_stale_stale_block_liquidity_liquid|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_good_exit_profit_profit_lt_neg0`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-1.2849`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 7. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_1b4103d1`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocke:656e4d5da5`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liquidity_unknown_overbought_ove|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_ok_or_unflagged_quote_age_q|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_trailing_take_profit_outcome_good_exit_profit_profit_`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-0.5405`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 8. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_2005653c`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquid
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquid`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked:60100be006`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=entry_observed|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquidity_liquidity_unknown_overbou|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_ok_or_unflagged_quote_age_q|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_holding_action_not_applicable_at_start_profit_profit_unk|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_good_exit_profit_profit_lt_neg0`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-1.9776`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 9. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_3a3aaacc`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocke:78b4f56442`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liquidity_unknown_overbought_ove|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_ok_or_unflagged_quote_age_q|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_neutral_profit_profit_lt_neg070`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-0.9598`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 10. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_41e80563`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_scalp_entry_action_decision_snapshot_stale_
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_scalp_entry_action_decision_snapshot_stale_`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_scalp_e:55623add97`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=entry_observed|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_lt60_source_scalp_entry_action_decision_snapshot_stale_fresh_liquidity_liquidity_unk|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_good_exit_profit_profit_lt_neg0`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-1.3143`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 11. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_48f0772f`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocke:47e8d2da24`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liquidity_unknown_overbought_ove|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_buy_profit_profit_unknown_held_held_not_applicable_at_st|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_good_exit_profit_profit_lt_neg0`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-1.3718`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 12. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_4f755341`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocke:c0d929d275`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liquidity_unknown_overbought_ove|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_buy_profit_profit_unknown_held_held_not_applicable_at_st|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_missed_upside_profit_profit_lt_`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-0.4299`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 13. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_5036a371`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_fresh_liquidity_liqu
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_fresh_liquidity_liqu`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked:edbaa3b1de`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=entry_observed|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_lt60_source_blocked_ai_score_stale_fresh_liquidity_liquidity_unknown_overbought_over|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_missed_upside_profit_profit_lt_`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=hold_no_edge`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-0.1644`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 14. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_545a2179`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_blocked_ai_score_stale_fresh_liquidity_liqui
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_blocked_ai_score_stale_fresh_liquidity_liqui`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_blocked_:e600219c4d`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=score_mid_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_70p_source_blocked_ai_score_stale_fresh_liquidity_liquidity_unknown_overbought_overb|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_ok_or_unflagged_quote_age_q|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_trailing_take_profit_outcome_good_exit_profit_profit_`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=lifecycle_flow_sim_probe_policy`, `stage=lifecycle_flow`, `classification_state=lifecycle_flow_sim_probe_candidate`, `bucket_relation=new_bucket_candidate`, `recommended_action=hold_no_edge`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=0.227`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 15. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_668f0cac`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_blocked_ai_score_stale_stale_block_liquidi
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_blocked_ai_score_stale_stale_block_liquidi`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_blocke:3bea5e23eb`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_63_65_source_blocked_ai_score_stale_stale_block_liquidity_liquidity_unknown_overboug|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_buy_profit_profit_unknown_held_held_not_applicable_at_st|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_neutral_profit_profit_lt_neg070`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-0.7002`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 16. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_68382cb8`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquid
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquid`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked:e095eb877a`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=entry_observed|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquidity_liquidity_unknown_overbou|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_holding_action_not_applicable_at_start_profit_profit_unk|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_trailing_take_profit_outcome_good_exit_profit_profit_`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-0.5068`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 17. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_6b547d48`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquid
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquid`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked:2898323171`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=entry_observed|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquidity_liquidity_unknown_overbou|submit=submit:combo_submit_quality:source_scalp_sim_entry_submit_revalidation_warning_revalidation_warning_stale_context_or_quote_q|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_holding_action_not_applicable_at_start_profit_profit_unk|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_good_exit_profit_profit_lt_neg0`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-1.6078`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 18. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_6d78600d`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquid
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquid`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked:c0867c0041`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=entry_observed|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquidity_liquidity_unknown_overbou|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_missed_upside_profit_profit_lt_`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=lifecycle_flow_sim_probe_policy`, `stage=lifecycle_flow`, `classification_state=lifecycle_flow_sim_probe_candidate`, `bucket_relation=new_bucket_candidate`, `recommended_action=hold_no_edge`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=0.0377`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 19. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_6e1e6c8e`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_stale_watch_liquidi
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_stale_watch_liquidi`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocke:93ed8754db`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_60_62_source_blocked_ai_score_stale_stale_watch_liquidity_liquidity_unknown_overboug|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_preset_hard_stop_pct_outcome_missed_upside_profit_pro`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=lifecycle_flow_sim_probe_policy`, `stage=lifecycle_flow`, `classification_state=lifecycle_flow_sim_probe_candidate`, `bucket_relation=new_bucket_candidate`, `recommended_action=relax_or_recover`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=0.7997`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 20. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_6e894a29`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocke:21e6eeef32`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liquidity_unknown_overbought_ove|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_good_exit_profit_profit_lt_neg0`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-3.5096`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 21. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_716f10d2`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquid
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquid`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked:581594fe20`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=entry_observed|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquidity_liquidity_unknown_overbou|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_neutral_profit_profit_lt_neg070`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-1.2378`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 22. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_784d400b`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocke:caa1101fb1`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liquidity_unknown_overbought_ove|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_missed_upside_profit_profit_lt_`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-0.6955`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 23. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_792aee43`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_watch_liquidit
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_watch_liquidit`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked:437a06c478`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=entry_observed|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_lt60_source_blocked_ai_score_stale_stale_watch_liquidity_liquidity_unknown_overbough|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_trailing_take_profit_outcome_good_exit_profit_profit_`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-0.455`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 24. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_7a697800`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_blocked_ai_score_stale_fresh_liquidity_liq
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_blocked_ai_score_stale_fresh_liquidity_liq`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_blocke:655a2ed745`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_63_65_source_blocked_ai_score_stale_fresh_liquidity_liquidity_unknown_overbought_ove|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_buy_profit_profit_unknown_held_held_not_applicable_at_st|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_good_exit_profit_profit_lt_neg0`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-2.2524`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 25. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_7c0ccf92`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_fresh_liquidity_liqu
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_fresh_liquidity_liqu`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked:276025828a`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=entry_observed|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_lt60_source_blocked_ai_score_stale_fresh_liquidity_liquidity_unknown_overbought_over|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_trailing_take_profit_outcome_neutral_profit_profit_po`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=lifecycle_flow_sim_probe_policy`, `stage=lifecycle_flow`, `classification_state=lifecycle_flow_sim_probe_candidate`, `bucket_relation=new_bucket_candidate`, `recommended_action=relax_or_recover`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=0.4501`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 26. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_8586326a`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_blocked_ai_score_stale_fresh_liquidity_liq
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_blocked_ai_score_stale_fresh_liquidity_liq`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_blocke:d0d51b4360`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_63_65_source_blocked_ai_score_stale_fresh_liquidity_liquidity_unknown_overbought_ove|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_trailing_take_profit_outcome_missed_upside_profit_pro`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=lifecycle_flow_sim_probe_policy`, `stage=lifecycle_flow`, `classification_state=lifecycle_flow_sim_probe_candidate`, `bucket_relation=new_bucket_candidate`, `recommended_action=relax_or_recover`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=0.6217`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 27. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_8914c8fc`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquid
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquid`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked:647eb31210`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=entry_observed|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquidity_liquidity_unknown_overbou|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_ok_or_unflagged_quote_age_q|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_holding_action_not_applicable_at_start_profit_profit_unk|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_trailing_take_profit_outcome_good_exit_profit_profit_`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=lifecycle_flow_sim_probe_policy`, `stage=lifecycle_flow`, `classification_state=lifecycle_flow_sim_probe_candidate`, `bucket_relation=new_bucket_candidate`, `recommended_action=relax_or_recover`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=0.3866`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 28. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_8ad55b77`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_fresh_liquidity_liqu
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_fresh_liquidity_liqu`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked:e3ad8e7bf7`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=entry_observed|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_lt60_source_blocked_ai_score_stale_fresh_liquidity_liquidity_unknown_overbought_over|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_holding_action_not_applicable_at_start_profit_profit_unk|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_neutral_profit_profit_lt_neg070`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-1.2488`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 29. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_92e74dd9`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_66_69_source_blocked_ai_score_stale_fresh_liquidity_liq
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_66_69_source_blocked_ai_score_stale_fresh_liquidity_liq`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_66_69_source_blocke:5de1d065f1`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=score_mid_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_66_69_source_blocked_ai_score_stale_fresh_liquidity_liquidity_unknown_overbought_ove|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_neutral_profit_profit_lt_neg070`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-1.1621`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 30. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_95558ee5`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_blocked_ai_score_stale_fresh_liquidity_liqui
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_blocked_ai_score_stale_fresh_liquidity_liqui`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_blocked_:f5fa0f724f`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=score_mid_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_70p_source_blocked_ai_score_stale_fresh_liquidity_liquidity_unknown_overbought_overb|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_missed_upside_profit_profit_lt_`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-1.4186`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 31. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_99b0ea72`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquid
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquid`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked:fbf64c8f20`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=entry_observed|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquidity_liquidity_unknown_overbou|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_ok_or_unflagged_quote_age_q|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_neutral_profit_profit_lt_neg070`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-0.9875`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 32. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_9a20cfaf`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocke:d9a0905c85`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liquidity_unknown_overbought_ove|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_neutral_profit_profit_lt_neg070`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-1.2909`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 33. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_a1e6d001`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_blocked_ai_score_stale_fresh_liquidity_liqui
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_blocked_ai_score_stale_fresh_liquidity_liqui`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_blocked_:a56077f97c`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=score_mid_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_70p_source_blocked_ai_score_stale_fresh_liquidity_liquidity_unknown_overbought_overb|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_ok_or_unflagged_quote_age_q|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_trailing_take_profit_outcome_missed_upside_profit_pro`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=lifecycle_flow_sim_probe_policy`, `stage=lifecycle_flow`, `classification_state=lifecycle_flow_sim_probe_candidate`, `bucket_relation=new_bucket_candidate`, `recommended_action=relax_or_recover`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=0.7342`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 34. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_a64d25e4`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_fresh_liquidity_liqu
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_fresh_liquidity_liqu`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked:fca01a3ab3`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=entry_observed|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_lt60_source_blocked_ai_score_stale_fresh_liquidity_liquidity_unknown_overbought_over|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_holding_action_not_applicable_at_start_profit_profit_unk|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_good_exit_profit_profit_lt_neg0`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-2.283`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 35. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_a6717d8c`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocke:250e74c35a`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liquidity_unknown_overbought_ove|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_missed_upside_profit_profit_lt_`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-0.7787`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 36. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_a924bc1f`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_blocked_ai_score_stale_fresh_liquidity_liqui
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_blocked_ai_score_stale_fresh_liquidity_liqui`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_blocked_:6c8a0f89e4`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=score_mid_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_70p_source_blocked_ai_score_stale_fresh_liquidity_liquidity_unknown_overbought_overb|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_good_exit_profit_profit_lt_neg0`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-2.5599`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 37. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_acec2360`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocke:376060c7e0`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liquidity_unknown_overbought_ove|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_neutral_profit_profit_lt_neg070`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-0.7548`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 38. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_babda514`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_blocked_ai_score_stale_fresh_liquidity_liq
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_blocked_ai_score_stale_fresh_liquidity_liq`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_blocke:74f192d842`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_63_65_source_blocked_ai_score_stale_fresh_liquidity_liquidity_unknown_overbought_ove|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_good_exit_profit_profit_lt_neg0`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-1.3252`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 39. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_d40ba8b0`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquid
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquid`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked:7a2550ae76`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=entry_observed|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquidity_liquidity_unknown_overbou|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_ok_or_unflagged_quote_age_q|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_trailing_take_profit_outcome_neutral_profit_profit_po`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=lifecycle_flow_sim_probe_policy`, `stage=lifecycle_flow`, `classification_state=lifecycle_flow_sim_probe_candidate`, `bucket_relation=new_bucket_candidate`, `recommended_action=relax_or_recover`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=0.4339`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 40. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_d6b40839`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquid
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquid`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked:5811fecb93`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=entry_observed|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquidity_liquidity_unknown_overbou|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_missed_upside_profit_profit_lt_`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-1.2149`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 41. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_d6fcbc90`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocke:262d7881f2`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liquidity_unknown_overbought_ove|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_good_exit_profit_profit_lt_neg0`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-1.3861`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 42. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_d8f6bc98`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocke:0df512316c`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liquidity_unknown_overbought_ove|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_ok_or_unflagged_quote_age_q|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_ai_momentum_decay_outcome_good_exit_profit_profit_pos`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=lifecycle_flow_sim_probe_policy`, `stage=lifecycle_flow`, `classification_state=lifecycle_flow_sim_probe_candidate`, `bucket_relation=new_bucket_candidate`, `recommended_action=hold_no_edge`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=0.0681`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 43. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_e378532f`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_scalp_entry_action_decision_snapshot_stale_
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_scalp_entry_action_decision_snapshot_stale_`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_scalp_e:e7db2fea48`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=entry_observed|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_lt60_source_scalp_entry_action_decision_snapshot_stale_fresh_liquidity_liquidity_unk|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_trailing_take_profit_outcome_neutral_profit_profit_ne`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=lifecycle_flow_sim_probe_policy`, `stage=lifecycle_flow`, `classification_state=lifecycle_flow_sim_probe_candidate`, `bucket_relation=new_bucket_candidate`, `recommended_action=relax_or_recover`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=0.3114`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 44. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_e6037160`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquid
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquid`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked:1e519a3c65`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=entry_observed|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquidity_liquidity_unknown_overbou|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_trailing_take_profit_outcome_neutral_profit_profit_ne`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-0.498`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 45. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_ec61a844`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocke:b4814cf070`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liquidity_unknown_overbought_ove|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_holding_action_not_applicable_at_start_profit_profit_unk|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_good_exit_profit_profit_lt_neg0`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-1.717`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 46. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_f1754ae8`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocke:50bd746c6d`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=score_watch_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liquidity_unknown_overbought_ove|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_ai_momentum_decay_outcome_good_exit_profit_profit_pos`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-0.9728`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 47. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_f4fedf98`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquid
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquid`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked:e531ef6981`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=entry_observed|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_lt60_source_blocked_ai_score_stale_stale_unknown_liquidity_liquidity_unknown_overbou|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_trailing_take_profit_outcome_good_exit_profit_profit_`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=deterministic`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=hold_no_edge`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['entry', 'holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-0.1823`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 48. `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_f5ba1b62`
+
+- title: Lifecycle bucket discovery follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_66_69_source_scalp_entry_action_decision_snapshot_stale
+- decision: `implement_now`
+- decision_reason: lifecycle bucket discovery follow-up is report/provenance handoff work; runtime apply remains blocked until the regenerated reports and verifier pass
+- source_report_type: `lifecycle_bucket_discovery`
+- lifecycle_stage: `lifecycle_flow`
+- target_subsystem: `lifecycle_bucket_discovery_taxonomy_provenance`
+- route: `auto_patch_required`
+- mapped_family: `lifecycle_bucket_discovery`
+- threshold_family: `lifecycle_bucket_discovery`
+- improvement_type: `source_dimension_gap_resolution`
+- confidence: `postclose_discovery_source`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can auto-classify and auto-apply without operator memory.
+- evidence: `bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_66_69_source_scalp_entry_action_decision_snapshot_stale`, `source_bucket_id=lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_66_69_source_scalp_:da97811653`, `canonical_bucket=lifecycle_flow:combo_lifecycle_flow:entry=score_mid_recovery|submit=submit_observed|holding=holding_observed|scale_in=scale_in_observed|exit=exit_observed`, `legacy_raw_bucket_key=entry=entry:combo_entry_spot:score_score_66_69_source_scalp_entry_action_decision_snapshot_stale_fresh_liquidity_liquidity_un|submit=submit:combo_submit_quality:source_scalp_sim_pre_submit_liquidity_guard_would_block_revalidation_warning_stale_context_or_qu|holding=holding:combo_holding_flow:source_scalp_sim_holding_started_action_wait_profit_profit_unknown_held_held_not_applicable_at_s|scale_in=scale_in:none|exit=exit:combo_exit_result:source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_good_exit_profit_profit_lt_neg0`, `bucket_alias_version=lifecycle_bucket_alias_v1`, `dimension_set_version=lifecycle_dimension_set_v1`, `bucket_absorption_reason=combo_bucket_rolled_up_to_broad_parent_dimensions`, `ai_tier2_taxonomy_decision=absorb_as_dimension`, `ai_tier2_selected_source=hybrid`, `source_bucket_kind=taxonomy_provenance_gap`, `stage=lifecycle_flow`, `classification_state=source_only_keep_collecting`, `bucket_relation=new_bucket_candidate`, `recommended_action=tighten_or_exclude`, `recommended_resolution=resolve_unknown_source_dimensions`, `source_dimension_gap=unknown_source_dimensions`, `missing_dimension_keys=['holding']`, `missing_lifecycle_flow_stage_keys=[]`, `unknown_reason_counts={}`, `source_quality_adjusted_ev_pct=-2.0747`, `runtime_effect=false_until_patch_review_passes`, `allowed_runtime_apply=false_until_contract_hook_tests_pass`
+- parity_contract: -
+- next_postclose_metric: lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or live_auto_apply_ready, or keep it source-only with an explicit blocker.
+- files_likely_touched: `src/engine/lifecycle_bucket_discovery.py`, `src/engine/threshold_cycle_preopen_apply.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py`, `postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped`
+- implementation_status: `-`
+- implementation_provenance: `-`
+- automation_reentry: After implementation, rerun lifecycle bucket discovery, code improvement workorder, runtime approval summary, threshold EV, and postclose verifier.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 49. `order_pattern_lab_ai_review_order_pattern_lab_ai_review_ai_review_followup_2026_05_29`
 
 - title: Pattern Lab AI review follow-up: order_pattern_lab_ai_review_ai_review_followup_2026_05_29
 - decision: `implement_now`
@@ -157,7 +1789,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - runtime 판단값을 직접 바꾸지 않는다.
 - 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
 
-### 2. `order_pattern_lab_ai_review_order_pattern_lab_ai_review_order_latency_guard_miss_ev_recovery`
+### 50. `order_pattern_lab_ai_review_order_pattern_lab_ai_review_order_latency_guard_miss_ev_recovery`
 
 - title: Pattern Lab AI review follow-up: order_pattern_lab_ai_review_order_latency_guard_miss_ev_recovery
 - decision: `implement_now`
@@ -191,7 +1823,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - runtime 판단값을 직접 바꾸지 않는다.
 - 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
 
-### 3. `order_entry_submit_drought_auto_resolution`
+### 51. `order_entry_submit_drought_auto_resolution`
 
 - title: Entry submit drought automatic resolution handoff
 - decision: `attach_existing_family`
@@ -225,41 +1857,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 4. `order_ai_threshold_dominance`
-
-- title: AI threshold dominance
-- decision: `attach_existing_family`
-- decision_reason: finding maps to an existing threshold family and should strengthen source metrics/provenance
-- source_report_type: `scalping_pattern_lab_automation`
-- lifecycle_stage: `-`
-- target_subsystem: `entry_funnel`
-- route: `existing_family`
-- mapped_family: `score65_74_recovery_probe`
-- threshold_family: `score65_74_recovery_probe`
-- improvement_type: `-`
-- confidence: `consensus`
-- priority: `1`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: Improve EV attribution and prepare bounded calibration input.
-- evidence: `{'judgment': '경고', 'why': '`blocked_ai_score_share=72.8%`로 WAIT/BLOCK 비중이 높아 BUY drought 해석을 지지한다.'}`, `{'judgment': '경고', 'why': '`blocked_ai_score_share=72.8%`로 WAIT/BLOCK 비중이 높아 BUY drought 해석을 지지한다.'}`
-- parity_contract: -
-- next_postclose_metric: -
-- files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_missed_entry_counterfactual.py`
-- acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
-- implementation_status: `-`
-- implementation_provenance: `-`
-- automation_reentry: After implementation, intraday/postclose calibration should include the updated family input.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 5. `order_entry_broker_receipt_contract_gap_review`
+### 52. `order_entry_broker_receipt_contract_gap_review`
 
 - title: Entry broker receipt contract gap review
 - decision: `attach_existing_family`
@@ -293,7 +1891,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 6. `order_entry_fill_quality_contract_gap_review`
+### 53. `order_entry_fill_quality_contract_gap_review`
 
 - title: Entry fill quality contract gap review
 - decision: `attach_existing_family`
@@ -327,7 +1925,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 7. `order_entry_post_submit_contract_gap_review`
+### 54. `order_entry_post_submit_contract_gap_review`
 
 - title: Entry post-submit contract gap review
 - decision: `attach_existing_family`
@@ -361,7 +1959,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 8. `order_entry_source_taxonomy_contract_gap_review`
+### 55. `order_entry_source_taxonomy_contract_gap_review`
 
 - title: Entry source taxonomy contract gap review
 - decision: `attach_existing_family`
@@ -395,7 +1993,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 9. `order_entry_telegram_post_submit_contract_gap_review`
+### 56. `order_entry_telegram_post_submit_contract_gap_review`
 
 - title: Entry Telegram post-submit contract gap review
 - decision: `attach_existing_family`
@@ -429,7 +2027,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 10. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_10_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_264969e0`
+### 57. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_10_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_264969e0`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:d4ae6b4cbc
 - decision: `attach_existing_family`
@@ -463,7 +2061,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 11. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_11_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_264969e0`
+### 58. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_11_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_264969e0`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:d4ae6b4cbc
 - decision: `attach_existing_family`
@@ -497,7 +2095,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 12. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_12_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_32463a04`
+### 59. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_12_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_32463a04`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:fcd588ff6c
 - decision: `attach_existing_family`
@@ -531,7 +2129,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 13. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_13_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_32463a04`
+### 60. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_13_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_32463a04`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:fcd588ff6c
 - decision: `attach_existing_family`
@@ -565,7 +2163,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 14. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_14_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_32463a04`
+### 61. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_14_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_32463a04`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:fcd588ff6c
 - decision: `attach_existing_family`
@@ -599,7 +2197,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 15. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_15_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_32463a04`
+### 62. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_15_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_32463a04`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:fcd588ff6c
 - decision: `attach_existing_family`
@@ -633,7 +2231,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 16. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_16_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_ce8ff0c6`
+### 63. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_16_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_ce8ff0c6`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_sca:6f3404e612
 - decision: `attach_existing_family`
@@ -667,7 +2265,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 17. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_17_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_f274cd18`
+### 64. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_17_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_f274cd18`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:62dc9d9e24
 - decision: `attach_existing_family`
@@ -701,7 +2299,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 18. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_18_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_32463a04`
+### 65. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_18_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_32463a04`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:fcd588ff6c
 - decision: `attach_existing_family`
@@ -735,7 +2333,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 19. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_19_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_79db100a`
+### 66. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_19_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_79db100a`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_sc:496a0a2877
 - decision: `attach_existing_family`
@@ -769,7 +2367,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 20. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_1_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_264969e0`
+### 67. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_1_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_264969e0`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:d4ae6b4cbc
 - decision: `attach_existing_family`
@@ -803,7 +2401,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 21. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_20_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_32463a04`
+### 68. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_20_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_32463a04`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blo:fcd588ff6c
 - decision: `attach_existing_family`
@@ -837,7 +2435,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 22. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_2_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_264969e0`
+### 69. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_2_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_264969e0`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:d4ae6b4cbc
 - decision: `attach_existing_family`
@@ -871,7 +2469,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 23. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_3_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_264969e0`
+### 70. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_3_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_264969e0`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:d4ae6b4cbc
 - decision: `attach_existing_family`
@@ -905,7 +2503,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 24. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_4_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_264969e0`
+### 71. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_4_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_264969e0`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:d4ae6b4cbc
 - decision: `attach_existing_family`
@@ -939,7 +2537,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 25. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_5_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_264969e0`
+### 72. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_5_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_264969e0`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:d4ae6b4cbc
 - decision: `attach_existing_family`
@@ -973,7 +2571,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 26. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_6_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_264969e0`
+### 73. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_6_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_264969e0`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:d4ae6b4cbc
 - decision: `attach_existing_family`
@@ -1007,7 +2605,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 27. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_7_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_264969e0`
+### 74. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_7_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_264969e0`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:d4ae6b4cbc
 - decision: `attach_existing_family`
@@ -1041,7 +2639,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 28. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_8_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_264969e0`
+### 75. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_8_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_264969e0`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:d4ae6b4cbc
 - decision: `attach_existing_family`
@@ -1075,7 +2673,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 29. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_9_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_6d30a10b`
+### 76. `order_lifecycle_flow_bucket_lifecycle_flow_bucket_incomplete_9_lifecycle_flow_combo_lifecycle_flow_entry_entry_missing_submit_submit_c_6d30a10b`
 
 - title: LDM lifecycle flow bucket follow-up: lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_combo_submit_quality_s:fdddb9a443
 - decision: `attach_existing_family`
@@ -1109,7 +2707,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 30. `order_stage_hook_workorder_discovery_stage_hook_holding_flow_runner_debounce_guard`
+### 77. `order_stage_hook_workorder_discovery_stage_hook_holding_flow_runner_debounce_guard`
 
 - title: Implement stage hook: holding_flow_runner_debounce_guard
 - decision: `attach_existing_family`
@@ -1158,7 +2756,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 31. `order_stage_hook_workorder_discovery_stage_hook_plateau_breakdown_exit_arbitration_probe`
+### 78. `order_stage_hook_workorder_discovery_stage_hook_plateau_breakdown_exit_arbitration_probe`
 
 - title: Implement stage hook: plateau_breakdown_exit_arbitration_probe
 - decision: `attach_existing_family`
@@ -1207,7 +2805,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 32. `order_lifecycle_entry_bucket_exit_rule_exit_unknown`
+### 79. `order_lifecycle_entry_bucket_exit_rule_exit_unknown`
 
 - title: LDM entry bucket attribution follow-up: exit_rule=exit_unknown
 - decision: `attach_existing_family`
@@ -1241,7 +2839,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 33. `order_lifecycle_entry_bucket_liquidity_bucket_liquidity_unknown`
+### 80. `order_lifecycle_entry_bucket_liquidity_bucket_liquidity_unknown`
 
 - title: LDM entry bucket attribution follow-up: liquidity_bucket=liquidity_unknown
 - decision: `attach_existing_family`
@@ -1275,7 +2873,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 34. `order_lifecycle_entry_bucket_overbought_bucket_overbought_unknown`
+### 81. `order_lifecycle_entry_bucket_overbought_bucket_overbought_unknown`
 
 - title: LDM entry bucket attribution follow-up: overbought_bucket=overbought_unknown
 - decision: `attach_existing_family`
@@ -1309,7 +2907,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 35. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_partial_sell_order_assumed_filled_rule_scalp_sim_panic_29f17ae0`
+### 82. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_partial_sell_order_assumed_filled_rule_scalp_sim_panic_29f17ae0`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=scalp_sim_partial_sell_order_assumed_filled|rule=scalp_sim_panic_lifecycle_partial_exit|outcome=outcome_not_applicable_partial_exit|profit=profit_pos150_pos300
 - decision: `attach_existing_family`
@@ -1343,7 +2941,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 36. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_partial_sell_order_assumed_filled_rule_scalp_sim_panic_73281913`
+### 83. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_partial_sell_order_assumed_filled_rule_scalp_sim_panic_73281913`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=scalp_sim_partial_sell_order_assumed_filled|rule=scalp_sim_panic_lifecycle_partial_exit|outcome=outcome_not_applicable_partial_exit|profit=profit_neg070_neg010
 - decision: `attach_existing_family`
@@ -1377,7 +2975,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 37. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_partial_sell_order_assumed_filled_rule_scalp_sim_panic_823fe278`
+### 84. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_partial_sell_order_assumed_filled_rule_scalp_sim_panic_823fe278`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=scalp_sim_partial_sell_order_assumed_filled|rule=scalp_sim_panic_lifecycle_partial_exit|outcome=outcome_not_applicable_partial_exit|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1411,7 +3009,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 38. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_partial_sell_order_assumed_filled_rule_scalp_sim_panic_cc037ec5`
+### 85. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_partial_sell_order_assumed_filled_rule_scalp_sim_panic_cc037ec5`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=scalp_sim_partial_sell_order_assumed_filled|rule=scalp_sim_panic_lifecycle_partial_exit|outcome=outcome_not_applicable_partial_exit|profit=profit_neg010_pos080
 - decision: `attach_existing_family`
@@ -1445,7 +3043,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 39. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_partial_sell_order_assumed_filled_rule_scalp_sim_panic_df836236`
+### 86. `order_lifecycle_exit_bucket_combo_exit_result_source_scalp_sim_partial_sell_order_assumed_filled_rule_scalp_sim_panic_df836236`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=scalp_sim_partial_sell_order_assumed_filled|rule=scalp_sim_panic_lifecycle_partial_exit|outcome=outcome_not_applicable_partial_exit|profit=profit_pos080_pos150
 - decision: `attach_existing_family`
@@ -1479,7 +3077,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 40. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_good_e_d8c33947`
+### 87. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_good_e_d8c33947`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=sim_post_sell_evaluation|rule=scalp_hard_stop_pct|outcome=GOOD_EXIT|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1513,7 +3111,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 41. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_missed_30bb5c8f`
+### 88. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_hard_stop_pct_outcome_missed_30bb5c8f`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=sim_post_sell_evaluation|rule=scalp_hard_stop_pct|outcome=MISSED_UPSIDE|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1547,7 +3145,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 42. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_good_e_71b132b9`
+### 89. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_good_e_71b132b9`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=sim_post_sell_evaluation|rule=scalp_soft_stop_pct|outcome=GOOD_EXIT|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1581,7 +3179,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 43. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_missed_bb293be8`
+### 90. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_missed_bb293be8`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=sim_post_sell_evaluation|rule=scalp_soft_stop_pct|outcome=MISSED_UPSIDE|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1615,7 +3213,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 44. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_neutra_d73738ba`
+### 91. `order_lifecycle_exit_bucket_combo_exit_result_source_sim_post_sell_evaluation_rule_scalp_soft_stop_pct_outcome_neutra_d73738ba`
 
 - title: LDM exit bucket source-quality follow-up: combo_exit_result=source=sim_post_sell_evaluation|rule=scalp_soft_stop_pct|outcome=NEUTRAL|profit=profit_lt_neg070
 - decision: `attach_existing_family`
@@ -1649,7 +3247,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 45. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_buy_profit_profit_lt_neg070_hel_575c586d`
+### 92. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_buy_profit_profit_lt_neg070_hel_575c586d`
 
 - title: LDM holding bucket source-quality follow-up: combo_holding_flow=source=scalp_sim_holding_started|action=BUY|profit=profit_lt_neg070|held=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -1683,7 +3281,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 46. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_holding_action_not_applicable_a_50644c4a`
+### 93. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_holding_action_not_applicable_a_50644c4a`
 
 - title: LDM holding bucket source-quality follow-up: combo_holding_flow=source=scalp_sim_holding_started|action=holding_action_not_applicable_at_start|profit=profit_pos150_pos300_plus|held=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -1717,7 +3315,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 47. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_holding_action_not_applicable_a_d19d801a`
+### 94. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_holding_action_not_applicable_a_d19d801a`
 
 - title: LDM holding bucket source-quality follow-up: combo_holding_flow=source=scalp_sim_holding_started|action=holding_action_not_applicable_at_start|profit=profit_neg010_pos080|held=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -1751,7 +3349,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 48. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_holding_action_not_applicable_a_f7731cc4`
+### 95. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_holding_action_not_applicable_a_f7731cc4`
 
 - title: LDM holding bucket source-quality follow-up: combo_holding_flow=source=scalp_sim_holding_started|action=holding_action_not_applicable_at_start|profit=profit_pos150_pos300|held=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -1785,7 +3383,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 49. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_holding_action_not_applicable_a_fc555278`
+### 96. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_holding_action_not_applicable_a_fc555278`
 
 - title: LDM holding bucket source-quality follow-up: combo_holding_flow=source=scalp_sim_holding_started|action=holding_action_not_applicable_at_start|profit=profit_lt_neg070|held=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -1819,7 +3417,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 50. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_lt_neg070_he_ed505a3f`
+### 97. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_lt_neg070_he_ed505a3f`
 
 - title: LDM holding bucket source-quality follow-up: combo_holding_flow=source=scalp_sim_holding_started|action=WAIT|profit=profit_lt_neg070|held=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -1853,7 +3451,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 51. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_pos080_pos15_aaaecaaf`
+### 98. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_pos080_pos15_aaaecaaf`
 
 - title: LDM holding bucket source-quality follow-up: combo_holding_flow=source=scalp_sim_holding_started|action=WAIT|profit=profit_pos080_pos150|held=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -1887,7 +3485,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 52. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_pos150_pos30_562da131`
+### 99. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_pos150_pos30_562da131`
 
 - title: LDM holding bucket source-quality follow-up: combo_holding_flow=source=scalp_sim_holding_started|action=WAIT|profit=profit_pos150_pos300_plus|held=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -1921,7 +3519,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 53. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_pos150_pos30_6f3188b0`
+### 100. `order_lifecycle_holding_bucket_combo_holding_flow_source_scalp_sim_holding_started_action_wait_profit_profit_pos150_pos30_6f3188b0`
 
 - title: LDM holding bucket source-quality follow-up: combo_holding_flow=source=scalp_sim_holding_started|action=WAIT|profit=profit_pos150_pos300|held=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -1955,7 +3553,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 54. `order_lifecycle_holding_bucket_held_bucket_held_not_applicable_at_start_508784a3`
+### 101. `order_lifecycle_holding_bucket_held_bucket_held_not_applicable_at_start_508784a3`
 
 - title: LDM holding bucket source-quality follow-up: held_bucket=held_not_applicable_at_start
 - decision: `attach_existing_family`
@@ -1989,7 +3587,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 55. `order_producer_gap_discovery_producer_gap_missed_fill_recovery_counterfactual_missing`
+### 102. `order_producer_gap_discovery_producer_gap_missed_fill_recovery_counterfactual_missing`
 
 - title: Implement missing producer: missed_fill_recovery_counterfactual_missing
 - decision: `attach_existing_family`
@@ -2023,7 +3621,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 56. `order_producer_gap_discovery_producer_gap_scale_in_counterfactual_gap_missing`
+### 103. `order_producer_gap_discovery_producer_gap_scale_in_counterfactual_gap_missing`
 
 - title: Implement missing producer: scale_in_counterfactual_gap_missing
 - decision: `attach_existing_family`
@@ -2057,7 +3655,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 57. `order_producer_gap_discovery_producer_gap_sim_entry_selection_gap_missing`
+### 104. `order_producer_gap_discovery_producer_gap_sim_entry_selection_gap_missing`
 
 - title: Implement missing producer: sim_entry_selection_gap_missing
 - decision: `attach_existing_family`
@@ -2091,7 +3689,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 58. `order_producer_gap_discovery_producer_gap_sim_exit_plateau_breakdown_gap_missing`
+### 105. `order_producer_gap_discovery_producer_gap_sim_exit_plateau_breakdown_gap_missing`
 
 - title: Implement missing producer: sim_exit_plateau_breakdown_gap_missing
 - decision: `attach_existing_family`
@@ -2125,7 +3723,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 59. `order_producer_gap_discovery_producer_gap_sim_holding_runner_gap_missing`
+### 106. `order_producer_gap_discovery_producer_gap_sim_holding_runner_gap_missing`
 
 - title: Implement missing producer: sim_holding_runner_gap_missing
 - decision: `attach_existing_family`
@@ -2159,7 +3757,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 60. `order_producer_gap_discovery_producer_gap_sim_scale_in_counterfactual_gap_missing`
+### 107. `order_producer_gap_discovery_producer_gap_sim_scale_in_counterfactual_gap_missing`
 
 - title: Implement missing producer: sim_scale_in_counterfactual_gap_missing
 - decision: `attach_existing_family`
@@ -2193,7 +3791,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 61. `order_producer_gap_discovery_producer_gap_sim_stop_recovery_gap_missing`
+### 108. `order_producer_gap_discovery_producer_gap_sim_stop_recovery_gap_missing`
 
 - title: Implement missing producer: sim_stop_recovery_gap_missing
 - decision: `attach_existing_family`
@@ -2227,7 +3825,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 62. `order_producer_gap_discovery_producer_gap_stop_recovery_counterfactual_missing`
+### 109. `order_producer_gap_discovery_producer_gap_stop_recovery_counterfactual_missing`
 
 - title: Implement missing producer: stop_recovery_counterfactual_missing
 - decision: `attach_existing_family`
@@ -2261,7 +3859,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 63. `order_producer_gap_discovery_producer_gap_swing_sim_probe_label_gap_missing`
+### 110. `order_producer_gap_discovery_producer_gap_swing_sim_probe_label_gap_missing`
 
 - title: Implement missing producer: swing_sim_probe_label_gap_missing
 - decision: `attach_existing_family`
@@ -2295,7 +3893,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 64. `order_swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_low_missing_30m_2h_kospi_trailing_start_take_profit`
+### 111. `order_swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_low_missing_30m_2h_kospi_trailing_start_take_profit`
 
 - title: Swing LDM source field follow-up: mfe_low|missing|30m_2h|kospi_trailing_start_take_profit|-|-|-
 - decision: `attach_existing_family`
@@ -2329,7 +3927,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 65. `order_swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_low_missing_held_missing_kospi_trailing_start_take_profit`
+### 112. `order_swing_ldm_holding_exit_holding_exit_bucket_attribution_mfe_low_missing_held_missing_kospi_trailing_start_take_profit`
 
 - title: Swing LDM source field follow-up: mfe_low|missing|held_missing|kospi_trailing_start_take_profit|-|-|-
 - decision: `attach_existing_family`
@@ -2363,7 +3961,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 66. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_computer_programmi`
+### 113. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_computer_programmi`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Computer programming, System Integration and Management Services|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2388,7 +3986,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_decision_matrix.py`, `src/engine/swing_lifecycle_bucket_discovery.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_decision_matrix.py src/tests/test_swing_lifecycle_bucket_discovery.py`
 - implementation_status: `implemented_source_quality_contract_waiting_sample`
-- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 6, "total_count": 6}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 6, "total_count": 6}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 6, "total_count": 6}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 6, "total_count": 6}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 6, "total_count": 6}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {"bucket_value_-": 1}}`
+- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 14, "total_count": 14}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 14, "total_count": 14}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 14, "total_count": 14}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 14, "total_count": 14}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 14, "total_count": 14}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {"bucket_value_-": 1}}`
 - automation_reentry: Next postclose workorder should preserve implementation_status=implemented_source_quality_contract_waiting_sample and use the source metrics as provenance only.
 
 실행 기준:
@@ -2397,7 +3995,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 67. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_diagnostic`
+### 114. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_diagnostic`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|-|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2422,7 +4020,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_decision_matrix.py`, `src/engine/swing_lifecycle_bucket_discovery.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_decision_matrix.py src/tests/test_swing_lifecycle_bucket_discovery.py`
 - implementation_status: `implemented_source_quality_contract_waiting_sample`
-- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 6, "total_count": 6}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 6, "total_count": 6}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 6, "total_count": 6}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 6, "total_count": 6}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 6, "total_count": 6}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {"bucket_value_-": 2}}`
+- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 12, "total_count": 12}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 12, "total_count": 12}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 12, "total_count": 12}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 12, "total_count": 12}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 12, "total_count": 12}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {"bucket_value_-": 2}}`
 - automation_reentry: Next postclose workorder should preserve implementation_status=implemented_source_quality_contract_waiting_sample and use the source metrics as provenance only.
 
 실행 기준:
@@ -2431,7 +4029,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 68. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_insurance_보험_생명보험_`
+### 115. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_insurance_보험_생명보험_`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Insurance|보험_생명보험|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2456,7 +4054,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_decision_matrix.py`, `src/engine/swing_lifecycle_bucket_discovery.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_decision_matrix.py src/tests/test_swing_lifecycle_bucket_discovery.py`
 - implementation_status: `implemented_source_quality_contract_waiting_sample`
-- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 7, "total_count": 7}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 7, "total_count": 7}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 7, "total_count": 7}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 7, "total_count": 7}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 7, "total_count": 7}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {}}`
+- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 13, "total_count": 13}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 13, "total_count": 13}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 13, "total_count": 13}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 13, "total_count": 13}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 13, "total_count": 13}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {}}`
 - automation_reentry: Next postclose workorder should preserve implementation_status=implemented_source_quality_contract_waiting_sample and use the source metrics as provenance only.
 
 실행 기준:
@@ -2465,7 +4063,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 69. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_bas`
+### 116. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_bas`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Manufacture of Basic Chemicals|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2490,7 +4088,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_decision_matrix.py`, `src/engine/swing_lifecycle_bucket_discovery.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_decision_matrix.py src/tests/test_swing_lifecycle_bucket_discovery.py`
 - implementation_status: `implemented_source_quality_contract_waiting_sample`
-- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 8, "total_count": 8}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 8, "total_count": 8}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 8, "total_count": 8}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 8, "total_count": 8}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 8, "total_count": 8}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {"bucket_value_-": 1}}`
+- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 14, "total_count": 14}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 14, "total_count": 14}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 14, "total_count": 14}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 14, "total_count": 14}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 14, "total_count": 14}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {"bucket_value_-": 1}}`
 - automation_reentry: Next postclose workorder should preserve implementation_status=implemented_source_quality_contract_waiting_sample and use the source metrics as provenance only.
 
 실행 기준:
@@ -2499,7 +4097,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 70. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_tel`
+### 117. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_manufacture_of_tel`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|confidence_weighted|trailing_after_mfe|Manufacture of Telecommunication and Broadcasting Apparatuses|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2524,7 +4122,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_decision_matrix.py`, `src/engine/swing_lifecycle_bucket_discovery.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_decision_matrix.py src/tests/test_swing_lifecycle_bucket_discovery.py`
 - implementation_status: `implemented_source_quality_contract_waiting_sample`
-- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 4, "total_count": 4}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 4, "total_count": 4}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 4, "total_count": 4}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 4, "total_count": 4}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 4, "total_count": 4}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {"bucket_value_-": 1}}`
+- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 10, "total_count": 10}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 10, "total_count": 10}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 10, "total_count": 10}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 10, "total_count": 10}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 10, "total_count": 10}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {"bucket_value_-": 1}}`
 - automation_reentry: Next postclose workorder should preserve implementation_status=implemented_source_quality_contract_waiting_sample and use the source metrics as provenance only.
 
 실행 기준:
@@ -2533,7 +4131,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 71. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_computer_programming_syste`
+### 118. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_computer_programming_syste`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|risk_capped|mae_stop_time_stop|Computer programming, System Integration and Management Services|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2558,7 +4156,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_decision_matrix.py`, `src/engine/swing_lifecycle_bucket_discovery.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_decision_matrix.py src/tests/test_swing_lifecycle_bucket_discovery.py`
 - implementation_status: `implemented_source_quality_contract_waiting_sample`
-- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 6, "total_count": 6}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 6, "total_count": 6}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 6, "total_count": 6}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 6, "total_count": 6}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 6, "total_count": 6}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {"bucket_value_-": 1}}`
+- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 12, "total_count": 12}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 12, "total_count": 12}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 12, "total_count": 12}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 12, "total_count": 12}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 12, "total_count": 12}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {"bucket_value_-": 1}}`
 - automation_reentry: Next postclose workorder should preserve implementation_status=implemented_source_quality_contract_waiting_sample and use the source metrics as provenance only.
 
 실행 기준:
@@ -2567,7 +4165,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 72. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_insurance_보험_생명보험_diagnost`
+### 119. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_insurance_보험_생명보험_diagnost`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|risk_capped|mae_stop_time_stop|Insurance|보험_생명보험|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2592,7 +4190,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_decision_matrix.py`, `src/engine/swing_lifecycle_bucket_discovery.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_decision_matrix.py src/tests/test_swing_lifecycle_bucket_discovery.py`
 - implementation_status: `implemented_source_quality_contract_waiting_sample`
-- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 7, "total_count": 7}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 7, "total_count": 7}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 7, "total_count": 7}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 7, "total_count": 7}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 7, "total_count": 7}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {}}`
+- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 13, "total_count": 13}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 13, "total_count": 13}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 13, "total_count": 13}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 13, "total_count": 13}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 13, "total_count": 13}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {}}`
 - automation_reentry: Next postclose workorder should preserve implementation_status=implemented_source_quality_contract_waiting_sample and use the source metrics as provenance only.
 
 실행 기준:
@@ -2601,7 +4199,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 73. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_basic_chemi`
+### 120. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_basic_chemi`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|risk_capped|mae_stop_time_stop|Manufacture of Basic Chemicals|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2626,7 +4224,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_decision_matrix.py`, `src/engine/swing_lifecycle_bucket_discovery.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_decision_matrix.py src/tests/test_swing_lifecycle_bucket_discovery.py`
 - implementation_status: `implemented_source_quality_contract_waiting_sample`
-- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 8, "total_count": 8}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 8, "total_count": 8}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 8, "total_count": 8}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 8, "total_count": 8}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 8, "total_count": 8}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {"bucket_value_-": 1}}`
+- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 14, "total_count": 14}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 14, "total_count": 14}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 14, "total_count": 14}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 14, "total_count": 14}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 14, "total_count": 14}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {"bucket_value_-": 1}}`
 - automation_reentry: Next postclose workorder should preserve implementation_status=implemented_source_quality_contract_waiting_sample and use the source metrics as provenance only.
 
 실행 기준:
@@ -2635,7 +4233,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 74. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_electronic_`
+### 121. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_electronic_`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|risk_capped|mae_stop_time_stop|Manufacture of Electronic Components|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2660,7 +4258,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_decision_matrix.py`, `src/engine/swing_lifecycle_bucket_discovery.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_decision_matrix.py src/tests/test_swing_lifecycle_bucket_discovery.py`
 - implementation_status: `implemented_source_quality_contract_waiting_sample`
-- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 18, "total_count": 18}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 18, "total_count": 18}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 18, "total_count": 18}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 18, "total_count": 18}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 18, "total_count": 18}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {"bucket_value_-": 1}}`
+- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 23, "total_count": 23}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 23, "total_count": 23}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 23, "total_count": 23}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 23, "total_count": 23}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 23, "total_count": 23}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {"bucket_value_-": 1}}`
 - automation_reentry: Next postclose workorder should preserve implementation_status=implemented_source_quality_contract_waiting_sample and use the source metrics as provenance only.
 
 실행 기준:
@@ -2669,7 +4267,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 75. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_other_chemi`
+### 122. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_other_chemi`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|risk_capped|mae_stop_time_stop|Manufacture of Other Chemical Products|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2694,7 +4292,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_decision_matrix.py`, `src/engine/swing_lifecycle_bucket_discovery.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_decision_matrix.py src/tests/test_swing_lifecycle_bucket_discovery.py`
 - implementation_status: `implemented_source_quality_contract_waiting_sample`
-- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 11, "total_count": 11}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 11, "total_count": 11}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 11, "total_count": 11}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 11, "total_count": 11}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 11, "total_count": 11}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {"bucket_value_-": 1}}`
+- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 17, "total_count": 17}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 17, "total_count": 17}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 17, "total_count": 17}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 17, "total_count": 17}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 17, "total_count": 17}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {"bucket_value_-": 1}}`
 - automation_reentry: Next postclose workorder should preserve implementation_status=implemented_source_quality_contract_waiting_sample and use the source metrics as provenance only.
 
 실행 기준:
@@ -2703,7 +4301,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 76. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_other_financial_intermedia`
+### 123. `order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_other_financial_intermedia`
 
 - title: Swing LDM source field follow-up: breakout_confirm_entry|risk_capped|mae_stop_time_stop|Other Financial Intermediation|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2728,7 +4326,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_decision_matrix.py`, `src/engine/swing_lifecycle_bucket_discovery.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_decision_matrix.py src/tests/test_swing_lifecycle_bucket_discovery.py`
 - implementation_status: `implemented_source_quality_contract_waiting_sample`
-- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 17, "total_count": 17}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 17, "total_count": 17}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 17, "total_count": 17}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 17, "total_count": 17}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 17, "total_count": 17}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {"bucket_value_-": 1}}`
+- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 23, "total_count": 23}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 23, "total_count": 23}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 23, "total_count": 23}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 23, "total_count": 23}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 23, "total_count": 23}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {"bucket_value_-": 1}}`
 - automation_reentry: Next postclose workorder should preserve implementation_status=implemented_source_quality_contract_waiting_sample and use the source metrics as provenance only.
 
 실행 기준:
@@ -2737,7 +4335,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 77. `order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_basic_chemica`
+### 124. `order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_basic_chemica`
 
 - title: Swing LDM source field follow-up: pullback_limit_entry|risk_capped|mae_stop_time_stop|Manufacture of Basic Chemicals|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2762,7 +4360,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_decision_matrix.py`, `src/engine/swing_lifecycle_bucket_discovery.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_decision_matrix.py src/tests/test_swing_lifecycle_bucket_discovery.py`
 - implementation_status: `implemented_source_quality_contract_waiting_sample`
-- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 8, "total_count": 8}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 8, "total_count": 8}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 8, "total_count": 8}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 8, "total_count": 8}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 8, "total_count": 8}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {"bucket_value_-": 1}}`
+- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 14, "total_count": 14}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 14, "total_count": 14}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 14, "total_count": 14}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 14, "total_count": 14}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 14, "total_count": 14}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {"bucket_value_-": 1}}`
 - automation_reentry: Next postclose workorder should preserve implementation_status=implemented_source_quality_contract_waiting_sample and use the source metrics as provenance only.
 
 실행 기준:
@@ -2771,41 +4369,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 78. `order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_electronic_co`
-
-- title: Swing LDM source field follow-up: pullback_limit_entry|risk_capped|mae_stop_time_stop|Manufacture of Electronic Components|FPCB(연성회로기판),PCB(인쇄회로기판),스마트폰_삼성전자관련주|DIAGNOSTIC
-- decision: `attach_existing_family`
-- decision_reason: instrumentation/report/provenance implementation status is implemented_source_quality_contract_waiting_sample; keep the order as existing-family source evidence instead of re-implementing
-- source_report_type: `swing_lifecycle_decision_matrix`
-- lifecycle_stage: `selection`
-- target_subsystem: `swing_lifecycle_decision_matrix`
-- route: `existing_family`
-- mapped_family: `-`
-- threshold_family: `-`
-- improvement_type: `swing_ldm_bucket_instrumentation_gap`
-- confidence: `postclose_ldm_source`
-- priority: `2`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: Close Swing LDM bucket source-quality gaps while preserving sim-only authority.
-- evidence: `section=discovery_arm_attribution`, `bucket_type=discovery_arm_attribution`, `bucket_key=pullback_limit_entry|risk_capped|mae_stop_time_stop|Manufacture of Electronic Components|FPCB(연성회로기판),PCB(인쇄회로기판),스마트폰_삼성전자관련주|DIAGNOSTIC`, `reason=source_quality_or_instrumentation_gap`, `implementation_status=implemented_source_quality_contract_waiting_sample`, `decision_authority=swing_ldm_source_only`, `actual_order_submitted=false`
-- parity_contract: -
-- next_postclose_metric: Swing LDM bucket should move from code_patch_required to source_only_keep_collecting or sim_auto_approved.
-- files_likely_touched: `src/engine/swing_lifecycle_decision_matrix.py`, `src/engine/swing_lifecycle_bucket_discovery.py`
-- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_decision_matrix.py src/tests/test_swing_lifecycle_bucket_discovery.py`
-- implementation_status: `implemented_source_quality_contract_waiting_sample`
-- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 5, "total_count": 5}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 5, "total_count": 5}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 5, "total_count": 5}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 5, "total_count": 5}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 5, "total_count": 5}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {}}`
-- automation_reentry: Next postclose workorder should preserve implementation_status=implemented_source_quality_contract_waiting_sample and use the source metrics as provenance only.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 79. `order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_plastic_produ`
+### 125. `order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_plastic_produ`
 
 - title: Swing LDM source field follow-up: pullback_limit_entry|risk_capped|mae_stop_time_stop|Manufacture of Plastic Products|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2830,7 +4394,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_decision_matrix.py`, `src/engine/swing_lifecycle_bucket_discovery.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_decision_matrix.py src/tests/test_swing_lifecycle_bucket_discovery.py`
 - implementation_status: `implemented_source_quality_contract_waiting_sample`
-- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 4, "total_count": 4}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 4, "total_count": 4}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 4, "total_count": 4}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 4, "total_count": 4}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 4, "total_count": 4}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {"bucket_value_-": 1}}`
+- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 10, "total_count": 10}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 10, "total_count": 10}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 10, "total_count": 10}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 10, "total_count": 10}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 10, "total_count": 10}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {"bucket_value_-": 1}}`
 - automation_reentry: Next postclose workorder should preserve implementation_status=implemented_source_quality_contract_waiting_sample and use the source metrics as provenance only.
 
 실행 기준:
@@ -2839,7 +4403,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 80. `order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_semiconductor`
+### 126. `order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_semiconductor`
 
 - title: Swing LDM source field follow-up: pullback_limit_entry|risk_capped|mae_stop_time_stop|Manufacture of Semiconductor|-|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2864,7 +4428,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_decision_matrix.py`, `src/engine/swing_lifecycle_bucket_discovery.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_decision_matrix.py src/tests/test_swing_lifecycle_bucket_discovery.py`
 - implementation_status: `implemented_source_quality_contract_waiting_sample`
-- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 5, "total_count": 5}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 5, "total_count": 5}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 5, "total_count": 5}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 5, "total_count": 5}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 5, "total_count": 5}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {"bucket_value_-": 1}}`
+- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 11, "total_count": 11}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 11, "total_count": 11}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 11, "total_count": 11}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 11, "total_count": 11}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 11, "total_count": 11}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {"bucket_value_-": 1}}`
 - automation_reentry: Next postclose workorder should preserve implementation_status=implemented_source_quality_contract_waiting_sample and use the source metrics as provenance only.
 
 실행 기준:
@@ -2873,7 +4437,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 81. `order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_sea_and_coastal_water_transp`
+### 127. `order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_sea_and_coastal_water_transp`
 
 - title: Swing LDM source field follow-up: pullback_limit_entry|risk_capped|mae_stop_time_stop|Sea and Coastal Water Transport|운송_해운|DIAGNOSTIC
 - decision: `attach_existing_family`
@@ -2898,7 +4462,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_decision_matrix.py`, `src/engine/swing_lifecycle_bucket_discovery.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_decision_matrix.py src/tests/test_swing_lifecycle_bucket_discovery.py`
 - implementation_status: `implemented_source_quality_contract_waiting_sample`
-- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 7, "total_count": 7}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 7, "total_count": 7}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 7, "total_count": 7}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 7, "total_count": 7}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 7, "total_count": 7}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {}}`
+- implementation_provenance: `{"allowed_runtime_apply": false, "implementation_type": "swing_ldm_source_field_coverage_contract", "missing_dimensions": [], "runtime_effect": false, "sample_status": "source_fields_available", "source_field_coverage": {"exit_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.exit_policy"], "present_count": 17, "total_count": 17}, "sector": {"coverage_ratio": 1.0, "paths": ["runtime_features.sector"], "present_count": 17, "total_count": 17}, "selection_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.entry_policy"], "present_count": 17, "total_count": 17}, "sizing_arm": {"coverage_ratio": 1.0, "paths": ["runtime_features.sizing_policy"], "present_count": 17, "total_count": 17}, "theme": {"coverage_ratio": 1.0, "paths": ["runtime_features.theme_tags"], "present_count": 17, "total_count": 17}}, "source_report_type": "swing_lifecycle_decision_matrix", "unknown_reason_counts": {}}`
 - automation_reentry: Next postclose workorder should preserve implementation_status=implemented_source_quality_contract_waiting_sample and use the source metrics as provenance only.
 
 실행 기준:
@@ -2907,7 +4471,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 82. `order_lifecycle_overnight_bucket_confidence_band_confidence_070p`
+### 128. `order_lifecycle_overnight_bucket_confidence_band_confidence_070p`
 
 - title: LDM overnight bucket attribution follow-up: confidence_band=confidence_070p
 - decision: `attach_existing_family`
@@ -2941,7 +4505,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 83. `order_lifecycle_overnight_bucket_confidence_band_confidence_unknown`
+### 129. `order_lifecycle_overnight_bucket_confidence_band_confidence_unknown`
 
 - title: LDM overnight bucket attribution follow-up: confidence_band=confidence_unknown
 - decision: `attach_existing_family`
@@ -2975,7 +4539,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 84. `order_lifecycle_overnight_bucket_held_bucket_held_600_1800s_plus`
+### 130. `order_lifecycle_overnight_bucket_held_bucket_held_600_1800s_plus`
 
 - title: LDM overnight bucket attribution follow-up: held_bucket=held_600_1800s_plus
 - decision: `attach_existing_family`
@@ -3009,7 +4573,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 85. `order_lifecycle_overnight_bucket_held_bucket_held_unknown`
+### 131. `order_lifecycle_overnight_bucket_held_bucket_held_unknown`
 
 - title: LDM overnight bucket attribution follow-up: held_bucket=held_unknown
 - decision: `attach_existing_family`
@@ -3043,7 +4607,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 86. `order_lifecycle_overnight_bucket_overnight_action_action_unknown`
+### 132. `order_lifecycle_overnight_bucket_overnight_action_action_unknown`
 
 - title: LDM overnight bucket attribution follow-up: overnight_action=action_unknown
 - decision: `attach_existing_family`
@@ -3077,7 +4641,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 87. `order_lifecycle_overnight_bucket_overnight_action_sell_today`
+### 133. `order_lifecycle_overnight_bucket_overnight_action_sell_today`
 
 - title: LDM overnight bucket attribution follow-up: overnight_action=SELL_TODAY
 - decision: `attach_existing_family`
@@ -3111,7 +4675,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 88. `order_lifecycle_overnight_bucket_overnight_status_sell_today`
+### 134. `order_lifecycle_overnight_bucket_overnight_status_sell_today`
 
 - title: LDM overnight bucket attribution follow-up: overnight_status=SELL_TODAY
 - decision: `attach_existing_family`
@@ -3145,7 +4709,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 89. `order_lifecycle_overnight_bucket_peak_profit_band_peak_lt_zero`
+### 135. `order_lifecycle_overnight_bucket_peak_profit_band_peak_lt_zero`
 
 - title: LDM overnight bucket attribution follow-up: peak_profit_band=peak_lt_zero
 - decision: `attach_existing_family`
@@ -3179,7 +4743,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 90. `order_lifecycle_overnight_bucket_peak_profit_band_peak_unknown`
+### 136. `order_lifecycle_overnight_bucket_peak_profit_band_peak_unknown`
 
 - title: LDM overnight bucket attribution follow-up: peak_profit_band=peak_unknown
 - decision: `attach_existing_family`
@@ -3213,7 +4777,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 91. `order_lifecycle_overnight_bucket_price_source_holding_price_samples_last`
+### 137. `order_lifecycle_overnight_bucket_price_source_holding_price_samples_last`
 
 - title: LDM overnight bucket attribution follow-up: price_source=holding_price_samples_last
 - decision: `attach_existing_family`
@@ -3247,7 +4811,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 92. `order_lifecycle_scale_in_bucket_arm_avg_down`
+### 138. `order_lifecycle_scale_in_bucket_arm_avg_down`
 
 - title: LDM scale-in bucket attribution follow-up: arm=AVG_DOWN
 - decision: `attach_existing_family`
@@ -3281,7 +4845,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 93. `order_lifecycle_scale_in_bucket_arm_pyramid`
+### 139. `order_lifecycle_scale_in_bucket_arm_pyramid`
 
 - title: LDM scale-in bucket attribution follow-up: arm=PYRAMID
 - decision: `attach_existing_family`
@@ -3315,7 +4879,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 94. `order_lifecycle_scale_in_bucket_blocker_namespace_avg_down`
+### 140. `order_lifecycle_scale_in_bucket_blocker_namespace_avg_down`
 
 - title: LDM scale-in bucket attribution follow-up: blocker_namespace=AVG_DOWN
 - decision: `attach_existing_family`
@@ -3349,7 +4913,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 95. `order_lifecycle_scale_in_bucket_blocker_namespace_avg_down_only`
+### 141. `order_lifecycle_scale_in_bucket_blocker_namespace_avg_down_only`
 
 - title: LDM scale-in bucket attribution follow-up: blocker_namespace=AVG_DOWN_ONLY
 - decision: `attach_existing_family`
@@ -3383,7 +4947,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 96. `order_lifecycle_scale_in_bucket_blocker_namespace_pyramid`
+### 142. `order_lifecycle_scale_in_bucket_blocker_namespace_pyramid`
 
 - title: LDM scale-in bucket attribution follow-up: blocker_namespace=PYRAMID
 - decision: `attach_existing_family`
@@ -3417,7 +4981,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 97. `order_lifecycle_scale_in_bucket_blocker_reason_low_broken`
+### 143. `order_lifecycle_scale_in_bucket_blocker_reason_low_broken`
 
 - title: LDM scale-in bucket attribution follow-up: blocker_reason=low_broken
 - decision: `attach_existing_family`
@@ -3451,7 +5015,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 98. `order_lifecycle_scale_in_bucket_blocker_reason_pnl_out_of_range_0_79`
+### 144. `order_lifecycle_scale_in_bucket_blocker_reason_pnl_out_of_range_0_79`
 
 - title: LDM scale-in bucket attribution follow-up: blocker_reason=pnl_out_of_range(-0.79)
 - decision: `attach_existing_family`
@@ -3485,7 +5049,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 99. `order_lifecycle_scale_in_bucket_blocker_reason_profit_not_enough`
+### 145. `order_lifecycle_scale_in_bucket_blocker_reason_profit_not_enough`
 
 - title: LDM scale-in bucket attribution follow-up: blocker_reason=profit_not_enough
 - decision: `attach_existing_family`
@@ -3519,7 +5083,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 100. `order_lifecycle_scale_in_bucket_blocker_reason_scalp_sim_panic_scale_in_blocked`
+### 146. `order_lifecycle_scale_in_bucket_blocker_reason_scalp_sim_panic_scale_in_blocked`
 
 - title: LDM scale-in bucket attribution follow-up: blocker_reason=scalp_sim_panic_scale_in_blocked
 - decision: `attach_existing_family`
@@ -3553,7 +5117,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 101. `order_lifecycle_scale_in_bucket_blocker_reason_trend_not_strong`
+### 147. `order_lifecycle_scale_in_bucket_blocker_reason_trend_not_strong`
 
 - title: LDM scale-in bucket attribution follow-up: blocker_reason=trend_not_strong
 - decision: `attach_existing_family`
@@ -3587,7 +5151,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 102. `order_lifecycle_entry_bucket_chosen_action_no_buy_ai`
+### 148. `order_lifecycle_entry_bucket_chosen_action_no_buy_ai`
 
 - title: LDM entry bucket attribution follow-up: chosen_action=NO_BUY_AI
 - decision: `attach_existing_family`
@@ -3621,7 +5185,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 103. `order_lifecycle_entry_bucket_chosen_action_wait_requote`
+### 149. `order_lifecycle_entry_bucket_chosen_action_wait_requote`
 
 - title: LDM entry bucket attribution follow-up: chosen_action=WAIT_REQUOTE
 - decision: `attach_existing_family`
@@ -3655,7 +5219,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 104. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_70p_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liq`
+### 150. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_70p_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liq`
 
 - title: LDM entry bucket attribution follow-up: combo_entry_spot=score=score_70p|source=wait6579_ev_cohort|stale=fresh_or_unflagged|liquidity=liquidity_high|overbought=overbought_proxy_watch|time=time_1000_1200
 - decision: `attach_existing_family`
@@ -3689,7 +5253,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 105. `order_lifecycle_entry_bucket_exit_rule_scalp_trailing_take_profit`
+### 151. `order_lifecycle_entry_bucket_exit_rule_scalp_trailing_take_profit`
 
 - title: LDM entry bucket attribution follow-up: exit_rule=scalp_trailing_take_profit
 - decision: `attach_existing_family`
@@ -3723,7 +5287,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 106. `order_lifecycle_entry_bucket_liquidity_bucket_liquidity_high`
+### 152. `order_lifecycle_entry_bucket_liquidity_bucket_liquidity_high`
 
 - title: LDM entry bucket attribution follow-up: liquidity_bucket=liquidity_high
 - decision: `attach_existing_family`
@@ -3757,7 +5321,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 107. `order_lifecycle_entry_bucket_overbought_bucket_overbought_proxy_normal`
+### 153. `order_lifecycle_entry_bucket_overbought_bucket_overbought_proxy_normal`
 
 - title: LDM entry bucket attribution follow-up: overbought_bucket=overbought_proxy_normal
 - decision: `attach_existing_family`
@@ -3791,7 +5355,7 @@ Stage hook candidate:
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 108. `order_lifecycle_entry_bucket_overbought_bucket_overbought_proxy_watch`
+### 154. `order_lifecycle_entry_bucket_overbought_bucket_overbought_proxy_watch`
 
 - title: LDM entry bucket attribution follow-up: overbought_bucket=overbought_proxy_watch
 - decision: `attach_existing_family`
@@ -3829,7 +5393,21 @@ Stage hook candidate:
 
 아래 항목은 source order로 분류됐지만 selected implementation order에는 포함되지 않았다. 재작업 지시 시 `decision`, `decision_reason`, `runtime_effect`를 먼저 재판정한다.
 
-### N1. `order_perf_buy_funnel_json_scan`
+### N1. `order_ai_threshold_dominance`
+
+- title: AI threshold dominance
+- decision: `attach_existing_family`
+- decision_reason: finding maps to an existing threshold family and should strengthen source metrics/provenance
+- source_report_type: `scalping_pattern_lab_automation`
+- lifecycle_stage: `-`
+- target_subsystem: `entry_funnel`
+- runtime_effect: `False`
+- allowed_runtime_apply: `False`
+- implementation_status: `-`
+- files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_missed_entry_counterfactual.py`
+- acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
+
+### N2. `order_perf_buy_funnel_json_scan`
 
 - title: BUY funnel sentinel field scan without repeated json.dumps
 - decision: `attach_existing_family`
@@ -3843,7 +5421,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/buy_funnel_sentinel.py`
 - acceptance_tests: `pytest src/tests/test_buy_funnel_sentinel.py`, `BUY Sentinel classification parity on same raw/cache input`
 
-### N2. `order_ai_threshold_miss_ev_recovery`
+### N3. `order_ai_threshold_miss_ev_recovery`
 
 - title: AI threshold miss EV recovery
 - decision: `attach_existing_family`
@@ -3857,7 +5435,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_missed_entry_counterfactual.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N3. `order_perf_daily_report_bulk_history`
+### N4. `order_perf_daily_report_bulk_history`
 
 - title: Daily report market snapshot bulk history query
 - decision: `attach_existing_family`
@@ -3871,7 +5449,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_report_service.py`
 - acceptance_tests: `pytest src/tests/test_daily_report_service.py src/tests/test_daily_report.py`, `daily report output parity on injected DB/model fixture`
 
-### N4. `order_latency_guard_miss_ev_recovery`
+### N5. `order_latency_guard_miss_ev_recovery`
 
 - title: latency guard miss EV recovery
 - decision: `attach_existing_family`
@@ -3885,7 +5463,21 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/sniper_performance_tuning_report.py`, `src/engine/daily_threshold_cycle_report.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N5. `order_perf_daily_report_engine_singleton`
+### N6. `order_observation_source_quality_warning_rollup`
+
+- title: Observation source-quality warning rollup
+- decision: `attach_existing_family`
+- decision_reason: observation source-quality warning rollup is evidence-only visibility for warnings outside the immediate implementation allowlist
+- source_report_type: `observation_source_quality_audit`
+- lifecycle_stage: `source_quality_gate`
+- target_subsystem: `runtime_instrumentation`
+- runtime_effect: `False`
+- allowed_runtime_apply: `False`
+- implementation_status: `-`
+- files_likely_touched: `src/engine/observation_source_quality_audit.py`, `src/engine/build_code_improvement_workorder.py`
+- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_observation_source_quality_audit.py src/tests/test_build_code_improvement_workorder.py`
+
+### N7. `order_perf_daily_report_engine_singleton`
 
 - title: Daily report SQLAlchemy engine singleton
 - decision: `attach_existing_family`
@@ -3899,7 +5491,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_report_service.py`
 - acceptance_tests: `pytest src/tests/test_daily_report_service.py src/tests/test_daily_report.py`, `engine creation count regression test`
 
-### N6. `order_swing_gatekeeper_reject_threshold_review`
+### N8. `order_swing_gatekeeper_reject_threshold_review`
 
 - title: swing gatekeeper reject threshold review
 - decision: `attach_existing_family`
@@ -3913,7 +5505,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/swing_lifecycle_audit.py`
 - acceptance_tests: `pytest swing lifecycle audit tests`, `pytest state handler fast signatures`
 
-### N7. `order_perf_recommend_update_vectorization`
+### N9. `order_perf_recommend_update_vectorization`
 
 - title: Recommendation and update_kospi vectorized membership checks
 - decision: `attach_existing_family`
@@ -3927,7 +5519,7 @@ Stage hook candidate:
 - files_likely_touched: `src/model/recommend_daily_v2.py`, `src/utils/update_kospi.py`
 - acceptance_tests: `pytest src/tests/test_swing_retrain_automation.py src/tests/test_swing_feature_ssot.py`, `recommendation CSV and diagnostics parity`
 
-### N8. `order_swing_holding_exit_contract_gap_review`
+### N10. `order_swing_holding_exit_contract_gap_review`
 
 - title: swing holding/exit contract gap review
 - decision: `attach_existing_family`
@@ -3941,7 +5533,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/ai_prompt_contracts.py`, `src/engine/ai_engine_openai.py`
 - acceptance_tests: `pytest swing lifecycle audit tests`
 
-### N9. `order_swing_market_regime_sensitivity_review`
+### N11. `order_swing_market_regime_sensitivity_review`
 
 - title: swing market regime sensitivity review
 - decision: `attach_existing_family`
@@ -3955,7 +5547,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/swing_lifecycle_audit.py`
 - acceptance_tests: `pytest swing lifecycle audit tests`
 
-### N10. `order_swing_ofi_qi_stale_or_missing_context`
+### N12. `order_swing_ofi_qi_stale_or_missing_context`
 
 - title: swing OFI/QI stale or missing context
 - decision: `attach_existing_family`
@@ -3969,7 +5561,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/orderbook_stability.py`, `src/engine/swing_lifecycle_audit.py`
 - acceptance_tests: `pytest orderbook stability tests`, `pytest swing lifecycle audit tests`
 
-### N11. `order_swing_scale_in_contract_gap_review`
+### N13. `order_swing_scale_in_contract_gap_review`
 
 - title: swing scale-in contract gap review
 - decision: `attach_existing_family`
@@ -3983,7 +5575,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/sniper_scale_in.py`
 - acceptance_tests: `pytest swing lifecycle audit tests`
 
-### N12. `order_perf_swing_simulation_iteration`
+### N14. `order_perf_swing_simulation_iteration`
 
 - title: Swing simulation iteration and quote grouping
 - decision: `attach_existing_family`
@@ -3997,7 +5589,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_daily_simulation_report.py`
 - acceptance_tests: `pytest src/tests/test_swing_model_selection_funnel_repair.py`, `swing simulation JSON parity on injected sources`
 
-### N13. `order_swing_discovery_label_contract_gap_review`
+### N15. `order_swing_discovery_label_contract_gap_review`
 
 - title: swing discovery label contract gap review
 - decision: `attach_existing_family`
@@ -4011,7 +5603,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_strategy_discovery_label_builder.py`, `src/engine/swing_strategy_discovery_ev_report.py`
 - acceptance_tests: `pytest swing lifecycle audit tests`
 
-### N14. `order_swing_pattern_lab_deepseek_scale_in_events_observed`
+### N16. `order_swing_pattern_lab_deepseek_scale_in_events_observed`
 
 - title: Scale-in events observed for swing positions
 - decision: `attach_existing_family`
@@ -4025,7 +5617,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/swing_selection_funnel_report.py`, `src/model/common_v2.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_model_selection_funnel_repair.py`, `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_deepseek_swing_pattern_lab.py`
 
-### N15. `order_swing_scale_in_ofi_qi_bearish_risk_review`
+### N17. `order_swing_scale_in_ofi_qi_bearish_risk_review`
 
 - title: swing scale-in OFI/QI bearish risk review
 - decision: `attach_existing_family`
@@ -4039,7 +5631,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/swing_lifecycle_audit.py`
 - acceptance_tests: `pytest sniper scale-in tests`, `pytest swing lifecycle audit tests`
 
-### N16. `order_perf_monitor_snapshot_stream_tail`
+### N18. `order_perf_monitor_snapshot_stream_tail`
 
 - title: Monitor snapshot runtime streaming tail read
 - decision: `attach_existing_family`
@@ -4053,7 +5645,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/monitor_snapshot_runtime.py`
 - acceptance_tests: `pytest src/tests/test_log_archive_service.py`, `last valid JSON line parity`
 
-### N17. `order_swing_exit_ofi_qi_smoothing_distribution`
+### N19. `order_swing_exit_ofi_qi_smoothing_distribution`
 
 - title: swing exit OFI/QI smoothing distribution
 - decision: `attach_existing_family`
@@ -4067,7 +5659,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/swing_lifecycle_audit.py`
 - acceptance_tests: `pytest OFI smoothing tests`, `pytest swing lifecycle audit tests`
 
-### N18. `order_swing_strategy_discovery_source_quality_followup`
+### N20. `order_swing_strategy_discovery_source_quality_followup`
 
 - title: swing strategy discovery label/source quality follow-up
 - decision: `attach_existing_family`
@@ -4081,7 +5673,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_strategy_discovery_label_builder.py`, `src/engine/swing_strategy_discovery_ev_report.py`, `src/engine/swing_sector_theme_source.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_strategy_discovery_label_builder.py src/tests/test_swing_strategy_discovery_ev_report.py src/tests/test_swing_sector_theme_source.py`
 
-### N19. `order_perf_final_ensemble_records`
+### N21. `order_perf_final_ensemble_records`
 
 - title: Final ensemble scanner records conversion without iterrows
 - decision: `attach_existing_family`
@@ -4095,7 +5687,7 @@ Stage hook candidate:
 - files_likely_touched: `src/scanners/final_ensemble_scanner.py`
 - acceptance_tests: `pytest src/tests/test_swing_model_selection_funnel_repair.py`, `V2 CSV pick list parity`
 
-### N20. `order_swing_strategy_discovery_avoid_bucket_review`
+### N22. `order_swing_strategy_discovery_avoid_bucket_review`
 
 - title: swing strategy discovery avoid bucket report enrichment
 - decision: `attach_existing_family`
@@ -4109,7 +5701,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_strategy_discovery_ev_report.py`, `docs/swing-strategy-discovery-sim-v1.md`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_strategy_discovery_ev_report.py src/tests/test_build_code_improvement_workorder.py`
 
-### N21. `order_swing_pattern_lab_deepseek_entry_no_submissions`
+### N23. `order_swing_pattern_lab_deepseek_entry_no_submissions`
 
 - title: All selected candidates failed to reach order submission
 - decision: `design_family_candidate`
@@ -4123,7 +5715,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/swing_selection_funnel_report.py`, `src/model/common_v2.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_model_selection_funnel_repair.py`, `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_deepseek_swing_pattern_lab.py`
 
-### N22. `order_liquidity_gate_miss_ev_recovery`
+### N24. `order_liquidity_gate_miss_ev_recovery`
 
 - title: liquidity gate miss EV recovery
 - decision: `design_family_candidate`
@@ -4137,7 +5729,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N23. `order_overbought_gate_miss_ev_recovery`
+### N25. `order_overbought_gate_miss_ev_recovery`
 
 - title: overbought gate miss EV recovery
 - decision: `design_family_candidate`
@@ -4151,7 +5743,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N24. `order_swing_ai_contract_structured_output_eval`
+### N26. `order_swing_ai_contract_structured_output_eval`
 
 - title: swing AI contract structured output eval
 - decision: `design_family_candidate`
@@ -4165,7 +5757,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/ai_prompt_contracts.py`, `src/engine/ai_engine_openai.py`, `src/engine/ai_response_contracts.py`
 - acceptance_tests: `pytest OpenAI transport/schema tests`, `pytest swing lifecycle audit tests`
 
-### N25. `order_panic_sell_defense_lifecycle_transition_pack`
+### N27. `order_panic_sell_defense_lifecycle_transition_pack`
 
 - title: panic sell defense lifecycle transition pack
 - decision: `design_family_candidate`
@@ -4179,7 +5771,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/panic_sell_defense_report.py`, `src/engine/daily_threshold_cycle_report.py`, `src/engine/runtime_approval_summary.py`, `docs/plan-korStockScanPerformanceOptimization.rebase.md`
 - acceptance_tests: `pytest panic sell defense/report lifecycle tests`, `pytest src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_approval_summary.py`
 
-### N26. `order_overbought_gate_miss_ev_회수_조건_점검`
+### N28. `order_overbought_gate_miss_ev_회수_조건_점검`
 
 - title: overbought gate miss EV 회수 조건 점검
 - decision: `design_family_candidate`
@@ -4193,7 +5785,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N27. `order_latency_canary_tag_완화_1축_canary_승인`
+### N29. `order_latency_canary_tag_완화_1축_canary_승인`
 
 - title: latency canary tag 완화 1축 canary 승인
 - decision: `defer_evidence`
@@ -4207,7 +5799,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/sniper_performance_tuning_report.py`, `src/engine/daily_threshold_cycle_report.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N28. `order_ai_threshold_miss_ev_회수_조건_점검`
+### N30. `order_ai_threshold_miss_ev_회수_조건_점검`
 
 - title: AI threshold miss EV 회수 조건 점검
 - decision: `defer_evidence`
@@ -4221,7 +5813,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_missed_entry_counterfactual.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N29. `order_panic_buying_source_quality_market_breadth_micro_coverage`
+### N31. `order_panic_buying_source_quality_market_breadth_micro_coverage`
 
 - title: panic buying source-quality market breadth and micro coverage
 - decision: `defer_evidence`
@@ -4235,7 +5827,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/panic_buying_report.py`, `src/engine/daily_threshold_cycle_report.py`, `src/engine/runtime_approval_summary.py`, `docs/plan-korStockScanPerformanceOptimization.rebase.md`, `docs/code-improvement-workorders/panic_buying_regime_mode_v2_2026-05-14.md`
 - acceptance_tests: `pytest src/tests/test_panic_buying_report.py`, `pytest src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_approval_summary.py`
 
-### N30. `order_swing_pattern_lab_deepseek_ofi_qi_smoothing_review`
+### N32. `order_swing_pattern_lab_deepseek_ofi_qi_smoothing_review`
 
 - title: OFI/QI exit smoothing action distribution
 - decision: `defer_evidence`
@@ -4249,7 +5841,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/swing_lifecycle_audit.py`, `src/engine/swing_selection_funnel_report.py`, `src/model/common_v2.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_model_selection_funnel_repair.py`, `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_deepseek_swing_pattern_lab.py`
 
-### N31. `order_partial_only_표류_전용_timeout_report_only`
+### N33. `order_partial_only_표류_전용_timeout_report_only`
 
 - title: partial-only 표류 전용 timeout report-only
 - decision: `defer_evidence`
@@ -4263,7 +5855,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N32. `order_split_entry_rebase_수량_정합성_report_only_감사`
+### N34. `order_split_entry_rebase_수량_정합성_report_only_감사`
 
 - title: split-entry rebase 수량 정합성 report-only 감사
 - decision: `defer_evidence`
@@ -4277,7 +5869,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N33. `order_동일_종목_split_entry_soft_stop_재진입_cooldown_report_only`
+### N35. `order_동일_종목_split_entry_soft_stop_재진입_cooldown_report_only`
 
 - title: 동일 종목 split-entry soft-stop 재진입 cooldown report-only
 - decision: `defer_evidence`
@@ -4291,7 +5883,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N34. `order_perf_kiwoom_orders_http_session_review`
+### N36. `order_perf_kiwoom_orders_http_session_review`
 
 - title: Kiwoom orders HTTP session reuse manual review
 - decision: `defer_evidence`
@@ -4305,7 +5897,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/kiwoom_orders.py`
 - acceptance_tests: `pytest src/tests/test_kiwoom_orders.py src/tests/test_sniper_scale_in.py`
 
-### N35. `order_perf_config_cache_scope_review`
+### N37. `order_perf_config_cache_scope_review`
 
 - title: Config cache scope review
 - decision: `defer_evidence`
@@ -4319,7 +5911,7 @@ Stage hook candidate:
 - files_likely_touched: `src/utils/constants.py`, `src/utils/kiwoom_utils.py`
 - acceptance_tests: `pytest config/import smoke tests`
 
-### N36. `order_perf_dashboard_db_pool_review`
+### N38. `order_perf_dashboard_db_pool_review`
 
 - title: Legacy dashboard DB connection pool review
 - decision: `defer_evidence`
@@ -4333,7 +5925,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/dashboard_data_repository.py`
 - acceptance_tests: `pytest src/tests/test_dashboard_data_repository.py`
 
-### N37. `order_partial_fallback_확대_직후_즉시_재평가_report_only`
+### N39. `order_partial_fallback_확대_직후_즉시_재평가_report_only`
 
 - title: partial → fallback 확대 직후 즉시 재평가 report-only
 - decision: `reject`
@@ -4347,7 +5939,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
 - acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
 
-### N38. `order_perf_kiwoom_ws_tick_parse_fastpath`
+### N40. `order_perf_kiwoom_ws_tick_parse_fastpath`
 
 - title: Kiwoom websocket tick parsing fast path
 - decision: `reject`
@@ -4361,7 +5953,7 @@ Stage hook candidate:
 - files_likely_touched: `src/engine/kiwoom_websocket.py`
 - acceptance_tests: `pytest websocket parsing/data-quality tests`
 
-### N39. `order_perf_raw_event_suppression_out_of_scope`
+### N41. `order_perf_raw_event_suppression_out_of_scope`
 
 - title: Raw pipeline event suppression out of scope
 - decision: `reject`

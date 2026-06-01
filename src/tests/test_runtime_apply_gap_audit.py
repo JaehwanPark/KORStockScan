@@ -2,8 +2,39 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 from src.engine.ai.postclose_review_config import PostcloseAIReviewConfig
 from src.engine import runtime_apply_gap_audit as mod
+
+
+@pytest.fixture(autouse=True)
+def _disable_real_bedrock_runtime_gap_failback(monkeypatch):
+    def fake_bedrock(context, config, primary_status):
+        return (
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "reviewer": "runtime_apply_gap_ai_review",
+                    "candidate_reviews": [
+                        {
+                            "candidate_id": item["candidate_id"],
+                            "recommended_disposition": "sim_auto_approved",
+                            "route_decision": "keep_sim_policy",
+                            "confidence": "medium",
+                            "reason": "Test Bedrock Qwen3 failback.",
+                            "required_followup": [],
+                        }
+                        for item in context.get("review_candidates", [])
+                    ],
+                    "audit": {"status": "pass", "issues": [], "reason": "test bedrock failback"},
+                    "codex_directives": [],
+                }
+            ),
+            {"provider": "bedrock_qwen3", "status": "success", "failback_used": True},
+        )
+
+    monkeypatch.setattr(mod, "_call_bedrock_qwen3_ai_review", fake_bedrock)
 
 
 def _patch_dirs(tmp_path, monkeypatch):
@@ -39,15 +70,14 @@ def _write_core_artifacts(report_dir: Path, target_date: str = "2026-05-22"):
     )
 
 
-def _runtime_gemini_config() -> PostcloseAIReviewConfig:
+def _runtime_openai_bedrock_config() -> PostcloseAIReviewConfig:
     return PostcloseAIReviewConfig(
         artifact="RUNTIME_APPLY_GAP_AUDIT",
         model="gpt-5.4",
         reasoning_effort="low",
         timeout_sec=180,
-        primary_provider="gemini_3_5_flash",
-        failback_provider="openai",
-        gemini_model="gemini-3.5-flash",
+        primary_provider="openai",
+        failback_provider="bedrock_qwen3",
         gemini_shard_size=10,
     )
 
@@ -233,7 +263,7 @@ def test_runtime_apply_gap_audit_emits_observation_warning_rollup_directive(tmp_
     )
 
 
-def test_runtime_apply_gap_gemini_review_splits_40_candidates_into_10_candidate_shards(monkeypatch):
+def test_runtime_apply_gap_openai_review_splits_40_candidates_into_10_candidate_shards(monkeypatch):
     calls = []
 
     def fake_call(context, config):
@@ -258,7 +288,7 @@ def test_runtime_apply_gap_gemini_review_splits_40_candidates_into_10_candidate_
                     "codex_directives": [],
                 }
             ),
-            {"provider": "gemini", "status": "success", "gemini_key_rotation_attempts": 1},
+            {"provider": "openai", "status": "success"},
         )
 
     monkeypatch.setattr(mod, "_call_openai_ai_review", fake_call)
@@ -267,7 +297,7 @@ def test_runtime_apply_gap_gemini_review_splits_40_candidates_into_10_candidate_
         "review_candidates": [{"candidate_id": f"candidate-{index}"} for index in range(40)],
     }
 
-    raw, status = mod._call_sharded_gemini_runtime_review(context, config=_runtime_gemini_config())
+    raw, status = mod._call_sharded_openai_bedrock_runtime_review(context, config=_runtime_openai_bedrock_config())
     parse_status, payload, warnings = mod._parse_ai_review_response(raw)
 
     assert parse_status == "parsed"
@@ -277,44 +307,60 @@ def test_runtime_apply_gap_gemini_review_splits_40_candidates_into_10_candidate_
     assert [item["candidate_id"] for item in payload["candidate_reviews"]] == [
         f"candidate-{index}" for index in range(40)
     ]
-    assert status["provider"] == "gemini"
+    assert status["provider"] == "openai"
+    assert status["primary_provider"] == "openai"
+    assert status["failback_provider"] == "bedrock_qwen3"
+    assert status["failback_used"] is False
     assert status["shard_count"] == 4
     assert status["parsed_shard_count"] == 4
 
 
-def test_runtime_apply_gap_gemini_shard_failure_uses_openai_full_context_failback(monkeypatch):
+def test_runtime_apply_gap_openai_shard_failure_uses_bedrock_same_shard_failback(monkeypatch):
     calls = []
 
     def fake_call(context, config):
         calls.append((config.primary_provider, len(context["review_candidates"])))
-        if config.primary_provider == "gemini_3_5_flash":
-            return "not-json", {"provider": "gemini", "status": "contract_failed"}
+        return "not-json", {"provider": "openai", "status": "contract_failed"}
+
+    def fake_bedrock(context, config, primary_status):
+        calls.append(("bedrock_qwen3", len(context["review_candidates"])))
         return (
             json.dumps(
                 {
                     "schema_version": 1,
                     "reviewer": "runtime_apply_gap_ai_review",
-                    "candidate_reviews": [],
-                    "audit": {"status": "pass", "issues": [], "reason": "openai failback"},
+                    "candidate_reviews": [
+                        {
+                            "candidate_id": item["candidate_id"],
+                            "recommended_disposition": "sim_auto_approved",
+                            "route_decision": "keep_sim_policy",
+                            "confidence": "medium",
+                            "reason": "Bedrock same-shard failback passed.",
+                            "required_followup": [],
+                        }
+                        for item in context["review_candidates"]
+                    ],
+                    "audit": {"status": "pass", "issues": [], "reason": "bedrock failback"},
                     "codex_directives": [],
                 }
             ),
-            {"provider": "openai", "status": "success"},
+            {"provider": "bedrock_qwen3", "status": "success", "failback_used": True},
         )
 
     monkeypatch.setattr(mod, "_call_openai_ai_review", fake_call)
+    monkeypatch.setattr(mod, "_call_bedrock_qwen3_ai_review", fake_bedrock)
     context = {
         "reviewer": "runtime_apply_gap_ai_review",
         "review_candidates": [{"candidate_id": f"candidate-{index}"} for index in range(12)],
     }
 
-    raw, status = mod._call_sharded_gemini_runtime_review(context, config=_runtime_gemini_config())
+    raw, status = mod._call_sharded_openai_bedrock_runtime_review(context, config=_runtime_openai_bedrock_config())
 
-    assert json.loads(raw)["audit"]["reason"] == "openai failback"
-    assert calls == [("gemini_3_5_flash", 10), ("openai", 12)]
+    assert json.loads(raw)["audit"]["reason"] == "Merged bounded shard reviews."
+    assert calls == [("openai", 10), ("bedrock_qwen3", 10), ("openai", 2), ("bedrock_qwen3", 2)]
     assert status["provider"] == "openai"
     assert status["failback_used"] is True
-    assert status["gemini_key_rotation_exhausted"] is True
+    assert status["failed_shard_ids"] == [1, 2]
 
 
 def test_positive_edge_source_only_is_fail_visible(tmp_path, monkeypatch):
@@ -484,6 +530,100 @@ def test_swing_positive_edge_source_only_tier2_missing_is_fail_closed_handoff(tm
     )
 
 
+def test_swing_discovery_candidate_ledger_falls_back_to_lifecycle_stage_and_family(tmp_path, monkeypatch):
+    report_dir = _patch_dirs(tmp_path, monkeypatch)
+    _write_core_artifacts(report_dir)
+    _write_json(
+        report_dir / "swing_lifecycle_bucket_discovery" / "swing_lifecycle_bucket_discovery_2026-05-22.json",
+        {
+            "surfaced_candidates": [
+                {
+                    "bucket_id": "swing:stage-fallback",
+                    "lifecycle_stage": "entry",
+                    "classification_state": "source_only_keep_collecting",
+                    "sample_count": 4,
+                    "source_quality_gate": "hold_sample",
+                    "source_quality_adjusted_ev_pct": 1.2,
+                    "allowed_runtime_apply": False,
+                }
+            ]
+        },
+    )
+
+    report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+
+    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == "swing:stage-fallback")
+    assert row["stage"] == "entry"
+    assert row["family"] == "swing_lifecycle_bucket_discovery"
+
+
+def test_swing_discovery_candidates_do_not_collapse_by_family(tmp_path, monkeypatch):
+    report_dir = _patch_dirs(tmp_path, monkeypatch)
+    _write_core_artifacts(report_dir)
+    _write_json(
+        report_dir / "swing_lifecycle_bucket_discovery" / "swing_lifecycle_bucket_discovery_2026-05-22.json",
+        {
+            "surfaced_candidates": [
+                {
+                    "candidate_id": "swing:candidate-a",
+                    "bucket_id": "swing:candidate-a",
+                    "stage": "entry",
+                    "classification_state": "source_only_keep_collecting",
+                    "source_quality_gate": "hold_sample",
+                    "allowed_runtime_apply": False,
+                },
+                {
+                    "candidate_id": "swing:candidate-b",
+                    "bucket_id": "swing:candidate-b",
+                    "stage": "holding",
+                    "classification_state": "source_only_keep_collecting",
+                    "source_quality_gate": "hold_sample",
+                    "allowed_runtime_apply": False,
+                },
+            ]
+        },
+    )
+
+    report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+
+    swing_ids = {
+        item["candidate_id"]
+        for item in report["candidate_route_ledger"]
+        if item.get("source_artifact") == "swing_lifecycle_bucket_discovery"
+    }
+    assert {"swing:candidate-a", "swing:candidate-b"}.issubset(swing_ids)
+
+
+def test_swing_ldm_candidates_enter_runtime_gap_ledger_before_discovery(tmp_path, monkeypatch):
+    report_dir = _patch_dirs(tmp_path, monkeypatch)
+    _write_core_artifacts(report_dir)
+    _write_json(
+        report_dir / "swing_lifecycle_decision_matrix" / "swing_lifecycle_decision_matrix_2026-05-22.json",
+        {
+            "swing_lifecycle_flow_bucket_attribution": {
+                "sim_auto_approval_candidates": [
+                    {
+                        "candidate_id": "swing_ldm:flow-a",
+                        "bucket_id": "swing_ldm:flow-a",
+                        "lifecycle_stage": "lifecycle_flow",
+                        "classification_hint": "sim_auto_approved",
+                        "source_quality_adjusted_ev_pct": 2.4,
+                        "allowed_runtime_apply": False,
+                    }
+                ]
+            }
+        },
+    )
+
+    report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+
+    row = next(item for item in report["candidate_route_ledger"] if item["candidate_id"] == "swing_ldm:flow-a")
+    assert row["source_artifact"] == "swing_lifecycle_decision_matrix"
+    assert row["stage"] == "lifecycle_flow"
+    assert row["final_disposition"] == "sim_auto_approved"
+    assert row["source_quality_gate"] == "pass"
+
+
 def test_missing_artifact_enters_retry_queue(tmp_path, monkeypatch):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_json(
@@ -503,7 +643,7 @@ def test_missing_artifact_enters_retry_queue(tmp_path, monkeypatch):
     )
 
 
-def test_ai_review_parse_fail_is_retryable(tmp_path, monkeypatch):
+def test_ai_review_parse_fail_with_bedrock_failback_failure_is_retryable(tmp_path, monkeypatch):
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir)
     _write_json(
@@ -527,12 +667,17 @@ def test_ai_review_parse_fail_is_retryable(tmp_path, monkeypatch):
         "_call_openai_ai_review",
         lambda context, config: ("not-json", {"provider": "openai", "status": "success", "model": config.model}),
     )
+    monkeypatch.setattr(
+        mod,
+        "_call_bedrock_qwen3_ai_review",
+        lambda context, config, primary_status: (None, {"provider": "bedrock_qwen3", "status": "unavailable"}),
+    )
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="openai")
 
-    assert report["ai_reasoning_review"]["failure_code"] == "ai_parse_fail"
+    assert report["ai_reasoning_review"]["failure_code"] == "ai_review_partial_failure"
     assert report["ai_reasoning_review"]["ai_review_retry_pending"] is True
-    assert any(item["failure_code"] == "ai_parse_fail" for item in report["retry_queue"])
+    assert any(item["failure_code"] == "ai_review_partial_failure" for item in report["retry_queue"])
 
 
 def test_ai_reason_is_stored_as_raw_en_and_user_reason_is_ko(tmp_path, monkeypatch):

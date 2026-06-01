@@ -1,20 +1,20 @@
 {
-  "timestamp": "2026-05-29T21:36:36.218518",
-  "vix_close": 15.8100004196167,
-  "vix_ma3": 15.946667035420736,
+  "timestamp": "2026-06-01T11:32:46.394134",
+  "vix_close": 15.319999694824219,
+  "vix_ma3": 15.783333460489908,
   "vix_peak_passed": false,
-  "vix_two_day_down": false,
+  "vix_two_day_down": true,
   "vix_extreme": false,
-  "wti_close": 87.63999938964844,
-  "wti_rsi": 38.7321786642253,
-  "wti_macd": -1.7352797004706986,
-  "wti_macd_signal": 0.1586559099998436,
+  "wti_close": 89.79000091552734,
+  "wti_rsi": 42.09461426522598,
+  "wti_macd": -2.0428521723545856,
+  "wti_macd_signal": -0.2852194800643471,
   "wti_dead_cross": false,
-  "wti_from_recent_high_pct": -19.344748356373177,
+  "wti_from_recent_high_pct": -17.366098021918397,
   "oil_reversal": true,
   "oil_pullback_relief": true,
-  "fng_value": 60.3142857142857,
-  "fng_prev": 60.3142857142857,
+  "fng_value": 60.1714285714286,
+  "fng_prev": 60.1714285714286,
   "fng_description": "greed",
   "fng_extreme_fear": false,
   "fng_recovery": false,
@@ -25,11 +25,11 @@
   "swing_recovery_gate_label": "INSUFFICIENT",
   "recovery_gate_reason": "oil_only_recovery_signal_insufficient",
   "oil_only_recovery_prior": true,
-  "market_regime_continuous_score": 69.3971,
+  "market_regime_continuous_score": 69.8157,
   "market_regime_continuous_label": "RISK_ON",
   "market_regime_component_scores": {
-    "vix_level": 24.19,
-    "fear_greed_level": 15.1571,
+    "vix_level": 24.68,
+    "fear_greed_level": 15.0857,
     "domestic_breadth": 17.6,
     "oil_relief": 10.0,
     "local_model": 2.45
@@ -43,8 +43,8 @@
   ],
   "debug": {
     "oil_rsi_turned": false,
-    "fng_curr": 60.3142857142857,
-    "fng_prev": 60.3142857142857,
+    "fng_curr": 60.1714285714286,
+    "fng_prev": 60.1714285714286,
     "score_threshold": 70,
     "component_scores": {
       "vix": 0,
@@ -68,8 +68,8 @@
         "neutral_min_score": 45.0
       },
       "component_scores": {
-        "vix_level": 24.19,
-        "fear_greed_level": 15.1571,
+        "vix_level": 24.68,
+        "fear_greed_level": 15.0857,
         "domestic_breadth": 17.6,
         "oil_relief": 10.0,
         "local_model": 2.45
@@ -83,7 +83,7 @@
       "ma20_ratio": 35.2,
       "daily_status_text": "하락장",
       "quote_date": "2026-05-29",
-      "report_source": "/home/ubuntu/KORStockScan/data/report/report_2026-05-29.json",
+      "report_source": "/home/ubuntu/KORStockScan/data/report/report_2026-06-01.json",
       "avg_bull": 49.9,
       "qualified_count": 1,
       "total_valid": 145,
@@ -95,6 +95,6 @@
     },
     "local_breadth_signal": "none"
   },
-  "cached_session_date": "2026-05-29",
-  "cached_at": "2026-05-29T21:36:36.224295+09:00"
+  "cached_session_date": "2026-06-01",
+  "cached_at": "2026-06-01T11:32:46.415345+09:00"
 }

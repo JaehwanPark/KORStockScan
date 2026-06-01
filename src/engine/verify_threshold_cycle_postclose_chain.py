@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 from datetime import date, datetime, time as dtime
 from pathlib import Path
@@ -154,6 +155,16 @@ def _safe_int(value: Any, default: int = 0) -> int:
         if value in (None, ""):
             return default
         return int(float(value))
+    except Exception:
+        return default
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value in (None, ""):
+            return default
+        numeric = float(value)
+        return numeric if math.isfinite(numeric) else default
     except Exception:
         return default
 
@@ -773,7 +784,9 @@ def _swing_lifecycle_handoff_status(
     runtime_summary: dict[str, Any],
     workorder: dict[str, Any],
 ) -> dict[str, Any]:
-    expected_candidate_ids = _collect_swing_lifecycle_ids(matrix) | _collect_swing_lifecycle_ids(discovery)
+    matrix_candidate_ids = _collect_swing_lifecycle_ids(matrix)
+    discovery_candidate_ids = _collect_swing_lifecycle_ids(discovery)
+    expected_candidate_ids = matrix_candidate_ids | discovery_candidate_ids
     ev_candidate_ids = _collect_swing_lifecycle_ids(
         {
             "swing_lifecycle_decision_matrix": ev_report.get("swing_lifecycle_decision_matrix"),
@@ -828,6 +841,11 @@ def _swing_lifecycle_handoff_status(
     missing: list[str] = []
     if matrix and not discovery:
         missing.append("swing_lifecycle_bucket_discovery_missing")
+    missing_matrix_to_discovery_candidates = (
+        sorted(matrix_candidate_ids - discovery_candidate_ids) if matrix_candidate_ids and discovery else []
+    )
+    if missing_matrix_to_discovery_candidates:
+        missing.append("swing_lifecycle_matrix_to_discovery_candidate_handoff_missing")
     if missing_ev_candidates:
         missing.append("threshold_cycle_ev_swing_lifecycle_candidates_missing")
     if missing_runtime_candidates:
@@ -862,9 +880,37 @@ def _swing_lifecycle_handoff_status(
         warnings.append(f"swing_lifecycle_bucket_discovery:ai_two_pass_review_{ai_review_status}_fail_closed")
     if bool(discovery_summary.get("ai_fail_closed")):
         warnings.append("swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked")
+    surfaced_candidates = (
+        discovery.get("surfaced_candidates")
+        if isinstance(discovery.get("surfaced_candidates"), list)
+        else []
+    )
+    stage_unknown_candidate_ids: list[str] = []
+    for item in surfaced_candidates:
+        if not isinstance(item, dict):
+            continue
+        stage = str(item.get("stage") or item.get("lifecycle_stage") or "").strip().lower()
+        if not stage or stage == "unknown":
+            stage_unknown_candidate_ids.append(str(item.get("candidate_id") or item.get("bucket_id") or "unknown"))
+    if stage_unknown_candidate_ids:
+        warnings.append("swing_lifecycle_bucket_discovery:stage_unknown")
+    matrix_summary = matrix.get("summary") if isinstance(matrix.get("summary"), dict) else {}
+    raw_swing_event_count = _safe_int(matrix_summary.get("raw_swing_event_count"), 0)
+    ldm_consumed_event_count = _safe_int(matrix_summary.get("ldm_consumed_event_count"), 0)
+    ldm_event_coverage_rate = _safe_float(matrix_summary.get("ldm_event_coverage_rate"), 0.0)
+    unmapped_swing_stage_counts = (
+        matrix_summary.get("unmapped_swing_stage_counts")
+        if isinstance(matrix_summary.get("unmapped_swing_stage_counts"), dict)
+        else {}
+    )
+    if raw_swing_event_count >= 1000 and ldm_event_coverage_rate < 0.01:
+        warnings.append("swing_lifecycle_decision_matrix:low_event_coverage")
     warnings = list(dict.fromkeys(warnings))
     return {
         "status": "fail" if missing else ("missing" if not matrix else "warning" if warnings else "pass"),
+        "matrix_candidate_ids": sorted(matrix_candidate_ids),
+        "discovery_candidate_ids": sorted(discovery_candidate_ids),
+        "missing_matrix_to_discovery_candidate_ids": missing_matrix_to_discovery_candidates,
         "expected_candidate_ids": sorted(expected_candidate_ids),
         "threshold_cycle_ev_candidate_ids": sorted(ev_candidate_ids),
         "runtime_approval_summary_candidate_ids": sorted(runtime_candidate_ids),
@@ -883,6 +929,24 @@ def _swing_lifecycle_handoff_status(
             discovery_summary.get("pre_review_sim_auto_candidate_count"),
             0,
         ),
+        "sim_auto_reviewed_candidate_count": _safe_int(
+            discovery_summary.get("sim_auto_reviewed_candidate_count"),
+            0,
+        ),
+        "sim_auto_unreviewed_candidate_count": _safe_int(
+            discovery_summary.get("sim_auto_unreviewed_candidate_count"),
+            0,
+        ),
+        "sim_auto_downgraded_by_review_count": _safe_int(
+            discovery_summary.get("sim_auto_downgraded_by_review_count"),
+            0,
+        ),
+        "sim_auto_review_shard_count": _safe_int(discovery_summary.get("sim_auto_review_shard_count"), 0),
+        "stage_unknown_candidate_ids": sorted(set(stage_unknown_candidate_ids)),
+        "raw_swing_event_count": raw_swing_event_count,
+        "ldm_consumed_event_count": ldm_consumed_event_count,
+        "ldm_event_coverage_rate": ldm_event_coverage_rate,
+        "unmapped_swing_stage_counts": unmapped_swing_stage_counts,
         "ai_tier2_proposal_count": discovery_summary.get("ai_tier2_proposal_count"),
         "comparative_review_count": discovery_summary.get("comparative_review_count"),
         "selected_decision_counts": discovery_summary.get("selected_decision_counts"),

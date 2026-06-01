@@ -9,19 +9,32 @@
 - panic_approval_requested: `0`
 - scalp_entry_adm_status: `pass`
 - lifecycle_matrix_status: `pass`
+- lifecycle_bucket_windows_promotion: `pass` / `target_pass`
 - lifecycle_ai_context prompt/applied: `3` / `1636`
 - swing_strategy_discovery_labeled/pending: `225` / `2729`
-- swing_lifecycle_matrix_auto: `0`
-- swing_lifecycle_bucket_auto: `0`
+- swing_lifecycle_matrix_auto: `8`
+- swing_lifecycle_bucket_auto: `8`
 - institutional_flow_available/join_rate: `True` / `100.0`
+- microstructure_reaction_available/ok: `False` / `0`
 - pattern_lab_currentness_status: `pass`
 - pattern_lab_ai_review_status: `warning`
 - producer_gap_discovery_status: `warning`
 - pattern_lab_propagation_status: `pass`
 - env_generated_at: `2026-05-29T07:35:01`
-- first_bot_start_at: `2026-05-29T07:40:02`
-- first_bot_start_after_env_at: `2026-05-29T07:40:02`
+- first_bot_start_at: `-`
+- first_bot_start_after_env_at: `-`
 - pre_env_boot_gap: `False`
+
+## Microstructure Reaction Context
+- available: `False`
+- authority: `entry_confidence_modifier_source_only`
+- rows ok/missing: `0` / `0`
+- real_submitted_count: `0`
+- status_counts: `{}`
+- entry_reaction_quality_counts: `{}`
+- avg_scores ask/hold/bid: `None` / `None` / `None`
+- max_vi_proximity_risk: `0`
+- warnings: `['microstructure_reaction_context_missing']`
 
 ## Scalping
 | 항목 | 설명 | 현재 적용 | 상태 | Gate 분류 | 튜닝 경로 | 판정 해석 | 점수 | 계약 | 차단/판정 사유 |
@@ -82,6 +95,12 @@
 - ready_for_bounded_apply: `True`
 - warnings: `[]`
 
+## Lifecycle Bucket Windows
+- promotion_window: `mtd`
+- confirmation_windows: `['rolling5d', 'rolling10d']`
+- windows: `{'rolling5d': {'available': True, 'artifact': '/home/ubuntu/KORStockScan/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_2026-05-29_rolling5d.json', 'window_role': 'rolling_confirmation', 'window_policy': 'rolling_5d', 'status': 'pass', 'parent_bucket_count': 34, 'selected_parent_level': 'L1_broad', 'parent_granularity_status': 'target_pass', 'absorbed_child_count': 232, 'absorbed_sample_count': 72408, 'child_conflict_warning_count': 13, 'live_auto_apply_ready_count': 0, 'source_contract_status': 'pass', 'ai_two_pass_review_status': 'disabled'}, 'rolling10d': {'available': True, 'artifact': '/home/ubuntu/KORStockScan/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_2026-05-29_rolling10d.json', 'window_role': 'rolling_confirmation', 'window_policy': 'rolling_10d', 'status': 'pass', 'parent_bucket_count': 35, 'selected_parent_level': 'L1_broad', 'parent_granularity_status': 'target_pass', 'absorbed_child_count': 289, 'absorbed_sample_count': 128502, 'child_conflict_warning_count': 16, 'live_auto_apply_ready_count': 0, 'source_contract_status': 'pass', 'ai_two_pass_review_status': 'disabled'}, 'mtd': {'available': True, 'artifact': '/home/ubuntu/KORStockScan/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_2026-05-29_mtd.json', 'window_role': 'promotion_confirmation', 'window_policy': 'month_to_date', 'status': 'pass', 'parent_bucket_count': 36, 'selected_parent_level': 'L1_broad', 'parent_granularity_status': 'target_pass', 'absorbed_child_count': 306, 'absorbed_sample_count': 145239, 'child_conflict_warning_count': 16, 'live_auto_apply_ready_count': 0, 'source_contract_status': 'pass', 'ai_two_pass_review_status': 'parsed'}}`
+- warnings: `[]`
+
 ## Lifecycle AI Context
 - context_artifact: `/home/ubuntu/KORStockScan/data/report/lifecycle_ai_context/lifecycle_ai_context_2026-05-29.json`
 - context_version: `lifecycle_ai_context_v1_2026-05-29`
@@ -122,9 +141,9 @@
 ## Swing Lifecycle Matrix
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_lifecycle_decision_matrix/swing_lifecycle_decision_matrix_2026-05-29.json`
 - available: `True`
-- total/probe/discovery: `3717` / `81` / `3636`
-- sim_auto_candidate_count: `0`
-- workorder_count: `18`
+- total/probe/discovery: `63838` / `59752` / `4086`
+- sim_auto_candidate_count: `8`
+- workorder_count: `17`
 - daily_simulation_consumed: `False`
 - runtime_effect: `False`
 - warnings: `[]`
@@ -133,7 +152,7 @@
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_lifecycle_bucket_discovery/swing_lifecycle_bucket_discovery_2026-05-29.json`
 - available: `True`
 - source_contract_status: `pass`
-- surfaced/sim_auto/code_patch: `532` / `0` / `0`
+- surfaced/sim_auto/code_patch: `538` / `8` / `0`
 - runtime_effect: `False`
 - warnings: `[]`
 

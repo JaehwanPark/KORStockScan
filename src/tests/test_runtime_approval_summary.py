@@ -240,6 +240,10 @@ def test_runtime_approval_summary_preserves_swing_flow_metrics():
             "join_contract_blocked": False,
             "sim_auto_candidate_count": 1,
             "sim_auto_candidate_ids": ["swing_ldm_lifecycle_flow_combo_parent"],
+            "raw_swing_event_count": 1200,
+            "ldm_consumed_event_count": 48,
+            "ldm_event_coverage_rate": 0.04,
+            "unmapped_swing_stage_counts": {"swing_other": 5},
         },
         "swing_lifecycle_bucket_discovery": {
             "available": True,
@@ -247,6 +251,10 @@ def test_runtime_approval_summary_preserves_swing_flow_metrics():
             "candidate_count": 2,
             "surfaced_candidate_count": 2,
             "sim_auto_approved_count": 1,
+            "sim_auto_reviewed_candidate_count": 21,
+            "sim_auto_unreviewed_candidate_count": 0,
+            "sim_auto_downgraded_by_review_count": 0,
+            "sim_auto_review_shard_count": 2,
             "swing_lifecycle_flow_bucket_count": 1,
             "complete_flow_count": 3,
             "incomplete_flow_count": 0,
@@ -263,9 +271,59 @@ def test_runtime_approval_summary_preserves_swing_flow_metrics():
 
     assert matrix_summary["swing_lifecycle_flow_bucket_count"] == 1
     assert matrix_summary["sim_auto_candidate_ids"] == ["swing_ldm_lifecycle_flow_combo_parent"]
+    assert matrix_summary["raw_swing_event_count"] == 1200
+    assert matrix_summary["ldm_consumed_event_count"] == 48
+    assert matrix_summary["ldm_event_coverage_rate"] == 0.04
+    assert matrix_summary["unmapped_swing_stage_counts"] == {"swing_other": 5}
     assert discovery_summary["swing_lifecycle_flow_bucket_count"] == 1
     assert discovery_summary["flow_sim_auto_approved_count"] == 1
     assert discovery_summary["stage_only_source_only_count"] == 1
+    assert discovery_summary["sim_auto_reviewed_candidate_count"] == 21
+    assert discovery_summary["sim_auto_review_shard_count"] == 2
+
+
+def test_runtime_approval_summary_tolerates_malformed_swing_coverage_numbers():
+    ev_report = {
+        "swing_lifecycle_decision_matrix": {
+            "available": True,
+            "total_rows": "bad-total",
+            "raw_swing_event_count": "bad-raw-count",
+            "ldm_consumed_event_count": "bad-consumed-count",
+            "ldm_event_coverage_rate": "bad-rate",
+        },
+    }
+
+    summary = mod._swing_lifecycle_matrix_summary(ev_report)
+
+    assert summary["total_rows"] == 0
+    assert summary["raw_swing_event_count"] == 0
+    assert summary["ldm_consumed_event_count"] == 0
+    assert summary["ldm_event_coverage_rate"] == 0.0
+    assert "swing_lifecycle_decision_matrix_low_event_coverage" not in summary["warnings"]
+
+
+def test_runtime_approval_summary_tolerates_non_finite_swing_coverage_numbers():
+    ev_report = {
+        "swing_lifecycle_decision_matrix": {
+            "available": True,
+            "raw_swing_event_count": 1200,
+            "ldm_consumed_event_count": 48,
+            "ldm_event_coverage_rate": "nan",
+        },
+    }
+
+    summary = mod._swing_lifecycle_matrix_summary(ev_report)
+
+    assert summary["raw_swing_event_count"] == 1200
+    assert summary["ldm_consumed_event_count"] == 48
+    assert summary["ldm_event_coverage_rate"] == 0.0
+    assert "swing_lifecycle_decision_matrix_low_event_coverage" in summary["warnings"]
+
+    ev_report["swing_lifecycle_decision_matrix"]["ldm_event_coverage_rate"] = "inf"
+    summary = mod._swing_lifecycle_matrix_summary(ev_report)
+
+    assert summary["ldm_event_coverage_rate"] == 0.0
+    assert "swing_lifecycle_decision_matrix_low_event_coverage" in summary["warnings"]
 
 
 def test_runtime_approval_summary_surfaces_swing_bucket_ai_followup_separately():
@@ -291,6 +349,41 @@ def test_runtime_approval_summary_surfaces_swing_bucket_ai_followup_separately()
     assert "ai_review_followup_required" in summary["warnings"]
     assert "ai_review_followup_sim_auto_blocked" in summary["warnings"]
     assert not any("fail_closed" in warning for warning in summary["warnings"])
+
+
+def test_runtime_approval_summary_tolerates_malformed_swing_discovery_counts():
+    ev_report = {
+        "swing_lifecycle_bucket_discovery": {
+            "available": True,
+            "candidate_count": "bad-candidate",
+            "surfaced_candidate_count": "bad-surfaced",
+            "sim_auto_approved_count": "bad-approved",
+            "sim_auto_reviewed_candidate_count": "bad-reviewed",
+            "sim_auto_unreviewed_candidate_count": "bad-unreviewed",
+            "sim_auto_downgraded_by_review_count": "bad-downgraded",
+            "sim_auto_review_shard_count": "bad-shard",
+            "flow_sim_auto_approved_count": "bad-flow",
+            "stage_only_source_only_count": "bad-stage-only",
+            "code_patch_required_count": "bad-code-patch",
+            "runtime_blocked_contract_gap_count": "bad-contract",
+            "automation_handoff_gap_count": "bad-handoff",
+        }
+    }
+
+    summary = mod._swing_lifecycle_bucket_discovery_summary(ev_report)
+
+    assert summary["candidate_count"] == 0
+    assert summary["surfaced_candidate_count"] == 0
+    assert summary["sim_auto_approved_count"] == 0
+    assert summary["sim_auto_reviewed_candidate_count"] == 0
+    assert summary["sim_auto_unreviewed_candidate_count"] == 0
+    assert summary["sim_auto_downgraded_by_review_count"] == 0
+    assert summary["sim_auto_review_shard_count"] == 0
+    assert summary["flow_sim_auto_approved_count"] == 0
+    assert summary["stage_only_source_only_count"] == 0
+    assert summary["code_patch_required_count"] == 0
+    assert summary["runtime_blocked_contract_gap_count"] == 0
+    assert summary["automation_handoff_gap_count"] == 0
 
 
 def test_runtime_approval_summary_surfaces_entry_adm_runtime_bias_summary(tmp_path, monkeypatch):

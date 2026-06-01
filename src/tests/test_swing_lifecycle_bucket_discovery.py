@@ -1,6 +1,13 @@
 import json
 
+import pytest
+
 from src.engine import swing_lifecycle_bucket_discovery as mod
+
+
+@pytest.fixture(autouse=True)
+def _disable_default_swing_bucket_ai_provider(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PROVIDER", "none")
 
 
 def _ai_response(bucket_ids: list[str]) -> dict:
@@ -149,6 +156,8 @@ def test_bucket_discovery_auto_approves_sim_only_candidates(tmp_path, monkeypatc
     assert report["summary"]["sim_auto_approved_count"] == 1
     assert report["summary"]["flow_sim_auto_approved_count"] == 1
     candidate = report["sim_auto_approved_candidates"][0]
+    assert candidate["candidate_id"] == candidate["bucket_id"]
+    assert candidate["stage"] == candidate["lifecycle_stage"] == "lifecycle_flow"
     assert candidate["classification_state"] == "sim_auto_approved"
     assert candidate["next_route"] == "next_preopen_swing_sim_policy_input"
     assert candidate["actual_order_submitted"] is False
@@ -164,6 +173,16 @@ def test_bucket_discovery_auto_approves_sim_only_candidates(tmp_path, monkeypatc
     assert approval["approved"] is True
     assert approval["approved_source_ids"] == ["swing_lifecycle_bucket_discovery"]
     assert catalog["policies"][0]["bucket_id"] == candidate["bucket_id"]
+
+
+def test_ai_review_rejects_candidate_bucket_id_mismatch():
+    payload = _ai_response(["bucket_a"])
+    payload["ai_tier2_proposals"][0]["candidate_id"] = "different_id"
+
+    status, _, warnings = mod._parse_ai_review_response(payload)
+
+    assert status == "parse_rejected"
+    assert "ai_review_ai_tier2_proposals_candidate_bucket_id_mismatch:different_id" in warnings
 
 
 def test_bucket_discovery_keeps_stage_only_buckets_source_only(tmp_path, monkeypatch):
@@ -265,12 +284,159 @@ def test_bucket_discovery_reviews_sim_auto_candidates_before_large_source_only_t
     assert calls[0]["candidate_ids"] == [sim_bucket_id]
     assert report["ai_two_pass_review"]["shards"][0]["provider_status"]["model"] == "gpt-5.4-mini"
     assert report["ai_two_pass_review"]["shards"][0]["provider_status"]["reasoning_effort"] == "medium"
+    assert report["ai_two_pass_review"]["requested_provider"] == "openai"
+    assert report["ai_two_pass_review"]["primary_provider"] == "bedrock_qwen3"
+    assert report["ai_two_pass_review"]["failback_provider"] == "openai"
     assert report["summary"]["ai_reviewed_candidate_count"] == 11
     assert report["summary"]["ai_unreviewed_candidate_count"] == 110
     assert report["summary"]["unreviewed_sim_auto_candidate_count"] == 0
     assert report["summary"]["sim_auto_approved_count"] == 1
     assert report["sim_auto_approved_candidates"][0]["bucket_id"] == sim_bucket_id
     assert report["sim_auto_approved_candidates"][0]["ai_review_coverage"] == "reviewed"
+
+
+def test_bucket_discovery_enabled_non_openai_provider_still_calls_configured_review(tmp_path, monkeypatch):
+    target = "2026-05-22"
+    matrix_dir = tmp_path / "matrix"
+    matrix_dir.mkdir()
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "discovery")
+    monkeypatch.setattr("src.engine.swing.sim_auto_approval_control_tower.SIM_AUTO_APPROVAL_DIR", tmp_path / "approvals")
+    monkeypatch.setattr("src.engine.swing.sim_auto_approval_control_tower.SWING_SIM_POLICY_DIR", tmp_path / "policies")
+
+    flow_bucket = _flow_bucket(
+        bucket_key="entry=entry_good|holding=hold_good|scale_in=scale_in:none|exit=exit_good",
+        joined_sample=4,
+        ev=1.1,
+    )
+    matrix_path = matrix_dir / f"swing_lifecycle_decision_matrix_{target}.json"
+    matrix_path.write_text(
+        json.dumps(
+            {
+                "input_contract": {"swing_daily_simulation_consumed": False},
+                "swing_lifecycle_flow_bucket_attribution": {"buckets": [flow_bucket]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+
+    calls = []
+
+    def fake_call(context, **kwargs):
+        calls.append((context, kwargs.get("config")))
+        config = kwargs["config"]
+        return _ai_response(context["candidate_ids"]), {
+            "provider": "bedrock_qwen3",
+            "status": "success",
+            "model": config.model,
+            "reasoning_effort": config.reasoning_effort,
+            "primary_provider": config.primary_provider,
+            "failback_provider": config.failback_provider,
+        }
+
+    monkeypatch.setattr(mod, "_call_openai_ai_review", fake_call)
+
+    report = mod.build_swing_lifecycle_bucket_discovery(target, provider="bedrock_qwen3")
+
+    assert calls
+    assert calls[0][1].primary_provider == "bedrock_qwen3"
+    assert report["summary"]["ai_two_pass_review_status"] == "parsed"
+    assert report["ai_two_pass_review"]["requested_provider"] == "bedrock_qwen3"
+    assert report["ai_two_pass_review"]["primary_provider"] == "bedrock_qwen3"
+
+
+def test_bucket_discovery_reviews_all_sim_auto_candidates_in_20_candidate_shards(tmp_path, monkeypatch):
+    target = "2026-05-22"
+    matrix_dir = tmp_path / "matrix"
+    matrix_dir.mkdir()
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "discovery")
+    monkeypatch.setattr("src.engine.swing.sim_auto_approval_control_tower.SIM_AUTO_APPROVAL_DIR", tmp_path / "approvals")
+    monkeypatch.setattr("src.engine.swing.sim_auto_approval_control_tower.SWING_SIM_POLICY_DIR", tmp_path / "policies")
+
+    flow_buckets = [
+        _flow_bucket(
+            bucket_key=f"entry=entry_{idx}|holding=hold_good|scale_in=scale_in:none|exit=exit_good",
+            joined_sample=4,
+            ev=1.1,
+        )
+        for idx in range(21)
+    ]
+    matrix_path = matrix_dir / f"swing_lifecycle_decision_matrix_{target}.json"
+    matrix_path.write_text(
+        json.dumps(
+            {
+                "input_contract": {"swing_daily_simulation_consumed": False},
+                "swing_lifecycle_flow_bucket_attribution": {"buckets": flow_buckets},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+
+    calls = []
+
+    def fake_call(context, **kwargs):
+        calls.append(context)
+        return _ai_response(context["candidate_ids"]), {"provider": "openai", "status": "success", "model": mod.AI_REVIEW_MODEL}
+
+    monkeypatch.setattr(mod, "_call_openai_ai_review", fake_call)
+
+    report = mod.build_swing_lifecycle_bucket_discovery(target, provider="openai")
+
+    assert [call["shard_id"] for call in calls] == ["sim_policy_review", "sim_policy_review_2"]
+    assert [len(call["candidate_ids"]) for call in calls] == [20, 1]
+    assert report["summary"]["sim_auto_review_shard_count"] == 2
+    assert report["summary"]["sim_auto_reviewed_candidate_count"] == 21
+    assert report["summary"]["sim_auto_unreviewed_candidate_count"] == 0
+    assert report["summary"]["sim_auto_downgraded_by_review_count"] == 0
+    assert report["summary"]["sim_auto_approved_count"] == 21
+
+
+def test_bucket_discovery_partial_sim_auto_shard_failure_only_downgrades_failed_shard(tmp_path, monkeypatch):
+    target = "2026-05-22"
+    matrix_dir = tmp_path / "matrix"
+    matrix_dir.mkdir()
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "discovery")
+    monkeypatch.setattr("src.engine.swing.sim_auto_approval_control_tower.SIM_AUTO_APPROVAL_DIR", tmp_path / "approvals")
+    monkeypatch.setattr("src.engine.swing.sim_auto_approval_control_tower.SWING_SIM_POLICY_DIR", tmp_path / "policies")
+
+    flow_buckets = [
+        _flow_bucket(
+            bucket_key=f"entry=entry_{idx}|holding=hold_good|scale_in=scale_in:none|exit=exit_good",
+            joined_sample=4,
+            ev=1.1,
+        )
+        for idx in range(21)
+    ]
+    matrix_path = matrix_dir / f"swing_lifecycle_decision_matrix_{target}.json"
+    matrix_path.write_text(
+        json.dumps(
+            {
+                "input_contract": {"swing_daily_simulation_consumed": False},
+                "swing_lifecycle_flow_bucket_attribution": {"buckets": flow_buckets},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+
+    def fake_call(context, **kwargs):
+        if context["shard_id"] == "sim_policy_review_2":
+            return None, {"provider": "openai", "status": "error", "model": mod.AI_REVIEW_MODEL}
+        return _ai_response(context["candidate_ids"]), {"provider": "openai", "status": "success", "model": mod.AI_REVIEW_MODEL}
+
+    monkeypatch.setattr(mod, "_call_openai_ai_review", fake_call)
+
+    report = mod.build_swing_lifecycle_bucket_discovery(target, provider="openai")
+
+    assert report["summary"]["ai_two_pass_review_status"] == "partial"
+    assert report["summary"]["sim_auto_review_shard_count"] == 2
+    assert report["summary"]["sim_auto_reviewed_candidate_count"] == 20
+    assert report["summary"]["sim_auto_unreviewed_candidate_count"] == 1
+    assert report["summary"]["sim_auto_downgraded_by_review_count"] == 1
+    assert report["summary"]["sim_auto_approved_count"] == 20
+    assert sum(1 for item in report["surfaced_candidates"] if item["classification_state"] == "source_only_keep_collecting") == 1
+    assert sum(1 for item in report["surfaced_candidates"] if item["classification_state"] == "sim_auto_approved") == 20
 
 
 def test_bucket_discovery_taxonomy_correction_does_not_block_parsed_sim_policy(tmp_path, monkeypatch):

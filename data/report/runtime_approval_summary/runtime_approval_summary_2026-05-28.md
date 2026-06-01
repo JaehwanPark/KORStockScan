@@ -9,11 +9,13 @@
 - panic_approval_requested: `0`
 - scalp_entry_adm_status: `pass`
 - lifecycle_matrix_status: `pass`
+- lifecycle_bucket_windows_promotion: `missing` / `None`
 - lifecycle_ai_context prompt/applied: `3` / `2125`
 - swing_strategy_discovery_labeled/pending: `84` / `2617`
 - swing_lifecycle_matrix_auto: `0`
 - swing_lifecycle_bucket_auto: `0`
 - institutional_flow_available/join_rate: `True` / `100.0`
+- microstructure_reaction_available/ok: `False` / `0`
 - pattern_lab_currentness_status: `pass`
 - pattern_lab_ai_review_status: `warning`
 - producer_gap_discovery_status: `warning`
@@ -22,6 +24,17 @@
 - first_bot_start_at: `-`
 - first_bot_start_after_env_at: `-`
 - pre_env_boot_gap: `False`
+
+## Microstructure Reaction Context
+- available: `False`
+- authority: `entry_confidence_modifier_source_only`
+- rows ok/missing: `0` / `0`
+- real_submitted_count: `0`
+- status_counts: `{}`
+- entry_reaction_quality_counts: `{}`
+- avg_scores ask/hold/bid: `None` / `None` / `None`
+- max_vi_proximity_risk: `0`
+- warnings: `['microstructure_reaction_context_missing']`
 
 ## Scalping
 | 항목 | 설명 | 현재 적용 | 상태 | Gate 분류 | 튜닝 경로 | 판정 해석 | 점수 | 계약 | 차단/판정 사유 |
@@ -82,6 +95,12 @@
 - ready_for_bounded_apply: `True`
 - warnings: `[]`
 
+## Lifecycle Bucket Windows
+- promotion_window: `mtd`
+- confirmation_windows: `['rolling5d', 'rolling10d']`
+- windows: `{'rolling5d': {'available': False, 'artifact': None, 'window_role': 'rolling_confirmation', 'window_policy': 'rolling5d', 'status': 'missing', 'parent_bucket_count': 0, 'selected_parent_level': None, 'parent_granularity_status': None, 'absorbed_child_count': 0, 'absorbed_sample_count': 0, 'child_conflict_warning_count': 0, 'live_auto_apply_ready_count': 0, 'source_contract_status': None, 'ai_two_pass_review_status': None}, 'rolling10d': {'available': False, 'artifact': None, 'window_role': 'rolling_confirmation', 'window_policy': 'rolling10d', 'status': 'missing', 'parent_bucket_count': 0, 'selected_parent_level': None, 'parent_granularity_status': None, 'absorbed_child_count': 0, 'absorbed_sample_count': 0, 'child_conflict_warning_count': 0, 'live_auto_apply_ready_count': 0, 'source_contract_status': None, 'ai_two_pass_review_status': None}, 'mtd': {'available': False, 'artifact': None, 'window_role': 'promotion_confirmation', 'window_policy': 'mtd', 'status': 'missing', 'parent_bucket_count': 0, 'selected_parent_level': None, 'parent_granularity_status': None, 'absorbed_child_count': 0, 'absorbed_sample_count': 0, 'child_conflict_warning_count': 0, 'live_auto_apply_ready_count': 0, 'source_contract_status': None, 'ai_two_pass_review_status': None}}`
+- warnings: `['lifecycle_bucket_discovery:contamination_quarantine_live_auto_blocked:3', 'lifecycle_bucket_windows:rolling5d_missing', 'lifecycle_bucket_windows:rolling10d_missing', 'lifecycle_bucket_windows:mtd_missing']`
+
 ## Lifecycle AI Context
 - context_artifact: `/home/ubuntu/KORStockScan/data/report/lifecycle_ai_context/lifecycle_ai_context_2026-05-28.json`
 - context_version: `lifecycle_ai_context_v1_2026-05-28`
@@ -122,9 +141,9 @@
 ## Swing Lifecycle Matrix
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_lifecycle_decision_matrix/swing_lifecycle_decision_matrix_2026-05-28.json`
 - available: `True`
-- total/probe/discovery: `3272` / `68` / `3204`
+- total/probe/discovery: `63103` / `59899` / `3204`
 - sim_auto_candidate_count: `0`
-- workorder_count: `12`
+- workorder_count: `17`
 - daily_simulation_consumed: `False`
 - runtime_effect: `False`
 - warnings: `[]`
@@ -133,7 +152,7 @@
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_lifecycle_bucket_discovery/swing_lifecycle_bucket_discovery_2026-05-28.json`
 - available: `True`
 - source_contract_status: `pass`
-- surfaced/sim_auto/code_patch: `527` / `0` / `0`
+- surfaced/sim_auto/code_patch: `533` / `0` / `0`
 - runtime_effect: `False`
 - warnings: `[]`
 

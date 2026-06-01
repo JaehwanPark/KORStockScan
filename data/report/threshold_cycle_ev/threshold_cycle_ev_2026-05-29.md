@@ -79,8 +79,15 @@
 - status: `pass` / human_intervention_required: `False`
 - candidates/surfaced: `500` / `238`
 - sim_auto/live_auto/new_bucket: `123` / `0` / `0`
+- role/window: `new_pattern_detection` / `daily_lifecycle_bucket_discovery_with_preopen_auto_apply`
+- parent_count/granularity/conflict: `45` / `target_pass` / `7`
 - state_counts: `{'source_only_keep_collecting': 352, 'lifecycle_flow_sim_probe_candidate': 12, 'sim_auto_approved': 123, 'entry_only_sim_auto_approved': 9, 'entry_only_source_candidate': 4}`
 - top_surfaced: `[{'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq', 'stage': 'lifecycle_flow', 'classification_state': 'source_only_keep_collecting', 'live_auto_apply_family': None, 'recommended_action': 'relax_or_recover', 'joined_sample': 4, 'source_quality_adjusted_ev_pct': 2.7842}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'stage': 'lifecycle_flow', 'classification_state': 'source_only_keep_collecting', 'live_auto_apply_family': None, 'recommended_action': 'relax_or_recover', 'joined_sample': 2, 'source_quality_adjusted_ev_pct': 1.2894}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_fresh_liquidity_liq', 'stage': 'lifecycle_flow', 'classification_state': 'source_only_keep_collecting', 'live_auto_apply_family': None, 'recommended_action': 'relax_or_recover', 'joined_sample': 1, 'source_quality_adjusted_ev_pct': 2.4291}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_stale_block_liquidi', 'stage': 'lifecycle_flow', 'classification_state': 'source_only_keep_collecting', 'live_auto_apply_family': None, 'recommended_action': 'relax_or_recover', 'joined_sample': 1, 'source_quality_adjusted_ev_pct': 1.1187}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'stage': 'lifecycle_flow', 'classification_state': 'source_only_keep_collecting', 'live_auto_apply_family': None, 'recommended_action': 'relax_or_recover', 'joined_sample': 1, 'source_quality_adjusted_ev_pct': 1.0433}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'stage': 'lifecycle_flow', 'classification_state': 'source_only_keep_collecting', 'live_auto_apply_family': None, 'recommended_action': 'relax_or_recover', 'joined_sample': 1, 'source_quality_adjusted_ev_pct': 1.5054}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_66_69_source_scalp_entry_action_decision_snapshot_stale', 'stage': 'lifecycle_flow', 'classification_state': 'source_only_keep_collecting', 'live_auto_apply_family': None, 'recommended_action': 'relax_or_recover', 'joined_sample': 1, 'source_quality_adjusted_ev_pct': 1.0295}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_66_69_source_scalp_entry_action_decision_snapshot_stale', 'stage': 'lifecycle_flow', 'classification_state': 'source_only_keep_collecting', 'live_auto_apply_family': None, 'recommended_action': 'relax_or_recover', 'joined_sample': 1, 'source_quality_adjusted_ev_pct': 1.7616}]`
+
+## Lifecycle Bucket Windows
+- promotion_window: `mtd`
+- confirmation_windows: `['rolling5d', 'rolling10d']`
+- windows: `{'rolling5d': {'available': True, 'artifact': '/home/ubuntu/KORStockScan/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_2026-05-29_rolling5d.json', 'window_role': 'rolling_confirmation', 'window_policy': 'rolling_5d', 'status': 'pass', 'parent_bucket_count': 34, 'selected_parent_level': 'L1_broad', 'parent_granularity_status': 'target_pass', 'absorbed_child_count': 232, 'absorbed_sample_count': 72408, 'child_conflict_warning_count': 13, 'live_auto_apply_ready_count': 0, 'source_contract_status': 'pass', 'ai_two_pass_review_status': 'disabled'}, 'rolling10d': {'available': True, 'artifact': '/home/ubuntu/KORStockScan/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_2026-05-29_rolling10d.json', 'window_role': 'rolling_confirmation', 'window_policy': 'rolling_10d', 'status': 'pass', 'parent_bucket_count': 35, 'selected_parent_level': 'L1_broad', 'parent_granularity_status': 'target_pass', 'absorbed_child_count': 289, 'absorbed_sample_count': 128502, 'child_conflict_warning_count': 16, 'live_auto_apply_ready_count': 0, 'source_contract_status': 'pass', 'ai_two_pass_review_status': 'disabled'}, 'mtd': {'available': True, 'artifact': '/home/ubuntu/KORStockScan/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_2026-05-29_mtd.json', 'window_role': 'promotion_confirmation', 'window_policy': 'month_to_date', 'status': 'pass', 'parent_bucket_count': 36, 'selected_parent_level': 'L1_broad', 'parent_granularity_status': 'target_pass', 'absorbed_child_count': 306, 'absorbed_sample_count': 145239, 'child_conflict_warning_count': 16, 'live_auto_apply_ready_count': 0, 'source_contract_status': 'pass', 'ai_two_pass_review_status': 'parsed'}}`
 
 ## Lifecycle AI Context
 - artifact: `/home/ubuntu/KORStockScan/data/report/lifecycle_ai_context/lifecycle_ai_context_2026-05-29.json`
@@ -178,8 +185,8 @@
 ## Code Improvement Workorder
 - artifact: `/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-29.json`
 - markdown: `/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-29.md`
-- selected_order_count: `108`
-- decision_counts: `{'implement_now': 2, 'attach_existing_family': 126, 'design_family_candidate': 6, 'defer_evidence': 10, 'reject': 3}`
+- selected_order_count: `154`
+- decision_counts: `{'implement_now': 50, 'attach_existing_family': 126, 'design_family_candidate': 6, 'defer_evidence': 10, 'reject': 3}`
 
 ## Approval Requests
 - none
@@ -189,9 +196,9 @@
 
 ## Calibration Decisions
 ## Code Improvement Top Orders
-- `order_pattern_lab_ai_review_order_pattern_lab_ai_review_ai_review_followup_2026_05_29` decision=`implement_now` subsystem=`pattern_lab`
-- `order_pattern_lab_ai_review_order_pattern_lab_ai_review_order_latency_guard_miss_ev_recovery` decision=`implement_now` subsystem=`pattern_lab`
-- `order_entry_submit_drought_auto_resolution` decision=`attach_existing_family` subsystem=`runtime_instrumentation`
+- `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_0273b5e0` decision=`implement_now` subsystem=`lifecycle_bucket_discovery_taxonomy_provenance`
+- `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_0f872dff` decision=`implement_now` subsystem=`lifecycle_bucket_discovery_taxonomy_provenance`
+- `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_169b9812` decision=`implement_now` subsystem=`lifecycle_bucket_discovery_taxonomy_provenance`
 
 ## Pattern Lab Top Findings
 - `AI threshold dominance` route=`existing_family` family=`score65_74_recovery_probe`

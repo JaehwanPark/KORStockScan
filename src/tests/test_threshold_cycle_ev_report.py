@@ -688,6 +688,10 @@ def test_swing_lifecycle_matrix_summary_includes_parent_flow_candidates(tmp_path
                     "join_contract_blocked": False,
                     "sim_auto_candidate_count": 1,
                     "workorder_count": 0,
+                    "raw_swing_event_count": 1200,
+                    "ldm_consumed_event_count": 48,
+                    "ldm_event_coverage_rate": 0.04,
+                    "unmapped_swing_stage_counts": {"swing_other": 5},
                     "daily_simulation_consumed": False,
                 },
                 "swing_lifecycle_flow_bucket_attribution": {
@@ -722,6 +726,10 @@ def test_swing_lifecycle_matrix_summary_includes_parent_flow_candidates(tmp_path
     assert summary["swing_lifecycle_flow_bucket_count"] == 1
     assert summary["complete_flow_count"] == 3
     assert summary["sim_auto_candidate_ids"] == ["swing_ldm_lifecycle_flow_combo_parent"]
+    assert summary["raw_swing_event_count"] == 1200
+    assert summary["ldm_consumed_event_count"] == 48
+    assert summary["ldm_event_coverage_rate"] == 0.04
+    assert summary["unmapped_swing_stage_counts"] == {"swing_other": 5}
 
 
 def test_swing_lifecycle_bucket_discovery_summary_includes_flow_metrics(tmp_path, monkeypatch):
@@ -741,6 +749,10 @@ def test_swing_lifecycle_bucket_discovery_summary_includes_flow_metrics(tmp_path
                     "candidate_count": 2,
                     "surfaced_candidate_count": 2,
                     "sim_auto_approved_count": 1,
+                    "sim_auto_reviewed_candidate_count": 21,
+                    "sim_auto_unreviewed_candidate_count": 0,
+                    "sim_auto_downgraded_by_review_count": 0,
+                    "sim_auto_review_shard_count": 2,
                     "swing_lifecycle_flow_bucket_count": 1,
                     "complete_flow_count": 3,
                     "incomplete_flow_count": 0,
@@ -770,6 +782,8 @@ def test_swing_lifecycle_bucket_discovery_summary_includes_flow_metrics(tmp_path
     assert summary["complete_flow_count"] == 3
     assert summary["flow_sim_auto_approved_count"] == 1
     assert summary["stage_only_source_only_count"] == 1
+    assert summary["sim_auto_reviewed_candidate_count"] == 21
+    assert summary["sim_auto_review_shard_count"] == 2
 
 
 def test_swing_lifecycle_bucket_discovery_summary_surfaces_parsed_followup(tmp_path, monkeypatch):

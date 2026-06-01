@@ -62,6 +62,24 @@ def test_postclose_wrapper_runs_swing_daily_simulation_before_lifecycle_audit():
     assert 'RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY="${THRESHOLD_CYCLE_RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY:-$RUN_SWING_LIFECYCLE_MATRIX}"' in script
 
 
+def test_swing_ldm_rolling_backfill_waits_for_postclose_and_skips_holidays():
+    script = Path("deploy/run_swing_ldm_rolling_backfill_once.sh").read_text(encoding="utf-8")
+
+    assert "threshold_cycle_postclose_${POSTCLOSE_DATE}.status.json" in script
+    assert 'if [ "$status" = "succeeded" ]; then' in script
+    assert "2026-05-18 2026-05-19 2026-05-20 2026-05-21 2026-05-22 2026-05-26 2026-05-27 2026-05-28 2026-05-29 2026-06-01" in script
+    assert "2026-05-23" not in script
+    assert "2026-05-24" not in script
+    assert "2026-05-25" not in script
+    assert "2026-05-30" not in script
+    assert "2026-05-31" not in script
+    assert "src.engine.swing_lifecycle_decision_matrix" in script
+    assert "src.engine.swing_lifecycle_bucket_discovery --date" in script
+    assert "--ai-provider openai" in script
+    assert "src.engine.swing_lifecycle_audit --date" in script
+    assert "--ai-review-provider openai" in script
+
+
 def test_postclose_wrapper_includes_valid_bottom_rebound_source_for_swing_discovery():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 

@@ -13,21 +13,21 @@
 - full_fill_completed_avg_profit_rate: `0.0`%
 
 ## Entry Funnel
-- budget_pass_to_submitted: `0` / `92` (`0.0`%)
-- latency pass/block: `10` / `82`
+- budget_pass_to_submitted: `0` / `0` (`0.0`%)
+- latency pass/block: `0` / `0`
 - latency submit routing: `latency_classifier_runtime_semantics_gap`
 - latency recommended action: `reject` (`recovery_count=0 below floor=10`)
 - latency profile generation: `{'mode': 'grid_quantile_search', 'profile_count': 378, 'age_cap_ms': 1500, 'jitter_cap_ms': 1500, 'spread_cap_ratio': 0.012, 'counterfactual_sample_floor': 3, 'recovery_event_floor_ratio': 0.1}`
-- safe/caution/recovery: `0` / `1` / `0`
+- safe/caution_normal/recovery: `0` / `1` / `0`
 - recovery attempts/cf sample/cf ev: `0` / `0` / `None`%
 - recovered/lost labels: `0` / `0`
 - stale/broker override excluded: `0` / `0`
-- full/partial fill: `18` / `18`
+- full/partial fill: `0` / `0`
 
 ## Holding Exit
-- holding_reviews: `2848`
-- exit_signals: `142`
-- holding_review_ms_p95: `1888.0`
+- holding_reviews: `0`
+- exit_signals: `0`
+- holding_review_ms_p95: `0.0`
 
 ## Scalp Simulator
 - authority: `equal_weight` / fill_policy: `signal_inclusive_best_ask_v1`
@@ -42,11 +42,11 @@
 - post_sell_mfe_mae_10m: mfe=`1.4753`% / mae=`-4.3798`% / close=`0.0908`%
 
 ## Missed Probe Counterfactual
-- book: `scalp_score65_74_probe_counterfactual` / role: `missed_buy_probe_counterfactual`
-- total/score65_74: `35` / `5`
-- avg_expected_ev: `3.6844`% / score65_74_avg_expected_ev: `0.4039`%
-- actual_order_submitted: `False` / broker_order_forbidden: `True`
-- authority: `missed_probe_ev_only_not_broker_execution`
+- book: `-` / role: `-`
+- total/score65_74: `None` / `None`
+- avg_expected_ev: `None`% / score65_74_avg_expected_ev: `None`%
+- actual_order_submitted: `None` / broker_order_forbidden: `None`
+- authority: `-`
 
 ## Scalp Entry ADM
 - artifact: `/home/ubuntu/KORStockScan/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_2026-05-22.json`
@@ -63,18 +63,31 @@
 ## Lifecycle Decision Matrix
 - artifact: `/home/ubuntu/KORStockScan/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_2026-05-22.json`
 - status: `pass` / version: `lifecycle_decision_matrix_v1_2026-05-22`
-- total/joined: `35228` / `33631`
-- policy_pass/promote_ready: `5` / `1`
+- total/joined: `35193` / `33596`
+- policy_pass/promote_ready: `5` / `0`
+- lifecycle_flow buckets/complete/runtime/workorders: `60` / `0` / `0` / `20`
+- holding/exit buckets: `27` / `74`
+- holding/exit workorders: `10` / `10`
+- lifecycle identity missing/join_rate: `0` / `1.0`
+- lifecycle complete_flow_rate: `0.0`
+- incomplete_flow_reason_counts: `{'missing_submit': 21259, 'missing_holding': 21263, 'missing_exit': 21106, 'missing_entry': 19960}`
 - fixed_threshold_roles: `{'hard_safety': ['broker_submit_guard', 'stale_quote_submit_block', 'price_freshness_guard', 'hard_stop', 'protect_stop', 'emergency_stop', 'account_order_cooldown_qty_guard'], 'baseline_prior': ['BUY_SCORE_THRESHOLD', 'VPW_MIN_SCORE', 'strength_momentum_cutoff', 'entry_score_cutoff'], 'bounded_tunable': ['SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION', 'SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION', 'SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION', 'score65_74_recovery_probe', 'soft_stop_whipsaw_confirmation', 'holding_flow_override', 'scale_in_price_guard'], 'legacy_archive': ['fallback_scout_main', 'fallback_single', 'latency_fallback_split_entry', 'legacy_latency_composite', 'closed_shadow_axes']}`
-- policy_entries: `[{'stage': 'entry', 'sample': 1521, 'joined_sample': 137, 'stage_ev_composite_pct': 0.3471, 'confidence': 1.0, 'selected_action': 'BUY_DEFENSIVE', 'source_quality_gate': 'pass', 'promote_ready': True}, {'stage': 'submit', 'sample': 129, 'joined_sample': 123, 'stage_ev_composite_pct': -0.2676, 'confidence': 1.0, 'selected_action': 'NO_CHANGE', 'source_quality_gate': 'pass', 'promote_ready': False}, {'stage': 'holding', 'sample': 145, 'joined_sample': 123, 'stage_ev_composite_pct': -0.4473, 'confidence': 1.0, 'selected_action': 'EXIT', 'source_quality_gate': 'pass', 'promote_ready': False}, {'stage': 'scale_in', 'sample': 32811, 'joined_sample': 32785, 'stage_ev_composite_pct': -0.159, 'confidence': 1.0, 'selected_action': 'NO_CHANGE', 'source_quality_gate': 'pass', 'promote_ready': False}, {'stage': 'exit', 'sample': 622, 'joined_sample': 463, 'stage_ev_composite_pct': -0.428, 'confidence': 1.0, 'selected_action': 'EXIT', 'source_quality_gate': 'pass', 'promote_ready': False}]`
+- policy_entries: `[{'stage': 'entry', 'sample': 1486, 'joined_sample': 102, 'stage_ev_composite_pct': -0.3299, 'confidence': 0.7001, 'selected_action': 'WAIT_REQUOTE', 'source_quality_gate': 'pass', 'promote_ready': False}, {'stage': 'submit', 'sample': 129, 'joined_sample': 123, 'stage_ev_composite_pct': -0.2676, 'confidence': 1.0, 'selected_action': 'NO_CHANGE', 'source_quality_gate': 'pass', 'promote_ready': False}, {'stage': 'holding', 'sample': 145, 'joined_sample': 123, 'stage_ev_composite_pct': -0.4473, 'confidence': 1.0, 'selected_action': 'EXIT', 'source_quality_gate': 'pass', 'promote_ready': False}, {'stage': 'scale_in', 'sample': 32811, 'joined_sample': 32785, 'stage_ev_composite_pct': -0.159, 'confidence': 1.0, 'selected_action': 'NO_CHANGE', 'source_quality_gate': 'pass', 'promote_ready': False}, {'stage': 'exit', 'sample': 622, 'joined_sample': 463, 'stage_ev_composite_pct': -0.428, 'confidence': 1.0, 'selected_action': 'EXIT', 'source_quality_gate': 'pass', 'promote_ready': False}]`
 
 ## Lifecycle Bucket Discovery
 - artifact: `/home/ubuntu/KORStockScan/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_2026-05-22.json`
 - status: `pass` / human_intervention_required: `False`
 - candidates/surfaced: `379` / `120`
 - sim_auto/live_auto/new_bucket: `119` / `1` / `0`
+- role/window: `new_pattern_detection` / `daily_lifecycle_bucket_discovery_with_preopen_auto_apply`
+- parent_count/granularity/conflict: `0` / `None` / `0`
 - state_counts: `{'live_auto_apply_ready': 1, 'sim_auto_approved': 119, 'source_only_keep_collecting': 259}`
 - top_surfaced: `[{'bucket_id': 'entry:combo_entry_spot:score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liquidity_unknown', 'stage': 'entry', 'classification_state': 'live_auto_apply_ready', 'live_auto_apply_family': 'entry_wait6579_score66_69_recovery_gate_v1', 'recommended_action': 'relax_or_recover', 'joined_sample': 24, 'source_quality_adjusted_ev_pct': 2.1843}, {'bucket_id': 'entry:chosen_action:no_buy_ai', 'stage': 'entry', 'classification_state': 'sim_auto_approved', 'live_auto_apply_family': None, 'recommended_action': 'tighten_or_exclude', 'joined_sample': 102, 'source_quality_adjusted_ev_pct': -0.3299}, {'bucket_id': 'entry:source_stage:scalp_entry_action_decision_snapshot', 'stage': 'entry', 'classification_state': 'sim_auto_approved', 'live_auto_apply_family': None, 'recommended_action': 'tighten_or_exclude', 'joined_sample': 102, 'source_quality_adjusted_ev_pct': -0.3299}, {'bucket_id': 'entry:stale_bucket:fresh', 'stage': 'entry', 'classification_state': 'sim_auto_approved', 'live_auto_apply_family': None, 'recommended_action': 'tighten_or_exclude', 'joined_sample': 80, 'source_quality_adjusted_ev_pct': -0.3696}, {'bucket_id': 'entry:source_stage:wait6579_ev_cohort', 'stage': 'entry', 'classification_state': 'sim_auto_approved', 'live_auto_apply_family': None, 'recommended_action': 'relax_or_recover', 'joined_sample': 35, 'source_quality_adjusted_ev_pct': 2.3199}, {'bucket_id': 'entry:stale_bucket:fresh_or_unflagged', 'stage': 'entry', 'classification_state': 'sim_auto_approved', 'live_auto_apply_family': None, 'recommended_action': 'relax_or_recover', 'joined_sample': 35, 'source_quality_adjusted_ev_pct': 2.3199}, {'bucket_id': 'entry:exit_rule:scalp_trailing_take_profit', 'stage': 'entry', 'classification_state': 'sim_auto_approved', 'live_auto_apply_family': None, 'recommended_action': 'tighten_or_exclude', 'joined_sample': 34, 'source_quality_adjusted_ev_pct': -0.3781}, {'bucket_id': 'entry:time_bucket:time_1000_1200', 'stage': 'entry', 'classification_state': 'sim_auto_approved', 'live_auto_apply_family': None, 'recommended_action': 'tighten_or_exclude', 'joined_sample': 33, 'source_quality_adjusted_ev_pct': -0.8942}]`
+
+## Lifecycle Bucket Windows
+- promotion_window: `mtd`
+- confirmation_windows: `['rolling5d', 'rolling10d']`
+- windows: `{'rolling5d': {'available': False, 'artifact': None, 'window_role': 'rolling_confirmation', 'window_policy': 'rolling5d', 'status': 'missing', 'parent_bucket_count': 0, 'selected_parent_level': None, 'parent_granularity_status': None, 'absorbed_child_count': 0, 'absorbed_sample_count': 0, 'child_conflict_warning_count': 0, 'live_auto_apply_ready_count': 0, 'source_contract_status': None, 'ai_two_pass_review_status': None}, 'rolling10d': {'available': False, 'artifact': None, 'window_role': 'rolling_confirmation', 'window_policy': 'rolling10d', 'status': 'missing', 'parent_bucket_count': 0, 'selected_parent_level': None, 'parent_granularity_status': None, 'absorbed_child_count': 0, 'absorbed_sample_count': 0, 'child_conflict_warning_count': 0, 'live_auto_apply_ready_count': 0, 'source_contract_status': None, 'ai_two_pass_review_status': None}, 'mtd': {'available': False, 'artifact': None, 'window_role': 'promotion_confirmation', 'window_policy': 'mtd', 'status': 'missing', 'parent_bucket_count': 0, 'selected_parent_level': None, 'parent_granularity_status': None, 'absorbed_child_count': 0, 'absorbed_sample_count': 0, 'child_conflict_warning_count': 0, 'live_auto_apply_ready_count': 0, 'source_contract_status': None, 'ai_two_pass_review_status': None}}`
 
 ## Lifecycle AI Context
 - artifact: `/home/ubuntu/KORStockScan/data/report/lifecycle_ai_context/lifecycle_ai_context_2026-05-22.json`
@@ -149,6 +162,9 @@
 ## Pattern Lab Audits
 - currentness: status=`pass` fail=`0` orders=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-22.json`
 - ai_review: status=`warning` orders=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-05-22.json`
+- time_window_regime_counterfactual: status=`missing` artifact=`-`
+- producer_gap_discovery: status=`missing` orders=`0` artifact=`-`
+- stage_hook_workorder_discovery: status=`missing` orders=`0` artifact=`-`
 - propagation: status=`pass` fail=`0` warnings=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-22.json`
 
 ## Swing Runtime Approval
@@ -169,8 +185,8 @@
 ## Code Improvement Workorder
 - artifact: `/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-22.json`
 - markdown: `/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-22.md`
-- selected_order_count: `28`
-- decision_counts: `{'attach_existing_family': 41, 'design_family_candidate': 7, 'defer_evidence': 10, 'reject': 3}`
+- selected_order_count: `71`
+- decision_counts: `{'implement_now': 23, 'attach_existing_family': 66, 'design_family_candidate': 7, 'defer_evidence': 10, 'reject': 3}`
 
 ## Approval Requests
 - none
@@ -182,9 +198,9 @@
 
 ## Calibration Decisions
 ## Code Improvement Top Orders
-- `order_ai_threshold_dominance` decision=`attach_existing_family` subsystem=`entry_funnel`
-- `order_perf_buy_funnel_json_scan` decision=`attach_existing_family` subsystem=`buy_funnel_sentinel`
-- `order_ai_threshold_miss_ev_recovery` decision=`attach_existing_family` subsystem=`entry_funnel`
+- `order_entry_submit_drought_auto_resolution` decision=`implement_now` subsystem=`runtime_instrumentation`
+- `order_entry_broker_receipt_contract_gap_review` decision=`implement_now` subsystem=`runtime_instrumentation`
+- `order_entry_fill_quality_contract_gap_review` decision=`implement_now` subsystem=`runtime_instrumentation`
 
 ## Pattern Lab Top Findings
 - `AI threshold dominance` route=`existing_family` family=`score65_74_recovery_probe`
@@ -209,11 +225,20 @@
 - `position_sizing_dynamic_formula`: `hold_sample` sample=`3/30`
 
 ## Warnings
+- `trade_review_missing`
+- `performance_tuning_missing`
 - `swing_lab_dq:OFI/QI stale/missing ratio: 0.915 (517/565); reasons: micro_missing=517, micro_not_ready=1, state_insufficient=1`
 - `lifecycle_bucket_discovery:ai_review_provider_disabled`
 - `lifecycle_bucket_discovery:ai_two_pass_review_disabled_live_auto_deferred_to_post_apply`
+- `lifecycle_bucket_discovery:ai_review_provider_disabled`
+- `lifecycle_bucket_discovery:ai_two_pass_review_disabled_live_auto_deferred_to_post_apply`
+- `lifecycle_bucket_windows:rolling5d_missing`
+- `lifecycle_bucket_windows:rolling10d_missing`
+- `lifecycle_bucket_windows:mtd_missing`
 - `swing_strategy_discovery:pending_future_quotes`
-- `swing_lifecycle_decision_matrix:swing_intraday_live_equiv_probe_missing`
 - `swing_lifecycle_decision_matrix:pending_future_quotes`
-- `swing_lifecycle_bucket_discovery:swing_ldm_ai_review_not_configured`
 - `pattern_lab_ai_review_warning`
+- `time_window_regime_counterfactual_missing`
+- `producer_gap_discovery_missing`
+- `stage_hook_workorder_discovery_missing`
+- `stage_hook_runtime_scaffold_missing`

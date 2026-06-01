@@ -20,7 +20,7 @@
 | `blocked_swing_score_vpw` | 134755 | 18 |
 | `gatekeeper_fast_reuse_bypass` | 143 | 19 |
 | `holding_flow_ofi_smoothing_applied` | 732 | 85 |
-| `holding_started` | 11 | 1 |
+| `holding_started` | 13 | 1 |
 | `swing_probe_discarded` | 7872 | 24 |
 | `swing_probe_entry_candidate` | 10 | 8 |
 | `swing_probe_exit_signal` | 9 | 9 |

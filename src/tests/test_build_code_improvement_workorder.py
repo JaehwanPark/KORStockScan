@@ -407,6 +407,67 @@ def test_observation_source_quality_unknown_warning_creates_rollup_order():
     assert classified.decision == "attach_existing_family"
 
 
+def test_swing_lifecycle_matrix_low_event_coverage_creates_rollup_order():
+    report = {
+        "summary": {
+            "raw_swing_event_count": 1200,
+            "ldm_consumed_event_count": 5,
+            "ldm_event_coverage_rate": 0.004167,
+            "unmapped_swing_stage_counts": {"swing_custom_event": 1195},
+        }
+    }
+
+    orders = mod._swing_lifecycle_matrix_followup_orders(report)
+
+    assert orders[0]["order_id"] == "order_swing_ldm_event_coverage_rollup"
+    assert orders[0]["runtime_effect"] is False
+    assert orders[0]["allowed_runtime_apply"] is False
+
+
+def test_swing_lifecycle_matrix_nan_event_coverage_creates_rollup_order():
+    report = {
+        "summary": {
+            "raw_swing_event_count": 1200,
+            "ldm_consumed_event_count": 5,
+            "ldm_event_coverage_rate": "nan",
+            "unmapped_swing_stage_counts": {"swing_custom_event": 1195},
+        }
+    }
+
+    orders = mod._swing_lifecycle_matrix_followup_orders(report)
+
+    assert orders[0]["order_id"] == "order_swing_ldm_event_coverage_rollup"
+    assert "ldm_event_coverage_rate=0.0" in orders[0]["evidence"]
+
+
+def test_swing_lifecycle_bucket_discovery_contract_and_ai_review_rollups_are_source_only():
+    report = {
+        "summary": {
+            "sim_auto_review_shard_count": 2,
+            "sim_auto_reviewed_candidate_count": 20,
+            "sim_auto_unreviewed_candidate_count": 1,
+            "sim_auto_downgraded_by_review_count": 1,
+            "ai_review_followup_reasons": ["sim_policy_review_2:ai_review_response_missing"],
+        },
+        "surfaced_candidates": [
+            {
+                "candidate_id": "swing:missing-stage",
+                "bucket_id": "swing:missing-stage",
+                "classification_state": "source_only_keep_collecting",
+            }
+        ],
+        "code_improvement_workorders": [],
+    }
+
+    orders = mod._swing_lifecycle_bucket_discovery_followup_orders(report)
+    order_ids = {item["order_id"] for item in orders}
+
+    assert "order_swing_lifecycle_bucket_discovery_contract_rollup" in order_ids
+    assert "order_swing_lifecycle_bucket_discovery_ai_review_rollup" in order_ids
+    assert all(item["runtime_effect"] is False for item in orders)
+    assert all(item["allowed_runtime_apply"] is False for item in orders)
+
+
 def test_build_code_improvement_workorder_consumes_pattern_lab_currentness_audit(tmp_path, monkeypatch):
     automation_dir = tmp_path / "automation"
     currentness_dir = tmp_path / "currentness"

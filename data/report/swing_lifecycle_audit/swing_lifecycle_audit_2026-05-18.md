@@ -20,32 +20,36 @@
 
 | group | raw | unique_records |
 | --- | ---: | ---: |
-| `entry` | 662582 | 42 |
-| `holding` | 62 | 2 |
+| `entry` | 823744 | 42 |
+| `holding` | 63 | 3 |
 | `scale_in` | 58 | 17 |
-| `exit` | 76 | 28 |
-| `other` | 576 | 15 |
+| `exit` | 81 | 30 |
+| `other` | 591 | 15 |
 
 ## Key Stages
 
 | stage | raw | unique_records |
 | --- | ---: | ---: |
-| `blocked_gatekeeper_reject` | 140 | 20 |
-| `blocked_swing_gap` | 96491 | 8 |
-| `blocked_swing_score_vpw` | 550978 | 39 |
-| `gatekeeper_fast_reuse_bypass` | 140 | 20 |
+| `blocked_gatekeeper_reject` | 154 | 20 |
+| `blocked_swing_gap` | 139697 | 8 |
+| `blocked_swing_score_vpw` | 666194 | 39 |
+| `gatekeeper_fast_reuse_bypass` | 154 | 20 |
 | `holding_flow_ofi_smoothing_applied` | 62 | 2 |
-| `swing_probe_discarded` | 14757 | 42 |
+| `holding_started` | 1 | 1 |
+| `sell_order_blocked_market_closed` | 1 | 1 |
+| `sell_order_sent` | 4 | 2 |
+| `swing_probe_discarded` | 17469 | 42 |
 | `swing_probe_entry_candidate` | 38 | 21 |
 | `swing_probe_exit_signal` | 38 | 28 |
 | `swing_probe_holding_started` | 38 | 21 |
 | `swing_probe_scale_in_order_assumed_filled` | 19 | 16 |
 | `swing_probe_sell_order_assumed_filled` | 38 | 28 |
-| `swing_probe_state_persisted` | 95 | 1 |
-| `swing_probe_state_restored` | 8 | 1 |
+| `swing_probe_state_empty_overwrite_blocked` | 1 | 1 |
+| `swing_probe_state_persisted` | 104 | 1 |
+| `swing_probe_state_restored` | 12 | 1 |
 | `swing_reentry_counterfactual_after_loss` | 453 | 10 |
 | `swing_same_symbol_loss_reentry_cooldown` | 13 | 13 |
-| `swing_same_symbol_loss_reentry_cooldowns_restored` | 7 | 1 |
+| `swing_same_symbol_loss_reentry_cooldowns_restored` | 8 | 1 |
 | `swing_scale_in_micro_context_observed` | 20 | 17 |
 | `swing_sim_scale_in_order_assumed_filled` | 19 | 16 |
 
@@ -79,17 +83,15 @@
 
 - available: `True`
 - sample_state: `hold_sample`
-- rows: `126`
+- rows: `117`
 - closed_count: `0`
 - winner_count: `0`
 - loser_count: `0`
 
 | family | rows | closed | winner | loser | avg_net_ret |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `swing_gatekeeper_reject_cooldown` | 42 | 0 | 0 | 0 | None |
-| `swing_market_regime_sensitivity` | 42 | 0 | 0 | 0 | None |
-| `swing_model_floor` | 3 | 0 | 0 | 0 | None |
-| `swing_selection_top_k` | 39 | 0 | 0 | 0 | None |
+| `swing_gatekeeper_reject_cooldown` | 113 | 0 | 0 | 0 | None |
+| `swing_market_regime_sensitivity` | 4 | 0 | 0 | 0 | None |
 
 ## Observation Axes
 
@@ -99,9 +101,9 @@
 | `swing_recommendation_db_load` | `db_load` | `swing_selection_top_k` | 3 | `ready` |
 | `swing_gatekeeper_accept_reject` | `entry` | `swing_gatekeeper_accept_reject` | 41 | `ready` |
 | `swing_gap_market_budget_price_qty` | `entry` | `swing_market_regime_sensitivity` | 99 | `ready` |
-| `swing_holding_mfe_mae_defer` | `holding` | `swing_holding_flow_defer` | 2 | `ready` |
+| `swing_holding_mfe_mae_defer` | `holding` | `swing_holding_flow_defer` | 3 | `ready` |
 | `swing_scale_in_avg_down_pyramid` | `scale_in` | `swing_pyramid_trigger` | 17 | `ready` |
-| `swing_exit_post_sell_attribution` | `exit` | `swing_trailing_stop_time_stop` | 28 | `ready` |
+| `swing_exit_post_sell_attribution` | `exit` | `swing_trailing_stop_time_stop` | 30 | `ready` |
 | `swing_entry_ofi_qi_execution_quality` | `entry` | `swing_entry_ofi_qi_execution_quality` | 0 | `hold_sample` |
 | `swing_scale_in_ofi_qi_confirmation` | `scale_in` | `swing_scale_in_ofi_qi_confirmation` | 58 | `ready` |
 | `swing_exit_ofi_qi_smoothing` | `holding_exit` | `swing_exit_ofi_qi_smoothing` | 62 | `ready` |

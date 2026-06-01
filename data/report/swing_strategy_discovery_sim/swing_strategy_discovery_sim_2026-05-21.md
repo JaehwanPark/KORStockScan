@@ -1,16 +1,21 @@
 # Swing Strategy Discovery Sim - 2026-05-21
 
-- generated_at: `2026-05-21T17:42:41`
+- generated_at: `2026-06-01T15:51:38`
 - policy_version: `swing_strategy_discovery_sim_v1`
 - mode: `sim_only_aggressive_exploration`
 - runtime_effect: `False`
 - decision_authority: `swing_sim_exploration_only`
-- candidate_count: `50`
-- arm_count: `400`
-- selection_arm_counts: `{'diversity_exploration': 15, 'lifecycle_rank': 35}`
-- block_reason_counts: `{'no_block_observed': 37, 'blocked_swing_gap': 4, 'blocked_gatekeeper_reject': 9}`
-- quote_feature_coverage: `1.0`
-- warnings: `['sector_theme:manual_sector_missing', 'sector_theme:sector_theme_missing']`
+- candidate_count: `0`
+- arm_count: `0`
+- bottom_rebound_selected_candidate_count: `0`
+- bottom_rebound_arm_count: `0`
+- bottom_rebound_persisted_candidate_count: `0`
+- bottom_rebound_persisted_arm_count: `0`
+- selection_arm_counts: `{}`
+- block_reason_counts: `{}`
+- source_family_bucket_counts: `{}`
+- quote_feature_coverage: `0.0`
+- warnings: `['safe_pool_source_empty']`
 
 ## Arm Set
 
@@ -24,6 +29,9 @@
 | `arm06_gap_fade_risk_fixed5d` | `gap_fade_entry` | `risk_capped` | `fixed_5d` |
 | `arm07_pullback_vol_scale_recovery` | `pullback_limit_entry` | `volatility_adjusted` | `scale_in_recovery` |
 | `arm08_breakout_risk_mae_time` | `breakout_confirm_entry` | `risk_capped` | `mae_stop_time_stop` |
+| `br_arm01_next_open_equal_fixed10d` | `bottom_rebound_next_open_entry` | `equal_notional` | `fixed_10d` |
+| `br_arm02_signal_close_retest_limit_fixed10d` | `bottom_rebound_signal_close_retest_limit_entry` | `risk_capped` | `fixed_10d` |
+| `br_arm03_atr_pullback_limit_mae_time` | `bottom_rebound_atr_pullback_limit_entry` | `volatility_adjusted` | `mae_stop_time_stop` |
 
 ## Contract
 

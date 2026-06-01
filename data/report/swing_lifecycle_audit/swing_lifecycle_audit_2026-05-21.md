@@ -21,10 +21,10 @@
 | group | raw | unique_records |
 | --- | ---: | ---: |
 | `entry` | 262584 | 24 |
-| `holding` | 743 | 86 |
+| `holding` | 745 | 86 |
 | `scale_in` | 27 | 8 |
-| `exit` | 60 | 13 |
-| `other` | 72 | 2 |
+| `exit` | 70 | 13 |
+| `other` | 76 | 2 |
 
 ## Key Stages
 
@@ -35,20 +35,20 @@
 | `blocked_swing_score_vpw` | 134755 | 18 |
 | `gatekeeper_fast_reuse_bypass` | 143 | 19 |
 | `holding_flow_ofi_smoothing_applied` | 732 | 85 |
-| `holding_started` | 11 | 1 |
-| `sell_order_blocked_market_closed` | 8 | 2 |
-| `sell_order_sent` | 34 | 3 |
+| `holding_started` | 13 | 1 |
+| `sell_order_blocked_market_closed` | 10 | 2 |
+| `sell_order_sent` | 42 | 3 |
 | `swing_probe_discarded` | 7872 | 24 |
 | `swing_probe_entry_candidate` | 10 | 8 |
 | `swing_probe_exit_signal` | 9 | 9 |
 | `swing_probe_holding_started` | 10 | 8 |
 | `swing_probe_scale_in_order_assumed_filled` | 9 | 8 |
 | `swing_probe_sell_order_assumed_filled` | 9 | 9 |
-| `swing_probe_state_empty_overwrite_blocked` | 8 | 1 |
+| `swing_probe_state_empty_overwrite_blocked` | 10 | 1 |
 | `swing_probe_state_persisted` | 31 | 1 |
-| `swing_probe_state_restored` | 17 | 1 |
+| `swing_probe_state_restored` | 18 | 1 |
 | `swing_same_symbol_loss_reentry_cooldown` | 1 | 1 |
-| `swing_same_symbol_loss_reentry_cooldowns_restored` | 15 | 1 |
+| `swing_same_symbol_loss_reentry_cooldowns_restored` | 16 | 1 |
 | `swing_scale_in_micro_context_observed` | 9 | 8 |
 | `swing_sim_scale_in_order_assumed_filled` | 9 | 8 |
 
@@ -82,17 +82,15 @@
 
 - available: `True`
 - sample_state: `hold_sample`
-- rows: `75`
+- rows: `66`
 - closed_count: `0`
 - winner_count: `0`
 - loser_count: `0`
 
 | family | rows | closed | winner | loser | avg_net_ret |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `swing_gatekeeper_reject_cooldown` | 25 | 0 | 0 | 0 | None |
-| `swing_market_regime_sensitivity` | 25 | 0 | 0 | 0 | None |
-| `swing_model_floor` | 3 | 0 | 0 | 0 | None |
-| `swing_selection_top_k` | 22 | 0 | 0 | 0 | None |
+| `swing_gatekeeper_reject_cooldown` | 52 | 0 | 0 | 0 | None |
+| `swing_market_regime_sensitivity` | 14 | 0 | 0 | 0 | None |
 
 ## Observation Axes
 

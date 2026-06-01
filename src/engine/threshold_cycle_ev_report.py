@@ -1117,6 +1117,10 @@ def _swing_lifecycle_matrix_summary(target_date: str) -> tuple[dict[str, Any], s
                 "discovery_rows": 0,
                 "sim_auto_candidate_count": 0,
                 "workorder_count": 0,
+                "raw_swing_event_count": 0,
+                "ldm_consumed_event_count": 0,
+                "ldm_event_coverage_rate": 0.0,
+                "unmapped_swing_stage_counts": {},
                 "daily_simulation_consumed": False,
                 "runtime_effect": False,
                 "decision_authority": "swing_ldm_source_only",
@@ -1164,6 +1168,12 @@ def _swing_lifecycle_matrix_summary(target_date: str) -> tuple[dict[str, Any], s
             "join_contract_blocked": bool(summary.get("join_contract_blocked")),
             "sim_auto_candidate_count": _safe_int(summary.get("sim_auto_candidate_count"), 0),
             "workorder_count": _safe_int(summary.get("workorder_count"), 0),
+            "raw_swing_event_count": _safe_int(summary.get("raw_swing_event_count"), 0),
+            "ldm_consumed_event_count": _safe_int(summary.get("ldm_consumed_event_count"), 0),
+            "ldm_event_coverage_rate": summary.get("ldm_event_coverage_rate"),
+            "unmapped_swing_stage_counts": summary.get("unmapped_swing_stage_counts")
+            if isinstance(summary.get("unmapped_swing_stage_counts"), dict)
+            else {},
             "daily_simulation_consumed": bool(summary.get("daily_simulation_consumed")),
             "swing_entry_bottleneck_primary": summary.get("swing_entry_bottleneck_primary")
             or entry_bottleneck.get("primary"),
@@ -1222,6 +1232,10 @@ def _swing_lifecycle_bucket_discovery_summary(target_date: str) -> tuple[dict[st
             "ai_fail_closed": bool(summary.get("ai_fail_closed")),
             "ai_review_blocker_state": summary.get("ai_review_blocker_state"),
             "pre_review_sim_auto_candidate_count": _safe_int(summary.get("pre_review_sim_auto_candidate_count"), 0),
+            "sim_auto_reviewed_candidate_count": _safe_int(summary.get("sim_auto_reviewed_candidate_count"), 0),
+            "sim_auto_unreviewed_candidate_count": _safe_int(summary.get("sim_auto_unreviewed_candidate_count"), 0),
+            "sim_auto_downgraded_by_review_count": _safe_int(summary.get("sim_auto_downgraded_by_review_count"), 0),
+            "sim_auto_review_shard_count": _safe_int(summary.get("sim_auto_review_shard_count"), 0),
             "ai_review_followup_required": bool(summary.get("ai_review_followup_required")),
             "ai_review_followup_reasons": summary.get("ai_review_followup_reasons")
             if isinstance(summary.get("ai_review_followup_reasons"), list)

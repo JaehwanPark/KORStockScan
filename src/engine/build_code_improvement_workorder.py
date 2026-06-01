@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -136,6 +137,16 @@ def _safe_int(value: Any, default: int = 0) -> int:
         if value is None:
             return default
         return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value in (None, ""):
+            return default
+        numeric = float(value)
+        return numeric if math.isfinite(numeric) else default
     except (TypeError, ValueError):
         return default
 
@@ -2880,6 +2891,45 @@ def _swing_lifecycle_matrix_followup_orders(report: dict[str, Any]) -> list[dict
     if not report:
         return []
     orders: list[dict[str, Any]] = []
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    raw_event_count = _safe_int(summary.get("raw_swing_event_count"), 0)
+    consumed_event_count = _safe_int(summary.get("ldm_consumed_event_count"), 0)
+    coverage_rate = _safe_float(summary.get("ldm_event_coverage_rate"), 0.0)
+    if raw_event_count >= 1000 and coverage_rate < 0.01:
+        orders.append(
+            {
+                "order_id": "order_swing_ldm_event_coverage_rollup",
+                "title": "Swing LDM raw event coverage roll-up review",
+                "source_report_type": "swing_lifecycle_decision_matrix",
+                "lifecycle_stage": "entry",
+                "target_subsystem": "swing_lifecycle_decision_matrix",
+                "route": "instrumentation_order",
+                "mapped_family": None,
+                "threshold_family": None,
+                "improvement_type": "swing_ldm_event_coverage_gap",
+                "confidence": "postclose_ldm_source",
+                "priority": 1,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "expected_ev_effect": "Prevent observed Swing SIM events from being silently excluded before bucket discovery.",
+                "evidence": [
+                    f"raw_swing_event_count={raw_event_count}",
+                    f"ldm_consumed_event_count={consumed_event_count}",
+                    f"ldm_event_coverage_rate={coverage_rate}",
+                    f"unmapped_swing_stage_counts={summary.get('unmapped_swing_stage_counts') or {}}",
+                    "decision_authority=swing_ldm_source_only",
+                    "actual_order_submitted=false",
+                ],
+                "next_postclose_metric": "Swing LDM coverage should stay >=0.01 when raw_swing_event_count>=1000, or unmapped stages should have explicit roll-up evidence.",
+                "files_likely_touched": [
+                    "src/engine/swing_lifecycle_decision_matrix.py",
+                    "src/engine/verify_threshold_cycle_postclose_chain.py",
+                ],
+                "acceptance_tests": [
+                    "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_decision_matrix.py src/tests/test_build_code_improvement_workorder.py",
+                ],
+            }
+        )
     for section_name in (
         "entry_bucket_attribution",
         "holding_exit_bucket_attribution",
@@ -2934,6 +2984,88 @@ def _swing_lifecycle_bucket_discovery_followup_orders(report: dict[str, Any]) ->
     if not report:
         return []
     orders: list[dict[str, Any]] = []
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    surfaced_candidates = report.get("surfaced_candidates") if isinstance(report.get("surfaced_candidates"), list) else []
+    contract_gap_ids: list[str] = []
+    for candidate in surfaced_candidates:
+        if not isinstance(candidate, dict):
+            continue
+        candidate_id = str(candidate.get("candidate_id") or "").strip()
+        bucket_id = str(candidate.get("bucket_id") or "").strip()
+        stage = str(candidate.get("stage") or candidate.get("lifecycle_stage") or "").strip()
+        if not candidate_id or not bucket_id or not stage or stage.lower() == "unknown":
+            contract_gap_ids.append(candidate_id or bucket_id or "unknown")
+    if contract_gap_ids:
+        orders.append(
+            {
+                "order_id": "order_swing_lifecycle_bucket_discovery_contract_rollup",
+                "title": "Swing lifecycle bucket discovery candidate contract roll-up review",
+                "source_report_type": "swing_lifecycle_bucket_discovery",
+                "lifecycle_stage": "source_quality",
+                "target_subsystem": "swing_lifecycle_bucket_discovery",
+                "route": "instrumentation_order",
+                "mapped_family": None,
+                "threshold_family": None,
+                "improvement_type": "swing_bucket_candidate_contract_gap",
+                "confidence": "postclose_bucket_discovery_source",
+                "priority": 1,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "expected_ev_effect": "Ensure Swing discovery candidates preserve candidate_id, bucket_id, stage, and lifecycle_stage through downstream consumers.",
+                "evidence": [
+                    f"contract_gap_candidate_ids={sorted(set(contract_gap_ids))[:20]}",
+                    "decision_authority=swing_ldm_bucket_discovery_sim_auto",
+                    "allowed_runtime_apply=false",
+                ],
+                "next_postclose_metric": "All surfaced Swing discovery candidates should expose candidate_id, bucket_id, stage, and lifecycle_stage.",
+                "files_likely_touched": [
+                    "src/engine/swing_lifecycle_bucket_discovery.py",
+                    "src/engine/runtime_apply_gap_audit.py",
+                    "src/engine/verify_threshold_cycle_postclose_chain.py",
+                ],
+                "acceptance_tests": [
+                    "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_bucket_discovery.py src/tests/test_runtime_apply_gap_audit.py src/tests/test_verify_threshold_cycle_postclose_chain.py",
+                ],
+            }
+        )
+    unreviewed_count = _safe_int(summary.get("sim_auto_unreviewed_candidate_count"), 0)
+    downgraded_count = _safe_int(summary.get("sim_auto_downgraded_by_review_count"), 0)
+    if unreviewed_count > 0 or downgraded_count > 0:
+        orders.append(
+            {
+                "order_id": "order_swing_lifecycle_bucket_discovery_ai_review_rollup",
+                "title": "Swing lifecycle sim-auto AI review shard roll-up review",
+                "source_report_type": "swing_lifecycle_bucket_discovery",
+                "lifecycle_stage": "source_quality",
+                "target_subsystem": "swing_lifecycle_bucket_discovery",
+                "route": "instrumentation_order",
+                "mapped_family": None,
+                "threshold_family": None,
+                "improvement_type": "swing_bucket_ai_review_shard_gap",
+                "confidence": "postclose_bucket_discovery_source",
+                "priority": 1,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "expected_ev_effect": "Keep parsed sim-auto shard candidates usable while fail-closing only unreviewed or failed shard candidates.",
+                "evidence": [
+                    f"sim_auto_review_shard_count={_safe_int(summary.get('sim_auto_review_shard_count'), 0)}",
+                    f"sim_auto_reviewed_candidate_count={_safe_int(summary.get('sim_auto_reviewed_candidate_count'), 0)}",
+                    f"sim_auto_unreviewed_candidate_count={unreviewed_count}",
+                    f"sim_auto_downgraded_by_review_count={downgraded_count}",
+                    f"ai_review_followup_reasons={summary.get('ai_review_followup_reasons') or []}",
+                    "decision_authority=swing_ldm_bucket_discovery_sim_auto",
+                    "allowed_runtime_apply=false",
+                ],
+                "next_postclose_metric": "Partial AI review failures should create source-only downgrade evidence without hiding parsed shard candidates.",
+                "files_likely_touched": [
+                    "src/engine/swing_lifecycle_bucket_discovery.py",
+                    "src/engine/build_code_improvement_workorder.py",
+                ],
+                "acceptance_tests": [
+                    "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_bucket_discovery.py src/tests/test_build_code_improvement_workorder.py",
+                ],
+            }
+        )
     for item in report.get("code_improvement_workorders") or []:
         if not isinstance(item, dict):
             continue

@@ -60,6 +60,7 @@
   - 다음 액션: source-quality split, active state 복원, open/closed count를 같이 기록한다.
   - 처리 결과(2026-06-01 KST 재확인): `source_split_pass_with_minor_state_metadata_gap`.
   - 근거: 당일 [pipeline_events_2026-06-01.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-06-01.jsonl)에서 sim/probe-like stage 재집계 결과는 total `7830`, `actual_order_submitted=false` `7765`, `broker_order_forbidden=true` `6250`, probe-like `538`, `actual_order_submitted=true` `0`이다. `actual_order_submitted=false` 누락 사례 65건은 `swing_probe_state_restored`, `swing_probe_state_persisted`, `score65_74_recovery_probe_entry_unlocked`처럼 상태 복원/메타데이터 성격의 event이며 real submit provenance는 없었다. [scalp_live_simulator_state.json](/home/ubuntu/KORStockScan/data/runtime/scalp_live_simulator_state.json)와 [swing_intraday_probe_state.json](/home/ubuntu/KORStockScan/data/runtime/swing_intraday_probe_state.json) active state는 존재하지만, event 자체의 `status/state` 메타데이터는 open/closed count 집계에 충분히 일관적이지 않아 `open_like=0`, `closed_like=0`으로 남았다.
+  - 중간점검(2026-06-01 10:58 KST): `sim_like_event_count=18642`, `sim_unique_records=181`, `sim_unique_stocks=111`, `actual_order_submitted=true=0`, `actual_order_submitted=false=18642`, `broker_order_forbidden=true=18361`로 실주문 분리는 유지됐다. `scalp_live_simulator_state.json` 기준 active simulated holding은 20건이다. 주요 sim stage는 `scalp_sim_panic_scale_in_blocked=4785`, `scalp_sim_panic_level1_partial_skipped_min_remaining=2911`, `scalp_sim_ai_holding_live_call=1263`, `sim_ai_critical_bypass=886`, `sim_ai_budget_exhausted=614`, `scalp_sim_buy_order_assumed_filled=181`이다. sim profit_rate 표본은 `n=13493`, 평균 `-0.1598`, 중앙값 `-0.37`, 범위 `-4.05~8.02`이며 peak_profit 표본은 `n=10410`, 평균 `0.6913`, 중앙값 `0.46`이다. lifecycle bucket match는 `matched=3250`, `no_match=3166`으로 장후 source-quality/lifecycle attribution 확인이 필요하다.
   - 다음 액션: sim/probe source split 자체는 pass로 유지하고, open/closed state 메타데이터 부족분은 source-quality follow-up으로만 넘긴다. 장중에는 sim/probe EV를 실주문 품질·전환 근거로 사용하지 않는다.
 
 ## 장후 체크리스트 (16:30~18:55)
@@ -74,6 +75,7 @@
   - Source: [swing_lifecycle_decision_matrix_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/swing_lifecycle_decision_matrix/swing_lifecycle_decision_matrix_2026-06-01.json), [swing_lifecycle_bucket_discovery_2026-06-01.json](/home/ubuntu/KORStockScan/data/report/swing_lifecycle_bucket_discovery/swing_lifecycle_bucket_discovery_2026-06-01.json), [swing_lifecycle_bucket_discovery_2026-05-29.json](/home/ubuntu/KORStockScan/data/report/swing_lifecycle_bucket_discovery/swing_lifecycle_bucket_discovery_2026-05-29.json)
   - 판정 기준: `source_contract_status=pass`, `ai_two_pass_review_status=parsed`, `state_counts`, `sim_auto_approved_count`, `flow_sim_auto_approved_count`, `complete_flow_count`, `complete_flow_rate`, `pending_future_quote_count`, `workorder_count`, `automation_handoff_gap_count`를 전일 baseline과 비교한다.
   - 금지: `source_only_keep_collecting`, pending future quote, sim/probe 표본, dry-run EV를 실주문 전환, full-live, provider/bot 변경, cap release 근거로 단독 사용하지 않는다.
+  - 운영 보강(2026-06-01): 표준 postclose 완료 후 `deploy/run_swing_ldm_rolling_backfill_once.sh 2026-06-01` 일회성 실행으로 2026-05-18~2026-06-01 거래일 스윙 LDM/bucket/audit 산출물을 재정렬한다. 휴일/주말은 제외하며 runtime threshold/order/provider/bot 변경 권한은 없다.
   - 다음 액션: `keep_collecting`, `complete_flow_improved`, `source_quality_followup`, `handoff_gap_fail`, `sim_auto_candidate_review` 중 하나로 닫는다.
 
 - [ ] `[SwingBucketParentReadiness0601] 스윙 버킷 parent 재구성 검토 조건 확인` (`Due: 2026-06-01`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:15`, `Track: SwingLogic`)
@@ -161,6 +163,16 @@
   - 테스트/검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_apply_gap_audit.py src/tests/test_verify_threshold_cycle_postclose_chain.py src/tests/test_build_next_stage2_checklist.py` 통과(153 passed).
   - 다음 액션: 2026-06-01 장후 표준 postclose 보고서 재생성 후 `quiet_gap_summary.quiet_gap_count`, `quiet_gap_codex_directive_count`, `lifecycle_quiet_gap_handoff_missing`, `LifecycleQuietGapReview0602` 생성 여부를 확인한다.
 
+- [x] `[SwingSimTuningHandoffAIRouteFix0601] 스윙 SIM 튜닝 handoff 및 postclose AI review route 고정 구현` (`Due: 2026-06-01`, `Slot: POSTCLOSE`, `TimeWindow: 19:15~19:35`, `Track: SwingLogic`)
+  - Source: [swing_lifecycle_decision_matrix.py](/home/ubuntu/KORStockScan/src/engine/swing_lifecycle_decision_matrix.py), [swing_lifecycle_bucket_discovery.py](/home/ubuntu/KORStockScan/src/engine/swing_lifecycle_bucket_discovery.py), [runtime_apply_gap_audit.py](/home/ubuntu/KORStockScan/src/engine/runtime_apply_gap_audit.py), [verify_threshold_cycle_postclose_chain.py](/home/ubuntu/KORStockScan/src/engine/verify_threshold_cycle_postclose_chain.py), [postclose_review_config.py](/home/ubuntu/KORStockScan/src/engine/ai/postclose_review_config.py), [postclose_structured_review_provider.py](/home/ubuntu/KORStockScan/src/engine/ai/postclose_structured_review_provider.py)
+  - 판정 기준: swing SIM 관측 이벤트가 LDM/bucket discovery/runtime gap audit/verifier로 candidate 단위 전달되고, postclose AI review는 `gpt-5.4`, `reasoning_effort=medium`, OpenAI primary, Bedrock Qwen3 failback, Gemini 미사용으로 닫힌다.
+  - 금지: 이 구현은 source-quality/postclose review/workorder 표면화 보완이며 runtime threshold, 주문, live provider route, bot restart, cap release를 변경하지 않는다.
+  - 처리 결과(2026-06-01 KST): `implemented_source_only_handoff_and_ai_route_fixed`.
+  - 근거: Swing LDM이 `swing_sim_buy_order_assumed_filled`, `swing_sim_holding_started`, `swing_sim_sell_order_assumed_filled`, `swing_sim_scale_in_order_assumed_filled`를 source-only lifecycle rows로 소비하도록 확장했다. holding/exit attribution key는 lifecycle flow child bucket key와 동일한 helper를 사용하도록 맞췄다. `runtime_apply_gap_audit`는 swing discovery 후보를 `family` 단위로 병합하지 않고 `candidate_id` 단위로 보존한다. scalping lifecycle bucket discovery의 기존 공통 AI config/직접 OpenAI 호출 계약은 유지하고, `runtime_apply_gap_audit`와 swing bucket discovery 경로에서만 OpenAI primary + Bedrock Qwen3 failback을 국소 고정했다. `runtime_apply_gap_audit`는 bounded shard별 OpenAI 실패/parse reject/schema mismatch를 같은 shard의 Bedrock Qwen3 failback으로만 처리하며 full-context retry를 하지 않는다.
+  - 자체 코드리뷰/보완: self-review에서 공통 postclose AI config 변경과 `lifecycle_bucket_discovery` 호출 경로 변경이 scalping sim LDM review contract에 영향을 줄 수 있음을 확인해 기존 default provider mapping, source-only reasoning, OpenAI timeout path를 복구했다. runtime gap audit의 Gemini compatibility wrapper와 Gemini-named shard-size 의존은 제거했고, swing bucket discovery는 provider override를 로컬 config로 제한했다. 추가 리뷰에서 `runtime_apply_gap_audit`가 Swing LDM 후보를 직접 ledger로 소비하지 않는 점과 verifier가 matrix/discovery 후보 ID 연속성 붕괴를 합집합 검증으로 놓칠 수 있음을 확인해 보완했다.
+  - 테스트/검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py` 통과(72 passed). `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_decision_matrix.py src/tests/test_swing_lifecycle_bucket_discovery.py src/tests/test_runtime_apply_gap_audit.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py` 통과(165 passed). `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_lifecycle_decision_matrix.py src/tests/test_swing_lifecycle_bucket_discovery.py src/tests/test_runtime_apply_gap_audit.py src/tests/test_verify_threshold_cycle_postclose_chain.py src/tests/test_threshold_cycle_ev_report.py src/tests/test_runtime_approval_summary.py src/tests/test_postclose_ai_review_config.py src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py` 통과(242 passed). `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/runtime_apply_gap_audit.py src/engine/verify_threshold_cycle_postclose_chain.py src/engine/swing_lifecycle_decision_matrix.py src/engine/swing_lifecycle_bucket_discovery.py src/engine/threshold_cycle_ev_report.py src/engine/runtime_approval_summary.py src/engine/build_code_improvement_workorder.py` 통과.
+  - 다음 액션: 2026-06-01 장후 표준 postclose 체인에서 `raw_swing_event_count`, `ldm_consumed_event_count`, `ldm_event_coverage_rate`, `candidate_route_ledger`의 swing candidate 보존, `ai_reasoning_review.provider_status.primary_provider=openai`, `failback_provider=bedrock_qwen3`, Gemini provider 미사용/disabled 여부를 확인한다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
 ## 수동 롤아웃 체크리스트: 진입/보유/청산 AI input v2
@@ -183,3 +195,18 @@
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
+
+<!-- AUTO_SERVER_COMPARISON_START -->
+### 본서버 vs songstockscan 자동 비교 (`2026-06-01 15:47:24`)
+
+- 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
+- 상세 리포트: `data/report/server_comparison/server_comparison_2026-06-01.md`
+- `Trade Review`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Performance Tuning`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Post Sell Feedback`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Entry Pipeline Flow`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+<!-- AUTO_SERVER_COMPARISON_END -->

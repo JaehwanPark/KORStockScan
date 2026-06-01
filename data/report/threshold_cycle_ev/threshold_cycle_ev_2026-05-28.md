@@ -6,15 +6,15 @@
 - selected_families: `soft_stop_whipsaw_confirmation, score65_74_recovery_probe, scalp_sim_candidate_window_expansion, scalp_sim_ai_budget_manager, lifecycle_decision_matrix_runtime, entry_wait6579_score66_69_recovery_gate_v1`
 
 ## Daily EV
-- completed: `5` / open: `0`
-- win/loss: `1` / `1` (`20.0`%)
-- avg_profit_rate: `0.07`%
-- realized_pnl_krw: `5034`
-- full_fill_completed_avg_profit_rate: `2.75`%
+- completed: `0` / open: `0`
+- win/loss: `0` / `0` (`0.0`%)
+- avg_profit_rate: `0.0`%
+- realized_pnl_krw: `0`
+- full_fill_completed_avg_profit_rate: `0.0`%
 
 ## Entry Funnel
-- budget_pass_to_submitted: `2` / `20927` (`0.01`%)
-- latency pass/block: `130` / `20790`
+- budget_pass_to_submitted: `0` / `0` (`0.0`%)
+- latency pass/block: `0` / `0`
 - latency submit routing: `latency_classifier_runtime_semantics_gap`
 - latency recommended action: `reject` (`recovery_count=0 below floor=1539`)
 - latency profile generation: `{'mode': 'grid_quantile_search', 'profile_count': 900, 'age_cap_ms': 1500, 'jitter_cap_ms': 1500, 'spread_cap_ratio': 0.012, 'counterfactual_sample_floor': 3, 'recovery_event_floor_ratio': 0.1}`
@@ -22,12 +22,12 @@
 - recovery attempts/cf sample/cf ev: `0` / `0` / `None`%
 - recovered/lost labels: `0` / `0`
 - stale/broker override excluded: `0` / `0`
-- full/partial fill: `4` / `3`
+- full/partial fill: `0` / `0`
 
 ## Holding Exit
-- holding_reviews: `2966`
-- exit_signals: `520`
-- holding_review_ms_p95: `1881.0`
+- holding_reviews: `0`
+- exit_signals: `0`
+- holding_review_ms_p95: `0.0`
 
 ## Scalp Simulator
 - authority: `equal_weight` / fill_policy: `signal_inclusive_best_ask_v1`
@@ -42,11 +42,11 @@
 - post_sell_mfe_mae_10m: mfe=`2.5096`% / mae=`-5.0835`% / close=`-0.1202`%
 
 ## Missed Probe Counterfactual
-- book: `scalp_score65_74_probe_counterfactual` / role: `missed_buy_probe_counterfactual`
-- total/score65_74: `96` / `0`
-- avg_expected_ev: `-1.2181`% / score65_74_avg_expected_ev: `0.0`%
-- actual_order_submitted: `False` / broker_order_forbidden: `True`
-- authority: `missed_probe_ev_only_not_broker_execution`
+- book: `-` / role: `-`
+- total/score65_74: `None` / `None`
+- avg_expected_ev: `None`% / score65_74_avg_expected_ev: `None`%
+- actual_order_submitted: `None` / broker_order_forbidden: `None`
+- authority: `-`
 
 ## Scalp Entry ADM
 - artifact: `/home/ubuntu/KORStockScan/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_2026-05-28.json`
@@ -79,8 +79,15 @@
 - status: `pass` / human_intervention_required: `False`
 - candidates/surfaced: `500` / `249`
 - sim_auto/live_auto/new_bucket: `140` / `0` / `10`
+- role/window: `new_pattern_detection` / `daily_lifecycle_bucket_discovery_with_preopen_auto_apply`
+- parent_count/granularity/conflict: `0` / `None` / `0`
 - state_counts: `{'runtime_blocked_contract_gap': 7, 'source_only_keep_collecting': 319, 'lifecycle_flow_sim_probe_candidate': 12, 'new_bucket_candidate': 10, 'sim_auto_approved': 140, 'entry_only_sim_auto_approved': 8, 'entry_only_source_candidate': 4}`
 - top_surfaced: `[{'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_blocked_ai_score_stale_stale_watch_liquidi', 'stage': 'lifecycle_flow', 'classification_state': 'runtime_blocked_contract_gap', 'live_auto_apply_family': None, 'recommended_action': 'relax_or_recover', 'joined_sample': 1, 'source_quality_adjusted_ev_pct': 2.5302}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_60_62_source_scalp_entry_action_decision_snapshot_stale', 'stage': 'lifecycle_flow', 'classification_state': 'runtime_blocked_contract_gap', 'live_auto_apply_family': None, 'recommended_action': 'relax_or_recover', 'joined_sample': 1, 'source_quality_adjusted_ev_pct': 4.8703}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_63_65_source_blocked_ai_score_stale_fresh_liquidity_liq', 'stage': 'lifecycle_flow', 'classification_state': 'runtime_blocked_contract_gap', 'live_auto_apply_family': 'greenfield_real_environment_authority', 'recommended_action': 'relax_or_recover', 'joined_sample': 1, 'source_quality_adjusted_ev_pct': 1.3233}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_70p_source_scalp_entry_action_decision_snapshot_stale_f', 'stage': 'lifecycle_flow', 'classification_state': 'runtime_blocked_contract_gap', 'live_auto_apply_family': 'greenfield_real_environment_authority', 'recommended_action': 'relax_or_recover', 'joined_sample': 1, 'source_quality_adjusted_ev_pct': 1.0122}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_combo_entry_spot_score_score_lt60_source_blocked_ai_score_stale_fresh_liquidity_liqu', 'stage': 'lifecycle_flow', 'classification_state': 'runtime_blocked_contract_gap', 'live_auto_apply_family': 'greenfield_real_environment_authority', 'recommended_action': 'relax_or_recover', 'joined_sample': 1, 'source_quality_adjusted_ev_pct': 2.2548}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_missing_scale_in_scale_in_arm_avg_down', 'stage': 'lifecycle_flow', 'classification_state': 'source_only_keep_collecting', 'live_auto_apply_family': None, 'recommended_action': 'keep_collecting', 'joined_sample': 9690, 'source_quality_adjusted_ev_pct': -0.6679}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_missing_scale_in_scale_in_arm_pyramid_', 'stage': 'lifecycle_flow', 'classification_state': 'source_only_keep_collecting', 'live_auto_apply_family': None, 'recommended_action': 'keep_collecting', 'joined_sample': 2309, 'source_quality_adjusted_ev_pct': 0.6159}, {'bucket_id': 'lifecycle_flow:combo_lifecycle_flow:entry_entry_missing_submit_submit_missing_holding_holding_missing_scale_in_scale_in_arm_avg_down', 'stage': 'lifecycle_flow', 'classification_state': 'source_only_keep_collecting', 'live_auto_apply_family': None, 'recommended_action': 'keep_collecting', 'joined_sample': 128, 'source_quality_adjusted_ev_pct': -0.6448}]`
+
+## Lifecycle Bucket Windows
+- promotion_window: `mtd`
+- confirmation_windows: `['rolling5d', 'rolling10d']`
+- windows: `{'rolling5d': {'available': False, 'artifact': None, 'window_role': 'rolling_confirmation', 'window_policy': 'rolling5d', 'status': 'missing', 'parent_bucket_count': 0, 'selected_parent_level': None, 'parent_granularity_status': None, 'absorbed_child_count': 0, 'absorbed_sample_count': 0, 'child_conflict_warning_count': 0, 'live_auto_apply_ready_count': 0, 'source_contract_status': None, 'ai_two_pass_review_status': None}, 'rolling10d': {'available': False, 'artifact': None, 'window_role': 'rolling_confirmation', 'window_policy': 'rolling10d', 'status': 'missing', 'parent_bucket_count': 0, 'selected_parent_level': None, 'parent_granularity_status': None, 'absorbed_child_count': 0, 'absorbed_sample_count': 0, 'child_conflict_warning_count': 0, 'live_auto_apply_ready_count': 0, 'source_contract_status': None, 'ai_two_pass_review_status': None}, 'mtd': {'available': False, 'artifact': None, 'window_role': 'promotion_confirmation', 'window_policy': 'mtd', 'status': 'missing', 'parent_bucket_count': 0, 'selected_parent_level': None, 'parent_granularity_status': None, 'absorbed_child_count': 0, 'absorbed_sample_count': 0, 'child_conflict_warning_count': 0, 'live_auto_apply_ready_count': 0, 'source_contract_status': None, 'ai_two_pass_review_status': None}}`
 
 ## Lifecycle AI Context
 - artifact: `/home/ubuntu/KORStockScan/data/report/lifecycle_ai_context/lifecycle_ai_context_2026-05-28.json`
@@ -178,8 +185,8 @@
 ## Code Improvement Workorder
 - artifact: `/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-28.json`
 - markdown: `/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-28.md`
-- selected_order_count: `96`
-- decision_counts: `{'implement_now': 1, 'attach_existing_family': 112, 'design_family_candidate': 3, 'defer_evidence': 5, 'reject': 2}`
+- selected_order_count: `148`
+- decision_counts: `{'implement_now': 47, 'attach_existing_family': 119, 'design_family_candidate': 3, 'defer_evidence': 5, 'reject': 2}`
 
 ## Approval Requests
 - none
@@ -190,8 +197,8 @@
 ## Calibration Decisions
 ## Code Improvement Top Orders
 - `order_lifecycle_bucket_discovery_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_f6cddc94` decision=`implement_now` subsystem=`lifecycle_bucket_discovery_taxonomy_provenance`
-- `order_entry_submit_drought_auto_resolution` decision=`attach_existing_family` subsystem=`runtime_instrumentation`
-- `order_entry_broker_receipt_contract_gap_review` decision=`attach_existing_family` subsystem=`runtime_instrumentation`
+- `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_04a0c69a` decision=`implement_now` subsystem=`lifecycle_bucket_discovery_taxonomy_provenance`
+- `order_lifecycle_source_dimension_gap_lifecycle_flow_combo_lifecycle_flow_lifecycle_flow_combo_lifecycle_flow_entry_entry_combo_entry_spot_score_053f28f4` decision=`implement_now` subsystem=`lifecycle_bucket_discovery_taxonomy_provenance`
 
 - `soft_stop_whipsaw_confirmation`: `adjust_up` sample=`10131/10`
 - `holding_flow_ofi_smoothing`: `hold` sample=`2848/20`
@@ -211,10 +218,16 @@
 - `position_sizing_dynamic_formula`: `hold_sample` sample=`18/30`
 
 ## Warnings
+- `trade_review_missing`
+- `performance_tuning_missing`
 - `pattern_lab_gemini_stale`
 - `pattern_lab_claude_stale`
 - `swing_lab_carryover:3`
 - `lifecycle_bucket_discovery:contamination_quarantine_live_auto_blocked:3`
+- `lifecycle_bucket_discovery:contamination_quarantine_live_auto_blocked:3`
+- `lifecycle_bucket_windows:rolling5d_missing`
+- `lifecycle_bucket_windows:rolling10d_missing`
+- `lifecycle_bucket_windows:mtd_missing`
 - `swing_strategy_discovery:pending_future_quotes`
 - `swing_lifecycle_decision_matrix:pending_future_quotes`
 - `pattern_lab_ai_review_warning`

@@ -29,6 +29,7 @@ AI_REVIEW_MODEL = "gpt-5.4"
 MIN_AI_REVIEW_MODEL = "gpt-5.4"
 AI_REVIEW_REASONING_EFFORT = "low"
 AI_REVIEW_TIMEOUT_SEC = 180
+AI_REVIEW_SHARD_SIZE = 10
 
 FINAL_DISPOSITIONS = {
     "live_auto_apply_ready",
@@ -221,6 +222,9 @@ def _candidate_family(item: dict[str, Any]) -> str:
         value = str(item.get(key) or "").strip()
         if value:
             return value
+    source_artifact = str(item.get("source_artifact") or "").strip()
+    if source_artifact == "swing_lifecycle_bucket_discovery":
+        return "swing_lifecycle_bucket_discovery"
     candidate_id = str(item.get("candidate_id") or "")
     return candidate_id.split(":", 1)[0] if candidate_id else ""
 
@@ -392,7 +396,7 @@ def _ledger_from_discovery(
         if not isinstance(item, dict):
             continue
         candidate_id = _candidate_id(item, f"{domain}_discovery")
-        family = _candidate_family(item)
+        family = _candidate_family({**item, "source_artifact": source_artifact})
         gate = _source_quality_gate(item)
         state = str(item.get("classification_state") or item.get("final_disposition") or "").strip()
         ev = _primary_ev(item)
@@ -429,7 +433,7 @@ def _ledger_from_discovery(
                 "candidate_id": candidate_id,
                 "family": family,
                 "domain": domain,
-                "stage": str(item.get("stage") or "unknown"),
+                "stage": str(item.get("stage") or item.get("lifecycle_stage") or "unknown"),
                 "source_artifact": source_artifact,
                 "producer_state": state or "unknown",
                 "consumer_state": "pending_bridge_join" if disposition == "live_auto_apply_ready" else "source_only",
@@ -465,6 +469,72 @@ def _ledger_from_discovery(
     return ledger
 
 
+def _swing_ldm_stage_from_section(section_name: str) -> str:
+    if section_name == "swing_lifecycle_flow_bucket_attribution":
+        return "lifecycle_flow"
+    if section_name == "holding_exit_bucket_attribution":
+        return "holding_exit"
+    return section_name.removesuffix("_bucket_attribution").removesuffix("_arm_attribution") or "swing"
+
+
+def _ledger_from_swing_ldm(matrix: dict[str, Any], *, target_date: str) -> list[dict[str, Any]]:
+    surfaced: list[dict[str, Any]] = []
+    for section_name in (
+        "swing_lifecycle_flow_bucket_attribution",
+        "entry_bucket_attribution",
+        "holding_exit_bucket_attribution",
+        "scale_in_bucket_attribution",
+        "discovery_arm_attribution",
+    ):
+        section = matrix.get(section_name) if isinstance(matrix.get(section_name), dict) else {}
+        stage = _swing_ldm_stage_from_section(section_name)
+        seen: set[str] = set()
+        for candidate_key in ("sim_auto_approval_candidates", "runtime_approval_candidates"):
+            for item in section.get(candidate_key) or []:
+                if not isinstance(item, dict):
+                    continue
+                candidate_id = _candidate_id(item, "swing_lifecycle_decision_matrix")
+                if candidate_id in seen:
+                    continue
+                seen.add(candidate_id)
+                surfaced.append(
+                    {
+                        **item,
+                        "candidate_id": candidate_id,
+                        "bucket_id": item.get("bucket_id") or candidate_id,
+                        "stage": item.get("stage") or item.get("lifecycle_stage") or stage,
+                        "lifecycle_stage": item.get("lifecycle_stage") or item.get("stage") or stage,
+                        "classification_state": item.get("classification_state")
+                        or item.get("classification_hint")
+                        or "sim_auto_approved",
+                        "source_quality_gate": item.get("source_quality_gate") or "pass",
+                        "recommended_route": item.get("recommended_route") or item.get("next_route") or "",
+                    }
+                )
+        for item in section.get("code_improvement_workorders") or []:
+            if not isinstance(item, dict):
+                continue
+            candidate_id = _candidate_id(item, "swing_lifecycle_decision_matrix")
+            surfaced.append(
+                {
+                    **item,
+                    "candidate_id": candidate_id,
+                    "bucket_id": item.get("bucket_id") or item.get("workorder_id") or candidate_id,
+                    "stage": item.get("stage") or item.get("lifecycle_stage") or stage,
+                    "lifecycle_stage": item.get("lifecycle_stage") or item.get("stage") or stage,
+                    "classification_state": item.get("classification_state") or "code_patch_required",
+                    "source_quality_gate": item.get("source_quality_gate") or "instrumentation_gap",
+                    "recommended_route": item.get("recommended_route") or "code_improvement_workorder",
+                }
+            )
+    return _ledger_from_discovery(
+        {"surfaced_candidates": surfaced},
+        target_date=target_date,
+        domain="swing",
+        source_artifact="swing_lifecycle_decision_matrix",
+    )
+
+
 def _source_dimension_gap_summary_from_payloads(payloads: dict[str, Any]) -> dict[str, Any]:
     discovery = payloads.get("lifecycle_bucket_discovery") if isinstance(payloads.get("lifecycle_bucket_discovery"), dict) else {}
     summary = (
@@ -492,7 +562,7 @@ def _source_dimension_gap_summary_from_payloads(payloads: dict[str, Any]) -> dic
             actionable.append(
                 {
                     "candidate_id": _candidate_id(item, "lifecycle_bucket_discovery"),
-                    "stage": item.get("stage"),
+                    "stage": item.get("stage") or item.get("lifecycle_stage"),
                     "classification_state": item.get("classification_state"),
                     "recommended_resolution": resolution,
                     "source_dimension_gap": gap,
@@ -540,7 +610,7 @@ def _source_dimension_gap_directives(summary: dict[str, Any]) -> list[dict[str, 
                 {
                     "candidate_id": item.get("candidate_id") or item.get("bucket_id") or item.get("source_bucket_id"),
                     "family": "lifecycle_bucket_discovery",
-                    "stage": item.get("stage") or "unknown",
+                    "stage": item.get("stage") or item.get("lifecycle_stage") or "unknown",
                     "source_artifact": "lifecycle_bucket_discovery",
                     "producer_state": item.get("classification_state") or "source_dimension_gap_summary",
                     "final_disposition": "code_patch_required",
@@ -815,7 +885,10 @@ def _merge_ledger_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     }
     for row in rows:
         candidate_id = str(row.get("candidate_id") or "")
-        key = str(row.get("family") or candidate_id)
+        if row.get("source_artifact") == "swing_lifecycle_bucket_discovery":
+            key = candidate_id
+        else:
+            key = str(row.get("family") or candidate_id)
         if not key:
             continue
         current = merged.get(key)
@@ -1203,6 +1276,7 @@ def _ai_review_config(*, model_override: str | None = None) -> PostcloseAIReview
         default_reasoning_effort=legacy_reasoning,
         default_timeout_sec=_legacy_runtime_apply_gap_timeout_default(),
     )
+    config = replace(config, primary_provider="openai", failback_provider="bedrock_qwen3")
     if model_override:
         return replace(config, model=str(model_override).strip() or config.model)
     return config
@@ -1213,39 +1287,6 @@ def _call_openai_ai_review(
     *,
     config: PostcloseAIReviewConfig,
 ) -> tuple[Any | None, dict[str, Any]]:
-    if config.primary_provider == "gemini_3_5_flash":
-        expected_ids = [
-            str(item.get("candidate_id") or "")
-            for item in (input_context.get("review_candidates") or [])
-            if isinstance(item, dict) and item.get("candidate_id")
-        ]
-
-        def validator(raw_text: str) -> tuple[bool, str]:
-            parse_status, payload, warnings = _parse_ai_review_response(raw_text)
-            if parse_status != "parsed":
-                return False, ",".join(warnings) or parse_status
-            actual_ids = [
-                str(item.get("candidate_id") or "")
-                for item in (payload.get("candidate_reviews") or [])
-                if isinstance(item, dict)
-            ]
-            if actual_ids != expected_ids:
-                return False, "candidate_id_mismatch"
-            return True, ""
-
-        return call_postclose_structured_review(
-            input_context,
-            schema_name=AI_REVIEW_SCHEMA_NAME,
-            instructions=_build_ai_review_prompt_en({k: v for k, v in input_context.items() if k != "review_candidates"}),
-            config=config,
-            metadata={
-                "endpoint_name": "runtime_apply_gap_ai_review",
-                "schema_name": AI_REVIEW_SCHEMA_NAME,
-                "report_type": "runtime_apply_gap_audit",
-            },
-            contract_validator=validator,
-            ensure_ascii=True,
-        )
     try:
         from openai import OpenAI, RateLimitError
         from src.engine.ai_response_contracts import build_openai_response_text_format
@@ -1303,6 +1344,84 @@ def _call_openai_ai_review(
     }
 
 
+def _runtime_review_expected_ids(input_context: dict[str, Any]) -> list[str]:
+    return [
+        str(item.get("candidate_id") or "")
+        for item in (input_context.get("review_candidates") or [])
+        if isinstance(item, dict) and item.get("candidate_id")
+    ]
+
+
+def _runtime_review_payload_contract_ok(
+    input_context: dict[str, Any],
+    payload: dict[str, Any],
+) -> tuple[bool, str]:
+    expected_ids = _runtime_review_expected_ids(input_context)
+    actual_ids = [
+        str(item.get("candidate_id") or "")
+        for item in (payload.get("candidate_reviews") or [])
+        if isinstance(item, dict)
+    ]
+    if actual_ids != expected_ids:
+        return False, "candidate_id_mismatch"
+    return True, ""
+
+
+def _runtime_review_contract_validator(input_context: dict[str, Any]):
+    def validator(raw_text: str) -> tuple[bool, str]:
+        parse_status, payload, warnings = _parse_ai_review_response(raw_text)
+        if parse_status != "parsed":
+            return False, ",".join(warnings) or parse_status
+        return _runtime_review_payload_contract_ok(input_context, payload)
+
+    return validator
+
+
+def _call_bedrock_qwen3_ai_review(
+    input_context: dict[str, Any],
+    *,
+    config: PostcloseAIReviewConfig,
+    primary_status: dict[str, Any],
+) -> tuple[Any | None, dict[str, Any]]:
+    failback_config = replace(
+        config,
+        primary_provider="bedrock_qwen3",
+        failback_provider="none",
+        attempt_role="failback",
+        retry_reason=str(primary_status.get("status") or "openai_failed"),
+    )
+    raw_response, status = call_postclose_structured_review(
+        input_context,
+        schema_name=AI_REVIEW_SCHEMA_NAME,
+        instructions=_build_ai_review_prompt_en({k: v for k, v in input_context.items() if k != "review_candidates"}),
+        config=failback_config,
+        metadata={
+            "endpoint_name": "runtime_apply_gap_ai_review",
+            "schema_name": AI_REVIEW_SCHEMA_NAME,
+            "report_type": "runtime_apply_gap_audit",
+        },
+        contract_validator=_runtime_review_contract_validator(input_context),
+        ensure_ascii=True,
+    )
+    return raw_response, {
+        **status,
+        "primary_provider": "openai",
+        "primary_model": config.model,
+        "failback_provider": "bedrock_qwen3",
+        "failback_model": config.bedrock_model_id,
+        "failback_used": raw_response is not None,
+        "failback_reason": str(primary_status.get("status") or "openai_failed"),
+        "primary_provider_status": primary_status,
+        "primary_error_type": str(primary_status.get("status") or ""),
+        "primary_error_message": str(
+            primary_status.get("reason")
+            or primary_status.get("openai_contract_reason")
+            or primary_status.get("primary_error_message")
+            or ""
+        )[:240],
+    }
+
+
 def _runtime_ai_review_shards(context: dict[str, Any], *, shard_size: int) -> list[dict[str, Any]]:
     candidates = context.get("review_candidates") if isinstance(context.get("review_candidates"), list) else []
     if not candidates:
@@ -1345,24 +1464,55 @@ def _merge_runtime_ai_review_payloads(payloads: list[dict[str, Any]]) -> dict[st
         "audit": {
             "status": audit_status,
             "issues": issues,
-            "reason": "Merged Gemini shard reviews.",
+            "reason": "Merged bounded shard reviews.",
         },
         "codex_directives": directives,
     }
 
 
-def _call_sharded_gemini_runtime_review(
+def _call_sharded_openai_bedrock_runtime_review(
     context: dict[str, Any],
     *,
     config: PostcloseAIReviewConfig,
 ) -> tuple[Any | None, dict[str, Any]]:
-    shards = _runtime_ai_review_shards(context, shard_size=config.gemini_shard_size)
+    shards = _runtime_ai_review_shards(context, shard_size=AI_REVIEW_SHARD_SIZE)
     shard_records: list[dict[str, Any]] = []
     payloads: list[dict[str, Any]] = []
-    gemini_only_config = replace(config, failback_provider="none")
+    failed_shard_ids: list[int] = []
+    failback_used = False
+    openai_config = replace(config, primary_provider="openai", failback_provider="bedrock_qwen3")
     for shard in shards:
-        raw_response, provider_status = _call_openai_ai_review(shard, config=gemini_only_config)
+        raw_response, provider_status = _call_openai_ai_review(shard, config=openai_config)
         parse_status, payload, warnings = _parse_ai_review_response(raw_response)
+        contract_ok, contract_reason = (
+            _runtime_review_payload_contract_ok(shard, payload)
+            if parse_status == "parsed"
+            else (False, ",".join(warnings) or parse_status)
+        )
+        if parse_status == "parsed" and not contract_ok:
+            parse_status = "parse_rejected"
+            warnings = [contract_reason]
+        if parse_status != "parsed" and config.failback_provider == "bedrock_qwen3":
+            failback_used = True
+            failed_shard_ids.append(int((shard.get("review_shard") or {}).get("shard_index") or 0))
+            raw_response, provider_status = _call_bedrock_qwen3_ai_review(
+                shard,
+                config=openai_config,
+                primary_status={
+                    **provider_status,
+                    "status": provider_status.get("status") or parse_status,
+                    "openai_contract_reason": ",".join(warnings)[:240],
+                },
+            )
+            parse_status, payload, warnings = _parse_ai_review_response(raw_response)
+            contract_ok, contract_reason = (
+                _runtime_review_payload_contract_ok(shard, payload)
+                if parse_status == "parsed"
+                else (False, ",".join(warnings) or parse_status)
+            )
+            if parse_status == "parsed" and not contract_ok:
+                parse_status = "parse_rejected"
+                warnings = [contract_reason]
         shard_record = {
             "shard_index": (shard.get("review_shard") or {}).get("shard_index"),
             "candidate_count": len(shard.get("review_candidates") or []),
@@ -1377,15 +1527,20 @@ def _call_sharded_gemini_runtime_review(
         }
         shard_records.append(shard_record)
         if parse_status != "parsed":
-            openai_config = replace(config, primary_provider="openai")
-            full_raw, full_status = _call_openai_ai_review(context, config=openai_config)
-            return full_raw, {
-                **full_status,
-                "failback_used": True,
-                "primary_provider": "gemini_3_5_flash",
-                "gemini_key_rotation_exhausted": True,
-                "failback_reason": "gemini_runtime_shard_failed",
-                "gemini_shards": shard_records,
+            return None, {
+                **config.provider_status_fields(),
+                "provider": "openai",
+                "status": "partial_failure",
+                "schema_name": AI_REVIEW_SCHEMA_NAME,
+                "primary_provider": "openai",
+                "primary_model": config.model,
+                "failback_provider": "bedrock_qwen3",
+                "failback_model": config.bedrock_model_id,
+                "failback_used": failback_used,
+                "failed_shard_ids": failed_shard_ids,
+                "shard_count": len(shards),
+                "parsed_shard_count": len(payloads),
+                "review_shards": shard_records,
                 "primary_error_type": parse_status,
                 "primary_error_message": ",".join(warnings)[:240],
             }
@@ -1393,23 +1548,20 @@ def _call_sharded_gemini_runtime_review(
     merged = _merge_runtime_ai_review_payloads(payloads)
     return json.dumps(merged, ensure_ascii=True), {
         **config.provider_status_fields(),
-        "provider": "gemini",
+        "provider": "openai",
         "status": "success",
-        "model": config.gemini_model,
+        "model": config.model,
         "schema_name": AI_REVIEW_SCHEMA_NAME,
-        "primary_provider": "gemini_3_5_flash",
-        "failback_provider": config.failback_provider,
-        "failback_used": False,
+        "primary_provider": "openai",
+        "primary_model": config.model,
+        "failback_provider": "bedrock_qwen3",
+        "failback_model": config.bedrock_model_id,
+        "failback_used": failback_used,
+        "failed_shard_ids": failed_shard_ids,
         "shard_count": len(shard_records),
         "parsed_shard_count": len(shard_records),
-        "gemini_shards": shard_records,
-        "gemini_contract_ok": True,
-        "gemini_key_rotation_attempts": sum(
-            int(((record.get("provider_status") or {}).get("gemini_key_rotation_attempts") or 0))
-            for record in shard_records
-        ),
+        "review_shards": shard_records,
     }
-
 
 def _run_ai_review(
     ledger: list[dict[str, Any]],
@@ -1493,13 +1645,16 @@ def _run_ai_review(
             )
         )
         return review, retry_items, directives
-    if config.model == "gpt-5.4" and config.primary_provider == "gemini_3_5_flash":
-        raw_response, provider_status = _call_sharded_gemini_runtime_review(context, config=config)
-    else:
-        raw_response, provider_status = _call_openai_ai_review(context, config=config)
+    raw_response, provider_status = _call_sharded_openai_bedrock_runtime_review(context, config=config)
     parse_status, payload, warnings = _parse_ai_review_response(raw_response)
     if parse_status != "parsed":
-        failure_code = "ai_parse_fail" if raw_response is not None else "ai_review_unavailable"
+        failure_code = (
+            "ai_review_partial_failure"
+            if str(provider_status.get("status") or "") == "partial_failure"
+            else "ai_parse_fail"
+            if raw_response is not None
+            else "ai_review_unavailable"
+        )
         review = {
             **base,
             "status": "fail",
@@ -1651,6 +1806,9 @@ def build_runtime_apply_gap_audit(
                 source_artifact="lifecycle_bucket_discovery",
             )
         )
+    swing_matrix = payloads.get("swing_lifecycle_decision_matrix") or {}
+    if swing_matrix:
+        ledger_rows.extend(_ledger_from_swing_ldm(swing_matrix, target_date=target_date))
     swing_discovery = payloads.get("swing_lifecycle_bucket_discovery") or {}
     if swing_discovery:
         ledger_rows.extend(

@@ -8,6 +8,7 @@ import json
 import os
 import re
 from collections import Counter
+from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -558,6 +559,17 @@ AI_REVIEW_REASONING_EFFORT = str(
 ).strip().lower() or "low"
 
 
+def _with_lifecycle_ai_provider_defaults(config: PostcloseAIReviewConfig) -> PostcloseAIReviewConfig:
+    prefix = config.env_prefix_name
+    primary_provider = config.primary_provider
+    failback_provider = config.failback_provider
+    if not os.getenv(f"{prefix}_PRIMARY_PROVIDER"):
+        primary_provider = "openai"
+    if not os.getenv(f"{prefix}_FAILBACK_PROVIDER"):
+        failback_provider = "openai"
+    return replace(config, primary_provider=primary_provider, failback_provider=failback_provider)
+
+
 def _ai_review_config_for_shard(shard_id: str | None) -> PostcloseAIReviewConfig:
     shard = str(shard_id or "unknown")
     generic_model = os.getenv("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_MODEL")
@@ -567,20 +579,22 @@ def _ai_review_config_for_shard(shard_id: str | None) -> PostcloseAIReviewConfig
         AI_REVIEW_TIMEOUT_SEC,
     )
     if shard == "live_contract_review":
-        return resolve_postclose_ai_review_config(
+        config = resolve_postclose_ai_review_config(
             "LIFECYCLE_BUCKET_DISCOVERY",
             default_model=str(generic_model or AI_REVIEW_MODEL),
             default_reasoning_effort=str(generic_reasoning or AI_REVIEW_REASONING_EFFORT),
             default_timeout_sec=generic_timeout_sec,
             env_prefix="KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_LIVE_CONTRACT_AI",
         )
-    return resolve_postclose_ai_review_config(
-        "LIFECYCLE_BUCKET_DISCOVERY",
-        default_model=str(generic_model or AI_REVIEW_SOURCE_ONLY_MODEL),
-        default_reasoning_effort=str(generic_reasoning or AI_REVIEW_SOURCE_ONLY_REASONING_EFFORT),
-        default_timeout_sec=generic_timeout_sec,
-        env_prefix="KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_SOURCE_ONLY_AI",
-    )
+    else:
+        config = resolve_postclose_ai_review_config(
+            "LIFECYCLE_BUCKET_DISCOVERY",
+            default_model=str(generic_model or AI_REVIEW_SOURCE_ONLY_MODEL),
+            default_reasoning_effort=str(generic_reasoning or AI_REVIEW_SOURCE_ONLY_REASONING_EFFORT),
+            default_timeout_sec=generic_timeout_sec,
+            env_prefix="KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_SOURCE_ONLY_AI",
+        )
+    return _with_lifecycle_ai_provider_defaults(config)
 
 
 def _ai_review_compact_value(value: Any, *, max_chars: int = AI_REVIEW_MAX_FIELD_CHARS) -> Any:
@@ -2580,13 +2594,13 @@ def _call_openai_ai_review(
 ) -> tuple[Any | None, dict[str, Any]]:
     resolved_shard_id = shard_id or str((input_context.get("review_scope") or {}).get("shard_id") or "unknown")
     config = config or _ai_review_config_for_shard(resolved_shard_id)
-    if config.primary_provider == "gemini_3_5_flash":
-        def validator(raw_text: str) -> tuple[bool, str]:
-            parse_status, _payload, warnings = _parse_ai_review_response(raw_text)
-            if parse_status != "parsed":
-                return False, ",".join(warnings) or parse_status
-            return True, ""
+    def validator(raw_text: str) -> tuple[bool, str]:
+        parse_status, _payload, warnings = _parse_ai_review_response(raw_text)
+        if parse_status != "parsed":
+            return False, ",".join(warnings) or parse_status
+        return True, ""
 
+    if config.primary_provider == "gemini_3_5_flash":
         return call_postclose_structured_review(
             input_context,
             schema_name=AI_REVIEW_SCHEMA_NAME,

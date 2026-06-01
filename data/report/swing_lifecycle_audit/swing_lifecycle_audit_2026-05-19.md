@@ -20,33 +20,33 @@
 
 | group | raw | unique_records |
 | --- | ---: | ---: |
-| `entry` | 273940 | 20 |
+| `entry` | 302059 | 20 |
 | `holding` | 463 | 50 |
 | `scale_in` | 33 | 11 |
 | `exit` | 30 | 16 |
-| `other` | 443 | 11 |
+| `other` | 447 | 11 |
 
 ## Key Stages
 
 | stage | raw | unique_records |
 | --- | ---: | ---: |
-| `blocked_gatekeeper_reject` | 39 | 8 |
+| `blocked_gatekeeper_reject` | 40 | 8 |
 | `blocked_swing_gap` | 14396 | 2 |
-| `blocked_swing_score_vpw` | 252081 | 20 |
-| `gatekeeper_fast_reuse_bypass` | 39 | 8 |
+| `blocked_swing_score_vpw` | 279693 | 20 |
+| `gatekeeper_fast_reuse_bypass` | 40 | 8 |
 | `holding_flow_ofi_smoothing_applied` | 463 | 50 |
 | `sell_order_blocked_market_closed` | 2 | 2 |
-| `swing_probe_discarded` | 7359 | 20 |
+| `swing_probe_discarded` | 7864 | 20 |
 | `swing_probe_entry_candidate` | 13 | 11 |
 | `swing_probe_exit_signal` | 14 | 14 |
 | `swing_probe_holding_started` | 13 | 11 |
 | `swing_probe_scale_in_order_assumed_filled` | 11 | 11 |
 | `swing_probe_sell_order_assumed_filled` | 14 | 14 |
 | `swing_probe_state_persisted` | 38 | 1 |
-| `swing_probe_state_restored` | 5 | 1 |
+| `swing_probe_state_restored` | 7 | 1 |
 | `swing_reentry_counterfactual_after_loss` | 388 | 6 |
 | `swing_same_symbol_loss_reentry_cooldown` | 9 | 9 |
-| `swing_same_symbol_loss_reentry_cooldowns_restored` | 3 | 1 |
+| `swing_same_symbol_loss_reentry_cooldowns_restored` | 5 | 1 |
 | `swing_scale_in_micro_context_observed` | 11 | 11 |
 | `swing_sim_scale_in_order_assumed_filled` | 11 | 11 |
 
@@ -80,17 +80,14 @@
 
 - available: `True`
 - sample_state: `hold_sample`
-- rows: `60`
+- rows: `51`
 - closed_count: `0`
 - winner_count: `0`
 - loser_count: `0`
 
 | family | rows | closed | winner | loser | avg_net_ret |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `swing_gatekeeper_reject_cooldown` | 20 | 0 | 0 | 0 | None |
-| `swing_market_regime_sensitivity` | 20 | 0 | 0 | 0 | None |
-| `swing_model_floor` | 3 | 0 | 0 | 0 | None |
-| `swing_selection_top_k` | 17 | 0 | 0 | 0 | None |
+| `swing_gatekeeper_reject_cooldown` | 51 | 0 | 0 | 0 | None |
 
 ## Observation Axes
 

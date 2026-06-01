@@ -597,6 +597,7 @@ def _call_openai(
     prompt: str,
     config: PostcloseAIReviewConfig,
     metadata: dict[str, str],
+    contract_validator: ContractValidator | None = None,
     failback_used: bool = False,
     failback_reason: str = "",
     primary_status: dict[str, Any] | None = None,
@@ -624,10 +625,11 @@ def _call_openai(
                 timeout=config.timeout_sec,
             )
             raw_text = _extract_openai_response_text(response)
+            contract_ok, contract_reason = _validator_ok(contract_validator, raw_text)
             usage = getattr(response, "usage", None)
             status = {
                 "provider": "openai",
-                "status": "success",
+                "status": "success" if contract_ok else "contract_failed",
                 "key_name": key_name,
                 "attempt_index": attempt_index,
                 "attempted_key_count": len(api_keys),
@@ -657,6 +659,8 @@ def _call_openai(
                 "failback_provider": config.failback_provider,
                 "failback_used": bool(failback_used),
                 "failback_reason": failback_reason,
+                "openai_contract_ok": contract_ok,
+                "openai_contract_reason": contract_reason,
             }
             if primary_status:
                 status.update(
@@ -671,7 +675,9 @@ def _call_openai(
                         "primary_provider_status": primary_status,
                     }
                 )
-            return raw_text, status
+            if contract_ok:
+                return raw_text, status
+            return None, status
         except RateLimitError as exc:
             errors.append({"key_name": key_name, "error": f"rate_limit:{exc}"})
         except Exception as exc:
@@ -698,7 +704,7 @@ def call_postclose_structured_review(
     ensure_ascii: bool = True,
 ) -> tuple[str | None, dict[str, Any]]:
     prompt = _prompt_text(context, ensure_ascii=ensure_ascii)
-    if config.model == "gpt-5.4-mini" and config.primary_provider == "bedrock_qwen3":
+    if config.primary_provider == "bedrock_qwen3":
         raw_text, primary_status = _call_bedrock_qwen3(
             schema_name=schema_name,
             instructions=instructions,
@@ -717,38 +723,72 @@ def call_postclose_structured_review(
                 prompt=prompt,
                 config=config,
                 metadata=metadata,
+                contract_validator=contract_validator,
                 failback_used=True,
                 failback_reason=failback_reason,
                 primary_status=primary_status,
             )
         return None, primary_status
-    if config.model == "gpt-5.4" and config.primary_provider == "gemini_3_5_flash":
-        raw_text, primary_status = _call_gemini_3_5_flash(
+    if config.primary_provider == "openai":
+        raw_text, primary_status = _call_openai(
             schema_name=schema_name,
             instructions=instructions,
             prompt=prompt,
             config=config,
+            metadata=metadata,
             contract_validator=contract_validator,
         )
         if raw_text is not None:
             return raw_text, primary_status
-        if config.failback_provider == "openai":
-            failback_reason = str(primary_status.get("status") or "gemini_3_5_flash_failed")
-            return _call_openai(
+        if config.failback_provider == "bedrock_qwen3":
+            failback_config = PostcloseAIReviewConfig(
+                **{
+                    **config.__dict__,
+                    "primary_provider": "bedrock_qwen3",
+                    "failback_provider": "none",
+                    "attempt_role": "failback",
+                    "retry_reason": str(primary_status.get("status") or "openai_failed"),
+                }
+            )
+            failback_raw, failback_status = _call_bedrock_qwen3(
                 schema_name=schema_name,
                 instructions=instructions,
                 prompt=prompt,
-                config=config,
-                metadata=metadata,
-                failback_used=True,
-                failback_reason=failback_reason,
-                primary_status=primary_status,
+                config=failback_config,
+                contract_validator=contract_validator,
             )
+            return failback_raw, {
+                **failback_status,
+                "primary_provider": "openai",
+                "primary_model": config.model,
+                "failback_provider": "bedrock_qwen3",
+                "failback_model": config.bedrock_model_id,
+                "failback_used": failback_raw is not None,
+                "failback_reason": str(primary_status.get("status") or "openai_failed"),
+                "primary_provider_status": primary_status,
+                "primary_error_type": str(primary_status.get("status") or ""),
+                "primary_error_message": _sanitize_error_message(
+                    primary_status.get("reason")
+                    or primary_status.get("openai_contract_reason")
+                    or ""
+                ),
+            }
         return None, primary_status
+    if config.primary_provider == "gemini_3_5_flash":
+        return None, {
+            **config.provider_status_fields(),
+            "provider": "gemini",
+            "status": "disabled",
+            "reason": "gemini_provider_disabled_for_postclose_review",
+            "primary_provider": "gemini_3_5_flash",
+            "failback_provider": config.failback_provider,
+            "failback_used": False,
+        }
     return _call_openai(
         schema_name=schema_name,
         instructions=instructions,
         prompt=prompt,
         config=config,
         metadata=metadata,
+        contract_validator=contract_validator,
     )
