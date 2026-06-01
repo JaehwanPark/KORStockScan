@@ -132,6 +132,20 @@ def _write_control_tower_minimal_sources(
             "warnings": [],
         },
     )
+    _write_json(
+        report_root / "runtime_apply_gap_audit" / f"runtime_apply_gap_audit_{target}.json",
+        {
+            "status": "pass",
+            "summary": {
+                "status": "pass",
+                "codex_directive_count": 2,
+                "source_dimension_gap_count": 3,
+                "quiet_gap_count": 4,
+                "quiet_gap_codex_directive_count": 1,
+            },
+            "codex_workorder_directives": [{"directive": "A"}, {"directive": "B"}],
+        },
+    )
     if write_verifier:
         _write_json(
             report_root
@@ -255,6 +269,20 @@ def test_tuning_performance_control_tower_separates_sim_progress_from_real_pnl(m
         },
     )
     _write_json(
+        report_root / "runtime_apply_gap_audit" / f"runtime_apply_gap_audit_{target}.json",
+        {
+            "status": "pass",
+            "summary": {
+                "status": "pass",
+                "codex_directive_count": 4,
+                "source_dimension_gap_count": 5,
+                "quiet_gap_count": 6,
+                "quiet_gap_codex_directive_count": 1,
+            },
+            "codex_workorder_directives": [{"directive": str(idx)} for idx in range(4)],
+        },
+    )
+    _write_json(
         report_root
         / "threshold_cycle_postclose_verification"
         / f"threshold_cycle_postclose_verification_{target}.json",
@@ -375,9 +403,12 @@ def test_tuning_performance_control_tower_separates_sim_progress_from_real_pnl(m
     assert report["swing_progression"]["swing_lifecycle_decision_matrix"]["delta"]["probe_rows"] == 121
     assert report["ev_authority"]["real_pnl_allowed_use"] == "diagnostic_only_until_post_apply_attribution_closes"
     assert report["workorder"]["pattern_lab_ai_review_source_order_count"] == 0
+    assert report["runtime_apply_gap_audit"]["status"] == "pass"
+    assert report["summary"]["runtime_apply_gap_audit_codex_directive_count"] == 4
     markdown = (output_dir / f"tuning_performance_control_tower_{target}.md").read_text(encoding="utf-8")
     assert "live_auto_apply_ready" in markdown
     assert "real_pnl_is_tuning_performance=false" in markdown
+    assert "Runtime gap audit" in markdown
 
 
 def test_control_tower_blocks_daily_live_ready_without_cumulative_confirmation(monkeypatch, tmp_path):
@@ -526,3 +557,100 @@ def test_control_tower_accepts_string_bridge_promotion_contract(monkeypatch, tmp
 
     assert report["summary"]["primary_verdict"] == "bridge_live_bucket_ready"
     assert report["bridge_summary"]["lifecycle_bucket_promotion_contract_passed"] is True
+
+
+def test_control_tower_surfaces_source_generation_stale_warning(monkeypatch, tmp_path):
+    report_root, apply_dir, _ = _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-05-29"
+    _write_control_tower_minimal_sources(report_root, apply_dir, target, lifecycle_sim=1)
+    _write_json(
+        report_root / "threshold_cycle_ev" / f"threshold_cycle_ev_{target}.json",
+        {
+            "generated_at": "2026-05-29T17:00:00+09:00",
+            "daily_ev_summary": {"source_split": {"combined_authority": "diagnostic_only"}},
+        },
+    )
+    _write_json(
+        report_root / "runtime_approval_summary" / f"runtime_approval_summary_{target}.json",
+        {
+            "generated_at": "2026-05-29T17:01:00+09:00",
+            "runtime_mutation_allowed": False,
+            "summary": {},
+        },
+    )
+    _write_json(
+        report_root / "swing_lifecycle_decision_matrix" / f"swing_lifecycle_decision_matrix_{target}.json",
+        {"generated_at": "2026-05-29T18:00:00+09:00", "summary": {"status": "pass"}},
+    )
+
+    report = mod.build_tuning_performance_control_tower(target)
+
+    assert report["source_freshness"]["status"] == "warning"
+    assert report["summary"]["source_freshness_status"] == "warning"
+    assert report["summary"]["source_generation_stale_warning_count"] > 0
+    assert "source_generation_stale_warning" in report["warnings"]
+
+
+def test_control_tower_source_freshness_handles_mixed_timezone_formats(monkeypatch, tmp_path):
+    report_root, apply_dir, _ = _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-05-29"
+    _write_control_tower_minimal_sources(report_root, apply_dir, target, lifecycle_sim=1)
+    _write_json(
+        report_root / "threshold_cycle_ev" / f"threshold_cycle_ev_{target}.json",
+        {
+            "generated_at": "2026-05-29T17:00:00",
+            "daily_ev_summary": {"source_split": {"combined_authority": "diagnostic_only"}},
+        },
+    )
+    _write_json(
+        report_root / "swing_lifecycle_decision_matrix" / f"swing_lifecycle_decision_matrix_{target}.json",
+        {"generated_at": "2026-05-29T18:00:00+09:00", "summary": {"status": "pass"}},
+    )
+
+    report = mod.build_tuning_performance_control_tower(target)
+
+    assert report["source_freshness"]["status"] == "warning"
+    assert report["summary"]["source_generation_stale_warning_count"] > 0
+
+
+def test_control_tower_source_freshness_honors_verifier_disabled_stages(monkeypatch, tmp_path):
+    report_root, apply_dir, _ = _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-05-29"
+    _write_control_tower_minimal_sources(report_root, apply_dir, target, lifecycle_sim=1)
+    _write_json(
+        report_root
+        / "threshold_cycle_postclose_verification"
+        / f"threshold_cycle_postclose_verification_{target}.json",
+        {
+            "status": "warning",
+            "execution_profile": {
+                "flags": {
+                    "daily_ev": True,
+                    "runtime_approval_summary": True,
+                    "lifecycle_decision_matrix": True,
+                    "lifecycle_bucket_discovery": True,
+                    "swing_lifecycle_matrix": False,
+                    "swing_lifecycle_bucket_discovery": False,
+                },
+                "disabled_stage_flags": ["swing_lifecycle_matrix", "swing_lifecycle_bucket_discovery"],
+            },
+            "lifecycle_bucket_windows": {"status": "pass", "checked": True, "missing": [], "warnings": []},
+        },
+    )
+    _write_json(
+        report_root / "threshold_cycle_ev" / f"threshold_cycle_ev_{target}.json",
+        {
+            "generated_at": "2026-05-29T17:00:00+09:00",
+            "daily_ev_summary": {"source_split": {"combined_authority": "diagnostic_only"}},
+        },
+    )
+    _write_json(
+        report_root / "swing_lifecycle_decision_matrix" / f"swing_lifecycle_decision_matrix_{target}.json",
+        {"generated_at": "2026-05-29T18:00:00+09:00", "summary": {"status": "pass"}},
+    )
+
+    report = mod.build_tuning_performance_control_tower(target)
+
+    assert report["source_freshness"]["status"] == "pass"
+    assert report["summary"]["source_generation_stale_warning_count"] == 0
+    assert "source_generation_stale_warning" not in report["warnings"]

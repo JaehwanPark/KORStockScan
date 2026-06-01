@@ -11,13 +11,13 @@
 - lifecycle_matrix_status: `pass`
 - lifecycle_bucket_windows_promotion: `pass` / `target_pass`
 - lifecycle_ai_context prompt/applied: `3` / `3175`
-- swing_strategy_discovery_labeled/pending: `117` / `3256`
-- swing_lifecycle_matrix_auto: `3`
+- swing_strategy_discovery_labeled/pending: `41` / `3458`
+- swing_lifecycle_matrix_auto: `0`
 - swing_lifecycle_bucket_auto: `0`
 - institutional_flow_available/join_rate: `True` / `100.0`
 - microstructure_reaction_available/ok: `True` / `9838`
 - pattern_lab_currentness_status: `pass`
-- pattern_lab_ai_review_status: `warning`
+- pattern_lab_ai_review_status: `pass`
 - producer_gap_discovery_status: `warning`
 - pattern_lab_propagation_status: `pass`
 - env_generated_at: `2026-06-01T07:35:01`
@@ -130,10 +130,10 @@
 ## Swing Strategy Discovery Sim
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_2026-06-01.json`
 - available: `True`
-- candidate/arm/labeled: `573` / `4186` / `117`
-- pending_future_quote_count: `3256`
+- candidate/arm/labeled: `594` / `4354` / `41`
+- pending_future_quote_count: `3458`
 - top_surviving_arm: `arm05_breakout_conf_trailing`
-- avoid_bucket_count: `8`
+- avoid_bucket_count: `1`
 - runtime_effect: `False`
 - interpretation: source-only exploration. Surviving arms can create future source-quality/workorder inputs but cannot apply runtime env.
 - warnings: `['pending_future_quotes']`
@@ -141,9 +141,9 @@
 ## Swing Lifecycle Matrix
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_lifecycle_decision_matrix/swing_lifecycle_decision_matrix_2026-06-01.json`
 - available: `True`
-- total/probe/discovery: `95903` / `91483` / `4420`
-- sim_auto_candidate_count: `3`
-- workorder_count: `14`
+- total/probe/discovery: `95919` / `91483` / `4436`
+- sim_auto_candidate_count: `0`
+- workorder_count: `8`
 - daily_simulation_consumed: `False`
 - runtime_effect: `False`
 - warnings: `[]`
@@ -152,9 +152,9 @@
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_lifecycle_bucket_discovery/swing_lifecycle_bucket_discovery_2026-06-01.json`
 - available: `True`
 - source_contract_status: `pass`
-- surfaced/sim_auto/code_patch: `513` / `0` / `0`
+- surfaced/sim_auto/code_patch: `477` / `0` / `0`
 - runtime_effect: `False`
-- warnings: `['ai_two_pass_review_missing_fail_closed', 'ai_two_pass_review_fail_closed_sim_auto_blocked']`
+- warnings: `['ai_two_pass_review_missing_fail_closed', 'ai_two_pass_review_missing_source_only']`
 
 ## Panic
 | 항목 | 설명 | 현재 적용 | 상태 | Gate 분류 | 튜닝 경로 | 판정 해석 | 점수 | 계약 | 차단/판정 사유 |
@@ -164,10 +164,10 @@
 
 ## Pattern Lab Audits
 - currentness: status=`pass` fail=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-06-01.json`
-- ai_review: status=`warning` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-06-01.json`
+- ai_review: status=`pass` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-06-01.json`
 - producer_gap_discovery: status=`warning` artifact=`/home/ubuntu/KORStockScan/data/report/producer_gap_discovery/producer_gap_discovery_2026-06-01.json`
 - propagation: status=`pass` fail=`0` warnings=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-06-01.json`
 
 ## Warnings
 - `swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_fail_closed`
-- `swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked`
+- `swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_source_only`

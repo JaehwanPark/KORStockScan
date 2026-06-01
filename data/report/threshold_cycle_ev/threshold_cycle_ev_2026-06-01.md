@@ -134,11 +134,11 @@
 ## Swing Strategy Discovery Sim
 - artifact: `/home/ubuntu/KORStockScan/data/report/swing_strategy_discovery_ev/swing_strategy_discovery_ev_2026-06-01.json`
 - authority: `swing_sim_exploration_only` / source_only: `True`
-- candidate/arm/policy_exit_rows: `573` / `4186` / `4186`
-- labeled/pending_future_quotes: `117` / `3256`
+- candidate/arm/policy_exit_rows: `594` / `4354` / `4354`
+- labeled/pending_future_quotes: `41` / `3458`
 - implementation_status: `implemented`
 - top_surviving_arm: `arm05_breakout_conf_trailing`
-- surviving/avoid_bucket_count: `1` / `8`
+- surviving/avoid_bucket_count: `1` / `1`
 - runtime_effect: `False`
 
 ## Pipeline Event Verbosity
@@ -161,7 +161,7 @@
 
 ## Pattern Lab Audits
 - currentness: status=`pass` fail=`0` orders=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-06-01.json`
-- ai_review: status=`warning` orders=`5` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-06-01.json`
+- ai_review: status=`pass` orders=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-06-01.json`
 - time_window_regime_counterfactual: status=`pass` artifact=`/home/ubuntu/KORStockScan/data/report/time_window_regime_counterfactual/time_window_regime_counterfactual_2026-06-01.json`
 - producer_gap_discovery: status=`warning` orders=`10` artifact=`/home/ubuntu/KORStockScan/data/report/producer_gap_discovery/producer_gap_discovery_2026-06-01.json`
 - stage_hook_workorder_discovery: status=`warning` orders=`2` artifact=`/home/ubuntu/KORStockScan/data/report/stage_hook_workorder_discovery/stage_hook_workorder_discovery_2026-06-01.json`
@@ -186,7 +186,7 @@
 - artifact: `/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-06-01.json`
 - markdown: `/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-06-01.md`
 - selected_order_count: `106`
-- decision_counts: `{'implement_now': 13, 'attach_existing_family': 113, 'design_family_candidate': 6, 'defer_evidence': 9, 'reject': 3}`
+- decision_counts: `{'implement_now': 6, 'attach_existing_family': 107, 'design_family_candidate': 6, 'defer_evidence': 9, 'reject': 3}`
 
 ## Approval Requests
 - `position_sizing_cap_release` sample=`33/30` reason=`window_policy primary=rolling_10d 기준 재평가: 1주 cap 해제 efficient trade-off 기준 충족(score=0.16/0.70): 자동 적용하지 않고 사용자 승인 요청 artifact로만 승격한다.` contract=`final_user_approval_required` live_ready=`False`
@@ -227,7 +227,5 @@
 - `lifecycle_bucket_discovery:source_contract_drift_warning`
 - `swing_strategy_discovery:pending_future_quotes`
 - `swing_lifecycle_decision_matrix:pending_future_quotes`
+- `swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_source_only`
 - `swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_fail_closed`
-- `swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked`
-- `pattern_lab_ai_review_warning`
-- `pattern_lab_ai_review_ai_review_followup_required`

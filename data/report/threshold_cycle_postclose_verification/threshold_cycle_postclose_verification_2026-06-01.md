@@ -22,7 +22,7 @@
 - status: `pass`
 - retry_queue_count: `0`
 - codex_directive_count: `4`
-- summary: `{'actionable_unknown_gap_count': 5, 'ai_review_retry_pending': False, 'ai_review_status': 'parsed', 'candidate_count': 629, 'codex_directive_count': 4, 'critical_failure_count': 0, 'derived_review_category_counts': {'code_patch_required': 16, 'runtime_blocked_contract_gap': 27, 'sim_auto_approved': 63, 'source_only_keep_collecting': 31, 'source_quality_blocker': 484, 'tier2_fail_closed_source_only': 8}, 'positive_edge_source_quality_pass_count': 31, 'quiet_gap_codex_directive_count': 1, 'quiet_gap_count': 287, 'quiet_gap_rollup_count': 287, 'retry_queue_count': 0, 'runtime_uptake_rate_pct': 0.0, 'source_dimension_gap_count': 150, 'status': 'pass'}`
+- summary: `{'actionable_unknown_gap_count': 5, 'ai_review_retry_pending': False, 'ai_review_status': 'parsed', 'candidate_count': 593, 'codex_directive_count': 4, 'critical_failure_count': 0, 'derived_review_category_counts': {'code_patch_required': 16, 'runtime_blocked_contract_gap': 27, 'sim_auto_approved': 63, 'source_only_keep_collecting': 13, 'source_quality_blocker': 471, 'tier2_fail_closed_source_only': 3}, 'positive_edge_source_quality_pass_count': 26, 'quiet_gap_codex_directive_count': 1, 'quiet_gap_count': 287, 'quiet_gap_rollup_count': 287, 'retry_queue_count': 0, 'runtime_uptake_rate_pct': 0.0, 'source_dimension_gap_count': 150, 'status': 'pass'}`
 
 ## BUY Funnel Submit Drought Handoff
 - status: `pass`
@@ -67,7 +67,7 @@
 ## AI Correction
 - status: `pass`
 - ai_status: `parsed`
-- provider_status: `{'provider': 'openai', 'status': 'success', 'new_provider_call': True, 'key_name': 'OPENAI_API_KEY', 'attempt_index': 1, 'model_index': 1, 'configured_key_count': 2, 'attempted_key_count': 1, 'attempted_keys': 1, 'attempted_key_names': ['OPENAI_API_KEY'], 'configured_model_count': 3, 'attempted_model_count': 1, 'attempted_models': ['gpt-5.5'], 'configured_models': ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'], 'model': 'gpt-5.5', 'schema_name': 'threshold_ai_correction_v1', 'reasoning_effort': 'high', 'prompt_chars': 114161, 'input_context_chars': 112841, 'input_context_hash': '8b91fd01da8011813a512ee8413f26d48678db8e6b06e185348a2f4bb5a24634', 'elapsed_ms': 151234, 'output_chars': 11985, 'input_tokens': 32137, 'output_tokens': 9344, 'total_tokens': 41481, 'estimated_cost': None, 'estimated_cost_usd': None, 'cost_estimate_status': 'missing_price_contract'}`
+- provider_status: `{'provider': 'openai', 'status': 'success', 'new_provider_call': True, 'key_name': 'OPENAI_API_KEY', 'attempt_index': 1, 'model_index': 1, 'configured_key_count': 2, 'attempted_key_count': 1, 'attempted_keys': 1, 'attempted_key_names': ['OPENAI_API_KEY'], 'configured_model_count': 3, 'attempted_model_count': 1, 'attempted_models': ['gpt-5.5'], 'configured_models': ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'], 'model': 'gpt-5.5', 'schema_name': 'threshold_ai_correction_v1', 'reasoning_effort': 'high', 'prompt_chars': 114161, 'input_context_chars': 112841, 'input_context_hash': '0dc85288c754fefc14310970bef857288b9a9417780868600c0fe9ec5bc1e76f', 'elapsed_ms': 114691, 'output_chars': 10690, 'input_tokens': 32137, 'output_tokens': 7504, 'total_tokens': 39641, 'estimated_cost': None, 'estimated_cost_usd': None, 'cost_estimate_status': 'missing_price_contract'}`
 - blocking_runtime_candidate_families: `['bad_entry_refined_canary', 'holding_exit_decision_matrix_advisory', 'holding_flow_ofi_smoothing', 'lifecycle_decision_matrix_runtime', 'protect_trailing_smoothing', 'score65_74_recovery_probe']`
 - parse_warnings: `[]`
 - interpretation: `AI correction parsed successfully`
@@ -131,13 +131,13 @@
 
 ## Swing Lifecycle Handoff
 - status: `warning`
-- expected_candidate_ids: `['swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_3b6dc92885', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_a72594ac3c', 'swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_swing_entry_entry_bucket_attribution_swing_strategy_discovery_s_b0984ff4fa']`
+- expected_candidate_ids: `[]`
 - missing_ev_candidate_ids: `[]`
 - missing_runtime_summary_candidate_ids: `[]`
 - missing_workorder_order_ids: `[]`
 - daily_simulation_consumed: `False`
 - ai_two_pass_review_status: `missing`
-- warnings: `['swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_fail_closed', 'swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked']`
+- warnings: `['swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_source_only', 'swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_fail_closed']`
 - interpretation: `Swing LDM AI two-pass review is fail-closed; sim-auto promotion is blocked and must be surfaced.`
 
 ## Producer Gap Discovery Handoff
@@ -171,11 +171,11 @@
 - interpretation: `bottom_rebound source was absent or blocked; safe-pool-only swing sim path applies`
 
 ## Workorder Snapshot
-- generation_id: `2026-06-01-bb836241b0da`
-- source_hash: `bb836241b0da5f7828439cd4f338e13d01fe835dd5be6dc3161b13b8d569bfef`
+- generation_id: `2026-06-01-c8ced7e9bcf4`
+- source_hash: `c8ced7e9bcf4d7658484ea2e30801f82276acd2718aa584b640d0d2d5877dcf7`
 - snapshot_status: `source_changed_with_lineage`
-- previous_generation_id: `2026-06-01-7634808b9b9f`
-- previous_source_hash: `7634808b9b9f7adc521678bcd69aa07cd0dfc18c887191326e50ebd6e7beac2a`
-- new_order_ids: `['order_pattern_lab_ai_review_ai_review_1', 'order_pattern_lab_ai_review_ai_review_2', 'order_pattern_lab_ai_review_ai_review_3', 'order_pattern_lab_ai_review_ai_review_6', 'order_producer_gap_discovery_producer_gap_scale_in_counterfactual_gap_missing', 'order_producer_gap_discovery_producer_gap_sim_exit_plateau_breakdown_gap_missing', 'order_producer_gap_discovery_producer_gap_sim_holding_runner_gap_missing', 'order_producer_gap_discovery_producer_gap_sim_scale_in_counterfactual_gap_missing']`
-- removed_order_ids: `['order_holding_exit_decision_matrix_edge_counterfactual', 'order_pattern_lab_ai_review_lifecycle_bucket_discovery', 'order_pattern_lab_ai_review_scalping_pattern_lab_automation', 'order_pattern_lab_ai_review_swing_lifecycle_bucket_discovery', 'order_pattern_lab_currentness_audit_scalping_ldm_threshold_reentry_sources', 'order_pattern_lab_currentness_audit_swing_ldm_threshold_reentry_sources', 'order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_confidence_weighted_trailing_after_mfe_diagnostic', 'order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_diagnostic', 'order_swing_ldm_selection_discovery_arm_attribution_breakout_confirm_entry_risk_capped_mae_stop_time_stop_manufacture_of_electronic_', 'order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_manufacture_of_basic_chemica', 'order_swing_ldm_selection_discovery_arm_attribution_pullback_limit_entry_risk_capped_mae_stop_time_stop_sea_and_coastal_water_transp']`
+- previous_generation_id: `2026-06-01-c46954f1b442`
+- previous_source_hash: `c46954f1b4423b47ad430769b1431eb4b1fe6dcc1adbc50308d13031d82f5e82`
+- new_order_ids: `[]`
+- removed_order_ids: `[]`
 - decision_changed_order_ids: `[]`

@@ -1314,6 +1314,89 @@ def test_consumer_stale_detects_generated_at_ordering():
     assert mod._consumer_stale(source, consumer) is False
 
 
+def test_postclose_verifier_warns_when_ev_runtime_stale_before_ldm_sources(tmp_path, monkeypatch):
+    project_root = tmp_path
+    report_dir = project_root / "data" / "report"
+    log_path = project_root / "logs" / "threshold_cycle_postclose_cron.log"
+    (project_root / "logs").mkdir(parents=True)
+    (project_root / "docs" / "checklists").mkdir(parents=True)
+    (project_root / "docs" / "checklists" / "2026-05-13-stage2-todo-checklist.md").write_text(
+        "# next\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "LOG_PATH", log_path)
+    monkeypatch.setattr(mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification")
+    monkeypatch.setattr(mod, "_next_krx_trading_day", lambda target_date: "2026-05-13")
+
+    for label, path in mod._artifact_paths("2026-05-12").items():
+        if label == "next_stage2_checklist":
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"report_type": label, "generated_at": "2026-05-12T17:00:00+09:00"}
+        if label == "threshold_cycle_ev":
+            payload["sources"] = {
+                "code_improvement_workorder": "code_improvement_workorder_2026-05-12.json",
+                "pattern_lab_currentness_audit": "pattern_lab_currentness_audit_2026-05-12.json",
+                "pattern_lab_ai_review": "pattern_lab_ai_review_2026-05-12.json",
+                "producer_gap_discovery": "producer_gap_discovery_2026-05-12.json",
+                "stage_hook_workorder_discovery": "stage_hook_workorder_discovery_2026-05-12.json",
+                "stage_hook_runtime_scaffold": "stage_hook_runtime_scaffold_2026-05-12.json",
+                "pattern_lab_propagation_audit": "pattern_lab_propagation_audit_2026-05-12.json",
+                "scalp_entry_action_decision_matrix": "scalp_entry_action_decision_matrix_2026-05-12.json",
+                "lifecycle_decision_matrix": "lifecycle_decision_matrix_2026-05-12.json",
+                "swing_lifecycle_decision_matrix": "swing_lifecycle_decision_matrix_2026-05-12.json",
+                "swing_lifecycle_bucket_discovery": "swing_lifecycle_bucket_discovery_2026-05-12.json",
+            }
+        elif label == "runtime_approval_summary":
+            payload["sources"] = {
+                "threshold_cycle_ev": "threshold_cycle_ev_2026-05-12.json",
+                "scalp_entry_action_decision_matrix": "scalp_entry_action_decision_matrix_2026-05-12.json",
+                "lifecycle_decision_matrix": "lifecycle_decision_matrix_2026-05-12.json",
+                "swing_lifecycle_decision_matrix": "swing_lifecycle_decision_matrix_2026-05-12.json",
+                "swing_lifecycle_bucket_discovery": "swing_lifecycle_bucket_discovery_2026-05-12.json",
+                "pattern_lab_propagation_audit": "pattern_lab_propagation_audit_2026-05-12.json",
+                "pattern_lab_ai_review": "pattern_lab_ai_review_2026-05-12.json",
+            }
+        elif label in {
+            "lifecycle_decision_matrix",
+            "lifecycle_bucket_discovery",
+            "swing_lifecycle_decision_matrix",
+            "swing_lifecycle_bucket_discovery",
+        }:
+            payload["generated_at"] = "2026-05-12T18:00:00+09:00"
+            payload["runtime_effect"] = False
+            payload["actual_order_submitted"] = False
+            payload["broker_order_forbidden"] = True
+            payload["allowed_runtime_apply"] = False
+            payload["summary"] = {"status": "pass"}
+        elif label == "runtime_apply_gap_audit":
+            payload.update({"status": "pass", "summary": {"critical_failure_count": 0, "ai_review_retry_pending": False}})
+        elif label == "code_improvement_workorder":
+            payload.update({"generation_id": "g1", "source_hash": "h1", "lineage": {"previous_exists": False}, "orders": []})
+        elif label == "swing_strategy_discovery_sim":
+            payload.update({"source_quality": {"bottom_rebound_source": {"status": "disabled"}}, "persist_summary": {}})
+        path.write_text(json.dumps(payload), encoding="utf-8")
+    log_path.write_text(
+        "[START] threshold-cycle postclose target_date=2026-05-12 started_at=2026-05-12T17:00:00+0900\n"
+        "[DONE] threshold-cycle postclose target_date=2026-05-12 swing_lifecycle=true pattern_labs=false "
+        "deepseek_swing_lab=false pattern_lab_currentness_audit=false pattern_lab_ai_review=false "
+        "pattern_lab_propagation_audit=true scalp_entry_adm=true lifecycle_decision_matrix=true "
+        "runtime_apply_bridge=true code_improvement_workorder=true daily_ev=true runtime_approval_summary=true "
+        "runtime_apply_gap_audit=true next_stage2_checklist=true swing_strategy_discovery=true "
+        "swing_lifecycle_matrix=true swing_lifecycle_bucket_discovery=true producer_gap_discovery=false "
+        "stage_hook_workorder_discovery=false stage_hook_runtime_scaffold=false finished_at=2026-05-12T18:30:00+0900\n",
+        encoding="utf-8",
+    )
+
+    report = mod.build_threshold_cycle_postclose_verification("2026-05-12")
+
+    assert "threshold_cycle_ev_stale_before_swing_lifecycle_decision_matrix" in report["source_generation_warnings"]
+    assert "runtime_approval_summary_stale_before_lifecycle_bucket_discovery" in report["handoff_warnings"]
+    assert report["stale_downstream_links"] == []
+
+
 def _write_adm_artifact(report_dir: Path, target_date: str = "2026-05-12") -> Path:
     path = (
         report_dir

@@ -1157,14 +1157,6 @@ wait_for_report_artifact \
   "$PROJECT_DIR/data/report/runtime_approval_summary/runtime_approval_summary_${TARGET_DATE}.json" \
   "$PROJECT_DIR/data/report/runtime_approval_summary/runtime_approval_summary_${TARGET_DATE}.md" \
   "runtime_approval_summary"
-if [ "$RUN_TUNING_PERFORMANCE_CONTROL_TOWER" = "true" ] || [ "$RUN_TUNING_PERFORMANCE_CONTROL_TOWER" = "1" ]; then
-  wait_for_postclose_resources "tuning_performance_control_tower"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.tuning_performance_control_tower --date "$TARGET_DATE"
-  wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/tuning_performance_control_tower/tuning_performance_control_tower_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/tuning_performance_control_tower/tuning_performance_control_tower_${TARGET_DATE}.md" \
-    "tuning_performance_control_tower"
-fi
 wait_for_postclose_resources "runtime_apply_gap_audit"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.runtime_apply_gap_audit --date "$TARGET_DATE"
 wait_for_report_artifact \
@@ -1190,4 +1182,12 @@ wait_for_report_artifact \
   "$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json" \
   "$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.md" \
   "threshold_cycle_postclose_verification_final"
+if [ "$RUN_TUNING_PERFORMANCE_CONTROL_TOWER" = "true" ] || [ "$RUN_TUNING_PERFORMANCE_CONTROL_TOWER" = "1" ]; then
+  wait_for_postclose_resources "tuning_performance_control_tower"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.tuning_performance_control_tower --date "$TARGET_DATE"
+  wait_for_report_artifact \
+    "$PROJECT_DIR/data/report/tuning_performance_control_tower/tuning_performance_control_tower_${TARGET_DATE}.json" \
+    "$PROJECT_DIR/data/report/tuning_performance_control_tower/tuning_performance_control_tower_${TARGET_DATE}.md" \
+    "tuning_performance_control_tower"
+fi
 restart_postclose_bot_if_requested

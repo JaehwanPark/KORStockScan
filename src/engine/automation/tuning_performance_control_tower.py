@@ -24,6 +24,7 @@ SOURCE_SPECS: dict[str, tuple[Path, str]] = {
     "threshold_cycle_ev": (REPORT_ROOT_DIR / "threshold_cycle_ev", "threshold_cycle_ev"),
     "runtime_approval_summary": (REPORT_ROOT_DIR / "runtime_approval_summary", "runtime_approval_summary"),
     "runtime_apply_bridge": (REPORT_ROOT_DIR / "runtime_apply_bridge", "runtime_apply_bridge"),
+    "runtime_apply_gap_audit": (REPORT_ROOT_DIR / "runtime_apply_gap_audit", "runtime_apply_gap_audit"),
     "lifecycle_decision_matrix": (REPORT_ROOT_DIR / "lifecycle_decision_matrix", "lifecycle_decision_matrix"),
     "lifecycle_bucket_discovery": (REPORT_ROOT_DIR / "lifecycle_bucket_discovery", "lifecycle_bucket_discovery"),
     "swing_lifecycle_decision_matrix": (
@@ -160,6 +161,21 @@ def _safe_bool(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
     return bool(value)
+
+
+def _parse_generated_at(value: Any) -> datetime | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=datetime.now().astimezone().tzinfo)
+    return parsed.astimezone()
 
 
 def _summary(payload: dict[str, Any]) -> dict[str, Any]:
@@ -357,6 +373,95 @@ def _runtime_summary(runtime_summary: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _runtime_gap_audit_summary(runtime_gap_audit: dict[str, Any]) -> dict[str, Any]:
+    summary = _summary(runtime_gap_audit)
+    directives = runtime_gap_audit.get("codex_workorder_directives")
+    return {
+        "status": runtime_gap_audit.get("status") or summary.get("status") or "missing",
+        "codex_directive_count": (
+            len(directives)
+            if isinstance(directives, list)
+            else _safe_int(summary.get("codex_directive_count"))
+        ),
+        "source_dimension_gap_count": _safe_int(summary.get("source_dimension_gap_count")),
+        "quiet_gap_count": _safe_int(summary.get("quiet_gap_count")),
+        "quiet_gap_codex_directive_count": _safe_int(summary.get("quiet_gap_codex_directive_count")),
+        "actionable_unknown_gap_count": _safe_int(summary.get("actionable_unknown_gap_count")),
+        "critical_failure_count": _safe_int(summary.get("critical_failure_count")),
+        "retry_queue_count": _safe_int(summary.get("retry_queue_count")),
+    }
+
+
+def _source_freshness(payloads: dict[str, dict[str, Any]], verifier_report: dict[str, Any]) -> dict[str, Any]:
+    consumer_flag_by_key = {
+        "threshold_cycle_ev": "daily_ev",
+        "runtime_approval_summary": "runtime_approval_summary",
+    }
+    source_flag_by_key = {
+        "lifecycle_decision_matrix": "lifecycle_decision_matrix",
+        "lifecycle_bucket_discovery": "lifecycle_bucket_discovery",
+        "swing_lifecycle_decision_matrix": "swing_lifecycle_matrix",
+        "swing_lifecycle_bucket_discovery": "swing_lifecycle_bucket_discovery",
+    }
+    execution_profile = (
+        verifier_report.get("execution_profile") if isinstance(verifier_report.get("execution_profile"), dict) else {}
+    )
+    execution_flags = (
+        execution_profile.get("flags") if isinstance(execution_profile.get("flags"), dict) else {}
+    )
+    disabled_stage_flags = set(
+        execution_profile.get("disabled_stage_flags")
+        if isinstance(execution_profile.get("disabled_stage_flags"), list)
+        else []
+    )
+
+    def stage_enabled(flag: str) -> bool:
+        if flag in disabled_stage_flags:
+            return False
+        return bool(execution_flags.get(flag, True))
+
+    consumer_keys = tuple(
+        key for key, flag in consumer_flag_by_key.items()
+        if stage_enabled(flag)
+    )
+    source_keys = tuple(
+        key for key, flag in source_flag_by_key.items()
+        if stage_enabled(flag)
+    )
+    stale_pairs: list[dict[str, Any]] = []
+    generated_at = {
+        key: payload.get("generated_at")
+        for key, payload in payloads.items()
+        if isinstance(payload, dict) and payload.get("generated_at")
+    }
+    parsed = {key: _parse_generated_at(value) for key, value in generated_at.items()}
+    for consumer_key in consumer_keys:
+        consumer_time = parsed.get(consumer_key)
+        if consumer_time is None:
+            continue
+        for source_key in source_keys:
+            source_time = parsed.get(source_key)
+            if source_time is None:
+                continue
+            if consumer_time < source_time:
+                stale_pairs.append(
+                    {
+                        "consumer": consumer_key,
+                        "source": source_key,
+                        "consumer_generated_at": generated_at.get(consumer_key),
+                        "source_generated_at": generated_at.get(source_key),
+                        "warning": f"{consumer_key}_stale_before_{source_key}",
+                    }
+                )
+    return {
+        "status": "warning" if stale_pairs else "pass",
+        "warning": "source_generation_stale_warning" if stale_pairs else None,
+        "stale_pair_count": len(stale_pairs),
+        "stale_pairs": stale_pairs,
+        "generated_at": generated_at,
+    }
+
+
 def _window_discovery_path(target_date: str, suffix: str | None = None) -> Path:
     base_dir = REPORT_ROOT_DIR / "lifecycle_bucket_discovery"
     if suffix:
@@ -516,6 +621,15 @@ def _postclose_verifier_summary(
     )
     return {
         "status": verifier_report.get("status"),
+        "handoff_warnings": verifier_report.get("handoff_warnings")
+        if isinstance(verifier_report.get("handoff_warnings"), list)
+        else [],
+        "missing_downstream_links": verifier_report.get("missing_downstream_links")
+        if isinstance(verifier_report.get("missing_downstream_links"), list)
+        else [],
+        "stale_downstream_links": verifier_report.get("stale_downstream_links")
+        if isinstance(verifier_report.get("stale_downstream_links"), list)
+        else [],
         "lifecycle_bucket_windows": {
             "status": windows.get("status"),
             "checked": bool(windows.get("checked")),
@@ -586,8 +700,6 @@ def _primary_verdict(
     )
     lifecycle_sim = _safe_int(current_lifecycle.get("sim_auto_approved_count") if isinstance(current_lifecycle, dict) else 0)
     swing_sim = _safe_int(current_swing.get("sim_auto_approved_count") if isinstance(current_swing, dict) else 0)
-    if warnings:
-        return "source_gap_review_required"
     verifier_windows = (
         verifier_summary.get("lifecycle_bucket_windows")
         if isinstance(verifier_summary.get("lifecycle_bucket_windows"), dict)
@@ -595,6 +707,8 @@ def _primary_verdict(
     )
     if verifier_summary.get("status") == "fail" or verifier_windows.get("status") == "fail":
         return "postclose_verifier_blocked"
+    if warnings:
+        return "source_gap_review_required"
     bridge_live = _safe_int(bridge_summary.get("live_auto_apply_ready_count"))
     if bridge_live > 0 and bridge_summary.get("lifecycle_bucket_promotion_contract_passed") is True:
         return "bridge_live_bucket_ready"
@@ -635,6 +749,8 @@ def _markdown(report: dict[str, Any]) -> str:
     )
     bridge = report.get("bridge_summary") if isinstance(report.get("bridge_summary"), dict) else {}
     verifier = report.get("postclose_verifier_summary") if isinstance(report.get("postclose_verifier_summary"), dict) else {}
+    runtime_gap = report.get("runtime_apply_gap_audit") if isinstance(report.get("runtime_apply_gap_audit"), dict) else {}
+    freshness = report.get("source_freshness") if isinstance(report.get("source_freshness"), dict) else {}
     daily_window = bucket_windows.get("daily") if isinstance(bucket_windows.get("daily"), dict) else {}
     promotion_window = str(bucket_windows.get("promotion_window") or "mtd")
     promotion_summary = (
@@ -697,7 +813,13 @@ def _markdown(report: dict[str, Any]) -> str:
         f"- Bridge/verifier: greenfield_policy_emit_state `{bridge.get('greenfield_policy_emit_state') or '-'}`, "
         f"promotion_contract_passed `{bridge.get('lifecycle_bucket_promotion_contract_passed')}`, "
         f"verifier_status `{verifier.get('status') or '-'}`, "
-        f"verifier_missing `{inline_json(verifier_windows.get('missing') or [])}`.",
+        f"verifier_missing `{inline_json(verifier_windows.get('missing') or [])}`, "
+        f"handoff_warnings `{inline_json(verifier.get('handoff_warnings') or [])}`.",
+        f"- Runtime gap audit: status `{runtime_gap.get('status')}`, directives `{runtime_gap.get('codex_directive_count')}`, "
+        f"source_dimension_gap `{runtime_gap.get('source_dimension_gap_count')}`, quiet_gap `{runtime_gap.get('quiet_gap_count')}`, "
+        f"quiet_gap_directives `{runtime_gap.get('quiet_gap_codex_directive_count')}`.",
+        f"- Source freshness: status `{freshness.get('status')}`, stale_pairs `{freshness.get('stale_pair_count')}`, "
+        f"warning `{freshness.get('warning') or '-'}`.",
         f"- Lifecycle bucket: candidates `{current(ldm_bucket, 'candidate_count')}` "
         f"(`{delta(ldm_bucket, 'candidate_count')}`), surfaced `{current(ldm_bucket, 'surfaced_candidate_count')}` "
         f"(`{delta(ldm_bucket, 'surfaced_candidate_count')}`), sim-auto "
@@ -848,11 +970,15 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
         daily_lifecycle_bucket=payloads["lifecycle_bucket_discovery"],
     )
     bridge = _bridge_summary(payloads["runtime_apply_bridge"])
+    runtime_gap_audit = _runtime_gap_audit_summary(payloads["runtime_apply_gap_audit"])
     verifier = _postclose_verifier_summary(
         payloads["threshold_cycle_postclose_verification"],
         sources["threshold_cycle_postclose_verification"],
     )
     workorder = _workorder_summary(payloads["code_improvement_workorder"])
+    source_freshness = _source_freshness(payloads, payloads["threshold_cycle_postclose_verification"])
+    if source_freshness.get("status") == "warning":
+        warnings.append("source_generation_stale_warning")
     current_ldm_bucket = ldm_bucket.get("current") if isinstance(ldm_bucket.get("current"), dict) else {}
     current_swing_bucket = swing_bucket.get("current") if isinstance(swing_bucket.get("current"), dict) else {}
     daily_bucket_summary = lifecycle_bucket_windows.get("daily") if isinstance(lifecycle_bucket_windows.get("daily"), dict) else {}
@@ -911,6 +1037,17 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
             "bridge_policy_emit_state": bridge.get("greenfield_policy_emit_state"),
             "promotion_window": promotion_window,
             "verifier_status": verifier.get("status"),
+            "verifier_handoff_warning_count": len(verifier.get("handoff_warnings") or []),
+            "verifier_missing_downstream_link_count": len(verifier.get("missing_downstream_links") or []),
+            "runtime_apply_gap_audit_status": runtime_gap_audit.get("status"),
+            "runtime_apply_gap_audit_codex_directive_count": runtime_gap_audit.get("codex_directive_count"),
+            "runtime_apply_gap_audit_source_dimension_gap_count": runtime_gap_audit.get("source_dimension_gap_count"),
+            "runtime_apply_gap_audit_quiet_gap_count": runtime_gap_audit.get("quiet_gap_count"),
+            "runtime_apply_gap_audit_quiet_gap_codex_directive_count": runtime_gap_audit.get(
+                "quiet_gap_codex_directive_count"
+            ),
+            "source_freshness_status": source_freshness.get("status"),
+            "source_generation_stale_warning_count": source_freshness.get("stale_pair_count"),
             "lifecycle_bucket_windows_status": (
                 (verifier.get("lifecycle_bucket_windows") or {}).get("status")
                 if isinstance(verifier.get("lifecycle_bucket_windows"), dict)
@@ -936,9 +1073,11 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
         "ev_authority": ev,
         "selected_runtime": _selected_runtime(apply_plan, threshold_ev),
         "runtime_approval": runtime,
+        "runtime_apply_gap_audit": runtime_gap_audit,
         "lifecycle_bucket_window_summary": lifecycle_bucket_windows,
         "bridge_summary": bridge,
         "postclose_verifier_summary": verifier,
+        "source_freshness": source_freshness,
         "scalp_sim_auto_approval": _scalp_sim_control_tower_summary(scalp_sim_auto, scalp_sim_catalog_path),
         "workorder": workorder,
         "sources": sources,

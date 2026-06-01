@@ -2520,6 +2520,36 @@ def build_threshold_cycle_postclose_verification(
             and _consumer_stale(runtime_summary, pattern_lab_ai_review)
         ):
             stale_downstream_links.append("runtime_approval_summary_stale_before_pattern_lab_ai_review")
+    source_generation_warnings: list[str] = []
+    freshness_sources = {
+        "lifecycle_decision_matrix": ldm_report,
+        "lifecycle_bucket_discovery": discovery_report,
+        "swing_lifecycle_decision_matrix": swing_ldm_report,
+        "swing_lifecycle_bucket_discovery": swing_bucket_discovery_report,
+    }
+    if "daily_ev" not in disabled_stage_flags:
+        for label, source_payload in freshness_sources.items():
+            if source_payload and _consumer_stale(ev_report, source_payload):
+                source_generation_warnings.append(f"threshold_cycle_ev_stale_before_{label}")
+    if "runtime_approval_summary" not in disabled_stage_flags:
+        for label, source_payload in freshness_sources.items():
+            if source_payload and _consumer_stale(runtime_summary, source_payload):
+                source_generation_warnings.append(f"runtime_approval_summary_stale_before_{label}")
+    if "lifecycle_decision_matrix" in disabled_stage_flags or "lifecycle_decision_matrix" not in execution_flags:
+        source_generation_warnings = [
+            key for key in source_generation_warnings if "lifecycle_decision_matrix" not in key
+        ]
+    if "swing_lifecycle_matrix" in disabled_stage_flags or "swing_lifecycle_matrix" not in execution_flags:
+        source_generation_warnings = [
+            key for key in source_generation_warnings if "swing_lifecycle_decision_matrix" not in key
+        ]
+    if "swing_lifecycle_bucket_discovery" in disabled_stage_flags or "swing_lifecycle_bucket_discovery" not in execution_flags:
+        source_generation_warnings = [
+            key for key in source_generation_warnings if "swing_lifecycle_bucket_discovery" not in key
+        ]
+    if "daily_ev" in disabled_stage_flags or "runtime_approval_summary" in disabled_stage_flags:
+        source_generation_warnings = []
+    handoff_warnings.extend(source_generation_warnings)
     if "code_improvement_workorder" in disabled_stage_flags:
         stale_downstream_links = [key for key in stale_downstream_links if "code_improvement_workorder" not in key]
     if "pattern_lab_currentness_audit" in disabled_stage_flags:
@@ -2631,6 +2661,7 @@ def build_threshold_cycle_postclose_verification(
         "downstream_links": downstream_links,
         "missing_downstream_links": missing_downstream_links,
         "stale_downstream_links": stale_downstream_links,
+        "source_generation_warnings": sorted(set(source_generation_warnings)),
         "runtime_apply_gap_audit": {
             "status": runtime_apply_gap_audit_status,
             "issues": runtime_apply_gap_audit_issues,

@@ -132,9 +132,11 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     propagation_idx = script.index("src.engine.pattern_lab_propagation_audit")
     post_propagation_ev_idx = script.index('run_threshold_cycle_ev_and_wait "post_propagation_audit_refresh"')
     runtime_summary_idx = script.index("src.engine.runtime_approval_summary")
-    tuning_control_idx = script.index("src.engine.automation.tuning_performance_control_tower")
     runtime_gap_idx = script.index("src.engine.runtime_apply_gap_audit")
     next_checklist_idx = script.rindex("src.engine.build_next_stage2_checklist")
+    pending_verify_idx = script.index("src.engine.verify_threshold_cycle_postclose_chain --date \"$TARGET_DATE\" --allow-pending-done-marker")
+    final_verify_idx = script.index("src.engine.verify_threshold_cycle_postclose_chain --date \"$TARGET_DATE\"", pending_verify_idx + 1)
+    tuning_control_idx = script.index("src.engine.automation.tuning_performance_control_tower")
 
     assert (
         sim_post_sell_idx
@@ -159,9 +161,11 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         < propagation_idx
         < post_propagation_ev_idx
         < runtime_summary_idx
-        < tuning_control_idx
         < runtime_gap_idx
         < next_checklist_idx
+        < pending_verify_idx
+        < final_verify_idx
+        < tuning_control_idx
     )
     assert 'RUN_PATTERN_LAB_PROPAGATION_AUDIT="${THRESHOLD_CYCLE_RUN_PATTERN_LAB_PROPAGATION_AUDIT:-true}"' in script
     assert 'RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL="${THRESHOLD_CYCLE_RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL:-true}"' in script
