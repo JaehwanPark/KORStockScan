@@ -18,8 +18,8 @@
 - identity_join_rate: `1.0`
 - complete_flow_rate: `0.346154`
 - join_contract_blocked: `False`
-- swing_entry_bottleneck_primary: `None`
-- swing_lifecycle_contract_gap_count: `None`
+- swing_entry_bottleneck_primary: `SWING_ENTRY_BOTTLENECK_OBSERVE`
+- swing_lifecycle_contract_gap_count: `4`
 - daily_simulation_consumed: `False`
 - warnings: `['swing_strategy_discovery_sim_missing']`
 

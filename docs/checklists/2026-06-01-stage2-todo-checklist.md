@@ -108,6 +108,13 @@
     - old/new CLI 모두 종료 코드 0.
   - 금지: cron/job id 출력 경로/runtime/path semantics 변경.
 
+- [x] `[DashboardArchiveSameDayCron0601] dashboard DB archive 금요일 평문 잔존 방지 및 same-day 검증 압축 운영 반영` (`Due: 2026-06-01`, `Slot: POSTCLOSE`, `TimeWindow: 18:20~18:35`, `Track: RunbookOps`)
+  - Source: [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md), [run_dashboard_db_archive_cron.sh](/home/ubuntu/KORStockScan/deploy/run_dashboard_db_archive_cron.sh), crontab `DASHBOARD_DB_ARCHIVE_2310`
+  - 판정 기준: 서버는 주말에 꺼져 있으므로 주말 cron에 의존하지 않는다. 금요일 대형 `pipeline_events` raw/snapshot이 월요일 장중까지 평문으로 남지 않도록 평일 23:10 `dashboard_db_archive`를 same-day verified/backfilled 압축으로 전환한다.
+  - 처리 결과(2026-06-01 KST): `same_day_verified_archive_cron_applied`.
+  - 근거: 실제 crontab의 `DASHBOARD_DB_ARCHIVE_2310`를 `10 23 * * 1-5 /home/ubuntu/KORStockScan/deploy/run_dashboard_db_archive_cron.sh 0 ...`로 변경했다. `compress_db_backfilled_files --days 0 --date 2026-05-29 --dry-run`은 2026-05-29 raw와 threshold snapshot을 verified compression 대상으로 잡아 약 `2.2GB` 저장공간 회수 가능성을 보였다. `--days 0 --date 2026-06-01 --dry-run`은 2026-06-01 threshold snapshot을 포함해 verified snapshot을 압축 대상으로 잡지만, 2026-06-01 raw pipeline은 parquet 검증이 없으면 skip된다. 미검증 raw는 압축하지 않는 기존 guard를 유지한다.
+  - 금지: 미검증 파일 강제 삭제, 당일 raw 수동 삭제, threshold/order/provider/bot 변경으로 해석하지 않는다.
+
 - [ ] `[HumanInterventionSummary0601] 자동화체인 사용자 개입 요구사항 분류 및 누락 확인` (`Due: 2026-06-01`, `Slot: POSTCLOSE`, `TimeWindow: 17:30~17:45`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-29.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-29.json), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
   - 판정 기준: 개입사항을 `approval_artifact_required|created|missing|blocked_by_policy|observe_only`, `Codex 구현 필요`, `수동 동기화 필요`, `관찰만`으로 분류한다.

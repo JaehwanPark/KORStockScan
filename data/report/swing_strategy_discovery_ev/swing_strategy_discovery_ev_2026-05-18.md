@@ -1,6 +1,6 @@
 # Swing Strategy Discovery EV - 2026-05-18
 
-- generated_at: `2026-06-01T15:36:48`
+- generated_at: `2026-06-01T18:11:12`
 - runtime_effect: `False`
 - decision_authority: `swing_sim_exploration_only`
 - candidate/arm/policy_exit_rows: `0` / `0` / `0`

@@ -1,6 +1,6 @@
 # Swing Strategy Discovery Sim - 2026-05-20
 
-- generated_at: `2026-06-01T15:45:56`
+- generated_at: `2026-06-01T18:20:06`
 - policy_version: `swing_strategy_discovery_sim_v1`
 - mode: `sim_only_aggressive_exploration`
 - runtime_effect: `False`

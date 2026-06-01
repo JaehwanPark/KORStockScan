@@ -1,21 +1,21 @@
 # Swing Strategy Discovery Sim - 2026-05-26
 
-- generated_at: `2026-05-26T22:19:03`
+- generated_at: `2026-06-01T18:33:26`
 - policy_version: `swing_strategy_discovery_sim_v1`
 - mode: `sim_only_aggressive_exploration`
 - runtime_effect: `False`
 - decision_authority: `swing_sim_exploration_only`
-- candidate_count: `50`
-- arm_count: `240`
-- bottom_rebound_selected_candidate_count: `32`
-- bottom_rebound_arm_count: `96`
+- candidate_count: `0`
+- arm_count: `0`
+- bottom_rebound_selected_candidate_count: `0`
+- bottom_rebound_arm_count: `0`
 - bottom_rebound_persisted_candidate_count: `0`
 - bottom_rebound_persisted_arm_count: `0`
-- selection_arm_counts: `{'diversity_exploration': 15, 'legacy_ml': 1, 'lifecycle_rank': 34}`
-- block_reason_counts: `{'no_block_observed': 47, 'blocked_gatekeeper_reject': 2, 'blocked_swing_score_vpw': 1}`
-- source_family_bucket_counts: `{'bottom_rebound': 32, 'safe_pool': 18}`
-- quote_feature_coverage: `1.0`
-- warnings: `['sector_theme:manual_sector_missing', 'sector_theme:sector_theme_missing']`
+- selection_arm_counts: `{}`
+- block_reason_counts: `{}`
+- source_family_bucket_counts: `{}`
+- quote_feature_coverage: `0.0`
+- warnings: `['safe_pool_source_empty']`
 
 ## Arm Set
 

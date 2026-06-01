@@ -173,6 +173,8 @@ BASE_FORBIDDEN_USES = with_evidence_authority_forbidden_uses(
     ]
 )
 SOURCE_CONTRACT_SCHEMA_VERSION = "lifecycle_source_contract_snapshot_v2"
+LEGACY_DAILY_LDM_SOURCE_KEY = "daily_lifecycle_decision_matrix_reports"
+CANONICAL_PER_DATE_SOURCE_KEY = "per_date_sources"
 SOURCE_CONTRACT_SECTION_SCHEMAS: dict[str, dict[str, tuple[str, ...]]] = {
     "lifecycle_flow_bucket_attribution": {
         "bucket_types": ("combo_lifecycle_flow",),
@@ -291,6 +293,8 @@ SOURCE_CONTRACT_SECTION_SCHEMAS: dict[str, dict[str, tuple[str, ...]]] = {
             "bucket_key",
             "bucket_type",
             "decision_authority",
+            "diagnostic_win_rate",
+            "equal_weight_avg_profit_pct",
             "forbidden_uses",
             "join_rate",
             "joined_sample",
@@ -674,6 +678,29 @@ def _source_dimensions(bucket_type: str, bucket_key: str) -> dict[str, str]:
     return dimensions or {bucket_type: bucket_key}
 
 
+def _explicit_lifecycle_flow_dimensions(bucket: dict[str, Any]) -> dict[str, str]:
+    child_ids = bucket.get("child_bucket_ids") if isinstance(bucket.get("child_bucket_ids"), dict) else {}
+    dimensions: dict[str, str] = {}
+    for stage_key, field in (
+        ("entry", "entry_bucket_id"),
+        ("submit", "submit_bucket_id"),
+        ("holding", "holding_bucket_id"),
+        ("scale_in", "scale_in_bucket_id"),
+        ("exit", "exit_bucket_id"),
+    ):
+        value = bucket.get(field) or child_ids.get(stage_key)
+        if value and str(value).strip().lower() not in {"missing", "none", "null"}:
+            dimensions[stage_key] = str(value)
+    return dimensions
+
+
+def _candidate_source_dimensions(stage: str, bucket_type: str, bucket_key: str, bucket: dict[str, Any]) -> dict[str, str]:
+    dimensions = _source_dimensions(bucket_type, bucket_key)
+    if stage == "lifecycle_flow" or bucket_type == "combo_lifecycle_flow":
+        dimensions = {**dimensions, **_explicit_lifecycle_flow_dimensions(bucket)}
+    return dimensions
+
+
 def _stable_source_bucket_id(stage: str, bucket_type: str, bucket_key: str) -> str:
     raw = f"{stage}|{bucket_type}|{bucket_key}"
     digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:10]
@@ -703,7 +730,12 @@ def _source_bucket_kind(candidate_state: str, bucket: dict[str, Any]) -> str:
 def _lifecycle_flow_missing_stage_keys(bucket: dict[str, Any]) -> list[str]:
     if str(bucket.get("stage") or "") != "lifecycle_flow" and str(bucket.get("bucket_type") or "") != "combo_lifecycle_flow":
         return []
-    dimensions = _source_dimensions(str(bucket.get("bucket_type") or ""), str(bucket.get("bucket_key") or ""))
+    dimensions = _candidate_source_dimensions(
+        str(bucket.get("stage") or ""),
+        str(bucket.get("bucket_type") or ""),
+        str(bucket.get("bucket_key") or ""),
+        bucket,
+    )
     missing: list[str] = []
     for stage_key, field in (
         ("entry", "entry_bucket_id"),
@@ -1630,6 +1662,12 @@ def _normalize_source_contract_for_compare(contract: dict[str, Any]) -> dict[str
     normalized = json.loads(json.dumps(contract, ensure_ascii=False, default=str))
     normalized["schema_version"] = SOURCE_CONTRACT_SCHEMA_VERSION
     normalized["compare_policy"] = "declared_schema_plus_observed_samples"
+    source_keys = {
+        CANONICAL_PER_DATE_SOURCE_KEY if str(item) == LEGACY_DAILY_LDM_SOURCE_KEY else str(item)
+        for item in (normalized.get("source_keys") or [])
+        if str(item)
+    }
+    normalized["source_keys"] = sorted(source_keys)
     sections = normalized.get("sections") if isinstance(normalized.get("sections"), dict) else {}
     normalized["sections"] = sections
     for section_name, declared in SOURCE_CONTRACT_SECTION_SCHEMAS.items():
@@ -1660,6 +1698,8 @@ def _normalize_source_contract_for_compare(contract: dict[str, Any]) -> dict[str
 def _compare_source_contracts(current: dict[str, Any], previous: dict[str, Any]) -> list[dict[str, Any]]:
     if not previous:
         return []
+    raw_current_sources = {str(item) for item in (current.get("source_keys") or []) if str(item)}
+    raw_previous_sources = {str(item) for item in (previous.get("source_keys") or []) if str(item)}
     current = _normalize_source_contract_for_compare(current)
     previous = _normalize_source_contract_for_compare(previous)
     changes: list[dict[str, Any]] = []
@@ -1674,6 +1714,19 @@ def _compare_source_contracts(current: dict[str, Any], previous: dict[str, Any])
                 "decision_authority": "source_contract_drift_detection",
             }
         )
+
+    for contract_side, raw_sources in (("current", raw_current_sources), ("previous", raw_previous_sources)):
+        if LEGACY_DAILY_LDM_SOURCE_KEY in raw_sources and CANONICAL_PER_DATE_SOURCE_KEY in raw_sources:
+            _add(
+                "source_alias_duplicate",
+                "warning",
+                CANONICAL_PER_DATE_SOURCE_KEY,
+                {
+                    "contract_side": contract_side,
+                    "legacy_source_key": LEGACY_DAILY_LDM_SOURCE_KEY,
+                    "canonical_source_key": CANONICAL_PER_DATE_SOURCE_KEY,
+                },
+            )
 
     current_sources = set(current.get("source_keys") or [])
     previous_sources = set(previous.get("source_keys") or [])
@@ -1878,7 +1931,7 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
     source_bucket_id = _stable_source_bucket_id(stage, bucket_type, bucket_key)
     joined_sample = _safe_int(bucket.get("joined_sample"))
     sample = _safe_int(bucket.get("sample"), joined_sample)
-    source_dimensions = _source_dimensions(bucket_type, bucket_key)
+    source_dimensions = _candidate_source_dimensions(stage, bucket_type, bucket_key, bucket)
     taxonomy = normalize_lifecycle_bucket(
         stage=stage,
         bucket_type=bucket_type,
@@ -1911,7 +1964,14 @@ def _candidate_from_bucket(stage: str, bucket: dict[str, Any]) -> dict[str, Any]
         and "unknown" in bucket_key
     ):
         source_dimension_gap = "legacy_contract_known_unknown"
-    elif "unknown" in bucket_key:
+    elif (
+        "unknown" in bucket_key
+        and (
+            stage != "lifecycle_flow"
+            and bucket_type != "combo_lifecycle_flow"
+            or bool(taxonomy.get("missing_dimension_keys"))
+        )
+    ):
         source_dimension_gap = "unknown_source_dimensions"
     runtime_apply_allowed = state == "live_auto_apply_ready" and not lifecycle_flow_source_only_blocker
     runtime_metadata_state = state if not lifecycle_flow_source_only_blocker else "source_only_keep_collecting"

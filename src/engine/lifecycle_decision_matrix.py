@@ -2238,6 +2238,11 @@ def _submit_bucket_row(bucket_type: str, bucket_key: str, rows: list[dict[str, A
     joined_sample = len(joined)
     ev_values = [float(row["stage_ev_composite_pct"]) for row in joined]
     avg_ev = round(sum(ev_values) / len(ev_values), 4) if ev_values else None
+    win_rate = (
+        round(sum(1 for value in ev_values if value > 0) / len(ev_values), 6)
+        if ev_values
+        else None
+    )
     source_quality = "pass" if len(rows) >= SUBMIT_BUCKET_SAMPLE_FLOOR else "hold_sample"
     unknown_context = _unknown_taxonomy_context(
         bucket_type=bucket_type,
@@ -2254,6 +2259,8 @@ def _submit_bucket_row(bucket_type: str, bucket_key: str, rows: list[dict[str, A
         "join_rate": round(joined_sample / len(rows), 4) if rows else 0.0,
         "source_quality_gate": source_quality,
         "source_quality_adjusted_ev_pct": avg_ev,
+        "equal_weight_avg_profit_pct": avg_ev,
+        "diagnostic_win_rate": win_rate,
         "recommended_route": "source_quality_workorder" if "unknown" in bucket_key else "keep_collecting",
         **unknown_context,
         "decision_authority": "adm_ldm_submit_bucket_attribution_source_only",

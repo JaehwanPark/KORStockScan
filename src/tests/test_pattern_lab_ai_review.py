@@ -59,6 +59,528 @@ def test_pattern_lab_ai_review_builds_two_pass_source_only_report(tmp_path, monk
     assert (report_dir / "pattern_lab_ai_review" / "pattern_lab_ai_review_2026-05-15.json").exists()
 
 
+def test_pattern_lab_ai_review_embeds_feedback_handoff_summary(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    _write_json(
+        report_dir / "pattern_lab_currentness_audit" / "pattern_lab_currentness_audit_2026-05-15.json",
+        {
+            "status": "pass",
+            "summary": {
+                "consumed_feedback_source_count": 6,
+                "missing_feedback_source_count": 0,
+            },
+            "checks": [],
+        },
+    )
+    for label in (
+        "threshold_cycle_ev",
+        "lifecycle_decision_matrix",
+        "lifecycle_bucket_discovery",
+        "swing_lifecycle_decision_matrix",
+        "swing_lifecycle_bucket_discovery",
+        "swing_strategy_discovery_ev",
+    ):
+        _write_json(
+            report_dir / label / f"{label}_2026-05-15.json",
+            {
+                "status": "pass",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "summary": {"candidate_count": 1},
+            },
+        )
+
+    report = mod.build_pattern_lab_ai_review_report("2026-05-15", provider="none")
+
+    handoff = report["feedback_handoff_summary"]
+    assert handoff["status"] == "pass"
+    assert handoff["runtime_effect"] is False
+    assert report["summary"]["feedback_handoff_status"] == "pass"
+    assert "automation_handoff_gap" in handoff["interpretation_hint"]
+
+
+def test_pattern_lab_ai_review_resolves_generic_handoff_gap_when_feedback_sources_closed(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    _write_json(
+        report_dir / "pattern_lab_currentness_audit" / "pattern_lab_currentness_audit_2026-05-15.json",
+        {
+            "status": "pass",
+            "summary": {
+                "consumed_feedback_source_count": 6,
+                "missing_feedback_source_count": 0,
+            },
+            "checks": [],
+        },
+    )
+    for label in (
+        "threshold_cycle_ev",
+        "lifecycle_decision_matrix",
+        "lifecycle_bucket_discovery",
+        "swing_lifecycle_decision_matrix",
+        "swing_lifecycle_bucket_discovery",
+        "swing_strategy_discovery_ev",
+    ):
+        _write_json(
+            report_dir / label / f"{label}_2026-05-15.json",
+            {"status": "pass", "runtime_effect": False, "allowed_runtime_apply": False},
+        )
+    raw_response = {
+        "schema_version": 1,
+        "interpretation": {"review_items": [], "source_feedback_status": "warning"},
+        "audit": {
+            "status": "correction_required",
+            "issues": ["automation_handoff_gap:1"],
+            "forbidden_use_violations": [],
+            "reason": "AI over-classified a generic handoff gap.",
+        },
+        "final_conclusions": [
+            {
+                "review_id": "interpretation_1",
+                "domain": "swing",
+                "final_state": "automation_handoff_gap",
+                "final_decision": "block_runtime_use",
+                "reason": "Generic handoff gap despite currentness pass.",
+                "required_followup": ["create_workorder"],
+            }
+        ],
+    }
+
+    report = mod.build_pattern_lab_ai_review_report("2026-05-15", provider="openai", ai_raw_response=raw_response)
+
+    assert report["status"] == "pass"
+    assert report["summary"]["audit_status"] == "pass"
+    assert report["code_improvement_orders"] == []
+    conclusion = report["ai_two_pass_review"]["final_conclusions"][0]
+    assert conclusion["final_state"] == "source_only_keep_collecting"
+    assert conclusion["final_decision"] == "keep"
+    assert conclusion["feedback_handoff_resolution"]["status"] == "resolved_by_currentness_feedback_handoff_pass"
+
+
+def test_pattern_lab_ai_review_keeps_specific_handoff_gap_when_feedback_sources_closed(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    _write_json(
+        report_dir / "pattern_lab_currentness_audit" / "pattern_lab_currentness_audit_2026-05-15.json",
+        {
+            "status": "pass",
+            "summary": {
+                "consumed_feedback_source_count": 6,
+                "missing_feedback_source_count": 0,
+            },
+            "checks": [],
+        },
+    )
+    for label in (
+        "threshold_cycle_ev",
+        "lifecycle_decision_matrix",
+        "lifecycle_bucket_discovery",
+        "swing_lifecycle_decision_matrix",
+        "swing_lifecycle_bucket_discovery",
+        "swing_strategy_discovery_ev",
+    ):
+        _write_json(
+            report_dir / label / f"{label}_2026-05-15.json",
+            {"status": "pass", "runtime_effect": False, "allowed_runtime_apply": False},
+        )
+    raw_response = {
+        "schema_version": 1,
+        "interpretation": {"review_items": [], "source_feedback_status": "warning"},
+        "audit": {
+            "status": "correction_required",
+            "issues": ["automation_handoff_gap:1"],
+            "forbidden_use_violations": [],
+            "reason": "AI surfaced a specific unresolved workorder handoff.",
+        },
+        "final_conclusions": [
+            {
+                "review_id": "order_swing_lifecycle_candidate_handoff_missing",
+                "domain": "swing",
+                "final_state": "automation_handoff_gap",
+                "final_decision": "surface_workorder",
+                "reason": "Specific candidate handoff remains unresolved.",
+                "required_followup": ["create_workorder"],
+            }
+        ],
+    }
+
+    report = mod.build_pattern_lab_ai_review_report("2026-05-15", provider="openai", ai_raw_response=raw_response)
+
+    assert report["status"] == "warning"
+    assert report["summary"]["audit_status"] == "correction_required"
+    assert any(
+        order["order_id"] == "order_pattern_lab_ai_review_order_swing_lifecycle_candidate_handoff_missing"
+        for order in report["code_improvement_orders"]
+    )
+    conclusion = report["ai_two_pass_review"]["final_conclusions"][0]
+    assert conclusion["final_state"] == "automation_handoff_gap"
+    assert "feedback_handoff_resolution" not in conclusion
+
+
+def test_pattern_lab_ai_review_generic_resolution_ids_exclude_specific_source_gaps():
+    assert "ai_review_two_pass_missing" not in mod.GENERIC_FEEDBACK_HANDOFF_REVIEW_IDS
+    assert "ai_two_pass_review_missing" not in mod.GENERIC_FEEDBACK_HANDOFF_REVIEW_IDS
+    assert "threshold_cycle_ev_source_contract_drift_warning" not in mod.GENERIC_FEEDBACK_HANDOFF_REVIEW_IDS
+
+
+def test_pattern_lab_ai_review_resolves_swing_ai_review_missing_when_no_sim_auto_candidates(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    _write_json(
+        report_dir / "pattern_lab_currentness_audit" / "pattern_lab_currentness_audit_2026-05-15.json",
+        {
+            "status": "pass",
+            "summary": {
+                "consumed_feedback_source_count": 6,
+                "missing_feedback_source_count": 0,
+            },
+            "checks": [],
+        },
+    )
+    for label in (
+        "threshold_cycle_ev",
+        "lifecycle_decision_matrix",
+        "lifecycle_bucket_discovery",
+        "swing_lifecycle_decision_matrix",
+        "swing_strategy_discovery_ev",
+    ):
+        _write_json(
+            report_dir / label / f"{label}_2026-05-15.json",
+            {"status": "pass", "runtime_effect": False, "allowed_runtime_apply": False},
+        )
+    _write_json(
+        report_dir / "swing_lifecycle_bucket_discovery" / "swing_lifecycle_bucket_discovery_2026-05-15.json",
+        {
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "summary": {
+                "source_contract_status": "pass",
+                "ai_fail_closed": False,
+                "ai_review_followup_required": False,
+                "sim_auto_blocked_by_ai_review_followup": False,
+                "pre_review_sim_auto_candidate_count": 0,
+                "sim_auto_unreviewed_candidate_count": 0,
+                "sim_auto_downgraded_by_review_count": 0,
+            },
+        },
+    )
+    raw_response = {
+        "schema_version": 1,
+        "interpretation": {"review_items": [], "source_feedback_status": "warning"},
+        "audit": {
+            "status": "correction_required",
+            "issues": ["ai_review_two_pass_missing"],
+            "forbidden_use_violations": [],
+            "reason": "AI over-classified source-only empty swing AI review.",
+        },
+        "final_conclusions": [
+            {
+                "review_id": "ai_review_two_pass_missing",
+                "domain": "swing",
+                "final_state": "ai_review_gap",
+                "final_decision": "block_runtime_use",
+                "reason": "swing_lifecycle_bucket_discovery lacks required two-pass AI review.",
+                "required_followup": ["review_ai_contract"],
+            }
+        ],
+    }
+
+    report = mod.build_pattern_lab_ai_review_report("2026-05-15", provider="openai", ai_raw_response=raw_response)
+
+    assert report["status"] == "pass"
+    assert report["summary"]["audit_status"] == "pass"
+    assert report["code_improvement_orders"] == []
+    conclusion = report["ai_two_pass_review"]["final_conclusions"][0]
+    assert conclusion["final_state"] == "source_only_keep_collecting"
+    assert conclusion["source_context_resolution"]["status"] == "resolved_by_source_only_empty_sim_auto_review_contract"
+
+
+def test_pattern_lab_ai_review_keeps_swing_ai_review_missing_when_sim_auto_candidates_unreviewed(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    _write_json(
+        report_dir / "pattern_lab_currentness_audit" / "pattern_lab_currentness_audit_2026-05-15.json",
+        {
+            "status": "pass",
+            "summary": {
+                "consumed_feedback_source_count": 6,
+                "missing_feedback_source_count": 0,
+            },
+            "checks": [],
+        },
+    )
+    for label in (
+        "threshold_cycle_ev",
+        "lifecycle_decision_matrix",
+        "lifecycle_bucket_discovery",
+        "swing_lifecycle_decision_matrix",
+        "swing_strategy_discovery_ev",
+    ):
+        _write_json(
+            report_dir / label / f"{label}_2026-05-15.json",
+            {"status": "pass", "runtime_effect": False, "allowed_runtime_apply": False},
+        )
+    _write_json(
+        report_dir / "swing_lifecycle_bucket_discovery" / "swing_lifecycle_bucket_discovery_2026-05-15.json",
+        {
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "summary": {
+                "source_contract_status": "pass",
+                "ai_fail_closed": False,
+                "ai_review_followup_required": False,
+                "sim_auto_blocked_by_ai_review_followup": False,
+                "pre_review_sim_auto_candidate_count": 1,
+                "sim_auto_unreviewed_candidate_count": 1,
+                "sim_auto_downgraded_by_review_count": 0,
+            },
+        },
+    )
+    raw_response = {
+        "schema_version": 1,
+        "interpretation": {"review_items": [], "source_feedback_status": "warning"},
+        "audit": {
+            "status": "correction_required",
+            "issues": ["ai_review_two_pass_missing"],
+            "forbidden_use_violations": [],
+            "reason": "AI surfaced a real swing review gap.",
+        },
+        "final_conclusions": [
+            {
+                "review_id": "ai_review_two_pass_missing",
+                "domain": "swing",
+                "final_state": "ai_review_gap",
+                "final_decision": "block_runtime_use",
+                "reason": "swing_lifecycle_bucket_discovery lacks required two-pass AI review.",
+                "required_followup": ["review_ai_contract"],
+            }
+        ],
+    }
+
+    report = mod.build_pattern_lab_ai_review_report("2026-05-15", provider="openai", ai_raw_response=raw_response)
+
+    assert report["status"] == "warning"
+    assert report["summary"]["audit_status"] == "correction_required"
+    assert any(order["review_id"] == "ai_review_two_pass_missing" for order in report["code_improvement_orders"])
+    conclusion = report["ai_two_pass_review"]["final_conclusions"][0]
+    assert conclusion["final_state"] == "ai_review_gap"
+    assert "source_context_resolution" not in conclusion
+
+
+def test_pattern_lab_ai_review_resolves_threshold_ev_incomplete_with_classified_source_only_warnings(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    _write_json(
+        report_dir / "pattern_lab_currentness_audit" / "pattern_lab_currentness_audit_2026-05-15.json",
+        {
+            "status": "pass",
+            "summary": {
+                "consumed_feedback_source_count": 6,
+                "missing_feedback_source_count": 0,
+            },
+            "checks": [],
+        },
+    )
+    for label in (
+        "lifecycle_decision_matrix",
+        "lifecycle_bucket_discovery",
+        "swing_lifecycle_decision_matrix",
+        "swing_strategy_discovery_ev",
+    ):
+        _write_json(
+            report_dir / label / f"{label}_2026-05-15.json",
+            {"status": "pass", "runtime_effect": False, "allowed_runtime_apply": False},
+        )
+    _write_json(
+        report_dir / "threshold_cycle_ev" / "threshold_cycle_ev_2026-05-15.json",
+        {
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "warnings": [
+                "swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_fail_closed",
+                "pattern_lab_ai_review_warning",
+            ],
+        },
+    )
+    _write_json(
+        report_dir / "swing_lifecycle_bucket_discovery" / "swing_lifecycle_bucket_discovery_2026-05-15.json",
+        {
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "summary": {
+                "source_contract_status": "pass",
+                "ai_fail_closed": False,
+                "ai_review_followup_required": False,
+                "pre_review_sim_auto_candidate_count": 0,
+                "sim_auto_unreviewed_candidate_count": 0,
+            },
+        },
+    )
+    raw_response = {
+        "schema_version": 1,
+        "interpretation": {"review_items": [], "source_feedback_status": "warning"},
+        "audit": {
+            "status": "correction_required",
+            "issues": ["threshold_cycle_ev_incomplete"],
+            "forbidden_use_violations": [],
+            "reason": "AI over-classified classified threshold EV warnings.",
+        },
+        "final_conclusions": [
+            {
+                "review_id": "threshold_cycle_ev_incomplete",
+                "domain": "scalping",
+                "final_state": "automation_handoff_gap",
+                "final_decision": "block_runtime_use",
+                "reason": "threshold_cycle_ev has null status and classified warnings.",
+                "required_followup": ["review_threshold_ev"],
+            }
+        ],
+    }
+
+    report = mod.build_pattern_lab_ai_review_report("2026-05-15", provider="openai", ai_raw_response=raw_response)
+
+    assert report["status"] == "pass"
+    assert report["summary"]["audit_status"] == "pass"
+    assert report["code_improvement_orders"] == []
+    conclusion = report["ai_two_pass_review"]["final_conclusions"][0]
+    assert conclusion["final_state"] == "source_only_keep_collecting"
+    assert conclusion["source_context_resolution"]["status"] == "resolved_by_classified_threshold_ev_source_only_warnings"
+
+
+def test_pattern_lab_ai_review_keeps_threshold_ev_incomplete_on_unclassified_warning(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    _write_json(
+        report_dir / "pattern_lab_currentness_audit" / "pattern_lab_currentness_audit_2026-05-15.json",
+        {
+            "status": "pass",
+            "summary": {
+                "consumed_feedback_source_count": 6,
+                "missing_feedback_source_count": 0,
+            },
+            "checks": [],
+        },
+    )
+    for label in (
+        "lifecycle_decision_matrix",
+        "lifecycle_bucket_discovery",
+        "swing_lifecycle_decision_matrix",
+        "swing_strategy_discovery_ev",
+    ):
+        _write_json(
+            report_dir / label / f"{label}_2026-05-15.json",
+            {"status": "pass", "runtime_effect": False, "allowed_runtime_apply": False},
+        )
+    _write_json(
+        report_dir / "threshold_cycle_ev" / "threshold_cycle_ev_2026-05-15.json",
+        {
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "warnings": ["unexpected_contract_warning"],
+        },
+    )
+    _write_json(
+        report_dir / "swing_lifecycle_bucket_discovery" / "swing_lifecycle_bucket_discovery_2026-05-15.json",
+        {
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "summary": {
+                "source_contract_status": "pass",
+                "ai_fail_closed": False,
+                "ai_review_followup_required": False,
+                "pre_review_sim_auto_candidate_count": 0,
+                "sim_auto_unreviewed_candidate_count": 0,
+            },
+        },
+    )
+    raw_response = {
+        "schema_version": 1,
+        "interpretation": {"review_items": [], "source_feedback_status": "warning"},
+        "audit": {
+            "status": "correction_required",
+            "issues": ["threshold_cycle_ev_incomplete"],
+            "forbidden_use_violations": [],
+            "reason": "AI surfaced threshold EV warning.",
+        },
+        "final_conclusions": [
+            {
+                "review_id": "threshold_cycle_ev_incomplete",
+                "domain": "scalping",
+                "final_state": "automation_handoff_gap",
+                "final_decision": "block_runtime_use",
+                "reason": "threshold_cycle_ev has an unclassified warning.",
+                "required_followup": ["review_threshold_ev"],
+            }
+        ],
+    }
+
+    report = mod.build_pattern_lab_ai_review_report("2026-05-15", provider="openai", ai_raw_response=raw_response)
+
+    assert report["status"] == "warning"
+    assert any(order["review_id"] == "threshold_cycle_ev_incomplete" for order in report["code_improvement_orders"])
+    conclusion = report["ai_two_pass_review"]["final_conclusions"][0]
+    assert conclusion["final_state"] == "automation_handoff_gap"
+    assert "source_context_resolution" not in conclusion
+
+
+def test_pattern_lab_ai_review_keeps_forbidden_use_gap_when_feedback_sources_closed(tmp_path, monkeypatch):
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    _write_json(
+        report_dir / "pattern_lab_currentness_audit" / "pattern_lab_currentness_audit_2026-05-15.json",
+        {
+            "status": "pass",
+            "summary": {
+                "consumed_feedback_source_count": 6,
+                "missing_feedback_source_count": 0,
+            },
+            "checks": [],
+        },
+    )
+    for label in (
+        "threshold_cycle_ev",
+        "lifecycle_decision_matrix",
+        "lifecycle_bucket_discovery",
+        "swing_lifecycle_decision_matrix",
+        "swing_lifecycle_bucket_discovery",
+        "swing_strategy_discovery_ev",
+    ):
+        _write_json(
+            report_dir / label / f"{label}_2026-05-15.json",
+            {"status": "pass", "runtime_effect": False, "allowed_runtime_apply": False},
+        )
+    raw_response = {
+        "schema_version": 1,
+        "interpretation": {"review_items": [], "source_feedback_status": "warning"},
+        "audit": {
+            "status": "correction_required",
+            "issues": ["automation_handoff_gap:1"],
+            "forbidden_use_violations": ["runtime env apply"],
+            "reason": "AI attempted a forbidden runtime use.",
+        },
+        "final_conclusions": [
+            {
+                "review_id": "interpretation_1",
+                "domain": "swing",
+                "final_state": "automation_handoff_gap",
+                "final_decision": "block_runtime_use",
+                "reason": "Forbidden runtime use must remain blocked.",
+                "required_followup": ["remove_forbidden_use"],
+            }
+        ],
+    }
+
+    report = mod.build_pattern_lab_ai_review_report("2026-05-15", provider="openai", ai_raw_response=raw_response)
+
+    assert report["status"] == "warning"
+    assert report["summary"]["audit_status"] == "correction_required"
+    assert report["ai_two_pass_review"]["audit"]["forbidden_use_violations"] == ["runtime env apply"]
+    conclusion = report["ai_two_pass_review"]["final_conclusions"][0]
+    assert conclusion["final_state"] == "automation_handoff_gap"
+    assert "feedback_handoff_resolution" not in conclusion
+
+
 def test_pattern_lab_ai_review_accepts_strict_ai_response_with_audit(tmp_path, monkeypatch):
     report_dir = tmp_path / "data" / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)

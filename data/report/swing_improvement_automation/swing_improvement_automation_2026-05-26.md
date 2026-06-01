@@ -9,7 +9,6 @@
 
 | order_id | stage | subsystem | route | family | priority |
 | --- | --- | --- | --- | --- | ---: |
-| `order_swing_entry_bottleneck_auto_resolution` | `entry` | `swing_entry` | `instrumentation_order` | `swing_gatekeeper_accept_reject` | 0 |
 | `order_swing_gatekeeper_reject_threshold_review` | `entry` | `swing_entry` | `existing_family` | `swing_gatekeeper_accept_reject` | 3 |
 | `order_swing_ofi_qi_stale_or_missing_context` | `entry` | `swing_orderbook_micro_context` | `existing_family` | `swing_entry_ofi_qi_execution_quality` | 4 |
 | `order_swing_holding_exit_contract_gap_review` | `holding_exit` | `swing_holding_exit` | `instrumentation_order` | `swing_exit_ofi_qi_smoothing` | 4 |

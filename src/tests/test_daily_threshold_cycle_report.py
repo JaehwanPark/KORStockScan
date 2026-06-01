@@ -2700,3 +2700,33 @@ def test_window_policy_registry_consumes_rolling_source_metrics_when_snapshot_sa
     audit_item = report["window_policy_audit"]["items"][0]
     assert audit_item["snapshot_alignment_status"] == "source_denominator_used"
     assert "rendering-only" in audit_item["snapshot_alignment_reason"]
+
+
+def test_window_policy_audit_keeps_ready_rolling_daily_source_split_as_lineage():
+    candidates = [
+        {
+            "family": "soft_stop_whipsaw_confirmation",
+            "source_sample_count": 3,
+            "sample_floor": 10,
+            "calibration_state": "hold_sample",
+            "window_policy_resolution": {
+                "primary": "rolling_10d",
+                "daily_only_allowed": False,
+                "primary_sample_ready": True,
+                "primary_snapshot_available": True,
+                "primary_source_available": True,
+                "primary_sample_count": 7417,
+                "primary_snapshot_sample_count": 7417,
+                "primary_source_sample_count": 7417,
+            },
+        }
+    ]
+
+    audit = report_mod._build_window_policy_audit(candidates)
+
+    assert audit["status"] == "pass"
+    assert audit["issue_counts"] == {}
+    assert audit["lineage_warning_counts"] == {"rolling_ready_daily_source_split": 1}
+    item = audit["items"][0]
+    assert item["source_sample_split_status"] == "documented_daily_source_split"
+    assert "lineage evidence" in item["source_sample_split_reason"]

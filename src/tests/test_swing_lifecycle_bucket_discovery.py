@@ -110,7 +110,7 @@ def _flow_bucket(
 
 
 def test_swing_lifecycle_bucket_ai_review_rejects_real_preapply_primary_ev_claim():
-    bucket_id = "swing_bucket_lifecycle_flow_combo_swing_lifecycle_flow_entry_entry_good_holding_hold_good_scale_in_scale_in_none_exit_exit_good"
+    bucket_id = "swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_entry_good_holding_hold_good_scale_in_scale_in_none_exit_exit_good"
     payload = _ai_response([bucket_id])
     payload["comparative_reviews"][0][
         "comparison_summary"
@@ -146,7 +146,7 @@ def test_bucket_discovery_auto_approves_sim_only_candidates(tmp_path, monkeypatc
     )
     monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
 
-    bucket_id = "swing_bucket_lifecycle_flow_combo_swing_lifecycle_flow_entry_entry_good_holding_hold_good_scale_in_scale_in_none_exit_exit_good"
+    bucket_id = "swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_entry_good_holding_hold_good_scale_in_scale_in_none_exit_exit_good"
     report = mod.build_swing_lifecycle_bucket_discovery(
         target,
         provider="openai",
@@ -171,7 +171,7 @@ def test_bucket_discovery_auto_approves_sim_only_candidates(tmp_path, monkeypatc
     approval = json.loads((sim_approval_dir / "swing_sim_auto_approval_2026-05-22.json").read_text())
     catalog = json.loads((sim_policy_dir / "swing_sim_policy_catalog_2026-05-22.json").read_text())
     assert approval["approved"] is True
-    assert approval["approved_source_ids"] == ["swing_lifecycle_bucket_discovery"]
+    assert "swing_lifecycle_bucket_discovery" in approval["approved_source_ids"]
     assert catalog["policies"][0]["bucket_id"] == candidate["bucket_id"]
 
 
@@ -272,7 +272,7 @@ def test_bucket_discovery_reviews_sim_auto_candidates_before_large_source_only_t
 
     monkeypatch.setattr(mod, "_call_openai_ai_review", fake_call)
 
-    sim_bucket_id = "swing_bucket_lifecycle_flow_combo_swing_lifecycle_flow_entry_entry_good_holding_hold_good_scale_in_scale_in_none_exit_exit_good"
+    sim_bucket_id = "swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_entry_entry_good_holding_hold_good_scale_in_scale_in_none_exit_exit_good"
     report = mod.build_swing_lifecycle_bucket_discovery(
         target,
         provider="openai",
@@ -609,6 +609,88 @@ def test_bucket_discovery_provider_disabled_downgrades_sim_auto(tmp_path, monkey
     assert candidate["ai_review_blocker_state"] == "provider_disabled"
     assert candidate["ai_review_required_but_provider_disabled"] is True
     assert candidate["allowed_runtime_apply"] is False
+
+
+def test_bucket_discovery_preserves_matrix_sim_auto_candidate_id(tmp_path, monkeypatch):
+    target = "2026-05-22"
+    matrix_dir = tmp_path / "matrix"
+    matrix_dir.mkdir()
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "discovery")
+
+    flow_bucket = _flow_bucket()
+    matrix_candidate_id = (
+        "swing_ldm_lifecycle_flow_combo_swing_lifecycle_flow_"
+        "entry_entry_good_holding_hold_good_scale_in_scale_in_none_exit_exit_good"
+    )
+    matrix_path = matrix_dir / f"swing_lifecycle_decision_matrix_{target}.json"
+    matrix_path.write_text(
+        json.dumps(
+            {
+                "input_contract": {"swing_daily_simulation_consumed": False},
+                "swing_lifecycle_flow_bucket_attribution": {"buckets": [flow_bucket]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+
+    report = mod.build_swing_lifecycle_bucket_discovery(target, provider="none")
+
+    candidate = report["surfaced_candidates"][0]
+    assert candidate["candidate_id"] == matrix_candidate_id
+    assert candidate["bucket_id"] == matrix_candidate_id
+    assert candidate["source_candidate_id"] == matrix_candidate_id
+    assert candidate["matrix_candidate_id"] == matrix_candidate_id
+    assert candidate["stage"] == "lifecycle_flow"
+    assert candidate["lifecycle_stage"] == "lifecycle_flow"
+
+
+def test_bucket_discovery_consumes_non_flow_matrix_approval_candidate(tmp_path, monkeypatch):
+    target = "2026-05-22"
+    matrix_dir = tmp_path / "matrix"
+    matrix_dir.mkdir()
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "discovery")
+
+    matrix_candidate_id = "swing_ldm_entry_entry_bucket_policy_candidate"
+    matrix_path = matrix_dir / f"swing_lifecycle_decision_matrix_{target}.json"
+    matrix_path.write_text(
+        json.dumps(
+            {
+                "input_contract": {"swing_daily_simulation_consumed": False},
+                "entry_bucket_attribution": {
+                    "sim_auto_approval_candidates": [
+                        {
+                            "candidate_id": matrix_candidate_id,
+                            "bucket_id": matrix_candidate_id,
+                            "bucket_type": "entry_bucket_attribution",
+                            "bucket_key": "policy_candidate",
+                            "lifecycle_stage": "entry",
+                            "classification_hint": "sim_auto_approved",
+                            "source_quality_adjusted_ev_pct": 1.2,
+                            "joined_sample": 10,
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "matrix_report_paths", lambda target_date: (matrix_path, matrix_path.with_suffix(".md")))
+
+    report = mod.build_swing_lifecycle_bucket_discovery(target, provider="none")
+
+    candidates = {
+        item.get("candidate_id"): item
+        for item in report["surfaced_candidates"]
+        if isinstance(item, dict)
+    }
+    candidate = candidates[matrix_candidate_id]
+    assert candidate["bucket_id"] == matrix_candidate_id
+    assert candidate["source_candidate_id"] == matrix_candidate_id
+    assert candidate["matrix_candidate_id"] == matrix_candidate_id
+    assert candidate["stage"] == "entry"
+    assert candidate["lifecycle_stage"] == "entry"
+    assert candidate["classification_state"] == "source_only_keep_collecting"
 
 
 def test_bucket_discovery_openai_unavailable_marks_provider_unavailable(tmp_path, monkeypatch):

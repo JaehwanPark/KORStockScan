@@ -94,17 +94,15 @@
 
 - available: `True`
 - sample_state: `hold_sample`
-- rows: `57`
+- rows: `48`
 - closed_count: `0`
 - winner_count: `0`
 - loser_count: `0`
 
 | family | rows | closed | winner | loser | avg_net_ret |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `swing_gatekeeper_reject_cooldown` | 19 | 0 | 0 | 0 | None |
-| `swing_market_regime_sensitivity` | 19 | 0 | 0 | 0 | None |
-| `swing_model_floor` | 3 | 0 | 0 | 0 | None |
-| `swing_selection_top_k` | 16 | 0 | 0 | 0 | None |
+| `swing_gatekeeper_reject_cooldown` | 45 | 0 | 0 | 0 | None |
+| `swing_market_regime_sensitivity` | 3 | 0 | 0 | 0 | None |
 
 ## Observation Axes
 

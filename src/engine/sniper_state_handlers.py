@@ -15096,6 +15096,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     ),
                     threshold_applied_value=whipsaw_decision.get("threshold_applied_value", "-"),
                     exit_rule_candidate="scalp_soft_stop_pct",
+                    **_build_observation_contract_fields("ops_volume_diagnostic"),
                 )
             if soft_stop_within_grace:
                 _log_holding_pipeline(

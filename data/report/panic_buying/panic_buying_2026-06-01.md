@@ -8,8 +8,8 @@
 - risk_regime_threshold_mode: `dynamic_quantile`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-06-01T15:29:13`
-- latest_event_at: `2026-06-01T15:27:48`
+- as_of: `2026-06-01T17:12:04`
+- latest_event_at: `2026-06-01T15:53:25`
 - reasons: `no panic buying threshold breached`
 
 ## 패닉바잉 지표
@@ -27,7 +27,7 @@
 - exhaustion_candidate_count: `0`
 - exhaustion_confirmed_count: `0`
 - force_exit_runner_count: `0`
-- max_exhaustion_score: `0.5206`
+- max_exhaustion_score: `0.4839`
 
 ## TP Counterfactual
 
@@ -45,7 +45,7 @@
 - missing_orderbook_count: `30`
 - degraded_orderbook_count: `30`
 - missing_trade_aggressor_count: `5`
-- carried_orderbook_snapshot_count: `12897`
+- carried_orderbook_snapshot_count: `12901`
 - carried_trade_aggressor_snapshot_count: `11400`
 - micro_cusum_triggered_symbol_count: `16`
 - micro_consensus_pass_symbol_count: `1`

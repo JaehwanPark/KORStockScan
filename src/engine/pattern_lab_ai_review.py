@@ -48,6 +48,12 @@ FINAL_STATES = {
 }
 FINAL_DECISIONS = {"keep", "surface_workorder", "block_runtime_use"}
 GAP_STATES = {"automation_handoff_gap", "source_quality_gap", "ai_review_gap", "code_patch_required"}
+# Keep this list limited to broad feedback-loop labels. Specific source gaps
+# must pass their own source-context predicates before they can be resolved.
+GENERIC_FEEDBACK_HANDOFF_REVIEW_IDS = {
+    "pattern_lab_ai_review_followup_required",
+    "swing_strategy_discovery_pending_quotes",
+}
 
 
 def report_paths(target_date: str) -> tuple[Path, Path]:
@@ -146,6 +152,55 @@ def _summary_for(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _feedback_handoff_summary(payloads: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    currentness = payloads.get("pattern_lab_currentness_audit") or {}
+    currentness_summary = currentness.get("summary") if isinstance(currentness.get("summary"), dict) else {}
+    feedback_labels = [
+        "threshold_cycle_ev",
+        "lifecycle_decision_matrix",
+        "lifecycle_bucket_discovery",
+        "swing_lifecycle_decision_matrix",
+        "swing_lifecycle_bucket_discovery",
+        "swing_strategy_discovery_ev",
+    ]
+    consumed_count = _safe_int(currentness_summary.get("consumed_feedback_source_count"), 0)
+    missing_count = _safe_int(currentness_summary.get("missing_feedback_source_count"), 0)
+    source_statuses: dict[str, dict[str, Any]] = {}
+    for label in feedback_labels:
+        payload = payloads.get(label) or {}
+        summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+        source_statuses[label] = {
+            "exists": bool(payload),
+            "status": payload.get("status") or summary.get("status"),
+            "runtime_effect": payload.get("runtime_effect"),
+            "allowed_runtime_apply": payload.get("allowed_runtime_apply"),
+            "candidate_count": summary.get("candidate_count")
+            or summary.get("surfaced_candidate_count")
+            or summary.get("candidate_ledger_count"),
+            "workorder_count": summary.get("workorder_count") or summary.get("code_patch_required_count"),
+        }
+    status = "pass"
+    if missing_count > 0:
+        status = "warning"
+    if any(not item["exists"] for item in source_statuses.values()):
+        status = "warning"
+    return {
+        "status": status,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "decision_authority": "pattern_lab_feedback_handoff_source_only",
+        "consumed_feedback_source_count": consumed_count,
+        "missing_feedback_source_count": missing_count,
+        "source_statuses": source_statuses,
+        "interpretation_hint": (
+            "Currentness audit reports pattern-lab feedback sources consumed; do not classify "
+            "automation_handoff_gap unless a listed source is missing or has explicit fail status."
+            if status == "pass"
+            else "One or more feedback sources are missing or incomplete; source-only follow-up may be required."
+        ),
+    }
+
+
 def _swing_micro_context_source_contract(context: dict[str, Any]) -> dict[str, Any]:
     sources = context.get("sources") if isinstance(context.get("sources"), dict) else {}
     swing = sources.get("swing_pattern_lab_automation") if isinstance(sources.get("swing_pattern_lab_automation"), dict) else {}
@@ -182,6 +237,11 @@ def _swing_lifecycle_bucket_discovery_summary(context: dict[str, Any]) -> dict[s
     return summary
 
 
+def _nested_report_summary(source_summary: dict[str, Any]) -> dict[str, Any]:
+    summary = source_summary.get("summary") if isinstance(source_summary.get("summary"), dict) else {}
+    return summary
+
+
 def _is_resolved_swing_lifecycle_bucket_discovery_gap(item: dict[str, Any], context: dict[str, Any]) -> bool:
     if str(item.get("final_state") or "") != "code_patch_required":
         return False
@@ -205,15 +265,124 @@ def _is_resolved_swing_lifecycle_bucket_discovery_gap(item: dict[str, Any], cont
     )
 
 
+def _is_resolved_swing_ai_review_missing_source_only_gap(item: dict[str, Any], context: dict[str, Any]) -> bool:
+    if str(item.get("final_state") or "") != "ai_review_gap":
+        return False
+    review_id = str(item.get("review_id") or "").lower()
+    reason = str(item.get("reason") or "").lower()
+    if "ai_review_two_pass_missing" not in review_id and not (
+        "swing_lifecycle_bucket_discovery" in reason and "ai" in reason and "missing" in reason
+    ):
+        return False
+    source_summary = _swing_lifecycle_bucket_discovery_summary(context)
+    summary = _nested_report_summary(source_summary)
+    return (
+        summary.get("source_contract_status") == "pass"
+        and source_summary.get("runtime_effect") is False
+        and source_summary.get("allowed_runtime_apply") is False
+        and summary.get("ai_fail_closed") is False
+        and summary.get("ai_review_followup_required") is False
+        and summary.get("sim_auto_blocked_by_ai_review_followup") is False
+        and _safe_int(summary.get("pre_review_sim_auto_candidate_count")) == 0
+        and _safe_int(summary.get("sim_auto_unreviewed_candidate_count")) == 0
+        and _safe_int(summary.get("sim_auto_downgraded_by_review_count")) == 0
+    )
+
+
+_CLASSIFIED_THRESHOLD_EV_WARNING_PREFIXES = {
+    "lifecycle_bucket_discovery:source_contract_drift_warning",
+    "swing_strategy_discovery:pending_future_quotes",
+    "swing_lifecycle_decision_matrix:pending_future_quotes",
+    "swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_fail_closed",
+    "swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked",
+    "pattern_lab_ai_review_warning",
+    "pattern_lab_ai_review_ai_review_followup_required",
+}
+
+
+def _threshold_cycle_ev_source_summary(context: dict[str, Any]) -> dict[str, Any]:
+    sources = context.get("sources") if isinstance(context.get("sources"), dict) else {}
+    source = sources.get("threshold_cycle_ev") if isinstance(sources.get("threshold_cycle_ev"), dict) else {}
+    summary = source.get("summary") if isinstance(source.get("summary"), dict) else {}
+    return summary
+
+
+def _threshold_ev_warnings_are_classified_source_only(context: dict[str, Any]) -> bool:
+    threshold_summary = _threshold_cycle_ev_source_summary(context)
+    if not threshold_summary:
+        return False
+    if threshold_summary.get("runtime_effect") is True or threshold_summary.get("allowed_runtime_apply") is True:
+        return False
+    warnings = threshold_summary.get("warnings") if isinstance(threshold_summary.get("warnings"), list) else []
+    if not warnings:
+        return False
+    unknown_warnings = [
+        str(warning)
+        for warning in warnings
+        if not any(str(warning).startswith(prefix) for prefix in _CLASSIFIED_THRESHOLD_EV_WARNING_PREFIXES)
+    ]
+    if unknown_warnings:
+        return False
+    return _feedback_handoff_closed(context)
+
+
+def _is_resolved_threshold_cycle_ev_incomplete_gap(item: dict[str, Any], context: dict[str, Any]) -> bool:
+    if str(item.get("final_state") or "") != "automation_handoff_gap":
+        return False
+    review_id = str(item.get("review_id") or "").lower()
+    reason = str(item.get("reason") or "").lower()
+    if "threshold_cycle_ev_incomplete" not in review_id and "threshold_cycle_ev" not in reason:
+        return False
+    if not _threshold_ev_warnings_are_classified_source_only(context):
+        return False
+    source_summary = _swing_lifecycle_bucket_discovery_summary(context)
+    summary = _nested_report_summary(source_summary)
+    return (
+        summary.get("source_contract_status") == "pass"
+        and source_summary.get("runtime_effect") is False
+        and source_summary.get("allowed_runtime_apply") is False
+        and summary.get("ai_fail_closed") is False
+        and summary.get("ai_review_followup_required") is False
+        and _safe_int(summary.get("pre_review_sim_auto_candidate_count")) == 0
+        and _safe_int(summary.get("sim_auto_unreviewed_candidate_count")) == 0
+    )
+
+
+def _resolved_source_context_conclusion(
+    item: dict[str, Any],
+    *,
+    status: str,
+    contract_id: str,
+) -> dict[str, Any]:
+    return {
+        **item,
+        "final_state": "source_only_keep_collecting",
+        "final_decision": "keep",
+        "explicit_gap_type": None,
+        "auditor_pass": True,
+        "source_context_resolution": {
+            "status": status,
+            "contract_id": contract_id,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "decision_authority": "pattern_lab_ai_review_source_only",
+        },
+    }
+
+
 def _apply_source_contract_resolutions(payload: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     conclusions = payload.get("final_conclusions") if isinstance(payload.get("final_conclusions"), list) else []
     resolved_ids: list[str] = []
+    source_contract_resolution_ids: list[str] = []
+    source_context_resolution_ids: list[str] = []
     resolved_conclusions: list[dict[str, Any]] = []
     for item in conclusions:
         if not isinstance(item, dict):
             continue
         if _is_resolved_swing_micro_context_gap(item, context):
-            resolved_ids.append(str(item.get("review_id") or "unknown"))
+            review_id = str(item.get("review_id") or "unknown")
+            resolved_ids.append(review_id)
+            source_contract_resolution_ids.append(review_id)
             resolved_conclusions.append(
                 {
                     **item,
@@ -230,7 +399,9 @@ def _apply_source_contract_resolutions(payload: dict[str, Any], context: dict[st
                 }
             )
         elif _is_resolved_swing_lifecycle_bucket_discovery_gap(item, context):
-            resolved_ids.append(str(item.get("review_id") or "unknown"))
+            review_id = str(item.get("review_id") or "unknown")
+            resolved_ids.append(review_id)
+            source_contract_resolution_ids.append(review_id)
             resolved_conclusions.append(
                 {
                     **item,
@@ -246,6 +417,28 @@ def _apply_source_contract_resolutions(payload: dict[str, Any], context: dict[st
                     },
                 }
             )
+        elif _is_resolved_swing_ai_review_missing_source_only_gap(item, context):
+            review_id = str(item.get("review_id") or "unknown")
+            resolved_ids.append(review_id)
+            source_context_resolution_ids.append(review_id)
+            resolved_conclusions.append(
+                _resolved_source_context_conclusion(
+                    item,
+                    status="resolved_by_source_only_empty_sim_auto_review_contract",
+                    contract_id="swing_lifecycle_bucket_discovery_ai_review_source_only_no_candidate",
+                )
+            )
+        elif _is_resolved_threshold_cycle_ev_incomplete_gap(item, context):
+            review_id = str(item.get("review_id") or "unknown")
+            resolved_ids.append(review_id)
+            source_context_resolution_ids.append(review_id)
+            resolved_conclusions.append(
+                _resolved_source_context_conclusion(
+                    item,
+                    status="resolved_by_classified_threshold_ev_source_only_warnings",
+                    contract_id="threshold_cycle_ev_warning_classification",
+                )
+            )
         else:
             resolved_conclusions.append(item)
     if not resolved_ids:
@@ -258,11 +451,14 @@ def _apply_source_contract_resolutions(payload: dict[str, Any], context: dict[st
         for item in resolved_conclusions
     )
     payload = {**payload, "final_conclusions": resolved_conclusions}
+    audit_issues = audit.get("issues") if isinstance(audit.get("issues"), list) else []
+    remaining_issues = [issue for issue in audit_issues if str(issue) not in set(resolved_ids)]
     payload["audit"] = {
         **audit,
         "status": "correction_required" if remaining_gap else "pass",
-        "source_contract_resolutions": resolved_ids,
-        "issues": audit.get("issues") if remaining_gap else [],
+        "source_contract_resolutions": source_contract_resolution_ids,
+        "source_context_resolutions": source_context_resolution_ids,
+        "issues": remaining_issues if remaining_gap else [],
         "reason": (
             audit.get("reason")
             if remaining_gap
@@ -270,6 +466,87 @@ def _apply_source_contract_resolutions(payload: dict[str, Any], context: dict[st
         ),
     }
     return payload
+
+
+def _feedback_handoff_closed(context: dict[str, Any]) -> bool:
+    handoff = context.get("feedback_handoff_summary") if isinstance(context.get("feedback_handoff_summary"), dict) else {}
+    if handoff.get("status") != "pass" or _safe_int(handoff.get("missing_feedback_source_count"), 0) != 0:
+        return False
+    currentness_failures = [
+        item
+        for item in context.get("currentness_checks", [])
+        if isinstance(item, dict) and str(item.get("status") or "") == "fail"
+    ]
+    if currentness_failures:
+        return False
+    source_statuses = handoff.get("source_statuses") if isinstance(handoff.get("source_statuses"), dict) else {}
+    return all(
+        isinstance(item, dict)
+        and item.get("exists") is True
+        and str(item.get("status") or "pass") not in {"fail", "failed"}
+        for item in source_statuses.values()
+    )
+
+
+def _apply_feedback_handoff_resolutions(payload: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    if not _feedback_handoff_closed(context):
+        return payload
+    audit = payload.get("audit") if isinstance(payload.get("audit"), dict) else {}
+    forbidden = audit.get("forbidden_use_violations") if isinstance(audit.get("forbidden_use_violations"), list) else []
+    if forbidden:
+        return payload
+    conclusions = payload.get("final_conclusions") if isinstance(payload.get("final_conclusions"), list) else []
+    resolved_ids: list[str] = []
+    resolved_conclusions: list[dict[str, Any]] = []
+    for item in conclusions:
+        if not isinstance(item, dict):
+            continue
+        final_state = str(item.get("final_state") or "")
+        review_id = str(item.get("review_id") or "unknown")
+        generic_review = review_id.startswith("interpretation_") or review_id in GENERIC_FEEDBACK_HANDOFF_REVIEW_IDS
+        if final_state in {"automation_handoff_gap", "ai_review_gap"} and generic_review:
+            resolved_ids.append(review_id)
+            resolved_conclusions.append(
+                {
+                    **item,
+                    "final_state": "source_only_keep_collecting",
+                    "final_decision": "keep",
+                    "explicit_gap_type": None,
+                    "auditor_pass": True,
+                    "feedback_handoff_resolution": {
+                        "status": "resolved_by_currentness_feedback_handoff_pass",
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "decision_authority": "pattern_lab_feedback_handoff_source_only",
+                    },
+                }
+            )
+        else:
+            resolved_conclusions.append(item)
+    if not resolved_ids:
+        return payload
+    audit = payload.get("audit") if isinstance(payload.get("audit"), dict) else {}
+    remaining_gap = any(
+        isinstance(item, dict)
+        and str(item.get("final_state") or "") in GAP_STATES
+        and str(item.get("final_decision") or "") != "keep"
+        for item in resolved_conclusions
+    )
+    return {
+        **payload,
+        "final_conclusions": resolved_conclusions,
+        "audit": {
+            **audit,
+            "status": "correction_required" if remaining_gap else "pass",
+            "feedback_handoff_resolutions": resolved_ids,
+            "issues": audit.get("issues") if remaining_gap else [],
+            "reason": (
+                audit.get("reason")
+                if remaining_gap
+                else "Pattern-lab feedback handoff is closed by currentness audit; generic AI handoff gaps were normalized to source-only keep."
+            ),
+        },
+    }
 
 
 def _normalize_empty_audit_correction(payload: dict[str, Any]) -> dict[str, Any]:
@@ -302,6 +579,40 @@ def _normalize_empty_audit_correction(payload: dict[str, Any]) -> dict[str, Any]
                 "Empty correction_required audit normalized to pass; explicit final conclusions, "
                 "if any, remain source-only workorder inputs."
             ),
+        },
+    }
+
+
+def _normalize_audit_resolution_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    audit = payload.get("audit") if isinstance(payload.get("audit"), dict) else {}
+    conclusions = payload.get("final_conclusions") if isinstance(payload.get("final_conclusions"), list) else []
+    if not audit or not conclusions:
+        return payload
+    source_context_ids = {
+        str(item.get("review_id"))
+        for item in conclusions
+        if isinstance(item, dict) and isinstance(item.get("source_context_resolution"), dict)
+    }
+    if not source_context_ids:
+        return payload
+    contract_ids = audit.get("source_contract_resolutions")
+    if not isinstance(contract_ids, list):
+        contract_ids = []
+    context_ids = audit.get("source_context_resolutions")
+    if not isinstance(context_ids, list):
+        context_ids = []
+    normalized_contract_ids = [item for item in contract_ids if str(item) not in source_context_ids]
+    normalized_context_ids = list(dict.fromkeys([*context_ids, *sorted(source_context_ids)]))
+    reason = audit.get("reason")
+    if normalized_context_ids and not normalized_contract_ids:
+        reason = "Source-only review gaps were resolved by source-context provenance; runtime authority remains false."
+    return {
+        **payload,
+        "audit": {
+            **audit,
+            "source_contract_resolutions": normalized_contract_ids,
+            "source_context_resolutions": normalized_context_ids,
+            "reason": reason,
         },
     }
 
@@ -347,6 +658,7 @@ def _build_input_context(target_date: str) -> dict[str, Any]:
         "allowed_runtime_apply": False,
         "forbidden_uses": FORBIDDEN_USES,
         "sources": sources,
+        "feedback_handoff_summary": _feedback_handoff_summary(payloads),
         "currentness_checks": currentness_checks,
         "pattern_lab_workorder_orders": workorder_orders,
     }
@@ -638,6 +950,7 @@ def _order_from_conclusion(conclusion: dict[str, Any]) -> dict[str, Any]:
         "order_id": f"order_{REPORT_TYPE}_{_slug(review_id)}",
         "title": f"Pattern Lab AI review follow-up: {review_id}",
         "source_report_type": REPORT_TYPE,
+        "review_id": review_id,
         "lifecycle_stage": "pattern_lab_ai_review",
         "target_subsystem": "pattern_lab",
         "priority": 10,
@@ -777,7 +1090,10 @@ def build_pattern_lab_ai_review_report(
         else:
             ai_status = "unavailable_deterministic_review"
     ai_payload = _normalize_empty_audit_correction(
-        _apply_source_contract_resolutions(ai_payload, context)
+        _apply_feedback_handoff_resolutions(
+            _apply_source_contract_resolutions(ai_payload, context),
+            context,
+        )
     )
     conclusions = (
         ai_payload.get("final_conclusions")
@@ -790,6 +1106,7 @@ def build_pattern_lab_ai_review_report(
         if isinstance(item, dict)
     ]
     ai_payload["final_conclusions"] = conclusions
+    ai_payload = _normalize_audit_resolution_fields(ai_payload)
     orders = [
         _order_from_conclusion(item)
         for item in conclusions
@@ -828,6 +1145,7 @@ def build_pattern_lab_ai_review_report(
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "source_quality_gate": "pattern_lab_currentness + LDM/threshold feedback re-entry contract",
         "forbidden_uses": FORBIDDEN_USES,
+        "feedback_handoff_summary": context.get("feedback_handoff_summary") or {},
         "status": status,
         "sources": {
             label: str(path) if path.exists() else None
@@ -847,6 +1165,10 @@ def build_pattern_lab_ai_review_report(
             "workorder_count": len(orders),
             "state_counts": dict(state_counts),
             "human_intervention_required": False,
+            "feedback_handoff_status": (context.get("feedback_handoff_summary") or {}).get("status"),
+            "feedback_handoff_missing_feedback_source_count": (
+                context.get("feedback_handoff_summary") or {}
+            ).get("missing_feedback_source_count"),
         },
         "ai_two_pass_review": {
             "provider": resolved_provider,
@@ -898,6 +1220,8 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- interpretation_count: `{len(((review.get('interpretation') or {}).get('review_items') or []) if isinstance(review.get('interpretation'), dict) else [])}`",
         f"- audit_issues: `{audit.get('issues') or []}`",
         f"- forbidden_use_violations: `{audit.get('forbidden_use_violations') or []}`",
+        f"- source_contract_resolutions: `{audit.get('source_contract_resolutions') or []}`",
+        f"- source_context_resolutions: `{audit.get('source_context_resolutions') or []}`",
         "",
         "## Final Conclusions",
         "",
@@ -905,10 +1229,23 @@ def render_markdown(report: dict[str, Any]) -> str:
     for item in (review.get("final_conclusions") or [])[:20]:
         if not isinstance(item, dict):
             continue
+        source_resolution = item.get("source_context_resolution")
+        contract_resolution = item.get("source_contract_resolution")
+        resolution_text = ""
+        if isinstance(source_resolution, dict):
+            resolution_text = (
+                f" source_context_resolution=`{source_resolution.get('status')}` "
+                f"contract=`{source_resolution.get('contract_id')}`"
+            )
+        elif isinstance(contract_resolution, dict):
+            resolution_text = (
+                f" source_contract_resolution=`{contract_resolution.get('status')}` "
+                f"contract=`{contract_resolution.get('contract_id')}`"
+            )
         lines.append(
             f"- `{item.get('review_id')}` domain=`{item.get('domain')}` "
             f"state=`{item.get('final_state')}` decision=`{item.get('final_decision')}` "
-            f"reason=`{item.get('reason')}`"
+            f"reason=`{item.get('reason')}`{resolution_text}"
         )
     lines.extend(["", "## Code Improvement Orders", ""])
     for order in report.get("code_improvement_orders") or []:

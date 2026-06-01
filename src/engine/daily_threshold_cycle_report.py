@@ -6343,6 +6343,7 @@ def apply_window_policy_registry_to_report(report: dict, cumulative_report: dict
 def _build_window_policy_audit(candidates: list[dict]) -> dict:
     items: list[dict] = []
     issue_counts: Counter[str] = Counter()
+    lineage_warning_counts: Counter[str] = Counter()
     for candidate in candidates:
         if not isinstance(candidate, dict):
             continue
@@ -6381,8 +6382,8 @@ def _build_window_policy_audit(candidates: list[dict]) -> dict:
                 "rolling source metrics supplied the registered primary denominator; "
                 "threshold snapshot sample is rendering-only for this family/window"
             )
-        if str(candidate.get("runtime_apply_blocker") or "") == "window_policy_primary_not_ready":
-            issues.append("daily_only_leak_blocked")
+        source_sample_split_status = "not_applicable"
+        source_sample_split_reason = ""
         if (
             primary
             and primary not in {"daily_intraday", "latest_report"}
@@ -6391,7 +6392,14 @@ def _build_window_policy_audit(candidates: list[dict]) -> dict:
             and state == "hold_sample"
             and source_sample < sample_floor
         ):
-            issues.append("rolling_ready_but_daily_source_hold_sample")
+            source_sample_split_status = "documented_daily_source_split"
+            source_sample_split_reason = (
+                "registered primary window is sample-ready, but the same-day source sample is below the "
+                "daily reporting floor; keep as lineage evidence instead of a runtime apply issue"
+            )
+            lineage_warning_counts["rolling_ready_daily_source_split"] += 1
+        if str(candidate.get("runtime_apply_blocker") or "") == "window_policy_primary_not_ready":
+            issues.append("daily_only_leak_blocked")
         denominator_keys = _sample_denominator_keys_for_family(family)
         if family in {"score65_74_recovery_probe", "position_sizing_cap_release", "position_sizing_dynamic_formula"} and not denominator_keys:
             issues.append("sample_denominator_missing")
@@ -6414,12 +6422,15 @@ def _build_window_policy_audit(candidates: list[dict]) -> dict:
                 "sample_denominator_keys": denominator_keys,
                 "snapshot_alignment_status": snapshot_alignment_status,
                 "snapshot_alignment_reason": snapshot_alignment_reason,
+                "source_sample_split_status": source_sample_split_status,
+                "source_sample_split_reason": source_sample_split_reason,
                 "issues": issues,
             }
         )
     return {
         "status": "issues_found" if issue_counts else "pass",
         "issue_counts": dict(sorted(issue_counts.items())),
+        "lineage_warning_counts": dict(sorted(lineage_warning_counts.items())),
         "items": items,
     }
 

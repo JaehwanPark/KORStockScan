@@ -1,6 +1,6 @@
 # Swing Strategy Discovery Labels - 2026-05-18
 
-- generated_at: `2026-06-01T15:36:47`
+- generated_at: `2026-06-01T18:11:12`
 - label_version: `swing_strategy_discovery_label_v1`
 - runtime_effect: `False`
 - decision_authority: `swing_sim_exploration_only`

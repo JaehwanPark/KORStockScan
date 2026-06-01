@@ -6,15 +6,15 @@
 
 | family | stage | deterministic | ai_state | proposal | guard |
 | --- | --- | --- | --- | --- | --- |
-| `swing_model_floor` | `selection` | `hold_no_edge` | `correction_proposed` | state=adjust_up, value=0.4 | accepted=True, reason=- |
-| `swing_selection_top_k` | `selection` | `hold_no_edge` | `correction_proposed` | state=adjust_down, value=2 | accepted=True, reason=- |
-| `swing_gatekeeper_accept_reject` | `entry` | `freeze` | `correction_proposed` | state=freeze, value=None | accepted=True, reason=- |
-| `swing_gatekeeper_reject_cooldown` | `entry` | `hold_no_edge` | `correction_proposed` | state=hold, value=7200 | accepted=True, reason=- |
-| `swing_market_regime_sensitivity` | `entry` | `hold_no_edge` | `correction_proposed` | state=adjust_up, value=strict_entry_observe | accepted=False, reason=missing_numeric_bounds_for_value_proposal |
-| `swing_pyramid_trigger` | `scale_in` | `freeze` | `correction_proposed` | state=freeze, value=None | accepted=True, reason=- |
-| `swing_avg_down_eligibility` | `scale_in` | `freeze` | `correction_proposed` | state=freeze, value=None | accepted=True, reason=- |
-| `swing_trailing_stop_time_stop` | `exit` | `freeze` | `correction_proposed` | state=freeze, value=None | accepted=True, reason=- |
-| `swing_holding_flow_defer` | `holding_exit` | `hold_sample` | `correction_proposed` | state=hold_sample, value=None | accepted=True, reason=- |
-| `swing_entry_ofi_qi_execution_quality` | `entry` | `hold_sample` | `correction_proposed` | state=hold_sample, value=None | accepted=True, reason=- |
-| `swing_scale_in_ofi_qi_confirmation` | `scale_in` | `freeze` | `correction_proposed` | state=freeze, value=None | accepted=True, reason=- |
-| `swing_exit_ofi_qi_smoothing` | `holding_exit` | `freeze` | `correction_proposed` | state=freeze, value=None | accepted=True, reason=- |
+| `swing_model_floor` | `selection` | `hold_no_edge` | `safety_concern` | state=adjust_down, value=0.3 | accepted=True, reason=- |
+| `swing_selection_top_k` | `selection` | `hold_no_edge` | `safety_concern` | state=adjust_down, value=2 | accepted=True, reason=- |
+| `swing_gatekeeper_accept_reject` | `entry` | `freeze` | `safety_concern` | state=freeze, value=None | accepted=True, reason=- |
+| `swing_gatekeeper_reject_cooldown` | `entry` | `hold_no_edge` | `safety_concern` | state=hold, value=7200 | accepted=True, reason=- |
+| `swing_market_regime_sensitivity` | `entry` | `hold_no_edge` | `safety_concern` | state=adjust_up, value=strict_entry_observe | accepted=False, reason=missing_numeric_bounds_for_value_proposal |
+| `swing_pyramid_trigger` | `scale_in` | `freeze` | `safety_concern` | state=freeze, value=None | accepted=True, reason=- |
+| `swing_avg_down_eligibility` | `scale_in` | `freeze` | `safety_concern` | state=freeze, value=None | accepted=True, reason=- |
+| `swing_trailing_stop_time_stop` | `exit` | `freeze` | `safety_concern` | state=freeze, value=None | accepted=True, reason=- |
+| `swing_holding_flow_defer` | `holding_exit` | `hold_sample` | `safety_concern` | state=hold_sample, value=None | accepted=True, reason=- |
+| `swing_entry_ofi_qi_execution_quality` | `entry` | `hold_sample` | `safety_concern` | state=hold_sample, value=None | accepted=True, reason=- |
+| `swing_scale_in_ofi_qi_confirmation` | `scale_in` | `freeze` | `safety_concern` | state=freeze, value=None | accepted=True, reason=- |
+| `swing_exit_ofi_qi_smoothing` | `holding_exit` | `freeze` | `safety_concern` | state=freeze, value=None | accepted=True, reason=- |

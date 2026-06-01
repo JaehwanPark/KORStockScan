@@ -1,13 +1,13 @@
 # Swing Daily Simulation - 2026-05-27
 
 - runtime_change: `False`
-- recommendation_rows: `20` / live `20` / diagnostic `0`
-- recommendation_sources: `{'recommendation_history': 17, 'daily_recommendations_v2_csv': 3}`
+- recommendation_rows: `17` / live `17` / diagnostic `0`
+- recommendation_sources: `{'recommendation_history': 17}`
 - db_recommendation_rows: `17`
 - source_signal_dates: `['2026-05-27']`
-- simulated_count: `20`
+- simulated_count: `17`
 - closed_count: `0`
-- planned_or_open_count: `20`
+- planned_or_open_count: `17`
 - closed win_rate: `0.00%`
 - closed avg_net_ret: `0.00%`
 
@@ -30,13 +30,13 @@
 
 | arm | simulated | closed | win_rate | avg_net_ret | status_counts |
 | --- | ---: | ---: | ---: | ---: | --- |
-| `gap_pass` | 20 | 0 | 0.00% | 0.00% | `{'PENDING_ENTRY': 20}` |
-| `gatekeeper_pass` | 20 | 0 | 0.00% | 0.00% | `{'PENDING_ENTRY': 20}` |
-| `selection_only` | 20 | 0 | 0.00% | 0.00% | `{'PENDING_ENTRY': 20}` |
+| `gap_pass` | 17 | 0 | 0.00% | 0.00% | `{'PLANNED_ENTRY': 17}` |
+| `gatekeeper_pass` | 17 | 0 | 0.00% | 0.00% | `{'PLANNED_ENTRY': 17}` |
+| `selection_only` | 17 | 0 | 0.00% | 0.00% | `{'PLANNED_ENTRY': 17}` |
 
 ## Runtime Entry Funnel
 
-- source: `/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-05-27.jsonl`
+- source: `/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-05-27.jsonl.gz`
 
 | stage | raw | unique_records | examples |
 | --- | ---: | ---: | --- |
@@ -50,23 +50,20 @@
 
 | code | name | source | status | guard | qty | entry | exit | net_ret | reason |
 | --- | --- | --- | --- | --- | ---: | --- | --- | ---: | --- |
-| `000270` | 기아 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `001440` | 대한전선 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `003490` | 대한항공 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `005930` | 삼성전자 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `006280` | 녹십자 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `007070` | GS리테일 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `011200` | HMM | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `011210` | 현대위아 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `011780` | 금호석유화학 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `017670` | SK텔레콤 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `018880` | 한온시스템 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `034220` | LG디스플레이 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `036460` | 한국가스공사 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `042660` | 한화오션 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `068270` | 셀트리온 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `071050` | 한국금융지주 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `078930` | GS | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `105560` | KB금융 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `138930` | BNK금융지주 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `192650` | 드림텍 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
+| `000270` | 기아 | `recommendation_history` | `PLANNED_ENTRY` | `BLOCKED_MARKET_REGIME` | 0 | 2026-05-29 |  |  |  |
+| `003490` | 대한항공 | `recommendation_history` | `PLANNED_ENTRY` | `BLOCKED_MARKET_REGIME` | 0 | 2026-05-29 |  |  |  |
+| `005930` | 삼성전자 | `recommendation_history` | `PLANNED_ENTRY` | `BLOCKED_SWING_GAP` | 0 | 2026-05-29 |  |  |  |
+| `007070` | GS리테일 | `recommendation_history` | `PLANNED_ENTRY` | `BLOCKED_MARKET_REGIME` | 0 | 2026-05-29 |  |  |  |
+| `011200` | HMM | `recommendation_history` | `PLANNED_ENTRY` | `BLOCKED_MARKET_REGIME` | 0 | 2026-05-29 |  |  |  |
+| `011210` | 현대위아 | `recommendation_history` | `PLANNED_ENTRY` | `BLOCKED_MARKET_REGIME` | 0 | 2026-05-29 |  |  |  |
+| `011780` | 금호석유화학 | `recommendation_history` | `PLANNED_ENTRY` | `BLOCKED_MARKET_REGIME` | 0 | 2026-05-29 |  |  |  |
+| `017670` | SK텔레콤 | `recommendation_history` | `PLANNED_ENTRY` | `BLOCKED_MARKET_REGIME` | 0 | 2026-05-29 |  |  |  |
+| `018880` | 한온시스템 | `recommendation_history` | `PLANNED_ENTRY` | `BLOCKED_MARKET_REGIME` | 0 | 2026-05-29 |  |  |  |
+| `034220` | LG디스플레이 | `recommendation_history` | `PLANNED_ENTRY` | `BLOCKED_MARKET_REGIME` | 0 | 2026-05-29 |  |  |  |
+| `036460` | 한국가스공사 | `recommendation_history` | `PLANNED_ENTRY` | `BLOCKED_MARKET_REGIME` | 0 | 2026-05-29 |  |  |  |
+| `042660` | 한화오션 | `recommendation_history` | `PLANNED_ENTRY` | `BLOCKED_MARKET_REGIME` | 0 | 2026-05-29 |  |  |  |
+| `068270` | 셀트리온 | `recommendation_history` | `PLANNED_ENTRY` | `BLOCKED_MARKET_REGIME` | 0 | 2026-05-29 |  |  |  |
+| `071050` | 한국금융지주 | `recommendation_history` | `PLANNED_ENTRY` | `BLOCKED_MARKET_REGIME` | 0 | 2026-05-29 |  |  |  |
+| `078930` | GS | `recommendation_history` | `PLANNED_ENTRY` | `BLOCKED_MARKET_REGIME` | 0 | 2026-05-29 |  |  |  |
+| `105560` | KB금융 | `recommendation_history` | `PLANNED_ENTRY` | `BLOCKED_MARKET_REGIME` | 0 | 2026-05-29 |  |  |  |
+| `138930` | BNK금융지주 | `recommendation_history` | `PLANNED_ENTRY` | `BLOCKED_MARKET_REGIME` | 0 | 2026-05-29 |  |  |  |

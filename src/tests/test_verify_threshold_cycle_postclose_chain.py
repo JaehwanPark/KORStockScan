@@ -1044,6 +1044,87 @@ def test_swing_parent_flow_handoff_passes_when_ev_and_runtime_include_candidate(
     assert report["missing"] == []
 
 
+def test_swing_lifecycle_handoff_ignores_discovery_source_only_extras_for_required_handoff():
+    candidate = {
+        "candidate_id": "swing_ldm_lifecycle_flow_combo_parent",
+        "bucket_id": "swing_ldm_lifecycle_flow_combo_parent",
+    }
+    matrix = {
+        "input_contract": {"swing_daily_simulation_consumed": False},
+        "swing_lifecycle_flow_bucket_attribution": {
+            "runtime_approval_candidates": [candidate],
+            "sim_auto_approval_candidates": [candidate],
+        },
+    }
+    discovery = {
+        "summary": {"ai_two_pass_review_status": "missing", "ai_fail_closed": True},
+        "surfaced_candidates": [
+            candidate,
+            {
+                "candidate_id": "swing_bucket_entry_source_only_extra",
+                "bucket_id": "swing_bucket_entry_source_only_extra",
+                "stage": "entry",
+                "lifecycle_stage": "entry",
+                "classification_state": "source_only_keep_collecting",
+            },
+        ],
+        "warnings": ["ai_two_pass_review_missing_fail_closed"],
+    }
+    ev_report = {
+        "swing_lifecycle_decision_matrix": {
+            "sim_auto_candidate_ids": ["swing_ldm_lifecycle_flow_combo_parent"],
+        },
+    }
+    runtime_summary = {
+        "swing_lifecycle_decision_matrix": {
+            "sim_auto_candidate_ids": ["swing_ldm_lifecycle_flow_combo_parent"],
+        },
+    }
+
+    report = mod._swing_lifecycle_handoff_status(matrix, discovery, ev_report, runtime_summary, {"orders": []})
+
+    assert report["status"] == "warning"
+    assert report["missing"] == []
+    assert report["expected_candidate_ids"] == ["swing_ldm_lifecycle_flow_combo_parent"]
+    assert "swing_lifecycle_bucket_discovery:ai_two_pass_review_missing_fail_closed" in report["warnings"]
+
+
+def test_swing_lifecycle_handoff_requires_non_flow_matrix_approval_candidate():
+    candidate = {
+        "candidate_id": "swing_ldm_entry_policy_candidate",
+        "bucket_id": "swing_ldm_entry_policy_candidate",
+        "stage": "entry",
+        "lifecycle_stage": "entry",
+    }
+    matrix = {
+        "input_contract": {"swing_daily_simulation_consumed": False},
+        "entry_bucket_attribution": {
+            "sim_auto_approval_candidates": [candidate],
+        },
+    }
+    discovery = {
+        "summary": {"ai_two_pass_review_status": "parsed", "ai_fail_closed": False},
+        "surfaced_candidates": [candidate],
+    }
+    ev_report = {
+        "swing_lifecycle_decision_matrix": {
+            "sim_auto_candidate_ids": ["swing_ldm_entry_policy_candidate"],
+        },
+    }
+    runtime_summary = {
+        "swing_lifecycle_decision_matrix": {
+            "sim_auto_candidate_ids": ["swing_ldm_entry_policy_candidate"],
+        },
+    }
+
+    report = mod._swing_lifecycle_handoff_status(matrix, discovery, ev_report, runtime_summary, {"orders": []})
+
+    assert report["status"] == "pass"
+    assert report["missing"] == []
+    assert report["required_matrix_candidate_ids"] == ["swing_ldm_entry_policy_candidate"]
+    assert report["expected_candidate_ids"] == ["swing_ldm_entry_policy_candidate"]
+
+
 def test_swing_lifecycle_handoff_fails_when_matrix_candidate_missing_from_discovery():
     matrix = {
         "input_contract": {"swing_daily_simulation_consumed": False},

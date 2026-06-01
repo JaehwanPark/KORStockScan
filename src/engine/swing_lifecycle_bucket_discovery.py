@@ -113,6 +113,16 @@ def _bucket_key_slug(value: Any) -> str:
     return f"{text[:67].rstrip('_')}_{digest}"
 
 
+def _matrix_candidate_slug(value: Any, *, max_len: int = 80) -> str:
+    text = re.sub(r"[^a-zA-Z0-9가-힣]+", "_", str(value or "").strip().lower()).strip("_")
+    if not text:
+        return "unknown"
+    if len(text) <= max_len:
+        return text
+    digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:10]
+    return f"{text[: max_len - 11].rstrip('_')}_{digest}"
+
+
 def report_paths(target_date: str) -> tuple[Path, Path]:
     base = REPORT_DIR / f"swing_lifecycle_bucket_discovery_{target_date}"
     return base.with_suffix(".json"), base.with_suffix(".md")
@@ -120,6 +130,10 @@ def report_paths(target_date: str) -> tuple[Path, Path]:
 
 def _bucket_id(stage: str, bucket_type: str, bucket_key: str) -> str:
     return f"swing_bucket_{_slug(stage)}_{_slug(bucket_type)}_{_bucket_key_slug(bucket_key)}"
+
+
+def _matrix_sim_auto_candidate_id(stage: str, bucket_type: str, bucket_key: str) -> str:
+    return f"swing_ldm_{_slug(stage)}_{_slug(bucket_type)}_{_matrix_candidate_slug(bucket_key)}"
 
 
 def _is_implemented_source_quality_waiting(item: dict[str, Any]) -> bool:
@@ -188,7 +202,12 @@ def _candidate_from_bucket(section_name: str, bucket: dict[str, Any]) -> dict[st
     bucket_type = str(bucket.get("bucket_type") or section_name)
     bucket_key = str(bucket.get("bucket_key") or "-")
     state = _classification_from_bucket(section_name, bucket)
-    bucket_id = _bucket_id(stage, bucket_type, bucket_key)
+    source_candidate_id = str(bucket.get("candidate_id") or bucket.get("bucket_id") or "").strip()
+    if section_name == "swing_lifecycle_flow_bucket_attribution" and state == "sim_auto_approved":
+        bucket_id = source_candidate_id or _matrix_sim_auto_candidate_id(stage, bucket_type, bucket_key)
+        source_candidate_id = source_candidate_id or bucket_id
+    else:
+        bucket_id = _bucket_id(stage, bucket_type, bucket_key)
     taxonomy = normalize_lifecycle_bucket(
         stage=stage,
         bucket_type=bucket_type,
@@ -222,6 +241,12 @@ def _candidate_from_bucket(section_name: str, bucket: dict[str, Any]) -> dict[st
     return {
         "candidate_id": bucket_id,
         "bucket_id": bucket_id,
+        "source_candidate_id": source_candidate_id or None,
+        "matrix_candidate_id": (
+            bucket_id
+            if section_name == "swing_lifecycle_flow_bucket_attribution" and state == "sim_auto_approved"
+            else None
+        ),
         "canonical_bucket": taxonomy["canonical_bucket"],
         "legacy_raw_bucket_key": taxonomy["legacy_raw_bucket_key"],
         "bucket_alias_version": BUCKET_ALIAS_VERSION,
@@ -268,6 +293,30 @@ def _candidate_from_bucket(section_name: str, bucket: dict[str, Any]) -> dict[st
         "forbidden_uses": FORBIDDEN_USES,
         "evidence_authority_contract": evidence_authority_contract(),
     }
+
+
+def _candidate_from_matrix_approval(section_name: str, item: dict[str, Any]) -> dict[str, Any]:
+    candidate = _candidate_from_bucket(section_name, item)
+    matrix_candidate_id = str(item.get("candidate_id") or item.get("bucket_id") or "").strip()
+    if matrix_candidate_id:
+        candidate["candidate_id"] = matrix_candidate_id
+        candidate["bucket_id"] = matrix_candidate_id
+        candidate["source_candidate_id"] = matrix_candidate_id
+        candidate["matrix_candidate_id"] = matrix_candidate_id
+        candidate["parent_bucket_id"] = matrix_candidate_id
+    candidate["classification_state"] = str(
+        item.get("classification_state")
+        or item.get("classification_hint")
+        or candidate.get("classification_state")
+        or "sim_auto_approved"
+    )
+    candidate["next_route"] = (
+        "next_preopen_swing_sim_policy_input"
+        if candidate["classification_state"] == "sim_auto_approved"
+        else candidate.get("next_route") or "postclose_source_quality_or_sample_collection"
+    )
+    candidate["source_section"] = section_name
+    return candidate
 
 
 def _swing_entry_bottleneck_candidate(matrix: dict[str, Any]) -> dict[str, Any] | None:
@@ -885,16 +934,30 @@ def build_swing_lifecycle_bucket_discovery(
 
     candidates: list[dict[str, Any]] = []
     explicit_workorders: list[dict[str, Any]] = []
+    seen_candidate_ids: set[str] = set()
+
+    def _append_candidate(candidate: dict[str, Any]) -> None:
+        candidate_id = str(candidate.get("candidate_id") or candidate.get("bucket_id") or "").strip()
+        if candidate_id and candidate_id in seen_candidate_ids:
+            return
+        if candidate_id:
+            seen_candidate_ids.add(candidate_id)
+        candidates.append(candidate)
+
     for section_name, section in _iter_attribution_sections(matrix):
         for bucket in section.get("buckets") or []:
             if isinstance(bucket, dict):
-                candidates.append(_candidate_from_bucket(section_name, bucket))
+                _append_candidate(_candidate_from_bucket(section_name, bucket))
+        for key in ("sim_auto_approval_candidates", "runtime_approval_candidates"):
+            for item in section.get(key) or []:
+                if isinstance(item, dict):
+                    _append_candidate(_candidate_from_matrix_approval(section_name, item))
         for item in section.get("code_improvement_workorders") or []:
             if isinstance(item, dict):
                 explicit_workorders.append(item)
     entry_bottleneck_candidate = _swing_entry_bottleneck_candidate(matrix)
     if entry_bottleneck_candidate:
-        candidates.append(entry_bottleneck_candidate)
+        _append_candidate(entry_bottleneck_candidate)
     candidates = [_ensure_candidate_taxonomy(item) for item in candidates]
     active_explicit_workorders = [
         item for item in explicit_workorders if not _is_implemented_source_quality_waiting(item)

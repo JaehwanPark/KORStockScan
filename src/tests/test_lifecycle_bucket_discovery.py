@@ -2,6 +2,7 @@ import json
 from types import SimpleNamespace
 
 from src.engine import lifecycle_bucket_discovery as mod
+from src.engine import lifecycle_decision_matrix as ldm_mod
 from src.engine.lifecycle.bucket_taxonomy import normalize_lifecycle_bucket
 
 
@@ -418,6 +419,30 @@ def test_lifecycle_bucket_discovery_summarizes_source_dimension_gaps():
     assert summary["lifecycle_flow_incomplete_stage_contract_count"] == 1
     assert summary["missing_dimension_key_counts"]["liquidity_bucket"] == 1
     assert summary["missing_dimension_key_counts"]["holding"] == 1
+
+
+def test_lifecycle_flow_source_dimensions_use_explicit_stage_bucket_ids():
+    bucket = {
+        "bucket_type": "combo_lifecycle_flow",
+        "bucket_key": "entry=unknown|submit=unknown|holding=hold_winner|exit=exit_good",
+        "source_quality_gate": "pass",
+        "recommended_route": "candidate_recovery_or_relax",
+        "complete_flow_count": 3,
+        "incomplete_flow_count": 0,
+        "joined_sample": 3,
+        "source_quality_adjusted_ev_pct": 1.2,
+        "entry_bucket_id": "entry:combo_entry_spot:score_66_69",
+        "submit_bucket_id": "submit:submit_quality:submitted",
+        "holding_bucket_id": "holding:holding_outcome:hold_winner",
+        "exit_bucket_id": "exit:exit_outcome:exit_good",
+    }
+
+    candidate = mod._candidate_from_bucket("lifecycle_flow", bucket)
+
+    assert candidate["source_dimensions"]["entry"] == "entry:combo_entry_spot:score_66_69"
+    assert candidate["source_dimensions"]["submit"] == "submit:submit_quality:submitted"
+    assert candidate["missing_dimension_keys"] == []
+    assert candidate["source_dimension_gap"] == ""
 
 
 def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(tmp_path, monkeypatch):
@@ -1321,6 +1346,69 @@ def test_lifecycle_bucket_discovery_does_not_treat_empty_declared_section_as_con
 
     assert report["summary"]["source_contract_status"] == "pass"
     assert report["source_contract_changes"] == []
+
+
+def test_lifecycle_bucket_discovery_accepts_legacy_daily_source_split_alias():
+    previous = {
+        "schema_version": "lifecycle_source_contract_snapshot_v1",
+        "source_keys": ["daily_lifecycle_decision_matrix_reports"],
+        "sections": {},
+    }
+    current = {
+        "schema_version": "lifecycle_source_contract_snapshot_v2",
+        "source_keys": ["per_date_sources"],
+        "sections": {},
+    }
+
+    changes = mod._compare_source_contracts(current, previous)
+
+    assert not [item for item in changes if item["change_type"] == "source_removed"]
+
+
+def test_lifecycle_bucket_discovery_warns_on_duplicate_legacy_source_alias():
+    previous = {
+        "schema_version": "lifecycle_source_contract_snapshot_v2",
+        "source_keys": ["per_date_sources"],
+        "sections": {},
+    }
+    current = {
+        "schema_version": "lifecycle_source_contract_snapshot_v2",
+        "source_keys": ["daily_lifecycle_decision_matrix_reports", "per_date_sources"],
+        "sections": {},
+    }
+
+    changes = mod._compare_source_contracts(current, previous)
+
+    duplicate_warnings = [
+        item
+        for item in changes
+        if item["change_type"] == "source_alias_duplicate"
+        and item["severity"] == "warning"
+        and item["subject"] == "per_date_sources"
+    ]
+    assert duplicate_warnings
+    assert not [item for item in changes if item["change_type"] == "source_removed"]
+
+
+def test_submit_bucket_rows_emit_ev_and_diagnostic_fields():
+    report = ldm_mod._submit_bucket_attribution(
+        [
+            {
+                "stage": "submit",
+                "stage_ev_composite_pct": 1.0,
+                "runtime_features": {},
+            },
+            {
+                "stage": "submit",
+                "stage_ev_composite_pct": -0.5,
+                "runtime_features": {},
+            },
+        ]
+    )
+
+    assert report["buckets"]
+    assert "equal_weight_avg_profit_pct" in report["buckets"][0]
+    assert "diagnostic_win_rate" in report["buckets"][0]
 
 
 def test_lifecycle_bucket_discovery_openai_review_uses_tier2_schema_and_english_prompt(monkeypatch):

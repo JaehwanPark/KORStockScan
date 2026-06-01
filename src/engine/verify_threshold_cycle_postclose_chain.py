@@ -488,6 +488,24 @@ def _collect_swing_lifecycle_ids(payload: Any) -> set[str]:
     return found
 
 
+def _collect_swing_lifecycle_required_matrix_ids(matrix: dict[str, Any]) -> set[str]:
+    found: set[str] = set()
+    required_sections = (
+        "swing_lifecycle_flow_bucket_attribution",
+        "entry_bucket_attribution",
+        "holding_exit_bucket_attribution",
+        "scale_in_bucket_attribution",
+        "discovery_arm_attribution",
+    )
+    for section_name in required_sections:
+        section = matrix.get(section_name) if isinstance(matrix.get(section_name), dict) else {}
+        for key in ("sim_auto_approval_candidates", "runtime_approval_candidates"):
+            for item in section.get(key) or []:
+                if isinstance(item, dict) and (item.get("candidate_id") or item.get("bucket_id")):
+                    found.add(str(item.get("candidate_id") or item.get("bucket_id")))
+    return found
+
+
 def _lifecycle_bucket_discovery_handoff_status(
     discovery: dict[str, Any],
     bridge_report: dict[str, Any],
@@ -785,8 +803,9 @@ def _swing_lifecycle_handoff_status(
     workorder: dict[str, Any],
 ) -> dict[str, Any]:
     matrix_candidate_ids = _collect_swing_lifecycle_ids(matrix)
+    required_matrix_candidate_ids = _collect_swing_lifecycle_required_matrix_ids(matrix)
     discovery_candidate_ids = _collect_swing_lifecycle_ids(discovery)
-    expected_candidate_ids = matrix_candidate_ids | discovery_candidate_ids
+    expected_candidate_ids = set(required_matrix_candidate_ids)
     ev_candidate_ids = _collect_swing_lifecycle_ids(
         {
             "swing_lifecycle_decision_matrix": ev_report.get("swing_lifecycle_decision_matrix"),
@@ -842,7 +861,9 @@ def _swing_lifecycle_handoff_status(
     if matrix and not discovery:
         missing.append("swing_lifecycle_bucket_discovery_missing")
     missing_matrix_to_discovery_candidates = (
-        sorted(matrix_candidate_ids - discovery_candidate_ids) if matrix_candidate_ids and discovery else []
+        sorted(required_matrix_candidate_ids - discovery_candidate_ids)
+        if required_matrix_candidate_ids and discovery
+        else []
     )
     if missing_matrix_to_discovery_candidates:
         missing.append("swing_lifecycle_matrix_to_discovery_candidate_handoff_missing")
@@ -909,6 +930,7 @@ def _swing_lifecycle_handoff_status(
     return {
         "status": "fail" if missing else ("missing" if not matrix else "warning" if warnings else "pass"),
         "matrix_candidate_ids": sorted(matrix_candidate_ids),
+        "required_matrix_candidate_ids": sorted(required_matrix_candidate_ids),
         "discovery_candidate_ids": sorted(discovery_candidate_ids),
         "missing_matrix_to_discovery_candidate_ids": missing_matrix_to_discovery_candidates,
         "expected_candidate_ids": sorted(expected_candidate_ids),

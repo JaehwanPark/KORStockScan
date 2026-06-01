@@ -1,0 +1,14 @@
+artifact_uri: file:///home/ubuntu/KORStockScan/data/model_registry/swing_v2/mlruns/542730445547806220/ab09e5eac9cf4d1bb424332ab18a8d0b/artifacts
+end_time: 1780302919090
+entry_point_name: ''
+experiment_id: '542730445547806220'
+lifecycle_stage: active
+run_id: ab09e5eac9cf4d1bb424332ab18a8d0b
+run_name: benchmark:catboost_ranker_v1:2026-06-01
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1780302919074
+status: 3
+tags: []
+user_id: ubuntu
